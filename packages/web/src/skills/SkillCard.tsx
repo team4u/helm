@@ -12,7 +12,7 @@ export interface SkillCardProps {
 /**
  * 全屏技能中心单张技能卡片视图组件：
  * - 响应式网格流单元，遵循 1px 发丝边框与克制低饱和设计系统规范；
- * - 顶部展示名称、来源徽章（内置 / 工作区 / 插件）与等宽 ID，零图标杂音；
+ * - 顶部展示名称、来源徽章（内置 / 共享 / 工作区 / 插件）与等宽 ID，零图标杂音；
  * - 中部展示功能说明；
  * - 底部展示关联文件数量胶囊（N 个参考文件）；
  * - 支持鼠标点击与键盘无障碍交互（Enter / Space 激活）；
@@ -39,7 +39,9 @@ export function SkillCard({
       ? 'badge badge-neutral'
       : sourceBadge.variant === 'plugin'
         ? 'badge badge-subtle mono'
-        : 'badge badge-ghost'
+        : sourceBadge.variant === 'agents'
+          ? 'badge badge-accent'
+          : 'badge badge-ghost'
 
   const cardClasses = [
     'primary-card',

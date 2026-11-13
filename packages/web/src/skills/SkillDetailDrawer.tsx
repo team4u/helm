@@ -29,7 +29,7 @@ export interface SkillDetailDrawerProps {
 /**
  * 全屏技能中心详情与代码预览抽屉组件：
  * - 基于 Radix UI Dialog 封装，520px-560px 右侧滑出抽屉；
- * - 顶部展示图标、名称、来源徽章（内置 / 工作区 / 插件）、技能 ID 与关闭按钮；
+ * - 顶部展示图标、名称、来源徽章（内置 / 共享 / 工作区 / 插件）、技能 ID 与关闭按钮；
  * - 支持在主规程 SKILL.md 与 references/*.md 子文件之间无缝切换；
  * - 异步调用 skillsApi.read，使用代数防竞态（loadGenerationRef）防止多任务交错覆盖；
  * - 提供格式化等宽文本阅读区（.skill-file-pre），安全展示 Markdown 与代码文档；
@@ -91,7 +91,9 @@ export function SkillDetailDrawer({
       ? 'badge badge-neutral'
       : sourceBadge?.variant === 'plugin'
         ? 'badge badge-subtle mono'
-        : 'badge badge-ghost'
+        : sourceBadge?.variant === 'agents'
+          ? 'badge badge-accent'
+          : 'badge badge-ghost'
 
   const references = skill?.references ?? []
   const totalFiles = 1 + references.length
@@ -129,6 +131,9 @@ export function SkillDetailDrawer({
                   <div className="primary-drawer-id mono text-subtle text-xs" title={skill.id}>
                     {skill.id}
                   </div>
+                )}
+                {skill?.source === 'agents' && (
+                  <div className="text-subtle text-xs">机器级共享根 · 只读</div>
                 )}
               </div>
             </div>

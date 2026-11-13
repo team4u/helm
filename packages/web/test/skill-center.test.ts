@@ -21,6 +21,7 @@ import {
   buildSkillCategoryCounts,
   filterSkills,
   getSkillSourceBadge,
+  isSkillAgents,
   isSkillBuiltin,
   isSkillPlugin,
   isSkillWorkspace,
@@ -54,7 +55,7 @@ function makeSkill(partial: Partial<SkillSummary> & { id: string }): SkillSummar
   }
 }
 
-const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, SkillSummary] = [
+const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, SkillSummary, SkillSummary] = [
   makeSkill({
     id: 'helm-cli',
     name: 'Helm 命令行操作手册',
@@ -88,35 +89,52 @@ const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, Skill
     references: ['references/rules.md'],
     managedByPlugin: 'community:linter',
   }),
+  makeSkill({
+    id: 'git-commit',
+    name: 'Git 提交信息生成',
+    description: '生成符合规范的中文 Git 提交信息',
+    references: [],
+    source: 'agents',
+  }),
 ]
 
 // ---------------------------------------------------------------------------
 // 1. 纯函数模型测试 (skill-center-model.ts)
 // ---------------------------------------------------------------------------
 
-test('skill-center-model: 技能类别判定纯函数（内置 / 插件 / 工作区）', { timeout: 60_000 }, () => {
+test('skill-center-model: 技能类别判定纯函数（内置 / 插件 / 共享 / 工作区）', { timeout: 60_000 }, () => {
   const builtinAssistant = makeSkill({ id: 'assistant-helper', managedByPlugin: 'builtin:profile' })
   const builtinCli = makeSkill({ id: 'helm-cli', managedByPlugin: 'builtin:profile' })
   const pluginManaged = makeSkill({ id: 'custom-skill', managedByPlugin: 'vendor:tools' })
   const workspacePrivate = makeSkill({ id: 'my-private-skill' })
+  const agentsShared = makeSkill({ id: 'git-commit', source: 'agents' })
 
   // 内置判定
   assert.equal(isSkillBuiltin(builtinAssistant), true)
   assert.equal(isSkillBuiltin(builtinCli), true)
   assert.equal(isSkillBuiltin(pluginManaged), false)
   assert.equal(isSkillBuiltin(workspacePrivate), false)
+  assert.equal(isSkillBuiltin(agentsShared), false)
 
   // 插件托管判定
   assert.equal(isSkillPlugin(pluginManaged), true)
   assert.equal(isSkillPlugin(builtinAssistant), false)
   assert.equal(isSkillPlugin(builtinCli), false)
   assert.equal(isSkillPlugin(workspacePrivate), false)
+  assert.equal(isSkillPlugin(agentsShared), false)
 
-  // 本地工作区私有技能判定
+  // 机器级共享根判定
+  assert.equal(isSkillAgents(agentsShared), true)
+  assert.equal(isSkillAgents(workspacePrivate), false)
+  assert.equal(isSkillAgents(builtinCli), false)
+  assert.equal(isSkillAgents(pluginManaged), false)
+
+  // 本地工作区私有技能判定（不含共享根来源）
   assert.equal(isSkillWorkspace(workspacePrivate), true)
   assert.equal(isSkillWorkspace(builtinAssistant), false)
   assert.equal(isSkillWorkspace(builtinCli), false)
   assert.equal(isSkillWorkspace(pluginManaged), false)
+  assert.equal(isSkillWorkspace(agentsShared), false, '共享根技能不得归入工作区')
 })
 
 test('skill-center-model: buildSkillCategoryCounts 准确统计各分类数量', { timeout: 60_000 }, () => {
@@ -127,22 +145,25 @@ test('skill-center-model: buildSkillCategoryCounts 准确统计各分类数量',
   // 3. database-migration (无 managedByPlugin) -> workspace
   // 4. herdr-deploy (builtin:herdr) -> builtin
   // 5. community-linter (community:linter) -> plugins
-  assert.equal(counts.all, 5)
+  // 6. git-commit (source: agents) -> agents
+  assert.equal(counts.all, 6)
   assert.equal(counts.builtin, 2)
   assert.equal(counts.workspace, 2)
   assert.equal(counts.plugins, 1)
+  assert.equal(counts.agents, 1)
 
   const emptyCounts = buildSkillCategoryCounts([])
-  assert.deepEqual(emptyCounts, { all: 0, builtin: 0, workspace: 0, plugins: 0 })
+  assert.deepEqual(emptyCounts, { all: 0, builtin: 0, workspace: 0, plugins: 0, agents: 0 })
 })
 
 test('skill-center-model: summarizeSkills 指标汇总', { timeout: 60_000 }, () => {
   const summary = summarizeSkills(mockSkills)
   assert.deepEqual(summary, {
-    total: 5,
+    total: 6,
     builtin: 2,
     workspace: 2,
     plugins: 1,
+    agents: 1,
   })
 })
 
@@ -159,6 +180,12 @@ test('skill-center-model: filterSkills 分类筛选与多维搜索（ID / 名称
   const pluginSkills = filterSkills(mockSkills, { query: '', categoryTab: 'plugins' })
   assert.equal(pluginSkills.length, 1)
   assert.equal(pluginSkills[0]!.id, 'community-linter')
+
+  // 机器级共享根分类筛选
+  const agentsSkills = filterSkills(mockSkills, { query: '', categoryTab: 'agents' })
+  assert.equal(agentsSkills.length, 1)
+  assert.equal(agentsSkills[0]!.id, 'git-commit')
+  assert.ok(agentsSkills.every((s) => isSkillAgents(s)))
 
   // 关键字按名称搜索
   const nameSearch = filterSkills(mockSkills, { query: '代码审查', categoryTab: 'all' })
@@ -192,6 +219,7 @@ test('skill-center-model: filterSkills 分类筛选与多维搜索（ID / 名称
 test('skill-center-model: getSkillSourceBadge 映射正确', { timeout: 60_000 }, () => {
   const cliSkill = makeSkill({ id: 'helm-cli', managedByPlugin: 'builtin:profile' })
   const codeSkill = makeSkill({ id: 'code-review' })
+  const sharedSkill = makeSkill({ id: 'git-commit', source: 'agents' })
 
   const badgeBuiltin = getSkillSourceBadge(cliSkill)
   assert.equal(badgeBuiltin.label, '内置')
@@ -204,6 +232,11 @@ test('skill-center-model: getSkillSourceBadge 映射正确', { timeout: 60_000 }
   const badgeWs = getSkillSourceBadge(codeSkill)
   assert.equal(badgeWs.label, '工作区')
   assert.equal(badgeWs.variant, 'workspace')
+
+  // 共享根技能优先归入 agents 徽章（即使无 managedByPlugin，也不冒充工作区）
+  const badgeAgents = getSkillSourceBadge(sharedSkill)
+  assert.equal(badgeAgents.label, '共享')
+  assert.equal(badgeAgents.variant, 'agents')
 })
 
 // ---------------------------------------------------------------------------
@@ -247,6 +280,22 @@ test('SkillCard: 选中状态与工作区来源徽章', { timeout: 60_000 }, () 
   assert.ok(html.includes('aria-selected="true"'), '选中时应具备 aria-selected 属性')
   assert.ok(html.includes('工作区'), '私有技能应展示「工作区」来源徽章')
   assert.ok(html.includes('1 个参考文件'), '应展示 1 个参考文件胶囊')
+  assert.doesNotMatch(html, emojiRegex, 'SkillCard 渲染输出严禁包含 Emoji')
+})
+
+test('SkillCard: 共享根技能展示「共享」徽章与强调色样式', { timeout: 60_000 }, () => {
+  const sharedSkill = mockSkills[5] // git-commit, source: agents
+  const html = renderToString(
+    e(SkillCard, {
+      skill: sharedSkill,
+      selected: false,
+      onSelect: () => {},
+    }),
+  )
+
+  assert.ok(html.includes('badge-accent'), '共享根技能应使用 badge-accent 徽章样式')
+  assert.ok(html.includes('共享'), '共享根技能应展示「共享」来源徽章')
+  assert.ok(!html.includes('工作区'), '共享根技能不得展示「工作区」徽章')
   assert.doesNotMatch(html, emojiRegex, 'SkillCard 渲染输出严禁包含 Emoji')
 })
 
@@ -334,6 +383,25 @@ test('SkillDetailDrawer: SSR 渲染抽屉主体、元信息、参考文件导航
   assert.ok(html.includes('# Helm CLI 技能规范'), '应展示正文 Markdown 内容')
 
   // 零 Emoji 断言
+  assert.doesNotMatch(html, emojiRegex, 'SkillDetailDrawer 渲染输出严禁包含 Emoji 表情')
+})
+
+test('SkillDetailDrawer: 共享根技能标注机器级共享根只读且不提供编辑入口', { timeout: 60_000 }, () => {
+  const sharedSkill = mockSkills[5] // git-commit, source: agents
+  const html = renderToString(
+    e(SkillDetailDrawer, {
+      skill: sharedSkill,
+      open: true,
+      inline: true,
+      initialContent: '# Git 提交技能',
+      onClose: () => {},
+    }),
+  )
+
+  assert.ok(html.includes('共享'), '共享根技能应展示「共享」徽章')
+  assert.ok(html.includes('badge-accent'), '共享根技能应使用 badge-accent 徽章样式')
+  assert.ok(html.includes('机器级共享根 · 只读'), '共享根技能应标注只读来源')
+  assert.ok(!html.includes('工作区'), '共享根技能不得标注工作区来源')
   assert.doesNotMatch(html, emojiRegex, 'SkillDetailDrawer 渲染输出严禁包含 Emoji 表情')
 })
 
@@ -487,6 +555,7 @@ test('SkillCenter: SSR 渲染顶栏、检索栏、网格流与零 Emoji 铁律',
   assert.ok(html.includes('primary-category-pill'), '应包含分类筛选标签')
   assert.ok(html.includes('全部'), '应包含全部标签')
   assert.ok(html.includes('内置'), '应包含内置标签')
+  assert.ok(html.includes('共享'), '应包含共享标签')
   assert.ok(html.includes('工作区'), '应包含工作区标签')
   assert.ok(html.includes('插件'), '应包含插件标签')
 
@@ -561,7 +630,7 @@ test('SkillCenter: 交互过滤、搜索与抽屉联动 (openTarget)', { timeout
     clearBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   cards = host.querySelectorAll('.skill-card')
-  assert.equal(cards.length, 5, '清空搜索后恢复全量卡片')
+  assert.equal(cards.length, 6, '清空搜索后恢复全量卡片')
 
   // 3. 点击分类药丸标签过滤
   const pills = Array.from(host.querySelectorAll('.primary-category-pill')) as HTMLButtonElement[]
@@ -573,6 +642,25 @@ test('SkillCenter: 交互过滤、搜索与抽屉联动 (openTarget)', { timeout
   })
   cards = host.querySelectorAll('.skill-card')
   assert.equal(cards.length, 2, '内置分类下应仅展示 2 个内置技能')
+
+  // 3.5 共享分类药丸：仅展示 source=agents 的技能
+  const agentsPill = pills.find((p) => p.textContent?.includes('共享'))
+  assert.ok(agentsPill, '应找到共享分类标签')
+  await act(async () => {
+    agentsPill.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  cards = host.querySelectorAll('.skill-card')
+  assert.equal(cards.length, 1, '共享分类下应仅展示 1 个共享根技能')
+  assert.ok(cards[0]!.textContent?.includes('git-commit'), '共享分类卡片应为 git-commit')
+
+  // 恢复全部后点击卡片触发 openTarget
+  const allPill = pills.find((p) => p.textContent?.includes('全部'))
+  assert.ok(allPill)
+  await act(async () => {
+    allPill.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  cards = host.querySelectorAll('.skill-card')
+  assert.equal(cards.length, 6, '恢复全部后应回到全量卡片')
 
   // 4. 点击卡片触发 openTarget 打开抽屉
   await act(async () => {

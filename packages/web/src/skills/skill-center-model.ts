@@ -7,7 +7,7 @@
 import type { SkillSummary } from '@helm/protocol'
 import { assetsApi } from '../lib/api.js'
 
-export type SkillCategoryTab = 'all' | 'builtin' | 'workspace' | 'plugins'
+export type SkillCategoryTab = 'all' | 'builtin' | 'plugins' | 'agents' | 'workspace'
 
 export interface SkillFilterOptions {
   query: string
@@ -18,6 +18,7 @@ export interface SkillSummaryStats {
   total: number
   builtin: number
   plugins: number
+  agents: number
   workspace: number
 }
 
@@ -38,11 +39,19 @@ export function isSkillPlugin(skill: SkillSummary): boolean {
 }
 
 /**
+ * 判断技能是否来自机器级共享只读根（~/.agents/skills，pi 生态技能库）：
+ * - source === 'agents'
+ */
+export function isSkillAgents(skill: SkillSummary): boolean {
+  return skill.source === 'agents'
+}
+
+/**
  * 判断技能是否为本地工作区私有技能：
- * - 无 managedByPlugin
+ * - 无 managedByPlugin 且非机器级共享根来源
  */
 export function isSkillWorkspace(skill: SkillSummary): boolean {
-  return !skill.managedByPlugin
+  return !skill.managedByPlugin && !isSkillAgents(skill)
 }
 
 /**
@@ -53,6 +62,7 @@ export function isSkillInTab(skill: SkillSummary, tab: SkillCategoryTab): boolea
   if (tab === 'builtin') return isSkillBuiltin(skill)
   if (tab === 'workspace') return isSkillWorkspace(skill)
   if (tab === 'plugins') return isSkillPlugin(skill)
+  if (tab === 'agents') return isSkillAgents(skill)
   return false
 }
 
@@ -102,9 +112,12 @@ export function buildSkillCategoryCounts(skills: SkillSummary[]): Record<SkillCa
   let builtin = 0
   let workspace = 0
   let plugins = 0
+  let agents = 0
 
   for (const s of list) {
-    if (isSkillBuiltin(s)) {
+    if (isSkillAgents(s)) {
+      agents++
+    } else if (isSkillBuiltin(s)) {
       builtin++
     } else if (isSkillPlugin(s)) {
       plugins++
@@ -118,6 +131,7 @@ export function buildSkillCategoryCounts(skills: SkillSummary[]): Record<SkillCa
     builtin,
     workspace,
     plugins,
+    agents,
   }
 }
 
@@ -130,17 +144,22 @@ export function summarizeSkills(skills: SkillSummary[]): SkillSummaryStats {
     total: counts.all,
     builtin: counts.builtin,
     plugins: counts.plugins,
+    agents: counts.agents,
     workspace: counts.workspace,
   }
 }
 
 /**
- * 获取技能来源徽章标签与类型
+ * 获取技能来源徽章标签与类型（agents 判定最前：共享技能必然无
+ * managedByPlugin，但语义上是独立分类，不以插件维度收编）
  */
 export function getSkillSourceBadge(skill: SkillSummary): {
   label: string
-  variant: 'builtin' | 'workspace' | 'plugin'
+  variant: 'builtin' | 'workspace' | 'plugin' | 'agents'
 } {
+  if (isSkillAgents(skill)) {
+    return { label: '共享', variant: 'agents' }
+  }
   if (isSkillBuiltin(skill)) {
     return { label: '内置', variant: 'builtin' }
   }

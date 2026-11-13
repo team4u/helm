@@ -21,8 +21,9 @@ export interface SkillCenterProps {
 const CATEGORY_TABS: Array<{ key: SkillCategoryTab; label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'builtin', label: '内置' },
-  { key: 'workspace', label: '工作区' },
   { key: 'plugins', label: '插件' },
+  { key: 'agents', label: '共享' },
+  { key: 'workspace', label: '工作区' },
 ]
 
 /**
