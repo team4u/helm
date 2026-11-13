@@ -222,7 +222,8 @@ pnpm helm plugins doc builtin:herdr overview --json
 外部插件是独立目录：后端 `index.ts` 导出 `PluginDefinition`，前端 `client/index.tsx` 使用 `@helm/plugin-client` 共享 SDK 编写 React 组件。脚手架、静态自检、增量发现、启用与受控热重载构成完整开发闭环，全程无需重启 Hub：
 
 ```bash
-# 1. 脚手架：生成 ~/.helm/plugins/my-plugin/（full 模板含 increment 动作与前端示例面板）
+# 1. 脚手架：生成 ~/.helm/plugins/my-plugin/（full 模板含 increment 动作与前端示例面板；
+#    app 模板生成可直接 helm apps validate/publish 的全栈微应用骨架）
 pnpm helm plugins init my-plugin
 
 # 2. 静态自检：真实加载 + 真实注册 + client.tsx 真实编译，四阶段预检

@@ -1,1 +1,1 @@
-{ "id": "todo-demo", "main": "index.ts", "version": "0.1.0" }
+{ "id": "todo-demo", "name": "TODO 示例", "main": "index.ts", "version": "0.1.0", "clientRoot": "./client" }

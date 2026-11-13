@@ -167,7 +167,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helm plugins rescan`** — 增量重扫描插件目录：只注册新外部插件（默认停用），已注册插件不重载。
 
-**`helm plugins init [name] [--dir <dir>] [--name <str>] [--template minimal|full] [--force]`** — 本地脚手架（不访问 Hub）。名称需匹配 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` 且禁止 `builtin:` 前缀；目标目录非空默认拒绝，`--force` 继续（同名文件被覆盖，不删除现有文件）。full 模板产出 `plugin.json`、`index.ts`（doc + increment 动作）、`client/index.tsx`（SamplePanel）、`tsconfig.json`、`README.md`；minimal 仅后端 ping 探针动作。
+**`helm plugins init [name] [--dir <dir>] [--name <str>] [--template minimal|full|app] [--force]`** — 本地脚手架（不访问 Hub）。名称需匹配 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` 且禁止 `builtin:` 前缀；目标目录非空默认拒绝，`--force` 继续（同名文件被覆盖，不删除现有文件）。full 模板产出 `plugin.json`、`index.ts`（doc + increment 动作）、`client/index.tsx`（SamplePanel）、`tsconfig.json`、`README.md`；minimal 仅后端 ping 探针动作；app 模板产出全栈微应用骨架（public doc + `add_item`/`set_done` 双 Schema 动作 + `ctx.ui.screen` 主视图 + 侧栏直达入口 + `client/index.tsx`/`client/styles.css`），生成目录可直接通过 `helm plugins doctor` 与 `helm apps validate`，后续步骤指向 `helm apps publish`。同形可复用样本见仓库 `apps/todo-demo`。
 
 **`helm plugins install <source> [--enable]`** — 从 npm/Git/本地路径安装（`POST /api/plugins/install`）。source 四种写法：`npm:<spec>`、`git:<repo>[@<ref>]`（可含子目录）、HTTPS Git URL（`#<ref>` 可选）、本地路径（相对 Hub 主机解析）。**安全须知**：安装并启用即在 Hub 进程内执行可信插件代码（无沙箱），仅装可信来源。
 

@@ -63,6 +63,7 @@ export default {
         required: ['id', 'done'],
         additionalProperties: false,
       },
+      outputSchema: okSchema,
       exposeAsTool: true,
       async handler(input) {
         todos.update((current) => ({
@@ -82,6 +83,7 @@ export default {
         required: ['id', 'title'],
         additionalProperties: false,
       },
+      outputSchema: okSchema,
       exposeAsTool: true,
       async handler(input) {
         todos.update((current) => ({

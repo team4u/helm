@@ -4,6 +4,10 @@
 
 每个全栈微应用在底层就是携带至少一个 `ctx.ui.screen` 的标准受管外部插件（安装于 `<dataDir>/plugins/<appId>`）——不建第二套「套娃宿主」。因此发布后的应用天然享有动作五端映射（HTTP / CLI `helm <appId> <action>` / Agent Tool / Workflow / Web）、`ctx.doc` 持久化与 `409 plugin_has_live_tasks` 停用保护。
 
+## 脚手架与种子样本
+
+从零开发全栈微应用用 `helm plugins init <name> --template app` 起步：生成 public doc + 双 Schema 动作 + `ctx.ui.screen` 主视图 + 侧栏直达入口的完整骨架，产物无需发布即可通过 `helm plugins doctor` 与 `helm apps validate` 四阶段预检，随后 `helm apps publish` 一键进应用中心。仓库 `apps/todo-demo` 是同形的可复用种子样本（四动作 TODO 应用，含就地 validate/publish 用法说明）。
+
 ## 公开文档 `catalog` 与发现合并规则
 
 插件声明公开持久文档 `ctx.doc<AppsCatalogDoc>('catalog', { apps: {} }, { public: true })`，记录 `PluginSummary` 不承载的应用产品元数据：

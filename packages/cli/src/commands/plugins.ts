@@ -2,7 +2,8 @@
  * 插件域：plugins list/enable/disable/config/doc/client 与 doctor/reload/rescan
  * （DX 闭环）、install/update/remove（受管包管理）与 actions list。config 除
  * --input <json> 外支持可重复 --set key=value（值按 JSON boolean/number 语义
- * 解析，否则 string）。plugins init 为本地脚手架命令。
+ * 解析，否则 string）。plugins init 为本地脚手架命令（minimal/full 通用插件与
+ * app 全栈微应用三档模板，app 产物直接通过 helm apps validate 预检）。
  */
 import type {
   ActionManifest,
@@ -460,11 +461,16 @@ export function pluginsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['plugins', 'init'],
-    description: '本地脚手架：在目标目录生成外部插件骨架（plugin.json + index.ts + tsconfig.json + client/index.tsx；不访问 Hub）',
+    description:
+      '本地脚手架：在目标目录生成外部插件骨架（不访问 Hub）；--template app 生成可通过 helm apps validate 的全栈微应用',
     flags: [
       { name: 'dir', type: 'string', help: '目标父目录（默认 <dataDir>/plugins；目录需已存在或可创建）' },
       { name: 'name', type: 'string', help: '插件目录名与默认 id（字母数字与 - _，默认 sample-plugin）' },
-      { name: 'template', type: 'string', help: '骨架模板：minimal（仅后端探针动作）| full（含 doc/动作/前端面板）；默认 full' },
+      {
+        name: 'template',
+        type: 'string',
+        help: '骨架模板：minimal（仅后端探针动作）| full（含 doc/动作/前端面板）| app（全栈微应用：doc/双动作/screen 主视图 + 侧栏入口，产物直接过 helm apps validate）；默认 full',
+      },
       { name: 'force', type: 'boolean', help: '目标目录非空时继续（默认拒绝，防覆盖）' },
     ],
     positional: '[name]',
@@ -614,13 +620,18 @@ function enrichPluginInUseError(err: CliError): CliError {
 /** 插件 id/目录名：字母数字开头，允许 - _（与 protocol 插件 id 规则对齐，禁 builtin:）。 */
 const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 
-const SCAFFOLD_PLUGIN_JSON = (id: string, template: 'minimal' | 'full') => `${JSON.stringify(
+/** 脚手架模板集合：minimal 仅后端 / full 通用插件面板 / app 全栈微应用（过 apps validate）。 */
+type ScaffoldTemplate = 'minimal' | 'full' | 'app'
+
+const SCAFFOLD_TEMPLATES: readonly ScaffoldTemplate[] = ['minimal', 'full', 'app']
+
+const SCAFFOLD_PLUGIN_JSON = (id: string, template: ScaffoldTemplate) => `${JSON.stringify(
   {
     id,
-    name: `${id} 插件`,
+    name: template === 'app' ? `${id} 应用` : `${id} 插件`,
     version: '0.1.0',
     main: 'index.ts',
-    ...(template === 'full' ? { clientRoot: './client' } : {}),
+    ...(template === 'app' || template === 'full' ? { clientRoot: './client' } : {}),
   },
   null,
   2,
@@ -746,7 +757,243 @@ export function SamplePanel(): React.JSX.Element {
 }
 `
 
-const SCAFFOLD_README = (template: 'minimal' | 'full') => `# 外部插件（helm plugins init 生成）
+/**
+ * app 模板后端：public doc 持久条目 + 两个双 Schema 动作 + screen 主视图 + 侧栏直达入口。
+ * 与 apps/todo-demo 种子应用及 app-builder 技能 fullstack-template.md 保持同一形状；
+ * 写后 flush（诚实性：不谎报已持久化）；无 Emoji；动作同时声明 input/outputSchema
+ * （单点 Schema 契约，缺失会在 doctor register 阶段被拒）。
+ */
+const SCAFFOLD_INDEX_TS_APP = (id: string, label: string) => `/**
+ * 全栈微应用后端入口（id: ${id}）：export default PluginDefinition。
+ * 修改后用 helm apps validate 复检，再 helm apps publish 热更新发布。
+ */
+import { randomUUID } from 'node:crypto'
+import type { PluginDefinition } from '@helm/protocol'
+
+interface Item {
+  id: string
+  title: string
+  done: boolean
+  createdAt: number
+}
+
+export default {
+  id: '${id}',
+  name: '${label}',
+  description: '最小全栈微应用：持久条目 + 新增/勾选动作 + 主视图。',
+  version: '0.1.0',
+  clientRoot: './client',
+  definePlugin(ctx) {
+    // 持久业务数据：public doc 供前端 usePluginDoc 实时订阅
+    const items = ctx.doc<{ list: Item[] }>('items', { list: [] }, { public: true })
+
+    // 共享 outputSchema：动作统一返回 { ok: true }
+    const okSchema = {
+      type: 'object',
+      properties: { ok: { type: 'boolean' } },
+      required: ['ok'],
+      additionalProperties: false,
+    } as const
+
+    ctx.action<{ title: string }, { ok: boolean }>({
+      id: 'add_item',
+      description: '新增一条条目',
+      inputSchema: {
+        type: 'object',
+        properties: { title: { type: 'string', minLength: 1 } },
+        required: ['title'],
+        additionalProperties: false,
+      },
+      outputSchema: okSchema,
+      exposeAsTool: true,
+      async handler(input) {
+        items.update((current) => ({
+          list: [
+            { id: randomUUID(), title: input.title, done: false, createdAt: Date.now() },
+            ...current.list,
+          ],
+        }))
+        await items.flush()
+        return { ok: true }
+      },
+    })
+
+    ctx.action<{ id: string; done: boolean }, { ok: boolean }>({
+      id: 'set_done',
+      description: '勾选/取消勾选条目',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'string' }, done: { type: 'boolean' } },
+        required: ['id', 'done'],
+        additionalProperties: false,
+      },
+      outputSchema: okSchema,
+      exposeAsTool: true,
+      async handler(input) {
+        items.update((current) => ({
+          list: current.list.map((it) => (it.id === input.id ? { ...it, done: input.done } : it)),
+        }))
+        await items.flush()
+        return { ok: true }
+      },
+    })
+
+    // 全栈应用硬性要求：至少一个 ctx.ui.screen（apps validate 的 missing_app_screen 检查项）
+    ctx.ui.screen({
+      id: 'main',
+      label: '${label}',
+      client: { module: 'index.tsx', export: 'MainScreen' },
+    })
+
+    // 侧栏直达入口（协议允许 screen:<pluginId>/<screenId> 目标；不需要可直接删除本段，
+    // 应用仍可从应用中心打开）
+    ctx.ui.sidebarItem({
+      id: 'open-main',
+      label: '${label}',
+      icon: 'layout-grid',
+      target: 'screen:${id}/main',
+    })
+  },
+} satisfies PluginDefinition
+`
+
+/**
+ * app 模板前端：仅用 @helm/plugin-client 宿主原语（Screen/ScreenSection/KvGrid/
+ * DataTable/Checkbox）+ 宿主 CSS 变量与 .btn 按钮；无 Emoji；13px 正文。
+ */
+const SCAFFOLD_CLIENT_APP_TSX = `import { useState, type ReactNode } from 'react'
+import {
+  usePluginContext,
+  usePluginDoc,
+  Screen,
+  ScreenSection,
+  DataTable,
+  KvGrid,
+  Checkbox,
+} from '@helm/plugin-client'
+import './styles.css'
+
+interface Item {
+  id: string
+  title: string
+  done: boolean
+  createdAt: number
+}
+
+export function MainScreen(): ReactNode {
+  const { callAction, notify } = usePluginContext()
+  const doc = usePluginDoc<{ list: Item[] }>('items')
+  const [draft, setDraft] = useState('')
+  const [pending, setPending] = useState(false)
+
+  const list = doc?.list ?? []
+  const doneCount = list.filter((it) => it.done).length
+
+  const add = async () => {
+    const title = draft.trim()
+    if (title === '') return
+    setPending(true)
+    try {
+      await callAction('add_item', { title })
+      setDraft('')
+    } catch (err) {
+      notify('新增失败：' + (err instanceof Error ? err.message : String(err)), 'error')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <Screen title="条目工作台" subtitle={'已完成 ' + doneCount + ' / ' + list.length}>
+      <ScreenSection title="新增条目">
+        <div className="app-form">
+          <input
+            className="app-input"
+            value={draft}
+            placeholder="输入条目标题后回车…"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void add()
+            }}
+          />
+          <button type="button" className="btn btn-primary" disabled={pending} onClick={() => void add()}>
+            新增
+          </button>
+        </div>
+      </ScreenSection>
+
+      <ScreenSection title="概览">
+        <KvGrid
+          items={[
+            { key: '条目总数', value: list.length },
+            { key: '已完成', value: doneCount },
+            { key: '数据来源', value: "public doc 'items'（usePluginDoc 实时订阅）" },
+          ]}
+        />
+      </ScreenSection>
+
+      <ScreenSection title="条目列表">
+        <DataTable
+          loading={doc === undefined}
+          empty={list.length === 0}
+          emptyLabel="暂无条目，输入标题新增第一条"
+          columns={2}
+          label="条目列表"
+        >
+          <thead>
+            <tr>
+              <th>状态</th>
+              <th>内容</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((it) => (
+              <tr key={it.id}>
+                <td className="app-col-check">
+                  <Checkbox
+                    checked={it.done}
+                    onChange={(checked) => void callAction('set_done', { id: it.id, done: checked })}
+                  />
+                </td>
+                <td className={it.done ? 'app-done' : ''}>{it.title}</td>
+              </tr>
+            ))}
+          </tbody>
+        </DataTable>
+      </ScreenSection>
+    </Screen>
+  )
+}
+`
+
+/** app 模板补充样式：仅布局微调，颜色一律走宿主 CSS 变量。 */
+const SCAFFOLD_CLIENT_APP_CSS = `.app-form { display: flex; gap: 8px; }
+.app-input { flex: 1; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--fg); }
+.app-input:focus { outline: none; border-color: var(--accent); }
+.app-col-check { width: 48px; }
+.app-done { text-decoration: line-through; color: var(--fg-muted); }
+`
+
+const SCAFFOLD_README = (template: ScaffoldTemplate) =>
+  template === 'app'
+    ? `# 全栈微应用（helm plugins init --template app 生成）
+
+- 后端入口：\`index.ts\`（public doc 'items' + add_item/set_done 双 Schema 动作 + ctx.ui.screen + 侧栏入口）
+- 前端组件：\`client/index.tsx\`（clientRoot 为 ./client，仅用 @helm/plugin-client 宿主原语）
+- 清单：\`plugin.json\`；本地类型检查：\`tsconfig.json\`（宿主运行时转译不依赖它，仅供编辑器/CI）
+
+## 开发闭环（无需发布到宿主即可验证）
+
+\`\`\`bash
+helm plugins doctor <本目录绝对路径>   # 四阶段自检：manifest/backend/register/client
+helm apps validate <本目录绝对路径>   # doctor + 全栈应用 Screen 强制检查
+helm apps publish <本目录绝对路径>    # 预检通过后受管安装并启用，登记应用中心
+helm apps remove <pluginId>           # 卸载（本地源码目录不受影响）
+\`\`\`
+
+侧栏入口（ctx.ui.sidebarItem）可删；删除后应用仍可从应用中心打开。同形参考样本：仓库 \`apps/todo-demo\`。
+`
+    : `# 外部插件（helm plugins init 生成）
 
 - 后端入口：\`index.ts\`（export default PluginDefinition）${template === 'full' ? '\n- 前端组件：\`client/index.tsx\`（clientRoot 声明为 ./client）' : ''}
 - 清单：\`plugin.json\`；本地类型检查：\`tsconfig.json\`（宿主运行时转译不依赖它，仅供编辑器/CI）
@@ -785,10 +1032,10 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
     )
   }
   const templateRaw = parsed.flags.get('template')
-  if (templateRaw !== undefined && templateRaw !== 'minimal' && templateRaw !== 'full') {
-    throw new CliError('--template 需为 minimal | full', 'invalid_flag_value')
+  if (templateRaw !== undefined && !SCAFFOLD_TEMPLATES.includes(templateRaw as ScaffoldTemplate)) {
+    throw new CliError(`--template 需为 ${SCAFFOLD_TEMPLATES.join(' | ')}`, 'invalid_flag_value')
   }
-  const template = (templateRaw ?? 'full') as 'minimal' | 'full'
+  const template = (templateRaw ?? 'full') as ScaffoldTemplate
   const usedPositionals = name === namePositional ? 1 : 0
   assertNoExtraPositionals(parsed.positionals, usedPositionals)
   const parentDir =
@@ -846,7 +1093,11 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
   await fsp.writeFile(path.join(target, 'plugin.json'), SCAFFOLD_PLUGIN_JSON(name, template), 'utf8')
   await fsp.writeFile(
     path.join(target, 'index.ts'),
-    template === 'full' ? SCAFFOLD_INDEX_TS_FULL(name) : SCAFFOLD_INDEX_TS_MINIMAL(name),
+    template === 'minimal'
+      ? SCAFFOLD_INDEX_TS_MINIMAL(name)
+      : template === 'app'
+        ? SCAFFOLD_INDEX_TS_APP(name, `${name} 应用`)
+        : SCAFFOLD_INDEX_TS_FULL(name),
     'utf8',
   )
   await fsp.writeFile(path.join(target, 'tsconfig.json'), SCAFFOLD_TSCONFIG, 'utf8')
@@ -854,6 +1105,12 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
     await fsp.mkdir(path.join(target, 'client'), { recursive: true })
     await fsp.writeFile(path.join(target, 'client', 'index.tsx'), SCAFFOLD_CLIENT_INDEX_TSX, 'utf8')
     files.push('client/index.tsx')
+  }
+  if (template === 'app') {
+    await fsp.mkdir(path.join(target, 'client'), { recursive: true })
+    await fsp.writeFile(path.join(target, 'client', 'index.tsx'), SCAFFOLD_CLIENT_APP_TSX, 'utf8')
+    await fsp.writeFile(path.join(target, 'client', 'styles.css'), SCAFFOLD_CLIENT_APP_CSS, 'utf8')
+    files.push('client/index.tsx', 'client/styles.css')
   }
   await fsp.writeFile(path.join(target, 'README.md'), SCAFFOLD_README(template), 'utf8')
   files.push('README.md')
@@ -864,18 +1121,17 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
     template,
     files,
     targetExisted,
-    nextSteps: [
-      `helm plugins doctor ${target}`,
-      'helm plugins rescan',
-      `helm plugins enable ${name}`,
-    ],
+    nextSteps:
+      template === 'app'
+        ? [`helm plugins doctor ${target}`, `helm apps validate ${target}`, `helm apps publish ${target}`]
+        : [`helm plugins doctor ${target}`, 'helm plugins rescan', `helm plugins enable ${name}`],
   }
   if (ctx.json) {
     printResult(ctx, summary)
     return
   }
   ctx.io.out(
-    `已生成插件骨架（模板 ${template}）：${target}${targetExisted ? '（目录已存在，文件已写入/覆盖）' : ''}\n`,
+    `已生成${template === 'app' ? '全栈微应用' : '插件'}骨架（模板 ${template}）：${target}${targetExisted ? '（目录已存在，文件已写入/覆盖）' : ''}\n`,
   )
   for (const file of summary.files) ctx.io.out(`  - ${file}\n`)
   ctx.io.out('后续步骤：\n')

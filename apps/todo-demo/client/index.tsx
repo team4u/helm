@@ -27,7 +27,7 @@ export function MainScreen(): ReactNode {
       await callAction('add_todo', { title })
       setDraft('')
     } catch (err) {
-      void notify({ level: 'error', title: '新增失败', body: String(err) })
+      notify('新增失败：' + (err instanceof Error ? err.message : String(err)), 'error')
     } finally {
       setPending(false)
     }
@@ -47,7 +47,7 @@ export function MainScreen(): ReactNode {
     try {
       await callAction('update_todo', { id, title })
     } catch (err) {
-      void notify({ level: 'error', title: '保存失败', body: String(err) })
+      notify('保存失败：' + (err instanceof Error ? err.message : String(err)), 'error')
     }
   }
 
@@ -55,7 +55,7 @@ export function MainScreen(): ReactNode {
     try {
       await callAction('remove_todo', { id })
     } catch (err) {
-      void notify({ level: 'error', title: '删除失败', body: String(err) })
+      notify('删除失败：' + (err instanceof Error ? err.message : String(err)), 'error')
     }
   }
 

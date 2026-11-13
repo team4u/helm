@@ -48,9 +48,10 @@
 helm plugins init my-plugin                          # 生成到 ~/.helm/plugins/my-plugin/（默认 full 模板）
 helm plugins init my-plugin --dir ~/code             # 生成到 ~/code/my-plugin/
 helm plugins init my-plugin --template minimal       # 仅后端探针动作（无前端文件）
+helm plugins init my-app --template app              # 全栈微应用骨架（可直接 apps validate/publish）
 ```
 
-full 模板产出 `plugin.json`（含 `clientRoot: "./client"`）、`index.ts`（doc 与 `increment` 动作示例）、`tsconfig.json`、`client/index.tsx`（引入 `@helm/plugin-client` 共享 Hook 的示例面板）与 `README.md`；minimal 模板不含 `clientRoot` 与前端文件。目标目录非空时默认拒绝，`--force` 继续（同名文件被覆盖）。
+full 模板产出 `plugin.json`（含 `clientRoot: "./client"`）、`index.ts`（doc 与 `increment` 动作示例）、`tsconfig.json`、`client/index.tsx`（引入 `@helm/plugin-client` 共享 Hook 的示例面板）与 `README.md`；minimal 模板不含 `clientRoot` 与前端文件；app 模板产出全栈微应用骨架（public doc + 双 Schema 动作 + `ctx.ui.screen` 主视图 + 侧栏入口，前端仅用宿主原语），生成目录无需发布即可通过 `helm plugins doctor` 与 `helm apps validate`，经 `helm apps publish` 一键发布到应用中心（同形样本：仓库 `apps/todo-demo`）。目标目录非空时默认拒绝，`--force` 继续（同名文件被覆盖）。
 
 ### ② 后端：TypeScript 源码免构建直接加载
 
