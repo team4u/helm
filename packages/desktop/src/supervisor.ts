@@ -41,6 +41,7 @@ export interface HubSupervisorOptions {
   env?: NodeJS.ProcessEnv;
   isElectron?: boolean;
   execPath?: string;
+  childWrapper?: string;
   /** stderr 环形缓冲行数（诊断尾部快照）。 */
   stderrTailLines?: number;
 }
@@ -62,6 +63,7 @@ export class HubSupervisor {
   private readonly isElectron: boolean;
   private readonly execPath: string;
   private readonly tailLines: number;
+  private readonly childWrapper?: string;
 
   private _state: SupervisorState = 'idle';
   private handle: ChildHandle | null = null;
@@ -79,6 +81,7 @@ export class HubSupervisor {
     this.isElectron = options.isElectron ?? false;
     this.execPath = options.execPath ?? process.execPath;
     this.tailLines = options.stderrTailLines ?? 40;
+    this.childWrapper = options.childWrapper;
   }
 
   get state(): SupervisorState {
@@ -136,6 +139,7 @@ export class HubSupervisor {
       this.runner = await selectRunner(this.config, {
       isElectron: this.isElectron,
       execPath: this.execPath,
+      childWrapper: this.childWrapper,
       env: this.env,
       onSkip: (kind, reason) => this.events.problem?.(new DesktopError('hub_runner_skipped', `运行器候选 ${kind} 被跳过: ${reason}`, { kind, reason })),
     });

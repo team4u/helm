@@ -41,7 +41,11 @@ function createBoot(electron?: ElectronApi): DesktopBoot {
   const updater = createPayloadUpdater(config, {
     npmInstaller: new HostNpmInstaller({
       command: [process.execPath, npmCli],
-      env: { ...process.env, ...(process.versions.electron === undefined ? {} : { ELECTRON_RUN_AS_NODE: '1' }) },
+      env: {
+        ...process.env,
+        npm_config_cache: join(config.dataDir ?? join(homedir(), '.helm'), 'npm-cache'),
+        ...(process.versions.electron === undefined ? {} : { ELECTRON_RUN_AS_NODE: '1' }),
+      },
       extraArgs: config.payloadRegistry === undefined ? [] : ['--registry', config.payloadRegistry],
     }),
   });
@@ -49,6 +53,7 @@ function createBoot(electron?: ElectronApi): DesktopBoot {
     config, updater, log,
     baselineVersion: typeof bundled?.version === 'string' ? bundled.version : undefined,
     supervisorOptions: {
+      childWrapper: resources === undefined ? undefined : join(resources, 'hub-child.mjs'),
       isElectron: process.versions.electron !== undefined,
       events: {
         stateChange: (next, prev) => log(`Hub：${prev} -> ${next}`),

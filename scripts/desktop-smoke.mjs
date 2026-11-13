@@ -89,7 +89,7 @@ function executableCandidates() {
   switch (process.platform) {
     case 'linux':
       // productName 首选，兜底包名小写形态，二者都探测避免对 electron-builder 命名细节撒谎。
-      return ['linux-unpacked/Helm', 'linux-unpacked/helm'];
+      return ['linux-unpacked/helm-desktop', 'linux-unpacked/Helm', 'linux-unpacked/helm'];
     case 'darwin':
       // 常规单架构构建输出 mac/；同时兼容多架构并行的历史目录形态。
       return [
@@ -265,7 +265,7 @@ function main() {
 
   // 显式固定端口与数据目录：不继承宿主环境里的 HELM_PORT/HELM_DATA_DIR 漂移。
   const port = String(opts.port);
-  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^HELM_/i.test(key) && key !== 'ELECTRON_RUN_AS_NODE'));
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^HELM_/i.test(key) && key !== 'ELECTRON_RUN_AS_NODE' && key !== 'NODE_PATH'));
   const env = { ...baseEnv, HELM_DATA_DIR: dataDir, HELM_DESKTOP_DATA_DIR: dataDir, HELM_CWD: dataDir, HELM_PORT: port, HELM_DESKTOP_PORT: port };
 
   console.log(`[desktop-smoke] 可执行文件: ${exe}`);

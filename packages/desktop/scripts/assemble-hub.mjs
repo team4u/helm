@@ -22,6 +22,7 @@
  *   仓库内验收，避免 node 解析偷渡到仓库 node_modules 造成假阳性。--no-verify 跳过。
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -204,47 +205,56 @@ const verifyHub = path.join(verifyRoot, 'hub');
 try {
   cpSync(hubDir, verifyHub, { recursive: true, dereference: true });
   const dataDir = mkdtempSync(path.join(verifyRoot, 'data-'));
-  const port = 33000 + (process.pid % 2000);
-  console.log(`[assemble-hub] 隔离验收（仓库外 ${verifyRoot}）: 启动 Hub @ ${port} ...`);
-  const child = spawn(process.execPath, [path.join(verifyHub, 'start.mjs'), 'start'], {
+  const check = spawnSync(process.execPath, [path.join(verifyHub, 'start.mjs'), 'check'], {
+    cwd: verifyHub, encoding: 'utf8', timeout: 30_000, env: { ...process.env, NODE_PATH: '' },
+  });
+  if (check.status !== 0) throw new Error(`隔离依赖验收失败：${check.stdout}\n${check.stderr}`);
+  const port = await new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      server.close((error) => error ? reject(error) : resolve(port));
+    });
+  });
+  console.log(`[assemble-hub] 隔离验收（${verifyRoot}）：启动 Hub @ ${port}`);
+  const wrapper = path.join(verifyRoot, 'hub-child.mjs');
+  cpSync(path.join(desktopRoot, 'dist', 'hub-child.js'), wrapper);
+  const child = spawn(process.execPath, [wrapper, path.join(verifyHub, 'kernel', 'dist', 'main.js')], {
     cwd: verifyHub,
-    env: { ...process.env, HELM_PORT: String(port), HELM_HOST: '127.0.0.1', HELM_DATA_DIR: dataDir, HELM_CWD: dataDir },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, NODE_PATH: '', HELM_PORT: String(port), HELM_HOST: '127.0.0.1', HELM_DATA_DIR: dataDir, HELM_CWD: dataDir },
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let stdout = '';
   let stderr = '';
-  child.stdout.on('data', (d) => { stdout += d; });
-  child.stderr.on('data', (d) => { stderr += d; });
-  const deadline = Date.now() + 60_000;
+  child.stdout.on('data', (d) => { stdout = (stdout + d).slice(-8000); });
+  child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-8000); });
+  let spawnError;
+  const closed = new Promise((resolve) => {
+    child.once('error', (error) => { spawnError = error; });
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+  const deadline = Date.now() + 30_000;
   let ok = false;
-  let lastErr = '';
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) break;
-    const probe = spawnSync(process.execPath, ['-e', `fetch('http://127.0.0.1:${port}/api/auth/status').then(r=>r.json()).then(j=>{if(typeof j!=='object'||j===null)throw new Error('bad json');process.exit(0)}).catch(e=>{process.stderr.write(String(e.message));process.exit(1)})`], { encoding: 'utf8', timeout: 5_000 });
-    if (probe.status === 0) {
-      ok = true;
-      break;
-    }
-    lastErr = probe.stderr ?? '';
-    await new Promise((r) => setTimeout(r, 500));
+  while (Date.now() < deadline && child.exitCode === null && spawnError === undefined) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/auth/status`, { signal: AbortSignal.timeout(1000) });
+      const body = await response.json();
+      if (response.ok && typeof body?.configured === 'boolean') { ok = true; break; }
+    } catch { /* 服务尚未就绪，继续等待。 */ }
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  const termRes = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
-  child.kill('SIGTERM');
-  const exitInfo = await Promise.race([termRes, new Promise((r) => setTimeout(() => r({ code: null, signal: null, timeout: true }), 15_000))]);
-  if (exitInfo.timeout) child.kill('SIGKILL');
-  if (!ok) {
-    console.error(`[assemble-hub] 隔离验收失败：Hub 未在 60s 内通过 HTTP 探活（最后探测错误: ${lastErr || 'unknown'}）`);
-    console.error(`[assemble-hub] Hub stdout:\n${stdout.slice(-4000)}`);
-    console.error(`[assemble-hub] Hub stderr:\n${stderr.slice(-4000)}`);
-    process.exit(1);
+  let timeout;
+  const stopped = new Promise((resolve) => { timeout = setTimeout(() => resolve({ timeout: true }), 10_000); });
+  if (child.connected) child.send({ type: 'shutdown' }, () => {});
+  else if (child.exitCode === null) child.kill('SIGTERM');
+  const exitInfo = await Promise.race([closed, stopped]);
+  clearTimeout(timeout);
+  if (exitInfo.timeout) { child.kill('SIGKILL'); await closed; }
+  if (!ok || spawnError !== undefined || exitInfo.timeout || exitInfo.code !== 0) {
+    throw new Error(`隔离验收失败（ready=${ok}, exit=${exitInfo.code}, timeout=${Boolean(exitInfo.timeout)}）：${spawnError ?? ''}\n${stdout}\n${stderr}`);
   }
-  if (exitInfo.code !== 0 && !exitInfo.timeout) {
-    console.error(`[assemble-hub] 隔离验收失败：Hub 退出码 ${exitInfo.code} ${exitInfo.signal ?? ''}`);
-    console.error(`[assemble-hub] Hub stdout:\n${stdout.slice(-4000)}`);
-    console.error(`[assemble-hub] Hub stderr:\n${stderr.slice(-4000)}`);
-    process.exit(1);
-  }
-  console.log(`[assemble-hub] 隔离验收通过：HTTP /api/auth/status 探活成功，SIGTERM 干净退出（exit=${exitInfo.code}${exitInfo.signal ? ` signal=${exitInfo.signal}` : ''}）`);
+  console.log('[assemble-hub] 隔离依赖检查、Hub HTTP 与跨平台 IPC 优雅退出全部通过');
 } finally {
   rmSync(verifyRoot, { recursive: true, force: true });
 }
