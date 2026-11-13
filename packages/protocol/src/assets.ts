@@ -60,7 +60,7 @@ export interface ProfileRuntime {
   env?: Record<string, string>
 }
 
-/** `~/.helm/skills/<id>/`（SKILL.md + references/*.md）的目录摘要。 */
+/** 技能目录摘要：dataDir 根 `~/.helm/skills/<id>/`（SKILL.md + references/*.md），或机器级共享只读根 `~/.agents/skills/<id>/`（source='agents'，helm 只读合入）。 */
 export interface SkillSummary {
   id: string
   name: string
@@ -69,6 +69,8 @@ export interface SkillSummary {
   references: string[]
   /** 托管该 Skill 的插件 ID；对应插件未启用时，会话目录、技能菜单与 load_skill 均不可用。 */
   managedByPlugin?: string
+  /** 来源根标识：缺省 'data'（~/.helm/skills 用户可写根）；'agents' 表示机器级共享只读根 ~/.agents/skills（pi 生态技能库，helm 只读合入，不写不删）。 */
+  source?: 'data' | 'agents'
 }
 
 /** 会话技能目录与 load_skill 共用的可用性规则；不是文件系统或工具执行权限边界。 */
