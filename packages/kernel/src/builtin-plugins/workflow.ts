@@ -28,8 +28,8 @@
  *   service.start 执行 init（终止遗留任务、标 failed、补发通知）与 close；
  *   liveTasks/liveWorktrees 声明在途任务与工作树占用；
  * - 3 个模型工具（subagent / SubagentWorkflow / cleanup_worktree）与
- *   11 个动作（list/get/save/delete/run/runs/inspect/abort/cleanup_worktree/
- *   list_worktrees/inspect_worktree）五端复用；
+ *   12 个动作（list/get/save/delete/run/runs/inspect/abort/steer/
+ *   cleanup_worktree/list_worktrees/inspect_worktree）五端复用；
  * - 嵌套深度契约：受管子代理（经本插件派生的原生/外部子会话）默认可嵌套
  *   DEFAULT_MAX_SUBAGENT_DEPTH（2）层——主会话直接派生一层，一层子代理
  *   默认可继续派生二层，达到子树上限的会话即编排叶子。私有登记表持久
@@ -60,6 +60,7 @@ import {
 } from '@helm/protocol'
 import { WorkflowService } from './workflow/engine/index.js'
 import { normalizeWorkflowArgs } from './workflow/engine/runtime.js'
+import { steerBackgroundSubagent } from './workflow/steer.js'
 import { WorktreeIsolation } from './workflow/isolation.js'
 import { executionOf, subagentFooter } from './workflow/tool-result.js'
 
@@ -1443,6 +1444,64 @@ export function createWorkflowPlugin(): PluginDefinition {
           await workflows.abort(runId)
           syncRunsDoc()
           return { run: workflows.getRun(runId) }
+        },
+      })
+
+      // ---- 动作 steer：后台原生子代理安全插话（exposeAsTool 直投 Agent 工具） ----
+      // 授权证明与守卫细节见 ./workflow/steer.ts：caller → run → child 全程
+      // 沿真实会话父链推导；仅 kind=subagent + running + 已解析原生子会话且
+      // 归属 bot/helm 的运行可插话（DSL 工作流与外部 Herdr 执行显式拒绝）；
+      // 提交唯一入口 ctx.host.submitInputGuarded（内核原子复核归属与 CAS
+      // 水位，human 红线执行层兜底），绝不回退普通 submitInput。
+      ctx.action({
+        id: 'steer',
+        description:
+          '向运行中的后台原生子代理插话纠偏（steer，whenBusy=steer 注入在途回合）。仅支持 kind=subagent、status=running、已解析原生子会话且归属仍为 bot/helm 的运行；DSL 编排工作流与外部运行时（如 Herdr 窗格）显式拒绝。会话上下文调用仅允许 run 发起会话自身或其祖先，不可跨树控制；内核按归属与 CAS 水位原子复核，事实过期（如子会话已推进）返回 409 可重读重试。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            runId: { type: 'string', description: '后台子代理运行 ID（subagent 工具 background:true 返回的 runId）' },
+            text: { type: 'string', description: '插话指导内容（非空；原样注入子会话，附运行来源前缀）' },
+          },
+          required: ['runId', 'text'],
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            steered: { type: 'boolean', const: true },
+            runId: { type: 'string' },
+            conversationId: { type: 'number', description: '被插话的原生子会话 ID' },
+            ownership: { type: 'string', enum: ['bot', 'helm'] },
+            stateChangeSeq: { type: 'number', description: '提交时复核通过的权威水位' },
+          },
+          required: ['steered', 'runId', 'conversationId', 'ownership', 'stateChangeSeq'],
+          additionalProperties: false,
+        },
+        cli: {
+          command: ['workflows', 'steer'],
+          description: '向运行中的后台原生子代理插话纠偏（仅原生 native 子代理可 steer；DSL 工作流与外部 Herdr 执行显式拒绝）',
+          positional: [{ field: 'runId', required: true }],
+        },
+        exposeAsTool: true,
+        async handler(input, context) {
+          const { runId, text } = input as { runId: string; text: string }
+          return steerBackgroundSubagent(
+            {
+              getRun: (id) => workflows.getRun(id),
+              isConversationCancelling: (id) => workflows.isConversationCancelling(id),
+              getConversation: (id) => ctx.host.getConversation(id),
+              getConversationOwnership: (id) => ctx.host.getConversationOwnership(id),
+              submitInputGuarded: (id, prompt, opts, guard) =>
+                ctx.host.submitInputGuarded(id, prompt, opts, guard),
+            },
+            { runId, text },
+            {
+              ...(context.conversationId !== undefined
+                ? { conversationId: context.conversationId }
+                : {}),
+            },
+          )
         },
       })
 

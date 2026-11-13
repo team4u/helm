@@ -17,6 +17,7 @@
 - 返回业务 result 与执行元数据（nodeId/conversationId/executionId/effectiveCwd/worktree）独立；后续可凭 resume 续接。
 - 后台返回 `runId` 和实际 execution；父回合结束后继续执行，Schema 与 gate 都完成后自动汇报。汇报幂等：同一 run 恰好投递一次，跨重启不重复。因此不要用 sleep 或轮询等待后台结果——汇报会自动到达本会话；需要核对时用 `helm workflows inspect <runId>` 只读查询，`helm workflows abort <runId>` 中止。
 - 四类执行体区别：原生 Profile 子会话（spawn 管道、进深度登记表、可 resume）；外部 Herdr Profile（终端窗格执行、同样进登记表，对编排透明）；SuperAgent Worker（`dispatch_worker` 派生、不进登记表，插件自有非阻塞协议，见下文）；fork/人工会话（不经 spawn 管道、不受深度限制，人类直连即适用缺省后台）。
+- 发现后台原生子代理跑偏时，主会话可调用 `run_action({ actionId: "builtin:workflow.steer", input: { runId, text } })` 插话纠偏，也可使用动作派生的模型工具；终端用 `helm workflows steer <runId> --text "<指导>"`。仅原生子代理 run（kind=subagent 且 running、已解析原生子会话、归属 bot/helm）可 steer；DSL 编排工作流与外部运行时（如 Herdr 窗格，无原生子会话）显式拒绝。插话经内核 guarded 提交按归属与 CAS 水位原子复核，事实过期时返回 409；human 归属永不触碰。会话内调用仅允许 run 发起会话自身或其祖先，不可跨树控制他人运行。
 - `isolation: "worktree"` 在目标节点分配独立 Git 工作树（原生及支持该能力的运行时）；基于源 HEAD，不包含源工作区未提交修改。任务结束、失败或取消后保留工作树与分支。
 - 检视或合入后调用 `cleanup_worktree({ worktreeId: execution.worktree.id })`；也可按子会话 ID，或实际 `nodeId` + `path` 清理。未提交修改、未合入提交及在用工作树默认拒绝清理。`force: true` 仅显式允许丢弃修改，不绕过归属或占用检查。
 - 只读检视（不执行任何写操作）：`helm worktrees list` 列出全部登记（含已清理记录元数据）；`helm worktrees inspect <worktreeId>` 返回登记元数据 + 目标节点真实 git 只读探测（当前分支/HEAD、未提交文件清单、领先基线提交数、diff 统计与有上限预览；`--conversation-id <id>` / `--path <path> [--node-id <nodeId>]` 可替代选择器）。仅登记记录可检视，不支持任意目录；目录缺失/已清理时如实返回 unavailableReason，git 失败显式报错。
