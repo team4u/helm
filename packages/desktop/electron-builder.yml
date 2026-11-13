@@ -13,6 +13,7 @@
 # 占位反向域名（无正式分发域名前可先用；接入签名/公证时统一调整）。
 appId: dev.helm.desktop
 productName: Helm
+artifactName: "Helm-${version}-${os}-${arch}.${ext}"
 
 directories:
   # 产物目录（区别于 tsc 的 dist/）：release/ 下生成各平台安装包与 *-unpacked 目录。
@@ -56,6 +57,9 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+
+deb:
+  packageName: helm-desktop
 
 linux:
   executableName: helm-desktop

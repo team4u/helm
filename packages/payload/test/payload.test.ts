@@ -340,10 +340,12 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
     assert.ok(probed, `Hub 未在 60s 内探活成功\nstdout: ${stdout}\nstderr: ${stderr}`);
     assert.match(stdout, /Helm Hub:/, 'Hub 启动横幅缺失');
     child.kill('SIGTERM');
+    let exitTimer: NodeJS.Timeout | undefined;
     const exitInfo = await Promise.race([
       exitPromise,
-      new Promise<{ code: null, signal: null }>((r) => setTimeout(() => r({ code: null, signal: null }), 15_000)),
+      new Promise<{ code: null, signal: null }>((r) => { exitTimer = setTimeout(() => r({ code: null, signal: null }), 15_000); }),
     ]);
+    clearTimeout(exitTimer);
     if (exitInfo.code === null && exitInfo.signal === null) child.kill('SIGKILL');
     assert.equal(exitInfo.code, 0, `Hub SIGTERM 后期望干净退出 0，实际 ${exitInfo.code} ${exitInfo.signal ?? ''}\nstdout: ${stdout}\nstderr: ${stderr}`);
   } finally {

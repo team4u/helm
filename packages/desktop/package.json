@@ -16,7 +16,7 @@
     "start": "tsx src/main.ts",
     "assemble:hub": "node scripts/assemble-hub.mjs",
     "dist": "pnpm run assemble:hub && electron-builder --publish never",
-    "dist:dir": "pnpm run assemble:hub && electron-builder --dir"
+    "dist:dir": "pnpm run assemble:hub && electron-builder --dir --publish never"
   },
   "devDependencies": {
     "electron": "^45.3.2",
