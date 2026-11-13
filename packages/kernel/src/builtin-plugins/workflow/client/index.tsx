@@ -1974,7 +1974,11 @@ export interface WorkflowLibraryScreenProps extends ScreenProps {
 
 export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactNode {
   const { items, error, loading, reload } = useWorkflowLibrary()
-  const [queryDraft, setQueryDraft] = useState('')
+  const queryParam = props.params['q'] ?? ''
+  const [queryDraft, setQueryDraft] = useState(queryParam)
+  useEffect(() => {
+    setQueryDraft(queryParam)
+  }, [queryParam])
   const query = queryDraft.trim().toLowerCase()
   const selectedName = props.params['wf']
   const selectedItem = selectedName !== undefined ? items?.find((i) => i.name === selectedName) : undefined
@@ -2017,7 +2021,11 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
               className="input"
               placeholder="搜索名称、描述或适用场景…"
               value={queryDraft}
-              onChange={(e) => setQueryDraft(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value
+                setQueryDraft(value)
+                props.setParams({ q: value === '' ? undefined : value })
+              }}
               aria-label="搜索工作流"
             />
             {queryDraft !== '' ? (
@@ -2026,7 +2034,10 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
                 className="btn btn-ghost btn-xs"
                 title="清空搜索"
                 aria-label="清空搜索"
-                onClick={() => setQueryDraft('')}
+                onClick={() => {
+                  setQueryDraft('')
+                  props.setParams({ q: undefined })
+                }}
               >
                 <Icon name="x" size={11} />
               </button>

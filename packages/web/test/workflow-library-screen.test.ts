@@ -263,6 +263,26 @@ test('工作流库 Screen：卡片网格渲染文件事实与元数据诊断；�
   }
 })
 
+test('工作流库搜索词从 URL 参数恢复', { timeout: 60_000 }, async () => {
+  setWorkflowClientStub({
+    docValue: { runs: [] },
+    conversations: [],
+    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+  })
+  const ctx = makeRecordingCtx({ list: LIST_RESULT })
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Screen = mod['WorkflowLibraryScreen'] as (p: ScreenProps) => React.ReactElement
+  const props = screenProps({ q: 'audit' })
+  const { host, unmount } = await mountClient(ctx, e(Screen, props))
+  try {
+    const search = host.querySelector('input[aria-label="搜索工作流"]') as HTMLInputElement
+    assert.equal(search.value, 'audit', '深链 q 参数应恢复搜索框内容')
+    assert.equal(host.querySelectorAll('.workflow-lib-card').length, 1, '深链搜索应过滤卡片')
+  } finally {
+    unmount()
+  }
+})
+
 test('详情抽屉：深链 wf 参数直开；get 只读源码渲染、无编辑输入；删除两步确认后刷新并清理参数', { timeout: 60_000 }, async () => {
   setWorkflowClientStub({
     docValue: { runs: [] },
