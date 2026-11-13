@@ -18,11 +18,11 @@ test('CSS Token 契约：--bg-inset 变量在亮色与暗色模式均声明为 v
   )
 })
 
-test('基础按钮与尺寸阶梯：.btn 标称 32px，.btn-sm 为 28px，.btn-xs 为 22px', { timeout: 60_000 }, () => {
+test('基础按钮与尺寸阶梯：.btn 为 27px，.btn-sm 为 28px，.btn-xs 为 22px', { timeout: 60_000 }, () => {
   assert.match(
     stylesCss,
-    /\.btn\s*\{[^}]*height:\s*32px;/,
-    '.btn 默认高度必须为 32px',
+    /\.btn\s*\{[^}]*height:\s*27px;/,
+    '.btn 默认高度必须为 27px',
   )
   assert.match(
     stylesCss,

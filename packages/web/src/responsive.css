@@ -48,9 +48,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .composer-env-bar { gap: 4px 8px; padding: 3px 8px 5px; }
   .composer-env-hint { display: none; }
   .composer-env-select { max-width: 128px; }
-  .composer-env-cwd { max-width: 180px; }
+  .composer-env-cwd { max-width: 180px; font-size: 11px; }
   .composer-env-cwd-input { width: min(180px, 100%); }
-  .composer-env-cwd { font-size: 11px; }
   .timeline-scroll { padding: 16px 14px 22px; }
   .msg-human-pill { max-width: 92%; }
   .msg-hover-bar { opacity: 0.85; }
@@ -71,7 +70,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 深链祖先面包屑在窄容器隐藏分隔符，只留紧凑 ID 胶囊 */
   .conversation-topbar .pane-breadcrumb { gap: 1px; }
   .conversation-topbar .pane-breadcrumb-sep { display: none; }
-  /* 话题切换已回归左栏手风琴：顶栏恢复单行标题，恢复默认内边距。 */
   .composer-widgets .card { padding: 8px 10px; }
 }
 @media (hover: none) {

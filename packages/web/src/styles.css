@@ -221,8 +221,6 @@ button,
 
 /* ==========================================================================
  * 1. 全局超细内嵌滚动条 (Overlay Scrollbars)
- * 对应原 styles.css: 174-189 行
- * 目标选择器：::-webkit-scrollbar 族系
  * 规范：8px 细槽、2px 透明内边距衬托 4px 居中悬浮滑块、悬停加深为 var(--fg-muted)
  * ========================================================================== */
 
@@ -420,8 +418,6 @@ button,
 
 /* ==========================================================================
  * 2. 子代理会话侧边抽屉 (Conversation Drawer)
- * 对应原 styles.css: 256-285 行
- * 目标选择器：.conversation-drawer-backdrop, .conversation-drawer
  * 规范：毛玻璃遮罩 (blur 8px saturate 1.1)、平滑全高滑出动效、深阴影
  * ========================================================================== */
 
@@ -462,338 +458,8 @@ button,
   to { transform: translateX(0); }
 }
 
-
 /* ==========================================================================
- * 3. 左栏导航（侧栏尺寸与选中态纯白微投影）
- * 对应原 styles.css: 290-375 行、403-422 行、554-575 行
- * 目标选择器：.sidebar-header, .nav-item, .nav-item:hover, .nav-item-active,
- *            .nav-item-active .nav-item-meta, .agent-standing-group .agent-conversations-list,
- *            .nav-item-sub, .sidebar-footer, .sidebar-footer .btn.is-active
- * 规范：
- * - 顶栏 46px 带 1px solid var(--line-2) 分隔；
- * - 导航项高度 30px、圆角 7px、字号 13px；
- * - 激活态采用带微发丝边缘投影的纯白卡片 (var(--seg-edge))；
- * - 二级子列表高度 26px、圆角 6px、字号 12.5px、左侧 1px solid var(--line-2)；
- * - 底栏采用 1px solid var(--line-2) 发丝线分割，激活图标按钮带 var(--seg-edge)
- * ========================================================================== */
-
-.sidebar-header {
-  height: 46px;
-  padding: 0 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--line-2);
-  gap: 8px;
-}
-
-.sidebar-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.sidebar-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.sidebar-group-header {
-  height: 24px;
-  padding: 0 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--fg-muted);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.nav-item {
-  height: 30px;
-  min-height: 30px;
-  padding: 0 8px;
-  border-radius: 7px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--fg-secondary);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-  font-size: 13px;
-  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
-  width: 100%;
-}
-
-.nav-item:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-
-.nav-item-active,
-.nav-item-active:hover {
-  background: var(--nav-active-bg);
-  color: var(--nav-active-fg);
-  box-shadow: var(--seg-edge);
-  font-weight: 500;
-}
-
-.nav-item-active .nav-item-meta {
-  color: var(--nav-active-muted);
-}
-
-.nav-item-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-
-.nav-item-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.nav-item-meta {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-}
-
-/* 智能体站位：一级 Agent 行 + 缩进的二级历史会话子列表 */
-.agent-standing {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.agent-standing-group .agent-conversations-list {
-  margin-left: 16px;
-  padding-left: 6px;
-  border-left: 1px solid var(--line-2);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.nav-item-sub {
-  height: 26px;
-  min-height: 26px;
-  padding: 0 8px;
-  border-radius: 6px;
-  font-size: 12.5px;
-}
-
-.nav-item-sub .nav-item-label {
-  font-size: 12.5px;
-  font-weight: 400;
-}
-
-
-
-/* ==========================================================================
- * 4. 卡片、平铺容器与 1px solid var(--line-2) 行间发丝线
- * 对应原 styles.css: 2337-2432 行（及 3282、4463 行卡片圆角）
- * 目标选择器：.list, .list > .row, .row, .list > .row + .row, .row + .row,
- *            .list-item-btn, .list-item-btn.is-active, .card, .section-flat,
- *            .plugin-settings-panels + .plugin-settings-panels,
- *            .plugin-card, .primary-card
- * 规范：
- * - 外层卡片与列表统一 12px 圆角；
- * - 列表内部行间分割去除外边距堆叠，统一通过 border-top: 1px solid var(--line-2) 发丝线分割；
- * - 列表行高收敛至 44px ~ 48px，左右内边距 7px 12px 7px 14px；
- * - 列表导航项激活态采用 --nav-active-bg 且浮起微阴影 var(--seg-edge)
- * ========================================================================== */
-
-/* ==========================================================================
- * 4. 卡片、平铺容器与 1px solid var(--line-2) 行间发丝线
- * 对应原 styles.css: 2337-2432 行（及 3282、4463 行卡片圆角）
- * 目标选择器：.list, .list > .row, .row, .list > .row + .row, .row + .row,
- *            .list-item-btn, .list-item-btn.is-active, .card, .section-flat,
- *            .plugin-settings-panels + .plugin-settings-panels,
- *            .plugin-card, .primary-card
- * 规范：
- * - 外层卡片与列表统一 12px 圆角；
- * - 列表内部行间分割去除外边距堆叠，统一通过 border-top: 1px solid var(--line-2) 发丝线分割；
- * - 列表行高收敛至 44px ~ 48px，左右内边距 7px 12px 7px 14px；
- * - 列表导航项激活态采用 --nav-active-bg 且浮起微阴影 var(--seg-edge)
- * ========================================================================== */
-
-/* 1px 发丝分隔列表 */
-.list {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  overflow: hidden;
-  flex: none;
-}
-
-.list > .row,
-.row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 44px;
-  padding: 7px 12px 7px 14px;
-  border-bottom: none;
-}
-
-.list > .row + .row,
-.row + .row {
-  border-top: 1px solid var(--line-2);
-}
-
-/* 列表导航交互项原语 */
-.list-item-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  width: 100%;
-  padding: 8px 10px;
-  border-radius: 7px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--fg);
-  font-size: 12.5px;
-  text-align: left;
-  cursor: pointer;
-  transition: background 100ms ease, color 100ms ease, border-color 100ms ease, box-shadow 100ms ease;
-  user-select: none;
-}
-
-.list-item-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-
-.list-item-btn.is-active,
-.list-item-btn[aria-pressed='true'] {
-  background: var(--nav-active-bg);
-  color: var(--nav-active-fg, var(--fg));
-  box-shadow: var(--seg-edge);
-  font-weight: 500;
-}
-
-.list-item-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.list-item-btn-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  font-weight: 500;
-  font-size: 12.5px;
-  gap: 6px;
-}
-
-/* 卡片与表单 */
-.card {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 12px 14px;
-}
-
-/* 静音平铺容器原语 */
-.section-flat {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.section-flat-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-/* 同插件多 settings.panel：面板间分隔与独立挂载区域 */
-.plugin-settings-panels + .plugin-settings-panels {
-  border-top: 1px solid var(--line-2);
-  padding-top: 10px;
-}
-
-/* 全屏中心卡片圆角同步对齐 12px 规范 */
-.plugin-card,
-.primary-card {
-  border-radius: 12px;
-}
-
-
-
-
-/* 全屏中心卡片圆角同步对齐 12px 规范 */
-.plugin-card,
-.primary-card {
-  border-radius: 12px;
-}
-
-
-/* ==========================================================================
- * 5. 居中模态弹窗 (Modals) 与经典大深影
- * 对应原 styles.css: 2605-2651 行 及 2785-2793 行
- * 目标选择器：.modal-backdrop, .modal, .modal-header, .modal-title, .modal-body, .modal-footer
- * 规范：
- * - 遮罩层：background: rgba(0, 0, 0, 0.28); backdrop-filter: blur(8px) saturate(1.1);
- * - 居中模态：圆角 14px；无默认硬边框，通过投影环构建精细 1px 发丝边与大深影：
- *   box-shadow: 0 0 0 1px var(--border), 0 24px 60px rgba(0, 0, 0, 0.32), 0 2px 8px rgba(0, 0, 0, 0.12);
- * - 顶栏与底栏统一通过 1px solid var(--line-2) 发丝线分隔；标题字号 13.5px
- * ========================================================================== */
-
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(8px) saturate(1.1);
-  -webkit-backdrop-filter: blur(8px) saturate(1.1);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  z-index: 100;
-}
-
-.modal {
-  width: 100%;
-  max-width: 680px;
-  max-height: 86vh;
-  background: var(--bg-elevated);
-  border: none;
-  border-radius: 14px;
-  box-shadow: 0 0 0 1px var(--border), 0 24px 60px rgba(0, 0, 0, 0.32), 0 2px 8px rgba(0, 0, 0, 0.12);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-/* ==========================================================================
- * 3. 左栏导航（淡色选中背景 + 零左侧彩条）
+ * 3. 左栏导航
  * ========================================================================== */
 
 .sidebar-header {
@@ -847,6 +513,7 @@ button,
   border: none;
   cursor: pointer;
   text-align: left;
+  font-size: 13px;
   transition: background 120ms ease, color 120ms ease;
   width: 100%;
 }
@@ -860,6 +527,8 @@ button,
 .nav-item-active:hover {
   background: var(--nav-active-bg);
   color: var(--nav-active-fg);
+  box-shadow: var(--seg-edge);
+  font-weight: 500;
 }
 
 .nav-item-active .nav-item-meta {
@@ -931,6 +600,7 @@ button,
 .nav-item-sub {
   min-height: 28px;
   padding: 3px 8px;
+  border-radius: 6px;
   font-size: 12.5px;
 }
 
@@ -1129,8 +799,6 @@ button,
   font-size: 12px;
   color: var(--fg-muted);
 }
-
-/* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */
 
 /* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */
 
@@ -1938,23 +1606,7 @@ button,
 }
 
 /* ==========================================================================
- * [Block A] 通用下拉选择器（Select - Radix UI 原语封装）
- * 目标文件：packages/web/src/styles.css
- * 替换行范围：约 1352-1650 行
- * 被替换的选择器：
- *   - .helm-select
- *   - .helm-select-trigger, :hover, :focus, :disabled
- *   - .helm-select-prefix, .helm-select-label, .helm-select-chevron
- *   - .dropdown-panel
- *   - .helm-select-popover
- *   - .helm-select-actions, .helm-select-action-btn, .helm-select-search
- *   - .model-drawer-tags-wrap, .model-drawer-tag
- *   - .helm-select-sm .helm-select-trigger, .helm-select-sm .helm-select-option
- *   - .composer-env-select .helm-select-trigger, .composer-env-select .helm-select-option
- *   - .helm-select.mono
- *   - .helm-select.w-full
- *   - .helm-select-option, [data-highlighted], :hover, [data-state="checked"], :disabled
- *   - .helm-select-option-icon, .helm-select-option-label, .helm-select-option-meta, .helm-select-check
+ * 通用下拉选择器（Select - Radix UI 原语封装）
  * ========================================================================== */
 
 .helm-select {
@@ -1969,15 +1621,13 @@ button,
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: 32px; /* 契约标称基准 */
-  height: 27px; /* 极简沉静收敛阶梯 */
+  height: 27px;
   padding: 0 8px 0 9px;
   border-radius: 7px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--fg);
-  font-size: 13px; /* 契约标称基准 */
-  font-size: 12.5px; /* 极简收敛字阶 */
+  font-size: 12.5px;
   font-family: inherit;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
@@ -2409,8 +2059,7 @@ button,
   border-radius: 6px;
   background: transparent;
   color: var(--fg);
-  font-size: 13px; /* 契约标称基准 */
-  font-size: 12.5px; /* 极简收敛字阶 */
+  font-size: 12.5px;
   text-align: left;
   cursor: pointer;
   white-space: nowrap;
@@ -2537,19 +2186,7 @@ button,
 }
 
 /* ==========================================================================
- * [Block B] 通用开关与复选框原语（Switch 与 Checkbox）
- * 目标文件：packages/web/src/styles.css
- * 替换行范围：约 1727-1859 行
- * 被替换的选择器：
- *   - .helm-switch-wrap, .is-disabled
- *   - .helm-switch, :focus-visible, :disabled
- *   - .helm-switch-thumb
- *   - .helm-switch.is-checked, .helm-switch.is-checked .helm-switch-thumb
- *   - .helm-switch-label
- *   - .helm-checkbox-wrap, .is-disabled
- *   - .helm-checkbox, :focus-visible, :disabled
- *   - .helm-checkbox.is-checked, .helm-checkbox.is-indeterminate
- *   - .helm-checkbox-icon, .helm-checkbox-label
+ * 通用开关与复选框原语（Switch 与 Checkbox）
  * ========================================================================== */
 
 /* Switch */
@@ -3053,8 +2690,7 @@ button,
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 32px; /* 契约标称基准 */
-  height: 27px; /* 极简沉静收敛阶梯 */
+  height: 27px;
   padding: 0 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -3251,7 +2887,26 @@ button,
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   overflow: hidden;
+  flex: none;
 }
+
+/* 行原语：列表内与平铺场景通用行骨架，相邻行间以 1px 发丝线分割 */
+.list > .row,
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 7px 12px 7px 14px;
+  border-bottom: none;
+}
+
+.list > .row + .row,
+.row + .row {
+  border-top: 1px solid var(--line-2);
+}
+
 .list > .row {
   padding: 9px 12px;
   border-bottom: 1px solid var(--border);
@@ -3289,6 +2944,7 @@ button,
 .list-item-btn[aria-pressed='true'] {
   background: var(--nav-active-bg);
   color: var(--nav-active-fg, var(--fg));
+  box-shadow: var(--seg-edge);
   font-weight: 500;
 }
 .list-item-btn:disabled {
@@ -3655,19 +3311,7 @@ button,
 }
 
 /* ==========================================================================
- * [Block C] 通用表单输入框、Textarea 与搜索栏原语
- * 目标文件：packages/web/src/styles.css
- * 替换行范围：约 2574-2603 行
- * 被替换的选择器：
- *   - .input, .select, .textarea
- *   - .input, .select (height: 32px -> 27px)
- *   - textarea.input, textarea.textarea, .textarea
- *   - .input:focus, .select:focus, .textarea:focus
- * 新增与完善：
- *   - input[type="text"], input[type="password"], input[type="search"], etc.
- *   - .search-input (28px height, 8px radius, var(--bg-muted) -> focus glow)
- *   - .input:disabled, .input::placeholder
- * ==========================================================================
+ * 通用表单输入框、Textarea 与搜索栏原语
  *
  * 搜索框统一规范（全站唯一搜索外观）：
  *   - 搜索输入一律用 type="text"，禁止 type="search"（原生自带清除 X，
@@ -3678,17 +3322,6 @@ button,
  *   - 清除按钮最多一个，由容器类内的自定义按钮提供。
  *   - 兜底：即使误用 type="search"，也强制去掉原生清除按钮。
  */
-
-input[type="search"]::-webkit-search-cancel-button,
-input[type="search"]::-webkit-search-decoration {
-  -webkit-appearance: none;
-  appearance: none;
-  display: none;
-}
-
-input[type="search"]::-moz-search-clear-button {
-  display: none;
-}
 
 .input,
 .select,
@@ -3713,8 +3346,7 @@ input[type="number"] {
 
 .input,
 .select {
-  height: 32px; /* 契约标称基准 */
-  height: 27px; /* 极简沉静收敛阶梯 */
+  height: 27px;
   line-height: 25px;
 }
 
@@ -5156,16 +4788,7 @@ input::placeholder {
 }
 
 /* ==========================================================================
- * [Block D] 分段控制器原语（SegmentedControl & Tabs）
- * 目标文件：packages/web/src/styles.css
- * 替换行范围：约 3750-3794 行
- * 被替换的选择器：
- *   - .helm-tabs-segmented
- *   - .segmented-control (移除 1px solid var(--border)，使用 var(--seg-track)，7px 圆角)
- *   - .segmented-control-btn (高度 24px，字号 12.5px，内边距 0 12px)
- *   - .segmented-control-btn:hover:not(:disabled)
- *   - .segmented-control-btn.is-active, [aria-pressed='true'], [data-state='active'] (应用 var(--seg-thumb) 与 var(--seg-edge))
- *   - .segmented-control-btn:disabled, [data-disabled]
+ * 分段控制器原语（SegmentedControl & Tabs）
  * ========================================================================== */
 
 .helm-tabs-segmented {

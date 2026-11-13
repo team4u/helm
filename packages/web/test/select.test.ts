@@ -338,8 +338,8 @@ test('契约：ProfileDetailDrawer 中的模型选择采用公共 Select，且�
   assert.match(profileDrawerSource, /import\s*\{[^}]*Select[^}]*\}\s*from\s*['"]\.\.\/ui\/Select(?:\.js)?['"]/)
   assert.match(profileDrawerSource, /<Select[\s\S]*?options=\{modelOptions\}/)
 
-  // 2. 样式契约：.input 与 .helm-select-trigger 严格等高（32px）与相同边框圆角规范
-  assert.match(stylesSource, /\.input,\s*\.select\s*\{[\s\S]*?height:\s*32px;/)
-  assert.match(stylesSource, /\.helm-select-trigger\s*\{[\s\S]*?height:\s*32px;/)
-  assert.match(stylesSource, /\.helm-select-trigger\s*\{[\s\S]*?font-size:\s*13px;/)
+  // 2. 样式契约：.input 与 .helm-select-trigger 严格等高（27px）与相同边框圆角规范
+  assert.match(stylesSource, /\.input,\s*\.select\s*\{[^}]*height:\s*27px;/)
+  assert.match(stylesSource, /\.helm-select-trigger\s*\{[^}]*height:\s*27px;/)
+  assert.match(stylesSource, /\.helm-select-trigger\s*\{[^}]*font-size:\s*12\.5px;/)
 })
