@@ -224,6 +224,25 @@ export class RuntimeAgentSpawn {
                 this.deps.events.publish('conversation.upsert', this.deps.conversations.withOwnership(this.deps.tracker.summaryOf(childId)))
               }
             },
+            // signal 桥守卫中止：现读归属与权威水位作守卫事实，经内核
+            // abortConversationGuarded 原子复核（human-owned 一律拒绝——看门狗
+            // 红线；事实过期/目标消失同样确定性拒绝，绝不回退普通中止）。
+            abortChildConversationGuarded: async (childId) => {
+              const summary = this.deps.conversations.summaryWithOwnership(childId)
+              const ownedBy = summary.ownedBy ?? 'human'
+              if (ownedBy === 'human') {
+                throw new HelmError(
+                  'ownership_conflict',
+                  `子会话 ${childId} 当前归属 human，拒绝自动中止（看门狗红线）`,
+                  409,
+                  { conversationId: childId, currentOwnership: ownedBy },
+                )
+              }
+              await this.deps.conversations.abortConversationGuarded(childId, {
+                expectedOwnership: ownedBy,
+                expectedStateSeq: summary.stateChangeSeq,
+              })
+            },
           },
         }),
         finalRequest,

@@ -119,7 +119,7 @@ function makeExternalHost(options: {
         updatedAt: 0,
       }
     },
-    async abortConversation() {},
+    async abortConversationGuarded() {},
     emitEvent() {},
     async runGate() {
       gateFallbackRuns++
@@ -308,7 +308,7 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
           },
           listActions: () => [],
           getConversation: (id) => env.kernel.getConversation(id),
-          abortConversation: (id) => env.kernel.abortConversation(id),
+          abortConversationGuarded: (id) => env.kernel.abortConversationGuarded(id, {}),
           emitEvent: () => {},
         },
       })
@@ -397,7 +397,7 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
           },
           listActions: () => env.kernel.plugins.listActions(),
           getConversation: (id) => env.kernel.getConversation(id),
-          abortConversation: (id) => env.kernel.abortConversation(id),
+          abortConversationGuarded: (id) => env.kernel.abortConversationGuarded(id, {}),
           emitEvent: (type, payload) => env.kernel.events.publish(type, payload),
           // 与生产 app.ts 同接线：gate 本机 fallback（native 路径已在子会话内
           // 执行，sentinel 断言此口零调用）。

@@ -40,7 +40,7 @@ const host: WorkflowServiceHost = {
   getConversation: () => {
     throw new Error('no conversations in this suite')
   },
-  async abortConversation() {},
+  async abortConversationGuarded() {},
   emitEvent() {},
   async runGate() {
     return { ok: true, output: '' }

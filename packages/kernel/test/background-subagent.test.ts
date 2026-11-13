@@ -7,7 +7,8 @@
  * - 前置错误同步抛出：spawn 在 onResolved 前失败当场 reject 原始错误，
  *   durable 记录被后台兜底链结算为 failed（不留僵尸 running，不伪造成功）；
  * - 父信号隔离与显式 abort：onResolved 后父 signal abort 不误杀后台子代理；
- *   service.abort(runId) 触发 host.abortConversation(childId) 且 run 结算 aborted；
+ *   service.abort(runId) 经守卫端口 abortConversationGuarded 中止子会话且 run
+ *   结算 aborted；
  * - gate 失败传播：spawn 因 gate_failed 抛错时 run 终态 failed（绝不提前
  *   completed），通知收到 status: 'failed' 与错误详情；
  * - 插件从不 onResolved 但 settle：execution 留空（绝不伪造），run 正常结算；
@@ -150,7 +151,7 @@ function makeHost(options: { notifyFailTimes?: number } = {}): ProgrammableHost 
         updatedAt: 0,
       }
     },
-    async abortConversation(id: number) {
+    async abortConversationGuarded(id: number) {
       abortedConversations.push(id)
     },
     emitEvent() {},

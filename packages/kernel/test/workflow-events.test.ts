@@ -43,7 +43,7 @@ function makeEnv(
       model: 'test/model', thinkingLevel: '', status: 'idle', stateChangeSeq: 1, completionSeq: 0,
       unread: false, pinned: false, pendingAskCount: 0, createdAt: 0, updatedAt: 0,
     }),
-    async abortConversation() {},
+    async abortConversationGuarded() {},
     emitEvent: (type, payload) => events.publish(type, payload),
     ...overrides,
   }
@@ -81,7 +81,7 @@ test('重放缓存标记透传到 getRun、listRuns、事件与重启后的公�
   }
   const revived = new WorkflowService({ dataDir: env.dataDir, state: env.state, host: {
     spawnAgent: async () => { throw new Error('重启后只读摘要') }, invokeAction: async () => { throw new Error('unused') }, listActions: () => [],
-    getConversation: () => { throw new Error('unused') }, abortConversation: async () => {}, emitEvent: () => {},
+    getConversation: () => { throw new Error('unused') }, abortConversationGuarded: async () => {}, emitEvent: () => {},
   } })
   try { assert.ok(revived.getRun(replay.id).nodes!.every((node) => node.cached === true)) }
   finally { await revived.close() }

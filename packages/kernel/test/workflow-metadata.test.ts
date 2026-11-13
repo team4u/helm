@@ -134,7 +134,7 @@ function makeExternalSpawnHost(
       return []
     },
     getConversation: (id: number) => conversationSummary(id),
-    async abortConversation() {},
+    async abortConversationGuarded() {},
     emitEvent() {},
     async runGate() {
       extras.runGateCalls++
@@ -354,7 +354,7 @@ describe('WorkflowService external spawn integration', () => {
         return []
       },
       getConversation: (id: number) => conversationSummary(id),
-      async abortConversation() {},
+      async abortConversationGuarded() {},
       emitEvent() {},
       // 引擎 fallback 端口（外部回报正常时不触发；缺失时 spawn 里的 gate 无法兑付）
       async runGate() {

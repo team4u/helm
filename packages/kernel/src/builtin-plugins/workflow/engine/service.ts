@@ -3,7 +3,11 @@
  *
  * 职责：
  * - 请求校验（name/script/scriptPath 恰一、512KB 上限、安全 name、caps 正数）；
- * - run 生命周期（后台启动立即返回 summary、wait/abort/getRun）；
+ * - run 生命周期（后台启动立即返回 summary、wait/abort）；abort(runId) 级联
+ *   取消本 run + 其子会话子树内的全部后代 run（兄弟不牵连；取消窗口内拒绝
+ *   该子树新 run/spawn，返回时全部 settle）；cancelRunsUnderConversation 供
+ *   插件在父会话 abort 后取消子树内属于它的全部 run；子会话中止一律经宿主
+ *   守卫端口（human 红线由内核原子复核，无普通中止回退）；
  * - 持久化（单库设计）：run 索引与每 run summary 存入注入的 state store
  *   （@helm/kernel 唯一 state.sqlite 的命名空间 doc），启动恢复时把遗留
  *   running 显式标 failed(interrupted)。唯一文件例外是统一前缀重放账本
@@ -117,7 +121,14 @@ export interface WorkflowServiceHost {
   ): Promise<EnvExecResponse>
   listActions(): ActionManifest[]
   getConversation(id: number): ConversationSummary
-  abortConversation(id: number): Promise<void>
+  /**
+   * 守卫式子会话中止：自动化取消（abort 级联 / init 恢复 / 引擎 abortAgent /
+   * 迟到 onResolved 补杀）的唯一入口。实现职责：现读归属事实（human-owned
+   * 一律拒绝——看门狗红线）并经内核 abortConversationGuarded 对
+   * expectedOwnership + expectedStateSeq 原子复核；目标已删除/守卫冲突时
+   * 确定性放弃（诊断），绝不回退普通 abortConversation。
+   */
+  abortConversationGuarded(id: number): Promise<void>
   emitEvent(type: string, payload: unknown): void
   /**
    * run 终态结算通知（每 run 恰一次；wait/close 必须等待它结束）。宿主用它
@@ -307,11 +318,11 @@ interface ActiveRun {
   /** 在途命令执行通道的 promise（收尾时 abort 并在结算前等待退出，避免脱管进程）。 */
   pendingExecs: Set<Promise<unknown>>
   /**
-   * 中止时需经 host.abortConversation 显式中止的子会话（startBackgroundAgent
-   * 的原生子会话：signal 桥只调 conversation.abort，不经 tracker 全量结算；
-   * 这里补充与 runtime.abortConversation 同级的确定性中止）。
+   * 本 run 派生的子会话集合（onResolved 回传即登记）：abort 级联时逐个经
+   * host.abortConversationGuarded 守卫中止；迟到 onResolved 在登记时若已
+   * 取消则立即补杀（防快照时序漏杀）。
    */
-  abortChildConversations?: Set<number>
+  childConversations: Set<number>
   /** progress 持久化节流（timeline 非空后定期落盘）。 */
   lastPersistAt: number
   /** 节点开始/结束必须推送的 workflow.updated 事件（有界频率内的强制点）。 */
@@ -349,6 +360,10 @@ export class WorkflowService {
   private readonly caps: Pick<WorkflowServiceOptions, 'concurrency' | 'agentCap' | 'itemCap' | 'nestedCap'>
   private readonly redact: (text: string) => string
   private readonly active = new Map<string, ActiveRun>()
+  /** 取消窗口中的会话集合（引用计数：并发取消重叠时最后一个释放才解除）：窗口内拒绝该会话新 run/spawn（防取消期间又派新任务）。 */
+  private readonly cancellingCounts = new Map<number, number>()
+  /** 进行中的边界取消（key -> promise）：同边界重入共享同一次取消，防回调相互等待死锁。 */
+  private readonly boundaryCancels = new Map<string, Promise<void>>()
   private closed = false
   /** init 幂等标记：仅恢复完整成功后置位；失败可重试。 */
   private recovered = false
@@ -460,8 +475,17 @@ export class WorkflowService {
             if (known !== undefined) children.add(known)
             for (const node of record.nodes ?? []) if (node.conversationId !== undefined) children.add(node.conversationId)
             // 全部执行已在 prepareRecovery 持久标记取消；此处仅等待真实终态，
-            // 不能先回报 interrupted 却让旧模型回合继续运行。
-            await Promise.all([...children].map((id) => this.host.abortConversation(id)))
+            // 不能先回报 interrupted 却让旧模型回合继续运行。守卫中止逐个诊断：
+            // 单个子会话拒绝（human 接管等红线事实）不阻断其余恢复。
+            await Promise.all([...children].map(async (id) => {
+              try {
+                await this.host.abortConversationGuarded(id)
+              } catch (error) {
+                process.stderr.write(
+                  `workflow init: guarded abort conversation ${id} failed: ${errorMessage(error)}\n`,
+                )
+              }
+            }))
           }
           record.status = 'failed'
           record.updatedAt = Date.now()
@@ -786,13 +810,17 @@ export class WorkflowService {
       timeline: [],
       pendingAborts: new Set(),
       pendingExecs: new Set(),
+      childConversations: new Set(),
       lastPersistAt: createdAt,
       lastNodeEventAt: createdAt,
     }
     // 停机屏障复查：入口检查后已经过 init() 与 resume 分支的 flush 等多个 await
     // 点，close() 只快照当下 active 集合——漏检会让 run 越过屏障继续派生子会话。
     // 本行到 active.set 之间无 await（单线程事件循环），此后 close 必然拍到本 run。
+    // 同款复查取消窗口：经过脚本读取/账本重放等 await 后，目标会话可能已进入
+    // 级联取消边界——在此拒绝，不留越过标记的漏网 run。
     this.assertNotClosed()
+    this.assertNotCancelling(conversationId)
     this.active.set(runId, run)
 
     /**
@@ -1156,30 +1184,22 @@ export class WorkflowService {
       timeline: [],
       pendingAborts: new Set(),
       pendingExecs: new Set(),
-      abortChildConversations: new Set(),
+      childConversations: new Set(),
       lastPersistAt: createdAt,
       lastNodeEventAt: createdAt,
     }
+    // 取消窗口复查（与 active.set 零 await 间隔）：入口检查后已经过 getConversation
+    // 等多个 await 点，父会话可能已进入级联取消边界——在此拒绝，不留漏网 run。
+    this.assertNotCancelling(request.parentConversationId)
     this.active.set(runId, run)
 
-    // abort(runId)/close() → 取消本 run 信号（spawn 信号桥停子会话回合）+
-    // 经 host.abortConversation 确定性中止已 onResolved 的子会话（tracker 全量
-    // 结算；幂等，已结束的子会话静默）。注册进 pendingAborts：settle 前必等完。
+    // abort(runId)/close()/级联取消 → 取消本 run 信号（spawn 信号桥停子会话回合）+
+    // 经 host.abortConversationGuarded 守卫中止已 onResolved 的子会话（human
+    // 红线由内核原子复核；幂等，已结束的子会话静默）。注册进 pendingAborts：
+    // settle 前必等完。
     const onRunAbort = (): void => {
-      for (const childId of [...(run.abortChildConversations ?? [])]) {
-        const pending = this.host
-          .abortConversation(childId)
-          .catch((error: unknown) => {
-            process.stderr.write(
-              `workflow ${runId}: abort conversation ${childId} failed: ${
-                error instanceof Error ? error.message : String(error)
-              }\n`,
-            )
-          })
-          .then(() => {
-            run.pendingAborts.delete(pending)
-          })
-        run.pendingAborts.add(pending)
+      for (const childId of [...run.childConversations]) {
+        this.abortChildConversation(run, childId)
       }
     }
     abort.signal.addEventListener('abort', onRunAbort, { once: true })
@@ -1208,6 +1228,10 @@ export class WorkflowService {
     const settle = async (
       outcome: { ok: true; raw: unknown } | { ok: false; error: unknown },
     ): Promise<void> => {
+      // 同步置位幂等门：abort 快路径与 spawn 迟到终局竞态下二次进入直接
+      // no-op（迟到结果只经 active 删除后的 records 事实可见，不翻终态）。
+      if (settled) return
+      settled = true
       try {
         const settledAt = Date.now()
         const aborted =
@@ -1300,11 +1324,25 @@ export class WorkflowService {
         }
         this.emitEventSafe('workflow.updated', { run: { ...run.summary } })
         this.active.delete(runId)
-        settled = true
         if (settleError !== undefined) run.settleError = settleError
         resolveDone()
       }
     }
+
+    // abort 快路径：取消即结算（不等 spawn 终局）。守卫拒绝（human 接管等
+    // 红线事实）时 spawn 可能长期不返回，而 run 的终态绝不能依赖被保护
+    // 子会话的完成；迟到 spawn 结果经 settle 的幂等门丢弃。
+    abort.signal.addEventListener(
+      'abort',
+      () => {
+        void settle({ ok: false, error: new HelmError('aborted', '后台子代理执行已取消', 409) }).catch(
+          (error: unknown) => {
+            reportSettleError(error)
+          },
+        )
+      },
+      { once: true },
+    )
 
     const agentIdForProto = request.agentId ?? `${runId}:subagent-0`
     // spawn 终局透传：guarded 在下方组装后立刻接入（wireBackground），后台链
@@ -1375,7 +1413,10 @@ export class WorkflowService {
         if (info.nodeId !== undefined) node.nodeId = info.nodeId
         if (info.conversationId !== undefined) {
           node.conversationId = info.conversationId
-          run.abortChildConversations?.add(info.conversationId)
+          run.childConversations.add(info.conversationId)
+          // 迟到 onResolved 补杀：取消先于执行元数据落地时，onRunAbort 的快照
+          // 看不到该子会话——在登记点立即补守卫中止，绝不因时序漏杀。
+          if (abort.signal.aborted) this.abortChildConversation(run, info.conversationId)
         }
         if (info.executionId !== undefined) node.executionId = info.executionId
         if (info.effectiveCwd !== undefined) node.effectiveCwd = info.effectiveCwd
@@ -1571,7 +1612,11 @@ export class WorkflowService {
     return this.getRun(runId).result
   }
 
-  /** 中止 run：强杀 worker 线程 + 取消在途子会话；不遗留 worker。 */
+  /**
+   * 中止 run（级联）：本 run 自身 + 其子会话子树内的全部后代 run 与同步子会话
+   * 一起取消；父会话的兄弟任务不受牵连。取消窗口内拒绝该子树新 run/spawn
+   * （防取消期间又派新任务）；返回时全部涉及 run 已 settle、无未处理 rejection。
+   */
   async abort(runId: string): Promise<void> {
     const activeRun = this.active.get(runId)
     if (activeRun === undefined) {
@@ -1579,12 +1624,168 @@ export class WorkflowService {
       this.getRun(runId)
       return
     }
-    activeRun.abort.abort()
-    // 启动期（尚未 onResolved）也必须等待真实退出：与运行期同一 done 通道
-    //（startBackgroundAgent 在 onResolved 前后都把收尾挂到 run.done），
-    // 返回时 run 已终态、active 已移除、无未处理 rejection。
-    await activeRun.done
+    const seeds = [...activeRun.childConversations]
+    await this.cancelBoundary(`run:${runId}`, seeds, (run, isWithin) => {
+      if (run === activeRun) return true
+      // 后代归属：run 的发起会话落在任一子会话子树内（沿真实会话父链）。
+      for (const seed of seeds) {
+        if (isWithin(run.conversationId, seed)) return true
+      }
+      return false
+    })
     if (activeRun.settleError !== undefined) throw activeRun.settleError
+  }
+
+  /** 会话是否处于级联取消窗口（插件层据此跳过向被取消父会话的结算汇报投递）。 */
+  isConversationCancelling(conversationId: number): boolean {
+    return this.cancellingCounts.has(conversationId)
+  }
+
+  /**
+   * 取消会话子树（含自身发起）的全部在途 run：父会话被中止（turn aborted）
+   * 后由插件层调用。幂等：同根并发调用共享同一次取消；全部 run settle 后
+   * 才返回（各自子会话的守卫中止在 run 结算链内等待）。
+   */
+  async cancelRunsUnderConversation(conversationId: number): Promise<void> {
+    await this.cancelBoundary(`conv:${conversationId}`, [conversationId], (run, isWithin) =>
+      isWithin(run.conversationId, conversationId),
+    )
+  }
+
+  /** 取消窗口断言：边界内会话拒绝新 run（HelmError aborted，不静默排队）。 */
+  private assertNotCancelling(conversationId: number): void {
+    if (this.cancellingCounts.has(conversationId)) {
+      throw new HelmError(
+        'aborted',
+        `会话 ${conversationId} 所在任务树正在取消，拒绝启动新运行`,
+        409,
+        { conversationId },
+      )
+    }
+  }
+
+  /**
+   * 守卫中止一个 run 的子会话：经宿主守卫入口（human 红线由内核原子复核；
+   * 拒绝/失败诊断不吞 stderr），绝不回退普通中止；完成前计入 pendingAborts
+   * （settle 前必等完——迟到调用在结算后仅诊断，同样不阻断终态）。
+   */
+  private abortChildConversation(run: ActiveRun, conversationId: number): void {
+    const pending = this.host
+      .abortConversationGuarded(conversationId)
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `workflow ${run.runId}: guarded abort conversation ${conversationId} rejected: ${message}\n`,
+        )
+      })
+      .then(() => {
+        run.pendingAborts.delete(pending)
+      })
+    // 先注册再执行：catch 链已保证 pending 不 reject，then 删除自引用安全。
+    run.pendingAborts.add(pending)
+  }
+
+  /**
+   * 边界取消核心：先落取消标记（窗口内新 run 在注册点被拒），再反复扫描
+   * active 中命中边界的 run 逐个取消，直到无新增；最后等待全部 settle。
+   * 标记引用计数（并发取消重叠时最后一个释放才解除）；同 key 重入共享同
+   * 一次取消，防回调相互等待死锁。
+   */
+  private async cancelBoundary(
+    key: string,
+    seeds: readonly number[],
+    match: (run: ActiveRun, isWithin: (candidate: number, seed: number) => boolean) => boolean,
+  ): Promise<void> {
+    const inflight = this.boundaryCancels.get(key)
+    if (inflight !== undefined) return inflight
+    const cancel = this.runBoundaryCancel(key, seeds, match)
+    this.boundaryCancels.set(key, cancel)
+    try {
+      await cancel
+    } finally {
+      if (this.boundaryCancels.get(key) === cancel) this.boundaryCancels.delete(key)
+    }
+  }
+
+  private runBoundaryCancel(
+    key: string,
+    seeds: readonly number[],
+    match: (run: ActiveRun, isWithin: (candidate: number, seed: number) => boolean) => boolean,
+  ): Promise<void> {
+    return (async () => {
+      /** 本次取消持有的标记增量（finally 逐一释放）。 */
+      const held: number[] = []
+      const mark = (id: number): void => {
+        this.cancellingCounts.set(id, (this.cancellingCounts.get(id) ?? 0) + 1)
+        held.push(id)
+      }
+      // 先落边界标记再扫描：注册点断言保证标记后的新 run 必被拒。
+      for (const seed of seeds) mark(seed)
+
+      /** 发起会话父链缓存（getConversation 网络式读取；缺失即链断）。 */
+      const parentCache = new Map<number, number | undefined>()
+      const parentOf = (id: number): number | undefined => {
+        if (!parentCache.has(id)) {
+          let parent: number | undefined
+          try {
+            parent = this.host.getConversation(id).parentConversationId
+          } catch {
+            parent = undefined
+          }
+          parentCache.set(id, parent)
+        }
+        return parentCache.get(id)
+      }
+      /** 沿真实会话父链判定 candidate 是否在 seed 子树内：visited 防环（父链
+       * 环按不可达处理），缺父即止（不虚构可达）。 */
+      const isWithin = (candidate: number, seed: number): boolean => {
+        if (candidate === seed) return true
+        const visited = new Set<number>()
+        let current: number | undefined = candidate
+        while (current !== undefined && !visited.has(current)) {
+          visited.add(current)
+          if (current === seed) return true
+          current = parentOf(current)
+        }
+        return false
+      }
+
+      const aborted = new Set<ActiveRun>()
+      try {
+        // 扫描-取消循环：每轮取全部命中且未取消的 run；标记其发起会话（窗口
+        // 内该会话不能再派新任务）后取消控制器。标记先于取消到位 + 注册点
+        // 断言 ⇒ 不会出现越标新 run；循环收敛（上限 64 轮防御，超出如实诊断）。
+        for (let round = 0; round < 64; round++) {
+          const next = [...this.active.values()].filter((r) => !aborted.has(r) && match(r, isWithin))
+          if (next.length === 0) break
+          for (const run of next) {
+            mark(run.conversationId)
+            aborted.add(run)
+            run.abort.abort()
+          }
+        }
+        if (aborted.size > 0 && [...this.active.values()].some((r) => !aborted.has(r) && match(r, isWithin))) {
+          process.stderr.write(
+            `workflow: 边界取消 ${key} 64 轮扫描后仍有命中 run（防御上限，剩余项由后续事件链结算）\n`,
+          )
+        }
+        // 全部 settle：各 run 的结算链内等待子会话守卫中止与结算通知完成。
+        await Promise.all([...aborted].map((r) => r.done))
+        // 防御性收尾扫描：等待期间理论不存在新注册（注册点已拒），仍兜底一轮。
+        const stragglers = [...this.active.values()].filter((r) => !aborted.has(r) && match(r, isWithin))
+        for (const run of stragglers) {
+          mark(run.conversationId)
+          run.abort.abort()
+          await run.done
+        }
+      } finally {
+        for (const id of held) {
+          const count = this.cancellingCounts.get(id) ?? 1
+          if (count <= 1) this.cancellingCounts.delete(id)
+          else this.cancellingCounts.set(id, count - 1)
+        }
+      }
+    })()
   }
 
   async close(): Promise<void> {
@@ -1624,6 +1825,9 @@ export class WorkflowService {
             ...(options?.schema !== undefined ? { schema: options.schema } : {}),
             ...(options?.gate !== undefined ? { gate: options.gate } : {}),
             ...(options?.attachments !== undefined ? { attachments: options.attachments } : {}),
+            // 显式续接授权透传（ResumeAgentOptions.maxSubagentDepth）：静默丢弃
+            // 等于假装授予了子树深度；引擎/内核边界照常校验非法值。
+            ...(options?.maxSubagentDepth !== undefined ? { maxSubagentDepth: options.maxSubagentDepth } : {}),
             ...(options?.onResolved !== undefined ? { onResolved: options.onResolved } : {}),
             ...(options?.onGateResult !== undefined ? { onGateResult: options.onGateResult } : {}),
           },
@@ -1633,21 +1837,11 @@ export class WorkflowService {
       abortAgent(agentId: string): void {
         const convId = conversationByAgent.get(agentId)
         if (convId === undefined) return
-        // 只中止本 run 派生的子会话。fire-and-forget 会让 abort/close 返回时子会话
-        // 仍在跑——记入 pendingAborts 由 done 收尾统一 await；不存在（已结束）时
-        // abortConversation 幂等静默，但 rejection 仍须诊断，绝不吞。
-        const pending = service.host
-          .abortConversation(convId)
-          .catch((error: unknown) => {
-            process.stderr.write(
-              `workflow ${run.runId}: abort conversation ${convId} failed: ${error instanceof Error ? error.message : String(error)}\n`,
-            )
-          })
-          .then(() => {
-            run.pendingAborts.delete(pending)
-          })
-        // 先注册再执行：catch 链已保证 pending 不 reject，then 删除自引用安全。
-        run.pendingAborts.add(pending)
+        // 只中止本 run 派生的子会话（守卫中止：human 红线由内核原子复核）；
+        // fire-and-forget 会让 abort/close 返回时子会话仍在跑——记入
+        // pendingAborts 由 done 收尾统一 await；不存在（已结束）时幂等静默，
+        // 但 rejection 仍须诊断，绝不吞。
+        service.abortChildConversation(run, convId)
       },
       ...(service.host.runGate !== undefined
         ? {
@@ -1747,6 +1941,11 @@ export class WorkflowService {
     if (this.closed || run.abort.signal.aborted) {
       return { ok: false, error: 'Workflow aborted.' }
     }
+    // 级联取消窗口内的会话不再派生（防取消期间又派新任务；返回节点错误而非
+    // 抛出——引擎把 agent 节点结算为失败，不阻断同批其他节点）。
+    if (this.isConversationCancelling(run.conversationId)) {
+      return { ok: false, error: '[aborted] 发起会话所在任务树正在取消，拒绝派生子代理' }
+    }
 
     // 引擎内 agentId（wf-agent-N）跨 run 重复；全局 agentSessions 是进程级
     // Map，两个同 parent 的并行 run 会互相覆盖对方的映射，resume 可能续接错
@@ -1786,6 +1985,10 @@ export class WorkflowService {
         executionInfo = info
         if (info.conversationId !== undefined) {
           conversationByAgent.set(request.agentId, info.conversationId)
+          run.childConversations.add(info.conversationId)
+          // 迟到 onResolved 补杀：abort 先于执行元数据落地时，abortAgent 的
+          // 映射里还没有该子会话——在登记点立即补守卫中止，绝不因时序漏杀。
+          if (run.abort.signal.aborted) this.abortChildConversation(run, info.conversationId)
         }
         request.onResolved?.(info)
       },

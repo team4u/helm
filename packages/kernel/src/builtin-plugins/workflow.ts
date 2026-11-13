@@ -6,12 +6,19 @@
  *   引擎为插件自有资产（内核不 import 本目录）；跨 spawn 通用边界在
  *   runtime/spawn（内核侧）；
  * - 私有 state 经 ctx.doc 私有文档 `records`（插件 docs 命名空间，state.sqlite
- *   持久）；公共 `runs` 投影按会话分片（ctx.sessionDoc，仅写各自会话的 run，
- *   不进全局首帧/全局 SSE）；全局仅保留紧凑 `run-badges` 角标文档
- *   （每会话 count/tone/footerText，无完整 run 摘要）；
+ *   持久）；公共 `runs` 投影按会话分片（ctx.sessionDoc，每会话分片含自身及
+ *   后代发起的 run——沿真实会话父链防环/缺父，run.conversationId 保持原始
+ *   归属；不进全局首帧/全局 SSE，会话新增/删除经宿主事件重投影）；全局仅
+ *   保留紧凑 `run-badges` 角标文档（每会话聚合 count/tone/footerText，按
+ *   run.id 去重，无完整 run 摘要）；
  *   无进程内 Map fallback、无 kernel.documentStore 注入；
  * - 后台子代理结算（kind=subagent）经 submitInput(requestId) 向父会话投递
- *   汇报（跨重启幂等；父会话已删除时 notification 通知）；
+ *   汇报（跨重启幂等；父会话已删除时 notification 通知）；级联取消边界内的
+ *   下级父会话不投递（防取消后复活），只向边界外拥有者单次结算汇报；
+ * - 级联取消：turn_settled（outcome=aborted）时取消该会话子树内属于它的
+ *   全部在途 run（completed/failed 不取消合法后台任务）；受管子会话中止一律
+ *   经 ctx.host.abortConversationGuarded 内核原子复核（human 红线），绝不
+ *   回退普通 abortConversation；
  * - 生命周期：service.prepare 执行 prepareRecovery（只落 abort 标记，不唤醒
  *   调度器，必须在任何服务 start 之前——宿主全局 prepare 屏障保证）；
  *   service.start 执行 init（终止遗留任务、标 failed、补发通知）与 close；
@@ -403,6 +410,28 @@ export function createWorkflowPlugin(): PluginDefinition {
         return { action: 'transform', value: { ...turn, tools } }
       })
 
+      // ---- turn_settled（outcome=aborted）：级联取消该会话子树内属于它的 run ----
+      // 只在 aborted 时级联（completed/failed 不取消合法后台任务）；fire-and-forget：
+      // 会话结算链绝不 await 取消完成——run 结算链会经守卫端口中止子会话并等待
+      // 其结算，若在此处相互等待会死锁（取消经引擎幂等门与重入共享收敛；子会话
+      // 被守卫中止触发的 turn_settled 递归进入时命中同一批 run，不再扩散）。
+      ctx.hook.onTurnSettled((payload) => {
+        if (payload.outcome !== 'aborted') return
+        const conversationId = payload.conversation.id
+        void workflows
+          .cancelRunsUnderConversation(conversationId)
+          .then(
+            () => syncRunsDoc(),
+            (error: unknown) => {
+              const message = error instanceof Error ? error.message : String(error)
+              process.stderr.write(
+                `builtin:workflow: 会话 ${conversationId} 中止后的后台运行级联取消失败: ${message}\n`,
+              )
+              syncRunsDoc()
+            },
+          )
+      })
+
       // 受控 stop 时序：teardown 先置 deactivating 会废黜 doc 句柄，但 service.stop
       // 属宿主受控调用链——本插件在 stop 内最后再同步 runs 投影。为使 stop 期间的
       // 最终落盘可写，引擎持有本周期 doc 句柄的直接引用（句柄在 stop 返回前仍由
@@ -442,7 +471,37 @@ export function createWorkflowPlugin(): PluginDefinition {
           execEnv: (req, signal) => ctx.host.execEnv(req, { signal }),
           listActions: () => ctx.host.listActions(),
           getConversation: (id) => ctx.host.getConversation(id),
-          abortConversation: (id) => ctx.host.abortConversation(id),
+          // 守卫式子会话中止（自动化取消唯一入口）：现读归属与权威水位作守卫
+          // 事实，经内核 abortConversationGuarded 原子复核；human 红线由内核在
+          // 串行域内兜底拒绝。事实读取不可用（如受控停止窗口）时携空守卫调用
+          // ——内核仍拒 human，绝不因此回退普通 abortConversation；守卫拒绝
+          // （归属翻转/水位推进/目标删除）确定性放弃并诊断，不重试不掩盖。
+          abortConversationGuarded: async (id) => {
+            let guard: { expectedOwnership?: 'bot' | 'helm'; expectedStateSeq?: number } = {}
+            try {
+              const ownership = ctx.host.getConversationOwnership(id)
+              guard =
+                ownership === 'human'
+                  ? {}
+                  : {
+                      expectedOwnership: ownership,
+                      expectedStateSeq: ctx.host.getConversation(id).stateChangeSeq,
+                    }
+            } catch (error) {
+              if (error instanceof HelmError && error.code === 'not_found') return
+              // 事实读取不可用：空守卫仍经内核原子复核（human 仍被拒）。
+              guard = {}
+            }
+            try {
+              await ctx.host.abortConversationGuarded(id, guard)
+            } catch (error) {
+              if (error instanceof HelmError && error.code === 'not_found') return
+              const message = error instanceof Error ? error.message : String(error)
+              process.stderr.write(
+                `builtin:workflow: 守卫中止子会话 ${id} 被内核拒绝（human 红线或事实过期；确定性放弃，不回退普通中止）: ${message}\n`,
+              )
+            }
+          },
           // 引擎侧签名是 void（各调用点 fire-and-forget 不 await）：适配器必须
           // 自吞异常——runs 投影（listRuns 可抛 workflow_index_corrupt）与广播
           // 失败只能诊断，逃逸会变成 unhandledRejection 拖垮进程（stop 路径
@@ -507,6 +566,43 @@ export function createWorkflowPlugin(): PluginDefinition {
         writeRunsDoc()
       }
 
+      // ---- 会话事实变化（新增/删除）→ 重投影 runs 分片与角标 ----
+      // 分片是会话子树聚合：会话删除会让「后代发起」的 run 失去投影目标，
+      // 新会话成为既有 run 的祖先时聚合面改变。conversation.upsert 高频
+      //（状态/doing 均广播）：以树形指纹（id + 父链）比对，树未变则跳过
+      //（无写放大）；投影本身仍幂等（值比对写入）。父链只在创建时落定
+      //（PATCH 不可改），指纹即完整树事实。
+      let conversationTreeFingerprint = ''
+      function reprojectOnConversationTreeChange(): void {
+        if (stopping) return
+        try {
+          const fingerprint = JSON.stringify(
+            ctx.host
+              .listConversations()
+              .map((c) => [c.id, c.parentConversationId ?? null] as const)
+              .sort((a, b) => a[0] - b[0]),
+          )
+          if (fingerprint === conversationTreeFingerprint) return
+          writeRunsDoc()
+          conversationTreeFingerprint = fingerprint
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`builtin:workflow: 会话树变化后的 runs 投影失败: ${message}\n`)
+        }
+      }
+      ctx.host.onEvent('conversation.upsert', () => {
+        reprojectOnConversationTreeChange()
+      })
+      ctx.host.onEvent('conversation.deleted', () => {
+        if (stopping) return
+        try {
+          writeRunsDoc()
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`builtin:workflow: 会话删除后的 runs 投影失败: ${message}\n`)
+        }
+      })
+
       /** 上一轮已写分片的值缓存（值相等时跳过写入，不发重复事件）。 */
       const writtenRunsByConv = new Map<number, string>()
       /** 上一轮已写角标摘要（值相等时跳过写入）。 */
@@ -527,24 +623,55 @@ export function createWorkflowPlugin(): PluginDefinition {
       function writeRunsDoc(): void {
         const runs = workflows.listRuns()
         // 会话存在集合：删除的父会话不重建孤儿 doc（store 已级联清理）。
-        const existingIds = new Set(
-          ctx.host.listConversations().map((c) => c.id),
-        )
+        const existing = new Map<number, { parentConversationId?: number }>()
+        for (const conversation of ctx.host.listConversations()) {
+          existing.set(conversation.id, conversation)
+        }
 
-        // 1) 每个仍有会话的父会话：写自己的 runs 分片（值不变跳过）。
+        /**
+         * 发起会话的祖先链（仅含仍存在的会话）：沿真实会话 parent 链上行，
+         * visited 防环（父链环按链断处理，不性深入），缺父即止（不虚构祖先）。
+         */
+        const ancestorChains = new Map<number, number[]>()
+        const ancestorsOf = (id: number): number[] => {
+          const cached = ancestorChains.get(id)
+          if (cached !== undefined) return cached
+          const chain: number[] = []
+          const visited = new Set<number>([id])
+          let current = existing.get(id)
+          while (current !== undefined) {
+            const parent = current.parentConversationId
+            if (parent === undefined || visited.has(parent)) break
+            visited.add(parent)
+            if (!existing.has(parent)) break
+            chain.push(parent)
+            current = existing.get(parent)
+          }
+          ancestorChains.set(id, chain)
+          return chain
+        }
+
+        // 1) 会话分片：自身 + 后代发起的 runs（run.conversationId 保持原始
+        //    归属，不改写为投影目标）；按 run.id 去重（防御索引异常形状），
+        //    顺序保持引擎全局序（createdAt 倒序）。发起会话已删除的 run 父链
+        //    事实不可达（父链存在子会话上），不投影到任何分片。
         const runsByConversation = new Map<number, WorkflowRunSummary[]>()
         for (const run of runs) {
-          if (!existingIds.has(run.conversationId)) continue
-          const list = runsByConversation.get(run.conversationId) ?? []
-          list.push(run)
-          runsByConversation.set(run.conversationId, list)
+          if (!existing.has(run.conversationId)) continue
+          const targets = new Set<number>([run.conversationId, ...ancestorsOf(run.conversationId)])
+          for (const target of targets) {
+            const list = runsByConversation.get(target) ?? []
+            if (list.some((r) => r.id === run.id)) continue
+            list.push(run)
+            runsByConversation.set(target, list)
+          }
         }
         for (const convId of persistedRunsConvs) {
-          if (!existingIds.has(convId)) {
+          if (!existing.has(convId)) {
             persistedRunsConvs.delete(convId)
             continue
           }
-          // 已持久会话：无 runs 时清到空（不保留旧投影）；尚未写入的不重建。
+          // 已持久会话：无可见 runs 时清到空（不保留旧投影）；尚未写入的不重建。
           if (!runsByConversation.has(convId)) runsByConversation.set(convId, [])
         }
         for (const [convId, convRuns] of runsByConversation) {
@@ -555,25 +682,21 @@ export function createWorkflowPlugin(): PluginDefinition {
           persistedRunsConvs.add(convId)
         }
 
-        // 2) 全局紧凑角标（有意全局：仅导航元数据，无完整 run 摘要）。
+        // 2) 全局紧凑角标（有意全局：仅导航元数据，无完整 run 摘要）：与分片
+        //    同源的后代聚合（分片本身已按 run.id 去重），幂等值比对写入。
         const byConversation: WorkflowRunBadgesDocState['byConversation'] = {}
-        for (const run of runs) {
-          if (!existingIds.has(run.conversationId)) continue
-          const key = String(run.conversationId)
-          const entry = byConversation[key] ?? { count: 0, tone: 'neutral' as const, footerText: '' }
-          entry.count += 1
-          if (run.status === 'running') entry.tone = 'accent'
-          else if (run.status === 'failed' && entry.tone !== 'accent') entry.tone = 'warn'
-          byConversation[key] = entry
-        }
-        for (const [key, entry] of Object.entries(byConversation)) {
-          const convRuns = runs.filter((r) => r.conversationId === Number(key))
+        for (const [convId, convRuns] of runsByConversation) {
+          if (convRuns.length === 0) continue
           const running = convRuns.filter((r) => r.status === 'running').length
           const failed = convRuns.filter((r) => r.status === 'failed').length
-          entry.footerText = [
-            running > 0 ? `${running} 运行中` : '',
-            failed > 0 ? `${failed} 失败` : '',
-          ].filter((s) => s !== '').join(' · ')
+          byConversation[String(convId)] = {
+            count: convRuns.length,
+            tone: running > 0 ? 'accent' : failed > 0 ? 'warn' : 'neutral',
+            footerText: [
+              running > 0 ? `${running} 运行中` : '',
+              failed > 0 ? `${failed} 失败` : '',
+            ].filter((s) => s !== '').join(' · '),
+          }
         }
         const badgesJson = JSON.stringify(byConversation)
         if (badgesJson !== writtenBadgesJson) {
@@ -587,6 +710,16 @@ export function createWorkflowPlugin(): PluginDefinition {
         run: WorkflowRunSummary,
         info: { parentConversationId: number; agentType?: string; execution?: AgentExecutionInfo },
       ): Promise<void> {
+        // 级联取消边界内不投递：取消结果已落 run 记录（UI/任务面板可查），
+        // 向同样被取消的下级父会话 submitInput 会唤醒新回合再派工（复活）；
+        // 只向本次取消边界外的拥有者做单次结算汇报（边界判断以引擎取消窗口
+        // 为准，投递决策发生在 run done 之前——无标记释放后的窗口）。
+        if (workflows.isConversationCancelling(info.parentConversationId)) {
+          process.stderr.write(
+            `builtin:workflow: 运行 ${run.id} 已${run.status}；父会话 ${info.parentConversationId} 在取消边界内，跳过汇报投递（结果见任务面板）\n`,
+          )
+          return
+        }
         let parentExists = false
         try {
           ctx.host.getConversation(info.parentConversationId)

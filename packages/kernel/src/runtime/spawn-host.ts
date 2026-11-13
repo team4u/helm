@@ -78,6 +78,12 @@ export interface SpawnHostSource {
   ): Promise<void>
   /** resume 续接时更新子会话 parentToolCallId（镜像 + 广播）。 */
   bindChildToolCall(childId: number, parentToolCallId: string): void
+  /**
+   * 守卫式中止子会话（signal 桥/启动期取消的红线入口）：实现现读归属事实
+   * 并经内核 abortConversationGuarded 原子复核（human-owned 一律拒绝）。
+   * 缺省不接线时 spawn 回退 SDK conversation.abort（原始取消能力）。
+   */
+  abortChildConversationGuarded?(childId: number): Promise<void>
 }
 
 export interface SpawnHostOptions {
@@ -128,6 +134,9 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
         finalRequest.parentToolCallId, thinkingLevelOverride,
       ),
     bindChildToolCall: (childId, parentToolCallId) => source.bindChildToolCall(childId, parentToolCallId),
+    ...(source.abortChildConversationGuarded !== undefined
+      ? { abortChildConversationGuarded: (childId: number) => source.abortChildConversationGuarded!(childId) }
+      : {}),
     resolveProfile: async (profileId) => {
       const profile = await source.readProfileForSpawn(profileId)
       if (!profile) return undefined

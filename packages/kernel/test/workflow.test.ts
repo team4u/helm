@@ -1264,7 +1264,7 @@ interface ServiceHostExtras {
   spawns: Array<Record<string, unknown>>
   actionCount: () => number
   aborted: number[]
-  abortConversation: WorkflowServiceHost['abortConversation']
+  abortConversationGuarded: WorkflowServiceHost['abortConversationGuarded']
 }
 
 function makeServiceHost(options: { actionFail?: boolean } = {}): WorkflowServiceHost & ServiceHostExtras {
@@ -1320,7 +1320,7 @@ function makeServiceHost(options: { actionFail?: boolean } = {}): WorkflowServic
         updatedAt: 0,
       }
     },
-    async abortConversation(id: number) {
+    async abortConversationGuarded(id: number) {
       aborted.push(id)
     },
     emitEvent() {},
@@ -2233,7 +2233,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
           },
           listActions: () => [],
           getConversation: (id) => runtime.getConversation(id),
-          abortConversation: (id) => runtime.abortConversation(id),
+          abortConversationGuarded: (id) => runtime.abortConversationGuarded(id, {}),
           emitEvent: () => {},
         },
       })
@@ -2405,7 +2405,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
           },
           listActions: () => runtime.plugins.listActions(),
           getConversation: (id) => runtime.getConversation(id),
-          abortConversation: (id) => runtime.abortConversation(id),
+          abortConversationGuarded: (id) => runtime.abortConversationGuarded(id, {}),
           emitEvent: () => {},
         },
       })

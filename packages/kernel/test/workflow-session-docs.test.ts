@@ -6,6 +6,9 @@
  * - 分片值不变不发 plugin.session_doc.updated（无写放大）；
  * - 删除的父会话不重建孤儿 doc（会话不存在时跳过；已持久分片在会话仍存在
  *   但无 runs 时清到空）；
+ * - 祖先聚合：每个会话分片含自身及后代发起的 runs（run.conversationId
+ *   保持原始归属），角标同步聚合、按 run.id 去重；父链环/缺父不虚构投影；
+ *   会话删除/树变化经宿主事件触发重投影；
  * - 重启（新 host 同持久层）start 后最终投影与会话分片一致。
  * runner: tsx --test；每项显式 timeout: 60_000。
  */
@@ -24,12 +27,13 @@ import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js'
 import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
 import { createHelm } from '../src/app.js'
 
-function makeConversation(id: number): ConversationSummary {
+function makeConversation(id: number, parent?: number): ConversationSummary {
   return {
     id,
     title: `conv-${id}`,
     profileId: 'assistant',
     tags: [],
+    ...(parent !== undefined ? { parentConversationId: parent } : {}),
     cwd: '/tmp',
     model: 'test/model',
     thinkingLevel: '',
@@ -47,6 +51,7 @@ function makeConversation(id: number): ConversationSummary {
 class FakeBackend extends PluginHostBackendFixtureBase {
   conversations = new Map<number, ConversationSummary>()
   events: Array<{ type: string; payload: unknown }> = []
+  private listeners = new Map<string, Array<(payload: unknown) => void>>()
   constructor() {
     super()
     this.conversations.set(1, makeConversation(1))
@@ -81,7 +86,19 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   createAsk(): Promise<never> { return Promise.reject(new HelmError('unsupported', '测试后端不提供 ask', 501)) }
   cancelAsk(): Promise<void> { return Promise.resolve() }
   registerAskSeqResolver(): () => void { return () => {} }
-  onEvent(): () => void { return () => {} }
+  onEvent(type: string, listener: (payload: unknown) => void): () => void {
+    const list = this.listeners.get(type) ?? []
+    list.push(listener)
+    this.listeners.set(type, list)
+    return () => {
+      const current = this.listeners.get(type) ?? []
+      this.listeners.set(type, current.filter((l) => l !== listener))
+    }
+  }
+  /** 模拟内核事件广播（conversation.upsert / conversation.deleted 等）。 */
+  emit(type: string, payload: unknown): void {
+    for (const listener of [...(this.listeners.get(type) ?? [])]) listener(payload)
+  }
   emitEvent(type: string, payload: unknown): void {
     this.events.push({ type, payload })
   }
@@ -342,5 +359,118 @@ test('sessionDoc 声明与 docs 命名空间隔离：runs 为会话文档，reco
     ['builtin:workflow:run-badges'],
     `全局命名空间只留 records 与 run-badges（实际 ${JSON.stringify(globalKeys)}）`,
   )
+  await host.dispose()
+})
+
+// ---------------------------------------------------------------------------
+// 祖先聚合：分片含自身 + 后代发起的 runs（原始归属保留），角标同步聚合
+// ---------------------------------------------------------------------------
+
+/** 事件回调经 PluginHost 任务包装异步执行：等一个微任务 + timer 刻。 */
+async function tick(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 5))
+}
+
+test('祖先聚合：后代发起的 run 进入祖先分片且保留原始归属；角标聚合去重；无关会话不串台', { timeout: 60_000 }, async () => {
+  // 树：1 ← 11（受管子会话）；2 独立。
+  backend.conversations.set(11, makeConversation(11, 1))
+  const host = makeHost()
+  await host.register(createWorkflowPlugin())
+  const runIn = async (conversationId: number, name: string) =>
+    (await host.invokeAction('builtin:workflow', 'run', { conversationId, script: `${META(name)}return 1` }, { conversationId })) as { run: { id: string; conversationId: number } }
+
+  const rootRun = await runIn(1, 'root-run')
+  const childRun = await runIn(11, 'child-run')
+
+  // 后代 run 进入祖先分片；conversationId 保持原始归属（11，不改写为 1）。
+  const shard1 = readShard(1)
+  const shard11 = readShard(11)
+  assert.equal(shard1?.runs.length, 2, `根会话分片含自身 + 后代 run（实际 ${JSON.stringify(shard1?.runs.map((r) => r.id))}）`)
+  assert.equal(shard11?.runs.length, 1, '子会话分片只含自己的 run')
+  const projectedChild = shard1!.runs.find((r) => r.id === childRun.run.id)
+  assert.ok(projectedChild, '后代 run 在根分片中')
+  assert.equal(projectedChild!.conversationId, 11, 'run.conversationId 保持原始归属（不改写为投影目标）')
+  assert.equal(shard11!.runs[0]!.conversationId, 11)
+  assert.equal(shard1!.runs.some((r) => r.id === rootRun.run.id), true, '自身 run 仍在根分片')
+
+  // 无关会话不串台。
+  assert.equal(readShard(2) === undefined || readShard(2)!.runs.length === 0, true, '无关会话分片不含该子树 run')
+
+  // 角标同步祖先聚合：根会话计数含后代 run（按 run.id 去重后即 2）。
+  const badges = readBadges()
+  assert.equal(badges.byConversation['1']?.['count'], 2, `根会话角标聚合后代 run（实际 ${JSON.stringify(badges)}）`)
+  assert.equal(badges.byConversation['11']?.['count'], 1, '子会话角标只计自己')
+  assert.equal(badges.byConversation['2'], undefined, '无关会话无角标')
+  await host.dispose()
+})
+
+test('父链环与缺父：不虚构祖先投影，投影有界完成', { timeout: 60_000 }, async () => {
+  // 环：4 → 5 → 4；缺父：6 → 999（不存在）。
+  backend.conversations.set(4, makeConversation(4, 5))
+  backend.conversations.set(5, makeConversation(5, 4))
+  backend.conversations.set(6, makeConversation(6, 999))
+  const host = makeHost()
+  await host.register(createWorkflowPlugin())
+
+  await host.invokeAction('builtin:workflow', 'run', { conversationId: 4, script: `${META('cycle-run')}return 1` }, { conversationId: 4 })
+  await host.invokeAction('builtin:workflow', 'run', { conversationId: 6, script: `${META('orphan-run')}return 1` }, { conversationId: 6 })
+
+  // 环：有界完成；4 与 5 互为投影目标（各自的 run 各自可见，不重复、不悬挂）。
+  const shard4 = readShard(4)
+  const shard5 = readShard(5)
+  assert.equal(shard4?.runs.length, 1, '环上会话 4 分片有界完成（含自己发起的 run）')
+  assert.equal(shard5?.runs.length, 1, '环上会话 5 分片有界完成（4 视为其祖先）')
+  assert.equal(shard4!.runs[0]!.conversationId, 4, '原始归属保留')
+  // 缺父：只投自己的分片，不虚构 999 的投影。
+  const shard6 = readShard(6)
+  assert.equal(shard6?.runs.length, 1, '缺父会话分片含自己的 run')
+  assert.equal(sessionDocs.get('builtin:workflow', 'runs', 999), undefined, '不虚构缺失祖先的分片')
+  await host.dispose()
+})
+
+test('会话删除事件触发重投影：祖先分片失去该子树 run，孤儿分片不重建', { timeout: 60_000 }, async () => {
+  backend.conversations.set(11, makeConversation(11, 1))
+  const host = makeHost()
+  await host.register(createWorkflowPlugin())
+  await host.invokeAction('builtin:workflow', 'run', { conversationId: 11, script: `${META('del-run')}return 1` }, { conversationId: 11 })
+  assert.equal(readShard(1)?.runs.length, 1, '删除前根分片含后代 run')
+
+  // 会话 11 删除（store 级联清理分片）→ conversation.deleted 事件 → 重投影。
+  backend.conversations.delete(11)
+  sessionDocs.delete('builtin:workflow', 'runs', 11)
+  backend.emit('conversation.deleted', { conversationId: 11 })
+  await tick()
+
+  assert.equal(readShard(1)?.runs.length, 0, `删除后根分片失去该子树 run（实际 ${JSON.stringify(readShard(1))}）`)
+  assert.equal(sessionDocs.get('builtin:workflow', 'runs', 11), undefined, '孤儿分片不重建')
+  assert.equal(readBadges().byConversation['1'], undefined, '角标不再计数已删子树 run')
+  await host.dispose()
+})
+
+test('conversation.upsert 树未变不重写（无写放大）；树变化（新增后代会话）后重投影', { timeout: 60_000 }, async () => {
+  const host = makeHost()
+  await host.register(createWorkflowPlugin())
+  await host.invokeAction('builtin:workflow', 'run', { script: `${META('upsert-run')}return 1` }, { conversationId: 1 })
+  const writesBefore = sessionDocs.writes.filter((k) => k === 'builtin:workflow:runs:1').length
+
+  // 树未变化（仅状态字段更新）：指纹不变，跳过重投影。
+  const conv1 = backend.conversations.get(1)!
+  backend.conversations.set(1, { ...conv1, status: 'working', stateChangeSeq: conv1.stateChangeSeq + 1 })
+  backend.emit('conversation.upsert', { conversation: backend.conversations.get(1) })
+  await tick()
+  assert.equal(
+    sessionDocs.writes.filter((k) => k === 'builtin:workflow:runs:1').length,
+    writesBefore,
+    '树未变不得重写分片',
+  )
+
+  // 新增后代会话（树变化）：重投影执行（幂等——无新 run，值不变不写），
+  // 但指纹前进；随后该后代的 run 会正确进入根分片。
+  backend.conversations.set(11, makeConversation(11, 1))
+  backend.emit('conversation.upsert', { conversation: backend.conversations.get(11) })
+  await tick()
+  await host.invokeAction('builtin:workflow', 'run', { conversationId: 11, script: `${META('upsert-child')}return 2` }, { conversationId: 11 })
+  assert.equal(readShard(1)?.runs.length, 2, '新增后代会话发起的 run 进入根分片')
+  assert.equal(readShard(11)?.runs.length, 1)
   await host.dispose()
 })

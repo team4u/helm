@@ -83,7 +83,7 @@ function makeServiceHost(over: { emitEvent?: WorkflowServiceHost['emitEvent'] } 
         updatedAt: 0,
       }
     },
-    async abortConversation() {},
+    async abortConversationGuarded() {},
     emitEvent: over.emitEvent ?? (() => {}),
   }
 }

@@ -190,7 +190,7 @@ test('run() 无受信 context（HTTP/CLI 路径事实）：run 无 parentToolCal
       createdAt: 0,
       updatedAt: 0,
     }),
-    async abortConversation() {},
+    async abortConversationGuarded() {},
     emitEvent: (type, payload) => events.publish(type, payload),
   }
   const service = new WorkflowService({ dataDir, state, host })

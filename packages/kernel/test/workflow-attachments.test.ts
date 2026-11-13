@@ -431,7 +431,7 @@ function makeRecordingServiceHost(): WorkflowServiceHost & { spawns: ServiceSpaw
         updatedAt: 0,
       } as never
     },
-    async abortConversation() {},
+    async abortConversationGuarded() {},
     emitEvent() {},
   }
   return Object.assign(host, { spawns })

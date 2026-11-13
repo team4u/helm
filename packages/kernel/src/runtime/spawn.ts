@@ -101,6 +101,14 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    * （可选；宿主同步镜像并广播 conversation.upsert）。缺省不追踪。
    */
   bindChildToolCall?(childId: number, parentToolCallId: string): void
+  /**
+   * 守卫式中止子会话回合（自动化取消的通用入口；零业务角色特判）：signal
+   * 桥与启动期取消经此中止子会话——宿主实现现读归属事实并走内核
+   * abortConversationGuarded 原子复核（human-owned 一律拒绝，看门狗红线；
+   * 事实过期同样确定性拒绝）。未接线（无内核运行时的装配/部分测试）时回退
+   * SDK conversation.abort，保持原始取消能力。
+   */
+  abortChildConversationGuarded?(childId: number): Promise<void>
   /** 按 profileId 读取真实 Profile（model/thinkingLevel/cwd/runtime）；不存在返回 undefined。 */
   resolveProfile(profileId: string): Promise<ResolvedProfile | undefined>
   /** 会话显式模型覆盖（modelOverride）；无覆盖返回 undefined。 */
@@ -399,21 +407,60 @@ async function runNativeSpawnTurn(
     }
     if (structured !== undefined) outputSessions.set(childId!, structured)
 
-    // ---- signal 桥：运行中 abort -> conversation.abort；listener 在 finally 摘除。----
+    // ---- signal 桥：运行中 abort -> 守卫中止子会话；listener 在 finally 摘除。----
+    // 经宿主守卫入口（内核串行域内原子复核归属+水位；human-owned 拒绝），
+    // 不再直接 conversation.abort——自动取消无条件杀子会话会越过看门狗红线
+    //（ownership 已翻转为 human 的续接子会话受保护）。守卫拒绝时：子会话
+    // 受保护继续独立运行，父侧等待立即以 aborted 终结（本 spawn 不再持有
+    // 父任务），绝不强杀受保护子会话。
+    const abortChildTurn = (): Promise<void> => {
+      const guarded = deps.abortChildConversationGuarded
+      if (guarded !== undefined) return guarded(childId as number)
+      return Promise.resolve(conversation.abort(bg)).then(() => undefined)
+    }
     let abortError: HelmError | undefined
+    /** 守卫拒绝时的父侧释放（race 败者已吸收，迟到结果不外溢）。 */
+    let releaseParentOnGuardRefusal: ((error: HelmError) => void) | undefined
     const onAbort = () => {
       abortError = new HelmError('aborted', '子代理执行被取消（request.signal abort）', 499, {
         conversationId: childId,
       })
-      void conversation.abort(bg).catch(() => {})
+      void abortChildTurn().then(
+        () => {
+          // 子会话已中止：其回合结算后 driveTurn 自然返回（abortError 兑底）。
+        },
+        (guardError: unknown) => {
+          const message = guardError instanceof Error ? guardError.message : String(guardError)
+          abortError = new HelmError(
+            'aborted',
+            `子代理执行已取消；子会话 ${String(childId)} 受守卫保护未中止（${message}）`,
+            499,
+            { conversationId: childId },
+          )
+          process.stderr.write(`[helm] 子会话 ${String(childId)} 取消被拒/失败: ${message}\n`)
+          releaseParentOnGuardRefusal?.(abortError)
+        },
+      )
     }
     if (request.signal) request.signal.addEventListener('abort', onAbort, { once: true })
+    const guardRefusal = new Promise<never>((_, reject) => {
+      releaseParentOnGuardRefusal = reject
+    })
     try {
       if (request.signal?.aborted) {
-        await conversation.abort(bg)
+        await abortChildTurn().catch((error: unknown) => {
+          process.stderr.write(
+            `[helm] 子会话 ${String(childId)} 启动期取消被拒/失败: ${
+              error instanceof Error ? error.message : String(error)
+            }\n`,
+          )
+        })
         throw new HelmError('aborted', '子代理启动期间已取消', 499, { conversationId: childId })
       }
-      return await driveTurn(deps, request, conversation, childId as number, structured, gateCwd)
+      const turn = driveTurn(deps, request, conversation, childId as number, structured, gateCwd)
+      // 守卫拒绝先行后，迟到的子回合结果/异常不再外溢（race 已由拒绝终结）。
+      void turn.catch(() => {})
+      return await Promise.race([turn, guardRefusal])
     } catch (error) {
       if (abortError !== undefined && error !== abortError) throw abortError
       throw error

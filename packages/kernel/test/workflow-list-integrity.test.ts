@@ -140,7 +140,7 @@ function makeServiceHost(): WorkflowServiceHost {
       return []
     },
     getConversation: (id: number) => conversationSummary(id),
-    async abortConversation() {},
+    async abortConversationGuarded() {},
     emitEvent() {},
   }
 }
@@ -537,7 +537,7 @@ function makeBackend(): PluginHostBackend {
     listConversations: () => [],
     getConversation: () => ({}) as never,
     updateConversation: async () => ({}) as never,
-    abortConversation: async () => {},
+    abortConversationGuarded: async () => {},
     getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'human' as const,
     spawnAgent: async () => ({}),

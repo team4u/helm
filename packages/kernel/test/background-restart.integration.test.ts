@@ -97,7 +97,7 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
     getConversation: () => {
       throw new Error('本用例不读会话')
     },
-    abortConversation: async (id) => {
+    abortConversationGuarded: async (id) => {
       calls.push(`abort:${id}`)
     },
     emitEvent: () => {},
