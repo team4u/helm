@@ -5,7 +5,7 @@
  * 1. 组装：缺产物自动补构建（显式超时），assemble 后目录/manifest/checksum 契约成立；
  * 2. 发布包契约：dist 根 package.json（@team4u/helm-hub 默认名，HELM_PAYLOAD_PACKAGE
  *    可覆盖）为可 npm pack/publish 的独立包：files 显式白名单 + 外部依赖精确版本 +
- *    @helm/protocol file:./protocol；manifest.name 与其同源；
+ *    @helm/protocol file:./protocol.tgz；manifest.name 与其同源；
  * 3. 布局：kernel/protocol/cli/web dist 镜像、内置插件资产落位、web 同级探测命中、
  *    不携带 node_modules；
  * 4. 负路径：依赖缺失退出码 3；checksum 篡改退出码 1；manifest 路径越界退出码 1；
@@ -20,7 +20,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -114,10 +114,10 @@ test('payload 发布包契约：dist 根 package.json 可独立 npm pack/publish
   // files 显式白名单：根 gitignore 的 dist/ 规则不得让 npm pack 剔除 kernel/dist 等。
   assert.deepEqual(
     (distPkg.files as string[]).slice().sort(),
-    ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'kernel', 'manifest.json', 'protocol', 'start.mjs', 'web'].sort(),
+    ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'kernel', 'manifest.json', 'protocol', 'protocol.tgz', 'start.mjs', 'web'].sort(),
   );
-  // @helm/protocol 物化为 file:./protocol；外部依赖全部精确版本（无 ^/~/>= 浮动）。
-  assert.equal(distPkg.dependencies['@helm/protocol'], 'file:./protocol');
+  // 协议包以归档安装；外部直接依赖使用精确版本（无 ^/~/>= 浮动）。
+  assert.equal(distPkg.dependencies['@helm/protocol'], 'file:./protocol.tgz');
   const kernelDeps = JSON.parse(readFileSync(path.join(repoRoot, 'packages/kernel/package.json'), 'utf-8')).dependencies;
   for (const [name, spec] of Object.entries<string>(distPkg.dependencies)) {
     if (name === '@helm/protocol') continue;
@@ -156,7 +156,7 @@ test('payload manifest 契约：formatVersion/version/entries/checksum 全部成
     keys,
     [
       'cli', 'cliPackageJson', 'kernel', 'kernelPackageJson', 'launcher', 'protocol',
-      'protocolPackageJson', 'rootPackageJson', 'webIndex',
+      'protocolArchive', 'protocolPackageJson', 'rootPackageJson', 'webIndex',
     ].sort(),
   );
 });
@@ -273,7 +273,7 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
 }, async () => {
   const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-payload-e2e-'));
   const packDir = path.join(outsideRoot, 'pack');
-  const extractDir = path.join(outsideRoot, 'extracted');
+  let extractDir = path.join(outsideRoot, 'extracted');
   try {
     mkdirSyncRecursive(packDir);
     mkdirSyncRecursive(extractDir);
@@ -297,9 +297,13 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
     }
     runCommand('tar', ['-xzf', tgz, '-C', extractDir, '--strip-components=1'], outsideRoot, 60_000);
 
-    // 3. 消费侧依赖补齐（updater 契约：--omit=dev --ignore-scripts）。
+    // 3. 本地 file: 依赖复制安装，晋升改名后仍须可以启动。
     runCommand('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], extractDir, 300_000);
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'protocol', 'dist', 'index.js')), 'file:./protocol 未安装');
+    assert.equal(lstatSync(path.join(extractDir, 'node_modules', '@helm', 'protocol')).isSymbolicLink(), false);
+    const promoted = path.join(outsideRoot, 'release');
+    renameSync(extractDir, promoted);
+    extractDir = promoted;
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'protocol', 'dist', 'index.js')), '晋升后协议依赖失效');
 
     // 4. check：三入口依赖解析 + node:sqlite + esbuild 实测，退出码 0。
     const env = { ...process.env };

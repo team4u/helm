@@ -6,7 +6,7 @@
  *   package.json     发布包清单（name 默认 @team4u/helm-hub，可由构建 env
  *                    HELM_PAYLOAD_PACKAGE 覆盖；manifest.name 与其同源）。dependencies
  *                    = kernel 生产依赖闭包的根集：外部依赖取仓库已安装 pnpm 实际版本
- *                    精确锁定，@helm/protocol 物化为 file:./protocol（dist 内携带其
+ *                    精确锁定，@helm/protocol 物化为 file:./protocol.tgz（同时携带其
  *                    dist/ 与 package.json）。消费侧（桌面 updater）解包 tgz 后执行
  *                    `npm install --omit=dev --ignore-scripts` 即可补齐依赖（esbuild
  *                    平台包按目标平台经 optionalDependencies 自动安装）。
@@ -21,6 +21,7 @@
  * 见 README）；依赖补齐契约是消费侧 npm install，start.mjs check 负责显式验收。
  */
 import { createHash } from 'node:crypto';
+import { create as createTar } from 'tar';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,7 +75,7 @@ function walkStats(dir) {
   return { files, bytes };
 }
 
-// --- 根依赖集：kernel ∪ protocol 生产依赖，@helm/protocol 物化为 file:./protocol ------
+// --- 根依赖集：kernel ∪ protocol 生产依赖，协议包以归档安装，避免目录链接 -------
 // 外部依赖版本取仓库已安装 pnpm 解析结果（node_modules 符号链接指向的真实包）的
 // package.json 精确版本——绝不携带 ^/~ 浮动范围进发布契约（可复现安装）。
 function resolveInstalledExactVersion(pkgDir, name) {
@@ -104,7 +105,7 @@ const rootDependencies = Object.fromEntries(
     return [name, resolveInstalledExactVersion(pkgDir, name)];
   }),
 );
-rootDependencies['@helm/protocol'] = 'file:./protocol';
+rootDependencies['@helm/protocol'] = 'file:./protocol.tgz';
 
 // npm 默认严格 peer 解析（ERESOLVE），而仓库 pnpm 安装允许 peer 版本宽于声明
 //（如 chord 钉 peer ws@8.21.0 而仓库锁定 8.22.1）。扫描已安装闭包生成 overrides，
@@ -132,7 +133,7 @@ const distPackageJson = {
   repository: { type: 'git', url: 'git+https://github.com/team4u/helm.git', directory: 'packages/payload' },
   publishConfig: { access: 'public' },
   engines: { node: rootPkg.engines?.node ?? '>=24.12.0' },
-  files: ['kernel', 'protocol', 'cli', 'web', 'start.mjs', 'manifest.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md'],
+  files: ['kernel', 'protocol', 'protocol.tgz', 'cli', 'web', 'start.mjs', 'manifest.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md'],
   dependencies: Object.fromEntries(Object.keys(rootDependencies).sort().map((k) => [k, rootDependencies[k]])),
   ...(peerOverrides.size > 0
     ? { overrides: Object.fromEntries([...peerOverrides.entries()].sort(([a], [b]) => a.localeCompare(b))) }
@@ -159,6 +160,8 @@ for (const component of ['kernel', 'protocol', 'cli']) {
   const componentPackage = JSON.parse(readFileSync(manifestPath, 'utf8'));
   writeFileSync(manifestPath, `${JSON.stringify({ ...componentPackage, version: payloadPkg.version }, null, 2)}\n`);
 }
+// 目录形式的 file: 依赖在 Windows 会生成指向 staging 的 junction；归档安装可安全搬移。
+await createTar({ cwd: path.join(stagingDir, 'protocol'), file: path.join(stagingDir, 'protocol.tgz'), gzip: true, portable: true, prefix: 'package' }, ['package.json', 'dist']);
 writeFileSync(path.join(stagingDir, 'package.json'), `${JSON.stringify(distPackageJson, null, 2)}\n`);
 
 // 内置插件运行时资产：src/builtin-plugins/<name>/{client,skill,assets}
@@ -182,6 +185,7 @@ const entries = {
   kernel: 'kernel/dist/main.js',
   kernelPackageJson: 'kernel/package.json',
   protocol: 'protocol/dist/index.js',
+  protocolArchive: 'protocol.tgz',
   protocolPackageJson: 'protocol/package.json',
   cli: 'cli/dist/index.js',
   cliPackageJson: 'cli/package.json',
@@ -203,7 +207,7 @@ writeFileSync(path.join(stagingDir, 'manifest.json'), `${JSON.stringify(manifest
 const stats = walkStats(stagingDir);
 console.log(`[payload] 组装完成: ${stagingDir}`);
 console.log(`[payload] 发布包名: ${distPackageJson.name}@${distPackageJson.version}（HELM_PAYLOAD_PACKAGE 可覆盖）`);
-console.log(`[payload] 根依赖 ${Object.keys(rootDependencies).length} 项（外部精确版本 ${externalDeps.length} + @helm/protocol file:./protocol）`);
+console.log(`[payload] 根依赖 ${Object.keys(rootDependencies).length} 项（外部精确版本 ${externalDeps.length} + @helm/protocol file:./protocol.tgz）`);
 console.log(`[payload] 文件 ${stats.files} 个，共 ${(stats.bytes / 1024 / 1024).toFixed(1)} MiB`);
 console.log(`[payload] 运行时资产目录 ${copiedAssets.length} 个: ${copiedAssets.join(', ')}`);
 console.log('[payload] 注意: 未打包 node_modules；消费侧 tgz 解包后 npm install --omit=dev --ignore-scripts 补依赖（start.mjs check 验收）');

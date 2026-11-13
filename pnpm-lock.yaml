@@ -282,6 +282,9 @@ importers:
       '@helm/web':
         specifier: workspace:*
         version: link:../web
+      tar:
+        specifier: 7.5.23
+        version: 7.5.23
 
   packages/protocol:
     dependencies:
