@@ -53,7 +53,7 @@ managedByPlugin: {{MANAGED_BY}}
 ### 节点与跨机执行
 - `helm nodes list`：节点与在线状态；`helm nodes issue <nodeId>`：签发接入令牌（明文仅返回一次）；`helm nodes remove <nodeId>`；`helm nodes upgrade <nodeId> [--check]`：检查或执行节点升级；`helm nodes forward [<nodeId> | --current] <listenHost:listenPort> [<targetHost>:]<targetPort>`：前台本地 TCP 端口转发（事件流即持有者，Ctrl-C 退出并关闭）；`helm nodes forwards` / `helm nodes forward-inspect <forwardId>` / `helm nodes forward-stop <forwardId>`：活动转发清单/详情/停止。
 - `helm env exec [--node <id>] [--cwd <dir>] [--timeout <ms>] [--stream] [--current] -- <command...>`：跨节点直接执行命令，超时单位毫秒。
-- `helm worktrees list`：列出受管工作树登记（含已清理记录的元数据）；`helm worktrees inspect <worktreeId>`：只读检视（登记元数据 + 目标节点真实 git 状态/统计/有上限 diff 预览，可用 `--conversation <id>` / `--path <path> [--node <nodeId>]` 替代选择器，`--diff false` 省略 diff 正文）；`helm worktrees cleanup [--id <id> | --conversation <id> | --current | --path <path> [--node <nodeId>]] [--delete-branch] [--force]`：清理受管工作树；默认拒绝脏工作区、未合入提交和在用/未确认停止的执行。
+- `helm worktrees list`：列出受管工作树登记（含已清理记录的元数据）；`helm worktrees inspect <worktreeId>`：只读检视（登记元数据 + 目标节点真实 git 状态/统计/有上限 diff 预览，可用 `--conversation-id <id>` / `--path <path> [--node-id <nodeId>]` 替代选择器，`--diff=false` 省略 diff 正文）；`helm worktrees cleanup [--worktree-id <id> | --conversation-id <id> | --current | --path <path> [--node-id <nodeId>]] [--delete-branch] [--force]`：清理受管工作树；默认拒绝脏工作区、未合入提交和在用/未确认停止的执行。
 
 ### 工作流
 - `helm workflows list` / `helm workflows run <nameOrFile> [--args <json>] [--resume-from-run-id <id>] [--current] [--wait]` / `helm workflows runs` / `helm workflows inspect <runId>` / `helm workflows abort <runId>`。
