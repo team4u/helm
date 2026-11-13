@@ -261,6 +261,8 @@ function main() {
   const dataDir = mkdtempSync(path.join(outDir, 'data-'));
 
   const appArgs = ['--smoke-test', `--smoke-output=${outDir}`];
+  // Xvfb 不提供真实 GPU；显式使用软件合成，避免 capturePage 的 UnknownVizError。
+  if (process.platform === 'linux') appArgs.push('--disable-gpu');
   if (needsNoSandbox()) appArgs.unshift('--no-sandbox');
 
   // 显式固定端口与数据目录：不继承宿主环境里的 HELM_PORT/HELM_DATA_DIR 漂移。
