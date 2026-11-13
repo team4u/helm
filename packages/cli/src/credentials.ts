@@ -22,6 +22,9 @@ const LOCK_WAIT_MS = 10_000
 const LOCK_POLL_MS = 25
 /** 锁内容空/半截的宽限窗口：持有者可能正处「已创建待写入」的瞬态，超过才判定损坏。 */
 const LOCK_SETTLE_GRACE_MS = 2_000
+/** Windows 上 rename 替换目标被读取方（杀毒/索引扫描）短暂占用时的有界退避窗口与轮询间隔。 */
+const RENAME_BUSY_TOTAL_MS = 1_500
+const RENAME_BUSY_POLL_MS = 25
 
 export function dataDirFor(env: NodeJS.ProcessEnv): string {
   const v = env['HELM_DATA_DIR']
@@ -168,7 +171,31 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
   }
 }
 
-/** tmp（唯一 uuid 名）+ fsync + rename 原子写，恒 0600。 */
+/**
+ * Windows 瞬时占用判定：目标被读取/扫描期间 rename 会短暂 EPERM/EACCES/EBUSY，
+ * 退避后重试即可提交。其他平台这些码是真实权限错误，立即失败不做无谓等待。
+ */
+function isTransientRenameBusy(err: unknown): boolean {
+  if (process.platform !== 'win32') return false
+  const code = (err as NodeJS.ErrnoException).code
+  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'
+}
+
+/** rename 原子替换；仅 Windows 瞬时占用时有界退避（总等待约 1.5 秒），耗尽仍抛原始错误。 */
+async function renameAtomically(tmp: string, file: string): Promise<void> {
+  const deadline = Date.now() + RENAME_BUSY_TOTAL_MS
+  for (;;) {
+    try {
+      await fsp.rename(tmp, file)
+      return
+    } catch (err) {
+      if (!isTransientRenameBusy(err) || Date.now() >= deadline) throw err
+      await new Promise((resolve) => setTimeout(resolve, RENAME_BUSY_POLL_MS))
+    }
+  }
+}
+
+/** tmp（唯一 uuid 名）+ fsync + rename 原子写，恒 0600；Windows 瞬时占用退避后仍原子提交。 */
 async function atomicWrite0600(file: string, text: string): Promise<void> {
   const tmp = `${file}.tmp-${randomUUID()}`
   let handle: fsp.FileHandle | undefined
@@ -178,7 +205,7 @@ async function atomicWrite0600(file: string, text: string): Promise<void> {
     await handle.sync()
     await handle.close()
     handle = undefined
-    await fsp.rename(tmp, file)
+    await renameAtomically(tmp, file)
   } catch (err) {
     await handle?.close().catch(() => {})
     await fsp.rm(tmp, { force: true }).catch(() => {})
