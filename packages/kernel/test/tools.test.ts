@@ -324,19 +324,23 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
     assert.ok(structured.content.includes('# 标题'))
   })
 
-  it('../ 逃逸与绝对路径越界拒绝', { timeout: 60_000 }, async () => {
+  it('../ 跨目录与 cwd 外绝对路径读取成功（与 bash 同权）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd2')
     mkdirSync(join(dir, 'inner'), { recursive: true })
     const deps = await makeRealDeps(join(dir, 'inner'))
     writeFileSync(join(dir, 'secret.txt'), 'outside')
     const tool = createReadTool(deps)
-    for (const p of ['../secret.txt', join(dir, 'secret.txt'), '../../etc/passwd']) {
+    for (const p of ['../secret.txt', join(dir, 'secret.txt'), '/etc/hostname']) {
       const result = await tool.execute({ path: p }, makeApi(join(dir, 'inner')), BACKGROUND_CONTEXT)
-    assert.equal(result.isError, true, `路径 ${p} 应被拒绝`)
+      assert.equal(!!result.isError, false, `路径 ${p} 应允许读取`)
     }
+    const structured = (
+      await tool.execute({ path: '../secret.txt' }, makeApi(join(dir, 'inner')), BACKGROUND_CONTEXT)
+    ).structuredOutput as { content: string }
+    assert.ok(structured.content.includes('outside'), '应读到 cwd 外文件内容')
   })
 
-  it('软链越界拒绝（realpath 解析后 containment）', { timeout: 60_000 }, async () => {
+  it('软链跟随读取（指向 cwd 外目标也允许）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'rd3')
     const outer = join(rootDir, 'rd3-outer')
     mkdirSync(outer, { recursive: true })
@@ -350,9 +354,9 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
       makeApi(join(dir, 'inner')),
       BACKGROUND_CONTEXT,
     )
-    assert.equal(result.isError, true, '指向 cwd 外的软链必须拒绝')
-    const text = (result.output as Array<{ type: string; text: string }>)[0]!.text
-    assert.ok(text.includes('path_escape_denied'))
+    assert.equal(!!result.isError, false, '软链应跟随读取（与 bash 同权）')
+    const structured = result.structuredOutput as { content: string }
+    assert.ok(structured.content.includes('via-symlink'))
   })
 
   it('目录拒绝；超大文件显式 file_too_large 并给出替代指引', { timeout: 60_000 }, async () => {

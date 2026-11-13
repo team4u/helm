@@ -1,11 +1,12 @@
 /**
- * 跨平台路径形状测试：read/write/edit 的词法解析与 containment 按目标路径
- * 自身形状（POSIX / Windows 盘符 / UNC）选用纯 posix/win32 规则，绝不用
- * Hub 宿主 node:path 默认规则解析远端路径；containment 基准为根目录时不
- * 叠加分隔符；盘符相对路径（C:relative）一律拒绝。
+ * 跨平台路径形状测试：read/write/edit 的词法解析按目标路径自身形状
+ * （POSIX / Windows 盘符 / UNC）选用纯 posix/win32 规则，绝不用 Hub 宿主
+ * node:path 默认规则解析远端路径；盘符相对路径（C:relative）一律拒绝。
+ * 路径契约（对齐 pi）：会话 cwd 仅作相对路径基准，绝对路径与 ../ 跨目录
+ * 访问一律允许（与 bash 同权，不设 cwd 沙箱）。
  *
  * 诚实性原则：远端用受控 ExecutionEnv 记录真实收到的路径（绝不伪造完成
- * 结果）；local 用 POSIX 根目录语义下的真实文件读写与路径逃逸拒绝验证。
+ * 结果）；local 用 POSIX 根目录语义下的真实文件读写验证。
  */
 
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
@@ -28,7 +29,6 @@ import {
   createReadTool,
   createWriteTool,
   isAbsoluteTargetPath,
-  isWithinBase,
   resolveTargetPath,
   targetPathShape,
 } from '../src/runtime/tools.js'
@@ -187,7 +187,7 @@ after(async () => {
 // ---------------------------------------------------------------------------
 // 1. 纯路径形状 helper
 // ---------------------------------------------------------------------------
-describe('targetPathShape / isAbsoluteTargetPath / resolveTargetPath / isWithinBase', { timeout: 60_000 }, () => {
+describe('targetPathShape / isAbsoluteTargetPath / resolveTargetPath', { timeout: 60_000 }, () => {
   it('形状判定：POSIX 绝对、盘符绝对、UNC、盘符相对与相对路径', { timeout: 60_000 }, () => {
     assert.equal(targetPathShape('/workspace/file.txt'), 'posix')
     assert.equal(targetPathShape('C:\\workspace\\file.txt'), 'win32')
@@ -200,13 +200,9 @@ describe('targetPathShape / isAbsoluteTargetPath / resolveTargetPath / isWithinB
     assert.equal(isAbsoluteTargetPath('\\\\server\\share'), true)
     assert.equal(isAbsoluteTargetPath('C:relative'), false, '盘符相对不是绝对路径')
     assert.equal(isAbsoluteTargetPath('relative'), false)
-    assert.equal(isWithinBase('c:\\WORKSPACE\\note.md', 'C:\\workspace'), true, 'Windows 路径比较不区分大小写')
-    assert.equal(isWithinBase('D:\\workspace\\note.md', 'C:\\workspace'), false, '不同卷不能视作子目录')
-    assert.equal(isWithinBase('C:\\workspace-elsewhere\\note.md', 'C:\\workspace'), false, '相似前缀不属于基准目录')
-    assert.equal(isWithinBase('C:\\workspace\\note.md', '/'), false, '不同平台形状不得混用')
   })
 
-  it('resolveTargetPath：Linux Hub 上按 win32 规则解析 Windows 靶点（不用宿主 resolve）', { timeout: 60_000 }, () => {
+  it('resolveTargetPath：Linux Hub 上按 win32 规则解析 Windows 靶点（不用宿主 resolve）；cwd 仅作相对基准', { timeout: 60_000 }, () => {
     // Linux Hub 的 path.resolve('C:\\workspace', 'file.txt') 会产出
     // '<cwd>/C:\\workspace/file.txt'——本 helper 必须按 win32 规则得到真实形状。
     const r = resolveTargetPath('file.txt', 'C:\\workspace')
@@ -215,23 +211,16 @@ describe('targetPathShape / isAbsoluteTargetPath / resolveTargetPath / isWithinB
     const abs = resolveTargetPath('C:\\workspace\\inner\\file.txt', 'C:\\workspace')
     assert.ok(abs.ok)
     assert.equal(abs.abs, 'C:\\workspace\\inner\\file.txt')
-    // 盘符相对拒绝
+    // 新契约：绝对路径（其他盘）与 ../ 跨目录均合法解析，不设 cwd 沙箱。
+    const otherDrive = resolveTargetPath('D:\\elsewhere\\file.txt', 'C:\\workspace')
+    assert.ok(otherDrive.ok)
+    assert.equal(otherDrive.abs, 'D:\\elsewhere\\file.txt')
+    const escape = resolveTargetPath('..\\secret.txt', 'C:\\workspace')
+    assert.ok(escape.ok)
+    assert.equal(escape.abs, 'C:\\secret.txt')
+    // 盘符相对拒绝（语义依赖进程当前目录，与新契约无关的确定性拒绝）
     const denied = resolveTargetPath('C:relative\\file.txt', 'C:\\workspace')
     assert.ok(!denied.ok)
-  })
-
-  it('isWithinBase：普通目录边界、根目录基准不叠加分隔符、win32 形状', { timeout: 60_000 }, () => {
-    assert.equal(isWithinBase('/workspace/file.txt', '/workspace'), true)
-    assert.equal(isWithinBase('/workspace', '/workspace'), true)
-    assert.equal(isWithinBase('/workspace-evil/file.txt', '/workspace'), false, '前缀相似目录不得误判为包含')
-    // 根目录基准：base + sep 会形成 '//' 错误前缀——根下合法文件必须通过。
-    assert.equal(isWithinBase('/etc/hostname', '/'), true)
-    assert.equal(isWithinBase('C:\\workspace\\file.txt', 'C:\\'), true)
-    assert.equal(isWithinBase('C:\\workspace\\file.txt', 'C:\\workspace'), true)
-    assert.equal(isWithinBase('D:\\workspace\\file.txt', 'C:\\workspace'), false)
-    // UNC 基准
-    assert.equal(isWithinBase('\\\\server\\share\\file.txt', '\\\\server\\share'), true)
-    assert.equal(isWithinBase('\\\\server\\other\\file.txt', '\\\\server\\share'), false)
   })
 })
 
@@ -250,32 +239,50 @@ describe('远端文件工具的跨平台路径语义（受控 ExecutionEnv）', 
     const result = await tool.execute({ path: 'note.md' }, makeApi('C:\\workspace'), BACKGROUND_CONTEXT)
     assert.equal(!!result.isError, false)
     const paths = recorder.calls.map((c) => c.path)
-    assert.ok(paths.includes('C:\\workspace'), `canonicalPath 应收到会话 cwd 原样：${JSON.stringify(paths)}`)
+    assert.ok(
+      paths.every((p) => p.startsWith('C:\\')),
+      `远端收到的路径必须是 win32 形状（不被 Hub resolve 污染）：${JSON.stringify(paths)}`,
+    )
     assert.ok(paths.includes('C:\\workspace\\note.md'), `readTextFile 应收到 win32 解析后的绝对路径：${JSON.stringify(paths)}`)
     const structured = result.structuredOutput as { content: string }
     assert.ok(structured.content.includes('# 远端内容'))
   })
 
-  it('read：Windows 靶点下 ../ 逃逸与 D: 绝对路径拒绝（win32 containment）', { timeout: 60_000 }, () => {
+  it('read：Windows 靶点下 ../ 跨目录与 D: 绝对路径允许（与 bash 同权）；盘符相对拒绝', { timeout: 60_000 }, () => {
     return (async () => {
-      const recorder = makeRecordingEnv({ canonical: (p) => p })
+      const files = new Map<string, string>([
+        ['C:\\secret.txt', 'escaped-via-dotdot'],
+        ['D:\\elsewhere\\secret.txt', 'absolute-other-drive'],
+      ])
+      const recorder = makeRecordingEnv({ canonical: (p) => p, files })
       const deps = await makeDeps(join(rootDir, 'r2'), {
         envFabric: makeStubFabric(recorder.env),
         nodeIdOf: () => 'win-node',
       })
       const tool = createReadTool(deps)
-      for (const p of ['..\\secret.txt', 'D:\\elsewhere\\secret.txt', 'C:relative.txt']) {
-        const result = await tool.execute({ path: p }, makeApi('C:\\workspace'), BACKGROUND_CONTEXT)
-        assert.equal(result.isError, true, `路径 ${p} 应被拒绝`)
-        const text = (result.output as Array<{ type: string; text: string }>)[0]!.text
-        assert.ok(text.includes('path_escape_denied'), `${p} 应报 path_escape_denied：${text}`)
-      }
-      // 越界请求绝不触达远端 env（词法预检即拒）。
-      assert.equal(recorder.calls.length, 0, '越界路径不得发起任何远端调用')
+      // 新契约：../ 与跨盘绝对路径均到达远端并成功读取（win32 规则解析）。
+      const dotdot = await tool.execute({ path: '..\\secret.txt' }, makeApi('C:\\workspace'), BACKGROUND_CONTEXT)
+      assert.equal(!!dotdot.isError, false, '.. 跨目录应允许')
+      assert.ok(((dotdot.structuredOutput as { content: string }).content).includes('escaped-via-dotdot'))
+      const abs = await tool.execute({ path: 'D:\\elsewhere\\secret.txt' }, makeApi('C:\\workspace'), BACKGROUND_CONTEXT)
+      assert.equal(!!abs.isError, false, '跨盘绝对路径应允许')
+      assert.ok(((abs.structuredOutput as { content: string }).content).includes('absolute-other-drive'))
+      const seenPaths = recorder.calls.map((c) => c.path)
+      assert.ok(seenPaths.includes('C:\\secret.txt'), `应收到 win32 解析后的 ../ 目标：${JSON.stringify(seenPaths)}`)
+      assert.ok(seenPaths.includes('D:\\elsewhere\\secret.txt'), `绝对路径应原样到达远端：${JSON.stringify(seenPaths)}`)
+      // 盘符相对路径仍拒绝（语义依赖进程当前目录），且绝不触达远端 env。
+      const before = recorder.calls.length
+      const denied = await tool.execute({ path: 'C:relative.txt' }, makeApi('C:\\workspace'), BACKGROUND_CONTEXT)
+      assert.equal(denied.isError, true, '盘符相对路径应被拒绝')
+      assert.ok(
+        ((denied.output as Array<{ text: string }>)[0]!.text).includes('invalid_path'),
+        `应报 invalid_path：${(denied.output as Array<{ text: string }>)[0]!.text}`,
+      )
+      assert.equal(recorder.calls.length, before, '盘符相对路径不得发起任何远端调用')
     })()
   })
 
-  it('write：Windows 靶点新文件写入真实到达远端；越界与软链逃逸拒绝', { timeout: 60_000 }, async () => {
+  it('write：Windows 靶点新文件写入真实到达远端；软链解析到真实路径后写入', { timeout: 60_000 }, async () => {
     const files = new Map<string, string>()
     const recorder = makeRecordingEnv({ canonical: (p) => p, files })
     const deps = await makeDeps(join(rootDir, 'w1'), {
@@ -291,18 +298,18 @@ describe('远端文件工具的跨平台路径语义（受控 ExecutionEnv）', 
     assert.equal(!!ok.isError, false)
     assert.equal(files.get('C:\\workspace\\src\\new-file.ts'), 'export {}')
     assert.ok(recorder.calls.some((c) => c.path === 'C:\\workspace\\src'), 'createDir 应收到 win32 dirname 结果')
-    // 越界绝不触达远端。
-    const before = recorder.calls.length
-    const denied = await tool.execute(
+    // ../ 跨目录写入允许：词法解析后直接写入目标。
+    const escaped = await tool.execute(
       { path: '..\\escape.txt', content: 'x' },
       makeApi('C:\\workspace'),
       BACKGROUND_CONTEXT,
     )
-    assert.equal(denied.isError, true)
-    assert.equal(recorder.calls.length, before, '越界写入不得发起任何远端调用')
-    // 软链逃逸：canonicalPath 返回 cwd 外真实路径时拒绝。
+    assert.equal(!!escaped.isError, false, '../ 跨目录写入应允许')
+    assert.equal(files.get('C:\\escape.txt'), 'x')
+    // 软链：canonicalPath 返回 cwd 外真实路径时，写入落到真实路径（与队列 key 对齐）。
     const evilRecorder = makeRecordingEnv({
       canonical: (p) => (p === 'C:\\workspace\\link.txt' ? 'D:\\outside\\real.txt' : p),
+      files: new Map<string, string>(),
     })
     const evilDeps = await makeDeps(join(rootDir, 'w2'), {
       envFabric: makeStubFabric(evilRecorder.env),
@@ -313,10 +320,10 @@ describe('远端文件工具的跨平台路径语义（受控 ExecutionEnv）', 
       makeApi('C:\\workspace'),
       BACKGROUND_CONTEXT,
     )
-    assert.equal(evil.isError, true)
+    assert.equal(!!evil.isError, false, '软链解析到真实路径后写入应成功（与 bash 同权）')
     assert.ok(
-      ((evil.output as Array<{ text: string }>)[0]!.text).includes('path_escape_denied'),
-      '软链越界必须拒绝',
+      evilRecorder.calls.some((c) => c.method === 'writeFile' && c.path === 'D:\\outside\\real.txt'),
+      'writeFile 应落到 canonical 解析后的真实路径',
     )
   })
 
@@ -409,31 +416,33 @@ describe('POSIX 靶点真实文件行为（根目录与普通目录）', { timeo
     assert.equal(readFileSync(join(dir, 'note.md'), 'utf8'), '# world')
   })
 
-  it('POSIX 路径逃逸拒绝：../ 与越界绝对路径不触达本机 fs', { timeout: 60_000 }, async () => {
+  it('POSIX 新契约：../ 跨目录与 cwd 外绝对路径真实读取成功；盘符相对拒绝', { timeout: 60_000 }, async () => {
     const outer = join(rootDir, 'local2-outer')
-    const inner = join(rootDir, 'local2')
-    mkdirSync(outer, { recursive: true })
+    const inner = join(outer, 'work')
     mkdirSync(inner, { recursive: true })
     writeFileSync(join(outer, 'secret.txt'), 'outside')
     const deps = await makeDeps(inner)
     const read = await createReadTool(deps)
-    for (const p of ['../secret.txt', join(outer, 'secret.txt'), 'C:\\Windows\\win.ini']) {
+    // 新契约：cwd 仅作相对基准，../ 与绝对路径均与 bash 同权。
+    for (const p of ['../secret.txt', join(outer, 'secret.txt')]) {
       const result = await read.execute({ path: p }, makeApi(inner), BACKGROUND_CONTEXT)
-      assert.equal(result.isError, true, `路径 ${p} 应被拒绝`)
+      assert.equal(!!result.isError, false, `路径 ${p} 应允许读取`)
       assert.ok(
-        ((result.output as Array<{ text: string }>)[0]!.text).includes('path_escape_denied'),
-        `${p} 应报 path_escape_denied`,
+        ((result.structuredOutput as { content: string }).content).includes('outside'),
+        `${p} 应读到 cwd 外内容`,
       )
     }
-    // 根目录基准（isWithinBase '/' 语义）：/etc/hostname 在词法 containment 内
-    // 通过预检（后续 realpath containment 仍生效；此处验证根基准不因 '//' 误拒）。
+    // 盘符相对路径仍拒绝（语义依赖进程当前目录）。
+    const denied = await read.execute({ path: 'C:relative.txt' }, makeApi(inner), BACKGROUND_CONTEXT)
+    assert.equal(denied.isError, true)
+    assert.ok(((denied.output as Array<{ text: string }>)[0]!.text).includes('invalid_path'))
+    // 根目录基准：/etc/hostname 正常读取。
     const rootRead = await read.execute({ path: '/etc/hostname' }, makeApi('/'), BACKGROUND_CONTEXT)
-    const rootText = (rootRead.output as Array<{ text: string }>)[0]!.text
-    assert.ok(!rootText.includes('path_escape_denied'), `根目录基准不得因 '//' 前缀误拒：${rootText}`)
+    assert.equal(!!rootRead.isError, false, '根目录基准下绝对路径应正常读取')
   })
 
-  it('根目录基准 write：/ 下合法新文件词法预检通过（不因 base 叠加分隔符误拒）', { timeout: 60_000 }, async () => {
-    // 用受控 env 验证词法层（真实 / 不可写，权限错误是另一回事，不属于词法误拒）。
+  it('根目录基准 write：/ 下新文件写入成功（cwd 仅作相对基准）', { timeout: 60_000 }, async () => {
+    // 用受控 env 验证（真实 / 不可写，权限错误属于操作系统边界，不是词法拒绝）。
     const recorder = makeRecordingEnv({ canonical: (p) => p })
     const deps = await makeDeps(join(rootDir, 'rootw'), {
       envFabric: makeStubFabric(recorder.env),
@@ -444,26 +453,8 @@ describe('POSIX 靶点真实文件行为（根目录与普通目录）', { timeo
       makeApi('/'),
       BACKGROUND_CONTEXT,
     )
-    assert.equal(!!result.isError, false, '根目录基准下的 cwd 内相对路径不得被误拒')
+    assert.equal(!!result.isError, false, '根目录基准下的相对路径不得被误拒')
     assert.ok(recorder.calls.some((c) => c.path === '/etc/new.conf'))
-  })
-
-  it('远端父目录权限错误不得当作不存在放行写入（确定性错误分支）', { timeout: 60_000 }, async () => {
-    const base = '/permission-root'
-    const recorder = makeRecordingEnv({ canonical: (path) => path })
-    recorder.env.canonicalPath = async (path) => {
-      if (path === base) return { ok: true, value: base }
-      return { ok: false, error: { code: path.endsWith('new.txt') ? 'not_found' : 'permission_denied', message: 'permission denied' } }
-    }
-    const deps = await makeDeps(join(rootDir, 'permission'), {
-      envFabric: makeStubFabric(recorder.env), nodeIdOf: () => 'permission-node',
-    })
-    const result = await createWriteTool(deps).execute(
-      { path: 'locked/new.txt', content: 'x' }, makeApi(base), BACKGROUND_CONTEXT,
-    )
-    assert.equal(result.isError, true)
-    assert.match((result.output as Array<{ text: string }>)[0]!.text, /无权探测|permission denied|EACCES/)
-    assert.equal(recorder.calls.some((call) => call.method === 'writeFile'), false, '权限拒绝时不能执行写入')
   })
 })
 

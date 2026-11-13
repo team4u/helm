@@ -1,7 +1,11 @@
 /**
  * 内核自带本机工具：bash（真实进程组、超时、abort、跨 chunk UTF-8 保真、
- * 输出限额显式报错）、read（按 cwd 安全读文件，realpath 防软链越界）与
- * read_artifact（spill 产物分页读取，UTF-8 边界对齐保证前进）。
+ * 输出限额显式报错）、read（读文本文件）与 read_artifact（spill 产物分页
+ * 读取，UTF-8 边界对齐保证前进）。
+ *
+ * 文件路径契约（read/write/edit，对齐 pi）：会话 cwd 仅作为相对路径的解析
+ * 基准，绝对路径与 ../ 跨目录访问一律允许——bash 本就无文件边界，文件工具
+ * 与 bash 同权，不设 cwd 沙箱；权限边界交给操作系统本身。
  *
  * - shell 执行委托 SDK `NodeExecutionEnv.exec`（`@earendil-works/pi-durable/env/node`）：
  *   预先 aborted 的 Context 绝不 spawn；abort/timeout 杀整个进程组并可靠等待子进程
@@ -13,11 +17,10 @@
  *   缺失时仅允许 local 短生命周期直建，远端显式 env_fabric_missing），
  *   绝不静默回退 local 误读写 Hub 本机磁盘。
  * - 跨平台路径形状：目标路径一律按其自身形状（POSIX 绝对 / Windows 盘符绝对 /
- *   UNC）选用纯 posix/win32 规则做词法解析与 containment，绝不用 Hub 宿主
- *   node:path 默认规则解析远端路径（Linux Hub 上 resolve('C:\\workspace') 会得到
- *   错误结果，Windows/mac/Linux 跨平台承诺即不成立）；containment 在基准为根目录
- *   （/ 或 C:\\）时不叠加分隔符（防 '//' 前缀误拒根下合法文件）；盘符相对路径
- *   （C:relative）语义依赖进程当前目录，一律显式拒绝。
+ *   UNC）选用纯 posix/win32 规则做词法解析，绝不用 Hub 宿主 node:path 默认
+ *   规则解析远端路径（Linux Hub 上 resolve('C:\\workspace') 会得到错误结果，
+ *   Windows/mac/Linux 跨平台承诺即不成立）；盘符相对路径（C:relative）语义
+ *   依赖进程当前目录，一律显式拒绝。
  * - env 注入（唯一权威在 env/scoped-env.ts 的 ScopedExecutionEnv）：local
  *   继承 process.env（真实 PATH/HOME）并剥除受管 HELM_* 变量（大小写
  *   不敏感），受管变量（HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID /
@@ -34,11 +37,13 @@
  * - SecretStash 脱敏在聚合完成的全文上执行（先完整拼接再 redact，跨 chunk 撕裂的
  *   秘密也必然完整匹配），绝不反向还原；超长输出经 services.ArtifactService.spill 落盘。
  * - 输出超过 maxOutputBytes 显式失败 `output_limit_exceeded`（绝不截断当成功）。
- * - read 用 fs.promises（不阻主线程）；realpath 解析 base 与 target 后做 containment，
- *   拒绝目录与软链越界；远端节点经 env RPC 的 canonicalPath/fileInfo/readTextFile
- *   同样做 realpath 越界检查；read 错误一律脱敏。
- * - write/edit 工具：会话 (nodeId, cwd) 内安全写文本与精确替换（唯一匹配校验），
- *   越出 cwd 的绝对路径 / `..` 逃逸 / 指向 cwd 外的软链一律拒绝；读-改-写窗口经
+ * - read 用 fs.promises（不阻主线程）；仅支持普通文件（目录/特殊文件拒绝，
+ *   单文件 128KiB 上限）；fd 读取——fstat 与读取同一 fd，校验即所读内容；
+ *   远端节点经 env RPC 的 canonicalPath/fileInfo/readTextFile（canonicalPath
+ *   先解析软链，使 lstat 语义的 fileInfo 看到真实目标）；read 错误一律脱敏。
+ * - write/edit 工具：写文本与精确替换（oldText 唯一匹配校验）；目标已存在时
+ *   经 canonicalPath/realpath 解析到真实路径再写（软链别名写到真实文件，与
+ *   互斥队列 key 对齐），新文件按词法绝对路径写入；读-改-写窗口经
  *   env/file-mutation-queue 与插件 API 共享同一目标节点 canonical 路径互斥队列
  *   （同文件不丢更新；详见该文件契约）。
  * - spill 指引指向 read_artifact；分页 ≤4KiB 防同量 spill 循环；
@@ -53,7 +58,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { constants as fsConstants } from 'node:fs'
-import { lstat, mkdir, open, readFile, realpath, writeFile, type FileHandle } from 'node:fs/promises'
+import { mkdir, open, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { composeExecutionEnv } from '../env/scoped-env.js'
 import { envWithFileMutationQueue, localWithFileMutationQueue } from '../env/file-mutation-queue.js'
 import { redactJsonValue } from '../redact.js'
@@ -62,9 +67,9 @@ import type { HelmToolDeps } from './tool-deps.js'
 
 // 形状判定与词法规则子集（normalize/join/dirname/basename）已收口
 // @helm/protocol（浏览器安全纯函数，内核与 builtin-plugins 共享）；依赖
-// node:path 完整实现的 resolve/relative 语义（进程 cwd / 大小写规则）留在
-// 内核（Node 环境），下方定义并再导出 isAbsoluteTargetPath/targetPathShape
-// 供既有相对路径引用保持稳定。
+// node:path 完整实现的 resolve 语义（进程 cwd / 大小写规则）留在内核
+// （Node 环境），下方再导出 isAbsoluteTargetPath/targetPathShape 供既有
+// 相对路径引用保持稳定。
 export { isAbsoluteTargetPath, targetPathShape } from '@helm/protocol'
 
 import { posix, win32 } from 'node:path'
@@ -83,8 +88,9 @@ function nodePathForShape(shape: 'posix' | 'win32' | undefined): typeof posix | 
 }
 
 /**
- * 按目标形状解析绝对路径：base 必须与 raw 同形状（或 raw 为相对路径）；
- * 盘符相对路径（C:relative / 裸 C:）一律拒绝（依赖进程 cwd，语义不可预测）。
+ * 按目标形状解析绝对路径：base（会话 cwd）仅作相对路径基准，绝对路径与
+ * ../ 跨目录均合法；盘符相对路径（C:relative / 裸 C:）一律拒绝（依赖进程
+ * cwd，语义不可预测）。
  */
 export function resolveTargetPath(raw: string, base: string): { ok: true; abs: string } | { ok: false; reason: string } {
   if (WINDOWS_DRIVE.test(raw) && WINDOWS_DRIVE_RELATIVE.test(raw)) {
@@ -93,20 +99,6 @@ export function resolveTargetPath(raw: string, base: string): { ok: true; abs: s
   const shape = targetPathShape(raw) ?? targetPathShape(base)
   const rules = nodePathForShape(shape)
   return { ok: true, abs: rules.resolve(base, raw) }
-}
-
-/**
- * containment（词法）：target 是否等于 base 或在 base 之下。
- * 用 target 自身形状的纯规则；base 为根目录（/ 或 C:\）时不叠加分隔符
- * （base + sep 会形成 '//' 错误前缀，误拒根目录下合法文件）。
- */
-export function isWithinBase(target: string, base: string): boolean {
-  const shape = targetPathShape(target)
-  const baseShape = targetPathShape(base)
-  if (shape && baseShape && shape !== baseShape) return false
-  const rules = nodePathForShape(shape ?? baseShape)
-  const relative = rules.relative(base, target)
-  return relative === '' || (relative !== '..' && !relative.startsWith('..' + rules.sep) && !rules.isAbsolute(relative))
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000
@@ -483,15 +475,20 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
 }
 
 const readParameters = obj({
-  path: str({ description: '文件路径（相对会话 cwd）' }),
+  path: str({ description: '文件路径（相对会话 cwd 或绝对路径，支持 ../ 跨目录）' }),
 })
 
-/** read 工具：按会话 (nodeId, cwd) 安全读取文本文件（realpath 拦截软链越界；远端经 env RPC）。 */
+/**
+ * read 工具：按会话 (nodeId, cwd) 靶点读取文本文件。cwd 仅作相对路径基准，
+ * 绝对路径与 ../ 跨目录一律允许（与 bash 同权）；仅支持普通文件，保留
+ * 128KiB 上限；远端经 env RPC（canonicalPath 先解析软链，使 lstat 语义的
+ * fileInfo 看到真实目标）。
+ */
 export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof readParameters, never> {
   return defineTool({
     name: 'read',
     description:
-      '读取文本文件内容；路径相对会话 cwd，拒绝越界绝对路径、../ 逃逸与软链指向目录外的目标；单文件上限 128KiB（超限请用 bash + read_artifact 分页）；会话绑定远端节点时在目标节点读取。',
+      '读取文本文件内容；路径相对会话 cwd 解析，支持绝对路径与 ../ 跨目录访问（与 bash 同权）；仅支持普通文件，单文件上限 128KiB（超限请用 bash + read_artifact 分页）；会话绑定远端节点时在目标节点读取。',
     parameters: readParameters,
     structuredOutputSchema: {
       type: 'object',
@@ -519,20 +516,9 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
       }
       const resolvedR = resolveTargetPath(raw, sessionId)
       if (!resolvedR.ok) {
-        return { output: [{ type: 'text', text: `path_escape_denied: ${resolvedR.reason}` }], isError: true }
+        return { output: [{ type: 'text', text: `invalid_path: ${resolvedR.reason}` }], isError: true }
       }
       const lexicalAbs = resolvedR.abs
-      if (!isWithinBase(lexicalAbs, sessionId)) {
-        return {
-          output: [
-            {
-              type: 'text',
-              text: `path_escape_denied: ${raw}（解析为 ${lexicalAbs}，越出会话 cwd ${sessionId}）`,
-            },
-          ],
-          isError: true,
-        }
-      }
       try {
         if (nodeId !== 'local') {
           if (deps.envFabric === undefined) {
@@ -554,23 +540,12 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
             }
           }
           const env = deps.envFabric.envFor(nodeId, sessionId)
-          const baseRealR = await env.canonicalPath(sessionId, context)
-          if (!baseRealR.ok) throw new Error(baseRealR.error.message)
-          const baseReal = baseRealR.value
+          // 先经 canonicalPath 解析软链：fileInfo 是 lstat 语义（软链 kind='symlink'），
+          // 解析到真实目标后才能与 local 的跟随语义一致；目标不存在/悬空软链在此
+          // 如实报错（catch 统一转 read_failed）。
           const targetRealR = await env.canonicalPath(lexicalAbs, context)
           if (!targetRealR.ok) throw new Error(targetRealR.error.message)
           const targetReal = targetRealR.value
-          if (!isWithinBase(targetReal, baseReal)) {
-            return {
-              output: [
-                {
-                  type: 'text',
-                  text: `path_escape_denied: ${raw}（基准目录 ${baseReal}，canonicalPath 后越界）`,
-                },
-              ],
-              isError: true,
-            }
-          }
           const infoR = await env.fileInfo(targetReal, context)
           if (!infoR.ok) throw new Error(infoR.error.message)
           if (infoR.value.kind === 'directory') {
@@ -613,23 +588,10 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
             structuredOutput: { path: raw, content: spill.text } as JsonValue,
           }
         }
-        // local 节点：进程内 fs（realpath 解析两侧再 containment：lexical 前缀检查绕不过软链）。
-        const [baseReal, targetReal] = await Promise.all([
-          realpath(sessionId),
-          realpath(lexicalAbs),
-        ])
-        if (!isWithinBase(targetReal, baseReal)) {
-          return {
-            output: [
-              {
-                type: 'text',
-                text: `path_escape_denied: ${raw}（基准目录 ${baseReal}，realpath 后越界）`,
-              },
-            ],
-            isError: true,
-          }
-        }
-        const info = await lstat(targetReal)
+        // local 节点：进程内 fs。stat（跟随软链）先做普通文件预检，给出清晰
+        // 错误分类（目录/特殊文件/超限）；随后 fd 读取：fstat 与读取同一 fd，
+        // 校验即所读内容（打开与预检之间目标被替换时以 fd 为准）。
+        const info = await stat(lexicalAbs)
         if (info.isDirectory()) {
           return {
             output: [{ type: 'text', text: `read_failed: ${raw} 是目录，read 仅支持普通文件` }],
@@ -639,31 +601,27 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
         if (!info.isFile()) {
           return {
             output: [
+              { type: 'text', text: `read_failed: ${raw} 不是普通文件（特殊文件）` },
+            ],
+            isError: true,
+          }
+        }
+        if (info.size > READ_FILE_MAX_BYTES) {
+          return {
+            output: [
               {
                 type: 'text',
-                text: `read_failed: ${raw} 不是普通文件（${info.isSymbolicLink() ? 'symlink' : '特殊文件'}）`,
+                text:
+                  `file_too_large: ${raw} 为 ${info.size} 字节，超过 read 工具 ${READ_FILE_MAX_BYTES} 字节上限。` +
+                  '请用 bash 命令输出到文件后经 read_artifact 分页读取，或用 head/tail/sed 取所需片段。',
               },
             ],
             isError: true,
           }
         }
-        // fd 读取（TOCTOU 缓解）：realpath/lstat 之后、读取之前，目标可能被
-        // 替换为指向 cwd 外的软链——O_NOFOLLOW 打开不跟随最终组件上的软链
-        // （被替换时 ELOOP 显式拒绝而非跟随越界）；fstat 与读取同一 fd，
-        // 校验即所读内容。平台无 O_NOFOLLOW（Windows）时退化为跟随打开；
-        // 中间目录组件被替换的竞态不在本层承诺（fd 级防护需改底层原语）。
-        let handle: FileHandle
-        try {
-          handle = await open(targetReal, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
-        } catch (error) {
-          if ((error as { code?: string }).code === 'ELOOP') {
-            return {
-              output: [{ type: 'text', text: `read_failed: ${raw} 在读取前被替换为软链，拒绝跟随` }],
-              isError: true,
-            }
-          }
-          throw error
-        }
+        // 打开跟随软链（与 bash 同权，软链指向哪里是用户文件系统自己的事实）；
+        // 预检之后、打开之前目标被替换时，以同一 fd 上的 fstat 复核为准。
+        const handle = await open(lexicalAbs, fsConstants.O_RDONLY)
         try {
           const statInfo = await handle.stat()
           if (!statInfo.isFile()) {
@@ -731,13 +689,14 @@ function resolveToolTarget(
 }
 
 /**
- * 靶点内路径安全解析：拒绝越出 base 的绝对路径与 `..` 逃逸。
- * 词法解析与 containment 一律按目标路径形状的纯 posix/win32 规则
- * （绝不用 Hub 宿主 path 默认规则解析远端路径）；基准为根目录时不叠加
- * 分隔符（防 '//' 前缀误拒）。已存在目标经 canonicalPath/realpath 后再做
- * containment（软链越界拒绝）；新文件（不存在）逐级向上找最近已存在祖先
- * 并校验其真实路径仍在 base 内——但权限错误（permission_denied）绝不当
- * 「不存在」处理（显式上抛，不静默误判）。
+ * 靶点路径解析：cwd（base）仅作相对路径基准，绝对路径与 ../ 跨目录均
+ * 允许（与 bash 同权，不设 cwd 沙箱）；权限边界交给操作系统本身。
+ * 词法解析按目标路径形状的纯 posix/win32 规则（绝不用 Hub 宿主 path 默认
+ * 规则解析远端路径）；盘符相对路径（C:relative）在此显式拒绝。目标已存在时
+ * 经 canonicalPath/realpath 解析到真实路径再写——软链别名写到真实文件，
+ * 且与 env/file-mutation-queue 的 canonical key 对齐；不存在（含悬空软链，
+ * writeFile 会跟随它在目标处创建文件，与 bash 重定向语义一致）按词法绝对
+ * 路径写入；无权探测等真实错误由后续 mkdir/writeFile 如实上抛。
  */
 async function resolveWritableTarget(
   env: {
@@ -749,139 +708,17 @@ async function resolveWritableTarget(
   raw: string,
   base: string,
   context: Context,
-): Promise<{ ok: true; abs: string; baseReal: string } | { ok: false; message: string }> {
-  // 词法预检：拒绝任何形式的越界输入（绝对路径仅允许 base 内部）；
-  // 盘符相对路径（C:relative）在此显式拒绝。
+): Promise<{ ok: true; abs: string } | { ok: false; message: string }> {
   const resolvedR = resolveTargetPath(raw, base)
-  if (!resolvedR.ok) return { ok: false, message: `path_escape_denied: ${resolvedR.reason}` }
+  if (!resolvedR.ok) return { ok: false, message: `invalid_path: ${resolvedR.reason}` }
   const absolute = resolvedR.abs
-  if (!isWithinBase(absolute, base)) {
-    return {
-      ok: false,
-      message: `path_escape_denied: ${raw}（解析为 ${absolute}，越出会话 cwd ${base}）`,
-    }
-  }
-  const baseRealR = await env.canonicalPath(base, context)
-  if (!baseRealR.ok) return { ok: false, message: `read_failed: 无法解析会话 cwd（${baseRealR.error.message}）` }
-  const baseReal = baseRealR.value
   const targetRealR = await env.canonicalPath(absolute, context)
-  if (targetRealR.ok) {
-    const targetReal = targetRealR.value
-    if (!isWithinBase(targetReal, baseReal)) {
-      return {
-        ok: false,
-        message: `path_escape_denied: ${raw}（基准目录 ${baseReal}，canonicalPath 后越界；拒绝软链指向 cwd 外的目标）`,
-      }
-    }
-    return { ok: true, abs: targetReal, baseReal }
-  }
-  // 目标不存在：允许在 cwd 内创建新文件（词法 containment 已过）；
-  // 逐级向上找最近的已存在祖先并校验其真实路径仍在 base 内（防软链中转逃逸）。
-  // 权限错误（permission_denied）不是「不存在」：显式上抛，绝不误当缺失父目录。
-  // dirname 按目标形状规则（win32 靶点下反斜杠才是分隔符；posix.dirname 会把
-  // 'C:\workspace\src' 当无分隔符字符串，探测链会立即走错）。
-  const rules = nodePathForShape(targetPathShape(absolute) ?? targetPathShape(base))
-  let probe = rules.dirname(absolute)
-  for (let depth = 0; depth < 64; depth += 1) {
-    const probeR = await env.canonicalPath(probe, context)
-    if (probeR.ok) {
-      if (!isWithinBase(probeR.value, baseReal)) {
-        return {
-          ok: false,
-          message: `path_escape_denied: ${raw}（祖先目录 ${probe} 经软链越出会话 cwd，拒绝写入）`,
-        }
-      }
-      return { ok: true, abs: absolute, baseReal }
-    }
-    if (probeR.error.code === 'permission_denied') {
-      return {
-        ok: false,
-        message: `write_failed: 无权探测祖先目录 ${probe}（${probeR.error.message}）`,
-      }
-    }
-    const parent = rules.dirname(probe)
-    if (parent === probe) break
-    probe = parent
-  }
-  return { ok: true, abs: absolute, baseReal }
-}
-
-/**
- * local 写入互斥临界区内的写前复核（TOCTOU 收窄）：resolveWritableTarget
- * 的 containment 在入队前完成，排队等待窗口内目标（或其已存在祖先）仍
- * 可能被并发替换为指向 cwd 外的软链（队列不锁 bash/外部进程）。写前对
- * 最近已存在祖先 realpath 复验仍 containment 内；新文件上溯父目录复验。
- * 已存在但无法解析（悬空软链）保守拒绝（writeFile 会跟随软链，不得赌它
- * 指向内）。复核 → 写入之间的微窗口是本层边界（fd 级防护需改写入原语）。
- */
-async function assertLocalTargetContained(abs: string, baseReal: string): Promise<void> {
-  const rules = nodePathForShape(targetPathShape(abs))
-  let probe = abs
-  for (let depth = 0; depth < 64; depth += 1) {
-    const info = await lstat(probe).catch(() => undefined)
-    if (info === undefined) {
-      const parent = rules.dirname(probe)
-      if (parent === probe) return
-      probe = parent
-      continue
-    }
-    const real = await realpath(probe).catch(() => undefined)
-    if (real === undefined || !isWithinBase(real, baseReal)) {
-      throw new Error(
-        `path_escape_denied: ${abs}（写入前复核：${probe} ${
-          real === undefined ? '已存在但无法解析真实路径（可能是悬空软链）' : `解析为 ${real}，越出会话 cwd`
-        }，拒绝写入）`,
-      )
-    }
-    return
-  }
-}
-
-/**
- * 远端写入互斥临界区内的写前复核（与 local 版同构，经 env canonicalPath +
- * fileInfo RPC）：收窄「入队等待窗口」的替换竞态；复核 RPC 与节点实际写入
- * 之间的网络微窗口是 RPC 协议边界，无法在本层消除。fileInfo 为 lstat 语义
- * （软链 kind='symlink'），用于区分「真不存在」与「存在但解析失败」。
- */
-async function assertRemoteTargetContained(
-  env: Parameters<typeof resolveWritableTarget>[0] & {
-    fileInfo(
-      path: string,
-      ctx: Context,
-    ): Promise<
-      { ok: true; value: { kind: string } } | { ok: false; error: { code: string; message: string } }
-    >
-  },
-  abs: string,
-  baseReal: string,
-  context: Context,
-): Promise<void> {
-  const rules = nodePathForShape(targetPathShape(abs))
-  let probe = abs
-  for (let depth = 0; depth < 64; depth += 1) {
-    const realR = await env.canonicalPath(probe, context)
-    if (!realR.ok) {
-      // 无法解析：区分「真不存在（上溯）」与「存在但悬空/无权（保守拒绝）」
-      const infoR = await env.fileInfo(probe, context)
-      if (infoR.ok) {
-        throw new Error(
-          `path_escape_denied: ${abs}（写入前复核：${probe} 已存在（kind=${infoR.value.kind}）但无法解析真实路径，拒绝写入）`,
-        )
-      }
-      const parent = rules.dirname(probe)
-      if (parent === probe) return
-      probe = parent
-      continue
-    }
-    if (!isWithinBase(realR.value, baseReal)) {
-      throw new Error(`path_escape_denied: ${abs}（写入前复核：${probe} 解析为 ${realR.value}，越出会话 cwd，拒绝写入）`)
-    }
-    return
-  }
+  if (targetRealR.ok) return { ok: true, abs: targetRealR.value }
+  return { ok: true, abs: absolute }
 }
 
 const writeParameters = obj({
-  path: str({ description: '目标文件路径（相对会话 cwd；允许在 cwd 内创建新文件或子目录）' }),
+  path: str({ description: '目标文件路径（相对会话 cwd 或绝对路径，支持 ../ 跨目录；允许创建新文件或子目录）' }),
   content: str({ description: '要写入的 UTF-8 文本内容（整体覆盖）' }),
   artifact: opt(
     bool({
@@ -891,12 +728,12 @@ const writeParameters = obj({
   ),
 })
 
-/** write 工具：在会话 (nodeId, cwd) 内安全写入文本文件（拒绝越界与软链逃逸）。 */
+/** write 工具：按会话 (nodeId, cwd) 靶点写入文本文件（路径与 bash 同权，不设 cwd 沙箱）。 */
 export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof writeParameters, never> {
   return defineTool({
     name: 'write',
     description:
-      '写入 UTF-8 文本文件（整体覆盖）。路径相对会话 cwd；允许在 cwd 内创建新文件或子目录；拒绝越出 cwd 的绝对路径、../ 逃逸与指向 cwd 外的软链；会话绑定远端节点时在目标节点写入。默认文件仅写入会话 cwd（Web 界面不可见）；若需交付用户在 Web 预览或下载，传 artifact: true 同步登记为会话产物并获取产物 ID，在回复中用 [文件名](artifact:<id>) 或 ![标题](artifact:<id>) 直接渲染到聊天界面。',
+      '写入 UTF-8 文本文件（整体覆盖）。路径相对会话 cwd 解析，支持绝对路径与 ../ 跨目录访问（与 bash 同权）；允许创建新文件或子目录；会话绑定远端节点时在目标节点写入。默认文件仅写入磁盘（Web 界面不可见）；若需交付用户在 Web 预览或下载，传 artifact: true 同步登记为会话产物并获取产物 ID，在回复中用 [文件名](artifact:<id>) 或 ![标题](artifact:<id>) 直接渲染到聊天界面。',
     parameters: writeParameters,
     structuredOutputSchema: {
       type: 'object',
@@ -977,11 +814,9 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
           }
           const bytes = Buffer.byteLength(args.content, 'utf8')
           // 互斥队列：同文件读-改-写窗口与插件/其他工具排队（见 env/file-mutation-queue.ts）。
-          // 新文件的父目录可能不存在：先确保目录（recursive，仍在 containment 内）；
-          // dirname 按目标形状规则（win32 反斜杠分隔符）。
+          // 新文件的父目录可能不存在：先确保目录（recursive）；dirname 按目标
+          // 形状规则（win32 反斜杠分隔符）。
           return await envWithFileMutationQueue(env, target.abs, async () => {
-            // 互斥临界区内写前复核：排队等待窗口内目标可能被替换为越界软链
-            await assertRemoteTargetContained(env, target.abs, target.baseReal, context)
             const parent = nodePathForShape(targetPathShape(target.abs)).dirname(target.abs)
             const mkdirResult = await env.createDir(parent, { recursive: true }, context)
             if (!mkdirResult.ok) throw new Error(mkdirResult.error.message)
@@ -990,19 +825,19 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
             return await onWriteSuccess(target.abs, bytes)
           }, context)
         }
-        // local 节点：进程内 fs。
+        // local 节点：进程内 fs（canonicalPath 直接用 realpath；解析失败（不
+        // 存在/悬空软链/无权等）一律按「不存在」处理，真实错误由随后的
+        // mkdir/writeFile 如实上抛）。
         const target = await resolveWritableTarget(
           {
             canonicalPath: async (p, _ctx) => {
               try {
                 return { ok: true, value: await realpath(p) }
               } catch (error) {
-                const code = (error as { code?: string }).code
                 return {
                   ok: false,
                   error: {
-                    // EACCES/EPERM 归一为 permission_denied（探测链区分「无权」与「不存在」）。
-                    code: code === 'EACCES' || code === 'EPERM' ? 'permission_denied' : 'not_found',
+                    code: (error as { code?: string }).code ?? 'not_found',
                     message: String(error),
                   },
                 }
@@ -1020,8 +855,6 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
         // local 与远端共享同一进程级队列（localWithFileMutationQueue 的 key 前缀
         // 与 NodeExecutionEnv.id 一致，两种入口互斥）。
         return await localWithFileMutationQueue(target.abs, async () => {
-          // 互斥临界区内写前复核：排队等待窗口内目标可能被替换为越界软链
-          await assertLocalTargetContained(target.abs, target.baseReal)
           await mkdir(nodePathForShape(targetPathShape(target.abs)).dirname(target.abs), { recursive: true })
           await writeFile(target.abs, args.content, 'utf8')
           return await onWriteSuccess(target.abs, bytes)
@@ -1037,20 +870,21 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
 }
 
 const editParameters = obj({
-  path: str({ description: '目标文件路径（相对会话 cwd）' }),
+  path: str({ description: '目标文件路径（相对会话 cwd 或绝对路径，支持 ../ 跨目录）' }),
   oldText: str({ description: '要被替换的精确文本（必须在文件中恰好出现一次）' }),
   newText: str({ description: '替换后的文本' }),
 })
 
 /**
  * edit 工具：精确文本替换。oldText 必须在目标文件中唯一精确匹配（不存在
- * 或出现多次均显式报错，绝不模糊替换或静默跳过）；替换后写回原文件。
+ * 或出现多次均显式报错，绝不模糊替换或静默跳过）；替换后写回原文件；
+ * 路径解析与 write 同契约（与 bash 同权，不设 cwd 沙箱）。
  */
 export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof editParameters, never> {
   return defineTool({
     name: 'edit',
     description:
-      '精确替换文件文本片段。oldText 必须在文件中恰好出现一次（不存在或多次出现均报错）；路径相对会话 cwd，拒绝越界；会话绑定远端节点时在目标节点读取与写回。',
+      '精确替换文件文本片段。oldText 必须在文件中恰好出现一次（不存在或多次出现均报错）；路径相对会话 cwd 解析，支持绝对路径与 ../ 跨目录访问（与 bash 同权）；会话绑定远端节点时在目标节点读取与写回。',
     parameters: editParameters,
     structuredOutputSchema: {
       type: 'object',
@@ -1092,8 +926,6 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
           }
           // 互斥队列：读-改-写整体持锁（读旧内容与写回之间不被其他变更插入）。
           return await envWithFileMutationQueue(env, target.abs, async () => {
-            // 持锁后先复核目标未被替换为越界软链，再读改写
-            await assertRemoteTargetContained(env, target.abs, target.baseReal, context)
             const readResult = await env.readTextFile(target.abs, context)
             if (!readResult.ok) throw new Error(readResult.error.message)
             const count = countOccurrences(readResult.value, args.oldText)
@@ -1123,18 +955,18 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
             }
           }, context)
         }
-        // local 节点：进程内 fs。
+        // local 节点：进程内 fs（canonicalPath 直接用 realpath；解析失败按
+        //「不存在」处理，真实错误由随后的 readFile/writeFile 如实上抛）。
         const target = await resolveWritableTarget(
           {
             canonicalPath: async (p, _ctx) => {
               try {
                 return { ok: true, value: await realpath(p) }
               } catch (error) {
-                const code = (error as { code?: string }).code
                 return {
                   ok: false,
                   error: {
-                    code: code === 'EACCES' || code === 'EPERM' ? 'permission_denied' : 'not_found',
+                    code: (error as { code?: string }).code ?? 'not_found',
                     message: String(error),
                   },
                 }
@@ -1149,8 +981,6 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
           return { output: [{ type: 'text', text: target.message }], isError: true }
         }
         return await localWithFileMutationQueue(target.abs, async () => {
-          // 持锁后先复核目标未被替换为越界软链，再读改写
-          await assertLocalTargetContained(target.abs, target.baseReal)
           const content = await readFile(target.abs, 'utf8')
           const count = countOccurrences(content, args.oldText)
           if (count === 0) {
