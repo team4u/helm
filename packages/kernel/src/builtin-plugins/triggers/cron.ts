@@ -622,6 +622,11 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
   ctx.action({
     id: 'cron_create',
     description: '创建 cron 定时任务（标准五字段：分 时 日 月 周；id/schedule/text 必填，timezone 默认 UTC）',
+    promptGuidelines: [
+      'schedule 是标准五字段周期 cron（分 时 日 月 周，如 "*/30 * * * *"），不是任意 shell 定时器：触发只把 text 文本投递到目标会话',
+      'timezone 用 IANA 区域名（如 Asia/Shanghai，缺省 UTC）；目标显式指定 targetConversationId 或 targetProfileId（互斥，缺省投递给最新 human 会话），不要含糊留空',
+      'text 是触发时投递的自包含指令文本（无附加上下文），把当次要做什么写清楚',
+    ],
     inputSchema: {
       type: 'object',
       properties: {

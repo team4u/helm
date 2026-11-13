@@ -24,6 +24,8 @@ Cron 模块支持标准五字段表达式（分 时 日 月 周，cron-parser �
 
 已启用的 cron 任务是停用预检的占用项：`inUse()` 声明非空时 `helm plugins disable builtin:triggers` 默认 `409 plugin_in_use`，`--force` 可知情越过。
 
+`cron_create` 在会话动作目录（`<available_actions>`）附三条使用指引（随插件启停与 scope 自动注入/清理）：五字段周期 cron 语义、显式 IANA 时区与投递目标、触发只把 `text` 文本投递到目标会话而非任意 shell 定时器。
+
 ## Webhook 签名入站
 
 Webhook 模块提供经验签的公网入站接口。宿主为插件挂载公开路由 `POST /api/plugins/builtin:triggers/routes/webhook/:id`（`public: true` 跳过 Token 鉴权，插件自行验签）。完整握手：
@@ -37,7 +39,7 @@ Webhook 模块提供经验签的公网入站接口。宿主为插件挂载公开
 
 验签密钥只持久化于 `credentials.json` 的 `pluginSecrets['builtin:triggers']['webhook:<id>']`（恒 0600，经 `ctx.host.secrets` 绑定本插件命名空间），并注册全局 `SecretStash` 脱敏；公共文档只存元数据（`hasSecret` 布尔协作契约），绝不包含原始密钥。
 
-**严禁模型会话创建密钥**：`webhook_create` 检测到 `conversationId` 调用上下文（`run_action` / workflow）时显式 `403 webhook_secret_context_forbidden` 拒绝——raw secret 经工具参数已进入该会话模型上下文，handler 拒绝无法清理已入上下文的秘密。密钥仅允许人工 HTTP/CLI（`helm webhook create`）配置。create 无跨存储事务：先写 doc 并 flush 真实冲刷，再写 secret；secret 写失败回滚移除 doc 条目，回滚失败聚合显式上抛。已配置端点同样构成 `inUse()` 停用占用项。
+**严禁模型会话创建密钥**：`webhook_create` 检测到 `conversationId` 调用上下文（`run_action` / workflow）时显式 `403 webhook_secret_context_forbidden` 拒绝——raw secret 经工具参数已进入该会话模型上下文，handler 拒绝无法清理已入上下文的秘密。密钥仅允许人工 HTTP/CLI（`helm webhook create`）配置。`webhook_create` 的会话目录指引如实声明同一契约：secret 只由人工配置、模型不生成不代填不回显；这是运行时强制（handler 拒绝）加协作纪律的双层约束，不是权限沙箱声明。create 无跨存储事务：先写 doc 并 flush 真实冲刷，再写 secret；secret 写失败回滚移除 doc 条目，回滚失败聚合显式上抛。已配置端点同样构成 `inUse()` 停用占用项。
 
 ### Webhook 管理动作
 

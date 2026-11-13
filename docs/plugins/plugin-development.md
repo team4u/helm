@@ -74,10 +74,13 @@ export default {
     // 2. 持久状态文档
     const statsDoc = ctx.doc('stats', { totalCalls: 0 }, { public: true });
 
-    // 3. 单点 Schema 动作（五端复用）
+    // 3. 单点 Schema 动作（五端复用 + 会话动作目录自动发现）
     ctx.action({
       id: 'send_notice',
       description: '发送业务通知消息',
+      promptGuidelines: [
+        '发送前向用户确认目标与内容；失败时如实报告，不重试暴发',
+      ],
       inputSchema: {
         type: 'object',
         properties: { target: { type: 'string' }, content: { type: 'string' } },
@@ -112,6 +115,22 @@ export default {
 ```
 
 加载机制：宿主基于 Node 24 `module.registerHooks` 钩子加载源码，对 `.ts` / `.tsx` 文件用 esbuild transform（不打包），按依赖闭包逐文件转译。`import.meta.url` 始终指向插件目录内的真实源文件；裸 npm 说明符从插件自身目录解析（可自带 `node_modules`），`@helm/*` 协议包与宿主共享同一实例、不重复加载。加载器不承诺解析 `tsconfig` 的 `paths` 别名，插件源码不要依赖。插件根注册成功后常驻宿主进程；停用不卸载已加载模块（同进程重新启用不重复初始化），完全重载代码走 `helm plugins reload`。`definePlugin` 顶层不要调用 `ctx.host.*` 运行时能力（doctor 的 register 检查会如实失败）——宿主调用应放入动作处理器、服务生命周期或钩子内。
+
+#### 动作自动发现与会话目录
+
+动作注册后即被运行时自动发现：启用且匹配会话 `scope` 的动作被投射进系统提示 `prompt.actions` 段的 `<available_actions>` 目录，每项含全限定 ID（`pluginId.actionId`）、description、CLI 命令与紧凑参数签名（仅当 `run_action` 元工具存在时生成）。内置与外部插件同权——新插件启用后动作自动出现在目录，**无需修改 SYSTEM.md 或任何内置技能**；插件停用、动作注销或对本会话 scope 不可达时条目自动清理，不留幻影提示词。
+
+三种暴露方式的边界：
+
+| 方式 | 会话内形态 | 适用场景 |
+| :--- | :--- | :--- |
+| 自动发现（缺省） | 仅在 `<available_actions>` 目录列出一条摘要，经 `run_action({ actionId, input })` 按需调用 | 大多数动作；目录成本最低 |
+| `exposeAsTool: true` | 目录条目之外另派生同名独立模型工具（参数 schema 即 inputSchema） | 高频/需要模型主动选用的动作 |
+| `ctx.tool(spec)` | 不进五端映射与目录，仅模型可见的专用工具 | 非业务能力的会话内机制（如内置的 subagent） |
+
+`PluginActionSpec` 可选声明使用指引：`promptGuidelines: string[]`（1~N 条非空要点，随目录条目展示；`exposeAsTool` 派生工具实际激活时也注入，不重复）与 `promptSnippet: string`（完整段落，仅派生工具实际激活时注入，未激活不产生任何提示词文本）。指引只写简短的使用纪律；长手册请自举受管技能（见下文「自举受管技能」），不要塞进指引字段。
+
+目录是摘要不是完整契约：模型获取完整 schema 优先用 `run_action({ actionId: '<pluginId>.<actionId>', describe: true })` 只读自省——返回该动作完整 manifest（含嵌套 inputSchema/outputSchema），不执行 handler、无副作用，同样按启用状态与 scope 过滤，无 bash 的会话也可用；有 bash 时 `helm actions list --json` 与 `helm <plugin> <action> --help` 等价可用。`scope`（`ConversationScope`：conversationIds / tags / profileIds / modelProviders 组合）同时约束目录可见性、`describe` 与实际调用——人工 HTTP/CLI 不受 scope 限制。
 
 ### ③ 前端：client.tsx 单轨与共享 SDK
 
@@ -292,3 +311,55 @@ helm profiles update reviewer --starters '[]' --json
 ```
 
 最多六项；label ≤ 24 码点、prompt ≤ 4000 码点。仅真正空白且历史已加载完整的会话显示；点击回填后由用户确认发送，不覆盖草稿与附件。
+
+### 自举受管技能（service.start + ensureSkill）
+
+动作目录指引只能容纳简短要点；需要完整手册时用受管技能自举（内置的 generative-ui、app-builder、helm-cli 均此模式）。
+
+SKILL.md 与 references 放在插件目录内随源码维护，service 启动时写入宿主技能库：
+
+```text
+my-plugin/
+├── index.ts
+└── skill-assets/
+    ├── SKILL.md
+    └── references/rollback.md
+```
+
+```typescript
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const skillDir = join(dirname(fileURLToPath(import.meta.url)), 'skill-assets');
+const SKILL_MD = `---
+name: deploy-guide
+description: 部署与回滚手册（何时加载由这句话驱动）
+managedByPlugin: my-plugin
+---
+
+# 部署与回滚
+
+遇发布失败先读：references/rollback.md
+`;
+
+ctx.service({
+  id: 'skill-bootstrap',
+  async start() {
+    await ctx.host.skills.ensureSkill({
+      id: 'deploy-guide',
+      skillMd: SKILL_MD,
+      references: {
+        'rollback.md': readFileSync(join(skillDir, 'references/rollback.md'), 'utf8'),
+      },
+    })
+  },
+  async stop() {},
+})
+```
+
+三个生效条件：
+
+1. **`managedByPlugin` 必须是本插件 ID**：宿主校验 frontmatter 绑定，防冒名托管；受管技能常规写入接口只读（403）。
+2. **随插件启停**：停用时技能自动退出可用目录（模型不再看到、`load_skill` 失败），重新启用后恢复；停用不留幻影提示词。
+3. **受 Profile.skills 白名单过滤**：Profile 限定技能目录时需显式勾选该技能才可见；全量目录 Profile 则自动可见。内置 helm-cli 同受此规则约束（限定目录且未勾选时同样不可加载），不是始终可用。

@@ -302,6 +302,12 @@ test('profiles: SYSTEM_DEFAULT 分层——含 helm-cli 引导与 HELM_CONVERSAT
   for (const component of ['MetricGrid', 'CheckboxGroup', 'ActionBar', 'BarList', 'KeyValueList', 'Accordion', 'helm:action', 'helm:open', 'helm:send']) {
     assert.ok(!system.includes(component), `SYSTEM_DEFAULT 不应含 Layer 2 细节: ${component}`)
   }
+  // 目录驱动：常驻提示词不点名具体扩展技能，由当回合可用技能目录自解释
+  for (const name of ['generative-ui', 'app-builder']) {
+    assert.ok(!system.includes(name), `SYSTEM_DEFAULT 不应硬编码扩展技能名: ${name}`)
+  }
+  // 产物登记 markdown 规则保留在 Layer 0
+  assert.ok(system.includes('artifact:<id>'), '应保留产物登记与内联渲染规则')
 })
 
 test('helm-cli 技能资产同步界面扩展与会话投影能力面（防回退）', { timeout: 60_000 }, () => {

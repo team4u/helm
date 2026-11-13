@@ -42,7 +42,7 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 | `ctx.getConfig()` | 读取当前生效配置 | secret 字段经 `configSchema` 分离至 credentials.json |
 | `ctx.configSchema(schema)` | 声明配置字段结构 | `type: string/number/boolean`，`secret: true` 自动入 `SecretStash` |
 | `ctx.hook` | 注册 7 个生命周期 Hook | `trigger / input / before_turn / tool_call / tool_result / agent_spawn / turn_settled`，支持 `priority` |
-| `ctx.action(spec)` | 注册五端复用动作 | 强类型 `inputSchema` / `outputSchema`，见下文 |
+| `ctx.action(spec)` | 注册五端复用动作（含会话目录自动发现） | 强类型 `inputSchema` / `outputSchema`，可选 `promptSnippet` / `promptGuidelines`，见下文 |
 | `ctx.tool(spec)` | 注册仅对模型可见的工具 | 支持 `promptSnippet` / `promptGuidelines` / `onUpdate` / `scope` |
 | `ctx.route(spec)` | 挂载 Web Standard 原始 HTTP 路由 | `public: true` 跳过 Token 鉴权（webhook 回调用） |
 | `ctx.doc(name, initial, opts)` | 声明持久状态文档 | state.sqlite；`public: true` 进全局首帧与 SSE 广播 |
@@ -92,6 +92,12 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 | Web UI | 声明式 Spec `{ type: 'helm:action', pluginId, actionId, input }` 或 `ctx.callAction` |
 
 输入输出在边界处统一 JSON Schema 强校验；输出经宿主统一脱敏后返回。
+
+### 会话动作目录（自动发现）
+
+除五端映射外，运行时把启用且匹配会话 `scope` 的动作自动投射进系统提示 `prompt.actions` 段的 `<available_actions>` 目录：每项含全限定 ID、description、CLI 命令与紧凑参数签名，模型经 `run_action` 元工具按需调用（目录仅在 `run_action` 存在时生成）。内置与外部插件同权——新插件启用后动作自动入目录，无需修改 SYSTEM.md 或内置技能；插件停用、动作注销或对本会话不可达时条目自动清理，不留幻影提示词。
+
+`PluginActionSpec` 可选 `promptGuidelines: string[]`（目录条目展示的简短使用要点；`exposeAsTool: true` 派生工具实际激活时同样注入，不重复）与 `promptSnippet: string`（完整段落，仅派生工具实际激活时注入）。目录是摘要：完整 schema 用 `run_action({ actionId, describe: true })` 只读自省（返回完整 manifest，不执行 handler，同样按启用状态与 scope 过滤），或经 CLI `helm actions list --json`。`scope` 同时约束目录可见性、describe 与调用；人工 HTTP/CLI 不受 scope 限制。
 
 `idempotent` 声明是作者对安全重试的**承诺**，不是引擎检测所得：声明 `true` 的动作在工作流账本中成功后进入前缀缓存复用，中断或失败时允许 `resumeFromRunId` 从该步安全重跑；声明 `false`（默认）的动作一旦执行状态不确定（进程崩溃于执行中），账本标记 `workflow_action_uncertain`，恢复时拒绝自动重跑副作用、显式交由人类确认。`prepareAction` 端口提供无副作用的前置校验（插件状态、scope、inputSchema + 定义端 idempotent），供编排引擎在落盘 `action_started` 前判定副作用语义。
 

@@ -14,7 +14,7 @@ managedByPlugin: {{MANAGED_BY}}
    - `HELM_CONVERSATION_ID`：当前会话 ID；`HELM_CWD`：会话工作目录；`HELM_NODE_ID`：绑定节点（本机时另有 `HELM_DATA_DIR`）。
 2. 解析输出必加 `--json`（人类可读输出仅供展示，不做程序消费）。
 3. 支持 `--current` 的命令用它选择当前会话（读取 `HELM_CONVERSATION_ID`）；其他命令按帮助传目标 ID。
-4. 自省优先（不背诵易变细节）：用 `helm --help`、`helm <cmd> --help` 实时查询子命令精确参数；动态插件动作与入参 JSON Schema 一律以 `helm actions list --json` 为准，插件配置以 `helm plugins config <id> --json` 为准。
+4. 自省优先（不背诵易变细节）：用 `helm --help`、`helm <cmd> --help` 实时查询子命令精确参数；动态插件动作与入参 JSON Schema 以会话内 `<available_actions>` 目录、`run_action({ actionId, describe: true })` 只读自省或 `helm actions list --json` 为准，插件配置以 `helm plugins config <id> --json` 为准。
 5. 会话正忙时 `helm send` 可用 `--when-busy steer|followUp|reject`（省略时默认 steer 插话引导）；等待本次回答加 `--wait`。
 
 ## 核心 CLI 命令全景（API 与 CLI 同权，全部支持 --json）
@@ -40,7 +40,7 @@ managedByPlugin: {{MANAGED_BY}}
 
 ### Profile 与技能
 - `helm profiles list` / `helm profiles get <id>`
-- `helm profiles create [id] --name/--model/--thinking/--node/--cwd/--system[-file]/--skills/--all-skills/--starters/--input <json>`（长期记忆由 `builtin:memory` 托管：`helm memory get|set|configure`）
+- `helm profiles create [id] --name/--model/--thinking/--node/--cwd/--system[-file]/--skills/--all-skills/--starters/--input <json>`（长期记忆由可选插件 `builtin:memory` 托管，动作经会话目录发现）
 - `helm profiles update <id> ...`：语义化 flag 先 GET 再合并 PUT（不丢绑定字段）；`--input` 单独使用为全量替换。
 - `helm profiles delete <id>`（默认 assistant 不可删）。
 - `helm skills list` / `helm skills read <id> [--path references/xxx.md]`。内置 helm-cli 为系统受管只读技能，启动时按内置源码覆盖；需要扩展时创建自己的技能，不修改内置文件。
@@ -68,9 +68,10 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm plugins update <id>`：更新受管安装的外部插件包并重载（源未变化时如实返回 changed:false）。
 - `helm plugins remove <id> [--yes]`：移除受管安装的外部插件包（破坏性：停用并清理 Hub 主机上的安装目录与记录）。人类模式 TTY 需输入 yes 确认；非交互环境用 `--yes`；`--json` 不交互。
 - `helm plugins doc <id> <name>`：读全局公共文档；会话文档加 `--conversation <n>`（或 `--current`），持续订阅加 `--watch`（专用 SSE，首帧即当前值，Ctrl-C 退出）。
-- `helm actions list`：全部插件动作清单（ActionManifest）。
-- `helm <plugin> <action>`：动作自动映射为 CLI（剥离 `builtin:` 前缀；如 `helm superagent dispatch_worker`）；用该命令的 `--help` 查询参数或用 `--input <json>`。
-- 可选插件启用后才能调用：`memory` 管理 Profile 长期记忆（`get/set/configure`），`apps` 校验与发布全栈微应用（`validate/publish/list/remove`），`herdr` 管理终端 Agent，`superagent` 派工和召回，`triggers` 管理 cron/webhook，`magpie` 管理模型网关；详细动作以 `helm actions list --json` 为准。
+- 动作发现以会话内自动目录为准：系统提示的 `<available_actions>` 段实时列出当前启用且匹配本会话作用域的全部插件动作（内置与外部插件同权，新插件无需改 SYSTEM.md 或内置技能即自动出现），每项含全限定 ID（`pluginId.actionId`）、描述、CLI 命令与紧凑参数签名，部分动作附作者声明的少量使用指引；插件停用或动作对本会话不可达时条目自动消失，不要凭记忆调用目录外的动作。
+- 目录是摘要不是完整契约：调用前优先 `run_action({ actionId: "<pluginId>.<actionId>", describe: true })` 只读获取该动作完整 manifest（含嵌套入参/出参 JSON Schema），不执行 handler、无副作用；describe 同样按启用状态与 scope 过滤，无 bash 的会话也能自省。有 bash 时也可用 `helm actions list --json`（全量清单）或 `helm <plugin> <action> --help`（单动作参数）。
+- `run_action({ actionId, input })` 无需先读本技能即可直接调用目录中的动作；`exposeAsTool: true` 的动作另以独立工具形态出现在工具列表，调用语义等价。
+- `helm <plugin> <action>`：动作自动映射为 CLI 顶层命令（剥离 `builtin:` 前缀；如 `helm cron create`），支持 `--input <json>` 传参。
 
 ### 审批、产物与逃生舱
 - `helm asks list` / `helm asks answer <id> --answers <json> [--expected-state-seq <n>]`（CAS 乐观锁）/ `helm asks cancel <id>`。
@@ -88,4 +89,4 @@ managedByPlugin: {{MANAGED_BY}}
   `load_skill({ skillId: "helm-cli", path: "references/skill-and-plugin-dev.md" })`。
 - 开发或优化插件 client.tsx，尤其涉及重型依赖、动态 import、首次加载性能或异步 chunk 前：
   `load_skill({ skillId: "helm-cli", path: "references/plugin-client-code-splitting.md" })`。
-- 交互式卡片/表单等富展示能力由可用技能目录中的 generative-ui 技能提供（托管插件 builtin:json-render）；构建可复用的全栈微应用并发布到应用中心由 app-builder 技能提供（托管插件 builtin:apps）：目录中存在时按其指引输出，不在时用普通 Markdown。
+- 交互式卡片/表单等富展示能力由可用技能目录中的 generative-ui 技能提供（托管插件 builtin:json-render）；构建可复用的全栈微应用并发布到应用中心由 app-builder 技能提供（托管插件 builtin:apps）：目录中存在时按其指引输出，不在时用普通 Markdown。其他插件自带的专项输出能力同理，以当回合可用技能目录与 `<available_actions>` 动作目录为准，不依赖系统提示点名。

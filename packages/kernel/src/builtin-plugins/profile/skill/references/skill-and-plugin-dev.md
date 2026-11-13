@@ -149,12 +149,38 @@ export default {
 - `composerCompleter` 为 `@ / # / :` 声明纯数据补全源（`/` 留给命令/技能）：`source` 必须显式选择 `{kind:'action', actionId, actionPluginId?}` 或 `{kind:'doc'|'sessionDoc', name, itemsField}`。Action 输入 `{query, conversationId}`、输出 `{items:[{id,label,insertText,hint?,icon?}]}`，且必须 `idempotent: true`；文档源必须是本插件 public doc/sessionDoc 的顶层数组字段，不猜 `docs[0]`。补全只替换触发 token、只插入文本，不提交/执行。Web 防抖查询，CLI/Agent/Workflow 经同一 Action。
 - `artifactPreviewer` 按 MIME（精确值或 `type/*`）和/或小写扩展名（如 `.csv`、`.topo.json`）匹配；至少声明一类，MIME 与后缀取 OR，按 scope 和 priority 裁决。组件接收宿主管理的 `blobUrl`、可选元数据名和最多 1 MiB 的文本；用户仍可切回默认预览与下载。client 仍是可信代码不是沙箱；展示不可信 HTML 时放入默认无权限的 `<iframe sandbox="">`，不注入宿主 DOM，不要声称 `allow-scripts` 无风险。
 - `NODE_DETAIL_SECTION_SLOT` (`builtin:node/detail-section`) 是节点中心宿主保留插槽，不是 `builtin:node` 插件。用 `ctx.ui.slot` 注入已有节点的扩展区，Props 为 `{nodeId,isLocal,isOnline,isNew:false}`；不传令牌/连接命令，不在新节点接入表单挂载。
-- `ctx.action({ id, description, inputSchema, outputSchema, idempotent?, handler })` 将 Schema 动作统一映射到 HTTP、CLI、Workflow action()、Web；`idempotent: true` 标记只读/幂等动作，失败或中断时允许工作流断链重跑；模型可经 run_action 调用，设置 exposeAsTool: true 才直接列为工具。
+- `ctx.action({ id, description, inputSchema, outputSchema, cli?, exposeAsTool?, idempotent?, scope?, promptSnippet?, promptGuidelines?, handler })` 将 Schema 动作统一映射到 HTTP、CLI、Workflow action()、Web 与会话动作目录：启用且匹配会话 scope 的动作自动出现在系统提示 `<available_actions>` 目录（全限定 ID/描述/CLI 命令/紧凑签名；内置与外部插件同权，新插件无需改 SYSTEM.md 或内置技能），模型经 `run_action({ actionId, input })` 直接调用，`run_action({ actionId, describe: true })` 可只读返回完整 manifest（含嵌套 schema，不执行 handler，同样按启用与 scope 过滤）。`exposeAsTool: true` 额外派生独立模型工具；`ctx.tool` 则是不进五端映射、仅模型可见的专用工具，两者都支持 `promptSnippet`（完整段落）/`promptGuidelines`（要点列表）：指引仅实际激活时注入、与目录不重复；停用或 scope 不可达时目录、工具与提示词自动清理，不留幻影。`idempotent: true` 标记只读/幂等动作，失败或中断时允许工作流断链重跑。
 - `ctx.host.execEnv(req, opts?)` 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helm/node 通道、SecretStash 注入与脱敏），纳入在途任务追踪（withTask）。
 - `ctx.host.nodeFetch(nodeId): typeof fetch` / `ctx.host.openTunnel(nodeId, { host?, port }, signal?)` 经 EnvFabric 节点隧道跨节点访问目标节点视角的 HTTP(S)/SSE 服务，或获取任意 TCP 双工流（host 由节点解析，缺省 `127.0.0.1`；活动隧道计入在途任务追踪）。节点端无需部署配套插件代码。
 - `ctx.doc(name, initial, { public: true })` 公开持久全局状态（进全局 SSE 首帧，更新广播全量）；前端组件经 `usePluginDoc(name)` 订阅。`ctx.configSchema` 的 secret 字段进入凭据存储，避免公开到 doc。
 - `ctx.sessionDoc(name, initial, { public: true })` 按会话分片持久状态：句柄 `get/set/update/delete(conversationId, ...)`（如 `metrics.update(input.conversationId, cur => ({ count: cur.count + 1 }))`），前端组件用 `usePluginSessionDoc("metrics")` 按当前会话订阅；不进全局首帧与全局广播，公开时经专用 SSE（`GET /api/plugins/:id/docs/:name/events?conversationId=N`）只推给订阅该会话的客户端；会话删除级联清理，删除后写入被拒。会话级 UI 状态（如每会话任务列表、运行详情）一律用 sessionDoc 而非 doc，避免全局写放大；doc 与 sessionDoc 禁止同名。
-- `ctx.service({ id, start, stop })` 管理后台服务；声明 liveTasks 可在停用前报告在途任务。
+- `ctx.service({ id, start, stop })` 管理后台服务；声明 liveTasks 可在停用前报告在途任务。service.start 内可经 `ctx.host.skills.ensureSkill({ id, skillMd, references })` 自举受管技能（长手册的标准去向，不要塞进 promptGuidelines）：
+
+```ts
+const SKILL_MD = `---
+name: deploy-guide
+description: 部署手册（模型靠这句话判断何时加载）
+managedByPlugin: my-plugin
+---
+
+# 部署
+遇回滚场景先读 references/rollback.md。
+`
+
+ctx.service({
+  id: 'skill-bootstrap',
+  async start() {
+    await ctx.host.skills.ensureSkill({
+      id: 'deploy-guide',
+      skillMd: SKILL_MD,
+      references: { 'rollback.md': '# 回滚\n…' },
+    })
+  },
+  async stop() {},
+})
+```
+
+  `managedByPlugin` 必须是本插件 ID（宿主校验绑定）；技能随插件停用自动退出可用目录、启用后恢复，同时仍受 Profile.skills 白名单过滤（限定目录的 Profile 需显式勾选才可见）——helm-cli 也遵守同一规则，不是始终可用。
 
 要点：
 - 外部插件 id 禁止 `builtin:` 前缀、禁止与已注册插件重名、不可自封 locked；放入目录后 `helm plugins rescan` 增量发现（或重启 Hub 自动发现），默认停用注册。

@@ -445,6 +445,10 @@ export function registerWebhook(
   ctx.action({
     id: 'webhook_create',
     description: '创建 webhook 入站端点（HMAC-SHA256 验签）；secret 仅允许人工 HTTP/CLI 配置，拒绝会话上下文调用',
+    promptGuidelines: [
+      'secret 只由人工配置：请用户自行执行 helm webhook create 或 HTTP 直调；不要在会话中生成、代填或回显 secret——会话上下文调用被服务端拒绝（403 webhook_secret_context_forbidden）',
+      '创建后向用户交付端点 URL 与验签方式：x-helm-signature: sha256=<hex>，HMAC-SHA256 签名覆盖原始 body 字节',
+    ],
     cli: { command: ['webhook', 'create'] },
     inputSchema: {
       type: 'object',
