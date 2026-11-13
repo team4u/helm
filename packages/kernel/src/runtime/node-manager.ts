@@ -8,7 +8,7 @@
 import { randomBytes } from 'node:crypto'
 import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
 import { chmod, mkdir, statfs, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError, type EnvExecRequest, type EnvExecResponse, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helm/protocol'
 import { sha256hex, type EnvFabric } from '../env/index.js'
@@ -188,7 +188,9 @@ export class NodeManager {
     const sourceCli = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
     const fs = await import('node:fs/promises')
     const compiled = await fs.access(compiledCli).then(() => true, () => false)
-    const args = compiled
+    // 源码内核必须配套源码 CLI，避免旧 dist 命令表与新 protocol 契约混用。
+    const useCompiled = basename(dirname(kernelDir)) !== 'src' && compiled
+    const args = useCompiled
       ? [process.execPath, compiledCli]
       : [process.execPath, join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), sourceCli]
     const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\"'\"'")}'`

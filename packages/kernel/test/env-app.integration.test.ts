@@ -214,6 +214,8 @@ test('跨节点执行的非法输入在 HTTP 边界返回明确的 400', { timeo
 test('本机受管 Shell 的 helm 包装入口能访问真实 Hub', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
+    const wrapper = await readFile(join(env.hubDir, 'bin', 'helm'), 'utf8')
+    assert.match(wrapper, /packages[\\/]cli[\\/]src[\\/]index\.ts/, '源码内核生成的受管入口必须使用源码 CLI，即使旧 dist 仍存在')
     const response = await env.request('/api/env/exec', { nodeId: 'local', cwd: env.hubDir, conversationId: 1, command: 'helm status --json' })
     assert.equal(response.status, 200)
     const result = await response.json() as { ok: boolean; output: string }
