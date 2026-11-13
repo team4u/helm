@@ -14,11 +14,16 @@
 
 后台子代理的汇报链路有完整的诚实性设计：父会话已被删除时，汇报降级为全局 notification 通知（「后台任务已结束，可在任务列表检查结果」）；其余故障（store/IO/权限）如实上抛，由引擎 outbox（`notifiedAt` 不置位）在下次 `init` 时补发，绝不吞错。
 
-## 五端动作（8 个）
+## 五端动作（11 个）
+
+工作流定义是跨会话可复用资产，唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js` 文件目录（无 catalog/state 副本）；`get` / `save` / `delete` 是这组资产的完整管理面，创建与修改全部由 AI / CLI 经动作完成，Web 端只读。
 
 | 动作 | CLI 映射 | 说明 |
 | :--- | :--- | :--- |
-| `list` | `helm workflows list` | 列出已保存的工作流定义 |
+| `list` | `helm workflows list` | 列出已保存的工作流定义（每条携带真实文件事实 `updatedAt` / `size`；元数据非法的条目保留并附 `metadataError`） |
+| `get` | `helm workflows get <name>` | 读取完整定义（只读源码 + 元数据 + 文件事实）；供 Web 只读展示与 AI 读取，不构成编辑能力；不存在 404 |
+| `save` | `helm workflows save [nameOrFile]` | 保存定义：`script`（位置参数为本地脚本文件时自动读入）或 `--from-run-id` 二选一；缺省名用脚本 `meta.name`，显式 `--name` 与 `meta.name` 不一致时拒绝；名称安全校验（`SAFE_NAME` 防路径穿越）；保存前做 validateScript 全量检查与 worker 同形状的 compile-only 语法预检（零副作用）；重复保存默认拒绝（`409 workflow_already_exists`），`--overwrite` 才覆盖；原子写入（同目录临时文件 + fsync，新建经 link 原子占位、并发同名创建恰好一个成功，覆盖经 rename 原子替换）；既有目标为越界符号链接时拒绝；返回保存后按真实 fs 重建的摘要（`created` + `workflow`）。`fromRunId` 把持久 RunRecord 中的脚本源固化为定义（内联 run 保存 `script`、文件 run 重读 `scriptPath`）；subagent run 与无脚本源的 run 显式拒绝 |
+| `delete` | `helm workflows delete <name>` | 删除定义文件（历史运行记录不受影响）；不存在 404；lstat/realpath 防目录外符号链接，目录条目拒绝 |
 | `run` | `helm workflows run [nameOrFile]` | 在指定或当前会话启动运行；新 run 必须显式指定会话（CLI `--current` 或 `--conversation-id`）；位置参数为已保存名或本地脚本文件（自动读入 `script`）；`--wait` 同步等终态 |
 | `runs` | `helm workflows runs` | 列出运行记录；支持 `conversationId` 过滤，CLI `--current` 缺省按当前会话过滤 |
 | `inspect` | `helm workflows inspect <runId>` | 查看单个运行详情（含节点状态与进度时间线；已保存定义发起的 run 携带 `savedName`） |
@@ -77,11 +82,12 @@ Worktree 隔离经 `agent_spawn` around continuation（priority 200，先于外�
 
 ## 前端扩展
 
-插件注册三个 client.tsx 视图（组件经 `usePluginSessionDoc` 自行订阅 runs 分片，动作经 `ctx.callAction`，零宿主私有依赖）：
+插件注册五个 client.tsx 视图（组件经 `usePluginSessionDoc` 自行订阅 runs 分片，动作经 `ctx.callAction`，零宿主私有依赖）：
 
 - `toolView` `subagent-card`（`replaceRow: true`）：时间线内 subagent 工具调用的双层胶囊实时卡，多次 resume 折叠展示；
-- `toolView` `workflow-card`（`replaceRow: true`）：时间线内 SubagentWorkflow 调用的工作流运行卡。已完成的 DSL run（含内联脚本）提供「重放」表单，经 `resumeFromRunId` 发起新 run，保留原会话；空白沿用原 args，显式 args 经 JSON 校验后覆盖。文件脚本重读最新内容，内联脚本沿用原源码。缓存仅复用调用载荷相同的前缀，首次失配起重新执行；副作用不确定时按引擎契约显式拒绝。失败/中止 run 提供「断点恢复」。重放、恢复和中止在途均防止重复提交。
-- `workbenchPanel` `tasks`：工作台面板（工作流库 + 当前会话执行树），`badge` 绑定 `run-badges` 文档。工作流库经 `list` 动作展示已保存定义并支持在当前会话运行；每行 args 草稿独立，按会话隔离并严格解析 JSON。有 worktree 的节点卡与独立子代理卡均提供只读改动概览（`inspect_worktree`），优先按登记 ID 定位，无 ID 时以 path 与节点消歧。审阅按钮仅向父会话提交请求，Web 不执行 git 写操作。Diff 仅覆盖已跟踪文件，未跟踪文件见状态列表；清理按钮使用同一精确选择器并在途禁用。
+- `toolView` `workflow-card`（`replaceRow: true`）：时间线内 SubagentWorkflow 调用的工作流运行卡。适合的 run（非 subagent 且非已保存定义发起）提供一键「保存为工作流」（`save fromRunId`，保存名取脚本 `meta.name`；重名 / 校验失败如实报错，绝不伪造成功）。已完成的 DSL run（含内联脚本）提供「重放」表单，经 `resumeFromRunId` 发起新 run，保留原会话；空白沿用原 args，显式 args 经 JSON 校验后覆盖。文件脚本重读最新内容，内联脚本沿用原源码。缓存仅复用调用载荷相同的前缀，首次失配起重新执行；副作用不确定时按引擎契约显式拒绝。失败/中止 run 提供「断点恢复」。重放、恢复和中止在途均防止重复提交。
+- `sidebarItem` `workflow-library` + `screen` `library`：工作流库全屏视图（一级主舞台卡片网格 + 右侧标准详情抽屉）。工作流定义是跨会话资产、不属会话 workbench 管理范畴；Screen 只读浏览（`updatedAt` / `size` 文件事实）、`get` 只读源码（`pre`/`code` + 复制，无任何编辑器）、运行（Radix `Select` 显式选择目标会话 + args 严格 JSON 解析）、删除（两步确认）与刷新；「让 AI 修改」仅提供可复制的明确请求文本（经 AI 调用 `save` 写回），不在 Web 内改文件。选中项与搜索词写入 `sp.*` 深链参数（`setParams` 唯一导航）。
+- `workbenchPanel` `tasks`：工作台面板（当前会话执行树 + 紧凑工作流库运行入口），`badge` 绑定 `run-badges` 文档。工作流库分节经 `list` 动作展示已保存定义并支持在当前会话运行（每行 args 草稿独立、按会话隔离、严格解析 JSON），并提供到工作流库 Screen 的导航；定义管理（源码/删除）不在此承担。有 worktree 的节点卡与独立子代理卡均提供只读改动概览（`inspect_worktree`），优先按登记 ID 定位，无 ID 时以 path 与节点消歧。审阅按钮仅向父会话提交请求，Web 不执行 git 写操作。Diff 仅覆盖已跟踪文件，未跟踪文件见状态列表；清理按钮使用同一精确选择器并在途禁用。
 
 执行卡片统一使用 `ExecutionNode` 视图模型连接子会话、工作流、动作及外部执行。每个实际执行只计数一次；卡片汇总后代的运行、异常、审批状态，在当前层展示直系子项，深层任务通过抽屉继续查看。审批与后代活动作为独立摘要呈现，工作流自身的结算结果仍以引擎记录为准。
 

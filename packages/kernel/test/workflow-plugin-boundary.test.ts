@@ -705,3 +705,121 @@ test('emitEvent 适配器：runs 投影损坏时引擎语义完整、显式诊�
     await host?.dispose()
   }
 })
+
+// ---------------------------------------------------------------------------
+// 8. 工作流库动作（get / save / delete）：真实插件注册 + 动作总线全链路
+// ---------------------------------------------------------------------------
+
+test('工作流库动作注册：get/save/delete 三动作登记且 CLI 映射到 workflows 子命令', { timeout: 60_000 }, async () => {
+  const host = makeHost()
+  const { createWorkflowPlugin } = await import('../src/builtin-plugins/workflow.js')
+  await host.register(createWorkflowPlugin())
+  const manifests = host.listActions().filter((m) => m.pluginId === WORKFLOW_PLUGIN_ID)
+  const byId = new Map(manifests.map((m) => [m.id, m]))
+  for (const id of ['get', 'save', 'delete']) {
+    assert.ok(byId.has(id), `应注册 ${id} 动作`)
+  }
+  assert.deepEqual(byId.get('get')!.cli?.command, ['workflows', 'get'])
+  assert.deepEqual(byId.get('save')!.cli?.command, ['workflows', 'save'])
+  assert.deepEqual(byId.get('save')!.cli?.positional, [{ field: 'name', readFileInto: 'script' }])
+  assert.deepEqual(byId.get('delete')!.cli?.command, ['workflows', 'delete'])
+  await host.dispose()
+})
+
+test('工作流库动作全链路：save 真实写入 → list 携带文件事实 → get 只读源码 → delete 后 404', { timeout: 60_000 }, async () => {
+  const host = makeHost()
+  const { createWorkflowPlugin } = await import('../src/builtin-plugins/workflow.js')
+  await host.register(createWorkflowPlugin())
+  const script = 'export const meta = { name: "release", description: "发布流程" }\nreturn 1'
+  try {
+    // save：真实写入并返回真实摘要。
+    const saved = (await host.invokeAction(WORKFLOW_PLUGIN_ID, 'save', { script })) as {
+      created: boolean
+      workflow: { name: string; updatedAt: number; size: number; description?: string }
+    }
+    assert.equal(saved.created, true)
+    assert.equal(saved.workflow.name, 'release')
+    assert.equal(saved.workflow.description, '发布流程')
+    assert.ok(saved.workflow.updatedAt > 0 && saved.workflow.size > 0)
+
+    // 重复保存：动作边界透传 409 workflow_already_exists。
+    await assert.rejects(
+      () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'save', { script }),
+      (err: unknown) => err instanceof HelmError && err.code === 'workflow_already_exists',
+    )
+
+    // inputSchema 边界：未知字段拒绝（additionalProperties: false）。
+    await assert.rejects(
+      () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'save', { script, bogus: 1 }),
+      (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+    )
+
+    // list：文件事实进入摘要。
+    const listed = (await host.invokeAction(WORKFLOW_PLUGIN_ID, 'list', {})) as {
+      workflows: Array<{ name: string; updatedAt: number; size: number }>
+    }
+    assert.equal(listed.workflows.length, 1)
+    assert.equal(listed.workflows[0]!.name, 'release')
+    assert.ok(listed.workflows[0]!.updatedAt > 0 && listed.workflows[0]!.size > 0)
+
+    // get：完整只读源码。
+    const detail = (await host.invokeAction(WORKFLOW_PLUGIN_ID, 'get', { name: 'release' })) as {
+      workflow: { name: string; script: string }
+    }
+    assert.equal(detail.workflow.name, 'release')
+    assert.equal(detail.workflow.script, script)
+
+    await assert.rejects(
+      () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'get', { name: 'nope' }),
+      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+    )
+
+    // delete：删除定义；再删 404；list 回空。
+    const removed = (await host.invokeAction(WORKFLOW_PLUGIN_ID, 'delete', { name: 'release' })) as {
+      deleted: boolean
+      name: string
+    }
+    assert.equal(removed.deleted, true)
+    assert.equal(removed.name, 'release')
+    await assert.rejects(
+      () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'delete', { name: 'release' }),
+      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+    )
+    const after = (await host.invokeAction(WORKFLOW_PLUGIN_ID, 'list', {})) as { workflows: unknown[] }
+    assert.deepEqual(after.workflows, [])
+  } finally {
+    await host.dispose()
+  }
+})
+
+test('save 动作 fromRunId：内联 run 固化为定义（经真实插件 records doc 种子）', { timeout: 60_000 }, async () => {
+  // 预置插件私有 records 文档：一条 completed 内联 workflow run。
+  docs.set('builtin:workflow:records', {
+    'workflow/runs': [{ id: 'wf_inline1', conversationId: 1, createdAt: 1 }],
+    'workflow/run/wf_inline1': {
+      id: 'wf_inline1',
+      name: 'inline',
+      conversationId: 1,
+      status: 'completed',
+      createdAt: 1,
+      updatedAt: 2,
+      kind: 'workflow',
+      script: 'export const meta = { name: "fromrun", description: "固化" }\nreturn 1',
+      journalPath: '/tmp/none.jsonl',
+    },
+  })
+  const host = makeHost()
+  const { createWorkflowPlugin } = await import('../src/builtin-plugins/workflow.js')
+  await host.register(createWorkflowPlugin())
+  try {
+    const saved = (await host.invokeAction(WORKFLOW_PLUGIN_ID, 'save', { fromRunId: 'wf_inline1' })) as {
+      created: boolean
+      workflow: { name: string; description?: string }
+    }
+    assert.equal(saved.created, true)
+    assert.equal(saved.workflow.name, 'fromrun')
+    assert.equal(saved.workflow.description, '固化')
+  } finally {
+    await host.dispose()
+  }
+})

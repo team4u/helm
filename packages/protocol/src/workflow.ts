@@ -9,11 +9,47 @@ import type { AgentExecutionInfo, AgentGateResult } from './plugin.js'
 export interface SavedWorkflowSummary {
   name: string
   path?: string
+  /** 定义文件最后修改时间（epoch ms；真实 fs stat，非缓存副本）。 */
+  updatedAt: number
+  /** 定义文件字节数（真实 fs stat）。 */
+  size: number
   /** 元数据校验失败时保留目录条目，并显式返回诊断。 */
   metadataError?: string
   description?: string
   whenToUse?: string
   phases?: Array<{ title: string; detail?: string; model?: string }>
+}
+
+/** builtin:workflow/get 动作返回的完整定义（只读源码 + 元数据 + 文件事实）。 */
+export interface SavedWorkflowDetail extends SavedWorkflowSummary {
+  /** 完整脚本源码：仅供只读展示与 AI 读取；Web 端不提供编辑能力。 */
+  script: string
+}
+
+/** builtin:workflow/save 动作入参：script / fromRunId 恰好提供一个。 */
+export interface WorkflowSaveRequest {
+  /** 完整脚本源码（与 fromRunId 二选一）。 */
+  script?: string
+  /** 把既有运行持久化的脚本源固化为定义（与 script 二选一；不可用于 subagent run）。 */
+  fromRunId?: string
+  /** 保存名称；缺省用 meta.name，与 meta.name 不一致时显式拒绝。 */
+  name?: string
+  /** 覆盖同名定义（默认拒绝，显式 true 才覆盖）。 */
+  overwrite?: boolean
+}
+
+/** builtin:workflow/save 动作结果（保存后按真实 fs 重新构建的摘要）。 */
+export interface WorkflowSaveResult {
+  /** true 新建；false 显式 overwrite 覆盖了既有定义。 */
+  created: boolean
+  workflow: SavedWorkflowSummary
+}
+
+/** builtin:workflow/delete 动作结果（只删除定义文件，历史 run 记录不受影响）。 */
+export interface WorkflowDeleteResult {
+  deleted: true
+  name: string
+  path: string
 }
 
 /** 工作流引擎运行请求（经 builtin:workflow 动作或内核编排调用）。 */

@@ -16,6 +16,7 @@ export {
   runWorkflow,
   normalizeWorkflowArgs,
   validateScript,
+  precheckScriptSyntax,
   assertBoundarySafe,
   workflowConcurrency,
   WorkflowRuntimeError,
