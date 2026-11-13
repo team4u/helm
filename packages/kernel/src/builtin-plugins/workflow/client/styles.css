@@ -1033,3 +1033,174 @@
   outline: 1px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ------------------------------------------------------------------ */
+/* 工作流库全屏视图（screen 扩展点）：卡片网格 + 详情抽屉专属结构       */
+/* ------------------------------------------------------------------ */
+
+.workflow-lib-screen {
+  gap: 14px;
+}
+
+.workflow-lib-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.workflow-lib-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.workflow-lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.workflow-lib-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  cursor: pointer;
+  min-width: 0;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.workflow-lib-card:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-hover, var(--border));
+}
+
+.workflow-lib-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.workflow-lib-card-warn {
+  border-left: 3px solid var(--warn);
+}
+
+.workflow-lib-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.workflow-lib-card-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-lib-card-meta-error {
+  font-size: 12px;
+}
+
+.workflow-lib-card-desc {
+  font-size: 12px;
+  color: var(--fg-muted, var(--fg));
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.workflow-lib-card-desc-empty {
+  color: var(--fg-faint, var(--fg-muted, var(--fg)));
+}
+
+.workflow-lib-card-phases {
+  font-size: 11px;
+  color: var(--fg-muted, var(--fg));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-lib-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.workflow-lib-card-facts {
+  font-size: 11px;
+  color: var(--fg-muted, var(--fg));
+  white-space: nowrap;
+}
+
+/* 详情抽屉（宿主 primary-drawer 骨架之上的业务结构） */
+
+.workflow-lib-drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.workflow-lib-source {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+}
+
+.workflow-lib-edit-request {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.workflow-lib-hint {
+  font-size: 12px;
+  color: var(--fg-muted, var(--fg));
+  line-height: 1.5;
+}
+
+.workflow-lib-run-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workflow-lib-run-select {
+  min-width: 180px;
+}
+
+.workflow-lib-run-row .workflow-library-args {
+  flex: 1 1 160px;
+}
+
+.workflow-lib-delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+@media (max-width: 680px) {
+  .workflow-lib-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-lib-run-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

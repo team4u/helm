@@ -24,8 +24,8 @@
  *   service.start 执行 init（终止遗留任务、标 failed、补发通知）与 close；
  *   liveTasks/liveWorktrees 声明在途任务与工作树占用；
  * - 3 个模型工具（subagent / SubagentWorkflow / cleanup_worktree）与
- *   8 个动作（list/run/runs/inspect/abort/cleanup_worktree/list_worktrees/
- *   inspect_worktree）五端复用；
+ *   11 个动作（list/get/save/delete/run/runs/inspect/abort/cleanup_worktree/
+ *   list_worktrees/inspect_worktree）五端复用；
  * - 嵌套深度契约：受管子代理（经本插件派生的原生/外部子会话）默认可嵌套
  *   DEFAULT_MAX_SUBAGENT_DEPTH（2）层——主会话直接派生一层，一层子代理
  *   默认可继续派生二层，达到子树上限的会话即编排叶子。私有登记表持久
@@ -1094,6 +1094,107 @@ export function createWorkflowPlugin(): PluginDefinition {
       })
 
       ctx.action({
+        id: 'get',
+        description: '读取已保存工作流的完整定义（只读源码与元数据；Web/AI 只读，不提供编辑）',
+        inputSchema: {
+          type: 'object',
+          properties: { name: { type: 'string', description: '已保存工作流名' } },
+          required: ['name'],
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: { workflow: { type: 'object' } },
+          required: ['workflow'],
+          additionalProperties: false,
+        },
+        cli: {
+          command: ['workflows', 'get'],
+          description: '读取已保存工作流定义（只读源码与元数据）',
+          positional: [{ field: 'name', required: true }],
+        },
+        async handler(input) {
+          const { name } = input as { name: string }
+          try {
+            return { workflow: workflows.get(name) }
+          } catch (error) {
+            if (error instanceof HelmError && error.code === 'not_found') {
+              throw new HelmError('not_found', `工作流 ${name} 不存在`, 404, { name })
+            }
+            throw error
+          }
+        },
+      })
+
+      ctx.action({
+        id: 'save',
+        description: '保存工作流定义为跨会话资产（script 或 fromRunId 二选一；缺省名用 meta.name；默认拒绝覆盖，overwrite: true 才覆盖）',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            script: { type: 'string', description: '完整脚本源码（与 fromRunId 二选一）' },
+            fromRunId: { type: 'string', description: '把既有运行持久化的脚本源固化为定义（与 script 二选一；不可用于后台子代理运行）' },
+            name: { type: 'string', description: '保存名称（可选；缺省用 meta.name，与 meta.name 不一致时拒绝）' },
+            overwrite: { type: 'boolean', description: '覆盖同名定义（默认拒绝）' },
+          },
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            created: { type: 'boolean' },
+            workflow: { type: 'object' },
+          },
+          required: ['created', 'workflow'],
+          additionalProperties: false,
+        },
+        cli: {
+          command: ['workflows', 'save'],
+          description: '保存工作流定义（位置参数为本地脚本文件或目标名称；也可 --from-run-id 固化既有运行）',
+          positional: [{ field: 'name', readFileInto: 'script' }],
+        },
+        async handler(input) {
+          const a = input as Record<string, unknown>
+          return workflows.save({
+            ...(a['script'] !== undefined ? { script: String(a['script']) } : {}),
+            ...(a['fromRunId'] !== undefined ? { fromRunId: String(a['fromRunId']) } : {}),
+            ...(a['name'] !== undefined ? { name: String(a['name']) } : {}),
+            ...(a['overwrite'] !== undefined ? { overwrite: a['overwrite'] === true } : {}),
+          })
+        },
+      })
+
+      ctx.action({
+        id: 'delete',
+        description: '删除已保存工作流定义文件（历史运行记录不受影响）',
+        inputSchema: {
+          type: 'object',
+          properties: { name: { type: 'string', description: '已保存工作流名' } },
+          required: ['name'],
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            deleted: { type: 'boolean', const: true },
+            name: { type: 'string' },
+            path: { type: 'string' },
+          },
+          required: ['deleted', 'name', 'path'],
+          additionalProperties: false,
+        },
+        cli: {
+          command: ['workflows', 'delete'],
+          description: '删除已保存工作流定义文件（历史运行记录不受影响）',
+          positional: [{ field: 'name', required: true }],
+        },
+        async handler(input) {
+          const { name } = input as { name: string }
+          return workflows.delete(name)
+        },
+      })
+
+      ctx.action({
         id: 'run',
         description: '在指定或当前会话启动工作流运行；CLI 使用 --current 传入当前会话',
         inputSchema: {
@@ -1408,6 +1509,20 @@ export function createWorkflowPlugin(): PluginDefinition {
         order: 10,
         badge: { doc: WORKFLOW_RUN_BADGES_DOC, byConversationField: 'byConversation' },
         client: { module: 'index.tsx', export: 'WorkflowWorkbenchPanel' },
+      })
+      // 工作流库：跨会话可复用资产的独立视图空间（定义管理不属会话 workbench）。
+      ctx.ui.sidebarItem({
+        id: 'workflow-library',
+        label: '工作流库',
+        icon: 'workflow',
+        target: `screen:${WORKFLOW_PLUGIN_ID}/library`,
+        order: 16,
+      })
+      ctx.ui.screen({
+        id: 'library',
+        label: '工作流库',
+        icon: 'workflow',
+        client: { module: 'index.tsx', export: 'WorkflowLibraryScreen' },
       })
     },
   }

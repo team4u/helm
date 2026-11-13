@@ -64,6 +64,15 @@ return { reports: reports.filter(report => report !== null) }
 - 禁用 `Date.now()` / `Math.random()` / 无参 `new Date()` / `eval` / `Function` 构造器；需要时间戳请在脚本返回后补，或经 args 传入。
 - 脚本结果与全部 agent/action 入参出参都必须可 JSON 序列化（不可序列化直接拒绝）。
 
+## 工作流库（跨会话可复用资产）
+
+已保存工作流定义的唯一存储真源是数据目录 `workflows/<name>.js`（带 `export const meta` 声明的 JS 脚本）；创建与修改全部由 AI / CLI 调用动作完成，无第二份 catalog 副本：
+
+- 读取：`helm workflows get <name> --json`（完整只读源码 + 元数据 + `updatedAt`/`size` 文件事实）；`helm workflows list --json` 列出全部定义。
+- 保存：`helm workflows save <file.js>`（本地脚本自动读入）或 `helm workflows save --from-run-id <runId>`（把既有运行的内联脚本源固化为定义；后台子代理 run 不可保存）。缺省名取脚本 `meta.name`；显式 `--name` 与 `meta.name` 不一致会拒绝。保存前自动做 meta 校验与语法预检（不执行脚本）；同名默认拒绝（409），`--overwrite` 才覆盖；写入原子完成，成功返回真实摘要。
+- 删除：`helm workflows delete <name>`（只删定义文件，历史运行记录与账本保留）。
+- 会话内修改：先用 `get` 读取当前源码，改完经 `save --overwrite` 写回；Web 工作流库只读浏览/运行/删除，不提供编辑器。
+
 ### 断点重放（resumeFromRunId）
 
 调用 `SubagentWorkflow({ resumeFromRunId: "<runId>", ... })`（或 CLI `helm workflows run <name> --resume-from-run-id <runId> --current --wait`）读取旧账本；匹配的已完成节点直接重放结果，agent/action 与已通过的 gate 不重复执行。参数变化（包括 gate 命令）会使对应节点重新执行。

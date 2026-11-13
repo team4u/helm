@@ -217,8 +217,8 @@ test('buildWorktreeReviewRequest：含坐标与检视统计；分支不一致显
 test('parseSavedWorkflowList：合法列表解析（含 metadataError 条目）；非法条目整体拒绝不静默丢弃', { timeout: 60_000 }, () => {
   const parsed = m.parseSavedWorkflowList({
     workflows: [
-      { name: 'release', description: '发布流程', whenToUse: '发版时', phases: [{ title: '检查' }, { title: '发布', detail: '执行发布' }] },
-      { name: 'broken', metadataError: 'meta.name is required' },
+      { name: 'release', updatedAt: 1, size: 2, description: '发布流程', whenToUse: '发版时', phases: [{ title: '检查' }, { title: '发布', detail: '执行发布' }] },
+      { name: 'broken', updatedAt: 1, size: 2, metadataError: 'meta.name is required' },
     ],
   })
   assert.ok(parsed !== undefined)
@@ -229,7 +229,7 @@ test('parseSavedWorkflowList：合法列表解析（含 metadataError 条目）�
 
   assert.equal(m.parseSavedWorkflowList(undefined), undefined)
   assert.equal(m.parseSavedWorkflowList({ workflows: 'nope' }), undefined)
-  assert.equal(m.parseSavedWorkflowList({ workflows: [{ name: 'ok' }, 42] }), undefined, '含非对象条目必须整体拒绝')
+  assert.equal(m.parseSavedWorkflowList({ workflows: [{ name: 'ok', updatedAt: 1, size: 1 }, 42] }), undefined, '含非对象条目必须整体拒绝')
   assert.equal(m.parseSavedWorkflowList({ workflows: [{ noName: true }] }), undefined, '缺 name 必须整体拒绝')
   assert.equal(m.parseSavedWorkflowList({ workflows: [{ name: 'x', phases: 'bad' }] }), undefined, 'phases 非数组必须整体拒绝')
   assert.equal(m.parseSavedWorkflowList({ workflows: [{ name: 'x', phases: [{ noTitle: 1 }] }] }), undefined, '含非法阶段项必须整体拒绝')
@@ -367,9 +367,9 @@ test('工作流库：渲染已保存定义与元数据；每行独立 args 草�
   const ctx = makeRecordingCtx({
     list: {
       workflows: [
-        { name: 'release', description: '发布流程：检查并发布', whenToUse: '发版时', phases: [{ title: '检查' }, { title: '发布' }] },
-        { name: 'audit', description: '审计流程' },
-        { name: 'broken', metadataError: 'meta.name is required' },
+        { name: 'release', description: '发布流程：检查并发布', whenToUse: '发版时', updatedAt: 1_700_000_000_000, size: 4096, phases: [{ title: '检查' }, { title: '发布' }] },
+        { name: 'audit', description: '审计流程', updatedAt: 1_700_000_000_000, size: 1024 },
+        { name: 'broken', metadataError: 'meta.name is required', updatedAt: 1, size: 2 },
       ],
     },
     run: { run: { id: 'wf_new' } },

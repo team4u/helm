@@ -419,7 +419,8 @@ export interface PluginClientContext {
  * - 内容展示：MarkdownView（标准 Markdown 渲染）/ CodeBlockView（语法高亮代码块）/
  *   CopyButton（复制按钮）；
  * - 格式化纯函数：formatTime（MM-DD HH:mm 紧凑时间）/ formatCompactTimestamp
- *   （MM-DD HH:mm:ss 日志时间戳）/ formatDurationMs（毫秒时长摘要）；
+ *   （MM-DD HH:mm:ss 日志时间戳）/ formatDurationMs（毫秒时长摘要）/ formatBytes
+ *   （字节数人类可读化，1024 进制）；
  * - PluginSlot：插件间子插槽渲染原语。
  */
 export const HELM_PLUGIN_CLIENT_SHARED_MODULE = '@helm/plugin-client'
@@ -511,5 +512,6 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'formatTime',
   'formatCompactTimestamp',
   'formatDurationMs',
+  'formatBytes',
 ] as const
 

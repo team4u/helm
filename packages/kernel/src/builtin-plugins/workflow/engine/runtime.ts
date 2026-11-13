@@ -20,6 +20,7 @@
 
 import { cpus } from 'node:os'
 import { Worker } from 'node:worker_threads'
+import { Script } from 'node:vm'
 import {
   actionJournalKey,
   agentJournalKey,
@@ -537,6 +538,27 @@ export function validateScript(script: string): { meta: WorkflowMeta; body: stri
     )
   }
   return extractMeta(script)
+}
+
+/**
+ * 保存定义前的纯语法预检（确定性、零副作用）：
+ * - validateScript 全量边界（长度 / 控制字符 / meta 纯字面量）；
+ * - 与 worker 完全相同的包装形状做 compile-only 编译检查——只 new Script 不
+ *   runInContext，不执行任何脚本体语句，不产生副作用。PRELUDE 是固定合法
+ * 前缀且与 body 以换行分隔，去掉后不改变 body 自身的语法判定。
+ */
+export function precheckScriptSyntax(script: string): { meta: WorkflowMeta; body: string } {
+  const { meta, body } = validateScript(script)
+  try {
+    new Script(`(async () => {\n${body}\n})()`, {
+      filename: 'workflow-syntax-precheck.js',
+      lineOffset: -1,
+    })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new WorkflowRuntimeError(`Workflow script has a syntax error: ${detail}`)
+  }
+  return { meta, body }
 }
 
 export async function runWorkflow(options: RunWorkflowOptions): Promise<WorkflowRunResult> {

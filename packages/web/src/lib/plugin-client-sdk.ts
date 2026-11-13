@@ -23,4 +23,4 @@ export { Screen, ScreenSection, DataTable, KvGrid } from './plugin-client-primit
 export type { ScreenProps, ScreenSectionProps, DataTableProps, KvGridProps } from './plugin-client-primitives.js'
 export { Dialog, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogTrigger } from '../ui/Dialog.js'
 export type { DialogProps } from '../ui/Dialog.js'
-export { formatTime, formatCompactTimestamp, formatDurationMs } from './format.js'
+export { formatTime, formatCompactTimestamp, formatDurationMs, formatBytes } from './format.js'
