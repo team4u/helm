@@ -311,18 +311,17 @@ export interface PluginActionCliSpec {
 }
 
 /**
- * 工具使用指引公共字段（ctx.tool 与 ctx.action 声明同语义；ActionManifest 随附）：
- * - promptSnippet：完整段落文本，原样注入 prompt.tools.<name> 命名 section；
- * - promptGuidelines：要点列表，聚合进 prompt.tools.guidelines 共享 section；
- *   两者可同时声明；均未声明时仅依赖 provider 原生 tools 声明。
- * 注册边界强校验（防提示目录被空文本污染）：promptSnippet 非空非纯空白
- * 字符串；promptGuidelines 非空数组且逐项非空非纯空白。仅激活工具投射进
- * 系统提示词（动作需 exposeAsTool 且 scope 命中），未激活不产生幻影文本。
+ * 能力使用指引公共字段（ctx.tool、ctx.action 与 ActionManifest 同权）：
+ * - 工具激活时，段落投射到 prompt.tools.<name>，要点聚合到 prompt.tools.guidelines；
+ * - 动作经 run_action 可达时，指引进入 prompt.actions 目录；直接派生为工具时沿用工具投射，避免重复。
+ * 两字段均可省略；动作仍按 description 自动进入可用动作目录。
+ * 注册边界要求非空非纯空白字符串，promptGuidelines 必须是非空数组。
+ * 仅对当前会话可达的能力投射指引；停用、scope 不匹配或工具被剥离时清理。
  */
 export interface PluginPromptFields {
-  /** 完整段落文本，原样注入 prompt.tools.<name> 命名 section。 */
+  /** 能力使用指引完整段落；投射到当前可达的工具或动作目录。 */
   promptSnippet?: string
-  /** 要点列表（每项非空非纯空白字符串），聚合进 prompt.tools.guidelines 共享 section。 */
+  /** 使用要点列表；每项必须是非空非纯空白字符串。 */
   promptGuidelines?: string[]
 }
 

@@ -177,10 +177,13 @@ test('声明者注册后原地修改 promptGuidelines 不污染已注册数据',
   const cap = new CapabilityRegistry();
   const guidelines = ['原始要点'];
   cap.registerAction('p', baseAction({ id: 'a', promptGuidelines: guidelines }));
-  cap.registerTool('p', baseTool({ promptGuidelines: guidelines }));
+  const toolSpec = baseTool({ promptSnippet: '原始段落', promptGuidelines: guidelines });
+  cap.registerTool('p', toolSpec);
 
   guidelines.push('污染项');
   guidelines[0] = '被改写';
+  toolSpec.promptSnippet = '被重绑的段落';
+  toolSpec.promptGuidelines = ['被重绑的要点'];
 
   const manifest = cap.listActions(['p']).find((m) => m.id === 'a');
   assert.ok(manifest);
@@ -188,6 +191,7 @@ test('声明者注册后原地修改 promptGuidelines 不污染已注册数据',
 
   const tool = cap.listTools(['p']).find((t) => t.name === 'toolX');
   assert.ok(tool);
+  assert.equal(tool.promptSnippet, '原始段落');
   assert.deepEqual(tool.promptGuidelines, ['原始要点']);
 
   // 出站清单再被消费方突变也不回灌注册表

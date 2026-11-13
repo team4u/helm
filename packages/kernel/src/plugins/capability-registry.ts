@@ -93,7 +93,7 @@ export interface ActionEntry {
   cli?: PluginActionSpec<unknown, unknown>['cli'];
   exposeAsTool: boolean;
   idempotent?: boolean;
-  /** 工具使用指引（exposeAsTool 激活时投射；已校验防御拷贝）。 */
+  /** 动作使用指引（经 run_action 或直接工具可达时投射；已校验防御拷贝）。 */
   promptSnippet?: string;
   promptGuidelines?: string[];
   toolAlias: string;
@@ -413,9 +413,8 @@ export class CapabilityRegistry {
     }
     assertSchemaCompilable(spec.inputSchema);
 
-    // 指引数组换入防御拷贝：声明者注册后原地 push/splice 不污染已校验数据
-    const storedToolSpec: PluginToolSpec<TIn> =
-      prompt.promptGuidelines === undefined ? spec : { ...spec, promptGuidelines: prompt.promptGuidelines };
+    // 保存声明快照，避免注册后重绑指引字段或修改数组绕过校验。
+    const storedToolSpec: PluginToolSpec<TIn> = { ...spec, ...prompt };
     pluginTools.set(spec.name, { pluginId, spec: storedToolSpec as PluginToolSpec });
   }
 
