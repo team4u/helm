@@ -143,7 +143,7 @@ test('优雅停止：SIGTERM 生效，端口释放，子进程退出', { timeout
   assert.equal(await pidAlive(pid), false, '子进程应已退出');
 });
 
-test('强制停止：忽略 SIGTERM 的子进程在优雅期后被 SIGKILL', { timeout: 60_000 }, async () => {
+test('强制停止：忽略 SIGTERM 的子进程在优雅期后被 SIGKILL', { timeout: 60_000, skip: process.platform === 'win32' ? 'Windows 的原生进程 kill 无法被忽略，IPC 关闭由独立测试验证' : false }, async () => {
   const { supervisor, port } = await makeHarness(
     { stopGraceMs: 400 },
     { MINI_HUB_MODE: 'ignore-sigterm' },
@@ -153,6 +153,16 @@ test('强制停止：忽略 SIGTERM 的子进程在优雅期后被 SIGKILL', { t
   await supervisor.stop();
   assert.equal(await pidAlive(pid), false, 'SIGKILL 兜底应终止无响应子进程');
   assert.equal(await waitFor('端口释放(强杀)', async () => !(await hubReady(port)), 5_000), true);
+});
+
+test('受管 Node 入口经 IPC 关闭，跨平台释放 Hub 端口', { timeout: 60_000 }, async () => {
+  const { supervisor, port } = await makeHarness({ hubCommand: undefined, hubEntry: MINI_HUB_FIXTURE });
+  const result = await supervisor.start();
+  assert.equal(result.runner?.kind, 'host-node');
+  const pid = supervisor.childPid!;
+  await supervisor.stop();
+  assert.equal(await pidAlive(pid), false);
+  assert.equal(await hubReady(port), false);
 });
 
 test('就绪超时：no-listen → hub_ready_timeout 且诊断含命令行', { timeout: 60_000 }, async () => {

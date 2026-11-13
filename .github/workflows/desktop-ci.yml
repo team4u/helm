@@ -111,7 +111,7 @@ jobs:
       # 安装包产物（NSIS exe / dmg / zip / AppImage / deb）：--publish never，
       # 永不在此发布；任何平台一个安装包都没产出视为真实失败。
       - name: Build desktop installers (publish never)
-        run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist -- --publish never
+        run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist
 
       - name: Upload desktop installers
         uses: actions/upload-artifact@v4
