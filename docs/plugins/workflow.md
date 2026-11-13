@@ -25,7 +25,7 @@
 | `abort` | `helm workflows abort <runId>` | 中止运行中工作流 |
 | `cleanup_worktree` | `helm worktrees cleanup` | 与工具同款语义；选择器三择一互斥，`--force` 清理脏工作树（不可越过占用/归属/locked 校验） |
 | `list_worktrees` | `helm worktrees list` | 列出受管工作树登记（含已清理记录的元数据；新建在前） |
-| `inspect_worktree` | `helm worktrees inspect <worktreeId>` | 只读检视受管工作树：登记元数据 + 目标节点真实 git 只读探测（未提交文件清单、领先基线提交数、diff 统计与有上限预览）；仅登记记录可检视，不支持任意目录；已清理/目录缺失如实返回 `unavailableReason`，git 失败显式报错 |
+| `inspect_worktree` | `helm worktrees inspect <worktreeId>` | 只读检视受管工作树：登记元数据 + 目标节点真实 git 只读探测（未提交文件清单、领先基线提交数、diff 统计与有上限预览）；仅登记记录可检视，不支持任意目录；已清理/目录缺失如实返回 `unavailableReason`，git 失败显式报错（附截断诊断，绝不静默当成功）；diff 固定 `--no-ext-diff --no-textconv` 且仅覆盖 tracked 改动（untracked 文件内容不进 diff，仍完整见于状态清单与 `dirtyFileCount` 真实总数）；预览/统计/状态清单在采集阶段即限内存，超出置 `diffTruncated`/`dirtyFilesTruncated` 或统计末尾截断说明，不假装完整；成功输出与错误诊断均经机密脱敏 |
 
 `run` 与 `cleanup_worktree` 对会话目标有显式冲突校验：输入 `conversationId` 与调用上下文（`--current` / `run_action` / workflow）同时存在且不一致时，显式 `400 validation_error` 拒绝——静默选边等于在调用方不知情下改投目标。
 

@@ -31,7 +31,7 @@ import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
 import { HelmError } from '@helm/protocol'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -1551,5 +1551,276 @@ describe('ignored 文件保护', { timeout: 60_000 }, () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// inspect 只读检视（真实 git）：成功输出脱敏 / 自定义 diff 驱动隔离 / 基线失效显式错误
+// ---------------------------------------------------------------------------
+
+describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真实 git）', { timeout: 60_000 }, () => {
+  it('diff/status 成功输出经 redact 脱敏：已登记秘密替换为 [REDACTED]，绝不原样回显', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't16')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const stash = new SecretStash()
+    const secret = 'sk-live-9f2e7c41d8ab54'
+    const release = stash.addRedaction(secret)
+    const allocator = bareAllocator(docs, { redact: (t) => stash.redact(t) })
+    try {
+      const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      const git = (args: string[]) => execFileSync('git', args, { cwd: record.path, encoding: 'utf-8' })
+      // 已提交改动内容含秘密（进 diff/统计）+ 未跟踪文件名含秘密（进状态清单）。
+      writeFileSync(join(record.path, 'creds.txt'), `token=${secret}\n`)
+      git(['add', 'creds.txt'])
+      git(['commit', '-qm', 'feat: add creds'])
+      writeFileSync(join(record.path, `${secret}.txt`), 'untracked\n')
+
+      const result = await allocator.inspect({ worktreeId: record.id })
+      assert.equal(result.exists, true)
+      assert.ok(result.diffPreview !== undefined && result.diffPreview.includes('[REDACTED]'), 'diff 中秘密值必须脱敏')
+      assert.ok(!result.diffPreview!.includes(secret), 'diff 预览不得含原始秘密')
+      assert.ok(!result.diffStat!.includes(secret), 'diff 统计不得含原始秘密')
+      assert.ok(
+        result.dirtyFiles.some((l) => l.includes('[REDACTED]')),
+        `文件名含秘密的状态行必须脱敏（实得 ${JSON.stringify(result.dirtyFiles)}）`,
+      )
+      assert.ok(result.dirtyFiles.every((l) => !l.includes(secret)), '状态行不得原样回显秘密')
+      release()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('diff 固定 --no-ext-diff --no-textconv：自定义 diff 驱动与 textconv 过滤器均不触发（对照组可触发）', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't17')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    // 自定义外部 diff 驱动与 textconv 过滤器：被调用即落 marker 文件并输出特征串。
+    const driverMarker = join(dir, 'ext-diff-invoked')
+    const textconvMarker = join(dir, 'textconv-invoked')
+    writeFileSync(join(dir, 'fake-driver.sh'), `#!/bin/sh\ntouch '${driverMarker}'\necho DRIVER-RAN\n`)
+    writeFileSync(join(dir, 'fake-textconv.sh'), `#!/bin/sh\ntouch '${textconvMarker}'\necho TEXCONV-RAN\n`)
+    chmodSync(join(dir, 'fake-driver.sh'), 0o755)
+    chmodSync(join(dir, 'fake-textconv.sh'), 0o755)
+    writeFileSync(join(repo, 'note.txt'), 'note-v1\n')
+    writeFileSync(join(repo, 'data.bin'), 'BINOLD\n')
+    writeFileSync(join(repo, '.gitattributes'), '*.txt diff=helmtest\n*.bin diff=helmtext\n')
+    const gitRepo = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
+    gitRepo(['add', '.'])
+    gitRepo(['commit', '-qm', 'add bin + attributes'])
+    gitRepo(['config', 'diff.helmtest.command', join(dir, 'fake-driver.sh')])
+    gitRepo(['config', 'diff.helmtext.textconv', join(dir, 'fake-textconv.sh')])
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      writeFileSync(join(record.path, 'note.txt'), 'note-v2\n')
+      writeFileSync(join(record.path, 'data.bin'), 'BINNEW-PAYLOAD-XYZ\n')
+      const result = await allocator.inspect({ worktreeId: record.id })
+      assert.ok(!existsSync(driverMarker), '外部 diff 驱动不得被触发（--no-ext-diff）')
+      assert.ok(!existsSync(textconvMarker), 'textconv 过滤器不得被触发（--no-textconv）')
+      assert.ok(!result.diffPreview!.includes('DRIVER-RAN'), 'diff 应为真实内部 diff，而非驱动输出')
+      assert.ok(!result.diffPreview!.includes('TEXCONV-RAN'), 'diff 不得经 textconv 过滤')
+      assert.ok(result.diffPreview!.includes('+BINNEW-PAYLOAD-XYZ'), '应显示真实内容行')
+      // 对照组：不带防护参数的裸 git diff 必须触发驱动（证明配置生效、测试非空转）。
+      execFileSync('git', ['diff', record.baseCommit], { cwd: record.path, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
+      assert.ok(existsSync(driverMarker), '对照组：裸 git diff 应触发外部驱动')
+      assert.ok(existsSync(textconvMarker), '对照组：裸 git diff 应触发 textconv')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('已登记基线失效（baseCommit 不可达）显式 worktree_check_failed 并附真实 git 输出，无 fallback', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't18')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      // 篡改登记基线为不存在的提交（模拟 gc / 历史改写后失效）。
+      const all = docs.get('builtin:workflow:worktree-state') as { 'runtime/worktrees'?: { records: ManagedWorktreeRecord[] } }
+      all['runtime/worktrees']!.records[0]!.baseCommit = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+      await assert.rejects(
+        () => allocator.inspect({ worktreeId: record.id }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError)
+          assert.equal(err.code, 'worktree_check_failed')
+          assert.match(err.message, /bad object|unknown revision|fatal/i)
+          return true
+        },
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// inspect 受限采集（受控 exec 分块注入：验证本模块采集代码的内存上限与流式
+// 计数，不 mock 任何 git 行为断言——git 行为全部由上方真实 git 测试覆盖）
+// ---------------------------------------------------------------------------
+
+/** 受控 exec：按命令尾参派发脚本输出，按固定块大小分块回调 onOutput（模拟真实流式输出跨块切行）。 */
+function stubChunkedExec(scriptOf: (args: readonly string[]) => { output: string; exitCode?: number }) {
+  const seen: string[][] = []
+  let chunkSize = 64
+  const exec = async (
+    _nodeId: string,
+    _cwd: string,
+    args: readonly string[],
+    options: { onOutput: (text: string) => void },
+  ): Promise<{ ok: true; value: { exitCode: number } }> => {
+    seen.push([...args])
+    const spec = scriptOf(args.slice(3))
+    for (let i = 0; i < spec.output.length; i += chunkSize) {
+      options.onOutput(spec.output.slice(i, i + chunkSize))
+    }
+    return { ok: true, value: { exitCode: spec.exitCode ?? 0 } }
+  }
+  return { seen, setChunkSize: (n: number) => (chunkSize = n), exec }
+}
+
+describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 60_000 }, () => {
+  it('diff 超 16KiB 先到先截且为真实前缀；状态行流式计数保留真实总数；diff argv 含 --no-ext-diff --no-textconv', {
+    timeout: 60_000,
+  }, async () => {
+    const base = 'a1b2c3d4'.repeat(5)
+    const head = 'e5f6a7b8'.repeat(5)
+    const statusLines = Array.from({ length: 250 }, (_, i) => `?? file-${String(i).padStart(3, '0')}.txt`)
+    const diffBody = Array.from({ length: 400 }, (_, i) => `+diff line ${String(i).padStart(3, '0')} ${'z'.repeat(48)}`).join('\n')
+    const statBody = Array.from({ length: 200 }, (_, i) => ` path-${String(i).padStart(3, '0')}.txt | 2 +-\n`).join('')
+    const stub = stubChunkedExec((args) => {
+      const key = args.join(' ')
+      if (key === 'rev-parse --abbrev-ref HEAD') return { output: 'stub-branch\n' }
+      if (key === 'rev-parse HEAD') return { output: `${head}\n` }
+      if (key === 'status --porcelain --untracked-files=all') return { output: `${statusLines.join('\n')}\n` }
+      if (key === `rev-list --count ${base}..${head}`) return { output: '3\n' }
+      if (key === `diff --no-ext-diff --no-textconv --stat ${base}`) return { output: statBody }
+      if (key === `diff --no-ext-diff --no-textconv ${base}`) return { output: diffBody }
+      return { output: '', exitCode: 1 }
+    })
+    // 块边界刻意切在行中间：验证 lines 模式流式按行结算不受分块影响。
+    stub.setChunkSize(7)
+    const docs = new Map<string, unknown>()
+    docs.set('builtin:workflow:worktree-state', {
+      'runtime/worktrees': {
+        version: 1,
+        records: [
+          {
+            id: 'local:/wt',
+            nodeId: 'local',
+            repoRoot: '/repo',
+            path: '/wt',
+            branch: 'stub-branch',
+            baseCommit: base,
+            dirtySource: false,
+            parentConversationId: 1,
+            origin: 'native',
+            status: 'active',
+            createdAt: Date.now(),
+          },
+        ],
+      },
+    })
+    const allocator = new WorktreeAllocator({
+      exec: stub.exec as never,
+      nodeExists: async () => ({ ok: true, value: true }) as never,
+      nodeCanonicalPath: async () => ({ ok: true, value: '/wt' }) as never,
+      docStore: {
+        get<T>(key: string, initial: T): T {
+          const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+          const raw = all[key]
+          return raw === undefined ? initial : (structuredClone(raw) as T)
+        },
+        set<T>(_key: string, _value: T): void {},
+      },
+    })
+
+    const result = await allocator.inspect({ worktreeId: 'local:/wt' })
+    // diff 预览：采集阶段先到先截，恰好上限字符数且为真实输出的前缀。
+    assert.equal(result.diffTruncated, true)
+    assert.equal(result.diffPreview!.length, 16_384)
+    assert.equal(result.diffPreview, diffBody.slice(0, 16_384))
+    assert.ok(diffBody.length > 16_384, '测试前提：脚本 diff 超过预览上限')
+    // 统计超上限：末尾附文字说明，不假装完整。
+    assert.ok(result.diffStat !== undefined && result.diffStat.includes('截断'), `统计截断必须文字说明（实得 ${result.diffStat}）`)
+    // 状态清单：块内切行不影响流式结算——真实总数 250，仅保留前 200 条原行。
+    assert.equal(result.dirtyFileCount, 250)
+    assert.equal(result.dirtyFiles.length, 200)
+    assert.equal(result.dirtyFilesTruncated, true)
+    assert.equal(result.dirtyFiles[0], '?? file-000.txt')
+    assert.equal(result.commitsAhead, 3)
+    assert.equal(result.branchChanged, undefined)
+    // argv 回归锁定：diff 命令必须携带防护参数。
+    const diffInvocations = stub.seen.filter((a) => a.includes('diff'))
+    assert.ok(diffInvocations.length >= 2, '应执行 --stat 与正文两条 diff 命令')
+    for (const argv of diffInvocations) {
+      assert.ok(argv.includes('--no-ext-diff') && argv.includes('--no-textconv'), `diff 命令必须含防护参数（实得 ${argv.join(' ')}）`)
+    }
+  })
+
+  it('git 失败显式 worktree_check_failed：长输出诊断截断（不静默当成功、不整段携带超长输出）', {
+    timeout: 60_000,
+  }, async () => {
+    const base = 'a1b2c3d4'.repeat(5)
+    const stub = stubChunkedExec((args) => {
+      const key = args.join(' ')
+      if (key === 'rev-parse --abbrev-ref HEAD') return { output: 'stub-branch\n' }
+      if (key === 'rev-parse HEAD') return { output: `${'e5f6a7b8'.repeat(5)}\n` }
+      if (key.startsWith('rev-list')) return { output: `fatal: bad object ${base}\n${'x'.repeat(3000)}`, exitCode: 128 }
+      return { output: '' }
+    })
+    const docs = new Map<string, unknown>()
+    docs.set('builtin:workflow:worktree-state', {
+      'runtime/worktrees': {
+        version: 1,
+        records: [
+          {
+            id: 'local:/wt',
+            nodeId: 'local',
+            repoRoot: '/repo',
+            path: '/wt',
+            branch: 'stub-branch',
+            baseCommit: base,
+            dirtySource: false,
+            parentConversationId: 1,
+            origin: 'native',
+            status: 'active',
+            createdAt: Date.now(),
+          },
+        ],
+      },
+    })
+    const allocator = new WorktreeAllocator({
+      exec: stub.exec as never,
+      nodeExists: async () => ({ ok: true, value: true }) as never,
+      nodeCanonicalPath: async () => ({ ok: true, value: '/wt' }) as never,
+      docStore: {
+        get<T>(key: string, initial: T): T {
+          const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+          const raw = all[key]
+          return raw === undefined ? initial : (structuredClone(raw) as T)
+        },
+        set<T>(_key: string, _value: T): void {},
+      },
+    })
+    await assert.rejects(
+      () => allocator.inspect({ worktreeId: 'local:/wt' }),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.equal(err.code, 'worktree_check_failed')
+        assert.match(err.message, /bad object/)
+        assert.match(err.message, /诊断已截断/)
+        assert.ok(err.message.length < 3000, '错误消息不得整段携带超长输出')
+        const details = err.details as { output?: string }
+        assert.ok(details !== undefined && details.output !== undefined && details.output.length <= 2000)
+        return true
+      },
+    )
   })
 })

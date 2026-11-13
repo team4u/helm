@@ -17,7 +17,11 @@
  *   超时当作缺失）；
  * - `list` / `inspect`：只读检视面（登记列表 + 目标节点真实 git 只读命令
  *   的状态/统计/有上限 diff 预览；仅登记记录可检视，命令固定白名单
- *   `git -C <登记路径>`，不接受任意目录）；
+ *   `git -C <登记路径>`，不接受任意目录）。检视输出在采集阶段即受限
+ *   （绝不无限聚合内存；状态行保留真实总数计数），diff 固定
+ *   `--no-ext-diff --no-textconv`（绝不触发用户自定义驱动）且仅覆盖
+ *   tracked 改动（untracked 不进 diff、仍见于状态清单）；成功返回的
+ *   diff/status 文本与错误诊断同样经 redact 脱敏；
  * - `cleanup`：选择器（worktreeId | conversationId | path[+nodeId]）解析
  *   已登记记录 + 占用检查（子会话运行中/路径被引用拒绝）+ per-repo
  *   canonical git common-dir 串行锁（同仓库不同 worktree 也串行，防
@@ -177,15 +181,16 @@ export interface WorktreeInspectResult {
   currentHead?: string
   /** 权威分支与登记分支不一致（工作树可能已被改签/替换）。 */
   branchChanged?: boolean
-  /** 未提交/未跟踪文件行（`git status --porcelain` 原行，上限截断）。 */
+  /** 未提交/未跟踪文件行（`git status --porcelain` 原行——保留 XY 首列状态码；上限截断）。 */
   dirtyFiles: string[]
+  /** 非空状态行真实总数（不因 dirtyFiles 保留上限截断而失真）。 */
   dirtyFileCount: number
   dirtyFilesTruncated: boolean
   /** 相对登记 baseCommit 的领先提交数（external 记录无 baseCommit 时缺省）。 */
   commitsAhead?: number
-  /** diff 统计摘要（`git diff --stat <base>`）。 */
+  /** diff 统计摘要（`git diff --stat <base>`；超出采集上限时末尾附截断说明，非完整统计）。 */
   diffStat?: string
-  /** diff 预览（有上限截断）。 */
+  /** diff 预览（有上限截断；仅覆盖 tracked 改动，untracked 文件内容不进 diff、仍完整见于 dirtyFiles）。 */
   diffPreview?: string
   diffTruncated: boolean
   /** diff 基线：登记 baseCommit，或 external 记录退化用的 HEAD。 */
@@ -211,8 +216,12 @@ const GIT_TIMEOUT_SECONDS = 120
 const INSPECT_DIRTY_FILES_LIMIT = 200
 /** inspect diff 预览字符上限（超出截断并标记 diffTruncated）。 */
 const INSPECT_DIFF_PREVIEW_LIMIT = 16_384
-/** inspect diff 统计摘要字符上限。 */
+/** inspect diff 统计摘要字符上限（超出时末尾附截断说明，不假装完整）。 */
 const INSPECT_DIFF_STAT_LIMIT = 4_096
+/** inspect 短探测命令（rev-parse/rev-list）输出上限（截断即显式失败，不把残缺哈希/计数当真值）。 */
+const INSPECT_PROBE_LIMIT = 4_096
+/** inspect git 失败诊断进入错误消息的字符上限（details.output 同限）。 */
+const INSPECT_ERROR_DIAGNOSTIC_LIMIT = 2_000
 
 /** `git worktree list --porcelain -z` 的单条权威登记。 */
 interface WorktreeEntry {
@@ -237,7 +246,25 @@ interface RepoAuthority {
   entries: WorktreeEntry[]
 }
 
-type GitResult = { ok: true; output: string } | { ok: false; output: string; exitCode: number | null }
+type GitOkResult = { ok: true; output: string; truncated: boolean; lines: string[]; totalNonEmptyLines: number }
+type GitResult = GitOkResult | { ok: false; output: string; exitCode: number | null; truncated: boolean }
+
+/**
+ * git 输出受限采集模式（inspect 只读预览专用；不声明则不限制，
+ * allocate/cleanup/verify 语义保持不变）：
+ * - chars：字符上限——onOutput 阶段先到先截，绝不无限聚合内存后再 slice；
+ * - lines：流式按行结算——只保留前 maxLines 条非空原行（含 porcelain 首列），
+ *   同时对全部非空行保持真实计数（status 清单截断不失真总量）。
+ */
+interface GitCaptureChars {
+  kind: 'chars'
+  limit: number
+}
+interface GitCaptureLines {
+  kind: 'lines'
+  maxLines: number
+}
+type GitCapture = GitCaptureChars | GitCaptureLines
 
 /** 解析 `git worktree list --porcelain -z` 输出（NUL 分隔记录，空 token 分隔条目）。 */
 function parseWorktreeList(output: string): WorktreeEntry[] {
@@ -289,6 +316,9 @@ function contextWithSignal(signal: AbortSignal | undefined): Context {
 /**
  * 在目标节点执行单条 git 命令（argv 数组直跑程序、无 shell 解析，路径含
  * 空格/特殊字符或 Windows 目标 shell 未知时同样安全）；非零退出显式失败。
+ * capture（可选）：声明后按受限模式在 onOutput 阶段即限内存（chars 截断
+ * 置 truncated；lines 只保留前 N 条非空原行并保持全量非空行计数），
+ * 错误诊断同样受限并经 redact 脱敏；不声明时行为与原无限聚合一致。
  */
 async function gitExec(
   deps: WorktreeAllocatorDeps,
@@ -296,9 +326,22 @@ async function gitExec(
   cwd: string,
   args: readonly string[],
   signal?: AbortSignal,
+  capture?: GitCapture,
 ): Promise<GitResult> {
   const redact = deps.redact ?? ((t: string) => t)
+  const maxLines = capture?.kind === 'lines' ? capture.maxLines : undefined
   let combined = ''
+  let truncated = false
+  const lines: string[] = []
+  let totalNonEmptyLines = 0
+  let pendingLine = ''
+  /** lines 模式：结算一条完整行（空行不计不入；超保留上限仍计数并置 truncated）。 */
+  const settleLine = (line: string): void => {
+    if (maxLines === undefined || line === '') return
+    totalNonEmptyLines += 1
+    if (lines.length < maxLines) lines.push(line)
+    else truncated = true
+  }
   const result = await deps.exec(
     nodeId,
     cwd,
@@ -307,22 +350,47 @@ async function gitExec(
       cwd,
       timeout: GIT_TIMEOUT_SECONDS,
       onOutput: (text: string) => {
-        combined += text
+        if (capture === undefined) {
+          combined += text
+          return
+        }
+        if (capture.kind === 'chars') {
+          if (truncated) return
+          if (combined.length + text.length <= capture.limit) {
+            combined += text
+            return
+          }
+          combined += text.slice(0, capture.limit - combined.length)
+          truncated = true
+          return
+        }
+        // lines 模式：块内可能切在行中间，仅结算完整行，残行留待下一块/收尾。
+        pendingLine += text
+        const parts = pendingLine.split('\n')
+        pendingLine = parts.pop() ?? ''
+        for (const line of parts) settleLine(line)
       },
     },
     contextWithSignal(signal),
   )
+  // 流末尾：残留半行按完整行结算（porcelain 输出以换行结尾时此处为空）。
+  if (pendingLine !== '') settleLine(pendingLine)
   if (!result.ok) {
+    const captured = capture?.kind === 'lines' ? lines.join('\n') : combined
     return {
       ok: false,
-      output: redact(combined + (combined === '' ? '' : '\n') + `[git ${result.error.code}: ${result.error.message}]`),
+      truncated,
+      output: redact(captured + (captured === '' ? '' : '\n') + `[git ${result.error.code}: ${result.error.message}]`),
       exitCode: null,
     }
   }
   if (result.value.exitCode !== 0) {
-    return { ok: false, output: redact(combined), exitCode: result.value.exitCode }
+    const captured = capture?.kind === 'lines' ? lines.join('\n') : combined
+    return { ok: false, truncated, output: redact(captured), exitCode: result.value.exitCode }
   }
-  return { ok: true, output: combined }
+  return capture?.kind === 'lines'
+    ? { ok: true, output: lines.join('\n'), truncated, lines, totalNonEmptyLines }
+    : { ok: true, output: combined, truncated, lines, totalNonEmptyLines }
 }
 
 export class WorktreeAllocator {
@@ -834,8 +902,17 @@ export class WorktreeAllocator {
    * - 目录存在性仅由节点真实 fs 探测证明；探测失败 fail closed 抛
    *   worktree_check_failed（节点离线/权限/超时不当作缺失）；
    * - 已 removed 登记或目录缺失：返回元数据 + unavailableReason，不跑 git；
-   * - git 命令失败（非零退出/超时）显式 worktree_check_failed 并附真实输出
-   *   （输出经 redact 脱敏）；绝不伪造空统计。
+   * - git 命令失败（非零退出/超时）显式 worktree_check_failed 并附截断的
+   *   真实输出诊断（经 redact 脱敏）；绝不伪造空统计、绝不当作成功；
+   * - 受限采集：diff 预览/统计/状态清单在 onOutput 阶段即限内存（不完整
+   *   聚合后 slice）；diff 超上限置 diffTruncated、统计末尾附截断说明，
+   *   状态行保留 XY 首列原行且 dirtyFileCount 始终为真实总数；
+   * - diff 固定 `--no-ext-diff --no-textconv`（受管只读检视绝不触发用户
+   *   自定义 diff/textconv 驱动）；仅覆盖 tracked 改动（基线为登记
+   *   baseCommit，external 记录退化 HEAD；基线失效显式报错、无 fallback），
+   *   untracked 文件内容不进 diff、仍完整见于 dirtyFiles/dirtyFileCount；
+   * - 成功返回的分支/哈希/状态行/diff 文本与错误诊断同样经 redact 脱敏
+   *   （与项目既有机密约定一致，不因检视面绕过）。
    */
   async inspect(input: WorktreeInspectInput, signal?: AbortSignal): Promise<WorktreeInspectResult> {
     if (input.worktreeId === undefined && input.conversationId === undefined && input.path === undefined) {
@@ -877,54 +954,96 @@ export class WorktreeAllocator {
       }
     }
 
-    const run = async (args: readonly string[]): Promise<string> => {
-      const result = await gitExec(this.deps, record.nodeId, record.path, ['-C', record.path, ...args], signal)
+    const run = async (args: readonly string[], capture?: GitCapture): Promise<GitOkResult> => {
+      const result = await gitExec(this.deps, record.nodeId, record.path, ['-C', record.path, ...args], signal, capture)
       if (!result.ok) {
+        const diagnostic = result.output.trim().slice(0, INSPECT_ERROR_DIAGNOSTIC_LIMIT)
+        const cut =
+          result.output.trim().length > INSPECT_ERROR_DIAGNOSTIC_LIMIT || result.truncated
+            ? '…（诊断已截断）'
+            : ''
         throw new HelmError(
           'worktree_check_failed',
-          `无法在节点 ${record.nodeId} 只读检视 worktree '${record.path}'（git ${args[0]} 失败，检视中止）：\n${result.output.trim()}`,
+          `无法在节点 ${record.nodeId} 只读检视 worktree '${record.path}'（git ${args[0]} 失败，检视中止）：\n${diagnostic}${cut}`,
           502,
-          { worktreeId: record.id, path: record.path, nodeId: record.nodeId, output: result.output.slice(0, 2000) },
+          { worktreeId: record.id, path: record.path, nodeId: record.nodeId, output: result.output.slice(0, INSPECT_ERROR_DIAGNOSTIC_LIMIT) },
         )
       }
-      return result.output
+      return result
+    }
+    /** 短探测命令（rev-parse/rev-list）取完整输出：受限采集下截断即显式失败，绝不把残缺哈希/计数当真值。 */
+    const probe = async (args: readonly string[]): Promise<string> => {
+      const result = await run(args, { kind: 'chars', limit: INSPECT_PROBE_LIMIT })
+      if (result.truncated) {
+        throw new HelmError(
+          'worktree_check_failed',
+          `检视探测命令 git ${args.join(' ')} 输出超出采集上限（${INSPECT_PROBE_LIMIT} 字符），结果不可信，检视中止`,
+          502,
+          { worktreeId: record.id, path: record.path, nodeId: record.nodeId },
+        )
+      }
+      return result.output.trim()
     }
 
-    const branch = (await run(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
-    const head = (await run(['rev-parse', 'HEAD'])).trim()
-    const status = await run(['status', '--porcelain', '--untracked-files=all'])
-    const dirtyLines = status.split('\n').map((l) => l.trim()).filter((l) => l !== '')
+    const branch = await probe(['rev-parse', '--abbrev-ref', 'HEAD'])
+    const head = await probe(['rev-parse', 'HEAD'])
+    // 状态清单：流式按行受限采集——保留前 200 条原行（含 XY 首列，不 trim），
+    // 非空行总数为真实值（不因保留上限截断而失真 dirtyFileCount）。
+    const statusResult = await run(['status', '--porcelain', '--untracked-files=all'], {
+      kind: 'lines',
+      maxLines: INSPECT_DIRTY_FILES_LIMIT,
+    })
 
     let commitsAhead: number | undefined
     if (record.baseCommit !== '') {
-      const ahead = await run(['rev-list', '--count', `${record.baseCommit}..${head}`])
-      commitsAhead = Number.parseInt(ahead.trim(), 10) || 0
+      const aheadRaw = await probe(['rev-list', '--count', `${record.baseCommit}..${head}`])
+      const ahead = Number.parseInt(aheadRaw, 10)
+      if (!Number.isFinite(ahead)) {
+        throw new HelmError(
+          'worktree_check_failed',
+          `检视无法解析领先提交数（git rev-list --count 输出 ${JSON.stringify(this.redact(aheadRaw))}，检视中止）`,
+          502,
+          { worktreeId: record.id, path: record.path, nodeId: record.nodeId },
+        )
+      }
+      commitsAhead = ahead
     }
     const diffRef = record.baseCommit !== '' ? record.baseCommit : 'HEAD'
-    const statRaw = await run(['diff', '--stat', diffRef])
-    const diffStat = statRaw.trim() === '' ? undefined : statRaw.trim().slice(0, INSPECT_DIFF_STAT_LIMIT)
+    // diff 固定禁用外部 diff 驱动与 textconv 过滤器（受管只读检视绝不触发
+    // 用户自定义驱动）；仅覆盖 tracked 改动，untracked 内容不进 diff。
+    const statResult = await run(['diff', '--no-ext-diff', '--no-textconv', '--stat', diffRef], {
+      kind: 'chars',
+      limit: INSPECT_DIFF_STAT_LIMIT,
+    })
+    let diffStat: string | undefined
+    const statText = statResult.output.trim()
+    if (statText !== '') {
+      // 统计被采集上限截断时末尾附文字说明，不假装完整统计。
+      diffStat =
+        this.redact(statText) +
+        (statResult.truncated ? `\n…（diff 统计超出检视上限 ${INSPECT_DIFF_STAT_LIMIT} 字符已截断，非完整统计）` : '')
+    }
 
     let diffPreview: string | undefined
     let diffTruncated = false
     if (input.diff !== false) {
-      const raw = await run(['diff', diffRef])
-      if (raw.length > INSPECT_DIFF_PREVIEW_LIMIT) {
-        diffPreview = raw.slice(0, INSPECT_DIFF_PREVIEW_LIMIT)
-        diffTruncated = true
-      } else {
-        diffPreview = raw === '' ? undefined : raw
-      }
+      const diffResult = await run(['diff', '--no-ext-diff', '--no-textconv', diffRef], {
+        kind: 'chars',
+        limit: INSPECT_DIFF_PREVIEW_LIMIT,
+      })
+      diffTruncated = diffResult.truncated
+      diffPreview = diffResult.output === '' ? undefined : this.redact(diffResult.output)
     }
 
     return {
       ...metadata,
       exists: true,
-      currentBranch: branch,
-      currentHead: head,
+      currentBranch: this.redact(branch),
+      currentHead: this.redact(head),
       ...(branch !== record.branch ? { branchChanged: true } : {}),
-      dirtyFiles: dirtyLines.slice(0, INSPECT_DIRTY_FILES_LIMIT),
-      dirtyFileCount: dirtyLines.length,
-      dirtyFilesTruncated: dirtyLines.length > INSPECT_DIRTY_FILES_LIMIT,
+      dirtyFiles: statusResult.lines.map((line) => this.redact(line)),
+      dirtyFileCount: statusResult.totalNonEmptyLines,
+      dirtyFilesTruncated: statusResult.truncated,
       ...(commitsAhead !== undefined ? { commitsAhead } : {}),
       ...(diffStat !== undefined ? { diffStat } : {}),
       ...(diffPreview !== undefined ? { diffPreview } : {}),
