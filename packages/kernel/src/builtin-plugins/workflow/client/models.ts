@@ -1084,6 +1084,202 @@ export function canResumeWorkflowRun(run: WorkflowRunSummary): boolean {
   return run.kind !== 'subagent' && (run.status === 'failed' || run.status === 'aborted')
 }
 
+/**
+ * 按已保存定义重跑可用判定：仅已完成的 DSL 工作流 run 且携带已保存工作流名。
+ * 这是「发起一次全新运行」，与 resumeFromRunId 的断点恢复语义无关：
+ * 不宣称命中旧 run 缓存，也不允许在内联脚本 run 上伪装可重跑（脚本源
+ * 不在保存目录，UI 拿不到就不提供入口）。
+ */
+export function canRerunWorkflowRun(run: WorkflowRunSummary): boolean {
+  return (
+    run.kind !== 'subagent' &&
+    run.status === 'completed' &&
+    typeof run.savedName === 'string' &&
+    run.savedName.trim() !== ''
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 受管工作树只读检视（inspect_worktree 动作结果的宽松解析与视图模型）
+// ---------------------------------------------------------------------------
+
+/** inspect_worktree 动作结果的只读视图（非法形状解析为 undefined，不猜测）。 */
+export interface WorktreeInspectView {
+  worktreeId: string
+  nodeId: string
+  path: string
+  branch: string
+  baseCommit: string
+  status: string
+  origin: string
+  exists: boolean
+  unavailableReason?: string
+  currentBranch?: string
+  currentHead?: string
+  branchChanged?: boolean
+  dirtyFiles: string[]
+  dirtyFileCount: number
+  dirtyFilesTruncated: boolean
+  commitsAhead?: number
+  diffStat?: string
+  diffPreview?: string
+  diffTruncated: boolean
+  diffBase: string
+}
+
+function inspectString(source: Record<string, unknown>, key: string): string | undefined {
+  const value = source[key]
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/** 宽松解析 inspect_worktree 动作结果（结构非法返回 undefined，不伪造）。 */
+export function parseWorktreeInspectResult(raw: unknown): WorktreeInspectView | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const result = raw as Record<string, unknown>
+  const record = result['record']
+  if (record === null || typeof record !== 'object' || Array.isArray(record)) return undefined
+  const rec = record as Record<string, unknown>
+  const worktreeId = inspectString(rec, 'id')
+  const path = inspectString(rec, 'path')
+  const branch = inspectString(rec, 'branch')
+  const nodeId = inspectString(rec, 'nodeId')
+  if (worktreeId === undefined || path === undefined || branch === undefined || nodeId === undefined) return undefined
+  const dirtyFiles = Array.isArray(result['dirtyFiles'])
+    ? (result['dirtyFiles'] as unknown[]).filter((l): l is string => typeof l === 'string')
+    : []
+  const diffBase = inspectString(result, 'diffBase')
+  return {
+    worktreeId,
+    nodeId,
+    path,
+    branch,
+    baseCommit: inspectString(rec, 'baseCommit') ?? '',
+    status: inspectString(rec, 'status') ?? 'active',
+    origin: inspectString(rec, 'origin') ?? '',
+    exists: result['exists'] === true,
+    ...(inspectString(result, 'unavailableReason') !== undefined
+      ? { unavailableReason: inspectString(result, 'unavailableReason') }
+      : {}),
+    ...(inspectString(result, 'currentBranch') !== undefined
+      ? { currentBranch: inspectString(result, 'currentBranch') }
+      : {}),
+    ...(inspectString(result, 'currentHead') !== undefined ? { currentHead: inspectString(result, 'currentHead') } : {}),
+    ...(result['branchChanged'] === true ? { branchChanged: true } : {}),
+    dirtyFiles,
+    dirtyFileCount: typeof result['dirtyFileCount'] === 'number' ? result['dirtyFileCount'] : dirtyFiles.length,
+    dirtyFilesTruncated: result['dirtyFilesTruncated'] === true,
+    ...(typeof result['commitsAhead'] === 'number' ? { commitsAhead: result['commitsAhead'] } : {}),
+    ...(inspectString(result, 'diffStat') !== undefined ? { diffStat: inspectString(result, 'diffStat') } : {}),
+    ...(inspectString(result, 'diffPreview') !== undefined ? { diffPreview: inspectString(result, 'diffPreview') } : {}),
+    diffTruncated: result['diffTruncated'] === true,
+    diffBase: diffBase ?? 'baseCommit',
+  }
+}
+
+/**
+ * 构建 inspect_worktree 调用选择器：优先受管登记 ID（精确）；无 ID 时退化
+ * path（+nodeId 消歧）。仅作用于已登记 worktree，绝不携带任意目录。
+ */
+export function buildWorktreeInspectSelector(
+  worktree: { id?: string; path: string },
+  nodeId?: string,
+): { worktreeId: string } | { path: string; nodeId?: string } {
+  const id = worktree.id?.trim()
+  if (id !== undefined && id !== '') return { worktreeId: id }
+  return { path: worktree.path, ...(nodeId !== undefined && nodeId !== '' ? { nodeId } : {}) }
+}
+
+/** 「让主会话审阅并合入」请求文案：只含登记元数据与只读检视统计，不含执行指令伪装。 */
+export function buildWorktreeReviewRequest(input: {
+  path: string
+  branch: string
+  nodeId?: string
+  baseCommit?: string
+  taskLabel?: string
+  inspect?: WorktreeInspectView
+}): string {
+  const lines: string[] = ['请审阅并合入以下受管工作树的改动（数据来自只读检视，实际内容请在目标节点以 git 复核）：']
+  lines.push(`- 工作树：${input.path}${input.nodeId !== undefined && input.nodeId !== '' ? `（节点 ${input.nodeId}）` : ''}`)
+  lines.push(`- 分支：${input.branch}${input.baseCommit !== undefined && input.baseCommit !== '' ? `（基于提交 ${input.baseCommit.slice(0, 12)}）` : ''}`)
+  if (input.taskLabel !== undefined && input.taskLabel.trim() !== '') lines.push(`- 任务：${firstLineOf(input.taskLabel, 80)}`)
+  const inspect = input.inspect
+  if (inspect !== undefined) {
+    if (!inspect.exists) {
+      lines.push(`- 检视：目录${inspect.unavailableReason === 'removed' ? '登记已清理' : '不存在'}，无可检视改动`)
+    } else {
+      lines.push(`- 未提交修改：${inspect.dirtyFileCount} 个文件`)
+      if (inspect.commitsAhead !== undefined) lines.push(`- 领先基线提交：${inspect.commitsAhead} 个`)
+      if (inspect.branchChanged === true && inspect.currentBranch !== undefined) {
+        lines.push(`- 注意：工作树当前分支 ${inspect.currentBranch} 与登记分支不一致，可能已被改签，请先核实归属`)
+      }
+    }
+  }
+  lines.push('请先只读复核（git diff / status），确认后合入主工作树；需要丢弃或清理工作树时请明确说明，不要静默 force 清理。')
+  return lines.join('\n')
+}
+
+// ---------------------------------------------------------------------------
+// 工作流库（list 动作结果的宽松解析与 args 严格解析）
+// ---------------------------------------------------------------------------
+
+/** 已保存工作流条目视图（与 SavedWorkflowSummary 同构；宽松解析）。 */
+export interface SavedWorkflowView {
+  name: string
+  path?: string
+  metadataError?: string
+  description?: string
+  whenToUse?: string
+  phases?: Array<{ title: string; detail?: string; model?: string }>
+}
+
+/** 宽松解析 list 动作结果（非法形状返回 undefined，不伪造列表）。 */
+export function parseSavedWorkflowList(raw: unknown): SavedWorkflowView[] | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const workflows = (raw as Record<string, unknown>)['workflows']
+  if (!Array.isArray(workflows)) return undefined
+  const out: SavedWorkflowView[] = []
+  for (const item of workflows) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
+    const record = item as Record<string, unknown>
+    const name = inspectString(record, 'name')
+    if (name === undefined) continue
+    const phasesRaw = record['phases']
+    const phases = Array.isArray(phasesRaw)
+      ? (phasesRaw as unknown[]).flatMap((p): Array<{ title: string; detail?: string; model?: string }> => {
+          if (p === null || typeof p !== 'object' || Array.isArray(p)) return []
+          const phase = p as Record<string, unknown>
+          const title = inspectString(phase, 'title')
+          if (title === undefined) return []
+          return [{
+            title,
+            ...(inspectString(phase, 'detail') !== undefined ? { detail: inspectString(phase, 'detail') } : {}),
+            ...(inspectString(phase, 'model') !== undefined ? { model: inspectString(phase, 'model') } : {}),
+          }]
+        })
+      : undefined
+    out.push({
+      name,
+      ...(inspectString(record, 'path') !== undefined ? { path: inspectString(record, 'path') } : {}),
+      ...(inspectString(record, 'metadataError') !== undefined ? { metadataError: inspectString(record, 'metadataError') } : {}),
+      ...(inspectString(record, 'description') !== undefined ? { description: inspectString(record, 'description') } : {}),
+      ...(inspectString(record, 'whenToUse') !== undefined ? { whenToUse: inspectString(record, 'whenToUse') } : {}),
+      ...(phases !== undefined && phases.length > 0 ? { phases } : {}),
+    })
+  }
+  return out
+}
+
+/** 库运行 args 输入严格解析：空串无 args；非空必须为合法 JSON（绝不静默当字符串透传）。 */
+export function parseWorkflowArgsInput(text: string): { ok: true; args?: unknown } | { ok: false; error: string } {
+  const trimmed = text.trim()
+  if (trimmed === '') return { ok: true }
+  try {
+    return { ok: true, args: JSON.parse(trimmed) as unknown }
+  } catch (error) {
+    return { ok: false, error: `args 需为合法 JSON：${error instanceof Error ? error.message : String(error)}` }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 工作台子代理统一列表（Active-First）
 // ---------------------------------------------------------------------------

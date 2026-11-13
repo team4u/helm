@@ -2152,6 +2152,7 @@ export class WorkflowService {
       name: record.name,
       conversationId: record.conversationId,
       ...(record.kind !== undefined ? { kind: record.kind } : {}),
+      ...(record.savedName !== undefined ? { savedName: record.savedName } : {}),
       ...(record.description !== undefined ? { description: record.description } : {}),
       ...(record.phases !== undefined ? { phases: record.phases } : {}),
       ...(record.parentToolCallId !== undefined && record.parentToolCallId !== ''

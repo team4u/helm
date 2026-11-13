@@ -17,6 +17,7 @@
 - 后台返回 `runId` 和实际 execution；父回合结束后继续执行，Schema 与 gate 都完成后自动汇报。`helm workflows inspect <runId> --json` 查询，`helm workflows abort <runId>` 中止。
 - `isolation: "worktree"` 在目标节点分配独立 Git 工作树（原生及支持该能力的运行时）；基于源 HEAD，不包含源工作区未提交修改。任务结束、失败或取消后保留工作树与分支。
 - 检视或合入后调用 `cleanup_worktree({ worktreeId: execution.worktree.id })`；也可按子会话 ID，或实际 `nodeId` + `path` 清理。未提交修改、未合入提交及在用工作树默认拒绝清理。`force: true` 仅显式允许丢弃修改，不绕过归属或占用检查。
+- 只读检视（不执行任何写操作）：`helm worktrees list` 列出全部登记（含已清理记录元数据）；`helm worktrees inspect <worktreeId>` 返回登记元数据 + 目标节点真实 git 只读探测（当前分支/HEAD、未提交文件清单、领先基线提交数、diff 统计与有上限预览；`--conversation <id>` / `--path <path> [--node <nodeId>]` 可替代选择器）。仅登记记录可检视，不支持任意目录；目录缺失/已清理时如实返回 unavailableReason，git 失败显式报错。
 - CLI：`helm worktrees cleanup --id <worktreeId> --json`；`--current` 使用当前子会话；`--path <path> --node <nodeId>` 精确选择节点目录。`--delete-branch` 同时删除分支（默认保留）。
 - Hub 重启会将中断的后台运行明确标为失败并汇报；需要时凭原 execution 的 resume 标识续接，不自动重新派工或重跑 gate。
 - 中断运行或外部执行失败后，若无法确认底层已停止，持久租约会阻止自动清理（worktree_execution_unknown）；先检查目标节点并续接收尾，或确认停止后通过 helm env exec 在原节点手动执行 Git 清理。force 不绕过此检查。

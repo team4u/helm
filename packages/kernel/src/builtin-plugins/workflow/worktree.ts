@@ -15,6 +15,9 @@
  * - `verifyForResume`：resume 续接前经节点真实 fs 探测 + git 探测校验
  *   worktree 仍在（探测失败与目录缺失显式区分，绝不把节点离线/权限/
  *   超时当作缺失）；
+ * - `list` / `inspect`：只读检视面（登记列表 + 目标节点真实 git 只读命令
+ *   的状态/统计/有上限 diff 预览；仅登记记录可检视，命令固定白名单
+ *   `git -C <登记路径>`，不接受任意目录）；
  * - `cleanup`：选择器（worktreeId | conversationId | path[+nodeId]）解析
  *   已登记记录 + 占用检查（子会话运行中/路径被引用拒绝）+ per-repo
  *   canonical git common-dir 串行锁（同仓库不同 worktree 也串行，防
@@ -147,6 +150,48 @@ export interface CleanupInput {
   signal?: AbortSignal
 }
 
+/** 只读检视选择器（与 CleanupInput 同款互斥规则；仅登记记录可检视）。 */
+export interface WorktreeInspectInput {
+  /** 受管 worktree 登记 ID（`${nodeId}:${path}`；与 conversationId/path 互斥）。 */
+  worktreeId?: string
+  conversationId?: number
+  /** worktree 绝对路径（多节点同名路径时必须另附 nodeId 消歧）。 */
+  path?: string
+  /** 目标节点 ID（仅可与 path 搭配）。 */
+  nodeId?: string
+  /** 是否包含 diff 预览（默认包含；登记元数据与统计始终返回）。 */
+  diff?: boolean
+  signal?: AbortSignal
+}
+
+/** 只读检视结果：登记元数据 + 节点真实 git 只读探测（全部有上限）。 */
+export interface WorktreeInspectResult {
+  /** 登记元数据（与持久记录同构；含已 removed 记录）。 */
+  record: ManagedWorktreeRecord
+  /** 节点真实 fs 探测：目录是否仍存在（探测失败显式抛错，绝不猜）。 */
+  exists: boolean
+  /** 无法执行 git 探测的显式原因（登记已清理 / 目录缺失）。 */
+  unavailableReason?: 'removed' | 'directory_missing'
+  /** 权威当前分支（`git rev-parse --abbrev-ref HEAD`）。 */
+  currentBranch?: string
+  currentHead?: string
+  /** 权威分支与登记分支不一致（工作树可能已被改签/替换）。 */
+  branchChanged?: boolean
+  /** 未提交/未跟踪文件行（`git status --porcelain` 原行，上限截断）。 */
+  dirtyFiles: string[]
+  dirtyFileCount: number
+  dirtyFilesTruncated: boolean
+  /** 相对登记 baseCommit 的领先提交数（external 记录无 baseCommit 时缺省）。 */
+  commitsAhead?: number
+  /** diff 统计摘要（`git diff --stat <base>`）。 */
+  diffStat?: string
+  /** diff 预览（有上限截断）。 */
+  diffPreview?: string
+  diffTruncated: boolean
+  /** diff 基线：登记 baseCommit，或 external 记录退化用的 HEAD。 */
+  diffBase: 'baseCommit' | 'HEAD'
+}
+
 export interface CleanupResult {
   removed: boolean
   worktreeId: string
@@ -161,6 +206,13 @@ const MANAGED_BRANCH_PREFIXES = ['helm/spawn-', 'helm/wf-'] as const
 
 /** 单条 git 命令的执行超时（秒）。 */
 const GIT_TIMEOUT_SECONDS = 120
+
+/** inspect 未提交文件行上限（超出截断，dirtyFileCount 保留真实计数）。 */
+const INSPECT_DIRTY_FILES_LIMIT = 200
+/** inspect diff 预览字符上限（超出截断并标记 diffTruncated）。 */
+const INSPECT_DIFF_PREVIEW_LIMIT = 16_384
+/** inspect diff 统计摘要字符上限。 */
+const INSPECT_DIFF_STAT_LIMIT = 4_096
 
 /** `git worktree list --porcelain -z` 的单条权威登记。 */
 interface WorktreeEntry {
@@ -686,6 +738,11 @@ export class WorktreeAllocator {
     return pool.reduce((a, b) => (b.createdAt >= a.createdAt ? b : a))
   }
 
+  /** 全部登记记录（新建在前；含已 removed，供只读检视/列表消费）。 */
+  list(): ManagedWorktreeRecord[] {
+    return [...this.loadDoc().records].sort((a, b) => b.createdAt - a.createdAt)
+  }
+
   /**
    * 按 worktreeId / 会话 / 路径（可附 nodeId 消歧）查询 active 记录。
    * 同一路径在多个节点有 active 登记且未指定 nodeId 时显式 validation_error
@@ -716,6 +773,163 @@ export class WorktreeAllocator {
       return byPath.length === 0 ? undefined : byPath.reduce((a, b) => (b.createdAt >= a.createdAt ? b : a))
     }
     return undefined
+  }
+
+  // ------------------------------------------------------------------
+  // inspect（只读检视：登记元数据 + 节点真实 git 只读探测）
+  // ------------------------------------------------------------------
+
+  /**
+   * 解析检视目标记录（选择器互斥规则与 cleanup 同构；含已 removed 记录——
+   * 检视是只读面，元数据本身诚实可返）。未登记选择器显式 not_found：
+   * 只检视 helm 登记的受管 worktree，绝不接受任意目录读文件。
+   */
+  private resolveInspectRecord(input: WorktreeInspectInput): ManagedWorktreeRecord {
+    const records = this.loadDoc().records
+    if (input.worktreeId !== undefined) {
+      const record = records.find((r) => r.id === input.worktreeId)
+      if (record === undefined) {
+        throw new HelmError('not_found', `未找到受管 worktree 记录 ${input.worktreeId}`, 404, { worktreeId: input.worktreeId })
+      }
+      return record
+    }
+    if (input.conversationId !== undefined) {
+      const record = this.getForConversation(input.conversationId)
+      if (record === undefined) {
+        throw new HelmError(
+          'not_found',
+          `未找到会话 ${input.conversationId} 绑定的受管 worktree 记录；inspect 仅检视 helm 登记的隔离 worktree`,
+          404,
+          { conversationId: input.conversationId },
+        )
+      }
+      return record
+    }
+    const matches = records.filter(
+      (r) => r.path === input.path && (input.nodeId === undefined || r.nodeId === input.nodeId),
+    )
+    if (matches.length === 0) {
+      throw new HelmError(
+        'not_found',
+        `未找到路径 ${input.path}${input.nodeId !== undefined ? `（节点 ${input.nodeId}）` : ''} 的受管 worktree 记录；inspect 仅检视 helm 登记的隔离 worktree，不支持任意目录`,
+        404,
+        { path: input.path, ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}) },
+      )
+    }
+    const nodeIds = new Set(matches.map((r) => r.nodeId))
+    if (nodeIds.size > 1) {
+      throw new HelmError(
+        'validation_error',
+        `路径 ${input.path} 在多个节点存在登记（${[...nodeIds].join(', ')}），检视需指定 nodeId 消歧（或改用 worktreeId 精确指定）`,
+        400,
+        { path: input.path, nodeIds: [...nodeIds] },
+      )
+    }
+    return matches.reduce((a, b) => (b.createdAt >= a.createdAt ? b : a))
+  }
+
+  /**
+   * 只读检视一个受管 worktree：登记元数据 + 在目标节点真实执行的 git 只读
+   * 命令（全部 `git -C <登记路径>`，命令固定白名单，不接受任意目录/cwd）。
+   * - 目录存在性仅由节点真实 fs 探测证明；探测失败 fail closed 抛
+   *   worktree_check_failed（节点离线/权限/超时不当作缺失）；
+   * - 已 removed 登记或目录缺失：返回元数据 + unavailableReason，不跑 git；
+   * - git 命令失败（非零退出/超时）显式 worktree_check_failed 并附真实输出
+   *   （输出经 redact 脱敏）；绝不伪造空统计。
+   */
+  async inspect(input: WorktreeInspectInput, signal?: AbortSignal): Promise<WorktreeInspectResult> {
+    if (input.worktreeId === undefined && input.conversationId === undefined && input.path === undefined) {
+      throw new HelmError('validation_error', 'inspect 需提供 worktreeId、conversationId 或 path 之一', 400)
+    }
+    if (input.worktreeId !== undefined && (input.conversationId !== undefined || input.path !== undefined)) {
+      throw new HelmError('validation_error', 'worktreeId 与 conversationId/path 互斥（worktreeId 单独使用）', 400)
+    }
+    if (input.nodeId !== undefined && input.path === undefined) {
+      throw new HelmError('validation_error', 'nodeId 仅可与 path 搭配使用（跨节点同名路径消歧）', 400)
+    }
+    if (input.conversationId !== undefined && input.path !== undefined) {
+      throw new HelmError('validation_error', 'conversationId 与 path 择一提供', 400)
+    }
+
+    const record = this.resolveInspectRecord(input)
+    const diffBase: WorktreeInspectResult['diffBase'] = record.baseCommit !== '' ? 'baseCommit' : 'HEAD'
+    const metadata: Pick<WorktreeInspectResult, 'record' | 'diffBase'> = { record, diffBase }
+    if (record.status === 'removed') {
+      return {
+        ...metadata,
+        exists: false,
+        unavailableReason: 'removed',
+        dirtyFiles: [],
+        dirtyFileCount: 0,
+        dirtyFilesTruncated: false,
+        diffTruncated: false,
+      }
+    }
+    if (!(await this.dirExistsOnNode(record.nodeId, record.path))) {
+      return {
+        ...metadata,
+        exists: false,
+        unavailableReason: 'directory_missing',
+        dirtyFiles: [],
+        dirtyFileCount: 0,
+        dirtyFilesTruncated: false,
+        diffTruncated: false,
+      }
+    }
+
+    const run = async (args: readonly string[]): Promise<string> => {
+      const result = await gitExec(this.deps, record.nodeId, record.path, ['-C', record.path, ...args], signal)
+      if (!result.ok) {
+        throw new HelmError(
+          'worktree_check_failed',
+          `无法在节点 ${record.nodeId} 只读检视 worktree '${record.path}'（git ${args[0]} 失败，检视中止）：\n${result.output.trim()}`,
+          502,
+          { worktreeId: record.id, path: record.path, nodeId: record.nodeId, output: result.output.slice(0, 2000) },
+        )
+      }
+      return result.output
+    }
+
+    const branch = (await run(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+    const head = (await run(['rev-parse', 'HEAD'])).trim()
+    const status = await run(['status', '--porcelain', '--untracked-files=all'])
+    const dirtyLines = status.split('\n').map((l) => l.trim()).filter((l) => l !== '')
+
+    let commitsAhead: number | undefined
+    if (record.baseCommit !== '') {
+      const ahead = await run(['rev-list', '--count', `${record.baseCommit}..${head}`])
+      commitsAhead = Number.parseInt(ahead.trim(), 10) || 0
+    }
+    const diffRef = record.baseCommit !== '' ? record.baseCommit : 'HEAD'
+    const statRaw = await run(['diff', '--stat', diffRef])
+    const diffStat = statRaw.trim() === '' ? undefined : statRaw.trim().slice(0, INSPECT_DIFF_STAT_LIMIT)
+
+    let diffPreview: string | undefined
+    let diffTruncated = false
+    if (input.diff !== false) {
+      const raw = await run(['diff', diffRef])
+      if (raw.length > INSPECT_DIFF_PREVIEW_LIMIT) {
+        diffPreview = raw.slice(0, INSPECT_DIFF_PREVIEW_LIMIT)
+        diffTruncated = true
+      } else {
+        diffPreview = raw === '' ? undefined : raw
+      }
+    }
+
+    return {
+      ...metadata,
+      exists: true,
+      currentBranch: branch,
+      currentHead: head,
+      ...(branch !== record.branch ? { branchChanged: true } : {}),
+      dirtyFiles: dirtyLines.slice(0, INSPECT_DIRTY_FILES_LIMIT),
+      dirtyFileCount: dirtyLines.length,
+      dirtyFilesTruncated: dirtyLines.length > INSPECT_DIRTY_FILES_LIMIT,
+      ...(commitsAhead !== undefined ? { commitsAhead } : {}),
+      ...(diffStat !== undefined ? { diffStat } : {}),
+      ...(diffPreview !== undefined ? { diffPreview } : {}),
+      diffTruncated,
+    }
   }
 
   // ------------------------------------------------------------------

@@ -746,3 +746,142 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* 受管工作树只读改动概览（inspect_worktree 结果展示） */
+.worktree-inspect {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+}
+
+.worktree-inspect-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.worktree-inspect-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.worktree-inspect-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.worktree-inspect-files {
+  margin: 0;
+  max-height: 120px;
+  overflow: auto;
+  font-size: 10.5px;
+}
+
+.worktree-inspect-diff {
+  max-height: 260px;
+}
+
+.worktree-inspect-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* 工作流库（已保存定义列表 + 当前会话运行） */
+.workflow-library {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workflow-library-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.workflow-library-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workflow-library-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-elevated);
+}
+
+.workflow-library-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.workflow-library-item-head > svg {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+}
+
+.workflow-library-name {
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.workflow-library-phases {
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.workflow-library-desc,
+.workflow-library-when {
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-library-run {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.workflow-library-args {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.workflow-library-args:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}

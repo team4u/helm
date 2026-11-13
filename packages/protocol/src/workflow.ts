@@ -94,6 +94,8 @@ export interface WorkflowRunSummary {
   conversationId: number
   /** run 种类：DSL 编排工作流（缺省/'workflow'）或后台单子代理（'subagent'）。 */
   kind?: 'workflow' | 'subagent'
+  /** 触发本次 run 的已保存工作流名（按保存定义重跑的稳定入口；内联脚本无此字段）。 */
+  savedName?: string
   /** 脚本 meta.description 描述。 */
   description?: string
   /** 脚本 meta.phases 声明的阶段蓝图。 */

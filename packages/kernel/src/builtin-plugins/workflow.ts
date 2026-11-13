@@ -17,7 +17,8 @@
  *   service.start 执行 init（终止遗留任务、标 failed、补发通知）与 close；
  *   liveTasks/liveWorktrees 声明在途任务与工作树占用；
  * - 3 个模型工具（subagent / SubagentWorkflow / cleanup_worktree）与
- *   6 个动作（list/run/runs/inspect/abort/cleanup_worktree）五端复用；
+ *   8 个动作（list/run/runs/inspect/abort/cleanup_worktree/list_worktrees/
+ *   inspect_worktree）五端复用；
  * - 嵌套深度契约：受管子代理（经本插件派生的原生/外部子会话）是编排
  *   叶子——私有登记表持久化事实，before_turn 剥离派工工具、工具/动作入口
  *   前置拒绝、agent_spawn 最高优先级兜底，三道防线显式报
@@ -1042,6 +1043,77 @@ export function createWorkflowPlugin(): PluginDefinition {
               ...(a['deleteBranch'] !== undefined ? { deleteBranch: a['deleteBranch'] === true } : {}),
               ...(a['force'] !== undefined ? { force: a['force'] === true } : {}),
             } as Record<string, never>,
+            context.signal,
+          )
+        },
+      })
+
+      ctx.action({
+        id: 'list_worktrees',
+        description: '列出受管 Git 工作树登记（含已清理记录的元数据）',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        outputSchema: {
+          type: 'object',
+          properties: { worktrees: { type: 'array', items: { type: 'object' } } },
+          required: ['worktrees'],
+          additionalProperties: false,
+        },
+        cli: { command: ['worktrees', 'list'], description: '列出受管 Git 工作树登记' },
+        async handler() {
+          return { worktrees: isolation.allocator.list() }
+        },
+      })
+
+      ctx.action({
+        id: 'inspect_worktree',
+        description: '只读检视一个受管 Git 工作树：登记元数据 + 目标节点真实 git 只读探测（状态/统计/有上限 diff 预览）；仅登记记录可检视',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            worktreeId: { type: 'string', description: '受管 worktree 登记 ID（node:path；与 conversationId/path 互斥）' },
+            conversationId: { type: 'number', minimum: 1, description: '子会话 ID（与 worktreeId/path 互斥）' },
+            path: { type: 'string', description: 'worktree 绝对路径（与 conversationId 互斥；多节点同名路径需另附 nodeId）' },
+            nodeId: { type: 'string', description: '目标节点 ID（仅可与 path 搭配，跨节点同名路径消歧）' },
+            diff: { type: 'boolean', description: '是否包含 diff 预览（默认包含；登记元数据与统计始终返回）' },
+          },
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            record: { type: 'object' },
+            exists: { type: 'boolean' },
+            unavailableReason: { type: 'string', enum: ['removed', 'directory_missing'] },
+            currentBranch: { type: 'string' },
+            currentHead: { type: 'string' },
+            branchChanged: { type: 'boolean' },
+            dirtyFiles: { type: 'array', items: { type: 'string' } },
+            dirtyFileCount: { type: 'number' },
+            dirtyFilesTruncated: { type: 'boolean' },
+            commitsAhead: { type: 'number' },
+            diffStat: { type: 'string' },
+            diffPreview: { type: 'string' },
+            diffTruncated: { type: 'boolean' },
+            diffBase: { type: 'string', enum: ['baseCommit', 'HEAD'] },
+          },
+          required: ['record', 'exists', 'dirtyFiles', 'dirtyFileCount', 'dirtyFilesTruncated', 'diffTruncated', 'diffBase'],
+          additionalProperties: false,
+        },
+        cli: {
+          command: ['worktrees', 'inspect'],
+          description: '只读检视受管 Git 工作树（登记元数据 + 状态/统计/diff 预览）',
+          positional: [{ field: 'worktreeId', required: true }],
+        },
+        async handler(input, context) {
+          const a = input as Record<string, unknown>
+          return isolation.allocator.inspect(
+            {
+              ...(a['worktreeId'] !== undefined ? { worktreeId: String(a['worktreeId']) } : {}),
+              ...(a['conversationId'] !== undefined ? { conversationId: Number(a['conversationId']) } : {}),
+              ...(a['path'] !== undefined ? { path: String(a['path']) } : {}),
+              ...(a['nodeId'] !== undefined ? { nodeId: String(a['nodeId']) } : {}),
+              ...(a['diff'] !== undefined ? { diff: a['diff'] === true } : {}),
+            },
             context.signal,
           )
         },

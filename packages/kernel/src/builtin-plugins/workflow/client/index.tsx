@@ -9,24 +9,31 @@
  * useConversation）从宿主 store 响应式读取；动作经 ctx.callAction 走
  * POST /api/actions/builtin:workflow/<actionId>，无任何宿主私有依赖。
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
 import type { ToolViewProps, WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
-import { formatDurationMs, usePluginContext, useConversation, useConversations, useToolActivity } from '@helm/plugin-client'
+import { CopyButton, formatDurationMs, usePluginContext, useConversation, useConversations, useToolActivity } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import {
   buildSubagentStatSegments,
   buildSubagentStreamLines,
   buildWorkbenchSubagentItems,
   buildWorkflowPhaseSections,
+  buildWorktreeInspectSelector,
+  buildWorktreeReviewRequest,
   canResumeWorkflowRun,
+  canRerunWorkflowRun,
   extractWorkflowLogs,
+  firstLineOf,
   formatNodeOutputPreview,
   hasNodeExtraDetail,
   formatWorkflowNodeStats,
   isLatestSubagentCallForTarget,
   parentToolSummaryOf,
+  parseSavedWorkflowList,
+  parseWorktreeInspectResult,
+  parseWorkflowArgsInput,
   resolveNodeSummaryText,
   resolveSubagentConversationId,
   resolveSubagentExecutionMeta,
@@ -35,6 +42,8 @@ import {
   resolveWorkflowRunForTool,
   subagentBadge,
   toolResultPreviewTruncated,
+  type SavedWorkflowView,
+  type WorktreeInspectView,
 } from './models.ts'
 import { usePluginSessionDoc, useStreamFollow, useElapsedNowMs } from './hooks.ts'
 import { SPIN, RUN_LABEL, RUN_BADGE, NODE_LABEL, NODE_BADGE, PHASE_ICON } from './presentation.ts'
@@ -43,7 +52,7 @@ import { SPIN, RUN_LABEL, RUN_BADGE, NODE_LABEL, NODE_BADGE, PHASE_ICON } from '
 // 图标（lucide-react 线性矢量，与宿主共享同一实例；无 Emoji）
 // ---------------------------------------------------------------------------
 
-import { Bot, Check, ChevronDown, ChevronRight, Circle, Clock, CornerDownRight, ExternalLink, GitBranch, Loader2, RotateCw, Square, Terminal, X } from 'lucide-react'
+import { Bot, Check, ChevronDown, ChevronRight, Circle, Clock, CornerDownRight, ExternalLink, GitBranch, GitPullRequest, Loader2, RotateCw, Square, Terminal, X } from 'lucide-react'
 
 function Icon({ name, size = 12, className }: { name: string; size?: number; className?: string }): ReactNode {
   const map: Record<string, typeof Bot> = {
@@ -57,6 +66,7 @@ function Icon({ name, size = 12, className }: { name: string; size?: number; cla
     'corner-down-right': CornerDownRight,
     'external-link': ExternalLink,
     'git-branch': GitBranch,
+    'git-pull-request': GitPullRequest,
     loader: Loader2,
     'rotate-cw': RotateCw,
     square: Square,
@@ -538,6 +548,16 @@ function WorkflowRunCardBody(props: {
       .catch((err: unknown) => ctx.notify(`断点恢复失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
       .finally(() => setBusy(false))
   }
+  // 重跑与 resume 语义无关：按已保存定义发起一次全新运行（沿用原 args 不成立，
+  // 也不宣称命中旧 run 的 journal 缓存；completed run 一律不使用 resumeFromRunId）。
+  const rerun = (): void => {
+    setBusy(true)
+    ctx
+      .callAction('run', { name: run.savedName })
+      .then(() => ctx.notify(`已按保存定义 ${run.savedName} 发起新运行`))
+      .catch((err: unknown) => ctx.notify(`重跑失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+      .finally(() => setBusy(false))
+  }
 
   const resultJson = useMemo(() => {
     if (run.result === undefined) return undefined
@@ -560,6 +580,9 @@ function WorkflowRunCardBody(props: {
         {run.replayedFrom !== undefined ? (
           <span className="badge badge-warn" title={`从 journal 前缀重放恢复（源 run ${run.replayedFrom}）`}>cached 重放</span>
         ) : null}
+        {run.savedName !== undefined ? (
+          <span className="badge badge-neutral" title={`已保存工作流：${run.savedName}`}>已保存定义</span>
+        ) : null}
         <span style={{ flex: 1 }} />
         <span className="workflow-run-stats tabular-nums">
           {nodes.length > 0 ? <span>{`节点 ${done}/${nodes.length}`}</span> : null}
@@ -573,9 +596,15 @@ function WorkflowRunCardBody(props: {
           </button>
         ) : null}
         {canResumeWorkflowRun(run) ? (
-          <button type="button" className="btn btn-sm" disabled={busy} onClick={resume} title="从 journal 断点重放恢复执行">
+          <button type="button" className="btn btn-sm" disabled={busy} onClick={resume} title="从同 run 的 journal 断点恢复：重放已完成前缀，仅重跑失败/未完成节点（沿用原脚本与 args；不支持改参换目标）">
             <Icon name="rotate-cw" size={11} />
             断点恢复
+          </button>
+        ) : null}
+        {canRerunWorkflowRun(run) ? (
+          <button type="button" className="btn btn-sm" disabled={busy} onClick={rerun} title={`按已保存定义 ${run.savedName} 发起一次全新运行（非断点恢复；不命中旧 run 缓存）`}>
+            <Icon name="rotate-cw" size={11} />
+            重跑
           </button>
         ) : null}
         {!inWorkbench ? (
@@ -623,7 +652,7 @@ function WorkflowRunCardBody(props: {
                   </div>
                 ) : null}
                 {section.nodes.map((node) => (
-                  <WorkflowNodeCard key={node.id} node={node} />
+                  <WorkflowNodeCard key={node.id} node={node} runConversationId={run.conversationId} />
                 ))}
               </div>
             ))}
@@ -654,7 +683,8 @@ function WorkflowRunCardBody(props: {
 }
 
 /** 工作流子代理节点：直接以一体化整卡直出（无手风琴折叠壳）。 */
-function WorkflowSubagentNodeCard({ node }: { node: WorkflowNodeState }): ReactNode {
+function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversationId: number }): ReactNode {
+  const { node } = props
   const outputText = typeof node.output === 'string' ? node.output : undefined
   const nodeStats = useMemo(() => formatWorkflowNodeStats(node), [node])
   return (
@@ -688,12 +718,26 @@ function WorkflowSubagentNodeCard({ node }: { node: WorkflowNodeState }): ReactN
         </div>
       ) : null}
       {node.error !== undefined ? <p className="callout callout--error">{node.error}</p> : null}
+      {node.worktree !== undefined ? (
+        <WorktreeInspectSection
+          worktree={{
+            path: node.worktree.path,
+            branch: node.worktree.branch,
+            ...(node.worktree.id !== undefined ? { id: node.worktree.id } : {}),
+          }}
+          nodeId={node.nodeId}
+          baseCommit={node.worktree.baseCommit}
+          taskLabel={node.label}
+          parentConversationId={props.runConversationId}
+        />
+      ) : null}
     </div>
   )
 }
 
 /** 无原生子会话节点：动作与外部执行如实展示，均不伪造可导航的子会话。 */
-function WorkflowExecutionNodeCard({ node }: { node: WorkflowNodeState }): ReactNode {
+function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversationId: number }): ReactNode {
+  const { node } = props
   const summaryText = resolveNodeSummaryText(node)
   const nodeStats = useMemo(() => formatWorkflowNodeStats(node), [node])
   const isErr = node.status === 'failed'
@@ -744,16 +788,208 @@ function WorkflowExecutionNodeCard({ node }: { node: WorkflowNodeState }): React
         </div>
       ) : null}
       {hasNodeExtraDetail(node) ? <WorkflowNodeDetail node={node} /> : null}
+      {node.worktree !== undefined ? (
+        <WorktreeInspectSection
+          worktree={{
+            path: node.worktree.path,
+            branch: node.worktree.branch,
+            ...(node.worktree.id !== undefined ? { id: node.worktree.id } : {}),
+          }}
+          nodeId={node.nodeId}
+          baseCommit={node.worktree.baseCommit}
+          taskLabel={node.label}
+          parentConversationId={props.runConversationId}
+        />
+      ) : null}
     </div>
   )
 }
 
 /** 单节点卡片：子代理节点直出一体化整卡；动作节点直出扁平双层卡。全程无手风琴折叠。 */
-function WorkflowNodeCard({ node }: { node: WorkflowNodeState }): ReactNode {
+function WorkflowNodeCard(props: { node: WorkflowNodeState; runConversationId: number }): ReactNode {
+  const { node } = props
   if (node.conversationId !== undefined) {
-    return <WorkflowSubagentNodeCard node={node} />
+    return <WorkflowSubagentNodeCard node={node} runConversationId={props.runConversationId} />
   }
-  return <WorkflowExecutionNodeCard node={node} />
+  return <WorkflowExecutionNodeCard node={node} runConversationId={props.runConversationId} />
+}
+
+/**
+ * 受管工作树只读改动概览（可折叠）：展开时经 inspect_worktree 动作在目标
+ * 节点真实执行 git 只读命令，展示登记元数据、状态统计与有上限 diff 预览；
+ * 「让主会话审阅并合入」仅向父会话提交审阅请求文本（官方 submitInput 能力），
+ * Web 端不执行任何 git 写操作、也不重复实现合入状态机。
+ */
+function WorktreeInspectSection(props: {
+  worktree: { id?: string; path: string; branch: string }
+  nodeId?: string
+  baseCommit?: string
+  taskLabel?: string
+  parentConversationId: number
+}): ReactNode {
+  const ctx = usePluginContext()
+  const { worktree } = props
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const [data, setData] = useState<WorktreeInspectView | undefined>(undefined)
+  const [sending, setSending] = useState(false)
+  const generation = useRef(0)
+
+  const load = async (): Promise<void> => {
+    const current = ++generation.current
+    setLoading(true)
+    setError(undefined)
+    try {
+      const raw = await ctx.callAction('inspect_worktree', buildWorktreeInspectSelector(worktree, props.nodeId))
+      if (generation.current !== current) return
+      const parsed = parseWorktreeInspectResult(raw)
+      if (parsed === undefined) {
+        setError('检视结果结构不合法（动作返回非预期形状，拒绝伪造展示）')
+      } else {
+        setData(parsed)
+      }
+    } catch (err) {
+      if (generation.current !== current) return
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (generation.current === current) setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    // 首次展开才拉取；重复展开沿用缓存（手动刷新按钮另路触发）。
+    if (open && data === undefined && error === undefined && !loading) void load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, worktree.path, worktree.id])
+
+  const reviewText = useMemo(
+    () =>
+      buildWorktreeReviewRequest({
+        path: worktree.path,
+        branch: data?.branch ?? worktree.branch,
+        nodeId: data?.nodeId ?? props.nodeId,
+        baseCommit: data?.baseCommit || props.baseCommit,
+        taskLabel: props.taskLabel,
+        ...(data !== undefined ? { inspect: data } : {}),
+      }),
+    [worktree.path, worktree.branch, props.nodeId, props.baseCommit, props.taskLabel, data],
+  )
+
+  const sendReview = (): void => {
+    setSending(true)
+    ctx
+      .submitInput(reviewText, { conversationId: props.parentConversationId, whenBusy: 'followUp' })
+      .then(() => ctx.notify('已向主会话提交工作树审阅请求'))
+      .catch((err: unknown) => ctx.notify(`提交审阅请求失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+      .finally(() => setSending(false))
+  }
+
+  const unavailableText =
+    data?.unavailableReason === 'removed'
+      ? '登记已清理（工作树已被移除）'
+      : data?.unavailableReason === 'directory_missing'
+        ? '目录已不存在（节点真实探测证实；登记仍保留）'
+        : undefined
+
+  return (
+    <div className="worktree-inspect">
+      <div className="worktree-inspect-header">
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs"
+          onClick={() => setOpen((v) => !v)}
+          title={open ? '收起工作树改动概览' : '展开工作树只读改动概览（目标节点真实 git 检视）'}
+        >
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
+          <Icon name="git-branch" size={11} />
+          改动概览
+        </button>
+        {open && data !== undefined ? (
+          <button type="button" className="btn btn-ghost btn-xs" disabled={loading} onClick={() => void load()} title="重新检视（只读）">
+            <Icon name="rotate-cw" size={11} className={loading ? SPIN : undefined} />
+            刷新
+          </button>
+        ) : null}
+      </div>
+      {open ? (
+        <div className="worktree-inspect-body">
+          {loading && data === undefined ? <div className="workflow-phase-empty">目标节点只读检视中…</div> : null}
+          {error !== undefined ? (
+            <div className="callout callout--error worktree-inspect-error">
+              <div>只读检视失败：{error}</div>
+              <button type="button" className="btn btn-xs" onClick={() => void load()}>
+                重试
+              </button>
+            </div>
+          ) : null}
+          {data !== undefined ? (
+            <>
+              {unavailableText !== undefined ? (
+                <div className="callout callout--warn">{unavailableText}，无法执行 git 检视；仅展示登记元数据。</div>
+              ) : null}
+              <div className="kv-grid">
+                <span className="kv-key">分支</span>
+                <span className="kv-val mono">
+                  {data.currentBranch ?? data.branch}
+                  {data.branchChanged === true ? (
+                    <span className="badge badge-warn" title={`登记分支 ${data.branch}；工作树可能已被改签`}>与登记不一致</span>
+                  ) : null}
+                </span>
+                <span className="kv-key">基线</span>
+                <span className="kv-val mono" title={data.baseCommit !== '' ? data.baseCommit : undefined}>
+                  {data.baseCommit !== '' ? `${data.baseCommit.slice(0, 12)}（${data.diffBase === 'HEAD' ? '无基线，按 HEAD' : '登记基线'}）` : '无登记基线（按 HEAD 检视未提交改动）'}
+                </span>
+                <span className="kv-key">未提交修改</span>
+                <span className="kv-val">{`${data.dirtyFileCount} 个文件${data.dirtyFilesTruncated ? '（列表已截断，仅显示前若干项）' : ''}`}</span>
+                {data.commitsAhead !== undefined ? (
+                  <>
+                    <span className="kv-key">领先基线提交</span>
+                    <span className="kv-val">{`${data.commitsAhead} 个`}</span>
+                  </>
+                ) : null}
+                {data.currentHead !== undefined ? (
+                  <>
+                    <span className="kv-key">当前 HEAD</span>
+                    <span className="kv-val mono">{data.currentHead.slice(0, 12)}</span>
+                  </>
+                ) : null}
+              </div>
+              {data.dirtyFiles.length > 0 ? (
+                <pre className="code-block-pre worktree-inspect-files"><code>{data.dirtyFiles.join('\n')}</code></pre>
+              ) : data.exists ? (
+                <div className="workflow-phase-empty">工作区无未提交修改</div>
+              ) : null}
+              {data.diffStat !== undefined ? (
+                <div>
+                  <div className="trace-section-label">Diff 统计（相对{data.diffBase === 'HEAD' ? ' HEAD' : '基线'}）</div>
+                  <pre className="code-block-pre workflow-node-pre"><code>{data.diffStat}</code></pre>
+                </div>
+              ) : null}
+              {data.diffPreview !== undefined ? (
+                <div>
+                  <div className="trace-section-label">
+                    Diff 预览（只读，有上限）
+                    {data.diffTruncated ? <span className="badge badge-neutral">已截断</span> : null}
+                  </div>
+                  <pre className="code-block-pre workflow-node-pre worktree-inspect-diff selectable"><code>{data.diffPreview}</code></pre>
+                </div>
+              ) : data.exists ? (
+                <div className="workflow-phase-empty">无 diff 内容</div>
+              ) : null}
+            </>
+          ) : null}
+          <div className="worktree-inspect-actions">
+            <button type="button" className="btn btn-xs" disabled={sending} onClick={sendReview} title="向主会话提交审阅与合入请求（实际检视与合入由主会话执行）">
+              <Icon name="git-pull-request" size={11} />
+              让主会话审阅并合入
+            </button>
+            <CopyButton text={reviewText} label="复制审阅请求文本" />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 /** 无原生子会话节点的结构化明细。 */
@@ -830,6 +1066,153 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
+// 工作流库（list 动作：已保存定义 + 在当前会话选择运行）
+// ---------------------------------------------------------------------------
+
+/** 工作流库分节：列出已保存定义（含元数据诊断），支持在当前会话选择运行。 */
+function WorkflowLibrarySection(props: { conversationId: number }): ReactNode {
+  const ctx = usePluginContext()
+  const [items, setItems] = useState<SavedWorkflowView[] | undefined>(undefined)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(true)
+  const [runningName, setRunningName] = useState<string | undefined>(undefined)
+  const [argsDraft, setArgsDraft] = useState('')
+  const [argsError, setArgsError] = useState<string | undefined>(undefined)
+  const generation = useRef(0)
+
+  const load = async (): Promise<void> => {
+    const current = ++generation.current
+    setLoading(true)
+    setError(undefined)
+    try {
+      const raw = await ctx.callAction('list')
+      if (generation.current !== current) return
+      const parsed = parseSavedWorkflowList(raw)
+      if (parsed === undefined) {
+        setError('工作流目录返回结构不合法（动作返回非预期形状）')
+      } else {
+        setItems(parsed)
+      }
+    } catch (err) {
+      if (generation.current !== current) return
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (generation.current === current) setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const runSaved = (name: string): void => {
+    const parsed = parseWorkflowArgsInput(argsDraft)
+    if (!parsed.ok) {
+      setArgsError(parsed.error)
+      return
+    }
+    setArgsError(undefined)
+    setRunningName(name)
+    ctx
+      .callAction('run', {
+        name,
+        conversationId: props.conversationId,
+        ...(parsed.args !== undefined ? { args: parsed.args } : {}),
+      })
+      .then(() => {
+        ctx.notify(`工作流 ${name} 已在当前会话启动`)
+        setArgsDraft('')
+      })
+      .catch((err: unknown) => ctx.notify(`启动工作流失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+      .finally(() => setRunningName(undefined))
+  }
+
+  return (
+    <section className="workflow-library">
+      <div className="trace-section-label workflow-library-header">
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs"
+          onClick={() => setOpen((v) => !v)}
+          title={open ? '收起工作流库' : '展开工作流库'}
+        >
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
+        </button>
+        工作流库（已保存定义）
+        <button type="button" className="btn btn-ghost btn-xs" disabled={loading} onClick={() => void load()} title="重新读取工作流目录">
+          <Icon name="rotate-cw" size={11} className={loading ? SPIN : undefined} />
+          刷新
+        </button>
+      </div>
+      {open ? (
+        <div className="workflow-library-body">
+          {loading && items === undefined ? <div className="workflow-phase-empty">工作流目录读取中…</div> : null}
+          {error !== undefined ? (
+            <div className="callout callout--error worktree-inspect-error">
+              <div>读取工作流目录失败：{error}</div>
+              <button type="button" className="btn btn-xs" onClick={() => void load()}>
+                重试
+              </button>
+            </div>
+          ) : null}
+          {items !== undefined && items.length === 0 && error === undefined ? (
+            <div className="workflow-phase-empty">暂无已保存工作流（保存目录内无带 meta 声明的脚本）</div>
+          ) : null}
+          {items?.map((item) => (
+            <div key={item.name} className="workflow-library-item">
+              <div className="workflow-library-item-head">
+                <Icon name="terminal" size={12} />
+                <strong className="workflow-library-name" title={item.path ?? item.name}>{item.name}</strong>
+                {item.phases !== undefined ? (
+                  <span className="workflow-library-phases" title={item.phases.map((p) => p.title).join(' → ')}>
+                    {`${item.phases.length} 阶段：${item.phases.map((p) => p.title).join(' / ')}`}
+                  </span>
+                ) : null}
+              </div>
+              {item.metadataError !== undefined ? (
+                <div className="callout callout--warn">元数据校验失败：{item.metadataError}</div>
+              ) : (
+                <>
+                  {item.description !== undefined ? (
+                    <div className="workflow-library-desc" title={item.description}>{firstLineOf(item.description, 120)}</div>
+                  ) : null}
+                  {item.whenToUse !== undefined ? (
+                    <div className="workflow-library-when" title={item.whenToUse}>{`适用：${firstLineOf(item.whenToUse, 120)}`}</div>
+                  ) : null}
+                </>
+              )}
+              <div className="workflow-library-run">
+                <input
+                  className="workflow-library-args"
+                  type="text"
+                  placeholder="args JSON（可选，严格解析）"
+                  value={argsDraft}
+                  onChange={(e) => setArgsDraft(e.target.value)}
+                  aria-label={`工作流 ${item.name} 的 args JSON`}
+                />
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  disabled={runningName !== undefined}
+                  onClick={() => runSaved(item.name)}
+                  title={`在当前会话运行已保存工作流 ${item.name}（args 为空则沿用脚本缺省）`}
+                >
+                  <Icon name={runningName === item.name ? 'loader' : 'circle'} size={11} className={runningName === item.name ? SPIN : undefined} />
+                  运行
+                </button>
+              </div>
+            </div>
+          ))}
+          {argsError !== undefined ? <div className="callout callout--error">{argsError}</div> : null}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // WorkflowWorkbenchPanel：workbench.panel 扩展点组件
 // ---------------------------------------------------------------------------
 
@@ -876,6 +1259,7 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
+      <WorkflowLibrarySection conversationId={props.conversation.id} />
       {workflowRuns.length > 0 ? <div className="trace-section-label">工作流运行</div> : null}
       {workflowRuns.map((run) => (
         <div key={run.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -910,7 +1294,7 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
         </>
       ) : null}
       {runs.length === 0 && subagentItems.length === 0 ? (
-        <p style={{ color: 'var(--fg-muted)' }}>当前会话暂无工作流或子代理。</p>
+        <div className="workflow-phase-empty">当前会话暂无工作流运行或子代理；可从上方工作流库选择已保存定义运行。</div>
       ) : null}
     </div>
   )

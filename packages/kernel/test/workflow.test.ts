@@ -1846,6 +1846,23 @@ describe('WorkflowService', () => {
     await service.close()
   })
 
+  it('savedName only appears in runs launched by saved name（inline script runs do not carry it）', timeout, async () => {
+    const host = makeServiceHost()
+    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const dir = join(dataDir, 'workflows')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'rerun-me.js'), META('rerun-me') + 'return 7', 'utf-8')
+
+    const byName = await service.run({ conversationId: 1, name: 'rerun-me' })
+    await service.wait(byName.id)
+    assert.equal(service.getRun(byName.id).savedName, 'rerun-me', '按保存名启动的 run 摘要应携带 savedName（重跑入口）')
+
+    const inline = await service.run({ conversationId: 1, script: META('inline') + 'return 8' })
+    await service.wait(inline.id)
+    assert.equal(service.getRun(inline.id).savedName, undefined, '内联脚本 run 不携带 savedName（脚本源不在保存目录，不伪造重跑入口）')
+    await service.close()
+  })
+
   it('progress timeline is persisted periodically, not only at terminal state', timeout, async () => {
     const host = makeServiceHost()
     const state = makeStateStore()

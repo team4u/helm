@@ -14,16 +14,18 @@
 
 后台子代理的汇报链路有完整的诚实性设计：父会话已被删除时，汇报降级为全局 notification 通知（「后台任务已结束，可在任务列表检查结果」）；其余故障（store/IO/权限）如实上抛，由引擎 outbox（`notifiedAt` 不置位）在下次 `init` 时补发，绝不吞错。
 
-## 五端动作（6 个）
+## 五端动作（8 个）
 
 | 动作 | CLI 映射 | 说明 |
 | :--- | :--- | :--- |
 | `list` | `helm workflows list` | 列出已保存的工作流定义 |
 | `run` | `helm workflows run [nameOrFile]` | 在指定或当前会话启动运行；新 run 必须显式指定会话（CLI `--current` 或 `--conversation-id`）；位置参数为已保存名或本地脚本文件（自动读入 `script`）；`--wait` 同步等终态 |
 | `runs` | `helm workflows runs` | 列出运行记录；支持 `conversationId` 过滤，CLI `--current` 缺省按当前会话过滤 |
-| `inspect` | `helm workflows inspect <runId>` | 查看单个运行详情（含节点状态与进度时间线） |
+| `inspect` | `helm workflows inspect <runId>` | 查看单个运行详情（含节点状态与进度时间线；已保存定义发起的 run 携带 `savedName`） |
 | `abort` | `helm workflows abort <runId>` | 中止运行中工作流 |
 | `cleanup_worktree` | `helm worktrees cleanup` | 与工具同款语义；选择器三择一互斥，`--force` 清理脏工作树（不可越过占用/归属/locked 校验） |
+| `list_worktrees` | `helm worktrees list` | 列出受管工作树登记（含已清理记录的元数据；新建在前） |
+| `inspect_worktree` | `helm worktrees inspect <worktreeId>` | 只读检视受管工作树：登记元数据 + 目标节点真实 git 只读探测（未提交文件清单、领先基线提交数、diff 统计与有上限预览）；仅登记记录可检视，不支持任意目录；已清理/目录缺失如实返回 `unavailableReason`，git 失败显式报错 |
 
 `run` 与 `cleanup_worktree` 对会话目标有显式冲突校验：输入 `conversationId` 与调用上下文（`--current` / `run_action` / workflow）同时存在且不一致时，显式 `400 validation_error` 拒绝——静默选边等于在调用方不知情下改投目标。
 
@@ -65,8 +67,8 @@ Worktree 隔离经 `agent_spawn` around continuation（priority 200，先于外�
 插件注册三个 client.tsx 视图（组件经 `usePluginSessionDoc` 自行订阅 runs 分片，动作经 `ctx.callAction`，零宿主私有依赖）：
 
 - `toolView` `subagent-card`（`replaceRow: true`）：时间线内 subagent 工具调用的双层胶囊实时卡，多次 resume 折叠展示；
-- `toolView` `workflow-card`（`replaceRow: true`）：时间线内 SubagentWorkflow 调用的工作流运行卡；
-- `workbenchPanel` `tasks`：工作台面板（当前会话工作流运行 + 子代理列表），`badge` 绑定 `run-badges` 文档驱动动态角标。
+- `toolView` `workflow-card`（`replaceRow: true`）：时间线内 SubagentWorkflow 调用的工作流运行卡；已保存定义发起的已完成 run 提供「重跑」（全新运行，非断点恢复），失败/中止 run 提供「断点恢复」（仅同 run journal 前缀重放，沿用原脚本与 args）；
+- `workbenchPanel` `tasks`：工作台面板（工作流库 + 当前会话工作流运行 + 子代理列表），`badge` 绑定 `run-badges` 文档驱动动态角标。工作流库经 `list` 动作展示已保存定义并支持在当前会话选择运行（args 输入严格 JSON 解析）；有 worktree 的节点卡提供可折叠只读改动概览（`inspect_worktree`）与「让主会话审阅并合入」（仅向父会话提交审阅请求文本，Web 端不执行 git 写操作）。
 
 ## 延伸阅读
 
