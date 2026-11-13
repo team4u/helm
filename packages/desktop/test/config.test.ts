@@ -13,7 +13,7 @@ import { DesktopError } from '../src/errors.js';
 
 const BASE_ENV: NodeJS.ProcessEnv = { PATH: process.env['PATH'] };
 
-test('缺省配置：端口 3202、hubUrl、kernel dist 入口', () => {
+test('缺省配置：端口 3202、hubUrl、kernel dist 入口', { timeout: 60_000 }, () => {
   const config = resolveDesktopConfig(BASE_ENV);
   assert.equal(config.port, 3202);
   assert.equal(config.hostname, '127.0.0.1');
@@ -24,7 +24,7 @@ test('缺省配置：端口 3202、hubUrl、kernel dist 入口', () => {
   assert.equal(config.stopGraceMs, 5_000);
 });
 
-test('env 覆盖：端口 / dataDir / webDist / payload / hubCommand / hubNode', () => {
+test('env 覆盖：端口 / dataDir / webDist / payload / hubCommand / hubNode', { timeout: 60_000 }, () => {
   const config = resolveDesktopConfig({
     ...BASE_ENV,
     HELM_DESKTOP_PORT: '3210',
@@ -43,12 +43,12 @@ test('env 覆盖：端口 / dataDir / webDist / payload / hubCommand / hubNode',
   assert.equal(config.hubNode, '/usr/local/bin/node');
 });
 
-test('显式 overrides 优先于 env', () => {
+test('显式 overrides 优先于 env', { timeout: 60_000 }, () => {
   const config = resolveDesktopConfig({ ...BASE_ENV, HELM_DESKTOP_PORT: '3210' }, { port: 3299 });
   assert.equal(config.port, 3299);
 });
 
-test('非法端口显式拒绝：非整数 / 越界 / 端口铁律保留端口；空串视为未配置', () => {
+test('非法端口显式拒绝：非整数 / 越界 / 端口铁律保留端口；空串视为未配置', { timeout: 60_000 }, () => {
   for (const bad of ['abc', '0', '70000']) {
     assert.throws(() => resolveDesktopConfig({ ...BASE_ENV, HELM_DESKTOP_PORT: bad }), (error: unknown) => {
       assert.ok(error instanceof DesktopError);
@@ -65,7 +65,7 @@ test('非法端口显式拒绝：非整数 / 越界 / 端口铁律保留端口�
   assert.equal(resolveDesktopConfig({ ...BASE_ENV, HELM_DESKTOP_PORT: '' }).port, 3202, '空串=未配置');
 });
 
-test('resolveHubEntry 优先级：hubCommand > payload > hubEntry；payload source 携带 args', () => {
+test('resolveHubEntry 优先级：hubCommand > payload > hubEntry；payload source 携带 args', { timeout: 60_000 }, () => {
   const withCommand = resolveDesktopConfig(BASE_ENV, { hubCommand: ['node', 'x.js'] });
   assert.equal(resolveHubEntry(withCommand), null);
   const withPayload = resolveDesktopConfig(BASE_ENV, { payloadEntry: '/p/main.js' });
@@ -76,7 +76,7 @@ test('resolveHubEntry 优先级：hubCommand > payload > hubEntry；payload sour
   assert.deepEqual(resolveHubEntry(plain), { entry: defaultHubEntryPath(), source: 'hub-entry', args: [] });
 });
 
-test('payload 更新器配置：HELM_PAYLOAD_PACKAGE / REGISTRY / VERSION 与 ENTRY_ARGS 解析', () => {
+test('payload 更新器配置：HELM_PAYLOAD_PACKAGE / REGISTRY / VERSION 与 ENTRY_ARGS 解析', { timeout: 60_000 }, () => {
   const config = resolveDesktopConfig({
     ...BASE_ENV,
     HELM_PAYLOAD_PACKAGE: ' my-payload ',
@@ -92,7 +92,7 @@ test('payload 更新器配置：HELM_PAYLOAD_PACKAGE / REGISTRY / VERSION 与 EN
   assert.equal(resolveDesktopConfig({ ...BASE_ENV, HELM_PAYLOAD_VERSION: 'latest' }).payloadVersion, 'latest');
 });
 
-test('payload 配置非法值显式拒绝：空白包名 / 非法 registry / 非法版本 / args 无入口', () => {
+test('payload 配置非法值显式拒绝：空白包名 / 非法 registry / 非法版本 / args 无入口', { timeout: 60_000 }, () => {
   const expectInvalid = (env: NodeJS.ProcessEnv): void => {
     assert.throws(() => resolveDesktopConfig(env), (error: unknown) => {
       assert.ok(error instanceof DesktopError);
@@ -109,7 +109,7 @@ test('payload 配置非法值显式拒绝：空白包名 / 非法 registry / 非
   assert.equal(resolveDesktopConfig({ ...BASE_ENV, HELM_DESKTOP_PAYLOAD_ENTRY_ARGS: '' }).payloadEntryArgs, undefined);
 });
 
-test('buildHubChildEnv：注入 kernel 约定变量并剥离 HELM_DESKTOP_* 与 HELM_PAYLOAD_*', () => {
+test('buildHubChildEnv：注入 kernel 约定变量并剥离 HELM_DESKTOP_* 与 HELM_PAYLOAD_*', { timeout: 60_000 }, () => {
   const config = resolveDesktopConfig(BASE_ENV, {
     port: 3210,
     dataDir: '/tmp/helm-d',

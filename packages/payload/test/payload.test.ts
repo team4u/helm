@@ -85,7 +85,7 @@ function expectedAssetDirs() {
   return expected.sort();
 }
 
-test('payload 组装：补齐缺失构建产物后执行 build.mjs 成功', { timeout: 480_000 }, () => {
+test('payload 组装：补齐缺失构建产物后执行 build.mjs 成功', { timeout: 60_000 }, () => {
   // 缺啥补啥（已构建的 CI 流程零额外耗时）；构建命令显式超时，失败即带输出终止。
   if (!existsSync(path.join(repoRoot, 'packages/protocol/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/protocol', 'run', 'build'], repoRoot, 180_000);
@@ -251,7 +251,7 @@ test('start.mjs start：依赖缺失时拒绝拉起 kernel（无 Helm Hub 输出
   assert.doesNotMatch(res.stdout, /Helm Hub:/, '依赖缺失时不得出现 kernel 启动输出');
 });
 
-test('start.mjs 无参数：用法错误退出码 1', { timeout: 30_000 }, () => {
+test('start.mjs 无参数：用法错误退出码 1', { timeout: 60_000 }, () => {
   const res = spawnSync(process.execPath, [path.join(stagingDir, 'start.mjs')], {
     cwd: repoRoot,
     encoding: 'utf8',
