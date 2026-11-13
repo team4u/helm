@@ -8,6 +8,7 @@
  *   attach-or-spawn / 崩溃重启 / 优雅停止。
  */
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { DesktopError } from './errors.js';
 import { resolveDesktopConfig, type DesktopConfig } from './config.js';
 import { HubSupervisor, type StartResult } from './supervisor.js';
@@ -88,8 +89,30 @@ async function runHeadless(): Promise<void> {
 
 // ---- GUI 模式 ----
 
+/**
+ * 安装包形态默认值：Hub payload 由 electron-builder extraResources 放在
+ * <resources>/hub（asar 之外，scripts/assemble-hub.mjs 组装）。仅填充未显式配置的
+ * HELM_DESKTOP_* 变量，env 覆盖语义不变；payload/全命令覆写存在时不碰入口。
+ */
+function applyPackagedHubDefaults(electron: ElectronApi): void {
+  if (!electron.app.isPackaged) return;
+  const resources = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (resources === undefined) return;
+  const entryConfigured =
+    process.env['HELM_DESKTOP_HUB_ENTRY'] !== undefined ||
+    process.env['HELM_DESKTOP_PAYLOAD_ENTRY'] !== undefined ||
+    process.env['HELM_DESKTOP_HUB_CMD'] !== undefined;
+  if (!entryConfigured) {
+    process.env['HELM_DESKTOP_HUB_ENTRY'] = join(resources, 'hub', 'kernel', 'dist', 'main.js');
+  }
+  if (process.env['HELM_DESKTOP_WEB_DIST'] === undefined) {
+    process.env['HELM_DESKTOP_WEB_DIST'] = join(resources, 'hub', 'web', 'dist');
+  }
+}
+
 async function runElectron(electron: ElectronApi): Promise<void> {
   const { app } = electron;
+  applyPackagedHubDefaults(electron);
   if (!app.requestSingleInstanceLock()) {
     log('已有桌面壳实例运行，本实例退出');
     app.quit();
@@ -200,7 +223,7 @@ async function main(): Promise<void> {
   const electron = getElectron();
   if (electron === null) {
     process.stderr.write(
-      '[helm-desktop] 未运行在 Electron 内。GUI 启动: 安装 electron 后执行 `npx electron packages/desktop`（详见 packages/desktop/README.md）；' +
+      '[helm-desktop] 未运行在 Electron 内。GUI 启动: pnpm --filter @helm/desktop exec electron .（详见 packages/desktop/README.md）；' +
         '无显示环境验证: HELM_DESKTOP_HEADLESS=1 tsx packages/desktop/src/main.ts\n',
     );
     process.exit(1);

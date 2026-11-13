@@ -1,0 +1,61 @@
+# electron-builder 生产打包配置（项目根 = packages/desktop，入口取 package.json
+# main → ./dist/main.js，即 tsc 产物，无需额外打包步骤）。
+#
+# 诚实边界（与 README「生产打包」一节同步维护）：
+# - Hub 运行时（kernel dist / web dist / 内置插件运行时资产）由 scripts/assemble-hub.mjs
+#   组装到 ./hub，经 extraResources 落在 <resources>/hub，整体在 asar 之外：Hub 以
+#   ELECTRON_RUN_AS_NODE 子进程运行，原生 esbuild 二进制与（未来 vendored 的）
+#   node_modules 必须是真实文件，进 asar 会被破坏（这正是 files/asarUnpack 的设计原因）。
+# - 未签名 / 未公证：无证书资产，mac 显式 identity: null；NSIS / AppImage / deb 无签名。
+# - 未提供应用图标：使用 Electron 默认图标，不虚构图标资产。
+# - 不含自动更新（src/updater.ts 仍为 Stub，updater 不在本配置范围）。
+
+# 占位反向域名（无正式分发域名前可先用；接入签名/公证时统一调整）。
+appId: dev.helm.desktop
+productName: Helm
+
+directories:
+  # 产物目录（区别于 tsc 的 dist/）：release/ 下生成各平台安装包与 *-unpacked 目录。
+  output: release
+
+# 桌面壳本体进 asar：体积小、纯 JS、无原生模块、无子进程直接执行的文件。
+asar: true
+files:
+  - package.json
+  - dist/**/*
+
+# asar 内目前没有任何原生产物；此模式是防御性声明——一旦未来把原生内容误放进
+# files，构建期会将其落到 app.asar.unpacked 保持真实文件语义（Hub 运行时本身
+# 走 extraResources，天然不受 asar 影响）。
+asarUnpack:
+  - "**/*.node"
+
+extraResources:
+  # assemble-hub.mjs 组装的 Hub payload → <resources>/hub（asar 之外）。
+  # 缺失时先执行 pnpm --filter @helm/desktop run assemble:hub（需仓库根 pnpm build）。
+  - from: hub
+    to: hub
+    filter:
+      - "**/*"
+
+mac:
+  target:
+    - dmg
+    - zip
+  # 显式禁用签名（无证书；默认 auto-discovery 会在无证环境产生不确定行为）。
+  # 未签名 dmg 首次打开需右键「打开」或 xattr -dr com.apple.quarantine 绕过 Gatekeeper。
+  identity: null
+
+win:
+  target:
+    - nsis
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  target:
+    - AppImage
+    - deb
+  maintainer: jay.wu <fjayblue@126.com>
