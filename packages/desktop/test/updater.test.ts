@@ -104,7 +104,7 @@ test('安装主链路：stage 只写 pending；activate 写 current（首次无 
     assert.ok(existsSync(path.join(info.releaseDir!, 'node_modules', FIXTURE_DEP)), '依赖须安装在晋升后的 release 目录内');
     assert.equal(installer.calls.length, 1);
     // release 目录是不可变 uuid 目录：releases/<name>/<version>/<uuid>
-    assert.match(info.releaseDir!, new RegExp(`releases/${FIXTURE_PACKAGE}/1\\.0\\.0/[0-9a-f]{16}$`));
+    assert.match(info.releaseDir!.split(path.sep).join('/'), new RegExp(`releases/${FIXTURE_PACKAGE}/1\\.0\\.0/[0-9a-f]{16}$`));
 
     // stage 只写 pending，不写 current。
     assert.ok(existsSync(path.join(payloadRoot, 'pending.json')));
@@ -702,13 +702,14 @@ test('HostNpmInstaller：默认命令经 node 直跑 execPath 旁 npm-cli.js，�
   const dir = await mkdtemp(path.join(tmpdir(), 'helm-desktop-npm-'));
   try {
     // 伪造 Node 安装布局：<dir>/node（真实 node 符号链接）+ node_modules/npm/bin/npm-cli.js。
-    symlinkSync(process.execPath, path.join(dir, 'node'));
+    const executable = path.join(dir, path.basename(process.execPath));
+    symlinkSync(process.execPath, executable);
     const npmCli = path.join(dir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
     mkdirSync(path.dirname(npmCli), { recursive: true });
     writeFileSync(npmCli, 'process.exit(7);\n');
     const payloadRoot = path.join(dir, 'payload-root');
     mkdirSync(payloadRoot, { recursive: true });
-    const installer = new HostNpmInstaller({ execPath: path.join(dir, 'node') });
+    const installer = new HostNpmInstaller({ execPath: executable });
     assert.match(installer.id, /npm-cli\.js/);
     const error = await rejectsWith(
       installer.install(payloadRoot),
@@ -716,7 +717,7 @@ test('HostNpmInstaller：默认命令经 node 直跑 execPath 旁 npm-cli.js，�
       (e) => {
         const argv = (e.details as { argv?: string[] }).argv ?? [];
         assert.ok(argv.includes('--ignore-scripts'), `必须携带 --ignore-scripts，实际: ${argv.join(' ')}`);
-        assert.ok(argv[0] === path.join(dir, 'node') && argv[1] === npmCli, '必须经 node 直接执行 npm-cli.js');
+        assert.ok(argv[0] === executable && argv[1] === npmCli, '必须经 node 直接执行 npm-cli.js');
       },
     );
     assert.match(error.message, /exit 7/);
