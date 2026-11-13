@@ -45,30 +45,28 @@ function rethrowWithConversation(err: unknown, conversationId: number, lead: str
   })
 }
 
-/** ConversationInputResult.entry.model -> assistant 回答文本块拼接（防御式解析）。 */
-function assistantTextOf(entry: ConversationInputResult['entry'] | undefined): string {
-  if (!entry || !Array.isArray(entry.model)) return ''
-  const parts: string[] = []
-  for (const message of entry.model) {
-    if (message === null || typeof message !== 'object') continue
-    const content = (message as { content?: unknown }).content
-    if (typeof content === 'string') {
-      parts.push(content)
-      continue
-    }
-    if (!Array.isArray(content)) continue
-    for (const block of content) {
-      if (
-        block !== null &&
-        typeof block === 'object' &&
-        (block as { type?: string }).type === 'text' &&
-        typeof (block as { text?: unknown }).text === 'string'
-      ) {
-        parts.push((block as { text: string }).text)
-      }
-    }
+/**
+ * 边界强校验 wait 响应：text 是协议权威回答（kernel 先 stash.redact 再返回），
+ * CLI 不再从 entry.model 重拼。任何畸形结构显式 invalid_response（details 带会话 ID）。
+ */
+function validateWaitResult(raw: unknown, conversationId: number): ConversationInputResult {
+  const invalid = (reason: string): CliError =>
+    new CliError(`Hub 等待回答响应非法：${reason}`, 'invalid_response', 1, { conversationId })
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw invalid(`需为 JSON 对象，实得 ${raw === null ? 'null' : Array.isArray(raw) ? 'array' : typeof raw}`)
   }
-  return parts.join('\n')
+  const r = raw as Record<string, unknown>
+  if (typeof r.conversationId !== 'number' || r.conversationId !== conversationId) {
+    throw invalid(`conversationId 应为 ${conversationId}，实得 ${JSON.stringify(r.conversationId)}`)
+  }
+  if (typeof r.submissionId !== 'string' || r.submissionId === '') throw invalid('submissionId 需为非空字符串')
+  if (typeof r.text !== 'string') throw invalid(`text 需为字符串（允许空串），实得 ${typeof r.text}`)
+  const entry = r.entry
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw invalid('entry 需为 JSON 对象')
+  const e = entry as Record<string, unknown>
+  if (typeof e.id !== 'string' || e.id === '') throw invalid('entry.id 需为非空字符串')
+  if (typeof e.kind !== 'string' || e.kind === '') throw invalid('entry.kind 需为非空字符串')
+  return raw as ConversationInputResult
 }
 
 export function askCommands(): CommandSpec[] {
@@ -107,24 +105,28 @@ export function askCommands(): CommandSpec[] {
         if (tags !== undefined) createBody.tags = coerceTags(tags)
         const hub = await ctx.hub()
         const created = await hub.post<ConversationSummary>('/api/conversations', createBody)
-        if (created === null || typeof created !== 'object' || typeof created.id !== 'number') {
-          throw new CliError('Hub 创建会话响应缺 number 字段 id', 'invalid_response')
+        if (
+          created === null || typeof created !== 'object' ||
+          typeof created.id !== 'number' || !Number.isSafeInteger(created.id) || created.id <= 0
+        ) {
+          throw new CliError('Hub 创建会话响应缺正安全整数 id', 'invalid_response')
         }
         const conversationId = created.id
 
         // 2) 提交并等待回答（whenBusy:reject——全新会话不应有在途回合，忙即显式失败）
         let result: ConversationInputResult
         try {
-          result = await hub.request<ConversationInputResult>(
+          const raw = await hub.request<unknown>(
             'POST',
             `/api/conversations/${conversationId}/input?wait=1`,
             { body: { text: prompt, whenBusy: 'reject' }, timeoutMs: timeoutMs ?? 0 },
           )
+          result = validateWaitResult(raw, conversationId)
         } catch (err) {
           rethrowWithConversation(err, conversationId, '')
         }
 
-        // 3) 可选：仅在成功取得回答后删除会话；删除失败保留会话并显式报错
+        // 3) 可选：仅在 wait 响应校验通过后删除会话；删除失败保留会话并显式报错
         let deleted = false
         if (parsed.flags.get('delete-on-success') === true) {
           try {
@@ -135,12 +137,12 @@ export function askCommands(): CommandSpec[] {
           }
         }
 
-        const answer = assistantTextOf(result?.entry)
+        const answer = result.text
         if (ctx.json) {
           printResult(ctx, {
             conversationId,
-            submissionId: result?.submissionId,
-            entryId: result?.entry?.id,
+            submissionId: result.submissionId,
+            entryId: result.entry.id,
             answer,
             deleted,
           })

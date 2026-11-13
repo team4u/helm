@@ -1,7 +1,8 @@
 /**
  * helm ask 单元测试：临时 HTTP server 模拟 Hub 契约（真实 fetch 边界）。
  * 覆盖：基本链路（创建+等待+输出）、stdin 管道并入、空输入拒绝、创建失败、
- * 生成失败保留会话、--delete-on-success、--timeout 校验与等待超时。
+ * 生成失败保留会话、--delete-on-success、--timeout 校验与等待超时、
+ * wait 响应强校验（malformed 不删会话、空 text 合法）。
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -9,6 +10,7 @@ import http from 'node:http'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import type { ConversationInputResult } from '@helm/protocol'
 import { runCli } from '../src/index.js'
 import type { StdinSource } from '../src/options.js'
 
@@ -98,11 +100,11 @@ function pipedStdin(text: string): StdinSource {
   return { isTTY: false, readAll: () => Promise.resolve(text) }
 }
 
-/** 模拟 ConversationInputResult（assistant 文本块在 entry.model）。 */
-const waitResult = (answer: string, conversationId = 9) => ({
+/** 模拟 ConversationInputResult：text 是协议权威回答（kernel stash.redact 后返回）。 */
+const waitResult = (answer: string, conversationId = 9): ConversationInputResult => ({
   conversationId,
   submissionId: 'sub-1',
-  text: 'x',
+  text: answer,
   entry: {
     id: 'e1',
     kind: 'pi.assistant',
@@ -284,6 +286,72 @@ test('ask --delete-on-success：成功后删除；删除失败保留会话并显
     assert.equal(res.out, '')
   } finally {
     await failHub.close()
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('ask wait 响应强校验：malformed/null/会话不符显式 invalid_response 且绝不删除；text 空串合法', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const badCases: Array<{ name: string; body: unknown }> = [
+    { name: '空对象', body: {} },
+    { name: 'null', body: null },
+    { name: 'conversationId 不符', body: { ...waitResult('回答'), conversationId: 8 } },
+    { name: 'submissionId 空串', body: { ...waitResult('回答'), submissionId: '' } },
+    { name: 'text 非字符串', body: { ...waitResult('回答'), text: 42 } },
+    { name: 'entry 缺失', body: { conversationId: 9, submissionId: 'sub-1', text: '回答' } },
+    { name: 'entry.id 空串', body: { ...waitResult('回答'), entry: { id: '', kind: 'pi.assistant' } } },
+    { name: 'entry.kind 缺失', body: { ...waitResult('回答'), entry: { id: 'e1' } } },
+  ]
+  try {
+    for (const { name, body } of badCases) {
+      const hub = await startHub({
+        'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
+        'POST /api/conversations/9/input?wait=1': () => ({ body }),
+        'DELETE /api/conversations/9': () => ({ status: 204 }),
+      })
+      try {
+        const res = await run(['ask', 'hi', '--delete-on-success', '--json'], makeEnv(hub.url, dir), ttyStdin())
+        assert.equal(res.code, 1, `${name} 应失败，实得 stdout：${res.out}`)
+        const envelope = JSON.parse(res.err) as { error: { code: string; message: string; details: { conversationId: number } } }
+        assert.equal(envelope.error.code, 'invalid_response', `${name}：${envelope.error.message}`)
+        assert.ok(envelope.error.message.includes('#9'), `${name}：${envelope.error.message}`)
+        assert.ok(envelope.error.message.includes('helm conversations get 9'), `${name}：${envelope.error.message}`)
+        assert.equal(envelope.error.details.conversationId, 9, name)
+        assert.equal(res.out, '', name)
+        // 校验失败绝不删除会话（含 --delete-on-success）
+        assert.ok(!hub.hits.some((h) => h.method === 'DELETE'), `${name}：不应发 DELETE`)
+      } finally {
+        await hub.close()
+      }
+    }
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+
+  // text 空串是合法回答：成功删除、stdout 无伪造内容
+  const emptyHub = await startHub({
+    'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
+    'POST /api/conversations/9/input?wait=1': () => ({ body: waitResult('') }),
+    'DELETE /api/conversations/9': () => ({ status: 204 }),
+  })
+  try {
+    const env = makeEnv(emptyHub.url, dir)
+    const json = await run(['ask', 'hi', '--delete-on-success', '--json'], env, ttyStdin())
+    assert.equal(json.code, 0, json.err)
+    assert.deepEqual(JSON.parse(json.out), {
+      conversationId: 9,
+      submissionId: 'sub-1',
+      entryId: 'e1',
+      answer: '',
+      deleted: true,
+    })
+    assert.ok(emptyHub.hits.some((h) => h.method === 'DELETE' && h.path === '/api/conversations/9'))
+
+    const human = await run(['ask', 'hi'], env, ttyStdin())
+    assert.equal(human.code, 0, human.err)
+    assert.equal(human.out, '')
+  } finally {
+    await emptyHub.close()
     await fsp.rm(dir, { recursive: true, force: true })
   }
 })
