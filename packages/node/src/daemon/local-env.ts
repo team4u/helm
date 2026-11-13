@@ -36,6 +36,7 @@ import { homedir, constants as osConstants, tmpdir } from 'node:os';
 import { basename, isAbsolute, join, resolve, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FileHandle } from 'node:fs/promises';
+import { normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helm/protocol';
 
 // ---------------------------------------------------------------------------
 // Result / 错误类型（code 对齐 @helm/protocol 的 Rpc*ErrorCode）
@@ -185,13 +186,36 @@ function resolveTimeoutMs(timeout: number | undefined): Result<undefined | numbe
   return ok(timeoutMs);
 }
 
-function resolvePath(cwd: string, path: string): string {
+/** 条目拼接按目标平台词法规则（真实宿主上与 node:path 宿主行为一致，注入测试下保持同一视角）。 */
+function joinTargetPath(platform: TargetPlatform, ...parts: string[]): string {
+  return platform === 'win32' ? win32.join(...parts) : join(...parts);
+}
+
+/** 父目录提取按目标平台词法规则（输入已是本原语解析后的规范路径）。 */
+function parentTargetPath(platform: TargetPlatform, p: string): string {
+  return platform === 'win32' ? win32.dirname(p) : resolve(p, '..');
+}
+
+/**
+ * 统一目标路径解析原语（file API 与 exec 共用，零探测、零猜测）：
+ *
+ * - posix 目标：保持宿主 node:path resolve 语义（非 Windows 行为不变）；
+ * - win32 目标：先做 `~` / `file://` 展开，再经 @helm/protocol 的
+ *   normalizeTargetPath 统一规范化——/mnt/<盘符>/…（WSL 挂载视图）与
+ *   /<盘符>/…（Git Bash / MSYS 盘符根视图）确定性转换为 <大写盘符>:\…
+ *   （而非宿主 resolve 误锚出的 <盘符>:\mnt\<盘符>\…），原生 Windows /
+ *   UNC / 相对路径仅做词法归一，无盘符 POSIX 根（/home、/tmp、裸 / 等）
+ *   显式结构化失败（code 'invalid'），绝不做 access 候选猜测；
+ *   相对路径锚定到按同一规则规范化后的会话 cwd（会话 cwd 也可能是
+ *   /mnt/<盘符>/… 视图）。
+ */
+export function resolveTargetPath(cwd: string, path: string, platform: TargetPlatform): Result<string> {
   let normalized = path;
   if (normalized === '~') {
     normalized = homedir();
   } else if (
     normalized.startsWith('~/') ||
-    (process.platform === 'win32' && normalized.startsWith('~\\'))
+    (platform === 'win32' && normalized.startsWith('~\\'))
   ) {
     normalized = join(homedir(), normalized.slice(2));
   } else if (normalized.startsWith('file://')) {
@@ -201,7 +225,21 @@ function resolvePath(cwd: string, path: string): string {
       // 畸形 URL 保留原样作为普通路径，文件方法维持不抛异常的契约。
     }
   }
-  return isAbsolute(normalized) ? resolve(normalized) : resolve(cwd, normalized);
+  if (platform !== 'win32') {
+    return ok(isAbsolute(normalized) ? resolve(normalized) : resolve(cwd, normalized));
+  }
+  const normalizedWin = normalizeTargetPath(normalized, 'win32');
+  if (!normalizedWin.ok) {
+    return err(new FileError('invalid', normalizedWin.reason, path));
+  }
+  if (win32.isAbsolute(normalizedWin.path)) {
+    return ok(win32.resolve(normalizedWin.path));
+  }
+  const base = normalizeTargetPath(cwd, 'win32');
+  if (!base.ok) {
+    return err(new FileError('invalid', `会话 cwd 无法解析：${base.reason}`, path));
+  }
+  return ok(win32.resolve(base.path, normalizedWin.path));
 }
 
 function fileKindFromStats(stats: { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }): FileKind | undefined {
@@ -618,12 +656,14 @@ class LocalBinaryReader implements BinaryReader {
 class LocalDirReader implements DirReader {
   #dir: DirHandleLike;
   #path: string;
+  #platform: TargetPlatform;
   #done = false;
   #closed = false;
 
-  constructor(dir: DirHandleLike, path: string) {
+  constructor(dir: DirHandleLike, path: string, platform: TargetPlatform) {
     this.#dir = dir;
     this.#path = path;
+    this.#platform = platform;
   }
 
   async next(maxEntries: number, signal?: AbortSignal): Promise<Result<{ entries: FileInfo[]; done: boolean }>> {
@@ -643,7 +683,7 @@ class LocalDirReader implements DirReader {
         }
         const loopAbort = abortResult(signal, this.#path);
         if (loopAbort) return loopAbort;
-        const entryPath = resolve(this.#path, entry.name);
+        const entryPath = joinTargetPath(this.#platform, this.#path, entry.name);
         let stats;
         try {
           stats = await lstat(entryPath);
@@ -935,6 +975,11 @@ export interface LocalExecutionEnvOptions {
   cwd: string;
   shellPath?: string;
   shellEnv?: NodeJS.ProcessEnv;
+  /**
+   * 目标平台标识（缺省 process.platform）：win32 目标启用 protocol
+   * normalizeTargetPath 的 POSIX 视图确定性转换；测试注入用，生产不传。
+   */
+  platform?: string;
 }
 
 export class LocalExecutionEnv {
@@ -943,16 +988,23 @@ export class LocalExecutionEnv {
   cwd: string;
   #shellPath?: string;
   #shellEnv?: NodeJS.ProcessEnv;
+  #platform: TargetPlatform;
   #activeChildPids = new Set<number>();
 
   constructor(options: LocalExecutionEnvOptions) {
     this.cwd = options.cwd;
     this.#shellPath = options.shellPath;
     this.#shellEnv = options.shellEnv;
+    this.#platform = targetPlatformOf(options.platform ?? process.platform);
+  }
+
+  /** file API 与 exec 共用的目标路径解析原语（见 resolveTargetPath）。 */
+  #resolvePath(path: string): Result<string> {
+    return resolveTargetPath(this.cwd, path, this.#platform);
   }
 
   async absolutePath(path: string): Promise<Result<string>> {
-    return ok(resolvePath(this.cwd, path));
+    return this.#resolvePath(path);
   }
 
   async joinPath(parts: string[]): Promise<Result<string>> {
@@ -968,7 +1020,39 @@ export class LocalExecutionEnv {
     const timeoutMsResult = resolveTimeoutMs(options?.timeout);
     if (!timeoutMsResult.ok) return timeoutMsResult;
     const timeoutMs = timeoutMsResult.value;
-    const cwd = options?.cwd !== undefined ? resolvePath(this.cwd, options.cwd) : this.cwd;
+    // win32 目标：options.cwd 与会话 cwd 统一经 resolveTargetPath 解析
+    // （/mnt/<盘符>/… 等 POSIX 视图确定性转换，无盘符根显式失败）；
+    // posix 目标保持宿主 node:path resolve 语义不变。
+    let cwd: string;
+    let originalCwd: string | undefined;
+    if (options?.cwd !== undefined) {
+      originalCwd = options.cwd;
+      const resolution = this.#resolvePath(options.cwd);
+      if (!resolution.ok) {
+        return err(
+          new ExecutionError(
+            'spawn_error',
+            `Invalid working directory: ${options.cwd}\n${resolution.error.message}\nCannot execute bash commands.`,
+          ),
+        );
+      }
+      cwd = resolution.value;
+    } else if (this.#platform === 'win32') {
+      // 会话 cwd 本身可能是 POSIX 视图：经同一原语规范化后再 spawn。
+      originalCwd = this.cwd;
+      const resolution = this.#resolvePath(this.cwd);
+      if (!resolution.ok) {
+        return err(
+          new ExecutionError(
+            'spawn_error',
+            `Invalid session cwd: ${this.cwd}\n${resolution.error.message}\nCannot execute bash commands.`,
+          ),
+        );
+      }
+      cwd = resolution.value;
+    } else {
+      cwd = this.cwd;
+    }
     // 字符串命令经 shell 执行；参数数组直接执行程序，不经 shell 解析。
     let program: string;
     let args: string[];
@@ -990,8 +1074,15 @@ export class LocalExecutionEnv {
       await access(cwd, constants.F_OK);
     } catch (error) {
       const cause = toError(error);
+      // win32 目标上解析可能改写了路径：诊断同时保留原始 cwd（options.cwd
+      // 或 POSIX 视图的会话 cwd）与解析后 cwd；posix 目标消息保持原样
+      // （非 Windows 行为不变）。
+      const origin =
+        originalCwd !== undefined && this.#platform === 'win32' && originalCwd !== cwd
+          ? ` (resolved from ${originalCwd})`
+          : '';
       return err(
-        new ExecutionError('spawn_error', `Working directory does not exist: ${cwd}\nCannot execute bash commands.`, cause),
+        new ExecutionError('spawn_error', `Working directory does not exist: ${cwd}${origin}\nCannot execute bash commands.`, cause),
       );
     }
     return await new Promise((resolvePromise) => {
@@ -1190,7 +1281,9 @@ export class LocalExecutionEnv {
   }
 
   async openTextLineReader(path: string, signal?: AbortSignal): Promise<Result<TextLineReader>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     try {
@@ -1207,7 +1300,9 @@ export class LocalExecutionEnv {
   }
 
   async readTextFile(path: string, signal?: AbortSignal): Promise<Result<string>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     try {
@@ -1240,7 +1335,9 @@ export class LocalExecutionEnv {
   }
 
   async readBinaryFile(path: string, signal?: AbortSignal): Promise<Result<Uint8Array>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     try {
@@ -1255,7 +1352,9 @@ export class LocalExecutionEnv {
     options: { noFollow?: boolean } | undefined,
     signal?: AbortSignal,
   ): Promise<Result<BinaryReader>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     const noFollow = options?.noFollow === true;
@@ -1299,11 +1398,13 @@ export class LocalExecutionEnv {
   }
 
   async writeFile(path: string, content: string | Uint8Array, signal?: AbortSignal): Promise<Result<void>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     try {
-      await mkdir(resolve(resolved, '..'), { recursive: true });
+      await mkdir(parentTargetPath(this.#platform, resolved), { recursive: true });
       const afterMkdirAbort = abortResult(signal, resolved);
       if (afterMkdirAbort) return afterMkdirAbort;
       await writeFile(resolved, content, { signal });
@@ -1314,11 +1415,13 @@ export class LocalExecutionEnv {
   }
 
   async appendFile(path: string, content: string | Uint8Array, signal?: AbortSignal): Promise<Result<void>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     try {
-      await mkdir(resolve(resolved, '..'), { recursive: true });
+      await mkdir(parentTargetPath(this.#platform, resolved), { recursive: true });
       const afterMkdirAbort = abortResult(signal, resolved);
       if (afterMkdirAbort) return afterMkdirAbort;
       await appendFile(resolved, content);
@@ -1330,7 +1433,9 @@ export class LocalExecutionEnv {
   }
 
   async truncateFile(path: string, size: number, signal?: AbortSignal): Promise<Result<void>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     if (!Number.isSafeInteger(size) || size < 0) {
@@ -1350,7 +1455,9 @@ export class LocalExecutionEnv {
   }
 
   async flushFile(path: string, signal?: AbortSignal): Promise<Result<void>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     let file: FileHandle | undefined;
@@ -1371,8 +1478,12 @@ export class LocalExecutionEnv {
   }
 
   async renameFile(sourcePath: string, destinationPath: string, signal?: AbortSignal): Promise<Result<void>> {
-    const source = resolvePath(this.cwd, sourcePath);
-    const destination = resolvePath(this.cwd, destinationPath);
+    const sourceResolution = this.#resolvePath(sourcePath);
+    if (!sourceResolution.ok) return sourceResolution;
+    const source = sourceResolution.value;
+    const destinationResolution = this.#resolvePath(destinationPath);
+    if (!destinationResolution.ok) return destinationResolution;
+    const destination = destinationResolution.value;
     const aborted = abortResult(signal, destination);
     if (aborted) return aborted;
     try {
@@ -1384,7 +1495,9 @@ export class LocalExecutionEnv {
   }
 
   async fileInfo(path: string, signal?: AbortSignal): Promise<Result<FileInfo>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     try {
@@ -1395,7 +1508,9 @@ export class LocalExecutionEnv {
   }
 
   async listDir(path: string, signal?: AbortSignal): Promise<Result<FileInfo[]>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     try {
@@ -1404,7 +1519,7 @@ export class LocalExecutionEnv {
       for (const entry of entries) {
         const loopAbort = abortResult(signal, resolved);
         if (loopAbort) return loopAbort;
-        const entryPath = resolve(resolved, entry.name);
+        const entryPath = joinTargetPath(this.#platform, resolved, entry.name);
         try {
           const info = fileInfoFromStats(entryPath, await lstat(entryPath));
           if (info.ok) infos.push(info.value);
@@ -1419,7 +1534,9 @@ export class LocalExecutionEnv {
   }
 
   async openDirReader(path: string, signal?: AbortSignal): Promise<Result<DirReader>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     try {
@@ -1429,14 +1546,16 @@ export class LocalExecutionEnv {
         await dir.close().catch(() => undefined);
         return afterOpenAbort;
       }
-      return ok(new LocalDirReader(dir, resolved));
+      return ok(new LocalDirReader(dir, resolved, this.#platform));
     } catch (error) {
       return err(toFileError(error, resolved));
     }
   }
 
   async canonicalPath(path: string, signal?: AbortSignal): Promise<Result<string>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     try {
@@ -1454,7 +1573,9 @@ export class LocalExecutionEnv {
   }
 
   async createDir(path: string, options: { recursive?: boolean } | undefined, signal?: AbortSignal): Promise<Result<void>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     try {
@@ -1470,7 +1591,9 @@ export class LocalExecutionEnv {
     options: { recursive?: boolean; force?: boolean } | undefined,
     signal?: AbortSignal,
   ): Promise<Result<void>> {
-    const resolved = resolvePath(this.cwd, path);
+    const resolution = this.#resolvePath(path);
+    if (!resolution.ok) return resolution;
+    const resolved = resolution.value;
     const aborted = abortResult(signal, resolved);
     if (aborted) return aborted;
     try {
