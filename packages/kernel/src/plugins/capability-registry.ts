@@ -93,6 +93,9 @@ export interface ActionEntry {
   cli?: PluginActionSpec<unknown, unknown>['cli'];
   exposeAsTool: boolean;
   idempotent?: boolean;
+  /** 工具使用指引（exposeAsTool 激活时投射；已校验防御拷贝）。 */
+  promptSnippet?: string;
+  promptGuidelines?: string[];
   toolAlias: string;
   scope?: ConversationScope;
   handler: (input: never, context: PluginActionContext) => unknown;
@@ -129,6 +132,38 @@ function pluginRoutePrefix(pluginId: string): string {
   return `/api/plugins/${encodeURIComponent(pluginId)}/routes`;
 }
 
+/**
+ * 工具使用指引字段注册边界强校验（ctx.tool 与 ctx.action 同标准，防提示目录
+ * 被空文本污染）：promptSnippet 非空非纯空白字符串；promptGuidelines 非空
+ * 数组且逐项非空非纯空白。通过后返回防御拷贝（数组复制），声明者注册后
+ * 原地修改不回灌已校验数据。
+ */
+function validatedPromptFields(
+  what: string,
+  fields: { promptSnippet?: unknown; promptGuidelines?: unknown },
+  code: 'invalid_tool_spec' | 'invalid_action_spec',
+): { promptSnippet?: string; promptGuidelines?: string[] } {
+  if (
+    fields.promptSnippet !== undefined &&
+    (typeof fields.promptSnippet !== 'string' || fields.promptSnippet.trim().length === 0)
+  ) {
+    throw new HelmError(code, `${what} 的 promptSnippet 必须是非空非纯空白字符串`, 400);
+  }
+  const guidelines = fields.promptGuidelines;
+  if (
+    guidelines !== undefined &&
+    (!Array.isArray(guidelines) ||
+      guidelines.length === 0 ||
+      guidelines.some((item) => typeof item !== 'string' || item.trim().length === 0))
+  ) {
+    throw new HelmError(code, `${what} 的 promptGuidelines 必须是非空字符串数组（每项非空非纯空白）`, 400);
+  }
+  return {
+    ...(typeof fields.promptSnippet === 'string' ? { promptSnippet: fields.promptSnippet } : {}),
+    ...(Array.isArray(guidelines) ? { promptGuidelines: [...(guidelines as string[])] } : {}),
+  };
+}
+
 function toManifest(entry: ActionEntry): ActionManifest {
   const manifest: ActionManifest = {
     pluginId: entry.pluginId,
@@ -139,6 +174,10 @@ function toManifest(entry: ActionEntry): ActionManifest {
     exposeAsTool: entry.exposeAsTool,
     ...(entry.scope !== undefined ? { scope: entry.scope } : {}),
     ...(entry.idempotent !== undefined ? { idempotent: entry.idempotent } : {}),
+    ...(entry.promptSnippet !== undefined ? { promptSnippet: entry.promptSnippet } : {}),
+    ...(entry.promptGuidelines !== undefined
+      ? { promptGuidelines: [...entry.promptGuidelines] }
+      : {}),
   };
   if (entry.cli) manifest.cli = entry.cli;
   return manifest;
@@ -302,6 +341,7 @@ export class CapabilityRegistry {
     if (spec.idempotent !== undefined && typeof spec.idempotent !== 'boolean') {
       throw new HelmError('validation_error', `插件 ${pluginId} 动作 ${spec.id} 的 idempotent 必须为 boolean`, 400);
     }
+    const prompt = validatedPromptFields(`插件 ${pluginId} 动作 ${spec.id}`, spec, 'invalid_action_spec');
 
     let pluginActions = this.actions.get(pluginId);
     if (!pluginActions) {
@@ -324,6 +364,8 @@ export class CapabilityRegistry {
       cli: spec.cli,
       exposeAsTool: spec.exposeAsTool === true,
       ...(spec.idempotent !== undefined ? { idempotent: spec.idempotent } : {}),
+      ...(prompt.promptSnippet !== undefined ? { promptSnippet: prompt.promptSnippet } : {}),
+      ...(prompt.promptGuidelines !== undefined ? { promptGuidelines: prompt.promptGuidelines } : {}),
       toolAlias: actionToolAlias(pluginId, spec.id),
       ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
       handler: spec.handler as (input: never, context: PluginActionContext) => unknown,
@@ -355,25 +397,7 @@ export class CapabilityRegistry {
       }
       assertSchemaCompilable(spec.structuredOutputSchema);
     }
-    if (spec.promptSnippet !== undefined && (typeof spec.promptSnippet !== 'string' || spec.promptSnippet.length === 0)) {
-      throw new HelmError(
-        'invalid_tool_spec',
-        `插件 ${pluginId} 工具 ${spec.name} 的 promptSnippet 必须是非空字符串`,
-        400,
-      );
-    }
-    if (
-      spec.promptGuidelines !== undefined &&
-      (!Array.isArray(spec.promptGuidelines) ||
-        spec.promptGuidelines.length === 0 ||
-        spec.promptGuidelines.some((item) => typeof item !== 'string' || item.length === 0))
-    ) {
-      throw new HelmError(
-        'invalid_tool_spec',
-        `插件 ${pluginId} 工具 ${spec.name} 的 promptGuidelines 必须是非空字符串数组（每项非空）`,
-        400,
-      );
-    }
+    const prompt = validatedPromptFields(`插件 ${pluginId} 工具 ${spec.name}`, spec, 'invalid_tool_spec');
     if (typeof spec.execute !== 'function') {
       throw new HelmError('invalid_tool_spec', `插件 ${pluginId} 工具 ${spec.name} 缺少 execute`, 400);
     }
@@ -389,7 +413,10 @@ export class CapabilityRegistry {
     }
     assertSchemaCompilable(spec.inputSchema);
 
-    pluginTools.set(spec.name, { pluginId, spec: spec as PluginToolSpec });
+    // 指引数组换入防御拷贝：声明者注册后原地 push/splice 不污染已校验数据
+    const storedToolSpec: PluginToolSpec<TIn> =
+      prompt.promptGuidelines === undefined ? spec : { ...spec, promptGuidelines: prompt.promptGuidelines };
+    pluginTools.set(spec.name, { pluginId, spec: storedToolSpec as PluginToolSpec });
   }
 
   registerRoute(pluginId: string, spec: PluginRouteSpec): void {
@@ -492,7 +519,9 @@ export class CapabilityRegistry {
               ? { structuredOutputSchema: tool.spec.structuredOutputSchema }
               : {}),
             ...(tool.spec.promptSnippet !== undefined ? { promptSnippet: tool.spec.promptSnippet } : {}),
-            ...(tool.spec.promptGuidelines !== undefined ? { promptGuidelines: tool.spec.promptGuidelines } : {}),
+            ...(tool.spec.promptGuidelines !== undefined
+              ? { promptGuidelines: [...tool.spec.promptGuidelines] }
+              : {}),
             sourcePluginId: pluginId,
             sourceKind: 'tool',
           });
@@ -507,6 +536,10 @@ export class CapabilityRegistry {
             name: action.toolAlias,
             description: action.description,
             inputSchema: action.inputSchema,
+            ...(action.promptSnippet !== undefined ? { promptSnippet: action.promptSnippet } : {}),
+            ...(action.promptGuidelines !== undefined
+              ? { promptGuidelines: [...action.promptGuidelines] }
+              : {}),
             sourcePluginId: pluginId,
             sourceKind: 'action',
             qualifiedId: `${pluginId}.${action.id}`,

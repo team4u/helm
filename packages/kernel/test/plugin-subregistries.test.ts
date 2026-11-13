@@ -492,6 +492,9 @@ test('CapabilityRegistry：工具与动作声明、列表派生与作用域校�
   const actions = cap.listActions(['p1']);
   assert.equal(actions.length, 1);
   assert.equal(actions[0]!.id, 'doSomething');
+  // 未声明提示字段的清单不携带 prompt 键（no-options 行为不变）
+  assert.equal('promptSnippet' in actions[0]!, false);
+  assert.equal('promptGuidelines' in actions[0]!, false);
 
   const tools = cap.listTools(['p1'], fakeConv);
   assert.equal(tools.length, 2); // 1 direct tool + 1 exposeAsTool action

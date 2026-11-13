@@ -310,7 +310,23 @@ export interface PluginActionCliSpec {
   timeoutMs?: number
 }
 
-export interface PluginActionSpec<TIn, TOut> {
+/**
+ * 工具使用指引公共字段（ctx.tool 与 ctx.action 声明同语义；ActionManifest 随附）：
+ * - promptSnippet：完整段落文本，原样注入 prompt.tools.<name> 命名 section；
+ * - promptGuidelines：要点列表，聚合进 prompt.tools.guidelines 共享 section；
+ *   两者可同时声明；均未声明时仅依赖 provider 原生 tools 声明。
+ * 注册边界强校验（防提示目录被空文本污染）：promptSnippet 非空非纯空白
+ * 字符串；promptGuidelines 非空数组且逐项非空非纯空白。仅激活工具投射进
+ * 系统提示词（动作需 exposeAsTool 且 scope 命中），未激活不产生幻影文本。
+ */
+export interface PluginPromptFields {
+  /** 完整段落文本，原样注入 prompt.tools.<name> 命名 section。 */
+  promptSnippet?: string
+  /** 要点列表（每项非空非纯空白字符串），聚合进 prompt.tools.guidelines 共享 section。 */
+  promptGuidelines?: string[]
+}
+
+export interface PluginActionSpec<TIn, TOut> extends PluginPromptFields {
   /** 动作 ID（plugin 内唯一）；映射为 POST /api/actions/:pluginId/:actionId。 */
   id: string
   description: string
@@ -349,7 +365,7 @@ export interface PluginToolContext {
   onUpdate?(partial: { output: string | Array<{ type: 'text'; text: string }>; isError?: boolean }): void
 }
 
-export interface PluginToolSpec<TIn = Record<string, unknown>> {
+export interface PluginToolSpec<TIn = Record<string, unknown>> extends PluginPromptFields {
   name: string
   description: string
   inputSchema: JsonSchema
@@ -357,14 +373,6 @@ export interface PluginToolSpec<TIn = Record<string, unknown>> {
   structuredOutputSchema?: JsonSchema
   /** 会话作用域：工具可见性与 executeTool 的双重过滤条件。 */
   scope?: ConversationScope
-  /**
-   * 工具使用指引（仅激活工具投射进系统提示词，未激活不产生幻影文本）：
-   * - promptSnippet：完整段落文本，原样注入 prompt.tools.<name> 命名 section；
-   * - promptGuidelines：要点列表（每项非空字符串），聚合进 prompt.tools.guidelines
-   *   共享 section；两者可同时声明；均未声明时仅依赖 provider 原生 tools 声明。
-   */
-  promptSnippet?: string
-  promptGuidelines?: string[]
   execute(input: TIn, context: PluginToolContext): MaybePromise<unknown>
 }
 
@@ -557,7 +565,7 @@ export interface PluginManagedMeta {
 }
 
 /** 单个已注册动作的可串行化清单，供 CLI / Web / Workflow 消费。 */
-export interface ActionManifest {
+export interface ActionManifest extends PluginPromptFields {
   pluginId: string
   id: string
   description: string
