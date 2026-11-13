@@ -15,6 +15,7 @@ import { sha256hex, type EnvFabric } from '../env/index.js'
 import type { ConfigService } from '../services/index.js'
 import type { SecretStash } from '../services/index.js'
 import { isAbsoluteTargetPath, runShell } from './tools.js'
+import { invalidPathText, normalizePathForTarget, targetPlatformForNode } from './target-platform.js'
 import { buildPosixHostShim, buildWindowsCmdWrapper, buildWindowsPosixShim, type CliShimPlan } from './cli-shim.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { compareStrictSemVer, hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmError, safeJson, unwrapUpgradeCheckRpc, unwrapUpgradeRpc, validateUpgradeCheckResult, validateUpgradeResult } from './semver.js'
@@ -657,6 +658,8 @@ export class NodeManager {
    * 缺省参数绝不误跑 Hub：带 conversationId 时继承该会话的远端绑定。
    * cwd 绝对性按目标形状判定（POSIX / 与 Windows 盘符/UNC 均合法），
    * 盘符相对（C:relative）拒绝；绝不用 Hub 宿主 isAbsolute 拒 Windows 路径。
+   * cwd 随后按目标节点平台规范化（win32 目标上 POSIX 视图转 Windows 路径；
+   * 平台未知不猜；无法映射的裸 POSIX 根 validation_error 并保留原始 cwd）。
    */
   resolveExecTarget(req: { nodeId?: string; cwd?: string; conversationId?: number }): { nodeId: string; cwd: string | undefined } {
     let nodeId = req.nodeId
@@ -675,6 +678,24 @@ export class NodeManager {
         400,
         { cwd },
       )
+    }
+    // 目标平台感知的 cwd 规范化（与 runShell 同一原语，不在此另写规则）：
+    // local 用 Hub 宿主平台，远端仅用注册登记平台（离线/未上报 → 平台
+    // 未知，原样透传不猜，由下方在线检查给出真实原因）；win32 目标上
+    // WSL / Git Bash POSIX 视图转规范 Windows 路径，无法映射的裸 POSIX 根
+    // 显式 validation_error（保留原始 cwd）。
+    const platformInfo = targetPlatformForNode(this.envFabric, nodeId)
+    if (cwd !== undefined) {
+      const cwdNorm = normalizePathForTarget(cwd, platformInfo)
+      if (!cwdNorm.ok) {
+        throw new HelmError(
+          'validation_error',
+          `cwd 无法规范化到目标节点平台：${cwdNorm.reason}`,
+          400,
+          { cwd, pathCode: cwdNorm.code },
+        )
+      }
+      cwd = cwdNorm.path
     }
     // 远端且未给定 cwd：拒绝盲跑（节点守护进程 dataDir 不是用户的意图靶点；
     // 安全目标：缺省参数绝不把远端会话命令误跑 Hub 或随机目录）。
