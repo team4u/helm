@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Run all tests on POSIX
+        if: runner.os != 'Windows'
+        run: pnpm test:all
+
+      - name: Run unit tests on Windows
+        if: runner.os == 'Windows'
+        run: pnpm test:unit
+
+      - name: Run cross-platform path regression tests on Windows
+        if: runner.os == 'Windows'
+        run: >-
+          node scripts/run-tests.mjs
+          packages/protocol/test/target-path-platform.test.ts
+          packages/kernel/test/target-cwd.test.ts
+          packages/kernel/test/target-platform-paths.test.ts
+          packages/kernel/test/spawn-cwd-normalize.test.ts
+          packages/kernel/test/conversation-cwd-normalize.test.ts
+          packages/kernel/test/herdr-spawn-cwd.test.ts
+          packages/node/test/node-local-env-win32-path.test.ts

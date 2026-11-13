@@ -44,18 +44,20 @@ interface SpawnEnv {
   close(): Promise<void>
 }
 
-/** 结构性 envFabric stub：仅 registry.get(nodeId).platform 平台事实。 */
-function platformHostOf(platforms: Record<string, string>): TrustedPlatformHost {
+/** 结构性 envFabric stub：远端取 registry，local 可注入 Hub 平台事实。 */
+function platformHostOf(platforms: Record<string, string>, hubPlatform?: string): TrustedPlatformHost {
   return {
     registry: {
       get: (nodeId: string): { platform: string } | undefined =>
         platforms[nodeId] !== undefined ? { platform: platforms[nodeId] } : undefined,
     },
+    hubPlatform: () => hubPlatform,
   }
 }
 
 async function openSpawnEnv(options: {
   platforms?: Record<string, string>
+  hubPlatform?: string
   profiles?: Record<string, { cwd?: string; nodeId?: string }>
 } = {}): Promise<SpawnEnv> {
   const models = createModels()
@@ -83,8 +85,8 @@ async function openSpawnEnv(options: {
     stashEnvFor: (id) => stash.envFor(id),
     redact: (t) => stash.redact(t),
     artifacts: new ArtifactService(dataDir, { get: () => undefined, list: () => [], put: () => {}, deleteByConversation: () => {} } as never),
-    // 结构性平台事实 stub（TrustedPlatformHost；local 分支由收口层自.process.platform 承担）。
-    envFabric: platformHostOf(options.platforms ?? {}) as unknown as EnvFabric,
+    // 结构性平台事实 stub（远端 registry；local 由显式 Hub 平台注入）。
+    envFabric: platformHostOf(options.platforms ?? {}, options.hubPlatform) as unknown as EnvFabric,
     harness,
     getLastAssistantText: (id) => lastTexts.get(id),
     resolveModel: () => ({ provider: 'faux', modelId: 'faux-1' }),
@@ -176,7 +178,7 @@ async function openSpawnEnv(options: {
 }
 
 test('新建 spawn：cwd 词法归一进 SDK 创建、镜像与 onResolved（local 平台）', { timeout: 60_000 }, async () => {
-  const env = await openSpawnEnv()
+  const env = await openSpawnEnv({ hubPlatform: 'linux' })
   try {
     env.faux.setResponses([fauxAssistantMessage('ok')])
     let resolved: { effectiveCwd?: string } | undefined
@@ -188,8 +190,7 @@ test('新建 spawn：cwd 词法归一进 SDK 创建、镜像与 onResolved（loc
         resolved = info as { effectiveCwd?: string }
       },
     } as never)
-    if (process.platform === 'win32') assert.fail('本用例预期 POSIX 宿主')
-    assert.equal(resolved?.effectiveCwd, '/tmp/helm/wt/a/c', 'onResolved 回传规范化 cwd')
+    assert.equal(resolved?.effectiveCwd, '/tmp/helm/wt/a/c', '注入 POSIX Hub 平台后 onResolved 回传规范化 cwd')
     const mirror = [...env.mirrors.values()].at(-1)!
     assert.equal(mirror.cwd, '/tmp/helm/wt/a/c', '子会话镜像登记规范化 cwd')
   } finally {
@@ -306,6 +307,7 @@ test('resume：显式 cwd 经 updateConversation 端口应用（生产为同一�
 /** 最小 RuntimeAgentSpawn 装配（只驱动 resolveSpawnTarget；其余端口 throw）。 */
 function spawnTargetResolver(options: {
   platforms: Record<string, string>
+  hubPlatform?: string
   parent: { cwd?: string; nodeId?: string }
   profiles?: Record<string, { cwd?: string; nodeId?: string }>
 }) {
@@ -320,7 +322,7 @@ function spawnTargetResolver(options: {
     tracker: {} as never,
     conversations: conversations as never,
     events: {} as never,
-    envFabric: platformHostOf(options.platforms) as unknown as EnvFabric,
+    envFabric: platformHostOf(options.platforms, options.hubPlatform) as unknown as EnvFabric,
     modelsRegistry: {} as never,
     hookBridge: {} as never,
     stashService: {} as never,
@@ -346,11 +348,9 @@ test('resolveSpawnTarget：sourceCwd 按最终节点平台收口（win32 转换 
   const unknown = spawnTargetResolver({ platforms: {}, parent: { cwd: '/home/keep' } })
   assert.equal((await unknown({ parentConversationId: 1 })).sourceCwd, '/home/keep')
 
-  // local posix：词法归一。
-  if (process.platform !== 'win32') {
-    const local = spawnTargetResolver({ platforms: {}, parent: {} })
-    assert.equal((await local({ parentConversationId: 1, requestCwd: '/tmp/x/./y/../z' })).sourceCwd, '/tmp/x/z')
-  }
+  // local posix：显式注入 Hub 平台，跨宿主稳定验证词法归一。
+  const local = spawnTargetResolver({ platforms: {}, hubPlatform: 'linux', parent: {} })
+  assert.equal((await local({ parentConversationId: 1, requestCwd: '/tmp/x/./y/../z' })).sourceCwd, '/tmp/x/z')
 })
 
 test('resolveSpawnTarget：远端 win32 目标上的坏 POSIX sourceCwd 显式拒绝（worktree 源目录不静默）', { timeout: 60_000 }, async () => {

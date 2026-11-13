@@ -49,6 +49,8 @@ import type { KernelRuntime } from './runtime.js'
 import type { BootstrappedKernelContext } from './runtime-bootstrap.js'
 
 export interface RuntimeServicesInit extends BootstrappedKernelContext {
+  /** Hub 平台事实注入（测试用；缺省 process.platform）。 */
+  hubPlatform?: () => string | undefined
   defaultModel?: string
   cwd: string
   hubUrl?: string
@@ -183,6 +185,7 @@ export function assembleRuntimeServices(
 
   // ---- 跨平台节点底座（EnvFabric）----
   const envFabric = createEnvFabric({
+    hubPlatform: init.hubPlatform,
     authenticate: tokenAuthenticator((nodeId) => nodes?.nodeDigestOf(nodeId)),
     cliBinDir: () => nodes?.cliBinDir,
     envOptions: ({ conversationId, cwd, nodeId }) =>

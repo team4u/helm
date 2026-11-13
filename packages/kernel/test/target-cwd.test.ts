@@ -1,9 +1,9 @@
 /**
  * runtime/target-cwd 单元测试（kernel cwd 收口唯一实现）：
- * - resolveTargetPlatform：local → process.platform 语义映射；远端仅信
- *   TrustedNodePlatformSource 上报（未上报 / 无来源 = undefined，不猜）；
- * - trustedPlatformFromEnvFabric：local → process.platform；远端读 registry
- *   注册事实（未注册 / 空 platform = undefined）；
+ * - resolveTargetPlatform：local 默认 process.platform，显式可信来源可注入
+ *   Hub 平台；远端仅信 TrustedNodePlatformSource 上报；
+ * - trustedPlatformFromEnvFabric：local 默认 process.platform、支持 Hub 注入；
+ *   远端读 registry 注册事实（未注册 / 空 platform = undefined）；
  * - normalizeCwdForPlatform / normalizeSessionCwd：相对路径拒绝（含盘符相对）、
  *   平台未知透传不改写、win32 目标确定性转换（/mnt/<盘符>、/<盘符>、//srv）
  *   与不可映射 POSIX 根显式失败（坏 POSIX cwd 绝不进入收口结果）。
@@ -41,14 +41,14 @@ describe('resolveTargetPlatform：目标平台解析（可信来源）', () => {
     assert.equal(resolveTargetPlatform('any-remote'), undefined, '无来源时远端一律未知')
   })
 
-  it('来源只对远端生效：local 不经来源（宿主平台即事实）', () => {
-    const lying = (): string => 'win32'
-    assert.equal(resolveTargetPlatform('local', lying), isWinHub ? 'win32' : 'posix')
+  it('local 默认宿主平台，但显式可信来源可注入 Hub 平台', () => {
+    const injected = (): string => 'linux'
+    assert.equal(resolveTargetPlatform('local', injected), 'posix')
   })
 })
 
 describe('trustedPlatformFromEnvFabric：EnvFabric 注册事实适配', () => {
-  it('local → process.platform；远端读 registry.get(nodeId).platform；未注册 → undefined', () => {
+  it('local 默认 process.platform；可注入 Hub 平台；远端读 registry.get(nodeId).platform', () => {
     const host = {
       registry: {
         get: (nodeId: string): { platform: string } | undefined =>
@@ -60,6 +60,15 @@ describe('trustedPlatformFromEnvFabric：EnvFabric 注册事实适配', () => {
     assert.equal(source('win-node'), 'win32')
     assert.equal(source('empty'), undefined, '空 platform 上报视为未知')
     assert.equal(source('offline-node'), undefined)
+  })
+
+  it('EnvFabric 显式注入 Hub 平台时 local 使用注入事实', () => {
+    const source = trustedPlatformFromEnvFabric({
+      registry: { get: () => undefined },
+      hubPlatform: () => 'linux',
+    } as never)
+    assert.equal(source('local'), 'linux')
+    assert.equal(source('remote'), undefined)
   })
 
   it('envFabric 缺席时 local 仍可解析（远端未知）', () => {

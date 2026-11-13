@@ -33,12 +33,18 @@ interface Env {
   close(): Promise<void>
 }
 
-async function makeEnv(): Promise<Env> {
+async function makeEnv(options: { hubPlatform?: string } = { hubPlatform: 'linux' }): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-conv-cwd-'))
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({
+    dataDir,
+    cwd: dataDir,
+    model: 'faux/faux-1',
+    models,
+    hubPlatform: () => options.hubPlatform,
+  })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   return {
     dataDir,
@@ -120,11 +126,7 @@ test('create：local 平台词法归一（点段消解）后持久化到镜像',
   const env = await makeEnv()
   try {
     const summary = await env.app.kernel.createConversation({ cwd: '/tmp/helm/a/./b/../c' })
-    if (process.platform === 'win32') {
-      // Windows 宿主：/tmp 是不可映射 POSIX 根，显式拒绝（本用例只在 POSIX 宿主断言归一）。
-      assert.fail('本用例预期 POSIX 宿主（CI linux）')
-    }
-    assert.equal(summary.cwd, '/tmp/helm/a/c')
+    assert.equal(summary.cwd, '/tmp/helm/a/c', '注入 POSIX Hub 平台后 cwd 跨宿主归一')
     assert.equal(env.app.kernel.getConversation(summary.id).cwd, '/tmp/helm/a/c')
   } finally {
     await env.close()

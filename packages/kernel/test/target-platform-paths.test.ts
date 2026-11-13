@@ -139,12 +139,14 @@ function makeRecordingFileEnv(files: Map<string, string>): {
 /** 平台可控的 EnvFabric 替身：nodePlatformOf / isOnline / env* 按参数返回。 */
 function makePlatformFabric(options: {
   platform?: string
+  hubPlatform?: string
   online?: boolean
   env?: unknown
 }): EnvFabric {
   const online = options.online ?? true
   return {
     registry: {} as never,
+    hubPlatform: () => options.hubPlatform,
     envFor: () => options.env as never,
     envForTarget: () => options.env as never,
     isOnline: () => online,
@@ -220,6 +222,18 @@ describe('targetPlatformForNode：平台选择（local 宿主 / 远端注册值 
     assert.ok(info.known, 'local 平台恒已知')
     assert.equal(info.platform, process.platform === 'win32' ? 'win32' : 'posix')
     assert.equal(info.reported, process.platform)
+  })
+
+  it('local：可注入 Hub 平台事实；缺省仍回退宿主平台', { timeout: 60_000 }, () => {
+    const injected = targetPlatformForNode({ hubPlatform: () => 'linux' }, 'local')
+    assert.equal(injected.known, true)
+    if (injected.known) {
+      assert.equal(injected.platform, 'posix')
+      assert.equal(injected.reported, 'linux')
+    }
+    const fallback = targetPlatformForNode(undefined, 'local')
+    assert.equal(fallback.known, true)
+    if (fallback.known) assert.equal(fallback.reported, process.platform)
   })
 
   it('远端：仅取注册登记平台；win32 → win32，linux/darwin → posix', { timeout: 60_000 }, () => {
@@ -327,7 +341,7 @@ describe('runShell：目标平台感知 cwd 规范化', { timeout: 60_000 }, () 
     const shell = makeRecordingShellEnv()
     const deps = await makeDeps(
       join(rootDir, 'rs7'),
-      makePlatformFabric({ env: shell.env }),
+      makePlatformFabric({ hubPlatform: 'linux', env: shell.env }),
     )
     const dir = join(rootDir, 'rs7-local')
     const result = await runShell(deps, 'pwd', { cwd: dir })
@@ -601,8 +615,8 @@ describe('resolveExecTarget：平台感知 cwd 规范化（HTTP exec 靶点）',
     assert.deepEqual(t, { nodeId: 'posix-node', cwd: '/mnt/d/proj' })
   })
 
-  it('local：缺省 cwd 原样（POSIX Hub 词法归一）', { timeout: 60_000 }, () => {
-    const manager = makeManager(makePlatformFabric({}))
+  it('local：缺省 cwd 原样（注入 POSIX Hub 词法归一）', { timeout: 60_000 }, () => {
+    const manager = makeManager(makePlatformFabric({ hubPlatform: 'linux' }))
     const t = manager.resolveExecTarget({})
     assert.deepEqual(t, { nodeId: 'local', cwd: '/hub/cwd' })
   })

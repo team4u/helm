@@ -2,7 +2,8 @@
  * 目标节点平台感知的路径规范化（kernel 执行链唯一入口）。
  *
  * 平台来源纪律（诚实性红线）：
- * - local 恒 Hub 宿主 process.platform（同进程，无需查询）；
+ * - local 默认 Hub 宿主 process.platform（同进程，无需查询），测试可注入
+ *   Hub 平台事实；
  * - 远端仅取 NodeRegistry 注册登记的平台（EnvFabric.nodePlatformOf 最小
  *   只读端口）；节点离线或守护进程未上报平台时平台未知——绝不猜测、
  *   绝不 fallback Hub 宿主平台、绝不 access 探测候选路径；
@@ -16,9 +17,12 @@
  */
 import { normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helm/protocol'
 
-/** 平台读取最小端口（EnvFabric.nodePlatformOf 的形状；测试可注入替身）。 */
+/** 平台读取最小端口（EnvFabric 的 Hub/节点平台事实形状；测试可注入替身）。 */
 export interface NodePlatformSource {
+  /** 远端节点平台事实（NodeRegistry 上报）；local 不从此端口猜测。 */
   nodePlatformOf?(nodeId: string): string | undefined
+  /** Hub 本机平台事实；测试可注入，生产缺省回退 process.platform。 */
+  hubPlatform?(): string | undefined
 }
 
 /** 目标平台解析结果：known 携带平台语义与原始上报值；unknown 携带显式原因。 */
@@ -35,7 +39,8 @@ export function targetPlatformForNode(
   nodeId: string,
 ): TargetPlatformInfo {
   if (nodeId === 'local') {
-    return { known: true, platform: targetPlatformOf(process.platform), reported: process.platform }
+    const reported = source?.hubPlatform?.() || process.platform
+    return { known: true, platform: targetPlatformOf(reported), reported }
   }
   const reported = source?.nodePlatformOf?.(nodeId)
   if (reported === undefined || reported === '') {

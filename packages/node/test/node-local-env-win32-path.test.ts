@@ -9,7 +9,7 @@
  *   零 access 候选猜测（错误不是 not_found 即证明未做探测回退）；
  * - file API 与 exec 共用同一解析原语（absolutePath / readFile / exec 行为一致）；
  * - exec 失败诊断同时保留原始 options.cwd 与解析后 cwd；
- * - posix 目标行为保持不变（/mnt/… 是真实路径，绝不反向转换）。
+ * - posix 目标使用宿主无关的 POSIX 词法语义（/mnt/… 是真实路径，绝不反向转换）。
  */
 
 import { test } from 'node:test';
@@ -67,7 +67,7 @@ test('resolveTargetPath win32：无盘符 POSIX 根显式结构化失败（不�
 // resolveTargetPath 纯函数（posix 目标：行为保持不变）
 // ---------------------------------------------------------------------------
 
-test('resolveTargetPath posix：/mnt/… 是真实路径，绝不反向转换；相对路径按宿主 resolve 锚定', { timeout: 60_000 }, () => {
+test('resolveTargetPath posix：/mnt/… 是真实路径，绝不反向转换；相对路径按 POSIX 规则锚定', { timeout: 60_000 }, () => {
   assert.deepEqual(resolveTargetPath('/home/proj', '/mnt/d/proj/x.ts', 'posix'), { ok: true, value: '/mnt/d/proj/x.ts' });
   assert.deepEqual(resolveTargetPath('/home/proj', '/d/x', 'posix'), { ok: true, value: '/d/x' });
   assert.deepEqual(resolveTargetPath('/home/proj', 'src/main.ts', 'posix'), { ok: true, value: '/home/proj/src/main.ts' });
@@ -103,8 +103,8 @@ test('LocalExecutionEnv win32 file API：无盘符 POSIX 根在入口显式失�
   if (!info.ok) assert.equal(info.error.code, 'invalid');
 });
 
-test('LocalExecutionEnv 默认平台（posix 宿主）：行为保持不变', { timeout: 60_000 }, async () => {
-  const env = new LocalExecutionEnv({ cwd: '/home/proj' });
+test('LocalExecutionEnv 显式 POSIX 平台：宿主无关地保持 POSIX 语义', { timeout: 60_000 }, async () => {
+  const env = new LocalExecutionEnv({ cwd: '/home/proj', platform: 'posix' });
   assert.deepEqual(await env.absolutePath('/mnt/d/proj/x.ts'), { ok: true, value: '/mnt/d/proj/x.ts' });
   assert.deepEqual(await env.absolutePath('src/main.ts'), { ok: true, value: '/home/proj/src/main.ts' });
   // posix 目标上 /home 是合法路径：解析成功（后续 fs 结果与解析无关）。

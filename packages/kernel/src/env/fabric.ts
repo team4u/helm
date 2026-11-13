@@ -64,6 +64,11 @@ export type EnvOptionsComposer = (input: {
 }) => Promise<Record<string, string>> | Record<string, string>
 
 export interface EnvFabricOptions {
+  /**
+   * Hub 平台事实（缺省 process.platform）。仅用于测试或受控宿主注入；生产
+   * 不应伪造本机平台，远端平台仍只取节点注册上报值。
+   */
+  hubPlatform?: () => string | undefined
   /** 节点 token 鉴权（由外部签发表提供；缺省拒绝一切注册）。 */
   authenticate?: (nodeId: string, token: string) => boolean | Promise<boolean>
   /** 心跳间隔/超时（毫秒）。 */
@@ -138,6 +143,11 @@ export interface EnvFabric {
   /** 节点注册时上报的 hubUrl（远端受管子进程回连地址守恒）。 */
   getNodeHubUrl(nodeId: string): string | undefined
   /**
+   * Hub 平台事实最小只读端口：缺省 process.platform，测试可显式注入。
+   * 目标平台规范化只通过此端口读取 local 的可测试 Hub 事实；生产不得伪造。
+   */
+  readonly hubPlatform?: () => string | undefined
+  /**
    * 节点平台（process.platform 口径）的最小只读端口：local 恒 Hub 宿主；
    * 远端仅取注册登记值（未上报或离线返回 undefined）。调用方据此做目标
    * 平台感知的路径规范化——平台未知时不猜、不 fallback Hub 宿主平台。
@@ -200,6 +210,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     ...(options.heartbeatIntervalMs === undefined ? {} : { heartbeatIntervalMs: options.heartbeatIntervalMs }),
     ...(options.heartbeatTimeoutMs === undefined ? {} : { heartbeatTimeoutMs: options.heartbeatTimeoutMs }),
   })
+  const hubPlatform = (): string => options.hubPlatform?.() || process.platform
   const remoteResolver = {
     getNodeEnvRpc: (nodeId: string): NodeEnvRpcFunctions | undefined => registry.getNodeEnvRpc(nodeId),
     waitForNodeOnline: (nodeId: string, context: Context) => registry.waitForNodeOnline(nodeId, context),
@@ -252,6 +263,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
 
   return {
     registry,
+    hubPlatform,
     envFor(nodeId: string, cwd: string): ExecutionEnv {
       // 无会话短生命周期对象：绝不缓存（同 cwd 反复使用也不堆积实例）。
       return freshBase(nodeId, cwd)
@@ -384,9 +396,10 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     },
 
     nodePlatformOf(nodeId: string): string | undefined {
-      // local 与 Hub 同进程；远端仅取注册登记 platform（未上报/离线 →
-      // undefined，由调用方按「平台未知」语义处理，绝不代猜）。
-      if (nodeId === 'local') return process.platform
+      // local 与 Hub 同进程；测试注入的 hubPlatform 代表受控 Hub 事实。
+      // 远端仅取注册登记 platform（未上报/离线 → undefined，由调用方按
+      // 「平台未知」语义处理，绝不代猜）。
+      if (nodeId === 'local') return hubPlatform()
       const platform = registry.get(nodeId)?.platform
       return platform === undefined || platform === '' ? undefined : platform
     },

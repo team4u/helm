@@ -135,6 +135,7 @@ export class KernelRuntime {
     const boot = await bootstrapKernelRuntime(options)
     const runtime = new KernelRuntime({
       ...boot,
+      hubPlatform: options.hubPlatform,
       defaultModel: options.model || process.env['HELM_MODEL'] || undefined,
       cwd: options.cwd ?? process.cwd(),
       hubUrl: options.hubUrl,

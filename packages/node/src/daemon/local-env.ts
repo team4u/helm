@@ -33,7 +33,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { homedir, constants as osConstants, tmpdir } from 'node:os';
-import { basename, isAbsolute, join, resolve, win32 } from 'node:path';
+import { basename, join, posix, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FileHandle } from 'node:fs/promises';
 import { normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helm/protocol';
@@ -188,18 +188,19 @@ function resolveTimeoutMs(timeout: number | undefined): Result<undefined | numbe
 
 /** 条目拼接按目标平台词法规则（真实宿主上与 node:path 宿主行为一致，注入测试下保持同一视角）。 */
 function joinTargetPath(platform: TargetPlatform, ...parts: string[]): string {
-  return platform === 'win32' ? win32.join(...parts) : join(...parts);
+  return platform === 'win32' ? win32.join(...parts) : posix.join(...parts);
 }
 
 /** 父目录提取按目标平台词法规则（输入已是本原语解析后的规范路径）。 */
 function parentTargetPath(platform: TargetPlatform, p: string): string {
-  return platform === 'win32' ? win32.dirname(p) : resolve(p, '..');
+  return platform === 'win32' ? win32.dirname(p) : posix.resolve(p, '..');
 }
 
 /**
  * 统一目标路径解析原语（file API 与 exec 共用，零探测、零猜测）：
  *
- * - posix 目标：保持宿主 node:path resolve 语义（非 Windows 行为不变）；
+ * - posix 目标：按 node:path posix 规则解析（/mnt/… 是真实路径绝不反向转换，
+ *   且与宿主 OS 无关——Windows 宿主注入测试下同样保持纯 POSIX 语义）；
  * - win32 目标：先做 `~` / `file://` 展开，再经 @helm/protocol 的
  *   normalizeTargetPath 统一规范化——/mnt/<盘符>/…（WSL 挂载视图）与
  *   /<盘符>/…（Git Bash / MSYS 盘符根视图）确定性转换为 <大写盘符>:\…
@@ -217,16 +218,29 @@ export function resolveTargetPath(cwd: string, path: string, platform: TargetPla
     normalized.startsWith('~/') ||
     (platform === 'win32' && normalized.startsWith('~\\'))
   ) {
-    normalized = join(homedir(), normalized.slice(2));
+    normalized = joinTargetPath(platform, homedir(), normalized.slice(2));
   } else if (normalized.startsWith('file://')) {
     try {
-      normalized = fileURLToPath(normalized);
+      normalized = fileURLToPath(normalized, { windows: platform === 'win32' });
     } catch {
       // 畸形 URL 保留原样作为普通路径，文件方法维持不抛异常的契约。
     }
   }
   if (platform !== 'win32') {
-    return ok(isAbsolute(normalized) ? resolve(normalized) : resolve(cwd, normalized));
+    // 先用 protocol 的纯 POSIX 规则做词法归一，再只用 posix.resolve 做
+    // 目标 cwd 锚定；这样 Windows 宿主不会把盘符/反斜杠规则带入目标路径。
+    const normalizedPath = normalizeTargetPath(normalized, 'posix')
+    const normalizedCwd = normalizeTargetPath(cwd, 'posix')
+    if (!normalizedPath.ok || !normalizedCwd.ok) {
+      // normalizeTargetPath('posix') 当前不会失败；保留显式分支以守住
+      // protocol 契约，避免未来扩展失败类型时静默继续。
+      return err(new FileError('invalid', 'Invalid POSIX target path', path))
+    }
+    return ok(
+      posix.isAbsolute(normalizedPath.path)
+        ? posix.resolve(normalizedPath.path)
+        : posix.resolve(normalizedCwd.path, normalizedPath.path),
+    );
   }
   const normalizedWin = normalizeTargetPath(normalized, 'win32');
   if (!normalizedWin.ok) {
@@ -1022,7 +1036,7 @@ export class LocalExecutionEnv {
     const timeoutMs = timeoutMsResult.value;
     // win32 目标：options.cwd 与会话 cwd 统一经 resolveTargetPath 解析
     // （/mnt/<盘符>/… 等 POSIX 视图确定性转换，无盘符根显式失败）；
-    // posix 目标保持宿主 node:path resolve 语义不变。
+    // posix 目标使用 node:path.posix 语义，避免 Windows 宿主污染目标路径。
     let cwd: string;
     let originalCwd: string | undefined;
     if (options?.cwd !== undefined) {

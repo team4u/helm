@@ -22,6 +22,8 @@ import { HelmStore } from './store.js'
 import type { ConversationTracker } from './conversations.js'
 
 export interface KernelBootOptions {
+  /** Hub 平台事实注入（测试用；缺省 process.platform）。 */
+  hubPlatform?: () => string | undefined
   dataDir?: string
   model?: string
   cwd?: string

@@ -10,9 +10,9 @@
  * - 目标节点平台无可信信息（远端未注册 / 未上报）：不猜、不改写，原样
  *   透传（绝对性校验仍然生效）。
  *
- * 平台事实来源（诚实性红线）：local 用 process.platform；远端只用
- * NodeRegistry 注册时上报的可信 platform（经 trustedPlatformFromEnvFabric），
- * 绝不探测、绝不用路径形状倒推目标平台。
+ * 平台事实来源（诚实性红线）：local 默认用 process.platform，测试可通过
+ * trustedPlatformFromEnvFabric 注入 Hub 平台；远端只用 NodeRegistry 注册时
+ * 上报的可信 platform，绝不探测、绝不用路径形状倒推目标平台。
  */
 
 import { HelmError, isAbsoluteTargetPath, normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helm/protocol'
@@ -32,37 +32,44 @@ export type TrustedNodePlatformSource = (nodeId: string) => string | undefined
  */
 export interface TrustedPlatformHost {
   registry: { get(nodeId: string): { platform: string } | undefined }
-  /** 可选最小只读平台端口（EnvFabric.nodePlatformOf）；提供时优先使用。 */
+  /** 可选 Hub 平台事实端口（测试可注入，生产缺省回退 process.platform）。 */
+  hubPlatform?(): string | undefined
+  /** 可选最小只读平台端口（EnvFabric.nodePlatformOf）；远端平台优先使用。 */
   nodePlatformOf?(nodeId: string): string | undefined
 }
 
 /**
- * 生产可信来源：优先 EnvFabric.nodePlatformOf 唯一只读端口（local →
- * process.platform，Hub 本机即 local 节点；远端 → NodeRegistry 注册上报的
- * platform，未注册 / 未上报 = undefined）；仅有 registry 的结构性 stub
- * 退回直读注册表（同一语义）。
+ * 生产可信来源：local 优先 EnvFabric.hubPlatform（测试注入），缺省回退
+ * process.platform；远端优先 EnvFabric.nodePlatformOf 只读端口（NodeRegistry
+ * 注册上报的 platform，未注册 / 未上报 = undefined）；仅有 registry 的结构性
+ * stub 退回直读注册表（同一语义）。
  */
 export function trustedPlatformFromEnvFabric(
   envFabric: EnvFabric | TrustedPlatformHost | undefined,
 ): TrustedNodePlatformSource {
   return (nodeId) => {
+    if (nodeId === 'local') {
+      return envFabric?.hubPlatform?.() || envFabric?.nodePlatformOf?.('local') || process.platform
+    }
     if (envFabric?.nodePlatformOf !== undefined) return envFabric.nodePlatformOf(nodeId)
-    if (nodeId === 'local') return process.platform
     return envFabric?.registry.get(nodeId)?.platform || undefined
   }
 }
 
 /**
  * 解析目标节点平台语义：undefined 表示无可信信息（调用方不得猜测）。
- * nodeId 缺省 / 空串视为 'local'；local 恒为 process.platform（Hub 本机
- * 即 local 节点，宿主平台即事实，不经来源）；远端只用来源上报。
+ * nodeId 缺省 / 空串视为 'local'；local 默认使用 process.platform，显式
+ * trustedPlatform 来源可提供测试用 Hub 平台事实；远端只用来源上报。
  */
 export function resolveTargetPlatform(
   nodeId: string | undefined,
   source?: TrustedNodePlatformSource,
 ): TargetPlatform | undefined {
   const id = nodeId === undefined || nodeId === '' ? 'local' : nodeId
-  if (id === 'local') return targetPlatformOf(process.platform)
+  if (id === 'local') {
+    const raw = source?.(id) || process.platform
+    return targetPlatformOf(raw)
+  }
   const raw = source?.(id)
   return raw !== undefined && raw !== '' ? targetPlatformOf(raw) : undefined
 }
