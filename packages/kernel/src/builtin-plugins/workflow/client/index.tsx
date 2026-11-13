@@ -12,7 +12,7 @@
  * 从宿主 store 响应式读取；动作经 ctx.callAction 走
  * POST /api/actions/builtin:workflow/<actionId>，无任何宿主私有依赖。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
 import type { ToolViewProps, WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
@@ -21,6 +21,7 @@ import { CopyButton, formatDurationMs, usePluginContext, useConversation, useCon
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import {
   aggregateExecutionNodes,
+  aggregateExecutionStatuses,
   buildExecutionTree,
   buildSubagentStatSegments,
   buildSubagentStreamLines,
@@ -31,7 +32,9 @@ import {
   canReplayWorkflowRun,
   collectExecutionApprovals,
   collectExecutionFrontline,
+  effectiveRunNodeStatus,
   executionNodeTitle,
+  executionRunStatus,
   executionToolStatus,
   extractWorkflowLogs,
   firstLineOf,
@@ -51,7 +54,9 @@ import {
   resolveWorkflowRunForTool,
   subagentBadge,
   toolResultPreviewTruncated,
+  type ExecutionNodeStatus,
   type SavedWorkflowView,
+  type SubagentBadge,
   type WorktreeInspectView,
 } from './models.ts'
 import { usePluginSessionDoc, useStreamFollow, useElapsedNowMs } from './hooks.ts'
@@ -90,17 +95,26 @@ function Icon({ name, size = 12, className }: { name: string; size?: number; cla
 // 统一执行树：父卡内下一级紧凑子项（ExecutionNode 递归视图模型）
 // ---------------------------------------------------------------------------
 
-/** 下一级紧凑子项行：点击 / 回车打开任意深度会话抽屉（不冒泡触发父卡）。 */
+/** 下一级紧凑子项行：会话行点击 / 回车打开任意深度会话抽屉；无会话执行
+ * 行（深层 workflow / external run）原位展开其直系子项（不伪造会话入口），
+ * 点击均不冒泡触发父卡。 */
 function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): ReactNode {
   const ctx = usePluginContext()
+  const [expandedKey, setExpandedKey] = useState<string | undefined>(undefined)
   if (nodes.length === 0) return null
   return (
     <div className="execution-children" onClick={(e) => e.stopPropagation()}>
       {nodes.map((node) => {
         const aggregated = node.aggregated
         const title = executionNodeTitle(node)
-        const open =
+        const openConversation =
           node.conversationId !== undefined ? () => ctx.openConversationDrawer(node.conversationId!) : undefined
+        // 无会话执行节点（深层 workflow / external run）：原位展开直系子项。
+        const expandable = openConversation === undefined && node.children.length > 0
+        const expanded = expandable && expandedKey === node.key
+        const activate =
+          openConversation ??
+          (expandable ? () => setExpandedKey((current) => (current === node.key ? undefined : node.key)) : undefined)
         const doing =
           aggregated.status === 'working' && node.summary?.doing !== undefined
             ? node.summary.doing.trim()
@@ -108,59 +122,83 @@ function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): ReactNode
         // 审批徽章只统计后代（自身 blocked 已由状态徽章表达）。
         const descendantApprovals = aggregated.blocked - (node.status === 'blocked' ? 1 : 0)
         return (
-          <div
-            key={node.key}
-            {...(open !== undefined
-              ? { role: 'button' as const, tabIndex: 0, 'aria-label': `打开会话 #${node.conversationId} 抽屉` }
-              : {})}
-            className={`execution-child-row execution-child-${aggregated.status}${open !== undefined ? ' execution-child-clickable' : ''}`}
-            title={
-              [
-                title,
-                open !== undefined ? `点击打开会话 #${node.conversationId} 抽屉` : undefined,
-              ]
-                .filter(Boolean)
-                .join('\n')
-            }
-            onClick={open}
-            onKeyDown={
-              open !== undefined
-                ? (e) => {
-                    if (e.target !== e.currentTarget) return
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      open()
-                    }
+          <Fragment key={node.key}>
+            <div
+              {...(activate !== undefined
+                ? {
+                    role: 'button' as const,
+                    tabIndex: 0,
+                    'aria-label': openConversation !== undefined
+                      ? `打开会话 #${node.conversationId} 抽屉`
+                      : expanded
+                        ? `收起 ${title} 直系子项`
+                        : `展开 ${title} 直系子项`,
+                    ...(expandable ? { 'aria-expanded': expanded } : {}),
                   }
-                : undefined
-            }
-          >
-            <Icon
-              name={EXECUTION_ICON[aggregated.status] ?? 'circle'}
-              size={11}
-              className={aggregated.status === 'working' ? SPIN : undefined}
-            />
-            {node.conversationId !== undefined ? (
-              <span className="execution-child-id">{`#${node.conversationId}`}</span>
-            ) : null}
-            <span className="execution-child-title">{title}</span>
-            {doing !== undefined && doing !== '' ? (
-              <span className="execution-child-doing" title={doing}>
-                {doing}
-              </span>
-            ) : null}
-            <span className="execution-child-right">
-              {descendantApprovals > 0 ? (
-                <span className="badge badge-warn">{`审批 ${descendantApprovals}`}</span>
+                : {})}
+              className={`execution-child-row execution-child-${aggregated.status}${activate !== undefined ? ' execution-child-clickable' : ''}`}
+              title={
+                [
+                  title,
+                  openConversation !== undefined
+                    ? `点击打开会话 #${node.conversationId} 抽屉`
+                    : expandable
+                      ? expanded
+                        ? '点击收起直系子项'
+                        : '点击展开直系子项（深层工作流 / 外部执行，无独立会话）'
+                      : undefined,
+                ]
+                  .filter(Boolean)
+                  .join('\n')
+              }
+              onClick={activate}
+              onKeyDown={
+                activate !== undefined
+                  ? (e) => {
+                      if (e.target !== e.currentTarget) return
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        activate()
+                      }
+                    }
+                  : undefined
+              }
+            >
+              <Icon
+                name={EXECUTION_ICON[aggregated.status] ?? 'circle'}
+                size={11}
+                className={aggregated.status === 'working' ? SPIN : undefined}
+              />
+              {expandable ? (
+                <Icon
+                  name={expanded ? 'chevron-down' : 'chevron-right'}
+                  size={11}
+                  className="execution-child-expand"
+                />
               ) : null}
-              {node.children.length > 0 ? (
-                <span className="execution-child-count tabular-nums">{`${aggregated.done}/${aggregated.total}`}</span>
+              {node.conversationId !== undefined ? (
+                <span className="execution-child-id">{`#${node.conversationId}`}</span>
               ) : null}
-              <span className={`badge ${EXECUTION_BADGE[aggregated.status] ?? 'badge-neutral'}`}>
-                {EXECUTION_LABEL[aggregated.status] ?? aggregated.status}
+              <span className="execution-child-title">{title}</span>
+              {doing !== undefined && doing !== '' ? (
+                <span className="execution-child-doing" title={doing}>
+                  {doing}
+                </span>
+              ) : null}
+              <span className="execution-child-right">
+                {descendantApprovals > 0 ? (
+                  <span className="badge badge-warn">{`审批 ${descendantApprovals}`}</span>
+                ) : null}
+                {node.children.length > 0 ? (
+                  <span className="execution-child-count tabular-nums">{`${aggregated.done}/${aggregated.total}`}</span>
+                ) : null}
+                <span className={`badge ${EXECUTION_BADGE[aggregated.status] ?? 'badge-neutral'}`}>
+                  {EXECUTION_LABEL[aggregated.status] ?? aggregated.status}
+                </span>
               </span>
-            </span>
-          </div>
+            </div>
+            {expanded ? <ExecutionChildrenRows nodes={node.children} /> : null}
+          </Fragment>
         )
       })}
     </div>
@@ -204,8 +242,14 @@ export function SubagentLiveCard(props: {
   const detailError = conv.loadError
   const [cleaning, setCleaning] = useState(false)
 
-  const badge = subagentBadge(summary?.status, toolStatus, backgroundRun?.status)
-  const isWorking = badge.status === 'working'
+  // 自身徽章：审批事实优先——AskDoc 存在（pendingAsks 或 pendingAskCount > 0）
+  // 即等待审批，与 AskDock 同源；Herdr 外部执行的 AskDoc 归属原生父会话时
+  // 会话 status 可能仍在 working，有单不得仍显示执行中。
+  const selfBadge: SubagentBadge =
+    pendingAsk !== undefined || (summary?.pendingAskCount ?? 0) > 0
+      ? { status: 'blocked', label: '等待审批', badge: 'badge-warn' }
+      : subagentBadge(summary?.status, toolStatus, backgroundRun?.status)
+  const isWorking = selfBadge.status === 'working'
 
   // 运行中秒表：SSR 首帧不启动时钟（确定性渲染）。
   const nowMs = useElapsedNowMs(isWorking)
@@ -228,7 +272,7 @@ export function SubagentLiveCard(props: {
   const snippet = useMemo(
     () =>
       resolveSubagentHeaderSnippet({
-        badgeStatus: badge.status,
+        badgeStatus: selfBadge.status,
         ...(summary !== undefined ? { summary } : {}),
         ...(live !== undefined ? { live } : {}),
         ...(detail?.entries !== undefined ? { entries: detail.entries } : {}),
@@ -237,7 +281,7 @@ export function SubagentLiveCard(props: {
         ...(toolSummary !== undefined ? { toolSummary } : {}),
         ...(detailError !== undefined ? { detailError } : {}),
       }),
-    [badge.status, summary, live, detail?.entries, pendingAsk, backgroundRun, toolSummary, detailError],
+    [selfBadge.status, summary, live, detail?.entries, pendingAsk, backgroundRun, toolSummary, detailError],
   )
 
   // 统一执行树：后代子树聚合 / 前线活动 / 后代审批（仅由真实数据提炼）。
@@ -245,6 +289,10 @@ export function SubagentLiveCard(props: {
   const descendants = useMemo(() => aggregateExecutionNodes(childNodes), [childNodes])
   const frontline = useMemo(() => collectExecutionFrontline(childNodes, 2), [childNodes])
   const approvals = useMemo(() => collectExecutionApprovals(childNodes, 3), [childNodes])
+  // 主徽章有效状态：与执行树同源（自身 + 后代聚合）；后台 / 深层子任务未
+  // 结算（blocked / working / error / pending）时绝不显示已完成，自身终态另标清楚。
+  const effectiveStatus: ExecutionNodeStatus =
+    descendants.total > 0 ? aggregateExecutionStatuses([selfBadge.status, descendants.status]) : selfBadge.status
 
   // 隔离工作树：显式入参优先，其次回退后台 run 首个节点的 worktree。
   const wt = worktree ?? backgroundRun?.nodes?.find((n) => n.worktree !== undefined)?.worktree
@@ -252,13 +300,13 @@ export function SubagentLiveCard(props: {
   const inspectNodeId =
     props.worktreeInspect?.nodeId ?? (summary?.nodeId !== undefined && summary.nodeId !== '' ? summary.nodeId : undefined)
   const streamLines = useMemo(
-    () => (props.expanded === true && detail?.entries !== undefined ? buildSubagentStreamLines(detail.entries, live, badge.status === 'working') : []),
-    [props.expanded, detail?.entries, live, badge.status],
+    () => (props.expanded === true && detail?.entries !== undefined ? buildSubagentStreamLines(detail.entries, live, selfBadge.status === 'working') : []),
+    [props.expanded, detail?.entries, live, selfBadge.status],
   )
 
   const stream = useStreamFollow(streamLines)
 
-  const cardClass = `subagent-live-card${badge.status === 'blocked' ? ' subagent-live-card-warn' : badge.status === 'error' || detailError !== undefined ? ' subagent-live-card-error' : ''}${props.expanded === true ? ' subagent-live-card-expanded' : ''}`
+  const cardClass = `subagent-live-card${effectiveStatus === 'blocked' ? ' subagent-live-card-warn' : effectiveStatus === 'error' || detailError !== undefined ? ' subagent-live-card-error' : ''}${props.expanded === true ? ' subagent-live-card-expanded' : ''}`
 
   const openChild = (): void => {
     ctx.openConversationDrawer(childConversationId)
@@ -284,9 +332,9 @@ export function SubagentLiveCard(props: {
       <div className="subagent-live-header">
         <div className="subagent-live-trigger">
           <Icon
-            name={detailError !== undefined ? 'x' : badge.status === 'working' ? 'loader' : badge.status === 'error' ? 'x' : 'bot'}
+            name={detailError !== undefined ? 'x' : effectiveStatus === 'working' ? 'loader' : effectiveStatus === 'error' ? 'x' : 'bot'}
             size={13}
-            className={badge.status === 'working' && detailError === undefined ? SPIN : undefined}
+            className={effectiveStatus === 'working' && detailError === undefined ? SPIN : undefined}
           />
           <span className="subagent-live-title" title={taskTitle}>
             <span className="subagent-live-id">子会话 #{childConversationId}</span>
@@ -302,7 +350,26 @@ export function SubagentLiveCard(props: {
             </span>
           ) : null}
           {props.cached === true ? <span className="badge badge-warn">cached</span> : null}
-          <span className={`badge ${badge.badge}`}>{badge.label}</span>
+          {effectiveStatus !== selfBadge.status ? (
+            <>
+              <span
+                className={`badge ${EXECUTION_BADGE[effectiveStatus] ?? 'badge-neutral'}`}
+                title={
+                  [
+                    `自身${selfBadge.label}，子树聚合：${EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}`,
+                    approvals.length > 0 ? `后代等待审批：${approvals.map((item) => item.text).join('；')}` : undefined,
+                  ]
+                    .filter(Boolean)
+                    .join('\n')
+                }
+              >
+                {EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}
+              </span>
+              <span className="badge badge-neutral" title={`自身状态：${selfBadge.label}`}>{`自身${selfBadge.label}`}</span>
+            </>
+          ) : (
+            <span className={`badge ${selfBadge.badge}`}>{selfBadge.label}</span>
+          )}
           {descendants.total > 0 ? (
             <span
               className="badge badge-neutral tabular-nums"
@@ -723,6 +790,11 @@ function WorkflowRunCardBody(props: {
   const deeperCount = subtree.total - nodes.length
   const approvals = useMemo(() => collectExecutionApprovals(childNodes, 3), [childNodes])
   const descendantApprovals = subtree.blocked
+  // 主徽章有效状态：与执行树同源（自身 run 终态 + 子树聚合）；后台 / 深层
+  // 子任务未结算（working / blocked / error / pending）时不假完成，自身终态
+  // 另标清楚（自身已失败 / 中止时保留更具体的终态文案）。
+  const selfRunStatus = executionRunStatus(run)
+  const effectiveStatus = effectiveRunNodeStatus(run, subtree)
 
   // 运行中秒表（SSR 首帧确定性）。
   const nowMs = useElapsedNowMs(run.status === 'running')
@@ -792,7 +864,21 @@ function WorkflowRunCardBody(props: {
         </button>
         <Icon name={run.kind === 'subagent' ? 'bot' : 'terminal'} />
         <strong>{run.name}</strong>
-        <span className={`badge ${RUN_BADGE[run.status] ?? 'badge-neutral'}`}>{RUN_LABEL[run.status] ?? run.status}</span>
+        {effectiveStatus !== selfRunStatus ? (
+          <>
+            <span
+              className={`badge ${EXECUTION_BADGE[effectiveStatus] ?? 'badge-neutral'}`}
+              title={`run 自身${RUN_LABEL[run.status] ?? run.status}；子树仍有未结算任务（${EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}）`}
+            >
+              {EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}
+            </span>
+            <span className="badge badge-neutral" title={`run 自身状态：${RUN_LABEL[run.status] ?? run.status}`}>
+              {`自身${RUN_LABEL[run.status] ?? run.status}`}
+            </span>
+          </>
+        ) : (
+          <span className={`badge ${RUN_BADGE[run.status] ?? 'badge-neutral'}`}>{RUN_LABEL[run.status] ?? run.status}</span>
+        )}
         {run.replayedFrom !== undefined ? (
           <span className="badge badge-warn" title={`从 journal 前缀重放恢复（源 run ${run.replayedFrom}）`}>cached 重放</span>
         ) : null}
@@ -1514,11 +1600,13 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
   const conversations = useConversations()
   const [inspectRunId, setInspectRunId] = useState<string | undefined>(undefined)
 
-  const runs = useMemo(
-    () => (runsDoc?.runs ?? []).filter((r: WorkflowRunSummary) => r.conversationId === props.conversation.id),
-    [runsDoc, props.conversation.id],
-  )
-  // 统一执行树：任意深度经 parentConversationId 递归；runs 分片仅含本会话，深层会话不虚构 run。
+  // runs 分片为「本会话 + 全部后代」的整棵投影（各 run 保留原始 conversationId，
+  // 由后端聚合分片提供）：整份交给 buildExecutionTree 按 conversationId 归位，
+  // 不过滤 own runs——深层外部 / 工作流 run 不丢树；直接子节点列表仍由树按
+  // 归属自然限定，重复 run id 在构树层去重。
+  const runs = useMemo(() => runsDoc?.runs ?? [], [runsDoc])
+  // 统一执行树：任意深度经 parentConversationId 递归 + 整棵 runs 投影归位；
+  // 深层会话无 run 数据时仅以会话链递归，不虚构。
   const tree = useMemo(
     () => buildExecutionTree({ rootConversationId: props.conversation.id, conversations, runs }),
     [props.conversation.id, conversations, runs],

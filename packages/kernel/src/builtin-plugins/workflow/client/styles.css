@@ -848,6 +848,16 @@
   color: var(--warn);
 }
 
+/* 无会话执行行（深层 workflow / external run）的展开指示 */
+.execution-child-expand {
+  color: var(--fg-subtle);
+}
+
+/* 原位展开的深层直系子项：仅小幅追加缩进，视觉嵌套受限不逐级叠加边距 */
+.execution-children .execution-children {
+  margin: 0 0 2px 14px;
+}
+
 /* 前线活动摘要行：与第 2 层副栏同构，tag 强调色 */
 .execution-frontline .subagent-live-subline-tag {
   color: var(--accent);

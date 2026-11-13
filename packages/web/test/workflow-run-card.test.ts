@@ -439,12 +439,13 @@ const stubCtx: PluginClientContextType = {
   theme: 'dark',
 }
 
-/** 渲染 WorkflowToolView：docValue 提供 runs 文档。 */
+/** 渲染 WorkflowToolView：docValue 提供 runs 文档（可携带 conversations 桩）。 */
 async function renderWorkflowToolView(
   props: Record<string, unknown>,
   docValue: unknown = undefined,
+  conversations: unknown[] | undefined = undefined,
 ): Promise<string> {
-  setWorkflowClientStub({ docValue })
+  setWorkflowClientStub(conversations !== undefined ? { docValue, conversations } : { docValue })
   const mod = await importWorkflowClientModule('index.tsx')
   const WorkflowToolView = mod['WorkflowToolView'] as (p: Record<string, unknown>) => React.ReactElement
   return renderToString(
@@ -512,6 +513,83 @@ async function renderHelloRun(): Promise<string> {
     { runs: [HELLO_RUN] },
   )
 }
+
+test('buildWorkflowPhaseSections：pending 节点不被 done 掩盖——终结 run 有未执行节点保持 pending', { timeout: 60_000 }, () => {
+  const completed = run({
+    status: 'completed',
+    nodes: [node({ id: 'a', status: 'done' }), node({ id: 'b', status: 'pending' })],
+  })
+  assert.equal(m.buildWorkflowPhaseSections(completed)[0]!.status, 'pending', 'run 已终结但存在未执行节点不得判 done')
+  const running = run({
+    status: 'running',
+    nodes: [node({ id: 'a', status: 'done' }), node({ id: 'b', status: 'pending' })],
+  })
+  assert.equal(m.buildWorkflowPhaseSections(running)[0]!.status, 'running')
+  const aborted = run({
+    status: 'aborted',
+    nodes: [node({ id: 'a', status: 'done' }), node({ id: 'b', status: 'pending' })],
+  })
+  assert.equal(m.buildWorkflowPhaseSections(aborted)[0]!.status, 'pending')
+  // skipped 视为已结算：全部 done / skipped 才判 done
+  const skipped = run({
+    status: 'completed',
+    nodes: [node({ id: 'a', status: 'done' }), node({ id: 'b', status: 'skipped' })],
+  })
+  assert.equal(m.buildWorkflowPhaseSections(skipped)[0]!.status, 'done')
+})
+
+test('SSR：run 主徽章同源有效状态——run 已完成但子任务仍在执行不假完成，自身终态另标清楚', { timeout: 60_000 }, async () => {
+  const conv11 = { ...summary(11, 'working', 1), doing: '后台补测试', updatedAt: 50 }
+  const conv21 = { ...summary(21, 'working', 11), doing: '补齐回归', updatedAt: 40 }
+  const html = await renderWorkflowToolView(
+    {
+      callId: 'call-x', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [],
+    },
+    {
+      runs: [
+        run({
+          id: 'wf_straggler', kind: 'workflow', status: 'completed', parentToolCallId: 'call-x',
+          createdAt: 1_000, updatedAt: 60_000,
+          nodes: [node({ id: 'a', kind: 'agent', status: 'done', conversationId: 11, label: '实现者' })],
+        }),
+      ],
+    },
+    [conv11, conv21],
+  )
+  assert.ok(html.includes('自身已完成'), '自身终态应另标清楚')
+  assert.ok(!/>已完成</.test(html), '不得以孤立的「已完成」作为主徽章假完成')
+  assert.match(html, /badge-accent[^>]*>执行中/, '主徽章应为同源有效状态（子任务仍在执行）')
+  assert.ok(html.includes('子树 0/2'), '子树计数如实展示未完成（深层后台子任务计入）')
+})
+
+test('SSR：run 全部于孙结算时主徽章保留自身终态文案（已完成 / 失败 / 已中止）', { timeout: 60_000 }, async () => {
+  const done = await renderWorkflowToolView(
+    { callId: 'c1', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+    {
+      runs: [
+        run({
+          id: 'wf_ok', kind: 'workflow', status: 'completed', parentToolCallId: 'c1',
+          nodes: [node({ id: 'a', kind: 'action', status: 'done', label: '动作' })],
+        }),
+      ],
+    },
+  )
+  assert.ok(done.includes('>已完成<'), '全部结算应显示已完成')
+  assert.ok(!done.includes('自身'), '有效状态与自身一致时不得重复标注')
+
+  const failed = await renderWorkflowToolView(
+    { callId: 'c2', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+    {
+      runs: [
+        run({
+          id: 'wf_bad', kind: 'workflow', status: 'failed', parentToolCallId: 'c2',
+          nodes: [node({ id: 'a', status: 'failed', error: 'gate 未通过' })],
+        }),
+      ],
+    },
+  )
+  assert.ok(failed.includes('>失败<'), '自身失败保留更具体终态文案')
+})
 
 test('SSR：WorkflowToolView 无关联 run 时保留调用详情（不虚构工作流卡）', { timeout: 60_000 }, async () => {
   const html = await renderWorkflowToolView({

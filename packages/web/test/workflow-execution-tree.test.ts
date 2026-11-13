@@ -88,17 +88,18 @@ function run(partial: Partial<WorkflowRunSummary> = {}): WorkflowRunSummary {
 // 纯逻辑：状态聚合与叶子状态推导
 // ---------------------------------------------------------------------------
 
-test('aggregateExecutionStatuses：blocked > error > working > done > pending，空集 pending', { timeout: 60_000 }, () => {
+test('aggregateExecutionStatuses：blocked > error > working 优先；done 仅全完成，pending 不被 done 掩盖，空集 pending', { timeout: 60_000 }, () => {
   assert.equal(m.aggregateExecutionStatuses([]), 'pending')
   assert.equal(m.aggregateExecutionStatuses(['done', 'done']), 'done')
-  assert.equal(m.aggregateExecutionStatuses(['pending', 'done']), 'done')
+  assert.equal(m.aggregateExecutionStatuses(['pending', 'done']), 'pending', '存在 pending 不得被判成整体完成')
+  assert.equal(m.aggregateExecutionStatuses(['done', 'pending', 'done']), 'pending')
   assert.equal(m.aggregateExecutionStatuses(['done', 'working']), 'working')
   assert.equal(m.aggregateExecutionStatuses(['working', 'error']), 'error')
   assert.equal(m.aggregateExecutionStatuses(['error', 'blocked']), 'blocked')
   assert.equal(m.aggregateExecutionStatuses(['done', 'pending', 'working', 'error', 'blocked']), 'blocked')
 })
 
-test('executionConversationStatus：与卡片徽章同源，后台 run 未终结绝不假完成', { timeout: 60_000 }, () => {
+test('executionConversationStatus：与卡片徽章同源，后台 run 未终结绝不假完成；AskDoc 有单即 blocked', { timeout: 60_000 }, () => {
   assert.equal(m.executionConversationStatus(summary(11, 'blocked'), undefined), 'blocked')
   assert.equal(m.executionConversationStatus(summary(11, 'working'), undefined), 'working')
   assert.equal(m.executionConversationStatus(summary(11, 'idle'), run({ status: 'running' })), 'working')
@@ -108,6 +109,11 @@ test('executionConversationStatus：与卡片徽章同源，后台 run 未终结
   assert.equal(m.executionConversationStatus(summary(11, 'error'), undefined), 'error')
   assert.equal(m.executionConversationStatus(summary(11, 'done'), undefined), 'done')
   assert.equal(m.executionConversationStatus(summary(11, 'idle'), run({ status: 'completed' })), 'done')
+  // AskDoc 有单即等待审批（与 AskDock 同源）：Herdr 外部执行的 AskDoc 归属
+  // 原生父会话，status 可能仍在 working，pendingAskCount > 0 即 blocked。
+  assert.equal(m.executionConversationStatus(summary(11, 'working', undefined, { pendingAskCount: 1 }), undefined), 'blocked')
+  assert.equal(m.executionConversationStatus(summary(11, 'working', undefined, { pendingAskCount: 2 }), undefined), 'blocked')
+  assert.equal(m.executionConversationStatus(summary(11, 'working', undefined, { pendingAskCount: 0 }), undefined), 'working')
   // run-only：无 summary 时按 run 状态如实呈现
   assert.equal(m.executionConversationStatus(undefined, run({ status: 'running' })), 'working')
   assert.equal(m.executionConversationStatus(undefined, run({ status: 'completed' })), 'done')
@@ -215,11 +221,12 @@ test('buildExecutionTree：DSL run 认领的会话挂 run 节点下，孙代递�
   const actionChild = wfNode.children.find((c) => c.kind === 'workflow-node')!
   assert.equal(actionChild.runNode?.id, 'n2')
   assert.equal(actionChild.status, 'done')
-  // 聚合：run(working) + n1 会话(done + 节点 running → gate 期 working，与卡片徽章一致)
-  // + #21(working) + n2(done) = 4 节点
-  assert.equal(wfNode.aggregated.total, 4)
+  // 聚合（容器壳不计自身任务，不双计）：n1 会话（done + 节点 running → gate 期
+  // working，与卡片徽章一致）+ #21(working) + n2(done) = 3 项真实执行
+  assert.equal(wfNode.aggregated.total, 3, 'workflow 容器壳不计自身，仅计 3 项真实执行')
   assert.equal(wfNode.aggregated.done, 1)
-  assert.equal(wfNode.aggregated.running, 3)
+  assert.equal(wfNode.aggregated.running, 2)
+  assert.equal(wfNode.aggregated.status, 'working')
 })
 
 test('buildExecutionTree：后台单子代理 run 关联直接子会话；会话缺失仅携带 run；无会话后台任务为外部执行', { timeout: 60_000 }, () => {
@@ -263,7 +270,8 @@ test('buildExecutionTree：后台单子代理 run 关联直接子会话；会话
   assert.equal(external.run?.id, 'wf_c')
   assert.equal(external.status, 'error')
   assert.equal(external.children.length, 1, 'run 内节点为外部执行节点的叶子')
-  assert.equal(external.aggregated.total, 2)
+  assert.equal(external.aggregated.total, 1, '外部 run 壳不计自身：run 内节点即唯一真实执行')
+  assert.equal(external.aggregated.error, 1)
 })
 
 test('buildExecutionTree：Active-First 排序 blocked > working > error > done，同级 updatedAt 降序', { timeout: 60_000 }, () => {
@@ -338,21 +346,182 @@ test('collectExecutionFrontline：深度优先收集子树 working 节点 doing 
   )
 })
 
-test('collectExecutionApprovals：收集子树 blocked 会话（#id + 用户标题，不虚构 AskSpec 标题）', { timeout: 60_000 }, () => {
+test('collectExecutionApprovals：收集子树 blocked 会话（#id + 用户标题，不虚构 AskSpec 标题；pendingAskCount>0 同计）', { timeout: 60_000 }, () => {
   const conversations = [
     summary(1, 'idle'),
     summary(11, 'working', 1),
     summary(21, 'blocked', 11, { title: '确认删除文件' }),
-    summary(22, 'blocked', 11),
+    summary(22, 'working', 11, { pendingAskCount: 1 }),
   ]
   const tree = m.buildExecutionTree({ rootConversationId: 1, conversations, runs: [] })
   const items = m.collectExecutionApprovals(tree, 3)
   assert.deepEqual(
     items.map((item) => item.text),
     ['#21 确认删除文件', '#22 等待审批'],
+    'status=blocked 与 pendingAskCount>0（AskDoc 有单）均计为等待审批',
   )
   assert.equal(items[0]!.conversationId, 21)
   assert.equal(m.collectExecutionApprovals(tree, 1).length, 1, 'limit 生效')
+})
+
+test('collectExecutionFrontline：后序最深活跃优先，父级等待兑底不抢占，自身实际工作保留', { timeout: 60_000 }, () => {
+  // 父 #11 working（无 doing，仅为等待子级的上级状态）+ 两个 working 子级：
+  // limit=2 只显示最深前线，不被父级兑底文案挤占
+  const conversations = [
+    summary(1, 'idle'),
+    summary(11, 'working', 1),
+    summary(21, 'working', 11, { doing: 'bash: pnpm test' }),
+    summary(22, 'working', 11, { doing: '读取 a.ts' }),
+  ]
+  const tree = m.buildExecutionTree({ rootConversationId: 1, conversations, runs: [] })
+  assert.deepEqual(
+    m.collectExecutionFrontline(tree, 2).map((item) => item.text),
+    ['#21 bash: pnpm test', '#22 读取 a.ts'],
+  )
+  // 父级有自身 doing（实际工作）时保留在更深前线之后，不被丢弃
+  const parentDoing = m.buildExecutionTree({
+    rootConversationId: 1,
+    conversations: [
+      summary(1, 'idle'),
+      summary(11, 'working', 1, { doing: '审阅产出' }),
+      summary(21, 'working', 11, { doing: 'bash: pnpm test' }),
+    ],
+    runs: [],
+  })
+  assert.deepEqual(
+    m.collectExecutionFrontline(parentDoing, 2).map((item) => item.text),
+    ['#21 bash: pnpm test', '#11 审阅产出'],
+  )
+  // 容器（workflow run 壳）的自身执行即其子节点：子树有更深前线时不再重复占位
+  const wfFront = m.buildExecutionTree({
+    rootConversationId: 1,
+    conversations: [summary(1, 'idle')],
+    runs: [
+      run({
+        id: 'wf_front', kind: 'workflow', status: 'running', name: '前线工作流',
+        nodes: [node({ id: 'n1', kind: 'action', status: 'running', label: '落盘动作' })],
+      }),
+    ],
+  })
+  assert.deepEqual(
+    m.collectExecutionFrontline(wfFront, 2).map((item) => item.text),
+    ['落盘动作 执行中'],
+    '唯一前线为最深节点，容器壳不重复占位',
+  )
+})
+
+test('buildExecutionTree：同一会话被多个历史/续接 DSL run 引用仅挂载一次，聚合不双计，旧 run 引用保留叶子行', { timeout: 60_000 }, () => {
+  const conversations = [
+    summary(1, 'idle'),
+    summary(11, 'working', 1, { doing: '正在实现' }),
+  ]
+  const runs = [
+    run({
+      id: 'wf_old', kind: 'workflow', status: 'completed', createdAt: 1_000, updatedAt: 2_000,
+      nodes: [node({ id: 'n1', kind: 'agent', status: 'done', conversationId: 11, label: '旧实现者' })],
+    }),
+    run({
+      id: 'wf_new', kind: 'workflow', status: 'running', createdAt: 5_000, updatedAt: 6_000,
+      nodes: [node({ id: 'n1', kind: 'agent', status: 'running', conversationId: 11, label: '续接实现者' })],
+    }),
+  ]
+  const tree = m.buildExecutionTree({ rootConversationId: 1, conversations, runs })
+  const wfNew = tree.find((n) => n.run?.id === 'wf_new')!
+  const wfOld = tree.find((n) => n.run?.id === 'wf_old')!
+  assert.ok(wfNew !== undefined && wfOld !== undefined)
+  assert.equal(wfNew.children[0]!.conversationId, 11, '会话子树归属仍在运行的续接 run')
+  assert.equal(wfNew.children[0]!.kind, 'conversation')
+  assert.equal(wfOld.children[0]!.kind, 'workflow-node', '旧 run 的引用保留普通叶子行（可显示）')
+  assert.equal(wfOld.children[0]!.conversationId, undefined, '旧 run 引用行不携带会话子树')
+  // 聚合不双计：两个 run 壳均不计自身，会话 11 只计一次
+  assert.equal(wfNew.aggregated.total, 1)
+  assert.equal(wfNew.aggregated.running, 1)
+  assert.equal(wfOld.aggregated.total, 1, '旧 run 壳不计自身，仅叶子行计 1')
+  assert.equal(wfOld.aggregated.done, 1)
+  // 前线不重复：会话 11 只出现一次
+  assert.deepEqual(
+    m.collectExecutionFrontline(tree, 5).map((item) => item.key),
+    ['conv:11'],
+  )
+})
+
+test('buildExecutionTree：消费含后代的整棵 runs 投影——深层 run 挂回原会话、重复 run id 去重', { timeout: 60_000 }, () => {
+  const conversations = [
+    summary(1, 'idle'),
+    summary(11, 'working', 1, { doing: '编排深层任务' }),
+    summary(21, 'done', 11),
+  ]
+  const deepExternal = run({
+    id: 'wf_ext', kind: 'subagent', status: 'running', conversationId: 11, name: '外部任务',
+    createdAt: 1_000, updatedAt: 2_000,
+    nodes: [node({ id: 'n', status: 'running', executionId: 'pane-42' })],
+  })
+  const deepDsl = run({
+    id: 'wf_deep', kind: 'workflow', status: 'completed', conversationId: 21, name: '深层工作流',
+    createdAt: 3_000, updatedAt: 4_000,
+    nodes: [node({ id: 'a', kind: 'action', status: 'done', label: '落盘' })],
+  })
+  // 同一 run 重复到达（聚合分片重叠）：按 id 去重，各 run 保留原始 conversationId
+  const tree = m.buildExecutionTree({ rootConversationId: 1, conversations, runs: [deepExternal, deepDsl, deepExternal] })
+  const conv11 = tree[0]!
+  assert.equal(conv11.conversationId, 11)
+  const ext = conv11.children.find((c) => c.kind === 'external')!
+  assert.ok(ext !== undefined, '深层外部执行 run 挂回其发起会话（run.conversationId=11）')
+  assert.equal(ext.run!.id, 'wf_ext')
+  const conv21 = conv11.children.find((c) => c.conversationId === 21)!
+  const deep = conv21.children.find((c) => c.kind === 'workflow')!
+  assert.ok(deep !== undefined, '深层会话 21 自己的 DSL run 挂在 21 节点下')
+  assert.equal(deep.run!.id, 'wf_deep')
+  // 去重后全树 run 节点唯一
+  const runIds: string[] = []
+  const walk = (list: ReadonlyArray<{ kind: string; run?: { id: string }; children: readonly unknown[] }>): void => {
+    for (const n of list) {
+      if (n.kind === 'workflow' || n.kind === 'external') runIds.push(n.run!.id)
+      walk(n.children as ReadonlyArray<{ kind: string; run?: { id: string }; children: readonly unknown[] }>)
+    }
+  }
+  walk(tree)
+  assert.deepEqual(runIds.sort(), ['wf_deep', 'wf_ext'], '重复 run id 不得重复挂载')
+  // 聚合不双计：#21 子树 = #21 自身 + 深层动作节点（深层 run 壳不计）
+  assert.equal(conv21.aggregated.total, 2)
+  assert.equal(conv21.aggregated.done, 2)
+})
+
+test('effectiveRunNodeStatus：无子树数据即自身终态；子树未结算不假完成（同源合成）', { timeout: 60_000 }, () => {
+  assert.equal(m.effectiveRunNodeStatus({ status: 'completed' }, undefined), 'done')
+  assert.equal(
+    m.effectiveRunNodeStatus({ status: 'completed' }, { status: 'pending', total: 0, done: 0, running: 0, blocked: 0, error: 0 }),
+    'done',
+    '子树无计数时不改变自身终态',
+  )
+  assert.equal(
+    m.effectiveRunNodeStatus({ status: 'completed' }, { status: 'working', total: 2, done: 1, running: 1, blocked: 0, error: 0 }),
+    'working',
+    'run 已完成但子任务仍在执行不假完成',
+  )
+  assert.equal(
+    m.effectiveRunNodeStatus({ status: 'running' }, { status: 'blocked', total: 1, done: 0, running: 0, blocked: 1, error: 0 }),
+    'blocked',
+  )
+  assert.equal(
+    m.effectiveRunNodeStatus({ status: 'failed' }, { status: 'done', total: 1, done: 1, running: 0, blocked: 0, error: 0 }),
+    'error',
+  )
+})
+
+test('buildExecutionTree：后代 pendingAskCount>0 冒泡为审批，父 idle 不假完成', { timeout: 60_000 }, () => {
+  const conversations = [
+    summary(1, 'idle'),
+    summary(11, 'idle', 1),
+    summary(21, 'working', 11, { pendingAskCount: 1, doing: '等待确认删除' }),
+  ]
+  const tree = m.buildExecutionTree({ rootConversationId: 1, conversations, runs: [] })
+  const conv11 = tree[0]!
+  assert.equal(conv11.status, 'done', '自身真实终态保持 done')
+  assert.equal(conv11.aggregated.status, 'blocked', '后代 AskDoc 有单冒泡：父不得显示整体完成')
+  assert.equal(conv11.aggregated.blocked, 1)
+  const approvals = m.collectExecutionApprovals(tree, 3)
+  assert.deepEqual(approvals.map((a) => a.conversationId), [21])
 })
 
 test('aggregateExecutionNodes：合并直接子节点聚合（不含自身）', { timeout: 60_000 }, () => {
@@ -597,6 +766,133 @@ test('无深层后代时紧凑子项与子树徽章不渲染（不造空占位�
     assert.equal(host.querySelector('.execution-children'), null)
     assert.equal(host.querySelector('.execution-frontline'), null)
     assert.ok(!/子树 \d/.test(host.textContent!), '无后代不得渲染子树徽章')
+  } finally {
+    unmount()
+  }
+})
+
+test('主徽章同源有效状态：父 idle + 后代 blocked/working 不显示已完成，自身终态另标清楚', { timeout: 60_000 }, async () => {
+  // SSR 复现场景：父 #11 idle，后代 #3/#4 working、#5 blocked——旧实现头部
+  // 绿色「已完成」仅靠右侧子树徽章提示，属假完成。
+  const child11 = summary(11, 'idle', 1, { updatedAt: 100 })
+  const child3 = summary(3, 'working', 11, { doing: '正在编排', updatedAt: 90 })
+  const child4 = summary(4, 'working', 11, { doing: '编辑 a.ts', updatedAt: 80 })
+  const child5 = summary(5, 'blocked', 11, { title: '确认删除文件', updatedAt: 70 })
+  setWorkflowClientStub({
+    docValue: { runs: [] },
+    conversations: [child11, child3, child4, child5],
+    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
+  const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
+  try {
+    const trigger = host.querySelector('.subagent-live-trigger')!
+    assert.ok(trigger !== null)
+    const badgeTexts = Array.from(trigger.querySelectorAll('.badge')).map((b) => b.textContent ?? '')
+    assert.ok(badgeTexts.includes('等待审批'), `主徽章应为同源有效状态（等待审批），实际：${badgeTexts.join('|')}`)
+    assert.ok(badgeTexts.includes('自身已完成'), '自身终态应另标清楚')
+    assert.ok(!badgeTexts.includes('已完成'), '不得以孤立的「已完成」作为主徽章假完成')
+    const warnBadge = trigger.querySelector('.badge-warn') as HTMLElement
+    assert.match(warnBadge.getAttribute('title') ?? '', /#5 确认删除文件/, '有效状态徽章 title 应含后代审批摘要')
+  } finally {
+    unmount()
+  }
+})
+
+test('自身 AskDoc 有单即等待审批（pendingAskCount>0，status 仍 working 不显示执行中）', { timeout: 60_000 }, async () => {
+  const child11 = summary(11, 'working', 1, { pendingAskCount: 1, doing: '外部执行等待确认' })
+  setWorkflowClientStub({
+    docValue: { runs: [] },
+    conversations: [child11],
+    conversation: (id) =>
+      id === 11
+        ? { summary: child11, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }
+        : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
+  const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
+  try {
+    const trigger = host.querySelector('.subagent-live-trigger')!
+    const badgeTexts = Array.from(trigger.querySelectorAll('.badge')).map((b) => b.textContent ?? '')
+    assert.ok(badgeTexts.includes('等待审批'), `AskDoc 有单即等待审批，实际：${badgeTexts.join('|')}`)
+    assert.ok(!badgeTexts.includes('执行中'), '有单不得仍显示执行中')
+  } finally {
+    unmount()
+  }
+})
+
+test('紧凑子项：深层 workflow / external run 行原位展开直系子项（不伪造会话入口）', { timeout: 60_000 }, async () => {
+  const child11 = summary(11, 'working', 1, { doing: '编排深层任务', updatedAt: 100 })
+  const deepDsl = run({
+    id: 'wf_deep', kind: 'workflow', status: 'running', conversationId: 11, name: '深层工作流',
+    createdAt: 3_000, updatedAt: 4_000,
+    nodes: [node({ id: 'a', kind: 'action', status: 'running', label: '落盘动作' })],
+  })
+  const deepExternal = run({
+    id: 'wf_ext', kind: 'subagent', status: 'running', conversationId: 11, name: '外部任务',
+    createdAt: 1_000, updatedAt: 2_000,
+    nodes: [node({ id: 'n', status: 'running', executionId: 'pane-42', label: '终端窗格' })],
+  })
+  setWorkflowClientStub({
+    // 祖先聚合投影：根会话分片含后代 runs（各 run 保留原始 conversationId）
+    docValue: { runs: [deepDsl, deepExternal] },
+    conversations: [child11],
+    conversation: (id) =>
+      id === 11
+        ? { summary: child11, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }
+        : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
+  const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
+  try {
+    // #11 卡内下一级：深层工作流 + 外部任务两行（均无会话 id 前缀，不伪造子会话）
+    const rows = host.querySelectorAll('.execution-child-row')
+    assert.equal(rows.length, 2, '深层 run 以紧凑行呈现')
+    const dslRow = Array.from(rows).find((r) => (r.textContent ?? '').includes('深层工作流')) as HTMLElement
+    const extRow = Array.from(rows).find((r) => (r.textContent ?? '').includes('外部任务')) as HTMLElement
+    assert.ok(dslRow !== undefined && extRow !== undefined)
+    for (const row of [dslRow, extRow]) {
+      assert.equal(row.querySelector('.execution-child-id'), null, '无会话 run 行不得伪造 #id 前缀')
+      assert.match(row.getAttribute('aria-label') ?? '', /^展开 /, '应提供展开直系子项入口')
+      assert.match(row.textContent ?? '', /执行中/, 'run 真实状态保留')
+    }
+    // 初始不展开：直系子项行不渲染（前线摘要文本可有，行数不变）
+    assert.equal(host.querySelectorAll('.execution-child-row').length, 2, '初始仅两个 run 行')
+    // 点击深层工作流行：原位展开直系子项（落盘动作行出现）
+    act(() => {
+      dslRow.click()
+    })
+    const expandedRows = host.querySelectorAll('.execution-child-row')
+    assert.equal(expandedRows.length, 3, '展开后多出直系子项行')
+    assert.ok(
+      Array.from(expandedRows).some((r) => (r.textContent ?? '').includes('落盘动作')),
+      '展开后应显示直系子项行',
+    )
+    assert.match(dslRow.getAttribute('aria-label') ?? '', /^收起 /, '展开后 aria 切换为收起')
+    // 再点收起
+    act(() => {
+      dslRow.click()
+    })
+    assert.equal(host.querySelectorAll('.execution-child-row').length, 2, '再次点击收起直系子项')
+    // 回车同样可展开外部任务行（键盘可达）
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    act(() => {
+      extRow.dispatchEvent(event)
+    })
+    const extRows = host.querySelectorAll('.execution-child-row')
+    assert.equal(extRows.length, 3, '回车展开外部 run 直系子项')
+    assert.ok(
+      Array.from(extRows).some((r) => (r.textContent ?? '').includes('终端窗格')),
+      '展开后应显示外部 run 直系子项行',
+    )
+    // 全程不得伪造会话抽屉打开
+    assert.deepEqual(spy.drawerCalls, [])
   } finally {
     unmount()
   }
