@@ -375,7 +375,6 @@ button,
   border: none;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  z-index: 90;
 }
 
 .helm-workbench {
@@ -390,7 +389,6 @@ button,
   border-left: 1px solid var(--border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
   overflow: hidden;
-  z-index: 100;
   animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -404,13 +402,11 @@ button,
 .conversation-drawer-wrapper {
   position: fixed;
   inset: 0;
-  z-index: 68;
 }
 
 .conversation-drawer-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 68;
   background: rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(8px) saturate(1.1);
   -webkit-backdrop-filter: blur(8px) saturate(1.1);
@@ -425,7 +421,6 @@ button,
   top: 0;
   bottom: 0;
   width: min(720px, 92vw);
-  z-index: 69;
   background: var(--bg);
   border-left: 1px solid var(--border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
@@ -4621,7 +4616,6 @@ input::placeholder {
   background: rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(8px) saturate(1.1);
   -webkit-backdrop-filter: blur(8px) saturate(1.1);
-  z-index: 90;
 }
 
 .plugin-drawer-content {
@@ -4636,7 +4630,6 @@ input::placeholder {
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
   display: flex;
   flex-direction: column;
-  z-index: 95;
   outline: none;
   overflow: hidden;
   animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -5179,7 +5172,7 @@ input::placeholder {
   height: 100dvh !important;
   padding: 0 !important;
   background: var(--bg) !important;
-  z-index: 120 !important;
+  z-index: var(--dialog-layer-z, 120) !important;
 }
 
 .modal-fullscreen {
@@ -5856,7 +5849,6 @@ input::placeholder {
   background: rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(8px) saturate(1.1);
   -webkit-backdrop-filter: blur(8px) saturate(1.1);
-  z-index: 90;
 }
 
 .primary-drawer-content {
@@ -5868,7 +5860,6 @@ input::placeholder {
   background: var(--bg-elevated);
   border-left: 1px solid var(--border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
-  z-index: 100;
   display: flex;
   flex-direction: column;
   outline: none;

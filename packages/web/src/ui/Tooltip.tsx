@@ -1,5 +1,6 @@
 import * as React from 'react'
 import * as TooltipPrimitive from '@radix-ui/react-tooltip'
+import { useOverlayChildStyle } from './overlay-stack.js'
 
 export interface TooltipProviderProps extends TooltipPrimitive.TooltipProviderProps {}
 
@@ -46,18 +47,22 @@ export interface TooltipContentProps extends React.ComponentPropsWithoutRef<type
 export const TooltipContent = React.forwardRef<
   React.ComponentRef<typeof TooltipPrimitive.Content>,
   TooltipContentProps
->(({ className = '', sideOffset = 5, side = 'top', align = 'center', children, ...props }, ref) => (
-  <TooltipPrimitive.Content
-    ref={ref}
-    side={side}
-    sideOffset={sideOffset}
-    align={align}
-    className={`helm-tooltip-content ${className}`.trim()}
-    {...props}
-  >
-    {children}
-  </TooltipPrimitive.Content>
-))
+>(({ className = '', sideOffset = 5, side = 'top', align = 'center', children, style, ...props }, ref) => {
+  const layeredStyle = useOverlayChildStyle(style)
+  return (
+    <TooltipPrimitive.Content
+      ref={ref}
+      side={side}
+      sideOffset={sideOffset}
+      align={align}
+      className={`helm-tooltip-content ${className}`.trim()}
+      style={layeredStyle}
+      {...props}
+    >
+      {children}
+    </TooltipPrimitive.Content>
+  )
+})
 TooltipContent.displayName = 'TooltipContent'
 
 export interface TooltipArrowProps extends React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Arrow> {}

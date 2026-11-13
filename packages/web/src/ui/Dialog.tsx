@@ -1,5 +1,6 @@
 import React from 'react'
 import * as RadixDialog from '@radix-ui/react-dialog'
+import { OverlayLayerContext, useOverlayLayer } from './overlay-stack.js'
 
 const DialogInlineContext = React.createContext<boolean>(false)
 
@@ -17,10 +18,24 @@ export interface DialogProps extends RadixDialog.DialogProps {
  * - 自带 Escape 键监听、DismissableLayer 防穿透与焦点圈定；
  * - 支持 inline 参数与 SSR / renderToString 兼容。
  */
-export function Dialog({ inline = false, children, ...props }: DialogProps) {
+export function Dialog({ inline = false, children, open, defaultOpen, onOpenChange, ...props }: DialogProps) {
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false)
+  const isOpen = open ?? uncontrolledOpen
+  const layer = useOverlayLayer(isOpen)
+  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
+    if (open === undefined) setUncontrolledOpen(nextOpen)
+    onOpenChange?.(nextOpen)
+  }, [open, onOpenChange])
+
   return (
     <DialogInlineContext.Provider value={inline}>
-      <RadixDialog.Root {...props}>{children}</RadixDialog.Root>
+      <RadixDialog.Root
+        {...props}
+        {...(open === undefined ? { defaultOpen } : { open })}
+        onOpenChange={handleOpenChange}
+      >
+        <OverlayLayerContext.Provider value={layer}>{children}</OverlayLayerContext.Provider>
+      </RadixDialog.Root>
     </DialogInlineContext.Provider>
   )
 }
@@ -53,11 +68,16 @@ export interface DialogOverlayProps extends React.ComponentPropsWithoutRef<typeo
 export const DialogOverlay = React.forwardRef<
   React.ComponentRef<typeof RadixDialog.Overlay>,
   DialogOverlayProps
->(function DialogOverlay({ className, ...props }, ref) {
+>(function DialogOverlay({ className, style, ...props }, ref) {
+  const layer = React.useContext(OverlayLayerContext)
+  const layeredStyle = layer === null
+    ? style
+    : ({ ...style, zIndex: layer.overlayZIndex, '--dialog-layer-z': layer.overlayZIndex } as React.CSSProperties)
   return (
     <RadixDialog.Overlay
       ref={ref}
       className={className ?? 'modal-backdrop'}
+      style={layeredStyle}
       {...props}
     />
   )
@@ -73,11 +93,16 @@ export interface DialogContentProps extends React.ComponentPropsWithoutRef<typeo
 export const DialogContent = React.forwardRef<
   React.ComponentRef<typeof RadixDialog.Content>,
   DialogContentProps
->(function DialogContent({ className, ...props }, ref) {
+>(function DialogContent({ className, style, ...props }, ref) {
+  const layer = React.useContext(OverlayLayerContext)
+  const layeredStyle = layer === null
+    ? style
+    : ({ ...style, zIndex: layer.contentZIndex, '--dialog-layer-z': layer.contentZIndex } as React.CSSProperties)
   return (
     <RadixDialog.Content
       ref={ref}
       className={className ?? 'modal'}
+      style={layeredStyle}
       {...props}
     />
   )

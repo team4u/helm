@@ -1,5 +1,6 @@
 import * as React from 'react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
+import { useOverlayChildStyle } from './overlay-stack.js'
 
 export interface DropdownMenuPortalProps extends DropdownMenuPrimitive.DropdownMenuPortalProps {}
 
@@ -33,13 +34,15 @@ export interface DropdownMenuContentProps extends React.ComponentPropsWithoutRef
 export const DropdownMenuContent = React.forwardRef<
   React.ComponentRef<typeof DropdownMenuPrimitive.Content>,
   DropdownMenuContentProps
->(({ className = '', sideOffset = 4, align = 'end', portalled = false, children, ...props }, ref) => {
+>(({ className = '', sideOffset = 4, align = 'end', portalled = false, children, style, ...props }, ref) => {
+  const layeredStyle = useOverlayChildStyle(style)
   const content = (
     <DropdownMenuPrimitive.Content
       ref={ref}
       sideOffset={sideOffset}
       align={align}
       className={`helm-dropdown-content ${className}`.trim()}
+      style={layeredStyle}
       {...props}
     >
       {children}

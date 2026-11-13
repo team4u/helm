@@ -3,6 +3,7 @@ import * as RadixSelect from '@radix-ui/react-select'
 import { HelmIcon } from '../lib/icons.js'
 import { Checkbox } from './Checkbox.js'
 import { Popover, PopoverContent, PopoverTrigger } from './Popover.js'
+import { useOverlayChildStyle } from './overlay-stack.js'
 import type {
   MultiSelectChangeEvent,
   SelectChangeEvent,
@@ -113,6 +114,7 @@ function SingleSelectInner<T extends string = string>({
 
   const selectedOption = options.find((opt) => opt.value === value)
   const popperSide = direction === 'up' ? 'top' : direction === 'down' ? 'bottom' : undefined
+  const layeredPopoverStyle = useOverlayChildStyle()
 
   const displayedLabel = (
     <span className={`helm-select-label${selectedOption ? '' : ' helm-select-placeholder'}`}>
@@ -165,6 +167,7 @@ function SingleSelectInner<T extends string = string>({
               sideOffset={4}
               avoidCollisions
               className={`helm-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
+              style={layeredPopoverStyle}
             >
               <RadixSelect.Viewport className="helm-select-viewport">
                 {options.map((opt) => {
@@ -247,6 +250,7 @@ function MultiSelectInner<T extends string = string>({
   const selectedSet = useMemo(() => new Set<T>(selectedValues), [selectedValues])
 
   const popperSide = direction === 'up' ? 'top' : direction === 'down' ? 'bottom' : undefined
+  const layeredPopoverStyle = useOverlayChildStyle()
 
   // 触发值变更
   const commitChange = (nextValues: T[]) => {
@@ -421,7 +425,7 @@ function MultiSelectInner<T extends string = string>({
         {inline ? (
           <div
             className={`helm-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
-            style={{ position: 'relative', marginTop: 4 }}
+            style={{ position: 'relative', marginTop: 4, ...layeredPopoverStyle }}
           >
             {contentNode}
           </div>

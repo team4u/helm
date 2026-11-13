@@ -3,6 +3,7 @@ import type { ConversationSummary } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
 import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { formatBytes } from '../lib/format.js'
@@ -53,10 +54,13 @@ export interface WorkbenchDrawerProps {
   conversation?: ConversationSummary
   /** 仅传 ID 时从 store 读取会话。 */
   conversationId?: number
+  /** 是否内联渲染；默认 true，保持工作台与主壳同一 DOM 树。 */
+  inline?: boolean
 }
 
 /** 右侧工作台抽屉：内置产物页签 + 插件 workbench.panel（动态排序与角标）。 */
 export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
+  const inline = props.inline ?? true
   const store = useHelmStore()
   const conversationId =
     props.conversation?.id ??
@@ -77,24 +81,19 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
   const activeTab = resolveActiveWorkbenchTab(store.workbenchTab, tabs)
   const activePanel = tabs.find((tab) => tab.id === activeTab && tab.pluginId !== undefined)
   const footerParts = buildWorkbenchFooter(tabs)
-  const { sseConnected, workbenchTab, setWorkbenchTab, activeModal, setWorkbenchOpen } = store
+  const { sseConnected, workbenchTab, setWorkbenchTab, setWorkbenchOpen } = store
   useEffect(() => {
     // 首帧 UI 贡献和会话尚未返回时保留深链；确认不可用后才规范化 URL。
     if (sseConnected && conversation !== undefined && activeTab !== workbenchTab) setWorkbenchTab(activeTab)
   }, [sseConnected, conversation, activeTab, workbenchTab, setWorkbenchTab])
-  useEffect(() => {
-    // Escape 关闭抽屉；上层模态（如产物预览）打开时让位给它先处理。
-    if (activeModal !== null) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setWorkbenchOpen(false)
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [activeModal, setWorkbenchOpen])
 
   return (
-    <aside className="helm-workbench" role="dialog" aria-modal="true" aria-label="工作台抽屉">
-      <Tabs
+    <Dialog open inline={inline} onOpenChange={(open) => { if (!open) setWorkbenchOpen(false) }}>
+      <DialogPortal inline={inline}>
+        <DialogOverlay className="workbench-backdrop" aria-label="关闭工作台">
+          <DialogContent className="helm-workbench" aria-label="工作台抽屉">
+            <DialogTitle style={{ display: 'none' }}>工作台</DialogTitle>
+            <Tabs
         value={activeTab}
         onValueChange={(val) => store.setWorkbenchTab(val)}
         variant="underline"
@@ -153,14 +152,17 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
             </div>
           )}
         </div>
-      </Tabs>
-      {footerParts.length > 0 ? (
-        <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', gap: 6, fontSize: 11, color: 'var(--fg-muted)' }}>
-          {footerParts.map((part) => (
-            <span key={part} className="badge badge-neutral">{part}</span>
-          ))}
-        </div>
-      ) : null}
-    </aside>
+            </Tabs>
+            {footerParts.length > 0 ? (
+              <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', gap: 6, fontSize: 11, color: 'var(--fg-muted)' }}>
+                {footerParts.map((part) => (
+                  <span key={part} className="badge badge-neutral">{part}</span>
+                ))}
+              </div>
+            ) : null}
+          </DialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </Dialog>
   )
 }

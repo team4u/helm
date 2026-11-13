@@ -167,6 +167,59 @@ test('Dialog DOM 交互契约：role="dialog"、无障碍关联与 onOpenChange 
   container.remove()
 })
 
+test('Dialog 自动维护无限嵌套层级：新开启的遮罩与内容始终高于父 Dialog', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  function StackApp() {
+    return e(React.Fragment, null,
+      e(Dialog, { open: true },
+        e(DialogPortal, { inline: true },
+          e(DialogOverlay, { id: 'stack-parent-overlay', className: 'modal-backdrop' },
+            e(DialogContent, { id: 'stack-parent-content', className: 'conversation-drawer' },
+              e(DialogTitle, null, '父抽屉'),
+            ),
+          ),
+        ),
+      ),
+      e(Dialog, { open: true, onOpenChange: () => {} },
+        e(DialogPortal, { inline: true },
+          e(DialogOverlay, { id: 'stack-child-overlay', className: 'modal-backdrop' },
+            e(DialogContent, { id: 'stack-child-content', className: 'conversation-drawer' },
+              e(DialogTitle, null, '子抽屉'),
+            ),
+          ),
+        ),
+      ),
+    )
+  }
+
+  try {
+    await act(async () => { root.render(e(StackApp)) })
+    const parentOverlay = document.getElementById('stack-parent-overlay')!
+    const parentContent = document.getElementById('stack-parent-content')!
+    assert.ok(parentOverlay && parentContent)
+
+    await act(async () => { await Promise.resolve() })
+    const childOverlay = document.getElementById('stack-child-overlay')!
+    const childContent = document.getElementById('stack-child-content')!
+    assert.ok(childOverlay && childContent)
+    assert.ok(
+      Number(childOverlay.style.zIndex) > Number(parentContent.style.zIndex),
+      '新 Dialog 遮罩必须盖在父 Dialog 内容之上',
+    )
+    assert.ok(
+      Number(childContent.style.zIndex) > Number(childOverlay.style.zIndex),
+      '新 Dialog 内容必须盖在自身遮罩之上',
+    )
+
+    await act(async () => { root.unmount() })
+  } finally {
+    container.remove()
+  }
+})
+
 test('Dialog open=false 初始状态不渲染内容', { timeout: 60_000 }, async () => {
   const container = document.createElement('div')
   document.body.appendChild(container)

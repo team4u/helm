@@ -1,5 +1,6 @@
 import * as React from 'react'
 import * as PopoverPrimitive from '@radix-ui/react-popover'
+import { useOverlayChildStyle } from './overlay-stack.js'
 
 export interface PopoverPortalProps extends PopoverPrimitive.PopoverPortalProps {}
 
@@ -33,13 +34,15 @@ export interface PopoverContentProps extends React.ComponentPropsWithoutRef<type
 export const PopoverContent = React.forwardRef<
   React.ComponentRef<typeof PopoverPrimitive.Content>,
   PopoverContentProps
->(({ className = '', align = 'center', sideOffset = 6, portalled = false, children, ...props }, ref) => {
+>(({ className = '', align = 'center', sideOffset = 6, portalled = false, children, style, ...props }, ref) => {
+  const layeredStyle = useOverlayChildStyle(style)
   const content = (
     <PopoverPrimitive.Content
       ref={ref}
       align={align}
       sideOffset={sideOffset}
       className={`helm-popover-content ${className}`.trim()}
+      style={layeredStyle}
       {...props}
     >
       {children}

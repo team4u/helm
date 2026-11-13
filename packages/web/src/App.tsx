@@ -186,17 +186,7 @@ function HelmShellInner() {
         </div>
       </main>
 
-      {store.workbenchOpen && (
-        <>
-          <button
-            type="button"
-            className="workbench-backdrop"
-            aria-label="关闭工作台"
-            onClick={() => store.setWorkbenchOpen(false)}
-          />
-          <WorkbenchDrawer conversationId={activeConversationId} />
-        </>
-      )}
+      {store.workbenchOpen && <WorkbenchDrawer conversationId={activeConversationId} />}
 
       {store.activeModal?.kind === 'command-palette' && <CommandPaletteModal onClose={closeModal} />}
       {store.activeModal?.kind === 'artifact-preview' && (

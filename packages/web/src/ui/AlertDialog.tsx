@@ -1,5 +1,6 @@
 import React from 'react'
 import * as RadixAlertDialog from '@radix-ui/react-alert-dialog'
+import { OverlayLayerContext, useOverlayLayer } from './overlay-stack.js'
 
 const AlertDialogInlineContext = React.createContext<boolean>(false)
 
@@ -17,10 +18,24 @@ export interface AlertDialogProps extends RadixAlertDialog.AlertDialogProps {
  * - 阻断外部交互，自带 Escape 键监听与焦点圈定；
  * - 支持 inline 参数与 SSR / renderToString 兼容。
  */
-export function AlertDialog({ inline = false, children, ...props }: AlertDialogProps) {
+export function AlertDialog({ inline = false, children, open, defaultOpen, onOpenChange, ...props }: AlertDialogProps) {
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false)
+  const isOpen = open ?? uncontrolledOpen
+  const layer = useOverlayLayer(isOpen)
+  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
+    if (open === undefined) setUncontrolledOpen(nextOpen)
+    onOpenChange?.(nextOpen)
+  }, [open, onOpenChange])
+
   return (
     <AlertDialogInlineContext.Provider value={inline}>
-      <RadixAlertDialog.Root {...props}>{children}</RadixAlertDialog.Root>
+      <RadixAlertDialog.Root
+        {...props}
+        {...(open === undefined ? { defaultOpen } : { open })}
+        onOpenChange={handleOpenChange}
+      >
+        <OverlayLayerContext.Provider value={layer}>{children}</OverlayLayerContext.Provider>
+      </RadixAlertDialog.Root>
     </AlertDialogInlineContext.Provider>
   )
 }
@@ -53,11 +68,16 @@ export interface AlertDialogOverlayProps extends React.ComponentPropsWithoutRef<
 export const AlertDialogOverlay = React.forwardRef<
   React.ComponentRef<typeof RadixAlertDialog.Overlay>,
   AlertDialogOverlayProps
->(function AlertDialogOverlay({ className, ...props }, ref) {
+>(function AlertDialogOverlay({ className, style, ...props }, ref) {
+  const layer = React.useContext(OverlayLayerContext)
+  const layeredStyle = layer === null
+    ? style
+    : ({ ...style, zIndex: layer.overlayZIndex, '--dialog-layer-z': layer.overlayZIndex } as React.CSSProperties)
   return (
     <RadixAlertDialog.Overlay
       ref={ref}
       className={className ?? 'modal-backdrop'}
+      style={layeredStyle}
       {...props}
     />
   )
@@ -72,11 +92,16 @@ export interface AlertDialogContentProps extends React.ComponentPropsWithoutRef<
 export const AlertDialogContent = React.forwardRef<
   React.ComponentRef<typeof RadixAlertDialog.Content>,
   AlertDialogContentProps
->(function AlertDialogContent({ className, ...props }, ref) {
+>(function AlertDialogContent({ className, style, ...props }, ref) {
+  const layer = React.useContext(OverlayLayerContext)
+  const layeredStyle = layer === null
+    ? style
+    : ({ ...style, zIndex: layer.contentZIndex, '--dialog-layer-z': layer.contentZIndex } as React.CSSProperties)
   return (
     <RadixAlertDialog.Content
       ref={ref}
       className={className ?? 'modal'}
+      style={layeredStyle}
       {...props}
     />
   )

@@ -9,6 +9,7 @@ const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.me
 const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawer.tsx', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
 const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+const overlayStackSource = readFileSync(new URL('../src/ui/overlay-stack.ts', import.meta.url), 'utf8')
 
 test('index.html viewport 配置包含 viewport-fit=cover', { timeout: 60_000 }, () => {
   assert.match(
@@ -118,11 +119,16 @@ test('Sidebar.tsx Activity Rail 空间切换保持移动端抽屉展开（二级
   )
 })
 
-test('App.tsx 在 workbench 打开时渲染移动端遮罩层并支持点击关闭', { timeout: 60_000 }, () => {
+test('WorkbenchDrawer 自己渲染 Dialog 遮罩并支持点击关闭', { timeout: 60_000 }, () => {
   assert.match(
-    appSource,
-    /store\.workbenchOpen\s*&&\s*\([\s\S]*?<button[\s\S]*?className=["'][^"']*workbench-backdrop[^"']*["'][\s\S]*?onClick=\{\(\)\s*=>\s*store\.setWorkbenchOpen\(false\)\}/,
-    'App.tsx 必须在 workbenchOpen 时渲染 workbench-backdrop 遮罩',
+    workbenchSource,
+    /<DialogOverlay\s+className=["']workbench-backdrop["'][\s\S]*?<DialogContent\s+className=["']helm-workbench["']/,
+    'WorkbenchDrawer 必须由自身承载 workbench-backdrop 与抽屉内容，不能依赖 App 外层打补丁',
+  )
+  assert.match(
+    workbenchSource,
+    /onOpenChange=\{\(open\)\s*=>\s*\{\s*if\s*\(!open\)\s*setWorkbenchOpen\(false\)\s*\}\}/,
+    'WorkbenchDrawer 必须把 Radix Dialog 关闭事件接回工作台状态',
   )
 })
 
@@ -180,18 +186,18 @@ test('responsive.css 适配移动端视口安全区、触控热区与遮罩层�
   // 遮罩层级与样式：工作台抽屉全断点为右侧滑出覆盖层，遮罩在 styles.css 全局定义
   assert.match(
     stylesCss,
-    /\.workbench-backdrop\s*\{[^}]*z-index:\s*90;[^}]*\}/,
-    '.workbench-backdrop 必须全局定义 z-index: 90',
-  )
-  assert.match(
-    stylesCss,
     /\.workbench-backdrop\s*\{[^}]*backdrop-filter:\s*blur\(8px\)/,
     '.workbench-backdrop 必须使用毛玻璃遮罩',
   )
   assert.match(
     stylesCss,
-    /\.helm-workbench\s*\{[^}]*position:\s*fixed;[^}]*width:\s*min\(560px,\s*100vw\);[^}]*z-index:\s*100;/s,
+    /\.helm-workbench\s*\{[^}]*position:\s*fixed;[^}]*width:\s*min\(560px,\s*100vw\);/s,
     '.helm-workbench 桌面端必须是贴右全高覆盖层抽屉（≥520px，非内嵌栏）',
+  )
+  assert.match(
+    overlayStackSource,
+    /new Set<symbol>\(\)[\s\S]*?function useOverlayLayer\([\s\S]*?overlayZIndex:[\s\S]*?contentZIndex:/,
+    '公共浮层栈必须自动分配 overlay/content 层级，不能依赖抽屉 CSS 手写 z-index',
   )
   assert.match(
     stylesCss,
