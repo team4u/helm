@@ -365,15 +365,33 @@ button,
   position: relative;
 }
 
+/* 工作台抽屉遮罩：与 primary-drawer 同规范的毛玻璃遮罩，点击关闭 */
+.workbench-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px) saturate(1.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  z-index: 90;
+}
+
 .helm-workbench {
-  width: 340px;
-  min-width: 340px;
-  height: 100%;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(560px, 100vw);
   display: flex;
   flex-direction: column;
   background: var(--bg-elevated);
   border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
   overflow: hidden;
+  z-index: 100;
+  animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* ==========================================================================
@@ -415,6 +433,17 @@ button,
   flex-direction: column;
   overflow: hidden;
   animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 右侧滑出抽屉通用入场动效（conversation / plugin / workbench / primary 抽屉共用） */
+@keyframes drawerSlideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes primaryDrawerSlideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
 }
 
 

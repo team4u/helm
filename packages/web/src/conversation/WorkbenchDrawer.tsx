@@ -77,14 +77,23 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
   const activeTab = resolveActiveWorkbenchTab(store.workbenchTab, tabs)
   const activePanel = tabs.find((tab) => tab.id === activeTab && tab.pluginId !== undefined)
   const footerParts = buildWorkbenchFooter(tabs)
-  const { sseConnected, workbenchTab, setWorkbenchTab } = store
+  const { sseConnected, workbenchTab, setWorkbenchTab, activeModal, setWorkbenchOpen } = store
   useEffect(() => {
     // 首帧 UI 贡献和会话尚未返回时保留深链；确认不可用后才规范化 URL。
     if (sseConnected && conversation !== undefined && activeTab !== workbenchTab) setWorkbenchTab(activeTab)
   }, [sseConnected, conversation, activeTab, workbenchTab, setWorkbenchTab])
+  useEffect(() => {
+    // Escape 关闭抽屉；上层模态（如产物预览）打开时让位给它先处理。
+    if (activeModal !== null) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setWorkbenchOpen(false)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [activeModal, setWorkbenchOpen])
 
   return (
-    <aside className="helm-workbench">
+    <aside className="helm-workbench" role="dialog" aria-modal="true" aria-label="工作台抽屉">
       <Tabs
         value={activeTab}
         onValueChange={(val) => store.setWorkbenchTab(val)}

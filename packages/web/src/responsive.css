@@ -10,7 +10,7 @@
 .connection-screen { height: 100dvh; }
 .connection-banner { padding: 7px 16px; background: var(--warn-bg); border-bottom: 1px solid var(--warn-border); color: var(--warn); font-size: 12px; }
 .connection-banner span { margin-left: 12px; }
-.mobile-nav-toggle, .sidebar-backdrop, .workbench-backdrop, .mobile-sidebar-close { display: none; }
+.mobile-nav-toggle, .sidebar-backdrop, .mobile-sidebar-close { display: none; }
 .nav-open { border: 0; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; min-height: 22px; }
 button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 button, a, input, select, textarea { touch-action: manipulation; }
@@ -109,10 +109,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     align-items: center;
   }
 }
-@media (max-width: 1200px) {
-  .helm-workbench { position: fixed; right: 0; top: 0; z-index: 60; width: min(92vw, 360px); min-width: 0; box-shadow: var(--shadow-lg); }
-  .workbench-backdrop { display: block; position: fixed; inset: 0; z-index: 59; background: var(--bg-backdrop); border: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-}
 @media (max-width: 860px) {
   /* 窄屏只隐藏「开启分屏」入口；分屏已开启时保留激活态按钮与关闭按钮可点 */
   .split-toggle-btn:not(.split-active),
@@ -207,6 +203,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .palette-close-desktop { display: none !important; }
   .palette-close-mobile { display: inline-flex !important; }
   .conversation-drawer { width: 100vw; }
+  .helm-workbench { width: 100vw; border-left: none; }
   .conversation-drawer-close-btn { min-height: 44px; min-width: 44px; }
 }
 

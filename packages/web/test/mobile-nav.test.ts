@@ -8,6 +8,7 @@ const authGateSource = readFileSync(new URL('../src/shell/AuthGate.tsx', import.
 const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
 const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawer.tsx', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
+const stylesCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
 
 test('index.html viewport 配置包含 viewport-fit=cover', { timeout: 60_000 }, () => {
   assert.match(
@@ -176,11 +177,31 @@ test('responsive.css 适配移动端视口安全区、触控热区与遮罩层�
     '.mobile-nav-toggle 触控热区提升至 36x36px',
   )
 
-  // 遮罩层级与样式
+  // 遮罩层级与样式：工作台抽屉全断点为右侧滑出覆盖层，遮罩在 styles.css 全局定义
+  assert.match(
+    stylesCss,
+    /\.workbench-backdrop\s*\{[^}]*z-index:\s*90;[^}]*\}/,
+    '.workbench-backdrop 必须全局定义 z-index: 90',
+  )
+  assert.match(
+    stylesCss,
+    /\.workbench-backdrop\s*\{[^}]*backdrop-filter:\s*blur\(8px\)/,
+    '.workbench-backdrop 必须使用毛玻璃遮罩',
+  )
+  assert.match(
+    stylesCss,
+    /\.helm-workbench\s*\{[^}]*position:\s*fixed;[^}]*width:\s*min\(560px,\s*100vw\);[^}]*z-index:\s*100;/s,
+    '.helm-workbench 桌面端必须是贴右全高覆盖层抽屉（≥520px，非内嵌栏）',
+  )
+  assert.match(
+    stylesCss,
+    /@keyframes\s+drawerSlideIn\s*\{[^}]*translateX\(100%\)/s,
+    'drawerSlideIn 关键帧必须定义（抽屉滑入动效）',
+  )
   assert.match(
     responsiveCss,
-    /\.workbench-backdrop\s*\{[^}]*z-index:\s*59;[^}]*background:\s*var\(--bg-backdrop\);/,
-    '.workbench-backdrop 必须设置 z-index: 59 与 var(--bg-backdrop)',
+    /\.helm-workbench\s*\{[^}]*width:\s*100vw;/,
+    '移动端（≤680px）工作台抽屉必须自适应全宽',
   )
   assert.match(
     responsiveCss,
