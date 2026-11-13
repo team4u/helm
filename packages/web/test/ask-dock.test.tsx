@@ -201,6 +201,23 @@ test('取消后代 ask 走原 asksApi cancel', { timeout: 60_000 }, async () => 
   assert.equal(cancelPost.url, '/api/asks/ask-grand/cancel', '取消孙会话 ask 应命中其会话级 askId')
 })
 
+test('祖先面板与子会话抽屉同时呈现同一审批时表单标签不串实例', { timeout: 60_000 }, async () => {
+  installFetch()
+  const store = makeStore({ pendingAsks: [ask('shared-ask', 11, 42)] })
+  await renderAskDock(store, 1)
+  await act(async () => {
+    root?.render(e(TestStoreProvider, { value: store },
+      e(React.Fragment, null, e(AskDock, { conversationId: 1 }), e(AskDock, { conversationId: 11 })),
+    ))
+  })
+  const inputs = [...document.querySelectorAll<HTMLInputElement>('.ask-dock input')]
+  assert.equal(inputs.length, 2)
+  assert.notEqual(inputs[0]!.id, inputs[1]!.id, '同一 AskDoc 的不同表单实例必须有独立 DOM id')
+  for (const card of document.querySelectorAll('.ask-dock')) {
+    assert.equal(card.querySelector('label')?.htmlFor, card.querySelector('input')?.id)
+  }
+})
+
 test('ask 解除 pending 后卡片即时消失', { timeout: 60_000 }, async () => {
   installFetch()
   const store = makeStore()

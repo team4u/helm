@@ -53,8 +53,8 @@ export function collectSubtreeIds(conversations: ConversationSummary[], conversa
   }
   const subtree = new Set<number>([conversationId])
   const queue = [conversationId]
-  while (queue.length > 0) {
-    const parent = queue.shift()!
+  for (let index = 0; index < queue.length; index++) {
+    const parent = queue[index]!
     for (const child of childrenOf.get(parent) ?? []) {
       if (subtree.has(child)) continue
       subtree.add(child)

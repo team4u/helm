@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import type { AskFieldSpec, AskSpec } from '@helm/protocol'
 import { asksApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -122,6 +122,8 @@ function AskFieldInput({
 
 function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
   const store = useHelmStore()
+  // 同一审批可能同时出现在祖先面板与子会话抽屉，表单标签只关联本实例。
+  const formId = useId()
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState<'answer' | 'cancel' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -213,12 +215,12 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
         <div className="ask-dock-fields">
           {ask.fields.map((field) => (
             <div key={field.name} className="ask-dock-field">
-              <label htmlFor={field.type === 'confirm' ? undefined : `${ask.id}-${field.name}`} className="ask-dock-label">
+              <label htmlFor={field.type === 'confirm' ? undefined : `${formId}-${field.name}`} className="ask-dock-label">
                 {field.label}
                 {field.required === true ? <span className="ask-dock-required">*</span> : null}
               </label>
               <AskFieldInput
-                inputId={`${ask.id}-${field.name}`}
+                inputId={`${formId}-${field.name}`}
                 field={field}
                 value={answers[field.name] ?? ''}
                 disabled={submitting !== null}
