@@ -194,6 +194,27 @@ kernel.__faux.setResponses([fauxAssistantMessage('不该出现')])
 // 2. 成功路径与确定性拒绝
 // ---------------------------------------------------------------------------
 
+test('guarded steer whenIdle=reject：空闲会话原子拒绝，不启动新回合或落入输入条目', { timeout: 60_000 }, async () => {
+  const kernel = await openRuntime(join(root, 't-guarded-steer-idle'))
+  try {
+    const conversation = await kernel.createConversation({ title: '空闲自动化会话' })
+    kernel.markConversationOwnership(conversation.id, 'bot')
+    kernel.__faux.setResponses([fauxAssistantMessage('不应执行')])
+    await assert.rejects(
+      kernel.submitInputGuarded(conversation.id, '仅纠偏在途任务', {
+        origin: 'agent', whenBusy: 'steer', whenIdle: 'reject',
+      }, { expectedOwnership: 'bot', expectedStateSeq: kernel.getConversation(conversation.id).stateChangeSeq }),
+      isHelmError('conversation_idle', 409),
+    )
+    const detail = await kernel.getConversationDetail(conversation.id)
+    assert.equal(detail.entries.filter((entry) => entry.kind === 'helm.input').length, 0)
+    assert.equal(kernel.__faux.getPendingResponseCount(), 1)
+    assert.equal(kernel.getConversation(conversation.id).status, 'idle')
+  } finally {
+    await kernel.close()
+  }
+})
+
 test('guarded abort 成功路径：bot 会话在途回合按授权中止', { timeout: 60_000 }, async () => {
   const dir = join(root, 't-guarded-abort-ok')
   const kernel = await openRuntime(dir)

@@ -21,7 +21,7 @@
 | 当前会话归属 | 缺省生命周期 | 显式 `background` |
 | :--- | :--- | :--- |
 | `human`（人类直连会话，缺省值） | 后台：执行环境就绪即返回运行句柄（`runId` + 实际 execution），父回合继续；终态后自动幂等汇报 | `background: false` 显式退回同步等待最终结果 |
-| `helm` / `bot`（trigger 派生会话、SuperAgent Worker、看门狗等自动化会话） | 同步：等待真实终态结果再返回，供确定性链路继续推进 | `background: true` 显式拒绝（显式报错并携带当前会话归属事实，绝不静默降级为同步） |
+| `helm` / `bot`（受管子代理、SuperAgent Worker 等自动化会话） | 同步：等待真实终态结果再返回，供确定性链路继续推进 | `background: true` 显式拒绝（显式报错并携带当前会话归属事实，绝不静默降级为同步） |
 
 设计动因：人类回合不应被长任务阻塞——后台执行、完成后汇报即可；自动化链路（中枢路由、批处理、编排脚本）需要真实结果才能推进，后台句柄只是把不确定性往后推。因此自动化会话显式要求后台属于契约错误，直接拒绝而不是猜测意图。
 
@@ -30,7 +30,7 @@
 | 执行体 | 派生机制 | 深度登记 | 结果回传 |
 | :--- | :--- | :--- | :--- |
 | 原生 Profile 子会话 | 内核 `spawnAgent` 管道（`agent_spawn` Hook） | 进 `subagent-conversations` 登记表，受嵌套深度契约约束；支持 `resume` 续接 | 同步等待最终结果；后台经下文幂等汇报链投递父会话 |
-| 外部 Herdr Profile（`herdr:<kind>` 前缀或 `runtime.kind: 'herdr'` 的 Profile） | `builtin:herdr` 拦截 `agent_spawn` 改道终端窗格执行，文件交接回传 | 同样进登记表、受深度契约约束（对上层编排透明） | 同一条幂等汇报链（父会话仍是原生 Helm 会话）。对外部窗格不支持 steer 插话（待能力）；补充指令经 `subagent` 的 `resume` 续接 |
+| 外部 Herdr Profile（`herdr:<kind>` 前缀或 `runtime.kind: 'herdr'` 的 Profile） | `builtin:herdr` 拦截 `agent_spawn`，在终端窗格执行并通过文件交接回传 | 派生入口检查调用方深度；窗格没有原生 `conversationId`，不登记为子会话 | 后台终态同样汇报父会话；不支持运行中 steer。调整任务须中止后重新发起；`resume` 仅适用于仍存在且可续接的执行 |
 | SuperAgent Worker | `builtin:superagent` 的 `dispatch_worker`：`createConversation`（不经 spawn 管道） | 不进登记表、不受深度契约约束 | 插件自有非阻塞协议：派工立即返回 `workerConversationId`、绝不同步等待；汇报走独立 `turn_settled` → 中枢路由链。它不是 `subagent` 的 `background` 参数，两者不得混用 |
 | fork / 人工会话 | 人类在 Web/CLI 直接创建或 fork 既有会话 | 不进登记表、不受深度限制 | 就是普通会话；人类直连（human-owned）即适用「缺省后台」策略 |
 
@@ -40,11 +40,11 @@
 
 ### 后台完成自动幂等汇报
 
-后台 run 到达终态（完成/失败/中止/中断）后，引擎经 `submitInput` 向父会话投递汇报，幂等键为 `requestId = helm:subagent-report:<runId>`：并发触发、终态后重复调用、Hub 重启恢复都恰好投递一次（持久去重）；父会话已删除时降级为全局 notification（见上文诚实性设计）。
+模型工具后台启动的 run 到达终态（完成/失败/中止/中断）后，引擎经 `submitInput` 向父会话投递 `followUp` 汇报。子代理的幂等键为 `helm:subagent-report:<runId>`，工作流为 `helm:workflow-report:<runId>`；未确认送达的通知在 Hub 重启时补发，父会话按 `requestId` 持久去重。汇报附带投递时其余在途运行的快照，不把单个任务完成当成全部任务完成。父会话已删除时发送全局 notification（见上文诚实性设计）。CLI/动作启动的 run 保留现有查询与 `--wait` 语义，不自动向会话投递汇报。
 
 因此**禁止 sleep 轮询**：发起后台任务后不要用 `sleep`、循环 bash 或定时重查去等结果——汇报会自动到达本会话。需要主动核对进度时用只读的 `helm workflows inspect <runId>`（按需查询，不是等待手段）。
 
-## 五端动作（11 个）
+## 五端动作（12 个）
 
 工作流定义是跨会话可复用资产，唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js` 文件目录（无 catalog/state 副本）；`get` / `save` / `delete` 是这组资产的完整管理面，创建与修改全部由 AI / CLI 经动作完成，Web 端只读。
 
@@ -57,7 +57,8 @@
 | `run` | `helm workflows run [nameOrFile]` | 在指定或当前会话启动运行；新 run 必须显式指定会话（CLI `--current` 或 `--conversation-id`）；位置参数为已保存名或本地脚本文件（自动读入 `script`）；`--wait` 同步等终态 |
 | `runs` | `helm workflows runs` | 列出运行记录；支持 `conversationId` 过滤，CLI `--current` 缺省按当前会话过滤 |
 | `inspect` | `helm workflows inspect <runId>` | 查看单个运行详情（含节点状态与进度时间线；已保存定义发起的 run 携带 `savedName`） |
-| `abort` | `helm workflows abort <runId>` | 中止运行中工作流 |
+| `abort` | `helm workflows abort <runId>` | 中止运行中的工作流或后台子代理 |
+| `steer` | `helm workflows steer <runId> --text "<指导>"` | 向在途原生后台子代理插话；只允许发起会话或其祖先控制，按归属与 CAS 水位守卫提交。已结束模型回合、human 归属、DSL 工作流或外部执行显式拒绝；同步获得 HTTP、CLI、模型工具与 `run_action` 入口 |
 | `cleanup_worktree` | `helm worktrees cleanup` | 与工具同款语义；选择器三择一互斥，`--force` 清理脏工作树（不可越过占用/归属/locked 校验） |
 | `list_worktrees` | `helm worktrees list` | 列出受管工作树登记（含已清理记录的元数据；新建在前） |
 | `inspect_worktree` | `helm worktrees inspect <worktreeId>` | 只读检视受管工作树：登记元数据 + 目标节点真实 git 只读探测（未提交文件清单、领先基线提交数、diff 统计与有上限预览）；仅登记记录可检视，不支持任意目录；已清理/目录缺失如实返回 `unavailableReason`，git 失败显式报错（附截断诊断，绝不静默当成功）；diff 固定 `--no-ext-diff --no-textconv` 且仅覆盖 tracked 改动（untracked 文件内容不进 diff，仍完整见于状态清单与 `dirtyFileCount` 真实总数）；预览/统计/状态清单在采集阶段即限内存，超出置 `diffTruncated`/`dirtyFilesTruncated` 或统计末尾截断说明，不假装完整；成功输出与错误诊断均经机密脱敏 |

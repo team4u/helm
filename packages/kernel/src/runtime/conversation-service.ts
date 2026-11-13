@@ -91,6 +91,8 @@ export interface ConversationServiceOptions {
 export interface SubmitInputOptions {
   origin?: InputOrigin
   whenBusy?: WhenBusy
+  /** @internal guarded 提交可要求 SDK 原子拒绝空闲会话；HTTP/CLI 不开放。 */
+  whenIdle?: 'reject'
   meta?: Record<string, unknown>
   attachments?: string[]
   replaceFromEntryId?: number
@@ -313,6 +315,9 @@ export class ConversationService {
     guard: GuardedMutationExpectation = {},
   ): Promise<{ submissionId: string }> {
     this.assertGuardShape(guard)
+    if (opts?.whenIdle !== undefined && opts.whenIdle !== 'reject') {
+      throw new HelmError('validation_error', 'guarded 提交的 whenIdle 仅允许 reject', 400)
+    }
     if (opts?.replaceFromEntryId !== undefined) {
       throw new HelmError(
         'validation_error',
@@ -719,6 +724,7 @@ export class ConversationService {
       resolvedAttachments: prepared.resolvedAttachments,
       content,
       requestId: opts?.requestId,
+      ...(opts?.whenIdle !== undefined ? { whenIdle: opts.whenIdle } : {}),
       ...(opts?.mutationGuard !== undefined ? { mutationGuard: opts.mutationGuard } : {}),
     }
     if (opts?.mutationGuard !== undefined) {

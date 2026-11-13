@@ -27,6 +27,10 @@ import {
   type WorkflowRunSummary,
 } from '@helm/protocol'
 import { isAncestorOrSelf, steerBackgroundSubagent } from '../src/builtin-plugins/workflow/steer.js'
+import { createModels } from '@earendil-works/pi-ai/models'
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { createHelm } from '../src/app.js'
+import { waitFor } from './helpers.js'
 import { actionToolAlias } from '../src/plugins/capability-registry.js'
 import { PluginHost, type PluginDocStore } from '../src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js'
@@ -180,6 +184,7 @@ describe('steerBackgroundSubagent 纯逻辑', () => {
     assert.deepEqual(call.opts, {
       origin: 'agent',
       whenBusy: 'steer',
+      whenIdle: 'reject',
       meta: { kind: 'subagent_steer', runId: 'wf_run0000000001' },
     })
     assert.deepEqual(call.guard, { expectedOwnership: 'bot', expectedStateSeq: 7 })
@@ -239,6 +244,45 @@ describe('steerBackgroundSubagent 纯逻辑', () => {
       () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_settling', text: 'x' }, {}),
       'steer_subagent_not_running',
       409,
+    )
+    assert.equal(p.submitted.length, 0)
+  })
+
+  it('run 仍 running 但子会话已结束（Gate 在途），拒绝启动额外回合', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_run0000000001', subagentRun())
+    for (const status of ['idle', 'done', 'error'] as const) {
+      p.conversations.set(42, { ...conv(42, 1), status })
+      await rejectsWith(
+        () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_run0000000001', text: '调整方案' }, { conversationId: 1 }),
+        'steer_subagent_not_running',
+        409,
+      )
+    }
+    assert.equal(p.submitted.length, 0)
+  })
+
+  it('子会话自身处于取消边界时拒绝插话', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_run0000000001', subagentRun())
+    p.cancelling.add(42)
+    await rejectsWith(
+      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_run0000000001', text: '调整方案' }, { conversationId: 1 }),
+      'steer_run_cancelling',
+      409,
+    )
+    assert.equal(p.submitted.length, 0)
+  })
+
+  it('父链读取的真实 IO 错误透传', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_run0000000001', subagentRun())
+    const ports = portsOf(p)
+    const failure = new Error('state store read failed')
+    ports.getConversation = () => { throw failure }
+    await assert.rejects(
+      steerBackgroundSubagent(ports, { runId: 'wf_run0000000001', text: '调整方案' }, { conversationId: 2 }),
+      (error: unknown) => error === failure,
     )
     assert.equal(p.submitted.length, 0)
   })
@@ -362,7 +406,7 @@ describe('isAncestorOrSelf', () => {
   ])
   const parentOf = (id: number) => parents.get(id)
 
-  it('自身与祖先命中；无关与断链不命中', () => {
+  it('自身与祖先命中；无关与断链不命中', timeout, () => {
     assert.equal(isAncestorOrSelf(3, 3, parentOf), true)
     assert.equal(isAncestorOrSelf(3, 1, parentOf), true, '1 是 3 的祖父')
     assert.equal(isAncestorOrSelf(3, 9, parentOf), false, '无关会话')
@@ -370,7 +414,7 @@ describe('isAncestorOrSelf', () => {
     assert.equal(isAncestorOrSelf(9, 1, parentOf), false, '起点父链缺失即断链')
   })
 
-  it('父链环不死循环；深度上限按不可证明处理', () => {
+  it('父链环不死循环；深度上限按不可证明处理', timeout, () => {
     const cyclic = new Map<number, number>([
       [5, 6],
       [6, 5],
@@ -603,6 +647,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
     assert.deepEqual(call.opts, {
       origin: 'agent',
       whenBusy: 'steer',
+      whenIdle: 'reject',
       meta: { kind: 'subagent_steer', runId },
     })
     assert.deepEqual(call.guard, { expectedOwnership: 'bot', expectedStateSeq: 7 })
@@ -682,4 +727,64 @@ describe('workflow 插件 steer 动作（端到端）', () => {
     assert.equal(backend.submitted.length, 0)
     await host.dispose()
   })
+})
+
+it('真实内核：在工具挂起期间纠偏，子代理读到新指令并将最终结果交回后台 run', timeout, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'wf-steer-native-'))
+  const models = createModels()
+  const faux = fauxProvider()
+  models.setProvider(faux.provider)
+  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  let releaseTool!: () => void
+  const toolGate = new Promise<void>((resolve) => { releaseTool = resolve })
+  try {
+    await app.kernel.plugins.register({
+      id: 'test:steer-barrier',
+      name: 'steer barrier',
+      definePlugin(ctx) {
+        ctx.tool({
+          name: 'hold_for_steer',
+          description: '等待本次测试放行',
+          inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+          async execute() {
+            await toolGate
+            return { output: [{ type: 'text', text: '工具已放行' }] }
+          },
+        })
+      },
+    })
+    let sawSteer = false
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('hold_for_steer', {})], { stopReason: 'toolUse' }),
+      (context) => {
+        sawSteer = context.messages.some((message) => message.role === 'user' && JSON.stringify(message.content).includes('改用方案B'))
+        return fauxAssistantMessage('已按方案B完成')
+      },
+      fauxAssistantMessage('主会话收到最终结果'),
+    ])
+    const started = await app.kernel.plugins.executeTool(
+      'subagent',
+      { prompt: '执行原方案' },
+      { conversationId: 1, callId: 'native-steer' },
+    ) as { structuredOutput: { runId: string; execution: { conversationId: number } } }
+    const { runId, execution } = started.structuredOutput
+    const childId = execution.conversationId
+    await waitFor(() => app.kernel.getConversation(childId).doing?.startsWith('hold_for_steer:') === true)
+    await app.kernel.plugins.invokeAction(WORKFLOW_PLUGIN_ID, 'steer', { runId, text: '改用方案B' }, { conversationId: 1 })
+    releaseTool()
+    await app.kernel.waitForIdle(childId)
+    await waitFor(async () => {
+      const { run } = await app.kernel.plugins.invokeAction(WORKFLOW_PLUGIN_ID, 'inspect', { runId }) as { run: WorkflowRunSummary }
+      return run.status === 'completed'
+    })
+    const { run } = await app.kernel.plugins.invokeAction(WORKFLOW_PLUGIN_ID, 'inspect', { runId }) as { run: WorkflowRunSummary }
+    assert.equal(sawSteer, true, '子代理下一次模型调用应包含纠偏指令')
+    assert.equal(run.result, '已按方案B完成')
+    const detail = await app.kernel.getConversationDetail(childId)
+    assert.ok(detail.entries.some((entry) => entry.kind === 'helm.input' && (entry.data as { meta?: { runId?: string } })?.meta?.runId === runId))
+  } finally {
+    releaseTool()
+    await app.close()
+    rmSync(dataDir, { recursive: true, force: true })
+  }
 })

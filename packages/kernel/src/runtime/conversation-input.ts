@@ -155,6 +155,7 @@ export class ConversationInputPipeline {
       resolvedAttachments: Array<{ ref: ConversationAttachmentRef; metadata: ArtifactMetadata; absPath: string }> | undefined
       content: string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>
       requestId: string | undefined
+      whenIdle?: 'reject'
       /** guarded mutation：提交点原子复核载荷（普通提交缺省）。 */
       mutationGuard?: GuardedMutationExpectation
     },
@@ -172,6 +173,7 @@ export class ConversationInputPipeline {
           type: 'input',
           content: content as never,
           whenBusy: finalWhenBusy,
+          ...(prepared.whenIdle !== undefined ? { whenIdle: prepared.whenIdle } : {}),
           entry: {
             kind: 'helm.input',
             data: {

@@ -30,7 +30,7 @@ export interface SteerHostPorts {
   submitInputGuarded(
     conversationId: number,
     text: string,
-    opts: { origin: 'agent'; whenBusy: 'steer'; meta: Record<string, unknown> },
+    opts: { origin: 'agent'; whenBusy: 'steer'; whenIdle: 'reject'; meta: Record<string, unknown> },
     guard: { expectedOwnership: 'bot' | 'helm'; expectedStateSeq: number },
   ): Promise<unknown>
 }
@@ -87,7 +87,7 @@ export async function steerBackgroundSubagent(
   context: { conversationId?: number },
 ): Promise<SteerActionOutput> {
   // 入参边界校验（外部输入显式拒绝；schema 之外的白文本仍需防御）。
-  const runId = typeof input.runId === 'string' ? input.runId : ''
+  const runId = typeof input.runId === 'string' ? input.runId.trim() : ''
   const text = typeof input.text === 'string' ? input.text.trim() : ''
   if (runId === '') {
     throw new HelmError('validation_error', 'runId 不能为空', 400, { field: 'runId' })
@@ -131,12 +131,12 @@ export async function steerBackgroundSubagent(
     )
   }
 
-  /** 链上会话不可读（已删除/IO 故障）即断链：不可证明 = 拒绝，不虚构祖先。 */
   const parentOf = (id: number): number | undefined => {
     try {
       return ports.getConversation(id).parentConversationId
-    } catch {
-      return undefined
+    } catch (error) {
+      if (error instanceof HelmError && error.code === 'not_found') return undefined
+      throw error
     }
   }
 
@@ -186,7 +186,7 @@ export async function steerBackgroundSubagent(
   // 7) run → child 后代证明：子会话父链必须可达 run 发起会话（记录漂移或
   //    伪装的 conversationId 在此拦截）；子会话已删除则 not_found 透传。
   const childSummary = ports.getConversation(childId)
-  if (!isAncestorOrSelf(childId, run.conversationId, parentOf)) {
+  if (childId === run.conversationId || !isAncestorOrSelf(childId, run.conversationId, parentOf)) {
     throw new HelmError(
       'steer_lineage_mismatch',
       `子会话 ${childId} 不在运行 ${runId} 发起会话 ${run.conversationId} 的后代树内（记录与真实会话树不一致），拒绝插话`,
@@ -207,6 +207,20 @@ export async function steerBackgroundSubagent(
     )
   }
 
+  // run 可能仍在验收 Gate 或刚完成环境创建；此时不能把指导当成新任务提交。
+  // 执行态现读与下方 CAS 共用同一水位，异步提交期间回合结束会被内核拒绝。
+  if (childSummary.status !== 'working' && childSummary.status !== 'blocked') {
+    throw new HelmError(
+      'steer_subagent_not_running',
+      `子会话 ${childId} 当前状态为 ${childSummary.status}，没有可插话的在途回合`,
+      409,
+      { runId, conversationId: childId, status: childSummary.status },
+    )
+  }
+  if (ports.isConversationCancelling(childId)) {
+    throw new HelmError('steer_run_cancelling', `子会话 ${childId} 正在取消，拒绝插话`, 409, { runId, conversationId: childId })
+  }
+
   // 9) 探针事实现读 + 内核原子复核：expectedOwnership/expectedStateSeq 为
   //    本刻事实，ctx.host.submitInputGuarded 在会话串行域内、SDK submit
   //    调用前同步复核；窗口内事实变化（人类按键推进水位、归属移交、目标
@@ -215,7 +229,7 @@ export async function steerBackgroundSubagent(
   await ports.submitInputGuarded(
     childId,
     `父会话插话纠偏（后台运行 ${runId}）：\n${text}`,
-    { origin: 'agent', whenBusy: 'steer', meta: { kind: 'subagent_steer', runId } },
+    { origin: 'agent', whenBusy: 'steer', whenIdle: 'reject', meta: { kind: 'subagent_steer', runId } },
     { expectedOwnership: ownership, expectedStateSeq },
   )
   return { steered: true, runId, conversationId: childId, ownership, stateChangeSeq: expectedStateSeq }

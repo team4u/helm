@@ -972,6 +972,8 @@ export interface HelmHostApi {
     opts?: {
       origin?: InputOrigin
       whenBusy?: WhenBusy
+      /** 仅向现有运行投递；SDK 在接纳输入时原子拒绝已空闲的会话。 */
+      whenIdle?: 'reject'
       meta?: Record<string, unknown>
       /** 跨重启幂等提交标识（重复提交同一 requestId 自动跳过）。 */
       requestId?: string

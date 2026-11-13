@@ -787,16 +787,20 @@ export function createWorkflowPlugin(): PluginDefinition {
         }
         const isSubagent = run.kind === 'subagent'
         const requestId = `helm:${isSubagent ? 'subagent' : 'workflow'}-report:${run.id}`
+        const otherRunningTasks = workflows.listRuns()
+          .filter((candidate) => candidate.id !== run.id && candidate.conversationId === info.parentConversationId && candidate.status === 'running')
+          .map((candidate) => ({ runId: candidate.id, name: candidate.name, kind: candidate.kind ?? 'workflow' }))
         const report = {
           runId: run.id,
           status: run.status,
+          otherRunningTasks,
           ...(run.result !== undefined ? { result: run.result } : {}),
           ...(run.error !== undefined ? { error: run.error } : {}),
           ...(info.execution !== undefined ? { execution: executionOf(info.execution) } : {}),
         }
         await ctx.host.submitInput(
           info.parentConversationId,
-          `${isSubagent ? '后台子代理任务' : '后台工作流任务'}已结算。以下为运行 ${run.id} 的结果数据：\n${safeResultText(report)}`,
+          `${isSubagent ? '后台子代理任务' : '后台工作流任务'}已结算。以下为运行 ${run.id} 的结果数据（仅代表本次任务；otherRunningTasks 是投递时其余在途运行的快照）：\n${safeResultText(report)}`,
           {
             origin: 'agent',
             whenBusy: 'followUp',
@@ -880,6 +884,10 @@ export function createWorkflowPlugin(): PluginDefinition {
       // ---- 模型工具：subagent ----
       ctx.tool({
         name: 'subagent',
+        promptGuidelines: [
+          '后台任务启动后可继续响应用户或处理其他工作；完成汇报会自动到达本会话，不要使用 sleep 或循环查询等待结果。',
+          '只有紧接着的下一步必须依赖子代理结果、期间没有其他工作时，才显式指定 background:false 同步等待。',
+        ],
         description:
           '派生一个子代理。人类交互会话缺省后台执行：执行环境就绪后立即返回 runId，后台完成后向本会话 followUp 汇报；自动化会话（受管子代理/驻留 Worker/触发会话，归属 bot/helm）缺省同步等待最终结果，显式 background=true 会被拒绝——后台汇报会驱动自动化调用方早结算。显式 background:false 可强制同步等待。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、isolation:worktree、model、effort、maxSubagentDepth（显式授予子树派生深度上限，1..5，缺省继承当前上限 2）；凭 execution.conversationId/executionId 作为 resume 续接。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
         inputSchema: {
@@ -1022,6 +1030,10 @@ export function createWorkflowPlugin(): PluginDefinition {
       // ---- 模型工具：SubagentWorkflow ----
       ctx.tool({
         name: 'SubagentWorkflow',
+        promptGuidelines: [
+          '后台工作流启动后可继续响应用户或处理其他工作；完成汇报会自动到达本会话，不要使用 sleep 或循环查询等待结果。',
+          '工作流返回运行句柄时表示已启动；必须等终态汇报后才能交付最终结果。',
+        ],
         description:
           '在当前会话执行 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本（字符串形 JSON 自动解包）。人类交互会话缺省后台执行（background 缺省 true）：启动后立即返回运行中 summary，完成后向本会话 followUp 汇报；自动化会话（归属 bot/helm：受管子代理/驻留 Worker/触发会话）缺省同步等待终态（runId/status/nodes/result），显式 background=true 会被拒绝。',
         inputSchema: {

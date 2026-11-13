@@ -10,13 +10,13 @@
 
 ## subagent 工具（模型内派生）
 
-当前会话可调用 `subagent` 派生子代理。生命周期缺省按当前会话归属判定：人类直连会话缺省后台（环境就绪即返回运行句柄，父回合继续，完成后自动汇报）；自动化会话（`ownedBy: helm/bot`，如 SuperAgent Worker、trigger 派生会话）缺省同步等待最终结果，且显式 `background: true` 会被拒绝。人类会话可显式 `background: false` 退回同步。`agentType` / `profileId` 只选择目标执行体，不参与生命周期判定：
+当前会话可调用 `subagent` 派生子代理。生命周期缺省按当前会话归属判定：人类直连会话缺省后台（环境就绪即返回运行句柄，父回合继续，完成后自动汇报）；自动化会话（`ownedBy: helm/bot`，如受管子代理、SuperAgent Worker）缺省同步等待最终结果，且显式 `background: true` 会被拒绝。人类会话可显式 `background: false` 退回同步。`agentType` / `profileId` 只选择目标执行体，不参与生命周期判定：
 - 必选：`prompt`（任务指令）。
 - 可选：`agentType`（Profile ID 或外部运行时标识如 `herdr:agy`、`herdr:claude@node-a`）、`schema`（JSON Schema 结构化输出）、`gate`（shell 验收命令，exit 非 0 即失败）、`cwd`、`isolation`（worktree）、`model`（provider/model）、`effort`、`attachments`（产物 ID 列表）、`resume`（上次 execution.conversationId / executionId，续接同一执行上下文）、`background`（见上述归属策略）。
 - 默认可派两级子代理：主会话是第 0 层，一级可继续派二级，二级为叶子。小任务直接执行；需要自主拆解的大方案交给一级负责人，无须额外授权参数。主会话可显式传 `maxSubagentDepth: 3`（整数 1..5）为大型任务提高上限，受管子代理只能继承或降低上限，不能自行提高。该值为相对任务树根的绝对层级，不是剩余层数。全局默认可通过插件中心或 `helm plugins config` 修改。
 - 返回业务 result 与执行元数据（nodeId/conversationId/executionId/effectiveCwd/worktree）独立；后续可凭 resume 续接。
 - 后台返回 `runId` 和实际 execution；父回合结束后继续执行，Schema 与 gate 都完成后自动汇报。汇报幂等：同一 run 恰好投递一次，跨重启不重复。因此不要用 sleep 或轮询等待后台结果——汇报会自动到达本会话；需要核对时用 `helm workflows inspect <runId>` 只读查询，`helm workflows abort <runId>` 中止。
-- 四类执行体区别：原生 Profile 子会话（spawn 管道、进深度登记表、可 resume）；外部 Herdr Profile（终端窗格执行、同样进登记表，对编排透明）；SuperAgent Worker（`dispatch_worker` 派生、不进登记表，插件自有非阻塞协议，见下文）；fork/人工会话（不经 spawn 管道、不受深度限制，人类直连即适用缺省后台）。
+- 四类执行体区别：原生 Profile 子会话（spawn 管道、进深度登记表、可 resume）；外部 Herdr Profile（终端窗格执行，没有原生子会话 ID，不登记为子会话）；SuperAgent Worker（`dispatch_worker` 派生、不进登记表，插件自有非阻塞协议，见下文）；fork/人工会话（不经 spawn 管道、不受深度限制，人类直连即适用缺省后台）。
 - 发现后台原生子代理跑偏时，主会话可调用 `run_action({ actionId: "builtin:workflow.steer", input: { runId, text } })` 插话纠偏，也可使用动作派生的模型工具；终端用 `helm workflows steer <runId> --text "<指导>"`。仅原生子代理 run（kind=subagent 且 running、已解析原生子会话、归属 bot/helm）可 steer；DSL 编排工作流与外部运行时（如 Herdr 窗格，无原生子会话）显式拒绝。插话经内核 guarded 提交按归属与 CAS 水位原子复核，事实过期时返回 409；human 归属永不触碰。会话内调用仅允许 run 发起会话自身或其祖先，不可跨树控制他人运行。
 - `isolation: "worktree"` 在目标节点分配独立 Git 工作树（原生及支持该能力的运行时）；基于源 HEAD，不包含源工作区未提交修改。任务结束、失败或取消后保留工作树与分支。
 - 检视或合入后调用 `cleanup_worktree({ worktreeId: execution.worktree.id })`；也可按子会话 ID，或实际 `nodeId` + `path` 清理。未提交修改、未合入提交及在用工作树默认拒绝清理。`force: true` 仅显式允许丢弃修改，不绕过归属或占用检查。
@@ -86,7 +86,7 @@ return { reports: reports.filter(report => report !== null) }
 - 也可建 Profile：`runtime: { kind: "herdr", agent: "<kind>", nodeId?, workspace?, env? }`，之后 `agentType` 直接用该 Profile ID。
 - 结果经工作目录下 `.helm/wf-out-<safeId>.json|.md` 交接文件回传（subagent 原地追问自愈）；终端 blocked 状态实时桥接为带 expectedStateSeq CAS 乐观锁的 AskDoc 审批卡（人类已在终端按键则 Web 端自动 superseded）。
 - 外部运行时不改变生命周期缺省：派生方会话的归属决定后台/同步，外部窗格任务的后台汇报同样走父会话幂等汇报链。
-- 对 Herdr 外部窗格不支持 steer 插话（待能力）：需要向运行中的外部任务补充指令时，用 `subagent` 的 `resume` 续接（原地追问自愈同样经审批桥），不要虚构对外部窗格的插话接口。
+- Herdr 外部窗格不支持运行中 steer。需要改变任务时，先中止该 run，再发起新任务。`resume` 仅适用于仍存在且空闲、归属验证通过的执行；窗格清理后该标识可能已失效，必须按实际错误处理。
 
 ## 与 builtin:superagent 后台 Worker 协作
 
