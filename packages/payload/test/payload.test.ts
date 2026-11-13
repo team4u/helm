@@ -323,35 +323,57 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
       cwd: extractDir,
       env: { ...env, HELM_PORT: String(port), HELM_HOST: '127.0.0.1', HELM_DATA_DIR: dataDir, HELM_CWD: dataDir },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
     });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
-    const exitPromise = new Promise<{ code: number | null, signal: NodeJS.Signals | null }>((resolve) => {
-      child.on('exit', (code, signal) => resolve({ code, signal }));
+    // close 同时保证 stdout/stderr 已收完；exit 先于管道 flush，不能据此断言日志。
+    const exitPromise = new Promise<{ code: number | null, signal: NodeJS.Signals | null }>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (code, signal) => resolve({ code, signal }));
     });
-    let probed = false;
-    const deadline = Date.now() + 60_000;
-    while (Date.now() < deadline && child.exitCode === null) {
-      const probe = spawnSync(process.execPath, ['-e', `fetch('http://127.0.0.1:${port}/api/auth/status').then(r=>r.json()).then(j=>{if(typeof j!=='object'||j===null)throw new Error('bad');process.exit(0)}).catch(()=>process.exit(1))`], { timeout: 5_000, encoding: 'utf8' });
-      if (probe.status === 0) {
-        probed = true;
-        break;
+    const waitForExit = async (timeoutMs: number) => {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        return await Promise.race([
+          exitPromise,
+          new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+        ]);
+      } finally {
+        clearTimeout(timer);
       }
-      await new Promise((r) => setTimeout(r, 500));
+    };
+    let exitInfo: Awaited<typeof exitPromise> | null = null;
+    try {
+      let probed = false;
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
+        try {
+          const response = await fetch(`http://127.0.0.1:${port}/api/auth/status`, { signal: AbortSignal.timeout(1_000) });
+          const body: unknown = await response.json();
+          if (response.ok && typeof body === 'object' && body !== null) {
+            probed = true;
+            break;
+          }
+        } catch { /* Hub 尚在启动，下次探活重试。 */ }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      assert.ok(probed, `Hub 未在 20s 内探活成功\nstdout: ${stdout}\nstderr: ${stderr}`);
+    } finally {
+      child.kill('SIGTERM');
+      exitInfo = await waitForExit(5_000);
+      if (exitInfo === null && child.pid !== undefined) {
+        // start.mjs 会派生 kernel；断言失败时也必须清理完整进程树。
+        if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { timeout: 5_000 });
+        else { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* 已退出 */ } }
+        await waitForExit(5_000);
+      }
     }
-    assert.ok(probed, `Hub 未在 60s 内探活成功\nstdout: ${stdout}\nstderr: ${stderr}`);
-    assert.match(stdout, /Helm Hub:/, 'Hub 启动横幅缺失');
-    child.kill('SIGTERM');
-    let exitTimer: NodeJS.Timeout | undefined;
-    const exitInfo = await Promise.race([
-      exitPromise,
-      new Promise<{ code: null, signal: null }>((r) => { exitTimer = setTimeout(() => r({ code: null, signal: null }), 15_000); }),
-    ]);
-    clearTimeout(exitTimer);
-    if (exitInfo.code === null && exitInfo.signal === null) child.kill('SIGKILL');
+    assert.ok(exitInfo, `Hub SIGTERM 关闭超时\nstdout: ${stdout}\nstderr: ${stderr}`);
     assert.equal(exitInfo.code, 0, `Hub SIGTERM 后期望干净退出 0，实际 ${exitInfo.code} ${exitInfo.signal ?? ''}\nstdout: ${stdout}\nstderr: ${stderr}`);
+    assert.match(stdout, /Helm Hub:/, 'Hub 启动横幅缺失');
   } finally {
     rmSync(outsideRoot, { recursive: true, force: true });
   }

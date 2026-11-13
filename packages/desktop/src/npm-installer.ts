@@ -1,12 +1,10 @@
 /**
  * payload 依赖安装器：可注入接口 + 宿主 npm 生产实现。
  *
- * 诚实边界（勿宣称解决 npm 自包含）：npm 包 tarball 不含 node_modules（见
- * packages/payload/README.md），本安装器只在 payload 根目录执行受控
- * `npm install --omit=dev --ignore-scripts`。Electron 不捆绑 npm CLI：宿主 npm
- * 不可用时显式抛 npm_installer_unavailable（附已搜索路径与指引），绝不静默跳过
- * 安装谎报成功；也不静默改用其他包管理器。esbuild 等平台原生依赖按宿主平台由
- * npm 经 optionalDependencies 解析安装，vendored / 单文件 bundle 路线仍未解决。
+ * npm 业务载荷不含 node_modules：本安装器在候选根目录执行
+ * `npm install --omit=dev --ignore-scripts`，按目标平台补齐 optionalDependencies。
+ * 桌面安装包注入随附的 npm-cli.js；独立宿主调用则从 Node 安装布局解析 npm。
+ * npm 不可用时显式抛 npm_installer_unavailable，绝不跳过安装或改用其他包管理器。
  *
  * 执行方式铁律：一律经 node 可执行文件直接运行 npm-cli.js——Windows 下 npm 入口
  * 是 .cmd 批处理，spawn 无法直接执行（也绝不经 shell:true 放宽注入面）；npm-cli.js
