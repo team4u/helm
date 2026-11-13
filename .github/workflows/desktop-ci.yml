@@ -99,6 +99,12 @@ jobs:
       - name: Build unpacked desktop app (dist:dir)
         run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist:dir
 
+      - name: Configure Linux sandbox helper
+        if: runner.os == 'Linux'
+        run: |
+          sudo chown root:root packages/desktop/release/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 packages/desktop/release/linux-unpacked/chrome-sandbox
+
       # 打包 App 冒烟：wrapper 定位解包可执行文件，隔离 HELM_DATA_DIR、固定 3202 端口，
       # 60s 超时杀树，依据 smoke.json 判定；报告落在 packages/desktop/release/smoke/。
       - name: Smoke test packaged app under Xvfb (Linux)

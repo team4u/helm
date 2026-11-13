@@ -1,6 +1,7 @@
 /** 配置解析：缺省值、env 覆盖、显式覆盖、端口铁律、子进程环境构建。 */
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
+import { join } from 'node:path';
 import {
   buildHubChildEnv,
   defaultHubEntryPath,
@@ -18,7 +19,7 @@ test('缺省配置：端口 3202、hubUrl、kernel dist 入口', () => {
   assert.equal(config.hostname, '127.0.0.1');
   assert.equal(config.hubUrl, 'http://127.0.0.1:3202');
   assert.equal(config.hubEntry, defaultHubEntryPath());
-  assert.ok(config.hubEntry.endsWith('packages/kernel/dist/main.js'));
+  assert.ok(config.hubEntry.endsWith(join('packages', 'kernel', 'dist', 'main.js')));
   assert.equal(config.restartMaxRetries, 3);
   assert.equal(config.stopGraceMs, 5_000);
 });

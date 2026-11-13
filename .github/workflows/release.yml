@@ -320,6 +320,12 @@ jobs:
       - name: Build unpacked desktop app (dist:dir)
         run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist:dir
 
+      - name: Configure Linux sandbox helper
+        if: runner.os == 'Linux'
+        run: |
+          sudo chown root:root packages/desktop/release/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 packages/desktop/release/linux-unpacked/chrome-sandbox
+
       - name: Smoke test packaged app under Xvfb (Linux)
         if: runner.os == 'Linux'
         run: xvfb-run -a node scripts/desktop-smoke.mjs --packaged
