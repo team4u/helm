@@ -122,6 +122,8 @@ export interface AgentJournalKeyInput {
    * ID 或次序变化都是不同调用）。未提供与空数组语义不同，不归一化。
    */
   attachments?: string[]
+  /** 派工上限改变会改变子代理行为，不得重放原授权下的缓存结果。 */
+  maxSubagentDepth?: number
 }
 
 /**
@@ -149,6 +151,7 @@ export function agentJournalKey(input: AgentJournalKeyInput): string {
     input.resume ?? null,
     input.attachments !== undefined ? input.attachments : null,
     input.schema !== undefined ? input.schema : null,
+    input.maxSubagentDepth ?? null,
   ])
   return createHash('sha256').update(canonical).digest('hex').slice(0, 32)
 }

@@ -5,8 +5,7 @@
  * agent_spawn 管道成功派生（onResolved 回传 conversationId）的子会话，
  * 条目含 depth / parentConversationId / maxSubagentDepth（子树上限快照）；
  * fork 会话与 SuperAgent worker（经 createConversation 创建，不经 spawn
- * 管道）不进表，不受嵌套限制影响。旧记录（仅 agentType/runId/createdAt）
- * 按 depth=1、默认上限兼容解读。
+ * 管道）不进表，不受嵌套限制影响。登记事实缺失或损坏时显式拒绝。
  *
  * 三道防线：
  * 1. before_turn：达到子树上限的叶子回合剥离 subagent / SubagentWorkflow
@@ -17,8 +16,8 @@
  *    worktree 分配）：直接调 kernel.spawnAgent 也被拒并登记新事实。
  *
  * 显式扩展：AgentSpawnRequest.maxSubagentDepth（subagent 工具入参同名字段）
- * 授予子树深度上限（1..5），只授予子树空间、不能为发起方解限；插件私有
- * config doc 预留全局缺省配置。
+ * 授予子树深度上限（1..5），受管子代理不得提高继承上限；宿主插件配置
+ * 提供全局缺省值的读写入口。
  *
  * 诚实性纪律：全部真实执行（faux 模型、真子会话、真 doc 持久化、真
  * 重启恢复），不 mock 引擎、不伪造拒绝结果。
@@ -76,7 +75,7 @@ function readRegistryRaw(dataDir: string): Record<string, unknown> {
   }
 }
 
-/** 直写插件私有 doc（app 已关闭时使用；模拟旧记录 / 预置配置）。 */
+/** 直写插件私有 doc（app 已关闭时使用；验证损坏记录显式拒绝）。 */
 function writePluginDocRaw(dataDir: string, name: string, value: unknown): void {
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'))
   try {
@@ -517,10 +516,10 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 9. 旧记录兼容：缺 depth/上限字段的条目按 depth=1/默认上限解读
+  // 9. 无兼容读取：缺 depth/上限字段的损坏条目必须显式报错
   // -------------------------------------------------------------------------
 
-  test('旧记录兼容：仅含 agentType/createdAt 的旧条目按 depth=1 解读，可派一层但其子即叶子', { timeout: 60_000 }, async () => {
+  test('登记事实缺失时显式失败，不猜测深度与权限', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth9')
     let legacyChildId = 0
     {
@@ -546,22 +545,11 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
         },
       })
     }
-    // 重启：旧条目归一化为 depth=1/默认上限——可再派一层，其子（depth=2）为叶子。
-    {
-      const { models, faux } = makeFauxModels()
-      const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
-      try {
-        const grandchild = (await spawnChain(app, faux, [legacyChildId]))[0]!
-        await app.kernel.documentStore.flush()
-        assert.equal(registryEntry(dir, grandchild)['depth'], 2, '旧记录派生的子登记 depth=2')
-        await assert.rejects(
-          () => app.kernel.spawnAgent({ parentConversationId: grandchild, prompt: '三层尝试' }),
-          (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
-        )
-      } finally {
-        await app.close()
-      }
-    }
+    const { models } = makeFauxModels()
+    await assert.rejects(
+      () => createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never }),
+      /深度登记无效/,
+    )
   })
 
   // -------------------------------------------------------------------------
@@ -623,6 +611,13 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
           },
         )
       }
+      // 子代理不能自行提高继承的上限，也不能设置低于目标层级的上限。
+      for (const ceiling of [4, 1]) {
+        await assert.rejects(
+          () => app.kernel.spawnAgent({ parentConversationId: child1, prompt: '越界授权', maxSubagentDepth: ceiling }),
+          (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+        )
+      }
       // 拒绝路径不登记任何新事实。
       await app.kernel.documentStore.flush()
       const registry = readRegistryRaw(dir)
@@ -633,31 +628,41 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 11. 配置上限（预留字段）：非法配置启动显式失败，不静默降级
+  // 11. 全局配置通过宿主统一入口写入，并在重启后影响新任务树。
   // -------------------------------------------------------------------------
 
-  test('配置上限预留：config doc 的 maxSubagentDepth 非法值在启动时显式失败', { timeout: 60_000 }, async () => {
+  test('插件配置 maxSubagentDepth 可读写、跨重启持久，非法数值显式拒绝派生', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth11')
     {
-      const { models } = makeFauxModels()
+      const { models, faux } = makeFauxModels()
       const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
-      await app.kernel.documentStore.flush()
-      await app.close()
+      try {
+        assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2)
+        await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: 99 })
+        await assert.rejects(() => spawnChain(app, faux, [1]), /maxSubagentDepth/)
+        await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: 1 })
+        const child = (await spawnChain(app, faux, [1]))[0]!
+        await assert.rejects(
+          () => app.kernel.spawnAgent({ parentConversationId: child, prompt: '超出全局一层' }),
+          (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
+        )
+      } finally {
+        await app.close()
+      }
     }
-    writePluginDocRaw(dir, 'builtin:workflow:config', { maxSubagentDepth: 99 })
-    {
-      const { models } = makeFauxModels()
+    const { models, faux } = makeFauxModels()
+    const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    try {
+      assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 1)
+      const child = (await spawnChain(app, faux, [1]))[0]!
       await assert.rejects(
-        () => createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never }),
-        (err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err)
-          assert.ok(
-            message.includes('maxSubagentDepth'),
-            `错误信息应指明配置字段（实际：${message}）`,
-          )
-          return true
-        },
+        () => app.kernel.spawnAgent({ parentConversationId: child, prompt: '重启后仍超限' }),
+        (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
       )
+      await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: null })
+      assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2)
+    } finally {
+      await app.close()
     }
   })
 })

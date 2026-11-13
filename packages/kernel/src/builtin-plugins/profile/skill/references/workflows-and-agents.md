@@ -13,6 +13,7 @@
 当前会话可调用 `subagent` 派生子代理；默认等待最终结果，`background: true` 在环境就绪后返回运行句柄并继续后台执行：
 - 必选：`prompt`（任务指令）。
 - 可选：`agentType`（Profile ID 或外部运行时标识如 `herdr:agy`、`herdr:claude@node-a`）、`schema`（JSON Schema 结构化输出）、`gate`（shell 验收命令，exit 非 0 即失败）、`cwd`、`isolation`（worktree）、`model`（provider/model）、`effort`、`attachments`（产物 ID 列表）、`resume`（上次 execution.conversationId / executionId，续接同一执行上下文）。
+- 默认可派两级子代理：主会话是第 0 层，一级可继续派二级，二级为叶子。小任务直接执行；需要自主拆解的大方案交给一级负责人，无须额外授权参数。主会话可显式传 `maxSubagentDepth: 3`（整数 1..5）为大型任务提高上限，受管子代理只能继承或降低上限，不能自行提高。该值为相对任务树根的绝对层级，不是剩余层数。全局默认可通过插件中心或 `helm plugins config` 修改。
 - 返回业务 result 与执行元数据（nodeId/conversationId/executionId/effectiveCwd/worktree）独立；后续可凭 resume 续接。
 - 后台返回 `runId` 和实际 execution；父回合结束后继续执行，Schema 与 gate 都完成后自动汇报。`helm workflows inspect <runId> --json` 查询，`helm workflows abort <runId>` 中止。
 - `isolation: "worktree"` 在目标节点分配独立 Git 工作树（原生及支持该能力的运行时）；基于源 HEAD，不包含源工作区未提交修改。任务结束、失败或取消后保留工作树与分支。
@@ -48,7 +49,7 @@ return { reports: reports.filter(report => report !== null) }
 
 - `meta`：必须是纯字面量对象（`export const meta = { name, description, phases? }`，phases 为 `[{ title, detail?, model? }]`）；禁止模板串/变量/函数调用。
 - `args`：运行时经 `--args` 或工具入参传入的 JSON（对象/数组/标量，经反序列化注入；缺省 undefined，可自由约定形状）。
-- `agent(prompt, opts?)`：调用同一子代理执行接口并等待真实结果；opts 为 `{ label?, phase?, model?, agentType?, isolation?("worktree"), gate?, resume?, effort?, schema?, attachments? }`。脚本用 pipeline/parallel 表达并发，节点不提前返回后台句柄。
+- `agent(prompt, opts?)`：调用同一子代理执行接口并等待真实结果；opts 为 `{ label?, phase?, model?, agentType?, isolation?("worktree"), gate?, resume?, effort?, schema?, attachments?, maxSubagentDepth? }`。脚本用 pipeline/parallel 表达并发，节点不提前返回后台句柄。
 - `pipeline(items, ...stages)`：对每个 item 依序过全部 stage（同一 item 串行、不同 item 并行），单条失败该项置 null 不炸全局；优先于 parallel 组织批量任务。
 - `parallel(thunks)`：全量并发，单项失败置 null。
 - `action(actionId, input?, opts?)`：零 Token 确定性调用宿主动作总线（`pluginId.actionId` 全限定或无冲突短名；输入输出经 schema 校验；opts 支持 `{ idempotent?, label?, phase? }`）。
@@ -66,7 +67,7 @@ return { reports: reports.filter(report => report !== null) }
 ### 断点重放（resumeFromRunId）
 
 调用 `SubagentWorkflow({ resumeFromRunId: "<runId>", ... })`（或 CLI `helm workflows run <name> --resume-from-run-id <runId> --current --wait`）读取旧账本；匹配的已完成节点直接重放结果，agent/action 与已通过的 gate 不重复执行。参数变化（包括 gate 命令）会使对应节点重新执行。
-`agent(..., { resume: "<label>" })` 则是续接代理上下文，与账本重放不同；不要同时指定 agentType/model/isolation/effort，schema、gate 与本轮 attachments 可以随续接提交。续接不自动继承上轮附件；附件 ID 或顺序变化也会影响账本匹配。原生子会话须仍存在、归属当前父会话且空闲；外部运行时还受其清理生命周期限制，失效时如实报错，不假装续接成功。
+`agent(..., { resume: "<label>" })` 则是续接代理上下文，与账本重放不同；不要同时指定 agentType/model/isolation/effort，schema、gate、本轮 attachments 与 maxSubagentDepth 可以随续接提交；层级授权变化会使旧账本缓存失配。续接不自动继承上轮附件；附件 ID 或顺序变化也会影响账本匹配。原生子会话须仍存在、归属当前父会话且空闲；外部运行时还受其清理生命周期限制，失效时如实报错，不假装续接成功。
 
 ## 与 builtin:herdr 终端 Agent 路由
 

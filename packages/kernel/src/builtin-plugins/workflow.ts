@@ -24,9 +24,9 @@
  *   默认可继续派生二层，达到子树上限的会话即编排叶子。私有登记表持久
  *   depth / parentConversationId / 子树上限等事实，before_turn 剥离派工工具、工具/动作入口
  *   前置拒绝、agent_spawn 最高优先级兜底，三道防线显式报
- *   subagent_depth_exceeded；显式扩展到更深层经插件配置（私有 config doc）
- *   与 AgentSpawnRequest.maxSubagentDepth 请求字段（均钳制在
- *   HARD_MAX_SUBAGENT_DEPTH 内，且只授予子树空间、不能为发起方解限）
+ *   subagent_depth_exceeded；显式扩展到更深层经插件配置
+ *   与 AgentSpawnRequest.maxSubagentDepth 请求字段（均校验在
+ *   HARD_MAX_SUBAGENT_DEPTH 内，受管子代理不能提高继承的上限）
  *   （fork / SuperAgent worker 不在表内，不受影响）。
  */
 import { existsSync } from 'node:fs'
@@ -86,22 +86,17 @@ function depthExceededError(depth: number, maxSubagentDepth: number, conversatio
   )
 }
 
-/**
- * 受管子代理登记条目（插件私有 doc `subagent-conversations` 持久事实）。
- * 旧记录仅含 agentType/runId/createdAt：缺省 depth 按 1、缺省上限按
- * DEFAULT_MAX_SUBAGENT_DEPTH 兼容解读（旧契约下受管子代理只能由非受管
- * 会话派生，depth=1 是事实而非猜测）。
- */
+/** 受管子代理登记条目（插件私有 doc `subagent-conversations` 持久事实）。 */
 interface ManagedSubagentEntry {
   agentType?: string
   runId?: string
   createdAt: number
   /** 自身派生深度：非受管会话直接派生 = 1，受管会话再派生 = 父深度 + 1。 */
-  depth?: number
+  depth: number
   /** 派生时的父会话 ID（树位置事实；resume 续接不改变）。 */
-  parentConversationId?: number
+  parentConversationId: number
   /** 该子代理子树的派生深度上限（派生时快照；配置后续变更不追溯）。 */
-  maxSubagentDepth?: number
+  maxSubagentDepth: number
 }
 
 const subagentOutputSchema = {
@@ -213,15 +208,19 @@ export function createWorkflowPlugin(): PluginDefinition {
       // 或 tags 一刀切，也不依赖 ownership 猜测。
       const subagentConvDoc = ctx.doc<Record<string, ManagedSubagentEntry>>('subagent-conversations', {})
 
-      // ---- 深度上限配置（私有 config doc；预留的显式扩展入口，暂无写入端） ----
-      // 值 { maxSubagentDepth?: number }，缺省 DEFAULT_MAX_SUBAGENT_DEPTH；
-      // 定义时即校验（正整数且 ≤ HARD_MAX_SUBAGENT_DEPTH），非法值显式失败，
-      // 绝不静默降级回默认值。
-      const depthConfigDoc = ctx.doc<{ maxSubagentDepth?: number }>('config', {})
+      // 复用宿主配置入口：插件中心与 helm plugins config 同权读写。
+      ctx.configSchema({
+        maxSubagentDepth: {
+          type: 'number',
+          label: '子代理最大层级',
+          description: `1..${HARD_MAX_SUBAGENT_DEPTH} 的整数，默认 2。主会话为第 0 层；变更影响新派生的任务树，现有任务沿用其上限。`,
+          default: DEFAULT_MAX_SUBAGENT_DEPTH,
+        },
+      })
       function configuredMaxSubagentDepth(): number {
-        const raw = depthConfigDoc.get().maxSubagentDepth
+        const raw = ctx.getConfig().maxSubagentDepth
         if (raw === undefined) return DEFAULT_MAX_SUBAGENT_DEPTH
-        if (!Number.isInteger(raw) || raw < 1 || raw > HARD_MAX_SUBAGENT_DEPTH) {
+        if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > HARD_MAX_SUBAGENT_DEPTH) {
           throw new HelmError(
             'validation_error',
             `builtin:workflow 配置 maxSubagentDepth 非法：${JSON.stringify(raw)}（需 1..${HARD_MAX_SUBAGENT_DEPTH} 的整数）`,
@@ -235,29 +234,24 @@ export function createWorkflowPlugin(): PluginDefinition {
       // 启动即校验配置：非法值在插件定义阶段显式失败，不带病运行。
       configuredMaxSubagentDepth()
 
-      /** 登记事实归一化：合法深度值为 ≥1 整数，其余（缺省/损坏）返回 undefined。 */
-      function normalizeDepth(raw: unknown): number | undefined {
-        return typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 ? raw : undefined
-      }
-
-      /**
-       * 会话深度事实（登记表 + 旧记录兼容归一化）：
-       * - 非受管会话（顶层 / fork / SuperAgent worker）：depth=0，上限取当前配置；
-       * - 受管会话：depth / 子树上限取派生时快照（缺省字段按 depth=1、
-       *   DEFAULT_MAX_SUBAGENT_DEPTH 兼容解读，越界上限钳回绝对上限）。
-       */
+      /** 非受管会话从 depth=0 开始；受管会话严格采用派生时的持久事实。 */
       function depthFactsOf(conversationId: number): { managed: boolean; depth: number; maxSubagentDepth: number } {
         const entry = subagentConvDoc.get()[String(conversationId)]
         if (entry === undefined) {
           return { managed: false, depth: 0, maxSubagentDepth: configuredMaxSubagentDepth() }
         }
-        const depth = normalizeDepth(entry.depth) ?? 1
-        const maxSubagentDepth = Math.min(
-          normalizeDepth(entry.maxSubagentDepth) ?? DEFAULT_MAX_SUBAGENT_DEPTH,
-          HARD_MAX_SUBAGENT_DEPTH,
-        )
-        return { managed: true, depth, maxSubagentDepth }
+        if (
+          !Number.isInteger(entry.depth) || entry.depth < 1 ||
+          !Number.isInteger(entry.maxSubagentDepth) || entry.maxSubagentDepth < entry.depth ||
+          entry.maxSubagentDepth > HARD_MAX_SUBAGENT_DEPTH ||
+          !Number.isSafeInteger(entry.parentConversationId) || entry.parentConversationId < 1 ||
+          entry.parentConversationId === conversationId
+        ) {
+          throw new HelmError('subagent_record_invalid', `受管子代理 ${conversationId} 的深度登记无效`, 500, { conversationId })
+        }
+        return { managed: true, depth: entry.depth, maxSubagentDepth: entry.maxSubagentDepth }
       }
+      for (const id of Object.keys(subagentConvDoc.get())) depthFactsOf(Number(id))
 
       function registerManagedSubagent(
         conversationId: number,
@@ -356,14 +350,16 @@ export function createWorkflowPlugin(): PluginDefinition {
             { maxSubagentDepth: explicitCeiling },
           )
         }
-        if (request.onResolved === undefined) {
-          await next(request)
-          return
+        const childCeiling = explicitCeiling ?? parentFacts.maxSubagentDepth
+        if (childCeiling < childDepth || (parentFacts.managed && childCeiling > parentFacts.maxSubagentDepth)) {
+          throw new HelmError(
+            'validation_error',
+            `maxSubagentDepth 必须至少为目标层级 ${childDepth}，受管子代理不能提高继承的上限 ${parentFacts.maxSubagentDepth}`,
+            400,
+            { depth: parentFacts.depth, maxSubagentDepth: childCeiling, inheritedLimit: parentFacts.maxSubagentDepth },
+          )
         }
         const original = request.onResolved
-        // 子代理事实在派生前定案：子树上限 = 显式请求 ?? 父会话生效上限
-        //（该字段只授予子树空间，永不为发起方自己解限——越深拒绝已在上方完成）。
-        const childCeiling = explicitCeiling ?? parentFacts.maxSubagentDepth
         // continuation 契约：已调 next 的 handler 返回 void（next 的结果即
         // 它的结果）；此处仅包裹 onResolved 记账，不得透传下游产物。
         await next({
@@ -379,7 +375,7 @@ export function createWorkflowPlugin(): PluginDefinition {
                 ceilingExplicit: explicitCeiling !== undefined,
               })
             }
-            original(info)
+            original?.(info)
           },
         })
       }, { priority: 300 })

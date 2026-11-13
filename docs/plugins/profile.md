@@ -24,7 +24,7 @@
 
 **资产缺失自愈防线**：外部误删 SYSTEM.md 时降级为空文本但不静默换人格——先向人类发一次性 warning 通知（按 profileId 独立去重，文件恢复即停、再次缺失可重新告警），再向模型注入 `profile.assets-missing` 显式说明，后续经 `helm profiles update --system` 等写入自愈重建（不是启动时自动恢复）。`not_found` 之外的 IO/权限错误如实上抛，不吞、不降级。
 
-`profile.catalog` 的注入钩子以低于默认值的 priority（-100）运行，确保在默认优先级的工具剥离钩子（如 superagent 路由模式收敛、`builtin:workflow` 对受管子代理剥离派工工具）之后、按届时的实际 `turn.tools` 决定注入与否——没有可用派工工具的回合不注入目录，避免教唆模型调用不存在的工具。不按 `parentConversationId` 一刀切排除（fork 会话或 SuperAgent 驻留 Worker 同样有父链，但只要当回合仍持有派工工具即保留完整协作能力）。
+`profile.catalog` 的注入钩子以低于默认值的 priority（-100）运行，确保在默认优先级的工具剥离钩子（如 superagent 路由模式收敛、`builtin:workflow` 对达到层级上限的受管子代理剥离派工工具）之后、按届时的实际 `turn.tools` 决定注入与否——没有可用派工工具的回合不注入目录，避免教唆模型调用不存在的工具。不按 `parentConversationId` 一刀切排除（fork 会话或 SuperAgent 驻留 Worker 同样有父链，但只要当回合仍持有派工工具即保留完整协作能力）。
 
 ## 跨 Profile `@` 点名协同
 

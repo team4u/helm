@@ -320,6 +320,35 @@ describe('workflow resume replay side-effect safety', () => {
   })
 })
 
+it('delegation depth reaches spawn/resume and changing it invalidates actual replay', timeout, async () => {
+  const script = (depth: number) => META('depth-replay') + `
+    await agent("first", { label: "lead", maxSubagentDepth: ${depth} })
+    return agent("again", { resume: "lead", maxSubagentDepth: ${depth} })
+  `
+  const observed: number[] = []
+  const host: WorkflowHost = {
+    ...makeAuditedHost(),
+    async spawnAgent(request) {
+      observed.push(request.maxSubagentDepth!)
+      return { ok: true, text: 'first' }
+    },
+    async resumeAgent(_id, _prompt, options) {
+      observed.push(options?.maxSubagentDepth!)
+      return { ok: true, text: 'again' }
+    },
+  }
+  const sink = makeJournalSink()
+  assert.equal((await runWorkflow({ script: script(3), host, journal: sink })).status, 'completed')
+  assert.deepEqual(observed, [3, 3])
+  observed.length = 0
+  const replay = await runWorkflow({ script: script(3), host, journal: { entries: sink.toEntries(), append() {} } })
+  assert.equal(replay.status, 'completed', replay.error)
+  assert.deepEqual(observed, [], 'same depth reuses the successful prefix')
+  const changed = await runWorkflow({ script: script(4), host, journal: { entries: sink.toEntries(), append() {} } })
+  assert.equal(changed.status, 'completed', changed.error)
+  assert.deepEqual(observed, [4, 4], 'changed depth must spawn and resume with the new authorization')
+})
+
 // ---------------------------------------------------------------------------
 // actionJournalKey 稳定性（guard：key 计算不受对象字段顺序影响）
 // ---------------------------------------------------------------------------
@@ -331,6 +360,8 @@ describe('journal key stability', () => {
     assert.equal(a, b, 'canonical key must not depend on input object key order')
     assert.notEqual(a, agentJournalKey({ prompt: 'p', label: 'l', model: 'm', agentType: 't', effort: 'e', isolation: 'worktree' }), 'gate must participate')
     assert.notEqual(agentJournalKey({ prompt: 'p' }), agentJournalKey({ prompt: 'p', schema: '{"type":"object"}' }), 'schema must participate')
+    assert.notEqual(agentJournalKey({ prompt: 'p' }), agentJournalKey({ prompt: 'p', maxSubagentDepth: 3 }), 'delegation depth must participate')
+    assert.notEqual(agentJournalKey({ prompt: 'p', maxSubagentDepth: 2 }), agentJournalKey({ prompt: 'p', maxSubagentDepth: 3 }), 'different delegation limits must invalidate replay')
   })
 
   it('actionJournalKey distinguishes actionId and serialized input', timeout, () => {

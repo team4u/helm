@@ -189,6 +189,8 @@ export interface ResumeAgentOptions {
   gate?: string
   /** 续接回合携带的产物 ID 列表（仅属本轮提交，不自动沿用原任务附件）。 */
   attachments?: string[]
+  /** 续接时显式调整子树上限，仍受发起方继承上限约束。 */
+  maxSubagentDepth?: number
   onResolved?: WorkflowSpawnRequest['onResolved']
   onGateResult?: WorkflowSpawnRequest['onGateResult']
 }
@@ -898,6 +900,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         gate: payload.gate,
         resume: payload.resume,
         attachments: payload.attachments,
+        maxSubagentDepth: payload.maxSubagentDepth,
         schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,
       }
       const replayed = replayAt(index, agentJournalKey(keyInput), 'agent')
@@ -1073,6 +1076,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                     ...(compiledSchema !== undefined ? { schema: compiledSchema } : {}),
                     ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
                     ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+                    ...(payload.maxSubagentDepth !== undefined ? { maxSubagentDepth: payload.maxSubagentDepth } : {}),
                     onResolved,
                     ...(payload.gate !== undefined ? { onGateResult } : {}),
                   })

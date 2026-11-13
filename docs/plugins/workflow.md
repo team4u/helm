@@ -38,8 +38,7 @@
 | `records` | 私有 `ctx.doc` | run 索引 + 每 run 完整记录（引擎唯一持久层） | 仅插件内部，重启恢复读同一命名空间 |
 | `worktree-state` | 私有 `ctx.doc` | WorktreeAllocator 登记表 + durable 租约表 + agentId 绑定表 | 仅插件内部；停用期间不清除，重新启用后 cleanup 仍可定位 |
 | `subagent-conversations` | 私有 `ctx.doc` | 受管子代理登记表：`depth` / `parentConversationId` / `maxSubagentDepth`（子树上限快照）等派生事实 | 仅插件内部；跨重启持久，是深度契约的唯一事实来源 |
-| `config` | 私有 `ctx.doc` | 预留的显式扩展配置（`maxSubagentDepth?`，缺省 2；启动即校验 1..5，非法值显式失败） | 仅插件内部；当前无写入端，为配置面预留 |
-| `runs` | 公开 `ctx.sessionDoc` | 每父会话自身的 run 列表投影 | 不进全局首帧/全局 SSE；前端经专用 SSE 按会话订阅 |
+| `runs` | 公开 `ctx.sessionDoc` | 当前会话及其后代发起的 run 列表投影，保留每个 run 的直接发起者 | 不进全局首帧/全局 SSE；前端经专用 SSE 按会话订阅 |
 | `run-badges` | 公开 `ctx.doc` | 每会话紧凑角标（`count / tone / footerText`，如「2 运行中 · 1 失败」） | 有意全局：工作台导航角标需要跨会话可见；完整 run 摘要绝不进入 |
 
 不存在内存降级或内核私有存储注入：所有运行态经 `records` 落 state.sqlite，重启后恢复。runs 投影带值缓存（JSON 直比，值不变跳过写入、不发重复事件）；已删除的父会话不重建孤儿分片（store 级联清理），无 runs 的已持久会话清到空而非保留旧投影。
@@ -52,7 +51,11 @@
 
 三道防线共用登记表事实：`before_turn` 对叶子回合剥离 `subagent` / `SubagentWorkflow`（一层子代理保留派工工具与协作目录）；工具与 `run` 动作入口在创建任何 run 记录前拒绝（`403 subagent_depth_exceeded`，携带 `depth` / `maxSubagentDepth` 事实）；`agent_spawn` 钩子（priority 300，先于 worktree 分配）兜底拒绝并登记新事实。
 
-显式扩展到更深层：插件配置（私有 `config` doc 的 `maxSubagentDepth`，1..5）改全局缺省；派生请求（`subagent` 工具入参 / DSL `agent({ maxSubagentDepth })` / `AgentSpawnRequest.maxSubagentDepth`）显式授予子树上限——该字段只授予子树空间，不能为发起方自己解限，且统一钻制在 `HARD_MAX_SUBAGENT_DEPTH`（5）内；协议不要求每次传参，缺省零参数可用。旧登记记录缺省 `depth` / 上限字段时按 `depth=1`、默认上限兼容解读。
+`maxSubagentDepth` 表示相对受管任务树根的绝对层级上限，主会话为第 0 层。默认值为 2，可在插件中心配置，或通过现有 `helm plugins config` 命令读写（范围 1..5 的整数）。配置变更影响新派生的任务树，已有子代理继续沿用登记上限。
+
+主会话可以在 `subagent({ maxSubagentDepth: 3 })` 或 DSL `agent(prompt, { maxSubagentDepth: 3 })` 中为大型任务显式开放到第 3 层。受管子代理只能继承或降低其上限，不能自行提高授权；设置值不得小于本次目标子代理的实际层级。续接不改变父子归属与层级，未传上限时保留原授权，显式设置时重新校验。所有入口均校验硬上限 5，越界或登记损坏时报错，不做兼容读取或猜测。
+
+这项限制只约束受管子代理派生。DSL `workflow()` 的脚本组合深度仍保持原有一层限制，与子代理层级分别计数。
 
 ## 两阶段崩溃恢复
 
@@ -78,7 +81,11 @@ Worktree 隔离经 `agent_spawn` around continuation（priority 200，先于外�
 
 - `toolView` `subagent-card`（`replaceRow: true`）：时间线内 subagent 工具调用的双层胶囊实时卡，多次 resume 折叠展示；
 - `toolView` `workflow-card`（`replaceRow: true`）：时间线内 SubagentWorkflow 调用的工作流运行卡；已保存定义发起的已完成 run 提供「重跑」（全新运行，非断点恢复），失败/中止 run 提供「断点恢复」（仅同 run journal 前缀重放，沿用原脚本与 args）；
-- `workbenchPanel` `tasks`：工作台面板（工作流库 + 当前会话工作流运行 + 子代理列表），`badge` 绑定 `run-badges` 文档驱动动态角标。工作流库经 `list` 动作展示已保存定义并支持在当前会话选择运行（args 输入严格 JSON 解析）；有 worktree 的节点卡提供可折叠只读改动概览（`inspect_worktree`）与「让主会话审阅并合入」（仅向父会话提交审阅请求文本，Web 端不执行 git 写操作）。
+- `workbenchPanel` `tasks`：工作台面板（工作流库 + 当前会话执行树），`badge` 绑定 `run-badges` 文档驱动动态角标。工作流库经 `list` 动作展示已保存定义并支持在当前会话选择运行（args 输入严格 JSON 解析）；有 worktree 的节点卡提供可折叠只读改动概览（`inspect_worktree`）与「让主会话审阅并合入」（仅向父会话提交审阅请求文本，Web 端不执行 git 写操作）。
+
+执行卡片统一使用 `ExecutionNode` 视图模型连接子会话、工作流、动作及外部执行。每个实际执行只计数一次；卡片汇总后代的运行、异常、审批状态，在当前层展示直系子项，深层任务通过抽屉继续查看。审批与后代活动作为独立摘要呈现，工作流自身的结算结果仍以引擎记录为准。
+
+会话抽屉展示祖先路径。点击已在主屏或分屏展示的祖先只关闭抽屉；点击其他祖先在抽屉内切换，保持主屏上下文。`AskDock` 汇集当前会话及后代的待确认项，标注来源；提交仍针对原始 AskDoc 并携带其 CAS 水位线。
 
 ## 延伸阅读
 

@@ -356,8 +356,8 @@ async function agentIn(scope, prompt, opts) {
   if (effort !== undefined && EFFORT_LEVELS.indexOf(effort) === -1) {
     throw new Error("agent() opts.effort must be one of: " + EFFORT_LEVELS.join(", ") + ".");
   }
-  // maxSubagentDepth：显式授予该子代理子树的派生深度上限（仅新鲜 spawn 生效；
-  // resume 续接沿用登记表既有事实）。缺省继承父会话生效上限（默认 2）。
+  // 显式设置目标子树的绝对层级上限；宿主验证不得超过受管发起方的授权。
+  // resume 缺省沿用已登记事实，显式设置时同样参与校验与重放指纹。
   const maxSubagentDepth = options.maxSubagentDepth;
   if (
     maxSubagentDepth !== undefined &&

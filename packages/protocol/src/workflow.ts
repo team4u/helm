@@ -134,7 +134,7 @@ export const DEFAULT_MAX_SUBAGENT_DEPTH = 2 as const
 
 /**
  * 派生深度绝对上限：插件配置与 AgentSpawnRequest.maxSubagentDepth 的共同
- * 钳制边界（安全护栏，防失控递归派生）。
+ * 校验边界（越界显式拒绝，防失控递归派生）。
  */
 export const HARD_MAX_SUBAGENT_DEPTH = 5 as const
 
@@ -151,7 +151,7 @@ export interface WorkflowConversationBadgeSummary {
   footerText?: string
 }
 
-/** `builtin:workflow` 会话级文档 `runs` 的分片快照（仅单会话自身的 run 列表）。 */
+/** `builtin:workflow` 会话级文档 `runs` 的分片快照（当前会话及后代的 run，保留直接归属）。 */
 export interface WorkflowRunSessionDocState {
   runs: WorkflowRunSummary[]
 }

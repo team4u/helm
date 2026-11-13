@@ -153,8 +153,8 @@ export interface AgentSpawnRequest {
    * 显式授予本次派生子代理子树的派生深度上限（可选整数，
    * 1..HARD_MAX_SUBAGENT_DEPTH）。缺省继承父会话的生效上限（顶层派生取
    * builtin:workflow 插件配置，默认 DEFAULT_MAX_SUBAGENT_DEPTH=2）。深度
-   * 守卫仍按父会话自身深度先行拒绝：该字段只授予子树空间，不能为发起方
-   * 自己解限。协议不要求每次传参——缺省路径零参数即可用。
+   * 守卫仍按父会话自身深度先行拒绝；受管子代理不能提高继承的上限。
+   * 只有非受管根会话可显式提高任务树上限。缺省路径无需传参。
    */
   maxSubagentDepth?: number
   cwd?: string
