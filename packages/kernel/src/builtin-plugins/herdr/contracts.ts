@@ -38,6 +38,12 @@ export interface HerdrNodeChannel {
   isOnline(nodeId: string): boolean
   /** 获取节点注册的可达 Hub URL（若有，供远端窗格自动注入 HELM_HUB_URL）。 */
   getNodeHubUrl?(nodeId: string): string | undefined
+  /**
+   * 节点可信平台上报（NodeRegistry 注册事实，如 'linux' / 'win32'；
+   * 未上报 / 不可达返回 undefined）：resolveCwd 按目标节点平台做 cwd
+   * 规范化用。缺席时远端平台视为未知（不猜、不改写）。
+   */
+  nodePlatform?(nodeId: string): string | undefined
   /** 在目标节点执行本机 Herdr 单次行协议 IPC 请求（支持 signal 取消，取消时立即中断底层连接）。 */
   ipcCall(
     nodeId: string,

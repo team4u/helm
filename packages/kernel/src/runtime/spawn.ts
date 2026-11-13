@@ -30,6 +30,7 @@ import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
 import { validateOrThrow } from '../plugins/schema.js'
 import { clampThinkingLevelForModel } from './models.js'
+import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { runGate } from './tools.js'
 
@@ -305,9 +306,19 @@ async function runNativeSpawnTurn(
     ? (summary!.nodeId ?? 'local')
     : (deps.resolveNodeId?.(profile.nodeId, request.parentConversationId) ?? profile.nodeId ?? parentSummary?.nodeId ?? 'local')
   deps.assertNodeAvailable?.(targetNodeId)
+  // 新建路径 cwd 链（request > profile > parent > Hub 缺省）在进入 SDK
+  // createConversation / 子会话镜像登记 / gate / onResolved 前按目标节点平台
+  // 统一收口（词法规范化；win32 目标上不可映射的 POSIX cwd 显式拒绝，
+  // 绝不落库；远端平台无可信信息时透传，不改写）。resume 缺省严格沿用
+  // 原子会话 cwd，语义不变；resume 显式 cwd 变更经上方 updateConversation
+  // 收口（同一规范化链）。
   const childCwd = isResume
     ? summary!.cwd
-    : (request.cwd ?? profile.cwd ?? parentSummary?.cwd ?? deps.defaultCwd)
+    : normalizeSessionCwd(request.cwd ?? profile.cwd ?? parentSummary?.cwd ?? deps.defaultCwd, {
+        nodeId: targetNodeId,
+        trustedPlatform: trustedPlatformFromEnvFabric(deps.envFabric),
+        entry: 'agent_spawn',
+      })
   // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
   const gateCwd = childCwd
   {

@@ -13,7 +13,7 @@
  * 4. 父会话绑定节点（由 Executor 注入 parentNodeId；缺省本机）。
  */
 
-import { HelmError, type Profile } from '@helm/protocol'
+import { HelmError, isAbsoluteTargetPath, normalizeTargetPath, type Profile, type TargetPlatform } from '@helm/protocol'
 import { isValidNodeId } from './transport.js'
 
 /** Herdr CLI Agent kind 标识（如 agy/claude/codex/pi；不做枚举硬编码，交由 Herdr 校验）。 */
@@ -159,6 +159,29 @@ export function isAbsolutePath(p: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(p)
 }
 
+/**
+ * 按目标节点平台收口（protocol 原语组合，零自行正则）：platform 未知
+ *（远端无可信上报）透传不改写；win32 目标上不可映射 POSIX 根显式拒绝。
+ * 与内核 runtime/target-cwd.ts 同语义（builtin-plugins 不越界导入 kernel
+ * 私有目录，收口原语统一来自 @helm/protocol）。
+ */
+function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | undefined, entry: string): string {
+  if (!isAbsoluteTargetPath(cwd)) {
+    throw new HelmError(
+      'validation_error',
+      `${entry}: cwd 需为绝对路径（POSIX / 开头、Windows 盘符 C:\\ 或 UNC \\\\server\\share；拒绝盘符相对与相对路径）：收到 '${cwd}'`,
+      400,
+      { cwd },
+    )
+  }
+  if (platform === undefined) return cwd
+  const result = normalizeTargetPath(cwd, platform)
+  if (!result.ok) {
+    throw new HelmError(result.code, `${entry}: ${result.reason}`, 400, { cwd })
+  }
+  return result.path
+}
+
 export function isValidEnvName(name: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
 }
@@ -167,21 +190,31 @@ export function isValidEnvName(name: string): boolean {
  * cwd 解析链：request.cwd（必须绝对路径）> Profile.workspace（runtime.workspace
  * > Profile.cwd）> 父会话 cwd（getConversation 现取）。
  * 返回 ''（空串）表示链尾无真实 cwd，由调用方显式拒绝（不猜进程 cwd）。
+ *
+ * 命中结果在建窗副作用前按目标节点平台统一收口（platform 为 undefined 表示
+ * 目标节点平台无可信信息：透传，不猜不改写；local 由调用方以 process.platform
+ * 解析）。win32 目标上不可映射的 POSIX cwd 显式拒绝（不落任何窗格）。
  */
 export function resolveCwd(
   requestCwd: string | undefined,
   routing: SpawnRouting | undefined,
   parentCwd: string | undefined,
+  platform?: TargetPlatform,
 ): string {
+  let cwd: string
   if (requestCwd !== undefined) {
     if (!isAbsolutePath(requestCwd)) {
       throw new HelmError('validation_error', `spawn cwd 必须是绝对路径：'${requestCwd}'`, 400, { cwd: requestCwd })
     }
-    return requestCwd
+    cwd = requestCwd
+  } else if (routing?.workspace !== undefined) {
+    cwd = routing.workspace
+  } else if (parentCwd !== undefined && isAbsolutePath(parentCwd)) {
+    cwd = parentCwd
+  } else {
+    return ''
   }
-  if (routing?.workspace !== undefined) return routing.workspace
-  if (parentCwd !== undefined && isAbsolutePath(parentCwd)) return parentCwd
-  return ''
+  return normalizeCwdForPlatform(cwd, platform, 'herdr.spawn')
 }
 
 /**

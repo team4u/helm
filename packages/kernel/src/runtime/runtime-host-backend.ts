@@ -89,6 +89,13 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     nodeIpc: {
       isOnline: (nodeId) => runtime.envFabric.isOnline(nodeId),
       getNodeHubUrl: (nodeId) => runtime.envFabric.getNodeHubUrl(nodeId),
+      // 可信节点平台（NodeRegistry 注册上报；local → process.platform）：
+      // 插件按目标节点平台做 cwd 规范化用（远端未注册 / 未上报 = undefined，
+      // 消费方不猜不改写）。
+      nodePlatform: (nodeId) =>
+        nodeId === 'local'
+          ? process.platform
+          : runtime.envFabric.registry.get(nodeId)?.platform || undefined,
       call: (nodeId, input, signal) => runtime.envFabric.ipcCall(nodeId, input, signal),
       subscribe: (nodeId, input, onLine, onClosed, signal) =>
         runtime.envFabric.ipcSubscribe(nodeId, input, onLine, onClosed, signal),

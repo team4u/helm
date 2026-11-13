@@ -70,8 +70,8 @@ export type PluginHostBackend = Omit<HelmHostApi, 'manageConversation' | 'skills
   skills: Omit<HelmHostApi['skills'], 'ensureSkill'> & {
     ensureSkill(asset: PluginSkillAsset, pluginId: string): Promise<void>;
   };
-  /** 节点 IPC 机制端口（EnvFabric 通道；测试宿主未提供时调用显式报 501，不静默降级）。 */
-  nodeIpc?: HelmHostNodeIpcPort;
+  /** 节点 IPC 机制端口（EnvFabric 通道；测试宿主未提供时调用显式报 501，不静默降级）。 nodePlatform 为内核可选扩展能力：NodeRegistry 注册上报的可信节点平台（local → process.platform），供插件做目标节点平台的 cwd 规范化（protocol 类型未声明，缺席即未知）。 */
+  nodeIpc?: HelmHostNodeIpcPort & { nodePlatform?: BackendNodePlatformPort };
   /** 节点本机 HTTP fetch 端口（EnvFabric.nodeFetch；未接线时调用显式报 501，不回退 local）。 */
   nodeFetch?: HelmHostNodeFetchPort;
   /** 任意 TCP 透传隧道端口（EnvFabric.openTunnel；未接线时调用显式报 501，不回退 local）。 */
@@ -95,6 +95,9 @@ export type PluginHostBackend = Omit<HelmHostApi, 'manageConversation' | 'skills
   isClosing(): boolean;
   assertConversationExists?(conversationId: number): void;
 };
+
+/** 节点可信平台上报端口（NodeRegistry 注册事实；local → process.platform）。 */
+export type BackendNodePlatformPort = (nodeId: string) => string | undefined;
 
 export interface PluginHostOptions {
   dataDir: string;

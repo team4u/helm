@@ -30,6 +30,7 @@ import type { EventHub } from './events.js'
 import type { HookBridge } from './hook-bridge.js'
 import type { ModelRegistry } from './model-registry.js'
 import { buildSpawnHost } from './spawn-host.js'
+import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { gateResultMissingError, sanitizeExecutionInfo, sanitizeGateResult } from './spawn/spawn-exec.js'
 import { runNativeSpawn, validateJsonSchema } from './spawn.js'
 import type { HelmStore } from './store.js'
@@ -290,7 +291,14 @@ export class RuntimeAgentSpawn {
       throw new HelmError('not_found', `agentType '${profileId}' 不是已注册的 Profile（profiles/${profileId} 不存在）`, 404)
     }
     const nodeId = profile.nodeId ?? parent.nodeId ?? 'local'
-    const sourceCwd = input.requestCwd ?? profile.cwd ?? parent.cwd ?? this.deps.toolDeps.defaultCwd
+    // 源 cwd（request > profile > parent > Hub 缺省）按目标节点平台统一收口：
+    // worktree 源目录解析（builtin:workflow 等 continuation 消费方）拿到的
+    // 是规范化后的路径；win32 目标上不可映射的 POSIX cwd 显式拒绝；远端
+    // 平台无可信信息时透传。parentCwd 是父会话镜像事实，原样返回。
+    const sourceCwd = normalizeSessionCwd(
+      input.requestCwd ?? profile.cwd ?? parent.cwd ?? this.deps.toolDeps.defaultCwd,
+      { nodeId, trustedPlatform: trustedPlatformFromEnvFabric(this.deps.envFabric), entry: 'resolve_spawn_target' },
+    )
     return { nodeId, sourceCwd, parentCwd: parent.cwd }
   }
 

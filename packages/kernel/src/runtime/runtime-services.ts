@@ -42,6 +42,7 @@ import { requireConv } from './runtime-helpers.js'
 import { RuntimeNodeOperations } from './runtime-nodes.js'
 import { RuntimeTriggerDispatcher } from './runtime-triggers.js'
 import { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
+import { trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { RuntimeOwnershipManager } from './runtime-ownership.js'
 import { createGlobalDocumentStore } from './runtime-host-backend.js'
 import type { KernelRuntime } from './runtime.js'
@@ -321,6 +322,7 @@ export function assembleRuntimeServices(
     models: () => modelsRegistry.models,
     parseModelRefOrThrow: (ref) => modelsRegistry.parseModelRefOrThrow(ref),
     assertModelEnabled: (provider, modelId) => modelsRegistry.assertModelEnabled(provider, modelId),
+    trustedPlatformOf: trustedPlatformFromEnvFabric(envFabric),
   })
 
   // ---- 原生子代理派生 ----
