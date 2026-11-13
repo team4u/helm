@@ -1088,25 +1088,18 @@ const SPACE_LABELS: Record<SidebarSpace, string> = {
  * Activity Rail（48px）：仅空间切换（对话/视图/设置）+ 主题按钮。
  * 桌面与移动抽屉共用；空间按钮直接导航主舞台到对应空间的最近目标（store.openSpace），
  * 系统中心入口收敛到「设置」空间内的纵向列表。
- *
- * 移动端两段式点击：触屏没有 hover，纯图标一点就跳空间（用户看不清目标）。
- * 抽屉视口首次点击只展开文字标签（rail-peek，模拟悬停预览），第二次点击才
- * 真正导航；桌面宽视口不受影响（标签由 CSS 隐藏，Tooltip 承担悬停说明）。
  */
 function ActivityRail({
   store,
   space,
   onOpenSpace,
-  peek,
 }: {
   store: HelmStoreValue
   space: SidebarSpace
   onOpenSpace: (space: SidebarSpace) => void
-  /** 标签展开态（移动端两段式点击的中间态；桌面恒不生效）。 */
-  peek?: boolean
 }) {
   return (
-    <nav className={`activity-rail${peek ? ' rail-peek' : ''}`} aria-label="主导航">
+    <nav className="activity-rail" aria-label="主导航">
       <div className="activity-rail-brand" title="Helm">
         <HelmIcon name="layers" size={17} />
         <StatusDot connected={store.sseConnected} />
@@ -1123,7 +1116,6 @@ function ActivityRail({
               onClick={() => onOpenSpace(key)}
             >
               <HelmIcon name={SPACE_ICONS[key]} size={16} />
-              <span className="rail-space-label">{SPACE_LABELS[key]}</span>
             </button>
           </Tooltip>
         ))}
@@ -1208,30 +1200,18 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   // 侧栏空间由主屏目标唯一推导（不进 URL）；Rail 点击经 store.openSpace 直接导航
   // 该空间最近的主舞台目标，URL 即该空间真实锚点，刷新/前进/后退天然可还原。
   const space = spaceForTarget(store.primaryTarget)
-  // 移动端两段式点击（与 ActivityRail 的 rail-peek 契约配套）：抽屉视口
-  //（≤860px，与 responsive.css 侧栏抽屉断点一致）首次点击空间图标只展开
-  // 文字标签，第二次点击才导航并关闭抽屉；成功导航即复位 peek。经遮罩/关闭
-  // 按钮收起抽屉时保留展开态，重开抽屉标签仍可读，同样消除「看不清就跳走」。
-  const [railPeek, setRailPeek] = useState(false)
-  const isDrawerViewport = (): boolean =>
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(max-width: 860px)').matches
 
   return (
     <aside className="helm-sidebar">
+      {/* 移动端抽屉：切换空间后保持抽屉展开——该空间的二级列表（设置中心清单/
+          视图清单/智能体列表）在抽屉内自然呈现，用户点选具体条目才关闭抽屉
+          （条目自带 onNavigate / App 的 nav-item 点击关闭通道）；若在此关抽屉，
+          用户没机会看清二级菜单就被带到空间的第一个目标。桌面侧栏常驻，行为不变。 */}
       <ActivityRail
         store={store}
         space={space}
-        peek={railPeek}
         onOpenSpace={(nextSpace) => {
-          if (!railPeek && isDrawerViewport()) {
-            setRailPeek(true)
-            return
-          }
-          setRailPeek(false)
           store.openSpace(nextSpace)
-          onClose?.()
         }}
       />
       <div className="sidebar-context">

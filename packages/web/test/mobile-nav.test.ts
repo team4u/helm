@@ -106,39 +106,14 @@ test('Sidebar.tsx 点击 Agent 站位主区域在移动端导航后关闭抽屉'
   )
 })
 
-test('Sidebar.tsx Activity Rail 空间导航后关闭移动端抽屉', { timeout: 60_000 }, () => {
+test('Sidebar.tsx Activity Rail 空间切换保持移动端抽屉展开（二级列表可见，点选条目才关闭）', { timeout: 60_000 }, () => {
+  // 移动端点一级空间图标不得关闭抽屉：用户需要先看清该空间的二级菜单
+  //（如设置空间的角色/模型/技能/节点/插件清单），点选具体条目才经
+  // onNavigate / App 的 nav-item 点击通道关闭抽屉。
   assert.match(
     sidebarSource,
-    /onOpenSpace=\{\(nextSpace\) => \{[\s\S]*?store\.openSpace\(nextSpace\)[\s\S]*?onClose\?\.\(\)/,
-    'Rail 空间切换必须导航主舞台并关闭移动端抽屉',
-  )
-})
-
-test('Sidebar.tsx 移动端一级空间图标两段式点击：首次展开文字标签，再次点击才导航', { timeout: 60_000 }, () => {
-  // 空间按钮内嵌常驻文字标签（桌面由 CSS 隐藏，Tooltip 承担悬停说明）
-  assert.match(
-    sidebarSource,
-    /<span className="rail-space-label">\{SPACE_LABELS\[key\]\}<\/span>/,
-    'Rail 空间按钮必须内嵌文字标签供移动端 peek 展开',
-  )
-  // 抽屉视口判定与两段式分支：未展开时首次点击只 peek，不导航不关抽屉
-  assert.match(
-    sidebarSource,
-    /matchMedia\('\(max-width: 860px\)'\)/,
-    'Rail 必须按抽屉断点判定两段式点击是否生效',
-  )
-  assert.match(
-    sidebarSource,
-    /if \(!railPeek && isDrawerViewport\(\)\) \{\s*setRailPeek\(true\)\s*return\s*\}/,
-    '抽屉视口首次点击空间图标只展开标签（peek），不得直接跳转',
-  )
-  // CSS 契约：peek 展开宽度与标签显示；桌面默认隐藏
-  assert.match(responsiveCss, /\.activity-rail\.rail-peek\s*\{[^}]*width:\s*128px/, 'peek 态 Rail 展开宽度')
-  assert.match(responsiveCss, /\.activity-rail\.rail-peek\s+\.rail-space-label\s*\{[^}]*display:\s*inline/, 'peek 态显示文字标签')
-  assert.match(
-    readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8'),
-    /\.rail-space-label\s*\{[^}]*display:\s*none/,
-    '桌面默认隐藏文字标签（Tooltip 承担悬停说明）',
+    /onOpenSpace=\{\(nextSpace\) => \{\s*store\.openSpace\(nextSpace\)\s*\}\}/,
+    'Rail 空间切换只切换空间，不得在切换时关闭移动端抽屉',
   )
 })
 
