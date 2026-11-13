@@ -17,6 +17,7 @@
     "packages/node/test/**/*.ts",
     "packages/cli/src/**/*.ts",
     "packages/cli/test/**/*.ts",
+    "packages/payload/test/**/*.ts",
     "packages/web/test/**/*.ts",
     "packages/web/test/**/*.tsx"
   ],

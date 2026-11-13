@@ -68,7 +68,7 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
 - **单测防死锁**：每个测试显式声明 `{ timeout: 60_000 }`（runner 为 `tsx --test`）；不依赖 Unix `timeout` 命令；不用过滤管道隐藏失败日志；**勿设 `HELM_TEST_SUITE_TIMEOUT_MS` 环境变量**（kernel 的 `env-registry-races` 会因宿主残留 HELM_* 变量误报）。
 - **分档与执行规则**：
   - `unit` = `protocol + cli + web`（进程内 / happy-dom DOM 模拟，不起真实服务）——改协议、CLI、Web 时默认跑；
-  - `integration` = `kernel + node`（真实进程、SQLite、Git、WebSocket、`createHelm`、daemon，全部视为集成）——改 kernel / node 时必跑；
+  - `integration` = `kernel + node + payload`（真实进程、SQLite、Git、WebSocket、`createHelm`、daemon，全部视为集成；payload 驱动真实构建与启动子进程）——改 kernel / node 时必跑；
   - 跨档契约变更两档都跑；合并前与全量验收跑 `test:all`。不变量 `all = unit ∪ integration` 不重不漏；新测试文件必须落在已登记包的 `test/` 目录，新包同步更新 `scripts/test-suites.mjs` 的 `SUITES` 分档。
 
 ## 6. 开发流程与多智能体协作

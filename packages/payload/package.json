@@ -1,0 +1,15 @@
+{
+  "name": "@helm/payload",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "tsx --test"
+  },
+  "devDependencies": {
+    "@helm/cli": "workspace:*",
+    "@helm/kernel": "workspace:*",
+    "@helm/web": "workspace:*"
+  }
+}
