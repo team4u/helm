@@ -1,0 +1,120 @@
+# Desktop CI：为 packages/desktop（未来 Electron 桌面版）预留的三平台验证。
+#
+# 现状约束（与 scripts/desktop-ci-contract.mjs 配套）：
+#   - packages/desktop 尚不存在：gate 任务先探测（以 package.json 为准），缺失时矩阵任务
+#     显示为 skipped，不阻塞合并、不影响现有 ci.yml；包落地后本工作流自动启用。
+#   - 只执行当前仓库真实存在的命令：pnpm typecheck / build / test:unit / test:all 与
+#     scripts/desktop-ci-contract.mjs；desktop 自有 test 脚本按探测结果条件执行，不虚构。
+#   - Linux 上一切可能拉起 Electron 的执行（全量测试、desktop 冒烟）一律包在
+#     xvfb-run -a 下（-a 自动分配隔离的虚拟显示）。
+#   - Windows 沿用主 CI 取舍只跑 unit（kernel/node 集成不在 Windows 执行）；macOS 为
+#     新增平台跑全量，若暴露平台性失败即为真实信号。
+#   - macos-latest 当前为 arm64；如需 Intel 架构自行扩 macos-13。
+
+name: Desktop CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: 检测 packages/desktop
+    runs-on: ubuntu-latest
+    outputs:
+      desktop_exists: ${{ steps.detect.outputs.desktop_exists }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 探测 desktop 包是否存在
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          exists="$(node scripts/desktop-ci-contract.mjs --detect)"
+          echo "desktop_exists=${exists}" >> "$GITHUB_OUTPUT"
+          if [ "$exists" = "true" ]; then
+            msg="检测到 packages/desktop：Desktop CI 三平台矩阵（Linux/Windows/macOS）将启用。"
+          else
+            msg="未检测到 packages/desktop/package.json：desktop 矩阵任务按设计跳过，不阻塞合并；包落地后本工作流自动启用。"
+          fi
+          echo "$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+
+  desktop:
+    name: desktop / ${{ matrix.os }}
+    needs: gate
+    if: needs.gate.outputs.desktop_exists == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Electron 无头运行需要 X server 与 GPU/音频库；xvfb-run 为下方测试/冒烟步骤
+      # 按需启动隔离的虚拟显示。
+      - name: Install Xvfb and Electron runtime libs (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libgbm1 libasound2
+
+      # 契约检查：desktop 存在时必须有 name 与 build 脚本（pnpm -r build 会静默跳过
+      # 无 build 的包），并输出 desktop_name / desktop_has_test 供后续条件步骤使用。
+      - name: Desktop package contract check
+        id: contract
+        shell: bash
+        run: node scripts/desktop-ci-contract.mjs --github-output "$GITHUB_OUTPUT"
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # 测试依赖 workspace 包 dist 产物（同 ci.yml：包 exports 指向 ./dist）。
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run all tests (macOS)
+        if: runner.os == 'macOS'
+        run: pnpm test:all
+
+      - name: Run all tests under Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm test:all
+
+      - name: Run unit tests (Windows)
+        if: runner.os == 'Windows'
+        run: pnpm test:unit
+
+      # desktop 自有测试脚本（探测存在才执行；不虚构脚本）：Linux 必须 xvfb-run 包裹。
+      - name: Desktop package tests (Windows / macOS)
+        if: runner.os != 'Linux' && steps.contract.outputs.desktop_has_test == 'true'
+        run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run test
+
+      - name: Desktop package tests under Xvfb (Linux)
+        if: runner.os == 'Linux' && steps.contract.outputs.desktop_has_test == 'true'
+        run: xvfb-run -a pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run test
