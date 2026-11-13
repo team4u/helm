@@ -527,16 +527,19 @@ export class ConversationService {
       ? clampThinkingLevelForModel(this.o.models(), effectiveRef, nextThinkingOverride)
       : nextThinkingOverride
     const nextThinking = await this.resolveEffectiveThinkingLevel(clampedOverride, nextProfileId, effectiveRef)
-    // 显式 cwd 按目标节点平台（本 patch 的 nodeId 优先）统一收口后再进 SDK
-    // configure 与镜像持久化（词法规范化；win32 目标上的坏 POSIX cwd 显式拒绝）。
+    // 显式 cwd，或 nodeId 迁移时的既有 cwd，均按新目标节点平台统一收口，
+    // 再进入 SDK configure 与镜像持久化；坏 POSIX cwd 显式拒绝。
+    const nextNodeId = patch.nodeId ?? meta.nodeId
+    const cwdToNormalize =
+      patch.cwd !== undefined ? patch.cwd : patch.nodeId !== undefined ? meta.cwd : undefined
     const effectivePatchCwd =
-      patch.cwd !== undefined
-        ? normalizeSessionCwd(patch.cwd, {
-            nodeId: patch.nodeId ?? meta.nodeId,
+      cwdToNormalize === undefined
+        ? undefined
+        : normalizeSessionCwd(cwdToNormalize, {
+            nodeId: nextNodeId,
             trustedPlatform: this.o.trustedPlatformOf ?? trustedPlatformFromEnvFabric(undefined),
             entry: 'conversation.update',
           })
-        : undefined
     const configureChange: AgentChange = {
       ...(effectivePatchCwd !== undefined ? { cwd: effectivePatchCwd } : {}),
       model: effectiveRef ?? null,

@@ -818,6 +818,8 @@ export interface HelmHostNodeIpcPort {
   isOnline(nodeId: string): boolean
   /** 节点注册时上报的可达 Hub URL（若有）。 */
   getNodeHubUrl?(nodeId: string): string | undefined
+  /** 节点注册时上报的可信平台（如 win32 / linux / darwin）；未上报或离线返回 undefined。 */
+  nodePlatform?(nodeId: string): string | undefined
   /** 单次行协议 IPC 调用；节点不支持或离线时显式报错。 */
   call(
     nodeId: string,

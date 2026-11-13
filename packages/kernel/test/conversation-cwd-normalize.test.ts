@@ -211,7 +211,25 @@ test('update：patch.cwd 按目标节点平台收口（同一链）', { timeout:
   }
 })
 
-test('update：仅改 nodeId 不改写既有 cwd（resume/迁移语义保持）', { timeout: 60_000 }, async () => {
+test('update：仅改 nodeId 时按新目标平台收口既有 cwd', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  let closeNode: (() => void) | undefined
+  try {
+    const issued = await env.app.kernel.nodes.issueNodeToken('win-build')
+    closeNode = await registerFakeNode(env.hubUrl, 'win-build', issued.token, 'win32')
+    const conv = await env.app.kernel.createConversation({ cwd: '/mnt/c/keep-me' })
+    assert.equal(conv.cwd, '/mnt/c/keep-me')
+
+    const updated = await env.app.kernel.updateConversation(conv.id, { nodeId: 'win-build' })
+    assert.equal(updated.nodeId, 'win-build')
+    assert.equal(updated.cwd, 'C:\\keep-me', 'nodeId 迁移不得留下目标 Windows 不可用的 POSIX cwd')
+  } finally {
+    closeNode?.()
+    await env.close()
+  }
+})
+
+test('update：仅改标题时保持既有 cwd', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const conv = await env.app.kernel.createConversation({ cwd: '/tmp/helm/keep-me' })

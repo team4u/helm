@@ -37,7 +37,7 @@ export interface TrustedPlatformHost {
 }
 
 /**
- * 生产可信来源：优先 EnvFabric.nodePlatformOf 唯一只读端口（local → 
+ * 生产可信来源：优先 EnvFabric.nodePlatformOf 唯一只读端口（local →
  * process.platform，Hub 本机即 local 节点；远端 → NodeRegistry 注册上报的
  * platform，未注册 / 未上报 = undefined）；仅有 registry 的结构性 stub
  * 退回直读注册表（同一语义）。
