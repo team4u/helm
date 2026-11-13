@@ -90,10 +90,9 @@ export interface WorkflowSpawnRequest {
   /** 由脚本 agent({ attachments }) 传入的产物 ID 列表（原样透传，宿主做存在性/授权校验）。 */
   attachments?: string[]
   /**
-   * 显式授予该 agent 子代理于树的派生深度上限（可选整数，
-   * 1..HARD_MAX_SUBAGENT_DEPTH；缺省继承父会话生效上限）。策略授予字段：
-   * 不进入 agent 调用的重放指纹（缓存的节点结果复用不受授予变化影响，
-   * 活重跑时新授予自然生效）。
+   * 显式设置该 agent 子代理在任务树中的绝对深度上限（1..HARD_MAX_SUBAGENT_DEPTH）；
+   * 缺省继承父会话生效上限。该字段参与 journal 指纹：授权变化使该调用及后续
+   * 前缀失配，避免复用不同派工权限下的缓存结果；真实 spawn 仍由宿主重新校验。
    */
   maxSubagentDepth?: number
   phaseIndex?: number
