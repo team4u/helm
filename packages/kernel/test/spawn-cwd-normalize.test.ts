@@ -263,7 +263,9 @@ test('新建 spawn：cwd 相对路径拒绝（既有绝对路径契约保持）'
 })
 
 test('resume：缺省严格沿用原子会话 cwd（不重算、不产生 update）', { timeout: 60_000 }, async () => {
-  const env = await openSpawnEnv()
+  // 注入 POSIX Hub 平台：fallback 链尾的 /tmp 缺省 cwd 在 win32 宿主的
+  // local 目标上不可映射，本用例断言的是 resume 语义而非平台收口。
+  const env = await openSpawnEnv({ hubPlatform: 'linux' })
   try {
     env.faux.setResponses([fauxAssistantMessage('first'), fauxAssistantMessage('second')])
     const first = await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: '首轮' } as never)
@@ -280,7 +282,7 @@ test('resume：缺省严格沿用原子会话 cwd（不重算、不产生 update
 })
 
 test('resume：显式 cwd 经 updateConversation 端口应用（生产为同一收口链）', { timeout: 60_000 }, async () => {
-  const env = await openSpawnEnv()
+  const env = await openSpawnEnv({ hubPlatform: 'linux' })
   try {
     env.faux.setResponses([fauxAssistantMessage('first'), fauxAssistantMessage('second')])
     await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: '首轮' } as never)
@@ -344,8 +346,8 @@ test('resolveSpawnTarget：sourceCwd 按最终节点平台收口（win32 转换 
   )
   assert.equal((await resolve({ parentConversationId: 1 })).sourceCwd, 'C:\\parent', 'parent cwd 回退同样收口')
 
-  // 平台未知：透传。
-  const unknown = spawnTargetResolver({ platforms: {}, parent: { cwd: '/home/keep' } })
+  // 平台未知：透传（parent 指向未注册远端，避免落回宿主 local 平台）。
+  const unknown = spawnTargetResolver({ platforms: {}, parent: { cwd: '/home/keep', nodeId: 'mystery-node' } })
   assert.equal((await unknown({ parentConversationId: 1 })).sourceCwd, '/home/keep')
 
   // local posix：显式注入 Hub 平台，跨宿主稳定验证词法归一。
