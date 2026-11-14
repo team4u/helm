@@ -78,6 +78,10 @@ test('生产包保持单向依赖，源码只通过已声明的公开包入口�
     for (const file of sourceFiles(join(root, 'src'))) {
       for (const specifier of imports(file)) {
         const label = `${relative(packagesDir, file)}: ${specifier}`
+        if (isAbsolute(specifier) || specifier.startsWith('file:')) {
+          violations.push(`${label} 绝对路径绕过包入口`)
+          continue
+        }
         if (specifier.startsWith('.')) {
           const target = relative(root, resolve(dirname(file), specifier))
           if (isAbsolute(target) || target === '..' || target.startsWith(`..${sep}`)) violations.push(`${label} 相对路径跨包`)
