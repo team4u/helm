@@ -78,7 +78,7 @@ function makeIo(fixture: Fixture, realpaths: Record<string, string> = {}, statUi
   return io
 }
 
-describe('validatePosixScanPath', () => {
+describe('validatePosixScanPath', { timeout: 60_000 }, () => {
   it('拒绝相对路径 / NUL / 空 / ..与. 段 / 双斜杠 / 超长；归一化尾随斜杠', { timeout: 60_000 }, () => {
     assert.equal(validatePosixScanPath('/a/b').ok, true)
     assert.deepEqual(validatePosixScanPath('/a/b/'), { ok: true, value: '/a/b' })
@@ -89,7 +89,7 @@ describe('validatePosixScanPath', () => {
   })
 })
 
-describe('scanPathUsage（注入 io）', () => {
+describe('scanPathUsage（注入 io）', { timeout: 60_000 }, () => {
   it('cwd 命中：等于目标与子目录；fd 命中：树内文件与目录；含进程名；同 PID 多引用去重（cwd 优先）', { timeout: 60_000 }, async () => {
     const io = makeIo({
       pids: {

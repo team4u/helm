@@ -1134,8 +1134,10 @@ export function ConversationTimeline({
 
   // 换会话/卸载：仅作废属于旧会话的在途校准（挂载/换会话时 ref callback 先于
   // 本 effect 运行，新会话刚启动的校准不能被本轮 cleanup 或 setup 误杀）与高亮
-  // 清除定时器（同一组件实例复用滚动容器）。
+  // 清除定时器（同一组件实例复用滚动容器）；切换会话重置贴底吸附初态。
   useEffect(() => {
+    stickToBottomRef.current = true
+    lastScrollTopRef.current = 0
     const ownedConversationId = conversation.id
     return () => {
       const active = activeCalibrationRef.current
@@ -1215,19 +1217,20 @@ export function ConversationTimeline({
   })
   const anchorTrackingEnabled = onActiveEntryChange !== undefined
 
-  // 贴底吸附：仅当用户主动上滚时脱离贴底（内容增长导致 scrollHeight 变大不得
-  // 误判为脱离）。阅读锚点追踪见下方观察器（不随 scroll 事件测量行矩形）。
+  // 贴底吸附：主动上滚即刻脱离贴底（解除死区牢笼，无论离底多近均尊重上滚意图）；
+  // 仅在主动向底滚动至近底区或实质触底时才恢复贴底。
   useEffect(() => {
     const el = scrollRef.current
     if (el === null) return
     const onScroll = (): void => {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-      if (el.scrollTop < lastScrollTopRef.current - 4 && distanceFromBottom > 80) {
+      const top = el.scrollTop
+      const distanceFromBottom = el.scrollHeight - top - el.clientHeight
+      if (top < lastScrollTopRef.current - 2) {
         stickToBottomRef.current = false
-      } else if (distanceFromBottom <= 80) {
+      } else if (distanceFromBottom <= 32 && (top > lastScrollTopRef.current || distanceFromBottom <= 8)) {
         stickToBottomRef.current = true
       }
-      lastScrollTopRef.current = el.scrollTop
+      lastScrollTopRef.current = top
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
@@ -1355,19 +1358,22 @@ export function ConversationTimeline({
     }, 2400)
   }, [outlineScrollRequest, anchorTrackingEnabled, notifyActiveEntryChange, anchorSignature, armScrollCalibration])
 
-  // 监听内部容器高度变化（思考流式增长、命令追加、分组自动展开/收起），贴底状态下实时跟随到底部。
+  // 监听内部容器高度变化（思考流式增长、命令追加、分组自动展开/收起）。
+  // 仅在会话仍有活跃生成（isWorking / hasLiveTurn）且当前处于贴底吸附态时跟随到底部；
+  // 已结算静止会话的历史浏览不因 content-visibility 估高纠正、折叠展开或异步资源加载而误置底。
   useEffect(() => {
     const inner = innerRef.current
     if (inner === null || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
       const el = scrollRef.current
       if (el === null || !stickToBottomRef.current) return
+      if (!isWorking && !hasLiveTurn) return
       el.scrollTop = el.scrollHeight
       lastScrollTopRef.current = el.scrollTop
     })
     ro.observe(inner)
     return () => ro.disconnect()
-  }, [])
+  }, [isWorking, hasLiveTurn])
 
   useEffect(() => {
     if (store.highlightedEntry?.conversationId === conversation.id) stickToBottomRef.current = false
