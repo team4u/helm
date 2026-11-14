@@ -536,55 +536,8 @@ function AgentConversationRow({
   selected?: boolean
   onToggleSelect?: (id: number) => void
 }) {
-  const [renaming, setRenaming] = useState(false)
-  const [draft, setDraft] = useState('')
   const active = isConversationActive(store, conv.id)
   const deletable = isConversationDeletable(conv)
-  const humanManageable = (conv.ownedBy ?? 'human') === 'human'
-
-  const commitRename = async () => {
-    const title = draft.trim()
-    setRenaming(false)
-    if (!title || title === conv.title) return
-    try {
-      await conversationsApi.patch(conv.id, { title })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '重命名失败',
-        body: err instanceof Error ? err.message : String(err),
-      })
-    }
-  }
-
-  if (renaming) {
-    return (
-      <div className="nav-item nav-item-sub" style={{ display: 'flex', gap: 4 }}>
-        <input
-          className="input"
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void commitRename()
-            if (e.key === 'Escape') setRenaming(false)
-          }}
-          style={{ height: 24, fontSize: 12 }}
-        />
-        <Tooltip content="确认重命名" side="top">
-          <button type="button" className="btn btn-icon-xs" aria-label="确认重命名" onClick={() => void commitRename()}>
-            <HelmIcon name="check" size={12} />
-          </button>
-        </Tooltip>
-        <Tooltip content="取消重命名" side="top">
-          <button type="button" className="btn btn-icon-xs" aria-label="取消重命名" onClick={() => setRenaming(false)}>
-            <HelmIcon name="x" size={12} />
-          </button>
-        </Tooltip>
-      </div>
-    )
-  }
 
   return (
     <div
@@ -617,12 +570,6 @@ function AgentConversationRow({
           }
           store.openTarget({ kind: 'conversation', conversationId: conv.id })
         }}
-        onDoubleClick={() => {
-          if (!batchMode && humanManageable) {
-            setDraft(conv.title)
-            setRenaming(true)
-          }
-        }}
         aria-current={active ? 'page' : undefined}
       >
         <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
@@ -645,17 +592,6 @@ function AgentConversationRow({
               />
             </span>
             <ConversationRowActionsMenu conversation={conv} />
-            {humanManageable && (
-              <HoverIconButton
-                title="重命名会话"
-                icon="edit-3"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setDraft(conv.title)
-                  setRenaming(true)
-                }}
-              />
-            )}
           </span>
         )}
       </span>
