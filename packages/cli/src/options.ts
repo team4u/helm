@@ -11,6 +11,8 @@ export interface StdinSource {
 /** runCli 注入点：测试以内存 writer 与 fetch 替身替换真实进程 IO。 */
 export interface RunCliOptions {
   env?: NodeJS.ProcessEnv;
+  /** CLI 进程工作目录（本地文件路径解析基准）；缺省 process.cwd()。测试注入以避免 process.chdir 并发污染。 */
+  cwd?: string;
   stdout?: (text: string) => void;
   stderr?: (text: string) => void;
   fetch?: typeof fetch;

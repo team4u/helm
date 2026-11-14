@@ -160,6 +160,7 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
       json,
       args: [],
       dataDir,
+      cwd: options.cwd ?? process.cwd(),
       async hub() {
         if (!clientHolder.client) clientHolder.client = await hubFromEnv(env, dataDir, io)
         return clientHolder.client

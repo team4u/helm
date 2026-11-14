@@ -1,5 +1,6 @@
 /** 产物域：artifacts list / put / get。 */
 import type { ArtifactMetadata } from '@helm/protocol'
+import path from 'node:path'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
@@ -7,6 +8,37 @@ import { printPlainText, printResult, requirePositional, resolveConversationTarg
 import { printValue } from '../output.js'
 
 const convFlags = [{ name: 'current', type: 'boolean', help: '使用 env HELM_CONVERSATION_ID' }] as const
+
+/**
+ * 按调用方（CLI 进程）cwd 把本地路径解析为绝对路径：绝不按 HELM_CWD 静默切换，
+ * 也不做全盘查找。目录差异本身是合法 cd，仅作为诊断附注返回。
+ */
+function resolveCallerPath(ctx: CommandContext, requested: string): { resolvedPath: string; sessionCwd?: string } {
+  const resolvedPath = path.resolve(ctx.cwd, requested)
+  let sessionCwd: string | undefined
+  if (ctx.env['HELM_ENV'] === '1') {
+    const managed = ctx.env['HELM_CWD']
+    if (managed && managed !== ctx.cwd) sessionCwd = managed
+  }
+  return { resolvedPath, sessionCwd }
+}
+
+/** 路径诊断结构化 details（--json 信封供脚本消费）。 */
+function pathDetails(requested: string, resolvedPath: string, ctx: CommandContext, sessionCwd?: string): Record<string, string> {
+  return {
+    requestedPath: requested,
+    resolvedPath,
+    cliCwd: ctx.cwd,
+    ...(sessionCwd !== undefined ? { sessionCwd } : {}),
+  }
+}
+
+/** 人类可读多行诊断（含可选会话 cwd 附注）。 */
+function pathDiagLines(requested: string, resolvedPath: string, ctx: CommandContext, sessionCwd?: string): string {
+  const hint =
+    sessionCwd !== undefined ? `\n  会话 cwd（HELM_CWD）=${sessionCwd}（目录差异属合法 cd；相对路径仍按 CLI cwd 解析）` : ''
+  return `\n  请求路径=${requested}\n  绝对路径=${resolvedPath}\n  CLI cwd=${ctx.cwd}${hint}`
+}
 
 export function artifactsCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
@@ -47,24 +79,31 @@ export function artifactsCommands(): CommandSpec[] {
       if (parsed.positionals.length > 2) {
         throw new CliError(`多余位置参数：${parsed.positionals.slice(2).join(' ')}`, 'unexpected_positional')
       }
-      const pathMod = await import('node:path')
       const fsp = await import('node:fs/promises')
+      const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, filePath)
       let bytes: Uint8Array
       try {
-        const st = await fsp.stat(filePath)
+        const st = await fsp.stat(resolvedPath)
         if (!st.isFile()) {
-          throw new CliError(`上传源不是常规文件（目录/设备）：${filePath}`, 'read_failed')
+          throw new CliError(
+            `上传源不是常规文件（目录/设备）${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
+            'read_failed',
+            1,
+            pathDetails(filePath, resolvedPath, ctx, sessionCwd),
+          )
         }
-        const buffer = await fsp.readFile(filePath)
+        const buffer = await fsp.readFile(resolvedPath)
         bytes = new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
       } catch (err) {
         if (err instanceof CliError) throw err
         throw new CliError(
-          `读取上传文件失败（${filePath}）：${err instanceof Error ? err.message : String(err)}`,
+          `读取上传文件失败（${err instanceof Error ? err.message : String(err)}）${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
           'read_failed',
+          1,
+          pathDetails(filePath, resolvedPath, ctx, sessionCwd),
         )
       }
-      const fileName = flagValue<string>(parsed.flags, 'name') ?? pathMod.basename(filePath)
+      const fileName = flagValue<string>(parsed.flags, 'name') ?? path.basename(resolvedPath)
       const mimeType = flagValue<string>(parsed.flags, 'mime-type')
       const hub = await ctx.hub()
       const metadata = await hub.uploadArtifact(id, fileName, bytes, mimeType)
@@ -78,7 +117,7 @@ export function artifactsCommands(): CommandSpec[] {
   cmds.push({
     path: ['artifacts', 'get'],
     description: '读取产物内容（GET /api/artifacts/:id/content；文本直出，二进制需 --output）',
-    flags: [{ name: 'output', type: 'string', help: '二进制落盘路径' }],
+    flags: [{ name: 'output', type: 'string', help: '二进制落盘路径（按 CLI 调用方 cwd 解析为绝对路径）' }],
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([{ name: 'output', type: 'string' }], ctx.args)
@@ -90,13 +129,21 @@ export function artifactsCommands(): CommandSpec[] {
       const isText = contentType.startsWith('text/') || contentType.includes('json') || contentType.includes('yaml') || contentType === ''
       if (output !== undefined) {
         const fsp = await import('node:fs/promises')
+        const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, output)
+        // bytes 用实际落盘字节数：Content-Length 头缺失（分块传输等）时依然可靠。
+        const buffer = Buffer.from(await response.arrayBuffer())
         try {
-          await fsp.writeFile(output, Buffer.from(await response.arrayBuffer()))
+          await fsp.writeFile(resolvedPath, buffer)
         } catch (err) {
-          throw new CliError(`写入 ${output} 失败：${err instanceof Error ? err.message : String(err)}`, 'write_failed')
+          throw new CliError(
+            `写入产物落盘文件失败（${err instanceof Error ? err.message : String(err)}）${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
+            'write_failed',
+            1,
+            pathDetails(output, resolvedPath, ctx, sessionCwd),
+          )
         }
-        if (ctx.json) printValue(ctx.io, { written: output, bytes: response.headers.get('content-length') }, true)
-        else ctx.io.out(`已写入 ${output}\n`)
+        if (ctx.json) printValue(ctx.io, { written: resolvedPath, bytes: buffer.byteLength }, true)
+        else ctx.io.out(`已写入 ${resolvedPath}（${buffer.byteLength} 字节）\n`)
         return
       }
       if (!isText) {

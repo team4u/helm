@@ -17,6 +17,8 @@ export interface CommandContext {
   json: boolean
   args: string[]
   dataDir: string
+  /** CLI 进程工作目录：本地文件相对路径的唯一解析基准（绝不按 HELM_CWD 静默切换）。 */
+  cwd: string
   hub(): Promise<HubClient>
 }
 
