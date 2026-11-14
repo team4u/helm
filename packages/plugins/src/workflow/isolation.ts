@@ -30,8 +30,10 @@ import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest, type NodePa
 import { sanitizeAgentExecutionInfo as sanitizeExecutionInfo } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from './worktree.js'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
 import { ExecutionError, FileError, type Result, type ShellExecResult } from '@earendil-works/pi-durable/env'
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { redactJsonValue } from '@helm/protocol'
 
 /** 外部运行时 agentType 命名空间形态：'namespace:kind'（通用约定，零插件点名）。 */
@@ -66,11 +68,17 @@ export interface WorktreeIsolationDeps {
       req: { command: string | string[]; nodeId?: string; cwd?: string; timeoutMs?: number },
       opts?: { signal?: AbortSignal },
     ): Promise<{ ok: boolean; exitCode: number | null; output: string; timedOut: boolean }>
-    probeNodeFs(input: { nodeId: string; op: 'exists' | 'canonicalPath'; path: string }): Promise<{ value: string | boolean }>
+    /**
+     * 目标节点真实执行环境（SDK ExecutionEnv；受控代理：周期守卫 + 在逖
+     * 任务跟踪）：exists / canonicalPath 在目标节点真实执行，失败如实返回
+     * Result error，绝不编造结果。
+     */
+    executionEnv(nodeId: string, cwd: string): ExecutionEnv
     /** 目标节点进程占用快照（通用机制面；语义见 protocol/plugin.ts 端口注释）。 */
     inspectNodePathUsage(input: { nodeId: string; path: string; signal?: AbortSignal }): Promise<NodePathUsage>
     listActiveSpawnExecutions(): AgentExecutionInfo[]
-    redactText(text: string): string
+    /** 宿主统一文本脱敏（SecretStash：明文机密 -> 标记）。 */
+    redact(text: string): string
     getConversation(id: number): { cwd: string; nodeId?: string; status: string }
   }
   /** 插件私有 doc（records 同层持久层；停用保留，重启可读）。 */
@@ -90,7 +98,7 @@ export class WorktreeIsolation {
       nodeCanonicalPath: (nodeId, path) => this.probeFs(nodeId, path, 'canonicalPath') as Promise<Result<string, FileError>>,
       inspectPathUsage: (nodeId, path, signal) => deps.host.inspectNodePathUsage({ nodeId, path, signal }),
       docStore: deps.docStore,
-      redact: (text) => deps.host.redactText(text),
+      redact: (text) => deps.host.redact(text),
       isConversationWorking: (id) => this.isConversationWorking(id),
       isPathInUse: (nodeId, path) => this.isPathInUse(nodeId, path),
     })
@@ -139,18 +147,30 @@ export class WorktreeIsolation {
     return { ok: true, value: { exitCode: res.exitCode } }
   }
 
-  /** 节点 fs 探测适配：probeNodeFs 失败如实映射（绝不编造结果）。 */
-  private async probeFs(nodeId: string, path: string, op: 'exists' | 'canonicalPath'): Promise<Result<boolean | string, FileError>> {
+  /**
+   * 节点 fs 探测适配（真实 ExecutionEnv：目标节点真实执行 exists /
+   * canonicalPath）：Result 形状与 allocator 依赖同构，失败（节点离线 /
+   * 权限 / 不存在）如实透传（绝不编造结果、绝不把探测失败当目录缺失）；
+   * 受控代理自带周期守卫与在逖任务跟踪。
+   */
+  private async probeFs(
+    nodeId: string,
+    path: string,
+    op: 'exists' | 'canonicalPath',
+  ): Promise<Result<boolean | string, FileError>> {
+    if (typeof nodeId !== 'string' || nodeId === '') {
+      return { ok: false, error: new FileError('unknown', 'probeFs 需要非空 nodeId', path) }
+    }
+    if (typeof path !== 'string' || path === '') {
+      return { ok: false, error: new FileError('unknown', 'probeFs 需要非空 path', path) }
+    }
     try {
-      const res = await this.deps.host.probeNodeFs({ nodeId, op, path })
-      if (op === 'exists') {
-        return typeof res.value === 'boolean'
-          ? { ok: true, value: res.value }
-          : { ok: false, error: new FileError('unknown', 'exists 返回非布尔值', path) }
-      }
-      return typeof res.value === 'string' && res.value !== ''
-        ? { ok: true, value: res.value }
-        : { ok: false, error: new FileError('unknown', 'canonicalPath 返回非字符串', path) }
+      // cwd 仅是执行环境坐标（exists/canonicalPath 用绝对 path，不依赖 cwd）；
+      // 入参校验后直接取 env，用后即弃，绝不缓存。
+      const env = this.deps.host.executionEnv(nodeId, path)
+      return op === 'exists'
+        ? await env.exists(path, BACKGROUND_CONTEXT)
+        : await env.canonicalPath(path, BACKGROUND_CONTEXT)
     } catch (error) {
       return {
         ok: false,
@@ -494,7 +514,7 @@ export class WorktreeIsolation {
               ...(info.executionId !== undefined ? { executionId: info.executionId } : {}),
             })
           // 机密检查：元数据将落库，含已登记机密显式拒绝。
-          const safe = redactJsonValue(managed, (text) => this.deps.host.redactText(text))
+          const safe = redactJsonValue(managed, (text) => this.deps.host.redact(text))
           if (JSON.stringify(safe) !== JSON.stringify(managed)) {
             throw new HelmError('worktree_metadata_secret', `隔离执行元数据包含已登记机密，拒绝持久化；执行标识 ${info.executionId ?? info.conversationId ?? '未知'}`, 400)
           }

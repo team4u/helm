@@ -210,6 +210,12 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  packages/env-io:
+    dependencies:
+      '@helm/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
   packages/hub:
     dependencies:
       '@helm/kernel':
@@ -261,6 +267,9 @@ importers:
       '@earendil-works/pi-schema':
         specifier: 1.5.0
         version: 1.5.0
+      '@helm/env-io':
+        specifier: workspace:*
+        version: link:../env-io
       '@helm/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -292,6 +301,9 @@ importers:
 
   packages/node:
     dependencies:
+      '@helm/env-io':
+        specifier: workspace:*
+        version: link:../env-io
       '@helm/protocol':
         specifier: workspace:*
         version: link:../protocol

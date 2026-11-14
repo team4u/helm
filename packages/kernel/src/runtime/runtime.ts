@@ -12,7 +12,6 @@
 
 import {
   HelmError,
-  type AgentExecutionInfo,
   type AgentSpawnRequest,
   type AskCreateSpec,
   type AskResult,
@@ -39,7 +38,6 @@ import {
   type NodeUpgradeResult,
   type PluginSkillAsset,
 } from '@helm/protocol'
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry, ToolRegistration } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord'
@@ -63,6 +61,7 @@ import type { HelmStore } from './store.js'
 import { THINKING_LEVELS } from './spawn.js'
 import type { HelmPluginConfigStore } from './plugin-config-store.js'
 import type { ConversationService } from './conversation-service.js'
+import type { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
 import type { NodeManager } from './node-manager.js'
 import type { ModelRegistry } from './model-registry.js'
 import {
@@ -124,6 +123,8 @@ export class KernelRuntime {
   private settledInflight: Promise<void> = Promise.resolve()
   readonly nodes: NodeManager
   readonly conversations: ConversationService
+  /** 子代理派生/靶点解析/占用快照服务（宿主后端直连；无二层转发门面）。 */
+  readonly agentSpawn!: RuntimeAgentSpawn
   readonly modelsRegistry: ModelRegistry
   readonly nodeOps: RuntimeNodeOperations
   private readonly svc: AssembledRuntimeServices
@@ -201,6 +202,7 @@ export class KernelRuntime {
     this.events = this.svc.events
     this.sessionDocEvents = this.svc.sessionDocStreams
     this.conversations = this.svc.conversations
+    this.agentSpawn = this.svc.agentSpawn
 
     // 核心会话事件转投（见字段注释）：SSE 帧已过 buildEvent 验证+脱敏，
     // 监听器拿到的是完整 HelmEvent 信封（协议 onEvent 契约形状）。
@@ -373,6 +375,7 @@ export class KernelRuntime {
     const attempt = (async () => {
       if (this.pluginHost) await this.pluginHost.start()
       this.harness.resume()
+      this.conversations.noteSchedulerEngaged()
       this.started = true
     })()
     this.startPromise = attempt
@@ -383,20 +386,6 @@ export class KernelRuntime {
       // 而不是永远收到同一份陈旧拒绝。
       if (this.startPromise === attempt) this.startPromise = undefined
       throw error
-    }
-  }
-
-  async prepareInterruptedConversations(ids: number[]): Promise<void> {
-    const targets = new Set(ids)
-    if (targets.size === 0) return
-    const inspection = await this.harness.inspect(BACKGROUND_CONTEXT)
-    if (inspection.scheduling !== 'paused') {
-      throw new HelmError('recovery_already_started', '必须在调度器恢复之前标记中断子代理，拒绝不安全的恢复顺序', 409)
-    }
-    for (const task of inspection.tasks) {
-      if (targets.has(task.record.conversationId as number)) {
-        await this.harness.abortTask(task.record.id, BACKGROUND_CONTEXT)
-      }
     }
   }
 
@@ -413,7 +402,7 @@ export class KernelRuntime {
     nodeId?: string,
     options?: { secretNames?: string[] },
   ): Record<string, string> {
-    return this.svc.agentSpawn.buildSpawnEnv(conversationId, cwd, nodeId, options)
+    return this.agentSpawn.buildSpawnEnv(conversationId, cwd, nodeId, options)
   }
 
   // ------------------------------------------------------------------
@@ -670,11 +659,12 @@ export class KernelRuntime {
   }
 
   // ------------------------------------------------------------------
-  // 子代理派生委托（RuntimeAgentSpawn）
+  // 子代理派生委托（RuntimeAgentSpawn；spawnAgent/runGate 为公共入口，
+  // 靶点解析/占用快照/执行事实由宿主后端直连 this.agentSpawn）
   // ------------------------------------------------------------------
 
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
-    return this.svc.agentSpawn.spawnAgent(request)
+    return this.agentSpawn.spawnAgent(request)
   }
 
   runGate(
@@ -687,36 +677,7 @@ export class KernelRuntime {
       env?: Record<string, string>
     } = {},
   ): Promise<{ ok: boolean; output: string }> {
-    return this.svc.agentSpawn.runGate(command, options)
-  }
-
-  async resolveSpawnTarget(input: {
-    parentConversationId: number
-    profileId?: string
-    requestCwd?: string
-  }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }> {
-    return this.svc.agentSpawn.resolveSpawnTarget(input)
-  }
-
-  listActiveSpawnExecutions(): AgentExecutionInfo[] {
-    return this.svc.agentSpawn.listActiveSpawnExecutions()
-  }
-
-  async probeNodeFs(input: {
-    nodeId: string
-    op: 'exists' | 'canonicalPath'
-    path: string
-    signal?: AbortSignal
-  }): Promise<{ value: string | boolean }> {
-    return this.svc.agentSpawn.probeNodeFs(input)
-  }
-
-  async inspectNodePathUsage(input: {
-    nodeId: string
-    path: string
-    signal?: AbortSignal
-  }): Promise<import('@helm/protocol').NodePathUsage> {
-    return this.svc.agentSpawn.inspectNodePathUsage(input)
+    return this.agentSpawn.runGate(command, options)
   }
 
   // ------------------------------------------------------------------

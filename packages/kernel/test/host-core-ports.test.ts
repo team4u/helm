@@ -75,9 +75,7 @@ function makeBackend(over: {
     isClosing: () => false,
     async resolveSpawnTarget() { throw new HelmError('unsupported', 'fixture 不解析 spawn 靶点', 501) },
     listActiveSpawnExecutions: () => [],
-    async probeNodeFs() { throw new HelmError('unsupported', 'fixture 不探测节点 fs', 501) },
     async inspectNodePathUsage() { throw new HelmError('unsupported', 'fixture 不扫描进程占用', 501) },
-    redactText: (text: string) => text,
     profiles: {
       list: async () => [{ id: 'assistant' }] as never,
       get: async (id) => ({ id }) as never,
@@ -143,12 +141,8 @@ function makeBackend(over: {
     buildSpawnEnv: () => ({}),
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', 'fixture', 501) },
     withFileMutationQueue(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不承载文件互斥队列', 501) },
-    listActions: () => [],
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
     createAsk: async () => ({ id: 'a', status: 'answered', answers: {} }),
@@ -412,6 +406,39 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
       await host.register({ id: 'p:fetch-throw', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
       await assert.rejects(api.nodeFetch('remote-1')('http://example.test'), failure)
       await host.disable('p:fetch-throw')
+    } finally {
+      await host.dispose()
+    }
+  })
+
+  await t.test('nodeFetch：弃置 Response（不消费不 cancel）确定性占用——disable 持续 409，显式 cancel 后释放（无 GC 兜底）', { timeout: 60_000 }, async () => {
+    // FinalizationRegistry 安全网已按契约移除：资源归属完全确定——插件拿到
+    // Response 后必须消费或 cancel；弃置即在途任务持续可见（disable/reload
+    // 硬阻断不可 force），绝不依赖 GC 时机把泄漏掩饰成可停用。
+    const raw = (() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(32))
+        // 永不 close：模拟 SSE 长流（头部早已到达不结束任务）。
+      },
+      cancel() {},
+    }, { highWaterMark: 0 })))) as typeof fetch
+    const backend = makeBackend({ nodeFetch: () => raw })
+    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    let api!: HelmHostApi
+    await host.register({ id: 'p:fetch-abandon', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
+    try {
+      const response = await api.nodeFetch('remote-1')('http://example.test')
+      assert.equal(response.status, 200, '头部到达即返回（不等待 body）')
+      // 弃置：只查过 status，既不消费也不 cancel。
+      void response
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await assert.rejects(host.disable('p:fetch-abandon'), { code: 'plugin_has_live_tasks' })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      // 跨多个事件循环轮次仍 409（确定性占用，非 GC 兜底的短暂窗口）。
+      await assert.rejects(host.disable('p:fetch-abandon'), { code: 'plugin_has_live_tasks' })
+      // 唯一收敛路径：显式 cancel（drain 到 EOF 同理，另有测试覆盖）。
+      await response.body!.cancel()
+      await host.disable('p:fetch-abandon')
     } finally {
       await host.dispose()
     }

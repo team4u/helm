@@ -26,6 +26,7 @@ export const FULL_TIER_TRIGGERS = new Set([
 /** 与 scripts/test-suites.mjs 的 SUITES 镜像：包目录 → 档位（仅用于报告展示）。 */
 export const PACKAGE_TIERS = {
   protocol: 'unit',
+  'env-io': 'unit',
   cli: 'unit',
   web: 'unit',
   'plugin-client': 'unit',

@@ -93,9 +93,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   runGate(): Promise<{ ok: boolean; output: string }> {
     return Promise.resolve({ ok: true, output: '' })
   }
-  prepareInterruptedConversations(): Promise<void> {
-    return Promise.resolve()
-  }
   cleanupWorktree(): Promise<{ removed: boolean; worktreeId: string; path: string; branch: string; nodeId: string; branchDeleted: boolean }> {
     if (this.cleanupWorktreeImpl) return this.cleanupWorktreeImpl()
     return Promise.resolve({ removed: true, worktreeId: 'local:/x', path: '/x', branch: 'b', nodeId: 'local', branchDeleted: false })

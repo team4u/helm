@@ -5,12 +5,12 @@
  * kind:'subagent' 子会话会凭旧 checkpoint 继续跑模型回合；而只把 run 标
  * failed (interrupted) 并不会停掉 SDK 里的旧任务。修复契约：
  * 1. app 在注册任何插件之前调用 workflows.prepareRecovery()；
- * 2. prepareRecovery 经 host.prepareInterruptedConversations(ids) 用
- *    harness.inspect（只读）+ harness.abortTask（只落 abort 标记，不 resume）
- *    持久标记遗留子任务；调度器仍 paused；
- * 3. 所有插件注册后 workflows.init() 先 await host.abortConversation 让已标记
- *    子任务真正终止，再把 run 标 failed (interrupted)、向父会话投递一次报告，
- *    最后才 kernel.start() 恢复调度。
+ * 2. prepareRecovery 经 host.abortConversationGuarded(id)（调度器 paused 相位：
+ *    harness.inspect 只读 + harness.abortTask 只落 abort 标记，不 resume、
+ *    不等结算）逐个持久标记遗留子任务，且 human 归属被内核守卫拒绝；
+ * 3. 所有插件注册后 workflows.init() 再次 await host.abortConversationGuarded
+ *    （调度器已恢复，等待真实终态）让已标记子任务真正终止，再把 run 标
+ *    failed (interrupted)、向父会话投递一次报告，最后才 kernel.start()。
  *
  * 诚实性纪律：遗留任务由真实 tsx 子进程打开真 KernelRuntime + 真 SQLite
  * state.sqlite，用慢速 faux 流式中途 process.kill(SIGKILL) 制造（重启前确有
@@ -88,9 +88,6 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
     spawnAgent: async () => {
       throw new Error('本用例不 spawn')
     },
-    prepareInterruptedConversations: async (ids) => {
-      calls.push(`prepare:${ids.join(',')}`)
-    },
     invokeAction: async () => {
       throw new Error('本用例不调用 action')
     },
@@ -109,13 +106,12 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
   const svc = new WorkflowService({ dataDir: '/tmp/unused', state, host })
 
   await svc.prepareRecovery()
-  assert.deepEqual(calls, [`prepare:${CHILD}`], 'prepareRecovery 必须先且只收集遗留子会话并调用 prepareInterruptedConversations')
+  assert.deepEqual(calls, [`abort:${CHILD}`], 'prepareRecovery 必须先逐个守卫中止（paused 相位落持久 abort 标记）遗留子会话')
 
   calls.length = 0
   await svc.init()
   const firstAbort = calls.findIndex((c) => c.startsWith('abort:'))
   assert.ok(firstAbort === 0, `init 首个宿主调用必须是 abortConversation（实际：${calls.join(' | ')}）`)
-  assert.equal(calls.filter((c) => c.startsWith('prepare:')).length, 0, 'prepareRecovery 已执行过，init 不得重复调用 prepare')
 
   const record = stateMap.get(runKey) as { status: string; error?: string; notifiedAt?: number }
   assert.equal(record.status, 'failed', '遗留 running run 必须显式标 failed（不伪装 completed）')
@@ -342,8 +338,10 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     await delay(600)
     assert.equal(faux.state.callCount, 1, 'kernel.start 后旧子会话仍不得再发起模型调用')
 
-    // 调度器已 resume 后再次 prepare 必须显式拒绝（不安全恢复顺序）
-    await assert.rejects(() => kernel.prepareInterruptedConversations([childId]), (err: { code?: string }) => err.code === 'recovery_already_started')
+    // 相位自适应（专用恢复方法已删除）：调度器已 resume 后，同一
+    // abortConversationGuarded 走普通中止语义（SDK abort + 等待空闲），
+    // 对 idle 子会话是安全 no-op，绝不复燃旧回合，也不再需要专用 409。
+    await kernel.abortConversationGuarded(childId, {})
 
     // ---- 6) 显式 resume 原子会话：执行新输入（新回合真实模型调用）----
     faux.setResponses([fauxAssistantMessage('续接后的新回答')])
@@ -359,6 +357,94 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     assert.equal(resumedConv, childId, 'resume 必须续接原子会话，绝不新建')
     assert.equal(answer, '续接后的新回答', 'resume 回合返回真实模型输出')
     assert.equal(faux.state.callCount, 2, `resume 恰好新增一次子会话模型调用（实际 ${faux.state.callCount}）`)
+  } finally {
+    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 用例 3（内核机制回归）：paused 相位 guarded 中止逐会话持久标记 + human
+// 红线覆盖恢复窗口（专用 prepareInterruptedConversations 已删除，语义并入
+// abortConversationGuarded 相位自适应）
+// ---------------------------------------------------------------------------
+
+test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 resume；human 归属在恢复窗口同样拒绝；start 后同方法回落普通中止语义', { timeout: 60_000 }, async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-bg-restart3-'))
+  const seedDir = mkdtempSync(join(tmpdir(), 'helm-bg-seed3-'))
+  const seederPath = join(seedDir, 'seed.mts')
+  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href), 'utf8')
+  const tsxCli = require.resolve('tsx/cli')
+  let child: ReturnType<typeof spawn> | undefined
+  t.after(() => {
+    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
+    rmSync(seedDir, { recursive: true, force: true })
+    rmSync(dataDir, { recursive: true, force: true })
+  })
+  try {
+    child = spawn(process.execPath, [tsxCli, seederPath], {
+      cwd: KERNEL_DIR,
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: seedDir,
+        HELM_SEED_DIR: dataDir,
+        HELM_DATA_DIR: dataDir,
+        HELM_WATCHDOG_INTERVAL_MS: '0',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let childId = 0
+    await new Promise<void>((resolve, reject) => {
+      let out = ''
+      child!.stdout!.on('data', (chunk: Buffer) => {
+        out += String(chunk)
+        const m = /CHILD=(\d+)/.exec(out)
+        if (m && childId === 0) childId = Number(m[1])
+      })
+      child!.stderr!.on('data', () => {})
+      child!.on('exit', (code, signal) => {
+        if (signal !== 'SIGKILL' && code !== 137) reject(new Error(`seeder 必须死于 SIGKILL（实际 code=${code} signal=${signal}）`))
+        else resolve()
+      })
+      child!.on('error', reject)
+    })
+    assert.ok(childId > 1, `必须拿到子会话 ID（收到 ${childId}）`)
+
+    // 重启（不注册任何插件、autoResume:false：调度器保持 paused，恢复屏障窗口）。
+    const faux = fauxProvider()
+    const models = createModels()
+    models.setProvider(faux.provider)
+    const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
+    t.after(async () => {
+      await kernel.close().catch(() => {})
+    })
+
+    // human 红线覆盖恢复窗口：paused 相位对 human 归属会话拒绝持久标记。
+    kernel.markConversationOwnership(childId, 'human')
+    await assert.rejects(
+      () => kernel.abortConversationGuarded(childId, {}),
+      (err: { code?: string }) => err.code === 'ownership_conflict',
+    )
+    let snap = await readOnlyInspect(dataDir)
+    let task = snap.tasks.find((tk) => tk.conversationId === childId)
+    assert.ok(task !== undefined && task.abortRequested === false, 'human 拒绝路径绝不落 abort 标记')
+    assert.equal(snap.scheduling, 'paused', 'human 拒绝路径不得唤醒调度器')
+
+    // helm 归属：paused 相位只落持久 abort 标记（不 resume、不等结算、零模型调用）。
+    kernel.markConversationOwnership(childId, 'helm')
+    await kernel.abortConversationGuarded(childId, {})
+    snap = await readOnlyInspect(dataDir)
+    task = snap.tasks.find((tk) => tk.conversationId === childId)
+    assert.ok(task !== undefined && task.abortRequested === true, 'paused 相位必须落持久 abortRequested 标记')
+    assert.equal(snap.scheduling, 'paused', 'paused 相位标记绝不 resume 调度器')
+    assert.equal(faux.state.callCount, 0, 'paused 相位零模型调用')
+
+    // start 后（调度器 running）：同一方法回落普通中止语义（idle 子会话为
+    // 安全 no-op，绝不复燃旧回合）。
+    await kernel.start()
+    await kernel.abortConversationGuarded(childId, {})
+    await kernel.waitForIdle(childId).catch(() => {})
+    assert.equal(faux.state.callCount, 0, 'running 相位中止已标记的遗留任务仍零新增模型调用')
+    assert.equal(kernel.getConversation(childId).status, 'idle', '遗留子会话终态 idle')
   } finally {
     if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
   }

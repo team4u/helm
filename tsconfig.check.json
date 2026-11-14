@@ -22,6 +22,8 @@
   },
   "include": [
     "packages/protocol/src/**/*.ts",
+    "packages/env-io/src/**/*.ts",
+    "packages/env-io/test/**/*.ts",
     "packages/plugin-client/src/**/*.ts",
     "packages/plugin-client/src/**/*.tsx",
     "packages/plugin-client/test/**/*.ts",

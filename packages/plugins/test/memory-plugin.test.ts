@@ -124,18 +124,15 @@ function makeBackend(): PluginHostBackend & {
     async runGate() {
       return { ok: true, output: '' }
     },
-    async prepareInterruptedConversations() {},
     async cleanupWorktree() {
       return { removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false }
     },
     async invokeAction() {
       return {}
     },
-    prepareAction: () => ({ idempotent: false }),
     async execEnv() {
       throw new HelmError('unsupported', 'fixture', 501)
     },
-    listActions: () => [],
     emitEvent(type: string, payload: unknown) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
     },

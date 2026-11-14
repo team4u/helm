@@ -76,13 +76,9 @@ const backend: PluginHostBackend = {
   },
   spawnAgent: async () => ({}),
   runGate: async () => ({ ok: true, output: '' }),
-  prepareInterruptedConversations: async () => {},
-  invokeAction: async () => ({}),
-  prepareAction: () => ({ idempotent: false }),
   execEnv: async () => {
     throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
   },
-  listActions: () => [],
   emitEvent: (type, payload) => {
     if (type === 'plugin.session_doc.updated') {
       sessionDocHub.dispatch(payload)

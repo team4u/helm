@@ -53,7 +53,6 @@ interface SettledCall {
 
 interface NotifyHost extends WorkflowServiceHost {
   settledCalls: SettledCall[]
-  preparedIds: number[][]
   guardedAborts: number[]
   /** 前 N 次 onBackgroundAgentSettled 抛错（outbox 补发演练）。 */
   notifyFailTimes: number
@@ -62,14 +61,10 @@ interface NotifyHost extends WorkflowServiceHost {
 function makeHost(): NotifyHost {
   const host: NotifyHost = {
     settledCalls: [],
-    preparedIds: [],
     guardedAborts: [],
     notifyFailTimes: 0,
     async spawnAgent() {
       return '后台节点结果'
-    },
-    async prepareInterruptedConversations(ids) {
-      host.preparedIds.push([...ids])
     },
     async invokeAction() {
       throw new Error('此测试不调用动作')
@@ -212,16 +207,16 @@ describe('后台 workflow run 通知与恢复', () => {
     const service = new WorkflowService({ dataDir, host, state })
     await service.prepareRecovery()
     assert.deepEqual(
-      host.preparedIds.map((ids) => [...ids].sort()),
-      [[77]],
-      'prepareRecovery 必须收集后台 workflow 的 nodes 子会话并先落 abort 标记',
+      host.guardedAborts,
+      [77],
+      'prepareRecovery 必须收集后台 workflow 的 nodes 子会话并逐个守卫中止（paused 相位落持久 abort 标记）',
     )
     await service.init()
     const summary = service.getRun('wf_bgdead000001')
     assert.equal(summary.status, 'failed')
     assert.ok(summary.error?.includes('interrupted by process restart'), summary.error)
     assert.ok(summary.error?.includes('resumeFromRunId'), '后台 workflow 中断须保留账本恢复提示')
-    assert.deepEqual(host.guardedAborts, [77], 'init 必须守卫中止后台 workflow 的在途子会话')
+    assert.deepEqual(host.guardedAborts, [77, 77], 'init 再次守卫中止同批子会话（调度器已恢复，等待真实终态）')
     assert.ok(summary.nodes?.every((n) => n.status === 'failed'), '中断节须如实标 failed')
     assert.equal(host.settledCalls.length, 1, '中断的后台 workflow 须补发通知恰一次')
     assert.equal(host.settledCalls[0]!.summary.status, 'failed')
@@ -275,9 +270,9 @@ describe('后台 workflow run 通知与恢复', () => {
     // 模拟重启：第二个 WorkflowService 读同一 state 做恢复（首服务视为已死）。
     const revived = new WorkflowService({ dataDir, host, state })
     await revived.prepareRecovery()
-    assert.deepEqual(host.preparedIds, [[42]], 'prepareRecovery 必须按持久 IDs 落 abort 预标记')
+    assert.deepEqual(host.guardedAborts, [42], 'prepareRecovery 必须按持久 IDs 逐个守卫中止（落持久 abort 标记）')
     await revived.init()
-    assert.deepEqual(host.guardedAborts, [42], 'init 必须守卫中止持久 IDs 指向的子会话')
+    assert.deepEqual(host.guardedAborts, [42, 42], 'init 再次守卫中止同批子会话（调度器已恢复，等待真实终态）')
     const summary = revived.getRun(started.id)
     assert.equal(summary.status, 'failed')
     assert.ok(summary.error?.includes('interrupted by process restart'), summary.error)
@@ -313,7 +308,7 @@ describe('后台 workflow run 通知与恢复', () => {
     })
     const service = new WorkflowService({ dataDir, host, state })
     await service.prepareRecovery()
-    assert.deepEqual(host.preparedIds, [], '同步 workflow 不参与子会话 abort 预标记')
+    assert.deepEqual(host.guardedAborts, [], '同步 workflow 不参与子会话 abort 预标记')
     await service.init()
     assert.equal(service.getRun('wf_syncdead0001').status, 'failed')
     assert.ok(service.getRun('wf_syncdead0001').error?.includes('resumeFromRunId'))

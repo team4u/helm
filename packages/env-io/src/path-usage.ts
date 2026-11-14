@@ -1,10 +1,12 @@
 /**
  * 目标路径进程占用扫描的纯编排器（Linux /proc 语义；删除前快照）。
  *
- * 架构约束：本模块属于 @helm/protocol，必须保持浏览器安全——零 Node 内置
- * import，一切文件系统访问经 `PathUsageIo` 注入（kernel 与 @helm/node 各自
- * 提供薄 fs 适配）；禁止相对 import 跨包。错误信封 `{ code, message }` 由
- * 两侧适配方映射为 RpcResult（节点 RPC）或 HelmError（Hub fabric）。
+ * 架构约束：本模块属于 @helm/env-io（kernel 与 @helm/node 共享的执行实现
+ * 包），保留可注入 io 面（PathUsageIo）——测试与非 Node 宿主可注入 fixture；
+ * 节点侧真实 fs 访问统一用同包 createNodePathUsageIo 适配。RPC 形状
+ * （NodePathUsage / NodePathUsageProcess）唯一真源在 @helm/protocol env-rpc；
+ * 错误信封 `{ code, message }` 由两侧适配方映射为 RpcResult（节点 RPC）或
+ * HelmError（Hub fabric）。
  *
  * 诚实性纪律（fail-closed）：
  * - 平台非 Linux（无 /proc 可靠语义）→ not_supported，绝不伪造结果；
@@ -21,7 +23,7 @@
  * realpath 解析结果（软链拼写的候选不漏报）。
  */
 
-import type { NodePathUsage, NodePathUsageProcess } from './env-rpc.js'
+import type { NodePathUsage, NodePathUsageProcess } from '@helm/protocol'
 
 /** 注入的只读 fs 面（browser-safe；两侧适配用 node:fs/promises 实现）。 */
 export interface PathUsageIo {

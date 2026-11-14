@@ -6,8 +6,7 @@
  * - 原生 subagent 执行环境装配与子会话初始状态广播（0ms 对齐 parentConversationId/parentToolCallId）；
  * - runGate 验收命令在目标节点执行（远端会话远端跑）；
  * - buildSpawnEnv 受管子进程环境构造；
- * - resolveSpawnTarget 通用 spawn 靶点解析；
- * - probeNodeFs 目标节点真实文件系统探测；
+ * - resolveSpawnTarget 通用 spawn 靶点解析（spawn-target.ts 同一权威链）；
  * - 维护 activeSpawnExecutions 活跃执行态与 agentSessions 别名映射。
  */
 
@@ -19,7 +18,6 @@ import type {
   ConversationSummary,
 } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
-import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry } from '@earendil-works/pi-durable'
 import type { EnvFabric } from '../env/index.js'
@@ -31,6 +29,7 @@ import type { HookBridge } from './hook-bridge.js'
 import type { ModelRegistry } from './model-registry.js'
 import { buildSpawnHost } from './spawn-host.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
+import { resolveSpawnTargetChain } from './spawn-target.js'
 import { gateResultMissingError, sanitizeExecutionInfo, sanitizeGateResult } from './spawn/spawn-exec.js'
 import { runNativeSpawn, validateJsonSchema } from './spawn.js'
 import type { HelmStore } from './store.js'
@@ -140,6 +139,8 @@ export class RuntimeAgentSpawn {
    * 兑现；内核只保留通用保证（schema 校验/gate 回报对账/结果验证）。
    */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
+    // 子会话提交/续接自带 resume：进入即标记调度器已交互（见 schedulerEngaged）。
+    this.deps.conversations.noteSchedulerEngaged()
     if (request.schema !== undefined) assertSchemaCompilable(request.schema)
     validateSecretNames(request.secretNames)
     const token = randomUUID()
@@ -334,7 +335,8 @@ export class RuntimeAgentSpawn {
   }
 
   /**
-   * 通用 spawn 靶点解析（ctx.host.resolveSpawnTarget 后端）。
+   * 通用 spawn 靶点解析（ctx.host.resolveSpawnTarget 后端；与原生执行行
+   * 同一权威链，见 runtime/spawn-target.ts）。
    */
   async resolveSpawnTarget(input: {
     parentConversationId: number
@@ -352,55 +354,30 @@ export class RuntimeAgentSpawn {
     if (profile === undefined) {
       throw new HelmError('not_found', `agentType '${profileId}' 不是已注册的 Profile（profiles/${profileId} 不存在）`, 404)
     }
-    const nodeId = profile.nodeId ?? parent.nodeId ?? 'local'
     // 源 cwd（request > profile > parent > Hub 缺省）按目标节点平台统一收口：
     // worktree 源目录解析（builtin:workflow 等 continuation 消费方）拿到的
     // 是规范化后的路径；win32 目标上不可映射的 POSIX cwd 显式拒绝；远端
     // 平台无可信信息时透传。parentCwd 是父会话镜像事实，原样返回。
-    const sourceCwd = normalizeSessionCwd(
-      input.requestCwd ?? profile.cwd ?? parent.cwd ?? this.deps.toolDeps.defaultCwd,
-      { nodeId, trustedPlatform: trustedPlatformFromEnvFabric(this.deps.envFabric), entry: 'resolve_spawn_target' },
-    )
+    const { nodeId, sourceCwd } = resolveSpawnTargetChain({
+      profileNodeId: profile.nodeId,
+      parentNodeId: parent.nodeId,
+      requestCwd: input.requestCwd,
+      profileCwd: profile.cwd,
+      parentCwd: parent.cwd,
+      defaultCwd: this.deps.toolDeps.defaultCwd,
+      normalize: (cwd, targetNodeId) =>
+        normalizeSessionCwd(cwd, {
+          nodeId: targetNodeId,
+          trustedPlatform: trustedPlatformFromEnvFabric(this.deps.envFabric),
+          entry: 'resolve_spawn_target',
+        }),
+    })
     return { nodeId, sourceCwd, parentCwd: parent.cwd }
   }
 
   /** 当前进程内仍在执行的 spawn 执行事实（ctx.host.listActiveSpawnExecutions 后端）。 */
   listActiveSpawnExecutions(): AgentExecutionInfo[] {
     return [...this.activeSpawnExecutions.values()].map((info) => ({ ...info }))
-  }
-
-  /**
-   * 目标节点真实 fs 探测（ctx.host.probeNodeFs 后端）。
-   */
-  async probeNodeFs(input: {
-    nodeId: string
-    op: 'exists' | 'canonicalPath'
-    path: string
-    signal?: AbortSignal
-  }): Promise<{ value: string | boolean }> {
-    if (typeof input.nodeId !== 'string' || input.nodeId === '') {
-      throw new HelmError('validation_error', `probeNodeFs 需要非空 nodeId（收到 ${String(input.nodeId)}）`, 400)
-    }
-    if (input.op !== 'exists' && input.op !== 'canonicalPath') {
-      throw new HelmError('validation_error', `probeNodeFs op 仅允许 exists | canonicalPath（收到 ${String(input.op)}）`, 400)
-    }
-    if (typeof input.path !== 'string' || input.path === '') {
-      throw new HelmError('validation_error', 'probeNodeFs 需要非空 path', 400)
-    }
-    const env = this.deps.envFabric.envFor(input.nodeId, input.path)
-    const context = input.signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(input.signal, BACKGROUND_CONTEXT)
-    const result = input.op === 'exists'
-      ? await env.exists(input.path, context)
-      : await env.canonicalPath(input.path, context)
-    if (!result.ok) {
-      throw new HelmError(
-        'node_fs_probe_failed',
-        `节点 ${input.nodeId} 上 ${input.op}('${this.deps.stashService.redact(input.path)}') 探测失败：${result.error.code}: ${this.deps.stashService.redact(result.error.message)}`,
-        502,
-        { nodeId: input.nodeId, op: input.op, path: this.deps.stashService.redact(input.path) },
-      )
-    }
-    return { value: result.value }
   }
 
   /**

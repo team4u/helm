@@ -14,7 +14,7 @@ import { scanPathUsage, validatePosixScanPath, type PathUsageIo } from '../src/i
 
 interface Fixture {
   /** procRoot 下的目录名列表（数字为 PID）。 */
-  pids: Record<string, { cwd?: string | Error; fds?: Record<string, string | Error>; comm?: string | Error; gone?: boolean }>
+  pids: Record<string, { cwd?: string | Error; fds?: Record<string, string | Error> | Error; comm?: string | Error; gone?: boolean }>
 }
 
 function err(code: string, message = code): Error {
@@ -34,7 +34,9 @@ function makeIo(fixture: Fixture, realpaths: Record<string, string> = {}, statUi
       }
       const f = /^\/proc\/(\d+)\/fd\/(\d+)$/.exec(p)
       if (f) {
-        const v = fixture.pids[f[1]!]?.fds?.[f[2]!]
+        const fds = fixture.pids[f[1]!]?.fds
+        if (fds instanceof Error) throw fds
+        const v = fds?.[f[2]!]
         if (v === undefined) throw err('ENOENT')
         if (v instanceof Error) throw v
         return v
@@ -55,9 +57,10 @@ function makeIo(fixture: Fixture, realpaths: Record<string, string> = {}, statUi
     },
     async stat(p) {
       const m = /^\/proc\/(\d+)$/.exec(p)
-      if (m === undefined || fixture.pids[m[1]!] === undefined) throw err('ENOENT')
+      const pid = m === null ? undefined : fixture.pids[m[1]!]
+      if (pid === undefined) throw err('ENOENT')
       // gone: true 模拟「读取时被拒、复核时已证实退出」（stat ENOENT）。
-      if (fixture.pids[m[1]!]!.gone === true) throw err('ENOENT')
+      if (pid.gone === true) throw err('ENOENT')
       return { uid: statUid }
     },
     async readFile(p) {

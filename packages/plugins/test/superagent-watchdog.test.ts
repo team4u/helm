@@ -279,10 +279,6 @@ async function makeHarness(opts: HarnessOptions = {}) {
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
-    listActions: () => [],
   }
 
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
@@ -799,10 +795,6 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
-    listActions: () => [],
   }
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-')), host: backend, docs })
   const config: SuperAgentConfig = {
@@ -1314,10 +1306,6 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
-    listActions: () => [],
     emitEvent: () => {},
   }
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-svc-')), host: backend, docs })
@@ -1528,10 +1516,6 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
-    listActions: () => [],
     emitEvent: () => {},
   }
   const runtime: SuperAgentWatchdogRuntime = {

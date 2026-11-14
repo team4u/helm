@@ -218,18 +218,6 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     throw new HelmError('unsupported', '本 fixture 不承载文件互斥队列', 501)
   }
 
-  prepareAction(...args: Parameters<Port<'prepareAction'>>): ReturnType<Port<'prepareAction'>> {
-    void args
-    unsupported('host.prepareAction')
-  }
-
-  prepareInterruptedConversations(
-    ...args: Parameters<Port<'prepareInterruptedConversations'>>
-  ): ReturnType<Port<'prepareInterruptedConversations'>> {
-    void args
-    unsupported('host.prepareInterruptedConversations')
-  }
-
   resolveSpawnTarget(
     ...args: Parameters<Port<'resolveSpawnTarget'>>
   ): ReturnType<Port<'resolveSpawnTarget'>> {
@@ -244,31 +232,11 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.listActiveSpawnExecutions')
   }
 
-  probeNodeFs(...args: Parameters<Port<'probeNodeFs'>>): ReturnType<Port<'probeNodeFs'>> {
-    void args
-    unsupported('host.probeNodeFs')
-  }
-
   inspectNodePathUsage(
     ...args: Parameters<Port<'inspectNodePathUsage'>>
   ): ReturnType<Port<'inspectNodePathUsage'>> {
     void args
     unsupported('host.inspectNodePathUsage')
-  }
-
-  redactText(...args: Parameters<Port<'redactText'>>): ReturnType<Port<'redactText'>> {
-    void args
-    unsupported('host.redactText')
-  }
-
-  invokeAction(...args: Parameters<Port<'invokeAction'>>): ReturnType<Port<'invokeAction'>> {
-    void args
-    unsupported('host.invokeAction')
-  }
-
-  listActions(...args: Parameters<Port<'listActions'>>): ReturnType<Port<'listActions'>> {
-    void args
-    unsupported('host.listActions')
   }
 
   refreshModels(...args: Parameters<Port<'refreshModels'>>): ReturnType<Port<'refreshModels'>> {
@@ -374,15 +342,9 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
           { signal?: AbortSignal }?,
         ]),
       ),
-    prepareAction: f(d.prepareAction),
-    prepareInterruptedConversations: f(d.prepareInterruptedConversations),
     resolveSpawnTarget: f(d.resolveSpawnTarget),
     listActiveSpawnExecutions: f(d.listActiveSpawnExecutions),
-    probeNodeFs: f(d.probeNodeFs),
     inspectNodePathUsage: f(d.inspectNodePathUsage),
-    redactText: f(d.redactText),
-    invokeAction: f(d.invokeAction),
-    listActions: f(d.listActions),
     refreshModels: f(d.refreshModels),
     createAsk: f(d.createAsk),
     cancelAsk: f(d.cancelAsk),

@@ -371,10 +371,10 @@ export function createWorkflowPlugin(): PluginDefinition {
         host: {
           resolveSpawnTarget: (input) => ctx.host.resolveSpawnTarget(input),
           execEnv: (req, opts) => ctx.host.execEnv(req, opts),
-          probeNodeFs: (input) => ctx.host.probeNodeFs(input),
+          executionEnv: (nodeId, cwd) => ctx.host.executionEnv(nodeId, cwd),
           inspectNodePathUsage: (input) => ctx.host.inspectNodePathUsage(input),
           listActiveSpawnExecutions: () => ctx.host.listActiveSpawnExecutions(),
-          redactText: (text) => ctx.host.redactText(text),
+          redact: (text) => ctx.host.redact(text),
           getConversation: (id) => {
             const conv = ctx.host.getConversation(id)
             return { cwd: conv.cwd, nodeId: conv.nodeId, status: conv.status }
@@ -503,9 +503,11 @@ export function createWorkflowPlugin(): PluginDefinition {
       const workflows = new WorkflowService({
         dataDir: ctx.dataDir,
         state: stateStore,
+        // 持久面值级脱敏钩子（契约声明主 app 注入；实际唯一来源是宿主统一
+        // redact 端口）：run 记录/账本写入前过 stash 脱敏，防机密落库。
+        redact: (text) => ctx.host.redact(text),
         host: {
           spawnAgent: (request) => ctx.host.spawnAgent(request),
-          prepareInterruptedConversations: (ids) => ctx.host.prepareInterruptedConversations(ids),
           invokeAction: async (pluginId, actionId, input, invokeContext) => {
             // ctx.host.invokeAction 已是宿主统一脱敏出口（protocol 契约）。
             return ctx.host.invokeAction(pluginId, actionId, input, invokeContext)
@@ -823,10 +825,11 @@ export function createWorkflowPlugin(): PluginDefinition {
       ctx.service({
         id: 'workflow-engine',
         async prepare() {
-          // 恢复阶段一（全局 prepare 屏障，先于任何服务 start）：只读遗留记录并
-          // 经 prepareInterruptedConversations 落持久 abort 标记，不唤醒 SDK
-          // 调度器、不提交输入——此时其他插件（assistant/herdr/外部）与工具尚未
-          // 注册完成，任何输入提交都会产生 orphan 回合。
+          // 恢复阶段一（全局 prepare 屏障，先于任何服务 start、先于 SDK 调度器
+          // resume）：只读遗留记录并经 abortConversationGuarded（paused 相位）
+          // 落持久 abort 标记，不唤醒 SDK 调度器、不提交输入——此时其他插件
+          // （assistant/herdr/外部）与工具尚未注册完成，任何输入提交都会产生
+          // orphan 回合。
           await workflows.prepareRecovery()
         },
         async start() {

@@ -416,7 +416,6 @@ class FakeBackend implements PluginHostBackend {
   async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
   async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
   listActiveSpawnExecutions(): [] { return [] }
-  async probeNodeFs(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) }
   async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) }
   redactText(text: string): string { return text }
   conversations = new Map<number, ConversationSummary>()
@@ -480,7 +479,6 @@ class FakeBackend implements PluginHostBackend {
     this.gateLog.push({ command, cwd: options?.cwd, env: options?.env })
     return { ok: true, output: 'local gate ok' }
   }
-  async prepareInterruptedConversations(): Promise<void> {}
   async invokeAction(): Promise<unknown> {
     return {}
   }

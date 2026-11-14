@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@helm/protocol": "workspace:*",
+    "@helm/env-io": "workspace:*",
     "birpc": "^2.9.0",
     "ws": "^8.18.0"
   },

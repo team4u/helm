@@ -36,11 +36,12 @@ import {
   type NodePathUsageProcess,
   type NodeTunnelTarget,
   type RpcResult,
+} from '@helm/protocol'
+import {
+  createNodePathUsageIo,
   scanPathUsage,
   validatePosixScanPath,
-  type PathUsageIo,
-} from '@helm/protocol'
-import { readlink, readdir, readFile, realpath, stat } from 'node:fs/promises'
+} from '@helm/env-io'
 import { randomUUID } from 'node:crypto'
 import type { Duplex } from 'node:stream'
 import { NodeRegistry, normalizeTunnelTarget } from './registry.js'
@@ -542,14 +543,9 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       const expectedPath = normalized.value
       if (nodeId === 'local') {
         // Hub 进程内真实扫描（platform 经 hubPlatform 端口，测试可注入；
-        // 生产为 process.platform，绝不伪造）。
-        const io: PathUsageIo = {
-          readlink: (p) => readlink(p),
-          readdir: (p) => readdir(p),
-          stat: (p) => stat(p).then((s) => ({ uid: s.uid })),
-          readFile: (p) => readFile(p, 'utf8'),
-          realpath: (p) => realpath(p),
-        }
+        // 生产为 process.platform，绝不伪造）。fs 适配与远端 daemon 共用
+        // @helm/env-io 同一实现，绝不各复制一套 fs 语义。
+        const io = createNodePathUsageIo()
         const result = await scanPathUsage(expectedPath, { io, platform: hubPlatform(), signal })
         if (result.ok) return result.value
         const { code, message } = result.error

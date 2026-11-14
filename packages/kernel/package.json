@@ -22,6 +22,7 @@
     "@earendil-works/pi-durable": "1.5.0",
     "@earendil-works/pi-schema": "1.5.0",
     "@helm/protocol": "workspace:*",
+    "@helm/env-io": "workspace:*",
     "ajv": "^8.17.1",
     "birpc": "^2.9.0",
     "diff": "8.0.4",

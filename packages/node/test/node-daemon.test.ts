@@ -38,16 +38,17 @@ import { runNodeCli } from '../src/cli.js';
 import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
-// 0. 依赖极简回归：@helm/node 运行时依赖仅限 @helm/protocol / birpc / ws
+// 0. 依赖极简回归：@helm/node 运行时依赖仅限 @helm/protocol / @helm/env-io
+//    （进程占用扫描共享执行实现，workspace 内包）/ birpc / ws
 // ---------------------------------------------------------------------------
 
-test('@helm/node 运行时依赖仅 @helm/protocol / birpc / ws（防重依赖回归）', { timeout: 60_000 }, async () => {
+test('@helm/node 运行时依赖仅 @helm/protocol / @helm/env-io / birpc / ws（防重依赖回归）', { timeout: 60_000 }, async () => {
   const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
   const pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf8')) as { dependencies?: Record<string, string> };
   assert.deepEqual(
     Object.keys(pkg.dependencies ?? {}).sort(),
-    ['@helm/protocol', 'birpc', 'ws'],
-    '@helm/node 的 dependencies 必须且仅能是 @helm/protocol / birpc / ws（不得引入 @earendil-works/* 等重依赖）',
+    ['@helm/env-io', '@helm/protocol', 'birpc', 'ws'],
+    '@helm/node 的 dependencies 必须且仅能是 @helm/protocol / @helm/env-io（共享进程占用扫描执行实现）/ birpc / ws（不得引入 @earendil-works/* 等重依赖）',
   );
 });
 

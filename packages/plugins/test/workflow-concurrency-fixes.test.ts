@@ -198,22 +198,24 @@ function makeFakeIsolation(options: FakeIsolationOptions = {}): FakeIsolationHan
           // verifyForResume 的 git 探测（rev-parse --is-inside-work-tree）足够。
           return { ok: true, exitCode: 0, output: 'true\n', timedOut: false }
         },
-        probeNodeFs: async (input) => {
-          if (
-            input.op === 'exists' && gatedPath !== undefined && input.path === gatedPath && !gateConsumed
-          ) {
-            gateConsumed = true
-            probeEnteredNotify()
-            await new Promise<void>((resolve) => {
-              releaseProbe = resolve
-            })
-            return { value: options.existsValue ?? true }
-          }
-          if (input.op === 'exists') return { value: options.existsValue ?? true }
-          return { value: input.path }
-        },
+        // 只探测 exists 的最小 ExecutionEnv 桩（allocator 仅用 exists/canonicalPath；
+        // Result 形状同构，失败路径由真实 env 覆盖于 native-worktree 测试）。
+        executionEnv: ((_nodeId: string, _cwd: string) =>
+          ({
+            exists: async (path: string) => {
+              if (gatedPath !== undefined && path === gatedPath && !gateConsumed) {
+                gateConsumed = true
+                probeEnteredNotify()
+                await new Promise<void>((resolve) => {
+                  releaseProbe = resolve
+                })
+              }
+              return { ok: true, value: options.existsValue ?? true } as const
+            },
+            canonicalPath: async (path: string) => ({ ok: true, value: path } as const),
+          }) as never) as WorktreeIsolationDeps['host']['executionEnv'],
         listActiveSpawnExecutions: () => [],
-        redactText: (text) => text,
+        redact: (text) => text,
         // 进程占用探测：本文件调 cleanup 的用例均在租约/占用层被拒（到不了
         // 进程扫描），补全空快照不会伪造任何被断言的行为。
         inspectNodePathUsage: async (input: { nodeId: string; path: string }) => ({

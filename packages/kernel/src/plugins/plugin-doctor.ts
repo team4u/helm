@@ -77,7 +77,6 @@ function doctorBackend(): PluginHostBackend {
   return {
     isClosing: () => false,
     redact: (text: string) => text,
-    redactText: (text: string) => text,
     profiles: port as never,
     skills: port as never,
     nodeIpc: undefined,
@@ -103,13 +102,9 @@ function doctorBackend(): PluginHostBackend {
     buildSpawnEnv: () => unavailable('host.buildSpawnEnv'),
     spawnAgent: () => unavailable('host.spawnAgent'),
     runGate: () => unavailable('host.runGate'),
-    prepareInterruptedConversations: () => unavailable('host.prepareInterruptedConversations'),
     resolveSpawnTarget: () => unavailable('host.resolveSpawnTarget'),
     listActiveSpawnExecutions: () => [],
-    probeNodeFs: () => unavailable('host.probeNodeFs'),
     inspectNodePathUsage: () => unavailable('host.inspectNodePathUsage'),
-    invokeAction: () => unavailable('host.invokeAction'),
-    listActions: () => [],
     refreshModels: () => unavailable('host.refreshModels'),
     createAsk: () => unavailable('host.createAsk'),
     cancelAsk: () => unavailable('host.cancelAsk'),
@@ -124,7 +119,6 @@ function doctorBackend(): PluginHostBackend {
     withFileLock: <T,>(_path: string, fn: () => Promise<T>): Promise<T> => fn(),
     atomicWriteFile: () => unavailable('host.atomicWriteFile'),
     withFileMutationQueue: <T,>(_target: never, fn: () => Promise<T>): Promise<T> => fn(),
-    prepareAction: () => unavailable('host.prepareAction'),
   };
 }
 

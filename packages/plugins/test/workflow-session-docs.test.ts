@@ -73,7 +73,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   getConversationOwnership(): 'helm' | 'bot' | 'human' { return 'human' }
   spawnAgent(): Promise<unknown> { return Promise.resolve('spawned') }
   runGate(): Promise<{ ok: boolean; output: string }> { return Promise.resolve({ ok: true, output: '' }) }
-  prepareInterruptedConversations(): Promise<void> { return Promise.resolve() }
   cleanupWorktree(): Promise<{ removed: boolean; worktreeId: string; path: string; branch: string; nodeId: string; branchDeleted: boolean }> {
     return Promise.resolve({ removed: true, worktreeId: 'local:/x', path: '/x', branch: 'b', nodeId: 'local', branchDeleted: false })
   }

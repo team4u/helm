@@ -91,9 +91,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   runGate(): Promise<{ ok: boolean; output: string }> {
     return Promise.resolve({ ok: true, output: '' })
   }
-  prepareInterruptedConversations(): Promise<void> {
-    return Promise.resolve()
-  }
   // 供 cleanup_worktree 真实插件路径驱动：execEnv 返回失败 git 输出（不执行真实命令）。
   execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
     return Promise.resolve({ ok: false, exitCode: 128, output: 'fatal: not a git repository', timedOut: false })
@@ -101,12 +98,16 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   listActiveSpawnExecutions(): never[] {
     return []
   }
-  redactText(text: string): string {
+  redact(text: string): string {
     return text
   }
-  probeNodeFs(input: { nodeId: string; op: 'exists' | 'canonicalPath'; path: string }): Promise<{ value: string | boolean }> {
-    if (input.op === 'exists') return Promise.resolve({ value: true })
-    return Promise.resolve({ value: input.path })
+  /** 最小执行环境桩（isolation 的 fs 探测面）：exists 恒真、canonicalPath 原样。 */
+  executionEnv(nodeId: string, cwd: string): import('@earendil-works/pi-durable/env').ExecutionEnv {
+    void nodeId; void cwd
+    return {
+      exists: async (path: string) => ({ ok: true, value: true } as const),
+      canonicalPath: async (path: string) => ({ ok: true, value: path } as const),
+    } as unknown as import('@earendil-works/pi-durable/env').ExecutionEnv
   }
   /** 进程占用快照：fixture 固定返回完整空快照（本文件不调 cleanup，仅满足端口形状）。 */
   inspectNodePathUsage(input: { nodeId: string; path: string }): Promise<import('@helm/protocol').NodePathUsage> {

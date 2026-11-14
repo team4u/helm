@@ -112,11 +112,7 @@ test('service stop 等待已进入采集的在途 tick，插件释放前完成 D
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    listActions: () => [],
   }
 
   const runtime: SuperAgentWatchdogRuntime = {

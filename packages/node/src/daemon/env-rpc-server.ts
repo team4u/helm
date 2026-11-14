@@ -40,7 +40,6 @@
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { readlink, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import type { Duplex } from 'node:stream';
 import {
   LocalExecutionEnv,
@@ -49,7 +48,7 @@ import {
   type DirReader,
   type TextLineReader,
 } from './local-env.js';
-import { scanPathUsage, type PathUsageIo } from '@helm/protocol';
+import { createNodePathUsageIo, scanPathUsage } from '@helm/env-io';
 import type {
   EnvExecInput,
   EnvExecOk,
@@ -1165,13 +1164,8 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         return invalidInput('envPathUsage path must be a non-empty string without NUL, at most 4096 chars');
       }
       const procRoot = options.pathUsage?.procRoot ?? '/proc';
-      const io: PathUsageIo = {
-        readlink: (p) => readlink(p),
-        readdir: (p) => readdir(p),
-        stat: (p) => stat(p).then((s) => ({ uid: s.uid })),
-        readFile: (p) => readFile(p, 'utf8'),
-        realpath: (p) => realpath(p),
-      };
+      // 与 Hub 侧共用 @helm/env-io 同一 node fs 适配，绝不各复制一套语义。
+      const io = createNodePathUsageIo();
       const result = await scanPathUsage(target, {
         io,
         platform: options.pathUsage?.platform?.() ?? process.platform,

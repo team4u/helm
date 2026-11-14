@@ -112,8 +112,12 @@ export interface WorkflowStateStore {
 export interface WorkflowServiceHost {
   /** agent_spawn 管道入口（KernelRuntime.spawnAgent：hook 链 + 原生子会话默认行）。 */
   spawnAgent(request: AgentSpawnRequest): Promise<unknown>
-  /** 恢复前只落 SDK abort 标记，不唤醒调度；必须早于插件服务启动。 */
-  prepareInterruptedConversations?(conversationIds: number[]): Promise<void>
+  /**
+   * 守卫式中止（通用取消机制）：SDK 调度器 paused（服务 prepare 屏障）时
+   * 对会话存活任务只落持久 abort 标记（不唤醒调度器）；运行中则真中止。
+   * 恢复屏障（调度器启动前持久取消遗留子会话）由此相位自适应兑现。
+   */
+  abortConversationGuarded(id: number): Promise<void>
   /**
    * 插件动作调用（PluginHost.invokeAction：manifest 精确匹配 + 输入输出 schema
    * 边界校验）。返回值必须已是安全 JSON（上游 app 层做 stash redact）。
@@ -483,21 +487,41 @@ export class WorkflowService {
   }
 
   /**
-   * 启动恢复：把跨重启遗留的 running run 显式标 failed。幂等；run() 首次调用
-   * 前自动执行，也可由宿主显式调用。失败可重试：initPromise 仅在恢复完整
-   * 成功（含 flush）后保留，异常时清缓存，下一次 init()/run() 重新执行。
+   * 启动恢复（阶段一：全局服务 prepare 屏障，SDK 调度器仍 paused）：把跨
+   * 重启遗留的 running run 的子会话经 host.abortConversationGuarded（paused
+   * 相位：只落持久 abort 标记，不唤醒调度器、不等结算）逐个持久取消。
+   * 幂等；run() 首次调用前自动执行，也可由宿主显式调用。失败可重试：
+   * initPromise 仅在恢复完整成功（含 flush）后保留，异常时清缓存，下一次
+   * init()/run() 重新执行。
    */
   async prepareRecovery(): Promise<void> {
     if (this.recoveryPrepared) return
-    if (this.host.prepareInterruptedConversations === undefined) return
     const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
     const childIds = new Set<number>()
     for (const entry of index) {
-      const record = this.loadRecord(entry.id)
+      let record: RunRecord
+      try {
+        record = this.loadRecord(entry.id)
+      } catch (error) {
+        // 记录缺失（索引残留）：恢复只处理真实存在的记录；索引损坏诊断
+        // 留给 listRuns（与 init 同契约，绝不删除索引掩盖）。
+        if (error instanceof HelmError && error.code === 'not_found') continue
+        throw error
+      }
       if (record.status !== 'running' || !this.isBackgroundRecord(record)) continue
       for (const id of this.backgroundChildIds(record)) childIds.add(id)
     }
-    if (childIds.size > 0) await this.host.prepareInterruptedConversations([...childIds])
+    // 逐会话守卫取消（human 一律内核拒绝）：单个拒绝（human 接管等红线事实）
+    // 不阻断其余恢复，stderr 诊断后继续——与 init 阶段同款客忍纪律。
+    for (const id of childIds) {
+      try {
+        await this.host.abortConversationGuarded(id)
+      } catch (error) {
+        process.stderr.write(
+          `workflow prepareRecovery: guarded abort conversation ${id} failed: ${errorMessage(error)}\n`,
+        )
+      }
+    }
     this.recoveryPrepared = true
   }
 

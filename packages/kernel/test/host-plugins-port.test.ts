@@ -454,11 +454,16 @@ test('周期守卫：停用后旧句柄 plugins 全方法一律 409 plugin_conte
 test('脱敏边界：doctor 失败诊断中的机密经宿主 redactText 出站', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-host-plugins-redact-'))
   const srcParent = mkdtempSync(join(tmpdir(), 'helm-host-plugins-redact-src-'))
-  // 构造带机密的宿主：redactText 把明文机密替换为标记（模拟 SecretStash）。
+  // 构造带机密的宿主：redact 把明文机密替换为标记（模拟 SecretStash）。
   const SECRET = 'sk-helm-super-secret-token'
   const stub = hostBackendStub()
-  stub.redactText = (text: string) => text.split(SECRET).join('[REDACTED]')
+<<<<<<< HEAD
+  stub.redact = (text: string) => text.split(SECRET).join('[REDACTED]')
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
+=======
+  stub.redact = (text: string) => text.split(SECRET).join('[REDACTED]')
+  const host = new PluginHost({
+>>>>>>> 626dc20d9 (refactor(kernel): 收缩 HelmHostApi 宿主能力，统一脱敏/靶点/恢复机制)
     dataDir,
     host: stub,
     docs: new MemoryDocStore(),

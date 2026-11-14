@@ -1063,6 +1063,15 @@ export interface HelmHostApi {
    * 第一个不可逆动作（SDK abort 调用）前同步复核会话存在性、归属（严禁
    * human）与可选 CAS 水位；复核失败抛 404 not_found / 409 ownership_conflict
    * / 409 state_seq_conflict 且绝不发起中止。
+   *
+   * 相位自适应（通用取消机制，无专用恢复方法）：
+   * - SDK 调度器已运行：SDK Conversation.abort + 等待会话空闲（既有语义）。
+   * - 调度器仍处 paused（全局服务 prepare 屏障、resume 之前）：对会话名下
+   *   的全部存活 SDK 任务只提交持久 abort 标记（harness.abortTask），不唤醒
+   *   调度器、不等待结算——恢复编排（如 workflow 的 prepareRecovery）据此
+   *   在调度器启动前持久取消自己登记的中断子会话，且逐个不可逆动作前同步
+   *   复核归属（human 一律拒绝）。内核绝不批量取消任意会话：目标会话永远
+   *   由调用方逐个显式给出。
    */
   abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void>
   /** 会话归属权现读（Watchdog 红线判定唯一可信来源；未标记一律 human）。 */
@@ -1077,7 +1086,11 @@ export interface HelmHostApi {
     artifactId: string,
     conversationId: number,
   ): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }>
-  /** 全局文本脱敏（SecretStash 明文 -> marker；诊断/日志出站前用）。 */
+  /**
+   * 全局文本脱敏（SecretStash 明文 -> marker）：诊断/日志出站前、以及插件
+   * 持久化自身元数据（如含路径/分支的工作树记录）前统一过此脱敏，防已
+   * 登记机密落库（唯一脱敏入口，无并行同名方法）。
+   */
   redact(text: string): string
   /**
    * 通用无工具单次文本补全（机制，无业务策略）：按会话解析生效模型
@@ -1175,13 +1188,12 @@ export interface HelmHostApi {
     input: unknown,
     context?: PluginActionContext,
   ): { idempotent: boolean }
-  /** 重启恢复前持久标记中断的子会话任务取消（必须在调度器恢复前调用）。 */
-  prepareInterruptedConversations(ids: number[]): Promise<void>
   /**
-   * 通用 spawn 靶点解析（机制，零业务语义）：按与原生执行行同构的链
+   * 通用 spawn 靶点解析（机制，零业务语义）：按与原生执行行同一权威链
    * 「request.cwd > profile.cwd > 父会话 cwd」解析源目录，「显式
    * profile.nodeId > 父会话绑定节点 > 'local'」解析实际执行节点，并返回
-   * 父会话 cwd 供插件层在分配资源前解析源目录。
+   * 父会话 cwd 供插件层在分配资源前解析源目录。链实现由内核唯一提取函数
+   * 提供（原生子会话派生与本端口同源），插件不得自行复制规则。
    * 返回值是内核权威事实；节点离线校验不在本端口（由 execEnv/gate 各自执行）。
    */
   resolveSpawnTarget(input: {
@@ -1198,18 +1210,6 @@ export interface HelmHostApi {
    */
   listActiveSpawnExecutions(): AgentExecutionInfo[]
   /**
-   * 目标节点真实 fs 探测（通用机制面，零业务语义）：exists / canonicalPath
-   * 经内核 EnvFabric 在目标节点真实执行。探测失败（节点离线/权限/超时）
-   * 如实 reject（HelmError），绝不编造结果；返回 value 为 boolean（exists）
-   * 或绝对路径字符串（canonicalPath）。
-   */
-  probeNodeFs(input: {
-    nodeId: string
-    op: 'exists' | 'canonicalPath'
-    path: string
-    signal?: AbortSignal
-  }): Promise<{ value: string | boolean }>
-  /**
    * 目标节点进程占用快照（删除前诊断面，通用机制、零业务语义）：目标节点
    * 上 cwd 或打开 fd 引用目标绝对路径（含子目录，路径分量边界匹配）的
    * 进程清单（PID/进程名/引用路径；绝不读 cmdline/environ）。快照不完整
@@ -1217,17 +1217,13 @@ export interface HelmHostApi {
    * 当作 0 占用。节点离线 / 守护进程版本不支持 / 平台不支持均显式 reject
    * （HelmError），绝不静默回退本机扫描。这是诊断快照而非跨进程互斥：
    * 扫描之后新启动的进程不在保护范围；内核也绝不基于此自动终止任何进程。
+   * Linux /proc 扫描实现在 @helm/env-io（kernel 与 @helm/node 共享同一实现）。
    */
   inspectNodePathUsage(input: {
     nodeId: string
     path: string
     signal?: AbortSignal
   }): Promise<NodePathUsage>
-  /**
-   * 宿主统一文本脱敏（SecretStash：明文机密 -> 标记）：插件持久化自身
-   * 元数据（如含路径/分支的工作树记录）前过此脱敏，防已登记机密落库。
-   */
-  redactText(text: string): string
   /** 调用任意已启用插件的动作（输出已经过 JSON 校验与宿主统一脱敏）。 */
   invokeAction(
     pluginId: string,

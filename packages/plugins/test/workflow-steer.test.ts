@@ -812,10 +812,6 @@ class SteerFakeBackend extends PluginHostBackendFixtureBase {
     return Promise.resolve()
   }
 
-  prepareInterruptedConversations(): Promise<void> {
-    return Promise.resolve()
-  }
-
   invokeAction(): Promise<unknown> {
     return Promise.resolve({})
   }

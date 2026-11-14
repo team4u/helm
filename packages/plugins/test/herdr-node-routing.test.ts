@@ -307,7 +307,6 @@ class FakeBackend implements PluginHostBackend {
     this.gateCalls.push({ command, cwd: options?.cwd, env: options?.env })
     return { ok: true, output: 'fixture gate ok' }
   }
-  async prepareInterruptedConversations(): Promise<void> {}
   async invokeAction(): Promise<unknown> {
     return {}
   }
@@ -325,7 +324,6 @@ class FakeBackend implements PluginHostBackend {
   listActiveSpawnExecutions(): [] {
     return []
   }
-  async probeNodeFs(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) }
   async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) }
   listActions(): [] {
     return []

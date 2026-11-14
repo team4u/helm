@@ -200,7 +200,6 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     setPluginConfig: async () => {},
     nodeIpc: undefined,
     redact: (t: string) => t,
-    redactText: (t: string) => t,
     buildSpawnEnv: () => ({}),
     async getConversationDetail(id: number, options?: { cursor?: string }) {
       detailCalls.push(id)
@@ -226,16 +225,11 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     async refreshModels() { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) },
     async resolveSpawnTarget() { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) },
     listActiveSpawnExecutions: () => [],
-    async probeNodeFs() { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) },
     async inspectNodePathUsage() { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
-    listActions: () => [],
     emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string })
     },
@@ -534,12 +528,8 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
     execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
-    listActions: () => [],
     emitEvent: (type: string, payload: unknown) => { if (type === 'notification') notifications.push(payload as { title: string; body: string }) },
   }
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs })

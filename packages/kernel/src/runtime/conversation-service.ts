@@ -285,13 +285,54 @@ export class ConversationService {
   }
 
   /**
+   * 调度器交互单调标记：内核一旦与 SDK 发生提交/中止/恢复/等待交互
+   *（submit / conversation.abort / waitForIdle / harness.resume——它们都会
+   * 或已意味着调度器离开 paused），即为 true 且永不回落。用作
+   * abortConversationGuarded 的快路径门：false 时才付一次只读 inspect 的
+   * 权威相位复核。标记保守住两个方向：漏记（某路径已 resume）只多一次
+   * inspect 复核后落回常规路径；多记（提前置 true）等价于旧路径行为
+   * （conversation.abort 自带 resume），均不改变安全语义。
+   */
+  private schedulerEngaged = false
+
+  /** 标记调度器已必然离开 paused（runtime.start resume / 首次提交 / 任意中止）。 */
+  noteSchedulerEngaged(): void {
+    this.schedulerEngaged = true
+  }
+
+  /**
    * 自动化 guarded 中止：守卫复核与 SDK abort 调用（第一个不可逆动作）在
    * 同一串行域内背靠背执行（零 await 间隔）；复核失败绝不发起中止。
    * 普通 abortConversation 语义不变（人类/CLI 路径不绑定自动化守卫）。
+   *
+   * 相位自适应（取代旧专用 prepareInterruptedConversations）：
+   * - SDK 调度器 running：SDK Conversation.abort + 等待空闲（既有语义，
+   *   热路径零额外 await——运行中取消不得因相位探测而变慢）；
+   * - 调度器 paused（服务 prepare 屏障、resume 之前）：对会话名下全部存活
+   *   SDK 任务逐一提交持久 abort 标记（harness.abortTask：不 resume、
+   *   不等结算），每个不可逆动作前同步复核归属（human 一律拒绝）——
+   *   恢复编排据此在调度器启动前持久取消自己登记的中断子会话。
    */
   async abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void> {
     this.assertGuardShape(guard)
     return this.withMutationGate(id, async () => {
+      // 恢复屏障路径：仅当内核尚无任何调度器交互时才付一次只读 inspect 的
+      // 权威相位复核；标记前逐任务同步复核（human 红线覆盖恢复窗口，
+      // 优于旧专用方法的无守卫批量取消）。
+      if (!this.schedulerEngaged) {
+        const inspection = await this.harness.inspect(BACKGROUND_CONTEXT)
+        if (inspection.scheduling === 'paused') {
+          for (const task of inspection.tasks) {
+            if (task.record.conversationId !== (id as never)) continue
+            // 与下方 abortTask 调用之间零 await（单线程内 ownership 无法插入）。
+            this.assertMutationGuard(id, guard)
+            await this.harness.abortTask(task.record.id, BACKGROUND_CONTEXT)
+          }
+          return
+        }
+        // 意外 running（autoResume:false 进程先提交过后再守卫中止）：落回常规路径。
+        this.noteSchedulerEngaged()
+      }
       const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
       if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
       // 最终复核：与下方 abort 调用之间零 await（上方 await 窗口内的归属翻转在此拦截）。
@@ -580,6 +621,8 @@ export class ConversationService {
   }
 
   async deleteConversation(id: number): Promise<void> {
+    // 删除会 abort 在途回合（自带 resume）：进入即标记（见 schedulerEngaged）。
+    this.noteSchedulerEngaged()
     requireConv(this.store, id)
     const owners = [...(this.o.managedConversations.get(id) ?? [])]
     if (owners.length > 0) {
@@ -654,6 +697,8 @@ export class ConversationService {
     text: string,
     opts?: SubmitInputOptions,
   ): Promise<{ submissionId: string }> {
+    // SDK submission 自带 resume：进入即标记调度器已交互（见 schedulerEngaged）。
+    this.noteSchedulerEngaged()
     this.contextOps.assertOpen()
     const convMeta = requireConv(this.store, id)
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
@@ -885,6 +930,8 @@ export class ConversationService {
   }
 
   async abortConversation(id: number): Promise<void> {
+    // conversation.abort 自带 resume：进入即标记（见 schedulerEngaged）。
+    this.noteSchedulerEngaged()
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
     const wasBusy = this.tracker.hasLiveWork(id)
@@ -917,6 +964,8 @@ export class ConversationService {
   // ------------------------------------------------------------------
 
   async waitForIdle(id: number): Promise<void> {
+    // conversation.waitForIdle 自带 resume：进入即标记（见 schedulerEngaged）。
+    this.noteSchedulerEngaged()
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
     await conversation.waitForIdle(BACKGROUND_CONTEXT)

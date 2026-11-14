@@ -50,15 +50,21 @@ export interface HostApiDependencies {
 }
 
 /**
- * 弃置 nodeFetch 响应的计数兜底：调用方拿到 Response 后既不消费也不
- * cancel body（也不持引用）时，包装流的 end 永不触发，插件将永久 409
- * plugin_has_live_tasks 不可停用。FinalizationRegistry 在 Response 被 GC 后
- * 补 end——时机非确定（依赖 GC），是泄漏安全网而非契约替代；调用方仍应
- * 消费或 cancel body（诚实声明：紧随弃置的 disable 可能仍短暂 409）。
+ * nodeFetch 弃置 Response 的确定性资源归属（无 GC 安全网）：
+ *
+ * 插件拿到包装 Response 后给体资源的唯一收敛路径：
+ * - 消费：读制 body 至 EOF（流自然 close）→ 计数结束；
+ * - 取消：response.body.cancel() / reader.cancel()（含 Response 构造后弃置前
+ *   的显式 cancel）→ 计数结束；
+ * - 传输失败：底层流 error → 包装流 error → 计数结束；
+ * - 宿主 close/dispose：底层隧道拆毁使 body 流以错误终结 → 计数结束，
+ *   绝不悬挂；
+ * - 弃置（既不消费也不 cancel）：计数保持——插件因此 409
+ *   plugin_has_live_tasks 不可停用/重载，这是弃置未关闭资源的真实代价，
+ *   绝不用 FinalizationRegistry 之类非确定性 GC 兜底把泄漏掩饰成可用。
+ * 头部到达不结束计数（SSE 长流全程在途），停用/重载硬阻断不可 force，
+ * 也不以 disable 自动 abort 绕过 409。
  */
-const abandonedNodeFetchResponses = new FinalizationRegistry<() => void>((end) => {
-  end();
-});
 
 /**
  * setConfig 读-合-写串行链（per-plugin）：backend.setPluginConfig 是整值
@@ -455,8 +461,6 @@ export function wrapHostApi(
                   statusText: response.statusText,
                   headers: response.headers,
                 });
-                // 弃置兜底：Response 不可达后被 GC 时补结束计数（见注册处声明）
-                abandonedNodeFetchResponses.register(wrapped, end);
                 return wrapped;
               } catch (error) {
                 // 包装失败（body 已锁定等）：尽力取消底层流并结束计数，绝不悬挂泄漏
@@ -536,7 +540,6 @@ export function wrapHostApi(
           return fn();
         }, opts),
       ),
-    probeNodeFs: (input) => tracked('host.probeNodeFs', () => backend.probeNodeFs(input)),
     inspectNodePathUsage: (input) => tracked('host.inspectNodePathUsage', () => backend.inspectNodePathUsage(input)),
 
     // 7. triggers & inputs
@@ -622,8 +625,6 @@ export function wrapHostApi(
       );
     },
     runGate: (command, options) => tracked('host.runGate', () => backend.runGate(command, options)),
-    prepareInterruptedConversations: (ids) =>
-      tracked('host.prepareInterruptedConversations', () => backend.prepareInterruptedConversations(ids)),
     resolveSpawnTarget: (input) => tracked('host.resolveSpawnTarget', () => backend.resolveSpawnTarget(input)),
     listActiveSpawnExecutions: () => {
       guard('host.listActiveSpawnExecutions');
@@ -635,10 +636,6 @@ export function wrapHostApi(
     getArtifact: (artifactId, conversationId) =>
       tracked('host.getArtifact', () => backend.getArtifact(artifactId, conversationId)),
     completeText: (input) => tracked('host.completeText', () => backend.completeText(input)),
-    redactText: (text) => {
-      guard('host.redactText');
-      return backend.redactText(text);
-    },
 
     // 11. actions
     invokeAction: async (targetPluginId, actionId, input, context) => {

@@ -170,18 +170,8 @@ function makeControlledBackend(): ControlledBackend {
     async runGate() {
       return { ok: true, output: '' }
     },
-    async prepareInterruptedConversations() {},
-    async invokeAction() {
-      return {}
-    },
-    prepareAction() {
-      return { idempotent: false }
-    },
     async execEnv() {
       throw new HelmError('unsupported', 'fixture', 501)
-    },
-    listActions() {
-      return []
     },
     emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })

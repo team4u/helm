@@ -93,9 +93,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   runGate(): Promise<{ ok: boolean; output: string }> {
     return Promise.resolve({ ok: true, output: '' });
   }
-  prepareInterruptedConversations(): Promise<void> {
-    return Promise.resolve();
-  }
   cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
     return Promise.resolve({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false });
   }

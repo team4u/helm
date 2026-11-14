@@ -31,6 +31,7 @@ import type { Models } from '@earendil-works/pi-ai'
 import { validateOrThrow } from '../plugins/schema.js'
 import { clampThinkingLevelForModel } from './models.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
+import { resolveSpawnTargetChain } from './spawn-target.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { runGate } from './tools.js'
 
@@ -141,11 +142,7 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    * 返回 [Attached Files] 文本块；无附件 spawn 时不注入。
    */
   resolveAttachmentsForPrompt?(): Promise<string>
-  /**
-   * 子会话目标节点解析（Profile.nodeId + 父会话上下文 -> 实际 nodeId）。
-   * 缺省回退 profile.nodeId ?? 父会话镜像 nodeId ?? 'local'。
-   */
-  resolveNodeId?: (profileNodeId: string | undefined, parentConversationId: number) => string
+  /** 节点可用性预检（离线拒绝）。新建路径靶点链统一由 spawn-target.ts 提供。 */
   assertNodeAvailable?: (nodeId: string) => void
 }
 
@@ -298,27 +295,38 @@ async function runNativeSpawnTurn(
     }
   }
 
-  // 新建路径 cwd 链：request > profile > 父会话镜像 cwd > 宿主缺省。
-  // 引擎层（WorkflowService）不再注入 cwd，父目录回退在此完成；herdr 工厂
-  // 自身也读 parent.cwd，语义一致。
+  // 新建路径靶点：request > profile > 父会话镜像（引擎层不再注入 cwd，父
+  // 目录回退在此完成）。与 ctx.host.resolveSpawnTarget 同一权威链
+  // （spawn-target.ts），绝不各自维护；resume 严格沿用原子会话镜像
+  // （nodeId/cwd 不重算），显式 cwd 变更已在上方 updateConversation 收口。
   const parentSummary = deps.getConversation(request.parentConversationId)
-  const targetNodeId = isResume
-    ? (summary!.nodeId ?? 'local')
-    : (deps.resolveNodeId?.(profile.nodeId, request.parentConversationId) ?? profile.nodeId ?? parentSummary?.nodeId ?? 'local')
+  let targetNodeId: string
+  let childCwd: string
+  if (isResume) {
+    targetNodeId = summary!.nodeId ?? 'local'
+    childCwd = summary!.cwd
+  } else {
+    const chain = resolveSpawnTargetChain({
+      profileNodeId: profile.nodeId,
+      parentNodeId: parentSummary?.nodeId,
+      requestCwd: request.cwd,
+      profileCwd: profile.cwd,
+      parentCwd: parentSummary?.cwd,
+      defaultCwd: deps.defaultCwd,
+      // 进入 SDK createConversation / 子会话镜像登记 / gate / onResolved 前
+      // 按目标节点平台统一收口（win32 目标上不可映射的 POSIX cwd 显式拒绝，
+      // 绝不落库；远端平台无可信信息时透传，不改写）。
+      normalize: (cwd, nodeId) =>
+        normalizeSessionCwd(cwd, {
+          nodeId,
+          trustedPlatform: trustedPlatformFromEnvFabric(deps.envFabric),
+          entry: 'agent_spawn',
+        }),
+    })
+    targetNodeId = chain.nodeId
+    childCwd = chain.sourceCwd
+  }
   deps.assertNodeAvailable?.(targetNodeId)
-  // 新建路径 cwd 链（request > profile > parent > Hub 缺省）在进入 SDK
-  // createConversation / 子会话镜像登记 / gate / onResolved 前按目标节点平台
-  // 统一收口（词法规范化；win32 目标上不可映射的 POSIX cwd 显式拒绝，
-  // 绝不落库；远端平台无可信信息时透传，不改写）。resume 缺省严格沿用
-  // 原子会话 cwd，语义不变；resume 显式 cwd 变更经上方 updateConversation
-  // 收口（同一规范化链）。
-  const childCwd = isResume
-    ? summary!.cwd
-    : normalizeSessionCwd(request.cwd ?? profile.cwd ?? parentSummary?.cwd ?? deps.defaultCwd, {
-        nodeId: targetNodeId,
-        trustedPlatform: trustedPlatformFromEnvFabric(deps.envFabric),
-        entry: 'agent_spawn',
-      })
   // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
   const gateCwd = childCwd
   {

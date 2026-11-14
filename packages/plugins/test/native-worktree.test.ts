@@ -68,7 +68,7 @@ async function assertCleanupPlatformRejected(fn: () => Promise<unknown>): Promis
 /**
  * 本机真实执行端口适配（无 mock）：exec 走 NodeExecutionEnv 真实 argv
  * 执行；exists/canonicalPath 走同 env 真实 fs。与生产（ctx.host.execEnv /
- * probeNodeFs）同契约，供 allocator 直建测试使用。
+ * executionEnv exists/canonicalPath）同契约，供 allocator 直建测试使用。
  */
 function localNodePorts() {
   const envOf = (cwd: string) => new NodeExecutionEnv({ cwd })
@@ -199,20 +199,10 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
         }
         return { ok: true, exitCode: result.value.exitCode, output: combined, timedOut: false }
       },
-      probeNodeFs: async (input) => {
-        const env = new NodeExecutionEnv({ cwd: input.path })
-        if (input.op === 'exists') {
-          const r = await env.exists(input.path, BACKGROUND_CONTEXT)
-          if (!r.ok) throw new HelmError('probe_failed', r.error.message, 502)
-          return { value: r.value }
-        }
-        const r = await env.canonicalPath(input.path, BACKGROUND_CONTEXT)
-        if (!r.ok) throw new HelmError('probe_failed', r.error.message, 502)
-        return { value: r.value }
-      },
+      executionEnv: (nodeId, cwd) => new NodeExecutionEnv({ cwd }),
       inspectNodePathUsage: (input) => envFabric.inspectPathUsage(input.nodeId, input.path, input.signal),
       listActiveSpawnExecutions: () => [],
-      redactText: (t) => stash.redact(t),
+      redact: (t) => stash.redact(t),
       getConversation: (id: number) => {
         const m = mirrors.get(id)
         if (!m) throw new HelmError('not_found', `会话不存在：${id}`, 404)
@@ -776,31 +766,17 @@ async function executeCleanupTool(
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    prepareInterruptedConversations: async () => {},
     resolveSpawnTarget: async () => ({ nodeId: 'local', sourceCwd: dataDir, parentCwd: dataDir }),
     listActiveSpawnExecutions: () => [],
     // 真实进程占用探测（与生产同构：local 进程内 /proc 扫描；非 Linux 显式
     // not_supported → cleanup fail-closed）。
     inspectNodePathUsage: (input: { nodeId: string; path: string; signal?: AbortSignal }) =>
       bareFabricOf().inspectPathUsage(input.nodeId, input.path, input.signal),
-    probeNodeFs: async (req: { nodeId: string; op: 'exists' | 'canonicalPath'; path: string }) => {
-      const env = new NodeExecutionEnv({ cwd: req.path })
-      if (req.op === 'exists') {
-        const r = await env.exists(req.path, BACKGROUND_CONTEXT)
-        if (!r.ok) throw new HelmError('probe_failed', r.error.message, 502)
-        return { value: r.value }
-      }
-      const r = await env.canonicalPath(req.path, BACKGROUND_CONTEXT)
-      if (!r.ok) throw new HelmError('probe_failed', r.error.message, 502)
-      return { value: r.value }
-    },
-    redactText: (t: string) => t,
-    invokeAction: async () => ({}),
-    prepareAction: () => ({ idempotent: false }),
+    executionEnv: (nodeId: string, cwd: string) => new NodeExecutionEnv({ cwd }),
+    redact: (t: string) => t,
     execEnv: async (req: { command: string | string[]; cwd?: string; timeoutMs?: number }) =>
       localExec(req.command, { ...(req.cwd !== undefined ? { cwd: req.cwd } : {}), ...(req.timeoutMs !== undefined ? { timeout: req.timeoutMs / 1000 } : {}) }),
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
-    listActions: () => [],
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
     createAsk: async () => ({}) as never,
