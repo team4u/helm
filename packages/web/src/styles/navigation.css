@@ -153,8 +153,11 @@
   font-weight: 400;
 }
 
-/* 子会话行悬停才显示重命名/删除/分屏小图标，平时不抢视觉焦点 */
-.nav-item-row-actions {
+/* 行级悬停操作（子会话重命名/删除、站位与视图行的分屏按钮与新建按钮）：
+ * 平时隐藏不抢视觉焦点，悬停/聚焦/激活行或触屏设备才显示。 */
+.nav-item-row-actions,
+.sidebar-split-action,
+.agent-new-conv-btn {
   display: none;
   align-items: center;
   gap: 2px;
@@ -162,12 +165,22 @@
 
 .nav-item:hover .nav-item-row-actions,
 .nav-item:focus-within .nav-item-row-actions,
-.nav-item-active .nav-item-row-actions {
+.nav-item-active .nav-item-row-actions,
+.nav-item:hover .sidebar-split-action,
+.nav-item:focus-within .sidebar-split-action,
+.nav-item-active .sidebar-split-action,
+.nav-item:hover .agent-new-conv-btn,
+.nav-item:focus-within .agent-new-conv-btn,
+.nav-item-active .agent-new-conv-btn {
   display: inline-flex;
 }
 
 @media (hover: none) {
-  .nav-item-row-actions { display: inline-flex; }
+  .nav-item-row-actions,
+  .sidebar-split-action,
+  .agent-new-conv-btn {
+    display: inline-flex;
+  }
 }
 
 /* 会话状态圆点与呼吸动效 */
@@ -229,25 +242,6 @@
   padding: 0 6px;
   font-size: 11px;
   color: var(--fg-muted);
-}
-
-/* 闲置智能体折叠区：0 会话智能体收纳，头部可点击展开 */
-.sidebar-idle-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 4px;
-}
-
-.sidebar-idle-toggle {
-  width: 100%;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
-
-.sidebar-idle-toggle:hover {
-  background: var(--bg-hover);
 }
 
 .agent-new-conv-btn {
@@ -314,6 +308,7 @@
   gap: 6px;
   height: 27px;
   padding: 0 8px;
+  margin-bottom: 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);

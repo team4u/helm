@@ -270,7 +270,7 @@ test('Sidebar 话题列表展开随目标切换：切换后自动收起原智能
   assert.ok(lists[0]!.textContent!.includes('重构方案'))
 })
 
-test('Sidebar 闲置智能体收纳：0 会话智能体进折叠区，默认不占主视野', { timeout: 60_000 }, async () => {
+test('Sidebar 智能体平铺：0 会话智能体直接平铺可见，不收进折叠闲置区', { timeout: 60_000 }, async () => {
   const store = makeTestStore({
     conversations: [conv({ id: 1, title: '个人助理', profileId: 'assistant' })],
     profiles: [
@@ -283,18 +283,8 @@ test('Sidebar 闲置智能体收纳：0 会话智能体进折叠区，默认不�
   render(store, e(Sidebar))
   await act(async () => {})
 
-  // 0 会话的 coder/writer 收进折叠区，默认收起不占主视野
-  const idle = document.body.querySelector('.sidebar-idle-group') as HTMLElement
-  assert.ok(idle, '闲置智能体折叠区存在')
-  assert.ok(idle.textContent!.includes('闲置智能体'), '折叠区标题')
-  assert.ok(!idle.textContent!.includes('编码专员'), '收起时不平铺闲置智能体行')
-
-  // 展开：平铺闲置智能体行（单行，无子列表）
-  const toggle = idle.querySelector('.sidebar-idle-toggle') as HTMLButtonElement
-  await act(async () => {
-    toggle.click()
-  })
-  assert.ok(idle.textContent!.includes('编码专员'), '展开后显示闲置智能体')
-  assert.ok(idle.textContent!.includes('写作助手'), '展开后显示全部闲置智能体')
+  assert.equal(document.body.querySelector('.sidebar-idle-group'), null, '不渲染闲置智能体折叠区')
+  const labels = [...document.body.querySelectorAll('.agent-standing-row .nav-item-label')].map((el) => el.textContent)
+  assert.deepEqual(labels, ['个人助理', '编码专员', '写作助手'], '0 会话智能体与活跃智能体稳定平铺在同一列表')
 })
 

@@ -363,7 +363,7 @@ function AgentStandingItem({
             <AgentNewConversationButton agent={agent} onCreate={onCreate} />
           )}
           {!batchMode && agent.primaryConversation && !isOpen && (
-            <span className="sidebar-split-action" style={{ display: 'inline-flex' }}>
+            <span className="sidebar-split-action">
               <HoverIconButton
                 className="split-toggle-btn sidebar-split-btn"
                 title="在右屏分屏打开"
@@ -561,7 +561,7 @@ function AgentConversationRow({
         <ConversationStatusDot conv={conv} />
         {!batchMode && (
           <span className="nav-item-row-actions">
-            <span className="sidebar-split-action" style={{ display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
+            <span className="sidebar-split-action" onClick={(e) => e.stopPropagation()}>
               <HoverIconButton
                 className="split-toggle-btn sidebar-split-btn"
                 title="在右屏分屏打开"
@@ -593,8 +593,8 @@ function AgentConversationRow({
 
 /**
  * 「智能体」分组（单展开，无折叠钮）：
- * - 有活跃会话的智能体平铺在上（仅当前目标所属的那 1 个显示话题子列表）；
- * - 0 会话的闲置智能体收进底部折叠区；批量管理时展开扁平会话清单。
+ * - 全部可见智能体稳定平铺（仅当前目标所属的那 1 个展开显示话题子列表）；
+ * - 批量管理时展开扁平会话清单供勾选删除。
  */
 function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onNavigate?: () => void }) {
   const [batchMode, setBatchMode] = useState(false)
@@ -602,7 +602,6 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
   const [deleting, setDeleting] = useState(false)
   const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
   const [search, setSearch] = useState('')
-  const [idleOpen, setIdleOpen] = useState(false)
 
   const agentStandings = useMemo(
     () =>
@@ -616,32 +615,9 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
     [store.profiles, store.conversations, store.plugins, store.groupedUi.sidebarItems, store.groupedUi.sidebarSections],
   )
 
-  // 当前待命中的零会话智能体平铺在上（不埋进折叠闲置区，保持激活可见）。
-  const standbyProfileIds = useMemo(() => {
-    const ids = new Set<string>()
-    if (store.primaryTarget.kind === 'agent') ids.add(store.primaryTarget.profileId)
-    if (store.splitTarget?.kind === 'agent') ids.add(store.splitTarget.profileId)
-    return ids
-  }, [store.primaryTarget, store.splitTarget])
-  const activeStandings = useMemo(
-    () => agentStandings.filter((a) => a.conversations.length > 0 || standbyProfileIds.has(a.profileId)),
-    [agentStandings, standbyProfileIds],
-  )
-  const idleStandings = useMemo(
-    () => agentStandings.filter((a) => a.conversations.length === 0 && !standbyProfileIds.has(a.profileId)),
-    [agentStandings, standbyProfileIds],
-  )
   const visibleStandings = useMemo(
     () => filterAgentStandings(agentStandings, search),
     [agentStandings, search],
-  )
-  const visibleActive = useMemo(
-    () => activeStandings.filter((a) => visibleStandings.some((v) => v.profileId === a.profileId)),
-    [activeStandings, visibleStandings],
-  )
-  const visibleIdle = useMemo(
-    () => idleStandings.filter((a) => visibleStandings.some((v) => v.profileId === a.profileId)),
-    [idleStandings, visibleStandings],
   )
   const openStandby = useCallback(
     (profileId: string) => openAgentStandby(store, profileId, onNavigate),
@@ -798,64 +774,21 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
           </div>
         </div>
       )}
-      {visibleActive.length === 0 && visibleIdle.length === 0 ? (
+      {visibleStandings.length === 0 ? (
         <div className="sidebar-search-empty">没有匹配的智能体</div>
       ) : (
-        <>
-          {visibleActive.map((agent) => (
-            <AgentStandingItem
-              key={agent.profileId}
-              agent={agent}
-              store={store}
-              onCreate={openStandby}
-              onNavigate={onNavigate}
-              batchMode={batchMode}
-              selectedIds={selectedIds}
-              onToggleSelect={toggleSelect}
-            />
-          ))}
-          {visibleIdle.length > 0 && !batchMode && (
-            <div className="sidebar-idle-group">
-              <button
-                type="button"
-                className="sidebar-group-header sidebar-idle-toggle"
-                title={idleOpen ? '收起闲置智能体' : '展开闲置智能体'}
-                aria-expanded={idleOpen}
-                onClick={() => setIdleOpen((v) => !v)}
-              >
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-                  <HelmIcon name={idleOpen ? 'chevron-down' : 'chevron-right'} size={12} />
-                  <span className="nav-item-label">闲置智能体</span>
-                </span>
-                <span className="badge badge-neutral tabular-nums">{visibleIdle.length}</span>
-              </button>
-              {idleOpen &&
-                visibleIdle.map((agent) => (
-                  <AgentStandingItem
-                    key={agent.profileId}
-                    agent={agent}
-                    store={store}
-                    onCreate={openStandby}
-                    onNavigate={onNavigate}
-                    batchMode={false}
-                  />
-                ))}
-            </div>
-          )}
-          {batchMode &&
-            visibleIdle.map((agent) => (
-              <AgentStandingItem
-                key={agent.profileId}
-                agent={agent}
-                store={store}
-                onCreate={openStandby}
-                onNavigate={onNavigate}
-                batchMode
-                selectedIds={selectedIds}
-                onToggleSelect={toggleSelect}
-              />
-            ))}
-        </>
+        visibleStandings.map((agent) => (
+          <AgentStandingItem
+            key={agent.profileId}
+            agent={agent}
+            store={store}
+            onCreate={openStandby}
+            onNavigate={onNavigate}
+            batchMode={batchMode}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
+          />
+        ))
       )}
       <ConfirmDialog
         open={batchDeleteConfirmOpen}
@@ -918,18 +851,20 @@ function ConversationRow({
       <span className="nav-item-meta">
         <span className="tabular-nums">#{conv.id}</span>
         <ConversationStatusDot conv={conv} />
-        <span className="sidebar-split-action" style={{ display: 'inline-flex' }} onClick={(e) => e.stopPropagation()}>
-          <HoverIconButton
-            className="split-toggle-btn sidebar-split-btn"
-            title="在右屏分屏打开"
-            icon="columns"
-            onClick={(e) => {
-              e.stopPropagation()
-              onOpenSplit()
-            }}
-          />
+        <span className="nav-item-row-actions">
+          <span className="sidebar-split-action" onClick={(e) => e.stopPropagation()}>
+            <HoverIconButton
+              className="split-toggle-btn sidebar-split-btn"
+              title="在右屏分屏打开"
+              icon="columns"
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenSplit()
+              }}
+            />
+          </span>
+          <ConversationRowActionsMenu conversation={conv} />
         </span>
-        <ConversationRowActionsMenu conversation={conv} />
       </span>
     </div>
   )
@@ -1034,14 +969,17 @@ function ViewNavGroup({ store }: { store: HelmStoreValue }) {
               <span className="nav-item-label">{view.label}</span>
             </button>
             <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
-              <HoverIconButton
-                title="在右屏分屏打开"
-                icon="columns"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  store.openTarget(view.target, { split: true })
-                }}
-              />
+              <span className="sidebar-split-action">
+                <HoverIconButton
+                  className="split-toggle-btn sidebar-split-btn"
+                  title="在右屏分屏打开"
+                  icon="columns"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    store.openTarget(view.target, { split: true })
+                  }}
+                />
+              </span>
             </span>
           </div>
         )
