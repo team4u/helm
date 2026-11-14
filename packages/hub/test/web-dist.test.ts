@@ -9,7 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveHubWebDistDir, resolveWebDistOption } from '../src/web-dist.js';
@@ -37,6 +37,23 @@ test('无 index.html 或无 web 目录：undefined（纯 API，不伪装静态�
     assert.equal(resolveHubWebDistDir(join(root, 'hub', 'dist')), undefined, '缺 index.html 不得启用');
     rmSync(join(root, 'web'), { recursive: true, force: true });
     assert.equal(resolveHubWebDistDir(join(root, 'hub', 'dist')), undefined, '缺 web 目录不得启用');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('默认目录探测遇到 I/O 故障显式失败，不降级为纯 API', {
+  timeout: 60_000,
+  skip: process.platform === 'win32' ? '创建符号链接需 Windows 开发者模式或管理员权限' : false,
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'helm-webdist-'));
+  try {
+    mkdirSync(join(root, 'web', 'dist'), { recursive: true });
+    symlinkSync('index.html', join(root, 'web', 'dist', 'index.html'));
+    assert.throws(
+      () => resolveHubWebDistDir(join(root, 'hub', 'dist')),
+      (error: unknown) => (error as NodeJS.ErrnoException).code === 'ELOOP',
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

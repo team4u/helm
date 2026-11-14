@@ -10,13 +10,19 @@
  * - npm payload：<payload>/hub/dist/main.js → <payload>/web/dist（web 与 hub 同级）。
  * 目录内必须有 index.html 才视为有效（未构建不伪装静态站点）。
  */
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** 探测 <entryDir>/../../web/dist；存在 index.html 时返回该目录，否则 undefined（纯 API 形态）。 */
 export function resolveHubWebDistDir(entryDir: string): string | undefined {
   const distDir = join(entryDir, '..', '..', 'web', 'dist');
-  return existsSync(join(distDir, 'index.html')) ? distDir : undefined;
+  try {
+    return statSync(join(distDir, 'index.html')).isFile() ? distDir : undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+    throw error;
+  }
 }
 
 /** 解析 HELM_WEB_DIST_DIR：显式目录优先；'false'/'0'/'' 显式禁用；未设置走 resolveHubWebDistDir。 */
