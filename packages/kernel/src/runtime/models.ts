@@ -62,12 +62,13 @@ export interface HelmModelSourceMeta {
   helmContextWindowKnown?: boolean
 }
 
-/** 模型真实已知的上下文窗口：仅当窗口为正数且未被标记为静态缺省时返回；
- * 未知（模型不在集合 / 标记 false / 窗口非正数）返回 undefined，不伪造。 */
+/** 模型真实已知的上下文窗口：仅当窗口为正的有限数且未被标记为静态缺省时
+ * 返回；未知（模型不在集合 / 标记 false / 窗口非正或非有限）返回 undefined，
+ * 不伪造。 */
 export function knownContextWindowOf(model: Model<Api> | undefined): number | undefined {
   if (model === undefined) return undefined
   if ((model as Model<Api> & HelmModelSourceMeta).helmContextWindowKnown === false) return undefined
-  return model.contextWindow > 0 ? model.contextWindow : undefined
+  return Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? model.contextWindow : undefined
 }
 
 /** 兼容网关静态模型的保守缺省。providers.json 只给模型 ID（string[]），
@@ -211,6 +212,8 @@ export function parseModelRef(ref: string): ModelRefParts {
  * 列出全部模型目录（含未配置 key 的，标注 available）与各模型思考档位。
  * checkAuth 语义：undefined = 合法的「未配置凭据」；仅此情况记 available=false。
  * 读取错误 / 协议错误（ModelsError code auth 等）向上抛出诊断，绝不静默吞掉。
+ * contextWindow 只投影真实已知窗口（knownContextWindowOf）：静态缺省、
+ * 上游未给窗口或非法值（非正/非有限）一律省略，绝不把 128k 兑底冒充事实。
  * disabledSnapshot：providerId -> 用户显式禁用的模型 ID 集（可用性语义不变，
  * 禁用仅作为目录标注；过滤在会话模型解析入口执行）。
  */
@@ -224,10 +227,12 @@ export async function listModelCatalog(
     const auth = await models.checkAuth(provider.id)
     const disabled = defaults?.disabledModels?.[provider.id]
     for (const model of models.getModels(provider.id)) {
+      const contextWindow = knownContextWindowOf(model)
       entries.push({
         provider: provider.id,
         modelId: model.id,
         available: auth !== undefined,
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(disabled !== undefined && disabled.includes(model.id) ? { disabled: true } : {}),
       })
       thinkingLevels[`${provider.id}/${model.id}`] = [...getSupportedThinkingLevels(model)]
