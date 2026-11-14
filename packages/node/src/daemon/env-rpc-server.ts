@@ -1182,9 +1182,11 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
         ? 'invalid'
         : result.error.code === 'not_supported'
           ? 'not_supported'
-          : result.error.code === 'aborted'
-            ? 'aborted'
-            : 'unknown';
+          : result.error.code === 'permission_denied'
+            ? 'permission_denied'
+            : result.error.code === 'aborted'
+              ? 'aborted'
+              : 'unknown';
       return { ok: false, error: { code, message: result.error.message } };
     },
 

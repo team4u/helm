@@ -251,9 +251,9 @@ export interface NodePathUsage {
   path: string
   /** 命中进程清单（上限截断见 processesTruncated；matchedTotal 保留真实计数）。 */
   processes: NodePathUsageProcess[]
-  /** 命中进程真实总数（不受 processes 截断影响）。 */
+  /** 命中进程真实总数（按 PID 去重：同进程 cwd+多个 fd 只计一次；不受 processes 截断影响）。 */
   matchedTotal: number
-  /** processes 清单是否因报告上限被截断（matchedTotal 仍是真值）。 */
+  /** processes 清单是否因报告上限被截断（截断时 matchedTotal 仍为去重真值）。 */
   processesTruncated: boolean
   /** false = 扫描不完整；绝不能当 0 占用。 */
   complete: boolean

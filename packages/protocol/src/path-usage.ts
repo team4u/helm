@@ -37,8 +37,8 @@ export interface PathUsageIo {
   realpath(path: string): Promise<string>
 }
 
-/** 扫描失败码（适配方映射：invalid→400/not_supported→501/aborted→499/unknown→502）。 */
-export type PathUsageFailureCode = 'invalid' | 'not_supported' | 'aborted' | 'unknown'
+/** 扫描失败码（适配方映射：invalid→400/not_supported→501/aborted→499/permission_denied与unknown→502）。 */
+export type PathUsageFailureCode = 'invalid' | 'not_supported' | 'aborted' | 'permission_denied' | 'unknown'
 
 export type PathUsageScanResult =
   | { ok: true; value: NodePathUsage }
@@ -103,7 +103,6 @@ async function readLink(io: PathUsageIo, path: string): Promise<ReadOutcome> {
     return { kind: 'denied', code: code ?? 'UNKNOWN', message }
   }
 }
-
 /** 诊断聚合（上限截断后聚合剩余计数，不无限膨胀）。 */
 class Diagnostics {
   private readonly entries: string[] = []
@@ -120,7 +119,10 @@ class Diagnostics {
 
 /**
  * 扫描目标绝对路径的进程占用（cwd + 打开 fd）。返回值约定见 NodePathUsage；
- * 本函数自身不抛错（一切失败经 Result error 信封）。
+ * 本函数自身不抛错（一切失败，含注入 io 的非 ENOENT 异常，经 Result error
+ * 信封显式返回）：
+ * - 目标 realpath 解析失败：ENOENT 只用原始路径匹配（目录存在性由上游
+ *   负责）；EACCES/EPERM → permission_denied（权限可诊断）；其他 → unknown。
  */
 export async function scanPathUsage(target: string, options: ScanPathUsageOptions): Promise<PathUsageScanResult> {
   const { io, platform } = options
@@ -142,17 +144,34 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
   if (!validated.ok) return { ok: false, error: { code: 'invalid', message: validated.message } }
   const rawPath = validated.value
 
-  // 匹配基：入参原样 + realpath（软链拼写的候选不漏报；realpath ENOENT 时
-  // 只用原样路径——目录消失由调用方上游存在性检查负责）。
+  // 匹配基：入参原样 + realpath（软链拼写的候选不漏报；realpath 失败按
+  // 头注释策略显式分类，绝不向上抛裸异常）。
   const bases = new Set<string>([rawPath])
-  const real = await io.realpath(rawPath).then(
-    (value) => value,
-    (error: unknown) => {
-      const code = (error as { code?: string } | null)?.code
-      if (code !== 'ENOENT') throw error
-      return undefined
-    },
-  )
+  let real: string | undefined
+  try {
+    real = await io.realpath(rawPath)
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code
+    if (code === 'ENOENT') {
+      real = undefined
+    } else if (code === 'EACCES' || code === 'EPERM') {
+      return {
+        ok: false,
+        error: {
+          code: 'permission_denied',
+          message: `无权解析目标路径 realpath（${code}: ${error instanceof Error ? error.message : String(error)}）；匹配基不完整，拒绝扫描`,
+        },
+      }
+    } else {
+      return {
+        ok: false,
+        error: {
+          code: 'unknown',
+          message: `目标路径 realpath 解析失败（${code ?? 'UNKNOWN'}: ${error instanceof Error ? error.message : String(error)}），拒绝扫描`,
+        },
+      }
+    }
+  }
   if (real !== undefined && real !== '') bases.add(real)
 
   let entries: string[]
@@ -181,18 +200,87 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
   }
 
   const processes: NodePathUsageProcess[] = []
+  /** 命中进程唯一 PID 集（同进程 cwd+多个 fd 只计一次；首个引用 cwd 优先）。 */
+  const matchedPids = new Set<number>()
   let matchedTotal = 0
   let truncated = false
   const pidDenied = new Set<number>()
   let scanned = 0
 
+  /** 记录盲区（fail-closed）：complete=false + 诊断（附 uid；同 PID 去重）。 */
+  const recordDenied = (pid: number, what: string, uid: number | undefined, code: string): void => {
+    complete = false
+    if (pidDenied.has(pid)) return
+    pidDenied.add(pid)
+    diagnostics.add(`pid ${pid}${uid !== undefined ? ` (uid ${uid})` : ''}: 无权读取 ${what}（${code}），该进程占用情况未知`)
+  }
+
+  /** PID 存活探测：ENOENT/ESRCH 证实已退出；其他错误无法证明存在状态。 */
+  const statPid = async (
+    pid: number,
+  ): Promise<{ kind: 'exists'; uid: number } | { kind: 'gone' } | { kind: 'unknown'; code: string }> => {
+    try {
+      return { kind: 'exists', uid: (await io.stat(`${procRoot}/${pid}`)).uid }
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code
+      if (code === 'ENOENT' || code === 'ESRCH') return { kind: 'gone' }
+      return { kind: 'unknown', code: code ?? 'UNKNOWN' }
+    }
+  }
+
+  /**
+   * 被拒读取的有界复核（恰一次，纯只读重读证明，不凭延时/身份猜测）：
+   * - stat 证实 PID 已退出（ENOENT/ESRCH）→ 退出竞态，忽略（契约允许）；
+   * - PID 仍在 → 重读一次：成功则如实采用（瞬时错误不算盲区）；仍拒或
+   *   gone（本次重读证实退出）则按退出/盲区如实结算；
+   * - stat 自身非退出类错误 → 无法证明存在状态，直接记录盲区（fail-closed）。
+   * 绝不因「应该可读」放过真 EACCES：仍拒师 PID 存活时必记 complete=false。
+   */
+  const settleDenied = async <T>(
+    pid: number,
+    what: string,
+    reread: () => Promise<{ ok: true; value: T } | { ok: false; code: string }>,
+  ): Promise<{ result: 'gone' } | { result: 'ok'; value: T } | { result: 'denied' }> => {
+    const st = await statPid(pid)
+    if (st.kind === 'gone') return { result: 'gone' }
+    if (st.kind === 'unknown') {
+      recordDenied(pid, what, undefined, st.code)
+      return { result: 'denied' }
+    }
+    const retry = await reread()
+    if (retry.ok) return { result: 'ok', value: retry.value }
+    if (retry.code === 'ENOENT' || retry.code === 'ESRCH') return { result: 'gone' }
+    recordDenied(pid, what, st.uid, retry.code)
+    return { result: 'denied' }
+  }
+
+  /** readLink 结果适配为 settleDenied 重读面。 */
+  const retryLink = (p: string) =>
+    readLink(io, p).then((o): { ok: true; value: string } | { ok: false; code: string } =>
+      o.kind === 'value' ? { ok: true, value: o.value } : { ok: false, code: o.kind === 'gone' ? 'ENOENT' : o.code })
+
+  /** 被拒 readLink 的有界复核（settleDenied 语义）：结果映射回 ReadOutcome（重读成功如实采用）。 */
+  const settleLink = async (pid: number, what: string, p: string): Promise<ReadOutcome> => {
+    const settled = await settleDenied<string>(pid, what, () => retryLink(p))
+    if (settled.result === 'ok') return { kind: 'value', value: settled.value }
+    if (settled.result === 'gone') return { kind: 'gone' }
+    return { kind: 'denied', code: 'DENIED', message: '复核后仍被拒' }
+  }
+
+  /**
+   * 登记一次命中（按 PID 去重）：同进程的 cwd/fd 多处引用只计一个进程、
+   * 只报首个引用（cwd 先扫故优先）；matchedTotal 始终为唯一 PID 真实计数，
+   * 报告清单截断不影响计数。
+   */
   const pushMatch = async (pid: number, source: 'cwd' | 'fd', path: string): Promise<void> => {
+    if (matchedPids.has(pid)) return
+    matchedPids.add(pid)
     matchedTotal += 1
     if (processes.length >= maxReported) {
       truncated = true
       return
     }
-    // 进程名惰性读取（仅命中时一次；世界可读；失败缺省不阻塞）。
+    // 进程名惰性读取（仅首个命中时一次；世界可读；失败缺省不阻塞）。
     let name: string | undefined
     try {
       const comm = await io.readFile(`${procRoot}/${pid}/comm`)
@@ -204,48 +292,51 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
     processes.push({ pid, ...(name !== undefined ? { name } : {}), source, path })
   }
 
-  const deny = async (pid: number, what: string, code: string): Promise<void> => {
-    complete = false
-    if (pidDenied.has(pid)) return
-    pidDenied.add(pid)
-    let uid: string | undefined
-    try {
-      uid = String((await io.stat(`${procRoot}/${pid}`)).uid)
-    } catch {
-      // /proc/<pid> 属主不可读（竞态）：诊断只缺 uid，不缺 PID。
-    }
-    diagnostics.add(`pid ${pid}${uid !== undefined ? ` (uid ${uid})` : ''}: 无权读取 ${what}（${code}），该进程占用情况未知`)
-  }
-
   for (const pid of pids) {
     if (scanned >= maxPids) break // 上限触发已在 diagnostics 记录，complete=false。
     scanned += 1
     if (options.signal?.aborted === true) {
       return { ok: false, error: { code: 'aborted', message: '进程占用扫描已取消' } }
     }
-    // cwd（进程工作目录在目标内）。
-    const cwd = await readLink(io, `${procRoot}/${pid}/cwd`)
+    // cwd（进程工作目录在目标内）。被拒时先有界复核：PID 已退出 → 竞态忽略；重读成功 → 如实采用。
+    let cwd = await readLink(io, `${procRoot}/${pid}/cwd`)
+    if (cwd.kind === 'denied') {
+      cwd = await settleLink(pid, 'cwd', `${procRoot}/${pid}/cwd`)
+    }
     if (cwd.kind === 'value' && cwd.value.startsWith('/') && [...bases].some((base) => pathContains(base, cwd.value))) {
       await pushMatch(pid, 'cwd', cwd.value)
-    } else if (cwd.kind === 'denied') {
-      await deny(pid, 'cwd', cwd.code)
     }
     // fd（打开的文件/目录在目标内；socket:/pipe:/anon_inode: 等非路径直接跳过）。
-    let fdNames: string[]
+    let fdNames: string[] | undefined
     try {
       fdNames = await io.readdir(`${procRoot}/${pid}/fd`)
     } catch (error) {
       const code = (error as { code?: string } | null)?.code
       if (code === 'ENOENT' || code === 'ESRCH') continue // 进程已退出（正常竞态）。
-      await deny(pid, 'fd', code ?? 'UNKNOWN')
-      continue
+      // 被拒：先有界复核（stat 证实退出 → 竞态忽略；仍在 → 重读一次定夺）。
+      const settled = await settleDenied(pid, 'fd', () =>
+        io.readdir(`${procRoot}/${pid}/fd`).then(
+          (names): { ok: true; value: string[] } | { ok: false; code: string } => ({ ok: true, value: names }),
+          (e: unknown) => ({ ok: false as const, code: (e as { code?: string } | null)?.code ?? 'UNKNOWN' }),
+        ),
+      )
+      if (settled.result !== 'ok') continue // 竞态退出或仍拒：本 PID 结算完毕。
+      fdNames = settled.value
     }
     for (const fdName of fdNames) {
       if (!/^\d+$/.test(fdName)) continue
-      const link = await readLink(io, `${procRoot}/${pid}/fd/${fdName}`)
+      // 局部变量重读：abort 可发生在本循环体内 await 期间，不能被循环头的
+      // 窄化结论掩盖（TS 对属性链的窄化不跨 await 更新）。
+      const signal = options.signal
+      if (signal?.aborted === true) {
+        return { ok: false, error: { code: 'aborted', message: '进程占用扫描已取消' } }
+      }
+      let link = await readLink(io, `${procRoot}/${pid}/fd/${fdName}`)
+      if (link.kind === 'denied') {
+        link = await settleLink(pid, `fd/${fdName}`, `${procRoot}/${pid}/fd/${fdName}`)
+      }
+      // gone（含复核证实退出）是常态竞态：跳过；denied 已在复核内记录盲区。
       if (link.kind !== 'value') {
-        // fd 链接的 ENOENT 是常态竞态（fd 刚关闭）；denied 只在 fd 目录本身
-        // 被拒时才有意义（逐 fd EACCES 不出现在 Linux 现实中，忽略即可）。
         continue
       }
       if (link.value.startsWith('/') && [...bases].some((base) => pathContains(base, link.value))) {

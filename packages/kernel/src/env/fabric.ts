@@ -37,6 +37,7 @@ import {
   type NodeTunnelTarget,
   type RpcResult,
   scanPathUsage,
+  validatePosixScanPath,
   type PathUsageIo,
 } from '@helm/protocol'
 import { readlink, readdir, readFile, realpath, stat } from 'node:fs/promises'
@@ -213,22 +214,33 @@ export interface EnvFabric {
   dispose(): Promise<void>
 }
 
-/** RPC 边界外的节点快照严格校验（AGENTS.md 边界 schema 纪律；非法形状显式拒绝，绝不部分采信）。 */
-function validatePathUsageSnapshot(nodeId: string, value: unknown): NodePathUsage {
+/**
+ * RPC 边界外的节点快照严格校验（AGENTS.md 边界 schema 纪律；非法形状/
+ * 与请求不相关联/自相矛盾的快照显式拒绝，绝不部分采信——节点返回其它
+ * 目录的空快照不能用作本目录清理依据）。
+ */
+function validatePathUsageSnapshot(nodeId: string, expectedPath: string, value: unknown): NodePathUsage {
   const fail = (reason: string): HelmError =>
-    new HelmError('node_path_usage_failed', `节点 ${nodeId} 返回的进程占用快照形状非法（${reason}），拒绝采信`, 502, {
+    new HelmError('node_path_usage_failed', `节点 ${nodeId} 返回的进程占用快照非法（${reason}），拒绝采信`, 502, {
       nodeId,
+      expectedPath,
     })
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw fail('非对象')
   const v = value as Record<string, unknown>
-  if (typeof v['path'] !== 'string' || v['path'] === '') throw fail('path 非非空字符串')
+  // 与请求关联：快照必须回显归一化后的目标路径（防拿错快照充当本目录依据）。
+  if (v['path'] !== expectedPath) {
+    throw fail(`path 与请求不符（期望 ${JSON.stringify(expectedPath)}，收到 ${JSON.stringify(String(v['path']))}）`)
+  }
   if (!Array.isArray(v['processes'])) throw fail('processes 非数组')
   if (v['processes'].length > 512) throw fail('processes 超出合理上限 512')
   const processes: NodePathUsageProcess[] = []
+  const seenPids = new Set<number>()
   for (const raw of v['processes']) {
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw fail('processes 条目非对象')
     const p = raw as Record<string, unknown>
     if (!Number.isSafeInteger(p['pid']) || (p['pid'] as number) <= 0) throw fail('pid 非正整数')
+    if (seenPids.has(p['pid'] as number)) throw fail(`processes 含重复 PID ${p['pid']}（同进程多引用应去重）`)
+    seenPids.add(p['pid'] as number)
     if (p['source'] !== 'cwd' && p['source'] !== 'fd') throw fail('source 非 cwd|fd')
     if (typeof p['path'] !== 'string' || p['path'] === '') throw fail('process path 非非空字符串')
     if (p['name'] !== undefined && typeof p['name'] !== 'string') throw fail('name 非字符串')
@@ -240,7 +252,18 @@ function validatePathUsageSnapshot(nodeId: string, value: unknown): NodePathUsag
     })
   }
   if (!Number.isSafeInteger(v['matchedTotal']) || (v['matchedTotal'] as number) < 0) throw fail('matchedTotal 非非负整数')
+  const matchedTotal = v['matchedTotal'] as number
   if (typeof v['processesTruncated'] !== 'boolean') throw fail('processesTruncated 非布尔')
+  const truncated = v['processesTruncated'] as boolean
+  // 计数与清单自洽：总数不得小于清单数；截断意味着总数大于清单数；未截断
+  // 时二者必须相等（如 truncated=true 而 matchedTotal=0 是矛盾）。
+  if (matchedTotal < processes.length) throw fail(`matchedTotal(${matchedTotal}) 小于清单数(${processes.length})`)
+  if (truncated && matchedTotal <= processes.length) {
+    throw fail(`processesTruncated=true 但 matchedTotal(${matchedTotal}) 未超过清单数(${processes.length})`)
+  }
+  if (!truncated && matchedTotal !== processes.length) {
+    throw fail(`未截断但 matchedTotal(${matchedTotal}) 与清单数(${processes.length})不一致`)
+  }
   if (typeof v['complete'] !== 'boolean') throw fail('complete 非布尔')
   if (!Array.isArray(v['diagnostics'])) throw fail('diagnostics 非数组')
   if (v['diagnostics'].length > 128) throw fail('diagnostics 超出合理上限 128')
@@ -248,8 +271,8 @@ function validatePathUsageSnapshot(nodeId: string, value: unknown): NodePathUsag
   return {
     path: v['path'] as string,
     processes,
-    matchedTotal: v['matchedTotal'] as number,
-    processesTruncated: v['processesTruncated'] as boolean,
+    matchedTotal,
+    processesTruncated: truncated,
     complete: v['complete'] as boolean,
     diagnostics: v['diagnostics'] as string[],
   }
@@ -499,6 +522,13 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
 
     async inspectPathUsage(nodeId: string, targetPath: string, signal?: AbortSignal): Promise<NodePathUsage> {
       if (signal?.aborted) throw new HelmError('aborted', '进程占用扫描已取消', 499, { nodeId })
+      // 入口统一形状校验（local/远端同规则）：归一化 POSIX 绝对路径既拦非法
+      // 入参，也作为快照回显关联（expectedPath）的基准。
+      const normalized = validatePosixScanPath(targetPath)
+      if (!normalized.ok) {
+        throw new HelmError('validation_error', `进程占用扫描入参非法：${normalized.message}`, 400, { nodeId })
+      }
+      const expectedPath = normalized.value
       if (nodeId === 'local') {
         // Hub 进程内真实扫描（platform 经 hubPlatform 端口，测试可注入；
         // 生产为 process.platform，绝不伪造）。
@@ -509,10 +539,18 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
           readFile: (p) => readFile(p, 'utf8'),
           realpath: (p) => realpath(p),
         }
-        const result = await scanPathUsage(targetPath, { io, platform: hubPlatform(), signal })
+        const result = await scanPathUsage(expectedPath, { io, platform: hubPlatform(), signal })
         if (result.ok) return result.value
         const { code, message } = result.error
         if (code === 'invalid') throw new HelmError('validation_error', `进程占用扫描入参非法：${message}`, 400, { nodeId })
+        if (code === 'permission_denied') {
+          throw new HelmError(
+            'node_path_usage_failed',
+            `本机进程占用扫描失败（权限不足）：${message}`,
+            502,
+            { nodeId, code: 'permission_denied' },
+          )
+        }
         if (code === 'not_supported') {
           throw new HelmError(
             'path_usage_not_supported',
@@ -538,7 +576,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       // birpc 可能以 undefined 结算（网关吸收旧版守护进程缺方法错误）：类型上显式含 undefined。
       let result: RpcResult<import('@helm/protocol').NodePathUsage> | undefined
       try {
-        result = await fn({ path: targetPath })
+        result = await fn({ path: expectedPath })
       } catch (error) {
         // birpc 代理使任意方法访问都是函数：旧版守护进程缺本方法时，调用
         // 以「function not found」拒绝——如实归类为不支持（501），绝不伪装
@@ -569,23 +607,40 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
           { nodeId },
         )
       }
-      if (typeof result !== 'object' || !('ok' in result)) {
+      // RPC 信封严格校验：ok 必须严格布尔；失败分支 error 必须携带合法
+      // code/message——非法信封显式 node_path_usage_failed，绝不靠后续
+      // 属性访问的 TypeError 兜底。
+      const envelope = result as { ok?: unknown; value?: unknown; error?: unknown }
+      if (typeof envelope.ok !== 'boolean') {
         throw new HelmError(
           'node_path_usage_failed',
-          `节点 ${nodeId} 进程占用扫描返回非法载荷（协议违反）：${String(result)}`,
+          `节点 ${nodeId} 进程占用扫描返回非法信封（ok 非严格布尔，协议违反）`,
           502,
           { nodeId },
         )
       }
-      if (!result.ok) {
+      if (!envelope.ok) {
+        const e = envelope.error as { code?: unknown; message?: unknown } | undefined
+        if (
+          typeof e !== 'object' || e === null ||
+          typeof e.code !== 'string' || e.code === '' ||
+          typeof e.message !== 'string' || e.message === ''
+        ) {
+          throw new HelmError(
+            'node_path_usage_failed',
+            `节点 ${nodeId} 进程占用扫描返回非法错误信封（缺合法 code/message，协议违反）`,
+            502,
+            { nodeId },
+          )
+        }
         throw new HelmError(
           'node_path_usage_failed',
-          `节点 ${nodeId} 进程占用扫描失败（${result.error.code}: ${result.error.message}）`,
+          `节点 ${nodeId} 进程占用扫描失败（${e.code}: ${e.message}）`,
           502,
-          { nodeId, code: result.error.code },
+          { nodeId, code: e.code },
         )
       }
-      return validatePathUsageSnapshot(nodeId, result.value)
+      return validatePathUsageSnapshot(nodeId, expectedPath, envelope.value)
     },
 
     async withFileMutationQueue<T>(

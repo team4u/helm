@@ -54,9 +54,17 @@ function holdProcess(target: string): { pid: number; stop: () => Promise<void> }
 }
 
 describe('envPathUsage：真实 /proc', { timeout: 60_000 }, () => {
-  it('子进程 cwd 占用：命中 pid 与路径；退出后重扫干净（complete=true）', async () => {
+  it('子进程 cwd 占用：命中 pid 与路径；退出后重扫干净（完整性不假设 root）', { timeout: 60_000 }, async () => {
     const target = join(rootDir, 'wt-a')
     mkdirSync(target, { recursive: true })
+    if (process.platform !== 'linux') {
+      // 非 Linux：显式 not_supported（不伪造结果、不静默跳过）。
+      const unsupported = await server.envPathUsage!({ path: target })
+      assert.equal(unsupported.ok, false)
+      if (unsupported.ok) return
+      assert.equal(unsupported.error.code, 'not_supported')
+      return
+    }
     const holder = holdProcess(target)
     try {
       const r = await server.envPathUsage!({ path: target })
@@ -67,7 +75,11 @@ describe('envPathUsage：真实 /proc', { timeout: 60_000 }, () => {
       assert.equal(hit!.source, 'cwd')
       assert.equal(hit!.path, target)
       assert.equal(typeof hit!.name, 'string', '应含进程名（comm）')
-      assert.equal(r.value.complete, true, 'root 宿主应完整扫描')
+      // 完整性不假设 root：非完整环境必须携带 fail-closed 诊断。
+      assert.equal(typeof r.value.complete, 'boolean')
+      if (r.value.complete !== true) {
+        assert.ok(r.value.diagnostics.length > 0, 'complete=false 必须携带不完整诊断')
+      }
     } finally {
       await holder.stop()
     }
@@ -78,9 +90,16 @@ describe('envPathUsage：真实 /proc', { timeout: 60_000 }, () => {
     assert.equal(after.value.processes.some((p) => p.pid === holder.pid), false, '退出进程不得残留命中')
   })
 
-  it('本进程打开 fd 占用：目标树内文件的打开描述符命中（source=fd）', async () => {
+  it('本进程打开 fd 占用：目标树内文件的打开描述符命中（source=fd）', { timeout: 60_000 }, async () => {
     const target = join(rootDir, 'wt-b')
     mkdirSync(target, { recursive: true })
+    if (process.platform !== 'linux') {
+      const unsupported = await server.envPathUsage!({ path: target })
+      assert.equal(unsupported.ok, false)
+      if (unsupported.ok) return
+      assert.equal(unsupported.error.code, 'not_supported')
+      return
+    }
     const held = join(target, 'held.log')
     writeFileSync(held, 'x')
     const fd = openSync(held, 'r')
@@ -98,7 +117,7 @@ describe('envPathUsage：真实 /proc', { timeout: 60_000 }, () => {
 })
 
 describe('envPathUsage：fixture procRoot 与边界', { timeout: 60_000 }, () => {
-  it('伪造 /proc 树（symlink cwd/fd）：命中与路径分量边界（/a 不匹配 /ab）', async () => {
+  it('伪造 /proc 树（symlink cwd/fd）：命中与路径分量边界（/a 不匹配 /ab）', { timeout: 60_000 }, async () => {
     const target = join(rootDir, 'real-wt')
     mkdirSync(target, { recursive: true })
     const fakeProc = join(rootDir, 'fake-proc')
@@ -114,8 +133,11 @@ describe('envPathUsage：fixture procRoot 与边界', { timeout: 60_000 }, () =>
       const r = await fixtureServer.envPathUsage!({ path: target })
       assert.equal(r.ok, true)
       if (!r.ok) return
-      assert.equal(r.value.matchedTotal, 2, 'cwd + fd 各一')
-      assert.ok(r.value.processes.every((p) => p.pid === 42))
+      // 同 PID（42）cwd+fd 去重：一进程一计数，首个引用 cwd 优先。
+      assert.equal(r.value.matchedTotal, 1, '同 PID cwd+fd 去重后单计数')
+      assert.equal(r.value.processes.length, 1)
+      assert.equal(r.value.processes[0]!.pid, 42)
+      assert.equal(r.value.processes[0]!.source, 'cwd')
       assert.equal(r.value.complete, true, 'fixture 内无权限拒绝 → 完整')
 
       const neighbor = await fixtureServer.envPathUsage!({ path: join(rootDir, 'real-wtb') })
@@ -127,7 +149,7 @@ describe('envPathUsage：fixture procRoot 与边界', { timeout: 60_000 }, () =>
     }
   })
 
-  it('平台注入 darwin/win32：显式 not_supported（不伪造跨平台结果）', async () => {
+  it('平台注入 darwin/win32：显式 not_supported（不伪造跨平台结果）', { timeout: 60_000 }, async () => {
     for (const platform of ['darwin', 'win32']) {
       const s = createNodeEnvRpcServer({ defaultCwd: rootDir, pathUsage: { platform: () => platform } })
       try {
@@ -142,7 +164,7 @@ describe('envPathUsage：fixture procRoot 与边界', { timeout: 60_000 }, () =>
     }
   })
 
-  it('入参严格校验：未知字段 / 非对象 / 相对路径 / NUL → invalid', async () => {
+  it('入参严格校验：未知字段 / 非对象 / 相对路径 / NUL → invalid', { timeout: 60_000 }, async () => {
     const cases: unknown[] = [
       null,
       'x',
@@ -161,7 +183,14 @@ describe('envPathUsage：fixture procRoot 与边界', { timeout: 60_000 }, () =>
 })
 
 describe('受管环境变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）', { timeout: 60_000 }, () => {
-  it('envExec：daemon 宿主 env 的受管值不进入子命令；调用方显式注入按次生效', async () => {
+  /** 用 node 自身探测子进程 env（不依赖 sh，跨平台同构）。 */
+  const probeEnvCommand = (): string[] => [
+    process.execPath,
+    '-e',
+    "console.log(JSON.stringify({t: process.env.HELM_TOKEN ?? '', s: process.env.HELM_EXECUTION_SCOPE ?? ''}))",
+  ]
+
+  it('envExec：daemon 宿主 env 的受管值不进入子命令；调用方显式注入按次生效', { timeout: 60_000 }, async () => {
     const prevToken = process.env.HELM_TOKEN
     const prevScope = process.env.HELM_EXECUTION_SCOPE
     process.env.HELM_TOKEN = 'daemon-own-secret'
@@ -174,12 +203,12 @@ describe('受管环境变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）', { ti
     try {
       const r = await echoServer.envExec({
         execId: 'strip-1',
-        command: ['sh', '-c', 'echo "T=[$HELM_TOKEN] S=[$HELM_EXECUTION_SCOPE]"'],
+        command: probeEnvCommand(),
       })
       assert.equal(r.ok, true, r.ok ? '' : r.error.message)
-      const out = chunks.join('')
-      assert.ok(out.includes('T=[]'), `HELM_TOKEN 不得继承（实得 ${out.trim()}）`)
-      assert.ok(out.includes('S=[]'), `HELM_EXECUTION_SCOPE 不得继承（实得 ${out.trim()}）`)
+      const parsed = JSON.parse(chunks.join('').trim()) as { t?: string; s?: string }
+      assert.equal(parsed.t, '', `HELM_TOKEN 不得继承（实得 ${parsed.t}）`)
+      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE 不得继承（实得 ${parsed.s}）`)
 
       // 调用方显式注入（Hub 按次合成）：按次生效。
       const chunks2: string[] = []
@@ -190,11 +219,12 @@ describe('受管环境变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）', { ti
       try {
         const r2 = await echoServer2.envExec({
           execId: 'strip-2',
-          command: ['sh', '-c', 'echo "S=[$HELM_EXECUTION_SCOPE]"'],
+          command: probeEnvCommand(),
           env: { HELM_EXECUTION_SCOPE: 'worktree:node-x:/wt' },
         })
         assert.equal(r2.ok, true)
-        assert.ok(chunks2.join('').includes('S=[worktree:node-x:/wt]'), '显式注入值必须按次生效')
+        const parsed2 = JSON.parse(chunks2.join('').trim()) as { s?: string }
+        assert.equal(parsed2.s, 'worktree:node-x:/wt', '显式注入值必须按次生效')
       } finally {
         await echoServer2.dispose().catch(() => undefined)
       }
@@ -207,7 +237,7 @@ describe('受管环境变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）', { ti
     }
   })
 
-  it('LocalExecutionEnv.exec 直连（inheritEnv 默认开启）：继承基底同样剥除受管值', async () => {
+  it('LocalExecutionEnv.exec 直连（inheritEnv 默认开启）：继承基底同样剥除受管值', { timeout: 60_000 }, async () => {
     const prevToken = process.env.HELM_TOKEN
     const prevScope = process.env.HELM_EXECUTION_SCOPE
     process.env.HELM_TOKEN = 'daemon-own-secret'
@@ -216,13 +246,14 @@ describe('受管环境变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）', { ti
     let out = ''
     try {
       const r = await env.exec(
-        ['sh', '-c', 'echo "T=[$HELM_TOKEN] S=[$HELM_EXECUTION_SCOPE]"'],
+        probeEnvCommand(),
         { onOutput: (text) => { out += text } },
         undefined as never,
       )
       assert.equal(r.ok, true, r.ok ? '' : r.error.message)
-      assert.ok(out.includes('T=[]'), `HELM_TOKEN 不得继承（实得 ${out.trim()}）`)
-      assert.ok(out.includes('S=[]'), `HELM_EXECUTION_SCOPE 不得继承（实得 ${out.trim()}）`)
+      const parsed = JSON.parse(out.trim()) as { t?: string; s?: string }
+      assert.equal(parsed.t, '', `HELM_TOKEN 不得继承（实得 ${parsed.t}）`)
+      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE 不得继承（实得 ${parsed.s}）`)
     } finally {
       if (prevToken === undefined) delete process.env.HELM_TOKEN
       else process.env.HELM_TOKEN = prevToken

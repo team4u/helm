@@ -89,6 +89,33 @@ function holdProcess(target: string): { pid: number; stop: () => Promise<void> }
   }
 }
 
+/**
+ * 平台事实：进程占用扫描仅 Linux /proc。真实 /proc 用例按平台如实分叉：
+ * 非 Linux 断言显式拒绝（不伪造 complete=true、不静默 skip）。
+ */
+const PROCESS_SCAN_ON = process.platform === 'linux'
+
+/**
+ * 断言真实探测的 cleanup 结算：Linux + 全可见（root）→ 正常移除；
+ * Linux + 可见性不完整（非 root 环境）→ 显式 worktree_process_check_failed
+ * 且携带诊断（fail-closed，不假设所有环境 root 全可见）。
+ */
+async function expectCleanupOkOrFailClosed(fn: () => Promise<{ removed: boolean }>): Promise<void> {
+  try {
+    const cleaned = await fn()
+    assert.equal(cleaned.removed, true)
+  } catch (error) {
+    assert.ok(error instanceof HelmError, `应 HelmError（实得 ${String(error)}）`)
+    assert.equal(
+      error.code,
+      'worktree_process_check_failed',
+      `可见性不完整时只能 fail-closed（实得 ${error.code}：${error instanceof HelmError ? error.message : ''}）`,
+    )
+    const details = error.details as { diagnostics?: string[] }
+    assert.ok((details?.diagnostics?.length ?? 0) > 0, 'fail-closed 必须携带不完整诊断')
+  }
+}
+
 async function allocateCleanWorktree(name: string): Promise<{ repo: string; record: ReturnType<WorktreeAllocator['list']>[number]; allocator: WorktreeAllocator; fabric: ReturnType<typeof createEnvFabric>; docs: Map<string, unknown> }> {
   const repo = makeGitRepo(join(rootDir, name, 'repo'))
   const fabric = createEnvFabric({})
@@ -99,8 +126,20 @@ async function allocateCleanWorktree(name: string): Promise<{ repo: string; reco
 }
 
 describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { timeout: 60_000 }, () => {
-  it('子进程 cwd 占用：cleanup 显式 worktree_process_in_use（details 含 pid/进程名/引用路径；force 不可绕过）', async () => {
+  it('子进程 cwd 占用：cleanup 显式 worktree_process_in_use（details 含 pid/进程名/引用路径；force 不可绕过）', { timeout: 60_000 }, async () => {
     const { record, allocator } = await allocateCleanWorktree('t1')
+    if (!PROCESS_SCAN_ON) {
+      // 非 Linux：扫描显式不支持 → cleanup fail-closed（不伪造占用事实）。
+      await assert.rejects(
+        () => allocator.cleanup({ worktreeId: record.id, force: true }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError)
+          assert.equal(err.code, 'worktree_process_check_failed')
+          return true
+        },
+      )
+      return
+    }
     const holder = holdProcess(record.path)
     try {
       for (const force of [false, true]) {
@@ -127,14 +166,23 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     } finally {
       await holder.stop()
     }
-    // 进程退出 → 保护解除，正常清理。
-    const cleaned = await allocator.cleanup({ worktreeId: record.id, deleteBranch: true })
-    assert.equal(cleaned.removed, true, '进程退出后应可正常清理')
-    assert.ok(!existsSync(record.path))
+    // 进程退出 → 保护解除；全可见环境正常清理，可见性不完整环境 fail-closed。
+    await expectCleanupOkOrFailClosed(() => allocator.cleanup({ worktreeId: record.id, deleteBranch: true }))
   })
 
-  it('本进程打开 worktree 内文件的 fd：fd 占用命中；关闭 fd 后可清理', async () => {
+  it('本进程打开 worktree 内文件的 fd：fd 占用命中；关闭 fd 后可清理', { timeout: 60_000 }, async () => {
     const { record, allocator } = await allocateCleanWorktree('t2')
+    if (!PROCESS_SCAN_ON) {
+      await assert.rejects(
+        () => allocator.cleanup({ worktreeId: record.id, force: true }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError)
+          assert.equal(err.code, 'worktree_process_check_failed')
+          return true
+        },
+      )
+      return
+    }
     const held = join(record.path, 'held.log')
     writeFileSync(held, 'x')
     const fd = openSync(held, 'r')
@@ -153,11 +201,10 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     } finally {
       closeSync(fd)
     }
-    const cleaned = await allocator.cleanup({ worktreeId: record.id, force: true })
-    assert.equal(cleaned.removed, true, 'fd 关闭后应可清理（force 丢弃 held.log 未跟踪文件）')
+    await expectCleanupOkOrFailClosed(() => allocator.cleanup({ worktreeId: record.id, force: true }))
   })
 
-  it('ignored 文件保护保持：.env 使非 force 清理仍 worktree_dirty（进程检查不削弱脏保护）', async () => {
+  it('ignored 文件保护保持：.env 使非 force 清理仍 worktree_dirty（进程检查不削弱脏保护）', { timeout: 60_000 }, async () => {
     const repo = makeGitRepo(join(rootDir, 't3', 'repo'))
     writeFileSync(join(repo, '.gitignore'), '.env\n')
     execFileSync('git', ['add', '.gitignore'], { cwd: repo })
@@ -175,12 +222,12 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
         return true
       },
     )
-    // 无进程占用时 force 越过脏保护、通过进程检查 → 正常移除。
-    const cleaned = await allocator.cleanup({ worktreeId: record.id, force: true })
-    assert.equal(cleaned.removed, true)
+    // 无进程占用时 force 越过脏保护、通过进程检查 → 全可见环境正常移除；
+    // 可见性不完整环境 fail-closed（expectCleanupOkOrFailClosed）。
+    await expectCleanupOkOrFailClosed(() => allocator.cleanup({ worktreeId: record.id, force: true }))
   })
 
-  it('探测端口失败（节点离线）：worktree_process_check_failed（fail-closed，force 也不绕过）', async () => {
+  it('探测端口失败（节点离线）：worktree_process_check_failed（fail-closed，force 也不绕过）', { timeout: 60_000 }, async () => {
     const { record, allocator } = await allocateCleanWorktree('t4')
     // 直接对 allocator 注入离线探测（远程节点离线在 fabric 层即抛 node_offline，
     // allocator 将其映射为 worktree_process_check_failed；此处用假 fabric 同构验证）。
@@ -217,12 +264,11 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       },
     )
     assert.ok(existsSync(record.path), 'fail-closed 时目录不得被移除')
-    // 原 allocator（健康探测）仍可清理。
-    const cleaned = await allocator.cleanup({ worktreeId: record.id })
-    assert.equal(cleaned.removed, true)
+    // 原 allocator（健康探测）仍可清理（全可见）或 fail-closed（可见性不完整）。
+    await expectCleanupOkOrFailClosed(() => allocator.cleanup({ worktreeId: record.id }))
   })
 
-  it('快照不完整（complete=false）：worktree_process_check_failed 并携带 diagnostics', async () => {
+  it('快照不完整（complete=false）：worktree_process_check_failed 并携带 diagnostics', { timeout: 60_000 }, async () => {
     const repo = makeGitRepo(join(rootDir, 't5', 'repo'))
     const docs = new Map<string, unknown>()
     const record = await (async () => {
@@ -263,14 +309,13 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       },
     )
     assert.ok(existsSync(record.path))
-    // 用真实完整探测的 allocator 清理。
+    // 用真实完整探测的 allocator 清理（全可见正常 / 可见性不完整 fail-closed）。
     const fabric = createEnvFabric({})
     const healthy = makeAllocator(fabric, docs)
-    const cleaned = await healthy.cleanup({ worktreeId: record.id })
-    assert.equal(cleaned.removed, true)
+    await expectCleanupOkOrFailClosed(() => healthy.cleanup({ worktreeId: record.id }))
   })
 
-  it('非 Linux Hub 平台（注入 hubPlatform=win32）：fabric 显式 not_supported → cleanup fail-closed', async () => {
+  it('非 Linux Hub 平台（注入 hubPlatform=win32）：fabric 显式 not_supported → cleanup fail-closed', { timeout: 60_000 }, async () => {
     const repo = makeGitRepo(join(rootDir, 't6', 'repo'))
     const fabric = createEnvFabric({ hubPlatform: () => 'win32' })
     const docs = new Map<string, unknown>()
@@ -296,7 +341,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     assert.ok(existsSync(record.path), '拒绝时目录不得被移除')
   })
 
-  it('fabric 入参校验：相对路径 / NUL 拒绝（validation_error）；远程未知节点离线显式 node_offline', async () => {
+  it('fabric 入参校验：相对路径 / NUL 拒绝（validation_error）；远程未知节点离线显式 node_offline', { timeout: 60_000 }, async () => {
     const fabric = createEnvFabric({})
     await assert.rejects(
       () => fabric.inspectPathUsage('local', 'relative/x'),
