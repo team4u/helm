@@ -88,6 +88,8 @@ export interface ModelCatalogEntry {
   provider: string
   modelId: string
   available: boolean
+  /** 真实已知的模型上下文窗口（tokens）；未知省略。 */
+  contextWindow?: number
   /** 用户显式禁用该模型（目录标注用；available 仍表示凭据可用，两者独立）。 */
   disabled?: boolean
 }

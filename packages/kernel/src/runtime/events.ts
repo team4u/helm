@@ -146,14 +146,43 @@ function assertConversationSummaryShape(value: unknown): void {
     (conv['nodeId'] !== undefined && typeof conv['nodeId'] !== 'string') ||
     (conv['thinkingLevelOverride'] !== undefined && typeof conv['thinkingLevelOverride'] !== 'string') ||
     (conv['doing'] !== undefined && typeof conv['doing'] !== 'string') ||
-    (conv['lastError'] !== undefined && typeof conv['lastError'] !== 'string')
+    (conv['lastError'] !== undefined && typeof conv['lastError'] !== 'string') ||
+    (conv['contextUsage'] !== undefined && !isContextUsageShape(conv['contextUsage']))
   ) {
     throw new HelmError(
       'invalid_event',
-      'conversation.upsert 的可选字段（parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError）存在时类型必须合法',
+      'conversation.upsert 的可选字段（parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError/contextUsage）存在时类型必须合法',
       500,
     )
   }
+}
+
+/** contextUsage 形状校验（可缺不可错；契约收敛为 tokens/contextWindow/compacting
+ * 三字段，未知字段拒绝——不留死字段；tokens 为 null 表示上下文未知）。 */
+function isContextUsageShape(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false
+  const usage = value as Record<string, unknown>
+  if (!Object.keys(usage).every((key) => key === 'tokens' || key === 'contextWindow' || key === 'compacting')) {
+    return false
+  }
+  if (
+    usage['tokens'] !== null &&
+    (typeof usage['tokens'] !== 'number' || !Number.isFinite(usage['tokens']) || usage['tokens'] < 0)
+  ) {
+    return false
+  }
+  if (
+    usage['contextWindow'] !== undefined &&
+    (typeof usage['contextWindow'] !== 'number' ||
+      !Number.isFinite(usage['contextWindow']) ||
+      usage['contextWindow'] <= 0)
+  ) {
+    return false
+  }
+  if (usage['compacting'] !== undefined && typeof usage['compacting'] !== 'boolean') {
+    return false
+  }
+  return true
 }
 
 /** ask.upsert 载荷校验：AskSpec 核心字段形状（业务级规则由 createAsk 的 validateAskSpec 把守）。 */

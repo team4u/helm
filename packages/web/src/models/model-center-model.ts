@@ -10,6 +10,7 @@
  */
 import type { ModelProviderSummary, ProviderConfig } from '@helm/protocol'
 import type { CredentialSummary, ModelDescriptor } from '../lib/api.js'
+import { formatTokens } from '../lib/format.js'
 
 export interface ProviderModelItem {
   id: string
@@ -338,12 +339,21 @@ export function buildMergedProviders(
     //    保存时会把全部模型误写成禁用；available 供模型选择器/默认模型选项过滤。
     if (remoteModels && remoteModels.length > 0) {
       p.modelsCount = remoteModels.length
-      p.models = remoteModels.map((m) => ({
-        id: m.modelId,
-        name: m.label || m.modelId,
-        enabled: m.disabled !== true,
-        tags: m.thinkingLevels && m.thinkingLevels.length > 1 ? ['思考模型'] : undefined,
-      }))
+      p.models = remoteModels.map((m) => {
+        // 标签顺序：思考模型在前，真实已知窗口（正数 tokens，紧凑格式）在后；
+        // 窗口未知绝不推测或补缺省；两者皆无保持 undefined（空语义不触发徽章渲染）。
+        const tags: string[] = []
+        if (m.thinkingLevels && m.thinkingLevels.length > 1) tags.push('思考模型')
+        if (typeof m.contextWindow === 'number' && m.contextWindow > 0) {
+          tags.push(`${formatTokens(m.contextWindow)} 上下文`)
+        }
+        return {
+          id: m.modelId,
+          name: m.label || m.modelId,
+          enabled: m.disabled !== true,
+          tags: tags.length > 0 ? tags : undefined,
+        }
+      })
     }
   }
 

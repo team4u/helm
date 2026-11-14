@@ -98,11 +98,15 @@ export const DEFAULT_CONTEXT_WINDOW = 128_000
 export const DEFAULT_MAX_TOKENS = 16_384
 
 /**
- * 本插件构建的 pi 模型：携带 magpieOwnedBy（供配额按 provider 归属）。
- * Model<MagpieApi> 的 compat 字段按 api 条件分布；openai-completions 模型
- * 无 compat 字段，故以交叉类型精确表达「magpieOwnedBy 附加字段」。
+ * 本插件构建的 pi 模型：携带 magpieOwnedBy（供配额按 provider 归属）与
+ * helmContextWindowKnown（上游窗口是否真实已知；见 runtime/models.ts 的
+ * HelmModelSourceMeta）。Model<MagpieApi> 的 compat 字段按 api 条件分布；
+ * openai-completions 模型无 compat 字段，故以交叉类型精确表达附加字段。
  */
-export type PiMagpieModel = Model<MagpieApi> & { magpieOwnedBy?: string }
+export type PiMagpieModel = Model<MagpieApi> & {
+  magpieOwnedBy?: string
+  helmContextWindowKnown?: boolean
+}
 
 /** 单条目录项 → pi 模型。 */
 export function toPiModel(entry: MagpieModelEntry, root: string): PiMagpieModel {
@@ -114,6 +118,7 @@ export function toPiModel(entry: MagpieModelEntry, root: string): PiMagpieModel 
     (modality): modality is 'text' | 'image' => modality === 'text' || modality === 'image',
   )
   const contextWindow = entry.context_length ?? entry.context_window ?? entry.max_input_tokens
+  const upstreamWindow = positive(contextWindow)
   const model: PiMagpieModel = {
     id: entry.id,
     name: entry.display_name?.trim() || entry.id,
@@ -125,7 +130,10 @@ export function toPiModel(entry: MagpieModelEntry, root: string): PiMagpieModel 
     // magpie 将「会推理」与「有档位」分开记录：reasoning:true + 空档位是
     // 只有思考开关无努力档的模型，两种都保留 reasoning 标记。
     reasoning: entry.reasoning === true || efforts.length > 0,
-    contextWindow: positive(contextWindow) ?? DEFAULT_CONTEXT_WINDOW,
+    // 上游窗口为正数才是已知窗口；缺省兑底值不得冒充真实窗口
+    // （contextUsage 不据此显示百分比）。
+    contextWindow: upstreamWindow ?? DEFAULT_CONTEXT_WINDOW,
+    helmContextWindowKnown: upstreamWindow !== undefined,
     maxTokens: positive(entry.max_output_tokens) ?? DEFAULT_MAX_TOKENS,
   }
   if (entry.owned_by) model.magpieOwnedBy = entry.owned_by

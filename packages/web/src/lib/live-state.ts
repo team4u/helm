@@ -92,7 +92,20 @@ export function mergeConversationDetail(state: LiveState, detail: ConversationDe
     return Number.isSafeInteger(left) && Number.isSafeInteger(right) ? left - right : (a.createdAt ?? 0) - (b.createdAt ?? 0)
   })
   const summary = state.conversations.find((c) => c.id === detail.id)
-  return { ...state, pendingEntries: omit(state.pendingEntries, String(detail.id)), conversationDetails: { ...state.conversationDetails, [detail.id]: { ...detail, ...(summary ?? {}), entries: sorted, nextCursor: olderPage || !current ? detail.nextCursor : current.nextCursor } } }
+  // 上下文用量：内核首次填充缓存静默（不发 SSE 帧），列表摘要可能长期缺该
+  // 字段；HTTP 详情首读带回时补进列表（ConversationPane 向 Composer 传
+  // summary ?? detail，不回填则胶囊永不渲染）。摘要已有则保留 SSE 权威值，
+  // 更早生成的 HTTP 详情不得回退已订阅状态（后续 upsert 会自愈追齐）。
+  const usage = summary?.contextUsage ?? detail.contextUsage
+  const conversations = summary !== undefined && usage !== undefined && summary.contextUsage === undefined
+    ? sortConversations(upsert(state.conversations, { ...summary, contextUsage: usage }))
+    : state.conversations
+  return {
+    ...state,
+    conversations,
+    pendingEntries: omit(state.pendingEntries, String(detail.id)),
+    conversationDetails: { ...state.conversationDetails, [detail.id]: { ...detail, ...(summary ?? {}), ...(usage !== undefined ? { contextUsage: usage } : {}), entries: sorted, nextCursor: olderPage || !current ? detail.nextCursor : current.nextCursor } },
+  }
 }
 
 /** 任何序号缺口都重连取快照，不能继续显示缺帧的“最新状态”。 */

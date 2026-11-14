@@ -12,6 +12,7 @@ import type {
   ConversationInput,
   ConversationPatch,
   ConversationSummary,
+  ModelsChangedEvent,
   PluginBuildProvider,
   TurnSettledPayload,
 } from '@helm/protocol'
@@ -161,6 +162,12 @@ export function assembleRuntimeServices(
       sessionDocStreams.closeForPlugin(event.plugin.id)
     } else if (event.type === 'conversation.deleted' && 'conversationId' in event) {
       sessionDocStreams.closeForConversation(event.conversationId)
+    } else if (event.type === 'models.changed' && 'payload' in event) {
+      // 目录刷新/集合重建后模型窗口可能变化（未知→已知/数值变/供应商消失）：
+      // 定向迫齐已观察/已缓存会话的上下文用量。tracker 组装完成前的启动期
+      // 事件无从追齐，静默跳过（启动时缓存本为空，首次波取即按新目录计算）。
+      const providers = (event as ModelsChangedEvent).payload.providers
+      tracker?.onModelsChanged(Array.isArray(providers) ? providers : [])
     }
   })
 
@@ -245,6 +252,8 @@ export function assembleRuntimeServices(
     redactError: (text) => options.stashService.redact(text),
     // 回合结算 unread 策略：背景派生子会话（helm/bot 归属且有父链）不置 unread。
     ownershipOf: (id) => ownership.getOwnership(id),
+    // 上下文用量：窗口按当前 Models 集合解析（未知不伪造）。
+    models: () => modelsRegistry.models,
     events: {
       onSummaryChanged: (summary) => {
         if (options.store.getConv(summary.id) === undefined || options.store.isDeleted(summary.id)) return
@@ -262,6 +271,9 @@ export function assembleRuntimeServices(
       },
       onLiveChanged: (live) => {
         events.publish('conversation.live', { live })
+      },
+      onNotification: (payload) => {
+        events.publish('notification', payload)
       },
       onTurnSettled: (payload, consumed) => {
         const run = options.dispatchTurnSettled(payload, consumed)

@@ -364,6 +364,8 @@ export interface ModelDescriptor {
   label?: string
   /** 该模型支持的思考档位（缺省仅 off）。 */
   thinkingLevels: string[]
+  /** 真实已知的模型上下文窗口（tokens）；未知省略。 */
+  contextWindow?: number
 }
 
 export interface ModelCatalogInfo {
@@ -395,12 +397,20 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
     }
     const id = `${entry.provider}/${entry.modelId}`
     const levels = levelsRaw[id]
+    // 窗口边界校验：出现即必须是有限正数（真实已知 tokens）；非法显式拒绝，未知省略。
+    if (
+      entry.contextWindow !== undefined &&
+      (typeof entry.contextWindow !== 'number' || !Number.isFinite(entry.contextWindow) || entry.contextWindow <= 0)
+    ) {
+      throw new Error('模型目录条目格式无效')
+    }
     return {
       id,
       provider: entry.provider,
       modelId: entry.modelId,
       available: entry.available,
       ...(entry.disabled === true ? { disabled: true } : {}),
+      ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
       thinkingLevels: Array.isArray(levels) && levels.every((level) => typeof level === 'string') && levels.length > 0 ? levels as string[] : ['off'],
     }
   })

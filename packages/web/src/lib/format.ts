@@ -1,15 +1,29 @@
 /**
- * 宿主 Web 专用格式化纯函数。
- * 插件共享的四件套（formatTime / formatCompactTimestamp / formatDurationMs /
- * formatBytes）唯一实现在 @helm/plugin-client；本模块 re-export 供宿主内部
- * 调用点统一从 lib/format 引用（单一实现，零复制）。
+ * Web 宿主格式化入口；共享实现统一由 @helm/plugin-client 提供。
  */
-export { formatBytes, formatCompactTimestamp, formatDurationMs, formatTime } from '@helm/plugin-client'
+export {
+  formatBytes,
+  formatCompactTimestamp,
+  formatDurationMs,
+  formatTime,
+} from '@helm/plugin-client'
 
 /** 错误转可读文本（通知 / 内联错误 / 连接失败提示共用）。 */
 export function errorText(err: unknown): string {
   if (err instanceof Error) return err.message
   return String(err)
+}
+
+/**
+ * tokens 紧凑人类可读（严格抄 pi agent footer formatTokens 分档，与会话用量展示同源）：
+ * <1000 原值；<10000 一位小数 k；<1M 四舍五入 k；<10M 一位小数 M；之后四舍五入 M。
+ */
+export function formatTokens(count: number): string {
+  if (count < 1000) return count.toString()
+  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`
+  if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`
+  return `${Math.round(count / 1_000_000)}M`
 }
 
 /** 本地化完整日期时间（节点连接时间 / 健康采集时间等表单式展示）。 */

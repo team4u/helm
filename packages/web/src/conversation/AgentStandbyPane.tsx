@@ -535,13 +535,26 @@ function StandbyModelPicker({ draftKey, draft, profile, disabled }: {
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
 
+  // 计算待命状态下的实际生效档位：优先取草稿，若无则取角色或全局默认，兜底 off 或首项支持档位。
+  const fallbackThinkingLevel = currentLevels.includes('off') ? 'off' : (currentLevels[0] ?? '')
+  const rawThinkingLevel =
+    draft.thinkingLevel !== undefined && draft.thinkingLevel !== ''
+      ? draft.thinkingLevel
+      : profile.thinkingLevel !== undefined && profile.thinkingLevel !== ''
+        ? profile.thinkingLevel
+        : store.defaultModelInfo?.defaultThinkingLevel !== undefined && store.defaultModelInfo.defaultThinkingLevel !== ''
+          ? store.defaultModelInfo.defaultThinkingLevel
+          : fallbackThinkingLevel
+  const effectiveThinkingLevel = currentLevels.includes(rawThinkingLevel) ? rawThinkingLevel : fallbackThinkingLevel
+  const showThinkingBadge = supportsThinking && effectiveThinkingLevel !== '' && effectiveThinkingLevel !== 'off'
+
   const pickModel = (model: string): void => {
     setOpen(false)
-    // 换模型后旧思考档位不再可信，回到跟随默认。
+    // 切换模型后重置思考档位为 undefined，使其按新模型能力重新解析。
     updateStandbyDraft(draftKey, { model: model === '' ? undefined : model, thinkingLevel: undefined })
   }
   const pickThinking = (level: string): void => {
-    updateStandbyDraft(draftKey, { thinkingLevel: level === '' ? undefined : level })
+    updateStandbyDraft(draftKey, { thinkingLevel: level })
   }
 
   return (
@@ -552,11 +565,17 @@ function StandbyModelPicker({ draftKey, draft, profile, disabled }: {
           className="btn btn-ghost btn-sm composer-model-button"
           disabled={disabled}
           aria-expanded={open}
-          aria-label={`模型与思考档位：${shortName}`}
-          title={disabled ? lockedNote : effectiveModel !== undefined && effectiveModel !== '' ? `当前模型：${effectiveModel}（未选择时跟随角色/全局默认）` : '跟随角色/全局默认模型'}
+          aria-label={`模型与思考档位：${shortName}${showThinkingBadge ? ` · ${effectiveThinkingLevel}` : ''}`}
+          title={
+            disabled
+              ? lockedNote
+              : effectiveModel !== undefined && effectiveModel !== ''
+                ? `当前模型：${effectiveModel}${showThinkingBadge ? ` · 思考 ${effectiveThinkingLevel}` : ''}`
+                : `跟随角色/全局默认模型${showThinkingBadge ? ` · 思考 ${effectiveThinkingLevel}` : ''}`
+          }
         >
           <span className="composer-model-label">{shortName}</span>
-          {draft.thinkingLevel !== undefined ? <span className="composer-model-level">· {draft.thinkingLevel}</span> : null}
+          {showThinkingBadge ? <span className="composer-model-level">· {effectiveThinkingLevel}</span> : null}
           <HelmIcon name="chevron-down" size={12} />
         </button>
       </PopoverTrigger>
@@ -607,11 +626,10 @@ function StandbyModelPicker({ draftKey, draft, profile, disabled }: {
                 <span style={{ color: 'var(--fg-subtle)' }}>{shortName}</span>
               </div>
               <ThinkingLevelControl
-                value={draft.thinkingLevel ?? ''}
+                value={effectiveThinkingLevel}
                 levels={currentLevels}
                 disabled={disabled}
                 onPick={pickThinking}
-                defaultTitle="创建会话后跟随默认档位（不显式覆盖）"
               />
             </>
           ) : null}

@@ -215,6 +215,28 @@
   box-shadow: 0 0 0 2px var(--err-bg);
 }
 
+/* 后台在途空心环（单灯位）：父会话自身空闲/已完成但后台任务（子代理/工作流）
+   仍在运行时，替换 idle 的无灯/done 的绿点成为该行唯一状态灯；
+   空心 + 慢速呼吸，与主回合 working 实心脉冲点明确区分，不冒充会话自身运行。 */
+.status-dot-background {
+  background: transparent;
+  border: 1.5px solid var(--accent);
+  box-sizing: border-box;
+  box-shadow: 0 0 0 2px var(--accent-bg);
+  animation: status-dot-background-pulse 2.6s ease-in-out infinite;
+}
+
+@keyframes status-dot-background-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1.5px var(--accent-bg);
+    opacity: 0.85;
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--accent-bg);
+    opacity: 1;
+  }
+}
+
 @keyframes status-dot-pulse {
   0%, 100% {
     box-shadow: 0 0 0 1.5px var(--accent-bg);
@@ -227,7 +249,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status-dot-working {
+  .status-dot-working,
+  .status-dot-background {
     animation: none;
   }
 }

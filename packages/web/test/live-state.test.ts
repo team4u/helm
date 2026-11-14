@@ -82,6 +82,24 @@ test('SSE 消息先于首次 HTTP 详情返回时，补齐详情后仍保留新�
   assert.deepEqual(state.pendingEntries, {})
 })
 
+test('列表摘要缺 contextUsage 时，HTTP 详情首读带回的用量补进列表与详情（内核首次填充静默不发 SSE 帧）', { timeout: 60_000 }, () => {
+  let state = applySnapshot(emptyLiveState(), snapshot) // 重启后快照：摘要无 contextUsage
+  const usage = { tokens: 25_000, contextWindow: 100_000 }
+  state = mergeConversationDetail(state, { ...conv, entries: [], contextUsage: usage })
+  // ConversationPane 向 Composer 传 summary ?? detail：列表摘要必须带用量，胶囊才能渲染
+  assert.deepEqual(state.conversations.find((c) => c.id === 1)?.contextUsage, usage)
+  assert.deepEqual(state.conversationDetails[1]?.contextUsage, usage)
+})
+
+test('列表摘要已有 contextUsage 时保留 SSE 权威值，旧 HTTP 详情不得回退', { timeout: 60_000 }, () => {
+  const fresh = { tokens: 50_000 }
+  let state = applySnapshot(emptyLiveState(), snapshot)
+  state = applyEventFrame(state, { seq: 11, event: { type: 'conversation.upsert', conversation: { ...conv, contextUsage: fresh } } })
+  state = mergeConversationDetail(state, { ...conv, entries: [], contextUsage: { tokens: 12_000 } })
+  assert.deepEqual(state.conversations.find((c) => c.id === 1)?.contextUsage, fresh)
+  assert.deepEqual(state.conversationDetails[1]?.contextUsage, fresh)
+})
+
 test('FTS input:/entry: 引用映射到真实时间线 entryId', { timeout: 60_000 }, () => {
   assert.equal(entryMatchesReference({ id: '4', kind: 'helm.input', data: { id: 'submission-1' } }, 'input:submission-1'), true)
   assert.equal(entryMatchesReference({ id: '5', kind: 'pi.assistant' }, 'entry:5'), true)
@@ -106,6 +124,31 @@ test('模型菜单按真实 /api/models 契约组成 provider/model，思考档�
 test('模型目录携带全局默认模型', { timeout: 60_000 }, () => {
   const catalog = normalizeModelCatalogInfo({ models: [], thinkingLevels: {}, defaultModel: 'magpie/group/smart' })
   assert.equal(catalog.defaultModel, 'magpie/group/smart')
+})
+
+test('模型目录窗口字段：真实已知正数透传，未知省略，非法值显式拒绝', { timeout: 60_000 }, () => {
+  // 已知正数窗口：透传到 ModelDescriptor
+  const known = normalizeModelCatalogInfo({ models: [
+    { provider: 'magpie', modelId: 'glm-4.6', available: true, contextWindow: 200_000 },
+  ] })
+  assert.equal(known.models[0]?.contextWindow, 200_000)
+
+  // 未知窗口：省略字段，不推测、不补缺省
+  const unknown = normalizeModelCatalogInfo({ models: [
+    { provider: 'magpie', modelId: 'kimi-k2', available: true },
+  ] })
+  assert.equal('contextWindow' in (unknown.models[0] ?? {}), false)
+
+  // 非法窗口（0 / 负数 / 非有限数 / 非数字）：边界显式拒绝，不静默丢弃
+  for (const bad of [0, -128_000, Number.POSITIVE_INFINITY, '200000']) {
+    assert.throws(
+      () => normalizeModelCatalogInfo({ models: [
+        { provider: 'magpie', modelId: 'bad-window', available: true, contextWindow: bad as number },
+      ] }),
+      /无效/,
+      `contextWindow=${String(bad)} 必须显式拒绝`,
+    )
+  }
 })
 
 const localNode: NodeInfo = { id: 'local', kind: 'local', online: true }

@@ -21,6 +21,22 @@ export type InputOrigin = 'human' | 'agent' | 'trigger'
 /** 会话正忙时新输入的处理策略；省略时内核默认 steer（插话引导）。 */
 export type WhenBusy = 'steer' | 'followUp' | 'reject'
 
+/** 会话上下文用量（派生展示数据；内核异步刷新，可能短暂滞后于真实上下文）。
+ *
+ * 估算语义对齐 pi agent 1.5.2 的 `getContextUsage`：优先采用最近一次有效
+ * assistant usage 实测值（stopReason 非 aborted/error 且上下文 tokens > 0）
+ * 加上其后消息的字符估算；head（pi.compaction / pi.reset）与 rewind 之后的
+ * 失效锚点自动退化为当前有效消息全量估算；最近一次压缩后尚无新的有效
+ * usage 时 tokens 为 null——真实上下文规模未知，不拿摘要字符估算冒充。 */
+export interface ConversationContextUsage {
+  /** 当前有效上下文的估算 tokens；null = 未知（压缩后尚无新的有效 assistant usage）。 */
+  tokens: number | null
+  /** 模型上下文窗口；仅当模型解析得到真实已知窗口时携带，未知不伪造。 */
+  contextWindow?: number
+  /** 压缩任务进行中（pi.live compactions 非空透传；展示「精简中…」）。 */
+  compacting?: boolean
+}
+
 /** 会话列表 / SSE 快照中的通用会话摘要。 */
 export interface ConversationSummary {
   id: number
@@ -54,6 +70,9 @@ export interface ConversationSummary {
   stateChangeSeq: number
   /** 每次回合结束单调递增。 */
   completionSeq: number
+  /** 上下文用量（派生展示数据）：由内核异步刷新；其变化发布 conversation.upsert
+   * 但不推进 stateChangeSeq（水位线专属于状态机/doing/Ask 的 CAS 语义）。 */
+  contextUsage?: ConversationContextUsage
   /** 仅人类在 Web/CLI 显式聚焦或 PATCH 时清零，API 读取不清零。 */
   unread: boolean
   pinned: boolean
