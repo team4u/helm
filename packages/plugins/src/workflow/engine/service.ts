@@ -511,15 +511,25 @@ export class WorkflowService {
       if (record.status !== 'running' || !this.isBackgroundRecord(record)) continue
       for (const id of this.backgroundChildIds(record)) childIds.add(id)
     }
-    // 逐会话守卫取消（human 一律内核拒绝）：单个拒绝（human 接管等红线事实）
-    // 不阻断其余恢复，stderr 诊断后继续——与 init 阶段同款客忍纪律。
+    // 逐会话守卫取消。仅两类确定性可接受失败可诊断后继续：not_found（会话
+    // 已删除）/ ownership_conflict（human 接管，红线拒绝——human 绝不 abort）。
+    // 其余失败（持久化 I/O、内核内部错误）必须上抛：恢复屏障被阻断，
+    // recoveryPrepared 不置位（下次 prepare 重试），绝不带着未落取消标记
+    // 启动调度器——“先落取消标记”的屏障优先于“容错继续”。
     for (const id of childIds) {
       try {
         await this.host.abortConversationGuarded(id)
       } catch (error) {
-        process.stderr.write(
-          `workflow prepareRecovery: guarded abort conversation ${id} failed: ${errorMessage(error)}\n`,
-        )
+        if (
+          error instanceof HelmError &&
+          (error.code === 'not_found' || error.code === 'ownership_conflict')
+        ) {
+          process.stderr.write(
+            `workflow prepareRecovery: skip conversation ${id}（${error.code}，确定性跳过不阻断屏障）: ${errorMessage(error)}\n`,
+          )
+          continue
+        }
+        throw error
       }
     }
     this.recoveryPrepared = true

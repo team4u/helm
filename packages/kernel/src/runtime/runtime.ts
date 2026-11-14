@@ -110,7 +110,8 @@ export class KernelRuntime {
   private processTokenHandle: { tokenOf(): string | undefined; dispose(): void } | undefined
   private hubUrlValue: string
   private pluginHost: PluginHost | undefined
-  private started = false
+  /** 启动生命周期事实（只读暴露给服务装配；resume 后同步段置位，见 start）。 */
+  #started = false
   private startPromise: Promise<void> | undefined
   private closed = false
   private readonly handledToolCalls = new Map<
@@ -369,14 +370,20 @@ export class KernelRuntime {
     return run
   }
 
+  /** 启动生命周期事实（只读）：start() 完成（harness.resume 后同一同步段）为 true。 */
+  get started(): boolean {
+    return this.#started
+  }
+
   async start(): Promise<void> {
-    if (this.started) return
+    if (this.#started) return
     if (this.startPromise) return this.startPromise
     const attempt = (async () => {
       if (this.pluginHost) await this.pluginHost.start()
       this.harness.resume()
-      this.conversations.noteSchedulerEngaged()
-      this.started = true
+      // resume 后同一同步段置位（无 await 间隔）：外部 isStarted() 读到 true
+      // 时调度器必然已离开 paused。
+      this.#started = true
     })()
     this.startPromise = attempt
     try {

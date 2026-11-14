@@ -541,15 +541,12 @@ export function createWorkflowPlugin(): PluginDefinition {
               // 事实读取不可用：空守卫仍经内核原子复核（human 仍被拒）。
               guard = {}
             }
-            try {
-              await ctx.host.abortConversationGuarded(id, guard)
-            } catch (error) {
-              if (error instanceof HelmError && error.code === 'not_found') return
-              const message = error instanceof Error ? error.message : String(error)
-              process.stderr.write(
-                `builtin:workflow: 守卫中止子会话 ${id} 被内核拒绝（human 红线或事实过期；确定性放弃，不回退普通中止）: ${message}\n`,
-              )
-            }
+            // 原样透传内核结果（含拒绝），适配器绝不吞异常：引擎各调用点自带
+            // 容忍分类（init 逐子诊断 try/catch、abortChildConversation 的
+            // .catch、prepareRecovery 按 not_found/ownership_conflict 与意外
+            // 错误区分屏障阻断/重试）——吞掉意外错误会让恢复屏障在未落取消
+            // 标记时静默“成功”。
+            await ctx.host.abortConversationGuarded(id, guard)
           },
           // 引擎侧签名是 void（各调用点 fire-and-forget 不 await）：适配器必须
           // 自吞异常——runs 投影（listRuns 可抛 workflow_index_corrupt）与广播

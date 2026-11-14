@@ -12,6 +12,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PassThrough } from 'node:stream'
+import http from 'node:http'
+import net from 'node:net'
+import { setTimeout as delay } from 'node:timers/promises'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -441,6 +444,68 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
       await host.disable('p:fetch-abandon')
     } finally {
       await host.dispose()
+    }
+  })
+
+  await t.test('nodeFetch 宿主 close 确定性归属：local 永不结束 body 与 headers 前请求在 dispose 后真实取消并释放', { timeout: 60_000 }, async () => {
+    // local 路径 backend 返回 globalThis.fetch：EnvFabric.close 拆远端隧道
+    // 管不到它，确定性取消必须来自每调用的 owned cleanup（宿主 dispose 触发
+    // 合成 AbortController），且正常 disable 不 abort（409 硬阻断不可 force）。
+    let socketClosed = 0
+    let headersSent = 0
+    const server = http.createServer((req, res) => {
+      headersSent += 1
+      if (req.url === '/pending') {
+        // 永不发送响应头（headers 前挂起）。
+        return
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.write('data: a\n\n')
+      // 永不结束的 SSE 长流。
+      const timer = setInterval(() => res.write('data: x\n\n'), 50)
+      res.on('close', () => { clearInterval(timer); socketClosed += 1 })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`
+    const backend = makeBackend({ nodeFetch: () => globalThis.fetch as typeof fetch })
+    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    let api!: HelmHostApi
+    await host.register({ id: 'p:fetch-dispose', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
+    try {
+      // --- local 永不结束 body：弃置（不消费不 cancel），dispose 后连接真实关闭 ---
+      const response = await api.nodeFetch('local')(`${base}/stream`)
+      assert.equal(response.status, 200)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      // 正常 disable：确定性占用 409（不可 force），且不得借 disable abort
+      //（dispose 之外唯一能跑 release 的路径），流仍可读。
+      await assert.rejects(host.disable('p:fetch-dispose'), { code: 'plugin_has_live_tasks' })
+      const reader0 = response.body!.getReader()
+      const chunk = await reader0.read()
+      assert.ok(!chunk.done, 'disable 的 409 拒绝不得中止在途流（不借 disable abort）')
+
+      await host.dispose()
+      // dispose 触发 owned cleanup：底层请求真实取消（服务端连接关闭）。
+      for (let i = 0; i < 100 && socketClosed === 0; i += 1) await delay(20)
+      assert.ok(socketClosed >= 1, `宿主 dispose 后 local 在途请求必须真实取消（服务端连接关闭；实际 ${socketClosed}）`)
+
+      // --- headers 前挂起的请求：dispose 后 fetch promise 以取消错误拒绝 ---
+      const host2 = new PluginHost({ dataDir, host: makeBackend({ nodeFetch: () => globalThis.fetch as typeof fetch }), docs: new MemoryDocStore() })
+      let api2!: HelmHostApi
+      await host2.register({ id: 'p:fetch-pending', definePlugin(ctx) { api2 = ctx.host } }, { enabled: true })
+      const pending = api2.nodeFetch('local')(`${base}/pending`)
+      await delay(50) // 请求已发出、响应头未到。
+      const disposed = host2.dispose()
+      await assert.rejects(() => pending, (error: unknown) => {
+        // owned cleanup 以宿主销毁原因 abort；undici 原样以 signal.reason 拒绝
+        //（确定性归属可观察）。也兼容实现层以 AbortError 形态上抛。
+        if (error instanceof HelmError && error.code === 'plugin_host_disposed') return true
+        const name = error instanceof Error ? error.name : String(error)
+        return name === 'AbortError' || /abort/i.test(String((error as { message?: string }).message ?? name))
+      })
+      await disposed
+      assert.ok(headersSent >= 2, '两个请求均真实到达服务端')
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 

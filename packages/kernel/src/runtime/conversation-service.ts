@@ -72,6 +72,14 @@ export interface ConversationServiceOptions {
   readonly runInputHook: (payload: unknown) => Promise<{ action: string; value?: unknown; reason?: string; result?: unknown } | undefined>
   /** 关闭守卫（isClosed）。 */
   readonly isClosed: () => boolean
+  /**
+   * 启动生命周期事实（KernelRuntime.started 只读投射）：start() 完成即
+   * harness.resume 之后的同步段置位。abortConversationGuarded 用它做快路径
+   * 门——未启动时才付一次只读 harness.inspect 的权威相位复核（prepare
+   * 屏障窗口持久标记；autoResume:false 手动提交后的未启动窗口按 inspect
+   * 权威结果走常规中止），绝不维护第二份镜像状态。
+   */
+  readonly isStarted: () => boolean
   /** 模型解析链（默认模型）。 */
   readonly defaultModel: () => string | undefined
   readonly defaultThinkingLevel: () => string | undefined
@@ -285,22 +293,6 @@ export class ConversationService {
   }
 
   /**
-   * 调度器交互单调标记：内核一旦与 SDK 发生提交/中止/恢复/等待交互
-   *（submit / conversation.abort / waitForIdle / harness.resume——它们都会
-   * 或已意味着调度器离开 paused），即为 true 且永不回落。用作
-   * abortConversationGuarded 的快路径门：false 时才付一次只读 inspect 的
-   * 权威相位复核。标记保守住两个方向：漏记（某路径已 resume）只多一次
-   * inspect 复核后落回常规路径；多记（提前置 true）等价于旧路径行为
-   * （conversation.abort 自带 resume），均不改变安全语义。
-   */
-  private schedulerEngaged = false
-
-  /** 标记调度器已必然离开 paused（runtime.start resume / 首次提交 / 任意中止）。 */
-  noteSchedulerEngaged(): void {
-    this.schedulerEngaged = true
-  }
-
-  /**
    * 自动化 guarded 中止：守卫复核与 SDK abort 调用（第一个不可逆动作）在
    * 同一串行域内背靠背执行（零 await 间隔）；复核失败绝不发起中止。
    * 普通 abortConversation 语义不变（人类/CLI 路径不绑定自动化守卫）。
@@ -316,22 +308,28 @@ export class ConversationService {
   async abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void> {
     this.assertGuardShape(guard)
     return this.withMutationGate(id, async () => {
-      // 恢复屏障路径：仅当内核尚无任何调度器交互时才付一次只读 inspect 的
-      // 权威相位复核；标记前逐任务同步复核（human 红线覆盖恢复窗口，
-      // 优于旧专用方法的无守卫批量取消）。
-      if (!this.schedulerEngaged) {
+      // 恢复屏障路径：仅当内核尚未完成 start（生命周期事实，非镜像状态）时
+      // 才付一次只读 inspect 的权威相位复核；标记前逐任务同步复核（human
+      // 红线覆盖恢复窗口，优于旧专用方法的无守卫批量取消）。
+      if (!this.o.isStarted()) {
         const inspection = await this.harness.inspect(BACKGROUND_CONTEXT)
         if (inspection.scheduling === 'paused') {
+          let matched = false
           for (const task of inspection.tasks) {
             if (task.record.conversationId !== (id as never)) continue
+            matched = true
             // 与下方 abortTask 调用之间零 await（单线程内 ownership 无法插入）。
             this.assertMutationGuard(id, guard)
             await this.harness.abortTask(task.record.id, BACKGROUND_CONTEXT)
           }
+          if (!matched) {
+            // 会话名下无存活任务也必须验证会话存在 + 归属：缺失 not_found、
+            // human 拒绝，绝不给 human/idle 目标返回成功。
+            this.assertMutationGuard(id, guard)
+          }
           return
         }
-        // 意外 running（autoResume:false 进程先提交过后再守卫中止）：落回常规路径。
-        this.noteSchedulerEngaged()
+        // 意外 running（autoResume:false 进程先提交过后、尚未 start）：落回常规路径。
       }
       const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
       if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
@@ -621,8 +619,6 @@ export class ConversationService {
   }
 
   async deleteConversation(id: number): Promise<void> {
-    // 删除会 abort 在途回合（自带 resume）：进入即标记（见 schedulerEngaged）。
-    this.noteSchedulerEngaged()
     requireConv(this.store, id)
     const owners = [...(this.o.managedConversations.get(id) ?? [])]
     if (owners.length > 0) {
@@ -697,8 +693,6 @@ export class ConversationService {
     text: string,
     opts?: SubmitInputOptions,
   ): Promise<{ submissionId: string }> {
-    // SDK submission 自带 resume：进入即标记调度器已交互（见 schedulerEngaged）。
-    this.noteSchedulerEngaged()
     this.contextOps.assertOpen()
     const convMeta = requireConv(this.store, id)
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
@@ -930,8 +924,6 @@ export class ConversationService {
   }
 
   async abortConversation(id: number): Promise<void> {
-    // conversation.abort 自带 resume：进入即标记（见 schedulerEngaged）。
-    this.noteSchedulerEngaged()
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
     const wasBusy = this.tracker.hasLiveWork(id)
@@ -964,8 +956,6 @@ export class ConversationService {
   // ------------------------------------------------------------------
 
   async waitForIdle(id: number): Promise<void> {
-    // conversation.waitForIdle 自带 resume：进入即标记（见 schedulerEngaged）。
-    this.noteSchedulerEngaged()
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
     await conversation.waitForIdle(BACKGROUND_CONTEXT)

@@ -139,8 +139,6 @@ export class RuntimeAgentSpawn {
    * 兑现；内核只保留通用保证（schema 校验/gate 回报对账/结果验证）。
    */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
-    // 子会话提交/续接自带 resume：进入即标记调度器已交互（见 schedulerEngaged）。
-    this.deps.conversations.noteSchedulerEngaged()
     if (request.schema !== undefined) assertSchemaCompilable(request.schema)
     validateSecretNames(request.secretNames)
     const token = randomUUID()

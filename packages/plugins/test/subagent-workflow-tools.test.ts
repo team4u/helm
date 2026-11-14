@@ -687,6 +687,42 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
     }
   })
 
+  it('ctx.host.buildSpawnEnv 真实端口：secretNames 显式授予完整转发（backend 第 4 参不吞）', { timeout: 60_000 }, async () => {
+    // 回归：runtime-host-backend 曾丢掉 options 参数，显式授予被静默吞成
+    // 缺省最小授权。经真实 KernelRuntime + createPluginHostBackend + wrapHostApi
+    // 全链验证第 4 参真实贯通到 RuntimeAgentSpawn.buildSpawnEnv。
+    const dir = join(rootDir, 'env-host-port')
+    const kernel = await KernelRuntime.open({ dataDir: dir, cwd: dir, model: 'faux/faux-1' })
+    try {
+      let api!: import('@helm/protocol').HelmHostApi
+      await kernel.plugins.register({
+        id: 'test:host-spawn-env-port',
+        definePlugin(ctx) {
+          api = ctx.host
+        },
+      } satisfies import('@helm/protocol').PluginDefinition, { enabled: true })
+      kernel.stash.put(9, 'HOST_PORT_KEY', 'host-port-value')
+
+      // 缺省最小授权：不携带任何父会话机密。
+      const minimal = api.buildSpawnEnv(9, '/srv/host-port', 'local')
+      assert.equal(minimal['HOST_PORT_KEY'], undefined, '缺省不得携带父会话机密')
+
+      // 显式逐名授予经 host 端口真实注入（backend 转发缺失时这里会拿到 undefined）。
+      const granted = api.buildSpawnEnv(9, '/srv/host-port', 'local', {
+        secretNames: ['HOST_PORT_KEY'],
+      })
+      assert.equal(granted['HOST_PORT_KEY'], 'host-port-value', 'secretNames 显式授予必须经 host 端口完整转发并注入')
+
+      // 授予不存在机密名：显式 404 secret_not_found，不静默空注入（同步端口契约）。
+      assert.throws(
+        () => api.buildSpawnEnv(9, '/srv/host-port', 'local', { secretNames: ['MISSING_NAME'] }),
+        (error: unknown) => error instanceof HelmError && error.code === 'secret_not_found',
+      )
+    } finally {
+      await kernel.close()
+    }
+  })
+
   it('非法入参显式拒绝（conversationId 非正整数 / 空 cwd）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'env2')
     const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),

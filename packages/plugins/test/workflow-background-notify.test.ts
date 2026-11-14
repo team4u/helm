@@ -23,7 +23,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
-import type { AgentExecutionInfo, WorkflowRunSummary } from '@helm/protocol'
+import { HelmError, type AgentExecutionInfo, type WorkflowRunSummary } from '@helm/protocol'
 import {
   WorkflowService,
   type WorkflowServiceHost,
@@ -316,4 +316,70 @@ describe('后台 workflow run 通知与恢复', () => {
     assert.equal(host.settledCalls.length, 0, '同步 workflow 中断不通知父会话')
     await service.close()
   })
+})
+
+// ---------------------------------------------------------------------------
+// prepareRecovery 屏障失败注入：意外错误必须阻断（可重试）；确定性红线
+// 拒绝（ownership_conflict = human 接管）与 not_found 可诊断跳过
+// ---------------------------------------------------------------------------
+
+/** 种子一条含两个子会话的后台 running run。 */
+function seedTwoChildren(state: WorkflowStateStore, runId: string): void {
+  const now = Date.now()
+  state.set('workflow/runs', [{ id: runId, conversationId: 1, createdAt: now }])
+  state.set(`workflow/run/${runId}`, {
+    id: runId,
+    name: 'subagent:worker',
+    conversationId: 1,
+    status: 'running',
+    createdAt: now,
+    updatedAt: now,
+    kind: 'subagent',
+    notifyParentOnSettle: true,
+    journalPath: '/tmp/nonexistent.jsonl',
+    nodes: [
+      { id: 'subagent-0', kind: 'agent', label: 'subagent:worker', status: 'running', startedAt: now, conversationId: 31 },
+      { id: 'subagent-1', kind: 'agent', label: 'subagent:worker', status: 'running', startedAt: now, conversationId: 32 },
+    ],
+    subagentMeta: { agentType: 'worker', execution: { nodeId: 'local', conversationId: 31 } },
+  })
+}
+
+it('prepareRecovery 屏障：意外错误上抛且 recoveryPrepared 不置位（重试可恢复），绝不带未落标记启动', timeout, async () => {
+  const state = makeStateStore()
+  seedTwoChildren(state, 'wf_barrier_io')
+  const host = makeHost()
+  const realAbort = host.abortConversationGuarded.bind(host)
+  let failFirst = true
+  host.abortConversationGuarded = async (id: number) => {
+    if (failFirst && id === 31) throw new Error('simulated persistence IO failure')
+    return realAbort(id)
+  }
+  const service = new WorkflowService({ dataDir: '/tmp/unused', state, host })
+
+  // 意外错误必须上抛：服务 prepare 失败 -> 宿主屏障阻断 start（调度器不 resume）。
+  await assert.rejects(() => service.prepareRecovery(), /simulated persistence IO failure/)
+
+  // 重试语义：失败注入解除后同一 service 再 prepare 成功（recoveryPrepared 未被置位）。
+  failFirst = false
+  host.guardedAborts.length = 0
+  await service.prepareRecovery()
+  assert.deepEqual(host.guardedAborts, [31, 32], '重试必须完整覆盖全部遗留子会话（不含错误期间未落标记的半程）')
+})
+
+it('prepareRecovery 容忍边界：ownership_conflict（human 接管）与 not_found 诊断跳过，其余子会话仍落标记', timeout, async () => {
+  const state = makeStateStore()
+  seedTwoChildren(state, 'wf_barrier_human')
+  const host = makeHost()
+  const realAbort = host.abortConversationGuarded.bind(host)
+  host.abortConversationGuarded = async (id: number) => {
+    host.guardedAborts.push(id)
+    // 31 号模拟内核 human 红线拒绝（human 绝不 abort）；32 号模拟会话已删除。
+    if (id === 31) throw new HelmError('ownership_conflict', '会话 31 当前归属 human，拒绝自动化变更（human 红线）', 409, { conversationId: 31 })
+    if (id === 32) throw new HelmError('not_found', '会话不存在：32', 404, { conversationId: 32 })
+    return realAbort(id)
+  }
+  const service = new WorkflowService({ dataDir: '/tmp/unused', state, host })
+  await service.prepareRecovery()
+  assert.deepEqual(host.guardedAborts, [31, 32], '两个子会话都尝试过守卫中止（human 由内核拒绝、已删会话 404），屏障不放行前先尝试')
 })

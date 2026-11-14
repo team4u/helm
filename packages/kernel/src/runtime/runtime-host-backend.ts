@@ -145,7 +145,8 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     atomicWriteFile: (path, content) => atomicWriteFile(path, content),
     completeText: (input) => runtime.completeConversationText(input),
     executionEnv: (nodeId, cwd) => runtime.envFabric.envFor(nodeId, cwd),
-    buildSpawnEnv: (conversationId, cwd, nodeId) => runtime.agentSpawn.buildSpawnEnv(conversationId, cwd, nodeId),
+    buildSpawnEnv: (conversationId, cwd, nodeId, options) =>
+      runtime.agentSpawn.buildSpawnEnv(conversationId, cwd, nodeId, options),
     spawnAgent: (request) => runtime.agentSpawn.spawnAgent(request),
     runGate: (command, options) => runtime.agentSpawn.runGate(command, options),
     resolveSpawnTarget: (input) => runtime.agentSpawn.resolveSpawnTarget(input),

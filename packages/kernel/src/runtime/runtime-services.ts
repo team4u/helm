@@ -325,6 +325,7 @@ export function assembleRuntimeServices(
     ownershipOf: (id) => ownership.getOwnership(id),
     runInputHook: (payload) => hookBridge.runHookChain('input', payload),
     isClosed: () => runtime.isClosing,
+    isStarted: () => runtime.started,
     defaultModel: () => modelsRegistry.defaultModel,
     defaultThinkingLevel: () => modelsRegistry.defaultThinkingLevel,
     models: () => modelsRegistry.models,

@@ -407,6 +407,17 @@ export function wrapHostApi(
     // 调用（新流）入任务跟踪并再次守卫（停用/停止窗口拒绝新流）；在途跟踪
     // 覆盖到 Response body EOF/cancel/error（响应头到达不结束任务，SSE
     // 长流不脱离监控）。
+    //
+    // 宿主 close/dispose 的确定性归属（local 路径 backend 返回
+    // globalThis.fetch，EnvFabric.close 拆远端隧道管不到它）：每次调用在
+    // 第一个 await 前登记专属 owned cleanup 进本周期 hostReleases——合成
+    // AbortController（原 Request/init 的取消信号优先保持 fetch 语义，
+    // 先 abort 者胜；宿主关闭信号仅追加，不覆盖调用方语义）。仅宿主
+    // dispose/close 拆除时触发：正常 disable 因在途任务 409 不可 force，
+    // 永远到不了 teardown 释放段——绝不借 disable 自动 abort 绕过 409。
+    // 任务自然收敛（EOF/cancel/传输失败）即解除 hostReleases 登记与全部
+    // 信号监听；弃置 Response（不消费不 cancel）保持确定性占用（409），
+    // 由宿主 close 兜底取消并释放计数。
     nodeFetch: backend.nodeFetch === undefined
       ? ((nodeId: string): typeof fetch => {
           guard(`host.nodeFetch:${nodeId}`);
@@ -425,22 +436,68 @@ export function wrapHostApi(
             guard(what);
             deps.tracker.begin(pluginId, what);
             let ended = false;
+            let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+            // —— owned cleanup（第一个 await 前登记完毕）——
+            const hostClose = new AbortController();
+            const composed = new AbortController();
+            const removers: Array<() => void> = [];
+            const listen = (signal: AbortSignal, onAbort: () => void): (() => void) => {
+              signal.addEventListener('abort', onAbort, { once: true });
+              return () => signal.removeEventListener('abort', onAbort);
+            };
+            // 原取消信号优先：先登记调用方信号（Request 自带 / init.signal），
+            // 先 abort 者以其 reason 胜出，宿主关闭信号最后合成。
+            const callerSignals: AbortSignal[] = [];
+            if (input instanceof Request && input.signal != null) callerSignals.push(input.signal);
+            if (init?.signal != null) callerSignals.push(init.signal);
+            for (const signal of callerSignals) {
+              if (signal.aborted) composed.abort(signal.reason);
+              else removers.push(listen(signal, () => composed.abort(signal.reason)));
+            }
+            removers.push(
+              listen(hostClose.signal, () => composed.abort(hostClose.signal.reason)),
+            );
+            const detach = (): void => {
+              for (const remove of removers) remove();
+              removers.length = 0;
+            };
             const end = (): void => {
               if (ended) return;
               ended = true;
               deps.tracker.end(pluginId, what);
+              state.hostReleases.delete(release);
+              detach();
             };
-            return Promise.resolve().then(() => raw(input, init)).then((response) => {
+            let released = false;
+            const release = (): void => {
+              if (released) return;
+              released = true;
+              hostClose.abort(
+                new HelmError(
+                  'plugin_host_disposed',
+                  '宿主已销毁：nodeFetch 在途请求确定性取消（owned cleanup）',
+                  503,
+                ),
+              );
+              // 弃置 body 的兜底结算：直接结束任务计数并尽力取消底层 reader
+              //（消费方随后的读取得到取消错误；自然收敛路径不经过此处）。
+              if (reader !== undefined) reader.cancel(hostClose.signal.reason).catch(() => {});
+              end();
+              detach();
+            };
+            state.hostReleases.add(release);
+            const callInit: RequestInit = { ...init, signal: composed.signal };
+            return Promise.resolve().then(() => raw(input, callInit)).then((response) => {
               if (response.body === null) {
                 end();
                 return response;
               }
               try {
-                const reader = response.body.getReader();
+                reader = response.body.getReader();
                 const trackedBody = new ReadableStream<Uint8Array>({
                   async pull(controller) {
                     try {
-                      const { done, value } = await reader.read();
+                      const { done, value } = await reader!.read();
                       if (done) { end(); controller.close(); return; }
                       if (value !== undefined) controller.enqueue(value);
                     } catch (error) {
@@ -450,7 +507,7 @@ export function wrapHostApi(
                   },
                   async cancel(reason) {
                     try {
-                      await reader.cancel(reason);
+                      await reader!.cancel(reason);
                     } finally {
                       end();
                     }

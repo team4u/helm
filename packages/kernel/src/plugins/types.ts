@@ -2,26 +2,13 @@
  * PluginHost 类型与接口定义。
  */
 import type {
-  AgentExecutionInfo,
-  AgentSpawnRequest,
-  ArtifactMetadata,
-  AskCreateSpec,
-  AskResult,
   BackendPluginsLifecyclePort,
-  ConversationActivity,
-  ConversationDetail,
-  ConversationInit,
-  ConversationListFilter,
-  ConversationPatch,
-  ConversationSummary,
-  EnvExecRequest,
-  EnvExecResponse,
-  ExternalTriggerEnvelope,
   GuardedMutationExpectation,
   HelmHostApi,
   HelmHostNodeIpcPort,
   HelmHostNodeFetchPort,
   HelmHostOpenTunnelPort,
+  HookName,
   PluginBuildProvider,
   MaybePromise,
   ModelProvidersRefreshResult,
@@ -33,7 +20,6 @@ import type {
   PluginSkillAsset,
 } from '@helm/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
-import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import type { PluginDocStore, PluginSessionDocStore } from './doc-registry.js';
 
 export type { PluginDocStore, PluginSessionDocStore } from './doc-registry.js';
@@ -64,8 +50,9 @@ export interface PluginProviderPort {
 /**
  * 宿主后端端口：ctx.host 的实现来源（Runtime 提供，见 runtime-host-backend.ts）。
  *
- * 显式成员清单（不再 Omit 反选）：与 HelmHostApi 的差异只有四类，
- * 每一类都在此声明——
+ * 形状策略：与 HelmHostApi 逐字同形的成员用正向 Pick 成员索引复用（含
+ * onEvent / emitEvent 的 MaybePromise<void> 可 await 契约，绝不手抄签名
+ * 漂移成 void；也不用 Omit 巨型反选或动态 Proxy）；差异成员逐个显式：
  * 1. pluginId 命名空间化：secrets / setPluginConfig / skills.ensureSkill /
  *    manageConversation（返回释放函数由 PluginHost 包装幂等）；
  * 2. 归一化形状：isClosing 为零参函数（ctx.host 暴露 getter）；
@@ -75,13 +62,47 @@ export interface PluginProviderPort {
  * 4. 不经后端转发（PluginHost 自供，避免二层转发）：listPlugins / listUi /
  *    listActions / invokeAction / prepareAction / setConfig。
  */
-export interface PluginHostBackend {
+export interface PluginHostBackend
+  extends Pick<
+    HelmHostApi,
+    | 'profiles'
+    | 'dispatchTrigger'
+    | 'submitInput'
+    | 'createConversation'
+    | 'listConversations'
+    | 'getConversation'
+    | 'getConversationDetail'
+    | 'updateConversation'
+    | 'abortConversation'
+    | 'getConversationOwnership'
+    | 'getConversationActivity'
+    | 'markConversationOwnership'
+    | 'buildSpawnEnv'
+    | 'spawnAgent'
+    | 'runGate'
+    | 'resolveSpawnTarget'
+    | 'listActiveSpawnExecutions'
+    | 'inspectNodePathUsage'
+    | 'withFileLock'
+    | 'atomicWriteFile'
+    | 'redact'
+    | 'refreshModels'
+    | 'completeText'
+    | 'executionEnv'
+    | 'execEnv'
+    | 'withFileMutationQueue'
+    | 'listArtifacts'
+    | 'getArtifact'
+    | 'createAsk'
+    | 'cancelAsk'
+    | 'registerAskSeqResolver'
+    | 'onEvent'
+    | 'emitEvent'
+  > {
   /** 宿主关闭状态（ctx.host.isClosing getter 的来源）。 */
   isClosing(): boolean
-  /** Profile 数据端口（与 HelmHostApi.profiles 同形）。 */
-  profiles: HelmHostApi['profiles']
   /** 技能数据端口；ensureSkill 额外携带调用方 pluginId（受管登记归属）。 */
-  skills: Omit<HelmHostApi['skills'], 'ensureSkill'> & {
+  skills: Pick<HelmHostApi['skills'], 'list' | 'readFile' | 'directory'> & {
     ensureSkill(asset: PluginSkillAsset, pluginId: string): Promise<void>
   }
   /** 插件私有 secrets 后端（PluginHost 在此之上包装 pluginId 命名空间）。 */
@@ -105,14 +126,6 @@ export interface PluginHostBackend {
    * PluginPackageManager 既有公共方法。
    */
   plugins?: BackendPluginsLifecyclePort
-
-  // ---- 触发与输入（与 HelmHostApi 同形；guarded 端口可选接线） ----
-  dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>
-  submitInput(
-    conversationId: number,
-    text: string,
-    opts?: Parameters<HelmHostApi['submitInput']>[2],
-  ): Promise<void>
   /** 自动化 guarded 提交（内核原子守卫端口）：未接线时 ctx.host 调用显式 501，绝不静默回退普通 submitInput。 */
   submitInputGuarded?(
     conversationId: number,
@@ -120,83 +133,10 @@ export interface PluginHostBackend {
     opts?: Parameters<HelmHostApi['submitInputGuarded']>[2],
     guard?: GuardedMutationExpectation,
   ): Promise<void>
-
-  // ---- 会话（与 HelmHostApi 同形） ----
-  createConversation(init: ConversationInit): Promise<ConversationSummary>
-  listConversations(filter?: ConversationListFilter): ConversationSummary[]
-  getConversation(id: number): ConversationSummary
-  getConversationDetail(id: number, options?: { limit?: number; cursor?: string }): Promise<ConversationDetail>
-  updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
-  abortConversation(id: number): Promise<void>
   /** 自动化 guarded 中止（含调度器 paused 相位的持久标记路径）；未接线时显式 501，绝不静默回退普通 abortConversation。 */
   abortConversationGuarded?(id: number, guard: GuardedMutationExpectation): Promise<void>
-  getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
-  getConversationActivity(id: number): ConversationActivity
   /** 声明 pluginId 对会话的管理权；返回释放函数（受管期间删除保护）。 */
   manageConversation(id: number, pluginId: string): () => void
-  markConversationOwnership(id: number, owner: 'helm' | 'bot' | 'human'): void
-
-  // ---- 子代理与执行环境（与 HelmHostApi 同形） ----
-  buildSpawnEnv(
-    conversationId: number,
-    cwd: string,
-    nodeId: string,
-    options?: { secretNames?: string[] },
-  ): Record<string, string>
-  spawnAgent(request: AgentSpawnRequest): Promise<unknown>
-  runGate(
-    command: string,
-    options?: {
-      cwd?: string
-      conversationId?: number
-      nodeId?: string
-      signal?: AbortSignal
-      env?: Record<string, string>
-    },
-  ): Promise<{ ok: boolean; output: string }>
-  resolveSpawnTarget(input: {
-    parentConversationId: number
-    profileId?: string
-    requestCwd?: string
-  }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }>
-  listActiveSpawnExecutions(): AgentExecutionInfo[]
-  inspectNodePathUsage(input: {
-    nodeId: string
-    path: string
-    signal?: AbortSignal
-  }): Promise<NodePathUsage>
-
-  // ---- 文件机制 / 环境执行 / 产物 / 补全（与 HelmHostApi 同形） ----
-  withFileLock<T>(path: string, fn: () => Promise<T>, opts?: { signal?: AbortSignal }): Promise<T>
-  atomicWriteFile(path: string, content: string): Promise<void>
-  redact(text: string): string
-  refreshModels(options?: Parameters<HelmHostApi['refreshModels']>[0]): Promise<ModelProvidersRefreshResult>
-  completeText(input: Parameters<HelmHostApi['completeText']>[0]): Promise<string>
-  executionEnv(nodeId: string, cwd: string): ExecutionEnv
-  execEnv(
-    req: Omit<EnvExecRequest, 'stream'>,
-    opts?: { signal?: AbortSignal },
-  ): Promise<EnvExecResponse>
-  withFileMutationQueue<T>(
-    target: { nodeId: string; cwd: string; path: string },
-    fn: () => Promise<T>,
-    opts?: { signal?: AbortSignal },
-  ): Promise<T>
-  listArtifacts(conversationId: number): Promise<ArtifactMetadata[]>
-  getArtifact(
-    artifactId: string,
-    conversationId: number,
-  ): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }>
-
-  // ---- Ask 与事件（与 HelmHostApi 同形） ----
-  createAsk(spec: AskCreateSpec): Promise<AskResult>
-  cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>
-  /** 注册 askId -> 当前 stateChangeSeq 解析器；返回注销函数。 */
-  registerAskSeqResolver(
-    resolver: (askId: string) => MaybePromise<number | undefined>,
-  ): () => void
-  onEvent(type: string, listener: (payload: unknown) => void): () => void
-  emitEvent(type: string, payload: unknown, options?: { broadcast?: boolean }): void
 }
 
 export interface PluginHostOptions {
