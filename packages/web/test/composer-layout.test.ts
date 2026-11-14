@@ -239,8 +239,8 @@ test('工具栏仅保留左右两组，模型归入左组，避免三个子项�
 test('思考档位合并进模型浮层：按钮组切换，当前档位随模型短名展示', { timeout: 60_000 }, () => {
   assert.match(source, /composer-model-level/)
   assert.match(source, /onPick=\{\(level\) => void pickThinking\(level\)\}/)
-  // 浮层内档位行为分段按钮组（默认 + 各档位），主按钮态表达当前选择（共享 ThinkingLevelControl）
-  assert.match(thinkingControlSource, /跟随模型 \/ Profile 默认档位/)
+  // 浮层内纯实体档位分段按钮组（对齐 Pi Agent，无默认伪档位），所见即所得（共享 ThinkingLevelControl）
+  assert.match(thinkingControlSource, /levels\.map/)
   assert.match(thinkingControlSource, /composer-thinking-row/)
 })
 

@@ -416,6 +416,7 @@ export interface HelmStoreValue {
   /** 静态资产（角色/模型/技能等）本轮会话是否已完成首次加载（待命页区分加载中与不存在）。 */
   assetsLoaded: boolean
   models: ModelDescriptor[]
+  defaultModelInfo?: { defaultModel: string; defaultThinkingLevel: string } | null
   providers: ProviderConfig[]
   credentials: CredentialSummary[]
   skills: SkillSummary[]

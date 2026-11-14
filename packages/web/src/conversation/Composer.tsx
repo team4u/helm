@@ -162,25 +162,34 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
     }
   }
 
+  const resetToProfileDefault = async (): Promise<void> => {
+    setOpen(false)
+    setPending(true)
+    try {
+      await conversationsApi.patch(conversation.id, { model: '', thinkingLevel: '' })
+    } catch (err) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '恢复默认配置失败',
+        body: err instanceof Error ? err.message : String(err),
+        conversationId: conversation.id,
+      })
+    } finally {
+      setPending(false)
+    }
+  }
+
   const rawShortName = conversation.model.split('/').pop() ?? conversation.model
   const shortName = rawShortName.trim() !== '' ? rawShortName : '默认模型'
   const currentModel = store.models.find((model) => model.id === conversation.model)
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
-  // 徽章以内核生效档位（conversation.thinkingLevel）为唯一权威：目标目录明确
-  // 不支持该值时隐藏徽章（off / 目录缺失同样隐藏），不用 override 抢优先。
+  // 生效档位与展示：优先取当前会话实际生效档位；若不在当前模型支持列表中，则回退至 off 或首项支持档位。
   const activeLevel = conversation.thinkingLevel
-  const showLevel = supportsThinking && activeLevel !== '' && activeLevel !== 'off' && currentLevels.includes(activeLevel)
-  // 控件选中态优先级：受支持的 override > 旧 override 不被目录支持但生效档
-  // 受支持时选生效档 > 「默认」（跟随继承链；无 override 恒选默认）。
-  const selectedLevel =
-    conversation.thinkingLevelOverride !== undefined
-      ? currentLevels.includes(conversation.thinkingLevelOverride)
-        ? conversation.thinkingLevelOverride
-        : activeLevel !== '' && activeLevel !== 'off' && currentLevels.includes(activeLevel)
-          ? activeLevel
-          : ''
-      : ''
+  const fallbackLevel = currentLevels.includes('off') ? 'off' : (currentLevels[0] ?? '')
+  const effectiveLevel = currentLevels.includes(activeLevel) ? activeLevel : fallbackLevel
+  const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
 
   return (
     <span className="composer-picker-root" ref={rootRef}>
@@ -191,12 +200,12 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
             className="btn btn-ghost btn-sm composer-model-button"
             disabled={pending}
             aria-expanded={open}
-            aria-label={`模型与思考档位：${shortName}${showLevel ? ` · ${activeLevel}` : ''}`}
-            title={`当前模型：${conversation.model}${showLevel ? ` · 思考 ${activeLevel}` : ''}`}
+            aria-label={`模型与思考档位：${shortName}${showLevel ? ` · ${effectiveLevel}` : ''}`}
+            title={`当前模型：${conversation.model}${showLevel ? ` · 思考 ${effectiveLevel}` : ''}`}
           >
             {pending ? <HelmIcon name="loader" size={12} className="spin-slow" /> : null}
             <span className="composer-model-label">{shortName}</span>
-            {showLevel ? <span className="composer-model-level">· {activeLevel}</span> : null}
+            {showLevel ? <span className="composer-model-level">· {effectiveLevel}</span> : null}
             <HelmIcon name="chevron-down" size={12} />
           </button>
         </PopoverTrigger>
@@ -210,7 +219,7 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
             <button
               type="button"
               className="popover-item"
-              onClick={() => void pick('')}
+              onClick={() => void resetToProfileDefault()}
               title="清除显式覆盖，重算 Profile/全局继承链"
             >
               跟随 Profile 默认（清除覆盖）
@@ -263,7 +272,7 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
                   <span style={{ color: 'var(--fg-subtle)' }}>{shortName}</span>
                 </div>
                 <ThinkingLevelControl
-                  value={selectedLevel}
+                  value={effectiveLevel}
                   levels={currentLevels}
                   disabled={pending}
                   onPick={(level) => void pickThinking(level)}

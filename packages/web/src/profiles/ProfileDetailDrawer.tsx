@@ -500,8 +500,6 @@ export function ProfileDetailDrawer({
                       value={form.thinkingLevel}
                       levels={profileThinkingLevels}
                       disabled={isSaving || isDeleting}
-                      defaultTitle="跟随全局缺省档位"
-                      defaultLabel="默认"
                       className="composer-thinking-row profile-thinking-row"
                       onPick={(level) =>
                         setForm((prev) => ({ ...prev, thinkingLevel: level }))
