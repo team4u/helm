@@ -55,11 +55,14 @@
  *   单文件 128KiB 上限）；fd 读取——fstat 与读取同一 fd，校验即所读内容；
  *   远端节点经 env RPC 的 canonicalPath/fileInfo/readTextFile（canonicalPath
  *   先解析软链，使 lstat 语义的 fileInfo 看到真实目标）；read 错误一律脱敏。
- * - write/edit 工具：写文本与精确替换（oldText 唯一匹配校验）；目标已存在时
+ * - write/edit 工具：写文本与精确替换（oldText 唯一匹配校验；newText 按
+ *   字面写入，不解释 String.replace 的 $& 系替换模式）；目标已存在时
  *   经 canonicalPath/realpath 解析到真实路径再写（软链别名写到真实文件，与
  *   互斥队列 key 对齐），新文件按词法绝对路径写入；读-改-写窗口经
  *   env/file-mutation-queue 与插件 API 共享同一目标节点 canonical 路径互斥队列
- *   （同文件不丢更新；详见该文件契约）。
+ *   （同文件不丢更新；详见该文件契约）。edit 成功的结构化输出在锁内、落盘
+ *   前基于实读内容计算真实行级差异（runtime/tool-edit-diff.ts 唯一实现，
+ *   local/远端共享；符合 @helm/protocol EDIT_TOOL_RESULT_SCHEMA）。
  * - spill 指引指向 read_artifact；分页 ≤4KiB 防同量 spill 循环；
  *   read_artifact 仅允许当前会话（含父会话授权链）产物，不接受任意路径。
  * - timeoutMs 必须为正有限整数且 ≤ 上限，非法值显式 invalid_timeout。
@@ -79,12 +82,15 @@ import { composeExecutionEnv, MANAGED_EXEC_ENV_VARS } from '../env/scoped-env.js
 import { envWithFileMutationQueue, localWithFileMutationQueue } from '../env/file-mutation-queue.js'
 import { redactJsonValue } from '../redact.js'
 import {
+  EDIT_TOOL_RESULT_SCHEMA,
   isAbsoluteTargetPath,
   normalizeTargetPath,
   targetPathShape,
+  type EditToolResult,
   type TargetPlatform,
 } from '@helm/protocol'
 import { invalidPathText, normalizePathForTarget, targetPlatformForNode } from './target-platform.js'
+import { computeEditDiff } from './tool-edit-diff.js'
 import type { HelmToolDeps } from './tool-deps.js'
 
 // 形状判定与词法规则子集（normalize/join/dirname/basename）已收口
@@ -1014,8 +1020,12 @@ const editParameters = obj({
 
 /**
  * edit 工具：精确文本替换。oldText 必须在目标文件中唯一精确匹配（不存在
- * 或出现多次均显式报错，绝不模糊替换或静默跳过）；替换后写回原文件；
- * 路径解析与 write 同契约（与 bash 同权，不设 cwd 沙箱）。
+ * 或出现多次均显式报错，绝不模糊替换或静默跳过）；newText 按字面替换写入
+ * （不解释 $& 系替换模式，与「精确替换」契约及差异展示一致）；替换后写回
+ * 原文件；路径解析与 write 同契约（与 bash 同权，不设 cwd 沙箱）。成功结构
+ * 化输出为 @helm/protocol EditToolResult：差异在 canonical 互斥锁内、写盘前
+ * 基于实读内容计算（computeEditDiff 抛错则 edit_failed 且文件未被修改），
+ * 仅在写入成功后返回。
  */
 export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof editParameters, never> {
   return defineTool({
@@ -1023,15 +1033,7 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
     description:
       '精确替换文件文本片段。oldText 必须在文件中恰好出现一次（不存在或多次出现均报错）；路径相对会话 cwd 解析，支持绝对路径与 ../ 跨目录访问（与 bash 同权）；会话绑定远端节点时在目标节点读取与写回。',
     parameters: editParameters,
-    structuredOutputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '实际编辑的绝对路径（canonical 解析后；非原始入参）' },
-        nodeId: { type: 'string', description: '实际编辑节点' },
-        replaced: { type: 'boolean' },
-      },
-      required: ['path', 'nodeId', 'replaced'],
-    } as never,
+    structuredOutputSchema: EDIT_TOOL_RESULT_SCHEMA as never,
     async execute(args, api, context) {
       const target0 = await resolveToolTarget(deps, api as never)
       if ('error' in target0) {
@@ -1086,14 +1088,33 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
                 isError: true,
               }
             }
-            const updated = readResult.value.replace(args.oldText, args.newText)
+            const content = readResult.value
+            const matchOffset = content.indexOf(args.oldText)
+            // 字面替换（不解释 $& 系模式）：落盘内容与差异计算输入严格同源。
+            const updated =
+              content.slice(0, matchOffset) +
+              args.newText +
+              content.slice(matchOffset + args.oldText.length)
+            // 差异在锁内、写盘前基于实读内容计算（纯函数；抛错则文件未被修改）。
+            const diff = computeEditDiff(
+              content,
+              updated,
+              matchOffset,
+              args.oldText.length,
+              deps.redact,
+            )
             const writeResult = await env.writeFile(target.abs, updated, context)
             if (!writeResult.ok) throw new Error(writeResult.error.message)
             return {
               output: [
                 { type: 'text', text: `edit_ok: ${target.abs}（节点 ${nodeId}，已替换 1 处）` },
               ],
-              structuredOutput: { path: target.abs, nodeId, replaced: true } as JsonValue,
+              structuredOutput: {
+                path: target.abs,
+                nodeId,
+                replaced: true,
+                diff,
+              } satisfies EditToolResult as unknown as JsonValue,
             }
           }, context)
         }
@@ -1145,13 +1166,31 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
               isError: true,
             }
           }
-          const updated = content.replace(args.oldText, args.newText)
+          const matchOffset = content.indexOf(args.oldText)
+          // 字面替换（不解释 $& 系模式）：落盘内容与差异计算输入严格同源。
+          const updated =
+            content.slice(0, matchOffset) +
+            args.newText +
+            content.slice(matchOffset + args.oldText.length)
+          // 差异在锁内、写盘前基于实读内容计算（纯函数；抛错则文件未被修改）。
+          const diff = computeEditDiff(
+            content,
+            updated,
+            matchOffset,
+            args.oldText.length,
+            deps.redact,
+          )
           await writeFile(target.abs, updated, 'utf8')
           return {
             output: [
               { type: 'text', text: `edit_ok: ${target.abs}（节点 ${nodeId}，已替换 1 处）` },
             ],
-            structuredOutput: { path: target.abs, nodeId, replaced: true } as JsonValue,
+            structuredOutput: {
+              path: target.abs,
+              nodeId,
+              replaced: true,
+              diff,
+            } satisfies EditToolResult as unknown as JsonValue,
           }
         }, context.abortSignal)
       } catch (error) {
