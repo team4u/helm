@@ -243,7 +243,7 @@
  * contain-intrinsic-size 的 auto 关键字优先沿用该行最近一次真实高度，
  * 从未渲染过的行按文本规模分桶估高占位，滚动经过时以真实高度纠正
  * （表现为滚动条长度轻微变化，属预期，不承诺零抖动）。
- * 仍在变化的行（live 流式回合、排队输入、未结算最新回合）与高亮 /
+ * live 流式回合、排队输入、最新 assistant 回合与高亮 /
  * 大纲定位目标行由 JS 侧解除隔离（不加这些类），保证测量与滚动定位精确。 */
 .tl-cv-xs { content-visibility: auto; contain-intrinsic-size: auto 48px; }
 .tl-cv-sm { content-visibility: auto; contain-intrinsic-size: auto 120px; }

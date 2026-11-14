@@ -829,21 +829,14 @@ function useHighlightScroll(
 ): (node: HTMLDivElement | null) => void {
   const store = useHelmStore()
   const h = store.highlightedEntry
-  const lastHandledRef = useRef<string | null>(null)
-  useEffect(() => { if (h === null) lastHandledRef.current = null }, [h])
-  return (node: HTMLDivElement | null): void => {
-    if (node === null || h === null) return
-    if (h.conversationId !== conversationId) return
-    const entryId = node.dataset.entryId
-    if (entryId !== h.entryId) return
-    const token = `${h.conversationId}:${h.entryId}`
-    if (lastHandledRef.current === token) return
-    lastHandledRef.current = token
+  // 稳定 ref 避免普通 rerender 重复定位；StrictMode 重新挂载 ref 时须重新
+  // 武装校准，因为首次挂载的任务已经由 effect cleanup 取消。
+  return useCallback((node: HTMLDivElement | null): void => {
+    if (node === null || h?.conversationId !== conversationId) return
+    if (node.dataset.entryId !== h.entryId) return
     node.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    // 搜索定位与大纲定位共用同一最终锚点校准（估高转真实高度的位移同样影响
-    // 此处），居中对齐按目标中心线校正。
     armCalibration(node, 'center')
-  }
+  }, [conversationId, h?.conversationId, h?.entryId, armCalibration])
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,7 +1079,7 @@ export function ConversationTimeline({
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(true)
   const lastScrollTopRef = useRef(0)
-  const lastHumanKeyRef = useRef<string | undefined>(undefined)
+  const lastHumanRef = useRef<{ conversationId: number; key: string | undefined } | null>(null)
   const lastOutlineTickRef = useRef<number | null>(null)
   const lastActiveEntryRef = useRef<string | undefined>(undefined)
   const outlineHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1100,6 +1093,12 @@ export function ConversationTimeline({
   // 不消费，重挂后可重新启动，避免一次性资格被 effect 重演提前耗尽。
   const initialBottomRef = useRef<{ active: boolean; consumed: boolean }>({ active: false, consumed: false })
 
+  const stopFollowingBottom = useCallback((): void => {
+    stickToBottomRef.current = false
+    initialBottomRef.current.consumed = true
+    if (activeCalibrationRef.current?.kind === 'initial-bottom') activeCalibrationRef.current.cancel()
+  }, [])
+
   // 启动最终锚点校准并接管在途任务（新定位/搜索高亮互斥，旧的立即 cancel）。
   // 行 ref 在 commit 阶段可能先于父级 scrollRef 挂载（子先于父），从目标自身
   // 向上定位滚动容器，不依赖 ref 挂载顺序。
@@ -1107,17 +1106,15 @@ export function ConversationTimeline({
     (target: HTMLElement, alignment: AnchorAlignment): void => {
       const scroller = target.closest<HTMLElement>('.timeline-scroll')
       if (scroller === null) return
-      // 显式定位优先于初始贴底：窗口资格就此消费，定位结束后不复活。
-      const prev = activeCalibrationRef.current
-      if (prev !== null && prev.kind === 'initial-bottom') initialBottomRef.current.consumed = true
-      prev?.cancel()
+      stopFollowingBottom()
+      activeCalibrationRef.current?.cancel()
       activeCalibrationRef.current = {
         conversationId: conversation.id,
         kind: 'anchor',
         cancel: calibrateAnchorAfterSmoothScroll({ scroller, target, alignment }),
       }
     },
-    [conversation.id],
+    [conversation.id, stopFollowingBottom],
   )
 
   const highlightScrollRef = useHighlightScroll(conversation.id, armScrollCalibration)
@@ -1158,11 +1155,7 @@ export function ConversationTimeline({
     if (!stickToBottomRef.current) return
     const scroller = scrollRef.current
     if (scroller === null) return
-    // 防御性接管：槽位占用者理论上不可能是初始窗口（active/consumed 守卫），
-    // 但取消动作必须在标记新窗口 active 之前完成，避免旧 onEnd 回调改写状态。
-    const prev = activeCalibrationRef.current
-    if (prev !== null && prev.kind === 'initial-bottom') initialBottomRef.current.consumed = true
-    prev?.cancel()
+    activeCalibrationRef.current?.cancel()
     state.active = true
     const cancel = calibrateInitialStickToBottom({
       scroller,
@@ -1265,11 +1258,11 @@ export function ConversationTimeline({
       lastScrollTopRef.current = top
     }
     const onWheel = (event: WheelEvent): void => {
-      if (event.deltaY < 0) stickToBottomRef.current = false
+      if (event.deltaY < 0) stopFollowingBottom()
     }
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home') {
-        stickToBottomRef.current = false
+        stopFollowingBottom()
       }
     }
     el.addEventListener('scroll', onScroll, { passive: true })
@@ -1280,7 +1273,7 @@ export function ConversationTimeline({
       el.removeEventListener('wheel', onWheel)
       el.removeEventListener('keydown', onKeyDown)
     }
-  }, [])
+  }, [stopFollowingBottom])
 
   // 视口当前阅读锚点追踪（供大纲浮层高亮）：IntersectionObserver 观察区域
   // 下缘收窄到「容器顶 + OUTLINE_ACTIVE_LINE_PX 基准线」，行相交 ⟺ 行顶已
@@ -1422,8 +1415,8 @@ export function ConversationTimeline({
   }, [isWorking, hasLiveTurn])
 
   useEffect(() => {
-    if (store.highlightedEntry?.conversationId === conversation.id) stickToBottomRef.current = false
-  }, [store.highlightedEntry, conversation.id])
+    if (store.highlightedEntry?.conversationId === conversation.id) stopFollowingBottom()
+  }, [store.highlightedEntry, conversation.id, stopFollowingBottom])
 
   const lastHumanKey = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
@@ -1445,13 +1438,13 @@ export function ConversationTimeline({
   // mount 不启动初始贴底窗口，避免硬上界在空白期被空转耗尽。
   const detailsReady = store.conversationDetails[conversation.id] !== undefined
   useEffect(() => {
-    if (lastHumanKey !== undefined && lastHumanKey !== lastHumanKeyRef.current) {
-      const isFirstRecord = lastHumanKeyRef.current === undefined
-      lastHumanKeyRef.current = lastHumanKey
-      // 挂载初始化只记录锚点、不强制贴底：搜索/大纲定位的 effect 与 ref
-      // callback 先于本 effect 运行并已释放贴底，此处拉回会把显式定位的
-      // 滚动目的地重新抢回底部（非挂载场景的新 human 消息仍重新贴底）。
-      if (!isFirstRecord) stickToBottomRef.current = true
+    if (detailsReady) {
+      const previous = lastHumanRef.current
+      // 初始化历史只记录锚点；已就绪的空会话随后首次发送仍是新增输入，须贴底。
+      if (previous?.conversationId === conversation.id && lastHumanKey !== undefined && lastHumanKey !== previous.key) {
+        stickToBottomRef.current = true
+      }
+      lastHumanRef.current = { conversationId: conversation.id, key: lastHumanKey }
     }
     const el = scrollRef.current
     if (el !== null && stickToBottomRef.current) {
@@ -1461,7 +1454,7 @@ export function ConversationTimeline({
     // 历史就绪后启动一次性初始贴底校准（窗口内部自守卫：已消费/在途/已释放
     // 贴底时不动作）；数据延迟就绪时由 detailsReady 依赖在本 effect 重启时启动。
     if (detailsReady) beginInitialBottomCalibration()
-  }, [contentFingerprint, lastHumanKey, detailsReady, beginInitialBottomCalibration])
+  }, [contentFingerprint, lastHumanKey, detailsReady, conversation.id, beginInitialBottomCalibration])
 
   const loading = !detailsReady
 
@@ -1485,7 +1478,7 @@ export function ConversationTimeline({
     <div ref={scrollRef} className="timeline-scroll">
       {store.conversationDetails[conversation.id]?.nextCursor && (
         <button className="btn btn-ghost btn-sm" disabled={loadingOlder} onClick={() => {
-          stickToBottomRef.current = false
+          stopFollowingBottom()
           const height = scrollRef.current?.scrollHeight ?? 0
           const top = scrollRef.current?.scrollTop ?? 0
           setLoadingOlder(true)

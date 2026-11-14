@@ -145,7 +145,7 @@ function setupClampedScroll(
       scrollTop = Math.max(0, Math.min(v, maxTop()))
     },
     setHeight: (v: number) => {
-      el.scrollHeight = v
+      Reflect.set(el, 'scrollHeight', v)
     },
   }
 }

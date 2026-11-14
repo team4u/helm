@@ -170,7 +170,7 @@ function setupClampedScroll(
       scrollTop = Math.max(0, Math.min(v, maxTop()))
     },
     setHeight: (v: number) => {
-      el.scrollHeight = v
+      Reflect.set(el, 'scrollHeight', v)
     },
   }
 }
@@ -204,6 +204,7 @@ interface RenderOpts {
   entries?: ConversationEntry[]
   /** store 是否携带 conversationDetails（false = 历史尚未就绪的 loading mount）。 */
   detailsReady?: boolean
+  nextCursor?: string
   highlightedEntry?: { conversationId: number; entryId: string } | null
   outlineScrollRequest?: OutlineScrollRequest | null
   strict?: boolean
@@ -214,7 +215,7 @@ async function renderTimeline(opts: RenderOpts = {}): Promise<void> {
   const entries = opts.entries ?? [humanEntry('1', '问'), assistantEntry('2', '答')]
   const store = makeTestStore({
     conversations: [conv],
-    ...(opts.detailsReady === false ? {} : { conversationDetails: { [conv.id]: { ...conv, entries } } }),
+    ...(opts.detailsReady === false ? {} : { conversationDetails: { [conv.id]: { ...conv, entries, ...(opts.nextCursor ? { nextCursor: opts.nextCursor } : {}) } } }),
     ...(opts.highlightedEntry !== undefined ? { highlightedEntry: opts.highlightedEntry } : {}),
   })
   host = document.createElement('div')
@@ -240,7 +241,7 @@ async function rerenderTimeline(opts: RenderOpts): Promise<void> {
   const entries = opts.entries ?? [humanEntry('1', '问'), assistantEntry('2', '答')]
   const store = makeTestStore({
     conversations: [conv],
-    ...(opts.detailsReady === false ? {} : { conversationDetails: { [conv.id]: { ...conv, entries } } }),
+    ...(opts.detailsReady === false ? {} : { conversationDetails: { [conv.id]: { ...conv, entries, ...(opts.nextCursor ? { nextCursor: opts.nextCursor } : {}) } } }),
     ...(opts.highlightedEntry !== undefined ? { highlightedEntry: opts.highlightedEntry } : {}),
   })
   const timeline = e(
@@ -420,7 +421,7 @@ test('合法空会话：窗口正常收敛退出，无写入、不空转', { tim
 // 显式定位优先（含首次已有 human entry 与 StrictMode）
 // ---------------------------------------------------------------------------
 
-test('搜索高亮优先（StrictMode + 首次已有 human entry）：无任何初始置底写入抢走定位', { timeout: 60_000 }, async () => {
+test('搜索高亮优先（StrictMode）：重挂后继续居中校准，普通 rerender 不重复定位', { timeout: 60_000 }, async () => {
   const raf = installManualRaf()
   const scrollIntoViewCalls = stubScrollIntoView()
   await renderTimeline({
@@ -430,22 +431,25 @@ test('搜索高亮优先（StrictMode + 首次已有 human entry）：无任何�
   const scroller = host!.querySelector<HTMLElement>('.timeline-scroll')!
   const mock = setupClampedScroll(scroller, { scrollHeight: 2000, clientHeight: 800, scrollTop: 0 })
 
-  // 定位目标行触发 scrollIntoView（ref callback，重演守卫下恰好一次）
   const calls = scrollIntoViewCalls()
-  assert.equal(calls.length, 1, '高亮目标行恰好定位一次')
+  assert.ok(calls.length >= 2, 'StrictMode 重挂重新武装已被 cleanup 取消的搜索校准')
   assert.equal(calls[0]!.dataset.entryId, '2')
+  assert.equal(mock.writes.length, 0, '首次 human 记录不抢走定位')
 
-  // 关键回归：lastHumanKey 初始化 effect 不得重新贴底抢走定位
-  assert.equal(mock.writes.length, 0, '无任何初始置底写入')
-  raf.flush(30)
-  assert.equal(mock.writes.length, 0, '校准帧循环期间也不置底')
+  const row = host!.querySelector<HTMLElement>('[data-entry-id="2"]')!
+  scroller.getBoundingClientRect = () => ({ top: 0, height: 800 } as DOMRect)
+  row.getBoundingClientRect = () => ({ top: 500 - mock.top(), height: 200 } as DOMRect)
+  raf.flush(4)
+  assert.equal(mock.top(), 200, '重挂后仍运行校准，将目标中心对齐视口中心')
+  assert.deepEqual(mock.writes, [200], '只做目标对齐，不写入底部 1200')
+  raf.flush(60)
 
-  // 窗口从未启动：高度增长不触发追底
+  const callCount = calls.length
+  await rerenderTimeline({ strict: true, highlightedEntry: { conversationId: 10, entryId: '2' } })
+  assert.equal(calls.length, callCount, '同一定位目标的普通 rerender 不重复定位')
   mock.setHeight(2500)
   raf.flush(10)
-  assert.equal(mock.writes.length, 0)
-  assert.equal(mock.top(), 0, '位置保持在定位前（scrollIntoView 已被 stub）')
-  const row = host!.querySelector<HTMLElement>('[data-entry-id="2"]')!
+  assert.deepEqual(mock.writes, [200], '显式定位已消费初始窗口，不再追底')
   assert.match(row.className, /entry-highlighted/, '高亮类存在')
 })
 
@@ -472,6 +476,42 @@ test('大纲定位优先（StrictMode）：定位目的地不被初始贴底抢�
   raf.flush(10)
   assert.equal(mock.writes.length, 0, '窗口未启动：后续高度变化不追底')
   assert.equal(mock.top(), 0)
+})
+
+test('键盘激活加载更早消息：主动取消初始校准，历史补偿完成后不再被拉回', { timeout: 60_000 }, async () => {
+  const raf = installManualRaf()
+  await renderTimeline({ nextCursor: 'older' })
+  const scroller = host!.querySelector<HTMLElement>('.timeline-scroll')!
+  const mock = setupClampedScroll(scroller, { scrollHeight: 2000, clientHeight: 800, scrollTop: 0 })
+  raf.flush(4)
+  mock.setTopSilent(300)
+
+  const button = Array.from(scroller.querySelectorAll('button')).find((el) => el.textContent === '加载更早的消息')!
+  assert.ok(button, '历史分页按钮存在')
+  await act(async () => {
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    button.click()
+  })
+  raf.flush(2)
+  assert.equal(mock.top(), 300, '分页后的历史位置补偿保留阅读位置')
+  mock.setHeight(2600)
+  raf.flush(20)
+  assert.equal(mock.top(), 300, '无 pointerdown 的键盘激活也能取消初始 rAF 追底')
+})
+
+test('空会话首次发送：即使曾向上滚轮，新增 human 输入仍恢复工作态跟底', { timeout: 60_000 }, async () => {
+  const raf = installManualRaf()
+  await renderTimeline({ entries: [] })
+  const scroller = host!.querySelector<HTMLElement>('.timeline-scroll')!
+  const mock = setupClampedScroll(scroller, { scrollHeight: 500, clientHeight: 800, scrollTop: 0 })
+  scroller.dispatchEvent(wheelUpEvent())
+  mock.setHeight(2000)
+  await rerenderTimeline({ conv: makeConv(10, { status: 'working' }) })
+  assert.equal(mock.top(), 1200, '历史已就绪后的首条 human 是新增输入，重新贴底')
+  mock.setHeight(2200)
+  innerResizeObserver().trigger()
+  raf.flush(10)
+  assert.equal(mock.top(), 1400, '工作态后续增长继续跟随')
 })
 
 // ---------------------------------------------------------------------------
