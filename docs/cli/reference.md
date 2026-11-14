@@ -195,7 +195,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helm cron list / create / delete / trigger` | builtin:triggers | cron 任务管理；create 必填 `--id --schedule --text`（标准五字段，timezone 默认 UTC），支持 `--target-conversation-id` / `--target-profile-id` / `--thread-key` 定向 |
 | `helm webhook create / list / delete` | builtin:triggers | webhook 端点管理（HMAC-SHA256 验签）；create 必填 `--id --secret`，secret 仅允许人工 HTTP/CLI 配置 |
 | `helm herdr list / read / focus` | builtin:herdr | 窗格管理；read 返回 40 行脱敏终端尾部快照，`--node-id` 消歧跨节点同 ID（歧义 409） |
-| `helm herdr steer` | builtin:herdr | 向受管且由 workflow run 派生的窗格插话（`--execution-id` `--node-id` `--workflow-run-id` `--parent-conversation-id` `--text`）。需服务端 `ping` 通告 `agent_prompt_guard_v1` 原子守卫能力，未通告 fail-closed 拒绝（当前历史 Herdr 服务端不提供）；通常用 `helm workflows steer <runId> --text` 自动路由，勿手动拼坐标 |
+| `helm herdr steer` | builtin:herdr | 向受管且由 workflow run 派生的窗格插话（`--execution-id` `--node-id` `--workflow-run-id` `--parent-conversation-id` `--text`）。使用现有 `agent.prompt`，`guardLevel=preflight` 表示发送前检查，不要求新增服务端能力；通常用 `helm workflows steer <runId> --text` 自动路由，勿手动拼坐标 |
 | `helm superagent <action>` | builtin:superagent | `dispatch_worker / inspect_worker / recall_context / subscribe_thread / archive_worker / set_router_mode` 等 |
 | `helm magpie status / refresh / quota / groups` | builtin:magpie | Magpie 网关状态、目录刷新、配额查询与路由组列表 |
 

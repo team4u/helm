@@ -30,7 +30,7 @@
 | 执行体 | 派生机制 | 深度登记 | 结果回传 |
 | :--- | :--- | :--- | :--- |
 | 原生 Profile 子会话 | 内核 `spawnAgent` 管道（`agent_spawn` Hook） | 进 `subagent-conversations` 登记表，受嵌套深度契约约束；支持 `resume` 续接 | 同步等待最终结果；后台经下文幂等汇报链投递父会话 |
-| 外部 Herdr Profile（`herdr:<kind>` 前缀或 `runtime.kind: 'herdr'` 的 Profile） | `builtin:herdr` 拦截 `agent_spawn`，在终端窗格执行并通过文件交接回传 | 派生入口检查调用方深度；窗格没有原生 `conversationId`，不登记为子会话 | 后台终态同样汇报父会话；`onResolved` 回传 `controls.steer`，`workflow.steer` 据此委托 `builtin:herdr` 的 steer 动作（需服务端 `agent_prompt_guard_v1` 拟议原子守卫能力，未通告则 fail-closed 显式拒绝，当前历史 Herdr 服务端不提供）；`resume` 仅适用于仍存在且空闲的执行 |
+| 外部 Herdr Profile（`herdr:<kind>` 前缀或 `runtime.kind: 'herdr'` 的 Profile） | `builtin:herdr` 拦截 `agent_spawn`，在终端窗格执行并通过文件交接回传 | 派生入口检查调用方深度；窗格没有原生 `conversationId`，不登记为子会话 | 后台终态同样汇报父会话；`onResolved` 回传 `controls.steer`，`workflow.steer` 据此委托 `builtin:herdr` 的 steer 动作（使用现有 `agent.prompt`，返回 `guardLevel=preflight`，不要求新增服务端能力）；`resume` 仅适用于仍存在且空闲的执行 |
 | SuperAgent Worker | `builtin:superagent` 的 `dispatch_worker`：`createConversation`（不经 spawn 管道） | 不进登记表、不受深度契约约束 | 插件自有非阻塞协议：派工立即返回 `workerConversationId`、绝不同步等待；汇报走独立 `turn_settled` → 中枢路由链。它不是 `subagent` 的 `background` 参数，两者不得混用 |
 | fork / 人工会话 | 人类在 Web/CLI 直接创建或 fork 既有会话 | 不进登记表、不受深度限制 | 就是普通会话；人类直连（human-owned）即适用「缺省后台」策略 |
 
@@ -58,7 +58,7 @@
 | `runs` | `helm workflows runs` | 列出运行记录；支持 `conversationId` 过滤，CLI `--current` 缺省按当前会话过滤 |
 | `inspect` | `helm workflows inspect <runId>` | 查看单个运行详情（含节点状态与进度时间线；已保存定义发起的 run 携带 `savedName`） |
 | `abort` | `helm workflows abort <runId>` | 中止运行中的工作流或后台子代理 |
-| `steer` | `helm workflows steer <runId> --text "<指导>"` | 向在途后台子代理插话；只允许发起会话或其祖先控制。原生节点按归属与 CAS 水位经内核 guarded 端口提交；外部执行（如 Herdr 窗格）按节点 `controls.steer` 动态委托对应插件动作，要求服务端原子守卫（`guardLevel=cas`），未通告守卫能力的目标显式拒绝。已结束模型回合、human 归属、DSL 工作流、混合候选歧义均显式拒绝；`steered=true` 仅代表投递成功，不代表指导已执行完成；同步获得 HTTP、CLI、模型工具与 `run_action` 入口 |
+| `steer` | `helm workflows steer <runId> --text "<指导>"` | 向在途后台子代理插话；只允许发起会话或其祖先控制。原生节点按归属与 CAS 水位经内核 guarded 端口提交；外部执行按节点 `controls.steer` 动态委托插件动作，如实返回 `preflight`（发送前预检）或 `cas`（提交点原子复核）；Herdr 使用现有 `agent.prompt`，预检与投递之间刚变 idle 时允许接续一轮。原生已结束模型回合、human 归属、DSL 工作流、混合候选歧义均显式拒绝；`steered=true` 仅代表投递成功，不代表指导已执行完成；同步获得 HTTP、CLI、模型工具与 `run_action` 入口 |
 | `cleanup_worktree` | `helm worktrees cleanup` | 与工具同款语义；选择器三择一互斥，`--force` 清理脏工作树（不可越过占用/归属/locked 校验） |
 | `list_worktrees` | `helm worktrees list` | 列出受管工作树登记（含已清理记录的元数据；新建在前） |
 | `inspect_worktree` | `helm worktrees inspect <worktreeId>` | 只读检视受管工作树：登记元数据 + 目标节点真实 git 只读探测（未提交文件清单、领先基线提交数、diff 统计与有上限预览）；仅登记记录可检视，不支持任意目录；已清理/目录缺失如实返回 `unavailableReason`，git 失败显式报错（附截断诊断，绝不静默当成功）；diff 固定 `--no-ext-diff --no-textconv` 且仅覆盖 tracked 改动（untracked 文件内容不进 diff，仍完整见于状态清单与 `dirtyFileCount` 真实总数）；预览/统计/状态清单在采集阶段即限内存，超出置 `diffTruncated`/`dirtyFilesTruncated` 或统计末尾截断说明，不假装完整；成功输出与错误诊断均经机密脱敏 |

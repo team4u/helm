@@ -491,6 +491,21 @@ describe('steerBackgroundSubagent 纯逻辑（外部委托路径）', () => {
     assert.equal(p.submitted.length, 0, '外部路径不得触发原生子会话提交')
   })
 
+  it('外部 preflight 结果如实透传，不能升级标记为 CAS', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_ext', externalRun())
+    p.invokeBehavior = () => ({
+      steered: true, executionId: 'ws:p9', nodeId: 'local',
+      stateChangeSeq: 17, ownership: 'helm', guardLevel: 'preflight',
+    })
+    const out = await steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: '补充指导' }, { conversationId: 1 })
+    assert.equal(out.targetKind, 'external')
+    assert.equal(out.guardLevel, 'preflight')
+    assert.equal(out.stateChangeSeq, 17)
+    assert.equal(p.delegations.length, 1)
+    assert.equal(p.submitted.length, 0)
+  })
+
   it('人工 HTTP/CLI（无会话上下文）可委托外部执行', timeout, async () => {
     const p = makePurePorts()
     p.runs.set('wf_ext', externalRun())
@@ -600,7 +615,8 @@ describe('steerBackgroundSubagent 纯逻辑（外部委托路径）', () => {
       ['executionId 不一致', { steered: true, executionId: 'ws:other', nodeId: 'local', stateChangeSeq: 1, ownership: 'helm', guardLevel: 'cas' }],
       ['nodeId 不一致', { steered: true, executionId: 'ws:p9', nodeId: 'node-x', stateChangeSeq: 1, ownership: 'helm', guardLevel: 'cas' }],
       ['ownership 非 helm', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'bot', guardLevel: 'cas' }],
-      ['guardLevel 非 cas', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'helm', guardLevel: 'preflight' }],
+      ['guardLevel 非法', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'helm', guardLevel: 'none' }],
+      ['guardLevel 缺失', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'helm' }],
       ['seq 负数', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: -1, ownership: 'helm', guardLevel: 'cas' }],
       ['seq 非整数', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1.5, ownership: 'helm', guardLevel: 'cas' }],
       ['seq 缺失', { steered: true, executionId: 'ws:p9', nodeId: 'local', ownership: 'helm', guardLevel: 'cas' }],
@@ -644,7 +660,7 @@ describe('steerBackgroundSubagent 纯逻辑（外部委托路径）', () => {
     let attempts = 0
     p.invokeBehavior = () => {
       attempts += 1
-      throw new HelmError('herdr_timeout', 'guard prompt 响应超时（投递结果不确定）', 504)
+      throw new HelmError('herdr_timeout', 'prompt 响应超时（投递结果不确定）', 504)
     }
     await rejectsWith(
       () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, {}),
@@ -660,7 +676,13 @@ describe('parseExternalSteerResult（独立边界校验）', () => {
   it('合法产物通过并提取水位', timeout, () => {
     assert.deepEqual(
       parseExternalSteerResult({ steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 3, ownership: 'helm', guardLevel: 'cas' }, expected),
-      { stateChangeSeq: 3 },
+      { stateChangeSeq: 3, guardLevel: 'cas' },
+    )
+  })
+  it('preflight 产物通过且保留预检级别', timeout, () => {
+    assert.deepEqual(
+      parseExternalSteerResult({ steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 4, ownership: 'helm', guardLevel: 'preflight' }, expected),
+      { stateChangeSeq: 4, guardLevel: 'preflight' },
     )
   })
   it('坏产物显式拒绝', timeout, () => {
