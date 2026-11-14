@@ -75,6 +75,7 @@ function makeBackend(over: {
     async resolveSpawnTarget() { throw new HelmError('unsupported', 'fixture 不解析 spawn 靶点', 501) },
     listActiveSpawnExecutions: () => [],
     async probeNodeFs() { throw new HelmError('unsupported', 'fixture 不探测节点 fs', 501) },
+    async inspectNodePathUsage() { throw new HelmError('unsupported', 'fixture 不扫描进程占用', 501) },
     redactText: (text: string) => text,
     profiles: {
       list: async () => [{ id: 'assistant' }] as never,

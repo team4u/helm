@@ -537,6 +537,7 @@ export function wrapHostApi(
         }, opts),
       ),
     probeNodeFs: (input) => tracked('host.probeNodeFs', () => backend.probeNodeFs(input)),
+    inspectNodePathUsage: (input) => tracked('host.inspectNodePathUsage', () => backend.inspectNodePathUsage(input)),
 
     // 7. triggers & inputs
     dispatchTrigger: (event) => {

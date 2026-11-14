@@ -229,6 +229,7 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     async resolveSpawnTarget() { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) },
     listActiveSpawnExecutions: () => [],
     async probeNodeFs() { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) },
+    async inspectNodePathUsage() { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     prepareInterruptedConversations: async () => {},

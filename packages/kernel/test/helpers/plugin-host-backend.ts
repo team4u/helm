@@ -256,6 +256,13 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.probeNodeFs')
   }
 
+  inspectNodePathUsage(
+    ...args: Parameters<Port<'inspectNodePathUsage'>>
+  ): ReturnType<Port<'inspectNodePathUsage'>> {
+    void args
+    unsupported('host.inspectNodePathUsage')
+  }
+
   redactText(...args: Parameters<Port<'redactText'>>): ReturnType<Port<'redactText'>> {
     void args
     unsupported('host.redactText')
@@ -380,6 +387,7 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
     resolveSpawnTarget: f(d.resolveSpawnTarget),
     listActiveSpawnExecutions: f(d.listActiveSpawnExecutions),
     probeNodeFs: f(d.probeNodeFs),
+    inspectNodePathUsage: f(d.inspectNodePathUsage),
     redactText: f(d.redactText),
     invokeAction: f(d.invokeAction),
     listActions: f(d.listActions),

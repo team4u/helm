@@ -223,6 +223,44 @@ export interface RpcFileInfo {
   mtimeMs: number
 }
 
+/**
+ * 单个引用目标路径的进程事实（删除前快照；只含定位信息）。
+ * 刻意不含 cmdline / environ / argv——命令行与环境变量常携带机密，
+ * 占用判定只需要 PID、进程名与引用路径（cwd / 打开文件）。
+ */
+export interface NodePathUsageProcess {
+  pid: number
+  /** 进程名（Linux /proc/<pid>/comm，世界可读；读取失败时缺省）。 */
+  name?: string
+  /** 引用来源：cwd（进程工作目录在目标路径内）| fd（打开的文件/目录在目标路径内）。 */
+  source: 'cwd' | 'fd'
+  /** 引用方的绝对路径（cwd 或 fd 指向的真实路径；已删除文件可能带 " (deleted)" 后缀）。 */
+  path: string
+}
+
+/**
+ * 目标绝对路径在节点上的进程占用快照（删除前诊断面，非跨进程互斥）。
+ *
+ * 诚实性纪律：`complete=false` 表示扫描不完整（存在无权读取的 PID 或扫描
+ * 上限触发），消费方必须 fail-closed——绝不能当 0 占用；`diagnostics`
+ * 携带人类可读的不完整原因（如被拒 PID 与属主 uid）。快照只是删除前
+ * 的一次性观测：扫描之后新启动的进程不在保护范围内（并发竞争如实存在）。
+ */
+export interface NodePathUsage {
+  /** 探测的绝对路径（调用方入参原样回显）。 */
+  path: string
+  /** 命中进程清单（上限截断见 processesTruncated；matchedTotal 保留真实计数）。 */
+  processes: NodePathUsageProcess[]
+  /** 命中进程真实总数（不受 processes 截断影响）。 */
+  matchedTotal: number
+  /** processes 清单是否因报告上限被截断（matchedTotal 仍是真值）。 */
+  processesTruncated: boolean
+  /** false = 扫描不完整；绝不能当 0 占用。 */
+  complete: boolean
+  /** 不完整原因（人类可读诊断；如 "pid 123 (uid 0): EACCES"）。 */
+  diagnostics: string[]
+}
+
 export interface RpcTextLine {
   text: string
   terminated: boolean
@@ -367,6 +405,16 @@ export interface NodeEnvRpcFunctions {
   }): Promise<RpcResult<{ entries: { path: string; kind: RpcFileKind }[]; truncated: boolean }>>
   envCanonicalPath(input: { path: string; cwd?: string }): Promise<RpcResult<string>>
   envExists(input: { path: string; cwd?: string }): Promise<RpcResult<boolean>>
+
+  /**
+   * 节点本机进程占用快照（目标绝对路径的 cwd + 打开 fd 引用扫描；只读
+   * 诊断面，进程内直接执行、绝不 spawn 扫描 helper）。只采集定位信息
+   * （PID/进程名/引用路径），不读 cmdline/environ。平台不支持（非 Linux
+   * /proc）显式 not_supported；存在无权读取的 PID 时 complete=false（绝不
+   * 假装完整）。旧版守护进程无本方法（optional）：调用方必须显式失败，
+   * 绝不静默回退本机扫描。升级排空不拒绝（与文件只读操作同口径）。
+   */
+  envPathUsage?(input: { path: string }): Promise<RpcResult<NodePathUsage>>
 
   envCreateDir(input: { path: string; recursive?: boolean; cwd?: string }): Promise<RpcResult<null>>
   envRemove(input: { path: string; recursive?: boolean; force?: boolean; cwd?: string }): Promise<RpcResult<null>>

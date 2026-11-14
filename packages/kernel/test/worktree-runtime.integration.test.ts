@@ -43,6 +43,22 @@ import assert from 'node:assert/strict'
 import { createHelm } from '../src/app.js'
 import { createHubHandler } from '../src/http/index.js'
 
+/**
+ * 平台事实：进程占用扫描当前仅 Linux /proc。非 Linux 上 cleanup 在进程检查处
+ * 显式拒绝（worktree_process_check_failed）——测试契约按平台如实分叉，
+ * 不伪造 complete=true、不静默跳过（跨平台显式拒绝是当前行为限制）。
+ */
+const PROCESS_SCAN_ON = process.platform === 'linux'
+
+/** 非 Linux 平台断言 cleanup 显式拒绝（不伪造 0 占用）。 */
+async function assertCleanupPlatformRejected(fn: () => Promise<unknown>): Promise<void> {
+  await assert.rejects(fn, (err: unknown) => {
+    assert.ok(err instanceof HelmError)
+    assert.equal(err.code, 'worktree_process_check_failed', '非 Linux 平台：进程占用扫描不支持，cleanup 必须显式拒绝')
+    return true
+  })
+}
+
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
@@ -239,16 +255,21 @@ describe('builtin:worktree 隔离派生（agent_spawn continuation）', { timeou
 
       // ---- 清理（builtin:workflow 公开动作；默认保留分支）。----
       // 未提交产物在树内：显式 force 丢弃（非 force 脏拒绝由 native-worktree 专项覆盖）。
-      const cleaned = await env.invoke.cleanupWorktree({
-        conversationId: resolved!.conversationId,
-        force: true,
-      })
-      assert.equal(cleaned.removed, true)
-      assert.equal(cleaned.worktreeId, worktree!.id, '清理结果应回传受管 worktreeId')
-      assert.equal(cleaned.branchDeleted, false, '默认清理必须保留分支')
-      assert.ok(!existsSync(worktree!.path), '清理后 worktree 目录应被移除')
-      const branchList = execFileSync('git', ['branch', '--list', worktree!.branch], { cwd: repo, encoding: 'utf8' })
-      assert.ok(branchList.includes(worktree!.branch), `分支 ${worktree!.branch} 应默认保留（实得 ${branchList.trim()}）`)
+      if (PROCESS_SCAN_ON) {
+        const cleaned = await env.invoke.cleanupWorktree({
+          conversationId: resolved!.conversationId,
+          force: true,
+        })
+        assert.equal(cleaned.removed, true)
+        assert.equal(cleaned.worktreeId, worktree!.id, '清理结果应回传受管 worktreeId')
+        assert.equal(cleaned.branchDeleted, false, '默认清理必须保留分支')
+        assert.ok(!existsSync(worktree!.path), '清理后 worktree 目录应被移除')
+        const branchList = execFileSync('git', ['branch', '--list', worktree!.branch], { cwd: repo, encoding: 'utf8' })
+        assert.ok(branchList.includes(worktree!.branch), `分支 ${worktree!.branch} 应默认保留（实得 ${branchList.trim()}）`)
+      } else {
+        await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ conversationId: resolved!.conversationId, force: true }))
+        assert.ok(existsSync(worktree!.path), '非 Linux 拒绝清理时目录不得被移除')
+      }
     } finally {
       await env.close()
     }
@@ -671,15 +692,20 @@ describe('外部插件 agent_spawn handled 与 worktree 统一登记', { timeout
       // 成功分支写入 branchDeleteError: undefined 值，doc 层 jsonClone 拒绝
       //（已知基座缺陷，主代理修复后可恢复断言）；分支删除成功链路由
       // native-worktree.test.ts allocator 专项覆盖。
-      const cleaned = await env.invoke.cleanupWorktree({
-        worktreeId: resolved!.worktree!.id!,
-        force: true,
-      })
-      assert.equal(cleaned.removed, true)
-      assert.equal(cleaned.branchDeleted, false, '默认清理保留分支')
-      assert.ok(!existsSync(wtPath), '清理应实际移除外部 worktree')
-      const branchList = execFileSync('git', ['branch', '--list', 'helm/wf-external-1'], { cwd: repo, encoding: 'utf8' })
-      assert.ok(branchList.includes('helm/wf-external-1'), '分支应默认保留')
+      if (PROCESS_SCAN_ON) {
+        const cleaned = await env.invoke.cleanupWorktree({
+          worktreeId: resolved!.worktree!.id!,
+          force: true,
+        })
+        assert.equal(cleaned.removed, true)
+        assert.equal(cleaned.branchDeleted, false, '默认清理保留分支')
+        assert.ok(!existsSync(wtPath), '清理应实际移除外部 worktree')
+        const branchList = execFileSync('git', ['branch', '--list', 'helm/wf-external-1'], { cwd: repo, encoding: 'utf8' })
+        assert.ok(branchList.includes('helm/wf-external-1'), '分支应默认保留')
+      } else {
+        await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ worktreeId: resolved!.worktree!.id!, force: true }))
+        assert.ok(existsSync(wtPath), '非 Linux 拒绝清理时目录不得被移除')
+      }
     } finally {
       await env.close()
     }
@@ -972,8 +998,12 @@ describe('持久租约未知占用保护（fail-closed）', { timeout: 60_000 },
         !leasePaths.includes(resolved!.worktree!.path),
         `成功 settle 后租约应释放，实得 ${JSON.stringify(leasePaths)}`,
       )
-      const cleaned = await env.invoke.cleanupWorktree({ conversationId: resolved!.conversationId!, force: true })
-      assert.equal(cleaned.removed, true, '租约释放后可清理')
+      if (PROCESS_SCAN_ON) {
+        const cleaned = await env.invoke.cleanupWorktree({ conversationId: resolved!.conversationId!, force: true })
+        assert.equal(cleaned.removed, true, '租约释放后可清理')
+      } else {
+        await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ conversationId: resolved!.conversationId!, force: true }))
+      }
     } finally {
       await env.close()
     }

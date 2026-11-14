@@ -40,13 +40,16 @@
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { readlink, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import type { Duplex } from 'node:stream';
 import {
   LocalExecutionEnv,
+  isManagedHelmEnvKey,
   type BinaryReader,
   type DirReader,
   type TextLineReader,
 } from './local-env.js';
+import { scanPathUsage, type PathUsageIo } from '@helm/protocol';
 import type {
   EnvExecInput,
   EnvExecOk,
@@ -56,6 +59,7 @@ import type {
   NodeIpcClosedEvent,
   NodeIpcEvent,
   NodeIpcSubscribeInput,
+  NodePathUsage,
   NodeTunnelOpenInput,
   RpcEnvError,
   RpcResult,
@@ -97,6 +101,16 @@ export interface NodeEnvRpcServerOptions {
    * Herdr 长任务等待不能被守护进程偷偷施加一个额外的固定死线。
    */
   ipcCallIdleTimeoutMs?: number;
+  /**
+   * 进程占用扫描注入（仅测试或受控宿主注入；生产不伪造）：
+   * - procRoot：/proc 根替代（缺省 '/proc'）；
+   * - platform：平台事实替代（缺省 process.platform；非 linux 显式
+   *   not_supported，绝不伪造跨平台结果）。
+   */
+  pathUsage?: {
+    procRoot?: string;
+    platform?: () => string;
+  };
   /**
    * 取消/超时后等待底层 stdio 管道排空的硬超时（毫秒，默认 500）：
    * 当命令派生的 detached 孙进程继承了 stdout/stderr fd 并持续写入时，
@@ -929,7 +943,10 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     const merged: Record<string, string> = {};
     if (input.inheritEnv !== false) {
       for (const [key, value] of Object.entries(process.env)) {
-        if (value !== undefined && key.toUpperCase() !== 'HELM_TOKEN') merged[key] = value;
+        // 受管身份变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）：daemon 宿主
+        // 自身的值绝不静默进入子命令；合法值只由调用方 input.env 按次注入。
+        if (value === undefined || isManagedHelmEnvKey(key)) continue;
+        merged[key] = value;
       }
     }
     for (const [key, value] of Object.entries(shellEnv ?? {})) {
@@ -1126,6 +1143,49 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     },
     async envExists({ path: target, cwd }) {
       return unwrap(envFor(cwd).exists(target));
+    },
+
+    /**
+     * 节点本机进程占用快照（删除前诊断；只读面，升级排空不拒绝——与文件
+     * 只读操作同口径）。进程内直接扫描（零 helper spawn、不用目标 cwd 启动
+     * 任何子进程）；只读 cwd/fd/comm 定位信息，绝不读 cmdline/environ。
+     * 入参严格校验（仅 path 字段）；非 Linux 平台显式 not_supported；无权
+     * 读取的 PID 使 complete=false（绝不假装完整/干净）。
+     */
+    async envPathUsage(raw: unknown): Promise<RpcResult<NodePathUsage>> {
+      if (!isRecord(raw) || Array.isArray(raw)) {
+        return invalidInput('envPathUsage input must be a plain object');
+      }
+      const unknownFields = Object.keys(raw).filter((key) => key !== 'path');
+      if (unknownFields.length > 0) {
+        return invalidInput(`envPathUsage rejects unknown field(s): ${unknownFields.join(', ')}`);
+      }
+      const target = (raw as { path?: unknown }).path;
+      if (typeof target !== 'string' || target.length === 0 || target.length > 4096 || target.includes('\u0000')) {
+        return invalidInput('envPathUsage path must be a non-empty string without NUL, at most 4096 chars');
+      }
+      const procRoot = options.pathUsage?.procRoot ?? '/proc';
+      const io: PathUsageIo = {
+        readlink: (p) => readlink(p),
+        readdir: (p) => readdir(p),
+        stat: (p) => stat(p).then((s) => ({ uid: s.uid })),
+        readFile: (p) => readFile(p, 'utf8'),
+        realpath: (p) => realpath(p),
+      };
+      const result = await scanPathUsage(target, {
+        io,
+        platform: options.pathUsage?.platform?.() ?? process.platform,
+        ...(procRoot === '/proc' ? {} : { procRoot }),
+      });
+      if (result.ok) return { ok: true, value: result.value };
+      const code = result.error.code === 'invalid'
+        ? 'invalid'
+        : result.error.code === 'not_supported'
+          ? 'not_supported'
+          : result.error.code === 'aborted'
+            ? 'aborted'
+            : 'unknown';
+      return { ok: false, error: { code, message: result.error.message } };
     },
 
     async envCreateDir({ path: target, recursive, cwd }) {

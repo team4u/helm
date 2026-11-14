@@ -402,4 +402,25 @@ export class RuntimeAgentSpawn {
     }
     return { value: result.value }
   }
+
+  /**
+   * 目标节点进程占用快照（ctx.host.inspectNodePathUsage 后端）：
+   * 经 EnvFabric 在目标节点真实扫描（local 进程内 / 远端 RPC），失败
+   * （离线/不支持/权限/扫描不完整）由 fabric 显式抛 HelmError，本层绝不
+   * 吞错、绝不回退本机；快照语义（非互斥、complete=false 必须 fail-closed）
+   * 见 protocol/plugin.ts 端口注释。
+   */
+  async inspectNodePathUsage(input: {
+    nodeId: string
+    path: string
+    signal?: AbortSignal
+  }): Promise<import('@helm/protocol').NodePathUsage> {
+    if (typeof input.nodeId !== 'string' || input.nodeId === '') {
+      throw new HelmError('validation_error', `inspectNodePathUsage 需要非空 nodeId（收到 ${String(input.nodeId)}）`, 400)
+    }
+    if (typeof input.path !== 'string' || input.path === '' || input.path.includes('\u0000')) {
+      throw new HelmError('validation_error', 'inspectNodePathUsage 需要非空且不含 NUL 的 path', 400)
+    }
+    return this.deps.envFabric.inspectPathUsage(input.nodeId, input.path, input.signal)
+  }
 }

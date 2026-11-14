@@ -153,6 +153,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     resolveSpawnTarget: (input) => runtime.resolveSpawnTarget(input),
     listActiveSpawnExecutions: () => runtime.listActiveSpawnExecutions(),
     probeNodeFs: (input) => runtime.probeNodeFs(input),
+    inspectNodePathUsage: (input) => runtime.inspectNodePathUsage(input),
     redactText: (text) => runtime.stash.redact(text),
     invokeAction: (pluginId, actionId, input, context) => runtime.plugins.invokeAction(pluginId, actionId, input, context),
     prepareAction: (pluginId, actionId, input, context) =>

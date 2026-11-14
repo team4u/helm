@@ -691,6 +691,14 @@ export class KernelRuntime {
     return this.svc.agentSpawn.probeNodeFs(input)
   }
 
+  async inspectNodePathUsage(input: {
+    nodeId: string
+    path: string
+    signal?: AbortSignal
+  }): Promise<import('@helm/protocol').NodePathUsage> {
+    return this.svc.agentSpawn.inspectNodePathUsage(input)
+  }
+
   // ------------------------------------------------------------------
   // 目录坐标查询
   // ------------------------------------------------------------------

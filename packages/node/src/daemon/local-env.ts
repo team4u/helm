@@ -834,13 +834,34 @@ async function getShellConfig(
   return ok({ shell: 'sh', args: ['-c'], commandTransport: 'argv' });
 }
 
+/**
+ * 受管身份变量名（大小写不敏感）剥除清单：宿主 daemon 进程自身的这些
+ * 环境变量绝不经继承进入子命令——HELM_TOKEN（节点凭据）、
+ * HELM_EXECUTION_SCOPE（执行作用域标记，由 Hub 侧按调用注入最新值）。
+ * 静默继承旧值会伪造执行身份/作用域，与内核 buildManagedEnv 的受管
+ * 固定覆盖同向；shellEnv（daemon 提供的 HELM_HUB_URL/HELM_DATA_DIR）与
+ * 调用方显式 env 不在剥除范围。
+ */
+const MANAGED_INHERIT_STRIP_UPPER = new Set(['HELM_TOKEN', 'HELM_EXECUTION_SCOPE']);
+
+/** 受管身份变量判定（导出供 env-rpc-server 的继承基底复用；大小写不敏感）。 */
+export function isManagedHelmEnvKey(key: string): boolean {
+  return MANAGED_INHERIT_STRIP_UPPER.has(key.toUpperCase());
+}
+
 function getShellEnv(
   baseEnv: NodeJS.ProcessEnv | undefined,
   extraEnv: Record<string, string> | undefined,
   inheritEnv = true,
 ): NodeJS.ProcessEnv {
   if (!inheritEnv) return { ...extraEnv };
-  return { ...process.env, ...baseEnv, ...extraEnv };
+  const inherited: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (isManagedHelmEnvKey(key)) continue;
+    inherited[key] = value;
+  }
+  return { ...inherited, ...baseEnv, ...extraEnv };
 }
 
 export function killProcessTree(pid: number): void {

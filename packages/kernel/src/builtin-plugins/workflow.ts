@@ -372,6 +372,7 @@ export function createWorkflowPlugin(): PluginDefinition {
           resolveSpawnTarget: (input) => ctx.host.resolveSpawnTarget(input),
           execEnv: (req, opts) => ctx.host.execEnv(req, opts),
           probeNodeFs: (input) => ctx.host.probeNodeFs(input),
+          inspectNodePathUsage: (input) => ctx.host.inspectNodePathUsage(input),
           listActiveSpawnExecutions: () => ctx.host.listActiveSpawnExecutions(),
           redactText: (text) => ctx.host.redactText(text),
           getConversation: (id) => {

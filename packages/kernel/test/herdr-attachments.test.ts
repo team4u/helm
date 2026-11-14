@@ -271,6 +271,7 @@ class FakeBackend implements PluginHostBackend {
   async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
   listActiveSpawnExecutions(): [] { return [] }
   async probeNodeFs(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) }
+  async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) }
   redactText(text: string): string { return text }
   async dispatchTrigger() {}
   async submitInput() {}

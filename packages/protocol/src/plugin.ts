@@ -27,6 +27,7 @@ import type {
   EnvExecRequest,
   EnvExecResponse,
   NodeIpcCallInput,
+  NodePathUsage,
   RpcResult,
 } from './env-rpc.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
@@ -1220,6 +1221,20 @@ export interface HelmHostApi {
     path: string
     signal?: AbortSignal
   }): Promise<{ value: string | boolean }>
+  /**
+   * 目标节点进程占用快照（删除前诊断面，通用机制、零业务语义）：目标节点
+   * 上 cwd 或打开 fd 引用目标绝对路径（含子目录，路径分量边界匹配）的
+   * 进程清单（PID/进程名/引用路径；绝不读 cmdline/environ）。快照不完整
+   * （权限不足/扫描上限）时 complete=false，调用方必须 fail-closed，绝不
+   * 当作 0 占用。节点离线 / 守护进程版本不支持 / 平台不支持均显式 reject
+   * （HelmError），绝不静默回退本机扫描。这是诊断快照而非跨进程互斥：
+   * 扫描之后新启动的进程不在保护范围；内核也绝不基于此自动终止任何进程。
+   */
+  inspectNodePathUsage(input: {
+    nodeId: string
+    path: string
+    signal?: AbortSignal
+  }): Promise<NodePathUsage>
   /**
    * 宿主统一文本脱敏（SecretStash：明文机密 -> 标记）：插件持久化自身
    * 元数据（如含路径/分支的工作树记录）前过此脱敏，防已登记机密落库。

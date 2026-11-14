@@ -214,6 +214,16 @@ function makeFakeIsolation(options: FakeIsolationOptions = {}): FakeIsolationHan
         },
         listActiveSpawnExecutions: () => [],
         redactText: (text) => text,
+        // 进程占用探测：本文件调 cleanup 的用例均在租约/占用层被拒（到不了
+        // 进程扫描），补全空快照不会伪造任何被断言的行为。
+        inspectNodePathUsage: async (input: { nodeId: string; path: string }) => ({
+          path: input.path,
+          processes: [],
+          matchedTotal: 0,
+          processesTruncated: false,
+          complete: true,
+          diagnostics: [],
+        }),
         getConversation: () => ({ cwd: gatedPath ?? '/repo', nodeId: 'local', status: 'idle' }),
       },
       docStore,

@@ -30,6 +30,14 @@ import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHelm } from '../src/app.js'
+import { HelmError } from '@helm/protocol'
+
+/**
+ * 平台事实：进程占用扫描当前仅 Linux /proc。非 Linux 上 cleanup 在进程检查处
+ * 显式拒绝（worktree_process_check_failed）——测试契约按平台如实分叉，
+ * 不伪造 complete=true、不静默跳过（跨平台显式拒绝是当前行为限制）。
+ */
+const PROCESS_SCAN_ON = process.platform === 'linux'
 
 let rootDir: string
 
@@ -236,7 +244,20 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
       assert.equal(noDiff['diffPreview'], undefined)
 
       // 清理（force：树内可能仍有未提交 gate 产物）后检视：仅元数据 + removed。
-      await env.invoke.cleanupWorktree({ worktreeId, force: true })
+      if (PROCESS_SCAN_ON) {
+        await env.invoke.cleanupWorktree({ worktreeId, force: true })
+      } else {
+        await assert.rejects(
+          () => env.invoke.cleanupWorktree({ worktreeId, force: true }),
+          (err: unknown) => {
+            assert.ok(err instanceof HelmError)
+            assert.equal(err.code, 'worktree_process_check_failed', '非 Linux 平台：进程占用扫描不支持，cleanup 必须显式拒绝')
+            return true
+          },
+        )
+        await env.close()
+        return
+      }
       const after = await env.invoke.inspectWorktree({ worktreeId })
       assert.equal(after['exists'], false)
       assert.equal(after['unavailableReason'], 'removed')

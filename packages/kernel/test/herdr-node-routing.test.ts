@@ -326,6 +326,7 @@ class FakeBackend implements PluginHostBackend {
     return []
   }
   async probeNodeFs(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不探测节点 fs', 501) }
+  async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) }
   listActions(): [] {
     return []
   }

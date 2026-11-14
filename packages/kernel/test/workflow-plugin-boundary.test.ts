@@ -107,6 +107,17 @@ class FakeBackend extends PluginHostBackendFixtureBase {
     if (input.op === 'exists') return Promise.resolve({ value: true })
     return Promise.resolve({ value: input.path })
   }
+  /** 进程占用快照：fixture 固定返回完整空快照（本文件不调 cleanup，仅满足端口形状）。 */
+  inspectNodePathUsage(input: { nodeId: string; path: string }): Promise<import('@helm/protocol').NodePathUsage> {
+    return Promise.resolve({
+      path: input.path,
+      processes: [],
+      matchedTotal: 0,
+      processesTruncated: false,
+      complete: true,
+      diagnostics: [],
+    })
+  }
   invokeAction(): Promise<unknown> {
     return Promise.resolve({})
   }

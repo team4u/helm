@@ -82,6 +82,7 @@ export function hostBackendStub(): PluginHostBackend {
     resolveSpawnTarget: () => unsupported('resolveSpawnTarget'),
     listActiveSpawnExecutions: () => [],
     probeNodeFs: () => unsupported('probeNodeFs'),
+    inspectNodePathUsage: () => unsupported('inspectNodePathUsage'),
     invokeAction: () => unsupported('invokeAction'),
     prepareAction: () => ({ idempotent: false }),
     listActions: () => [],

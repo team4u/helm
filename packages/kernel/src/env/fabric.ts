@@ -32,9 +32,14 @@ import {
   type NodeEnvRpcFunctions,
   type NodeIpcCallInput,
   type NodeIpcSubscribeInput,
+  type NodePathUsage,
+  type NodePathUsageProcess,
   type NodeTunnelTarget,
   type RpcResult,
+  scanPathUsage,
+  type PathUsageIo,
 } from '@helm/protocol'
+import { readlink, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import type { Duplex } from 'node:stream'
 import { NodeRegistry, normalizeTunnelTarget } from './registry.js'
@@ -184,6 +189,17 @@ export interface EnvFabric {
    */
   nodeFetch(nodeId: string): typeof fetch
   /**
+   * 目标节点进程占用快照（删除前诊断面；非跨进程互斥）：
+   * - local：Hub 进程内真实 /proc 只读扫描（零 helper spawn，不用目标 cwd
+   *   启动任何子进程）；只读 cwd/fd/comm 定位信息，绝不读 cmdline/environ；
+   * - 远端：经 envPathUsage RPC 在目标节点扫描，**绝不回退本机**；节点
+   *   离线抛 409 node_offline，旧版守护进程无本方法抛 501
+   *   path_usage_not_supported，扫描不完整时返回 complete=false（调用方
+   *   必须 fail-closed，绝不当 0 占用）；
+   * - 非 Linux 平台显式 not_supported（HelmError path_usage_not_supported）。
+   */
+  inspectPathUsage(nodeId: string, path: string, signal?: AbortSignal): Promise<NodePathUsage>
+  /**
    * 释放某会话的全部靶点缓存：仅移除 bases 条目（绝不调用 cleanup 杀
    * 该会话在途命令——在途 exec/reader 持旧实例自然完成，见文件头注释）。
    * 会话删除或修改 nodeId/cwd 时调用。
@@ -195,6 +211,48 @@ export interface EnvFabric {
   debugBases(): EnvTargetSnapshot[]
   /** dispose：远端 env 清理 + 注册表关闭；幂等；单条失败如实记录不静默。 */
   dispose(): Promise<void>
+}
+
+/** RPC 边界外的节点快照严格校验（AGENTS.md 边界 schema 纪律；非法形状显式拒绝，绝不部分采信）。 */
+function validatePathUsageSnapshot(nodeId: string, value: unknown): NodePathUsage {
+  const fail = (reason: string): HelmError =>
+    new HelmError('node_path_usage_failed', `节点 ${nodeId} 返回的进程占用快照形状非法（${reason}），拒绝采信`, 502, {
+      nodeId,
+    })
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw fail('非对象')
+  const v = value as Record<string, unknown>
+  if (typeof v['path'] !== 'string' || v['path'] === '') throw fail('path 非非空字符串')
+  if (!Array.isArray(v['processes'])) throw fail('processes 非数组')
+  if (v['processes'].length > 512) throw fail('processes 超出合理上限 512')
+  const processes: NodePathUsageProcess[] = []
+  for (const raw of v['processes']) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw fail('processes 条目非对象')
+    const p = raw as Record<string, unknown>
+    if (!Number.isSafeInteger(p['pid']) || (p['pid'] as number) <= 0) throw fail('pid 非正整数')
+    if (p['source'] !== 'cwd' && p['source'] !== 'fd') throw fail('source 非 cwd|fd')
+    if (typeof p['path'] !== 'string' || p['path'] === '') throw fail('process path 非非空字符串')
+    if (p['name'] !== undefined && typeof p['name'] !== 'string') throw fail('name 非字符串')
+    processes.push({
+      pid: p['pid'] as number,
+      ...(p['name'] !== undefined ? { name: p['name'] as string } : {}),
+      source: p['source'] as 'cwd' | 'fd',
+      path: p['path'] as string,
+    })
+  }
+  if (!Number.isSafeInteger(v['matchedTotal']) || (v['matchedTotal'] as number) < 0) throw fail('matchedTotal 非非负整数')
+  if (typeof v['processesTruncated'] !== 'boolean') throw fail('processesTruncated 非布尔')
+  if (typeof v['complete'] !== 'boolean') throw fail('complete 非布尔')
+  if (!Array.isArray(v['diagnostics'])) throw fail('diagnostics 非数组')
+  if (v['diagnostics'].length > 128) throw fail('diagnostics 超出合理上限 128')
+  if (v['diagnostics'].some((d) => typeof d !== 'string')) throw fail('diagnostics 条目非字符串')
+  return {
+    path: v['path'] as string,
+    processes,
+    matchedTotal: v['matchedTotal'] as number,
+    processesTruncated: v['processesTruncated'] as boolean,
+    complete: v['complete'] as boolean,
+    diagnostics: v['diagnostics'] as string[],
+  }
 }
 
 export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
@@ -437,6 +495,97 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
           request,
         ) as ReturnType<typeof fetch>
       }) as typeof fetch
+    },
+
+    async inspectPathUsage(nodeId: string, targetPath: string, signal?: AbortSignal): Promise<NodePathUsage> {
+      if (signal?.aborted) throw new HelmError('aborted', '进程占用扫描已取消', 499, { nodeId })
+      if (nodeId === 'local') {
+        // Hub 进程内真实扫描（platform 经 hubPlatform 端口，测试可注入；
+        // 生产为 process.platform，绝不伪造）。
+        const io: PathUsageIo = {
+          readlink: (p) => readlink(p),
+          readdir: (p) => readdir(p),
+          stat: (p) => stat(p).then((s) => ({ uid: s.uid })),
+          readFile: (p) => readFile(p, 'utf8'),
+          realpath: (p) => realpath(p),
+        }
+        const result = await scanPathUsage(targetPath, { io, platform: hubPlatform(), signal })
+        if (result.ok) return result.value
+        const { code, message } = result.error
+        if (code === 'invalid') throw new HelmError('validation_error', `进程占用扫描入参非法：${message}`, 400, { nodeId })
+        if (code === 'not_supported') {
+          throw new HelmError(
+            'path_usage_not_supported',
+            `本 Hub 平台 '${hubPlatform()}' 不支持进程占用扫描（当前仅 Linux /proc；不伪造跨平台结果），无法证明目标路径 0 占用`,
+            501,
+            { nodeId, platform: hubPlatform() },
+          )
+        }
+        if (code === 'aborted') throw new HelmError('aborted', message, 499, { nodeId })
+        throw new HelmError('node_path_usage_failed', `本机进程占用扫描失败：${message}`, 502, { nodeId })
+      }
+      // 远端：目标节点真实扫描，绝不回退本机。
+      const rpc = await requireRpc(nodeId, signal)
+      const fn = rpc.envPathUsage
+      if (fn === undefined) {
+        throw new HelmError(
+          'path_usage_not_supported',
+          `节点 ${nodeId} 的守护进程不支持 envPathUsage（版本过旧？），无法证明目标路径 0 占用；绝不回退本机扫描`,
+          501,
+          { nodeId },
+        )
+      }
+      // birpc 可能以 undefined 结算（网关吸收旧版守护进程缺方法错误）：类型上显式含 undefined。
+      let result: RpcResult<import('@helm/protocol').NodePathUsage> | undefined
+      try {
+        result = await fn({ path: targetPath })
+      } catch (error) {
+        // birpc 代理使任意方法访问都是函数：旧版守护进程缺本方法时，调用
+        // 以「function not found」拒绝——如实归类为不支持（501），绝不伪装
+        // 成扫描失败或回退本机；传输/超时等其他错误仍为 502。
+        const message = error instanceof Error ? error.message : String(error)
+        if (message.includes('[birpc] function') && message.includes('not found')) {
+          throw new HelmError(
+            'path_usage_not_supported',
+            `节点 ${nodeId} 的守护进程不支持 envPathUsage（版本过旧？），无法证明目标路径 0 占用；绝不回退本机扫描`,
+            501,
+            { nodeId, cause: message },
+          )
+        }
+        throw new HelmError(
+          'node_path_usage_failed',
+          `节点 ${nodeId} 进程占用扫描调用失败：${message}`,
+          502,
+          { nodeId, cause: message },
+        )
+      }
+      if (result === undefined || result === null) {
+        // 旧版守护进程无 envPathUsage：birpc 经网关 onGeneralError 吸收后
+        // 以 undefined 结算——如实归类不支持（501），绝不回退本机、绝不当作空快照。
+        throw new HelmError(
+          'path_usage_not_supported',
+          `节点 ${nodeId} 的守护进程不支持 envPathUsage（版本过旧？），无法证明目标路径 0 占用；绝不回退本机扫描`,
+          501,
+          { nodeId },
+        )
+      }
+      if (typeof result !== 'object' || !('ok' in result)) {
+        throw new HelmError(
+          'node_path_usage_failed',
+          `节点 ${nodeId} 进程占用扫描返回非法载荷（协议违反）：${String(result)}`,
+          502,
+          { nodeId },
+        )
+      }
+      if (!result.ok) {
+        throw new HelmError(
+          'node_path_usage_failed',
+          `节点 ${nodeId} 进程占用扫描失败（${result.error.code}: ${result.error.message}）`,
+          502,
+          { nodeId, code: result.error.code },
+        )
+      }
+      return validatePathUsageSnapshot(nodeId, result.value)
     },
 
     async withFileMutationQueue<T>(

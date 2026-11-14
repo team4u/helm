@@ -49,6 +49,22 @@ import { ArtifactService, SecretStash } from '../src/services/index.js'
 type FauxHandle = ReturnType<typeof fauxProvider>
 
 /**
+ * 平台事实：进程占用扫描当前仅实现 Linux /proc。测试契约按平台如实分叉：
+ * 非 Linux 上 cleanup 在进程检查处显式拒绝（worktree_process_check_failed）
+ * ——不伪造 complete=true、不静默跳过；这是当前跨平台行为限制的如实断言。
+ */
+const PROCESS_SCAN_ON = process.platform === 'linux'
+
+/** 非 Linux 平台断言 cleanup 显式拒绝（进程占用扫描不支持，不伪造 0 占用）。 */
+async function assertCleanupPlatformRejected(fn: () => Promise<unknown>): Promise<void> {
+  await assert.rejects(fn, (err: unknown) => {
+    assert.ok(err instanceof HelmError)
+    assert.equal(err.code, 'worktree_process_check_failed', '非 Linux 平台：进程占用扫描不支持，cleanup 必须显式拒绝')
+    return true
+  })
+}
+
+/**
  * 本机真实执行端口适配（无 mock）：exec 走 NodeExecutionEnv 真实 argv
  * 执行；exists/canonicalPath 走同 env 真实 fs。与生产（ctx.host.execEnv /
  * probeNodeFs）同契约，供 allocator 直建测试使用。
@@ -150,6 +166,7 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
   }
   const allocator = new WorktreeAllocator({
     ...localNodePorts(),
+    inspectPathUsage: (nodeId, path, signal) => envFabric.inspectPathUsage(nodeId, path, signal),
     docStore: nestedDocStore,
     redact: (t) => stash.redact(t),
     isConversationWorking: (id) => working.has(id),
@@ -192,6 +209,7 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
         if (!r.ok) throw new HelmError('probe_failed', r.error.message, 502)
         return { value: r.value }
       },
+      inspectNodePathUsage: (input) => envFabric.inspectPathUsage(input.nodeId, input.path, input.signal),
       listActiveSpawnExecutions: () => [],
       redactText: (t) => stash.redact(t),
       getConversation: (id: number) => {
@@ -763,6 +781,10 @@ async function executeCleanupTool(
     prepareInterruptedConversations: async () => {},
     resolveSpawnTarget: async () => ({ nodeId: 'local', sourceCwd: dataDir, parentCwd: dataDir }),
     listActiveSpawnExecutions: () => [],
+    // 真实进程占用探测（与生产同构：local 进程内 /proc 扫描；非 Linux 显式
+    // not_supported → cleanup fail-closed）。
+    inspectNodePathUsage: (input: { nodeId: string; path: string; signal?: AbortSignal }) =>
+      bareFabricOf().inspectPathUsage(input.nodeId, input.path, input.signal),
     probeNodeFs: async (req: { nodeId: string; op: 'exists' | 'canonicalPath'; path: string }) => {
       const env = new NodeExecutionEnv({ cwd: req.path })
       if (req.op === 'exists') {
@@ -932,22 +954,28 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       writeFileSync(join(record!.path, 'wip.txt'), 'dirty\n')
       th.markIdle(childId)
 
-      const result = await th.allocator.cleanup({ conversationId: childId, deleteBranch: true, force: true })
-      assert.equal(result.removed, true)
-      assert.equal(result.branchDeleted, true)
-      assert.equal(result.path, record!.path)
-      assert.ok(!existsSync(record!.path), 'worktree 目录应被移除')
-      // 分支已删除（git branch --list 无输出）。
-      const branchList = execFileSync('git', ['branch', '--list', record!.branch], { cwd: repo, encoding: 'utf8' })
-      assert.equal(branchList.trim(), '', `分支 ${record!.branch} 应已删除`)
-      // 记录状态置 removed。
-      const after = th.allocator.getForConversation(childId)
-      assert.ok(after)
-      assert.equal(after!.status, 'removed')
-      assert.ok(after!.removedAt !== undefined)
-      // 幂等：二次清理返回 removed: false。
-      const again = await th.allocator.cleanup({ conversationId: childId })
-      assert.equal(again.removed, false)
+      if (PROCESS_SCAN_ON) {
+        const result = await th.allocator.cleanup({ conversationId: childId, deleteBranch: true, force: true })
+        assert.equal(result.removed, true)
+        assert.equal(result.branchDeleted, true)
+        assert.equal(result.path, record!.path)
+        assert.ok(!existsSync(record!.path), 'worktree 目录应被移除')
+        // 分支已删除（git branch --list 无输出）。
+        const branchList = execFileSync('git', ['branch', '--list', record!.branch], { cwd: repo, encoding: 'utf8' })
+        assert.equal(branchList.trim(), '', `分支 ${record!.branch} 应已删除`)
+        // 记录状态置 removed。
+        const after = th.allocator.getForConversation(childId)
+        assert.ok(after)
+        assert.equal(after!.status, 'removed')
+        assert.ok(after!.removedAt !== undefined)
+        // 幂等：二次清理返回 removed: false。
+        const again = await th.allocator.cleanup({ conversationId: childId })
+        assert.equal(again.removed, false)
+      } else {
+        // 非 Linux：进程占用扫描不支持 → cleanup 显式拒绝（fail-closed，不伪造 0 占用）。
+        await assertCleanupPlatformRejected(() => th.allocator.cleanup({ conversationId: childId, deleteBranch: true, force: true }))
+        assert.ok(existsSync(record!.path), '拒绝清理时目录不得被移除')
+      }
     } finally {
       await th.close()
     }
@@ -1030,10 +1058,20 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
 // 7. 安全加固：external 登记 / 未合入检查 / 跨节点歧义 / fail closed
 // ---------------------------------------------------------------------------
 
+/** bareAllocator 共用的真实 EnvFabric（local 进程内真实 /proc 扫描）。 */
+let bareFabric: ReturnType<typeof createEnvFabric> | undefined
+function bareFabricOf(): ReturnType<typeof createEnvFabric> {
+  bareFabric ??= createEnvFabric({})
+  return bareFabric
+}
+
 /** 直建 allocator（不经 spawn 链）的轻量夹具（与生产同构的嵌套 doc）。 */
 function bareAllocator(docs: Map<string, unknown>, extra?: { isPathInUse?: (nodeId: string, path: string) => boolean; redact?: (t: string) => string }) {
   return new WorktreeAllocator({
     ...localNodePorts(),
+    // 真实进程占用探测（local 进程内 /proc 扫描；Linux 上完整，其他平台
+    // 显式 not_supported → cleanup fail-closed，与生产同构）。
+    inspectPathUsage: (nodeId, path, signal) => bareFabricOf().inspectPathUsage(nodeId, path, signal),
     docStore: {
       get<T>(key: string, initial: T): T {
         const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
@@ -1074,16 +1112,21 @@ describe('external 登记与真实清理', { timeout: 60_000 }, () => {
       assert.equal(first.repoRoot, '', 'external 初始 repoRoot 为空')
 
       // 干净 external worktree：无 baseCommit 也照常清理（unmerged 相对主 HEAD=0）。
-      const result = await allocator.cleanup({ worktreeId: first.id, deleteBranch: true })
-      assert.equal(result.removed, true)
-      assert.equal(result.branchDeleted, true)
-      assert.ok(!existsSync(wtPath), 'external worktree 目录应被移除')
-      const after = rawRecords(docs).find((r) => r.id === first.id)!
-      assert.equal(after.status, 'removed')
-      assert.equal(after.repoRoot, repo, 'repoRoot 应已解析并持久化为真正主工作树')
-      // 幂等重放。
-      const again = await allocator.cleanup({ worktreeId: first.id })
-      assert.equal(again.removed, false)
+      if (PROCESS_SCAN_ON) {
+        const result = await allocator.cleanup({ worktreeId: first.id, deleteBranch: true })
+        assert.equal(result.removed, true)
+        assert.equal(result.branchDeleted, true)
+        assert.ok(!existsSync(wtPath), 'external worktree 目录应被移除')
+        const after = rawRecords(docs).find((r) => r.id === first.id)!
+        assert.equal(after.status, 'removed')
+        assert.equal(after.repoRoot, repo, 'repoRoot 应已解析并持久化为真正主工作树')
+        // 幂等重放。
+        const again = await allocator.cleanup({ worktreeId: first.id })
+        assert.equal(again.removed, false)
+      } else {
+        await assertCleanupPlatformRejected(() => allocator.cleanup({ worktreeId: first.id, deleteBranch: true }))
+        assert.ok(existsSync(wtPath), '非 Linux 拒绝清理时目录不得被移除')
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1150,10 +1193,14 @@ describe('同路径跨节点歧义', { timeout: 60_000 }, () => {
       // 指定 nodeId 精确清理 local 登记（local env 真实执行 git）。
       // 注：node-b 登记指向同一物理目录，local 清理成功后目录即消失，
       // node-b 记录保留 active（目录缺失场景另行显式报告，见 t10d）。
-      const result = await allocator.cleanup({ path: sharedPath, nodeId: 'local', deleteBranch: true })
-      assert.equal(result.removed, true)
-      assert.equal(rawRecords(docs).find((r) => r.id === a.id)!.status, 'removed')
-      assert.equal(rawRecords(docs).find((r) => r.id === b.id)!.status, 'active', '其他节点登记不受影响')
+      if (PROCESS_SCAN_ON) {
+        const result = await allocator.cleanup({ path: sharedPath, nodeId: 'local', deleteBranch: true })
+        assert.equal(result.removed, true)
+        assert.equal(rawRecords(docs).find((r) => r.id === a.id)!.status, 'removed')
+        assert.equal(rawRecords(docs).find((r) => r.id === b.id)!.status, 'active', '其他节点登记不受影响')
+      } else {
+        await assertCleanupPlatformRejected(() => allocator.cleanup({ path: sharedPath, nodeId: 'local', deleteBranch: true }))
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1300,8 +1347,12 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
       )
       assert.ok(existsSync(record.path))
       execFileSync('git', ['worktree', 'unlock', record.path], { cwd: repo })
-      const ok = await allocator.cleanup({ worktreeId: record.id })
-      assert.equal(ok.removed, true, '解锁后可正常清理')
+      if (PROCESS_SCAN_ON) {
+        const ok = await allocator.cleanup({ worktreeId: record.id })
+        assert.equal(ok.removed, true, '解锁后可正常清理')
+      } else {
+        await assertCleanupPlatformRejected(() => allocator.cleanup({ worktreeId: record.id }))
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1376,28 +1427,34 @@ describe('分支删除部分失败', { timeout: 60_000 }, () => {
       mkdirSync(refsDir, { recursive: true })
       const lockPath = join(refsDir, `spawn-${record.branch.slice('helm/spawn-'.length)}.lock`)
       writeFileSync(lockPath, '')
-      await assert.rejects(
-        () => allocator.cleanup({ worktreeId: record.id, deleteBranch: true }),
-        (err: unknown) => {
-          assert.ok(err instanceof HelmError)
-          assert.equal(err.code, 'branch_delete_failed')
-          return true
-        },
-      )
-      const after = rawRecords(docs).find((r) => r.id === record.id)!
-      assert.equal(after.status, 'removed', 'worktree 已 removed 的事实必须先固化（不可永远 active）')
-      assert.equal(after.branchDeleted, false)
-      assert.ok((after.branchDeleteError ?? '').length > 0, '失败诊断应保留在记录上')
-      assert.ok(!existsSync(record.path), 'worktree 目录已被移除')
+      if (PROCESS_SCAN_ON) {
+        await assert.rejects(
+          () => allocator.cleanup({ worktreeId: record.id, deleteBranch: true }),
+          (err: unknown) => {
+            assert.ok(err instanceof HelmError)
+            assert.equal(err.code, 'branch_delete_failed')
+            return true
+          },
+        )
+        const after = rawRecords(docs).find((r) => r.id === record.id)!
+        assert.equal(after.status, 'removed', 'worktree 已 removed 的事实必须先固化（不可永远 active）')
+        assert.equal(after.branchDeleted, false)
+        assert.ok((after.branchDeleteError ?? '').length > 0, '失败诊断应保留在记录上')
+        assert.ok(!existsSync(record.path), 'worktree 目录已被移除')
 
-      // 解除 ref 锁后重试 deleteBranch（幂等路径）。
-      rmSync(lockPath, { force: true })
-      const retry = await allocator.cleanup({ worktreeId: record.id, deleteBranch: true })
-      assert.equal(retry.removed, false, '重试时 worktree 已移除（removed:false）')
-      assert.equal(retry.branchDeleted, true, '重试删除分支成功')
-      const final = rawRecords(docs).find((r) => r.id === record.id)!
-      assert.equal(final.branchDeleted, true)
-      assert.equal(final.branchDeleteError, undefined)
+        // 解除 ref 锁后重试 deleteBranch（幂等路径）。
+        rmSync(lockPath, { force: true })
+        const retry = await allocator.cleanup({ worktreeId: record.id, deleteBranch: true })
+        assert.equal(retry.removed, false, '重试时 worktree 已移除（removed:false）')
+        assert.equal(retry.branchDeleted, true, '重试删除分支成功')
+        const final = rawRecords(docs).find((r) => r.id === record.id)!
+        assert.equal(final.branchDeleted, true)
+        assert.equal(final.branchDeleteError, undefined)
+      } else {
+        // 非 Linux：到不了真实 remove（进程检查先拒绝），分支删除部分失败路径不可达。
+        await assertCleanupPlatformRejected(() => allocator.cleanup({ worktreeId: record.id, deleteBranch: true }))
+        assert.ok(existsSync(record.path), '非 Linux 拒绝清理时目录不得被移除')
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1544,10 +1601,15 @@ describe('ignored 文件保护', { timeout: 60_000 }, () => {
         },
       )
       assert.ok(existsSync(join(record.path, '.env')), '拒绝时 ignored 文件不得被删')
-      // force：显式清除。
-      const result = await allocator.cleanup({ worktreeId: record.id, force: true })
-      assert.equal(result.removed, true)
-      assert.ok(!existsSync(record.path))
+      // force：显式清除（进程占用检查仍执行：无进程占用时放行）。
+      if (PROCESS_SCAN_ON) {
+        const result = await allocator.cleanup({ worktreeId: record.id, force: true })
+        assert.equal(result.removed, true)
+        assert.ok(!existsSync(record.path))
+      } else {
+        await assertCleanupPlatformRejected(() => allocator.cleanup({ worktreeId: record.id, force: true }))
+        assert.ok(existsSync(record.path), '非 Linux 拒绝清理时目录不得被移除')
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1731,6 +1793,10 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       exec: stub.exec as never,
       nodeExists: async () => ({ ok: true, value: true }) as never,
       nodeCanonicalPath: async () => ({ ok: true, value: '/wt' }) as never,
+      // inspect 只读面不触发进程扫描；如被误调即显式拒绝（不伪造）。
+      inspectPathUsage: async () => {
+        throw new HelmError('unsupported', 'inspect 用例不扫描进程占用', 501)
+      },
       docStore: {
         get<T>(key: string, initial: T): T {
           const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
@@ -1800,6 +1866,10 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       exec: stub.exec as never,
       nodeExists: async () => ({ ok: true, value: true }) as never,
       nodeCanonicalPath: async () => ({ ok: true, value: '/wt' }) as never,
+      // inspect 只读面不触发进程扫描；如被误调即显式拒绝（不伪造）。
+      inspectPathUsage: async () => {
+        throw new HelmError('unsupported', 'inspect 用例不扫描进程占用', 501)
+      },
       docStore: {
         get<T>(key: string, initial: T): T {
           const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}

@@ -26,7 +26,7 @@
  * 会话状态读取错误不当作安全（fail-closed）；节点探测失败不当作目录缺失；
  * 机密元数据拒绝落库。
  */
-import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helm/protocol'
+import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest, type NodePathUsage } from '@helm/protocol'
 import { sanitizeAgentExecutionInfo as sanitizeExecutionInfo } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from './worktree.js'
@@ -67,6 +67,8 @@ export interface WorktreeIsolationDeps {
       opts?: { signal?: AbortSignal },
     ): Promise<{ ok: boolean; exitCode: number | null; output: string; timedOut: boolean }>
     probeNodeFs(input: { nodeId: string; op: 'exists' | 'canonicalPath'; path: string }): Promise<{ value: string | boolean }>
+    /** 目标节点进程占用快照（通用机制面；语义见 protocol/plugin.ts 端口注释）。 */
+    inspectNodePathUsage(input: { nodeId: string; path: string; signal?: AbortSignal }): Promise<NodePathUsage>
     listActiveSpawnExecutions(): AgentExecutionInfo[]
     redactText(text: string): string
     getConversation(id: number): { cwd: string; nodeId?: string; status: string }
@@ -86,6 +88,7 @@ export class WorktreeIsolation {
       exec: (nodeId, cwd, args, options, context) => this.execGit(nodeId, cwd, args, options, context),
       nodeExists: (nodeId, path) => this.probeFs(nodeId, path, 'exists') as Promise<Result<boolean, FileError>>,
       nodeCanonicalPath: (nodeId, path) => this.probeFs(nodeId, path, 'canonicalPath') as Promise<Result<string, FileError>>,
+      inspectPathUsage: (nodeId, path, signal) => deps.host.inspectNodePathUsage({ nodeId, path, signal }),
       docStore: deps.docStore,
       redact: (text) => deps.host.redactText(text),
       isConversationWorking: (id) => this.isConversationWorking(id),

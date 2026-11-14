@@ -47,7 +47,7 @@ import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/conte
 import type { Context } from '@earendil-works/chord'
 import type { ExecutionError, FileError, Result, ShellExecResult } from '@earendil-works/pi-durable/env'
 import { randomUUID } from 'node:crypto'
-import { HelmError, pathRulesForShape, targetPathShape } from '@helm/protocol'
+import { HelmError, pathRulesForShape, targetPathShape, type NodePathUsage } from '@helm/protocol'
 
 /** 受管 worktree 持久化 key（docStore 命名空间 'runtime/worktrees'）。 */
 const DOC_KEY = 'runtime/worktrees'
@@ -106,6 +106,18 @@ export interface WorktreeAllocatorDeps {
   isConversationWorking?: (conversationId: number) => boolean
   /** worktree 路径是否仍被引用（cleanup 占用检查；缺省视为未被引用）。 */
   isPathInUse?: (nodeId: string, path: string) => boolean
+  /**
+   * 删除前进程占用快照探测（目标节点 cwd/fd 引用 worktree 或其子目录；
+   * 路径分量边界匹配——'/a' 不匹配 '/ab'）。必须提供：缺失时 cleanup
+   * fail-closed 拒绝（worktree_process_check_failed，不能证明 0 占用就不能
+   * 删除）。快照非互斥：扫描后新启动的进程不在保护范围（并发竞争如实
+   * 存在）；命中仅拒绝与诊断，绝不自动终止进程。
+   */
+  inspectPathUsage: (
+    nodeId: string,
+    path: string,
+    signal?: AbortSignal,
+  ) => Promise<NodePathUsage>
 }
 
 export interface AllocateInput {
@@ -1177,6 +1189,85 @@ export class WorktreeAllocator {
     )
   }
 
+  /**
+   * 删除前进程占用快照检查（per-repo 锁内、真实 git worktree remove 前的
+   * 最后一道屏障；force 不可绕过）：
+   * - 探测端口缺失 / 探测失败（节点离线、守护进程版本不支持、平台不支持、
+   *   权限、超时）→ worktree_process_check_failed（不能证明 0 占用就不能
+   *   删除，绝不静默跳过、绝不当作干净）；
+   * - 快照不完整（complete=false，如无权读取部分 PID / 扫描上限触发）→
+   *   worktree_process_check_failed 并携带 diagnostics（绝不假称 0 占用）；
+   * - 命中（cwd / 打开 fd 引用 worktree 或其子目录）→ worktree_process_in_use
+   *   （409，含 PID/进程名/引用路径，路径与诊断均经 redact 脱敏；进程名
+   *   与 PID 非机密）；只诊断与拒绝，绝不自动 kill/发键；命中且快照同时
+   *   不完整时仍报 in_use（占用事实已成立），details 附 complete 状态。
+   * 快照是删除前一次性观测而非跨进程互斥：扫描之后新启动的进程不在
+   * 保护范围（并发竞争如实存在，由调用方文档口径承担）。
+   */
+  private async assertPathUnusedByProcesses(record: ManagedWorktreeRecord, signal?: AbortSignal): Promise<void> {
+    const probe = this.deps.inspectPathUsage
+    if (probe === undefined) {
+      throw new HelmError(
+        'worktree_process_check_failed',
+        `worktree '${record.path}'（节点 ${record.nodeId}）未装配进程占用探测端口，无法证明无进程占用，清理中止（force 也不可绕过）`,
+        502,
+        { worktreeId: record.id, path: this.redact(record.path), nodeId: record.nodeId },
+      )
+    }
+    let usage: NodePathUsage
+    try {
+      usage = await probe(record.nodeId, record.path, signal)
+    } catch (error) {
+      const cause = error instanceof HelmError
+        ? `${error.code}: ${error.message}`
+        : error instanceof Error
+          ? error.message
+          : String(error)
+      throw new HelmError(
+        'worktree_process_check_failed',
+        `无法完成 worktree '${record.path}'（节点 ${record.nodeId}）的进程占用扫描（${this.redact(cause)}），不能证明 0 占用，清理中止（force 也不可绕过）`,
+        502,
+        { worktreeId: record.id, nodeId: record.nodeId, path: this.redact(record.path), cause: this.redact(cause) },
+      )
+    }
+    if (usage.matchedTotal > 0 || usage.processes.length > 0) {
+      const shown = usage.processes.map((p) => `${p.pid}${p.name !== undefined ? `(${p.name})` : ''}`)
+      throw new HelmError(
+        'worktree_process_in_use',
+        `worktree '${record.path}'（节点 ${record.nodeId}）被 ${usage.matchedTotal} 个进程的工作目录或打开文件引用（${shown.join('、')}${usage.matchedTotal > shown.length ? ` 等 ${usage.matchedTotal} 个` : ''}${usage.processesTruncated ? '；清单截断' : ''}）；这是删除前快照，不会自动终止任何进程，请先在目标节点处理后再清理（force 也不可绕过）`,
+        409,
+        {
+          worktreeId: record.id,
+          path: this.redact(record.path),
+          nodeId: record.nodeId,
+          pids: usage.processes.map((p) => p.pid),
+          processes: usage.processes.map((p) => ({
+            pid: p.pid,
+            ...(p.name !== undefined ? { name: p.name } : {}),
+            source: p.source,
+            path: this.redact(p.path),
+          })),
+          matchedTotal: usage.matchedTotal,
+          processesTruncated: usage.processesTruncated,
+          complete: usage.complete,
+        },
+      )
+    }
+    if (usage.complete !== true) {
+      throw new HelmError(
+        'worktree_process_check_failed',
+        `worktree '${record.path}'（节点 ${record.nodeId}）的进程占用扫描不完整（${usage.diagnostics.map((d) => this.redact(d)).join('；') || '原因未知'}），不能证明 0 占用，清理中止（force 也不可绕过）`,
+        502,
+        {
+          worktreeId: record.id,
+          nodeId: record.nodeId,
+          path: this.redact(record.path),
+          diagnostics: usage.diagnostics.map((d) => this.redact(d)),
+        },
+      )
+    }
+  }
+
   async cleanup(input: CleanupInput): Promise<CleanupResult> {
     // 选择器校验：worktreeId 单用；conversationId/path 择一；nodeId 仅搭 path。
     if (input.worktreeId === undefined && input.conversationId === undefined && input.path === undefined) {
@@ -1427,6 +1518,11 @@ export class WorktreeAllocator {
           )
         }
       }
+
+      // 删除前进程占用快照（per-repo 锁内、真实 remove 前的最后一道屏障；
+      // force 不可绕过——force 只授权丢弃文件，不授权拆除运行中进程脚下的
+      // 目录）。只诊断与拒绝，绝不自动终止进程。
+      await this.assertPathUnusedByProcesses(fresh, input.signal)
 
       // 真实移除（不 prune、不猜测缺失；失败显式报错）。
       const remove = await gitExec(

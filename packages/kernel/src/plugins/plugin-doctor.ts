@@ -107,6 +107,7 @@ function doctorBackend(): PluginHostBackend {
     resolveSpawnTarget: () => unavailable('host.resolveSpawnTarget'),
     listActiveSpawnExecutions: () => [],
     probeNodeFs: () => unavailable('host.probeNodeFs'),
+    inspectNodePathUsage: () => unavailable('host.inspectNodePathUsage'),
     invokeAction: () => unavailable('host.invokeAction'),
     listActions: () => [],
     refreshModels: () => unavailable('host.refreshModels'),
