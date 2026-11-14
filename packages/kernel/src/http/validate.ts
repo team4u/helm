@@ -1,8 +1,11 @@
 /**
- * 边界字段校验：每个 HTTP body 字段显式检查类型与形状，
- * 不用 `as` 断言充当校验；非法输入统一 400 validation_error。
+ * 边界字段校验：机械类型/形状/未知字段规则统一走 JSON Schema（AJV，
+ * 与插件动作入参同一套 @helm/protocol 校验器），复杂跨字段语义与
+ * 逐项业务断言保留手写；非法输入统一 400 validation_error。
+ *
+ * 不用 `as` 断言充当校验——schema 校验通过后的类型收窄会注明依据。
  */
-import { HelmError } from '@helm/protocol'
+import { HelmError, validateOrThrow, type JsonSchema } from '@helm/protocol'
 import {
   PROFILE_STARTERS_MAX_ITEMS,
   PROFILE_STARTER_LABEL_MAX_LENGTH,
@@ -20,10 +23,34 @@ import type {
 } from '@helm/protocol'
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+/** ID_PATTERN 的 JSON Schema pattern 形态（AJV 以 ECMA-262 编译，同语义）。 */
+const ID_PATTERN_SOURCE = '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+/** 节点 ID 规则（字母数字开头，可含 . _ -，长度 1..128）。 */
+export const NODE_ID_PATTERN_SOURCE = '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+/** 安全正整数上界：与 Number.isSafeInteger 同一口径（schema integer 不查安全界）。 */
+const MAX_SAFE_INTEGER = 9007199254740991
 
 export class ValidationError extends HelmError {
   constructor(message: string, details?: unknown) {
     super('validation_error', message, 400, details)
+  }
+}
+
+/**
+ * JSON Schema body 校验：复用 @helm/protocol 的 AJV 封装（编译缓存、
+ * $async 拒绝、字段路径诊断），失败换抛 HTTP 边界的 ValidationError
+ * （同一 400 validation_error 契约；消息含 instancePath 定位，details
+ * 携带 AJV 错误清单）。schema 只做机械形状（类型/长度/枚举/未知字段），
+ * 语义规则（跨字段互斥、trim 语义、路径绝对性等）留在调用方手写。
+ */
+export function assertBodySchema(schema: JsonSchema, value: unknown, what: string): void {
+  try {
+    validateOrThrow(schema, value, what)
+  } catch (error) {
+    if (error instanceof HelmError && error.code === 'validation_error') {
+      throw new ValidationError(error.message, error.details)
+    }
+    throw error
   }
 }
 
@@ -109,41 +136,58 @@ export function requireIdParam(raw: string, field: string): string {
   return raw
 }
 
+/** 可选 nodeId 字段：非空字符串 + 节点 ID 格式（字母数字开头，可含 . _ -）。
+ * 会话 init/patch 与 Profile body 共用同一规则（原先两份重复实现已合并）。 */
+export function optionalNodeId(body: Record<string, unknown>): string | undefined {
+  const value = body['nodeId']
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) {
+    throw new ValidationError('nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（字母数字开头，可含 . _ -）')
+  }
+  return value
+}
+
 // ---------------------------------------------------------------------------
-// 组合校验器
+// 会话 body（init / patch / input / reset / compact / fork / withdraw）
 // ---------------------------------------------------------------------------
 
-export function parseConversationInit(body: Record<string, unknown>): ConversationInit {
-  const init: ConversationInit = {}
+/** init 与 patch 共用的可选字段（title/profileId/tags/nodeId/cwd 同一规则，原先两份重复已合并）。 */
+function parseConversationCommonFields(body: Record<string, unknown>): ConversationInit {
+  const out: ConversationInit = {}
   const title = optionalString(body, 'title', { maxLength: 200, minLength: 1 })
-  if (title !== undefined) init.title = title
+  if (title !== undefined) out.title = title
   const profileId = optionalString(body, 'profileId')
   if (profileId !== undefined) {
     if (!ID_PATTERN.test(profileId)) throw new ValidationError('profileId 需为合法标识符')
-    init.profileId = profileId
+    out.profileId = profileId
   }
   const tags = optionalStringArray(body, 'tags')
   if (tags !== undefined) {
     if (tags.some((t) => t.length === 0 || t.length > 64)) {
       throw new ValidationError('tags 每项需为 1-64 字符')
     }
-    init.tags = tags
+    out.tags = tags
   }
+  const nodeId = optionalNodeId(body)
+  if (nodeId !== undefined) out.nodeId = nodeId
+  const cwd = optionalString(body, 'cwd')
+  if (cwd !== undefined) {
+    if (!isCrossPlatformAbsolutePath(cwd)) {
+      throw new ValidationError('cwd 需为绝对路径（POSIX / 开头、Windows 盘符 C:\\ 或 UNC \\\\server\\share）')
+    }
+    out.cwd = cwd
+  }
+  return out
+}
+
+export function parseConversationInit(body: Record<string, unknown>): ConversationInit {
+  const init = parseConversationCommonFields(body)
   const parent = optionalNumber(body, 'parentConversationId')
   if (parent !== undefined) {
     if (!Number.isInteger(parent) || parent <= 0) {
       throw new ValidationError('parentConversationId 需为正整数')
     }
     init.parentConversationId = parent
-  }
-  const nodeId = optionalNodeId(body)
-  if (nodeId !== undefined) init.nodeId = nodeId
-  const cwd = optionalString(body, 'cwd')
-  if (cwd !== undefined) {
-    if (!isCrossPlatformAbsolutePath(cwd)) {
-      throw new ValidationError('cwd 需为绝对路径（POSIX / 开头、Windows 盘符 C:\\ 或 UNC \\\\server\\share）')
-    }
-    init.cwd = cwd
   }
   const model = optionalString(body, 'model')
   if (model !== undefined) {
@@ -155,30 +199,7 @@ export function parseConversationInit(body: Record<string, unknown>): Conversati
 }
 
 export function parseConversationPatch(body: Record<string, unknown>): ConversationPatch {
-  const patch: ConversationPatch = {}
-  const title = optionalString(body, 'title', { maxLength: 200, minLength: 1 })
-  if (title !== undefined) patch.title = title
-  const profileId = optionalString(body, 'profileId')
-  if (profileId !== undefined) {
-    if (!ID_PATTERN.test(profileId)) throw new ValidationError('profileId 需为合法标识符')
-    patch.profileId = profileId
-  }
-  const tags = optionalStringArray(body, 'tags')
-  if (tags !== undefined) {
-    if (tags.some((t) => t.length === 0 || t.length > 64)) {
-      throw new ValidationError('tags 每项需为 1-64 字符')
-    }
-    patch.tags = tags
-  }
-  const nodeId = optionalNodeId(body)
-  if (nodeId !== undefined) patch.nodeId = nodeId
-  const cwd = optionalString(body, 'cwd')
-  if (cwd !== undefined) {
-    if (!isCrossPlatformAbsolutePath(cwd)) {
-      throw new ValidationError('cwd 需为绝对路径（POSIX / 开头、Windows 盘符 C:\\ 或 UNC \\\\server\\share）')
-    }
-    patch.cwd = cwd
-  }
+  const patch: ConversationPatch = parseConversationCommonFields(body)
   const model = optionalString(body, 'model')
   if (model !== undefined) {
     // PATCH 专属语义：'' = 清除显式覆盖（重算 Profile/全局继承链）；
@@ -201,14 +222,18 @@ export function parseConversationPatch(body: Record<string, unknown>): Conversat
   return patch
 }
 
-/** 可选 nodeId 字段：非空字符串 + 节点 ID 格式（字母数字开头，可含 . _ -）。 */
-function optionalNodeId(body: Record<string, unknown>): string | undefined {
-  const value = body['nodeId']
-  if (value === undefined) return undefined
-  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) {
-    throw new ValidationError('nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（字母数字开头，可含 . _ -）')
-  }
-  return value
+const INPUT_BODY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    text: { type: 'string', maxLength: 512 * 1024 },
+    whenBusy: { enum: ['steer', 'followUp', 'reject'] },
+    origin: { enum: ['human', 'agent', 'trigger'] },
+    meta: { type: 'object' },
+    attachments: { type: 'array', items: { type: 'string', pattern: ID_PATTERN_SOURCE } },
+    replaceFromEntryId: { type: 'integer', minimum: 1, maximum: MAX_SAFE_INTEGER },
+  },
+  required: ['text'],
+  additionalProperties: false,
 }
 
 export function parseInputBody(body: Record<string, unknown>): {
@@ -219,42 +244,26 @@ export function parseInputBody(body: Record<string, unknown>): {
   attachments?: string[]
   replaceFromEntryId?: number
 } {
-  const text = requireString(body, 'text', { maxLength: 512 * 1024 })
-  const whenBusy = optionalEnum(body, 'whenBusy', ['steer', 'followUp', 'reject'] as const)
-  const origin = optionalEnum(body, 'origin', ['human', 'agent', 'trigger'] as const)
+  // 机械形状（text 类型/长度、枚举、附件 ID 格式、未知字段）走 schema；
+  // meta 递归 JSON-safe 与附件去重/空数组语义是业务规则，手写保留。
+  assertBodySchema(INPUT_BODY_SCHEMA, body, 'input body')
   const meta = parseMetaObject(body.meta)
   const attachments = parseAttachmentIds(body.attachments)
-  const replaceFromEntryIdRaw = body.replaceFromEntryId
-  if (replaceFromEntryIdRaw !== undefined) {
-    if (typeof replaceFromEntryIdRaw !== 'number' || !Number.isSafeInteger(replaceFromEntryIdRaw) || replaceFromEntryIdRaw <= 0) {
-      throw new ValidationError('replaceFromEntryId 需为安全范围内的正整数')
-    }
-  }
-  rejectUnknownKeys(body, new Set(['text', 'whenBusy', 'origin', 'meta', 'attachments', 'replaceFromEntryId']))
   return {
-    text,
-    ...(whenBusy !== undefined ? { whenBusy } : {}),
-    ...(origin !== undefined ? { origin } : {}),
+    text: body.text as string,
+    ...(body.whenBusy !== undefined ? { whenBusy: body.whenBusy as WhenBusy } : {}),
+    ...(body.origin !== undefined ? { origin: body.origin as InputOrigin } : {}),
     ...(meta !== undefined ? { meta } : {}),
     ...(attachments !== undefined ? { attachments } : {}),
-    ...(replaceFromEntryIdRaw !== undefined ? { replaceFromEntryId: replaceFromEntryIdRaw } : {}),
+    ...(body.replaceFromEntryId !== undefined ? { replaceFromEntryId: body.replaceFromEntryId as number } : {}),
   }
 }
 
-/** 附件 ID 列表：字符串数组，逐项须满足 ID_PATTERN，去重；空数组视为未提供。 */
+/** 附件 ID 列表：逐项 ID_PATTERN 已由 schema 保证；此处只做去重与空数组视为未提供。 */
 function parseAttachmentIds(raw: unknown): string[] | undefined {
   if (raw === undefined) return undefined
-  if (!Array.isArray(raw) || raw.some((item) => typeof item !== 'string')) {
-    throw new ValidationError('attachments 需为字符串数组')
-  }
-  const ids = raw as string[]
-  for (const id of ids) {
-    if (!ID_PATTERN.test(id)) {
-      throw new ValidationError(`attachments 含非法产物 ID：${id}`)
-    }
-  }
-  const unique = [...new Set(ids)]
-  return unique.length > 0 ? unique : undefined
+  const ids = [...new Set(raw as string[])]
+  return ids.length > 0 ? ids : undefined
 }
 
 /** 纯 JSON 对象校验（非对象 JSON——数组/标量拒绝）；逐值递归验证 JSON-safe。 */
@@ -289,28 +298,90 @@ function assertJsonSafe(path: string, value: unknown): void {
   }
 }
 
+const ASK_ANSWER_BODY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    answers: { type: 'object', additionalProperties: { type: 'string' } },
+    expectedStateSeq: { type: 'integer', minimum: 0 },
+  },
+  required: ['answers'],
+  additionalProperties: false,
+}
+
 export function parseAskAnswerBody(body: Record<string, unknown>): {
   answers: Record<string, string>
   expectedStateSeq?: number
 } {
-  const raw = body.answers
-  if (raw === undefined || typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new ValidationError('answers 需为对象')
+  assertBodySchema(ASK_ANSWER_BODY_SCHEMA, body, 'ask answer body')
+  return {
+    answers: { ...(body.answers as Record<string, string>) },
+    ...(body.expectedStateSeq !== undefined ? { expectedStateSeq: body.expectedStateSeq as number } : {}),
   }
-  const answers: Record<string, string> = {}
-  for (const [key, value] of Object.entries(raw)) {
-    if (typeof value !== 'string') {
-      throw new ValidationError(`answers.${key} 需为字符串`)
-    }
-    answers[key] = value
-  }
-  const seq = optionalNumber(body, 'expectedStateSeq')
-  if (seq !== undefined && (!Number.isInteger(seq) || seq < 0)) {
-    throw new ValidationError('expectedStateSeq 需为非负整数')
-  }
-  rejectUnknownKeys(body, new Set(['answers', 'expectedStateSeq']))
-  return { answers, ...(seq !== undefined ? { expectedStateSeq: seq } : {}) }
 }
+
+// ---------------------------------------------------------------------------
+// 会话上下文操作 body（reset / compact / fork / withdraw）：纯机械形状全走 schema
+// ---------------------------------------------------------------------------
+
+const CONVERSATION_RESET_BODY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { handoff: { type: 'string', maxLength: 512 * 1024 } },
+  additionalProperties: false,
+}
+
+/** POST /api/conversations/:id/reset：可选 handoff 文本。 */
+export function parseConversationResetBody(body: Record<string, unknown>): { handoff?: string } {
+  assertBodySchema(CONVERSATION_RESET_BODY_SCHEMA, body, 'reset body')
+  return body.handoff !== undefined ? { handoff: body.handoff as string } : {}
+}
+
+const CONVERSATION_COMPACT_BODY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { instructions: { type: 'string', maxLength: 512 * 1024 } },
+  additionalProperties: false,
+}
+
+/** POST /api/conversations/:id/compact：可选 instructions 文本。 */
+export function parseConversationCompactBody(body: Record<string, unknown>): { instructions?: string } {
+  assertBodySchema(CONVERSATION_COMPACT_BODY_SCHEMA, body, 'compact body')
+  return body.instructions !== undefined ? { instructions: body.instructions as string } : {}
+}
+
+const CONVERSATION_FORK_BODY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    entryId: { type: 'integer', minimum: 1, maximum: MAX_SAFE_INTEGER },
+    title: { type: 'string', minLength: 1, maxLength: 200 },
+  },
+  required: ['entryId'],
+  additionalProperties: false,
+}
+
+/** POST /api/conversations/:id/fork：entryId 必填安全正整数；title 可选 1..200。 */
+export function parseConversationForkBody(body: Record<string, unknown>): { entryId: number; title?: string } {
+  assertBodySchema(CONVERSATION_FORK_BODY_SCHEMA, body, 'fork body')
+  return {
+    entryId: body.entryId as number,
+    ...(body.title !== undefined ? { title: body.title as string } : {}),
+  }
+}
+
+const CONVERSATION_WITHDRAW_BODY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { submissionId: { type: 'integer', minimum: 1, maximum: MAX_SAFE_INTEGER } },
+  required: ['submissionId'],
+  additionalProperties: false,
+}
+
+/** POST /api/conversations/:id/withdraw：submissionId 必填安全正整数。 */
+export function parseConversationWithdrawBody(body: Record<string, unknown>): { submissionId: number } {
+  assertBodySchema(CONVERSATION_WITHDRAW_BODY_SCHEMA, body, 'withdraw body')
+  return { submissionId: body.submissionId as number }
+}
+
+// ---------------------------------------------------------------------------
+// Profile body（跨字段语义重，保持手写组合）
+// ---------------------------------------------------------------------------
 
 export function parseProfileBody(body: Record<string, unknown>, opts: { requireId: boolean }): Profile {
   const id = opts.requireId ? requireValidId(body, 'id') : optionalValidId(body, 'id')
@@ -341,7 +412,7 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   const starters = parseProfileStarters(body.starters)
   const system = optionalString(body, 'system', { maxLength: 512 * 1024 })
   rejectUnknownKeys(body, new Set(['id', 'name', 'model', 'thinkingLevel', 'nodeId', 'cwd', 'tags', 'skills', 'starters', 'runtime', 'managedByPlugin', 'humanSelectable', 'system']))
-  const nodeId = optionalProfileNodeId(body)
+  const nodeId = optionalNodeId(body)
   const cwd = optionalString(body, 'cwd')
   if (cwd !== undefined && cwd.length === 0) throw new ValidationError('cwd 需为非空字符串')
   const profile: Profile = { ...(id !== undefined ? { id } : {}) } as Profile
@@ -402,16 +473,6 @@ function parseProfileStarters(raw: unknown): ProfileStarterPrompt[] | undefined 
     }
     return { label: trimmed, prompt }
   })
-}
-
-/** Profile 可选 nodeId：非空 + 节点 ID 格式。 */
-function optionalProfileNodeId(body: Record<string, unknown>): string | undefined {
-  const value = body['nodeId']
-  if (value === undefined) return undefined
-  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) {
-    throw new ValidationError('nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（字母数字开头，可含 . _ -）')
-  }
-  return value
 }
 
 function parseProfileRuntime(raw: unknown): ProfileRuntime | undefined {
@@ -482,147 +543,109 @@ function optionalValidId(body: Record<string, unknown>, field: string): string |
   return requireValidId(body, field)
 }
 
+// ---------------------------------------------------------------------------
+// providers / credentials / actions / plugin config body
+// ---------------------------------------------------------------------------
+
+const PROVIDERS_BODY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    providers: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', pattern: ID_PATTERN_SOURCE },
+          protocol: { enum: ['openai', 'anthropic'] },
+          baseUrl: { type: 'string', pattern: '^https?://' },
+          models: { type: 'array', items: { type: 'string' } },
+          label: { type: 'string' },
+          enabled: { type: 'boolean' },
+        },
+        required: ['id', 'protocol', 'baseUrl', 'models', 'enabled'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['providers'],
+  additionalProperties: false,
+}
+
 /**
  * providers PUT body（对象形态）：{ providers: [...] }。数组形态由路由层
- * （parseProvidersBodyValue，CLI 完整原始数组约定）色装后复用本函数，
- * 两种形态走同一套逐项严格校验。
+ * （parseProvidersBodyValue，CLI 完整原始数组约定）包装后复用本函数，
+ * 两种形态走同一套逐项 schema 校验。
  */
 export function parseProvidersBody(body: Record<string, unknown>): ProviderConfig[] {
-  const raw = body.providers
-  if (!Array.isArray(raw)) {
-    throw new ValidationError('body 需为 { providers: [...] }')
-  }
-  rejectUnknownKeys(body, new Set(['providers']))
-  const out: ProviderConfig[] = []
-  let index = 0
-  for (const item of raw) {
-    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
-      throw new ValidationError(`providers[${index}] 需为对象`)
-    }
-    const p = item as Record<string, unknown>
-    const id = p.id
-    if (typeof id !== 'string' || !ID_PATTERN.test(id)) {
-      throw new ValidationError(`providers[${index}].id 需为合法标识符`)
-    }
-    const protocol = p.protocol
-    if (protocol !== 'openai' && protocol !== 'anthropic') {
-      throw new ValidationError(`providers[${index}].protocol 需为 'openai' | 'anthropic'`)
-    }
-    const baseUrl = p.baseUrl
-    if (typeof baseUrl !== 'string' || !/^https?:\/\//.test(baseUrl)) {
-      throw new ValidationError(`providers[${index}].baseUrl 需为 http(s) URL`)
-    }
-    const models = p.models
-    if (!Array.isArray(models) || models.some((m) => typeof m !== 'string')) {
-      throw new ValidationError(`providers[${index}].models 需为字符串数组`)
-    }
-    const label = p.label
-    if (label !== undefined && typeof label !== 'string') {
-      throw new ValidationError(`providers[${index}].label 需为字符串`)
-    }
-    const enabled = p.enabled
-    if (typeof enabled !== 'boolean') {
-      throw new ValidationError(`providers[${index}].enabled 需为 boolean`)
-    }
-    rejectUnknownKeys(p, new Set(['id', 'protocol', 'baseUrl', 'models', 'label', 'enabled']))
-    out.push({
-      id,
-      protocol,
-      baseUrl,
-      models: models as string[],
-      ...(label !== undefined ? { label } : {}),
-      enabled,
-    })
-    index++
-  }
-  return out
+  assertBodySchema(PROVIDERS_BODY_SCHEMA, body, 'providers body')
+  const items = body.providers as Record<string, unknown>[]
+  return items.map((p) => ({
+    id: p.id as string,
+    protocol: p.protocol as 'openai' | 'anthropic',
+    baseUrl: p.baseUrl as string,
+    models: p.models as string[],
+    ...(p.label !== undefined ? { label: p.label as string } : {}),
+    enabled: p.enabled as boolean,
+  }))
+}
+
+const CREDENTIAL_BODY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { value: { type: 'string', minLength: 1, maxLength: 64 * 1024 } },
+  required: ['value'],
+  additionalProperties: false,
 }
 
 export function parseCredentialBody(body: Record<string, unknown>): string {
-  const value = requireString(body, 'value', { minLength: 1, maxLength: 64 * 1024 })
-  rejectUnknownKeys(body, new Set(['value']))
-  return value
+  assertBodySchema(CREDENTIAL_BODY_SCHEMA, body, 'credential body')
+  return body.value as string
+}
+
+const ACTION_INVOKE_BODY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    // input 为任意 JSON 值（含 null）；只要求键存在。
+    input: true,
+    conversationId: { type: 'integer', minimum: 1 },
+  },
+  required: ['input'],
+  additionalProperties: false,
 }
 
 export function parseActionInvokeBody(body: Record<string, unknown>): {
   input: unknown
   conversationId?: number
 } {
-  if (!('input' in body)) {
-    throw new ValidationError('body 需包含 input 字段')
+  assertBodySchema(ACTION_INVOKE_BODY_SCHEMA, body, 'action invoke body')
+  return {
+    input: body.input,
+    ...(body.conversationId !== undefined ? { conversationId: body.conversationId as number } : {}),
   }
-  rejectUnknownKeys(body, new Set(['input', 'conversationId']))
-  const conversationId = optionalNumber(body, 'conversationId')
-  if (conversationId !== undefined && (!Number.isInteger(conversationId) || conversationId <= 0)) {
-    throw new ValidationError('conversationId 需为正整数')
-  }
-  return { input: body.input, ...(conversationId !== undefined ? { conversationId } : {}) }
+}
+
+const PLUGIN_CONFIG_BODY_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    values: {
+      type: 'object',
+      additionalProperties: { type: ['string', 'number', 'boolean', 'null'] },
+    },
+  },
+  required: ['values'],
+  additionalProperties: false,
 }
 
 export function parsePluginConfigBody(body: Record<string, unknown>): Record<string, unknown> {
-  const raw = body.values
-  if (raw === undefined || typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new ValidationError('body 需为 { values: object }')
-  }
-  rejectUnknownKeys(body, new Set(['values']))
-  const values: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(raw)) {
-    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || v === null) {
-      values[k] = v
-    } else {
-      throw new ValidationError(`values.${k} 需为标量`)
-    }
-  }
-  return values
+  assertBodySchema(PLUGIN_CONFIG_BODY_SCHEMA, body, 'plugin config body')
+  return { ...(body.values as Record<string, unknown>) }
 }
 
-function rejectUnknownKeys(body: Record<string, unknown>, allowed: Set<string>): void {
+/** 手写组合校验器（schema 未覆盖的跨字段规则）专用：拒绝未知字段。 */
+export function rejectUnknownKeys(body: Record<string, unknown>, allowed: Set<string>): void {
   const unknown = Object.keys(body).filter((k) => !allowed.has(k))
   if (unknown.length > 0) {
     throw new ValidationError(`不支持的字段: ${unknown.join(', ')}`)
   }
-}
-
-// routes.ts 的 env exec body 边界校验复用同一实现（不另写一套规则）。
-export { rejectUnknownKeys }
-
-// ---------------------------------------------------------------------------
-// 会话上下文操作 body（reset / compact / fork）
-// ---------------------------------------------------------------------------
-
-/** POST /api/conversations/:id/reset：可选 handoff 文本。 */
-export function parseConversationResetBody(body: Record<string, unknown>): { handoff?: string } {
-  const handoff = optionalString(body, 'handoff', { maxLength: 512 * 1024 })
-  rejectUnknownKeys(body, new Set(['handoff']))
-  return handoff !== undefined ? { handoff } : {}
-}
-
-/** POST /api/conversations/:id/compact：可选 instructions 文本。 */
-export function parseConversationCompactBody(body: Record<string, unknown>): { instructions?: string } {
-  const instructions = optionalString(body, 'instructions', { maxLength: 512 * 1024 })
-  rejectUnknownKeys(body, new Set(['instructions']))
-  return instructions !== undefined ? { instructions } : {}
-}
-
-/** POST /api/conversations/:id/fork：entryId 必填正整数；title 可选 1..200。 */
-export function parseConversationForkBody(body: Record<string, unknown>): { entryId: number; title?: string } {
-  const raw = body.entryId
-  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
-    throw new ValidationError('entryId 需为安全范围内的正整数')
-  }
-  const title = optionalString(body, 'title', { minLength: 1, maxLength: 200 })
-  rejectUnknownKeys(body, new Set(['entryId', 'title']))
-  return { entryId: raw, ...(title !== undefined ? { title } : {}) }
-}
-
-/** POST /api/conversations/:id/withdraw：submissionId 必填安全正整数。 */
-export function parseConversationWithdrawBody(body: Record<string, unknown>): { submissionId: number } {
-  const raw = body.submissionId
-  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
-    throw new ValidationError('submissionId 需为安全范围内的正整数')
-  }
-  rejectUnknownKeys(body, new Set(['submissionId']))
-  return { submissionId: raw }
 }
 
 // ---------------------------------------------------------------------------
