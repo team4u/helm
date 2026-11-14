@@ -106,36 +106,91 @@ function makeApi(cwd: string, conversationId = 1) {
   } as never
 }
 
-/** 远端文件 env 替身：canonicalPath 解析映射 + fileInfo/readBinaryFile 真实字节。 */
+/** 远端文件替身：可注入读途中增长/info 变更/短读/打开后类型突变等异常场景。 */
+interface RemoteStubFile {
+  kind: 'file' | 'directory' | 'symlink'
+  size: number
+  bytes: Uint8Array
+  /** reader.read 返回内容（缺省 bytes 截到请求 length；用于增长/短读注入）。 */
+  readBytes?: Uint8Array
+  /** 第二次（读后）info 覆盖值（模拟读途中变更）。 */
+  infoAfterRead?: { size?: number; mtimeMs?: number }
+  /** reader.info 上报的 kind（缺省同 kind；模拟预检普通但打开后非普通文件）。 */
+  readerKind?: 'file' | 'directory' | 'symlink'
+}
+
+/** 远端文件 env 替身：canonicalPath 解析映射 + fileInfo + openBinaryReader
+ *  同 fd info/read/close（无 readBinaryFile：证明工具不依赖无界全量读取）。 */
 function makeRemoteFileEnv(options: {
   canonical: Record<string, string>
-  files: Map<string, { kind: 'file' | 'directory' | 'symlink'; size: number; bytes: Uint8Array }>
-}): { env: Record<string, unknown>; calls: string[] } {
+  files: Map<string, RemoteStubFile>
+}): {
+  env: Record<string, unknown>
+  calls: string[]
+  readers: Array<{ path: string; readLengths: number[]; infoCalls: number; closed: boolean }>
+} {
   const calls: string[] = []
+  const readers: Array<{ path: string; readLengths: number[]; infoCalls: number; closed: boolean }> = []
+  const notFound = (path: string) => ({
+    ok: false as const,
+    error: { code: 'not_found', message: `ENOENT: ${path}` },
+  })
   return {
     calls,
+    readers,
     env: {
       id: 'remote:fake-file-node',
       async canonicalPath(path: string, _context: Context) {
         calls.push(`canonicalPath:${path}`)
         const mapped = options.canonical[path]
-        return mapped === undefined
-          ? { ok: false, error: { code: 'not_found', message: `ENOENT: ${path}` } }
-          : { ok: true, value: mapped }
+        return mapped === undefined ? notFound(path) : { ok: true as const, value: mapped }
       },
       async fileInfo(path: string, _context: Context) {
         calls.push(`fileInfo:${path}`)
         const info = options.files.get(path)
         return info === undefined
-          ? { ok: false, error: { code: 'not_found', message: `ENOENT: ${path}` } }
-          : { ok: true, value: { kind: info.kind, size: info.size } }
+          ? notFound(path)
+          : { ok: true as const, value: { kind: info.kind, size: info.size } }
       },
-      async readBinaryFile(path: string, _context: Context) {
-        calls.push(`readBinaryFile:${path}`)
-        const info = options.files.get(path)
-        return info === undefined
-          ? { ok: false, error: { code: 'not_found', message: `ENOENT: ${path}` } }
-          : { ok: true, value: info.bytes }
+      async openBinaryReader(path: string, _opts: { noFollow?: boolean }, _context: Context) {
+        calls.push(`openBinaryReader:${path}`)
+        const file = options.files.get(path)
+        if (file === undefined) return notFound(path)
+        const record = { path, readLengths: [] as number[], infoCalls: 0, closed: false }
+        readers.push(record)
+        return {
+          ok: true as const,
+          value: {
+            async info(_context: Context) {
+              record.infoCalls += 1
+              const base = {
+                name: path,
+                path,
+                kind: file.readerKind ?? file.kind,
+                size: file.size,
+                mtimeMs: 1_000,
+              }
+              if (record.infoCalls >= 2 && file.infoAfterRead !== undefined) {
+                return { ok: true as const, value: { ...base, ...file.infoAfterRead } }
+              }
+              return { ok: true as const, value: base }
+            },
+            async read(offset: number, length: number, _context: Context) {
+              record.readLengths.push(length)
+              calls.push(`read:${length}`)
+              const source = file.readBytes ?? file.bytes
+              const available = Math.max(0, source.byteLength - offset)
+              return {
+                ok: true as const,
+                value: source.subarray(offset, offset + Math.min(length, available)),
+              }
+            },
+            async close(_context: Context) {
+              record.closed = true
+              calls.push('close')
+            },
+          },
+        }
       },
     },
   }
@@ -384,9 +439,9 @@ function limitReads(handle: FileHandle, maxPerRead: number): ArtifactReadHandle 
 }
 
 describe('register_artifact：remote 节点真实字节与显式拒绝', { timeout: 60_000 }, () => {
-  it('经 EnvFabric 读取远端字节成功；canonical 路径回显（软链解析后）', { timeout: 60_000 }, async () => {
+  it('经 EnvFabric 有界读取远端字节成功；canonical 路径回显（软链解析后）；句柄关闭', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra-remote-1')
-    const { env, calls } = makeRemoteFileEnv({
+    const { env, calls, readers } = makeRemoteFileEnv({
       canonical: { '/proj/link.bin': '/proj/real-data.bin' },
       files: new Map([
         ['/proj/real-data.bin', { kind: 'file', size: BINARY_SAMPLE.byteLength, bytes: BINARY_SAMPLE }],
@@ -402,7 +457,19 @@ describe('register_artifact：remote 节点真实字节与显式拒绝', { timeo
     assert.equal(structured.nodeId, 'n1')
     assert.equal(structured.size, BINARY_SAMPLE.byteLength)
     assert.ok(calls.includes('canonicalPath:/proj/link.bin'))
-    assert.ok(calls.includes('readBinaryFile:/proj/real-data.bin'))
+    assert.ok(calls.includes('openBinaryReader:/proj/real-data.bin'), '必经 openBinaryReader 有界读取')
+    assert.ok(
+      !calls.some((c) => c.startsWith('readBinaryFile')),
+      '绝不经 readBinaryFile 无界全量缓冲',
+    )
+    const reader = readers[0]!
+    assert.ok(
+      reader.readLengths.every((length) => length <= 15 * 1024 * 1024 + 1),
+      `read 请求长度必须有界（${reader.readLengths.join(',')}）`,
+    )
+    assert.equal(reader.readLengths[0], 15 * 1024 * 1024 + 1, '有界请求上限+1')
+    assert.equal(reader.infoCalls, 2, '打开后与读后各一次 info')
+    assert.equal(reader.closed, true, '成功路径同样释放句柄')
     const stored = Buffer.from(await deps.artifacts.readBuffer(structured.artifactId))
     assert.deepEqual([...stored], [...BINARY_SAMPLE], '远端字节原样保真')
   })
@@ -432,10 +499,10 @@ describe('register_artifact：remote 节点真实字节与显式拒绝', { timeo
     assert.equal(calls.length, 0, '离线/缺 fabric 不得发起任何远端读取')
   })
 
-  it('读前 fileInfo 超限拒绝（不读字节）；读后字节数超限同样显式拒绝', { timeout: 60_000 }, async () => {
+  it('读前 fileInfo 超限拒绝（不打开 reader）；预检小文件但读取增长超限同样实证拒绝且关闭句柄', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra-remote-3')
     const cap = 15 * 1024 * 1024
-    // 读前超限：fileInfo.size > 上限，readBinaryFile 绝不发起。
+    // 读前超限：fileInfo.size > 上限，openBinaryReader 绝不发起。
     const pre = makeRemoteFileEnv({
       canonical: { '/proj/huge.bin': '/proj/huge.bin' },
       files: new Map([['/proj/huge.bin', { kind: 'file', size: cap + 1, bytes: Buffer.alloc(0) }]]),
@@ -451,27 +518,111 @@ describe('register_artifact：remote 节点真实字节与显式拒绝', { timeo
     )
     assert.equal(preResult.isError, true)
     assert.ok((preResult.output as Array<{ text: string }>)[0]!.text.includes('artifact_too_large'))
-    assert.ok(!pre.calls.some((c) => c.startsWith('readBinaryFile')), '读前超限不得读字节')
-    // 读后超限：fileInfo 谎报小尺寸，readBinaryFile 返回超限字节。
-    const post = makeRemoteFileEnv({
+    assert.ok(!pre.calls.some((c) => c.startsWith('openBinaryReader')), '读前超限不得打开 reader')
+    // 预检小文件但 reader 读取时增长超上限：读到上限+1 即实证拒绝（绝不先
+    // 无界缓冲传输后才拒绝），句柄仍释放。
+    const grew = makeRemoteFileEnv({
       canonical: { '/proj/grew.bin': '/proj/grew.bin' },
       files: new Map([
-        ['/proj/grew.bin', { kind: 'file', size: 16, bytes: Buffer.alloc(cap + 1, 0x62) }],
+        [
+          '/proj/grew.bin',
+          { kind: 'file', size: 16, bytes: Buffer.alloc(0), readBytes: Buffer.alloc(cap + 1, 0x62) },
+        ],
       ]),
     })
-    const postDeps = await makeDeps(join(rootDir, 'ra-remote-3b'), {
-      envFabric: makeFabric({ platform: 'linux', env: post.env }),
+    const grewDeps = await makeDeps(join(rootDir, 'ra-remote-3b'), {
+      envFabric: makeFabric({ platform: 'linux', env: grew.env }),
       nodeIdOf: () => 'n1',
     })
-    const postResult = await createRegisterArtifactTool(postDeps).execute(
+    const grewResult = await createRegisterArtifactTool(grewDeps).execute(
       { path: 'grew.bin' },
       makeApi('/proj'),
       BACKGROUND_CONTEXT,
     )
-    assert.equal(postResult.isError, true)
-    const postText = (postResult.output as Array<{ text: string }>)[0]!.text
-    assert.ok(postText.includes('artifact_too_large'), `读后超限必须显式拒绝（${postText.slice(0, 80)}）`)
-    assert.ok(postText.includes(String(cap + 1)), '错误信息携带真实读到的字节数')
+    assert.equal(grewResult.isError, true)
+    const grewText = (grewResult.output as Array<{ text: string }>)[0]!.text
+    assert.ok(grewText.includes('artifact_too_large'), `增长超限必须显式拒绝（${grewText.slice(0, 80)}）`)
+    assert.ok(grewText.includes(String(cap + 1)), '错误信息携带真实读到的字节数')
+    assert.deepEqual(grew.readers[0]!.readLengths, [cap + 1], '有界请求上限+1（非无界 read）')
+    assert.equal(grew.readers[0]!.closed, true, '超限失败路径也释放句柄')
+  })
+
+  it('读取途中 info 变化 / 读取长短与稳定 size 不一致均 file_changed，不截断当成功；失败路径全部关闭句柄', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'ra-remote-4')
+    // 读途中追加：第二次 info 上报更大的 size（读后复核观察到变更）。
+    const mutated = makeRemoteFileEnv({
+      canonical: { '/proj/growing.bin': '/proj/growing.bin' },
+      files: new Map([
+        [
+          '/proj/growing.bin',
+          {
+            kind: 'file',
+            size: 64 * 1024,
+            bytes: Buffer.alloc(64 * 1024, 0x61),
+            infoAfterRead: { size: 64 * 1024 + 4096, mtimeMs: 2_000 },
+          },
+        ],
+      ]),
+    })
+    const mutatedDeps = await makeDeps(join(dir, 'a'), {
+      envFabric: makeFabric({ platform: 'linux', env: mutated.env }),
+      nodeIdOf: () => 'n1',
+    })
+    const mutatedResult = await createRegisterArtifactTool(mutatedDeps).execute(
+      { path: 'growing.bin' },
+      makeApi('/proj'),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(mutatedResult.isError, true)
+    const mutatedText = (mutatedResult.output as Array<{ text: string }>)[0]!.text
+    assert.ok(mutatedText.includes('file_changed'), `读途中变更应 file_changed（${mutatedText.slice(0, 80)}）`)
+    assert.ok(mutatedText.includes('69632'))
+    assert.equal(mutated.readers[0]!.closed, true, 'file_changed 失败路径释放句柄')
+    // info 前后一致但读到的字节数少于稳定 size（截断视图）：同样拒绝。
+    const shortRead = makeRemoteFileEnv({
+      canonical: { '/proj/short.bin': '/proj/short.bin' },
+      files: new Map([
+        [
+          '/proj/short.bin',
+          { kind: 'file', size: 4096, bytes: Buffer.alloc(0), readBytes: Buffer.alloc(2048, 0x63) },
+        ],
+      ]),
+    })
+    const shortDeps = await makeDeps(join(dir, 'b'), {
+      envFabric: makeFabric({ platform: 'linux', env: shortRead.env }),
+      nodeIdOf: () => 'n1',
+    })
+    const shortResult = await createRegisterArtifactTool(shortDeps).execute(
+      { path: 'short.bin' },
+      makeApi('/proj'),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(shortResult.isError, true)
+    const shortText = (shortResult.output as Array<{ text: string }>)[0]!.text
+    assert.ok(shortText.includes('file_changed'), '长短与稳定 size 不一致应拒绝')
+    assert.ok(shortText.includes('2048'))
+    assert.equal(shortRead.readers[0]!.closed, true, '不一致失败路径释放句柄')
+    // 打开后非普通文件：预检 kind=file 通过，reader.info 上报非普通文件，
+    // 权威拒绝且释放句柄、未读任何字节。
+    const special = makeRemoteFileEnv({
+      canonical: { '/proj/pipe.fifo': '/proj/pipe.fifo' },
+      files: new Map([
+        ['/proj/pipe.fifo', { kind: 'file', size: 0, bytes: Buffer.alloc(0), readerKind: 'symlink' }],
+      ]),
+    })
+    const specialDeps = await makeDeps(join(dir, 'c'), {
+      envFabric: makeFabric({ platform: 'linux', env: special.env }),
+      nodeIdOf: () => 'n1',
+    })
+    const specialResult = await createRegisterArtifactTool(specialDeps).execute(
+      { path: 'pipe.fifo' },
+      makeApi('/proj'),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(specialResult.isError, true)
+    assert.ok((specialResult.output as Array<{ text: string }>)[0]!.text.includes('不是普通文件'))
+    assert.equal(special.readers[0]!.closed, true, '特殊文件失败路径释放句柄')
+    assert.equal(special.readers[0]!.readLengths.length, 0, '未读任何字节')
   })
 })
 

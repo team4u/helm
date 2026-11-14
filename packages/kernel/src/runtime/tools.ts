@@ -73,7 +73,6 @@ import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { constants as fsConstants } from 'node:fs'
 import { mkdir, open, readFile, realpath, stat, writeFile } from 'node:fs/promises'
-import type { FileHandle } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { MAX_ARTIFACT_BYTES } from '../services/artifacts.js'
 import { composeExecutionEnv, MANAGED_EXEC_ENV_VARS } from '../env/scoped-env.js'
@@ -1189,10 +1188,7 @@ export type ArtifactFileBytes =
   | { ok: false; code: 'artifact_too_large'; read: number }
   | { ok: false; code: 'file_changed'; detail: string }
 
-/**
- * helper 读取所需的最小句柄面（结构化：真实 FileHandle 天然满足，测试可用
- * 包装真实句柄注入短读/读途中变更，不需模拟整个 FileHandle）。
- */
+/** helper 读取所需的最小句柄面（真实 FileHandle 结构化满足，便于测试注入短读/变更）。 */
 export interface ArtifactReadHandle {
   stat(): Promise<{ size: number; mtimeMs: number; ctimeMs: number }>
   read(
@@ -1218,13 +1214,9 @@ function artifactOpenFlags(): number {
 
 /**
  * 同一 FileHandle 上有界读到 EOF（register_artifact local 路径唯一实现）：
- * - 逐块循环读到 EOF：单次短读只推进游标继续循环，绝不把短读当完整文件
- *  （旧实现一次性 read(size) 在文件增长时最多读到旧 size，把静默截断的
- *  前缀当成功登记）；
- * - 总预算 MAX_ARTIFACT_BYTES + 1：读到超限即停并显式 artifact_too_large
- *  （读上限+1 字节即为超限实证，绝无 bytesRead > MAX 永假的死分支）；
- * - 读取前后同一 fd fstat 对比 size/mtime/ctime：中途被追加/截断/改写时
- *  显式 file_changed，绝不把旧前缀登记成功（无快照系统，只做前后对比）。
+ * 逐块循环到 EOF（短读只推进游标，绝不当完整文件）；总预算 MAX+1（读到
+ * 上限+1 即实证超限）；读后同 fd stat 对比 size/mtime/ctime，中途变更显式
+ * file_changed，绝不把旧前缀登记成功。
  */
 export async function readArtifactBytesFromHandle(handle: ArtifactReadHandle): Promise<ArtifactFileBytes> {
   const before = await handle.stat()
@@ -1264,8 +1256,9 @@ export async function readArtifactBytesFromHandle(handle: ArtifactReadHandle): P
  *
  * 诚实性契约：
  * - 在目标节点读取真实文件字节（远端必经 EnvFabric 的 canonicalPath /
- *   fileInfo / readBinaryFile；节点离线或 EnvFabric 缺失显式失败，绝不回退
- *   local 误读 Hub 本机磁盘）；
+ *   fileInfo 预检 + openBinaryReader 同 fd 有界读取；节点离线或 EnvFabric
+ *   缺失显式失败，绝不回退 local 误读 Hub 本机磁盘，也不 fallback
+ *   readBinaryFile 的无界全量缓冲）；
  * - 只接受普通文件（目录/特殊文件拒绝）：stat 预检分类（无竞态场景）+
  *   O_NONBLOCK（平台支持时）open 封 stat→open 竞态窗口（换成 FIFO 不阻塞）
  *   + 同一 fd fstat 权威复核；上限 MAX_ARTIFACT_BYTES（15 MiB，与上传入口
@@ -1377,20 +1370,91 @@ export function createRegisterArtifactTool(
               isError: true,
             }
           }
-          const bytesR = await env.readBinaryFile(sourcePath, context)
-          if (!bytesR.ok) throw new Error(bytesR.error.message)
-          bytes = bytesR.value
-          // 读后复核：预检与读取之间文件可能增长，超限显式拒绝（不截断当成功）。
-          if (bytes.byteLength > MAX_ARTIFACT_BYTES) {
-            return {
-              output: [
-                {
-                  type: 'text',
-                  text: `artifact_too_large: ${args.path} 读取到 ${bytes.byteLength} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`,
-                },
-              ],
-              isError: true,
+          // 有界二进制读取：openBinaryReader 打开后的同 fd positional 读取
+          //（节点实现 O_NONBLOCK 打开 + 同 fd fstat 拒特殊文件），绝不走
+          // readBinaryFile 的无界全量缓冲（源文件增长数 GB 会先整体缓冲传输
+          // 后才拒绝）。打开失败显式拒绝，无任何回退。
+          const readerR = await env.openBinaryReader(sourcePath, { noFollow: true }, context)
+          if (!readerR.ok) throw new Error(readerR.error.message)
+          const reader = readerR.value
+          try {
+            // 打开后权威信息（同 fd，非路径视图）：kind/size/mtime 以 reader
+            // 的 info 为准，预检 size 只作快速拒绝。
+            const openedR = await reader.info(context)
+            if (!openedR.ok) throw new Error(openedR.error.message)
+            const opened = openedR.value
+            if (opened.kind !== 'file') {
+              return {
+                output: [
+                  {
+                    type: 'text',
+                    text: `register_failed: ${args.path} 在打开后不是普通文件（kind=${opened.kind}），拒绝读取`,
+                  },
+                ],
+                isError: true,
+              }
             }
+            if (opened.size > MAX_ARTIFACT_BYTES) {
+              return {
+                output: [
+                  {
+                    type: 'text',
+                    text: `artifact_too_large: ${args.path} 为 ${opened.size} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`,
+                  },
+                ],
+                isError: true,
+              }
+            }
+            // 请求上限+1：SDK 契约「最多 length 字节、仅 EOF 处更短」，内部
+            // 循环短读至 length 或 EOF——超限即实证，绝无先全量后拒绝。
+            const readR = await reader.read(0, MAX_ARTIFACT_BYTES + 1, context)
+            if (!readR.ok) throw new Error(readR.error.message)
+            const readBytes = readR.value
+            if (readBytes.byteLength > MAX_ARTIFACT_BYTES) {
+              return {
+                output: [
+                  {
+                    type: 'text',
+                    text: `artifact_too_large: ${args.path} 读取到 ${readBytes.byteLength} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`,
+                  },
+                ],
+                isError: true,
+              }
+            }
+            // 读后二次 info（同 fd）：size/mtime 与打开时不一致或读取长短与
+            // 稳定 size 不一致均拒绝（读途中增长/截断不得截断当成功）。
+            const afterR = await reader.info(context)
+            if (!afterR.ok) throw new Error(afterR.error.message)
+            const after = afterR.value
+            if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs) {
+              return {
+                output: [
+                  {
+                    type: 'text',
+                    text:
+                      `file_changed: ${args.path} 读取期间文件发生变化` +
+                      `（size ${opened.size} -> ${after.size}，mtime ${opened.mtimeMs} -> ${after.mtimeMs}），拒绝登记可能不完整的快照`,
+                  },
+                ],
+                isError: true,
+              }
+            }
+            if (readBytes.byteLength !== opened.size) {
+              return {
+                output: [
+                  {
+                    type: 'text',
+                    text: `file_changed: ${args.path} 读取到 ${readBytes.byteLength} 字节与稳定大小 ${opened.size} 不一致，拒绝截断当成功`,
+                  },
+                ],
+                isError: true,
+              }
+            }
+            bytes = readBytes
+          } finally {
+            // 取消/失败路径同样释放远端句柄（节点侧 reader 生命周期与连接
+            // 绑定，显式 close 立即回收）。
+            await reader.close(BACKGROUND_CONTEXT)
           }
         } else {
           // local：与 read 工具同构——先 stat（跟随软链）预检分类（目录/特殊
