@@ -241,7 +241,7 @@ describe('computeEditDiff 纯函数：行边界形态', { timeout: 60_000 }, () 
   it('重复上下文：同文本不同行号（行号真实不折叠）', { timeout: 60_000 }, () => {
     const original = 'r\nr\nr\nTARGET\nr\nr\nr\n'
     const diff = diffOf(original, 'TARGET', 'DONE')
-    const contexts = diff.rows.filter((r) => r.kind === 'context') as Array<{ oldLine: number }>
+    const contexts = diff.rows.filter((r) => r.kind === 'context')
     assert.deepEqual(contexts.map((r) => r.oldLine), [1, 2, 3, 5, 6, 7])
     assert.deepEqual(rowTexts(contexts), ['r', 'r', 'r', 'r', 'r', 'r'])
   })
@@ -483,11 +483,11 @@ async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<Hel
 }
 
 const ajv = new Ajv({ allErrors: true, strict: false })
-const validateEditResult = ajv.compile(EDIT_TOOL_RESULT_SCHEMA)
+const validateEditResult = ajv.compile<EditToolResult>(EDIT_TOOL_RESULT_SCHEMA)
 
 function assertSchemaValid(structured: unknown): EditToolResult {
   assert.ok(validateEditResult(structured), `结构化输出应符合 EDIT_TOOL_RESULT_SCHEMA：${JSON.stringify(validateEditResult.errors)}`)
-  return structured as EditToolResult
+  return structured
 }
 
 /** 受控远端 env：真实内存文件表（对齐 file-mutation-queue.test.ts 模式）。 */
