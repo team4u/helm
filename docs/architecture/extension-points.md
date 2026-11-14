@@ -19,6 +19,8 @@
 | `HookBridge` | 每次模型请求按 scope 裁剪插件工具；钩子链收敛后投射 `prompt.tools.*` 与 `prompt.actions`，清理不可达能力的旧指引 |
 | `AssetReloader` | 纯文件资产（Profile/技能）的热重载协调 |
 
+插件可通过 `ctx.host.onEvent` 观察内核产生的会话摘要、条目、实时视图和删除事件。监听器收到经过边界校验与脱敏的事件信封；活动统计由消费插件按真实内容变化计算，不在所有会话的核心追踪器中维护 Watchdog 专用计数。订阅随插件生命周期解除。
+
 动作与工具的认知入口均由声明驱动：`ctx.action` 默认进入 `<available_actions>` 目录，`exposeAsTool: true` 则使用独立工具声明，`ctx.tool` 提供模型专用工具。`promptSnippet` / `promptGuidelines` 仅在对应能力对当前会话可达时注入；动作目录依赖最终工具集保留 `run_action`。完整参数 Schema 可用 `run_action({ actionId, describe: true })` 按需只读获取，不执行 handler。内置与外部插件使用相同机制，具体范式见 [插件开发指南](../plugins/plugin-development.md#动作自动发现与会话目录)。
 
 ## 后端：7 个生命周期 Hook

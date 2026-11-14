@@ -31,6 +31,12 @@ stateDiagram-v2
 
 会话正忙（`working`）时新输入的三种策略由 `WhenBusy` 表达：`steer`（内核默认）中止当前步骤并注入新指令；`followUp` 排队至当前回合结束后作为下轮输入；`reject` 直接拒绝并返回冲突。无第三种隐式行为，批处理投递请显式 `followUp`。
 
+### 输入身份与 SDK 关联
+
+输入以持久 `ConversationInput.id` 为唯一身份，该值也是提交给 SDK 的 `requestId`。提交前登记、观察到 entry 或 inbox 后重建，都按这个身份合并元数据。SDK 的 `run.inputs` 和 `runFailure.inputs` 使用 submission ID，追踪器通过独立的 `submissionId → requestId` 索引关联，不能把两种标识当作同一个值。
+
+重启恢复活跃回合时，追踪器按 SDK 的权威 submission 清单精确回读对应 entry，补齐来源、元数据和附件；结算与撤回同时清理输入记录及关联索引。完成、失败和中止继续通过统一结算路径通知插件，不使用临时负数或另一套字符串键来迁移输入身份。
+
 ### 输入来源、归属权与插件管理权
 
 每次提交的 `helm.input` entry 附着输入来源 `origin: 'human' | 'agent' | 'trigger'`，从 CLI/HTTP 一路透传到 `turn_settled` 钩子。后台 Worker 本回合消费的输入只要含任一 `agent / trigger` 来源，即向 `routerConversationId`（SuperAgent 中枢）投递汇报卡片；纯 `human` 回合仅静默更新召回图谱。
