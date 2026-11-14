@@ -86,7 +86,7 @@ return { reports: reports.filter(report => report !== null) }
 - 也可建 Profile：`runtime: { kind: "herdr", agent: "<kind>", nodeId?, workspace?, env? }`，之后 `agentType` 直接用该 Profile ID。
 - 结果经工作目录下 `.helm/wf-out-<safeId>.json|.md` 交接文件回传（subagent 原地追问自愈）；终端 blocked 状态实时桥接为带 expectedStateSeq CAS 乐观锁的 AskDoc 审批卡（人类已在终端按键则 Web 端自动 superseded）。
 - 外部运行时不改变生命周期缺省：派生方会话的归属决定后台/同步，外部窗格任务的后台汇报同样走父会话幂等汇报链。
-- Herdr 原生 `agent.prompt` 支持向 `working` 代理补充输入，`blocked` 时显式拒绝；目标 CLI 决定输入是插话还是排队。Helm 的 `workflow.steer` 已接入外部 Herdr 执行：仅当目标服务端在 `ping` 通告拟议的 `agent_prompt_guard_v1` 原子守卫能力时才投递（未通告则 fail-closed 显式拒绝；当前历史 Herdr 服务端 0.9.5 / protocol 22 不提供，属 Helm 待服务端配套的契约，勿向用户声称真实 Herdr 已可用）。不能用 `resume` 给运行中的窗格插话：Helm 会拒绝 busy 续接。`resume` 仅适用于仍存在且空闲、归属验证通过的执行；窗格清理后该标识可能已失效，必须按实际错误处理。
+- Herdr 原生 `agent.prompt` 支持向 `working` 代理补充输入，`blocked` 时显式拒绝；目标 CLI 决定输入是插话还是排队。Helm 的 `workflow.steer` 已接入外部 Herdr 执行：仅当目标服务端在 `ping` 通告拟议的 `agent_prompt_guard_v1` 原子守卫能力时才投递（未通告则 fail-closed 显式拒绝；当前历史 Herdr 服务端 0.9.5 / protocol 22 不提供，属 Helm 待服务端配套的契约，勿向用户声称真实 Herdr 已可用）。插话会附带唯一交接标识，最终结果还需附上匹配最新标识的确认文件；无确认或确认非法时显式失败并保留现场，不能把旧结果当作完成。不能用 `resume` 给运行中的窗格插话：Helm 会拒绝 busy 续接。`resume` 仅适用于仍存在且空闲、归属验证通过的执行；窗格清理后该标识可能已失效，必须按实际错误处理。
 
 ## 与 builtin:superagent 后台 Worker 协作
 

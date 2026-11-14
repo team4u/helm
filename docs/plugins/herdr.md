@@ -40,9 +40,13 @@ Herdr 原生 `agent.prompt` 支持向 `working` 状态的代理继续提交输�
 - 能力通告：`ping` 返回 `pong.capabilities.agent_prompt_guard_v1 === true`（严格布尔，缺失如实视为不支持）；
 - 请求字段：`agent.prompt` params 增 `guard: { terminal_id, pane_id, tab_id, agent_name, state_change_seq, agent_status: 'working' }`，不携带 `wait`；`terminal_id` 必须取权威 `agent.get` 回传的真实值；
 - 守卫语义（硬性要求）：服务端在写入任何 PTY 字节前原子核验完整身份四元组 + 水位 + `working`，且**守卫覆盖完整「文本 + 回车」投递期**（真实投递是先粘贴文本、延时后回车的多步序列，仅首字节前核验不足以保证整个 submission；需服务端以原子提交或输入保留实现）；核验不符返回 `stale_state` / `agent_not_ready` / `agent_blocked` 且零字节写入；部分写入后发生的异常必须如实报告为不确定结果，调用方不得重试；
-- 现状证据（服务端源码只读核实，herdr 0.9.5 / protocol 22）：`AgentPromptParams` 仅 `{target, text, wait}`，无 guard 字段；旧服务端 serde 会静默忽略未知 guard 字段并照常投递。因此未通告该能力的服端被 fail-closed 拒绝（`409 herdr_steer_guard_unsupported`，附服务端 version/protocol 诊断），**绝不盲发**。在服务端配套发布前，不能声称真实 Herdr 全链路可用；仓内测试用的是实现该拟议契约的 fixture，不代表实际 Herdr 能力。
+- 现状证据（服务端源码只读核实，herdr 0.9.5 / protocol 22）：`AgentPromptParams` 仅 `{target, text, wait}`，无 guard 字段；旧服务端 serde 会静默忽略未知 guard 字段并照常投递。因此未通告该能力的服务端被 fail-closed 拒绝（`409 herdr_steer_guard_unsupported`，附服务端 version/protocol 诊断），**绝不盲发**。在服务端配套发布前，不能声称真实 Herdr 全链路可用；仓内测试用的是实现该拟议契约的 fixture，不代表实际 Herdr 能力。
 
-原 `driveTask` 在结算等待中排空在途 steer 并做权威复查：首个 `idle/done` 可能早于 steer 投递完成被 `agent.wait` 观察到，不能直接进入文件交接——排空后以 `agent.get` 复查，`working` 回到等待、`blocked` 交审批桥，真实 settled 才进入交接阶段并立即拒绝后续 steer。不用固定延时声称证明指令消费（CLI 内部队列消费不由协议保证）。不能用运行中 `resume` 代替插话（`resumeInto` 拒绝被占用窗格）；`resume` 仍只适用于存在、空闲且归属验证通过的执行。外部运行时不改变派生方会话的后台缺省策略（见 workflow 插件文档「默认后台协同」）。
+原 `driveTask` 先排空在途 steer 并重读权威状态：`working` 回到等待、`blocked` 交审批桥。仅看到 `idle/done` 仍不能证明 CLI 已消费排队输入，因此每次投递还携带唯一的 `receipt` 和确认文件契约。CLI 必须先按最新指导写完原结果文件，再原子写入同目录的 `wf-out-<原标识>-s.json`，内容为 `{"receipt":"<最新标识>"}`。业务结果的文件路径和 JSON Schema 不变。Helm 严格校验确认 JSON，旧 receipt 无法确认新插话；确认只证明完成该次指导的交接，业务结果仍需通过原 Schema 和 Gate。
+
+结算前的确认校验与进入 handoff 阶段在同一同步段内完成，期间又有插话则重新核验。窗格开始关闭后立即拒绝插话。缺确认时以启动超时预算等待后续 `working/blocked`，预算耗尽并复查仍未确认则报 `herdr_steer_unconfirmed`，保留现场；确认文件非法时报 `herdr_steer_confirmation_invalid`。两者均不读取旧结果冒充完成、不自动补发 prompt。投递超时或断线时保守保留待确认 receipt；只有服务端明确零写入的拒绝才撤销本次标识。成功交接后清理确认文件，清理失败单独通知。
+
+不能用运行中 `resume` 代替插话（`resumeInto` 拒绝被占用窗格）；`resume` 仍只适用于存在、空闲且归属验证通过的执行。外部运行时不改变派生方会话的后台缺省策略（见 workflow 插件文档「默认后台协同」）。
 
 **Gate 恰好一次验收**：文件成功后若请求带 `gate` 命令，在窗格实际节点与实际 cwd（worktree 模式为隔离树路径）、以建窗时的同一 env 执行恰好一次门禁命令（本机 `runLocalGate`，远端经节点通道）；`exit != 0` 即失败。
 

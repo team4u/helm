@@ -104,6 +104,7 @@ class GuardServerTransport implements HerdrTransport {
         const tab = this.tabs.get(params['tab_id'] as string)
         if (!tab) throw new HelmError('tab_not_found', 'no tab', 404)
         tab.closed = true
+        for (const [id, pane] of this.panes) if (pane.tabId === params['tab_id']) this.panes.delete(id)
         return { type: 'ok' }
       }
       case 'agent.start': {
@@ -121,6 +122,7 @@ class GuardServerTransport implements HerdrTransport {
         const pane = this.paneOf(params['target'])
         const until = ((params['until'] as string[]) ?? []).map((s) => s as PaneStatus)
         for (let i = 0; i < 4_000; i += 1) {
+          if (!this.panes.has(pane.paneId)) throw new HelmError('agent_not_found', 'pane closed', 404)
           if (until.length === 0 || until.includes(pane.agentStatus)) {
             return { type: 'agent_info', agent: agentInfoOf(pane) }
           }
@@ -206,6 +208,15 @@ class GuardServerTransport implements HerdrTransport {
     if (!pane) return
     pane.agentStatus = status
     pane.seq += 1
+    if (status === 'idle' || status === 'done') {
+      const delivered = this.steerDelivered.filter((entry) => entry.paneId === paneId).at(-1)?.text
+      if (delivered !== undefined) {
+        const receipt = delivered.match(/确认 receipt：([A-Za-z0-9_-]+)/)?.[1]
+        const file = delivered.match(/\.helm\/(wf-out-[A-Za-z0-9_.-]+-s\.json)/)?.[1]
+        assert.ok(receipt !== undefined && file !== undefined)
+        this.outputFiles.set(`${pane.cwd}/.helm/${file}`, JSON.stringify({ receipt }))
+      }
+    }
     this.emit({ type: 'pane.updated', paneId })
   }
 }
