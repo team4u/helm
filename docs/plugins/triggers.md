@@ -1,6 +1,6 @@
 # 触发器插件：Cron 与 Webhook 入站连接器
 
-`builtin:triggers` 是系统的入站连接器（可选启用）：Cron 定时器与 Webhook 接收器两大连接器把外部事件经共享投递 helper 送入内核 `trigger` 管道，统一 `defang` 防逃逸包裹后路由到目标会话。管理界面基于 `client.tsx` React 单轨实现（`TriggersManagerScreen` 与 `TriggersSettingsPanel`），不再有声明式 JSON 管理界面。
+`builtin:triggers` 是系统的入站连接器（默认启用，可停用）：Cron 定时器与 Webhook 接收器两大连接器把外部事件经共享投递 helper 送入内核 `trigger` 管道，统一 `defang` 防逃逸包裹后路由到目标会话。管理界面基于 `client.tsx` React 单轨实现（`TriggersManagerScreen` 与 `TriggersSettingsPanel`），不再有声明式 JSON 管理界面。
 
 ## Cron 定时编排
 

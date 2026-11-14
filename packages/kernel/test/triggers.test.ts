@@ -2,7 +2,7 @@
  * builtin:triggers（cron + webhook 入站连接器）独立验收测试。
  *
  * 组合纪律：真实 createHelm（真 SQLite + 真 PluginHost + 真 assistant）+
- * faux provider；启用插件走 host.enable；HTTP 面经真实 createHubHandler
+ * faux provider；插件由 createHelm 默认启用；HTTP 面经真实 createHubHandler
  * （public 豁免与派发共用 route-match）断言 webhook 验签链。不 mock app、
  * 不 fake host 端口。
  *
@@ -72,14 +72,11 @@ async function makeEnv(): Promise<TestEnv> {
   return env
 }
 
-/** 组合层默认注册插件，启用操作仍需显式调用。 */
+/** 组合层默认注册并启用插件。 */
 function requireTriggersRegistered(env: TestEnv): void {
   const summary = env.app.kernel.plugins.list().find((p) => p.id === TRIGGERS)
   assert.ok(summary, `${TRIGGERS} 应由 createHelm 默认注册`)
-}
-
-async function enableTriggers(env: TestEnv): Promise<void> {
-  await env.app.kernel.plugins.enable(TRIGGERS)
+  assert.equal(summary.enabled, true, `${TRIGGERS} 应由 createHelm 默认启用`)
 }
 
 /** 等待谓词成立（轮询，默认 5s 超时）。 */
@@ -129,35 +126,32 @@ const sign = (secret: string, body: Uint8Array | string): string =>
 // 1. 注册 / 启停 / 动作清单契约
 // ---------------------------------------------------------------------------
 
-test('triggers1: createHelm 默认停用注册；无动作无路由无公开 doc', { timeout: 60_000 }, async () => {
+test('triggers1: createHelm 默认启用注册；动作、路由、UI 与公开 doc 就绪', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
     const host = env.app.kernel.plugins
     const summary = host.list().find((p) => p.id === TRIGGERS)!
-    assert.equal(summary.enabled, false, '默认必须停用注册（与 superagent/herdr 同契约）')
-    assert.equal(summary.actions.length, 0)
-    assert.deepEqual(host.listUi().filter((u) => u.pluginId === TRIGGERS), [])
-    assert.deepEqual(host.listRoutes().filter((r) => r.pluginId === TRIGGERS), [])
-    assert.throws(
-      () => host.getPublicDoc(TRIGGERS, 'crons'),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+    assert.ok(summary.actions.length > 0, '默认启用即暴露动作清单')
+    assert.ok(host.listUi().some((u) => u.pluginId === TRIGGERS), '默认启用即挂载 UI 贡献')
+    assert.ok(
+      host.listRoutes().some((r) => r.pluginId === TRIGGERS),
+      '默认启用即挂载 webhook 公开路由',
     )
-    // 停用态动作调用显式拒绝（409 plugin_disabled，绝不静默成功）
-    await assert.rejects(
-      () => host.invokeAction(TRIGGERS, 'cron_list', {}),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_disabled',
-    )
+    const doc = host.getPublicDoc(TRIGGERS, 'crons')
+    assert.deepEqual(doc.value, { version: 1, jobs: [] })
+    // 启用态动作直接可调（空任务清单形状合法）
+    const listed = (await host.invokeAction(TRIGGERS, 'cron_list', {})) as { jobs: unknown[] }
+    assert.deepEqual(listed, { jobs: [] })
   } finally {
     await env.close()
   }
 })
 
-test('triggers2: enable 后七个动作注册、schema 边界与 cli.command 声明', { timeout: 60_000 }, async () => {
+test('triggers2: 七个动作注册、schema 边界与 cli.command 声明', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
-    await enableTriggers(env)
     const host = env.app.kernel.plugins
     const summary = host.list().find((p) => p.id === TRIGGERS)!
     assert.equal(summary.enabled, true)
@@ -220,7 +214,6 @@ test('triggers3: cron CRUD 契约——默认值、重复创建拒绝、list/del
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
-    await enableTriggers(env)
     const host = env.app.kernel.plugins
 
     const empty = (await host.invokeAction(TRIGGERS, 'cron_list', {})) as { jobs: unknown[] }
@@ -287,7 +280,6 @@ test('triggers4: cron_trigger 手动触发——信封进入 #1、origin=trigger
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
-    await enableTriggers(env)
     const kernel = env.app.kernel
 
     await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
@@ -332,7 +324,6 @@ test('triggers5: cron 目标路由——显式会话直投；启用 superagent �
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
-    await enableTriggers(env)
     const kernel = env.app.kernel
 
     // 5a. 显式 targetConversationId：直投目标会话（superagent 修复后不得覆盖）
@@ -416,7 +407,6 @@ test('triggers6: webhook CRUD——元数据不含 secret、重复拒绝、公�
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
-    await enableTriggers(env)
     const host = env.app.kernel.plugins
     const SECRET = 'whsec_meta_no_leak_9527'
 
@@ -465,7 +455,6 @@ test('triggers7: webhook HTTP 验签——raw 精确字节、成功 202、无签
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
-    await enableTriggers(env)
     const kernel = env.app.kernel
     const SECRET = 'whsec_raw_bytes_3f09'
     await kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'ci', secret: SECRET })
@@ -518,7 +507,6 @@ test('triggers8: webhook defang 注入防护与 UTF-8 边界', { timeout: 60_000
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
-    await enableTriggers(env)
     const kernel = env.app.kernel
     const SECRET = 'whsec_inject'
     await kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'evil', secret: SECRET })
@@ -548,7 +536,6 @@ test('triggers9: secret 落 credentials.json 0600、不进 docs/SQLite、删除�
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
-    await enableTriggers(env)
     const kernel = env.app.kernel
     const S1 = 'whsec_keep_me_111'
     const S2 = 'whsec_remove_me_222'
@@ -689,7 +676,6 @@ test('triggers11: disable 后路由撤下、动作拒绝；doc 404', { timeout: 
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
-    await enableTriggers(env)
     await env.app.kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'bye', secret: 'whsec_bye' })
     // webhook 端点为持久占用：先验证默认 409 拦截，再 force 停用。
     await assert.rejects(
@@ -730,7 +716,6 @@ test('triggers11: disable 后路由撤下、动作拒绝；doc 404', { timeout: 
 test('triggers12: UI 贡献——管理视图与设置面板为 client 单轨', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    await enableTriggers(env)
     const ui = env.app.kernel.plugins.listUi().filter((u) => u.pluginId === TRIGGERS)
     const surfaces = ui.map((u) => u.surface).sort()
     assert.deepEqual(surfaces, ['screen', 'settings.panel', 'sidebar.item'], '三个 UI 贡献面')

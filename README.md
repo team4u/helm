@@ -73,7 +73,7 @@ flowchart TD
         PA["builtin:apps (应用中心与微应用工坊 / 默认启用)"]
         P2["builtin:herdr (终端 CLI Agent 主控)"]
         P3["builtin:superagent (双层中枢与看门狗)"]
-        P4["builtin:triggers (Cron 与 Webhook 触发器)"]
+        P4["builtin:triggers (Cron 与 Webhook 触发器 / 默认启用)"]
         P5["builtin:magpie (动态模型网关)"]
         P6["builtin:json-render (声明式渲染 / 默认启用)"]
         P7["builtin:mermaid (图表渲染 / 默认启用)"]
@@ -256,7 +256,7 @@ Helm 采用微内核设计，所有扩展能力均由插件提供，停用后其
 | `builtin:apps` | 应用中心与微应用工坊 | 全栈微应用目录（`catalog`）、`validate/publish/list/update_meta/remove` 动作（`helm apps`）与 `app-builder` 技能 | 默认启用（可停用） |
 | `builtin:herdr` | 终端 Agent 主控 | 连接 Herdr 终端 IPC，调度 23 种终端 CLI，负责结构化交接、追问自愈与 CAS 审批桥 | 默认停用，按需启用 |
 | `builtin:superagent` | 双层中枢与看门狗 | 零阻塞路由中枢、后台驻留 Worker、两层巡检与状态自愈（巡检周期由插件服务自管） | 默认停用（实验性） |
-| `builtin:triggers` | 自动化触发器 | 提供 Cron 定时调度与 Webhook 入站，验证签名并防逃逸投递 | 默认停用，按需启用 |
+| `builtin:triggers` | 自动化触发器 | 提供 Cron 定时调度与 Webhook 入站，验证签名并防逃逸投递 | 默认启用（可停用） |
 | `builtin:magpie` | 动态模型网关 | 连接动态模型网关，原生协议分发，提供目录热重载与配额路由视图 | 默认停用，按需启用 |
 | `builtin:json-render` | 声明式渲染 | 聊天 `ui` 代码围栏的 JSON DSL、求值器与界面原语，并维护 `generative-ui` 技能 | 默认启用（可停用） |
 | `builtin:mermaid` | 图表渲染 | 接管 Markdown 中 Mermaid 代码块渲染；停用后回退普通代码块 | 默认启用（可停用） |

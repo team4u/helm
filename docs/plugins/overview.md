@@ -15,7 +15,7 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 
 ## 内置插件全景
 
-内核启动时由组合层（`app.ts`）按固定顺序注册 10 个内置插件。前 6 个默认启用，后 4 个默认停用、按需开启：
+内核启动时由组合层（`app.ts`）按固定顺序注册 10 个内置插件。前 7 个默认启用，后 3 个默认停用、按需开启：
 
 | 插件 ID | 名称 | 职责一句话 | 默认状态 | locked |
 | :--- | :--- | :--- | :--- | :--- |
@@ -25,9 +25,9 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 | `builtin:json-render` | JSON 卡片渲染 | 接管 ```ui 代码围栏渲染声明式 JSON Spec 卡片，自举 `generative-ui` 技能 | 启用 | 否 |
 | `builtin:mermaid` | Mermaid 图表 | 接管 ```mermaid 代码围栏，把 Mermaid 文本渲染为矢量图表 | 启用 | 否 |
 | `builtin:apps` | 应用中心 | 全栈微应用目录（`catalog`）、`validate/publish/list/update_meta/remove` 动作、应用中心启动台与 `app-builder` 技能 | 启用 | 否 |
+| `builtin:triggers` | 触发器 | Cron 定时与 Webhook 签名入站连接器 | 启用 | 否 |
 | `builtin:herdr` | Herdr 终端 | 拦截 `agent_spawn` 驱动本机/远端 Herdr CLI Agent，带 CAS 审批桥 | 停用 | 否 |
 | `builtin:superagent` | SuperAgent 中枢 | 双层中枢（总控路由 + 驻留 Worker）与两层巡检看门狗 | 停用 | 否 |
-| `builtin:triggers` | 触发器 | Cron 定时与 Webhook 签名入站连接器 | 停用 | 否 |
 | `builtin:magpie` | Magpie 网关 | 动态模型网关接入：模型目录、配额与路由组诊断 | 停用 | 否 |
 
 10 个插件之间正交且可组合：`builtin:profile` 为所有会话提供认知底座；`builtin:memory` 与之正交（内核对记忆零感知）；`builtin:apps` 经 `ctx.host.plugins` 受管包端口管理用户全栈微应用的预检与发布；`builtin:workflow` 的编排引擎消费 `builtin:herdr` 接管的外部运行时（经 `agent_spawn` 管道，对脚本层透明）；`builtin:superagent` 的 Watchdog 经 `diagnostics.collect` 进程内事件采集 Herdr 窗格探针；`builtin:json-render` 与 `builtin:mermaid` 是扩展点之上的普通消费者，停用即回退普通代码块，不影响其他插件。

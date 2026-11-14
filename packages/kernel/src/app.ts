@@ -23,9 +23,9 @@ export async function createHelm(options: HelmOptions = {}) {
     await kernel.plugins.register(createJsonRenderPlugin());
     await kernel.plugins.register(createMermaidPlugin());
     await kernel.plugins.register(createAppsPlugin({ hubCwd: options.cwd ?? process.cwd() }));
+    await kernel.plugins.register(createTriggersPlugin());
     await kernel.plugins.register(createHerdrPlugin(), { enabled: false });
     await kernel.plugins.register(createSuperAgentPlugin(), { enabled: false });
-    await kernel.plugins.register(createTriggersPlugin(), { enabled: false });
     await kernel.plugins.register(createMagpiePlugin(), { enabled: false });
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
     // 全部工具注册后统一 prepare -> start，最后恢复 SDK 调度器。
