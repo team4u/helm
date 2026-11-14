@@ -11,7 +11,7 @@
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Models, ModelsStore } from '@earendil-works/pi-ai'
-import { DEFAULT_COMPACTION_POLICY, Harness, createRegistry, type CompactionPolicy, type Registry } from '@earendil-works/pi-durable'
+import { Harness, createRegistry, type Registry } from '@earendil-works/pi-durable'
 import { HelmError } from '@helm/protocol'
 import { CredentialService, ProviderService, ensureDataDir, resolveDataDir } from '../services/index.js'
 import { buildModels } from './models.js'
@@ -47,10 +47,6 @@ export interface BootstrappedKernelContext {
   modelsInstance: Models
   modelsStore: ModelsStore
   apiKeyCache: Record<string, string>
-  /** 生效压缩策略（contextUsage 阈值计算用）：helm 不 override SDK compaction
-   * 设置，故为 SDK 默认值；未来若在 settings 配置 compaction，需同步改为
-   * 按模型经 SDK compactionPolicy() 计算。 */
-  compactionPolicy: CompactionPolicy
   setModels(m: Models): void
   redactReport(fn: (text: string) => string): void
 }
@@ -129,7 +125,6 @@ export async function bootstrapKernelRuntime(
     modelsInstance,
     modelsStore,
     apiKeyCache,
-    compactionPolicy: { ...DEFAULT_COMPACTION_POLICY },
     setModels: (m: Models) => {
       modelsSlot.current = m
     },

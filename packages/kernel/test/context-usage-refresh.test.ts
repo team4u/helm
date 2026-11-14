@@ -10,7 +10,9 @@
  * 5. 首次填充携带 compacting 时必须发布 upsert（否则订阅方永远看不到）；
  *    无压缩状态的首次填充保持静默；
  * 6. 窗口来源诚实性：helmContextWindowKnown === false 的静态缺省窗口不得
- *    作为已知窗口携带（contextWindow/thresholds 省略）。
+ *    作为已知窗口携带（contextWindow 省略）；
+ * 7. 压缩失败通知：新的 compactionFailure 恰发一次脱敏 error notification，
+ *    同一 taskId 重复快照不重复通知，新 taskId 再报。
  *
  * 确定性：刷新的调度与 harness.conversation 调用都在同步段发生（断言即时可
  * 见）；异步推进全部经手动释放的 deferred / ensureContextUsage settle 事件，
@@ -21,7 +23,6 @@ import { describe, it } from 'node:test'
 import type { ContextView, ConversationView, Harness, Observation, Observer } from '@earendil-works/pi-durable'
 import { createModels } from '@earendil-works/pi-ai/models'
 import type { Models, Provider } from '@earendil-works/pi-ai'
-import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
 import type { UserMessage } from '@earendil-works/pi-ai'
 import type { ConversationSummary } from '@helm/protocol'
 import { ConversationTracker, type TrackerEvents } from '../src/runtime/conversations.js'
@@ -58,7 +59,9 @@ function usageView(chars: number): ContextView {
 }
 
 function tokensOf(chars: number): number {
-  return estimateMessageTokens(userContent(chars))
+  // 固定期望（pi agent chars/4）：usageView 的用户消息为 'a'.repeat(chars)，
+  // 不镜像被测实现。
+  return Math.ceil(chars / 4)
 }
 
 /** 刷新结果队列项：即时视图或手动释放的 deferred。 */
@@ -140,16 +143,24 @@ function metaOf(model: string): ConvMeta {
   }
 }
 
-function eventsOf(): TrackerEvents & { summaries: ConversationSummary[] } {
+function eventsOf(): TrackerEvents & {
+  summaries: ConversationSummary[]
+  notifications: Array<{ level: string; title: string; body?: string; conversationId: number }>
+} {
   const summaries: ConversationSummary[] = []
+  const notifications: Array<{ level: string; title: string; body?: string; conversationId: number }> = []
   return {
     summaries,
+    notifications,
     onSummaryChanged: (summary) => {
       summaries.push(summary)
     },
     onInputCommitted: () => {},
     onTurnSettled: async () => {},
     onAssistantText: () => {},
+    onNotification: (payload) => {
+      notifications.push(payload)
+    },
   }
 }
 
@@ -185,6 +196,7 @@ function trackerEnv(options?: {
   model?: string
   initialEntries?: EntrySpec[]
   initialLive?: Record<string, unknown>
+  redactError?: (text: string) => string
 }): {
   harness: FakeHarness
   store: FakeStore
@@ -203,6 +215,7 @@ function trackerEnv(options?: {
     store: store as unknown as HelmStore,
     events,
     models: () => models,
+    ...(options?.redactError !== undefined ? { redactError: options.redactError } : {}),
   })
   return { harness, store, events, tracker }
 }
@@ -388,8 +401,7 @@ describe('上下文用量刷新：首次填充发布规则', { timeout: 60_000 }
     await env.tracker.ensureContextUsage(1)
     assert.equal(env.events.summaries.length, 1, '首次填充携带压缩状态必须发布')
     const usage = env.events.summaries[0]!.contextUsage
-    assert.ok(usage?.compacting, '发布帧必须携带 compacting')
-    assert.equal(usage.compacting.trigger, 'manual')
+    assert.equal(usage?.compacting, true, '发布帧必须携带 compacting 布尔')
   })
 
   it('无压缩状态的首次填充保持静默（帧纪律不变）', { timeout: 60_000 }, async () => {
@@ -406,22 +418,57 @@ describe('上下文用量刷新：首次填充发布规则', { timeout: 60_000 }
 // ---------------------------------------------------------------------------
 
 describe('上下文用量刷新：窗口来源诚实性', { timeout: 60_000 }, () => {
-  it('已知窗口模型携带 contextWindow/thresholds；静态缺省标记模型省略', { timeout: 60_000 }, async () => {
+  it('已知窗口模型携带 contextWindow；静态缺省标记模型省略', { timeout: 60_000 }, async () => {
     const known = trackerEnv({ model: 'faux/m-known' })
     await known.tracker.observe(1)
     await known.tracker.ensureContextUsage(1)
     const knownUsage = known.tracker.summaryOf(1).contextUsage!
     assert.ok(knownUsage)
     assert.equal(knownUsage.contextWindow, 200_000, '策展窗口如实携带')
-    assert.equal(knownUsage.thresholds?.blockingTokens, 200_000 - 16_384)
 
     const unknown = trackerEnv({ model: 'faux/m-unknown' })
     await unknown.tracker.observe(1)
     await unknown.tracker.ensureContextUsage(1)
     const unknownUsage = unknown.tracker.summaryOf(1).contextUsage!
     assert.ok(unknownUsage)
-    assert.ok(unknownUsage.tokens > 0, '用量估算仍然提供')
+    assert.ok(unknownUsage.tokens !== null && unknownUsage.tokens > 0, '用量估算仍然提供')
     assert.equal(unknownUsage.contextWindow, undefined, '静态缺省窗口不得显示为已知')
-    assert.equal(unknownUsage.thresholds, undefined, '窗口未知时不推导阈值')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 7. 压缩失败通知（脱敏 + 去重）
+// ---------------------------------------------------------------------------
+
+describe('上下文用量刷新：压缩失败通知', { timeout: 60_000 }, () => {
+  it('新的 compactionFailure 恰发一次脱敏 error notification；同一 taskId 重复快照不重复；新 taskId 再报', { timeout: 60_000 }, async () => {
+    const failure = { taskId: 5, trigger: 'manual', error: 'sk-abc 网关 500' }
+    const env = trackerEnv({
+      initialLive: { compactionFailure: failure },
+      redactError: (t) => t.replace('sk-abc', '***'),
+    })
+    await env.tracker.observe(1)
+    assert.equal(env.events.notifications.length, 1, '初始快照的失败必须上报（不静默）')
+    const notice = env.events.notifications[0]!
+    assert.equal(notice.level, 'error')
+    assert.equal(notice.title, '上下文精简失败')
+    assert.equal(notice.conversationId, 1)
+    assert.match(notice.body ?? '', /\*\*\* 网关 500/, '错误摘要必须经注入 redact 脱敏')
+    assert.ok(!(notice.body ?? '').includes('sk-abc'), '机密不得回显')
+
+    // 同一失败重复出现在后续快照：不得重复通知。
+    env.harness.advance(viewOf({ live: { compactionFailure: failure } }))
+    env.harness.advance(viewOf({ live: { compactionFailure: failure, run: { taskId: 3, inputs: [] } } }))
+    assert.equal(env.events.notifications.length, 1, '同一 taskId 不得重复通知')
+
+    // 新的失败（新 taskId）：再报一次。
+    env.harness.advance(viewOf({ live: { compactionFailure: { taskId: 6, trigger: 'threshold', error: 'again' } } }))
+    assert.equal(env.events.notifications.length, 2)
+    assert.match(env.events.notifications[1]!.body ?? '', /阈值/)
+
+    // 无失败的快照：不发；失败清除后再次出现同一 taskId 也不重报（同 runtime 去重）。
+    env.harness.advance(viewOf({ live: {} }))
+    env.harness.advance(viewOf({ live: { compactionFailure: { taskId: 6, trigger: 'threshold', error: 'again' } } }))
+    assert.equal(env.events.notifications.length, 2)
   })
 })
