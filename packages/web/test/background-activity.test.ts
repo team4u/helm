@@ -1,12 +1,15 @@
 /**
- * 侧栏「会话后台在途」模型与渲染测试：
+ * 侧栏「会话后台在途」模型与渲染测试（单灯语义）：
  * - 纯函数层 summarizeConversationBackgroundActivity / collectBackgroundBadgeDocs /
- *   resolveStandingStatusIndicator / backgroundAwareStatusTooltip 的契约（tone=accent
- *   才在途、neutral 历史计数与 warn 失败不误报、全局角标不参与、scope 过滤、
- *   插件贡献/doc 缺失归零、非 primary 会话后台活跃透出到一级站位行、
- *   error > blocked > working 优先级）；
- * - Sidebar SSR 渲染：idle/done + 后台在途空心环、与 working 实心点并列不冒充、
- *   tooltip 同时陈述基础状态与后台摘要、展开态不重复显示；
+ *   resolveStandingStatusIndicator / resolveStatusLight / backgroundAwareStatusTooltip
+ *   的契约（tone=accent 才在途、neutral 历史计数与 warn 失败不误报、全局角标
+ *   不参与、scope 过滤、插件贡献/doc 缺失归零、非 primary 会话后台活跃透出到
+ *   一级站位行、error > blocked > working 优先级）；
+ * - 单灯优先级：working/blocked/error 主会话状态灯独占（不渲染后台空心环、
+ *   tooltip 不叠加后台摘要）；idle/done + 后台在途仅渲染空心环（done 绿点让位）；
+ *   无后台在途保持五态原样；
+ * - Sidebar SSR 渲染：会话行/折叠站位行/sidebar.section 分组行均只有一个灯，
+ *   展开态站位行不重复显示、子会话行各自一个灯；
  * - 挂载路径：badge doc 经 Sidebar effect 按需 ensurePluginDoc（纯函数零副作用）。
  */
 import assert from 'node:assert/strict'
@@ -18,11 +21,12 @@ import { createRoot, type Root } from 'react-dom/client'
 import type { ConversationSummary, PluginUiContribution, WorkbenchPanelSpec } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
-import { conversationStatusTooltip } from '../src/shell/sidebar-model.js'
+import { conversationStatusDotClass, conversationStatusTooltip } from '../src/shell/sidebar-model.js'
 import {
   backgroundAwareStatusTooltip,
   collectBackgroundBadgeDocs,
   resolveStandingStatusIndicator,
+  resolveStatusLight,
   summarizeConversationBackgroundActivity,
   type ConversationBackgroundIndex,
 } from '../src/shell/background-activity-model.js'
@@ -188,7 +192,7 @@ test('多面板聚合：footerText 去重后拼接，在途取并集', { timeout
 })
 
 // ---------------------------------------------------------------------------
-// 纯函数层：一级站位聚合与 tooltip 组合
+// 纯函数层：一级站位聚合、单灯优先级与 tooltip 组合
 // ---------------------------------------------------------------------------
 
 test('站位聚合优先级 error > blocked > working；并列取列表首个（primary 置顶序）', { timeout: 60_000 }, () => {
@@ -226,7 +230,25 @@ test('后台在途来自非 primary 会话也能透出，摘要跨会话去重',
   assert.equal(indicator?.backgroundSummary, '1 运行中', '相同 footerText 跨会话去重')
 })
 
-test('tooltip 组合：基础状态与后台摘要同时陈述；无在途时与既有文案一致', { timeout: 60_000 }, () => {
+test('resolveStatusLight 单灯优先级：主状态独占灯位，idle/done 让位后台空心环', { timeout: 60_000 }, () => {
+  // working/blocked/error：主会话状态灯独占，后台在途完全不参与灯位
+  for (const status of ['working', 'blocked', 'error'] as const) {
+    assert.deepEqual(
+      resolveStatusLight(status, true),
+      { dotClass: conversationStatusDotClass(status), background: false },
+      `${status} 状态灯必须独占，不渲染后台空心环`,
+    )
+  }
+  // idle/done + 后台在途：仅空心环（idle 的无灯与 done 的绿点让位）
+  assert.deepEqual(resolveStatusLight('idle', true), { dotClass: 'status-dot status-dot-background', background: true })
+  assert.deepEqual(resolveStatusLight('done', true), { dotClass: 'status-dot status-dot-background', background: true })
+  // 无后台在途：保持五态原样
+  assert.deepEqual(resolveStatusLight('working', false), { dotClass: 'status-dot status-dot-working', background: false })
+  assert.deepEqual(resolveStatusLight('done', false), { dotClass: 'status-dot status-dot-done', background: false })
+  assert.deepEqual(resolveStatusLight('idle', false), { dotClass: null, background: false })
+})
+
+test('tooltip 组合：状态灯独占时只陈述主回合；空心环灯位叠加基础状态 + 后台摘要', { timeout: 60_000 }, () => {
   assert.equal(
     backgroundAwareStatusTooltip({ status: 'idle', backgroundActive: false }),
     conversationStatusTooltip('idle'),
@@ -239,9 +261,18 @@ test('tooltip 组合：基础状态与后台摘要同时陈述；无在途时与
     backgroundAwareStatusTooltip({ status: 'done', backgroundActive: true, backgroundSummary: '' }),
     '已完成 · 后台任务运行中',
   )
+  // working/blocked/error：即使后台在途，tooltip 也只显示主会话状态/doing/lastError
   assert.equal(
     backgroundAwareStatusTooltip({ status: 'working', doing: '正在思考方案', backgroundActive: true, backgroundSummary: '2 运行中' }),
-    '运行中: 正在思考方案 · 后台任务: 2 运行中',
+    '运行中: 正在思考方案',
+  )
+  assert.equal(
+    backgroundAwareStatusTooltip({ status: 'blocked', backgroundActive: true, backgroundSummary: '2 运行中' }),
+    '待确认',
+  )
+  assert.equal(
+    backgroundAwareStatusTooltip({ status: 'error', lastError: 'model_error: x', backgroundActive: true }),
+    '异常: model_error: x',
   )
   assert.equal(
     backgroundAwareStatusTooltip({ status: 'error', lastError: 'model_error: x', backgroundActive: false }),
@@ -250,7 +281,7 @@ test('tooltip 组合：基础状态与后台摘要同时陈述；无在途时与
 })
 
 // ---------------------------------------------------------------------------
-// Sidebar 渲染：会话行与一级站位行的空心环
+// Sidebar 渲染：会话行与折叠站位行的单灯位
 // ---------------------------------------------------------------------------
 
 const BASE_PROFILES = [
@@ -269,7 +300,47 @@ function renderSidebar(store: HelmStoreValue): string {
   return renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
 }
 
-test('idle 会话 + 后台在途：折叠站位行渲染空心环，tooltip 同时陈述空闲与后台摘要', { timeout: 60_000 }, () => {
+/** 统计会话状态灯数量（排除 ActivityRail 的 SSE 连接点 status-dot-connected）。 */
+function countStatusLights(html: string): number {
+  return (
+    html.match(/class="status-dot(?: status-dot-(?:working|blocked|done|error|background))?"/g) ?? []
+  ).length
+}
+
+test('working/blocked/error 会话 + 后台在途：只渲染主会话状态灯，无 background class', { timeout: 60_000 }, () => {
+  for (const [status, dotClass] of [
+    ['working', 'status-dot-working'],
+    ['blocked', 'status-dot-blocked'],
+    ['error', 'status-dot-error'],
+  ] as const) {
+    const store = sidebarStore({
+      conversations: [
+        conv({
+          id: 1,
+          title: '主会话',
+          profileId: 'assistant',
+          status,
+          doing: status === 'working' ? '正在思考方案' : undefined,
+          lastError: status === 'error' ? 'model_error: boom' : undefined,
+          updatedAt: 9000,
+        }),
+        conv({ id: 50, title: '别处', profileId: 'coder' }),
+      ],
+      primaryTarget: { kind: 'conversation', conversationId: 50 },
+      groupedUi: groupUiContributions([panelContribution()]),
+      pluginDocs: {
+        'builtin:workflow/run-badges': badgesDoc({ '1': { count: 3, tone: 'accent', footerText: '3 运行中' } }),
+      },
+    })
+    const html = renderSidebar(store)
+    assert.ok(html.includes(`class="status-dot ${dotClass}"`), `${status} 主会话状态灯保留`)
+    assert.ok(!html.includes('status-dot-background'), `${status} 状态灯独占，不渲染后台空心环`)
+    assert.ok(!html.includes('后台任务'), `${status} tooltip 不叠加后台摘要`)
+    assert.equal(countStatusLights(html), 1, `${status} 折叠站位行只有一个灯`)
+  }
+})
+
+test('idle 会话 + 后台在途：仅渲染后台空心环，tooltip 陈述空闲 + 后台摘要', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', updatedAt: 9000 }),
@@ -285,9 +356,10 @@ test('idle 会话 + 后台在途：折叠站位行渲染空心环，tooltip 同�
   assert.ok(html.includes('class="status-dot status-dot-background"'), '应渲染后台在途空心环')
   assert.ok(html.includes('title="空闲 · 后台任务: 2 运行中"'), 'tooltip 同时陈述基础状态与后台摘要')
   assert.ok(!html.includes('status-dot-working'), 'idle + 后台在途不得冒充会话自身 working')
+  assert.equal(countStatusLights(html), 1, '折叠站位行只有一个灯')
 })
 
-test('done 会话 + 后台在途：已完成圆点与空心环并列呈现', { timeout: 60_000 }, () => {
+test('done 会话 + 后台在途：绿点让位，仅渲染后台空心环', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', updatedAt: 9000 }),
@@ -300,34 +372,37 @@ test('done 会话 + 后台在途：已完成圆点与空心环并列呈现', { t
     },
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('class="status-dot status-dot-done"'), 'done 基础圆点保留')
-  assert.ok(html.includes('class="status-dot status-dot-background"'), '空心环与基础圆点并列')
-  assert.ok(html.includes('title="已完成 · 后台任务: 1 运行中"'))
+  assert.ok(html.includes('class="status-dot status-dot-background"'), '后台在途空心环为唯一灯位')
+  assert.ok(!html.includes('class="status-dot status-dot-done"'), 'done 绿点必须让位，不得与空心环并列')
+  assert.ok(html.includes('title="已完成 · 后台任务: 1 运行中"'), 'tooltip 陈述已完成 + 后台摘要')
+  assert.equal(countStatusLights(html), 1, '折叠站位行只有一个灯')
 })
 
-test('working 会话 + 后台在途：两种圆点共存且不互相覆盖文案', { timeout: 60_000 }, () => {
+test('无后台在途：保持五态原样（done 绿点、idle 无灯）', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'working', doing: '正在思考方案', updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', updatedAt: 9000 }),
+      conv({ id: 2, title: '闲置话题', profileId: 'assistant' }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     groupedUi: groupUiContributions([panelContribution()]),
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '1': { count: 3, tone: 'accent', footerText: '3 运行中' } }),
+      'builtin:workflow/run-badges': badgesDoc({ '1': { count: 5, tone: 'neutral', footerText: '5 条历史' } }),
     },
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('class="status-dot status-dot-working"'), 'working 实心脉冲点保留')
-  assert.ok(html.includes('class="status-dot status-dot-background"'), '后台空心环并列')
-  assert.ok(html.includes('title="运行中: 正在思考方案 · 后台任务: 3 运行中"'))
+  assert.ok(html.includes('class="status-dot status-dot-done"'), '无在途时 done 保持绿点')
+  assert.ok(!html.includes('status-dot-background'), 'neutral 历史计数不得点亮空心环')
+  assert.equal(countStatusLights(html), 1, 'done 会话一个灯，idle 会话无灯')
 })
 
-test('展开态：站位行不重复显示指示，子会话行呈现各自状态与空心环', { timeout: 60_000 }, () => {
+test('展开态：站位行不重复显示指示，每个子会话行各自一个灯', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', updatedAt: 9000 }),
-      conv({ id: 2, title: '旧话题', profileId: 'assistant' }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', updatedAt: 9000 }),
+      conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
+      conv({ id: 3, title: '失败话题', profileId: 'assistant', status: 'error', lastError: 'model_error: boom' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 1 },
     groupedUi: groupUiContributions([panelContribution()]),
@@ -337,15 +412,19 @@ test('展开态：站位行不重复显示指示，子会话行呈现各自状�
   })
   const html = renderSidebar(store)
   assert.ok(html.includes('agent-conversations-list'), '当前智能体展开话题子列表')
-  assert.ok(html.includes('title="空闲 · 后台任务: 1 运行中"'), '子会话行展示自身在途摘要')
+  assert.ok(html.includes('title="空闲 · 后台任务: 1 运行中"'), 'idle 子会话行展示后台空心环')
+  assert.ok(html.includes('class="status-dot status-dot-error"'), 'error 子会话行展示自身状态灯')
+  assert.ok(html.includes('class="status-dot status-dot-done"'), 'done 子会话行保持绿点')
+  // 三个子会话行各一个灯（done 绿点 / 后台空心环 / error 状态灯），站位行不重复
+  assert.equal(countStatusLights(html), 3, '展开态每个子会话行恰好一个灯，站位行不显示')
   assert.equal(
     (html.match(/status-dot-background/g) ?? []).length,
     1,
-    '展开态只在子会话行显示一次，站位行不重复显示',
+    '后台空心环只在对应子会话行显示一次',
   )
 })
 
-test('折叠站位行聚合非 primary 会话：后台在途与 error 均可从次要会话透出', { timeout: 60_000 }, () => {
+test('折叠站位行：非 primary 后台在途 + 代表会话 working/blocked/error 时隐藏后台环', { timeout: 60_000 }, () => {
   // primary idle + 次会话 error：站位行透出 error（代表会话 = 次会话）
   const errorStore = sidebarStore({
     conversations: [
@@ -360,8 +439,29 @@ test('折叠站位行聚合非 primary 会话：后台在途与 error 均可从�
   assert.ok(errorHtml.includes('title="异常: model_error: boom"'))
   assert.ok(!errorHtml.includes('status-dot-background'), '无在途徽章时不渲染空心环')
 
-  // primary idle + 次会话后台在途：站位行透出空心环（代表会话仍为 primary）
-  const backgroundStore = sidebarStore({
+  // primary idle + 次会话后台在途 + 另一次会话 blocked：状态灯独占，隐藏整个站位的后台环
+  const blockedStore = sidebarStore({
+    conversations: [
+      conv({ id: 1, title: '主会话', profileId: 'assistant', updatedAt: 9000 }),
+      conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
+      conv({ id: 3, title: '阻塞话题', profileId: 'assistant', status: 'blocked' }),
+      conv({ id: 50, title: '别处', profileId: 'coder' }),
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 50 },
+    groupedUi: groupUiContributions([panelContribution()]),
+    pluginDocs: {
+      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 运行中' } }),
+    },
+  })
+  const blockedHtml = renderSidebar(blockedStore)
+  assert.ok(blockedHtml.includes('class="status-dot status-dot-blocked"'), '代表会话 blocked 状态灯透出')
+  assert.ok(!blockedHtml.includes('status-dot-background'), '代表状态 blocked 时隐藏整个站位的后台环')
+  assert.ok(!blockedHtml.includes('后台任务'), 'tooltip 只显示代表会话状态')
+})
+
+test('折叠站位行：代表会话 idle/done 时仅渲染一个后台空心环（非 primary 后台透出）', { timeout: 60_000 }, () => {
+  // primary idle + 次会话后台在途：站位行仅一个空心环（代表会话仍为 primary）
+  const idleStore = sidebarStore({
     conversations: [
       conv({ id: 1, title: '主会话', profileId: 'assistant', updatedAt: 9000 }),
       conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
@@ -373,13 +473,34 @@ test('折叠站位行聚合非 primary 会话：后台在途与 error 均可从�
       'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 运行中' } }),
     },
   })
-  const backgroundHtml = renderSidebar(backgroundStore)
-  assert.ok(backgroundHtml.includes('class="status-dot status-dot-background"'), '非 primary 会话的后台在途透出到站位行')
-  assert.ok(backgroundHtml.includes('title="空闲 · 后台任务: 4 运行中"'))
+  const idleHtml = renderSidebar(idleStore)
+  assert.ok(idleHtml.includes('class="status-dot status-dot-background"'), '非 primary 会话的后台在途透出到站位行')
+  assert.ok(idleHtml.includes('title="空闲 · 后台任务: 4 运行中"'))
+  assert.equal(countStatusLights(idleHtml), 1, '站位行只有一个后台空心环，无并列基础圆点')
+
+  // primary done + 次会话后台在途：done 绿点让位，同样仅一个空心环
+  const doneStore = sidebarStore({
+    conversations: [
+      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', updatedAt: 9000 }),
+      conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
+      conv({ id: 50, title: '别处', profileId: 'coder' }),
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 50 },
+    groupedUi: groupUiContributions([panelContribution()]),
+    pluginDocs: {
+      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 2, tone: 'accent', footerText: '2 运行中' } }),
+    },
+  })
+  const doneHtml = renderSidebar(doneStore)
+  assert.ok(!doneHtml.includes('class="status-dot status-dot-done"'), '代表 done 绿点让位')
+  assert.ok(doneHtml.includes('class="status-dot status-dot-background"'), '仅渲染后台空心环')
+  assert.ok(doneHtml.includes('title="已完成 · 后台任务: 2 运行中"'))
+  assert.equal(countStatusLights(doneHtml), 1, '站位行只有一个后台空心环')
 })
 
-test('sidebar.section 分组会话行同样消费后台在途空心环', { timeout: 60_000 }, () => {
-  const store = sidebarStore({
+test('sidebar.section 分组会话行同样遵守单灯语义', { timeout: 60_000 }, () => {
+  // idle + 后台在途：仅空心环
+  const idleStore = sidebarStore({
     conversations: [
       conv({ id: 20, title: 'Worker A', profileId: 'coder', tags: ['worker'], status: 'idle' }),
       conv({ id: 50, title: '别处', profileId: 'assistant' }),
@@ -393,9 +514,29 @@ test('sidebar.section 分组会话行同样消费后台在途空心环', { timeo
       'builtin:workflow/run-badges': badgesDoc({ '20': { count: 1, tone: 'accent', footerText: '1 运行中' } }),
     },
   })
-  const html = renderSidebar(store)
-  assert.ok(html.includes('后台 Worker'), '分组渲染')
-  assert.ok(html.includes('title="空闲 · 后台任务: 1 运行中"'), '分组会话行空心环 + 摘要')
+  const idleHtml = renderSidebar(idleStore)
+  assert.ok(idleHtml.includes('后台 Worker'), '分组渲染')
+  assert.ok(idleHtml.includes('title="空闲 · 后台任务: 1 运行中"'), '分组会话行空心环 + 摘要')
+
+  // working + 后台在途：仅主状态灯，无 background class
+  const workingStore = sidebarStore({
+    conversations: [
+      conv({ id: 20, title: 'Worker A', profileId: 'coder', tags: ['worker'], status: 'working', doing: '执行任务' }),
+      conv({ id: 50, title: '别处', profileId: 'assistant' }),
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 50 },
+    groupedUi: groupUiContributions([
+      panelContribution(),
+      { pluginId: 'builtin:superagent', surface: 'sidebar.section', spec: { id: 'workers', label: '后台 Worker', filterTag: 'worker' } },
+    ]),
+    pluginDocs: {
+      'builtin:workflow/run-badges': badgesDoc({ '20': { count: 1, tone: 'accent', footerText: '1 运行中' } }),
+    },
+  })
+  const workingHtml = renderSidebar(workingStore)
+  assert.ok(workingHtml.includes('class="status-dot status-dot-working"'), '分组会话行主状态灯保留')
+  assert.ok(!workingHtml.includes('status-dot-background'), '分组会话行不与后台空心环并列')
+  assert.ok(!workingHtml.includes('后台任务'), 'tooltip 不叠加后台摘要')
 })
 
 test('插件停用（贡献消失）或仅剩 neutral 历史计数时无任何在途指示', { timeout: 60_000 }, () => {
