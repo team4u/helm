@@ -9,7 +9,7 @@ import { isAbsoluteTargetPath } from '@helm/protocol'
 import { jsonOk, errorResponse, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
 import type { KernelRuntimeLike } from './contracts.js'
-import { assertBodySchema, NODE_ID_PATTERN_SOURCE, ValidationError } from './validate.js'
+import { assertBodySchema, NODE_ID_PATTERN_SOURCE, requireUtf16LengthAtMost, ValidationError } from './validate.js'
 import type { RouteContext } from './route-context.js'
 import { parseOptionalJsonObjectBody, readOptionalJsonBody } from './route-context.js'
 
@@ -139,8 +139,11 @@ const NODE_ISSUE_BODY_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-// 升级 body 机械形状（类型/长度/未知字段）走 schema；targetVersion 的
+// 升级 body 机械形状（类型/未知字段）走 schema；targetVersion 的
 // trim + 严格 SemVer、registryUrl 的可解析 + 含主机名语义保留手写。
+// targetVersion 的 maxLength:64 无需 UTF-16 守卫：严格 SemVer 仅接受纯
+// ASCII（码点数 == 码元数），被码点计数放过的非 BMP 输入必过不了
+// SemVer 同样 400，拒绝边界不变。
 const NODE_UPGRADE_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -151,8 +154,10 @@ const NODE_UPGRADE_BODY_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-// 主机名：非空、≤255、无空白、无控制字符（与原逐字符检查同语义）。
-const HOST_FIELD = { type: 'string', minLength: 1, maxLength: 255, pattern: '^[^\\s\\x00-\\x1f\\x7f]+$' } as const
+// 主机名：非空白、无控制字符（与原逐字符检查同语义）；maxLength 不进
+// schema（AJV 码点计数会放宽非 BMP 输入），由 parseNodeForwardBody 内
+// 的 UTF-16 守卫以原 string.length 口径兑底。
+const HOST_FIELD = { type: 'string', minLength: 1, pattern: '^[^\\s\\x00-\\x1f\\x7f]+$' } as const
 
 const NODE_FORWARD_BODY_SCHEMA: JsonSchema = {
   type: 'object',
@@ -261,11 +266,14 @@ function parseNodeUpgradeBody(body: Record<string, unknown>): { targetVersion?: 
 }
 
 /** POST /api/nodes/:id/forward body：listenHost/listenPort/targetPort 必填，
- * targetHost 可选；形状（含主机名无空白/控制字符）已由 schema 保证。 */
+ * targetHost 可选；形状（含主机名无空白/控制字符）已由 schema 保证，
+ * 长度上限（UTF-16 码元 ≤ 255）由守卫保持原手写口径。 */
 function parseNodeForwardBody(
   body: Record<string, unknown>,
 ): { listenHost: string; listenPort: number; targetHost?: string; targetPort: number } {
   assertBodySchema(NODE_FORWARD_BODY_SCHEMA, body, 'node forward body')
+  requireUtf16LengthAtMost('listenHost', body.listenHost as string, 255)
+  if (body.targetHost !== undefined) requireUtf16LengthAtMost('targetHost', body.targetHost as string, 255)
   return {
     listenHost: body.listenHost as string,
     listenPort: body.listenPort as number,

@@ -54,6 +54,21 @@ export function assertBodySchema(schema: JsonSchema, value: unknown, what: strin
   }
 }
 
+/**
+ * UTF-16 码元长度上限守卫：AJV maxLength 按码点计数（代理对算 1），
+ * 与原手写校验的 string.length（UTF-16 码元，非 BMP 字符算 2）口径不同
+ * ——含 emoji 等非 BMP 字符的输入会让 schema 边界放宽（如 101 个 emoji
+ * 的 title 是 101 码点/202 码元，原实现拒、纯 schema 放行）。受影响的
+ * 字段不再在 schema 里声明 maxLength，统一由此守卫恢复原拒绝边界；
+ * 不给 AJV 加自定义 plugin、不改其全局 Unicode 语义。
+ * minLength:1 无此偏差（空串同拒、非空同过），仍留在 schema。
+ */
+export function requireUtf16LengthAtMost(field: string, value: string, maxLength: number): void {
+  if (value.length > maxLength) {
+    throw new ValidationError(`${field} 长度需 <= ${maxLength}`)
+  }
+}
+
 export function requireString(body: Record<string, unknown>, field: string, opts?: { maxLength?: number; minLength?: number }): string {
   const value = body[field]
   if (typeof value !== 'string') {
@@ -225,7 +240,9 @@ export function parseConversationPatch(body: Record<string, unknown>): Conversat
 const INPUT_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
-    text: { type: 'string', maxLength: 512 * 1024 },
+    // maxLength 不进 schema：AJV 按码点计数会放宽非 BMP 输入，由
+    // requireUtf16LengthAtMost 以原 string.length 口径兑底。
+    text: { type: 'string' },
     whenBusy: { enum: ['steer', 'followUp', 'reject'] },
     origin: { enum: ['human', 'agent', 'trigger'] },
     meta: { type: 'object' },
@@ -244,9 +261,11 @@ export function parseInputBody(body: Record<string, unknown>): {
   attachments?: string[]
   replaceFromEntryId?: number
 } {
-  // 机械形状（text 类型/长度、枚举、附件 ID 格式、未知字段）走 schema；
-  // meta 递归 JSON-safe 与附件去重/空数组语义是业务规则，手写保留。
+  // 机械形状（text 类型、枚举、附件 ID 格式、未知字段）走 schema；
+  // text 的 UTF-16 长度上限、meta 递归 JSON-safe 与附件去重/空数组语义
+  // 是原口径/业务规则，手写保留。
   assertBodySchema(INPUT_BODY_SCHEMA, body, 'input body')
+  requireUtf16LengthAtMost('text', body.text as string, 512 * 1024)
   const meta = parseMetaObject(body.meta)
   const attachments = parseAttachmentIds(body.attachments)
   return {
@@ -325,25 +344,29 @@ export function parseAskAnswerBody(body: Record<string, unknown>): {
 
 const CONVERSATION_RESET_BODY_SCHEMA: JsonSchema = {
   type: 'object',
-  properties: { handoff: { type: 'string', maxLength: 512 * 1024 } },
+  // maxLength 不进 schema（AJV 码点计数会放宽非 BMP 输入），守卫兑底。
+  properties: { handoff: { type: 'string' } },
   additionalProperties: false,
 }
 
 /** POST /api/conversations/:id/reset：可选 handoff 文本。 */
 export function parseConversationResetBody(body: Record<string, unknown>): { handoff?: string } {
   assertBodySchema(CONVERSATION_RESET_BODY_SCHEMA, body, 'reset body')
+  if (body.handoff !== undefined) requireUtf16LengthAtMost('handoff', body.handoff as string, 512 * 1024)
   return body.handoff !== undefined ? { handoff: body.handoff as string } : {}
 }
 
 const CONVERSATION_COMPACT_BODY_SCHEMA: JsonSchema = {
   type: 'object',
-  properties: { instructions: { type: 'string', maxLength: 512 * 1024 } },
+  // maxLength 不进 schema（AJV 码点计数会放宽非 BMP 输入），守卫兑底。
+  properties: { instructions: { type: 'string' } },
   additionalProperties: false,
 }
 
 /** POST /api/conversations/:id/compact：可选 instructions 文本。 */
 export function parseConversationCompactBody(body: Record<string, unknown>): { instructions?: string } {
   assertBodySchema(CONVERSATION_COMPACT_BODY_SCHEMA, body, 'compact body')
+  if (body.instructions !== undefined) requireUtf16LengthAtMost('instructions', body.instructions as string, 512 * 1024)
   return body.instructions !== undefined ? { instructions: body.instructions as string } : {}
 }
 
@@ -351,15 +374,17 @@ const CONVERSATION_FORK_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     entryId: { type: 'integer', minimum: 1, maximum: MAX_SAFE_INTEGER },
-    title: { type: 'string', minLength: 1, maxLength: 200 },
+    // title maxLength 不进 schema（AJV 码点计数会放宽非 BMP 输入），守卫兑底。
+    title: { type: 'string', minLength: 1 },
   },
   required: ['entryId'],
   additionalProperties: false,
 }
 
-/** POST /api/conversations/:id/fork：entryId 必填安全正整数；title 可选 1..200。 */
+/** POST /api/conversations/:id/fork：entryId 必填安全正整数；title 可选 1..200（UTF-16 码元）。 */
 export function parseConversationForkBody(body: Record<string, unknown>): { entryId: number; title?: string } {
   assertBodySchema(CONVERSATION_FORK_BODY_SCHEMA, body, 'fork body')
+  if (body.title !== undefined) requireUtf16LengthAtMost('title', body.title as string, 200)
   return {
     entryId: body.entryId as number,
     ...(body.title !== undefined ? { title: body.title as string } : {}),
@@ -591,13 +616,15 @@ export function parseProvidersBody(body: Record<string, unknown>): ProviderConfi
 
 const CREDENTIAL_BODY_SCHEMA: JsonSchema = {
   type: 'object',
-  properties: { value: { type: 'string', minLength: 1, maxLength: 64 * 1024 } },
+  // value maxLength 不进 schema（AJV 码点计数会放宽非 BMP 输入），守卫兑底。
+  properties: { value: { type: 'string', minLength: 1 } },
   required: ['value'],
   additionalProperties: false,
 }
 
 export function parseCredentialBody(body: Record<string, unknown>): string {
   assertBodySchema(CREDENTIAL_BODY_SCHEMA, body, 'credential body')
+  requireUtf16LengthAtMost('value', body.value as string, 64 * 1024)
   return body.value as string
 }
 

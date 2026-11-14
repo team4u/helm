@@ -9,13 +9,21 @@
  * - 安全整数上界（fork entryId / withdraw submissionId / input
  *   replaceFromEntryId 拒 2^60）；
  * - 错误可诊断：details.errors 携带 AJV 字段路径。
+ * - UTF-16 码元长度边界：AJV maxLength 按码点计数（代理对算 1），
+ *   与原手写 string.length（码元）口径不同——含非 BMP 字符的反例
+ *   不得因 schema 化而放宽（守卫恢复原拒绝边界，贴界不误拒）。
  * 以及薄分发后的路由 parity（多余段 404 / 方法不匹配 405|404 各归其位）。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { HelmError } from '@helm/protocol'
 import { handleApi } from '../src/http/routes.js'
-import { ValidationError } from '../src/http/validate.js'
+import {
+  parseConversationCompactBody,
+  parseConversationResetBody,
+  parseInputBody,
+  ValidationError,
+} from '../src/http/validate.js'
 import type { KernelRuntimeLike } from '../src/http/contracts.js'
 
 type CallLog = Record<string, unknown[]>
@@ -615,6 +623,58 @@ test('schema 拒绝携带 AJV 字段路径诊断（details.errors 非空，可�
       return true
     },
   )
+})
+
+// ---------------------------------------------------------------------------
+// UTF-16 码元长度边界：AJV maxLength 按码点计数，非 BMP 字符（代理对）
+// 会让 schema 边界放宽；守卫以原 string.length（码元）口径恢复。
+// 1 个 emoji = 1 码点 = 2 码元 = 4 UTF-8 字节，反例均在 body 字节限制内。
+// ---------------------------------------------------------------------------
+
+test('UTF-16 码元长度上限：emoji 反例不因 AJV 码点计数放宽（fork 200 / credential 64k / forward 255）', { timeout: 60_000 }, async () => {
+  const calls = newCallLog()
+  const kernel = makeKernel(calls)
+  const emoji = '\uD83D\uDE00'
+  // fork title ≤200 码元：101 emoji = 101 码点（schema 放行）/ 202 码元（原拒）→ 400。
+  await expect400(kernel, 'POST', '/api/conversations/1/fork', { entryId: 1, title: emoji.repeat(101) })
+  // 贴界不误拒：50 emoji + 100 ASCII = 150 码点 / 200 码元 → 201。
+  const forkOk = await call(kernel, 'POST', '/api/conversations/1/fork', {
+    entryId: 1, title: emoji.repeat(50) + 'a'.repeat(100),
+  })
+  assert.equal(forkOk.status, 201)
+  // credential value ≤64k 码元：32769 emoji = 65538 码元（131076 字节，body 限内）→ 400；
+  // 32768 emoji = 65536 码元贴界 → 200。
+  await expect400(kernel, 'PUT', '/api/credentials/faux', { value: emoji.repeat(32769) })
+  const credOk = await call(kernel, 'PUT', '/api/credentials/faux', { value: emoji.repeat(32768) })
+  assert.equal(credOk.status, 200)
+  // forward 主机名 ≤255 码元：'a'+128 emoji = 129 码点 / 257 码元 → 400（listenHost/targetHost 同规）。
+  await expect400(kernel, 'POST', '/api/nodes/node-a/forward', {
+    listenHost: 'a' + emoji.repeat(128), listenPort: 1, targetPort: 2,
+  })
+  await expect400(kernel, 'POST', '/api/nodes/node-a/forward', {
+    listenHost: 'h', listenPort: 1, targetPort: 2, targetHost: 'a' + emoji.repeat(128),
+  })
+  const fwdOk = await call(kernel, 'POST', '/api/nodes/node-a/forward', {
+    listenHost: 'a' + emoji.repeat(127), listenPort: 1, targetPort: 2,
+  })
+  assert.equal(fwdOk.status, 201, 'a+127 emoji = 255 码元贴界应放行')
+})
+
+test('input/reset/compact 512k 解析器口径：码元上限恢复；HTTP 层由 1MiB body 上限先行拦截', { timeout: 60_000 }, () => {
+  const emoji = '\uD83D\uDE00'
+  // 262145 emoji = 524290 码元 > 524288（原拒）；其 UTF-8 编码 1048580 字节
+  // 已超 1MiB body 上限，HTTP 层会先 413，故在解析器层直接验证原拒绝边界。
+  assert.throws(() => parseInputBody({ text: emoji.repeat(262145) }), ValidationError)
+  assert.throws(() => parseConversationResetBody({ handoff: emoji.repeat(262145) }), ValidationError)
+  assert.throws(() => parseConversationCompactBody({ instructions: emoji.repeat(262145) }), ValidationError)
+  // 贴界不误拒：262144 emoji = 524288 码元 = 原上限。
+  assert.equal(parseInputBody({ text: emoji.repeat(262144) }).text.length, 524288)
+  assert.deepEqual(parseConversationResetBody({ handoff: emoji.repeat(262144) }), {
+    handoff: emoji.repeat(262144),
+  })
+  assert.deepEqual(parseConversationCompactBody({ instructions: emoji.repeat(262144) }), {
+    instructions: emoji.repeat(262144),
+  })
 })
 
 // ---------------------------------------------------------------------------
