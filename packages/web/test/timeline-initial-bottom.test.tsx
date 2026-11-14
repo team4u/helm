@@ -4,7 +4,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
 import { makeTestStore } from './helpers/store.js'
 import { ConversationTimeline, type OutlineScrollRequest } from '../src/conversation/ConversationTimeline.js'
 
@@ -118,12 +118,15 @@ interface ClampedScrollMock {
   height(): number
   setTopSilent(v: number): void
   setHeight(v: number): void
+  /** 视口尺寸变化（Composer 长高/收起）：按浏览器语义 clamp 并派发 scroll。 */
+  setClientHeight(v: number): void
 }
 
 /**
  * 浏览器一致的滚动语义 mock：scrollTop 写入截断到 [0, scrollHeight-clientHeight]
- * 并同步派发 scroll（程序写入也会派发）；scrollHeight 收缩时把超界 scrollTop 下调
- * 并派发 scroll（布局位移），增长时不动。禁止可无限 scrollTop 的假语义。
+ * 并同步派发 scroll（程序写入也会派发）；scrollHeight 收缩或 clientHeight 增大
+ * （视口变大）使最大可滚位置下降时，把超界 scrollTop 夹紧到新底部并派发
+ * scroll（布局位移），反向变化不产生位移。禁止可无限 scrollTop 的假语义。
  */
 function setupClampedScroll(
   el: HTMLElement,
@@ -149,6 +152,13 @@ function setupClampedScroll(
     get: () => clientHeight,
     set: (v: number) => {
       clientHeight = v
+      // 视口变大（如 Composer 收起）使最大可滚位置下降：浏览器夹紧超界
+      // scrollTop 到新底部并派发 scroll；视口变小（Composer 长高）无位移。
+      const clamped = Math.min(scrollTop, maxTop())
+      if (clamped !== scrollTop) {
+        scrollTop = clamped
+        el.dispatchEvent(new Event('scroll'))
+      }
     },
   })
   Object.defineProperty(el, 'scrollTop', {
@@ -171,6 +181,9 @@ function setupClampedScroll(
     },
     setHeight: (v: number) => {
       Reflect.set(el, 'scrollHeight', v)
+    },
+    setClientHeight: (v: number) => {
+      Reflect.set(el, 'clientHeight', v)
     },
   }
 }
@@ -202,6 +215,8 @@ function innerResizeObserver(): FakeResizeObserver {
 interface RenderOpts {
   conv?: ConversationSummary
   entries?: ConversationEntry[]
+  /** 会话实时流式增量（真实 stream props 路径，非写入计数）。 */
+  live?: ConversationLive
   /** store 是否携带 conversationDetails（false = 历史尚未就绪的 loading mount）。 */
   detailsReady?: boolean
   nextCursor?: string
@@ -226,6 +241,7 @@ async function renderTimeline(opts: RenderOpts = {}): Promise<void> {
       conversation: conv,
       detailEntries: entries,
       onRequestEdit: () => {},
+      ...(opts.live !== undefined ? { live: opts.live } : {}),
       ...(opts.outlineScrollRequest !== undefined ? { outlineScrollRequest: opts.outlineScrollRequest } : {}),
     },
   )
@@ -250,6 +266,7 @@ async function rerenderTimeline(opts: RenderOpts): Promise<void> {
       conversation: conv,
       detailEntries: entries,
       onRequestEdit: () => {},
+      ...(opts.live !== undefined ? { live: opts.live } : {}),
       ...(opts.outlineScrollRequest !== undefined ? { outlineScrollRequest: opts.outlineScrollRequest } : {}),
     },
   )
@@ -555,4 +572,75 @@ test('换会话（同实例复用）：旧窗口取消，新会话获得全新�
   raf.flush(4)
   assert.deepEqual(mock.writes, [1200, 1600], '新会话窗口正常跟底')
   assert.equal(mock.top(), 1600)
+})
+
+// ---------------------------------------------------------------------------
+// 续聊跟底回归（fix/followup-scroll）：初始窗口结束后的 clamp 与流式跟随
+// ---------------------------------------------------------------------------
+
+test('A/B/A 换会话且初始窗口结束后续聊：新增 human 恢复跟底，Composer 收起的 clamp 下调不释放贴底，流式 live 继续跟随', { timeout: 60_000 }, async () => {
+  const raf = installManualRaf()
+  const entriesA = [humanEntry('1', '问'), assistantEntry('2', '答')]
+  await renderTimeline({ conv: makeConv(10), entries: entriesA })
+  const scroller = host!.querySelector<HTMLElement>('.timeline-scroll')!
+  const mock = setupClampedScroll(scroller, { scrollHeight: 2000, clientHeight: 800, scrollTop: 0 })
+  raf.flush(4)
+  assert.deepEqual(mock.writes, [1200], '会话 A 初始置底')
+  raf.flush(60)
+
+  // A/B/A：切到 B 再切回 A（App 按 key 重挂的等价同实例路径），每次窗口均自然收敛
+  await rerenderTimeline({ conv: makeConv(11), entries: [humanEntry('11', '问11'), assistantEntry('12', '答11')] })
+  raf.flush(4)
+  raf.flush(60)
+  await rerenderTimeline({ conv: makeConv(10), entries: entriesA })
+  raf.flush(4)
+  raf.flush(60)
+  // A 的窗口也已结束：后续跟底只能依赖贴底状态机（lastHuman 恢复）与 RO，
+  // 不能靠一次性初始窗口掩盖。
+
+  // 用户上滚脱离：证明后续贴底确由新增 human 恢复，而非残留状态
+  scroller.dispatchEvent(wheelUpEvent())
+  mock.setTopSilent(1000)
+  scroller.dispatchEvent(new Event('scroll'))
+  assert.equal(mock.writes.length, 1, '用户接管后无程序写入')
+
+  // Composer 多行使视口缩小 800->500（无位移、无 scroll）
+  mock.setClientHeight(500)
+
+  // 新增 human 输入且 working：lastHuman 变化恢复贴底，写入被 clamp 到 1500
+  await rerenderTimeline({
+    conv: makeConv(10, { status: 'working' }),
+    entries: [...entriesA, humanEntry('3', '追问')],
+  })
+  assert.equal(mock.top(), 1500, '新增 human 恢复贴底（2000-500）')
+
+  // Composer 清空收起使视口恢复 500->800：浏览器把 1500 clamp 到 1200 并派发
+  // scroll（先于任何 RO 回调）。该下降是布局位移，不得释放贴底。
+  mock.setClientHeight(800)
+  assert.equal(mock.top(), 1200, 'clamp 到 1200（距底 0）')
+
+  // 下一回合首 token：内容增长（此步无 rerender/fingerprint 变化）只能依赖 RO
+  // 跟底；若 clamp 被误判为用户上翻则从此永远追不上
+  mock.setHeight(2600)
+  innerResizeObserver().trigger()
+  assert.equal(mock.top(), 1800, 'clamp 下调后贴底保留，RO 继续跟底（2600-800）')
+
+  // 后续流式分段（真实 live props）持续跟随
+  await rerenderTimeline({
+    conv: makeConv(10, { status: 'working' }),
+    entries: [...entriesA, humanEntry('3', '追问')],
+    live: { conversationId: 10, text: '流式回答第一段', tools: [], updatedAt: 5 },
+  })
+  mock.setHeight(2800)
+  innerResizeObserver().trigger()
+  assert.equal(mock.top(), 2000, 'live 流式第一段跟底（2800-800）')
+
+  await rerenderTimeline({
+    conv: makeConv(10, { status: 'working' }),
+    entries: [...entriesA, humanEntry('3', '追问')],
+    live: { conversationId: 10, text: '流式回答第一段，继续输出更多内容', tools: [], updatedAt: 6 },
+  })
+  mock.setHeight(3000)
+  innerResizeObserver().trigger()
+  assert.equal(mock.top(), 2200, 'live 流式后续段持续贴底（3000-800，gap=0）')
 })
