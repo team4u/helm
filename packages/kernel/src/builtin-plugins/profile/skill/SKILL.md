@@ -79,7 +79,7 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm artifacts list [id] [--current]` / `helm artifacts put <filePath> [id] [--name <n>] [--mime-type <m>]` / `helm artifacts get <id> [--output <path>]`。
 - 生成文本文件供用户在 Web 查看时，用 `write(..., artifact: true)`。登记已有文件（含图片、视频、PDF）可用 `register_artifact({ path: "<path>" })`：路径相对当前会话 cwd 解析，在会话绑定节点读取并复制到 Hub 的产物目录；返回产物 ID 后才能视为交付成功。单个产物上限 15 MiB。
 - 终端内用 `helm artifacts put <path> --current` 上传调用机器上的本地文件；相对路径以该次 CLI 进程的实际 cwd 为准，`--current` 只选择会话，不改读文件的目录。`helm artifacts get <id> --output <path>` 同样写到调用机器；成功回显实际绝对路径。不要把 Hub 或另一节点的路径当成本地路径。
-- 外部命令生成待交付文件时，传基于实际执行目录的绝对输出路径；POSIX shell 可先 `output="$PWD/report.png"`。显式指定其他目录时，先确认该目录在实际执行节点上。`HELM_CWD` 是受管会话目录，shell 内 `cd` 后 `$PWD` 可以与它不同。
+- 外部命令生成待交付文件时，使用本次任务独有的文件名或目录，并传基于实际执行目录的绝对输出路径；POSIX shell 可先 `output="$PWD/report-<本次任务标识>.png"`。显式指定其他目录时，先确认该目录在实际执行节点上。`HELM_CWD` 是受管会话目录，shell 内 `cd` 后 `$PWD` 可以与它不同。
 - 生成后确认预期文件存在，再用同一绝对路径登记；命令退出码为 0 或输出“保存成功”不能代替产物登记。读取失败时按报错中的绝对路径和节点排查，不自动搜索其他会话的工作树或把同名旧文件当成本次产物。
 - 产物登记会保存独立副本；需要交付的文件应在清理源 worktree 前登记。成功后在回复中用 `[文件名](artifact:<id>)` 或 `![图片](artifact:<id>)` 内联渲染。清理 worktree 不删除这些副本；删除所属会话会级联删除产物。
 - `helm api <METHOD> <path> [--input <json>] [--field k=v]`：原始 HTTP 逃生舱（如 `helm api GET /api/nodes`）。
