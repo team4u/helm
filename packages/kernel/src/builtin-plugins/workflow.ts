@@ -1470,7 +1470,7 @@ export function createWorkflowPlugin(): PluginDefinition {
       ctx.action({
         id: 'steer',
         description:
-          '向运行中的后台子代理插话纠偏（steer）：原生节点经内核 guarded 提交按归属与 CAS 水位原子复核；外部执行（如带原子守卫能力的 Herdr 窗格）按节点 controls.steer 委托对应插件动作，同样要求服务端守卫（guardLevel=cas），未通告守卫能力的目标显式拒绝。仅支持 kind=subagent、status=running 的运行；DSL 编排工作流、未回传控制引用的外部执行、human 归属或模型回合已结束时显式拒绝。会话上下文调用仅允许 run 发起会话自身或其祖先，不可跨树控制；事实过期（如子会话已推进）返回 409 可重读重试。steered=true 仅代表投递成功，不代表指导已执行完成。',
+          '向运行中的后台子代理补充指导：原生子会话经内核 guarded 端口按归属与 CAS 水位原子复核；外部执行按节点 controls.steer 委托插件，并如实返回 guardLevel（preflight 为发送前预检，cas 为提交点原子复核）。仅支持 kind=subagent、status=running 的运行；DSL 工作流、缺控制引用的外部执行及 human 归属拒绝。会话内仅发起会话自身或其祖先可控制。steered=true 仅表示已投递，不表示指导已执行；超时或断线不自动重试。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -1504,8 +1504,8 @@ export function createWorkflowPlugin(): PluginDefinition {
                 executionId: { type: 'string', description: '被插话的外部执行标识' },
                 nodeId: { type: 'string', description: '外部执行节点' },
                 ownership: { type: 'string', const: 'helm' },
-                stateChangeSeq: { type: 'number', minimum: 0, description: '服务端守卫核验通过的权威水位' },
-                guardLevel: { type: 'string', const: 'cas', description: '守卫级别（服务端原子守卫）' },
+                stateChangeSeq: { type: 'number', minimum: 0, description: '预检或提交点复核时观测的权威水位' },
+                guardLevel: { type: 'string', enum: ['preflight', 'cas'], description: '执行插件实际采用的守卫级别' },
               },
               required: ['steered', 'runId', 'targetKind', 'executionId', 'nodeId', 'ownership', 'stateChangeSeq', 'guardLevel'],
               additionalProperties: false,

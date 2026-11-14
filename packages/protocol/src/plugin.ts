@@ -182,9 +182,8 @@ export interface AgentSpawnRequest {
  */
 export interface AgentExecutionControls {
   /**
-   * 安全插话（steer）委托：目标动作必须实现外部委托标准契约
-   * （ExternalSteerRequest / ExternalSteerResult），并以服务端原子守卫
-   * （guardLevel 'cas'）投递；未实现/未通告守卫能力必须显式拒绝。
+   * 插话（steer）委托：目标动作实现 ExternalSteerRequest / ExternalSteerResult，
+   * 独立校验授权、归属和状态，并如实返回实际守卫级别。
    */
   steer?: { pluginId: string; actionId: string }
 }
@@ -237,19 +236,19 @@ export interface ExternalSteerRequest {
  * 外部执行环境 steer 委托标准输出（执行插件动作必须返回的严格形状；
  * 委托方逐字段核销，任何坏产物显式拒绝）。
  *
- * 诚实语义：steered=true 仅代表服务端守卫核验通过且文本已投递
- * （guardLevel 'cas'），**不代表该指导已被 CLI 消费或执行完成**。
+ * steered=true 仅代表文本已投递，不代表指导已被消费或执行完成。
+ * preflight 是发送前预检，cas 是提交点的服务端原子复核；两者不可混称。
  */
 export interface ExternalSteerResult {
   steered: true
   executionId: string
   nodeId: string
-  /** 服务端守卫核验通过时的权威水位。 */
+  /** 预检或提交点复核时观测的权威水位，具体语义由 guardLevel 区分。 */
   stateChangeSeq: number
   /** 外部受管执行一律 helm 归属（human/bot 归属不适用外部窗格）。 */
   ownership: 'helm'
-  /** 守卫级别：当前唯一合法值 'cas'（服务端原子守卫，未通告能力必须拒绝）。 */
-  guardLevel: 'cas'
+  /** preflight：发送前预检；cas：服务端在提交点原子复核。 */
+  guardLevel: 'preflight' | 'cas'
 }
 
 /** gate 命令执行结果；output 为失败时展示给用户的命令输出。 */

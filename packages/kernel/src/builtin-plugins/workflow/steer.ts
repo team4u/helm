@@ -19,7 +19,7 @@
  *    契约（executionId/nodeId/workflowRunId/parentConversationId/text），
  *    透传原调用 context（含 signal，绝不伪造 caller）；产物按
  *    ExternalSteerResult 逐字段核销（steered/executionId/nodeId/ownership
- *    'helm'/stateChangeSeq 非负安全整数/guardLevel 'cas'），任何坏产物显式
+ *    'helm'/stateChangeSeq 非负安全整数/guardLevel 'cas' 或 'preflight'），任何坏产物显式
  *    拒绝。控制动作非幂等：超时/断线不重试、不伪造成功（invokeAction 单次
  *    调用即终局）。steered 仅代表投递成功，不代表指导已执行完成。
  *
@@ -78,7 +78,7 @@ export type SteerActionOutput =
       nodeId: string
       ownership: 'helm'
       stateChangeSeq: number
-      guardLevel: 'cas'
+      guardLevel: ExternalSteerResult['guardLevel']
     }
 
 export interface SteerActionContext {
@@ -94,7 +94,7 @@ function steerError(code: string, message: string, status: number, details?: Rec
 export function parseExternalSteerResult(
   raw: unknown,
   expected: { executionId: string; nodeId: string; pluginId: string; actionId: string },
-): { stateChangeSeq: number } {
+): Pick<ExternalSteerResult, 'stateChangeSeq' | 'guardLevel'> {
   const invalid = (reason: string): HelmError =>
     steerError(
       'steer_delegate_invalid',
@@ -113,12 +113,13 @@ export function parseExternalSteerResult(
   if (source['executionId'] !== expected.executionId) throw invalid('executionId 与目标节点不一致')
   if (source['nodeId'] !== expected.nodeId) throw invalid('nodeId 与目标节点不一致')
   if (source['ownership'] !== 'helm') throw invalid("ownership 必须为 'helm'")
-  if (source['guardLevel'] !== 'cas') throw invalid("guardLevel 必须为 'cas'（未通告原子守卫能力的执行环境必须显式拒绝）")
+  const guardLevel = source['guardLevel']
+  if (guardLevel !== 'cas' && guardLevel !== 'preflight') throw invalid("guardLevel 必须为 'cas' 或 'preflight'")
   const seq = source['stateChangeSeq']
   if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0) {
     throw invalid('stateChangeSeq 必须是非负安全整数')
   }
-  return { stateChangeSeq: seq }
+  return { stateChangeSeq: seq, guardLevel }
 }
 
 /**
@@ -293,7 +294,7 @@ export async function steerBackgroundSubagent(
       nodeId: target.nodeId,
       ownership: 'helm',
       stateChangeSeq: parsed.stateChangeSeq,
-      guardLevel: 'cas',
+      guardLevel: parsed.guardLevel,
     }
   }
 

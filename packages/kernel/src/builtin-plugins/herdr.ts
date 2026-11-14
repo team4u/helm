@@ -777,15 +777,15 @@ export function createHerdrPlugin(): PluginDefinition {
       // 通常由 builtin:workflow.steer 依据节点 controls 动态路由到本动作，也可
       // HTTP/CLI/run_action 直调；直调同样独立做调用方祖先链授权、父会话/run
       // 强匹配与受管 (nodeId, paneId) 精确定位（不因直调豁免授权）。投递唯一
-      // 入口 executor.steerPane：仅 task 阶段 + 服务端 agent_prompt_guard_v1
-      // 原子守卫（未通告能力 fail-closed 拒绝）；steered 仅代表投递成功。
+      // 入口 executor.steerPane：受管 task 阶段预检后调用现有 agent.prompt；
+      // preflight 不承诺提交点 CAS，steered 仅代表投递成功。
       ctx.action<
         { executionId: string; nodeId: string; workflowRunId: string; parentConversationId: number; text: string },
-        { steered: true; executionId: string; nodeId: string; stateChangeSeq: number; ownership: 'helm'; guardLevel: 'cas' }
+        { steered: true; executionId: string; nodeId: string; stateChangeSeq: number; ownership: 'helm'; guardLevel: 'preflight' }
       >({
         id: HERDR_STEER_CONTROLS.actionId,
         description:
-          '向本插件受管、且由 workflow run 派生的 Herdr 窗格插话纠偏（需服务端 ping capabilities 通告 agent_prompt_guard_v1 原子守卫，未通告显式拒绝）。仅任务执行期（task 阶段）且 Agent 处于 working 时可投递：服务端在完整文本+回车投递期内原子核验身份/水位/working，核验不符零写入；blocked 交原审批桥处理。steered=true 仅代表投递成功，不代表该指导已被执行；控制动作非幂等，超时/断线不重试。',
+          '向本插件受管、且由 workflow run 派生的 Herdr 窗格补充指导。仅任务执行期预检为 working 时发送，使用 Herdr 原生 agent.prompt；预检与投递之间刚变为 idle 时允许接续一轮。blocked 交原审批桥处理，关闭、交接和 Gate 阶段拒绝。guardLevel=preflight 表示发送前检查，不保证提交点 CAS；steered=true 仅代表已投递。超时或断线不自动重试。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -804,16 +804,16 @@ export function createHerdrPlugin(): PluginDefinition {
             steered: { type: 'boolean', const: true },
             executionId: { type: 'string' },
             nodeId: { type: 'string' },
-            stateChangeSeq: { type: 'number', minimum: 0, description: '服务端守卫核验通过的权威水位' },
+            stateChangeSeq: { type: 'number', minimum: 0, description: '发送前预检观测的权威水位' },
             ownership: { type: 'string', const: 'helm' },
-            guardLevel: { type: 'string', const: 'cas', description: '服务端原子守卫（agent_prompt_guard_v1）' },
+            guardLevel: { type: 'string', const: 'preflight', description: '发送前预检，不承诺提交点 CAS' },
           },
           required: ['steered', 'executionId', 'nodeId', 'stateChangeSeq', 'ownership', 'guardLevel'],
           additionalProperties: false,
         },
         cli: {
           command: ['herdr', 'steer'],
-          description: '向受管 Herdr 窗格插话（需服务端 agent_prompt_guard_v1 守卫；通常用 helm workflows steer <runId> 自动路由）',
+          description: '向受管 Herdr 窗格补充指导（通常用 helm workflows steer <runId> 自动路由）',
           timeoutMs: 15_000,
         },
         async handler(input, context) {
@@ -862,7 +862,7 @@ export function createHerdrPlugin(): PluginDefinition {
               )
             }
           }
-          // 投递（强匹配/阶段/能力门禁在 executor 内独立复核）。
+          // 投递（归属、阶段与运行状态在 executor 内独立复核）。
           const { stateChangeSeq } = await executor.steerPane(pane, {
             workflowRunId: input.workflowRunId,
             parentConversationId: input.parentConversationId,
@@ -875,7 +875,7 @@ export function createHerdrPlugin(): PluginDefinition {
             nodeId: nodeIdOf(pane) ?? 'local',
             stateChangeSeq,
             ownership: 'helm' as const,
-            guardLevel: 'cas' as const,
+            guardLevel: 'preflight' as const,
           }
         },
       })
