@@ -34,6 +34,7 @@ import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-ho
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createSuperAgentPlugin } from '../src/superagent.js'
 import { ProfileService } from '../../kernel/src/services/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 共享基建
@@ -208,7 +209,7 @@ test('memory：set 动作超限在写盘前拒绝（MEMORY.md 不半截写入）
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
     const backend = makeControlledBackend(dataDir)
-    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
     await host.register(createMemoryPlugin(), { enabled: true })
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: 'M'.repeat(MEM_MAX + 1) }),
@@ -253,7 +254,7 @@ test('memory：同 Profile 双会话并发 update_memory append 最终不超上�
     const backend = makeControlledBackend(dataDir)
     backend.conversations.set(10, makeConversation(10))
     backend.conversations.set(20, makeConversation(20))
-    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
     await host.register(createMemoryPlugin(), { enabled: true })
 
     const outcomes = await Promise.allSettled([
@@ -279,7 +280,7 @@ test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 asset
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
     const backend = makeControlledBackend(dataDir)
-    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
     await host.register(createProfilePlugin(), { enabled: true })
     await host.register(createMemoryPlugin(), { enabled: true })
 
@@ -362,7 +363,7 @@ test('memory：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路径
     mkdirSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
 
     const backend = makeControlledBackend(dataDir)
-    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
     await host.register(createMemoryPlugin(), { enabled: true })
     const turn = {
       conversation: makeConversation(1),
@@ -407,7 +408,7 @@ async function makeSuperAgentEnv(): Promise<SuperAgentEnv> {
   // Host 直接持有受控 backend 本体（不 clone）：测试对 backend 的失败注入
   // （markConversationOwnership 覆盖 / submitRejector）与插件消费的
   // ctx.host 必须是同一对象。
-  const host = new PluginHost({ dataDir, host: backend, docs })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs })
   await host.register(createSuperAgentPlugin(), { enabled: true })
   return {
     host,
@@ -608,7 +609,7 @@ async function makeWatchdogHarness(opts: {
       }
     },
   }
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir: mkdtempSync(join(tmpdir(), 'helm-wd-evict-')),
     host: backend,
     docs,

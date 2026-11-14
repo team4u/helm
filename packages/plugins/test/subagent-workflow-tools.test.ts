@@ -45,6 +45,7 @@ import { createWorkflowPlugin } from '../src/workflow.js'
 import { buildManagedEnv, runShell } from '../../kernel/src/runtime/tools.js'
 import type { HelmToolDeps } from '../../kernel/src/runtime/tool-deps.js'
 import { SecretStash } from '../../kernel/src/services/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 interface FauxHandle {
   setResponses(messages: unknown[]): void
@@ -119,7 +120,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
   it('声明含全部新入参；agentType/cwd/model/effort 原样进入 agent_spawn hook；输出独立回报 conversationId', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sa1')
     const { models, faux } = makeFauxModels()
-    const kernel = await KernelRuntime.open({
+    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
@@ -209,7 +210,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
   it('resume 续接：以首调返回的 conversationId 续接原会话，不新建；钩子载荷与尾行均可见 resume', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sa2')
     const { models, faux } = makeFauxModels()
-    const kernel = await KernelRuntime.open({
+    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
@@ -264,7 +265,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
   it("不合法 isolation（'docker'）被显式拒绝：钩子绝不触发，不静默丢字段降级执行", { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sa3')
     const { models, faux } = makeFauxModels()
-    const kernel = await KernelRuntime.open({
+    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
@@ -306,7 +307,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
   it('agent_spawn handled 外部后端：onResolved 回传 executionId/effectiveCwd/worktree，工具独立回报不混入业务 result', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'sa4')
     const { models, faux } = makeFauxModels()
-    const kernel = await KernelRuntime.open({
+    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
@@ -379,7 +380,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
   it('args 为任意 JSON 对象原样到达真实引擎（args.items.map 可用，绝不 String 化）；scriptPath 与 resumeFromRunId 均贯通', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wf1')
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
@@ -453,7 +454,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
   it('非法组合（script 与 scriptPath 同时提供）经工具显式失败，不伪造运行', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wf2')
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
@@ -488,7 +489,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
   it('模型 tool_call 传 JSON 字符串或双重序列化 args 时，prepareArguments 与工具执行链自动规范化，持久化记录为真实对象', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wf3')
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
@@ -590,7 +591,7 @@ function extractRunId(text: string): string | undefined {
 test('subagent 失败于子会话创建后：错误输出仍附 footer 与 execution（失败卡可续接子会话）', { timeout: 60_000 }, async () => {
   const dir = join(rootDir, 'sa-err-footer')
   const { models, faux } = makeFauxModels()
-  const app = await createHelm({
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
@@ -638,7 +639,7 @@ function fauxThinking(text: string): { type: 'thinking'; thinking: string } {
 describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
   it('仅会话 stash + 受管五变量 + 受管 token；绝不携带 process.env（PATH/HOME/spy 键）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'env1')
-    const kernel = await KernelRuntime.open({
+    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       hubUrl: 'http://127.0.0.1:3999',
@@ -688,7 +689,7 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
 
   it('非法入参显式拒绝（conversationId 非正整数 / 空 cwd）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'env2')
-    const kernel = await KernelRuntime.open({
+    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
@@ -736,7 +737,7 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
 describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同环境）', { timeout: 60_000 }, () => {
   it('真实 Gate 子进程读自定义 env；HELM 固定值与受管 token 不被注入覆盖；无 provider 时剥除注入的旧 token', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'gate1')
-    const kernel = await KernelRuntime.open({
+    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       hubUrl: 'http://127.0.0.1:3999',
@@ -790,7 +791,7 @@ describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同�
 
   it('process.env 同名键被 options.env 覆盖（基底 < 注入 < 受管变量三级合并）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'gate3')
-    const kernel = await KernelRuntime.open({
+    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',

@@ -41,6 +41,7 @@ import { createHelm } from '../../hub/src/app.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { PluginHost, type PluginHostBackend, type PluginSessionDocStore } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -564,7 +565,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
   before(async () => {
     auth = new AuthService(dataDir)
     const handler = createHubHandler(
-      { dataDir, auth, events: new NoopEventHub(), plugins: new PluginHost({ dataDir, host: makeBackend(), docs: { get: <T>(_k: string, initial: T): T => initial, set: () => {} , deletePlugin: () => {}, flush: async () => {}} }) } as unknown as KernelRuntimeLike,
+      { dataDir, auth, events: new NoopEventHub(), plugins: new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend(), docs: { get: <T>(_k: string, initial: T): T => initial, set: () => {} , deletePlugin: () => {}, flush: async () => {}} }) } as unknown as KernelRuntimeLike,
     )
     // 直接调 handler（不经网络）：setup 拿用户 token 备用。
     const res = await handler(
@@ -599,7 +600,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
       flush: async () => {},
     }
     const index = await seedRecordsDocInto(docsStore, join(dataDir, 'corrupt-index-seed'))
-    const host = new PluginHost({
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir: join(dataDir, 'corrupt-index-plugins'),
       host: makeBackend(),
       docs: docsStore,
@@ -639,7 +640,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
     }
     const index = await seedRecordsDocInto(docsStore, join(dataDir, 'corrupt-record-seed'))
     const victim = index[0]!.id
-    const host = new PluginHost({
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir: join(dataDir, 'corrupt-record-plugins'),
       host: makeBackend(),
       docs: docsStore,
@@ -713,7 +714,7 @@ test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码�
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   const plugins = app.kernel.plugins
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {

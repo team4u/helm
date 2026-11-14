@@ -35,6 +35,7 @@ import {
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 import assert from 'node:assert/strict'
 
@@ -67,7 +68,7 @@ async function makeWfEnv(): Promise<WfEnv> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
 
   const echoCalls: string[] = []
   await app.kernel.plugins!.register({
@@ -240,7 +241,7 @@ test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各�
   const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     const settled: Array<{ outcome: string; origins: string[]; conversationId: number; error?: string }> = []
     await app.kernel.plugins!.register({

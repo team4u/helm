@@ -114,7 +114,7 @@ export default {
 } satisfies PluginDefinition;
 ```
 
-加载机制：宿主基于 Node 24 `module.registerHooks` 钩子加载源码，对 `.ts` / `.tsx` 文件用 esbuild transform（不打包），按依赖闭包逐文件转译。`import.meta.url` 始终指向插件目录内的真实源文件；裸 npm 说明符从插件自身目录解析（可自带 `node_modules`），`@helm/*` 协议包与宿主共享同一实例、不重复加载。加载器不承诺解析 `tsconfig` 的 `paths` 别名，插件源码不要依赖。插件根注册成功后常驻宿主进程；停用不卸载已加载模块（同进程重新启用不重复初始化），完全重载代码走 `helm plugins reload`。`definePlugin` 顶层不要调用 `ctx.host.*` 运行时能力（doctor 的 register 检查会如实失败）——宿主调用应放入动作处理器、服务生命周期或钩子内。
+加载机制：宿主基于 Node 24 `module.registerHooks` 钩子加载源码，对 `.ts` / `.tsx` 文件经插件构建端口（`PluginBuildProvider.transformBackendTs`；产品在 hub 注入 `@helm/plugin-build` 默认实现）同步转译（不打包），按依赖闭包逐文件转译；未注入端口的宿主对 TS 源加载显式拒绝（`unsupported_backend_ts_build`）。`import.meta.url` 始终指向插件目录内的真实源文件；裸 npm 说明符从插件自身目录解析（可自带 `node_modules`），`@helm/*` 协议包与宿主共享同一实例、不重复加载。加载器不承诺解析 `tsconfig` 的 `paths` 别名，插件源码不要依赖。插件根注册成功后常驻宿主进程；停用不卸载已加载模块（同进程重新启用不重复初始化），完全重载代码走 `helm plugins reload`。`definePlugin` 顶层不要调用 `ctx.host.*` 运行时能力（doctor 的 register 检查会如实失败）——宿主调用应放入动作处理器、服务生命周期或钩子内。
 
 #### 动作自动发现与会话目录
 

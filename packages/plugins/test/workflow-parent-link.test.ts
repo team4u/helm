@@ -33,6 +33,7 @@ import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { openHelmDatabase } from '../../kernel/src/runtime/sqlite.js'
 import { HelmStore } from '../../kernel/src/runtime/store.js'
 import { EventHub } from '../../kernel/src/runtime/events.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 interface FauxHandle {
   setResponses(messages: unknown[]): void
@@ -56,7 +57,7 @@ const FAST_SCRIPT =
 test('工具链精确关联：parentToolCallId 经受信 context 注入 run，双并行不串扰，重启保留', { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-wf-calllink-'))
   const { models, faux } = makeFauxModels()
-  const app = await createHelm({
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
@@ -123,7 +124,7 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
   }
 
   // --- 3. 重启（同 dataDir）：历史 run 的 parentToolCallId 持久保留 ---
-  const reopened = await createHelm({
+  const reopened = await createHelm({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
@@ -217,7 +218,7 @@ test('run 动作 inputSchema 不得注入 parentToolCallId（additionalPropertie
   // 受信工具上下文（PluginToolContext.callId）可注入。
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-schema-'))
   const { models } = makeFauxModels()
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: models as never })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: models as never })
   try {
     const manifests = app.kernel.plugins.listActions()
     const runManifest = manifests.find((m) => m.pluginId === 'builtin:workflow' && m.id === 'run')

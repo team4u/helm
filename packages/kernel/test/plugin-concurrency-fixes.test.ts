@@ -34,6 +34,7 @@ import { ConfigService } from '../src/services/config.js'
 import type { PluginConfigStore, PluginDocStore, PluginHostBackend, PluginProviderPort } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import type { Provider } from '@earendil-works/pi-ai'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -66,7 +67,7 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void; r
 
 function makeHost(overrides: { deferServices?: boolean; backend?: PluginHostBackend; providers?: PluginProviderPort } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-conc-fix-'))
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: {
       ...createPluginHostBackendFixture(),

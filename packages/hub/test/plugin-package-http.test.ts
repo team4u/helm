@@ -26,6 +26,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 
 import { createHelm } from '../src/app.js'
 import { createHubHandler } from '../../kernel/src/http/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -61,7 +62,7 @@ interface HubEnv {
 
 async function makeHub(): Promise<HubEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-pkg-http-'))
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
   const handler = createHubHandler(app.kernel as never)
   // 真实鉴权链：setup 取 token，后续 Bearer 携带
   const setupResponse = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
@@ -207,13 +208,13 @@ test('重启恢复：pluginPackages 记录驱动 GET /api/plugins 的 managed �
   const srcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-restart-src-'))
   const src = writeLocalPlugin(srcParent, 'restart-demo')
   {
-    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     await app.kernel.plugins.installPluginPackage(src)
     await app.close()
   }
   // 阶段二：全新 Hub 进程内状态（同一 dataDir）——managed 必须仍在
   {
-    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     const summary = app.kernel.plugins.list().find((p) => p.id === 'restart-demo')
     assert.ok(summary, '重启后插件应自动注册')
     assert.ok(summary.managed, '重启后 managed 映射必须仍在（磁盘记录驱动）')

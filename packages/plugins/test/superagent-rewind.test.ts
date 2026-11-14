@@ -39,6 +39,7 @@ import {
   assertRecallDoc,
 } from '../src/superagent.js'
 import type { ConversationEntry } from '@helm/protocol'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 受控基座（真实 PluginHost + 真实插件 + 受控 backend + 真实 EventHub）
@@ -240,7 +241,7 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     },
   }
   const docs = new MemoryDocStore()
-  const host = new PluginHost({ dataDir, host: backend, docs })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs })
 
   const hub = new EventHub({ initialSeq: 0, snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [] }) })
 
@@ -541,7 +542,7 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
     listActions: () => [],
     emitEvent: (type: string, payload: unknown) => { if (type === 'notification') notifications.push(payload as { title: string; body: string }) },
   }
-  const host = new PluginHost({ dataDir, host: backend, docs })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs })
   await host.register(createSuperAgentPlugin(), { enabled: true })
   const routerId = (docs.store.get('builtin:superagent:index') as { routerConversationId?: number }).routerConversationId
   const reportCount = () => submits.filter((s) => s.conversationId === routerId && s.origin === 'agent').length

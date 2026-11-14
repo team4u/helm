@@ -16,6 +16,7 @@
  *   非法 category 400、宿主端口未接线 501；
  * - 停用 builtin:apps 后动作/UI 立即消失（可停用铁律）。
  */
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -263,7 +264,7 @@ async function setup(options: {
     options.conversations ?? new Map<number, ConversationSummary>([[1, makeConversation(1)]])
   const backend = makeBackend(conversations, options.pluginsPort)
   const docs = options.docs ?? new MemoryDocStore()
-  const host = new PluginHost({ dataDir, host: backend, docs })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs })
   await host.register(
     createAppsPlugin({ hubCwd: options.hubCwd ?? '/hub' }),
     { enabled: true },
@@ -736,7 +737,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
         },
       },
     })
-    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
     await host.register(createAppsPlugin(), { enabled: true })
     assert.deepEqual(skillCalls, [{ id: APP_BUILDER_SKILL_ID, managedBy: APPS_PLUGIN_ID }])
     await host.dispose()

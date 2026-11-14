@@ -30,6 +30,7 @@ import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js
 import { SessionDocEventHub } from '../src/runtime/events.js'
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
 import { HelmStore } from '../src/runtime/store.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -149,7 +150,7 @@ let sessionDocs: MemorySessionDocStore
 let hostApi: ReturnType<typeof makeHostApi>
 
 function makeHost(opts: { sessionDocs?: MemorySessionDocStore | null } = {}): PluginHost {
-  return new PluginHost({
+  return new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: hostApi.backend,
     docs,

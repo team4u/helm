@@ -19,7 +19,7 @@
  *    会话的 failed 只通知，不再触发 wake）。
  * 9. 缺权威 seq：只读通知，绝不 abort / bridge。
  */
-
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -285,7 +285,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
     listActions: () => [],
   }
 
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir: mkdtempSync(join(tmpdir(), 'helm-superagent-watchdog-')),
     host: backend,
     docs,
@@ -804,7 +804,7 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     prepareAction: () => ({ idempotent: false }),
     listActions: () => [],
   }
-  const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-')), host: backend, docs })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-')), host: backend, docs })
   const config: SuperAgentConfig = {
     routerMode: true,
     mutedSources: '',
@@ -1320,7 +1320,7 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     listActions: () => [],
     emitEvent: () => {},
   }
-  const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-svc-')), host: backend, docs })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-svc-')), host: backend, docs })
   const runtime: SuperAgentWatchdogRuntime = {
     getConfig: () => ({
       routerMode: true,
@@ -1358,7 +1358,7 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
   cancelled.length = 0
   // 新水位 seq=20：目标会话同步推进（与探针一致）。
   conversations.set(55, makeConversationSummary(55, { status: 'blocked', stateChangeSeq: 20 }))
-  const host2 = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-svc2-')), host: backend, docs })
+  const host2 = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-svc2-')), host: backend, docs })
   await host2.register({
     id: PLUGIN_ID,
     definePlugin(ctx) {
@@ -1548,7 +1548,7 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     track: async <T>(_label: string, task: () => Promise<T>) => task(),
   }
   const mkHost = async () => {
-    const host = new PluginHost({ dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-cancel-')), host: backend, docs })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-cancel-')), host: backend, docs })
     await host.register({
       id: PLUGIN_ID,
       definePlugin(ctx) {
@@ -1578,7 +1578,7 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     // 每轮新 host + 新 docs + 新水位，避免 ask_id_conflict 干扰。
     const seq = mode === 'settled' ? 11 : 12
     conversations.set(55, makeConversationSummary(55, { status: 'blocked', stateChangeSeq: seq }))
-    const host2 = new PluginHost({
+    const host2 = new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-cancel2-')),
       host: backend,
       docs: new MemoryDocStore(),

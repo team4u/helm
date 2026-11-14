@@ -30,6 +30,7 @@ import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/provid
 
 import { HelmError, type HelmEventFrame } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -50,7 +51,7 @@ async function makeEnv(): Promise<TestEnv> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   faux.setResponses([fauxAssistantMessage('收到')])
   const env: TestEnv = {
     dataDir,

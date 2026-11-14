@@ -21,6 +21,7 @@
  * 全程无 Hub、无端口监听；finally 杀干净子进程并删除临时目录。
  * 每用例 timeout: 60_000；运行命令带总超时（timeout 50s tsx --test 本文件）。
  */
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -128,19 +129,20 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
 // ---------------------------------------------------------------------------
 
 /** 子进程 seeder 源码（真实 SDK 持久任务；写临时 .mts 由 tsx 直跑）。 */
-function seederSource(kernelSrc: string, piAiModelsSrc: string, piAiFauxSrc: string): string {
+function seederSource(kernelSrc: string, piAiModelsSrc: string, piAiFauxSrc: string, pluginBuildSrc: string): string {
   return `import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createModels } from '${piAiModelsSrc}'
 import { fauxAssistantMessage, fauxProvider } from '${piAiFauxSrc}'
 import { KernelRuntime } from '${kernelSrc}'
+import { createPluginBuildProvider } from '${pluginBuildSrc}'
 
 const dataDir = process.env.HELM_SEED_DIR!
 const models = createModels()
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 models.setProvider(faux.provider)
 faux.setResponses([fauxAssistantMessage('这是一段被慢速流式输出的长文本用于确保 SIGKILL 时模型回合仍在流式中')])
-const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
+const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
 // 真实原生 spawn：创建子会话并提交输入（submission 内部 resume 调度器，回合真实运行）
 let childId = 0
 void kernel.spawnAgent({
@@ -212,7 +214,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-bg-restart-'))
   const seedDir = mkdtempSync(join(tmpdir(), 'helm-bg-seed-'))
   const seederPath = join(seedDir, 'seed.mts')
-  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href), 'utf8')
+  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helm/plugin-build')), 'utf8')
   const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
   t.after(() => {
@@ -262,7 +264,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     const faux = fauxProvider()
     const models = createModels()
     models.setProvider(faux.provider)
-    const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
+    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
     t.after(async () => {
       await kernel.close().catch(() => {})
     })

@@ -29,6 +29,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError, type ConversationSummary, type Profile } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { PluginHost } from '../../kernel/src/plugins/plugin-host.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import {
   ConfigService,
   CredentialService,
@@ -52,7 +53,7 @@ function makeModels() {
 }
 
 async function createApp(dataDir: string) {
-  return createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+  return createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
 }
 
 function makeConversation(id: number, model = ''): ConversationSummary {
@@ -147,7 +148,7 @@ function makeHostFixture(overrides: { config?: PluginConfigStore } = {}): HostFi
   const backend = makeBackend()
   const events = (backend as unknown as { __events: string[] }).__events
   const payloads = (backend as unknown as { __payloads: Array<{ type: string; payload: unknown }> }).__payloads
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs: new MemoryDocStore(),
@@ -522,7 +523,7 @@ test('宿主引用探测：profile_runtime / profile_model / conversation_model 
   const backend = makeBackend()
   const events = (backend as unknown as { __events: string[] }).__events
   const payloads = (backend as unknown as { __payloads: Array<{ type: string; payload: unknown }> }).__payloads
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs: new MemoryDocStore(),
@@ -854,7 +855,7 @@ async function makeConfigFixture(): Promise<{
   const store = new HelmPluginConfigStore({ config, credentials })
   await store.load()
   const backend = makeBackend()
-  const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore(), config: store })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore(), config: store })
   await host.register({
     id: 'ext:cfg',
     definePlugin: (ctx) => {

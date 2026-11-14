@@ -32,6 +32,7 @@ import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js
 import { HelmError, type ConversationDetail, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginSummary, type HelmPluginContext } from '@helm/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -428,7 +429,7 @@ before(async () => {
   providers = new ProviderService(dataDir)
   stash = new SecretStash()
   artifacts = new ArtifactService(dataDir, new InMemoryArtifactRepository(), stash)
-  pluginHost = new PluginHost({ dataDir, host: hostApiForPluginHost(), docs: docStore() })
+  pluginHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: hostApiForPluginHost(), docs: docStore() })
   await registerRoutePlugin(pluginHost)
   await registerDocPlugin(pluginHost)
   hub0 = new TestEventHub()

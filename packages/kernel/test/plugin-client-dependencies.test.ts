@@ -19,18 +19,14 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, rmSync as rmSyncFn } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError } from '@helm/protocol'
+import { HelmError, clientNpmRootsOf } from '@helm/protocol'
+import { clearClientCompilerMemoryCache, compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
 import {
   importPluginDefinition,
   normalizeDefinition,
   readHelmClientDependencies,
   resolvePluginEntry,
 } from '../src/plugins/external-loader.js'
-import {
-  clientNpmRootsOf,
-  clearClientCompilerMemoryCache,
-  compilePluginClientModule,
-} from '../src/plugins/client-compiler.js'
 import { doctorPluginDir } from '../src/plugins/plugin-doctor.js'
 import { PluginPackageManager, type PackageRunner } from '../src/plugins/package-manager.js'
 import { PluginPackageManagerStore } from '../src/plugins/package-store.js'
@@ -294,12 +290,12 @@ test('磁盘缓存跨内存代际复用，且前端依赖声明变更使旧 bund
 test('doctor 全链与生产同一编译口径：依赖就绪 ok，缺失时 client 检查结构化失败', { timeout: 60_000 }, async () => {
   const okDir = makePluginDir({ name: 'chart-plugin-ok', clientDeps: ['fake-chart-lib'] })
   await importNormalized(okDir) // 预热模块缓存（doctor 用新代际导入，互不影响）
-  const report = await doctorPluginDir(okDir)
+  const report = await doctorPluginDir(okDir, { buildProvider: createPluginBuildProvider() })
   assert.equal(report.ok, true, JSON.stringify(report.checks, null, 2))
   assert.equal(report.pluginId, 'chart-plugin')
 
   const missingDir = makePluginDir({ name: 'chart-plugin-no-lib', clientDeps: ['fake-chart-lib'], installLib: false })
-  const missingReport = await doctorPluginDir(missingDir)
+  const missingReport = await doctorPluginDir(missingDir, { buildProvider: createPluginBuildProvider() })
   assert.equal(missingReport.ok, false)
   const clientCheck = missingReport.checks.find((c) => c.id === 'client')
   assert.ok(clientCheck?.error)

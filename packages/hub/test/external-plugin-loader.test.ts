@@ -28,6 +28,7 @@ import { HelmError } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { loadExternalPlugins } from '../../kernel/src/plugins/external-loader.js'
 import { pluginDataDirName } from '../../kernel/src/plugins/plugin-dir-name.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -81,7 +82,7 @@ function makeModels() {
 
 async function makeEnv(): Promise<TestEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
   return {
     dataDir,
     app,
@@ -97,7 +98,7 @@ async function makeEnv(): Promise<TestEnv> {
 
 /** 在指定 dataDir 上启动 createHelm（外部插件发现失败的错误断言用）。 */
 function makeEnvIn(dataDir: string): Promise<Awaited<ReturnType<typeof createHelm>>> {
-  return createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+  return createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
 }
 
 /** 写入一个约定入口形态的外部插件目录。 */
@@ -136,7 +137,7 @@ test('约定入口 index.mjs 的外部插件在 createHelm 启动时被自动发
     mkdirSync(memoryDataDir, { recursive: true })
     writeFileSync(join(memoryDataDir, 'notes.md'), 'memory plugin data')
 
-    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     try {
       const summary = app.kernel.plugins.list().find((p) => p.id === 'demo-external')
       assert.ok(summary, '外部插件应被自动注册')
@@ -157,7 +158,7 @@ test('外部插件 enable 后 action / public doc / client.tsx 编译全链路�
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     writeConventionPlugin(join(dataDir, 'plugins'))
-    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     try {
       await app.kernel.plugins.enable('demo-external')
       // action：入参 schema 校验 + 出参 schema 校验 + doc 副作用
@@ -189,7 +190,7 @@ test('plugin.json（main 指定入口）的外部插件被正确发现与注册'
       join(dirPath, 'src', 'entry.mjs'),
       `export default {\n  id: 'manifest-plugin',\n  name: '清单插件',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'ping',\n      description: '回声',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },\n      handler: () => ({ pong: true }),\n    })\n  },\n}\n`,
     )
-    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     try {
       const summary = app.kernel.plugins.list().find((p) => p.id === 'manifest-plugin')
       assert.ok(summary, 'plugin.json 插件应被自动注册')
@@ -213,7 +214,7 @@ test('pluginEnabled 持久化 true 的外部插件跨重启自动恢复启用', 
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     writeConventionPlugin(join(dataDir, 'plugins'))
-    const first = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const first = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     // 显式 enable 落盘 pluginEnabled["demo-external"] = true
     await first.kernel.plugins.enable('demo-external')
     const persisted = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as { pluginEnabled?: Record<string, boolean> }
@@ -221,7 +222,7 @@ test('pluginEnabled 持久化 true 的外部插件跨重启自动恢复启用', 
     await first.close()
 
     // 二次启动：持久化 true 自动恢复启用，无需手动 enable
-    const second = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const second = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     try {
       const summary = second.kernel.plugins.list().find((p) => p.id === 'demo-external')
       assert.ok(summary, '外部插件重启后仍应被注册')
@@ -241,12 +242,12 @@ test('pluginEnabled 持久化 false 的外部插件重启后保持停用', { tim
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     writeConventionPlugin(join(dataDir, 'plugins'))
-    const first = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const first = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     await first.kernel.plugins.enable('demo-external')
     await first.kernel.plugins.disable('demo-external')
     await first.close()
 
-    const second = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const second = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     try {
       const summary = second.kernel.plugins.list().find((p) => p.id === 'demo-external')
       assert.ok(summary)
@@ -277,7 +278,7 @@ test('普通插件留下的纯数据目录（无 plugin.json / 约定入口）�
     writeFileSync(join(pluginsDir, '.hidden', 'index.mjs'), 'export default {}')
     mkdirSync(join(pluginsDir, 'empty-dir'), { recursive: true })
 
-    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     try {
       const ids = app.kernel.plugins.list().map((p) => p.id)
       assert.ok(!ids.includes('some-plugin-data'), '纯数据目录不注册')
@@ -479,7 +480,7 @@ test('未声明 clientRoot 的外部插件默认 clientRoot 为插件目录本�
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     writeConventionPlugin(join(dataDir, 'plugins'))
-    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     try {
       const summary = app.kernel.plugins.list().find((p) => p.id === 'demo-external')
       assert.ok(summary, '外部插件应被自动注册')
@@ -520,7 +521,7 @@ test('模块导出无 name：同内置契约注册成功（展示名回落 id）
       join(dirPath, 'index.mjs'),
       `export default {\n  id: 'no-name-plugin',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'ping',\n      description: '回声',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
     )
-    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     try {
       const summary = app.kernel.plugins.list().find((p) => p.id === 'no-name-plugin')
       assert.ok(summary, '无 name 的外部插件应可注册（同 protocol 契约）')
@@ -591,7 +592,7 @@ test('plugin.json 声明 clientRoot: "./client"（模块导出未重复声明时
       join(dirPath, 'client', 'index.tsx'),
       `export function MainScreen() { return null }\n`,
     )
-    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
     try {
       const summary = app.kernel.plugins.list().find((p) => p.id === 'manifest-client-root')
       assert.ok(summary, '外部插件应被自动注册')

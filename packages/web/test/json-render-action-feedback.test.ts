@@ -10,6 +10,7 @@ import * as HelmPluginClient from '@helm/plugin-client'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
 import { normalizeSpec, type NormalizedSpecNode } from '../../plugins/src/json-render/client/spec-normalize.js'
 import type { EvalScope } from '../../plugins/src/json-render/client/evaluator.js'
+import { compilePluginClientModule } from '@helm/plugin-build'
 import type { ReactNode } from 'react'
 
 /** spec-primitives 的渲染上下文形状（client 目录不入 typecheck，此处本地最小声明）。 */

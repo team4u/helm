@@ -20,6 +20,7 @@ import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js
 import { SessionDocEventHub } from '../src/runtime/events.js'
 import { AuthService } from '../src/services/index.js'
 import { createHubHandler, startHub, type KernelRuntimeLike, type SessionDocEventPort } from '../src/http/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 function makeConversation(id: number): ConversationSummary {
   return {
@@ -102,7 +103,7 @@ beforeEach(async () => {
   const auth = new AuthService(dataDir)
   const setup = await auth.setup('test-password-123')
   token = setup.token
-  pluginHost = new PluginHost({
+  pluginHost = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs: {

@@ -19,6 +19,7 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 interface Env {
   dataDir: string
@@ -35,7 +36,7 @@ async function makeEnv(): Promise<Env> {
   faux.setResponses([fauxAssistantMessage('ok')])
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   const env: Env = {
     dataDir,
@@ -144,7 +145,7 @@ test('多 provider 禁用集互不干扰；缺省 provider PUT 清空全部', { 
   const models = createModels()
   models.setProvider(fauxA.provider)
   models.setProvider(fauxB.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, models })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   try {
     const env: Env = { dataDir, app, hubUrl: hub.url, async close() { await hub.close().catch(() => {}) } }
@@ -260,7 +261,7 @@ test('禁用模型后原生 spawn 三条解析路径均在创建前拒绝（409 
   faux.setResponses([fauxAssistantMessage('ok')])
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     const parent = app.kernel.listConversations().find((c) => c.profileId === 'assistant')
     assert.ok(parent)
@@ -309,7 +310,7 @@ test('resume 既有子会话：绑定模型后来被禁用时 409 model_disabled
   faux.setResponses([fauxAssistantMessage('ok')])
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     const parent = app.kernel.listConversations().find((c) => c.profileId === 'assistant')
     assert.ok(parent)
@@ -423,7 +424,7 @@ test('重启持久化：同一 dataDir 重新 createHelm 后禁用集仍生效',
     const faux = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
     const models = createModels()
     models.setProvider(faux.provider)
-    const app = await createHelm({ dataDir: freshDir, cwd: freshDir, models })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: freshDir, cwd: freshDir, models })
     try {
       const catalog = await app.kernel.listModels()
       const entry = catalog.models.find((m) => m.provider === 'faux' && m.modelId === 'faux-2')
@@ -453,7 +454,7 @@ test('config.json.disabledModels 非法形状：启动显式 config_corrupt，�
     const models = createModels()
     models.setProvider(faux.provider)
     await assert.rejects(
-      () => createHelm({ dataDir, cwd: dataDir, models }),
+      () => createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, models }),
       (err: unknown) => {
         assert.ok(err instanceof Error)
         assert.equal((err as { code?: string }).code, 'config_corrupt')

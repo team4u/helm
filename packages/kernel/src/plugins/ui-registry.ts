@@ -1,5 +1,5 @@
 /**
- * ui-registry.ts: 负责 7 大全界面前端扩展点的收集与校验，结合 client-compiler.ts 的模块校验与产物管理。
+ * ui-registry.ts: 负责 7 大全界面前端扩展点的收集与校验，结合构建端口（PluginBuildProvider）的模块校验与产物管理。
  *
  * 职责：
  * - 收集 sidebar, screen, timeline, markdown.codeBlock, tool, composer, workbench,
@@ -14,8 +14,17 @@
  * - enable 提交点的跨插件唯一性终检（profile.runtime kind 与 commandPalette slash），
  *   由 PluginHost 在启用提交块调用；默认停用的探测注册不占用全局名字。
  */
-import { HelmError, RESERVED_SLASH_COMMANDS, type PluginUiContribution, type UiActionSpec } from '@helm/protocol';
-import { assertModuleRefShape, clientNpmRootsOf, compilePluginClientModule, type ClientCompileResult, type ClientNpmRoot } from './client-compiler.js';
+import {
+  HelmError,
+  RESERVED_SLASH_COMMANDS,
+  assertModuleRefShape,
+  clientNpmRootsOf,
+  type PluginBuildProvider,
+  type PluginClientBundle,
+  type PluginClientNpmRoot,
+  type PluginUiContribution,
+  type UiActionSpec,
+} from '@helm/protocol';
 import { assertConversationScope, isPlainObject, jsonClone } from './shared.js';
 
 /** 宿主保留的命令斜杠触发词（skill: 前缀整体保留），插件不得占用。 */
@@ -103,17 +112,12 @@ export interface ClientModuleOptions {
   } | undefined;
   dataDir: string;
   isDisposed: () => boolean;
-  compile?: (
-    pluginId: string,
-    clientRoot: string,
-    moduleRef: string,
-    dataDir: string,
-    options?: { npmRoots?: ReadonlyArray<ClientNpmRoot> },
-  ) => Promise<ClientCompileResult>;
 }
 
 export class UiRegistry {
   private ui = new Map<string, PluginUiContribution[]>();
+
+  constructor(private readonly buildProvider?: PluginBuildProvider) {}
 
   registerUi(pluginId: string, surface: string, spec: unknown, fnName: string, clientRoot?: string): void {
     if (!isPlainObject(spec)) {
@@ -411,6 +415,16 @@ export class UiRegistry {
           'invalid_ui_spec',
           `插件 ${pluginId} ui.${fnName} 的 client.export 必须是非空合法导出名`,
           400,
+        );
+      }
+      // 构建端口在注册边界终检：无 provider 的宿主无法编译 client.tsx，
+      // 显式拒绝整个声明（插件 enable 失败）而非静默丢弃 UI 贡献。
+      if (this.buildProvider === undefined) {
+        throw new HelmError(
+          'unsupported_client_build',
+          `插件 ${pluginId} ui.${fnName} 声明 client 引用，但宿主未注入插件构建端口（PluginHostOptions.buildProvider）：无法编译 client.tsx，显式拒绝而非静默丢弃 UI`,
+          501,
+          { pluginId, fnName, module: String(client.module ?? '') },
         );
       }
     }
@@ -785,7 +799,7 @@ export class UiRegistry {
     pluginId: string,
     moduleRef: string,
     options: ClientModuleOptions,
-  ): Promise<ClientCompileResult> {
+  ): Promise<PluginClientBundle> {
     if (options.isDisposed()) {
       throw new HelmError('plugin_host_disposed', 'PluginHost 已 dispose', 409);
     }
@@ -817,11 +831,25 @@ export class UiRegistry {
     }
     const identity = info.identity;
     const epoch = info.epoch;
-    const compile = options.compile ?? compilePluginClientModule;
+    // 构建端口由 PluginHostOptions 注入（产品在 hub 接线默认实现）；缺失时
+    // 显式 501，绝不静默返回空产物或回退内置编译器。
+    const provider = this.buildProvider;
+    if (provider === undefined) {
+      throw new HelmError(
+        'unsupported_client_build',
+        `宿主未注入插件构建端口（PluginHostOptions.buildProvider）：无法提供插件 ${pluginId} 的 client 模块 ${moduleRef}`,
+        501,
+        { pluginId, module: moduleRef },
+      );
+    }
     // 受控 npm 依赖：定义声明的 specifiers -> 解析根聚合（与 doctor 链同一映射口径）。
-    const npmRoots: ClientNpmRoot[] = clientNpmRootsOf(info.npmDependencies);
-    const result = await compile(pluginId, clientRoot, moduleRef, options.dataDir, {
-      ...(npmRoots.length > 0 ? { npmRoots } : {}),
+    const npmRoots: PluginClientNpmRoot[] = clientNpmRootsOf(info.npmDependencies);
+    const result = await provider.compileClientModule({
+      pluginId,
+      clientRoot,
+      moduleRef,
+      cacheDir: options.dataDir,
+      npmRoots,
     });
     const current = options.getPluginLifecycle(pluginId);
     if (

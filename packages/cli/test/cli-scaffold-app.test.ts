@@ -19,6 +19,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { runCli } from '../src/index.js'
 import { doctorPluginDir } from '../../kernel/src/plugins/plugin-doctor.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/plugin-host.js'
 import { createAppsPlugin, APPS_PLUGIN_ID } from '../../plugins/src/apps.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
@@ -87,11 +88,12 @@ async function validateViaRealAppsPlugin(dir: string): Promise<ValidateResult> {
       ensureSkill: async () => {},
     },
     plugins: {
-      doctorPlugin: (target: { dir?: string; id?: string }) => doctorPluginDir(target.dir!),
+      doctorPlugin: (target: { dir?: string; id?: string }) =>
+          doctorPluginDir(target.dir!, { buildProvider: createPluginBuildProvider() }),
     },
     emitEvent: () => {},
   }
-  const host = new PluginHost({ dataDir, host: backend as never, docs: new MemoryDocStore() })
+  const host = new PluginHost({ dataDir, host: backend as never, docs: new MemoryDocStore(), buildProvider: createPluginBuildProvider() })
   try {
     await host.register(createAppsPlugin({ hubCwd: dataDir }), { enabled: true })
     return (await host.invokeAction(APPS_PLUGIN_ID, 'validate', { dir })) as ValidateResult
@@ -187,7 +189,7 @@ test('plugins init --template app 端到端：真实 doctor 四阶段 + 真实 a
     const { dir } = JSON.parse(r.out) as { dir: string }
 
     // 真实 doctor：manifest/backend/register/client 四阶段 + screen 捕获
-    const report = await doctorPluginDir(dir)
+    const report = await doctorPluginDir(dir, { buildProvider: createPluginBuildProvider() })
     assert.ok(report.ok, `doctor 应通过：${JSON.stringify(report.checks)}`)
     assert.deepEqual(
       report.checks.map((c) => c.id),
@@ -212,7 +214,7 @@ test('对照：full 模板 doctor 通过但 apps validate 如实报 missing_app_
     assert.equal(r.code, 0, r.err)
     const { dir } = JSON.parse(r.out) as { dir: string }
 
-    const report = await doctorPluginDir(dir)
+    const report = await doctorPluginDir(dir, { buildProvider: createPluginBuildProvider() })
     assert.ok(report.ok)
     assert.deepEqual(report.screens, [], 'full 模板只注册 workbenchPanel，不声明 screen')
 

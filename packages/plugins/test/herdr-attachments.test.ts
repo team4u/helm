@@ -21,6 +21,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrNodeChannel, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 受控 HerdrTransport（与 herdr.test.ts 同款裁剪版）
@@ -421,7 +422,7 @@ async function makeEnv(opts: { withGetArtifact?: boolean; hubUrls?: Record<strin
     },
     subscribe: async () => { throw new HelmError('unsupported', 'attachments fixture 不订阅远端事件', 501) },
   }
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs: new MemoryDocStore(),

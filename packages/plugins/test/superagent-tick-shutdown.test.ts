@@ -19,6 +19,7 @@ import {
 } from '../src/superagent/watchdog.js'
 import type { SuperAgentWatchdogRuntime } from '../src/superagent/contracts.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 function makeSummary(id: number): ConversationSummary {
   return {
@@ -132,7 +133,7 @@ test('service stop 等待已进入采集的在途 tick，插件释放前完成 D
     track: async <T,>(_label: string, task: () => Promise<T>) => task(),
   }
 
-  const host = new PluginHost({ dataDir, host: backend, docs })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs })
   await host.register({
     id: 'builtin:superagent',
     definePlugin(ctx) {

@@ -22,6 +22,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { TranscriptContext } from '@earendil-works/pi-ai'
 import { HelmError } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 interface Env {
   dataDir: string
@@ -35,7 +36,7 @@ async function makeEnv(): Promise<Env> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   return {
     dataDir,
     faux,

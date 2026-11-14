@@ -30,6 +30,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError as HostHelmError } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { doctorPluginDir } from '../../kernel/src/plugins/plugin-doctor.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 function makeModels() {
   const models = createModels()
@@ -38,7 +39,7 @@ function makeModels() {
 }
 
 async function createApp(dataDir: string) {
-  return createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+  return createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
 }
 
 // ---------------------------------------------------------------------------
@@ -155,8 +156,9 @@ test('代际加载：?helmgen 入口重新初始化模块图，相对依赖闭�
     const { dirPath, counterName } = writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-gen')
     const childSrc = `
 const { registerPluginTsRoot, nextPluginGeneration } = await import(${JSON.stringify(loaderSrc)})
+const { createPluginBuildProvider } = await import(${JSON.stringify(import.meta.resolve('@helm/plugin-build'))})
 const entry = ${JSON.stringify(join(dirPath, 'index.ts'))}
-const release = registerPluginTsRoot(${JSON.stringify(dirPath)})
+const release = registerPluginTsRoot(${JSON.stringify(dirPath)}, { transform: createPluginBuildProvider().transformBackendTs })
 const plain = (await import('file://' + entry)).default
 if (plain.id !== 'dx-gen') { console.log('FAIL id'); process.exit(1) }
 if (globalThis[${JSON.stringify(counterName)}] !== 1) { console.log('FAIL plain-init'); process.exit(1) }
@@ -204,7 +206,7 @@ test('doctor：健康插件 ok=true 且附真实注册 summary', { timeout: 60_0
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const { dirPath } = writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-healthy')
-    const report = await doctorPluginDir(dirPath)
+    const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
     assert.equal(report.ok, true, `健康插件应通过：${JSON.stringify(report.checks)}`)
     assert.equal(report.pluginId, 'dx-healthy')
     assert.deepEqual(
@@ -225,7 +227,7 @@ test('doctor：损坏 manifest 落在 manifest 检查项', { timeout: 60_000 }, 
     const dirPath = join(dataDir, 'plugins', 'dx-bad-manifest')
     mkdirSync(dirPath, { recursive: true })
     writeFileSync(join(dirPath, 'plugin.json'), '{ not valid json')
-    const report = await doctorPluginDir(dirPath)
+    const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
     assert.equal(report.ok, false)
     const manifest = report.checks.find((c) => c.id === 'manifest')
     assert.ok(manifest?.error, 'manifest 检查失败')
@@ -246,7 +248,7 @@ test('doctor：TS 语法错误落在 backend 检查项（含文件定位）', { 
     const dirPath = join(dataDir, 'plugins', 'dx-syntax')
     mkdirSync(dirPath, { recursive: true })
     writeFileSync(join(dirPath, 'index.ts'), 'export default { id: "dx-syntax", definePlugin( {}\n')
-    const report = await doctorPluginDir(dirPath)
+    const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
     assert.equal(report.ok, false)
     const backend = report.checks.find((c) => c.id === 'backend')
     assert.ok(backend?.error)
@@ -278,7 +280,7 @@ test('doctor：注册边界违约（重复动作 id）落在 register 检查项'
 export default { id: 'dx-dup-action', definePlugin }
 `,
     )
-    const report = await doctorPluginDir(dirPath)
+    const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
     assert.equal(report.ok, false)
     const register = report.checks.find((c) => c.id === 'register')
     assert.ok(register?.error)
@@ -301,7 +303,7 @@ test('doctor：悬空 client export 落在 client 检查项（真实编译产物
       join(dirPath, 'index.ts'),
       entry.replace('NotThePanelYouWant', 'SamplePanel'),
     )
-    const report = await doctorPluginDir(dirPath)
+    const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
     assert.equal(report.ok, false)
     const client = report.checks.find((c) => c.id === 'client')
     assert.ok(client?.error, `client 检查应失败：${JSON.stringify(report.checks)}`)
@@ -316,7 +318,7 @@ test('doctor：健康前端组件通过 client 检查', { timeout: 60_000 }, asy
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-dx-doc-'))
   try {
     const dirPath = writeClientPlugin(join(dataDir, 'plugins'), 'dx-client-ok')
-    const report = await doctorPluginDir(dirPath)
+    const report = await doctorPluginDir(dirPath, { buildProvider: createPluginBuildProvider() })
     assert.equal(report.ok, true, JSON.stringify(report.checks))
     const client = report.checks.find((c) => c.id === 'client')
     assert.ok(client && client.error === undefined)

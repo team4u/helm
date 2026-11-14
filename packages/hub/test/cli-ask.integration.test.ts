@@ -9,13 +9,14 @@ import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/provid
 import { runCli } from '../../cli/src/index.js'
 import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 async function fixture() {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-cli-ask-'))
   const models = createModels()
   const faux = fauxProvider()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   const auth = app.kernel.auth.createProcessToken()
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   return {

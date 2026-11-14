@@ -24,6 +24,7 @@ import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-work
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import type { ConversationSummary, WorkflowRunSummary } from '@helm/protocol'
 import { createHelm } from '../../hub/src/app.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 const ROOT = 1
 
@@ -49,7 +50,7 @@ async function makeEnv(onEmpty: 'hang' | 'end' = 'hang'): Promise<Env> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   const settled: TurnSettledRecord[] = []
   // turn.settled 发布在内核事件总线（非宿主内部事件）：经 events.subscribe 观察。
   app.kernel.events.subscribe((frame) => {

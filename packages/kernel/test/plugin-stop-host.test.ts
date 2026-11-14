@@ -30,6 +30,7 @@ import {
   type PluginDocHandle,
 } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 /** 判定「stop 窗口外旧句柄拒绝」的统一断言。 */
 function isContextExpired(err: unknown): boolean {
@@ -331,7 +332,7 @@ let dataDir: string
 let backend: StopWindowBackend
 
 function makeHost(): PluginHost {
-  return new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
 }
 
 beforeEach(() => {

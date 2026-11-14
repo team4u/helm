@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { HelmError } from '@helm/protocol';
 import { UiRegistry } from '../src/plugins/ui-registry.js';
+import { createPluginBuildProvider } from '@helm/plugin-build';
 
 const isHelmError = (code: string) => (err: unknown): boolean => err instanceof HelmError && err.code === code;
 
@@ -33,7 +34,7 @@ function registerProfileRuntime(ui: UiRegistry, pluginId: string, kind: string):
 }
 
 test('markdown.codeBlock：languages 形状、重复拒绝与 client 必填', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry();
+  const ui = new UiRegistry(createPluginBuildProvider());
   const client = { module: 'index.tsx', export: 'C' };
 
   // 合法声明（多语言 + priority）
@@ -73,7 +74,7 @@ test('markdown.codeBlock：languages 形状、重复拒绝与 client 必填', { 
 });
 
 test('ui.action：actionId/client 至少其一与字段归属', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry();
+  const ui = new UiRegistry(createPluginBuildProvider());
   const client = { module: 'index.tsx', export: 'C' };
 
   // 合法：header + actionId + placement toolbar
@@ -126,7 +127,7 @@ test('ui.action：actionId/client 至少其一与字段归属', { timeout: 60_00
 });
 
 test('priority/order 必须是有限安全整数', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry();
+  const ui = new UiRegistry(createPluginBuildProvider());
   ui.registerUi('p1', 'sidebar.item', { id: 'ok1', label: 'A', priority: 10, order: -3 }, 'sidebarItem');
   ui.registerUi('p1', 'sidebar.item', { id: 'ok2', label: 'B', priority: 0 }, 'sidebarItem');
 
@@ -142,7 +143,7 @@ test('priority/order 必须是有限安全整数', { timeout: 60_000 }, () => {
 });
 
 test('commandPalette：slash 格式、保留词与插件内重复', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry();
+  const ui = new UiRegistry(createPluginBuildProvider());
   registerCommand(ui, 'p1', 'cmd1', 'wf');
   registerCommand(ui, 'p1', 'cmd2'); // 无 slash 合法
 
@@ -194,7 +195,7 @@ test('commandPalette：slash 格式、保留词与插件内重复', { timeout: 6
 });
 
 test('profile.runtime：kind/label/agentSuggestions 形状与插件内重复 kind', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry();
+  const ui = new UiRegistry(createPluginBuildProvider());
   registerProfileRuntime(ui, 'p1', 'worker');
   registerProfileRuntime(ui, 'p1', 'watcher'); // 同插件不同 kind 合法
 
@@ -228,7 +229,7 @@ test('profile.runtime：kind/label/agentSuggestions 形状与插件内重复 kin
 });
 
 test('assertCrossPluginUnique：active+pending 终检与自排除', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry();
+  const ui = new UiRegistry(createPluginBuildProvider());
   registerCommand(ui, 'a', 'cmd', 'wf');
   registerProfileRuntime(ui, 'a', 'worker');
   registerCommand(ui, 'b', 'cmd', 'wf'); // 与 a 冲突
@@ -252,17 +253,17 @@ test('assertCrossPluginUnique：active+pending 终检与自排除', { timeout: 6
   );
 
   // pending 同时出现在 active 列表中（如 host 传入含 pending 的全集）不误报自冲突
-  const ui2 = new UiRegistry();
+  const ui2 = new UiRegistry(createPluginBuildProvider());
   registerCommand(ui2, 'a', 'cmd', 'wf');
   ui2.assertCrossPluginUnique('a', ['a']);
 
   // 无任何声明的 pending：通过
-  const ui3 = new UiRegistry();
+  const ui3 = new UiRegistry(createPluginBuildProvider());
   ui3.assertCrossPluginUnique('empty', ['a', 'b']);
 });
 
 test('inactive probe 不占全局名字：默认停用注册不参与终检', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry();
+  const ui = new UiRegistry(createPluginBuildProvider());
   registerCommand(ui, 'probe', 'cmd', 'wf');
   registerProfileRuntime(ui, 'probe', 'worker');
 
@@ -285,7 +286,7 @@ test('inactive probe 不占全局名字：默认停用注册不参与终检', { 
 });
 
 test('clear/remove 后名字与声明释放', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry();
+  const ui = new UiRegistry(createPluginBuildProvider());
   registerCommand(ui, 'a', 'cmd', 'wf');
   registerProfileRuntime(ui, 'a', 'worker');
   ui.registerUi('a', 'sidebar.item', { id: 's1', label: 'S', docs: ['d1'] }, 'sidebarItem');

@@ -42,6 +42,7 @@ import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHelm } from '../src/app.js'
 import { createHubHandler } from '../../kernel/src/http/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 /**
  * 平台事实：进程占用扫描当前仅 Linux /proc。非 Linux 上 cleanup 在进程检查处
@@ -121,7 +122,7 @@ async function openRuntime(dataDir: string, cwd?: string): Promise<RuntimeEnv> {
   const models = createModels()
   const faux = fauxProvider()
   models.setProvider(faux.provider)
-  const app = await createHelm({
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd: cwd ?? dataDir,
     model: 'faux/faux-1',

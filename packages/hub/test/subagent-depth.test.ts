@@ -37,6 +37,7 @@ import { join } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHelm } from '../src/app.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 interface FauxHandle {
   setResponses(messages: unknown[]): void
@@ -131,7 +132,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   test('顶层会话派生一层：登记 depth=1/父链/子树上限=2；一层子代理回合保留 subagent/SubagentWorkflow', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth1')
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       // 顶层：派生一个子代理（真实原生 spawn，真子会话；显式同步等待结果）。
       faux.setResponses([
@@ -187,7 +188,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   test('一层子代理经 subagent 工具继续派二层：登记 depth=2/父链；二层子代理回合剥离派工工具', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth2')
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       // 模型消费顺序（同步 spawn 逐层 await，顺序确定）：
       // 顶层 toolUse(subagent) → 一层子代理 toolUse(subagent) → 二层子代理文本
@@ -252,7 +253,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   test('二层子代理拒绝再派生：spawnAgent 403 subagent_depth_exceeded（含事实）；run 动作定向二层被拒且无 run 记录；一层对照组放行', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth3')
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
       const child2 = (await spawnChain(app, faux, [child1]))[0]!
@@ -310,7 +311,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   test('一层子代理可运行 SubagentWorkflow：run 动作放行，节点派生的子会话登记 depth=2', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth4')
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
       faux.setResponses([fauxAssistantMessage('引擎节点子代理回答')])
@@ -344,7 +345,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   test('受管子代理显式 background:true：显式拒绝（防早结算），不派生、不建 run；同步缺省仍可用', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth5')
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
       // 一层子代理是 helm-owned 自动化会话：显式 background:true 必须显式报错，
@@ -412,7 +413,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   test('fork 会话（有 parentConversationId）不被误伤：工具完整、spawn 与 run 动作可用', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth6')
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       // 顶层完成一个回合（提供可分叉条目）。
       faux.setResponses([fauxAssistantMessage('顶层回答')])
@@ -452,7 +453,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   test('SuperAgent worker 不被误伤：dispatch_worker 创建的会话可正常派生子代理', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth7')
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       await app.kernel.plugins.enable('builtin:superagent')
       const dispatched = (await app.kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
@@ -482,7 +483,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
     const dir = join(rootDir, 'depth8')
     {
       const { models, faux } = makeFauxModels()
-      const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
       try {
         const child1 = (await spawnChain(app, faux, [1]))[0]!
         await spawnChain(app, faux, [child1])
@@ -493,7 +494,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
     // 重启：同一 dataDir，登记表事实生效。
     {
       const { models, faux } = makeFauxModels()
-      const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
       try {
         const child1 = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
         assert.ok(child1, '重启后一层子会话镜像应恢复')
@@ -530,7 +531,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
     let legacyChildId = 0
     {
       const { models, faux } = makeFauxModels()
-      const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
       try {
         const child1 = (await spawnChain(app, faux, [1]))[0]!
         legacyChildId = child1
@@ -553,7 +554,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
     }
     const { models } = makeFauxModels()
     await assert.rejects(
-      () => createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never }),
+      () => createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never }),
       /深度登记无效/,
     )
   })
@@ -565,7 +566,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
   test('显式深度授予：maxSubagentDepth=3 时三层可用、三层为叶子；新登记继承授予上限', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth10')
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       faux.setResponses([fauxAssistantMessage('一层回答')])
       let grantedChild = 0
@@ -641,7 +642,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
     const dir = join(rootDir, 'depth11')
     {
       const { models, faux } = makeFauxModels()
-      const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
       try {
         assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2)
         for (const invalid of [0, 99, 2.5, Number.NaN]) {
@@ -663,7 +664,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
       }
     }
     const { models, faux } = makeFauxModels()
-    const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
     try {
       assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 1)
       const child = (await spawnChain(app, faux, [1]))[0]!

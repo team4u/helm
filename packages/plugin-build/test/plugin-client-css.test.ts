@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { readFile, writeFile as writeFileCb } from 'node:fs'
 import { promisify } from 'node:util'
-import { compilePluginClientModule } from '../src/plugins/client-compiler.js'
+import { compilePluginClientModule } from '../src/index.js'
 import { HelmError, PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol'
 
 const writeFileP = promisify(writeFileCb)

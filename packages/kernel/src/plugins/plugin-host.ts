@@ -49,7 +49,7 @@ import {
 } from '@helm/protocol';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline, type IsolatedHookError } from './hooks.js';
 import { PluginTaskTracker } from './tracking.js';
-import { type ClientCompileResult } from './client-compiler.js';
+import type { PluginBuildProvider, PluginClientBundle } from '@helm/protocol';
 import {
   findSourceDirByPluginId,
   importPluginDefinition,
@@ -151,7 +151,7 @@ export class PluginHost {
   private tracker = new PluginTaskTracker();
   private docRegistry: PluginDocRegistry;
   private capabilityRegistry = new CapabilityRegistry();
-  private uiRegistry = new UiRegistry();
+  private uiRegistry: UiRegistry;
   private configStore?: PluginConfigStore;
   private disposed = false;
   private registerSeq = 0;
@@ -180,6 +180,7 @@ export class PluginHost {
 
   constructor(private readonly options: PluginHostOptions) {
     this.configStore = options.config;
+    this.uiRegistry = new UiRegistry(options.buildProvider);
     this.servicesStarted = options.deferServices !== true;
     for (const name of Object.keys(HOOK_ALLOWED_ACTIONS) as HookName[]) {
       this.pipelines.set(name, new HookPipeline(name));
@@ -1058,7 +1059,9 @@ export class PluginHost {
       if (target.id.trim().length === 0) {
         throw new HelmError('validation_error', 'doctor 目标 id 需为非空字符串', 400);
       }
-      const source = await findSourceDirByPluginId(this.options.dataDir, target.id);
+      const source = await findSourceDirByPluginId(this.options.dataDir, target.id, {
+        transform: this.options.buildProvider?.transformBackendTs,
+      });
       if (source === undefined) {
         throw new HelmError(
           'plugin_source_missing',
@@ -1087,8 +1090,16 @@ export class PluginHost {
     } else {
       throw new HelmError('validation_error', 'doctor 需提供目标：dir/path（目录绝对路径）或 id（已注册插件）', 400);
     }
-    const report = await doctorPluginDir(dir);
+    const report = await doctorPluginDir(dir, { buildProvider: this.options.buildProvider });
     return requestedId === undefined ? report : { ...report, requestedId };
+  }
+
+  /**
+   * 插件构建端口透出（external-loader / package-manager 等外部插件链取
+   * TS 转译函数用；未注入时返回 undefined，相关能力显式拒绝）。
+   */
+  getBuildProvider(): PluginBuildProvider | undefined {
+    return this.options.buildProvider;
   }
 
   /**
@@ -1108,7 +1119,7 @@ export class PluginHost {
       doctor: skipDoctor
         ? undefined
         : async (dir) => {
-            const report = await doctorPluginDir(dir);
+            const report = await doctorPluginDir(dir, { buildProvider: this.options.buildProvider });
             if (!report.ok) {
               const first = report.checks.find((c) => c.error !== undefined);
               throw new HelmError(
@@ -1161,7 +1172,9 @@ export class PluginHost {
   asPackageManagerHost(): PackageManagerHost {
     return {
       registerManagedPlugin: async (dir, options) => {
-        const releaseTsRoot = registerPluginTsRoot(dir);
+        const releaseTsRoot = registerPluginTsRoot(dir, {
+          transform: this.options.buildProvider?.transformBackendTs,
+        });
         try {
           const entryPath = await resolvePluginEntry(dir);
           if (entryPath === undefined) {
@@ -1282,7 +1295,7 @@ export class PluginHost {
     pluginId: string,
     moduleRef: string,
     options?: { chunk?: string; hash?: string },
-  ): Promise<ClientCompileResult> {
+  ): Promise<PluginClientBundle> {
     this.assertNotDisposed();
     return this.uiRegistry.getClientModule(pluginId, moduleRef, {
       chunk: options?.chunk,

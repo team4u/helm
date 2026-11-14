@@ -38,6 +38,7 @@ import { waitFor } from '../../kernel/test/helpers.js'
 import { actionToolAlias } from '../../kernel/src/plugins/capability-registry.js'
 import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -882,7 +883,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
 
   async function setup(): Promise<{ host: PluginHost; backend: SteerFakeBackend; runId: string }> {
     const backend = new SteerFakeBackend()
-    const host = new PluginHost({
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir,
       host: backend,
       docs: new MemoryDocStore(),
@@ -902,7 +903,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
 
   it('manifest 冒烟：exposeAsTool 直投、CLI 命令 workflows steer、oneOf 输出双分支', timeout, async () => {
     const backend = new SteerFakeBackend()
-    const host = new PluginHost({
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir,
       host: backend,
       docs: new MemoryDocStore(),
@@ -1035,7 +1036,7 @@ it('真实内核：在工具挂起期间纠偏，子代理读到新指令并将�
   const models = createModels()
   const faux = fauxProvider()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   let releaseTool!: () => void
   const toolGate = new Promise<void>((resolve) => { releaseTool = resolve })
   try {

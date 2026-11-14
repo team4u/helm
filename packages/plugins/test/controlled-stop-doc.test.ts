@@ -22,6 +22,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, type ConversationSummary, type EnvExecResponse, type PluginDefinition, type PluginDocHandle, type PublicPluginDoc } from '@helm/protocol'
 import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -221,7 +222,7 @@ let docs: JsonDocStore
 let sessionDocs: JsonSessionDocStore
 
 function makeHost(options: { deferServices?: boolean } = {}): PluginHost {
-  return new PluginHost({
+  return new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs,

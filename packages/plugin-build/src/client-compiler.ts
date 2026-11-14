@@ -1,5 +1,8 @@
 /**
- * PluginClientCompiler：client.tsx 轨道的宿主侧编译器。
+ * PluginClientCompiler：client.tsx 轨道的宿主侧编译器（@helm/plugin-build，内核外实现）。
+ *
+ * 本模块是 PluginBuildProvider.compileClientModule 的实现体，由产品组合根（hub）
+ * 注入内核 PluginHost；内核自身不依赖 esbuild（契约见 @helm/protocol plugin-build.ts）。
  *
  * 职责（只做机制）：
  * - 把插件 clientRoot 内的相对 .ts/.tsx 入口编译为浏览器 ESM（esbuild bundle + metafile）；
@@ -33,9 +36,15 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync, readFileSync, writeFileSync, renameSync, existsSync, rmSync } from 'node:fs';
 import { basename, isAbsolute, join, dirname, relative, resolve, sep } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { HelmError, PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol';
+import {
+  HelmError,
+  PLUGIN_CLIENT_CSS_EXPORT,
+  assertModuleRefShape,
+  isAbsoluteTargetPath,
+  type PluginClientBundle,
+  type PluginClientNpmRoot,
+} from '@helm/protocol';
 import { build, type Plugin as EsbuildPlugin } from 'esbuild';
-import { isCrossPlatformAbsolutePath } from './shared.js';
 
 /**
  * 宿主与插件共享的浏览器端运行时依赖：编译期拦截为虚拟 shim 模块（绝不解析
@@ -62,44 +71,11 @@ export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.fr
   '@helm/plugin-client': '__helm_shared_plugin_client',
 });
 
-/** ClientComponentRef.module 允许的字符集（相对路径段：字母数字 . _ -，禁止空段与 ..）。 */
-const MODULE_REF_PATTERN = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*\.(ts|tsx)$/;
-
 /** 依赖清单（deps.json）结构版本；v2 为 CSS-as-JS 旧格式，v3 起原生 CSS bundling，v4 起含受控 npm 依赖，v5 起启用 esbuild minify 与预压缩，v6 起支持代码分割与异步 chunk 桥，v7 起共享 chunk 注册改用 esbuild 命名空间桥（key 含 pluginId/moduleRef），v8 起记录受控 npm 依赖声明集。 */
 const DEPS_LIST_VERSION = 8;
 
-export interface ClientCompileResult {
-  /** 产物 JS 文本（自包含 ESM；共享依赖经 globalThis 命名空间运行时解析）。 */
-  code: string
-  /** 内容 hash（入口 + 全部本地依赖内容 sha256 + 编译参数）。 */
-  contentHash: string
-  /** 产物 gzip 预压缩字节（供 HTTP 快速响应）。 */
-  gzipped?: Uint8Array
-  /** 产物入口模块的具名导出清单（含 CSS 保留导出；doctor 消费做悬空 export 校验）。 */
-  exports: string[]
-  /** 异步分包产物（code-splitting 路径生成；key 为 chunk 文件名）。 */
-  chunks?: Record<string, { code: string; gzipped?: Uint8Array }>
-}
-
-/** 校验 ClientComponentRef.module 形状（相对 .ts/.tsx，无绝对/越根/编码逃逸）。 */
-export function assertModuleRefShape(pluginId: string, moduleRef: string): void {
-  if (
-    typeof moduleRef !== 'string' ||
-    isAbsolute(moduleRef) ||
-    /^[a-zA-Z]:[\\/]/.test(moduleRef) ||
-    /^\\\\[^\\]+\\[^\\]+/.test(moduleRef) ||
-    moduleRef.includes('\\') ||
-    moduleRef.split('/').includes('..') ||
-    !MODULE_REF_PATTERN.test(moduleRef)
-  ) {
-    throw new HelmError(
-      'invalid_client_module',
-      `插件 ${pluginId} 的 client 模块引用非法（须为 clientRoot 内相对 .ts/.tsx 路径，禁止绝对路径/..越根/反斜杠）：${String(moduleRef)}`,
-      400,
-      { pluginId, module: String(moduleRef) },
-    );
-  }
-}
+/** 编译产物（@helm/protocol PluginClientBundle 的本地别名，供测试与工具直接引用）。 */
+export type ClientCompileResult = PluginClientBundle;
 
 // ---------------------------------------------------------------------------
 // 并发合并：同 key 在途编译共享同一 Promise；失败即清除可重试
@@ -273,26 +249,7 @@ interface DepsListFile {
  * packageRoot 是提供这些包的解析根（通常为内置插件宿主包根，node_modules 内）。
  * 解析产物按文件 realpath containment 校验后随本地依赖一并进 deps hash 与缓存复查。
  */
-export interface ClientNpmRoot {
-  specifiers: ReadonlyArray<string>;
-  packageRoot: string;
-}
-
-/**
- * 定义声明的 npmDependencies（说明符 -> 解析根）聚合为编译器可校验的 roots。
- * ui-registry 运行链与 doctor 静态自检链共用，保证同一映射口径。
- */
-export function clientNpmRootsOf(
-  npmDependencies: Readonly<Record<string, string>> | undefined,
-): ClientNpmRoot[] {
-  const npmByRoot = new Map<string, string[]>();
-  for (const [spec, packageRoot] of Object.entries(npmDependencies ?? {})) {
-    const list = npmByRoot.get(packageRoot) ?? [];
-    list.push(spec);
-    npmByRoot.set(packageRoot, list);
-  }
-  return [...npmByRoot.entries()].map(([packageRoot, specifiers]) => ({ packageRoot, specifiers }));
-}
+export type ClientNpmRoot = PluginClientNpmRoot;
 
 function npmRootsKey(roots: ReadonlyArray<ClientNpmRoot>): string {
   return roots
@@ -1104,7 +1061,7 @@ function containmentPlugin(
         // 盘符 / UNC 绝对路径不是裸说明符：filter 只排除 `.` 与 `/` 开头，
         // `D:\...`、`\\server\share\...` 会落进来（Windows 上入口与本地依赖
         // 全为此形态）。交回 esbuild 默认解析。
-        if (isCrossPlatformAbsolutePath(args.path)) return null;
+        if (isAbsoluteTargetPath(args.path)) return null;
         // CSS 语法引用（url() 资源 / @import）不是 npm 说明符：交由 cssPolicyPlugin
         // 按资源策略处理（data:/https: 放行，本地相对显式拒绝），绝不误报裸依赖
         if (args.kind === 'url-token' || args.kind === 'import-rule') return null;

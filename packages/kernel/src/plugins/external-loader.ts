@@ -44,11 +44,12 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   HelmError,
+  type PluginBuildProvider,
   type PluginDefinition,
   type PluginDiagnosticError,
   type PluginSummary,
 } from '@helm/protocol';
-import { registerPluginTsRoot, nextPluginGeneration } from './backend-ts-loader.js';
+import { registerPluginTsRoot, nextPluginGeneration, type BackendTsTransformFn } from './backend-ts-loader.js';
 import { isBuiltinPluginDataDirName } from './plugin-dir-name.js';
 
 /** 加载器所需的最小宿主形状（真实 PluginHost 结构兼容，便于独立测试）。 */
@@ -66,6 +67,19 @@ export interface ExternalPluginHost {
     version?: string;
     error: PluginDiagnosticError;
   }): void;
+  /**
+   * 可选：宿主构建端口透出（真实 PluginHost 提供）：外部插件 TS 转译函数
+   * 由此取自 PluginHostOptions.buildProvider。未实现/未注入时 TS 源加载在
+   * 转译阶段显式拒绝（unsupported_backend_ts_build），JS 插件不受影响。
+   */
+  getBuildProvider?(): PluginBuildProvider | undefined;
+}
+
+/** 从宿主形状取后端 TS 转译函数（构建端口未接线时 undefined）。 */
+function tsTransformOf(
+  host: { getBuildProvider?(): PluginBuildProvider | undefined },
+): BackendTsTransformFn | undefined {
+  return host.getBuildProvider?.()?.transformBackendTs;
 }
 
 /** reload/rescan 所需的完整宿主形状（含 unregister；真实 PluginHost 结构兼容）。 */
@@ -203,6 +217,8 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
   }
   const registered: string[] = [];
   const existingIds = new Set<string>();
+  // 后端 TS 转译函数：宿主构建端口注入（未接线时 TS 插件在转译阶段显式拒绝）。
+  const transform = tsTransformOf(plugins);
   const populateExisting = async () => {
     existingIds.clear();
     for (const summary of await plugins.list()) existingIds.add(summary.id);
@@ -218,7 +234,7 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
     // 本进程：插件运行期动态 import 依赖转译可用，已加载模块在 ESM 缓存中保持
     // identity。因此插件停用/卸载不释放根、不卸载已加载模块（同进程内重新
     // 注册不重复初始化）；释放仅发生在加载失败回退时。
-    const releaseTsRoot = registerPluginTsRoot(dirPath);
+    const releaseTsRoot = registerPluginTsRoot(dirPath, { transform });
     let committed = false;
     try {
       const entryPath = await resolvePluginEntry(dirPath);
@@ -880,8 +896,9 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
 export async function findSourceDirByPluginId(
   dataDir: string,
   pluginId: string,
+  options: { transform?: BackendTsTransformFn } = {},
 ): Promise<string | undefined> {
-  const found = await findPluginSource(dataDir, pluginId);
+  const found = await findPluginSource(dataDir, pluginId, options);
   return found?.dir;
 }
 
@@ -894,6 +911,7 @@ export interface PluginSourceLocation {
 async function findPluginSource(
   dataDir: string,
   pluginId: string,
+  options: { transform?: BackendTsTransformFn } = {},
 ): Promise<PluginSourceLocation | undefined> {
   const pluginsDir = join(dataDir, 'plugins');
   let entries: Array<{ name: string; isDirectory(): boolean }>;
@@ -912,7 +930,7 @@ async function findPluginSource(
     // id 不一致时即便修复也轮不到它命中，直接跳过；同名目录解析失败时目标
     // 源码本身仍处于损坏态，交由上层按未找到源目录报错。
     let entryPath: string | undefined;
-    const releaseTsRoot = registerPluginTsRoot(dirPath);
+    const releaseTsRoot = registerPluginTsRoot(dirPath, { transform: options.transform });
     try {
       entryPath = await resolvePluginEntry(dirPath);
       if (entryPath === undefined) continue;
@@ -966,7 +984,7 @@ export async function reloadExternalPlugin(
     throw new HelmError('unknown_plugin', `未注册的插件：${pluginId}`, 404, { pluginId });
   }
   const wasEnabled = current.enabled;
-  const source = await findPluginSource(dataDir, pluginId);
+  const source = await findPluginSource(dataDir, pluginId, { transform: tsTransformOf(plugins) });
   if (source === undefined) {
     throw new HelmError(
       'plugin_source_missing',
@@ -992,7 +1010,7 @@ export async function reloadExternalPlugin(
       { pluginId, sourceDir },
     );
   }
-  const releaseTsRoot = registerPluginTsRoot(sourceDir);
+  const releaseTsRoot = registerPluginTsRoot(sourceDir, { transform: tsTransformOf(plugins) });
   let committed = false;
   try {
     const generation = nextPluginGeneration(sourceDir);
@@ -1074,6 +1092,7 @@ export async function rescanExternalPlugins(
   }
   const existingIds = new Set((await plugins.list()).map((summary) => summary.id));
   const registered: string[] = [];
+  const transform = tsTransformOf(plugins);
   let skipped = 0;
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
@@ -1083,7 +1102,7 @@ export async function rescanExternalPlugins(
       skipped += 1; // 目录名同名已注册插件：快速跳过（不重载）
       continue;
     }
-    const releaseTsRoot = registerPluginTsRoot(dirPath);
+    const releaseTsRoot = registerPluginTsRoot(dirPath, { transform });
     let committed = false;
     try {
       const entryPath = await resolvePluginEntry(dirPath);

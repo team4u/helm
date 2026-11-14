@@ -25,6 +25,7 @@ import {
 } from '../src/plugins/index.js'
 import { ConfigService } from '../src/services/config.js'
 import { hostBackendStub } from './helpers/host-backend-stub.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -85,7 +86,7 @@ async function makeEnv(): Promise<Env> {
   // 后端 plugins 端口接线：与 runtime createPluginHostBackend 同一委托面
   //（直接转发 PluginHost 既有公共方法，复用同一生命周期队列与任务跟踪）。
   const backend = hostBackendStub()
-  const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
   backend.plugins = {
     doctorPlugin: (target) => host.doctorExternalPlugin(target),
     installPlugin: (source, options) => host.installPluginPackage(source, options),
@@ -103,7 +104,7 @@ async function makeEnv(): Promise<Env> {
   const store = new PluginPackageManagerStore(new ConfigService(dataDir))
   await store.load()
   host.attachPackageManager(
-    new PluginPackageManager({ dataDir, cwd: dataDir, store, host: host.asPackageManagerHost() }),
+    new PluginPackageManager({ dataDir, cwd: dataDir, store, host: host.asPackageManagerHost(), buildProvider: createPluginBuildProvider() }),
     store,
   )
   return {
@@ -401,7 +402,7 @@ test('后端未接线 plugins 端口：修改操作显式 501，读面照常可�
   // 显式不接线 plugins 端口（undefined）：与轻量测试宿主同形态。
   const backend = hostBackendStub()
   backend.plugins = undefined
-  const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
   try {
     const api = await registerProbe(host)
     // 读面（同源宿主清单）可用
@@ -457,7 +458,7 @@ test('脱敏边界：doctor 失败诊断中的机密经宿主 redactText 出站'
   const SECRET = 'sk-helm-super-secret-token'
   const stub = hostBackendStub()
   stub.redactText = (text: string) => text.split(SECRET).join('[REDACTED]')
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: stub,
     docs: new MemoryDocStore(),

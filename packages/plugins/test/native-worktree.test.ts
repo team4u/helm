@@ -45,6 +45,7 @@ import { createWorkflowPlugin } from '../src/workflow.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { ArtifactService, SecretStash } from '../../kernel/src/services/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 type FauxHandle = ReturnType<typeof fauxProvider>
 
@@ -808,7 +809,7 @@ async function executeCleanupTool(
     onEvent: () => () => {},
     emitEvent: () => {},
   }
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs: {

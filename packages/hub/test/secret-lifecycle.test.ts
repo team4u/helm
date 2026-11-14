@@ -41,6 +41,7 @@ import { PaneRegistry, EMPTY_MANAGED_DOC, type ManagedDoc } from '../../plugins/
 import { AskCoordinator } from '../../plugins/src/herdr/asks.js'
 import { MetadataProjector } from '../../plugins/src/herdr/metadata.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../../plugins/src/herdr/contracts.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // SecretStash：TTL（fake clock）
@@ -787,7 +788,7 @@ test('真实回合结算：completed/failed/aborted 均停注入 turn 机密；�
   const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 4, max: 4 } })
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     const kernel = app.kernel
     const stash = kernel.services.stash
@@ -867,7 +868,7 @@ test('原生执行行：非空 secretNames 显式 unsupported_secret_grant（默
   const models = createModels()
   models.setProvider(faux.provider)
   // 默认插件集：builtin:herdr 停用 → agent_spawn 无外部运行时接管，原生执行行必须显式拒绝。
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     const kernel = app.kernel
     kernel.services.stash.put(1, 'NATIVE_KEY', 'native-secret')

@@ -37,6 +37,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import type { HerdrTarget, HerdrTransport, HerdrCallOptions, HerdrEvent } from '../src/herdr/contracts.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 const testDir = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(testDir, '..', '..', '..')
@@ -243,7 +244,7 @@ async function openEnv(dataDir: string, transport: HerdrTransport): Promise<Env>
   // 直连（组合层已无 herdrTransport 注入缝）。
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   await app.kernel.plugins.setConfig('builtin:herdr', { socketPath })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   const setup = await fetch(`${hub.url}/api/auth/setup`, {

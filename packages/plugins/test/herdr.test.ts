@@ -46,6 +46,7 @@ import { LocalNodeChannel } from '../src/herdr/local-node-channel.js'
 import type { HelmHostNodeIpcPort } from '@helm/protocol'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 受控 HerdrTransport
@@ -617,7 +618,7 @@ async function makeEnv(options: {
     },
     subscribe: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC 订阅', 501) },
   }
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs,
@@ -1213,7 +1214,7 @@ test('服务启动半途失败: snapshot 失败时自行清理订阅，注册整
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-halfway-'))
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
-  const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore(), config: new MemoryConfigStore({ socketPath }) })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore(), config: new MemoryConfigStore({ socketPath }) })
   try {
     await assert.rejects(
       host.register(createHerdrPlugin()),
@@ -1262,7 +1263,7 @@ test('启动对账: 孤儿回收；failed 保留；同 ID 换 human agent 不误
 
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
-  const host = new PluginHost({ dataDir, host: backend, docs, config: new MemoryConfigStore({ socketPath }) })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs, config: new MemoryConfigStore({ socketPath }) })
   try {
     // doc pane target 显式指向测试 served socket：target:{} 会 resolve 到宿主
     // 真实 ~/.config/herdr/herdr.sock（对账拿到外部 pane 集合，孤儿回收误判）。
@@ -2050,7 +2051,7 @@ async function makeHerdrProbeEnv(
     },
     subscribe: async () => { throw new HelmError('unsupported', '本 fixture 不承载 IPC 订阅', 501) },
   }
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs,

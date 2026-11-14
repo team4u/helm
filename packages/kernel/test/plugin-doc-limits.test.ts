@@ -26,6 +26,7 @@ import {
 } from '../src/plugins/index.js'
 import { PluginDocRegistry } from '../src/plugins/doc-registry.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -90,7 +91,7 @@ function makeBackend(): PluginHostBackend {
 }
 
 function makeHost(): PluginHost {
-  return new PluginHost({ dataDir, host: makeBackend(), docs, sessionDocs })
+  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend(), docs, sessionDocs })
 }
 
 function throwsCode(fn: () => unknown, code: string, status?: number): HelmError {
@@ -236,7 +237,7 @@ test('sessionDoc initial 超限：注册拒绝 plugin_doc_too_large', { timeout:
 
 test('sessionDoc set/update 超限：拒绝且旧值不变、持久层不写、事件不发', { timeout: 60_000 }, async () => {
   let handle: PluginSessionDocHandle<{ n: number; blob?: string }> | undefined
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: {
       ...makeBackend(),
@@ -282,7 +283,7 @@ test('sessionDoc set/update 超限：拒绝且旧值不变、持久层不写、�
 
 test('sessionDoc 边界：序列化恰好等于上限时放行', { timeout: 60_000 }, async () => {
   let handle: PluginSessionDocHandle<string> | undefined
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: {
       ...makeBackend(),

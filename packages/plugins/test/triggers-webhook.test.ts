@@ -29,6 +29,7 @@ import { SecretStash } from '../../kernel/src/services/secret-stash.js'
 import { createTriggersPlugin } from '../src/triggers.js'
 import { TRIGGERS_PLUGIN_ID, webhookSecretKey } from '../src/triggers/contracts.js'
 import { STOP_REQUEST_WAIT_MS } from '../src/triggers/webhook.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 /** POSIX 0600 断言：Windows 无 POSIX mode（NTFS 走 ACL），跳过模式位校验。 */
 async function assertCredentialsMode0600(dataDir: string): Promise<void> {
@@ -254,7 +255,7 @@ async function makeHarness(over: Partial<{ closing: boolean }> = {}): Promise<Ha
   // secrets 后端镜像写入真实 CredentialService 供落盘断言（0600 / 精确键 /
   // 跨重启）——生产链路由 runtime 后端直连 credentialsSvc（见 kernel-host）。
   const innerSecrets = backend.secrets
-  const host = new PluginHost({ dataDir, host: backend, docs })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs })
   backend.secrets = {
     get: (pluginId, key) => {
       void innerSecrets

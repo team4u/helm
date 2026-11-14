@@ -19,6 +19,7 @@ import {
 import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { pluginToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -214,7 +215,7 @@ let docs: MemoryDocStore
 let sessionDocs: MemorySessionDocStore
 
 function makeHost(options: { deferServices?: boolean } = {}): PluginHost {
-  return new PluginHost({
+  return new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs,

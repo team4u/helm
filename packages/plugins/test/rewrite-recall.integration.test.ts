@@ -7,13 +7,14 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { createHelm } from '../../hub/src/app.js'
 import type { RecallGraphDoc } from '../src/superagent/contracts.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 test('真实组合：编辑 Worker 历史输入经 SDK 事件清理对应召回节点并保留前轮', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-rewrite-recall-'))
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     const { kernel } = app
     await kernel.profiles.save({ id: 'rewrite-expert', name: '编辑回归专家' })

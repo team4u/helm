@@ -38,6 +38,7 @@ import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
 import { FsOutputFiles, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { parsePong, SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 纯契约：parsePong 真实形状
@@ -468,7 +469,7 @@ async function makeEnv(options: { transport?: SteerFakeTransport; startupTimeout
   }) as PluginHostBackend & { conversations: Map<number, ConversationSummary> }
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs: new MemoryDocStore(),

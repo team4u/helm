@@ -26,7 +26,9 @@ import {
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js';
-import type { UiRegistry, ClientModuleOptions } from '../src/plugins/ui-registry.js';
+
+import { createPluginBuildProvider } from '@helm/plugin-build';
+import type { PluginBuildProvider } from '@helm/protocol';
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -169,8 +171,8 @@ function throwsCode(fn: () => unknown, code: string): void {
   });
 }
 
-function makeHost(config?: PluginConfigStore): PluginHost {
-  return new PluginHost({ dataDir, host: makeHostApi(events), docs, config });
+function makeHost(config?: PluginConfigStore, extra?: { buildProvider?: PluginBuildProvider }): PluginHost {
+  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeHostApi(events), docs, config, ...(extra?.buildProvider !== undefined ? { buildProvider: extra.buildProvider } : {}) });
 }
 
 beforeEach(() => {
@@ -1416,7 +1418,7 @@ test('stop 与事件发布同时失败：保留 stop 诊断（聚合 eventError�
     if (emitBroken && type === 'plugin.changed') throw new Error('事件管道崩');
     originalEmit.call(backend, type, payload);
   };
-  const host = new PluginHost({ dataDir, host: backend, docs });
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs });
   await host.register(fullPlugin('p:double', () => { throw stopErr; }));
   emitBroken = true;
 
@@ -1449,7 +1451,7 @@ test('真实 HTTP 桥：stop 失败的 disable 错误信封可序列化可脱敏
   const stash = new SecretStash();
   const secretValue = 'sk-stopfail-supersecret';
   stash.addRedaction(secretValue);
-  const httpHost = new PluginHost({ dataDir, host: makeHostApi(events), docs });
+  const httpHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeHostApi(events), docs });
   await httpHost.register(fullPlugin('p:http', () => { throw new Error(`stop 失败含秘密 ${secretValue}`); }));
 
   const kernel = {
@@ -1506,7 +1508,7 @@ test('真实 HTTP 桥：双失败（stop + 事件发布）信封同样可序列�
     if (emitBroken && type === 'plugin.changed') throw new Error('事件管道崩');
     originalEmit.call(backend, type, payload);
   };
-  const httpHost = new PluginHost({ dataDir, host: backend, docs });
+  const httpHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs });
   await httpHost.register(fullPlugin('p:dbl', () => { throw new Error('stop 双失败诊断'); }));
   emitBroken = true;
 
@@ -1966,7 +1968,7 @@ test('ctx.host.execEnv：真实调用 backend（required 端口）+ 在途任务
       return execPromise;
     },
   };
-  const host = new PluginHost({ dataDir, host: backend, docs });
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs });
 
   let actionPromise!: Promise<unknown>;
   await host.register({
@@ -2157,25 +2159,23 @@ test('client 模块编译在途回归：同 ID 卸载后重新注册（epoch 重
   let compileFinishResolve!: () => void;
   const compileFinishGate = new Promise<void>((r) => { compileFinishResolve = r; });
 
-  const host = makeHost();
-  t.after(() => host.dispose());
-  // 门控只替换内部编译端口，仍由真实宿主提供注册身份，不扩张 PluginHostOptions。
-  const registry = (host as unknown as { uiRegistry: UiRegistry }).uiRegistry;
-  const getClientModule = registry.getClientModule.bind(registry);
-  t.mock.method(registry, 'getClientModule', (pluginId: string, moduleRef: string, options: ClientModuleOptions) =>
-    getClientModule(pluginId, moduleRef, {
-      ...options,
-      compile: async () => {
+  const host = makeHost(undefined, {
+    buildProvider: {
+      compileClientModule: async () => {
         compileStartedResolve();
         await compileFinishGate;
         return {
-          code: `console.log('compiled for ${pluginId}/${moduleRef}')`,
+          code: `console.log('compiled')`,
           contentHash: 'hash-v1',
           exports: [],
         };
       },
-    }),
-  );
+      transformBackendTs: () => {
+        throw new HelmError('not_supported', '测试桩不提供后端转译', 501);
+      },
+    },
+  });
+  t.after(() => host.dispose());
 
   const clientDir = join(dataDir, 'client-src');
   mkdirSync(clientDir, { recursive: true });

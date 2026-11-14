@@ -32,6 +32,7 @@ import {
   type PluginHostBackend,
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
+import { createPluginBuildProvider } from '@helm/plugin-build';
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -150,7 +151,7 @@ let recorder: Array<{ type: string; payload: unknown }>;
 function makeHost(config?: PluginConfigStore): PluginHost {
   const api = makeHostApi(events);
   recorder = api.__payload;
-  return new PluginHost({ dataDir, host: api, docs, config });
+  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: api, docs, config });
 }
 
 /** 声明服务启动/停止均记录的插件定义工厂。 */

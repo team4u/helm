@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { createHelm } from '../src/app.js'
 import { createHubHandler } from '../../kernel/src/http/hub.js'
 import { CredentialService } from '../../kernel/src/services/credentials.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // 动态凭据与 configSchema secret 共用 credentials.json，但只有声明的配置可出站。
 test('插件配置 HTTP 在重启和停用时均隐藏动态凭据，并保留已声明配置的脱敏', { timeout: 60_000 }, async () => {
@@ -19,7 +20,7 @@ test('插件配置 HTTP 在重启和停用时均隐藏动态凭据，并保留�
   let app: Awaited<ReturnType<typeof createHelm>> | undefined
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      app = await createHelm({ dataDir, cwd: dataDir })
+      app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
       await app.kernel.plugins.register({
         id: pluginId,
         definePlugin(ctx) {

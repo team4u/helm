@@ -30,6 +30,7 @@ import {
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js';
+import { createPluginBuildProvider } from '@helm/plugin-build';
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -184,7 +185,7 @@ let docs: MemoryDocStore;
 let events: string[];
 
 function makeHost(config?: PluginConfigStore): PluginHost {
-  return new PluginHost({ dataDir, host: makeHostApi(events), docs, config });
+  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeHostApi(events), docs, config });
 }
 
 beforeEach(() => {

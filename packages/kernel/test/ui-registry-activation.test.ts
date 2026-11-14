@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 function createHostBackend(): PluginHostBackend {
   const unused = (): never => { throw new Error('本测试只验证 UI 启用，不应执行宿主业务操作') }
@@ -33,7 +34,7 @@ test('并发启用重复 slash：只发布一个插件，失败方回滚持久�
   let bothArrived!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
   const ready = new Promise<void>((resolve) => { bothArrived = resolve })
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: createHostBackend(),
     docs: {

@@ -22,6 +22,7 @@ import { MemoryStore } from '../src/memory/store.js'
 import { createProfilePlugin } from '../src/profile.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -172,7 +173,7 @@ async function setup(
   await profiles.ensureDefault()
   await profiles.save({ id: 'coder', name: ' coder '.trim(), tags: [] })
   const backend = Object.assign(makeBackend(), createProfileFileHost(dataDir, profiles))
-  const host = new PluginHost({ dataDir, host: backend, docs })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs })
   await host.register(createMemoryPlugin(), { enabled: true })
   for (const plugin of extraPlugins) await host.register(plugin, { enabled: true })
   return { host, profiles, store: new MemoryStore(createProfileFileHost(dataDir, profiles)), backend }
@@ -442,7 +443,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     const dir = join(scratchRoot, 't10')
     const profiles = new ProfileService(dir)
     await profiles.ensureDefault()
-    const host = new PluginHost({ dataDir: dir, host: Object.assign(makeBackend(), createProfileFileHost(dir, profiles)), docs: new MemoryDocStore() })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: dir, host: Object.assign(makeBackend(), createProfileFileHost(dir, profiles)), docs: new MemoryDocStore() })
     await host.register(
       {
         id: 'builtin:profile',
@@ -529,7 +530,7 @@ test('memory 单 Profile 开关跨重启持久（真实 createHelm）', { timeou
       const faux = fauxProvider()
       const models = createModels()
       models.setProvider(faux.provider)
-      return createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
+      return createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
     }
     const first = await build()
     try {

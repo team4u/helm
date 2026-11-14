@@ -30,6 +30,7 @@ import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHelm } from '../src/app.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import { HelmError } from '@helm/protocol'
 
 /**
@@ -79,7 +80,7 @@ async function openRuntime(dataDir: string, cwd: string): Promise<RuntimeEnv> {
   const models = createModels()
   const faux = fauxProvider()
   models.setProvider(faux.provider)
-  const app = await createHelm({
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd,
     model: 'faux/faux-1',

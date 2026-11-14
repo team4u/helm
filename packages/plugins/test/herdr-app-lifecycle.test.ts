@@ -7,6 +7,7 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import { runCli } from '../../cli/src/index.js'
 import { herdrServerFixture } from './herdr-server-fixture.js'
 
@@ -16,7 +17,7 @@ async function openApp(dataDir: string) {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  return createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  return createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
 }
 
 test('createHelm 默认注册停用 Herdr，普通启动及原生回退不依赖终端服务', { timeout: 60_000 }, async (t) => {

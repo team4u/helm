@@ -26,6 +26,7 @@ import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createHelm } from '../../hub/src/app.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 function makeConversation(id: number, parent?: number): ConversationSummary {
   return {
@@ -161,7 +162,7 @@ let docs: MemoryDocStore
 let sessionDocs: MemorySessionDocStore
 
 function makeHost(): PluginHost {
-  return new PluginHost({ dataDir, host: backend, docs, sessionDocs })
+  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs, sessionDocs })
 }
 
 const META = (name: string) => `export const meta = { name: "${name}", description: "test" }\n`
@@ -199,7 +200,7 @@ function badgeDocEvents(): unknown[] {
 }
 
 test('真实内核全局流不旁路广播 workflow.updated/settled 的完整输出，内部监听器仍收到终态', { timeout: 60_000 }, async () => {
-  const app = await createHelm({ dataDir, cwd: dataDir })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
   const frames: unknown[] = []
   const release = app.kernel.events.subscribe((frame) => frames.push(frame))
   const settled: unknown[] = []

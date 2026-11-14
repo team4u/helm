@@ -19,6 +19,7 @@ import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.
 import { createProfilePlugin } from '../src/profile.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 async function freshDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'helm-starters-'))
@@ -200,7 +201,7 @@ test('profile：自举补写默认 Profile 的 managedByPlugin（缺失显式补
       async flush(): Promise<void> {}
     }
 
-    const host = new PluginHost({
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir,
       host: Object.assign(createPluginHostBackendFixture(), createProfileFileHost(dataDir, profiles), {
         emitEvent: async () => {},

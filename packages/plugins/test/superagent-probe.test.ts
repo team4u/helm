@@ -42,6 +42,7 @@ import { createHerdrPlugin } from '../src/herdr.js'
 import { ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import type { HelmHostNodeIpcPort, RpcResult } from '@helm/protocol'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 共享测试基座
@@ -58,7 +59,7 @@ function makeFauxModels(): { models: ReturnType<typeof createModels>; faux: Faux
 
 async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxHandle }> {
   const { models, faux } = makeFauxModels()
-  const runtime = await KernelRuntime.open({
+  const runtime = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
@@ -574,7 +575,7 @@ async function makeProbeEnv(
       throw new HelmError('unsupported', '本 fixture 不承载远端 IPC 订阅', 501)
     },
   }
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs,
@@ -754,7 +755,7 @@ async function makeUiHost(): Promise<{ host: PluginHost; dataDir: string }> {
     join(clientRoot, 'main-screen.tsx'),
     `export function MainScreen(): string { return 'ok' }\n`,
   )
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: new UiBackend(),
     docs: new ProbeDocStore(),

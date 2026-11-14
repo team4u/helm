@@ -41,6 +41,7 @@ import { HelmError as HostHelmError } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { loadExternalPlugins } from '../../kernel/src/plugins/external-loader.js'
 import { registerPluginTsRoot } from '../../kernel/src/plugins/backend-ts-loader.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 /** 测试进程全局侧表（插件模块级初始化计数 / 越根执行哨兵）的类型安全访问。 */
 function globalFlag(name: string): unknown {
@@ -56,7 +57,7 @@ function makeModels() {
 async function createApp(dataDir: string) {
   // 注：watchdogIntervalMs 选项已随内核定时巡检移交 builtin:superagent 移除；
   // 组合层 createHelm 默认启用 superagent=false，无定时任务需要关闭。
-  return createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+  return createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
 }
 
 /** 本加载器源码路径（纯 node 子进程直接加载：仅用可擦除语法，原生 strip-types 可读）。 */
@@ -563,10 +564,12 @@ test('TS 根释放与 fallback 映射（纯 node 子进程，生产运行时保�
     // 1) 注册期 .js 映射 / 无扩展名 / symlink 别名全部加载且单次初始化；
     // 2) fallback 越根（../evil.js -> 根外 evil.ts）拒绝且哨兵不翻；
     // 3) 全部根释放后 .js 映射消失（ERR_MODULE_NOT_FOUND）。
-    const childSrc = `
+    const providerUrl = import.meta.resolve('@helm/plugin-build')
+const childSrc = `
 const { registerPluginTsRoot } = await import(${JSON.stringify(pathToFileURL(loaderSrc).href)});
+const { createPluginBuildProvider } = await import(${JSON.stringify(providerUrl)});
 const root = ${JSON.stringify(dirPath)};
-const release = registerPluginTsRoot(root);
+const release = registerPluginTsRoot(root, { transform: createPluginBuildProvider().transformBackendTs });
 const entry = await import('file://' + root + '/entry.ts');
 if (entry.w !== 49 || entry.a !== 42) { console.log('FAIL mapping ' + entry.w + '/' + entry.a); process.exit(1); }
 try {
@@ -605,15 +608,16 @@ test('registerPluginTsRoot 引用计数：重复注册合并，计数归零后�
   const dirPath = mkdtempSync(join(tmpdir(), 'helm-ext-root-'))
   try {
     writeFileSync(join(dirPath, 'still.ts'), 'export const v = 1\n')
-    const release1 = registerPluginTsRoot(dirPath)
-    const release2 = registerPluginTsRoot(dirPath)
+    const transform = createPluginBuildProvider().transformBackendTs
+    const release1 = registerPluginTsRoot(dirPath, { transform })
+    const release2 = registerPluginTsRoot(dirPath, { transform })
     release1()
     // 计数未归零：目录仍在转译范围（.js -> .ts 映射仍可用）
     const m = (await import(`file://${join(dirPath, 'still.js')}`)) as { v: number }
     assert.equal(m.v, 1, '计数未归零前转译范围仍生效')
     release2()
     // 归零后可再次注册（钩子重新懒注册），周期可重复
-    const release3 = registerPluginTsRoot(dirPath)
+    const release3 = registerPluginTsRoot(dirPath, { transform })
     release3()
   } finally {
     rmSync(dirPath, { recursive: true, force: true })

@@ -28,6 +28,7 @@ import {
 import { UiRegistry } from '../src/plugins/ui-registry.js';
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
+import { createPluginBuildProvider } from '@helm/plugin-build';
 
 const isHelmError = (code: string) => (err: unknown): boolean => err instanceof HelmError && err.code === code;
 
@@ -36,7 +37,7 @@ const isHelmError = (code: string) => (err: unknown): boolean => err instanceof 
 // ---------------------------------------------------------------------------
 
 test('artifactPreviewer：合法 MIME/后缀声明与匹配列表公共校验', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry();
+  const ui = new UiRegistry(createPluginBuildProvider());
 
   // client 轨 + 精确 MIME + 多段后缀 + priority 均合法
   ui.registerUi(
@@ -113,7 +114,7 @@ function registerCompleter(ui: UiRegistry, pluginId: string, id: string, source:
 }
 
 test('composerCompleter：禁用轨、trigger 白名单与 source 形状', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry();
+  const ui = new UiRegistry(createPluginBuildProvider());
 
   // 三种合法 action 源（含跨插件）
   registerCompleter(ui, 'p1', 'a1', { kind: 'action', actionId: 'complete' });
@@ -145,7 +146,7 @@ test('composerCompleter：禁用轨、trigger 白名单与 source 形状', { tim
 });
 
 test('composerCompleter：doc/sessionDoc 源声明仍受 source 形状约束（引用校验随 JSON 轨移除）', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry();
+  const ui = new UiRegistry(createPluginBuildProvider());
   registerCompleter(ui, 'p1', 'd1', { kind: 'doc', name: 'items', itemsField: 'entries' });
   registerCompleter(ui, 'p1', 's1', { kind: 'sessionDoc', name: 'ctx', itemsField: 'list' });
   // 源形状非法仍拒绝（如 itemsField 原型污染键）
@@ -212,7 +213,7 @@ function createHost(): HostFixture {
   const sessionData = new Map<string, string>();
   const sessionKey = (pluginId: string, name: string, conversationId: number): string =>
     `${pluginId}\u0000${name}\u0000${conversationId}`;
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: {
       ...createHostBackend(),

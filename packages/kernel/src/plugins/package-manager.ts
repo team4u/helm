@@ -31,7 +31,7 @@ import { spawn } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { HelmError, type PluginInstallResult, type PluginPackageRecord, type PluginRemoveResult, type PluginPackageSource, type PluginSummary, type PluginUpdateResult } from '@helm/protocol';
+import { HelmError, type PluginBuildProvider, type PluginInstallResult, type PluginPackageRecord, type PluginRemoveResult, type PluginPackageSource, type PluginSummary, type PluginUpdateResult } from '@helm/protocol';
 import { parsePluginSource } from './package-source.js';
 import { doctorPluginDir } from './plugin-doctor.js';
 import { readHelmClientDependencies } from './external-loader.js';
@@ -131,6 +131,12 @@ export interface PluginPackageManagerOptions {
   runner?: PackageRunner
   /** 单命令超时（默认 120s）。 */
   commandTimeoutMs?: number
+  /**
+   * 插件构建端口（runtime 注入，与 PluginHostOptions.buildProvider 同一实例）：
+   * install/update 的 doctor 预检与生产同一编译/转译口径。缺失时带 client 引用
+   * 或 TS 源的包在 doctor 处如实失败，不静默降级。
+   */
+  buildProvider?: PluginBuildProvider
 }
 
 const COPY_IGNORE = new Set(['node_modules', '.git', '.staging']);
@@ -178,6 +184,7 @@ export class PluginPackageManager {
   private readonly host: PackageManagerHost;
   private readonly runner: PackageRunner;
   private readonly timeoutMs: number;
+  private readonly buildProvider?: PluginBuildProvider;
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(options: PluginPackageManagerOptions) {
@@ -187,6 +194,7 @@ export class PluginPackageManager {
     this.host = options.host;
     this.runner = options.runner ?? defaultPackageRunner;
     this.timeoutMs = options.commandTimeoutMs ?? 120_000;
+    this.buildProvider = options.buildProvider;
   }
 
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
@@ -241,7 +249,7 @@ export class PluginPackageManager {
         await this.installRuntimeDeps(payloadDir);
         const { pluginId, dirName } = await this.identifyPlugin(payloadDir, parsed);
         // doctor 全链（manifest/backend/register/client）在依赖就绪后执行
-        const report = await doctorPluginDir(payloadDir);
+        const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
         if (!report.ok) {
           const first = report.checks.find((c) => c.error !== undefined);
           throw new HelmError(
@@ -444,7 +452,7 @@ export class PluginPackageManager {
             { pluginId, actualId: identified.pluginId },
           );
         }
-        const report = await doctorPluginDir(payloadDir);
+        const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
         if (!report.ok) {
           const first = report.checks.find((c) => c.error !== undefined);
           throw new HelmError(
@@ -688,7 +696,7 @@ export class PluginPackageManager {
    * 回退约定入口探测名；最终以 doctor 报告的 pluginId 为准。
    */
   private async identifyPlugin(payloadDir: string, source: PluginPackageSource): Promise<{ pluginId: string; dirName: string }> {
-    const report = await doctorPluginDir(payloadDir);
+    const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
     if (report.ok && report.pluginId !== undefined) {
       return { pluginId: report.pluginId, dirName: report.pluginId };
     }

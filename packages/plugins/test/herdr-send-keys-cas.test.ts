@@ -22,6 +22,7 @@
  *      失败，绝不盲发无 CAS 键；
  *   d) pong 坏形状：显式 herdr_protocol_violation，绝不把坏数据当能力判断。
  */
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
@@ -403,7 +404,7 @@ async function makeEnv(options: { transport?: CasFakeTransport } = {}): Promise<
   }
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
-  const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore(), config: new MemoryConfigStore({ socketPath }) })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore(), config: new MemoryConfigStore({ socketPath }) })
   await host.register(createHerdrPlugin(), { enabled: true })
   return {
     host,

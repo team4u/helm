@@ -15,6 +15,7 @@ import { after } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { compilePluginClientModule } from '../../../kernel/src/plugins/client-compiler.js'
 import * as HelmPluginClient from '@helm/plugin-client'
+import { compilePluginClientModule } from '@helm/plugin-build'
 
 const WORKFLOW_CLIENT_ROOT = fileURLToPath(new URL('../../../plugins/src/workflow/client', import.meta.url))
 const CACHE_DIR = mkdtempSync(join(tmpdir(), 'helm-web-workflow-client-'))

@@ -28,6 +28,7 @@ import {
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { ConversationEntry, ConversationSummary, PluginDefinition } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import assert from 'node:assert/strict'
 
 /** 捕获的单次最终模型请求（回放语义折叠后的视图）。 */
@@ -57,7 +58,7 @@ async function makeEnv(): Promise<TestEnv> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   const initialConv = app.kernel
     .listConversations()
     .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)

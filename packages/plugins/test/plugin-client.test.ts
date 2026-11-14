@@ -26,6 +26,7 @@ import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
 import { createHubHandler } from '../../kernel/src/http/index.js'
 import type { EventHub, KernelRuntimeLike} from '../../kernel/src/http/index.js'
+import { compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
 
 // ---------------------------------------------------------------------------
@@ -162,7 +163,7 @@ before(async () => {
       this.store.set(key, structuredClone(value))
     }
   }
-  pluginHost = new PluginHost({
+  pluginHost = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: makeBackend(),
     docs: new MemoryDocStore() as never,
@@ -936,6 +937,7 @@ test('磁盘缓存 npm 依赖失效：跨进程重启后（清内存缓存）npm
     const first = await compilePluginClientModule('test:npm-disk', clientRoot, 'index.tsx', scratch, { npmRoots })
     // 模拟进程重启：清空内存缓存，磁盘清单复查路径生效
     const { clearClientCompilerMemoryCache } = await import('../../kernel/src/plugins/client-compiler.js')
+    const { clearClientCompilerMemoryCache } = await import('@helm/plugin-build')
     clearClientCompilerMemoryCache()
     const cached = await compilePluginClientModule('test:npm-disk', clientRoot, 'index.tsx', scratch, { npmRoots })
     assert.equal(cached.contentHash, first.contentHash, '未变化时磁盘缓存命中')
@@ -1078,6 +1080,7 @@ test('主模块缓存命中不预读全部 chunk：磁盘路径惰性读盘，ch
     assert.ok(Object.keys(first.chunks ?? {}).length > 0, '分包产物必须含异步 chunk')
     // 模拟进程重启（磁盘缓存路径）：主模块命中不预读 chunk 内容
     const { clearClientCompilerMemoryCache } = await import('../../kernel/src/plugins/client-compiler.js')
+    const { clearClientCompilerMemoryCache } = await import('@helm/plugin-build')
     clearClientCompilerMemoryCache()
     const mainHit = await compilePluginClientModule('test:lazy-chunks', clientRoot, 'index.tsx', scratch)
     assert.equal(mainHit.contentHash, first.contentHash)

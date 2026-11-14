@@ -22,6 +22,7 @@ import { hostBackendStub } from './helpers/host-backend-stub.js'
 import type { PluginDocStore } from '../src/plugins/index.js'
 import { handleApi } from '../src/http/routes.js'
 import type { KernelRuntimeLike } from '../src/http/contracts.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -44,7 +45,7 @@ let host: PluginHost
 
 before(async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'helm-http-conc-'))
-  host = new PluginHost({ dataDir, host: hostBackendStub(), docs: new MemoryDocStore() })
+  host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: hostBackendStub(), docs: new MemoryDocStore() })
 })
 
 after(async () => {

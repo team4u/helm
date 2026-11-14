@@ -20,5 +20,8 @@
   },
   "dependencies": {
     "@helm/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@helm/plugin-build": "workspace:*"
   }
 }

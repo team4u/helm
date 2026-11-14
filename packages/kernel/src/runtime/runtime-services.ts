@@ -12,6 +12,7 @@ import type {
   ConversationInput,
   ConversationPatch,
   ConversationSummary,
+  PluginBuildProvider,
   TurnSettledPayload,
 } from '@helm/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
@@ -61,6 +62,8 @@ export interface RuntimeServicesInit extends BootstrappedKernelContext {
   externalModels?: unknown
   /** 合入技能扫描的机器级共享来源根（缺省 defaultExternalSkillRoots()）。 */
   externalSkillRoots?: readonly string[]
+  /** 插件构建端口（KernelBootOptions.buildProvider 透传；hub 注入默认实现）。 */
+  buildProvider?: PluginBuildProvider
   nodeUpgradeTimeoutMs: number
 }
 

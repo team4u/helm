@@ -14,6 +14,7 @@ import type { Models, ModelsStore } from '@earendil-works/pi-ai'
 import { Harness, createRegistry, type Registry } from '@earendil-works/pi-durable'
 import { HelmError } from '@helm/protocol'
 import { CredentialService, ProviderService, ensureDataDir, resolveDataDir } from '../services/index.js'
+import type { PluginBuildProvider } from '@helm/protocol'
 import { buildModels } from './models.js'
 import { createFileModelsStore } from './models-store.js'
 import { assertModelsStoreHealthyAtBoot } from './runtime-helpers.js'
@@ -34,6 +35,12 @@ export interface KernelBootOptions {
   /** 合入技能扫描的机器级共享来源根（缺省 defaultExternalSkillRoots()，即
    * ~/.agents/skills；传空数组可完全隔离，测试用）。 */
   externalSkillRoots?: readonly string[]
+  /**
+   * 插件构建端口（client.tsx 编译 + 外部插件 TS 转译）：由产品组合根（hub）
+   * 注入默认实现（@helm/plugin-build）；内核不携带构建工具。缺失时相关能力
+   * 显式拒绝（unsupported_client_build / unsupported_backend_ts_build）。
+   */
+  buildProvider?: PluginBuildProvider
 }
 
 export interface BootstrappedKernelContext {

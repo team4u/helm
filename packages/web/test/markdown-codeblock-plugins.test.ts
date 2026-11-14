@@ -21,6 +21,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginUiContribution } from '@helm/protocol'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
 import * as HelmPluginClient from '@helm/plugin-client'
+import { compilePluginClientModule } from '@helm/plugin-build'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 

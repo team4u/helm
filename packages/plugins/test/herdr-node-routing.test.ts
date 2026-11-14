@@ -32,6 +32,7 @@ import type { HelmHostNodeIpcPort } from '@helm/protocol'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 受控环境（与 herdr-plugin-fixes 同构；父会话 nodeId 可配置）
@@ -395,7 +396,7 @@ async function makeEnv(over: Partial<ConversationSummary> = {}): Promise<Env> {
     call: callViaFixture,
     subscribe: async () => { throw new HelmError('unsupported', '本 fixture 不订阅远端事件', 501) },
   }
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs: new MemoryDocStore(),

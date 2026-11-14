@@ -33,6 +33,7 @@ import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
 import { FsOutputFiles, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 type PaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 
@@ -347,7 +348,7 @@ async function makeEnv(): Promise<Env> {
   }) as PluginHostBackend & { conversations: Map<number, ConversationSummary> }
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs: new MemoryDocStore(),

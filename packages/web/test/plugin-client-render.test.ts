@@ -22,7 +22,7 @@ import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import { renderToString } from 'react-dom/server'
 // 测试通过 tsx 执行当前 worktree 的真实编译器；生产 Web 不反向依赖 kernel。
-import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
+import { compilePluginClientModule } from '@helm/plugin-build'
 import { requireClientExport } from '../src/lib/plugin-client.js'
 // '@helm/plugin-client' 共享模块实例：宿主挂载的是 web/src/lib/plugin-client-context.ts
 // 的模块命名空间（HelmStoreProvider 挂载同一对象）；测试直接 import 该模块挂到全局。

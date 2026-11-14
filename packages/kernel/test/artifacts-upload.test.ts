@@ -31,6 +31,7 @@ import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHubHandler } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike} from '../src/http/index.js'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 基座
@@ -84,7 +85,7 @@ function makeKernel(): KernelRuntimeLike {
     credentials: new CredentialService(dataDir),
     providers: new ProviderService(dataDir),
     artifacts,
-    plugins: new PluginHost({
+    plugins: new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir,
       host: undefined as unknown as PluginHostBackend,
       docs: {

@@ -147,6 +147,7 @@ export class KernelRuntime {
       autoResume: options.autoResume !== false,
       externalModels: options.models,
       externalSkillRoots: options.externalSkillRoots,
+      buildProvider: options.buildProvider,
       nodeUpgradeTimeoutMs: options.nodeUpgradeTimeoutMs ?? 120_000,
     })
     try {
@@ -257,6 +258,7 @@ export class KernelRuntime {
       docs: this.documentStore,
       sessionDocs: createPluginSessionDocStore(this.store),
       config: this.svc.pluginConfig,
+      buildProvider: this.init.buildProvider,
     })
     // 受管包安装记录预热（config.json pluginPackages；损坏显式上抛）后接线安装器。
     const packageStore = new PluginPackageManagerStore(this.svc.configSvc)
@@ -267,6 +269,7 @@ export class KernelRuntime {
         cwd: this.init.cwd,
         store: packageStore,
         host: this.pluginHost.asPackageManagerHost(),
+        buildProvider: this.init.buildProvider,
       }),
       packageStore,
     )

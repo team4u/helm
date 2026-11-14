@@ -50,6 +50,7 @@ import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contr
 import { SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
 import { askKey } from '../src/herdr/asks.js'
 import { EMPTY_MANAGED_DOC } from '../src/herdr/panes.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 测试环境（与 herdr.test.ts 同构；独立维护以允许针对返修场景扩展）
@@ -590,7 +591,7 @@ async function makeEnv(options: EnvOptions = {}): Promise<Env> {
     },
     subscribe: async () => { throw new HelmError('unsupported', 'fixture 不承载远端 IPC 订阅', 501) },
   }
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs,
@@ -723,7 +724,7 @@ test('默认 transport：生产工厂真实注入执行器，经真实 UDS wire 
   const backend = new FakeBackend()
   backend.conversations.get(1)!.cwd = dir
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-default-transport-'))
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs: new MemoryDocStore(),
@@ -844,7 +845,7 @@ test('启动对账归属精确：helm-wf-abc 不认领 helm-wf-abcde（放弃所
   transport.tabs.set('w:t1', { closed: false })
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
-  const host = new PluginHost({ dataDir, host: backend, docs, config: new MemoryConfigStore({ socketPath }) })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs, config: new MemoryConfigStore({ socketPath }) })
   try {
     await host.register(createHerdrPlugin())
     assert.equal(transport.tabs.get('w:t1')!.closed, false, '前缀相似但非精确同名：放弃所有权不误关')
@@ -875,7 +876,7 @@ test('启动对账：真正 working/blocked 保留并报告；已结束 keepaliv
   transport.tabs.set('w:t2', { closed: false })
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
-  const host = new PluginHost({ dataDir, host: backend, docs, config: new MemoryConfigStore({ socketPath }) })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs, config: new MemoryConfigStore({ socketPath }) })
   try {
     await host.register(createHerdrPlugin())
     assert.equal(transport.tabs.get('w:t1')!.closed, false, '真正 working 保留不伪装结束')
@@ -1541,7 +1542,7 @@ test('订阅 ack 失败释放已注册的 CAS resolver 与 workflow listener', {
   transport.subscribe = async () => { throw new HelmError('herdr_disconnected', 'ack failed', 502) }
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
-  const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore(), config: new MemoryConfigStore({ socketPath }) })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore(), config: new MemoryConfigStore({ socketPath }) })
   try {
     await assert.rejects(host.register(createHerdrPlugin()))
     assert.equal(backend.askSeqResolvers.size, 0)

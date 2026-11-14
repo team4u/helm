@@ -2215,7 +2215,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
     const models = createModels()
     models.setProvider(faux.provider)
 
-    const runtime = await KernelRuntime.open({
+    const runtime = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir,
       cwd: dataDir,
       model: 'faux/faux-1',
@@ -2309,12 +2309,13 @@ describe('workflow real-SDK integration (faux provider)', () => {
 
   it('real env.exec child processes are cancelled on early return and script failure', timeout, async () => {
     const { createHelm } = await import('../../hub/src/app.js')
+    const { createPluginBuildProvider } = await import('@helm/plugin-build')
     const { fauxProvider } = await import('@earendil-works/pi-ai/providers/faux')
     const { createModels } = await import('@earendil-works/pi-ai/models')
     const dataDir = mkdtempSync(join(tmpdir(), 'wf-exec-cleanup-'))
     const models = createModels()
     models.setProvider(fauxProvider().provider)
-    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
     // 插件化后编排引擎仅经 builtin:workflow 动作总线驱动（不再暴露 app.workflows）。
     const workflows = app.kernel.plugins!
     const runWorkflow = (request: Record<string, unknown>) =>
@@ -2377,7 +2378,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
     const models = createModels()
     models.setProvider(faux.provider)
 
-    const runtime = await KernelRuntime.open({
+    const runtime = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir,
       cwd: dataDir,
       model: 'faux/faux-1',

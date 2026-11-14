@@ -23,6 +23,7 @@ import {
 } from '../src/plugins/index.js'
 import { projectToolPromptSections } from '../src/runtime/runtime-helpers.js'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -209,7 +210,7 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
   t.after(() => rmSync(dataDir, { recursive: true, force: true }))
 
   await t.test('epoch 守卫：停用后旧句柄 host 调用一律 409 plugin_context_expired', async () => {
-    const host = new PluginHost({ dataDir, host: makeBackend({}), docs: new MemoryDocStore() })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({}), docs: new MemoryDocStore() })
     let captured: Parameters<NonNullable<Parameters<typeof host.register>[0]['definePlugin']>>[0]['host'] | undefined
     const def: PluginDefinition = {
       id: 'p:epoch',
@@ -262,7 +263,7 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
       }
       return fn()
     }
-    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
     let second: Promise<unknown> | undefined
     const def: PluginDefinition = {
       id: 'p:lock',
@@ -293,7 +294,7 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
 
   await t.test('nodeIpc.subscribe 竞态：释放先于建立完成时晚到订阅立即收割', { timeout: 60_000 }, async () => {
     const calls: NodeIpcCalls = { subscribeStarted: [], stopCalls: 0 }
-    const host = new PluginHost({ dataDir, host: makeBackend({ nodeIpcCalls: calls, subscribeDelayMs: 30 }), docs: new MemoryDocStore() })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ nodeIpcCalls: calls, subscribeDelayMs: 30 }), docs: new MemoryDocStore() })
     let release: (() => void) | undefined
     const def: PluginDefinition = {
       id: 'p:ipc',
@@ -331,7 +332,7 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
 
   await t.test('openTunnel 生命周期跟踪：活动 Duplex 期间停用被拒，关闭后可停用；失败不泄漏计数', { timeout: 60_000 }, async () => {
     const stub: OpenTunnelStub = { calls: [], delayMs: 20, duplexes: [], failures: [] }
-    const host = new PluginHost({ dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
     let hostApi: Parameters<NonNullable<Parameters<typeof host.register>[0]['definePlugin']>>[0]['host'] | undefined
     const def: PluginDefinition = {
       id: 'p:tunnel',
@@ -394,7 +395,7 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
       cancel() { cancelled = true },
     }, { highWaterMark: 0 })))) as typeof fetch
     const backend = makeBackend({ nodeFetch: () => raw })
-    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
     let api!: HelmHostApi
     await host.register({ id: 'p:fetch-flow', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
     try {
@@ -419,7 +420,7 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
   await t.test('openTunnel：宿主 dispose 销毁活动及建立后迟到的 Duplex', { timeout: 60_000 }, async () => {
     for (const delayMs of [0, 20]) {
       const stub: OpenTunnelStub = { calls: [], delayMs, duplexes: [], failures: [] }
-      const host = new PluginHost({ dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
+      const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
       let api!: HelmHostApi
       await host.register({ id: `p:tunnel-dispose-${delayMs}`, definePlugin(ctx) { api = ctx.host } }, { enabled: true })
       const opening = api.openTunnel('local', { port: 9000 })

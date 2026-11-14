@@ -53,6 +53,7 @@ import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import { HelmError } from '@helm/protocol'
 import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 import assert from 'node:assert/strict'
 
@@ -121,7 +122,7 @@ async function makeEnv(dataDir?: string): Promise<SuperAgentEnv> {
   const models = createModels()
   models.setProvider(faux.provider)
 
-  const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
 
   const requests: SuperAgentEnv['requests'] = []
   faux.setResponses([])

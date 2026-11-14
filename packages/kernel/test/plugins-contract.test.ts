@@ -17,6 +17,7 @@ import {
 } from '@helm/protocol';
 import { PluginHost, type PluginDocStore } from '../src/plugins/index.js';
 import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js';
+import { createPluginBuildProvider } from '@helm/plugin-build';
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -170,7 +171,7 @@ let backend: FakeBackend;
 let docs: MemoryDocStore;
 
 function makeHost(): PluginHost {
-  return new PluginHost({ dataDir, host: backend, docs });
+  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs });
 }
 
 async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<void> {

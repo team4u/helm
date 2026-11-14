@@ -7,13 +7,14 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { getCurrentTools, getCurrentSystemPrompt } from '@earendil-works/pi-ai/utils/transcript';
 import { createHelm } from '../src/app.js';
+import { createPluginBuildProvider } from '@helm/plugin-build';
 
 async function openFixture() {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-boundary-'));
   const models = createModels();
   const faux = fauxProvider();
   models.setProvider(faux.provider);
-  const app = await createHelm({ dataDir, cwd: dataDir, models, model: 'faux/faux-1' });
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, models, model: 'faux/faux-1' });
   return { app, faux, dataDir, async close() { await app.close(); await rm(dataDir, { recursive: true, force: true }); } };
 }
 

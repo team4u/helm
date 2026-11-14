@@ -25,6 +25,7 @@ import { HelmError, type NodeRegisterInput, type NodeRegisterResult } from '@hel
 import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import type { NodeConnection, HubConnectionLocal } from '../../kernel/src/env/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 interface Env {
   dataDir: string
@@ -38,7 +39,7 @@ async function makeEnv(options: { hubPlatform?: string } = { hubPlatform: 'linux
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd: dataDir,
     model: 'faux/faux-1',

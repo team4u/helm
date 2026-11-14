@@ -18,6 +18,7 @@ import { PluginHost, type PluginHostBackend, type PluginDocStore } from '../../k
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
+import { compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
 import { serveTransport } from './helpers/herdr-unit-fixture.js'
 
 let dataDir: string
@@ -113,7 +114,7 @@ before(async () => {
   // 受控空协议服务器：启用即连接（snapshot/subscribe 成功即注册完成）。
   const socketPath = join(dataDir, 'herdr.sock')
   served = await serveTransport(emptyTransport(), socketPath)
-  pluginHost = new PluginHost({
+  pluginHost = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: makeBackend(),
     docs: new MemoryDocStore(),

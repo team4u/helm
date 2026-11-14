@@ -7,13 +7,14 @@ import { DatabaseSync } from 'node:sqlite'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { createHelm } from '../../hub/src/app.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 test('派工自动标题和召回元数据不持久化已登记机密', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-superagent-title-secret-'))
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     await app.kernel.plugins.enable('builtin:superagent')
     const secret = 'private-title-token-9f4d2a'

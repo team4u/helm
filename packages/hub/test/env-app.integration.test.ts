@@ -15,6 +15,7 @@ function fauxToolCallMessage(name: string, input: Record<string, unknown>): Retu
 import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { createHerdrTransport } from '../../plugins/src/herdr/transport.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createNodeDaemon, type NodeDaemon } from '../../node/src/index.js'
 import { runCli } from '../../cli/src/index.js'
 import type { EnvFabric } from '../../kernel/src/env/index.js'
@@ -46,7 +47,7 @@ async function openEnvironment() {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir: hubDir, cwd: hubDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: hubDir, cwd: hubDir, model: 'faux/faux-1', models })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   const auth = app.kernel.auth.createProcessToken()
   let daemon: NodeDaemon | undefined

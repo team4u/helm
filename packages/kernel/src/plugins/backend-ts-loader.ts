@@ -1,7 +1,7 @@
 /**
  * 后端插件 TypeScript 模块加载器（external-loader 的转译底座）。
  *
- * 机制（Node 24 `module.registerHooks` 主线程同步钩子 + esbuild `transformSync`）：
+ * 机制（Node 24 `module.registerHooks` 主线程同步钩子 + 构建端口注入的转译函数）：
  * - 只转译「已注册插件根目录」（realpath）内的 .ts/.tsx/.mts/.cts 源文件为 ESM；
  *   文件 URL 就是真实源文件 URL（不落到缓存产物文件），因此 `import.meta.url` /
  *   相对资源定位永远指向插件目录内的真实源文件，不受缓存路径影响；
@@ -42,14 +42,22 @@
  *   沙箱：可信插件与宿主同权限，路径边界是转译范围的约定而非安全承诺；
  * - 后端 .tsx 的真实用途是「与前端共享源文件形态的纯逻辑模块」（JSX 语法可写、
  *   转译为 react/jsx-runtime 导入，需插件目录自备 react 或改用纯 .ts）；React
- *   组件仍属前端 client.tsx 轨道（client-compiler），此处不做 JSX 运行时注入。
+ *   组件仍属前端 client.tsx 轨道（@helm/plugin-build），此处不做 JSX 运行时注入。
+ *
+ * 构建端口：本模块只保留加载机制（resolve 策略、代际传播、containment、
+ * 钩子生命周期）；源码转译由 PluginBuildProvider.transformBackendTs 提供并经
+ * registerPluginTsRoot(root, { transform }) 显式注入（产品在 hub 接线默认实现）。
+ * 内核不静态依赖 esbuild；未注入 transform 时需要转译的加载显式拒绝
+ * （501 unsupported_backend_ts_build），绝不回退内置转译器。
  */
 import { registerHooks, type ModuleHooks } from 'node:module';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { transformSync } from 'esbuild';
-import { HelmError } from '@helm/protocol';
+import { HelmError, type PluginBuildProvider } from '@helm/protocol';
+
+/** 转译函数形状（PluginBuildProvider.transformBackendTs）。 */
+export type BackendTsTransformFn = PluginBuildProvider['transformBackendTs'];
 
 /** 支持转译的 TypeScript 源扩展名（.cts 转译产物仍按 ESM 加载，保持单一模块形态）。 */
 const TS_SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
@@ -57,8 +65,13 @@ const TS_SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
 /** Node 原生可解析的 JS 家族扩展名（TS 习惯映射的源形态）。 */
 const JS_FAMILY_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 
-/** 已注册插件根目录（realpath）与引用计数。 */
-const rootRefCounts = new Map<string, number>();
+/** 已注册插件根目录（realpath）：引用计数与该根的转译函数（构建端口注入）。 */
+interface TsRootEntry {
+  count: number;
+  transform?: BackendTsTransformFn;
+}
+
+const rootRefCounts = new Map<string, TsRootEntry>();
 
 /**
  * 模块代际计数（受控热重载用）：根 realpath -> 下一代代数号。
@@ -121,17 +134,28 @@ function isInsideRoot(root: string, target: string): boolean {
 
 /** url 是否位于任一已注册根目录之下（根以 realpath 注册；symlink URL 由 resolve 层消解）。 */
 function isInsideAnyRoot(url: string): boolean {
-  if (rootRefCounts.size === 0 || !url.startsWith('file:')) return false;
+  return rootOfUrl(url) !== undefined;
+}
+
+/** url 所属的已注册根（无则 undefined）；transformOfRoot 与根判定共用同一遍历。 */
+function rootOfUrl(url: string): string | undefined {
+  if (rootRefCounts.size === 0 || !url.startsWith('file:')) return undefined;
   let path: string;
   try {
     path = fileURLToPath(url);
   } catch {
-    return false;
+    return undefined;
   }
   for (const root of rootRefCounts.keys()) {
-    if (isInsideRoot(root, path)) return true;
+    if (isInsideRoot(root, path)) return root;
   }
-  return false;
+  return undefined;
+}
+
+/** 取 url 所属已注册根的转译函数（未注入时 undefined；load 钩子显式拒绝）。 */
+function transformOfRoot(url: string): BackendTsTransformFn | undefined {
+  const root = rootOfUrl(url);
+  return root === undefined ? undefined : rootRefCounts.get(root)?.transform;
 }
 
 function fileExtension(path: string): string {
@@ -305,17 +329,25 @@ function ensureHooks(): void {
         // 读源失败（权限 / 竞态删除）：如实抛 Node 原生错误，不静默跳过
         throw err;
       }
+      // 转译函数由构建端口注入（按根存储）：缺失时显式拒绝，绝不回退内置转译器。
+      const transform = transformOfRoot(url);
+      if (transform === undefined) {
+        throw new HelmError(
+          'unsupported_backend_ts_build',
+          `宿主未注入插件构建端口（PluginHostOptions.buildProvider.transformBackendTs）：无法转译外部插件 TS 源 ${file}`,
+          501,
+          { file },
+        );
+      }
       let code: string;
       try {
-        const result = transformSync(source, {
-          loader: ext === '.tsx' ? 'tsx' : 'ts',
-          jsx: 'automatic',
-          format: 'esm',
-          sourcefile: file,
-          target: 'node20',
+        code = transform({
+          source,
+          file,
+          kind: ext === '.tsx' ? 'tsx' : 'ts',
         });
-        code = result.code;
       } catch (err) {
+        if (err instanceof HelmError) throw err;
         throw transpileError(file, err);
       }
       return { format: 'module', source: code, shortCircuit: true };
@@ -339,28 +371,39 @@ function transpileError(file: string, err: unknown): HelmError {
 
 /**
  * 为插件根目录启用后端 TS 转译（引用计数；同一目录重复注册合并，钩子懒注册）。
+ * options.transform 为该根的转译函数（PluginBuildProvider.transformBackendTs，
+ * 由外部插件加载链从宿主构建端口透传）；重复注册时显式提供的 transform 覆盖
+ * 旧值，未提供时保持既有值（同进程同一纯函数语义）。
  * 返回释放函数：计数归零时目录移出转译范围并 deregister 进程钩子（只反注册
  * 本加载器的钩子实例，不影响宿主进程内其他 hooks）。
  */
-export function registerPluginTsRoot(rootDir: string): () => void {
+export function registerPluginTsRoot(
+  rootDir: string,
+  options: { transform?: BackendTsTransformFn } = {},
+): () => void {
   const root = realpathSync(rootDir);
-  const count = rootRefCounts.get(root) ?? 0;
-  rootRefCounts.set(root, count + 1);
-  if (count === 0) ensureHooks();
+  const entry = rootRefCounts.get(root);
+  if (entry === undefined) {
+    rootRefCounts.set(root, { count: 1, transform: options.transform });
+    ensureHooks();
+  } else {
+    entry.count += 1;
+    if (options.transform !== undefined) entry.transform = options.transform;
+  }
   let released = false;
   return () => {
     if (released) return;
     released = true;
     const current = rootRefCounts.get(root);
     if (current === undefined) return;
-    if (current <= 1) {
+    if (current.count <= 1) {
       rootRefCounts.delete(root);
       if (rootRefCounts.size === 0 && hooks !== undefined) {
         hooks.deregister();
         hooks = undefined;
       }
     } else {
-      rootRefCounts.set(root, current - 1);
+      current.count -= 1;
     }
   };
 }

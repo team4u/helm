@@ -19,6 +19,7 @@ import {
   type PluginProviderPort,
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
+import { createPluginBuildProvider } from '@helm/plugin-build';
 
 // ---------------------------------------------------------------------------
 // fake 基建
@@ -171,7 +172,7 @@ function definePluginWith(id: string, fn: (ctx: import('@helm/protocol').HelmPlu
 
 function makeHost(plugins?: PluginProviderPort): { host: PluginHost; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'helm-plugin-providers-'));
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     host: makeHostApi(),
     docs: new MemoryDocStore(),

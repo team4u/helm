@@ -45,6 +45,7 @@ import {
   truncateCodePoints,
 } from '../src/profile/catalog.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -232,7 +233,7 @@ async function makeEnv(extraPlugins: PluginDefinition[] = [], withSessionDocs = 
   const profiles = new ProfileService(dataDir)
   await profiles.ensureDefault()
   const backend = Object.assign(makeControlledBackend(), createProfileFileHost(dataDir, profiles))
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs: new MemoryDocStore(),

@@ -27,6 +27,7 @@ import { HelmError, type ConversationSummary, type ExternalTriggerEnvelope } fro
 import { createHelm } from '../../hub/src/app.js'
 import { createHubHandler } from '../../kernel/src/http/index.js'
 import { createDeliveryDispatch } from '../src/triggers/delivery.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -53,7 +54,7 @@ async function makeEnv(): Promise<TestEnv> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   faux.setResponses([])
   const handler = createHubHandler(app.kernel)
   const env: TestEnv = {
@@ -598,7 +599,7 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
   }
   // 第一进程：setup 鉴权 + 启用 + 建 webhook（secret 落 credentials.json）
   const first = mkModels()
-  const app1 = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: first.models })
+  const app1 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: first.models })
   try {
     const { AuthService } = await import('../../kernel/src/services/index.js')
     const auth = new AuthService(dataDir)
@@ -613,7 +614,7 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
 
   // 第二进程（同 dataDir 重启）：启用沿用，secret 从凭据文件恢复
   const second = mkModels()
-  const app2 = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models: second.models })
+  const app2 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: second.models })
   try {
     const summary = app2.kernel.plugins.list().find((p) => p.id === TRIGGERS)!
     assert.equal(summary.enabled, false, '重启后沿用持久化停用状态')

@@ -10,6 +10,7 @@ import type {
   HelmHostNodeFetchPort,
   HelmHostOpenTunnelPort,
   HookName,
+  PluginBuildProvider,
   PluginConfigFieldSchema,
   PluginDefinition,
   PluginDiagnosticError,
@@ -114,6 +115,14 @@ export interface PluginHostOptions {
    * 不依赖调用方插件自带 redactor）。未提供时原样返回（宿主模式/测试）。
    */
   redactText?: (text: string) => string;
+  /**
+   * 插件构建端口（client.tsx 编译 + 后端 TS 转译）：机制在内核，构建工具由
+   * 组合根注入（产品在 hub 注入 @helm/plugin-build 默认实现）。缺失时内核
+   * 显式拒绝相关能力（client UI 贡献 unsupported_client_build、外部 TS 源
+   * unsupported_backend_ts_build），绝不静默丢 UI 或降级，也不动态 import
+   * 默认实现。
+   */
+  buildProvider?: PluginBuildProvider;
   /**
    * 延迟服务启动屏障（runtime 自建 host 时使用）：true 时 register/enable 的
    * 启用插件只完成定义收集、provider 挂载与服务 prepare 登记，不执行服务

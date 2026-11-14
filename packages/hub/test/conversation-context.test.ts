@@ -27,6 +27,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { HelmError } from '@helm/protocol'
 import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 interface Env {
   dataDir: string
@@ -42,7 +43,7 @@ async function makeEnv(): Promise<Env> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   return {
     dataDir,

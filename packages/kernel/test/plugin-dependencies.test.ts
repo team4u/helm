@@ -25,6 +25,7 @@ import {
   type PluginHostBackend,
 } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -60,7 +61,7 @@ function makeBackend(): PluginHostBackend {
 }
 
 function makeHost(options: { deferServices?: boolean } = {}): PluginHost {
-  return new PluginHost({
+  return new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: makeBackend(),
     docs,

@@ -38,6 +38,7 @@ import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-ho
 import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { redactJsonValue } from '../../kernel/src/redact.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 import assert from 'node:assert/strict'
 
@@ -195,7 +196,7 @@ async function makeCoreEnv(): Promise<CoreEnv> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   const plugins = app.kernel.plugins
   return {
     dataDir,
@@ -243,7 +244,7 @@ async function makeEnv(): Promise<TestEnv> {
   models.setProvider(faux.provider)
 
   // 真实组合入口：真 SQLite + 真 PluginHost + profile/memory + WorkflowService。
-  const app = await createHelm({
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd: dataDir,
     model: 'faux/faux-1',
@@ -552,7 +553,7 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
     const faux2 = fauxProvider()
     const models2 = createModels()
     models2.setProvider(faux2.provider)
-    const app2 = await createHelm({ dataDir: env.dataDir, cwd: env.dataDir, model: 'faux/faux-1', models: models2 })
+    const app2 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: env.dataDir, cwd: env.dataDir, model: 'faux/faux-1', models: models2 })
     try {
       // 受管技能：篡改文件被覆盖回源码版本，缺失 reference 被补齐
       assert.equal(
@@ -956,7 +957,7 @@ test('集成5: 重启后播种会话与历史经真实 SQLite 保留，faux 续�
     const faux = fauxProvider()
     const models = createModels()
     models.setProvider(faux.provider)
-    const app = await createHelm({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
     return { faux, app }
   }
 
@@ -1016,7 +1017,7 @@ async function makeHttpEnv() {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
 
   // 播种入口会话 ID（首个 assistant 无父链会话；此环境内仍存在）
   const initialConv = app.kernel
@@ -2187,7 +2188,7 @@ test('对齐6: 双 Profile 独立 SYSTEM/MEMORY/模型，PATCH 切换与清覆�
     const faux = fauxProvider()
     const models = createModels()
     models.setProvider(faux.provider)
-    const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
     return { faux, app }
   }
 

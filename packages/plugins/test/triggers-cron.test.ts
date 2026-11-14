@@ -25,6 +25,7 @@ import {
   type CronJob,
 } from '../src/triggers/cron.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 测试基建：内存 doc store + 可控时钟 + host fake
@@ -142,7 +143,7 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
     return h.flushImpl()
   }
   docs.flush = innerFlush
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     docs,
     host: {

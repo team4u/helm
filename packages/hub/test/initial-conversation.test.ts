@@ -23,12 +23,13 @@ import { HelmError } from '@helm/protocol'
 
 import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 async function buildApp(dataDir: string, model = 'faux/faux-1') {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model, models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model, models })
   return { faux, app }
 }
 

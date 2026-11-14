@@ -30,6 +30,7 @@ import { HelmError, type PluginDefinition, type WorkflowRunSummary } from '@helm
 import { createHelm } from '../../hub/src/app.js'
 import { readJournal, type WorkflowJournalEntry } from '../src/workflow/engine/journal.js'
 import { pluginDataDirName } from '../../kernel/src/plugins/plugin-dir-name.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -58,7 +59,7 @@ async function makeEnv(): Promise<Env> {
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
 
   // 会话绑定 (nodeId='local', cwd=convCwd)：env.exec 缺省靶点必须继承它。
   const { mkdirSync } = await import('node:fs')
@@ -242,7 +243,7 @@ test('env.exec3: 插件声明 idempotent: true 的动作在账本生效（resume
   const faux = fauxProvider()
   const models = createModels()
   models.setProvider(faux.provider)
-  const app = await createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     let handlerRuns = 0
     let shouldFail = true

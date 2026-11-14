@@ -40,6 +40,7 @@ import {
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { createMagpiePlugin } from '../src/magpie.js'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
+import { compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
 import {
   MAGPIE_PLUGIN_ID,
   MAGPIE_PROVIDER_ID,
@@ -324,7 +325,7 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
     for (const [id, err] of result.errors) errors[id] = err instanceof Error ? err.message : String(err)
     return { providers: opts?.providers ?? [MAGPIE_PROVIDER_ID], aborted: result.aborted, errors, models: [], providerCatalog: [] }
   }
-  const host = new PluginHost({
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: makeHostApi({
       ...options.hostApi,
@@ -558,7 +559,7 @@ test('magpie7: 宿主缺 providers 端口时启用显式 501（不静默降级�
   const backends = new Map<string, FakeBackend>()
   const fetchMock = installFetchMock(backends)
   try {
-    const host = new PluginHost({
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir,
       host: makeHostApi({
         refreshModels: (async () => ({ providers: [], aborted: false, errors: {}, models: [], providerCatalog: [] })) as never,

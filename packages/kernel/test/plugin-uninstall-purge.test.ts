@@ -28,6 +28,7 @@ import {
   createPluginSessionDocStore,
 } from '../src/runtime/runtime-host-backend.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 
 interface StoreHandle {
   store: HelmStore
@@ -90,7 +91,7 @@ function makeHost(handle: StoreHandle, dataDir: string): PluginHost {
       }
     },
   }
-  return new PluginHost({
+  return new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs: createGlobalDocumentStore(handle.store),

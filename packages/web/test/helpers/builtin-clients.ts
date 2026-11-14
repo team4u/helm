@@ -15,6 +15,7 @@ import { after } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { compilePluginClientModule } from '../../../kernel/src/plugins/client-compiler.js'
 import * as HelmPluginClient from '@helm/plugin-client'
+import { compilePluginClientModule } from '@helm/plugin-build'
 
 export interface BuiltinClientStubOptions {
   /** docName → doc 值（usePluginDoc 按 docName 路由返回）。 */
