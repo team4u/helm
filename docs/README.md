@@ -26,7 +26,7 @@ Helm 是极简持久微内核多智能体编排系统：内核只保留持久会
 
 | 文档 | 说明 |
 | :--- | :--- |
-| [极简微内核哲学](architecture/overview.md) | 零业务角色硬编码与五包单向依赖设计 |
+| [极简微内核哲学](architecture/overview.md) | 零业务角色硬编码、机制与插件分包、产品组合根与单向依赖 |
 | [生命周期 Hook 与全界面扩展点](architecture/extension-points.md) | 后端可组合 Hook 与前端全界面插槽契约 |
 | [EnvFabric 分布式执行底座](architecture/envfabric.md) | 反向 WebSocket 连接、受管 Shell、节点透传隧道与安全自升级 |
 | [pi-durable 持久会话状态机](architecture/pi-durable.md) | 五态状态机、SQLite/FTS5、机密隔离与 CAS 乐观锁 |

@@ -1,10 +1,10 @@
 # 微内核架构总览
 
-Helm 是极简持久微内核的多智能体编排系统。内核只提供四块通用机制——持久会话状态机、跨平台执行底座、模型接入与插件宿主；角色、编排、记忆、巡检等一切策略性能力全部由插件在机制之上组合实现。本文给出内核的职责边界、零角色硬编码原则、五包依赖拓扑与 API/CLI 同权契约；后端 Hook 与前端扩展点的完整定义见[扩展点详解](extension-points.md)，跨节点执行底座见 [EnvFabric](envfabric.md)，会话与存储见 [pi-durable 集成](pi-durable.md)。
+Helm 是极简持久微内核的多智能体编排系统。内核只提供四块通用机制——持久会话状态机、跨平台执行底座、模型接入与插件宿主；角色、编排、记忆、巡检等一切策略性能力全部由插件在机制之上组合实现。本文给出内核的职责边界、零角色硬编码原则、单向包依赖拓扑与 API/CLI 同权契约；后端 Hook 与前端扩展点的完整定义见[扩展点详解](extension-points.md)，跨节点执行底座见 [EnvFabric](envfabric.md)，会话与存储见 [pi-durable 集成](pi-durable.md)。
 
 ## 微内核四块通用机制
 
-`@helm/kernel`（可执行包名 `helm-hub`）的全部职责收敛为四块机制，每块都与具体业务正交：
+`@helm/kernel` 的职责收敛为四块机制，每块都与具体业务正交。`helm-hub` 进程入口属于 `@helm/hub`，由它选择插件、注入构建实现并启动内核：
 
 | 机制 | 核心内容 | 明确不包含 |
 | :--- | :--- | :--- |
@@ -36,7 +36,7 @@ flowchart TD
 
 以下能力**不在内核**，这是架构红线而非实现现状的描述：
 
-- **编排引擎与 `WorktreeAllocator`**：`subagent` / `SubagentWorkflow` / `cleanup_worktree` 三个模型工具、DSL 编排引擎（`builtin-plugins/workflow/engine`）与受管 Git Worktree 的租约分配、断点续接、安全清理，全部由 `builtin:workflow` 插件承载。内核对 Git 零语义——`AgentSpawnRequest.isolation` 等执行环境要求由插件层经 `agent_spawn` continuation 改写请求兑现，无插件兑现而原样到达原生执行行时显式返回 `unsupported_runtime`。
+- **编排引擎与 `WorktreeAllocator`**：`subagent` / `SubagentWorkflow` / `cleanup_worktree` 三个模型工具、DSL 编排引擎（`packages/plugins/src/workflow/engine`）与受管 Git Worktree 的租约分配、断点续接、安全清理，全部由 `builtin:workflow` 插件承载。内核对 Git 零语义——`AgentSpawnRequest.isolation` 等执行环境要求由插件层经 `agent_spawn` continuation 改写请求兑现，无插件兑现而原样到达原生执行行时显式返回 `unsupported_runtime`。
 - **角色与技能**：`SYSTEM.md` 注入、技能目录与 `load_skill` 工具由 `builtin:profile`（常驻不可卸载）提供；`builtin:memory` 自管 `profiles/<id>/MEMORY.md`。内核对「角色」这个概念零感知。
 - **巡检定时器**：内核不提供 `watchdog` 定时器，也不存在 `watchdog_tick` Hook。周期性任务一律由插件自管服务调度——`builtin:superagent` 用自有 `ctx.service` 驱动巡检周期，`builtin:herdr` 通过通用进程内事件采集终端诊断。
 - **声明式 JSON 渲染与 Mermaid**：已分别剥离为 `builtin:json-render` 与 `builtin:mermaid` 插件，停用后相关围栏回退普通代码块。
@@ -65,25 +65,44 @@ export interface ConversationSummary {
 
 这一原则的工程收益是直接的：新增一种智能体角色只需创建 Profile 与（可选的）插件，内核代码与数据库结构零改动；反之，若把角色枚举硬编码进内核，每种编排模式都会污染核心数据表并阻碍动态演进。`builtin:superagent` 是最好的实践样本——它首次启用时动态创建 `SuperAgent 中枢`（`profileId: 'superagent'`）与 `巡检看门狗`（`profileId: 'watchdog'`）两个常驻会话，ID 持久化于插件自有 doc（`SuperAgentIndexDoc`），内核将它们视为普通会话，路由、派生与巡检逻辑完全由插件 Hook 与自有服务驱动。
 
-## 五包单向依赖拓扑
+## 单向包依赖拓扑
 
 ```mermaid
 flowchart TD
-    Web["@helm/web 前端主控台"] --> Protocol["@helm/protocol"]
-    Cli["@helm/cli (helm)"] --> Protocol
-    Kernel["@helm/kernel (helm-hub)"] --> Protocol
-    Node["@helm/node (helm-node)"] --> Protocol
+    Hub["@helm/hub 产品组合根"] --> Kernel["@helm/kernel 机制"]
+    Hub --> Plugins["@helm/plugins 官方插件"]
+    Hub --> Build["@helm/plugin-build 构建实现"]
+    Kernel --> Protocol["@helm/protocol 通用契约"]
+    Plugins --> Protocol
+    Plugins --> Client["@helm/plugin-client 浏览器 SDK"]
+    Build --> Protocol
+    Client --> Protocol
+    Web["@helm/web 应用"] --> Client
+    Web --> Protocol
+    Cli["@helm/cli"] --> Protocol
+    Node["@helm/node"] --> Protocol
 ```
 
-`@helm/protocol` 是唯一的共享契约包，定义全部跨包类型、Schema 与错误码，零运行时重依赖；其余四个包彼此不直接依赖，公共接口变更必须先改 `protocol` 再同步所有消费方。
+`@helm/protocol` 定义通用会话、RPC、事件和插件扩展契约，保持零运行时重依赖。工作流、工作树和外部执行控制的业务类型与校验归属插件。内核不通过插件专属字段识别执行策略，插件之间经自己的契约协作。
+
+`@helm/hub` 是唯一选择默认插件的产品组合根。直接使用 `KernelRuntime` 时不隐式注册内置插件；使用 `createHelm` 时由 Hub 注册官方插件并设置启用状态。内核不依赖插件包，也不导出它们的工厂。前端构建通过显式端口注入，加载器与插件生命周期不需要直接依赖构建工具实现。
+
+`@helm/plugin-client` 不依赖 Web 应用源码。它提供共享组件与上下文，Web 应用通过宿主端口接入真实数据、文档订阅、Markdown 渲染和导航。独立插件可以直接依赖这个包进行类型检查；运行时仍与宿主共享同一个 React 和上下文实例。
 
 | 包 | 可执行 | 职责 |
 | :--- | :--- | :--- |
-| `@helm/protocol` | — | 契约包：类型、JSON Schema、错误码、`CORE_CLI_COMMAND_PATHS` |
-| `@helm/kernel` | `helm-hub` | 微内核服务：持久化、EnvFabric、Model/Auth、PluginHost 与全部内置插件 |
-| `@helm/node` | `helm-node` | 受控节点守护进程：承载远端执行、文件系统操作与自升级 |
-| `@helm/cli` | `helm` | 控制端 CLI：静态核心命令表 + 动作清单动态命令 |
-| `@helm/web` | — | 前端主控台（Vite dev 端口 3201，代理至 Hub 3202） |
+| `@helm/protocol` | — | 通用类型、Schema、错误码与 `CORE_CLI_COMMAND_PATHS` |
+| `@helm/kernel` | — | 持久化、EnvFabric、Model/Auth、PluginHost 与 HTTP 服务机制 |
+| `@helm/plugins` | — | 官方插件、插件业务契约、客户端视图与技能资产 |
+| `@helm/plugin-client` | — | 共享 UI 原语、上下文、Hooks 与宿主接入端口 |
+| `@helm/plugin-build` | — | 插件源码构建实现，由产品组合根注入宿主 |
+| `@helm/hub` | `helm-hub` | 默认插件注册、构建实现接线、服务进程启动与关闭 |
+| `@helm/node` | `helm-node` | 远端执行、文件系统操作与自升级 |
+| `@helm/cli` | `helm` | 静态核心命令表 + 动作清单动态命令 |
+| `@helm/web` | — | Web 应用（开发端口 3201，代理至 Hub 3202） |
+| `@helm/payload` / `@helm/desktop` | 桌面应用 | 产品资产组装与桌面进程监督 |
+
+包边界由源码导入和生产依赖图共同约束：跨包使用公开入口，禁止相对路径越包或导入其他包的私有 `src`；生产依赖图不得成环。测试中的完整产品组合可以依赖 Hub，纯内核测试直接使用 KernelRuntime。移动文件本身不计作职责简化，构建后的 payload 与桌面入口也必须遵守新的产品组合关系。
 
 三条边界纪律需要严格遵守。第一，**CLI 与 Node 物理分包**：控制 Hub 的客户端（`helm`）与被控节点守护进程（`helm-node`）不得混装在同一包或同一命令中，二者的信任模型与部署位置完全不同。第二，**边界处校验**：所有外部输入——HTTP body、插件产物、工作流 DSL、事件载荷、Herdr `.helm/wf-out-*` 交接文件——在入口处执行类型/Schema 校验，非法输入显式拒绝而非静默降级。第三，**公共接口消费方普查**：改动任何导出符号前先全仓搜索引用（`kernel/node/cli/web/测试`），漏改即事故；`CORE_CLI_COMMAND_PATHS` 与 `coreCommands()` 的双向锁定校验就是这一纪律的机制化体现。
 

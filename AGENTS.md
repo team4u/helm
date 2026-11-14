@@ -24,8 +24,8 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
 
 **设计原则**：第一性原理推导最简正确实现（感觉笨重先怀疑设计，不打补丁）；KISS / YAGNI；命名自解释、注释只写 Why；一个模块只做好一件事；**机制与策略分离**（内核给机制，策略由插件/配置/用户层给）。
 
-1. **五包单向依赖**：`@helm/web` / `@helm/cli` → `@helm/protocol` ← `@helm/kernel` / `@helm/node`。`protocol` 是唯一共享契约包，零运行时重依赖；跨包公共接口先改 `protocol` 再同步全部消费方。
-2. **内核只保留四块通用机制**（`@helm/kernel` / `helm-hub`，零业务角色硬编码）：
+1. **单向包依赖**：`@helm/kernel` 提供机制，`@helm/plugins` 承载内置插件，`@helm/hub` 是连接两者的产品组合根并提供 `helm-hub` 命令；内核不得依赖插件或组合根。`@helm/plugin-client` 是独立浏览器 SDK，`@helm/web` 通过宿主端口向它注入应用能力；SDK 不得反向依赖 Web 应用。`@helm/plugin-build` 提供构建实现，由产品层通过端口注入宿主。`@helm/protocol` 只放通用跨包契约，零运行时重依赖；插件业务契约归属插件包，跨包变更必须普查全部消费方。
+2. **内核只保留四块通用机制**（`@helm/kernel`，零业务角色硬编码）：
    - `pi-durable` 持久会话：通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5（**纯可重建派生索引，禁写 `pi_*` 表语义**）、`AskDoc`、`SecretStash`、`Artifacts`、纯文件资产热重载、原生 `spawnAgent` 子会话派生（`agent_spawn` Hook 管道 + 默认执行行）；
    - `EnvFabric` + `NodeRegistry`：`/ws/node` 反向控制网关、`/ws/node-tunnel` 任意 TCP 透传隧道（`openTunnel` 原语 + `nodeFetch` 适配层 + `helm nodes forward` 端口转发），内建 `local` 节点 + 远端 `@helm/node` 守护进程，驱动 `bash / read / write / edit / gate / env exec` 与按 `nodeId + canonicalPath` 的文件互斥（与任何插件是否启用正交）；
    - `Model 与 Auth`：模型供应商接入、模型禁用过滤、凭据与令牌管理；
@@ -35,7 +35,7 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
 5. **扩展面契约（零 `if/else` 插件 ID 业务特判）**：
    - **后端 7 个生命周期 Hook**（`continue | transform | handled | block`，`block` 仅限 `tool_call`）：`trigger`、`input`、`before_turn`、`tool_call`、`tool_result`、`agent_spawn`（额外支持 `next` around 包装）、`turn_settled`（统一覆盖 `completed | failed | aborted`）；
    - **前端 16 个 `ctx.ui` 扩展点**（`client.tsx` React 单轨）：`sidebarItem`、`sidebarSection`、`screen`、`timelineRenderer`、`markdownCodeBlock`、`toolView`、`composerPill`、`composerWidget`、`composerCompleter`、`artifactPreviewer`、`workbenchPanel`、`command`、`settingsPanel`、`profileRuntime`、`action`（`conversation:header | row | timeline:entry`）、`slot`。
-6. **10 个内置插件**（深度文档见 `docs/plugins/<name>.md`）：
+6. **10 个内置插件**（实现位于 `@helm/plugins`，由 `@helm/hub` 注册；深度文档见 `docs/plugins/<name>.md`）：
    - **默认启用（7 个）**：`builtin:profile`（`locked` 常驻；SYSTEM.md / 技能目录（含 `~/.agents/skills` 机器级共享技能来源合入）/ `load_skill` / `@` 补全 / `helm-cli` 受管技能）、`builtin:workflow`（子代理三工具 + DSL 引擎 + Worktree 租约）、`builtin:memory`（单 Profile `MEMORY.md` 64k 文件锁与开关）、`builtin:apps`（全栈微应用 `catalog`、`validate/publish` 与 `app-builder` 技能）、`builtin:json-render`（`ui` 围栏卡片与 `generative-ui` 技能）、`builtin:mermaid`（`mermaid` 围栏图表）、`builtin:triggers`（Cron 与 Webhook `defang` 入站）；
    - **默认停用（3 个）**：`builtin:herdr`（拦截 `agent_spawn` 驱动 23 种终端 CLI、`.helm/wf-out-*` 文件交接自愈、CAS 审批桥、`$helm` 状态 Token）、`builtin:superagent`（双层中枢路由、驻留 Worker、RecallGraph、自管两层 Watchdog）、`builtin:magpie`（动态模型网关）。
    - **插件通用铁律**：① 停用后其工具、动作、CLI 命令、受管技能与 UI 贡献**即时消失，不留幻影提示词**；② 高频会话级状态（如 workflow `runs`）必须用 `ctx.sessionDoc` 专用 SSE 按需订阅，严禁进全局 `ctx.doc` 造成首帧/广播写放大（单文档上限 2 MiB，超限 `413`）；③ 全局启动先按依赖拓扑对全体服务执行 `prepare()` 再依次 `start()`（如 `builtin:workflow` 先于 SDK 调度器标记中断任务取消）；④ 停用/重载遇在途任务经 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`，不可 force），遇持久占用或被依赖返回 `409 plugin_in_use`（可 `--force`）。
@@ -52,7 +52,7 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
 
 ## 4. 高频改动联动检查单（改 X 必须同步 Y）
 
-- **改动跨包类型 / 接口 / 导出符号** → 先改 `@helm/protocol`，再全仓搜索（`rg`）普查 `kernel / node / cli / web / 测试` 全部消费方并同步，漏改即事故。
+- **改动跨包类型 / 接口 / 导出符号** → 先改契约所属包（通用契约为 `@helm/protocol`，插件业务契约为 `@helm/plugins`），再全仓搜索（`rg`）普查全部包与测试的消费方并同步，漏改即事故。生产源码不得通过相对路径跨包或导入其他包的私有 `src`；新增依赖必须声明，包依赖图必须无环。
 - **新增 / 变更面向用户的 HTTP 接口** → 同一次改动必须补齐 `helm` CLI 映射（`packages/cli/src/commands/`，含 `--json` 与 `--current` 会话/节点自动感知），并同步 `@helm/protocol` 的 `CORE_CLI_COMMAND_PATHS` 与 `builtin:profile` 的 `helm-cli` 技能文档（`services.test.ts` 双向锁定校验）。
 - **插件暴露业务能力** → 用 `ctx.action({ id, inputSchema, outputSchema })` 单点声明，自动获得五端映射：HTTP（`POST /api/actions/<pluginId>/<actionId>`）、CLI（`helm <plugin> <action>`，剥离 `builtin:` 前缀，`cli.command` 可覆写）、Agent Tool（`exposeAsTool` 或 `run_action`）、Workflow `action()` 与 Web UI。
 - **编写 / 重构 Web 界面或插件 `client.tsx`** → 先读 [`docs/conventions/web-frontend.md`](docs/conventions/web-frontend.md)（布局/组件/样式/移动端）与 [`docs/conventions/web-navigation.md`](docs/conventions/web-navigation.md)（路由/深链/分屏/待命页/弹窗），并遵守五条硬铁律：
@@ -83,7 +83,7 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
 ## 7. 文档中心速查（按需深入阅读）
 
 - **总览与入门**：`docs/README.md` · `docs/getting-started/`（installation / first-workflow）· `docs/cli/reference.md`（全量命令字典）
-- **架构机制**：`docs/architecture/overview.md`（微内核哲学与五包拓扑）· `extension-points.md`（Hook 与 16 个 UI 扩展点完整契约）· `envfabric.md`（反向 WS、隧道、文件互斥、自升级）· `pi-durable.md`（五态状态机、存储、机密、CAS 审批）
+- **架构机制**：`docs/architecture/overview.md`（微内核职责与单向包拓扑）· `extension-points.md`（Hook 与 16 个 UI 扩展点完整契约）· `envfabric.md`（反向 WS、隧道、文件互斥、自升级）· `pi-durable.md`（五态状态机、存储、机密、CAS 审批）
 - **编排引擎**：`docs/workflows/dsl-guide.md`（JS DSL 权威参考）· `worktree-and-gate.md`（Worktree 生命周期与 Gate 门禁）· `journaling-recovery.md`（账本重放与断点恢复）
 - **插件生态**：`docs/plugins/overview.md`（契约总纲）· `plugin-development.md`（外部插件开发实战）及各内置插件同名文档：`profile / workflow / memory / apps / herdr / superagent / triggers / magpie / json-render / mermaid`
 - **Web 约定**：`docs/conventions/web-frontend.md`（设计系统）· `docs/conventions/web-navigation.md`（URL Hash 与导航）

@@ -10,16 +10,20 @@
 [![CLI Parity](https://img.shields.io/badge/CLI-100%25%20Parity-purple?style=flat-square)](docs/cli/reference.md)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
 
-Helm 是面向复杂工程任务的轻量持久微内核系统，用于解决多智能体协作不可控、跨机运维繁重与终端工具脱节三类问题。内核（`helm-hub`）只保留四块通用机制：基于 `pi-durable` 的持久会话状态机（SQLite 全量落盘、FTS5 全文检索、`AskDoc` 审批与原生 `spawnAgent` 子会话派生）、跨平台执行编排底座 `EnvFabric` 与 `NodeRegistry`（WebSocket 反向连接，统一驱动本地与远端节点的 `bash / read / write / edit / gate` 与文件互斥）、Model 与 Auth（模型供应商接入、凭据与令牌管理），以及唯一强类型插件宿主 `PluginHost`（`definePlugin(ctx)`，提供后端生命周期 Hook 与前端全界面扩展点）。业务角色一律通过 `profileId` 与 `tags` 表达，内核零硬编码；`subagent`、`SubagentWorkflow`、Git Worktree 租约等编排能力全部由 `builtin:workflow` 等插件承载，停用即整体消失。
+Helm 是面向复杂工程任务的轻量持久微内核系统，用于解决多智能体协作不可控、跨机运维繁重与终端工具脱节三类问题。内核（`@helm/kernel`）只保留四块通用机制：基于 `pi-durable` 的持久会话状态机（SQLite 全量落盘、FTS5 全文检索、`AskDoc` 审批与原生 `spawnAgent` 子会话派生）、跨平台执行编排底座 `EnvFabric` 与 `NodeRegistry`（WebSocket 反向连接，统一驱动本地与远端节点的 `bash / read / write / edit / gate` 与文件互斥）、Model 与 Auth（模型供应商接入、凭据与令牌管理），以及唯一强类型插件宿主 `PluginHost`（`definePlugin(ctx)`，提供后端生命周期 Hook 与前端全界面扩展点）。业务角色一律通过 `profileId` 与 `tags` 表达，内核零硬编码；`subagent`、`SubagentWorkflow`、Git Worktree 租约等编排能力全部由 `builtin:workflow` 等插件承载，停用即整体消失。
 
 ### 代码库包结构
 
-Helm 采用 Monorepo 架构，五个包保持单向依赖：`@helm/web` / `@helm/cli` → `@helm/protocol` ← `@helm/kernel` / `@helm/node`。`protocol` 是唯一共享契约包，零运行时重依赖。
+Helm 按机制、插件和产品组合分包。`@helm/hub` 连接 `@helm/kernel`、`@helm/plugins` 与构建实现；内核可以独立使用，不依赖内置插件。`@helm/plugin-client` 提供可独立构建的浏览器 SDK，由 Web 应用注入数据与导航能力。通用契约放在 `@helm/protocol`，插件业务契约归属插件包。
 
 | 包名 | 职责说明 | 交付产物 |
 | :--- | :--- | :--- |
 | `@helm/protocol` | 共享契约与数据结构，零重依赖 | 核心类型、状态机、RPC 与事件契约 |
-| `@helm/kernel` | 持久微内核与插件宿主 | Hub 服务（`helm-hub`） |
+| `@helm/kernel` | 持久微内核与插件宿主 | 可嵌入的运行时与 HTTP 服务机制 |
+| `@helm/hub` | 产品组合根与进程入口 | Hub 服务（`helm-hub`） |
+| `@helm/plugins` | 内置插件、业务契约、客户端视图与技能资产 | 官方插件集合 |
+| `@helm/plugin-client` | 共享 UI 原语、上下文与宿主能力端口 | 浏览器 SDK |
+| `@helm/plugin-build` | 插件前后端源码构建 | 注入式构建实现 |
 | `@helm/cli` | 命令行客户端，与 API 完全同权 | 控制命令（`helm`） |
 | `@helm/node` | 受控节点守护进程，反向连接 Hub | 节点服务（`helm-node`） |
 | `@helm/web` | 响应式 Web 主控台 | Web 界面（Vite SPA） |
@@ -54,7 +58,10 @@ flowchart TD
         Prot["@helm/protocol (数据模型 / 状态机 / RPC / 事件)"]
     end
 
-    subgraph Kernel["@helm/kernel (helm-hub / Port 3202)"]
+    Hub["@helm/hub (helm-hub / Port 3202)"]
+    Build["@helm/plugin-build"]
+    ClientSdk["@helm/plugin-client"]
+    subgraph Kernel["@helm/kernel 机制"]
         Durable["持久微内核 (pi-durable / SQLite / FTS5 / AskDoc / spawnAgent)"]
         Fabric["跨平台底座 (EnvFabric / NodeRegistry / 节点文件互斥)"]
         ModelAuth["Model 与 Auth"]
@@ -66,7 +73,7 @@ flowchart TD
         Remote["远端守护 (@helm/node / helm-node 反向 WS 连接)"]
     end
 
-    subgraph Plugins["内置插件生态"]
+    subgraph Plugins["@helm/plugins 内置插件生态"]
         P0["builtin:workflow (确定性编排与 Worktree 租约 / 默认启用)"]
         P1["builtin:profile (角色与技能底座 / 常驻)"]
         P1M["builtin:memory (长期记忆 / 默认启用)"]
@@ -80,13 +87,17 @@ flowchart TD
     end
 
     Web --> Prot
+    Web --> ClientSdk
     CLI --> Prot
-    Prot --> Kernel
-    Kernel --> Fabric
+    Hub --> Kernel
+    Hub --> Plugins
+    Hub --> Build
+    Kernel --> Prot
+    Plugins --> Prot
+    Plugins --> ClientSdk
+    ClientSdk --> Prot
     Fabric --> Local
     Fabric --> Remote
-    Kernel --> Host
-    Host --> Plugins
 ```
 
 ---
