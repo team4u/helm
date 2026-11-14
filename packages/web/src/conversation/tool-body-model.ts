@@ -28,6 +28,10 @@ function stringField(record: Record<string, unknown> | undefined, key: string): 
   return typeof value === 'string' ? value : undefined
 }
 
+export function inputPathOf(input: unknown): string | undefined {
+  return stringField(asRecord(input), 'path')
+}
+
 /** JSON 美化；循环引用等异常退回 String()，绝不抛出打断渲染。 */
 export function prettyJson(value: unknown): string {
   try {

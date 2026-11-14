@@ -107,6 +107,28 @@ type SkeletonRow =
   | { kind: 'remove'; oldLine: number }
   | { kind: 'add'; newLine: number }
 
+/** 让行数预算优先留给真实改动，避免大替换片段中的未改行挤掉后续变更。 */
+function trimUnchangedContext(skeleton: SkeletonRow[]): SkeletonRow[] {
+  const rows: SkeletonRow[] = []
+  for (let start = 0; start < skeleton.length;) {
+    if (skeleton[start]!.kind !== 'context') {
+      rows.push(skeleton[start++]!)
+      continue
+    }
+    let end = start + 1
+    while (end < skeleton.length && skeleton[end]!.kind === 'context') end++
+    const before = start > 0
+    const after = end < skeleton.length
+    for (let i = start; i < end; i++) {
+      if ((before && i < start + EDIT_CONTEXT_LINES) || (after && i >= end - EDIT_CONTEXT_LINES)) {
+        rows.push(skeleton[i]!)
+      }
+    }
+    start = end
+  }
+  return rows
+}
+
 /**
  * 在唯一精确替换的前后全文与匹配区间上生成 ToolEditDiff（纯函数，无 IO）。
  *
@@ -161,6 +183,7 @@ export function computeEditDiff(
   let editBudgetExceeded = false
   const changes = diffLines(rawOldWindow, rawNewWindow, {
     maxEditLength: EDIT_DIFF_MAX_EDIT_LENGTH,
+    timeout: 250,
   })
   if (changes === undefined) {
     editBudgetExceeded = true
@@ -260,7 +283,7 @@ export function computeEditDiff(
   const rows: ToolDiffRow[] = []
   let usedChars = 0
   let truncated = editBudgetExceeded
-  for (const entry of skeleton) {
+  for (const entry of trimUnchangedContext(skeleton)) {
     if (rows.length >= TOOL_DIFF_MAX_ROWS) {
       truncated = true
       break

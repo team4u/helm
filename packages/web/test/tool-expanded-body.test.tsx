@@ -1,15 +1,15 @@
 /**
  * 宿主内置工具展开体交互测试（happy-dom）：
  * 1. edit：running 待执行片段（无文件行号）→ done 已应用差异（真实行号），
- *    failure 错误 + 未应用片段（绝不显示已应用差异），非法/缺失元数据显式
+ *    failure 错误 + 请求片段（不判定磁盘副作用），非法/缺失元数据显式
  *    诊断并默认展开原始数据；词级加深；服务端截断提示与折叠展开；大输入
  *    超预算提示并保留原始参数入口；
  * 2. write：源码预览前 12 行 / 共 N 行 / 展开全部 / 复制完整源码；
  * 3. read：spill 不做源码高亮且保留产物入口；普通结果按路径语言高亮；
  * 4. bash：命令复制头、输出默认尾 8 行、已折叠前 N 行与展开全部、退出码；
  * 5. 通用工具：键值展示 + 原始数据展开保留完整 JSON 入参与原始输出；
- * 6. TraceRow：无插件接管可点击展开内置体；tool.view inline 接管后行静默
- *    不再提供内置展开体（插件行为不变）；单行统计 +N −N / N 行。
+ * 6. TraceRow：无插件接管可点击展开内置体；tool.view inline 保留原始数据
+ *    入口，插件视图不被内置体替换；单行统计 +N −N / N 行。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -247,6 +247,8 @@ test('edit 已应用差异：单删单增行对词级加深', { timeout: 60_000 
     assert.ok(m.host.querySelector('.trace-diff-word-add'), 'add 行词级加深')
     const wordAdd = m.host.querySelector('.trace-diff-content .trace-diff-word-add')?.textContent
     assert.ok(wordAdd?.includes('2'), '加深的是变化词')
+    assert.equal(m.host.querySelector('.trace-diff-row-remove .trace-diff-content')?.textContent, '−  const a = 1')
+    assert.equal(m.host.querySelector('.trace-diff-row-add .trace-diff-content')?.textContent, '+  const a = 2')
   } finally {
     m.unmount()
   }
@@ -277,6 +279,10 @@ test('edit 服务端截断：如实提示不可取回；长差异折叠后可展
       foldBtn.click()
     })
     assert.equal(m.host.querySelectorAll('.trace-diff-row').length, 40, '展开后显示全部已传输行')
+    const collapse = m.host.querySelector('.trace-diff-more') as HTMLButtonElement
+    assert.match(collapse.textContent ?? '', /收起/)
+    await act(async () => { collapse.click() })
+    assert.equal(m.host.querySelectorAll('.trace-diff-row').length, 32, '展开后仍可收起')
   } finally {
     m.unmount()
   }
@@ -394,7 +400,7 @@ test('read：spill 输出不做源码高亮并保留产物入口；普通结果�
         }),
       ),
     )
-    assert.match(m.host.textContent ?? '', /超长已转产物/)
+    assert.match(m.host.textContent ?? '', /含产物引用/)
     assert.equal(m.host.querySelector('.trace-code-sec'), null, 'spill 不走语法高亮形态')
     const artifactBtn = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('打开完整产物')) as HTMLButtonElement
     assert.ok(artifactBtn, '保留打开完整产物入口')
@@ -529,26 +535,30 @@ test('TraceRow：无插件接管时点击展开内置展开体，再点击收起
   }
 })
 
-test('TraceRow：tool.view inline 接管后行静默，不提供宿主内置展开体', { timeout: 60_000 }, async () => {
+test('TraceRow：tool.view inline 保留原始数据入口，不提供宿主专属展开体', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
     await m.render(
       rowUi(
         trace({
           toolName: 'subagent',
+          input: { prompt: '保留插件的原始输入' },
+          resultText: '原始派工结果',
           toolView: { pluginId: 'builtin:workflow', spec: { id: 'subagent-view', toolNames: ['subagent'] } },
         }),
       ),
     )
     const row = m.host.querySelector('.trace-row') as HTMLElement
     assert.ok(row)
-    assert.ok(row.classList.contains('trace-row-static'), '插件接管后行不可展开')
-    assert.equal(row.getAttribute('role'), null)
+    assert.equal(row.getAttribute('role'), 'button', '保留原有可展开工具行')
     assert.ok(m.host.querySelector('.trace-toolview'), '插件视图仍在行下方渲染')
     await act(async () => {
       row.click()
     })
-    assert.equal(m.host.querySelector('.trace-expanded-body'), null, '不出现宿主内置展开体')
+    assert.ok(m.host.querySelector('.trace-expanded-body'), '可查看原始数据')
+    assert.equal(m.host.querySelector('.trace-tool-body'), null, '插件不被宿主专属展开体接管')
+    assert.match(m.host.textContent ?? '', /保留插件的原始输入/)
+    assert.match(m.host.textContent ?? '', /原始派工结果/)
   } finally {
     m.unmount()
   }
@@ -580,6 +590,19 @@ test('TraceRow：单行统计 write 行数与 edit +N −N；无统计不渲染�
 
     await m.render(rowUi(trace({ toolName: 'bash', input: { command: 'ls' } })))
     assert.equal(m.host.querySelector('.trace-row-stats'), null, '无统计不渲染徽标')
+  } finally {
+    m.unmount()
+  }
+})
+
+test('原型属性同名工具走通用展示，不误当作内置 React 组件', { timeout: 60_000 }, async () => {
+  const m = createMount()
+  try {
+    for (const toolName of ['toString', 'constructor', '__proto__']) {
+      await m.render(bodyUi(trace({ toolName, input: { query: '真实参数' }, resultText: '真实输出' })))
+      assert.match(m.host.textContent ?? '', /真实参数/)
+      assert.match(m.host.textContent ?? '', /真实输出/)
+    }
   } finally {
     m.unmount()
   }

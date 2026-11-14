@@ -35,7 +35,7 @@ import {
   type ToolTrace,
 } from './timeline-model.js'
 import { resolveActiveOutlineEntryId } from './outline-model.js'
-import { ToolExpandedBody } from './ToolExpandedBody.js'
+import { ToolExpandedBody, ToolRawBody } from './ToolExpandedBody.js'
 import { toolRowStats } from './tool-body-model.js'
 import { calibrateAnchorAfterSmoothScroll, type AnchorAlignment } from './timeline-scroll-calibration.js'
 import {
@@ -446,10 +446,9 @@ export function TraceRow({
 
   // 命中插件 tool.view：replaceRow=true 时插件组件完全替换默认工具行；
   // 未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
-  // 插件接管（任一形态）时不提供宿主内置展开体，行本身也不再可点击。
+  // inline 插件视图保留工具行的原始数据入口，专属展开体仅用于宿主工具。
   const toolView = tool.toolView
   const replaceRow = toolView !== undefined && (toolView.spec as ToolViewSpec).replaceRow === true
-  const expandable = toolView === undefined
 
   return (
     <div className={`trace-entry${rowFailed ? ' trace-entry-error' : ''}`}>
@@ -466,20 +465,17 @@ export function TraceRow({
       ) : (
         <>
           <div
-            className={`trace-row${rowFailed ? ' trace-row-error' : ''}${expandable ? '' : ' trace-row-static'}`}
-            role={expandable ? 'button' : undefined}
-            tabIndex={expandable ? 0 : undefined}
-            onClick={expandable ? () => setOpen((v) => !v) : undefined}
-            onKeyDown={
-              expandable
-                ? (e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      setOpen((v) => !v)
-                    }
-                  }
-                : undefined
-            }
+            className={`trace-row${rowFailed ? ' trace-row-error' : ''}`}
+            role="button"
+            tabIndex={0}
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                setOpen((v) => !v)
+              }
+            }}
           >
             <span className="trace-row-left">
               <HelmIcon
@@ -514,9 +510,11 @@ export function TraceRow({
               />
             </div>
           ) : null}
-          {open && expandable ? (
+          {open ? (
             <div className="trace-expanded-body selectable">
-              <ToolExpandedBody tool={tool} conversationId={conversationId} />
+              {toolView === undefined
+                ? <ToolExpandedBody tool={tool} conversationId={conversationId} />
+                : <ToolRawBody tool={tool} conversationId={conversationId} />}
             </div>
           ) : null}
         </>

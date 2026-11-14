@@ -13,7 +13,7 @@
  *   提示不可取回；
  * - 组件文件只导出组件与类型，纯转换均在 *-model.ts。
  */
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolEditDiff } from '@helm/protocol'
 import { HelmIcon } from '../lib/icons.js'
@@ -32,10 +32,10 @@ import {
   type WordSegment,
 } from './edit-diff-model.js'
 import {
-  asRecord,
   bashBodyData,
   headLines,
   inputKvEntries,
+  inputPathOf,
   prettyJson,
   readBodyData,
   tailLines,
@@ -115,10 +115,10 @@ function PendingDiffView({ pending }: { pending: PendingEditDiff | undefined }):
       {visible.map((row: PendingDiffRow, index: number) => (
         <DiffRowView key={index} row={row} numbered={false} />
       ))}
-      {hidden > 0 ? <DiffFoldButton hidden={hidden} expanded={expanded} onToggle={() => setExpanded((v) => !v)} /> : null}
+      {pending.rows.length > DIFF_FOLD_ROWS ? <DiffFoldButton hidden={hidden} expanded={expanded} onToggle={() => setExpanded((v) => !v)} /> : null}
       {pending.truncated ? (
         <div className="trace-diff-note">
-          片段差异过长，仅计算并显示前 {pending.rows.length} 行；+{pending.addedLines} −{pending.removedLines}
+          片段差异过长，仅保留前 {pending.rows.length} 行；+{pending.addedLines} −{pending.removedLines}
           统计覆盖全部变更行，完整内容见下方原始数据。
         </div>
       ) : null}
@@ -134,13 +134,19 @@ function AppliedDiffView({ diff }: { diff: ToolEditDiff }): ReactNode {
   return (
     <div className="trace-diff">
       {visible.map((row: AppliedDiffRowView, index: number) => (
-        <DiffRowView key={index} row={row} numbered />
+        <Fragment key={index}>
+          {row.kind === 'context' && visible[index - 1]?.kind === 'context' &&
+            row.oldLine > (visible[index - 1] as Extract<AppliedDiffRowView, { kind: 'context' }>).oldLine + 1
+            ? <div className="trace-diff-note">… 已省略未改动的行 …</div>
+            : null}
+          <DiffRowView row={row} numbered />
+        </Fragment>
       ))}
-      {hidden > 0 ? <DiffFoldButton hidden={hidden} expanded={expanded} onToggle={() => setExpanded((v) => !v)} /> : null}
+      {rows.length > DIFF_FOLD_ROWS ? <DiffFoldButton hidden={hidden} expanded={expanded} onToggle={() => setExpanded((v) => !v)} /> : null}
       {diff.truncated ? (
         <div className="trace-diff-note">
-          差异行数或字符超出服务端预算，此处仅传输了部分差异行（展开也无法取回未传输内容）；+
-          {diff.addedLines} −{diff.removedLines} 统计覆盖整个替换，完整内容请查看目标文件。
+          部分差异因长度限制或脱敏省略，展开也无法取回未传输内容；+
+          {diff.addedLines} −{diff.removedLines} 统计覆盖整个替换。
         </div>
       ) : null}
     </div>
@@ -169,19 +175,19 @@ function RawToolData({ tool, defaultOpen = false }: { tool: ToolTrace; defaultOp
         <div className="trace-raw-body">
           {inputJson !== undefined ? (
             <div>
-              <div className="trace-section-label">入参（JSON）</div>
+              <div className="trace-code-head"><span className="trace-section-label">入参（JSON）</span><CopyButton text={inputJson} label="复制入参 JSON" /></div>
               <pre className="code-block-pre code-block-pre-flush">{inputJson}</pre>
             </div>
           ) : null}
           {tool.resultText !== undefined ? (
             <div>
-              <div className="trace-section-label">原始输出</div>
+              <div className="trace-code-head"><span className="trace-section-label">原始输出</span><CopyButton text={tool.resultText} label="复制原始输出" /></div>
               <pre className="code-block-pre code-block-pre-flush">{tool.resultText}</pre>
             </div>
           ) : null}
           {structuredJson !== undefined ? (
             <div>
-              <div className="trace-section-label">结构化结果（JSON）</div>
+              <div className="trace-code-head"><span className="trace-section-label">结构化结果（JSON）</span><CopyButton text={structuredJson} label="复制结构化结果" /></div>
               <pre className="code-block-pre code-block-pre-flush">{structuredJson}</pre>
             </div>
           ) : null}
@@ -195,14 +201,12 @@ function RawToolData({ tool, defaultOpen = false }: { tool: ToolTrace; defaultOp
 // edit
 // ---------------------------------------------------------------------------
 
-function inputPathOf(input: unknown): string | undefined {
-  const path = asRecord(input)?.path
-  return typeof path === 'string' ? path : undefined
-}
-
 function EditToolBody({ tool }: ToolBodyProps): ReactNode {
   const inputPath = inputPathOf(tool.input)
-  const pending = useMemo(() => buildPendingEditDiff(tool.input), [tool.input])
+  const pending = useMemo(
+    () => tool.status === 'running' || tool.status === 'error' || tool.isError ? buildPendingEditDiff(tool.input) : undefined,
+    [tool.input, tool.status, tool.isError],
+  )
   const resultCheck = useMemo(
     () => (tool.status === 'done' && !tool.isError ? checkEditToolResult(tool.structuredOutput) : undefined),
     [tool.status, tool.isError, tool.structuredOutput],
@@ -245,7 +249,7 @@ function EditToolBody({ tool }: ToolBodyProps): ReactNode {
     }
     return (
       <>
-        <div className="trace-section-label">已应用的差异 · 元数据不可用</div>
+        <div className="trace-section-label">执行成功 · 差异数据不可用</div>
         <div className="callout callout--error" role="alert">
           <HelmIcon name="alert-triangle" size={12} />
           <span className="callout-text">
@@ -357,7 +361,7 @@ function ReadToolBody({ tool }: ToolBodyProps): ReactNode {
     <>
       {data.isSpill ? (
         <>
-          <div className="trace-section-label">读取结果 · 超长已转产物（头部预览）</div>
+          <div className="trace-section-label">读取结果（含产物引用）</div>
           <pre className="code-block-pre code-block-pre-flush">{shown}</pre>
           {foldable ? (
             <button type="button" className="trace-inline-btn" onClick={() => setExpanded((v) => !v)}>
@@ -428,12 +432,12 @@ function BashToolBody({ tool }: ToolBodyProps): ReactNode {
         <>
           <div className="trace-section-label">输出{tool.status === 'running' ? '（执行中）' : ''}</div>
           <pre className="code-block-pre code-block-pre-flush">{expanded ? data.output : slice.visible}</pre>
-          {!expanded && slice.hiddenLines > 0 ? (
+          {slice.hiddenLines > 0 ? (
             <div className="trace-out-foot">
-              <span className="trace-tool-note">已折叠前 {slice.hiddenLines} 行</span>
-              <button type="button" className="trace-inline-btn" onClick={() => setExpanded(true)}>
-                <HelmIcon name="chevron-down" size={11} />
-                展开全部（共 {slice.totalLines} 行）
+              {!expanded ? <span className="trace-tool-note">已折叠前 {slice.hiddenLines} 行</span> : null}
+              <button type="button" className="trace-inline-btn" onClick={() => setExpanded((value) => !value)}>
+                <HelmIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
+                {expanded ? '收起' : `展开全部（共 ${slice.totalLines} 行）`}
               </button>
             </div>
           ) : null}
@@ -459,16 +463,16 @@ function GenericToolBody({ tool }: ToolBodyProps): ReactNode {
       {kv.length > 0 ? (
         <>
           <div className="trace-section-label">入参</div>
-          <div className="trace-kv">
+          <div className="kv-list trace-kv">
             {kv.map((entry) => (
-              <div key={entry.key} className="trace-kv-row">
-                <span className="trace-kv-key">{entry.key}</span>
+              <Fragment key={entry.key}>
+                <span className="kv-key">{entry.key}</span>
                 {entry.block ? (
-                  <pre className="trace-kv-block code-block-pre code-block-pre-flush">{entry.value}</pre>
+                  <pre className="kv-val trace-kv-block code-block-pre code-block-pre-flush">{entry.value}</pre>
                 ) : (
-                  <span className="trace-kv-val">{entry.value}</span>
+                  <span className="kv-val">{entry.value}</span>
                 )}
-              </div>
+              </Fragment>
             ))}
           </div>
         </>
@@ -479,10 +483,10 @@ function GenericToolBody({ tool }: ToolBodyProps): ReactNode {
           <pre className="code-block-pre code-block-pre-flush">
             {resultExpanded ? tool.resultText : slice.visible}
           </pre>
-          {!resultExpanded && slice.hiddenLines > 0 ? (
-            <button type="button" className="trace-inline-btn" onClick={() => setResultExpanded(true)}>
-              <HelmIcon name="chevron-down" size={11} />
-              展开全部（共 {slice.totalLines} 行）
+          {slice.hiddenLines > 0 ? (
+            <button type="button" className="trace-inline-btn" onClick={() => setResultExpanded((value) => !value)}>
+              <HelmIcon name={resultExpanded ? 'chevron-up' : 'chevron-down'} size={11} />
+              {resultExpanded ? '收起' : `展开全部（共 ${slice.totalLines} 行）`}
             </button>
           ) : null}
         </>
@@ -520,12 +524,19 @@ const TOOL_BODY_MAP: Record<string, (props: ToolBodyProps) => ReactNode> = {
   bash: BashToolBody,
 }
 
+export function ToolRawBody({ tool, conversationId }: ToolBodyProps): ReactNode {
+  return <>
+    <RawToolData tool={tool} defaultOpen />
+    {tool.artifactRef !== undefined ? <ArtifactEntry tool={tool} conversationId={conversationId} /> : null}
+  </>
+}
+
 export function ToolExpandedBody({ tool, conversationId }: ToolBodyProps): ReactNode {
-  const Body = TOOL_BODY_MAP[tool.toolName] ?? GenericToolBody
+  const Body = Object.hasOwn(TOOL_BODY_MAP, tool.toolName) ? TOOL_BODY_MAP[tool.toolName]! : GenericToolBody
   return (
     <div className="trace-tool-body">
       <Body tool={tool} conversationId={conversationId} />
-      <ArtifactEntry tool={tool} conversationId={conversationId} />
+      {tool.artifactRef !== undefined ? <ArtifactEntry tool={tool} conversationId={conversationId} /> : null}
     </div>
   )
 }

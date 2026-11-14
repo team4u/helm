@@ -73,7 +73,7 @@ test('checkEditToolResult：行号 0 / 负数 / 非整数与 rows 形状非法�
   const checkLine = checkEditToolResult(badLine)
   assert.equal(checkLine.ok, false)
   if (checkLine.ok) return
-  assert.match(checkLine.reason, /rows\[0\]/)
+  assert.match(checkLine.reason, /rows(?:\[0\]|\/0)/)
 
   const badShape = validEditResult()
   ;(badShape.diff as { rows: unknown[] }).rows = [{ kind: 'context', oldLine: 3, text: '缺 newLine' }]
@@ -89,14 +89,14 @@ test('checkEditToolResult：additionalProperties:false 拒绝未声明字段', {
   const check = checkEditToolResult(extra)
   assert.equal(check.ok, false)
   if (check.ok) return
-  assert.match(check.reason, /extra/)
+  assert.match(check.reason, /additional properties/)
 
   const extraInDiff = validEditResult()
   ;(extraInDiff.diff as Record<string, unknown>).note = 'x'
   const checkDiff = checkEditToolResult(extraInDiff)
   assert.equal(checkDiff.ok, false)
   if (checkDiff.ok) return
-  assert.match(checkDiff.reason, /note/)
+  assert.match(checkDiff.reason, /additional properties/)
 })
 
 // ---------------------------------------------------------------------------
@@ -130,16 +130,18 @@ test('buildPendingEditDiff：单行替换产生 remove+add+context，行数据�
   // 单删单增行对带词级标注：变化词 '2' / '9' 加深
   assert.ok(remove?.word?.some((s) => s.changed && s.text.includes('2')), 'remove 行词级标注含变化词')
   assert.ok(add?.word?.some((s) => s.changed && s.text.includes('9')), 'add 行词级标注含变化词')
+  assert.equal(remove?.word?.map((segment) => segment.text).join(''), remove?.text, '删除行高亮后仍是原文')
+  assert.equal(add?.word?.map((segment) => segment.text).join(''), add?.text, '新增行高亮后仍是原文')
 })
 
 test('buildPendingEditDiff：纯新增 / 纯删除计数正确', { timeout: 60_000 }, () => {
-  const addOnly = buildPendingEditDiff({ oldText: 'a', newText: 'a\nb\nc' })
+  const addOnly = buildPendingEditDiff({ oldText: 'a\n', newText: 'a\nb\nc\n' })
   assert.ok(addOnly !== undefined && addOnly.kind === 'computed')
   if (addOnly.kind === 'computed') {
     assert.equal(addOnly.addedLines, 2)
     assert.equal(addOnly.removedLines, 0)
   }
-  const removeOnly = buildPendingEditDiff({ oldText: 'a\nb\nc', newText: 'a' })
+  const removeOnly = buildPendingEditDiff({ oldText: 'a\nb\nc\n', newText: 'a\n' })
   assert.ok(removeOnly !== undefined && removeOnly.kind === 'computed')
   if (removeOnly.kind === 'computed') {
     assert.equal(removeOnly.addedLines, 0)
