@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AskSpec, ConversationSummary } from '@helm/protocol'
 import { asksApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
@@ -13,7 +13,6 @@ import {
   AGENT_SUB_LIST_PREVIEW,
   buildAgentStandings,
   conversationStatusDotClass,
-  conversationStatusTooltip,
   extractSidebarViews,
   filterAgentStandings,
   filterConversationsByTag,
@@ -21,6 +20,15 @@ import {
   isConversationDeletable,
   type AgentStanding,
 } from './sidebar-model.js'
+import {
+  backgroundAwareStatusTooltip,
+  collectBackgroundBadgeDocs,
+  resolveStandingStatusIndicator,
+  summarizeConversationBackgroundActivity,
+  type ConversationBackgroundActivity,
+  type ConversationBackgroundIndex,
+  type StandingStatusIndicator,
+} from './background-activity-model.js'
 
 function StatusDot({ connected }: { connected: boolean }) {
   return (
@@ -57,18 +65,51 @@ function HoverIconButton({
   )
 }
 
-function ConversationStatusDot({ conv }: { conv: ConversationSummary }) {
+function ConversationStatusDot({
+  conv,
+  background,
+}: {
+  conv: ConversationSummary
+  background?: ConversationBackgroundActivity
+}) {
   const dotClass = conversationStatusDotClass(conv.status)
-  if (!dotClass) return null
-  const tooltip = conversationStatusTooltip(conv.status, conv.doing, conv.lastError)
+  const backgroundActive = background?.active === true
+  if (dotClass === null && !backgroundActive) return null
+  const tooltip = backgroundAwareStatusTooltip({
+    status: conv.status,
+    doing: conv.doing,
+    lastError: conv.lastError,
+    backgroundActive,
+    backgroundSummary: background?.summary,
+  })
   return (
     <Tooltip content={tooltip} side="top">
-      <span
-        className={dotClass}
-        title={tooltip}
-        aria-label={tooltip}
-        role="status"
-      />
+      <span className="status-dot-group" title={tooltip} aria-label={tooltip} role="status">
+        {dotClass !== null && <span className={dotClass} />}
+        {backgroundActive && <span className="status-dot status-dot-background" />}
+      </span>
+    </Tooltip>
+  )
+}
+
+/** 智能体站位行折叠态指示器：代表会话基础圆点 + 名下任一会话的后台在途空心环。 */
+function StandingStatusDot({ indicator }: { indicator: StandingStatusIndicator }) {
+  const rep = indicator.representative
+  const dotClass = conversationStatusDotClass(rep.status)
+  if (dotClass === null && !indicator.backgroundActive) return null
+  const tooltip = backgroundAwareStatusTooltip({
+    status: rep.status,
+    doing: rep.doing,
+    lastError: rep.lastError,
+    backgroundActive: indicator.backgroundActive,
+    backgroundSummary: indicator.backgroundSummary,
+  })
+  return (
+    <Tooltip content={tooltip} side="top">
+      <span className="status-dot-group" title={tooltip} aria-label={tooltip} role="status">
+        {dotClass !== null && <span className={dotClass} />}
+        {indicator.backgroundActive && <span className="status-dot status-dot-background" />}
+      </span>
     </Tooltip>
   )
 }
@@ -270,6 +311,7 @@ function activeProfileIdOf(store: HelmStoreValue): string | null {
 function AgentStandingItem({
   agent,
   store,
+  background,
   onCreate,
   onNavigate,
   batchMode,
@@ -278,6 +320,7 @@ function AgentStandingItem({
 }: {
   agent: AgentStanding
   store: HelmStoreValue
+  background: ConversationBackgroundIndex
   onCreate: (profileId: string) => void
   onNavigate?: () => void
   batchMode?: boolean
@@ -292,6 +335,12 @@ function AgentStandingItem({
 
   const activeInAgent = agent.conversations.some((c) => isConversationActive(store, c.id))
   const standbyActive = isAgentStandbyActive(store, agent.profileId)
+  // 折叠态站位指示器：聚合名下全部会话（基础状态优先级 + 后台在途），
+  // 不只看 primaryConversation——后台活跃的非 primary 会话同样透出。
+  const standingIndicator = useMemo(
+    () => resolveStandingStatusIndicator(agent.conversations, background),
+    [agent.conversations, background],
+  )
   // 无折叠钮：展开由当前目标唯一推导（点击智能体即选中并展开）。
   const isOpen = batchMode
     ? hasSubList && expanded
@@ -350,9 +399,7 @@ function AgentStandingItem({
           <span className="nav-item-label">{agent.label}</span>
         </button>
         <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
-          {!isOpen && agent.primaryConversation && (
-            <ConversationStatusDot conv={agent.primaryConversation} />
-          )}
+          {!isOpen && standingIndicator !== null && <StandingStatusDot indicator={standingIndicator} />}
           {!isOpen && agent.primaryConversation?.nodeId && agent.primaryConversation.nodeId !== 'local' && (
             <RemoteNodeTag nodeId={agent.primaryConversation.nodeId} />
           )}
@@ -378,6 +425,7 @@ function AgentStandingItem({
         <AgentConversationsList
           agent={agent}
           store={store}
+          background={background}
           showAll={showAll}
           onToggleShowAll={() => setShowAll((v) => !v)}
           batchMode={batchMode}
@@ -393,6 +441,7 @@ function AgentStandingItem({
 function AgentConversationsList({
   agent,
   store,
+  background,
   showAll,
   onToggleShowAll,
   batchMode,
@@ -401,6 +450,7 @@ function AgentConversationsList({
 }: {
   agent: AgentStanding
   store: HelmStoreValue
+  background: ConversationBackgroundIndex
   showAll: boolean
   onToggleShowAll: () => void
   batchMode?: boolean
@@ -423,6 +473,7 @@ function AgentConversationsList({
           key={conv.id}
           conv={conv}
           store={store}
+          background={background.get(conv.id)}
           batchMode={batchMode}
           selected={selectedIds?.has(conv.id)}
           onToggleSelect={onToggleSelect}
@@ -454,12 +505,14 @@ function AgentConversationsList({
 function AgentConversationRow({
   conv,
   store,
+  background,
   batchMode,
   selected,
   onToggleSelect,
 }: {
   conv: ConversationSummary
   store: HelmStoreValue
+  background?: ConversationBackgroundActivity
   batchMode?: boolean
   selected?: boolean
   onToggleSelect?: (id: number) => void
@@ -558,7 +611,7 @@ function AgentConversationRow({
       <span className="nav-item-meta">
         <span className="tabular-nums">#{conv.id}</span>
         {conv.nodeId && conv.nodeId !== 'local' && <RemoteNodeTag nodeId={conv.nodeId} />}
-        <ConversationStatusDot conv={conv} />
+        <ConversationStatusDot conv={conv} background={background} />
         {!batchMode && (
           <span className="nav-item-row-actions">
             <span className="sidebar-split-action" onClick={(e) => e.stopPropagation()}>
@@ -596,7 +649,15 @@ function AgentConversationRow({
  * - 全部可见智能体稳定平铺（仅当前目标所属的那 1 个展开显示话题子列表）；
  * - 批量管理时展开扁平会话清单供勾选删除。
  */
-function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onNavigate?: () => void }) {
+function AgentStandingsGroup({
+  store,
+  background,
+  onNavigate,
+}: {
+  store: HelmStoreValue
+  background: ConversationBackgroundIndex
+  onNavigate?: () => void
+}) {
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [deleting, setDeleting] = useState(false)
@@ -782,6 +843,7 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
             key={agent.profileId}
             agent={agent}
             store={store}
+            background={background}
             onCreate={openStandby}
             onNavigate={onNavigate}
             batchMode={batchMode}
@@ -807,7 +869,7 @@ function AgentStandingsGroup({ store, onNavigate }: { store: HelmStoreValue; onN
 }
 
 /** 插件动态会话分组区（sidebar.section）：filterTag 分组通用渲染，支持 collapsible / defaultCollapsed。 */
-function SidebarSectionGroups({ store }: { store: HelmStoreValue }) {
+function SidebarSectionGroups({ store, background }: { store: HelmStoreValue; background: ConversationBackgroundIndex }) {
   const sections = store.groupedUi.sidebarSections.filter((s) => s.spec.filterTag)
   // 纯内容型 section（无 filterTag，但声明了 client 内容）：渲染内容本身，
   // 不因缺少 filterTag 静默丢弃（与 sidebar.item 的 client 内容渲染同一策略）。
@@ -822,7 +884,12 @@ function SidebarSectionGroups({ store }: { store: HelmStoreValue }) {
         </div>
       ))}
       {sections.map((section) => (
-        <SidebarSectionGroup key={`${section.pluginId}/${section.spec.id}`} store={store} section={section} />
+        <SidebarSectionGroup
+          key={`${section.pluginId}/${section.spec.id}`}
+          store={store}
+          section={section}
+          background={background}
+        />
       ))}
     </>
   )
@@ -831,11 +898,13 @@ function SidebarSectionGroups({ store }: { store: HelmStoreValue }) {
 /** 单条会话行（插件 sidebar.section 分组内渲染）。 */
 function ConversationRow({
   conv,
+  background,
   active,
   onOpen,
   onOpenSplit,
 }: {
   conv: ConversationSummary
+  background?: ConversationBackgroundActivity
   active: boolean
   onOpen: () => void
   onOpenSplit: () => void
@@ -850,7 +919,7 @@ function ConversationRow({
       </button>
       <span className="nav-item-meta">
         <span className="tabular-nums">#{conv.id}</span>
-        <ConversationStatusDot conv={conv} />
+        <ConversationStatusDot conv={conv} background={background} />
         <span className="nav-item-row-actions">
           <span className="sidebar-split-action" onClick={(e) => e.stopPropagation()}>
             <HoverIconButton
@@ -874,9 +943,11 @@ function ConversationRow({
 function SidebarSectionGroup({
   store,
   section,
+  background,
 }: {
   store: HelmStoreValue
   section: HelmStoreValue['groupedUi']['sidebarSections'][number]
+  background: ConversationBackgroundIndex
 }) {
   const spec = section.spec
   const tag = spec.filterTag as string
@@ -921,6 +992,7 @@ function SidebarSectionGroup({
           <ConversationRow
             key={conv.id}
             conv={conv}
+            background={background.get(conv.id)}
             active={isConversationActive(store, conv.id)}
             onOpen={() => store.openTarget({ kind: 'conversation', conversationId: conv.id })}
             onOpenSplit={() =>
@@ -1139,6 +1211,28 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   // 该空间最近的主舞台目标，URL 即该空间真实锚点，刷新/前进/后退天然可还原。
   const space = spaceForTarget(store.primaryTarget)
 
+  // 后台在途摘要（纯推导，零插件 ID 特判）：workbench.panel badge 契约 → 按会话
+  // 索引；badge doc 的按需加载在下方 effect（纯函数内不做副作用）。插件停用后
+  // UI 贡献与 doc 均从 store 消失，摘要自然归零，指示立即消失。
+  const background = useMemo(
+    () =>
+      summarizeConversationBackgroundActivity({
+        panels: store.groupedUi.workbenchPanels,
+        conversations: store.conversations,
+        pluginDocs: store.pluginDocs,
+      }),
+    [store.groupedUi.workbenchPanels, store.conversations, store.pluginDocs],
+  )
+  const badgeDocs = useMemo(
+    () => collectBackgroundBadgeDocs(store.groupedUi.workbenchPanels, store.conversations),
+    [store.groupedUi.workbenchPanels, store.conversations],
+  )
+  const { authenticated, ensurePluginDoc } = store
+  useEffect(() => {
+    if (!authenticated) return
+    for (const ref of badgeDocs) void ensurePluginDoc(ref.pluginId, ref.doc)
+  }, [badgeDocs, authenticated, ensurePluginDoc])
+
   return (
     <aside className="helm-sidebar">
       {/* 移动端抽屉：切换空间后保持抽屉展开——该空间的二级列表（设置中心清单/
@@ -1193,8 +1287,8 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           {space === 'conversations' ? (
             <>
               <PendingAsksPanel store={store} />
-              <AgentStandingsGroup store={store} onNavigate={onClose} />
-              <SidebarSectionGroups store={store} />
+              <AgentStandingsGroup store={store} background={background} onNavigate={onClose} />
+              <SidebarSectionGroups store={store} background={background} />
             </>
           ) : space === 'views' ? (
             <ViewNavGroup store={store} />
