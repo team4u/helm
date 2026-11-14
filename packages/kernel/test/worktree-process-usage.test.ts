@@ -349,6 +349,70 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     )
   })
 
+  it('注入瞬时拒读：最多复查两次，取得完整零占用快照后才清理', { timeout: 60_000 }, async () => {
+    const { record, allocator, fabric } = await allocateCleanWorktree('recheck-cleared')
+    let calls = 0
+    fabric.inspectPathUsage = async (_nodeId, path) => {
+      calls += 1
+      return {
+        path,
+        processes: [],
+        matchedTotal: 0,
+        processesTruncated: false,
+        complete: calls === 3,
+        diagnostics: calls === 3 ? [] : ['pid 42: fd 暂时不可读（EACCES）'],
+      }
+    }
+    const result = await allocator.cleanup({ worktreeId: record.id, force: true })
+    assert.equal(calls, 3)
+    assert.equal(result.removed, true)
+    assert.equal(existsSync(record.path), false)
+  })
+
+  it('注入持续权限盲区：复查有上限，force 仍拒绝并保留工作树', { timeout: 60_000 }, async () => {
+    const { record, allocator, fabric } = await allocateCleanWorktree('recheck-denied')
+    let calls = 0
+    fabric.inspectPathUsage = async (_nodeId, path) => {
+      calls += 1
+      return {
+        path,
+        processes: [],
+        matchedTotal: 0,
+        processesTruncated: false,
+        complete: false,
+        diagnostics: ['pid 42: fd 仍不可读（EACCES）'],
+      }
+    }
+    await assert.rejects(
+      () => allocator.cleanup({ worktreeId: record.id, force: true }),
+      (err: unknown) => err instanceof HelmError && err.code === 'worktree_process_check_failed',
+    )
+    assert.equal(calls, 3)
+    assert.equal(existsSync(record.path), true)
+  })
+
+  it('注入占用事实：即使快照不完整也立即拒绝，不用复查掩盖占用', { timeout: 60_000 }, async () => {
+    const { record, allocator, fabric } = await allocateCleanWorktree('recheck-occupied')
+    let calls = 0
+    fabric.inspectPathUsage = async (_nodeId, path) => {
+      calls += 1
+      return {
+        path,
+        processes: [{ pid: process.pid, source: 'fd', path }],
+        matchedTotal: 1,
+        processesTruncated: false,
+        complete: false,
+        diagnostics: ['另一 PID 不可读（EACCES）'],
+      }
+    }
+    await assert.rejects(
+      () => allocator.cleanup({ worktreeId: record.id, force: true }),
+      (err: unknown) => err instanceof HelmError && err.code === 'worktree_process_in_use',
+    )
+    assert.equal(calls, 1)
+    assert.equal(existsSync(record.path), true)
+  })
+
   it('fabric 入参校验：相对路径 / NUL 拒绝（validation_error）；远程未知节点离线显式 node_offline', { timeout: 60_000 }, async () => {
     const fabric = createEnvFabric({})
     await assert.rejects(

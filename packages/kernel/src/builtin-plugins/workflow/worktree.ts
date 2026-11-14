@@ -47,6 +47,7 @@ import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/conte
 import type { Context } from '@earendil-works/chord'
 import type { ExecutionError, FileError, Result, ShellExecResult } from '@earendil-works/pi-durable/env'
 import { randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, pathRulesForShape, targetPathShape, type NodePathUsage } from '@helm/protocol'
 
 /** 受管 worktree 持久化 key（docStore 命名空间 'runtime/worktrees'）。 */
@@ -1195,8 +1196,8 @@ export class WorktreeAllocator {
    * - 探测端口缺失 / 探测失败（节点离线、守护进程版本不支持、平台不支持、
    *   权限、超时）→ worktree_process_check_failed（不能证明 0 占用就不能
    *   删除，绝不静默跳过、绝不当作干净）；
-   * - 快照不完整（complete=false，如无权读取部分 PID / 扫描上限触发）→
-   *   worktree_process_check_failed 并携带 diagnostics（绝不假称 0 占用）；
+   * - 无命中的不完整快照最多复查两次（进程 exec/退出期间可能瞬时拒读）；
+   *   只有新的完整零占用快照可放行，持续不完整仍携带 diagnostics 拒绝；
    * - 命中（cwd / 打开 fd 引用 worktree 或其子目录）→ worktree_process_in_use
    *   （409，含 PID/进程名/引用路径，路径与诊断均经 redact 脱敏；进程名
    *   与 PID 非机密）；只诊断与拒绝，绝不自动 kill/发键；命中且快照同时
@@ -1217,6 +1218,16 @@ export class WorktreeAllocator {
     let usage: NodePathUsage
     try {
       usage = await probe(record.nodeId, record.path, signal)
+      // /proc 的 exec/退出窗口可能短暂拒读；复查必须重新取得完整快照，
+      // 不能凭重试次数、进程身份或延时把未知占用当作安全。实际命中立即拒绝。
+      for (
+        let attempt = 0;
+        attempt < 2 && usage.complete !== true && usage.matchedTotal === 0 && usage.processes.length === 0;
+        attempt += 1
+      ) {
+        await delay(25 * (attempt + 1), undefined, { signal })
+        usage = await probe(record.nodeId, record.path, signal)
+      }
     } catch (error) {
       const cause = error instanceof HelmError
         ? `${error.code}: ${error.message}`
