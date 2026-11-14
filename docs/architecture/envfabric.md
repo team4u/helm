@@ -93,6 +93,12 @@ export interface EnvExecInput {
 
 `NodeEnvRpcFunctions` 提供完整的文件系统操作集，本机与远端同构：文本/二进制读写与追加、截断、重命名；`envListFiles` 递归发现（带 truncated 标记）；行迭代器与二进制分块 reader（`envOpenTextLineReader / envOpenBinaryReader` + 按句柄 read/close）；目录遍历 reader；临时文件/目录创建；`envCanonicalPath / envExists / envFileInfo` 等探测原语。错误以 `RpcEnvError { code, message, spillPath? }` 结构化返回而非裸抛。
 
+### 目标节点进程占用快照
+
+`EnvFabric.inspectPathUsage(nodeId, path, signal?)` 与插件端口 `ctx.host.inspectNodePathUsage({ nodeId, path, signal? })` 查询绝对路径是否被进程 cwd 或打开的文件句柄引用。local 在 Hub 进程内执行，远端通过节点 `envPathUsage` RPC 执行；两侧共用 protocol 的纯扫描编排器，只注入各自的文件系统操作，不建立 kernel 对 node 包的运行时依赖，也不启动扫描子进程。
+
+结果提供 PID、进程名、引用来源和路径，以及扫描完整性、真实命中进程数和报告截断标记。无法读取的进程或句柄必须反映为 `complete: false`；消费方不能把不完整结果当作零占用。离线节点、不支持的平台或无效响应显式失败。当前只支持 Linux 的可见 `/proc` 视图，不读取命令行和环境变量，不自动终止进程；扫描是一次性快照，不提供跨进程互斥。`builtin:workflow` 在删除 worktree 前使用该端口，权限不足或不支持的平台会阻止自动清理，详见 [worktree 清理规则](../workflows/worktree-and-gate.md)。
+
 ### 节点文件互斥
 
 内核 `write`/`edit` 工具与插件自定义文件读改写在同一 Hub 进程内并发时，「读同一旧内容后各自写回」会丢更新。文件互斥队列以 `文件系统 id + canonical 路径` 为 key 做进程级串行化：
