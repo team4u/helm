@@ -24,7 +24,7 @@ export const TOOL_DIFF_MAX_ROWS = 160
 export const TOOL_DIFF_MAX_TEXT_CHARS = 32_768
 export const TOOL_DIFF_MAX_ROW_CHARS = 4_096
 
-const lineNumber = { type: 'integer', minimum: 1 }
+const lineNumber = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER }
 const text = { type: 'string', maxLength: TOOL_DIFF_MAX_ROW_CHARS }
 
 /** SDK 输出与 Web 展示入口共用同一 Schema，拒绝伪造的行号与非法数据。 */
@@ -63,8 +63,8 @@ export const EDIT_TOOL_RESULT_SCHEMA = {
             ],
           },
         },
-        addedLines: { type: 'integer', minimum: 0 },
-        removedLines: { type: 'integer', minimum: 0 },
+        addedLines: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+        removedLines: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
         firstChangedLine: lineNumber,
         truncated: { type: 'boolean' },
       },
