@@ -18,6 +18,9 @@
  * 3. 同 conversation 重复 requestId（SDK 去重语义）重建正确且不重复；
  * 4. 重启恢复活跃 run：observe 经 live.run.inputs 权威映射 + submission
  *    精确查询补齐 origin/meta/attachments 与关联索引；
+ *    关联时序窗口锁定：bindSubmission（submit 回包续延）必先行于生成任务
+ *    request 阶段的 pi.live.generation 写入 commit，即时完成/失败回合仍恰
+ *    一次含输入且结算后无残索引（SDK 时序保证，详见用例注释）；
  * 5. stopObserving 后在途异步 adoptInitial 不向 maps 复活条目；
  * 6. settledRuns 容量淘汰（64）与 deleteConversation 全量清理保持不变。
  *
@@ -354,6 +357,125 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         await database.close()
       }
     }
+  })
+
+  it('idle 提交即时完成/失败：bind 晚于 run 启动快照仍恰一次含输入且无残索引（SDK 时序窗口锁定）', timeout, async () => {
+    // 窗口事实（真实 pi-durable 1.5.0 实测）：run 启动 commit 的观察 advance
+    // 在 submit 回包前同步触发（markConsumed 因索引未登记而跳过）；
+    // bindSubmission 在 submit 续延微任务中先行于调度器 drain 的后续 commit，
+    // 而生成任务 request 阶段必先单独 commit `pi.live.generation={attempt}`
+    //（generation.js：模型调用与 failNoModel 之前），该 advance 时 run 仍在
+    //——重扫 run.inputs 后 markConsumed 命中。失败结算另在结算快照重标
+    // failure.inputs。若未来 SDK 时序变更打破该保证（任务 commit 先于
+    // submit 续延），本用例即红：即时完成回合将丢失输入归属。
+    const dir = join(root, 'instant-settle-window')
+    const mkHarness = async () => {
+      const database = await openHelmDatabase(dir)
+      const store = new HelmStore(database)
+      await store.load()
+      const faux = fauxProvider()
+      const models = createModels()
+      models.setProvider(faux.provider)
+      const harness = await Harness.open(
+        database.storage,
+        { models: () => models, registry: createRegistry(), settings: { followUpMode: 'all' } },
+        BACKGROUND_CONTEXT,
+      )
+      return { harness, store, database, faux }
+    }
+
+    const runCase = async (
+      caseDir: string,
+      response: ReturnType<typeof fauxAssistantMessage>,
+      expectedOutcome: 'completed' | 'failed',
+    ): Promise<void> => {
+      const { harness, store, database, faux } = await mkHarness()
+      try {
+        harness.resume()
+        const conv = await harness.createConversation(
+          { ownership: { kind: 'ownerless' }, agent: { model: { provider: 'faux', modelId: 'faux-1' } } },
+          BACKGROUND_CONTEXT,
+        )
+        const id = conv.id as number
+        store.upsertConv({
+          id,
+          title: '会话',
+          profileId: 'assistant',
+          nodeId: 'local',
+          tags: [],
+          cwd: dir,
+          model: 'faux/faux-1',
+          thinkingLevel: '',
+          unread: false,
+          pinned: false,
+          stateChangeSeq: 1,
+          completionSeq: 0,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        } as never)
+        const settled: TurnSettledPayload[] = []
+        const tracker = new ConversationTracker({
+          harness,
+          store,
+          events: {
+            onSummaryChanged: () => {},
+            onInputCommitted: () => {},
+            onAssistantText: () => {},
+            onTurnSettled: (payload) => {
+              settled.push(payload as TurnSettledPayload)
+            },
+          },
+        })
+        await tracker.observe(id)
+        const input: ConversationInput = {
+          id: `instant-${caseDir}`,
+          text: '瞬时回合问题',
+          origin: 'human',
+          createdAt: 1,
+        }
+        faux.setResponses([response])
+        tracker.registerInput(id, input)
+        // 与 ConversationInputPipeline.submitFreshInput 同序：bind 在 submit
+        // 回包续延中登记索引（给窗口以最恶劣的即时结算机会）。
+        const submitted = conv.submit(
+          {
+            type: 'input',
+            content: input.text,
+            entry: { kind: 'helm.input', data: { id: input.id, text: input.text, origin: 'human', createdAt: 1 } },
+            requestId: input.id,
+          },
+          BACKGROUND_CONTEXT,
+        )
+        const bound = submitted.then((sub) => tracker.bindSubmission(id, input.id, sub.id as number))
+        await Promise.all([submitted.catch(() => {}), bound])
+        await conv.waitForIdle(BACKGROUND_CONTEXT).catch(() => {})
+        await new Promise((r) => setTimeout(r, 200))
+
+        const payload = settled.find((s) => s.conversation.id === id)
+        assert.ok(payload !== undefined, `${caseDir}：结算到达`)
+        assert.equal(payload.outcome, expectedOutcome)
+        assert.deepEqual(
+          payload.inputs.map((i) => i.id),
+          [input.id],
+          `${caseDir}：即时${expectedOutcome}回合恰含本输入（无丢失无重复）`,
+        )
+        // 结算后无残索引/残登记（晚 bind 不得在 takeConsumed 后留脏项）。
+        const internals = tracker as unknown as TrackerInternals
+        assert.equal(internals.trackedInputs.get(id)?.size ?? 0, 0, `${caseDir}：追踪记录已清`)
+        assert.equal(internals.submissionIndex.get(id)?.size ?? 0, 0, `${caseDir}：关联索引已清`)
+        assert.equal(internals.consumedInputs.has(id), false, `${caseDir}：消费集已清`)
+      } finally {
+        await harness.close(BACKGROUND_CONTEXT)
+        await store.close()
+        await database.close()
+      }
+    }
+
+    // 即时完整回答（无流式 partial）：run 启动与结束 commit 间仅隔生成任务
+    // request 阶段的 generation 写入 commit —— 正是窗口最恶劣形态。
+    await runCase('ok', fauxAssistantMessage('瞬时回答'), 'completed')
+    // 即时失败（failNoModel 之外的模型错误路径：结算快照重标 failure.inputs）。
+    await runCase('fail', fauxAssistantMessage('x', { errorMessage: 'boom', stopReason: 'error' }), 'failed')
   })
 
   it('stopObserving 后在途异步 adoptInitial 不向 maps 复活条目', timeout, async () => {
