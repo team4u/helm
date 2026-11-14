@@ -320,7 +320,7 @@ function CommandPopover({
   }, [query, slashItems])
 
   // 键盘循环限定可见候选，修复显示截断但索引越界到不可见项的旧问题。
-  // visible 记忆化：条目集不变时保持数组身份稳定，键盘 effect 不因无关重渲染重挂全局监听。
+  // 记忆化保持数组身份稳定：条目集不变时键盘 effect 不重挂全局监听。
   const visible = useMemo(() => items.slice(0, SLASH_VISIBLE_LIMIT), [items])
   const visibleKeys = visible.map((item) => item.id).join('|')
 
@@ -620,12 +620,10 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const [widgetsExpanded, setWidgetsExpanded] = useState(false)
   // 活草稿版本：text / 编辑目标 / 附件任一变化推进，用于发送失败后判断草稿是否已被用户修改
   const liveDraftRef = useRef<ComposerDraftVersion>(draftVersionOf('', null, []))
-  // 普通函数供组件内部互调（await 后仍作用于发起时的 render 快照）；
-  // 离开组件的边界出口（prefill effect 依赖）用稳定包装，身份恒定。
-  const syncLiveDraft = (text: string, target: number | null, attachments: ReadonlyArray<PendingAttachment>): void => {
+  // 只触达实例 ref，无状态闭包：空依赖维持恒定身份，作为下游 useCallback 的稳定依赖。
+  const syncLiveDraft = useCallback((text: string, target: number | null, attachments: ReadonlyArray<PendingAttachment>): void => {
     liveDraftRef.current = draftVersionOf(text, target, attachments)
-  }
-  const syncLiveDraftStable = useStableCallback(syncLiveDraft)
+  }, [])
 
   const working = conversation.status === 'working' || conversation.status === 'blocked'
   const isMobile = useIsMobile(680)
@@ -641,7 +639,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     envBlockedRef.current = blocker.blocked
     setEnvBlocker(blocker)
   }
-  // 跨组件边界（SessionEnvBar prop + 其 effect 依赖）：稳定包装，取最新实现。
+  // SessionEnvBar 的 blocker effect 依赖此回调身份：普通函数会使其每 render 重跑（blocked 态下循环）。
   const handleEnvBlockerStable = useStableCallback(handleEnvBlocker)
   // 环境条卸载（开聊锁定 / 状态变化）时复位阻塞，避免残留阻止后续发送
   useEffect(() => {
@@ -652,17 +650,16 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const widgets = store.groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))
   const pills = store.groupedUi.composerPills.filter((p) => matchesUiScope(conversation, p.spec.scope))
 
-  const autoGrow = (): void => {
+  // 只读 textareaRef：空依赖维持恒定身份，ResizeObserver 不随重渲染拆建。
+  const autoGrow = useCallback((): void => {
     const el = textareaRef.current
     if (el === null) return
     el.style.height = '0px'
     el.style.height = `${el.scrollHeight}px`
-  }
-  // ResizeObserver / 自适应 layout effect 依赖：稳定身份，observer 不因无关重渲染反复拆除重建。
-  const autoGrowStable = useStableCallback(autoGrow)
+  }, [])
   useLayoutEffect(() => {
     autoGrow()
-  }, [text, isMobile, autoGrowStable])
+  }, [text, isMobile, autoGrow])
   useEffect(() => {
     const el = textareaRef.current
     if (el === null) return
@@ -674,7 +671,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [autoGrowStable])
+  }, [autoGrow])
   useEffect(() => {
     const extras = extrasRef.current
     if (extras === null) return
@@ -726,7 +723,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     setAttachments(nextAttachments)
     syncLiveDraft(prefill.text, nextEditing, nextAttachments)
     textareaRef.current?.focus()
-  }, [prefill, syncLiveDraftStable])
+  }, [prefill, syncLiveDraft])
 
   // 切换会话时退出历史编辑态并关闭全部浮层（补全源订阅随 token 置空停订）
   useEffect(() => {
@@ -766,8 +763,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
           const meta = await conversationsApi.uploadArtifact(conversation.id, file)
           setAttachments((prev) => {
             const next = [...prev, { artifactId: meta.id, name: meta.name, size: meta.size, mimeType: meta.mimeType }]
-            // await 后回到的是发起上传时的渲染快照（旧 text/editingEntryId）：
-            // 活版本只替换附件集，文本与编辑锚点取 liveDraftRef 活值，不回灌旧快照。
+            // await 后渲染快照已过期：文本/锚点取活值，只替换附件集。
             syncLiveDraft(liveDraftRef.current.text, liveDraftRef.current.targetEntryId, next)
             return next
           })
@@ -822,7 +818,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       el.setSelectionRange(pos, pos)
     })
   }
-  // 斜杠浮层 onPick 跨组件边界（其全局键盘 effect 依赖）：稳定包装，选中时取最新实现。
+  // 浮层 onPick/onClose 进其键盘 effect 依赖：稳定出口，调用时取最新实现。
   const applyPopoverStable = useStableCallback(applyPopover)
   const closeSlashPopoverStable = useStableCallback((): void => {
     setPopover(null)
@@ -845,7 +841,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     setCompletionToken(null)
     focusWithCaret(el, nextCaret)
   }
-  // 补全浮层 onPick 适配（跨组件边界进其键盘 effect 依赖）：稳定身份，选中时取最新实现。
+  // 补全浮层 onPick 适配：稳定出口，选中时取最新实现。
   const pickCompletionStable = useStableCallback((entry: MergedCompletionItem): void => {
     applyCompletion(entry.item.insertText)
   })
@@ -914,10 +910,8 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       if (el !== null) focusWithCaret(el, nextCaret)
     }).catch(() => { /* 动作调用已发送明确失败通知，保留原草稿。 */ }).finally(() => { commandPendingRef.current = false })
   }, [editingEntryId, attachments, syncLiveDraft, runPluginCommandFrom])
-  // 斜杠菜单条目存入状态后跨 render 存续：入口经稳定包装取最新实现，
-  // 替代渲染期手写 latest ref 赋值（原写法在 render 期写 ref，依赖纪律更弱）。
+  // 斜杠菜单条目跨 render 存续：入口经稳定包装取最新实现（替代渲染期写 latest ref）。
   const runPluginCommandStable = useStableCallback(runPluginCommand)
-  // 重建仅由技能/插件命令集驱动；runner 新鲜度由稳定包装保证，不靠条目重建。
   useEffect(() => {
     setSlashMenuItems(
       buildSlashMenuItems(availableSkills, slashPluginCommands, runPluginCommandStable),
@@ -1052,8 +1046,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       })
       setAttachments((current) => {
         const next = current.filter((attachment) => !sentAttachments.has(attachment.artifactId))
-        // await 后回到发起渲染：已发送附件从活版本一并移除（文本/锚点取活值），
-        // 避免 liveDraft 残留已发送附件误导后续 onlyIfEmpty 回填与回滚判定。
+        // 已发送附件从活版本移除，避免残留误导 onlyIfEmpty 回填与回滚判定。
         syncLiveDraft(liveDraftRef.current.text, liveDraftRef.current.targetEntryId, next)
         return next
       })
@@ -1224,7 +1217,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             key={`env-${conversation.id}`}
             conversation={conversation}
             sendBlocked={sendInFlight}
-            onBlockerChange={handleEnvBlocker}
+            onBlockerChange={handleEnvBlockerStable}
           />
         ) : null}
         <div

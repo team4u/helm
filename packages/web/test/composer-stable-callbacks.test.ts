@@ -33,7 +33,7 @@ const conv = (id: number): ConversationSummary => ({
 const convA = conv(1)
 const convB = conv(2)
 
-function makeStore(): { store: HelmStoreValue; notices: Array<Record<string, unknown>> } {
+function makeStore(opts?: { detail?: boolean }): { store: HelmStoreValue; notices: Array<Record<string, unknown>> } {
   const noop = () => {}
   const asyncNoop = async () => undefined
   const notices: Array<Record<string, unknown>> = []
@@ -41,7 +41,10 @@ function makeStore(): { store: HelmStoreValue; notices: Array<Record<string, unk
     authReady: true, authConfigured: true, authenticated: true, authError: null,
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const,
     themePreference: 'system' as const,
-    conversations: [convA, convB], conversationDetails: {}, conversationLives: {},
+    conversations: [convA, convB],
+    // 空 entries + idle：空会话展示起始环境配置条（SessionEnvBar）
+    conversationDetails: opts?.detail === true ? { 1: { ...convA, entries: [] } } : {},
+    conversationLives: {},
     conversationArtifacts: { 1: [], 2: [] }, pendingAsks: [], resolvedAsksByConv: {},
     plugins: [], uiContributions: [], groupedUi: groupUiContributions([]), pluginDocs: {},
     nodes: [], profiles: [], assetsLoaded: true, models: [], providers: [], credentials: [],
@@ -301,6 +304,44 @@ test('切 A→B 后 B 草稿全新：prefill 回填正常落地，onlyIfEmpty �
     app.show('composer-1', convA)
     assert.equal(app.ta().value, '', '切回 A 同样是全新草稿（按会话 key 重挂）')
     assert.equal(app.chips().length, 0)
+  } finally {
+    api.restore()
+    app.unmount()
+  }
+})
+
+test('起始环境条阻塞态不因无关重渲染循环：blocker 回调出口身份稳定', { timeout: 60_000 }, async () => {
+  const api = stubApi()
+  const { store } = makeStore({ detail: true })
+  const app = mountComposer(store)
+  try {
+    app.show('composer-1', convA)
+    const envBar = app.host.querySelector('.composer-env-bar')
+    assert.notEqual(envBar, null, '空会话展示起始环境条')
+    // 修改 cwd 草稿 → dirty → blocker={blocked:true} 每渲染新对象：
+    // 若 onBlockerChange 身份不稳定，SessionEnvBar 的 blocker effect 将每 render 重跑并循环
+    const cwdInput = envBar!.querySelector<HTMLInputElement>('input[aria-label="会话工作目录"]')!
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      const tracker = (cwdInput as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
+      const prev = tracker?.getValue() ?? ''
+      setter.call(cwdInput, '/tmp/work')
+      tracker?.setValue(prev)
+      cwdInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await flush()
+    const sendBtn = app.host.querySelector<HTMLButtonElement>('button.btn-send')!
+    assert.equal(sendBtn.disabled, true, '未保存环境修改时发送被阻塞')
+    // 无关重渲染（正文输入）不触发 blocker effect 重跑/循环；若循环将抛 Maximum update depth exceeded
+    await type(app.ta(), 'hello')
+    await type(app.ta(), 'hello world')
+    assert.equal(app.host.querySelector<HTMLButtonElement>('button.btn-send')!.disabled, true, '阻塞持续且状态稳定')
+    // Escape 取消 → 阻塞解除
+    await act(async () => {
+      cwdInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    await flush()
+    assert.equal(app.host.querySelector<HTMLButtonElement>('button.btn-send')!.disabled, false, '取消后发送恢复')
   } finally {
     api.restore()
     app.unmount()
