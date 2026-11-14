@@ -303,13 +303,15 @@ export function redactSchemaText(schema: Record<string, unknown>, redact: (t: st
  * 受管环境变量（HELM_*）：由内核 managed/stash 构造保持权威，Profile 不得覆盖
  * （与 buildToolEnv「受管变量最后固定覆盖」同一内核约定）。HELM_HUB_URL 例外
  * 语义见 buildSpawnPaneEnv：远端窗格只允许显式配置的有效可达地址，或节点通道
- * 报告的该节点真实可达 hubUrl。
+ * 报告的该节点真实可达 hubUrl。HELM_EXECUTION_SCOPE 为执行上下文作用域锚点
+ * （内核 executionScopeHash 合成，非机密），随其余受管键固定覆盖。
  */
 export const MANAGED_ENV_KEYS = Object.freeze([
   'HELM_ENV',
   'HELM_CONVERSATION_ID',
   'HELM_CWD',
   'HELM_DATA_DIR',
+  'HELM_EXECUTION_SCOPE',
   'HELM_TOKEN',
 ])
 
@@ -359,11 +361,14 @@ export function buildSpawnPaneEnv(
     }
   }
 
-  // 其余受管 HELM_* 最后固定覆盖（内核约定：managed/stash 权威）。
+  // 其余受管 HELM_* 最后固定覆盖（内核约定：managed/stash 权威）；受管键
+  // （含 HELM_HUB_URL）按大小写不敏感匹配剥除 Profile 注入——Windows env 名
+  // 大小写不敏感，helm_execution_scope / Helm_Cwd 等别名不得逃逸后劫持。
+  const managedUpper = new Set(
+    [...MANAGED_ENV_KEYS, 'HELM_HUB_URL'].map((key) => key.toUpperCase()),
+  )
   for (const [key, value] of Object.entries(profileEnv)) {
-    if (key === 'HELM_HUB_URL' && (explicitReachable || channelReachable)) continue
-    if (key === 'HELM_TOKEN' && (explicitReachable || channelReachable)) continue
-    if (MANAGED_ENV_KEYS.includes(key) || key === 'HELM_HUB_URL') continue
+    if (managedUpper.has(key.toUpperCase())) continue
     env[key] = value
   }
   Object.assign(env, managed)

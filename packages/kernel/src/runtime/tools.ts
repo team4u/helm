@@ -1,7 +1,12 @@
 /**
  * 内核自带本机工具：bash（真实进程组、超时、abort、跨 chunk UTF-8 保真、
- * 输出限额显式报错）、read（读文本文件）与 read_artifact（spill 产物分页
- * 读取，UTF-8 边界对齐保证前进）。
+ * 输出限额显式报错）、read（读文本文件）、read_artifact（spill 产物分页
+ * 读取，UTF-8 边界对齐保证前进）与 register_artifact（把靶点节点上的
+ * 真实普通文件复制登记为会话产物，支持二进制，上限 15 MiB）。
+ * read/write/edit/register_artifact 的结构化 path 与成功消息回显真实
+ * target 绝对路径（read 为词法绝对路径或远端 canonical）与 nodeId；
+ * bash 结构化输出回显实际 nodeId/cwd（规范化后启动目录）；文本 stdout
+ * 原样不动，绝不从外部成功文本猜测文件位置。
  *
  * 文件路径契约（read/write/edit，对齐 pi）：会话 cwd 仅作为相对路径的解析
  * 基准，绝对路径与 ../ 跨目录访问一律允许——bash 本就无文件边界，文件工具
@@ -32,8 +37,9 @@
  * - env 注入（唯一权威在 env/scoped-env.ts 的 ScopedExecutionEnv）：local
  *   继承 process.env（真实 PATH/HOME）并剥除受管 HELM_* 变量（大小写
  *   不敏感），受管变量（HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID /
- *   HELM_CWD / HELM_DATA_DIR / HELM_NODE_ID / 受管 HELM_TOKEN）由 composer
- *   （buildManagedEnv）现场合成固定覆盖，deps.cliBinDir 前置注入 PATH；
+ *   HELM_CWD / HELM_DATA_DIR / HELM_NODE_ID / HELM_EXECUTION_SCOPE /
+ *   受管 HELM_TOKEN）由 composer（buildManagedEnv）现场合成固定覆盖，
+ *   deps.cliBinDir 前置注入 PATH；
  *   远端节点绝不携带 Hub 宿主环境、也绝不合成默认 PATH（节点守护进程
  *   自身合并节点 PATH/HOME 并剥除节点宿主 HELM_TOKEN）；远端
  *   HELM_HUB_URL 仅取节点注册时上报的真实 hubUrl（未上报则省略该键，
@@ -67,7 +73,9 @@ import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { constants as fsConstants } from 'node:fs'
 import { mkdir, open, readFile, realpath, stat, writeFile } from 'node:fs/promises'
-import { composeExecutionEnv } from '../env/scoped-env.js'
+import { createHash } from 'node:crypto'
+import { MAX_ARTIFACT_BYTES } from '../services/artifacts.js'
+import { composeExecutionEnv, MANAGED_EXEC_ENV_VARS } from '../env/scoped-env.js'
 import { envWithFileMutationQueue, localWithFileMutationQueue } from '../env/file-mutation-queue.js'
 import { redactJsonValue } from '../redact.js'
 import {
@@ -152,6 +160,10 @@ export interface ShellRunResult {
   output: string
   timedOut: boolean
   signal: string | null
+  /** 实际执行节点（显式/会话绑定解析结果；供 bash 结构化输出回显，不入协议响应）。 */
+  nodeId?: string
+  /** 实际启动工作目录（normalizePathForTarget 规范化后；win32 视图已转换）。 */
+  cwd?: string
 }
 
 /** timeoutMs 校验：正有限整数且 ≤ 上限；非法显式抛错（不静默改默认）。 */
@@ -230,30 +242,33 @@ export async function runShell(
     }
   }
   const cwd = cwdNorm.path
+  // 执行事实回显（bash 结构化输出用）：解析出的真实节点与规范化启动目录；
+  // 仅存在于内部 ShellRunResult，不进 HTTP EnvExecResponse 协议。
+  const withTarget = (r: ShellRunResult): ShellRunResult => ({ ...r, nodeId, cwd })
   // 远端节点：经 EnvFabric 的 RemoteExecutionEnv 执行（绝不回退 local）；
   // 配置缺失（envFabric 未注入）与节点离线分别显式失败，绝不 fallthrough local。
   if (nodeId !== 'local') {
     if (deps.envFabric === undefined) {
-      return {
+      return withTarget({
         ok: false,
         exitCode: null,
         output: `env_fabric_missing: 节点 ${nodeId} 为远端但 EnvFabric 未注入（无法建立远端执行，绝不回退本机）`,
         timedOut: false,
         signal: null,
-      }
+      })
     }
     // isOnline 仅是「调用时已知晓离线」的快速失败提示；检查后到 RPC 之间
     // 断连的行为由 RemoteExecutionEnv 统一决定：等待节点重连（尊重 context
     // 取消，见 env/remote-env.ts 的离线韧性语义）。两条路径语义有意不同
     //（前者已知的确定离线立即报错，后者在途韧性等待），不是遗漏。
     if (!deps.envFabric.isOnline(nodeId)) {
-      return {
+      return withTarget({
         ok: false,
         exitCode: null,
         output: `node_offline: 节点 ${nodeId} 离线或未接入，无法在远端执行命令（绝不回退本机执行）`,
         timedOut: false,
         signal: null,
-      }
+      })
     }
   }
   // 远端节点：必须经 EnvFabric（无 fabric 时显式失败，绝不回退 local）；
@@ -283,13 +298,13 @@ export async function runShell(
     shellEnv = buildToolEnv(deps, cwd, options.conversationId, options.env, nodeId)
     shellInheritEnv = false
   } else {
-    return {
+    return withTarget({
       ok: false,
       exitCode: null,
       output: `env_fabric_missing: 节点 ${nodeId} 为远端但 EnvFabric 未注入（无法建立远端执行，绝不回退本机）`,
       timedOut: false,
       signal: null,
-    }
+    })
   }
   // 到达顺序聚合（stdout/stderr 混排按真实到达序，非先 stdout 后 stderr）。
   // 秘密脱敏在聚合全文上做：跨 chunk 撕裂的秘密在完整拼接后必然完整匹配。
@@ -332,13 +347,13 @@ export async function runShell(
   if (!result.ok) {
     // 远端断线：命令已启动、结果未知——error.code 为 unknown，绝不重试。
     if (result.error.code === 'unknown') {
-      return {
+      return withTarget({
         ok: false,
         exitCode: null,
         output: redactAll(combined + (combined === '' ? '' : '\n') + `[shell unknown: ${result.error.message}]`),
         timedOut: false,
         signal: null,
-      }
+      })
     }
   }
   if (exceeded) {
@@ -347,7 +362,7 @@ export async function runShell(
       options.onOutputChunk !== undefined
         ? '（流式模式：逐块输出已全部推送，此处仅终态诊断聚合超限）'
         : ''
-    return {
+    return withTarget({
       ok: false,
       exitCode: null,
       output: redactAll(
@@ -356,14 +371,14 @@ export async function runShell(
       ),
       timedOut: false,
       signal: null,
-    }
+    })
   }
   if (!result.ok) {
     const error = result.error
     const timedOut = error.code === 'timeout'
     const aborted = error.code === 'aborted'
     const label = aborted ? 'aborted' : timedOut ? `timeout after ${timeoutMs}ms` : error.code
-    return {
+    return withTarget({
       ok: false,
       exitCode: null,
       output: redactAll(
@@ -371,15 +386,15 @@ export async function runShell(
       ),
       timedOut,
       signal: null,
-    }
+    })
   }
-  return {
+  return withTarget({
     ok: result.value.exitCode === 0,
     exitCode: result.value.exitCode,
     output: redactAll(combined),
     timedOut: false,
     signal: null,
-  }
+  })
 }
 
 /**
@@ -417,9 +432,31 @@ export function buildToolEnv(
 }
 
 /**
+ * 执行作用域锚点：HELM_EXECUTION_SCOPE = `helm-<sha256 前 24 hex>`。
+ * 输入仅含非机密执行事实（Helm 实例标识 dataDir、会话 ID、节点 ID、实际
+ * cwd，数组 JSON 序列化防分隔符歧义）；同会话同靶点多命令恒定相同，跨
+ * 会话/节点/工作树/Helm 实例不同。它是供工具显式采用的稳定资源命名提示
+ * （锁文件/临时目录/缓存前缀等），不是 OS 沙箱、不承诺自动隔离第三方
+ * daemon；绝不包含任何 secret。
+ */
+export function executionScopeHash(
+  dataDir: string,
+  conversationId: number | undefined,
+  nodeId: string,
+  cwd: string,
+): string {
+  const digest = createHash('sha256')
+    .update(JSON.stringify([dataDir, conversationId ?? 0, nodeId, cwd]))
+    .digest('hex')
+  return `helm-${digest.slice(0, 24)}`
+}
+
+/**
  * 宿主受管环境变量（不含 process.env）：会话 SecretStash 注入 + 固定覆盖的
- * HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD /（仅 local）
- * HELM_DATA_DIR，以及受管 HELM_TOKEN（无受管 token 时绝不透传同名继承值）。
+ * HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD / HELM_EXECUTION_SCOPE /
+ * （仅 local）HELM_DATA_DIR，以及受管 HELM_TOKEN（无受管 token 时绝不透传同名继承值）。
+ * stash 键命中受管身份变量（含大小写变体）时一律剥除（Windows env 名大小写
+ * 不敏感，别名劫持回连/身份/作用域变量）；受管值仅在此合成 canonical 名。
  * local（继承 process.env）与远端（不携带宿主进程环境）共用此构造。
  * options.stashEnv 可覆盖默认的「全部活跃秘密」（外部 spawn 最小授权用：
  * 传 {} 即不携带任何会话机密，只保留受管 HELM_*）。
@@ -432,6 +469,10 @@ export function buildToolEnv(
  *  （verifyToken 认进程内摘要；诚实边界：token 会出现在远端机器内存/环境，
  *   与本机子进程同权，不承诺对远端机器零泄漏）。
  */
+/** 受管身份变量名大写集：stash/profile 一切大小写变体均不得提供（Windows
+ *  env 名大小写不敏感，lowercase 别名可在子进程读取时劫持 canonical 值）。 */
+const MANAGED_ENV_UPPER = new Set<string>(MANAGED_EXEC_ENV_VARS.map((name) => name.toUpperCase()))
+
 export function buildManagedEnv(
   deps: HelmToolDeps,
   cwd: string,
@@ -445,19 +486,28 @@ export function buildManagedEnv(
       : conversationId === undefined
         ? {}
         : deps.stashEnvFor(conversationId)
+  // stash 一律不得携带受管身份变量（含大小写变体）：受管值仅由下方固定覆盖
+  // 合成 canonical 名；secret 命中 helm_execution_scope / Helm_Cwd 等别名时
+  // 直接剥除（Windows env 名大小写不敏感，别名可劫持子进程读取）。拷贝用
+  // 展开语义（DefineOwnProperty）保留 __proto__ 等自有键，剥除用 delete。
+  const safeStashEnv: Record<string, string> = { ...stashEnv }
+  for (const key of Object.keys(stashEnv)) {
+    if (MANAGED_ENV_UPPER.has(key.toUpperCase())) delete safeStashEnv[key]
+  }
   const managedToken = deps.processToken?.()
   // 远端回连地址守恒：仅用节点注册时上报的真实 hubUrl；未上报则省略该键，
   // 绝不 fallback deps.hubUrl（Hub 本机地址对远端不可达）。
   const nodeHubUrl = nodeId !== 'local' ? deps.envFabric?.getNodeHubUrl(nodeId) : undefined
   const hubUrl = nodeId === 'local' ? deps.hubUrl : nodeHubUrl
   const env: Record<string, string> = {
-    ...stashEnv,
+    ...safeStashEnv,
     HELM_ENV: '1',
     ...(hubUrl !== undefined ? { HELM_HUB_URL: hubUrl } : {}),
     HELM_CONVERSATION_ID: String(conversationId ?? 0),
     HELM_CWD: cwd,
     ...(nodeId === 'local' ? { HELM_DATA_DIR: deps.dataDir } : {}),
     HELM_NODE_ID: nodeId,
+    HELM_EXECUTION_SCOPE: executionScopeHash(deps.dataDir, conversationId, nodeId, cwd),
   }
   if (managedToken === undefined) delete env['HELM_TOKEN']
   else env['HELM_TOKEN'] = managedToken
@@ -489,6 +539,8 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
         exitCode: { type: ['number', 'null'] },
         output: { type: 'string' },
         timedOut: { type: 'boolean' },
+        nodeId: { type: 'string', description: '实际执行节点（会话绑定解析结果）' },
+        cwd: { type: 'string', description: '实际启动工作目录（目标平台规范化后，非原始入参）' },
       },
       required: ['ok', 'output'],
     } as never,
@@ -515,12 +567,16 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
         api.callId,
         result.output,
       )
+      // 结构化回显实际执行事实（nodeId + 规范化启动 cwd）；文本 stdout 原样
+      // 不动，绝不从外部成功文本猜测文件位置。
       const structured = redactJsonValue(
         {
           ok: result.ok,
           exitCode: result.exitCode,
           output: spill.text,
           timedOut: result.timedOut,
+          ...(result.nodeId !== undefined ? { nodeId: result.nodeId } : {}),
+          ...(result.cwd !== undefined ? { cwd: result.cwd } : {}),
         },
         (t) => deps.redact(t),
       )
@@ -552,10 +608,11 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
     structuredOutputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string' },
+        path: { type: 'string', description: '实际读取的绝对路径（远端为 canonical 解析后；非原始入参）' },
+        nodeId: { type: 'string', description: '实际读取节点' },
         content: { type: 'string' },
       },
-      required: ['path', 'content'],
+      required: ['path', 'nodeId', 'content'],
     } as never,
     async execute(args, api, context) {
       const raw = args.path
@@ -652,7 +709,7 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
           )
           return {
             output: [{ type: 'text', text: spill.text }],
-            structuredOutput: { path: raw, content: spill.text } as JsonValue,
+            structuredOutput: { path: targetReal, nodeId, content: spill.text } as JsonValue,
           }
         }
         // local 节点：进程内 fs。stat（跟随软链）先做普通文件预检，给出清晰
@@ -718,7 +775,7 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
           )
           return {
             output: [{ type: 'text', text: spill.text }],
-            structuredOutput: { path: raw, content: spill.text } as JsonValue,
+            structuredOutput: { path: lexicalAbs, nodeId, content: spill.text } as JsonValue,
           }
         } finally {
           await handle.close()
@@ -813,11 +870,12 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
     structuredOutputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string' },
+        path: { type: 'string', description: '实际写入的绝对路径（已存在文件为 canonical 解析后；非原始入参）' },
+        nodeId: { type: 'string', description: '实际写入节点' },
         bytesWritten: { type: 'number' },
         artifactId: { type: 'string' },
       },
-      required: ['path', 'bytesWritten'],
+      required: ['path', 'nodeId', 'bytesWritten'],
     } as never,
     async execute(args, api, context) {
       const target0 = await resolveToolTarget(deps, api as never)
@@ -848,19 +906,22 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
               output: [
                 {
                   type: 'text' as const,
-                  text: `write_ok: ${args.path}（${bytes} 字节）\n[Artifact] id=${meta.id} name=${meta.name}`,
+                  text: `write_ok: ${targetAbs}（节点 ${nodeId}，${bytes} 字节）\n[Artifact] id=${meta.id} name=${meta.name}`,
                 },
               ],
               structuredOutput: {
-                path: args.path,
+                path: targetAbs,
+                nodeId,
                 bytesWritten: bytes,
                 artifactId: meta.id,
               } as JsonValue,
             }
           }
           return {
-            output: [{ type: 'text' as const, text: `write_ok: ${args.path}（${bytes} 字节）` }],
-            structuredOutput: { path: args.path, bytesWritten: bytes } as JsonValue,
+            output: [
+              { type: 'text' as const, text: `write_ok: ${targetAbs}（节点 ${nodeId}，${bytes} 字节）` },
+            ],
+            structuredOutput: { path: targetAbs, nodeId, bytesWritten: bytes } as JsonValue,
           }
         }
 
@@ -965,10 +1026,11 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
     structuredOutputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string' },
+        path: { type: 'string', description: '实际编辑的绝对路径（canonical 解析后；非原始入参）' },
+        nodeId: { type: 'string', description: '实际编辑节点' },
         replaced: { type: 'boolean' },
       },
-      required: ['path', 'replaced'],
+      required: ['path', 'nodeId', 'replaced'],
     } as never,
     async execute(args, api, context) {
       const target0 = await resolveToolTarget(deps, api as never)
@@ -1007,7 +1069,9 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
             const count = countOccurrences(readResult.value, args.oldText)
             if (count === 0) {
               return {
-                output: [{ type: 'text', text: `edit_failed: oldText 在 ${args.path} 中不存在（拒绝无操作编辑）` }],
+                output: [
+                  { type: 'text', text: `edit_failed: oldText 在 ${target.abs} 中不存在（拒绝无操作编辑）` },
+                ],
                 isError: true,
               }
             }
@@ -1016,7 +1080,7 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
                 output: [
                   {
                     type: 'text',
-                    text: `edit_failed: oldText 在 ${args.path} 中出现 ${count} 次（需唯一匹配；请扩大上下文使 oldText 唯一）`,
+                    text: `edit_failed: oldText 在 ${target.abs} 中出现 ${count} 次（需唯一匹配；请扩大上下文使 oldText 唯一）`,
                   },
                 ],
                 isError: true,
@@ -1026,8 +1090,10 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
             const writeResult = await env.writeFile(target.abs, updated, context)
             if (!writeResult.ok) throw new Error(writeResult.error.message)
             return {
-              output: [{ type: 'text', text: `edit_ok: ${args.path}（已替换 1 处）` }],
-              structuredOutput: { path: args.path, replaced: true } as JsonValue,
+              output: [
+                { type: 'text', text: `edit_ok: ${target.abs}（节点 ${nodeId}，已替换 1 处）` },
+              ],
+              structuredOutput: { path: target.abs, nodeId, replaced: true } as JsonValue,
             }
           }, context)
         }
@@ -1062,7 +1128,9 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
           const count = countOccurrences(content, args.oldText)
           if (count === 0) {
             return {
-              output: [{ type: 'text', text: `edit_failed: oldText 在 ${args.path} 中不存在（拒绝无操作编辑）` }],
+              output: [
+                { type: 'text', text: `edit_failed: oldText 在 ${target.abs} 中不存在（拒绝无操作编辑）` },
+              ],
               isError: true,
             }
           }
@@ -1071,7 +1139,7 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
               output: [
                 {
                   type: 'text',
-                  text: `edit_failed: oldText 在 ${args.path} 中出现 ${count} 次（需唯一匹配；请扩大上下文使 oldText 唯一）`,
+                  text: `edit_failed: oldText 在 ${target.abs} 中出现 ${count} 次（需唯一匹配；请扩大上下文使 oldText 唯一）`,
                 },
               ],
               isError: true,
@@ -1080,8 +1148,10 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
           const updated = content.replace(args.oldText, args.newText)
           await writeFile(target.abs, updated, 'utf8')
           return {
-            output: [{ type: 'text', text: `edit_ok: ${args.path}（已替换 1 处）` }],
-            structuredOutput: { path: args.path, replaced: true } as JsonValue,
+            output: [
+              { type: 'text', text: `edit_ok: ${target.abs}（节点 ${nodeId}，已替换 1 处）` },
+            ],
+            structuredOutput: { path: target.abs, nodeId, replaced: true } as JsonValue,
           }
         }, context.abortSignal)
       } catch (error) {
@@ -1104,6 +1174,265 @@ function countOccurrences(haystack: string, needle: string): number {
     index = haystack.indexOf(needle, index + needle.length)
   }
   return count
+}
+
+const registerArtifactParameters = obj({
+  path: str({ description: '要登记为会话产物的源文件路径（相对会话 cwd 或绝对路径，支持 ../ 跨目录，与 bash 同权）' }),
+  name: opt(str({ description: '产物展示名（缺省用源文件名）' })),
+  mimeType: opt(str({ description: 'MIME 类型（缺省按扩展名探测；文本类会脱敏后落盘，二进制字节原样保留）' })),
+})
+
+/**
+ * register_artifact 工具：把会话靶点节点上的真实普通文件复制登记为当前
+ * 会话产物（经 artifacts.writeUploaded 落 Hub 数据目录，Web 可预览/下载）。
+ *
+ * 诚实性契约：
+ * - 在目标节点读取真实文件字节（远端必经 EnvFabric 的 canonicalPath /
+ *   fileInfo / readBinaryFile；节点离线或 EnvFabric 缺失显式失败，绝不回退
+ *   local 误读 Hub 本机磁盘）；
+ * - 只接受普通文件（目录/特殊文件拒绝：stat 预检分类 + 同一 fd fstat 复核，
+ *   FIFO 等特殊文件在预检即拒绝，绝不在 open 上无限阻塞），读前 fileInfo/
+ *   fstat 预检 + 读后字节数复核，上限 MAX_ARTIFACT_BYTES（15 MiB，与上传入口
+ *   一致）；
+ * - local 用同一 fd stat/read（预检与读取同一文件标识，防打开后被替换；
+   按预检 size 有界读取，绝不对大/特殊文件无限 read）；
+ * - 结构化结果回显 artifactId、源文件绝对路径（local 为词法绝对路径、远端
+ *   为 canonical 解析后）、nodeId、name、size/mime；二进制保真与文本脱敏
+ *   由 ArtifactService 统一处理；一切异常文本经 deps.redact 脱敏。
+ */
+export function createRegisterArtifactTool(
+  deps: HelmToolDeps,
+): ToolRegistration<typeof registerArtifactParameters, never> {
+  return defineTool({
+    name: 'register_artifact',
+    description:
+      '把会话靶点节点上的真实普通文件登记为当前会话产物（复制进 Hub 数据目录，Web 界面可见/可预览/可下载）。支持二进制（字节原样保真）与文本（脱敏后落盘）；单文件上限 15 MiB；会话绑定远端节点时在目标节点读取，绝不回退本机。生成新文本内容时优先用 write(..., artifact: true)；本工具用于把已有文件（如命令输出、构建产物、图片）交给用户。',
+    parameters: registerArtifactParameters,
+    structuredOutputSchema: {
+      type: 'object',
+      properties: {
+        artifactId: { type: 'string', description: '产物 ID（可用 [文件名](artifact:<id>) 渲染）' },
+        path: { type: 'string', description: '源文件绝对路径（远端为 canonical 解析后）' },
+        nodeId: { type: 'string', description: '实际读取节点' },
+        name: { type: 'string', description: '产物展示名' },
+        size: { type: 'number', description: '登记字节数（文本类为脱敏后大小）' },
+        mimeType: { type: 'string', description: '产物 MIME 类型' },
+      },
+      required: ['artifactId', 'path', 'nodeId', 'name', 'size', 'mimeType'],
+    } as never,
+    async execute(args, api, context) {
+      if (deps.artifacts.writeUploaded === undefined) {
+        return {
+          output: [
+            { type: 'text', text: 'register_failed: 产物服务未配置 writeUploaded，无法登记会话产物' },
+          ],
+          isError: true,
+        }
+      }
+      const target0 = await resolveToolTarget(deps, api as never)
+      if ('error' in target0) {
+        return { output: [{ type: 'text', text: `register_failed: ${target0.error}` }], isError: true }
+      }
+      const { nodeId, base, platform } = target0
+      try {
+        const resolvedR = resolveTargetPath(args.path, base, platform)
+        if (!resolvedR.ok) {
+          return { output: [{ type: 'text', text: `invalid_path: ${resolvedR.reason}` }], isError: true }
+        }
+        const lexicalAbs = resolvedR.abs
+        const displayName =
+          args.name ?? nodePathForShape(targetPathShape(lexicalAbs)).basename(lexicalAbs)
+        let bytes: Uint8Array
+        let sourcePath: string
+        if (nodeId !== 'local') {
+          // 远端：必经 EnvFabric（缺失/离线显式失败，绝不回退 local）。
+          if (deps.envFabric === undefined) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text: `env_fabric_missing: 节点 ${nodeId} 为远端但 EnvFabric 未注入（无法读取远端文件，绝不回退本机）`,
+                },
+              ],
+              isError: true,
+            }
+          }
+          if (!deps.envFabric.isOnline(nodeId)) {
+            return {
+              output: [
+                { type: 'text', text: `node_offline: 节点 ${nodeId} 离线，无法读取远端文件（绝不回退本机）` },
+              ],
+              isError: true,
+            }
+          }
+          const env = deps.envFabric.envFor(nodeId, base)
+          // canonicalPath 先解析软链（与 read 一致）：fileInfo 是 lstat 语义。
+          const targetRealR = await env.canonicalPath(lexicalAbs, context)
+          if (!targetRealR.ok) throw new Error(targetRealR.error.message)
+          sourcePath = targetRealR.value
+          const infoR = await env.fileInfo(sourcePath, context)
+          if (!infoR.ok) throw new Error(infoR.error.message)
+          const info = infoR.value
+          if (info.kind === 'directory') {
+            return {
+              output: [
+                { type: 'text', text: `register_failed: ${args.path} 是目录，register_artifact 仅支持普通文件` },
+              ],
+              isError: true,
+            }
+          }
+          if (info.kind !== 'file') {
+            return {
+              output: [
+                { type: 'text', text: `register_failed: ${args.path} 不是普通文件（kind=${info.kind}）` },
+              ],
+              isError: true,
+            }
+          }
+          if (info.size > MAX_ARTIFACT_BYTES) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text: `artifact_too_large: ${args.path} 为 ${info.size} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`,
+                },
+              ],
+              isError: true,
+            }
+          }
+          const bytesR = await env.readBinaryFile(sourcePath, context)
+          if (!bytesR.ok) throw new Error(bytesR.error.message)
+          bytes = bytesR.value
+          // 读后复核：预检与读取之间文件可能增长，超限显式拒绝（不截断当成功）。
+          if (bytes.byteLength > MAX_ARTIFACT_BYTES) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text: `artifact_too_large: ${args.path} 读取到 ${bytes.byteLength} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`,
+                },
+              ],
+              isError: true,
+            }
+          }
+        } else {
+          // local：与 read 工具同构——先 stat（跟随软链）预检分类（目录/特殊
+          // 文件/超限；FIFO 等特殊文件在预检即拒绝，绝不在 open 上无限阻塞），
+          // 随后同一 fd 上 fstat 复核 + 有界读取（预检与读取同一文件标识，防
+          // 打开后被替换；按预检 size 分配缓冲，绝不对大/特殊文件无限 read）。
+          const preInfo = await stat(lexicalAbs)
+          if (preInfo.isDirectory()) {
+            return {
+              output: [
+                { type: 'text', text: `register_failed: ${args.path} 是目录，register_artifact 仅支持普通文件` },
+              ],
+              isError: true,
+            }
+          }
+          if (!preInfo.isFile()) {
+            return {
+              output: [
+                { type: 'text', text: `register_failed: ${args.path} 不是普通文件（特殊文件）` },
+              ],
+              isError: true,
+            }
+          }
+          if (preInfo.size > MAX_ARTIFACT_BYTES) {
+            return {
+              output: [
+                {
+                  type: 'text',
+                  text: `artifact_too_large: ${args.path} 为 ${preInfo.size} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`,
+                },
+              ],
+              isError: true,
+            }
+          }
+          const handle = await open(lexicalAbs, fsConstants.O_RDONLY)
+          try {
+            const statInfo = await handle.stat()
+            if (statInfo.isDirectory()) {
+              return {
+                output: [
+                  { type: 'text', text: `register_failed: ${args.path} 是目录，register_artifact 仅支持普通文件` },
+                ],
+                isError: true,
+              }
+            }
+            if (!statInfo.isFile()) {
+              return {
+                output: [
+                  { type: 'text', text: `register_failed: ${args.path} 在打开后不是普通文件，拒绝读取` },
+                ],
+                isError: true,
+              }
+            }
+            if (statInfo.size > MAX_ARTIFACT_BYTES) {
+              return {
+                output: [
+                  {
+                    type: 'text',
+                    text: `artifact_too_large: ${args.path} 为 ${statInfo.size} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`,
+                  },
+                ],
+                isError: true,
+              }
+            }
+            const buffer = Buffer.alloc(statInfo.size)
+            const { bytesRead } =
+              statInfo.size === 0
+                ? { bytesRead: 0 }
+                : await handle.read(buffer, 0, statInfo.size, 0)
+            // 读后复核：预检与读取之间内容被追加时以实际读到的字节数为准，
+            // 超限显式拒绝（不截断当成功）。
+            if (bytesRead > MAX_ARTIFACT_BYTES) {
+              return {
+                output: [
+                  {
+                    type: 'text',
+                    text: `artifact_too_large: ${args.path} 读取到 ${bytesRead} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`,
+                  },
+                ],
+                isError: true,
+              }
+            }
+            bytes = buffer.subarray(0, bytesRead)
+          } finally {
+            await handle.close()
+          }
+          sourcePath = lexicalAbs
+        }
+        const meta = await deps.artifacts.writeUploaded(api.conversationId as number, {
+          name: displayName,
+          bytes,
+          ...(args.mimeType !== undefined ? { mimeType: args.mimeType } : {}),
+        })
+        return {
+          output: [
+            {
+              type: 'text',
+              text:
+                `[Artifact] id=${meta.id} name=${meta.name}\n` +
+                `register_artifact_ok: 源 ${sourcePath}（节点 ${nodeId}，${meta.size} 字节，${meta.mimeType}）`,
+            },
+          ],
+          structuredOutput: {
+            artifactId: meta.id,
+            path: sourcePath,
+            nodeId,
+            name: meta.name,
+            size: meta.size,
+            mimeType: meta.mimeType,
+          } as JsonValue,
+        }
+      } catch (error) {
+        return {
+          output: [{ type: 'text', text: `register_failed: ${deps.redact(String(error))}` }],
+          isError: true,
+        }
+      }
+    },
+  })
 }
 
 const readArtifactParameters = obj({

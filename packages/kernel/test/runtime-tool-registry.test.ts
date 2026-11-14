@@ -131,7 +131,10 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     assert.equal(coreExt.name, 'helm-core')
     assert.ok(Array.isArray(coreExt.tools))
     const toolNames = coreExt.tools!.map((t) => t.name)
-    assert.deepEqual(toolNames.sort(), ['bash', 'edit', 'read', 'read_artifact', 'run_action', 'write'].sort())
+    assert.deepEqual(
+      toolNames.sort(),
+      ['bash', 'edit', 'read', 'read_artifact', 'register_artifact', 'run_action', 'write'].sort(),
+    )
 
     // 验证 run_action 元工具行为
     const runActionTool = coreExt.tools!.find((t) => t.name === 'run_action') as unknown as {

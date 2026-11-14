@@ -2,8 +2,8 @@
  * 运行时工具装配器：负责内核基础工具（helm-core）与插件衍生工具（helm-plugins）的注册与热装。
  *
  * 职责：
- * 1. installKernelTools：构造 bash/read/write/edit/read_artifact 与 run_action 元工具，
- *    统一以 wrapToolExecute 包装以支持 tool_call handled 接管返回；
+ * 1. installKernelTools：构造 bash/read/write/edit/read_artifact/register_artifact
+ *    与 run_action 元工具，统一以 wrapToolExecute 包装以支持 tool_call handled 接管返回；
  * 2. installPluginTools：将 PluginHost.listTools() 返回的 DerivedToolSpec 映射为真实 SDK
  *    工具扩展并安装到 registry（原地热替换旧插件工具扩展），出站结果经 pluginToolResult 脱敏与格式化；
  * 3. 消费与 HookBridge 共享的 handledToolCalls Map，实现无反向依赖的工具级拦截短路。
@@ -27,6 +27,7 @@ import {
   createEditTool,
   createReadArtifactTool,
   createReadTool,
+  createRegisterArtifactTool,
   createWriteTool,
 } from './tools.js'
 
@@ -63,9 +64,10 @@ export class RuntimeToolRegistry {
   constructor(private readonly options: RuntimeToolRegistryOptions) {}
 
   /**
-   * 内核基础工具（bash/read/write/edit/read_artifact + run_action 元工具）
-   * 统一注册（与插件工具同一 registry 机制；execute 统一包 handled 接管）。
-   * subagent / SubagentWorkflow / cleanup_worktree 由 builtin:workflow 插件提供。
+   * 内核基础工具（bash/read/write/edit/read_artifact/register_artifact +
+   * run_action 元工具）统一注册（与插件工具同一 registry 机制；execute 统一
+   * 包 handled 接管）。subagent / SubagentWorkflow / cleanup_worktree 由
+   * builtin:workflow 插件提供。
    */
   installKernelTools(): void {
     const { registry, toolDeps, getPluginHost, isArtifactAuthorized, redact, handledToolCalls, getConversation } = this.options
@@ -121,6 +123,7 @@ export class RuntimeToolRegistry {
       createReadArtifactTool(toolDeps, (convId: number, artifactConvId: number) =>
         isArtifactAuthorized(convId, artifactConvId),
       ),
+      createRegisterArtifactTool(toolDeps),
       createRunActionTool(toolHost),
     ].map((tool) => {
       const raw = tool as unknown as Record<string, unknown>

@@ -44,7 +44,10 @@ export interface ScopedExecutionEnvOptions {
 }
 
 /** 受管变量名集（大小写不敏感剥除；Windows env 名语义下 helm_token / Helm_Token
- *  等同名变体一并剥除，受管值最后固定覆写——策略由 composer 提供权威值）。 */
+ *  等同名变体一并剥除，受管值最后固定覆写——策略由 composer 提供权威值）。
+ *  HELM_EXECUTION_SCOPE 是执行上下文作用域锚点（helm-<sha256 前 24 hex>，
+ *  见 tools.ts 的 executionScopeHash）：非机密、仅供工具显式采用的稳定资源
+ *  命名提示（非 OS 沙箱），与其他绑定身份变量同等受管。 */
 export const MANAGED_EXEC_ENV_VARS = [
   'HELM_ENV',
   'HELM_HUB_URL',
@@ -52,6 +55,7 @@ export const MANAGED_EXEC_ENV_VARS = [
   'HELM_CWD',
   'HELM_DATA_DIR',
   'HELM_NODE_ID',
+  'HELM_EXECUTION_SCOPE',
   'HELM_TOKEN',
 ] as const
 

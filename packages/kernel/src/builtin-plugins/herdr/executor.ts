@@ -63,6 +63,34 @@ import { HERDR_STEER_CONTROLS } from './contracts.js'
  */
 const PANE_MANAGED_LOCK_KEYS: readonly string[] = [...MANAGED_ENV_KEYS, 'HELM_HUB_URL', 'HELM_NODE_ID']
 
+/** 受管键大写集：授予值（secretNames 命中的 stash 键）的大小写变体同样不得劫持。 */
+const PANE_MANAGED_LOCK_UPPER: ReadonlySet<string> = new Set(
+  PANE_MANAGED_LOCK_KEYS.map((key) => key.toUpperCase()),
+)
+
+/**
+ * 授予 env 与基线受管锁定合并（纯函数，applyPaneSecrets 唯一实现）：
+ * - 授予值叠加到基线之上（同名覆盖）；
+ * - 受管键（含大小写变体别名，如 helm_execution_scope / Helm_Cwd）一律剥除
+ *   后重申基线 canonical 值——Windows env 名大小写不敏感，别名可在子进程
+ *   读取时劫持回连/身份/作用域变量（与内核 buildManagedEnv 固定覆盖同构）。
+ */
+export function mergeGrantedEnvWithManagedLocks(
+  baseline: Record<string, string>,
+  granted: Record<string, string>,
+): Record<string, string> {
+  const env: Record<string, string> = { ...baseline, ...granted }
+  for (const key of Object.keys(env)) {
+    if (PANE_MANAGED_LOCK_UPPER.has(key.toUpperCase()) && !PANE_MANAGED_LOCK_KEYS.includes(key)) {
+      delete env[key]
+    }
+  }
+  for (const key of PANE_MANAGED_LOCK_KEYS) {
+    if (key in baseline) env[key] = baseline[key]!
+  }
+  return env
+}
+
 export interface ExecutorHost {
   /** 父会话 cwd 解析（宿主 getConversation 桥；错误如实上抛）。 */
   parentCwdOf(parentConversationId: number): string | undefined
@@ -575,11 +603,7 @@ export class HerdrExecutor {
     const selected = Object.fromEntries(
       secretNames.filter((name) => Object.hasOwn(granted, name)).map((name) => [name, granted[name]!]),
     )
-    const env: Record<string, string> = { ...baseline, ...selected }
-    for (const key of PANE_MANAGED_LOCK_KEYS) {
-      if (key in baseline) env[key] = baseline[key]!
-    }
-    return env
+    return mergeGrantedEnvWithManagedLocks(baseline, selected)
   }
 
   private executionInfoOf(pane: ManagedPane): AgentExecutionInfo {
