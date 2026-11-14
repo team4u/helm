@@ -12,7 +12,11 @@
  * 6. 窗口来源诚实性：helmContextWindowKnown === false 的静态缺省窗口不得
  *    作为已知窗口携带（contextWindow 省略）；
  * 7. 压缩失败通知：新的 compactionFailure 恰发一次脱敏 error notification，
- *    同一 taskId 重复快照不重复通知，新 taskId 再报。
+ *    同一 taskId 重复快照不重复通知，新 taskId 再报；
+ * 8. models.changed 定向迫齐（onModelsChanged）：未知→已知/已知→移除的窗口
+ *    变化经既有刷新链追齐，usage-only 更新可达 summary 且不推进
+ *    stateChangeSeq；providers 定向与同值重复事件去重；在途置 dirty 迫齐；
+ * 9. 活跃 run 期间窗口变化仍发布（不静默到回合结束），相同窗口不重复发帧。
  *
  * 确定性：刷新的调度与 harness.conversation 调用都在同步段发生（断言即时可
  * 见）；异步推进全部经手动释放的 deferred / ensureContextUsage settle 事件，
@@ -197,6 +201,8 @@ function trackerEnv(options?: {
   initialEntries?: EntrySpec[]
   initialLive?: Record<string, unknown>
   redactError?: (text: string) => string
+  /** 目录集合现读（缺省固定 faux 双模型）；模拟目录刷新 = 重新赋值返回值。 */
+  models?: () => Models
 }): {
   harness: FakeHarness
   store: FakeStore
@@ -209,12 +215,12 @@ function trackerEnv(options?: {
   const store = new FakeStore()
   store.convs.set(1, metaOf(options?.model ?? 'faux/m-known'))
   const events = eventsOf()
-  const models = modelsWithFaux()
+  const models = options?.models ?? modelsWithFaux
   const tracker = new ConversationTracker({
     harness: harness as unknown as Harness,
     store: store as unknown as HelmStore,
     events,
-    models: () => models,
+    models: () => models(),
     ...(options?.redactError !== undefined ? { redactError: options.redactError } : {}),
   })
   return { harness, store, events, tracker }
@@ -470,5 +476,156 @@ describe('上下文用量刷新：压缩失败通知', { timeout: 60_000 }, () =
     env.harness.advance(viewOf({ live: {} }))
     env.harness.advance(viewOf({ live: { compactionFailure: { taskId: 6, trigger: 'threshold', error: 'again' } } }))
     assert.equal(env.events.notifications.length, 2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 8. models.changed 定向迫齐（onModelsChanged）
+// ---------------------------------------------------------------------------
+
+/** 单模型 faux 目录集：known 携带真实窗口；未知用静态缺省标记；
+ * served=false 模拟供应商不再供应该模型（getModel 命不中）。 */
+function modelsWithWindowState(window: number, known: boolean, served: boolean): Models {
+  const models = createModels()
+  const base = {
+    id: 'm-1',
+    name: 'm-1',
+    provider: 'faux',
+    api: 'openai-completions',
+    baseUrl: 'http://faux.local',
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    reasoning: false,
+    maxTokens: 4_096,
+  }
+  const model = known
+    ? { ...base, contextWindow: window }
+    : { ...base, contextWindow: 128_000, helmContextWindowKnown: false }
+  const list = served ? [model] : []
+  const provider = {
+    id: 'faux',
+    name: 'faux',
+    baseUrl: 'http://faux.local',
+    auth: {},
+    getModels: () => list,
+    getAllModels: () => list,
+  } as unknown as Provider
+  models.setProvider(provider)
+  return models
+}
+
+describe('上下文用量刷新：models.changed 定向迫齐', { timeout: 60_000 }, () => {
+  it('未知→已知：idle 会话不发新输入也追齐窗口，summary 可达且不推进 stateChangeSeq', { timeout: 60_000 }, async () => {
+    let models = modelsWithWindowState(0, false, true)
+    const env = trackerEnv({ model: 'faux/m-1', models: () => models })
+    await env.tracker.observe(1)
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, undefined, '初始目录无窗口')
+    const seqBefore = env.store.convs.get(1)!.stateChangeSeq
+    env.events.summaries.length = 0
+
+    models = modelsWithWindowState(400_000, true, true)
+    env.tracker.onModelsChanged([])
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000, '目录刷新后窗口追齐')
+    assert.equal(env.events.summaries.length, 1, '用量变化必须发布 summary（可达 SSE）')
+    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, 'usage-only 不得推进 stateChangeSeq')
+  })
+
+  it('providers 定向：非目标供应商不刷新；同值重复事件不重复发帧', { timeout: 60_000 }, async () => {
+    let models = modelsWithWindowState(0, false, true)
+    const env = trackerEnv({ model: 'faux/m-1', models: () => models })
+    await env.tracker.observe(1)
+    await env.tracker.ensureContextUsage(1)
+    const calls = env.harness.contextCalls
+    env.tracker.onModelsChanged(['other'])
+    assert.equal(env.harness.contextCalls, calls, '非目标供应商不得触发刷新')
+
+    models = modelsWithWindowState(300_000, true, true)
+    env.tracker.onModelsChanged(['faux'])
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 300_000, '定向命中后追齐')
+    const published = env.events.summaries.length
+
+    env.tracker.onModelsChanged([])
+    env.tracker.onModelsChanged([])
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.events.summaries.length, published, '同值重复事件经指纹去重不重复发帧')
+  })
+
+  it('已知→供应商不再供应：窗口恢复未知并发布', { timeout: 60_000 }, async () => {
+    let models = modelsWithWindowState(400_000, true, true)
+    const env = trackerEnv({ model: 'faux/m-1', models: () => models })
+    await env.tracker.observe(1)
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000)
+
+    models = modelsWithWindowState(0, false, false)
+    env.tracker.onModelsChanged([])
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, undefined, '模型不在集合：窗口恢复未知')
+    assert.ok(env.events.summaries.length >= 1, '恢复未知也要可达 summary')
+  })
+
+  it('刷新在途期间的二次事件置 dirty 迫齐：不并启新刷新，最终取最新窗口', { timeout: 60_000 }, async () => {
+    let models = modelsWithWindowState(0, false, true)
+    const env = trackerEnv({ model: 'faux/m-1', models: () => models })
+    await env.tracker.observe(1)
+    await env.tracker.ensureContextUsage(1)
+
+    const gate = env.harness.pushDeferred()
+    models = modelsWithWindowState(250_000, true, true)
+    env.tracker.onModelsChanged([])
+    const inFlight = env.harness.contextCalls
+    models = modelsWithWindowState(999_000, true, true)
+    env.tracker.onModelsChanged([])
+    assert.equal(env.harness.contextCalls, inFlight, '在途期间二次事件不得并启新刷新')
+
+    gate.resolve(usageView(100))
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 999_000, 'dirty 迫齐后取最新窗口')
+  })
+
+  it('未观察但有缓存的会话同样追齐（stopObserving 后目录刷新仍更新缓存）', { timeout: 60_000 }, async () => {
+    let models = modelsWithWindowState(0, false, true)
+    const env = trackerEnv({ model: 'faux/m-1', models: () => models })
+    await env.tracker.observe(1)
+    await env.tracker.ensureContextUsage(1)
+    env.tracker.stopObserving(1)
+
+    models = modelsWithWindowState(400_000, true, true)
+    env.tracker.onModelsChanged([])
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000, '缓存会话不观察也追齐')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 9. 活跃 run 期间的窗口变化发布
+// ---------------------------------------------------------------------------
+
+describe('上下文用量刷新：活跃 run 期间的窗口变化', { timeout: 60_000 }, () => {
+  it('窗口变化仍发布（不静默到回合结束）；相同窗口重复事件不重复发帧', { timeout: 60_000 }, async () => {
+    let models = modelsWithWindowState(0, false, true)
+    const env = trackerEnv({
+      model: 'faux/m-1',
+      initialLive: { run: { taskId: 7, inputs: [] } },
+      models: () => models,
+    })
+    await env.tracker.observe(1)
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.events.summaries.length, 0, '首次填充无 compacting 保持静默')
+    const seqBefore = env.store.convs.get(1)!.stateChangeSeq
+
+    models = modelsWithWindowState(400_000, true, true)
+    env.tracker.onModelsChanged([])
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000)
+    assert.equal(env.events.summaries.length, 1, 'active run 期间窗口变化必须发布')
+    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, '不推进 stateChangeSeq')
+
+    env.tracker.onModelsChanged([])
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.events.summaries.length, 1, '相同窗口重复事件不得重复发帧')
   })
 })

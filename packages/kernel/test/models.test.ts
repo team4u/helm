@@ -21,9 +21,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import type { ProviderConfig } from '@helm/protocol'
-import type { ApiKeyAuth, MutableModels } from '@earendil-works/pi-ai'
+import type { ApiKeyAuth, MutableModels, Models, Provider } from '@earendil-works/pi-ai'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { createModels } from '@earendil-works/pi-ai/models'
 import {
   buildModels,
   knownContextWindowOf,
@@ -222,6 +223,45 @@ describe('兼容网关（openai 协议）', { timeout: 60_000 }, () => {
     assert.ok(builtin, '内置 provider 目录应存在带窗口模型')
     assert.equal(knownContextWindowOf(builtin), builtin.contextWindow, '内置模型窗口如实已知')
     assert.equal(knownContextWindowOf(undefined), undefined)
+  })
+
+  test('listModelCatalog 只投影真实已知窗口：静态缺省/非正/非有限一律省略', { timeout: 60_000 }, async () => {
+    const models = createModels()
+    const base = {
+      name: 'w',
+      provider: 'win',
+      api: 'openai-completions',
+      baseUrl: 'http://win.local',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      reasoning: false,
+      maxTokens: 4_096,
+    }
+    // 形态对齐 Magpie 目录产物（toPiModel）：已知窗口无标记，未知携带
+    // helmContextWindowKnown:false + 保守缺省 128k。
+    const list = [
+      { ...base, id: 'known', contextWindow: 400_000 },
+      { ...base, id: 'static-default', contextWindow: 128_000, helmContextWindowKnown: false },
+      { ...base, id: 'infinite', contextWindow: Number.POSITIVE_INFINITY },
+      { ...base, id: 'zero', contextWindow: 0 },
+    ]
+    const provider = {
+      id: 'win',
+      name: 'win',
+      baseUrl: 'http://win.local',
+      auth: {},
+      getModels: () => list,
+      getAllModels: () => list,
+    } as unknown as Provider
+    models.setProvider(provider)
+
+    const catalog = await listModelCatalog(models)
+    const byId = new Map(catalog.models.map((entry) => [entry.modelId, entry]))
+    assert.equal(byId.get('known')!.contextWindow, 400_000, '真实已知窗口如实投影')
+    assert.equal('contextWindow' in (byId.get('static-default') ?? {}), false, '静态缺省窗口必须省略')
+    assert.equal('contextWindow' in (byId.get('infinite') ?? {}), false, '非有限窗口必须省略')
+    assert.equal('contextWindow' in (byId.get('zero') ?? {}), false, '非正窗口必须省略')
+    assert.equal(knownContextWindowOf(list[2] as never), undefined, 'Infinity 不得透传')
   })
 
   test('streamSimple 组装 baseURL/path/bearer/model id 并收到真实流式回答', { timeout: 60_000 }, async () => {

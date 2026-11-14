@@ -1117,6 +1117,33 @@ export class ConversationTracker {
       })
   }
 
+  /** models.changed 后定向迫齐上下文用量缓存。
+   *
+   * 目录刷新/集合重建可能让同一模型的窗口从未知变已知（或反向、数值变化、
+   * 供应商不再供应）：已观察/已缓存会话的旧用量必须追上，否则 idle 会话
+   * 不发新输入就永远停留在旧窗口。只调度既有刷新链（在途置 dirty 迫齐、
+   * 代数守护、指纹去重），不新增异步机制、不触发 LLM 请求；usage-only
+   * 更新不推进 stateChangeSeq（applyContextUsage 的既有纪律）。
+   *
+   * - providers 非空：只刷新生效模型属于这些供应商的会话（事件定向）；
+   * - providers 空：目录整体可能已换，全部追齐；
+   * - 只看已观察（observeGenerations）或已有用量缓存（contextUsageCache）
+   *   的会话：不扫全量历史会话（启动期/大目录下的昂贵 N 次扫描），未观察
+   *   且未缓存的会话首次波取时自然按新目录计算。
+   */
+  onModelsChanged(providers: readonly string[]): void {
+    const wanted = providers.length > 0 ? new Set(providers) : undefined
+    const targets = new Set([...this.contextUsageCache.keys(), ...this.observeGenerations.keys()])
+    for (const id of targets) {
+      const meta = this.store.getConv(id)
+      if (!meta || meta.model === '') continue
+      const slash = meta.model.indexOf('/')
+      const provider = slash > 0 ? meta.model.slice(0, slash) : meta.model
+      if (wanted !== undefined && !wanted.has(provider)) continue
+      this.scheduleContextUsageRefresh(id)
+    }
+  }
+
   /** 确保该会话 contextUsage 缓存已填充且刷新链归寂（首个详情读等同步可见路径）。
    *
    * - 已缓存且无在途刷新：立即返回（已缓存的分页读零开销，不重复刷新）；
@@ -1213,12 +1240,15 @@ export class ConversationTracker {
       return
     }
     if (key === previousKey) return
-    // run 活跃期间：仅压缩实时状态（compacting）变化才发帧；token 变化是
-    // 瞬态，等本回合结算帧携带（emitSettled 附加缓存值），避免 working
-    // 期间重复 doing 语义帧（帧纪律：不逐 token 发摘要）。
+    // run 活跃期间：仅压缩实时状态（compacting）与上下文窗口（contextWindow）
+    // 变化才发帧；token 变化是瞬态，等本回合结算帧携带（emitSettled 附加
+    // 缓存值），避免 working 期间重复 doing 语义帧（帧纪律：不逐 token 发
+    // 摘要）。窗口变化是目录刷新/模型切换带来的语义事实，不是逐 token 噪声，
+    // 不得静默到回合结束；同样不推进 stateChangeSeq。
     if (this.liveViews.get(conversationId)?.run !== undefined) {
       const compactionChanged = (previous?.compacting ?? null) !== (usage.compacting ?? null)
-      if (!compactionChanged) return
+      const windowChanged = (previous?.contextWindow ?? null) !== (usage.contextWindow ?? null)
+      if (!compactionChanged && !windowChanged) return
     }
     // 发布摘要（携带新 usage）：不推进 stateChangeSeq——水位线专属状态机/
     // doing/Ask 的 CAS 语义，派生展示数据不得污染（否则 pending Ask 会被伪

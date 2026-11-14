@@ -126,6 +126,31 @@ test('模型目录携带全局默认模型', { timeout: 60_000 }, () => {
   assert.equal(catalog.defaultModel, 'magpie/group/smart')
 })
 
+test('模型目录窗口字段：真实已知正数透传，未知省略，非法值显式拒绝', { timeout: 60_000 }, () => {
+  // 已知正数窗口：透传到 ModelDescriptor
+  const known = normalizeModelCatalogInfo({ models: [
+    { provider: 'magpie', modelId: 'glm-4.6', available: true, contextWindow: 200_000 },
+  ] })
+  assert.equal(known.models[0]?.contextWindow, 200_000)
+
+  // 未知窗口：省略字段，不推测、不补缺省
+  const unknown = normalizeModelCatalogInfo({ models: [
+    { provider: 'magpie', modelId: 'kimi-k2', available: true },
+  ] })
+  assert.equal('contextWindow' in (unknown.models[0] ?? {}), false)
+
+  // 非法窗口（0 / 负数 / 非有限数 / 非数字）：边界显式拒绝，不静默丢弃
+  for (const bad of [0, -128_000, Number.POSITIVE_INFINITY, '200000']) {
+    assert.throws(
+      () => normalizeModelCatalogInfo({ models: [
+        { provider: 'magpie', modelId: 'bad-window', available: true, contextWindow: bad as number },
+      ] }),
+      /无效/,
+      `contextWindow=${String(bad)} 必须显式拒绝`,
+    )
+  }
+})
+
 const localNode: NodeInfo = { id: 'local', kind: 'local', online: true }
 const gpuNode: NodeInfo = { id: 'gpu-box', kind: 'byom', online: false }
 

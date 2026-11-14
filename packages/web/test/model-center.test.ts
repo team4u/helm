@@ -223,6 +223,62 @@ test('buildMergedProviders: 正确与凭证、自定义网关及远程目录模�
   assert.equal(vllm?.configured, true)
 })
 
+test('buildMergedProviders: 真实已知窗口生成「N 上下文」标签且思考标签在前，未知窗口不加', { timeout: 60_000 }, () => {
+  const catalogModels: ModelDescriptor[] = [
+    {
+      id: 'magpie/glm-4.6',
+      provider: 'magpie',
+      modelId: 'glm-4.6',
+      available: true,
+      thinkingLevels: ['off', 'high'],
+      contextWindow: 200_000,
+      label: 'GLM 4.6',
+    },
+    {
+      id: 'magpie/kimi-k2',
+      provider: 'magpie',
+      modelId: 'kimi-k2',
+      available: true,
+      thinkingLevels: ['off', 'low'],
+      label: 'Kimi K2',
+    },
+    {
+      id: 'magpie/qwen3-coder',
+      provider: 'magpie',
+      modelId: 'qwen3-coder',
+      available: true,
+      thinkingLevels: ['off'],
+      contextWindow: 1_000_000,
+      label: 'Qwen3 Coder',
+    },
+    {
+      id: 'magpie/plain-mini',
+      provider: 'magpie',
+      modelId: 'plain-mini',
+      available: true,
+      thinkingLevels: ['off'],
+      label: 'Plain Mini',
+    },
+  ]
+
+  const merged = buildMergedProviders(
+    [{ id: 'magpie', name: 'Magpie', configured: true, modelsCount: 0 }],
+    [{ id: 'magpie', configured: true }],
+    [],
+    catalogModels,
+  )
+  const byId = new Map((merged.find((p) => p.id === 'magpie')?.models ?? []).map((m) => [m.id, m]))
+
+  // 思考 + 已知 200k 窗口：两个标签，思考在前、紧凑窗口在后
+  assert.deepEqual(byId.get('glm-4.6')?.tags, ['思考模型', '200k 上下文'])
+  // 思考 + 窗口未知：只有思考标签，绝不推测窗口
+  assert.deepEqual(byId.get('kimi-k2')?.tags, ['思考模型'])
+  // 非思考模型 + 已知 1M 窗口：仍有窗口标签（与是否思考无关）
+  assert.deepEqual(byId.get('qwen3-coder')?.tags, ['1.0M 上下文'])
+  // 两者皆无：保持 undefined（空 tags 不产生空数组语义）
+  assert.equal(byId.get('plain-mini')?.tags, undefined)
+})
+
 test('buildDefaultModelOptions: 哨兵空值项、可用模型过滤与目录外保留', { timeout: 60_000 }, () => {
   const models: ModelDescriptor[] = [
     {
