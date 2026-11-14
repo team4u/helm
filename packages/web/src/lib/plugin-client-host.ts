@@ -27,15 +27,13 @@ export function createPluginClientHostPort(store: HelmStoreValue): PluginClientH
     pendingAsks: store.pendingAsks,
     loadErrors: store.loadErrors,
     plugins: store.plugins,
-    // 测试替身可能只携带部分字段：缺失的 UI 贡献切片语义为空（无 Screen / 无插槽贡献）。
-    screens: store.groupedUi?.screens ?? [],
+    screens: store.groupedUi.screens,
     pluginDocs: store.pluginDocs,
-    ensurePluginDoc: (pluginId, docName) => store.ensurePluginDoc(pluginId, docName),
-    getPluginSessionDoc: (pluginId, docName, conversationId) => store.getPluginSessionDoc(pluginId, docName, conversationId),
-    subscribeSessionDoc: (key, listener) => store.subscribeSessionDoc(key, listener),
-    getSessionDocState: (key) => store.getSessionDocState(key),
-    invokePluginAction: (pluginId, actionId, input, conversationId) =>
-      store.invokePluginAction(pluginId, actionId, input, conversationId),
+    ensurePluginDoc: store.ensurePluginDoc,
+    getPluginSessionDoc: store.getPluginSessionDoc,
+    subscribeSessionDoc: store.subscribeSessionDoc,
+    getSessionDocState: store.getSessionDocState,
+    invokePluginAction: store.invokePluginAction,
     submitConversationInput: async (conversationId, input) => {
       await conversationsApi.submitInput(conversationId, {
         text: input.text,
@@ -56,14 +54,14 @@ export function createPluginClientHostPort(store: HelmStoreValue): PluginClientH
         title: message,
         ...(conversationId !== undefined ? { conversationId } : {}),
       }),
-    loadConversationDetail: (conversationId, force) => store.loadConversationDetail(conversationId, force),
+    loadConversationDetail: store.loadConversationDetail,
     slots: {
       collectItems: (qualifiedName, conversationId) => {
         const conversation = conversationId !== undefined
-          ? (store.conversations ?? []).find((c) => c.id === conversationId)
+          ? store.conversations.find((c) => c.id === conversationId)
           : undefined
         return collectSlotItems(
-          store.groupedUi?.pluginSlots ?? [],
+          store.groupedUi.pluginSlots,
           qualifiedName,
           (scope) => matchesUiScope(conversation, scope),
         ).map((item): PluginSlotPortItem => ({ pluginId: item.pluginId, contributionId: item.spec.id, spec: item.spec }))

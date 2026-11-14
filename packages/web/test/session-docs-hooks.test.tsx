@@ -15,6 +15,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { bindSessionDocRuntime, getSessionDocState, resetSessionDocSubscriptions, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import { usePluginSessionDocsMap } from '../src/lib/store-context.js'
 import { usePluginSessionDocValue, usePluginSessionDocState } from '@helm/plugin-client'
+import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
 import { makeTestStore } from './helpers/store.js'
 import { TestStoreProvider } from './helpers/host-store.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
@@ -82,6 +83,15 @@ function mountProbes(
     harness,
   }
 }
+
+test('宿主端口在快照更新后保留订阅与加载函数身份', { timeout: 60_000 }, () => {
+  const store = stableSessionDocStore()
+  const initial = createPluginClientHostPort(store)
+  const updated = createPluginClientHostPort({ ...store, conversations: [] })
+  for (const key of ['subscribeSessionDoc', 'getSessionDocState', 'ensurePluginDoc', 'getPluginSessionDoc', 'loadConversationDetail', 'invokePluginAction'] as const) {
+    assert.equal(updated[key], initial[key], key)
+  }
+})
 
 test('StrictMode 挂载-卸载-重挂载：订阅恢复且引用稳定（不无限重渲染）', { timeout: 60_000 }, async () => {
   resetSessionDocSubscriptions()
