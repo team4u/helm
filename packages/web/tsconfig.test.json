@@ -3,9 +3,13 @@
   "compilerOptions": {
     "allowImportingTsExtensions": true,
     "paths": {
-      "@helm/protocol": ["../protocol/src/index.ts"],
-      "@helm/plugin-client": ["../plugin-client/src/index.ts"]
+      "@helm/protocol": [
+        "../protocol/src/index.ts"
+      ]
     }
   },
-  "include": ["test/**/*.ts", "test/**/*.tsx"]
+  "include": [
+    "test/**/*.ts",
+    "test/**/*.tsx"
+  ]
 }

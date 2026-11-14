@@ -187,6 +187,10 @@ importers:
       '@helm/protocol':
         specifier: workspace:*
         version: link:../protocol
+    devDependencies:
+      '@helm/plugin-build':
+        specifier: workspace:*
+        version: link:../plugin-build
 
   packages/desktop:
     devDependencies:
@@ -211,6 +215,9 @@ importers:
       '@helm/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@helm/plugin-build':
+        specifier: workspace:*
+        version: link:../plugin-build
       '@helm/plugins':
         specifier: workspace:*
         version: link:../plugins
@@ -266,9 +273,6 @@ importers:
       diff:
         specifier: 8.0.4
         version: 8.0.4
-      esbuild:
-        specifier: 0.28.2
-        version: 0.28.2
       typebox:
         specifier: ^1.0.0
         version: 1.4.4
@@ -279,6 +283,9 @@ importers:
       '@helm/node':
         specifier: workspace:*
         version: link:../node
+      '@helm/plugin-build':
+        specifier: workspace:*
+        version: link:../plugin-build
       '@types/ws':
         specifier: ^8.18.0
         version: 8.18.2
@@ -319,6 +326,15 @@ importers:
       tar:
         specifier: 7.5.23
         version: 7.5.23
+
+  packages/plugin-build:
+    dependencies:
+      '@helm/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   packages/plugin-client:
     dependencies:
@@ -383,6 +399,9 @@ importers:
       '@earendil-works/pi-durable':
         specifier: 1.5.0
         version: 1.5.0(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
+      '@helm/plugin-client':
+        specifier: workspace:*
+        version: link:../plugin-client
       '@helm/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -402,6 +421,15 @@ importers:
       '@helm/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@helm/plugin-build':
+        specifier: workspace:*
+        version: link:../plugin-build
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.3.0
+      lucide-react:
+        specifier: ^1.66.0
+        version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
 
   packages/protocol:
     dependencies:
@@ -464,6 +492,9 @@ importers:
       '@happy-dom/global-registrator':
         specifier: ^21.0.4
         version: 21.0.4
+      '@helm/plugin-build':
+        specifier: workspace:*
+        version: link:../plugin-build
       '@types/react':
         specifier: ^19.0.0
         version: 19.3.0

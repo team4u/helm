@@ -39,7 +39,6 @@ import {
 } from '../../kernel/src/plugins/index.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { createMagpiePlugin } from '../src/magpie.js'
-import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
 import { compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
 import {
   MAGPIE_PLUGIN_ID,

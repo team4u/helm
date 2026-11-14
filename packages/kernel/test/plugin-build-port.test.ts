@@ -12,8 +12,8 @@
  *   （501 unsupported_backend_ts_build），注入真实 provider 后可加载；
  * - doctor：client 插件在无 provider 时 client/register 检查如实失败，
  *   注入后 ok；JS-only 插件无 provider 也可通过（不需要构建能力）；
- * - createHelm：无 buildProvider 的组合根在注册 client 内置插件时显式失败
- *  （产品 hub 必须注入，内核不提供默认实现）。
+ * - KernelRuntime：无 buildProvider 时注册 client 引用插件在运行时路径显式拒绝
+ *  （产品由 hub 组合根默认注入，内核不提供默认实现）。
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -190,18 +190,32 @@ test('doctor：JS-only 插件无 provider 也可通过（不无差别牵连）',
   assert.equal(report.ok, true, `无 client 引用的插件不需要构建端口：${JSON.stringify(report.checks)}`)
 })
 
-test('createHelm：无 buildProvider 的组合根在注册 client 内置插件时显式失败', { timeout: 60_000 }, async () => {
-  const { createHelm } = await import('../../hub/src/app.js')
+test('KernelRuntime：无 buildProvider 时注册 client 引用插件在运行时路径显式拒绝（产品由 hub 默认注入）', { timeout: 60_000 }, async () => {
+  const { KernelRuntime } = await import('../src/runtime/index.js')
   const { fauxProvider } = await import('@earendil-works/pi-ai/providers/faux')
   const { createModels } = await import('@earendil-works/pi-ai/models')
   const models = createModels()
   models.setProvider(fauxProvider({ tokensPerSecond: 1 }).provider)
-  await assert.rejects(
-    createHelm({ dataDir, cwd: dataDir, model: 'faux/faux-1', models }),
-    (err: unknown) => {
-      assert.ok(err instanceof HelmError, `应为 HelmError：${String(err)}`)
-      assert.equal(err.code, 'unsupported_client_build')
-      return true
-    },
-  )
+  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
+  try {
+    const clientRoot = join(dataDir, 'client-src')
+    mkdirSync(clientRoot, { recursive: true })
+    writeFileSync(join(clientRoot, 'index.tsx'), 'export const X = 1\n')
+    await assert.rejects(
+      kernel.plugins.register({
+        id: 'p:runtime-no-provider',
+        clientRoot,
+        definePlugin: (ctx) => {
+          ctx.ui.screen({ id: 's', label: 'S', client: { module: 'index.tsx', export: 'X' } })
+        },
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmError, `应为 HelmError：${String(err)}`)
+        assert.equal(err.code, 'unsupported_client_build')
+        return true
+      },
+    )
+  } finally {
+    await kernel.close()
+  }
 })

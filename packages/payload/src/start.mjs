@@ -105,7 +105,7 @@ function checkLayout(entries, checksums, version) {
 
 /**
  * 依赖解析：以 dist 根 package.json dependencies 为契约清单，从 hub / kernel /
- * plugins / protocol / cli 五个运行时入口文件出发用 createRequire(entry).resolve
+ * plugins / plugin-build / plugin-client / protocol / cli 七个运行时入口文件出发用 createRequire(entry).resolve
  * 做真实解析——与 Hub 运行时 Node 的解析语义同源（import.meta.resolve 的第二参数
  * 在 Node 默认被忽略，之前的实现会在任意宿主目录下误判）。
  */
@@ -121,6 +121,8 @@ function resolveProdDeps(entries) {
     hub: path.resolve(payloadRoot, entries.hub ?? 'hub/dist/main.js'),
     kernel: path.resolve(payloadRoot, entries.kernel ?? 'kernel/dist/index.js'),
     plugins: path.resolve(payloadRoot, entries.plugins ?? 'plugins/dist/index.js'),
+    pluginBuild: path.resolve(payloadRoot, entries.pluginBuild ?? 'plugin-build/dist/index.js'),
+    pluginClient: path.resolve(payloadRoot, entries.pluginClient ?? 'plugin-client/src/index.ts'),
     protocol: path.resolve(payloadRoot, entries.protocol ?? 'protocol/dist/index.js'),
     cli: path.resolve(payloadRoot, entries.cli ?? 'cli/dist/index.js'),
   };
@@ -187,7 +189,7 @@ async function probeRuntimeCapabilities(entries) {
 
 function reportDeps(result) {
   if (result.missing.length === 0) {
-    console.log(`[payload] 生产依赖全部可解析 (${result.total}/${result.total}，hub/kernel/plugins/protocol/cli 五入口)` );
+    console.log(`[payload] 生产依赖全部可解析 (${result.total}/${result.total}，hub/kernel/plugins/plugin-build/plugin-client/protocol/cli 七入口)`);
     return;
   }
   console.error(`[payload] 运行时依赖缺失 (${result.missing.length} 项): ${result.missing.join(', ')}`);

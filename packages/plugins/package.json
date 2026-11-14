@@ -62,20 +62,24 @@
   "scripts": {
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/copy-plugin-clients.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
     "test": "tsx --test"
   },
   "dependencies": {
     "@earendil-works/chord": "1.5.0",
     "@earendil-works/pi-ai": "1.5.0",
     "@earendil-works/pi-durable": "1.5.0",
+    "@helm/plugin-client": "workspace:*",
     "@helm/protocol": "workspace:*",
     "cron-parser": "^5.10.4",
     "mermaid": "^12.2.0",
     "typebox": "^1.0.0"
   },
   "devDependencies": {
+    "@happy-dom/global-registrator": "^21.0.4",
     "@helm/kernel": "workspace:*",
-    "@happy-dom/global-registrator": "^21.0.4"
+    "@helm/plugin-build": "workspace:*",
+    "@types/react": "^19.0.0",
+    "lucide-react": "^1.66.0"
   }
 }

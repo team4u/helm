@@ -5,8 +5,9 @@
  *
  * 产物布局（packages/desktop/hub/，electron-builder extraResources → <resources>/hub）：
  *   hub/{package.json, manifest.json, start.mjs}   复用 payload dist（同源契约）
- *   hub/hub/ hub/kernel/ hub/plugins/ hub/protocol/ hub/cli/ hub/web/
- *                                                  hub/kernel/plugins/protocol/cli/web 产物
+ *   hub/hub/ hub/kernel/ hub/plugins/ hub/plugin-build/ hub/plugin-client/ hub/protocol/ hub/cli/ hub/web/
+ *                                                  hub/kernel/plugins/plugin-build/plugin-client/
+ *                                                  protocol/cli/web 产物
  *   hub/node_modules/...                            生产依赖闭包（见下）
  *   hub/tools/npm/                                  npm CLI 完整文件闭包（bin/npm-cli.js，
  *                                                   供主代理 Electron run-as-node 运行）
@@ -121,11 +122,17 @@ function placeDep(name, realDir, pkgJson, consumerDir) {
   }
 }
 
-// 根依赖：外部依赖自声明它的运行时包目录（kernel 优先，其次 plugins）解析；
-// @helm/protocol / @helm/kernel / @helm/plugins 以 payload 携带的同名目录为本体
-// 物化进 node_modules（其外部依赖自仓库对应包目录解析，保证与发布 file: 语义
-// 一致的闭包）。
-const RUNTIME_PKG_DIRS = { '@helm/protocol': 'protocol', '@helm/kernel': 'kernel', '@helm/plugins': 'plugins' };
+// 根依赖：外部依赖自声明它的运行时包目录解析；
+// @helm/protocol / @helm/kernel / @helm/plugins / @helm/plugin-build 以 payload
+// 携带的同名目录为本体物化进 node_modules（其外部依赖自仓库对应包目录解析，
+// 保证与发布 file: 语义一致的闭包）。
+const RUNTIME_PKG_DIRS = {
+  '@helm/protocol': 'protocol',
+  '@helm/kernel': 'kernel',
+  '@helm/plugins': 'plugins',
+  '@helm/plugin-build': 'plugin-build',
+  '@helm/plugin-client': 'plugin-client',
+};
 for (const [name, spec] of Object.entries(rootDeps)) {
   const runtimeDir = RUNTIME_PKG_DIRS[name];
   if (runtimeDir !== undefined) {
@@ -141,9 +148,14 @@ for (const [name, spec] of Object.entries(rootDeps)) {
     }
     continue;
   }
-  const ownerDir = ['kernel', 'plugins'].find((dir) =>
-    Object.keys(JSON.parse(readFileSync(path.join(repoRoot, 'packages', dir, 'package.json'), 'utf-8')).dependencies ?? {}).includes(name),
-  ) ?? 'kernel';
+  // 归属查找先 dependencies 再 peerDependencies（如 react 仅为 SDK 的 peer），
+  // 都未命中时回退 kernel（随后 resolveDepRealDir 会如实报缺失）。
+  const pkgOf = (dir) => JSON.parse(readFileSync(path.join(repoRoot, 'packages', dir, 'package.json'), 'utf-8'));
+  const RUNTIME_OWNER_DIRS = ['kernel', 'plugins', 'plugin-build', 'plugin-client', 'hub'];
+  const ownerDir =
+    RUNTIME_OWNER_DIRS.find((dir) => Object.keys(pkgOf(dir).dependencies ?? {}).includes(name)) ??
+    RUNTIME_OWNER_DIRS.find((dir) => Object.keys(pkgOf(dir).peerDependencies ?? {}).includes(name)) ??
+    'kernel';
   const resolved = resolveDepRealDir(path.join(repoRoot, 'packages', ownerDir), name, false);
   if (resolved.error) {
     problems.push(resolved.error);

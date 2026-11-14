@@ -28,6 +28,7 @@ export const PACKAGE_TIERS = {
   protocol: 'unit',
   cli: 'unit',
   web: 'unit',
+  'plugin-client': 'unit',
   'plugin-build': 'integration',
   kernel: 'integration',
   plugins: 'integration',

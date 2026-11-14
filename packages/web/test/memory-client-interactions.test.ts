@@ -9,7 +9,6 @@ import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginClientContext as ClientContext, ProfileDetailSlotProps } from '@helm/protocol'
-import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
 import * as HelmPluginClient from '@helm/plugin-client'
 import { compilePluginClientModule } from '@helm/plugin-build'
 

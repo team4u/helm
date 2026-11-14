@@ -7,10 +7,10 @@
     "noEmit": true,
     "declaration": false,
     "sourceMap": false,
-    "allowImportingTsExtensions": true,
-    "paths": {
-      "@helm/protocol": ["../protocol/src/index.ts"]
-    }
+    "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ]
 }

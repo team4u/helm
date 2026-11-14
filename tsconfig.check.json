@@ -6,10 +6,18 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@helm/plugin-client": ["packages/plugin-client/src/index.ts"],
-      "@helm/kernel": ["packages/kernel/src/index.ts"],
-      "@helm/plugins": ["packages/plugins/src/index.ts"],
-      "@helm/plugins/*": ["packages/plugins/src/*"]
+      "@helm/kernel": [
+        "packages/kernel/src/index.ts"
+      ],
+      "@helm/plugins": [
+        "packages/plugins/src/index.ts"
+      ],
+      "@helm/plugins/*": [
+        "packages/plugins/src/*"
+      ],
+      "@helm/plugin-build": [
+        "packages/plugin-build/src/index.ts"
+      ]
     }
   },
   "include": [
@@ -18,6 +26,8 @@
     "packages/plugin-client/src/**/*.tsx",
     "packages/plugin-client/test/**/*.ts",
     "packages/plugin-client/test/**/*.tsx",
+    "packages/plugin-build/src/**/*.ts",
+    "packages/plugin-build/test/**/*.ts",
     "packages/kernel/src/**/*.ts",
     "packages/kernel/test/**/*.ts",
     "packages/plugins/src/**/*.ts",

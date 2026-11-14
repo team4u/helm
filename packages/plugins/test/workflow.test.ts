@@ -29,6 +29,7 @@ import { Worker } from 'node:worker_threads'
 import type { EnvExecResponse } from '@helm/protocol'
 import type { WorkflowJournalEntry } from '../src/workflow/engine/journal.js'
 import { HelmError } from '@helm/protocol'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import {
   JournalWriter,
   actionJournalKey,

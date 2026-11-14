@@ -6,8 +6,8 @@
  * 而 kernel / node 包的测试大量起真实子进程、开 SQLite、建 Git worktree、跑 WebSocket
  * 与 @helm/node daemon，不是纯单元。为避免误分类，本脚本只做【保守包级切分】：
  *
- *   unit        = protocol + cli + web（含 web 的 happy-dom/React 交互测试，
- *                 属进程内 DOM 模拟，不起真实服务）；
+ *   unit        = protocol + cli + web + plugin-client（含 web 的 happy-dom/React 交互测试
+ *                 与 SDK 自测，属进程内 DOM 模拟，不起真实服务）；
  *   integration = plugin-build + kernel + plugins + hub + node + payload + desktop（全部文件，
  *                 整体视为集成，含真实 esbuild 编译/子进程、SQLite/Git/daemon、payload 组装
  *                 与桌面壳 Hub 子进程监督）；
@@ -37,7 +37,7 @@ const packagesDir = path.join(repoRoot, 'packages');
 
 // 套件 → 包名。切分原则见文件头注释；调整分档时必须同步更新 AGENTS.md 的测试分层约定。
 const SUITES = {
-  unit: ['protocol', 'cli', 'web'],
+  unit: ['protocol', 'cli', 'web', 'plugin-client'],
   integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'node', 'payload', 'desktop'],
 };
 const ALL_PACKAGES = [...SUITES.unit, ...SUITES.integration];

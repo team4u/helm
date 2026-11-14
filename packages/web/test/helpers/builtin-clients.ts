@@ -13,7 +13,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { compilePluginClientModule } from '../../../kernel/src/plugins/client-compiler.js'
 import * as HelmPluginClient from '@helm/plugin-client'
 import { compilePluginClientModule } from '@helm/plugin-build'
 
