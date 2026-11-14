@@ -12,6 +12,7 @@ import {
 } from '../lib/commands-model.js'
 import { HelmIcon } from '../lib/icons.js'
 import { matchesUiScope } from '../lib/types.js'
+import { useStableCallback } from '../lib/use-stable-callback.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
@@ -35,6 +36,7 @@ import {
   detectCompletionToken,
   replaceTriggerToken,
   type CompletionToken,
+  type MergedCompletionItem,
 } from './composer-completion-model.js'
 import { useComposerCompletionSources } from './use-composer-completion.js'
 import {
@@ -318,7 +320,8 @@ function CommandPopover({
   }, [query, slashItems])
 
   // 键盘循环限定可见候选，修复显示截断但索引越界到不可见项的旧问题。
-  const visible = items.slice(0, SLASH_VISIBLE_LIMIT)
+  // visible 记忆化：条目集不变时保持数组身份稳定，键盘 effect 不因无关重渲染重挂全局监听。
+  const visible = useMemo(() => items.slice(0, SLASH_VISIBLE_LIMIT), [items])
   const visibleKeys = visible.map((item) => item.id).join('|')
 
   useEffect(() => {
@@ -617,9 +620,12 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const [widgetsExpanded, setWidgetsExpanded] = useState(false)
   // 活草稿版本：text / 编辑目标 / 附件任一变化推进，用于发送失败后判断草稿是否已被用户修改
   const liveDraftRef = useRef<ComposerDraftVersion>(draftVersionOf('', null, []))
-  const syncLiveDraft = useCallback((text: string, target: number | null, attachments: ReadonlyArray<PendingAttachment>): void => {
+  // 普通函数供组件内部互调（await 后仍作用于发起时的 render 快照）；
+  // 离开组件的边界出口（prefill effect 依赖）用稳定包装，身份恒定。
+  const syncLiveDraft = (text: string, target: number | null, attachments: ReadonlyArray<PendingAttachment>): void => {
     liveDraftRef.current = draftVersionOf(text, target, attachments)
-  }, [])
+  }
+  const syncLiveDraftStable = useStableCallback(syncLiveDraft)
 
   const working = conversation.status === 'working' || conversation.status === 'blocked'
   const isMobile = useIsMobile(680)
@@ -631,10 +637,12 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const envConfigurable = canConfigureSessionEnv(detailEntries, conversation.status)
   // 发送中立即禁止改环境：避免输入提交与环境修改竞态
   const sendInFlight = sending || uploading > 0
-  const handleEnvBlocker = useCallback((blocker: SessionEnvBlocker): void => {
+  const handleEnvBlocker = (blocker: SessionEnvBlocker): void => {
     envBlockedRef.current = blocker.blocked
     setEnvBlocker(blocker)
-  }, [])
+  }
+  // 跨组件边界（SessionEnvBar prop + 其 effect 依赖）：稳定包装，取最新实现。
+  const handleEnvBlockerStable = useStableCallback(handleEnvBlocker)
   // 环境条卸载（开聊锁定 / 状态变化）时复位阻塞，避免残留阻止后续发送
   useEffect(() => {
     if (envConfigurable) return
@@ -644,15 +652,17 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const widgets = store.groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))
   const pills = store.groupedUi.composerPills.filter((p) => matchesUiScope(conversation, p.spec.scope))
 
-  const autoGrow = useCallback((): void => {
+  const autoGrow = (): void => {
     const el = textareaRef.current
     if (el === null) return
     el.style.height = '0px'
     el.style.height = `${el.scrollHeight}px`
-  }, [])
+  }
+  // ResizeObserver / 自适应 layout effect 依赖：稳定身份，observer 不因无关重渲染反复拆除重建。
+  const autoGrowStable = useStableCallback(autoGrow)
   useLayoutEffect(() => {
     autoGrow()
-  }, [text, isMobile, autoGrow])
+  }, [text, isMobile, autoGrowStable])
   useEffect(() => {
     const el = textareaRef.current
     if (el === null) return
@@ -664,7 +674,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [autoGrow])
+  }, [autoGrowStable])
   useEffect(() => {
     const extras = extrasRef.current
     if (extras === null) return
@@ -716,7 +726,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     setAttachments(nextAttachments)
     syncLiveDraft(prefill.text, nextEditing, nextAttachments)
     textareaRef.current?.focus()
-  }, [prefill, syncLiveDraft])
+  }, [prefill, syncLiveDraftStable])
 
   // 切换会话时退出历史编辑态并关闭全部浮层（补全源订阅随 token 置空停订）
   useEffect(() => {
@@ -756,7 +766,9 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
           const meta = await conversationsApi.uploadArtifact(conversation.id, file)
           setAttachments((prev) => {
             const next = [...prev, { artifactId: meta.id, name: meta.name, size: meta.size, mimeType: meta.mimeType }]
-            syncLiveDraft(text, editingEntryId, next)
+            // await 后回到的是发起上传时的渲染快照（旧 text/editingEntryId）：
+            // 活版本只替换附件集，文本与编辑锚点取 liveDraftRef 活值，不回灌旧快照。
+            syncLiveDraft(liveDraftRef.current.text, liveDraftRef.current.targetEntryId, next)
             return next
           })
         } catch (err) {
@@ -810,24 +822,33 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       el.setSelectionRange(pos, pos)
     })
   }
+  // 斜杠浮层 onPick 跨组件边界（其全局键盘 effect 依赖）：稳定包装，选中时取最新实现。
+  const applyPopoverStable = useStableCallback(applyPopover)
+  const closeSlashPopoverStable = useStableCallback((): void => {
+    setPopover(null)
+  })
+  const closeCompletionStable = useStableCallback((): void => {
+    setCompletionToken(null)
+  })
 
   // 补全选中：只替换光标前触发 token（含触发符）为 insertText，前后文本/附件/编辑锚点不动。
-  const applyCompletion = useCallback(
-    (insertText: string): void => {
-      const el = textareaRef.current
-      if (el === null) {
-        setCompletionToken(null)
-        return
-      }
-      const caret = el.selectionStart ?? liveDraftRef.current.text.length
-      const { next, nextCaret } = replaceTriggerToken(liveDraftRef.current.text, caret, insertText)
-      setText(next)
-      syncLiveDraft(next, editingEntryId, attachments)
+  const applyCompletion = (insertText: string): void => {
+    const el = textareaRef.current
+    if (el === null) {
       setCompletionToken(null)
-      focusWithCaret(el, nextCaret)
-    },
-    [editingEntryId, attachments, syncLiveDraft],
-  )
+      return
+    }
+    const caret = el.selectionStart ?? liveDraftRef.current.text.length
+    const { next, nextCaret } = replaceTriggerToken(liveDraftRef.current.text, caret, insertText)
+    setText(next)
+    syncLiveDraft(next, editingEntryId, attachments)
+    setCompletionToken(null)
+    focusWithCaret(el, nextCaret)
+  }
+  // 补全浮层 onPick 适配（跨组件边界进其键盘 effect 依赖）：稳定身份，选中时取最新实现。
+  const pickCompletionStable = useStableCallback((entry: MergedCompletionItem): void => {
+    applyCompletion(entry.item.insertText)
+  })
 
   const completionSnapshot = useComposerCompletionSources({
     token: completionToken,
@@ -854,16 +875,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     [conversationProfile, store.skills, enabledPluginIds],
   )
   const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
-  const runPluginCommandRef = useRef<(cmd: QualifiedCommand) => void>(() => {})
-  useEffect(() => {
-    setSlashMenuItems(
-      buildSlashMenuItems(
-        availableSkills,
-        slashPluginCommands,
-        (cmd) => runPluginCommandRef.current(cmd),
-      ),
-    )
-  }, [availableSkills, slashPluginCommands])
 
   // ⌘K 与斜杠菜单复用同一动作寻址；失败必须返回给提交者。
   const runPluginCommandFrom = useCallback(async (cmd: QualifiedCommand): Promise<void> => {
@@ -903,7 +914,15 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       if (el !== null) focusWithCaret(el, nextCaret)
     }).catch(() => { /* 动作调用已发送明确失败通知，保留原草稿。 */ }).finally(() => { commandPendingRef.current = false })
   }, [editingEntryId, attachments, syncLiveDraft, runPluginCommandFrom])
-  runPluginCommandRef.current = runPluginCommand
+  // 斜杠菜单条目存入状态后跨 render 存续：入口经稳定包装取最新实现，
+  // 替代渲染期手写 latest ref 赋值（原写法在 render 期写 ref，依赖纪律更弱）。
+  const runPluginCommandStable = useStableCallback(runPluginCommand)
+  // 重建仅由技能/插件命令集驱动；runner 新鲜度由稳定包装保证，不靠条目重建。
+  useEffect(() => {
+    setSlashMenuItems(
+      buildSlashMenuItems(availableSkills, slashPluginCommands, runPluginCommandStable),
+    )
+  }, [availableSkills, slashPluginCommands, runPluginCommandStable])
 
   const runSlashCommand = (raw: string): boolean => {
     const cmd = raw.trim()
@@ -1031,7 +1050,13 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
         ...(targetEntryId !== null ? { replaceFromEntryId: targetEntryId } : working ? { whenBusy: busyMode } : {}),
         ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.artifactId) } : {}),
       })
-      setAttachments((current) => current.filter((attachment) => !sentAttachments.has(attachment.artifactId)))
+      setAttachments((current) => {
+        const next = current.filter((attachment) => !sentAttachments.has(attachment.artifactId))
+        // await 后回到发起渲染：已发送附件从活版本一并移除（文本/锚点取活值），
+        // 避免 liveDraft 残留已发送附件误导后续 onlyIfEmpty 回填与回滚判定。
+        syncLiveDraft(liveDraftRef.current.text, liveDraftRef.current.targetEntryId, next)
+        return next
+      })
     } catch (err) {
       // 仅当 Composer 仍处于乐观清空后的期望状态才恢复文本与编辑目标；
       // 用户已开始新输入 / 已选择其他编辑目标则保持现状，旧 target 不回灌。
@@ -1286,16 +1311,16 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             <CommandPopover
               query={popoverQuery}
               slashItems={slashMenuItems}
-              onPick={applyPopover}
-              onClose={() => setPopover(null)}
+              onPick={applyPopoverStable}
+              onClose={closeSlashPopoverStable}
             />
           ) : null}
           <CompletionPopover
             open={completionOpen}
             trigger={completionToken !== null && completionToken.trigger !== '/' ? completionToken.trigger : '@'}
             snapshot={completionSnapshot}
-            onPick={(entry) => applyCompletion(entry.item.insertText)}
-            onClose={() => setCompletionToken(null)}
+            onPick={pickCompletionStable}
+            onClose={closeCompletionStable}
             anchorRef={composerBoxRef}
           />
           <div className="composer-toolbar">
