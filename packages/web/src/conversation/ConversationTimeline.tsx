@@ -33,6 +33,14 @@ import {
   type ToolTrace,
 } from './timeline-model.js'
 import { resolveActiveOutlineEntryId } from './outline-model.js'
+import {
+  OUTLINE_ACTIVE_LINE_PX,
+  resolveActiveAnchorIndex,
+  resolveContainmentClass,
+  supportsTimelineContainment,
+  timelineAnchorId,
+  type ContainmentExclusions,
+} from './timeline-containment-model.js'
 import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { Tooltip } from '../ui/Tooltip.js'
@@ -622,7 +630,8 @@ export function ThinkingRow({
       </button>
       {open ? (
         <div className="trace-expanded-body selectable thinking-expanded-body">
-          <MarkdownView text={text} conversationId={conversationId} />
+          {/* active 思考块是仍在增长的 live 文本；静止思考不启用流式路径 */}
+          <MarkdownView text={text} conversationId={conversationId} streaming={active} />
         </div>
       ) : null}
     </div>
@@ -849,6 +858,15 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
     const texts = turn.segments.filter((s) => s.kind === 'text') as Array<{ kind: 'text'; text: string }>
     return texts.map((t) => t.text).join('\n\n')
   }, [turn.segments])
+  // 流式正文提示：live 回合的最后一个文本段是仍在增长的真 live 文本（流式增量
+  // 总并入末段），传 streaming 启用 MarkdownView 流式渲染路径；已结算回合与
+  // 其他静态 Markdown 不启用。
+  const lastTextSegIndex = useMemo(() => {
+    for (let i = turn.segments.length - 1; i >= 0; i--) {
+      if (turn.segments[i]!.kind === 'text') return i
+    }
+    return -1
+  }, [turn.segments])
 
   const forkFromHere = async (): Promise<void> => {
     const entryId = turn.entryIds.length > 0 ? turn.entryIds[turn.entryIds.length - 1]! : undefined
@@ -907,9 +925,16 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
 
   return (
     <div className="msg-ai-block" tabIndex={0}>
-      {turn.segments.map((seg) => {
+      {turn.segments.map((seg, segIndex) => {
         if (seg.kind === 'text') {
-          return <MarkdownView key={seg.key} text={seg.text} conversationId={conversation.id} />
+          return (
+            <MarkdownView
+              key={seg.key}
+              text={seg.text}
+              conversationId={conversation.id}
+              streaming={turn.live && segIndex === lastTextSegIndex}
+            />
+          )
         }
         if (seg.kind === 'step-group') {
           return (
@@ -1085,27 +1110,45 @@ export function ConversationTimeline({
     return undefined
   }, [items])
 
-  // 贴底吸附与视口当前阅读锚点追踪：仅当用户主动上滚时脱离贴底（内容增长导致 scrollHeight 变大不得误判为脱离）。
+  // 历史行渲染隔离（content-visibility，DOM 完整保留仅跳过屏外渲染）：仅浏览器
+  // 支持时启用；live 流式回合、排队输入、未结算最新回合与高亮/大纲定位目标行
+  // 在 resolveContainmentClass 内解除隔离，保证测量与滚动定位以真实布局进行。
+  const containmentEnabled = useMemo(() => supportsTimelineContainment(), [])
+
+  // 必须解除隔离的锚点：搜索高亮（store）、大纲定位闪烁高亮（local）与当前
+  // 大纲定位请求目标（定位后请求会保留到下一次请求，仅此一行不重隔离，可接受）。
+  const releasedEntryIds = useMemo(() => {
+    const ids = new Set<string>()
+    const h = store.highlightedEntry
+    if (h !== null && h.conversationId === conversation.id && h.entryId !== '') ids.add(h.entryId)
+    if (localHighlightEntryId !== null && localHighlightEntryId !== '') ids.add(localHighlightEntryId)
+    const requested = outlineScrollRequest?.entryId
+    if (requested !== undefined && requested !== '') ids.add(requested)
+    return ids
+  }, [store.highlightedEntry, conversation.id, localHighlightEntryId, outlineScrollRequest])
+
+  const cvExclusions = useMemo<ContainmentExclusions>(
+    () => ({
+      releasedEntryIds,
+      latestAssistantKey: lastAssistantKey,
+      conversationBusy: conversation.status === 'working' || conversation.status === 'blocked',
+    }),
+    [releasedEntryIds, lastAssistantKey, conversation.status],
+  )
+
+  // 锚点集合签名：仅当行集合（锚点 id 序列）变化时才重建阅读锚点观察器；
+  // 流式内容增长（items 引用变化但锚点不变）不触发重绑。
+  const anchorSignature = useMemo(() => items.map((item) => timelineAnchorId(item)).join('\n'), [items])
+  // 回调可能每次渲染都是新闭包：latest-ref 避免观察器随回调身份变化而重绑。
+  const onActiveEntryChangeRef = useRef(onActiveEntryChange)
+  onActiveEntryChangeRef.current = onActiveEntryChange
+
+  // 贴底吸附：仅当用户主动上滚时脱离贴底（内容增长导致 scrollHeight 变大不得
+  // 误判为脱离）。阅读锚点追踪已拆到下方独立观察器，不再随 scroll 事件全量
+  // 测量行矩形（那会强迫所有屏外行参与布局计算，抵消渲染隔离收益）。
   useEffect(() => {
     const el = scrollRef.current
     if (el === null) return
-    const syncActiveOutlineEntry = (): void => {
-      if (onActiveEntryChange === undefined || innerRef.current === null) return
-      const containerTop = el.getBoundingClientRect().top
-      const nodes = innerRef.current.querySelectorAll<HTMLElement>('[data-entry-id]')
-      const offsets: Array<{ entryId: string; top: number }> = []
-      for (const node of nodes) {
-        const id = node.dataset.entryId
-        if (id !== undefined && id !== '') {
-          offsets.push({ entryId: id, top: node.getBoundingClientRect().top - containerTop })
-        }
-      }
-      const nextActive = resolveActiveOutlineEntryId(offsets, 96)
-      if (nextActive !== lastActiveEntryRef.current) {
-        lastActiveEntryRef.current = nextActive
-        onActiveEntryChange(nextActive)
-      }
-    }
     const onScroll = (): void => {
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
       if (el.scrollTop < lastScrollTopRef.current - 4 && distanceFromBottom > 80) {
@@ -1114,14 +1157,94 @@ export function ConversationTimeline({
         stickToBottomRef.current = true
       }
       lastScrollTopRef.current = el.scrollTop
-      syncActiveOutlineEntry()
     }
-    syncActiveOutlineEntry()
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [onActiveEntryChange, items.length])
+  }, [])
 
-  // 响应大纲面板点击定位：平滑滚动到对应消息块（或助手回复内指定的 h1~h3 标题）并触发闪烁高亮。
+  // 视口当前阅读锚点追踪（供大纲浮层高亮）：优先 IntersectionObserver——观察
+  // 区域下缘收窄到「容器顶 + OUTLINE_ACTIVE_LINE_PX 基准线」，行相交 ⟺ 行顶
+  // 已越过基准线，最后一个相交索引与 resolveActiveOutlineEntryId「最后一个
+  // 越过基准线的锚点」语义对齐（见 timeline-containment-model）。锚点集合或
+  // 容器高度变化时重绑观察器；无 IO 环境退化为 rAF 节流的整列测量。
+  useEffect(() => {
+    if (onActiveEntryChange === undefined) return
+    const scroller = scrollRef.current
+    const inner = innerRef.current
+    if (scroller === null || inner === null) return
+
+    const anchors = Array.from(inner.querySelectorAll<HTMLElement>('[data-entry-id]')).filter(
+      (el) => (el.dataset.entryId ?? '') !== '',
+    )
+    const entryIds = anchors.map((el) => el.dataset.entryId!)
+    const publish = (nextActive: string | undefined): void => {
+      if (nextActive === lastActiveEntryRef.current) return
+      lastActiveEntryRef.current = nextActive
+      onActiveEntryChangeRef.current?.(nextActive)
+    }
+
+    if (typeof IntersectionObserver === 'undefined') {
+      // 退化路径：rAF 节流，每帧至多测量一次（而非每个 scroll 事件一次）。
+      let frame = 0
+      const measure = (): void => {
+        frame = 0
+        const containerTop = scroller.getBoundingClientRect().top
+        const offsets: Array<{ entryId: string; top: number }> = []
+        for (const node of anchors) {
+          offsets.push({ entryId: node.dataset.entryId!, top: node.getBoundingClientRect().top - containerTop })
+        }
+        publish(resolveActiveOutlineEntryId(offsets, OUTLINE_ACTIVE_LINE_PX))
+      }
+      const schedule = (): void => {
+        if (frame === 0) frame = requestAnimationFrame(measure)
+      }
+      schedule()
+      scroller.addEventListener('scroll', schedule, { passive: true })
+      return () => {
+        scroller.removeEventListener('scroll', schedule)
+        if (frame !== 0) cancelAnimationFrame(frame)
+      }
+    }
+
+    const intersecting = new Set<number>()
+    const indexByEl = new Map<HTMLElement, number>()
+    anchors.forEach((el, index) => indexByEl.set(el, index))
+    const onEntries = (entries: IntersectionObserverEntry[]): void => {
+      for (const entry of entries) {
+        const idx = indexByEl.get(entry.target as HTMLElement)
+        if (idx === undefined) continue
+        if (entry.isIntersecting) intersecting.add(idx)
+        else intersecting.delete(idx)
+      }
+      const next = resolveActiveAnchorIndex(intersecting, entryIds.length)
+      publish(next === -1 ? undefined : entryIds[next])
+    }
+    let io: IntersectionObserver | null = null
+    const buildObserver = (): void => {
+      io?.disconnect()
+      intersecting.clear()
+      // 基准线随容器高度变化（分屏/缩放）：由 ResizeObserver 触发重绑。
+      const bottomInset = Math.max(0, scroller.clientHeight - OUTLINE_ACTIVE_LINE_PX)
+      io = new IntersectionObserver(onEntries, { root: scroller, rootMargin: `0px 0px -${bottomInset}px 0px` })
+      for (const el of anchors) io.observe(el)
+    }
+    buildObserver()
+    let ro: ResizeObserver | null = null
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => buildObserver())
+      ro.observe(scroller)
+    }
+    return () => {
+      io?.disconnect()
+      ro?.disconnect()
+    }
+  }, [anchorSignature])
+
+  // 响应大纲面板点击定位：目标行已在本次渲染中解除渲染隔离（releasedEntryIds
+  // 含 outlineScrollRequest.entryId），本 effect 在 DOM commit 后运行，
+  // scrollIntoView 以真实布局测量定位；平滑滚动到对应消息块（或助手回复内指定
+  // 的 h1~h3 标题，按 DOM 顺序取序数——渲染隔离保留完整 DOM，序数与大纲提取
+  // 一致）并触发闪烁高亮。
   useEffect(() => {
     if (!outlineScrollRequest || outlineScrollRequest.tick === lastOutlineTickRef.current) return
     lastOutlineTickRef.current = outlineScrollRequest.tick
@@ -1268,11 +1391,14 @@ export function ConversationTimeline({
       ) : null}
       <div ref={innerRef} className="timeline-inner">
         {items.map((item) => {
+          // 渲染隔离类：仅历史完成行获得（live/排队/未结算最新回合/解除目标行
+          // 由 resolveContainmentClass 返回空串，正常渲染）。
+          const cvClass = resolveContainmentClass(item, cvExclusions, containmentEnabled)
           if (item.kind === 'human') {
             return (
               <div
                 key={item.key}
-                className={`timeline-human-wrap ${highlightClass(item.entryId)}`}
+                className={`timeline-human-wrap ${highlightClass(item.entryId)}${cvClass !== '' ? ` ${cvClass}` : ''}`}
                 ref={highlightScrollRef}
                 data-entry-id={item.entryId}
               >
@@ -1289,7 +1415,7 @@ export function ConversationTimeline({
             return (
               <div
                 key={item.key}
-                className={highlightClass(item.entryId)}
+                className={`${highlightClass(item.entryId)}${cvClass !== '' ? ` ${cvClass}` : ''}`.trim()}
                 ref={highlightScrollRef}
                 data-entry-id={item.entryId}
               >
@@ -1301,7 +1427,7 @@ export function ConversationTimeline({
             return (
               <div
                 key={item.key}
-                className={highlightClass(item.entryId)}
+                className={`${highlightClass(item.entryId)}${cvClass !== '' ? ` ${cvClass}` : ''}`.trim()}
                 ref={highlightScrollRef}
                 data-entry-id={item.entryId}
               >
@@ -1309,11 +1435,11 @@ export function ConversationTimeline({
               </div>
             )
           }
-          const anchorId = item.entryIds[0] ?? item.key
+          const anchorId = timelineAnchorId(item)
           return (
             <div
               key={item.key}
-              className={highlightClass(anchorId)}
+              className={`${highlightClass(anchorId)}${cvClass !== '' ? ` ${cvClass}` : ''}`.trim()}
               ref={highlightScrollRef}
               data-entry-id={anchorId}
             >
