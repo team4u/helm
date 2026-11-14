@@ -52,7 +52,7 @@ function log(line) {
 
 async function loadDist() {
   try {
-    const app = await import('../packages/kernel/dist/app.js');
+    const app = await import('../packages/hub/dist/app.js');
     const http = await import('../packages/kernel/dist/http/index.js');
     return { createHelm: app.createHelm, startHub: http.startHub };
   } catch (err) {

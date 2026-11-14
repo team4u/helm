@@ -8,8 +8,8 @@ import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import * as HelmPluginClient from '@helm/plugin-client'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
-import { normalizeSpec, type NormalizedSpecNode } from '../../kernel/src/builtin-plugins/json-render/client/spec-normalize.js'
-import type { EvalScope } from '../../kernel/src/builtin-plugins/json-render/client/evaluator.js'
+import { normalizeSpec, type NormalizedSpecNode } from '../../plugins/src/json-render/client/spec-normalize.js'
+import type { EvalScope } from '../../plugins/src/json-render/client/evaluator.js'
 import type { ReactNode } from 'react'
 
 /** spec-primitives 的渲染上下文形状（client 目录不入 typecheck，此处本地最小声明）。 */
@@ -33,7 +33,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const CACHE = mkdtempSync(join(tmpdir(), 'helm-jr-feedback-'))
 const { code } = await compilePluginClientModule(
   'builtin:json-render',
-  resolve(here, '../../kernel/src/builtin-plugins/json-render/client'),
+  resolve(here, '../../plugins/src/json-render/client'),
   'spec-primitives.tsx',
   CACHE,
 )

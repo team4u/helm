@@ -6,7 +6,10 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@helm/plugin-client": ["packages/plugin-client/src/index.ts"]
+      "@helm/plugin-client": ["packages/plugin-client/src/index.ts"],
+      "@helm/kernel": ["packages/kernel/src/index.ts"],
+      "@helm/plugins": ["packages/plugins/src/index.ts"],
+      "@helm/plugins/*": ["packages/plugins/src/*"]
     }
   },
   "include": [
@@ -17,6 +20,10 @@
     "packages/plugin-client/test/**/*.tsx",
     "packages/kernel/src/**/*.ts",
     "packages/kernel/test/**/*.ts",
+    "packages/plugins/src/**/*.ts",
+    "packages/plugins/test/**/*.ts",
+    "packages/hub/src/**/*.ts",
+    "packages/hub/test/**/*.ts",
     "packages/node/src/**/*.ts",
     "packages/node/test/**/*.ts",
     "packages/cli/src/**/*.ts",
@@ -28,6 +35,6 @@
     "packages/web/test/**/*.tsx"
   ],
   "exclude": [
-    "packages/kernel/src/builtin-plugins/*/client"
+    "packages/plugins/src/*/client"
   ]
 }

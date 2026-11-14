@@ -83,8 +83,8 @@ for (const [key, rel] of Object.entries(manifest.entries ?? {})) {
 }
 if (problems.length > 0) { console.error(problems.join('; ')); process.exit(1); }
 let deps = {};
-try { deps = JSON.parse(readFileSync(path.resolve(root, manifest.entries.kernelPackageJson), 'utf8')).dependencies ?? {}; }
-catch { console.error('kernel package.json 损坏'); process.exit(1); }
+try { deps = JSON.parse(readFileSync(path.resolve(root, manifest.entries.rootPackageJson), 'utf8')).dependencies ?? {}; }
+catch { console.error('root package.json 损坏'); process.exit(1); }
 const missing = Object.keys(deps).filter((d) => !existsSync(path.join(root, 'node_modules', d)));
 if (missing.length > 0) { console.error('依赖缺失: ' + missing.join(', ')); process.exit(3); }
 console.log('fixture payload ok');
@@ -96,13 +96,13 @@ export type FixtureCorruption =
   | 'format-version'
   | 'checksums'
   | 'entry-missing'
-  | 'kernel-is-launcher'
+  | 'hub-is-launcher'
   | 'manifest-name'
   | 'manifest-version';
 
 export interface FixturePayloadOptions {
   version: string;
-  /** kernel/package.json 声明的依赖名列表（默认 [FIXTURE_DEP]；空数组 = 无依赖）。 */
+  /** 根 package.json 声明的依赖名列表（默认 [FIXTURE_DEP]；空数组 = 无依赖）。 */
   deps?: string[];
   /** 预置 node_modules（vendored 场景）。 */
   vendoredDeps?: string[];
@@ -114,18 +114,18 @@ export interface FixturePayloadOptions {
 export function fixturePayloadEntries(options: FixturePayloadOptions): TarEntry[] {
   const { version } = options;
   const deps = options.deps ?? [FIXTURE_DEP];
-  const kernelPkgJson = `${JSON.stringify(
-    { name: 'fixture-kernel', version, dependencies: Object.fromEntries(deps.map((d) => [d, '*'])) },
+  const rootPkgJson = `${JSON.stringify(
+    { name: 'fixture-payload', version, dependencies: Object.fromEntries(deps.map((d) => [d, '*'])) },
     null,
     2,
   )}\n`;
-  const kernelMain = `// fixture kernel entry (${version})\nconsole.log('fixture kernel ${version}');\n`;
+  const hubMain = `// fixture hub entry (${version})\nconsole.log('fixture hub ${version}');\n`;
   const entries: TarEntry[] = [
     { name: 'package/' },
-    { name: 'package/kernel/' },
-    { name: 'package/kernel/dist/' },
-    { name: 'package/kernel/dist/main.js', content: kernelMain },
-    { name: 'package/kernel/package.json', content: kernelPkgJson },
+    { name: 'package/hub/' },
+    { name: 'package/hub/dist/' },
+    { name: 'package/hub/dist/main.js', content: hubMain },
+    { name: 'package/package.json', content: rootPkgJson },
     { name: 'package/start.mjs', content: FIXTURE_START_MJS },
   ];
   for (const dep of options.vendoredDeps ?? []) {
@@ -140,24 +140,24 @@ export function fixturePayloadEntries(options: FixturePayloadOptions): TarEntry[
     formatVersion: 1,
     name: FIXTURE_PACKAGE,
     version,
-    entries: { launcher: 'start.mjs', kernel: 'kernel/dist/main.js', kernelPackageJson: 'kernel/package.json' },
+    entries: { launcher: 'start.mjs', hub: 'hub/dist/main.js', rootPackageJson: 'package.json' },
     entryChecksums: {
       launcher: checksum(FIXTURE_START_MJS),
-      kernel: checksum(kernelMain),
-      kernelPackageJson: checksum(kernelPkgJson),
+      hub: checksum(hubMain),
+      rootPackageJson: checksum(rootPkgJson),
     },
   };
   if (options.corrupt === 'format-version') manifest['formatVersion'] = 2;
   if (options.corrupt === 'manifest-name') manifest['name'] = 'evil-mismatched-payload';
   if (options.corrupt === 'manifest-version') manifest['version'] = '9.9.9';
-  if (options.corrupt === 'kernel-is-launcher') (manifest['entries'] as Record<string, unknown>)['kernel'] = 'start.mjs';
-  if (options.corrupt === 'checksums') (manifest['entryChecksums'] as Record<string, unknown>)['kernel'] = '0'.repeat(64);
+  if (options.corrupt === 'hub-is-launcher') (manifest['entries'] as Record<string, unknown>)['hub'] = 'start.mjs';
+  if (options.corrupt === 'checksums') (manifest['entryChecksums'] as Record<string, unknown>)['hub'] = '0'.repeat(64);
   let manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
   if (options.corrupt === 'manifest-json') manifestText = '{ broken json';
   entries.push({ name: 'package/manifest.json', content: manifestText });
   const finalEntries =
     options.corrupt === 'entry-missing'
-      ? entries.filter((e) => e.name !== 'package/kernel/dist/main.js')
+      ? entries.filter((e) => e.name !== 'package/hub/dist/main.js')
       : entries;
   return [...finalEntries, ...(options.extraEntries ?? [])];
 }

@@ -20,11 +20,11 @@ import path from 'node:path'
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const MARKER = 'generated-by:helm/scripts/link-bins.mjs'
 
-/** bin 名 → 源码入口（相对仓库根） */
+/** bin 名 → 源码入口（相对仓库根）；helm-hub 经 scripts/run-hub.mjs 注入 dev 路径解析 */
 const BINS = {
   helm: 'packages/cli/src/index.ts',
   'helm-node': 'packages/node/src/cli.ts',
-  'helm-hub': 'packages/kernel/src/main.ts',
+  'helm-hub': 'scripts/run-hub.mjs',
 }
 
 const removeMode = process.argv.includes('--remove')

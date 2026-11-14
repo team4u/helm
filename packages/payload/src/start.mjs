@@ -4,14 +4,18 @@
  *
  * 命令：
  *   node start.mjs check   校验 manifest/entries/checksums（严格相对路径），并按
- *                          dist 根 package.json dependencies 从 kernel/protocol/cli
- *                          三个运行时入口逐依赖做真实解析（createRequire——与运行时
- *                          Node 解析语义一致；import.meta.resolve 的 parent 参数在
- *                          当前 Node 默认被忽略，不可用于此），随后实测运行时能力：
- *                          import node:sqlite、加载 esbuild 并真实 transform 一段
- *                          JS（覆盖插件 client 编译链路）。check 绝不启动 Hub。
- *   node start.mjs start   依赖验收通过后拉起 kernel 入口（dist/main.js），透传环境
- *                          变量与信号。
+ *                          dist 根 package.json dependencies 从 hub/kernel/plugins/
+ *                          protocol/cli 五个运行时入口逐依赖做真实解析（createRequire
+ *                          ——与运行时 Node 解析语义一致；import.meta.resolve 的
+ *                          parent 参数在当前 Node 默认被忽略，不可用于此），随后实测
+ *                          运行时能力：import node:sqlite、加载 esbuild 并真实
+ *                          transform 一段 JS（覆盖插件 client 编译链路）。check 绝不
+ *                          启动 Hub。
+ *   node start.mjs start   依赖验收通过后拉起 hub 入口（hub/dist/main.js），透传
+ *                          环境变量与信号；web/dist 存在且未显式配置时导出
+ *                          HELM_WEB_DIST_DIR（@helm/kernel 经 npm 安装进
+ *                          node_modules 后其源码内默认探测不再命中 payload 根布局，
+ *                          由启动器显式声明，不静默降级为无静态托管）。
  *
  * 退出码（绝不静默降级）：
  *   0  校验通过且依赖可解析、运行时能力实测成功（或 start 的子进程正常退出）
@@ -100,10 +104,10 @@ function checkLayout(entries, checksums, version) {
 }
 
 /**
- * 依赖解析：以 dist 根 package.json dependencies 为契约清单，从 kernel / protocol /
- * cli 三个运行时入口文件出发用 createRequire(entry).resolve 做真实解析——与 Hub
- * 运行时 Node 的解析语义同源（import.meta.resolve 的第二参数在 Node 默认被忽略，
- * 之前的实现会在任意宿主目录下误判）。
+ * 依赖解析：以 dist 根 package.json dependencies 为契约清单，从 hub / kernel /
+ * plugins / protocol / cli 五个运行时入口文件出发用 createRequire(entry).resolve
+ * 做真实解析——与 Hub 运行时 Node 的解析语义同源（import.meta.resolve 的第二参数
+ * 在 Node 默认被忽略，之前的实现会在任意宿主目录下误判）。
  */
 function resolveProdDeps(entries) {
   let deps = {};
@@ -114,7 +118,9 @@ function resolveProdDeps(entries) {
     process.exit(EXIT_ERROR);
   }
   const bases = {
-    kernel: path.resolve(payloadRoot, entries.kernel ?? 'kernel/dist/main.js'),
+    hub: path.resolve(payloadRoot, entries.hub ?? 'hub/dist/main.js'),
+    kernel: path.resolve(payloadRoot, entries.kernel ?? 'kernel/dist/index.js'),
+    plugins: path.resolve(payloadRoot, entries.plugins ?? 'plugins/dist/index.js'),
     protocol: path.resolve(payloadRoot, entries.protocol ?? 'protocol/dist/index.js'),
     cli: path.resolve(payloadRoot, entries.cli ?? 'cli/dist/index.js'),
   };
@@ -169,8 +175,8 @@ async function probeRuntimeCapabilities(entries) {
     failures.push(`node:sqlite 不可用（Node 版本过低或构建缺内置模块）: ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
-    const kernelEntry = path.resolve(payloadRoot, entries.kernel ?? 'kernel/dist/main.js');
-    const esbuild = createRequire(kernelEntry)('esbuild');
+    const hubEntry = path.resolve(payloadRoot, entries.hub ?? 'hub/dist/main.js');
+    const esbuild = createRequire(hubEntry)('esbuild');
     const out = await esbuild.transform('const answer = 42\n', { loader: 'js' });
     if (typeof out?.code !== 'string' || !out.code.includes('answer')) throw new Error('transform 输出异常');
   } catch (err) {
@@ -181,7 +187,7 @@ async function probeRuntimeCapabilities(entries) {
 
 function reportDeps(result) {
   if (result.missing.length === 0) {
-    console.log(`[payload] 生产依赖全部可解析 (${result.total}/${result.total}，kernel/protocol/cli 三入口)` );
+    console.log(`[payload] 生产依赖全部可解析 (${result.total}/${result.total}，hub/kernel/plugins/protocol/cli 五入口)` );
     return;
   }
   console.error(`[payload] 运行时依赖缺失 (${result.missing.length} 项): ${result.missing.join(', ')}`);
@@ -218,8 +224,13 @@ if (command === 'check') {
     console.error(`[payload] 运行时能力实测失败：\n${failures.map((f) => `- ${f}`).join('\n')}`);
     process.exit(EXIT_DEPS_MISSING);
   }
-  const kernelEntry = path.resolve(payloadRoot, entries.kernel);
-  const child = spawn(process.execPath, [kernelEntry], { stdio: 'inherit', env: process.env });
+  const hubEntry = path.resolve(payloadRoot, entries.hub);
+  // web/dist 存在且未显式配置时导出静态托管目录（见文件头注释；绝不静默降级）。
+  const childEnv = { ...process.env };
+  if (childEnv.HELM_WEB_DIST_DIR === undefined && existsSync(path.join(payloadRoot, 'web/dist'))) {
+    childEnv.HELM_WEB_DIST_DIR = path.resolve(payloadRoot, 'web/dist');
+  }
+  const child = spawn(process.execPath, [hubEntry], { stdio: 'inherit', env: childEnv });
   const forward = (signal) => () => child.kill(signal);
   process.on('SIGINT', forward('SIGINT'));
   process.on('SIGTERM', forward('SIGTERM'));

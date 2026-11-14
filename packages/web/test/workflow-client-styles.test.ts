@@ -55,7 +55,7 @@ test('工作流真实编译与加载：阶段状态颜色不被基础样式覆�
   const host = document.createElement('div')
   document.body.appendChild(host)
   try {
-    const clientRoot = fileURLToPath(new URL('../../kernel/src/builtin-plugins/workflow/client', import.meta.url))
+    const clientRoot = fileURLToPath(new URL('../../plugins/src/workflow/client', import.meta.url))
     const { code, contentHash } = await compilePluginClientModule('builtin:workflow', clientRoot, 'index.tsx', cacheDir)
     globalThis.fetch = async () => new Response(code, { headers: { 'x-helm-client-hash': contentHash } })
     let imports = 0

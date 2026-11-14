@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createHelm } from '../packages/kernel/dist/index.js'
+import { createHelm } from '../packages/hub/dist/index.js'
 import { startHub } from '../packages/kernel/dist/http/index.js'
 import { writeNodeIdentity } from '../packages/node/dist/index.js'
 

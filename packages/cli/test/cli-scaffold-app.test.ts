@@ -20,7 +20,7 @@ import path from 'node:path'
 import { runCli } from '../src/index.js'
 import { doctorPluginDir } from '../../kernel/src/plugins/plugin-doctor.js'
 import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/plugin-host.js'
-import { createAppsPlugin, APPS_PLUGIN_ID } from '../../kernel/src/builtin-plugins/apps.js'
+import { createAppsPlugin, APPS_PLUGIN_ID } from '../../plugins/src/apps.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 
 async function run(

@@ -26,7 +26,7 @@ import { workflowUi } from './helpers/workflow-ui.js'
 import { importWorkflowClientModule, importWorkflowModels, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 const HelmStoreContext = { Provider: TestStoreProvider }
 import type { HelmStoreValue } from '../src/lib/types.js'
-import type { SubagentParentToolSummary } from '../../kernel/src/builtin-plugins/workflow/client/models.ts'
+import type { SubagentParentToolSummary } from '../../plugins/src/workflow/client/models.ts'
 mountSharedPluginNamespaces({ realHooks: true })
 const {
   buildSubagentStreamLines, subagentBadge, toolResultPreviewTruncated, isScrolledToBottom,
@@ -908,7 +908,7 @@ test('SubagentLiveCard 整体大卡片点击契约：外层整卡可点击，第
 })
 
 test('插件自有样式契约：整卡统一 hover，且宿主样式表不携带工作流业务类', { timeout: 60_000 }, () => {
-  const pluginCss = readFileSync(new URL('../../kernel/src/builtin-plugins/workflow/client/styles.css', import.meta.url), 'utf-8')
+  const pluginCss = readFileSync(new URL('../../plugins/src/workflow/client/styles.css', import.meta.url), 'utf-8')
   const hostCss = [readHostStyles(), readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')].join('\n')
   assert.ok(pluginCss.includes('.subagent-card-clickable:hover'), '插件样式应包含整卡 hover 高亮规则')
   assert.match(

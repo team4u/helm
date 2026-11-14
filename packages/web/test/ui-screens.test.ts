@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 
-// ScreenHost 宿主契约（DSL 归一化测试已迁 packages/kernel/test/json-render-dsl.test.ts）。
+// ScreenHost 宿主契约（DSL 归一化测试已迁 packages/plugins/test/json-render-dsl.test.ts）。
 
 test('ScreenHost 零插件 ID 特判，所有 screen 统一经 PluginUiView 渲染（herdr 专用映射已清退）', { timeout: 60_000 }, async () => {
   const source = await readFile(new URL('../src/screens/ScreenHost.tsx', import.meta.url), 'utf-8')

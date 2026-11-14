@@ -80,6 +80,12 @@ if (fallback) {
     ? fallback + path.delimiter + process.env.NODE_PATH
     : fallback;
 }
+// tsx 运行期把 @helm/kernel / @helm/plugins 工作区包解析到源码：与测试直接相对
+// 导入 kernel/plugins 源码保持单模块身份（否则 dist 与 source 双身份会让
+// instanceof 错误映射成 500 等静默错乱）；构建产物不受影响。
+if (childEnv.TSX_TSCONFIG_PATH === undefined) {
+  childEnv.TSX_TSCONFIG_PATH = path.join(repoRoot, 'tsconfig.dev.json');
+}
 
 // 无 shell 参与：参数逐个透传，天然免疫字符串拼接注入；glob 交给 tsx / node test runner 展开。
 const child = spawn(process.execPath, [tsxCli, '--test', '--test-timeout=20000', ...forwardArgs], {

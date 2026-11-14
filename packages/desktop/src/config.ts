@@ -38,7 +38,7 @@ export interface DesktopConfig {
   readonly payloadRegistry?: string;
   /** 锁定 payload 精确版本（HELM_PAYLOAD_VERSION）；缺省跟踪 dist-tags.latest。 */
   readonly payloadVersion?: string;
-  /** 仓库内 kernel dist 的 hub 入口（缺省 <repo>/packages/kernel/dist/main.js）。 */
+  /** 仓库内 hub dist 的入口（缺省 <repo>/packages/hub/dist/main.js）。 */
   readonly hubEntry?: string;
   /** 完整命令覆写（最高优先，空格拆分自 HELM_DESKTOP_HUB_CMD）。 */
   readonly hubCommand?: string[];
@@ -87,9 +87,9 @@ export type DesktopOverrides = Partial<
   >
 >;
 
-/** kernel dist hub 入口缺省路径（src 与 dist 下同构：均上溯两级到 packages/）。 */
+/** hub 入口缺省路径（src 与 dist 下同构：均上溯两级到 packages/）。 */
 export function defaultHubEntryPath(): string {
-  return fileURLToPath(new URL('../../kernel/dist/main.js', import.meta.url));
+  return fileURLToPath(new URL('../../hub/dist/main.js', import.meta.url));
 }
 
 function parsePort(raw: string | undefined, origin: string): number {

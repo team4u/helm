@@ -5,7 +5,7 @@
  * 1. buildTimelineItems：live.queuedInputs 尾部胶囊、input.id 去重（原地转正
  *    时 key 不变不重复）、queuedMode 与 origin 透传。
  * 2. ConversationTimeline SSR：steer / followUp 胶囊文案与样式类名。
- *（helm:send 求值测试已迁 packages/kernel/test/json-render-send-target.test.ts）
+ *（helm:send 求值测试已迁 packages/plugins/test/json-render-send-target.test.ts）
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'

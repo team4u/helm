@@ -13,9 +13,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as backoff } from 'node:timers/promises';
 
 assert.equal(process.env.HERDR_ENV, '1', 'Live acceptance must run inside Herdr');
-const appPath = process.env.HELM_OVERVIEW_APP ?? resolve(dirname(fileURLToPath(import.meta.url)), '../packages/kernel/dist/app.js');
-const kernelDist = dirname(appPath);
-const repository = resolve(kernelDist, '../../..');
+const appPath = process.env.HELM_OVERVIEW_APP ?? resolve(dirname(fileURLToPath(import.meta.url)), '../packages/hub/dist/app.js');
+const hubDist = dirname(appPath);
+const repository = resolve(hubDist, '../../..');
 const root = await mkdtemp(join(tmpdir(), 'helm-overview-live-'));
 const xdg = join(root, 'xdg');
 const session = `helm-overview-${process.pid}`;
@@ -121,7 +121,7 @@ function cleanup() {
   return cleanupPromise;
 }
 try {
-  const { createHerdrTransport } = await import(pathToFileURL(join(kernelDist, 'builtin-plugins/herdr/transport.js')));
+  const { createHerdrTransport } = await import(pathToFileURL(resolve(hubDist, '../../plugins/dist/herdr/transport.js')));
   base = createHerdrTransport();
   const readyUntil = Date.now() + 10_000;
   let ready = false;
@@ -165,7 +165,7 @@ try {
   check('unmanaged shell remains human owned', row.ownedBy === 'human');
   check('shell has no fabricated stateChangeSeq', !Object.hasOwn(row, 'stateChangeSeq'));
   check('overview preserves the actual directory', row.effectiveCwd === firstCwd || row.cwd === firstCwd || row.foregroundCwd === firstCwd);
-  const { startHub } = await import(pathToFileURL(join(kernelDist, 'http/index.js')));
+  const { startHub } = await import(pathToFileURL(resolve(hubDist, '../../kernel/dist/http/index.js')));
   hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 });
   token = app.kernel.auth.createProcessToken();
   const response = await fetch(`${hub.url}/api/plugins/builtin%3Aherdr/docs/overview`, { headers: { authorization: `Bearer ${token.token}` } });

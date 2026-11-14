@@ -9,7 +9,7 @@
  * 3. 布局：kernel/protocol/cli/web dist 镜像、内置插件资产落位、web 同级探测命中、
  *    不携带 node_modules；
  * 4. 负路径：依赖缺失退出码 3；checksum 篡改退出码 1；manifest 路径越界退出码 1；
- *    start 依赖缺失时拒绝拉起 kernel；
+ *    start 依赖缺失时拒绝拉起 hub；
  * 5. 正路径（真实端到端，仓库外隔离目录）：npm pack dist → 安全解包（校验全部成员
  *    位于 package/ 前缀、manifest 在包根而非 dist/ 子目录）→ npm install
  *    --omit=dev --ignore-scripts → start.mjs check（依赖解析 + node:sqlite +
@@ -74,7 +74,7 @@ function assertMirrored(srcDir: string, stagedDir: string) {
 
 /** 内置插件运行时资产期望落位：src 侧存在的 client/skill/assets 子目录全部出现在 dist 侧。 */
 function expectedAssetDirs() {
-  const builtinSrc = path.join(repoRoot, 'packages/kernel/src/builtin-plugins');
+  const builtinSrc = path.join(repoRoot, 'packages/plugins/src');
   const expected = [];
   for (const ent of readdirSync(builtinSrc, { withFileTypes: true })) {
     if (!ent.isDirectory()) continue;
@@ -90,8 +90,14 @@ test('payload 组装：补齐缺失构建产物后执行 build.mjs 成功', { ti
   if (!existsSync(path.join(repoRoot, 'packages/protocol/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/protocol', 'run', 'build'], repoRoot, 180_000);
   }
-  if (!existsSync(path.join(repoRoot, 'packages/kernel/dist/main.js'))) {
+  if (!existsSync(path.join(repoRoot, 'packages/kernel/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/kernel', 'run', 'build'], repoRoot, 240_000);
+  }
+  if (!existsSync(path.join(repoRoot, 'packages/plugins/dist/index.js'))) {
+    runCommand('pnpm', ['--filter', '@helm/plugins', 'run', 'build'], repoRoot, 240_000);
+  }
+  if (!existsSync(path.join(repoRoot, 'packages/hub/dist/main.js'))) {
+    runCommand('pnpm', ['--filter', '@helm/hub', 'run', 'build'], repoRoot, 240_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/web/dist/index.html'))) {
     runCommand('pnpm', ['--filter', '@helm/web', 'run', 'build'], repoRoot, 300_000);
@@ -114,19 +120,25 @@ test('payload 发布包契约：dist 根 package.json 可独立 npm pack/publish
   // files 显式白名单：根 gitignore 的 dist/ 规则不得让 npm pack 剔除 kernel/dist 等。
   assert.deepEqual(
     (distPkg.files as string[]).slice().sort(),
-    ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'kernel', 'manifest.json', 'protocol', 'protocol.tgz', 'start.mjs', 'web'].sort(),
+    ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'hub', 'kernel', 'kernel.tgz', 'manifest.json', 'plugins', 'plugins.tgz', 'protocol', 'protocol.tgz', 'start.mjs', 'web'].sort(),
   );
-  // 协议包以归档安装；外部直接依赖使用精确版本（无 ^/~/>= 浮动）。
+  // @helm 运行时包以归档安装；外部直接依赖使用精确版本（无 ^/~/>= 浮动）。
   assert.equal(distPkg.dependencies['@helm/protocol'], 'file:./protocol.tgz');
-  const kernelDeps = JSON.parse(readFileSync(path.join(repoRoot, 'packages/kernel/package.json'), 'utf-8')).dependencies;
+  assert.equal(distPkg.dependencies['@helm/kernel'], 'file:./kernel.tgz');
+  assert.equal(distPkg.dependencies['@helm/plugins'], 'file:./plugins.tgz');
+  const runtimeDeps = Object.fromEntries(
+    ['kernel', 'plugins', 'hub', 'protocol'].map((dir) => {
+      const deps = JSON.parse(readFileSync(path.join(repoRoot, 'packages', dir, 'package.json'), 'utf-8')).dependencies ?? {};
+      return [dir, deps];
+    }),
+  );
   for (const [name, spec] of Object.entries<string>(distPkg.dependencies)) {
-    if (name === '@helm/protocol') continue;
-    assert.ok(kernelDeps[name] !== undefined || name === 'ajv', `根依赖 ${name} 不在 kernel/protocol 生产依赖闭包内`);
+    if (name.startsWith('@helm/')) continue;
+    const owner = Object.keys(runtimeDeps).find((dir) => runtimeDeps[dir]![name] !== undefined);
+    assert.ok(owner !== undefined, `根依赖 ${name} 不在 hub/kernel/plugins/protocol 生产依赖闭包内`);
     assert.match(spec, /^\d/, `外部依赖 ${name} 必须是精确版本，实际 ${spec}`);
     // 与仓库已安装版本一致（可复现安装；经 pnpm 符号链接取真实包，兼容 peer 后缀目录）。
-    const fromDir = kernelDeps[name] !== undefined
-      ? path.join(repoRoot, 'packages/kernel')
-      : path.join(repoRoot, 'packages/protocol');
+    const fromDir = path.join(repoRoot, 'packages', owner);
     const realPkgJson = JSON.parse(
       readFileSync(path.join(realpathSync(path.join(fromDir, 'node_modules', name)), 'package.json'), 'utf-8'),
     );
@@ -155,32 +167,37 @@ test('payload manifest 契约：formatVersion/version/entries/checksum 全部成
   assert.deepEqual(
     keys,
     [
-      'cli', 'cliPackageJson', 'kernel', 'kernelPackageJson', 'launcher', 'protocol',
+      'cli', 'cliPackageJson', 'hub', 'hubPackageJson', 'kernel', 'kernelArchive', 'kernelPackageJson',
+      'launcher', 'plugins', 'pluginsArchive', 'pluginsPackageJson', 'protocol',
       'protocolArchive', 'protocolPackageJson', 'rootPackageJson', 'webIndex',
     ].sort(),
   );
 });
 
-test('payload 布局：kernel/protocol/cli/web dist 镜像、资产落位、web 同级探测命中、无 node_modules', { timeout: 60_000 }, () => {
+test('payload 布局：hub/kernel/plugins/protocol/cli/web dist 镜像、资产落位、无陈旧产物、无 node_modules', { timeout: 60_000 }, () => {
+  assertMirrored(path.join(repoRoot, 'packages/hub/dist'), path.join(stagingDir, 'hub/dist'));
   assertMirrored(path.join(repoRoot, 'packages/kernel/dist'), path.join(stagingDir, 'kernel/dist'));
+  assertMirrored(path.join(repoRoot, 'packages/plugins/dist'), path.join(stagingDir, 'plugins/dist'));
   assertMirrored(path.join(repoRoot, 'packages/protocol/dist'), path.join(stagingDir, 'protocol/dist'));
   assertMirrored(path.join(repoRoot, 'packages/cli/dist'), path.join(stagingDir, 'cli/dist'));
   assertMirrored(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'));
 
   for (const rel of expectedAssetDirs()) {
     assert.ok(
-      existsSync(path.join(stagingDir, 'kernel/dist/builtin-plugins', rel)),
+      existsSync(path.join(stagingDir, 'plugins/dist', rel)),
       `内置插件资产未落位: ${rel}`,
     );
   }
   const clients = expectedAssetDirs().filter((rel) => rel.endsWith('/client'));
   assert.ok(clients.length >= 9, `内置插件 client 目录数量异常: ${clients.length}`);
 
-  const hubJs = path.join(stagingDir, 'kernel/dist/http/hub.js');
-  assert.ok(existsSync(hubJs), 'kernel dist 缺 http/hub.js');
-  const probed = path.resolve(path.dirname(hubJs), '../../../web/dist');
-  assert.equal(probed, path.join(stagingDir, 'web/dist'), 'web dist 必须与 kernel 同级布局命中默认探测');
-  assert.ok(existsSync(path.join(probed, 'index.html')), 'web dist 缺 index.html');
+  assert.ok(existsSync(path.join(stagingDir, 'hub/dist/main.js')), 'hub dist 缺 main.js 入口');
+  assert.ok(existsSync(path.join(stagingDir, 'kernel/dist/http/hub.js')), 'kernel dist 缺 http/hub.js');
+  assert.ok(existsSync(path.join(stagingDir, 'web/dist/index.html')), 'web dist 缺 index.html');
+  // 陈旧布局守护：拆包迁移后 kernel dist 绝不允许再携带产品组合根或内置插件残留。
+  for (const stale of ['kernel/dist/main.js', 'kernel/dist/app.js', 'kernel/dist/builtin-plugins']) {
+    assert.ok(!existsSync(path.join(stagingDir, stale)), `检出陈旧产物: ${stale}（kernel 构建未 clean）`);
+  }
 
   // 诚实性：组装目录绝不携带 node_modules（依赖补齐契约是消费侧 npm install）。
   const stagedFiles = walkFiles(stagingDir);
@@ -238,7 +255,7 @@ test('start.mjs check：checksum 篡改 / manifest 路径越界时显式退出�
   }
 });
 
-test('start.mjs start：依赖缺失时拒绝拉起 kernel（无 Helm Hub 输出）', { timeout: 60_000 }, () => {
+test('start.mjs start：依赖缺失时拒绝拉起 hub（无 Helm Hub 输出）', { timeout: 60_000 }, () => {
   const env = { ...process.env };
   delete env.NODE_PATH;
   const res = spawnSync(process.execPath, [path.join(stagingDir, 'start.mjs'), 'start'], {
@@ -292,18 +309,22 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
       assert.ok(member.startsWith('package/'), `tarball 成员逃逸 package/ 前缀: ${member}`);
       assert.ok(!member.split('/').includes('..'), `tarball 成员含 ..: ${member}`);
     }
-    for (const must of ['package/manifest.json', 'package/start.mjs', 'package/package.json', 'package/kernel/dist/main.js', 'package/protocol/dist/index.js', 'package/cli/dist/index.js', 'package/web/dist/index.html']) {
+    for (const must of ['package/manifest.json', 'package/start.mjs', 'package/package.json', 'package/hub/dist/main.js', 'package/kernel/dist/index.js', 'package/plugins/dist/index.js', 'package/protocol/dist/index.js', 'package/cli/dist/index.js', 'package/web/dist/index.html']) {
       assert.ok(list.includes(must), `tarball 缺 ${must}（manifest/start 必须在包根而非 dist/ 子目录）`);
     }
     runCommand('tar', ['-xzf', tgz, '-C', extractDir, '--strip-components=1'], outsideRoot, 60_000);
 
     // 3. 本地 file: 依赖复制安装，晋升改名后仍须可以启动。
     runCommand('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], extractDir, 300_000);
-    assert.equal(lstatSync(path.join(extractDir, 'node_modules', '@helm', 'protocol')).isSymbolicLink(), false);
+    for (const helmPkg of ['protocol', 'kernel', 'plugins']) {
+      assert.equal(lstatSync(path.join(extractDir, 'node_modules', '@helm', helmPkg)).isSymbolicLink(), false, `@helm/${helmPkg} 必须是归档安装的真实目录`);
+    }
     const promoted = path.join(outsideRoot, 'release');
     renameSync(extractDir, promoted);
     extractDir = promoted;
     assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'protocol', 'dist', 'index.js')), '晋升后协议依赖失效');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'kernel', 'dist', 'index.js')), '晋升后 kernel 依赖失效');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugins', 'dist', 'index.js')), '晋升后 plugins 依赖失效');
 
     // 4. check：三入口依赖解析 + node:sqlite + esbuild 实测，退出码 0。
     const env = { ...process.env };
@@ -312,7 +333,7 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
       cwd: extractDir, env, encoding: 'utf8', timeout: 120_000,
     });
     assert.equal(check.status, 0, `check 期望 0，实际 ${check.status}\nstdout: ${check.stdout}\nstderr: ${check.stderr}`);
-    assert.match(check.stdout, /三入口/);
+    assert.match(check.stdout, /五入口/);
     assert.match(check.stdout, /node:sqlite \+ esbuild transform/);
 
     // 5. start：真实拉起 Hub，探活公开端点 /api/auth/status，SIGTERM 干净退出。
@@ -361,11 +382,26 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       assert.ok(probed, `Hub 未在 20s 内探活成功\nstdout: ${stdout}\nstderr: ${stderr}`);
+      // 静态托管真实验收：GET / 必须回 200 HTML（npm 安装布局下 kernel 默认探测
+      // 指向 node_modules/web/dist，依赖 start.mjs / hub 产品层显式注入；只探 API
+      // 会漏掉「API 活着但桌面空白」的回归），并取 index.html 内真实 /assets/* 资源。
+      const indexRes = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(3_000) });
+      assert.equal(indexRes.status, 200, `GET / 期望 200，实际 ${indexRes.status}（静态托管未生效）`);
+      const indexHtml = await indexRes.text();
+      assert.match(indexRes.headers.get('content-type') ?? '', /text\/html/, 'GET / 必须回 HTML');
+      assert.match(indexHtml, /<div[^>]*id="root"/, 'index.html 必须包含前端挂载点');
+      const assetMatch = /(?:src|href)="(\/?assets\/[^"]+\.(?:js|css))"/.exec(indexHtml);
+      assert.ok(assetMatch !== null, `index.html 未引用真实静态资源: ${indexHtml.slice(0, 300)}`);
+      const assetPath = assetMatch[1]!.startsWith('/') ? assetMatch[1]! : `/${assetMatch[1]!}`;
+      const assetRes = await fetch(`http://127.0.0.1:${port}${assetPath}`, { signal: AbortSignal.timeout(3_000) });
+      assert.equal(assetRes.status, 200, `静态资源 ${assetPath} 期望 200，实际 ${assetRes.status}`);
+      const assetBody = await assetRes.text();
+      assert.ok(assetBody.length > 0, `静态资源 ${assetPath} 不得为空体`);
     } finally {
       child.kill('SIGTERM');
       exitInfo = await waitForExit(5_000);
       if (exitInfo === null && child.pid !== undefined) {
-        // start.mjs 会派生 kernel；断言失败时也必须清理完整进程树。
+        // start.mjs 会派生 hub；断言失败时也必须清理完整进程树。
         if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { timeout: 5_000 });
         else { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* 已退出 */ } }
         await waitForExit(5_000);

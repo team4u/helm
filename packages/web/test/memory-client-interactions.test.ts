@@ -28,7 +28,7 @@ before(async () => {
     __helm_shared_lucide_react: LucideReact,
     __helm_shared_plugin_client: HelmPluginClient,
   })
-  const clientRoot = fileURLToPath(new URL('../../kernel/src/builtin-plugins/memory/client', import.meta.url))
+  const clientRoot = fileURLToPath(new URL('../../plugins/src/memory/client', import.meta.url))
   const { code } = await compilePluginClientModule('builtin:memory', clientRoot, 'index.tsx', cacheDir)
   const compiled = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)
   MemorySection = compiled.ProfileMemorySection as React.ComponentType<ProfileDetailSlotProps>

@@ -1,0 +1,81 @@
+{
+  "name": "@helm/plugins",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./profile": {
+      "types": "./dist/profile.d.ts",
+      "import": "./dist/profile.js"
+    },
+    "./memory": {
+      "types": "./dist/memory.d.ts",
+      "import": "./dist/memory.js"
+    },
+    "./workflow": {
+      "types": "./dist/workflow.d.ts",
+      "import": "./dist/workflow.js"
+    },
+    "./herdr": {
+      "types": "./dist/herdr.d.ts",
+      "import": "./dist/herdr.js"
+    },
+    "./herdr/contracts": {
+      "types": "./dist/herdr/contracts.d.ts",
+      "import": "./dist/herdr/contracts.js"
+    },
+    "./superagent": {
+      "types": "./dist/superagent.d.ts",
+      "import": "./dist/superagent.js"
+    },
+    "./triggers": {
+      "types": "./dist/triggers.d.ts",
+      "import": "./dist/triggers.js"
+    },
+    "./apps": {
+      "types": "./dist/apps.d.ts",
+      "import": "./dist/apps.js"
+    },
+    "./magpie": {
+      "types": "./dist/magpie.d.ts",
+      "import": "./dist/magpie.js"
+    },
+    "./magpie/contracts": {
+      "types": "./dist/magpie/contracts.d.ts",
+      "import": "./dist/magpie/contracts.js"
+    },
+    "./json-render": {
+      "types": "./dist/json-render.d.ts",
+      "import": "./dist/json-render.js"
+    },
+    "./mermaid": {
+      "types": "./dist/mermaid.d.ts",
+      "import": "./dist/mermaid.js"
+    }
+  },
+  "scripts": {
+    "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/copy-plugin-clients.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-durable": "1.5.0",
+    "@helm/protocol": "workspace:*",
+    "cron-parser": "^5.10.4",
+    "mermaid": "^12.2.0",
+    "typebox": "^1.0.0"
+  },
+  "devDependencies": {
+    "@helm/kernel": "workspace:*",
+    "@happy-dom/global-registrator": "^21.0.4"
+  }
+}

@@ -36,7 +36,7 @@ import { workflowUi } from './helpers/workflow-ui.js'
 import { importWorkflowClientModule, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 import type {
   BackgroundReportParse,
-} from '../../kernel/src/builtin-plugins/workflow/client/model-background-report.ts'
+} from '../../plugins/src/workflow/client/model-background-report.ts'
 import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement

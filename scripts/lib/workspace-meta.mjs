@@ -29,6 +29,8 @@ export const PACKAGE_TIERS = {
   cli: 'unit',
   web: 'unit',
   kernel: 'integration',
+  plugins: 'integration',
+  hub: 'integration',
   node: 'integration',
   payload: 'integration',
   desktop: 'integration',
@@ -167,7 +169,7 @@ export function testFilesOfPackage(repoRoot, pkgDir) {
 
 /**
  * 快速门命令计划（纯函数，供 CLI 执行与 --list 复核共用）：
- *   1. 任一受影响包 → pnpm typecheck（会先 build protocol+node，是测试的类型/运行前置）；
+ *   1. 任一受影响包 → pnpm typecheck（会先 build protocol/node/kernel/plugins/hub，是测试的类型/运行前置）；
  *   2. 选中 desktop 测试 → 先 pnpm --filter @helm/desktop run build（typecheck 不产
  *      packages/desktop/dist/hub-child.js，冷工作树不补建则 desktop 测试必败，且改
  *      hub-child 源码可能测到旧 dist）；
@@ -181,7 +183,7 @@ export function planCheckCommands({ affectedDirs, testFiles, pm, execPath, repoR
     commands.push({
       cmd: pm.cmd,
       args: [...pm.args, 'typecheck'],
-      label: 'pnpm typecheck（含 protocol/node build）',
+      label: 'pnpm typecheck（含 protocol/node/kernel/plugins/hub build）',
     });
   }
   if (testFiles.some((f) => f.startsWith('packages/desktop/test/'))) {

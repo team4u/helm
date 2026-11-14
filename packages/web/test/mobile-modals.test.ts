@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { readHostStyles } from './helpers/host-styles.js'
 
-const mermaidSource = readFileSync(new URL('../../kernel/src/builtin-plugins/mermaid/client/MermaidPreviewModal.tsx', import.meta.url), 'utf8')
-const mermaidPluginCss = readFileSync(new URL('../../kernel/src/builtin-plugins/mermaid/client/styles.css', import.meta.url), 'utf8')
+const mermaidSource = readFileSync(new URL('../../plugins/src/mermaid/client/MermaidPreviewModal.tsx', import.meta.url), 'utf8')
+const mermaidPluginCss = readFileSync(new URL('../../plugins/src/mermaid/client/styles.css', import.meta.url), 'utf8')
 const pluginCardSource = readFileSync(new URL('../src/plugins/PluginCard.tsx', import.meta.url), 'utf8')
 const pluginDrawerSource = readFileSync(new URL('../src/plugins/PluginDetailDrawer.tsx', import.meta.url), 'utf8')
 const modelDrawerSource = readFileSync(new URL('../src/models/ModelDetailDrawer.tsx', import.meta.url), 'utf8')

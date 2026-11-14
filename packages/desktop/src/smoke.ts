@@ -3,7 +3,7 @@
  *
  * 验证链：配置解析 → 运行器能力探测 → attach-or-spawn（期望 owned）→ Hub 身份探测 →
  * SIGKILL 崩溃 → 监督器自动重启 → 优雅停止 → 端口释放。
- * 前置：仓库根执行过 pnpm build（packages/kernel/dist/main.js 存在）。
+ * 前置：仓库根执行过 pnpm build（packages/hub/dist/main.js 存在）。
  * 数据隔离：dataDir 用临时目录，端口用临时分配端口，绝不触碰 3202 与 ~/.helm。
  */
 import { mkdtemp, rm } from 'node:fs/promises';

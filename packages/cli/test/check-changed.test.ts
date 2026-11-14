@@ -151,19 +151,21 @@ test('parseNameStatusZ：-z 流按 NUL 切分，rename/copy 展开新旧双侧',
 const SYNTH_PKGS = [
   { name: '@helm/protocol', dir: 'protocol', workspaceDeps: [] },
   { name: '@helm/kernel', dir: 'kernel', workspaceDeps: ['@helm/protocol', '@helm/node'] },
+  { name: '@helm/plugins', dir: 'plugins', workspaceDeps: ['@helm/protocol', '@helm/kernel'] },
+  { name: '@helm/hub', dir: 'hub', workspaceDeps: ['@helm/protocol', '@helm/kernel', '@helm/plugins'] },
   { name: '@helm/node', dir: 'node', workspaceDeps: ['@helm/protocol'] },
   { name: '@helm/cli', dir: 'cli', workspaceDeps: ['@helm/protocol'] },
   { name: '@helm/web', dir: 'web', workspaceDeps: ['@helm/protocol'] },
-  { name: '@helm/payload', dir: 'payload', workspaceDeps: ['@helm/cli', '@helm/kernel', '@helm/web'] },
+  { name: '@helm/payload', dir: 'payload', workspaceDeps: ['@helm/cli', '@helm/kernel', '@helm/plugins', '@helm/hub', '@helm/web'] },
   { name: '@helm/desktop', dir: 'desktop', workspaceDeps: [] },
 ]
 
-test('依赖闭包：protocol 改动扩散到全部消费方；node 改动经 kernel 传递到 payload', { timeout: 60_000 }, () => {
+test('依赖闭包：protocol 改动扩散到全部消费方；node 改动经 kernel 传递到 hub/payload', { timeout: 60_000 }, () => {
   const r1 = computeAffectedPackages(['packages/protocol/src/index.ts'], SYNTH_PKGS)
-  assert.deepEqual([...r1.affected].sort(), ['cli', 'kernel', 'node', 'payload', 'protocol', 'web'])
+  assert.deepEqual([...r1.affected].sort(), ['cli', 'hub', 'kernel', 'node', 'payload', 'plugins', 'protocol', 'web'])
 
   const r2 = computeAffectedPackages(['packages/node/src/cli.ts'], SYNTH_PKGS)
-  assert.deepEqual([...r2.affected].sort(), ['kernel', 'node', 'payload'])
+  assert.deepEqual([...r2.affected].sort(), ['hub', 'kernel', 'node', 'payload', 'plugins'])
 
   const r3 = computeAffectedPackages(['packages/desktop/src/main.ts'], SYNTH_PKGS)
   assert.deepEqual([...r3.affected], ['desktop'])
@@ -174,18 +176,18 @@ test('纯测试文件改动只选本包；包内非测试文件（含 test 助�
   assert.deepEqual([...t1.affected], ['kernel'])
   assert.equal(t1.fullTier, false)
 
-  // test/ 下非 *.test.ts 的助手文件按 source 处理（保守闭包）。
+  // test/ 下非 *.test.ts 的助手文件按 source 处理（保守闭包：kernel → hub → payload，hub 依赖 kernel）。
   const t2 = computeAffectedPackages(['packages/kernel/test/helpers.ts'], SYNTH_PKGS)
-  assert.deepEqual([...t2.affected].sort(), ['kernel', 'payload'])
+  assert.deepEqual([...t2.affected].sort(), ['hub', 'kernel', 'payload', 'plugins'])
 
   const t3 = computeAffectedPackages(['pnpm-lock.yaml'], SYNTH_PKGS)
   assert.equal(t3.fullTier, true)
-  assert.equal(t3.affected.size, 7)
+  assert.equal(t3.affected.size, 9)
 
   // 单改快速门自身实现（scripts 源码）也触发全档，不允许「无检查通过」。
   const t5 = computeAffectedPackages(['scripts/lib/spawn-checked.mjs'], SYNTH_PKGS)
   assert.equal(t5.fullTier, true)
-  assert.equal(t5.affected.size, 7)
+  assert.equal(t5.affected.size, 9)
 
   const t4 = computeAffectedPackages(['docs/foo.md', 'AGENTS.md'], SYNTH_PKGS)
   assert.equal(t4.affected.size, 0)

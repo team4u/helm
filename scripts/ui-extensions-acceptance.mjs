@@ -1,7 +1,7 @@
 // UI 扩展（P0–P4）浏览器验收夹具：真实内核/SQLite/PluginHost/HTTP/esbuild，
 // 零模型调用（不注入 faux provider，测试插件只走 UI/文档/action 面）。
 //
-// 前置：本仓库已完成 pnpm build（packages/kernel/dist 与 packages/web/dist 存在）。
+// 前置：本仓库已完成 pnpm build（packages/hub/dist、packages/kernel/dist 与 packages/web/dist 存在）。
 // 注意：当前 worktree 基线尚不含 P0–P4 实现（sessionDoc / 微操作 / PluginSlot /
 // composer 控制面在后端与前端并行开发中，protocol 契约见 ce17ae67）。本脚本
 // 是为合入后的真实浏览器验收预置的夹具：现在直接运行会在注册
@@ -24,7 +24,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = fileURLToPath(new URL('..', import.meta.url))
-const { createHelm } = await import('../packages/kernel/dist/app.js')
+const { createHelm } = await import('../packages/hub/dist/app.js')
 const { startHub } = await import('../packages/kernel/dist/http/index.js')
 
 // 1. 隔离数据目录（mkdtemp 于系统临时目录，绝不读写 ~/.helm 或旧系统数据）

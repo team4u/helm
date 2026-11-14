@@ -18,7 +18,7 @@ import type { Profile } from '@helm/protocol'
 import { ProfileService } from '../../kernel/src/services/profiles-skills.js'
 import { parseProfileBody } from '../../kernel/src/http/validate.js'
 import { buildProfileSavePayload, createDraft, editProfileField } from '../src/modals/profile-editor-model.js'
-import { MemoryStore } from '../../kernel/src/builtin-plugins/memory/store.js'
+import { MemoryStore } from '../../plugins/src/memory/store.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 
 /** 模拟 GET /profiles/:id 返回的富化详情（profile.json 基础字段 + SYSTEM 全文）。 */

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { createHelm } from '../packages/kernel/dist/app.js';
+import { createHelm } from '../packages/hub/dist/app.js';
 import { startHub } from '../packages/kernel/dist/http/index.js';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));

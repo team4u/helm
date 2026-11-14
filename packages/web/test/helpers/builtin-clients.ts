@@ -51,10 +51,10 @@ const CACHE_DIR = mkdtempSync(join(tmpdir(), 'helm-web-builtin-clients-'))
 after(() => rmSync(CACHE_DIR, { recursive: true, force: true }))
 
 const CLIENT_ROOTS: Record<string, string> = {
-  'builtin:superagent': fileURLToPath(new URL('../../../kernel/src/builtin-plugins/superagent/client', import.meta.url)),
-  'builtin:triggers': fileURLToPath(new URL('../../../kernel/src/builtin-plugins/triggers/client', import.meta.url)),
-  'builtin:magpie': fileURLToPath(new URL('../../../kernel/src/builtin-plugins/magpie/client', import.meta.url)),
-  'builtin:apps': fileURLToPath(new URL('../../../kernel/src/builtin-plugins/apps/client', import.meta.url)),
+  'builtin:superagent': fileURLToPath(new URL('../../../plugins/src/superagent/client', import.meta.url)),
+  'builtin:triggers': fileURLToPath(new URL('../../../plugins/src/triggers/client', import.meta.url)),
+  'builtin:magpie': fileURLToPath(new URL('../../../plugins/src/magpie/client', import.meta.url)),
+  'builtin:apps': fileURLToPath(new URL('../../../plugins/src/apps/client', import.meta.url)),
 }
 
 export async function importBuiltinClientModule(

@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { compilePluginClientModule } from '../../../kernel/src/plugins/client-compiler.js'
 import * as HelmPluginClient from '@helm/plugin-client'
 
-const WORKFLOW_CLIENT_ROOT = fileURLToPath(new URL('../../../kernel/src/builtin-plugins/workflow/client', import.meta.url))
+const WORKFLOW_CLIENT_ROOT = fileURLToPath(new URL('../../../plugins/src/workflow/client', import.meta.url))
 const CACHE_DIR = mkdtempSync(join(tmpdir(), 'helm-web-workflow-client-'))
 after(() => rmSync(CACHE_DIR, { recursive: true, force: true }))
 
@@ -65,6 +65,6 @@ export async function importWorkflowClientModule(moduleRef = 'index.tsx', cacheD
 }
 
 /** 类型引用不执行源码：运行时始终使用上方真实编译与动态 import。 */
-export async function importWorkflowModels(cacheDir = CACHE_DIR): Promise<typeof import('../../../kernel/src/builtin-plugins/workflow/client/models.ts')> {
-  return await importWorkflowClientModule('models.ts', cacheDir) as unknown as typeof import('../../../kernel/src/builtin-plugins/workflow/client/models.ts')
+export async function importWorkflowModels(cacheDir = CACHE_DIR): Promise<typeof import('../../../plugins/src/workflow/client/models.ts')> {
+  return await importWorkflowClientModule('models.ts', cacheDir) as unknown as typeof import('../../../plugins/src/workflow/client/models.ts')
 }

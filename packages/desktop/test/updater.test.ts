@@ -100,7 +100,7 @@ test('安装主链路：stage 只写 pending；activate 写 current（首次无 
     assert.deepEqual(info.entryArgs, []);
     assert.ok(info.releaseDir !== undefined && existsSync(info.releaseDir));
     assert.ok(info.entryPath !== undefined && existsSync(info.entryPath));
-    assert.ok(info.entryPath!.endsWith(path.join('kernel', 'dist', 'main.js')), '入口必须是 manifest.entries.kernel 而非 start.mjs');
+    assert.ok(info.entryPath!.endsWith(path.join('hub', 'dist', 'main.js')), '入口必须是 manifest.entries.hub 而非 start.mjs');
     assert.ok(existsSync(path.join(info.releaseDir!, 'node_modules', FIXTURE_DEP)), '依赖须安装在晋升后的 release 目录内');
     assert.equal(installer.calls.length, 1);
     // release 目录是不可变 uuid 目录：releases/<name>/<version>/<uuid>
@@ -221,7 +221,7 @@ test('损坏 manifest：非法 JSON / formatVersion / kernel 缺失 / kernel 指
       { version: '1.1.0', corrupt: 'manifest-json', expectCode: 'payload_manifest_invalid' },
       { version: '1.2.0', corrupt: 'format-version', expectCode: 'payload_manifest_invalid' },
       { version: '1.3.0', corrupt: 'entry-missing', expectCode: 'payload_manifest_invalid' },
-      { version: '1.4.0', corrupt: 'kernel-is-launcher', expectCode: 'payload_manifest_invalid' },
+      { version: '1.4.0', corrupt: 'hub-is-launcher', expectCode: 'payload_manifest_invalid' },
       { version: '1.5.0', corrupt: 'manifest-name', expectCode: 'payload_manifest_invalid' },
       { version: '1.6.0', corrupt: 'manifest-version', expectCode: 'payload_manifest_invalid' },
     ];
@@ -353,7 +353,7 @@ test('activate：入参被篡改（逃逸/跨包/入口不一致）→ payload_a
     const wrongEntry: PayloadInfo = { ...info, entryPath: path.join(info.releaseDir!, 'start.mjs') };
     await rejectsWith(updater.activate(wrongEntry), 'payload_activate_invalid', (e) => {
       const problems = (e.details as { problems?: string[] }).problems ?? [];
-      assert.ok(problems.some((p) => p.includes('entries.kernel 不一致')), `入口不一致须显式列出，实际: ${problems.join('; ')}`);
+      assert.ok(problems.some((p) => p.includes('entries.hub 不一致')), `入口不一致须显式列出，实际: ${problems.join('; ')}`);
     });
     assert.equal(updater.resolveCurrent(), null, '激活失败不写 current');
     assert.ok(updater.resolvePending() !== null, '激活失败保留 pending 待正确决议');

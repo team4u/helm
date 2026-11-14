@@ -206,6 +206,40 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  packages/hub:
+    dependencies:
+      '@helm/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+      '@helm/plugins':
+        specifier: workspace:*
+        version: link:../plugins
+      '@helm/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@earendil-works/chord':
+        specifier: 1.5.0
+        version: 1.5.0(esbuild@0.28.2)(ws@8.22.1)
+      '@earendil-works/pi-ai':
+        specifier: 1.5.0
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
+      '@earendil-works/pi-durable':
+        specifier: 1.5.0
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
+      '@helm/node':
+        specifier: workspace:*
+        version: link:../node
+      '@types/ws':
+        specifier: ^8.18.0
+        version: 8.18.2
+      birpc:
+        specifier: ^2.9.0
+        version: 2.9.0
+      ws:
+        specifier: ^8.18.0
+        version: 8.22.1
+
   packages/kernel:
     dependencies:
       '@earendil-works/chord':
@@ -229,18 +263,12 @@ importers:
       birpc:
         specifier: ^2.9.0
         version: 2.9.0
-      cron-parser:
-        specifier: ^5.10.4
-        version: 5.10.4
       diff:
         specifier: 8.0.4
         version: 8.0.4
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
-      mermaid:
-        specifier: ^12.2.0
-        version: 12.3.0
       typebox:
         specifier: ^1.0.0
         version: 1.4.4
@@ -248,9 +276,6 @@ importers:
         specifier: ^8.18.0
         version: 8.22.1
     devDependencies:
-      '@happy-dom/global-registrator':
-        specifier: ^21.0.4
-        version: 21.0.4
       '@helm/node':
         specifier: workspace:*
         version: link:../node
@@ -279,9 +304,15 @@ importers:
       '@helm/cli':
         specifier: workspace:*
         version: link:../cli
+      '@helm/hub':
+        specifier: workspace:*
+        version: link:../hub
       '@helm/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@helm/plugins':
+        specifier: workspace:*
+        version: link:../plugins
       '@helm/web':
         specifier: workspace:*
         version: link:../web
@@ -340,6 +371,37 @@ importers:
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
+
+  packages/plugins:
+    dependencies:
+      '@earendil-works/chord':
+        specifier: 1.5.0
+        version: 1.5.0(esbuild@0.28.2)(ws@8.22.1)
+      '@earendil-works/pi-ai':
+        specifier: 1.5.0
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
+      '@earendil-works/pi-durable':
+        specifier: 1.5.0
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
+      '@helm/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      cron-parser:
+        specifier: ^5.10.4
+        version: 5.10.4
+      mermaid:
+        specifier: ^12.2.0
+        version: 12.3.0
+      typebox:
+        specifier: ^1.0.0
+        version: 1.4.4
+    devDependencies:
+      '@happy-dom/global-registrator':
+        specifier: ^21.0.4
+        version: 21.0.4
+      '@helm/kernel':
+        specifier: workspace:*
+        version: link:../kernel
 
   packages/protocol:
     dependencies:

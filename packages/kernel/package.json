@@ -5,9 +5,6 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": {
-    "helm-hub": "./dist/main.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -15,8 +12,7 @@
     }
   },
   "scripts": {
-    "dev": "cd ../.. && tsx packages/kernel/src/main.ts",
-    "build": "tsc -p tsconfig.json && node scripts/copy-plugin-clients.mjs",
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test"
   },
@@ -28,15 +24,12 @@
     "@helm/protocol": "workspace:*",
     "ajv": "^8.17.1",
     "birpc": "^2.9.0",
-    "cron-parser": "^5.10.4",
     "diff": "8.0.4",
     "esbuild": "0.28.2",
-    "mermaid": "^12.2.0",
     "typebox": "^1.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@happy-dom/global-registrator": "^21.0.4",
     "@helm/node": "workspace:*",
     "@types/ws": "^8.18.0"
   }

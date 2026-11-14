@@ -12,7 +12,7 @@
  *    baseline、current.json 原子切换、清除同一 pending；启动失败则 reject(info, error)——
  *    记入 blocked.json、current 保持不动、清除同一 pending、不修改任何 release 目录；
  * 3. resolveCurrent / resolvePending / resolvePrevious 读取时严格复验（状态文件与 release
- *    manifest 的 name/version 一致、entryPath 与 manifest entries.kernel 一致、containment、
+ *    manifest 的 name/version 一致、entryPath 与 manifest entries.hub 一致、containment、
  *    拒绝 Windows 绝对/盘符相对/反斜杠路径形态），损坏显式报错，绝不静默当空态。
  *
  * check() 更新判定：跟踪 latest 时仅「更大 SemVer」视为可更新（registry latest 回退不误报）；
@@ -42,9 +42,9 @@ export interface PayloadInfo {
   readonly version: string;
   /** release 目录（绝对路径，releases/<name>/<version>/<uuid> 不可变目录）；stage 后存在。 */
   readonly releaseDir?: string;
-  /** Hub 入口（绝对路径，来自 payload manifest entries.kernel；非 start.mjs）。 */
+  /** Hub 入口（绝对路径，来自 payload manifest entries.hub；非 start.mjs）。 */
   readonly entryPath?: string;
-  /** spawn 附加参数（契约上恒空：kernel 入口直接启动）。 */
+  /** spawn 附加参数（契约上恒空：hub 入口直接启动）。 */
   readonly entryArgs?: readonly string[];
 }
 
@@ -347,9 +347,9 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       });
       rmSync(tgzPath, { force: true });
 
-      const { kernelEntryPath, launcherPath } = this.loadPayloadManifest(extractDir, meta);
+      const { hubEntryPath, launcherPath } = this.loadPayloadManifest(extractDir, meta);
       await this.verifyWithInstaller(extractDir, launcherPath);
-      const info = this.promoteToImmutable(extractDir, meta, kernelEntryPath);
+      const info = this.promoteToImmutable(extractDir, meta, hubEntryPath);
       writeJsonAtomic(this.pendingFile, this.stateOf(info, new Date().toISOString()));
       this.unblockVersion(meta.version);
       return info;
@@ -558,7 +558,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     return true;
   }
 
-  /** release 目录 manifest 复验：name/version 与状态文件一致，entryPath 与 entries.kernel 一致。 */
+  /** release 目录 manifest 复验：name/version 与状态文件一致，entryPath 与 entries.hub 一致。 */
   private validateReleaseManifest(releaseDir: string, name: string, version: string, entryPath: string | null, problems: string[]): void {
     let manifest: unknown;
     try {
@@ -575,19 +575,19 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     }
     const entries = m['entries'];
     const entriesRecord = typeof entries === 'object' && entries !== null ? (entries as Record<string, unknown>) : {};
-    const kernelRel = entriesRecord['kernel'];
-    if (typeof kernelRel !== 'string' || kernelRel.length === 0) {
-      problems.push('release manifest entries.kernel 缺失');
+    const hubRel = entriesRecord['hub'];
+    if (typeof hubRel !== 'string' || hubRel.length === 0) {
+      problems.push('release manifest entries.hub 缺失');
       return;
     }
     const contained: string[] = [];
-    const resolved = this.containedIn(releaseDir, kernelRel, contained, 'entries.kernel');
+    const resolved = this.containedIn(releaseDir, hubRel, contained, 'entries.hub');
     if (contained.length > 0) {
       problems.push(...contained);
       return;
     }
     if (entryPath !== null && resolved !== path.resolve(entryPath)) {
-      problems.push(`entryPath 与 manifest entries.kernel 不一致: ${entryPath} ≠ ${resolved}`);
+      problems.push(`entryPath 与 manifest entries.hub 不一致: ${entryPath} ≠ ${resolved}`);
     }
   }
 
@@ -773,7 +773,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
   private loadPayloadManifest(
     releaseDir: string,
     meta: RegistryVersion | null,
-  ): { kernelEntryPath: string; launcherPath: string } {
+  ): { hubEntryPath: string; launcherPath: string } {
     let manifest: unknown;
     try {
       manifest = JSON.parse(readFileSync(path.join(releaseDir, 'manifest.json'), 'utf8'));
@@ -795,24 +795,24 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     }
     const entries = m['entries'];
     const entriesRecord = typeof entries === 'object' && entries !== null ? (entries as Record<string, unknown>) : {};
-    const kernelRel = entriesRecord['kernel'];
+    const hubRel = entriesRecord['hub'];
     const launcherRel = typeof entriesRecord['launcher'] === 'string' && entriesRecord['launcher'].length > 0 ? entriesRecord['launcher'] : 'start.mjs';
-    if (typeof kernelRel !== 'string' || kernelRel.length === 0) {
-      problems.push('entries.kernel 缺失（Hub 入口声明）');
-    } else if (kernelRel === launcherRel || kernelRel === 'start.mjs') {
-      problems.push('entries.kernel 不得指向 launcher（start.mjs 是带命令参数的启动器，不是 Hub 入口）');
+    if (typeof hubRel !== 'string' || hubRel.length === 0) {
+      problems.push('entries.hub 缺失（Hub 入口声明）');
+    } else if (hubRel === launcherRel || hubRel === 'start.mjs') {
+      problems.push('entries.hub 不得指向 launcher（start.mjs 是带命令参数的启动器，不是 Hub 入口）');
     }
-    let kernelEntryPath: string | null = null;
-    if (typeof kernelRel === 'string') {
-      kernelEntryPath = this.containedIn(releaseDir, kernelRel, problems, 'entries.kernel');
+    let hubEntryPath: string | null = null;
+    if (typeof hubRel === 'string') {
+      hubEntryPath = this.containedIn(releaseDir, hubRel, problems, 'entries.hub');
     }
     const launcherPath = this.containedIn(releaseDir, launcherRel, problems, 'entries.launcher');
-    if (kernelEntryPath !== null && !existsSync(kernelEntryPath)) problems.push(`entries.kernel 文件不存在: ${kernelRel}`);
+    if (hubEntryPath !== null && !existsSync(hubEntryPath)) problems.push(`entries.hub 文件不存在: ${hubRel}`);
     if (!existsSync(launcherPath)) problems.push(`launcher 文件不存在: ${launcherRel}`);
     if (problems.length > 0) {
       throw new DesktopError('payload_manifest_invalid', 'payload manifest 契约不满足', { releaseDir, problems });
     }
-    return { kernelEntryPath: kernelEntryPath!, launcherPath };
+    return { hubEntryPath: hubEntryPath!, launcherPath };
   }
 
   /** 相对路径 containment 解析（manifest 声明同样不可逃逸 releaseDir，且拒绝 Windows 形态：盘符前缀与反斜杠）。 */
@@ -962,7 +962,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
    * 绝不重命名/删除既有版本目录（同版本重装并存，激活由 current.json 指针决定）。
    * 晋升失败（如目录被占位文件阻挡）显式报错，既有 current 与其他版本目录不受影响。
    */
-  private promoteToImmutable(extractDir: string, meta: RegistryVersion, kernelEntryPath: string): PayloadInfo {
+  private promoteToImmutable(extractDir: string, meta: RegistryVersion, hubEntryPath: string): PayloadInfo {
     const versionRoot = this.releaseDirFor(meta.name, meta.version);
     try {
       mkdirSync(versionRoot, { recursive: true });
@@ -973,7 +973,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
         { versionRoot },
       );
     }
-    const entryRel = path.relative(extractDir, kernelEntryPath);
+    const entryRel = path.relative(extractDir, hubEntryPath);
     for (let attempt = 0; attempt < 8; attempt++) {
       const releaseDir = path.join(versionRoot, randomBytes(8).toString('hex'));
       if (existsSync(releaseDir)) continue;

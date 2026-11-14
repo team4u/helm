@@ -43,9 +43,9 @@ const { matchMarkdownCodeBlock } = await import('../src/conversation/codeblock-r
 const { CodeBlockRenderer } = await import('../src/conversation/CodeBlockRenderer.js')
 const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 
-const JSON_RENDER_ROOT = resolve(here, '../../kernel/src/builtin-plugins/json-render/client')
-const MERMAID_ROOT = resolve(here, '../../kernel/src/builtin-plugins/mermaid/client')
-const KERNEL_ROOT = resolve(here, '../../kernel')
+const JSON_RENDER_ROOT = resolve(here, '../../plugins/src/json-render/client')
+const MERMAID_ROOT = resolve(here, '../../plugins/src/mermaid/client')
+const PLUGINS_ROOT = resolve(here, '../../plugins')
 const CACHE = mkdtempSync(join(tmpdir(), 'helm-codeblock-test-'))
 
 // ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ test('mermaid client 真实编译（受控 npm bundle）：模块可导入且不
   // 不挂载 __helm_shared_mermaid：mermaid 经插件受控 npm 依赖自带，宿主零绑定
   ;(globalThis as Record<string, unknown>).__helm_shared_mermaid = undefined
   const mod = await importCompiled(MERMAID_ROOT, 'builtin:mermaid', [
-    { specifiers: ['mermaid'], packageRoot: KERNEL_ROOT },
+    { specifiers: ['mermaid'], packageRoot: PLUGINS_ROOT },
   ])
   assert.equal(typeof mod['MermaidCodeBlock'], 'function', 'MermaidCodeBlock 导出为组件函数')
 })

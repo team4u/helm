@@ -12,7 +12,6 @@
  */
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -289,13 +288,13 @@ test('指向不存在目录的 webDistDir：显式诊断 web_dist_invalid（不�
   assert.ok(body.error.message.includes('no-such-dist'), '诊断应包含具体目录路径')
 })
 
-test('单参调用形态（kernel）：缺省 webDistDir 探测', { timeout: 60_000 }, async () => {
+test('单参调用形态（kernel）：缺省不启用静态托管（纯 API，不探测任何默认目录）', { timeout: 60_000 }, async () => {
   const legacy = createHandlerLegacy(makeKernel(dataDir))
-  // 缺省探测依赖实际构建产物；构建后应走 SPA 回退，未构建时才返回 JSON 404。
-  const hasDefaultDist = existsSync(new URL('../../web/dist/index.html', import.meta.url))
+  // 内核不做默认目录探测（Web 目录是 hub 产品策略）：无论仓旁是否存在 web dist，
+  // 非 /api 一律 JSON 404；嵌入式 Kernel 的 HTTP 默认行为不随环境改变。
   const res = await call(legacy, 'GET', '/not-a-real-dist-check')
-  assert.equal(res.status, hasDefaultDist ? 200 : 404)
-  assert.equal(res.headers.get('content-type'), hasDefaultDist ? 'text/html; charset=utf-8' : 'application/json; charset=utf-8')
+  assert.equal(res.status, 404)
+  assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8')
 })
 
 test('非 GET/HEAD 方法（POST /）不进静态托管，回落 JSON 404', { timeout: 60_000 }, async () => {

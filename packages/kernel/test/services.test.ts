@@ -25,10 +25,10 @@ import {
   HELM_CLI_SKILL_AND_PLUGIN_DEV_MD,
   HELM_CLI_SKILL_ASSET,
   renderSkillTemplate,
-} from '../src/builtin-plugins/profile/assets.js'
+} from '../../plugins/src/profile/assets.js'
 import { MANAGED_EXEC_ENV_VARS } from '../src/env/scoped-env.js'
-import { WATCHDOG_PLAYBOOK_SKILL_ASSET } from '../src/builtin-plugins/superagent/assets.js'
-import { MemoryStore } from '../src/builtin-plugins/memory/store.js'
+import { WATCHDOG_PLAYBOOK_SKILL_ASSET } from '../../plugins/src/superagent/assets.js'
+import { MemoryStore } from '../../plugins/src/memory/store.js'
 import { createProfileFileHost } from './helpers/profile-file-host.js'
 import { assert } from './helpers.js'
 import { waitFor } from './helpers.js'

@@ -5,7 +5,8 @@
  *
  * 产物布局（packages/desktop/hub/，electron-builder extraResources → <resources>/hub）：
  *   hub/{package.json, manifest.json, start.mjs}   复用 payload dist（同源契约）
- *   hub/kernel/ hub/protocol/ hub/cli/ hub/web/    kernel/protocol/cli/web 产物
+ *   hub/hub/ hub/kernel/ hub/plugins/ hub/protocol/ hub/cli/ hub/web/
+ *                                                  hub/kernel/plugins/protocol/cli/web 产物
  *   hub/node_modules/...                            生产依赖闭包（见下）
  *   hub/tools/npm/                                  npm CLI 完整文件闭包（bin/npm-cli.js，
  *                                                   供主代理 Electron run-as-node 运行）
@@ -47,7 +48,7 @@ if (!existsSync(path.join(payloadDist, 'manifest.json'))) {
   const res = spawnSync('pnpm', ['--filter', '@helm/payload', 'run', 'build'], { cwd: repoRoot, stdio: 'inherit' });
   if (res.status !== 0) fail('payload dist 组装失败（上方位输出）');
 }
-if (!existsSync(path.join(payloadDist, 'kernel/dist/main.js'))) fail(`payload dist 布局异常: ${payloadDist}`);
+if (!existsSync(path.join(payloadDist, 'hub/dist/main.js'))) fail(`payload dist 布局异常: ${payloadDist}`);
 
 // --- 复用 payload dist（同源契约，不重复实现） ---------------------------------------
 rmSync(hubDir, { recursive: true, force: true });
@@ -120,23 +121,30 @@ function placeDep(name, realDir, pkgJson, consumerDir) {
   }
 }
 
-// 根依赖：外部依赖自 kernel 包目录解析；@helm/protocol 以 payload 携带的 protocol/
-// 目录为本体（其依赖自仓库 protocol 包目录解析，保证与发布 file: 语义一致的闭包）。
+// 根依赖：外部依赖自声明它的运行时包目录（kernel 优先，其次 plugins）解析；
+// @helm/protocol / @helm/kernel / @helm/plugins 以 payload 携带的同名目录为本体
+// 物化进 node_modules（其外部依赖自仓库对应包目录解析，保证与发布 file: 语义
+// 一致的闭包）。
+const RUNTIME_PKG_DIRS = { '@helm/protocol': 'protocol', '@helm/kernel': 'kernel', '@helm/plugins': 'plugins' };
 for (const [name, spec] of Object.entries(rootDeps)) {
-  if (name === '@helm/protocol') {
-    const protoDir = path.join(hubDir, 'protocol');
-    const protoPkg = JSON.parse(readFileSync(path.join(protoDir, 'package.json'), 'utf-8'));
-    placed.set(path.join(hubDir, 'node_modules', name), { name, version: protoPkg.version });
+  const runtimeDir = RUNTIME_PKG_DIRS[name];
+  if (runtimeDir !== undefined) {
+    const pkgDir = path.join(hubDir, runtimeDir);
+    const pkgJson = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf-8'));
+    placed.set(path.join(hubDir, 'node_modules', name), { name, version: pkgJson.version });
     mkdirSync(path.join(hubDir, 'node_modules', '@helm'), { recursive: true });
-    copyQueue.push([protoDir, path.join(hubDir, 'node_modules', '@helm', 'protocol')]);
-    for (const depName of Object.keys(protoPkg.dependencies ?? {})) {
-      const resolved = resolveDepRealDir(path.join(repoRoot, 'packages/protocol'), depName, false);
+    copyQueue.push([pkgDir, path.join(hubDir, 'node_modules', '@helm', runtimeDir)]);
+    for (const depName of Object.keys(pkgJson.dependencies ?? {})) {
+      const resolved = resolveDepRealDir(path.join(repoRoot, 'packages', runtimeDir), depName, false);
       if (resolved.error) problems.push(resolved.error);
-      else placeDep(depName, resolved.realDir, resolved.pkgJson, protoDir);
+      else placeDep(depName, resolved.realDir, resolved.pkgJson, pkgDir);
     }
     continue;
   }
-  const resolved = resolveDepRealDir(path.join(repoRoot, 'packages/kernel'), name, false);
+  const ownerDir = ['kernel', 'plugins'].find((dir) =>
+    Object.keys(JSON.parse(readFileSync(path.join(repoRoot, 'packages', dir, 'package.json'), 'utf-8')).dependencies ?? {}).includes(name),
+  ) ?? 'kernel';
+  const resolved = resolveDepRealDir(path.join(repoRoot, 'packages', ownerDir), name, false);
   if (resolved.error) {
     problems.push(resolved.error);
     continue;
@@ -220,7 +228,7 @@ try {
   console.log(`[assemble-hub] 隔离验收（${verifyRoot}）：启动 Hub @ ${port}`);
   const wrapper = path.join(verifyRoot, 'hub-child.mjs');
   cpSync(path.join(desktopRoot, 'dist', 'hub-child.js'), wrapper);
-  const child = spawn(process.execPath, [wrapper, path.join(verifyHub, 'kernel', 'dist', 'main.js')], {
+  const child = spawn(process.execPath, [wrapper, path.join(verifyHub, 'hub', 'dist', 'main.js')], {
     cwd: verifyHub,
     env: { ...process.env, NODE_PATH: '', HELM_PORT: String(port), HELM_HOST: '127.0.0.1', HELM_DATA_DIR: dataDir, HELM_CWD: dataDir },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],

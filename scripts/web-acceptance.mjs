@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createHelm } from '../packages/kernel/dist/app.js'
+import { createHelm } from '../packages/hub/dist/app.js'
 import { startHub } from '../packages/kernel/dist/http/index.js'
 const projectRoot = fileURLToPath(new URL('..', import.meta.url))
 const sdkRoot = new URL('../packages/kernel/node_modules/@earendil-works/pi-ai/dist/', import.meta.url)

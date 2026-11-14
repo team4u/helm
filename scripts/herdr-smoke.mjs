@@ -3,7 +3,7 @@
  * herdr-smoke.mjs — `builtin:herdr` 真链路手工验收脚本（独立运行，不纳入 pnpm test）。
  *
  * 验收对象（全部真实组件，零 mock）：
- * - 编译产物 @helm/kernel：packages/kernel/dist/app.js 的 createHelm + WorkflowService；
+ * - 编译产物 @helm/hub：packages/hub/dist/app.js 的 createHelm；
  * - builtin:herdr 插件：setConfig -> enable -> agent_spawn 钩子接管外部运行时；
  * - 本机已安装 Herdr 服务：脚本自建隔离 headless session（独立 XDG_CONFIG_HOME、
  *   显式 socket path、子进程剔除继承的 HERDR_* 定位变量），绝不触碰用户现有
@@ -26,12 +26,12 @@
  *    snapshot 精确恢复既有 pane/tab/workspace 基线（保留已有窗格）。缓存节点不携带原 executionId/worktree 元数据
  *    （原 run 已验证过），重放只验证无新调用/无新资源。
  *
- * 传输层：导入与 app.js 同目录的 builtin-plugins/herdr/transport.js 的
+ * 传输层：导入 @helm/plugins 编译产物（packages/plugins/dist/herdr/transport.js）的
  * createHerdrTransport（生产实现），透明包装 call 做方法计数后注入
  * createHelm({ herdrTransport })；绝不 mock 返回。脚本自身的 session.snapshot
  * 也复用该 transport（每次调用带有限 timeoutMs）。
  *
- * 依赖：node>=24、已执行 pnpm build（存在 packages/kernel/dist）、herdr / pi / git
+ * 依赖：node>=24、已执行 pnpm build（存在 packages/hub/dist 与 packages/plugins/dist）、herdr / pi / git
  * 在 PATH、~/.pi/agent/auth.json 具备目标模型真实凭据。不监听任何端口。
  * 总超时：--timeout-ms（默认 180000，范围 60000..1800000）；清理阶段另有独立
  * 有界预算，超时后仍确保关闭自己创建的 herdr server。
@@ -62,7 +62,7 @@ import { fileURLToPath } from 'node:url'
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 const KERNEL_APP_PATH = process.env.HERDR_SMOKE_KERNEL_APP
   ? resolve(process.env.HERDR_SMOKE_KERNEL_APP)
-  : resolve(SCRIPT_DIR, '..', 'packages', 'kernel', 'dist', 'app.js')
+  : resolve(SCRIPT_DIR, '..', 'packages', 'hub', 'dist', 'app.js')
 const PROFILE_ID = 'herdr-smoke-pi'
 const ROOT_CONVERSATION_ID = 1
 const ARTIFACT_NAME = 'artifact.txt'
@@ -303,7 +303,7 @@ async function main() {
     const nodeMajor = Number(process.versions.node.split('.')[0])
     check('node 主版本 >= 24', nodeMajor >= 24, process.versions.node)
     check('内核编译产物存在（先 pnpm build）', existsSync(KERNEL_APP_PATH), KERNEL_APP_PATH)
-    const transportModulePath = join(dirname(KERNEL_APP_PATH), 'builtin-plugins', 'herdr', 'transport.js')
+    const transportModulePath = resolve(SCRIPT_DIR, '..', 'packages', 'plugins', 'dist', 'herdr', 'transport.js')
     check('herdr 传输层编译产物存在', existsSync(transportModulePath), transportModulePath)
     runCmd('herdr', ['--version'])
     runCmd('git', ['--version'])
