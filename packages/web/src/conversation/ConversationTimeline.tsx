@@ -37,7 +37,7 @@ import {
 import { resolveActiveOutlineEntryId } from './outline-model.js'
 import { ToolExpandedBody, ToolRawBody } from './ToolExpandedBody.js'
 import { toolRowStats } from './tool-body-model.js'
-import { calibrateAnchorAfterSmoothScroll, type AnchorAlignment } from './timeline-scroll-calibration.js'
+import { calibrateAnchorAfterSmoothScroll, calibrateInitialStickToBottom, type AnchorAlignment } from './timeline-scroll-calibration.js'
 import {
   OUTLINE_ACTIVE_LINE_PX,
   resolveActiveAnchorIndex,
@@ -1090,7 +1090,15 @@ export function ConversationTimeline({
   const lastOutlineTickRef = useRef<number | null>(null)
   const lastActiveEntryRef = useRef<string | undefined>(undefined)
   const outlineHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const activeCalibrationRef = useRef<{ conversationId: number; cancel: () => void } | null>(null)
+  const activeCalibrationRef = useRef<{
+    conversationId: number
+    kind: 'anchor' | 'initial-bottom'
+    cancel: () => void
+  } | null>(null)
+  // 一次性初始贴底窗口资格：consumed = 已被用户输入/自然收敛/显式定位取代，
+  // 本会话内不再重启；换会话/StrictMode 重演的 cleanup 只取消（active=false）
+  // 不消费，重挂后可重新启动，避免一次性资格被 effect 重演提前耗尽。
+  const initialBottomRef = useRef<{ active: boolean; consumed: boolean }>({ active: false, consumed: false })
 
   // 启动最终锚点校准并接管在途任务（新定位/搜索高亮互斥，旧的立即 cancel）。
   // 行 ref 在 commit 阶段可能先于父级 scrollRef 挂载（子先于父），从目标自身
@@ -1099,9 +1107,13 @@ export function ConversationTimeline({
     (target: HTMLElement, alignment: AnchorAlignment): void => {
       const scroller = target.closest<HTMLElement>('.timeline-scroll')
       if (scroller === null) return
-      activeCalibrationRef.current?.cancel()
+      // 显式定位优先于初始贴底：窗口资格就此消费，定位结束后不复活。
+      const prev = activeCalibrationRef.current
+      if (prev !== null && prev.kind === 'initial-bottom') initialBottomRef.current.consumed = true
+      prev?.cancel()
       activeCalibrationRef.current = {
         conversationId: conversation.id,
+        kind: 'anchor',
         cancel: calibrateAnchorAfterSmoothScroll({ scroller, target, alignment }),
       }
     },
@@ -1114,9 +1126,15 @@ export function ConversationTimeline({
   // 换会话/卸载：仅作废属于旧会话的在途校准（挂载/换会话时 ref callback 先于
   // 本 effect 运行，新会话刚启动的校准不能被本轮 cleanup 或 setup 误杀）与高亮
   // 清除定时器（同一组件实例复用滚动容器）；切换会话重置贴底吸附初态。
+  // 初始贴底窗口同样只取消不消费：StrictMode 的 cleanup→setup 重演后可重启。
   useEffect(() => {
     stickToBottomRef.current = true
     lastScrollTopRef.current = 0
+    // 重置大纲 tick 消费记录：换会话/StrictMode 重挂后，尚在生效的定位请求
+    // 必须重新执行（否则 setup 重置的贴底初态会抢走定位目的地）。
+    lastOutlineTickRef.current = null
+    initialBottomRef.current.active = false
+    initialBottomRef.current.consumed = false
     const ownedConversationId = conversation.id
     return () => {
       const active = activeCalibrationRef.current
@@ -1129,6 +1147,34 @@ export function ConversationTimeline({
         outlineHighlightTimerRef.current = null
       }
     }
+  }, [conversation.id])
+
+  // 启动一次性初始贴底校准（详见 timeline-scroll-calibration.ts）。仅在：
+  // 未消费、未在途、仍处于贴底吸附态（搜索/大纲定位 effect 已先行释放贴底，
+  // 显式定位优先）且滚动容器就绪时启动；窗口结束后不再因 rerender 复活。
+  const beginInitialBottomCalibration = useCallback((): void => {
+    const state = initialBottomRef.current
+    if (state.consumed || state.active) return
+    if (!stickToBottomRef.current) return
+    const scroller = scrollRef.current
+    if (scroller === null) return
+    // 防御性接管：槽位占用者理论上不可能是初始窗口（active/consumed 守卫），
+    // 但取消动作必须在标记新窗口 active 之前完成，避免旧 onEnd 回调改写状态。
+    const prev = activeCalibrationRef.current
+    if (prev !== null && prev.kind === 'initial-bottom') initialBottomRef.current.consumed = true
+    prev?.cancel()
+    state.active = true
+    const cancel = calibrateInitialStickToBottom({
+      scroller,
+      onEnd: (reason) => {
+        state.active = false
+        if (reason !== 'cancelled') state.consumed = true
+        if (reason === 'user-input') stickToBottomRef.current = false
+        const active = activeCalibrationRef.current
+        if (active !== null && active.cancel === cancel) activeCalibrationRef.current = null
+      },
+    })
+    activeCalibrationRef.current = { conversationId: conversation.id, kind: 'initial-bottom', cancel }
   }, [conversation.id])
 
   const isWorking = conversation.status === 'working'
@@ -1163,7 +1209,7 @@ export function ConversationTimeline({
   }, [items])
 
   // 历史行渲染隔离（content-visibility）：仅浏览器支持时启用；live 流式回合、
-  // 排队输入、未结算最新回合与高亮/大纲定位目标行在 resolveContainmentClass
+  // 排队输入、最新 assistant 回合与高亮/大纲定位目标行在 resolveContainmentClass
   // 内解除隔离，保证测量与滚动定位以真实布局进行。
   const containmentEnabled = useMemo(() => supportsTimelineContainment(), [])
 
@@ -1179,12 +1225,8 @@ export function ConversationTimeline({
   }, [store.highlightedEntry, conversation.id, localHighlightEntryId, outlineScrollRequest])
 
   const cvExclusions = useMemo<ContainmentExclusions>(
-    () => ({
-      releasedEntryIds,
-      latestAssistantKey: lastAssistantKey,
-      conversationBusy: conversation.status === 'working' || conversation.status === 'blocked',
-    }),
-    [releasedEntryIds, lastAssistantKey, conversation.status],
+    () => ({ releasedEntryIds, latestAssistantKey: lastAssistantKey }),
+    [releasedEntryIds, lastAssistantKey],
   )
 
   // 锚点集合签名：仅当行集合（锚点 id 序列）变化时才重建阅读锚点观察器；
@@ -1198,11 +1240,22 @@ export function ConversationTimeline({
 
   // 贴底吸附：主动上滚即刻脱离贴底（解除死区牢笼，无论离底多近均尊重上滚意图）；
   // 仅在主动向底滚动至近底区或实质触底时才恢复贴底。
+  // 初始贴底窗口期内 scroll 事件的 top 下降可能只是估高转真实布局的位移（浏览器
+  // 对收缩后超界的 scrollTop 下调同样派发 scroll），不据此判定用户意图——窗口期
+  // 的用户接管由校准器的物理输入监听同步取消并释放贴底。
+  // 常驻方向性输入释放：wheel 上滚（deltaY<0）与上滚方向键在事件监听内同步释放
+  // 贴底，不等 scroll 事件（scroll 异步派发，流式增长触发的 ResizeObserver 跟底
+  // 写入可能先于 scroll 到达，仅靠 scroll 判定会把用户已上滚的位置拉回底部）。
+  // 只处理明确向上的输入；点击/触摸/向下输入不阻止 working 正常跟底。
   useEffect(() => {
     const el = scrollRef.current
     if (el === null) return
     const onScroll = (): void => {
       const top = el.scrollTop
+      if (initialBottomRef.current.active) {
+        lastScrollTopRef.current = top
+        return
+      }
       const distanceFromBottom = el.scrollHeight - top - el.clientHeight
       if (top < lastScrollTopRef.current - 2) {
         stickToBottomRef.current = false
@@ -1211,8 +1264,22 @@ export function ConversationTimeline({
       }
       lastScrollTopRef.current = top
     }
+    const onWheel = (event: WheelEvent): void => {
+      if (event.deltaY < 0) stickToBottomRef.current = false
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home') {
+        stickToBottomRef.current = false
+      }
+    }
     el.addEventListener('scroll', onScroll, { passive: true })
-    return () => el.removeEventListener('scroll', onScroll)
+    el.addEventListener('wheel', onWheel, { passive: true })
+    el.addEventListener('keydown', onKeyDown, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('keydown', onKeyDown)
+    }
   }, [])
 
   // 视口当前阅读锚点追踪（供大纲浮层高亮）：IntersectionObserver 观察区域
@@ -1374,19 +1441,29 @@ export function ConversationTimeline({
   }, [items])
 
   const contentFingerprint = `${items.length}:${detailEntries.length}:${conversation.status}:${lastTurnSummary}:${live?.updatedAt ?? 0}:${live?.thinking?.length ?? 0}:${live?.text.length ?? 0}:${live?.queuedInputs?.map((q) => `${q.id}:${q.mode}`).join(',') ?? ''}:${resolvedAsks.length}`
+  // 会话历史就绪（conversationDetails 存在，含合法空会话）：loading 的空白
+  // mount 不启动初始贴底窗口，避免硬上界在空白期被空转耗尽。
+  const detailsReady = store.conversationDetails[conversation.id] !== undefined
   useEffect(() => {
     if (lastHumanKey !== undefined && lastHumanKey !== lastHumanKeyRef.current) {
+      const isFirstRecord = lastHumanKeyRef.current === undefined
       lastHumanKeyRef.current = lastHumanKey
-      stickToBottomRef.current = true
+      // 挂载初始化只记录锚点、不强制贴底：搜索/大纲定位的 effect 与 ref
+      // callback 先于本 effect 运行并已释放贴底，此处拉回会把显式定位的
+      // 滚动目的地重新抢回底部（非挂载场景的新 human 消息仍重新贴底）。
+      if (!isFirstRecord) stickToBottomRef.current = true
     }
     const el = scrollRef.current
     if (el !== null && stickToBottomRef.current) {
       el.scrollTop = el.scrollHeight
       lastScrollTopRef.current = el.scrollTop
     }
-  }, [contentFingerprint, lastHumanKey])
+    // 历史就绪后启动一次性初始贴底校准（窗口内部自守卫：已消费/在途/已释放
+    // 贴底时不动作）；数据延迟就绪时由 detailsReady 依赖在本 effect 重启时启动。
+    if (detailsReady) beginInitialBottomCalibration()
+  }, [contentFingerprint, lastHumanKey, detailsReady, beginInitialBottomCalibration])
 
-  const loading = store.conversationDetails[conversation.id] === undefined
+  const loading = !detailsReady
 
   // 引导词仅出现在「确实空白」的会话：历史已加载完且无更早分页、无在途
   // 发送/运行、无排队输入与待审批。任一不满足都不渲染，避免误判。
@@ -1449,7 +1526,7 @@ export function ConversationTimeline({
       ) : null}
       <div ref={innerRef} className="timeline-inner">
         {items.map((item) => {
-          // 渲染隔离类：仅历史完成行获得（live/排队/未结算最新回合/解除目标行
+          // 渲染隔离类：仅历史完成行获得（live/排队/最新 assistant 回合/解除目标行
           // 由 resolveContainmentClass 返回空串，正常渲染）。
           const cvClass = resolveContainmentClass(item, cvExclusions, containmentEnabled)
           if (item.kind === 'human') {

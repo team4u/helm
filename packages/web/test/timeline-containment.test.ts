@@ -100,35 +100,31 @@ test('containmentClassName 与 CONTAINMENT_INTRINSIC_PX 对应 CSS 分桶类', {
 
 const noRelease = new Set<string>()
 
-test('resolveContainmentClass：live 回合、排队输入、未结算最新回合、解除目标不隔离', { timeout: 60_000 }, () => {
+test('resolveContainmentClass：live 回合、排队输入、最新 assistant 回合、解除目标不隔离', { timeout: 60_000 }, () => {
   // 浏览器不支持：一律正常渲染（空类名）
-  assert.equal(resolveContainmentClass(turn('1', '正文'), { releasedEntryIds: noRelease, conversationBusy: false }, false), '')
+  assert.equal(resolveContainmentClass(turn('1', '正文'), { releasedEntryIds: noRelease }, false), '')
   // 历史完成行：获得分桶类
-  assert.match(resolveContainmentClass(turn('1', '正文'), { releasedEntryIds: noRelease, conversationBusy: false }, true), /^tl-cv-/)
+  assert.match(resolveContainmentClass(turn('1', '正文'), { releasedEntryIds: noRelease }, true), /^tl-cv-/)
   // live 流式回合不隔离
-  assert.equal(resolveContainmentClass({ ...turn('2', '流式'), live: true }, { releasedEntryIds: noRelease, conversationBusy: true }, true), '')
+  assert.equal(resolveContainmentClass({ ...turn('2', '流式'), live: true }, { releasedEntryIds: noRelease }, true), '')
   // 排队输入（尚未生效，仍会变化）不隔离
   assert.equal(
-    resolveContainmentClass({ ...human('3', '排队'), queuedMode: 'followUp' }, { releasedEntryIds: noRelease, conversationBusy: true }, true),
+    resolveContainmentClass({ ...human('3', '排队'), queuedMode: 'followUp' }, { releasedEntryIds: noRelease }, true),
     '',
   )
-  // 未结算会话的最新回合不隔离；更早的已完成回合照常隔离
+  // 最新 assistant 回合无论会话 busy 与否一律真实渲染（估高误差集中在尾部，
+  // 隔离它会让首次置底落在估算总高上）；更早的已完成回合照常隔离
   assert.equal(
-    resolveContainmentClass(turn('4', '最新'), { releasedEntryIds: noRelease, conversationBusy: true, latestAssistantKey: 'turn:4' }, true),
+    resolveContainmentClass(turn('4', '最新'), { releasedEntryIds: noRelease, latestAssistantKey: 'turn:4' }, true),
     '',
   )
   assert.match(
-    resolveContainmentClass(turn('5', '更早'), { releasedEntryIds: noRelease, conversationBusy: true, latestAssistantKey: 'turn:4' }, true),
-    /^tl-cv-/,
-  )
-  // 会话空闲后最新回合也隔离
-  assert.match(
-    resolveContainmentClass(turn('4', '最新'), { releasedEntryIds: noRelease, conversationBusy: false, latestAssistantKey: 'turn:4' }, true),
+    resolveContainmentClass(turn('5', '更早'), { releasedEntryIds: noRelease, latestAssistantKey: 'turn:4' }, true),
     /^tl-cv-/,
   )
   // 高亮 / 大纲定位目标行解除隔离（entryId 与 assistant 锚点两种口径）
-  assert.equal(resolveContainmentClass(human('6', '目标'), { releasedEntryIds: new Set(['6']), conversationBusy: false }, true), '')
-  assert.equal(resolveContainmentClass(turn('7', '目标'), { releasedEntryIds: new Set(['7']), conversationBusy: false }, true), '')
+  assert.equal(resolveContainmentClass(human('6', '目标'), { releasedEntryIds: new Set(['6']) }, true), '')
+  assert.equal(resolveContainmentClass(turn('7', '目标'), { releasedEntryIds: new Set(['7']) }, true), '')
 })
 
 test('timelineAnchorId：assistant 回合取首个持久化条目，其余取 entryId', { timeout: 60_000 }, () => {
@@ -226,21 +222,27 @@ async function renderTimeline(opts: RenderOptions): Promise<ReturnType<typeof ma
   return store
 }
 
-test('历史完成行按分桶获得渲染隔离类，divider 最小桶；DOM 全部保留', { timeout: 60_000 }, async () => {
+test('历史完成行按分桶获得渲染隔离类，divider 最小桶；最新 assistant 回合与空闲会话也真实渲染；DOM 全部保留', { timeout: 60_000 }, async () => {
   await renderTimeline({
     entries: [
       humanEntry('1', '短消息'),
       assistantEntry('2', '# 标题\n\n正文'),
       humanEntry('3', 'x'.repeat(600)),
-      { id: '4', kind: 'pi.reset', data: {} },
+      assistantEntry('4', 'x'.repeat(6000)),
+      { id: '5', kind: 'pi.reset', data: {} },
     ],
   })
   const rows = [...host!.querySelectorAll<HTMLElement>('[data-entry-id]')]
-  assert.equal(rows.length, 4, '全部条目 DOM 保留（不裁剪历史）')
+  assert.equal(rows.length, 5, '全部条目 DOM 保留（不裁剪历史）')
   assert.match(rows[0]!.className, /\btl-cv-sm\b/, '短人类消息 → sm 桶')
   assert.match(rows[1]!.className, /\btl-cv-sm\b/, '短助手回合 → sm 桶')
   assert.match(rows[2]!.className, /\btl-cv-md\b/, '600 字符人类消息 → md 桶')
-  assert.match(rows[3]!.className, /\btl-cv-xs\b/, '分割线 → xs 桶')
+  assert.equal(
+    /\btl-cv-/.test(rows[3]!.className),
+    false,
+    'idle 会话的最新 assistant 回合（尾部长回答）不隔离：首次置底依赖真实总高',
+  )
+  assert.match(rows[4]!.className, /\btl-cv-xs\b/, '分割线 → xs 桶')
 })
 
 test('live 流式回合与排队输入不隔离，历史人类行照常隔离；搜索高亮目标行解除隔离', { timeout: 60_000 }, async () => {
@@ -285,14 +287,17 @@ test('live 流式回合与排队输入不隔离，历史人类行照常隔离；
 })
 
 test('大纲定位：先解除目标行隔离，commit 后按 heading 序数精确滚动到对应标题', { timeout: 60_000 }, async () => {
+  // 目标是非最新的历史回合（最新 assistant 回合给终真实渲染，无需解除）
   const entries = [
     humanEntry('1', '问'),
     assistantEntry('2', '# 一级\n正文A\n## 二级目标\n正文B\n### 三级\n正文C'),
+    humanEntry('3', '再问'),
+    assistantEntry('4', '最新回答'),
   ]
-  // 第一阶段：无定位请求，目标回合行正常隔离
+  // 第一阶段：无定位请求，目标历史回合行正常隔离
   await renderTimeline({ entries })
   const wrapperBefore = host!.querySelector<HTMLElement>('[data-entry-id="2"]')
-  assert.equal(hasCvClass(wrapperBefore), true, '请求前目标行处于隔离态')
+  assert.equal(hasCvClass(wrapperBefore), true, '请求前目标历史回合处于隔离态（最新回合始终真实渲染）')
 
   // 第二阶段：带 headingIndex 的定位请求 → 解除隔离后滚动到精确 <h2>
   const scrolled: Array<{ el: HTMLElement; wrapperClass: string }> = []

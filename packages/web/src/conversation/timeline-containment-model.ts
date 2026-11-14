@@ -97,17 +97,17 @@ export function timelineAnchorId(item: TimelineItem): string {
 export interface ContainmentExclusions {
   /** 必须解除隔离的锚点集合（搜索/大纲高亮与定位目标：内容需真实布局后测量滚动）。 */
   releasedEntryIds: ReadonlySet<string>
-  /** 最新 assistant 回合 key（会话未结算时该回合仍会变更）。 */
+  /** 最新 assistant 回合 key：无论会话 busy 与否始终真实渲染（见下）。 */
   latestAssistantKey?: string
-  /** 会话仍在执行（working / blocked）时最新回合不可隔离。 */
-  conversationBusy: boolean
 }
 
 /**
  * 判定单个时间线行是否可应用渲染隔离 class：
  * - 浏览器不支持或未启用（enabled=false）一律正常渲染；
- * - 仍在变化的内容不可隔离：live 流式回合、排队输入（queuedMode）、
- *   未结算会话的最新回合；
+ * - 仍在变化的内容不可隔离：live 流式回合、排队输入（queuedMode）；
+ * - 最新 assistant 回合无论会话 busy 与否一律真实渲染：首次打开的初始贴底与
+ *   活跃跟底的估高误差都集中在尾部（尾部长回答的真实高度远大于估高桶，
+ *   隔离它会让首次置底落在估算总高上），且该回合是用户当前关注的落点；
  * - 高亮 / 大纲定位目标行必须解除隔离（否则 scrollIntoView 以占位高度定位失真）。
  */
 export function resolveContainmentClass(
@@ -119,7 +119,7 @@ export function resolveContainmentClass(
   if (item.kind === 'human' && item.queuedMode !== undefined) return ''
   if (item.kind === 'assistant') {
     if (item.live) return ''
-    if (exclusions.conversationBusy && item.key === exclusions.latestAssistantKey) return ''
+    if (item.key === exclusions.latestAssistantKey) return ''
   }
   if (exclusions.releasedEntryIds.has(timelineAnchorId(item))) return ''
   return containmentClassName(estimateContainmentBucket(item))
