@@ -19,18 +19,22 @@
   --bg-active: rgba(28, 28, 33, 0.08);
   --bg-backdrop: rgba(0, 0, 0, 0.28);
 
-  /* 代码区独立于页面底色，保持 GitHub 式阅读层次 */
+  /* 代码高亮：借鉴 pi 的 OKHSL 语义色相映射（蓝=关键字、黄=函数、紫=类型、
+     青=变量、橙=字符串、绿=数字、灰=注释标点）；浅色饱和度收一档（S×0.85）
+     呈纸面油墨感，并保证底色 ≥4.5:1 */
   --code-bg: #f6f8fa;
   --code-header-bg: #eef1f4;
   --code-border: #d0d7de;
-  --code-token-comment: #6e7781;
-  --code-token-keyword: #cf222e;
-  --code-token-string: #0a3069;
-  --code-token-title: #8250df;
-  --code-token-number: #0550ae;
-  --code-token-muted: #57606a;
-  --code-token-addition: #1a7f37;
-  --code-token-deletion: #cf222e;
+  --code-token-comment: #677176;
+  --code-token-keyword: #36728f;
+  --code-token-string: #9e5829;
+  --code-token-title: #8c6919;
+  --code-token-type: #725ea8;
+  --code-token-variable: #31767c;
+  --code-token-number: #3a7959;
+  --code-token-muted: #677176;
+  --code-token-addition: #3a7959;
+  --code-token-deletion: #bb3d46;
 
   /* 工具差异展示语义底色（行级淡底 + 词级加深） */
   --diff-add-bg: rgba(26, 127, 55, 0.12);
@@ -44,13 +48,13 @@
   --fg-subtle: #b9b9c2;
   --fg-on-solid: #ffffff;
 
-  /* Markdown 正文阅读色阶（Soft Ink）：正文约 88% 墨色去眩光，
-     标题/加粗压实锚点，列表符号与引用退灰，行内代码压印而非描框 */
+  /* Markdown 正文阅读色阶（Soft Ink）：正文墨阶去眩光，标题/加粗压实锚点，
+     列表符号与引用退灰；行内代码用带靛紫倾向的冷墨，仅靠胶囊底与等宽体区分 */
   --prose-fg: #2c2d35;
   --prose-strong: #18181d;
   --prose-muted: #5a5b66;
   --prose-marker: #85858d;
-  --prose-code-fg: #24292f;
+  --prose-code-fg: #323544;
   --prose-code-bg: #eceef2;
   --prose-code-border: #dcdce2;
   --prose-link: #4338ca;
@@ -118,18 +122,20 @@
   --bg-active: rgba(255, 255, 255, 0.09);
   --bg-backdrop: rgba(0, 0, 0, 0.55);
 
-  /* 代码区独立于页面底色，保持 GitHub 式阅读层次 */
+  /* 代码高亮：与浅色主题同一套 pi 语义色相，OKHSL L≈67% 保证深底高对比 */
   --code-bg: #161b22;
   --code-header-bg: #21262d;
   --code-border: #30363d;
-  --code-token-comment: #8b949e;
-  --code-token-keyword: #ff7b72;
-  --code-token-string: #a5d6ff;
-  --code-token-title: #d2a8ff;
-  --code-token-number: #79c0ff;
-  --code-token-muted: #c9d1d9;
-  --code-token-addition: #3fb950;
-  --code-token-deletion: #f85149;
+  --code-token-comment: #9da5a9;
+  --code-token-keyword: #69add0;
+  --code-token-string: #de8d5a;
+  --code-token-title: #cd9a22;
+  --code-token-type: #a798d7;
+  --code-token-variable: #5db3ba;
+  --code-token-number: #68b78d;
+  --code-token-muted: #9da5a9;
+  --code-token-addition: #68b78d;
+  --code-token-deletion: #ea7f81;
 
   /* 工具差异展示语义底色（行级淡底 + 词级加深） */
   --diff-add-bg: rgba(46, 160, 67, 0.16);
@@ -143,12 +149,13 @@
   --fg-subtle: #56565f;
   --fg-on-solid: #14142a;
 
-  /* 深色正文降亮度消光晕（Halation）：标题/加粗才提亮，列表符号去噪 */
+  /* 正文保持墨阶去光晕（Halation）：标题/加粗才提亮，列表符号去噪；
+     行内代码用带靛紫倾向的冷墨，仅靠胶囊底与等宽体区分 */
   --prose-fg: #d9d9e0;
   --prose-strong: #f2f2f7;
   --prose-muted: #a0a0ab;
   --prose-marker: #707079;
-  --prose-code-fg: #e2e4ed;
+  --prose-code-fg: #d5d8e6;
   --prose-code-bg: #25262c;
   --prose-code-border: #35363f;
   --prose-link: #a5b4fc;
