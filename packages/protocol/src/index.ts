@@ -21,6 +21,7 @@ export * from './schema.js'
 export * from './ui.js'
 export * from './workflow.js'
 export * from './worktree.js'
+export * from './tool-presentation.js'
 export {
   isAbsoluteAgentPath,
   sanitizeAgentExecutionInfo,
