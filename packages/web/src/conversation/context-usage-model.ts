@@ -12,7 +12,9 @@
  *
  * 契约（内核 ConversationContextUsage）：tokens 恒有（可为 null）；
  * contextWindow 未知时省略（内核不伪造）；compacting 为布尔透传。
+ * formatTokens 已收敛至 lib/format.ts（与会话用量展示同源的仓内唯一实现）。
  */
+import { formatTokens } from '../lib/format.js'
 
 export type ContextUsageTone = 'default' | 'warn' | 'high'
 
@@ -29,15 +31,6 @@ export interface ContextUsageInput {
   tokens: number | null
   contextWindow?: number
   compacting?: boolean
-}
-
-/** tokens 人类可读（严格抄 pi footer formatTokens）。 */
-export function formatTokens(count: number): string {
-  if (count < 1000) return count.toString()
-  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`
-  if (count < 1_000_000) return `${Math.round(count / 1000)}k`
-  if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`
-  return `${Math.round(count / 1_000_000)}M`
 }
 
 /** 组装只读状态文本（纯函数）；返回 null 表示不渲染任何状态文本。 */

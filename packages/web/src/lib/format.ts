@@ -1,5 +1,5 @@
 /**
- * 通用格式化纯函数（字节 / 时长 / 日期时间 / 错误文本）。
+ * 通用格式化纯函数（字节 / tokens / 时长 / 日期时间 / 错误文本）。
  * 全仓唯一实现：时间线、节点弹窗、Herdr 总览等界面共用，进制与舍入规则统一。
  */
 
@@ -37,6 +37,18 @@ export function formatDurationMs(ms: number | undefined): string {
 export function errorText(err: unknown): string {
   if (err instanceof Error) return err.message
   return String(err)
+}
+
+/**
+ * tokens 紧凑人类可读（严格抄 pi agent footer formatTokens 分档，与会话用量展示同源）：
+ * <1000 原值；<10000 一位小数 k；<1M 四舍五入 k；<10M 一位小数 M；之后四舍五入 M。
+ */
+export function formatTokens(count: number): string {
+  if (count < 1000) return count.toString()
+  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`
+  if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`
+  return `${Math.round(count / 1_000_000)}M`
 }
 
 /** 本地化完整日期时间（节点连接时间 / 健康采集时间等表单式展示）。 */

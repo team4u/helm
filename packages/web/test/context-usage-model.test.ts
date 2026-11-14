@@ -9,7 +9,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { contextUsageLabel, formatTokens } from '../src/conversation/context-usage-model.js'
+import { contextUsageLabel } from '../src/conversation/context-usage-model.js'
+import { formatTokens } from '../src/lib/format.js'
 
 test('formatTokens：pi footer 分档（<1000 原值；<10000 一位小数 k；<1M 取整 k；<10M 一位小数 M）', { timeout: 60_000 }, () => {
   assert.equal(formatTokens(0), '0')

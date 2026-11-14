@@ -290,3 +290,73 @@ test('ModelDetailDrawer: 点击展开后渲染全部模型且省略提示消失�
   })
   container.remove()
 })
+
+// ---------------------------------------------------------------------------
+// 4. 思考与上下文窗口标签相邻渲染（复用既有 tags 徽章轨道，零新布局）
+// ---------------------------------------------------------------------------
+
+function makeTaggedProvider(): ProviderItem {
+  return {
+    id: 'magpie',
+    name: 'Magpie',
+    type: 'commercial',
+    configured: true,
+    modelsCount: 2,
+    models: [
+      { id: 'glm-4.6', name: 'GLM 4.6', enabled: true, tags: ['思考模型', '200k 上下文'] },
+      { id: 'plain-mini', name: 'Plain Mini', enabled: true },
+    ],
+  }
+}
+
+test('ModelDetailDrawer SSR: 思考与上下文窗口标签在同一胶囊内相邻渲染且思考在前，未知窗口不加标签', { timeout: 60_000 }, () => {
+  const html = renderToStaticMarkup(
+    e(ModelDetailDrawer, {
+      provider: makeTaggedProvider(),
+      open: true,
+      inline: true,
+      onClose: () => {},
+    }),
+  )
+
+  // 两枚徽章零间隔相邻（同一 map 展开、同一胶囊内），顺序思考在前、窗口在后
+  assert.match(
+    html,
+    />思考模型<\/span><span class="badge mi-effort mchip-tag mtell">200k 上下文<\/span>/,
+  )
+  assert.ok(html.indexOf('思考模型') < html.indexOf('200k 上下文'), '思考标签必须排在窗口标签之前')
+
+  // 未知窗口的模型不渲染任何「上下文」徽章，也不产生空标签容器
+  assert.equal((html.match(/上下文/g) ?? []).length, 1, '仅已知窗口模型携带「上下文」标签')
+})
+
+test('ModelDetailDrawer DOM: 胶囊徽章按 tags 顺序真实挂载，无标签模型不渲染徽章', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  await act(async () => {
+    root.render(
+      e(ModelDetailDrawer, { provider: makeTaggedProvider(), open: true, inline: true, onClose: () => {} }),
+    )
+  })
+
+  const chips = Array.from(container.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]'))
+  assert.equal(chips.length, 2)
+
+  const badgesOf = (chip: HTMLButtonElement) =>
+    Array.from(chip.querySelectorAll('span.badge')).map((span) => span.textContent ?? '')
+
+  const glm = chips.find((chip) => (chip.getAttribute('title') ?? '').includes('glm-4.6'))
+  assert.ok(glm, '应存在 glm-4.6 胶囊')
+  assert.deepEqual(badgesOf(glm), ['思考模型', '200k 上下文'])
+
+  const plain = chips.find((chip) => (chip.getAttribute('title') ?? '').includes('plain-mini'))
+  assert.ok(plain, '应存在 plain-mini 胶囊')
+  assert.deepEqual(badgesOf(plain), [], '无标签模型不渲染任何徽章')
+
+  await act(async () => {
+    root.unmount()
+  })
+  container.remove()
+})
