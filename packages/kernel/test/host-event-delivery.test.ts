@@ -167,6 +167,7 @@ describe('宿主事件单一投递边界', { timeout: 60_000 }, () => {
 
   it('EventHub.close 解除宿主投递器，不保留运行时回调', { timeout: 60_000 }, () => {
     const events = new EventHub({
+      initialSeq: 0,
       snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }),
       persistSeq: () => {},
     })

@@ -95,6 +95,7 @@ function doctorBackend(): PluginHostBackend {
     abortConversation: () => unavailable('host.abortConversation'),
     abortConversationGuarded: () => unavailable('host.abortConversationGuarded') as never as Promise<void>,
     getConversationOwnership: () => unavailable('host.getConversationOwnership'),
+    markConversationOwnership: () => unavailable('host.markConversationOwnership'),
     listArtifacts: () => unavailable('host.listArtifacts'),
     getArtifact: () => unavailable('host.getArtifact'),
     completeText: () => unavailable('host.completeText'),
@@ -114,7 +115,6 @@ function doctorBackend(): PluginHostBackend {
     // 静默丢弃是安全 no-op（不是能力缺失的静默降级：事件本身无返回值可伪造）。
     emitEvent: () => {},
     manageConversation: () => unavailable('host.manageConversation'),
-    markConversationOwnership: () => unavailable('host.markConversationOwnership'),
     execEnv: () => unavailable('host.execEnv'),
     withFileLock: <T,>(_path: string, fn: () => Promise<T>): Promise<T> => fn(),
     atomicWriteFile: () => unavailable('host.atomicWriteFile'),

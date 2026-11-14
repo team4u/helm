@@ -372,7 +372,7 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-bg-restart3-'))
   const seedDir = mkdtempSync(join(tmpdir(), 'helm-bg-seed3-'))
   const seederPath = join(seedDir, 'seed.mts')
-  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href), 'utf8')
+  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helm/plugin-build')), 'utf8')
   const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
   t.after(() => {

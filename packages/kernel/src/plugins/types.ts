@@ -75,7 +75,6 @@ export interface PluginHostBackend
     | 'updateConversation'
     | 'abortConversation'
     | 'getConversationOwnership'
-    | 'getConversationActivity'
     | 'markConversationOwnership'
     | 'buildSpawnEnv'
     | 'spawnAgent'
