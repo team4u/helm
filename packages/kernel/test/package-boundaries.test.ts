@@ -52,6 +52,7 @@ const forbidden: Record<string, readonly string[]> = {
   '@helm/protocol': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build'],
   '@helm/kernel': ['@helm/plugins', '@helm/hub', '@helm/web', '@helm/plugin-client', '@helm/plugin-build'],
   '@helm/plugins': ['@helm/kernel', '@helm/hub', '@helm/web'],
+  '@helm/plugin-build': ['@helm/kernel', '@helm/hub', '@helm/web', '@helm/plugins', '@helm/plugin-client', '@helm/node'],
   '@helm/plugin-client': ['@helm/kernel', '@helm/hub', '@helm/web', '@helm/plugins', '@helm/node', '@helm/plugin-build'],
   '@helm/node': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/plugin-client', '@helm/plugin-build'],
   '@helm/web': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/node', '@helm/plugin-build'],
@@ -91,6 +92,14 @@ test('生产包保持单向依赖，源码只通过已声明的公开包入口�
     }
   }
   assert.deepEqual(violations, [], violations.join('\n'))
+})
+
+test('内核不携带内置插件源码与插件专属构建依赖', { timeout: 60_000 }, () => {
+  const kernel = workspacePackages().find(({ manifest }) => manifest.name === '@helm/kernel')!
+  assert.ok(!existsSync(join(kernel.root, 'src/builtin-plugins')), '内置插件应属于独立包')
+  for (const dependency of ['mermaid', 'cron-parser', 'esbuild', 'react', 'react-dom', 'lucide-react']) {
+    assert.ok(!(dependency in (kernel.manifest.dependencies ?? {})), `内核不应依赖 ${dependency}`)
+  }
 })
 
 test('workspace 生产依赖图无环', { timeout: 60_000 }, () => {

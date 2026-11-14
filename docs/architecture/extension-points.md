@@ -14,7 +14,7 @@
 | :--- | :--- |
 | `CapabilityRegistry` | 动作、工具与原始路由的注册、Schema 校验与五端映射 |
 | `PluginDocRegistry` | 全局 `ctx.doc` 与按会话分片 `ctx.sessionDoc` 的持久化与发布 |
-| `UiRegistry` | 界面声明校验、跨插件冲突裁决（priority）、客户端组件编译与缓存 |
+| `UiRegistry` | 界面声明校验、跨插件冲突裁决（priority），通过注入端口请求客户端构建产物 |
 | `RuntimeToolRegistry` | 注册与热更新内核/插件工具；`run_action` 调用与只读 `describe` |
 | `HookBridge` | 每次模型请求按 scope 裁剪插件工具；钩子链收敛后投射 `prompt.tools.*` 与 `prompt.actions`，清理不可达能力的旧指引 |
 | `AssetReloader` | 纯文件资产（Profile/技能）的热重载协调 |
@@ -130,7 +130,7 @@ export interface ComposerController {
 
 ## client.tsx 单轨渲染机制
 
-组件经 `ClientComponentRef { module, export }` 声明：`module` 是相对插件 `clientRoot` 的源文件路径（禁止绝对路径与 `../` 越根），`export` 是具名导出名。宿主用 esbuild 按源内容 hash（含本地依赖）编译缓存；编译产物不打包第二份 React。插件定义未声明 `clientRoot` 时，一切 client 引用在注册边界拒绝——不存在无法编译的悬空引用。受控 npm 依赖统一经 `npmDependencies`（说明符 → 解析根）声明：内置插件指向内核包根；外部插件在清单声明 `clientDependencies`（plugin.json 或 package.json `helm.clientDependencies`，说明符为裸包名/子路径），宿主归一映射到插件自身目录（`<插件目录>/node_modules`）并走同一编译链（doctor / 受管 install/update / reload / 运行期同一口径），编译器逐文件 containment 校验并随依赖 hash 复查——未声明的裸依赖显式拒绝，已声明未安装给出可诊断错误，不放开任意裸依赖。
+组件经 `ClientComponentRef { module, export }` 声明：`module` 是相对插件 `clientRoot` 的源文件路径（禁止绝对路径与 `../` 越根），`export` 是具名导出名。产品层注入 `@helm/plugin-build` 的构建实现，由它使用 esbuild 按源内容 hash（含本地依赖）编译缓存；内核只消费构建端口，编译产物不打包第二份 React。插件定义未声明 `clientRoot` 时，一切 client 引用在注册边界拒绝——不存在无法编译的悬空引用。受控 npm 依赖统一经 `npmDependencies`（说明符 → 解析根）声明：内置插件指向 `@helm/plugins` 包根；外部插件在清单声明 `clientDependencies`（plugin.json 或 package.json `helm.clientDependencies`，说明符为裸包名/子路径），宿主归一映射到插件自身目录（`<插件目录>/node_modules`）并走同一编译链（doctor / 受管 install/update / reload / 运行期同一口径），编译器逐文件 containment 校验并随依赖 hash 复查——未声明的裸依赖显式拒绝，已声明未安装给出可诊断错误，不放开任意裸依赖。
 
 插件自有样式的托管链：本地 CSS 及根内 `@import` 由 esbuild 合并，通过保留导出 `__helmClientCss`（`PLUGIN_CLIENT_CSS_EXPORT`）内联为插件 JS 文本数据；宿主确认模块导入成功且加载仍有效后注入 `<style data-helm-plugin-css>`，入口更新时替换，停用/卸载或登出时回收。宿主样式表不承载插件业务类；资源 URL 支持 `data:` 与显式 HTTP(S)/协议相对地址，本地资源 URL 与远程 `@import` 显式拒绝。编译、导出校验或加载失败时宿主显示明确错误与重试入口，不把空白静默冒充加载成功。
 
