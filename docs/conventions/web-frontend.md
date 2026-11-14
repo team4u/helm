@@ -16,7 +16,7 @@
 
 - 适用场景：主舞台卡片点击后的深层详情、能力透视（Tools / Actions / Hooks 清单）、动态配置表单与设置面板扩展。
 - 尺寸契约：桌面端固定宽度 520px~560px，贴右侧全高展开；移动端（≤680px）自适应 100% 全宽。
-- 实现契约：基于 `packages/web/src/ui/` 的 Radix `Dialog` 原语封装，支持 Escape 退出、点击遮罩关闭与受管焦点圈定。
+- 实现契约：基于 `@helm/plugin-client` 的 Radix `Dialog` 原语封装，支持 Escape 退出、点击遮罩关闭与受管焦点圈定。
 
 ### 轻量居中模态（Centered Modal）
 
@@ -44,14 +44,16 @@
 
 ### Radix UI 唯一无头交互原语底座
 
-凡涉及浮层、对话框、下拉选择、标签页、气泡提示等复杂交互组件，**必须统一使用 `packages/web/src/ui/` 下基于 `@radix-ui/react-*` 的公共原语**，严禁使用原生控件，严禁引入第三方重量级 UI 库：
+凡涉及浮层、对话框、下拉选择、标签页、气泡提示等复杂交互组件，**必须使用已有的 Radix 封装**。共享实现位于 `packages/plugin-client/src/ui/`，通过 `@helm/plugin-client` 公开；Web 专有组件位于 `packages/web/src/ui/`。严禁使用原生控件或引入第三方重量级 UI 库：
 
-- **弹窗与抽屉（`Dialog` / `AlertDialog`）**：全屏抽屉与居中模态统一基于 `ui/Dialog.tsx` 与 `AlertDialog.tsx`；
-- **下拉选择（`Select`）**：**全仓严禁使用原生 `<select>`**，统一使用 `ui/Select.tsx`（高度统一 30px，字号 12px，无障碍 combobox 契约）；
-- **下拉菜单与气泡（`DropdownMenu` / `Popover`）**：操作菜单与弹出浮层统一使用对应封装；
-- **标签页（`Tabs`）**：分段控制与视图切换统一使用 `ui/Tabs.tsx`；
-- **轻量提示（`Tooltip`）**：悬浮说明统一使用 `ui/Tooltip.tsx`；
-- **开关与勾选（`Switch` / `Checkbox`）**：布尔值与启停控制统一使用对应封装。
+- **弹窗与抽屉**：`Dialog` 使用 SDK 封装；Web 危险确认使用 `AlertDialog`；
+- **下拉选择**：全仓严禁原生 `<select>`，统一使用 SDK 的 `Select` / `MultiSelect`（高度 30px，字号 12px，无障碍 combobox 契约）；
+- **下拉菜单与气泡**：Web 操作菜单使用 `DropdownMenu`，共享气泡使用 SDK 的 `Popover`；
+- **标签页**：分段控制与视图切换使用 SDK 的 `Tabs` / `SegmentedControl`；
+- **轻量提示**：Web 使用 `Tooltip`；
+- **开关与勾选**：使用 SDK 的 `Switch` / `Checkbox`。
+
+SDK 不导入 Web store、路由或渲染实现。`HelmStoreProvider` 通过 `PluginClientHostContext` 注入真实数据与宿主能力；订阅、详情加载等稳定函数直接复用原函数引用，避免快照更新引起退订重连。插件与宿主必须共享同一个 SDK 上下文实例。
 
 **严禁手写简陋交互浮层**：不得用原生 `div` + `position: absolute` + 随意 `onClick` 拼凑浮层，杜绝缺乏键盘无障碍（WAI-ARIA）、Focus Trap 焦点逃逸、Escape 无法退出与遮罩穿透问题。
 

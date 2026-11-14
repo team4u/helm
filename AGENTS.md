@@ -58,7 +58,7 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
 - **编写 / 重构 Web 界面或插件 `client.tsx`** → 先读 [`docs/conventions/web-frontend.md`](docs/conventions/web-frontend.md)（布局/组件/样式/移动端）与 [`docs/conventions/web-navigation.md`](docs/conventions/web-navigation.md)（路由/深链/分屏/待命页/弹窗），并遵守五条硬铁律：
   1. **零 Emoji**：界面文案、导航、标题、按钮、徽章、卡片严禁 Emoji；图标统一 `lucide-react`（`HelmIcon`）或纯文本；
   2. **视图形态三级**：海量项 / 多维检索 / 管理与市场类必须用「全屏一级主舞台卡片网格 + 右侧 520px~560px 详情抽屉」，严禁塞居中弹窗；
-  3. **Radix UI 唯一交互原语**：一律基于 `packages/web/src/ui/` 封装（全仓禁原生 `<select>` 与手写无障碍浮层）；插件优先复用 `@helm/plugin-client` 的 `Screen / ScreenSection / DataTable / KvGrid` 与宿主原语类，禁大面积内联样式或复制通用 CSS；正文 13/14px，移动端（≤680px）与分屏下禁输入框字号突兀放大；
+  3. **Radix UI 唯一交互原语**：共享组件使用 `@helm/plugin-client` 的 Radix 封装；Web 专有组件位于 `packages/web/src/ui/`（全仓禁原生 `<select>` 与手写无障碍浮层）；插件优先复用 `@helm/plugin-client` 的 `Screen / ScreenSection / DataTable / KvGrid` 与宿主原语类，禁大面积内联样式或复制通用 CSS；正文 13/14px，移动端（≤680px）与分屏下禁输入框字号突兀放大；
   4. **唯一 Hash 导航**：全站位置由 `url-hash-model.ts` + `HelmStoreProvider` 唯一管理（`#/a/<profileId>` 待命真草稿、`#/c/<id>` 会话、`#/s/<pluginId>/<screenId>` 视图、`sp.*`/`ssp.*` 参数、`split` 分屏、`sidebar` 空间）；组件统一调 `store.openTarget / setScreenParams / setSidebarSpace` 等，**新建对话进待命页、首次发送才落库**，严禁自建平行路由或直接操作 `history.*`；
   5. **Fast Refresh**：`.tsx` 组件文件只导出组件与 TS 类型，纯函数/常量剥离至独立模块。
 
@@ -67,8 +67,8 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
 - **分层入口**：`scripts/test-suites.mjs`（复用 `scripts/run-tests.mjs` 的跨平台超时与进程树清理），三档命令：`pnpm test:unit` / `pnpm test:integration` / `pnpm test:all`（`pnpm test` 等同 `test:all`）。
 - **单测防死锁**：每个测试显式声明 `{ timeout: 60_000 }`（runner 为 `tsx --test`）；不依赖 Unix `timeout` 命令；不用过滤管道隐藏失败日志；**勿设 `HELM_TEST_SUITE_TIMEOUT_MS` 环境变量**（kernel 的 `env-registry-races` 会因宿主残留 HELM_* 变量误报）。
 - **分档与执行规则**：
-  - `unit` = `protocol + cli + web`（进程内 / happy-dom DOM 模拟，不起真实服务）——改协议、CLI、Web 时默认跑；
-  - `integration` = `kernel + node + payload + desktop`（真实进程、SQLite、Git、WebSocket、`createHelm`、daemon、payload 组装与桌面壳 Hub 子进程监督，全部视为集成）——改 kernel / node / payload / desktop 时必跑；
+  - `unit` = `protocol + cli + web + plugin-client`（进程内 / happy-dom DOM 模拟，不起真实服务）——改协议、CLI、Web 或浏览器 SDK 时默认跑；
+  - `integration` = `kernel + plugins + hub + plugin-build + node + payload + desktop`（真实进程、SQLite、Git、WebSocket、源码构建、`createHelm`、daemon、payload 组装与桌面壳 Hub 子进程监督，全部视为集成）——改任一执行、插件、产品或构建包时必跑；
   - 跨档契约变更两档都跑；合并前与全量验收跑 `test:all`。不变量 `all = unit ∪ integration` 不重不漏；新测试文件必须落在已登记包的 `test/` 目录，新包同步更新 `scripts/test-suites.mjs` 的 `SUITES` 分档。
 - **快速反馈门（补充而非替代）**：`pnpm check:changed` 按变更集（`--base <ref>` 显式基线优先；默认取分支 upstream 或 origin/HEAD 的 merge-base，均无则报错要求 `--base`，绝不静默退化 HEAD~1；变更集 = 已提交 ∪ 暂存/未暂存 ∪ 未跟踪；pnpm 传参用 `--` 分隔，如 `pnpm check:changed -- --base main --list`）选受影响包（workspace 依赖反向闭包，锁文件/根配置/测试基础设施（含 `scripts/**/*.mjs`）变更触发全档），顺序跑 `pnpm typecheck` →（选中 desktop 测试时先 `pnpm --filter @helm/desktop run build`，typecheck 不产其 dist）→ 受影响包测试（复用 `run-tests.mjs`）；`--list` 先复核选集。`pnpm check:hygiene` 用 TypeScript AST 静态检查测试卫生（显式 timeout、skip 必附理由、禁设 `HELM_TEST_SUITE_TIMEOUT_MS`）。二者只提供增量快速反馈，不改变本节分档必跑与合并前 `test:all` 的规定。
 - **进程 kill 纪律**：只允许终止**自己 spawn 并持有 PID/句柄**的进程（POSIX：独立进程组 `kill(-pid)`，宽限后 SIGKILL；Windows：`taskkill /PID <pid> /T /F` 杀 owned `ChildProcess` 整棵树，参考 `scripts/run-tests.mjs`）；确需按端口清理时，必须先核验监听进程的 cwd 与实际归属再终止。**严禁按模糊名称/路径发信号（如 `pkill -f`、`pgrep | xargs kill`、`taskkill /IM`）**（会误杀他人会话、其他 worktree 的 dev 服务与无关系统进程），严禁猜测 PID。
