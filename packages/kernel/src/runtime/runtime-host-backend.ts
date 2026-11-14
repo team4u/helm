@@ -133,7 +133,6 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
       await runtime.submitInputGuarded(id, text, opts, guard)
     },
     getConversationOwnership: (id) => runtime.getConversationOwnership(id),
-    getConversationActivity: (id) => runtime.getConversationActivity(id),
     listArtifacts: (conversationId) => Promise.resolve(runtime.artifacts.list(conversationId)),
     getArtifact: (artifactId, conversationId) => runtime.resolveAuthorizedAttachment(conversationId, artifactId),
     redact: (text) => runtime.stash.redact(text),

@@ -142,9 +142,6 @@ class StopWindowBackend implements PluginHostBackend {
     this.record('abortConversation')
     if (!this.conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
   }
-  getConversationActivity(): { consecutiveErrors: number } {
-    return { consecutiveErrors: 0 }
-  }
   getConversationOwnership(): 'helm' | 'bot' | 'human' {
     return 'helm'
   }

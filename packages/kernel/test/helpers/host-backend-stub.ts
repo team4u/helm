@@ -63,7 +63,6 @@ export function hostBackendStub(): PluginHostBackend {
     abortConversation: () => unsupported('abortConversation'),
     abortConversationGuarded: () => unsupported('abortConversationGuarded') as never as Promise<void>,
     getConversationOwnership: () => 'human',
-    getConversationActivity: () => ({ consecutiveErrors: 0 }),
     listArtifacts: () => Promise.resolve([]),
     getArtifact: () => unsupported('getArtifact'),
     redact: (text: string) => text,

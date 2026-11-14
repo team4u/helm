@@ -141,13 +141,6 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.getConversationOwnership')
   }
 
-  getConversationActivity(
-    ...args: Parameters<Port<'getConversationActivity'>>
-  ): ReturnType<Port<'getConversationActivity'>> {
-    void args
-    unsupported('host.getConversationActivity')
-  }
-
   listArtifacts(...args: Parameters<Port<'listArtifacts'>>): ReturnType<Port<'listArtifacts'>> {
     void args
     unsupported('host.listArtifacts')
@@ -360,7 +353,6 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
     abortConversation: f(d.abortConversation),
     abortConversationGuarded: f(d.abortConversationGuarded),
     getConversationOwnership: f(d.getConversationOwnership),
-    getConversationActivity: f(d.getConversationActivity),
     listArtifacts: f(d.listArtifacts),
     getArtifact: f(d.getArtifact),
     completeText: f(d.completeText),

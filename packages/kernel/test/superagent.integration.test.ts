@@ -1160,3 +1160,103 @@ test('SA6: SSE 先等 snapshot 首帧——启用后 UI 贡献与 publicDoc 增�
     await env.close()
   }
 })
+
+// ---------------------------------------------------------------------------
+// 会话活动统计迁入（真实事件链路）：内核事件桥接 + watchdog 原生探针事实
+// ---------------------------------------------------------------------------
+
+test('真实事件链路：内核会话事件桥接到插件 onEvent；watchdog 探针携带真实活动/失败统计', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    const kernel = env.app.kernel
+
+    // 采集插件：验证内核桥接（conversation.live/upsert/turn.settled 到达插件
+    // ctx.host.onEvent，载荷为 HelmEvent 信封形状）+ 捕获 watchdog 巡检探针。
+    const liveFrames: Array<{ conversationId: number; updatedAt: number }> = []
+    const workingUpserts: number[] = []
+    const settledOutcomes: string[] = []
+    let collections: Array<{ probes: Array<{ conversationId?: number; stalledMs?: number; consecutiveErrors?: number; status: string }> }> = []
+    await kernel.plugins.register({
+      id: 'test:event-bridge-collector',
+      definePlugin(ctx) {
+        ctx.host.onEvent('conversation.live', (raw) => {
+          const live = (raw as { type?: string; live?: { conversationId?: number; updatedAt?: number } }).live
+          if (typeof live?.conversationId === 'number' && typeof live.updatedAt === 'number') {
+            liveFrames.push({ conversationId: live.conversationId, updatedAt: live.updatedAt })
+          }
+        })
+        ctx.host.onEvent('conversation.upsert', (raw) => {
+          const conversation = (raw as { conversation?: { id?: number; status?: string } }).conversation
+          if (conversation?.status === 'working' && typeof conversation.id === 'number') {
+            workingUpserts.push(conversation.id)
+          }
+        })
+        ctx.host.onEvent('turn.settled', (raw) => {
+          // turn.settled 在 EventHub 走自定义事件形状（{type, payload}）。
+          const outcome = (raw as { payload?: { outcome?: string } }).payload?.outcome
+          if (typeof outcome === 'string') settledOutcomes.push(outcome)
+        })
+        ctx.host.onEvent('diagnostics.collect', (raw) => {
+          const collection = raw as { probes?: never[] }
+          if (Array.isArray(collection?.probes)) collections.push(collection as never)
+        })
+      },
+    })
+    await kernel.plugins.enable(SUPERAGENT_ID)
+
+    // 两轮失败回合（真实 turn_settled 钩子路径 → 连续失败计数 = 2）。
+    for (const question of ['会失败的一', '会失败的二']) {
+      env.faux.setResponses([fauxAssistantMessage('x', { errorMessage: 'boom', stopReason: 'error' })])
+      await kernel.submitInput(ROOT_CONVERSATION_ID, question).catch(() => {})
+      await kernel.waitForIdle(ROOT_CONVERSATION_ID).catch(() => {})
+    }
+    await waitFor(() => settledOutcomes.filter((o) => o === 'failed').length >= 2)
+
+    // 手动 tick：原生探针从插件真实统计构造（非已删除的 getConversationActivity 端口）。
+    collections = []
+    await kernel.plugins.invokeAction(SUPERAGENT_ID, 'watchdog_tick', {})
+    const failedProbe = collections[0]?.probes.find((p) => p.conversationId === ROOT_CONVERSATION_ID)
+    assert.ok(failedProbe !== undefined, '根会话进入原生探针')
+    assert.equal(failedProbe!.consecutiveErrors, 2, '连续失败计数经真实事件统计')
+    assert.equal(failedProbe!.status, 'error')
+    assert.equal(failedProbe!.stalledMs, undefined, '空闲/失败会话不报停滞')
+
+    // 在途 run（门控 faux 响应）：working 探针携带真实无活动时钟（刚起步，远低于阈值）。
+    const gate = deferred<void>()
+    env.faux.setResponses([async () => {
+      await gate.promise
+      return fauxAssistantMessage('慢回答完成')
+    }])
+    const slowSubmit = kernel.submitInput(ROOT_CONVERSATION_ID, '慢问题').catch(() => {})
+    await waitFor(() => kernel.getConversation(ROOT_CONVERSATION_ID).status === 'working')
+    collections = []
+    await kernel.plugins.invokeAction(SUPERAGENT_ID, 'watchdog_tick', {})
+    const workingProbe = collections[0]?.probes.find((p) => p.conversationId === ROOT_CONVERSATION_ID)
+    assert.ok(workingProbe !== undefined, 'working 会话进入原生探针')
+    assert.equal(workingProbe!.status, 'working')
+    assert.ok(
+      workingProbe!.stalledMs !== undefined && workingProbe!.stalledMs < 60_000,
+      `working 会话报真实 stalledMs（自 run 启动活动计）：${String(workingProbe!.stalledMs)}`,
+    )
+    gate.resolve()
+    await slowSubmit
+    await kernel.waitForIdle(ROOT_CONVERSATION_ID).catch(() => {})
+    await waitFor(() => settledOutcomes.includes('completed'))
+
+    // 成功回合归零：再 tick 后探针 consecutiveErrors 回到无记录（省略 0 字段）。
+    collections = []
+    await kernel.plugins.invokeAction(SUPERAGENT_ID, 'watchdog_tick', {})
+    const settledProbe = collections[0]?.probes.find((p) => p.conversationId === ROOT_CONVERSATION_ID)
+    assert.ok(settledProbe !== undefined)
+    assert.ok((settledProbe!.consecutiveErrors ?? 0) === 0, '成功回合后连续失败归零')
+
+    // 内核事件桥接证据：插件收到了真实 conversation.live / working upsert / turn.settled。
+    assert.ok(liveFrames.some((f) => f.conversationId === ROOT_CONVERSATION_ID), 'conversation.live 帧桥接到插件')
+    assert.ok(workingUpserts.includes(ROOT_CONVERSATION_ID), 'working 摘要桥接到插件')
+    assert.ok(settledOutcomes.includes('failed') && settledOutcomes.includes('completed'), 'turn.settled 桥接到插件')
+
+    await kernel.plugins.disable(SUPERAGENT_ID).catch(() => {})
+  } finally {
+    await env.close()
+  }
+})

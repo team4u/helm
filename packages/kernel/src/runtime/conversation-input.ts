@@ -161,7 +161,7 @@ export class ConversationInputPipeline {
     },
   ): Promise<{ submissionId: string }> {
     const { finalInput, finalWhenBusy, effectiveText, resolvedAttachments, content, mutationGuard } = prepared
-    const key = this.host.tracker.registerInput(id, finalInput)
+    this.host.tracker.registerInput(id, finalInput)
     try {
       // 提交点最终复核：与下方 SDK submit 调用（第一个不可逆动作）之间零
       // await——上方全部准备工作窗口内的归属翻转在此拦截，绝不产生提交。
@@ -192,10 +192,10 @@ export class ConversationInputPipeline {
         },
         BACKGROUND_CONTEXT,
       )
-      this.host.tracker.bindSubmission(id, key, submission.id as number)
+      this.host.tracker.bindSubmission(id, finalInput.id, submission.id as number)
       return { submissionId: String(submission.id) }
     } catch (error) {
-      this.host.tracker.dropInput(id, key)
+      this.host.tracker.dropInput(id, finalInput.id)
       throw normalizeBusyError(error)
     }
   }

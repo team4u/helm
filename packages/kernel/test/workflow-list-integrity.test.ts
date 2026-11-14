@@ -538,7 +538,6 @@ function makeBackend(): PluginHostBackend {
     getConversation: () => ({}) as never,
     updateConversation: async () => ({}) as never,
     abortConversationGuarded: async () => {},
-    getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'human' as const,
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),

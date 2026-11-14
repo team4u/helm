@@ -405,9 +405,10 @@ describe('ConversationTracker 真实 SDK 时间线与实时事件', { timeout: 6
       assert.equal(collector.entries.length, 0, '初始 observe 历史条目不重发')
 
       // 真实 run：faux 文本回答 -> helm.input + pi.assistant 落库。
-      // 经真实 tracker API 登记（registerInput -> bindSubmission，与 runtime 同路径）。
+      // 经真实 tracker API 登记（registerInput -> bindSubmission，与 runtime 同路径；
+      // 追踪身份即持久 input.id = requestId）。
       faux.setResponses([fauxAssistantMessage('真实回答')])
-      const key = tracker.registerInput(id, {
+      tracker.registerInput(id, {
         id: 'in-1',
         text: '真实问题',
         origin: 'human',
@@ -426,7 +427,7 @@ describe('ConversationTracker 真实 SDK 时间线与实时事件', { timeout: 6
           },
           BACKGROUND_CONTEXT,
         )
-        .then((sub) => tracker.bindSubmission(id, key, sub.id as number))
+        .then((sub) => tracker.bindSubmission(id, 'in-1', sub.id as number))
       await conv.waitForIdle(BACKGROUND_CONTEXT)
 
       // 等待观察者路径完成（advance 同步，但 run 结算在微任务内）。
@@ -537,7 +538,7 @@ describe('ConversationTracker 真实 SDK 时间线与实时事件', { timeout: 6
         },
       })
       await tracker.observe(id)
-      const key = tracker.registerInput(id, {
+      tracker.registerInput(id, {
         id: 'm-1',
         text: '带 meta 的问题',
         origin: 'agent',
@@ -563,7 +564,7 @@ describe('ConversationTracker 真实 SDK 时间线与实时事件', { timeout: 6
           },
           BACKGROUND_CONTEXT,
         )
-        .then((sub) => tracker.bindSubmission(id, key, sub.id as number))
+        .then((sub) => tracker.bindSubmission(id, 'm-1', sub.id as number))
       await conv.waitForIdle(BACKGROUND_CONTEXT)
       await waitFor(() => settled.length >= 1, 5_000)
       const inputs = settled[0]?.inputs ?? []
@@ -577,12 +578,14 @@ describe('ConversationTracker 真实 SDK 时间线与实时事件', { timeout: 6
     }
   })
 
-  it('getProbeFacts：failed 递增、completed 归零；空闲无 stalledMs', { timeout: 60_000 }, async () => {
-    const dir = join(root, `probe-${Date.now()}`)
+  it('submissionIndex：bindSubmission 后 markConsumed 可命中；结算后索引不残留', { timeout: 60_000 }, async () => {
+    const settled: Array<{ inputs: Array<{ id: string; meta?: Record<string, unknown> }> }> = []
+    const dir = join(root, `index-${Date.now()}`)
     const database = await openHelmDatabase(dir)
     const store = new HelmStore(database)
     await store.load()
     const faux = fauxProvider()
+    faux.setResponses([fauxAssistantMessage('ok')])
     const models = createModels()
     models.setProvider(faux.provider)
     const registry = createRegistry()
@@ -592,28 +595,54 @@ describe('ConversationTracker 真实 SDK 时间线与实时事件', { timeout: 6
       BACKGROUND_CONTEXT,
     )
     harness.resume()
-    const collector = makeCollector()
-    const tracker = new ConversationTracker({ harness, store, events: eventsOf(collector) })
     try {
       const conv = await harness.createConversation({ ownership: { kind: 'ownerless' }, agent: { model: { provider: 'faux', modelId: 'faux-1' } } }, BACKGROUND_CONTEXT)
       const id = conv.id as number
       store.upsertConv(convMeta(id))
+      const committed: string[] = []
+      const tracker = new ConversationTracker({
+        harness,
+        store,
+        events: {
+          onSummaryChanged: () => {},
+          onInputCommitted: (_cid, input) => {
+            committed.push(input.id)
+          },
+          onAssistantText: () => {},
+          onTurnSettled: (payload) => {
+            settled.push(payload as { inputs: Array<{ id: string }> })
+          },
+        },
+      })
       await tracker.observe(id)
-      assert.equal(tracker.getProbeFacts(id).consecutiveErrors, 0, '初始零失败')
-      assert.equal(tracker.getProbeFacts(id).stalledMs, undefined, '空闲不报 stalled')
-
-      // 失败 run：faux 报 model error（runFailure -> emitSettled failed）。
-      faux.setResponses([fauxAssistantMessage('x', { errorMessage: 'boom', stopReason: 'error' })])
-      await conv.submit({ type: 'input', content: 'q1' }, BACKGROUND_CONTEXT)
-      await conv.waitForIdle(BACKGROUND_CONTEXT).catch(() => {})
-      await waitFor(() => (tracker.getProbeFacts(id).consecutiveErrors ?? 0) === 1, 5_000)
-      assert.equal(tracker.getProbeFacts(id).stalledMs, undefined, '失败后空闲仍不报 stalled')
-
-      // 成功 run：completed 归零。
-      faux.setResponses([fauxAssistantMessage('恢复的回答')])
-      await conv.submit({ type: 'input', content: 'q2' }, BACKGROUND_CONTEXT)
+      tracker.registerInput(id, {
+        id: 'ix-1',
+        text: '索引验证问题',
+        origin: 'human',
+        createdAt: 3,
+      })
+      const submission = await conv.submit(
+        {
+          type: 'input',
+          content: '索引验证问题',
+          entry: { kind: 'helm.input', data: { id: 'ix-1', text: '索引验证问题', origin: 'human', createdAt: 3 } },
+          requestId: 'ix-1',
+        },
+        BACKGROUND_CONTEXT,
+      )
+      tracker.bindSubmission(id, 'ix-1', submission.id as number)
       await conv.waitForIdle(BACKGROUND_CONTEXT)
-      await waitFor(() => tracker.getProbeFacts(id).consecutiveErrors === 0, 5_000)
+      await waitFor(() => settled.length >= 1, 5_000)
+      // run.inputs 经索引映射命中：onInputCommitted 恰一次且为 requestId 身份。
+      assert.deepEqual(committed, ['ix-1'])
+      assert.deepEqual(settled[0]!.inputs.map((i) => i.id), ['ix-1'])
+      // 结算后追踪记录与关联索引均不残留。
+      const internals = (tracker as unknown as {
+        trackedInputs: Map<number, Map<string, unknown>>
+        submissionIndex: Map<number, Map<number, string>>
+      })
+      assert.equal(internals.trackedInputs.get(id)?.size ?? 0, 0, '结算后追踪记录清空')
+      assert.equal(internals.submissionIndex.get(id)?.size ?? 0, 0, '结算后关联索引清空')
     } finally {
       await harness.close(BACKGROUND_CONTEXT)
       await store.close()

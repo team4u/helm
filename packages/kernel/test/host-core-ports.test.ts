@@ -128,7 +128,6 @@ function makeBackend(over: {
     updateConversation: async (id) => makeConversation(id),
     abortConversation: async () => {},
     getConversationOwnership: () => 'helm',
-    getConversationActivity: () => ({ consecutiveErrors: 0 }),
     listArtifacts: async () => [],
     getArtifact: async () => { throw new HelmError('not_found', 'no artifact', 404) },
     redact: (t) => t,

@@ -862,14 +862,6 @@ export interface HelmHostSecretsPort {
   addRedaction(value: string): () => void
 }
 
-/** 会话活动事实（Watchdog 探针口径；仅真实活动计数，不猜测）。 */
-export interface ConversationActivity {
-  /** 无在途 run 时缺省（空闲非停滞）；有 run 且有活动记录时为距今毫秒数。 */
-  stalledMs?: number
-  /** 连续回合失败次数（无失败为 0）。 */
-  consecutiveErrors: number
-}
-
 /**
  * 自动化变更守卫期望（guarded mutation）：调用方携带授权时点的事实
  * （探针 ownedBy / stateChangeSeq），内核在会话串行域内、于第一个不可逆
@@ -1077,8 +1069,6 @@ export interface HelmHostApi {
   abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void>
   /** 会话归属权现读（Watchdog 红线判定唯一可信来源；未标记一律 human）。 */
   getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
-  /** 会话活动事实（stalledMs / consecutiveErrors；探针口径）。 */
-  getConversationActivity(id: number): ConversationActivity
   /** 列出会话产物元数据（本会话全部；明文内容不进返回值）。 */
   listArtifacts(conversationId: number): Promise<ArtifactMetadata[]>
   /**

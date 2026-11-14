@@ -78,9 +78,6 @@ function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationActivity(): { consecutiveErrors: number } {
-      return { consecutiveErrors: 0 }
-    },
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
     },

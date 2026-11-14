@@ -103,6 +103,8 @@ export class KernelRuntime {
   readonly sessionDocEvents: SessionDocEventHub
   private readonly stashService = new SecretStash()
   private readonly hostEventListeners = new Map<string, Set<(payload: unknown) => MaybePromise<void>>>()
+  /** 核心会话事件 SSE 帧 -> 内部宿主事件面转投（ctx.host.onEvent 消费；close 释放）。 */
+  private readonly coreEventForwardRelease: () => void
   readonly envFabric: EnvFabric
   /** Hub 侧前台端口转发（监听器仅在命令期间存在；close 统一销毁）。 */
   readonly nodeForward: NodeForwardService
@@ -198,6 +200,21 @@ export class KernelRuntime {
     this.events = this.svc.events
     this.sessionDocEvents = this.svc.sessionDocStreams
     this.conversations = this.svc.conversations
+
+    // 核心会话事件转投（见字段注释）：SSE 帧已过 buildEvent 验证+脱敏，
+    // 监听器拿到的是完整 HelmEvent 信封（协议 onEvent 契约形状）。
+    const CORE_HOST_EVENT_TYPES = new Set([
+      'conversation.upsert',
+      'conversation.deleted',
+      'conversation.entry',
+      'conversation.live',
+      'turn.settled',
+    ])
+    this.coreEventForwardRelease = this.events.subscribe((frame) => {
+      const event = frame.event as { type: string }
+      if (!CORE_HOST_EVENT_TYPES.has(event.type)) return
+      void this.dispatchInternalEvent(event.type, event)
+    })
 
     this.nodeOps.bindEvents()
 
@@ -720,14 +737,6 @@ export class KernelRuntime {
     return this.svc.ownership.getOwnership(conversationId)
   }
 
-  getConversationActivity(conversationId: number): { stalledMs?: number; consecutiveErrors: number } {
-    const meta = this.store.getConv(conversationId)
-    if (meta === undefined || this.store.isDeleted(conversationId)) {
-      throw new HelmError('not_found', `会话不存在：${conversationId}`, 404, { conversationId })
-    }
-    return this.svc.tracker.getProbeFacts(conversationId)
-  }
-
   // ------------------------------------------------------------------
   // 异步审批委托（AskService）
   // ------------------------------------------------------------------
@@ -893,6 +902,7 @@ export class KernelRuntime {
       events: this.events,
       sessionDocStreams: this.svc.sessionDocStreams,
       sessionDocLifecycleRelease: this.svc.sessionDocLifecycleRelease,
+      coreEventForwardRelease: this.coreEventForwardRelease,
       stashService: this.stashService,
     })
     this.processTokenHandle = undefined

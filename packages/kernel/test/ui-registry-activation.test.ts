@@ -14,7 +14,6 @@ function createHostBackend(): PluginHostBackend {
     dispatchTrigger: unused, submitInput: unused, createConversation: unused,
     listConversations: () => [], getConversation: unused, updateConversation: unused,
     abortConversation: unused, manageConversation: () => () => {},
-    getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'human' as const,
     markConversationOwnership: unused, spawnAgent: unused, runGate: unused,
     prepareInterruptedConversations: unused,

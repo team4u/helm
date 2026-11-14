@@ -114,9 +114,6 @@ function makeBackend(): PluginHostBackend & {
       return () => {}
     },
     async abortConversation() {},
-    getConversationActivity(): { consecutiveErrors: number } {
-      return { consecutiveErrors: 0 }
-    },
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
     },

@@ -10,23 +10,19 @@
  *   不等的弱断言，测不出真实缺陷。
  *
  * 现契约：
- * 1. trackedInputs 按 input.id（requestId）唯一：正常 register/bind 与 entry
- *    观察重建合并为一条记录，绝不重复；
+ * 1. trackedInputs 以持久 input.id（requestId）为唯一键：正常 register/bind
+ *    与 entry/inbox 观察重建合并为一条记录，绝不重复；submissionId 仅存于
+ *    submissionIndex 关联索引（SDK run.inputs/failure.inputs 的映射面）；
  * 2. entry 重建仅认当前 run 区间（run.first 及之后）与当前 inbox，已结算
  *    run 的历史 helm.input 不复活：多轮 complete 后 abort 只含当前 run 输入；
  * 3. 同 conversation 重复 requestId（SDK 去重语义）重建正确且不重复；
  * 4. 重启恢复活跃 run：observe 经 live.run.inputs 权威映射 + submission
- *    精确查询补齐 origin/meta/attachments；
+ *    精确查询补齐 origin/meta/attachments 与关联索引；
  * 5. stopObserving 后在途异步 adoptInitial 不向 maps 复活条目；
  * 6. settledRuns 容量淘汰（64）与 deleteConversation 全量清理保持不变。
  *
  * 经真实 KernelRuntime（faux provider + 真实 SQLite）驱动，内部状态经类型
  * 转换读取（测试与实现同包，仅测试内窥视）。
- *
- * 键域事实更正：旧实现 Math.abs(requestIdHash) 曾把 -2147483648 压缩为负数
- * 临时键；JS 中 Math.abs(-2147483648) 实际返回正 2147483648（64-bit 浮点），
- * 旧注释“仍为负”的说法是错误的——真实缺陷是 32-bit 哈希本身会碰撞，与
- * Math.abs 无关，故本实现彻底放弃哈希，req:<requestId> 全字符串键。
  */
 
 import { strict as assert } from 'node:assert'
@@ -52,8 +48,9 @@ interface TrackerInternals {
   lastSettledRun: Map<number, number>
   runTaskIds: Map<number, number>
   runFirstEntries: Map<number, number>
-  trackedInputs: Map<number, Map<number | string, { input: ConversationInput; submissionId: number | string }>>
-  consumedInputs: Map<number, Set<number | string>>
+  trackedInputs: Map<number, Map<string, ConversationInput>>
+  submissionIndex: Map<number, Map<number, string>>
+  consumedInputs: Map<number, Set<string>>
   liveViews: Map<number, unknown>
   observeGenerations: Map<number, symbol>
 }
@@ -217,14 +214,14 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       await kernel.waitForIdle(1)
       const tracker = trackerOf(kernel)
       // 结算后历史不残留（上一组已验证）；此处验证运行期间键域：
-      // 提交第二条（run 进行中）时 map 中该输入唯一。
+      // 提交第二条（run 进行中）时 map 中该输入唯一且以 requestId 为键。
       const map = tracker.trackedInputs.get(1)
       const keys = [...(map?.keys() ?? [])]
       for (const key of keys) {
-        if (typeof key === 'string') assert.match(key, /^req:/, `重建键必须是 req: 前缀：${key}`)
+        assert.equal(typeof key, 'string', `追踪键必须是 requestId 字符串：${String(key)}`)
       }
       // 每个在册 input.id 唯一。
-      const ids = [...(map?.values() ?? [])].map((t) => t.input.id)
+      const ids = [...(map?.values() ?? [])].map((t) => t.id)
       assert.equal(new Set(ids).size, ids.length, 'input.id 无重复记录')
     } finally {
       await kernel.close()
@@ -331,9 +328,12 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         const map = (tracker as unknown as TrackerInternals).trackedInputs.get(id)
         assert.ok(map !== undefined && map.size >= 1, '重启恢复活跃 run 后输入在册')
         const tracked = [...map.values()][0]!
-        assert.equal(tracked.input.text, '重启前的在途问题')
-        assert.equal(tracked.input.origin, 'agent', '重启后 origin 权威补齐')
-        assert.deepEqual(tracked.input.meta, { from: 'test', seq: 7 }, '重启后 meta 权威补齐')
+        assert.equal(tracked.text, '重启前的在途问题')
+        assert.equal(tracked.origin, 'agent', '重启后 origin 权威补齐')
+        assert.deepEqual(tracked.meta, { from: 'test', seq: 7 }, '重启后 meta 权威补齐')
+        // 重启恢复后关联索引已登记（markConsumed 可命中，结算不丢输入）。
+        const index = (tracker as unknown as TrackerInternals).submissionIndex.get(id)
+        assert.ok(index !== undefined && index.size >= 1, '重启后 submissionId->requestId 索引在册')
         // 第二段重设慢工厂响应（run 重启后续跑）。
         faux.setResponses([
           async () => {

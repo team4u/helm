@@ -5,7 +5,9 @@
  * 1. 原生 watchdog tick：probe 携带 targetKind:'conversation' / conversationId /
  *    权威 stateChangeSeq；ownedBy 即时反映 markConversationOwnership；root 恒 human；
  *    getConversationOwnership 公开读取（root human / 未登记 human / 现读持久 doc /
- *    不存在与已删除显式 not_found / 删除后登记清零）。
+ *    不存在与已删除显式 not_found / 删除后登记清零）。会话活动统计
+ *    （stalledMs/consecutiveErrors）已迁入 builtin:superagent 订阅真实事件，
+ *    由 superagent-watchdog.test.ts 与 superagent.integration.test.ts 覆盖。
  * 2. hooks.ts 边界校验：非法探针（负数 stalledMs、非整数 conversationId、
  *    非法枚举 targetKind、空 nodeId、伪造负 seq、非有限数）显式拒绝，
  *    绝不进入下游钩子。
@@ -85,7 +87,7 @@ test('关闭内核后拒绝新输入，结算回调不能重新启动模型回�
 // 1. 原生 tick：权威 seq / ownership 即时更改 / root human
 // ---------------------------------------------------------------------------
 
-test('原生事实端口：getConversationOwnership/getConversationActivity 现读真实事实（探针构造同源）', { timeout: 60_000 }, async () => {
+test('原生事实端口：getConversationOwnership 现读真实事实（探针构造同源）', { timeout: 60_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'helm-probe-native-'))
   const kernel = await openRuntime(join(root, 'k1'))
   try {
@@ -106,10 +108,6 @@ test('原生事实端口：getConversationOwnership/getConversationActivity 现�
     assert.equal(kernel.getConversationOwnership(1), 'human', 'root 恒 human')
     assert.equal(kernel.getConversationOwnership(manual.id), 'human', '用户直连默认 human')
     assert.equal(kernel.getConversationOwnership(childId), 'helm', 'spawn 子会话自动 helm')
-    // 活动事实端口：空闲会话无停滞、有连续错误计数（结构真实）。
-    const activity = kernel.getConversationActivity(childId)
-    assert.equal(activity.consecutiveErrors, 0)
-    assert.ok(activity.stalledMs === undefined, '空闲会话不报停滞（idle 非停滞）')
 
     // 即时更改：manual 标记 bot 后端口现读立即生效。
     kernel.markConversationOwnership(manual.id, 'bot')
@@ -440,9 +438,6 @@ class ProbeBackend implements PluginHostBackend {
     }
   }
   async abortConversation(): Promise<void> {}
-  getConversationActivity(): { consecutiveErrors: number } {
-    return { consecutiveErrors: 0 }
-  }
   getConversationOwnership(): 'helm' | 'bot' | 'human' {
     return 'human'
   }

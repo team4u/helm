@@ -152,7 +152,6 @@ function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostB
     async cancelAsk() {},
     registerAskSeqResolver() { return () => {} },
     onEvent() { return () => {} },
-    getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'human',
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
@@ -565,7 +564,6 @@ async function makeWatchdogHarness(opts: {
         if (idx >= 0) cur.splice(idx, 1)
       }
     },
-    getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: (id) => opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helm'),
     abortConversation: async (id) => {
       if (abortShouldFail) {

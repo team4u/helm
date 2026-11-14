@@ -266,7 +266,6 @@ class FakeBackend implements PluginHostBackend {
   }
   async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
   getConversationOwnership(): 'human' { return 'human' }
-  getConversationActivity(): { stalledMs: number; consecutiveErrors: number } { return { stalledMs: 0, consecutiveErrors: 0 } }
   async listArtifacts(): Promise<never[]> { return [] }
   async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
   async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }

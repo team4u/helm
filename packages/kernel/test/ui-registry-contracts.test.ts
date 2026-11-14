@@ -180,7 +180,6 @@ function createHostBackend(): PluginHostBackend {
     getConversation: unused,
     updateConversation: unused,
     abortConversation: unused,
-    getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'human' as const,
     manageConversation: () => () => {},
     markConversationOwnership: unused,

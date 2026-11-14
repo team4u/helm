@@ -414,15 +414,15 @@ export class ConversationRewind {
     return conversation.submit(tx, inputDraft) as unknown as Promise<string>
   }
 
-  /** 事务后 tracker 登记（bindSubmission 合并 commit 观察路径的先行登记）。 */
+  /** 事务后 tracker 登记（bindSubmission 登记关联索引，观察路径已按 requestId 先行登记）。 */
   private registerRewoundInput(id: number, finalInput: ConversationInput, submissionId: unknown): void {
-    // 事务已落库：登记 tracker（commit 观察路径可能已按 req: 键先行登记，
-    // bindSubmission 会合并为唯一记录，失败则 drop 撤销，绝不留下孤儿登记）。
-    const key = this.host.tracker.registerInput(id, finalInput)
+    // 事务已落库：登记 tracker（commit 观察路径可能已按 requestId 先行登记，
+    // registerInput 幂等合并为唯一记录，失败则 drop 撤销，绝不留下孤儿登记）。
+    this.host.tracker.registerInput(id, finalInput)
     try {
-      this.host.tracker.bindSubmission(id, key, Number(submissionId))
+      this.host.tracker.bindSubmission(id, finalInput.id, Number(submissionId))
     } catch (error) {
-      this.host.tracker.dropInput(id, key)
+      this.host.tracker.dropInput(id, finalInput.id)
       throw error
     }
   }

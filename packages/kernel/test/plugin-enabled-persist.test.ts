@@ -78,9 +78,6 @@ function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationActivity(): { consecutiveErrors: number } {
-      return { consecutiveErrors: 0 }
-    },
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
     },

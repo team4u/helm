@@ -4,12 +4,19 @@
  * 本模块只做巡检策略，机制全部来自 PluginHost / ctx.host / Herdr 探针：
  * - 定时巡检（原内核 watchdog 定时器 + watchdog_tick 钩子已移除）完全由本模块
  *   ctx.service 拥有：singleflight 定时 tick（默认 15s，unref）先经
- *   ctx.host 只读端口（listConversations / getConversationActivity /
- *   getConversationOwnership）构造原生会话事实，再以 'diagnostics.collect'
+ *   ctx.host 只读端口（listConversations / getConversationOwnership）与会话
+ *   活动统计构造原生会话事实，再以 'diagnostics.collect'
  *   内部事件（broadcast:false，await 全部监听器）采集外部探针（如 Herdr 终端
  *   窗格），汇总后按确定性规则表执行 notify / bridge_to_ask /
  *   auto_abort_and_notify / wake_watchdog；另提供 watchdog_tick 手动动作
  *   （HTTP/CLI/Tool 同权，scope 强制 watchdog Profile）；
+ * - 会话活动统计（真实无活动时钟 + 连续失败计数）由本模块订阅真实事件维护：
+ *   conversation.live（run 进度内容变更，内核已按内容指纹去重，重复帧不刷新）
+ *   / conversation.upsert（run 启动与 doing 语义翻转）/ turn_settled 钩子
+ *   （failed 递增、completed 归零、aborted 保持；回合结束清活动时钟）/
+ *   conversation.deleted（清理统计）。绝不用每帧心跳假活动；停用后随
+ *   onEvent/hook 订阅自动解除，无统计 timer/observer 残留；重启后无活动
+ *   记录时不报停滞（保守，不伪造时钟起点）；
  * - 去重状态持久化于私有 ctx.doc（同 (targetKind,nodeId,targetId,stateChangeSeq)
  *   同类动作恰好一次；未达阈值绝不预先占坑，跨重启不重复危险动作）；
  * - L2：向专属 watchdog 会话合并投递异常事实（origin agent / followUp），
@@ -35,6 +42,7 @@ import {
   HelmError,
   type AskResult,
   type BeforeTurnHookPayload,
+  type ConversationSummary,
   type GuardedMutationExpectation,
   type HelmPluginContext,
   type TurnSettledPayload,
@@ -47,7 +55,12 @@ import {
   type WatchdogOwnership,
   type WatchdogProbe,
 } from '../diagnostics.js'
-import type { SuperAgentWatchdogRuntime } from './contracts.js'
+import {
+  asConversationDeletedEvent,
+  asConversationLiveEvent,
+  asConversationUpsertEvent,
+  type SuperAgentWatchdogRuntime,
+} from './contracts.js'
 
 // ---------------------------------------------------------------------------
 // 常量与私有类型
@@ -243,6 +256,64 @@ export function registerSuperAgentWatchdog(
     skipped: boolean
     collection: DiagnosticsCollection
   }
+
+  // ---- 会话活动统计（真实事件驱动；停用随订阅解除，无 timer） ----------------
+
+  /** 会话 -> 最近一次真实活动时刻（内核事件权威时间戳；无记录不报停滞）。 */
+  const lastActivityAt = new Map<number, number>()
+  /** 会话 -> 连续失败回合数（failed 递增，completed 归零，aborted 保持）。 */
+  const consecutiveErrorCounts = new Map<number, number>()
+  /** 会话 -> 上次 live 帧的 run 进度指纹（重复帧不刷新时钟，防每帧心跳假活动）。 */
+  const liveProgressKeys = new Map<number, string>()
+
+  /** 活动事实：仅 working 会话报 stalledMs（空闲非停滞）；重启后无活动记录
+   * 不伪造时钟起点（undefined，保守不报）。 */
+  function conversationActivityOf(summary: ConversationSummary): {
+    stalledMs?: number
+    consecutiveErrors: number
+  } {
+    const consecutiveErrors = consecutiveErrorCounts.get(summary.id) ?? 0
+    if (summary.status !== 'working') return { consecutiveErrors }
+    const at = lastActivityAt.get(summary.id)
+    if (at === undefined) return { consecutiveErrors }
+    return { stalledMs: Date.now() - at, consecutiveErrors }
+  }
+
+  // conversation.live：内核已按内容指纹去重（重复快照不发帧），此处再按
+  // 「run 进度字段」（文本/思考/工具状态）过滤——仅 queuedInputs 变化的帧
+  // （排队胶囊出入队，非 run 进度）不刷新时钟，与原内核活动指纹同口径。
+  ctx.host.onEvent('conversation.live', (raw) => {
+    const live = asConversationLiveEvent(raw)
+    if (live === undefined) return
+    const key = JSON.stringify([
+      live.text,
+      live.thinking ?? '',
+      live.tools.map((t) => `${t.callId}:${t.status}`),
+    ])
+    if (liveProgressKeys.get(live.conversationId) === key) return
+    liveProgressKeys.set(live.conversationId, key)
+    lastActivityAt.set(live.conversationId, live.updatedAt)
+  })
+
+  // conversation.upsert（status=working）：run 启动与 doing 语义翻转各恰一帧
+  // （内核按语义指纹去重）；这是首字前（纯 thinking 阶段）的唯一活动信号。
+  ctx.host.onEvent('conversation.upsert', (raw) => {
+    const conversation = asConversationUpsertEvent(raw)
+    if (conversation === undefined) return
+    if (conversation.status === 'working') {
+      lastActivityAt.set(conversation.id, conversation.updatedAt)
+    }
+  })
+
+  // 会话删除：统计彻底清理（目标消亡，无从停滞/失败）。载荷非法仅丢弃
+  //（不粗 as 信任）；残留统计随会话不再进入探针，无泄漏面。
+  ctx.host.onEvent('conversation.deleted', (raw) => {
+    const conversationId = asConversationDeletedEvent(raw)
+    if (conversationId === undefined) return
+    lastActivityAt.delete(conversationId)
+    consecutiveErrorCounts.delete(conversationId)
+    liveProgressKeys.delete(conversationId)
+  })
 
   // ---- 通知 / fire-and-forget --------------------------------------------
 
@@ -475,8 +546,9 @@ export function registerSuperAgentWatchdog(
   // ---------------------------------------------------------------------------
 
   /**
-   * 单轮巡检：先从 ctx.host 构造原生会话事实（getConversationActivity /
-   * getConversationOwnership / listConversations 均为宿主只读端口），再经
+   * 单轮巡检：先从 ctx.host 构造原生会话事实（listConversations /
+   * getConversationOwnership 为宿主只读端口；stalledMs/consecutiveErrors 来自
+   * 本模块真实事件统计，见 registerSuperAgentWatchdog 头注释），再经
    * 'diagnostics.collect' 内部事件（broadcast:false，await 全部监听器）采集
    * 外部探针（如 builtin:herdr 终端窗格）。任一环节失败显式抛出，绝不静默
    * 跳过（诚实性纪律）。
@@ -487,7 +559,7 @@ export function registerSuperAgentWatchdog(
     }
     const summaries = ctx.host.listConversations()
     const probes: WatchdogProbe[] = summaries.map((summary) => {
-      const activity = ctx.host.getConversationActivity(summary.id)
+      const activity = conversationActivityOf(summary)
       return {
         targetId: String(summary.id),
         /**
@@ -1257,6 +1329,19 @@ export function registerSuperAgentWatchdog(
   // ---------------------------------------------------------------------------
 
   ctx.hook.onTurnSettled(async (payload: TurnSettledPayload) => {
+    // 活动统计先行（全部会话）：回合终态即活动时钟终点；failed 递增、
+    // completed 归零、aborted 保持（非模型失败）。插件停用后订阅随钩子注册
+    // 一并解除，无残留 observer。
+    lastActivityAt.delete(payload.conversation.id)
+    liveProgressKeys.delete(payload.conversation.id)
+    if (payload.outcome === 'failed') {
+      consecutiveErrorCounts.set(
+        payload.conversation.id,
+        (consecutiveErrorCounts.get(payload.conversation.id) ?? 0) + 1,
+      )
+    } else if (payload.outcome === 'completed') {
+      consecutiveErrorCounts.set(payload.conversation.id, 0)
+    }
     if (payload.outcome !== 'failed' && payload.outcome !== 'aborted') return
     const conversation = payload.conversation
     if (!isWatchdogSession(conversation.id, conversation.profileId)) return

@@ -48,7 +48,7 @@
 
 巡检周期完全由插件自有 `ctx.service`（`superagent-watchdog`）驱动——内核不内置巡检定时器、不存在 `watchdog_tick` Hook。singleflight 定时 tick（默认 15s）的流程：
 
-**Layer 1 机械探针（0-Token 规则表）**：先经 `ctx.host` 只读端口（`listConversations` / `getConversationActivity` / `getConversationOwnership`）构造原生会话事实，再以 `diagnostics.collect` 进程内事件（`broadcast: false`，await 全部监听器）采集外部探针——`builtin:herdr` 监听该事件追加自有窗格的真实探针。汇总后按确定性规则表分类处置：
+**Layer 1 机械探针（0-Token 规则表）**：先经 `ctx.host` 只读端口（`listConversations` / `getConversationOwnership`）与插件自有的会话活动统计构造原生会话事实，再以 `diagnostics.collect` 进程内事件（`broadcast: false`，await 全部监听器）采集外部探针——`builtin:herdr` 监听该事件追加自有窗格的真实探针。汇总后按确定性规则表分类处置：
 
 | 异常形态 | 处置 |
 | :--- | :--- |
@@ -60,6 +60,8 @@
 | 外部窗格连续不可达达阈值 | 唤醒 L2 + 通知 |
 
 去重状态持久化于私有 doc：同 `(targetKind, nodeId, targetId, stateChangeSeq)` 同类动作恰好一次，未达阈值绝不预先占坑，跨重启不重复危险动作；文档损坏显式报错拒绝巡检（回空会令已处理动作重放）。
+
+会话活动统计（真实无活动时钟与连续失败计数）由插件订阅真实事件维护：`conversation.live`（内核已按内容指纹去重，插件侧再按 run 进度字段过滤，仅 queuedInputs 变化的帧不算活动）、`conversation.upsert`（working 摘要即 run 启动/doing 翻转，首字前唯一活动信号）、`turn_settled` 钩子（failed 递增、completed 归零、aborted 保持；回合结束清活动时钟）与 `conversation.deleted`（统计清理）。绝不用每帧心跳假活动；停用后随订阅自动解除，无统计 timer/observer 残留；重启后无活动记录时不报停滞（不伪造时钟起点）。
 
 **Layer 2 认知推理**：Layer 1 判定需认知排障时，把异常事实（XML 转义防逃逸，不用反引号围栏杜绝 prompt 注入面）合并投递到看门狗会话（`origin: 'agent'` / `followUp`）。模型结合 `watchdog-playbooks` 技能手册推理根因与处置，经专属工具落地：`watchdog_inspect`（现查目标真实详情，只读）、`watchdog_recover`（向 owned 会话提交恢复提示）、`watchdog_abort`（中止 owned 会话，human/中枢/看门狗自身拒绝）。三个工具 `scope` 限定 watchdog Profile 且执行期核对实际 watchdog 会话 ID（防同 Profile 人类直聊滥用）；同名 `ctx.action` 供 HTTP/CLI（`helm superagent watchdog_*`）。
 

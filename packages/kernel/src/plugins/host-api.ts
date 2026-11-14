@@ -603,10 +603,6 @@ export function wrapHostApi(
       guard('host.getConversationOwnership');
       return backend.getConversationOwnership(id);
     },
-    getConversationActivity: (id) => {
-      guard('host.getConversationActivity');
-      return backend.getConversationActivity(id);
-    },
     manageConversation: (id) =>
       acquire('host.manageConversation')(() => backend.manageConversation(id, pluginId)),
     markConversationOwnership: (id, owner) => {

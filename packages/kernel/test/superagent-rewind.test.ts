@@ -189,9 +189,6 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     registerAskSeqResolver() { return () => {} },
     onEvent() { return () => {} },
     abortConversation: async () => {},
-    getConversationActivity(): { consecutiveErrors: number } {
-      return { consecutiveErrors: 0 }
-    },
     getConversationOwnership(): 'helm' | 'bot' | 'human' {
       return 'human'
     },

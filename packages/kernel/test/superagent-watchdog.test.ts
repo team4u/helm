@@ -200,8 +200,9 @@ async function makeHarness(opts: HarnessOptions = {}) {
   conversations.set(routerId, makeConversationSummary(routerId, { profileId: 'superagent', title: 'SuperAgent 中枢' }))
   conversations.set(1, makeConversationSummary(1, { title: '个人助理' }))
   const ownership = new Map<number, 'helm' | 'bot' | 'human'>()
-  /** ctx.host.getConversationActivity 可编程事实（缺省 idle 零错误）。 */
-  const activity = new Map<number, { stalledMs?: number; consecutiveErrors: number }>()
+  /** 会话活动统计驱动（与生产同源：经 ctx.host.onEvent 真实事件注入，
+   * 不再经已删除的 getConversationActivity 端口）。 */
+  const activitySeeded = new Map<number, number>()
   /** ctx.host.onEvent 监听注册表（模拟 runtime emitHostEvent 内部分发）。 */
   const eventListeners = new Map<string, Array<(payload: unknown) => MaybePromise<void>>>()
   let backendClosing = false
@@ -240,7 +241,6 @@ async function makeHarness(opts: HarnessOptions = {}) {
     setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: (id, owner) => ownership.set(id, owner),
-    getConversationActivity: (id) => activity.get(id) ?? { consecutiveErrors: 0 },
     getConversationOwnership: (id) => opts.ownership?.(id) ?? ownership.get(id) ?? (id === 1 ? 'human' : 'helm'),
     isClosing: () => backendClosing || (opts.isClosing?.() ?? false),
     createAsk: async (spec) => {
@@ -326,7 +326,6 @@ async function makeHarness(opts: HarnessOptions = {}) {
     recorded,
     conversations,
     ownership,
-    activity,
     config,
     docs,
     routerId,
@@ -346,13 +345,34 @@ async function makeHarness(opts: HarnessOptions = {}) {
     setBackendClosing(value: boolean) {
       backendClosing = value
     },
+    /** 与生产同源：向插件 ctx.host.onEvent 监听器发布内核形状事件。 */
+    async emitHostEvent(type: string, payload: unknown): Promise<void> {
+      for (const listener of [...(eventListeners.get(type) ?? [])]) {
+        await listener(payload)
+      }
+    },
+    /** 注入一次真实活动事实：conversation.live 帧（run 进度指纹变化 + 可控
+     * updatedAt，与内核 tracker 发帧同形状）。 */
+    async seedActivity(conversationId: number, stalledMs: number): Promise<void> {
+      activitySeeded.set(conversationId, (activitySeeded.get(conversationId) ?? 0) + 1)
+      await this.emitHostEvent('conversation.live', {
+        type: 'conversation.live',
+        live: {
+          conversationId,
+          text: `progress-${activitySeeded.get(conversationId)}`,
+          tools: [],
+          updatedAt: Date.now() - stalledMs,
+        },
+      })
+    },
     async tick(externalProbes: WatchdogProbe[] = [], summaries?: ConversationSummary[]) {
       // 默认用当前会话表快照（含预置与测试中手动更新的状态）。
       const list = summaries ?? [...conversations.values()]
       for (const s of list) conversations.set(s.id, s)
       // 原生探针事实同步到真实事实源：新链路中 native probe 由 runTick 从
-      // getConversation / getConversationActivity 构造，测试注入的探针字段
-      //（status/seq/stalledMs/consecutiveErrors）镜像到 backend 会话与 activity 表。
+      // getConversation + 插件真实事件统计构造，测试注入的探针字段
+      //（status/seq/stalledMs/consecutiveErrors）镜像到 backend 会话表与插件
+      // 订阅的真实事件（conversation.live 帧 / turn_settled 钩子）。
       // injectNativeAsExternal 模式下不镜像（原样注入，构造非常规形状）。
       if (!opts.injectNativeAsExternal) {
         for (const probe of externalProbes) {
@@ -363,10 +383,19 @@ async function makeHarness(opts: HarnessOptions = {}) {
             status: (probe.status as ConversationSummary['status']) ?? base.status,
             ...(probe.stateChangeSeq !== undefined ? { stateChangeSeq: probe.stateChangeSeq } : {}),
           })
-          activity.set(probe.conversationId, {
-            ...(probe.stalledMs !== undefined ? { stalledMs: probe.stalledMs } : {}),
-            consecutiveErrors: probe.consecutiveErrors ?? 0,
-          })
+          // 先回放失败结算（计数递增且清活动时钟），再注入活动帧（时钟起点）。
+          for (let i = 0; i < (probe.consecutiveErrors ?? 0); i += 1) {
+            await this.turnSettled({
+              conversation: makeConversationSummary(probe.conversationId, { status: 'error' }),
+              inputs: [],
+              outcome: 'failed',
+              error: 'boom',
+              settledAt: Date.now(),
+            })
+          }
+          if (probe.stalledMs !== undefined) {
+            await this.seedActivity(probe.conversationId, probe.stalledMs)
+          }
         }
       }
       let release: (() => void) | undefined
@@ -477,8 +506,9 @@ test('native 停滞：阈值前不消费；阈值后 abort+wake 恰好一次；�
   const h = await makeHarness()
   h.config.abortAfterMs = 600_000
   h.conversations.set(55, makeConversationSummary(55, { status: 'working', stateChangeSeq: 10 }))
-  // 未达阈值（stalledMs < stalledAfterMs）：零动作、零去重标记（不预先占坑）。
-  await h.tick([nativeProbe(55, { stalledMs: 59_999, status: 'working' })])
+  // 未达阈值（stalledMs 远低于 stalledAfterMs，事件注入时钟含毫秒级漂移）：
+  // 零动作、零去重标记（不预先占坑）。
+  await h.tick([nativeProbe(55, { stalledMs: 50_000, status: 'working' })])
   assert.equal(h.recorded.aborts.length, 0)
   assert.equal(h.recorded.submits.filter((s) => s.conversationId === h.watchdogId).length, 0)
 
@@ -497,6 +527,161 @@ test('native 停滞：阈值前不消费；阈值后 abort+wake 恰好一次；�
   await h.tick([nativeProbe(55, { stalledMs: 700_000, status: 'working', stateChangeSeq: 11 })])
   assert.deepEqual(h.recorded.aborts, [55, 55])
   assert.equal(h.recorded.submits.filter((s) => s.conversationId === h.watchdogId).length, 2)
+})
+
+// ---------------------------------------------------------------------------
+// 2b. 活动统计（真实事件驱动；迁自内核 tracker getProbeFacts）
+// ---------------------------------------------------------------------------
+
+test('活动统计：重复指纹 live 帧不刷新时钟（非每帧心跳假活动）', { timeout: 60_000 }, async () => {
+  const h = await makeHarness()
+  h.conversations.set(55, makeConversationSummary(55, { status: 'working', stateChangeSeq: 10 }))
+  // 初始活动：200s 前（超 stalledAfterMs 60s，若时钟未被刷新则唤醒）。
+  await h.seedActivity(55, 200_000)
+  // 同指纹帧（内核内容去重后不会发，防御性验证插件侧也不计为活动：
+  // updatedAt 全新，但 text/tools 与上帧相同）。
+  await h.emitHostEvent('conversation.live', {
+    type: 'conversation.live',
+    live: { conversationId: 55, text: 'progress-1', tools: [], updatedAt: Date.now() },
+  })
+  // 不携带 stalledMs（不做镜像注入，让探针从插件自身统计构造）。
+  await h.tick([nativeProbe(55, { status: 'working' })], [
+    makeConversationSummary(55, { status: 'working', stateChangeSeq: 10 }),
+  ])
+  // 时钟未被重复帧刷新：stalledMs ≈ 200s 达唤醒阈值 → wake 恰一次。
+  assert.equal(h.recorded.submits.filter((s) => s.conversationId === h.watchdogId).length, 1)
+})
+
+test('活动统计：queuedInputs-only 帧不算 run 进度（不刷新时钟）', { timeout: 60_000 }, async () => {
+  const h = await makeHarness()
+  h.conversations.set(55, makeConversationSummary(55, { status: 'working', stateChangeSeq: 10 }))
+  // 初始活动：200s 前（超唤醒阈值）。
+  await h.seedActivity(55, 200_000)
+  // 仅 queuedInputs 变化的帧：text/tools/thinking 与上帧相同（run 无进度）。
+  await h.emitHostEvent('conversation.live', {
+    type: 'conversation.live',
+    live: {
+      conversationId: 55,
+      text: 'progress-1',
+      tools: [],
+      queuedInputs: [{ id: 'q1', submissionId: '9', mode: 'steer', text: '插话', origin: 'agent', createdAt: 1 }],
+      updatedAt: Date.now(),
+    },
+  })
+  await h.tick([nativeProbe(55, { status: 'working' })], [
+    makeConversationSummary(55, { status: 'working', stateChangeSeq: 10 }),
+  ])
+  // 时钟未被 queued-only 帧刷新：stalledMs ≈ 200s → wake 恰一次。
+  assert.equal(h.recorded.submits.filter((s) => s.conversationId === h.watchdogId).length, 1)
+})
+
+test('活动统计：conversation.upsert(working) 刷新时钟；turn settled 清时钟', { timeout: 60_000 }, async () => {
+  const h = await makeHarness()
+  h.conversations.set(55, makeConversationSummary(55, { status: 'working', stateChangeSeq: 10 }))
+  // 初始活动：300s 前（超唤醒阈值 60s，未达 abort 阈值 600s）。
+  await h.seedActivity(55, 300_000)
+  // run 启动/doing 翻转摘要（working）刷新时钟：不再停滞。
+  await h.emitHostEvent('conversation.upsert', {
+    type: 'conversation.upsert',
+    conversation: makeConversationSummary(55, { status: 'working', stateChangeSeq: 11, updatedAt: Date.now() }),
+  })
+  await h.tick([nativeProbe(55, { status: 'working', stateChangeSeq: 11 })], [
+    makeConversationSummary(55, { status: 'working', stateChangeSeq: 11 }),
+  ])
+  assert.equal(h.recorded.aborts.length, 0, '时钟被 working 摘要刷新，无中止')
+  assert.equal(
+    h.recorded.submits.filter((s) => s.conversationId === h.watchdogId).length,
+    0,
+    '时钟被 working 摘要刷新，无唤醒',
+  )
+
+  // 回合结算（completed）：清活动时钟；随后空闲 tick 不报停滞（空闲非停滞）。
+  await h.turnSettled({
+    conversation: makeConversationSummary(55, { status: 'done' }),
+    inputs: [],
+    outcome: 'completed',
+    settledAt: Date.now(),
+  })
+  await h.tick([nativeProbe(55, { status: 'idle' })], [
+    makeConversationSummary(55, { status: 'idle', stateChangeSeq: 12 }),
+  ])
+  assert.equal(h.recorded.aborts.length, 0)
+  assert.equal(h.recorded.submits.filter((s) => s.conversationId === h.watchdogId).length, 0)
+})
+
+test('活动统计：failed 递增 / completed 归零 / aborted 保持；conversation.deleted 清理', { timeout: 60_000 }, async () => {
+  const h = await makeHarness()
+  const fail = async (conversationId: number): Promise<void> => {
+    await h.turnSettled({
+      conversation: makeConversationSummary(conversationId, { status: 'error' }),
+      inputs: [],
+      outcome: 'failed',
+      error: 'boom',
+      settledAt: Date.now(),
+    })
+  }
+  // 连续两次失败（真实 turn_settled 钩子路径）：探针 consecutiveErrors=2
+  //（errorThreshold=3 未达，error 状态唤醒认知层）。
+  await fail(55)
+  await fail(55)
+  await h.tick([nativeProbe(55, { status: 'error' })], [
+    makeConversationSummary(55, { status: 'error', stateChangeSeq: 10 }),
+  ])
+  // human 归属错误仅通知（纯 human 汇报不变）：无 abort、无 L2 唤醒。
+  h.ownership.set(88, 'human')
+  await fail(88)
+  await fail(88)
+  const wakeBefore = h.recorded.submits.filter((s) => s.conversationId === h.watchdogId).length
+  await h.tick([nativeProbe(88, { status: 'error' })], [
+    makeConversationSummary(88, { status: 'error', stateChangeSeq: 10 }),
+  ])
+  assert.equal(h.recorded.aborts.length, 0)
+  assert.equal(
+    h.recorded.submits.filter((s) => s.conversationId === h.watchdogId).length,
+    wakeBefore,
+    'human 错误不唤醒 L2',
+  )
+
+  // completed 归零：同会话成功回合后计数清零。
+  await h.turnSettled({
+    conversation: makeConversationSummary(55, { status: 'done' }),
+    inputs: [],
+    outcome: 'completed',
+    settledAt: Date.now(),
+  })
+  // aborted 保持（非模型失败）：先失败一次再中止，计数不归零也不叠加。
+  await h.turnSettled({
+    conversation: makeConversationSummary(66, { status: 'idle' }),
+    inputs: [],
+    outcome: 'aborted',
+    settledAt: Date.now(),
+  })
+
+  // conversation.deleted：统计清理（目标消亡，无从停滞）。仅验证不抛错且后续
+  // tick 正常（内部 map 已清，不可直接窥视，但事件载荷边界校验已覆盖）。
+  await h.emitHostEvent('conversation.deleted', { type: 'conversation.deleted', conversationId: 55 })
+  await h.tick([])
+  assert.equal(h.recorded.aborts.length, 0)
+})
+
+test('活动统计：非法事件载荷丢弃不计入（边界校验）', { timeout: 60_000 }, async () => {
+  const h = await makeHarness()
+  h.conversations.set(55, makeConversationSummary(55, { status: 'working', stateChangeSeq: 10 }))
+  // 非法载荷：缺 type / conversationId 非整数 / updatedAt 非法。
+  await h.emitHostEvent('conversation.live', { live: { conversationId: 55, text: 'x', tools: [], updatedAt: 1 } })
+  await h.emitHostEvent('conversation.live', {
+    type: 'conversation.live',
+    live: { conversationId: 55.5, text: 'x', tools: [], updatedAt: 1 },
+  })
+  await h.emitHostEvent('conversation.live', {
+    type: 'conversation.live',
+    live: { conversationId: 55, text: 'x', tools: [], updatedAt: Number.NaN },
+  })
+  // 全部被丢弃：无活动记录 → working 不报停滞 → 无唤醒。
+  await h.tick([nativeProbe(55, { status: 'working' })], [
+    makeConversationSummary(55, { status: 'working', stateChangeSeq: 10 }),
+  ])
+  assert.equal(h.recorded.submits.filter((s) => s.conversationId === h.watchdogId).length, 0)
 })
 
 test('两个节点同 paneId 独立去重，跨注册周期持久恢复，损坏文档显式拒绝', { timeout: 60_000 }, async () => {
@@ -581,7 +766,6 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
-    getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: (id) => opts.ownership?.(id) ?? 'helm',
     isClosing: () => opts.isClosing?.() ?? false,
     createAsk: async (spec) => {
@@ -1112,7 +1296,6 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
-    getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'helm',
     isClosing: () => false,
     createAsk: (spec) =>
@@ -1326,7 +1509,6 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
-    getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'helm',
     isClosing: () => false,
     createAsk: (spec) =>

@@ -320,9 +320,6 @@ class FakeBackend implements PluginHostBackend {
     return () => {}
   }
   async abortConversation(): Promise<void> {}
-  getConversationActivity(): { consecutiveErrors: number } {
-    return { consecutiveErrors: 0 }
-  }
   getConversationOwnership(): 'helm' | 'bot' | 'human' {
     return 'human'
   }

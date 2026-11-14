@@ -83,9 +83,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   abortConversation(): Promise<void> {
     return Promise.resolve()
   }
-  getConversationActivity(): { consecutiveErrors: number } {
-    return { consecutiveErrors: 0 }
-  }
   getConversationOwnership(): 'helm' | 'bot' | 'human' {
     return 'human'
   }

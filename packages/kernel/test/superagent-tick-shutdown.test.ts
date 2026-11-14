@@ -82,7 +82,6 @@ test('service stop 等待已进入采集的在途 tick，插件释放前完成 D
     updateConversation: async (id) => conversations.get(id)!,
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
-    getConversationActivity: () => ({ consecutiveErrors: 0 }),
     getConversationOwnership: () => 'helm',
     isClosing: () => false,
     createAsk: async () => { throw new HelmError('unsupported', '本测试不建 Ask', 400) },

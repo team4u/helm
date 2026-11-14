@@ -5,11 +5,12 @@
  * 在快照推进时同步维护内存镜像与排队副作用（SSE 推送在微任务中发出）。
  *
  * turn_settled 精确捕获：
- * - 输入登记 registerInput（负临时键）-> bindSubmission 回填 submissionId；
- *   观察路径（entry / pi.inbox 重建）以 `req:<requestId>` 键落位并按
- *   input.id 幂等合并为唯一记录；entry 重建仅认当前 run 区间（run.first
- *   及之后）与当前 inbox，已结算 run 的历史 helm.input 不复活；重启恢复
- *   活跃 run 时经 live.run.inputs 权威清单 + submission 精确查询补齐元数据；
+ * - 输入以持久 input.id（即 SDK requestId）为唯一追踪身份：registerInput
+ *   提交前登记、bindSubmission 回填 submissionId→requestId 关联索引；
+ *   观察路径（helm.input entry / pi.inbox 重建）直接按 requestId 落位并幂等
+ *   合并唯一记录；entry 重建仅认当前 run 区间（run.first 及之后）与当前
+ *   inbox，已结算 run 的历史 helm.input 不复活；重启恢复活跃 run 时经
+ *   live.run.inputs 权威清单 + submission 精确查询补齐元数据与索引；
  * - 每个 run（taskId）多 tool round 累计消费输入（新 taskId 才重置）；
  * - run 消失（完成/失败）精确结算一次（settledRuns 防双报；失败取
  *   runFailure.inputs 精确清单）；
@@ -79,11 +80,6 @@ interface InboxItemShape {
   entry?: { kind?: string; data?: unknown }
 }
 
-interface TrackedInput {
-  input: ConversationInput
-  submissionId: number | string
-}
-
 /** live 节流窗口（毫秒）：50-100ms 区间取 75ms，兼顾 SSE 帧率与提交压力。 */
 const LIVE_THROTTLE_MS = 75
 
@@ -100,19 +96,20 @@ export class ConversationTracker {
   private readonly liveViews = new Map<number, LiveStateShape>()
   /** 会话 -> 当前 pi.inbox 排队项镜像（queuedInputs 派生与实时推送用）。 */
   private readonly inboxViews = new Map<number, ReadonlyArray<InboxItemShape>>()
-  /** submissionId -> TrackedInput（submit 登记 + entry 观察重建双通道）。
+  /** 会话 -> requestId（= input.id）-> 输入元数据（唯一追踪身份；提交登记
+   * 与 entry/inbox 观察重建按 requestId 幂等合并为唯一记录）。 */
+  private readonly trackedInputs = new Map<number, Map<string, ConversationInput>>()
+  /** 会话 -> submissionId -> requestId：SDK 接口关联索引（live.run.inputs /
+   * runFailure.inputs / withdraw 均以 submissionId 表达，经此映射回追踪身份）。
    *
-   * 键域（无碰撞区分）：
-   * - number（正）：SDK 真实 submissionId（bindSubmission 回填）；
-   * - number（负）：submit 前的临时登记键（bindSubmission/dropInput 迁移或删除）；
-   * - string `req:<requestId>`：helm.input entry / inbox 观察重建（观察路径拿
-   *   不到 submissionId，直接以 requestId 字符串落位，bindSubmission 时合并）。 */
-  private readonly trackedInputs = new Map<number, Map<number | string, TrackedInput>>()
+   * 写入来源：bindSubmission（submit 返回）、adoptInputsFromInbox（inbox 项
+   * id 即 submissionId）、重启恢复的 submission 精确查询；结算/撤回时清理。 */
+  private readonly submissionIndex = new Map<number, Map<number, string>>()
   /** 会话 -> 输入重建下界 entry id（单调不回退：新 run 取 run.first 向上推，
    * run 结束不清除——窗口内已结算的 helm.input 不再被下一快照复活）。 */
   private readonly runFirstEntries = new Map<number, number>()
-  /** 本回合已消费 submissionId 集（run 存续期间累计，新 taskId 重置）。 */
-  private readonly consumedInputs = new Map<number, Set<number | string>>()
+  /** 本回合已消费 requestId 集（run 存续期间累计，新 taskId 重置）。 */
+  private readonly consumedInputs = new Map<number, Set<string>>()
   /** 当前 run 的 taskId（多 tool round 不变；变化才重置消费集）。 */
   private readonly runTaskIds = new Map<number, number>()
   /** 已结算的 run（防 done+failure+abort 双报）。 */
@@ -133,12 +130,6 @@ export class ConversationTracker {
   private readonly lastLiveKey = new Map<number, string>()
   /** 会话 -> 上次已发 queuedInputs 指纹（入队/出队 0ms 冲刷判定）。 */
   private readonly lastQueuedLiveKeys = new Map<number, string>()
-  /** 会话 -> 最近一次真实活动时间（仅活动内容变更时刷新，非每次快照刷新）。 */
-  private readonly lastActivityAt = new Map<number, number>()
-  /** 会话 -> 最近一次活动内容指纹（重复快照不刷新时间）。 */
-  private readonly lastActivityKey = new Map<number, string>()
-  /** 会话 -> 连续失败回合数（completed 归零）。 */
-  private readonly consecutiveErrors = new Map<number, number>()
   /** 会话 -> 最近一次已推送摘要的语义指纹（status|doing|pendingAsk；相同不重发）。 */
   private readonly lastSummaryKey = new Map<number, string>()
 
@@ -223,20 +214,19 @@ export class ConversationTracker {
     this.adoptInputsFromInbox(id, inboxItems)
     if (!live?.run) return
     this.runTaskIds.set(id, live.run.taskId)
-    this.consumedInputs.set(id, new Set<number | string>())
+    this.consumedInputs.set(id, new Set<string>())
     const first = live.run.first !== undefined ? Number(live.run.first) : undefined
     if (first !== undefined) this.runFirstEntries.set(id, first)
-    // 本 run 已放置输入：SDK 权威 submissionId -> entry 精确回读，并直接以
-    // submissionId 数字键落位（与正常 register/bind 同键域，markConsumed 可命中）。
+    // 本 run 已放置输入：SDK 权威 submissionId -> entry 精确回读，登记
+    // requestId 追踪记录与 submissionId->requestId 索引（markConsumed 可命中）。
     const loaded = await this.loadRunInputEntries(id, live.run.inputs as number[])
     // 停观换代：异步回读结果作废，绝不向已清理的 maps 复活条目。
     if (this.observeGenerations.get(id) !== generation) return
     this.adoptInputsFromEntries(id, loaded.entries)
-    this.bindRestoredInputs(id, loaded.pairs)
+    this.indexRestoredSubmissions(id, loaded.pairs)
     // queued（未放置）输入：inbox entry 载荷直读（上面已登记镜像，此处仅补输入元数据）。
     this.adoptInputsFromInbox(id, inboxItems)
     for (const submissionId of live.run.inputs) this.markConsumed(id, submissionId)
-    this.noteActivity(id, live)
     // 恢复的活跃 run 已体现在快照摘要（listConversations）：登记语义指纹即可，
     // 后续 advance 仅在真实变化时推送，不补发冗余 working 帧。
     if (this.store.getConv(id)) this.lastSummaryKey.set(id, summaryKeyOf(this.summaryOf(id)))
@@ -274,31 +264,29 @@ export class ConversationTracker {
     return { entries: out, pairs }
   }
 
-  /** 把恢复输入的 req: 键归一为真实 submissionId 键（markConsumed 可命中）。 */
-  private bindRestoredInputs(
+  /** 把恢复输入的权威 (submissionId, requestId) 对登记进关联索引。 */
+  private indexRestoredSubmissions(
     id: number,
     pairs: ReadonlyArray<{ submissionId: number; requestId: string }>,
   ): void {
     if (pairs.length === 0) return
-    const map = this.trackedInputs.get(id)
-    if (!map) return
-    for (const { submissionId, requestId } of pairs) {
-      const reqKey = `req:${requestId}`
-      const tracked = map.get(reqKey)
-      if (tracked === undefined) continue
-      map.delete(reqKey)
-      map.set(submissionId, tracked)
-    }
+    const index = this.submissionIndex.get(id) ?? new Map<number, string>()
+    for (const { submissionId, requestId } of pairs) index.set(submissionId, requestId)
+    this.submissionIndex.set(id, index)
   }
 
-  /** inbox queued 项重建（未放置输入的 origin/meta/attachments 补齐）。 */
+  /** inbox queued 项重建（未放置输入的 origin/meta/attachments 补齐 + 索引登记）。 */
   private adoptInputsFromInbox(id: number, items: ReadonlyArray<InboxItemShape>): void {
     for (const item of items) {
       if (item.mode === 'write') continue
       const data = item.entry?.data as HelmInputMeta | undefined
       if (item.entry?.kind !== 'helm.input' || !data) continue
       if (typeof data.id !== 'string' || typeof data.text !== 'string') continue
-      this.upsertTrackedInput(id, data, `req:${data.id}`)
+      // inbox 项 id 即 SDK submissionId：登记关联索引（出队放置后 markConsumed 可命中）。
+      const index = this.submissionIndex.get(id) ?? new Map<number, string>()
+      index.set(item.id, data.id)
+      this.submissionIndex.set(id, index)
+      this.upsertTrackedInput(id, data.id, data)
     }
   }
 
@@ -325,11 +313,9 @@ export class ConversationTracker {
     // 删除令牌同时废止异步结果，避免保留已删会话的代数墓碑。
     this.observeGenerations.delete(id)
     this.trackedInputs.delete(id)
+    this.submissionIndex.delete(id)
     this.consumedInputs.delete(id)
     this.lastEmittedEntry.delete(id)
-    this.lastActivityAt.delete(id)
-    this.lastActivityKey.delete(id)
-    this.consecutiveErrors.delete(id)
     this.lastSummaryKey.delete(id)
     this.lastAssistant.delete(id)
     this.settledInflight.delete(id)
@@ -349,66 +335,64 @@ export class ConversationTracker {
     }
   }
 
-  /** 提交前登记 input 元数据（submit 返回后 bindSubmission 回填真实 submissionId）。 */
-  registerInput(conversationId: number, input: ConversationInput): number {
-    const map = this.trackedInputs.get(conversationId) ?? new Map<number | string, TrackedInput>()
-    const key = nextInputKey()
-    map.set(key, { input, submissionId: key })
+  /** 提交前登记 input 元数据（以持久 input.id 即 requestId 为追踪身份；
+   * submit 返回后 bindSubmission 登记 submissionId 关联索引）。 */
+  registerInput(conversationId: number, input: ConversationInput): void {
+    const map = this.trackedInputs.get(conversationId) ?? new Map<string, ConversationInput>()
+    // 同 requestId 可能已有 entry/inbox 观察重建的记录（如 rewind 事务提交
+    // 先于登记）：只补缺（内存中更完整的元数据优先），不新建重复记录。
+    const existing = map.get(input.id)
+    map.set(input.id, existing === undefined ? input : mergeInputMeta(existing, input))
     this.trackedInputs.set(conversationId, map)
-    return key
   }
 
-  /** submit 返回后绑定真实 submissionId（HelmError 时 dropInput 移除登记）。 */
-  bindSubmission(conversationId: number, key: number, submissionId: number): void {
-    const map = this.trackedInputs.get(conversationId)
-    const tracked = map?.get(key)
-    if (!map || !tracked) return
-    map.delete(key)
-    // requestId 按 conversation 去重：同 requestId 已有 entry 观察重建的 req: 记录
-    // 时合并为唯一记录（以 submissionId 数字键落位，不再保留 req: 键）。否则新建。
-    const reqKey = `req:${tracked.input.id}`
-    const existing = map.get(reqKey)
-    if (existing !== undefined) {
-      map.delete(reqKey)
-      map.set(submissionId, existing)
-      return
-    }
-    map.set(submissionId, tracked)
+  /** submit 返回后登记 submissionId→requestId 关联索引（SDK run.inputs 等
+   * 均以 submissionId 表达，经索引映射回追踪身份；HelmError 时 dropInput
+   * 移除登记）。 */
+  bindSubmission(conversationId: number, requestId: string, submissionId: number): void {
+    const index = this.submissionIndex.get(conversationId) ?? new Map<number, string>()
+    index.set(submissionId, requestId)
+    this.submissionIndex.set(conversationId, index)
   }
 
-  dropInput(conversationId: number, key: number): void {
-    this.trackedInputs.get(conversationId)?.delete(key)
+  dropInput(conversationId: number, requestId: string): void {
+    this.trackedInputs.get(conversationId)?.delete(requestId)
   }
 
-  /** 撤回排队提交：清理 submissionId 键及 req:<requestId> 重建键（withdraw 用）。 */
+  /** 撤回排队提交：清理关联索引项及 requestId 追踪记录（withdraw 用）。 */
   dropSubmission(conversationId: number, submissionId: number, requestId?: string): void {
-    const map = this.trackedInputs.get(conversationId)
-    if (!map) return
-    map.delete(submissionId)
-    if (requestId !== undefined) map.delete(`req:${requestId}`)
+    const index = this.submissionIndex.get(conversationId)
+    const resolved = requestId ?? index?.get(submissionId)
+    index?.delete(submissionId)
+    if (resolved !== undefined) this.trackedInputs.get(conversationId)?.delete(resolved)
   }
 
   /** 本回合（当前 run）输入清单（before_turn payload 用）：run.inputs 精确
-   * 序列（steer 追加在内）+ 尚未放置的 queued 登记，按 input.id 去重唯一。 */
+   * 序列（steer 追加在内）+ 尚未关联 submissionId 的登记（submit 在途），
+   * 按 input.id 去重唯一。 */
   currentRunInputs(conversationId: number): ConversationInput[] {
     const run = this.liveViews.get(conversationId)?.run
     if (!run) return []
     const map = this.trackedInputs.get(conversationId)
+    const index = this.submissionIndex.get(conversationId)
     if (!map) return []
     const out: ConversationInput[] = []
     const seen = new Set<string>()
-    const collect = (tracked: TrackedInput | undefined): void => {
-      if (!tracked || seen.has(tracked.input.id)) return
-      seen.add(tracked.input.id)
-      out.push(tracked.input)
+    const collect = (input: ConversationInput | undefined): void => {
+      if (!input || seen.has(input.id)) return
+      seen.add(input.id)
+      out.push(input)
     }
-    // run.inputs 是本 run 已放置 submissionId 的精确序列（含已消费项）。
+    // run.inputs 是本 run 已放置 submissionId 的精确序列（含已消费项），
+    // 经关联索引映射回追踪身份。
     for (const submissionId of run.inputs) {
-      collect(map.get(submissionId))
+      const requestId = index?.get(submissionId)
+      if (requestId !== undefined) collect(map.get(requestId))
     }
-    // queued（未放置）登记：负临时键项（busy 中 followUp 输入在册未放置）。
-    for (const [key, tracked] of map) {
-      if (typeof key === 'number' && key < 0) collect(tracked)
+    // 尚未关联 submissionId 的登记：submit 在途（busy 中 followUp 输入在册未放置）。
+    const bound = new Set(index?.values() ?? [])
+    for (const [requestId, input] of map) {
+      if (!bound.has(requestId)) collect(input)
     }
     return out
   }
@@ -490,30 +474,36 @@ export class ConversationTracker {
     this.emitSettled(conversationId, 'aborted', all, undefined)
   }
 
-  /** 取当前 run 的全部输入（abort 结算）：已放置（run.inputs）+ 已消费集 +
-   * 尚未放置的 queued 登记（负临时键），按 input.id 去重；绝不遍历历史 run
-   * 的 req: 键（已结算输入不再复活，origin 与重复输入不被旧历史污染）。 */
+  /** 取当前 run 的全部输入（abort 结算）：已放置（run.inputs 经索引）+ 已消费集 +
+   * 尚未关联 submissionId 的登记，按 input.id 去重；绝不遍历历史 run 的
+   * 追踪记录（已结算输入不再复活，origin 与重复输入不被旧历史污染）。 */
   private takeCurrentRunInputs(conversationId: number): ConversationInput[] {
     const run = this.liveViews.get(conversationId)?.run
     const map = this.trackedInputs.get(conversationId)
+    const index = this.submissionIndex.get(conversationId)
     const out: ConversationInput[] = []
     if (!map) return out
     const seen = new Set<string>()
-    const collect = (tracked: TrackedInput | undefined): void => {
-      if (!tracked || seen.has(tracked.input.id)) return
-      seen.add(tracked.input.id)
-      out.push(tracked.input)
+    const collect = (input: ConversationInput | undefined): void => {
+      if (!input || seen.has(input.id)) return
+      seen.add(input.id)
+      out.push(input)
     }
     if (run !== undefined) {
-      for (const submissionId of run.inputs) collect(map.get(submissionId))
+      for (const submissionId of run.inputs) {
+        const requestId = index?.get(submissionId)
+        if (requestId !== undefined) collect(map.get(requestId))
+      }
     }
-    for (const submissionId of this.consumedInputs.get(conversationId) ?? []) {
-      collect(map.get(submissionId))
+    for (const requestId of this.consumedInputs.get(conversationId) ?? []) {
+      collect(map.get(requestId))
     }
-    for (const [key, tracked] of map) {
-      if (typeof key === 'number' && key < 0) collect(tracked)
+    const bound = new Set(index?.values() ?? [])
+    for (const [requestId, input] of map) {
+      if (!bound.has(requestId)) collect(input)
     }
     this.trackedInputs.delete(conversationId)
+    this.submissionIndex.delete(conversationId)
     return out
   }
 
@@ -635,7 +625,7 @@ export class ConversationTracker {
       if (this.runTaskIds.get(id) !== live.run.taskId) {
         // 新 run 开始：重置本回合消费集（同 run 多 tool round 不重置）。
         this.runTaskIds.set(id, live.run.taskId)
-        this.consumedInputs.set(id, new Set<number | string>())
+        this.consumedInputs.set(id, new Set<string>())
         this.settledRuns.delete(runKey)
         this.dropSettledRunFromOrder(id, runKey)
         const first = live.run.first !== undefined ? Number(live.run.first) : undefined
@@ -650,8 +640,7 @@ export class ConversationTracker {
       // 完成期（answered，inputs 清空）不动 consumedInputs——保留已消费记录。
     }
 
-    // 实时视图：真实活动变更记录 + 节流推送（终态在 emitSettled 内强制冲刷）。
-    this.noteActivity(id, live)
+    // 实时视图：节流推送（终态在 emitSettled 内强制冲刷）。
     this.emitLiveThrottled(id, live)
     // run 活跃期间的实时摘要：run 启动与 doing 语义变化（首字前即有 working）。
     this.emitRunSummary(id)
@@ -673,24 +662,6 @@ export class ConversationTracker {
       advanced = true
     }
     if (advanced) this.lastEmittedEntry.set(id, watermark)
-  }
-
-  /** 真实活动变更才刷新 lastActivityAt（重复快照不刷新，防 stall 误判）。 */
-  private noteActivity(id: number, live: LiveStateShape | undefined): void {
-    if (!live?.run) return
-    const tools = live.tools ?? []
-    const nested = live.nestedTools ?? []
-    const fingerprint = [
-      live.run.taskId,
-      live.run.turns ?? 0,
-      live.run.inputs.length,
-      ...tools.map((t) => `${t.callId}:${t.status}`),
-      ...nested.map((t) => `${t.callId}:${t.status}`),
-      streamedLengthOf(live.generation),
-    ].join('|')
-    if (this.lastActivityKey.get(id) === fingerprint) return
-    this.lastActivityKey.set(id, fingerprint)
-    this.lastActivityAt.set(id, Date.now())
   }
 
   /** 节流推送实时视图：窗口内只保留最新快照，同内容不重复发帧。
@@ -783,8 +754,7 @@ export class ConversationTracker {
   /** 从 helm.input entry 数据登记输入（按 input.id 即 requestId 幂等合并唯一记录）。
    *
    * 正常路径 register/bind 已有权威记录：entry 观察仅回填元数据缺口（origin/
-   * meta/attachments），不新建重复记录。观察者拿不到 submissionId 时以
-   * `req:<requestId>` 字符串键落位（bindSubmission 后续合并为唯一记录）。 */
+   * meta/attachments），不新建重复记录。 */
   private adoptInputsFromEntries(id: number, entries: ReadonlyArray<unknown>): void {
     for (const raw of entries) {
       const entry = raw as { kind?: string; data?: unknown }
@@ -793,65 +763,59 @@ export class ConversationTracker {
       if (entry?.kind !== 'helm.input') continue
       const meta = entry.data as HelmInputMeta | undefined
       if (!meta || typeof meta.id !== 'string' || typeof meta.text !== 'string') continue
-      this.upsertTrackedInput(id, meta, `req:${meta.id}`)
+      this.upsertTrackedInput(id, meta.id, meta)
     }
   }
 
-  /** 单条 helm.input 元数据登记/合并（按 input.id 幂等，唯一记录）。 */
-  private upsertTrackedInput(id: number, meta: HelmInputMeta, reqKey: string): void {
-    const map = this.trackedInputs.get(id) ?? new Map<number | string, TrackedInput>()
+  /** 单条 helm.input 元数据登记/合并（按 input.id 幂等，唯一记录；调用方已
+   * 校验 meta.id/text 为字符串）。 */
+  private upsertTrackedInput(id: number, requestId: string, meta: HelmInputMeta): void {
+    const map = this.trackedInputs.get(id) ?? new Map<string, ConversationInput>()
     const rebuilt = inputFromMeta(meta)
-    // 同 requestId 可能已有三种在册形式：req: 键、submissionId 数字键、负临时键。
-    // 均只补缺（内存中更完整的元数据优先），不新建重复记录。
-    let target: TrackedInput | undefined = map.get(reqKey)
-    if (target === undefined) {
-      for (const tracked of map.values()) {
-        if (tracked.input.id === meta.id) {
-          target = tracked
-          break
-        }
-      }
-    }
-    if (target !== undefined) {
-      target.input = mergeInputMeta(target.input, rebuilt)
+    const existing = map.get(requestId)
+    if (existing !== undefined) {
+      map.set(requestId, mergeInputMeta(existing, rebuilt))
       this.trackedInputs.set(id, map)
       return
     }
-    map.set(reqKey, { input: rebuilt, submissionId: reqKey })
+    map.set(requestId, rebuilt)
     this.trackedInputs.set(id, map)
   }
 
-  private markConsumed(conversationId: number, submissionId: number | string): void {
+  /** 标记 submissionId 已被当前 run 消费：经关联索引映射回 requestId 后
+   * 恰一次登记（onInputCommitted 恰一次）。索引缺失（bind/回填尚未发生）时
+   * 静默跳过，下一次快照重扫 run.inputs 时补记。 */
+  private markConsumed(conversationId: number, submissionId: number): void {
     const map = this.trackedInputs.get(conversationId)
-    const tracked = map?.get(submissionId)
-    if (!map || !tracked) return
-    const consumedSet = this.consumedInputs.get(conversationId) ?? new Set<number | string>()
-    if (consumedSet.has(submissionId)) return
-    consumedSet.add(submissionId)
+    const requestId = this.submissionIndex.get(conversationId)?.get(submissionId)
+    const input = requestId === undefined ? undefined : map?.get(requestId)
+    if (!map || !input) return
+    const consumedSet = this.consumedInputs.get(conversationId) ?? new Set<string>()
+    if (consumedSet.has(input.id)) return
+    consumedSet.add(input.id)
     this.consumedInputs.set(conversationId, consumedSet)
-    this.events.onInputCommitted(conversationId, tracked.input)
+    this.events.onInputCommitted(conversationId, input)
   }
 
-  /** 结算取本 run 已消费输入并清理登记：按 input.id 去重唯一，全部键位
-   * （submissionId / req: 重建键）一并清除，历史不复活。 */
+  /** 结算取本 run 已消费输入并清理登记：requestId 集合每项恰一条记录，
+   * 追踪记录与关联索引一并清除，历史不复活。 */
   private takeConsumed(conversationId: number): ConversationInput[] {
     const consumedSet = this.consumedInputs.get(conversationId)
     const map = this.trackedInputs.get(conversationId)
+    const index = this.submissionIndex.get(conversationId)
     const out: ConversationInput[] = []
     if (consumedSet && map) {
-      const seen = new Set<string>()
-      for (const submissionId of consumedSet) {
-        const tracked = map.get(submissionId)
-        if (!tracked || seen.has(tracked.input.id)) continue
-        seen.add(tracked.input.id)
-        out.push(tracked.input)
+      for (const requestId of consumedSet) {
+        const input = map.get(requestId)
+        if (input !== undefined) out.push(input)
       }
-      // 已结算输入的全部键位一并清除（含同 input.id 的 req: 重建键）。
-      for (const input of out) {
-        for (const [key, value] of map) {
-          if (value.input.id === input.id) map.delete(key)
+      // 已结算输入的追踪记录与索引项一并清除。
+      if (index !== undefined) {
+        for (const [submissionId, requestId] of index) {
+          if (consumedSet.has(requestId)) index.delete(submissionId)
         }
       }
+      for (const requestId of consumedSet) map.delete(requestId)
     }
     this.consumedInputs.delete(conversationId)
     return out
@@ -869,12 +833,6 @@ export class ConversationTracker {
     try {
       // 实时视图终态冲刷：先于 turn_settled 发出（空 tools/文本表示流结束）。
       this.flushLiveFinal(conversationId)
-      // 连续失败计数：failed 递增，completed 归零，aborted 保持（非模型失败）。
-      if (outcome === 'failed') {
-        this.consecutiveErrors.set(conversationId, (this.consecutiveErrors.get(conversationId) ?? 0) + 1)
-      } else if (outcome === 'completed') {
-        this.consecutiveErrors.set(conversationId, 0)
-      }
       // 先推进持久水位，再构造结算快照；插件与读取接口观察同一终态。
       // completionSeq 推进 + unread 置位（human 显式 patch 才清零）。
       // 背景派生子会话（ownedBy 非 human 且有父链，如受管 subagent / SuperAgent
@@ -1042,20 +1000,6 @@ export class ConversationTracker {
       this.lastAssistant.delete(conversationId)
     }
   }
-
-  /**
-   * 看门狗探针事实：仅基于真实活动变更（noteActivity）与回合结算计数，
-   * 不依赖每次快照刷新；无在途 run 时不报 stalled（空闲非停滞）。
-   */
-  getProbeFacts(conversationId: number): { stalledMs?: number; consecutiveErrors: number } {
-    const consecutiveErrors = this.consecutiveErrors.get(conversationId) ?? 0
-    if (!this.liveViews.get(conversationId)?.run) {
-      return { consecutiveErrors }
-    }
-    const lastActivityAt = this.lastActivityAt.get(conversationId)
-    if (lastActivityAt === undefined) return { consecutiveErrors }
-    return { stalledMs: Date.now() - lastActivityAt, consecutiveErrors }
-  }
 }
 
 function statusNow(meta: ConvMeta, outcome: TurnOutcome): ConversationStatus {
@@ -1083,12 +1027,7 @@ function lastErrorOf(
   return `${failure.reason}${detail}`
 }
 
-// 输入登记的临时 key 使用负数，避免与 submissionId 冲突。
-let inputKeySeq = -1
-function nextInputKey(): number {
-  inputKeySeq -= 1
-  return inputKeySeq
-}
+// 输入追踪身份即持久 input.id（requestId），无需临时键分配。
 
 /** 从 helm.input entry / inbox 载荷重建 ConversationInput（缺省字段不伪造）。 */
 function inputFromMeta(meta: HelmInputMeta): ConversationInput {
@@ -1131,26 +1070,6 @@ function assistantTextOf(entry: {
     .filter((b) => b.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text as string)
     .join('\n')
-}
-
-/** 流式 generation.message 的可见文本+思考长度（活动指纹用；非对象形状返回 -1 区分）。 */
-function streamedLengthOf(generation: LiveStateShape['generation']): number {
-  if (generation === null || typeof generation !== 'object') return -1
-  const message = (generation as { message?: unknown }).message
-  if (message === null || typeof message !== 'object') return -1
-  const content = (message as { content?: unknown }).content
-  if (!Array.isArray(content)) return -1
-  let length = 0
-  for (const block of content) {
-    if (block === null || typeof block !== 'object') continue
-    const b = block as { type?: unknown; text?: unknown; thinking?: unknown }
-    if (b.type === 'text' && typeof b.text === 'string') {
-      length += b.text.length
-    } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
-      length += b.thinking.length
-    }
-  }
-  return length
 }
 
 /** 普通对象判定（null 与非对象不算；类实例不算）。 */

@@ -1478,35 +1478,6 @@ describe('snapshot 与插件公共文档', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// getConversationActivity（原 watchdog tick 活动事实端口）
-// ---------------------------------------------------------------------------
-
-describe('getConversationActivity（原 watchdog tick 活动事实端口）', { timeout: 60_000 }, () => {
-  it('携带真实 stalledMs/consecutiveErrors；失败回合后 consecutiveErrors 递增', { timeout: 60_000 }, async () => {
-    const dir = join(root, 'w1')
-    const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
-    try {
-      // 成功回合。
-      kernel.__faux.setResponses([fauxAssistantMessage('ok')])
-      await kernel.submitInput(1, '第一问')
-      await kernel.waitForIdle(1)
-      // 成功回合后无连续错误（探针构造省略 consecutiveErrors=0 字段同源）。
-      assert.equal(kernel.getConversationActivity(1).consecutiveErrors, 0)
-
-      // 失败回合：consecutiveErrors=1（真实事实，内核不做自动恢复）。
-      kernel.__faux.setResponses([
-        fauxAssistantMessage('x', { errorMessage: 'boom', stopReason: 'error' }),
-      ])
-      await kernel.submitInput(1, '会失败的问题').catch(() => {})
-      await kernel.waitForIdle(1).catch(() => {})
-      assert.equal(kernel.getConversationActivity(1).consecutiveErrors, 1)
-    } finally {
-      await kernel.close()
-    }
-  })
-})
-
-// ---------------------------------------------------------------------------
 // getConversationDetail 分页
 // ---------------------------------------------------------------------------
 

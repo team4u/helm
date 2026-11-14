@@ -13,8 +13,8 @@ import {
 /*
  * SuperAgentDependencies 已删除：业务依赖全部经公开 ctx.host 端口
  *（profiles/skills/getConversationDetail/listArtifacts/abortConversation/
- * getConversationOwnership/getConversationActivity/redact/isClosing/
- * setConfig/onEvent('conversation.entry')），不再有组合层私有 DI 面。
+ * getConversationOwnership/redact/isClosing/setConfig/onEvent('conversation.entry')），
+ * 不再有组合层私有 DI 面。
  */
 
 // ---------------------------------------------------------------------------
@@ -243,6 +243,69 @@ export function resolveSuperAgentConfig(raw: Record<string, unknown>): SuperAgen
 
 export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/**
+ * conversation.live 事件载荷边界守卫（看门狗活动统计消费）：完整 HelmEvent
+ * 信封形状（type + live.{conversationId 正整数, text 字符串, tools 数组,
+ * updatedAt 有限非负}）；非法返回 undefined（调用方丢弃并诊断），绝不粗 as 信任。
+ */
+export function asConversationLiveEvent(
+  payload: unknown,
+): { conversationId: number; text: string; thinking?: string; tools: Array<{ callId: string; status: string }>; updatedAt: number } | undefined {
+  if (!isPlainObject(payload) || payload['type'] !== 'conversation.live') return undefined
+  const live = payload['live']
+  if (!isPlainObject(live)) return undefined
+  const conversationId = live['conversationId']
+  const text = live['text']
+  const tools = live['tools']
+  const updatedAt = live['updatedAt']
+  if (!isPosIntId(conversationId)) return undefined
+  if (typeof text !== 'string') return undefined
+  if (!Array.isArray(tools)) return undefined
+  for (const tool of tools) {
+    if (!isPlainObject(tool)) return undefined
+    if (typeof tool['callId'] !== 'string' || typeof tool['status'] !== 'string') return undefined
+  }
+  if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt) || updatedAt < 0) return undefined
+  const thinking = live['thinking']
+  if (thinking !== undefined && typeof thinking !== 'string') return undefined
+  return {
+    conversationId,
+    text,
+    ...(thinking !== undefined ? { thinking } : {}),
+    tools: tools as Array<{ callId: string; status: string }>,
+    updatedAt,
+  }
+}
+
+/**
+ * conversation.upsert 事件载荷边界守卫（看门狗活动统计消费）：完整 HelmEvent
+ * 信封形状（type + conversation.{id 正整数, status 字符串, updatedAt 有限非负}）。
+ */
+export function asConversationUpsertEvent(
+  payload: unknown,
+): { id: number; status: string; updatedAt: number } | undefined {
+  if (!isPlainObject(payload) || payload['type'] !== 'conversation.upsert') return undefined
+  const conversation = payload['conversation']
+  if (!isPlainObject(conversation)) return undefined
+  const id = conversation['id']
+  const status = conversation['status']
+  const updatedAt = conversation['updatedAt']
+  if (!isPosIntId(id)) return undefined
+  if (typeof status !== 'string') return undefined
+  if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt) || updatedAt < 0) return undefined
+  return { id, status, updatedAt }
+}
+
+/**
+ * conversation.deleted 事件载荷边界守卫（看门狗统计清理消费）：完整 HelmEvent
+ * 信封形状（type + conversationId 正整数）。
+ */
+export function asConversationDeletedEvent(payload: unknown): number | undefined {
+  if (!isPlainObject(payload) || payload['type'] !== 'conversation.deleted') return undefined
+  const conversationId = payload['conversationId']
+  return isPosIntId(conversationId) ? conversationId : undefined
 }
 
 /** 正整数会话 ID（> 0；无保留会话概念，常驻/worker 只需正整数）。 */

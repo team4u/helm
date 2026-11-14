@@ -95,7 +95,6 @@ function doctorBackend(): PluginHostBackend {
     abortConversation: () => unavailable('host.abortConversation'),
     abortConversationGuarded: () => unavailable('host.abortConversationGuarded') as never as Promise<void>,
     getConversationOwnership: () => unavailable('host.getConversationOwnership'),
-    getConversationActivity: () => unavailable('host.getConversationActivity'),
     listArtifacts: () => unavailable('host.listArtifacts'),
     getArtifact: () => unavailable('host.getArtifact'),
     completeText: () => unavailable('host.completeText'),
