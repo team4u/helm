@@ -85,10 +85,16 @@ function expectedAssetDirs() {
   return expected.sort();
 }
 
-test('payload 组装：补齐缺失构建产物后执行 build.mjs 成功', { timeout: 60_000 }, () => {
+test('payload 组装：补齐缺失构建产物后执行 build.mjs 成功', { timeout: 600_000 }, () => {
   // 缺啥补啥（已构建的 CI 流程零额外耗时）；构建命令显式超时，失败即带输出终止。
   if (!existsSync(path.join(repoRoot, 'packages/protocol/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/protocol', 'run', 'build'], repoRoot, 180_000);
+  }
+  if (!existsSync(path.join(repoRoot, 'packages/env-io/dist/index.js'))) {
+    runCommand('pnpm', ['--filter', '@helm/env-io', 'run', 'build'], repoRoot, 180_000);
+  }
+  if (!existsSync(path.join(repoRoot, 'packages/plugin-build/dist/index.js'))) {
+    runCommand('pnpm', ['--filter', '@helm/plugin-build', 'run', 'build'], repoRoot, 240_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/kernel/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/kernel', 'run', 'build'], repoRoot, 240_000);
@@ -120,7 +126,7 @@ test('payload 发布包契约：dist 根 package.json 可独立 npm pack/publish
   // files 显式白名单：根 gitignore 的 dist/ 规则不得让 npm pack 剔除 kernel/dist 等。
   assert.deepEqual(
     (distPkg.files as string[]).slice().sort(),
-    ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'hub', 'kernel', 'kernel.tgz', 'manifest.json', 'plugin-build', 'plugin-build.tgz', 'plugin-client', 'plugin-client.tgz', 'plugins', 'plugins.tgz', 'protocol', 'protocol.tgz', 'start.mjs', 'web'].sort(),
+    ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'env-io', 'env-io.tgz', 'hub', 'kernel', 'kernel.tgz', 'manifest.json', 'plugin-build', 'plugin-build.tgz', 'plugin-client', 'plugin-client.tgz', 'plugins', 'plugins.tgz', 'protocol', 'protocol.tgz', 'start.mjs', 'web'].sort(),
   );
   // @helm 运行时包以归档安装；外部直接依赖使用精确版本（无 ^/~/>= 浮动）。
   assert.equal(distPkg.dependencies['@helm/protocol'], 'file:./protocol.tgz');
@@ -128,7 +134,8 @@ test('payload 发布包契约：dist 根 package.json 可独立 npm pack/publish
   assert.equal(distPkg.dependencies['@helm/plugins'], 'file:./plugins.tgz');
   assert.equal(distPkg.dependencies['@helm/plugin-build'], 'file:./plugin-build.tgz');
   assert.equal(distPkg.dependencies['@helm/plugin-client'], 'file:./plugin-client.tgz');
-  const RUNTIME_DIRS = ['kernel', 'plugins', 'hub', 'plugin-build', 'plugin-client', 'protocol'];
+  assert.equal(distPkg.dependencies['@helm/env-io'], 'file:./env-io.tgz');
+  const RUNTIME_DIRS = ['kernel', 'plugins', 'hub', 'plugin-build', 'plugin-client', 'env-io', 'protocol'];
   const runtimeDeps = Object.fromEntries(
     RUNTIME_DIRS.map((dir) => {
       const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'packages', dir, 'package.json'), 'utf-8'));
@@ -170,7 +177,7 @@ test('payload manifest 契约：formatVersion/version/entries/checksum 全部成
   assert.deepEqual(
     keys,
     [
-      'cli', 'cliPackageJson', 'hub', 'hubPackageJson', 'kernel', 'kernelArchive', 'kernelPackageJson',
+      'cli', 'cliPackageJson', 'envIo', 'envIoArchive', 'envIoPackageJson', 'hub', 'hubPackageJson', 'kernel', 'kernelArchive', 'kernelPackageJson',
       'launcher', 'pluginBuild', 'pluginBuildArchive', 'pluginBuildPackageJson',
       'pluginClient', 'pluginClientArchive', 'pluginClientPackageJson',
       'plugins', 'pluginsArchive', 'pluginsPackageJson', 'protocol',
@@ -187,6 +194,7 @@ test('payload 布局：hub/kernel/plugins/protocol/cli/web dist 镜像、资产�
   assertMirrored(path.join(repoRoot, 'packages/cli/dist'), path.join(stagingDir, 'cli/dist'));
   assertMirrored(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'));
   assertMirrored(path.join(repoRoot, 'packages/plugin-build/dist'), path.join(stagingDir, 'plugin-build/dist'));
+  assertMirrored(path.join(repoRoot, 'packages/env-io/dist'), path.join(stagingDir, 'env-io/dist'));
   // SDK 公开 exports 指向 src/index.ts（无 dist）：镜像交付源码本体。
   assertMirrored(path.join(repoRoot, 'packages/plugin-client/src'), path.join(stagingDir, 'plugin-client/src'));
 
@@ -317,14 +325,14 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
       assert.ok(member.startsWith('package/'), `tarball 成员逃逸 package/ 前缀: ${member}`);
       assert.ok(!member.split('/').includes('..'), `tarball 成员含 ..: ${member}`);
     }
-    for (const must of ['package/manifest.json', 'package/start.mjs', 'package/package.json', 'package/hub/dist/main.js', 'package/kernel/dist/index.js', 'package/plugins/dist/index.js', 'package/plugin-build/dist/index.js', 'package/plugin-client/src/index.ts', 'package/protocol/dist/index.js', 'package/cli/dist/index.js', 'package/web/dist/index.html']) {
+    for (const must of ['package/manifest.json', 'package/start.mjs', 'package/package.json', 'package/hub/dist/main.js', 'package/kernel/dist/index.js', 'package/plugins/dist/index.js', 'package/plugin-build/dist/index.js', 'package/plugin-client/src/index.ts', 'package/env-io/dist/index.js', 'package/protocol/dist/index.js', 'package/cli/dist/index.js', 'package/web/dist/index.html']) {
       assert.ok(list.includes(must), `tarball 缺 ${must}（manifest/start 必须在包根而非 dist/ 子目录）`);
     }
     runCommand('tar', ['-xzf', tgz, '-C', extractDir, '--strip-components=1'], outsideRoot, 60_000);
 
     // 3. 本地 file: 依赖复制安装，晋升改名后仍须可以启动。
     runCommand('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], extractDir, 300_000);
-    for (const helmPkg of ['protocol', 'kernel', 'plugins', 'plugin-build', 'plugin-client']) {
+    for (const helmPkg of ['protocol', 'kernel', 'plugins', 'plugin-build', 'plugin-client', 'env-io']) {
       assert.equal(lstatSync(path.join(extractDir, 'node_modules', '@helm', helmPkg)).isSymbolicLink(), false, `@helm/${helmPkg} 必须是归档安装的真实目录`);
     }
     const promoted = path.join(outsideRoot, 'release');
@@ -335,15 +343,16 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
     assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugins', 'dist', 'index.js')), '晋升后 plugins 依赖失效');
     assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugin-build', 'dist', 'index.js')), '晋升后 plugin-build 依赖失效');
     assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugin-client', 'src', 'index.ts')), '晋升后 plugin-client SDK 依赖失效');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'env-io', 'dist', 'index.js')), '晋升后 env-io 依赖失效');
 
-    // 4. check：三入口依赖解析 + node:sqlite + esbuild 实测，退出码 0。
+    // 4. check：八入口依赖解析 + node:sqlite + esbuild 实测，退出码 0。
     const env = { ...process.env };
     delete env.NODE_PATH;
     const check = spawnSync(process.execPath, [path.join(extractDir, 'start.mjs'), 'check'], {
       cwd: extractDir, env, encoding: 'utf8', timeout: 120_000,
     });
     assert.equal(check.status, 0, `check 期望 0，实际 ${check.status}\nstdout: ${check.stdout}\nstderr: ${check.stderr}`);
-    assert.match(check.stdout, /七入口/);
+    assert.match(check.stdout, /八入口/);
     assert.match(check.stdout, /node:sqlite \+ esbuild transform/);
 
     // 5. start：真实拉起 Hub，探活公开端点 /api/auth/status，SIGTERM 干净退出。

@@ -16,7 +16,6 @@ try {
 }
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
-const { HelmStoreContext } = await import('../src/lib/store-context.js')
 const e = React.createElement
 
 let root: Root | undefined
@@ -247,7 +246,7 @@ async function rerenderTimeline(opts: RerenderOpts = {}): Promise<void> {
   await act(async () => {
     root!.render(
       e(
-        HelmStoreContext.Provider,
+        HostStoreProviders,
         { value: store },
         e(ConversationTimeline, {
           conversation: conv,
@@ -262,7 +261,7 @@ async function rerenderTimeline(opts: RerenderOpts = {}): Promise<void> {
 
 function innerResizeObserver(): FakeResizeObserver {
   const innerRo = FakeResizeObserver.instances.find((inst) =>
-    Array.from(inst.targets).some((t) => t.classList.contains('timeline-inner')),
+    !inst.disconnected && Array.from(inst.targets).some((t) => t.classList.contains('timeline-inner')),
   )
   assert.ok(innerRo !== undefined, '内部容器的 ResizeObserver 必须存在')
   return innerRo!

@@ -1,7 +1,7 @@
 # @helm/payload — Hub npm payload（最小骨架）
 
 Electron 桌面薄壳的目标：从公开 npm 拉取最新 Hub 内容并直接运行。本包是仓库内的
-payload 组装器：把 kernel dist、web dist、CLI dist 与内置插件运行时资产（client /
+payload 组装器：把 Hub 组合根、kernel、官方插件、共享运行时包、web dist、CLI 与内置插件运行时资产（client /
 skill / assets）组织为一个自描述的可发布目录，并提供零依赖启动入口与
 manifest/version/entry 契约。**本阶段不做 Electron UI，不解决依赖自包含。**
 
@@ -18,11 +18,17 @@ pnpm --filter @helm/payload run build   # 单独组装（要求 kernel/web/cli d
 dist/
   manifest.json        # 契约：formatVersion=1 / name / version / builtAt / nodeEngines / entries / entryChecksums
   start.mjs            # 零依赖启动入口（check | start）
+  hub/                 # Hub 产品组合根（组合 kernel/plugins/plugin-build）
   kernel/
-    package.json       # 内核依赖声明（start.mjs 依赖解析清单的来源）
+    package.json       # 内核运行时依赖声明
     dist/              # kernel tsc 产物
-    dist/builtin-plugins/<name>/{client,skill,assets}   # 运行时资产（各解析器 dist 侧首选探测位）
-  web/dist/            # Vite 产物；与 kernel 同级，命中 hub.ts 默认探测 ../../../web/dist
+  plugins/             # 官方插件包
+  plugins/dist/<plugin>/{client,skill,assets}  # 插件运行时资产
+  plugin-build/        # 插件源码编译实现
+  plugin-client/       # 共享浏览器 SDK 源码入口
+  protocol/            # 通用协议包归档安装
+  env-io/              # 执行侧共享 I/O 实现
+  web/dist/            # Vite 产物，由 Hub 产品入口显式定位静态目录
   cli/dist/            # CLI tsc 产物
 ```
 
@@ -32,25 +38,24 @@ dist/
 ## 启动入口 start.mjs
 
 ```bash
-node start.mjs check   # 校验 manifest/entries/checksums，并报告 kernel 运行时依赖解析状态
-node start.mjs start   # 依赖可解析时拉起 kernel/dist/main.js（透传环境变量与信号）
+node start.mjs check   # 校验布局、八个运行时入口依赖与内置能力
+node start.mjs start   # 依赖可解析时拉起 Hub 组合根（透传环境变量与信号）
 ```
 
-退出码：`0` 校验通过（布局 + 三入口依赖解析 + node:sqlite/esbuild 实测）；`1` 用法错误或
-manifest/布局/checksum/路径契约损坏；`3` 布局合法但依赖缺失或运行时能力实测失败。依赖判定以
-dist 根 `package.json` 的 `dependencies` 为契约清单，从 kernel/protocol/cli 三个入口用
-`createRequire(entry).resolve`（含 ESM-only exports 回退）做真实解析；`check` 另行实测
-`node:sqlite` 与 esbuild transform（覆盖插件 client 编译链路与平台二进制），绝不执行 Hub。
+退出码：`0` 校验通过（布局 + 八入口依赖解析 + node:sqlite/esbuild 实测）；`1` 用法错误或
+manifest/布局/checksum/路径契约损坏；`3` 布局合法但依赖缺失或运行时能力实测失败。`start.mjs`
+从 Hub、kernel、plugins、plugin-build、plugin-client、env-io、protocol 与 CLI 八个运行时入口创建
+`createRequire` 并解析根 dependencies（含 ESM-only exports 回退）；`check` 另行实测
+`node:sqlite` 与 esbuild transform，绝不执行 Hub。
 
 ## 依赖补齐契约（发布包 + 消费侧 npm install）
 
 dist 根 `package.json` 是可直接 `npm pack` / `npm publish` 的独立包（默认名
 `@team4u/helm-hub`，构建 env `HELM_PAYLOAD_PACKAGE` 可覆盖；`manifest.name` 与其同源）：
 
-- `files` 显式白名单（kernel/protocol/cli/web/start.mjs/manifest.json），tarball 内
+- `files` 显式白名单涵盖 Hub、kernel、plugins、plugin-build、plugin-client、env-io、protocol、CLI、web 和启动清单；tarball 内
   manifest/start 位于包根（不是 dist/ 子目录）；
-- 外部直接依赖锁定到仓库已安装的精确版本；`@helm/protocol` 以 `file:./protocol.tgz`
-  安装为真实目录，避免 Windows junction 在候选改名后失效。dist 同时携带原始 protocol 产物；
+- 外部直接依赖锁定到仓库已安装的精确版本；`@helm/env-io`、`@helm/protocol` 等共享包分别以 `file:./<package>.tgz` 安装为真实目录，避免 Windows junction 在候选改名后失效。
 - 自动扫描闭包 peer 冲突生成 `overrides`（npm 严格 peer 解析 vs pnpm 宽松语义，如 chord
   钉 peer ws@8.21.0 而仓库锁定 8.22.1）——`.npmrc` 无法随 tarball 分发（npm 永久排除它），
   发布包携带 overrides，安装过程使用相同的根依赖版本；

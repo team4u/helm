@@ -5,7 +5,7 @@
  * 产物形态（dist/ 即发布包根，release 代理在 dist 内执行 npm pack/publish）：
  *   package.json     发布包清单（name 默认 @team4u/helm-hub，可由构建 env
  *                    HELM_PAYLOAD_PACKAGE 覆盖；manifest.name 与其同源）。dependencies
- *                    = hub/kernel/plugins/protocol 生产依赖闭包的根集：外部依赖取仓库
+ *                    = hub/kernel/plugins/env-io/protocol 生产依赖闭包的根集：外部依赖取仓库
  *                    已安装 pnpm 实际版本精确锁定，@helm/* 物化为 file:./<pkg>.tgz
  *                   （同时携带其 dist/ 与 package.json）。消费侧（桌面 updater）解包
  *                    tgz 后执行 `npm install --omit=dev --ignore-scripts` 即可补齐依赖
@@ -18,6 +18,7 @@
  *   plugin-client/{package.json, src/} @helm/plugin-client 浏览器 SDK（exports 指向
  *                                 src/index.ts 且源含 .tsx，交付源码本体而非不存在的
  *                                 dist；plugins 生产依赖，file: 依赖本体）
+ *   env-io/{package.json, dist/} @helm/env-io 执行侧共享 I/O 实现
  *   protocol/{package.json, dist/} protocol 构建产物（file: 依赖本体）
  *   cli/{package.json, dist/}      CLI 产物（package.json 供定位/审计，运行时入口由
  *                                  桌面主代理经 HELM_CLI_ENTRY 指向 cli/dist/index.js）
@@ -56,6 +57,8 @@ const inputs = [
   ['plugin-build package.json', path.join(repoRoot, 'packages/plugin-build/package.json')],
   ['plugin-client SDK 源入口', path.join(repoRoot, 'packages/plugin-client/src/index.ts')],
   ['plugin-client package.json', path.join(repoRoot, 'packages/plugin-client/package.json')],
+  ['env-io dist 入口', path.join(repoRoot, 'packages/env-io/dist/index.js')],
+  ['env-io package.json', path.join(repoRoot, 'packages/env-io/package.json')],
   ['protocol dist 入口', path.join(repoRoot, 'packages/protocol/dist/index.js')],
   ['protocol package.json', path.join(repoRoot, 'packages/protocol/package.json')],
   ['web dist 入口', path.join(repoRoot, 'packages/web/dist/index.html')],
@@ -90,10 +93,10 @@ function walkStats(dir) {
   return { files, bytes };
 }
 
-// --- 根依赖集：hub ∪ kernel ∪ plugins ∪ protocol 生产依赖，@helm/* 以归档安装 ------
+// --- 根依赖集：hub ∪ kernel ∪ plugins ∪ plugin-build ∪ plugin-client ∪ env-io ∪ protocol 生产依赖，@helm/* 以归档安装 ------
 // 外部依赖版本取仓库已安装 pnpm 解析结果（node_modules 符号链接指向的真实包）的
 // package.json 精确版本——绝不携带 ^/~ 浮动范围进发布契约（可复现安装）。
-const RUNTIME_PKGS = ['kernel', 'plugins', 'hub', 'plugin-build', 'plugin-client', 'protocol'];
+const RUNTIME_PKGS = ['kernel', 'plugins', 'hub', 'plugin-build', 'plugin-client', 'env-io', 'protocol'];
 const pkgJsonOf = Object.fromEntries(
   RUNTIME_PKGS.map((dir) => [dir, JSON.parse(readFileSync(path.join(repoRoot, 'packages', dir, 'package.json'), 'utf-8'))]),
 );
@@ -140,6 +143,7 @@ rootDependencies['@helm/kernel'] = 'file:./kernel.tgz';
 rootDependencies['@helm/plugins'] = 'file:./plugins.tgz';
 rootDependencies['@helm/plugin-build'] = 'file:./plugin-build.tgz';
 rootDependencies['@helm/plugin-client'] = 'file:./plugin-client.tgz';
+rootDependencies['@helm/env-io'] = 'file:./env-io.tgz';
 
 // npm 默认严格 peer 解析（ERESOLVE），而仓库 pnpm 安装允许 peer 版本宽于声明
 //（如 chord 钉 peer ws@8.21.0 而仓库锁定 8.22.1）。扫描已安装闭包生成 overrides，
@@ -160,12 +164,12 @@ const distPackageJson = {
   name: payloadPackageName,
   version: payloadPkg.version,
   type: 'module',
-  description: 'helm Hub 运行时载荷（hub + kernel + plugins + plugin-build + plugin-client + protocol + cli + web dist 与零依赖启动入口）',
+  description: 'helm Hub 运行时载荷（hub + kernel + plugins + plugin-build + plugin-client + env-io + protocol + cli + web dist 与零依赖启动入口）',
   license: 'MIT',
   repository: { type: 'git', url: 'git+https://github.com/team4u/helm.git', directory: 'packages/payload' },
   publishConfig: { access: 'public' },
   engines: { node: rootPkg.engines?.node ?? '>=24.12.0' },
-  files: ['hub', 'kernel', 'kernel.tgz', 'plugins', 'plugins.tgz', 'plugin-build', 'plugin-build.tgz', 'plugin-client', 'plugin-client.tgz', 'protocol', 'protocol.tgz', 'cli', 'web', 'start.mjs', 'manifest.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md'],
+  files: ['hub', 'kernel', 'kernel.tgz', 'plugins', 'plugins.tgz', 'plugin-build', 'plugin-build.tgz', 'plugin-client', 'plugin-client.tgz', 'env-io', 'env-io.tgz', 'protocol', 'protocol.tgz', 'cli', 'web', 'start.mjs', 'manifest.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md'],
   dependencies: Object.fromEntries(Object.keys(rootDependencies).sort().map((k) => [k, rootDependencies[k]])),
   ...(peerOverrides.size > 0
     ? { overrides: Object.fromEntries([...peerOverrides.entries()].sort(([a], [b]) => a.localeCompare(b))) }
@@ -176,7 +180,7 @@ const distPackageJson = {
 rmSync(stagingDir, { recursive: true, force: true });
 mkdirSync(stagingDir, { recursive: true });
 
-for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'protocol', 'cli']) {
+for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protocol', 'cli']) {
   cpSync(path.join(repoRoot, 'packages', dir, 'dist'), path.join(stagingDir, dir, 'dist'), { recursive: true });
   cpSync(path.join(repoRoot, 'packages', dir, 'package.json'), path.join(stagingDir, dir, 'package.json'));
 }
@@ -191,7 +195,7 @@ cpSync(path.join(repoRoot, 'THIRD_PARTY_NOTICES.md'), path.join(stagingDir, 'THI
 // @helm/* workspace 依赖：根 package.json 已统一安装全部 @helm/* 归档，
 // 子包内残留 workspace:* 协议会让消费侧 npm install 直接失败（npm 不支持
 // workspace: 协议），运行期经 Node 逐级上溯命中根 node_modules 同一套实例。
-for (const component of ['hub', 'kernel', 'plugins', 'plugin-build', 'plugin-client', 'protocol', 'cli']) {
+for (const component of ['hub', 'kernel', 'plugins', 'plugin-build', 'plugin-client', 'env-io', 'protocol', 'cli']) {
   const manifestPath = path.join(stagingDir, component, 'package.json');
   const componentPackage = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const deps = Object.fromEntries(
@@ -216,7 +220,7 @@ for (const ent of readdirSync(builtinSrc, { withFileTypes: true }).sort((a, b) =
 }
 
 // 目录形式的 file: 依赖在 Windows 会生成指向 staging 的 junction；归档安装可安全搬移。
-for (const dir of ['protocol', 'kernel', 'plugins', 'plugin-build']) {
+for (const dir of ['protocol', 'kernel', 'plugins', 'plugin-build', 'env-io']) {
   await createTar({ cwd: path.join(stagingDir, dir), file: path.join(stagingDir, `${dir}.tgz`), gzip: true, portable: true, prefix: 'package' }, ['package.json', 'dist']);
 }
 await createTar({ cwd: path.join(stagingDir, 'plugin-client'), file: path.join(stagingDir, 'plugin-client.tgz'), gzip: true, portable: true, prefix: 'package' }, ['package.json', 'src']);
@@ -254,6 +258,9 @@ const entries = {
   pluginClient: 'plugin-client/src/index.ts',
   pluginClientPackageJson: 'plugin-client/package.json',
   pluginClientArchive: 'plugin-client.tgz',
+  envIo: 'env-io/dist/index.js',
+  envIoPackageJson: 'env-io/package.json',
+  envIoArchive: 'env-io.tgz',
   protocol: 'protocol/dist/index.js',
   protocolArchive: 'protocol.tgz',
   protocolPackageJson: 'protocol/package.json',
@@ -277,7 +284,7 @@ writeFileSync(path.join(stagingDir, 'manifest.json'), `${JSON.stringify(manifest
 const stats = walkStats(stagingDir);
 console.log(`[payload] 组装完成: ${stagingDir}`);
 console.log(`[payload] 发布包名: ${distPackageJson.name}@${distPackageJson.version}（HELM_PAYLOAD_PACKAGE 可覆盖）`);
-console.log(`[payload] 根依赖 ${Object.keys(rootDependencies).length} 项（外部精确版本 ${Object.keys(rootDependencies).length - 5} + peer ${externalPeers.length} + @helm/* file:./<pkg>.tgz ×5）`);
+console.log(`[payload] 根依赖 ${Object.keys(rootDependencies).length} 项（外部精确版本 ${Object.keys(rootDependencies).length - 6} + peer ${externalPeers.length} + @helm/* file:./<pkg>.tgz ×6）`);
 console.log(`[payload] 文件 ${stats.files} 个，共 ${(stats.bytes / 1024 / 1024).toFixed(1)} MiB`);
 console.log(`[payload] 运行时资产目录 ${copiedAssets.length} 个: ${copiedAssets.join(', ')}`);
 console.log('[payload] 注意: 未打包 node_modules；消费侧 tgz 解包后 npm install --omit=dev --ignore-scripts 补依赖（start.mjs check 验收）');

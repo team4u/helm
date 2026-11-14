@@ -17,7 +17,6 @@ import {
 } from '../src/conversation/outline-model.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import { makeTestStore } from './helpers/store.js'
-import { HostStoreProviders } from './helpers/host-store.js'
 
 try {
   GlobalRegistrator.register()
@@ -26,7 +25,7 @@ try {
 }
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
-const { HelmStoreContext } = await import('../src/lib/store-context.js')
+const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
 const e = React.createElement
 

@@ -31,7 +31,7 @@ import type {
 } from '@helm/protocol'
 import { ApiClientError, pluginsApi } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
-import { HostStoreProviders } from './helpers/host-store.js'
+const { HostStoreProviders } = await import('./helpers/host-store.js')
 
 const e = React.createElement
 

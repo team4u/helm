@@ -3,11 +3,11 @@ import test, { describe } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import { parseArtifactUrl, markdownUrlTransform } from '@helm/plugin-client'
-import { MarkdownView } from '../src/conversation/MarkdownView.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
-import { HostStoreProviders } from './helpers/host-store.js'
+import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 
 ;(globalThis as Record<string, unknown>).React = React
+const { MarkdownView } = await import('../src/conversation/MarkdownView.js')
+const { HostStoreProviders } = await import('./helpers/host-store.js')
 
 describe('artifact-link 纯函数解析与 URL 转换', { timeout: 60_000 }, () => {
   test('parseArtifactUrl：识别 artifact:<id> 合法形态', () => {
@@ -56,6 +56,7 @@ describe('MarkdownView 产物内联渲染', { timeout: 60_000 }, () => {
       themePreference: 'system',
       activeModal: null,
       setActiveModal: activeModalFn ?? (() => {}),
+      groupedUi: groupUiContributions([]),
       conversationArtifacts: {},
       loadConversationArtifacts: async () => {},
       pushNotice: () => {},

@@ -15,9 +15,9 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import type { ConversationSummary } from '@helm/protocol'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
-import { HostStoreProviders } from './helpers/host-store.js'
 
 GlobalRegistrator.register()
+const { HostStoreProviders } = await import('./helpers/host-store.js')
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { Composer } = await import('../src/conversation/Composer.js')

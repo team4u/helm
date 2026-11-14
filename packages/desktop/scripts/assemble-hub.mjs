@@ -132,6 +132,7 @@ const RUNTIME_PKG_DIRS = {
   '@helm/plugins': 'plugins',
   '@helm/plugin-build': 'plugin-build',
   '@helm/plugin-client': 'plugin-client',
+  '@helm/env-io': 'env-io',
 };
 for (const [name, spec] of Object.entries(rootDeps)) {
   const runtimeDir = RUNTIME_PKG_DIRS[name];
@@ -151,7 +152,7 @@ for (const [name, spec] of Object.entries(rootDeps)) {
   // 归属查找先 dependencies 再 peerDependencies（如 react 仅为 SDK 的 peer），
   // 都未命中时回退 kernel（随后 resolveDepRealDir 会如实报缺失）。
   const pkgOf = (dir) => JSON.parse(readFileSync(path.join(repoRoot, 'packages', dir, 'package.json'), 'utf-8'));
-  const RUNTIME_OWNER_DIRS = ['kernel', 'plugins', 'plugin-build', 'plugin-client', 'hub'];
+  const RUNTIME_OWNER_DIRS = ['kernel', 'plugins', 'plugin-build', 'plugin-client', 'env-io', 'hub'];
   const ownerDir =
     RUNTIME_OWNER_DIRS.find((dir) => Object.keys(pkgOf(dir).dependencies ?? {}).includes(name)) ??
     RUNTIME_OWNER_DIRS.find((dir) => Object.keys(pkgOf(dir).peerDependencies ?? {}).includes(name)) ??
