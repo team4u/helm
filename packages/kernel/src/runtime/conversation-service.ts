@@ -180,6 +180,8 @@ export class ConversationService {
       defaultThinkingLevel: this.o.defaultThinkingLevel,
       parseModelRefOrThrow: this.o.parseModelRefOrThrow,
       summaryWithOwnership: (id) => this.summaryWithOwnership(id),
+      // 模型/档位对齐后上下文窗口与阈值可能变化：触发用量重算。
+      scheduleContextUsageRefresh: (id) => this.tracker.scheduleContextUsageRefresh(id),
     })
 
     this.inputPipeline = new ConversationInputPipeline({
@@ -573,6 +575,10 @@ export class ConversationService {
     this.store.upsertConv(updated)
     if (patch.nodeId !== undefined || patch.cwd !== undefined) {
       this.o.evictConversationBase(id)
+    }
+    // 模型/思考档位变化后窗口与阈值可能变化：触发上下文用量重算（去重）。
+    if (patch.model !== undefined || patch.profileId !== undefined || patch.thinkingLevel !== undefined) {
+      this.tracker.scheduleContextUsageRefresh(id)
     }
     const summary = this.tracker.summaryOf(id)
     this.events.publish('conversation.upsert', this.withOwnership(summary))

@@ -651,6 +651,9 @@ export function ThinkingRow({
 
 function ContextDivider({ item }: { item: DividerItem }) {
   const [open, setOpen] = useState(false)
+  // 可展开文本：reset 的交接摘要与 compaction 的精简摘要（同一展开交互）。
+  const expandable = item.divider === 'reset' ? item.handoff : item.summary
+  const expandLabel = item.divider === 'reset' ? '交接摘要' : '精简摘要'
   return (
     <div className="context-divider-wrap">
       <div className="context-divider">
@@ -659,29 +662,24 @@ function ContextDivider({ item }: { item: DividerItem }) {
           {item.divider === 'reset' ? '上下文已重置' : '上下文已精简'}
         </span>
       </div>
-      {item.handoff !== undefined ? (
+      {expandable !== undefined ? (
         <button
           type="button"
-          className="trace-group-summary context-divider-handoff-btn"
+          className="trace-group-summary context-divider-expand-btn"
           onClick={() => setOpen((v) => !v)}
         >
           <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-          {open ? '收起交接摘要' : '展开交接摘要'}
+          {open ? `收起${expandLabel}` : `展开${expandLabel}`}
         </button>
       ) : null}
-      {open && item.handoff !== undefined ? <ResetHandoffBody item={item} /> : null}
-    </div>
-  )
-}
-
-function ResetHandoffBody({ item }: { item: DividerItem }) {
-  if (item.handoff === undefined) return null
-  return (
-    <div className="trace-expanded-body selectable trace-expanded-body-flush">
-      <div className="trace-section-label">交接摘要</div>
-      <pre className="code-block-pre code-block-pre-flush">
-        <code>{item.handoff}</code>
-      </pre>
+      {open && expandable !== undefined ? (
+        <div className="trace-expanded-body selectable trace-expanded-body-flush">
+          <div className="trace-section-label">{expandLabel}</div>
+          <pre className="code-block-pre code-block-pre-flush">
+            <code>{expandable}</code>
+          </pre>
+        </div>
+      ) : null}
     </div>
   )
 }

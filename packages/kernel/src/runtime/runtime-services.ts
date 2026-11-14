@@ -242,6 +242,9 @@ export function assembleRuntimeServices(
     redactError: (text) => options.stashService.redact(text),
     // 回合结算 unread 策略：背景派生子会话（helm/bot 归属且有父链）不置 unread。
     ownershipOf: (id) => ownership.getOwnership(id),
+    // 上下文用量：窗口按当前 Models 集合解析（未知不伪造）；阈值为生效压缩策略。
+    models: () => modelsRegistry.models,
+    compactionPolicy: () => init.compactionPolicy,
     events: {
       onSummaryChanged: (summary) => {
         if (options.store.getConv(summary.id) === undefined || options.store.isDeleted(summary.id)) return

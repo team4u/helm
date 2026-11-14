@@ -135,14 +135,56 @@ function assertConversationSummaryShape(value: unknown): void {
     (conv['nodeId'] !== undefined && typeof conv['nodeId'] !== 'string') ||
     (conv['thinkingLevelOverride'] !== undefined && typeof conv['thinkingLevelOverride'] !== 'string') ||
     (conv['doing'] !== undefined && typeof conv['doing'] !== 'string') ||
-    (conv['lastError'] !== undefined && typeof conv['lastError'] !== 'string')
+    (conv['lastError'] !== undefined && typeof conv['lastError'] !== 'string') ||
+    (conv['contextUsage'] !== undefined && !isContextUsageShape(conv['contextUsage']))
   ) {
     throw new HelmError(
       'invalid_event',
-      'conversation.upsert 的可选字段（parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError）存在时类型必须合法',
+      'conversation.upsert 的可选字段（parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError/contextUsage）存在时类型必须合法',
       500,
     )
   }
+}
+
+/** contextUsage 形状校验（可缺不可错；未知窗口省略而非伪造）。 */
+function isContextUsageShape(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false
+  const usage = value as Record<string, unknown>
+  if (typeof usage['tokens'] !== 'number' || !Number.isFinite(usage['tokens']) || usage['tokens'] < 0) return false
+  if (
+    (usage['contextWindow'] !== undefined &&
+      (typeof usage['contextWindow'] !== 'number' || !Number.isFinite(usage['contextWindow']))) ||
+    (usage['measuredTokens'] !== undefined &&
+      (typeof usage['measuredTokens'] !== 'number' || !Number.isFinite(usage['measuredTokens']))) ||
+    (usage['compactionError'] !== undefined && typeof usage['compactionError'] !== 'string')
+  ) {
+    return false
+  }
+  const thresholds = usage['thresholds']
+  if (
+    thresholds !== undefined &&
+    (thresholds === null ||
+      typeof thresholds !== 'object' ||
+      typeof (thresholds as Record<string, unknown>)['blockingTokens'] !== 'number' ||
+      !Number.isFinite((thresholds as Record<string, unknown>)['blockingTokens'] as number) ||
+      ((thresholds as Record<string, unknown>)['backgroundTokens'] !== undefined &&
+        typeof (thresholds as Record<string, unknown>)['backgroundTokens'] !== 'number'))
+  ) {
+    return false
+  }
+  const compacting = usage['compacting']
+  if (
+    compacting !== undefined &&
+    (compacting === null ||
+      typeof compacting !== 'object' ||
+      (compacting as Record<string, unknown>)['trigger'] !== 'manual' &&
+        (compacting as Record<string, unknown>)['trigger'] !== 'threshold' &&
+        (compacting as Record<string, unknown>)['trigger'] !== 'overflow' ||
+      typeof (compacting as Record<string, unknown>)['blocking'] !== 'boolean')
+  ) {
+    return false
+  }
+  return true
 }
 
 /** ask.upsert 载荷校验：AskSpec 核心字段形状（业务级规则由 createAsk 的 validateAskSpec 把守）。 */

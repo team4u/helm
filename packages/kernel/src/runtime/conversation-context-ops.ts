@@ -54,6 +54,8 @@ export class ConversationContextOps {
       opts?.handoff !== undefined && opts.handoff !== '' ? this.host.stash.redact(opts.handoff) : undefined
     await conversation.reset(safeHandoff, BACKGROUND_CONTEXT)
     this.host.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
+    // 重置后上下文从零开始：立即触发用量重算（观察路径的 pi.reset 条目触发去重兑底）。
+    this.host.tracker.scheduleContextUsageRefresh(id)
     const summary = this.host.tracker.summaryOf(id)
     this.host.events.publish('conversation.upsert', this.host.withOwnership(summary))
     return summary
@@ -72,6 +74,9 @@ export class ConversationContextOps {
         : undefined
     const taskId = await conversation.compact(safeInstructions, BACKGROUND_CONTEXT)
     this.host.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
+    // 手动压缩已受理：立即触发用量重算（compacting 状态与压缩后 tokens 由
+    // 观察路径的 live/entry 触发继续迫齐；空闲会话不经 live 帧短路）。
+    this.host.tracker.scheduleContextUsageRefresh(id)
     const summary = this.host.tracker.summaryOf(id)
     this.host.events.publish('conversation.upsert', this.host.withOwnership(summary))
     return { taskId: Number(taskId), conversation: summary }
