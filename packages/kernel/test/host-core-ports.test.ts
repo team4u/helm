@@ -509,6 +509,62 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     }
   })
 
+  await t.test('nodeFetch 取消信号覆盖语义：init.signal 覆盖 Request.signal、显式 null 清除继承、宿主 close 仍可取消', { timeout: 60_000 }, async () => {
+    // 标准 fetch 语义（AbortSignal.any 合成，不并入被覆盖的旧信号）：
+    let socketClosed = 0
+    const server = http.createServer((req, res) => {
+      if (req.url === '/pending') return // 永不发响应头。
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.write('data: a\n\n')
+      const timer = setInterval(() => res.write('data: x\n\n'), 50)
+      res.on('close', () => { clearInterval(timer); socketClosed += 1 })
+    })
+    server.on('clientError', () => undefined)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`
+    const backend = makeBackend({ nodeFetch: () => globalThis.fetch as typeof fetch })
+    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
+    let api!: HelmHostApi
+    await host.register({ id: 'p:fetch-signal', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
+    try {
+      // 1) Request 原信号已 abort，但 init 覆盖信号未 abort：请求必须正常进行
+      //（旧实现把两个信号都并入合成，会被已 abort 的旧信号错误取消）。
+      const stale = new AbortController()
+      stale.abort()
+      const fresh = new AbortController()
+      const overridden = await api.nodeFetch('local')(new Request(`${base}/stream`, { signal: stale.signal }), { signal: fresh.signal })
+      assert.equal(overridden.status, 200, 'init.signal 覆盖：已 abort 的旧 Request 信号不得取消请求')
+      const r1 = overridden.body!.getReader()
+      const chunk1 = await r1.read()
+      assert.ok(!chunk1.done && chunk1.value !== undefined, '覆盖信号未 abort 时流正常可读')
+      await r1.cancel()
+
+      // 2) init 覆盖信号 abort：真实取消（headers 前挂起请求以 AbortError 拒绝）。
+      const caller = new AbortController()
+      const pending = api.nodeFetch('local')(`${base}/pending`, { signal: caller.signal })
+      await delay(50)
+      caller.abort()
+      await assert.rejects(() => pending, (error: unknown) => {
+        const name = error instanceof Error ? error.name : String(error)
+        return name === 'AbortError' || /abort/i.test(String((error as { message?: string }).message ?? name))
+      })
+
+      // 3) init.signal = null 清除已 abort 的 Request 继承信号：请求正常；
+      // 弃置 body 后宿主 dispose 仍能确定性取消（连接真实关闭）。
+      const aborted = new AbortController()
+      aborted.abort()
+      const cleared = await api.nodeFetch('local')(new Request(`${base}/stream`, { signal: aborted.signal }), { signal: null })
+      assert.equal(cleared.status, 200, '显式 null 清除继承：已 abort 的 Request 信号不得取消请求')
+      void cleared // 弃置（不消费不 cancel）。
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await host.dispose()
+      for (let i = 0; i < 100 && socketClosed === 0; i += 1) await delay(20)
+      assert.ok(socketClosed >= 1, `null 清除继承后宿主 dispose 仍必须真实取消在途请求（实际关闭 ${socketClosed}）`)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
   await t.test('openTunnel：宿主 dispose 销毁活动及建立后迟到的 Duplex', { timeout: 60_000 }, async () => {
     for (const delayMs of [0, 20]) {
       const stub: OpenTunnelStub = { calls: [], delayMs, duplexes: [], failures: [] }
