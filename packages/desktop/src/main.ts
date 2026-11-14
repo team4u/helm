@@ -12,6 +12,8 @@ import { HostNpmInstaller } from './npm-installer.js';
 import { getElectron, type BrowserWindowLike, type ElectronApi, type TrayLike } from './electron-api.js';
 import { TRAY_ICON_DATA_URL } from './tray-icon.js';
 import { restoreShellPath } from './shell-env.js';
+import { installLinuxExitChildSweep } from './linux-exit-children.js';
+import { applyLinuxDesktopName } from './pre-ready.js';
 
 const log = (message: string): void => { process.stdout.write(`[helm-desktop] ${message}\n`); };
 const smoke = process.argv.includes('--smoke-test');
@@ -94,9 +96,13 @@ async function waitForReact(win: BrowserWindowLike): Promise<void> {
 
 async function runElectron(electron: ElectronApi): Promise<void> {
   const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = electron;
+  // Linux AppImage 退出兜底须先于任何可能退出的路径就位（其余平台 / 形态零开销）。
+  installLinuxExitChildSweep();
   const browserData = join(process.env.HELM_DESKTOP_DATA_DIR ?? process.env.HELM_DATA_DIR ?? join(homedir(), '.helm'), 'desktop');
   mkdirSync(browserData, { recursive: true });
   app.setPath('userData', browserData);
+  // Linux 桌面身份（Wayland app_id / X11 WM_CLASS）必须在 ready 之前设置，见 pre-ready.ts。
+  applyLinuxDesktopName(app, process.platform);
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
   await app.whenReady();
   if (!smoke) {

@@ -33,6 +33,19 @@ Linux 运行窗口测试时使用 `xvfb-run -a`。打包产物在 `packages/desk
 
 安装包在 `resources/hub/` 内携带基线 Hub、Web、CLI、生产依赖和 npm CLI，均位于 ASAR 之外；用户无需先安装 Node 或 npm。图形界面关闭时隐藏到托盘；托盘不可用时，关闭窗口会退出。真正退出时，桌面端通过 IPC 要求受管 Hub 优雅关闭，超时才终止进程。数据保存在 `~/.helm`，浏览器缓存位于其 `desktop/` 子目录。
 
+## Linux 桌面身份与退出收敛
+
+**桌面身份（pre-ready）**：Electron 45 的 `app.setDesktopName(name)` 是 Linux 专属 API（`app.setAppUserModelId` 是 Windows 专属 API，本应用未使用，Windows/macOS 行为不变），必须在 ready 事件之前调用，一个调用同时决定 Wayland `app_id` 与 X11 `WM_CLASS`，无需 `--class` 等命令行开关。`src/pre-ready.ts` 在 ready 之前设置 `helm-desktop`，与 electron-builder 按 `linux.executableName` 生成的 `helm-desktop.desktop` 文件基名一致（AppImage 内置条目与 deb 的 `/usr/share/applications` 同名）；`test/pre-ready.test.ts` 跨文件锁定该一致性，现有 `appId: dev.helm.desktop` 不变。xdg-desktop-portal 1.21+ / GNOME 50 起会拒绝无法解析到 `.desktop` 文件的 app_id。诚实边界：本仓库未在真实 Wayland 会话现场验证门户解析；构建期 electron-builder 仍会提示 package.json 未设 desktopName（其推荐方案是同时改安装项文件名，当前刻意不动 builder 配置，保持与既有 `helm-desktop.desktop` 产物一致）。
+
+**退出收敛（AppImage 兒底）**：常规退出仍由 `quit()` 先 `await` 受管 Hub 优雅停止；仅当 Linux 且运行在 AppImage 内（AppImage 运行时注入 `APPIMAGE` 环境变量，解包目录 / deb 安装无此变量）时，额外注册进程 `exit` 事件的同步最后兒底（`src/linux-exit-children.ts`，覆盖 `app.exit` / `process.exit` / 自然退出）：
+
+- 通过 `/proc/self/task/*/children` 只枚举自己的直接子进程（含 Chromium zygote 等原生后代）后定向发信号，绝不按进程名全机搜索；外部附着的 Hub 不是本进程子进程，永远不会被触碰；
+- 排除自己与父进程；每次 TERM/KILL 前复核 `/proc/<pid>/stat` 的 `ppid` 归属与 `starttime`，PID 复用或 reparent 易主的目标一律放弃不补刀；
+- 僵尸（state `Z`）视作已释放：不发信号、不等待；任何 `/proc` 读取或解析失败只跳过该目标或整体放弃，绝不盲发信号；
+- 总预算 TERM 3s + KILL 500ms，全体子进程共享同一预算（不随数量翻倍）；无子进程残留时零等待，非 AppImage 的 Linux 环境不注册该兒底、退出零额外等待。
+
+诚实边界：兒底运行在 `exit` 事件内（同步、无事件循环），主进程自身被 SIGKILL 或原生崩溃时无能为力；单元测试以注入的假 procfs / 信号 / 时钟验证逻辑（见 `test/linux-exit-children.test.ts`），真实 AppImage / Wayland 会话下残留子进程触发 squashfs SIGBUS 是否绝迹未在本仓库实测。
+
 ## 更新
 
 业务更新源由基线包的 `package.json.name` 确定，默认构建名为 `@team4u/helm-hub`；可在构建时通过 `HELM_PAYLOAD_PACKAGE` 指定其他公开 npm 包。正式自动更新需要先在 npm 发布该包，并为 GitHub 发布流程配置对应权限。
