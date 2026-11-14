@@ -20,6 +20,7 @@
  * - 所有长 RPC 携带 request.signal。
  */
 
+import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, targetPlatformOf, type AgentExecutionInfo, type AgentSpawnRequest, type TargetPlatform } from '@helm/protocol'
 import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, HerdrTarget } from './contracts.js'
@@ -119,8 +120,8 @@ export class HerdrExecutor {
   /**
    * 不确定投递（超时/断线/坏响应）的插话失败记录（paneKey -> 脱敏原因）：
    * 任务结算排空在途 steer 后据此显式失败并保留现场（绝不读旧结果或
-   * 自愈冒充）；后续成功插话以最新指导覆盖并核销本记录。服务端 admission
-   * 确定零写入拒绝（stale_state/agent_not_ready/agent_blocked/agent_not_found）
+   * 自愈冒充），后续插话不得清除未确认的投递。服务端 admission
+   * 确定零写入拒绝（agent_not_ready/agent_blocked/agent_not_found）
    * 不记本表。
    */
   private readonly steerFailures = new Map<string, string>()
@@ -675,7 +676,10 @@ export class HerdrExecutor {
     await this.settleThroughSteers(request, pane, pane.outputFileName!, info)
     // 结算以 registry 现值为准：插话可能已把唯一交接文件重定向到新名字
     //（绝不沿用起始快照误读旧路径）。
-    const latest = this.registry.get(nodeIdOf(pane), pane.paneId) ?? pane
+    const latest = this.registry.get(nodeIdOf(pane), pane.paneId)
+    if (latest?.outputFileName === undefined) {
+      throw new HelmError('herdr_context_unavailable', `pane ${pane.paneId} 的交接上下文已失效`, 409)
+    }
     const output = await this.readAndValidateOutput(request, latest)
     if (request.gate !== undefined) {
       this.panePhases.set(key, 'gate')
@@ -696,7 +700,7 @@ export class HerdrExecutor {
    *   结算等待），blocked 交审批桥；unknown 如实失败；
    * - 不确定投递（超时/断线/坏响应）已按 pane 记失败：结算显式
    *   herdr_steer_uncertain 失败并保留现场（绝不读旧结果，也不经自愈追问
-   *   冒充按最新指导的交付）；其后若有成功插话，失败记录已被最新指导核销；
+   *   冒充按最新指导的交付）；后续插话不能抹去该不确定结果；
    * - 成功插话即把唯一交接文件重定向到全新名字（旧结果天然防冒充）：
    *   idle/done 时新文件未出现则不得进交接——有界 agent.wait(until
    *   working/blocked) 等后续回合起步后复查（不宣称 idle 可证明 CLI 已
@@ -756,9 +760,14 @@ export class HerdrExecutor {
             info = resumed
             continue
           }
-          // 预算耗尽仍无新文件：交由 readAndValidateOutput 的一次自愈按最新
-          // 文件名兑底（追问后仍缺则显式失败，绝不读旧文件）。
+          // 超时附近可能刚起步：先复查权威状态，避免向仍工作中的 CLI 提前追问。
+          info = await this.agentGet(pane.target, pane.paneId, request.signal)
           if (!steerSettled() || latestName() !== currentName) continue
+          if (info.agentStatus === 'working' || info.agentStatus === 'blocked') continue
+          if (info.agentStatus === 'unknown') {
+            throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} 状态 unknown，无法确认完成`, 502)
+          }
+          // 仍 settled 时交由原单次自愈按最新文件名兑底，绝不读旧文件。
         }
       }
       // 终核验与切 handoff 同一同步段：此后插话被阶段门禁拒绝。
@@ -772,7 +781,7 @@ export class HerdrExecutor {
   /**
    * 有界等待后续回合（agent.wait until working/blocked，预算复用启动超时）：
    * 返回新回合的权威 info（working/blocked）；预算耗尽返回 undefined。
-   * 超时不是错误：调用方据此终检确认并显式失败。
+   * 超时交调用方复查状态，再按最新业务文件走原单次交接自愈。
    */
   private async waitSteerTurnOrNone(
     request: AgentSpawnRequest,
@@ -1206,7 +1215,7 @@ export class HerdrExecutor {
   private static readonly STEER_PROMPT_TIMEOUT_MS = 5_000
 
   /** 服务端 admission 确定零写入的拒绝码（其余超时/断线/坏响应一律按不确定投递处理）。 */
-  private static readonly STEER_ZERO_WRITE_CODES = new Set(['stale_state', 'agent_not_ready', 'agent_blocked', 'agent_not_found'])
+  private static readonly STEER_ZERO_WRITE_CODES = new Set(['agent_not_ready', 'agent_blocked', 'agent_not_found'])
 
   /**
    * 受管窗格运行中插话（按 pane 互斥；单次投递不重试）：
@@ -1225,8 +1234,8 @@ export class HerdrExecutor {
    * 6. 投递：现有 agent.prompt {target: 受管 agentName, text}，无 wait、
    *    无附加守卫字段、显式短超时，单次调用即终局，绝不重试。预检到
    *    服务端接收之间刚转 idle 的提交交由真实 admission 裁定（允许接续
-   *    新回合）；服务端确定零写入拒绝（stale_state/agent_not_ready/
-   *    agent_blocked/agent_not_found）不动原交接路径；超时/断线/坏响应
+   *    新回合）；服务端确定零写入拒绝（agent_not_ready/agent_blocked/
+   *    agent_not_found）不动原交接路径；超时/断线/坏响应
    *    为不确定投递——按 pane 记失败，任务结算时显式失败保留现场，
    *    绝不落回旧交接文件或自动重发。
    *
@@ -1333,18 +1342,21 @@ export class HerdrExecutor {
         }
         // 超时/断线/坏响应：投递结果不确定（可能已写入）。按 pane 记失败，
         // 任务结算时显式失败保留现场；绝不静默落回旧文件或自动重发。
-        this.steerFailures.set(key, error instanceof Error ? error.message : String(error))
+        if (this.activeTasks.get(key) === origin) {
+          this.steerFailures.set(key, error instanceof Error ? error.message : String(error))
+        }
         throw error
       }
-      // 成功投递：先重定向唯一交接文件（结算排空在途 steer 时必然可见），
-      // 再核销此前的不确定投递记录（最新指导已覆盖旧投递）。
+      if (this.activeTasks.get(key) !== origin || origin.signal?.aborted || this.activeCloses.has(this.closeKey(current))) {
+        throw new HelmError('herdr_steer_task_ended', `pane ${pane.paneId} 的输入已投递，但原任务已取消或关闭；请检查现场，不要重发`, 409)
+      }
+      // 成功投递后重定向唯一交接文件；结算排空在途 steer 时必然可见。
       this.registry.update(nodeIdOf(current), current.paneId, { outputFileName: next })
       const retired = this.steerRetiredFiles.get(key) ?? []
       if (current.outputFileName !== undefined && current.outputFileName !== '') {
         retired.push(current.outputFileName)
       }
       this.steerRetiredFiles.set(key, retired)
-      this.steerFailures.delete(key)
       return { stateChangeSeq: authority.stateChangeSeq }
     })().finally(() => this.activeSteers.delete(key))
     this.activeSteers.set(key, steer)
@@ -1396,6 +1408,14 @@ export class HerdrExecutor {
         },
       )
     }
+    if (this.steerFailures.has(this.paneKey(pane))) {
+      throw new HelmError(
+        'herdr_steer_uncertain',
+        `pane ${pane.paneId} 的前次插话投递结果不确定，请先检查现场，不能继续插话掩盖该结果`,
+        409,
+        { paneId: pane.paneId },
+      )
+    }
     return current
   }
 
@@ -1432,8 +1452,7 @@ export class HerdrExecutor {
       )
     }
     const ext = fileName.endsWith('.json') ? 'json' : 'md'
-    const unique = `steer-${Date.now()}-${HashShort.of(`${pane.paneId}:${Math.random().toString(36).slice(2, 10)}`)}`
-    return buildOutputFileName(`s${HashShort.of(unique)}`, ext)
+    return buildOutputFileName(`s${randomUUID()}`, ext)
   }
 
   /** 成功交接后清理已被插话作废的旧结果文件（失败路径保留现场；清理失败显式通知不拖垮已验证结果）。 */

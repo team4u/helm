@@ -19,7 +19,7 @@
  *      admission 确定零写入拒绝，原任务按原路径不受扰；
  *   d) 不确定投递（超时/断线）：单次不重发、按 pane 记失败；原任务结算显式
  *      herdr_steer_uncertain 失败保留现场（不读旧结果、不自愈冒充、不补发）；
- *      后续成功插话以最新指导覆盖失败记录；
+ *      后续插话不能清除前次不确定结果；
  *   e) 唯一交接文件名：旧结果/迟到写回不能冒充新结果；连续插话只接受最新
  *      业务文件（预算耗尽经一次自愈按最新文件名兜底）；JSON Schema 不变；
  *   f) 阶段门禁：startup / handoff / gate / keepalive / 取消 / 关闭中拒绝；
@@ -121,6 +121,7 @@ class SteerFakeTransport implements HerdrTransport {
   failAfterSteerWrite = false
   /** agent.get 挂起直到该 Promise 解决（模拟 closePane 权威查询挂起）。 */
   holdAgentGetUntil: Promise<void> | undefined
+  onWaitTimeout: ((pane: PaneState) => void) | undefined
   /** 已接受的插话投递（文本 + 目标）。 */
   steerDelivered: Array<{ paneId: string; text: string }> = []
   /** pong capabilities：真实 0.9.5 形状 + send_keys CAS（审批桥需要）。 */
@@ -210,6 +211,7 @@ class SteerFakeTransport implements HerdrTransport {
             return { type: 'agent_info', agent: agentInfoOf(pane) }
           }
           if (deadline !== undefined && Date.now() >= deadline) {
+            this.onWaitTimeout?.(pane)
             throw new HelmError('timeout', 'agent.wait 预算耗尽（无状态变化）', 408)
           }
           await delay(10)
@@ -850,7 +852,7 @@ test('steer: 投递后连接中断（不确定投递）单次不重发；原任�
   }
 })
 
-test('steer: 不确定投递被后续成功插话覆盖——按最新唯一文件结算，作废文件清理', { timeout: 60_000 }, async () => {
+test('steer: 后续插话不能覆盖前次不确定投递，任务仍显式失败并保留现场', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.transport.promptStatus = 'working'
@@ -860,17 +862,16 @@ test('steer: 不确定投递被后续成功插话覆盖——按最新唯一文�
     env.transport.failAfterSteerWrite = true
     await rejectsSteer(env, steerInput(pane(), { text: '第一条（结果不确定）' }), 'herdr_timeout')
     env.transport.failAfterSteerWrite = false
-    const out = (await env.host.invokeAction('builtin:herdr', 'steer', steerInput(pane(), { text: '第二条（最新指导）' }))) as Record<string, unknown>
-    assert.equal(out['steered'], true)
-    assert.equal(env.transport.steerDelivered.length, 2)
-    const latestFile = steerFileOf(env, 1)
+    await rejectsSteer(env, steerInput(pane(), { text: '第二条' }), 'herdr_steer_uncertain', 409)
+    assert.equal(steerPromptCalls(env).length, 1, '未确认前不得再次向终端投递')
+    assert.equal(env.transport.steerDelivered.length, 1)
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${original}`, 'superseded-result')
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${latestFile}`, 'latest-guidance')
+    const originalPath = `${pane().cwd}/.helm/${original}`
+    env.transport.outputFiles.set(originalPath, 'old-result')
     env.transport.advancePane(pane().paneId, 'done')
-    assert.equal(await promise, 'latest-guidance', '最新成功插话覆盖不确定记录，按最新文件结算')
-    assert.equal(existsSync(join(pane().cwd, '.helm', latestFile)), false)
-    assert.equal(existsSync(join(pane().cwd, '.helm', original)), false, '作废旧文件成功后被清理')
+    await assert.rejects(promise, (error: unknown) => (error as HelmError).code === 'herdr_steer_uncertain')
+    assert.equal(existsSync(originalPath), true)
+    assert.equal(taskPromptCalls(env).length, 1, '不能以交接自愈掩盖不确定投递')
   } finally {
     await env.close()
   }
@@ -973,6 +974,32 @@ test('steer: 投递后仍 idle 且新文件未出现——有界等待后续回�
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'v2-guided', '必须以新回合结果结算，不得以 v1 成功')
     assert.equal(existsSync(originalPath), false, '成功交接后旧文件被清理')
+  } finally {
+    await env.close()
+  }
+})
+
+test('steer: 等待预算耗尽时刚开始工作，复查状态后继续等待而不提前自愈', { timeout: 60_000 }, async () => {
+  const env = await makeEnv({ startupTimeoutMs: 3001 })
+  try {
+    env.transport.promptStatus = 'working'
+    env.transport.steerConsumeStatus = 'idle'
+    let callsAtTimeout: number | undefined
+    env.transport.onWaitTimeout = (current) => {
+      callsAtTimeout = env.transport.calls.length
+      env.transport.advancePane(current.paneId, 'working')
+    }
+    const { promise, pane } = await spawnRun(env)
+    await taskPromptDelivered(env)
+    await env.host.invokeAction('builtin:herdr', 'steer', steerInput(pane()))
+    await waitFor(() => callsAtTimeout !== undefined && env.transport.calls.slice(callsAtTimeout).some((call) =>
+      call.method === 'agent.wait' && (call.params['until'] as string[]).includes('idle'),
+    ))
+    assert.equal(taskPromptCalls(env).length, 1, '仍工作时不得提前发起交接自愈')
+    const fileName = steerFileOf(env, 0)
+    env.transport.outputFiles.set(`${pane().cwd}/.helm/${fileName}`, 'late-started-result')
+    env.transport.advancePane(pane().paneId, 'done')
+    assert.equal(await promise, 'late-started-result')
   } finally {
     await env.close()
   }
