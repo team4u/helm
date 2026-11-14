@@ -10,7 +10,7 @@
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
 import type { ConversationSummary, HelmEventFrame, HelmSnapshot } from '@helm/protocol'
-import { EventHub, type SseFrame } from '../src/runtime/events.js'
+import { EventHub, type SseFrame, type SnapshotProvider } from '../src/runtime/events.js'
 
 // ---------------------------------------------------------------------------
 // fixture
@@ -18,7 +18,7 @@ import { EventHub, type SseFrame } from '../src/runtime/events.js'
 
 interface Fixture {
   hub: EventHub
-  snapshotValue: HelmSnapshot
+  snapshotValue: ReturnType<SnapshotProvider>
   persistedSeqs: number[]
 }
 function summary(id: number, title: string, doing?: string): ConversationSummary {
@@ -318,7 +318,7 @@ describe('EventHub 快照竞态', { timeout: 60_000 }, () => {
     // provider 首次被调用同步发布 600 个事件（>512 缓冲上限）。
     let reentrant = false
     const persisted: number[] = []
-    const snapValue: HelmSnapshot = { seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }
+    const snapValue: HelmSnapshot = { bootId: 'test-boot', seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }
     const hub = new EventHub({
       initialSeq: 0,
       snapshot: () => {
@@ -583,6 +583,30 @@ describe('EventHub.publish 事件形状', { timeout: 60_000 }, () => {
     hub.publish('ask.upsert', { ...baseAsk, expectedStateSeq: 7, ownerPluginId: 'builtin:herdr' })
     hub.publish('ask.upsert', { ...baseAsk, id: 'ask-2', status: 'answered' as never })
     assert.equal(hub.seq, 3)
+  })
+
+  it('ask.upsert 同步校验机密生命周期，非法元数据不进入续传缓存', { timeout: 60_000 }, () => {
+    const { hub, persistedSeqs } = makeFixture()
+    const ask = { id: 'lifetime-ask', conversationId: 1, title: '机密', status: 'pending', createdAt: 1 }
+    for (const secretLifetime of [{ ttlMs: 0 }, { scope: 'unknown' }, { ttl: 100 }, new Date()]) {
+      assert.throws(() => hub.publish('ask.upsert', {
+        ...ask,
+        fields: [{ name: 'TOKEN', label: 'Token', type: 'text', secret: true, secretLifetime }],
+      }), /secretLifetime|非 JSON/)
+    }
+    assert.throws(() => hub.publish('ask.upsert', {
+      ...ask,
+      fields: [{ name: 'plain', label: 'Plain', type: 'text', secretLifetime: { scope: 'turn' } }],
+    }), /secretLifetime/)
+    assert.equal(hub.seq, 0)
+    assert.deepEqual(persistedSeqs, [])
+    let seen: unknown
+    const unsubscribe = hub.subscribe((frame) => { seen = frame.event })
+    const fields = [{ name: 'TOKEN', label: 'Token', type: 'text', secret: true, secretLifetime: { ttlMs: 100, scope: 'turn' } }]
+    hub.publish('ask.upsert', { ...ask, fields })
+    assert.deepEqual(seen, { type: 'ask.upsert', ask: { ...ask, fields } })
+    unsubscribe()
+    hub.close()
   })
 
   it('notification 非法载荷显式拒绝且不推进 seq（不静默修正 level/title）', { timeout: 60_000 }, () => {
@@ -868,8 +892,9 @@ describe('EventHub SSE 空闲心跳', { timeout: 60_000 }, () => {
   })
 
   it('心跳受字节背压有界约束：不读的慢消费者堆积超限被明确关流', { timeout: 60_000 }, async () => {
-    // 128B 上限：单条心跳约 14B，10 次内必触发。
-    const { hub } = makeFixture({ keepaliveMs: 5, maxPendingBytes: 128 })
+    // 预算 320B：首帧 snapshot（含 bootId，约 150B）可通过；单条心跳约 14B，
+    // 堆积 20 余次即超限（keepaliveMs=5 下约百余毫秒内触发）。
+    const { hub } = makeFixture({ keepaliveMs: 5, maxPendingBytes: 320 })
     const controller = new AbortController()
     const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
     assert.ok(response.body)

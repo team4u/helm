@@ -652,15 +652,23 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
       kernel.stash.put(9, 'HELM_TOKEN', 'stash-spoofed-token')
 
       const env = kernel.buildSpawnEnv(9, '/srv/work')
-      assert.equal(env['MY_API_KEY'], 'sekrit-value', '会话秘密应注入（spawn env 设计目标）')
+      assert.equal(env['MY_API_KEY'], undefined, '缺省最小授权：外部 spawn 不携带任何父会话机密')
       assert.equal(env['HELM_ENV'], '1')
       assert.equal(env['HELM_HUB_URL'], 'http://127.0.0.1:3999')
       assert.equal(env['HELM_CONVERSATION_ID'], '9')
-      assert.equal(env['HELM_CWD'], '/srv/work', '受管 HELM_CWD 覆盖 stash 同名伪造')
+      assert.equal(env['HELM_CWD'], '/srv/work', '受管 HELM_CWD 保持权威（stash 同名伪造未注入）')
       assert.equal(env['HELM_DATA_DIR'], dir)
       const token = env['HELM_TOKEN']
-      assert.ok(token && token !== 'stash-spoofed-token', 'HELM_TOKEN 必须是受管 token（覆盖 stash 伪造）')
+      assert.ok(token && token !== 'stash-spoofed-token', 'HELM_TOKEN 必须是受管 token（不受 stash 伪造影响）')
       assert.ok(token!.length > 8)
+
+      // 显式授予（含受管同名伪造）：逐名注入 + 受管变量仍固定覆盖。
+      const granted = kernel.buildSpawnEnv(9, '/srv/work', 'local', {
+        secretNames: ['MY_API_KEY', 'HELM_CWD', 'HELM_TOKEN'],
+      })
+      assert.equal(granted['MY_API_KEY'], 'sekrit-value', '显式 secretNames 逐名注入（spawn env 设计目标）')
+      assert.equal(granted['HELM_CWD'], '/srv/work', '受管 HELM_CWD 覆盖 stash 同名伪造')
+      assert.equal(granted['HELM_TOKEN'], token, 'HELM_TOKEN 必须是受管 token（覆盖 stash 伪造）')
 
       // 绝不携带宿主 process.env：PATH/HOME 与 spy 键均不得外泄到远端。
       assert.equal(env['PATH'], undefined, 'spawn env 不得携带宿主 PATH')

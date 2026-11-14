@@ -421,6 +421,8 @@ export function buildToolEnv(
  * HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD /（仅 local）
  * HELM_DATA_DIR，以及受管 HELM_TOKEN（无受管 token 时绝不透传同名继承值）。
  * local（继承 process.env）与远端（不携带宿主进程环境）共用此构造。
+ * options.stashEnv 可覆盖默认的「全部活跃秘密」（外部 spawn 最小授权用：
+ * 传 {} 即不携带任何会话机密，只保留受管 HELM_*）。
  * 远端专用语义：
  * - HELM_HUB_URL 仅取节点 register 时上报的真实回连地址（守恒）；节点未上报
  *   时省略该键（daemon 侧保持其 shellEnv 的真实 hubUrl），绝不 fallback
@@ -435,8 +437,14 @@ export function buildManagedEnv(
   cwd: string,
   conversationId?: number,
   nodeId: string = 'local',
+  options: { stashEnv?: Record<string, string> } = {},
 ): Record<string, string> {
-  const stashEnv = conversationId === undefined ? {} : deps.stashEnvFor(conversationId)
+  const stashEnv =
+    options.stashEnv !== undefined
+      ? options.stashEnv
+      : conversationId === undefined
+        ? {}
+        : deps.stashEnvFor(conversationId)
   const managedToken = deps.processToken?.()
   // 远端回连地址守恒：仅用节点注册时上报的真实 hubUrl；未上报则省略该键，
   // 绝不 fallback deps.hubUrl（Hub 本机地址对远端不可达）。

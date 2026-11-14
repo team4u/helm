@@ -1024,10 +1024,15 @@ async function makeHttpEnv() {
     .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
   if (initialConv === undefined) throw new Error('makeHttpEnv：首次启动应播种 assistant 入口会话')
 
-  // 集成探针插件：echo 动作回显 stash 真实值（验证出站脱敏链路）
+  // 集成探针插件：echo 动作回显 stash 真实值（验证出站脱敏链路）。
+  // 探针值经 probeState 间接引用：初始会话删除即回收其 stash 机密（新契约），
+  // 测试制删后会向存活会话重新登记再断言。
   const stash = app.kernel.services.stash
   const SECRET_TRICKY = ['quote"', 'line'].join('\n')
-  const trickyPlaceholder = stash.put(initialConv.id, 'TRICKY_TOKEN', SECRET_TRICKY)
+  const probeState = {
+    secret: SECRET_TRICKY,
+    placeholder: stash.put(initialConv.id, 'TRICKY_TOKEN', SECRET_TRICKY),
+  }
 
   await app.kernel.plugins!.register({
     id: 'test:probe',
@@ -1049,7 +1054,7 @@ async function makeHttpEnv() {
           required: ['text'],
           additionalProperties: false,
         },
-        handler: (input) => ({ text: `${input.text} ${SECRET_TRICKY} ${trickyPlaceholder}` }),
+        handler: (input) => ({ text: `${input.text} ${probeState.secret} ${probeState.placeholder}` }),
       })
       ctx.action<{ n: number }, { doubled: number }>({
         id: 'double',
@@ -1081,7 +1086,7 @@ async function makeHttpEnv() {
   // 真 startHub：port 0（内核分配），kernel 全部来自 createHelm
   const hub = await startHub({ kernel: app.kernel as never, port: 0 })
   return {
-    hub, app, faux, dataDir, SECRET_TRICKY, trickyPlaceholder, initialConvId: initialConv.id,
+    hub, app, faux, dataDir, SECRET_TRICKY, probeState, stash, initialConvId: initialConv.id,
     rootPassword: '集成测试Root密码八位',
     async close() {
       await hub.close()
@@ -1194,13 +1199,15 @@ test('集成6: HTTP 真实往返——鉴权/初始会话可删/动作校验同�
 
     // --- HTTP 出站脱敏：echo 动作结果含 stash 真实值时，响应只带占位符。
     // hub 的统一 JsonRedactor（kernel.services.stash.redact）必须在出站前擦除明文。
+    // 初始会话已删（其 stash 机密随之回收）：向存活会话重新登记同值再验证。
+    env.probeState.placeholder = env.stash.put(httpConvId, 'TRICKY_TOKEN', env.SECRET_TRICKY)
     const echoAction = await call('POST', '/api/actions/test:probe/echo', { body: { input: { text: '前缀' } } })
     assert.equal(echoAction.status, 200)
     const echoBody = echoAction.body
     assert.ok(!echoBody.includes(env.SECRET_TRICKY), 'HTTP 响应不得含秘密明文（含换行形态）')
     assert.ok(!echoBody.includes('quote\\"'), 'HTTP 响应不得含秘密 JSON 转义形态')
     assert.ok(!echoBody.includes('line'), 'HTTP 响应不得含换行后半段明文')
-    assert.ok(echoBody.includes(env.trickyPlaceholder), 'HTTP 响应应保留占位符')
+    assert.ok(echoBody.includes(env.probeState.placeholder), 'HTTP 响应应保留占位符')
 
     // --- SSE snapshot 首帧：鉴权后连接即收快照
     const sseResponse = await fetch(`${base}/api/events`, { headers: { authorization: `Bearer ${token}` } })

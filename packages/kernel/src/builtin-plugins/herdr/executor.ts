@@ -48,6 +48,7 @@ import {
   buildOutputFileName,
   buildSpawnPaneEnv,
   HashShort,
+  MANAGED_ENV_KEYS,
   redactPromptText,
   redactSchemaText,
   resolveCwd,
@@ -55,6 +56,12 @@ import {
   type SpawnRouting,
 } from './spawn-rules.js'
 import { HERDR_STEER_CONTROLS } from './contracts.js'
+
+/**
+ * 窗格环境里由基线权威固定的受管键（MANAGED_ENV_KEYS + 回连/节点身份）：
+ * applyPaneSecrets 授予叠加后重申基线值，授予名不得劫持。
+ */
+const PANE_MANAGED_LOCK_KEYS: readonly string[] = [...MANAGED_ENV_KEYS, 'HELM_HUB_URL', 'HELM_NODE_ID']
 
 export interface ExecutorHost {
   /** 父会话 cwd 解析（宿主 getConversation 桥；错误如实上抛）。 */
@@ -108,7 +115,12 @@ export class HerdrExecutor {
   /** pane scopeKey -> 进行中的 closePane promise（abort 双路径单飞）。 */
   private readonly activeCloses = new Map<string, Promise<void>>()
 
-  /** env 只留在内存；Gate 与续接复用建窗时的实际环境，绝不持久化机密。 */
+  /**
+   * pane scopeKey -> 窗格环境基线（受管 HELM_* + Profile 合并，**不含任何 stash
+   * 机密**）。只留在内存；Gate/续接每次从基线出发，按当次请求 secretNames 从
+   * 当前 stash 重新授权取值——绝不缓存机密明文供后续子进程复用（TTL/回合
+   * 结束后不再注入旧值）。
+   */
   private readonly paneEnvs = new Map<string, Record<string, string>>()
   private readonly blockedTasks = new Map<string, Promise<boolean>>()
   private readonly unstartedPanes = new Set<string>()
@@ -301,7 +313,7 @@ export class HerdrExecutor {
     const safeId = `${HashShort.of(unique)}${HashShort.of(request.prompt).slice(0, 4)}`
     const ext = request.schema !== undefined ? 'json' : 'md'
     const outputFileName = buildOutputFileName(safeId, ext)
-    const env = this.buildPaneEnv(request.parentConversationId, cwd, routing, target)
+    const env = this.buildPaneEnv(request.parentConversationId, cwd, routing, target, request.secretNames)
     const window = await this.createWindow(target, routing, request, cwd, env, agentName)
     const managed: ManagedPane = {
       target: window.target,
@@ -321,7 +333,7 @@ export class HerdrExecutor {
     }
     this.registry.add(managed)
     const key = this.paneKey(managed)
-    this.paneEnvs.set(key, this.buildPaneEnv(request.parentConversationId, window.effectiveCwd, routing, window.target))
+    this.paneEnvs.set(key, this.buildPaneBaselineEnv(request.parentConversationId, window.effectiveCwd, routing, window.target))
     this.unstartedPanes.add(key)
     return managed
   }
@@ -370,7 +382,7 @@ export class HerdrExecutor {
     }
     // worktree.create 不接受 env：在该 workspace 下补建带 env 的 tab（env 按实际
     // worktree cwd 重建），关初始空 tab；任一步失败回收已创建 workspace。
-    const worktreeEnv = this.buildPaneEnv(request.parentConversationId, effectiveCwd, routing, target)
+    const worktreeEnv = this.buildPaneEnv(request.parentConversationId, effectiveCwd, routing, target, request.secretNames)
     try {
       const tabbed = parseTabCreated(
         await this.transport.call(
@@ -496,16 +508,22 @@ export class HerdrExecutor {
   }
 
   /**
-   * 窗格 env：buildSpawnEnv(managed/stash，确切目标节点) + buildSpawnPaneEnv 合并。
+   * 窗格环境基线：buildSpawnEnv（受管 HELM_*，确切目标节点，**零 stash 机密**）
+   * + buildSpawnPaneEnv（Profile 合并、远端回连语义）。建窗、Gate 与续接共用；
    * 受管 HELM_* 由内核构造权威（Profile 不可覆盖）；远端剥本机回连变量
    * （Profile 显式有效可达 HELM_HUB_URL 或节点通道 hubUrl 除外）。
    * buildSpawnEnv 第三参始终传确切 nodeId（'local' 或远端 ID）——绝不让内核
    * 按父会话继承（父会话绑定远端时会把本机窗格误配到远端）。
    */
-  private buildPaneEnv(parentConversationId: number, cwd: string, routing: SpawnRouting, target: HerdrTarget): Record<string, string> {
+  private buildPaneBaselineEnv(
+    parentConversationId: number,
+    cwd: string,
+    routing: SpawnRouting,
+    target: HerdrTarget,
+  ): Record<string, string> {
     const nodeId = targetNodeId(target) ?? 'local'
     const base = this.deps.buildSpawnEnv(this.host.askConversationId(parentConversationId), cwd, nodeId)
-    const { env, stripped, hubUrlOverridden } = buildSpawnPaneEnv(base, routing.profileEnv, {
+    const { env, stripped } = buildSpawnPaneEnv(base, routing.profileEnv, {
       remote: nodeId !== 'local',
       ...(nodeId !== 'local' ? { nodeHubUrl: this.deps.nodeChannel?.getNodeHubUrl?.(nodeId) } : {}),
     })
@@ -516,7 +534,51 @@ export class HerdrExecutor {
         'info',
       )
     }
-    void hubUrlOverridden
+    return env
+  }
+
+  /**
+   * 建窗时刻的完整窗格 env：基线 + 按当次 secretNames 授予的机密（从当前
+   * stash 现取；缺失在内核边界显式报错，绝不静默降级为空注入）。已建窗的
+   * 外部 CLI 进程 env 无法撤回（如实边界）；后续 Gate 不复用此刻机密值，
+   * 每次从基线重新授权。
+   */
+  private buildPaneEnv(
+    parentConversationId: number,
+    cwd: string,
+    routing: SpawnRouting,
+    target: HerdrTarget,
+    secretNames?: string[],
+  ): Record<string, string> {
+    const baseline = this.buildPaneBaselineEnv(parentConversationId, cwd, routing, target)
+    if (secretNames === undefined || secretNames.length === 0) return baseline
+    return this.applyPaneSecrets(baseline, parentConversationId, cwd, target, secretNames)
+  }
+
+  /**
+   * 从当前 stash 重新授权取值叠加到基线：每次实际使用（建窗/Gate/续接）前现取，
+   * 不经任何缓存；缺失/过期/已结算名字在内核边界显式 404。受管 HELM_* 基线
+   * 权威：授予名不得劫持回连/身份变量（与内核 buildManagedEnv 固定覆盖同构）。
+   */
+  private applyPaneSecrets(
+    baseline: Record<string, string>,
+    parentConversationId: number,
+    cwd: string,
+    target: HerdrTarget,
+    secretNames: string[],
+  ): Record<string, string> {
+    if (secretNames.length === 0) return { ...baseline }
+    const nodeId = targetNodeId(target) ?? 'local'
+    const granted = this.deps.buildSpawnEnv(this.host.askConversationId(parentConversationId), cwd, nodeId, {
+      secretNames,
+    })
+    const selected = Object.fromEntries(
+      secretNames.filter((name) => Object.hasOwn(granted, name)).map((name) => [name, granted[name]!]),
+    )
+    const env: Record<string, string> = { ...baseline, ...selected }
+    for (const key of PANE_MANAGED_LOCK_KEYS) {
+      if (key in baseline) env[key] = baseline[key]!
+    }
     return env
   }
 
@@ -1602,10 +1664,11 @@ export class HerdrExecutor {
     }
   }
 
-  /** gate：文件成功后恰好一次；本机 runLocalGate，远端 transport.runGate（同一实际 cwd 与路由 env）。 */
+  /** gate：文件成功后恰好一次；本机 runLocalGate，远端 transport.runGate（同一实际 cwd 与路由基线 env）。机密不缓存：每次按本次请求 secretNames 从当前 stash 重新授权，缺失/过期/已结算在 gate 子进程启动前显式 404（零 gate 副作用）。 */
   private async runGateFor(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
-    const env = this.paneEnvs.get(this.paneKey(pane))
-    if (env === undefined) throw new HelmError('herdr_context_unavailable', '任务环境已丢失，无法在同一环境执行 Gate', 409)
+    const baseline = this.paneEnvs.get(this.paneKey(pane))
+    if (baseline === undefined) throw new HelmError('herdr_context_unavailable', '任务环境已丢失，无法在同一环境执行 Gate', 409)
+    const env = this.applyPaneSecrets(baseline, request.parentConversationId, pane.effectiveCwd, targetOf(pane), request.secretNames ?? [])
     const gate: { ok: boolean; output: string } =
       nodeIdOf(pane) === undefined
         ? await this.deps.runLocalGate(request.gate!, {
@@ -1715,12 +1778,12 @@ export class HerdrExecutor {
     request.onResolved?.(this.executionInfoOf(updated))
     // request.cwd 缺省代表沿用窗格实际 cwd（不重开窗、不重建 env tab）。
     // 续接不重跑 agent.start（窗格已有 agent）；直接进入投递-审批-交接循环。
-    // env 缺失（失败窗格清理后）：按当前路由与窗格实际 cwd 重建（同构于建窗，
-    // 不留机密长驻内存也能支撑 resume Gate）。
+    // env 缺失（失败窗格清理后）：按当前路由与窗格实际 cwd 重建基线（不含机密；
+    // resume 的 Gate 按 resume 请求自身 secretNames 重新授权，不沿用建窗时授予）。
     if (!this.paneEnvs.has(this.paneKey(updated))) {
       this.paneEnvs.set(
         this.paneKey(updated),
-        this.buildPaneEnv(request.parentConversationId, updated.effectiveCwd, resumeRouting, targetOf(updated)),
+        this.buildPaneBaselineEnv(request.parentConversationId, updated.effectiveCwd, resumeRouting, targetOf(updated)),
       )
     }
     await this.preloadAttachmentMeta(request)
@@ -1855,10 +1918,10 @@ export class HerdrExecutor {
 
   /**
    * 外部结算路径（事件 pane.closed / 启动对账 / 探针归属不符）的 executor 侧
-   * 资源对齐：registry 置 settled 后 closePane 会因幂等早退，机密 paneEnvs
-   * （含 HELM_TOKEN）与未启动标记必须在此显式释放，生命周期与 registry
-   * outcome 对齐，绝不随人类关窗逐个驻留到停用重建。在途 steer 的阶段/
-   * 任务登记同步作废（其尾读复核将确定性拒绝）。
+   * 资源对齐：registry 置 settled 后 closePane 会因幂等早退，环境基线 paneEnvs
+   * （含受管 HELM_TOKEN，不含 stash 机密）与未启动标记必须在此显式释放，生命周期
+   * 与 registry outcome 对齐，绝不随人类关窗逐个驻留到停用重建。在途 steer 的
+   * 阶段/任务登记同步作废（其尾读复核将确定性拒绝）。
    */
   releasePaneState(pane: ManagedPane): void {
     const key = this.paneKey(pane)

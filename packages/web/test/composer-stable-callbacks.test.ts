@@ -358,13 +358,13 @@ test('斜杠浮层打开期间无关重渲染不重挂全局键盘监听（边�
   const originalRemove = window.removeEventListener.bind(window)
   let keydownAdds = 0
   ;(window as unknown as Record<string, unknown>).addEventListener = function patchedAdd(
-    this: Window, type: string, listener: EventListenerOrEventListenerObject, options?: unknown,
+    this: Window, type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions,
   ) {
     if (type === 'keydown') keydownAdds += 1
     return originalAdd(type, listener, options)
   } as unknown as typeof window.addEventListener
   ;(window as unknown as Record<string, unknown>).removeEventListener = function patchedRemove(
-    this: Window, type: string, listener: EventListenerOrEventListenerObject, options?: unknown,
+    this: Window, type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions,
   ) {
     return originalRemove(type, listener, options)
   } as unknown as typeof window.removeEventListener

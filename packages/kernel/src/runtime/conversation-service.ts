@@ -596,10 +596,12 @@ export class ConversationService {
     // 绝不吞错很成功。
     await this.o.cancelAsksByConversation(id)
     await this.artifactsSvc.deleteConversation(id)
+    // 纯内存机密同步回收（含仅用于脱敏的旧值）：会话删除即彻底释放。
+    this.stash.clear(id)
     this.events.publish('notification', {
       level: 'info',
       title: '会话已删除',
-      body: `会话 ${id} 及其产物/待答 AskDoc 已清理`,
+      body: `会话 ${id} 及其产物/待答 AskDoc/内存机密已清理`,
       conversationId: id,
     })
     this.tracker.stopObserving(id)

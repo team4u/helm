@@ -166,6 +166,16 @@ export interface AgentSpawnRequest {
   resume?: string
   /** 随本次子代理派生传递的产物 ID 列表。 */
   attachments?: string[]
+  /**
+   * 显式授予外部运行时（如 herdr 窗格）注入的父会话机密环境变量名列表。
+   * 缺省不携带任何父会话机密（最小授权；受管 HELM_* 不受影响）；逐名授予，
+   * 名字需在父会话 SecretStash 内现存，缺失在 spawn 边界显式拒绝。仅外部
+   * 运行时消费：原生子会话工具环境按子会话自身 stash 计算，无法承接本授予——
+   * agent_spawn 钩子未接管（无外部运行时）而非空 secretNames 到达原生执行行时
+   * 显式拒绝（unsupported_secret_grant），绝不假装子代理已取得机密；空数组
+   * 等同未授予。按次授予，resume 不自动沿用。
+   */
+  secretNames?: string[]
   /** 取消信号，由宿主注入。 */
   signal?: AbortSignal
 }
@@ -1110,10 +1120,17 @@ export interface HelmHostApi {
   /** 原子写文件（临时文件 + rename；通用机制，失败显式拒绝）。 */
   atomicWriteFile(path: string, content: string): Promise<void>
   /**
-   * 外部 spawn 环境变量（目标节点受管回连集合：stash + 受管 HELM_*）；
-   * nodeId 为实际选定目标节点；绝不携带宿主 process.env。
+   * 外部 spawn 环境变量（受管 HELM_* 回连集合；绝不携带宿主 process.env）。
+   * 缺省不携带任何父会话 SecretStash 机密（外部窗格最小授权）；仅当显式传
+   * secretNames 时逐名注入（需在父会话 stash 内现存，缺失显式抛错）。
+   * nodeId 为实际选定目标节点。
    */
-  buildSpawnEnv(conversationId: number, cwd: string, nodeId: string): Record<string, string>
+  buildSpawnEnv(
+    conversationId: number,
+    cwd: string,
+    nodeId: string,
+    options?: { secretNames?: string[] },
+  ): Record<string, string>
   /**
    * 声明插件对本会话的管理权（如 superagent 的 router/watchdog 会话）：
    * 受管期间会话删除保护（409 conversation_managed_by_plugin），

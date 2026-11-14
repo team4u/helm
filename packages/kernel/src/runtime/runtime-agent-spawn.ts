@@ -36,7 +36,34 @@ import { runNativeSpawn, validateJsonSchema } from './spawn.js'
 import type { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { buildManagedEnv, runGate } from './tools.js'
-import type { SecretStash } from '../services/index.js'
+import { isValidEnvName, type SecretStash } from '../services/index.js'
+
+/**
+ * secretNames 边界校验（spawn 请求与 buildSpawnEnv 共用）：字符串数组、每项
+ * 非空且为合法环境变量名、无重复；undefined（未授予）合法。非法形状显式拒绝。
+ */
+export function validateSecretNames(secretNames: string[] | undefined): string[] {
+  if (secretNames === undefined) return []
+  if (!Array.isArray(secretNames)) {
+    throw new HelmError('validation_error', `secretNames 需为字符串数组（收到 ${typeof secretNames}）`, 400)
+  }
+  const seen = new Set<string>()
+  for (const name of secretNames) {
+    if (typeof name !== 'string' || name === '' || !isValidEnvName(name)) {
+      throw new HelmError(
+        'validation_error',
+        `secretNames 含非法机密名 '${String(name)}'（需非空合法环境变量名）`,
+        400,
+        { name },
+      )
+    }
+    if (seen.has(name)) {
+      throw new HelmError('validation_error', `secretNames 重复：${name}`, 400, { name })
+    }
+    seen.add(name)
+  }
+  return [...secretNames]
+}
 
 export interface RuntimeAgentSpawnDeps {
   readonly store: HelmStore
@@ -66,8 +93,16 @@ export class RuntimeAgentSpawn {
   /**
    * 受管子进程 spawn 环境变量构造：
    * 绝不携带宿主 process.env（远端环境由目标机器自理，PATH/HOME 等不得外泄）。
+   * 缺省不携带任何父会话 stash 机密（外部窗格最小授权）；仅显式 secretNames
+   * 逐名注入：名字需在父会话 stash 内现存（含未过期/未结算），缺失显式 404，
+   * 绝不静默降级为空注入。
    */
-  buildSpawnEnv(conversationId: number, cwd: string, nodeId?: string): Record<string, string> {
+  buildSpawnEnv(
+    conversationId: number,
+    cwd: string,
+    nodeId?: string,
+    options?: { secretNames?: string[] },
+  ): Record<string, string> {
     if (!Number.isInteger(conversationId) || conversationId <= 0) {
       throw new HelmError(
         'validation_error',
@@ -81,8 +116,22 @@ export class RuntimeAgentSpawn {
         cwd,
       })
     }
+    const names = validateSecretNames(options?.secretNames)
+    // 单次选择读取后基于实际返回键判缺失（同步边界，同次只采样 clock 一次）：
+    // 先 has 后 envFor 的两段读会在 TTL 边界跨界——has 过、envFor 省略，返回
+    // 假成功空注入。
+    const stashEnv = this.deps.stashService.envFor(conversationId, names)
+    const missing = names.filter((name) => !Object.hasOwn(stashEnv, name))
+    if (missing.length > 0) {
+      throw new HelmError(
+        'secret_not_found',
+        `会话 ${conversationId} 的 stash 内不存在（或已停止注入）机密：${missing.join(', ')}；请确认机密名与生命周期（TTL/回合作用域）`,
+        404,
+        { conversationId, missing },
+      )
+    }
     const resolvedNodeId = nodeId ?? this.deps.store.getConv(conversationId)?.nodeId ?? 'local'
-    return buildManagedEnv(this.deps.toolDeps, cwd, conversationId, resolvedNodeId)
+    return buildManagedEnv(this.deps.toolDeps, cwd, conversationId, resolvedNodeId, { stashEnv })
   }
 
   /**
@@ -92,6 +141,7 @@ export class RuntimeAgentSpawn {
    */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
     if (request.schema !== undefined) assertSchemaCompilable(request.schema)
+    validateSecretNames(request.secretNames)
     const token = randomUUID()
     if (request.resume !== undefined) {
       const resumeId = /^\d+$/.test(request.resume) ? Number(request.resume) : this.agentSessions.get(request.resume)
@@ -160,6 +210,18 @@ export class RuntimeAgentSpawn {
         finalRequest.attachments !== undefined && finalRequest.attachments.length > 0
           ? await this.deps.conversations.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
           : undefined
+
+      // 原生执行行诚实边界：原生子会话工具环境按子会话自身 stash 计算，无法
+      // 承接父会话机密授予——非空 secretNames 到达此处（无外部运行时钩子接管）
+      // 显式拒绝，绝不静默忽略假装子代理已取得机密；空数组等同未授予。
+      if (finalRequest.secretNames !== undefined && finalRequest.secretNames.length > 0) {
+        throw new HelmError(
+          'unsupported_secret_grant',
+          `原生执行行不支持 secretNames 机密授予（${finalRequest.secretNames.join(', ')}）：原生子会话不继承父会话 stash；机密注入仅外部运行时（如 builtin:herdr 窗格）支持，请改用外部运行时 agentType 或去掉授予`,
+          400,
+          { secretNames: [...finalRequest.secretNames] },
+        )
+      }
 
       return runNativeSpawn(
         buildSpawnHost({

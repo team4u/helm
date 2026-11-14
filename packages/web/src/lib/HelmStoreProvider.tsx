@@ -4,7 +4,7 @@ import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
-import type { ActionManifest, ArtifactMetadata, ConversationDetail, ConversationSummary, HelmEventFrame, HelmSnapshot, PluginSummary, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
+import type { ActionManifest, ArtifactMetadata, ConversationDetail, ConversationSummary, HelmEventFrame, HelmResumedFrame, HelmSnapshot, PluginSummary, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
 import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, nodesApi, pluginsApi, setStoredToken, type CredentialSummary, type ModelDescriptor, type NodeInfo } from './api.js'
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, readSseChunkWithDeadline, sortNodes, SseParser, sseClientTimings, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
@@ -137,6 +137,10 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [notices, setNotices] = useState<ToastNotice[]>([])
   const noticeSequence = useRef(0)
   const session = useRef(0)
+  // SSE 短断线续传凭据（bootId 事件代 + 已实际应用的水位 seq）：仅在快照成功应用或
+  // 逐帧应用成功后推进；登出/换身份、快照或帧应用失败立即清空，下次连接强制全量
+  // 快照，绝不携带损坏 cursor 重试，也不让新身份沿用旧授权的客户端缓存。
+  const sseCursorRef = useRef<{ bootId: string; seq: number } | null>(null)
   const requests = useRef(new Map<string, Promise<unknown>>())
   const failedDocs = useRef(new Set<string>())
   const pluginEpoch = useRef(new Map<string, number>())
@@ -242,6 +246,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     session.current++
     requests.current.clear()
     failedDocs.current.clear()
+    // 续传凭据一并作废：同一 Hub 换身份后不得沿用其他授权会话的客户端水位。
+    sseCursorRef.current = null
     assetGeneration.current++
     // 释放待命草稿并作废在途首发任务：旧 create/upload/submit 回包不得复活正文/附件或继续发送。
     resetStandbyDrafts()
@@ -613,50 +619,114 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
       try {
         const token = getStoredToken()
-        const response = await fetch('/api/events', { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal })
+        // 短断线续传：携带上一条连接实际应用到的水位（双凭据缺一不可）；
+        // 校验不过时内核改发 snapshot 全量对齐，客户端无需预判。
+        const cursor = sseCursorRef.current
+        const eventsUrl = cursor !== null
+          ? `/api/events?afterSeq=${cursor.seq}&bootId=${encodeURIComponent(cursor.bootId)}`
+          : '/api/events'
+        const response = await fetch(eventsUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal })
         if (response.status === 401) { logout(); return }
+        if (cursor !== null && response.status === 400) {
+          // 续传凭据被判非法：作废凭据（本次即失败重连，下次全量），绝不带坏凭据死循环。
+          sseCursorRef.current = null
+          throw new Error('实时续传请求被内核拒绝（HTTP 400），已改为全量重新同步')
+        }
         if (!response.ok || !response.body) throw new Error(`实时连接失败（HTTP ${response.status}）`)
-        let gotSnapshot = false
+        /** null=待首帧控制帧；fresh=全量已就绪；resumed=补发中（追平 headSeq 才 live）。 */
+        let mode: 'fresh' | 'resumed' | null = null
+        /** resumed 连接的追平水位：重放期间不宣称 live，避免显示「新鲜」的陈旧状态。 */
+        let resumedHeadSeq = 0
+        let liveAnnounced = false
+        const announceLive = (): void => {
+          if (liveAnnounced) return
+          liveAnnounced = true
+          setSseConnected(true)
+          setConnectionError(null)
+        }
         const parser = new SseParser((message) => {
-          const payload: unknown = JSON.parse(message.data)
-          if (message.event === 'snapshot') {
-            session.current++
-            requests.current.clear()
-            failedDocs.current.clear()
-            // 断线期间可能发生停用/升级：旧模块与在途下载不能跨快照复活。
-            resetPluginClientCache()
-            setLoadErrors({})
-            updateLive((state) => applySnapshot(state, payload as HelmSnapshot))
-            setConversationArtifacts({})
-            gotSnapshot = true
-            retry = 0
-            setSseConnected(true)
-            setConnectionError(null)
-            for (const target of [targets.current.primaryTarget, targets.current.splitTarget]) {
-              if (target?.kind === 'conversation') { void loadConversationDetail(target.conversationId, true); void loadConversationArtifacts(target.conversationId) }
-            }
-          } else {
-            if (!gotSnapshot) throw new Error('实时连接缺少初始快照')
-            const frame = payload as HelmEventFrame
-            const oldSeq = liveRef.current.seq
-            // 删除事件先快照被删会话摘要（applyEventFrame 后列表即移除）：待命目标需
-            // 继承其 profileId/nodeId/cwd，防止远端坐标悄悄回落本机。
-            const deletedEvent = frame.event.type === 'conversation.deleted' && 'conversationId' in frame.event ? frame.event : undefined
-            const deletedSummary = deletedEvent !== undefined
-              ? liveRef.current.conversations.find((c) => c.id === deletedEvent.conversationId)
-              : undefined
-            updateLive((state) => applyEventFrame(state, frame))
-            if (frame.seq <= oldSeq) return
+          // 消息处理边界：任何协议错误（无效 JSON / 空或畸形控制帧 / 缺 event 增量 /
+          // 快照或帧应用失败 / 握手不匹配 / 重复控制帧）都在此作废续传凭据后重抛
+          // 断开本连接，下次强制全量——绝不带着可能错位的水位重试坏状态；网络层
+          // 异常（空闲超时/流断开）不经过此边界，完好凭据仍可短断线续传。
+          try {
+            const payload: unknown = JSON.parse(message.data)
+            if (message.event === 'snapshot') {
+              if (mode !== null) throw new Error('实时连接收到重复的 snapshot 控制帧')
+              const snap = payload as HelmSnapshot
+              if (snap === null || typeof snap !== 'object' || typeof snap.bootId !== 'string' || snap.bootId === '') {
+                throw new Error('内核实时快照格式无效（缺少有效 bootId）')
+              }
+              mode = 'fresh'
+              session.current++
+              requests.current.clear()
+              failedDocs.current.clear()
+              // 断线期间可能发生停用/升级：旧模块与在途下载不能跨快照复活。
+              resetPluginClientCache()
+              setLoadErrors({})
+              updateLive((state) => applySnapshot(state, snap))
+              sseCursorRef.current = { bootId: snap.bootId, seq: snap.seq }
+              setConversationArtifacts({})
+              retry = 0
+              announceLive()
+              for (const target of [targets.current.primaryTarget, targets.current.splitTarget]) {
+                if (target?.kind === 'conversation') { void loadConversationDetail(target.conversationId, true); void loadConversationArtifacts(target.conversationId) }
+              }
+            } else if (message.event === 'resumed') {
+              if (mode !== null) throw new Error('实时连接收到重复的 resumed 控制帧')
+              const resumed = payload as HelmResumedFrame
+              const current = sseCursorRef.current
+              if (
+                current === null ||
+                resumed === null ||
+                typeof resumed !== 'object' ||
+                typeof resumed.bootId !== 'string' ||
+                resumed.bootId !== current.bootId ||
+                resumed.seq !== current.seq ||
+                !Number.isSafeInteger(resumed.headSeq) ||
+                resumed.headSeq < current.seq
+              ) {
+                throw new Error('实时连接续传握手不匹配，正在全量重新同步')
+              }
+              mode = 'resumed'
+              resumedHeadSeq = resumed.headSeq
+              retry = 0
+              // 不清详情/产物/插件缓存：续传补发未丢失任何状态；只有实际追平 headSeq
+              // 才宣称 live（零补发时立即 live），重放中不显示「新鲜」。
+              if (liveRef.current.seq >= resumedHeadSeq) announceLive()
+            } else {
+              if (mode === null) throw new Error('实时连接缺少初始快照')
+              const frame = payload as HelmEventFrame
+              if (frame === null || typeof frame !== 'object' || frame.event === null || typeof frame.event !== 'object' || typeof frame.event.type !== 'string') {
+                throw new Error('实时事件帧格式无效（缺少 event）')
+              }
+              const oldSeq = liveRef.current.seq
+              // 删除事件先快照被删会话摘要（applyEventFrame 后列表即移除）：待命目标需
+              // 继承其 profileId/nodeId/cwd，防止远端坐标悄悄回落本机。
+              const deletedEvent = frame.event.type === 'conversation.deleted' && 'conversationId' in frame.event ? frame.event : undefined
+              const deletedSummary = deletedEvent !== undefined
+                ? liveRef.current.conversations.find((c) => c.id === deletedEvent.conversationId)
+                : undefined
+              updateLive((state) => applyEventFrame(state, frame))
+              // 按帧实际应用推进续传水位（应用失败已在边界作废凭据，绝不提前推进）。
+              const applied = sseCursorRef.current
+              if (applied !== null && liveRef.current.seq > applied.seq) {
+                sseCursorRef.current = { bootId: applied.bootId, seq: liveRef.current.seq }
+              }
+              if (mode === 'resumed' && liveRef.current.seq >= resumedHeadSeq) announceLive()
+              if (frame.seq <= oldSeq) return
             const event = frame.event
             if (event.type === 'notification' && 'title' in event) pushNotice(event)
             if (event.type === 'plugin.changed' && 'plugin' in event) {
               pluginEpoch.current.set(event.plugin.id, (pluginEpoch.current.get(event.plugin.id) ?? 0) + 1)
               for (const key of requests.current.keys()) if (key.startsWith(`doc:${event.plugin.id}/`)) requests.current.delete(key)
               failedDocs.current.clear()
-              failedDocs.current.clear()
-              // 插件停用/卸载（ui 贡献移除）时同步释放其 client 模块缓存与全部会话文档订阅
+              // 任意 plugin.changed（含 enabled=true 的热重载/升级）都让该插件 client 模块
+              // 缓存失效：loader 只在缓存代变化后才重新拉取比对 contentHash，只处理停用
+              // 会让启用态重载后无限残留旧 UI 代码（续传不 reset 全局缓存时更是如此）。
+              evictPluginClientCache(event.plugin.id)
+              // 插件停用/卸载（ui 贡献移除）时同步释放全部会话文档订阅
               if (!event.plugin.enabled) {
-                evictPluginClientCache(event.plugin.id)
                 evictSessionDocSubscriptions(event.plugin.id)
               }
               void refreshAssets()
@@ -694,6 +764,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
               evictSessionDocsOfConversation(id)
             }
           }
+          } catch (error) {
+            // 协议边界统一作废续传凭据（见边界注释）后重抛：本次连接按失败重连，
+            // 下次必须全量快照，绝不携带可能错位的水位重试。
+            sseCursorRef.current = null
+            throw error
+          }
         })
         reader = response.body.getReader()
         const decoder = new TextDecoder()
@@ -719,7 +795,10 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
         if (reader) { await reader.cancel().catch(() => {}); reader.releaseLock() }
         if (active) {
           setSseConnected(false)
-          timer = setTimeout(() => { void connect() }, Math.min(1000 * 2 ** retry++, 10000))
+          // 指数退避 + 随机抖动：内核重启等同时断线场景避免同步重连风暴。
+          const backoff = Math.min(1000 * 2 ** retry, 10000) + Math.random() * 250
+          retry += 1
+          timer = setTimeout(() => { void connect() }, backoff)
         }
       }
     }

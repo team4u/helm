@@ -396,7 +396,7 @@ test('readNodeIdentity 严格校验外部对象（null/array/坏字段全拒绝�
   }
 });
 
-test('parseJoinToken 拒绝 local/空白/控制字符等非法令牌', () => {
+test('parseJoinToken 拒绝 local/空白/控制字符等非法令牌', { timeout: 60_000 }, () => {
   assert.equal(parseJoinToken('local:secret'), null, 'local ID 不得作为 JOIN nodeId');
   assert.equal(parseJoinToken(' node-1:secret'), null, '首空白拒绝');
   assert.equal(parseJoinToken('node-1:secret '), null, '尾空白拒绝');

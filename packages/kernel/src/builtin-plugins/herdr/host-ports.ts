@@ -42,7 +42,7 @@ export function assembleHerdrDepsFromHost(
   const analyzer = createBlockedSnapshotAnalyzer({ completeConversationText: (input) => host.completeText(input) })
   return {
     profiles: { get: (id) => host.profiles.get(id) },
-    buildSpawnEnv: (conversationId, cwd, nodeId) => host.buildSpawnEnv(conversationId, cwd, nodeId),
+    buildSpawnEnv: (conversationId, cwd, nodeId, options) => host.buildSpawnEnv(conversationId, cwd, nodeId, options),
     redact: (text) => host.redact(text),
     runLocalGate: (command, opts) => host.runGate(command, { ...opts, nodeId: 'local' }),
     getArtifact: (id, conversationId) => host.getArtifact(id, conversationId),

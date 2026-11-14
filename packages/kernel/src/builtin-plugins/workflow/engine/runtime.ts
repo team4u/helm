@@ -91,6 +91,12 @@ export interface WorkflowSpawnRequest {
   /** 由脚本 agent({ attachments }) 传入的产物 ID 列表（原样透传，宿主做存在性/授权校验）。 */
   attachments?: string[]
   /**
+   * 由脚本 agent({ secretNames }) 传入的机密环境变量名列表：显式授予外部
+   * 运行时注入父会话 stash 机密（缺省不携带任何机密；名字存在性由内核
+   * spawn 边界校验）。参与 journal 指纹：授予变化即不同调用。
+   */
+  secretNames?: string[]
+  /**
    * 显式设置该 agent 子代理在任务树中的绝对深度上限（1..HARD_MAX_SUBAGENT_DEPTH）；
    * 缺省继承父会话生效上限。该字段参与 journal 指纹：授权变化使该调用及后续
    * 前缀失配，避免复用不同派工权限下的缓存结果；真实 spawn 仍由宿主重新校验。
@@ -425,6 +431,8 @@ interface AgentCallPayload {
   attachments?: string[]
   /** 显式授予该 agent 子树的派生深度上限（worker 侧已验证；宿主边界二次校验）。 */
   maxSubagentDepth?: number
+  /** 显式授予外部运行时注入的父会话机密环境变量名（宿主边界二次校验；仅新鲜 spawn 下发）。 */
+  secretNames?: string[]
 }
 
 interface ActionCallPayload {
@@ -462,6 +470,12 @@ function derivedLabel(prompt: string): string {
 function isValidAttachments(value: unknown): value is string[] {
   if (!Array.isArray(value)) return false
   return value.every((id) => typeof id === 'string' && id.trim() !== '')
+}
+
+/** secretNames 同构边界校验：非空字符串数组（环境变量名形状由内核 spawn 边界统一校验）。 */
+function isValidSecretNames(value: unknown): value is string[] {
+  if (!Array.isArray(value)) return false
+  return value.every((name) => typeof name === 'string' && name.trim() !== '')
 }
 
 /** resume 可复活的子代理，按 label 记忆。 */
@@ -856,6 +870,11 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         respond(callId, false, undefined, 'agent() opts.attachments must be an array of non-empty string artifact IDs.', true)
         return
       }
+      // 同上：secretNames 是机密授予字段，非法形状在边界显式拒绝（不静默丢弃）。
+      if (payload.secretNames !== undefined && !isValidSecretNames(payload.secretNames)) {
+        respond(callId, false, undefined, 'agent() opts.secretNames must be an array of non-empty string secret env names.', true)
+        return
+      }
       // 同上：maxSubagentDepth 是策略授予字段，非法值在边界显式拒绝（不钳制、
       // 不静默丢弃）；仅对新鲜 spawn 下发，resume 续接沿用登记表既有事实。
       if (
@@ -922,6 +941,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         resume: payload.resume,
         attachments: payload.attachments,
         maxSubagentDepth: payload.maxSubagentDepth,
+        secretNames: payload.secretNames,
         schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,
       }
       const replayed = replayAt(index, agentJournalKey(keyInput), 'agent')
@@ -1116,6 +1136,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                     ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
                     ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
                     ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+                    ...(payload.secretNames !== undefined ? { secretNames: payload.secretNames } : {}),
                     onResolved,
                     ...(payload.gate !== undefined ? { onGateResult } : {}),
                   })

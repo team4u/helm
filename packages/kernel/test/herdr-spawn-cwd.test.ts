@@ -30,7 +30,7 @@ import type { HerdrEvent, HerdrNodeChannel, HerdrTarget, HerdrTransport } from '
 // resolveCwd（纯函数）
 // ---------------------------------------------------------------------------
 
-test('resolveCwd：platform 未知（undefined）——链语义与透传保持（向后兼容）', () => {
+test('resolveCwd：platform 未知（undefined）——链语义与透传保持（向后兼容）', { timeout: 60_000 }, () => {
   const routing: SpawnRouting = { kind: 'agy', nodeId: 'win-build', args: [], profileEnv: {} }
   assert.equal(resolveCwd('/mnt/c/work', routing, undefined, undefined), '/mnt/c/work')
   assert.equal(resolveCwd(undefined, routing, '/home/parent', undefined), '/home/parent')
@@ -41,7 +41,7 @@ test('resolveCwd：platform 未知（undefined）——链语义与透传保持�
   )
 })
 
-test('resolveCwd：win32 平台——request/workspace/parent 三级均确定性转换', () => {
+test('resolveCwd：win32 平台——request/workspace/parent 三级均确定性转换', { timeout: 60_000 }, () => {
   const routing: SpawnRouting = { kind: 'agy', args: [], workspace: '/d/profile-ws', profileEnv: {} }
   assert.equal(resolveCwd('/mnt/c/work/helm', routing, undefined, 'win32'), 'C:\\work\\helm')
   assert.equal(resolveCwd(undefined, routing, undefined, 'win32'), 'D:\\profile-ws', 'workspace 回退按目标平台收口')
@@ -50,7 +50,7 @@ test('resolveCwd：win32 平台——request/workspace/parent 三级均确定性
   assert.equal(resolveCwd('//server/share/ws', undefined, undefined, 'win32'), '\\\\server\\share\\ws')
 })
 
-test('resolveCwd：win32 平台——坏 POSIX 根显式拒绝（不建窗、不落任何记录）', () => {
+test('resolveCwd：win32 平台——坏 POSIX 根显式拒绝（不建窗、不落任何记录）', { timeout: 60_000 }, () => {
   for (const bad of ['/home/user', '/tmp/herdr']) {
     assert.throws(
       () => resolveCwd(bad, undefined, undefined, 'win32'),
@@ -60,7 +60,7 @@ test('resolveCwd：win32 平台——坏 POSIX 根显式拒绝（不建窗、不
   }
 })
 
-test('resolveCwd：posix 平台——词法归一且绝不反向转换 /mnt/<盘符>', () => {
+test('resolveCwd：posix 平台——词法归一且绝不反向转换 /mnt/<盘符>', { timeout: 60_000 }, () => {
   assert.equal(resolveCwd('/mnt/c/work/./x', undefined, undefined, 'posix'), '/mnt/c/work/x')
 })
 
@@ -68,7 +68,7 @@ test('resolveCwd：posix 平台——词法归一且绝不反向转换 /mnt/<盘
 // 平台事实接线（host-ports 能力检测 / LocalNodeChannel）
 // ---------------------------------------------------------------------------
 
-test('nodeChannelFromHost：宿主 nodePlatform 能力存在则透传，缺席则省略（不伪造）', () => {
+test('nodeChannelFromHost：宿主 nodePlatform 能力存在则透传，缺席则省略（不伪造）', { timeout: 60_000 }, () => {
   const calls: string[] = []
   const withPlatform = nodeChannelFromHost({
     nodeIpc: {
@@ -108,7 +108,7 @@ test('nodeChannelFromHost：宿主 nodePlatform 能力存在则透传，缺席�
   assert.equal(without.nodePlatform, undefined, '宿主无该能力时省略（远端平台未知，不猜）')
 })
 
-test('LocalNodeChannel：本机节点平台 = process.platform；远端不承载', () => {
+test('LocalNodeChannel：本机节点平台 = process.platform；远端不承载', { timeout: 60_000 }, () => {
   const channel: HerdrNodeChannel = new LocalNodeChannel()
   assert.equal(channel.nodePlatform?.('local'), process.platform)
   assert.equal(channel.nodePlatform?.('remote-a'), undefined)

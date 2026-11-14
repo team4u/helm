@@ -19,7 +19,24 @@ export interface AskFieldSpec {
   options?: Array<AskFieldOption>
   /** true 时答案写入内存 SecretStash，持久层与上下文仅存 [REDACTED:stash:<uuid>]。 */
   secret?: boolean
+  /**
+   * secret 答案的生命周期（仅 secret: true 字段允许；缺省会话级、不过期）。
+   * 到期或回合结算只停止环境注入，脱敏永不停止（旧值仍用于全部输出脱敏）。
+   */
+  secretLifetime?: SecretLifetime
   required?: boolean
+}
+
+/**
+ * 机密生命周期（AskFieldSpec.secretLifetime 与 SecretStash.put 共用同一表达）：
+ * - ttlMs：注入有效期毫秒，有限正 safe integer，上限 24 小时；按惰性判定失效
+ *   （读取时对表，不设额外定时器）；
+ * - scope：'conversation'（缺省，会话存续期注入）/ 'turn'（随下一次回合结算
+ *   completed | failed | aborted 停止注入；idle 不清扫，异步落地的答案属于下一次回合）。
+ */
+export interface SecretLifetime {
+  ttlMs?: number
+  scope?: 'conversation' | 'turn'
 }
 
 export type AskStatus = 'pending' | 'answered' | 'cancelled' | 'superseded'

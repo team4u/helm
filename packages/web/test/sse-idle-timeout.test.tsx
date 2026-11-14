@@ -83,7 +83,7 @@ interface Observed {
   sseConnected: boolean
 }
 
-const snapshotPayload = { seq: 1, conversations: [], pendingAsks: [], plugins: [], ui: [] }
+const snapshotPayload = { bootId: 'test-boot', seq: 1, conversations: [], pendingAsks: [], plugins: [], ui: [] }
 
 /** 挂起的 /api/events 流：发出 snapshot 后永不写入、永不关闭。 */
 function hangingEventStream(): ReadableStream<Uint8Array> {
@@ -108,7 +108,7 @@ test('挂起流空闲超时中止并重连，重连 401 必须登出且不再无
     if (path === '/api/auth/status') {
       return new Response(JSON.stringify({ configured: true, authenticated: true }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
-    if (path === '/api/events') {
+    if (path === '/api/events' || path.startsWith('/api/events?')) {
       eventsCalls += 1
       if (eventsCalls === 1) {
         return new Response(hangingEventStream(), { status: 200, headers: { 'content-type': 'text/event-stream' } })

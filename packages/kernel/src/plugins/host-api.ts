@@ -614,9 +614,9 @@ export function wrapHostApi(
     },
 
     // 9. agents & spawn
-    buildSpawnEnv: (conversationId, cwd, nodeId) => {
+    buildSpawnEnv: (conversationId, cwd, nodeId, options) => {
       guard('host.buildSpawnEnv');
-      return backend.buildSpawnEnv(conversationId, cwd, nodeId);
+      return backend.buildSpawnEnv(conversationId, cwd, nodeId, options);
     },
     spawnAgent: (request) => {
       guard('host.spawnAgent');

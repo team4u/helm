@@ -45,7 +45,7 @@ import {
 // 纯契约：buildSendKeysParams / parsePong / isStaleStateError
 // ---------------------------------------------------------------------------
 
-test('契约: buildSendKeysParams 产出 wire 字段 expected_state_seq 并拒绝非法入参', () => {
+test('契约: buildSendKeysParams 产出 wire 字段 expected_state_seq 并拒绝非法入参', { timeout: 60_000 }, () => {
   const params = buildSendKeysParams({ target: 'ws:p1', keys: ['y'], expectedStateSeq: 41 })
   assert.deepEqual(params, { target: 'ws:p1', keys: ['y'], expected_state_seq: 41 })
   assert.throws(() => buildSendKeysParams({ target: '', keys: ['y'], expectedStateSeq: 1 }), HelmError)
@@ -56,7 +56,7 @@ test('契约: buildSendKeysParams 产出 wire 字段 expected_state_seq 并拒�
   assert.throws(() => buildSendKeysParams({ target: 'p', keys: ['y'], expectedStateSeq: Number.MAX_SAFE_INTEGER + 1 }), HelmError)
 })
 
-test('契约: parsePong 严格边界——通告 true 才支持，缺省如实不支持，坏形状显式违约', () => {
+test('契约: parsePong 严格边界——通告 true 才支持，缺省如实不支持，坏形状显式违约', { timeout: 60_000 }, () => {
   const supported = parsePong({
     type: 'pong',
     version: '0.9.6-dev',
@@ -99,7 +99,7 @@ test('契约: parsePong 严格边界——通告 true 才支持，缺省如实�
   }
 })
 
-test('契约: isStaleStateError 只认 stale_state 错误码', () => {
+test('契约: isStaleStateError 只认 stale_state 错误码', { timeout: 60_000 }, () => {
   assert.equal(isStaleStateError(new HelmError('stale_state', 'seq mismatch', 409)), true)
   assert.equal(isStaleStateError({ code: 'stale_state' }), true)
   assert.equal(isStaleStateError(new HelmError('herdr_timeout', 'no response', 504)), false)

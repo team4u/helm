@@ -9,8 +9,10 @@
 
 import type {
   ConversationInit,
+  ConversationInput,
   ConversationPatch,
   ConversationSummary,
+  TurnSettledPayload,
 } from '@helm/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import {
@@ -97,7 +99,7 @@ export function assembleRuntimeServices(
     store: HelmStore
     stashService: SecretStash
     handledToolCalls: Map<string, { conversationId: number | undefined; result: { output: Array<{ type: 'text'; text: string }>; isError: boolean } }>
-    dispatchTurnSettled(payload: unknown, consumed: unknown): Promise<void>
+    dispatchTurnSettled(payload: TurnSettledPayload, consumed: ConversationInput[]): Promise<void>
     onSettleInflight(run: Promise<void>): void
     safeSummary(id: number): ConversationSummary | undefined
     submitInput(id: number, text: string, opts?: Parameters<ConversationService['submitInput']>[2]): Promise<unknown>

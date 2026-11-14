@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AskSpec,
   ConversationAttachmentRef,
@@ -11,6 +11,7 @@ import type {
 import { artifactsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon } from '../lib/icons.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { useStableCallback } from '../lib/use-stable-callback.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { ToolActivityContext } from '../lib/tool-activity.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'
@@ -33,6 +34,7 @@ import {
   type ToolTrace,
 } from './timeline-model.js'
 import { resolveActiveOutlineEntryId } from './outline-model.js'
+import { calibrateAnchorAfterSmoothScroll, type AnchorAlignment } from './timeline-scroll-calibration.js'
 import {
   OUTLINE_ACTIVE_LINE_PX,
   resolveActiveAnchorIndex,
@@ -816,7 +818,10 @@ function useEntryHighlight(
   }
 }
 
-function useHighlightScroll(conversationId: number): (node: HTMLDivElement | null) => void {
+function useHighlightScroll(
+  conversationId: number,
+  armCalibration: (target: HTMLElement, alignment: AnchorAlignment) => void,
+): (node: HTMLDivElement | null) => void {
   const store = useHelmStore()
   const h = store.highlightedEntry
   const lastHandledRef = useRef<string | null>(null)
@@ -830,6 +835,9 @@ function useHighlightScroll(conversationId: number): (node: HTMLDivElement | nul
     if (lastHandledRef.current === token) return
     lastHandledRef.current = token
     node.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    // 搜索定位与大纲定位共用同一最终锚点校准（估高转真实高度的位移同样影响
+    // 此处），居中对齐按目标中心线校正。
+    armCalibration(node, 'center')
   }
 }
 
@@ -1076,8 +1084,45 @@ export function ConversationTimeline({
   const lastHumanKeyRef = useRef<string | undefined>(undefined)
   const lastOutlineTickRef = useRef<number | null>(null)
   const lastActiveEntryRef = useRef<string | undefined>(undefined)
-  const highlightScrollRef = useHighlightScroll(conversation.id)
+  const outlineHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const activeCalibrationRef = useRef<{ conversationId: number; cancel: () => void } | null>(null)
+
+  // 启动最终锚点校准并接管在途任务（新定位/搜索高亮互斥，旧的立即 cancel）。
+  // 行 ref 在 commit 阶段可能先于父级 scrollRef 挂载（子先于父），从目标自身
+  // 向上定位滚动容器，不依赖 ref 挂载顺序。
+  const armScrollCalibration = useCallback(
+    (target: HTMLElement, alignment: AnchorAlignment): void => {
+      const scroller = target.closest<HTMLElement>('.timeline-scroll')
+      if (scroller === null) return
+      activeCalibrationRef.current?.cancel()
+      activeCalibrationRef.current = {
+        conversationId: conversation.id,
+        cancel: calibrateAnchorAfterSmoothScroll({ scroller, target, alignment }),
+      }
+    },
+    [conversation.id],
+  )
+
+  const highlightScrollRef = useHighlightScroll(conversation.id, armScrollCalibration)
   const highlightClass = useEntryHighlight(conversation.id, localHighlightEntryId)
+
+  // 换会话/卸载：仅作废属于旧会话的在途校准（挂载/换会话时 ref callback 先于
+  // 本 effect 运行，新会话刚启动的校准不能被本轮 cleanup 或 setup 误杀）与高亮
+  // 清除定时器（同一组件实例复用滚动容器）。
+  useEffect(() => {
+    const ownedConversationId = conversation.id
+    return () => {
+      const active = activeCalibrationRef.current
+      if (active !== null && active.conversationId === ownedConversationId) {
+        active.cancel()
+        activeCalibrationRef.current = null
+      }
+      if (outlineHighlightTimerRef.current !== null) {
+        clearTimeout(outlineHighlightTimerRef.current)
+        outlineHighlightTimerRef.current = null
+      }
+    }
+  }, [conversation.id])
 
   const isWorking = conversation.status === 'working'
   const items = useMemo(
@@ -1110,13 +1155,12 @@ export function ConversationTimeline({
     return undefined
   }, [items])
 
-  // 历史行渲染隔离（content-visibility，DOM 完整保留仅跳过屏外渲染）：仅浏览器
-  // 支持时启用；live 流式回合、排队输入、未结算最新回合与高亮/大纲定位目标行
-  // 在 resolveContainmentClass 内解除隔离，保证测量与滚动定位以真实布局进行。
+  // 历史行渲染隔离（content-visibility）：仅浏览器支持时启用；live 流式回合、
+  // 排队输入、未结算最新回合与高亮/大纲定位目标行在 resolveContainmentClass
+  // 内解除隔离，保证测量与滚动定位以真实布局进行。
   const containmentEnabled = useMemo(() => supportsTimelineContainment(), [])
 
-  // 必须解除隔离的锚点：搜索高亮（store）、大纲定位闪烁高亮（local）与当前
-  // 大纲定位请求目标（定位后请求会保留到下一次请求，仅此一行不重隔离，可接受）。
+  // 必须解除隔离的锚点：搜索高亮（store）、大纲闪烁高亮（local）与当前定位请求目标。
   const releasedEntryIds = useMemo(() => {
     const ids = new Set<string>()
     const h = store.highlightedEntry
@@ -1139,13 +1183,14 @@ export function ConversationTimeline({
   // 锚点集合签名：仅当行集合（锚点 id 序列）变化时才重建阅读锚点观察器；
   // 流式内容增长（items 引用变化但锚点不变）不触发重绑。
   const anchorSignature = useMemo(() => items.map((item) => timelineAnchorId(item)).join('\n'), [items])
-  // 回调可能每次渲染都是新闭包：latest-ref 避免观察器随回调身份变化而重绑。
-  const onActiveEntryChangeRef = useRef(onActiveEntryChange)
-  onActiveEntryChangeRef.current = onActiveEntryChange
+  // 观察器只读取最近一次提交的回调，不因父组件的新闭包反复重绑。
+  const notifyActiveEntryChange = useStableCallback((entryId: string | undefined): void => {
+    onActiveEntryChange?.(entryId)
+  })
+  const anchorTrackingEnabled = onActiveEntryChange !== undefined
 
   // 贴底吸附：仅当用户主动上滚时脱离贴底（内容增长导致 scrollHeight 变大不得
-  // 误判为脱离）。阅读锚点追踪已拆到下方独立观察器，不再随 scroll 事件全量
-  // 测量行矩形（那会强迫所有屏外行参与布局计算，抵消渲染隔离收益）。
+  // 误判为脱离）。阅读锚点追踪见下方观察器（不随 scroll 事件测量行矩形）。
   useEffect(() => {
     const el = scrollRef.current
     if (el === null) return
@@ -1162,13 +1207,13 @@ export function ConversationTimeline({
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
 
-  // 视口当前阅读锚点追踪（供大纲浮层高亮）：优先 IntersectionObserver——观察
-  // 区域下缘收窄到「容器顶 + OUTLINE_ACTIVE_LINE_PX 基准线」，行相交 ⟺ 行顶
-  // 已越过基准线，最后一个相交索引与 resolveActiveOutlineEntryId「最后一个
-  // 越过基准线的锚点」语义对齐（见 timeline-containment-model）。锚点集合或
-  // 容器高度变化时重绑观察器；无 IO 环境退化为 rAF 节流的整列测量。
+  // 视口当前阅读锚点追踪（供大纲浮层高亮）：IntersectionObserver 观察区域
+  // 下缘收窄到「容器顶 + OUTLINE_ACTIVE_LINE_PX 基准线」，行相交 ⟺ 行顶已
+  // 越过基准线，最后一个相交索引与 resolveActiveOutlineEntryId 语义对齐
+  //（见 timeline-containment-model），屏外行不被 rect 测量强制布局；锚点集合
+  // 或容器高度变化时重绑，无 IO 环境退化为 rAF 节流整列测量。
   useEffect(() => {
-    if (onActiveEntryChange === undefined) return
+    if (!anchorTrackingEnabled) return
     const scroller = scrollRef.current
     const inner = innerRef.current
     if (scroller === null || inner === null) return
@@ -1180,7 +1225,7 @@ export function ConversationTimeline({
     const publish = (nextActive: string | undefined): void => {
       if (nextActive === lastActiveEntryRef.current) return
       lastActiveEntryRef.current = nextActive
-      onActiveEntryChangeRef.current?.(nextActive)
+      notifyActiveEntryChange(nextActive)
     }
 
     if (typeof IntersectionObserver === 'undefined') {
@@ -1238,17 +1283,15 @@ export function ConversationTimeline({
       io?.disconnect()
       ro?.disconnect()
     }
-  }, [anchorSignature])
+  }, [anchorTrackingEnabled, anchorSignature, notifyActiveEntryChange])
 
-  // 响应大纲面板点击定位：目标行已在本次渲染中解除渲染隔离（releasedEntryIds
-  // 含 outlineScrollRequest.entryId），本 effect 在 DOM commit 后运行，
-  // scrollIntoView 以真实布局测量定位；平滑滚动到对应消息块（或助手回复内指定
-  // 的 h1~h3 标题，按 DOM 顺序取序数——渲染隔离保留完整 DOM，序数与大纲提取
-  // 一致）并触发闪烁高亮。
+  // 响应大纲面板点击定位：目标行已在同一渲染中解除渲染隔离（releasedEntryIds
+  // 含请求 entryId），本 effect 于 DOM commit 后以真实布局测量定位；heading 按
+  // DOM 顺序取序数（渲染隔离保留完整 DOM，与大纲提取一致）。tick 仅在目标
+  // 真实存在并处理后消费：目标尚未加载（历史分页未及）时不消费也不标记，
+  // 锚点集合变化后重试，绝不把请求静默丢弃。
   useEffect(() => {
     if (!outlineScrollRequest || outlineScrollRequest.tick === lastOutlineTickRef.current) return
-    lastOutlineTickRef.current = outlineScrollRequest.tick
-    stickToBottomRef.current = false
     const container = innerRef.current
     if (container === null) return
 
@@ -1260,6 +1303,8 @@ export function ConversationTimeline({
       }
     }
     if (targetWrapper === null) return
+    lastOutlineTickRef.current = outlineScrollRequest.tick
+    stickToBottomRef.current = false
 
     let scrollEl: HTMLElement = targetWrapper
     if (outlineScrollRequest.headingIndex !== undefined) {
@@ -1269,18 +1314,20 @@ export function ConversationTimeline({
         scrollEl = matchedHeading
       }
     }
-    // 大纲定位：目标对齐到滚动区顶部（而非居中），便于从该条消息开始向下阅读
+    // 大纲定位：目标对齐到滚动区顶部（而非居中），便于从该条消息开始向下阅读。
     scrollEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    armScrollCalibration(scrollEl, 'start')
     setLocalHighlightEntryId(outlineScrollRequest.entryId)
-    if (onActiveEntryChange !== undefined) {
+    if (anchorTrackingEnabled) {
       lastActiveEntryRef.current = outlineScrollRequest.entryId
-      onActiveEntryChange(outlineScrollRequest.entryId)
+      notifyActiveEntryChange(outlineScrollRequest.entryId)
     }
-    const timer = setTimeout(() => {
+    if (outlineHighlightTimerRef.current !== null) clearTimeout(outlineHighlightTimerRef.current)
+    outlineHighlightTimerRef.current = setTimeout(() => {
+      outlineHighlightTimerRef.current = null
       setLocalHighlightEntryId((current) => (current === outlineScrollRequest.entryId ? null : current))
     }, 2400)
-    return () => clearTimeout(timer)
-  }, [outlineScrollRequest, onActiveEntryChange])
+  }, [outlineScrollRequest, anchorTrackingEnabled, notifyActiveEntryChange, anchorSignature, armScrollCalibration])
 
   // 监听内部容器高度变化（思考流式增长、命令追加、分组自动展开/收起），贴底状态下实时跟随到底部。
   useEffect(() => {

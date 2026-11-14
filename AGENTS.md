@@ -70,6 +70,8 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
   - `unit` = `protocol + cli + web`（进程内 / happy-dom DOM 模拟，不起真实服务）——改协议、CLI、Web 时默认跑；
   - `integration` = `kernel + node + payload + desktop`（真实进程、SQLite、Git、WebSocket、`createHelm`、daemon、payload 组装与桌面壳 Hub 子进程监督，全部视为集成）——改 kernel / node / payload / desktop 时必跑；
   - 跨档契约变更两档都跑；合并前与全量验收跑 `test:all`。不变量 `all = unit ∪ integration` 不重不漏；新测试文件必须落在已登记包的 `test/` 目录，新包同步更新 `scripts/test-suites.mjs` 的 `SUITES` 分档。
+- **快速反馈门（补充而非替代）**：`pnpm check:changed` 按变更集（`--base <ref>` 显式基线优先；默认取分支 upstream 或 origin/HEAD 的 merge-base，均无则报错要求 `--base`，绝不静默退化 HEAD~1；变更集 = 已提交 ∪ 暂存/未暂存 ∪ 未跟踪；pnpm 传参用 `--` 分隔，如 `pnpm check:changed -- --base main --list`）选受影响包（workspace 依赖反向闭包，锁文件/根配置/测试基础设施（含 `scripts/**/*.mjs`）变更触发全档），顺序跑 `pnpm typecheck` →（选中 desktop 测试时先 `pnpm --filter @helm/desktop run build`，typecheck 不产其 dist）→ 受影响包测试（复用 `run-tests.mjs`）；`--list` 先复核选集。`pnpm check:hygiene` 用 TypeScript AST 静态检查测试卫生（显式 timeout、skip 必附理由、禁设 `HELM_TEST_SUITE_TIMEOUT_MS`）。二者只提供增量快速反馈，不改变本节分档必跑与合并前 `test:all` 的规定。
+- **进程 kill 纪律**：只允许终止**自己 spawn 并持有 PID/句柄**的进程（POSIX：独立进程组 `kill(-pid)`，宽限后 SIGKILL；Windows：`taskkill /PID <pid> /T /F` 杀 owned `ChildProcess` 整棵树，参考 `scripts/run-tests.mjs`）；确需按端口清理时，必须先核验监听进程的 cwd 与实际归属再终止。**严禁按模糊名称/路径发信号（如 `pkill -f`、`pgrep | xargs kill`、`taskkill /IM`）**（会误杀他人会话、其他 worktree 的 dev 服务与无关系统进程），严禁猜测 PID。
 
 ## 6. 开发流程与多智能体协作
 

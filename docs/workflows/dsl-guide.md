@@ -50,9 +50,10 @@ helm workflows run ./review.js --args '{"pr": 1024, "strict": true}'
 | `effort` | `string` | 思考力度：`minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
 | `schema` | `object` | 结构化输出的 JSON Schema |
 | `attachments` | `string[]` | 本次调用携带的产物 ID 列表 |
+| `secretNames` | `string[]` | 显式授予外部运行时（如 `herdr:` 窗格）注入的父会话机密环境变量名列表。缺省不携带任何父会话机密；名字需为合法环境变量名且在父会话 stash 内现存（缺失显式报错）；仅外部运行时消费，原生 Profile 子会话不支持——非空授予到达原生执行行显式报错 `unsupported_secret_grant`（空数组等同未授予）；按次授予，resume 不自动沿用；字段参与恢复缓存指纹 |
 | `maxSubagentDepth` | `number` | 相对任务树根的绝对子代理层级上限（1..5 整数；默认继承上限 2，根会话为第 0 层）。根会话可为大任务提高上限；受管子代理不得提高继承上限。续接未传时保留授权，显式设置重新校验；字段参与恢复缓存指纹 |
 
-选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, maxSubagentDepth`。
+选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, secretNames, maxSubagentDepth`。
 
 **结构化输出**：配置 `schema` 时宿主为子智能体挂载结构化契约，引擎解析其 JSON 回复并按 Schema 校验，通过则返回原生对象，不通过（非 JSON 或不合契约）返回 `null`：
 

@@ -1,6 +1,6 @@
 /**
  * pre-ready 桌面身份：Linux setDesktopName 的取值与调用时机（必须早于 whenReady）、
- * 非 Linux 平台零行为、旧版 Electron 缺 API 安全跳过、与 electron-builder 产物的
+ * 非 Linux 平台零行为、与 electron-builder 产物的
  * .desktop 文件基名跨文件锁定一致。
  */
 import { strict as assert } from 'node:assert';

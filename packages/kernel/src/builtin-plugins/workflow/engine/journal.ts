@@ -124,6 +124,8 @@ export interface AgentJournalKeyInput {
   attachments?: string[]
   /** 派工上限改变会改变子代理行为，不得重放原授权下的缓存结果。 */
   maxSubagentDepth?: number
+  /** 机密授予变化会改变外部运行时环境，不得重放旧授权下的缓存结果。 */
+  secretNames?: string[]
 }
 
 /**
@@ -135,8 +137,10 @@ export interface AgentJournalKeyInput {
  * 在 schema 有/无与 attachments 有/无的四象限里产生同 canonical 异语义的碰撞。
  * 因此 v2 一次性收敛为带版本标记的固定槽：attachments 恒占第 10 槽（null =
  * 未提供），schema 恒占第 11 槽（null = 未提供），任何后续新字段只能追加在
- * 版本号之后。v1→v2 变更即 key 全体失配（开发阶段无迁移，旧账本安全降级为
- * 断链重跑）。
+ * 版本号之后。secretNames 追加为第 13 槽（null = 未提供；无条件占位，不与
+ * 任何旧尾槽碰撞）。注意：无条件占位使本变更后**全部调用 key 与旧账本失配**
+ * （含未携带 secretNames 的调用）——开发阶段无迁移，旧账本安全降级为断链
+ * 重跑，不存在「未携带新字段则 key 不变」的兼容承诺。
  */
 export function agentJournalKey(input: AgentJournalKeyInput): string {
   const canonical = JSON.stringify([
@@ -152,6 +156,7 @@ export function agentJournalKey(input: AgentJournalKeyInput): string {
     input.attachments !== undefined ? input.attachments : null,
     input.schema !== undefined ? input.schema : null,
     input.maxSubagentDepth ?? null,
+    input.secretNames !== undefined ? input.secretNames : null,
   ])
   return createHash('sha256').update(canonical).digest('hex').slice(0, 32)
 }

@@ -701,6 +701,7 @@ test('models filter：查看禁用清单 / --disable 全量替换 / --clear 清�
 test('events watch：SSE snapshot + 增量，--json 每行输出', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const snapshot = {
+    bootId: '00000000-0000-0000-0000-000000000001',
     seq: 5,
     conversations: [{ id: 1, title: '助理', profileId: 'assistant', tags: [], cwd: '/', model: 'm', status: 'idle', stateChangeSeq: 1, completionSeq: 1, unread: false, pinned: false, pendingAskCount: 0, createdAt: 0, updatedAt: 0 }],
     pendingAsks: [],

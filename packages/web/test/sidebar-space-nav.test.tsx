@@ -51,6 +51,7 @@ const CONV_1 = {
 }
 
 const snapshotPayload = {
+  bootId: 'test-boot',
   seq: 1,
   conversations: [CONV_1],
   pendingAsks: [],

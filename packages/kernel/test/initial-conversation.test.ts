@@ -40,7 +40,7 @@ function initialConvOf(app: Awaited<ReturnType<typeof createHelm>>) {
   return conv
 }
 
-test('初始会话删除与缺省 trigger 投递', async (t) => {
+test('初始会话删除与缺省 trigger 投递', { timeout: 60_000 }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'helm-initial-del-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
 

@@ -396,7 +396,7 @@ afterEach(() => {
 // 1. catalog：协议分流 / thinkingLevelMap / adaptiveThinking
 // ---------------------------------------------------------------------------
 
-test('magpie1: magpieApi 协议分流与 baseUrl 挂点', () => {
+test('magpie1: magpieApi 协议分流与 baseUrl 挂点', { timeout: 60_000 }, () => {
   assert.deepEqual(magpieApi(['/v1/responses']), { api: 'openai-responses', endpoint: 'v1' })
   assert.deepEqual(magpieApi(['/v1/messages']), { api: 'anthropic-messages', endpoint: 'root' })
   assert.deepEqual(magpieApi([]), { api: 'openai-completions', endpoint: 'v1' })
@@ -404,7 +404,7 @@ test('magpie1: magpieApi 协议分流与 baseUrl 挂点', () => {
   assert.deepEqual(magpieApi(['/v1/messages', '/v1/responses']), { api: 'openai-responses', endpoint: 'v1' }, 'responses 优先')
 })
 
-test('magpie2: toPiModels 完整映射——api/baseUrl/thinkingLevelMap/forceAdaptiveThinking/ownedBy', () => {
+test('magpie2: toPiModels 完整映射——api/baseUrl/thinkingLevelMap/forceAdaptiveThinking/ownedBy', { timeout: 60_000 }, () => {
   const root = 'http://127.0.0.1:3425'
   const models = toPiModels(CATALOG.data as never, root)
   const byId = new Map(models.map((m) => [m.id, m]))
@@ -437,7 +437,7 @@ test('magpie2: toPiModels 完整映射——api/baseUrl/thinkingLevelMap/forceAd
   assert.equal(relay.magpieOwnedBy, 'opencode-go', 'owned_by 透传供配额归属')
 })
 
-test('magpie3: thinkingLevelMap 边界——空档位 / Anthropic off 键语义', () => {
+test('magpie3: thinkingLevelMap 边界——空档位 / Anthropic off 键语义', { timeout: 60_000 }, () => {
   assert.equal(thinkingLevelMap([], false), undefined)
   const map = thinkingLevelMap(['none', 'high'], true)!
   assert.equal(map.off, 'none', '有 none 档时 off → none')
@@ -445,7 +445,7 @@ test('magpie3: thinkingLevelMap 边界——空档位 / Anthropic off 键语义'
   assert.equal('off' in mapNoNone, false, 'Anthropic 无 none 档时 off 键删除（SDK 缺省发送禁用 thinking）')
 })
 
-test('magpie4: adaptiveThinking 版本判定', () => {
+test('magpie4: adaptiveThinking 版本判定', { timeout: 60_000 }, () => {
   assert.equal(adaptiveThinking('claude-sonnet-4.6'), true)
   assert.equal(adaptiveThinking('anthropic/claude-opus-4.6-x'), true)
   assert.equal(adaptiveThinking('claude-opus-5-5'), true)
@@ -457,7 +457,7 @@ test('magpie4: adaptiveThinking 版本判定', () => {
 // 2. gateway 配置解析
 // ---------------------------------------------------------------------------
 
-test('magpie5: resolveGateway 优先级 / configuredRoot 语义 / 非法显式 URL 显式报错', () => {
+test('magpie5: resolveGateway 优先级 / configuredRoot 语义 / 非法显式 URL 显式报错', { timeout: 60_000 }, () => {
   const none = resolveGateway({}, {})
   assert.equal(none.root, DEFAULT_MAGPIE_ROOT)
   assert.equal(none.token, DEFAULT_MAGPIE_TOKEN)

@@ -1,6 +1,8 @@
 /**
- * `GET /api/events` SSE 契约：首帧 snapshot + seq 水位线，随后增量事件流。
- * 客户端断线重连后凭首帧 snapshot 自动对齐状态，绝不丢帧。
+ * `GET /api/events` SSE 契约：首帧 snapshot（或续传 resumed）+ seq 水位线，
+ * 随后增量事件流。短断线重连可携带 `?afterSeq=<seq>&bootId=<bootId>` 续传：
+ * 校验通过首帧改发 resumed 并补发缺口帧；跨代（服务端重启）、seq 越界或
+ * 缓存缺口一律回退 snapshot 全量对齐，绝不越缺口假成功。
  */
 
 import type { AskSpec } from './ask.js'
@@ -12,8 +14,16 @@ import type { PluginUiContribution } from './ui.js'
 /** SSE 全局事件序号（水位线）。 */
 export type HelmEventSeq = number
 
+/**
+ * 服务端事件代标识（EventHub 实例随机生成）：seq 只在同代内连续可比，
+ * 跨代（服务端重启换实例）必须全量快照，绝不凭裸 seq 续传。
+ */
+export type HelmBootId = string
+
 /** 连接建立时原子读取的全量快照（首帧 `event: snapshot`）。 */
 export interface HelmSnapshot {
+  /** 当前事件代：客户端记录后作为重连续传凭据之一。 */
+  bootId: HelmBootId
   seq: HelmEventSeq
   conversations: ConversationSummary[]
   /** 当前待答 AskDoc（status = pending）。 */
@@ -158,4 +168,18 @@ export type HelmEvent =
 export interface HelmEventFrame {
   seq: HelmEventSeq
   event: HelmEvent
+}
+
+/**
+ * 续传控制首帧（`event: resumed`）：`?afterSeq`+`?bootId` 双凭据校验通过后
+ * 发送，随后按 seq 顺序补发 `(afterSeq, headSeq]` 的缓存帧再接实时增量。
+ * 客户端必须校验 bootId 与自身水位一致，且追平 headSeq 后才算恢复实时。
+ */
+export interface HelmResumedFrame {
+  /** 服务端当前事件代（与请求携带的一致；跨代时服务端改发 snapshot）。 */
+  bootId: HelmBootId
+  /** 服务端确认续传的客户端水位（等于请求 afterSeq）。 */
+  seq: HelmEventSeq
+  /** 建连采样时刻的服务端事件头水位；补发追平该值后客户端才算 live。 */
+  headSeq: HelmEventSeq
 }

@@ -68,6 +68,7 @@ function installFetch(): void {
     if (url === '/api/events') {
       return new Response(hangingEventStream((send) => {
         send(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify({
+          bootId: 'test-boot',
           seq: 1,
           conversations,
           pendingAsks: [],

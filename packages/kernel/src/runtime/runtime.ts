@@ -24,6 +24,8 @@ import {
   type ConversationPatch,
   type ConversationSummary,
   type ConversationWithdrawResponse,
+  type ConversationInput,
+  type TurnSettledPayload,
   type EnvExecRequest,
   type EnvExecResponse,
   type ExternalTriggerEnvelope,
@@ -385,8 +387,13 @@ export class KernelRuntime {
     this.hubUrlValue = url
   }
 
-  buildSpawnEnv(conversationId: number, cwd: string, nodeId?: string): Record<string, string> {
-    return this.svc.agentSpawn.buildSpawnEnv(conversationId, cwd, nodeId)
+  buildSpawnEnv(
+    conversationId: number,
+    cwd: string,
+    nodeId?: string,
+    options?: { secretNames?: string[] },
+  ): Record<string, string> {
+    return this.svc.agentSpawn.buildSpawnEnv(conversationId, cwd, nodeId, options)
   }
 
   // ------------------------------------------------------------------
@@ -493,12 +500,17 @@ export class KernelRuntime {
     return this.pluginHost
   }
 
-  private async dispatchTurnSettled(payload: unknown, consumed: unknown): Promise<void> {
-    const convId = (payload as { conversationId: number }).conversationId
+  private async dispatchTurnSettled(payload: TurnSettledPayload, consumed: ConversationInput[]): Promise<void> {
+    const convId = payload.conversation.id
     for (const [id, entry] of this.handledToolCalls) {
       if (entry.conversationId === convId) this.handledToolCalls.delete(id)
     }
-    const turnEvent = { ...(payload as Record<string, unknown>), inputs: consumed }
+    // turn 作用域机密在本回合权威结算点回收（completed/failed/aborted 统一经此，
+    // settledRuns 防双报）：先于钩子链推进结算序——turn_settled 链内 late 登记
+    // 的 turn 机密出生序 = 新计数，属下一回合，不被本次误扫；仅停止注入，
+    // byUuid 旧值保留继续脱敏。
+    this.stashService.settleTurn(convId)
+    const turnEvent: TurnSettledPayload = { ...payload, inputs: consumed }
     try {
       const outcome = await this.svc.hookBridge.runHookChain('turn_settled', turnEvent)
       if (outcome?.action === 'handled') return

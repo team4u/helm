@@ -119,12 +119,19 @@ export interface HerdrTransport {
 export interface HerdrPluginDependencies {
   profiles: { get(id: string): Promise<Profile | undefined> }
   /**
-   * 外部 spawn 环境变量：目标节点受管回连集合（stash + 受管 HELM_*）。
+   * 外部 spawn 环境变量：目标节点受管回连集合（受管 HELM_*；缺省不携带任何
+   * 父会话 stash 机密——外部窗格最小授权）。
    * nodeId 为实际选定的目标节点（'local' 显式表示本机；绝不传 undefined 让
    * 内核按父会话继承——父会话绑定远端时会把本机窗格误配到远端）。
-   * 仅显式 session/stash 变量，绝不携带整个继承的 process 环境。
+   * 仅显式 secretNames 时逐名注入父会话机密（需现存，缺失显式抛错）；
+   * 绝不携带整个继承的 process 环境。
    */
-  buildSpawnEnv(conversationId: number, cwd: string, nodeId: string): Record<string, string>
+  buildSpawnEnv(
+    conversationId: number,
+    cwd: string,
+    nodeId: string,
+    options?: { secretNames?: string[] },
+  ): Record<string, string>
   redact(text: string): string
   runLocalGate(command: string, options: { cwd?: string; conversationId?: number; signal?: AbortSignal; env?: Record<string, string> }): Promise<AgentGateResult>
   /** 附件产物元数据解析（含授权校验；不存在/越权抛 HelmError）。可选注入。 */

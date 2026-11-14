@@ -31,6 +31,8 @@ export {
   isValidEnvName,
   makePlaceholder,
   parsePlaceholder,
+  validateSecretLifetime,
+  MAX_SECRET_TTL_MS,
   type StashedSecret,
 } from './secret-stash.js'
 

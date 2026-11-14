@@ -54,7 +54,7 @@ function queueOnlyLive(live: ConversationLive): ConversationLive {
 
 /** 新连接必须重新加载详情和未随快照提供的 public docs：快照只含 pluginDocs 直投部分。 */
 export function applySnapshot(previous: LiveState, snapshot: HelmSnapshot): LiveState {
-  if (!Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0 || !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.pendingAsks) || !Array.isArray(snapshot.plugins) || !Array.isArray(snapshot.ui)) {
+  if (typeof snapshot.bootId !== 'string' || snapshot.bootId === '' || !Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0 || !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.pendingAsks) || !Array.isArray(snapshot.plugins) || !Array.isArray(snapshot.ui)) {
     throw new Error('内核实时快照格式无效')
   }
   if (snapshot.conversationLives !== undefined && !Array.isArray(snapshot.conversationLives)) throw new Error('内核实时快照格式无效')

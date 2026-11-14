@@ -2,10 +2,22 @@
  * EventHub：全局持久化 seq 的事件总线 + SSE 快照/增量流。
  *
  * 语义（按设计文档 §1.2）：
- * - seq 单调递增且持久化（helm_seq），重启不回退；只在事件成功组装脱敏后推进序号；
+ * - seq 单调递增且持久化（helm_seq），重启不回退；发布严格按「组装脱敏 -> 编码
+ *   -> 持久化 nextSeq -> 推进内存水位 -> 入 ring -> 广播」排序，任一步失败都不
+ *   推进水位、不留半成品（绝不产生无 ring 记录的裸 seq 缺口）；
+ * - 每个实例随机生成 bootId（事件代）：`?afterSeq`+`?bootId` 双凭据均校验通过才
+ *   允许短断线续传（首帧 resumed + ring 补发 + 实时增量，严格无重复无遗漏）；
+ *   跨代、seq 越界（未来）或 ring 缺口一律回退 snapshot 全量对齐，绝不越缺口
+ *   假成功；畸形查询参数（非非负安全整数/长度超限/单凭据）显式 400；
+ * - 续传 ring：保存发布时编码一次的不可变 SSE 字节（订阅者与重放共享同一份，
+ *   防订阅者篡改重放数据；不复制 SQLite 事件库），帧数/字节双上限（默认 256 帧 /
+ *   1 MiB）超限从头淘汰；单帧超字节预算即清空 ring，禁止任何客户端跨该帧续传；
+ *   重放经 ReadableStream.pull 按消费者节奏逐步冲刷，绝不在 start 内一次性塞满
+ *   队列（快消费者也不被字节预算误杀；冲刷期间新到达帧另行计入慢消费者预算）；
  * - publish 与 subscribe 同名保留（app 使用 kernel.events.publish(type, payload)）；
- * - response(request)：标准 SSE——先订阅缓冲，再同步取快照，首帧
- *   `event: snapshot`（HelmSnapshot），随后逐帧 `event: <type>` + `data: {seq,event}`；
+ * - response(request)：标准 SSE——先订阅缓冲，再同步采样（快照或 ring+headSeq），
+ *   首帧 `event: snapshot`（HelmSnapshot，含 bootId）或 `event: resumed`
+ *   （HelmResumedFrame），随后逐帧 `event: <type>` + `data: {seq,event}`；
  *   Request.signal abort 与 ReadableStream.cancel 均退订关流；无事件时保持连接（纯实时流）；
  * - sseStream(consume)：可编程消费入口（同 snapshot 先行语义），返回退订句柄；
  *   消费者 return false 或抛错即隔离该订阅并清理，不影响其他订阅者；
@@ -20,9 +32,11 @@
  *   对齐），绝不静默丢帧；快照 provider 是同步的，无需异步快照系统。
  */
 
+import { randomUUID } from 'node:crypto'
 import { HelmError } from '@helm/protocol'
 import type {
   AskSpec,
+  SecretLifetime,
   ConversationEntry,
   ConversationLive,
   ConversationSummary,
@@ -35,23 +49,43 @@ import type {
   PublicPluginSessionDoc,
 } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
+import { validateSecretLifetime } from '../services/secret-stash.js'
 
-export type SnapshotProvider = () => HelmSnapshot
+/**
+ * 快照内容 provider：不含 bootId（由 EventHub 实例注入，单一事实来源），
+ * seq 为 provider 侧已知水位，最终以 hub 当前 seq 取最大为准。
+ */
+export type SnapshotProvider = () => Omit<HelmSnapshot, 'bootId'>
 
 export interface EventSubscription {
   unsubscribe(): void
 }
 
-/** SSE 输出帧：首帧 snapshot 或增量 {seq, event}。 */
+/** SSE 输出帧：首帧 snapshot/resumed 控制帧或增量 {seq, event}。 */
 export type SseFrame = HelmSnapshot | HelmEventFrame
 
-interface QueuedFrame {
+/** SSE chunk 编码器（发布一次，ring、重放与全部订阅者复用同一份字节）。 */
+const SSE_ENCODER = new TextEncoder()
+
+function encodeSseChunk(name: string, data: unknown): Uint8Array {
+  return SSE_ENCODER.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)
+}
+
+/** 空闲心跳注释行（预编码共享；SSE 解析器忽略，不伪造业务事件）。 */
+const KEEPALIVE_CHUNK = SSE_ENCODER.encode(': keepalive\n\n')
+
+/** 续传 ring 条目：发布时编码的不可变 SSE 字节（防订阅者修改重放数据）。 */
+interface RingEntry {
   seq: number
-  event: HelmEvent
+  chunk: Uint8Array
 }
 
 /** 订阅建立到快照冲刷完成之间的未决帧数上限（溢出即慢客户端，关流重连）。 */
 const MAX_PENDING_EVENTS = 512
+
+/** 续传 ring 默认上限：256 帧 / 1 MiB 字节（超限从头剪裁）。 */
+const DEFAULT_RING_MAX_FRAMES = 256
+const DEFAULT_RING_MAX_BYTES = 1024 * 1024
 
 const CONVERSATION_STATUSES = new Set(['working', 'blocked', 'done', 'idle', 'error'])
 const ASK_STATUSES = new Set(['pending', 'answered', 'cancelled', 'superseded'])
@@ -145,6 +179,14 @@ function assertAskSpecShape(value: unknown): void {
       throw new HelmError('invalid_event', 'ask.upsert 的 field 需要 { name: string; label: string; type: text|select|confirm } 形状', 500)
     }
     const f = field as Record<string, unknown>
+    if (f['secretLifetime'] !== undefined) {
+      if (f['secret'] !== true) throw new HelmError('invalid_event', 'ask.upsert 的 secretLifetime 仅允许用于 secret 字段', 500)
+      try {
+        validateSecretLifetime(f['secretLifetime'] as SecretLifetime, 'ask.upsert field.secretLifetime')
+      } catch (error) {
+        throw new HelmError('invalid_event', error instanceof Error ? error.message : 'ask.upsert field.secretLifetime 格式无效', 500)
+      }
+    }
     if (f['type'] === 'select' && (!Array.isArray(f['options']) || f['options'].length === 0)) {
       throw new HelmError('invalid_event', 'ask.upsert 的 select 字段需要非空 options（与 createAsk 校验一致）', 500)
     }
@@ -208,7 +250,14 @@ function pruneUndefined(value: unknown, visiting: WeakSet<object>): unknown {
 
 export class EventHub {
   private seqValue: number
-  private readonly subscribers = new Set<(frame: HelmEventFrame) => void>()
+  /** 事件代标识（实例随机生成）：续传双凭据之一，同代内 seq 才连续可比。 */
+  readonly bootId: string
+  /** 续传 ring（seq 连续区段，从头淘汰；单帧超预算即清空禁跨帧续传）。 */
+  private readonly ring: RingEntry[] = []
+  private ringBytes = 0
+  private readonly ringMaxFrames: number
+  private readonly ringMaxBytes: number
+  private readonly subscribers = new Set<(frame: HelmEventFrame, chunk: Uint8Array) => void>()
   private readonly snapshot: SnapshotProvider
   private readonly persistSeq: (seq: number) => void
   private readonly streamClosers = new Set<() => void>()
@@ -230,12 +279,21 @@ export class EventHub {
     maxPendingBytes?: number
     /** SSE 空闲心跳间隔（毫秒）；默认 15s，非正值停用（测试用小值加速）。 */
     keepaliveMs?: number
+    /** 事件代标识（默认随机 UUID；测试可注入固定值）。 */
+    bootId?: string
+    /** 续传 ring 帧数上限；默认 256（测试可调小验证淘汰）。 */
+    ringMaxFrames?: number
+    /** 续传 ring 字节上限；默认 1 MiB（测试可调小验证淘汰）。 */
+    ringMaxBytes?: number
   }) {
     this.seqValue = options.initialSeq
+    this.bootId = options.bootId ?? randomUUID()
     this.snapshot = options.snapshot
     this.persistSeq = options.persistSeq ?? (() => {})
     this.maxPendingBytes = options.maxPendingBytes ?? DEFAULT_MAX_PENDING_BYTES
     this.keepaliveMs = options.keepaliveMs ?? DEFAULT_KEEPALIVE_MS
+    this.ringMaxFrames = options.ringMaxFrames ?? DEFAULT_RING_MAX_FRAMES
+    this.ringMaxBytes = options.ringMaxBytes ?? DEFAULT_RING_MAX_BYTES
   }
 
   get seq(): number {
@@ -254,28 +312,61 @@ export class EventHub {
   }
 
   /**
-   * 发布事件。
-   * 先组装并脱敏事件（失败抛 HelmError 且不推进 seq），成功才推进序号并投递。
+   * 发布事件（严格顺序：组装脱敏 -> 编码 -> 持久化 -> 推进内存 -> 入 ring -> 广播）。
+   * buildEvent/persistSeq 失败均抛出且不推进水位、不入 ring、不广播——持久化
+   * 报错绝不留下裸 seq（否则下一次成功发布会在 ring 里形成缺口，续传时假承诺）。
+   * 帧只编码一次（不可变字节），ring 重放与全部订阅者共享同一份。
    */
   publish(type: string, payload: unknown): void {
+    const nextSeq = this.seqValue + 1
     const event = this.buildEvent(type, payload)
-    this.seqValue += 1
-    this.persistSeq(this.seqValue)
-    const frame: HelmEventFrame = { seq: this.seqValue, event }
+    const frame: HelmEventFrame = { seq: nextSeq, event }
+    // V8 无法 freeze 非空 TypedArray 视图；不可变性由结构保证：ring 只存这份独立
+    // 编码字节（不共享事件对象图，订阅者改对象改不到重放数据），宿主内全部消费
+    // 路径（ring 重放 / controller.enqueue）均只读，绝不回写。
+    const chunk = encodeSseChunk(String(event.type), frame)
+    this.persistSeq(nextSeq)
+    this.seqValue = nextSeq
+    this.pushRing(nextSeq, chunk)
     for (const deliver of [...this.subscribers]) {
       try {
-        deliver(frame)
+        deliver(frame, chunk)
       } catch {
         // 订阅方回调抛错只隔离自身（各订阅内部自行清理），不影响其他订阅者。
       }
     }
   }
 
-  /** 当前快照（供 HTTP GET 与 SSE 首帧复用）；经 prune + 递归脱敏后返回。 */
+  /** ring 追加：非连续 append（防御：任何途径产生的裸 seq 缺口）先作废旧区段，
+   * 从本帧重建；帧数/字节超限从头淘汰保持连续；单帧超字节预算即清空，
+   * 禁止任何客户端跨该帧续传（宁可回退 snapshot，不越缺口假成功）。 */
+  private pushRing(seq: number, chunk: Uint8Array): void {
+    const last = this.ring[this.ring.length - 1]
+    if (last !== undefined && last.seq + 1 !== seq) {
+      this.ring.length = 0
+      this.ringBytes = 0
+    }
+    const bytes = chunk.byteLength
+    if (bytes > this.ringMaxBytes) {
+      this.ring.length = 0
+      this.ringBytes = 0
+      return
+    }
+    this.ring.push({ seq, chunk })
+    this.ringBytes += bytes
+    while (this.ring.length > this.ringMaxFrames || this.ringBytes > this.ringMaxBytes) {
+      const evicted = this.ring.shift()
+      if (evicted === undefined) break
+      this.ringBytes -= evicted.chunk.byteLength
+    }
+  }
+
+  /** 当前快照（供 HTTP GET 与 SSE 首帧复用）；经 prune + 递归脱敏后返回，
+   * 并注入实例 bootId（事件代单一事实来源）。 */
   currentSnapshot(): HelmSnapshot {
     const snap = this.snapshot()
     const redacted = redactJsonValue(pruneUndefined(snap, new WeakSet()), (t) => this.redact(t)) as HelmSnapshot
-    return { ...redacted, seq: Math.max(snap.seq, this.seqValue) }
+    return { ...redacted, seq: Math.max(snap.seq, this.seqValue), bootId: this.bootId }
   }
 
   /** 订阅增量帧；返回退订函数（HTTP 层只消费 response，此入口供编程消费与测试）。 */
@@ -313,39 +404,63 @@ export class EventHub {
   }
 
   /**
-   * HTTP SSE 响应：立即返回 Response；首帧 snapshot，随后按 seq 增量。
-   * request.signal abort 与 ReadableStream.cancel 都退订并关流；未决帧数/字节数
-   * 超上限的慢客户端被明确关流（重连凭 snapshot 对齐）；无事件时保持连接，绝不回退 JSON。
-   * 空闲期间按 keepaliveMs 周期写入 `: keepalive` SSE 注释行（客户端解析器忽略，
-   * 不伪造业务事件、不推进 seq），让卡死连接可被客户端检测；心跳走统一 write
-   * 背压路径（堆积超限同样关流），abort/cancel/close 随 shutdown 一并清理 timer。
+   * HTTP SSE 响应：立即返回 Response；首帧 snapshot（或续传 resumed），随后按 seq 增量。
+   * `?afterSeq`+`?bootId` 双凭据校验通过则首帧改发 resumed 并按 seq 补发 ring 缓存帧；
+   * 跨代/未来 seq/缓存缺口一律回退 snapshot；畸形凭据显式 400。
+   * 重放字节不经 start 一次性入队（消费者尚未 pull 会撞上 1 MiB 排队预算，误杀快
+   * 消费者），而是统一进入冲刷队列由 pull 按消费者节奏逐步冲刷；冲刷期间新到达的
+   * 实时帧计入独立慢消费者预算（replay 引用共享 ring 字节，不重复计数）。
+   * request.signal abort 与 ReadableStream.cancel 都退订关流；无事件时保持连接，
+   * 绝不回退 JSON；空闲期间按 keepaliveMs 周期写入 `: keepalive` 注释行（仅在冲刷
+   * 完成后启动，冲刷期数据本身流动；心跳走统一 write 背压路径，abort/cancel/close
+   * 随 shutdown 一并清理 timer）。
    */
   response(request: Request): Response {
-    const encoder = new TextEncoder()
-    /** 快照冲刷完成前的未决帧（此后改用流内字节背压）。 */
-    let pending: string[] = []
-    let streaming = false
+    const query = EventHub.parseResumeQuery(request)
+    if (query.error !== undefined) {
+      // 边界强校验：畸形续传凭据显式 400，绝不静默忽略或半续传。
+      return new Response(JSON.stringify({ error: { code: 'invalid_input', message: query.error } }), {
+        status: 400,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      })
+    }
+
+    /** 冲刷队列条目：replay 引用（共享 ring 字节）或冲刷期间新到达帧/心跳。 */
+    interface OutboundEntry {
+      chunk: Uint8Array
+      /** 计入慢消费者预算的字节数（replay 引用为 0，不重复计数 ring 内存）。 */
+      liveBytes: number
+    }
+
+    let outbound: OutboundEntry[] = []
+    let outboundLiveBytes = 0
+    /** 重放/积压冲刷中：业务字节只入冲刷队列，由 pull 按消费者节奏逐步入队。 */
+    let flushing = false
     let closed = false
     let unsubscribe: (() => void) | undefined
     let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined
     let keepaliveTimer: ReturnType<typeof setInterval> | undefined
 
-    const encodeFrame = (name: string, data: unknown): string =>
-      `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
-
-    const write = (chunk: string): boolean => {
+    const write = (chunk: Uint8Array): boolean => {
       const controller = controllerRef
       if (controller === undefined || closed) return false
-      const bytes = encoder.encode(chunk)
       // 字节级有界背压：desiredSize = -排队字节数（hwm=0）；超限即慢客户端。
       const queuedBytes = controller.desiredSize === null ? 0 : -controller.desiredSize
-      if (queuedBytes + bytes.byteLength > this.maxPendingBytes) return false
+      if (queuedBytes + chunk.byteLength > this.maxPendingBytes) return false
       try {
-        controller.enqueue(bytes)
+        controller.enqueue(chunk)
         return true
       } catch {
         return false
       }
+    }
+
+    /** 冲刷期间到达的帧/心跳入冲刷队列尾（保持严格字节序；新字节计入慢消费者预算）。 */
+    const pushOutbound = (chunk: Uint8Array): boolean => {
+      if (outboundLiveBytes + chunk.byteLength > this.maxPendingBytes) return false
+      outboundLiveBytes += chunk.byteLength
+      outbound.push({ chunk, liveBytes: chunk.byteLength })
+      return true
     }
 
     const shutdown = (): void => {
@@ -367,30 +482,47 @@ export class EventHub {
       }
     }
 
-    // 先订阅再取快照（同 microtask 内完成，缓冲不丢帧）；快照失败同步抛给 HTTP 层。
+    const startKeepalive = (): void => {
+      // 空闲心跳：SSE 注释行（: 开头），客户端解析器忽略，绝不伪造业务事件、
+      // 不推进 seq；走统一 write 背压路径（不读的慢消费者堆积超限同样关流）。
+      if (this.keepaliveMs <= 0 || keepaliveTimer !== undefined || closed) return
+      keepaliveTimer = setInterval(() => {
+        if (!write(KEEPALIVE_CHUNK)) shutdown()
+      }, this.keepaliveMs)
+    }
+
+    // 先订阅再同步采样（同 microtask 内完成，缓冲不丢帧）；快照失败同步抛给 HTTP 层。
     const handle = this.openStream(
-      (frame) => {
+      (frame, chunk) => {
         if (closed) return false
-        const chunk = encodeFrame(String(frame.event.type), { seq: frame.seq, event: frame.event })
-        if (streaming) return write(chunk)
-        if (pending.length >= MAX_PENDING_EVENTS) {
-          // 快照尚未冲刷完就积压超限：明确关流，不静默丢帧。
-          return false
-        }
-        pending.push(chunk)
-        return true
+        // 冲刷期间到达的帧排在重放之后（严格字节序）；冲刷完转流式直写（字节背压接管）。
+        if (flushing) return pushOutbound(chunk)
+        return write(chunk)
       },
       shutdown,
     )
     unsubscribe = handle.unsubscribe
-    let snap: HelmSnapshot
-    try {
-      snap = this.currentSnapshot()
-    } catch (error) {
-      shutdown()
-      throw error
+
+    const resume = query.resume
+    let liveSeq: number
+    let handshake: Uint8Array
+    let replay: Uint8Array[] = []
+    if (resume !== undefined && this.canResume(resume)) {
+      // 续传：采样 headSeq + ring 切片（订阅已建立，此后发布进冲刷队列/直写，无窗口）。
+      liveSeq = this.seqValue
+      handshake = encodeSseChunk('resumed', { bootId: this.bootId, seq: resume.afterSeq, headSeq: liveSeq })
+      replay = this.ring.filter((entry) => entry.seq > resume.afterSeq).map((entry) => entry.chunk)
+    } else {
+      let snap: HelmSnapshot
+      try {
+        snap = this.currentSnapshot()
+      } catch (error) {
+        shutdown()
+        throw error
+      }
+      liveSeq = snap.seq
+      handshake = encodeSseChunk('snapshot', snap)
     }
-    const snapshotChunk = encodeFrame('snapshot', snap)
 
     const stream = new ReadableStream<Uint8Array>(
       {
@@ -410,34 +542,43 @@ export class EventHub {
             return
           }
           request.signal.addEventListener('abort', shutdown)
-          if (!write(snapshotChunk)) {
+          // 握手帧直接写入（受字节预算约束）；重放字节绝不在此入队——留给 pull
+          // 按消费者节奏逐步冲刷，避免消费者尚未 pull 就撞满 1 MiB 排队预算。
+          if (!write(handshake)) {
             shutdown()
             return
           }
-          if (!handle.goLive(snap.seq)) return
-          // goLive 已把缓冲冲刷进 pending；此后转流式直写（字节背压接管）。
-          streaming = true
-          for (const chunk of pending) {
-            if (!write(chunk)) {
-              shutdown()
-              return
-            }
+          outbound = replay.map((chunk) => ({ chunk, liveBytes: 0 }))
+          flushing = outbound.length > 0
+          // 冲刷订阅缓冲（seq > liveSeq 的帧）：冲刷中入冲刷队列尾，否则直写。
+          if (!handle.goLive(liveSeq)) return
+          if (!flushing) startKeepalive()
+        },
+        pull: () => {
+          if (closed || !flushing) return
+          const entry = outbound.shift()
+          if (entry === undefined) return
+          outboundLiveBytes -= entry.liveBytes
+          const controller = controllerRef
+          if (controller === undefined) return
+          // pull 语义：消费者已持有 pending read，本次入队直接满足读取，不堆积排队预算。
+          try {
+            controller.enqueue(entry.chunk)
+          } catch {
+            shutdown()
+            return
           }
-          pending = []
-          // 空闲心跳：SSE 注释行（: 开头），客户端解析器忽略，绝不伪造业务事件、
-          // 不推进 seq；走统一 write 背压路径（不读的慢消费者堆积超限同样关流），
-          // 断开（abort/cancel/hub.close）随 shutdown 一并清理 timer。
-          if (this.keepaliveMs > 0) {
-            keepaliveTimer = setInterval(() => {
-              if (!write(': keepalive\n\n')) shutdown()
-            }, this.keepaliveMs)
+          if (outbound.length === 0) {
+            flushing = false
+            startKeepalive()
           }
         },
         cancel: () => {
           shutdown()
         },
       },
-      // hwm=0：desiredSize 恒为 -排队字节数，供 write 做慢客户端判定。
+      // hwm=0：desiredSize 恒为 -排队字节数，供 write 做慢客户端判定；pull 仅在
+      // 队列空且存在 pending read 时触发，冲刷阶段每次至多入队一帧。
       { highWaterMark: 0, size: (c) => c.byteLength } satisfies QueuingStrategy<Uint8Array>,
     )
     return new Response(stream, {
@@ -450,15 +591,65 @@ export class EventHub {
     })
   }
 
+  /** 解析 `?afterSeq`/`?bootId` 续传查询：不携带即普通连接；携带则必须成对、不
+   * 重复且形状合法（非负安全整数 / 长度 1..64 的非空字符串），畸形/重复显式 400，
+   * 绝不半续传（URLSearchParams.get 会吞重复参数，重复即拒绝）。 */
+  private static parseResumeQuery(request: Request): { resume?: { afterSeq: number; bootId: string }; error?: string } {
+    let params: URLSearchParams
+    try {
+      params = new URL(request.url).searchParams
+    } catch {
+      return { error: '无法解析请求 URL 查询参数' }
+    }
+    const afterSeqAll = params.getAll('afterSeq')
+    const bootIdAll = params.getAll('bootId')
+    if (afterSeqAll.length > 1 || bootIdAll.length > 1) {
+      return { error: '?afterSeq 与 ?bootId 不得重复携带' }
+    }
+    if (afterSeqAll.length === 0 && bootIdAll.length === 0) return {}
+    if (afterSeqAll.length === 0 || bootIdAll.length === 0) {
+      return { error: '?afterSeq 与 ?bootId 必须成对携带才能续传' }
+    }
+    const afterSeqRaw = afterSeqAll[0]!
+    const bootIdRaw = bootIdAll[0]!
+    if (!/^\d{1,16}$/.test(afterSeqRaw) || !Number.isSafeInteger(Number(afterSeqRaw))) {
+      return { error: 'afterSeq 必须是非负安全整数' }
+    }
+    if (bootIdRaw.length === 0 || bootIdRaw.length > 64) {
+      return { error: 'bootId 必须是长度 1..64 的非空字符串' }
+    }
+    return { resume: { afterSeq: Number(afterSeqRaw), bootId: bootIdRaw } }
+  }
+
+  /** 续传可行性：同代、不越未来，且需要的 (afterSeq, headSeq] 非空时必须被 ring
+   * 完整连续覆盖（首帧 <= afterSeq+1、末帧恰为当前 head、区段内逐帧 +1 连续；
+   * ring 最多 256 帧线性检验足够），任一不满足回退 snapshot——末帧缺失会让客户端
+   * 永远追不平 headSeq（心跳仍到、空闲看门狗不触发），绝不发假 resumed 承诺；
+   * afterSeq == headSeq（已追平头部）零补发续传，但同样必须同代。 */
+  private canResume(resume: { afterSeq: number; bootId: string }): boolean {
+    if (resume.bootId !== this.bootId) return false
+    const headSeq = this.seqValue
+    if (resume.afterSeq > headSeq) return false
+    if (resume.afterSeq >= headSeq) return true
+    if (this.ring.length === 0) return false
+    if (this.ring[0]!.seq > resume.afterSeq + 1) return false
+    if (this.ring[this.ring.length - 1]!.seq !== headSeq) return false
+    for (let i = 1; i < this.ring.length; i++) {
+      if (this.ring[i]!.seq !== this.ring[i - 1]!.seq + 1) return false
+    }
+    return true
+  }
+
   /**
-   * 建立带缓冲的内部订阅：订阅先入缓冲，goLive(snapshotSeq) 冲刷 seq 更新的缓冲帧后
-   * 转实时。onFrame 返回 false（写入失败/溢出/消费者停止）或抛错都立即退订并回调 onStop。
+   * 建立带缓冲的内部订阅：订阅先入缓冲（帧与预编码字节一同入队，冲刷时零重编码），
+   * goLive(snapshotSeq) 冲刷 seq 更新的缓冲帧后转实时。onFrame 返回 false
+   * （写入失败/溢出/消费者停止）或抛错都立即退订并回调 onStop。
    */
   private openStream(
-    onFrame: (frame: HelmEventFrame) => boolean,
+    onFrame: (frame: HelmEventFrame, chunk: Uint8Array) => boolean,
     onStop?: () => void,
   ): { unsubscribe(): void; goLive(snapshotSeq: number): boolean } {
-    let buffer: QueuedFrame[] = []
+    let buffer: Array<{ seq: number; frame: HelmEventFrame; chunk: Uint8Array }> = []
     let live = false
     let done = false
     const stop = (): void => {
@@ -468,16 +659,16 @@ export class EventHub {
       this.streamClosers.delete(stop)
       onStop?.()
     }
-    const deliver = (frame: HelmEventFrame): void => {
+    const deliver = (frame: HelmEventFrame, chunk: Uint8Array): void => {
       let ok = false
       try {
-        ok = onFrame(frame)
+        ok = onFrame(frame, chunk)
       } catch {
         ok = false
       }
       if (!ok) stop()
     }
-    const push = (frame: HelmEventFrame): void => {
+    const push = (frame: HelmEventFrame, chunk: Uint8Array): void => {
       if (done) return
       if (!live) {
         if (buffer.length >= MAX_PENDING_EVENTS) {
@@ -485,10 +676,10 @@ export class EventHub {
           stop()
           return
         }
-        buffer.push(frame)
+        buffer.push({ seq: frame.seq, frame, chunk })
         return
       }
-      deliver(frame)
+      deliver(frame, chunk)
     }
     this.subscribers.add(push)
     this.streamClosers.add(stop)
@@ -497,9 +688,9 @@ export class EventHub {
       goLive(snapshotSeq: number): boolean {
         if (done) return false
         live = true
-        for (const frame of buffer) {
-          if (frame.seq <= snapshotSeq) continue
-          deliver(frame)
+        for (const item of buffer) {
+          if (item.seq <= snapshotSeq) continue
+          deliver(item.frame, item.chunk)
           if (done) return false
         }
         buffer = []

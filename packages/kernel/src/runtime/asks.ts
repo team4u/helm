@@ -30,7 +30,7 @@
 import type { AskCreateSpec, AskFieldSpec, AskResult, AskSpec } from '@helm/protocol'
 import { HelmError, type MaybePromise } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
-import { isValidEnvName } from '../services/secret-stash.js'
+import { isValidEnvName, validateSecretLifetime } from '../services/secret-stash.js'
 import type { HelmStore } from './store.js'
 import type { SecretStash } from '../services/secret-stash.js'
 
@@ -240,12 +240,13 @@ export class AskService {
     validateAnswersAgainstFields(spec, answers)
 
     // secret 值入 stash（空值不入：stash 空明文会让脱敏失效）；持久与事件只存 marker。
+    // secretLifetime 原样透传：TTL/turn 作用域由 stash 统一执行（停止注入后旧值仍脱敏）。
     const stored: Record<string, string> = {}
     for (const field of spec.fields) {
       const value = answers[field.name] ?? ''
       stored[field.name] =
         field.secret && value !== ''
-          ? this.stash.put(spec.conversationId, envNameOf(field), value)
+          ? this.stash.put(spec.conversationId, envNameOf(field), value, field.secretLifetime)
           : value
     }
     return this.settle(id, 'answered', { answers: stored })
@@ -439,6 +440,17 @@ function validateAskSpec(spec: AskCreateSpec): void {
     if (field.secret === true) {
       // 声明边界即校验 env 名可用（envName 或 name 二者取一）。
       envNameOf(field)
+    }
+    // secretLifetime 仅 secret 字段允许；形状/枚举/上限在边界显式拒绝（不静默降级）。
+    if (field.secretLifetime !== undefined) {
+      if (field.secret !== true) {
+        throw new HelmError(
+          'validation_error',
+          `field '${field.name}' 声明 secretLifetime 但未标记 secret: true（生命周期仅约束机密字段）`,
+          400,
+        )
+      }
+      validateSecretLifetime(field.secretLifetime, `field '${field.name}' 的 secretLifetime`)
     }
   }
   // 同会话 secret env 名碰撞明确拒绝（保留声明原样时 'api_key' 与 'API_KEY' 是两个名字）。

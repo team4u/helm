@@ -92,7 +92,7 @@ test('真实共享 hooks 消费会话文档 snapshot/增量：父工具已返回
     parentToolCallId: 'call-bg', status: 'running', createdAt: 1, updatedAt: 2,
     nodes: [{ id: 'agent', kind: 'agent', status: 'running', conversationId: 11 }] }
   runsValue = [run]
-  let state = applySnapshot(emptyLiveState(), { seq: 1, conversations: [parent, child], pendingAsks: [], plugins: [plugin], ui: workflowUi })
+  let state = applySnapshot(emptyLiveState(), { bootId: 'test-boot', seq: 1, conversations: [parent, child], pendingAsks: [], plugins: [plugin], ui: workflowUi })
   const entries = [
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'call-bg', name: 'subagent', arguments: { prompt: '跑后台测试' } }] }] },
     { id: '2', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'call-bg', toolName: 'subagent', content: [{ type: 'text', text: JSON.stringify({ execution: { conversationId: 11 } }) }] }] },

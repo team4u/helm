@@ -12,6 +12,8 @@
     "test:unit": "pnpm --filter @helm/protocol run build && node scripts/test-suites.mjs unit",
     "test:integration": "pnpm --filter @helm/protocol run build && node scripts/test-suites.mjs integration",
     "test:force-exit": "node scripts/run-tests.mjs --test-force-exit \"packages/*/test/*.test.ts\" \"packages/*/test/*.test.tsx\"",
+    "check:changed": "node scripts/check-changed.mjs",
+    "check:hygiene": "node scripts/check-test-hygiene.mjs",
     "dev": "pnpm --filter @helm/protocol run build && pnpm --parallel --stream --filter @helm/kernel --filter @helm/web run dev",
     "dev:kernel": "pnpm --filter @helm/protocol run build && tsx packages/kernel/src/main.ts",
     "dev:web": "pnpm --filter @helm/web dev",

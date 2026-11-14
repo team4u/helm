@@ -2305,6 +2305,7 @@ export class WorkflowService {
       ...(request.maxSubagentDepth !== undefined ? { maxSubagentDepth: request.maxSubagentDepth } : {}),
       ...(request.schema !== undefined ? { schema: request.schema.schema } : {}),
       ...(request.attachments !== undefined ? { attachments: request.attachments } : {}),
+      ...(request.secretNames !== undefined ? { secretNames: request.secretNames } : {}),
       ...(resumeRef !== undefined ? { resume: resumeRef } : {}),
       // cwd 不注入：执行行按自身链解析（原生 request>Profile>parent镜像>Hub；
       // herdr request>Profile.workspace>parent>Hub）。引擎层注入会压过 Profile

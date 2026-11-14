@@ -21,6 +21,8 @@
 
 完整执行行为：**建窗（普通 `tab.create` 或 worktree 模式 `worktree.create` + 补建带 env 的 tab 两步）、`agent.start`、权威就绪等待、`agent.prompt --wait`、blocked 审批桥、文件交接（含一次自愈）、gate 恰好一次、双轨保活清理**八段序列。新建 PTY 的 shell 尚未就绪时，`agent.start` 可返回 `agent_pane_busy`（未启动 Agent）；Helm 仅对该错误在启动期限内等待再试，取消立即退出，超时或不确定结果不重试。启动成功可能仍是 `unknown + launch_pending`，须继续等权威就绪后再投递，不把 unknown 当终态失败，也不提前 prompt。
 
+**窗格环境最小授权**：窗格 env 由内核 `buildSpawnEnv`（受管 `HELM_*` 回连集合，按确切目标节点构造）与 Profile `runtime.env` 合成。缺省**不携带任何父会话 SecretStash 机密**——外部窗格是独立进程，不自动继承会话机密；需要注入时由 spawn 请求显式 `secretNames` 逐名授予（名字需在父会话 stash 内现存，缺失显式报错，绝不静默降级为空注入），且按次授予、resume 不自动沿用。受管 `HELM_*` 恒由内核权威固定覆盖（Profile 不得覆盖回连/身份变量）；与未注入机密同名的 Profile 显式配置原样保留（不存在「父机密误删 Profile 配置」的交叉影响）。
+
 ### 后台窗格隔离与文件交接
 
 插件在 Herdr 内创建 `helm-wf-` 前缀命名的窗格后台静默执行，不干扰前台。任务 prompt 末尾附「helm 交接契约」：要求 agent 完成后把最终结果写入 `<effectiveCwd>/.helm/wf-out-<hash>.json|.md`——声明了 `schema` 时为满足 JSON Schema 的单个 JSON 值，否则为 Markdown 全文。「写文件是交付结果的唯一方式；未写文件视为任务失败」。

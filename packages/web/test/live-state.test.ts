@@ -6,7 +6,7 @@ import { normalizeModelCatalogInfo } from '../src/lib/api.js'
 import type { NodeInfo } from '@helm/protocol'
 
 const conv: ConversationSummary = { id: 1, title: '助理', profileId: 'assistant', cwd: '/tmp', model: '', thinkingLevel: '', status: 'idle', tags: [], stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: true, pendingAskCount: 0, createdAt: 0, updatedAt: 0 }
-const snapshot: HelmSnapshot = { seq: 10, conversations: [conv], pendingAsks: [], plugins: [], ui: [] }
+const snapshot: HelmSnapshot = { bootId: 'test-boot', seq: 10, conversations: [conv], pendingAsks: [], plugins: [], ui: [] }
 
 test('SSE 分段 CRLF、多 data 行与注释不能丢帧', { timeout: 60_000 }, () => {
   const messages: Array<{ event: string; data: string }> = []

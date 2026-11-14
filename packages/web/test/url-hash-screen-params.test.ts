@@ -31,6 +31,7 @@ const e = React.createElement
 let snapshotDelayMs = 0
 
 const snapshotPayload = {
+  bootId: 'test-boot',
   seq: 1,
   conversations: [],
   pendingAsks: [],

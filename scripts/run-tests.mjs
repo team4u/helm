@@ -8,7 +8,10 @@
  * - 单测超时沿用 Node 原生 `--test-timeout=20000`，由各测试文件自身声明 `{ timeout: 60_000 }` 覆盖；
  * - 整个套件设置总超时（默认 10 分钟，覆盖 Windows 实测约 217s 的全量耗时），超时后杀完整进程树：
  *   Windows 用 `taskkill /PID <pid> /T /F`，POSIX 用独立进程组 + SIGTERM，宽限后 SIGKILL；
- * - 正常退出原样透传退出码；子进程被信号终止时按 128+signal 退出；总超时以 124 退出（GNU timeout 惯例）。
+ * - 正常退出原样透传退出码；子进程被信号终止时按 128+signal 退出；总超时以 124 退出（GNU timeout 惯例）；
+ * - 主动终止（forced 路径）时 leader 退出不立即结算：tsx 独立进程组内可能仍有忽略 SIGTERM
+ *   的孙进程，保留 KILL_GRACE_MS 的 SIGKILL 升级与 LAST_RESORT 封顶，轮询 owned 进程组
+ *   排空后才退（Windows 无组信号，taskkill /T /F 已杀树，维持即退），不留孤儿也不挂无限 timer。
  *
  * 环境变量：HELM_TEST_SUITE_TIMEOUT_MS 覆盖总超时（毫秒，正整数）。
  * 参数透传：本脚本收到的所有 CLI 参数原样追加给 tsx / node test runner（含 glob）。
@@ -89,8 +92,24 @@ const child = spawn(process.execPath, [tsxCli, '--test', '--test-timeout=20000',
 let suiteTimer = null;
 let graceTimer = null;
 let lastResortTimer = null;
+let groupWatchTimer = null;
 // 由本脚本主动终止（总超时 / 转发信号）时锁定退出码，防止后续 exit 事件覆盖。
 let forcedExitCode = null;
+
+const GROUP_POLL_MS = 100;
+
+// owned 测试进程组（tsx 独立 PGID）是否仍有成员：leader 退出不代表整组停止，
+// 孙进程可能忽略 SIGTERM；仅 ESRCH 视为排空（EPERM 等保守按存活）。
+function groupAlive() {
+  if (process.platform === 'win32') return false; // Windows 无组信号，树杀由 taskkill /T /F 负责
+  if (child.pid == null) return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code !== 'ESRCH';
+  }
+}
 
 function clearTimers() {
   for (const t of [suiteTimer, graceTimer, lastResortTimer]) {
@@ -140,12 +159,28 @@ child.on('error', (err) => {
 });
 
 child.on('exit', (code, signal) => {
-  clearTimers();
   const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
   if (forcedExitCode !== null) {
-    console.error(`[run-tests] 已强制终止，耗时 ${elapsed}s，退出 ${forcedExitCode}`);
-    process.exit(forcedExitCode);
+    // 强制终止路径：leader（tsx）退出不代表 owned 组排空——孙进程可能忽略 SIGTERM。
+    // 不 clearTimers：保留 KILL_GRACE_MS 的 SIGKILL 升级与 LAST_RESORT 封顶，
+    // 轮询组排空后才退。Windows 无组信号，taskkill /T /F 已杀树，维持即退。
+    if (process.platform === 'win32') {
+      console.error(`[run-tests] 已强制终止，耗时 ${elapsed}s，退出 ${forcedExitCode}`);
+      process.exit(forcedExitCode);
+    }
+    if (groupWatchTimer !== null) return;
+    groupWatchTimer = setInterval(() => {
+      if (!groupAlive()) {
+        console.error(
+          `[run-tests] 已强制终止，耗时 ${((Date.now() - startMs) / 1000).toFixed(1)}s，` +
+            `owned 测试进程组已排空，退出 ${forcedExitCode}`,
+        );
+        process.exit(forcedExitCode);
+      }
+    }, GROUP_POLL_MS);
+    return;
   }
+  clearTimers();
   if (code !== null) {
     console.error(`[run-tests] 套件 ${elapsed}s 结束，退出码 ${code}`);
     process.exit(code);

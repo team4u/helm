@@ -269,7 +269,7 @@ async function seedProfile(
 // 纯函数：SYSTEM.md 摘要提取
 // ---------------------------------------------------------------------------
 
-test('extractSystemSummary：跳过 frontmatter / 代码块 / 标题，取首个自然段', () => {
+test('extractSystemSummary：跳过 frontmatter / 代码块 / 标题，取首个自然段', { timeout: 60_000 }, () => {
   const md = [
     '---',
     'name: 秘密元数据',
@@ -288,7 +288,7 @@ test('extractSystemSummary：跳过 frontmatter / 代码块 / 标题，取首个
   assert.ok(!summary!.includes('角色标题'), '标题行不进入摘要')
 })
 
-test('extractSystemSummary：围栏代码块与列表/引用/HTML 行跳过', () => {
+test('extractSystemSummary：围栏代码块与列表/引用/HTML 行跳过', { timeout: 60_000 }, () => {
   const md = [
     '```yaml',
     '# 代码内的伪标题',
@@ -303,14 +303,14 @@ test('extractSystemSummary：围栏代码块与列表/引用/HTML 行跳过', ()
   assert.equal(extractSystemSummary(md), '真正的自然段在这里。')
 })
 
-test('extractSystemSummary：无自然段返回 undefined（不伪造）', () => {
+test('extractSystemSummary：无自然段返回 undefined（不伪造）', { timeout: 60_000 }, () => {
   assert.equal(extractSystemSummary('# 只有标题\n\n---\nfrontmatter 未闭合也安全'), undefined)
   assert.equal(extractSystemSummary(''), undefined)
   assert.equal(extractSystemSummary('   \n\n'), undefined)
   assert.equal(extractSystemSummary('```\nall code\n```'), undefined)
 })
 
-test('extractSystemSummary 与 truncateCodePoints：100 码点截断（代理对计 1）', () => {
+test('extractSystemSummary 与 truncateCodePoints：100 码点截断（代理对计 1）', { timeout: 60_000 }, () => {
   const long = '首段 ' + '字'.repeat(200)
   const summary = extractSystemSummary(long)!
   assert.ok([...summary].length <= PROFILE_SUMMARY_MAX_CODEPOINTS)
@@ -326,7 +326,7 @@ test('extractSystemSummary 与 truncateCodePoints：100 码点截断（代理对
 
 const RUNTIME_KINDS = new Set(['herdr'])
 
-test('isCollaborationCandidate：排除自身 / humanSelectable:false / 托管插件停用 / runtime 无接管', () => {
+test('isCollaborationCandidate：排除自身 / humanSelectable:false / 托管插件停用 / runtime 无接管', { timeout: 60_000 }, () => {
   const base = { id: 'coder', name: 'Coder' } as Profile
   assert.equal(isCollaborationCandidate({ ...base, id: 'assistant' }, 'assistant', new Set(), RUNTIME_KINDS), false, '排除自身')
   assert.equal(isCollaborationCandidate({ ...base, humanSelectable: false }, 'assistant', new Set(), RUNTIME_KINDS), false)
@@ -353,7 +353,7 @@ test('isCollaborationCandidate：排除自身 / humanSelectable:false / 托管�
   assert.equal(isCollaborationCandidate(base, 'assistant', new Set(), RUNTIME_KINDS), true, '普通 Profile 通过')
 })
 
-test('activeRuntimeKinds：只认 profile.runtime surface 的 kind 字符串', () => {
+test('activeRuntimeKinds：只认 profile.runtime surface 的 kind 字符串', { timeout: 60_000 }, () => {
   const ui: PluginUiContribution[] = [
     { pluginId: 'builtin:herdr', surface: 'profile.runtime', spec: { kind: 'herdr', label: 'x' } },
     { pluginId: 'p2', surface: 'profile.runtime', spec: { kind: 'other', label: 'y' } },
@@ -363,7 +363,7 @@ test('activeRuntimeKinds：只认 profile.runtime surface 的 kind 字符串', (
   assert.deepEqual([...activeRuntimeKinds(ui)].sort(), ['herdr', 'other'])
 })
 
-test('toCatalogEntry：runtime 标注与 workspace 覆盖 cwd；describePosition 继承语义', () => {
+test('toCatalogEntry：runtime 标注与 workspace 覆盖 cwd；describePosition 继承语义', { timeout: 60_000 }, () => {
   const native = toCatalogEntry({ id: 'coder', name: 'Coder' } as Profile)
   assert.equal(native.runtimeKind, 'native')
   assert.equal(describePosition(native), undefined, '无显式配置 → 继承（不谎报 local）')
@@ -390,7 +390,7 @@ test('toCatalogEntry：runtime 标注与 workspace 覆盖 cwd；describePosition
   )
 })
 
-test('renderProfileCatalogSection：动态字段 XML 转义 + runtime 标注 + 边界指引', () => {
+test('renderProfileCatalogSection：动态字段 XML 转义 + runtime 标注 + 边界指引', { timeout: 60_000 }, () => {
   const section = renderProfileCatalogSection(
     [
       { id: 'coder', name: 'C&A<>"', runtimeKind: 'native', summary: '专&注<迁移>' },

@@ -889,7 +889,7 @@ export function createWorkflowPlugin(): PluginDefinition {
           '只有紧接着的下一步必须依赖子代理结果、期间没有其他工作时，才显式指定 background:false 同步等待。',
         ],
         description:
-          '派生一个子代理。人类交互会话缺省后台执行：执行环境就绪后立即返回 runId，后台完成后向本会话 followUp 汇报；自动化会话（受管子代理/驻留 Worker/触发会话，归属 bot/helm）缺省同步等待最终结果，显式 background=true 会被拒绝——后台汇报会驱动自动化调用方早结算。显式 background:false 可强制同步等待。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、isolation:worktree、model、effort、maxSubagentDepth（显式授予子树派生深度上限，1..5，缺省继承当前上限 2）；凭 execution.conversationId/executionId 作为 resume 续接。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
+          '派生一个子代理。人类交互会话缺省后台执行：执行环境就绪后立即返回 runId，后台完成后向本会话 followUp 汇报；自动化会话（受管子代理/驻留 Worker/触发会话，归属 bot/helm）缺省同步等待最终结果，显式 background=true 会被拒绝——后台汇报会驱动自动化调用方早结算。显式 background:false 可强制同步等待。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、isolation:worktree、model、effort、maxSubagentDepth（显式授予子树派生深度上限，1..5，缺省继承当前上限 2）；凭 execution.conversationId/executionId 作为 resume 续接。外部运行时窗格缺省不携带任何父会话机密，需注入时用 secretNames 逐名授予。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
         inputSchema: {
           type: 'object',
           properties: {
@@ -921,6 +921,11 @@ export function createWorkflowPlugin(): PluginDefinition {
               description: `显式授予该子代理子树的派生深度上限（1..${HARD_MAX_SUBAGENT_DEPTH}；缺省继承当前上限，默认 ${DEFAULT_MAX_SUBAGENT_DEPTH}）`,
             },
             attachments: { type: 'array', items: { type: 'string' }, description: '随任务传递给子代理的产物 ID 列表（可选）' },
+            secretNames: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '显式授予外部运行时窗格注入的父会话机密环境变量名列表（可选；需为合法环境变量名且在父会话 stash 内现存）。缺省不携带任何父会话机密；仅外部运行时（如 herdr:）消费，原生 Profile 子会话不支持——非空授予到达原生执行行显式报错 unsupported_secret_grant；空数组等同未授予；按次授予，resume 不自动沿用',
+            },
           },
           required: ['prompt'],
           additionalProperties: false,
@@ -946,6 +951,15 @@ export function createWorkflowPlugin(): PluginDefinition {
             const list = a['attachments']
             if (!Array.isArray(list) || list.some((item) => typeof item !== 'string' || item.length === 0)) {
               return envelopeError('subagent_failed: attachments 需为非空字符串数组（产物 ID 列表）', 'invalid attachments: 需为非空字符串数组')
+            }
+          }
+          if (a['secretNames'] !== undefined) {
+            const list = a['secretNames']
+            if (!Array.isArray(list) || list.some((item) => typeof item !== 'string' || item.length === 0)) {
+              return envelopeError(
+                'subagent_failed: secretNames 需为非空字符串数组（机密环境变量名；缺省不携带任何父会话机密）',
+                'invalid secretNames: 需为非空字符串数组',
+              )
             }
           }
           if (a['background'] !== undefined && typeof a['background'] !== 'boolean') {
@@ -974,6 +988,7 @@ export function createWorkflowPlugin(): PluginDefinition {
             ...(a['effort'] !== undefined ? { effort: String(a['effort']) } : {}),
             ...(a['maxSubagentDepth'] !== undefined ? { maxSubagentDepth: Number(a['maxSubagentDepth']) } : {}),
             ...(Array.isArray(a['attachments']) ? { attachments: a['attachments'] as string[] } : {}),
+            ...(Array.isArray(a['secretNames']) ? { secretNames: a['secretNames'] as string[] } : {}),
             onResolved: (info) => {
               resolved = info
             },

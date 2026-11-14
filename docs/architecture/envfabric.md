@@ -27,7 +27,7 @@ flowchart TD
 
 两条执行路径的分工：`local` 节点直接复用 pi-durable 的 `NodeExecutionEnv`（进程内调用，无 RPC 开销）；远端节点经 `RemoteExecutionEnv` 走 `NodeRegistry` 的 WebSocket + birpc 通道。缓存生命周期有明确边界——**有会话靶点**（`envForTarget` 且带 `conversationId`）按 `(conversationId, nodeId, cwd)` 缓存底座，会话删除或修改 nodeId/cwd 时驱逐（驱逐只移除缓存条目、绝不杀在途命令）；**无会话靶点**（`envFor`，如 herdr 文件交接、gate、无会话 HTTP exec）每次创建全新短生命周期实例，用后即弃，绝不进缓存。未知节点返回 Remote env（操作时等待重连），**绝不静默回落 local**——远端节点离线时操作显式抛 `409 node_offline` 或挂起等待重连（可取消）。
 
-`ScopedExecutionEnv` 负责每条命令的环境变量现场合成（fail-closed）：继承宿主 `process.env` 的真实 `PATH/HOME` 工具链，但受管 `HELM_*` 变量（`HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD / HELM_DATA_DIR / HELM_NODE_ID / HELM_TOKEN`，含大小写变体）一律先剥除，再由 `envOptions` 回调注入权威值——`HELM_HUB_URL`、`HELM_CONVERSATION_ID`、受管 `HELM_TOKEN` 与 `SecretStash` 解密后的 `HELM_SECRET_*` 机密。composer 返回的绑定身份键不可被逐调用 `options.env` 同名覆盖（防伪造作用域）；无 `conversationId` 的调用不注入任何机密——没有可信作用域就不注入，而非借用别的会话。机密服务在 fabric 外部，fabric 只消费回调结果，自身不持有机密。`ctx.host.buildSpawnEnv(conversationId, cwd, nodeId)` 把同一合成规则暴露给插件的外部 spawn。
+`ScopedExecutionEnv` 负责每条命令的环境变量现场合成（fail-closed）：继承宿主 `process.env` 的真实 `PATH/HOME` 工具链，但受管 `HELM_*` 变量（`HELM_ENV / HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD / HELM_DATA_DIR / HELM_NODE_ID / HELM_TOKEN`，含大小写变体）一律先剥除，再由 `envOptions` 回调注入权威值——`HELM_HUB_URL`、`HELM_CONVERSATION_ID`、受管 `HELM_TOKEN` 与 `SecretStash` 解密后的 `HELM_SECRET_*` 机密。composer 返回的绑定身份键不可被逐调用 `options.env` 同名覆盖（防伪造作用域）；无 `conversationId` 的调用不注入任何机密——没有可信作用域就不注入，而非借用别的会话。机密服务在 fabric 外部，fabric 只消费回调结果，自身不持有机密。`ctx.host.buildSpawnEnv(conversationId, cwd, nodeId, options?)` 把同一受管合成规则暴露给插件的外部 spawn，但外部窗格采用最小授权：缺省不携带任何父会话 stash 机密，仅显式 `options.secretNames` 逐名注入（需现存，缺失显式报错）。
 
 ## 零入站 SSH 依赖与反向 WebSocket
 
