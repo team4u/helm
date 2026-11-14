@@ -1250,8 +1250,10 @@ export function ConversationTimeline({
         return
       }
       const distanceFromBottom = el.scrollHeight - top - el.clientHeight
-      if (top < lastScrollTopRef.current - 2) {
-        stickToBottomRef.current = false
+      if (top < lastScrollTopRef.current) {
+        // 输入框收起或内容收缩会把 scrollTop 夹紧到新底部；保留既有跟随意图，
+        // 既不误判为用户上翻，也不恢复用户已经解除的贴底。
+        if (distanceFromBottom > 1) stickToBottomRef.current = false
       } else if (distanceFromBottom <= 32 && (top > lastScrollTopRef.current || distanceFromBottom <= 8)) {
         stickToBottomRef.current = true
       }
@@ -1402,7 +1404,8 @@ export function ConversationTimeline({
   // 已结算静止会话的历史浏览不因 content-visibility 估高纠正、折叠展开或异步资源加载而误置底。
   useEffect(() => {
     const inner = innerRef.current
-    if (inner === null || typeof ResizeObserver === 'undefined') return
+    const scroller = scrollRef.current
+    if (inner === null || scroller === null || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
       const el = scrollRef.current
       if (el === null || !stickToBottomRef.current) return
@@ -1411,6 +1414,8 @@ export function ConversationTimeline({
       lastScrollTopRef.current = el.scrollTop
     })
     ro.observe(inner)
+    // Composer 高度、移动端键盘等只改变视口，不一定改变 inner 的尺寸。
+    ro.observe(scroller)
     return () => ro.disconnect()
   }, [isWorking, hasLiveTurn])
 
