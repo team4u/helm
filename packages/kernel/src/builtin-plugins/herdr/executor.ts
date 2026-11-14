@@ -20,7 +20,6 @@
  * - 所有长 RPC 携带 request.signal。
  */
 
-import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, targetPlatformOf, type AgentExecutionInfo, type AgentSpawnRequest, type TargetPlatform } from '@helm/protocol'
 import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, HerdrTarget } from './contracts.js'
@@ -40,8 +39,6 @@ import {
   parseTabCreated,
   parseWorktreeCreated,
   SEND_KEYS_CAS_CAPABILITY,
-  AGENT_PROMPT_GUARD_CAPABILITY,
-  buildAgentPromptGuardParams,
   type HerdrAgentInfo,
 } from './rpc.js'
 import {
@@ -120,13 +117,15 @@ export class HerdrExecutor {
   /** 在途 steer（按 pane 互斥；driveTask 结算前排空）。 */
   private readonly activeSteers = new Map<string, Promise<{ stateChangeSeq: number }>>()
   /**
-   * 已投递（或因超时/断线保守视为已投递）插话的最新 receipt（paneKey ->
-   * receipt）：任务结算前必须读到与最新 receipt 严格相等的确认文件，否则
-   * herdr_steer_unconfirmed（绝不把旧结果冒充按最新指导的交付）。零写入
-   * 拒绝（stale_state/agent_not_ready/agent_blocked）在投递点撤销本次
-   * receipt、恢复前一已投递者。
+   * 不确定投递（超时/断线/坏响应）的插话失败记录（paneKey -> 脱敏原因）：
+   * 任务结算排空在途 steer 后据此显式失败并保留现场（绝不读旧结果或
+   * 自愈冒充）；后续成功插话以最新指导覆盖并核销本记录。服务端 admission
+   * 确定零写入拒绝（stale_state/agent_not_ready/agent_blocked/agent_not_found）
+   * 不记本表。
    */
-  private readonly paneSteerReceipts = new Map<string, string>()
+  private readonly steerFailures = new Map<string, string>()
+  /** 已被插话作废的旧交接文件名（paneKey -> 名单；仅成功交接后统一清理）。 */
+  private readonly steerRetiredFiles = new Map<string, string[]>()
   /** 本机冻结连接目标（启用时注入）。 */
   private readonly localTarget: HerdrTarget
 
@@ -658,11 +657,12 @@ export class HerdrExecutor {
       )
     } finally {
       request.signal?.removeEventListener('abort', onAbort)
-      // 本次请求结算（成功/失败/取消）：任务阶段/在途登记/插话 receipt 与
+      // 本次请求结算（成功/失败/取消）：任务阶段/在途登记/插话失败记录与
       // 附件元数据缓存同步回收，后续 steer 按「无可插话任务」拒绝。
       this.activeTasks.delete(taskKey)
       this.panePhases.delete(taskKey)
-      this.paneSteerReceipts.delete(taskKey)
+      this.steerFailures.delete(taskKey)
+      this.steerRetiredFiles.delete(taskKey)
       this.releaseAttachmentMeta(request)
     }
   }
@@ -672,40 +672,63 @@ export class HerdrExecutor {
     this.panePhases.set(key, 'task')
     await this.project(pane, `run:${pane.agentName}`)
     const info = await this.promptAndWait(pane.target, pane, this.taskPrompt(request, pane), request.signal)
-    await this.settleThroughSteers(request, pane, info)
-    const output = await this.readAndValidateOutput(request, pane)
+    await this.settleThroughSteers(request, pane, pane.outputFileName!, info)
+    // 结算以 registry 现值为准：插话可能已把唯一交接文件重定向到新名字
+    //（绝不沿用起始快照误读旧路径）。
+    const latest = this.registry.get(nodeIdOf(pane), pane.paneId) ?? pane
+    const output = await this.readAndValidateOutput(request, latest)
     if (request.gate !== undefined) {
       this.panePhases.set(key, 'gate')
       await this.runGateFor(request, pane)
     }
     request.signal?.throwIfAborted()
-    // 成功交接（含插话确认核销）后清理确认文件；失败路径保留现场（含确认文件）。
-    await this.clearSteerConfirm(request, pane)
+    // 成功交接后清理已被插话作废的旧结果文件（失败路径保留现场）。
+    await this.clearRetiredSteerOutputs(request, pane)
     this.registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'keepalive', outputFileName: undefined })
     return output
   }
 
   /**
-   * 结算等待 + 在途 steer 排空 + 权威复查 + 插话确认核销：
+   * 结算等待 + 在途 steer 排空 + 权威复查 + 最新交接文件核验：
    * - 首个 idle/done 可能早于 steer 投递（文本+回车多步序列）被 agent.wait
    *   观察到——不能直接进交接。排空在途 steer（等待真实 RPC 终局，非固定
-   *   延时）后以权威 agent.get 复查：working 说明 steer 已开启新回合（回到
-   *   结算等待），blocked 交审批桥；
-   * - 排空/复查仍不能证明 CLI 已消费排队输入（guard 回包后 turn1 可能已
-   *   idle 且旧结果已落盘）：已投递插话以确认文件核销——结算只接受与最新
-   *   receipt 严格相等且位于同一冻结 target/实际 cwd 的确认。idle 无确认时
-   *   以有界 agent.wait(until working/blocked)（复用启动预算）等后续回合
-   *   出现后复查；预算耗尽仍无确认则显式 herdr_steer_unconfirmed 失败并
-   *   保留现场（绝不把旧结果冒充按最新指导的交付，也不自动再发 prompt）；
-   * - 排空期间新进入的 steer 再排一轮；unknown 如实失败。
+   *   延时）后以权威 agent.get 复查：working 说明插话已开启新回合（回到
+   *   结算等待），blocked 交审批桥；unknown 如实失败；
+   * - 不确定投递（超时/断线/坏响应）已按 pane 记失败：结算显式
+   *   herdr_steer_uncertain 失败并保留现场（绝不读旧结果，也不经自愈追问
+   *   冒充按最新指导的交付）；其后若有成功插话，失败记录已被最新指导核销；
+   * - 成功插话即把唯一交接文件重定向到全新名字（旧结果天然防冒充）：
+   *   idle/done 时新文件未出现则不得进交接——有界 agent.wait(until
+   *   working/blocked) 等后续回合起步后复查（不宣称 idle 可证明 CLI 已
+   *   消费队列）；预算耗尽仍无新文件交由 readAndValidateOutput 的一次自愈
+   *   按最新文件名兑底（追问后仍缺则显式失败保留现场）；
+   * - 文件核验跨 await 期间可能又有插话（重定向更新名字）或留下不确定
+   *   记录：必须重新核验；终核验与切换 handoff 阶段在同一同步段完成，
+   *   此后插话被阶段门禁拒绝。
    */
-  private async settleThroughSteers(request: AgentSpawnRequest, pane: ManagedPane, initial: HerdrAgentInfo): Promise<void> {
+  private async settleThroughSteers(
+    request: AgentSpawnRequest,
+    pane: ManagedPane,
+    initialFileName: string,
+    initial: HerdrAgentInfo,
+  ): Promise<void> {
     const key = this.paneKey(pane)
+    const latestName = (): string | undefined => this.registry.get(nodeIdOf(pane), pane.paneId)?.outputFileName
+    const steerSettled = (): boolean => !this.activeSteers.has(key) && !this.steerFailures.has(key)
     let info = initial
     for (;;) {
       await this.waitUntilSettled(request, pane, info)
       const inFlight = this.activeSteers.get(key)
       if (inFlight !== undefined) await inFlight.catch(() => {})
+      const uncertain = this.steerFailures.get(key)
+      if (uncertain !== undefined) {
+        throw new HelmError(
+          'herdr_steer_uncertain',
+          `pane ${pane.paneId} 的插话投递结果不确定（${this.deps.redact(uncertain)}）：拒绝以旧交接结果或自愈追问冒充按最新指导的交付，任务显式失败并保留现场`,
+          502,
+          { paneId: pane.paneId, reason: this.deps.redact(uncertain) },
+        )
+      }
       const authority = await this.agentGet(pane.target, pane.paneId, request.signal)
       if (authority.agentStatus === 'working' || authority.agentStatus === 'blocked') {
         info = authority
@@ -714,38 +737,35 @@ export class HerdrExecutor {
       if (authority.agentStatus === 'unknown') {
         throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} 状态 unknown，无法确认完成`, 502)
       }
-      if (this.activeSteers.has(key)) continue
-      const receipt = this.paneSteerReceipts.get(key)
-      const confirmed = receipt === undefined || await this.readSteerConfirm(request, pane, receipt)
-      // 文件 IO 期间可能又有插话；核销与封住 task 入口必须在同一同步段内。
-      if (this.activeSteers.has(key) || this.paneSteerReceipts.get(key) !== receipt) continue
-      if (confirmed) {
-        request.signal?.throwIfAborted()
-        this.panePhases.set(key, 'handoff')
-        return
+      if (!steerSettled()) continue
+      const currentName = latestName()
+      if (currentName !== undefined && currentName !== initialFileName) {
+        // 插话已重定向唯一交接文件：新文件未出现前不得进交接（旧结果冒充防线）。
+        let present = false
+        try {
+          await this.transport.readOutput(targetOf(pane), pane.effectiveCwd, currentName, request.signal)
+          present = true
+        } catch (error) {
+          if (!(error instanceof HelmError && error.code === 'herdr_output_missing')) throw error
+        }
+        if (!steerSettled() || latestName() !== currentName) continue
+        if (!present) {
+          // 新结果未出现：有界等待后续回合起步后复查（working/blocked 回主循环）。
+          const resumed = await this.waitSteerTurnOrNone(request, pane)
+          if (resumed !== undefined) {
+            info = resumed
+            continue
+          }
+          // 预算耗尽仍无新文件：交由 readAndValidateOutput 的一次自愈按最新
+          // 文件名兑底（追问后仍缺则显式失败，绝不读旧文件）。
+          if (!steerSettled() || latestName() !== currentName) continue
+        }
       }
-      // idle 无确认：CLI 队列可能尚未起步——有界等待后续回合出现（非固定
-      // 延时，也不宣称消费完成）；blocked 交审批桥，working 回到结算等待。
-      const resumed = await this.waitSteerTurnOrNone(request, pane)
-      if (resumed !== undefined) {
-        info = resumed
-        continue
-      }
-      // 超时附近可能恰好起步或完成：重读状态与确认，不以超时推断投递失败。
-      info = await this.agentGet(pane.target, pane.paneId, request.signal)
-      if (this.activeSteers.has(key) || this.paneSteerReceipts.get(key) !== receipt) continue
-      if (info.agentStatus === 'working' || info.agentStatus === 'blocked') continue
-      if (info.agentStatus === 'unknown') {
-        throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} 状态 unknown，无法确认完成`, 502)
-      }
-      if (await this.readSteerConfirm(request, pane, receipt!)) continue
-      if (this.activeSteers.has(key) || this.paneSteerReceipts.get(key) !== receipt) continue
-      throw new HelmError(
-        'herdr_steer_unconfirmed',
-        `pane ${pane.paneId} 已 idle 但未确认最新插话（receipt=${this.deps.redact(receipt)}）：确认文件 ${pane.effectiveCwd}/.helm/${this.steerConfirmFileNameOf(pane)} 缺失或内容不符；拒绝把旧结果冒充按最新指导的交付，窗格保留现场`,
-        502,
-        { paneId: pane.paneId, receipt: this.deps.redact(receipt) },
-      )
+      // 终核验与切 handoff 同一同步段：此后插话被阶段门禁拒绝。
+      if (!steerSettled() || latestName() !== currentName) continue
+      request.signal?.throwIfAborted()
+      this.panePhases.set(key, 'handoff')
+      return
     }
   }
 
@@ -831,73 +851,6 @@ export class HerdrExecutor {
   /** closePane 单飞键（与 closePane 内部完全同构：steer 门禁复用同一坐标）。 */
   private closeKey(pane: ManagedPane): string {
     return `${nodeIdOf(pane) ?? 'local'}:${pane.paneId}`
-  }
-
-  /** 插话确认 sidecar 文件名（同目录、复用 transport wf-out-* 白名单）。 */
-  private steerConfirmFileNameOf(pane: ManagedPane): string {
-    const fileName = pane.outputFileName
-    if (fileName === undefined || fileName === '') {
-      throw new HelmError(
-        'herdr_context_unavailable',
-        `pane ${pane.paneId} 缺少交接文件名，无法派生插话确认文件名`,
-        409,
-        { paneId: pane.paneId },
-      )
-    }
-    const confirm = fileName.replace(/\.(json|md)$/, '-s.json')
-    if (!/^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$/.test(confirm)) {
-      throw new HelmError(
-        'herdr_context_unavailable',
-        `插话确认文件名 '${confirm}' 不符合交接白名单（原文件名 '${fileName}' 过长）`,
-        409,
-        { paneId: pane.paneId, confirm },
-      )
-    }
-    return confirm
-  }
-
-  /** 确认文件是严格的 { receipt: string } JSON，旧 receipt 不核销新插话。 */
-  private async readSteerConfirm(
-    request: AgentSpawnRequest,
-    pane: ManagedPane,
-    receipt: string,
-  ): Promise<boolean> {
-    let raw: string
-    try {
-      raw = await this.transport.readOutput(targetOf(pane), pane.effectiveCwd, this.steerConfirmFileNameOf(pane), request.signal)
-    } catch (error) {
-      if (error instanceof HelmError && error.code === 'herdr_output_missing') return false
-      // 其它 IO/权限错误如实抛：不得当作「未确认」静默重试或失败。
-      throw error
-    }
-    let value: unknown
-    try {
-      value = JSON.parse(raw)
-    } catch {
-      throw new HelmError('herdr_steer_confirmation_invalid', `pane ${pane.paneId} 的插话确认文件不是合法 JSON`, 502)
-    }
-    if (
-      value === null || typeof value !== 'object' || Array.isArray(value) ||
-      Object.keys(value).length !== 1 || !Object.hasOwn(value, 'receipt') ||
-      typeof (value as { receipt?: unknown }).receipt !== 'string'
-    ) {
-      throw new HelmError('herdr_steer_confirmation_invalid', `pane ${pane.paneId} 的插话确认文件必须是 { receipt: string }`, 502)
-    }
-    return (value as { receipt: string }).receipt === receipt
-  }
-
-  /** 成功交接后清理插话确认文件（失败保留现场；清理失败如实通知不拖垮已验证结果）。 */
-  private async clearSteerConfirm(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
-    if (!this.paneSteerReceipts.has(this.paneKey(pane))) return
-    try {
-      await this.transport.removeOutput(targetOf(pane), pane.effectiveCwd, this.steerConfirmFileNameOf(pane), request.signal)
-    } catch (error) {
-      this.host.notify(
-        'Herdr 插话确认清理未竟',
-        `确认文件删除失败（结果已验证，不影响本次交付）：${error instanceof Error ? this.deps.redact(error.message) : String(error)}`,
-        'error',
-      )
-    }
   }
 
   /** prompt --wait（含自愈追问共用）：blocked 也可能立即返回（审批桥接管）。 */
@@ -1246,70 +1199,41 @@ export class HerdrExecutor {
   }
 
   // ------------------------------------------------------------------
-  // 运行中插话（steer）：仅 task 阶段 + 服务端 agent_prompt_guard_v1 原子守卫
+  // 运行中插话（steer）：仅 task 阶段 + agent.get 预检 + 现有 agent.prompt
   // ------------------------------------------------------------------
 
-  /** steer 投递短超时：服务端守卫核验+写入应远小于此；超时如实报不确定，不重试。 */
+  /** steer 投递短超时：预检后单次投递应远小于此；超时如实报不确定，不重试。 */
   private static readonly STEER_PROMPT_TIMEOUT_MS = 5_000
 
-  /**
-   * agent.prompt 的原子守卫能力门禁（与 send_keys CAS 同模式；fail-closed）：
-   * 目标 Herdr 未在 ping capabilities 严格通告 agent_prompt_guard_v1 === true
-   * 时拒绝插话（herdr_steer_guard_unsupported）——旧服务端 serde 会静默忽略
-   * guard 字段并照常投递，身份/水位核验形同虚设；绝不盲发。探测结果在同一
-   * 启用周期内按 target 冻结（Herdr 升级后重新启用插件生效）。
-   */
-  private readonly promptGuardSupport = new Map<string, boolean>()
-
-  private async assertPromptGuard(target: HerdrTarget, signal?: AbortSignal): Promise<void> {
-    const key = JSON.stringify(target)
-    const cached = this.promptGuardSupport.get(key)
-    if (cached === true) return
-    if (cached === false) throw this.steerGuardUnsupportedError(target)
-    const pong = parsePong(await this.transport.call(target, 'ping', {}, { signal, timeoutMs: 5_000 }))
-    this.promptGuardSupport.set(key, pong.promptGuard)
-    if (!pong.promptGuard) throw this.steerGuardUnsupportedError(target, pong)
-  }
-
-  private steerGuardUnsupportedError(target: HerdrTarget, server?: { version: string; protocol: number }): HelmError {
-    const serverLabel = server !== undefined ? `（version ${server.version}, protocol ${server.protocol}）` : ''
-    return new HelmError(
-      'herdr_steer_guard_unsupported',
-      `目标 Herdr${serverLabel} 未在 ping capabilities 通告 '${AGENT_PROMPT_GUARD_CAPABILITY}'，拒绝无原子守卫的运行中插话：旧服务端会静默忽略 guard 字段并照常投递（身份/水位核验形同虚设）；该能力为 Helm 拟议契约（需服务端在完整文本+回车投递期内原子核验身份/水位/working，核验不符零写入），当前历史服务端（herdr 0.9.5 / protocol 22）未提供；请升级 Herdr 服务端至通告该能力的版本并重新启用 herdr 插件`,
-      409,
-      {
-        capability: AGENT_PROMPT_GUARD_CAPABILITY,
-        ...(server !== undefined ? { serverVersion: server.version, serverProtocol: server.protocol } : {}),
-        target: JSON.stringify(target),
-      },
-    )
-  }
+  /** 服务端 admission 确定零写入的拒绝码（其余超时/断线/坏响应一律按不确定投递处理）。 */
+  private static readonly STEER_ZERO_WRITE_CODES = new Set(['stale_state', 'agent_not_ready', 'agent_blocked', 'agent_not_found'])
 
   /**
    * 受管窗格运行中插话（按 pane 互斥；单次投递不重试）：
    *
-   * 门禁（全部通过才投递，任何一步失败确定性拒绝，绝无静默降级）：
+   * 门禁（任何一步失败确定性拒绝，绝无静默降级）：
    * 1. live 执行上下文：registry 现值 outcome=running 且阶段为 'task'
    *    （startup/handoff/gate/keepalive/failed/settled 一律拒绝）；
    * 2. run/父会话强匹配：workflowRunId 与 parentConversationId 必须与受管
    *    记录精确相等（仅限 workflow run 管理下的窗格）；
    * 3. 原 run signal 未取消（跨节点冻结 target：不重算 node/socket，不接受
    *    同 pane 不同 node——由 plugin 动作层精确 (nodeId, paneId) 定位保证）；
-   * 4. 预检 agent.get：name/tab/pane/terminal 身份精确相等、working 且非
-   *    launch_pending；blocked 交原 Ask 审批桥（此处拒绝），idle/done/unknown
-   *    拒绝（绝不新建回合）；
-   * 5. 能力门禁（agent_prompt_guard_v1；见 assertPromptGuard）；
-   * 6. 尾读复核：能力探测跨 await 后重验阶段/registry/run signal（不路跨
-   *    await 后继续发键）；
-   * 7. 投递：agent.prompt 携带 guard、无 wait、显式短超时，await 真实响应；
-   *    断线/超时/坏响应如实上抛（可能已部分投递的不确定结果），绝不重发。
-   *    投递文本附带唯一 receipt 与确认 sidecar 契约：receipt 在发送前登记，
-   *    零写入拒绝（stale/not_ready/blocked）时撤销、不确定结果保守保留。
+   * 4. agent.get 预检：name/tab/pane 身份精确相等、working 且非
+   *    launch_pending；blocked 交原 Ask 审批桥（此处拒绝）；预检已
+   *    idle/done/unknown 拒绝（绝不主动新建回合）；
+   * 5. 预检跨 await 后复核阶段/registry/run signal；
+   * 6. 投递：现有 agent.prompt {target: 受管 agentName, text}，无 wait、
+   *    无附加守卫字段、显式短超时，单次调用即终局，绝不重试。预检到
+   *    服务端接收之间刚转 idle 的提交交由真实 admission 裁定（允许接续
+   *    新回合）；服务端确定零写入拒绝（stale_state/agent_not_ready/
+   *    agent_blocked/agent_not_found）不动原交接路径；超时/断线/坏响应
+   *    为不确定投递——按 pane 记失败，任务结算时显式失败保留现场，
+   *    绝不落回旧交接文件或自动重发。
    *
-   * 诚实语义：steered=true 仅代表守卫核验通过且文本已投递；CLI 内部队列的
-   * 消费不由协议保证——任务结算以确认文件核销最新 receipt（缺认显式
-   * herdr_steer_unconfirmed，绝不把旧结果冒充按最新指导的交付）；确认核销
-   * 也只证明「按最新指导完成了交接」，不等同已验证指导语义正确。
+   * 诚实语义：guardLevel='preflight'——预检不是提交点原子复核（不可伪称
+   * CAS）；steered=true 仅代表单次投递成功。每次成功插话把唯一交接文件
+   * 重定向到全新 wf-out-* 名（旧名作废）：任务结算只接受最新名字的交付，
+   * 旧结果/迟到写回天然无法冒充。
    */
   async steerPane(pane: ManagedPane, input: SteerPaneInput): Promise<{ stateChangeSeq: number }> {
     if (typeof input.text !== 'string' || input.text.trim() === '') {
@@ -1337,7 +1261,7 @@ export class HerdrExecutor {
           { paneId: pane.paneId },
         )
       }
-      // 4) 预检：权威 agent.get 核验完整身份与工作状态。
+      // 4) 预检：权威 agent.get 核验身份与工作状态（preflight，非提交点 CAS）。
       const authority = await this.agentGet(current.target, current.paneId, input.signal)
       if (
         authority.paneId !== current.paneId ||
@@ -1349,14 +1273,6 @@ export class HerdrExecutor {
           `pane ${current.paneId} 权威身份与受管记录不一致（name=${String(authority.name)} tab=${authority.tabId}），拒绝插话`,
           409,
           { paneId: current.paneId, authorityName: authority.name, authorityTabId: authority.tabId },
-        )
-      }
-      if (authority.terminalId === undefined) {
-        throw new HelmError(
-          'herdr_protocol_violation',
-          `agent.get 未回传非空 terminal_id（pane ${current.paneId}），无法构造守卫，拒绝插话（绝不猜造终端标识）`,
-          502,
-          { paneId: current.paneId },
         )
       }
       if (authority.launchPending === true) {
@@ -1383,9 +1299,7 @@ export class HerdrExecutor {
           { paneId: current.paneId, agentStatus: authority.agentStatus },
         )
       }
-      // 5) 能力门禁（fail-closed；不盲发 guard 到旧服务端）。
-      await this.assertPromptGuard(current.target, input.signal)
-      // 6) 尾读复核：能力探测跨 await，任务可能已结算/取消/进入新阶段。
+      // 5) 预检跨 await 复核：任务可能已结算/取消/进入新阶段。
       this.assertSteerable(pane, input)
       const originAfter = this.activeTasks.get(key)
       if (originAfter === undefined || originAfter.signal?.aborted) {
@@ -1396,30 +1310,15 @@ export class HerdrExecutor {
           { paneId: pane.paneId },
         )
       }
-      // 7) 投递：无 wait + 显式短超时；单次调用即终局，绝不重试。
-      //    receipt 先登记后投递：超时/断线可能已写入，保守保留待确认；
-      //    零写入拒绝（stale/not_ready/blocked）在 catch 中撤销本次 receipt。
-      const receipt = `steer-${randomUUID()}`
-      const text = this.steerPromptText(current, input, receipt)
-      const previousReceipt = this.paneSteerReceipts.get(key)
-      this.paneSteerReceipts.set(key, receipt)
+      // 6) 单次投递：全新唯一交接文件名 + 现有 agent.prompt（无 wait/无附加字段）。
+      const next = this.nextSteerOutputFileName(current)
+      const text = this.steerPromptText(current, input, next)
       try {
         parseAgentResult(
           await this.transport.call(
             current.target,
             'agent.prompt',
-            buildAgentPromptGuardParams({
-              target: current.agentName,
-              text,
-              guard: {
-                terminalId: authority.terminalId,
-                paneId: current.paneId,
-                tabId: current.tabId,
-                agentName: current.agentName,
-                stateChangeSeq: authority.stateChangeSeq,
-                agentStatus: 'working',
-              },
-            }),
+            { target: current.agentName, text },
             { signal: input.signal, timeoutMs: HerdrExecutor.STEER_PROMPT_TIMEOUT_MS },
           ),
           'agent.prompt',
@@ -1427,13 +1326,25 @@ export class HerdrExecutor {
         )
       } catch (error) {
         const code = (error as { code?: string }).code
-        if (isStaleStateError(error) || code === 'agent_not_ready' || code === 'agent_blocked') {
-          // 服务端零写入拒绝：确定性撤销本次 receipt（恢复前一已投递者）。
-          if (previousReceipt === undefined) this.paneSteerReceipts.delete(key)
-          else this.paneSteerReceipts.set(key, previousReceipt)
+        if (typeof code === 'string' && HerdrExecutor.STEER_ZERO_WRITE_CODES.has(code)) {
+          // 服务端 admission 确定零写入：不重定向交接文件、不记失败，
+          // 原任务按自身节奏继续（前一有效路径保持不变）。
+          throw error
         }
+        // 超时/断线/坏响应：投递结果不确定（可能已写入）。按 pane 记失败，
+        // 任务结算时显式失败保留现场；绝不静默落回旧文件或自动重发。
+        this.steerFailures.set(key, error instanceof Error ? error.message : String(error))
         throw error
       }
+      // 成功投递：先重定向唯一交接文件（结算排空在途 steer 时必然可见），
+      // 再核销此前的不确定投递记录（最新指导已覆盖旧投递）。
+      this.registry.update(nodeIdOf(current), current.paneId, { outputFileName: next })
+      const retired = this.steerRetiredFiles.get(key) ?? []
+      if (current.outputFileName !== undefined && current.outputFileName !== '') {
+        retired.push(current.outputFileName)
+      }
+      this.steerRetiredFiles.set(key, retired)
+      this.steerFailures.delete(key)
       return { stateChangeSeq: authority.stateChangeSeq }
     })().finally(() => this.activeSteers.delete(key))
     this.activeSteers.set(key, steer)
@@ -1488,8 +1399,29 @@ export class HerdrExecutor {
     return current
   }
 
-  /** 插话投递文本：运行来源前缀 + 脱敏指导 + 原文件交接契约提醒（不变）+ 插话确认契约。 */
-  private steerPromptText(pane: ManagedPane, input: SteerPaneInput, receipt: string): string {
+  /** 插话投递文本：来源前缀 + 脱敏指导 + 交接文件重定向（旧路径作废，仅最新指导有效）。 */
+  private steerPromptText(pane: ManagedPane, input: SteerPaneInput, nextFileName: string): string {
+    const previous = pane.outputFileName
+    if (previous === undefined || previous === '') {
+      throw new HelmError(
+        'herdr_context_unavailable',
+        `pane ${pane.paneId} 缺少交接文件名（任务阶段异常），拒绝插话`,
+        409,
+        { paneId: pane.paneId },
+      )
+    }
+    return [
+      `父会话插话纠偏（后台运行 ${input.workflowRunId}）：`,
+      this.deps.redact(input.text),
+      '',
+      '--- helm 交接契约更新（必须遵守）---',
+      `按本插话的最新指导完成剩余工作后，把最终结果写入新文件 ${pane.effectiveCwd}/.helm/${nextFileName}（内容要求与原交接契约一致，仍须通过原 Schema 与 Gate）。`,
+      `原交接文件 ${previous} 已作废：不要再写旧文件；helm 只接受新文件的交付，未写新文件视为任务失败。`,
+    ].join('\n')
+  }
+
+  /** 本次插话的全新唯一交接文件名（与当前业务文件同扩展；复用同一白名单）。 */
+  private nextSteerOutputFileName(pane: ManagedPane): string {
     const fileName = pane.outputFileName
     if (fileName === undefined || fileName === '') {
       throw new HelmError(
@@ -1499,21 +1431,29 @@ export class HerdrExecutor {
         { paneId: pane.paneId },
       )
     }
-    const confirmFile = this.steerConfirmFileNameOf(pane)
-    return [
-      `父会话插话纠偏（后台运行 ${input.workflowRunId}）：`,
-      this.deps.redact(input.text),
-      '',
-      '--- helm 交接契约（不变）---',
-      `任务完成后，仍把最终结果写入文件 ${pane.effectiveCwd}/.helm/${fileName}（原交接契约不变）；插话不改变交付方式，未写文件视为任务失败。`,
-      '',
-      '--- helm 插话确认（必须遵守）---',
-      `本次插话的确认 receipt：${receipt}`,
-      `在按本插话的最新指导写完上述结果文件之后，还必须把确认 JSON 原子写入文件 ${pane.effectiveCwd}/.helm/${confirmFile}：`,
-      JSON.stringify({ receipt }),
-      '后续收到新插话时，以最新 receipt 更新确认文件；确认只表示完成该次指导的交接，结果仍须通过原 Schema 与 Gate。',
-      '未写确认文件或内容不符，视为未按最新指导交付，任务将按插话未确认失败。',
-    ].join('\n')
+    const ext = fileName.endsWith('.json') ? 'json' : 'md'
+    const unique = `steer-${Date.now()}-${HashShort.of(`${pane.paneId}:${Math.random().toString(36).slice(2, 10)}`)}`
+    return buildOutputFileName(`s${HashShort.of(unique)}`, ext)
+  }
+
+  /** 成功交接后清理已被插话作废的旧结果文件（失败路径保留现场；清理失败显式通知不拖垮已验证结果）。 */
+  private async clearRetiredSteerOutputs(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
+    const key = this.paneKey(pane)
+    const retired = this.steerRetiredFiles.get(key)
+    if (retired === undefined || retired.length === 0) return
+    try {
+      for (const fileName of retired) {
+        await this.transport.removeOutput(targetOf(pane), pane.effectiveCwd, fileName, request.signal)
+      }
+    } catch (error) {
+      this.host.notify(
+        'Herdr 作废交接文件清理未竟',
+        `插话作废的旧结果文件删除失败（结果已验证，不影响本次交付）：${error instanceof Error ? this.deps.redact(error.message) : String(error)}`,
+        'error',
+      )
+    } finally {
+      this.steerRetiredFiles.delete(key)
+    }
   }
 
   // ------------------------------------------------------------------
@@ -1868,7 +1808,8 @@ export class HerdrExecutor {
       this.unstartedPanes.delete(this.paneKey(pane))
       this.panePhases.delete(this.paneKey(pane))
       this.activeTasks.delete(this.paneKey(pane))
-      this.paneSteerReceipts.delete(this.paneKey(pane))
+      this.steerFailures.delete(this.paneKey(pane))
+      this.steerRetiredFiles.delete(this.paneKey(pane))
       for (const removed of this.asks.paneClosed(pane.paneId, nodeIdOf(pane))) {
         if (removed.phase === 'pending' || removed.phase === 'creating') {
           await this.cancelAskQuietly(removed.askId, 'superseded')
@@ -1892,7 +1833,8 @@ export class HerdrExecutor {
     this.unstartedPanes.delete(key)
     this.panePhases.delete(key)
     this.activeTasks.delete(key)
-    this.paneSteerReceipts.delete(key)
+    this.steerFailures.delete(key)
+    this.steerRetiredFiles.delete(key)
   }
 
   private async cancelAskQuietly(askId: string, reason: 'cancelled' | 'superseded'): Promise<void> {

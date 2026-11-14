@@ -5,12 +5,13 @@
  * 链路：subagent(background:true, agentType:'herdr:agy') → WorkflowService
  * durable run → agent_spawn 钩子 → HerdrExecutor 建窗（onResolved 回传
  * controls.steer）→ workflow.steer 按节点 controls 动态委托 herdr.steer →
- * 服务端原子守卫投递 → 原 run 文件交接 / Gate / 父会话结算通知照常。
+ * 预检 + 现有 agent.prompt 投递（guardLevel='preflight'）→ 原文件交接 /
+ * Gate / 父会话结算通知照常（插话以全新唯一交接文件重定向，旧路径作废）。
  *
- * 诚实声明：SteerFakeTransport「实现」的是 helm 拟议的 agent_prompt_guard_v1
- * 契约（见 rpc.ts 契约块）——fixture 行为不代表实际 Herdr 服务端能力；当前
- * 历史服务端（herdr 0.9.5 / protocol 22）未通告该能力，真实链路对其
- * fail-closed（herdr_steer_guard_unsupported）。本文件只验证 helm 侧接线。
+ * fixture 语义（真实协议，herdr 0.9.5 / protocol 22）：pong 为真实形状（无
+ * 拟议守卫能力字段）；agent.prompt(target, text, wait?) 按官方形状模拟——
+ * 任务 prompt 携带 wait（target 为 paneId），插话不携带 wait（target 为受管
+ * agentName），绝不依赖拟议 guard 字段识别插话。
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -31,7 +32,7 @@ import { createWorkflowPlugin } from '../src/builtin-plugins/workflow.js'
 import { completeBackend } from './helpers/host-backend-stub.js'
 import { FsOutputFiles, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/builtin-plugins/herdr/contracts.js'
-import { AGENT_PROMPT_GUARD_CAPABILITY } from '../src/builtin-plugins/herdr/rpc.js'
+import { SEND_KEYS_CAS_CAPABILITY } from '../src/builtin-plugins/herdr/rpc.js'
 
 type PaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 
@@ -39,29 +40,29 @@ interface PaneState {
   paneId: string
   tabId: string
   workspaceId: string
-  terminalId: string
   agentStatus: PaneStatus
   seq: number
   name?: string
   cwd: string
+  launchPending?: boolean
 }
 
 function agentInfoOf(pane: PaneState) {
   return {
-    terminal_id: pane.terminalId,
     pane_id: pane.paneId,
     tab_id: pane.tabId,
     workspace_id: pane.workspaceId,
     agent_status: pane.agentStatus,
     interactive_ready: pane.agentStatus !== 'unknown',
     state_change_seq: pane.seq,
+    launch_pending: pane.launchPending === true,
     cwd: pane.cwd,
     ...(pane.name !== undefined ? { name: pane.name } : {}),
   }
 }
 
-/** 拟议 agent_prompt_guard_v1 契约的受控服务端（fixture；非实际 Herdr 能力）。 */
-class GuardServerTransport implements HerdrTransport {
+/** 真实 protocol 22 形状的受控服务端（agent.prompt admission 语义如实模拟）。 */
+class ProtocolServerTransport implements HerdrTransport {
   panes = new Map<string, PaneState>()
   tabs = new Map<string, { closed: boolean }>()
   calls: Array<{ method: string; params: Record<string, unknown> }> = []
@@ -81,9 +82,10 @@ class GuardServerTransport implements HerdrTransport {
     this.calls.push({ method, params })
     switch (method) {
       case 'ping':
+        // 真实 0.9.5 pong 形状：无任何拟议插话守卫能力字段。
         return {
-          type: 'pong', version: 'guard-fixture', protocol: 22,
-          capabilities: { [AGENT_PROMPT_GUARD_CAPABILITY]: true },
+          type: 'pong', version: '0.9.5', protocol: 22,
+          capabilities: { live_handoff: false, detached_server_daemon: false, endpoint_protocol_generation: 1, [SEND_KEYS_CAS_CAPABILITY]: true },
         }
       case 'tab.create': {
         const n = this.panes.size + 1
@@ -92,7 +94,7 @@ class GuardServerTransport implements HerdrTransport {
         const tabId = `${workspaceId}:t${n}`
         const paneCwd = (params['cwd'] as string) ?? '/tmp'
         mkdirSync(join(paneCwd, '.helm'), { recursive: true })
-        this.panes.set(paneId, { paneId, tabId, workspaceId, terminalId: `term-${n}`, agentStatus: 'idle', seq: 1, cwd: paneCwd })
+        this.panes.set(paneId, { paneId, tabId, workspaceId, agentStatus: 'idle', seq: 1, cwd: paneCwd })
         this.tabs.set(tabId, { closed: false })
         return {
           type: 'tab_created',
@@ -131,20 +133,15 @@ class GuardServerTransport implements HerdrTransport {
         throw new HelmError('timeout', 'timed out', 408)
       }
       case 'agent.prompt': {
+        // 分支判别（真实协议形状）：任务 prompt 携带 wait；插话不携带 wait 且
+        // 以受管 agentName 寻址——绝不依赖任何拟议 guard 字段。
         const pane = this.paneOf(params['target'])
         const text = params['text'] as string
-        const guard = params['guard'] as Record<string, unknown> | undefined
-        if (guard !== undefined) {
-          // 原子守卫（fixture 拟议契约）：首字节前核验身份+水位+working，覆盖
-          // 完整「文本 + 回车」投递期；不符零写入。
-          if (
-            guard['terminal_id'] !== pane.terminalId || guard['pane_id'] !== pane.paneId ||
-            guard['tab_id'] !== pane.tabId || guard['agent_name'] !== pane.name ||
-            guard['state_change_seq'] !== pane.seq || guard['agent_status'] !== 'working' ||
-            pane.agentStatus !== 'working'
-          ) {
-            throw new HelmError('stale_state', 'guard 核验不符，输入未写入', 409)
-          }
+        if (params['wait'] === undefined) {
+          // 真实 admission：launch_pending / blocked 零写入拒绝；预检 working
+          // 后刚转 idle 的提交接续新回合。
+          if (pane.launchPending === true) throw new HelmError('agent_not_ready', 'launch_pending，输入未写入', 409)
+          if (pane.agentStatus === 'blocked') throw new HelmError('agent_blocked', 'blocked，输入未写入', 409)
           pane.seq += 1
           pane.agentStatus = 'working'
           this.steerDelivered.push({ paneId: pane.paneId, text })
@@ -153,8 +150,8 @@ class GuardServerTransport implements HerdrTransport {
         }
         pane.agentStatus = this.promptStatus
         pane.seq += 1
-        // 任务 prompt 一到即落盘交接文件（模拟 CLI 按契约交付）。
-        const fileName = text.match(/wf-out-[A-Za-z0-9_.-]+\.(json|md)/)?.[0]
+        // 任务 prompt 一到即落盘交接文件（模拟 CLI 按原契约交付首版结果）。
+        const fileName = text.match(/wf-out-[A-Za-z0-9_.-]+\.(?:json|md)/)?.[0]
         if (fileName !== undefined) this.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'task-done')
         this.emit({ type: 'pane.updated', paneId: pane.paneId })
         return { type: 'agent_prompted', agent: agentInfoOf(pane) }
@@ -163,14 +160,20 @@ class GuardServerTransport implements HerdrTransport {
         const pane = this.paneOf(params['target'])
         return { type: 'pane_read', read: { pane_id: pane.paneId, text: `tail of ${pane.paneId}` } }
       }
-      case 'agent.send_keys':
+      case 'agent.send_keys': {
+        const pane = this.paneOf(params['target'])
+        const expected = params['expected_state_seq']
+        if (typeof expected !== 'number' || expected !== pane.seq) {
+          throw new HelmError('stale_state', 'CAS 水位不符，按键未发送', 409)
+        }
         return { type: 'ok' }
+      }
       case 'pane.report_metadata':
         return { type: 'ok' }
       case 'session.snapshot':
         return { type: 'session_snapshot', snapshot: { version: 'test', protocol: 22, workspaces: [], tabs: [], panes: [], agents: [] } }
       default:
-        throw new HelmError('method_not_found', `guard fixture 不支持 ${method}`, 400)
+        throw new HelmError('method_not_found', `protocol fixture 不支持 ${method}`, 400)
     }
   }
 
@@ -203,6 +206,10 @@ class GuardServerTransport implements HerdrTransport {
     for (const listener of [...this.eventListeners]) listener(event)
   }
 
+  /**
+   * 终端进入 idle/done 时模拟 CLI 完成交接：有插话则按最新指导把最终结果
+   * 写入插话指定的全新唯一文件（旧路径残写的首版仍在，但已作废）。
+   */
   advancePane(paneId: string, status: PaneStatus): void {
     const pane = this.panes.get(paneId)
     if (!pane) return
@@ -211,10 +218,9 @@ class GuardServerTransport implements HerdrTransport {
     if (status === 'idle' || status === 'done') {
       const delivered = this.steerDelivered.filter((entry) => entry.paneId === paneId).at(-1)?.text
       if (delivered !== undefined) {
-        const receipt = delivered.match(/确认 receipt：([A-Za-z0-9_-]+)/)?.[1]
-        const file = delivered.match(/\.helm\/(wf-out-[A-Za-z0-9_.-]+-s\.json)/)?.[1]
-        assert.ok(receipt !== undefined && file !== undefined)
-        this.outputFiles.set(`${pane.cwd}/.helm/${file}`, JSON.stringify({ receipt }))
+        const file = delivered.match(/写入新文件 [^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+        assert.ok(file !== undefined, '插话文本应含新交接文件名')
+        this.outputFiles.set(`${pane.cwd}/.helm/${file}`, 'steered-done')
       }
     }
     this.emit({ type: 'pane.updated', paneId })
@@ -275,7 +281,7 @@ class MemoryConfigStore implements PluginConfigStore {
 
 interface Env {
   host: PluginHost
-  transport: GuardServerTransport
+  transport: ProtocolServerTransport
   dataDir: string
   parentNotifications: Array<{ conversationId: number; text: string; meta: Record<string, unknown> }>
   gateCalls: number[]
@@ -286,7 +292,7 @@ async function makeEnv(): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-steer-wf-'))
   const parentCwd = join(dataDir, 'parent')
   mkdirSync(parentCwd, { recursive: true })
-  const transport = new GuardServerTransport()
+  const transport = new ProtocolServerTransport()
   const conversation1: ConversationSummary = {
     id: 1,
     title: 'conv-1',
@@ -374,7 +380,7 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 
   }
 }
 
-test('双插件联调: herdr 后台 run 经 workflow.steer 委托投递，文件交接/Gate 恰一次、父通知正常（guard fixture 非实际 Herdr 能力）', { timeout: 60_000 }, async () => {
+test('双插件联调: 真实形状服务端上 herdr 后台 run 经 workflow.steer 委托投递（guardLevel=preflight），最新文件交接/Gate 恰一次、父通知正常', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     // 1) 发起后台 herdr 子代理 run（真实 WorkflowService durable 记录）。
@@ -386,9 +392,15 @@ test('双插件联调: herdr 后台 run 经 workflow.steer 委托投递，文件
     const runId = started.structuredOutput.runId
     assert.ok(typeof runId === 'string' && runId !== '')
     // 2) 任务 prompt 已投递且终端 working。
-    await waitFor(() => env.transport.calls.some((c) => c.method === 'agent.prompt' && c.params['guard'] === undefined))
+    await waitFor(() => env.transport.calls.some((c) => c.method === 'agent.prompt' && c.params['wait'] !== undefined))
     const pane = [...env.transport.panes.values()][0]!
     await waitFor(() => pane.agentStatus === 'working')
+    const taskFileName = (() => {
+      const text = env.transport.calls.find((c) => c.method === 'agent.prompt' && c.params['wait'] !== undefined)!.params['text'] as string
+      const name = text.match(/写入[^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+      assert.ok(name !== undefined)
+      return name
+    })()
     // 3) run 节点已回传 controls.steer + 外部执行坐标。
     const before = (await env.host.invokeAction(WORKFLOW_PLUGIN_ID, 'inspect', { runId }, { conversationId: 1 })) as { run: WorkflowRunSummary }
     const node = (before.run.nodes ?? [])[0]
@@ -413,15 +425,22 @@ test('双插件联调: herdr 后台 run 经 workflow.steer 委托投递，文件
         nodeId: 'local',
         ownership: 'helm',
         stateChangeSeq: out['stateChangeSeq'],
-        guardLevel: 'cas',
+        guardLevel: 'preflight',
       },
     )
+    assert.equal(typeof out['stateChangeSeq'], 'number', '预检观测水位如实透传')
     assert.equal(env.transport.steerDelivered.length, 1, 'steer 恰好投递一次')
     assert.ok(env.transport.steerDelivered[0]!.text.includes('改用方案B'))
-    assert.ok(env.transport.steerDelivered[0]!.text.includes('.helm/wf-out-'), '投递文本保留文件交接契约提醒')
-    const guardPrompt = env.transport.calls.find((c) => c.method === 'agent.prompt' && c.params['guard'] !== undefined)!
-    assert.equal('wait' in guardPrompt.params, false, 'steer 投递不携带 wait（不订阅结算）')
-    // 5) 任务终态：原 run 文件交接 / Gate 恰好一次 / 父通知正常。
+    const steerCall = env.transport.calls.find((c) => c.method === 'agent.prompt' && c.params['wait'] === undefined)!
+    assert.ok(steerCall !== undefined)
+    assert.deepEqual(Object.keys(steerCall.params).sort(), ['target', 'text'], '现有 agent.prompt 形状（无 wait/无附加字段）')
+    assert.equal(steerCall.params['target'], pane.name, '以受管 agentName 寻址')
+    const steerText = env.transport.steerDelivered[0]!.text
+    const newFile = steerText.match(/写入新文件 [^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+    assert.ok(newFile !== undefined, '投递文本指向全新唯一交接文件')
+    assert.notEqual(newFile, taskFileName)
+    assert.ok(steerText.includes(`原交接文件 ${taskFileName} 已作废`), '投递文本明确旧路径作废')
+    // 5) 任务终态：CLI 按最新指导写新文件 -> 原 run 交接 / Gate 恰一次 / 父通知正常。
     env.transport.advancePane(pane.paneId, 'done')
     await waitFor(async () => {
       const { run } = (await env.host.invokeAction(WORKFLOW_PLUGIN_ID, 'inspect', { runId }, { conversationId: 1 })) as { run: WorkflowRunSummary }
@@ -429,25 +448,16 @@ test('双插件联调: herdr 后台 run 经 workflow.steer 委托投递，文件
     })
     const final = (await env.host.invokeAction(WORKFLOW_PLUGIN_ID, 'inspect', { runId }, { conversationId: 1 })) as { run: WorkflowRunSummary }
     assert.equal(final.run.status, 'completed')
-    assert.equal(final.run.result, 'task-done', '交接文件内容成为 run 结果')
+    assert.equal(final.run.result, 'steered-done', '最新唯一交接文件内容成为 run 结果')
     assert.equal(env.gateCalls.length, 1, 'Gate 恰好执行一次')
     assert.equal(
       env.parentNotifications.filter((n) => n.meta['backgroundRunId'] === runId).length,
       1,
       '父会话结算通知恰好一次',
     )
-    // 交接文件已清理（真实 fs）。
-    const file = env.transport.calls
-      .filter((c) => c.method === 'agent.prompt' && c.params['guard'] === undefined)
-      .map((c) => (c.params['text'] as string).match(/[\w/.-]*\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1])
-      .find((name): name is string => name !== undefined)
-    assert.ok(file !== undefined)
-    assert.equal(existsSync(join(pane.cwd, '.helm', file)), false, '成功交接后文件被删除')
-    // herdr 窗格结算（keepalive 后被 workflow.settled 清理）。
-    await waitFor(() => {
-      const list = env.host.listActions().find((m) => m.pluginId === 'builtin:herdr' && m.id === 'list')
-      return list !== undefined
-    })
+    // 新旧交接文件成功后均已清理（真实 fs）。
+    assert.equal(existsSync(join(pane.cwd, '.helm', newFile)), false, '最新交接文件被删除')
+    assert.equal(existsSync(join(pane.cwd, '.helm', taskFileName)), false, '作废旧文件被清理')
   } finally {
     await env.close()
   }
@@ -462,7 +472,7 @@ test('双插件联调: 跨树会话经 workflow.steer 对外部执行同样拒�
       { conversationId: 1, callId: 'call-1' },
     )) as { structuredOutput: { runId: string } }
     const runId = started.structuredOutput.runId
-    await waitFor(() => env.transport.calls.some((c) => c.method === 'agent.prompt' && c.params['guard'] === undefined))
+    await waitFor(() => env.transport.calls.some((c) => c.method === 'agent.prompt' && c.params['wait'] !== undefined))
     let caught: unknown
     try {
       // 会话 2 不存在（非祖先）：拒绝。
