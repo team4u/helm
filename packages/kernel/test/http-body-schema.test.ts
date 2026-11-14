@@ -621,6 +621,24 @@ test('schema 拒绝携带 AJV 字段路径诊断（details.errors 非空，可�
 // 薄分发路由 parity（多余段 404 / 方法不匹配 405|404 各归其位）
 // ---------------------------------------------------------------------------
 
+test('路由分派不把对象原型属性当作领域 handler', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  for (const name of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    const response = await call(kernel, 'GET', `/api/${name}`)
+    assert.equal(response.status, 404, name)
+    assert.equal(response.code, 'not_found', name)
+  }
+})
+
+test('空 body 经过端点 Schema，必填字段缺失时不调用服务', { timeout: 60_000 }, async () => {
+  const calls = newCallLog()
+  const kernel = makeKernel(calls)
+  await expect400(kernel, 'POST', '/api/nodes/node-a/forward')
+  assert.deepEqual(calls.startNodeForward, [])
+  const reset = await call(kernel, 'POST', '/api/conversations/1/reset')
+  assert.equal(reset.status, 200)
+})
+
 test('路由 parity：多余段与未匹配方法不落入操作分支', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   // 多余段 / 未匹配方法 → 404（原实现各领域语义）。

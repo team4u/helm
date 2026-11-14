@@ -51,7 +51,7 @@ export async function parseOptionalJsonObjectBody<T>(
   parse: (body: Record<string, unknown>) => T,
 ): Promise<T> {
   const raw = await readBinaryBodyWithLimit(request, 1024 * 1024)
-  if (raw.length === 0) return {} as T
+  if (raw.length === 0) return parse({})
   let parsed: unknown
   try {
     parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw))

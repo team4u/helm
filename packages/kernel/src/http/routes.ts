@@ -49,8 +49,7 @@ export async function handleApi(
   const segments = url.pathname.split('/').filter((s) => s.length > 0)
   // 剥离 api 前缀
   if (segments[0] === 'api') segments.shift()
-  // 统一严格解码每个路径段（hub.ts 已对整路径做过一次；此处对已剥离
-  // api 前缀的段再解一次是幂等的——已解码段不含 '%' 时直接原样返回）。
+  // hub.ts 的路径校验不改写 Request；这里从原始 URL 解析并解码路径段。
   const ctx: RouteContext = {
     request,
     method: request.method,
@@ -103,7 +102,7 @@ async function dispatch(
     return errorResponse(redactor, 404, 'not_found', '路由不存在')
   }
 
-  const handler = DOMAIN_HANDLERS[head]
+  const handler = Object.hasOwn(DOMAIN_HANDLERS, head) ? DOMAIN_HANDLERS[head] : undefined
   if (handler === undefined) return errorResponse(redactor, 404, 'not_found', '路由不存在')
   return handler(ctx, kernel, redactor)
 }
