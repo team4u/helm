@@ -315,12 +315,11 @@ export class KernelRuntime {
         console.error('[helm] plugin.changed 后刷新插件工具失败:', error)
       }
       const envelope = payload as { type?: string; plugin?: unknown; ui?: unknown } | undefined
-      this.events.publish('plugin.changed', {
+      return this.events.publish('plugin.changed', {
         type: 'plugin.changed',
         plugin: envelope?.plugin ?? {},
         ui: Array.isArray(envelope?.ui) ? envelope!.ui : [],
-      })
-      return
+      }).internal
     }
     if (type === 'plugin.session_doc.updated') {
       this.svc.sessionDocStreams.dispatch(payload)

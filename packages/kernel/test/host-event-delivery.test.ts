@@ -27,6 +27,7 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import type { HelmEventFrame, MaybePromise } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { EventHub } from '../src/runtime/events.js'
 
 type FauxHandle = ReturnType<typeof fauxProvider>
 
@@ -130,6 +131,52 @@ describe('宿主事件单一投递边界', { timeout: 60_000 }, () => {
     } finally {
       await kernel.close()
     }
+  })
+
+  it('plugin.changed 特殊发布路径也等待异步内部监听器', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'plugin-event-await'))
+    const gate = deferred()
+    const entered = deferred()
+    let calls = 0
+    let settled = false
+    let release: (() => void) | undefined
+    try {
+      await kernel.plugins.register({ id: 'test:lifecycle-event', definePlugin() {} })
+      const plugin = kernel.plugins.list().find((item) => item.id === 'test:lifecycle-event')!
+      release = kernel.onEvent('plugin.changed', async () => {
+        calls++
+        entered.resolve()
+        await gate.promise
+      })
+      const published = kernel.emitHostEvent('plugin.changed', { plugin, ui: [] })
+      assert.ok(published instanceof Promise)
+      void published.then(() => { settled = true })
+      await entered.promise
+      await new Promise((done) => setImmediate(done))
+      assert.equal(settled, false)
+      assert.equal(calls, 1)
+      gate.resolve()
+      await published
+      assert.equal(settled, true)
+    } finally {
+      gate.resolve()
+      release?.()
+      await kernel.close()
+    }
+  })
+
+  it('EventHub.close 解除宿主投递器，不保留运行时回调', { timeout: 60_000 }, () => {
+    const events = new EventHub({
+      snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }),
+      persistSeq: () => {},
+    })
+    let delivered = 0
+    events.setHostDispatcher(() => { delivered++ })
+    events.publish('test:before-close', {})
+    assert.equal(delivered, 1)
+    events.close()
+    events.publish('test:after-close', {})
+    assert.equal(delivered, 1)
   })
 
   it('内核自动生成事件（真实提交）：内部监听器与 SSE 帧逐条一一对应，恰一次', { timeout: 60_000 }, async () => {

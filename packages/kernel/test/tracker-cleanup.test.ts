@@ -449,9 +449,11 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         const bound = submitted.then((sub) => tracker.bindSubmission(id, input.id, sub.id as number))
         await Promise.all([submitted.catch(() => {}), bound])
         await conv.waitForIdle(BACKGROUND_CONTEXT).catch(() => {})
-        await new Promise((r) => setTimeout(r, 200))
+        await tracker.waitTurnSettled(id)
 
-        const payload = settled.find((s) => s.conversation.id === id)
+        const outcomes = settled.filter((s) => s.conversation.id === id)
+        assert.equal(outcomes.length, 1, `${caseDir}：回合恰好结算一次`)
+        const payload = outcomes[0]!
         assert.ok(payload !== undefined, `${caseDir}：结算到达`)
         assert.equal(payload.outcome, expectedOutcome)
         assert.deepEqual(

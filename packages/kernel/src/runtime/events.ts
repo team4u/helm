@@ -322,6 +322,7 @@ export class EventHub {
   close(): void {
     for (const stop of [...this.streamClosers]) stop()
     this.subscribers.clear()
+    this.hostDispatcher = undefined
   }
 
   /**
