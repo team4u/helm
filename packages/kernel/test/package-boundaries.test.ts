@@ -68,7 +68,9 @@ function hasPublicExport(manifest: PackageManifest, specifier: string): boolean 
   const subpath = specifier === manifest.name ? '.' : `.${specifier.slice(manifest.name.length)}`
   const exports = manifest.exports
   if (exports === undefined || typeof exports === 'string') return subpath === '.'
-  if (!Object.keys(exports).some((key) => key.startsWith('.'))) return subpath === '.'
+  const keys = Object.keys(exports)
+  if (keys.length === 0) return false
+  if (!keys.some((key) => key.startsWith('.'))) return subpath === '.'
   return Object.entries(exports).some(([key, value]) => {
     if (value === null) return false
     const star = key.indexOf('*')
