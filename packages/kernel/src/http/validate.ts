@@ -54,15 +54,7 @@ export function assertBodySchema(schema: JsonSchema, value: unknown, what: strin
   }
 }
 
-/**
- * UTF-16 码元长度上限守卫：AJV maxLength 按码点计数（代理对算 1），
- * 与原手写校验的 string.length（UTF-16 码元，非 BMP 字符算 2）口径不同
- * ——含 emoji 等非 BMP 字符的输入会让 schema 边界放宽（如 101 个 emoji
- * 的 title 是 101 码点/202 码元，原实现拒、纯 schema 放行）。受影响的
- * 字段不再在 schema 里声明 maxLength，统一由此守卫恢复原拒绝边界；
- * 不给 AJV 加自定义 plugin、不改其全局 Unicode 语义。
- * minLength:1 无此偏差（空串同拒、非空同过），仍留在 schema。
- */
+/** JSON Schema 按码点计长；这些字段的限额使用 UTF-16 码元，需单独验证。 */
 export function requireUtf16LengthAtMost(field: string, value: string, maxLength: number): void {
   if (value.length > maxLength) {
     throw new ValidationError(`${field} 长度需 <= ${maxLength}`)
@@ -240,8 +232,6 @@ export function parseConversationPatch(body: Record<string, unknown>): Conversat
 const INPUT_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
-    // maxLength 不进 schema：AJV 按码点计数会放宽非 BMP 输入，由
-    // requireUtf16LengthAtMost 以原 string.length 口径兑底。
     text: { type: 'string' },
     whenBusy: { enum: ['steer', 'followUp', 'reject'] },
     origin: { enum: ['human', 'agent', 'trigger'] },
@@ -344,7 +334,6 @@ export function parseAskAnswerBody(body: Record<string, unknown>): {
 
 const CONVERSATION_RESET_BODY_SCHEMA: JsonSchema = {
   type: 'object',
-  // maxLength 不进 schema（AJV 码点计数会放宽非 BMP 输入），守卫兑底。
   properties: { handoff: { type: 'string' } },
   additionalProperties: false,
 }
@@ -358,7 +347,6 @@ export function parseConversationResetBody(body: Record<string, unknown>): { han
 
 const CONVERSATION_COMPACT_BODY_SCHEMA: JsonSchema = {
   type: 'object',
-  // maxLength 不进 schema（AJV 码点计数会放宽非 BMP 输入），守卫兑底。
   properties: { instructions: { type: 'string' } },
   additionalProperties: false,
 }
@@ -374,7 +362,6 @@ const CONVERSATION_FORK_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     entryId: { type: 'integer', minimum: 1, maximum: MAX_SAFE_INTEGER },
-    // title maxLength 不进 schema（AJV 码点计数会放宽非 BMP 输入），守卫兑底。
     title: { type: 'string', minLength: 1 },
   },
   required: ['entryId'],
@@ -616,7 +603,6 @@ export function parseProvidersBody(body: Record<string, unknown>): ProviderConfi
 
 const CREDENTIAL_BODY_SCHEMA: JsonSchema = {
   type: 'object',
-  // value maxLength 不进 schema（AJV 码点计数会放宽非 BMP 输入），守卫兑底。
   properties: { value: { type: 'string', minLength: 1 } },
   required: ['value'],
   additionalProperties: false,

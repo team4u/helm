@@ -660,8 +660,20 @@ test('UTF-16 码元长度上限：emoji 反例不因 AJV 码点计数放宽（fo
   assert.equal(fwdOk.status, 201, 'a+127 emoji = 255 码元贴界应放行')
 })
 
-test('input/reset/compact 512k 解析器口径：码元上限恢复；HTTP 层由 1MiB body 上限先行拦截', { timeout: 60_000 }, () => {
+test('input/reset/compact 的 UTF-16 上限同时约束解析器与 HTTP 混合文本', { timeout: 60_000 }, async () => {
   const emoji = '\uD83D\uDE00'
+  const mixed = emoji.repeat(200000) + 'a'.repeat(124289)
+  assert.equal(mixed.length, 524289)
+  const kernel = makeKernel()
+  for (const [path, field] of [
+    ['/api/conversations/1/input', 'text'],
+    ['/api/conversations/1/reset', 'handoff'],
+    ['/api/conversations/1/compact', 'instructions'],
+  ] as const) {
+    const body = { [field]: mixed }
+    assert.ok(Buffer.byteLength(JSON.stringify(body)) < 1024 * 1024)
+    await expect400(kernel, 'POST', path, body)
+  }
   // 262145 emoji = 524290 码元 > 524288（原拒）；其 UTF-8 编码 1048580 字节
   // 已超 1MiB body 上限，HTTP 层会先 413，故在解析器层直接验证原拒绝边界。
   assert.throws(() => parseInputBody({ text: emoji.repeat(262145) }), ValidationError)

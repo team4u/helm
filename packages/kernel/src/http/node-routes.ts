@@ -139,11 +139,7 @@ const NODE_ISSUE_BODY_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-// 升级 body 机械形状（类型/未知字段）走 schema；targetVersion 的
-// trim + 严格 SemVer、registryUrl 的可解析 + 含主机名语义保留手写。
-// targetVersion 的 maxLength:64 无需 UTF-16 守卫：严格 SemVer 仅接受纯
-// ASCII（码点数 == 码元数），被码点计数放过的非 BMP 输入必过不了
-// SemVer 同样 400，拒绝边界不变。
+// 版本还需严格 SemVer 校验（纯 ASCII，长度口径一致），registryUrl 需可解析且含主机名。
 const NODE_UPGRADE_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -154,9 +150,7 @@ const NODE_UPGRADE_BODY_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-// 主机名：非空白、无控制字符（与原逐字符检查同语义）；maxLength 不进
-// schema（AJV 码点计数会放宽非 BMP 输入），由 parseNodeForwardBody 内
-// 的 UTF-16 守卫以原 string.length 口径兑底。
+// 主机名禁空白与控制字符，UTF-16 长度上限在解析时验证。
 const HOST_FIELD = { type: 'string', minLength: 1, pattern: '^[^\\s\\x00-\\x1f\\x7f]+$' } as const
 
 const NODE_FORWARD_BODY_SCHEMA: JsonSchema = {
