@@ -19,7 +19,8 @@
 - 四类执行体区别：原生 Profile 子会话（spawn 管道、进深度登记表、可 resume）；外部 Herdr Profile（终端窗格执行，没有原生子会话 ID，不登记为子会话）；SuperAgent Worker（`dispatch_worker` 派生、不进登记表，插件自有非阻塞协议，见下文）；fork/人工会话（不经 spawn 管道、不受深度限制，人类直连即适用缺省后台）。
 - 发现后台子代理跑偏时，主会话可调用 `run_action({ actionId: "builtin:workflow.steer", input: { runId, text } })` 插话纠偏，也可使用动作派生的模型工具；终端用 `helm workflows steer <runId> --text "<指导>"`。仅 kind=subagent 且 running 的 run 可 steer：原生节点（已解析原生子会话、归属 bot/helm）经内核 guarded 提交按归属与 CAS 水位原子复核；外部执行按节点 `controls.steer` 动态委托插件，并如实返回 guardLevel：Herdr 使用现有 `agent.prompt`，`preflight` 表示发送前检查，`cas` 才表示提交点原子复核。事实过期时返回 409；human 归属永不触碰；混合候选歧义拒绝。会话内调用仅允许 run 发起会话自身或其祖先，不可跨树控制他人运行。steered=true 仅代表投递成功，不代表该指导已执行完成；不确定失败（超时/断线）不自动重试。
 - `isolation: "worktree"` 在目标节点分配独立 Git 工作树（原生及支持该能力的运行时）；基于源 HEAD，不包含源工作区未提交修改。任务结束、失败或取消后保留工作树与分支。
-- 检视或合入后调用 `cleanup_worktree({ worktreeId: execution.worktree.id })`；也可按子会话 ID，或实际 `nodeId` + `path` 清理。未提交修改、未合入提交及在用工作树默认拒绝清理。`force: true` 仅显式允许丢弃修改，不绕过归属或占用检查。
+- 检视或合入后调用 `cleanup_worktree({ worktreeId: execution.worktree.id })`；也可按子会话 ID，或实际 `nodeId` + `path` 清理。先把需要交付的文件用 `register_artifact({ path })` 或目标节点上的 `helm artifacts put <绝对路径> --current` 保存为产物，登记成功后副本不依赖源工作树。未提交修改、未跟踪/被忽略文件、未合入提交及在用工作树默认拒绝清理。`force: true` 仅显式允许丢弃修改，不绕过归属或占用检查。
+- 清理前会探测目标节点上的进程是否仍以工作树或其子目录为 cwd，或持有其中的文件句柄；命中 `worktree_process_in_use` 时，依据返回的 PID 和进程名核对占用。只对已确认属于自己的任务做收尾，不终止其他会话或人类进程。进程探测不支持或不完整时显式拒绝清理，`force: true` 也不能跳过。
 - 只读检视（不执行任何写操作）：`helm worktrees list` 列出全部登记（含已清理记录元数据）；`helm worktrees inspect <worktreeId>` 返回登记元数据 + 目标节点真实 git 只读探测（当前分支/HEAD、未提交文件清单、领先基线提交数、diff 统计与有上限预览；`--conversation-id <id>` / `--path <path> [--node-id <nodeId>]` 可替代选择器）。仅登记记录可检视，不支持任意目录；目录缺失/已清理时如实返回 unavailableReason，git 失败显式报错。
 - CLI：`helm worktrees cleanup --worktree-id <worktreeId> --json`；`--current` 使用当前子会话；`--path <path> --node-id <nodeId>` 精确选择节点目录。`--delete-branch` 同时删除分支（默认保留）。
 - Hub 重启会将中断的后台运行明确标为失败并汇报；需要时凭原 execution 的 resume 标识续接，不自动重新派工或重跑 gate。

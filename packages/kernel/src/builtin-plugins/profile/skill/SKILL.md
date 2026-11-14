@@ -12,6 +12,7 @@ managedByPlugin: {{MANAGED_BY}}
    - `HELM_ENV`（固定为 `1`，标识处于 Helm 受管执行环境）。
    - `HELM_HUB_URL`：Hub 地址；`HELM_TOKEN`：受管进程令牌（不要打印或写进提示词）。调用失败时按实际错误排查。
    - `HELM_CONVERSATION_ID`：当前会话 ID；`HELM_CWD`：会话工作目录；`HELM_NODE_ID`：绑定节点（本机时另有 `HELM_DATA_DIR`）。
+   - `HELM_EXECUTION_SCOPE`：当前 Helm 实例、会话、节点和工作目录的稳定资源命名空间。同一执行坐标的多次命令沿用它；更换会话、节点或工作目录后变化。外部工具支持命名会话或资源隔离时，可显式用它命名。该变量不会自动配置外部工具，也不提供进程或文件沙箱。
 2. 解析输出必加 `--json`（人类可读输出仅供展示，不做程序消费）。
 3. 支持 `--current` 的命令用它选择当前会话（读取 `HELM_CONVERSATION_ID`）；其他命令按帮助传目标 ID。
 4. 自省优先（不背诵易变细节）：用 `helm --help`、`helm <cmd> --help` 实时查询子命令精确参数；动态插件动作与入参 JSON Schema 以会话内 `<available_actions>` 目录、`run_action({ actionId, describe: true })` 只读自省或 `helm actions list --json` 为准，插件配置以 `helm plugins config <id> --json` 为准。
@@ -76,7 +77,11 @@ managedByPlugin: {{MANAGED_BY}}
 ### 审批、产物与逃生舱
 - `helm asks list` / `helm asks answer <id> --answers <json> [--expected-state-seq <n>]`（CAS 乐观锁）/ `helm asks cancel <id>`。
 - `helm artifacts list [id] [--current]` / `helm artifacts put <filePath> [id] [--name <n>] [--mime-type <m>]` / `helm artifacts get <id> [--output <path>]`。
-- 生成文件供用户在 Web 查看时，用 write(..., artifact: true) 或 `helm artifacts put <path> --current` 登记产物；在回复正文中可用 `[文件名](artifact:<id>)` 或 `![图片](artifact:<id>)` 直接内联渲染。
+- 生成文本文件供用户在 Web 查看时，用 `write(..., artifact: true)`。登记已有文件（含图片、视频、PDF）可用 `register_artifact({ path: "<path>" })`：路径相对当前会话 cwd 解析，在会话绑定节点读取并复制到 Hub 的产物目录；返回产物 ID 后才能视为交付成功。单个产物上限 15 MiB。
+- 终端内用 `helm artifacts put <path> --current` 上传调用机器上的本地文件；相对路径以该次 CLI 进程的实际 cwd 为准，`--current` 只选择会话，不改读文件的目录。`helm artifacts get <id> --output <path>` 同样写到调用机器；成功回显实际绝对路径。不要把 Hub 或另一节点的路径当成本地路径。
+- 外部命令生成待交付文件时，传基于实际执行目录的绝对输出路径；POSIX shell 可先 `output="$PWD/report.png"`。显式指定其他目录时，先确认该目录在实际执行节点上。`HELM_CWD` 是受管会话目录，shell 内 `cd` 后 `$PWD` 可以与它不同。
+- 生成后确认预期文件存在，再用同一绝对路径登记；命令退出码为 0 或输出“保存成功”不能代替产物登记。读取失败时按报错中的绝对路径和节点排查，不自动搜索其他会话的工作树或把同名旧文件当成本次产物。
+- 产物登记会保存独立副本；需要交付的文件应在清理源 worktree 前登记。成功后在回复中用 `[文件名](artifact:<id>)` 或 `![图片](artifact:<id>)` 内联渲染。清理 worktree 不删除这些副本；删除所属会话会级联删除产物。
 - `helm api <METHOD> <path> [--input <json>] [--field k=v]`：原始 HTTP 逃生舱（如 `helm api GET /api/nodes`）。
 
 ## 按需读取专题手册
