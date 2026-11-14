@@ -12,6 +12,7 @@ import type { ReactNode } from 'react'
 import type { ToolViewProps, WorkflowRunSummary } from '@helm/protocol'
 import { useConversation, useConversations, usePluginContext, useToolActivity } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
+import { ExecutionCard } from './ExecutionCard.tsx'
 import { useElapsedNowMs, usePluginSessionDoc, useStreamFollow } from './hooks.ts'
 import { SPIN, EXECUTION_BADGE, EXECUTION_ICON, EXECUTION_LABEL } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
@@ -255,167 +256,181 @@ export function SubagentLiveCard(props: {
 
   const stream = useStreamFollow(streamLines)
 
-  const cardClass = `subagent-live-card${effectiveStatus === 'blocked' ? ' subagent-live-card-warn' : effectiveStatus === 'error' || detailError !== undefined ? ' subagent-live-card-error' : ''}${props.expanded === true ? ' subagent-live-card-expanded' : ''}`
+  const variantClass = [
+    effectiveStatus === 'blocked' ? 'subagent-live-card-warn' : undefined,
+    effectiveStatus === 'error' || detailError !== undefined ? 'subagent-live-card-error' : undefined,
+    props.expanded === true ? 'subagent-live-card-expanded' : undefined,
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   const openChild = (): void => {
     ctx.openConversationDrawer(childConversationId)
   }
 
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      className={`${cardClass} subagent-card-clickable`}
-      aria-label={`打开子会话 #${childConversationId} 抽屉`}
-      title={[taskTitle, summary?.profileId, wt?.branch, statSegments.join(' · '), '点击打开子会话抽屉'].filter(Boolean).join('\n')}
-      onClick={openChild}
-      onKeyDown={(e) => {
-        // 内嵌动作、details/summary 的键盘激活属于控件本身，而非卡片导航。
-        if (e.target !== e.currentTarget) return
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          openChild()
-        }
-      }}
-    >
-      <div className="subagent-live-header">
-        <div className="subagent-live-trigger">
-          <Icon
-            name={detailError !== undefined ? 'x' : effectiveStatus === 'working' ? 'loader' : effectiveStatus === 'error' ? 'x' : 'bot'}
-            size={13}
-            className={effectiveStatus === 'working' && detailError === undefined ? SPIN : undefined}
-          />
-          <span className="subagent-live-title" title={taskTitle}>
-            <span className="subagent-live-id">子会话 #{childConversationId}</span>
-            {summary?.profileId !== undefined && summary.profileId !== '' ? (
-              <span className="badge badge-neutral">{summary.profileId}</span>
-            ) : null}
-            {taskTitle !== undefined ? <span className="subagent-live-title-text">{taskTitle}</span> : null}
-          </span>
-          {wt !== undefined ? (
-            <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${wt.path}`}>
-              <Icon name="git-branch" size={11} />
-              {wt.branch}
-            </span>
-          ) : null}
-          {props.cached === true ? <span className="badge badge-warn">cached</span> : null}
-          {effectiveStatus !== selfBadge.status ? (
-            <>
-              <span
-                className={`badge ${EXECUTION_BADGE[effectiveStatus] ?? 'badge-neutral'}`}
-                title={
-                  [
-                    `自身${selfBadge.label}，子树聚合：${EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}`,
-                    approvals.length > 0 ? `后代等待审批：${approvals.map((item) => item.text).join('；')}` : undefined,
-                  ]
-                    .filter(Boolean)
-                    .join('\n')
-                }
-              >
-                {EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}
-              </span>
-              <span className="badge badge-neutral" title={`自身状态：${selfBadge.label}`}>{`自身${selfBadge.label}`}</span>
-            </>
-          ) : (
-            <span className={`badge ${selfBadge.badge}`}>{selfBadge.label}</span>
-          )}
-          {descendants.total > 0 ? (
-            <span
-              className="badge badge-neutral tabular-nums"
-              title={`子树执行进度：${descendants.done}/${descendants.total} 完成、${descendants.running} 执行中`}
-            >
-              {`子树 ${descendants.done}/${descendants.total}`}
-            </span>
-          ) : null}
-          {descendants.blocked > 0 ? (
-            <span
-              className="badge badge-warn"
-              title={`后代等待审批：${approvals.map((item) => item.text).join('；')}`}
-            >
-              {`审批 ${descendants.blocked}`}
-            </span>
-          ) : null}
-          {props.extraStats !== undefined && props.extraStats !== '' ? (
-            <span className="subagent-live-stats workflow-node-stats tabular-nums">{props.extraStats}</span>
-          ) : null}
-          {statSegments.length > 0 ? (
-            <span className="subagent-live-stats workflow-node-duration tabular-nums">{statSegments.join(' · ')}</span>
-          ) : null}
-        </div>
-        <span className="subagent-live-actions" onClick={(e) => e.stopPropagation()}>
-          {backgroundRun?.status === 'running' ? (
-            <button
-              type="button"
-              className="btn btn-xs btn-danger"
-              title="中止该后台子代理任务"
-              aria-label="中止该后台子代理任务"
-              onClick={(e) => {
-                e.stopPropagation()
-                void ctx
-                  .callAction('abort', { runId: backgroundRun.id })
-                  .catch((err: unknown) => ctx.notify(`中止后台子代理失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
-              }}
-            >
-              <Icon name="square" size={11} />
-              <span className="subagent-action-label">中止</span>
-            </button>
-          ) : null}
-          {wt !== undefined ? (
-            <button
-              type="button"
-              className="btn btn-xs"
-              disabled={cleaning}
-              title="清理隔离工作树（优先登记 ID 精确定位，避免跨节点同名路径歧义）"
-              aria-label="清理隔离工作树"
-              onClick={(e) => {
-                e.stopPropagation()
-                if (cleaning) return
-                setCleaning(true)
-                ctx
-                  .callAction('cleanup_worktree', buildWorktreeSelector(wt, inspectNodeId))
-                  .then(() => ctx.notify(`已清理隔离工作树 ${wt.branch}`))
-                  .catch((err: unknown) => ctx.notify(`清理工作树失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
-                  .finally(() => setCleaning(false))
-              }}
-            >
-              <Icon name="rotate-cw" size={11} className={cleaning ? SPIN : undefined} />
-              <span className="subagent-action-label">清理工作树</span>
-            </button>
-          ) : null}
-          {detailError !== undefined ? (
-            <button
-              type="button"
-              className="btn btn-xs"
-              title="重新加载子会话详情"
-              aria-label="重新加载子会话详情"
-              onClick={(e) => {
-                e.stopPropagation()
-                conv.reload()
-              }}
-            >
-              <Icon name="rotate-cw" size={11} />
-              <span className="subagent-action-label">重试</span>
-            </button>
-          ) : null}
+  // 头部触发区：图标 + 标题 + 徽章 + 统计尾注（纯展示插槽内容）。
+  const heading = (
+    <>
+      <Icon
+        name={detailError !== undefined ? 'x' : effectiveStatus === 'working' ? 'loader' : effectiveStatus === 'error' ? 'x' : 'bot'}
+        size={13}
+        className={effectiveStatus === 'working' && detailError === undefined ? SPIN : undefined}
+      />
+      <span className="subagent-live-title" title={taskTitle}>
+        <span className="subagent-live-id">子会话 #{childConversationId}</span>
+        {summary?.profileId !== undefined && summary.profileId !== '' ? (
+          <span className="badge badge-neutral">{summary.profileId}</span>
+        ) : null}
+        {taskTitle !== undefined ? <span className="subagent-live-title-text">{taskTitle}</span> : null}
+      </span>
+      {wt !== undefined ? (
+        <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${wt.path}`}>
+          <Icon name="git-branch" size={11} />
+          {wt.branch}
         </span>
-      </div>
-      {snippet !== undefined ? (
-        <div className={`subagent-live-subline subagent-live-subline-${snippet.kind}`} title={snippet.text}>
-          <Icon name="corner-down-right" size={11} />
-          {snippet.tag !== undefined ? <span className="subagent-live-subline-tag">{snippet.tag}</span> : null}
-          <span className="subagent-live-subline-text">{snippet.text}</span>
-        </div>
       ) : null}
-      {frontline.length > 0 ? (
-        <div
-          className="subagent-live-subline execution-frontline"
-          title={frontline.map((item) => item.text).join('\n')}
+      {props.cached === true ? <span className="badge badge-warn">cached</span> : null}
+      {effectiveStatus !== selfBadge.status ? (
+        <>
+          <span
+            className={`badge ${EXECUTION_BADGE[effectiveStatus] ?? 'badge-neutral'}`}
+            title={
+              [
+                `自身${selfBadge.label}，子树聚合：${EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}`,
+                approvals.length > 0 ? `后代等待审批：${approvals.map((item) => item.text).join('；')}` : undefined,
+              ]
+                .filter(Boolean)
+                .join('\n')
+            }
+          >
+            {EXECUTION_LABEL[effectiveStatus] ?? effectiveStatus}
+          </span>
+          <span className="badge badge-neutral" title={`自身状态：${selfBadge.label}`}>{`自身${selfBadge.label}`}</span>
+        </>
+      ) : (
+        <span className={`badge ${selfBadge.badge}`}>{selfBadge.label}</span>
+      )}
+      {descendants.total > 0 ? (
+        <span
+          className="badge badge-neutral tabular-nums"
+          title={`子树执行进度：${descendants.done}/${descendants.total} 完成、${descendants.running} 执行中`}
         >
-          <Icon name="corner-down-right" size={11} />
-          <span className="subagent-live-subline-tag">前线</span>
-          <span className="subagent-live-subline-text">{frontline.map((item) => item.text).join(' · ')}</span>
-        </div>
+          {`子树 ${descendants.done}/${descendants.total}`}
+        </span>
       ) : null}
+      {descendants.blocked > 0 ? (
+        <span
+          className="badge badge-warn"
+          title={`后代等待审批：${approvals.map((item) => item.text).join('；')}`}
+        >
+          {`审批 ${descendants.blocked}`}
+        </span>
+      ) : null}
+      {props.extraStats !== undefined && props.extraStats !== '' ? (
+        <span className="subagent-live-stats workflow-node-stats tabular-nums">{props.extraStats}</span>
+      ) : null}
+      {statSegments.length > 0 ? (
+        <span className="subagent-live-stats workflow-node-duration tabular-nums">{statSegments.join(' · ')}</span>
+      ) : null}
+    </>
+  )
+
+  // 头部动作区：中止 / 清理 / 重试（点击已由框架隔离，不冒泡整卡导航）。
+  const actions = (
+    <>
+      {backgroundRun?.status === 'running' ? (
+        <button
+          type="button"
+          className="btn btn-xs btn-danger"
+          title="中止该后台子代理任务"
+          aria-label="中止该后台子代理任务"
+          onClick={(e) => {
+            e.stopPropagation()
+            void ctx
+              .callAction('abort', { runId: backgroundRun.id })
+              .catch((err: unknown) => ctx.notify(`中止后台子代理失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+          }}
+        >
+          <Icon name="square" size={11} />
+          <span className="subagent-action-label">中止</span>
+        </button>
+      ) : null}
+      {wt !== undefined ? (
+        <button
+          type="button"
+          className="btn btn-xs"
+          disabled={cleaning}
+          title="清理隔离工作树（优先登记 ID 精确定位，避免跨节点同名路径歧义）"
+          aria-label="清理隔离工作树"
+          onClick={(e) => {
+            e.stopPropagation()
+            if (cleaning) return
+            setCleaning(true)
+            ctx
+              .callAction('cleanup_worktree', buildWorktreeSelector(wt, inspectNodeId))
+              .then(() => ctx.notify(`已清理隔离工作树 ${wt.branch}`))
+              .catch((err: unknown) => ctx.notify(`清理工作树失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+              .finally(() => setCleaning(false))
+          }}
+        >
+          <Icon name="rotate-cw" size={11} className={cleaning ? SPIN : undefined} />
+          <span className="subagent-action-label">清理工作树</span>
+        </button>
+      ) : null}
+      {detailError !== undefined ? (
+        <button
+          type="button"
+          className="btn btn-xs"
+          title="重新加载子会话详情"
+          aria-label="重新加载子会话详情"
+          onClick={(e) => {
+            e.stopPropagation()
+            conv.reload()
+          }}
+        >
+          <Icon name="rotate-cw" size={11} />
+          <span className="subagent-action-label">重试</span>
+        </button>
+      ) : null}
+    </>
+  )
+
+  // 第 2 层动态副栏：当前动作 / 思考 / 结论 / 错误 + 前线活动摘要。
+  const sublines =
+    snippet !== undefined || frontline.length > 0 ? (
+      <>
+        {snippet !== undefined ? (
+          <div className={`subagent-live-subline subagent-live-subline-${snippet.kind}`} title={snippet.text}>
+            <Icon name="corner-down-right" size={11} />
+            {snippet.tag !== undefined ? <span className="subagent-live-subline-tag">{snippet.tag}</span> : null}
+            <span className="subagent-live-subline-text">{snippet.text}</span>
+          </div>
+        ) : null}
+        {frontline.length > 0 ? (
+          <div
+            className="subagent-live-subline execution-frontline"
+            title={frontline.map((item) => item.text).join('\n')}
+          >
+            <Icon name="corner-down-right" size={11} />
+            <span className="subagent-live-subline-tag">前线</span>
+            <span className="subagent-live-subline-text">{frontline.map((item) => item.text).join(' · ')}</span>
+          </div>
+        ) : null}
+      </>
+    ) : undefined
+
+  return (
+    <ExecutionCard
+      variantClass={variantClass}
+      activate={{
+        label: `打开子会话 #${childConversationId} 抽屉`,
+        tooltip: [taskTitle, summary?.profileId, wt?.branch, statSegments.join(' · '), '点击打开子会话抽屉'].filter(Boolean).join('\n'),
+        open: openChild,
+      }}
+      heading={heading}
+      actions={actions}
+      snippet={sublines}
+    >
       {childNodes.length > 0 ? <ExecutionChildrenRows nodes={childNodes} /> : null}
       {props.expanded === true && streamLines.length > 0 ? (
         <div className="subagent-live-stream" ref={stream.ref} onScroll={stream.onScroll}>
@@ -469,7 +484,7 @@ export function SubagentLiveCard(props: {
           />
         </div>
       ) : null}
-    </div>
+    </ExecutionCard>
   )
 }
 

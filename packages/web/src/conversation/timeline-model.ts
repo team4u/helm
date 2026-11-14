@@ -951,6 +951,38 @@ export function humanItemEntryKind(item: HumanInputItem): string {
 }
 
 // ---------------------------------------------------------------------------
+// 排队中的非人类长文本折叠（通用机制，不含插件业务解析）
+// ---------------------------------------------------------------------------
+
+/** 排队中非人类输入的长文本阈值：超过 600 字符或 8 行才折叠。 */
+const QUEUED_AGENT_COLLAPSE_CHARS = 600
+const QUEUED_AGENT_COLLAPSE_LINES = 8
+const QUEUED_AGENT_PREVIEW_CHARS = 240
+
+export interface QueuedAgentTextCollapse {
+  /** 是否应折叠（短文本不折叠，展示不变）。 */
+  collapsed: boolean
+  /** 折叠态预览（保留换行结构，截断加省略号；展开后不使用）。 */
+  preview: string
+}
+
+/**
+ * 排队中（steer/followUp）且非人类来源的长文本（如后台结算汇报原文）折叠决策。
+ * 通用展示策略：不解析任何业务 payload，仅按长度/行数判定；展开后仍可看全文。
+ */
+export function queuedAgentTextCollapse(text: string): QueuedAgentTextCollapse {
+  const lines = text.split('\n')
+  if (text.length <= QUEUED_AGENT_COLLAPSE_CHARS && lines.length <= QUEUED_AGENT_COLLAPSE_LINES) {
+    return { collapsed: false, preview: text }
+  }
+  const preview = lines.slice(0, 6).join('\n').slice(0, QUEUED_AGENT_PREVIEW_CHARS)
+  return {
+    collapsed: true,
+    preview: preview.length < text.length ? `${preview}…` : preview,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // assistant 回合在途判定（复制/分叉 hover 条仅在彻底完成时展示）
 // ---------------------------------------------------------------------------
 

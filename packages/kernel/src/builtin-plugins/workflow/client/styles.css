@@ -78,11 +78,27 @@
   font: inherit;
 }
 
-.subagent-live-toggle {
-  padding: 0 2px;
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
+/* 后台汇报卡：头部触发区兼任折叠开关（整卡不做点击导航，正文可选可点） */
+.subagent-live-toggleable {
+  cursor: pointer;
+}
+
+.subagent-live-toggleable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-xs);
+}
+
+/* 后台汇报副栏失败态：错误预览红色直见 */
+.execution-report-subline-error .subagent-live-subline-text {
+  color: var(--err);
+}
+
+/* 后台汇报展开区：投递时在途任务快照徽章行 */
+.execution-report-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .subagent-live-stats {

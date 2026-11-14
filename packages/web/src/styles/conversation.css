@@ -297,6 +297,48 @@
   opacity: 0.86;
 }
 
+/* 排队中的非人类长文本（如后台汇报原文）：折叠预览 + 展开收起按钮 */
+.msg-human-pill-collapsible {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.msg-human-collapsed-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 13px;
+  color: var(--fg-muted);
+  word-break: break-word;
+  min-width: 0;
+}
+
+.msg-human-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+
+.msg-human-collapse-btn:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.msg-human-collapse-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* AI 正文（去外框气泡，干净铺在画布底色上） */
 .msg-ai-block {
   display: flex;

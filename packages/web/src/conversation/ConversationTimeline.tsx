@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type {
   AskSpec,
   ConversationAttachmentRef,
@@ -23,6 +23,7 @@ import {
   filterRewoundEntries,
   isAssistantTurnBusy,
   lastEditableHumanInput,
+  queuedAgentTextCollapse,
   toolSummaryText,
   type AssistantTurn,
   type DividerItem,
@@ -207,6 +208,14 @@ function HumanMessage({
   const humanFullTime = formatFullTimestamp(item.createdAt)
   const hasHumanTime = item.createdAt !== undefined && humanTime !== ''
 
+  // 排队中的非人类长文本（如后台结算汇报原文）：通用可展开收起，不解析业务 payload。
+  const [longOpen, setLongOpen] = useState(false)
+  const queuedCollapse =
+    item.queuedMode !== undefined && item.origin !== 'human'
+      ? queuedAgentTextCollapse(item.text)
+      : undefined
+  const collapseBodyId = useId()
+
   const editRequest = async (): Promise<void> => {
     // 仅人类输入可原地编辑：agent 汇报 / trigger 注入不是人类编辑对象（铅笔已收起，双重防御）
     if (item.origin !== 'human') return
@@ -298,8 +307,25 @@ function HumanMessage({
           {ORIGIN_LABEL[item.origin] ?? item.origin}
         </span>
       ) : null}
-      <div className={`msg-human-pill selectable${item.queuedMode !== undefined ? ' msg-human-pill-queued' : ''}`}>
-        {item.text}
+      <div className={`msg-human-pill selectable${item.queuedMode !== undefined ? ' msg-human-pill-queued' : ''}${queuedCollapse?.collapsed === true ? ' msg-human-pill-collapsible' : ''}`}>
+        <span
+          id={collapseBodyId}
+          className={queuedCollapse?.collapsed === true && !longOpen ? 'msg-human-collapsed-text' : undefined}
+        >
+          {queuedCollapse?.collapsed === true && !longOpen ? queuedCollapse.preview : item.text}
+        </span>
+        {queuedCollapse?.collapsed === true ? (
+          <button
+            type="button"
+            className="msg-human-collapse-btn"
+            aria-expanded={longOpen}
+            aria-controls={collapseBodyId}
+            onClick={() => setLongOpen((current) => !current)}
+          >
+            <HelmIcon name={longOpen ? 'chevron-up' : 'chevron-down'} size={11} />
+            <span>{longOpen ? '收起' : `展开全文（${item.text.length} 字符）`}</span>
+          </button>
+        ) : null}
       </div>
       {item.attachments !== undefined && item.attachments.length > 0 ? (
         <AttachmentChips attachments={item.attachments} conversationId={conversation.id} />

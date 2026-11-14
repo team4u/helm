@@ -66,6 +66,9 @@ import { executionOf, subagentFooter } from './workflow/tool-result.js'
 
 export { WORKFLOW_PLUGIN_ID }
 
+/** 后台结算汇报的 timeline.renderer 标记（meta.renderer 精确匹配，宿主零业务特判）。 */
+const BACKGROUND_REPORT_RENDERER = 'workflow:background-report'
+
 /**
  * clientRoot 兼容 src / dist 运行路径：编译后 dist/builtin-plugins/workflow.js
  * 的同级目录无 client/（tsx 源目录有）；探测失败回退包内 src 源目录。
@@ -805,7 +808,12 @@ export function createWorkflowPlugin(): PluginDefinition {
             origin: 'agent',
             whenBusy: 'followUp',
             requestId,
-            meta: { backgroundRunId: run.id, kind: isSubagent ? 'subagent_report' : 'workflow_report' },
+            meta: {
+              backgroundRunId: run.id,
+              kind: isSubagent ? 'subagent_report' : 'workflow_report',
+              // 轻量渲染标记：宿主按 matchMeta 精确派发给本插件折叠卡；不影响 payload。
+              renderer: BACKGROUND_REPORT_RENDERER,
+            },
           },
         )
       }
@@ -1691,6 +1699,12 @@ export function createWorkflowPlugin(): PluginDefinition {
       })
 
       // ---- UI 扩展点（client.tsx 轨道；组件经 usePluginSessionDoc 自行订阅 runs 分片） ----
+      ctx.ui.timelineRenderer({
+        id: 'background-report',
+        kinds: ['helm.input'],
+        matchMeta: { renderer: BACKGROUND_REPORT_RENDERER },
+        client: { module: 'index.tsx', export: 'BackgroundReportCard' },
+      })
       ctx.ui.toolView({
         id: 'subagent-card',
         toolNames: ['subagent'],
