@@ -840,7 +840,9 @@
 .composer-model-button > svg { flex-shrink: 0; }
 .composer-model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: normal; }
 .composer-model-level { flex-shrink: 0; color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
-/* 上下文用量只读状态文本（模型选择器右侧）：不可点击，仅色调差异 */
+/* 上下文用量只读状态文本（模型选择器右侧）：不可点击，仅色调差异。
+ * 色调类与基础规则同 specificity（.composer-toolbar 前缀一致），
+ * 声明在后覆盖默认灰，否则 0,1,0 < 0,2,0 黄红永远不生效。 */
 .composer-toolbar .composer-context-status {
   min-width: 0;
   flex-shrink: 0;
@@ -850,8 +852,8 @@
   line-height: normal;
   user-select: none;
 }
-.composer-context-status-warn { color: var(--warn); }
-.composer-context-status-high { color: var(--err); }
+.composer-toolbar .composer-context-status-warn { color: var(--warn); }
+.composer-toolbar .composer-context-status-high { color: var(--err); }
 .composer-thinking-row {
   margin: 4px 6px 8px;
   width: calc(100% - 12px);

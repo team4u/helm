@@ -11,6 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { readFileSync } from 'node:fs'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
@@ -164,5 +165,33 @@ test('重启后首次打开 idle 会话：详情首读合并后列表摘要带 c
     assert.equal(statusSpan(host)?.textContent, '25.0%/100k')
   } finally {
     unmount()
+  }
+})
+
+test('CSS 优先级回归：加载真实 forms.css，色调类必须真正覆盖默认灰', { timeout: 60_000 }, () => {
+  // 回归背景：基础规则 `.composer-toolbar .composer-context-status`（0,2,0）
+  // 一度高于裸 `.composer-context-status-warn/-high`（0,1,0），黄红永远不生效。
+  // DOM class 断言无法发现该 bug：用真实样式表的 computedStyle 验证。
+  const css = readFileSync(new URL('../src/styles/forms.css', import.meta.url), 'utf8')
+  const style = document.createElement('style')
+  style.textContent = `:root { --fg-muted: rgb(11, 12, 13); --warn: rgb(21, 22, 23); --err: rgb(31, 32, 33); }\n${css}`
+  document.head.appendChild(style)
+  const toolbar = document.createElement('div')
+  toolbar.className = 'composer-toolbar'
+  const base = document.createElement('span')
+  base.className = 'composer-context-status'
+  const warn = document.createElement('span')
+  warn.className = 'composer-context-status composer-context-status-warn'
+  const high = document.createElement('span')
+  high.className = 'composer-context-status composer-context-status-high'
+  toolbar.append(base, warn, high)
+  document.body.appendChild(toolbar)
+  try {
+    assert.equal(getComputedStyle(base).color, 'rgb(11, 12, 13)')
+    assert.equal(getComputedStyle(warn).color, 'rgb(21, 22, 23)', 'warn 色调必须覆盖默认灰（specificity 不得低于基础规则）')
+    assert.equal(getComputedStyle(high).color, 'rgb(31, 32, 33)', 'high 色调必须覆盖默认灰')
+  } finally {
+    toolbar.remove()
+    style.remove()
   }
 })

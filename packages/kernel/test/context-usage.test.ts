@@ -23,8 +23,8 @@ import { join } from 'node:path'
 import type { ContextView } from '@earendil-works/pi-durable'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-import { calculateContextTokens, estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
-import type { AssistantMessage, Message, UserMessage } from '@earendil-works/pi-ai'
+import { calculateContextTokens } from '@earendil-works/pi-ai/utils/estimate'
+import type { AssistantMessage, Message, SystemMessage, Tool, UserMessage } from '@earendil-works/pi-ai'
 import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import type { ProviderConfig } from '@helm/protocol'
@@ -34,6 +34,7 @@ import {
   compactingOf,
   contextUsageKeyOf,
   estimateContextUsage,
+  estimateTokens,
 } from '../src/runtime/context-usage.js'
 import { buildModels } from '../src/runtime/models.js'
 import { EventHub } from '../src/runtime/events.js'
@@ -45,6 +46,20 @@ import { KernelRuntime } from '../src/runtime/index.js'
 
 function userMessage(text: string): UserMessage {
   return { role: 'user', content: text, timestamp: 1 }
+}
+
+function systemMessage(spec: {
+  content?: string
+  sections?: Record<string, string | null>
+  toolsAdded?: Tool[]
+}): SystemMessage {
+  return {
+    role: 'system',
+    content: spec.content ?? '',
+    ...(spec.sections !== undefined ? { sections: spec.sections } : {}),
+    ...(spec.toolsAdded !== undefined ? { toolsAdded: spec.toolsAdded } : {}),
+    timestamp: 0,
+  }
 }
 
 function assistantMessage(
@@ -67,8 +82,11 @@ function assistantMessage(
 interface ViewSpec {
   headId?: number
   headKind?: 'pi.compaction' | 'pi.reset'
-  /** [entryId, contribution messages]（omit 用空数组表示）。 */
+  /** [entryId, contribution messages]（omit 用空数组表示：被 edit 覆盖的目标条目）。 */
   entries: Array<[number, Message[]]>
+  /** 携带非空 edits 的条目 id（helm.rewind 等上下文覆盖条目；其 edits 的
+   * targets 由测试用空 contribution 自行模拟，viewOf 只标注边界）。 */
+  editEntryIds?: number[]
 }
 
 function viewOf(spec: ViewSpec): ContextView {
@@ -76,19 +94,87 @@ function viewOf(spec: ViewSpec): ContextView {
     spec.headId !== undefined
       ? ({ id: spec.headId, kind: spec.headKind ?? 'pi.compaction' } as never)
       : undefined
-  // 真实 ContextView 语义：entries = [head 标记] + head.head 之后的非 head 条目；
-  // messages 只由这些条目的 contributions 组成（head 之前的旧条目不在内）。
-  const active = spec.headId === undefined ? spec.entries : spec.entries.filter(([id]) => id > spec.headId!)
-  const entries = spec.entries.map(([id]) => ({ id, kind: 'pi.assistant' } as never))
-  const contributions = spec.entries.map(([, messages]) => messages)
-  const messages = active.flatMap(([, msgs]) => msgs)
+  // 真实 ContextView 语义：entries = [head 标记（自身 contribution：reset 的
+  // handoff / compaction 的摘要）+ 保留前缀 + 后续条目]；messages 由全部
+  // contributions 组成（head 之前的旧条目不应出现在 spec 中，由测试自行保证）。
+  const editIds = new Set(spec.editEntryIds ?? [])
+  const entries = spec.entries.map(([id]) => ({
+    id,
+    kind: 'pi.assistant',
+    ...(editIds.has(id) ? { edits: [{ target: 1, action: 'omit' }] } : {}),
+  } as never))
+  // edits 携带条目自身无 model（helm.rewind 只写 edits/data）：贡献为空；
+  // 被 omit 的目标条目由测试用空 contribution 自行模拟（ContextView 已应用 edits）。
+  const contributions = spec.entries.map(([id, messages]) => (editIds.has(id) ? [] : messages))
+  const messages = spec.entries.flatMap(([id, msgs]) => (editIds.has(id) ? [] : msgs))
   return { head, entries, contributions, messages } as unknown as ContextView
 }
 
-describe('estimateContextUsage：与 pi agent getContextUsage 语义对齐', { timeout: 60_000 }, () => {
-  it('实测锚点：head 之后最近一条有效 assistant 的 usage + 其后消息估算', { timeout: 60_000 }, () => {
-    const anchor = assistantMessage({ input: 1_000, output: 50 })
-    const trailingUser = userMessage('尾段问题')
+describe('estimateTokens：pi agent compaction.js chars/4 分档（固定期望）', { timeout: 60_000 }, () => {
+  it('user/toolResult：text 字符 /4 向上取整；图片按 4800 字符', { timeout: 60_000 }, () => {
+    assert.equal(estimateTokens(userMessage('a'.repeat(400))), 100)
+    assert.equal(estimateTokens(userMessage('a'.repeat(401))), 101)
+    assert.equal(estimateTokens(userMessage('a'.repeat(3))), 1)
+    const withImage: Message = {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'a'.repeat(100) },
+        { type: 'image', data: 'x', mimeType: 'image/png' },
+      ],
+      timestamp: 1,
+    }
+    assert.equal(estimateTokens(withImage), Math.ceil((100 + 4_800) / 4))
+    const toolResult: Message = {
+      role: 'toolResult',
+      toolCallId: 'c1',
+      toolName: 't',
+      content: [{ type: 'text', text: 'r'.repeat(400) }],
+      isError: false,
+      timestamp: 1,
+    }
+    assert.equal(estimateTokens(toolResult), 100)
+  })
+
+  it('assistant：text + thinking 字符 + toolCall 的 name 与参数 JSON 字符', { timeout: 60_000 }, () => {
+    const args = { path: '/tmp/x' }
+    const assistant: Message = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'a'.repeat(100) },
+        { type: 'thinking', thinking: 'b'.repeat(200) },
+        { type: 'toolCall', id: 't1', name: 'n'.repeat(10), arguments: args },
+      ],
+      api: 'openai-completions',
+      provider: 'faux',
+      model: 'faux-1',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: 'stop',
+      timestamp: 1,
+    }
+    const expectedChars = 100 + 200 + 10 + JSON.stringify(args).length
+    assert.equal(estimateTokens(assistant), Math.ceil(expectedChars / 4))
+  })
+
+  it('system：content + sections 值（null 跳过）+ toolsAdded JSON 合并后一次 ceil(/4)', { timeout: 60_000 }, () => {
+    const tool: Tool = { name: 'demo', description: 'd'.repeat(100), parameters: {} }
+    const toolsChars = JSON.stringify([tool]).length
+    assert.equal(
+      estimateTokens(
+        systemMessage({
+          content: 'a'.repeat(300),
+          sections: { intro: 'b'.repeat(80), gone: null },
+          toolsAdded: [tool],
+        }),
+      ),
+      Math.ceil((300 + 80 + toolsChars) / 4),
+    )
+  })
+})
+
+describe('estimateContextUsage：与 pi agent getContextUsage 语义对齐（固定期望）', { timeout: 60_000 }, () => {
+  it('实测锚点：边界之后最近一条有效 assistant 的 usage + 其后消息 chars/4 估算', { timeout: 60_000 }, () => {
+    const anchor = assistantMessage({ input: 1_000, output: 50 }, 'm'.repeat(400)) // usage 1050
+    const trailingUser = userMessage('c'.repeat(400)) // 100
     const view = viewOf({
       headId: 10,
       entries: [
@@ -96,83 +182,74 @@ describe('estimateContextUsage：与 pi agent getContextUsage 语义对齐', { t
         [12, [trailingUser]],
       ],
     })
-    const result = estimateContextUsage(view)
-    assert.equal(result.tokens, calculateContextTokens(anchor.usage) + estimateMessageTokens(trailingUser))
+    assert.equal(estimateContextUsage(view).tokens, 1_050 + 100)
   })
 
-  it('无实测锚点（无 head）：全量估算', { timeout: 60_000 }, () => {
-    const user = userMessage('只有用户消息的问题')
-    const anchorless = { ...assistantMessage({ input: 0, output: 0 }) }
+  it('无实测锚点（无 head、无 edit）：全量估算', { timeout: 60_000 }, () => {
+    const user = userMessage('x'.repeat(400)) // 100
+    const anchorless = assistantMessage({ input: 0, output: 0 }, 'y'.repeat(400)) // 100
     const view = viewOf({ entries: [[11, [user]], [12, [anchorless]]] })
-    const result = estimateContextUsage(view)
-    assert.equal(result.tokens, estimateMessageTokens(user) + estimateMessageTokens(anchorless))
-  })
-
-  it('越过 head 的旧 assistant 不作锚点（compaction/reset 后失效）', { timeout: 60_000 }, () => {
-    const stale = assistantMessage({ input: 9_000, output: 10 })
-    const freshUser = userMessage('新上下文的输入')
-    const view = viewOf({
-      headId: 10,
-      headKind: 'pi.reset',
-      entries: [
-        [9, [stale]],
-        [11, [freshUser]],
-      ],
-    })
-    const result = estimateContextUsage(view)
-    assert.equal(result.tokens, estimateMessageTokens(freshUser))
-  })
-
-  it('helm.rewind omit（空 contribution）条目被跳过，不阻断也不复活旧锚点', { timeout: 60_000 }, () => {
-    const beforeRewind = assistantMessage({ input: 5_000, output: 10 })
-    const newUser = userMessage('重发后的新输入')
-    const view = viewOf({
-      entries: [
-        [8, [beforeRewind]],
-        [9, []], // rewind 覆盖区间内的旧条目（omit）
-        [10, []],
-        [11, [newUser]],
-      ],
-    })
-    // omit 之前（id 更小）的 anchor 描述的前缀未被动过，仍然有效。
-    const result = estimateContextUsage(view)
-    assert.equal(
-      result.tokens,
-      calculateContextTokens(beforeRewind.usage) + estimateMessageTokens(newUser),
-    )
+    assert.equal(estimateContextUsage(view).tokens, 200)
   })
 
   it('多条实测 assistant：取最新一条（尾向扫描第一个命中）', { timeout: 60_000 }, () => {
-    const older = assistantMessage({ input: 2_000, output: 10 })
-    const newer = assistantMessage({ input: 3_000, output: 20 })
+    const older = assistantMessage({ input: 2_000, output: 10 }, 'a'.repeat(400))
+    const newer = assistantMessage({ input: 3_000, output: 20 }, 'b'.repeat(400)) // usage 3020
     const view = viewOf({
       entries: [
         [11, [older]],
         [12, [newer]],
       ],
     })
-    const result = estimateContextUsage(view)
-    assert.equal(result.tokens, calculateContextTokens(newer.usage))
+    assert.equal(estimateContextUsage(view).tokens, 3_020)
   })
 
   it('stopReason 为 aborted/error 的 assistant 不作锚点（pi getAssistantUsage 同款过滤）', { timeout: 60_000 }, () => {
-    const aborted = assistantMessage({ input: 8_000, output: 10 }, '被中止', 'aborted')
-    const errored = assistantMessage({ input: 8_500, output: 10 }, '出错', 'error')
-    const trailingUser = userMessage('仍然没有有效锚点')
+    const aborted = assistantMessage({ input: 8_000, output: 10 }, 'a'.repeat(400), 'aborted') // 100
+    const errored = assistantMessage({ input: 8_500, output: 10 }, 'b'.repeat(400), 'error') // 100
+    const trailingUser = userMessage('c'.repeat(400)) // 100
     const view = viewOf({ entries: [[11, [aborted]], [12, [errored]], [13, [trailingUser]]] })
-    const result = estimateContextUsage(view)
-    // aborted/error 无有效 usage：不作锚点，退化为全量字符估算
+    // aborted/error 无有效 usage：不作锚点，退化为全量 chars/4 估算
     // （真实 ContextView 的 contributions 已剔除这类消息；本合成视图刻意保留，
-    // 锁定「锚点扫描不得把 8k+ 假装成实测」的核心语义），
-    assert.equal(
-      result.tokens,
-      estimateMessageTokens(aborted) + estimateMessageTokens(errored) + estimateMessageTokens(trailingUser),
-    )
+    // 锁定「锚点扫描不得把 8k+ 假装成实测」的核心语义）。
+    assert.equal(estimateContextUsage(view).tokens, 300)
+  })
+
+  it('rewind 边界（最新 edits 非空条目）之前的锚点一律失效：全量估算（pi 语义）', { timeout: 60_000 }, () => {
+    const anchor = assistantMessage({ input: 5_000, output: 10 }, 'm'.repeat(400)) // 5010
+    const newUser = userMessage('n'.repeat(400)) // 100
+    const view = viewOf({
+      editEntryIds: [9],
+      entries: [
+        [8, [anchor]],
+        [9, []], // helm.rewind：携带 edits 的条目（自身无 model）
+        [10, []], // 被 omit 的目标条目
+        [11, [newUser]],
+      ],
+    })
+    // pi：最新 context_edit 之前的 usage 不可信——即使锚点条目本身未被 omit，
+    // 也不得把 5010 当作实测（旧实现在此错误地信任锚点）。
+    assert.equal(estimateContextUsage(view).tokens, 100 + 100)
+  })
+
+  it('edit 之后的新 usage 恢复实测（锚点晚于 edit 边界即可信）', { timeout: 60_000 }, () => {
+    const stale = assistantMessage({ input: 5_000, output: 10 }, 'm'.repeat(400)) // 5010
+    const fresh = assistantMessage({ input: 3_000, output: 40 }, 'p'.repeat(400)) // 3040
+    const view = viewOf({
+      editEntryIds: [9],
+      entries: [
+        [8, [stale]],
+        [9, []],
+        [10, []],
+        [11, [fresh]],
+      ],
+    })
+    assert.equal(estimateContextUsage(view).tokens, 3_040)
   })
 
   it('压缩 head（pi.compaction）后尚无有效 usage：tokens=null，摘要估算不冒充已知上下文', { timeout: 60_000 }, () => {
-    const kept = assistantMessage({ input: 40_000, output: 100 })
-    const summary = userMessage('历史已精简为该摘要')
+    const kept = assistantMessage({ input: 40_000, output: 100 }, 'k'.repeat(400))
+    const summary = userMessage('s'.repeat(400))
     // 保留的旧前缀条目 id 均小于压缩标记：其 usage 反映压缩前规模，不可信。
     const view = viewOf({
       headId: 100,
@@ -182,29 +259,96 @@ describe('estimateContextUsage：与 pi agent getContextUsage 语义对齐', { t
         [99, [kept]],
       ],
     })
-    const result = estimateContextUsage(view)
-    assert.equal(result.tokens, null)
+    assert.equal(estimateContextUsage(view).tokens, null)
   })
 
   it('压缩 head 后已有新回答：用 post-compaction usage 实测', { timeout: 60_000 }, () => {
-    const kept = assistantMessage({ input: 40_000, output: 100 })
-    const fresh = assistantMessage({ input: 3_000, output: 40 })
+    const kept = assistantMessage({ input: 40_000, output: 100 }, 'k'.repeat(400))
+    const summary = userMessage('s'.repeat(400))
+    const fresh = assistantMessage({ input: 3_000, output: 40 }, 'p'.repeat(400)) // 3040
     const view = viewOf({
       headId: 100,
       headKind: 'pi.compaction',
       entries: [
-        [100, [userMessage('摘要')]],
+        [100, [summary]],
         [99, [kept]],
         [101, [fresh]],
       ],
     })
-    const result = estimateContextUsage(view)
-    assert.equal(result.tokens, calculateContextTokens(fresh.usage))
+    // 锚点（101）晚于 head（100）且无 edit 边界：usage 实测，保留前缀不计入。
+    assert.equal(estimateContextUsage(view).tokens, 3_040)
   })
 
-  it('reset head（pi.reset）是全新上下文：无锚点时全量估算（0 也是真实值，不为 null）', { timeout: 60_000 }, () => {
-    const view = viewOf({ headId: 50, headKind: 'pi.reset', entries: [[50, []], [51, []]] })
-    assert.equal(estimateContextUsage(view).tokens, 0)
+  it('压缩后有有效回答但后续 edit 使锚点失效：全量估算（非 null，pi 两判定独立）', { timeout: 60_000 }, () => {
+    const kept = assistantMessage({ input: 40_000, output: 100 }, 'k'.repeat(400)) // 100
+    const summary = userMessage('s'.repeat(400)) // 100
+    const fresh = assistantMessage({ input: 3_000, output: 40 }, 'p'.repeat(400)) // 100（usage 3040）
+    const view = viewOf({
+      headId: 100,
+      headKind: 'pi.compaction',
+      editEntryIds: [102],
+      entries: [
+        [100, [summary]],
+        [99, [kept]],
+        [101, [fresh]],
+        [102, []], // 压缩后的又一次 rewind（携带 edits）
+      ],
+    })
+    // post-compaction 有效 assistant 存在（不为 null）；但锚点 101 早于 edit 边界
+    // 102：退化为全量估算（摘要 + 保留前缀 + 新回答均按字符计）。
+    assert.equal(estimateContextUsage(view).tokens, 100 + 100 + 100)
+  })
+
+  it('压缩后唯一有效回答被 edit omit：post-compaction 无有效 assistant，tokens=null', { timeout: 60_000 }, () => {
+    const kept = assistantMessage({ input: 40_000, output: 100 }, 'k'.repeat(400))
+    const summary = userMessage('s'.repeat(400))
+    const view = viewOf({
+      headId: 100,
+      headKind: 'pi.compaction',
+      editEntryIds: [102],
+      entries: [
+        [100, [summary]],
+        [99, [kept]],
+        [101, []], // 压缩后的新回答被后续 rewind omit（contributions 为空）
+        [102, []],
+      ],
+    })
+    assert.equal(estimateContextUsage(view).tokens, null)
+  })
+
+  it('reset head（pi.reset）是全新上下文：全量估算即真实值（0 不为 null）', { timeout: 60_000 }, () => {
+    const empty = viewOf({ headId: 50, headKind: 'pi.reset', entries: [[50, []], [51, []]] })
+    assert.equal(estimateContextUsage(empty).tokens, 0)
+    const withHandoff = viewOf({
+      headId: 50,
+      headKind: 'pi.reset',
+      entries: [[50, [userMessage('h'.repeat(400))]], [51, []]],
+    })
+    assert.equal(estimateContextUsage(withHandoff).tokens, 100)
+  })
+
+  it('全量估算折叠当前生效 system：sections 按名 patch，不重复计被替换/删除的旧 section', { timeout: 60_000 }, () => {
+    const sys1 = systemMessage({ sections: { intro: 'x'.repeat(400) } })
+    const sys2 = systemMessage({ sections: { intro: null, guide: 'y'.repeat(400) } })
+    const user = userMessage('z'.repeat(400))
+    const view = viewOf({ entries: [[5, [sys1]], [6, [sys2]], [7, [user]]] })
+    // 当前生效 system = sections {guide: 400}（intro 被替换删除）→ 100；user 100。
+    // 旧实现逐条计 system 会把 intro+guide 双计（300）。
+    assert.equal(estimateContextUsage(view).tokens, 200)
+  })
+
+  it('全量估算折叠当前生效 system：tools 重放后只计一次（追加指令计入 content）', { timeout: 60_000 }, () => {
+    const tool: Tool = { name: 'demo', description: 'd'.repeat(100), parameters: {} }
+    const toolsChars = JSON.stringify([tool]).length
+    const sys1 = systemMessage({ toolsAdded: [tool] })
+    const sys2 = systemMessage({ content: 'b'.repeat(400) })
+    const user = userMessage('c'.repeat(400))
+    const view = viewOf({ entries: [[5, [sys1]], [6, [sys2]], [7, [user]]] })
+    // 折叠后 system：content 400 + 当前 tools（仅计一次 JSON）→ 一次 ceil；user 100。
+    const expected = Math.ceil((400 + toolsChars) / 4) + 100
+    assert.equal(estimateContextUsage(view).tokens, expected)
+    // 旧实现双计 tools JSON：会得到 toolsChars×2 的偏大值。
+    assert.notEqual(estimateContextUsage(view).tokens, Math.ceil((400 + 2 * toolsChars) / 4) + 100)
   })
 })
 

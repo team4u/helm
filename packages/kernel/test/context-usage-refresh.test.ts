@@ -23,7 +23,6 @@ import { describe, it } from 'node:test'
 import type { ContextView, ConversationView, Harness, Observation, Observer } from '@earendil-works/pi-durable'
 import { createModels } from '@earendil-works/pi-ai/models'
 import type { Models, Provider } from '@earendil-works/pi-ai'
-import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
 import type { UserMessage } from '@earendil-works/pi-ai'
 import type { ConversationSummary } from '@helm/protocol'
 import { ConversationTracker, type TrackerEvents } from '../src/runtime/conversations.js'
@@ -60,7 +59,9 @@ function usageView(chars: number): ContextView {
 }
 
 function tokensOf(chars: number): number {
-  return estimateMessageTokens(userContent(chars))
+  // 固定期望（pi agent chars/4）：usageView 的用户消息为 'a'.repeat(chars)，
+  // 不镜像被测实现。
+  return Math.ceil(chars / 4)
 }
 
 /** 刷新结果队列项：即时视图或手动释放的 deferred。 */
