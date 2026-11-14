@@ -14,6 +14,7 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import type { ConversationSummary } from '@helm/protocol'
+import { applySnapshot, emptyLiveState, mergeConversationDetail } from '../src/lib/live-state.js'
 import { makeTestStore, TestStoreProvider } from './helpers/store.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
 
@@ -80,6 +81,23 @@ test('无 contextUsage 时不渲染胶囊', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv(undefined))
   try {
     assert.equal(pillButton(host), null)
+  } finally {
+    unmount()
+  }
+})
+
+test('重启后首次打开 idle 会话：详情首读合并后列表摘要带 contextUsage，胶囊随之渲染', { timeout: 60_000 }, async () => {
+  // 内核首次填充用量缓存静默不发 SSE 帧：快照摘要无用量，只有 HTTP 详情携带
+  const base = conv(undefined)
+  let state = applySnapshot(emptyLiveState(), { bootId: 'test-boot', seq: 3, conversations: [base], pendingAsks: [], plugins: [], ui: [] })
+  state = mergeConversationDetail(state, { ...base, entries: [], contextUsage: { tokens: 25_000, contextWindow: 100_000 } })
+  // ConversationPane 向 Composer 传 summary ?? detail：胶囊数据源是合并后的列表摘要
+  const merged = state.conversations.find((c) => c.id === 1)
+  assert.ok(merged, '合并后列表摘要必须存在')
+  assert.ok(merged.contextUsage, '合并后列表摘要必须带 contextUsage')
+  const { host, unmount } = await mountComposer(merged)
+  try {
+    assert.equal(pillButton(host)?.textContent, '25%')
   } finally {
     unmount()
   }
