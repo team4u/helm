@@ -12,6 +12,7 @@ import type {
   ConversationInput,
   ConversationPatch,
   ConversationSummary,
+  ModelsChangedEvent,
   TurnSettledPayload,
 } from '@helm/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
@@ -158,6 +159,12 @@ export function assembleRuntimeServices(
       sessionDocStreams.closeForPlugin(event.plugin.id)
     } else if (event.type === 'conversation.deleted' && 'conversationId' in event) {
       sessionDocStreams.closeForConversation(event.conversationId)
+    } else if (event.type === 'models.changed' && 'payload' in event) {
+      // 目录刷新/集合重建后模型窗口可能变化（未知→已知/数值变/供应商消失）：
+      // 定向迫齐已观察/已缓存会话的上下文用量。tracker 组装完成前的启动期
+      // 事件无从追齐，静默跳过（启动时缓存本为空，首次波取即按新目录计算）。
+      const providers = (event as ModelsChangedEvent).payload.providers
+      tracker?.onModelsChanged(Array.isArray(providers) ? providers : [])
     }
   })
 
