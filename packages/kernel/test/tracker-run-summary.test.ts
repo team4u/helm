@@ -118,13 +118,18 @@ describe('emitRunSummary：run 启动与 doing 语义变化的实时摘要', { t
         await submitP
         await kernel.waitForIdle(1)
         await waitFor(() => recorded.frames.some((f) => f.status === 'done'))
-        // completed 终态恰一次：done 帧不因后续空闲快照重复。
+        // completed 终态恰一次：done 帧不因后续空闲快照重复（上下文用量刷新
+        // 帧与结算帧同 seq，按 seq 去重不计为新终态）。
         const doneFrames = recorded.frames.filter((f) => f.status === 'done')
-        assert.equal(doneFrames.length, 1, `completed 终态恰一次，实际：${JSON.stringify(recorded.frames)}`)
-        // stateChangeSeq 全程单调推进。
+        assert.equal(
+          new Set(doneFrames.map((f) => f.seq)).size,
+          1,
+          `completed 终态恰一次，实际：${JSON.stringify(recorded.frames)}`,
+        )
+        // stateChangeSeq 全程单调不回退（usage-only 帧同 seq 不推进）。
         const seqs = recorded.frames.map((f) => f.seq)
         for (let i = 1; i < seqs.length; i += 1) {
-          assert.ok(seqs[i]! > seqs[i - 1]!, `stateChangeSeq 单调：${JSON.stringify(seqs)}`)
+          assert.ok(seqs[i]! >= seqs[i - 1]!, `stateChangeSeq 单调不回退：${JSON.stringify(seqs)}`)
         }
         assert.ok(seqs[0]! > before, 'run 启动摘要推进 stateChangeSeq')
       } finally {
@@ -235,10 +240,15 @@ describe('emitRunSummary：run 启动与 doing 语义变化的实时摘要', { t
         await waitFor(() => recorded.frames.some((f) => f.status === 'error'))
         const errorFrames = recorded.frames.filter((f) => f.status === 'error')
         assert.equal(errorFrames.length, 1, `failed 终态恰一次：${JSON.stringify(recorded.frames)}`)
-        // 空闲快照不再推送（无复活）。
-        const frozen = recorded.frames.length
+        // 空闲快照不再推送（无复活）：终态后允许的迟到帧仅限 usage-only
+        // （同状态、同 seq，不推进水位线），状态机不得复活或回退。
+        const frozenAt = recorded.frames.length
+        const frozenLast = recorded.frames[frozenAt - 1]!
         await new Promise((r) => setTimeout(r, 250))
-        assert.equal(recorded.frames.length, frozen, '失败终态后空闲快照不重复推送')
+        for (const late of recorded.frames.slice(frozenAt)) {
+          assert.equal(late.status, frozenLast.status, `终态后新帧只能是 usage-only：${JSON.stringify(recorded.frames.slice(frozenAt))}`)
+          assert.equal(late.seq, frozenLast.seq, 'usage-only 帧不推进 stateChangeSeq')
+        }
       } finally {
         recorded.stop()
       }

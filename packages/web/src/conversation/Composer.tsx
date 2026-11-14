@@ -57,6 +57,7 @@ import {
   ENV_BLOCKER_CLEAR,
 } from './composer-model.js'
 import { lastEditableHumanInput } from './timeline-model.js'
+import { contextUsageView } from './context-usage-model.js'
 import { formatBytes } from '../lib/format.js'
 
 export interface ComposerProps {
@@ -283,6 +284,89 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
         </PopoverPortal>
       </Popover>
     </span>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 上下文用量胶囊（ModelPicker 右侧；Radix Popover 详情 + 手动压缩入口）
+// ---------------------------------------------------------------------------
+
+function ContextUsagePill({ conversation }: { conversation: ConversationSummary }) {
+  const store = useHelmStore()
+  const [open, setOpen] = useState(false)
+  const [compacting, setCompacting] = useState(false)
+  const usage = conversation.contextUsage
+  // 压缩中态优先看本地提交在途，其次内核透传的 compacting；防止重复提交。
+  const isCompacting = compacting || usage?.compacting !== undefined
+  if (usage === undefined) return null
+  const view = contextUsageView(usage)
+
+  const runCompact = async (): Promise<void> => {
+    if (isCompacting) return
+    setCompacting(true)
+    try {
+      await conversationsApi.compact(conversation.id)
+      store.pushNotice({
+        type: 'notification',
+        level: 'info',
+        title: '精简任务已提交',
+        conversationId: conversation.id,
+      })
+    } catch (err) {
+      store.pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: '精简上下文失败',
+        body: err instanceof Error ? err.message : String(err),
+        conversationId: conversation.id,
+      })
+    } finally {
+      setCompacting(false)
+    }
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={`btn btn-ghost btn-sm composer-context-pill${view.tone === 'high' ? ' composer-context-pill-high' : view.tone === 'warn' ? ' composer-context-pill-warn' : view.tone === 'compacting' ? ' composer-context-pill-compacting' : ''}`}
+          aria-expanded={open}
+          aria-label={view.ariaLabel}
+          title={view.ariaLabel}
+        >
+          <HelmIcon
+            name={view.tone === 'compacting' ? 'loader' : 'gauge'}
+            size={12}
+            className={view.tone === 'compacting' ? 'spin-slow' : undefined}
+          />
+          <span className="mono tabular-nums">{view.pillLabel}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverPortal>
+        <PopoverContent side="top" align="start" sideOffset={8} className="composer-popover composer-context-popover">
+          <div className="popover-header">上下文用量</div>
+          <div className="composer-context-rows">
+            {view.rows.map((row) => (
+              <div key={row.key} className={`composer-context-row${row.danger === true ? ' composer-context-row-danger' : ''}`}>
+                <span className="composer-context-row-key">{row.key}</span>
+                <span className="composer-context-row-value">{row.value}</span>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="popover-item"
+            disabled={isCompacting}
+            onClick={() => void runCompact()}
+            title={isCompacting ? '压缩进行中，稍后再试' : '手动精简历史上下文（摘要替换旧前缀）'}
+          >
+            <HelmIcon name="archive" size={13} className={isCompacting ? 'spin-slow' : undefined} />
+            {isCompacting ? '压缩进行中…' : '精简上下文'}
+          </button>
+        </PopoverContent>
+      </PopoverPortal>
+    </Popover>
   )
 }
 
@@ -1339,6 +1423,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                 </button>
               </Tooltip>
               <ModelPicker conversation={conversation} />
+              <ContextUsagePill conversation={conversation} />
               <input
                 ref={fileInputRef}
                 type="file"

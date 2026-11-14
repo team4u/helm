@@ -46,7 +46,13 @@ import {
   DEFAULT_MAGPIE_ROOT,
   DEFAULT_MAGPIE_TOKEN,
 } from '../src/builtin-plugins/magpie/contracts.js'
-import { magpieApi, toPiModels, adaptiveThinking, thinkingLevelMap } from '../src/builtin-plugins/magpie/catalog.js'
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  magpieApi,
+  toPiModels,
+  adaptiveThinking,
+  thinkingLevelMap,
+} from '../src/builtin-plugins/magpie/catalog.js'
 import { normalizeRoot, isLoopback, resolveGateway } from '../src/builtin-plugins/magpie/gateway.js'
 
 const MAGPIE = MAGPIE_PLUGIN_ID
@@ -435,6 +441,16 @@ test('magpie2: toPiModels 完整映射——api/baseUrl/thinkingLevelMap/forceAd
 
   const relay = byId.get('group/relay')!
   assert.equal(relay.magpieOwnedBy, 'opencode-go', 'owned_by 透传供配额归属')
+
+  // 窗口来源诚实性：上游窗口为正数才标记已知；缺省兑底值不得冒充真实窗口。
+  assert.equal(gpt.helmContextWindowKnown, true, 'context_length 正数 → 已知窗口')
+  assert.equal(gpt.contextWindow, 400_000)
+  assert.equal(byId.get('anthropic/claude-sonnet-4.6')!.helmContextWindowKnown, true, 'context_window 正数 → 已知窗口')
+  for (const id of ['anthropic/claude-sonnet-4.5', 'kimi/k2-chat', 'group/relay']) {
+    const model = byId.get(id)!
+    assert.equal(model.helmContextWindowKnown, false, `无上游窗口（${id}）必须标记未知`)
+    assert.equal(model.contextWindow, DEFAULT_CONTEXT_WINDOW, '兑底值仍满足 pi-ai Model 契约')
+  }
 })
 
 test('magpie3: thinkingLevelMap 边界——空档位 / Anthropic off 键语义', { timeout: 60_000 }, () => {

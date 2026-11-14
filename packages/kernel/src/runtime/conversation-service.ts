@@ -180,6 +180,8 @@ export class ConversationService {
       defaultThinkingLevel: this.o.defaultThinkingLevel,
       parseModelRefOrThrow: this.o.parseModelRefOrThrow,
       summaryWithOwnership: (id) => this.summaryWithOwnership(id),
+      // 模型/档位对齐后上下文窗口与阈值可能变化：触发用量重算。
+      scheduleContextUsageRefresh: (id) => this.tracker.scheduleContextUsageRefresh(id),
     })
 
     this.inputPipeline = new ConversationInputPipeline({
@@ -369,6 +371,9 @@ export class ConversationService {
   // ------------------------------------------------------------------
 
   async getConversationDetail(id: number, options?: { limit?: number; cursor?: string }): Promise<ConversationDetail> {
+    // 缓存缺失（重启后首次打开/分叉新建）时先等初始刷新完成：首个 detail 即
+    // 携带 contextUsage；已缓存时零开销直通（后续分页不重复刷新）。
+    await this.tracker.ensureContextUsage(id)
     return this.detailOps.getConversationDetail(id, options)
   }
 
@@ -573,6 +578,10 @@ export class ConversationService {
     this.store.upsertConv(updated)
     if (patch.nodeId !== undefined || patch.cwd !== undefined) {
       this.o.evictConversationBase(id)
+    }
+    // 模型/思考档位变化后窗口与阈值可能变化：触发上下文用量重算（去重）。
+    if (patch.model !== undefined || patch.profileId !== undefined || patch.thinkingLevel !== undefined) {
+      this.tracker.scheduleContextUsageRefresh(id)
     }
     const summary = this.tracker.summaryOf(id)
     this.events.publish('conversation.upsert', this.withOwnership(summary))

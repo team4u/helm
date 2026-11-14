@@ -26,10 +26,12 @@ import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import {
   buildModels,
+  knownContextWindowOf,
   listModelCatalog,
   listModelProviders,
   parseModelRef,
   requireModelRef,
+  type HelmModelSourceMeta,
   type ModelCatalogEntry,
 } from '../src/runtime/models.js'
 import { createFileModelsStore } from '../src/runtime/models-store.js'
@@ -204,6 +206,24 @@ async function drainStream(stream: AsyncIterable<unknown>): Promise<{ done: bool
 // ---------------------------------------------------------------------------
 
 describe('兼容网关（openai 协议）', { timeout: 60_000 }, () => {
+  test('静态模型窗口显式标记未知（helmContextWindowKnown 经 setProvider/getModel 保留）', { timeout: 60_000 }, () => {
+    const models = buildModels({
+      providers: [openaiCompatConfig('http://127.0.0.1:9/v1')],
+      apiKeys: () => ({}),
+    })
+    const model = models.getModel('gw-openai', 'gw-openai-model')
+    assert.ok(model, 'compat 模型应注册到目录')
+    // 请求契约缺省仍在（发送请求需要），但不得当作真实已知窗口。
+    assert.equal(model.contextWindow, 128_000)
+    assert.equal((model as typeof model & HelmModelSourceMeta).helmContextWindowKnown, false, 'compat 静态模型必须携带未知标记')
+    assert.equal(knownContextWindowOf(model), undefined, '已知窗口解析必须省略静态缺省')
+    // 内置 provider 模型缺省视为已知：窗口是策展数据。
+    const builtin = models.getModels().find((entry) => entry.contextWindow > 0)
+    assert.ok(builtin, '内置 provider 目录应存在带窗口模型')
+    assert.equal(knownContextWindowOf(builtin), builtin.contextWindow, '内置模型窗口如实已知')
+    assert.equal(knownContextWindowOf(undefined), undefined)
+  })
+
   test('streamSimple 组装 baseURL/path/bearer/model id 并收到真实流式回答', { timeout: 60_000 }, async () => {
     const models = buildModels({
       providers: [openaiCompatConfig(`${openaiGateway.url}/v1`)],

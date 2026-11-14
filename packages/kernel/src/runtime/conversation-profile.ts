@@ -30,6 +30,8 @@ export interface ConversationProfileHost {
   readonly defaultThinkingLevel: () => string | undefined
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
   readonly summaryWithOwnership: (id: number) => ConversationSummary
+  /** 模型/档位对齐后触发上下文用量重算（窗口/阈值可能变化）；缺省不触发。 */
+  readonly scheduleContextUsageRefresh?: (id: number) => void
 }
 
 export class ConversationProfileService {
@@ -130,6 +132,9 @@ export class ConversationProfileService {
         stateChangeSeq: latest.stateChangeSeq + 1,
         updatedAt: Date.now(),
       })
+      // 生效模型变化后上下文窗口/阈值随之变化：触发用量重算（去重；forks
+      // 与 profile 级联刷新均经此对齐，首次观察路径另有 adoptInitial 兑底）。
+      this.host.scheduleContextUsageRefresh?.(id)
       if (emitEvent) this.host.events.publish('conversation.upsert', this.host.summaryWithOwnership(id))
     })
   }

@@ -21,6 +21,36 @@ export type InputOrigin = 'human' | 'agent' | 'trigger'
 /** 会话正忙时新输入的处理策略；省略时内核默认 steer（插话引导）。 */
 export type WhenBusy = 'steer' | 'followUp' | 'reject'
 
+/** 会话上下文用量（派生展示数据；内核异步刷新，可能短暂滞后于真实上下文）。
+ *
+ * 估算语义与 pi-durable 的 compaction/estimate 逻辑对齐：优先采用最近一次
+ * 有效 assistant usage 实测值（measuredTokens）加上其后消息的字符估算，
+ * head/compaction/reset 与 helm.rewind/omit 之后的失效锚点自动退化为全量
+ * 估算；不做任何 fallback 冒充。 */
+export interface ConversationContextUsage {
+  /** 当前有效上下文的估算总 tokens（实测锚点 + 尾段估算）。 */
+  tokens: number
+  /** 模型上下文窗口；仅当模型在当前 Models 集合中解析得到时携带，未知不伪造。 */
+  contextWindow?: number
+  /** 实测部分（最近一次可用的 assistant usage 上报 tokens）；全估算时省略。 */
+  measuredTokens?: number
+  /** 自动压缩阈值；仅当 contextWindow 已知且自动压缩启用时携带。 */
+  thresholds?: {
+    /** 后台压缩阈值（后台压缩禁用时省略）。 */
+    backgroundTokens?: number
+    /** 阻塞压缩阈值（contextWindow - reserveTokens）。 */
+    blockingTokens: number
+  }
+  /** 进行中的压缩任务（pi.live compactions 透传；多项时取最新一项）。 */
+  compacting?: {
+    trigger: 'manual' | 'threshold' | 'overflow'
+    /** true = 生成回合正阻塞等待该压缩完成。 */
+    blocking: boolean
+  }
+  /** 最近一次压缩失败摘要（已脱敏，截断至 400 字符）；产生摘要的压缩成功后清除。 */
+  compactionError?: string
+}
+
 /** 会话列表 / SSE 快照中的通用会话摘要。 */
 export interface ConversationSummary {
   id: number
@@ -54,6 +84,9 @@ export interface ConversationSummary {
   stateChangeSeq: number
   /** 每次回合结束单调递增。 */
   completionSeq: number
+  /** 上下文用量（派生展示数据）：由内核异步刷新；其变化发布 conversation.upsert
+   * 但不推进 stateChangeSeq（水位线专属于状态机/doing/Ask 的 CAS 语义）。 */
+  contextUsage?: ConversationContextUsage
   /** 仅人类在 Web/CLI 显式聚焦或 PATCH 时清零，API 读取不清零。 */
   unread: boolean
   pinned: boolean

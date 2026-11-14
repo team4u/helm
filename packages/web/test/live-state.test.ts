@@ -82,6 +82,24 @@ test('SSE 消息先于首次 HTTP 详情返回时，补齐详情后仍保留新�
   assert.deepEqual(state.pendingEntries, {})
 })
 
+test('列表摘要缺 contextUsage 时，HTTP 详情首读带回的用量补进列表与详情（内核首次填充静默不发 SSE 帧）', { timeout: 60_000 }, () => {
+  let state = applySnapshot(emptyLiveState(), snapshot) // 重启后快照：摘要无 contextUsage
+  const usage = { tokens: 25_000, contextWindow: 100_000 }
+  state = mergeConversationDetail(state, { ...conv, entries: [], contextUsage: usage })
+  // ConversationPane 向 Composer 传 summary ?? detail：列表摘要必须带用量，胶囊才能渲染
+  assert.deepEqual(state.conversations.find((c) => c.id === 1)?.contextUsage, usage)
+  assert.deepEqual(state.conversationDetails[1]?.contextUsage, usage)
+})
+
+test('列表摘要已有 contextUsage 时保留 SSE 权威值，旧 HTTP 详情不得回退', { timeout: 60_000 }, () => {
+  const fresh = { tokens: 50_000 }
+  let state = applySnapshot(emptyLiveState(), snapshot)
+  state = applyEventFrame(state, { seq: 11, event: { type: 'conversation.upsert', conversation: { ...conv, contextUsage: fresh } } })
+  state = mergeConversationDetail(state, { ...conv, entries: [], contextUsage: { tokens: 12_000 } })
+  assert.deepEqual(state.conversations.find((c) => c.id === 1)?.contextUsage, fresh)
+  assert.deepEqual(state.conversationDetails[1]?.contextUsage, fresh)
+})
+
 test('FTS input:/entry: 引用映射到真实时间线 entryId', { timeout: 60_000 }, () => {
   assert.equal(entryMatchesReference({ id: '4', kind: 'helm.input', data: { id: 'submission-1' } }, 'input:submission-1'), true)
   assert.equal(entryMatchesReference({ id: '5', kind: 'pi.assistant' }, 'entry:5'), true)
