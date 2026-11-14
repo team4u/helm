@@ -24,6 +24,7 @@ import { calculateContextTokens, estimateMessageTokens } from '@earendil-works/p
 import type { AssistantMessage, Message, UserMessage } from '@earendil-works/pi-ai'
 import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
+import type { ProviderConfig } from '@helm/protocol'
 import {
   assembleContextUsage,
   compactionErrorOf,
@@ -31,6 +32,7 @@ import {
   contextUsageKeyOf,
   estimateContextUsage,
 } from '../src/runtime/context-usage.js'
+import { buildModels } from '../src/runtime/models.js'
 import { EventHub } from '../src/runtime/events.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 
@@ -327,6 +329,60 @@ function recordUpserts(kernel: KernelRuntime, conversationId: number): {
 }
 
 describe('集成：摘要携带 contextUsage 与事件发布', { timeout: 60_000 }, () => {
+  it('重启后 idle 历史会话：首个详情即携带 contextUsage（实测锚点可恢复）', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime('idle-detail')
+    kernel.__faux.setResponses([fauxAssistantMessage('历史回答')])
+    await kernel.submitInput(1, '历史问题')
+    await kernel.waitForIdle(1)
+    await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) > 0)
+    await kernel.close()
+
+    // 重启：恢复链 observe idle 会话；首个详情（不经任何列表读/等待）必须
+    // 已携带 usage（getConversationDetail 在缓存缺失时等初始刷新完成）。
+    const reopened = await openRuntime('idle-detail')
+    try {
+      const detail = await reopened.getConversationDetail(1, { limit: 5 })
+      assert.ok(detail.contextUsage, '重启后首个详情必须携带 contextUsage')
+      assert.ok(
+        detail.contextUsage.measuredTokens !== undefined && detail.contextUsage.measuredTokens > 0,
+        '历史实测锚点（faux 真实 usage）恢复后仍可用',
+      )
+      assert.ok(detail.contextUsage.tokens > 0)
+      // 后续分页不重复刷新（缓存直通）：仍携带且值稳定。
+      const page2 = await reopened.getConversationDetail(1, { limit: 5 })
+      assert.ok(page2.contextUsage)
+      assert.equal(page2.contextUsage.tokens, detail.contextUsage.tokens)
+    } finally {
+      await reopened.close()
+    }
+  })
+
+  it('compat 网关静态模型：tokens 携带但 contextWindow/thresholds 省略（不伪造）', { timeout: 60_000 }, async () => {
+    const compatConfig: ProviderConfig = {
+      id: 'gw-static',
+      protocol: 'openai',
+      baseUrl: 'http://127.0.0.1:9',
+      models: ['static-model'],
+      label: '静态网关',
+      enabled: true,
+    }
+    const kernel = await KernelRuntime.open({
+      dataDir: join(root, 'compat-window'),
+      cwd: join(root, 'compat-window'),
+      model: 'gw-static/static-model',
+      models: buildModels({ providers: [compatConfig], apiKeys: () => ({}) }),
+    })
+    try {
+      const detail = await kernel.getConversationDetail(1, { limit: 5 })
+      assert.ok(detail.contextUsage, '用量估算（tokens）仍提供')
+      assert.equal(detail.contextUsage.contextWindow, undefined, '静态缺省窗口不得显示为已知窗口')
+      assert.equal(detail.contextUsage.thresholds, undefined, '窗口未知时不推导阈值')
+      assert.equal(detail.model, 'gw-static/static-model')
+    } finally {
+      await kernel.close()
+    }
+  })
+
   it('回合结算后 tokens=measuredTokens；usage-only 变化不推进 stateChangeSeq', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime('settle-usage')
     try {

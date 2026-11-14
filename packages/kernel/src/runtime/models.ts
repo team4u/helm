@@ -22,6 +22,7 @@ import {
   createModels,
   createProvider,
   getSupportedThinkingLevels,
+  type Api,
   type ApiKeyAuth,
   type AuthResult,
   type Model,
@@ -49,7 +50,27 @@ export interface ModelGatewayOptions {
 }
 
 /**
- * 兼容网关静态模型的保守缺省。providers.json 只给模型 ID（string[]），
+ * helm 附加在 pi 模型对象上的来源元数据（局部交叉类型，不进 SDK 契约）。
+ *
+ * `helmContextWindowKnown`：contextWindow 是否为真实已知值。pi-ai 的 Model
+ * 契约要求 contextWindow 必填数字，静态来源（providers.json 兼容网关、上游
+ * 目录缺窗口的 Magpie 条目）只能填保守缺省——这些模型显式标记 false；
+ * 内置 provider 与显式模型目录的窗口是策展数据，缺省（undefined）视为已知。
+ * 字段随模型对象经 Models.setProvider/getModel 原样保留（SDK 不裁剪未知字段）。
+ */
+export interface HelmModelSourceMeta {
+  helmContextWindowKnown?: boolean
+}
+
+/** 模型真实已知的上下文窗口：仅当窗口为正数且未被标记为静态缺省时返回；
+ * 未知（模型不在集合 / 标记 false / 窗口非正数）返回 undefined，不伪造。 */
+export function knownContextWindowOf(model: Model<Api> | undefined): number | undefined {
+  if (model === undefined) return undefined
+  if ((model as Model<Api> & HelmModelSourceMeta).helmContextWindowKnown === false) return undefined
+  return model.contextWindow > 0 ? model.contextWindow : undefined
+}
+
+/** 兼容网关静态模型的保守缺省。providers.json 只给模型 ID（string[]），
  * pi-ai 的 Model 契约要求 contextWindow / maxTokens / cost 为必填数字——
  * 这些是「让请求能发出去」的最小缺省，不是探测到的真实能力：
  * 真实能力只能来自上游目录（如 /v1/models 探测），helm 目前不做探测。
@@ -73,6 +94,8 @@ function compatModel(
     baseUrl: config.baseUrl,
     input: ['text'] as ModelInputModality[],
     ...COMPAT_MODEL_DEFAULTS,
+    // 静态缺省窗口不是探测值：显式标记未知（knownContextWindowOf 据此省略）。
+    helmContextWindowKnown: false,
   }
   return config.protocol === 'anthropic'
     ? { ...shared, api: 'anthropic-messages', reasoning: false }

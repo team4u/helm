@@ -38,6 +38,7 @@ import type { Models } from '@earendil-works/pi-ai'
 import type { ConvMeta, HelmStore } from './store.js'
 import { summaryOf } from './store.js'
 import { deriveConversationLive, toConversationEntry, type EntryRecordLike } from './entries.js'
+import { knownContextWindowOf } from './models.js'
 import {
   assembleContextUsage,
   compactionErrorOf,
@@ -166,8 +167,10 @@ export class ConversationTracker {
   /** 在途期间收到新触发信号的会话（完成后重跑一次）。 */
   private readonly contextUsageDirty = new Set<number>()
   /** 会话 -> 上下文触发已扫描到的最大 entry id（与 onEntryCommitted 无关，
-   * 独立推进：无 sink 时也能正确去重）。 */
+   * 独立推进：无 sink 时也能正确去重；仅超过旧水位线的新标记条目才触发刷新）。 */
   private readonly contextUsageEntryWatermark = new Map<number, number>()
+  /** 会话 -> 刷新链 settle 等待者（ensureContextUsage 唤醒用；stopObserving 兑底 resolve）。 */
+  private readonly contextUsageWaiters = new Map<number, Array<() => void>>()
 
   constructor(options: {
     harness: Harness
@@ -251,17 +254,25 @@ export class ConversationTracker {
     const live = view.docs['pi.live'] as LiveStateShape | undefined
     this.liveViews.set(id, live ?? {})
     let watermark = this.lastEmittedEntry.get(id) ?? 0
+    // 上下文触发水位线与 entry 事件水位线同一初值对齐：初始快照内的历史标记
+    // （pi.compaction 等）不触发后续 adopt 的重复刷新（初始刷新见下方调度）。
+    let usageWatermark = this.contextUsageEntryWatermark.get(id) ?? 0
     for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
       const numeric = Number(raw.id)
       if (Number.isFinite(numeric) && numeric > watermark) watermark = numeric
+      if (Number.isFinite(numeric) && numeric > usageWatermark) usageWatermark = numeric
     }
     this.lastEmittedEntry.set(id, watermark)
+    this.contextUsageEntryWatermark.set(id, usageWatermark)
     // inbox 镜像登记先于 run 判定：重启/停 run 但 inbox 仍有排队输入时，
     // queuedInputs 派生与 listLiveViews 快照不丢排队事实（不在 web 伪造队列）。
     const inbox = view.docs['pi.inbox'] as { items?: InboxItemShape[] } | undefined
     const inboxItems = inbox?.items ?? []
     this.inboxViews.set(id, inboxItems)
     this.adoptInputsFromInbox(id, inboxItems)
+    // 首次挂接即填充上下文用量缓存（重启/分叉/新建会话的初始读路径）；
+    // idle 会话同样需要（否则仅活跃 run 会话有初始值，历史会话打开后无胶囊）。
+    this.scheduleContextUsageRefresh(id)
     if (!live?.run) return
     this.runTaskIds.set(id, live.run.taskId)
     this.consumedInputs.set(id, new Set<number | string>())
@@ -281,8 +292,6 @@ export class ConversationTracker {
     // 恢复的活跃 run 已体现在快照摘要（listConversations）：登记语义指纹即可，
     // 后续 advance 仅在真实变化时推送，不补发冗余 working 帧。
     if (this.store.getConv(id)) this.lastSummaryKey.set(id, summaryKeyOf(this.summaryOf(id)))
-    // 首次挂接即填充上下文用量缓存（重启/分叉/新建会话的初始读路径）。
-    this.scheduleContextUsageRefresh(id)
   }
 
   /** 回读结果：helm.input entry 列表 + (submissionId, requestId) 权威对。 */
@@ -377,11 +386,15 @@ export class ConversationTracker {
     this.lastAssistant.delete(id)
     this.settledInflight.delete(id)
     this.settledErrors.delete(id)
-    // 上下文用量镜像一并清理：停观/删除后的迟到刷新经代数守护丢弃，不复活。
+    // 上下文用量镜像一并清理：停观/删除后的迟到刷新经代数守护丢弃，不复活；
+    // 刷新链等待者先行 resolve（醒来后自查缓存/元数据并退出，不永久挂起）。
     this.contextUsageCache.delete(id)
     this.contextUsageKeys.delete(id)
     this.contextUsageDirty.delete(id)
     this.contextUsageEntryWatermark.delete(id)
+    const usageWaiters = this.contextUsageWaiters.get(id) ?? []
+    this.contextUsageWaiters.delete(id)
+    for (const resolve of usageWaiters) resolve()
     const waiters = this.settledWaiters.get(id) ?? []
     this.settledWaiters.delete(id)
     for (const resolve of waiters) resolve()
@@ -709,26 +722,31 @@ export class ConversationTracker {
     this.emitRunSummary(id)
   }
 
-  /** 上下文边界扫描：新条目里出现 pi.compaction / pi.reset / helm.rewind，
-   * 或 pi.live 压缩状态（compactions/compactionFailure）指纹变化时触发刷新。
-   * 独立水位线（与 onEntryCommitted 无关）：无 entry sink 的观察者同样去重。 */
+  /** 上下文边界扫描：仅超过旧水位线的新条目中出现 pi.compaction /
+   * pi.reset / helm.rewind，或 pi.live 压缩状态（compactions/compactionFailure）
+   * 指纹变化时才触发刷新。历史标记条目不重复触发（否则流式期间每次快照都
+   * 重调度，写放大）；水位线单调推进。独立水位线（与 onEntryCommitted 无关）：
+   * 无 entry sink 的观察者同样去重。 */
   private noteContextBoundary(
     id: number,
     view: ConversationView,
     prev: LiveStateShape | undefined,
     live: LiveStateShape | undefined,
   ): void {
-    let watermark = this.contextUsageEntryWatermark.get(id) ?? 0
+    const old = this.contextUsageEntryWatermark.get(id) ?? 0
+    let watermark = old
     let boundary = false
     for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
       const numeric = Number(raw.id)
-      if (!Number.isFinite(numeric)) continue
+      if (!Number.isFinite(numeric) || numeric <= old) continue
       if (numeric > watermark) watermark = numeric
       const kind = (raw as { kind?: unknown }).kind
       if (kind === 'pi.compaction' || kind === 'pi.reset' || kind === 'helm.rewind') boundary = true
     }
     this.contextUsageEntryWatermark.set(id, watermark)
-    if (boundary || compactionLiveKeyOf(prev) !== compactionLiveKeyOf(live)) {
+    // prev 恒为对象镜像（liveViews 存 ?? {}）；live 原始 doc 缺失时归一为空对象，
+    // 避免「无 pi.live doc 的快照」首帧因 undefined vs {} 指纹差异误触发刷新。
+    if (boundary || compactionLiveKeyOf(prev) !== compactionLiveKeyOf(live ?? {})) {
       this.scheduleContextUsageRefresh(id)
     }
   }
@@ -1087,19 +1105,55 @@ export class ConversationTracker {
         if (this.contextUsageDirty.delete(conversationId)) {
           this.scheduleContextUsageRefresh(conversationId)
         }
+        // 唤醒等待方（ensureContextUsage）：自行复查缓存/在途状态决定返回或续等。
+        const waiters = this.contextUsageWaiters.get(conversationId)
+        if (waiters !== undefined) {
+          this.contextUsageWaiters.delete(conversationId)
+          for (const resolve of waiters) resolve()
+        }
       })
+  }
+
+  /** 确保该会话 contextUsage 缓存已填充且刷新链归寂（首个详情读等同步可见路径）。
+   *
+   * - 已缓存且无在途刷新：立即返回（已缓存的分页读零开销，不重复刷新）；
+   * - 缺失或在途：等待刷新链 settle（多调用方合并同一次刷新；dirty 重跑链
+   *   同样等待到归寂，避免「缓存已设但链未完」时读到即将被迫齐的旧值）；
+   * - 每轮等待都由真实「刷新链 settle」事件推进（无轮询无 sleep）；上限
+   *   8 轮仅防御病态链（持续被代数守护丢弃且不断有新触发）。
+   */
+  async ensureContextUsage(conversationId: number): Promise<void> {
+    for (let round = 0; round < 8; round += 1) {
+      if (this.contextUsageCache.has(conversationId) && !this.contextUsagePending.has(conversationId)) {
+        return
+      }
+      if (!this.store.getConv(conversationId)) return
+      if (!this.contextUsagePending.has(conversationId)) {
+        this.scheduleContextUsageRefresh(conversationId)
+        // 调度被拒（会话恰好被删）：不再等待，如实返回。
+        if (!this.contextUsagePending.has(conversationId)) return
+      }
+      await new Promise<void>((resolve) => {
+        const list = this.contextUsageWaiters.get(conversationId) ?? []
+        list.push(resolve)
+        this.contextUsageWaiters.set(conversationId, list)
+      })
+    }
   }
 
   /** 单次刷新：读真实 ContextView + 模型窗口/阈值 + live 压缩状态，变化才发布。 */
   private async refreshContextUsageOnce(conversationId: number): Promise<void> {
     const meta = this.store.getConv(conversationId)
     if (!meta) return
-    // 代数守护：await 后会话已停观/重观察（或被删除）时丢弃结果，不向镜像回写。
+    // 代数守护：await 前捕获；未观察（undefined）同样参与比较——刷新期间并发
+    // observe（换代）/stopObserving（删除令牌）都会改变当前值，迟到结果丢弃。
     const generation = this.observeGenerations.get(conversationId)
     const conversation = await this.harness.conversation(conversationId as never, BACKGROUND_CONTEXT)
     if (!conversation) return
     const view = await conversation.context(BACKGROUND_CONTEXT)
-    if (generation !== undefined && this.observeGenerations.get(conversationId) !== generation) return
+    if (this.observeGenerations.get(conversationId) !== generation) return
+    // 会话可能在 await 期间被删除：迟到结果不得复活缓存或发事件。
+    if (!this.store.getConv(conversationId)) return
     this.applyContextUsage(conversationId, meta, view)
   }
 
@@ -1112,8 +1166,10 @@ export class ConversationTracker {
       slash > 0 && slash < meta.model.length - 1 && this.modelsOf !== undefined
         ? this.modelsOf().getModel(meta.model.slice(0, slash), meta.model.slice(slash + 1))
         : undefined
-    // 未知窗口不伪造：模型不在当前 Models 集合时不携带 contextWindow/thresholds。
-    const contextWindow = model !== undefined && model.contextWindow > 0 ? model.contextWindow : undefined
+    // 窗口来源诚实性：模型不在当前 Models 集合，或窗口是静态保守缺省
+    // （compat 网关 / Magpie 目录缺上游窗口，helmContextWindowKnown === false）
+    // 时不携带 contextWindow/thresholds——绝不把 128k 缺省冒充真实窗口。
+    const contextWindow = knownContextWindowOf(model)
     const thresholds =
       contextWindow !== undefined && policy.enabled
         ? {
@@ -1138,9 +1194,18 @@ export class ConversationTracker {
     // 缓存先行更新：HTTP / SSE 快照读立即看到新值（事件是否另发见下）。
     this.contextUsageCache.set(conversationId, usage)
     this.contextUsageKeys.set(conversationId, key)
-    // 首次填充静默：值经快照 / HTTP 读自然可见，不发事件（避免启动期每会话
-    // 一帧噪声，维持「终态后无重复语义帧」的既有帧纪律）。
-    if (previousKey === undefined) return
+    // 首次填充默认静默：值经快照 / HTTP 读自然可见，不发事件（避免启动期每
+    // 会话一帧噪声，维持「终态后无重复语义帧」的既有帧纪律）。唯一例外：
+    // 填充时已携带压缩实时状态（compacting/compactionError，如启动期恢复
+    // 进行中压缩、首次刷新落在手动压缩窗口内）必须发布——否则没有任何后续
+    // 语义帧会携带它，订阅方将永远看不到该状态。
+    if (previousKey === undefined) {
+      if (usage.compacting !== undefined || usage.compactionError !== undefined) {
+        const summary = this.summaryOf(conversationId)
+        this.events.onSummaryChanged(summary)
+      }
+      return
+    }
     if (key === previousKey) return
     // run 活跃期间：仅压缩实时状态（compacting / 失败摘要）变化才发帧；token
     // 变化是瞬态，等本回合结算帧携带（emitSettled 附加缓存值），避免 working

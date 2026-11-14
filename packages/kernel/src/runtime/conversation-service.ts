@@ -371,6 +371,9 @@ export class ConversationService {
   // ------------------------------------------------------------------
 
   async getConversationDetail(id: number, options?: { limit?: number; cursor?: string }): Promise<ConversationDetail> {
+    // 缓存缺失（重启后首次打开/分叉新建）时先等初始刷新完成：首个 detail 即
+    // 携带 contextUsage；已缓存时零开销直通（后续分页不重复刷新）。
+    await this.tracker.ensureContextUsage(id)
     return this.detailOps.getConversationDetail(id, options)
   }
 
