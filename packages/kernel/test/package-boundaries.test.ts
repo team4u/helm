@@ -50,7 +50,8 @@ function imports(file: string): string[] {
 }
 
 const forbidden: Record<string, readonly string[]> = {
-  '@helm/protocol': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build'],
+  '@helm/protocol': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build', '@helm/env-io'],
+  '@helm/env-io': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build'],
   '@helm/kernel': ['@helm/plugins', '@helm/hub', '@helm/web', '@helm/plugin-client', '@helm/plugin-build'],
   '@helm/plugins': ['@helm/kernel', '@helm/hub', '@helm/web'],
   '@helm/plugin-build': ['@helm/kernel', '@helm/hub', '@helm/web', '@helm/plugins', '@helm/plugin-client', '@helm/node'],
@@ -81,7 +82,7 @@ function hasPublicExport(manifest: PackageManifest, specifier: string): boolean 
 test('生产包保持单向依赖，源码只通过已声明的公开包入口跨边界', { timeout: 60_000 }, () => {
   const packages = workspacePackages()
   const names = new Set(packages.map(({ manifest }) => manifest.name))
-  for (const name of ['@helm/kernel', '@helm/plugins', '@helm/hub', '@helm/plugin-client', '@helm/plugin-build']) {
+  for (const name of ['@helm/kernel', '@helm/plugins', '@helm/hub', '@helm/plugin-client', '@helm/plugin-build', '@helm/env-io']) {
     assert.ok(names.has(name), `缺少独立包 ${name}`)
   }
   const violations: string[] = []
