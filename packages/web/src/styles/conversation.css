@@ -691,6 +691,13 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
+}
+.trace-tool-body .trace-section-label {
+  color: var(--fg-muted);
+  text-transform: none;
+  letter-spacing: normal;
+  overflow-wrap: anywhere;
 }
 
 .trace-tool-note {
