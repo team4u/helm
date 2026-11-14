@@ -215,16 +215,8 @@
   box-shadow: 0 0 0 2px var(--err-bg);
 }
 
-/* 圆点成组容器：基础状态圆点与后台在途空心环并列（保持 7px 紧凑布局）。 */
-.status-dot-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
-  vertical-align: middle;
-}
-
-/* 后台在途空心环：父会话自身空闲/已完成但后台任务（子代理/工作流）仍在运行；
+/* 后台在途空心环（单灯位）：父会话自身空闲/已完成但后台任务（子代理/工作流）
+   仍在运行时，替换 idle 的无灯/done 的绿点成为该行唯一状态灯；
    空心 + 慢速呼吸，与主回合 working 实心脉冲点明确区分，不冒充会话自身运行。 */
 .status-dot-background {
   background: transparent;

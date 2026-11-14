@@ -12,7 +12,6 @@ import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarg
 import {
   AGENT_SUB_LIST_PREVIEW,
   buildAgentStandings,
-  conversationStatusDotClass,
   extractSidebarViews,
   filterAgentStandings,
   filterConversationsByTag,
@@ -24,6 +23,7 @@ import {
   backgroundAwareStatusTooltip,
   collectBackgroundBadgeDocs,
   resolveStandingStatusIndicator,
+  resolveStatusLight,
   summarizeConversationBackgroundActivity,
   type ConversationBackgroundActivity,
   type ConversationBackgroundIndex,
@@ -65,6 +65,41 @@ function HoverIconButton({
   )
 }
 
+/**
+ * 单灯位状态灯：dotClass 由 resolveStatusLight 纯函数裁决，每行只渲染一个灯，
+ * 绝不依顺序叠第二盏（working/blocked/error 状态灯独占；idle/done 让位后台空心环；
+ * 无在途保持五态原样）。tooltip 与灯位同源，后台摘要仅在空心环灯位时叠加。
+ */
+function StatusLightDot({
+  status,
+  doing,
+  lastError,
+  backgroundActive,
+  backgroundSummary,
+}: {
+  status: ConversationSummary['status']
+  doing?: string
+  lastError?: string
+  backgroundActive: boolean
+  backgroundSummary?: string
+}) {
+  const light = resolveStatusLight(status, backgroundActive)
+  if (light.dotClass === null) return null
+  const tooltip = backgroundAwareStatusTooltip({
+    status,
+    doing,
+    lastError,
+    backgroundActive,
+    backgroundSummary,
+  })
+  return (
+    <Tooltip content={tooltip} side="top">
+      <span className={light.dotClass} title={tooltip} aria-label={tooltip} role="status" />
+    </Tooltip>
+  )
+}
+
+/** 会话行唯一状态灯：主会话状态优先，idle/done 且后台在途时让位空心环。 */
 function ConversationStatusDot({
   conv,
   background,
@@ -72,45 +107,29 @@ function ConversationStatusDot({
   conv: ConversationSummary
   background?: ConversationBackgroundActivity
 }) {
-  const dotClass = conversationStatusDotClass(conv.status)
-  const backgroundActive = background?.active === true
-  if (dotClass === null && !backgroundActive) return null
-  const tooltip = backgroundAwareStatusTooltip({
-    status: conv.status,
-    doing: conv.doing,
-    lastError: conv.lastError,
-    backgroundActive,
-    backgroundSummary: background?.summary,
-  })
   return (
-    <Tooltip content={tooltip} side="top">
-      <span className="status-dot-group" title={tooltip} aria-label={tooltip} role="status">
-        {dotClass !== null && <span className={dotClass} />}
-        {backgroundActive && <span className="status-dot status-dot-background" />}
-      </span>
-    </Tooltip>
+    <StatusLightDot
+      status={conv.status}
+      doing={conv.doing}
+      lastError={conv.lastError}
+      backgroundActive={background?.active === true}
+      backgroundSummary={background?.summary}
+    />
   )
 }
 
-/** 智能体站位行折叠态指示器：代表会话基础圆点 + 名下任一会话的后台在途空心环。 */
+/** 智能体站位行折叠态唯一状态灯：代表会话状态灯优先（working/blocked/error 独占，
+ *  隐藏整个站位的后台环）；代表 idle/done 且名下任一会话后台在途时只显示空心环。 */
 function StandingStatusDot({ indicator }: { indicator: StandingStatusIndicator }) {
   const rep = indicator.representative
-  const dotClass = conversationStatusDotClass(rep.status)
-  if (dotClass === null && !indicator.backgroundActive) return null
-  const tooltip = backgroundAwareStatusTooltip({
-    status: rep.status,
-    doing: rep.doing,
-    lastError: rep.lastError,
-    backgroundActive: indicator.backgroundActive,
-    backgroundSummary: indicator.backgroundSummary,
-  })
   return (
-    <Tooltip content={tooltip} side="top">
-      <span className="status-dot-group" title={tooltip} aria-label={tooltip} role="status">
-        {dotClass !== null && <span className={dotClass} />}
-        {indicator.backgroundActive && <span className="status-dot status-dot-background" />}
-      </span>
-    </Tooltip>
+    <StatusLightDot
+      status={rep.status}
+      doing={rep.doing}
+      lastError={rep.lastError}
+      backgroundActive={indicator.backgroundActive}
+      backgroundSummary={indicator.backgroundSummary}
+    />
   )
 }
 

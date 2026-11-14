@@ -22,7 +22,7 @@ import type { ConversationSummary, WorkbenchPanelSpec } from '@helm/protocol'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'
 import { resolveWorkbenchPanelBadge } from '../conversation/workbench-model.js'
-import { conversationStatusTooltip } from './sidebar-model.js'
+import { conversationStatusDotClass, conversationStatusTooltip } from './sidebar-model.js'
 
 /** 摘要片段分隔符（与工作台底部状态栏 footerText 拼接风格一致）。 */
 const SUMMARY_SEPARATOR = ' · '
@@ -105,8 +105,9 @@ export function collectBackgroundBadgeDocs(
  *   并列取列表首个即常驻/最新置顶序；无更高优先级时保持列表首个，与既有
  *   「看 primaryConversation」行为兼容）——支持后台在途来自非 primary 会话；
  * - backgroundActive / backgroundSummary：名下任一会话的后台在途聚合
- *   （footerText 去重拼接）。空心环与基础圆点并列呈现，两者同时透出，
- *   展开态由子会话行各自呈现，站位行不再重复。
+ *   （footerText 去重拼接）。灯位渲染由 resolveStatusLight 单灯裁决：代表会话
+ *   working/blocked/error 时状态灯独占（隐藏整个站位的后台环），代表 idle/done
+ *   时让位唯一的后台空心环；展开态由子会话行各自呈现，站位行不重复。
  */
 export interface StandingStatusIndicator {
   representative: ConversationSummary
@@ -150,9 +151,41 @@ export function resolveStandingStatusIndicator(
   return { representative, backgroundActive, backgroundSummary: parts.join(SUMMARY_SEPARATOR) }
 }
 
+/** 后台在途空心环完整类名（与基础状态圆点共用 status-dot 基类）。 */
+const BACKGROUND_DOT_CLASS = 'status-dot status-dot-background'
+
+/** 单灯位渲染判定：基础状态圆点或后台在途空心环二选一，绝无第二盏灯。 */
+export interface StatusLight {
+  /** 唯一灯位完整类名（含 status-dot 前缀）；null = 无灯（idle 且无后台在途）。 */
+  dotClass: string | null
+  /** 该灯位是否为后台在途空心环（true 时 tooltip 才叠加后台摘要）。 */
+  background: boolean
+}
+
 /**
- * 组合悬浮提示：基础会话状态（五态文案 + doing/lastError 诊断）叠加后台运行摘要。
- * 空心环不得误导为会话自身 working，tooltip 必须同时陈述两者。
+ * 单灯优先级（侧栏每个会话/智能体站位行只保留一个灯位）：
+ * 1. working / blocked / error：主会话状态灯独占灯位，后台空心环完全不渲染；
+ * 2. idle / done 且该行有后台在途：仅渲染后台空心环（idle 的无灯与 done 的
+ *    绿点让位，父会话已空闲/完成而后台仍在运行）；
+ * 3. 无后台在途：保持既有五态显示（done 绿点、idle 无灯、其余各自状态点）。
+ */
+export function resolveStatusLight(
+  status: ConversationSummary['status'],
+  backgroundActive: boolean,
+): StatusLight {
+  const base = conversationStatusDotClass(status)
+  if (status === 'working' || status === 'blocked' || status === 'error') {
+    return { dotClass: base, background: false }
+  }
+  if (backgroundActive) return { dotClass: BACKGROUND_DOT_CLASS, background: true }
+  return { dotClass: base, background: false }
+}
+
+/**
+ * 单灯位悬浮提示：主会话状态灯（working/blocked/error）只陈述主回合诊断
+ * （doing/lastError），不叠加后台摘要，避免干扰当前主回合；仅当灯位为后台
+ * 空心环（idle/done 让位）时，才在基础状态文案后拼后台运行摘要，明确父会话
+ * 已空闲/完成而后台仍在运行。无在途时与既有文案完全一致。
  */
 export function backgroundAwareStatusTooltip(input: {
   status: ConversationSummary['status']
@@ -162,7 +195,8 @@ export function backgroundAwareStatusTooltip(input: {
   backgroundSummary?: string
 }): string {
   const base = conversationStatusTooltip(input.status, input.doing, input.lastError)
-  if (!input.backgroundActive) return base
+  const light = resolveStatusLight(input.status, input.backgroundActive)
+  if (!light.background) return base
   const summary = input.backgroundSummary?.trim() ?? ''
   return summary === '' ? `${base} · 后台任务运行中` : `${base} · 后台任务: ${summary}`
 }
