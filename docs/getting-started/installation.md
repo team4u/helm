@@ -89,8 +89,8 @@ pnpm helm status --json                              # 验证：configured 与 a
 
 | 变量 | 默认值 | 适用组件 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `HELM_PORT` | `3202` | `@helm/kernel` / `@helm/web` | Hub 监听端口（前端代理目标跟随该值） |
-| `HELM_HOST` | `127.0.0.1` | `@helm/kernel` | Hub 绑定地址；远端节点接入需显式 `0.0.0.0` 或反代 |
+| `HELM_PORT` | `3202` | `@helm/hub` / `@helm/kernel` / `@helm/web` | Hub 监听端口（前端代理目标跟随该值） |
+| `HELM_HOST` | `127.0.0.1` | `@helm/hub` | Hub 绑定地址；远端节点接入需显式 `0.0.0.0` 或反代 |
 | `HELM_DATA_DIR` | `~/.helm` | 全部包 | 数据与凭据主目录，与旧系统 `~/.botx`、`~/.botd` 完全隔离 |
 | `HELM_HUB_URL` | `http://127.0.0.1:3202` | `@helm/cli` | CLI 目标 Hub 地址；与 `cli-token` 同源绑定 |
 | `HELM_TOKEN` | 无 | `@helm/cli` | 显式令牌，优先级高于磁盘凭据（不触碰磁盘） |

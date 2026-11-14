@@ -136,7 +136,9 @@ export default {
 
 视图类扩展点统一采用 React 组件单轨（`UiSpecBase` 只接受 `client: ClientComponentRef`，不再接受声明式 JSON Spec）。需要纯数据驱动界面时依赖 [`builtin:json-render`](json-render.md) 的能力，不在视图声明中写 `json` 字段。
 
-组件从 `@helm/plugin-client` 导入共享能力——该说明符被编译器虚拟化为宿主全局命名空间（`globalThis.__helm_shared_plugin_client`），绝不打包第二份 React。可导入符号清单（`PLUGIN_CLIENT_SHARED_EXPORTS` 唯一真源）：
+`@helm/plugin-client` 是独立的浏览器 SDK 包，插件可以直接依赖它进行类型检查，无需把 `tsconfig.paths` 指向 Web 应用源码或其他包的 `node_modules`。SDK 不导入 Web 的 store 与路由实现；应用通过宿主端口接入真实数据、文档订阅、导航及渲染能力。
+
+运行时，该说明符被构建器虚拟化为宿主全局命名空间（`globalThis.__helm_shared_plugin_client`），与宿主使用同一份 SDK、React 和上下文实例。可导入符号清单（`PLUGIN_CLIENT_SHARED_EXPORTS` 唯一真源）：
 
 | 分类 | 符号 |
 | :--- | :--- |
