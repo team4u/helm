@@ -11,7 +11,8 @@ interface PackageManifest {
   name: string
   dependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
-  devDependencies?: Record<string, string>
+  optionalDependencies?: Record<string, string>
+  exports?: string | Record<string, unknown>
 }
 
 function workspacePackages() {
@@ -63,6 +64,18 @@ function packageName(specifier: string): string {
   return specifier.startsWith('@') ? specifier.split('/').slice(0, 2).join('/') : specifier.split('/')[0]!
 }
 
+function hasPublicExport(manifest: PackageManifest, specifier: string): boolean {
+  const subpath = specifier === manifest.name ? '.' : `.${specifier.slice(manifest.name.length)}`
+  const exports = manifest.exports
+  if (exports === undefined || typeof exports === 'string') return subpath === '.'
+  if (!Object.keys(exports).some((key) => key.startsWith('.'))) return subpath === '.'
+  return Object.entries(exports).some(([key, value]) => {
+    if (value === null) return false
+    const star = key.indexOf('*')
+    return star === -1 ? key === subpath : subpath.startsWith(key.slice(0, star)) && subpath.endsWith(key.slice(star + 1))
+  })
+}
+
 test('生产包保持单向依赖，源码只通过已声明的公开包入口跨边界', { timeout: 60_000 }, () => {
   const packages = workspacePackages()
   const names = new Set(packages.map(({ manifest }) => manifest.name))
@@ -71,7 +84,7 @@ test('生产包保持单向依赖，源码只通过已声明的公开包入口�
   }
   const violations: string[] = []
   for (const { root, manifest } of packages) {
-    const dependencies = { ...manifest.dependencies, ...manifest.peerDependencies }
+    const dependencies = { ...manifest.dependencies, ...manifest.peerDependencies, ...manifest.optionalDependencies }
     for (const name of forbidden[manifest.name] ?? []) {
       if (name in dependencies) violations.push(`${manifest.name}: 禁止依赖 ${name}`)
     }
@@ -92,6 +105,8 @@ test('生产包保持单向依赖，源码只通过已声明的公开包入口�
         if ((forbidden[manifest.name] ?? []).includes(target)) violations.push(`${label} 反向依赖`)
         if (target !== manifest.name && !(target in dependencies)) violations.push(`${label} 未声明生产依赖`)
         if (/\/src(?:\/|$)/.test(specifier)) violations.push(`${label} 导入私有源码`)
+        const targetManifest = packages.find(({ manifest: candidate }) => candidate.name === target)?.manifest
+        if (targetManifest && !hasPublicExport(targetManifest, specifier)) violations.push(`${label} 未通过公开 exports 导入`)
       }
     }
   }
@@ -108,7 +123,7 @@ test('内核不携带内置插件源码与插件专属构建依赖', { timeout: 
 
 test('workspace 生产依赖图无环', { timeout: 60_000 }, () => {
   const packages = workspacePackages()
-  const graph = new Map(packages.map(({ manifest }) => [manifest.name, Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies })]))
+  const graph = new Map(packages.map(({ manifest }) => [manifest.name, Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies, ...manifest.optionalDependencies })]))
   const visited = new Set<string>()
   const visit = (name: string, stack: string[]): void => {
     assert.ok(!stack.includes(name), `依赖成环：${[...stack, name].join(' -> ')}`)
