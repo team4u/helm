@@ -339,6 +339,14 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       },
     )
     assert.ok(existsSync(record.path), '拒绝时目录不得被移除')
+    await assert.rejects(
+      () => fabric.inspectPathUsage('local', 'C:\\workspace\\repo'),
+      (err: unknown) => {
+        assert.ok(err instanceof HelmError)
+        assert.equal(err.code, 'path_usage_not_supported', '合法 Windows 路径应明确报告平台不支持')
+        return true
+      },
+    )
   })
 
   it('fabric 入参校验：相对路径 / NUL 拒绝（validation_error）；远程未知节点离线显式 node_offline', { timeout: 60_000 }, async () => {

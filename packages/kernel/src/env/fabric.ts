@@ -522,8 +522,19 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
 
     async inspectPathUsage(nodeId: string, targetPath: string, signal?: AbortSignal): Promise<NodePathUsage> {
       if (signal?.aborted) throw new HelmError('aborted', '进程占用扫描已取消', 499, { nodeId })
-      // 入口统一形状校验（local/远端同规则）：归一化 POSIX 绝对路径既拦非法
-      // 入参，也作为快照回显关联（expectedPath）的基准。
+      // 先确认实际节点的平台；Windows 的合法盘符路径不能被误报为非法 POSIX
+      // 路径。不支持的平台明确拒绝；远端离线仍先报告节点不可达。
+      const rpc = nodeId === 'local' ? undefined : await requireRpc(nodeId, signal)
+      const platform = nodeId === 'local' ? hubPlatform() : registry.get(nodeId)?.platform
+      if (platform && platform !== 'linux') {
+        throw new HelmError(
+          'path_usage_not_supported',
+          `节点 ${nodeId} 平台 '${platform}' 不支持进程占用扫描（当前仅 Linux /proc），无法证明目标路径 0 占用`,
+          501,
+          { nodeId, platform },
+        )
+      }
+      // 支持的平台统一归一化目标路径，并与 RPC 快照回显关联。
       const normalized = validatePosixScanPath(targetPath)
       if (!normalized.ok) {
         throw new HelmError('validation_error', `进程占用扫描入参非法：${normalized.message}`, 400, { nodeId })
@@ -563,8 +574,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
         throw new HelmError('node_path_usage_failed', `本机进程占用扫描失败：${message}`, 502, { nodeId })
       }
       // 远端：目标节点真实扫描，绝不回退本机。
-      const rpc = await requireRpc(nodeId, signal)
-      const fn = rpc.envPathUsage
+      const fn = rpc!.envPathUsage
       if (fn === undefined) {
         throw new HelmError(
           'path_usage_not_supported',
