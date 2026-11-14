@@ -79,19 +79,24 @@ sequenceDiagram
 
 每个 Git 仓库以 canonical `git common-dir` 真实路径为键维护进程内串行队列。同一仓库的不同 worktree 清理也按序串行，避免并发操作抢占 `.git/config.lock`。锁外先做占用快速失败检查，锁内再以最新记录复查一遍（并发清理与状态变更在锁内收敛到同一事实）。
 
-### 五道清理安全检查
+### 六道清理安全检查
 
-锁内重新取证权威 `git worktree list` 登记后，依次执行：
+锁内重新取证权威 `git worktree list` 登记，并在移除前完成以下检查：
 
 | 检查 | 拒绝错误码 | force 可否越过 |
 | :--- | :--- | :--- |
 | 1. 占用检查：关联子会话运行中（`working` / `blocked`），或路径仍被在途 spawn 执行 / 本插件租约引用 | `worktree_in_use` | 否 |
 | 2. 主根保护：登记路径即主工作树，或经 realpath 解析指向主工作树 | `worktree_owner_mismatch` | 否 |
 | 3. realpath 校验：登记路径经软链跳到其他工作树（登记可能已被替换）；附加权威登记的 path / branch / HEAD 归属匹配、prunable / locked 状态检查 | `worktree_owner_mismatch` / `worktree_locked` | 否 |
-| 4. 脏工作区保护：含未提交修改、未跟踪或被忽略文件（`--ignored=matching` 也计入） | `worktree_dirty` | 是（`force`） |
-| 5. 未合入保护：分支存在相对主工作树当前 HEAD 未合入的提交（`git rev-list --count`） | `worktree_dirty` | 是（`force`） |
+| 4. 进程占用保护：目标节点上的进程仍以工作树或其子目录为 cwd，或持有其中的文件句柄；探测不完整或不支持时同样拒绝 | `worktree_process_in_use` / `worktree_process_check_failed` | 否 |
+| 5. 脏工作区保护：含未提交修改、未跟踪或被忽略文件（`--ignored=matching` 也计入） | `worktree_dirty` | 是（`force`） |
+| 6. 未合入保护：分支存在相对主工作树当前 HEAD 未合入的提交（`git rev-list --count`） | `worktree_dirty` | 是（`force`） |
 
 第 3 道中的 `locked` 是所有者显式加锁，任何情况下不可越过（请先解锁）。检查命令本身失败（如 `git status` 报错）会以 `worktree_check_failed` 显式中止清理，绝不当作干净或目录缺失。全部通过后执行真实 `git worktree remove`；分支删除部分失败时先固化「树已 removed」事实（`branchDeleted: false` 与诊断保留在记录上），可再次 cleanup 传 `deleteBranch` 重试。
+
+进程探测在实际目标节点执行，远端节点不可达时不会改查 Hub 本机。命中占用时，错误详情给出 PID、进程名和占用方式，不采集命令行或环境变量；框架只拒绝清理，不终止进程。调用方核对归属并完成自己的进程收尾后，可重试清理。
+
+这次探测是删除前的进程快照，不是跨进程的原子锁：扫描之后新进程仍可能进入该目录。需要交付的文件应先用 `register_artifact` 或 `helm artifacts put` 登记为产物。登记成功后，副本保存在 Helm 数据目录，源 worktree 清理不会删除副本；所属会话删除仍会级联删除产物。
 
 分支删除只允许 `helm/spawn-` 与 `helm/wf-` 两个受管前缀，绝不触碰人类分支。目录已不存在的记录以 `worktree_missing` 显式报错并保留登记（节点真实 fs stat 证明缺失才算），绝不全仓 `prune` 其他登记。
 
