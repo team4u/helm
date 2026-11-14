@@ -145,7 +145,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helm artifacts put <filePath> [id] [--current] [--name <str>] [--mime-type <str>]`** — 上传本地文件为产物。`<filePath>` 相对路径一律按**调用方 cwd**（CLI 进程当前目录）解析为绝对路径后 stat/读取，绝不按 `HELM_CWD` 静默切换或全盘查找；读取失败给出 `read_failed`，消息与 `details` 含 `requestedPath` / `resolvedPath` / `cliCwd`，若 `HELM_ENV=1` 且 `HELM_CWD` 与调用方 cwd 不同则附注 `sessionCwd`（目录差异属合法 `cd`，仅提示）。默认产物名取解析后绝对路径的 basename。
 
-**`helm artifacts get <id> [--output <path>]`** — 读取产物内容；文本直出，二进制必须 `--output` 落盘。`--output` 相对路径同样只按调用方 cwd 解析，实际写入后文字与 `--json` 的 `written` 均回显绝对路径，`bytes` 为实际落盘字节数（不依赖响应 `Content-Length` 头）；写入失败 `write_failed` 同样携带上述路径诊断。
+**`helm artifacts get <id> [--output <path>]`** — 读取产物内容；文本直出，二进制必须 `--output` 落盘。`--output` 相对路径同样只按调用方 cwd 解析，实际写入后文字与 `--json` 的 `written` 均回显绝对路径，`bytes` 为实际落盘字节数（不依赖响应 `Content-Length` 头）；写入失败 `write_failed` 同样携带上述路径诊断。响应体传输中断返回 `download_failed` 与目标路径诊断，已有目标文件保持原样。
 
 **`helm skills list` / `helm skills read <id> [--path <rel>]`** — 技能目录浏览；`--path` 读子文件（如 `references/xxx.md`），缺省 SKILL.md。
 
