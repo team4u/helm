@@ -6,7 +6,7 @@
 
 `PluginHost` 是插件生命周期的唯一协调者：管理注册（register）、启用（enable）、停用（disable）与注销（unregister）状态机，同插件的启停操作经 per-plugin 队列串行；停用先把 phase 置为 `deactivating` 再进入 await，期间新的 `invokeAction / executeTool / runHook` 一律拒绝，绝不让任务进入正在拆毁的注册表。每个启用周期递增 epoch：旧 `definePlugin` 上下文（含 doc 句柄与宿主生命周期资源）在新周期或停用后立即失效，防止异步残留注册污染新周期。
 
-服务启动遵循**全局 prepare → start 屏障**：`PluginHost.start` 先对全体已启用服务执行 `prepare()`（如 `builtin:workflow` 在 `prepareRecovery` 中先于 SDK 调度器恢复持久标记中断任务取消），再依次 `start()`；热启用同样先 prepare 后 start。停用预检分两层：`liveTasks()` 声明在途运行任务（非空即 `409 plugin_has_live_tasks`，不可 force 跳过），`inUse()` 声明持久生效资源（非空默认 `409 plugin_in_use`，可显式 `--force`），`liveWorktrees()` 声明在途工作树占用供清理链拒绝误碰。
+服务启动遵循**全局 prepare → start 屏障**：`PluginHost.start` 先对全体已启用服务执行 `prepare()`（如 `builtin:workflow` 在 `prepareRecovery` 中先于 SDK 调度器恢复持久标记中断任务取消），再依次 `start()`；热启用同样先 prepare 后 start。停用预检分两层：`liveTasks()` 声明在途运行任务（非空即 `409 plugin_has_live_tasks`，不可 force 跳过），`inUse()` 声明持久生效资源（非空默认 `409 plugin_in_use`，可显式 `--force`）。工作树在途占用不存在宿主侧声明端口：占用事实（在途 spawn 执行坐标与 durable 租约）由 `builtin:workflow` 插件在自己的清理链内直接维护与检验。
 
 宿主内的子注册表分工如下：
 

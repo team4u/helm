@@ -121,6 +121,6 @@ helm worktrees cleanup --conversation-id 42 --delete-branch --force
 
 ## 边界与约束
 
-- 插件停用期间工作树登记与租约不清除，重新启用后 cleanup 仍可定位（不丢元数据）；停用插件时在途运行经 `liveTasks` 阻止（`409 plugin_has_live_tasks`），在途工作树占用经 `liveWorktrees` 声明。
+- 插件停用期间工作树登记与租约不清除，重新启用后 cleanup 仍可定位（不丢元数据）；停用插件时在途运行经 `liveTasks` 阻止（`409 plugin_has_live_tasks`）。在途工作树占用不经宿主声明端口：cleanup 链直接以宿主在途 spawn 执行坐标与本插件 durable 租约判定（`isPathInUse`）。
 - 内核 `EnvFabric` 另提供按 `nodeId + canonicalPath` 的文件互斥，但只约束经过 EnvFabric 的受管操作：同步 shell 命令与外部编辑器直接写文件不受它保证。
 - 非常规仓库布局（裸仓库、`--separate-git-dir`）显式拒绝（`worktree_unsupported_layout`），不猜测主仓路径。

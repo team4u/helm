@@ -47,7 +47,7 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 | `ctx.route(spec)` | 挂载 Web Standard 原始 HTTP 路由 | `public: true` 跳过 Token 鉴权（webhook 回调用） |
 | `ctx.doc(name, initial, opts)` | 声明持久状态文档 | state.sqlite；`public: true` 进全局首帧与 SSE 广播 |
 | `ctx.sessionDoc(name, initial, opts)` | 按会话分片的持久文档 | 不进全局首帧/全局 SSE，专用订阅流 |
-| `ctx.service(spec)` | 注册后台长驻服务 | `prepare / start / stop / liveTasks / liveWorktrees / inUse` |
+| `ctx.service(spec)` | 注册后台长驻服务 | `prepare / start / stop / liveTasks / inUse` |
 | `ctx.provider(provider)` | 注册模型供应商网关 | 启用时挂载、停用后注销，宿主统一协调 |
 | `ctx.ui` | 前端全界面扩展点注册表 | 16 个注册方法，见 [extension-points.md](../architecture/extension-points.md) |
 | `ctx.host` | 宿主运行时能力 | 见下文「ctx.host 能力面」 |
@@ -119,7 +119,7 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 2. **在途任务硬阻断**：`liveTasks()` 返回非空（执行中的动作/工具/子代理派生/服务自声明任务）即 `409 plugin_has_live_tasks`，**不可 force 跳过**——状态一致性优先。`liveTasks()` 执行崩溃或返回非法数据时按 `500 plugin_live_tasks_check_failed` 拒绝，宿主绝不默认放行。
 3. **持久资源知情确认**：`inUse()` 声明持久生效资源（如 `builtin:triggers` 的已启用 cron 任务与 webhook 端点），非空默认 `409 plugin_in_use` 并列出占用清单；调用方显式 `--force` 可越过（磁盘配置保留，重新启用后恢复）。宿主还会通用探测 Profile.runtime 绑定与模型引用（`profile_runtime` / `profile_model` / `conversation_model`）与依赖它的已启用插件（`plugin_dependency`，含传递依赖者）。
 
-`liveWorktrees()` 声明运行中任务占用的受管工作树路径，供 `builtin:workflow` 的清理链拒绝误碰在途占用——它不参与停用阻断（那是 `liveTasks` 的职责），而是清理安全机制。
+工作树的在途占用不经宿主服务端口声明：`builtin:workflow` 的清理链直接以宿主在途 spawn 执行坐标（`ctx.host.listActiveSpawnExecutions`）与自身 durable 租约判定占用（见 [workflow.md](./workflow.md)），不参与停用阻断（那是 `liveTasks` 的职责）。
 
 故障隔离方面，插件加载或启用失败不拖垮内核：`PluginSummary.status` 置 `failed` 并携带结构化 `error`（`code / message / stage / details`），`stage` 标明故障阶段（`scan` 清单解析 / `load` 模块导入 / `define` 契约校验 / `enable` 服务启动）。失败插件在插件中心可见且诊断可读；修复源码后经 `reload` 或重启恢复。
 

@@ -101,7 +101,6 @@ import {
 import {
   assertNoLiveTasks,
   collectServiceInUse,
-  listLiveWorktrees,
   prepareServices,
   startServiceBarrier,
   startServices,
@@ -1334,11 +1333,6 @@ export class PluginHost {
   listPublicDocs(): PublicPluginDoc[] {
     this.assertNotDisposed();
     return this.docRegistry.listPublicDocs(this.getIdleActivePluginIds());
-  }
-
-  listLiveWorktrees(): Array<{ nodeId: string; path: string }> {
-    this.assertNotDisposed();
-    return listLiveWorktrees(this.plugins.values());
   }
 
   // --- Hook 管道 -----------------------------------------------------------

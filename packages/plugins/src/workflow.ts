@@ -26,7 +26,7 @@
  * - 生命周期：service.prepare 执行 prepareRecovery（只落 abort 标记，不唤醒
  *   调度器，必须在任何服务 start 之前——宿主全局 prepare 屏障保证）；
  *   service.start 执行 init（终止遗留任务、标 failed、补发通知）与 close；
- *   liveTasks/liveWorktrees 声明在途任务与工作树占用；
+ *   liveTasks 声明在途任务（停用硬阻断）；
  * - 3 个模型工具（subagent / SubagentWorkflow / cleanup_worktree）与
  *   12 个动作（list/get/save/delete/run/runs/inspect/abort/steer/
  *   cleanup_worktree/list_worktrees/inspect_worktree）五端复用；
@@ -874,19 +874,6 @@ export function createWorkflowPlugin(): PluginDefinition {
             .listRuns()
             .filter((r) => r.status === 'running')
             .map((r) => `workflow:${r.id}`)
-        },
-        liveWorktrees() {
-          const out: Array<{ nodeId: string; path: string }> = []
-          for (const run of workflows.listRuns()) {
-            if (run.status !== 'running') continue
-            for (const node of run.nodes ?? []) {
-              if (node.status !== 'running') continue
-              if (node.worktree?.path !== undefined && node.nodeId !== undefined) {
-                out.push({ nodeId: node.nodeId, path: node.worktree.path })
-              }
-            }
-          }
-          return out
         },
       })
 

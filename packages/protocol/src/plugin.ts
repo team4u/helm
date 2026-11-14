@@ -518,8 +518,6 @@ export interface PluginServiceSpec {
   stop(): MaybePromise<void>
   /** 返回仍需本服务保活的任务标签；宿主在停用/卸载前同步检查。 */
   liveTasks?(): string[]
-  /** 声明本服务当前正在占用的工作树/目录路径（通用机制面：供具备清理或探测能力的消费方拒绝误碰在途占用）。 */
-  liveWorktrees?(): Array<{ nodeId: string; path: string }>
   /**
    * 声明本服务当前管辖的持久生效资源（非瞬态运行中任务）。
    * 非空时默认阻止停用（409 plugin_in_use），除非调用方显式指定 force: true。

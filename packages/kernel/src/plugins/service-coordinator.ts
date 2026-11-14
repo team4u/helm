@@ -195,55 +195,6 @@ export async function startServiceBarrier(
 }
 
 /**
- * 全部已启用且已启动服务声明的工作树占用清单（WorktreeAllocator 的
- * isPathInUse 探测源）：合并各服务 liveWorktrees() 返回值。
- * 服务声明函数抛错或返回非法形状时如实显式报错，绝不静默当空——
- * 占用检查坏了就必须修，不能靠猜放行清理在途工作树。
- */
-export function listLiveWorktrees(
-  plugins: Iterable<PluginState>,
-): Array<{ nodeId: string; path: string }> {
-  const out: Array<{ nodeId: string; path: string }> = [];
-  for (const state of plugins) {
-    if (!state.enabled) continue;
-    for (const svc of state.services) {
-      if (!svc.started || svc.liveWorktrees === undefined) continue;
-      let declared: Array<{ nodeId: string; path: string }>;
-      try {
-        declared = svc.liveWorktrees();
-      } catch (err) {
-        throw new HelmError(
-          'plugin_live_worktrees_check_failed',
-          `插件 ${state.definition.id} 服务 ${svc.id} 的 liveWorktrees 检查抛出异常`,
-          500,
-          { pluginId: state.definition.id, serviceId: svc.id, error: toJsonSafeError(err) },
-        );
-      }
-      if (
-        !Array.isArray(declared) ||
-        declared.some(
-          (item) =>
-            typeof item !== 'object' ||
-            item === null ||
-            Array.isArray(item) ||
-            typeof (item as { nodeId?: unknown }).nodeId !== 'string' ||
-            typeof (item as { path?: unknown }).path !== 'string',
-        )
-      ) {
-        throw new HelmError(
-          'plugin_live_worktrees_check_failed',
-          `插件 ${state.definition.id} 服务 ${svc.id} 的 liveWorktrees 必须返回 { nodeId, path } 数组`,
-          500,
-          { pluginId: state.definition.id, serviceId: svc.id },
-        );
-      }
-      out.push(...declared);
-    }
-  }
-  return out;
-}
-
-/**
  * 停用/卸载前的持久资源占用聚合：遍历已启动且声明 inUse 的服务，合并
  * 返回值。服务 inUse 抛错或返回非法形状时显式 plugin_in_use_check_failed
  * （未知即占用原则），绝不静默当空放行。

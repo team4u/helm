@@ -103,11 +103,11 @@
 
 受控停用（`stop`）同样有严格时序：先置 `stopping` 拦截运行期后台回调，`await` 引擎 `close`（在途 run 终态写入私有 records，写入经宿主受控停止窗口放行），再做最终 runs 分片与角标投影并 `await records.flush()` 真实落盘。最终投影是派生观察面——若持久层损坏导致读取失败，发布显式 notification 诊断后不阻断拆毁（引擎终态已在 records，业务读取路径会显式报错，不静默）。
 
-## 在途保护：liveTasks 与 liveWorktrees
+## 在途保护：liveTasks 与工作树占用
 
 `liveTasks()` 返回运行中 run 的 `workflow:<runId>` 标签——停用插件时宿主据此 `409 plugin_has_live_tasks` 硬阻断（不可 force）。
 
-`liveWorktrees()` 返回运行中 run 各节点占用的 `{nodeId, path}`，供本插件 cleanup 链（及未来其他清理方）拒绝误清理在途工作树。它不阻断停用本身，是清理安全机制而非生命周期门禁。
+工作树占用事实由本插件直接维护：cleanup 链以宿主在途 spawn 执行坐标（`ctx.host.listActiveSpawnExecutions`，含外部运行时回传坐标）与自身 durable 租约（pending 占位与 running 一视同仁）判定 `isPathInUse`，不经任何宿主侧声明端口。
 
 Worktree 隔离经 `agent_spawn` around continuation（priority 200，先于外部运行时接管器如 herdr 的 100 执行 = 更外层）包裹完整派生：在 `next` 前分配/续接/登记租约，外部执行同样被租约与登记包裹。durable 租约 fail-closed：分配路径在 `git worktree add` 副作用**之前**持久登记占位，崩溃后该占位无在途执行即显式 `worktree_execution_unknown` 阻塞清理——不能证明停止就不能清理；释放仅两种（执行确认成功、或确认从未启动），一切未知状态保留租约。
 

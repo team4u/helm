@@ -160,14 +160,6 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmPl
           { pluginId, serviceId: spec.id },
         );
       }
-      if (spec.liveWorktrees !== undefined && typeof spec.liveWorktrees !== 'function') {
-        throw new HelmError(
-          'invalid_service_spec',
-          `插件 ${pluginId} 服务 ${spec.id} 的 liveWorktrees 必须是返回 { nodeId, path } 数组的函数`,
-          400,
-          { pluginId, serviceId: spec.id },
-        );
-      }
       if (spec.prepare !== undefined && typeof spec.prepare !== 'function') {
         throw new HelmError(
           'invalid_service_spec',
