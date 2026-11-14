@@ -130,8 +130,18 @@ export function artifactsCommands(): CommandSpec[] {
       if (output !== undefined) {
         const fsp = await import('node:fs/promises')
         const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, output)
-        // bytes 用实际落盘字节数：Content-Length 头缺失（分块传输等）时依然可靠。
-        const buffer = Buffer.from(await response.arrayBuffer())
+        // 完整接收后才写文件，传输失败不能被误报为写盘失败或覆盖已有交付文件。
+        let buffer: Buffer
+        try {
+          buffer = Buffer.from(await response.arrayBuffer())
+        } catch (err) {
+          throw new CliError(
+            `下载产物内容失败（${err instanceof Error ? err.message : String(err)}）${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
+            'download_failed',
+            1,
+            pathDetails(output, resolvedPath, ctx, sessionCwd),
+          )
+        }
         try {
           await fsp.writeFile(resolvedPath, buffer)
         } catch (err) {

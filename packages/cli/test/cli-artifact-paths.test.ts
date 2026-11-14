@@ -250,6 +250,32 @@ test('get --output：按 CLI cwd 解析相对路径，written 回显绝对路径
   assert.ok(text.out.includes(`（${content.length} 字节）`), `应回显实际字节数：${text.out}`)
 })
 
+test('get --output：传输中断给出下载诊断且保留已有文件', { timeout: 60_000 }, async (t) => {
+  const callerDir = await tempDir(t, 'helm-cli-art-get-')
+  const output = path.join(callerDir, 'existing.bin')
+  await fsp.writeFile(output, 'existing-deliverable')
+  const hub = makeHubStub({
+    'GET /api/artifacts/art-9/content': () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]))
+        controller.error(new Error('transfer interrupted'))
+      },
+    }), { headers: { 'content-type': 'application/octet-stream' } }),
+  })
+  const r = await run(
+    ['artifacts', 'get', 'art-9', '--output', 'existing.bin', '--json'],
+    makeEnv(callerDir),
+    callerDir,
+    hub.fetchImpl,
+  )
+  assert.equal(r.code, 1)
+  const { error } = JSON.parse(r.err)
+  assert.equal(error.code, 'download_failed')
+  assert.equal(error.details.resolvedPath, output)
+  assert.match(error.message, /transfer interrupted/)
+  assert.equal(await fsp.readFile(output, 'utf8'), 'existing-deliverable')
+})
+
 test('get --output：写入失败诊断含绝对路径与结构化 details', { timeout: 60_000 }, async (t) => {
   const callerDir = await tempDir(t, 'helm-cli-art-get-')
   const hub = makeHubStub({
