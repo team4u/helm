@@ -132,7 +132,7 @@ export type HandleOutcome = { action: 'handled'; result: unknown } | { action: '
  */
 type PaneTaskPhase = 'startup' | 'task' | 'handoff' | 'gate'
 
-/** steerPane 入参（与 @helm/protocol ExternalSteerRequest 对齐；signal 为调用上下文取消）。 */
+/** steerPane 入参（与 plugins 包 ExternalSteerRequest 对齐；signal 为调用上下文取消）。 */
 export interface SteerPaneInput {
   workflowRunId: string
   parentConversationId: number

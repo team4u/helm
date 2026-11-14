@@ -94,7 +94,7 @@ import { computeEditDiff } from './tool-edit-diff.js'
 import type { HelmToolDeps } from './tool-deps.js'
 
 // 形状判定与词法规则子集（normalize/join/dirname/basename）已收口
-// @helm/protocol（浏览器安全纯函数，内核与 builtin-plugins 共享）；依赖
+// @helm/protocol（浏览器安全纯函数，内核与 @helm/plugins 共享）；依赖
 // node:path 完整实现的 resolve 语义（进程 cwd / 大小写规则）留在内核
 // （Node 环境），下方再导出 isAbsoluteTargetPath/targetPathShape 供既有
 // 相对路径引用保持稳定。

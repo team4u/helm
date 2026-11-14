@@ -162,7 +162,7 @@ export function isAbsolutePath(p: string): boolean {
 /**
  * 按目标节点平台收口（protocol 原语组合，零自行正则）：platform 未知
  *（远端无可信上报）透传不改写；win32 目标上不可映射 POSIX 根显式拒绝。
- * 与内核 runtime/target-cwd.ts 同语义（builtin-plugins 不越界导入 kernel
+ * 与内核 runtime/target-cwd.ts 同语义（@helm/plugins 不越界导入 @helm/kernel
  * 私有目录，收口原语统一来自 @helm/protocol）。
  */
 function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | undefined, entry: string): string {

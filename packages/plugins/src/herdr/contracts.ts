@@ -164,9 +164,8 @@ export type { BlockedSnapshotAiOption, BlockedSnapshotAnalysis } from './prompt-
 
 /**
  * builtin:herdr 对外发布的 steer 控制引用（execution meta 控制项）：
- * 执行器（executionInfoOf）与插件动作注册共用同一常量，坐标与插件侧共享
- * 契约模块（builtin-plugins/contracts.ts）的 ExternalSteerRequest/Result
- * 契约对应。
+ * 执行器（executionInfoOf）与插件动作注册共用同一常量，坐标与 plugins 包共享
+ * 契约模块（contracts.ts）的 ExternalSteerRequest/Result 契约对应。
  */
 export const HERDR_STEER_CONTROLS = {
   pluginId: 'builtin:herdr',
