@@ -32,6 +32,12 @@
   --code-token-addition: #1a7f37;
   --code-token-deletion: #cf222e;
 
+  /* 工具差异展示语义底色（行级淡底 + 词级加深） */
+  --diff-add-bg: rgba(26, 127, 55, 0.12);
+  --diff-remove-bg: rgba(207, 34, 46, 0.1);
+  --diff-add-word-bg: rgba(26, 127, 55, 0.32);
+  --diff-remove-word-bg: rgba(207, 34, 46, 0.28);
+
   --fg: #1c1c21;
   --fg-secondary: #4b4b53;
   --fg-muted: #85858d;
@@ -124,6 +130,12 @@
   --code-token-muted: #c9d1d9;
   --code-token-addition: #3fb950;
   --code-token-deletion: #f85149;
+
+  /* 工具差异展示语义底色（行级淡底 + 词级加深） */
+  --diff-add-bg: rgba(46, 160, 67, 0.16);
+  --diff-remove-bg: rgba(248, 81, 73, 0.15);
+  --diff-add-word-bg: rgba(63, 185, 80, 0.38);
+  --diff-remove-word-bg: rgba(248, 81, 73, 0.36);
 
   --fg: #ededf1;
   --fg-secondary: #b9b9c1;

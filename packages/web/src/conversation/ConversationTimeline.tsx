@@ -35,6 +35,8 @@ import {
   type ToolTrace,
 } from './timeline-model.js'
 import { resolveActiveOutlineEntryId } from './outline-model.js'
+import { ToolExpandedBody } from './ToolExpandedBody.js'
+import { toolRowStats } from './tool-body-model.js'
 import { calibrateAnchorAfterSmoothScroll, type AnchorAlignment } from './timeline-scroll-calibration.js'
 import {
   OUTLINE_ACTIVE_LINE_PX,
@@ -412,7 +414,7 @@ function buildToolViewProps(
   }
 }
 
-function TraceRow({
+export function TraceRow({
   tool,
   conversationId,
   defaultOpen,
@@ -425,7 +427,6 @@ function TraceRow({
   siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
 }) {
   const [open, setOpen] = useState(defaultOpen)
-  const store = useHelmStore()
 
   const rowFailed = Boolean(tool.isError)
   const right =
@@ -440,19 +441,15 @@ function TraceRow({
             : ''
   const rowIcon = toolStatusIcon(tool)
 
-  const inputJson = useMemo(() => {
-    if (tool.input === undefined) return undefined
-    try {
-      return JSON.stringify(tool.input, null, 2)
-    } catch {
-      return String(tool.input)
-    }
-  }, [tool.input])
+  // 单行极简统计（edit +N −N / write 行数）：只报事实，运行态不伪称成功。
+  const stats = useMemo(() => toolRowStats(tool), [tool])
 
   // 命中插件 tool.view：replaceRow=true 时插件组件完全替换默认工具行；
   // 未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
+  // 插件接管（任一形态）时不提供宿主内置展开体，行本身也不再可点击。
   const toolView = tool.toolView
   const replaceRow = toolView !== undefined && (toolView.spec as ToolViewSpec).replaceRow === true
+  const expandable = toolView === undefined
 
   return (
     <div className={`trace-entry${rowFailed ? ' trace-entry-error' : ''}`}>
@@ -469,16 +466,20 @@ function TraceRow({
       ) : (
         <>
           <div
-            className={`trace-row${rowFailed ? ' trace-row-error' : ''}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => setOpen((v) => !v)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                setOpen((v) => !v)
-              }
-            }}
+            className={`trace-row${rowFailed ? ' trace-row-error' : ''}${expandable ? '' : ' trace-row-static'}`}
+            role={expandable ? 'button' : undefined}
+            tabIndex={expandable ? 0 : undefined}
+            onClick={expandable ? () => setOpen((v) => !v) : undefined}
+            onKeyDown={
+              expandable
+                ? (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setOpen((v) => !v)
+                    }
+                  }
+                : undefined
+            }
           >
             <span className="trace-row-left">
               <HelmIcon
@@ -488,6 +489,17 @@ function TraceRow({
               />
               <span className="trace-tool-name">{tool.toolName}</span>
               <span className="trace-tool-summary">{toolSummaryText(tool.toolName, tool.input)}</span>
+              {stats !== undefined ? (
+                <span className="trace-row-stats" title={stats.title}>
+                  {stats.removeCount !== undefined ? (
+                    <span className="trace-row-stats-remove">−{stats.removeCount}</span>
+                  ) : null}
+                  {stats.addCount !== undefined ? (
+                    <span className="trace-row-stats-add">+{stats.addCount}</span>
+                  ) : null}
+                  {stats.text !== undefined ? <span>{stats.text}</span> : null}
+                </span>
+              ) : null}
             </span>
             <span className="trace-row-right">{right}</span>
           </div>
@@ -502,40 +514,9 @@ function TraceRow({
               />
             </div>
           ) : null}
-          {open ? (
+          {open && expandable ? (
             <div className="trace-expanded-body selectable">
-              {inputJson !== undefined ? (
-                <div>
-                  <div className="trace-section-label">入参</div>
-                  <pre className="code-block-pre code-block-pre-flush">
-                    <code>{inputJson}</code>
-                  </pre>
-                </div>
-              ) : null}
-              {tool.resultText !== undefined ? (
-                <div>
-                  <div className="trace-section-label">输出</div>
-                  <pre className="code-block-pre code-block-pre-flush">
-                    <code>{tool.resultText}</code>
-                  </pre>
-                </div>
-              ) : null}
-              {tool.artifactRef !== undefined ? (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  onClick={() =>
-                    store.setActiveModal({
-                      kind: 'artifact-preview',
-                      artifactId: tool.artifactRef!,
-                      conversationId,
-                    })
-                  }
-                >
-                  <HelmIcon name="external-link" size={12} />
-                  打开完整产物 #{tool.artifactRef}
-                </button>
-              ) : null}
+              <ToolExpandedBody tool={tool} conversationId={conversationId} />
             </div>
           ) : null}
         </>

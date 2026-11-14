@@ -668,6 +668,222 @@
   text-decoration-color: currentColor;
 }
 
+/* ==========================================================================
+ * 5.1 内置工具展开体（edit 差异 / write·read 源码 / bash 输出 / 通用键值）
+ * 仅在无插件 tool.view 接管时使用；展开体在 26px 轨迹行下方，信息密度克制。
+ * ========================================================================== */
+
+/* 插件接管（inline）后的静默行：不可展开、无悬停背景 */
+.trace-row-static {
+  cursor: default;
+}
+.trace-row-static:hover {
+  background: transparent;
+}
+
+/* 单行极简统计：edit +N −N / write 行数，tabular 数字，不挤压摘要 */
+.trace-row-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.trace-row-stats-add { color: var(--code-token-addition); }
+.trace-row-stats-remove { color: var(--code-token-deletion); }
+
+.trace-tool-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trace-tool-note {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+/* 展开体内轻量文字按钮（展开剩余/展开全部/原始数据） */
+.trace-inline-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+.trace-inline-btn:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+.trace-inline-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 行差异表：旧/新行号 + 符号 + 内容；待执行片段形态无行号列 */
+.trace-diff {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-xs);
+  background: var(--code-bg);
+  overflow: hidden;
+}
+.trace-diff-row {
+  display: grid;
+  grid-template-columns: 3.4em 3.4em 1fr;
+  align-items: baseline;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.trace-diff-pending .trace-diff-row {
+  grid-template-columns: 1.2em 1fr;
+}
+.trace-diff-num {
+  text-align: right;
+  padding: 0 6px;
+  color: var(--fg-subtle);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.trace-diff-content {
+  padding: 0 10px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-width: 0;
+}
+.trace-diff-sign {
+  display: inline-block;
+  width: 1.2em;
+  user-select: none;
+  flex-shrink: 0;
+}
+.trace-diff-row-add { background: var(--diff-add-bg); }
+.trace-diff-row-remove { background: var(--diff-remove-bg); }
+.trace-diff-row-context .trace-diff-content { color: var(--fg-muted); }
+.trace-diff-word-add { background: var(--diff-add-word-bg); border-radius: 2px; }
+.trace-diff-word-remove { background: var(--diff-remove-word-bg); border-radius: 2px; }
+.trace-diff-row-add > .trace-diff-content > .trace-diff-sign { color: var(--code-token-addition); }
+.trace-diff-row-remove > .trace-diff-content > .trace-diff-sign { color: var(--code-token-deletion); }
+.trace-diff-more {
+  margin: 2px;
+  align-self: flex-start;
+}
+.trace-diff-note {
+  padding: 5px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  border-top: 1px dashed var(--border-strong);
+}
+
+/* bash 命令头与输出折叠脚注 */
+.trace-cmd-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-xs);
+}
+.trace-cmd-head code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.trace-out-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 源码预览节（行数说明 + 复制） */
+.trace-code-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.trace-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 错误输出（edit/read 失败详情） */
+.trace-error-pre {
+  color: var(--err);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 通用键值（短值内联，多行/嵌套值块状） */
+.trace-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.trace-kv-row {
+  display: grid;
+  grid-template-columns: minmax(72px, max-content) 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.trace-kv-key {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding-top: 1px;
+  word-break: break-all;
+}
+.trace-kv-val {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg);
+  word-break: break-word;
+  white-space: pre-wrap;
+  min-width: 0;
+}
+.trace-kv-block {
+  margin: 0;
+  min-width: 0;
+}
+
+/* 原始数据折叠入口（入参 JSON + 原始输出 + 结构化结果） */
+.trace-raw {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.trace-raw-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+@media (max-width: 680px) {
+  .trace-diff-row { grid-template-columns: 2.6em 2.6em 1fr; }
+  .trace-diff-pending .trace-diff-row { grid-template-columns: 1.2em 1fr; }
+  .trace-kv-row { grid-template-columns: 1fr; gap: 2px; }
+}
+
 /* 上下文重置 / 精简 26px 分割线 */
 .context-divider-wrap {
   display: flex;
