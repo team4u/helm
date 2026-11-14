@@ -1,25 +1,24 @@
 /**
- * 会话上下文用量计算（纯函数；对齐 pi-durable 的 compaction/estimate 逻辑）。
+ * 会话上下文用量计算（纯函数；对齐 pi agent 1.5.2 的真实源码语义）。
  *
- * 事实依据（@earendil-works/pi-durable 1.5.0 `dist/harness/compaction.js` 的
- * `estimateContext(view, extra)` 实测源码）：SDK 在生成前的阈值压缩判定用
- * 「实测锚点 + 尾段估算」——从 view.entries 尾部向前找 head 标记之后最近一条
- * usage > 0 的 assistant 消息（其请求前缀在当前有效上下文内），tokens =
- * 该 usage 的上下文 tokens + 其后消息的字符估算；找不到则全量估算。
+ * 事实依据（@earendil-works/pi-coding-agent 1.5.2 `dist/core/agent-session.js`
+ * 的 `getContextUsage` 与 `dist/core/compaction/compaction.js` 的
+ * `estimateProjectedContextTokens` 实测源码）：
+ * - 有效 assistant usage（`getAssistantUsage`）：stopReason 不是 aborted/error
+ *   且 `calculateContextTokens(usage) > 0`；aborted / error / 全零 usage 无有效数据；
+ * - 最近一次压缩（pi.compaction）之后尚无有效 assistant usage 时上下文
+ *   tokens 未知（`tokens: null`）——压缩摘要替换了旧前缀，摘要字符估算不
+ *   冒充真实上下文，直到下一次 LLM 响应上报 usage；
+ * - 最后一次 usage 若位于最近一次 context invalidation（compaction / context
+ *   edit）之前不可信：helm 的 pi-durable ContextView 已按 head 标记与 edits
+ *   （helm.rewind 的 omit/replace）裁剪 entries/contributions，锚点回扫天然
+ *   只命中「当前有效上下文内」的 assistant usage，锚点失效时自动退化为
+ *   当前有效 messages 全量估算。
  *
- * 为什么不裸用 `estimateContextTokens(messages)`（pi-ai utils）：它只看消息
- * 数组，不知道 head 标记位置；压缩/重置后旧 usage 会被误当作有效锚点。
- * 为什么在本仓重写而不再用 SDK 函数：`estimateContext` 未从
- * `@earendil-works/pi-durable` 的公开 exports 导出（仅 dist 内部模块），走
- * 私有子路径违反包边界。本模块逐行对齐其语义，并额外拆出实测/估算两段；
- * 基础原语 `calculateContextTokens` / `estimateMessageTokens` 复用 pi-ai
- * 公开导出（SDK 同一来源），估算常数不复制。
- *
- * helm.rewind/omit 语义：SDK `Conversation.context()` 返回的 ContextView 已按
- * edits 应用 omit（被覆盖条目 contributions 为空数组）且 head 指向最新边界，
- * 因此锚点回扫天然只命中「当前有效上下文内、最近一次 rewind 覆盖区间之外」
- * 的 assistant usage；锚点失效时（如 rewind 后尚无新回答且旧 usage 均被
- * omit/越过 head）自动退化为当前有效消息的全量估算，无需额外分支。
+ * 为什么在本仓重写而不用 SDK 函数：pi-durable 的 `estimateContext` 未从公开
+ * exports 导出（仅 dist 内部模块），走私有子路径违反包边界；基础原语
+ * `calculateContextTokens` / `estimateMessageTokens` 复用 pi-ai 公开导出
+ * （SDK 同一来源），估算常数不复制。
  */
 
 import type { ContextView } from '@earendil-works/pi-durable'
@@ -27,30 +26,41 @@ import { calculateContextTokens, estimateMessageTokens } from '@earendil-works/p
 import type { Message } from '@earendil-works/pi-ai'
 import type { ConversationContextUsage } from '@helm/protocol'
 
-/** 估算结果：总 tokens 与实测部分（全估算时 measuredTokens 省略）。 */
+/** 有效 assistant usage 的消息形状（pi getAssistantUsage 判定的结构子集）。 */
+type MeasuredAssistant = {
+  role: 'assistant'
+  usage: Parameters<typeof calculateContextTokens>[0]
+}
+
+/** 估算结果；tokens 为 null 表示真实上下文未知（压缩后尚无有效 usage）。 */
 export interface ContextUsageEstimate {
-  tokens: number
-  measuredTokens?: number
+  tokens: number | null
 }
 
 /**
- * 对齐 pi-durable `estimateContext(view, [])` 的上下文估算。
+ * 对齐 pi `getContextUsage` 的上下文估算。
  *
- * - 实测锚点：view.entries 从尾向前、跳过 id <= head.id 的条目，在
- *   contributions 中找最后一条 usage 上下文 tokens > 0 的 assistant 消息；
+ * - 实测锚点：view.entries 从尾向前、跳过 id <= head.id 的条目（head 标记
+ *   本身与压缩保留的旧前缀条目都不含可信 usage），在 contributions 中找
+ *   最后一条有效 assistant（stopReason 非 aborted/error 且 usage > 0）；
  * - tokens = 锚点 usage 上下文 tokens + view.messages 中锚点之后的消息估算；
- * - 无锚点：view.messages 全量估算（measuredTokens 省略）。
+ * - 锚点有效但消息数组中找不到锚点（防御）：退化为全量估算；
+ * - 最近一次 head 是 pi.compaction 且无锚点：tokens = null（压缩摘要字符
+ *   估算不冒充已知上下文；pi.reset 是全新上下文，全量估算为 0 是真实值）；
+ * - 无锚点（无 head 或 head 为 pi.reset）：view.messages 全量估算。
  */
 export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
-  let measured: { role: 'assistant'; usage: Parameters<typeof calculateContextTokens>[0] } | undefined
-  const after = view.head?.id ?? Number.NEGATIVE_INFINITY
+  const head = view.head
+  let measured: MeasuredAssistant | undefined
+  const after = head?.id ?? Number.NEGATIVE_INFINITY
   for (let index = view.entries.length - 1; index >= 0 && measured === undefined; index -= 1) {
     if (view.entries[index]!.id <= after) continue
-    // 与 SDK findLast 等价：取 contributions 内最后一条实测 assistant。
+    // 与 SDK findLast 等价：取 contributions 内最后一条有效实测 assistant。
     for (const message of view.contributions[index]!) {
-      if (isMeasuredAssistant(message)) measured = message
+      if (isValidMeasuredAssistant(message)) measured = message
     }
   }
+  if (measured === undefined && head?.kind === 'pi.compaction') return { tokens: null }
   // 锚点对象来自 contributions，与 messages 同源同引用（lastIndexOf 按身份命中）；
   // 结构子集到 Message 的断言是同一运行时对象的 widening，不引入任何伪造。
   const from = measured === undefined ? 0 : view.messages.lastIndexOf(measured as Message) + 1
@@ -58,18 +68,18 @@ export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
   for (const message of view.messages.slice(from)) {
     tokens += estimateMessageTokens(message)
   }
-  return measured === undefined ? { tokens } : { tokens, measuredTokens: calculateContextTokens(measured.usage) }
+  return { tokens }
 }
 
-function isMeasuredAssistant(message: unknown): message is {
-  role: 'assistant'
-  usage: Parameters<typeof calculateContextTokens>[0]
-} {
+/** pi `getAssistantUsage` 同款判定：role 为 assistant、stopReason 非
+ * aborted/error、usage 形状可算且上下文 tokens > 0（pi-durable 的
+ * contributions 已剔除 aborted/error/deferred 消息，此处按同一规则防御
+ * 非常规来源，派生展示数据不因个别损坏条目中断刷新）。 */
+function isValidMeasuredAssistant(message: unknown): message is MeasuredAssistant {
   if (message === null || typeof message !== 'object') return false
-  const m = message as { role?: unknown; usage?: unknown }
+  const m = message as { role?: unknown; usage?: unknown; stopReason?: unknown }
   if (m.role !== 'assistant' || m.usage === null || typeof m.usage !== 'object') return false
-  // 与 SDK 同公式（totalTokens 或四费率之和）；非法形状不作为锚点（派生展示
-  // 数据不因个别损坏条目中断刷新）。usage 必为对象，公式内不再解引用 null。
+  if (m.stopReason === 'aborted' || m.stopReason === 'error') return false
   return calculateContextTokens(m.usage as Parameters<typeof calculateContextTokens>[0]) > 0
 }
 
@@ -87,66 +97,50 @@ export interface LiveCompactionFailureShape {
   error: string
 }
 
-const COMPACTION_TRIGGERS = new Set(['manual', 'threshold', 'overflow'])
-
-/**
- * 由 live 镜像透传压缩实时状态：多项压缩任务时取最新（taskId 序尾项）；
- * trigger 非法（未知 SDK 版本形状）时省略 compacting 而不是伪造。
- */
-export function compactingOf(
-  compactions: readonly LiveCompactionShape[] | undefined,
-): ConversationContextUsage['compacting'] {
-  const latest = compactions?.[compactions.length - 1]
-  if (latest === undefined) return undefined
-  if (!COMPACTION_TRIGGERS.has(latest.trigger)) return undefined
-  return { trigger: latest.trigger as 'manual' | 'threshold' | 'overflow', blocking: latest.blocking === true }
+/** pi.live compactions 非空即压缩进行中（只读展示「精简中…」；多项任务
+ * 取任何一项在途都为真，不伪造 trigger 细节）。 */
+export function compactingOf(compactions: readonly LiveCompactionShape[] | undefined): boolean | undefined {
+  return compactions !== undefined && compactions.length > 0 ? true : undefined
 }
 
-/** 压缩失败摘要（脱敏 + 400 字符截断由调用方 redact 注入；此处仅截断）。 */
-export function compactionErrorOf(
-  failure: LiveCompactionFailureShape | undefined,
+const COMPACTION_TRIGGER_LABEL: Record<string, string> = {
+  manual: '手动',
+  threshold: '阈值',
+  overflow: '溢出',
+}
+
+/** 压缩失败通知正文（trigger 语义 + 脱敏错误摘要，截断 400 字符）。
+ * 压缩失败不得静默：由 tracker 经 notification 事件显式上报一次。 */
+export function compactionFailureNoticeOf(
+  failure: LiveCompactionFailureShape,
   redact: (text: string) => string,
-): string | undefined {
-  if (failure === undefined) return undefined
-  const text = redact(failure.error ?? '').trim()
-  return text === '' ? undefined : text.slice(0, 400)
+): string {
+  const trigger = COMPACTION_TRIGGER_LABEL[failure.trigger] ?? failure.trigger
+  const error = redact(failure.error ?? '').trim().slice(0, 400)
+  return error === '' ? `${trigger}触发的上下文精简失败（无错误详情）` : `${trigger}触发的上下文精简失败：${error}`
 }
 
 /**
  * 组装完整 contextUsage（可缺字段全部省略，不伪造）。
- * window/thresholds 由调用方按模型解析结果给出（未知传 undefined）。
+ * contextWindow 由调用方按模型解析结果给出（未知传 undefined）。
  */
 export function assembleContextUsage(parts: {
   estimate: ContextUsageEstimate
   contextWindow?: number
-  thresholds?: ConversationContextUsage['thresholds']
-  compacting?: ConversationContextUsage['compacting']
-  compactionError?: string
+  compacting?: boolean
 }): ConversationContextUsage {
   return {
     tokens: parts.estimate.tokens,
-    ...(parts.estimate.measuredTokens !== undefined ? { measuredTokens: parts.estimate.measuredTokens } : {}),
     ...(parts.contextWindow !== undefined ? { contextWindow: parts.contextWindow } : {}),
-    ...(parts.thresholds !== undefined ? { thresholds: parts.thresholds } : {}),
     ...(parts.compacting !== undefined ? { compacting: parts.compacting } : {}),
-    ...(parts.compactionError !== undefined ? { compactionError: parts.compactionError } : {}),
   }
 }
 
 /**
  * contextUsage 语义指纹（发布去重）：任一承载字段变化才发布 conversation.upsert。
- * tokens 参与指纹（回合结束后真实变化）；compacting/blocking 变化同样发布。
+ * tokens 参与指纹（回合结束后真实变化）；compacting 变化同样发布。
  */
 export function contextUsageKeyOf(usage: ConversationContextUsage | undefined): string {
   if (usage === undefined) return ''
-  return JSON.stringify([
-    usage.tokens,
-    usage.measuredTokens ?? null,
-    usage.contextWindow ?? null,
-    usage.thresholds?.blockingTokens ?? null,
-    usage.thresholds?.backgroundTokens ?? null,
-    usage.compacting?.trigger ?? null,
-    usage.compacting?.blocking ?? null,
-    usage.compactionError ?? null,
-  ])
+  return JSON.stringify([usage.tokens, usage.contextWindow ?? null, usage.compacting ?? null])
 }

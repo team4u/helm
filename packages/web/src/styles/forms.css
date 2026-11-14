@@ -840,38 +840,18 @@
 .composer-model-button > svg { flex-shrink: 0; }
 .composer-model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: normal; }
 .composer-model-level { flex-shrink: 0; color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
-/* 上下文用量胶囊（ModelPicker 右侧）：仅色彩/尺寸差异，不新建交互原语 */
-.composer-toolbar .composer-context-pill {
-  height: 32px;
+/* 上下文用量只读状态文本（模型选择器右侧）：不可点击，仅色调差异 */
+.composer-toolbar .composer-context-status {
   min-width: 0;
   flex-shrink: 0;
-  padding: 0 6px;
-  gap: 4px;
+  padding: 0 2px;
   color: var(--fg-muted);
   font-size: 11.5px;
   line-height: normal;
+  user-select: none;
 }
-.composer-context-pill > svg { flex-shrink: 0; }
-.composer-context-pill-warn { color: var(--warn); }
-.composer-context-pill-high { color: var(--err); }
-.composer-context-pill-compacting { color: var(--fg-subtle); }
-.composer-context-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px 10px 6px;
-  max-width: 320px;
-}
-.composer-context-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
-  align-items: baseline;
-  font-size: 12px;
-}
-.composer-context-row-key { color: var(--fg-subtle); white-space: nowrap; }
-.composer-context-row-value { color: var(--fg-secondary); word-break: break-all; text-align: right; }
-.composer-context-row-danger .composer-context-row-value { color: var(--err); }
+.composer-context-status-warn { color: var(--warn); }
+.composer-context-status-high { color: var(--err); }
 .composer-thinking-row {
   margin: 4px 6px 8px;
   width: calc(100% - 12px);

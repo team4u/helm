@@ -33,7 +33,7 @@ import type {
 } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { DEFAULT_COMPACTION_POLICY, type CompactionPolicy, type ContextView, type Harness, type ConversationView, type Observation, type Observer } from '@earendil-works/pi-durable'
+import { type ContextView, type Harness, type ConversationView, type Observation, type Observer } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
 import type { ConvMeta, HelmStore } from './store.js'
 import { summaryOf } from './store.js'
@@ -41,7 +41,7 @@ import { deriveConversationLive, toConversationEntry, type EntryRecordLike } fro
 import { knownContextWindowOf } from './models.js'
 import {
   assembleContextUsage,
-  compactionErrorOf,
+  compactionFailureNoticeOf,
   compactingOf,
   contextUsageKeyOf,
   estimateContextUsage,
@@ -75,6 +75,8 @@ export interface TrackerEvents {
   onEntryCommitted?(conversationId: number, entry: ConversationEntry): void
   /** 会话实时增量（流式文本累计快照 + 工具卡；节流推送，终态冲刷最终状态）。 */
   onLiveChanged?(live: ConversationLive): void
+  /** 压缩失败等异步异常的一次性显式上报（EventHub notification 通道）。 */
+  onNotification?(payload: { level: 'info' | 'warning' | 'error'; title: string; body?: string; conversationId: number }): void
 }
 
 /** helm.input entry / inbox item 的元数据载荷形状。 */
@@ -171,6 +173,9 @@ export class ConversationTracker {
   private readonly contextUsageEntryWatermark = new Map<number, number>()
   /** 会话 -> 刷新链 settle 等待者（ensureContextUsage 唤醒用；stopObserving 兑底 resolve）。 */
   private readonly contextUsageWaiters = new Map<number, Array<() => void>>()
+  /** 会话 -> 已发过压缩失败通知的 taskId（同一失败重复快照不重复通知；
+   * 不随 stopObserving 清除——同 runtime 内重观察不得再报同一失败）。 */
+  private readonly notifiedCompactionFailures = new Map<number, number>()
 
   constructor(options: {
     harness: Harness
@@ -181,12 +186,9 @@ export class ConversationTracker {
     /** 会话归属权现读（Runtime 注入 ownership.getOwnership）；缺省视为 human。
      * 仅用于回合结算 unread 策略：背景派生子会话不制造人类未读。 */
     ownershipOf?: (id: number) => 'helm' | 'bot' | 'human'
-    /** 当前 Models 集合现读（contextUsage 的窗口/阈值解析用）；缺省不解析
-     * （contextWindow/thresholds 省略，绝不伪造）。 */
+    /** 当前 Models 集合现读（contextUsage 的窗口解析用）；缺省不解析
+     * （contextWindow 省略，绝不伪造）。 */
     models?: () => Models
-    /** 生效压缩策略现读（阈值计算用）；缺省 SDK 默认值（helm 不 override
-     * compaction 设置，见 runtime-bootstrap）。 */
-    compactionPolicy?: () => CompactionPolicy
   }) {
     this.harness = options.harness
     this.store = options.store
@@ -194,7 +196,6 @@ export class ConversationTracker {
     this.redactError = options.redactError ?? ((text) => text)
     this.ownershipOf = options.ownershipOf
     this.modelsOf = options.models
-    this.compactionPolicyOf = options.compactionPolicy ?? (() => ({ ...DEFAULT_COMPACTION_POLICY }))
   }
 
   /** 错误诊断摘要脱敏（Runtime 注入 stashService.redact；防 provider 错误回显已登记秘密）。 */
@@ -203,11 +204,8 @@ export class ConversationTracker {
   /** 会话归属权现读（缺省恒 human）；仅回合结算 unread 策略消费。 */
   private readonly ownershipOf: ((id: number) => 'helm' | 'bot' | 'human') | undefined
 
-  /** 当前 Models 集合现读（缺省不解析：窗口/阈值省略）。 */
+  /** 当前 Models 集合现读（缺省不解析：窗口省略）。 */
   private readonly modelsOf: (() => Models) | undefined
-
-  /** 生效压缩策略现读（缺省 SDK 默认值）。 */
-  private readonly compactionPolicyOf: () => CompactionPolicy
 
   /** 每次观察独立令牌；停观即删除，迟到异步结果不得复活状态。 */
   private readonly observeGenerations = new Map<number, symbol>()
@@ -253,6 +251,8 @@ export class ConversationTracker {
   ): Promise<void> {
     const live = view.docs['pi.live'] as LiveStateShape | undefined
     this.liveViews.set(id, live ?? {})
+    // 重启/重挂即看到的遗留失败同样不静默（每个 runtime 生命周期恰报一次）。
+    this.noteCompactionFailure(id, live)
     let watermark = this.lastEmittedEntry.get(id) ?? 0
     // 上下文触发水位线与 entry 事件水位线同一初值对齐：初始快照内的历史标记
     // （pi.compaction 等）不触发后续 adopt 的重复刷新（初始刷新见下方调度）。
@@ -612,6 +612,9 @@ export class ConversationTracker {
     const live = view.docs['pi.live'] as LiveStateShape | undefined
     const prev = this.liveViews.get(id)
     this.liveViews.set(id, live ?? {})
+
+    // 压缩失败不得静默：新的 compactionFailure 恰发一次 error notification。
+    this.noteCompactionFailure(id, live)
 
     // 上下文边界变化（压缩/重置/原地覆盖重发条目落地，或压缩实时状态变化）：
     // 调度异步刷新（同步去重；observe 回调内禁止 await）。
@@ -1141,7 +1144,23 @@ export class ConversationTracker {
     }
   }
 
-  /** 单次刷新：读真实 ContextView + 模型窗口/阈值 + live 压缩状态，变化才发布。 */
+  /** 压缩失败不得静默：新的 compactionFailure（按 taskId 去重，同一失败
+   * 重复快照不重复通知）发一次脱敏 error notification。SDK 只在下一次成功
+   * 压缩时清除 compactionFailure，成功后新失败是全新 taskId，自然再报。 */
+  private noteCompactionFailure(id: number, live: LiveStateShape | undefined): void {
+    const failure = live?.compactionFailure
+    if (failure === undefined) return
+    if (this.notifiedCompactionFailures.get(id) === failure.taskId) return
+    this.notifiedCompactionFailures.set(id, failure.taskId)
+    this.events.onNotification?.({
+      level: 'error',
+      title: '上下文精简失败',
+      body: compactionFailureNoticeOf(failure, this.redactError),
+      conversationId: id,
+    })
+  }
+
+  /** 单次刷新：读真实 ContextView + 模型窗口 + live 压缩状态，变化才发布。 */
   private async refreshContextUsageOnce(conversationId: number): Promise<void> {
     const meta = this.store.getConv(conversationId)
     if (!meta) return
@@ -1160,7 +1179,6 @@ export class ConversationTracker {
   /** 应用刷新结果：组装 -> 指纹比对 -> 缓存 + 发布（不推进 stateChangeSeq）。 */
   private applyContextUsage(conversationId: number, meta: ConvMeta, view: ContextView): void {
     const live = this.liveViews.get(conversationId)
-    const policy = this.compactionPolicyOf()
     const slash = meta.model.indexOf('/')
     const model =
       slash > 0 && slash < meta.model.length - 1 && this.modelsOf !== undefined
@@ -1168,25 +1186,13 @@ export class ConversationTracker {
         : undefined
     // 窗口来源诚实性：模型不在当前 Models 集合，或窗口是静态保守缺省
     // （compat 网关 / Magpie 目录缺上游窗口，helmContextWindowKnown === false）
-    // 时不携带 contextWindow/thresholds——绝不把 128k 缺省冒充真实窗口。
+    // 时不携带 contextWindow——绝不把 128k 缺省冒充真实窗口。
     const contextWindow = knownContextWindowOf(model)
-    const thresholds =
-      contextWindow !== undefined && policy.enabled
-        ? {
-            blockingTokens: contextWindow - policy.reserveTokens,
-            ...(policy.backgroundTokens > 0
-              ? { backgroundTokens: contextWindow - policy.reserveTokens - policy.backgroundTokens }
-              : {}),
-          }
-        : undefined
     const compacting = compactingOf(live?.compactions)
-    const compactionError = compactionErrorOf(live?.compactionFailure, this.redactError)
     const usage = assembleContextUsage({
       estimate: estimateContextUsage(view),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
-      ...(thresholds !== undefined ? { thresholds } : {}),
       ...(compacting !== undefined ? { compacting } : {}),
-      ...(compactionError !== undefined ? { compactionError } : {}),
     })
     const key = contextUsageKeyOf(usage)
     const previous = this.contextUsageCache.get(conversationId)
@@ -1196,25 +1202,22 @@ export class ConversationTracker {
     this.contextUsageKeys.set(conversationId, key)
     // 首次填充默认静默：值经快照 / HTTP 读自然可见，不发事件（避免启动期每
     // 会话一帧噪声，维持「终态后无重复语义帧」的既有帧纪律）。唯一例外：
-    // 填充时已携带压缩实时状态（compacting/compactionError，如启动期恢复
-    // 进行中压缩、首次刷新落在手动压缩窗口内）必须发布——否则没有任何后续
-    // 语义帧会携带它，订阅方将永远看不到该状态。
+    // 填充时已携带压缩进行中状态（compacting，如启动期恢复进行中压缩、首次
+    // 刷新落在手动压缩窗口内）必须发布——否则没有任何后续语义帧会携带它，
+    // 订阅方将永远看不到该状态。
     if (previousKey === undefined) {
-      if (usage.compacting !== undefined || usage.compactionError !== undefined) {
+      if (usage.compacting !== undefined) {
         const summary = this.summaryOf(conversationId)
         this.events.onSummaryChanged(summary)
       }
       return
     }
     if (key === previousKey) return
-    // run 活跃期间：仅压缩实时状态（compacting / 失败摘要）变化才发帧；token
-    // 变化是瞬态，等本回合结算帧携带（emitSettled 附加缓存值），避免 working
+    // run 活跃期间：仅压缩实时状态（compacting）变化才发帧；token 变化是
+    // 瞬态，等本回合结算帧携带（emitSettled 附加缓存值），避免 working
     // 期间重复 doing 语义帧（帧纪律：不逐 token 发摘要）。
     if (this.liveViews.get(conversationId)?.run !== undefined) {
-      const compactionChanged =
-        (previous?.compacting?.trigger ?? null) !== (usage.compacting?.trigger ?? null) ||
-        (previous?.compacting?.blocking ?? null) !== (usage.compacting?.blocking ?? null) ||
-        (previous?.compactionError ?? null) !== (usage.compactionError ?? null)
+      const compactionChanged = (previous?.compacting ?? null) !== (usage.compacting ?? null)
       if (!compactionChanged) return
     }
     // 发布摘要（携带新 usage）：不推进 stateChangeSeq——水位线专属状态机/

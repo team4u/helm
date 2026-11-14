@@ -146,42 +146,29 @@ function assertConversationSummaryShape(value: unknown): void {
   }
 }
 
-/** contextUsage 形状校验（可缺不可错；未知窗口省略而非伪造）。 */
+/** contextUsage 形状校验（可缺不可错；契约收敛为 tokens/contextWindow/compacting
+ * 三字段，未知字段拒绝——不留死字段；tokens 为 null 表示上下文未知）。 */
 function isContextUsageShape(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false
   const usage = value as Record<string, unknown>
-  if (typeof usage['tokens'] !== 'number' || !Number.isFinite(usage['tokens']) || usage['tokens'] < 0) return false
+  if (!Object.keys(usage).every((key) => key === 'tokens' || key === 'contextWindow' || key === 'compacting')) {
+    return false
+  }
   if (
-    (usage['contextWindow'] !== undefined &&
-      (typeof usage['contextWindow'] !== 'number' || !Number.isFinite(usage['contextWindow']))) ||
-    (usage['measuredTokens'] !== undefined &&
-      (typeof usage['measuredTokens'] !== 'number' || !Number.isFinite(usage['measuredTokens']))) ||
-    (usage['compactionError'] !== undefined && typeof usage['compactionError'] !== 'string')
+    usage['tokens'] !== null &&
+    (typeof usage['tokens'] !== 'number' || !Number.isFinite(usage['tokens']) || usage['tokens'] < 0)
   ) {
     return false
   }
-  const thresholds = usage['thresholds']
   if (
-    thresholds !== undefined &&
-    (thresholds === null ||
-      typeof thresholds !== 'object' ||
-      typeof (thresholds as Record<string, unknown>)['blockingTokens'] !== 'number' ||
-      !Number.isFinite((thresholds as Record<string, unknown>)['blockingTokens'] as number) ||
-      ((thresholds as Record<string, unknown>)['backgroundTokens'] !== undefined &&
-        typeof (thresholds as Record<string, unknown>)['backgroundTokens'] !== 'number'))
+    usage['contextWindow'] !== undefined &&
+    (typeof usage['contextWindow'] !== 'number' ||
+      !Number.isFinite(usage['contextWindow']) ||
+      usage['contextWindow'] <= 0)
   ) {
     return false
   }
-  const compacting = usage['compacting']
-  if (
-    compacting !== undefined &&
-    (compacting === null ||
-      typeof compacting !== 'object' ||
-      (compacting as Record<string, unknown>)['trigger'] !== 'manual' &&
-        (compacting as Record<string, unknown>)['trigger'] !== 'threshold' &&
-        (compacting as Record<string, unknown>)['trigger'] !== 'overflow' ||
-      typeof (compacting as Record<string, unknown>)['blocking'] !== 'boolean')
-  ) {
+  if (usage['compacting'] !== undefined && typeof usage['compacting'] !== 'boolean') {
     return false
   }
   return true
