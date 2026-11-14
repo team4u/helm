@@ -13,12 +13,10 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { bindSessionDocRuntime, getSessionDocState, resetSessionDocSubscriptions, subscribeSessionDoc } from '../src/lib/session-docs.js'
-import {
-  usePluginSessionDoc,
-  usePluginSessionDocDiagnostics,
-  usePluginSessionDocsMap,
-} from '../src/lib/store-context.js'
-import { makeTestStore, TestStoreProvider } from './helpers/store.js'
+import { usePluginSessionDocsMap } from '../src/lib/store-context.js'
+import { usePluginSessionDocValue, usePluginSessionDocState } from '@helm/plugin-client'
+import { makeTestStore } from './helpers/store.js'
+import { TestStoreProvider } from './helpers/host-store.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
 
 const e = React.createElement
@@ -52,8 +50,8 @@ function mountProbes(
   const mapReads: Record<string, unknown>[] = []
   function Probes(): React.ReactNode {
     reads.push({
-      value: usePluginSessionDoc('runs', { pluginId: 'builtin:workflow', conversationId: 42 }),
-      diagnostics: usePluginSessionDocDiagnostics('runs', { pluginId: 'builtin:workflow', conversationId: 42 }),
+      value: usePluginSessionDocValue('runs', { pluginId: 'builtin:workflow', conversationId: 42 }),
+      diagnostics: usePluginSessionDocState('runs', { pluginId: 'builtin:workflow', conversationId: 42 }),
     })
     mapReads.push(usePluginSessionDocsMap('builtin:workflow', opts.docNames ?? ['runs', 'stats'], 42))
     return e('div', null, 'probe')

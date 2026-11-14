@@ -11,13 +11,14 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { PluginUiContribution } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
-import { PluginClientContext, createPluginClientContext, usePluginContext } from '../src/lib/plugin-client-context.js'
+import { PluginClientContext, createPluginClientContext, usePluginContext } from '@helm/plugin-client'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
-import { PluginSlot } from '../src/lib/plugin-client-sdk.js'
+import { PluginSlot } from '@helm/plugin-client'
 import { collectSlotItems, isValidSlotTarget } from '../src/ui/plugin-slot-model.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
+import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -94,10 +95,10 @@ test('PluginSlot：短名拼全限定、贡献项渲染、子项 ctx.pluginId �
   }
   seedPluginClientModule('p2', 'zone.tsx', contribModule)
   const store = slotContributionUi([slotContribution('p2', 'badge', 'owner/zone', { client: { module: 'zone.tsx', export: 'ZoneBadge' } })])
-  const ownerCtx = createPluginClientContext(store, 'owner', undefined)
+  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store), 'owner', undefined)
   const host = document.createElement('div')
   const root = renderToString(host, e(
-    HelmStoreContext.Provider, { value: store },
+    HostStoreProviders, { value: store },
     e(PluginClientContext.Provider, { value: ownerCtx },
       e(PluginSlot, { name: 'zone', slotProps: { zone: 'east' } })),
   ))
@@ -114,10 +115,10 @@ test('PluginSlot：single 取首项、无命中回退 fallback', { timeout: 60_0
     slotContribution('p1', 'a', 'owner/zone', { client: { module: 'a.tsx', export: 'ItemA' } }),
     slotContribution('p2', 'b', 'owner/zone', { client: { module: 'b.tsx', export: 'ItemB' }, priority: 5 }),
   ])
-  const ownerCtx = createPluginClientContext(store, 'owner', undefined)
+  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store), 'owner', undefined)
   const host = document.createElement('div')
   const root = renderToString(host, e(
-    HelmStoreContext.Provider, { value: store },
+    HostStoreProviders, { value: store },
     e(PluginClientContext.Provider, { value: ownerCtx },
       e(PluginSlot, { name: 'zone', mode: 'single' })),
   ))
@@ -126,7 +127,7 @@ test('PluginSlot：single 取首项、无命中回退 fallback', { timeout: 60_0
 
   const host2 = document.createElement('div')
   const root2 = renderToString(host2, e(
-    HelmStoreContext.Provider, { value: store },
+    HostStoreProviders, { value: store },
     e(PluginClientContext.Provider, { value: ownerCtx },
       e(PluginSlot, { name: 'empty-slot', fallback: e('div', null, 'nope') })),
   ))
@@ -147,10 +148,10 @@ test('PluginSlot：环检测显式告警且不死循环', { timeout: 60_000 }, (
   }
   seedPluginClientModule('p2', 'cycle.tsx', cycleModule)
   const store = slotContributionUi([slotContribution('p2', 'cycle', 'owner/loop', { client: { module: 'cycle.tsx', export: 'CycleItem' } })])
-  const ownerCtx = createPluginClientContext(store, 'owner', undefined)
+  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store), 'owner', undefined)
   const host = document.createElement('div')
   const root = renderToString(host, e(
-    HelmStoreContext.Provider, { value: store },
+    HostStoreProviders, { value: store },
     e(PluginClientContext.Provider, { value: ownerCtx },
       e(PluginSlot, { name: 'loop' })),
   ))

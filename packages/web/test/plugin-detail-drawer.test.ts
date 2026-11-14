@@ -10,9 +10,9 @@ import {
   buildResetFieldPayload,
   canResetConfigField,
 } from '../src/modals/plugin-config-form-model.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -505,7 +505,7 @@ test('PluginDetailDrawer：当 store 中存在 settingsPanels 扩展时正确挂
     await act(async () => {
       root.render(
         e(
-          HelmStoreContext.Provider,
+          HostStoreProviders,
           { value: store },
           e(PluginDetailDrawer, {
             plugin,

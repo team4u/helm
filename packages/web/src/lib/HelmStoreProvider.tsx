@@ -7,7 +7,8 @@ import * as LucideReact from 'lucide-react'
 import type { ActionManifest, ArtifactMetadata, ConversationDetail, ConversationSummary, HelmEventFrame, HelmResumedFrame, HelmSnapshot, PluginSummary, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
 import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, nodesApi, pluginsApi, setStoredToken, type CredentialSummary, type ModelDescriptor, type NodeInfo } from './api.js'
 import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, readSseChunkWithDeadline, sortNodes, SseParser, sseClientTimings, type LiveState } from './live-state.js'
-import { HelmStoreContext, useHelmStore, usePluginDoc } from './store-context.js'
+import { HelmStoreContext, useHelmStore } from './store-context.js'
+import { PluginClientHostContext, usePluginDocValue } from '@helm/plugin-client'
 import {
   evictSessionDocSubscriptions,
   evictSessionDocsOfConversation,
@@ -18,7 +19,8 @@ import {
 } from './session-docs.js'
 import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.js'
 import { resetStandbyDrafts } from '../conversation/standby-model.js'
-import * as HelmPluginClient from './plugin-client-sdk.js'
+import * as HelmPluginClient from '@helm/plugin-client'
+import { createPluginClientHostPort } from './plugin-client-host.js'
 import { formatLocationHash, isSameLocationState, parseLocationHash, shouldPushLocationHistory, upgradeLegacyLocationState, type WorkspaceLocationState } from './url-hash-model.js'
 import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, spaceForTarget, type ActiveModal, type GroupedUiSpecs, type HelmStoreValue, type ResolvedTarget, type SidebarSpace, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 import { errorText } from './format.js'
@@ -827,7 +829,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     //   与 '@helm/plugin-client' 虚拟化为这些全局命名空间，运行时取得同一份
     //   React/lucide/宿主 hooks 实例，绝不打包第二份 React。
     const w = window as unknown as Record<string, unknown>
-    w.__HELM_SHARED__ = { React, useHelmStore, usePluginDoc }
+    w.__HELM_SHARED__ = { React, useHelmStore, usePluginDoc: usePluginDocValue }
     w.__helm_shared_react = React
     w.__helm_shared_react_dom = ReactDom
     w.__helm_shared_react_dom_client = ReactDomClient
@@ -844,5 +846,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       delete w.__helm_shared_plugin_client
     }
   }, [])
-  return <HelmStoreContext.Provider value={store}>{children}</HelmStoreContext.Provider>
+  // 宿主端口：SDK（@helm/plugin-client）钩子与委托组件经此注入真实 store 能力。
+  // 端口对象随 store 快照重建（与 store 同一 SSE 节奏）；钩子内部仅依赖稳定具名函数。
+  const pluginClientPort = useMemo(() => createPluginClientHostPort(store), [store])
+  return (
+    <HelmStoreContext.Provider value={store}>
+      <PluginClientHostContext.Provider value={pluginClientPort}>{children}</PluginClientHostContext.Provider>
+    </HelmStoreContext.Provider>
+  )
 }

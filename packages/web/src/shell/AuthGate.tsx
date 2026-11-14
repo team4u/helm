@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { authApi } from '../lib/api.js'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 
 export function AuthGate() {

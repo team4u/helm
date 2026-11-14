@@ -4,10 +4,11 @@ import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import { makeTestStore, TestStoreProvider } from './helpers/store.js'
+import { makeTestStore } from './helpers/store.js'
+import { TestStoreProvider } from './helpers/host-store.js'
 import { importWorkflowClientModule, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 
-const iconsSource = readFileSync(new URL('../src/lib/icons.tsx', import.meta.url), 'utf8')
+const iconsSource = readFileSync(new URL('../../plugin-client/src/icons.tsx', import.meta.url), 'utf8')
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
 const ancestrySource = readFileSync(new URL('../src/conversation/ancestry-model.ts', import.meta.url), 'utf8')
 const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawer.tsx', import.meta.url), 'utf8')

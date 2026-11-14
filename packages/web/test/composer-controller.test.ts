@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 // 重要顺序约束：happy-dom + react-dom 19 的合成事件委托要求在 import react-dom/client
 // 之前挂载 happy-dom 全局；否则 react-dom 缓存原始 addEventListener 引用后，
@@ -26,8 +27,7 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 import type { ComposerController, ConversationSummary, PluginUiContribution } from '@helm/protocol'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
-import { usePluginContext } from '../src/lib/plugin-client-context.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
+import { usePluginContext } from '@helm/plugin-client'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import {
   buildSlashMenuItems,
@@ -232,7 +232,7 @@ function mountComposer(
     root = createRoot(host)
     root.render(
       React.createElement(
-        HelmStoreContext.Provider,
+        HostStoreProviders,
         { value: store },
         React.createElement(Composer, { conversation, prefill: null }),
       ),

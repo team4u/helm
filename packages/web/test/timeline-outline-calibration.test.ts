@@ -6,6 +6,7 @@ import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import { ConversationTimeline, type OutlineScrollRequest } from '../src/conversation/ConversationTimeline.js'
 
 try {
@@ -154,7 +155,7 @@ async function renderTimeline(opts: {
     root = createRoot(host!)
     root.render(
       e(
-        HelmStoreContext.Provider,
+        HostStoreProviders,
         { value: store },
         e(ConversationTimeline, {
           conversation: conv,
@@ -182,7 +183,7 @@ async function rerenderWith(opts: {
   await act(async () => {
     root!.render(
       e(
-        HelmStoreContext.Provider,
+        HostStoreProviders,
         { value: store },
         e(ConversationTimeline, {
           conversation: conv,

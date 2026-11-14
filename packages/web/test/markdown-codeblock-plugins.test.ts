@@ -20,9 +20,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginUiContribution } from '@helm/protocol'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
-import * as HelmPluginClient from '../src/lib/plugin-client-sdk.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
+import * as HelmPluginClient from '@helm/plugin-client'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).React = React
@@ -95,7 +95,7 @@ test('CodeBlockRenderer：无命中回退宿主普通代码块（语言标签 + 
   act(() => {
     root = createRoot(host)
     root.render(e(
-      HelmStoreContext.Provider, { value: store },
+      HostStoreProviders, { value: store },
       e(CodeBlockRenderer, { language: 'python', code: 'print("hi")' }),
     ))
   })
@@ -159,7 +159,7 @@ function renderBlock(contributions: PluginUiContribution[], language: string, co
   act(() => {
     root = createRoot(host)
     root.render(e(
-      HelmStoreContext.Provider, { value: store },
+      HostStoreProviders, { value: store },
       e(CodeBlockRenderer, { language, code, conversationId: 1 }),
     ))
   })
@@ -211,13 +211,13 @@ test('CodeBlockRenderer：加载失败显式诊断 + 源码可复制（诚实性
   act(() => {
     root = createRoot(host)
     root.render(e(
-      HelmStoreContext.Provider, { value: store },
+      HostStoreProviders, { value: store },
       e(CBR, { language: 'ui', code }),
     ))
   })
   // 等待异步加载失败呈现
   await new Promise((r) => setTimeout(r, 50))
-  act(() => { root!.render(e(HelmStoreContext.Provider, { value: store }, e(CBR, { language: 'ui', code }))) })
+  act(() => { root!.render(e(HostStoreProviders, { value: store }, e(CBR, { language: 'ui', code }))) })
   const text = host.textContent ?? ''
   assert.match(text, /渲染失败|加载失败/)
   assert.match(text, /not found|404/)

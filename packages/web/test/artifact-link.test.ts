@@ -2,10 +2,10 @@ import assert from 'node:assert/strict'
 import test, { describe } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import { parseArtifactUrl, markdownUrlTransform } from '../src/conversation/artifact-link.js'
+import { parseArtifactUrl, markdownUrlTransform } from '@helm/plugin-client'
 import { MarkdownView } from '../src/conversation/MarkdownView.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 ;(globalThis as Record<string, unknown>).React = React
 
@@ -67,7 +67,7 @@ describe('MarkdownView 产物内联渲染', { timeout: 60_000 }, () => {
     const store = makeMockStore()
     const html = renderToString(
       React.createElement(
-        HelmStoreContext.Provider,
+        HostStoreProviders,
         { value: store },
         React.createElement(MarkdownView, {
           text: '请查看输出：[数据报告.csv](artifact:art-csv-101)',
@@ -84,7 +84,7 @@ describe('MarkdownView 产物内联渲染', { timeout: 60_000 }, () => {
     const store = makeMockStore()
     const html = renderToString(
       React.createElement(
-        HelmStoreContext.Provider,
+        HostStoreProviders,
         { value: store },
         React.createElement(MarkdownView, {
           text: '访问官网：[Helm Docs](https://helm.dev)',
@@ -101,7 +101,7 @@ describe('MarkdownView 产物内联渲染', { timeout: 60_000 }, () => {
     const store = makeMockStore()
     const html = renderToString(
       React.createElement(
-        HelmStoreContext.Provider,
+        HostStoreProviders,
         { value: store },
         React.createElement(MarkdownView, {
           text: '流程图预览：\n\n![架构图](artifact:arch-img-202)',

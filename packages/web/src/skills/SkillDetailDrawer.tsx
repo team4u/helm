@@ -1,18 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { SkillSummary } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
-import { CopyButton } from '../conversation/CopyButton.js'
+import { HelmIcon, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Select } from '@helm/plugin-client'
+import type { SelectOption } from '@helm/plugin-client'
 import { CodeBlockView, MarkdownView } from '../conversation/MarkdownView.js'
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-} from '../ui/Dialog.js'
-import { Select } from '../ui/Select.js'
-import type { SelectOption } from '../ui/Select.js'
 import {
   getSkillSourceBadge,
   skillsApi,

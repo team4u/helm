@@ -14,10 +14,11 @@ import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
-import { usePlugins } from '../src/lib/plugin-client-context.js'
-import * as HelmPluginClient from '../src/lib/plugin-client-sdk.js'
+import { usePlugins } from '@helm/plugin-client'
+import * as HelmPluginClient from '@helm/plugin-client'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -48,7 +49,7 @@ test('usePlugins：plugins 返回 store.plugins 同一引用（实时数据源�
     captured = usePlugins()
     return null
   }
-  renderToString(e(HelmStoreContext.Provider, { value: store }, e(Probe)))
+  renderToString(e(HostStoreProviders, { value: store }, e(Probe)))
   assert.equal(captured!.plugins, plugins, '必须返回 store.plugins 的同一引用')
 })
 
@@ -76,7 +77,7 @@ test('usePlugins：screens 返回 groupedUi.screens 同一引用（含 pluginId 
     captured = usePlugins()
     return null
   }
-  renderToString(e(HelmStoreContext.Provider, { value: store }, e(Probe)))
+  renderToString(e(HostStoreProviders, { value: store }, e(Probe)))
   assert.equal(captured!.screens, store.groupedUi.screens, '必须返回 groupedUi.screens 的同一引用')
   assert.equal(captured!.screens.length, 2, '仅 screen surface 计入')
   assert.deepEqual(
@@ -95,7 +96,7 @@ test('usePlugins：无 PluginClientContext（全屏视图无会话槽位）时�
     captured = usePlugins()
     return e('div', null, String(captured!.plugins.length))
   }
-  const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Probe)))
+  const html = renderToString(e(HostStoreProviders, { value: store }, e(Probe)))
   assert.equal(captured!.plugins.length, 1)
   assert.match(html, /1/)
 })
@@ -113,13 +114,13 @@ test('usePlugins：store 快照更新后响应式返回新值（无缓存旧引�
   let root: Root | undefined
   act(() => {
     root = createRoot(host)
-    root.render(e(HelmStoreContext.Provider, { value: store }, e(Probe)))
+    root.render(e(HostStoreProviders, { value: store }, e(Probe)))
   })
   assert.equal(captured[0]!.plugins.length, 1)
 
   store = storeWithScreens(secondPlugins, [])
   act(() => {
-    root!.render(e(HelmStoreContext.Provider, { value: store }, e(Probe)))
+    root!.render(e(HostStoreProviders, { value: store }, e(Probe)))
   })
   assert.equal(captured[captured.length - 1]!.plugins.length, 2, 'store 更新后必须返回新快照')
   act(() => root?.unmount())

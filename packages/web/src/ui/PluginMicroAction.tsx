@@ -12,7 +12,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { UiActionSpec } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { PluginUiView } from './PluginUiView.js'

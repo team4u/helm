@@ -2,10 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SearchHit } from '@helm/protocol'
 import { searchApi } from '../lib/api.js'
 import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
 import type { CommandSpec } from '@helm/protocol'
 
 type PaletteRow =

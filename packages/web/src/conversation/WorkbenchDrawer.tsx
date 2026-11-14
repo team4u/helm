@@ -1,10 +1,8 @@
 import { useEffect, useMemo } from 'react'
 import type { ConversationSummary } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon, Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Tabs, TabsList, TabsTrigger } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
-import { Tabs, TabsList, TabsTrigger } from '../ui/Tabs.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { formatBytes } from '../lib/format.js'
 import {

@@ -4,8 +4,8 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { ConversationSummary } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { makeTestStore as makeMockStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -31,7 +31,7 @@ test('ThinkingRow 组件渲染：展开时使用 MarkdownView 渲染标题与列
   const markdownText = '# 深度思考\n\n- 步骤一\n- 步骤二'
   const html = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeMockStore() },
       e(ThinkingRow, { text: markdownText, conversationId: 1, defaultOpen: true }),
     ),
@@ -51,7 +51,7 @@ test('思考过程折叠契约：非进行中（思考结束或历史会话）�
   const markdownText = '# 思考内容\n\n已完成'
   const html = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeMockStore() },
       e(ThinkingRow, { text: markdownText, conversationId: 1 }),
     ),
@@ -71,7 +71,7 @@ test('思考进行中契约：active=true 时默认展开并展示转圈 loader 
   const markdownText = '# 思考中…'
   const html = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeMockStore() },
       e(ThinkingRow, { text: markdownText, conversationId: 1, active: true }),
     ),
@@ -104,7 +104,7 @@ test('响应与等待态：使用 spinner 转圈指示器，不带「正在等�
 
   const html = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeMockStore({ conversations: [convWorking] }) },
       e(ConversationTimeline, {
         conversation: convWorking,
@@ -141,7 +141,7 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
   // 1. 思考中阶段（仅流式思考 live.thinking，尚无正文）：呈现「正在思考…」且展开思考内容
   const htmlThinking = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeMockStore({ conversations: [convWorking] }) },
       e(ConversationTimeline, {
         conversation: convWorking,
@@ -160,7 +160,7 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
   // 2. 思考完毕开始产出正文阶段（live.text 到达）：思考过程自动折叠，正文露出
   const htmlTextStreaming = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeMockStore({ conversations: [convWorking] }) },
       e(ConversationTimeline, {
         conversation: convWorking,
@@ -196,7 +196,7 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
 
   const htmlSettled = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeMockStore({ conversations: [convSettled] }) },
       e(ConversationTimeline, {
         conversation: convSettled,

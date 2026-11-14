@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import type { PluginSummary } from '@helm/protocol'
 import { ApiClientError, pluginsApi } from '../lib/api.js'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginCard } from './PluginCard.js'
 import { PluginDetailDrawer } from './PluginDetailDrawer.js'

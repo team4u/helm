@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { SkillCard } from './SkillCard.js'

@@ -1,6 +1,6 @@
 import React from 'react'
 import type { SkillSummary } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { getSkillSourceBadge } from './skill-center-model.js'
 
 export interface SkillCardProps {

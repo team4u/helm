@@ -9,9 +9,9 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary, PluginUiContribution } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, spaceForTarget, type HelmStoreValue, type ResolvedTarget, type SidebarSpace } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 // happy-dom 全局就绪后再加载 react-dom/client（静态导入会捕获注册前的 Node 全局）
@@ -99,7 +99,7 @@ function MutableStoreSidebar({
 }): React.ReactElement {
   const [store, setStore] = React.useState<HelmStoreValue>(base)
   apiRef.current.update = (patch) => setStore((current) => ({ ...current, ...patch }))
-  return e(HelmStoreContext.Provider, { value: store }, e(Sidebar))
+  return e(HostStoreProviders, { value: store }, e(Sidebar))
 }
 
 /** 空间代表目标（模拟真实 Provider 的空间回跳：views 取首个可用 screen，settings 缺省角色中心）。
@@ -123,7 +123,7 @@ function SpaceAwareSidebar({ base }: { base: HelmStoreValue }): React.ReactEleme
       setPrimary(SPACE_REPRESENTATIVE[space])
     },
   }), [base, primary])
-  return e(HelmStoreContext.Provider, { value: store }, e(Sidebar))
+  return e(HostStoreProviders, { value: store }, e(Sidebar))
 }
 
 function render(store: HelmStoreValue, element: React.ReactElement): void {
@@ -136,7 +136,7 @@ function render(store: HelmStoreValue, element: React.ReactElement): void {
   }
   document.body.innerHTML = '<div id="test-root"></div>'
   root = createRoot(container())
-  root.render(e(HelmStoreContext.Provider, { value: store }, element))
+  root.render(e(HostStoreProviders, { value: store }, element))
 }
 
 test('Sidebar 空间切换：对话空间默认渲染智能体，视图空间渲染 screen 贡献', { timeout: 60_000 }, async () => {

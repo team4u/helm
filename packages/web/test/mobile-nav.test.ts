@@ -11,7 +11,7 @@ const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawe
 const conversationDrawerSource = readFileSync(new URL('../src/conversation/ConversationDrawer.tsx', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
 const stylesCss = readHostStyles()
-const overlayStackSource = readFileSync(new URL('../src/ui/overlay-stack.ts', import.meta.url), 'utf8')
+const overlayStackSource = readFileSync(new URL('../../plugin-client/src/ui/overlay-stack.ts', import.meta.url), 'utf8')
 
 test('index.html viewport 配置包含 viewport-fit=cover', { timeout: 60_000 }, () => {
   assert.match(

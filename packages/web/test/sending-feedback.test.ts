@@ -5,9 +5,9 @@ import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationLive, ConversationStatus, ConversationSummary } from '@helm/protocol'
 import { sendingPendingVisible } from '../src/conversation/composer-model.js'
 import { emptyLiveState } from '../src/lib/live-state.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 // 与现有 SSR 测试一致，为 tsx 的 classic JSX 转换提供 React。
 ;(globalThis as Record<string, unknown>).React = React
@@ -42,7 +42,7 @@ function renderTimeline(status: ConversationStatus, sending: boolean, entries: C
     getPluginSessionDoc: asyncNoop,
     retrySessionDoc: noop,
   }
-  return renderToString(React.createElement(HelmStoreContext.Provider, { value: store },
+  return renderToString(React.createElement(HostStoreProviders, { value: store },
     React.createElement(ConversationTimeline, {
       conversation, detailEntries: entries, sendingPending: sendingPendingVisible(sending, status),
       ...(live ? { live } : {}), onRequestEdit: noop,

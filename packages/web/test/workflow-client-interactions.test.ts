@@ -12,7 +12,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ConversationSummary, PluginClientContext as PluginClientContextType } from '@helm/protocol'
-import { PluginClientContext } from '../src/lib/plugin-client-context.js'
+import { PluginClientContext } from '@helm/plugin-client'
 import {
   importWorkflowClientModule,
   mountSharedPluginNamespaces,

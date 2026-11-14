@@ -1,4 +1,4 @@
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 
 export function ToastOverlay() {

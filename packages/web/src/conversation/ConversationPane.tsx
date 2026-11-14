@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationAttachmentRef } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { isConversationDeletable, isHumanSelectableProfile } from '../shell/sidebar-model.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/DropdownMenu.js'

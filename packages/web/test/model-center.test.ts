@@ -10,7 +10,6 @@ import { renderToStaticMarkup, renderToString } from 'react-dom/server'
 import type { ProviderConfig } from '@helm/protocol'
 import type { ModelProviderSummary } from '@helm/protocol'
 import type { ModelDescriptor } from '../src/lib/api.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { ModelCard } from '../src/models/ModelCard.js'
 import { ModelCenter } from '../src/models/ModelCenter.js'
 import {
@@ -24,6 +23,7 @@ import {
 } from '../src/models/model-center-model.js'
 import { ModelDetailDrawer } from '../src/models/ModelDetailDrawer.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -478,7 +478,7 @@ test('ModelCenter SSR: 完整渲染顶栏、Tab 栏、检索框、分类药丸�
   })
 
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(ModelCenter, { inlineDrawer: true })),
+    e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })),
   )
 
   // 1. 顶栏标题与副标题
@@ -511,7 +511,7 @@ test('ModelCenter SSR: 目标携带 providerId 时自动唤出对应详情抽屉
   })
 
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(ModelCenter, { inlineDrawer: true })),
+    e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })),
   )
 
   // 抽屉展开且含有 Anthropic 详情
@@ -533,7 +533,7 @@ test('ModelCenter SSR: 空状态与分屏模式渲染', { timeout: 60_000 }, () 
   // 传入空列表触发空状态
   const htmlEmpty = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ModelCenter, {
         providers: [],
@@ -559,7 +559,7 @@ test('ModelCenter SSR: 目标携带 tab=defaults 时内联全局默认配置表�
   })
 
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(ModelCenter, { inlineDrawer: true })),
+    e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })),
   )
 
   // Tab 表单内联呈现，不再唤出 defaults 抽屉
@@ -592,7 +592,7 @@ test('ModelCenter SSR: 后端目录返回插件网关时呈现动态供应商卡
 
   // listModelProviders 尚未返回前不渲染（初始 catalog 为空数组）
   const htmlInitial = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(ModelCenter, { inlineDrawer: true })),
+    e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })),
   )
   assert.doesNotMatch(htmlInitial, /Magpie/)
 
@@ -605,7 +605,7 @@ test('ModelCenter SSR: 后端目录返回插件网关时呈现动态供应商卡
 
   const html = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ModelCenter, { providers: merged, inlineDrawer: true }),
     ),

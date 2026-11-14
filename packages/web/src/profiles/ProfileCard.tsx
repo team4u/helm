@@ -5,7 +5,7 @@ import {
   isSystemProfile,
   resolveProfileModel,
 } from './profile-center-model.js'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 
 export interface ProfileCardProps {
   profile: Profile

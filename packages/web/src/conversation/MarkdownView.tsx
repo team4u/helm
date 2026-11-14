@@ -3,12 +3,11 @@ import type { ReactNode } from 'react'
 import Markdown, { type Components, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { SyntaxCode } from './SyntaxCode.js'
-import { CopyButton } from './CopyButton.js'
-import { HelmIcon } from '../lib/icons.js'
+import { CopyButton, HelmIcon, markdownUrlTransform, parseArtifactUrl } from '@helm/plugin-client'
+import type { MarkdownViewProps } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { CodeBlockRenderer } from './CodeBlockRenderer.js'
 import { artifactsApi } from '../lib/api.js'
-import { markdownUrlTransform, parseArtifactUrl } from './artifact-link.js'
 import {
   countHeadingsUpToH3,
   remarkHeadingIndices,
@@ -18,12 +17,8 @@ import {
 /** 整篇渲染（非流式与 gate 回退路径）复用同一无状态插件组。 */
 const wholeDocumentRemarkPlugins = [remarkGfm, remarkHeadingIndices]
 
-export interface MarkdownViewProps {
-  text: string
-  conversationId?: number
-  /** true = 流式正文：已完成前缀块冻结复用解析，仅末尾可变块重解析。 */
-  streaming?: boolean
-}
+/** 宿主标准 Markdown 渲染的 props 契约唯一真源在 @helm/plugin-client（本组件经宿主端口注入 SDK）。 */
+export type { MarkdownViewProps }
 
 /**
  * 独立语法高亮代码块（产物预览等非 Markdown 场景消费）：

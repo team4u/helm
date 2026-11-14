@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { Tooltip } from './Tooltip.js'
 
 export interface CloseSplitButtonProps {

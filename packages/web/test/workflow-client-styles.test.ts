@@ -9,7 +9,7 @@ import { renderToString } from 'react-dom/server'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginClientContext as PluginClientContextType, WorkflowRunSummary } from '@helm/protocol'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
-import { PluginClientContext } from '../src/lib/plugin-client-context.js'
+import { PluginClientContext } from '@helm/plugin-client'
 import { evictPluginClientCache, getCachedClientComponent, loadPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { mountSharedPluginNamespaces, setWorkflowClientStub } from './helpers/workflow-client.js'
 

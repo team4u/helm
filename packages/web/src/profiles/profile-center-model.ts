@@ -5,7 +5,7 @@ import {
   PROFILE_STARTER_PROMPT_MAX_LENGTH,
 } from '@helm/protocol'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
-import type { SelectOption } from '../ui/select-model.js'
+import type { SelectOption } from '@helm/plugin-client'
 
 declare module '@helm/protocol' {
   interface Profile {

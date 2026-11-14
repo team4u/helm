@@ -10,7 +10,6 @@ import type {
   SidebarSectionSpec,
   SkillSummary,
 } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, resolveTargetString, type HelmStoreValue } from '../src/lib/types.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import {
@@ -34,6 +33,7 @@ import {
   isSkillVisible,
   partitionSidebarUi,
 } from '../src/shell/sidebar-model.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const noop = () => {}
 const asyncNoop = async () => undefined
@@ -832,7 +832,7 @@ test('删除回退仿真：主屏/分屏/抽屉命中被删会话时回该智能
 
 test('SSR 渲染回归：Sidebar 包含批量管理按钮与极简无 Emoji 验证', { timeout: 60_000 }, () => {
   const store = makeTestStore()
-  const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
+  const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
   // 智能体分组头部包含 check-square 批量管理按钮
   assert.ok(html.includes('title="批量管理会话"'), '应渲染批量管理切换按钮')
@@ -892,7 +892,7 @@ test('Sidebar 状态圆点渲染验证：五态圆点与单会话站位行', { t
     conv({ id: 22, title: '异常 C', profileId: 'auditor', status: 'error' }),
     conv({ id: 23, title: '完成 D', profileId: 'reporter', status: 'done' }),
   )
-  const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
+  const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
   // 1) idle 不产生任何圆点（conversationStatusDotClass 对 idle 返回 null）
   assert.ok(!html.includes('status-dot-idle'), 'idle 会话不得渲染状态圆点')
@@ -925,7 +925,7 @@ test('Sidebar 状态圆点渲染验证：五态圆点与单会话站位行', { t
 
 test('Sidebar 双层导航：Activity Rail 空间切换与系统中心直达（SSR）', { timeout: 60_000 }, () => {
   const store = makeTestStore()
-  const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
+  const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
   // Rail 结构：三空间切换 + 主题按钮均带 aria-label；系统中心入口收敛到设置空间列表
   assert.ok(html.includes('activity-rail'), '应渲染 Activity Rail 容器')
@@ -950,7 +950,7 @@ test('Sidebar 双层导航：Activity Rail 空间切换与系统中心直达（S
 
 test('Sidebar 设置空间：系统中心纵向列表与激活高亮（SSR）', { timeout: 60_000 }, () => {
   const store = makeTestStore({ primaryTarget: { kind: 'models' } })
-  const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
+  const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
   assert.ok(html.includes('settings-nav'), '设置空间渲染系统中心列表')
   for (const label of ['角色', '模型与凭据', '技能库', '计算节点', '插件中心']) {
@@ -972,7 +972,7 @@ test('Sidebar 双层导航：单展开仅当前智能体显示话题子列表，
     ],
     profiles: [{ id: 'assistant', name: '个人助理' }],
   })
-  const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
+  const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
   // 单展开：当前会话所属智能体（assistant）展开话题子列表
   assert.ok(html.includes('agent-conversations-list'), '当前智能体渲染话题子列表')

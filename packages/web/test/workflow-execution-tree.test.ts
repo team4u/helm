@@ -21,7 +21,7 @@ import type {
   WorkflowNodeState,
   WorkflowRunSummary,
 } from '@helm/protocol'
-import { PluginClientContext } from '../src/lib/plugin-client-context.js'
+import { PluginClientContext } from '@helm/plugin-client'
 import {
   importWorkflowClientModule,
   importWorkflowModels,

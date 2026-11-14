@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore } from 'react'
+import { createContext, useCallback, useContext, useEffect, useSyncExternalStore } from 'react'
 import type { SessionDocKey } from './session-docs.js'
 import { getSessionDocState, subscribeSessionDoc } from './session-docs.js'
 import type { HelmStoreValue } from './types.js'
@@ -14,64 +14,14 @@ export function useHelmStore(): HelmStoreValue {
 }
 
 // ---------------------------------------------------------------------------
-// 会话级插件文档（sessionDoc）订阅 hook：ref-count 共享专用 SSE 流，
-// 仅实际挂载引用才连接；详见 lib/session-docs.ts。
+// 会话级插件文档（sessionDoc）批量订阅 hooks（宿主专用）：
+// 单值 / 诊断订阅见 @helm/plugin-client 的 usePluginSessionDocValue /
+// usePluginSessionDocState（端口驱动，插件与宿主共享同一实现）。
+// ref-count 共享专用 SSE 流，仅实际挂载引用才连接；详见 lib/session-docs.ts。
 // ---------------------------------------------------------------------------
 
-/** useSyncExternalStore 快照形状（与 lib/session-docs.ts getSessionDocState 一致）。 */
-interface SessionDocSnapshotRef {
-  value?: unknown
-  hasValue: boolean
-  deleted: boolean
-  error?: string
-  connected: boolean
-}
-
-const EMPTY_SESSION_DOC: SessionDocSnapshotRef = { hasValue: false, deleted: false, connected: false }
-
 /**
- * 响应式订阅会话级公开文档：(pluginId, docName, conversationId) 元组仅在
- * 有挂载订阅者时才开专用 SSE 流。delete 帧（deleted=true）按协议携带
- * value=initial（reset 语义），照常返回该初始值；只有不存在/未初始化/出错
- * 才返回 undefined。conversationId 为 undefined 时返回 undefined 且不开流。
- */
-export function usePluginSessionDoc<T = unknown>(
-  docName: string,
-  options?: { conversationId?: number; pluginId?: string },
-): T | undefined {
-  const state = usePluginSessionDocDiagnostics(docName, options)
-  if (!state.hasValue || state.error !== undefined) return undefined
-  return state.value as T | undefined
-}
-
-/** 订阅诊断态（错误/连接状态/删除标记）：供宿主或高级组件显式展示，不静默降级。 */
-export function usePluginSessionDocDiagnostics(
-  docName: string,
-  options?: { conversationId?: number; pluginId?: string },
-): SessionDocSnapshotRef {
-  // 仅依赖稳定的具名函数与 key：store 对象本身随全局 SSE 状态频繁换引用，
-  // 依赖它会导致每次全局事件都退订（refcount 归零清缓存）再重开流。
-  const { subscribeSessionDoc, getSessionDocState } = useHelmStore()
-  const pluginId = options?.pluginId
-  const conversationId = options?.conversationId
-  const key = useMemo<SessionDocKey | null>(
-    () => (pluginId !== undefined && conversationId !== undefined && docName !== '' ? { pluginId, docName, conversationId } : null),
-    [pluginId, docName, conversationId],
-  )
-  const subscribe = useCallback(
-    (listener: () => void) => (key === null ? () => {} : subscribeSessionDoc(key, listener)),
-    [subscribeSessionDoc, key],
-  )
-  return useSyncExternalStore(
-    subscribe,
-    () => (key === null ? EMPTY_SESSION_DOC : getSessionDocState(key)),
-    () => EMPTY_SESSION_DOC,
-  )
-}
-
-/**
- * 批量订阅同一插件同一会话的多个会话级文档，返回 `{ [docName]: value }`，
- * 供 HelmSpecView 注入 `$sessionDocs` 求值上下文（声明式 sessionDocs 双轨集成）。
+ * 批量订阅同一插件同一会话的多个会话级文档，返回 `{ [docName]: value }`。
  * 任一文档出错时对应键缺失，并在快照上如实暴露错误（不静默空表）。
  */
 export function usePluginSessionDocsMap(
@@ -136,25 +86,7 @@ function cacheSame(prev: Record<string, unknown>, next: Record<string, unknown>)
 }
 
 /**
- * 订阅指定插件的公开文档（public doc），首次自动触发 GET /api/plugins/:id/docs/:name，
- * 随后随 SSE `plugin.doc.updated` 实时自动重渲染。
- */
-export function usePluginDoc<T = unknown>(pluginId: string, docName: string): T | undefined {
-  const store = useHelmStore()
-  const key = `${pluginId}/${docName}`
-  const value = store.pluginDocs[key] as T | undefined
-
-  const { ensurePluginDoc, authenticated } = store
-  useEffect(() => {
-    if (value === undefined && authenticated) void ensurePluginDoc(pluginId, docName)
-  }, [pluginId, docName, value, authenticated, ensurePluginDoc])
-
-  return value
-}
-
-/**
- * 批量订阅同一插件的多个公开文档，返回 `{ [docName]: docValue }` 映射表，
- * 供 `<HelmSpecView />` 直接注入 `$docs` 求值上下文。
+ * 批量订阅同一插件的多个公开文档，返回 `{ [docName]: docValue }` 映射表。
  */
 export function usePluginDocsMap(
   pluginId: string | undefined,
@@ -181,3 +113,5 @@ export function usePluginDocsMap(
   }
   return map
 }
+
+export type { SessionDocKey }

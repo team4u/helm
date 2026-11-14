@@ -8,10 +8,10 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { evictPluginClientCache, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import { mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 
 GlobalRegistrator.register()
@@ -85,7 +85,7 @@ test('已挂载插件视图在快照重建后重载模块与样式，无关插�
       }
     }
 
-    await reload(() => root.render(React.createElement(HelmStoreContext.Provider, { value: makeTestStore() },
+    await reload(() => root.render(React.createElement(HostStoreProviders, { value: makeTestStore() },
       React.createElement(PluginUiView, { pluginId: 'snapshot-plugin', spec: { client: { module: 'index.tsx', export: 'Panel' } } }))))
     assert.equal(host.querySelector('.revision-card')?.getAttribute('data-generation'), '1')
     await act(async () => { evictPluginClientCache('another-plugin') })

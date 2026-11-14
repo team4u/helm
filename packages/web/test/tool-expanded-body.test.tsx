@@ -17,8 +17,8 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import type { ToolTrace } from '../src/conversation/timeline-model.js'
 import { ToolExpandedBody } from '../src/conversation/ToolExpandedBody.js'
 
@@ -67,12 +67,12 @@ store.setActiveModal = ((modal: { kind: string; artifactId?: string }) => {
 }) as typeof store.setActiveModal
 
 function bodyUi(tool: ToolTrace): React.ReactElement {
-  return e(HelmStoreContext.Provider, { value: store }, e(ToolExpandedBody, { tool, conversationId: 1 }))
+  return e(HostStoreProviders, { value: store }, e(ToolExpandedBody, { tool, conversationId: 1 }))
 }
 
 function rowUi(tool: ToolTrace, defaultOpen = false): React.ReactElement {
   return e(
-    HelmStoreContext.Provider,
+    HostStoreProviders,
     { value: store },
     e(TraceRow, { tool, conversationId: 1, defaultOpen, siblingCalls: [] }),
   )

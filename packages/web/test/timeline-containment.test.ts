@@ -6,6 +6,7 @@ import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import {
   CONTAINMENT_INTRINSIC_PX,
   containmentClassName,
@@ -206,7 +207,7 @@ async function renderTimeline(opts: RenderOptions): Promise<ReturnType<typeof ma
     root = createRoot(host!)
     root.render(
       e(
-        HelmStoreContext.Provider,
+        HostStoreProviders,
         { value: store },
         e(ConversationTimeline, {
           conversation: conv,
@@ -428,7 +429,7 @@ test('IO 路径：锚点集合变化（加载更早历史）时重绑观察器�
       act(async () => {
         root!.render(
           e(
-            HelmStoreContext.Provider,
+            HostStoreProviders,
             { value: store },
             e(ConversationTimeline, {
               conversation: conv,

@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginMicroAction } from './PluginMicroAction.js'
 import { matchConversationActions } from '../conversation/action-model.js'

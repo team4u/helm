@@ -7,7 +7,7 @@ import {
 } from './plugin-card-model.js'
 import type { PluginSummary } from '@helm/protocol'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helm/plugin-client'
 import { HelmStoreContext } from '../lib/store-context.js'
 import {
   AlertDialog,
@@ -19,16 +19,7 @@ import {
   AlertDialogPortal,
   AlertDialogTitle,
 } from '../ui/AlertDialog.js'
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-} from '../ui/Dialog.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { Switch } from '../ui/Switch.js'
 import {
   formatInstalledAt,
   pluginPackageErrorText,

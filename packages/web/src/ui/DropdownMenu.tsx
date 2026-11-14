@@ -1,6 +1,6 @@
 import * as React from 'react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
-import { useOverlayChildStyle } from './overlay-stack.js'
+import { useOverlayChildStyle } from '@helm/plugin-client'
 
 export interface DropdownMenuPortalProps extends DropdownMenuPrimitive.DropdownMenuPortalProps {}
 

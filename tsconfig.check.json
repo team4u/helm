@@ -6,11 +6,15 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@helm/plugin-client": ["packages/web/src/lib/plugin-client-sdk.ts"]
+      "@helm/plugin-client": ["packages/plugin-client/src/index.ts"]
     }
   },
   "include": [
     "packages/protocol/src/**/*.ts",
+    "packages/plugin-client/src/**/*.ts",
+    "packages/plugin-client/src/**/*.tsx",
+    "packages/plugin-client/test/**/*.ts",
+    "packages/plugin-client/test/**/*.tsx",
     "packages/kernel/src/**/*.ts",
     "packages/kernel/test/**/*.ts",
     "packages/node/src/**/*.ts",

@@ -1,12 +1,18 @@
-import * as React from 'react'
+/**
+ * 测试 store 替身工厂（纯 web 模块，不引入 @helm/plugin-client 的 Radix 依赖图）：
+ * happy-dom 环境下需要交互式展开 Radix 浮层的测试遵循「GlobalRegistrator.register()
+ * 之后再动态加载」约定；本模块可被静态导入而不破坏该约定。
+ * Provider 栈见 helpers/host-store.ts（静态引入 SDK，需按约定动态加载）。
+ */
 import { HelmStoreContext } from '../../src/lib/store-context.js'
-import { PluginClientContext, createPluginClientContext } from '../../src/lib/plugin-client-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../../src/lib/types.js'
 import {
   getSessionDocState,
   subscribeSessionDoc,
   type SessionDocKey,
 } from '../../src/lib/session-docs.js'
+
+export { HelmStoreContext }
 
 export function makeTestStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
   const noop = () => {}
@@ -33,10 +39,4 @@ export function makeTestStore(overrides: Partial<HelmStoreValue> = {}): HelmStor
     ...overrides,
   }
   return store
-}
-
-/** 同时注入真实宿主 store 与 SDK 上下文，不替换 hooks 或组件事件。 */
-export function TestStoreProvider({ value, children }: { value: HelmStoreValue; children?: React.ReactNode }): React.ReactNode {
-  return React.createElement(HelmStoreContext.Provider, { value },
-    React.createElement(PluginClientContext.Provider, { value: createPluginClientContext(value, 'builtin:workflow', 1) }, children))
 }

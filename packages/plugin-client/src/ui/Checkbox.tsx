@@ -1,5 +1,5 @@
 import React, { useId } from 'react'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '../icons.js'
 
 export interface CheckboxProps {
   checked: boolean

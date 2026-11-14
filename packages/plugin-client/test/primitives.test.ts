@@ -12,8 +12,8 @@ import * as React from 'react'
 import { Fragment } from 'react'
 import { renderToString } from 'react-dom/server'
 import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helm/protocol'
-import * as HelmPluginClient from '../src/lib/plugin-client-sdk.js'
-import { Screen, ScreenSection, DataTable, KvGrid } from '../src/lib/plugin-client-primitives.js'
+import * as HelmPluginClient from '../src/index.js'
+import { Screen, ScreenSection, DataTable, KvGrid } from '../src/primitives.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React

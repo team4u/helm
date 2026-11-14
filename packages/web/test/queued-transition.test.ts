@@ -5,9 +5,9 @@ import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import { emptyLiveState } from '../src/lib/live-state.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 ;(globalThis as Record<string, unknown>).React = React
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
@@ -43,7 +43,7 @@ function render(live: ConversationLive): string {
     getPluginSessionDoc: asyncNoop,
     retrySessionDoc: noop,
   }
-  return renderToString(React.createElement(HelmStoreContext.Provider, { value: store },
+  return renderToString(React.createElement(HostStoreProviders, { value: store },
     React.createElement(ConversationTimeline, { conversation, detailEntries: [], live, onRequestEdit: () => {} })))
 }
 

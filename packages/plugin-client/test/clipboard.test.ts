@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { copyToClipboard } from '../src/conversation/clipboard.js'
+import { copyToClipboard } from '../src/clipboard.js'
 
 test('copyToClipboard: 当 navigator.clipboard.writeText 可用时优先调用并返回 true', { timeout: 60_000 }, async () => {
   let copiedText = ''

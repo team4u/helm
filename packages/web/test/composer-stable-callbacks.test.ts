@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -20,7 +21,6 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 import type { ArtifactMetadata, ConversationSummary } from '@helm/protocol'
 import { conversationsApi } from '../src/lib/api.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 
 const { Composer } = await import('../src/conversation/Composer.js')
@@ -87,7 +87,7 @@ function mountComposer(store: HelmStoreValue, onSendingChange?: (sending: boolea
     act(() => {
       root.render(
         React.createElement(
-          HelmStoreContext.Provider,
+          HostStoreProviders,
           { value: store },
           React.createElement(Composer, {
             key,

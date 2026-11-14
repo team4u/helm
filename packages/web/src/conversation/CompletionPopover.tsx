@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { MergedCompletionItem } from './composer-completion-model.js'
 import { COMPLETION_VISIBLE_LIMIT } from './composer-completion-model.js'
 import type { CompletionSourceSnapshot } from './use-composer-completion.js'
-import { Popover, PopoverAnchor, PopoverContent } from '../ui/Popover.js'
+import { Popover, PopoverAnchor, PopoverContent } from '@helm/plugin-client'
 
 export interface CompletionPopoverProps {
   open: boolean

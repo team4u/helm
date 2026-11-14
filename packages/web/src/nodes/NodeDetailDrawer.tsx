@@ -1,8 +1,6 @@
 import React, { useState } from 'react'
-import { copyToClipboard } from '../conversation/clipboard.js'
-import { CopyButton } from '../conversation/CopyButton.js'
+import { copyToClipboard, CopyButton, HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot } from '@helm/plugin-client'
 import { nodesApi, type NodeUpgradeCheckResult } from '../lib/api.js'
-import { HelmIcon } from '../lib/icons.js'
 import {
   buildNodeConnectGuide,
   formatBytes,
@@ -10,15 +8,6 @@ import {
   formatUsage,
   validateNodeIdInput,
 } from '../modals/nodes-modal-model.js'
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-} from '../ui/Dialog.js'
-import { PluginSlot } from '../ui/PluginSlot.js'
 import {
   formatNodePlatformArch,
   getNodeDisplayName,

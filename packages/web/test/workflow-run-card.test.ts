@@ -11,7 +11,7 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { ConversationSummary, PluginClientContext as PluginClientContextType, WorkbenchPanelProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
-import { PluginClientContext } from '../src/lib/plugin-client-context.js'
+import { PluginClientContext } from '@helm/plugin-client'
 import {
   importWorkflowClientModule,
   importWorkflowModels,

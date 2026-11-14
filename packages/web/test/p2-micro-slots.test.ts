@@ -37,6 +37,7 @@ import {
   matchTimelineRenderer,
   sortByPriorityDescStable,
 } from '../src/conversation/timeline-model.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -314,7 +315,7 @@ test('PluginMicroAction action-only：渲染图标按钮，点击调用 actionPl
     await act(async () => {
       root.render(
         e(
-          HelmStoreContext.Provider,
+          HostStoreProviders,
           { value: store },
           e(PluginMicroAction, { action, variant: 'toolbar', conversationId: 42 }),
         ),
@@ -328,7 +329,7 @@ test('PluginMicroAction action-only：渲染图标按钮，点击调用 actionPl
     await act(async () => {
       root.render(
         e(
-          HelmStoreContext.Provider,
+          HostStoreProviders,
           { value: store },
           e('div', { onClick: () => { outerClicked = true } },
             e(PluginMicroAction, { action, variant: 'toolbar', conversationId: 42 })),
@@ -373,7 +374,7 @@ test('PluginMicroAction：pending 期间禁用防重复提交，失败显式通�
   const root = createRoot(host)
   try {
     await act(async () => {
-      root.render(e(HelmStoreContext.Provider, { value: store },
+      root.render(e(HostStoreProviders, { value: store },
         e(PluginMicroAction, { action, variant: 'hover', conversationId: 20, entryId: '33' })))
     })
     const btn = host.querySelector('button') as HTMLButtonElement
@@ -410,7 +411,7 @@ test('PluginMicroAction menu 形态：popover-item 菜单项 + onInvoked 关闭�
   const root = createRoot(host)
   try {
     await act(async () => {
-      root.render(e(HelmStoreContext.Provider, { value: store },
+      root.render(e(HostStoreProviders, { value: store },
         e(PluginMicroAction, { action, variant: 'menu', conversationId: 1, onInvoked: () => { invoked++ } })))
     })
     const item = host.querySelector('button.popover-item') as HTMLButtonElement
@@ -447,7 +448,7 @@ test('PluginMicroAction 声明 client：内联 PluginUiView 渲染组件内容�
   }
   const host = document.createElement('div')
   document.body.appendChild(host)
-  const element = e(HelmStoreContext.Provider, { value: store },
+  const element = e(HostStoreProviders, { value: store },
     e(PluginMicroAction, { action, variant: 'toolbar', conversationId: 1, slotProps: { conversationId: 1 } }))
   const first = createRoot(host)
   let root = first
@@ -502,7 +503,7 @@ test('ConversationTimeline：timeline.entry.action 仅在匹配 kind/role 的消
   ]
   const html = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ConversationTimeline, { conversation: humanConv, detailEntries: entries, onRequestEdit: () => {} }),
     ),
@@ -524,14 +525,14 @@ test('ConversationRowActionsMenu：仅在该会话 scope 命中时渲染菜单�
   ]
   const scopedStore = makeTestStore({ conversations: [workerConv], groupedUi: groupUiContributions(contributions) })
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: scopedStore },
+    e(HostStoreProviders, { value: scopedStore },
       e(ConversationRowActionsMenu, { conversation: workerConv })),
   )
   assert.match(html, /插件会话操作/)
 
   const humanStore = makeTestStore({ conversations: [humanConv], groupedUi: groupUiContributions(contributions) })
   const emptyHtml = renderToString(
-    e(HelmStoreContext.Provider, { value: humanStore },
+    e(HostStoreProviders, { value: humanStore },
       e(ConversationRowActionsMenu, { conversation: humanConv })),
   )
   assert.equal(emptyHtml, '', 'scope 未命中时零渲染、零视觉残留')
@@ -560,7 +561,7 @@ test('ConversationPane SSR：placement=toolbar 的插件动作直出顶栏，men
     groupedUi: groupUiContributions(contributions),
   })
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store },
+    e(HostStoreProviders, { value: store },
       e(ConversationPane, { conversationId: 10 })),
   )
   // toolbar 动作直出顶栏（含标签与图标按钮）

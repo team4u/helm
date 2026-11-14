@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { HelmStoreContext } from '../src/lib/store-context.js'
 
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -17,7 +18,6 @@ const { renderToString } = await import('react-dom/server')
 ;(globalThis as Record<string, unknown>).React = React
 
 import type { SkillSummary } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import {
   buildSkillCategoryCounts,
   filterSkills,
@@ -29,7 +29,6 @@ import {
   summarizeSkills,
   type SkillCategoryTab,
 } from '../src/skills/skill-center-model.js'
-import { SkillCard } from '../src/skills/SkillCard.js'
 import {
   buildSkillFileList,
   extractSkillFrontmatter,
@@ -44,6 +43,9 @@ import { makeTestStore } from './helpers/store.js'
 // 抽屉与技能中心携带 @radix-ui/react-select 依赖图，须在 happy-dom
 // GlobalRegistrator.register() 之后动态加载（与 select.test.ts 同一约定），
 // 否则 Radix Select 下拉浮层在预注册环境中无法展开。
+const { HostStoreProviders } = await import('./helpers/host-store.js')
+// SkillCard 经 @helm/plugin-client（Radix 依赖图）静态引用 HelmIcon：同约定 register 后动态加载
+const { SkillCard } = await import('../src/skills/SkillCard.js')
 const { SkillDetailDrawer } = await import('../src/skills/SkillDetailDrawer.js')
 const { SkillCenter } = await import('../src/skills/SkillCenter.js')
 
@@ -1179,7 +1181,7 @@ test('SkillCenter: SSR 渲染顶栏、检索栏、网格流与零 Emoji 铁律',
 
   const html = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(SkillCenter, { inlineDrawer: true }),
     ),
@@ -1217,7 +1219,7 @@ test('SkillCenter: 当无匹配项时渲染空状态且零 Emoji', { timeout: 60
 
   const html = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(SkillCenter, { inlineDrawer: true }),
     ),
@@ -1245,7 +1247,7 @@ test('SkillCenter: 交互过滤、搜索与抽屉联动 (openTarget)', { timeout
   await act(async () => {
     root.render(
       e(
-        HelmStoreContext.Provider,
+        HostStoreProviders,
         { value: store },
         e(SkillCenter, { inlineDrawer: true }),
       ),
@@ -1355,7 +1357,7 @@ test('静态规范契约：所有技能模块源码 0 Emoji 且保 Fast Refresh'
   )
 
   // 阅读器契约：文件选择必须复用公共 Select，严禁原生 select；样式不落内联
-  assert.match(drawerSrc, /import\s*\{[^}]*Select[^}]*\}\s*from\s*['"]\.\.\/ui\/Select\.js['"]/)
+  assert.match(drawerSrc, /import\s*\{[^}]*Select[^}]*\}\s*from\s*['"]@helm\/plugin-client['"]/)
   assert.ok(!drawerSrc.includes('<select'), 'SkillDetailDrawer 严禁使用原生 select')
   assert.ok(!/style=\{/.test(drawerSrc), 'SkillDetailDrawer 不得残留内联 style')
 })

@@ -10,15 +10,15 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
 import { ToolActivityProvider } from '../src/conversation/ToolActivityProvider.js'
-import { ToolActivityContext } from '../src/lib/tool-activity.js'
+import { ToolActivityContext } from '@helm/plugin-client'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import { mountSharedPluginNamespaces } from './helpers/workflow-client.js'
-import * as SDK from '../src/lib/plugin-client-context.js'
+import * as SDK from '@helm/plugin-client'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -62,7 +62,7 @@ function mount() {
   return {
     host,
     render: async (content: React.ReactNode, store: HelmStoreValue = makeTestStore()) => {
-      await act(async () => root.render(e(HelmStoreContext.Provider, { value: store }, content)))
+      await act(async () => root.render(e(HostStoreProviders, { value: store }, content)))
     },
     close: async () => { await act(async () => root.unmount()); host.remove() },
   }

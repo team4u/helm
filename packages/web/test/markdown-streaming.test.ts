@@ -23,8 +23,8 @@ import {
   splitStreamingMarkdownBlocks,
 } from '../src/conversation/markdown-model.js'
 import { MarkdownView } from '../src/conversation/MarkdownView.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 
 GlobalRegistrator.register()
@@ -101,7 +101,7 @@ async function mountView(initial: { text: string; streaming?: boolean }): Promis
     await act(async () => {
       root.render(
         React.createElement(
-          HelmStoreContext.Provider,
+          HostStoreProviders,
           { value: store },
           React.createElement(MarkdownView, props),
         ),

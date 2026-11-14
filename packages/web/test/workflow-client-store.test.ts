@@ -8,13 +8,13 @@ import type { ConversationEntry, ConversationSummary, PluginSummary, PluginUiCon
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
 import { ConversationPane } from '../src/conversation/ConversationPane.js'
 import { WorkbenchDrawer } from '../src/conversation/WorkbenchDrawer.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { applySnapshot, applyEventFrame, emptyLiveState } from '../src/lib/live-state.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { resetSessionDocSubscriptions } from '../src/lib/session-docs.js'
 import { importWorkflowClientModule, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import { workflowUi } from './helpers/workflow-ui.js'
 
 GlobalRegistrator.register()
@@ -77,7 +77,7 @@ function mount() {
   return {
     host,
     render: async (store: HelmStoreValue, content: React.ReactNode) => {
-      await act(async () => root.render(e(HelmStoreContext.Provider, { value: store }, content)))
+      await act(async () => root.render(e(HostStoreProviders, { value: store }, content)))
     },
     close: async () => { await act(async () => root.unmount()); host.remove() },
   }

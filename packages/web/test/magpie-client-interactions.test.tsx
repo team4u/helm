@@ -11,7 +11,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { PluginClientContext as PluginClientContextType } from '@helm/protocol'
-import { PluginClientContext } from '../src/lib/plugin-client-context.js'
+import { PluginClientContext } from '@helm/plugin-client'
 import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } from './helpers/builtin-clients.js'
 
 const e = React.createElement

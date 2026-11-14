@@ -30,8 +30,8 @@ import type {
   PluginUpdateResult,
 } from '@helm/protocol'
 import { ApiClientError, pluginsApi } from '../src/lib/api.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 
@@ -382,7 +382,7 @@ test('PluginDetailDrawer：更新操作调用 update 并回调刷新，changed=f
   try {
     await act(async () => {
       root.render(
-        e(HelmStoreContext.Provider, { value: store },
+        e(HostStoreProviders, { value: store },
           e(PluginDetailDrawer, {
             plugin: makeManagedPlugin(), open: true, inline: true,
             onClose: () => {}, onToggleEnabled: async () => {}, toggling: false,
@@ -562,7 +562,7 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
 
   try {
     await act(async () => {
-      root.render(e(HelmStoreContext.Provider, { value: store }, e(PluginCenter, { inlineDrawer: true })))
+      root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
     })
 
     // 打开安装模态

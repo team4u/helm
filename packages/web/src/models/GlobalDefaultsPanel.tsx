@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { assetsApi } from '../lib/api.js'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon, Select } from '@helm/plugin-client'
 import { HelmStoreContext } from '../lib/store-context.js'
-import { Select } from '../ui/Select.js'
 import { buildDefaultModelOptions, UNSET_MODEL_VALUE } from './model-center-model.js'
 
 export interface GlobalDefaultsPanelProps {

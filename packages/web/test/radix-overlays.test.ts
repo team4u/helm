@@ -11,7 +11,7 @@ import {
   PopoverPortal,
   PopoverContent,
   PopoverArrow,
-} from '../src/ui/Popover.js'
+} from '@helm/plugin-client'
 import {
   DropdownMenu,
   DropdownMenuRoot,
@@ -34,7 +34,7 @@ import {
 
 const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
 
-const popoverSource = readFileSync(new URL('../src/ui/Popover.tsx', import.meta.url), 'utf8')
+const popoverSource = readFileSync(new URL('../../plugin-client/src/ui/Popover.tsx', import.meta.url), 'utf8')
 const dropdownSource = readFileSync(new URL('../src/ui/DropdownMenu.tsx', import.meta.url), 'utf8')
 const tooltipSource = readFileSync(new URL('../src/ui/Tooltip.tsx', import.meta.url), 'utf8')
 const composerSource = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8')
@@ -222,7 +222,7 @@ test('Composer ModelPicker 接入 Radix Popover 替代手写绝对定位与事�
     composerSource.indexOf('// ---------------------------------------------------------------------------', composerSource.indexOf('function ModelPicker')),
   )
   // 引入 Popover 原语
-  assert.match(composerSource, /import\s*\{[^}]*Popover[^}]*\}\s*from\s*'\.\.\/ui\/Popover\.js'/)
+  assert.match(composerSource, /import\s*\{[^}]*Popover[^}]*\}\s*from\s*'@helm\/plugin-client'/)
   assert.match(modelPickerSlice, /<Popover open=\{open\} onOpenChange=\{setOpen\}>/)
   assert.match(modelPickerSlice, /<PopoverTrigger asChild>/)
   assert.match(modelPickerSlice, /<PopoverPortal>/)

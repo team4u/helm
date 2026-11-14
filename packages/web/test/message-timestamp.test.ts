@@ -7,8 +7,8 @@ import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
 import { formatFullTimestamp, formatMessageTime } from '../src/lib/format.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import type { AssistantTurn, HumanInputItem } from '../src/conversation/timeline-model.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { makeTestStore as makeMockStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -301,7 +301,7 @@ test('ConversationTimeline：完成回合渲染时间与耗时，以及 Tooltip 
 
   const html = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeMockStore({ conversations: [conv] }) },
       e(ConversationTimeline, {
         conversation: conv,
@@ -351,7 +351,7 @@ test('ConversationTimeline：回合处于 busy（working/live）时不提前渲�
 
   const html = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeMockStore({ conversations: [convWorking] }) },
       e(ConversationTimeline, {
         conversation: convWorking,

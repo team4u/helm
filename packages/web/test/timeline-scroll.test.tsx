@@ -6,6 +6,7 @@ import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
 
 try {
@@ -216,7 +217,7 @@ async function renderTimeline(conv: ConversationSummary, entries: ConversationEn
   await act(async () => {
     root!.render(
       e(
-        HelmStoreContext.Provider,
+        HostStoreProviders,
         { value: store },
         e(ConversationTimeline, {
           conversation: conv,

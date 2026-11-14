@@ -21,9 +21,9 @@ import {
 import { ProfileCard } from '../src/profiles/ProfileCard.js'
 import { ProfileDetailDrawer } from '../src/profiles/ProfileDetailDrawer.js'
 import { ProfileCenter } from '../src/profiles/ProfileCenter.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import type { ModelDescriptor } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import { PROFILE_DETAIL_SECTION_SLOT } from '@helm/protocol'
@@ -388,7 +388,7 @@ test('ProfileDetailDrawer：编辑已有角色模式渲染与 0 Emoji', { timeou
 
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ProfileDetailDrawer, {
         profile: mockProfiles[3], // code-reviewer (custom)
@@ -420,7 +420,7 @@ test('ProfileDetailDrawer：系统角色受保护禁删渲染断言', { timeout:
 
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ProfileDetailDrawer, {
         profile: mockProfiles[1], // watchdog (system)
@@ -443,7 +443,7 @@ test('ProfileDetailDrawer：新建角色模式与可编辑 ID 渲染断言', { t
 
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ProfileDetailDrawer, {
         profile: null,
@@ -466,7 +466,7 @@ test('ProfileDetailDrawer：思考档位随所选模型展示共享分段按钮�
   const store = makeTestStore({ models: mockModels, skills: mockSkills })
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ProfileDetailDrawer, {
         profile: { ...mockProfiles[3]!, model: 'claude-3-7-sonnet', defaultModel: 'claude-3-7-sonnet' },
@@ -489,7 +489,7 @@ test('ProfileDetailDrawer：思考档位随所选模型展示共享分段按钮�
   // 未绑定模型的表单：跟随全局缺省，不渲染档位按钮组
   const unbound = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ProfileDetailDrawer, {
         profile: { ...mockProfiles[3]!, model: undefined, defaultModel: undefined },
@@ -518,7 +518,7 @@ test('ProfileCenter：全屏中心顶栏、检索栏、卡片流网格与 0 Emoj
 
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ProfileCenter, {
         isSplit: false,
@@ -556,7 +556,7 @@ test('ProfileCenter：空状态渲染断言', { timeout: 60_000 }, () => {
 
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ProfileCenter, {
         isSplit: true,
@@ -629,7 +629,7 @@ test('ProfileDetailDrawer：经 PluginSlot 渲染 builtin:memory 注入的长期
 
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ProfileDetailDrawer, {
         profile: mockProfiles[3], // code-reviewer (custom)
@@ -649,7 +649,7 @@ test('ProfileDetailDrawer：无 memory 插件贡献时不渲染长期记忆区�
   const store = makeTestStore({ models: mockModels, skills: mockSkills })
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ProfileDetailDrawer, {
         profile: mockProfiles[3],

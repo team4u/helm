@@ -1,17 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import type { PluginDoctorReport } from '@helm/protocol'
 import { pluginsApi } from '../lib/api.js'
-import { HelmIcon } from '../lib/icons.js'
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-} from '../ui/Dialog.js'
-import { Switch } from '../ui/Switch.js'
+import { HelmIcon, Dialog, DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helm/plugin-client'
 import {
   buildDoctorCheckItems,
   detectPluginSourceKind,

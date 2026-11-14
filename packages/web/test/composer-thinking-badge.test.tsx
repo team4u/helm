@@ -14,8 +14,8 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import type { ConversationSummary } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -67,7 +67,7 @@ async function mountComposer(conversation: ConversationSummary): Promise<{ host:
   document.body.appendChild(host)
   const root = createRoot(host)
   await act(async () => {
-    root.render(e(HelmStoreContext.Provider, { value: store }, e(Composer, { conversation, prefill: null })))
+    root.render(e(HostStoreProviders, { value: store }, e(Composer, { conversation, prefill: null })))
   })
   return { host, unmount: () => { act(() => root.unmount()); host.remove() } }
 }

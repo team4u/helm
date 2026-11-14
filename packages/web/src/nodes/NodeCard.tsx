@@ -1,5 +1,5 @@
 import React from 'react'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { formatUptime } from '../modals/nodes-modal-model.js'
 import {
   formatNodePlatformArch,

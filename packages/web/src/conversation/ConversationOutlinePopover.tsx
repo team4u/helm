@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon, Popover, PopoverContent, PopoverTrigger } from '@helm/plugin-client'
 import { formatMessageTime } from '../lib/format.js'
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/Popover.js'
 import {
   countOutlineTurns,
   filterOutlineNodes,

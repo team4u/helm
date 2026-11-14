@@ -7,13 +7,13 @@ import React, { act } from 'react'
 import * as ReactDOMClient from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { findNextSelectableIndex, type SelectOption, type SelectChangeEvent } from '../src/ui/select-model.js'
+import { findNextSelectableIndex, type SelectOption, type SelectChangeEvent } from '@helm/plugin-client'
 
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
 
-const { Select } = await import('../src/ui/Select.js')
+const { Select } = await import('@helm/plugin-client')
 
 const e = React.createElement
 
@@ -336,7 +336,7 @@ test('契约：ProfileDetailDrawer 中的模型选择采用公共 Select，且�
   const stylesSource = readHostStyles()
 
   // 1. Profile 中的默认模型使用 <Select>
-  assert.match(profileDrawerSource, /import\s*\{[^}]*Select[^}]*\}\s*from\s*['"]\.\.\/ui\/Select(?:\.js)?['"]/)
+  assert.match(profileDrawerSource, /import\s*\{[^}]*Select[^}]*\}\s*from\s*['"]@helm\/plugin-client['"]/)
   assert.match(profileDrawerSource, /<Select[\s\S]*?options=\{modelOptions\}/)
 
   // 2. 样式契约：.input 与 .helm-select-trigger 严格等高（27px）与相同边框圆角规范

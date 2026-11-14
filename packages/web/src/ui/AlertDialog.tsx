@@ -1,6 +1,6 @@
 import React from 'react'
 import * as RadixAlertDialog from '@radix-ui/react-alert-dialog'
-import { OverlayLayerContext, useOverlayLayer } from './overlay-stack.js'
+import { OverlayLayerContext, useOverlayLayer } from '@helm/plugin-client'
 
 const AlertDialogInlineContext = React.createContext<boolean>(false)
 

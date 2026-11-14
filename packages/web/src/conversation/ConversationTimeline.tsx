@@ -9,13 +9,11 @@ import type {
   ToolViewSpec,
 } from '@helm/protocol'
 import { artifactsApi, conversationsApi } from '../lib/api.js'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon, ToolActivityContext, CopyButton } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { ToolActivityContext } from '../lib/tool-activity.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'
-import { CopyButton } from './CopyButton.js'
 import { MarkdownView } from './MarkdownView.js'
 import {
   buildTimelineItems,
@@ -804,7 +802,6 @@ function resolveAssistantAnchorEntry(
   }
   return lastTextEntry ?? lastAssistant
 }
-
 
 // ---------------------------------------------------------------------------
 // 高亮定位

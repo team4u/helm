@@ -15,10 +15,10 @@ import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
 import { emptyLiveState } from '../src/lib/live-state.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import { conversationStatusTooltip } from '../src/shell/sidebar-model.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 // 与 edit-resend SSR 测试一致：为 tsx 的 classic JSX 转换提供 React。
 ;(globalThis as Record<string, unknown>).React = React
@@ -58,7 +58,7 @@ function renderTimelineHtml(conversation: ConversationSummary, entries: Conversa
     retrySessionDoc: noop,
   }
   const editTargets: unknown[] = []
-  const html = renderToString(React.createElement(HelmStoreContext.Provider, { value: store },
+  const html = renderToString(React.createElement(HostStoreProviders, { value: store },
     React.createElement(ConversationTimeline, {
       conversation, detailEntries: entries,
       onRequestEdit: (target) => { editTargets.push(target) },

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -23,7 +24,6 @@ import type {
   PluginUiContribution,
 } from '@helm/protocol'
 import { conversationsApi } from '../src/lib/api.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import {
   COMPLETION_VISIBLE_LIMIT,
@@ -206,7 +206,7 @@ async function mount(conversation: ConversationSummary, opts: TestStoreOverrides
     act(() => {
       r.render(
         React.createElement(
-          HelmStoreContext.Provider,
+          HostStoreProviders,
           { value: made.store },
           React.createElement(Composer, { conversation, prefill: p }),
         ),

@@ -10,7 +10,7 @@ import {
   removeTokenBeforeCaret,
   type QualifiedCommand,
 } from '../lib/commands-model.js'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon, Popover, PopoverContent, PopoverPortal, PopoverTrigger, Select, type SelectOption } from '@helm/plugin-client'
 import { matchesUiScope } from '../lib/types.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -25,8 +25,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../ui/DropdownMenu.js'
-import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '../ui/Popover.js'
-import { Select, type SelectOption } from '../ui/Select.js'
 import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { AskDock } from './AskDock.js'
@@ -414,7 +412,6 @@ function CommandPopover({
 // 空会话起始环境配置条（开聊即锁定）
 // ---------------------------------------------------------------------------
 
-
 /** 空会话（或 /reset 后未再发消息）时展示：草稿式配置起始执行节点与工作目录。
  * 选节点只进入草稿不立即提交；跨节点切换清空 cwd 草稿（协议无节点默认目录，绝不沿用旧节点路径）；
  * 保存一次 PATCH { nodeId, cwd }，以返回值确认；未改节点时 cwd 单独可改，Enter 保存 / Escape 取消。 */
@@ -738,7 +735,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     setAttachments([])
     syncLiveDraft('', null, [])
   }, [syncLiveDraft])
-
 
   const notifyError = useCallback(
     (title: string, err: unknown) => {

@@ -15,14 +15,16 @@ import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import type { AskSpec, ConversationSummary } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
+import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
 import {
   createPluginClientContext,
   PluginClientContext,
   useConversation,
   useConversations,
-} from '../src/lib/plugin-client-context.js'
+} from '@helm/plugin-client'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -160,7 +162,7 @@ function renderProbe<T>(store: HelmStoreValue, use: () => T): { html: string; re
     return e('div', { 'data-probe': '1' }, String(JSON.stringify(captured)?.slice(0, 120) ?? ''))
   }
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(PluginClientContext.Provider, { value: stubCtx }, e(Probe))),
+    e(HostStoreProviders, { value: store }, e(PluginClientContext.Provider, { value: stubCtx }, e(Probe))),
   )
   return { html, result: captured }
 }
@@ -176,7 +178,7 @@ function mountProbe<T>(store: HelmStoreValue, use: () => T): { result: () => T |
   let root: Root | undefined
   act(() => {
     root = createRoot(host)
-    root.render(e(HelmStoreContext.Provider, { value: store }, e(PluginClientContext.Provider, { value: stubCtx }, e(Probe))))
+    root.render(e(HostStoreProviders, { value: store }, e(PluginClientContext.Provider, { value: stubCtx }, e(Probe))))
   })
   return {
     result: () => captured,
@@ -309,7 +311,7 @@ test('createPluginClientContext.openConversationDrawer：打开 conversation-dra
       workbenchCalls.push(open)
     },
   })
-  const ctx = createPluginClientContext(store, 'test:plugin', 1)
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 1)
   ctx.openConversationDrawer(42)
   assert.deepEqual(modals, [{ kind: 'conversation-drawer', conversationId: 42 }], '必须设置 conversation-drawer 模态')
   assert.deepEqual(workbenchCalls, [], '不得调用 setWorkbenchOpen（工作台保持原状）')
@@ -327,7 +329,7 @@ test('createPluginClientContext.openConversationDrawer：工作台关闭时同�
       workbenchCalls.push(open)
     },
   })
-  const ctx = createPluginClientContext(store, 'test:plugin', undefined)
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', undefined)
   ctx.openConversationDrawer(7)
   assert.deepEqual(modals, [{ kind: 'conversation-drawer', conversationId: 7 }])
   assert.deepEqual(workbenchCalls, [], '抽屉入口不得强制展开工作台')

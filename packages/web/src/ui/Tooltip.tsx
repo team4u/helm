@@ -1,6 +1,6 @@
 import * as React from 'react'
 import * as TooltipPrimitive from '@radix-ui/react-tooltip'
-import { useOverlayChildStyle } from './overlay-stack.js'
+import { useOverlayChildStyle } from '@helm/plugin-client'
 
 export interface TooltipProviderProps extends TooltipPrimitive.TooltipProviderProps {}
 

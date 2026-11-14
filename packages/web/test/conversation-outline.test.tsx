@@ -17,6 +17,7 @@ import {
 } from '../src/conversation/outline-model.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 try {
   GlobalRegistrator.register()
@@ -238,7 +239,7 @@ test('ConversationPane 顶栏渲染大纲按钮，打开浮层后支持搜索过
   document.body.appendChild(host)
   await act(async () => {
     root = createRoot(host!)
-    root.render(e(HelmStoreContext.Provider, { value: store }, e(ConversationPane, { conversationId: 10 })))
+    root.render(e(HostStoreProviders, { value: store }, e(ConversationPane, { conversationId: 10 })))
   })
 
   // 1. 顶栏出现「大纲」触发按钮且角标显示 2 轮提问

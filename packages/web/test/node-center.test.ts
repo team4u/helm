@@ -30,8 +30,8 @@ import {
 import { NodeCard } from '../src/nodes/NodeCard.js'
 import { NodeDetailDrawer } from '../src/nodes/NodeDetailDrawer.js'
 import { NodeCenter } from '../src/nodes/NodeCenter.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
 
@@ -320,7 +320,7 @@ test('NodeDetailDrawer: SSR 渲染系统概览、体检信息、接入命令行�
 
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(NodeDetailDrawer, {
         node: remoteNode,
@@ -371,7 +371,7 @@ test('NodeDetailDrawer: SSR 渲染系统概览、体检信息、接入命令行�
 test('NodeDetailDrawer: 接入新节点模式 (isNew={true}) 正确渲染', { timeout: 60_000 }, () => {
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeTestStore() },
       e(NodeDetailDrawer, {
         node: null,
@@ -401,7 +401,7 @@ test('NodeCenter: SSR 渲染顶栏、检索工具栏、分类药丸、网格流�
 
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(NodeCenter, {
         inlineDrawer: true,
@@ -444,7 +444,7 @@ test('NodeCenter: 分屏模式支持 isSplit 与 onCloseSplit', { timeout: 60_00
   let closed = false
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(NodeCenter, {
         isSplit: true,
@@ -468,7 +468,7 @@ test('NodeCenter: 选中节点时通过 primaryTarget 唤起抽屉详情', { tim
 
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(NodeCenter, {
         inlineDrawer: true,
@@ -490,7 +490,7 @@ test('NodeCenter: 空节点列表渲染友好空状态与重置按钮', { timeou
 
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(NodeCenter, {
         inlineDrawer: true,

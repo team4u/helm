@@ -1,26 +1,21 @@
 /**
- * <PluginSlot />：插件间子插槽（plugin.slot 贡献）的渲染原语（P3）。
+ * <PluginSlot />：插件间子插槽（plugin.slot 贡献）的渲染原语。
  *
  * - name 为本插件内部短名时自动拼接 `<ctx.pluginId>/<name>`；含 '/' 视为显式
  *   全限定名（'<ownerPluginId>/<slotName>'）；
- * - 从 store.groupedUi.pluginSlots 查找 target === 全限定名且命中当前会话
- *   scope 的贡献项，按 priority 降序、order 升序稳定排序（同分保持贡献顺序）；
- * - 每项独立 <PluginUiView />（自带 ViewBoundary），子项上下文的 pluginId
- *   是贡献者插件而非 owner；
- * - 环保护：SlotAncestryContext 记录渲染链上的 (贡献者插件, 贡献项 id)，
- *   同一项再次出现时显式渲染环告警并终止递归；同时限制最大嵌套深度。
+ * - 贡献项匹配与排序、单个贡献项渲染（宿主 PluginUiView）经宿主端口注入；
+ *   子项上下文的 pluginId 是贡献者插件而非 owner；
+ * - 环保护在本组件内执行：SlotAncestryContext 记录渲染链上的
+ *   (贡献者插件, 贡献项 id)，同一项再次出现时显式渲染环告警并终止递归；
+ *   同时限制最大嵌套深度。
  *
- * 本文件只导出组件（保 Fast Refresh）；排序与匹配纯函数在 plugin-slot-model.ts。
+ * 本文件只导出组件与 TS 类型（Fast Refresh 契约同源）。
  */
 import { createContext, useContext } from 'react'
 import type { ReactNode } from 'react'
-import type { ConversationSummary, PluginSlotContributionSpec } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
-import { PluginClientContext } from '../lib/plugin-client-context.js'
-import { useHelmStore } from '../lib/store-context.js'
-import { matchesUiScope, type QualifiedUiSpec } from '../lib/types.js'
-import { PluginUiView } from './PluginUiView.js'
-import { collectSlotItems } from './plugin-slot-model.js'
+import { HelmIcon } from './icons.js'
+import { usePluginClientHost } from './host-port.js'
+import { PluginClientContext } from './plugin-context.js'
 
 export interface PluginSlotProps {
   /** 本插件内部子插槽短名（自动拼接 ctx.pluginId 前缀）；含 '/' 为显式全限定名。 */
@@ -51,7 +46,7 @@ const MAX_SLOT_DEPTH = 16
 export function PluginSlot(props: PluginSlotProps): ReactNode {
   const { name, slotProps, mode = 'list', fallback, className, ownerPluginId, conversationId: explicitConversationId } = props
   const clientCtx = useContext(PluginClientContext)
-  const store = useHelmStore()
+  const host = usePluginClientHost()
   const owner = ownerPluginId ?? clientCtx?.pluginId
   const conversationId = explicitConversationId ?? clientCtx?.conversationId
   const ancestry = useContext(SlotAncestryContext)
@@ -66,11 +61,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
   }
 
   const qualified = name.includes('/') ? name : `${owner}/${name}`
-  const conversation: ConversationSummary | undefined = conversationId !== undefined
-    ? store.conversations.find((c) => c.id === conversationId)
-    : undefined
-
-  const items = collectSlotItems(store.groupedUi.pluginSlots, qualified, (scope) => matchesUiScope(conversation, scope))
+  const items = host.slots.collectItems(qualified, conversationId)
   const visible = mode === 'single' ? items.slice(0, 1) : items
 
   if (visible.length === 0) return fallback !== undefined ? <>{fallback}</> : null
@@ -87,8 +78,8 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
   return (
     <div className={className}>
       {visible.map((item) => {
-        const key = `${item.pluginId}/${item.spec.id}`
-        if (ancestry.chain.some(([pid, cid]) => pid === item.pluginId && cid === item.spec.id)) {
+        const key = `${item.pluginId}/${item.contributionId}`
+        if (ancestry.chain.some(([pid, cid]) => pid === item.pluginId && cid === item.contributionId)) {
           return (
             <div className="callout callout--warning" role="alert" key={key}>
               <HelmIcon name="alert-triangle" size={13} />
@@ -99,16 +90,14 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
         return (
           <SlotAncestryContext.Provider
             key={key}
-            value={{ chain: [...ancestry.chain, [item.pluginId, item.spec.id] as const], depth: ancestry.depth + 1 }}
+            value={{ chain: [...ancestry.chain, [item.pluginId, item.contributionId] as const], depth: ancestry.depth + 1 }}
           >
-            <PluginUiView
-              pluginId={item.pluginId}
-              spec={item.spec}
-              slotProps={slotProps}
-              conversationId={conversationId}
-              composer={clientCtx?.composer}
-              label={`插槽 ${qualified}/${item.spec.id}`}
-            />
+            {host.slots.renderItem(item, {
+              slotProps,
+              conversationId,
+              composer: clientCtx?.composer,
+              label: `插槽 ${qualified}/${item.contributionId}`,
+            })}
           </SlotAncestryContext.Provider>
         )
       })}

@@ -19,10 +19,10 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginUiContribution } from '@helm/protocol'
 import { NODE_DETAIL_SECTION_SLOT } from '@helm/protocol'
 import { NodeDetailDrawer } from '../src/nodes/NodeDetailDrawer.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -73,7 +73,7 @@ function storeWith(contributions: PluginUiContribution[], overrides: Partial<Hel
 function renderDrawer(store: HelmStoreValue, props: { node: NodeInfo | null; isNew?: boolean }): string {
   return renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(NodeDetailDrawer, {
         node: props.node,

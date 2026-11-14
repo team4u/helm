@@ -32,8 +32,8 @@ import type {
 } from '@helm/protocol'
 import { groupUiContributions } from '../src/lib/types.js'
 import { timelineEntryActionContextOf } from '../src/conversation/action-model.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -99,7 +99,7 @@ function renderTimeline(
   })
   return renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ConversationTimeline, {
         conversation,
@@ -348,7 +348,7 @@ test('action-only entry action 点击：载荷 entryId 为真实 entry.id，kind
     await act(async () => {
       root.render(
         e(
-          HelmStoreContext.Provider,
+          HostStoreProviders,
           { value: store },
           e(ConversationTimeline, {
             conversation: humanConv,

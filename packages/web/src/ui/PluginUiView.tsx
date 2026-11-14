@@ -8,11 +8,8 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { ClientComponentRef, ComposerController } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
-import { useHelmStore } from '../lib/store-context.js'
-import { createPluginClientContext, PluginClientContext } from '../lib/plugin-client-context.js'
+import { HelmIcon, createPluginClientContext, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helm/plugin-client'
 import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
-import { ViewBoundary } from './ViewBoundary.js'
 
 export interface PluginUiViewProps {
   pluginId: string
@@ -49,7 +46,7 @@ export function PluginUiView(props: PluginUiViewProps): ReactNode {
 }
 
 function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, composer, label }: PluginUiViewProps & { clientRef: ClientComponentRef }): ReactNode {
-  const store = useHelmStore()
+  const port = usePluginClientHost()
   const [retry, setRetry] = useState(0)
   const [client, setClient] = useState<ClientState>(() => {
     const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export)
@@ -107,7 +104,7 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, co
     )
   }
 
-  const ctx = createPluginClientContext(store, pluginId, conversationId, composer)
+  const ctx = createPluginClientContext(port, pluginId, conversationId, composer)
   return (
     <ViewBoundary label={label ?? '插件组件'}>
       <PluginClientContext.Provider value={ctx}>

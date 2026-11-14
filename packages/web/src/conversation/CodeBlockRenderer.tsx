@@ -8,7 +8,7 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { ComponentType } from 'react'
 import type { MarkdownCodeBlockProps } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
+import { CopyButton, createPluginClientContext, HelmIcon, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import {
   getCachedClientComponent,
@@ -20,9 +20,6 @@ import {
 } from '../lib/plugin-client.js'
 import { matchMarkdownCodeBlock } from './codeblock-registry-model.js'
 import { StandardCodeBlock } from './StandardCodeBlock.js'
-import { CopyButton } from './CopyButton.js'
-import { ViewBoundary } from '../ui/ViewBoundary.js'
-import { createPluginClientContext, PluginClientContext } from '../lib/plugin-client-context.js'
 
 type ClientState =
   | { phase: 'loading' }
@@ -78,7 +75,7 @@ function PluginCodeBlock(props: {
   conversationId?: number
 }): ReactNode {
   const { pluginId, clientRef, language, code, conversationId } = props
-  const store = useHelmStore()
+  const port = usePluginClientHost()
   const revision = useSyncExternalStore(
     subscribePluginClientCacheInvalidation,
     () => getPluginClientCacheRevision(pluginId),
@@ -143,7 +140,7 @@ function PluginCodeBlock(props: {
   }
 
   const { Component } = client
-  const ctx = createPluginClientContext(store, pluginId, conversationId)
+  const ctx = createPluginClientContext(port, pluginId, conversationId)
   return (
     <ViewBoundary label={`${language} 渲染`}>
       <PluginClientContext.Provider value={ctx}>

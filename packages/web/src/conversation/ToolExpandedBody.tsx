@@ -16,10 +16,9 @@
 import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolEditDiff } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon, CopyButton } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { formatBytes } from '../lib/format.js'
-import { CopyButton } from './CopyButton.js'
 import { SyntaxCode } from './SyntaxCode.js'
 import type { ToolTrace } from './timeline-model.js'
 import {

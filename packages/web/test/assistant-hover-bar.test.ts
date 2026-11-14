@@ -6,8 +6,8 @@ import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
 import { isAssistantTurnBusy } from '../src/conversation/timeline-model.js'
 import type { AssistantTurn } from '../src/conversation/timeline-model.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { makeTestStore as makeMockStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -206,7 +206,7 @@ test('ConversationTimeline：agent 回合响应中不显示复制与分叉按钮
   // 1. 响应中（working + live）：无 msg-hover-bar，不提前渲染「从此处分叉新会话」
   const htmlDuring = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeMockStore({ conversations: [convWorking] }) },
       e(ConversationTimeline, {
         conversation: convWorking,
@@ -229,7 +229,7 @@ test('ConversationTimeline：agent 回合响应中不显示复制与分叉按钮
   const convIdle: ConversationSummary = { ...convWorking, status: 'idle' }
   const htmlSettled = renderToString(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: makeMockStore({ conversations: [convIdle] }) },
       e(ConversationTimeline, {
         conversation: convIdle,

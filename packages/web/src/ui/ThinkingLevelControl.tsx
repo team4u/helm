@@ -1,5 +1,5 @@
 import React from 'react'
-import { Tabs, TabsList, TabsTrigger } from './Tabs.js'
+import { Tabs, TabsList, TabsTrigger } from '@helm/plugin-client'
 
 export interface ThinkingLevelControlProps {
   /** 选中值：'' 表示跟随默认（Profile / 全局继承），否则为具体档位。 */

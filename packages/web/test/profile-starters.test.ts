@@ -21,8 +21,8 @@ import {
 } from '../src/profiles/profile-center-model.js'
 import { ProfileDetailDrawer } from '../src/profiles/ProfileDetailDrawer.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 ;(globalThis as Record<string, unknown>).React = React
 const e = React.createElement
@@ -78,7 +78,7 @@ test('ProfileDetailDrawer：starters 编辑区块渲染既有条目与计数（0
   const store = makeTestStore({ profiles: [profileWithStarters], models: [] })
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ProfileDetailDrawer, {
         profile: profileWithStarters,
@@ -133,7 +133,7 @@ function renderTimeline(opts: {
   })
   const html = renderToStaticMarkup(
     e(
-      HelmStoreContext.Provider,
+      HostStoreProviders,
       { value: store },
       e(ConversationTimeline, {
         conversation,

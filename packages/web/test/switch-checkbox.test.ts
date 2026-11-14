@@ -10,8 +10,8 @@ import { renderToString } from 'react-dom/server'
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 ;(globalThis as Record<string, unknown>).React = React
-const { Switch } = await import('../src/ui/Switch.js')
-const { Checkbox } = await import('../src/ui/Checkbox.js')
+const { Switch } = await import('@helm/plugin-client')
+const { Checkbox } = await import('@helm/plugin-client')
 
 const e = React.createElement
 

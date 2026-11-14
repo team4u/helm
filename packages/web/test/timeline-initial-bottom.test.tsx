@@ -6,6 +6,7 @@ import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import { ConversationTimeline, type OutlineScrollRequest } from '../src/conversation/ConversationTimeline.js'
 
 try {
@@ -245,7 +246,7 @@ async function renderTimeline(opts: RenderOpts = {}): Promise<void> {
       ...(opts.outlineScrollRequest !== undefined ? { outlineScrollRequest: opts.outlineScrollRequest } : {}),
     },
   )
-  const wrapped = e(HelmStoreContext.Provider, { value: store }, timeline)
+  const wrapped = e(HostStoreProviders, { value: store }, timeline)
   await act(async () => {
     root = createRoot(host!)
     root.render(opts.strict === true ? e(React.StrictMode, null, wrapped) : wrapped)
@@ -270,7 +271,7 @@ async function rerenderTimeline(opts: RenderOpts): Promise<void> {
       ...(opts.outlineScrollRequest !== undefined ? { outlineScrollRequest: opts.outlineScrollRequest } : {}),
     },
   )
-  const wrapped = e(HelmStoreContext.Provider, { value: store }, timeline)
+  const wrapped = e(HostStoreProviders, { value: store }, timeline)
   await act(async () => {
     root!.render(opts.strict === true ? e(React.StrictMode, null, wrapped) : wrapped)
   })

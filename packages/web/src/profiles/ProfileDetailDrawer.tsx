@@ -12,21 +12,9 @@ import {
   validateStarterDraft,
   validateStarterDrafts,
 } from './profile-center-model.js'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon, Checkbox, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot, Select, type SelectOption, Switch } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
-import { Checkbox } from '../ui/Checkbox.js'
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-} from '../ui/Dialog.js'
-import { PluginSlot } from '../ui/PluginSlot.js'
-import { Select, type SelectOption } from '../ui/Select.js'
-import { Switch } from '../ui/Switch.js'
 import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
 import { PROFILE_DETAIL_SECTION_SLOT, PROFILE_STARTERS_MAX_ITEMS } from '@helm/protocol'
 

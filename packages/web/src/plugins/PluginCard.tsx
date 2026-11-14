@@ -1,8 +1,7 @@
 import React, { useContext } from 'react'
 import type { PluginSummary } from '@helm/protocol'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon, Switch } from '@helm/plugin-client'
 import { HelmStoreContext } from '../lib/store-context.js'
-import { Switch } from '../ui/Switch.js'
 import {
   getPluginDescription,
   listPluginScreens,

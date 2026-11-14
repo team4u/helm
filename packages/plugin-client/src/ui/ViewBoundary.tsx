@@ -1,5 +1,5 @@
 import { Component, type ReactNode } from 'react'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '../icons.js'
 
 /** 插件渲染异常只影响当前扩展视图，宿主导航和其他会话仍可使用。 */
 export class ViewBoundary extends Component<{ children: ReactNode; label?: string }, { message: string | null }> {

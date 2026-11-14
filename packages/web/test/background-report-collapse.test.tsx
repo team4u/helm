@@ -27,17 +27,17 @@ import type {
   PluginClientContext as PluginClientContextType,
   TimelineRendererProps,
 } from '@helm/protocol'
-import { PluginClientContext } from '../src/lib/plugin-client-context.js'
+import { PluginClientContext } from '@helm/plugin-client'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { emptyLiveState } from '../src/lib/live-state.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { buildTimelineItems, queuedAgentTextCollapse } from '../src/conversation/timeline-model.js'
 import { workflowUi } from './helpers/workflow-ui.js'
 import { importWorkflowClientModule, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 import type {
   BackgroundReportParse,
 } from '../../kernel/src/builtin-plugins/workflow/client/model-background-report.ts'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 
@@ -475,7 +475,7 @@ async function mountTimeline(
   await act(async () => {
     root.render(
       e(
-        HelmStoreContext.Provider,
+        HostStoreProviders,
         { value: store },
         e(ConversationTimeline, { conversation: store.conversations[0]!, detailEntries: entries, ...(live ? { live } : {}), onRequestEdit: () => {} }),
       ),

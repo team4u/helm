@@ -15,7 +15,6 @@ import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { ConversationEntry } from '@helm/protocol'
 import { emptyLiveState } from '../src/lib/live-state.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import {
@@ -27,6 +26,7 @@ import {
   shouldRestoreEditOnFailure,
   type PendingAttachment,
 } from '../src/conversation/composer-model.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const composerSource = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8')
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
@@ -65,7 +65,7 @@ function renderTimelineHtml(entries: ConversationEntry[]): string {
     getPluginSessionDoc: asyncNoop,
     retrySessionDoc: noop,
   }
-  return renderToString(React.createElement(HelmStoreContext.Provider, { value: store },
+  return renderToString(React.createElement(HostStoreProviders, { value: store },
     React.createElement(ConversationTimeline, {
       conversation, detailEntries: entries, onRequestEdit: noop,
     }),

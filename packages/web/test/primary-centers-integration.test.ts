@@ -36,13 +36,13 @@ const { renderToString } = await import('react-dom/server')
 
 ;(globalThis as Record<string, unknown>).React = React
 
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import {
   parseLocationHash,
   formatLocationHash,
   upgradeLegacyLocationState,
 } from '../src/lib/url-hash-model.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import { ProfileCenter } from '../src/profiles/ProfileCenter.js'
 import { SkillCenter } from '../src/skills/SkillCenter.js'
 import { NodeCenter } from '../src/nodes/NodeCenter.js'
@@ -126,7 +126,7 @@ test('Sidebar.tsx：设置空间 5 大入口统一导航至一级目标，且激
 
   for (const { kind, label } of targets) {
     const store = makeTestStore({ primaryTarget: { kind } })
-    const html = renderToString(e(HelmStoreContext.Provider, { value: store }, e(Sidebar)))
+    const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
     assert.ok(html.includes(`nav-item-active`), `当 primaryTarget=${kind} 时，${label} 行应高亮`)
     assert.ok(html.includes(`aria-current="page"`), `当 primaryTarget=${kind} 时，${label} 行应设置 aria-current="page"`
     )
@@ -211,7 +211,7 @@ test('四大中心主舞台组件：SSR 渲染结构与基础容器契约', { ti
 
   // 1. ProfileCenter
   const profileHtml = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(ProfileCenter)),
+    e(HostStoreProviders, { value: store }, e(ProfileCenter)),
   )
   assert.ok(profileHtml.includes('primary-center-topbar'))
   assert.ok(profileHtml.includes('智能体角色中心'))
@@ -219,7 +219,7 @@ test('四大中心主舞台组件：SSR 渲染结构与基础容器契约', { ti
 
   // 2. SkillCenter
   const skillHtml = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(SkillCenter)),
+    e(HostStoreProviders, { value: store }, e(SkillCenter)),
   )
   assert.ok(skillHtml.includes('primary-center-topbar'))
   assert.ok(skillHtml.includes('技能中心'))
@@ -227,7 +227,7 @@ test('四大中心主舞台组件：SSR 渲染结构与基础容器契约', { ti
 
   // 3. NodeCenter
   const nodeHtml = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(NodeCenter)),
+    e(HostStoreProviders, { value: store }, e(NodeCenter)),
   )
   assert.ok(nodeHtml.includes('primary-center-topbar'))
   assert.ok(nodeHtml.includes('计算节点中心'))
@@ -235,7 +235,7 @@ test('四大中心主舞台组件：SSR 渲染结构与基础容器契约', { ti
 
   // 4. ModelCenter
   const modelHtml = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(ModelCenter)),
+    e(HostStoreProviders, { value: store }, e(ModelCenter)),
   )
   assert.ok(modelHtml.includes('primary-center-topbar'))
   assert.ok(modelHtml.includes('模型与凭证中心'))
@@ -250,7 +250,7 @@ test('四大中心抽屉联动：携带子项 ID 时自动呼出对应 540px 右
     primaryTarget: { kind: 'profiles', profileId: 'superagent' },
   })
   const profileHtml = renderToString(
-    e(HelmStoreContext.Provider, { value: profileStore }, e(ProfileCenter, { inlineDrawer: true })),
+    e(HostStoreProviders, { value: profileStore }, e(ProfileCenter, { inlineDrawer: true })),
   )
   assert.ok(profileHtml.includes('primary-drawer-content'), 'Profiles 应呼出抽屉')
   assert.ok(profileHtml.includes('SuperAgent 中枢'))
@@ -263,7 +263,7 @@ test('四大中心抽屉联动：携带子项 ID 时自动呼出对应 540px 右
     primaryTarget: { kind: 'skills', skillId: 'helm-cli' },
   })
   const skillHtml = renderToString(
-    e(HelmStoreContext.Provider, { value: skillStore }, e(SkillCenter, { inlineDrawer: true })),
+    e(HostStoreProviders, { value: skillStore }, e(SkillCenter, { inlineDrawer: true })),
   )
   assert.ok(skillHtml.includes('primary-drawer-content'), 'Skills 应呼出抽屉')
 
@@ -275,7 +275,7 @@ test('四大中心抽屉联动：携带子项 ID 时自动呼出对应 540px 右
     primaryTarget: { kind: 'nodes', nodeId: 'local' },
   })
   const nodeHtml = renderToString(
-    e(HelmStoreContext.Provider, { value: nodeStore }, e(NodeCenter, { inlineDrawer: true })),
+    e(HostStoreProviders, { value: nodeStore }, e(NodeCenter, { inlineDrawer: true })),
   )
   assert.ok(nodeHtml.includes('primary-drawer-content'), 'Nodes 应呼出抽屉')
   assert.ok(nodeHtml.includes('系统概览'))
@@ -285,7 +285,7 @@ test('四大中心抽屉联动：携带子项 ID 时自动呼出对应 540px 右
     primaryTarget: { kind: 'models', providerId: 'anthropic' },
   })
   const modelHtml = renderToString(
-    e(HelmStoreContext.Provider, { value: modelStore }, e(ModelCenter, { inlineDrawer: true })),
+    e(HostStoreProviders, { value: modelStore }, e(ModelCenter, { inlineDrawer: true })),
   )
   assert.ok(modelHtml.includes('primary-drawer-content'), 'Models 应呼出抽屉')
   assert.ok(modelHtml.includes('凭证与连接设置'))

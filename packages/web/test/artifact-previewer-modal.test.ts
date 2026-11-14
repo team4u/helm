@@ -12,11 +12,11 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ArtifactPreviewerProps, ArtifactMetadata, ConversationSummary, PluginUiContribution } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { ArtifactPreviewModal } from '../src/conversation/ArtifactPreviewModal.js'
 import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -142,7 +142,7 @@ function mount(host: HTMLElement, store: HelmStoreValue, artifactId: string, con
   act(() => {
     root = createRoot(host)
     root.render(e(
-      HelmStoreContext.Provider, { value: store },
+      HostStoreProviders, { value: store },
       e(ArtifactPreviewModal, { artifactId, conversationId, onClose: () => {}, inline: true }),
     ))
   })
@@ -168,7 +168,7 @@ async function flush(): Promise<void> {
 async function rerender(root: Root, store: HelmStoreValue, artifactId: string, conversationId?: number): Promise<void> {
   await act(async () => {
     root.render(e(
-      HelmStoreContext.Provider, { value: store },
+      HostStoreProviders, { value: store },
       e(ArtifactPreviewModal, { artifactId, conversationId, onClose: () => {}, inline: true }),
     ))
   })

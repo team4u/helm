@@ -13,17 +13,18 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ComposerController } from '@helm/protocol'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { getSessionDocState, resetSessionDocSubscriptions, subscribeSessionDoc, type SessionDocKey } from '../src/lib/session-docs.js'
+import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
 import {
   createPluginClientContext,
   PluginClientContext,
   usePluginDoc,
   usePluginSessionDoc,
-} from '../src/lib/plugin-client-context.js'
+} from '@helm/plugin-client'
 import type { HelmStoreValue } from '../src/lib/types.js'
 import { pluginsApi } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -43,7 +44,7 @@ function mountProbe<T>(store: HelmStoreValue, ctxValue: ReturnType<typeof create
   let root: Root | undefined
   act(() => {
     root = createRoot(host)
-    root.render(e(HelmStoreContext.Provider, { value: store }, e(PluginClientContext.Provider, { value: ctxValue }, e(Probe))))
+    root.render(e(HostStoreProviders, { value: store }, e(PluginClientContext.Provider, { value: ctxValue }, e(Probe))))
   })
   return {
     result: () => captured,
@@ -57,7 +58,7 @@ test('usePluginDoc：省略 pluginId 用 ctx 插件，显式 pluginId 跨插件�
     ensurePluginDoc: async (pluginId, docName) => { ensured.push([pluginId, docName]); return undefined },
     pluginDocs: { 'test:plugin/status': { ok: 1 }, 'other:plugin/status': { ok: 2 } },
   })
-  const ctx = createPluginClientContext(store, 'test:plugin', 1)
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 1)
   const p1 = mountProbe(store, ctx, () => usePluginDoc('status'))
   assert.deepEqual(p1.result(), { ok: 1 }, '省略 pluginId 读当前插件文档')
   const p2 = mountProbe(store, ctx, () => usePluginDoc('status', 'other:plugin'))
@@ -77,7 +78,7 @@ test('usePluginSessionDoc：继承 ctx 插件与会话；显式覆写；无会�
       return subscribeSessionDoc(key, listener)
     },
   })
-  const ctx = createPluginClientContext(store, 'test:plugin', 7)
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 7)
   // 显式覆写 conversationId（无 SSE 环境：订阅会尝试连接，值保持 undefined，不 mock）
   const p1 = mountProbe(store, ctx, () => usePluginSessionDoc('runs', { conversationId: 9 }))
   assert.equal(p1.result(), undefined, '未收到首帧前 undefined')
@@ -85,7 +86,7 @@ test('usePluginSessionDoc：继承 ctx 插件与会话；显式覆写；无会�
   p1.unmount()
 
   // 无会话上下文：不开流
-  const ctxNoConv = createPluginClientContext(store, 'test:plugin', undefined)
+  const ctxNoConv = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', undefined)
   const p2 = mountProbe(store, ctxNoConv, () => usePluginSessionDoc('runs'))
   assert.equal(p2.result(), undefined)
   assert.equal(opened.length, 1, '无会话不开订阅流')
@@ -100,7 +101,7 @@ test('callAction 第三参：跨插件寻址与显式会话', { timeout: 60_000 
       return { pong: true }
     },
   })
-  const ctx = createPluginClientContext(store, 'test:plugin', 5)
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 5)
   const r1 = await ctx.callAction('ping', { a: 1 })
   assert.deepEqual(r1, { pong: true })
   assert.deepEqual(calls[0], { pluginId: 'test:plugin', actionId: 'ping', input: { a: 1 }, conversationId: 5 }, '默认本插件 + 继承会话')
@@ -120,7 +121,7 @@ test('submitInput：真实 conversationsApi（origin agent）；无会话显式 
   t.after(() => { globalThis.fetch = originalFetch })
 
   const store = makeTestStore()
-  const ctx = createPluginClientContext(store, 'test:plugin', 42)
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 42)
   await ctx.submitInput('hello', { whenBusy: 'followUp' })
   assert.equal(captured.length, 1)
   assert.equal(captured[0]!.path, '/api/conversations/42/input')
@@ -131,7 +132,7 @@ test('submitInput：真实 conversationsApi（origin agent）；无会话显式 
   assert.equal(captured[1]!.path, '/api/conversations/7/input')
 
   // 无会话上下文且未显式指定：显式 reject（不静默降级）
-  const ctxNone = createPluginClientContext(store, 'test:plugin', undefined)
+  const ctxNone = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', undefined)
   await assert.rejects(() => ctxNone.submitInput('x'), /无目标会话/)
 })
 
@@ -151,7 +152,7 @@ test('getPluginDoc/getPluginSessionDoc：第二参与会话路径（真实 plugi
     ensurePluginDoc: async (pluginId, name) => (await pluginsApi.getPublicDoc(pluginId, name)).value,
     getPluginSessionDoc: async (pluginId, name, conversationId) => (await pluginsApi.getPublicSessionDoc(pluginId, name, conversationId)).value,
   })
-  const ctx = createPluginClientContext(realStore, 'test:plugin', 9)
+  const ctx = createPluginClientContext(createPluginClientHostPort(realStore), 'test:plugin', 9)
   const v = await ctx.getPluginDoc('status', 'other:plugin')
   assert.equal(paths[0]!.path, '/api/plugins/other%3Aplugin/docs/status')
   assert.deepEqual(v, { v: 1 }, '返回文档 value')
@@ -161,7 +162,7 @@ test('getPluginDoc/getPluginSessionDoc：第二参与会话路径（真实 plugi
   assert.equal(paths[1]!.qs, 'conversationId=9', '会话文档走同一路径 + conversationId 查询参数')
   assert.deepEqual(sv, { v: 1 })
 
-  const ctxNone = createPluginClientContext(realStore, 'test:plugin', undefined)
+  const ctxNone = createPluginClientContext(createPluginClientHostPort(realStore), 'test:plugin', undefined)
   await assert.rejects(() => ctxNone.getPluginSessionDoc('runs'), /无目标会话/)
 })
 
@@ -175,8 +176,8 @@ test('composer：仅显式提供时存在于 ctx；透传同一实例', { timeou
     insertText: () => {},
     submit: async () => {},
   }
-  const withComposer = createPluginClientContext(store, 'test:plugin', 1, controller)
+  const withComposer = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 1, controller)
   assert.equal(withComposer.composer, controller, '显式提供时透传同一实例')
-  const without = createPluginClientContext(store, 'test:plugin', 1)
+  const without = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 1)
   assert.equal(without.composer, undefined, '未提供时省略键（非 undefined 赋值）')
 })

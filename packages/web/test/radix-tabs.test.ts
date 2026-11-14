@@ -14,7 +14,7 @@ GlobalRegistrator.register()
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 
-const { Tabs, TabsList, TabsTrigger, TabsContent, SegmentedControl } = await import('../src/ui/Tabs.js')
+const { Tabs, TabsList, TabsTrigger, TabsContent, SegmentedControl } = await import('@helm/plugin-client')
 
 const stylesCss = readHostStyles()
 const composerSource = readFileSync(join(PKG_ROOT, 'src/conversation/Composer.tsx'), 'utf8')
@@ -22,7 +22,7 @@ const thinkingControlSource = readFileSync(join(PKG_ROOT, 'src/ui/ThinkingLevelC
 const artifactModalSource = readFileSync(join(PKG_ROOT, 'src/conversation/ArtifactPreviewModal.tsx'), 'utf8')
 const workbenchSource = readFileSync(join(PKG_ROOT, 'src/conversation/WorkbenchDrawer.tsx'), 'utf8')
 const profileDrawerSource = readFileSync(join(PKG_ROOT, 'src/profiles/ProfileDetailDrawer.tsx'), 'utf8')
-const tabsSource = readFileSync(join(PKG_ROOT, 'src/ui/Tabs.tsx'), 'utf8')
+const tabsSource = readFileSync(join(PKG_ROOT, '../plugin-client/src/ui/Tabs.tsx'), 'utf8')
 
 // ---------------------------------------------------------------------------
 // 1. SSR 渲染与数据属性（data-state="active"）契约测试
@@ -404,16 +404,16 @@ test('设计系统契约：styles.css 完美映射 [data-state=active] 到 .segm
 test('源码级重构契约：5 大业务组件均已迁移至 Radix Tabs / SegmentedControl', { timeout: 60_000 }, () => {
   // 1. Composer 思考档位：共享 ThinkingLevelControl（基于 Tabs segmented 原语）
   assert.match(composerSource, /import\s*\{[^}]*ThinkingLevelControl[^}]*\}\s*from\s*['"]\.\.\/ui\/ThinkingLevelControl(?:\.js)?['"]/)
-  assert.match(thinkingControlSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]\.\/Tabs(?:\.js)?['"]/)
+  assert.match(thinkingControlSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]@helm\/plugin-client['"]/)
   assert.match(thinkingControlSource, /<Tabs[\s\S]*?<TabsList[^>]*segmented-control \$\{className\}[\s\S]*?<TabsTrigger/)
   assert.match(thinkingControlSource, /className = 'composer-thinking-row'/)
 
   // 2. ArtifactPreviewModal 源码/富文本切换已使用 SegmentedControl
-  assert.match(artifactModalSource, /import\s*\{[^}]*SegmentedControl[^}]*\}\s*from\s*['"]\.\.\/ui\/Tabs(?:\.js)?['"]/)
+  assert.match(artifactModalSource, /import\s*\{[^}]*SegmentedControl[^}]*\}\s*from\s*['"]@helm\/plugin-client['"]/)
   assert.match(artifactModalSource, /<SegmentedControl[\s\S]*?value=\{view\}[\s\S]*?富文本[\s\S]*?源码/)
 
   // 3. WorkbenchDrawer 产物/插件页签已使用 Tabs / TabsList / TabsTrigger
-  assert.match(workbenchSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]\.\.\/ui\/Tabs(?:\.js)?['"]/)
+  assert.match(workbenchSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]@helm\/plugin-client['"]/)
   assert.match(workbenchSource, /<Tabs[\s\S]*?<TabsList\s+asChild>[\s\S]*?<div\s+className=["']tabs-bar["']>[\s\S]*?<TabsTrigger/)
 })
 

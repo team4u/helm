@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { HelmIcon } from './lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { ModalFocusScope } from './shell/ModalFocusScope.js'
 import { ArtifactPreviewModal } from './conversation/ArtifactPreviewModal.js'
 import { ConversationPane } from './conversation/ConversationPane.js'

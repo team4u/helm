@@ -34,8 +34,8 @@ const { renderToString } = await import('react-dom/server')
 
 import type { PluginSummary } from '@helm/protocol'
 import { pluginsApi } from '../src/lib/api.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const e = React.createElement
@@ -129,7 +129,7 @@ test('PluginCenter SSR：渲染搜索框、统计徽章与卡片网格', { timeo
   })
 
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(PluginCenter)),
+    e(HostStoreProviders, { value: store }, e(PluginCenter)),
   )
 
   // 1. 主容器类名
@@ -159,7 +159,7 @@ test('PluginCenter SSR：存在 failed 故障态插件时顶栏统计追加异�
   })
 
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(PluginCenter)),
+    e(HostStoreProviders, { value: store }, e(PluginCenter)),
   )
 
   // 1. 顶栏统计追加异常计数（failed 插件 enabled: false，不计入已启用）
@@ -190,7 +190,7 @@ test('PluginCenter DOM 交互：搜索过滤实时联动', { timeout: 60_000 }, 
   })
 
   await act(async () => {
-    root.render(e(HelmStoreContext.Provider, { value: store }, e(PluginCenter, { inlineDrawer: true })))
+    root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
   })
 
   // 初始状态包含 5 个卡片
@@ -240,7 +240,7 @@ test('PluginCenter DOM 交互：抽屉根据 primaryTarget.pluginId 展开，关
   })
 
   await act(async () => {
-    root.render(e(HelmStoreContext.Provider, { value: store }, e(PluginCenter, { inlineDrawer: true })))
+    root.render(e(HostStoreProviders, { value: store }, e(PluginCenter, { inlineDrawer: true })))
   })
 
   // 验证抽屉处于展开态

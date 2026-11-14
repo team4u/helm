@@ -1,4 +1,4 @@
-import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '../ui/Dialog.js'
+import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
 import { ConversationPane } from './ConversationPane.js'
 
 export interface ConversationDrawerProps {

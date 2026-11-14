@@ -5,7 +5,7 @@
  */
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { markdownUrlTransform } from '../conversation/artifact-link.js'
+import { markdownUrlTransform } from './artifact-url.js'
 
 export function MarkdownText({ text }: { text: string }): React.JSX.Element {
   return (

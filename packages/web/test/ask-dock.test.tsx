@@ -17,7 +17,8 @@ GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { AskDock } = await import('../src/conversation/AskDock.js')
-const { makeTestStore, TestStoreProvider } = await import('./helpers/store.js')
+const { makeTestStore } = await import('./helpers/store.js')
+const { TestStoreProvider } = await import('./helpers/host-store.js')
 const e = React.createElement
 const originalFetch = globalThis.fetch
 let root: Root | undefined

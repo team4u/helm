@@ -18,7 +18,8 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationSummary, WorkflowRunSummary } from '@helm/protocol'
-import { TestStoreProvider, makeTestStore } from './helpers/store.js'
+import { makeTestStore } from './helpers/store.js'
+import { TestStoreProvider } from './helpers/host-store.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { workflowUi } from './helpers/workflow-ui.js'
@@ -114,7 +115,7 @@ function renderCard(
   // 存量流式行 / 截断 / 报错测试均针对展开态流内容：默认展开保持覆盖语义，extra 可覆盖。
   const { expanded = true, ...rest } = extra
   return renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(SubagentLiveCard, { childConversationId: 11, toolStatus, expanded, ...rest })),
+    e(TestStoreProvider, { value: store }, e(SubagentLiveCard, { childConversationId: 11, toolStatus, expanded, ...rest })),
   )
 }
 
@@ -279,7 +280,7 @@ test('ConversationPane 加载失败分屏分支：错误 + 重试 + 关闭分屏
     loadErrors: { 'conversation:42': '500 内部错误' },
   })
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(ConversationPane, { conversationId: 42, isSplit: true, onCloseSplit: () => {} })),
+    e(TestStoreProvider, { value: store }, e(ConversationPane, { conversationId: 42, isSplit: true, onCloseSplit: () => {} })),
   )
   assert.ok(html.includes('加载失败'), '分屏加载失败应显示错误')
   assert.ok(html.includes('500 内部错误'))
@@ -291,7 +292,7 @@ test('ConversationPane 加载失败分屏分支：错误 + 重试 + 关闭分屏
 test('ConversationPane 加载中分屏分支：仍有显式关闭分屏入口', { timeout: 60_000 }, () => {
   const store = makeStore({})
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(ConversationPane, { conversationId: 42, isSplit: true, onCloseSplit: () => {} })),
+    e(TestStoreProvider, { value: store }, e(ConversationPane, { conversationId: 42, isSplit: true, onCloseSplit: () => {} })),
   )
   assert.ok(html.includes('正在加载会话'), '应显示加载中态')
   assert.ok(html.includes('split-close-btn'), '加载中分屏分支必须有显式关闭入口')
@@ -300,7 +301,7 @@ test('ConversationPane 加载中分屏分支：仍有显式关闭分屏入口', 
 test('ConversationPane 非分屏分支：早退不渲染分屏关闭按钮', { timeout: 60_000 }, () => {
   const store = makeStore({})
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(ConversationPane, { conversationId: 42 })),
+    e(TestStoreProvider, { value: store }, e(ConversationPane, { conversationId: 42 })),
   )
   assert.ok(!html.includes('split-close-btn'))
 })
@@ -372,7 +373,7 @@ test('同步外部子代理无原生子会话：完成后卡片停止显示执�
     { id: '3', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'ext-1', toolName: 'subagent', content: [{ type: 'text', text: result }], isError: false }] },
     { id: '4', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '任务完成' }], stopReason: 'stop' }] },
   ]
-  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [conversation] }) },
+  const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [conversation] }) },
     e(ConversationTimeline, { conversation, detailEntries: entries, onRequestEdit: () => {} })))
   assert.ok(html.includes('subagent-external-card'))
   assert.ok(html.includes('外部执行已结束'))
@@ -393,7 +394,7 @@ test('resume 正在运行时：历史失败调用保留失败状态，只有最�
     { id: '3', kind: 'helm.input', data: { text: '重试', origin: 'human' } },
     { id: '4', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'call_new', name: 'subagent', arguments: { prompt: '继续修复', resume: '12' } }] }] },
   ]
-  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent, child] }) },
+  const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [parent, child] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
   assert.equal((html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length, 1)
   const historicalRow = html.match(/<div class="trace-row trace-row-error"[\s\S]*?<\/div>/)?.[0]
@@ -409,7 +410,7 @@ test('expanded=false：SSR 首帧不渲染实时流，保留头部与状态徽�
     conversationDetails: { 11: { ...summary(11, 'done'), entries: entriesWithToolResult('exit 0') } },
   })
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store },
+    e(TestStoreProvider, { value: store },
       e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', expanded: false })),
   )
   assert.ok(html.includes('subagent-live-card'), '卡片容器应渲染')
@@ -430,7 +431,7 @@ test('同一子会话 #12 被首次派生 + resume 续接：时间线仅 1 张�
     { id: '6', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'call_2', toolName: 'subagent', content: [{ type: 'text', text: '第二轮完成\n[subagent conversationId=12]' }], isError: false }] },
     { id: '7', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '全部完成' }], stopReason: 'stop' }] },
   ]
-  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent, child12] }) },
+  const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [parent, child12] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
   const cardCount = (html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length
   assert.equal(cardCount, 1, `同一子会话多次 resume 仅渲染 1 张实时卡，实际 ${cardCount}`)
@@ -446,7 +447,7 @@ test('工作台独立子会话：紧凑卡无实时流，保留副栏且 working
     conversations: [child31, child32],
   })
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store }, e(WorkbenchDrawer, { conversationId: 1 })),
+    e(TestStoreProvider, { value: store }, e(WorkbenchDrawer, { conversationId: 1 })),
   )
   assert.ok(html.includes('子代理会话'), '分组标题应渲染')
   assert.ok(html.includes('子会话 #<!-- -->31') || html.includes('子会话 #31'), '折叠卡片头部应显示 #31')
@@ -738,7 +739,7 @@ test('resolveSubagentHeaderSnippet：done 取 entries 结论 > toolSummary.resul
 test('紧凑卡 SSR 首帧：未传 expanded 时只渲染头部', { timeout: 60_000 }, () => {
   const store = makeStore({ conversations: [summary(11, 'done')] })
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store },
+    e(TestStoreProvider, { value: store },
       e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done' })),
   )
   assert.ok(html.includes('subagent-live-card'), '卡片容器应渲染')
@@ -751,7 +752,7 @@ test('紧凑卡 SSR 首帧：未传 expanded 时只渲染头部', { timeout: 60_
 test('折叠态 done 卡无任何结论来源时不渲染第 2 层副栏', { timeout: 60_000 }, () => {
   const store = makeStore({ conversations: [summary(11, 'idle')] })
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store },
+    e(TestStoreProvider, { value: store },
       e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done' })),
   )
   assert.ok(!html.includes('subagent-live-subline'), '无有效文本时不得渲染副栏占位')
@@ -762,7 +763,7 @@ test('toolSummary 注入：折叠态头部显示任务标题、耗时统计与�
     conversations: [summary(11, 'done')],
   })
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store },
+    e(TestStoreProvider, { value: store },
       e(SubagentLiveCard, {
         childConversationId: 11,
         toolStatus: 'done',
@@ -792,7 +793,7 @@ test('blocked 折叠卡：warn 描边 + 等待审批副栏（pendingAsk 标题�
     }],
   })
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store },
+    e(TestStoreProvider, { value: store },
       e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done' })),
   )
   assert.ok(html.includes('subagent-live-card-warn'), 'blocked 卡应有 warn 描边类')
@@ -812,7 +813,7 @@ test('时间线挂载实时卡后不再重复渲染 subagent trace-row；被 res
     { id: '6', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'call_2', toolName: 'subagent', content: [{ type: 'text', text: '第二轮完成\n[subagent conversationId=12]' }], isError: false }] },
     { id: '7', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '全部完成' }], stopReason: 'stop' }] },
   ]
-  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent, child12] }) },
+  const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [parent, child12] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
   const cardCount = (html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length
   assert.equal(cardCount, 1, `仅最新调用挂载 1 张实时卡，实际 ${cardCount}`)
@@ -834,7 +835,7 @@ test('时间线普通 subagent 调用无父 trace-row 双横条：胶囊卡独�
     { id: '3', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'call_1', toolName: 'subagent', content: [{ type: 'text', text: '调研完成\n[subagent conversationId=12]' }], isError: false }] },
     { id: '4', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '结论如上' }], stopReason: 'stop' }] },
   ]
-  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent, child12] }) },
+  const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [parent, child12] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
   assert.equal((html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length, 1, '唯一调用挂载 1 张实时卡')
   const subagentRows = (html.match(/<div class="trace-row[\s\S]*?<\/div>/g) ?? []).filter((r) => r.includes('subagent'))
@@ -847,7 +848,7 @@ test('加载失败折叠卡：error 描边 + 加载失败副栏（零请求展�
     loadErrors: { 'conversation:11': '网关超时' },
   })
   const html = renderToString(
-    e(HelmStoreContext.Provider, { value: store },
+    e(TestStoreProvider, { value: store },
       e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done' })),
   )
   assert.ok(html.includes('subagent-live-card-error'), '加载失败卡应有 error 描边类')
@@ -869,7 +870,7 @@ test('工作流业务卡隐藏重复工具行，但保留本次调用入参和�
   // runs 已改为会话分片订阅（usePluginSessionDoc）：SSR 首帧无订阅数据时，
   // WorkflowToolView 如实回退原始调用详情，绝不虚构运行卡；替换 trace-row
   // 的行为不依赖是否有订阅数据。
-  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [parent] }) },
+  const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [parent] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
   assert.ok(!html.includes('class="trace-row"'), '无数据也不得回退宿主默认工具行')
   assert.ok(html.includes('调用详情'))
@@ -878,7 +879,7 @@ test('工作流业务卡隐藏重复工具行，但保留本次调用入参和�
 })
 
 test('折叠子代理卡：不渲染内联流与展开箭头，整卡通过抽屉查看详情', { timeout: 60_000 }, () => {
-  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [summary(11, 'done')] }) },
+  const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [summary(11, 'done')] }) },
     e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', expanded: false, toolSummary: { prompt: '本次原始续接指令', resultText: '本次父工具原始输出' },
     })))
   assert.ok(!html.includes('subagent-live-toggle'), '不得渲染折叠展开箭头')
@@ -895,7 +896,7 @@ test('宿主只按通用 tool.view 挂载，工作流状态不渗入父回合在
 })
 
 test('SubagentLiveCard 整体大卡片点击契约：外层整卡可点击，第 1 层和第 2 层无割裂的内层按钮链接', { timeout: 60_000 }, () => {
-  const html = renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [summary(11, 'done')] }) },
+  const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [summary(11, 'done')] }) },
     e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', toolSummary: { prompt: '任务', durationMs: 1000, resultText: '产出结论' } })))
   // 外层为整体大卡片按钮
   assert.ok(html.includes('subagent-card-clickable'), '整卡应具有可点击类名')
@@ -931,16 +932,16 @@ const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}
 test('SSR：双层胶囊卡全程无任何 Emoji 或特殊符号字符', { timeout: 60_000 }, () => {
   const samples = [
     // 折叠 done 卡带结论
-    renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [summary(11, 'done')] }) },
+    renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [summary(11, 'done')] }) },
       e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done', toolSummary: { prompt: '任务', durationMs: 1000, resultText: '结论' } }))),
     // 展开流式卡
-    renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [summary(11, 'working')] }) },
+    renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [summary(11, 'working')] }) },
       e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'running', expanded: true }))),
     // blocked 折叠卡
-    renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [summary(11, 'blocked')] }) },
+    renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [summary(11, 'blocked')] }) },
       e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'running' }))),
     // 加载失败折叠卡
-    renderToString(e(HelmStoreContext.Provider, { value: makeStore({ conversations: [summary(11, 'done')], loadErrors: { 'conversation:11': '超时' } }) },
+    renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [summary(11, 'done')], loadErrors: { 'conversation:11': '超时' } }) },
       e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'done' }))),
   ]
   for (const html of samples) {

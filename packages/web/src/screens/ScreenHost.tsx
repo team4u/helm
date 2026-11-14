@@ -5,7 +5,7 @@
  */
 import * as React from 'react'
 import { useMemo, type ReactNode } from 'react'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import type { ResolvedTarget } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'

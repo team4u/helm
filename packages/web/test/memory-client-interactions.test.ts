@@ -10,7 +10,7 @@ import * as LucideReact from 'lucide-react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginClientContext as ClientContext, ProfileDetailSlotProps } from '@helm/protocol'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
-import * as HelmPluginClient from '../src/lib/plugin-client-context.js'
+import * as HelmPluginClient from '@helm/plugin-client'
 
 // DOM 必须先于 react-dom/client 求值，合成 textarea 事件才会注册浏览器输入路径。
 GlobalRegistrator.register()

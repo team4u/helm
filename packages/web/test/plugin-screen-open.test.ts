@@ -19,6 +19,7 @@ import type { PluginSummary } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { PluginCard } from '../src/plugins/PluginCard.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import type { HelmStoreValue, ResolvedTarget } from '../src/lib/types.js'
 
 const e = React.createElement
@@ -96,7 +97,7 @@ test('PluginCard：enabled 且有 Screen 时底栏渲染打开视图，点击阻
 
   await act(async () => {
     root.render(
-      e(HelmStoreContext.Provider, { value: store },
+      e(HostStoreProviders, { value: store },
         e(PluginCard, {
           plugin: APP_PLUGIN,
           selected: false,
@@ -131,7 +132,7 @@ test('PluginCard：停用或无 Screen 时不渲染打开按钮（无 Provider �
     const root = ReactDOMClient.createRoot(host)
     await act(async () => {
       root.render(
-        e(HelmStoreContext.Provider, { value: store },
+        e(HostStoreProviders, { value: store },
           e(PluginCard, { plugin, selected: false, onSelect: () => {}, onToggle: () => {} })),
       )
     })

@@ -26,7 +26,7 @@ import { compilePluginClientModule } from '../../kernel/src/plugins/client-compi
 import { requireClientExport } from '../src/lib/plugin-client.js'
 // '@helm/plugin-client' 共享模块实例：宿主挂载的是 web/src/lib/plugin-client-context.ts
 // 的模块命名空间（HelmStoreProvider 挂载同一对象）；测试直接 import 该模块挂到全局。
-import * as HelmPluginClient from '../src/lib/plugin-client-context.js'
+import * as HelmPluginClient from '@helm/plugin-client'
 
 const e = React.createElement
 

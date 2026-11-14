@@ -1,16 +1,8 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
 import { HelmStoreContext } from '../lib/store-context.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-} from '../ui/Dialog.js'
 import {
   type ProviderItem,
   type ProviderModelItem,

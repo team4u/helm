@@ -10,8 +10,8 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { compilePluginClientModule } from '../../kernel/src/plugins/client-compiler.js'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
 import { getCachedClientComponent, seedPluginClientModule, evictPluginClientCache, resetPluginClientCache, loadPluginClientModule, PluginClientError } from '../src/lib/plugin-client.js'
-import { HelmStoreContext } from '../src/lib/store-context.js'
 import { makeTestStore } from './helpers/store.js'
+import { HostStoreProviders } from './helpers/host-store.js'
 import { mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 
 GlobalRegistrator.register()
@@ -59,7 +59,7 @@ test('同步缓存按 plugin/module/export 隔离，组件复用时不在新上�
       ['beta', 'index.tsx', 'First', 'beta:c:first'],
     ] as const) {
       renders.length = 0
-      await act(async () => root.render(e(HelmStoreContext.Provider, { value: store },
+      await act(async () => root.render(e(HostStoreProviders, { value: store },
         e(PluginUiView, { pluginId, spec: { client: { module, export: name } } }))))
       assert.ok(renders.length > 0)
       assert.ok(renders.every((value) => value === expected), `不能短暂渲染旧身份：${renders.join(', ')}`)
@@ -69,12 +69,12 @@ test('同步缓存按 plugin/module/export 隔离，组件复用时不在新上�
     assert.equal(getCachedClientComponent('alpha', 'index.tsx', 'Missing'), undefined)
     assert.equal(getCachedClientComponent('alpha', 'absent.tsx', 'First'), undefined)
     renders.length = 0
-    await act(async () => root.render(e(HelmStoreContext.Provider, { value: store },
+    await act(async () => root.render(e(HostStoreProviders, { value: store },
       e(PluginUiView, { pluginId: 'beta', spec: { client: { module: 'index.tsx', export: 'Missing' } } }))))
     assert.match(host.textContent!, /不存在导出 Missing/)
     assert.deepEqual(renders, [], '缺失导出不能误用同模块的上一个缓存组件')
     globalThis.fetch = async () => new Response('服务不可用', { status: 503 })
-    await act(async () => root.render(e(HelmStoreContext.Provider, { value: store },
+    await act(async () => root.render(e(HostStoreProviders, { value: store },
       e(PluginUiView, { pluginId: 'beta', spec: { client: { module: 'index.tsx', export: 'Second' } } }))))
     assert.match(host.textContent!, /HTTP 503/)
     globalThis.fetch = async () => new Response('', { headers: { 'x-helm-client-hash': hashes.get('/api/plugins/beta/client.mjs?module=index.tsx')! } })

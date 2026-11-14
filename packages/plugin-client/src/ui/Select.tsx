@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useMemo, useState } from 'react'
 import * as RadixSelect from '@radix-ui/react-select'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from '../icons.js'
 import { Checkbox } from './Checkbox.js'
 import { Popover, PopoverContent, PopoverTrigger } from './Popover.js'
 import { useOverlayChildStyle } from './overlay-stack.js'

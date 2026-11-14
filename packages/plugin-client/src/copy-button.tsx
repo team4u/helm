@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { copyToClipboard } from './clipboard.js'
-import { HelmIcon } from '../lib/icons.js'
+import { HelmIcon } from './icons.js'
 
 /** 复制按钮：复制成功切换 check 图标 1.5s；失败显示警告提示防静默吞没。 */
 export function CopyButton({ text, label, className = 'btn btn-ghost btn-sm' }: { text: string; label?: string; className?: string }) {
