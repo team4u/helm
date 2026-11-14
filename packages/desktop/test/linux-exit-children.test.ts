@@ -1,8 +1,8 @@
 /**
  * Linux AppImage 退出兜底（纯逻辑）：注入假 procfs / 信号 / 虚拟时钟，绝不触碰宿主进程。
  * 覆盖：TERM→KILL 升级与共享预算、僵尸跳过、comm 含空格括号的 stat 解析、多线程
- * children 去重、自己/父进程排除、PID 复用与 reparent 不补刀、读取失败不盲杀、
- * ESRCH 视作退出、非 AppImage / Windows / macOS 不安装不读 proc。
+ * children 去重、自己/父进程排除、PID 复用与 reparent 不补刀且不白等预算、读取失败不盲杀、
+ * ESRCH 视作退出、非 AppImage / 未打包（含继承宿主 APPIMAGE）/ Windows / macOS 不安装不读 proc。
  */
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
@@ -36,6 +36,7 @@ interface Harness {
 interface HarnessOptions {
   platform?: NodeJS.Platform;
   env?: Record<string, string | undefined>;
+  isPackaged?: boolean;
   tasks?: Record<string, string>;
   tasksThrows?: boolean;
   procs?: Record<number, FakeProc>;
@@ -61,6 +62,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const deps: ExitSweepDeps = {
     platform: options.platform ?? 'linux',
     env: options.env ?? { APPIMAGE: '/opt/Helm.AppImage' },
+    isPackaged: options.isPackaged ?? true,
     selfPid: SELF,
     parentPid: PARENT,
     readdirSync: (path) => {
@@ -162,16 +164,17 @@ test('TERM 后 PID 被复用（starttime 变化）不再补刀 KILL', { timeout:
   const summary = sweepOwnedExitChildren(h.deps);
   assert.deepEqual(h.kills, [{ pid: 200, signal: 'SIGTERM' }]);
   assert.equal(summary.signaledKill, 0);
-  assert.equal(h.now(), SWEEP_TERM_GRACE_MS); // KILL 阶段鉴权失败即放弃，不再等待
+  assert.equal(h.now(), 0, 'starttime 已变应立即视作了结，不白等满 TERM 宽限');
 });
 
-test('TERM 后 reparent（ppid 变化）不补刀 KILL', { timeout: 60_000 }, () => {
+test('TERM 后 reparent（ppid 变化）不补刀 KILL，立即视作了结', { timeout: 60_000 }, () => {
   const procs: Record<number, FakeProc> = { 200: {} };
   const h = makeHarness({ procs, tasks: { [String(SELF)]: '200' } });
   procs[200]!.onTerm = () => { procs[200]!.ppid = 1; };
   const summary = sweepOwnedExitChildren(h.deps);
   assert.deepEqual(h.kills.map((k) => k.signal), ['SIGTERM']);
   assert.equal(summary.signaledKill, 0);
+  assert.equal(h.now(), 0, 'ppid 已变应立即视作了结，不白等满 TERM 宽限');
 });
 
 test('捕获时已非直接子进程（ppid≠self）不处理', { timeout: 60_000 }, () => {
@@ -216,31 +219,34 @@ test('无子进程时零信号零等待（常规退出的常态路径）', { tim
   assert.equal(h.now(), 0);
 });
 
-test('linuxAppImageExitSweepNeeded：仅 Linux + 非空 APPIMAGE', { timeout: 60_000 }, () => {
-  assert.equal(linuxAppImageExitSweepNeeded({ platform: 'linux', env: { APPIMAGE: '/x/Helm.AppImage' } }), true);
-  assert.equal(linuxAppImageExitSweepNeeded({ platform: 'linux', env: { APPIMAGE: '' } }), false);
-  assert.equal(linuxAppImageExitSweepNeeded({ platform: 'linux', env: {} }), false);
-  assert.equal(linuxAppImageExitSweepNeeded({ platform: 'win32', env: { APPIMAGE: '/x/Helm.AppImage' } }), false);
-  assert.equal(linuxAppImageExitSweepNeeded({ platform: 'darwin', env: { APPIMAGE: '/x/Helm.AppImage' } }), false);
+test('linuxAppImageExitSweepNeeded：仅 Linux + 打包态 + 非空 APPIMAGE', { timeout: 60_000 }, () => {
+  assert.equal(linuxAppImageExitSweepNeeded({ platform: 'linux', isPackaged: true, env: { APPIMAGE: '/x/Helm.AppImage' } }), true);
+  assert.equal(linuxAppImageExitSweepNeeded({ platform: 'linux', isPackaged: true, env: { APPIMAGE: '' } }), false);
+  assert.equal(linuxAppImageExitSweepNeeded({ platform: 'linux', isPackaged: true, env: {} }), false);
+  assert.equal(linuxAppImageExitSweepNeeded({ platform: 'linux', isPackaged: false, env: { APPIMAGE: '/x/Helm.AppImage' } }), false);
+  assert.equal(linuxAppImageExitSweepNeeded({ platform: 'win32', isPackaged: true, env: { APPIMAGE: '/x/Helm.AppImage' } }), false);
+  assert.equal(linuxAppImageExitSweepNeeded({ platform: 'darwin', isPackaged: true, env: { APPIMAGE: '/x/Helm.AppImage' } }), false);
 });
 
-test('非 AppImage Linux / Windows / macOS：不安装兜底、不读 /proc、不加监听', { timeout: 60_000 }, () => {
-  const cases: Array<[NodeJS.Platform, Record<string, string | undefined>]> = [
-    ['linux', {}],
-    ['linux', { APPIMAGE: '' }],
-    ['win32', { APPIMAGE: '/x/Helm.AppImage' }],
-    ['darwin', { APPIMAGE: '/x/Helm.AppImage' }],
+test('非 AppImage / 未打包 / Windows / macOS：不安装兜底、不读 /proc、不加监听', { timeout: 60_000 }, () => {
+  const cases: Array<[NodeJS.Platform, boolean, Record<string, string | undefined>]> = [
+    ['linux', true, {}],
+    ['linux', true, { APPIMAGE: '' }],
+    ['linux', false, { APPIMAGE: '/x/VSCode.AppImage' }], // 开发态继承宿主 AppImage 环境
+    ['win32', true, { APPIMAGE: '/x/Helm.AppImage' }],
+    ['darwin', true, { APPIMAGE: '/x/Helm.AppImage' }],
   ];
-  for (const [platform, env] of cases) {
+  for (const [platform, isPackaged, env] of cases) {
     const before = process.listeners('exit');
     let fsTouched = false;
     const installed = installLinuxExitChildSweep({
       platform,
+      isPackaged,
       env,
       readdirSync: () => { fsTouched = true; return []; },
       readFileSync: () => { fsTouched = true; return ''; },
     });
-    assert.equal(installed, false, `${platform} ${JSON.stringify(env)} 不应安装`);
+    assert.equal(installed, false, `${platform} isPackaged=${isPackaged} ${JSON.stringify(env)} 不应安装`);
     assert.equal(fsTouched, false, '条件不满足时不得读 /proc');
     assert.equal(process.listeners('exit').length, before.length, '不得注册 exit 监听');
   }

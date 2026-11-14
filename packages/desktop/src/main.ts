@@ -97,7 +97,7 @@ async function waitForReact(win: BrowserWindowLike): Promise<void> {
 async function runElectron(electron: ElectronApi): Promise<void> {
   const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = electron;
   // Linux AppImage 退出兜底须先于任何可能退出的路径就位（其余平台 / 形态零开销）。
-  installLinuxExitChildSweep();
+  installLinuxExitChildSweep({ isPackaged: app.isPackaged });
   const browserData = join(process.env.HELM_DESKTOP_DATA_DIR ?? process.env.HELM_DATA_DIR ?? join(homedir(), '.helm'), 'desktop');
   mkdirSync(browserData, { recursive: true });
   app.setPath('userData', browserData);

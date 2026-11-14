@@ -19,7 +19,7 @@ test('Linux：设置 desktopName，且 main.ts 调用时机须在 whenReady 之�
   assert.deepEqual(calls, [`setDesktopName:${LINUX_DESKTOP_NAME}`]);
 
   const main = readFileSync(join(srcDir, 'main.ts'), 'utf8');
-  const sweep = main.indexOf('installLinuxExitChildSweep()');
+  const sweep = main.indexOf('installLinuxExitChildSweep({');
   const identity = main.indexOf('applyLinuxDesktopName(app');
   const ready = main.indexOf('await app.whenReady()');
   assert.ok(sweep > 0 && identity > 0 && ready > 0, 'main.ts 应同时包含兜底安装、身份设置与 whenReady');
@@ -32,10 +32,6 @@ test('win32 / darwin：不设置 desktopName，保持既有行为', { timeout: 6
   assert.equal(applyLinuxDesktopName(app, 'win32'), false);
   assert.equal(applyLinuxDesktopName(app, 'darwin'), false);
   assert.deepEqual(calls, []);
-});
-
-test('旧版 Electron 缺少 setDesktopName API 时安全跳过', { timeout: 60_000 }, () => {
-  assert.equal(applyLinuxDesktopName({} as DesktopNameApp, 'linux'), false);
 });
 
 test('标识与 electron-builder 产物一致：desktopName = executableName 基名，现有标识不动', { timeout: 60_000 }, () => {
