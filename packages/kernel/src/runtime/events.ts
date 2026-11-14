@@ -36,7 +36,6 @@ import { randomUUID } from 'node:crypto'
 import { HelmError } from '@helm/protocol'
 import type {
   AskSpec,
-  SecretLifetime,
   ConversationEntry,
   ConversationLive,
   ConversationSummary,
@@ -44,9 +43,11 @@ import type {
   HelmEvent,
   HelmEventFrame,
   HelmSnapshot,
+  MaybePromise,
   NodeInfo,
   PublicPluginDoc,
   PublicPluginSessionDoc,
+  SecretLifetime,
 } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 import { validateSecretLifetime } from '../services/secret-stash.js'
@@ -59,6 +60,16 @@ export type SnapshotProvider = () => Omit<HelmSnapshot, 'bootId'>
 
 export interface EventSubscription {
   unsubscribe(): void
+}
+
+/** 单次 publish 的投递结果。 */
+export interface EventPublishResult {
+  /** 本次发布的已验证+脱敏事件帧（SSE ring 已入队、广播已隔离完成）。 */
+  readonly frame: HelmEventFrame
+  /** 内部宿主监听器投递（单次；未安装投递器时 undefined）。发布方按需 await
+   *（公开 emitEvent 契约）；不 await 即 fire-and-forget（内核自动事件路径，
+   * 投递器内部逐监听器隔离错误、返回的 promise 绝不 reject）。 */
+  readonly internal: MaybePromise<void> | undefined
 }
 
 /** SSE 输出帧：首帧 snapshot/resumed 控制帧或增量 {seq, event}。 */
@@ -258,6 +269,8 @@ export class EventHub {
   private readonly ringMaxFrames: number
   private readonly ringMaxBytes: number
   private readonly subscribers = new Set<(frame: HelmEventFrame, chunk: Uint8Array) => void>()
+  /** 内部宿主事件投递器（runtime 安装；每次 publish 恰调用一次，单一投递边界）。 */
+  private hostDispatcher: ((event: HelmEvent) => MaybePromise<void>) | undefined
   private readonly snapshot: SnapshotProvider
   private readonly persistSeq: (seq: number) => void
   private readonly streamClosers = new Set<() => void>()
@@ -312,12 +325,28 @@ export class EventHub {
   }
 
   /**
-   * 发布事件（严格顺序：组装脱敏 -> 编码 -> 持久化 -> 推进内存 -> 入 ring -> 广播）。
-   * buildEvent/persistSeq 失败均抛出且不推进水位、不入 ring、不广播——持久化
-   * 报错绝不留下裸 seq（否则下一次成功发布会在 ring 里形成缺口，续传时假承诺）。
-   * 帧只编码一次（不可变字节），ring 重放与全部订阅者共享同一份。
+   * 安装内部宿主事件投递器（ctx.host.onEvent 监听面的单一投递边界）：每次
+   * publish 在 SSE 广播之后恰调用一次，参数为已验证+脱敏的完整 HelmEvent
+   * 信封（协议 onEvent 契约形状）。投递器必须同步返回（可返回 promise）、
+   * 不得抛出（监听器错误由投递器自身隔离），否则会破坏 publish 的既有
+   * 错误语义（广播已完成后再报错属于假失败）。
    */
-  publish(type: string, payload: unknown): void {
+  setHostDispatcher(dispatch: (event: HelmEvent) => MaybePromise<void>): void {
+    this.hostDispatcher = dispatch
+  }
+
+  /**
+   * 发布事件（严格顺序：组装脱敏 -> 编码 -> 持久化 -> 推进内存 -> 入 ring -> 广播
+   * -> 内部宿主投递）。buildEvent/persistSeq 失败均抛出且不推进水位、不入
+   * ring、不广播——持久化报错绝不留下裸 seq（否则下一次成功发布会在 ring 里
+   * 形成缺口，续传时假承诺）。帧只编码一次（不可变字节），ring 重放与全部
+   * 订阅者共享同一份。
+   *
+   * 返回本次 frame 与内部宿主监听器投递（恰一次）：需要等待异步内部监听器的
+   * 发布方（公开 emitEvent）await internal；内核自动事件（tracker 等）忽略
+   * 返回即 fire-and-forget，绝不阻塞发布点（如 SDK advance 同步观察路径）。
+   */
+  publish(type: string, payload: unknown): EventPublishResult {
     const nextSeq = this.seqValue + 1
     const event = this.buildEvent(type, payload)
     const frame: HelmEventFrame = { seq: nextSeq, event }
@@ -335,6 +364,7 @@ export class EventHub {
         // 订阅方回调抛错只隔离自身（各订阅内部自行清理），不影响其他订阅者。
       }
     }
+    return { frame, internal: this.hostDispatcher?.(event) }
   }
 
   /** ring 追加：非连续 append（防御：任何途径产生的裸 seq 缺口）先作废旧区段，

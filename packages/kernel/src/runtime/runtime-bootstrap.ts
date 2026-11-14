@@ -266,8 +266,6 @@ export async function teardownKernelRuntime(deps: {
     close(): void
   }
   sessionDocLifecycleRelease?: () => void
-  /** 核心会话事件转投订阅释放（KernelRuntime 构造器建立；teardown 解除）。 */
-  coreEventForwardRelease?: () => void
   stashService: {
     clear(): void
   }
@@ -328,7 +326,6 @@ export async function teardownKernelRuntime(deps: {
   await step('database.close', () => deps.database.close())
   deps.events.close()
   deps.sessionDocLifecycleRelease?.()
-  deps.coreEventForwardRelease?.()
   deps.sessionDocStreams.close()
   deps.stashService.clear()
   if (storeError !== undefined || failures.length > 0) {

@@ -1457,8 +1457,10 @@ describe('snapshot 与插件公共文档', { timeout: 60_000 }, () => {
         definePlugin(ctx) {
           ctx.host.onEvent('test.settled', (raw) => {
             if (disposed) return
-            const run = raw as { id: string }
-            seen.push(run.id)
+            // 广播路径内部监听器收到的是已验证+脱敏的 HelmEvent 信封（未知
+            // type 走 CustomHelmEvent {type, payload}；协议 onEvent 契约形状）。
+            const run = (raw as { payload?: { id?: string } }).payload
+            if (run?.id !== undefined) seen.push(run.id)
           })
         },
       })

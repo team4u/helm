@@ -102,8 +102,6 @@ export class KernelRuntime {
   readonly sessionDocEvents: SessionDocEventHub
   private readonly stashService = new SecretStash()
   private readonly hostEventListeners = new Map<string, Set<(payload: unknown) => MaybePromise<void>>>()
-  /** 核心会话事件 SSE 帧 -> 内部宿主事件面转投（ctx.host.onEvent 消费；close 释放）。 */
-  private readonly coreEventForwardRelease: () => void
   readonly envFabric: EnvFabric
   /** Hub 侧前台端口转发（监听器仅在命令期间存在；close 统一销毁）。 */
   readonly nodeForward: NodeForwardService
@@ -205,20 +203,12 @@ export class KernelRuntime {
     this.conversations = this.svc.conversations
     this.agentSpawn = this.svc.agentSpawn
 
-    // 核心会话事件转投（见字段注释）：SSE 帧已过 buildEvent 验证+脱敏，
-    // 监听器拿到的是完整 HelmEvent 信封（协议 onEvent 契约形状）。
-    const CORE_HOST_EVENT_TYPES = new Set([
-      'conversation.upsert',
-      'conversation.deleted',
-      'conversation.entry',
-      'conversation.live',
-      'turn.settled',
-    ])
-    this.coreEventForwardRelease = this.events.subscribe((frame) => {
-      const event = frame.event as { type: string }
-      if (!CORE_HOST_EVENT_TYPES.has(event.type)) return
-      void this.dispatchInternalEvent(event.type, event)
-    })
+    // 内部宿主事件面的单一投递边界：EventHub 每次 publish 在 SSE 广播后恰一次
+    // 投递给 ctx.host.onEvent 监听器（已验证+脱敏的 HelmEvent 信封）。内核自动
+    // 事件（tracker/asks 等直接 events.publish）忽略返回即 fire-and-forget，
+    // 绝不阻塞发布点（如 SDK advance 同步观察路径）；公开 emitHostEvent 广播
+    // 路径 await 返回的投递结果（emitEvent 契约），不再自行二次 dispatch。
+    this.events.setHostDispatcher((event) => this.dispatchInternalEvent(event.type, event))
 
     this.nodeOps.bindEvents()
 
@@ -336,8 +326,9 @@ export class KernelRuntime {
       this.svc.sessionDocStreams.dispatch(payload)
       return this.dispatchInternalEvent(type, payload)
     }
-    this.events.publish(type, payload)
-    return this.dispatchInternalEvent(type, payload)
+    // 广播路径的内部监听器投递由 EventHub 单一投递边界负责（publish 恰一次，
+    // 参数为已验证+脱敏信封）；返回其投递结果保持 emitEvent 可 await 契约。
+    return this.events.publish(type, payload).internal
   }
 
   onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void {
@@ -873,7 +864,6 @@ export class KernelRuntime {
       events: this.events,
       sessionDocStreams: this.svc.sessionDocStreams,
       sessionDocLifecycleRelease: this.svc.sessionDocLifecycleRelease,
-      coreEventForwardRelease: this.coreEventForwardRelease,
       stashService: this.stashService,
     })
     this.processTokenHandle = undefined
