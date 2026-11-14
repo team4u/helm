@@ -138,7 +138,7 @@ export interface ComposerController {
 
 ## 公开数据与会话分片投影
 
-`ctx.doc(name, initial, { public: true })` 进入全局 SSE 首帧 `pluginDocs` 与 `plugin.doc.updated` 广播，适合全局设置或紧凑导航摘要（如 `builtin:workflow` 的 `run-badges` 只含计数、色调与底部短文案）。私有文档不公开。句柄的 `get/set/update` 同步镜像，`flush()` 等待底层排队写真正落盘——副作用执行前必须 `await flush()`，防止「未落盘就派生副作用」。
+`ctx.doc(name, initial, { public: true })` 进入全局 SSE 首帧 `pluginDocs` 与 `plugin.doc.updated` 广播，适合全局设置或紧凑导航摘要（如 `builtin:workflow` 的 `run-badges` 只含计数、色调与底部短文案）。按会话索引的角标（`badge.byConversationField`）中 `tone: 'accent'` 的通用语义为「该会话存在在途后台任务」：侧栏据此渲染空心环指示（`footerText` 仅原样展示，宿主不解析插件文案）；`neutral` 表示历史计数、`warn` 表示需关注的汇总（如失败），均不表示在途。私有文档不公开。句柄的 `get/set/update` 同步镜像，`flush()` 等待底层排队写真正落盘——副作用执行前必须 `await flush()`，防止「未落盘就派生副作用」。
 
 `ctx.sessionDoc(name, initial, { public: true })` 按 `conversationId` 持久化分片：不进全局首帧，也不向普通 `/api/events` 发送会话文档事件。读写句柄为 `get/set/update/delete(conversationId, ...)` 加 `listConversationIds()`；会话删除清理其文档，过期句柄或删除后的写入报错。客户端 `usePluginSessionDoc(name)` 使用当前槽位会话，也可显式指定 `{ conversationId, pluginId }`；同一文档的多个挂载组件共享订阅，引用归零时断开。专用 SSE 首帧提供当前值与水位，后续只传该元组的更新，重连重新取首帧。
 

@@ -82,7 +82,7 @@ test('Sidebar.tsx 智能体站位结构取代旧新建下拉：站位新建入�
   // 新：Agent 站位 + 新建对话按钮（agent-new-conv-btn）。
   assert.match(
     sidebarSource,
-    /<AgentStandingsGroup\s+store=\{store\}\s+onNavigate=\{onClose\}\s*\/>/,
+    /<AgentStandingsGroup\s+store=\{store\}\s+background=\{background\}\s+onNavigate=\{onClose\}\s*\/>/,
     'Sidebar 必须将 onClose 传递给 AgentStandingsGroup 作为导航后关闭回调',
   )
   assert.match(
