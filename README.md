@@ -24,6 +24,7 @@ Helm 按机制、插件和产品组合分包。`@helm/hub` 连接 `@helm/kernel`
 | `@helm/plugins` | 内置插件、业务契约、客户端视图与技能资产 | 官方插件集合 |
 | `@helm/plugin-client` | 共享 UI 原语、上下文与宿主能力端口 | 浏览器 SDK |
 | `@helm/plugin-build` | 插件前后端源码构建 | 注入式构建实现 |
+| `@helm/env-io` | Hub 与节点共享的执行侧 I/O 实现 | 路径进程占用扫描 |
 | `@helm/cli` | 命令行客户端，与 API 完全同权 | 控制命令（`helm`） |
 | `@helm/node` | 受控节点守护进程，反向连接 Hub | 节点服务（`helm-node`） |
 | `@helm/web` | 响应式 Web 主控台 | Web 界面（Vite SPA） |

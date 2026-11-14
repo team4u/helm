@@ -97,7 +97,7 @@
 
 重启恢复分两个阶段完成，顺序由宿主全局 prepare 屏障保证：
 
-**阶段一 `prepareRecovery`**（全部服务 `start` 之前）：只读遗留记录，对 running 状态的子会话调用 `prepareInterruptedConversations` 落持久 abort 标记。此阶段**不唤醒 SDK 调度器、不提交任何输入**——此刻其他插件的工具尚未注册，任何输入提交都会产生 orphan 回合。
+**阶段一 `prepareRecovery`**（全部服务 `start` 之前）：只读遗留记录，对自己登记为 running 的子会话调用 `abortConversationGuarded`。调度器暂停时，该操作只落持久 abort 标记，并逐任务复核会话归属。此阶段**不唤醒 SDK 调度器、不提交任何输入**——此刻其他插件的工具尚未注册，任何输入提交都会产生 orphan 回合。
 
 **阶段二 `init`**（全部插件 prepare 完成后）：终止遗留子任务（等待真实终态，不先回报 interrupted 却让旧回合继续跑）、把遗留 `running` 显式标 `failed(interrupted)`（subagent 类附「可凭 conversationId/executionId 通过 resume 续接」提示；DSL 类附「账本完好，可经 resumeFromRunId 恢复」）、补发崩溃前已达终态但未通知的父会话汇报（outbox 机制，`notifiedAt` 防重复）。随后快照已持久分片集合并同步 runs 投影与角标。
 

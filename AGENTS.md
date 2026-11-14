@@ -67,7 +67,7 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
 - **分层入口**：`scripts/test-suites.mjs`（复用 `scripts/run-tests.mjs` 的跨平台超时与进程树清理），三档命令：`pnpm test:unit` / `pnpm test:integration` / `pnpm test:all`（`pnpm test` 等同 `test:all`）。
 - **单测防死锁**：每个测试显式声明 `{ timeout: 60_000 }`（runner 为 `tsx --test`）；不依赖 Unix `timeout` 命令；不用过滤管道隐藏失败日志；**勿设 `HELM_TEST_SUITE_TIMEOUT_MS` 环境变量**（kernel 的 `env-registry-races` 会因宿主残留 HELM_* 变量误报）。
 - **分档与执行规则**：
-  - `unit` = `protocol + cli + web + plugin-client`（进程内 / happy-dom DOM 模拟，不起真实服务）——改协议、CLI、Web 或浏览器 SDK 时默认跑；
+  - `unit` = `protocol + env-io + cli + web + plugin-client`（进程内 / happy-dom DOM 模拟，不起真实服务）——改协议、CLI、Web 或浏览器 SDK 时默认跑；
   - `integration` = `kernel + plugins + hub + plugin-build + node + payload + desktop`（真实进程、SQLite、Git、WebSocket、源码构建、`createHelm`、daemon、payload 组装与桌面壳 Hub 子进程监督，全部视为集成）——改任一执行、插件、产品或构建包时必跑；
   - 跨档契约变更两档都跑；合并前与全量验收跑 `test:all`。不变量 `all = unit ∪ integration` 不重不漏；新测试文件必须落在已登记包的 `test/` 目录，新包同步更新 `scripts/test-suites.mjs` 的 `SUITES` 分档。
 - **快速反馈门（补充而非替代）**：`pnpm check:changed` 按变更集（`--base <ref>` 显式基线优先；默认取分支 upstream 或 origin/HEAD 的 merge-base，均无则报错要求 `--base`，绝不静默退化 HEAD~1；变更集 = 已提交 ∪ 暂存/未暂存 ∪ 未跟踪；pnpm 传参用 `--` 分隔，如 `pnpm check:changed -- --base main --list`）选受影响包（workspace 依赖反向闭包，锁文件/根配置/测试基础设施（含 `scripts/**/*.mjs`）变更触发全档），顺序跑 `pnpm typecheck` →（选中 desktop 测试时先 `pnpm --filter @helm/desktop run build`，typecheck 不产其 dist）→ 受影响包测试（复用 `run-tests.mjs`）；`--list` 先复核选集。`pnpm check:hygiene` 用 TypeScript AST 静态检查测试卫生（显式 timeout、skip 必附理由、禁设 `HELM_TEST_SUITE_TIMEOUT_MS`）。二者只提供增量快速反馈，不改变本节分档必跑与合并前 `test:all` 的规定。

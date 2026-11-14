@@ -95,7 +95,7 @@ export interface EnvExecInput {
 
 ### 目标节点进程占用快照
 
-`EnvFabric.inspectPathUsage(nodeId, path, signal?)` 与插件端口 `ctx.host.inspectNodePathUsage({ nodeId, path, signal? })` 查询绝对路径是否被进程 cwd 或打开的文件句柄引用。local 在 Hub 进程内执行，远端通过节点 `envPathUsage` RPC 执行；两侧共用 protocol 的纯扫描编排器，只注入各自的文件系统操作，不建立 kernel 对 node 包的运行时依赖，也不启动扫描子进程。
+`EnvFabric.inspectPathUsage(nodeId, path, signal?)` 与插件端口 `ctx.host.inspectNodePathUsage({ nodeId, path, signal? })` 查询绝对路径是否被进程 cwd 或打开的文件句柄引用。local 在 Hub 进程内执行，远端通过节点 `envPathUsage` RPC 执行；两侧共用 `@helm/env-io` 的扫描实现与文件系统适配，protocol 只定义 RPC 形状。kernel 与 node 互不依赖实现代码，也不启动扫描子进程。
 
 结果提供 PID、进程名、引用来源和路径，以及扫描完整性、真实命中进程数和报告截断标记。无法读取的进程或句柄必须反映为 `complete: false`；消费方不能把不完整结果当作零占用。离线节点、不支持的平台或无效响应显式失败。当前只支持 Linux 的可见 `/proc` 视图，不读取命令行和环境变量，不自动终止进程；扫描是一次性快照，不提供跨进程互斥。`builtin:workflow` 在删除 worktree 前使用该端口，权限不足或不支持的平台会阻止自动清理，详见 [worktree 清理规则](../workflows/worktree-and-gate.md)。
 

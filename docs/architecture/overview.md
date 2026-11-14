@@ -81,6 +81,9 @@ flowchart TD
     Web --> Protocol
     Cli["@helm/cli"] --> Protocol
     Node["@helm/node"] --> Protocol
+    Kernel --> EnvIo["@helm/env-io 执行侧共享实现"]
+    Node --> EnvIo
+    EnvIo --> Protocol
 ```
 
 `@helm/protocol` 定义通用会话、RPC、事件和插件扩展契约，保持零运行时重依赖。工作流、工作树和外部执行控制的业务类型与校验归属插件。内核不通过插件专属字段识别执行策略，插件之间经自己的契约协作。
@@ -96,6 +99,7 @@ flowchart TD
 | `@helm/plugins` | — | 官方插件、插件业务契约、客户端视图与技能资产 |
 | `@helm/plugin-client` | — | 共享 UI 原语、上下文、Hooks 与宿主接入端口 |
 | `@helm/plugin-build` | — | 插件源码构建实现，由产品组合根注入宿主 |
+| `@helm/env-io` | — | 执行侧共享 I/O 实现，当前承载路径进程占用扫描 |
 | `@helm/hub` | `helm-hub` | 默认插件注册、构建实现接线、服务进程启动与关闭 |
 | `@helm/node` | `helm-node` | 远端执行、文件系统操作与自升级 |
 | `@helm/cli` | `helm` | 静态核心命令表 + 动作清单动态命令 |

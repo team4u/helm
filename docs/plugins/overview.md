@@ -54,7 +54,7 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 
 ### 生命周期与全局启动屏障
 
-插件状态机覆盖「注册、启用、执行、停用、卸载」五个阶段。关键时序约束是**全局 prepare 后 start 屏障**：`PluginHost.start` 先对全体已启用服务执行 `prepare()`，全部完成后才依次执行 `start()`，最后恢复会话调度。热启用单个插件同样先 prepare 后 start。这一屏障存在的理由：`builtin:workflow` 需要在任何输入提交之前，先为重启中断的子会话落持久取消标记（`prepareInterruptedConversations`）——如果此刻其他插件的工具尚未注册，任何输入提交都会产生 orphan 回合。
+插件状态机覆盖「注册、启用、执行、停用、卸载」五个阶段。关键时序约束是**全局 prepare 后 start 屏障**：`PluginHost.start` 先对全体已启用服务执行 `prepare()`，全部完成后才依次执行 `start()`，最后恢复会话调度。热启用单个插件同样先 prepare 后 start。这一屏障存在的理由：`builtin:workflow` 需要在任何输入提交之前，先对自己登记的中断子会话调用 `abortConversationGuarded` 落持久取消标记——如果此刻其他插件的工具尚未注册，任何输入提交都会产生 orphan 回合。
 
 ### 插件间依赖（仅 ID，不做版本解析）
 
@@ -133,12 +133,16 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 | 输入与会话 | `submitInput(id, text, opts)` / `submitInputGuarded(id, text, opts, guard)` | `requestId` 支持跨重启幂等提交；`origin: human/agent/trigger`；`whenBusy: steer/followUp/reject`；`submitInputGuarded` 在提交点原子复核归属（严禁 human）与 CAS 水位 |
 | 会话管理 | `createConversation / listConversations / getConversation / getConversationDetail / updateConversation / abortConversation / abortConversationGuarded` | 全套会话生命周期；`abortConversationGuarded` 在首个不可逆动作前原子复核归属与水位；`manageConversation` 声明删除保护（`409 conversation_managed_by_plugin`）；`markConversationOwnership` 标记归属权 |
 | 人机审批 | `createAsk / cancelAsk / registerAskSeqResolver` | AskDoc 创建与 CAS 水位解析器注册 |
-| 子代理与执行 | `spawnAgent / runGate / execEnv / prepareInterruptedConversations / resolveSpawnTarget / listActiveSpawnExecutions / probeNodeFs / withFileMutationQueue` | `agent_spawn` 管道派生、门禁命令、跨节点执行（复用 EnvFabric 与脱敏） |
+| 子代理与执行 | `spawnAgent / runGate / execEnv / resolveSpawnTarget / listActiveSpawnExecutions / withFileMutationQueue` | `agent_spawn` 管道派生、门禁命令、跨节点执行（复用 EnvFabric 与脱敏） |
 | 动作互调与插件治理 | `prepareAction / invokeAction / listActions / plugins` | 跨插件动作 preflight 与执行；`ctx.host.plugins` 提供受管包生命周期（`list / listUi / doctor / install / update / remove / enable / disable`，拦截自指修改） |
 | 资产端口 | `profiles / skills / secrets` | Profile 读写与 SYSTEM.md、技能受管自举、插件私有机密（credentials.json `pluginSecrets.<pluginId>`，恒 0600） |
 | 节点与文件 | `nodeIpc / nodeFetch / openTunnel / executionEnv / withFileLock / atomicWriteFile / buildSpawnEnv` | 跨节点 IPC 桥（Herdr 用）、节点 HTTP(S) 透传 `fetch`（任意 host，跨节点访问节点视角的 HTTP/HTTPS/SSE 服务）、任意 TCP 透传隧道（原始 Duplex）、目标节点执行环境、文件锁与原子写 |
-| 通用机制 | `redact / redactText / completeText / refreshModels / listPlugins / listUi / setConfig / isClosing` | 脱敏、无工具单次文本补全、目录刷新、清单读取、自身配置更新 |
+| 通用机制 | `redact / completeText / refreshModels / listPlugins / listUi / setConfig / isClosing` | 脱敏、无工具单次文本补全、目录刷新、清单读取、自身配置更新 |
 | 事件 | `onEvent(type, listener) / emitEvent(type, payload, opts)` | 订阅 `workflow.settled`、`conversation.entry` 等事件；`broadcast: false` 仅进程内分发；插件停用自动解除订阅 |
+
+`executionEnv` 提供真实节点文件系统探测，不另设文件存在性包装 API。`resolveSpawnTarget` 与原生派生使用同一个权威解析函数，避免隔离插件与执行行对目标节点、目录的继承规则产生分歧。
+
+`nodeFetch` 返回的响应体属于调用方的在途资源：消费至 EOF、显式取消或传输失败后才结束跟踪。弃置而不关闭的响应仍然占用任务，插件停用与重载返回 `409 plugin_has_live_tasks`；宿主关闭时拆除底层传输。框架不依赖 GC 终结器判断资源是否结束。
 
 两条使用纪律：其一，受管 Git Worktree 清理不在 `ctx.host`——插件如需清理受管工作树，调用 `builtin:workflow` 的 `cleanup_worktree` 动作（经 `invokeAction` 或 CLI `helm worktrees cleanup`）；其二，`execEnv` 目标节点或目录缺省时继承请求中 `conversationId` 对应会话坐标，节点离线显式报 `409 node_offline`，绝不静默回退本机。
 
