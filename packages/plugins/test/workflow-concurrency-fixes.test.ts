@@ -21,9 +21,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
-import { HelmError, type AgentSpawnRequest } from '@helm/protocol'
+import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helm/protocol'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/workflow/isolation.js'
+import { extractWorkflowExecutionMeta } from '../src/contracts.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -377,22 +378,22 @@ describe('外部运行时租约首写 flush 失败', timeout, () => {
     try {
       const handle = makeFakeIsolation({ failFlushFirst: 1 })
       await assertNoUnhandledRejection(async () => {
-        let resolved: { worktree?: { id?: string } } | undefined
+        let resolved: AgentExecutionInfo | undefined
         const result = await handle.isolation.aroundSpawn(
           {
             parentConversationId: 1,
             prompt: '外部任务',
             agentType: 'ext:demo',
             isolation: 'worktree',
-            onResolved: (info: { worktree?: { id?: string } }) => {
-              resolved = info as { worktree?: { id?: string } }
+            onResolved: (info: AgentExecutionInfo) => {
+              resolved = info
             },
           } as never,
           async (final) => {
             // 模拟外部运行时回报 worktree（首次回填即触发租约 flush 失败）。
             ;(final as AgentSpawnRequest).onResolved?.({
               nodeId: 'local',
-              worktree: { path: '/wt/ext-1', branch: 'helm/spawn-ext1' },
+              meta: { 'builtin:workflow': { worktree: { path: '/wt/ext-1', branch: 'helm/spawn-ext1' } } },
               conversationId: 7,
               executionId: 'exec-1',
             })
@@ -400,7 +401,10 @@ describe('外部运行时租约首写 flush 失败', timeout, () => {
           },
         )
         assert.equal(result, 'ext-done')
-        assert.ok(resolved?.worktree?.id, 'enriched worktree 元数据应回传调用方')
+        assert.ok(
+          resolved !== undefined && extractWorkflowExecutionMeta(resolved).worktree?.id,
+          'enriched worktree 元数据应回传调用方',
+        )
         assert.equal(leaseCount(handle.docStore), 0, '结算后租约必须释放（settle 写重试整页落盘）')
       })
       assert.ok(
@@ -410,6 +414,70 @@ describe('外部运行时租约首写 flush 失败', timeout, () => {
     } finally {
       process.stderr.write = originalWrite
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 4b. 外部运行时 meta 命名空间合并往返（防丢其他命名空间/controls 回归）
+// ---------------------------------------------------------------------------
+
+describe('外部运行时 execution meta 合并往返', timeout, () => {
+  it('worktree 增强不丢 other-plugin 命名空间与 controls；租约存 enriched 合并结果', timeout, async () => {
+    const handle = makeFakeIsolation()
+    let resolved: AgentExecutionInfo | undefined
+    let midflightLeaseInfo: AgentExecutionInfo | undefined
+    const result = await handle.isolation.aroundSpawn(
+      {
+        parentConversationId: 1,
+        prompt: '外部任务',
+        agentType: 'ext:demo',
+        isolation: 'worktree',
+        onResolved: (info: AgentExecutionInfo) => {
+          resolved = info
+        },
+      } as never,
+      async (final) => {
+        // 模拟外部运行时（如 herdr）回报：workflow 命名空间同时携带 worktree
+        // 与 controls，另有第三方插件注入的 other-plugin 命名空间。
+        ;(final as AgentSpawnRequest).onResolved?.({
+          nodeId: 'local',
+          conversationId: 7,
+          executionId: 'exec-ns-1',
+          meta: {
+            'builtin:workflow': {
+              worktree: { path: '/wt/ext-ns', branch: 'helm/spawn-extns' },
+              controls: { steer: { pluginId: 'ext:demo', actionId: 'steer' } },
+            },
+            'other-plugin': { keep: ['ns', { roundtrip: true }] },
+          },
+        })
+        // 执行窗口内同步抓取租约快照（结算后即释放）。
+        const leases = handle.docStore.get<Record<string, { info?: AgentExecutionInfo }>>('worktree-leases', {})
+        midflightLeaseInfo = Object.values(leases)[0]?.info
+        return 'ext-done'
+      },
+    )
+    assert.equal(result, 'ext-done')
+    assert.ok(resolved !== undefined, 'onResolved 应回传 enriched 信息')
+    const wfMeta = extractWorkflowExecutionMeta(resolved)
+    assert.equal(wfMeta.worktree?.id, 'local:/wt/ext-ns', 'worktree 应被统一登记并回填稳定 id')
+    assert.deepEqual(
+      wfMeta.controls,
+      { steer: { pluginId: 'ext:demo', actionId: 'steer' } },
+      'worktree 增强不得丢失同命名空间的 controls（steer 委托引用）',
+    )
+    assert.deepEqual(
+      resolved.meta?.['other-plugin'],
+      { keep: ['ns', { roundtrip: true }] },
+      '其他插件的命名空间必须原样保留（合并而非覆盖）',
+    )
+    // 持久租约同样保存 enriched 合并后的 info（不是外部原始回传）。
+    assert.ok(midflightLeaseInfo !== undefined, '执行期间应有租约记录')
+    const leaseWf = extractWorkflowExecutionMeta(midflightLeaseInfo)
+    assert.equal(leaseWf.worktree?.id, 'local:/wt/ext-ns')
+    assert.deepEqual(midflightLeaseInfo.meta?.['other-plugin'], { keep: ['ns', { roundtrip: true }] })
+    // 结算成功后租约释放。
+    assert.equal(Object.keys(handle.docStore.get<Record<string, unknown>>('worktree-leases', {})).length, 0)
   })
 })
 

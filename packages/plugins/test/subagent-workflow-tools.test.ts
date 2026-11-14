@@ -326,7 +326,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
               nodeId: 'local',
               executionId: 'pane-9',
               effectiveCwd: '/srv/wt/helm-42',
-              worktree: { path: '/srv/wt/helm-42', branch: 'helm/wf-run-1' },
+              meta: { 'builtin:workflow': { worktree: { path: '/srv/wt/helm-42', branch: 'helm/wf-run-1' } } },
             })
             return { action: 'handled', result: { external: 'done', detail: 7 } }
           })
@@ -370,11 +370,11 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
   /** 引擎动作（与 HTTP/CLI 同链路；wait:true 返回终态 run）。 */
   const wfRun = (app: Awaited<ReturnType<typeof createHelm>>, request: Record<string, unknown>) =>
     app.kernel.plugins.invokeAction('builtin:workflow', 'run', request) as Promise<{
-      run: import('@helm/protocol').WorkflowRunSummary
+      run: import('../src/contracts.js').WorkflowRunSummary
     }>
   const wfInspect = (app: Awaited<ReturnType<typeof createHelm>>, runId: string) =>
     app.kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as Promise<{
-      run: import('@helm/protocol').WorkflowRunSummary
+      run: import('../src/contracts.js').WorkflowRunSummary
     }>
 
   it('args 为任意 JSON 对象原样到达真实引擎（args.items.map 可用，绝不 String 化）；scriptPath 与 resumeFromRunId 均贯通', { timeout: 60_000 }, async () => {

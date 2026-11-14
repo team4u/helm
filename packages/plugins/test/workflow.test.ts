@@ -2321,7 +2321,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
     const workflows = app.kernel.plugins!
     const runWorkflow = (request: Record<string, unknown>) =>
       workflows.invokeAction('builtin:workflow', 'run', request, { conversationId: app.kernel.listConversations()[0]!.id }) as Promise<
-        import('@helm/protocol').WorkflowRunSummary
+        import('../src/contracts.js').WorkflowRunSummary
       >
     try {
       const sentinels: string[] = []
@@ -2349,7 +2349,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
           (error: unknown) => error instanceof HelmError && error.code === 'workflow_failed',
         )
         const listed = (await workflows.invokeAction('builtin:workflow', 'runs', {})) as unknown as {
-          runs: Array<import('@helm/protocol').WorkflowRunSummary>
+          runs: Array<import('../src/contracts.js').WorkflowRunSummary>
         }
         // 取本脚本名下终态 failed 的那一条。
         const failedRuns = listed.runs.filter((r) => r.name === `real-exec-cleanup-${index}`)

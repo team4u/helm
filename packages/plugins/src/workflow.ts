@@ -35,29 +35,28 @@
  *   默认可继续派生二层，达到子树上限的会话即编排叶子。私有登记表持久
  *   depth / parentConversationId / 子树上限等事实，before_turn 剥离派工工具、工具/动作入口
  *   前置拒绝、agent_spawn 最高优先级兜底，三道防线显式报
- *   subagent_depth_exceeded；显式扩展到更深层经插件配置
- *   与 AgentSpawnRequest.maxSubagentDepth 请求字段（均校验在
+ *   subagent_depth_exceeded；显式扩展到更深层经插件配置与 spawn meta 的
+ *   本插件命名空间 maxSubagentDepth 字段（均校验在
  *   HARD_MAX_SUBAGENT_DEPTH 内，受管子代理不能提高继承的上限）
  *   （fork / SuperAgent worker 不在表内，不受影响）。
  */
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { HelmError, safeResultText, type AgentExecutionInfo, type AgentSpawnRequest, type PluginDefinition } from '@helm/protocol'
 import {
   DEFAULT_MAX_SUBAGENT_DEPTH,
   HARD_MAX_SUBAGENT_DEPTH,
-  HelmError,
+  WORKFLOW_META_NAMESPACE,
   WORKFLOW_PLUGIN_ID,
   WORKFLOW_RUNS_DOC,
   WORKFLOW_RUN_BADGES_DOC,
-  safeResultText,
-  type AgentExecutionInfo,
-  type AgentSpawnRequest,
-  type PluginDefinition,
-  type WorkflowRunSummary,
+  parseWorkflowSpawnMeta,
+  withWorkflowSpawnMeta,
   type WorkflowRunBadgesDocState,
   type WorkflowRunSessionDocState,
-} from '@helm/protocol'
+  type WorkflowRunSummary,
+} from './contracts.js'
 import { WorkflowService } from './workflow/engine/index.js'
 import { normalizeWorkflowArgs } from './workflow/engine/runtime.js'
 import { steerBackgroundSubagent } from './workflow/steer.js'
@@ -389,13 +388,16 @@ export function createWorkflowPlugin(): PluginDefinition {
       // 任何入口（同步工具 / 后台 run / 引擎节点 / 未来调用方）派生的子会话
       // 都被记账，重启后依旧生效。
       ctx.hook.onAgentSpawn(async (request, next) => {
+        // 业务扩展字段经 meta 的本插件命名空间携带：内核只校验 envelope
+        //（JSON-safe），业务值在此边界用本插件 schema 校验（非法显式拒绝）。
+        const spawnMeta = parseWorkflowSpawnMeta(request.meta)
         const parentFacts = depthFactsOf(request.parentConversationId)
         const childDepth = parentFacts.depth + 1
         if (parentFacts.managed && childDepth > parentFacts.maxSubagentDepth) {
           throw depthExceededError(parentFacts.depth, parentFacts.maxSubagentDepth, request.parentConversationId)
         }
         // 显式扩展请求字段：无效值显式拒绝（不静默丢弃、不擅自锐化）。
-        const explicitCeiling = request.maxSubagentDepth
+        const explicitCeiling = spawnMeta.maxSubagentDepth
         if (
           explicitCeiling !== undefined &&
           (!Number.isInteger(explicitCeiling) || explicitCeiling < 1 || explicitCeiling > HARD_MAX_SUBAGENT_DEPTH)
@@ -425,7 +427,7 @@ export function createWorkflowPlugin(): PluginDefinition {
             if (info.conversationId !== undefined) {
               registerManagedSubagent(info.conversationId, {
                 ...(request.agentType !== undefined ? { agentType: request.agentType } : {}),
-                ...(request.workflowRunId !== undefined ? { runId: request.workflowRunId } : {}),
+                ...(spawnMeta.runId !== undefined ? { runId: spawnMeta.runId } : {}),
                 depth: childDepth,
                 parentConversationId: request.parentConversationId,
                 maxSubagentDepth: childCeiling,
@@ -982,7 +984,9 @@ export function createWorkflowPlugin(): PluginDefinition {
             ...(a['resume'] !== undefined ? { resume: String(a['resume']) } : {}),
             ...(a['model'] !== undefined ? { model: String(a['model']) } : {}),
             ...(a['effort'] !== undefined ? { effort: String(a['effort']) } : {}),
-            ...(a['maxSubagentDepth'] !== undefined ? { maxSubagentDepth: Number(a['maxSubagentDepth']) } : {}),
+            ...(a['maxSubagentDepth'] !== undefined
+              ? { meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: Number(a['maxSubagentDepth']) }) }
+              : {}),
             ...(Array.isArray(a['attachments']) ? { attachments: a['attachments'] as string[] } : {}),
             ...(Array.isArray(a['secretNames']) ? { secretNames: a['secretNames'] as string[] } : {}),
             onResolved: (info) => {

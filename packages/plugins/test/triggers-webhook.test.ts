@@ -15,21 +15,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
-import {
-  HelmError,
-  type ConversationSummary,
-  type MaybePromise,
-  type PluginDefinition,
-  type WorkflowRunSummary,
-  type ExternalTriggerEnvelope,
-} from '@helm/protocol'
+import { HelmError, type ConversationSummary, type MaybePromise, type PluginDefinition, type ExternalTriggerEnvelope } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../src/contracts.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import { CredentialService, credentialsPath } from '../../kernel/src/services/index.js'
 import { SecretStash } from '../../kernel/src/services/secret-stash.js'
 import { createTriggersPlugin } from '../src/triggers.js'
 import { TRIGGERS_PLUGIN_ID, webhookSecretKey } from '../src/triggers/contracts.js'
 import { STOP_REQUEST_WAIT_MS } from '../src/triggers/webhook.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
 
 /** POSIX 0600 断言：Windows 无 POSIX mode（NTFS 走 ACL），跳过模式位校验。 */
 async function assertCredentialsMode0600(dataDir: string): Promise<void> {

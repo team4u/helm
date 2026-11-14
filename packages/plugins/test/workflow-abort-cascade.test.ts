@@ -20,6 +20,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmError, type AgentSpawnRequest, type ConversationSummary } from '@helm/protocol'
+import { parseWorkflowSpawnMeta } from '../src/contracts.js'
+import type { AgentNamespacedMeta } from '@helm/protocol'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 
 const timeout = { timeout: 60_000 } as const
@@ -374,8 +376,8 @@ describe('WorkflowService 级联取消', () => {
 
     assert.equal(service.getRun(started.id).status, 'completed')
     assert.deepEqual(result, ['ok-1', 'ok-2'])
-    const resumeSpawn = host.spawns[1] as { resume?: string; maxSubagentDepth?: number; prompt?: string }
-    assert.equal(resumeSpawn.maxSubagentDepth, 3, '显式续接授权透传到 spawn 请求（不被静默丢弃）')
+    const resumeSpawn = host.spawns[1] as { resume?: string; meta?: AgentNamespacedMeta; prompt?: string }
+    assert.equal(parseWorkflowSpawnMeta(resumeSpawn.meta).maxSubagentDepth, 3, '显式续接授权透传到 spawn 请求（不被静默丢弃）')
     assert.equal(typeof resumeSpawn.resume, 'string', '续接引用随请求传递')
     await service.close()
   })

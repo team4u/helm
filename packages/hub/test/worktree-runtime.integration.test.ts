@@ -42,7 +42,12 @@ import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHelm } from '../src/app.js'
 import { createHubHandler } from '../../kernel/src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { extractWorkflowExecutionMeta } from '@helm/plugins/contracts'
+
+/** 提取受管 worktree 描述（execution meta 的 workflow 命名空间业务值）。 */
+function worktreeOf(info: AgentExecutionInfo | undefined) {
+  return info === undefined ? undefined : extractWorkflowExecutionMeta(info).worktree
+}
 
 /**
  * 平台事实：进程占用扫描当前仅 Linux /proc。非 Linux 上 cleanup 在进程检查处
@@ -122,7 +127,7 @@ async function openRuntime(dataDir: string, cwd?: string): Promise<RuntimeEnv> {
   const models = createModels()
   const faux = fauxProvider()
   models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
+  const app = await createHelm({
     dataDir,
     cwd: cwd ?? dataDir,
     model: 'faux/faux-1',
@@ -236,7 +241,7 @@ describe('builtin:worktree 隔离派生（agent_spawn continuation）', { timeou
       assert.ok(resolved, 'onResolved 应回传执行环境元数据')
       assert.equal(resolved!.nodeId, 'local')
       assert.ok(resolved!.conversationId !== undefined && resolved!.conversationId > 1, '应派生真子会话')
-      const worktree = resolved!.worktree
+      const worktree = worktreeOf(resolved)
       assert.ok(worktree, 'isolation:worktree 必须回传 worktree 元数据')
       assert.ok(worktree!.path.includes(join(dir, '.helm-worktrees')), `worktree 应位于同级 .helm-worktrees：${worktree!.path}`)
       assert.ok(worktree!.branch.startsWith('helm/spawn-'), `分支应为 helm/spawn-*：${worktree!.branch}`)
@@ -343,8 +348,8 @@ describe('失败路径资源保留（防 continuation 收敛误删回归）', { 
           return true
         },
       )
-      assert.ok(resolved?.worktree, 'gate 失败前 onResolved 已回传 worktree')
-      const wtPath = resolved!.worktree!.path
+      assert.ok(worktreeOf(resolved), 'gate 失败前 onResolved 已回传 worktree')
+      const wtPath = worktreeOf(resolved)!.path
       // 关键防回归：gate 失败（子会话已 settle）绝不触发回收误删。
       assert.ok(existsSync(wtPath), 'gate 失败后 worktree 必须保留（供人类检视）')
       assert.ok(existsSync(join(wtPath, 'wip-artifact.txt')), '子会话未提交产物必须保留')
@@ -397,10 +402,10 @@ describe('失败路径资源保留（防 continuation 收敛误删回归）', { 
           return true
         },
       )
-      assert.ok(resolved?.worktree)
-      const preExisting = join(resolved!.worktree!.path, 'partial.txt')
+      assert.ok(worktreeOf(resolved))
+      const preExisting = join(worktreeOf(resolved)!.path, 'partial.txt')
       // 关键断言：continuation 收敛不得回收已绑定子会话的隔离树（防误删回归）。
-      assert.ok(existsSync(resolved!.worktree!.path), '模型失败后 worktree 必须保留')
+      assert.ok(existsSync(worktreeOf(resolved)!.path), '模型失败后 worktree 必须保留')
       assert.ok(existsSync(preExisting), '未提交产物必须保留')
     } finally {
       await env.close()
@@ -433,11 +438,11 @@ describe('失败路径资源保留（防 continuation 收敛误删回归）', { 
       } as AgentSpawnRequest)
       const deadline = Date.now() + 10_000
       while (Date.now() < deadline) {
-        if (resolved?.worktree && existsSync(join(resolved.worktree.path, 'cancel-marker.txt'))) break
+        if (worktreeOf(resolved) && existsSync(join(worktreeOf(resolved)!.path, 'cancel-marker.txt'))) break
         await new Promise((r) => setTimeout(r, 50))
       }
-      assert.ok(resolved?.worktree, '取消前 onResolved 应回传 worktree')
-      assert.ok(existsSync(join(resolved!.worktree!.path, 'cancel-marker.txt')), '取消前子会话应已写入产物')
+      assert.ok(worktreeOf(resolved), '取消前 onResolved 应回传 worktree')
+      assert.ok(existsSync(join(worktreeOf(resolved)!.path, 'cancel-marker.txt')), '取消前子会话应已写入产物')
       // 产物写入发生在首轮工具调用；等待第二轮模型请求真正进入 held，
       // 再发起取消，避免全量测试并发时过早 abort 只取消了首轮收敛。
       const heldDeadline = Date.now() + 10_000
@@ -450,8 +455,8 @@ describe('失败路径资源保留（防 continuation 收敛误删回归）', { 
 
       const childId = resolved!.conversationId!
       await env.kernel.waitForIdle(childId)
-      assert.ok(existsSync(resolved!.worktree!.path), '取消后 worktree 必须保留（子会话已创建绑定，不得误删）')
-      assert.ok(existsSync(join(resolved!.worktree!.path, 'cancel-marker.txt')), '取消后未提交产物必须保留')
+      assert.ok(existsSync(worktreeOf(resolved)!.path), '取消后 worktree 必须保留（子会话已创建绑定，不得误删）')
+      assert.ok(existsSync(join(worktreeOf(resolved)!.path, 'cancel-marker.txt')), '取消后未提交产物必须保留')
       assert.ok(entered)
     } finally {
       await env.close()
@@ -488,10 +493,10 @@ describe('占用中的 worktree 清理保护', { timeout: 60_000 }, () => {
       } as AgentSpawnRequest)
       const deadline = Date.now() + 10_000
       while (Date.now() < deadline) {
-        if (resolved?.worktree && existsSync(join(resolved.worktree.path, 'in-use-marker.txt'))) break
+        if (worktreeOf(resolved) && existsSync(join(worktreeOf(resolved)!.path, 'in-use-marker.txt'))) break
         await new Promise((r) => setTimeout(r, 50))
       }
-      assert.ok(resolved?.worktree && resolved?.conversationId, '子会话应已创建')
+      assert.ok(worktreeOf(resolved) && resolved?.conversationId, '子会话应已创建')
       const childId = resolved!.conversationId!
       assert.equal(env.kernel.getConversation(childId).status, 'working', '模型挂起期间子会话应为 working')
 
@@ -505,8 +510,8 @@ describe('占用中的 worktree 清理保护', { timeout: 60_000 }, () => {
           return true
         },
       )
-      assert.ok(existsSync(resolved!.worktree!.path), '占用拒绝时目录不得被动')
-      assert.ok(existsSync(join(resolved!.worktree!.path, 'in-use-marker.txt')), '占用期间产物不得被删')
+      assert.ok(existsSync(worktreeOf(resolved)!.path), '占用拒绝时目录不得被动')
+      assert.ok(existsSync(join(worktreeOf(resolved)!.path, 'in-use-marker.txt')), '占用期间产物不得被删')
 
       // 真实收尾：释放模型 + abort，等 spawn settle 与子会话 idle。
       controller.abort()
@@ -595,8 +600,8 @@ describe('cleanup_worktree 动作边界（HTTP Schema/鉴权/透传）', { timeo
           resolved = info
         },
       } as AgentSpawnRequest)
-      assert.ok(resolved?.worktree && resolved?.worktree?.id, '应回传受管 worktree id')
-      const wt = resolved!.worktree!
+      assert.ok(worktreeOf(resolved) && worktreeOf(resolved)?.id, '应回传受管 worktree id')
+      const wt = worktreeOf(resolved)!
 
       // 按受管 id 成功清理（worktreeId 精确选择器；deleteBranch 默认保留分支）。
       const ok = await postCleanup(env, { worktreeId: wt.id })
@@ -664,7 +669,7 @@ describe('外部插件 agent_spawn handled 与 worktree 统一登记', { timeout
               nodeId: 'local',
               executionId: 'test-exec-1',
               effectiveCwd: wtPath,
-              worktree: { path: wtPath, branch: 'helm/wf-external-1' },
+              meta: { 'builtin:workflow': { worktree: { path: wtPath, branch: 'helm/wf-external-1' } } },
             })
             return { action: 'handled', result: '外部任务完成（真实 worktree 内产物已写入）' }
           })
@@ -684,8 +689,8 @@ describe('外部插件 agent_spawn handled 与 worktree 统一登记', { timeout
       assert.equal(result, '外部任务完成（真实 worktree 内产物已写入）')
 
       // 统一登记：onResolved 回传被改写为受管记录（含稳定 id）。
-      assert.ok(resolved?.worktree?.id, '外部回传 worktree 应被统一登记并回填稳定 id')
-      assert.ok(resolved!.worktree!.id!.startsWith('local:'), `受管 id 应为 nodeId:path 形态：${resolved!.worktree!.id}`)
+      assert.ok(worktreeOf(resolved)?.id, '外部回传 worktree 应被统一登记并回填稳定 id')
+      assert.ok(worktreeOf(resolved)!.id!.startsWith('local:'), `受管 id 应为 nodeId:path 形态：${worktreeOf(resolved)!.id}`)
 
       // cleanup 与原生同机制：统一登记记录可定位清理（helm/wf-* 受管前缀）。
       //（外部 handled 路径成功完成：租约按契约释放，可清理。）
@@ -695,7 +700,7 @@ describe('外部插件 agent_spawn handled 与 worktree 统一登记', { timeout
       // native-worktree.test.ts allocator 专项覆盖。
       if (PROCESS_SCAN_ON) {
         const cleaned = await env.invoke.cleanupWorktree({
-          worktreeId: resolved!.worktree!.id!,
+          worktreeId: worktreeOf(resolved)!.id!,
           force: true,
         })
         assert.equal(cleaned.removed, true)
@@ -704,7 +709,7 @@ describe('外部插件 agent_spawn handled 与 worktree 统一登记', { timeout
         const branchList = execFileSync('git', ['branch', '--list', 'helm/wf-external-1'], { cwd: repo, encoding: 'utf8' })
         assert.ok(branchList.includes('helm/wf-external-1'), '分支应默认保留')
       } else {
-        await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ worktreeId: resolved!.worktree!.id!, force: true }))
+        await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ worktreeId: worktreeOf(resolved)!.id!, force: true }))
         assert.ok(existsSync(wtPath), '非 Linux 拒绝清理时目录不得被移除')
       }
     } finally {
@@ -725,7 +730,7 @@ describe('外部插件 agent_spawn handled 与 worktree 统一登记', { timeout
             const request = payload as AgentSpawnRequest
             if (request.agentType !== 'test:no-node') return next(request) as unknown as void
             // 缺 nodeId：不得假设 local。
-            request.onResolved?.({ executionId: 'exec-no-node', worktree: { path: '/srv/wt/x', branch: 'helm/wf-x' } })
+            request.onResolved?.({ executionId: 'exec-no-node', meta: { 'builtin:workflow': { worktree: { path: '/srv/wt/x', branch: 'helm/wf-x' } } } })
             return { action: 'handled', result: '假成功：无节点' }
           })
         },
@@ -795,7 +800,7 @@ describe('同子会话并发 resume 互斥', { timeout: 60_000 }, () => {
         isolation: 'worktree',
         onResolved: (info) => {
           childId = info.conversationId ?? 0
-          firstWtPath = info.worktree?.path ?? ''
+          firstWtPath = worktreeOf(info)?.path ?? ''
         },
       } as AgentSpawnRequest)
       assert.ok(childId > 0)
@@ -960,7 +965,7 @@ describe('持久租约未知占用保护（fail-closed）', { timeout: 60_000 },
               nodeId: 'local',
               executionId: 'ext-pane-7',
               effectiveCwd: wtPath,
-              worktree: { path: wtPath, branch: 'helm/wf-lease-1' },
+              meta: { 'builtin:workflow': { worktree: { path: wtPath, branch: 'helm/wf-lease-1' } } },
             },
             worktreeId,
             createdAt: Date.now(),
@@ -992,11 +997,11 @@ describe('持久租约未知占用保护（fail-closed）', { timeout: 60_000 },
           resolved = info
         },
       } as AgentSpawnRequest)
-      assert.ok(resolved?.worktree, '成功 spawn 应回传 worktree')
-      const leases = env.pluginDoc.get<Record<string, { info?: { worktree?: { path?: string } } }>>('worktree-leases', {})
-      const leasePaths = Object.values(leases).map((l) => l.info?.worktree?.path)
+      assert.ok(worktreeOf(resolved), '成功 spawn 应回传 worktree')
+      const leases = env.pluginDoc.get<Record<string, { info?: AgentExecutionInfo }>>('worktree-leases', {})
+      const leasePaths = Object.values(leases).map((l) => worktreeOf(l.info)?.path)
       assert.ok(
-        !leasePaths.includes(resolved!.worktree!.path),
+        !leasePaths.includes(worktreeOf(resolved)!.path),
         `成功 settle 后租约应释放，实得 ${JSON.stringify(leasePaths)}`,
       )
       if (PROCESS_SCAN_ON) {

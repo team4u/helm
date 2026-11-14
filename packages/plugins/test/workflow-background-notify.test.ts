@@ -23,7 +23,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
-import { HelmError, type AgentExecutionInfo, type WorkflowRunSummary } from '@helm/protocol'
+import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../src/contracts.js'
 import {
   WorkflowService,
   type WorkflowServiceHost,

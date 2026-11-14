@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
-import type { WorkflowRunSummary } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../src/contracts.js'
 import { EventHub } from '../../kernel/src/runtime/events.js'
 import {
   WorkflowService,
@@ -172,7 +172,7 @@ test('phase/log 与 onResolved 元数据立即推送：workflow.updated 携带 p
     async (request) => {
       request.onResolved?.({
         conversationId: 4242,
-        worktree: { path: '/tmp/wt-iso', branch: 'helm/wf-1' },
+        meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt-iso', branch: 'helm/wf-1' } } },
       })
       request.onGateResult?.({ ok: true, output: '' })
       return '完成结果'

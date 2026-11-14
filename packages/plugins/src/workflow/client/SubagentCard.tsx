@@ -9,7 +9,8 @@
  */
 import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ToolViewProps, WorkflowRunSummary } from '@helm/protocol'
+import type { ToolViewProps } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../../contracts.js'
 import { useConversation, useConversations, usePluginContext, useToolActivity } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { ExecutionCard } from './ExecutionCard.tsx'

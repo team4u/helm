@@ -30,7 +30,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-work
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
-import { HelmError } from '@helm/protocol'
+import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -40,6 +40,7 @@ import assert from 'node:assert/strict'
 import { createEnvFabric } from '../../kernel/src/env/fabric.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../../kernel/src/runtime/spawn.js'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/workflow/worktree.js'
+import { extractWorkflowExecutionMeta } from '../src/contracts.js'
 import { WorktreeIsolation } from '../src/workflow/isolation.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
@@ -385,7 +386,7 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
     const repo = makeGitRepo(join(dir, 'repo'))
     const th = await openSpawnHarness(repo, join(dir, 'data'))
     try {
-      let resolved: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } } | undefined
+      let resolved: AgentExecutionInfo | undefined
       th.faux.setResponses([
         fauxAssistantMessage([fauxToolCall('bash', { command: 'pwd && git branch --show-current' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('任务完成'),
@@ -395,16 +396,17 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
         prompt: '在 worktree 里执行 pwd',
         isolation: 'worktree',
         gate: 'test -f README.md && git rev-parse --is-inside-work-tree | grep -qx true',
-        onResolved: (info: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } }) => {
-          resolved = info as typeof resolved
+        onResolved: (info: AgentExecutionInfo) => {
+          resolved = info
         },
       } as never)
       assert.equal(result, '任务完成')
 
       // onResolved：worktree 元数据回传（path/branch），path 位于同级 .helm-worktrees。
-      assert.ok(resolved?.worktree, 'onResolved 应回传 worktree 元数据')
-      const wtPath = resolved!.worktree!.path
-      const wtBranch = resolved!.worktree!.branch
+      const resolvedWt = resolved !== undefined ? extractWorkflowExecutionMeta(resolved).worktree : undefined
+      assert.ok(resolvedWt, 'onResolved 应回传 worktree 元数据')
+      const wtPath = resolvedWt!.path
+      const wtBranch = resolvedWt!.branch
       assert.ok(wtBranch.startsWith('helm/spawn-'), `分支名应为 helm/spawn-*：${wtBranch}`)
       assert.ok(wtPath.includes(join(dir, '.helm-worktrees')), `worktree 应位于同级 .helm-worktrees 下：${wtPath}`)
       assert.ok(existsSync(wtPath), 'worktree 目录应真实存在')
@@ -443,8 +445,8 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
         prompt: 'gate 取证',
         isolation: 'worktree',
         gate: 'pwd > .helm-gate-pwd.txt && test -f README.md',
-        onResolved: (info: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } }) => {
-          wtPath = info.worktree?.path ?? ''
+        onResolved: (info: AgentExecutionInfo) => {
+          wtPath = extractWorkflowExecutionMeta(info).worktree?.path ?? ''
         },
       } as never)
       assert.ok(wtPath !== '', '应回传 worktree path')
@@ -560,7 +562,7 @@ describe('dirty 源仓库诚实提示', { timeout: 60_000 }, () => {
         parentConversationId: 1,
         prompt: 'dirty 源任务',
         isolation: 'worktree',
-        onResolved: (info: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } }) => {
+        onResolved: (info: AgentExecutionInfo) => {
           childId = info.conversationId ?? 0
         },
       } as never)
@@ -597,9 +599,9 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
         parentConversationId: 1,
         prompt: '第一轮',
         isolation: 'worktree',
-        onResolved: (info: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } }) => {
+        onResolved: (info: AgentExecutionInfo) => {
           childId = info.conversationId ?? 0
-          firstWt = info.worktree
+          firstWt = extractWorkflowExecutionMeta(info).worktree
         },
       } as never)
       assert.ok(childId > 0 && firstWt)
@@ -611,8 +613,8 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
         parentConversationId: 1,
         prompt: '续接',
         resume: String(childId),
-        onResolved: (info: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } }) => {
-          resumedWt = info.worktree
+        onResolved: (info: AgentExecutionInfo) => {
+          resumedWt = extractWorkflowExecutionMeta(info).worktree
         },
       } as never)
       assert.equal(second, '续接完成')
@@ -640,7 +642,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
         parentConversationId: 1,
         prompt: '第一轮',
         isolation: 'worktree',
-        onResolved: (info: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } }) => {
+        onResolved: (info: AgentExecutionInfo) => {
           childId = info.conversationId ?? 0
         },
       } as never)
@@ -678,7 +680,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
         parentConversationId: 1,
         prompt: '第一轮',
         isolation: 'worktree',
-        onResolved: (info: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } }) => {
+        onResolved: (info: AgentExecutionInfo) => {
           childId = info.conversationId ?? 0
         },
       } as never)
@@ -842,7 +844,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
         parentConversationId: 1,
         prompt: '任务',
         isolation: 'worktree',
-        onResolved: (info: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } }) => {
+        onResolved: (info: AgentExecutionInfo) => {
           childId = info.conversationId ?? 0
         },
       } as never)
@@ -880,7 +882,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
         parentConversationId: 1,
         prompt: '任务',
         isolation: 'worktree',
-        onResolved: (info: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } }) => {
+        onResolved: (info: AgentExecutionInfo) => {
           childId = info.conversationId ?? 0
         },
       } as never)
@@ -918,7 +920,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
         parentConversationId: 1,
         prompt: '任务',
         isolation: 'worktree',
-        onResolved: (info: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } }) => {
+        onResolved: (info: AgentExecutionInfo) => {
           childId = info.conversationId ?? 0
         },
       } as never)
@@ -998,7 +1000,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
         parentConversationId: 1,
         prompt: '任务',
         isolation: 'worktree',
-        onResolved: (info: { conversationId?: number; effectiveCwd?: string; worktree?: { path: string; branch: string } }) => {
+        onResolved: (info: AgentExecutionInfo) => {
           childId = info.conversationId ?? 0
         },
       } as never)

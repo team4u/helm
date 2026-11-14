@@ -28,17 +28,13 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import {
-  HelmError,
-  type AgentGateResult,
-  type AskResult,
-  type ConversationSummary,
-  type MaybePromise,
-  type Profile,
-  type WorkflowRunSummary,
-} from '@helm/protocol'
+import { HelmError, type AgentGateResult, type AskResult, type ConversationSummary, type MaybePromise, type Profile } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../src/contracts.js'
 import { PluginHost, type PluginConfigStore, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHerdrPlugin } from '../src/herdr.js'
+import { extractWorkflowExecutionMeta } from '../src/contracts.js'
+import type { AgentExecutionInfo } from '@helm/protocol'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
 import type { DiagnosticsCollection } from '../src/diagnostics.js'
@@ -46,7 +42,6 @@ import { LocalNodeChannel } from '../src/herdr/local-node-channel.js'
 import type { HelmHostNodeIpcPort } from '@helm/protocol'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 受控 HerdrTransport
@@ -1064,10 +1059,10 @@ test('Worktree 隔离: 两步建窗注入 env、关初始 tab、workspace.close 
     assert.equal(tabCreates.length, 1, '补建一个带 env 的 tab')
     assert.ok(tabCreates[0]!.params['workspace_id'])
     assert.ok(env.transport.calls.some((c) => c.method === 'tab.close'), '关闭初始空 tab')
-    // onResolved 回传 worktree 元数据 + effectiveCwd 为 worktree.path。
-    const wt = resolved!['worktree'] as { path: string; branch: string }
-    assert.ok(wt.path.includes('.worktrees/'))
-    assert.equal(resolved!['effectiveCwd'], wt.path)
+    // onResolved 回传 worktree 元数据（workflow 命名空间）+ effectiveCwd 为 worktree.path。
+    const wt = extractWorkflowExecutionMeta(resolved as AgentExecutionInfo).worktree
+    assert.ok(wt?.path.includes('.worktrees/'))
+    assert.equal(resolved!['effectiveCwd'], wt!.path)
     // 父回合 settle -> workspace.close。
     await env.host.runHook('turn_settled', turnSettledOf(1))
     assert.ok([...env.transport.workspaces.values()].some((w) => w.closed), '关闭自有最后一个 tab 后 Herdr 回收空 worktree workspace')
@@ -1081,7 +1076,7 @@ test('双轨清理: workflowRunId 由 onWorkflowSettled 关；独立 pane 由父
   try {
     // workflow 轨道。
     scriptSuccess(env, 'wf-ok')
-    await spawnDirect(env, { agentType: 'herdr:agy', workflowRunId: 'wf_run1' })
+    await spawnDirect(env, { agentType: 'herdr:agy', meta: { 'builtin:workflow': { runId: 'wf_run1' } } })
     const pane1 = [...env.transport.panes.values()][0]!
     await env.host.runHook('turn_settled', turnSettledOf(1))
     assert.equal(env.transport.tabs.get(pane1.tabId)!.closed, false, 'workflow pane 不由父回合关')

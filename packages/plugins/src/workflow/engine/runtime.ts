@@ -32,7 +32,7 @@ import {
 import { type CompiledSchema, compileJsonSchema } from './json-schema.js'
 import { extractMeta, type WorkflowMeta } from './meta.js'
 import type { AgentExecutionInfo, AgentGateResult } from '@helm/protocol'
-import { HARD_MAX_SUBAGENT_DEPTH } from '@helm/protocol'
+import { extractWorkflowExecutionMeta, HARD_MAX_SUBAGENT_DEPTH } from '../../contracts.js'
 import type { WorkflowActionEntry, WorkflowAgentEntry, WorkflowEntry } from './progress.js'
 import { WORKER_SOURCE } from './worker-source.js'
 
@@ -1093,7 +1093,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             if (info.conversationId !== undefined) base.conversationId = info.conversationId
             if (info.executionId !== undefined) base.executionId = info.executionId
             if (info.effectiveCwd !== undefined) base.effectiveCwd = info.effectiveCwd
-            if (info.worktree !== undefined) base.worktree = info.worktree
+            const wfExecMeta = extractWorkflowExecutionMeta(info)
+            if (wfExecMeta.worktree !== undefined) base.worktree = wfExecMeta.worktree
             if (info.modelName !== undefined) base.model = info.modelName
             if (info.thinking !== undefined) base.thinking = info.thinking
             if (info.requestedThinking !== undefined) base.requestedThinking = info.requestedThinking
@@ -1154,7 +1155,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                 if (info.conversationId !== undefined) base.conversationId = info.conversationId
                 if (info.executionId !== undefined) base.executionId = info.executionId
                 if (info.effectiveCwd !== undefined) base.effectiveCwd = info.effectiveCwd
-                if (info.worktree !== undefined) base.worktree = info.worktree
+                const wfExecMeta = extractWorkflowExecutionMeta(info)
+                if (wfExecMeta.worktree !== undefined) base.worktree = wfExecMeta.worktree
               }
               if (result.gate !== undefined && base.gate === undefined) base.gate = result.gate
               if (compiledSchema !== undefined && result.ok) {

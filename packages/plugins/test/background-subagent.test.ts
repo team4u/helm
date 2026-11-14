@@ -22,7 +22,8 @@ import { after, before, describe, it } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError, type AgentExecutionInfo, type WorkflowRunSummary } from '@helm/protocol'
+import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../src/contracts.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 
 const timeout = { timeout: 60_000 } as const
@@ -177,7 +178,7 @@ describe('startBackgroundAgent', () => {
       execution: {
         conversationId: 42,
         effectiveCwd: '/tmp/wt',
-        worktree: { path: '/tmp/wt', branch: 'helm/spawn-1' },
+        meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt', branch: 'helm/spawn-1' } } },
       },
       result: 'slow-task-result',
     }
@@ -198,7 +199,7 @@ describe('startBackgroundAgent', () => {
     assert.deepEqual(execution, {
       conversationId: 42,
       effectiveCwd: '/tmp/wt',
-      worktree: { path: '/tmp/wt', branch: 'helm/spawn-1' },
+      meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt', branch: 'helm/spawn-1' } } },
     })
     // 节点元数据已就位（getRun 实时视图）。
     const live = service.getRun(run.id)

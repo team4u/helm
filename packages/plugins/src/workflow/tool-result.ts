@@ -1,14 +1,16 @@
 import type { AgentExecutionInfo } from '@helm/protocol'
+import { extractWorkflowExecutionMeta } from '../contracts.js'
 
-/** 插件结构化结果仅保留执行底座实际回传的字段。 */
+/** 插件结构化结果仅保留执行底座实际回传的字段（worktree 经业务 meta 提取）。 */
 export function executionOf(info: AgentExecutionInfo): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   if (info.nodeId !== undefined) out['nodeId'] = info.nodeId
   if (info.conversationId !== undefined) out['conversationId'] = info.conversationId
   if (info.executionId !== undefined) out['executionId'] = info.executionId
   if (info.effectiveCwd !== undefined) out['effectiveCwd'] = info.effectiveCwd
-  if (info.worktree !== undefined) {
-    out['worktree'] = { ...info.worktree }
+  const worktree = extractWorkflowExecutionMeta(info).worktree
+  if (worktree !== undefined) {
+    out['worktree'] = { ...worktree }
   }
   return out
 }
@@ -20,9 +22,10 @@ export function subagentFooter(resumeRef: string | undefined, resolved: AgentExe
   if (resolved?.conversationId !== undefined) parts.push(`conversationId=${resolved.conversationId}`)
   if (resolved?.executionId !== undefined) parts.push(`executionId=${resolved.executionId}`)
   if (resolved?.effectiveCwd !== undefined) parts.push(`cwd=${resolved.effectiveCwd}`)
-  if (resolved?.worktree !== undefined) {
-    parts.push(`worktree=${resolved.worktree.path}@${resolved.worktree.branch}`)
-    if (resolved.worktree.id !== undefined) parts.push(`worktreeId=${JSON.stringify(resolved.worktree.id)}`)
+  const worktree = resolved === undefined ? undefined : extractWorkflowExecutionMeta(resolved).worktree
+  if (worktree !== undefined) {
+    parts.push(`worktree=${worktree.path}@${worktree.branch}`)
+    if (worktree.id !== undefined) parts.push(`worktreeId=${JSON.stringify(worktree.id)}`)
     parts.push('cleanup=cleanup_worktree')
   }
   return parts.length === 0 ? '' : `[subagent ${parts.join(' ')}]`

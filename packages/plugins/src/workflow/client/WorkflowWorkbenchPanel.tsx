@@ -4,7 +4,8 @@
  */
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { WorkbenchPanelProps, WorkflowRunSummary } from '@helm/protocol'
+import type { WorkbenchPanelProps } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../../contracts.js'
 import { useConversations } from '@helm/plugin-client'
 import { usePluginSessionDoc } from './hooks.ts'
 import { buildExecutionTree, executionToolStatus } from './model-execution-tree.ts'

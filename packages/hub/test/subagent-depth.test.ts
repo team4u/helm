@@ -30,6 +30,7 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError } from '@helm/protocol'
+import { withWorkflowSpawnMeta } from '@helm/plugins/contracts'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -573,7 +574,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
       await app.kernel.spawnAgent({
         parentConversationId: 1,
         prompt: '授予三层的子树',
-        maxSubagentDepth: 3,
+        meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: 3 }),
         onResolved: (info) => {
           if (info.conversationId !== undefined) grantedChild = info.conversationId
         },
@@ -609,7 +610,7 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
             app.kernel.spawnAgent({
               parentConversationId: 1,
               prompt: '无效授予',
-              maxSubagentDepth: invalid,
+              meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: invalid as number }),
             }),
           (err: unknown) => {
             assert.ok(err instanceof HelmError, `maxSubagentDepth=${invalid} 应为 HelmError`)
@@ -621,7 +622,12 @@ describe('workflow 子代理深度契约（默认上限 2）', { timeout: 60_000
       // 子代理不能自行提高继承的上限，也不能设置低于目标层级的上限。
       for (const ceiling of [4, 1]) {
         await assert.rejects(
-          () => app.kernel.spawnAgent({ parentConversationId: child1, prompt: '越界授权', maxSubagentDepth: ceiling }),
+          () =>
+            app.kernel.spawnAgent({
+              parentConversationId: child1,
+              prompt: '越界授权',
+              meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: ceiling }),
+            }),
           (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
         )
       }

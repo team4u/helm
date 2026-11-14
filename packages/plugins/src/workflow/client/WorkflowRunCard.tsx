@@ -7,7 +7,8 @@
  */
 import { useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ToolViewProps, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
+import type { ToolViewProps } from '@helm/protocol'
+import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
 import { formatDurationMs, useConversations, usePluginContext, useToolActivity } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'

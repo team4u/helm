@@ -20,15 +20,9 @@ import { after, describe, it } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  HelmError,
-  WORKFLOW_PLUGIN_ID,
-  type AgentExecutionInfo,
-  type AgentSpawnRequest,
-  type ConversationSummary,
-  type MaybePromise,
-  type WorkflowRunSummary,
-} from '@helm/protocol'
+import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest, type ConversationSummary, type MaybePromise } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../src/contracts.js'
+import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
 import { steerBackgroundSubagent, parseExternalSteerResult } from '../src/workflow/steer.js'
 import { isAncestorOrSelf } from '../src/lineage.js'
 import { createModels } from '@earendil-works/pi-ai/models'

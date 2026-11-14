@@ -15,24 +15,17 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer, type Server, type Socket } from 'node:net'
-import {
-  HelmError,
-  type AgentGateResult,
-  type AskResult,
-  type ConversationSummary,
-  type MaybePromise,
-  type Profile,
-  type WorkflowRunSummary,
-} from '@helm/protocol'
+import { HelmError, type AgentGateResult, type AskResult, type ConversationSummary, type MaybePromise, type Profile } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../src/contracts.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { LocalNodeChannel } from '../src/herdr/local-node-channel.js'
 import type { PluginConfigStore } from '../../kernel/src/plugins/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import type { HelmHostNodeIpcPort } from '@helm/protocol'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 受控环境（与 herdr-plugin-fixes 同构；父会话 nodeId 可配置）

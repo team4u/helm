@@ -2,7 +2,8 @@
  * builtin:workflow 插件 client 纯逻辑：统一执行树 ExecutionTree / ExecutionNode
  * （任意深度递归视图模型、状态聚合、前线活动与后代审批摘要；零 React/DOM 依赖）。
  */
-import type { ConversationSummary, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol'
+import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
 import { compactCardTitle, subagentBadge } from './model-subagent.ts'
 import type { SubagentCardStatus } from './model-subagent.ts'
 import { firstLineOf } from './model-format.ts'

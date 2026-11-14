@@ -527,7 +527,7 @@ async function spawnRun(
     parentConversationId: 1,
     prompt: 'do the thing',
     agentType: 'herdr:agy',
-    workflowRunId: 'wf_run0000000009',
+    meta: { 'builtin:workflow': { runId: 'wf_run0000000009' } },
     ...rest,
     signal,
   } as never).then((hookOutcome) => {

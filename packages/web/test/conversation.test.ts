@@ -4,7 +4,10 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry, ConversationLive, WorkflowRunSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive } from '@helm/protocol'
+// 类型引用（test-only）：workflow/herdr 共享契约已自 @helm/protocol 迁至 kernel 插件层；
+// 与既有 web 测试引用 kernel 私有源码的约定一致（如 mermaid-theme.test.ts），纯类型零运行时耦合，不放宽生产包边界。
+import type { WorkflowRunSummary } from '@helm/plugins/contracts'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 // subagent/workflow 纯逻辑已迁入 builtin:workflow 插件 client 模块（kernel 真实
 // esbuild 编译后动态 import；react 等 shim 在编译前挂载，类型经 helpers 断言）。
@@ -35,14 +38,14 @@ function resolveSubagentConversationId(
 function resolveWorkflowRunForTool(
   tool: ToolTrace,
   parentConversationId: number,
-  workflowRuns: ReadonlyArray<import('@helm/protocol').WorkflowRunSummary>,
-): import('@helm/protocol').WorkflowRunSummary | undefined {
+  workflowRuns: ReadonlyArray<import('@helm/plugins/contracts').WorkflowRunSummary>,
+): import('@helm/plugins/contracts').WorkflowRunSummary | undefined {
   return resolveWorkflowRunForToolImpl(toWorkflowToolInput(tool), parentConversationId, workflowRuns)
 }
 function resolveSubagentExecutionMeta(
   tool: ToolTrace,
   parentConversationId: number,
-  workflowRuns: ReadonlyArray<import('@helm/protocol').WorkflowRunSummary>,
+  workflowRuns: ReadonlyArray<import('@helm/plugins/contracts').WorkflowRunSummary>,
 ) {
   return resolveSubagentExecutionMetaImpl(toWorkflowToolInput(tool), parentConversationId, workflowRuns)
 }

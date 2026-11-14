@@ -507,6 +507,9 @@ importers:
       '@helm/plugin-build':
         specifier: workspace:*
         version: link:../plugin-build
+      '@helm/plugins':
+        specifier: workspace:*
+        version: link:../plugins
       '@types/react':
         specifier: ^19.0.0
         version: 19.3.0

@@ -26,19 +26,34 @@
  * 会话状态读取错误不当作安全（fail-closed）；节点探测失败不当作目录缺失；
  * 机密元数据拒绝落库。
  */
-import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest, type NodePathUsage } from '@helm/protocol'
-import { sanitizeAgentExecutionInfo as sanitizeExecutionInfo } from '@helm/protocol'
+import { HelmError, sanitizeAgentExecutionInfo as sanitizeExecutionInfo, redactJsonValue, type AgentExecutionInfo, type AgentSpawnRequest, type NodePathUsage } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
+import {
+  extractWorkflowExecutionMeta,
+  workflowExecutionMeta,
+  type WorktreeExecutionDescriptor,
+} from '../contracts.js'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from './worktree.js'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
 import { ExecutionError, FileError, type Result, type ShellExecResult } from '@earendil-works/pi-durable/env'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
-import { redactJsonValue } from '@helm/protocol'
 
 /** 外部运行时 agentType 命名空间形态：'namespace:kind'（通用约定，零插件点名）。 */
 function isExternalRuntimeAgentType(agentType: string | undefined): boolean {
   return agentType !== undefined && agentType.includes(':')
+}
+
+/**
+ * 把受管 worktree 描述写进 execution meta 的 workflow 命名空间：合并保留
+ * 信封其余字段、其他插件命名空间与 workflow 命名空间未提及的既有键（如
+ * 外部运行时回传的 controls）；本层是原生路径 worktree 业务值的唯一生产方。
+ */
+function withWorktreeExecutionMeta(
+  info: AgentExecutionInfo,
+  worktree: WorktreeExecutionDescriptor,
+): AgentExecutionInfo {
+  return { ...info, meta: workflowExecutionMeta({ worktree }, info.meta) }
 }
 
 /**
@@ -209,7 +224,7 @@ export class WorktreeIsolation {
     for (const info of this.deps.host.listActiveSpawnExecutions()) {
       if (info.nodeId !== nodeId) continue
       if (info.effectiveCwd !== undefined && this.contains(path, info.effectiveCwd)) return true
-      const wt = info.worktree
+      const wt = extractWorkflowExecutionMeta(info).worktree
       if (wt !== undefined && this.contains(path, wt.path)) return true
     }
     // 2) 本插件租约：pending（占位）与 running 一视同仁——按 worktreeId 从
@@ -392,17 +407,16 @@ export class WorktreeIsolation {
         ...(isolationNotice !== '' ? { prompt: `${request.prompt}${isolationNotice}` } : {}),
         onResolved: (raw) => {
           const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-          const enriched: AgentExecutionInfo = {
-            ...info,
-            nodeId: info.nodeId ?? target.nodeId,
-            worktree: {
+          const enriched: AgentExecutionInfo = withWorktreeExecutionMeta(
+            { ...info, nodeId: info.nodeId ?? target.nodeId },
+            {
               path: record.path,
               branch: record.branch,
               id: record.id,
               ...(record.repoRoot !== '' ? { repoRoot: record.repoRoot } : {}),
               ...(record.baseCommit !== '' ? { baseCommit: record.baseCommit, dirtySource: record.dirtySource } : {}),
             },
-          }
+          )
           if (info.conversationId !== undefined) {
             this.allocator.bindConversation(record.path, record.nodeId, info.conversationId)
             this.recordAgentBinding(request.agentId, info.conversationId)
@@ -457,17 +471,16 @@ export class WorktreeIsolation {
         isolation: undefined,
         onResolved: (raw) => {
           const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-          const enriched: AgentExecutionInfo = {
-            ...info,
-            nodeId: info.nodeId ?? record.nodeId,
-            worktree: {
+          const enriched: AgentExecutionInfo = withWorktreeExecutionMeta(
+            { ...info, nodeId: info.nodeId ?? record.nodeId },
+            {
               path: record.path,
               branch: record.branch,
               id: record.id,
               ...(record.repoRoot !== '' ? { repoRoot: record.repoRoot } : {}),
               ...(record.baseCommit !== '' ? { baseCommit: record.baseCommit, dirtySource: record.dirtySource } : {}),
             },
-          }
+          )
           this.updateLease(leaseToken, enriched)
           execution = enriched
           request.onResolved?.(enriched)
@@ -499,16 +512,17 @@ export class WorktreeIsolation {
       ...request,
       onResolved: (raw) => {
         const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-        if (info.worktree !== undefined) {
+        const externalWorktree = extractWorkflowExecutionMeta(info).worktree
+        if (externalWorktree !== undefined) {
           if (info.nodeId === undefined) {
             throw new HelmError('execution_info_invalid', '隔离工作树必须回传实际 nodeId，不能推测外部运行时的节点', 502)
           }
           const managed =
-            this.allocator.findActive({ path: info.worktree.path, nodeId: info.nodeId }) ??
+            this.allocator.findActive({ path: externalWorktree.path, nodeId: info.nodeId }) ??
             this.allocator.registerExternal({
               nodeId: info.nodeId,
-              path: info.worktree.path,
-              branch: info.worktree.branch,
+              path: externalWorktree.path,
+              branch: externalWorktree.branch,
               parentConversationId: request.parentConversationId,
               ...(info.conversationId !== undefined ? { conversationId: info.conversationId } : {}),
               ...(info.executionId !== undefined ? { executionId: info.executionId } : {}),
@@ -518,15 +532,12 @@ export class WorktreeIsolation {
           if (JSON.stringify(safe) !== JSON.stringify(managed)) {
             throw new HelmError('worktree_metadata_secret', `隔离执行元数据包含已登记机密，拒绝持久化；执行标识 ${info.executionId ?? info.conversationId ?? '未知'}`, 400)
           }
-          const enriched: AgentExecutionInfo = {
-            ...info,
-            worktree: {
-              ...info.worktree,
-              id: managed.id,
-              ...(managed.repoRoot !== '' ? { repoRoot: managed.repoRoot } : {}),
-              ...(managed.baseCommit !== '' ? { baseCommit: managed.baseCommit, dirtySource: managed.dirtySource } : {}),
-            },
-          }
+          const enriched: AgentExecutionInfo = withWorktreeExecutionMeta(info, {
+            ...externalWorktree,
+            id: managed.id,
+            ...(managed.repoRoot !== '' ? { repoRoot: managed.repoRoot } : {}),
+            ...(managed.baseCommit !== '' ? { baseCommit: managed.baseCommit, dirtySource: managed.dirtySource } : {}),
+          })
           if (info.conversationId !== undefined) {
             this.recordAgentBinding(request.agentId, info.conversationId)
           }

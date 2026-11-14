@@ -7,14 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  HelmError,
-  type ConversationSummary,
-  type EnvExecResponse,
-  type MaybePromise,
-  type PluginDefinition,
-  type WorkflowRunSummary,
-} from '@helm/protocol';
+import { HelmError, type ConversationSummary, type EnvExecResponse, type MaybePromise, type PluginDefinition } from '@helm/protocol';
 import { PluginHost, type PluginDocStore } from '../src/plugins/index.js';
 import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js';
 import { createPluginBuildProvider } from '@helm/plugin-build';
@@ -51,7 +44,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   /** 会话管理保护记录：(conversationId, pluginId) → 仍生效即存在。 */
   managed = new Map<string, { conversationId: number; pluginId: string }>();
   askSeqResolvers = new Set<(askId: string) => MaybePromise<number | undefined>>();
-  workflowListeners = new Set<(run: WorkflowRunSummary) => void | Promise<void>>();
+  workflowListeners = new Set<(run: unknown) => void | Promise<void>>();
 
   constructor() {
     super();
@@ -93,9 +86,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   runGate(): Promise<{ ok: boolean; output: string }> {
     return Promise.resolve({ ok: true, output: '' });
   }
-  cleanupWorktree(): Promise<import('@helm/protocol').WorktreeCleanupResult> {
-    return Promise.resolve({ removed: false, worktreeId: '', path: '', branch: '', nodeId: '', branchDeleted: false });
-  }
   invokeAction(pluginId: string, actionId: string): Promise<unknown> {
     void pluginId;
     void actionId;
@@ -136,9 +126,9 @@ class FakeBackend extends PluginHostBackendFixtureBase {
     };
   }
   onEvent(_type: string, listener: (payload: unknown) => void | Promise<void>): () => void {
-    this.workflowListeners.add(listener as (run: WorkflowRunSummary) => void | Promise<void>);
+    this.workflowListeners.add(listener);
     return () => {
-      this.workflowListeners.delete(listener as (run: WorkflowRunSummary) => void | Promise<void>);
+      this.workflowListeners.delete(listener);
     };
   }
   emitEvent(type: string, payload: unknown): void {
@@ -670,7 +660,9 @@ test('onEvent(workflow.settled) 监听：停用自动解除；回调计入在途
     id: 'p:wf',
     definePlugin: (ctx) => {
       void ctx.host.onEvent('workflow.settled', async (raw) => {
-        const run = raw as WorkflowRunSummary;
+        // 通用事件通道：payload 对内核是不透明 unknown（workflow.settled 的
+        // 业务形状由 @helm/plugins 契约解释，kernel 不依赖插件业务契约）。
+        const run = raw as { id: string };
         await new Promise((r) => setTimeout(r, 10));
         settledRuns.push(run.id);
       });
@@ -678,13 +670,8 @@ test('onEvent(workflow.settled) 监听：停用自动解除；回调计入在途
   });
   assert.equal(backend.workflowListeners.size, 1);
 
-  const makeRun = (id: string): WorkflowRunSummary => ({
+  const makeRun = (id: string): { id: string } => ({
     id,
-    name: 'demo',
-    conversationId: 1,
-    status: 'completed',
-    createdAt: 1,
-    updatedAt: 2,
   });
 
   // 正常触发（监听是后端集合：直接调用即可）

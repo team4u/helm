@@ -10,7 +10,7 @@
  */
 
 import type { WorkflowMeta, WorkflowPhaseMeta } from './meta.js'
-import type { AgentExecutionInfo } from '@helm/protocol'
+import type { WorktreeExecutionDescriptor } from '../../contracts.js'
 
 /** Raw entry lifecycle, as written by the runtime. */
 export type WorkflowEntryState = 'start' | 'progress' | 'done' | 'error'
@@ -52,8 +52,8 @@ export interface WorkflowAgentEntry {
   executionId?: string
   /** 实际生效工作目录（绝对路径；外部执行环境回传或宿主确认）。 */
   effectiveCwd?: string
-  /** isolation: 'worktree' 分配的隔离工作树。 */
-  worktree?: AgentExecutionInfo['worktree']
+  /** isolation: 'worktree' 分配的隔离工作树（见插件共享契约模块）。 */
+  worktree?: WorktreeExecutionDescriptor
   /** 完整 prompt（审计用；持久面已脱敏）。 */
   prompt?: string
   /** 结构化输出 JSON Schema（脚本声明原样）。 */

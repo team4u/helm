@@ -32,6 +32,12 @@ import assert from 'node:assert/strict'
 import { createHelm } from '../src/app.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { HelmError } from '@helm/protocol'
+import { extractWorkflowExecutionMeta } from '@helm/plugins/contracts'
+
+/** 提取受管 worktree 描述（execution meta 的 workflow 命名空间业务值）。 */
+function worktreeOf(info: AgentExecutionInfo | undefined) {
+  return info === undefined ? undefined : extractWorkflowExecutionMeta(info).worktree
+}
 
 /**
  * 平台事实：进程占用扫描当前仅 Linux /proc。非 Linux 上 cleanup 在进程检查处
@@ -121,11 +127,12 @@ async function spawnCleanWorktree(env: RuntimeEnv): Promise<{ worktreeId: string
       resolved = info
     },
   } as AgentSpawnRequest)
-  assert.ok(resolved?.worktree?.id, '应回传受管 worktree id')
+  const worktree = worktreeOf(resolved)
+  assert.ok(worktree?.id, '应回传受管 worktree id')
   return {
-    worktreeId: resolved!.worktree!.id,
-    path: resolved!.worktree!.path,
-    branch: resolved!.worktree!.branch,
+    worktreeId: worktree!.id!,
+    path: worktree!.path,
+    branch: worktree!.branch,
   }
 }
 
@@ -148,10 +155,10 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
           resolved = info
         },
       } as AgentSpawnRequest)
-      assert.ok(resolved?.worktree?.id, '应回传受管 worktree id')
-      const worktreeId = resolved!.worktree!.id
-      const path = resolved!.worktree!.path
-      const branch = resolved!.worktree!.branch
+      assert.ok(worktreeOf(resolved)?.id, '应回传受管 worktree id')
+      const worktreeId = worktreeOf(resolved)!.id
+      const path = worktreeOf(resolved)!.path
+      const branch = worktreeOf(resolved)!.branch
       const childId = resolved!.conversationId!
 
       // ---- list_worktrees：登记元数据完整且新建在前。----
@@ -219,7 +226,7 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
           resolved = info
         },
       } as AgentSpawnRequest)
-      const worktreeId = resolved!.worktree!.id
+      const worktreeId = worktreeOf(resolved)!.id
 
       // 未登记路径：404 not_found（不支持任意目录）。
       await assert.rejects(
@@ -232,7 +239,7 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
         (err: unknown) => err instanceof Error && /需提供|validation_error/.test(err.message),
       )
       await assert.rejects(
-        () => env.invoke.inspectWorktree({ worktreeId, path: resolved!.worktree!.path }),
+        () => env.invoke.inspectWorktree({ worktreeId, path: worktreeOf(resolved)!.path }),
         (err: unknown) => err instanceof Error && /互斥|validation_error/.test(err.message),
       )
       await assert.rejects(

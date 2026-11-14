@@ -33,16 +33,10 @@ import { join } from 'node:path'
 import { createServer, type Socket } from 'node:net'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { setTimeout as delay } from 'node:timers/promises'
-import {
-  HelmError,
-  type AgentGateResult,
-  type AskResult,
-  type ConversationSummary,
-  type MaybePromise,
-  type Profile,
-  type WorkflowRunSummary,
-} from '@helm/protocol'
+import { HelmError, type AgentGateResult, type AskResult, type ConversationSummary, type MaybePromise, type Profile } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../src/contracts.js'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { FsOutputFiles, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
@@ -50,7 +44,6 @@ import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contr
 import { SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
 import { askKey } from '../src/herdr/asks.js'
 import { EMPTY_MANAGED_DOC } from '../src/herdr/panes.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 测试环境（与 herdr.test.ts 同构；独立维护以允许针对返修场景扩展）
@@ -915,12 +908,12 @@ test('resume 真实形状: workflow 无 agentType 续接（resume 第三参 opti
   const env = await makeEnv()
   try {
     scriptSuccess(env, 'wf-first')
-    await spawnDirect(env, { agentType: 'herdr:agy', agentId: 'run1:node-a', workflowRunId: 'run1' })
+    await spawnDirect(env, { agentType: 'herdr:agy', agentId: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } } })
     const tabsBefore = env.transport.calls.filter((c) => c.method === 'tab.create').length
 
     scriptSuccess(env, 'wf-second')
     // workflow resumeAgent：resume=agentId，无 agentType（服务端 resumeAgent 形状）。
-    const resumed = await spawnDirect(env, { resume: 'run1:node-a', agentId: 'run1:node-a', workflowRunId: 'run1', prompt: 'continue' })
+    const resumed = await spawnDirect(env, { resume: 'run1:node-a', agentId: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } }, prompt: 'continue' })
     assert.equal(resumed, 'wf-second')
     assert.equal(env.transport.calls.filter((c) => c.method === 'tab.create').length, tabsBefore, 'workflow 续接不新建 tab')
   } finally {
@@ -932,7 +925,7 @@ test('resume 拒绝: 跨 workflow 轨道 / busy / settled / 歧义 / cwd 冲突 
   const env = await makeEnv()
   try {
     scriptSuccess(env, 'wf-first')
-    await spawnDirect(env, { agentType: 'herdr:agy', agentId: 'run1:node-a', workflowRunId: 'run1' })
+    await spawnDirect(env, { agentType: 'herdr:agy', agentId: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } } })
     const pane = [...env.transport.panes.values()][0]!
 
     // 跨 workflow 轨道（pane 属 run1，请求 undefined 轨道）。
@@ -942,7 +935,7 @@ test('resume 拒绝: 跨 workflow 轨道 / busy / settled / 歧义 / cwd 冲突 
       (e: unknown) => (e as HelmError).code === 'resume_workflow_mismatch',
     )
     // 同 workflow OK。
-    const ok = await spawnDirect(env, { resume: 'run1:node-a', workflowRunId: 'run1' })
+    const ok = await spawnDirect(env, { resume: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } } })
     assert.equal(ok, 'x')
     // busy 拒绝：in-flight 并发（用事件置 running 后另一次 resume）。构造 busy：
     // 先把 registry 置回 running（模拟在途），再 resume。
@@ -954,19 +947,19 @@ test('resume 拒绝: 跨 workflow 轨道 / busy / settled / 歧义 / cwd 冲突 
       await listener({ id: 'run1', name: 'n', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 2 })
     }
     await assert.rejects(
-      spawnDirect(env, { resume: 'run1:node-a', workflowRunId: 'run1' }),
+      spawnDirect(env, { resume: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } } }),
       (e: unknown) => (e as HelmError).code === 'pane_settled',
     )
     // cwd 冲突：settled 已拒——重新 spawn 一个再试。
     scriptSuccess(env, 'y')
-    await spawnDirect(env, { agentType: 'herdr:agy', agentId: 'run2:n', workflowRunId: 'run2' })
+    await spawnDirect(env, { agentType: 'herdr:agy', agentId: 'run2:n', meta: { 'builtin:workflow': { runId: 'run2' } } })
     await assert.rejects(
-      spawnDirect(env, { resume: 'run2:n', workflowRunId: 'run2', cwd: '/tmp/other-cwd' }),
+      spawnDirect(env, { resume: 'run2:n', meta: { 'builtin:workflow': { runId: 'run2' } }, cwd: '/tmp/other-cwd' }),
       (e: unknown) => (e as HelmError).code === 'resume_cwd_conflict',
     )
     // kind 改型拒绝。
     await assert.rejects(
-      spawnDirect(env, { resume: 'run2:n', workflowRunId: 'run2', agentType: 'herdr:claude' }),
+      spawnDirect(env, { resume: 'run2:n', meta: { 'builtin:workflow': { runId: 'run2' } }, agentType: 'herdr:claude' }),
       (e: unknown) => (e as HelmError).code === 'resume_kind_conflict',
     )
     void pane
@@ -1657,9 +1650,9 @@ test('workflow 批量清理逐项隔离：首项失败不中断；陈旧快照 f
   try {
     // p1/p2：keepalive；p3：running（blocked，createAsk 挂起受控）。
     scriptSuccess(env, 'p1-ok')
-    await spawnDirect(env, { agentType: 'herdr:pi', workflowRunId: 'wf_bulk' })
+    await spawnDirect(env, { agentType: 'herdr:pi', meta: { 'builtin:workflow': { runId: 'wf_bulk' } } })
     scriptSuccess(env, 'p2-ok')
-    await spawnDirect(env, { agentType: 'herdr:pi', workflowRunId: 'wf_bulk' })
+    await spawnDirect(env, { agentType: 'herdr:pi', meta: { 'builtin:workflow': { runId: 'wf_bulk' } } })
     const backend = env.backend
     let askEntered = false
     let releaseAsk!: () => void
@@ -1670,7 +1663,7 @@ test('workflow 批量清理逐项隔离：首项失败不中断；陈旧快照 f
       throw new HelmError('ask_backend_broken', 'ask store down', 500)
     }
     env.transport.promptStatus = 'blocked'
-    const p3run = spawnDirect(env, { agentType: 'herdr:pi', workflowRunId: 'wf_bulk' }).catch((error: unknown) => error)
+    const p3run = spawnDirect(env, { agentType: 'herdr:pi', meta: { 'builtin:workflow': { runId: 'wf_bulk' } } }).catch((error: unknown) => error)
     await waitFor(() => askEntered)
     const [p1, p2, p3] = [...env.transport.panes.values()]
     assert.ok(p1 && p2 && p3)

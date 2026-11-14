@@ -52,6 +52,10 @@ import {
   type ConversationSummary,
   type EnvExecRequest,
   type EnvExecResponse,
+} from '@helm/protocol'
+import {
+  extractWorkflowExecutionMeta,
+  withWorkflowSpawnMeta,
   type SavedWorkflowDetail,
   type SavedWorkflowSummary,
   type WorkflowDeleteResult,
@@ -62,7 +66,7 @@ import {
   type WorkflowRunSummary,
   type WorkflowSaveRequest,
   type WorkflowSaveResult,
-} from '@helm/protocol'
+} from '../../contracts.js'
 import { JournalWriter, readJournal, type WorkflowJournalEntry } from './journal.js'
 import { extractMeta, hasMetaDeclaration, type WorkflowMeta } from './meta.js'
 import { collapse, type WorkflowEntry } from './progress.js'
@@ -1769,7 +1773,7 @@ export class WorkflowService {
       ...request,
       ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
       agentId: agentIdForProto,
-      workflowRunId: runId,
+      meta: withWorkflowSpawnMeta(undefined, { runId }),
       onResolved: (raw: unknown) => {
         const info = sanitizeExecutionInfo(raw, { agentId: agentIdForProto })
         executionInfo = info
@@ -1783,8 +1787,10 @@ export class WorkflowService {
         }
         if (info.executionId !== undefined) node.executionId = info.executionId
         if (info.effectiveCwd !== undefined) node.effectiveCwd = info.effectiveCwd
-        if (info.worktree !== undefined) node.worktree = info.worktree
-        if (info.controls !== undefined) node.controls = info.controls
+        // 业务扩展（worktree / 控制引用）在引擎边界用本插件契约校验并落到节点。
+        const wfExecMeta = extractWorkflowExecutionMeta(info)
+        if (wfExecMeta.worktree !== undefined) node.worktree = wfExecMeta.worktree
+        if (wfExecMeta.controls !== undefined) node.controls = wfExecMeta.controls
         record.subagentMeta = {
           ...(request.agentType !== undefined && request.agentType !== ''
             ? { agentType: request.agentType }
@@ -2336,7 +2342,10 @@ export class WorkflowService {
       ...(request.model !== undefined ? { model: request.model } : {}),
       ...(request.effort !== undefined ? { effort: request.effort } : {}),
       ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
-      ...(request.maxSubagentDepth !== undefined ? { maxSubagentDepth: request.maxSubagentDepth } : {}),
+      meta: withWorkflowSpawnMeta(undefined, {
+        runId: run.runId,
+        ...(request.maxSubagentDepth !== undefined ? { maxSubagentDepth: request.maxSubagentDepth } : {}),
+      }),
       ...(request.schema !== undefined ? { schema: request.schema.schema } : {}),
       ...(request.attachments !== undefined ? { attachments: request.attachments } : {}),
       ...(request.secretNames !== undefined ? { secretNames: request.secretNames } : {}),
@@ -2344,7 +2353,6 @@ export class WorkflowService {
       // cwd 不注入：执行行按自身链解析（原生 request>Profile>parent镜像>Hub；
       // herdr request>Profile.workspace>parent>Hub）。引擎层注入会压过 Profile
       // 路由，resume 时更会把已建子会话/Worktree 的实际 cwd 重置回父目录。
-      workflowRunId: run.runId,
       onResolved: (raw: unknown) => {
         const info = sanitizeExecutionInfo(raw, { agentId: nativeAgentId })
         executionInfo = info
@@ -2767,7 +2775,7 @@ export class WorkflowService {
     if (redacted.prompt !== undefined) redacted.prompt = this.redact(redacted.prompt)
     if (redacted.effectiveCwd !== undefined) redacted.effectiveCwd = this.redact(redacted.effectiveCwd)
     if (redacted.worktree !== undefined) {
-      redacted.worktree = redactJsonValue(redacted.worktree, this.redact) as NonNullable<AgentExecutionInfo['worktree']>
+      redacted.worktree = redactJsonValue(redacted.worktree, this.redact) as NonNullable<WorkflowNodeState['worktree']>
     }
     if (redacted.gate !== undefined) {
       redacted.gate = { ok: redacted.gate.ok, output: this.redact(redacted.gate.output) }

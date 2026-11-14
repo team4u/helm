@@ -17,7 +17,10 @@ import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import type { ConversationEntry, ConversationSummary, WorkflowRunSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
+// 类型引用（test-only）：workflow/herdr 共享契约归属 @helm/plugins（自 @helm/protocol
+// 迁出，见 devDependency）；纯类型零运行时耦合，不放宽生产包边界。
+import type { WorkflowRunSummary } from '@helm/plugins/contracts'
 import { makeTestStore } from './helpers/store.js'
 import { TestStoreProvider } from './helpers/host-store.js'
 import { groupUiContributions } from '../src/lib/types.js'

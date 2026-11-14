@@ -5,7 +5,10 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry, WorkflowRunSummary } from '@helm/protocol'
+import type { ConversationEntry } from '@helm/protocol'
+// 类型引用（test-only）：workflow/herdr 共享契约已自 @helm/protocol 迁至 kernel 插件层；
+// 与既有 web 测试引用 kernel 私有源码的约定一致（如 mermaid-theme.test.ts），纯类型零运行时耦合，不放宽生产包边界。
+import type { WorkflowRunSummary } from '@helm/plugins/contracts'
 import { importWorkflowModels, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 
 mountSharedPluginNamespaces()

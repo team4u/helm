@@ -31,6 +31,7 @@ import type {
   RpcResult,
 } from './env-rpc.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
+import type { AgentNamespacedMeta } from './meta.js'
 
 /** JSON Schema 对象；由宿主在边界处统一校验。 */
 export type JsonSchema = Record<string, unknown>
@@ -148,16 +149,15 @@ export interface AgentSpawnRequest {
   onResolved?: (info: AgentExecutionInfo) => void
   /** gate 命令由实际执行环境内恰好一次执行后回传结果；宿主引擎可免二次执行。 */
   onGateResult?: (result: AgentGateResult) => void
-  /** 发起本次派生的 workflow run；非工作流派生缺省。 */
-  workflowRunId?: string
   /**
-   * 显式授予本次派生子代理子树的派生深度上限（可选整数，
-   * 1..HARD_MAX_SUBAGENT_DEPTH）。缺省继承父会话的生效上限（顶层派生取
-   * builtin:workflow 插件配置，默认 DEFAULT_MAX_SUBAGENT_DEPTH=2）。深度
-   * 守卫仍按父会话自身深度先行拒绝；受管子代理不能提高继承的上限。
-   * 只有非受管根会话可显式提高任务树上限。缺省路径无需传参。
+   * 命名空间业务扩展（机制面）：键为声明方插件 ID（如 'builtin:workflow'），
+   * 值为该插件私有的 JSON-safe 对象（runId / 派生深度上限等业务字段）。内核
+   * 只校验 envelope（JSON-safe、有界、无函数/循环），不解释任何命名空间
+   * 内容；各命名空间业务值由其所有方插件在边界用自身 schema 验证（非法
+   * 显式拒绝）。改写请求的 agent_spawn continuation 应原样透传未消费的
+   * 命名空间。
    */
-  maxSubagentDepth?: number
+  meta?: AgentNamespacedMeta
   cwd?: string
   /** 结构化输出 JSON Schema（文件交接时强制落盘校验）。 */
   schema?: JsonSchema
@@ -184,21 +184,9 @@ export interface AgentSpawnRequest {
 /**
  * 子代理实际执行环境元数据（onResolved 回传）。
  * 原生路径至少回传 conversationId；外部运行时（如 herdr）至少回传 executionId。
+ * worktree / 控制引用等业务扩展经 meta 命名空间携带（见 meta.ts）：内核只
+ * 校验 envelope，不解释任何命名空间内部结构（形状由所有方插件边界校验）。
  */
-/**
- * 外部执行环境的控制动作引用（纯机制引用）：执行插件在 onResolved 回传，
- * 供编排层（如 builtin:workflow 的 steer）经宿主 invokeAction 委托控制动作。
- * 只存 pluginId/actionId 动作坐标，绝不携带回调、运行时策略或机密；
- * 具体授权与守卫由目标插件动作独立执行（不因委托而豁免）。
- */
-export interface AgentExecutionControls {
-  /**
-   * 插话（steer）委托：目标动作实现 ExternalSteerRequest / ExternalSteerResult，
-   * 独立校验授权、归属和状态，并如实返回实际守卫级别。
-   */
-  steer?: { pluginId: string; actionId: string }
-}
-
 export interface AgentExecutionInfo {
   /** 实际执行节点，由执行方回传；不能从父会话猜测外部插件的目标。 */
   nodeId?: string
@@ -207,60 +195,20 @@ export interface AgentExecutionInfo {
   executionId?: string
   /** 实际生效的工作目录绝对路径。 */
   effectiveCwd?: string
-  /** isolation: 'worktree' 时分配的隔离工作树（插件层兑现后回传）。 */
-  worktree?: {
-    path: string
-    branch: string
-    /** Helm 受管登记 ID；供 cleanup_worktree 精确定位。 */
-    id?: string
-    repoRoot?: string
-    baseCommit?: string
-    dirtySource?: boolean
-  }
   /**
-   * 外部执行控制动作引用（机制引用，非机密）。仅外部执行可携带：必须与
-   * executionId + nodeId 同时出现（sanitize 拒绝孤立 controls）。
+   * 命名空间业务扩展（机制面）：与 AgentSpawnRequest.meta 同构（如受管
+   * worktree 描述、外部控制动作引用等由对应插件定义形状并在边界校验）。
+   * 内核 envelope 只保证 JSON-safe 与有界，透传不解释。
    */
-  controls?: AgentExecutionControls
+  meta?: AgentNamespacedMeta
 }
 
-/**
- * 外部执行环境 steer 委托标准输入（builtin:workflow.steer 依据节点
- * controls.steer 组装后经宿主 invokeAction 调用执行插件动作）。
- * workflowRunId/parentConversationId 为必填外部控制契约：目标动作必须
- * 与受管执行记录强匹配，绝不凭调用方自报坐标放行。
+/*
+ * 外部执行 steer 委托契约（ExternalSteerRequest / ExternalSteerResult 与
+ * 执行控制引用 AgentExecutionControls）属插件层业务，已迁至内置插件包共享
+ * 契约模块（packages/plugins/src/contracts.ts；workflow 编排层
+ * 与外部执行插件（如 builtin:herdr）共同消费）；protocol 不再出口。
  */
-export interface ExternalSteerRequest {
-  /** 受管执行标识（onResolved.executionId）。 */
-  executionId: string
-  /** 实际执行节点（'local' 或节点 ID）。 */
-  nodeId: string
-  /** 派生该执行的 workflow run ID（强匹配）。 */
-  workflowRunId: string
-  /** 派生该执行的父会话 ID（强匹配）。 */
-  parentConversationId: number
-  /** 插话指导内容（非空白；原样交执行插件组装投递文本）。 */
-  text: string
-}
-
-/**
- * 外部执行环境 steer 委托标准输出（执行插件动作必须返回的严格形状；
- * 委托方逐字段核销，任何坏产物显式拒绝）。
- *
- * steered=true 仅代表文本已投递，不代表指导已被消费或执行完成。
- * preflight 是发送前预检，cas 是提交点的服务端原子复核；两者不可混称。
- */
-export interface ExternalSteerResult {
-  steered: true
-  executionId: string
-  nodeId: string
-  /** 预检或提交点复核时观测的权威水位，具体语义由 guardLevel 区分。 */
-  stateChangeSeq: number
-  /** 外部受管执行一律 helm 归属（human/bot 归属不适用外部窗格）。 */
-  ownership: 'helm'
-  /** preflight：发送前预检；cas：服务端在提交点原子复核。 */
-  guardLevel: 'preflight' | 'cas'
-}
 
 /** gate 命令执行结果；output 为失败时展示给用户的命令输出。 */
 export interface AgentGateResult {
@@ -269,8 +217,8 @@ export interface AgentGateResult {
 }
 
 /*
- * 探针契约（WatchdogProbe 等）已移出 protocol 核心，由插件侧共享契约模块提供
- *（packages/kernel/src/builtin-plugins/diagnostics.ts，'diagnostics.collect'
+ * 探针契约（WatchdogProbe 等）已移出 protocol 核心，由内置插件包共享契约
+ * 模块提供（packages/plugins/src/diagnostics.ts，'diagnostics.collect'
  * 内部事件采集）。
  */
 

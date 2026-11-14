@@ -30,8 +30,13 @@ import type { ModelRegistry } from './model-registry.js'
 import { buildSpawnHost } from './spawn-host.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { resolveSpawnTargetChain } from './spawn-target.js'
-import { gateResultMissingError, sanitizeExecutionInfo, sanitizeGateResult } from './spawn/spawn-exec.js'
-import { runNativeSpawn, validateJsonSchema } from './spawn.js'
+import {
+  agentGateResultMissingError,
+  sanitizeAgentExecutionInfo,
+  sanitizeAgentGateResult,
+  sanitizeAgentNamespacedMeta,
+} from '@helm/protocol'
+import { isSpawnConversationInTurn, runNativeSpawn, validateJsonSchema } from './spawn.js'
 import type { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { buildManagedEnv, runGate } from './tools.js'
@@ -136,17 +141,31 @@ export class RuntimeAgentSpawn {
   /**
    * 子代理派生：agent_spawn around 管道（continuation）-> 默认原生 subagent。
    * 内核零 Git/worktree 语义：隔离等执行环境要求由插件层经 next(finalReq)
-   * 兑现；内核只保留通用保证（schema 校验/gate 回报对账/结果验证）。
+   * 兑现；内核只保留通用保证（meta envelope 校验 / schema 校验 / gate 回报
+   * 对账 / 结果验证；命名空间业务值由所有方插件校验）。
    */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
     if (request.schema !== undefined) assertSchemaCompilable(request.schema)
     validateSecretNames(request.secretNames)
+    // envelope 边界（同步段，先于钩子链与一切 await）：meta 必须是 JSON-safe
+    // 命名空间对象；业务值不在内核校验（所有方插件边界负责）。
+    sanitizeAgentNamespacedMeta(request.meta, {
+      agentId: request.agentId ?? 'subagent',
+      field: 'spawn request meta',
+    })
     const token = randomUUID()
     if (request.resume !== undefined) {
       const resumeId = /^\d+$/.test(request.resume) ? Number(request.resume) : this.agentSessions.get(request.resume)
       const child = resumeId !== undefined ? this.deps.store.getConv(resumeId) : undefined
-      if (child !== undefined && child.parentConversationId === request.parentConversationId) {
-        if ([...this.activeSpawnExecutions.values()].some((info) => info.conversationId === resumeId)) {
+      if (resumeId !== undefined && child !== undefined && child.parentConversationId === request.parentConversationId) {
+        // 早期互斥拒绝（钩子链前）：共享在途注册表（与 runNativeSpawn 同源；
+        // 覆盖直调入口与「子会话已建但 onResolved 未回传」空窗）+ 本映射的
+        // 预置坐标（覆盖钩子链窗口内宿主侧并发 resume）。权威占用在原生执行
+        // 行同步 claim；本映射仅是执行事实镜像与早期检查面。
+        if (
+          isSpawnConversationInTurn(this.deps.harness, resumeId) ||
+          [...this.activeSpawnExecutions.values()].some((info) => info.conversationId === resumeId)
+        ) {
           throw new HelmError('subagent_in_use', `子会话 ${resumeId} 仍有在途执行，不能并发续接`, 409)
         }
         this.activeSpawnExecutions.set(token, { conversationId: resumeId, nodeId: child.nodeId ?? 'local', effectiveCwd: child.cwd })
@@ -154,31 +173,33 @@ export class RuntimeAgentSpawn {
     }
     const originalResolved = request.onResolved
     let execution: AgentExecutionInfo | undefined
-    let gate: ReturnType<typeof sanitizeGateResult> | undefined
+    let gate: ReturnType<typeof sanitizeAgentGateResult> | undefined
     const observed: AgentSpawnRequest = {
       ...request,
       onResolved: (raw) => {
-        const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
+        const info = sanitizeAgentExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
         info.nodeId ??= info.conversationId !== undefined ? this.deps.store.getConv(info.conversationId)?.nodeId : undefined
         execution = info
         this.activeSpawnExecutions.set(token, info)
         originalResolved?.(info)
       },
       onGateResult: (raw) => {
-        gate = sanitizeGateResult(raw, { agentId: request.agentId ?? 'subagent' })
+        gate = sanitizeAgentGateResult(raw, { agentId: request.agentId ?? 'subagent' })
         request.onGateResult?.(gate)
       },
     }
     try {
       const result = await this.spawnAgentObserved(observed)
       if (request.schema !== undefined) {
+        // 跨插件边界终校验：原生行内部的自息/工具校验不因接管（handled）或
+        // 钩子改写而存在，最终产物必须在此重新过一遍 Schema（不可删）。
         const validation = validateJsonSchema(result, request.schema)
         if (!validation.ok) {
           throw new HelmError('schema_validation_failed', `子代理最终结果未满足 Schema：${validation.errors.join('; ')}`, 502)
         }
       }
       if (request.gate !== undefined && execution?.executionId !== undefined && gate === undefined) {
-        throw gateResultMissingError({ agentId: request.agentId ?? 'subagent', executionId: execution.executionId, command: request.gate })
+        throw agentGateResultMissingError({ agentId: request.agentId ?? 'subagent', executionId: execution.executionId, command: request.gate })
       }
       if (gate !== undefined && !gate.ok) {
         throw new HelmError('gate_failed', `子代理验收命令失败：${gate.output}`, 502)
@@ -198,6 +219,13 @@ export class RuntimeAgentSpawn {
     // around（continuation）管道：插件可包裹完整生命周期（在 next 前分配资源、
     // next 后收敛）；handled 仍可完全接管；无插件时直接默认原生执行。
     return this.deps.hookBridge.runHookAround('agent_spawn', request, async (finalRequest) => {
+      // envelope 边界（around 最终请求）：钩子链 transform/continuation 改写
+      // 后的 meta 在进入执行（原生行或接管插件）之前统一复验——入口校验不
+      // 覆盖中间窗口，这里与原生执行行入口的复查互为冗余防线。
+      sanitizeAgentNamespacedMeta(finalRequest.meta, {
+        agentId: finalRequest.agentId ?? request.agentId ?? 'subagent',
+        field: 'spawn request meta',
+      })
       if (
         finalRequest.attachments !== undefined &&
         finalRequest.attachments.length > 0 &&

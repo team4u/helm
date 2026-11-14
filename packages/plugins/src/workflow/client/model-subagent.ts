@@ -10,8 +10,8 @@ import type {
   ConversationLive,
   ConversationSummary,
   ToolViewProps,
-  WorkflowRunSummary,
 } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../../contracts.js'
 import { formatDurationMs } from '@helm/plugin-client'
 import { firstLineOf, inputString } from './model-format.ts'
 

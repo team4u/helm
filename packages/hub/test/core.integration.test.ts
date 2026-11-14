@@ -186,8 +186,8 @@ interface CoreEnv {
   dbPath: string
   faux: ReturnType<typeof fauxProvider>
   app: Awaited<ReturnType<typeof createHelm>>
-  runWorkflow(request: Record<string, unknown>): Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>
-  inspectRun(runId: string): Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>
+  runWorkflow(request: Record<string, unknown>): Promise<{ run: import('@helm/plugins/contracts').WorkflowRunSummary }>
+  inspectRun(runId: string): Promise<{ run: import('@helm/plugins/contracts').WorkflowRunSummary }>
   close(): Promise<void>
 }
 
@@ -204,9 +204,9 @@ async function makeCoreEnv(): Promise<CoreEnv> {
     faux,
     app,
     runWorkflow: (request) =>
-      plugins.invokeAction('builtin:workflow', 'run', request) as Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>,
+      plugins.invokeAction('builtin:workflow', 'run', request) as Promise<{ run: import('@helm/plugins/contracts').WorkflowRunSummary }>,
     inspectRun: (runId) =>
-      plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>,
+      plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as Promise<{ run: import('@helm/plugins/contracts').WorkflowRunSummary }>,
     async close() {
       await app.close().catch(() => {})
       rmSync(dataDir, { recursive: true, force: true })
@@ -2036,7 +2036,7 @@ test('对齐5: 测试插件 agent_spawn handled 外部后端——onResolved 真
             nodeId: 'local',
             executionId: execId,
             effectiveCwd: execDir,
-            worktree: { path: execDir, branch: 'align-wt' },
+            meta: { 'builtin:workflow': { worktree: { path: execDir, branch: 'align-wt' } } },
           })
           // gate 在外部执行环境内真实执行（kernel.runGate 真实 shell 于 execDir）
           if (request.gate !== undefined) {

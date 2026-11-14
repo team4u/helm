@@ -23,6 +23,7 @@
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, targetPlatformOf, type AgentExecutionInfo, type AgentSpawnRequest, type TargetPlatform } from '@helm/protocol'
+import { parseWorkflowSpawnMeta, workflowExecutionMeta } from '../contracts.js'
 import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, HerdrTarget } from './contracts.js'
 import { targetNodeId } from './contracts.js'
 import { validateOrThrow } from '@helm/protocol'
@@ -343,6 +344,8 @@ export class HerdrExecutor {
     const outputFileName = buildOutputFileName(safeId, ext)
     const env = this.buildPaneEnv(request.parentConversationId, cwd, routing, target, request.secretNames)
     const window = await this.createWindow(target, routing, request, cwd, env, agentName)
+    // 编排命名空间业务值在边界校验（内核 envelope 只保证 JSON-safe）。
+    const spawnRunId = parseWorkflowSpawnMeta(request.meta).runId
     const managed: ManagedPane = {
       target: window.target,
       paneId: window.paneId,
@@ -354,7 +357,7 @@ export class HerdrExecutor {
       routing: { kind: routing.kind, ...(routing.profileId !== undefined ? { profileId: routing.profileId } : {}) },
       parentConversationId: request.parentConversationId,
       ...(request.agentId !== undefined ? { agentId: request.agentId } : {}),
-      ...(request.workflowRunId !== undefined ? { workflowRunId: request.workflowRunId } : {}),
+      ...(spawnRunId !== undefined ? { workflowRunId: spawnRunId } : {}),
       outcome: 'running',
       outputFileName,
       createdAt: Date.now(),
@@ -611,12 +614,15 @@ export class HerdrExecutor {
       nodeId: nodeIdOf(pane) ?? 'local',
       executionId: pane.paneId,
       effectiveCwd: pane.effectiveCwd,
-      // 外部执行控制引用：编排层（builtin:workflow.steer）据此动态委托本插件
-      // steer 动作（零硬编码；不携带回调或策略）。
-      controls: { steer: { pluginId: HERDR_STEER_CONTROLS.pluginId, actionId: HERDR_STEER_CONTROLS.actionId } },
-      ...(pane.worktree !== undefined
-        ? { worktree: { path: pane.worktree.path, branch: pane.worktree.branch ?? '' } }
-        : {}),
+      // 业务扩展经编排命名空间 meta 携带（内核 envelope 不解释）：控制引用供
+      // 编排层（builtin:workflow.steer）动态委托本插件 steer 动作（零硬编码；
+      // 不携带回调或策略）；worktree 供隔离层登记租约。
+      meta: workflowExecutionMeta({
+        controls: { steer: { pluginId: HERDR_STEER_CONTROLS.pluginId, actionId: HERDR_STEER_CONTROLS.actionId } },
+        ...(pane.worktree !== undefined
+          ? { worktree: { path: pane.worktree.path, branch: pane.worktree.branch ?? '' } }
+          : {}),
+      }),
     }
   }
 
@@ -1748,7 +1754,7 @@ export class HerdrExecutor {
     }
     // workflow 轨道一致性：两边必须同为同一 workflow（或同为 undefined）。
     const paneWf = pane.workflowRunId
-    const reqWf = request.workflowRunId
+    const reqWf = parseWorkflowSpawnMeta(request.meta).runId
     if (paneWf !== reqWf) {
       throw new HelmError(
         'resume_workflow_mismatch',
@@ -1793,11 +1799,12 @@ export class HerdrExecutor {
     if (this.registry.get(nodeIdOf(pane), pane.paneId)?.outcome === 'running') {
       throw new HelmError('pane_busy', `pane ${pane.paneId} 已由另一续接占用`, 409)
     }
+    const spawnRunId = parseWorkflowSpawnMeta(request.meta).runId
     const updated = this.registry.update(nodeIdOf(pane), pane.paneId, {
       outcome: 'running',
       outputFileName: buildOutputFileName(safeId, ext),
       agentId: request.agentId ?? pane.agentId,
-      ...(request.workflowRunId !== undefined ? { workflowRunId: request.workflowRunId } : {}),
+      ...(spawnRunId !== undefined ? { workflowRunId: spawnRunId } : {}),
     })!
     request.onResolved?.(this.executionInfoOf(updated))
     // request.cwd 缺省代表沿用窗格实际 cwd（不重开窗、不重建 env tab）。

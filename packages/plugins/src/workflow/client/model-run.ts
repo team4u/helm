@@ -3,7 +3,8 @@
  * 工作流运行卡阶段分组 / log 路标 / 节点摘要 / 操作可用判定与节点统计
  * （原 workflow-card-model.ts；零 React/DOM 依赖）。
  */
-import type { ConversationSummary, WorkflowNodeState, WorkflowRunSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol'
+import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
 import { formatShortModelName } from './model-subagent.ts'
 
 /** 工具输出 JSON 里的 run id 字段（"id":"wf_xxx"）精确提取（不匹配子串/前缀）。 */

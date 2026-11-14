@@ -15,8 +15,12 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ConversationSummary, PluginClientContext as PluginClientContextType, ScreenProps, WorkbenchPanelProps, WorkflowRunSummary } from '@helm/protocol'
+import type { ConversationSummary, PluginClientContext as PluginClientContextType, ScreenProps, WorkbenchPanelProps } from '@helm/protocol'
+// 类型引用（test-only）：workflow/herdr 共享契约归属 @helm/plugins（自 @helm/protocol
+// 迁出，见 devDependency）；纯类型零运行时耦合，不放宽生产包边界。
+import type { WorkflowRunSummary } from '@helm/plugins/contracts'
 import { PluginClientContext } from '@helm/plugin-client'
+
 import {
   importWorkflowClientModule,
   importWorkflowModels,

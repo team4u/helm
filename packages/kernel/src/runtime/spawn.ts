@@ -25,7 +25,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { defineExtension, defineTool, type AgentChange, type Extension, type ToolRegistration } from '@earendil-works/pi-durable'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import { HelmError, sanitizeAgentNamespacedMeta } from '@helm/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
 import { validateOrThrow } from '../plugins/schema.js'
@@ -152,33 +152,85 @@ export interface SpawnOutcome {
   kind2?: never
 }
 
-const resumeClaims = new WeakMap<Harness, Set<number>>()
-const structuredSessions = new WeakMap<Harness, Map<number, StructuredOutputSession>>()
+/**
+ * 子会话在途派生互斥（进程内，按 Harness 隔离）：唯一权威锁注册表。
+ *
+ * 两个入口共用本注册表，避免各自为锁时互不可见：
+ * - runNativeSpawn（原生执行行，含测试直调与 around-hook 包裹后的 next 续入）；
+ * - RuntimeAgentSpawn.spawnAgent 的 resume 预检（宿主管道入口，钩子链前早期拒绝）。
+ *
+ * 占用时机（空窗红线）：
+ * - resume：入口同步段（第一个 await 之前）即 claim；
+ * - 新建：createConversation 返回后与 agentSessions 登记同一同步段即 claim，
+ *  覆盖「子会话已存在但 onResolved 尚未回传」的空窗（该窗口内会话状态尚非
+ *  working、宿主 activeSpawnExecutions 尚无坐标，仅者此处可见）。
+ *
+ * 只承诺本进程内互斥（跨进程/跨重启由持久状态与守卫端口负责）；外部运行时
+ * （如 herdr 窗格）的 resume 互斥由其自身受管登记表负责，不经本表。
+ */
+const conversationInTurn = new WeakMap<Harness, Set<number>>()
+
+function inTurnSet(harness: Harness): Set<number> {
+  let set = conversationInTurn.get(harness)
+  if (set === undefined) {
+    set = new Set<number>()
+    conversationInTurn.set(harness, set)
+  }
+  return set
+}
+
+/** 声明占用子会话（同步，无 await）：已被占用时抛 409 subagent_in_use。 */
+export function claimSpawnConversation(harness: Harness, childId: number): void {
+  const set = inTurnSet(harness)
+  if (set.has(childId)) {
+    throw new HelmError('subagent_in_use', `子会话 ${childId} 仍在执行，不能并发续接`, 409, { conversationId: childId })
+  }
+  set.add(childId)
+}
+
+/** 释放占用（finally 路径；幂等）。 */
+export function releaseSpawnConversation(harness: Harness, childId: number): void {
+  inTurnSet(harness).delete(childId)
+}
+
+/** 只读探询（宿主管道入口的早期拒绝用；不占用）。 */
+export function isSpawnConversationInTurn(harness: Harness, childId: number): boolean {
+  return conversationInTurn.get(harness)?.has(childId) ?? false
+}
 
 export async function runNativeSpawn(deps: NativeSpawnDeps, request: AgentSpawnRequest): Promise<unknown> {
+  // envelope 边界（同步段）：meta 必须是 JSON-safe 命名空间对象（钩子链
+  // transform 后的最终请求在此复查；业务值由命名空间所有方插件校验）。
+  sanitizeAgentNamespacedMeta(request.meta, { agentId: request.agentId ?? 'subagent', field: 'spawn request meta' })
   const childId = request.resume === undefined ? undefined : resolveResumeRef(deps, request.resume, request.parentConversationId)
-  let claims = resumeClaims.get(deps.harness)
-  if (claims === undefined) {
-    claims = new Set<number>()
-    resumeClaims.set(deps.harness, claims)
-  }
   if (childId !== undefined) {
+    // 状态预检是与 claim 互补的第二道防线（覆盖未经本表的历史在途状态）。
     const status = deps.getConversation(childId)?.status
-    if (claims.has(childId) || status === 'working' || status === 'blocked') {
+    if (status === 'working' || status === 'blocked') {
       throw new HelmError('subagent_in_use', `子会话 ${childId} 仍在执行，不能并发续接`, 409, { conversationId: childId })
     }
-    claims.add(childId)
+    claimSpawnConversation(deps.harness, childId)
   }
+  const execution: NativeSpawnExecution = {}
   try {
-    return await runNativeSpawnTurn(deps, request)
+    return await runNativeSpawnTurn(deps, request, execution)
   } finally {
-    if (childId !== undefined) claims.delete(childId)
+    if (childId !== undefined) releaseSpawnConversation(deps.harness, childId)
+    if (execution.childId !== undefined) releaseSpawnConversation(deps.harness, execution.childId)
   }
 }
+
+/** 新建派生的子会话 ID 回传通道（创建后同步 claim，外层 finally 统一释放）。 */
+interface NativeSpawnExecution {
+  childId?: number
+}
+
+const structuredSessions = new WeakMap<Harness, Map<number, StructuredOutputSession>>()
 
 async function runNativeSpawnTurn(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
+  execution: NativeSpawnExecution,
 ): Promise<unknown> {
   if (request.isolation !== undefined && request.isolation !== null && request.isolation !== '') {
     // 内核零业务分支：非空 isolation 到达原生执行行 = 没有插件经 agent_spawn
@@ -373,6 +425,11 @@ async function runNativeSpawnTurn(
       )
       childId = conv.id as number
       if (request.agentId) deps.agentSessions.set(request.agentId, childId)
+      // 空窗闭合（见 conversationInTurn 注释）：子会话已存在但 onResolved 尚未
+      // 回传、镜像状态尚非 working 的窗口内，仅此同步占用可见——与 agentSessions
+      // 登记同一同步段 claim，任何并发 resume（宿主管道或直调）立即被拒。
+      claimSpawnConversation(deps.harness, childId)
+      execution.childId = childId
       // 原生 spawn 不打业务角色标签（tags 由宿主策略决定，内核零角色硬编码）。
       await deps.registerChildConversation(
         childId,

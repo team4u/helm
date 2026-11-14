@@ -3,7 +3,7 @@
  * models.ts 只保留纯函数；hook 依赖集中在本文件，供 index.tsx 组件消费。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { WorkflowRunSummary } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../../contracts.js'
 import { useConversation, useConversations, usePluginContext, usePluginDoc, usePluginSessionDoc } from '@helm/plugin-client'
 import { isScrolledToBottom } from './model-format.ts'
 import { parseSavedWorkflowList } from './model-library.ts'

@@ -2,7 +2,7 @@
  * builtin:workflow 插件 client 纯逻辑：工作流库（list/get/save 动作结果的
  * 严格解析、库运行 args 严格解析与「让 AI 修改」请求文案；零 React/DOM 依赖）。
  */
-import type { WorkflowRunSummary } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../../contracts.js'
 import { firstLineOf, inspectString } from './model-format.ts'
 
 // ---------------------------------------------------------------------------

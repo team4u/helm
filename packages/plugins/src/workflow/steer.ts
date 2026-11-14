@@ -26,7 +26,8 @@
  * 本模块零引擎依赖（不 import engine/），全部宿主端口经参数注入，
  * 供 workflow.ts 动作注册与确定性单测共用。
  */
-import { HelmError, type ConversationSummary, type ExternalSteerResult, type WorkflowRunSummary } from '@helm/protocol'
+import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { type ExternalSteerResult, type WorkflowRunSummary } from '../contracts.js'
 import { isAncestorOrSelf } from '../lineage.js'
 
 /** steer 所需宿主端口（ctx.host 子集；注入确定性 fake 即可全覆盖测试）。 */

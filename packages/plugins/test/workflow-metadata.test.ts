@@ -22,11 +22,8 @@ import { after, before, describe, it } from 'node:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type {
-  AgentExecutionInfo,
-  AgentSpawnRequest,
-  WorkflowRunSummary,
-} from '@helm/protocol'
+import type { AgentExecutionInfo, AgentSpawnRequest } from '@helm/protocol'
+import { parseWorkflowSpawnMeta, type WorkflowRunSummary } from '../src/contracts.js'
 import { runWorkflow, type WorkflowHost } from '../src/workflow/engine/runtime.js'
 import {
   WorkflowService,
@@ -222,7 +219,7 @@ describe('engine external spawn metadata', () => {
         request.onResolved?.({
           executionId: 'herdr-tab-9',
           effectiveCwd: '/srv/worktree-a',
-          worktree: { path: '/srv/worktree-a', branch: 'wf/topic' },
+          meta: { 'builtin:workflow': { worktree: { path: '/srv/worktree-a', branch: 'wf/topic' } } },
         })
         return { ok: true, text: JSON.stringify({ answer: 1 }) }
       },
@@ -331,12 +328,12 @@ describe('WorkflowService external spawn integration', () => {
     await service.close()
   })
 
-  it('workflowRunId rides every spawn request', timeout, async () => {
+  it('workflow runId rides every spawn request meta', timeout, async () => {
     const host = makeExternalSpawnHost()
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     const summary = await service.run({ conversationId: 1, script: META('wfid') + 'return await agent("x")' })
     await service.wait(summary.id)
-    assert.equal(host.spawns[0]?.workflowRunId, summary.id)
+    assert.equal(parseWorkflowSpawnMeta(host.spawns[0]?.meta).runId, summary.id)
     await service.close()
   })
 
@@ -476,7 +473,7 @@ describe('WorkflowService listRuns and settlement', () => {
         conversationId: 9,
         executionId: 'herdr-tab-1',
         effectiveCwd: `/tmp/wt-${SECRET}`,
-        worktree: { path: `/tmp/wt-${SECRET}`, branch: 'wf/x' },
+        meta: { 'builtin:workflow': { worktree: { path: `/tmp/wt-${SECRET}`, branch: 'wf/x' } } },
       },
       externalGate: { ok: true, output: `checked ${SECRET}` },
     })

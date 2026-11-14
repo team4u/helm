@@ -31,7 +31,7 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
             nodeId: 'local',
             executionId: 'pane-9',
             effectiveCwd: `/srv/${secret}/task`,
-            worktree: { path: `/srv/${secret}/task`, branch: `helm/${secret}/task` },
+            meta: { 'builtin:workflow': { worktree: { path: `/srv/${secret}/task`, branch: `helm/${secret}/task` } } },
           })
           return { action: 'handled', result: { answer: 42 } }
         })

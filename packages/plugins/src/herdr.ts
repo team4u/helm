@@ -25,7 +25,8 @@
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmError, type PluginDefinition, type WorkflowRunSummary } from '@helm/protocol'
+import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { type ExternalSteerRequest, type ExternalSteerResult, type WorkflowRunSummary } from './contracts.js'
 import {
   DIAGNOSTICS_COLLECT_EVENT,
   appendProbes,
@@ -779,10 +780,7 @@ export function createHerdrPlugin(): PluginDefinition {
       // 强匹配与受管 (nodeId, paneId) 精确定位（不因直调豁免授权）。投递唯一
       // 入口 executor.steerPane：受管 task 阶段预检后调用现有 agent.prompt；
       // preflight 不承诺提交点 CAS，steered 仅代表投递成功。
-      ctx.action<
-        { executionId: string; nodeId: string; workflowRunId: string; parentConversationId: number; text: string },
-        { steered: true; executionId: string; nodeId: string; stateChangeSeq: number; ownership: 'helm'; guardLevel: 'preflight' }
-      >({
+      ctx.action<ExternalSteerRequest, ExternalSteerResult>({
         id: HERDR_STEER_CONTROLS.actionId,
         description:
           '向本插件受管、且由 workflow run 派生的 Herdr 窗格补充指导。仅任务执行期预检为 working 时发送，使用 Herdr 原生 agent.prompt；预检与投递之间刚变为 idle 时允许接续一轮。blocked 交原审批桥处理，关闭、交接和 Gate 阶段拒绝。guardLevel=preflight 表示发送前检查，不保证提交点 CAS；steered=true 仅代表已投递。超时或断线不自动重试。',

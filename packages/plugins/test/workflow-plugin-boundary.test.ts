@@ -8,14 +8,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  HelmError,
-  WORKFLOW_PLUGIN_ID,
-  type ConversationSummary,
-  type MaybePromise,
-  type PluginDefinition,
-  type PluginToolContext,
-} from '@helm/protocol'
+import { HelmError, type ConversationSummary, type MaybePromise, type PluginDefinition, type PluginToolContext } from '@helm/protocol'
+import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
 import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { pluginToolResult } from '../../kernel/src/runtime/runtime-helpers.js'

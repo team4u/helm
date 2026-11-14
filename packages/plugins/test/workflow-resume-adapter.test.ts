@@ -32,6 +32,7 @@ import { after, before, describe, it } from 'node:test'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AgentSpawnRequest } from '@helm/protocol'
+import { parseWorkflowSpawnMeta } from '../src/contracts.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 
@@ -155,7 +156,7 @@ describe('WorkflowService 生产适配：spawn/resume 端口参数面', () => {
       // 外部执行环境元数据经 onResolved 回传。
       assert.equal(first!.seq, 0)
       assert.ok(!(('cwd' in first!.request)), `首调不得注入 cwd（实得 ${JSON.stringify(first!.request.cwd)}）`)
-      assert.equal(first!.request.workflowRunId, started.id, '首调携带 workflowRunId')
+      assert.equal(parseWorkflowSpawnMeta(first!.request.meta).runId, started.id, '首调 spawn meta 携带 runId')
       assert.equal(first!.request.resume, undefined, '首调不是 resume')
 
       // resume：schema/gate 原样下传；agentType/cwd/model/isolation 缺省不传

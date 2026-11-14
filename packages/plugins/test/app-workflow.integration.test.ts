@@ -58,8 +58,8 @@ interface WfEnv {
   /** echo action handler 执行计数（副作用哨兵）。 */
   echoCalls: string[]
   /** 引擎经 builtin:workflow 插件动作总线驱动（与 HTTP/CLI/模型工具同链路）。 */
-  runWorkflow(request: Record<string, unknown>): Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>
-  inspectRun(runId: string): Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>
+  runWorkflow(request: Record<string, unknown>): Promise<{ run: import('../src/contracts.js').WorkflowRunSummary }>
+  inspectRun(runId: string): Promise<{ run: import('../src/contracts.js').WorkflowRunSummary }>
   close(): Promise<void>
 }
 
@@ -106,9 +106,9 @@ async function makeWfEnv(): Promise<WfEnv> {
     app,
     echoCalls,
     runWorkflow: (request) =>
-      plugins.invokeAction('builtin:workflow', 'run', request) as Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>,
+      plugins.invokeAction('builtin:workflow', 'run', request) as Promise<{ run: import('../src/contracts.js').WorkflowRunSummary }>,
     inspectRun: (runId) =>
-      plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as Promise<{ run: import('@helm/protocol').WorkflowRunSummary }>,
+      plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as Promise<{ run: import('../src/contracts.js').WorkflowRunSummary }>,
     async close() {
       await app.close().catch(() => {})
       rmSync(dataDir, { recursive: true, force: true })

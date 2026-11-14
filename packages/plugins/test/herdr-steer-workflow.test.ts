@@ -19,21 +19,17 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import {
-  HelmError,
-  WORKFLOW_PLUGIN_ID,
-  type AgentSpawnRequest,
-  type ConversationSummary,
-  type WorkflowRunSummary,
-} from '@helm/protocol'
+import { HelmError, type AgentSpawnRequest, type ConversationSummary } from '@helm/protocol'
+import type { WorkflowRunSummary } from '../src/contracts.js'
+import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
 import { PluginHost, type PluginConfigStore, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
 import { FsOutputFiles, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
 
 type PaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 
@@ -88,6 +84,26 @@ class ProtocolServerTransport implements HerdrTransport {
           type: 'pong', version: '0.9.5', protocol: 22,
           capabilities: { live_handoff: false, detached_server_daemon: false, endpoint_protocol_generation: 1, [SEND_KEYS_CAS_CAPABILITY]: true },
         }
+      case 'worktree.create': {
+        // 真实协议形状：外部运行时自行派生 worktree（独立 workspace + 初始
+        // tab），经 meta 回传描述；env 非空时 executor 会另建带 env 的 tab 并
+        // 关闭初始空 tab（见 executor 建窗链）。
+        const n = this.panes.size + 1
+        const workspaceId = `ws-wt-${n}`
+        const paneId = `${workspaceId}:p1`
+        const tabId = `${workspaceId}:t1`
+        const path = `${params['cwd']}/.worktrees/wt-steer`
+        mkdirSync(join(path, '.helm'), { recursive: true })
+        this.panes.set(paneId, { paneId, tabId, workspaceId, agentStatus: 'idle', seq: 1, cwd: path })
+        this.tabs.set(tabId, { closed: false })
+        return {
+          type: 'worktree_created',
+          workspace: { workspace_id: workspaceId },
+          tab: { tab_id: tabId, workspace_id: workspaceId },
+          root_pane: { pane_id: paneId, workspace_id: workspaceId, tab_id: tabId },
+          worktree: { path, branch: (params['branch'] as string) ?? 'helm/wf-steer' },
+        }
+      }
       case 'tab.create': {
         const n = this.panes.size + 1
         const workspaceId = 'ws-default'
@@ -484,6 +500,69 @@ test('双插件联调: 跨树会话经 workflow.steer 对外部执行同样拒�
     assert.ok(caught instanceof HelmError)
     assert.equal(caught.code, 'steer_out_of_scope')
     assert.equal(env.transport.steerDelivered.length, 0)
+  } finally {
+    await env.close()
+  }
+})
+
+test('双插件联调: herdr worktree 隔离执行增强不丢 controls（命名空间合并回归）', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    // 1) 后台 herdr 子代理 run + isolation:'worktree'：herdr 经 worktree.create
+    //    自行派生隔离树，onResolved 在 workflow 命名空间同时回传 worktree 与
+    //    controls.steer。
+    const started = (await env.host.executeTool(
+      'subagent',
+      { prompt: '慢任务', background: true, agentType: 'herdr:agy', isolation: 'worktree', gate: 'true' },
+      { conversationId: 1, callId: 'call-wt-1' },
+    )) as { structuredOutput: { runId: string } }
+    const runId = started.structuredOutput.runId
+    assert.ok(typeof runId === 'string' && runId !== '', '后台 run 应返回 runId')
+    await waitFor(() => env.transport.calls.some((c) => c.method === 'worktree.create'))
+    const worktreeCreate = env.transport.calls.find((c) => c.method === 'worktree.create')!
+    const wtPath = (worktreeCreate.params['cwd'] as string) + '/.worktrees/wt-steer'
+    let lastSeen = ''
+    let node: (WorkflowRunSummary['nodes'] extends (infer N)[] | undefined ? N : never) | undefined
+    // 2) 节点收敛：worktree 被隔离层统一登记并回填稳定受管 id；controls
+    //    （steer 委托引用）与 worktree 同处 workflow 命名空间，增强合并
+    //    不得把 controls 覆盖丢（否则 steer 失去外部委托坐标）。
+    await waitFor(() => {
+      return env.host
+        .invokeAction(WORKFLOW_PLUGIN_ID, 'inspect', { runId }, { conversationId: 1 })
+        .then((raw) => {
+          const run = (raw as { run: WorkflowRunSummary }).run
+          lastSeen = JSON.stringify({ status: run.status, error: run.error })
+          node = (run.nodes ?? [])[0]
+          return node?.worktree?.id !== undefined
+        })
+        .catch((e) => {
+          lastSeen = String(e)
+          return false
+        })
+    }).catch(() => assert.fail(`worktree 应回填受管 id（run 状态：${lastSeen}）`))
+    assert.ok(node !== undefined, '节点应存在')
+    assert.equal(node.worktree?.path, wtPath, 'worktree 应为外部运行时派生路径')
+    assert.equal(node.worktree?.id, `local:${wtPath}`, 'worktree 应回填稳定受管登记 id')
+    assert.deepEqual(
+      node.controls?.steer,
+      { pluginId: 'builtin:herdr', actionId: 'steer' },
+      'worktree 增强不得丢失同命名空间的 controls（steer 委托引用）',
+    )
+    // 3) 经 workflow.steer 插话仍可按 controls 动态委托（合并后的坐标可用）。
+    //    先等任务 prompt 到达且窗格 working（steer 仅任务执行期可投递）。
+    await waitFor(() => env.transport.calls.some((c) => c.method === 'agent.prompt' && c.params['wait'] !== undefined))
+    await waitFor(() => [...env.transport.panes.values()].some((p) => p.agentStatus === 'working'))
+    const out = (await env.host.invokeAction(
+      WORKFLOW_PLUGIN_ID,
+      'steer',
+      { runId, text: 'worktree 树内插话' },
+      { conversationId: 1 },
+    )) as { steered?: boolean }
+    assert.equal(out.steered, true)
+    assert.ok(
+      env.transport.steerDelivered.some((s) => s.text.includes('worktree 树内插话')),
+      '插话应投递到外部窗格（文本经执行插件包装，含原文即可）',
+    )
   } finally {
     await env.close()
   }
