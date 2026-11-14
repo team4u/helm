@@ -8,7 +8,11 @@
  * 本文件零运行时依赖（仅 HelmError）；内外插件平权使用。
  */
 import { HelmError } from './error.js'
-import type { AgentExecutionInfo, AgentGateResult } from './plugin.js'
+import type {
+  AgentExecutionControls,
+  AgentExecutionInfo,
+  AgentGateResult,
+} from './plugin.js'
 
 /** 目标路径是否绝对（POSIX / 开头、Windows 盘符绝对或 UNC / 根反斜杠）。 */
 export function isAbsoluteAgentPath(p: string): boolean {
@@ -28,6 +32,51 @@ function executionInfoError(agentId: string, reason: string): HelmError {
   )
 }
 
+/** 非空 trim 后仍非空的字符串字段校验（controls 坐标用）。 */
+function requireTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+/** 校验并克隆 controls（严格形状：拒绝未知键与非空 trim 字符串之外的任何值）。 */
+function sanitizeControls(
+  value: unknown,
+  context: { agentId: string },
+): AgentExecutionControls {
+  const source = value as Partial<AgentExecutionControls> | null
+  if (source === null || typeof source !== 'object' || Array.isArray(source)) {
+    throw executionInfoError(context.agentId, 'controls 必须是对象')
+  }
+  for (const key of Object.keys(source)) {
+    if (key !== 'steer') {
+      throw executionInfoError(context.agentId, `controls 未知字段 "${key}"`)
+    }
+  }
+  const out: AgentExecutionControls = {}
+  const steer = source.steer as Partial<NonNullable<AgentExecutionControls['steer']>> | undefined
+  if (steer !== undefined) {
+    if (steer === null || typeof steer !== 'object' || Array.isArray(steer)) {
+      throw executionInfoError(context.agentId, 'controls.steer 必须是对象')
+    }
+    for (const key of Object.keys(steer)) {
+      if (key !== 'pluginId' && key !== 'actionId') {
+        throw executionInfoError(context.agentId, `controls.steer 未知字段 "${key}"`)
+      }
+    }
+    const pluginId = requireTrimmedString(steer.pluginId)
+    const actionId = requireTrimmedString(steer.actionId)
+    if (pluginId === undefined || actionId === undefined) {
+      throw executionInfoError(context.agentId, 'controls.steer.pluginId/actionId 必须是非空 trim 字符串')
+    }
+    out.steer = { pluginId, actionId }
+  }
+  if (out.steer === undefined) {
+    throw executionInfoError(context.agentId, 'controls 至少包含 steer')
+  }
+  return out
+}
+
 /** 校验并克隆插件回传的 AgentExecutionInfo（拒绝多余/畸形字段，防注入）。 */
 export function sanitizeAgentExecutionInfo(
   value: unknown,
@@ -37,7 +86,7 @@ export function sanitizeAgentExecutionInfo(
   if (source === null || typeof source !== 'object' || Array.isArray(source)) {
     throw executionInfoError(context.agentId, '回调载荷必须是对象')
   }
-  const known = ['nodeId', 'conversationId', 'executionId', 'effectiveCwd', 'worktree'] as const
+  const known = ['nodeId', 'conversationId', 'executionId', 'effectiveCwd', 'worktree', 'controls'] as const
   for (const key of Object.keys(source)) {
     if (!(known as readonly string[]).includes(key)) {
       throw executionInfoError(context.agentId, `未知字段 "${key}"`)
@@ -96,6 +145,17 @@ export function sanitizeAgentExecutionInfo(
     if (worktree.dirtySource !== undefined) {
       if (typeof worktree.dirtySource !== 'boolean') throw executionInfoError(context.agentId, 'worktree.dirtySource 必须是布尔值')
       out.worktree.dirtySource = worktree.dirtySource
+    }
+  }
+  if (source.controls !== undefined) {
+    out.controls = sanitizeControls(source.controls, context)
+    // 孤立 controls 拒绝：控制引用只对外部执行有意义，必须同时携带
+    // executionId + nodeId（原生执行的控制走内核 guarded 端口，不经 controls）。
+    if (out.executionId === undefined || out.nodeId === undefined) {
+      throw executionInfoError(
+        context.agentId,
+        'controls 必须与 executionId + nodeId 同时回传（孤立控制引用拒绝；原生执行不需要 controls）',
+      )
     }
   }
   if (out.conversationId === undefined && out.executionId === undefined) {

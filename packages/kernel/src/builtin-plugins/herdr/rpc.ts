@@ -33,6 +33,11 @@ export interface HerdrAgentInfo {
   workspaceId: string
   agent?: string
   name?: string
+  /**
+   * 权威终端标识（官方 AgentInfo 必填字段；helm 侧宽松解析为可选，但
+   * steer 守卫路径强制非空——缺失即拒绝，绝不猜造）。
+   */
+  terminalId?: string
   agentStatus: HerdrAgentStatus
   stateChangeSeq: number
   /** 真实启动序列：agent.start 后短暂 unknown + launch_pending（服务端实测）。 */
@@ -196,6 +201,7 @@ function parseAgentInfo(agent: unknown, method: string): HerdrAgentInfo {
     workspaceId: reqString(agent, method, 'workspace_id'),
     agent: optString(agent, 'agent'),
     name: optString(agent, 'name'),
+    terminalId: optString(agent, 'terminal_id'),
     agentStatus: parseStatus(agent['agent_status'], method),
     stateChangeSeq: parseSeq(agent['state_change_seq'], method),
     launchPending: optBool(agent, 'launch_pending'),
@@ -383,19 +389,115 @@ export function buildSendKeysParams(request: SendKeysRequest): Record<string, un
   return { target: request.target, keys: [...request.keys], expected_state_seq: request.expectedStateSeq }
 }
 
+// ---------------------------------------------------------------
+// agent.prompt 运行中插话原子守卫（helm 侧契约；等待 Herdr 服务端配套）
+//
+// 现状证据（/root/code/herdr 服务端源码，herdr 0.9.5 / protocol 22，只读核实）：
+// - `AgentPromptParams` 仅 `{target, text, wait}`（src/api/schema/agents.rs:176-181），
+//   无任何守卫字段；serde 无 deny_unknown_fields——盲发 guard 字段会被旧服务端
+//   **静默忽略并照常投递**，身份/水位核验形同虚设；
+// - 真实投递是「先粘贴文本、延时后回车」的多步序列：仅承诺首字节前核验
+//   不足以保证整个 submission——粘贴与回车之间 lifecycle 可能变化。
+//
+// 因此 helm 侧契约（提案，需 Herdr 服务端发布配套后端到端生效）：
+// - 能力通告：pong.capabilities.`agent_prompt_guard_v1` === true；
+// - 请求字段：agent.prompt params 增 `guard: { terminal_id, pane_id, tab_id,
+//   agent_name, state_change_seq, agent_status: 'working' }`，不携带 wait；
+// - 守卫语义（能力契约的硬性要求）：服务端在写入任何 PTY 字节前原子核验
+//   完整身份四元组 + 水位 + working 状态，且**守卫覆盖完整「文本 + 回车」
+//   投递期**（由服务端原子提交或输入保留实现：粘贴与回车间的 lifecycle
+//   变化不得破坏提交原子性）；核验不符返回 wire 错误 `stale_state` /
+//   `agent_not_ready` / `agent_blocked` 且零字节写入；部分写入后发生的异常
+//   必须如实报告为不确定结果（可能已部分投递），调用方不得重试；
+// - 未通告该能力的旧服务端：helm 以 herdr_steer_guard_unsupported fail-closed
+//   显式拒绝（绝不盲发 guard 字段）。
+// 在服务端配套发布前，历史 Herdr 服务端均无此能力——steer 对其不可用。
+// ---------------------------------------------------------------
+
+/** pong.capabilities 中通告 agent.prompt 原子守卫支持的字段名（wire 名）。 */
+export const AGENT_PROMPT_GUARD_CAPABILITY = 'agent_prompt_guard_v1'
+
+/** agent.prompt 守卫请求（helm 内部 camelCase；wire 由 buildAgentPromptGuardParams 转换）。 */
+export interface AgentPromptGuard {
+  /** 权威 agent.get 回传的真实终端标识（非空；不猜造）。 */
+  terminalId: string
+  paneId: string
+  tabId: string
+  agentName: string
+  /** CAS 期望水位：必须等于预检 agent.get 观测的 state_change_seq。 */
+  stateChangeSeq: number
+  /** 目标状态硬约束：仅允许向 working 代理插话。 */
+  agentStatus: 'working'
+}
+
+/**
+ * 构造带守卫的 agent.prompt wire params（无 wait；边界校验非法即显式拒绝）。
+ * 守卫字段名与语义见上方契约块；调用方必须先通过能力门禁。
+ */
+export function buildAgentPromptGuardParams(input: {
+  target: string
+  text: string
+  guard: AgentPromptGuard
+}): Record<string, unknown> {
+  if (typeof input.target !== 'string' || input.target.length === 0) {
+    throw new HelmError('validation_error', 'agent.prompt target 必须是非空字符串', 400, { target: input.target })
+  }
+  if (typeof input.text !== 'string' || input.text.length === 0) {
+    throw new HelmError('validation_error', 'agent.prompt text 必须是非空字符串', 400)
+  }
+  const g = input.guard
+  for (const [field, value] of [
+    ['terminalId', g.terminalId],
+    ['paneId', g.paneId],
+    ['tabId', g.tabId],
+    ['agentName', g.agentName],
+  ] as const) {
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new HelmError('validation_error', `agent.prompt guard.${field} 必须是非空 trim 字符串`, 400, { field })
+    }
+  }
+  if (typeof g.stateChangeSeq !== 'number' || !Number.isSafeInteger(g.stateChangeSeq) || g.stateChangeSeq < 0) {
+    throw new HelmError(
+      'validation_error',
+      `agent.prompt guard.stateChangeSeq 必须是非负安全整数：${String(g.stateChangeSeq)}`,
+      400,
+      { stateChangeSeq: g.stateChangeSeq },
+    )
+  }
+  if (g.agentStatus !== 'working') {
+    throw new HelmError('validation_error', `agent.prompt guard.agentStatus 必须是 'working'（实际 '${String(g.agentStatus)}'）`, 400, {
+      agentStatus: g.agentStatus,
+    })
+  }
+  return {
+    target: input.target,
+    text: input.text,
+    guard: {
+      terminal_id: g.terminalId,
+      pane_id: g.paneId,
+      tab_id: g.tabId,
+      agent_name: g.agentName,
+      state_change_seq: g.stateChangeSeq,
+      agent_status: 'working',
+    },
+  }
+}
+
 /** ping -> pong 解析出的服务端能力摘要。 */
 export interface HerdrServerInfo {
   version: string
   protocol: number
   /** agent.send_keys 是否支持 expected_state_seq CAS（capabilities 严格通告 true）。 */
   sendKeysCas: boolean
+  /** agent.prompt 是否支持 guard 原子守卫（capabilities 严格通告 true）。 */
+  promptGuard: boolean
 }
 
 /**
  * pong 严格边界校验（真实形状：type='pong' + version + protocol + 可选 capabilities）：
  * - version/protocol 缺失或类型不符 -> herdr_protocol_violation（坏数据不得成为
  *   能力判断依据）；
- * - capabilities 缺省/null -> sendKeysCas=false（旧服务端如实视为不支持）；
+ * - capabilities 缺省/null -> 能力如实视为不支持（旧服务端）；
  * - 能力字段存在但非布尔 -> 违约；仅在严格 === true 时视为支持。
  */
 export function parsePong(result: unknown): HerdrServerInfo {
@@ -404,23 +506,30 @@ export function parsePong(result: unknown): HerdrServerInfo {
     version: reqString(obj, 'ping', 'version'),
     protocol: parseSeq(obj['protocol'], 'ping', 'protocol'),
     sendKeysCas: false,
+    promptGuard: false,
   }
   const capabilities = obj['capabilities']
   if (capabilities === undefined || capabilities === null) return info
   if (!isObj(capabilities)) {
     throw new HelmError('herdr_protocol_violation', 'ping capabilities 必须是对象或 null', 502, { capabilities })
   }
-  const flag = capabilities[SEND_KEYS_CAS_CAPABILITY]
-  if (flag === undefined) return info
-  if (typeof flag !== 'boolean') {
-    throw new HelmError(
-      'herdr_protocol_violation',
-      `ping capabilities.${SEND_KEYS_CAS_CAPABILITY} 必须是布尔值，实际：${JSON.stringify(flag)}`,
-      502,
-      { flag },
-    )
+  for (const [flag, field] of [
+    ['sendKeysCas', SEND_KEYS_CAS_CAPABILITY],
+    ['promptGuard', AGENT_PROMPT_GUARD_CAPABILITY],
+  ] as const) {
+    const value = capabilities[field]
+    if (value === undefined) continue
+    if (typeof value !== 'boolean') {
+      throw new HelmError(
+        'herdr_protocol_violation',
+        `ping capabilities.${field} 必须是布尔值，实际：${JSON.stringify(value)}`,
+        502,
+        { value },
+      )
+    }
+    info[flag] = value
   }
-  return { ...info, sendKeysCas: flag }
+  return info
 }
 
 /**

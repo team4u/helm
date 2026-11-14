@@ -182,7 +182,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | 命令 | 来源插件 | 说明 |
 | :--- | :--- | :--- |
 | `helm workflows list / get <name> / runs / inspect <runId> / abort <runId>` | builtin:workflow | 工作流资产与运行管理；`list` 每条携带 `updatedAt`/`size` 文件事实，`get` 返回只读源码与元数据（不存在 404），`runs` 支持 `--current` 按会话过滤 |
-| `helm workflows steer <runId> --text "<指导>"` | builtin:workflow | 向运行中的原生后台子代理插话纠偏，支持 `--current` 会话范围与 `--json`；按会话父链、归属和 CAS 水位验证。工作流、外部运行时、human 归属或模型回合已结束时显式拒绝 |
+| `helm workflows steer <runId> --text "<指导>"` | builtin:workflow | 向运行中的后台子代理插话纠偏，支持 `--current` 会话范围与 `--json`；按会话父链授权，原生节点按归属和 CAS 水位经内核 guarded 提交，外部执行（如 Herdr）按节点 `controls.steer` 委托对应插件并要求服务端原子守卫。DSL 工作流、human 归属、模型回合已结束或候选歧义时显式拒绝；插话发送成功不代表指导已执行完成 |
 | `helm workflows save [nameOrFile]` | builtin:workflow | 保存工作流定义为跨会话资产；位置参数为本地脚本文件（自动读入 `script`）或目标名称，`--from-run-id <id>` 把既有运行的内联脚本源固化为定义；缺省名用脚本 `meta.name`（与 `--name` 不一致时拒绝）；保存前语法预检，重复默认拒绝（409）、`--overwrite` 才覆盖；原子写入，返回真实摘要 |
 | `helm workflows delete <name>` | builtin:workflow | 删除已保存工作流定义文件（历史运行记录不受影响）；不存在 404，防目录外符号链接 |
 | `helm workflows run [nameOrFile]` | builtin:workflow | 启动工作流；位置参数为已保存名或本地脚本文件（自动读入 `script`）；缺省启动即返回（run 后台推进），`--wait` 同步等终态（失败/中止非零退出）；`--args` 传 JSON 入参、`--resume-from-run-id` 断点重放、`--conversation-id`/`--current` 指定目标会话（新 run 必须显式指定）。注意与模型工具 `subagent` / `SubagentWorkflow` 的 `background` 策略（按会话归属判定）是不同参数、不同入口 |
@@ -195,6 +195,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helm cron list / create / delete / trigger` | builtin:triggers | cron 任务管理；create 必填 `--id --schedule --text`（标准五字段，timezone 默认 UTC），支持 `--target-conversation-id` / `--target-profile-id` / `--thread-key` 定向 |
 | `helm webhook create / list / delete` | builtin:triggers | webhook 端点管理（HMAC-SHA256 验签）；create 必填 `--id --secret`，secret 仅允许人工 HTTP/CLI 配置 |
 | `helm herdr list / read / focus` | builtin:herdr | 窗格管理；read 返回 40 行脱敏终端尾部快照，`--node-id` 消歧跨节点同 ID（歧义 409） |
+| `helm herdr steer` | builtin:herdr | 向受管且由 workflow run 派生的窗格插话（`--execution-id` `--node-id` `--workflow-run-id` `--parent-conversation-id` `--text`）。需服务端 `ping` 通告 `agent_prompt_guard_v1` 原子守卫能力，未通告 fail-closed 拒绝（当前历史 Herdr 服务端不提供）；通常用 `helm workflows steer <runId> --text` 自动路由，勿手动拼坐标 |
 | `helm superagent <action>` | builtin:superagent | `dispatch_worker / inspect_worker / recall_context / subscribe_thread / archive_worker / set_router_mode` 等 |
 | `helm magpie status / refresh / quota / groups` | builtin:magpie | Magpie 网关状态、目录刷新、配额查询与路由组列表 |
 

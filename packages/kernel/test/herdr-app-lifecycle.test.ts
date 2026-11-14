@@ -58,7 +58,7 @@ test('createHelm 先配置后启用，重启沿用开关与连接配置，停用
     assert.deepEqual(await app.kernel.plugins.invokeAction('builtin:herdr', 'list', {}), { panes: [] })
     assert.deepEqual(
       app.kernel.plugins.listActions().filter((action) => action.pluginId === 'builtin:herdr').map((action) => action.id).sort(),
-      ['focus', 'list', 'read'],
+      ['focus', 'list', 'read', 'steer'],
     )
     const enabledConfig = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
     assert.equal(enabledConfig.pluginEnabled['builtin:herdr'], true)

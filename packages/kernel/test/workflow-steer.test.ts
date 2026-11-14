@@ -3,17 +3,20 @@
  *
  * 覆盖：
  * - 纯逻辑 steerBackgroundSubagent：caller → run → child 授权证明链
- *   （kind/status/取消窗口/无原生子会话（外部 Herdr）/节点非 running/歧义/
- *   跨树 caller/血统不一致/human 归属/kernel 守卫冲突透传/入参边界）与
- *   提交参数（origin=agent、whenBusy=steer、meta 溯源、ownership+CAS 水位守卫）；
+ *   （kind/status/取消窗口/无子会话/节点非 running/歧义/跨树 caller/
+ *   血统不一致/human 归属/kernel 守卫冲突透传/入参边界）与提交参数
+ *   （origin=agent、whenBusy=steer、meta 溯源、ownership+CAS 水位守卫）；
+ * - 外部执行委托：controls.steer 动态路由（零硬编码插件 ID）、标准委托输入
+ *   （executionId/nodeId/workflowRunId/parentConversationId/text）、原 context
+ *   透传（含 signal）、混合 native+external 歧义拒绝、坏产物逐字段拒绝、
+ *   委托插件不可用原样透传、非幂等（失败不自动重试）；
  * - isAncestorOrSelf：自身/祖先/环/断链/深度上限；
  * - 插件级端到端：真实 createWorkflowPlugin 注册 + 真实 WorkflowService 后台
- *   run，经 host.invokeAction 与 exposeAsTool 派生工具（全限定名与
- *   provider-safe 别名双路径）插话成功；manifest（exposeAsTool / CLI 命令）
- *   冒烟；跨树会话调用拒绝。
+ *   run，经 host.invokeAction 与 exposeAsTool 派生工具插话成功；manifest
+ *   （exposeAsTool / CLI 命令 / oneOf 输出）冒烟；跨树会话调用拒绝。
  */
 import { strict as assert } from 'node:assert'
-import { after, before, describe, it } from 'node:test'
+import { after, describe, it } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -26,7 +29,8 @@ import {
   type MaybePromise,
   type WorkflowRunSummary,
 } from '@helm/protocol'
-import { isAncestorOrSelf, steerBackgroundSubagent } from '../src/builtin-plugins/workflow/steer.js'
+import { steerBackgroundSubagent, parseExternalSteerResult } from '../src/builtin-plugins/workflow/steer.js'
+import { isAncestorOrSelf } from '../src/builtin-plugins/lineage.js'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { createHelm } from '../src/app.js'
@@ -48,14 +52,24 @@ interface RecordedSteer {
   guard: Record<string, unknown>
 }
 
+interface RecordedDelegation {
+  pluginId: string
+  actionId: string
+  input: Record<string, unknown>
+  context: { conversationId?: number; signal?: AbortSignal }
+}
+
 interface PurePorts {
   runs: Map<string, WorkflowRunSummary>
   conversations: Map<number, ConversationSummary>
   ownership: Map<number, 'helm' | 'bot' | 'human'>
   cancelling: Set<number>
   submitted: RecordedSteer[]
+  delegations: RecordedDelegation[]
   /** 可编程 submitInputGuarded 行为（缺省成功）。 */
   submitBehavior?: (call: RecordedSteer) => void
+  /** 可编程外部委托行为（缺省返回合法 ExternalSteerResult）。 */
+  invokeBehavior?: (call: RecordedDelegation) => unknown
 }
 
 function conv(id: number, parent: number | undefined, seq = 7): ConversationSummary {
@@ -93,6 +107,24 @@ function subagentRun(over: Partial<WorkflowRunSummary> = {}): WorkflowRunSummary
   }
 }
 
+/** 外部 herdr 形态的 run 节点（controls.steer + executionId + nodeId）。 */
+function externalRun(over: Partial<WorkflowRunSummary> = {}): WorkflowRunSummary {
+  return subagentRun({
+    nodes: [
+      {
+        id: 'subagent-0',
+        kind: 'agent',
+        label: 'subagent:herdr:agy',
+        status: 'running',
+        nodeId: 'local',
+        executionId: 'ws:p9',
+        controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } },
+      },
+    ],
+    ...over,
+  })
+}
+
 function makePurePorts(): PurePorts {
   return {
     runs: new Map(),
@@ -105,6 +137,7 @@ function makePurePorts(): PurePorts {
     ownership: new Map([[42, 'helm']]),
     cancelling: new Set(),
     submitted: [],
+    delegations: [],
   }
 }
 
@@ -135,6 +168,25 @@ function portsOf(p: PurePorts) {
       p.submitted.push(call)
       return { submissionId: 's-1' }
     },
+    async invokeAction(
+      pluginId: string,
+      actionId: string,
+      input: unknown,
+      context?: { conversationId?: number; signal?: AbortSignal },
+    ): Promise<unknown> {
+      const call = { pluginId, actionId, input: input as Record<string, unknown>, context: context ?? {} }
+      const result = p.invokeBehavior !== undefined ? p.invokeBehavior(call) : {
+        steered: true as const,
+        executionId: 'ws:p9',
+        nodeId: 'local',
+        stateChangeSeq: 12,
+        ownership: 'helm' as const,
+        guardLevel: 'cas' as const,
+      }
+      if (result instanceof HelmError || result instanceof Error) throw result
+      p.delegations.push(call)
+      return result
+    },
   }
 }
 
@@ -156,10 +208,10 @@ async function rejectsWith(
 }
 
 // ---------------------------------------------------------------------------
-// 纯逻辑：steerBackgroundSubagent
+// 纯逻辑：steerBackgroundSubagent（原生路径）
 // ---------------------------------------------------------------------------
 
-describe('steerBackgroundSubagent 纯逻辑', () => {
+describe('steerBackgroundSubagent 纯逻辑（原生路径）', () => {
   it('成功插话：run 发起会话为 caller，提交参数与守卫事实完整', timeout, async () => {
     const p = makePurePorts()
     p.runs.set('wf_run0000000001', subagentRun())
@@ -172,9 +224,11 @@ describe('steerBackgroundSubagent 纯逻辑', () => {
     assert.deepEqual(out, {
       steered: true,
       runId: 'wf_run0000000001',
+      targetKind: 'native',
       conversationId: 42,
       ownership: 'bot',
       stateChangeSeq: 7,
+      guardLevel: 'cas',
     })
     assert.equal(p.submitted.length, 1)
     const call = p.submitted[0]!
@@ -188,6 +242,7 @@ describe('steerBackgroundSubagent 纯逻辑', () => {
       meta: { kind: 'subagent_steer', runId: 'wf_run0000000001' },
     })
     assert.deepEqual(call.guard, { expectedOwnership: 'bot', expectedStateSeq: 7 })
+    assert.equal(p.delegations.length, 0, '原生路径不得触发外部委托')
   })
 
   it('无会话上下文（人工 HTTP/CLI）放行；caller 为 run 发起会话的祖先放行', timeout, async () => {
@@ -231,12 +286,12 @@ describe('steerBackgroundSubagent 纯逻辑', () => {
     assert.equal(p.submitted.length, 0)
   })
 
-  it('无已解析原生子会话（外部 Herdr / 未就绪）拒绝；节点非 running 拒绝', timeout, async () => {
+  it('无可插话目标（外部执行未回传控制引用 / 未就绪）拒绝；节点非 running 拒绝', timeout, async () => {
     const p = makePurePorts()
-    p.runs.set('wf_ext', subagentRun({ nodes: [{ id: 'subagent-0', kind: 'agent', label: 'x', status: 'running', executionId: 'herdr:pane-7' }] }))
+    p.runs.set('wf_ext', subagentRun({ nodes: [{ id: 'subagent-0', kind: 'agent', label: 'x', status: 'running', executionId: 'herdr:pane-7', nodeId: 'local' }] }))
     await rejectsWith(
       () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, {}),
-      'steer_no_native_conversation',
+      'steer_no_steerable_target',
       409,
     )
     p.runs.set('wf_settling', subagentRun({ nodes: [{ id: 'subagent-0', kind: 'agent', label: 'x', status: 'done', conversationId: 42 }] }))
@@ -246,6 +301,7 @@ describe('steerBackgroundSubagent 纯逻辑', () => {
       409,
     )
     assert.equal(p.submitted.length, 0)
+    assert.equal(p.delegations.length, 0)
   })
 
   it('run 仍 running 但子会话已结束（Gate 在途），拒绝启动额外回合', timeout, async () => {
@@ -392,6 +448,225 @@ describe('steerBackgroundSubagent 纯逻辑', () => {
       'validation_error',
       400,
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 纯逻辑：steerBackgroundSubagent（外部执行委托路径）
+// ---------------------------------------------------------------------------
+
+describe('steerBackgroundSubagent 纯逻辑（外部委托路径）', () => {
+  it('成功委托：标准输入完整、原 context（含 signal）透传、联合结果可辨识', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_ext', externalRun())
+    const signal = AbortSignal.abort()
+    const out = await steerBackgroundSubagent(
+      portsOf(p),
+      { runId: 'wf_ext', text: '改用方案B' },
+      { conversationId: 1, signal },
+    )
+    assert.deepEqual(out, {
+      steered: true,
+      runId: 'wf_ext',
+      targetKind: 'external',
+      executionId: 'ws:p9',
+      nodeId: 'local',
+      ownership: 'helm',
+      stateChangeSeq: 12,
+      guardLevel: 'cas',
+    })
+    assert.equal(p.delegations.length, 1)
+    const call = p.delegations[0]!
+    assert.equal(call.pluginId, 'builtin:herdr', '委托目标完全来自记录（零硬编码路由）')
+    assert.equal(call.actionId, 'steer')
+    assert.deepEqual(call.input, {
+      executionId: 'ws:p9',
+      nodeId: 'local',
+      workflowRunId: 'wf_ext',
+      parentConversationId: 1,
+      text: '改用方案B',
+    })
+    assert.equal(call.context.conversationId, 1, '原 caller 上下文透传（不伪造）')
+    assert.equal(call.context.signal, signal, '取消信号透传到委托动作')
+    assert.equal(p.submitted.length, 0, '外部路径不得触发原生子会话提交')
+  })
+
+  it('人工 HTTP/CLI（无会话上下文）可委托外部执行', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_ext', externalRun())
+    await steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'ok' }, {})
+    assert.equal(p.delegations.length, 1)
+    assert.equal(p.delegations[0]!.context.conversationId, undefined)
+  })
+
+  it('跨树 caller 对外部执行同样拒绝（委托前授权）', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_ext', externalRun())
+    await rejectsWith(
+      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, { conversationId: 2 }),
+      'steer_out_of_scope',
+      403,
+    )
+    assert.equal(p.delegations.length, 0)
+  })
+
+  it('run 取消窗口内拒绝外部委托', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_ext', externalRun())
+    p.cancelling.add(1)
+    await rejectsWith(
+      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, {}),
+      'steer_run_cancelling',
+      409,
+    )
+    assert.equal(p.delegations.length, 0)
+  })
+
+  it('混合 native + external 候选歧义拒绝（不优先 native 吞掉 external）', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_mixed', subagentRun({
+      nodes: [
+        { id: 'a', kind: 'agent', label: 'native', status: 'running', conversationId: 42 },
+        {
+          id: 'b', kind: 'agent', label: 'herdr', status: 'running', nodeId: 'local', executionId: 'ws:p9',
+          controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } },
+        },
+      ],
+    }))
+    await rejectsWith(
+      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_mixed', text: 'x' }, {}),
+      'steer_ambiguous_subagent',
+      409,
+    )
+    assert.equal(p.submitted.length, 0)
+    assert.equal(p.delegations.length, 0)
+  })
+
+  it('同一节点同时登记原生子会话与外部控制引用：歧义拒绝', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_both', subagentRun({
+      nodes: [
+        {
+          id: 'a', kind: 'agent', label: 'both', status: 'running', conversationId: 42,
+          nodeId: 'local', executionId: 'ws:p9',
+          controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } },
+        },
+      ],
+    }))
+    await rejectsWith(
+      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_both', text: 'x' }, {}),
+      'steer_ambiguous_subagent',
+      409,
+    )
+    assert.equal(p.submitted.length, 0)
+    assert.equal(p.delegations.length, 0)
+  })
+
+  it('多个外部候选歧义拒绝', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_multi-ext', externalRun({
+      nodes: [
+        { id: 'a', kind: 'agent', label: 'x', status: 'running', nodeId: 'local', executionId: 'ws:p1', controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } } },
+        { id: 'b', kind: 'agent', label: 'y', status: 'running', nodeId: 'local', executionId: 'ws:p2', controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } } },
+      ],
+    }))
+    await rejectsWith(
+      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_multi-ext', text: 'x' }, {}),
+      'steer_ambiguous_subagent',
+      409,
+    )
+    assert.equal(p.delegations.length, 0)
+  })
+
+  it('controls.steer 引用非法（空 pluginId/actionId）：显式拒绝', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_badref', externalRun({
+      nodes: [{
+        id: 'subagent-0', kind: 'agent', label: 'x', status: 'running', nodeId: 'local', executionId: 'ws:p9',
+        controls: { steer: { pluginId: '   ', actionId: 'steer' } },
+      }],
+    }))
+    await rejectsWith(
+      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_badref', text: 'x' }, {}),
+      'steer_delegate_invalid',
+      502,
+    )
+    assert.equal(p.delegations.length, 0)
+  })
+
+  it('委托产物核销：steered/executionId/nodeId/ownership/guardLevel/seq 逐字段拒绝', timeout, async () => {
+    const bad: Array<[string, unknown]> = [
+      ['steered 非 true', { steered: false, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'helm', guardLevel: 'cas' }],
+      ['executionId 不一致', { steered: true, executionId: 'ws:other', nodeId: 'local', stateChangeSeq: 1, ownership: 'helm', guardLevel: 'cas' }],
+      ['nodeId 不一致', { steered: true, executionId: 'ws:p9', nodeId: 'node-x', stateChangeSeq: 1, ownership: 'helm', guardLevel: 'cas' }],
+      ['ownership 非 helm', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'bot', guardLevel: 'cas' }],
+      ['guardLevel 非 cas', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'helm', guardLevel: 'preflight' }],
+      ['seq 负数', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: -1, ownership: 'helm', guardLevel: 'cas' }],
+      ['seq 非整数', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1.5, ownership: 'helm', guardLevel: 'cas' }],
+      ['seq 缺失', { steered: true, executionId: 'ws:p9', nodeId: 'local', ownership: 'helm', guardLevel: 'cas' }],
+      ['未知字段', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'helm', guardLevel: 'cas', extra: 1 }],
+      ['非对象', null],
+    ]
+    for (const [reason, payload] of bad) {
+      const p = makePurePorts()
+      p.runs.set('wf_ext', externalRun())
+      p.invokeBehavior = () => payload
+      await rejectsWith(
+        () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, {}),
+        'steer_delegate_invalid',
+        502,
+      )
+      assert.equal(p.submitted.length, 0, `${reason}：不产生原生提交`)
+    }
+  })
+
+  it('委托插件不可用（unknown_action 等）原样透传，绝不重试或伪造成功', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_ext', externalRun())
+    let attempts = 0
+    p.invokeBehavior = () => {
+      attempts += 1
+      throw new HelmError('unknown_action', "插件 builtin:herdr 未声明动作 steer（插件停用或能力缺失）", 404, {
+        pluginId: 'builtin:herdr', actionId: 'steer',
+      })
+    }
+    await rejectsWith(
+      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, {}),
+      'unknown_action',
+      404,
+    )
+    assert.equal(attempts, 1, '控制动作非幂等：单次失败后不自动重试')
+  })
+
+  it('委托超时/断线真实错误透传且不重试', timeout, async () => {
+    const p = makePurePorts()
+    p.runs.set('wf_ext', externalRun())
+    let attempts = 0
+    p.invokeBehavior = () => {
+      attempts += 1
+      throw new HelmError('herdr_timeout', 'guard prompt 响应超时（投递结果不确定）', 504)
+    }
+    await rejectsWith(
+      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, {}),
+      'herdr_timeout',
+      504,
+    )
+    assert.equal(attempts, 1)
+  })
+})
+
+describe('parseExternalSteerResult（独立边界校验）', () => {
+  const expected = { executionId: 'ws:p9', nodeId: 'local', pluginId: 'p', actionId: 'a' }
+  it('合法产物通过并提取水位', timeout, () => {
+    assert.deepEqual(
+      parseExternalSteerResult({ steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 3, ownership: 'helm', guardLevel: 'cas' }, expected),
+      { stateChangeSeq: 3 },
+    )
+  })
+  it('坏产物显式拒绝', timeout, () => {
+    assert.throws(() => parseExternalSteerResult(undefined, expected), HelmError)
+    assert.throws(() => parseExternalSteerResult([], expected), HelmError)
+    assert.throws(() => parseExternalSteerResult({ steered: 'true' }, expected), HelmError)
   })
 })
 
@@ -603,7 +878,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
     return { host, backend, runId }
   }
 
-  it('manifest 冒烟：exposeAsTool 直投、CLI 命令 workflows steer、runId 位置参数', timeout, async () => {
+  it('manifest 冒烟：exposeAsTool 直投、CLI 命令 workflows steer、oneOf 输出双分支', timeout, async () => {
     const backend = new SteerFakeBackend()
     const host = new PluginHost({
       dataDir,
@@ -620,7 +895,8 @@ describe('workflow 插件 steer 动作（端到端）', () => {
     assert.equal(manifest.exposeAsTool, true, 'steer 应 exposeAsTool 直投 Agent 工具')
     assert.deepEqual(manifest.cli?.command, ['workflows', 'steer'])
     assert.deepEqual(manifest.cli?.positional, [{ field: 'runId', required: true }])
-    assert.ok(manifest.description.includes('Herdr'), '描述应显式声明外部运行时拒绝')
+    const oneOf = (manifest.outputSchema as { oneOf?: unknown[] }).oneOf
+    assert.ok(Array.isArray(oneOf) && oneOf.length === 2, '输出 Schema 应为 native/external oneOf 双分支')
     await host.dispose()
   })
 
@@ -635,9 +911,11 @@ describe('workflow 插件 steer 动作（端到端）', () => {
     assert.deepEqual(out, {
       steered: true,
       runId,
+      targetKind: 'native',
       conversationId: 42,
       ownership: 'bot',
       stateChangeSeq: 7,
+      guardLevel: 'cas',
     })
     assert.equal(backend.submitted.length, 1)
     const call = backend.submitted[0]!
@@ -661,6 +939,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
       const out = (await host.executeTool(name, { runId, text: '换个思路' }, { conversationId: 1, callId: 'c2' })) as Record<string, unknown>
       assert.equal(out['steered'], true, `${name} 应解析到 steer 动作`)
       assert.equal(out['conversationId'], 42)
+      assert.equal(out['targetKind'], 'native')
     }
     assert.equal(backend.submitted.length, 2)
     await host.dispose()

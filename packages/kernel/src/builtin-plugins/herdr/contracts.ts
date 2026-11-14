@@ -155,6 +155,16 @@ export interface HerdrPluginDependencies {
 
 export type { BlockedSnapshotAiOption, BlockedSnapshotAnalysis } from './prompt-options.js'
 
+/**
+ * builtin:herdr 对外发布的 steer 控制引用（onResolved.controls.steer）：
+ * 执行器（executionInfoOf）与插件动作注册共用同一常量，坐标与
+ * @helm/protocol ExternalSteerRequest/Result 契约对应。
+ */
+export const HERDR_STEER_CONTROLS = {
+  pluginId: 'builtin:herdr',
+  actionId: 'steer',
+} as const
+
 /** ctx.host.createAsk 的最小形状（与 AskCreateSpec/AskResult 对齐）。 */
 export interface CreateAskSpecLike {
   id?: string

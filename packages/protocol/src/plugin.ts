@@ -174,6 +174,21 @@ export interface AgentSpawnRequest {
  * 子代理实际执行环境元数据（onResolved 回传）。
  * 原生路径至少回传 conversationId；外部运行时（如 herdr）至少回传 executionId。
  */
+/**
+ * 外部执行环境的控制动作引用（纯机制引用）：执行插件在 onResolved 回传，
+ * 供编排层（如 builtin:workflow 的 steer）经宿主 invokeAction 委托控制动作。
+ * 只存 pluginId/actionId 动作坐标，绝不携带回调、运行时策略或机密；
+ * 具体授权与守卫由目标插件动作独立执行（不因委托而豁免）。
+ */
+export interface AgentExecutionControls {
+  /**
+   * 安全插话（steer）委托：目标动作必须实现外部委托标准契约
+   * （ExternalSteerRequest / ExternalSteerResult），并以服务端原子守卫
+   * （guardLevel 'cas'）投递；未实现/未通告守卫能力必须显式拒绝。
+   */
+  steer?: { pluginId: string; actionId: string }
+}
+
 export interface AgentExecutionInfo {
   /** 实际执行节点，由执行方回传；不能从父会话猜测外部插件的目标。 */
   nodeId?: string
@@ -192,6 +207,49 @@ export interface AgentExecutionInfo {
     baseCommit?: string
     dirtySource?: boolean
   }
+  /**
+   * 外部执行控制动作引用（机制引用，非机密）。仅外部执行可携带：必须与
+   * executionId + nodeId 同时出现（sanitize 拒绝孤立 controls）。
+   */
+  controls?: AgentExecutionControls
+}
+
+/**
+ * 外部执行环境 steer 委托标准输入（builtin:workflow.steer 依据节点
+ * controls.steer 组装后经宿主 invokeAction 调用执行插件动作）。
+ * workflowRunId/parentConversationId 为必填外部控制契约：目标动作必须
+ * 与受管执行记录强匹配，绝不凭调用方自报坐标放行。
+ */
+export interface ExternalSteerRequest {
+  /** 受管执行标识（onResolved.executionId）。 */
+  executionId: string
+  /** 实际执行节点（'local' 或节点 ID）。 */
+  nodeId: string
+  /** 派生该执行的 workflow run ID（强匹配）。 */
+  workflowRunId: string
+  /** 派生该执行的父会话 ID（强匹配）。 */
+  parentConversationId: number
+  /** 插话指导内容（非空白；原样交执行插件组装投递文本）。 */
+  text: string
+}
+
+/**
+ * 外部执行环境 steer 委托标准输出（执行插件动作必须返回的严格形状；
+ * 委托方逐字段核销，任何坏产物显式拒绝）。
+ *
+ * 诚实语义：steered=true 仅代表服务端守卫核验通过且文本已投递
+ * （guardLevel 'cas'），**不代表该指导已被 CLI 消费或执行完成**。
+ */
+export interface ExternalSteerResult {
+  steered: true
+  executionId: string
+  nodeId: string
+  /** 服务端守卫核验通过时的权威水位。 */
+  stateChangeSeq: number
+  /** 外部受管执行一律 helm 归属（human/bot 归属不适用外部窗格）。 */
+  ownership: 'helm'
+  /** 守卫级别：当前唯一合法值 'cas'（服务端原子守卫，未通告能力必须拒绝）。 */
+  guardLevel: 'cas'
 }
 
 /** gate 命令执行结果；output 为失败时展示给用户的命令输出。 */

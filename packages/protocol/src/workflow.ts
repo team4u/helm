@@ -91,6 +91,8 @@ export interface WorkflowNodeState {
   effectiveCwd?: string
   /** isolation: 'worktree' 分配的隔离工作树。 */
   worktree?: AgentExecutionInfo['worktree']
+  /** 外部执行控制动作引用（onResolved.controls 透传；steer 据此路由外部委托）。 */
+  controls?: AgentExecutionInfo['controls']
   phaseIndex?: number
   phaseTitle?: string
   /** agent 节点的原始提示词（审计/重放展示用）。 */

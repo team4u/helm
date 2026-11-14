@@ -27,9 +27,22 @@
 
 **原地追问自愈**：首次读取交接文件时，缺失、非法 JSON、Schema 校验失败或空文件均触发一次原地追问（注入明确的失败原因与重写指令，同轮走审批桥等待真实进展后再读）；二次仍失败则抛 `herdr_output_contract_violation`（附 `agent.read` 尾部 40 行脱敏快照），窗格保留现场供人工排查。**严禁静默截取终端脏屏幕文本冒充成功结果**——这是本插件最核心的诚实性红线。`herdr_output_missing`（404）是唯一可自愈边界码；其余 IO/SSH/权限错误如实抛诊断，不当缺文件重投任务。成功后交接文件即被清理。
 
-Herdr 原生 `agent.prompt` 支持向 `working` 状态的代理继续提交输入；`blocked` 时返回 `agent_blocked` 且不写入终端。输入通过 Herdr 的 Agent 接口发送，具体是立即插话还是排队，由目标 CLI 决定。`--wait` 观察生命周期状态，不确认某条补充指令已经执行完成。
+Herdr 原生 `agent.prompt` 支持向 `working` 状态的代理继续提交输入；`blocked` 时返回 `agent_blocked` 且不写入终端。输入通过 Herdr 的 Agent 接口发送，具体是立即插话还是排队，由目标 CLI 决定；`--wait` 只观察生命周期状态，不确认某条补充指令已经执行完成。
 
-Helm 当前的 `workflow.steer` 只接入原生子会话，尚未接入 Herdr 的运行中输入能力，因此该动作对 Herdr 执行显式拒绝。接入应由 `builtin:herdr` 校验受管窗格、发起会话、节点与实际 Agent 身份后调用 `agent.prompt`，继续沿用原 run 的文件交接与 Gate；不能用运行中 `resume` 代替，因为 Helm 的 `resumeInto` 会拒绝被占用的窗格。`resume` 仍只适用于存在、空闲且归属验证通过的执行。外部运行时不改变派生方会话的后台缺省策略（见 workflow 插件文档「默认后台协同」）。
+### 运行中插话（steer 动作）与 `agent_prompt_guard_v1` 拟议契约
+
+`builtin:herdr` 提供 `steer` 动作（HTTP `POST /api/actions/builtin:herdr/steer`、CLI `helm herdr steer`、`run_action` 与 Workflow `action()` 同权；不 `exposeAsTool`，模型统一走 `builtin:workflow.steer`）。`onResolved` 同时回传 `controls.steer = { pluginId: 'builtin:herdr', actionId: 'steer' }`，`builtin:workflow.steer` 据此把外部节点的插话动态委托到本动作（零硬编码路由；混合原生/外部候选歧义拒绝）。直调同样独立做调用方祖先链授权（模型路径的会话上下文由内核注入；HTTP 自报 `conversationId` 仅作用域提示、非认证）、父会话/run 强匹配与受管 `(nodeId, paneId)` 精确定位，不能经 `run_action` 绕开。仅限 workflow run 管理下的窗格：`workflowRunId` / `parentConversationId` 为必填外部控制契约。
+
+门禁链（任何一步失败确定性拒绝，绝不静默降级）：仅在任务执行期（task 阶段；startup/handoff/gate/keepalive/failed/settled 一律拒绝，按 pane 互斥拒绝重入）；预检 `agent.get` 核验 name/tab/pane/terminal 完整身份、`working` 且非 `launch_pending`（`blocked` 交原审批桥，`idle/done/unknown` 拒绝且绝不新建回合）；能力门禁后以 `agent.prompt` 携带 `guard`、**不传 `wait`**、短超时单次投递，断线/超时/坏响应如实上抛（可能已部分投递的不确定结果），绝不重试。投递文本附原文件交接契约提醒；`steered=true` 仅代表投递成功，不代表该指导已被执行。
+
+**拟议能力契约（Helm 侧提案，等待 Herdr 服务端配套；当前历史服务端不提供）**：
+
+- 能力通告：`ping` 返回 `pong.capabilities.agent_prompt_guard_v1 === true`（严格布尔，缺失如实视为不支持）；
+- 请求字段：`agent.prompt` params 增 `guard: { terminal_id, pane_id, tab_id, agent_name, state_change_seq, agent_status: 'working' }`，不携带 `wait`；`terminal_id` 必须取权威 `agent.get` 回传的真实值；
+- 守卫语义（硬性要求）：服务端在写入任何 PTY 字节前原子核验完整身份四元组 + 水位 + `working`，且**守卫覆盖完整「文本 + 回车」投递期**（真实投递是先粘贴文本、延时后回车的多步序列，仅首字节前核验不足以保证整个 submission；需服务端以原子提交或输入保留实现）；核验不符返回 `stale_state` / `agent_not_ready` / `agent_blocked` 且零字节写入；部分写入后发生的异常必须如实报告为不确定结果，调用方不得重试；
+- 现状证据（服务端源码只读核实，herdr 0.9.5 / protocol 22）：`AgentPromptParams` 仅 `{target, text, wait}`，无 guard 字段；旧服务端 serde 会静默忽略未知 guard 字段并照常投递。因此未通告该能力的服端被 fail-closed 拒绝（`409 herdr_steer_guard_unsupported`，附服务端 version/protocol 诊断），**绝不盲发**。在服务端配套发布前，不能声称真实 Herdr 全链路可用；仓内测试用的是实现该拟议契约的 fixture，不代表实际 Herdr 能力。
+
+原 `driveTask` 在结算等待中排空在途 steer 并做权威复查：首个 `idle/done` 可能早于 steer 投递完成被 `agent.wait` 观察到，不能直接进入文件交接——排空后以 `agent.get` 复查，`working` 回到等待、`blocked` 交审批桥，真实 settled 才进入交接阶段并立即拒绝后续 steer。不用固定延时声称证明指令消费（CLI 内部队列消费不由协议保证）。不能用运行中 `resume` 代替插话（`resumeInto` 拒绝被占用窗格）；`resume` 仍只适用于存在、空闲且归属验证通过的执行。外部运行时不改变派生方会话的后台缺省策略（见 workflow 插件文档「默认后台协同」）。
 
 **Gate 恰好一次验收**：文件成功后若请求带 `gate` 命令，在窗格实际节点与实际 cwd（worktree 模式为隔离树路径）、以建窗时的同一 env 执行恰好一次门禁命令（本机 `runLocalGate`，远端经节点通道）；`exit != 0` 即失败。
 

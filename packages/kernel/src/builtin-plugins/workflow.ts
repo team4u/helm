@@ -1459,40 +1459,62 @@ export function createWorkflowPlugin(): PluginDefinition {
         },
       })
 
-      // ---- 动作 steer：后台原生子代理安全插话（exposeAsTool 直投 Agent 工具） ----
-      // 授权证明与守卫细节见 ./workflow/steer.ts：caller → run → child 全程
-      // 沿真实会话父链推导；仅 kind=subagent + running + 已解析原生子会话且
-      // 归属 bot/helm 的运行可插话（DSL 工作流与外部 Herdr 执行显式拒绝）；
-      // 提交唯一入口 ctx.host.submitInputGuarded（内核原子复核归属与 CAS
-      // 水位，human 红线执行层兜底），绝不回退普通 submitInput。
+      // ---- 动作 steer：后台子代理安全插话（exposeAsTool 直投 Agent 工具） ----
+      // 授权证明与守卫细节见 ./workflow/steer.ts：caller → run → target 全程
+      // 沿真实会话父链推导；仅 kind=subagent + running 的运行可插话：原生节点
+      // （conversationId）经 ctx.host.submitInputGuarded 内核原子复核归属与
+      // CAS 水位（human 红线执行层兜底）；外部节点（controls.steer + executionId
+      // + nodeId）动态 invokeAction 委托目标插件动作（零硬编码插件 ID，混合
+      // 候选歧义拒绝）；DSL 工作流与未回传控制引用的外部执行显式拒绝。
+      // 控制动作非幂等：超时/断线不重试不伪造成功；steered 仅代表投递成功。
       ctx.action({
         id: 'steer',
         description:
-          '向运行中的后台原生子代理插话纠偏（steer，whenBusy=steer 注入在途回合）。仅支持 kind=subagent、status=running、已解析原生子会话且归属仍为 bot/helm 的运行；DSL 编排工作流与外部运行时（如 Herdr 窗格）显式拒绝。会话上下文调用仅允许 run 发起会话自身或其祖先，不可跨树控制；内核按归属与 CAS 水位原子复核，事实过期（如子会话已推进）返回 409 可重读重试。',
+          '向运行中的后台子代理插话纠偏（steer）：原生节点经内核 guarded 提交按归属与 CAS 水位原子复核；外部执行（如带原子守卫能力的 Herdr 窗格）按节点 controls.steer 委托对应插件动作，同样要求服务端守卫（guardLevel=cas），未通告守卫能力的目标显式拒绝。仅支持 kind=subagent、status=running 的运行；DSL 编排工作流、未回传控制引用的外部执行、human 归属或模型回合已结束时显式拒绝。会话上下文调用仅允许 run 发起会话自身或其祖先，不可跨树控制；事实过期（如子会话已推进）返回 409 可重读重试。steered=true 仅代表投递成功，不代表指导已执行完成。',
         inputSchema: {
           type: 'object',
           properties: {
             runId: { type: 'string', description: '后台子代理运行 ID（subagent 工具 background:true 返回的 runId）' },
-            text: { type: 'string', description: '插话指导内容（非空；原样注入子会话，附运行来源前缀）' },
+            text: { type: 'string', description: '插话指导内容（非空；原样注入目标执行，附运行来源前缀）' },
           },
           required: ['runId', 'text'],
           additionalProperties: false,
         },
         outputSchema: {
           type: 'object',
-          properties: {
-            steered: { type: 'boolean', const: true },
-            runId: { type: 'string' },
-            conversationId: { type: 'number', description: '被插话的原生子会话 ID' },
-            ownership: { type: 'string', enum: ['bot', 'helm'] },
-            stateChangeSeq: { type: 'number', description: '提交时复核通过的权威水位' },
-          },
-          required: ['steered', 'runId', 'conversationId', 'ownership', 'stateChangeSeq'],
-          additionalProperties: false,
+          oneOf: [
+            {
+              properties: {
+                steered: { type: 'boolean', const: true },
+                runId: { type: 'string' },
+                targetKind: { type: 'string', const: 'native' },
+                conversationId: { type: 'number', description: '被插话的原生子会话 ID' },
+                ownership: { type: 'string', enum: ['bot', 'helm'] },
+                stateChangeSeq: { type: 'number', description: '提交时复核通过的权威水位' },
+                guardLevel: { type: 'string', const: 'cas', description: '守卫级别（内核 CAS 复核）' },
+              },
+              required: ['steered', 'runId', 'targetKind', 'conversationId', 'ownership', 'stateChangeSeq', 'guardLevel'],
+              additionalProperties: false,
+            },
+            {
+              properties: {
+                steered: { type: 'boolean', const: true },
+                runId: { type: 'string' },
+                targetKind: { type: 'string', const: 'external' },
+                executionId: { type: 'string', description: '被插话的外部执行标识' },
+                nodeId: { type: 'string', description: '外部执行节点' },
+                ownership: { type: 'string', const: 'helm' },
+                stateChangeSeq: { type: 'number', minimum: 0, description: '服务端守卫核验通过的权威水位' },
+                guardLevel: { type: 'string', const: 'cas', description: '守卫级别（服务端原子守卫）' },
+              },
+              required: ['steered', 'runId', 'targetKind', 'executionId', 'nodeId', 'ownership', 'stateChangeSeq', 'guardLevel'],
+              additionalProperties: false,
+            },
+          ],
         },
         cli: {
           command: ['workflows', 'steer'],
-          description: '向运行中的后台原生子代理插话纠偏（仅原生 native 子代理可 steer；DSL 工作流与外部 Herdr 执行显式拒绝）',
+          description: '向运行中的后台子代理插话纠偏（原生与外部（如 Herdr）执行按节点解析路由；无服务端原子守卫能力的外部目标显式拒绝）',
           positional: [{ field: 'runId', required: true }],
         },
         exposeAsTool: true,
@@ -1506,12 +1528,15 @@ export function createWorkflowPlugin(): PluginDefinition {
               getConversationOwnership: (id) => ctx.host.getConversationOwnership(id),
               submitInputGuarded: (id, prompt, opts, guard) =>
                 ctx.host.submitInputGuarded(id, prompt, opts, guard),
+              invokeAction: (pluginId, actionId, invokeInput, invokeContext) =>
+                ctx.host.invokeAction(pluginId, actionId, invokeInput, invokeContext),
             },
             { runId, text },
             {
               ...(context.conversationId !== undefined
                 ? { conversationId: context.conversationId }
                 : {}),
+              ...(context.signal !== undefined ? { signal: context.signal } : {}),
             },
           )
         },

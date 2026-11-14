@@ -1750,6 +1750,7 @@ export class WorkflowService {
         if (info.executionId !== undefined) node.executionId = info.executionId
         if (info.effectiveCwd !== undefined) node.effectiveCwd = info.effectiveCwd
         if (info.worktree !== undefined) node.worktree = info.worktree
+        if (info.controls !== undefined) node.controls = info.controls
         record.subagentMeta = {
           ...(request.agentType !== undefined && request.agentType !== ''
             ? { agentType: request.agentType }

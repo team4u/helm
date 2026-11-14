@@ -47,6 +47,8 @@ import {
 import { isValidSessionName, isValidNodeId, resolveSocketPath } from './herdr/transport.js'
 import { normalizeStartupTimeoutMs } from './herdr/spawn-rules.js'
 import { assembleHerdrDepsFromHost, nodeChannelFromHost } from './herdr/host-ports.js'
+import { HERDR_STEER_CONTROLS } from './herdr/contracts.js'
+import { isAncestorOrSelf } from './lineage.js'
 import { OverviewProjector, type OverviewDoc } from './herdr/overview.js'
 
 /**
@@ -768,6 +770,113 @@ export function createHerdrPlugin(): PluginDefinition {
             )
           }
           return { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local', focused: true }
+        },
+      })
+
+      // ---- 动作 steer：受管窗格运行中插话（onResolved.controls.steer 委托目标） ----
+      // 通常由 builtin:workflow.steer 依据节点 controls 动态路由到本动作，也可
+      // HTTP/CLI/run_action 直调；直调同样独立做调用方祖先链授权、父会话/run
+      // 强匹配与受管 (nodeId, paneId) 精确定位（不因直调豁免授权）。投递唯一
+      // 入口 executor.steerPane：仅 task 阶段 + 服务端 agent_prompt_guard_v1
+      // 原子守卫（未通告能力 fail-closed 拒绝）；steered 仅代表投递成功。
+      ctx.action<
+        { executionId: string; nodeId: string; workflowRunId: string; parentConversationId: number; text: string },
+        { steered: true; executionId: string; nodeId: string; stateChangeSeq: number; ownership: 'helm'; guardLevel: 'cas' }
+      >({
+        id: HERDR_STEER_CONTROLS.actionId,
+        description:
+          '向本插件受管、且由 workflow run 派生的 Herdr 窗格插话纠偏（需服务端 ping capabilities 通告 agent_prompt_guard_v1 原子守卫，未通告显式拒绝）。仅任务执行期（task 阶段）且 Agent 处于 working 时可投递：服务端在完整文本+回车投递期内原子核验身份/水位/working，核验不符零写入；blocked 交原审批桥处理。steered=true 仅代表投递成功，不代表该指导已被执行；控制动作非幂等，超时/断线不重试。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            executionId: { type: 'string', minLength: 1, description: '受管执行标识（onResolved.executionId，即 paneId）' },
+            nodeId: { type: 'string', description: "实际执行节点（'local' 或节点 ID；必须与窗格登记一致）" },
+            workflowRunId: { type: 'string', minLength: 1, description: '派生该窗格的 workflow run ID（强匹配；仅限 run 管理下的窗格）' },
+            parentConversationId: { type: 'number', minimum: 1, description: '派生该窗格的父会话 ID（强匹配）' },
+            text: { type: 'string', minLength: 1, description: '插话指导内容（非空；脱敏后附交接契约提醒注入终端）' },
+          },
+          required: ['executionId', 'nodeId', 'workflowRunId', 'parentConversationId', 'text'],
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            steered: { type: 'boolean', const: true },
+            executionId: { type: 'string' },
+            nodeId: { type: 'string' },
+            stateChangeSeq: { type: 'number', minimum: 0, description: '服务端守卫核验通过的权威水位' },
+            ownership: { type: 'string', const: 'helm' },
+            guardLevel: { type: 'string', const: 'cas', description: '服务端原子守卫（agent_prompt_guard_v1）' },
+          },
+          required: ['steered', 'executionId', 'nodeId', 'stateChangeSeq', 'ownership', 'guardLevel'],
+          additionalProperties: false,
+        },
+        cli: {
+          command: ['herdr', 'steer'],
+          description: '向受管 Herdr 窗格插话（需服务端 agent_prompt_guard_v1 守卫；通常用 helm workflows steer <runId> 自动路由）',
+          timeoutMs: 15_000,
+        },
+        async handler(input, context) {
+          const registry = registryRef.current
+          const executor = executorRef.current
+          if (registry === undefined || executor === undefined) {
+            throw new HelmError(
+              'herdr_not_connected',
+              'Herdr 服务未启动（未连接目标服务器），无法插话',
+              409,
+            )
+          }
+          // 受管节点精确定位：显式 nodeId 必须与登记一致（不接受同 pane 不同
+          // node；'local' 折叠为本机缺省）。
+          if (input.nodeId !== 'local' && !isValidNodeId(input.nodeId)) {
+            throw new HelmError('validation_error', `nodeId '${input.nodeId}' 非法`, 400, { nodeId: input.nodeId })
+          }
+          const pane = registry.get(input.nodeId === 'local' ? undefined : input.nodeId, input.executionId)
+          if (pane === undefined) {
+            throw new HelmError(
+              'not_found',
+              `窗格 ${input.executionId}@${input.nodeId} 不由 builtin:herdr 管理`,
+              404,
+              { executionId: input.executionId, nodeId: input.nodeId },
+            )
+          }
+          // 调用方祖先链独立授权：携带会话上下文的调用必须是 run 父会话的
+          // 自身或祖先。会话上下文在模型路径由内核注入；HTTP 自报
+          // conversationId 仅作作用域提示（非认证），不匹配同样拒绝。
+          const caller = context.conversationId
+          if (caller !== undefined) {
+            const parentOf = (id: number): number | undefined => {
+              try {
+                return hostApi.getConversation(id).parentConversationId
+              } catch (error) {
+                if (error instanceof HelmError && error.code === 'not_found') return undefined
+                throw error
+              }
+            }
+            if (!isAncestorOrSelf(input.parentConversationId, caller, parentOf)) {
+              throw new HelmError(
+                'herdr_steer_out_of_scope',
+                `会话 ${caller} 无权插话窗格 ${input.executionId}：该窗格属父会话 ${input.parentConversationId} 的运行，仅其自身或祖先（或人工 HTTP/CLI）可插话`,
+                403,
+                { callerConversationId: caller, parentConversationId: input.parentConversationId, executionId: input.executionId },
+              )
+            }
+          }
+          // 投递（强匹配/阶段/能力门禁在 executor 内独立复核）。
+          const { stateChangeSeq } = await executor.steerPane(pane, {
+            workflowRunId: input.workflowRunId,
+            parentConversationId: input.parentConversationId,
+            text: input.text,
+            ...(context.signal !== undefined ? { signal: context.signal } : {}),
+          })
+          return {
+            steered: true as const,
+            executionId: pane.paneId,
+            nodeId: nodeIdOf(pane) ?? 'local',
+            stateChangeSeq,
+            ownership: 'helm' as const,
+            guardLevel: 'cas' as const,
+          }
         },
       })
 
