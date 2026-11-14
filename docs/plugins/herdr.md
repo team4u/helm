@@ -19,7 +19,7 @@
 
 非上述两种（普通 Profile / 未知前缀）返回 `continue` 交还内核原生执行行。节点选定优先级链：显式 `@nodeId`（含 `@local` 显式覆盖远端父节点）> `runtime.nodeId` > Profile 顶层 `nodeId` > 父会话绑定节点 > 本机。CLI 私有参数仅来自 `runtime.args` 原样透传，非法输入显式抛错，绝不猜测私有 flag。
 
-完整执行行为：**建窗（普通 `tab.create` 或 worktree 模式 `worktree.create` + 补建带 env 的 tab 两步）、`agent.start`、权威就绪等待、`agent.prompt --wait`、blocked 审批桥、文件交接（含一次自愈）、gate 恰好一次、双轨保活清理**八段序列。`agent.start` 真实启动序列返回 `unknown + launch_pending`：必须 `agent.wait` 等权威就绪后再投递，不得把 unknown 当终态失败、也不得提前 prompt。
+完整执行行为：**建窗（普通 `tab.create` 或 worktree 模式 `worktree.create` + 补建带 env 的 tab 两步）、`agent.start`、权威就绪等待、`agent.prompt --wait`、blocked 审批桥、文件交接（含一次自愈）、gate 恰好一次、双轨保活清理**八段序列。新建 PTY 的 shell 尚未就绪时，`agent.start` 可返回 `agent_pane_busy`（未启动 Agent）；Helm 仅对该错误在启动期限内等待再试，取消立即退出，超时或不确定结果不重试。启动成功可能仍是 `unknown + launch_pending`，须继续等权威就绪后再投递，不把 unknown 当终态失败，也不提前 prompt。
 
 ### 后台窗格隔离与文件交接
 

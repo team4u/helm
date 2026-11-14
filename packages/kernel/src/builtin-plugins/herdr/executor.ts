@@ -414,8 +414,9 @@ export class HerdrExecutor {
    * agent.start + 就绪等待（真实启动序列）：
    * - start 成功返回可能仍是 unknown/launch_pending（seq=0）：以 startupTimeout
    *   预算 agent.wait(until idle/blocked) 等权威就绪（signal 可取消）；
-   * - agent_not_ready 且权威 blocked：窗格已有 agent 等待交互，桥接审批后续等，
-   *   不启动第二个 agent（其余 agent_not_ready 场景如实抛）。
+   * - 新建 PTY 的 shell 可能尚未就绪；仅对服务端明确未启动的
+   *   agent_pane_busy 在启动预算内等待再试，不重试任何不确定投递；
+   * - agent_not_ready 且权威 blocked：桥接已有 agent，不启动第二个。
    */
   private async startAgentAndWaitReady(
     target: HerdrTarget,
@@ -430,24 +431,37 @@ export class HerdrExecutor {
       timeout_ms: this.host.startupTimeoutMs(),
     }
     if (routing.args.length > 0) params['args'] = routing.args
+    const shellDeadline = Date.now() + this.host.startupTimeoutMs()
     let started: HerdrAgentInfo
-    try {
-      started = parseAgentResult(
-        await this.transport.call(target, 'agent.start', params, { signal }),
-        'agent.start',
-        'agent_started',
-      )
-    } catch (error) {
-      const code = (error as { code?: string }).code
-      if (code !== 'agent_not_ready') throw error
-      const probe = await this.agentGet(target, paneId, signal)
-      if (probe.agentStatus !== 'blocked') throw error
-      this.host.notify(
-        'Herdr 窗格已存在等待中的 Agent',
-        `pane ${paneId} 返回 agent_not_ready 且权威状态 blocked，桥接既有 agent 继续审批流程，不启动第二个 agent`,
-        'info',
-      )
-      return probe
+    for (;;) {
+      signal?.throwIfAborted()
+      try {
+        started = parseAgentResult(
+          await this.transport.call(target, 'agent.start', params, { signal }),
+          'agent.start',
+          'agent_started',
+        )
+        break
+      } catch (error) {
+        const code = (error as { code?: string }).code
+        if (code === 'agent_pane_busy') {
+          const remaining = shellDeadline - Date.now()
+          if (remaining <= 0) {
+            throw new HelmError('herdr_startup_timeout', `pane ${paneId} 的 shell 未在启动期限内就绪（agent_pane_busy）`, 504)
+          }
+          await delay(Math.min(this.pollIntervalMs, remaining), undefined, { signal })
+          continue
+        }
+        if (code !== 'agent_not_ready') throw error
+        const probe = await this.agentGet(target, paneId, signal)
+        if (probe.agentStatus !== 'blocked') throw error
+        this.host.notify(
+          'Herdr 窗格已存在等待中的 Agent',
+          `pane ${paneId} 返回 agent_not_ready 且权威状态 blocked，桥接既有 agent 继续审批流程，不启动第二个 agent`,
+          'info',
+        )
+        return probe
+      }
     }
     if (started.agentStatus === 'blocked') return started
     if (started.interactiveReady && (started.agentStatus === 'idle' || started.agentStatus === 'done')) return started

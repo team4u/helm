@@ -1342,6 +1342,37 @@ test('actions: list/read/focus（read 40 行脱敏；未知 pane 404）', { time
   }
 })
 
+test('新窗格 shell 尚未就绪：仅对零启动的 agent_pane_busy 等待再试', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    env.transport.errors.set('agent.start', () => {
+      env.transport.errors.delete('agent.start')
+      return new HelmError('agent_pane_busy', 'shell 尚未就绪，未启动 Agent', 409)
+    })
+    env.transport.onPrompt = (pane, text) => {
+      env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileNameOf(text)}`, 'ready-result')
+    }
+    assert.equal(await spawnDirect(env, { agentType: 'herdr:pi' }), 'ready-result')
+    assert.equal(env.transport.calls.filter((call) => call.method === 'agent.start').length, 2)
+    assert.equal(env.transport.calls.filter((call) => call.method === 'agent.prompt').length, 1)
+    assert.equal(env.transport.calls.filter((call) => call.method === 'tab.create').length, 1)
+  } finally {
+    await env.close()
+  }
+})
+
+test('新窗格启动结果不确定时不重试 agent.start', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    env.transport.errors.set('agent.start', () => new HelmError('herdr_timeout', '启动响应超时，可能已启动', 504))
+    await assert.rejects(spawnDirect(env, { agentType: 'herdr:pi' }), (error: unknown) => (error as HelmError).code === 'herdr_timeout')
+    assert.equal(env.transport.calls.filter((call) => call.method === 'agent.start').length, 1)
+    assert.equal(env.transport.calls.filter((call) => call.method === 'agent.prompt').length, 0)
+  } finally {
+    await env.close()
+  }
+})
+
 test('agent_not_ready 桥接: 权威 blocked 时复用既有 agent，不启动第二个', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
