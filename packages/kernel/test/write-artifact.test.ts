@@ -55,14 +55,16 @@ describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
       BACKGROUND_CONTEXT,
     )
     assert.equal(res.isError, undefined)
+    const noteAbs = join(dir, 'note.txt')
     const outputText = (res.output as Array<{ text: string }>)[0]!.text
-    assert.match(outputText, /^write_ok: note\.txt（11 字节）$/)
+    assert.equal(outputText, `write_ok: ${noteAbs}（节点 local，11 字节）`)
     assert.doesNotMatch(outputText, /\[Artifact\]/)
-    const structured = res.structuredOutput as { path: string; bytesWritten: number; artifactId?: string }
-    assert.equal(structured.path, 'note.txt')
+    const structured = res.structuredOutput as { path: string; nodeId: string; bytesWritten: number; artifactId?: string }
+    assert.equal(structured.path, noteAbs, '结构化 path 回显真实绝对路径（非原始入参）')
+    assert.equal(structured.nodeId, 'local')
     assert.equal(structured.bytesWritten, 11)
     assert.equal(structured.artifactId, undefined)
-    assert.equal(readFileSync(join(dir, 'note.txt'), 'utf8'), 'hello world')
+    assert.equal(readFileSync(noteAbs, 'utf8'), 'hello world')
     // 产物仓库应为空
     assert.equal((await artifacts.list(1)).length, 0)
   })
@@ -87,16 +89,20 @@ describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
       BACKGROUND_CONTEXT,
     )
     assert.equal(res.isError, undefined)
+    const chartAbs = join(dir, 'reports', 'chart.svg')
+    const structured = res.structuredOutput as { path: string; nodeId: string; bytesWritten: number; artifactId?: string }
     const outputText = (res.output as Array<{ text: string }>)[0]!.text
-    assert.match(outputText, /write_ok: reports\/chart\.svg（17 字节）/)
-    assert.match(outputText, /\[Artifact\] id=([A-Za-z0-9-]+) name=chart\.svg/)
-    const structured = res.structuredOutput as { path: string; bytesWritten: number; artifactId?: string }
-    assert.equal(structured.path, 'reports/chart.svg')
+    assert.equal(
+      outputText,
+      `write_ok: ${chartAbs}（节点 local，17 字节）\n[Artifact] id=${structured.artifactId} name=chart.svg`,
+    )
+    assert.equal(structured.path, chartAbs, '结构化 path 回显真实绝对路径')
+    assert.equal(structured.nodeId, 'local')
     assert.equal(structured.bytesWritten, 17)
     assert.ok(typeof structured.artifactId === 'string')
 
     // 验证文件在 cwd 与产物服务中都存在
-    assert.equal(readFileSync(join(dir, 'reports/chart.svg'), 'utf8'), '<svg>circle</svg>')
+    assert.equal(readFileSync(chartAbs, 'utf8'), '<svg>circle</svg>')
     const metaList = await artifacts.list(2)
     assert.equal(metaList.length, 1)
     assert.equal(metaList[0]!.id, structured.artifactId)
@@ -190,13 +196,15 @@ describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
       BACKGROUND_CONTEXT,
     )
     assert.equal(res.isError, undefined)
+    const resultAbs = '/remote/workspace/output/result.json'
     const outputText = (res.output as Array<{ text: string }>)[0]!.text
-    assert.match(outputText, /write_ok: output\/result\.json（17 字节）/)
+    assert.ok(outputText.startsWith(`write_ok: ${resultAbs}（节点 worker-node-1，17 字节）`), `应回显远端绝对路径与节点（${outputText}）`)
     assert.match(outputText, /\[Artifact\] id=([A-Za-z0-9-]+) name=result\.json/)
-    const structured = res.structuredOutput as { path: string; bytesWritten: number; artifactId?: string }
-    assert.equal(structured.path, 'output/result.json')
+    const structured = res.structuredOutput as { path: string; nodeId: string; bytesWritten: number; artifactId?: string }
+    assert.equal(structured.path, resultAbs, '远端结构化 path 回显绝对路径')
+    assert.equal(structured.nodeId, 'worker-node-1')
     assert.ok(typeof structured.artifactId === 'string')
-    assert.equal(remoteFiles.get('/remote/workspace/output/result.json'), '{"status":"done"}')
+    assert.equal(remoteFiles.get(resultAbs), '{"status":"done"}')
     const metas = await artifacts.list(5)
     assert.equal(metas.length, 1)
     assert.equal(metas[0]!.id, structured.artifactId)

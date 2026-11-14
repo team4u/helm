@@ -19,7 +19,9 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
 import { execSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { open } from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
@@ -36,7 +38,9 @@ import {
   createRegisterArtifactTool,
   createWriteTool,
   executionScopeHash,
+  readArtifactBytesFromHandle,
   runShell,
+  type ArtifactReadHandle,
 } from '../src/runtime/tools.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
 import {
@@ -271,7 +275,113 @@ describe('register_artifact：local 真实字节登记', { timeout: 60_000 }, ()
     assert.ok(text.includes('artifact_too_large'), `应显式超限（${text.slice(0, 80)}）`)
     assert.ok(text.includes('15 MiB'))
   })
+
+  it('短读不当作完整文件：受限每次 read 字节数的真实句柄循环读到 EOF 还原全文', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'ra-local-5')
+    mkdirSync(dir, { recursive: true })
+    // 1) 真实临时文件 + 包装真实 FileHandle：每次 read 最多 3 字节（强制短读），
+    //    readArtifactBytesFromHandle 必须循环到 EOF 还原全文（旧实现单次 read
+    //    会把首 3 字节当完整文件静默登记）。
+    const source = join(dir, 'chunked.bin')
+    const payload = Buffer.concat([BINARY_SAMPLE, Buffer.alloc(1024, 0x5a)])
+    writeFileSync(source, payload)
+    const real = await open(source, 'r')
+    try {
+      const limited = limitReads(real, 3)
+      const read = await readArtifactBytesFromHandle(limited)
+      if (!read.ok) {
+        assert.fail(`受限短读应成功（得到 ${read.code}）`)
+      }
+      assert.deepEqual([...read.bytes], [...payload], '逐次短读循环拼回完整字节')
+      assert.equal(read.size, payload.byteLength)
+    } finally {
+      await real.close()
+    }
+    // 2) 工具链路同样字节保真（不受分块策略影响）。
+    const deps = await makeDeps(dir)
+    const result = await createRegisterArtifactTool(deps).execute(
+      { path: 'chunked.bin' },
+      makeApi(dir),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(!!result.isError, false)
+    const structured = result.structuredOutput as { artifactId: string }
+    assert.deepEqual([...Buffer.from(await deps.artifacts.readBuffer(structured.artifactId))], [...payload])
+  })
+
+  it('读途中增长/追加：中途变更显式 file_changed，绝不把旧 size 前缀登记成功', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'ra-local-6')
+    mkdirSync(dir, { recursive: true })
+    const source = join(dir, 'growing.bin')
+    // 600 KiB：跨越 helper 的 256 KiB 分块边界（至少 3 次 read），确保能在读途
+    // 中途注入变更，而不是首块一次性读完。
+    const base = Buffer.alloc(600 * 1024, 0x61)
+    writeFileSync(source, base)
+    // 包装真实 FileHandle：第 2 次 read 前（已读完首块、后续块未读）向同一
+    // 真实文件追加字节（模拟读途中并发写入；文件与句柄均真实，仅拦截 read
+    // 注入变更时机）。旧实现单次 read(旧 size) 会把 600KiB 前缀当完整文件
+    // 静默登记成功。
+    const real = await open(source, 'r')
+    try {
+      let readCalls = 0
+      const mutated: ArtifactReadHandle = {
+        stat: () => real.stat(),
+        read: (buffer, offset, length, position) => {
+          readCalls += 1
+          if (readCalls === 2) {
+            appendFileSync(source, Buffer.alloc(4096, 0x62))
+          }
+          return real.read(buffer, offset, length, position)
+        },
+      }
+      const read = await readArtifactBytesFromHandle(mutated)
+      assert.ok(!read.ok, '读途中变更必须失败')
+      if (!read.ok) {
+        assert.equal(read.code, 'file_changed', `应为 file_changed（得到 ${read.code}）`)
+      }
+    } finally {
+      await real.close()
+    }
+    // 变更落定后重新登记：成功且字节完整（64KiB + 追加的 4096），证明无旧前缀
+    // 残留登记、拒绝是「拒绝可能不完整的快照」而非永久不可登记。
+    const deps = await makeDeps(dir)
+    const result = await createRegisterArtifactTool(deps).execute(
+      { path: 'growing.bin' },
+      makeApi(dir),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(!!result.isError, false)
+    const structured = result.structuredOutput as { size: number }
+    assert.equal(structured.size, 600 * 1024 + 4096)
+  })
+
+  it('预算实证超限：真实 15 MiB+1 文件经 helper 显式 artifact_too_large（读到上限+1 即停）', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'ra-local-7')
+    mkdirSync(dir, { recursive: true })
+    const huge = join(dir, 'huge.bin')
+    writeFileSync(huge, Buffer.alloc(15 * 1024 * 1024 + 1, 0x61))
+    const real = await open(huge, 'r')
+    try {
+      const read = await readArtifactBytesFromHandle(limitReads(real, 64 * 1024))
+      assert.ok(!read.ok && read.code === 'artifact_too_large', '超预算必须显式 artifact_too_large')
+      if (!read.ok && read.code === 'artifact_too_large') {
+        assert.ok(read.read > 15 * 1024 * 1024, `超限读到的字节数应越过上限（${read.read}）`)
+      }
+    } finally {
+      await real.close()
+    }
+  })
 })
+
+/** 包装真实 FileHandle：限制每次 read 最多 maxPerRead 字节（验证短读循环）；
+ *  只需满足 ArtifactReadHandle 最小面（不模拟完整 FileHandle）。 */
+function limitReads(handle: FileHandle, maxPerRead: number): ArtifactReadHandle {
+  return {
+    stat: () => handle.stat(),
+    read: (buffer, offset, length, position) =>
+      handle.read(buffer, offset, Math.min(length, maxPerRead), position),
+  }
+}
 
 describe('register_artifact：remote 节点真实字节与显式拒绝', { timeout: 60_000 }, () => {
   it('经 EnvFabric 读取远端字节成功；canonical 路径回显（软链解析后）', { timeout: 60_000 }, async () => {

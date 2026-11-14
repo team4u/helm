@@ -73,6 +73,7 @@ import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { constants as fsConstants } from 'node:fs'
 import { mkdir, open, readFile, realpath, stat, writeFile } from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { MAX_ARTIFACT_BYTES } from '../services/artifacts.js'
 import { composeExecutionEnv, MANAGED_EXEC_ENV_VARS } from '../env/scoped-env.js'
@@ -1182,6 +1183,81 @@ const registerArtifactParameters = obj({
   mimeType: opt(str({ description: 'MIME 类型（缺省按扩展名探测；文本类会脱敏后落盘，二进制字节原样保留）' })),
 })
 
+/** register_artifact local 读取结果：成功携带完整字节；失败为机器可读码。 */
+export type ArtifactFileBytes =
+  | { ok: true; bytes: Buffer; size: number }
+  | { ok: false; code: 'artifact_too_large'; read: number }
+  | { ok: false; code: 'file_changed'; detail: string }
+
+/**
+ * helper 读取所需的最小句柄面（结构化：真实 FileHandle 天然满足，测试可用
+ * 包装真实句柄注入短读/读途中变更，不需模拟整个 FileHandle）。
+ */
+export interface ArtifactReadHandle {
+  stat(): Promise<{ size: number; mtimeMs: number; ctimeMs: number }>
+  read(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number | null,
+  ): Promise<{ bytesRead: number; buffer: Buffer }>
+}
+
+/** 单次读取块大小（有界循环读，避免一次性占 15 MiB 缓冲）。 */
+const ARTIFACT_READ_CHUNK_BYTES = 256 * 1024
+
+/** local 打开标志：O_RDONLY + 平台支持时 O_NONBLOCK。stat 预检与 open 之间存在
+ *  竞态窗口（普通文件被换成 FIFO/设备文件会使纯 O_RDONLY 的 open 无限阻塞），
+ *  O_NONBLOCK 让 open 立即返回、由同一 fd 上的 fstat 权威拒绝；Windows
+ *  libuv 不支持 O_NONBLOCK，仅用 O_RDONLY（Windows 无 FIFO，风险面不同）。 */
+function artifactOpenFlags(): number {
+  return process.platform === 'win32'
+    ? fsConstants.O_RDONLY
+    : fsConstants.O_RDONLY | (fsConstants as { O_NONBLOCK?: number }).O_NONBLOCK!
+}
+
+/**
+ * 同一 FileHandle 上有界读到 EOF（register_artifact local 路径唯一实现）：
+ * - 逐块循环读到 EOF：单次短读只推进游标继续循环，绝不把短读当完整文件
+ *  （旧实现一次性 read(size) 在文件增长时最多读到旧 size，把静默截断的
+ *  前缀当成功登记）；
+ * - 总预算 MAX_ARTIFACT_BYTES + 1：读到超限即停并显式 artifact_too_large
+ *  （读上限+1 字节即为超限实证，绝无 bytesRead > MAX 永假的死分支）；
+ * - 读取前后同一 fd fstat 对比 size/mtime/ctime：中途被追加/截断/改写时
+ *  显式 file_changed，绝不把旧前缀登记成功（无快照系统，只做前后对比）。
+ */
+export async function readArtifactBytesFromHandle(handle: ArtifactReadHandle): Promise<ArtifactFileBytes> {
+  const before = await handle.stat()
+  const budget = MAX_ARTIFACT_BYTES + 1
+  const chunks: Buffer[] = []
+  let total = 0
+  let position = 0
+  for (;;) {
+    const want = Math.min(ARTIFACT_READ_CHUNK_BYTES, budget - total)
+    if (want <= 0) return { ok: false, code: 'artifact_too_large', read: total }
+    const chunk = Buffer.alloc(want)
+    const { bytesRead } = await handle.read(chunk, 0, want, position)
+    if (bytesRead === 0) break
+    chunks.push(chunk.subarray(0, bytesRead))
+    total += bytesRead
+    position += bytesRead
+    if (total > MAX_ARTIFACT_BYTES) return { ok: false, code: 'artifact_too_large', read: total }
+  }
+  const after = await handle.stat()
+  if (
+    after.size !== before.size ||
+    after.mtimeMs !== before.mtimeMs ||
+    after.ctimeMs !== before.ctimeMs
+  ) {
+    return {
+      ok: false,
+      code: 'file_changed',
+      detail: `读取期间文件发生变化（size ${before.size} -> ${after.size}，mtime ${before.mtimeMs} -> ${after.mtimeMs}，ctime ${before.ctimeMs} -> ${after.ctimeMs}），拒绝登记可能不完整的快照`,
+    }
+  }
+  return { ok: true, bytes: Buffer.concat(chunks, total), size: after.size }
+}
+
 /**
  * register_artifact 工具：把会话靶点节点上的真实普通文件复制登记为当前
  * 会话产物（经 artifacts.writeUploaded 落 Hub 数据目录，Web 可预览/下载）。
@@ -1190,12 +1266,13 @@ const registerArtifactParameters = obj({
  * - 在目标节点读取真实文件字节（远端必经 EnvFabric 的 canonicalPath /
  *   fileInfo / readBinaryFile；节点离线或 EnvFabric 缺失显式失败，绝不回退
  *   local 误读 Hub 本机磁盘）；
- * - 只接受普通文件（目录/特殊文件拒绝：stat 预检分类 + 同一 fd fstat 复核，
- *   FIFO 等特殊文件在预检即拒绝，绝不在 open 上无限阻塞），读前 fileInfo/
- *   fstat 预检 + 读后字节数复核，上限 MAX_ARTIFACT_BYTES（15 MiB，与上传入口
- *   一致）；
- * - local 用同一 fd stat/read（预检与读取同一文件标识，防打开后被替换；
-   按预检 size 有界读取，绝不对大/特殊文件无限 read）；
+ * - 只接受普通文件（目录/特殊文件拒绝）：stat 预检分类（无竞态场景）+
+ *   O_NONBLOCK（平台支持时）open 封 stat→open 竞态窗口（换成 FIFO 不阻塞）
+ *   + 同一 fd fstat 权威复核；上限 MAX_ARTIFACT_BYTES（15 MiB，与上传入口
+ *   一致），读前预检 + 读后字节数复核；
+ * - local 有界循环读到 EOF（短读继续循环，绝不把单次短读/旧 size 前缀当
+ *   完整文件；读到上限+1 即实证超限），读取前后同一 fd stat 对比
+ *   size/mtime/ctime，中途变更显式 file_changed（见 readArtifactBytesFromHandle）；
  * - 结构化结果回显 artifactId、源文件绝对路径（local 为词法绝对路径、远端
  *   为 canonical 解析后）、nodeId、name、size/mime；二进制保真与文本脱敏
  *   由 ArtifactService 统一处理；一切异常文本经 deps.redact 脱敏。
@@ -1317,9 +1394,11 @@ export function createRegisterArtifactTool(
           }
         } else {
           // local：与 read 工具同构——先 stat（跟随软链）预检分类（目录/特殊
-          // 文件/超限；FIFO 等特殊文件在预检即拒绝，绝不在 open 上无限阻塞），
-          // 随后同一 fd 上 fstat 复核 + 有界读取（预检与读取同一文件标识，防
-          // 打开后被替换；按预检 size 分配缓冲，绝不对大/特殊文件无限 read）。
+          // 文件/超限；FIFO 等特殊文件在无竞态场景下预检即拒绝）；打开用
+          // O_NONBLOCK（平台支持时）封住 stat→open 竞态窗口（普通文件被换成
+          // FIFO 后纯 O_RDONLY 的 open 会无限阻塞）；同一 fd 上 fstat 权威复核
+          // 后有界循环读到 EOF（短读继续、超限实证、中途变更显式 file_changed，
+          // 见 readArtifactBytesFromHandle）。
           const preInfo = await stat(lexicalAbs)
           if (preInfo.isDirectory()) {
             return {
@@ -1348,7 +1427,7 @@ export function createRegisterArtifactTool(
               isError: true,
             }
           }
-          const handle = await open(lexicalAbs, fsConstants.O_RDONLY)
+          const handle = await open(lexicalAbs, artifactOpenFlags())
           try {
             const statInfo = await handle.stat()
             if (statInfo.isDirectory()) {
@@ -1362,7 +1441,7 @@ export function createRegisterArtifactTool(
             if (!statInfo.isFile()) {
               return {
                 output: [
-                  { type: 'text', text: `register_failed: ${args.path} 在打开后不是普通文件，拒绝读取` },
+                  { type: 'text', text: `register_failed: ${args.path} 在打开后不是普通文件（特殊文件），拒绝读取` },
                 ],
                 isError: true,
               }
@@ -1378,25 +1457,27 @@ export function createRegisterArtifactTool(
                 isError: true,
               }
             }
-            const buffer = Buffer.alloc(statInfo.size)
-            const { bytesRead } =
-              statInfo.size === 0
-                ? { bytesRead: 0 }
-                : await handle.read(buffer, 0, statInfo.size, 0)
-            // 读后复核：预检与读取之间内容被追加时以实际读到的字节数为准，
-            // 超限显式拒绝（不截断当成功）。
-            if (bytesRead > MAX_ARTIFACT_BYTES) {
+            const read = await readArtifactBytesFromHandle(handle)
+            if (!read.ok) {
+              if (read.code === 'artifact_too_large') {
+                return {
+                  output: [
+                    {
+                      type: 'text',
+                      text: `artifact_too_large: ${args.path} 读取到 ${read.read} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`,
+                    },
+                  ],
+                  isError: true,
+                }
+              }
               return {
                 output: [
-                  {
-                    type: 'text',
-                    text: `artifact_too_large: ${args.path} 读取到 ${bytesRead} 字节，超过单产物 ${MAX_ARTIFACT_BYTES} 字节（15 MiB）上限`,
-                  },
+                  { type: 'text', text: `file_changed: ${args.path} ${read.detail}` },
                 ],
                 isError: true,
               }
             }
-            bytes = buffer.subarray(0, bytesRead)
+            bytes = read.bytes
           } finally {
             await handle.close()
           }
