@@ -45,15 +45,19 @@ helm workflows run ./review.js --args '{"pr": 1024, "strict": true}'
 | `model` | `string` | 模型覆盖，如 `'provider/model'` |
 | `agentType` | `string` | Profile ID（专家 Bot 标识）或外部运行时标识（如 `herdr:agy`） |
 | `isolation` | `'worktree'` | 启用独立 Git Worktree 隔离（唯一合法值） |
-| `gate` | `string` | 验收 shell 命令，退出码非 0 判定失败 |
+| `gate` | `string` | 验收 shell 命令，退出码非 0 或超时判定失败；完整结果（`exitCode`、`timedOut`）经 `agent.withMeta` 回传 |
 | `resume` | `string` | 续接本 run 内既有智能体的 label |
 | `effort` | `string` | 思考力度：`minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
 | `schema` | `object` | 结构化输出的 JSON Schema |
 | `attachments` | `string[]` | 本次调用携带的产物 ID 列表 |
 | `secretNames` | `string[]` | 显式授予外部运行时（如 `herdr:` 窗格）注入的父会话机密环境变量名列表。缺省不携带任何父会话机密；名字需为合法环境变量名且在父会话 stash 内现存（缺失显式报错）；仅外部运行时消费，原生 Profile 子会话不支持——非空授予到达原生执行行显式报错 `unsupported_secret_grant`（空数组等同未授予）；按次授予，resume 不自动沿用；字段参与恢复缓存指纹 |
 | `maxSubagentDepth` | `number` | 相对任务树根的绝对子代理层级上限（1..5 整数；默认继承上限 2，根会话为第 0 层）。根会话可为大任务提高上限；受管子代理不得提高继承上限。续接未传时保留授权，显式设置重新校验；字段参与恢复缓存指纹 |
+| `cwd` | `string` | 子代理工作目录（跨平台绝对路径）。不带 `isolation` 时直接在该目录运行；带 `isolation: 'worktree'` 时从该目录切出子级 Worktree。字段参与恢复缓存指纹 |
+| `timeoutMs` | `number` | 单回合超时毫秒数（1_000 .. 3_600_000 整数）。超时中止子会话并按失败返回；只限制执行时限，不改变调用身份，不记入恢复缓存 Key |
+| `gateTimeoutMs` | `number` | 单次门禁命令超时毫秒数（1_000 .. 600_000 整数，默认 120_000）。仅在设置 `gate` 时有效 |
+| `maxAttempts` | `number` | 失败自动重试次数上限（1 .. 10 整数，默认 1）。配合 `gate` 或 `timeoutMs` 使用；需要 `label`，未传时自动生成 |
 
-选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, secretNames, maxSubagentDepth`。
+选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort`、`cwd` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置；`resume` 沿用原会话的工作目录，不能用 `cwd` 改指他处，需要换目录就新建节点），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, secretNames, maxSubagentDepth, cwd, timeoutMs, gateTimeoutMs, maxAttempts`。
 
 **结构化输出**：配置 `schema` 时宿主为子智能体挂载结构化契约，引擎解析其 JSON 回复并按 Schema 校验，通过则返回原生对象，不通过（非 JSON 或不合契约）返回 `null`：
 
@@ -79,6 +83,54 @@ if (result === null) throw new Error("结构化输出校验失败")
 **attachments 授权边界**：只允许当前编排会话及其父链有权使用的产物；数组不能包含空 ID、纯空白 ID 或非字符串项（空数组合法，且与未提供在重放指纹上是不同调用）。宿主会校验产物存在性与授权。当前授权不覆盖子会话或兄弟会话——不能把上一个子代理产出的产物 ID 直接转交给下一个子代理，需要交接时先由有权读取的会话显式导出内容，再按接收方有权使用的方式登记。不同节点、目录与 Worktree 之间没有自动文件同步。
 
 **resume 的边界**：只有该子会话仍存在、归属校验通过且不忙时才能真正续接。`resume` 续接的是会话上下文，`resumeFromRunId` 重放的是工作流账本，两者是不同操作。前缀失配后命中「仅存在于账本缓存」的子结果时，引擎会显式失败而不是伪造续接。
+
+### `agent.withMeta(prompt, options)` 与 `goal(spec)`
+
+`agent(prompt, opts)` 的返回值保持不变：成功返回文本或 `schema` 对象，失败返回 `null`。需要执行信息与门禁结果时改用 `agent.withMeta(prompt, opts)`，选项与 `agent()` 完全相同，返回值携带完整执行元数据：
+
+```ts
+interface AgentWithMetaResult<T = unknown> {
+  ok: boolean
+  output: T | null
+  attempts: number          // 实际执行的尝试次数
+  error?: string            // 失败原因
+  timedOut?: boolean        // 回合是否超时
+  execution?: {
+    nodeId?: string
+    conversationId?: number // 子会话 ID，可凭它 resume
+    executionId?: string
+    effectiveCwd?: string
+    worktree?: WorktreeExecutionDescriptor  // { id, path, branch, ... }
+  }
+  gate?: AgentGateResult
+}
+```
+
+`AgentGateResult` 是门禁的完整结果，字段固定为：
+
+| 字段 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `ok` | `boolean` | 退出码为 0 且未超时 |
+| `output` | `string` | 聚合输出（已脱敏） |
+| `exitCode` | `number \| null` | 进程退出码；超时被杀时为 `null` |
+| `timedOut` | `boolean` | 是否超时 |
+
+`goal(spec)` 是 `agent.withMeta` 的简写，`maxAttempts` 缺省为 3：`goal({ label, objective, gate, maxAttempts = 3, ...rest })` 等价于 `agent.withMeta(objective, { ...rest, label, gate, maxAttempts })`（`objective` 就是 prompt）：
+
+```javascript
+const res = await goal({
+  label: "impl-auth",
+  objective: "实现登录模块，完成后 git add 并 git commit 到当前分支",
+  isolation: "worktree",
+  gate: "pnpm test --filter auth && test -z \"$(git status --porcelain)\"",
+  maxAttempts: 3,
+  gateTimeoutMs: 120_000,
+})
+if (!res.ok) throw new Error(`重试 ${res.attempts} 次后未通过: ${res.error}`)
+const wt = res.execution?.worktree  // { id, path, branch, ... }，后续可据此合入或清理
+```
+
+**`maxAttempts` 重试语义**：第 1 次尝试因门禁失败、门禁超时或回合超时而失败，且已取得子会话 ID 时，引擎自动以 `resume: label` 携带失败原因与报错输出续跑，最多执行 `maxAttempts` 次。重试沿用同一子会话与同一 Worktree，不重建隔离树。每次尝试在账本中各占一条独立 `index` 记录；进程重启后 `resumeFromRunId` 直接跳过已完成的尝试。失败分支同样保留 `execution`（含 Worktree 描述）与 `gate` 结果，脚本可据此决定人工介入或清理。
 
 ### `parallel(thunks)` 与 `pipeline(items, ...stages)`
 
@@ -106,7 +158,7 @@ const reports = await pipeline(
 - `options.idempotent`（boolean）：调用端的幂等承诺声明，覆盖动作定义端的默认值。
 - `options.label` / `options.phase`：节点展示标签与阶段覆盖。
 
-`idempotent` 的准确语义：它是对「该动作可安全重复执行（包括部分完成或中断后重试）」的承诺，由动作作者或脚本作者作出，不是引擎检测所得。引擎用它决定恢复策略——已声明幂等的动作失败或中断后允许 `resumeFromRunId` 放行并断链重跑；未声明幂等的动作失败或存在悬挂意图行时，恢复会被保守拒绝（见[状态流水与故障恢复](journaling-recovery.md)）。注意内建 `env.exec` 定义为非幂等：脚本里对它显式标 `idempotent: true` 前，请确认命令真的可安全重放（如纯只读查询）。
+`idempotent` 的准确语义：它是对「该动作可安全重复执行（包括部分完成或中断后重试）」的承诺，由动作作者或脚本作者作出，不是引擎检测所得。引擎用它决定恢复策略——已声明幂等的动作失败或中断后允许 `resumeFromRunId` 放行并断链重跑；未声明幂等的动作失败或存在悬挂意图行时，恢复会被保守拒绝（见[状态流水与故障恢复](journaling-recovery.md)）。注意内建 `env.exec` 定义为非幂等：脚本里对它显式标 `idempotent: true` 前，请确认命令真的可安全重放（如纯只读查询）。要在工作流里执行支持断点续跑的 `git merge` 时，先检查已合入再合并：`git merge-base --is-ancestor "<branch>" HEAD || git merge --no-ff -m "<msg>" "<branch>"`——已合入则跳过，未合入才执行合并，这样可安全声明 `idempotent: true`。
 
 **内建动作 `env.exec`（短名 `exec`）**：经内核 EnvFabric 在节点上执行命令。输入结构与返回值如下：
 
@@ -130,7 +182,11 @@ if (diff.ok) log(diff.output)
 
 ### `workflow(ref, args)`
 
-嵌套调用其他工作流。`ref` 是已保存工作流名字符串，或 `{ scriptPath }` 对象（不提供则抛错）；`args` 原样传给子工作流。嵌套深度上限为 1：你已经在某个工作流内部时不能再 `workflow()`，应直接内联编排。子工作流的名字用于进度前缀与错误定位（进度条目会带子工作流派生前缀）。
+嵌套调用其他工作流。`ref` 是已保存工作流名字符串，或 `{ scriptPath }` 对象（不提供则抛错）；`args` 原样传给子工作流。子工作流的名字用于进度前缀与错误定位（进度条目会带子工作流派生前缀）。
+
+嵌套深度上限为 4 层（根工作流为第 0 层），总调用数仍受 `WORKFLOW_NESTED_CAP = 256` 约束。整棵工作流树在同一 Worker 进程内执行，所有 `agent` 与 `action` 节点共用同一份递增 `callIndex` 与同一个 `workflow-<runId>.jsonl` 账本。中途中断后对根 `runId` 调一次 `resumeFromRunId`，即可按账本前缀跳过全部已完成节点，整树续跑。
+
+每次 `workflow()` 调用分配递增的 `scopeId`（根工作流为 `0`）。`label` 与 `resume` 以 `${scopeId}:${label}` 为键登记：并发运行的多个子工作流可以各自使用同名 `label`（如 `"plan"`），互不覆盖对方的续接目标。
 
 ### `phase(title)` 与 `log(message)`
 
@@ -159,7 +215,7 @@ if (diff.ok) log(diff.output)
 | 单次 `parallel` / `pipeline` 列表项 | `WORKFLOW_ITEM_CAP` | 4096 |
 | 嵌套 `workflow()` 调用总数 | `WORKFLOW_NESTED_CAP` | 256 |
 
-脚本含控制字符（制表符、回车、换行除外）会在编译前被拒绝。并发智能体数量由宿主按 CPU 核数调度（上限 16，给宿主线程留两个核），超出并发的调用在信号量上排队。
+脚本含控制字符（制表符、回车、换行除外）会在编译前被拒绝。单个 Run 的并发子代理数由插件配置 `maxConcurrentAgents` 控制（`1 .. 128`，缺省 `max(2, min(32, CPU 核数 × 2))`），超出并发的调用在信号量上排队。经 `workflow()` 调用的子工作流共用当前 Run 的信号量；子代理在回合内经工具同步派发的子任务使用独立信号量。这样父节点不会占着槽位等子节点完成，子节点也不会在队列外等父节点释放槽位。
 
 ## 完整示例
 

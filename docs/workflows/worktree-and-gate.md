@@ -25,7 +25,8 @@ flowchart TD
 
 - 目录：`<主仓同级>/.helm-worktrees/<repo>-<shortId>`
 - 分支：`helm/spawn-<shortId>`，基于分配时刻记录的 `baseCommit` 创建（不追易变 HEAD——锁内创建瞬间主仓 HEAD 可能已被推进）
-- 源状态：如实记录源工作区是否脏（`dirtySource`）。源仓库脏时，子智能体的提示词会附加明确告知：隔离树基于 HEAD 创建，不包含源工作区未提交的改动。
+- 源状态：如实记录源工作区是否脏（`dirtySource`）。源仓库脏时明确告知：隔离树基于 HEAD 创建，不包含源工作区未提交的改动。
+- 上下文注入：每次启动（新建与 `resume`）都向子代理提示词末尾注入 `<worktree_context>`，内容含 `worktreeId`、`path`、`branch`、`baseCommit`、`baseBranch`（若有）与 `dirtySource` 提示，并提醒子代理在结束回合前运行 `git add` 与 `git commit` 保持工作区干净。从干净仓库切出的子代理同样知道自己的分支与目录。
 
 所有 Git 命令经 EnvFabric 节点通道以 argv 数组直跑（无 shell 拼接），路径含空格或特殊字符在 Linux、macOS 与 Windows 上同样安全。分配成功后元数据持久化在插件私有文档：
 
@@ -33,6 +34,8 @@ flowchart TD
 | :--- | :--- |
 | `id` | 唯一标识，格式 `${nodeId}:${path}` |
 | `repoRoot` / `path` / `branch` / `baseCommit` | 主仓根、隔离树路径、分支名、基线提交 |
+| `baseBranch` | 创建 Worktree 时源目录检出的本地分支名（父模块分支；detached HEAD 时为空），供清理时判定已合入目标 |
+| `parentWorktreeId` | 源目录本身是受管 Worktree 时记录其 ID，标识父子关系 |
 | `dirtySource` | 派生时源工作区是否含未提交修改 |
 | `conversationId` / `executionId` | 绑定的子会话与执行标识（onResolved 回填） |
 | `origin` | `'native'`（引擎分配）或 `'external'`（外部运行时回传登记） |
@@ -45,7 +48,8 @@ flowchart TD
 工作树占用采用持久租约保护，安全红线是「不能证明停止就不能清理」：
 
 - **占位先于副作用**：`git worktree add` 执行之前，先在租约文档持久登记占位（`phase: 'pending'`）并落盘。进程在此之后崩溃，重启后该占位仍在——清理时无法证明没有执行启动，会以 `worktree_execution_unknown` 显式阻塞，交人工确认。
-- **释放仅限两种确认状态**：执行确认成功；或执行确认从未启动（`next` 调用前就抛错，此时占位自身可证明无执行）。`onResolved` 失败、外部进程可能已启动但未回填标识、以及其他一切未知状态均保留租约。
+- **释放仅限确认停止的状态**：执行确认成功；执行确认从未启动（`next` 调用前就抛错，此时占位自身可证明无执行）；或原生子会话的回合以失败收场（门禁未过、回合超时、Schema 校验失败）且宿主确认该会话已停止。第三种情形释放本次运行租约，同时保留 Worktree 记录与子会话映射，供下一轮 `resume` 续接或后续 `cleanup_worktree` 清理；`resume` 成功完成时顺带清掉该登记下残留的旧租约。
+- **未知状态保留租约**：进程崩溃后重启（无法证明子代理是否还在改文件）、`onResolved` 失败、外部进程可能已启动但未回填标识，均保留租约并以 `worktree_execution_unknown` 阻塞清理，交人工确认。
 - **元数据机密检查**：将要落库的路径/分支/仓路径字段若包含已登记机密，以 `worktree_metadata_secret` 拒绝持久化（诊断输出使用脱敏值）。
 
 resume 与租约的交互：已绑定隔离树的子会话在 resume 时严格沿用原树——目录缺失经节点真实探测证实后显式失败（探测失败与目录缺失严格区分，绝不把节点离线当作缺失）；中途迁移节点或改写 `cwd` 显式拒绝（`resume_cwd_conflict`）。创建时未启用隔离的会话，不允许在 resume 时中途切换为 worktree 隔离。
@@ -69,7 +73,18 @@ sequenceDiagram
     Note over E,H: 任一来源命中即定论，绝不二次执行；宿主缺 runGate 能力则显式失败该调用
 ```
 
-判定标准：退出码为 0 且未超时即通过；非零退出码把该次 `agent` 调用判定为失败（节点状态记录 gate 输出，便于定位缺陷），确定性账本不会将门禁失败的调用记为成功结果。宿主自跑 fallback 的工作目录只使用引擎确认过的值（执行环境回传的 `cwd` 或父会话 `cwd`），绝不猜测远端目录。外部执行环境（如 Herdr 远端窗格）在其对应工作目录中执行同一命令并经 `onGateResult` 回报，回报优先采纳。
+判定标准：退出码为 0 且未超时即通过；非零退出码或超时把该次 `agent` 调用判定为失败（节点状态记录 gate 输出，便于定位缺陷），确定性账本不会将门禁失败的调用记为成功结果。结果以 `AgentGateResult` 完整回传，字段固定为：
+
+| 字段 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `ok` | `boolean` | 退出码为 0 且未超时 |
+| `output` | `string` | 聚合输出（已脱敏） |
+| `exitCode` | `number \| null` | 进程退出码；超时被杀时为 `null` |
+| `timedOut` | `boolean` | 是否超时 |
+
+宿主执行的门禁有独立超时：`agent()` 的 `gateTimeoutMs` 选项（`1_000 .. 600_000` 整数，默认 `120_000` 毫秒）传给宿主 `runGate`。超时由宿主终止整个进程组（先 SIGTERM，宽限后 SIGKILL），返回 `timedOut: true` 与 `exitCode: null`。门禁未过时抛出的 `gate_failed` 错误在 `details` 中附带 `exitCode`、`timedOut` 与输出尾部，供失败重试时定位缺陷。
+
+宿主自跑 fallback 的工作目录只使用引擎确认过的值（执行环境回传的 `cwd` 或父会话 `cwd`），绝不猜测远端目录；宿主缺 `runGate` 能力则显式失败该调用。外部执行环境（如 Herdr 远端窗格）在其对应工作目录中执行同一命令并经 `onGateResult` 回报，回报优先采纳。`gateTimeoutMs` 只约束宿主侧执行；外部运行时是否支持门禁超时以其自身能力为准，Helm 不对此作承诺。
 
 ## 安全回收
 
@@ -90,7 +105,15 @@ sequenceDiagram
 | 3. realpath 校验：登记路径经软链跳到其他工作树（登记可能已被替换）；附加权威登记的 path / branch / HEAD 归属匹配、prunable / locked 状态检查 | `worktree_owner_mismatch` / `worktree_locked` | 否 |
 | 4. 进程占用保护：目标节点上的进程仍以工作树或其子目录为 cwd，或持有其中的文件句柄；探测不完整或不支持时同样拒绝 | `worktree_process_in_use` / `worktree_process_check_failed` | 否 |
 | 5. 脏工作区保护：含未提交修改、未跟踪或被忽略文件（`--ignored=matching` 也计入） | `worktree_dirty` | 是（`force`） |
-| 6. 未合入保护：分支存在相对主工作树当前 HEAD 未合入的提交（`git rev-list --count`） | `worktree_dirty` | 是（`force`） |
+| 6. 未合入保护：分支存在相对基准提交未合入的提交（`git rev-list --count`） | `worktree_dirty` | 是（`force`） |
+
+第 6 项检查的基准提交按以下顺序确定：
+
+1. 调用方传入 `mergedInto`（动作输入或 CLI `--merged-into`）：校验其为合法 ref（非空、不含空白与控制字符、不含 `..` / `~` / `^` / `:`，不以 `-` 开头），在仓库内 `git rev-parse --verify --quiet "<ref>^{commit}"` 解析。解析不到提交以 `400 validation_error` 显式拒绝，不回退主工作树。
+2. 未传 `mergedInto` 但登记了 `baseBranch`：父分支仍存在时用其当前提交；父分支已删则回退主工作树 HEAD。
+3. 其他情况用主工作树当前 HEAD。
+
+计数为 `0` 且工作区干净时，说明提交已全部合入目标分支，不传 `force` 即可删除。确认合入（或 `force`）后统一用 `git branch -D` 删除分支：基准提交不是 `main` 时 `git branch -d` 会拒绝删除，`-D` 避免误报。这套基准规则服务于父子 Worktree：模块分支 `B` 派生的子分支 `C` 已合入 `B`、而 `B` 尚未合入 `main` 时，清理 `C` 传入 `mergedInto: B` 即可正常回收，不需要 `force`。
 
 第 3 道中的 `locked` 是所有者显式加锁，任何情况下不可越过（请先解锁）。检查命令本身失败（如 `git status` 报错）会以 `worktree_check_failed` 显式中止清理，绝不当作干净或目录缺失。全部通过后执行真实 `git worktree remove`；分支删除部分失败时先固化「树已 removed」事实（`branchDeleted: false` 与诊断保留在记录上），可再次 cleanup 传 `deleteBranch` 重试。
 
@@ -112,12 +135,13 @@ helm worktrees cleanup --worktree-id local:/repo/.helm-worktrees/repo-ab12cd34
 helm worktrees cleanup --conversation-id 42
 helm worktrees cleanup --path /repo/.helm-worktrees/repo-ab12cd34 --node-id local
 
-# 选项：--delete-branch 一并删除受管分支；--force 越过脏工作区/未合入保护
-#（不可越过占用、归属与 locked 校验）
-helm worktrees cleanup --conversation-id 42 --delete-branch --force
+# 选项：--delete-branch 一并删除受管分支；--merged-into <ref> 指定已合入的
+# 目标分支或提交（缺省用登记的 baseBranch，再回退主工作树 HEAD）；
+# --force 越过脏工作区/未合入保护（不可越过占用、归属与 locked 校验）
+helm worktrees cleanup --conversation-id 42 --merged-into helm/spawn-ab12cd34 --delete-branch
 ```
 
-同一能力暴露为模型工具 `cleanup_worktree`（参数同构：`worktreeId` / `conversationId` / `path` + `nodeId` / `deleteBranch` / `force`），子智能体可在任务收尾时自行清理。工具侧的 `--current` 语义：无任何显式选择器时以当前会话为选择器（即子会话自己的 worktree），显式选择器永不被上下文覆盖。清理前还有一道租约终检：存在重启中断或未确认停止的执行租约时以 `worktree_execution_unknown` 拒绝（见上文 fail-closed 红线）。
+同一能力暴露为模型工具 `cleanup_worktree`（参数同构：`worktreeId` / `conversationId` / `path` + `nodeId` / `deleteBranch` / `mergedInto` / `force`），子智能体可在任务收尾时自行清理。CLI 旗标由动作 Schema 动态派生（camelCase 入参映射为 kebab-case 旗标），与工具参数一一对应；动作 Schema 新增入参即自动出现对应旗标，无需改 CLI 实现。工具侧的 `--current` 语义：无任何显式选择器时以当前会话为选择器（即子会话自己的 worktree），显式选择器永不被上下文覆盖。清理前还有一道租约终检：存在重启中断或未确认停止的执行租约时以 `worktree_execution_unknown` 拒绝（见上文 fail-closed 红线）。
 
 ## 边界与约束
 

@@ -10,19 +10,21 @@
 <Hub 数据目录>/plugins/builtin%3Aworkflow/artifacts/<conversationId>/workflow-<runId>.jsonl
 ```
 
-默认数据目录下示例：`~/.helm/plugins/builtin%3Aworkflow/artifacts/42/workflow-wf_1a2b3c4d5e6f.jsonl`（`runId` 形如 `wf_<12位十六进制>`）。已保存的工作流脚本位于 `<插件数据目录>/workflows/`；运行索引与完整记录持久化在插件私有 `records` 文档（Hub 的 `state.sqlite` 插件文档表），Web 界面摘要经按会话分片的 `runs` 投影订阅。
+默认数据目录下示例：`~/.helm/plugins/builtin%3Aworkflow/artifacts/42/workflow-wf_1a2b3c4d5e6f.jsonl`（`runId` 形如 `wf_<12位十六进制>`）。已保存的工作流脚本位于 `<插件数据目录>/workflows/`；运行索引（轻量字段：`id`、`conversationId`、`status`、`createdAt`、`updatedAt`、`notifyParentOnSettle`、`autoResumeCount`、`resumedByRunId`）持久化在插件私有 `records` 文档（Hub 的 `state.sqlite` 插件文档表），每个 Run 的完整记录经原子写（`.tmp` + `fsync` + `rename`）存为 `<插件数据目录>/artifacts/<conversationId>/workflow-<runId>.record.json`，`worktree-state` 保留全部登记不删减历史。Web 界面摘要经按会话分片的 `runs` 投影订阅；进度树中节点的 `prompt`、`gate.output` 与 `error` 只保留最多 1024 字符的截断预览，完整内容以子会话与账本为准。经 `workflow()` 嵌套的整棵工作流树共用同一份账本与同一递增 `callIndex`，不按子工作流拆分账本。
 
 每行一个 JSON 对象，三类事件行：
 
 | `type` | 语义 | 关键字段 |
 | :--- | :--- | :--- |
-| `agent` | 智能体调用终态 | `index`, `key`, `ok`, `text`（成功时的回复文本）, `resumed?` |
+| `agent` | 智能体调用终态 | `index`, `key`, `ok`, `text`（成功时的回复文本）, `resumed?`, `execution?`（执行信息，含 worktree 描述；落盘前脱敏）, `gate?`（`AgentGateResult`） |
 | `action_started` | 动作执行意图（先于 handler 落盘） | `index`, `key`, `idempotent?` |
 | `action` | 动作调用终态 | `index`, `key`, `ok`, `result` / `error`, `idempotent?` |
 
 `index` 是调用发起位次（agent 与 action 共享同一全序，并发完成顺序不影响分配）；`seq` 是落盘物理单调序号（恢复时按 `index` 前缀校验、按 `seq` 去重）；`key` 是调用载荷的哈希摘要。
 
-**Key 计算**（SHA-256，取 32 位十六进制）：agent 的 Key 覆盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`attachments`（原样序列化，不去重不排序——ID 或次序变化都是不同调用；未提供与空数组语义不同，不归一化）、`schema` 的序列化形式与 `maxSubagentDepth`（派工上限），采用带版本标记的固定槽 canonical 形态（新增字段只追加在版本号之后，杜绝槽位碰撞）。action 的 Key 覆盖全限定 `actionId` 与序列化后的输入。任何参数微调都会改变 Key，防止误用过期缓存。
+**Key 计算**（SHA-256，取 32 位十六进制）：agent 的 Key 覆盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`attachments`（原样序列化，不去重不排序——ID 或次序变化都是不同调用；未提供与空数组语义不同，不归一化）、`schema` 的序列化形式、`maxSubagentDepth`（派工上限）、`secretNames`（机密授予）与 `cwd`（工作目录），采用带版本标记的固定槽 canonical 形态（新增字段只追加在版本号之后，杜绝槽位碰撞）。`timeoutMs` 与 `gateTimeoutMs` 只限制执行时限，不改变调用身份，不记入 Key；`maxAttempts` 的每次尝试各占一条独立 `index` 记录，不做归并。action 的 Key 覆盖全限定 `actionId` 与序列化后的输入。任何参数微调都会改变 Key，防止误用过期缓存。
+
+当前 Key 版本为 **v3**：在 v2 的固定槽上无条件追加 `cwd` 槽。无条件占位使升版后全部调用 Key 与旧账本失配（含未携带 `cwd` 的调用）。开发阶段不做迁移：旧账本安全降级为断链重跑，不存在「未携带新字段则 Key 不变」的兼容承诺。
 
 ## 前缀重放，不是查表缓存
 
@@ -31,6 +33,8 @@
 为什么不做「输入相同就复用」的无序查表？因为在编排流程里，上游环境变化意味着后续调用处于不同业务状态——另一场 run 第 12 位恰好相同的 prompt 不是同一份工作。乱序复用后续匹配，等同于在不同上下文中冒用历史结果。前缀单调匹配保证：只有当此前的每一步都确认与账本一致时，本步的历史结果才有资格被复用。
 
 两类特殊失配的守卫：伪造或不一致的缓存行拒绝——`resumed` 标记必须与本次调用是否 resume 严格对应；重放命中的行若带 `schema`，还会用当前契约复检一次。前缀失配后命中「仅存在于账本缓存」的 resume 目标时显式失败（无活会话可续接，绝不伪造 live 续接）。
+
+重放命中 `agent` 行时，`agent.withMeta` 与 `goal` 从账本还原该行的 `execution`（含 Worktree 描述）与 `gate` 字段，脚本可继续对该 Worktree 执行合入或清理。多级工作流的 `label` 以 `${scopeId}:${label}` 登记（见 DSL 手册的 `workflow()` 一节）：同名 `label` 在不同子工作流内是不同节点，前缀匹配按各自的 Key 逐项比对，整棵树对根 `runId` 一次续跑。
 
 ## Agent 尽力记账 vs Action 强一致
 
@@ -92,6 +96,18 @@ helm workflows run ./pipeline.js --resume-from-run-id wf_1a2b3c4d5e6f --wait
 ```
 
 恢复执行继承原 run 的 `args`（显式传入可覆盖），已成功前缀的智能体调用零 Token 瞬间返回，自中断点起实时接续。
+
+## 失败 Run 的自动断点续跑
+
+上游模型接口长时间故障时，后台运行的 Workflow Run 可能用完重试次数变为 `failed`。满足以下全部条件的 Run 会在 Watchdog 巡检（每 15 秒一次 `diagnostics.collect`）中被上报为待续跑探针：
+
+- `status === 'failed'` 且 `notifyParentOnSettle === true`（后台任务）。
+- 未被新 Run 接替（`resumedByRunId` 为空）。
+- 失败原因不是语法错误、参数校验错误或 `workflow_action_uncertain`。
+- 账本无不确定副作用且至少有一条成功记录。
+- 累计自动续跑次数 `autoResumeCount` 小于 3。
+
+Watchdog 按 `autoResumeCount` 等待冷却时间：第 0 次等 2 分钟，第 1 次等 5 分钟，第 2 次等 15 分钟。冷却期满后调用 `workflow.run({ resumeFromRunId })` 从断点续跑，并把原 Run 的 `resumedByRunId` 指向新 Run，防止重复触发；新 Run 的 `autoResumeCount` 在原值上递增。每轮巡检最多恢复 1 个 Run，按 `failedAt` 从早到晚排序：网关刚恢复时避免同时唤醒多个大工作流再次压垮接口。人工续跑与自动续跑走同一入口（`helm workflows run --resume-from-run-id`），自动机制只在冷却与次数上收敛，不改变重放语义。
 
 ## 边界与约束
 
