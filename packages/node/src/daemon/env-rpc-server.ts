@@ -66,12 +66,6 @@ import type {
 
 type RpcErrorCode = RpcEnvError['code'];
 
-/**
- * 隧道连接错误码（protocol 并行分支新增 RpcFileErrorCode 'connect_failed'，
- * 合并后本别名自动收敛为同一联合；本地先以交叉声明自洽）。
- */
-type RpcTunnelErrorCode = RpcErrorCode | 'connect_failed';
-
 /** 升级排空拒新错误信封：稳定码 node_draining + 人类可读诊断。 */
 const drainingRejection = (what: string): RpcEnvError => ({
   code: 'node_draining',
@@ -375,22 +369,30 @@ export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
   getActiveTunnelCount(): number;
 }
 
-/** NodeEnvRpcFunctions + 节点隧道扩展（NodeTunnelOpenInput 统一引自 protocol）。 */
-type NodeEnvRpcWithTunnelFunctions = NodeEnvRpcFunctions & {
-  nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcTunnelResult>;
-  nodeTunnelAbort(tunnelId: string): Promise<void>;
-};
-
-/**
- * 隧道 RPC 错误信封（本地最窄类型：code 含 protocol 并行分支正在新增的
- * 'connect_failed'；protocol 合并后直接换成 RpcResult 即可，不提交副本）。
- */
-type RpcTunnelResult = { ok: true; value: null } | { ok: false; error: { code: RpcTunnelErrorCode; message: string } };
-
 /** void 返回的 RPC（abort/cleanup/unsubscribe）：不做 RpcResult 边界包装；
  * envCleanup 因按 cwd 杀全部同 cwd 会话在途命令的破坏性语义，在函数内
  * 自带 disposed/draining 显式拒绝（抛错经 birpc 错误信封如实回拒）。 */
 const VOID_RPC_METHODS = new Set(['envAbortExec', 'envCleanup', 'ipcAbortCall', 'ipcUnsubscribe', 'nodeTunnelAbort']);
+
+/**
+ * guard 受理策略（与 VOID_RPC_METHODS 同层的数据声明，缺省策略为不拒新、不追踪）：
+ * - envExec：受理即登记——draining/disposed/对象校验与 execWaiters 计数
+ *   全部在 guard 入口同步完成，升级排空轮询看到的计数包含「已受理未
+ *   spawn」的调用，且已受理的调用不会因之后的 setDraining 被拒；
+ * - nodeTunnelOpen：draining 拒新隧道；隧道生命周期（双端销毁）由
+ *   tunnelWaiters 追踪，dispose 排空时等待其 settle，不再另行计数；
+ * - ipcCall：一次性 call 计入排空口径（ipcWaiters），升级等待其收敛，
+ *   不被旧宿主退出硬切断；
+ * - ipcSubscribe：订阅是长驻语义，排空不等待它收敛（等待它等于禁止
+ *   升级期间订阅存在），但 draining 时拒新——旧宿主 dispose 前统一优雅
+ *   关闭既有订阅并经 onIpcClosed 通知 Hub，Hub 侧可自行重订。
+ */
+const ADMIT_POLICIES: Record<string, { drainingWhat?: string; tracked?: 'exec' | 'ipc' }> = {
+  envExec: { drainingWhat: 'commands', tracked: 'exec' },
+  nodeTunnelOpen: { drainingWhat: 'tunnels' },
+  ipcCall: { drainingWhat: 'IPC calls', tracked: 'ipc' },
+  ipcSubscribe: { drainingWhat: 'IPC subscriptions' },
+};
 
 export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEnvRpcServer {
   const {
@@ -754,7 +756,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     tunnel.settle();
   };
 
-  const nodeTunnelOpenCore = async (raw: unknown): Promise<RpcTunnelResult> => {
+  const nodeTunnelOpenCore = async (raw: unknown): Promise<RpcResult<null>> => {
     // 边界严格校验：plain object、字段白名单、值域——未知字段一律拒绝。
     if (!isRecord(raw) || Array.isArray(raw)) return invalidInput('nodeTunnelOpen input must be a plain object');
     const unknownFields = Object.keys(raw).filter(
@@ -807,16 +809,16 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     const tunnel = newTunnel(tunnelId, tcp);
     // 统一 settle：整个建立过程（TCP connect + WS 握手）只结算一次。
     let settled = false;
-    let settleResult: (result: RpcTunnelResult) => void = () => undefined;
-    const rpcResult = new Promise<RpcTunnelResult>((resolve) => { settleResult = resolve; });
-    const settleOnce = (result: RpcTunnelResult): void => {
+    let settleResult: (result: RpcResult<null>) => void = () => undefined;
+    const rpcResult = new Promise<RpcResult<null>>((resolve) => { settleResult = resolve; });
+    const settleOnce = (result: RpcResult<null>): void => {
       if (settled) return;
       settled = true;
       clearTimeout(budgetTimer);
       settleResult(result);
     };
-    // TCP 错误归一 connect_failed（系统码保留在 message，不外溢到 code）。
-    const connectFailed = (detail: string): { code: RpcTunnelErrorCode; message: string } => ({
+    // TCP 错误归一 connect_failed（protocol NodeTunnelErrorCode；系统码保留在 message，不外溢到 code）。
+    const connectFailed = (detail: string): RpcEnvError => ({
       code: 'connect_failed',
       message: `tunnel TCP connect to ${target} failed: ${detail}`,
     });
@@ -1308,9 +1310,10 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     ipcSubscribe,
     ipcUnsubscribe,
   };
-  // 隧道 RPC 附着在 env 函数面之上（protocol 并入前的本地扩展）。
-  const rpcFunctions: NodeEnvRpcWithTunnelFunctions = Object.assign(rpc, {
-    nodeTunnelOpen: (input: NodeTunnelOpenInput): Promise<RpcTunnelResult> => nodeTunnelOpenCore(input),
+  // 隧道 RPC 附着在 env 函数面之上（protocol NodeEnvRpcFunctions 已含
+  // optional nodeTunnelOpen/nodeTunnelAbort；此处补上具体实现）。
+  const rpcFunctions: NodeEnvRpcFunctions = Object.assign(rpc, {
+    nodeTunnelOpen: (input: NodeTunnelOpenInput): Promise<RpcResult<null>> => nodeTunnelOpenCore(input),
     nodeTunnelAbort,
   });
 
@@ -1318,122 +1321,56 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
    * 边界统一包装：所有 RpcResult 返回的 RPC——disposed / 同步异常 /
    * null 输入解构错误——一律转为结构化 RpcResult 错误信封，绝不向
    * birpc 调用方抛裸异常。void 返回的 abort/cleanup 不改签名。
+   *
+   * 方法差异只经 admit 参数化：
+   * - drainingWhat：参与升级排空拒新的方法及其拒新文案主题；未配置的
+   *   方法不拒新（文件只读面与排空无关），且在延迟执行段复核 disposed
+   *   （受理与执行间连接被 dispose 时以结构化 aborted 拒绝，不再触碰
+   *   original）；
+   * - tracker：受理即计入排空内省（trackExec / trackIpc）。
    */
-  const pendingOperations = new Set<Promise<unknown>>();
-  const guarded = rpcFunctions as unknown as Record<string, unknown>;
-  for (const key of Object.keys(rpcFunctions) as (keyof NodeEnvRpcWithTunnelFunctions)[]) {
-    if (VOID_RPC_METHODS.has(key)) continue;
-    const original = guarded[key];
-    if (typeof original !== 'function') continue;
-    if (key === 'envExec') {
-      // 受理即登记：draining/disposed/对象校验与 execWaiters 计数全部在 guard
-      // 入口同步完成——升级排空轮询看到的计数包含「已受理未 spawn」的调用，
-      // 且已受理的调用不会因之后的 setDraining 被拒。
-      guarded[key] = async (...args: unknown[]): Promise<RpcResult<unknown>> => {
-        if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
-        const input = args[0];
-        if (!input || typeof input !== 'object' || Array.isArray(input)) return invalidInput('RPC input must be an object');
-        if (draining) {
-          return { ok: false, error: drainingRejection('commands') };
-        }
-        const operation = trackExec(
-          Promise.resolve().then(() => (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args)),
-        );
-        pendingOperations.add(operation);
-        try {
-          return await operation;
-        } catch (error) {
-          return rpcFail(error);
-        } finally {
-          pendingOperations.delete(operation);
-        }
-      };
-      continue;
-    }
-    if (key === 'nodeTunnelOpen') {
-      // 受理即登记：draining/disposed 拒新隧道；隧道生命周期（双端销毁）
-      // 由 tunnelWaiters 追踪，dispose 排空时等待其 settle。
-      guarded[key] = async (...args: unknown[]): Promise<RpcResult<unknown>> => {
-        if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
-        const input = args[0];
-        if (!input || typeof input !== 'object' || Array.isArray(input)) return invalidInput('RPC input must be an object');
-        if (draining) {
-          return { ok: false, error: drainingRejection('tunnels') };
-        }
-        const operation = Promise.resolve().then(() => (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args));
-        pendingOperations.add(operation);
-        try {
-          return await operation;
-        } catch (error) {
-          return rpcFail(error);
-        } finally {
-          pendingOperations.delete(operation);
-        }
-      };
-      continue;
-    }
-    if (key === 'ipcCall') {
-      // 受理即登记：draining/disposed 拒新 IPC 调用；一次性 call 计入排空
-      // 口径（ipcWaiters），升级等待其收敛，不被旧宿主退出硬切断。
-      guarded[key] = async (...args: unknown[]): Promise<RpcResult<unknown>> => {
-        if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
-        const input = args[0];
-        if (!input || typeof input !== 'object' || Array.isArray(input)) return invalidInput('RPC input must be an object');
-        if (draining) {
-          return { ok: false, error: drainingRejection('IPC calls') };
-        }
-        const operation = trackIpc(
-          Promise.resolve().then(() => (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args)),
-        );
-        pendingOperations.add(operation);
-        try {
-          return await operation;
-        } catch (error) {
-          return rpcFail(error);
-        } finally {
-          pendingOperations.delete(operation);
-        }
-      };
-      continue;
-    }
-    if (key === 'ipcSubscribe') {
-      // 订阅是长驻语义：排空不等待它收敛（等待它等于禁止升级期间订阅存在），
-      // 但 draining 时拒新——旧宿主 dispose 前统一优雅关闭既有订阅并经
-      // onIpcClosed 通知 Hub，Hub 侧可自行重订。
-      guarded[key] = async (...args: unknown[]): Promise<RpcResult<unknown>> => {
-        if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
-        const input = args[0];
-        if (!input || typeof input !== 'object' || Array.isArray(input)) return invalidInput('RPC input must be an object');
-        if (draining) {
-          return { ok: false, error: drainingRejection('IPC subscriptions') };
-        }
-        const operation = Promise.resolve().then(() => (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args));
-        pendingOperations.add(operation);
-        try {
-          return await operation;
-        } catch (error) {
-          return rpcFail(error);
-        } finally {
-          pendingOperations.delete(operation);
-        }
-      };
-      continue;
-    }
-    guarded[key] = async (...args: unknown[]): Promise<RpcResult<unknown>> => {
+  const guardRpcMethod = (
+    original: (...args: unknown[]) => Promise<RpcResult<unknown>>,
+    admit: { drainingWhat?: string; tracker?: <T>(promise: Promise<T>) => Promise<T> },
+  ): ((...args: unknown[]) => Promise<RpcResult<unknown>>) =>
+    async (...args: unknown[]): Promise<RpcResult<unknown>> => {
       if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
       if (!args[0] || typeof args[0] !== 'object' || Array.isArray(args[0])) return invalidInput('RPC input must be an object');
-      const operation = Promise.resolve().then(() => disposed
-        ? { ok: false as const, error: { code: 'aborted' as const, message: 'server disposed' } }
-        : (original as (...a: unknown[]) => Promise<RpcResult<unknown>>)(...args));
-      pendingOperations.add(operation);
+      if (admit.drainingWhat !== undefined && draining) {
+        return { ok: false, error: drainingRejection(admit.drainingWhat) };
+      }
+      const recheckDisposedInFlight = admit.drainingWhat === undefined;
+      const operation = Promise.resolve().then(() =>
+        recheckDisposedInFlight && disposed
+          ? { ok: false as const, error: { code: 'aborted' as const, message: 'server disposed' } }
+          : original(...args),
+      );
+      const tracked = admit.tracker !== undefined ? admit.tracker(operation) : operation;
+      pendingOperations.add(tracked);
       try {
-        return await operation;
+        return await tracked;
       } catch (error) {
         return rpcFail(error);
       } finally {
-        pendingOperations.delete(operation);
+        pendingOperations.delete(tracked);
       }
     };
+
+  const pendingOperations = new Set<Promise<unknown>>();
+  const guarded = rpcFunctions as unknown as Record<string, unknown>;
+  for (const key of Object.keys(rpcFunctions)) {
+    if (VOID_RPC_METHODS.has(key)) continue;
+    const original = guarded[key];
+    if (typeof original !== 'function') continue;
+    const admit = ADMIT_POLICIES[key];
+    const tracker =
+      admit?.tracked === 'exec' ? trackExec
+      : admit?.tracked === 'ipc' ? trackIpc
+      : undefined;
+    guarded[key] = guardRpcMethod(original as (...args: unknown[]) => Promise<RpcResult<unknown>>, {
+      drainingWhat: admit?.drainingWhat,
+      tracker,
+    });
   }
 
   let disposal: Promise<void> | undefined;
