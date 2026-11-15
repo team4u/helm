@@ -341,7 +341,7 @@ function makeConversation(id: number, over: Partial<ConversationSummary> = {}): 
     title: `conv-${id}`,
     profileId: 'assistant',
     tags: [],
-    cwd: '/tmp/helm-herdr-parent',
+    cwd: PARENT_CWD,
     model: '',
     thinkingLevel: '',
     status: 'idle',
@@ -556,9 +556,17 @@ class MemoryConfigStore {
   set(): Promise<void> { return Promise.resolve() }
 }
 
+/**
+ * 父会话 cwd（每进程唯一）：并发测试进程（含同仓其他 worktree）共享固定
+ * /tmp/helm-herdr-parent 时，makeEnv 的 rmSync 会互删对方 FsOutputFiles /
+ * NodeExecutionEnv 写入的交接产物，造成虚假 herdr_output_contract_violation
+ * （已实测两进程并发同文件必现互踩）；唯一化后跨进程零互踩。
+ */
+const PARENT_CWD = join(tmpdir(), `helm-herdr-parent-${process.pid}`)
+
 async function makeEnv(options: EnvOptions = {}): Promise<Env> {
   const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'helm-herdr-fix-'))
-  const parentHelmDir = join('/tmp/helm-herdr-parent', '.helm')
+  const parentHelmDir = join(PARENT_CWD, '.helm')
   rmSync(parentHelmDir, { recursive: true, force: true })
   mkdirSync(parentHelmDir, { recursive: true })
   const backend = options.backend ?? new FakeBackend()
@@ -608,6 +616,7 @@ async function makeEnv(options: EnvOptions = {}): Promise<Env> {
       await host.dispose().catch(() => {})
       await served.close()
       rmSync(dataDir, { recursive: true, force: true })
+      rmSync(PARENT_CWD, { recursive: true, force: true })
     },
   }
 }
@@ -1103,7 +1112,7 @@ test('Profile 不能覆盖受管 HELM_*（本机）；远端仅显式有效可�
     scriptSuccess(env, 'env-ok')
     await spawnDirect(env, { agentType: 'hijack' })
     const envSent = env.transport.calls.find((c) => c.method === 'tab.create')!.params['env'] as Record<string, string>
-    assert.equal(envSent['HELM_CWD'], '/tmp/helm-herdr-parent', '受管 HELM_CWD 权威')
+    assert.equal(envSent['HELM_CWD'], PARENT_CWD, '受管 HELM_CWD 权威')
     assert.equal(envSent['HELM_TOKEN'], 'SECRET-TOKEN', '受管 token 权威')
     assert.equal(envSent['CUSTOM'], 'ok', '非受管 Profile 变量保留')
     // 本机窗格：Profile 的 HELM_HUB_URL 也不覆盖受管值。
