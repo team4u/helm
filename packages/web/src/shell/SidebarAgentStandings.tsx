@@ -256,7 +256,8 @@ function AgentConversationsList({
   )
 }
 
-/** Agent 名下单个历史会话行（批量模式缩进渲染 + 勾选）。 */
+/** Agent 名下单个历史会话行（批量模式缩进渲染 + 勾选）。
+ * 分屏入口收敛到会话详情顶栏，会话行不再携带分屏按钮。 */
 function AgentConversationRow({
   conv,
   store,
@@ -316,17 +317,6 @@ function AgentConversationRow({
         <ConversationStatusDot conv={conv} background={background} />
         {!batchMode && (
           <span className="nav-item-row-actions">
-            <span className="sidebar-split-action" onClick={(e) => e.stopPropagation()}>
-              <HoverIconButton
-                className="split-toggle-btn sidebar-split-btn"
-                title="在右屏分屏打开"
-                icon="columns"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  store.openTarget({ kind: 'conversation', conversationId: conv.id }, { split: true })
-                }}
-              />
-            </span>
             <ConversationRowActionsMenu conversation={conv} />
           </span>
         )}
