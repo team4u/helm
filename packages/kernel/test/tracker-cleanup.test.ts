@@ -45,17 +45,24 @@ import { HelmStore } from '../src/runtime/store.js'
 
 type FauxHandle = ReturnType<typeof fauxProvider>
 
+/** 单会话聚合镜像的可观测子集（与 ConversationMirror 字段同名）。 */
+interface MirrorLike {
+  trackedInputs: Map<string, ConversationInput>
+  submissionIndex: Map<number, string>
+  consumedInputs: Set<string> | undefined
+  runFirstEntry: number | undefined
+  runTaskId: number | undefined
+  lastSettledRun: number | undefined
+  settledRunOrder: string[]
+  live: unknown
+  observeGeneration: symbol | undefined
+  settledInflight: number
+  settledError: unknown
+}
+
 interface TrackerInternals {
+  mirrors: Map<number, MirrorLike>
   settledRuns: Set<string>
-  settledRunOrder: Map<number, string[]>
-  lastSettledRun: Map<number, number>
-  runTaskIds: Map<number, number>
-  runFirstEntries: Map<number, number>
-  trackedInputs: Map<number, Map<string, ConversationInput>>
-  submissionIndex: Map<number, Map<number, string>>
-  consumedInputs: Map<number, Set<string>>
-  liveViews: Map<number, unknown>
-  observeGenerations: Map<number, symbol>
 }
 
 function trackerOf(kernel: KernelRuntime): TrackerInternals {
@@ -123,7 +130,7 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
       assert.equal(settled[1]!.inputs.length, 1)
       assert.equal(settled[1]!.inputs[0]!.origin, 'human')
       // 已结算两轮后 trackedInputs 不残留历史 req: 记录。
-      const mapAfter = trackerOf(kernel).trackedInputs.get(1)
+      const mapAfter = trackerOf(kernel).mirrors.get(1)?.trackedInputs
       assert.equal(mapAfter?.size ?? 0, 0, '已结算输入的历史记录不残留')
 
       // 第三轮在途 abort：只含当前输入，绝不污染旧轮 origin。
@@ -165,11 +172,11 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
         await kernel.waitForIdle(1)
       }
       const tracker = trackerOf(kernel)
-      const map = tracker.trackedInputs.get(1)
+      const map = tracker.mirrors.get(1)?.trackedInputs
       assert.equal(map?.size ?? 0, 0, '三轮 complete 后无历史 req: 记录残留（不复活）')
       // 稍等观察者快照推进后再验一次（旧缺陷在每次窗口扫描时复活历史）。
       await new Promise((r) => setTimeout(r, 200))
-      assert.equal(tracker.trackedInputs.get(1)?.size ?? 0, 0, '后续快照不复活历史输入')
+      assert.equal(tracker.mirrors.get(1)?.trackedInputs.size ?? 0, 0, '后续快照不复活历史输入')
     } finally {
       await kernel.close()
     }
@@ -218,7 +225,7 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       const tracker = trackerOf(kernel)
       // 结算后历史不残留（上一组已验证）；此处验证运行期间键域：
       // 提交第二条（run 进行中）时 map 中该输入唯一且以 requestId 为键。
-      const map = tracker.trackedInputs.get(1)
+      const map = tracker.mirrors.get(1)?.trackedInputs
       const keys = [...(map?.keys() ?? [])]
       for (const key of keys) {
         assert.equal(typeof key, 'string', `追踪键必须是 requestId 字符串：${String(key)}`)
@@ -328,14 +335,14 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         const id = conv.id as number
         const tracker = trackerOfHarness(harness, store)
         await tracker.observe(id)
-        const map = (tracker as unknown as TrackerInternals).trackedInputs.get(id)
+        const map = (tracker as unknown as TrackerInternals).mirrors.get(id)?.trackedInputs
         assert.ok(map !== undefined && map.size >= 1, '重启恢复活跃 run 后输入在册')
         const tracked = [...map.values()][0]!
         assert.equal(tracked.text, '重启前的在途问题')
         assert.equal(tracked.origin, 'agent', '重启后 origin 权威补齐')
         assert.deepEqual(tracked.meta, { from: 'test', seq: 7 }, '重启后 meta 权威补齐')
         // 重启恢复后关联索引已登记（markConsumed 可命中，结算不丢输入）。
-        const index = (tracker as unknown as TrackerInternals).submissionIndex.get(id)
+        const index = (tracker as unknown as TrackerInternals).mirrors.get(id)?.submissionIndex
         assert.ok(index !== undefined && index.size >= 1, '重启后 submissionId->requestId 索引在册')
         // 第二段重设慢工厂响应（run 重启后续跑）。
         faux.setResponses([
@@ -463,9 +470,9 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         )
         // 结算后无残索引/残登记（晚 bind 不得在 takeConsumed 后留脏项）。
         const internals = tracker as unknown as TrackerInternals
-        assert.equal(internals.trackedInputs.get(id)?.size ?? 0, 0, `${caseDir}：追踪记录已清`)
-        assert.equal(internals.submissionIndex.get(id)?.size ?? 0, 0, `${caseDir}：关联索引已清`)
-        assert.equal(internals.consumedInputs.has(id), false, `${caseDir}：消费集已清`)
+        assert.equal(internals.mirrors.get(id)?.trackedInputs.size ?? 0, 0, `${caseDir}：追踪记录已清`)
+        assert.equal(internals.mirrors.get(id)?.submissionIndex.size ?? 0, 0, `${caseDir}：关联索引已清`)
+        assert.equal(internals.mirrors.get(id)?.consumedInputs === undefined, true, `${caseDir}：消费集已清`)
       } finally {
         await harness.close(BACKGROUND_CONTEXT)
         await store.close()
@@ -493,14 +500,14 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       const conv = await kernel.createConversation({})
       await kernel.deleteConversation(conv.id)
       const tracker = trackerOf(kernel)
-      assert.equal(tracker.trackedInputs.has(conv.id), false)
-      assert.equal(tracker.runFirstEntries.has(conv.id), false)
-      assert.equal(tracker.observeGenerations.has(conv.id), false)
+      assert.equal(tracker.mirrors.has(conv.id), false)
+      assert.equal(tracker.mirrors.get(conv.id)?.runFirstEntry === undefined, true)
+      assert.equal(tracker.mirrors.has(conv.id), false)
       // 中止不应替换仍在观察的 root 会话令牌。
-      const genBefore = tracker.observeGenerations.get(1)
+      const genBefore = tracker.mirrors.get(1)?.observeGeneration
       await kernel.abortConversation(1)
       await kernel.waitForIdle(1).catch(() => {})
-      assert.equal(tracker.observeGenerations.get(1), genBefore)
+      assert.equal(tracker.mirrors.get(1)?.observeGeneration, genBefore)
     } finally {
       await kernel.close()
     }
@@ -516,8 +523,6 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
         events: { onTurnSettled: (...args: unknown[]) => Promise<void> | void }
         emitSettled(id: number, outcome: string, inputs: ConversationInput[], error: undefined): void
         stopObserving(id: number): void
-        settledInflight: Map<number, number>
-        settledErrors: Map<number, unknown>
       }
       let fail!: (error: Error) => void
       const pending = new Promise<void>((_resolve, reject) => { fail = reject })
@@ -525,14 +530,14 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
       tracker.events.onTurnSettled = () => pending
       try {
         tracker.emitSettled(conv.id, 'completed', [], undefined)
-        assert.equal(tracker.settledInflight.has(conv.id), true)
+        assert.equal((tracker.mirrors.get(conv.id)?.settledInflight ?? 0) > 0, true)
         tracker.stopObserving(conv.id)
         fail(new Error('late callback failure'))
         await pending.catch(() => {})
         await Promise.resolve()
-        assert.equal(tracker.settledInflight.has(conv.id), false)
-        assert.equal(tracker.settledErrors.has(conv.id), false)
-        assert.equal(tracker.observeGenerations.has(conv.id), false)
+        assert.equal(tracker.mirrors.has(conv.id), false)
+        assert.equal(tracker.mirrors.has(conv.id), false)
+        assert.equal(tracker.mirrors.has(conv.id), false)
       } finally {
         tracker.events.onTurnSettled = original
       }
@@ -553,7 +558,7 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
       for (let taskId = 1; taskId <= 70; taskId += 1) {
         note(conv.id, `${conv.id}:${taskId}`)
       }
-      const order = tracker.settledRunOrder.get(conv.id)
+      const order = tracker.mirrors.get(conv.id)?.settledRunOrder
       assert.ok(order !== undefined)
       assert.equal(order.length, 64, '容量上限 64')
       assert.equal(order[0], `${conv.id}:7`, '最旧键（taskId=1..6）被淘汰')
@@ -581,17 +586,17 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
       await kernel.submitInput(conv.id, '问题')
       await kernel.waitForIdle(conv.id)
       assert.ok(tracker.settledRuns.size >= 1, '回合结算后 settledRuns 应有条目')
-      assert.ok(tracker.lastSettledRun.has(conv.id))
+      assert.ok(tracker.mirrors.get(conv.id)?.lastSettledRun !== undefined)
       await kernel.deleteConversation(conv.id)
       assert.equal(tracker.settledRuns.size, 0, '该会话 settledRuns 前缀键全部清理')
-      assert.equal(tracker.settledRunOrder.has(conv.id), false)
-      assert.equal(tracker.lastSettledRun.has(conv.id), false)
-      assert.equal(tracker.runTaskIds.has(conv.id), false)
-      assert.equal(tracker.runFirstEntries.has(conv.id), false)
-      assert.equal(tracker.trackedInputs.has(conv.id), false)
-      assert.equal(tracker.consumedInputs.has(conv.id), false)
-      assert.equal(tracker.liveViews.has(conv.id), false)
-      assert.equal(tracker.observeGenerations.has(conv.id), false)
+      assert.equal(tracker.mirrors.has(conv.id), false)
+      assert.equal(tracker.mirrors.has(conv.id), false)
+      assert.equal(tracker.mirrors.has(conv.id), false)
+      assert.equal(tracker.mirrors.has(conv.id), false)
+      assert.equal(tracker.mirrors.has(conv.id), false)
+      assert.equal(tracker.mirrors.has(conv.id), false)
+      assert.equal(tracker.mirrors.has(conv.id), false)
+      assert.equal(tracker.mirrors.has(conv.id), false)
     } finally {
       await kernel.close()
     }
@@ -610,13 +615,13 @@ describe('settledRuns 容量淘汰与 stopObserving 清理', { timeout: 60_000 }
         await kernel.deleteConversation(conv.id)
       }
       assert.equal(tracker.settledRuns.size, 0)
-      assert.equal(tracker.settledRunOrder.size, 0)
-      assert.equal(tracker.lastSettledRun.size, 0)
-      assert.equal(tracker.runTaskIds.size, 0)
-      assert.equal(tracker.runFirstEntries.size, 0)
-      assert.equal(tracker.trackedInputs.size, 0)
-      assert.equal(tracker.consumedInputs.size, 0)
-      assert.deepEqual([...tracker.observeGenerations.keys()], [1])
+      // 全部按会话 Map 已聚合为 mirrors：仅剩仍在观察的根会话 1，无任何残留键。
+      assert.equal(tracker.mirrors.size, 1)
+      assert.deepEqual(
+        [...tracker.mirrors.keys()],
+        [1],
+        '仅根会话 1 仍在观察，其余 50 个已删会话镜像全部回收',
+      )
     } finally {
       await kernel.close()
     }

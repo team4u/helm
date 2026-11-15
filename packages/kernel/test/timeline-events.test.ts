@@ -638,11 +638,10 @@ describe('ConversationTracker 真实 SDK 时间线与实时事件', { timeout: 6
       assert.deepEqual(settled[0]!.inputs.map((i) => i.id), ['ix-1'])
       // 结算后追踪记录与关联索引均不残留。
       const internals = (tracker as unknown as {
-        trackedInputs: Map<number, Map<string, unknown>>
-        submissionIndex: Map<number, Map<number, string>>
+        mirrors: Map<number, { trackedInputs: Map<string, unknown>; submissionIndex: Map<number, string> }>
       })
-      assert.equal(internals.trackedInputs.get(id)?.size ?? 0, 0, '结算后追踪记录清空')
-      assert.equal(internals.submissionIndex.get(id)?.size ?? 0, 0, '结算后关联索引清空')
+      assert.equal(internals.mirrors.get(id)?.trackedInputs.size ?? 0, 0, '结算后追踪记录清空')
+      assert.equal(internals.mirrors.get(id)?.submissionIndex.size ?? 0, 0, '结算后关联索引清空')
     } finally {
       await harness.close(BACKGROUND_CONTEXT)
       await store.close()
