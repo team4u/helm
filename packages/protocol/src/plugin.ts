@@ -1111,8 +1111,9 @@ export interface HelmHostApi {
       nodeId?: string
       signal?: AbortSignal
       env?: Record<string, string>
+      gateTimeoutMs?: number
     },
-  ): Promise<{ ok: boolean; output: string }>
+  ): Promise<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }>
   /**
    * 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helm/node 通道、SecretStash 注入与脱敏）。
    * 靶点解析优先级：显式 nodeId/cwd > conversationId 绑定 (nodeId, cwd) > 'local'/Hub cwd。

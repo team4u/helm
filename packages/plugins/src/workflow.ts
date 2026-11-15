@@ -616,6 +616,7 @@ export function createWorkflowPlugin(): PluginDefinition {
               ...(gateOptions.cwd !== undefined ? { cwd: gateOptions.cwd } : {}),
               ...(gateOptions.conversationId !== undefined ? { conversationId: gateOptions.conversationId } : {}),
               ...(gateOptions.signal !== undefined ? { signal: gateOptions.signal } : {}),
+              ...(gateOptions.gateTimeoutMs !== undefined ? { gateTimeoutMs: gateOptions.gateTimeoutMs } : {}),
             }),
         },
       })

@@ -29,12 +29,14 @@ import { workflowUi } from './helpers/workflow-ui.js'
 import { importWorkflowClientModule, importWorkflowModels, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 const HelmStoreContext = { Provider: TestStoreProvider }
 import type { HelmStoreValue } from '../src/lib/types.js'
-import type { SubagentParentToolSummary } from '../../plugins/src/workflow/client/models.ts'
+import type { SubagentParentToolSummary, ExecutionNode } from '../../plugins/src/workflow/client/models.ts'
 mountSharedPluginNamespaces({ realHooks: true })
 const {
   buildSubagentStreamLines, subagentBadge, toolResultPreviewTruncated, isScrolledToBottom,
   resolveSubagentTaskTitle, resolveSubagentHeaderSnippet, buildSubagentStatSegments,
   extractSubagentResultPreview, formatShortModelName, formatSemanticToolAction,
+  resolveSubagentElapsedMs, resolveRunElapsedMs, resolveNodeElapsedMs,
+  resolveExecutionNodeElapsedMs, buildExecutionTree,
 } = await importWorkflowModels()
 
 const e = React.createElement
@@ -503,14 +505,13 @@ test('formatShortModelName：剥离 provider 前缀，空串返回 undefined', {
 // 纯逻辑：buildSubagentStatSegments
 // ---------------------------------------------------------------------------
 
-test('buildSubagentStatSegments：模型 / 思考档位 / 工具步数 / token / 耗时按序收集，无值跳过', { timeout: 60_000 }, () => {
+test('buildSubagentStatSegments：模型 / 思考档位 / 工具步数 / token 按序收集（总耗时不在此）', { timeout: 60_000 }, () => {
   const child = { ...summary(11, 'done'), model: 'openai/glm-5', thinkingLevel: 'high', createdAt: 1_000, updatedAt: 61_000 }
   const segs = buildSubagentStatSegments({
     summary: child,
     entries: entriesWithToolResult('exit 0'),
-    toolSummary: { durationMs: 120_000 },
   })
-  assert.deepEqual(segs, ['glm-5', 'high', '已载 1 次工具', '2m0s'])
+  assert.deepEqual(segs, ['glm-5', 'high', '已载 1 次工具'])
   // off 思考档位不展示；token 紧凑格式；无 entries 时用 live.tools 计数
   const segs2 = buildSubagentStatSegments({
     summary: { ...summary(11, 'working'), thinkingLevel: 'off' },
@@ -519,36 +520,84 @@ test('buildSubagentStatSegments：模型 / 思考档位 / 工具步数 / token /
       { callId: 'b', toolName: 'read', status: 'running' },
     ], updatedAt: 1 },
     backgroundRun: bgRun({ nodes: [{ id: 'n1', kind: 'agent', status: 'running', tokens: 1500 }] }),
-    isWorking: true,
   })
   assert.deepEqual(segs2, ['已载 2 次工具', '1.5k'])
-  // 小于 1000 的 token 原样展示；无时间差信息的 run 不产生耗时片段
+  // 小于 1000 的 token 原样展示；会话创建时间不是本轮边界，不产生耗时片段
   const segs3 = buildSubagentStatSegments({
     backgroundRun: bgRun({ status: 'completed', createdAt: 1, updatedAt: 1, nodes: [{ id: 'n1', kind: 'agent', status: 'done', tokens: 500 }] }),
   })
-  assert.deepEqual(segs3, ['500', '0ms'])
+  assert.deepEqual(segs3, ['500'])
 })
 
-test('buildSubagentStatSegments：working 秒表仅客户端时钟有效才显示（SSR 确定性）', { timeout: 60_000 }, () => {
+test('resolveSubagentElapsedMs：在途（working/blocked）有时钟才动态计时，结算定格持久化 duration', { timeout: 60_000 }, () => {
   const start = 1_700_000_000_000
-  const child = { ...summary(11, 'working'), createdAt: start, updatedAt: start }
-  // nowMs 缺省（SSR 首帧）：不显示秒表
-  assert.deepEqual(buildSubagentStatSegments({ summary: child, isWorking: true }), [])
-  // nowMs 早于起点（时钟异常）：同样不显示
-  assert.deepEqual(buildSubagentStatSegments({ summary: child, nowMs: start - 1, isWorking: true }), [])
-  // 会话创建时间不是本轮边界：resume 场景必须省略该伪计时。
-  assert.deepEqual(buildSubagentStatSegments({ summary: child, nowMs: start + 5_000, isWorking: true }), [])
-  // 仅本次父工具记录起点存在时显示本次调用耗时。
-  assert.deepEqual(buildSubagentStatSegments({ summary: child, toolSummary: { startedAt: start }, nowMs: start + 5_000, isWorking: true }), ['5.0s'])
-  // 非 working：优先 toolSummary.durationMs，其次 run / summary 的时间差
-  assert.deepEqual(
-    buildSubagentStatSegments({ summary: { ...summary(11, 'done'), createdAt: 0, updatedAt: 0 }, toolSummary: { durationMs: 800 } }),
-    ['800ms'],
+  // nowMs 缺省（SSR 首帧）或早于起点（时钟异常）：不显示秒表
+  assert.equal(resolveSubagentElapsedMs({ status: 'working', startedAt: start }), undefined)
+  assert.equal(resolveSubagentElapsedMs({ status: 'working', startedAt: start, nowMs: start - 1 }), undefined)
+  // 会话创建时间不是本轮边界：resume 场景无本次起点必须省略该伪计时
+  assert.equal(resolveSubagentElapsedMs({ status: 'working' }), undefined)
+  // working：优先后台 run.createdAt（run 即本次调用的真实边界）
+  assert.equal(
+    resolveSubagentElapsedMs({ status: 'working', backgroundRun: bgRun({ status: 'running', createdAt: start }), nowMs: start + 5_000 }),
+    5_000,
   )
-  assert.deepEqual(
-    buildSubagentStatSegments({ backgroundRun: bgRun({ status: 'completed', createdAt: 1_000, updatedAt: 61_000 }) }),
-    ['1m0s'],
+  // 仅本次父工具记录起点时显示本次调用耗时
+  assert.equal(resolveSubagentElapsedMs({ status: 'working', toolSummary: { startedAt: start }, nowMs: start + 5_000 }), 5_000)
+  // blocked（等待审批）仍在途：有本次起点时秒表持续动态变化
+  assert.equal(resolveSubagentElapsedMs({ status: 'blocked', startedAt: start, nowMs: start + 8_000 }), 8_000)
+  assert.equal(resolveSubagentElapsedMs({ status: 'blocked' }), undefined)
+  // 结算：优先持久化 duration（run 首节点 durationMs / toolSummary.durationMs）
+  assert.equal(
+    resolveSubagentElapsedMs({ backgroundRun: bgRun({ status: 'completed', nodes: [{ id: 'n1', kind: 'agent', status: 'done', durationMs: 800 }] }) }),
+    800,
   )
+  assert.equal(resolveSubagentElapsedMs({ toolSummary: { durationMs: 800 } }), 800)
+  // run 无节点 duration 时以 createdAt → updatedAt 定格
+  assert.equal(resolveSubagentElapsedMs({ backgroundRun: bgRun({ status: 'completed', createdAt: 1_000, updatedAt: 61_000 }) }), 60_000)
+})
+
+test('resolveRunElapsedMs：running 随时钟动态推进，其余定格 createdAt→updatedAt 真实边界', { timeout: 60_000 }, () => {
+  const start = 1_700_000_000_000
+  // running 且时钟有效：动态推进
+  assert.equal(resolveRunElapsedMs({ status: 'running', createdAt: start, updatedAt: start }, start + 4_000), 4_000)
+  // running 但无时钟（SSR 首帧）或时钟异常：定格到最近快照（确定性，不伪造）
+  assert.equal(resolveRunElapsedMs({ status: 'running', createdAt: start, updatedAt: start + 2_000 }), 2_000)
+  assert.equal(resolveRunElapsedMs({ status: 'running', createdAt: start, updatedAt: start }, start - 1), 0)
+  // 结算：createdAt → updatedAt 定格
+  assert.equal(resolveRunElapsedMs({ status: 'completed', createdAt: 1_000, updatedAt: 61_000 }, start), 60_000)
+  // 非法时间差如实省略
+  assert.equal(resolveRunElapsedMs({ status: 'completed', createdAt: 5_000, updatedAt: 1_000 }), undefined)
+})
+
+test('resolveNodeElapsedMs：running 用 startedAt 动态、结算用 durationMs 定格，无边界省略', { timeout: 60_000 }, () => {
+  const start = 1_700_000_000_000
+  assert.equal(resolveNodeElapsedMs({ status: 'running', startedAt: start }, start + 1_500), 1_500)
+  // running 但无时钟（SSR）或无起点：省略，不显示虚构 0ms
+  assert.equal(resolveNodeElapsedMs({ status: 'running', startedAt: start }), undefined)
+  assert.equal(resolveNodeElapsedMs({ status: 'running' }, start), undefined)
+  assert.equal(resolveNodeElapsedMs({ status: 'done', durationMs: 95_000 }, start), 95_000)
+  assert.equal(resolveNodeElapsedMs({ status: 'done' }, start), undefined)
+  assert.equal(resolveNodeElapsedMs({ status: 'failed', durationMs: -1 }), undefined)
+})
+
+test('resolveExecutionNodeElapsedMs：runNode 边界优先，容器行用 run，纯会话节点省略', { timeout: 60_000 }, () => {
+  const start = 1_700_000_000_000
+  // runNode：running 动态 / 结算定格
+  assert.equal(
+    resolveExecutionNodeElapsedMs({ runNode: { id: 'n1', kind: 'action', status: 'running', startedAt: start } }, start + 2_000),
+    2_000,
+  )
+  assert.equal(
+    resolveExecutionNodeElapsedMs({ runNode: { id: 'n2', kind: 'action', status: 'done', durationMs: 3_000 } }, start),
+    3_000,
+  )
+  // 无 runNode 的容器行（深层 workflow / external）：run 边界
+  assert.equal(
+    resolveExecutionNodeElapsedMs({ run: bgRun({ status: 'running', createdAt: start, updatedAt: start }) }, start + 6_000),
+    6_000,
+  )
+  // 纯会话节点（无 run / runNode）：无本轮可靠起点，不以会话 createdAt 伪造
+  assert.equal(resolveExecutionNodeElapsedMs({}, start), undefined)
 })
 
 // ---------------------------------------------------------------------------
@@ -761,7 +810,7 @@ test('折叠态 done 卡无任何结论来源时不渲染第 2 层副栏', { tim
   assert.ok(!html.includes('subagent-live-subline'), '无有效文本时不得渲染副栏占位')
 })
 
-test('toolSummary 注入：折叠态头部显示任务标题、耗时统计与完成结论预览', { timeout: 60_000 }, () => {
+test('toolSummary 注入：折叠态头部显示任务标题、独立总耗时位与完成结论预览', { timeout: 60_000 }, () => {
   const store = makeStore({
     conversations: [summary(11, 'done')],
   })
@@ -778,9 +827,61 @@ test('toolSummary 注入：折叠态头部显示任务标题、耗时统计与�
       })),
   )
   assert.ok(html.includes('修复构建失败'), '折叠态头部应显示任务标题')
-  assert.ok(html.includes('1m35s'), '折叠态头部应显示耗时统计')
-  assert.ok(html.includes('subagent-live-stats'), '统计尾注容器应渲染')
+  assert.ok(html.includes('1m35s'), '折叠态头部应显示定格总耗时')
+  assert.ok(html.includes('subagent-live-elapsed'), '总耗时应位于独立固定展示位（subagent-live-elapsed）')
   assert.ok(html.includes('构建已恢复，测试 42 通过'), '第 2 层副栏应显示结论预览')
+})
+
+test('working 卡 SSR 首帧：无客户端时钟时省略动态总耗时，不伪造 0ms', { timeout: 60_000 }, () => {
+  const store = makeStore({ conversations: [summary(11, 'working')] })
+  const html = renderToString(
+    e(TestStoreProvider, { value: store },
+      e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'running', startedAt: Date.now() - 60_000 })),
+  )
+  assert.ok(html.includes('执行中'), '状态徽章正常渲染')
+  assert.ok(!html.includes('subagent-live-elapsed'), 'SSR 首帧无时钟不得显示动态总耗时')
+})
+
+test('ExecutionChildrenRows：真实 run/runNode 边界的行显示总耗时，运行行 SSR 首帧省略', { timeout: 60_000 }, async () => {
+  const subagentModule = await importWorkflowClientModule('SubagentCard.tsx')
+  const Rows = subagentModule.ExecutionChildrenRows as React.ComponentType<{ nodes: ExecutionNode[] }>
+  const parent = summary(1, 'working')
+  const run: WorkflowRunSummary = {
+    id: 'wf_rows',
+    name: '树行耗时',
+    conversationId: 1,
+    status: 'running',
+    createdAt: 1_000,
+    updatedAt: 2_000,
+    nodes: [
+      { id: 'n_done', kind: 'action', status: 'done', durationMs: 95_000, label: '动作甲' },
+      { id: 'n_run', kind: 'action', status: 'running', startedAt: 1_500, label: '动作乙' },
+    ],
+  }
+  const tree = buildExecutionTree({ rootConversationId: 1, conversations: [parent], runs: [run] })
+  const children = tree[0]?.children ?? []
+  assert.equal(children.length, 2, '构树应产出两个动作叶子')
+  const html = renderToString(
+    e(TestStoreProvider, { value: makeStore({ conversations: [parent] }) }, e(Rows, { nodes: children })),
+  )
+  assert.ok(html.includes('动作甲') && html.includes('动作乙'), '两行均应渲染')
+  const elapsedSlots = html.split('execution-child-elapsed').length - 1
+  assert.equal(elapsedSlots, 1, `结算行渲染独立耗时位、运行行 SSR 首帧省略，实际 ${elapsedSlots}`)
+  assert.ok(html.includes('1m35s'), '结算行显示持久化 duration 定格值')
+})
+
+test('ExternalRunSummary：显示 run 总耗时（结算定格 createdAt→updatedAt）', { timeout: 60_000 }, async () => {
+  const subagentModule = await importWorkflowClientModule('SubagentCard.tsx')
+  const ExternalRunSummary = subagentModule.ExternalRunSummary as React.ComponentType<Record<string, unknown>>
+  const html = renderToString(
+    e(TestStoreProvider, { value: makeStore({}) },
+      e(ExternalRunSummary, {
+        run: bgRun({ status: 'completed', createdAt: 1_000, updatedAt: 61_000 }),
+        toolStatus: 'done',
+      })),
+  )
+  assert.ok(html.includes('subagent-live-elapsed'), '应渲染独立总耗时位')
+  assert.ok(html.includes('1m0s'), '结算 run 显示定格总耗时')
 })
 
 test('blocked 折叠卡：warn 描边 + 等待审批副栏（pendingAsk 标题）', { timeout: 60_000 }, () => {
@@ -926,6 +1027,11 @@ test('插件自有样式契约：整卡统一 hover，且宿主样式表不携�
   )
   assert.ok(!pluginCss.includes('.subagent-live-trigger:hover'), '严禁为 trigger 设置独立 hover 背景')
   assert.ok(!pluginCss.includes('.subagent-live-subline:hover'), '严禁为 subline 设置独立 hover 背景')
+  // 总耗时独立固定展示位：持有唯一右推 auto margin（统计尾注不得再右推，
+  // 避免双 auto margin 空洞），且不被任何窄屏规则隐藏。
+  assert.match(pluginCss, /\.subagent-live-elapsed\s*\{[\s\S]*?margin-left:\s*auto/, '总耗时位应持有唯一右推 auto margin')
+  assert.doesNotMatch(pluginCss, /\.subagent-live-stats\s*\{[^}]*margin-left/, '统计尾注不得再持有右推 margin（避免双 auto margin 空洞）')
+  assert.doesNotMatch(pluginCss, /\.subagent-live-elapsed[^{]*\{[^}]*display:\s*none/, '总耗时位不得被窄屏规则隐藏')
   assert.doesNotMatch(hostCss, /\.(?:subagent|workflow)-/, '宿主样式表不得硬编码插件业务类')
   assert.doesNotMatch(hostCss, /\.phase-segment/, '阶段胶囊样式同属插件')
 })

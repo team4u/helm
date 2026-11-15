@@ -73,5 +73,5 @@ test('工具计时起点来自本次持久化调用条目，后续 resume 不复
   const step = seg.steps.find((s) => s.kind === 'tool')
   assert.ok(step?.kind === 'tool')
   assert.equal(step.tool.startedAt, 10000)
-  assert.equal(m.resolveSubagentElapsedMs({ toolSummary: { startedAt: step.tool.startedAt }, isWorking: true, nowMs: 14000 }), 4000)
+  assert.equal(m.resolveSubagentElapsedMs({ toolSummary: { startedAt: step.tool.startedAt }, status: 'working', nowMs: 14000 }), 4000)
 })

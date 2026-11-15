@@ -79,6 +79,9 @@ export interface WorkflowSpawnRequest {
   model?: string
   effort?: string
   isolation?: 'worktree'
+  cwd?: string
+  timeoutMs?: number
+  gateTimeoutMs?: number
   /**
    * 执行环境确定后回传（原生子会话或外部运行时均适用）：conversationId /
    * executionId / effectiveCwd / worktree 等元数据 + 实际模型信息。引擎把
@@ -135,6 +138,7 @@ export interface WorkflowSpawnResult {
    * 引擎仅用于进度行，绝不混入用户返回值。
    */
   executionInfo?: AgentExecutionInfo
+  timedOut?: boolean
 }
 
 /** gate 命令结果；output 是失败时展示给用户的输出。 */
@@ -173,7 +177,7 @@ export interface WorkflowHost {
    * 由本引擎兑现。缺省宿主让 runtime 显式失败该调用——静默不跑的 gate
    * 等于把未验证工作标记为已验证。
    */
-  runGate?(command: string, options: { agentId: string; cwd?: string }): Promise<WorkflowGateResult>
+  runGate?(command: string, options: { agentId: string; cwd?: string; gateTimeoutMs?: number }): Promise<WorkflowGateResult>
   /**
    * 动作前置预检（Pre-flight，零副作用）：在落盘 `action_started` 之前调用。
    * 用于校验 actionId 存在性/无歧义、插件启用、会话 scope 及 inputSchema，
@@ -208,6 +212,8 @@ export interface ResumeAgentOptions {
   attachments?: string[]
   /** 续接时显式调整子树上限，仍受发起方继承上限约束。 */
   maxSubagentDepth?: number
+  timeoutMs?: number
+  gateTimeoutMs?: number
   onResolved?: WorkflowSpawnRequest['onResolved']
   onGateResult?: WorkflowSpawnRequest['onGateResult']
 }
@@ -444,10 +450,14 @@ interface AgentCallPayload {
   maxSubagentDepth?: number
   /** 显式授予外部运行时注入的父会话机密环境变量名（宿主边界二次校验；仅新鲜 spawn 下发）。 */
   secretNames?: string[]
+  cwd?: string
+  timeoutMs?: number
+  gateTimeoutMs?: number
   /** 发起调用的 workflow scope（worker makeScope 分配；根 = 0，缺省视为根）。label/resume 按它命名空间隔离。 */
   scopeId?: number
   /** 自动重试上限（1..MAX_AGENT_ATTEMPTS，缺省 1）：失败且已登记续接句柄时按 attempt 环自动续接重试。 */
   maxAttempts?: number
+  withMeta?: boolean
 }
 
 interface ActionCallPayload {
@@ -526,6 +536,17 @@ interface CompletedChild {
   replayed?: true
 }
 
+function executionInfoForMeta(base: WorkflowAgentEntry): Record<string, unknown> | undefined {
+  if (base.nodeId === undefined && base.conversationId === undefined && base.executionId === undefined && base.effectiveCwd === undefined && base.worktree === undefined) return undefined
+  return {
+    ...(base.nodeId !== undefined ? { nodeId: base.nodeId } : {}),
+    ...(base.conversationId !== undefined ? { conversationId: base.conversationId } : {}),
+    ...(base.executionId !== undefined ? { executionId: base.executionId } : {}),
+    ...(base.effectiveCwd !== undefined ? { effectiveCwd: base.effectiveCwd } : {}),
+    ...(base.worktree !== undefined ? { worktree: base.worktree } : {}),
+  }
+}
+
 function applySchema(result: WorkflowSpawnResult, compiled: CompiledSchema): WorkflowSpawnResult {
   let parsed: unknown
   try {
@@ -552,6 +573,7 @@ async function applyGate(
   agentId: string,
   runGate: NonNullable<WorkflowHost['runGate']> | undefined,
   reported?: WorkflowGateResult,
+  gateTimeoutMs?: number,
 ): Promise<WorkflowSpawnResult> {
   const outcome =
     reported ??
@@ -559,6 +581,7 @@ async function applyGate(
     (await runGate!(command, {
       agentId,
       ...(result.cwd !== undefined ? { cwd: result.cwd } : {}),
+      ...(gateTimeoutMs !== undefined ? { gateTimeoutMs } : {}),
     }))
   const { gate: _ran, ...kept } = result
   if (outcome.ok) return kept
@@ -1010,6 +1033,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         attachments: payload.attachments,
         maxSubagentDepth: payload.maxSubagentDepth,
         secretNames: payload.secretNames,
+        cwd: payload.cwd,
         schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,
       }
       const replayed = replayAt(index, agentJournalKey(keyInput), 'agent')
@@ -1098,8 +1122,16 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           ok: true,
           text: replayedText,
           ...(replayedEntry.type === 'agent' && replayedEntry.resumed === true ? { resumed: true } : {}),
+          ...(replayedEntry.execution !== undefined ? { execution: replayedEntry.execution } : {}),
+          ...(replayedEntry.gate !== undefined ? { gate: replayedEntry.gate } : {}),
         })
-        respond(callId, true, replayedText)
+        respond(callId, true, payload.withMeta === true ? {
+          ok: true,
+          output: replayedText,
+          attempts: 1,
+          ...(replayedEntry.execution !== undefined ? { execution: replayedEntry.execution } : {}),
+          ...(replayedEntry.gate !== undefined ? { gate: replayedEntry.gate } : {}),
+        } : replayedText)
         return
       }
 
@@ -1205,6 +1237,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                     ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
                     ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
                     ...(payload.maxSubagentDepth !== undefined ? { maxSubagentDepth: payload.maxSubagentDepth } : {}),
+                    ...(payload.timeoutMs !== undefined ? { timeoutMs: payload.timeoutMs } : {}),
+                    ...(payload.gateTimeoutMs !== undefined ? { gateTimeoutMs: payload.gateTimeoutMs } : {}),
                     onResolved,
                     ...(payload.gate !== undefined ? { onGateResult } : {}),
                   })
@@ -1224,6 +1258,9 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                     ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
                     ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
                     ...(payload.secretNames !== undefined ? { secretNames: payload.secretNames } : {}),
+                    ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
+                    ...(payload.timeoutMs !== undefined ? { timeoutMs: payload.timeoutMs } : {}),
+                    ...(payload.gateTimeoutMs !== undefined ? { gateTimeoutMs: payload.gateTimeoutMs } : {}),
                     onResolved,
                     ...(payload.gate !== undefined ? { onGateResult } : {}),
                   })
@@ -1244,7 +1281,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
               if (result.ok && payload.gate !== undefined) {
                 // gate 恰好一次：优先 onGateResult/result.gate 已回报结果；
                 // 否则宿主自跑 fallback（仍缺 runGate 则上方前置检查已 fatal）。
-                result = await applyGate(result, payload.gate, agentId, runGate, base.gate)
+                result = await applyGate(result, payload.gate, agentId, runGate, base.gate, payload.gateTimeoutMs)
                 if (result.ok && base.gate === undefined) base.gate = { ok: true, output: '' }
               }
             } else {
@@ -1288,8 +1325,17 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           if (result.ok) {
             const text = result.text ?? ''
             emit([{ ...common, state: 'done', resultPreview: preview(text) }])
-            await recordAgent({ index, key, ok: true, text, ...resumeMark })
-            respond(callId, true, text)
+            const execution = executionInfoForMeta(base)
+            await recordAgent({
+              index, key, ok: true, text, ...resumeMark,
+              ...(execution !== undefined ? { execution } : {}),
+              ...(base.gate !== undefined ? { gate: base.gate } : {}),
+            })
+            respond(callId, true, payload.withMeta === true ? {
+              ok: true, output: text, attempts: attempt,
+              ...(execution !== undefined ? { execution } : {}),
+              ...(base.gate !== undefined ? { gate: base.gate } : {}),
+            } : text)
             return
           }
           // 失败但已观察到执行环境（conversationId/executionId，含 service 失败
@@ -1319,7 +1365,12 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             emit([{ ...base, queuedAt, attempt }])
             continue
           }
-          await recordAgent({ index, key, ok: false, ...resumeMark })
+          const execution = executionInfoForMeta(base)
+          await recordAgent({
+            index, key, ok: false, ...resumeMark,
+            ...(execution !== undefined ? { execution } : {}),
+            ...(base.gate !== undefined ? { gate: base.gate } : {}),
+          })
           emit([
             {
               ...common,
@@ -1328,7 +1379,15 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
               ...(result.skipped ? { skipped: true } : {}),
             },
           ])
-          respond(callId, true, null)
+          respond(callId, true, payload.withMeta === true ? {
+            ok: false,
+            output: null,
+            attempts: attempt,
+            error: result.error ?? 'Agent failed.',
+            ...(result.timedOut === true ? { timedOut: true } : {}),
+            ...(execution !== undefined ? { execution } : {}),
+            ...(base.gate !== undefined ? { gate: base.gate } : {}),
+          } : null)
           return        }
       } finally {
         liveAgents.delete(index)

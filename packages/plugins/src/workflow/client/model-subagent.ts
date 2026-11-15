@@ -12,7 +12,6 @@ import type {
   ToolViewProps,
 } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { formatDurationMs } from '@helm/plugin-client'
 import { firstLineOf, inputString } from './model-format.ts'
 
 // ---------------------------------------------------------------------------
@@ -335,15 +334,22 @@ function formatCompactTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`
 }
 
-/** 仅以本次调用或 run 的记录计时；未知边界时省略。 */
+/**
+ * 卡片总耗时：仅以真实记录的边界计时——本次父工具调用 startedAt/durationMs、
+ * 后台 run createdAt / 首节点 durationMs。自身 working / blocked（在途，含等待
+ * 审批）有时钟则随 nowMs 动态推进；其余（含后代仍在跑而自身已结算）定格在
+ * 自身持久化 duration，不用会话 createdAt 伪造一次 resume 的总耗时；无本轮
+ * 可靠边界时返回 undefined（调用方如实省略）。
+ */
 export function resolveSubagentElapsedMs(input: {
   backgroundRun?: WorkflowRunSummary
   toolSummary?: SubagentParentToolSummary
   startedAt?: number
   nowMs?: number
-  isWorking?: boolean
+  /** 自身有效状态：working / blocked 视为在途动态计时，其余定格。 */
+  status?: SubagentCardStatus
 }): number | undefined {
-  if (input.isWorking) {
+  if (input.status === 'working' || input.status === 'blocked') {
     const start = input.backgroundRun?.status === 'running'
       ? input.backgroundRun.createdAt
       : input.startedAt ?? input.toolSummary?.startedAt
@@ -780,29 +786,26 @@ function contentTextOf(content: unknown): string {
   return text
 }
 
-/** 头部极简统计尾注片段。 */
+/** 头部极简统计尾注片段（总耗时已拆至独立展示位，不在此收集）。 */
 export function buildSubagentStatSegments(input: {
   summary?: ConversationSummary
   entries?: ReadonlyArray<ConversationEntry>
   live?: ConversationLive
   backgroundRun?: WorkflowRunSummary
-  toolSummary?: SubagentParentToolSummary
-  nowMs?: number
-  startedAt?: number
-  isWorking?: boolean
+  /** 工作流节点的权威模型 / Token 统计；存在时覆盖摘要中的同类字段。 */
+  modelOverride?: string
+  tokensOverride?: number
 }): string[] {
   const segments: string[] = []
-  const shortModel = formatShortModelName(input.summary?.model || input.backgroundRun?.nodes?.[0]?.model)
+  const shortModel = formatShortModelName(input.modelOverride || input.summary?.model || input.backgroundRun?.nodes?.[0]?.model)
   if (shortModel !== undefined) segments.push(shortModel)
   if (input.summary?.thinkingLevel !== undefined && input.summary.thinkingLevel.trim() !== '' && input.summary.thinkingLevel !== 'off') {
     segments.push(input.summary.thinkingLevel)
   }
   const steps = countToolSteps(input.entries, input.live)
   if (steps !== undefined && steps > 0) segments.push(`已载 ${steps} 次工具`)
-  const tokens = input.backgroundRun?.nodes?.[0]?.tokens
+  const tokens = input.tokensOverride ?? input.backgroundRun?.nodes?.[0]?.tokens
   if (tokens !== undefined && tokens > 0) segments.push(formatCompactTokens(tokens))
-  const elapsed = resolveSubagentElapsedMs(input)
-  if (elapsed !== undefined) segments.push(formatDurationMs(elapsed))
   return segments
 }
 

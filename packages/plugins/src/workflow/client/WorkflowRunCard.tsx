@@ -25,7 +25,9 @@ import {
   formatNodeOutputPreview,
   formatWorkflowNodeStats,
   hasNodeExtraDetail,
+  resolveNodeElapsedMs,
   resolveNodeSummaryText,
+  resolveRunElapsedMs,
   resolveWorkflowRunForTool,
 } from './model-run.ts'
 import { canSaveRunAsWorkflow, parseWorkflowArgsInput, parseWorkflowSaveResult } from './model-library.ts'
@@ -134,12 +136,10 @@ export function WorkflowRunCardBody(props: {
   const selfRunStatus = executionRunStatus(run)
   const effectiveStatus = effectiveRunNodeStatus(run, subtree)
 
-  // 运行中秒表（SSR 首帧确定性）。
+  // 运行中秒表（SSR 首帧确定性）：总耗时随秒表动态推进，结束定格在
+  // createdAt → updatedAt 真实边界。
   const nowMs = useElapsedNowMs(run.status === 'running')
-  const elapsedMs =
-    run.status === 'running' && nowMs !== undefined && Number.isFinite(run.createdAt) && nowMs >= run.createdAt
-      ? nowMs - run.createdAt
-      : run.updatedAt - run.createdAt
+  const elapsedMs = resolveRunElapsedMs(run, nowMs)
 
   /** 同步 ref 防重复：渲染尚未刷新时连点也不重复发请求；错误如实通知，不覆盖成功。 */
   const guarded = (dispatch: () => Promise<unknown>, failMessage: string): void => {
@@ -250,7 +250,7 @@ export function WorkflowRunCardBody(props: {
           {nodes.length > 0 ? <span>{`节点 ${done}/${nodes.length}`}</span> : null}
           {deeperCount > 0 ? <span>{`子树 ${subtree.done}/${subtree.total}`}</span> : null}
           {tokens > 0 ? <span>{`${tokens.toLocaleString()} Tokens`}</span> : null}
-          <span>{formatDurationMs(Math.max(0, elapsedMs))}</span>
+          {elapsedMs !== undefined ? <span>{formatDurationMs(elapsedMs)}</span> : null}
         </span>
         {descendantApprovals > 0 ? (
           <span
@@ -417,7 +417,6 @@ export function WorkflowRunCardBody(props: {
 function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversationId: number; childNodes?: ExecutionNode[] }): ReactNode {
   const { node, childNodes } = props
   const outputText = typeof node.output === 'string' ? node.output : undefined
-  const nodeStats = useMemo(() => formatWorkflowNodeStats(node), [node])
   return (
     <div className="workflow-subagent-node-card">
       <SubagentLiveCard
@@ -426,7 +425,10 @@ function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversat
         startedAt={node.startedAt}
         worktree={node.worktree}
         cached={node.cached}
-        extraStats={nodeStats.length > 0 ? nodeStats.join(' · ') : undefined}
+        statsOverride={{
+          ...(node.model !== undefined ? { model: node.model } : {}),
+          ...(node.tokens !== undefined ? { tokens: node.tokens } : {}),
+        }}
         toolSummary={{
           prompt: node.label,
           durationMs: node.durationMs,
@@ -473,6 +475,10 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
   const summaryText = resolveNodeSummaryText(node)
   const nodeStats = useMemo(() => formatWorkflowNodeStats(node), [node])
   const isErr = node.status === 'failed'
+  // 总耗时：running 随秒表从 startedAt 动态推进（SSR 首帧无时钟如实省略），
+  // 结算定格持久化 durationMs；无真实边界不显示虚构值。
+  const nowMs = useElapsedNowMs(node.status === 'running')
+  const elapsedMs = resolveNodeElapsedMs(node, nowMs)
   return (
     <div className={`subagent-live-card ${node.kind === 'action' ? 'workflow-action-card' : 'workflow-agent-card'}${isErr ? ' subagent-live-card-error' : ''}`}>
       <div className="subagent-live-header">
@@ -507,8 +513,8 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
           {nodeStats.length > 0 ? (
             <span className="subagent-live-stats workflow-node-stats tabular-nums">{nodeStats.join(' · ')}</span>
           ) : null}
-          {node.durationMs !== undefined ? (
-            <span className="subagent-live-stats workflow-node-duration tabular-nums">{formatDurationMs(node.durationMs)}</span>
+          {elapsedMs !== undefined ? (
+            <span className="subagent-live-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
           ) : null}
         </div>
       </div>

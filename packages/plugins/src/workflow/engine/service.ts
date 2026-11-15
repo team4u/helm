@@ -191,8 +191,8 @@ export interface WorkflowServiceHost {
    */
   runGate?(
     command: string,
-    options: { cwd?: string; conversationId?: number; signal?: AbortSignal },
-  ): Promise<{ ok: boolean; output: string }>
+    options: { cwd?: string; conversationId?: number; signal?: AbortSignal; gateTimeoutMs?: number },
+  ): Promise<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }>
 }
 
 export interface WorkflowAutoResumeCandidate {
@@ -2077,10 +2077,22 @@ export class WorkflowService {
     if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
       throw new HelmError('validation_error', 'maxAttempts 必须是正整数', 400, { maxAttempts })
     }
-    const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+    const raw = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+    const broken = runIndexProblem(raw)
+    if (broken !== undefined) {
+      throw this.indexCorruptError(broken.runId, broken.problem)
+    }
     const candidates: WorkflowAutoResumeCandidate[] = []
-    for (const entry of index) {
-      const record = this.loadRecord(entry.id)
+    for (const entry of raw) {
+      let record: RunRecord
+      try {
+        record = this.loadRecord(entry.id)
+      } catch (error) {
+        // 单条损坏记录不能让所有其它候选静默消失；记录明确诊断后跳过，
+        // Watchdog 仍可恢复账本完整的 Run。listRuns 继续对外严格失败。
+        process.stderr.write(`workflow auto-resume: skip ${entry.id}: ${errorMessage(error)}\n`)
+        continue
+      }
       if (
         record.status !== 'failed' ||
         record.kind === 'subagent' ||
@@ -2328,6 +2340,8 @@ export class WorkflowService {
             // 显式续接授权透传（ResumeAgentOptions.maxSubagentDepth）：静默丢弃
             // 等于假装授予了子树深度；引擎/内核边界照常校验非法值。
             ...(options?.maxSubagentDepth !== undefined ? { maxSubagentDepth: options.maxSubagentDepth } : {}),
+            ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+            ...(options?.gateTimeoutMs !== undefined ? { gateTimeoutMs: options.gateTimeoutMs } : {}),
             ...(options?.onResolved !== undefined ? { onResolved: options.onResolved } : {}),
             ...(options?.onGateResult !== undefined ? { onGateResult: options.onGateResult } : {}),
           },
@@ -2345,7 +2359,7 @@ export class WorkflowService {
       },
       ...(service.host.runGate !== undefined
         ? {
-            runGate: async (command: string, options: { agentId: string; cwd?: string }) => {
+            runGate: async (command: string, options: { agentId: string; cwd?: string; gateTimeoutMs?: number }) => {
               const convId = conversationByAgent.get(options.agentId)
               // cwd 只用引擎确认过的值（result.cwd / 回传元数据）；缺省父会话
               // cwd，绝不猜测远端工作目录。
@@ -2353,6 +2367,7 @@ export class WorkflowService {
                 ...(options.cwd !== undefined ? { cwd: options.cwd } : { cwd: parent.cwd }),
                 ...(convId !== undefined ? { conversationId: convId } : { conversationId: parent.id }),
                 signal: run.abort.signal,
+                ...(options.gateTimeoutMs !== undefined ? { gateTimeoutMs: options.gateTimeoutMs } : {}),
               })
             },
           }
@@ -2493,6 +2508,9 @@ export class WorkflowService {
       ...(request.model !== undefined ? { model: request.model } : {}),
       ...(request.effort !== undefined ? { effort: request.effort } : {}),
       ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
+      ...(!isResume && request.cwd !== undefined ? { cwd: request.cwd } : {}),
+      ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+      ...(request.gateTimeoutMs !== undefined ? { gateTimeoutMs: request.gateTimeoutMs } : {}),
       meta: withWorkflowSpawnMeta(undefined, {
         runId: run.runId,
         ...(request.maxSubagentDepth !== undefined ? { maxSubagentDepth: request.maxSubagentDepth } : {}),

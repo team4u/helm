@@ -7,6 +7,7 @@ import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
 import { compactCardTitle, subagentBadge } from './model-subagent.ts'
 import type { SubagentCardStatus } from './model-subagent.ts'
 import { firstLineOf } from './model-format.ts'
+import { resolveNodeElapsedMs, resolveRunElapsedMs } from './model-run.ts'
 
 /** 从认领同一子会话的多个后台 run 中选出当前关联者。 */
 function pickBackgroundRun(
@@ -155,6 +156,21 @@ export function executionToolStatus(
   if (runStatus === 'running') return 'running'
   if (runStatus === 'failed' || runStatus === 'aborted') return 'error'
   return 'done'
+}
+
+/**
+ * 执行树紧凑行总耗时：优先 runNode 真实边界（running 用 startedAt + nowMs
+ * 动态推进、结算用 durationMs 定格）；无 runNode 的容器行（深层 workflow /
+ * external）与会话行携带的后台 run 用 run 边界；纯会话节点无本轮可靠起点
+ * （会话 createdAt 不是本轮边界）时返回 undefined，不伪造。
+ */
+export function resolveExecutionNodeElapsedMs(
+  node: Pick<ExecutionNode, 'run' | 'runNode'>,
+  nowMs?: number,
+): number | undefined {
+  if (node.runNode !== undefined) return resolveNodeElapsedMs(node.runNode, nowMs)
+  if (node.run !== undefined) return resolveRunElapsedMs(node.run, nowMs)
+  return undefined
 }
 
 /** 节点展示标题：用户标题 > run 节点 label / prompt > 会话与 run 兜底描述（不虚构）。 */

@@ -49,6 +49,8 @@ export {
   canResumeWorkflowRun,
   canReplayWorkflowRun,
   formatWorkflowNodeStats,
+  resolveRunElapsedMs,
+  resolveNodeElapsedMs,
 } from './model-run.ts'
 export type { NodeSummaryText, WorkflowPhaseSection, WorkflowLogLine } from './model-run.ts'
 
@@ -76,6 +78,7 @@ export {
   effectiveRunNodeStatus,
   executionToolStatus,
   executionNodeTitle,
+  resolveExecutionNodeElapsedMs,
   collectExecutionFrontline,
   collectExecutionApprovals,
   aggregateExecutionNodes,

@@ -263,3 +263,47 @@ export function formatWorkflowNodeStats(node: WorkflowNodeState): string[] {
   }
   return segments
 }
+
+// ---------------------------------------------------------------------------
+// 总耗时解析（仅以真实记录的边界计时，不伪造 0ms / 虚构值）
+// ---------------------------------------------------------------------------
+
+/**
+ * run 总耗时：running 且客户端时钟有效（nowMs >= createdAt）时随 nowMs 动态
+ * 推进；其余（含 SSR 首帧无时钟）用 updatedAt - createdAt 定格到最近快照，
+ * 两者都是真实边界；非法时间差返回 undefined（调用方如实省略）。
+ */
+export function resolveRunElapsedMs(
+  run: Pick<WorkflowRunSummary, 'status' | 'createdAt' | 'updatedAt'>,
+  nowMs?: number,
+): number | undefined {
+  if (
+    run.status === 'running' &&
+    nowMs !== undefined && Number.isFinite(nowMs) &&
+    Number.isFinite(run.createdAt) && nowMs >= run.createdAt
+  ) {
+    return nowMs - run.createdAt
+  }
+  const settled = run.updatedAt - run.createdAt
+  return Number.isFinite(settled) && settled >= 0 ? settled : undefined
+}
+
+/**
+ * run 内节点耗时：running 用 startedAt + nowMs 动态推进（无时钟或无起点
+ * 如实省略，保证 SSR 确定性）；已结算用持久化 durationMs 定格；无真实边界
+ * （既无 startedAt 也无 durationMs）省略，绝不显示虚构的 0ms。
+ */
+export function resolveNodeElapsedMs(
+  node: Pick<WorkflowNodeState, 'status' | 'startedAt' | 'durationMs'>,
+  nowMs?: number,
+): number | undefined {
+  if (node.status === 'running') {
+    return node.startedAt !== undefined && Number.isFinite(node.startedAt) &&
+      nowMs !== undefined && Number.isFinite(nowMs) && nowMs >= node.startedAt
+      ? nowMs - node.startedAt
+      : undefined
+  }
+  return node.durationMs !== undefined && Number.isFinite(node.durationMs) && node.durationMs >= 0
+    ? node.durationMs
+    : undefined
+}

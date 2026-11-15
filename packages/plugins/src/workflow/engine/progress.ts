@@ -59,7 +59,7 @@ export interface WorkflowAgentEntry {
   /** 结构化输出 JSON Schema（脚本声明原样）。 */
   schema?: Record<string, unknown>
   /** gate 执行结果（执行环境内恰好一次执行后的回报）。 */
-  gate?: { ok: boolean; output: string }
+  gate?: { ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }
   /** 脚本声明的 gate 命令原文（审计用；持久面已脱敏）。 */
   gateCommand?: string
   agentType?: string

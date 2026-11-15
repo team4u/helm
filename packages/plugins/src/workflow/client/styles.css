@@ -101,17 +101,31 @@
   gap: 4px;
 }
 
+/* 统计尾注（模型 / token 等）：可被窄屏隐藏的可让位信息，右推职责不在
+   此处（避免与耗时位双 auto margin 造成空洞）。 */
 .subagent-live-stats {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 36%;
-  margin-left: auto;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-muted);
   white-space: nowrap;
   flex-shrink: 0;
   padding-right: 4px;
+}
+
+/* 总耗时独立固定展示位：运行中动态变化、结束定格的唯一耗时出口；右推
+   职责集中于此单一 auto margin，窄屏（<=680px）不随统计尾注隐藏、无
+   max-width 截断，保证任何状态下可见。 */
+.subagent-live-elapsed {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 第 2 层动态副栏：折叠态单行展示当前动作 / 思考 / 结论 / 错误 */
@@ -722,10 +736,6 @@
   color: var(--fg-muted);
 }
 
-.workflow-node-duration {
-  font-size: 10.5px;
-}
-
 /* 无原生子会话节点（action / cached / 外部窗格）的结构化明细 */
 .workflow-node-detail {
   display: flex;
@@ -860,6 +870,14 @@
 }
 
 .execution-child-count {
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 紧凑行总耗时：仅真实 run/runNode 边界才渲染（运行中随父级秒表动态变化） */
+.execution-child-elapsed {
+  font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--fg-subtle);
   font-variant-numeric: tabular-nums;

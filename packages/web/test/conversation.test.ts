@@ -569,6 +569,18 @@ test('lastHumanTextOf 与格式化工具', { timeout: 60_000 }, () => {
   assert.equal(formatDurationMs(1500), '1.5s')
   assert.equal(formatDurationMs(125_000), '2m5s')
   assert.equal(formatDurationMs(undefined), '')
+  // 进位边界：拆分前先按总秒数四舍五入，绝不产生 60.0s / 1m60s / 59m60s
+  assert.equal(formatDurationMs(59_600), '59.6s', '59.6s 未及 60s 保持一位小数秒档')
+  assert.equal(formatDurationMs(59_949), '59.9s')
+  assert.equal(formatDurationMs(59_950), '1m0s', '59.95s 舍入触达 60s 必须进分档')
+  assert.equal(formatDurationMs(60_000), '1m0s')
+  assert.equal(formatDurationMs(119_600), '2m0s', '1m59.6s 不得渲染成 1m60s')
+  assert.equal(formatDurationMs(3_599_600), '1h0m', '59m59.6s 不得渲染成 59m60s')
+  assert.equal(formatDurationMs(3_600_000), '1h0m')
+  assert.equal(formatDurationMs(7_323_000), '2h2m', '>=1h 人类可读档位（分钟粒度）')
+  assert.equal(formatDurationMs(36_000_000), '10h0m')
+  assert.equal(formatDurationMs(-1), '')
+  assert.equal(formatDurationMs(Number.NaN), '')
 })
 
 // ---------------------------------------------------------------------------

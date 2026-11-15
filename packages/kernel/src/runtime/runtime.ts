@@ -672,8 +672,9 @@ export class KernelRuntime {
       nodeId?: string
       signal?: AbortSignal
       env?: Record<string, string>
+      gateTimeoutMs?: number
     } = {},
-  ): Promise<{ ok: boolean; output: string }> {
+  ): Promise<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }> {
     return this.agentSpawn.runGate(command, options)
   }
 

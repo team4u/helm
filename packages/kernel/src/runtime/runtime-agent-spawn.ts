@@ -351,8 +351,9 @@ export class RuntimeAgentSpawn {
       nodeId?: string
       signal?: AbortSignal
       env?: Record<string, string>
+      gateTimeoutMs?: number
     } = {},
-  ): Promise<{ ok: boolean; output: string }> {
+  ): Promise<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }> {
     let nodeId = options.nodeId
     if (nodeId === undefined && options.conversationId !== undefined) {
       nodeId = this.deps.store.getConv(options.conversationId)?.nodeId

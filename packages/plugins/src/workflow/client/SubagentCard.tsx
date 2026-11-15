@@ -11,7 +11,7 @@ import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { useConversation, useConversations, usePluginContext, useToolActivity } from '@helm/plugin-client'
+import { useConversation, useConversations, usePluginContext, useToolActivity, formatDurationMs } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { ExecutionCard } from './ExecutionCard.tsx'
 import { useElapsedNowMs, usePluginSessionDoc, useStreamFollow } from './hooks.ts'
@@ -20,6 +20,7 @@ import { Icon } from './WorkflowIcon.tsx'
 import { WorktreeInspectSection } from './WorktreeInspectSection.tsx'
 import { buildWorktreeSelector } from './model-worktree.ts'
 import { toolResultPreviewTruncated } from './model-format.ts'
+import { resolveRunElapsedMs } from './model-run.ts'
 import {
   aggregateExecutionNodes,
   aggregateExecutionStatuses,
@@ -27,6 +28,7 @@ import {
   collectExecutionApprovals,
   collectExecutionFrontline,
   executionNodeTitle,
+  resolveExecutionNodeElapsedMs,
 } from './model-execution-tree.ts'
 import type { ExecutionNode, ExecutionNodeStatus } from './model-execution-tree.ts'
 import {
@@ -35,6 +37,7 @@ import {
   isLatestSubagentCallForTarget,
   parentToolSummaryOf,
   resolveSubagentConversationId,
+  resolveSubagentElapsedMs,
   resolveSubagentExecutionMeta,
   resolveSubagentHeaderSnippet,
   resolveSubagentTaskTitle,
@@ -52,6 +55,15 @@ import type { SubagentBadge } from './model-subagent.ts'
 export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): ReactNode {
   const ctx = usePluginContext()
   const [expandedKey, setExpandedKey] = useState<string | undefined>(undefined)
+  // 父级统一秒表：仅当本级存在运行中的真实边界（runNode / 无 runNode 的
+  // run）才启动，单一 interval 供本级全部行复用（避免每行各建 interval）；
+  // 递归子层是独立组件实例，各自持表不违反 hooks 规则。
+  const needsTick = nodes.some(
+    (node) =>
+      node.runNode?.status === 'running' ||
+      (node.runNode === undefined && node.run?.status === 'running'),
+  )
+  const nowMs = useElapsedNowMs(needsTick)
   if (nodes.length === 0) return null
   return (
     <div className="execution-children" onClick={(e) => e.stopPropagation()}>
@@ -72,6 +84,9 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
             : undefined
         // 审批徽章只统计后代（自身 blocked 已由状态徽章表达）。
         const descendantApprovals = aggregated.blocked - (node.status === 'blocked' ? 1 : 0)
+        // 总耗时：仅以真实 run/runNode 边界解析（运行中随父级秒表动态、结算
+        // 定格持久化 duration；无本轮边界如实省略）。
+        const elapsedMs = resolveExecutionNodeElapsedMs(node, nowMs)
         return (
           <Fragment key={node.key}>
             <div
@@ -137,6 +152,9 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
                 </span>
               ) : null}
               <span className="execution-child-right">
+                {elapsedMs !== undefined ? (
+                  <span className="execution-child-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
+                ) : null}
                 {descendantApprovals > 0 ? (
                   <span className="badge badge-warn">{`审批 ${descendantApprovals}`}</span>
                 ) : null}
@@ -175,8 +193,8 @@ export function SubagentLiveCard(props: {
   startedAt?: number
   /** 是否为缓存/历史重放任务。 */
   cached?: boolean
-  /** 额外统计尾注（如工作流节点的模型与 token 统计）。 */
-  extraStats?: string
+  /** 工作流节点的权威模型 / Token 统计，覆盖摘要中的同类字段，避免重复展示。 */
+  statsOverride?: { model?: string; tokens?: number }
   /** 展开态展示实时流与底部调用详情。 */
   expanded?: boolean
   callDetails?: Pick<ToolViewProps, 'input' | 'result' | 'artifactRef'>
@@ -184,7 +202,7 @@ export function SubagentLiveCard(props: {
   childNodes?: ExecutionNode[]
 }) {
   const ctx = usePluginContext()
-  const { childConversationId, toolStatus, backgroundRun, worktree, toolSummary, startedAt } = props
+  const { childConversationId, toolStatus, backgroundRun, worktree, toolSummary, startedAt, statsOverride } = props
   const conv = useConversation(childConversationId)
   const summary = conv.summary
   const detail = conv.detail
@@ -200,11 +218,6 @@ export function SubagentLiveCard(props: {
     pendingAsk !== undefined || (summary?.pendingAskCount ?? 0) > 0
       ? { status: 'blocked', label: '等待审批', badge: 'badge-warn' }
       : subagentBadge(summary?.status, toolStatus, backgroundRun?.status)
-  const isWorking = selfBadge.status === 'working'
-
-  // 运行中秒表：SSR 首帧不启动时钟（确定性渲染）。
-  const nowMs = useElapsedNowMs(isWorking)
-
   const taskTitle = resolveSubagentTaskTitle(summary, childConversationId, toolSummary, backgroundRun)
   const statSegments = useMemo(
     () =>
@@ -213,12 +226,10 @@ export function SubagentLiveCard(props: {
         ...(detail?.entries !== undefined ? { entries: detail.entries } : {}),
         ...(live !== undefined ? { live } : {}),
         ...(backgroundRun !== undefined ? { backgroundRun } : {}),
-        ...(toolSummary !== undefined ? { toolSummary } : {}),
-        isWorking,
-        startedAt,
-        nowMs,
+        ...(statsOverride?.model !== undefined ? { modelOverride: statsOverride.model } : {}),
+        ...(statsOverride?.tokens !== undefined ? { tokensOverride: statsOverride.tokens } : {}),
       }),
-    [summary, detail?.entries, live, backgroundRun, toolSummary, isWorking, startedAt, nowMs],
+    [summary, detail?.entries, live, backgroundRun, statsOverride?.model, statsOverride?.tokens],
   )
   const snippet = useMemo(
     () =>
@@ -245,7 +256,26 @@ export function SubagentLiveCard(props: {
   const effectiveStatus: ExecutionNodeStatus =
     descendants.total > 0 ? aggregateExecutionStatuses([selfBadge.status, descendants.status]) : selfBadge.status
 
-  // 隔离工作树：显式入参优先，其次回退后台 run 首个节点的 worktree。
+  // 任一自身/后代仍在执行或等待审批时，总耗时持续增长。聚合徽章可能因
+  // 另一后代失败而显示 error，因此计时不能只依赖 effectiveStatus。
+  const elapsedActive =
+    selfBadge.status === 'working' || selfBadge.status === 'blocked' ||
+    descendants.running > 0 || descendants.blocked > 0
+  // SSR 首帧不启动时钟，保持确定性渲染。
+  const nowMs = useElapsedNowMs(elapsedActive)
+  // 总耗时独立展示位：仅以真实边界解析（本次调用 / 后台 run；运行中随秒表
+  // 动态推进、结算定格持久化 duration；无本轮边界如实省略，不用会话
+  // createdAt 伪造一次 resume 的耗时）。
+  const elapsedMs = resolveSubagentElapsedMs({
+    ...(backgroundRun !== undefined ? { backgroundRun } : {}),
+    ...(toolSummary !== undefined ? { toolSummary } : {}),
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    nowMs,
+    status: elapsedActive ? 'working' : effectiveStatus,
+  })
+  const elapsedText = elapsedMs !== undefined ? formatDurationMs(elapsedMs) : undefined
+
+  // 隔离工作树:显式入参优先,其次回退后台 run 首个节点的 worktree。
   const wt = worktree ?? backgroundRun?.nodes?.find((n) => n.worktree !== undefined)?.worktree
   // 检视/清理共用消歧坐标：调用方显式 nodeId > 子会话绑定节点。
   const inspectNodeId =
@@ -327,11 +357,11 @@ export function SubagentLiveCard(props: {
           {`审批 ${descendants.blocked}`}
         </span>
       ) : null}
-      {props.extraStats !== undefined && props.extraStats !== '' ? (
-        <span className="subagent-live-stats workflow-node-stats tabular-nums">{props.extraStats}</span>
-      ) : null}
       {statSegments.length > 0 ? (
-        <span className="subagent-live-stats workflow-node-duration tabular-nums">{statSegments.join(' · ')}</span>
+        <span className="subagent-live-stats tabular-nums">{statSegments.join(' · ')}</span>
+      ) : null}
+      {elapsedText !== undefined ? (
+        <span className="subagent-live-elapsed tabular-nums">{elapsedText}</span>
       ) : null}
     </>
   )
@@ -425,7 +455,7 @@ export function SubagentLiveCard(props: {
       variantClass={variantClass}
       activate={{
         label: `打开子会话 #${childConversationId} 抽屉`,
-        tooltip: [taskTitle, summary?.profileId, wt?.branch, statSegments.join(' · '), '点击打开子会话抽屉'].filter(Boolean).join('\n'),
+        tooltip: [taskTitle, summary?.profileId, wt?.branch, [...statSegments, elapsedText].filter(Boolean).join(' · '), '点击打开子会话抽屉'].filter(Boolean).join('\n'),
         open: openChild,
       }}
       heading={heading}
@@ -578,7 +608,12 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
             <span className="trace-tool-summary">{toolSummary.prompt ?? `子会话 #${childId}`}</span>
             <span className="badge badge-neutral">#{childId} · 已在下文续接</span>
           </span>
-          <span className="trace-row-right">{props.status === 'error' || props.isError === true ? '失败' : props.status === 'done' ? '完成' : '运行中'}</span>
+          <span className="trace-row-right">
+            {props.durationMs !== undefined ? (
+              <span className="tabular-nums">{formatDurationMs(props.durationMs)}</span>
+            ) : null}
+            {props.status === 'error' || props.isError === true ? '失败' : props.status === 'done' ? '完成' : '运行中'}
+          </span>
         </div>
       </div>
     )
@@ -617,6 +652,10 @@ export function ExternalRunSummary(props: {
   const badge = subagentBadge(undefined, toolStatus, run?.status)
   const active = badge.status === 'working'
   const failedState = badge.status === 'error'
+  // run 总耗时：运行中随秒表动态推进，结束定格在 createdAt → updatedAt；
+  // 无 run 数据时如实省略。
+  const nowMs = useElapsedNowMs(active && run?.status === 'running')
+  const elapsedMs = run !== undefined ? resolveRunElapsedMs(run, nowMs) : undefined
   return (
     <div className="subagent-live-card subagent-external-card">
       <div className="subagent-live-header">
@@ -630,6 +669,9 @@ export function ExternalRunSummary(props: {
           </span>
         ) : null}
         <span className={`badge ${badge.badge}`}>{badge.label}</span>
+        {elapsedMs !== undefined ? (
+          <span className="subagent-live-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
+        ) : null}
       </div>
       <div className="subagent-live-stream subagent-external-body">
         {nodes.length > 0 ? (
