@@ -77,7 +77,9 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
 
 - **主代理职责**：拆分任务、确定接口、协调子代理、审查结果与最终验收；重实现、大范围开发和成套测试交给子代理。
 - **子代理模型**：所有子代理统一使用 GLM（`glm-agent`），覆盖调查、审查、规划、实现与验收；除非用户明确变更此偏好。
-- **Worktree 隔离（严禁 `/tmp`）**：首 commit 后并行开发一律在主仓同级磁盘目录 `../helm-worktrees/<name>` 建 worktree（避开 tmpfs 内存盘）；委派子代理提示词须显式指定该路径及核心约束，不设 `max_turns`。
+- **Worktree 隔离（严禁 `/tmp`）**：首 commit 后并行开发一律在主仓同级磁盘目录 `../helm-worktrees/<name>` 建 worktree（避开 tmpfs 内存盘）；委派子代理提示词须显式指定该路径及核心约束，不设 `max_turns`。委派前确认代理实际使用的 worktree 路径与基线；工具自动创建的 worktree 不符合路径约束时，先按本规则创建合规 worktree。
+- **未提交改动所有权**：共享工作区中任务开始前已存在的已修改、已暂存和未跟踪文件，默认视为用户或其他代理所有。开工时记录 `git status --short`、`git diff --name-only` 和未跟踪文件清单；修改前检查目标文件是否已有改动，所有权不明时保留现状并先询问。严禁为清理工作区、同步代理分支或解决验证失败而对共享工作区执行 `git reset --hard`、宽泛 `git restore` / `git checkout`、`git clean`、全量 stash 或其他会覆盖、删除他人改动的操作；不得把主分支或主工作区 reset 到代理分支。丢弃改动必须逐项确认归属、明确列出路径并取得用户授权。合入代理工作优先 cherry-pick 代理提交；代理只有未提交 diff 时，先在代理 worktree 内提交，再按提交审查和合入，禁止用整树覆盖方式同步。
+- **误覆盖应急**：一旦发现可能误删或覆盖他人改动，立即停止写入和清理操作；保留现场，检查 reflog、代理 worktree、编辑器历史等可恢复来源，并向用户说明影响与恢复情况。未经用户确认，不继续 reset、rebase、clean 或执行其他可能改写现场的操作。
 - **Git 提交**：中文 Conventional Commits（如 `feat(kernel): ...`），不加 `Co-Authored-By`。
 
 ## 7. 文档中心速查（按需深入阅读）
