@@ -166,6 +166,9 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
           void workflows.abort(started.id).catch(() => {})
         }
         context.signal?.addEventListener('abort', onAbort, { once: true })
+        // run 启动本身包含异步准备；父回合可能在 listener 注册前已中止，
+        // AbortSignal 不会重放旧事件，故注册后还需检查当前状态。
+        if (context.signal?.aborted) onAbort()
         try {
           const outcome = await workflows.waitForeground(started.id, {
             onDetached: () => context.signal?.removeEventListener('abort', onAbort),

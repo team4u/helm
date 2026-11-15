@@ -224,6 +224,15 @@ function runRecordProblem(record: unknown): string | undefined {
     return 'childConversationIds 非法（需正整数数组）'
   }
   if (r['error'] !== undefined && typeof r['error'] !== 'string') return 'error 非字符串'
+  if (r['syncForeground'] !== undefined && typeof r['syncForeground'] !== 'boolean') {
+    return 'syncForeground 非布尔'
+  }
+  if (
+    r['detachedAt'] !== undefined &&
+    (typeof r['detachedAt'] !== 'number' || !Number.isFinite(r['detachedAt']) || r['detachedAt'] < 0)
+  ) {
+    return 'detachedAt 非非负有限数值'
+  }
   if (
     r['autoResumeCount'] !== undefined &&
     (!Number.isInteger(r['autoResumeCount']) || (r['autoResumeCount'] as number) < 0)
