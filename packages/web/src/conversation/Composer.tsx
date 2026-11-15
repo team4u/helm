@@ -1,35 +1,22 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ComposerScopeProps, ConversationAttachmentRef, ConversationSummary, WhenBusy } from '@helm/protocol'
+import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol'
 import { COMPOSER_STATUS_SLOT } from '@helm/protocol'
-import { assetsApi, conversationsApi } from '../lib/api.js'
-import {
-  buildSlashMenuItems,
-  commandActionPluginId,
-  insertAtCaret,
-  matchExactPluginSlash,
-  pluginSlashCommandsFor,
-  removeTokenBeforeCaret,
-  type QualifiedCommand,
-} from '../lib/commands-model.js'
-import { HelmIcon, PluginSlot, Popover, PopoverContent, PopoverPortal, PopoverTrigger, Select, type SelectOption } from '@helm/plugin-client'
+import { conversationsApi } from '../lib/api.js'
+import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
+import { HelmIcon, PluginSlot } from '@helm/plugin-client'
 import { matchesUiScope } from '../lib/types.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { useHelmStore } from '../lib/store-context.js'
-import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
 import { slashMenuSkills } from './slash-menu-skills.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import {
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuRoot,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '../ui/DropdownMenu.js'
-import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
-import { Tooltip } from '../ui/Tooltip.js'
 import { AskDock } from './AskDock.js'
 import { CompletionPopover } from './CompletionPopover.js'
+import { CommandPopover } from './CommandPopover.js'
+import { ModelPicker } from './ModelPicker.js'
+import { SessionEnvBar } from './SessionEnvBar.js'
+import { ComposerSendControls } from './ComposerSendControls.js'
+import { Tooltip } from '../ui/Tooltip.js'
 import { focusWithCaret, useComposerController } from './composer-controller.js'
 import {
   detectCompletionToken,
@@ -39,22 +26,12 @@ import {
 } from './composer-completion-model.js'
 import { useComposerCompletionSources } from './use-composer-completion.js'
 import {
-  attachmentsOfEditTarget,
-  busyEnterMode,
   canConfigureSessionEnv,
-  draftVersionOf,
-  envDraftError,
-  envDraftOnNodeChange,
+  busyEnterMode,
   getComposerPlaceholder,
-  isHistoricalEdit,
-  shouldRestoreEditOnFailure,
   useIsMobile,
-  type ComposerDraftVersion,
-  type EnvDraft,
-  type PendingAttachment,
-  type SessionEnvBlocker,
-  ENV_BLOCKER_CLEAR,
 } from './composer-model.js'
+import { useComposerSend, type ComposerPrefill } from './composer-send.js'
 import { lastEditableHumanInput } from './timeline-model.js'
 import { contextUsageLabel } from './context-usage-model.js'
 import { formatBytes } from '../lib/format.js'
@@ -62,14 +39,7 @@ import { formatBytes } from '../lib/format.js'
 export interface ComposerProps {
   conversation: ConversationSummary
   /** 请求回填文本（时间线「编辑并重发」）；每次递增 tick 保证同文本也能再次触发。 */
-  prefill: {
-    text: string
-    entryId?: number
-    attachments?: ConversationAttachmentRef[]
-    tick: number
-    /** true 时仅当草稿完全空闲（无文本/附件/编辑锚点/在途操作）才回填；否则警告并拒绝。 */
-    onlyIfEmpty?: boolean
-  } | null
+  prefill: ComposerPrefill | null
   /** 真实发送请求开始/结束时通知父层（在途反馈；斜杠命令不触发）。 */
   onSendingChange?: (sending: boolean) => void
   /** /new 新话题入口：进入本智能体待命页（首次发送才落库）；宿主传入面板位置明确的导航回调。 */
@@ -77,214 +47,6 @@ export interface ComposerProps {
 }
 
 type PopoverKind = 'slash' | null
-
-// ---------------------------------------------------------------------------
-// ModelPicker
-// ---------------------------------------------------------------------------
-
-function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
-  const store = useHelmStore()
-  const [open, setOpen] = useState(false)
-  const [pending, setPending] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
-  const [query, setQuery] = useState('')
-  const rootRef = useRef<HTMLSpanElement | null>(null)
-
-  const refreshCatalog = async (): Promise<void> => {
-    setRefreshing(true)
-    try {
-      const res = await assetsApi.refreshModels()
-      await store.refreshAssets()
-      const errors = Object.entries(res.errors ?? {})
-      if (errors.length > 0) {
-        store.pushNotice({
-          type: 'notification',
-          level: 'warning',
-          title: '部分供应商目录刷新失败',
-          body: errors.map(([p, err]) => `${p}: ${err}`).join('; '),
-          conversationId: conversation.id,
-        })
-      } else {
-        store.pushNotice({
-          type: 'notification',
-          level: 'info',
-          title: '已刷新模型目录',
-          body: `共 ${store.models.length} 个可用模型`,
-          conversationId: conversation.id,
-        })
-      }
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '刷新模型目录失败',
-        body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
-      })
-    } finally {
-      setRefreshing(false)
-    }
-  }
-
-  const pick = async (model: string): Promise<void> => {
-    setOpen(false)
-    if (model === conversation.model) return
-    setPending(true)
-    try {
-      await conversationsApi.patch(conversation.id, { model })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '切换模型失败',
-        body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
-      })
-    } finally {
-      setPending(false)
-    }
-  }
-
-  const pickThinking = async (level: string): Promise<void> => {
-    setPending(true)
-    try {
-      await conversationsApi.patch(conversation.id, { thinkingLevel: level })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '切换思考等级失败',
-        body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
-      })
-    } finally {
-      setPending(false)
-    }
-  }
-
-  const resetToProfileDefault = async (): Promise<void> => {
-    setOpen(false)
-    setPending(true)
-    try {
-      await conversationsApi.patch(conversation.id, { model: '', thinkingLevel: '' })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '恢复默认配置失败',
-        body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
-      })
-    } finally {
-      setPending(false)
-    }
-  }
-
-  const rawShortName = conversation.model.split('/').pop() ?? conversation.model
-  const shortName = rawShortName.trim() !== '' ? rawShortName : '默认模型'
-  const currentModel = store.models.find((model) => model.id === conversation.model)
-  const currentLevels = currentModel?.thinkingLevels ?? ['off']
-  const supportsThinking = currentLevels.some((level) => level !== 'off')
-  // 生效档位与展示：优先取当前会话实际生效档位；若不在当前模型支持列表中，则回退至 off 或首项支持档位。
-  const activeLevel = conversation.thinkingLevel
-  const fallbackLevel = currentLevels.includes('off') ? 'off' : (currentLevels[0] ?? '')
-  const effectiveLevel = currentLevels.includes(activeLevel) ? activeLevel : fallbackLevel
-  const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
-
-  return (
-    <span className="composer-picker-root" ref={rootRef}>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm composer-model-button"
-            disabled={pending}
-            aria-expanded={open}
-            aria-label={`模型与思考档位：${shortName}${showLevel ? ` · ${effectiveLevel}` : ''}`}
-            title={`当前模型：${conversation.model}${showLevel ? ` · 思考 ${effectiveLevel}` : ''}`}
-          >
-            {pending ? <HelmIcon name="loader" size={12} className="spin-slow" /> : null}
-            <span className="composer-model-label">{shortName}</span>
-            {showLevel ? <span className="composer-model-level">· {effectiveLevel}</span> : null}
-            <HelmIcon name="chevron-down" size={12} />
-          </button>
-        </PopoverTrigger>
-        <PopoverPortal>
-          <PopoverContent
-            side="top"
-            align="start"
-            sideOffset={8}
-            className="composer-popover composer-model-popover"
-          >
-            <button
-              type="button"
-              className="popover-item"
-              onClick={() => void resetToProfileDefault()}
-              title="清除显式覆盖，重算 Profile/全局继承链"
-            >
-              跟随 Profile 默认（清除覆盖）
-            </button>
-            <div className="composer-model-search-bar" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
-                <HelmIcon name="search" size={13} />
-                <input
-                  aria-label="搜索模型"
-                  placeholder="搜索模型…"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                />
-              </div>
-              <Tooltip content="刷新动态模型目录" side="top">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-icon-sm composer-model-refresh-btn"
-                  disabled={refreshing}
-                  title="刷新动态模型目录"
-                  aria-label="刷新动态模型目录"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void refreshCatalog()
-                  }}
-                >
-                  <HelmIcon name="rotate-cw" size={13} className={refreshing ? 'spin-slow' : undefined} />
-                </button>
-              </Tooltip>
-            </div>
-            {store.models.filter((model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(query.toLowerCase())).map((m) => (
-              <button
-                key={m.id}
-                title={m.id}
-                type="button"
-                className={`popover-item${m.id === conversation.model ? ' popover-item-active' : ''}`}
-                onClick={() => void pick(m.id)}
-              >
-                <span className="mono">{m.modelId}</span>
-                <span className="popover-item-meta">{m.provider}</span>
-              </button>
-            ))}
-            {store.models.every((model) => !model.available || model.disabled === true) && (
-              <div className="popover-item" style={{ cursor: 'default', color: 'var(--fg-subtle)' }}>暂无可用模型；请先在「模型与凭据」配置供应商密钥</div>
-            )}
-            {supportsThinking ? (
-              <>
-                <div className="popover-header">
-                  思考档位
-                  <span style={{ color: 'var(--fg-subtle)' }}>{shortName}</span>
-                </div>
-                <ThinkingLevelControl
-                  value={effectiveLevel}
-                  levels={currentLevels}
-                  disabled={pending}
-                  onPick={(level) => void pickThinking(level)}
-                />
-              </>
-            ) : null}
-          </PopoverContent>
-        </PopoverPortal>
-      </Popover>
-    </span>
-  )
-}
 
 // ---------------------------------------------------------------------------
 // 上下文用量只读状态（ModelPicker 右侧；对齐 pi footer 展示，不可交互）。
@@ -308,338 +70,16 @@ function ContextUsageStatus({ conversation }: { conversation: ConversationSummar
 }
 
 // ---------------------------------------------------------------------------
-// 斜杠 / 产物引用浮层
-// ---------------------------------------------------------------------------
-
-interface PopoverItem {
-  id: string
-  label: string
-  hint?: string
-  /** 回填草稿的触发词（插件命令改用 run 直接执行，不回填）。 */
-  apply?: string
-  /** 插件命令：选中即执行（不回填触发词到草稿）。 */
-  run?: () => void
-}
-/** 键盘可见候选上限：↑↓ 循环只在此列表内（显示与键盘索引一致）。 */
-const SLASH_VISIBLE_LIMIT = 12
-function CommandPopover({
-  query,
-  slashItems,
-  onPick,
-  onClose,
-}: {
-  query: string
-  /** 已合并好的斜杠菜单条目（含插件命令）；省略时回退宿主内置三源构建。 */
-  slashItems?: ReadonlyArray<PopoverItem>
-  onPick: (apply: string, caretSuffix?: string) => void
-  onClose: () => void
-}) {
-  const [active, setActive] = useState(0)
-
-  const items = useMemo<PopoverItem[]>(() => {
-    const q = query.toLowerCase()
-    if (slashItems !== undefined) {
-      return slashItems.filter((i) => i.id.toLowerCase().includes(q) || i.label.toLowerCase().includes(q))
-    }
-    const builtin: PopoverItem[] = [
-      { id: '/new', label: '/new', hint: '开始新话题', apply: '/new' },
-      { id: '/clear', label: '/clear', hint: '重置上下文', apply: '/clear' },
-      { id: '/compact', label: '/compact', hint: '精简上下文', apply: '/compact' },
-    ]
-    return builtin.filter((i) => i.id.toLowerCase().includes(q))
-  }, [query, slashItems])
-
-  // 键盘循环限定可见候选，修复显示截断但索引越界到不可见项的旧问题。
-  // 记忆化保持数组身份稳定：条目集不变时键盘 effect 不重挂全局监听。
-  const visible = useMemo(() => items.slice(0, SLASH_VISIBLE_LIMIT), [items])
-  const visibleKeys = visible.map((item) => item.id).join('|')
-
-  useEffect(() => {
-    setActive(0)
-  }, [query, visibleKeys])
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      // IME 组合中不拦截（组合音节可能含触发符，Enter 属确认候选）。
-      if (e.isComposing || e.keyCode === 229) return
-      if (visible.length === 0) {
-        if (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape') {
-          e.preventDefault()
-          e.stopPropagation()
-          e.stopImmediatePropagation()
-          onClose()
-        }
-        return
-      }
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        e.stopPropagation()
-        e.stopImmediatePropagation()
-        setActive((i) => (i + 1) % visible.length)
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        e.stopPropagation()
-        e.stopImmediatePropagation()
-        setActive((i) => (i - 1 + visible.length) % visible.length)
-      } else if (e.key === 'Enter') {
-        e.preventDefault()
-        e.stopPropagation()
-        e.stopImmediatePropagation()
-        const item = visible[active]
-        if (item !== undefined) {
-          if (item.run !== undefined) item.run()
-          else if (item.apply !== undefined) onPick(item.apply)
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        e.stopImmediatePropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [visible, active, onPick, onClose])
-
-  if (visible.length === 0) {
-    return (
-      <div className="composer-popover">
-        <div className="popover-item" style={{ color: 'var(--fg-muted)' }}>
-          没有匹配的命令或技能
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="composer-popover">
-      <div className="popover-header">
-        命令与技能
-        <span style={{ color: 'var(--fg-subtle)' }}>↑↓ 选择 · Enter 确认 · Esc 关闭</span>
-      </div>
-      {visible.map((item, idx) => (
-        <button
-          key={item.id}
-          type="button"
-          className={`popover-item${idx === active ? ' popover-item-active' : ''}`}
-          onMouseEnter={() => setActive(idx)}
-          onClick={() => {
-            if (item.run !== undefined) item.run()
-            else if (item.apply !== undefined) onPick(item.apply)
-          }}
-        >
-          <span className="mono">{item.label}</span>
-          {item.hint !== undefined ? <span className="popover-item-meta">{item.hint}</span> : null}
-        </button>
-      ))}
-      {items.length > visible.length ? (
-        <div className="popover-item" style={{ color: 'var(--fg-subtle)', cursor: 'default' }}>
-          候选过多，仅显示前 {SLASH_VISIBLE_LIMIT} 项，可继续输入过滤
-        </div>
-      ) : null}
-    </div>
-  )
-}
-// ---------------------------------------------------------------------------
-// 空会话起始环境配置条（开聊即锁定）
-// ---------------------------------------------------------------------------
-
-/** 空会话（或 /reset 后未再发消息）时展示：草稿式配置起始执行节点与工作目录。
- * 选节点只进入草稿不立即提交；跨节点切换清空 cwd 草稿（协议无节点默认目录，绝不沿用旧节点路径）；
- * 保存一次 PATCH { nodeId, cwd }，以返回值确认；未改节点时 cwd 单独可改，Enter 保存 / Escape 取消。 */
-function SessionEnvBar({
-  conversation,
-  sendBlocked,
-  onBlockerChange,
-}: {
-  conversation: ConversationSummary
-  sendBlocked: boolean
-  onBlockerChange: (blocker: SessionEnvBlocker) => void
-}) {
-  const store = useHelmStore()
-  const [draft, setDraft] = useState<EnvDraft>(() => ({
-    nodeId: conversation.nodeId || 'local',
-    cwd: conversation.cwd,
-  }))
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const currentNodeId = conversation.nodeId || 'local'
-  const nodeKnown = store.nodes.some((n) => n.id === currentNodeId)
-  const draftNode = store.nodes.find((n) => n.id === draft.nodeId)
-  const draftNodeKnown = draft.nodeId === currentNodeId ? nodeKnown : store.nodes.some((n) => n.id === draft.nodeId)
-  // 已确认坐标锚点：保存成功以 PATCH 返回值为准（SSE 摘要可能滞后，不依赖其时序）
-  const [confirmed, setConfirmed] = useState<EnvDraft>(() => ({ nodeId: currentNodeId, cwd: conversation.cwd }))
-  const lastCoordinatesRef = useRef<EnvDraft>({ nodeId: currentNodeId, cwd: conversation.cwd })
-  const unchanged = draft.nodeId === confirmed.nodeId && draft.cwd === confirmed.cwd
-  const validationError = envDraftError(draft)
-  const dirty = !unchanged
-  const blocked = saving || dirty
-  const blocker: SessionEnvBlocker = blocked
-    ? { blocked: true, reason: saving ? '正在保存会话环境…' : '请先保存或取消起始环境修改' }
-    : ENV_BLOCKER_CLEAR
-
-  // 阻塞状态回传 Composer（发送门控）
-  useEffect(() => {
-    onBlockerChange(blocker)
-  }, [blocker.blocked, blocker.reason, onBlockerChange])
-
-  // 会话坐标被外部（SSE / 其他入口）更新且本地无未保存修改时，同步锚点与草稿
-  useEffect(() => {
-    const previous = lastCoordinatesRef.current
-    if (previous.nodeId === currentNodeId && previous.cwd === conversation.cwd) return
-    const next = { nodeId: currentNodeId, cwd: conversation.cwd }
-    lastCoordinatesRef.current = next
-    setConfirmed(next)
-    if (dirty) return
-    setDraft(next)
-  }, [currentNodeId, conversation.cwd, dirty])
-
-  const save = async (): Promise<void> => {
-    if (saving || sendBlocked) return
-    const err = envDraftError(draft)
-    if (err !== null) {
-      setError(err)
-      return
-    }
-    if (unchanged) return
-    setSaving(true)
-    setError(null)
-    try {
-      // 一次 PATCH 同时提交 nodeId + cwd；以返回值确认保存成功（不依赖 SSE 时序）
-      const saved = await conversationsApi.patch(conversation.id, { nodeId: draft.nodeId, cwd: draft.cwd.trim() })
-      const nextConfirmed: EnvDraft = { nodeId: saved.nodeId || 'local', cwd: saved.cwd }
-      setConfirmed(nextConfirmed)
-      setDraft(nextConfirmed)
-      store.pushNotice({
-        type: 'notification',
-        level: 'info',
-        title: '已保存会话环境',
-        body: `#${conversation.id} -> ${saved.nodeId || 'local'}:${saved.cwd}`,
-        conversationId: conversation.id,
-      })
-    } catch (e) {
-      // 保存失败保留草稿并显式报错，不静默回滚
-      const message = e instanceof Error ? e.message : String(e)
-      setError(message)
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '保存会话环境失败',
-        body: message,
-        conversationId: conversation.id,
-      })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const cancel = (): void => {
-    if (saving) return
-    // PATCH 确认结果可能早于 SSE 到达，取消时保留最新已确认的坐标。
-    setDraft(confirmed)
-    setError(null)
-  }
-
-  const nodeOptions = useMemo<SelectOption<string>[]>(() => {
-    const list: SelectOption<string>[] = store.nodes.map((n) => ({
-      value: n.id,
-      label: nodeOptionLabel(n),
-      icon: n.id === 'local' ? 'monitor' : 'network',
-      meta: n.id !== 'local' ? (n.online ? '在线' : '离线') : undefined,
-    }))
-    if (!draftNodeKnown) {
-      list.push({
-        value: draft.nodeId,
-        label: `${draft.nodeId}（未知）`,
-        icon: 'alert-circle',
-      })
-    }
-    return list
-  }, [store.nodes, draftNodeKnown, draft.nodeId])
-
-  return (
-    <div className="composer-env-bar" data-dirty={dirty ? 'true' : undefined}>
-      <span className="composer-env-item">
-        <Select
-          className="composer-env-select"
-          aria-label="会话执行节点"
-          disabled={saving || sendBlocked}
-          value={draft.nodeId}
-          options={nodeOptions}
-          onChange={(e) => {
-            setError(null)
-            setDraft((prev) => envDraftOnNodeChange(prev, e.target.value))
-          }}
-        />
-      </span>
-      <span className="composer-env-item composer-env-cwd-wrap">
-        <HelmIcon name="folder" size={12} className="composer-env-cwd-icon" />
-        <input
-          className="input mono composer-env-cwd-input"
-          aria-label="会话工作目录"
-          aria-invalid={error !== null}
-          value={draft.cwd}
-          disabled={saving || sendBlocked}
-          placeholder={draft.nodeId === currentNodeId ? '/绝对路径' : '目标节点上的绝对路径，例如 /home/user/work'}
-          onChange={(e) => {
-            setError(null)
-            setDraft((prev) => ({ ...prev, cwd: e.target.value }))
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              void save()
-            } else if (e.key === 'Escape') {
-              e.preventDefault()
-              cancel()
-            }
-          }}
-        />
-      </span>
-      {blocked ? (
-        <span className="composer-env-actions">
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            disabled={saving || validationError !== null}
-            onClick={() => void save()}
-          >
-            {saving ? <HelmIcon name="loader" size={11} className="spin-slow" /> : <HelmIcon name="check" size={11} />}
-            保存
-          </button>
-          <button type="button" className="btn btn-sm" disabled={saving} onClick={cancel}>
-            取消
-          </button>
-        </span>
-      ) : null}
-      {error !== null ? (
-        <span className="composer-env-error" role="alert" title={error}>{error}</span>
-      ) : draftNode !== undefined && !draftNode.online && draft.nodeId !== 'local' ? (
-        <span className="composer-env-warn">节点离线，保存后仍需节点上线才能执行</span>
-      ) : null}
-      <span className="composer-env-hint">首条消息发送后锁定</span>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Composer 主体
+// Composer 主体：组装 + 渲染。发送管线 / 附件上传 / 编辑回填在 composer-send.ts，
+// 模型选择在 ModelPicker.tsx，环境配置条在 SessionEnvBar.tsx，斜杠浮层在
+// CommandPopover.tsx，发送控件在 ComposerSendControls.tsx。
 // ---------------------------------------------------------------------------
 
 export function Composer({ conversation, prefill, onSendingChange, onNewThread }: ComposerProps) {
   const store = useHelmStore()
-  const [text, setText] = useState('')
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
-  const [editingEntryId, setEditingEntryId] = useState<number | null>(null)
   const [popover, setPopover] = useState<PopoverKind>(null)
   const [popoverQuery, setPopoverQuery] = useState('')
   const [completionToken, setCompletionToken] = useState<CompletionToken | null>(null)
-  const [sending, setSending] = useState(false)
-  const [uploading, setUploading] = useState(0)
-  const [envBlocker, setEnvBlocker] = useState<SessionEnvBlocker>(ENV_BLOCKER_CLEAR)
-  const sendingRef = useRef(false)
-  const uploadingRef = useRef(0)
-  const envBlockedRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -647,12 +87,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const dragDepthRef = useRef(0)
   const [dragging, setDragging] = useState(false)
   const [widgetsExpanded, setWidgetsExpanded] = useState(false)
-  // 活草稿版本：text / 编辑目标 / 附件任一变化推进，用于发送失败后判断草稿是否已被用户修改
-  const liveDraftRef = useRef<ComposerDraftVersion>(draftVersionOf('', null, []))
-  // 只触达实例 ref，无状态闭包：空依赖维持恒定身份，作为下游 useCallback 的稳定依赖。
-  const syncLiveDraft = useCallback((text: string, target: number | null, attachments: ReadonlyArray<PendingAttachment>): void => {
-    liveDraftRef.current = draftVersionOf(text, target, attachments)
-  }, [])
+  const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
 
   const working = conversation.status === 'working' || conversation.status === 'blocked'
   const isMobile = useIsMobile(680)
@@ -662,20 +97,44 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     ? undefined
     : detail?.entries
   const envConfigurable = canConfigureSessionEnv(detailEntries, conversation.status)
-  // 发送中立即禁止改环境：避免输入提交与环境修改竞态
-  const sendInFlight = sending || uploading > 0
-  const handleEnvBlocker = (blocker: SessionEnvBlocker): void => {
-    envBlockedRef.current = blocker.blocked
-    setEnvBlocker(blocker)
-  }
-  // SessionEnvBar 的 blocker effect 依赖此回调身份：普通函数会使其每 render 重跑（blocked 态下循环）。
-  const handleEnvBlockerStable = useStableCallback(handleEnvBlocker)
-  // 环境条卸载（开聊锁定 / 状态变化）时复位阻塞，避免残留阻止后续发送
-  useEffect(() => {
-    if (envConfigurable) return
-    envBlockedRef.current = false
-    setEnvBlocker(ENV_BLOCKER_CLEAR)
-  }, [envConfigurable])
+
+  const slashPluginCommands = useMemo(
+    () => pluginSlashCommandsFor(store.groupedUi.commands, conversation),
+    [store.groupedUi.commands, conversation],
+  )
+
+  // 发送管线（草稿 / 编辑锚点 / 附件上传 / 提交与失败恢复 / 环境阻塞）。
+  const {
+    text,
+    attachments,
+    editingEntryId,
+    sending,
+    uploading,
+    envBlocker,
+    sendInFlight,
+    setDraftState,
+    insertTextState,
+    readLiveDraft,
+    cancelEdit,
+    uploadFiles,
+    removeAttachment,
+    applyHistoryEdit,
+    send,
+    sendExplicit,
+    runPluginCommand,
+    handleEnvBlocker,
+    notifyError,
+  } = useComposerSend({
+    conversation,
+    prefill,
+    onSendingChange,
+    onNewThread,
+    textareaRef,
+    slashPluginCommands,
+    envConfigurable,
+    working,
+  })
+
   const widgets = store.groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))
   const pills = store.groupedUi.composerPills.filter((p) => matchesUiScope(conversation, p.spec.scope))
 
@@ -721,90 +180,11 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     }
   }, [isMobile, pills.length, widgets.length])
 
-  // 回填（编辑并重发）：prefill 引用变化即触发，同文本重复回填也生效。
-  // 每次选择编辑目标都整体替换附件（目标无附件则清空），绝不保留上一个目标的草稿残留。
+  // 切换会话时关闭全部浮层（补全源订阅随 token 置空停订；编辑态复位在发送管线 hook）
   useEffect(() => {
-    if (prefill === null) return
-    // onlyIfEmpty：草稿非空/编辑中/在途时拒绝回填（经 ref 读取，不新增 effect 依赖）。
-    if (prefill.onlyIfEmpty === true) {
-      const live = liveDraftRef.current
-      if (
-        live.text.trim() !== '' ||
-        live.attachments.length > 0 ||
-        live.targetEntryId !== null ||
-        sendingRef.current ||
-        uploadingRef.current > 0
-      ) {
-        store.pushNotice({
-          type: 'notification',
-          level: 'warning',
-          title: '请先处理当前草稿，再选择引导词',
-          conversationId: conversation.id,
-        })
-        return
-      }
-    }
-    const target = { text: prefill.text, ...(prefill.entryId !== undefined ? { entryId: prefill.entryId } : {}), ...(prefill.attachments !== undefined ? { attachments: prefill.attachments } : {}) }
-    const nextEditing = isHistoricalEdit(target) ? prefill.entryId! : null
-    const nextAttachments = attachmentsOfEditTarget(target)
-    setText(prefill.text)
-    setEditingEntryId(nextEditing)
-    setAttachments(nextAttachments)
-    syncLiveDraft(prefill.text, nextEditing, nextAttachments)
-    textareaRef.current?.focus()
-  }, [prefill, syncLiveDraft])
-
-  // 切换会话时退出历史编辑态并关闭全部浮层（补全源订阅随 token 置空停订）
-  useEffect(() => {
-    setEditingEntryId(null)
     setPopover(null)
     setCompletionToken(null)
   }, [conversation.id])
-
-  const cancelEdit = useCallback((): void => {
-    setEditingEntryId(null)
-    setText('')
-    setAttachments([])
-    syncLiveDraft('', null, [])
-  }, [syncLiveDraft])
-
-  const notifyError = useCallback(
-    (title: string, err: unknown) => {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title,
-        body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
-      })
-    },
-    [store, conversation.id],
-  )
-
-  const uploadFiles = useCallback(
-    async (files: ReadonlyArray<File>): Promise<void> => {
-      uploadingRef.current += files.length
-      setUploading(uploadingRef.current)
-      for (const file of files) {
-        try {
-          if (file.size > 15 * 1024 * 1024) throw new Error('文件超过 15 MiB 上限')
-          const meta = await conversationsApi.uploadArtifact(conversation.id, file)
-          setAttachments((prev) => {
-            const next = [...prev, { artifactId: meta.id, name: meta.name, size: meta.size, mimeType: meta.mimeType }]
-            // await 后渲染快照已过期：文本/锚点取活值，只替换附件集。
-            syncLiveDraft(liveDraftRef.current.text, liveDraftRef.current.targetEntryId, next)
-            return next
-          })
-        } catch (err) {
-          notifyError(`附件上传失败：${file.name}`, err)
-        } finally {
-          uploadingRef.current--
-          setUploading(uploadingRef.current)
-        }
-      }
-    },
-    [conversation.id, notifyError],
-  )
 
   // 触发检测：'/' 进斜杠命令浮层；'@' '#' ':' 进统一插件补全浮层。
   const detectPopover = useCallback((value: string, caret: number): void => {
@@ -837,8 +217,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     const m = tokenRe.exec(before)
     const start = m !== null ? caret - (m[1]?.length ?? 0) : caret
     const next = `${text.slice(0, start)}${apply}${text.slice(caret)}`
-    setText(next)
-    syncLiveDraft(next, editingEntryId, attachments)
+    setDraftState(next)
     setPopover(null)
     requestAnimationFrame(() => {
       const pos = start + apply.length
@@ -862,10 +241,9 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       setCompletionToken(null)
       return
     }
-    const caret = el.selectionStart ?? liveDraftRef.current.text.length
-    const { next, nextCaret } = replaceTriggerToken(liveDraftRef.current.text, caret, insertText)
-    setText(next)
-    syncLiveDraft(next, editingEntryId, attachments)
+    const caret = el.selectionStart ?? readLiveDraft().length
+    const { next, nextCaret } = replaceTriggerToken(readLiveDraft(), caret, insertText)
+    setDraftState(next)
     setCompletionToken(null)
     focusWithCaret(el, nextCaret)
   }
@@ -882,11 +260,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   // 浮层真正打开 = 触发符激活且该会话作用域内有注册源；无源时不弹窗也不拦截输入。
   const completionOpen = completionSnapshot.hasSources
 
-  const slashPluginCommands = useMemo(
-    () => pluginSlashCommandsFor(store.groupedUi.commands, conversation),
-    [store.groupedUi.commands, conversation],
-  )
-
   // 斜杠菜单三源合并：宿主内置命令 + 当前会话可用技能（profile.skills 白名单 +
   // 插件启用双过滤，缺 Profile 时先不展示技能）+ 满足作用域的插件命令。
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
@@ -898,243 +271,15 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     () => slashMenuSkills(conversationProfile, store.skills, enabledPluginIds),
     [conversationProfile, store.skills, enabledPluginIds],
   )
-  const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
-
-  // ⌘K 与斜杠菜单复用同一动作寻址；失败必须返回给提交者。
-  const runPluginCommandFrom = useCallback(async (cmd: QualifiedCommand): Promise<void> => {
-    const actionId = cmd.spec.actionId
-    if (actionId === undefined) throw new Error('插件命令未绑定动作')
-    setPopover(null)
-    await store
-      .invokePluginAction(commandActionPluginId(cmd), actionId, cmd.spec.input, conversation.id)
-      .then(() => {
-        store.pushNotice({
-          type: 'notification',
-          level: 'info',
-          title: '命令已执行',
-          body: `${cmd.spec.slash !== undefined ? `/${cmd.spec.slash} · ` : ''}${cmd.spec.title}`,
-          conversationId: conversation.id,
-        })
-      })
-      .catch((err: unknown) => {
-        notifyError(`命令执行失败：/${cmd.spec.slash ?? cmd.spec.id}`, err)
-        throw err
-      })
-  }, [store, conversation.id, notifyError])
-
-  const commandPendingRef = useRef(false)
-  // 命令成功后才消费触发词；用户已经修改草稿时不得覆盖新内容。
-  const runPluginCommand = useCallback((cmd: QualifiedCommand): void => {
-    if (commandPendingRef.current) return
-    commandPendingRef.current = true
-    const el = textareaRef.current
-    const before = liveDraftRef.current
-    const caret = el?.selectionStart ?? before.text.length
-    const { next, nextCaret } = removeTokenBeforeCaret(before.text, caret)
-    void runPluginCommandFrom(cmd).then(() => {
-      if (!shouldRestoreEditOnFailure(liveDraftRef.current, before)) return
-      setText(next)
-      syncLiveDraft(next, editingEntryId, attachments)
-      if (el !== null) focusWithCaret(el, nextCaret)
-    }).catch(() => { /* 动作调用已发送明确失败通知，保留原草稿。 */ }).finally(() => { commandPendingRef.current = false })
-  }, [editingEntryId, attachments, syncLiveDraft, runPluginCommandFrom])
-  // 斜杠菜单条目跨 render 存续：入口经稳定包装取最新实现（替代渲染期写 latest ref）。
-  const runPluginCommandStable = useStableCallback(runPluginCommand)
   useEffect(() => {
     setSlashMenuItems(
-      buildSlashMenuItems(availableSkills, slashPluginCommands, runPluginCommandStable),
+      buildSlashMenuItems(availableSkills, slashPluginCommands, runPluginCommand),
     )
-  }, [availableSkills, slashPluginCommands, runPluginCommandStable])
-
-  const runSlashCommand = (raw: string): boolean => {
-    const cmd = raw.trim()
-    if (cmd === '/new') {
-      // /new 是新话题入口：进入本智能体待命页（首次发送才落库），不再重置原会话；
-      // 未提供回调（非会话页宿主）时显式提示，不猜测目标也不伤原会话。
-      if (onNewThread !== undefined) {
-        onNewThread()
-      } else {
-        store.pushNotice({
-          type: 'notification',
-          level: 'warning',
-          title: '请从会话顶栏「新话题」开始新话题',
-          conversationId: conversation.id,
-        })
-      }
-      return true
-    }
-    if (cmd === '/clear') {
-      void conversationsApi
-        .reset(conversation.id)
-        .then(() => {
-          store.pushNotice({ type: 'notification', level: 'info', title: '上下文已重置', conversationId: conversation.id })
-        })
-        .catch((err: unknown) => notifyError('重置上下文失败', err))
-      return true
-    }
-    if (cmd === '/compact') {
-      void conversationsApi
-        .compact(conversation.id)
-        .then(() => {
-          store.pushNotice({ type: 'notification', level: 'info', title: '精简任务已提交', conversationId: conversation.id })
-        })
-        .catch((err: unknown) => notifyError('精简上下文失败', err))
-      return true
-    }
-    return false
-  }
-
-  const setDraftState = useCallback((next: string): void => {
-    setText(next)
-    syncLiveDraft(next, editingEntryId, attachments)
-  }, [editingEntryId, attachments, syncLiveDraft])
-
-  const insertTextState = useCallback((fragment: string): void => {
-    const el = textareaRef.current
-    const currentText = liveDraftRef.current.text
-    if (el === null) {
-      const appended = currentText + fragment
-      setText(appended)
-      syncLiveDraft(appended, editingEntryId, attachments)
-      return
-    }
-    const caret = el.selectionStart ?? currentText.length
-    const { next, nextCaret } = insertAtCaret(currentText, caret, fragment, el.selectionEnd ?? caret)
-    setText(next)
-    syncLiveDraft(next, editingEntryId, attachments)
-    focusWithCaret(el, nextCaret)
-  }, [text, editingEntryId, attachments, syncLiveDraft, textareaRef])
-
-  const send = useCallback(async (busyMode: WhenBusy = 'steer', strict = false): Promise<void> => {
-    const draft = liveDraftRef.current.text
-    const payload = draft.trim()
-    if (payload === '' || sendingRef.current || uploadingRef.current > 0 || commandPendingRef.current) {
-      if (strict) throw new Error('当前草稿为空或输入区已有在途操作')
-      return
-    }
-    // 未保存环境或环境保存中不允许发送（同时覆盖 Enter 与发送按钮）
-    if (envBlockedRef.current) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'warning',
-        title: '请先保存或取消起始环境修改',
-        body: envBlocker.reason ?? undefined,
-        conversationId: conversation.id,
-      })
-      if (strict) throw new Error('请先保存或取消起始环境修改')
-      return
-    }
-    // 插件斜杠命令：草稿首 token 精确命中满足作用域的插件命令时执行（仅非编辑态）。
-    const pluginCmd = matchExactPluginSlash(payload, slashPluginCommands)
-    const editing = editingEntryId !== null
-    if (!editing && pluginCmd !== undefined) {
-      commandPendingRef.current = true
-      const before = liveDraftRef.current
-      try {
-        await runPluginCommandFrom(pluginCmd)
-        if (shouldRestoreEditOnFailure(liveDraftRef.current, before)) {
-          setText('')
-          syncLiveDraft('', editingEntryId, attachments)
-        }
-      } catch (error) {
-        if (strict) throw error
-      } finally {
-        commandPendingRef.current = false
-      }
-      return
-    }
-    // 编辑态正文中出现 /new 等管理命令只是被编辑消息的文本，不立即执行；
-    // 仅非编辑输入才作为会话管理命令立即执行。
-    const slash = editing ? false : runSlashCommand(payload)
-    if (slash) {
-      setText('')
-      syncLiveDraft('', editingEntryId, attachments)
-      return
-    }
-    const targetEntryId = editingEntryId
-    const sentAttachments = new Set(attachments.map((attachment) => attachment.artifactId))
-    // 冻结发送瞬间草稿：失败时只有 Composer 仍处于乐观清空后的期望状态
-    // （用户未新输入、未选其他目标、未改附件）才回滚，旧 target 不得误绑新输入。
-    const frozenDraft = draftVersionOf(draft, targetEntryId, attachments)
-    const expectedAfterClear = draftVersionOf('', null, attachments)
-    sendingRef.current = true
-    setSending(true)
-    onSendingChange?.(true)
-    setText('')
-    setPopover(null)
-    // 乐观退出编辑态；失败时在 catch 中按冻结版本回滚
-    setEditingEntryId(null)
-    syncLiveDraft('', null, attachments)
-    try {
-      await conversationsApi.submitInput(conversation.id, {
-        text: payload,
-        origin: 'human',
-        ...(targetEntryId !== null ? { replaceFromEntryId: targetEntryId } : working ? { whenBusy: busyMode } : {}),
-        ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.artifactId) } : {}),
-      })
-      setAttachments((current) => {
-        const next = current.filter((attachment) => !sentAttachments.has(attachment.artifactId))
-        // 已发送附件从活版本移除，避免残留误导 onlyIfEmpty 回填与回滚判定。
-        syncLiveDraft(liveDraftRef.current.text, liveDraftRef.current.targetEntryId, next)
-        return next
-      })
-    } catch (err) {
-      // 仅当 Composer 仍处于乐观清空后的期望状态才恢复文本与编辑目标；
-      // 用户已开始新输入 / 已选择其他编辑目标则保持现状，旧 target 不回灌。
-      const restore = shouldRestoreEditOnFailure(liveDraftRef.current, expectedAfterClear)
-      if (restore) {
-        setText(draft)
-        if (frozenDraft.targetEntryId !== null) setEditingEntryId(frozenDraft.targetEntryId)
-        syncLiveDraft(draft, frozenDraft.targetEntryId, attachments)
-      }
-      notifyError(targetEntryId !== null ? '更新消息失败' : '发送失败', err)
-      if (strict) throw err
-    } finally {
-      sendingRef.current = false
-      setSending(false)
-      onSendingChange?.(false)
-    }
-  }, [text, attachments, editingEntryId, working, runSlashCommand, syncLiveDraft, onSendingChange, notifyError, store, conversation.id, uploadingRef, envBlocker, runPluginCommandFrom, slashPluginCommands])
-
-  // 显式文本提交：不消费草稿 / 编辑锚点 / 附件（插件命令结果等非用户键入内容）。
-  // 与 send 共用 sendingRef 并发保护与 onSendingChange 在途反馈；失败如实 reject。
-  const sendExplicit = useCallback(async (raw: string, whenBusy?: WhenBusy): Promise<void> => {
-    const payload = raw.trim()
-    if (payload === '' || sendingRef.current || uploadingRef.current > 0) {
-      throw new Error('composer_send_invalid')
-    }
-    if (envBlockedRef.current) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'warning',
-        title: '请先保存或取消起始环境修改',
-        body: envBlocker.reason ?? undefined,
-        conversationId: conversation.id,
-      })
-      throw new Error('composer_env_blocked')
-    }
-    sendingRef.current = true
-    setSending(true)
-    onSendingChange?.(true)
-    try {
-      await conversationsApi.submitInput(conversation.id, {
-        text: payload,
-        origin: 'human',
-        ...(working ? { whenBusy: whenBusy ?? 'steer' } : {}),
-      })
-    } catch (err) {
-      notifyError('发送失败', err)
-      throw err
-    } finally {
-      sendingRef.current = false
-      setSending(false)
-      onSendingChange?.(false)
-    }
-  }, [working, onSendingChange, notifyError, store, conversation.id, uploadingRef, envBlocker])
+  }, [availableSkills, slashPluginCommands, runPluginCommand])
 
   const composer = useComposerController({
     text,
-    readDraft: () => liveDraftRef.current.text,
+    readDraft: readLiveDraft,
     attachments,
     sending,
     textareaRef,
@@ -1210,12 +355,8 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       const target = lastEditableHumanInput(detail?.entries ?? [])
       if (target !== undefined) {
         e.preventDefault()
-        setText(target.text)
-        setEditingEntryId(target.entryId ?? null)
-        // ↑ 进入历史编辑同样整体替换附件（含空附件清空旧草稿）
-        setAttachments(attachmentsOfEditTarget(target))
-        syncLiveDraft(target.text, target.entryId ?? null, attachmentsOfEditTarget(target))
-        requestAnimationFrame(() => textareaRef.current?.focus())
+        // ↑ 进入历史编辑：整体替换文本 / 锚点 / 附件（含空附件清空旧草稿）
+        applyHistoryEdit(target)
       }
     }
   }
@@ -1245,7 +386,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             key={`env-${conversation.id}`}
             conversation={conversation}
             sendBlocked={sendInFlight}
-            onBlockerChange={handleEnvBlockerStable}
+            onBlockerChange={handleEnvBlocker}
           />
         ) : null}
         <div
@@ -1289,11 +430,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                       className="btn btn-ghost btn-icon-xs"
                       title="移除附件"
                       aria-label={`移除附件 ${att.name}`}
-                      onClick={() => setAttachments((prev) => {
-                        const next = prev.filter((a) => a.artifactId !== att.artifactId)
-                        syncLiveDraft(text, editingEntryId, next)
-                        return next
-                      })}
+                      onClick={() => removeAttachment(att.artifactId)}
                     >
                       <HelmIcon name="x" size={10} />
                     </button>
@@ -1310,8 +447,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             rows={1}
             placeholder={getComposerPlaceholder(working, isMobile)}
             onChange={(e) => {
-              setText(e.target.value)
-              syncLiveDraft(e.target.value, editingEntryId, attachments)
+              setDraftState(e.target.value)
               detectPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
             }}
             onKeyUp={(e) => {
@@ -1432,110 +568,16 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                 </details>
               ) : null}
             </div>
-            <span className="composer-toolbar-right">
-              {!working || editingEntryId !== null ? (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary btn-pill btn-send"
-                  disabled={sending || uploading > 0 || envBlocker.blocked || text.trim() === ''}
-                  onClick={() => void send()}
-                  title={editingEntryId !== null
-                    ? working
-                      ? '更新并重新生成（将覆盖此条及后续对话并停止当前执行） (Enter)'
-                      : '更新并重新生成（将覆盖此条及后续对话） (Enter)'
-                    : envBlocker.blocked
-                      ? envBlocker.reason ?? '请先保存或取消起始环境修改'
-                      : '发送 (Enter)；Shift+Enter 换行'}
-                  aria-label={editingEntryId !== null ? '更新并重新生成' : uploading > 0 ? `上传中 (${uploading})` : '发送'}
-                >
-                  <HelmIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
-                </button>
-              ) : text.trim() === '' ? (
-                <Tooltip content="停止当前执行" side="top">
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-danger btn-pill btn-send composer-abort-button"
-                    onClick={() => void abortTurn()}
-                    title="停止当前执行"
-                    aria-label="停止当前执行"
-                  >
-                    <HelmIcon name="square" size={14} />
-                  </button>
-                </Tooltip>
-              ) : (
-                <DropdownMenuRoot>
-                  <div className="composer-split-send">
-                    <button
-                      type="button"
-                      className="composer-split-main composer-steer-action"
-                      disabled={sending || uploading > 0 || envBlocker.blocked}
-                      onClick={() => void send('steer')}
-                      title="下一个步骤边界注入（Enter）"
-                      aria-label={uploading > 0 ? `上传中 (${uploading})` : editingEntryId !== null ? '更新并重新生成' : '插话引导'}
-                    >
-                      <HelmIcon
-                        name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
-                        size={14}
-                        className={sending || uploading > 0 ? 'spin-slow' : undefined}
-                      />
-                      <span className="composer-action-label">{editingEntryId !== null ? '更新' : '插话'}</span>
-                    </button>
-                    <div className="composer-split-divider" />
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        className="composer-split-trigger"
-                        disabled={sending || uploading > 0 || envBlocker.blocked}
-                        aria-label="选择发送策略"
-                        title="选择发送策略（插话 / 排队）"
-                      >
-                        <HelmIcon name="chevron-down" size={12} />
-                      </button>
-                    </DropdownMenuTrigger>
-                  </div>
-                  <DropdownMenuContent portalled align="end" side="top" sideOffset={6} className="composer-busy-dropdown-content">
-                    <DropdownMenuItem
-                      className="composer-busy-menu-item"
-                      onClick={() => void send('steer')}
-                    >
-                      <HelmIcon name="corner-down-right" size={14} className="composer-busy-menu-icon" />
-                      <div className="composer-busy-menu-text">
-                        <div className="composer-busy-menu-title">插话引导</div>
-                        <div className="composer-busy-menu-desc">下一个步骤边界注入</div>
-                      </div>
-                      <span className="composer-busy-menu-kbd">Enter</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      className="composer-busy-menu-item composer-queue-button"
-                      onClick={() => void send('followUp')}
-                      title="当前回合结束后处理（⌘/Ctrl+Enter）"
-                      aria-label="排队发送"
-                    >
-                      <HelmIcon name="clock" size={14} className="composer-busy-menu-icon" />
-                      <div className="composer-busy-menu-text">
-                        <div className="composer-busy-menu-title">排队发送</div>
-                        <div className="composer-busy-menu-desc">当前回合结束后处理</div>
-                      </div>
-                      <span className="composer-busy-menu-kbd">⌘/Ctrl+Enter</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      danger
-                      className="composer-busy-menu-item"
-                      onClick={() => void abortTurn()}
-                      title="停止当前执行"
-                      aria-label="停止当前执行"
-                    >
-                      <HelmIcon name="square" size={13} className="composer-busy-menu-icon" />
-                      <div className="composer-busy-menu-text">
-                        <div className="composer-busy-menu-title">停止执行</div>
-                        <div className="composer-busy-menu-desc">立即中止当前回合</div>
-                      </div>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenuRoot>
-              )}
-            </span>
+            <ComposerSendControls
+              working={working}
+              editingEntryId={editingEntryId}
+              sending={sending}
+              uploading={uploading}
+              envBlocker={envBlocker}
+              text={text}
+              send={send}
+              abortTurn={abortTurn}
+            />
           </div>
         </div>
       </div>
