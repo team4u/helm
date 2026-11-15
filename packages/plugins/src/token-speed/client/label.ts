@@ -2,9 +2,13 @@
  * builtin:token-speed 速率徽标的纯展示模型（无组件导出，Fast Refresh 友好）。
  *
  * 诚实性纪律：
+ * - 一切速率都是基于 live 节流帧（75ms 帧 × partial 提交 100ms 双重粒度）
+ *   的观测估算——即使终态 token 数经 provider usage 对账准确，时间仍是帧
+ *   观测近似，徽标文本一律加 ≈ 前缀（移动端无 title 也能知道是估算），
+ *   绝不暗示服务器精确解码时间；
  * - 无可靠速率（工具暂停 / 窗口滑空 / 首字前 / 终态无可测累计）不渲染任何
  *   占位文本，绝不以 0.0 tok/s 冒充真实速率；
- * - tooltip 必须区分「实时滑动窗口」与「终态对账」口径，并如实标注：
+ * - tooltip 必须区分「实时滑动窗口观测」与「终态对账」口径，并如实标注：
  *   不含首字延迟与工具执行时间、估算口径（provider / estimate / mixed）、
  *   TTFT 起点是插件首次观测（非请求精确起点）。
  */
@@ -49,13 +53,13 @@ export function tokenSpeedLabelOf(status: {
       : ''
   if (status.phase === 'settled') {
     return {
-      text: `${tps.toFixed(1)} tok/s`,
-      title: `最近回合解码 ${tps.toFixed(1)} tok/s（对账：${tokens} tok / ${secondsLabel(status.decodeMs)} 解码净耗时，口径 ${source}；不含首字延迟与工具执行${ttft}）`,
+      text: `≈${tps.toFixed(1)} tok/s`,
+      title: `最近回合解码 ≈${tps.toFixed(1)} tok/s（对账 ${tokens} tok / 观测解码净耗时 ${secondsLabel(status.decodeMs)}，口径 ${source}；时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行${ttft}）`,
     }
   }
   const windowSeconds = status.windowMs / 1000
   return {
-    text: `${tps.toFixed(1)} tok/s`,
-    title: `实时解码 ${tps.toFixed(1)} tok/s（${windowSeconds.toFixed(windowSeconds < 10 ? 1 : 0)}s 滑动窗口，口径 ${source}；不含首字延迟与工具执行；已生成 ${tokens} tok / 解码 ${secondsLabel(status.decodeMs)}${ttft}）`,
+    text: `≈${tps.toFixed(1)} tok/s`,
+    title: `实时解码 ≈${tps.toFixed(1)} tok/s（${windowSeconds.toFixed(windowSeconds < 10 ? 1 : 0)}s 滑动窗口流式观测速率，口径 ${source}；时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行；已生成 ${tokens} tok / 观测解码 ${secondsLabel(status.decodeMs)}${ttft}）`,
   }
 }

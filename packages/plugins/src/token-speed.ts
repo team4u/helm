@@ -3,11 +3,10 @@
  *
  * 职责边界（机制与策略分离）：
  * - 内核只透传 ConversationLive.generation 通用流式事实（taskId + attempt +
- *   受限
- *   message 投影），零速率计算；本插件消费这些事实自行推导全部策略：
+ *   受限 message 投影），零速率计算；本插件消费这些事实自行推导全部策略：
  *   时间滑动窗口速率、chars/4 估算、TTFT（起点=首次观测，不伪造）、
- *   burst/stall 平滑、provider usage 终值对账、工具执行时间剔除（见
- *   tracker.ts）；停用本插件不产生任何额外内核计算或持久写放大；
+ *   burst/stall 平滑、按 taskId 精确对账、工具执行时间剔除（见 tracker.ts）；
+ *   停用本插件不产生任何额外内核计算或持久写放大；
  * - 高频会话级状态只进 public sessionDoc（专用 SSE 按需订阅，写入按
  *   250ms 节流；首测 / 阶段变化 / 终态立即写），绝不进全局 ctx.doc 或
  *   conversation summary；
@@ -17,18 +16,28 @@
  *
  * 事件时序事实（内核观察链路，跨同提交折叠稳定）：
  * - conversation.entry（pi.assistant 最终 usage）先于同提交的 conversation.live
- *   帧到达——完成事实按 taskId 精确关联到段（失败尝试计数剔除，无身份
- *   entry 不关联）；
- * - pi-durable 每个工具轮 handOver 换 generation 任务，回合内每个模型请求
- *   各结算一次 turn_settled：payload.conversation.status 仍为 working 表示
- *   链延续（继续累计）；非 working 为链终点（终态发布 + 下一 generation 帧
- *   重置链）。
+ *   帧到达——完成事实按 taskId 精确关联到段（失败尝试计数剔除，无 taskId 的
+ *   entry 身份不明不关联）；
+ * - pi-durable 每个工具轮 handOver 换 generation 任务（live.run.taskId 变化，
+ *   generation.taskId 同源），回合内每个模型请求各结算一次 turn_settled：
+ *   payload.conversation.status 仍为 working 表示链延续（继续累计）；非 working
+ *   为链终点（终态发布 + 下一 generation 帧重置链）。
+ *
+ * 生命周期与清理语义（全部是派生测量，可由新流量重建，无迁移无回退）：
+ * - 启用周期开始（服务 prepare 屏障，先于任何 start / 输入恢复）：清空上一
+ *   周期遗留的全部 speed 会话文档——重启或中途启用拿不到完整测量，宁可显示
+ *   空，绝不把上周期的 decoding/tools 态冒充当前实时；
+ * - pi.reset / pi.compaction / helm.rewind 落库：旧上下文已失效，彻底清空该
+ *   会话速率状态，不回读旧上下文、不回退旧 TPS；
+ * - 失败 / 中止回合（turn_settled outcome）：直接清空当前测量，未完成回答
+ *   绝不冒充正常终态；运行期 completed 终态保留显示到下一回合首测覆盖。
  */
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { COMPOSER_STATUS_SLOT, HelmError, type PluginDefinition } from '@helm/protocol'
 import {
+  CONTEXT_INVALIDATION_ENTRY_KINDS,
   DEFAULT_SLIDING_WINDOW_MS,
   DOC_WRITE_INTERVAL_MS,
   MAX_SLIDING_WINDOW_MS,
@@ -37,6 +46,7 @@ import {
   TOKEN_SPEED_PLUGIN_ID,
   asAssistantCompletion,
   asConversationDeletedId,
+  asConversationEntryEnvelope,
   asConversationLiveFrame,
   type TokenSpeedStatus,
 } from './token-speed/contracts.js'
@@ -49,8 +59,7 @@ function resolveTokenSpeedClientRoot(): string {
   const here = dirname(fileURLToPath(import.meta.url))
   const local = join(here, 'token-speed', 'client')
   if (existsSync(local)) return local
-  const pkgRoot = dirname(here)
-  const srcFallback = join(pkgRoot, 'src', 'token-speed', 'client')
+  const srcFallback = join(dirname(here), 'src', 'token-speed', 'client')
   if (existsSync(srcFallback)) return srcFallback
   throw new HelmError(
     'token_speed_plugin_client_missing',
@@ -64,7 +73,7 @@ export function createTokenSpeedPlugin(): PluginDefinition {
     id: TOKEN_SPEED_PLUGIN_ID,
     name: 'Token 速率',
     description:
-      '输入区状态行的实时解码速率（tok/s）：滑动窗口速率、首字延迟与终态对账；策略可选启用，内核零计算。',
+      '输入区状态行的实时解码速率（tok/s）：流式观测速率、首字延迟与终态对账（节流帧观测估算，徽标以 ≈ 标注）。',
     icon: 'gauge',
     version: '0.1.0',
     clientRoot: resolveTokenSpeedClientRoot(),
@@ -126,6 +135,20 @@ export function createTokenSpeedPlugin(): PluginDefinition {
       const nowOf = (fallback: number): number =>
         Number.isFinite(fallback) && fallback > 0 ? fallback : Date.now()
 
+      /** 彻底清空某会话的速率状态（内存态 + 会话文档）。会话行已消失时文档
+       * 删除按 not_found 容忍（会话 id 单调不复用，残留不可达），其余错误如实
+       * 上抛。上下文失效 marker / 失败中止回合 / 会话删除共用。 */
+      const clearConversationState = (conversationId: number): void => {
+        trackers.delete(conversationId)
+        lastWriteAt.delete(conversationId)
+        settledChains.delete(conversationId)
+        try {
+          speedDoc.delete(conversationId)
+        } catch (error) {
+          if (!(error instanceof HelmError && error.status === 404)) throw error
+        }
+      }
+
       // 实时帧：驱动状态机并发布节流文档。
       ctx.host.onEvent('conversation.live', (raw) => {
         const frame = asConversationLiveFrame(raw)
@@ -146,12 +169,22 @@ export function createTokenSpeedPlugin(): PluginDefinition {
         publish(frame.conversationId, status, force, now)
       })
 
-      // 最终 usage 对账：pi.assistant entry 先于同提交 live 帧到达；按 taskId
-      // 精确关联到段（无 taskId 的 entry 身份不明，不关联不猜测）。
+      // 落库条目：先校验信封与边界 marker。pi.reset / pi.compaction /
+      // helm.rewind 表示旧上下文已失效——清空该会话全部速率状态，不回读旧
+      // 上下文、不回退旧 TPS；pi.assistant 完成事实（taskId / usage /
+      // stopReason）按请求身份精确对账（成败处置归策略层，此处只透传事实）。
       ctx.host.onEvent('conversation.entry', (raw) => {
+        const envelope = asConversationEntryEnvelope(raw)
+        if (envelope === undefined) return
+        const { conversationId, kind } = envelope
+        if (CONTEXT_INVALIDATION_ENTRY_KINDS.has(kind)) {
+          clearConversationState(conversationId)
+          return
+        }
+        if (kind !== 'pi.assistant') return
         const completion = asAssistantCompletion(raw)
         if (completion === undefined) return
-        trackers.get(completion.conversationId)?.noteCompletion({
+        trackers.get(conversationId)?.noteCompletion({
           taskId: completion.taskId,
           entryId: completion.entryId,
           usageOutput: completion.usageOutput,
@@ -159,10 +192,15 @@ export function createTokenSpeedPlugin(): PluginDefinition {
         })
       })
 
-      // 回合结算：working = 工具轮 handOver 的中间结算（链继续）；其余为链
-      // 终点——发布终态并等待下一 generation 帧重置链。
+      // 回合结算：working = 工具轮 handOver 的中间结算（链继续）；
+      // failed / aborted = 未完成回答，绝不冒充正常终态，直接清空当前测量；
+      // 其余 completed 为链终点——发布终态并等待下一 generation 帧重置链。
       ctx.hook.onTurnSettled((payload) => {
         const conversationId = payload.conversation.id
+        if (payload.outcome === 'failed' || payload.outcome === 'aborted') {
+          clearConversationState(conversationId)
+          return
+        }
         if (payload.conversation.status === 'working') return
         const tracker = trackers.get(conversationId)
         settledChains.add(conversationId)
@@ -178,14 +216,33 @@ export function createTokenSpeedPlugin(): PluginDefinition {
       ctx.host.onEvent('conversation.deleted', (raw) => {
         const conversationId = asConversationDeletedId(raw)
         if (conversationId === undefined) return
-        trackers.delete(conversationId)
-        lastWriteAt.delete(conversationId)
-        settledChains.delete(conversationId)
-        try {
-          speedDoc.delete(conversationId)
-        } catch (error) {
-          if (!(error instanceof HelmError && error.status === 404)) throw error
-        }
+        clearConversationState(conversationId)
+      })
+
+      // 生命周期服务：本插件数据全部是派生测量（可由新流量重建）。启用周期
+      // 开始时（全局 prepare 屏障，先于任何服务 start / 输入恢复）清空上一
+      // 周期遗留的 speed 会话文档——重启或中途启用拿不到完整测量，宁可显示
+      // 空，绝不把上周期的 decoding/tools 实时态冒充当前；无迁移、无回退。
+      // stop 清内存态（句柄随周期拆除，无在途后台任务可等）。
+      ctx.service({
+        id: 'speed-lifecycle',
+        prepare: () => {
+          for (const conversationId of speedDoc.listConversationIds()) {
+            try {
+              speedDoc.delete(conversationId)
+            } catch (error) {
+              if (!(error instanceof HelmError && error.status === 404)) throw error
+            }
+          }
+        },
+        start: () => {
+          // 无后台任务可启动（事件驱动 + 只读展示）；周期清理已在 prepare 完成。
+        },
+        stop: () => {
+          trackers.clear()
+          lastWriteAt.clear()
+          settledChains.clear()
+        },
       })
 
       // ---- 声明式 UI：宿主输入区状态行插槽（只读速率文本） ------------------

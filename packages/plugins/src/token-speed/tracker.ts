@@ -242,7 +242,7 @@ export class ConversationTokenSpeedTracker {
   }
 
   /** 采纳一帧 conversation.live（generation 缺席 = 工具阶段 / 段间间隙）。 */
-  observeFrame(now: number, frame: { generation?: GenerationFrame; hasTools: boolean }): void {
+  observeFrame(now: number, frame: { generation?: GenerationFrame; hasTools?: boolean }): void {
     const generation = frame.generation
     if (generation === undefined) {
       this.phase = 'tools'

@@ -134,6 +134,7 @@ describe('conversation.live generation 事件边界校验', { timeout: 60_000 },
     return new EventHub({
       initialSeq: 0,
       snapshot: () => ({
+        bootId: 'test-boot',
         seq: 0,
         conversations: [],
         pendingAsks: [],

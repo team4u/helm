@@ -141,7 +141,7 @@ test('边界：完成事实晚于段关闭帧到达（entry 在 tools 帧之后�
   tracker.observeFrame(200, { hasTools: true })
   tracker.noteCompletion(success(1, 120))
   tracker.observeFrame(300, { generation: { taskId: 2, attempt: 1 } })
-  tracker.observeFrame(400, { generation: { taskId: 2, attempt: 1, message: message({ text: 'b'.repeat(400) }, 60) } })
+  tracker.observeFrame(400, { generation: { taskId: 2, attempt: 1, message: message({ text: 'b'.repeat(400), usageOutput: 60 }) } })
   tracker.noteCompletion(success(2, 60))
   const status = tracker.liveStatus(400)!
   assert.equal(status.outputTokens, 180, '两种观察顺序（先关后关）均按 taskId 正确对账')
@@ -150,9 +150,9 @@ test('边界：完成事实晚于段关闭帧到达（entry 在 tools 帧之后�
 test('精度：中途接入段被整条 usage 对账——计数入总量、不进终态速率分子分母', { timeout: 60_000 }, () => {
   const tracker = trackerOf()
   // 插件启用时请求已流过大半（首帧即带 8000 chars 历史内容，无空 generation 基线）。
-  tracker.observeFrame(0, { generation: { taskId: 9, attempt: 1, message: message({ text: 'h'.repeat(8000) }, 2000) } })
+  tracker.observeFrame(0, { generation: { taskId: 9, attempt: 1, message: message({ text: 'h'.repeat(8000), usageOutput: 2000 }) } })
   // 只测得 suffix：100ms 内新增 80 chars（20 tok 估算）。
-  tracker.observeFrame(100, { generation: { taskId: 9, attempt: 1, message: message({ text: 'h'.repeat(8080) }, 2020) } })
+  tracker.observeFrame(100, { generation: { taskId: 9, attempt: 1, message: message({ text: 'h'.repeat(8080), usageOutput: 2020 }) } })
   tracker.noteCompletion(success(9, 2000))
   const settled = tracker.settle(200)!
   assert.equal(settled.outputTokens, 2000, '权威整条总量如实计入 token 总量')
@@ -163,7 +163,7 @@ test('精度：单增长帧段（跨度 0）不进速率对——终态无速率
   const tracker = trackerOf()
   // 极短回复：整个响应在一个观测帧内到达（节流合并）。
   tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
-  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message({ text: 'a'.repeat(400) }, 100) } })
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message({ text: 'a'.repeat(400), usageOutput: 100 }) } })
   tracker.noteCompletion(success(1, 100))
   const settled = tracker.settle(200)!
   assert.equal(settled.outputTokens, 100)

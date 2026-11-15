@@ -54,6 +54,7 @@ Helm 是极简持久微内核多智能体编排系统：内核只保留持久会
 | [动态模型网关](plugins/magpie.md) | `builtin:magpie`：多协议分发与模型目录热重载 |
 | [JSON 卡片渲染](plugins/json-render.md) | `builtin:json-render`：声明式 JSON Spec 渲染原语与技能 |
 | [Mermaid 图表渲染](plugins/mermaid.md) | `builtin:mermaid`：聊天内 Mermaid 围栏渲染 |
+| [Token 速率徽标](plugins/token-speed.md) | `builtin:token-speed`：输入区状态行实时解码速率（流式观测估算，默认停用） |
 | [自定义插件开发实战](plugins/plugin-development.md) | 前后端全栈插件开发、调试与发布 |
 
 ### 命令手册与开发规范

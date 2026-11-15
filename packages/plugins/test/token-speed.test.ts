@@ -2,15 +2,19 @@
  * builtin:token-speed 插件行为测试：
  *
  * 1. 纯算法层（tracker.ts，注入时间）：滑动窗口（正常 / 最小跨度 / burst-stall
- *    延伸 / 跨段不延伸 / 窗口滑空）、累计快照差分与重复帧、attempt / 内容回退
- *    段重置（重试不重复累计）、TTFT 与 decode 分离、工具阶段解码暂停（段间
- *    不拼接间隙）、provider usage 增量优先 + 最终 entry 对账（FIFO、entry 先于
- *    live 帧）、中途接入基线（不制造首帧尖峰、TTFT 省略）、settle/resetChain、
- *    source 口径（provider / estimate / mixed）；
+ *    延伸 / 跨段不延伸 / 窗口滑空）、累计快照差分与重复帧、身份变化段重置
+ *    （同任务重试 / 跨任务 handOver 不重复累计）、TTFT 与 decode 分离、
+ *    工具阶段解码暂停（段间不拼接间隙）、provider usage 增量优先 + 最终
+ *    entry 按 taskId 精确对账（entry 先于 / 晚于段关闭帧）、中途接入基线
+ *    （不制造首帧尖峰、TTFT 省略；整条 usage 对账不进终态速率）、
+ *    settle/resetChain、source 口径（provider / estimate / mixed）；
  * 2. 插件装配层（真 PluginHost + 事件替身）：conversation.live / entry /
  *    deleted 事件驱动 sessionDoc 发布（节流、阶段变化立即写、终态写）、
- *    turn_settled working（链延续）与终态（链结算 + 下一 generation 帧重置）、
- *    UI 插槽注册到 COMPOSER_STATUS_SLOT、停用后监听与文档写入停止。
+ *    上下文失效 marker（pi.reset / pi.compaction / helm.rewind）清空、
+ *    failed / aborted 回合清空（不冒充终态）、turn_settled working（链延续）
+ *    与终态（链结算 + 下一 generation 帧重置）、UI 插槽注册到
+ *    COMPOSER_STATUS_SLOT、生命周期（prepare 清上周期文档 / stop 清内存态）、
+ *    停用后监听与文档写入停止。
  */
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -27,6 +31,7 @@ import {
   DOC_WRITE_INTERVAL_MS,
   TOKEN_SPEED_DOC,
   TOKEN_SPEED_PLUGIN_ID,
+  asAssistantCompletion,
   asConversationLiveFrame,
   type TokenSpeedStatus,
 } from '../src/token-speed/contracts.js'
@@ -254,18 +259,21 @@ test('展示模型：实时/终态口径区分与诚实标注；无可靠速率�
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'tools' }), null)
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 0 }), null)
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'settled', tps: Number.NaN }), null)
-  // 实时：滑动窗口口径 + 口径标注 + TTFT 首次观测声明。
+  // 实时：滑动窗口口径 + 口径标注 + TTFT 首次观测声明；一切速率均 ≈ 观测估算
+  //（文本前缀即可见，移动端不依赖 title）。
   const live = tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 52.35, ttftMs: 640 })!
-  assert.equal(live.text, '52.4 tok/s')
-  assert.match(live.title, /实时解码 52\.4 tok\/s/)
-  assert.match(live.title, /1\.0s 滑动窗口/)
+  assert.equal(live.text, '≈52.4 tok/s')
+  assert.match(live.title, /实时解码 ≈52\.4 tok\/s/)
+  assert.match(live.title, /1\.0s 滑动窗口流式观测速率/)
   assert.match(live.title, /供应商 usage \+ 字符估算混合/)
+  assert.match(live.title, /时间为节流帧观测近似，非服务器精确解码时间/)
   assert.match(live.title, /不含首字延迟与工具执行/)
-  assert.match(live.title, /首字延迟 640ms（起点为插件首次观测，非请求精确起点）/) 
-  // 终态：对账口径（不再提滑动窗口）。
+  assert.match(live.title, /首字延迟 640ms（起点为插件首次观测，非请求精确起点）/)
+  // 终态：对账口径（不再提滑动窗口）；时间仍为帧观测近似。
   const settled = tokenSpeedLabelOf({ ...base, phase: 'settled', tps: 125 })!
-  assert.equal(settled.text, '125.0 tok/s')
-  assert.match(settled.title, /最近回合解码 125\.0 tok\/s（对账/)
+  assert.equal(settled.text, '≈125.0 tok/s')
+  assert.match(settled.title, /最近回合解码 ≈125\.0 tok\/s（对账/)
+  assert.match(settled.title, /观测解码净耗时/)
   assert.doesNotMatch(settled.title, /滑动窗口/)
   // 无 TTFT（中途接入）：tooltip 不编造首字延迟测量值。
   assert.doesNotMatch(tokenSpeedLabelOf({ ...base, phase: 'settled', tps: 10 })!.title, /首字延迟 \\d+ms/)
@@ -289,11 +297,49 @@ test('事件守卫：非法载荷丢弃（asConversationLiveFrame），合法最
     undefined,
     'message 形状非法拒绝',
   )
+  assert.equal(
+    asConversationLiveFrame({ type: 'conversation.live', live: { conversationId: 1, text: '', tools: [], updatedAt: 1, generation: { taskId: 'task-9', attempt: 1 } } }),
+    undefined,
+    'taskId 非正整数（如字符串）整体拒绝（请求身份事实存在即必须合法）',
+  )
   const frame = asConversationLiveFrame({
     type: 'conversation.live',
     live: { conversationId: 2, text: '', tools: [], updatedAt: 42, generation: { taskId: 9, attempt: 3 } },
   })
   assert.deepEqual(frame, { conversationId: 2, generation: { taskId: 9, attempt: 3 }, hasTools: false, updatedAt: 42 })
+})
+
+test('事件守卫：asAssistantCompletion 抽取通用完成事实（role/stopReason 校验，不过滤成败）', { timeout: 60_000 }, () => {
+  const base = { type: 'conversation.entry', conversationId: 3 }
+  // 信封 / kind / model 形状 / role / stopReason 逐层校验。
+  assert.equal(asAssistantCompletion({ ...base, entry: { id: '1', kind: 'pi.user', model: [{ role: 'user' }] } }), undefined, '非 pi.assistant 不消费')
+  assert.equal(
+    asAssistantCompletion({ ...base, entry: { id: '1', kind: 'pi.assistant', model: [{ role: 'user', stopReason: 'stop' }] } }),
+    undefined,
+    'model[0].role 非 assistant 拒绝',
+  )
+  assert.equal(
+    asAssistantCompletion({ ...base, entry: { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant' }] } }),
+    undefined,
+    '缺 stopReason 的载荷不完整，拒绝',
+  )
+  // 成功终态：taskId（正整数）+ entryId + usage + stopReason 全量事实。
+  assert.deepEqual(
+    asAssistantCompletion({ ...base, entry: { id: '1', kind: 'pi.assistant', taskId: 9, model: [{ role: 'assistant', stopReason: 'stop', usage: { output: 120 } }] } }),
+    { conversationId: 3, taskId: 9, entryId: '1', usageOutput: 120, stopReason: 'stop' },
+  )
+  // 失败 / 中止同样是终结事实（策略层需知道该请求已结束），照实携带不过滤。
+  assert.deepEqual(
+    asAssistantCompletion({ ...base, entry: { id: '2', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'aborted', usage: { output: 40 } }] } }),
+    { conversationId: 3, taskId: undefined, entryId: '2', usageOutput: 40, stopReason: 'aborted' },
+  )
+  // usage 缺失 / 零值不携带（绝不以 0 对账）；taskId 非法形状视为缺省（身份不明）。
+  const noUsage = asAssistantCompletion({ ...base, entry: { id: '3', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'error' }] } })
+  assert.deepEqual(noUsage, { conversationId: 3, taskId: undefined, entryId: '3', usageOutput: undefined, stopReason: 'error' })
+  const zeroUsage = asAssistantCompletion({ ...base, entry: { id: '4', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'stop', usage: { output: 0 } }] } })
+  assert.equal(zeroUsage!.usageOutput, undefined)
+  const badTaskId = asAssistantCompletion({ ...base, entry: { id: '5', kind: 'pi.assistant', taskId: 'task-9', model: [{ role: 'assistant', stopReason: 'stop' }] } })
+  assert.equal(badTaskId!.taskId, undefined)
 })
 
 // ---------------------------------------------------------------------------
@@ -334,8 +380,15 @@ class MemorySessionDocStore {
     const prefix = `${pluginId}\0`
     for (const key of [...this.store.keys()]) if (key.startsWith(prefix)) this.store.delete(key)
   }
-  listConversationIds(): number[] {
-    return []
+  listConversationIds(pluginId: string, name: string): number[] {
+    const prefix = `${pluginId}\0${name}\0`
+    const out: number[] = []
+    for (const key of this.store.keys()) {
+      if (!key.startsWith(prefix)) continue
+      const id = Number(key.slice(prefix.length))
+      if (Number.isInteger(id) && id > 0) out.push(id)
+    }
+    return out
   }
   async flush(): Promise<void> {}
 }
@@ -418,17 +471,22 @@ function liveEvent(conversationId: number, updatedAt: number, generation?: { tas
   }
 }
 
-function entryEvent(conversationId: number, taskId: number, output: number, options?: { stopReason?: string; entryId?: string }): unknown {
+function entryEvent(conversationId: number, taskId: number | undefined, output: number, options?: { stopReason?: string; entryId?: string }): unknown {
   return {
     type: 'conversation.entry',
     conversationId,
     entry: {
-      id: options?.entryId ?? `entry-${conversationId}-${taskId}`,
+      id: options?.entryId ?? `entry-${conversationId}-${taskId ?? 'anon'}`,
       kind: 'pi.assistant',
       ...(taskId !== undefined ? { taskId } : {}),
-      model: [{ role: 'assistant', usage: { output }, ...(options?.stopReason !== undefined ? { stopReason: options.stopReason } : {}) }],
+      model: [{ role: 'assistant', stopReason: options?.stopReason ?? 'stop', usage: { output } }],
     },
   }
+}
+
+/** 上下文失效 marker 条目事件（pi.reset / pi.compaction / helm.rewind）。 */
+function markerEvent(conversationId: number, kind: 'pi.reset' | 'pi.compaction' | 'helm.rewind'): unknown {
+  return { type: 'conversation.entry', conversationId, entry: { id: '10', kind } }
 }
 
 interface Harness {
@@ -584,6 +642,119 @@ test('插件装配：非法事件载荷丢弃，不抛错不写入', { timeout: 
     assert.equal(docOf(5), null)
   } finally {
     await close()
+  }
+})
+
+test('插件装配：空闲时上下文失效 marker（reset/compaction/rewind）清空上一回合 settled 文档与状态机', { timeout: 60_000 }, async () => {
+  const { backend, host, sessionDocs, docOf, close } = await openPlugin()
+  try {
+    const CONV = 6
+    // 先积累一个已结算终态（两次增长帧保证 decodeMs > 0；空闲时徽标显示 settled 值）。
+    await backend.dispatch('conversation.live', liveEvent(CONV, 0, { taskId: 1, attempt: 1 }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 400, { taskId: 1, attempt: 1, message: message([text('a'.repeat(800))]) }))
+    await backend.dispatch('conversation.entry', entryEvent(CONV, 1, 200))
+    await host.runHook('turn_settled', { conversation: conversationOf(CONV, 'done'), inputs: [], outcome: 'completed', settledAt: 500 })
+    assert.equal(docOf(CONV)!.phase, 'settled')
+    // 三种边界 marker 逐个验证：任一到达即彻底清空，不残留旧回合值。
+    for (const kind of ['pi.compaction', 'helm.rewind', 'pi.reset'] as const) {
+      await backend.dispatch('conversation.live', liveEvent(CONV, 600, { taskId: 2, attempt: 1 }))
+      await backend.dispatch('conversation.live', liveEvent(CONV, 700, { taskId: 2, attempt: 1, message: message([text('b'.repeat(400))]) }))
+      await backend.dispatch('conversation.live', liveEvent(CONV, 900, { taskId: 2, attempt: 1, message: message([text('b'.repeat(800))]) }))
+      await backend.dispatch('conversation.entry', entryEvent(CONV, 2, 200))
+      await host.runHook('turn_settled', { conversation: conversationOf(CONV, 'done'), inputs: [], outcome: 'completed', settledAt: 1_000 })
+      assert.equal(docOf(CONV)!.phase, 'settled', `重建终态后验证 ${kind} 清空`)
+      await backend.dispatch('conversation.entry', markerEvent(CONV, kind))
+      assert.equal(docOf(CONV), null, `${kind} 到达后文档清空`)
+      assert.equal(sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, CONV), undefined, `${kind} 后持久行删除`)
+    }
+    // marker 后新回合计数从零开始（旧上下文速率事实不可归属，不回退旧 TPS）。
+    await backend.dispatch('conversation.live', liveEvent(CONV, 1_100, { taskId: 3, attempt: 1 }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 1_200, { taskId: 3, attempt: 1, message: message([text('c'.repeat(40))]) }))
+    assert.equal(docOf(CONV)!.outputTokens, 10, '新回合从零累计，不携带 marker 前测量')
+  } finally {
+    await close()
+  }
+})
+
+test('插件装配：失败 / 中止回合直接清空测量，不冒充正常终态', { timeout: 60_000 }, async () => {
+  const { backend, host, docOf, close } = await openPlugin()
+  try {
+    const CONV = 7
+    const buildMeasurement = async () => {
+      await backend.dispatch('conversation.live', liveEvent(CONV, 0, { taskId: 1, attempt: 1 }))
+      await backend.dispatch('conversation.live', liveEvent(CONV, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
+      await backend.dispatch('conversation.live', liveEvent(CONV, 300, { taskId: 1, attempt: 1, message: message([text('a'.repeat(800))]) }))
+    }
+    // failed：清空，不产出 settled。
+    await buildMeasurement()
+    await host.runHook('turn_settled', { conversation: conversationOf(CONV, 'error'), inputs: [], outcome: 'failed', error: 'provider 503', settledAt: 400 })
+    assert.equal(docOf(CONV), null, 'failed 回合不把未完成回答装成终态')
+    // aborted：同样清空。
+    await buildMeasurement()
+    await host.runHook('turn_settled', { conversation: conversationOf(CONV, 'error'), inputs: [], outcome: 'aborted', settledAt: 500 })
+    assert.equal(docOf(CONV), null, 'aborted 回合不产出终态')
+    // 失败请求的 entry 完成事实（stopReason: aborted）到达也不对账冒充成功。
+    await buildMeasurement()
+    await backend.dispatch('conversation.entry', entryEvent(CONV, 1, 999, { stopReason: 'aborted' }))
+    await host.runHook('turn_settled', { conversation: conversationOf(CONV, 'error'), inputs: [], outcome: 'failed', settledAt: 600 })
+    assert.equal(docOf(CONV), null)
+    // completed 链中点（working）不受影响：失败清理不涉及链延续路径。
+    await buildMeasurement()
+    await host.runHook('turn_settled', { conversation: conversationOf(CONV, 'working'), inputs: [], outcome: 'completed', settledAt: 700 })
+    assert.equal(docOf(CONV)?.phase ?? 'decoding', 'decoding', 'working 中间结算仍不产生终态')
+  } finally {
+    await close()
+  }
+})
+
+test('插件装配：生命周期——prepare 清上周期 sessionDoc，stop 清内存态，停用重启用无过期实时状态', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-token-speed-'))
+  const backend = new EventBackend()
+  const docs = new MemoryDocStore()
+  const sessionDocs = new MemorySessionDocStore()
+  // 预置「上一周期遗留」的持久行：启用周期的 prepare 屏障必须清掉它（宁可
+  // 显示空，绝不把上周期 decoding/tools 态冒充当前实时）。
+  const stale: TokenSpeedStatus = {
+    phase: 'decoding',
+    tps: 88.8,
+    outputTokens: 999,
+    decodeMs: 4_000,
+    source: 'provider',
+    windowMs: 1_000,
+    updatedAt: 1,
+  }
+  sessionDocs.put(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 8, JSON.stringify(stale))
+  sessionDocs.put(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 9, JSON.stringify({ ...stale, phase: 'tools' }))
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    host: backend.base,
+    docs,
+    sessionDocs: sessionDocs as never,
+  })
+  try {
+    await host.register(createTokenSpeedPlugin(), { enabled: true })
+    assert.equal(sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 8), undefined, '注册即启用的 prepare 屏障清掉上周期行')
+    assert.equal(sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 9), undefined)
+    // 本周期新流量写入实时态。
+    await backend.dispatch('conversation.live', liveEvent(8, 0, { taskId: 1, attempt: 1 }))
+    await backend.dispatch('conversation.live', liveEvent(8, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
+    assert.equal(sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 8) !== undefined, true, '本周期实时测量已写入')
+    // 停用：stop 清内存态；持久行保留（会话文档承诺跨停用存活），UI 贡献消失。
+    await host.disable(TOKEN_SPEED_PLUGIN_ID)
+    assert.notEqual(sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 8), undefined, '停用不清持久行（清理在下一周期 prepare）')
+    // 重新启用：prepare 清掉上周期的 decoding 态，绝不立即显示成实时。
+    await host.enable(TOKEN_SPEED_PLUGIN_ID)
+    assert.equal(sessionDocs.get(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, 8), undefined, '重启用周期 prepare 清理上周期实时态')
+    const registry = (host as unknown as { uiRegistry: { getUiByPlugin(id: string): Array<{ spec: { target?: string; id?: string } }> } }).uiRegistry
+    assert.ok(
+      registry.getUiByPlugin(TOKEN_SPEED_PLUGIN_ID).some((item) => item.spec.target === COMPOSER_STATUS_SLOT),
+      '重启用后 UI 插槽贡献恢复',
+    )
+  } finally {
+    await host.dispose()
+    rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
