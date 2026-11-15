@@ -56,6 +56,12 @@ export type JournalWriteInput =
       gate?: JournalGateResult
       /** 自动重试尝试序号；普通 agent 行缺省以保持旧语义。 */
       attempt?: number
+      /** 同一调用的首个 index；重放并发重试时用于还原原尝试槽位。 */
+      invocationIndex?: number
+      prompt?: string
+      /** 当前失败后由人工发起重试。自动重试按 maxAttempts 判断。 */
+      retryKind?: 'manual'
+      skipped?: boolean
       /** 失败原因（已脱敏）。 */
       error?: string
       timedOut?: boolean
@@ -122,6 +128,10 @@ export type WorkflowJournalEntry =
       /** 门禁结果（已脱敏）。 */
       gate?: JournalGateResult
       attempt?: number
+      invocationIndex?: number
+      prompt?: string
+      retryKind?: 'manual'
+      skipped?: boolean
       error?: string
       timedOut?: boolean
     }
@@ -278,6 +288,10 @@ function isAgentEntry(value: unknown): value is Extract<WorkflowJournalEntry, { 
     (e['text'] === undefined || typeof e['text'] === 'string') &&
     (e['resumed'] === undefined || e['resumed'] === true) &&
     (e['attempt'] === undefined || (Number.isInteger(e['attempt']) && (e['attempt'] as number) >= 1)) &&
+    (e['invocationIndex'] === undefined || (Number.isInteger(e['invocationIndex']) && (e['invocationIndex'] as number) >= 0 && (e['invocationIndex'] as number) <= (e['index'] as number))) &&
+    (e['prompt'] === undefined || typeof e['prompt'] === 'string') &&
+    (e['retryKind'] === undefined || e['retryKind'] === 'manual') &&
+    (e['skipped'] === undefined || typeof e['skipped'] === 'boolean') &&
     (e['error'] === undefined || typeof e['error'] === 'string') &&
     (e['timedOut'] === undefined || typeof e['timedOut'] === 'boolean') &&
     (e['execution'] === undefined || isAgentExecutionShape(e['execution'])) &&
@@ -543,6 +557,7 @@ export function redactJournalEntry(
   if (entry.type !== 'agent') return entry
   const out: JournalWriteInput = { ...entry }
   if (out.text !== undefined) out.text = redact(out.text)
+  if (out.prompt !== undefined) out.prompt = redact(out.prompt)
   if (out.execution !== undefined) out.execution = redactValue(out.execution, redact) as JournalAgentExecution
   if (out.error !== undefined) out.error = redact(out.error)
   if (out.gate !== undefined) {

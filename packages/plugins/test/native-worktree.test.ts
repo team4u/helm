@@ -425,7 +425,8 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
       assert.equal(th.mirrors.get(childId)?.cwd, wtPath, '子会话镜像 cwd 应为 worktree 目录')
       const prompt = await childPromptText(th.harness, childId)
       assert.ok(prompt.includes('在 worktree 里执行 pwd'), 'prompt 应原样提交给子会话')
-      // 每次启动都注入 worktree 上下文（干净源也不例外）。n      assert.ok(prompt.includes('<worktree_context>'), `干净源也应注入 worktree 上下文：${prompt.slice(-400)}`)
+      // 每次启动都注入 worktree 上下文（干净源也不例外）。
+      assert.ok(prompt.includes('<worktree_context>'), `干净源也应注入 worktree 上下文：${prompt.slice(-400)}`)
       assert.ok(prompt.includes('git add') && prompt.includes('git commit'), '上下文应提醒结束回合前提交改动')
       // gate 在 worktree 目录内执行：gate 命令校验 pwd 与 worktree 一致
       //（HELM_EXPECTED_WT 由下方第二次调用验证；首次用 gate 已通过的事实）。
