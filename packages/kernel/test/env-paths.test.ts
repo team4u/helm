@@ -9,8 +9,7 @@
  * 结果）；local 用 POSIX 根目录语义下的真实文件读写验证。
  */
 
-import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
-import type { Context } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

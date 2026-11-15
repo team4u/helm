@@ -16,8 +16,7 @@
  * 的结构子集），错误码与诊断文本由 WorktreeAllocator 的调用方契约锁定。
  */
 
-import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
-import type { Context } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
 import type { ExecutionError, FileError, Result, ShellExecResult } from '@earendil-works/pi-durable/env'
 import { HelmError, pathRulesForShape, targetPathShape } from '@helm/protocol'
 

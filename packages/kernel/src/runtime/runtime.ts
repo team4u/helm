@@ -40,7 +40,7 @@ import {
 } from '@helm/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry, ToolRegistration } from '@earendil-works/pi-durable'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import {
   ArtifactService as SvcArtifactService,
   AuthService as SvcAuthService,

@@ -15,7 +15,7 @@
  * - read 的分类文案（目录/特殊文件/超限）在此常量化，local 预检、local
  *   打开后复核与远端 fileInfo 共用，绝不漂移。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { constants as fsConstants } from 'node:fs'
 import { mkdir, open, readFile, realpath, stat, writeFile } from 'node:fs/promises'

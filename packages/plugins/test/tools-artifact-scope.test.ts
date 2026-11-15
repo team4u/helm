@@ -16,8 +16,7 @@
  *    不可覆盖）、Herdr 窗格受管键锁定。
  */
 
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { Context } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import { execSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { open } from 'node:fs/promises'

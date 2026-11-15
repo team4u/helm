@@ -8,7 +8,7 @@
  * - 全量 rewind 覆盖区间扫描汇总（提供给详情投影与 FTS 重建）。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { InboxDoc, LiveDoc, type Harness } from '@earendil-works/pi-durable'
 import type { ConversationAttachmentRef, ConversationInput } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'

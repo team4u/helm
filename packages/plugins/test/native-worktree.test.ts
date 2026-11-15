@@ -79,11 +79,11 @@ function localNodePorts() {
       cwd: string,
       args: readonly string[],
       options: { cwd: string; timeout: number; onOutput: (text: string) => void },
-      context: import('@earendil-works/chord').Context,
+      context: import('@earendil-works/chord/context').Context,
     ) => envOf(cwd).exec([...args], options, context) as never,
-    nodeExists: async (nodeId: string, path: string, context: import('@earendil-works/chord').Context) =>
+    nodeExists: async (nodeId: string, path: string, context: import('@earendil-works/chord/context').Context) =>
       envOf(path).exists(path, context) as never,
-    nodeCanonicalPath: async (nodeId: string, path: string, context: import('@earendil-works/chord').Context) =>
+    nodeCanonicalPath: async (nodeId: string, path: string, context: import('@earendil-works/chord/context').Context) =>
       envOf(path).canonicalPath(path, context) as never,
   }
 }

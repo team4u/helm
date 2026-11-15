@@ -29,7 +29,7 @@
  * worktree-cleanup.ts。本文件只保留核心门面：allocate / registerExternal /
  * 登记/查询转发、per-repo 串行锁与策略校验（受管分支前缀、机密检查）。
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import type { ExecutionError, FileError, Result, ShellExecResult } from '@earendil-works/pi-durable/env'
 import { randomUUID } from 'node:crypto'
 import { HelmError, pathRulesForShape, targetPathShape, type NodePathUsage } from '@helm/protocol'

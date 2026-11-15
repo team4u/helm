@@ -10,7 +10,7 @@
  * - 全新输入提交到 SDK harness 并与 tracker 登记绑定。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import type { Harness } from '@earendil-works/pi-durable'
 import type {
   ArtifactMetadata,

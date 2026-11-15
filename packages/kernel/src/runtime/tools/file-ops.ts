@@ -15,7 +15,7 @@
  * local/远端共享；符合 @helm/protocol EDIT_TOOL_RESULT_SCHEMA）。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { bool, obj, opt, str } from '@earendil-works/pi-schema'
 import { EDIT_TOOL_RESULT_SCHEMA, isAbsoluteTargetPath, type EditToolResult } from '@helm/protocol'

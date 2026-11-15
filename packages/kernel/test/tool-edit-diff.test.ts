@@ -13,8 +13,7 @@
  *    替换（$& 不解释）、失败（不存在/多次）绝不产生成功 diff 且文件不变。
  */
 
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { Context } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import { Ajv } from 'ajv'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

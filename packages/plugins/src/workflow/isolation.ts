@@ -22,8 +22,7 @@
  */
 import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest, type NodePathUsage } from '@helm/protocol'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from './worktree.js'
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { Context } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import { ExecutionError, FileError, type Result, type ShellExecResult } from '@earendil-works/pi-durable/env'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { WorktreeLeaseStore } from './isolation-lease-store.js'

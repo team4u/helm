@@ -17,7 +17,7 @@
  * 失败如实透出原始错误（artifact_read_failed，经脱敏），绝不吞成 not_found。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import { constants as fsConstants } from 'node:fs'

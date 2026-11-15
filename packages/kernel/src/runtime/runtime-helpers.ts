@@ -5,7 +5,7 @@
  * rewind 区间解析、404 会话校验等跨模块复用的小函数。
  */
 import { join } from 'node:path'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import type { ConversationSummary } from '@helm/protocol'
 import type { Models } from '@earendil-works/pi-ai'
