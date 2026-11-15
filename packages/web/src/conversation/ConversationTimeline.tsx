@@ -36,6 +36,7 @@ import { resolveActiveOutlineEntryId } from './outline-model.js'
 import { ToolExpandedBody, ToolRawBody } from './ToolExpandedBody.js'
 import { toolRowStats } from './tool-body-model.js'
 import { calibrateAnchorAfterSmoothScroll, calibrateInitialStickToBottom, type AnchorAlignment } from './timeline-scroll-calibration.js'
+import { captureTimelineScrollAnchor, restoreTimelineScrollAnchor } from './timeline-scroll-anchor.js'
 import {
   OUTLINE_ACTIVE_LINE_PX,
   resolveActiveAnchorIndex,
@@ -1458,6 +1459,18 @@ export function ConversationTimeline({
 
   const loading = !detailsReady
 
+  const loadEarlierEntries = (): void => {
+    stopFollowingBottom()
+    const scroller = scrollRef.current
+    if (scroller === null) return
+    const anchor = captureTimelineScrollAnchor(scroller)
+    setLoadingOlder(true)
+    void store.loadEarlierEntries(conversation.id).finally(() => {
+      setLoadingOlder(false)
+      requestAnimationFrame(() => restoreTimelineScrollAnchor(scroller, anchor))
+    })
+  }
+
   // 引导词仅出现在「确实空白」的会话：历史已加载完且无更早分页、无在途
   // 发送/运行、无排队输入与待审批。任一不满足都不渲染，避免误判。
   const conversationDetail = store.conversationDetails[conversation.id]
@@ -1477,16 +1490,9 @@ export function ConversationTimeline({
   return (
     <div ref={scrollRef} className="timeline-scroll">
       {store.conversationDetails[conversation.id]?.nextCursor && (
-        <button className="btn btn-ghost btn-sm" disabled={loadingOlder} onClick={() => {
-          stopFollowingBottom()
-          const height = scrollRef.current?.scrollHeight ?? 0
-          const top = scrollRef.current?.scrollTop ?? 0
-          setLoadingOlder(true)
-          void store.loadEarlierEntries(conversation.id).finally(() => {
-            setLoadingOlder(false)
-            requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollTop = top + scrollRef.current.scrollHeight - height })
-          })
-        }}>{loadingOlder ? '正在加载历史…' : '加载更早的消息'}</button>
+        <button className="btn btn-ghost btn-sm" disabled={loadingOlder} onClick={loadEarlierEntries}>
+          {loadingOlder ? '正在加载历史…' : '加载更早的消息'}
+        </button>
       )}
       {store.loadErrors[`history:${conversation.id}`] && <p className="callout callout--error" role="alert">{store.loadErrors[`history:${conversation.id}`]}</p>}
       {loading ? (

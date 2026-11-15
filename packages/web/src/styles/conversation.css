@@ -196,7 +196,7 @@
 .timeline-scroll {
   flex: 1;
   overflow-y: auto;
-  overflow-anchor: none;
+  overflow-anchor: auto;
   padding: 20px 24px 28px;
   display: flex;
   flex-direction: column;
@@ -241,8 +241,8 @@
 /* 历史完成行渲染隔离：content-visibility 让浏览器跳过屏外行的渲染与布局，
  * DOM 完整保留（大纲定位 / 搜索高亮 / 插件卡片契约不裁剪条目）。
  * contain-intrinsic-size 的 auto 关键字优先沿用该行最近一次真实高度，
- * 从未渲染过的行按文本规模分桶估高占位，滚动经过时以真实高度纠正
- * （表现为滚动条长度轻微变化，属预期，不承诺零抖动）。
+ * 从未渲染过的行按文本规模分桶估高占位，滚动经过时以真实高度纠正；
+ * 滚动容器保留浏览器原生滚动锚定，尽量维持当前阅读位置。
  * live 流式回合、排队输入、最新 assistant 回合与高亮 /
  * 大纲定位目标行由 JS 侧解除隔离（不加这些类），保证测量与滚动定位精确。 */
 .tl-cv-xs { content-visibility: auto; contain-intrinsic-size: auto 48px; }
