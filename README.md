@@ -125,6 +125,8 @@ HELM_PORT=3202 pnpm dev
 
 Web 主控台监听 `http://127.0.0.1:3201`，内核 Hub 监听 `http://127.0.0.1:3202`。端口固定约束：`3000/3001/3002/3101/3102` 为外部与历史系统保留，Helm 永不占用。
 
+> **Docker 部署 Hub + 宿主机节点自举**：若需在局域网长期稳定运行 Hub 并连接宿主机开发环境，可直接执行 `pnpm link:bins && docker compose up -d --build`（对外监听 `0.0.0.0:3333`、数据持久化至 `~/.helm-hub-docker`），随后在 Web「计算节点」界面一键签发并复制 `helm-node start -d` 命令在宿主机执行即可接入。详见[安装与配置指南](docs/getting-started/installation.md#docker-容器部署-hub-与宿主机节点接入自举开发推荐)。
+
 ### 3. 初始化管理员并登录
 
 ```bash

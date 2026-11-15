@@ -73,6 +73,46 @@ pnpm dev:web                     # 窗口 2：仅前端（需 Hub 已在 3202 �
 
 以下端口为本机其他系统预留，Helm 任何组件不得占用：`3000`（外部公共开发服务）、`3001` / `3002`（`botd`）、`3101` / `3102`（`botx`）。
 
+## Docker 容器部署 Hub 与宿主机节点接入（自举开发推荐）
+
+若将 Helm 作为日常主力工具持续开发或自举迭代，推荐采用 **「Docker 容器运行稳定 Hub + 宿主机运行 `helm-node` 挂载真实开发环境」** 的分离拓扑：容器内 Hub 托管编译好的 Web 静态产物并将状态持久化至独立目录，宿主机的源码改动或测试重启不会中断主力 Hub；会话通过 `EnvFabric` 路由回宿主机节点执行读写、测试、Git Worktree 与 Herdr 终端协同。
+
+### 1. 构建并启动 Docker Hub
+
+仓库根已提供 `Dockerfile`、`docker-compose.yml` 与 `.dockerignore`。在宿主机仓库根执行：
+
+```bash
+# 1. 将 helm / helm-node / helm-hub 挂载到 /usr/local/bin（直跑宿主机源码）
+pnpm link:bins
+
+# 2. 构建镜像并后台拉起 Hub 容器
+docker compose up -d --build
+```
+
+默认配置说明（见 `docker-compose.yml`）：
+
+- **端口映射**：对外绑定 `0.0.0.0:3333:3202`（宿主机 3333 → 容器内 3202），容器内 Hub 同时托管 `packages/web/dist` 前端静态资源、HTTP API 与 `/ws/node` 网关；局域网内任意机器可直接通过 `http://<服务器局域网IP>:3333` 访问完整 Web 主控台；
+- **数据目录隔离**：容器内 `/data/.helm` 挂载在宿主机 `~/.helm-hub-docker`，与宿主机 CLI / `helm-node` 使用的 `~/.helm` 物理隔离，避免争抢 SQLite 与凭据文件锁。
+
+### 2. 在 Web 界面一键生成命令并接入宿主机节点
+
+1. 在浏览器打开 `http://<服务器局域网IP>:3333`，首次访问根据界面引导完成管理员密码初始化与登录；
+2. 点击左侧边栏底部的 **「计算节点」**（路由 `#/settings/nodes`）进入计算节点中心，点击右上角 **「接入节点」**；
+3. 输入节点 ID（如 `host-dev`），点击 **「签发接入令牌」**；界面会基于当前浏览器访问地址（`window.location.origin`）自动生成带局域网 IP 的一键接入命令：
+   ```bash
+   helm-node start -d --hub http://<服务器局域网IP>:3333 --token host-dev:<secret>
+   ```
+4. 点击 **「复制命令」**，在宿主机（或任何待接入机器）终端粘贴执行，即可绑定节点身份并拉起后台守护进程；Web 节点中心卡片会实时变为 **「在线」**。
+5. 新建会话或配置 Profile 时，将节点选为 `host-dev`、工作目录填宿主机源码路径（如 `/root/code/helm`），即可用容器内的 Hub 驱动宿主机代码库。
+
+### 3. 日常升级 Docker Hub
+
+当宿主机源码完成新一轮迭代并通过测试后，执行以下命令即可平滑重建容器，宿主机 `helm-node` 会在容器就绪后自动重连，所有会话与凭据完整保留：
+
+```bash
+docker compose up -d --build
+```
+
 ## 初始化管理员与登录
 
 首次部署需要初始化管理员密码（密码以 scrypt 哈希存储），随后登录 CLI 并检查状态：

@@ -1,0 +1,18 @@
+services:
+  helm-hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: helm-hub:dev
+    container_name: helm-hub
+    restart: unless-stopped
+    ports:
+      # 宿主机对外 3333 → 容器内 3202；局域网其他机器直接通过 http://<服务器局域网IP>:3333 访问
+      - "0.0.0.0:3333:3202"
+    environment:
+      - HELM_HOST=0.0.0.0
+      - HELM_PORT=3202
+      - HELM_DATA_DIR=/data/.helm
+    volumes:
+      # 持久化 Hub 的数据库、凭据与产物（独立于宿主机 ~/.helm，避免与宿主机 CLI / helm-node 争抢锁）
+      - ~/.helm-hub-docker:/data/.helm
