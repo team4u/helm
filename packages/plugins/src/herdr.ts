@@ -22,53 +22,31 @@
  * 半途失败自行清理已获取资源；stop 清理订阅/定时器/Asks 与可回收自有 pane。
  */
 
-import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
-import { type ExternalSteerRequest, type ExternalSteerResult, type WorkflowRunSummary } from './contracts.js'
-import {
-  DIAGNOSTICS_COLLECT_EVENT,
-  appendProbes,
-  parseCollection,
-} from './diagnostics.js'
+import { type WorkflowRunSummary } from './contracts.js'
 import { createHerdrTransport } from './herdr/transport.js'
 import { targetNodeId, type HerdrConfig, type HerdrEvent, type HerdrPluginDependencies, type HerdrTarget, type HerdrTransport } from './herdr/contracts.js'
 import { AskCoordinator, type AskEntry } from './herdr/asks.js'
 import { MetadataProjector } from './herdr/metadata.js'
-import { PaneRegistry, EMPTY_MANAGED_DOC, nodeIdOf, scopeKey, type ManagedDoc, type ManagedPane } from './herdr/panes.js'
+import { PaneRegistry, EMPTY_MANAGED_DOC, nodeIdOf, type ManagedDoc } from './herdr/panes.js'
 import { HerdrExecutor } from './herdr/executor.js'
+import { registerHerdrActions } from './herdr/actions.js'
+import { HerdrProbeCollector } from './herdr/probes.js'
 import {
   assertOkResult,
   isOkResult,
   parseAgentResult,
-  parsePaneRead,
   parseSessionSnapshot,
 } from './herdr/rpc.js'
-import { isValidSessionName, isValidNodeId, resolveSocketPath } from './herdr/transport.js'
+import { isValidSessionName, resolveSocketPath } from './herdr/transport.js'
 import { normalizeStartupTimeoutMs } from './herdr/spawn-rules.js'
 import { assembleHerdrDepsFromHost, nodeChannelFromHost } from './herdr/host-ports.js'
-import { HERDR_STEER_CONTROLS } from './herdr/contracts.js'
-import { isAncestorOrSelf } from './lineage.js'
 import { OverviewProjector, type OverviewDoc } from './herdr/overview.js'
+import { resolvePluginClientRoot } from './asset-paths.js'
 
-/**
- * clientRoot 兼容 src / dist 运行路径（与 workflow 插件同机制）：
- * 编译后 dist/herdr.js 同级无 client/（tsx 源目录有）；
- * 探测失败回退包内 src 源目录，仍失败显式抛错（不静默降级）。
- */
+/** clientRoot 解析收敛到通用资产路径（src / dist 双运行形态；缺失显式报错不静默降级）。 */
 function resolveHerdrClientRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'herdr', 'client')
-  if (existsSync(local)) return local
-  const pkgRoot = dirname(here)
-  const srcFallback = join(pkgRoot, 'src', 'herdr', 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    'herdr_plugin_client_missing',
-    `内置插件 builtin:herdr 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
+  return resolvePluginClientRoot('builtin:herdr', 'herdr', 'herdr_plugin_client_missing')
 }
 
 /** Herdr 23 种 CLI agent.start kind（detect::agent_label 全集）；供 ProfileRuntimeUiSpec 候选。 */
@@ -126,16 +104,22 @@ export function createHerdrPlugin(): PluginDefinition {
 
       /** 最近一次 socket 事件处理的 pane seq 缓存（事件去重，agent.get 为权威）。 */
       const eventSeqCache = new Map<string, number>()
-      /**
-       * 探针观察水位（本启用周期；scopeKey(nodeId, paneId) 键）：
-       * stalledMs 口径 = 「最近一次观察到 (status, seq) 变化的时点」至今的时长——
-       * 首次观测从 0 起，水位或状态变化重置；探测失败（unreachable）不变更
-       * 水位（读失败不是进展证据，停滞继续累计）。注意该口径只反映状态变迁，
-       * 不含工作活动（长时间无状态翻转的活跃任务会如实表现为停滞递增）。
-       */
-      const probeObservations = new Map<string, { status: string; seq: number | undefined; since: number }>()
-      /** 连续探测失败计数（agent.get 成功即清零；仅诊断事实，不触发自动动作）。 */
-      const probeFailures = new Map<string, number>()
+      /** 探针采集器（观察水位/失败计数归其自管；停用 reset、结算 forget）。 */
+      const probes = new HerdrProbeCollector({
+        asks,
+        registry: () => registryRef.current,
+        overview: () => overviewRef.current,
+        executor: () => executorRef.current,
+        transport: transportOf,
+        localTarget: () => frozenLocalTarget,
+        signal: () => connectionAbort.signal,
+        settleUnmanaged: (pane) => {
+          registryRef.current?.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
+          executorRef.current?.releasePaneState(pane)
+          forgetPaneCaches(nodeIdOf(pane), pane.paneId)
+        },
+        cancelAskQuietly: cancelQuietly,
+      })
       /** 停用中：doc 句柄已失效，overview 刷新静默跳过（KISS：无写入即无异常）。 */
       let stopping = false
 
@@ -379,10 +363,8 @@ export function createHerdrPlugin(): PluginDefinition {
       // ---- 启动对账：subscribe ack -> snapshot 扫描 ----
       /** 窗格从 registry 结算移除时同步回收探针/事件缓存（防长驻泄漏）。 */
       function forgetPaneCaches(nodeId: string | undefined, paneId: string): void {
-        const scope = scopeKey(nodeId, paneId)
         eventSeqCache.delete(`${nodeId ?? 'local'}:${paneId}`)
-        probeObservations.delete(scope)
-        probeFailures.delete(scope)
+        probes.forget(nodeId, paneId)
       }
 
       async function reconcile(): Promise<void> {
@@ -521,359 +503,22 @@ export function createHerdrPlugin(): PluginDefinition {
       // diagnostics.collect 监听（原 watchdog_tick priority 100 钩子改道）：
       // 巡检发起方（builtin:superagent Watchdog service）采集原生事实后经宿主
       // 内部事件追加本插件自有窗格的真实 probes（含远端轮询）。事件在宿主
-      // await，采集失败如实上抛给发起方，绝不静默吞。
-      // human 归属红线：非自有 pane 一律不产生 probe；总览重取为只读采集。
-      ctx.host.onEvent(DIAGNOSTICS_COLLECT_EVENT, async (raw) => {
-        // 事件入口边界校验：非法载荷显式抛错给发布方（await 语义），不猜不吞。
-        const collection = parseCollection(raw)
-        const registry = registryRef.current
-        if (!registry) return
-        const overview = overviewRef.current
-        if (overview !== undefined) {
-          // cwd/seen 等无事件变化（官方 actions.rs:1780 只改 cwd 不发事件）
-          // 依赖本 tick 重取快照对齐；单飞合并，不新增独立定时器。
-          await overview.refresh(registry, asks, frozenLocalTarget)
-        }
-        const now = Date.now()
-        const activePanes = registry.all().filter((pane) => pane.outcome !== 'settled')
-        // 并发探针：单窗格 agent.get 带 5s 短超时且 Promise.all 并发采集，
-        // 防止单个慢/挂节点串行卡死采集预算。
-        const probes = await Promise.all(
-          activePanes.map(async (pane): Promise<ReturnType<typeof buildProbe> | undefined> => {
-            const scope = scopeKey(nodeIdOf(pane), pane.paneId)
-            let status = 'unknown'
-            let authoritySeq: number | undefined
-            try {
-              const info = parseAgentResult(
-                await transportOf().call(
-                  pane.target,
-                  'agent.get',
-                  { target: pane.paneId },
-                  { signal: connectionAbort.signal, timeoutMs: 5_000 },
-                ),
-                'agent.get',
-                'agent_info',
-              )
-              if (info.name !== pane.agentName || info.tabId !== pane.tabId) {
-                registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
-                executorRef.current?.releasePaneState(pane)
-                forgetPaneCaches(nodeIdOf(pane), pane.paneId)
-                return undefined
-              }
-              for (const superseded of asks.observeAuthority({
-                paneId: pane.paneId,
-                nodeId: nodeIdOf(pane),
-                seq: info.stateChangeSeq,
-                status: info.agentStatus,
-              })) {
-                await cancelQuietly(superseded, 'superseded')
-              }
-              status = info.agentStatus
-              authoritySeq = info.stateChangeSeq
-              probeFailures.delete(scope)
-            } catch {
-              status = 'unreachable'
-              // 权威不可达：绝不猜造 seq；水位不变更（停滞继续累计），
-              // 连续失败计数如实递增。
-              probeFailures.set(scope, (probeFailures.get(scope) ?? 0) + 1)
-            }
-            return buildProbe(pane, status, authoritySeq, now)
-          }),
-        )
-        appendProbes(collection, probes.filter((probe) => probe !== undefined))
-      })
+      // await，采集失败如实上抛给发起方，绝不静默吞；采集实现与停滞水位
+      // 口径见 herdr/probes.ts。human 归属红线：非自有 pane 一律不产生 probe。
+      probes.register(ctx.host)
 
-      /** 单窗格探针构造（停滞水位维护与 facts 口径；采集事件主体）。 */
-      function buildProbe(
-        pane: ManagedPane,
-        status: string,
-        authoritySeq: number | undefined,
-        now: number,
-      ) {
-        const scope = scopeKey(nodeIdOf(pane), pane.paneId)
-        // 停滞水位：首次观测从 0 起；(status, seq) 任一变化重置；
-        // unreachable 保持旧水位累计（读失败不是进展证据，不用总运行时长
-        // 冒充停滞，也不因探测失败归零重跑）。
-        const prev = probeObservations.get(scope)
-        let stalledMs = 0
-        if (status === 'unreachable') {
-          // 读失败：沿用旧观测点继续累计（无旧观测时从当下起算，不伪造进展）。
-          if (prev !== undefined) {
-            stalledMs = now - prev.since
-          } else {
-            probeObservations.set(scope, { status, seq: undefined, since: now })
-          }
-        } else if (prev === undefined || prev.status !== status || prev.seq !== authoritySeq) {
-          probeObservations.set(scope, { status, seq: authoritySeq, since: now })
-        } else {
-          stalledMs = now - prev.since
-        }
-        const pendingAskCount = asks
-          .entries()
-          .filter(
-            (e) =>
-              e.paneId === pane.paneId &&
-              e.nodeId === nodeIdOf(pane) &&
-              (e.phase === 'pending' || e.phase === 'creating'),
-          ).length
-        return {
-          targetId: pane.paneId,
-          targetKind: 'external' as const,
-          nodeId: nodeIdOf(pane) ?? 'local',
-          ownedBy: 'helm' as const,
-          status,
-          ...(authoritySeq !== undefined ? { stateChangeSeq: authoritySeq } : {}),
-          stalledMs,
-          ...(status === 'unreachable' ? { consecutiveErrors: probeFailures.get(scope) ?? 1 } : {}),
-          facts: {
-            kind: 'herdr',
-            agentName: pane.agentName,
-            outcome: pane.outcome,
-            effectiveCwd: pane.effectiveCwd,
-            parentConversationId: pane.parentConversationId,
-            pendingAskCount,
-            // 口径如实：stalledMs 基于状态/水位变化观察时点，不含工作活动。
-            stalledBasis: 'since-last-state-change',
-          },
-        }
-      }
-
-      // ---- actions（HTTP/CLI 同权；read 40 行脱敏；focus 显式操作） ----
-      ctx.action<Record<string, never>, { panes: Array<Record<string, unknown>> }>({
-        id: 'list',
-        description: '列出本插件管理的 Herdr 窗格（nodeId/pane/状态/归属）',
-        idempotent: true,
-        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-        outputSchema: {
-          type: 'object',
-          properties: { panes: { type: 'array', items: { type: 'object' } } },
-          required: ['panes'],
-          additionalProperties: false,
-        },
-        handler() {
-          const registry = registryRef.current
-          return {
-            panes: registry
-              ? registry.all().map((p) => ({
-                  nodeId: nodeIdOf(p) ?? 'local',
-                  paneId: p.paneId,
-                  agentName: p.agentName,
-                  outcome: p.outcome,
-                  effectiveCwd: p.effectiveCwd,
-                  parentConversationId: p.parentConversationId,
-                  ...(p.workflowRunId !== undefined ? { workflowRunId: p.workflowRunId } : {}),
-                }))
-              : [],
-          }
-        },
-      })
-
-      /** pane 消歧解析：registry 命中多个节点同 ID pane 时显式 409。 */
-      function resolvePane(input: { paneId: string; nodeId?: string }): ManagedPane {
-        const registry = registryRef.current
-        if (registry === undefined) {
-          throw new HelmError('not_found', `pane ${input.paneId} 不由 builtin:herdr 管理`, 404, { paneId: input.paneId })
-        }
-        if (input.nodeId !== undefined && input.nodeId !== '') {
-          if (!isValidNodeId(input.nodeId)) {
-            throw new HelmError('validation_error', `nodeId '${input.nodeId}' 非法`, 400, { nodeId: input.nodeId })
-          }
-          const pane = registry.get(input.nodeId === 'local' ? undefined : input.nodeId, input.paneId)
-          if (pane === undefined) {
-            throw new HelmError('not_found', `pane ${input.paneId}@${input.nodeId} 不由 builtin:herdr 管理`, 404, {
-              paneId: input.paneId,
-              nodeId: input.nodeId,
-            })
-          }
-          return pane
-        }
-        const candidates = registry.all().filter((p) => p.paneId === input.paneId)
-        if (candidates.length === 0) {
-          throw new HelmError('not_found', `pane ${input.paneId} 不由 builtin:herdr 管理`, 404, { paneId: input.paneId })
-        }
-        if (candidates.length > 1) {
-          throw new HelmError(
-            'pane_ambiguous',
-            `pane ${input.paneId} 在多个节点存在（${candidates.map((p) => nodeIdOf(p) ?? 'local').join(', ')}），请用 nodeId 字段消歧`,
-            409,
-            { paneId: input.paneId, nodeIds: candidates.map((p) => nodeIdOf(p) ?? 'local') },
-          )
-        }
-        return candidates[0]!
-      }
-
-      ctx.action<{ paneId: string; nodeId?: string }, { paneId: string; nodeId: string; text: string }>({
-        id: 'read',
-        description: '读取本插件管理窗格的终端尾部快照（40 行，脱敏；跨节点同 ID 用 nodeId 消歧）',
-        idempotent: true,
-        inputSchema: {
-          type: 'object',
-          properties: {
-            paneId: { type: 'string', minLength: 1 },
-            nodeId: { type: 'string', description: '目标节点（缺省本机；同 ID 多节点时必填消歧）' },
-          },
-          required: ['paneId'],
-          additionalProperties: false,
-        },
-        outputSchema: {
-          type: 'object',
-          properties: { paneId: { type: 'string' }, nodeId: { type: 'string' }, text: { type: 'string' } },
-          required: ['paneId', 'nodeId', 'text'],
-          additionalProperties: false,
-        },
-        async handler(input) {
-          const pane = resolvePane(input)
-          const read = parsePaneRead(
-            await transportOf().call(pane.target, 'agent.read', {
-              target: pane.paneId,
-              source: 'recent_unwrapped',
-              lines: 40,
-              format: 'text',
-            }),
-          )
-          return { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local', text: depsOf().redact(read.text) }
-        },
-      })
-
-      ctx.action<{ paneId: string; nodeId?: string }, { paneId: string; nodeId: string; focused: boolean }>({
-        id: 'focus',
-        description: '在 Herdr 终端聚焦指定窗格（用户显式操作；跨节点同 ID 用 nodeId 消歧）',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            paneId: { type: 'string', minLength: 1 },
-            nodeId: { type: 'string', description: '目标节点（缺省本机；同 ID 多节点时必填消歧）' },
-          },
-          required: ['paneId'],
-          additionalProperties: false,
-        },
-        outputSchema: {
-          type: 'object',
-          properties: { paneId: { type: 'string' }, nodeId: { type: 'string' }, focused: { type: 'boolean' } },
-          required: ['paneId', 'nodeId', 'focused'],
-          additionalProperties: false,
-        },
-        async handler(input) {
-          const pane = resolvePane(input)
-          // 真实协议（服务端源码 agents.rs:35-41）：agent.focus 返回
-          // ResponseResult::AgentInfo { agent }（agent_info），非 ok。
-          const info = parseAgentResult(
-            await transportOf().call(pane.target, 'agent.focus', { target: pane.paneId }),
-            'agent.focus',
-            'agent_info',
-          )
-          if (info.focused !== true) {
-            throw new HelmError(
-              'herdr_focus_failed',
-              `agent.focus 返回 focused=false（pane ${pane.paneId}@${nodeIdOf(pane) ?? 'local'}）`,
-              502,
-              { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local' },
-            )
-          }
-          return { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local', focused: true }
-        },
-      })
-
-      // ---- 动作 steer：受管窗格运行中插话（onResolved.controls.steer 委托目标） ----
-      // 通常由 builtin:workflow.steer 依据节点 controls 动态路由到本动作，也可
-      // HTTP/CLI/run_action 直调；直调同样独立做调用方祖先链授权、父会话/run
-      // 强匹配与受管 (nodeId, paneId) 精确定位（不因直调豁免授权）。投递唯一
-      // 入口 executor.steerPane：受管 task 阶段预检后调用现有 agent.prompt；
-      // preflight 不承诺提交点 CAS，steered 仅代表投递成功。
-      ctx.action<ExternalSteerRequest, ExternalSteerResult>({
-        id: HERDR_STEER_CONTROLS.actionId,
-        description:
-          '向本插件受管、且由 workflow run 派生的 Herdr 窗格补充指导。仅任务执行期预检为 working 时发送，使用 Herdr 原生 agent.prompt；预检与投递之间刚变为 idle 时允许接续一轮。blocked 交原审批桥处理，关闭、交接和 Gate 阶段拒绝。guardLevel=preflight 表示发送前检查，不保证提交点 CAS；steered=true 仅代表已投递。超时或断线不自动重试。',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            executionId: { type: 'string', minLength: 1, description: '受管执行标识（onResolved.executionId，即 paneId）' },
-            nodeId: { type: 'string', description: "实际执行节点（'local' 或节点 ID；必须与窗格登记一致）" },
-            workflowRunId: { type: 'string', minLength: 1, description: '派生该窗格的 workflow run ID（强匹配；仅限 run 管理下的窗格）' },
-            parentConversationId: { type: 'number', minimum: 1, description: '派生该窗格的父会话 ID（强匹配）' },
-            text: { type: 'string', minLength: 1, description: '插话指导内容（非空；脱敏后附交接契约提醒注入终端）' },
-          },
-          required: ['executionId', 'nodeId', 'workflowRunId', 'parentConversationId', 'text'],
-          additionalProperties: false,
-        },
-        outputSchema: {
-          type: 'object',
-          properties: {
-            steered: { type: 'boolean', const: true },
-            executionId: { type: 'string' },
-            nodeId: { type: 'string' },
-            stateChangeSeq: { type: 'number', minimum: 0, description: '发送前预检观测的权威水位' },
-            ownership: { type: 'string', const: 'helm' },
-            guardLevel: { type: 'string', const: 'preflight', description: '发送前预检，不承诺提交点 CAS' },
-          },
-          required: ['steered', 'executionId', 'nodeId', 'stateChangeSeq', 'ownership', 'guardLevel'],
-          additionalProperties: false,
-        },
-        cli: {
-          command: ['herdr', 'steer'],
-          description: '向受管 Herdr 窗格补充指导（通常用 helm workflows steer <runId> 自动路由）',
-          timeoutMs: 15_000,
-        },
-        async handler(input, context) {
-          const registry = registryRef.current
-          const executor = executorRef.current
-          if (registry === undefined || executor === undefined) {
-            throw new HelmError(
-              'herdr_not_connected',
-              'Herdr 服务未启动（未连接目标服务器），无法插话',
-              409,
-            )
-          }
-          // 受管节点精确定位：显式 nodeId 必须与登记一致（不接受同 pane 不同
-          // node；'local' 折叠为本机缺省）。
-          if (input.nodeId !== 'local' && !isValidNodeId(input.nodeId)) {
-            throw new HelmError('validation_error', `nodeId '${input.nodeId}' 非法`, 400, { nodeId: input.nodeId })
-          }
-          const pane = registry.get(input.nodeId === 'local' ? undefined : input.nodeId, input.executionId)
-          if (pane === undefined) {
-            throw new HelmError(
-              'not_found',
-              `窗格 ${input.executionId}@${input.nodeId} 不由 builtin:herdr 管理`,
-              404,
-              { executionId: input.executionId, nodeId: input.nodeId },
-            )
-          }
-          // 调用方祖先链独立授权：携带会话上下文的调用必须是 run 父会话的
-          // 自身或祖先。会话上下文在模型路径由内核注入；HTTP 自报
-          // conversationId 仅作作用域提示（非认证），不匹配同样拒绝。
-          const caller = context.conversationId
-          if (caller !== undefined) {
-            const parentOf = (id: number): number | undefined => {
-              try {
-                return hostApi.getConversation(id).parentConversationId
-              } catch (error) {
-                if (error instanceof HelmError && error.code === 'not_found') return undefined
-                throw error
-              }
-            }
-            if (!isAncestorOrSelf(input.parentConversationId, caller, parentOf)) {
-              throw new HelmError(
-                'herdr_steer_out_of_scope',
-                `会话 ${caller} 无权插话窗格 ${input.executionId}：该窗格属父会话 ${input.parentConversationId} 的运行，仅其自身或祖先（或人工 HTTP/CLI）可插话`,
-                403,
-                { callerConversationId: caller, parentConversationId: input.parentConversationId, executionId: input.executionId },
-              )
-            }
-          }
-          // 投递（归属、阶段与运行状态在 executor 内独立复核）。
-          const { stateChangeSeq } = await executor.steerPane(pane, {
-            workflowRunId: input.workflowRunId,
-            parentConversationId: input.parentConversationId,
-            text: input.text,
-            ...(context.signal !== undefined ? { signal: context.signal } : {}),
-          })
-          return {
-            steered: true as const,
-            executionId: pane.paneId,
-            nodeId: nodeIdOf(pane) ?? 'local',
-            stateChangeSeq,
-            ownership: 'helm' as const,
-            guardLevel: 'preflight' as const,
+      // ---- actions（list/read/focus/steer 注册与 pane 消歧见 herdr/actions.ts） ----
+      registerHerdrActions(ctx, {
+        registry: () => registryRef.current,
+        executor: () => executorRef.current,
+        transport: transportOf,
+        redact: (text) => depsOf().redact(text),
+        parentOfConversation: (id) => {
+          try {
+            return hostApi.getConversation(id).parentConversationId
+          } catch (error) {
+            if (error instanceof HelmError && error.code === 'not_found') return undefined
+            throw error
           }
         },
       })
@@ -1074,8 +719,7 @@ export function createHerdrPlugin(): PluginDefinition {
         overviewRef.current = undefined
         eventSeqCache.clear()
         // 探针观察水位/失败计数随启用周期作废（新周期从首次观测重新起算）。
-        probeObservations.clear()
-        probeFailures.clear()
+        probes.reset()
         if (errors.length > 0) {
           const detail = errors.map((e) => (e instanceof Error ? depsOf().redact(e.message) : String(e))).join('; ')
           throw new HelmError('plugin_service_stop_failed', `herdr 服务清理失败：${detail}`, 500, { errors: detail })
