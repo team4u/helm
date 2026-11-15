@@ -48,7 +48,7 @@ flowchart TD
 工作树占用采用持久租约保护，安全红线是「不能证明停止就不能清理」：
 
 - **占位先于副作用**：`git worktree add` 执行之前，先在租约文档持久登记占位（`phase: 'pending'`）并落盘。进程在此之后崩溃，重启后该占位仍在——清理时无法证明没有执行启动，会以 `worktree_execution_unknown` 显式阻塞，交人工确认。
-- **释放仅限确认停止的状态**：执行确认成功；执行确认从未启动（`next` 调用前就抛错，此时占位自身可证明无执行）；或原生子会话的回合以失败收场（门禁未过、回合超时、Schema 校验失败、被中止/取消）且宿主确认该会话已停止。第三种情形的判定仅覆盖原生子会话（`conversationId` 已回填且无外部 `executionId`）：释放本次运行租约，同时保留 Worktree 记录与子会话映射，供下一轮 `resume` 续接或后续 `cleanup_worktree` 清理，`resume` 成功完成时顺带清掉该登记下残留的旧租约。外部执行（Herdr 等远端进程）启动与否不可证明，失败或取消后仍保留租约 fail-closed。
+- **释放仅限确认停止的状态**：执行确认成功；执行确认从未启动（`next` 调用前就抛错，此时占位自身可证明无执行）；或原生子会话的回合以失败收场（门禁未过、回合超时、Schema 校验失败、被中止/取消）且宿主确认该会话已停止。第三种情形的判定仅覆盖原生子会话（`conversationId` 已回填且无外部 `executionId`）：释放本次运行租约，同时保留 Worktree 记录与子会话映射，供下一轮 `resume` 续接或后续 `cleanup_worktree` 清理，`resume` 成功完成时顺带清掉该登记下残留的旧租约。外部执行（Herdr 等远端进程）启动与否不可证明，失败或取消后仍保留租约 fail-closed。特别地，Herdr 窗格回合超时（`TimeoutError` 中止，区别于普通取消）只保存诊断并保留窗格，不关窗、不代发按键，也不承诺底层 CLI 已停止；后续 `resume` 在任何 prompt 发送前以权威 `agent.get` 复核，仅 `idle` / `done` 放行续接，`working` / `blocked` / `unknown` 或无法权威确认（含启动期超时后 `agent.start` 完成与否不确定）一律显式拒绝，不新建窗格、不重发 `agent.start`。
 - **未知状态保留租约**：进程崩溃后重启（无法证明子代理是否还在改文件）、`onResolved` 失败、外部进程可能已启动但未回填标识，均保留租约并以 `worktree_execution_unknown` 阻塞清理，交人工确认。
 - **元数据机密检查**：将要落库的路径/分支/仓路径字段若包含已登记机密，以 `worktree_metadata_secret` 拒绝持久化（诊断输出使用脱敏值）。
 
@@ -84,7 +84,7 @@ sequenceDiagram
 
 宿主执行的门禁有独立超时：`agent()` 的 `gateTimeoutMs` 选项（`1_000 .. 600_000` 整数，默认 `120_000` 毫秒）传给宿主 `runGate`。超时由宿主终止整个进程组（先 SIGTERM，宽限后 SIGKILL），返回 `timedOut: true` 与 `exitCode: null`。门禁未过时抛出的 `gate_failed` 错误在 `details` 中附带 `exitCode`、`timedOut` 与输出尾部，供失败重试时定位缺陷。
 
-宿主自跑 fallback 的工作目录只使用引擎确认过的值（执行环境回传的 `cwd` 或父会话 `cwd`），绝不猜测远端目录；宿主缺 `runGate` 能力则显式失败该调用。外部执行环境（如 Herdr 远端窗格）在其对应工作目录中执行同一命令并经 `onGateResult` 回报，回报优先采纳。`gateTimeoutMs` 只约束宿主侧执行；外部运行时是否支持门禁超时以其自身能力为准，Helm 不对此作承诺。
+宿主自跑 fallback 的工作目录只使用引擎确认过的值（执行环境回传的 `cwd` 或父会话 `cwd`），绝不猜测远端目录；宿主缺 `runGate` 能力则显式失败该调用。外部执行环境（如 Herdr 远端窗格）在其对应工作目录中执行同一命令并经 `onGateResult` 回报，回报优先采纳。`gateTimeoutMs` 只约束宿主侧执行；外部运行时是否支持门禁超时以其自身能力为准——当前 `builtin:herdr` 明确不支持：其本机 gate 依赖契约 `runLocalGate` 与远端 `transport.runGate` 均未暴露门禁超时参数，无法如实兑现超时语义，因此携带 `gateTimeoutMs` 的 Herdr 运行时请求（新建与已登记 resume）在进入建窗/续接前以 `unsupported_runtime` 显式拒绝（原生执行行不受影响）；需要限时验收时请在 `gate` 命令内自行包装超时（如 `timeout <秒> <命令>`）。
 
 ## 安全回收
 

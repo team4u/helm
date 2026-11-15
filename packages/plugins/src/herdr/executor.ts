@@ -18,6 +18,15 @@
  *   关闭中不再把 registry 改回 running；
  * - 成功/失败路径必须 removeEventListener 释放 abort 监听器；
  * - 所有长 RPC 携带 request.signal。
+ *
+ * 超时安全边界（TimeoutError 中止，区别于普通 AbortError 取消）：
+ * - 无安全 stop/CAS 手段停止底层 CLI——超时只保存诊断并保留 pane（标 failed，
+ *   不关窗、不发键），绝不把保留 pane 包装成可无条件续接；
+ * - 后续 resume 在任何 prompt 发送前经 assertResumeAgentConfirmed 权威确认：
+ *   仅 idle/done 可续接；working/blocked/unknown/无法确认一律显式拒绝
+ *   （不新建、不按键中止）；启动期超时（agent.start 完成与否不确定）同样
+ *   先安全确认，绝不盲目重发 agent.start；
+ * - 普通 AbortError 取消仍按现状关闭自有 pane（已授权路径不变）。
  */
 
 import { randomUUID } from 'node:crypto'
@@ -194,24 +203,20 @@ export class HerdrExecutor {
    *   Profile.nodeId > 父会话绑定节点 > 本机。'local' 显式覆盖远端父节点，
    *   不折叠丢失；显式/Profile 指定与父节点不同时以更高优先级为准（合法切换）。
    * - 附件：远端机器无可达 HELM_HUB_URL 时在建窗之前显式拒绝
-   *   （remote_hub_unreachable_for_artifacts，零远端副作用）。
+   *   （remote_hub_unreachable_for_artifacts，零远端副作用）；
+   * - gateTimeoutMs：仅对已识别为 Herdr 处理路径（herdr 运行时新建 / 已登记
+   *   resume）显式拒绝；原生 passthrough 不受影响。
    */
   async handle(request: AgentSpawnRequest): Promise<HandleOutcome> {
-    if (request.gateTimeoutMs !== undefined) {
-      throw new HelmError(
-        'unsupported_runtime',
-        'Herdr 当前不支持 gateTimeoutMs；请在 gate 命令中自行设置超时，或移除该选项',
-        400,
-        { gateTimeoutMs: request.gateTimeoutMs },
-      )
-    }
     if (request.resume !== undefined) {
       const candidates = this.registry.findByResumeRef(request.resume)
       if (candidates.length === 0) {
-        // 非本插件记录：原生 resume（conversationId）交还内核；显式 herdr
+        // 非本插件记录：原生 resume（conversationId）交还内核——原生
+        // passthrough 不受 Herdr 的 gateTimeoutMs 限制影响；显式 herdr
         // 运行时的 resume 绝不静默新建续接窗格。
         const routing = await resolveSpawnRouting(request.agentType, this.deps.profiles)
         if (routing === undefined) return { action: 'continue' }
+        this.assertNoGateTimeout(request)
         throw new HelmError(
           'not_found',
           `resume ref '${request.resume}' 不存在（非本插件登记的 herdr agentId/paneId）`,
@@ -219,11 +224,14 @@ export class HerdrExecutor {
           { resumeRef: request.resume },
         )
       }
+      // 已登记的 Herdr 窗格续接：先识别为受管 resume 再拒绝 gateTimeoutMs。
+      this.assertNoGateTimeout(request)
       const outcome = await this.resumeInto(request, candidates)
       return { action: 'handled', result: outcome }
     }
     const routing = await resolveSpawnRouting(request.agentType, this.deps.profiles)
     if (routing === undefined) return { action: 'continue' }
+    this.assertNoGateTimeout(request)
     assertNoUnsupportedOverrides(request.model, request.effort)
     if (request.signal?.aborted) {
       throw new HelmError('aborted', 'herdr spawn 请求在创建前已取消', 409)
@@ -232,6 +240,24 @@ export class HerdrExecutor {
     this.assertAttachmentsReachable(request, target, routing)
     const result = await this.spawnNew(request, routing, target)
     return { action: 'handled', result }
+  }
+
+  /**
+   * Herdr 运行时的 gateTimeoutMs 显式拒绝（仅在请求已识别为 Herdr 处理路径
+   * 后调用：herdr 运行时新建 / 已登记 resume；原生 passthrough 不经此处，
+   * 不受影响）。契约事实：本机依赖 runLocalGate 的 options 未暴露门禁超时
+   * 参数、远端 transport.runGate 无超时通道——接受该选项等于静默丢弃外部
+   * 超时语义，因此如实拒绝并给出替代方案（见 docs/workflows/worktree-
+   * and-gate.md 的 Gate 章节）。
+   */
+  private assertNoGateTimeout(request: AgentSpawnRequest): void {
+    if (request.gateTimeoutMs === undefined) return
+    throw new HelmError(
+      'unsupported_runtime',
+      'Herdr 运行时不支持 gateTimeoutMs（本机依赖契约 runLocalGate 与远端 transport.runGate 均未暴露门禁超时参数，无法如实兑现超时语义）；请在 gate 命令内自行实现超时（如用 timeout 包装命令），或移除该选项',
+      400,
+      { gateTimeoutMs: request.gateTimeoutMs },
+    )
   }
 
   /**
@@ -729,7 +755,7 @@ export class HerdrExecutor {
     const aborted = new Promise<never>((_, reject) => { rejectAbort = reject })
     const onAbort = () => {
       if (isTimeoutSignal(request.signal)) {
-        rejectAbort(new HelmError('agent_timeout', `pane ${pane.paneId} 执行超时，保留窗格供 resume 续接`, 408))
+        rejectAbort(new HelmError('agent_timeout', `pane ${pane.paneId} 执行超时，保留窗格与诊断（resume 前将权威确认底层 CLI 状态）`, 408))
         return
       }
       cleanup ??= this.closePane(pane, 'cancelled')
@@ -760,7 +786,7 @@ export class HerdrExecutor {
         const snapshot = await this.readDiagnostic(pane)
         throw new HelmError(
           'agent_timeout',
-          `pane ${pane.paneId} 执行超时，窗格已保留供 resume 续接\n终端最后 40 行（脱敏）：\n${snapshot}`,
+          `pane ${pane.paneId} 执行超时，窗格已保留（底层 CLI 可能仍在执行；resume 前将权威确认，仅 idle/done 可续接，绝不代发按键中止）\n终端最后 40 行（脱敏）：\n${snapshot}`,
           408,
           { paneId: pane.paneId, snapshot },
         )
@@ -1752,7 +1778,10 @@ export class HerdrExecutor {
    *   request.agentId；
    * - workflow resumeAgent：resume = 本 run 记录的 agentId，无 agentType。
    * 校验：只准同 workflow（含 undefined 轨道一致）及同父会话；拒绝 busy/
-   * settled/未知/歧义；显式 kind/nodeId/cwd 不一致显式拒绝（不静默忽略）。
+   * settled/未知/歧义；显式 kind/nodeId/cwd 不一致显式拒绝（不静默忽略）；
+   * 任何 prompt 发送前经 assertResumeAgentConfirmed 权威确认底层 Agent
+   * （仅 idle/done 可续接；超时保留 pane 的 working/blocked 与启动期未定
+   * 状态一律显式拒绝，不新建、不按键中止）。
    * 返回 undefined 表示该 ref 非本插件记录（交还内核原生 resume）。
    */
   private async resumeInto(request: AgentSpawnRequest, candidates: ManagedPane[]): Promise<unknown> {
@@ -1814,6 +1843,10 @@ export class HerdrExecutor {
         { resumeRef, requestCwd: request.cwd, effectiveCwd: pane.effectiveCwd },
       )
     }
+    // 权威续接门禁：任何 prompt 发送前以 agent.get 确认底层 Agent 可安全续接
+    // （TimeoutError 保留 pane 的底层 CLI 可能仍 working/blocked；启动期超时
+    // 的 agent.start 完成与否未定——都先安全确认，绝不盲目投递）。
+    await this.assertResumeAgentConfirmed(request, pane)
 
     const unique = `${Date.now()}-resume-${HashShort.of(request.prompt.slice(0, 160))}-${request.parentConversationId}-${Math.random().toString(36).slice(2, 6)}`
     const safeId = `r${HashShort.of(unique)}`
@@ -1841,6 +1874,73 @@ export class HerdrExecutor {
     }
     await this.preloadAttachmentMeta(request)
     return this.runManagedTask(request, updated)
+  }
+
+  /**
+   * resume 权威就绪门禁（在任何 prompt 发送前执行；安全边界）：
+   * - TimeoutError 超时保留的 pane 底层 CLI 可能仍 working/blocked——没有
+   *   安全 stop/CAS 手段，不能把保留 pane 包装成可无条件续接；
+   * - 启动期超时（agent.start 完成与否不确定）同样以此门禁显式拒绝或安全
+   *   确认：身份与状态均权威确认才放行，绝不盲目重发 agent.start；
+   * - 放行条件：身份（pane/tab/name）与受管登记精确一致且状态 idle/done；
+   *   working/blocked/unknown/launch_pending、无法权威确认（agent.get 失败）
+   *   或身份不一致一律显式拒绝——不新建 Agent、不代发按键中止，交人类在
+   *   Herdr 终端确认后再续接。
+   */
+  private async assertResumeAgentConfirmed(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
+    const resumeRef = request.resume!
+    let authority: HerdrAgentInfo
+    try {
+      authority = await this.agentGet(targetOf(pane), pane.paneId, request.signal)
+    } catch (error) {
+      if (request.signal?.aborted) throw error
+      throw new HelmError(
+        'resume_agent_unconfirmed',
+        `pane ${pane.paneId} 无法权威确认底层 Agent 状态（${error instanceof Error ? this.deps.redact(error.message) : String(error)}）；常见于启动期超时后 agent.start 完成与否不确定，或窗格已无受管 Agent。拒绝盲目续接：不新建 Agent、不重发 agent.start、不代发按键；请先在 Herdr 终端人工确认该窗格后再 resume`,
+        409,
+        { resumeRef, paneId: pane.paneId, cause: (error as { code?: string }).code ?? 'agent_get_failed' },
+      )
+    }
+    if (authority.paneId !== pane.paneId || authority.tabId !== pane.tabId || authority.name !== pane.agentName) {
+      throw new HelmError(
+        'herdr_ownership_lost',
+        `pane ${pane.paneId} 权威身份与受管登记不一致（name=${String(authority.name)} tab=${authority.tabId}），无法确认受管 Agent 仍在该窗格（可能从未启动成功或已被替换），拒绝续接`,
+        409,
+        { resumeRef, paneId: pane.paneId, authorityName: authority.name, authorityTabId: authority.tabId },
+      )
+    }
+    if (authority.launchPending === true) {
+      throw new HelmError(
+        'resume_agent_busy',
+        `pane ${pane.paneId} 仍在启动（launch_pending），底层 CLI 状态未定，拒绝续接`,
+        409,
+        { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus },
+      )
+    }
+    if (authority.agentStatus === 'working') {
+      throw new HelmError(
+        'resume_agent_busy',
+        `pane ${pane.paneId} 底层 CLI 仍在执行（working；常见于超时保留的 pane），拒绝续接：不新建、不按键中止；请等其在 Herdr 终端完结（idle/done）后再 resume`,
+        409,
+        { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus },
+      )
+    }
+    if (authority.agentStatus === 'blocked') {
+      throw new HelmError(
+        'resume_agent_blocked',
+        `pane ${pane.paneId} 底层 CLI 正 blocked 等待审批按键，续接绝不代人类发键；请在 Herdr 终端直接处理该阻塞后再 resume`,
+        409,
+        { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus, stateChangeSeq: authority.stateChangeSeq },
+      )
+    }
+    if (authority.agentStatus !== 'idle' && authority.agentStatus !== 'done') {
+      throw new HelmError(
+        'resume_agent_unconfirmed',
+        `pane ${pane.paneId} 权威状态为 ${authority.agentStatus}，无法确认可安全续接（仅 idle/done 可续接）`,
+        409,
+        { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus },
+      )
+    }
   }
 
   /**

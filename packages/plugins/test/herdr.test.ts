@@ -13,6 +13,10 @@
  * - 双轨清理（workflow settled / 父 turn settled）与失败保留；
  * - Worktree 注 env（两步建窗 + 关初始 tab + workspace.close）；
  * - resume（同父复用 / 跨父拒绝 / 未知拒绝 / 并发拒绝）；
+ * - gateTimeoutMs：仅对 Herdr 处理路径（新建 / 已登记 resume）显式拒绝，
+ *   原生 passthrough 不受影响；
+ * - 超时安全边界（TimeoutError）：保留 pane 与诊断、绝不代发按键；底层
+ *   working/blocked/启动期未定时 resume 显式拒绝，idle 后复用同一 pane 续接；
  * - abort 立即取消 Ask 并关闭自有 PTY；
  * - 启停：默认停用注册、启用连接、liveTasks 409 保护、结算后可 disable、
  *   对账失败自行清理订阅；
@@ -77,8 +81,10 @@ class FakeTransport implements HerdrTransport {
   onPrompt: ((pane: PaneState, text: string) => void) | undefined
   /** send_keys 后目标状态（默认 working 模拟键已生效处理中）。 */
   afterSendKeys: PaneStatus = 'working'
-  /** agent.wait 轮询中止信号（测试用）。 */
+  /** agent.wait 轮询中止信号（测试用：中止后挂起的 wait 立即以 timeout 终结）。 */
   waitAbort: AbortSignal | undefined
+  /** agent.wait 因 waitAbort 中止的次数（测试确定性观察点）。 */
+  waitBreaks = 0
   /** 自定义终端快照（agent.read 返回；缺省 tail of <pane> 行）。 */
   snapshotText: string | undefined
   /** ping capabilities 通告：缺省模拟支持 send_keys CAS 的服务端；测试可改写模拟旧服务端（真实 0.9.5 无 CAS 字段）。 */
@@ -177,15 +183,21 @@ class FakeTransport implements HerdrTransport {
         return { type: 'agent_info', agent: agentInfoOf(pane) }
       }
       case 'agent.wait': {
-        // 真实语义：阻塞直至 until 命中（fake 以 10ms 轮询模拟）。
+        // 真实语义：阻塞直至 until 命中（fake 以 10ms 轮询模拟；waitAbort
+        // 中止时立即以 timeout 终结，与状态变化解耦，供测试确定性收尾）。
         const pane = this.paneOf(params['target'])
         const until = ((params['until'] as string[]) ?? []).map((s) => s as PaneStatus)
+        const waitSignal = this.waitAbort
         for (let i = 0; i < 2_000; i += 1) {
           if (until.length === 0 || until.includes(pane.agentStatus)) {
             return { type: 'agent_info', agent: agentInfoOf(pane) }
           }
-          if (this.waitAbort?.aborted) break
-          await delay(10)
+          try {
+            await delay(10, undefined, waitSignal !== undefined ? { signal: waitSignal } : {})
+          } catch {
+            this.waitBreaks += 1
+            break
+          }
         }
         throw new HelmError('timeout', 'timed out waiting for agent status', 408)
       }
@@ -683,14 +695,32 @@ function scriptSuccess(env: Env, content: string, schema = false): void {
 // 文件交接 A/B/C
 // ---------------------------------------------------------------------------
 
-test('Herdr 显式拒绝 gateTimeoutMs，避免静默丢弃外部超时语义', { timeout: 60_000 }, async () => {
+test('gateTimeoutMs: Herdr spawn/已登记 resume 显式拒绝；原生 passthrough 不受影响', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
+    // 原生 passthrough：非 Herdr 运行时的请求携带 gateTimeoutMs 原样放行内核。
+    const native = (await spawnDirect(env, { gate: 'true', gateTimeoutMs: 1_000 })) as {
+      __transformed?: { gateTimeoutMs?: number }
+    }
+    assert.ok(native.__transformed !== undefined, '原生请求不被 Herdr 接管')
+    assert.equal(native.__transformed.gateTimeoutMs, 1_000, 'gateTimeoutMs 原样透传内核')
+
+    // Herdr 运行时新建：进入建窗前显式拒绝。
     await assert.rejects(
       spawnDirect(env, { agentType: 'herdr:agy', gate: 'true', gateTimeoutMs: 1_000 }),
       (error: unknown) => error instanceof HelmError && error.code === 'unsupported_runtime',
     )
     assert.equal(env.transport.calls.some((call) => call.method === 'agent.start'), false)
+
+    // 已登记 resume：识别为受管 pane 后同样显式拒绝，不发续接 prompt。
+    scriptSuccess(env, 'first')
+    await spawnDirect(env, { agentType: 'herdr:agy', agentId: 'wf_gt:node-a' })
+    const promptsBefore = env.transport.calls.filter((c) => c.method === 'agent.prompt').length
+    await assert.rejects(
+      spawnDirect(env, { agentType: 'herdr:agy', resume: 'wf_gt:node-a', gate: 'true', gateTimeoutMs: 1_000 }),
+      (error: unknown) => error instanceof HelmError && error.code === 'unsupported_runtime',
+    )
+    assert.equal(env.transport.calls.filter((c) => c.method === 'agent.prompt').length, promptsBefore, '拒绝时不发续接 prompt')
   } finally {
     await env.close()
   }
@@ -1178,6 +1208,56 @@ test('abort: 立即取消 Ask 并关闭自有 PTY（清理不受 aborted 阻碍�
   }
 })
 
+test('超时（TimeoutError）保留 pane：working 时 resume 显式拒绝不发键；idle 后可 resume 复用同一 pane', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    // 首轮任务投递后底层 CLI 持续 working（不写交接文件）。
+    env.transport.promptStatus = 'working'
+    const waitBreak = new AbortController()
+    env.transport.waitAbort = waitBreak.signal
+    const controller = new AbortController()
+    const spawned = spawnDirect(env, { agentType: 'herdr:agy', agentId: 'wf_to:a', signal: controller.signal })
+    await waitFor(() => env.transport.calls.some((c) => c.method === 'agent.prompt'))
+    // 回合超时（AbortSignal.timeout 同源语义：reason 为 TimeoutError）。
+    controller.abort(new DOMException('turn timed out', 'TimeoutError'))
+    let timedOut: unknown = undefined
+    await assert.rejects(spawned, (e: unknown) => {
+      timedOut = e
+      return e instanceof HelmError && e.code === 'agent_timeout'
+    })
+    const snapshotOfTimeout = String((timedOut as HelmError).details?.snapshot ?? '')
+    assert.ok(snapshotOfTimeout.length > 0, '超时错误附终端诊断快照')
+
+    const pane = [...env.transport.panes.values()][0]!
+    assert.equal(env.transport.tabs.get(pane.tabId)?.closed, false, '超时保留 pane 不关窗')
+    assert.equal(pane.agentStatus, 'working', '底层 CLI 仍 working')
+    assert.equal(env.transport.sendKeysLog.length, 0, '绝不代发按键中止')
+    const list = (await env.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ outcome: string }> }
+    assert.equal(list.panes[0]!.outcome, 'failed', 'registry 标 failed 留档')
+
+    // 底层仍 working：resume 在任何 prompt 发送前显式拒绝（不新建、不发键）。
+    await assert.rejects(
+      spawnDirect(env, { agentType: 'herdr:agy', resume: 'wf_to:a' }),
+      (e: unknown) => e instanceof HelmError && e.code === 'resume_agent_busy',
+    )
+    assert.equal(env.transport.calls.filter((c) => c.method === 'agent.prompt').length, 1, '拒绝续接时不追加 prompt')
+    assert.equal(env.transport.sendKeysLog.length, 0)
+
+    // 释放 fake agent.wait 后底层转 idle：权威确认通过，复用同一 pane 续接。
+    waitBreak.abort()
+    await waitFor(() => env.transport.waitBreaks === 1)
+    env.transport.advancePane(pane.paneId, 'idle')
+    scriptSuccess(env, 'resumed-after-timeout')
+    const tabsBefore = env.transport.calls.filter((c) => c.method === 'tab.create').length
+    const resumed = await spawnDirect(env, { agentType: 'herdr:agy', resume: 'wf_to:a' })
+    assert.equal(resumed, 'resumed-after-timeout')
+    assert.equal(env.transport.calls.filter((c) => c.method === 'tab.create').length, tabsBefore, '复用既有 pane 不新建 tab')
+    assert.equal(env.transport.panes.size, 1)
+  } finally {
+    await env.close()
+  }
+})
+
 // ---------------------------------------------------------------------------
 // 启停与 liveTasks
 // ---------------------------------------------------------------------------
@@ -1373,6 +1453,31 @@ test('新窗格启动结果不确定时不重试 agent.start', { timeout: 60_000
     await assert.rejects(spawnDirect(env, { agentType: 'herdr:pi' }), (error: unknown) => (error as HelmError).code === 'herdr_timeout')
     assert.equal(env.transport.calls.filter((call) => call.method === 'agent.start').length, 1)
     assert.equal(env.transport.calls.filter((call) => call.method === 'agent.prompt').length, 0)
+  } finally {
+    await env.close()
+  }
+})
+
+test('启动期超时后 resume：agent.start 完成与否未定时权威确认失败则显式拒绝，不盲目重发', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    // 启动期超时：agent.start 响应不确定，窗格登记 failed 且无受管 Agent 身份。
+    env.transport.errors.set('agent.start', () => new HelmError('herdr_timeout', '启动响应超时，可能已启动', 504))
+    await assert.rejects(
+      spawnDirect(env, { agentType: 'herdr:agy', agentId: 'wf_su:a' }),
+      (error: unknown) => (error as HelmError).code === 'herdr_timeout',
+    )
+    const starts = env.transport.calls.filter((c) => c.method === 'agent.start').length
+    assert.equal(starts, 1)
+
+    // resume 党权威 agent.get 确认：窗格无受管 Agent 身份（name 缺失）→
+    // 显式拒绝；不重发 agent.start、不新建、不发 prompt。
+    await assert.rejects(
+      spawnDirect(env, { agentType: 'herdr:agy', resume: 'wf_su:a' }),
+      (e: unknown) => e instanceof HelmError && e.code === 'herdr_ownership_lost',
+    )
+    assert.equal(env.transport.calls.filter((c) => c.method === 'agent.start').length, starts, 'resume 不盲目重发 agent.start')
+    assert.equal(env.transport.calls.some((c) => c.method === 'agent.prompt'), false, '拒绝续接时不发 prompt')
   } finally {
     await env.close()
   }
