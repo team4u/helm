@@ -29,6 +29,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   closeSync,
+  existsSync,
   fsyncSync,
   linkSync,
   lstatSync,
@@ -502,6 +503,13 @@ export class WorkflowService {
   private readonly active = new Map<string, ActiveRun>()
   /** 取消窗口中的会话集合（引用计数：并发取消重叠时最后一个释放才解除）：窗口内拒绝该会话新 run/spawn（防取消期间又派新任务）。 */
   private readonly cancellingCounts = new Map<number, number>()
+  /**
+   * 进程内接管保留（防并发双接管）：resume 已在旧 record 落接管标记、新 run
+   * 快照尚未落盘的窗口内，新 runId 在索引与磁盘上均无痕迹——幽灵检测会误
+   * 判可重接管。保留集合在此窗口内占位（检测时保持 409）；快照落盘或启动
+   * 失败即释放，不放宽到整个活跃期。
+   */
+  private readonly takeoverReservations = new Set<string>()
   /** 进行中的边界取消（key -> promise）：同边界重入共享同一次取消，防回调相互等待死锁。 */
   private readonly boundaryCancels = new Map<string, Promise<void>>()
   private closed = false
@@ -565,8 +573,7 @@ export class WorkflowService {
    */
   async prepareRecovery(): Promise<void> {
     if (this.recoveryPrepared) return
-    const rawIndex = this.readRunIndexForRecovery()
-    const index = rawIndex as RunIndexEntry[]
+    const index = this.readRunIndex()
     const childIds = new Set<number>()
     for (const entry of index) {
       let record: RunRecord
@@ -611,8 +618,7 @@ export class WorkflowService {
     this.initPromise = (async () => {
       try {
         await this.prepareRecovery()
-        const rawIndex = this.readRunIndexForRecovery()
-        const index = rawIndex as RunIndexEntry[]
+        const index = this.readRunIndex()
         let changed = false
         // 通知 outbox 补发：崩溃前已达终态但 onBackgroundAgentSettled 未成功（或
         // 未及调用）的记录。回调失败不阻断 init（stderr 诊断，notifiedAt 不置位，
@@ -1185,34 +1191,58 @@ export class WorkflowService {
     // notifyParentOnSettle、累计 autoResumeCount +1。接管标记先于新 run 快照
     // 落盘：进程死在两写之间只会留下「指向不存在 run 的接管标记」（诊断
     // 可见），不会出现双 run 同时可续跑。
+    /**
+     * 接管保留释放（幂等）：新 run 快照落盘（磁盘成为接管事实的权威）或
+     * 启动失败（标记是否幽灵交由磁盘事实判定）时调用。
+     */
+    let releaseTakeoverReservation: () => void = () => {}
     if (replayFrom !== undefined) {
-      if (replayFrom.resumedByRunId !== undefined) {
-        let takeoverExists = this.active.has(replayFrom.resumedByRunId)
-        if (!takeoverExists) {
-          try {
-            this.loadRecord(replayFrom.resumedByRunId)
-            takeoverExists = true
-          } catch (error) {
-            if (!(error instanceof HelmError && error.code === 'not_found')) throw error
-            process.stderr.write(
-              `workflow resume: clearing orphaned takeover marker ${replayFrom.resumedByRunId} on ${replayFrom.id}\n`,
-            )
-          }
-        }
-        if (takeoverExists) {
+      // 并发接管串行化（同步临界段）：终检用现读记录——本 run 入口 loadRecord
+      // 后已经过 init()/flush 等 await 点，并发 resume 可能已抢先落标记；从
+      // 现读检查到标记写入之间无 await（单线程事件循环），后到者必然读到先
+      // 到者的标记并 409，不可能双双接管。
+      const currentMarker = this.loadRecord(replayFrom.id).resumedByRunId
+      if (currentMarker !== undefined) {
+        // 幽灵标记甄别：索引 not_found 不等于新 run 从未存在——接管 run 可能
+        // 已写记录/账本后索引才丢失。只有进程内保留、活跃表、索引与磁盘
+        // （同会话的记录与账本文件）四面都无痕迹才确证可重接管；仍有痕迹
+        // （即使索引缺失）保持 409 诊断，防对已产生副作用的 run 重复续跑。
+        // 接管记录损坏如实上抛。
+        const takeover = this.inspectTakeoverMarker(currentMarker, replayFrom.conversationId)
+        if (!takeover.ghost) {
           throw new HelmError(
             'conflict',
-            `工作流 ${replayFrom.id} 已被运行 ${replayFrom.resumedByRunId} 接管续跑；请从接管的 run 继续`,
+            `工作流 ${replayFrom.id} 已被运行 ${currentMarker} 接管续跑（${takeover.reason}）；请从接管的 run 继续或人工核查`,
             409,
-            { runId: replayFrom.id, resumedByRunId: replayFrom.resumedByRunId },
+            { runId: replayFrom.id, resumedByRunId: currentMarker },
           )
         }
+        process.stderr.write(
+          `workflow resume: clearing orphaned takeover marker ${currentMarker} on ${replayFrom.id}（索引与磁盘均无接管痕迹，确证从未写记录/账本）\n`,
+        )
         replayFrom.resumedByRunId = undefined
       }
-      replayFrom.resumedByRunId = runId
-      replayFrom.updatedAt = Date.now()
-      this.writeRecord(replayFrom)
-      await this.state.flush?.()
+      // 接管保留（防并发双接管）：从旧 record 标记落盘到新 run 快照落盘之间
+      // 存在 await 窗口（flush 等），此间的幽灵检测在索引与磁盘上都看不到新
+      // run——保留集合先占位，检测一律按「接管仍存在」409；绝不放宽整个
+      // 活跃期，快照落盘或启动失败即释放。
+      this.takeoverReservations.add(runId)
+      let reservationHeld = true
+      releaseTakeoverReservation = (): void => {
+        if (reservationHeld) {
+          reservationHeld = false
+          this.takeoverReservations.delete(runId)
+        }
+      }
+      try {
+        replayFrom.resumedByRunId = runId
+        replayFrom.updatedAt = Date.now()
+        this.writeRecord(replayFrom)
+        await this.state.flush?.()
+      } catch (error) {
+        releaseTakeoverReservation()
+        throw error
+      }
     }
 
     const abort = new AbortController()
@@ -1276,9 +1306,15 @@ export class WorkflowService {
     // 点，close() 只快照当下 active 集合——漏检会让 run 越过屏障继续派生子会话。
     // 本行到 active.set 之间无 await（单线程事件循环），此后 close 必然拍到本 run。
     // 同款复查取消窗口：经过脚本读取/账本重放等 await 后，目标会话可能已进入
-    // 级联取消边界——在此拒绝，不留越过标记的漏网 run。
-    this.assertNotClosed()
-    this.assertNotCancelling(conversationId)
+    // 级联取消边界——在此拒绝，不留越过标记的漏网 run。拒绝时释放接管保留
+    // （新 run 未落任何快照，标记交由磁盘事实判定）。
+    try {
+      this.assertNotClosed()
+      this.assertNotCancelling(conversationId)
+    } catch (error) {
+      releaseTakeoverReservation()
+      throw error
+    }
     this.active.set(runId, run)
 
     /**
@@ -1415,9 +1451,15 @@ export class WorkflowService {
     // 先落 running 快照（state store）：进程若死于此 run，重启后 init() 显式发现并标 failed。
     try {
       this.writeRecord(record)
+      // 快照已原子落盘：接管事实以磁盘为权威（幽灵检测必见文件），进程内
+      // 保留即可释放（幂等；flush 失败时文件仍在，同样不再需要保留）。
+      releaseTakeoverReservation()
       await this.state.flush?.()
     } catch (error) {
       // running 快照都没能落库：不启动执行，不留任何 active/writer。
+      // 快照未落盘时释放接管保留——此时标记是否幽灵交由磁盘事实判定
+      // （无任何文件 = 真幽灵可重接管；写一半失败原子回滚不留文件）。
+      releaseTakeoverReservation()
       // close() 快照可能已拍到本 run：gate 必须给终点，否则 close 永久挂起。
       await run.writer.close().catch(() => {})
       this.active.delete(runId)
@@ -1925,7 +1967,13 @@ export class WorkflowService {
             onGateResult: (raw: unknown) => {
               const gate = sanitizeGateResult(raw, { agentId: agentIdForProto })
               gateResult = gate
-              node.gate = { ok: gate.ok, output: this.redact(gate.output) }
+              // exitCode/timedOut 是诊断事实（非机密），保留不丢弃。
+              node.gate = {
+                ok: gate.ok,
+                output: this.redact(gate.output),
+                ...(gate.exitCode !== undefined ? { exitCode: gate.exitCode } : {}),
+                ...(gate.timedOut !== undefined ? { timedOut: gate.timedOut } : {}),
+              }
               request.onGateResult?.(gate)
             },
           }
@@ -2027,30 +2075,10 @@ export class WorkflowService {
    * 故障不会被 snapshot 再吞掉（throw 直接打断 SSE snapshot 组装）。
    */
   listRuns(): WorkflowRunSummary[] {
-    let raw: unknown
-    try {
-      raw = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
-    } catch (error) {
-      // 索引本体读不出来：与单条记录故障同级的持久层服务故障。
-      throw new HelmError(
-        'workflow_index_corrupt',
-        `读取工作流 run 索引失败：${errorMessage(error)}`,
-        500,
-        { key: INDEX_KEY },
-      )
-    }
-    // 索引是持久层外部输入：非数组/null 项/字段非法显式报损坏（带 key 与可
-    // 辨识 runId），绝不强转后拿 entry.id TypeError 或当有效列表。
-    const broken = runIndexProblem(raw)
-    if (broken !== undefined) {
-      throw new HelmError(
-        'workflow_index_corrupt',
-        `工作流 run 索引损坏（${broken.problem}）`,
-        500,
-        { key: INDEX_KEY, runId: broken.runId },
-      )
-    }
-    const index = raw as RunIndexEntry[]
+    // 索引读取与其他全部入口统一（readRunIndex）：store 抛错/形状损坏显式
+    // workflow_index_corrupt（带 key 与可辨识 runId），绝不强转后拿 entry.id
+    // TypeError 或当有效列表。
+    const index = this.readRunIndex()
     const out: WorkflowRunSummary[] = []
     const seen = new Set<string>()
     for (const active of this.active.values()) {
@@ -2094,13 +2122,11 @@ export class WorkflowService {
     if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
       throw new HelmError('validation_error', 'maxAttempts 必须是正整数', 400, { maxAttempts })
     }
-    const raw = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
-    const broken = runIndexProblem(raw)
-    if (broken !== undefined) {
-      throw this.indexCorruptError(broken.runId, broken.problem)
-    }
+    // 索引读取与其他全部入口统一：损坏显式 workflow_index_corrupt，绝不静默
+    // 当空索引返回空候选（那会让 Watchdog 误以为无事可做）。
+    const index = this.readRunIndex()
     const candidates: WorkflowAutoResumeCandidate[] = []
-    for (const entry of raw) {
+    for (const entry of index) {
       let record: RunRecord
       try {
         record = this.loadRecord(entry.id)
@@ -2114,10 +2140,23 @@ export class WorkflowService {
         record.status !== 'failed' ||
         record.kind === 'subagent' ||
         record.notifyParentOnSettle !== true ||
-        record.resumedByRunId !== undefined ||
         (record.autoResumeCount ?? 0) >= maxAttempts ||
         isNonRetryableWorkflowError(record.error)
       ) continue
+      if (record.resumedByRunId !== undefined) {
+        // 幽灵接管标记同规则甄别（与 resume 入口同一 helper）：接管 run 四面
+        // 无痕（从未写记录/账本）才放行重接管；仍存在或损坏（含磁盘仍有
+        // 文件、并发启动窗口）一律不放行。损坏诊断后跳过本条，不影响其他候选。
+        try {
+          const takeover = this.inspectTakeoverMarker(record.resumedByRunId, record.conversationId)
+          if (!takeover.ghost) continue
+        } catch (error) {
+          process.stderr.write(
+            `workflow auto-resume: skip ${entry.id}: takeover ${record.resumedByRunId} unusable: ${errorMessage(error)}\n`,
+          )
+          continue
+        }
+      }
       const journal = readJournal(record.journalPath)
       const hasSafeReplayAnchor = journal.entries.some((line) =>
         line.type === 'action'
@@ -2203,7 +2242,7 @@ export class WorkflowService {
    * 拒绝/失败诊断不吞 stderr），绝不回退普通中止；完成前计入 pendingAborts
    * （settle 前必等完——迟到调用在结算后仅诊断，同样不阻断终态）。
    */
-  private abortChildConversation(run: ActiveRun, conversationId: number): void {
+  private abortChildConversation(run: ActiveRun, conversationId: number): Promise<void> {
     const pending = this.host
       .abortConversationGuarded(conversationId)
       .catch((error: unknown) => {
@@ -2217,6 +2256,9 @@ export class WorkflowService {
       })
     // 先注册再执行：catch 链已保证 pending 不 reject，then 删除自引用安全。
     run.pendingAborts.add(pending)
+    // 返回该 pending（绝不 reject）：单回合超时路径需在返回失败前等完自己
+    // 触发的守卫中止，避免紧随的 resume 撞上在途 abort。
+    return pending
   }
 
   /**
@@ -2492,8 +2534,9 @@ export class WorkflowService {
     // resume 严格续接：优先用本 run 内 spawn 时记录的 convId；仅当本 run 未见
     // 过（如 resume 自重放账本的 agent）才退回 native 全局映射。
     const knownConvId = conversationByAgent.get(request.agentId)
-    const requestedResumeRef = (request as WorkflowSpawnRequest & { resumeRef?: string }).resumeRef
-    const resumeRef = isResume ? String(requestedResumeRef ?? knownConvId ?? nativeAgentId) : undefined
+    // resumeRef 已是 WorkflowSpawnRequest 正式字段（runtime 重放/续接时透传
+    // executionId 或 conversationId 字符串），无需再经交集类型强转读取。
+    const resumeRef = isResume ? String(request.resumeRef ?? knownConvId ?? nativeAgentId) : undefined
 
     /** 已 sanitized 的执行元数据（onResolved 可能与 spawn 返回前多次回调——幂等只记最新）。 */
     let executionInfo: AgentExecutionInfo | undefined
@@ -2503,22 +2546,46 @@ export class WorkflowService {
     // agent({ timeoutMs }) 单回合超时：runtime 侧 WorkflowSpawnRequest 的扩展
     // 字段（DSL 接入由 runtime 分支落地）；服务边界按设计范围强校验。
     const timeoutMs = this.readAgentTimeoutMs(request)
-    const timeoutSignal = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs)
+    /**
+     * 自有 AbortController + unref 计时器（不用 AbortSignal.timeout：其计时器
+     * 不可撤销，旧 attempt 的超时会在 spawn 终局后迟到触发，经 agentId 映射
+     * 误中止同会话的新 attempt）。超时 abort 以 TimeoutError 为 reason（Herdr
+     * 按 signal.reason.name === 'TimeoutError' 识别单回合超时，无需新增协议
+     * 字段）；成功/失败出口统一清计时器。
+     */
+    let timeoutController: AbortController | undefined
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined
     let timedOut = false
-    if (timeoutSignal !== undefined) {
-      timeoutSignal.addEventListener(
-        'abort',
-        () => {
-          // run 级取消已另有归因；此处只记录单回合超时事实。
-          if (run.abort.signal.aborted) return
-          timedOut = true
-          // 超时即守卫中止子会话（human 红线由内核原子复核）：优先 onResolved
-          // 已回传的 conversationId，否则用本 run 内登记的 agentId 映射。
-          const childId = executionInfo?.conversationId ?? conversationByAgent.get(request.agentId)
-          if (childId !== undefined) this.abortChildConversation(run, childId)
-        },
-        { once: true },
-      )
+    /** 本 attempt 因超时触发的守卫中止（返回前必等完，防 resume 撞在途 abort）。 */
+    const timeoutAborts = new Set<Promise<void>>()
+    if (timeoutMs !== undefined) {
+      timeoutController = new AbortController()
+      const controller = timeoutController
+      timeoutTimer = setTimeout(() => {
+        timeoutTimer = undefined
+        // run 级取消已另有归因；此处只记录单回合超时事实。
+        if (run.abort.signal.aborted) return
+        timedOut = true
+        controller.abort(new DOMException(`子代理回合超过 ${timeoutMs}ms 上限`, 'TimeoutError'))
+        // 超时即守卫中止子会话（human 红线由内核原子复核）：优先 onResolved
+        // 已回传的 conversationId，否则用本 run 内登记的 agentId 映射。
+        const childId = executionInfo?.conversationId ?? conversationByAgent.get(request.agentId)
+        if (childId !== undefined) timeoutAborts.add(this.abortChildConversation(run, childId))
+      }, timeoutMs)
+      timeoutTimer.unref?.()
+    }
+    const timeoutSignal = timeoutController?.signal
+    /** 成功/失败出口统一撤销计时器（监听随 controller 置空一并失效可回收）。 */
+    const disarmTimeout = (): void => {
+      if (timeoutTimer !== undefined) {
+        clearTimeout(timeoutTimer)
+        timeoutTimer = undefined
+      }
+      timeoutController = undefined
+    }
+    /** 超时失败返回前等完自己触发的守卫中止（后续 resume 不撞忙）。 */
+    const awaitTimeoutAborts = async (): Promise<void> => {
+      if (timeoutAborts.size > 0) await Promise.allSettled([...timeoutAborts])
     }
 
     const proto: AgentSpawnRequest = {
@@ -2551,9 +2618,14 @@ export class WorkflowService {
         if (info.conversationId !== undefined) {
           conversationByAgent.set(request.agentId, info.conversationId)
           run.childConversations.add(info.conversationId)
-          // 迟到 onResolved 补杀：abort 先于执行元数据落地时，abortAgent 的
-          // 映射里还没有该子会话——在登记点立即补守卫中止，绝不因时序漏杀。
-          if (run.abort.signal.aborted) this.abortChildConversation(run, info.conversationId)
+          // 迟到 onResolved 补杀：abort/超时先于执行元数据落地时，abortAgent
+          // 的映射里还没有该子会话——在登记点立即补守卫中止，绝不因时序漏杀；
+          // 超时路径计入本 attempt 等待面（返回前等完）。
+          if (run.abort.signal.aborted) {
+            this.abortChildConversation(run, info.conversationId)
+          } else if (timedOut) {
+            timeoutAborts.add(this.abortChildConversation(run, info.conversationId))
+          }
           // 子会话事实即时持久：崩溃恢复以这组 IDs 为权威坐标（见
           // persistChildConversationFact）。同步/后台 workflow 一视同仁——
           // 统一经 invokeSpawn，不按启动形态分支。
@@ -2574,11 +2646,14 @@ export class WorkflowService {
 
     try {
       const raw = await this.host.spawnAgent(proto)
-      // 超时已触发：子会话已被守卫中止，迟到的返回不可信，按超时失败处理。
+      // 超时已触发：子会话已被守卫中止，迟到的返回不可信，按超时失败处理；
+      // 返回前等完自己触发的守卫中止（后续 resume 不撞在途 abort）。
       if (timedOut) {
+        await awaitTimeoutAborts()
         return {
           ok: false,
           error: `[agent_timeout] 子代理 ${request.label} 回合超过 ${timeoutMs}ms 上限，已中止子会话（可凭 execution.conversationId resume 续接）`,
+          timedOut: true,
           ...(executionInfo !== undefined ? { executionInfo } : {}),
           ...(gateResult !== undefined ? { gate: gateResult } : {}),
         }
@@ -2608,9 +2683,11 @@ export class WorkflowService {
         ...(gateResult !== undefined ? { gate: gateResult } : {}),
       }
       if (timedOut) {
+        await awaitTimeoutAborts()
         return {
           ok: false,
           error: `[agent_timeout] 子代理 ${request.label} 回合超过 ${timeoutMs}ms 上限，已中止子会话（可凭 execution.conversationId resume 续接）`,
+          timedOut: true,
           ...retained,
         }
       }
@@ -2620,6 +2697,10 @@ export class WorkflowService {
       }
       const message = error instanceof Error ? error.message : String(error)
       return { ok: false, error: message, ...retained }
+    } finally {
+      // 成功/失败出口统一清计时器与监听：旧 attempt 的超时绝不允许在未来
+      // 触发（同会话可能已被新 attempt 续接，迟到超时会误杀新回合）。
+      disarmTimeout()
     }
   }
 
@@ -2629,7 +2710,9 @@ export class WorkflowService {
    * 3_600_000 整数毫秒，非法显式拒绝，绝不静默锐化。
    */
   private readAgentTimeoutMs(request: WorkflowSpawnRequest): number | undefined {
-    const raw = (request as { timeoutMs?: unknown }).timeoutMs
+    // timeoutMs 已是 WorkflowSpawnRequest 正式字段；运行时值仍做形状校验
+    // （边界校验纪律：引擎侧输入不因类型声明而免检）。
+    const raw: unknown = request.timeoutMs
     if (raw === undefined) return undefined
     if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1_000 || raw > 3_600_000) {
       throw new HelmError(
@@ -2894,9 +2977,11 @@ export class WorkflowService {
   /**
    * 写 run 记录（§4.3）：完整 RunRecord 原子落文件（.tmp + fsync + rename），
    * records doc 只维护轻量索引（id/conversationId/status/createdAt/updatedAt/
-   * notifyParentOnSettle/autoResumeCount/resumedByRunId）。先文件后索引：
-   * 文件写失败时索引未动，不会出现索引指向缺失文件的中间态（loadRecord
-   * 对缺失文件显式报 workflow_record_corrupt，绝不假装记录存在）。
+   * notifyParentOnSettle/autoResumeCount/resumedByRunId）。顺序纪律：先读校验
+   * 索引、再写文件、最后更新索引——索引已损坏时绝不继续写文件（避免在未知
+   * 全局状态下覆盖持久事实，徒增不一致面）；文件写失败时索引未动（不会出现
+   * 索引指向缺失文件的中间态；loadRecord 对缺失文件显式报
+   * workflow_record_corrupt，绝不假装记录存在）。
    */
   private writeRecord(record: RunRecord): void {
     // 活跃 run 的在途子会话以内存 Set 为唯一真源：任何写入（onResolved 即时 /
@@ -2906,6 +2991,9 @@ export class WorkflowService {
     if (active !== undefined && active.childConversations.size > 0) {
       record.childConversationIds = [...active.childConversations]
     }
+    // 索引损坏在写文件前显式拦下（workflow_index_corrupt）：带着损坏索引继续
+    // 写只会在下一次读取时爆炸，且掩盖了最早的不一致时刻。
+    const index = this.readRunIndex()
     this.writeRecordFile(record)
     const entry: RunIndexEntry = {
       id: record.id,
@@ -2917,8 +3005,6 @@ export class WorkflowService {
       ...(record.autoResumeCount !== undefined ? { autoResumeCount: record.autoResumeCount } : {}),
       ...(record.resumedByRunId !== undefined ? { resumedByRunId: record.resumedByRunId } : {}),
     }
-    const rawIndex = this.readRunIndexForRecovery()
-    const index = rawIndex as RunIndexEntry[]
     const at = index.findIndex((candidate) => candidate.id === record.id)
     if (at >= 0) index[at] = entry
     else index.push(entry)
@@ -2961,24 +3047,23 @@ export class WorkflowService {
   }
 
   private loadRecord(runId: string): RunRecord {
-    // 索引是唯一入口（开发期无迁移：无旧 per-run doc 读取）。
-    let rawIndex: unknown
+    // 索引是唯一入口（开发期无迁移：无旧 per-run doc 读取）；索引级故障
+    // 统一 workflow_index_corrupt（与其他全部索引入口同契约），附 runId 上下文。
+    let index: RunIndexEntry[]
     try {
-      rawIndex = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+      index = this.readRunIndex()
     } catch (error) {
-      // store 抛错（IO/解析）是持久层故障，绝不 TS 强转后当 not_found 混过。
-      throw new HelmError(
-        'workflow_record_corrupt',
-        `读取工作流运行 ${runId} 所需的 run 索引失败：${errorMessage(error)}`,
-        500,
-        { runId, key: INDEX_KEY },
-      )
+      if (error instanceof HelmError && error.code === 'workflow_index_corrupt') {
+        throw new HelmError(
+          error.code,
+          `读取工作流运行 ${runId} 所需的 run 索引失败：${error.message}`,
+          500,
+          { runId, key: INDEX_KEY },
+        )
+      }
+      throw error
     }
-    const broken = runIndexProblem(rawIndex)
-    if (broken !== undefined) {
-      throw this.indexCorruptError(broken.runId, broken.problem)
-    }
-    const entry = (rawIndex as RunIndexEntry[]).find((candidate) => candidate.id === runId)
+    const entry = index.find((candidate) => candidate.id === runId)
     if (entry === undefined) {
       throw new HelmError('not_found', `工作流运行 ${runId} 不存在`, 404, { runId })
     }
@@ -3040,8 +3125,12 @@ export class WorkflowService {
     return record as RunRecord
   }
 
-  /** 统一读取并校验 run 索引；恢复/写入路径不得把损坏数据当空数组。 */
-  private readRunIndexForRecovery(): RunIndexEntry[] {
+  /**
+   * 统一读取并校验 run 索引（list/get/prepare/init/write 全部入口共用）：
+   * store 抛错与形状损坏一律 workflow_index_corrupt（500，带 key 与可辨识
+   * runId），绝不把损坏数据当空数组、绝不让调用方强转后 TypeError。
+   */
+  private readRunIndex(): RunIndexEntry[] {
     let raw: unknown
     try {
       raw = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
@@ -3058,14 +3147,46 @@ export class WorkflowService {
     return raw as RunIndexEntry[]
   }
 
-  /** listRuns 索引损坏诊断（不自动删索引或记录：修复由人类确认）。 */
+  /** 索引损坏诊断（不自动删索引或记录：修复由人类确认）。 */
   private indexCorruptError(runId: string, reason: string): HelmError {
     return new HelmError(
       'workflow_index_corrupt',
-      `工作流 run 索引损坏（${reason}）；列表无法完整呈现，请检查 state store`,
+      `工作流 run 索引损坏（${reason}）；请检查 state store（不自动删除索引或记录）`,
       500,
-      { runId },
+      { key: INDEX_KEY, runId },
     )
+  }
+
+  /**
+   * 接管标记甄别：ghost=true 表示接管 run 在进程内保留（标记已落盘、快照
+   * 未落盘的并发窗口）、活跃表、run 索引与磁盘（同会话的记录文件与账本
+   * 文件）四面都无任何痕迹——新 run 从未落任何持久事实，允许重接管；
+   * 否则返回不放行原因。接管记录损坏（索引指向但文件不可读/形状非法）
+   * 如实上抛 workflow_record_corrupt：损坏即无法确证无副作用，绝不放行。
+   */
+  private inspectTakeoverMarker(
+    takeoverRunId: string,
+    conversationId: number,
+  ): { ghost: true } | { ghost: false; reason: string } {
+    if (this.takeoverReservations.has(takeoverRunId)) {
+      return { ghost: false, reason: '接管 run 标记已落盘、快照尚未落盘（并发启动窗口）' }
+    }
+    if (this.active.has(takeoverRunId)) return { ghost: false, reason: '接管 run 仍在运行' }
+    try {
+      this.loadRecord(takeoverRunId)
+      return { ghost: false, reason: '接管 run 的记录仍存在' }
+    } catch (error) {
+      if (!(error instanceof HelmError && error.code === 'not_found')) throw error
+    }
+    // 索引已无此 run：磁盘文件是最后的副作用事实（索引缺失可能是损坏/重建，
+    // 文件在即按已产生副作用保守处理）。
+    const traces: string[] = []
+    const recordPath = this.recordPathFor(conversationId, takeoverRunId)
+    const journalPath = this.journalPathFor(conversationId, takeoverRunId)
+    if (existsSync(recordPath)) traces.push(`记录文件 ${recordPath}`)
+    if (existsSync(journalPath)) traces.push(`账本 ${journalPath}`)
+    if (traces.length > 0) return { ghost: false, reason: `磁盘仍存在接管 run 的${traces.join('、')}` }
+    return { ghost: true }
   }
 
   private toSummary(record: RunRecord): WorkflowRunSummary {
@@ -3112,7 +3233,13 @@ export class WorkflowService {
       redacted.worktree = redactJsonValue(redacted.worktree, this.redact) as NonNullable<WorkflowNodeState['worktree']>
     }
     if (redacted.gate !== undefined) {
-      redacted.gate = { ok: redacted.gate.ok, output: this.redact(redacted.gate.output) }
+      // exitCode/timedOut 是诊断事实（非机密），脱敏时保留不丢。
+      redacted.gate = {
+        ok: redacted.gate.ok,
+        output: this.redact(redacted.gate.output),
+        ...(redacted.gate.exitCode !== undefined ? { exitCode: redacted.gate.exitCode } : {}),
+        ...(redacted.gate.timedOut !== undefined ? { timedOut: redacted.gate.timedOut } : {}),
+      }
     }
     if (redacted.gateCommand !== undefined) redacted.gateCommand = this.redact(redacted.gateCommand)
     if (redacted.model !== undefined) redacted.model = this.redact(redacted.model)
@@ -3162,7 +3289,15 @@ export class WorkflowService {
           ...(agent.prompt !== undefined ? { prompt: nodeTextPreview(agent.prompt) } : {}),
           ...(agent.schema !== undefined ? { schema: agent.schema } : {}),
           ...(agent.gate !== undefined
-            ? { gate: { ok: agent.gate.ok, output: nodeTextPreview(agent.gate.output) } }
+            ? {
+                gate: {
+                  ok: agent.gate.ok,
+                  output: nodeTextPreview(agent.gate.output),
+                  // exitCode/timedOut 是诊断事实（非机密），折叠时保留不丢。
+                  ...(agent.gate.exitCode !== undefined ? { exitCode: agent.gate.exitCode } : {}),
+                  ...(agent.gate.timedOut !== undefined ? { timedOut: agent.gate.timedOut } : {}),
+                },
+              }
             : {}),
           ...(agent.tokens !== undefined ? { tokens: agent.tokens } : {}),
           ...(agent.durationMs !== undefined ? { durationMs: agent.durationMs } : {}),

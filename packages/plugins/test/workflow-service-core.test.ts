@@ -1,11 +1,17 @@
 /**
  * 设计文档 §2.3 / §3.2 / §4.2-4.3 的 service/journal 侧核心测试：
  * - journal key v3（cwd 槽）与 agent 行 execution/gate 记录（校验 + 脱敏 + 每次尝试独立 index）；
- * - invokeSpawn 失败分支保留 executionInfo/gateResult、timeoutMs 超时守卫中止子会话；
+ * - invokeSpawn 失败分支保留 executionInfo/gateResult、timeoutMs 单回合超时（自有
+ *   AbortController + unref 计时器：TimeoutError reason、timedOut:true、返回前等完
+ *   自己触发的守卫中止、成功出口撤销计时器）；
  * - RunRecord 完整体原子落 dataDir/artifacts/<convId>/workflow-<runId>.record.json，
  *   records doc 仅存轻量索引；resume 新 run 接管（resumedByRunId 防重复、
- *   autoResumeCount 累计、notifyParentOnSettle 继承）；
- * - nodesFromProgress 长文本截断（1024 + 指示）。
+ *   autoResumeCount 累计、notifyParentOnSettle 继承；幽灵标记需四面无痕才可重接管）；
+ * - 跨重启 resume：手工 seed 失败 attempt 行（attempt=1 + execution.conversationId，
+ *   invocationIndex=0 前向兼容），resumeRef 直传 conversationId 字符串到
+ *   AgentSpawnRequest.resume；
+ * - prepare/init 读取损坏索引：显式 workflow_index_corrupt 拒绝且不修改任何记录；
+ * - nodesFromProgress 长文本截断（1024 + 指示）与 gate.exitCode/timedOut 全链保留。
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -350,10 +356,14 @@ test('invokeSpawn 失败分支保留 executionInfo 与 gate 回报（不丢弃 W
   await custom.service.close()
 })
 
-test('invokeSpawn timeoutMs：超时守卫中止子会话并返回 [agent_timeout]（保留 executionInfo）', timeout, async (t) => {
+test('invokeSpawn timeoutMs：超时守卫中止子会话并返回 [agent_timeout]（保留 executionInfo；signal.reason 为 TimeoutError；timedOut=true）', timeout, async (t) => {
+  let observedReason: unknown
   const custom = makeEnv(t, (proto: unknown) => {
     const request = proto as { onResolved?: (info: unknown) => void; signal?: AbortSignal }
     request.onResolved?.({ conversationId: 9, effectiveCwd: '/hang/dir' })
+    request.signal?.addEventListener('abort', () => {
+      observedReason = request.signal?.reason
+    })
     return new Promise((_resolve, reject) => {
       request.signal?.addEventListener('abort', () => reject(new HelmError('aborted', '回合中止', 409)), { once: true })
     })
@@ -368,8 +378,75 @@ test('invokeSpawn timeoutMs：超时守卫中止子会话并返回 [agent_timeou
   })
   assert.equal(result.ok, false)
   assert.ok(result.error!.includes('[agent_timeout]'), `错误应含超时锚点：${result.error}`)
+  assert.equal(result.timedOut, true, '超时失败必须携带 timedOut: true 供引擎记账')
   assert.equal(result.executionInfo?.conversationId, 9, '超时失败保留 executionInfo 供 resume')
   assert.deepEqual(custom.guardedAborts, [9], '超时必须守卫中止子会话')
+  const reason = observedReason as { name?: string } | undefined
+  assert.equal(reason?.name, 'TimeoutError', `signal.reason.name 必须是 TimeoutError（Herdr 识别锚点）：${String(observedReason)}`)
+})
+
+test('invokeSpawn 超时：返回前等完自己触发的守卫中止（后续 resume 不撞在途 abort）', timeout, async (t) => {
+  let releaseAbort: (() => void) | undefined
+  const abortGate = new Promise<void>((resolve) => {
+    releaseAbort = resolve
+  })
+  const custom = makeEnv(
+    t,
+    (proto: unknown) => {
+      const request = proto as { onResolved?: (info: unknown) => void; signal?: AbortSignal }
+      request.onResolved?.({ conversationId: 12 })
+      return new Promise((_resolve, reject) => {
+        request.signal?.addEventListener('abort', () => reject(new HelmError('aborted', '回合中止', 409)), { once: true })
+      })
+    },
+    {
+      abortConversationGuarded: async (id: number) => {
+        custom.guardedAborts.push(id)
+        await abortGate
+      },
+    },
+  )
+  let settled = false
+  const pending = callInvokeSpawn(custom, {
+    agentId: 'slow-abort',
+    index: 0,
+    prompt: 'p',
+    label: 'slow',
+    agentType: '',
+    timeoutMs: 1_000,
+  }).then((result) => {
+    settled = true
+    return result
+  })
+  // 超时（1s）后守卫中止挂在 abortGate 上：完成前不得返回超时失败。
+  await new Promise((resolve) => setTimeout(resolve, 1_500))
+  assert.equal(settled, false, '自己触发的守卫中止完成前不得返回（防 resume 撞忙）')
+  releaseAbort!()
+  const result = await pending
+  assert.equal(result.timedOut, true)
+  assert.deepEqual(custom.guardedAborts, [12])
+})
+
+test('invokeSpawn 成功返回后撤销超时计时器：旧 attempt 迟到超时不误伤同会话新 attempt', timeout, async (t) => {
+  const custom = makeEnv(t, async (proto: unknown) => {
+    const request = proto as { onResolved?: (info: unknown) => void }
+    request.onResolved?.({ conversationId: 31 })
+    return 'quick'
+  })
+  const result = await callInvokeSpawn(custom, {
+    agentId: 'e',
+    index: 0,
+    prompt: 'p',
+    label: 'quick',
+    agentType: '',
+    timeoutMs: 1_000,
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.timedOut, undefined)
+  // 等待越过 timeoutMs：旧 attempt 的计时器必须已被成功出口撤销，绝不
+  // 迟到触发守卫中止（同会话可能已被新 attempt 续接）。
+  await new Promise((resolve) => setTimeout(resolve, 1_400))
+  assert.deepEqual(custom.guardedAborts, [], '成功出口后不得有迟到超时中止')
 })
 
 test('invokeSpawn timeoutMs 非法值在边界显式拒绝（1_000..3_600_000）', timeout, async (t) => {
@@ -386,4 +463,359 @@ test('invokeSpawn timeoutMs 非法值在边界显式拒绝（1_000..3_600_000）
       }),
     (error: unknown) => error instanceof HelmError && error.code === 'validation_error',
   )
+})
+
+// ---------------------------------------------------------------------------
+// 跨重启 resume：手工 seed 失败 attempt 行，resumeRef 直传 conversationId
+// ---------------------------------------------------------------------------
+
+/** 手工构造持久事实（记录文件 + 轻量索引 + 账本），与 writeRecord 现行契约同形。 */
+function seedPersistedRun(
+  dataDir: string,
+  docs: Map<string, unknown>,
+  spec: {
+    runId: string
+    conversationId: number
+    status: 'running' | 'completed' | 'failed' | 'aborted'
+    createdAt?: number
+    updatedAt?: number
+    script?: string
+    error?: string
+    kind?: 'workflow' | 'subagent'
+    notifyParentOnSettle?: boolean
+    childConversationIds?: number[]
+    resumedByRunId?: string
+    journal?: string[]
+  },
+): { journalPath: string; recordFile: string } {
+  const dir = join(dataDir, 'artifacts', String(spec.conversationId))
+  mkdirSync(dir, { recursive: true })
+  const journalPath = join(dir, `workflow-${spec.runId}.jsonl`)
+  const recordFile = join(dir, `workflow-${spec.runId}.record.json`)
+  const createdAt = spec.createdAt ?? 1_000
+  const updatedAt = spec.updatedAt ?? 2_000
+  writeFileSync(
+    recordFile,
+    JSON.stringify({
+      id: spec.runId,
+      name: 'seeded',
+      conversationId: spec.conversationId,
+      status: spec.status,
+      createdAt,
+      updatedAt,
+      ...(spec.error !== undefined ? { error: spec.error } : {}),
+      ...(spec.script !== undefined ? { script: spec.script } : {}),
+      ...(spec.kind !== undefined ? { kind: spec.kind } : {}),
+      ...(spec.notifyParentOnSettle !== undefined ? { notifyParentOnSettle: spec.notifyParentOnSettle } : {}),
+      ...(spec.childConversationIds !== undefined ? { childConversationIds: spec.childConversationIds } : {}),
+      ...(spec.resumedByRunId !== undefined ? { resumedByRunId: spec.resumedByRunId } : {}),
+      journalPath,
+    }),
+    'utf8',
+  )
+  writeFileSync(journalPath, `${(spec.journal ?? []).join('\n')}${(spec.journal ?? []).length > 0 ? '\n' : ''}`, 'utf8')
+  const index = (docs.get('workflow/runs') ?? []) as Array<Record<string, unknown>>
+  index.push({
+    id: spec.runId,
+    conversationId: spec.conversationId,
+    status: spec.status,
+    createdAt,
+    updatedAt,
+    ...(spec.notifyParentOnSettle !== undefined ? { notifyParentOnSettle: spec.notifyParentOnSettle } : {}),
+    ...(spec.resumedByRunId !== undefined ? { resumedByRunId: spec.resumedByRunId } : {}),
+  })
+  docs.set('workflow/runs', index)
+  return { journalPath, recordFile }
+}
+
+function stateOver(docs: Map<string, unknown>): WorkflowStateStore {
+  return {
+    get<T>(key: string, initial: T): T {
+      return docs.has(key) ? (docs.get(key) as T) : initial
+    },
+    set(key: string, value: unknown) {
+      docs.set(key, value)
+    },
+  }
+}
+
+test('跨重启 resume：失败 attempt 行的 execution.conversationId 经 resumeRef 直传 AgentSpawnRequest.resume（不拼 runId）', timeout, async (t) => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-restart-resume-'))
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }))
+  const convId = 9
+  const priorRunId = 'wf_seedfail0001'
+  const prompt = '跨重启续接任务'
+  // 手工 seed 失败 attempt 行：attempt=1 + execution.conversationId=77（无
+  // executionId → persistedHandle=String(77)）；invocationIndex=0 为账本新增
+  // 可选字段（agentJournalKey 不含该字段，键值稳定）。maxAttempts=3 的重放
+  // 语义：attempt 1 失败已入账，第 2 次 live 调用经 resume 续接（需
+  // failedAttempt+1 < maxAttempts；maxAttempts=2 时 attempt=2 达上限直接
+  // 终态回应，不再 live）。
+  const docs = new Map<string, unknown>()
+  seedPersistedRun(dataDir, docs, {
+    runId: priorRunId,
+    conversationId: convId,
+    status: 'failed',
+    error: '[agent_failed] 尝试失败',
+    script: `export const meta = { name: "restart-resume", description: "d" }\nreturn await agent(${JSON.stringify(prompt)}, { maxAttempts: 3 })`,
+    journal: [
+      JSON.stringify({
+        v: 1,
+        seq: 0,
+        type: 'agent',
+        index: 0,
+        key: agentJournalKey({ prompt }),
+        ok: false,
+        attempt: 1,
+        error: '[agent_failed] 尝试失败',
+        invocationIndex: 0,
+        execution: { conversationId: 77 },
+      }),
+    ],
+  })
+  const spawns: Array<{ resume?: string; agentId?: string }> = []
+  const host: WorkflowServiceHost = {
+    spawnAgent: async (request) => {
+      spawns.push({ resume: request.resume, agentId: request.agentId })
+      return 'retry-ok'
+    },
+    invokeAction: async () => {
+      throw new Error('本测试不调用动作')
+    },
+    listActions: () => [],
+    getConversation: (id: number) => makeParentSummary(id, dataDir),
+    abortConversationGuarded: async () => {},
+    emitEvent: () => {},
+  }
+  const revived = new WorkflowService({ dataDir, state: stateOver(docs), host })
+  try {
+    const summary = await revived.run({ resumeFromRunId: priorRunId })
+    await revived.wait(summary.id)
+    assert.equal(revived.getRun(summary.id).status, 'completed')
+    assert.equal(spawns.length, 1, '重放后仅一次续接 spawn')
+    assert.equal(spawns[0]!.resume, '77', 'resumeRef 直传 conversationId 字符串到 resume，不拼 runId 前缀')
+    assert.ok(spawns[0]!.agentId!.includes(':'), '原生 agentId 仍带 runId 命名空间（与 resume 字段互不干扰）')
+  } finally {
+    await revived.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// prepare/init 读取损坏索引：显式拒绝且不修改任何记录
+// ---------------------------------------------------------------------------
+
+test('prepare/init 读取损坏索引：显式 workflow_index_corrupt 拒绝，且不修改记录/索引', timeout, async (t) => {
+  const env = makeEnv(t, async () => 'unused')
+  const record = {
+    id: 'wf_idxcrash001',
+    name: 'idx-crash',
+    conversationId: 21,
+    status: 'running',
+    createdAt: 1,
+    updatedAt: 2,
+    kind: 'subagent' as const,
+    journalPath: join(env.dataDir, 'artifacts', '21', 'workflow-wf_idxcrash001.jsonl'),
+    notifyParentOnSettle: true,
+    childConversationIds: [88],
+  }
+  seedPersistedRun(env.dataDir, env.docs, {
+    runId: record.id,
+    conversationId: 21,
+    status: 'running',
+    kind: 'subagent',
+    notifyParentOnSettle: true,
+    childConversationIds: [88],
+  })
+  // 损坏注入：索引变非数组（恢复屏障必须先于任何记录读取/修改显式拒绝）。
+  env.docs.set('workflow/runs', { not: 'an-array' })
+  await assert.rejects(
+    () => env.service.prepareRecovery(),
+    (error: unknown) => error instanceof HelmError && error.code === 'workflow_index_corrupt',
+  )
+  await assert.rejects(
+    () => env.service.init(),
+    (error: unknown) => error instanceof HelmError && error.code === 'workflow_index_corrupt',
+  )
+  // 拒绝必须发生在任何记录修改之前：记录保持 running 原样、索引保持损坏
+  // 原样（绝不静默重建/剪枝）、子会话未被守卫中止（屏障未越过索引读取）。
+  const after = JSON.parse(readFileSync(join(env.dataDir, 'artifacts', '21', 'workflow-wf_idxcrash001.record.json'), 'utf-8')) as { status: string }
+  assert.equal(after.status, 'running', '记录不得被改终态')
+  assert.deepEqual(env.docs.get('workflow/runs'), { not: 'an-array' }, '索引不得被静默重建')
+  assert.deepEqual(env.guardedAborts, [], '损坏索引下不得触发任何子会话中止')
+})
+
+// ---------------------------------------------------------------------------
+// 幽灵接管标记（run 入口）：四面无痕才可重接管；磁盘仍有痕迹保持 409
+// ---------------------------------------------------------------------------
+
+test('resume 幽灵接管标记：索引与磁盘均无痕迹才清标记重接管；磁盘仍有记录/账本保持 409', timeout, async (t) => {
+  const env = makeEnv(t, async () => 'ghost-resume-result')
+  const script = 'export const meta = { name: "orphan", description: "d" }\nreturn 41'
+  // 真幽灵：接管 run 从未写任何记录/账本（索引无、磁盘无文件）。
+  seedPersistedRun(env.dataDir, env.docs, {
+    runId: 'wf_orphanA0001',
+    conversationId: 23,
+    status: 'failed',
+    error: '[agent_failed] 失败',
+    script,
+    resumedByRunId: 'wf_vanish9999',
+    journal: [],
+  })
+  const resumed = await env.service.run({ resumeFromRunId: 'wf_orphanA0001' })
+  await env.service.wait(resumed.id)
+  assert.equal(env.service.getRun(resumed.id).result, 41)
+  const markerFile = JSON.parse(
+    readFileSync(join(env.dataDir, 'artifacts', '23', 'workflow-wf_orphanA0001.record.json'), 'utf-8'),
+  ) as { resumedByRunId?: string }
+  assert.equal(markerFile.resumedByRunId, resumed.id, '真幽灵标记被新接管取代')
+
+  // 索引缺失但磁盘仍有账本文件：保持 409（防重复副作用）。
+  seedPersistedRun(env.dataDir, env.docs, {
+    runId: 'wf_orphanB0002',
+    conversationId: 23,
+    status: 'failed',
+    error: '[agent_failed] 失败',
+    script,
+    resumedByRunId: 'wf_keptj9998',
+    journal: [],
+  })
+  writeFileSync(
+    join(env.dataDir, 'artifacts', '23', 'workflow-wf_keptj9998.jsonl'),
+    `${JSON.stringify({ v: 1, seq: 0, type: 'agent', index: 0, key: 'k', ok: true, text: 'x' })}\n`,
+    'utf8',
+  )
+  await assert.rejects(
+    () => env.service.run({ resumeFromRunId: 'wf_orphanB0002' }),
+    (error: unknown) =>
+      error instanceof HelmError &&
+      error.code === 'conflict' &&
+      (error.details as { resumedByRunId?: string }).resumedByRunId === 'wf_keptj9998',
+  )
+
+  // 索引缺失但磁盘仍有记录文件：同样保持 409。
+  seedPersistedRun(env.dataDir, env.docs, {
+    runId: 'wf_orphanC0003',
+    conversationId: 23,
+    status: 'failed',
+    error: '[agent_failed] 失败',
+    script,
+    resumedByRunId: 'wf_keptr9997',
+    journal: [],
+  })
+  writeFileSync(
+    join(env.dataDir, 'artifacts', '23', 'workflow-wf_keptr9997.record.json'),
+    JSON.stringify({
+      id: 'wf_keptr9997',
+      name: 'taken',
+      conversationId: 23,
+      status: 'completed',
+      createdAt: 0,
+      updatedAt: 0,
+      journalPath: join(env.dataDir, 'artifacts', '23', 'workflow-wf_keptr9997.jsonl'),
+    }),
+    'utf8',
+  )
+  await assert.rejects(
+    () => env.service.run({ resumeFromRunId: 'wf_orphanC0003' }),
+    (error: unknown) =>
+      error instanceof HelmError &&
+      error.code === 'conflict' &&
+      (error.details as { resumedByRunId?: string }).resumedByRunId === 'wf_keptr9997',
+  )
+})
+
+test('resume 并发防双接管：标记已落盘、新 run 快照未落盘窗口内第二个 resume 409', timeout, async (t) => {
+  const env = makeEnv(t, async () => 'conc-resume-result')
+  const script = 'export const meta = { name: "conc", description: "d" }\nreturn 7'
+  seedPersistedRun(env.dataDir, env.docs, {
+    runId: 'wf_conc0000001',
+    conversationId: 25,
+    status: 'failed',
+    error: '[agent_failed] 失败',
+    script,
+    journal: [],
+  })
+  // flush 门：把第一个 resume 挂在「标记已落盘、快照未落盘」窗口内。
+  let releaseFlush: (() => void) | undefined
+  const flushGate = new Promise<void>((resolve) => {
+    releaseFlush = resolve
+  })
+  env.state.flush = async () => {
+    await flushGate
+  }
+  const first = env.service.run({ resumeFromRunId: 'wf_conc0000001' })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  // 窗口内：旧 record 的接管标记已写盘，新 run 快照未落——第二个并发
+  // resume 必须被进程内接管保留拦下（四面检查会误判幽灵）。
+  await assert.rejects(
+    () => env.service.run({ resumeFromRunId: 'wf_conc0000001' }),
+    (error: unknown) =>
+      error instanceof HelmError && error.code === 'conflict',
+    '并发启动窗口内不得误判幽灵清标记（防双接管）',
+  )
+  releaseFlush!()
+  const summary = await first
+  await env.service.wait(summary.id)
+  assert.equal(env.service.getRun(summary.id).result, 7, '第一个 resume 正常完成')
+  const marker = JSON.parse(
+    readFileSync(join(env.dataDir, 'artifacts', '25', 'workflow-wf_conc0000001.record.json'), 'utf-8'),
+  ) as { resumedByRunId?: string }
+  assert.equal(marker.resumedByRunId, summary.id, '接管标记指向第一个（唯一）新 run')
+})
+
+// ---------------------------------------------------------------------------
+// gate.exitCode/timedOut 全链保留（折叠/脱敏/后台子代理）
+// ---------------------------------------------------------------------------
+
+test('节点 gate.exitCode/timedOut 全链保留（进度折叠与脱敏不丢诊断字段）', timeout, async (t) => {
+  const env = makeEnv(
+    t,
+    async (proto: unknown) => {
+      const request = proto as {
+        onResolved?: (info: unknown) => void
+        onGateResult?: (gate: unknown) => void
+      }
+      request.onResolved?.({ conversationId: 41 })
+      request.onGateResult?.({ ok: false, output: 'gate 失败输出', exitCode: 3, timedOut: true })
+      throw new HelmError('gate_failed', '门禁失败', 502)
+    },
+    { runGate: async () => ({ ok: true, output: 'host-gate' }) },
+  )
+  const started = await env.service.run({
+    conversationId: 13,
+    script:
+      'export const meta = { name: "gate-diag", description: "d" }\nreturn await agent("gated task", { gate: "true", maxAttempts: 1 })',
+  })
+  await env.service.wait(started.id)
+  const node = env.service.getRun(started.id).nodes![0]!
+  assert.equal(node.gate?.ok, false)
+  assert.equal(node.gate?.exitCode, 3, 'exitCode 必须保留（脱敏不丢诊断字段）')
+  assert.equal(node.gate?.timedOut, true, 'timedOut 必须保留')
+  const persisted = readRecordFile(env.dataDir, 13, started.id) as {
+    nodes?: Array<{ gate?: { exitCode?: number | null; timedOut?: boolean } }>
+  }
+  assert.equal(persisted.nodes![0]!.gate!.exitCode, 3, '持久记录同样保留 exitCode')
+  assert.equal(persisted.nodes![0]!.gate!.timedOut, true, '持久记录同样保留 timedOut')
+})
+
+test('startBackgroundAgent 节点 gate.exitCode/timedOut 保留（onGateResult 构建即不丢）', timeout, async (t) => {
+  const env = makeEnv(t, async (proto: unknown) => {
+    const request = proto as {
+      onResolved?: (info: unknown) => void
+      onGateResult?: (gate: unknown) => void
+    }
+    request.onResolved?.({ conversationId: 51 })
+    request.onGateResult?.({ ok: false, output: 'bg gate 失败', exitCode: 2, timedOut: true })
+    return 'bg-done'
+  })
+  const { run } = await env.service.startBackgroundAgent({
+    parentConversationId: 14,
+    prompt: '后台任务',
+    gate: 'true',
+  })
+  await env.service.wait(run.id)
+  const node = env.service.getRun(run.id).nodes![0]!
+  assert.equal(node.gate?.ok, false)
+  assert.equal(node.gate?.exitCode, 2)
+  assert.equal(node.gate?.timedOut, true)
 })

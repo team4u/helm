@@ -6,17 +6,23 @@
  * 1. 命中全部条件的失败后台 run 成为候选（failedAt=updatedAt，autoResumeCount
  *    缺省报 0，候选形状恰为四字段）；
  * 2. 逐项过滤矩阵：非 failed 状态 / 非后台（未置 notifyParentOnSettle）/ 已被
- *    接管（resumedByRunId）/ subagent 种类 / 次数达上限 / 不可重试错误
- *    （workflow_action_uncertain、[validation_error]、脚本语法错误——大小写
- *    不敏感；无括号的普通 validation 字样不在排除面）；
+ *    接管（resumedByRunId，接管目标真实存在）/ subagent 种类 / 次数达上限 /
+ *    不可重试错误（workflow_action_uncertain、[validation_error]、脚本语法
+ *    错误——大小写不敏感；无括号的普通 validation 字样不在排除面）；
  * 3. 账本不确定（悬挂 action_started / ok:false action / 損坏行）一律排除，
- *    即便存在 ok agent 行；
- * 4. 账本无任何可安全恢复锚点（空文件 / 无 execution 的失败 agent 行 / 文件缺失 ENOENT）
- *    排除；带 execution 的失败尝试与 action_started+action ok 配对放行；
+ *    即便存在 ok agent 行；带 execution 的失败尝试与 action_started+action ok
+ *    配对是可安全恢复锚点；
+ * 4. 账本无任何可安全恢复锚点（空文件 / 无 execution 的失败 agent 行 / 文件
+ *    缺失 ENOENT）排除；
  * 5. 按 failedAt 升序（最旧失败优先），与索引写入顺序无关；
  * 6. maxAttempts 边界：非正整数显式 validation_error；1 时 count 1 排除、
  *    0 保留；
- * 7. 索引指向缺失记录文件：显式 workflow_record_corrupt 上抛，不静默跳过。
+ * 7. 单条损坏记录（记录文件缺失/損坏）诊断后跳过，不影响其他候选；
+ * 8. 索引損坏（非数组/项形状非法）显式 workflow_index_corrupt 上抛，绝不
+ *    静默当空索引返回空候选；
+ * 9. 幽灵接管标记同规则甄别：接管 run 四面无痕（索引/磁盘均无记录与账本）
+ *    才放行重接管；磁盘仍有记录/账本文件（即使索引缺失）或接管目标損坏
+ *    一律不放行。
  */
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -92,11 +98,26 @@ function makeEnv(t: TestContext) {
 // 按现行契约构造持久事实：记录文件 + 轻量索引 + JSONL 账本
 // ---------------------------------------------------------------------------
 
-/** 账本行构造（与 WorkflowJournalEntry 同形；同文件内 seq 必须唯一——读端按 seq 去重）。 */
+/** 账本行构造（与 WorkflowJournalEntry 同形；同文件内 seq 必须唯一——读端按 seq 去重）。
+ * agent 行携带 invocationIndex: 0（账本新增可选字段，未落入前解析器容忍未知键，
+ * 落地后即契合新行格式；agentJournalKey 不含该字段，键值稳定）。 */
 const agentOk = (seq: number, index = 0, key = `k${seq}`) =>
-  JSON.stringify({ v: 1, seq, type: 'agent', index, key, ok: true, text: 'done' })
+  JSON.stringify({ v: 1, seq, type: 'agent', index, key, ok: true, text: 'done', invocationIndex: 0 })
 const agentFail = (seq: number, index = 0, key = `k${seq}`) =>
-  JSON.stringify({ v: 1, seq, type: 'agent', index, key, ok: false })
+  JSON.stringify({ v: 1, seq, type: 'agent', index, key, ok: false, invocationIndex: 0 })
+/** 带 execution 的失败尝试行（可安全恢复锚点；attempt ≥ 1）。 */
+const agentFailAttempt = (seq: number, conversationId: number, index = 0, key = `k${seq}`) =>
+  JSON.stringify({
+    v: 1, seq, type: 'agent', index, key, ok: false, attempt: 1,
+    error: '[agent_failed] 尝试失败', invocationIndex: 0,
+    execution: { conversationId },
+  })
+/** 无 execution 的失败尝试行（无锚点）。 */
+const agentFailAttemptNoExec = (seq: number, index = 0, key = `k${seq}`) =>
+  JSON.stringify({
+    v: 1, seq, type: 'agent', index, key, ok: false, attempt: 1,
+    error: '[agent_failed] 尝试失败', invocationIndex: 0,
+  })
 const actionStarted = (seq: number, index = 0, key = `a${index}`) =>
   JSON.stringify({ v: 1, seq, type: 'action_started', index, key })
 const actionOk = (seq: number, index = 0, key = `a${index}`) =>
@@ -225,8 +246,9 @@ test('过滤矩阵：状态/后台标记/接管/种类/次数/不可重试错误
   seedCandidateRun(env, 'wf_running00006', 106, at(6), { ...journal, status: 'running' })
   // 非后台 run（未置/显式 false 均不算）。
   seedCandidateRun(env, 'wf_sync00000007', 107, at(7), { ...journal, notifyParentOnSettle: false })
-  // 已被接管（防重复续跑）。
+  // 已被接管（防重复续跑）：接管目标真实存在（终态记录仍在索引）。
   seedCandidateRun(env, 'wf_resumed00008', 108, at(8), { ...journal, resumedByRunId: 'wf_next0001' })
+  seedRun(env, { runId: 'wf_next0001', conversationId: 108, failedAt: at(8) - 1, status: 'completed', journal: [] })
   // subagent 种类（单子代理后台任务不走工作流断点续跑）。
   seedCandidateRun(env, 'wf_subagent009', 109, at(9), { ...journal, kind: 'subagent' })
   // 次数达默认上限 3。
@@ -284,19 +306,27 @@ test('账本不确定（悬挂 action_started / ok:false action / 損坏行）�
 // 4. 账本无 ok agent/action：排除；action 配对成功放行
 // ---------------------------------------------------------------------------
 
-test('账本无 ok agent/action（空文件 / 仅失败 agent 行 / 文件缺失）排除；action ok 配对放行', timeout, (t) => {
+test('账本无 ok agent/action（空文件 / 仅失败 agent 行 / 文件缺失）排除；失败尝试带 execution 与 action ok 配对放行', timeout, (t) => {
   const env = makeEnv(t)
   const at = (n: number) => 1_700_001_000_000 + n * 1_000
   seedCandidateRun(env, 'wf_actok000001', 301, at(1), {
     journal: [actionStarted(0, 0), actionOk(1, 0)],
   })
+  // 带 execution 的失败尝试（attempt=1 + conversationId）：可安全恢复锚点。
+  seedCandidateRun(env, 'wf_attempt005', 305, at(5), {
+    journal: [agentFailAttempt(0, 305)],
+  })
   seedCandidateRun(env, 'wf_empty000002', 302, at(2), { journal: [] })
   seedCandidateRun(env, 'wf_agentfail003', 303, at(3), {
     journal: [agentFail(0, 0), agentFail(1, 1)],
   })
+  // 失败尝试无 execution：无锚点，无法定位续接目标，排除。
+  seedCandidateRun(env, 'wf_noexec006', 306, at(6), {
+    journal: [agentFailAttemptNoExec(0)],
+  })
   seedCandidateRun(env, 'wf_nojournal004', 304, at(4), { journal: undefined })
   const ids = env.service.listAutoResumeCandidates().map((c) => c.runId)
-  assert.deepEqual(ids, ['wf_actok000001'])
+  assert.deepEqual(ids, ['wf_actok000001', 'wf_attempt005'])
 })
 
 // ---------------------------------------------------------------------------
@@ -345,12 +375,13 @@ test('maxAttempts 非正整数显式 validation_error；1 时 count 1 排除、0
 // 7. 记录文件缺失：诊断后跳过该条，不影响其他候选
 // ---------------------------------------------------------------------------
 
-test('索引指向缺失记录文件：诊断后跳过该条，保留其他健康候选', timeout, (t) => {
+test('单条损坏记录（记录文件缺失/損坏）诊断后跳过，保留其他健康候选', timeout, (t) => {
   const env = makeEnv(t)
   const journal = { journal: [agentOk(0)] }
   seedCandidateRun(env, 'wf_ok000000001', 601, 1_700_004_000_000, journal)
   seedCandidateRun(env, 'wf_miss0000002', 602, 1_700_004_001_000, journal)
-  // 模拟持久层不一致：索引保留，记录文件被外部删除。
+  seedCandidateRun(env, 'wf_crpt000003', 603, 1_700_004_002_000, journal)
+  // 模拟持久层不一致：索引保留，记录文件被外部删除 / 被写成非法 JSON。
   const recordFile = join(
     env.dataDir,
     'artifacts',
@@ -358,5 +389,76 @@ test('索引指向缺失记录文件：诊断后跳过该条，保留其他健�
     'workflow-wf_miss0000002.record.json',
   )
   rmSync(recordFile)
+  writeFileSync(
+    join(env.dataDir, 'artifacts', '603', 'workflow-wf_crpt000003.record.json'),
+    'garbage-not-json{{{',
+    'utf8',
+  )
   assert.deepEqual(env.service.listAutoResumeCandidates().map((candidate) => candidate.runId), ['wf_ok000000001'])
+})
+
+// ---------------------------------------------------------------------------
+// 8. 索引损坏：显式 workflow_index_corrupt，绝不静默返回空候选
+// ---------------------------------------------------------------------------
+
+test('索引损坏（非数组 / 项形状非法）显式 workflow_index_corrupt 上抛，不静默返回空候选', timeout, (t) => {
+  const env = makeEnv(t)
+  seedCandidateRun(env, 'wf_okidx000001', 801, 1_700_005_000_000)
+  const brokenIndexes: unknown[] = [
+    null,
+    { 0: {} },
+    [{ id: 'wf_brokenentry', conversationId: 0, status: 'failed', createdAt: 1, updatedAt: 1 }],
+  ]
+  for (const broken of brokenIndexes) {
+    env.docs.set('workflow/runs', broken)
+    assert.throws(
+      () => env.service.listAutoResumeCandidates(),
+      (error: unknown) => error instanceof HelmError && error.code === 'workflow_index_corrupt',
+      '索引损坏必须显式上抛（Watchdog 依赖候选面，绝不静默空列表）',
+    )
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 9. 幽灵接管标记同规则甄别：真幽灵放行；磁盘仍有痕迹或接管目标损坏不放行
+// ---------------------------------------------------------------------------
+
+test('幽灵接管标记：真幽灵（索引与磁盘均无痕迹）放行；磁盘仍有记录/账本（即使索引缺失）或接管目标损坏不放行', timeout, (t) => {
+  const env = makeEnv(t)
+  const at = (n: number) => 1_700_006_000_000 + n * 1_000
+  const journal = { journal: [agentOk(0)] }
+  // 真幽灵：接管 run 从未存在（索引无、磁盘无记录/账本）——放行重接管。
+  seedCandidateRun(env, 'wf_ghostok0001', 901, at(1), { ...journal, resumedByRunId: 'wf_never9011' })
+  // 索引缺失但账本文件仍在磁盘：新 run 已产生副作用，不放行。
+  seedCandidateRun(env, 'wf_ghostjour02', 902, at(2), { ...journal, resumedByRunId: 'wf_gonej9022' })
+  writeFileSync(
+    join(env.dataDir, 'artifacts', '902', 'workflow-wf_gonej9022.jsonl'),
+    `${agentOk(0)}\n`,
+    'utf8',
+  )
+  // 索引缺失但记录文件仍在磁盘：不放行。
+  seedCandidateRun(env, 'wf_ghostrec03', 903, at(3), { ...journal, resumedByRunId: 'wf_goner9033' })
+  writeFileSync(
+    join(env.dataDir, 'artifacts', '903', 'workflow-wf_goner9033.record.json'),
+    JSON.stringify({
+      id: 'wf_goner9033',
+      name: 'taken-over',
+      conversationId: 903,
+      status: 'completed',
+      createdAt: 0,
+      updatedAt: 0,
+      journalPath: join(env.dataDir, 'artifacts', '903', 'workflow-wf_goner9033.jsonl'),
+    }),
+    'utf8',
+  )
+  // 接管目标记录损坏（索引指向但文件非法）：无法确证无副作用，不放行。
+  seedCandidateRun(env, 'wf_ghostcrpt04', 904, at(4), { ...journal, resumedByRunId: 'wf_gonec9044' })
+  seedRun(env, { runId: 'wf_gonec9044', conversationId: 904, failedAt: at(4) - 1, status: 'completed', journal: [] })
+  writeFileSync(
+    join(env.dataDir, 'artifacts', '904', 'workflow-wf_gonec9044.record.json'),
+    'garbage-not-json{{{',
+    'utf8',
+  )
+  const ids = env.service.listAutoResumeCandidates().map((c) => c.runId)
+  assert.deepEqual(ids, ['wf_ghostok0001'], '仅真幽灵标记放行重接管')
 })

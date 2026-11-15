@@ -530,12 +530,14 @@ describe('WorkflowService listRuns integrity', () => {
         return true
       },
     )
-    // 单 run 语境同样显式（不吞成 not_found），带 runId 诊断。
+    // 单 run 语境同样显式（不吞成 not_found），带 runId 诊断；索引级故障
+    // 与全部索引入口统一为 workflow_index_corrupt（记录文件级故障才显
+    // workflow_record_corrupt）。
     assert.throws(
       () => failingService.getRun(victim),
       (error: unknown) => {
         assert.ok(error instanceof HelmError)
-        assert.equal(error.code, 'workflow_record_corrupt')
+        assert.equal(error.code, 'workflow_index_corrupt')
         assert.equal((error.details as { runId?: string }).runId, victim)
         return true
       },
