@@ -1261,6 +1261,34 @@ function makeFailingFlushStore(failAfter: number): WorkflowStateStore & { flushe
   return store
 }
 
+// ---------------------------------------------------------------------------
+// Run 记录文件契约：records doc 仅存 workflow/runs 轻量索引，完整 RunRecord
+// 落 dataDir/artifacts/<conversationId>/workflow-<runId>.record.json
+// ---------------------------------------------------------------------------
+
+function runRecordPath(dataDir: string, conversationId: number, runId: string): string {
+  return join(dataDir, 'artifacts', String(conversationId), `workflow-${runId}.record.json`)
+}
+
+function readRunRecord<T = Record<string, unknown>>(dataDir: string, conversationId: number, runId: string): T {
+  return JSON.parse(readFileSync(runRecordPath(dataDir, conversationId, runId), 'utf-8')) as T
+}
+
+/** 恢复夹具：按现行 RunRecord 契约落一条最小完整 running 记录文件（必填字段与 writeRecord 对齐）。 */
+function seedRunRecordFile(dataDir: string, runId: string, conversationId: number): void {
+  const record = {
+    id: runId,
+    name: 'old',
+    conversationId,
+    status: 'running',
+    createdAt: 1,
+    updatedAt: 1,
+    journalPath: join(dataDir, 'artifacts', String(conversationId), `workflow-${runId}.jsonl`),
+  }
+  mkdirSync(join(dataDir, 'artifacts', String(conversationId)), { recursive: true })
+  writeFileSync(runRecordPath(dataDir, conversationId, runId), JSON.stringify(record), 'utf-8')
+}
+
 interface ServiceHostExtras {
   spawns: Array<Record<string, unknown>>
   actionCount: () => number
@@ -1377,9 +1405,8 @@ describe('WorkflowService', () => {
     const final = service.getRun(summary.id)
     assert.equal(final.status, 'failed', 'bad meta must reach a failed terminal state')
     assert.ok(final.error !== undefined && final.error.length > 0)
-    // 状态 store 里的 record 也必须是终态（跨重启不再依赖内存 summary）。
-    const record = state.get<{ status: string } | null>(`workflow/run/${summary.id}`, null)
-    assert.ok(record !== null)
+    // 记录文件里的 record 也必须是终态（跨重启不再依赖内存 summary）。
+    const record = readRunRecord<{ status: string }>(dataDir, 1, summary.id)
     assert.equal(record.status, 'failed')
     await service.close()
   })
@@ -1395,10 +1422,10 @@ describe('WorkflowService', () => {
       () => service.wait(summary.id),
       /simulated store flush failure/,
     )
-    // active 必须已摘除（不留假 running），getRun 回落 store 仍可 inspect。
+    // active 必须已摘除（不留假 running），getRun 回落记录文件仍可 inspect。
     // （内存 summary 的 error 已附 persist failed 说明。）
-    const record = state.get<{ status: string } | null>(`workflow/run/${summary.id}`, null)
-    assert.ok(record !== null)
+    // 先文件后索引：终态记录文件已落盘，随后的索引 flush 失败不回滚文件事实。
+    assert.ok(existsSync(runRecordPath(dataDir, 1, summary.id)), 'terminal record file must exist despite flush failure')
     // 写入 store 的终态可能成功（set 同步镜像先于 flush），关键是明确失败已上报。
     // close 对已损坏的 store 同样如实抛 flush 错误（诚实传播，非静默）。
     await assert.rejects(() => service.close(), /simulated store flush failure/)
@@ -1498,8 +1525,7 @@ describe('WorkflowService', () => {
     assert.equal(service.getRun(resumed.id).result, 'text:one')
 
     // uncertain journal：手工悬挂 action_started。
-    const record = state.get<{ journalPath: string } | null>(`workflow/run/${first.id}`, null)
-    assert.ok(record !== null)
+    const record = readRunRecord<{ journalPath: string }>(dataDir, 1, first.id)
     const firstJournal = readJournal(record.journalPath)
     assert.equal(firstJournal.actionUncertain, false)
 
@@ -1527,8 +1553,7 @@ describe('WorkflowService', () => {
     })
     await service.wait(first.id)
     assert.equal(host.actionCount(), 1)
-    const record0 = state.get<{ journalPath: string } | null>(`workflow/run/${first.id}`, null)
-    assert.ok(record0 !== null)
+    assert.ok(existsSync(runRecordPath(dataDir, 1, first.id)), 'run record file must be persisted')
 
     // handler 抛错的 action 终态行 ok:false：resume 必须拒绝自动重试。
     await assert.rejects(
@@ -1553,8 +1578,7 @@ describe('WorkflowService', () => {
       script: META('svc-unreadable') + 'const a = await agent("one")\nconst b = await agent("two")\nreturn [a, b]',
     })
     await service.wait(first.id)
-    const record = state.get<{ journalPath: string } | null>(`workflow/run/${first.id}`, null)
-    assert.ok(record !== null)
+    const record = readRunRecord<{ journalPath: string }>(dataDir, 1, first.id)
     const spawnsBefore = host.spawns.length
     // 用目录顶替 journal 文件：真实 EISDIR 读错误（root 下 chmod 无效）。
     rmSync(record.journalPath)
@@ -1585,8 +1609,7 @@ describe('WorkflowService', () => {
       script: META('svc-corrupt-resume') + 'const a = await agent("one")\nreturn a',
     })
     await service.wait(first.id)
-    const record = state.get<{ journalPath: string } | null>(`workflow/run/${first.id}`, null)
-    assert.ok(record !== null)
+    const record = readRunRecord<{ journalPath: string }>(dataDir, 1, first.id)
 
     // 追加一行可判定为 agent 的截断行：ioErrors 计数但不阻断安全重放。
     const { appendFileSync } = await import('node:fs')
@@ -1602,10 +1625,10 @@ describe('WorkflowService', () => {
       `summary must carry journal ioErrors diagnostics, got: ${JSON.stringify(final.journalIoErrors)}`,
     )
     // 诊断也必须持久化（跨重启 inspect 可见）。
-    const persisted = state.get<{ journalIoErrors?: string[] } | null>(`workflow/run/${resumed.id}`, null)
+    const persisted = readRunRecord<{ journalIoErrors?: string[] }>(dataDir, 1, resumed.id)
     assert.ok(
-      (persisted?.journalIoErrors ?? []).some((message) => message.includes('corrupt/unreadable line')),
-      'persisted record must carry journalIoErrors',
+      (persisted.journalIoErrors ?? []).some((message) => message.includes('corrupt/unreadable line')),
+      'persisted record file must carry journalIoErrors',
     )
     await service.close()
   })
@@ -1628,8 +1651,9 @@ describe('WorkflowService', () => {
     assert.equal(host.spawns.length, 1, 'only the first run spawned')
     assert.equal(service.getRun(resumed.id).result, 'text:hello')
 
-    // 显式提供不同 args 允许失配转 live。
-    const changed = await service.run({ resumeFromRunId: first.id, args: { topic: 'changed' } })
+    // 显式提供不同 args 允许失配转 live。first 已被 resumed 接管（resumedByRunId
+    // 已设置，重复 resume 原 run 会被 409 拒绝）——从返回的新 run 继续。
+    const changed = await service.run({ resumeFromRunId: resumed.id, args: { topic: 'changed' } })
     await service.wait(changed.id)
     assert.equal(host.spawns.length, 2)
     assert.equal(service.getRun(changed.id).result, 'text:changed')
@@ -1706,17 +1730,12 @@ describe('WorkflowService', () => {
   it('leftover running record from a previous process is marked failed on next run', timeout, async () => {
     const state = makeStateStore()
     const host = makeServiceHost()
-    // 预置一条 running 记录（模拟进程死亡）。
-    state.set('workflow/runs', [{ id: 'wf_deadbeef0000', conversationId: 1, createdAt: 1 }])
-    state.set('workflow/run/wf_deadbeef0000', {
-      id: 'wf_deadbeef0000',
-      name: 'old',
-      conversationId: 1,
-      status: 'running',
-      createdAt: 1,
-      updatedAt: 1,
-      journalPath: join(dataDir, 'artifacts', '1', 'workflow-wf_deadbeef0000.jsonl'),
-    })
+    // 预置一条 running 记录（模拟进程死亡）：workflow/runs 只存轻量索引字段，
+    // 完整 RunRecord 落 dataDir/artifacts/<convId>/workflow-<runId>.record.json。
+    state.set('workflow/runs', [
+      { id: 'wf_deadbeef0000', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 },
+    ])
+    seedRunRecordFile(dataDir, 'wf_deadbeef0000', 1)
     const service = new WorkflowService({ dataDir, host, state })
     await service.init()
     const summary = service.getRun('wf_deadbeef0000')
@@ -1746,35 +1765,26 @@ describe('WorkflowService', () => {
         pending.clear()
       },
     }
-    // 预置 running 记录（已提交）。
+    // 预置 running 记录（索引已提交；完整记录按新契约是独立文件，直接落盘）。
     committed.set(
       'workflow/runs',
-      JSON.stringify([{ id: 'wf_deadbeef0001', conversationId: 1, createdAt: 1 }]),
+      JSON.stringify([{ id: 'wf_deadbeef0001', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }]),
     )
-    committed.set(
-      'workflow/run/wf_deadbeef0001',
-      JSON.stringify({
-        id: 'wf_deadbeef0001',
-        name: 'old',
-        conversationId: 1,
-        status: 'running',
-        createdAt: 1,
-        updatedAt: 1,
-        journalPath: join(dataDir, 'artifacts', '1', 'workflow-wf_deadbeef0001.jsonl'),
-      }),
-    )
+    seedRunRecordFile(dataDir, 'wf_deadbeef0001', 1)
     const host = makeServiceHost()
     const service = new WorkflowService({ dataDir, host, state })
-    // 首次 init：标记写入缓冲但 flush 失败——读回仍 running，且未标 recovered。
+    // 首次 init：终态先原子落记录文件，随后索引 flush 失败——如实抛错，未标 recovered。
     await assert.rejects(() => service.init(), /simulated store flush failure/)
+    // 索引标记未提交：store 提交面仍见 running（先文件后索引，索引滞后于文件）。
     assert.equal(
-      state.get<{ status: string } | null>('workflow/run/wf_deadbeef0001', null)?.status,
+      state.get<Array<{ id: string; status: string }>>('workflow/runs', []).find((e) => e.id === 'wf_deadbeef0001')?.status,
       'running',
-      'uncommitted mark must not be visible',
+      'uncommitted index mark must not be visible in the committed store',
     )
-    // 重试必须重新执行恢复（而非静默跳过）：flush 仍失败，再次如实抛错。
-    await assert.rejects(() => service.init(), /simulated store flush failure/)
-    // store 修复后重试：完整成功并提交 failed 终态。
+    // 记录文件已持 failed 终态：持久权威面先于索引落盘，索引 flush 失败不回滚文件。
+    assert.equal(readRunRecord<{ status: string }>(dataDir, 1, 'wf_deadbeef0001').status, 'failed')
+    // 首次失败未永久标记 recovered（initPromise 已清，重试真实重执行而非复用
+    // 被拒 promise）；文件已终态则恢复幂等，完整成功。
     flushOk = true
     await service.init()
     assert.equal(service.getRun('wf_deadbeef0001').status, 'failed')
@@ -1800,8 +1810,8 @@ describe('WorkflowService', () => {
     // 内存结果保持原值（运行时用原始值）……不：service 持久面统一脱敏，summary/result 也是持久面。
     assert.equal(result.nested.token, '{{REDACTED}}')
     assert.equal(result.list[0], '{{REDACTED}}')
-    const record = state.get<{ args?: unknown; result?: unknown } | null>(`workflow/run/${summary.id}`, null)
-    assert.ok(!JSON.stringify(record).includes(SECRET), 'persisted record must not contain the secret')
+    const record = readRunRecord<{ args?: unknown; result?: unknown }>(dataDir, 1, summary.id)
+    assert.ok(!JSON.stringify(record).includes(SECRET), 'persisted record file must not contain the secret')
     await service.close()
   })
 
@@ -1881,8 +1891,7 @@ describe('WorkflowService', () => {
       `,
     })
     await service.wait(summary.id)
-    const record = state.get<{ progress?: Array<{ kind: string }> } | null>(`workflow/run/${summary.id}`, null)
-    assert.ok(record !== null)
+    const record = readRunRecord<{ progress?: Array<{ kind: string }> }>(dataDir, 1, summary.id)
     const kinds = (record.progress ?? []).map((p) => p.kind)
     assert.ok(kinds.includes('phase'), `phase persisted: ${JSON.stringify(kinds)}`)
     assert.ok(kinds.includes('log'), `log persisted: ${JSON.stringify(kinds)}`)
@@ -2048,8 +2057,7 @@ describe('WorkflowService', () => {
     assert.equal(run1.status, 'failed')
 
     // 检查账本没有 action_started，actionUncertain 为 false
-    const rec1 = state.get<{ journalPath: string } | null>(`workflow/run/${sum1.id}`, null)
-    assert.ok(rec1)
+    const rec1 = readRunRecord<{ journalPath: string }>(dataDir, 1, sum1.id)
     const journal1 = readJournal(rec1.journalPath)
     assert.equal(journal1.actionUncertain, false)
     assert.equal(journal1.entries.some((e) => e.type === 'action_started'), false)
@@ -2102,8 +2110,7 @@ describe('WorkflowService', () => {
     const nodeRel = runRel.nodes?.find((n) => n.id === 'action-0')
     assert.equal(nodeRel?.status, 'failed')
     assert.match(nodeRel?.error ?? '', /cwd 必须为跨平台绝对路径/)
-    const recRel = state.get<{ journalPath: string } | null>(`workflow/run/${sumRel.id}`, null)
-    assert.ok(recRel)
+    const recRel = readRunRecord<{ journalPath: string }>(dataDir, 1, sumRel.id)
     const jRel = readJournal(recRel.journalPath)
     assert.equal(jRel.actionUncertain, false)
     assert.equal(jRel.entries.some((e) => e.type === 'action_started'), false)
@@ -2119,8 +2126,7 @@ describe('WorkflowService', () => {
     const nodeNode = runNode.nodes?.find((n) => n.id === 'action-0')
     assert.equal(nodeNode?.status, 'failed')
     assert.match(nodeNode?.error ?? '', /nodeId 需匹配/)
-    const recNode = state.get<{ journalPath: string } | null>(`workflow/run/${sumNode.id}`, null)
-    assert.ok(recNode)
+    const recNode = readRunRecord<{ journalPath: string }>(dataDir, 1, sumNode.id)
     const jNode = readJournal(recNode.journalPath)
     assert.equal(jNode.actionUncertain, false)
     assert.equal(jNode.entries.some((e) => e.type === 'action_started'), false)
@@ -2136,8 +2142,7 @@ describe('WorkflowService', () => {
     const nodeTimeout = runTimeout.nodes?.find((n) => n.id === 'action-0')
     assert.equal(nodeTimeout?.status, 'failed')
     assert.match(nodeTimeout?.error ?? '', /timeoutMs 必须是 1 到 600000 之间的整数/)
-    const recTimeout = state.get<{ journalPath: string } | null>(`workflow/run/${sumTimeout.id}`, null)
-    assert.ok(recTimeout)
+    const recTimeout = readRunRecord<{ journalPath: string }>(dataDir, 1, sumTimeout.id)
     const jTimeout = readJournal(recTimeout.journalPath)
     assert.equal(jTimeout.actionUncertain, false)
     assert.equal(jTimeout.entries.some((e) => e.type === 'action_started'), false)
@@ -2298,8 +2303,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
       assert.deepEqual(result, ['STAR', 'OCEAN'], '脚本内 args 为真实对象，map 正常计算')
 
       // 持久化记录必须是真实对象，不得为字符串
-      const stored = state.get<{ args?: unknown } | null>(`workflow/run/${summary.id}`, null)
-      assert.ok(stored, 'run 应持久化')
+      const stored = readRunRecord<{ args?: unknown }>(dataDir, 1, summary.id)
       assert.equal(typeof stored.args, 'object', '持久化 args 必须为对象而非字符串')
       assert.deepEqual(stored.args, { topics: ['star', 'ocean'] })
     } finally {
