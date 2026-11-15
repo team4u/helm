@@ -21,7 +21,7 @@ import {
 import { ProfileCard } from '../src/profiles/ProfileCard.js'
 import { ProfileDetailDrawer } from '../src/profiles/ProfileDetailDrawer.js'
 import { ProfileCenter } from '../src/profiles/ProfileCenter.js'
-import type { ModelDescriptor } from '../src/lib/api.js'
+import type { ModelDescriptor, NodeInfo } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
@@ -502,6 +502,68 @@ test('ProfileDetailDrawer：思考档位随所选模型展示共享分段按钮�
   )
   assert.match(unbound, /未绑定模型时跟随全局缺省思考档位/)
   assert.doesNotMatch(unbound, /segmented-control-btn/)
+})
+
+test('ProfileDetailDrawer：默认节点绑定渲染既有值与未知节点回退', { timeout: 60_000 }, () => {
+  const mockNodes: NodeInfo[] = [
+    { id: 'local', kind: 'local', online: true },
+    { id: 'dev-box', kind: 'byom', online: true },
+    { id: 'standby-box', kind: 'byom', online: false },
+  ]
+  const store = makeTestStore({ models: mockModels, skills: mockSkills, nodes: mockNodes })
+
+  // 既有绑定：表单回显已绑定节点 ID
+  const bound = renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(ProfileDetailDrawer, {
+        profile: { ...mockProfiles[3]!, nodeId: 'dev-box' },
+        isNew: false,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.match(bound, /默认节点/)
+  assert.match(bound, /dev-box/)
+
+  // 未知既有值（节点已注销）：补「未知节点」回退项，不丢值不报错
+  const unknown = renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(ProfileDetailDrawer, {
+        profile: { ...mockProfiles[3]!, nodeId: 'ghost-node' },
+        isNew: false,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.match(unknown, /ghost-node（未知节点）/)
+
+  // 未绑定：首项为「未绑定（本机 local）」空值选项
+  const unboundNode = renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(ProfileDetailDrawer, {
+        profile: mockProfiles[3],
+        isNew: false,
+        open: true,
+        inline: true,
+        onClose: () => {},
+      }),
+    ),
+  )
+  assert.match(unboundNode, /未绑定（本机 local）/)
+  assert.doesNotMatch(unboundNode, /未知节点/)
+  assert.doesNotMatch(bound, EMOJI_REGEX, '已绑定节点抽屉渲染输出严禁含有 Emoji')
+  assert.doesNotMatch(unknown, EMOJI_REGEX, '未知节点回退渲染输出严禁含有 Emoji')
+  assert.doesNotMatch(unboundNode, EMOJI_REGEX, '未绑定节点抽屉渲染输出严禁含有 Emoji')
 })
 
 // ---------------------------------------------------------------------------

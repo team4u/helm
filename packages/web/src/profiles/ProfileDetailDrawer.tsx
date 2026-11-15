@@ -14,6 +14,7 @@ import {
 } from './profile-center-model.js'
 import { HelmIcon, Checkbox, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot, Select, type SelectOption, Switch } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
 import { PROFILE_DETAIL_SECTION_SLOT, PROFILE_STARTERS_MAX_ITEMS } from '@helm/protocol'
@@ -34,12 +35,14 @@ interface FormState {
   description: string
   model: string
   thinkingLevel: string
+  /** 绑定的默认计算节点 ID；空串 = 未绑定（回退本机 local）。 */
+  nodeId: string
   cwd: string
   system: string
   useAllSkills: boolean
   selectedSkillIds: string[]
   starters: StarterDraft[]
-  /** 保存时未暴露字段原样回传：nodeId/runtime/tags 等不得因表单裁剪而丢。 */
+  /** 保存时未暴露字段原样回传：runtime/tags 等不得因表单裁剪而丢。 */
   source: Profile | null
 }
 
@@ -51,6 +54,7 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
       description: '',
       model: '',
       thinkingLevel: '',
+      nodeId: '',
       cwd: '',
       system: '',
       useAllSkills: true,
@@ -66,6 +70,7 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
     description: profile.description ?? '',
     model: resolveProfileModel(profile) ?? '',
     thinkingLevel: profile.thinkingLevel ?? '',
+    nodeId: profile.nodeId ?? '',
     cwd: profile.cwd ?? '',
     system: profile.system ?? '',
     useAllSkills: profile.skills === undefined,
@@ -78,7 +83,7 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
 /**
  * 智能体角色详情与配置抽屉（520px-560px 宽度）：
  * - 基于 Radix Dialog 原语实现平滑右侧滑出；
- * - 覆盖角色 ID、名称、描述、默认模型、工作目录、系统提示词、插件扩展子插槽与技能白名单；
+ * - 覆盖角色 ID、名称、描述、默认模型、默认节点、工作目录、系统提示词、插件扩展子插槽与技能白名单；
  * - 提供脏表单防护、新建校验与删除二次确认；
  * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
  */
@@ -134,6 +139,7 @@ export function ProfileDetailDrawer({
               description: detail.description ?? prev.description,
               model: resolveProfileModel(detail) ?? prev.model,
               thinkingLevel: detail.thinkingLevel ?? '',
+              nodeId: detail.nodeId ?? prev.nodeId,
               cwd: detail.cwd ?? prev.cwd,
               system: detail.system ?? prev.system,
               useAllSkills: detail.skills === undefined,
@@ -165,6 +171,7 @@ export function ProfileDetailDrawer({
         form.description.trim() !== '' ||
         form.model.trim() !== '' ||
         form.thinkingLevel !== '' ||
+        form.nodeId.trim() !== '' ||
         form.cwd.trim() !== '' ||
         form.system.trim() !== '' ||
         !form.useAllSkills ||
@@ -178,6 +185,7 @@ export function ProfileDetailDrawer({
     if (form.description !== baseline.description) return true
     if (form.model !== baseline.model) return true
     if (form.thinkingLevel !== baseline.thinkingLevel) return true
+    if (form.nodeId !== baseline.nodeId) return true
     if (form.cwd !== baseline.cwd) return true
     if (form.system !== baseline.system) return true
     if (form.useAllSkills !== baseline.useAllSkills) return true
@@ -201,6 +209,24 @@ export function ProfileDetailDrawer({
   const modelOptions = useMemo<SelectOption<string>[]>(() => {
     return buildProfileModelOptions(store.models ?? [], form.model)
   }, [store.models, form.model])
+
+  // 默认节点下拉选项：未绑定项 + store.nodes 全量；既有值不在节点列表时补「未知节点」回退项
+  const nodeOptions = useMemo<SelectOption<string>[]>(() => {
+    const list: SelectOption<string>[] = [
+      { value: '', label: '未绑定（本机 local）', icon: 'monitor' },
+      ...store.nodes.map((n) => ({
+        value: n.id,
+        label: nodeOptionLabel(n),
+        icon: n.id === 'local' || n.kind === 'local' ? 'monitor' : 'network',
+        meta: n.kind === 'local' ? undefined : n.online ? '在线' : '离线',
+      })),
+    ]
+    const current = form.nodeId.trim()
+    if (current !== '' && !list.some((o) => o.value === current)) {
+      list.push({ value: current, label: `${current}（未知节点）`, icon: 'alert-circle' })
+    }
+    return list
+  }, [store.nodes, form.nodeId])
 
   // 所选模型支持的思考档位：未绑定模型时无档位（跟随全局缺省）；
   // 目录缺失（模型未配置/外部）时无档位可选，仅保留既有值提示。
@@ -251,7 +277,7 @@ export function ProfileDetailDrawer({
     setIsSaving(true)
     try {
       // 整体替换契约：以最近一次完整详情为基底，仅覆写表单暴露字段——
-      // nodeId/runtime/tags/thinkingLevel 等未暴露字段原样保留，不因表单裁剪而丢。
+      // runtime/tags 等未暴露字段原样保留，不因表单裁剪而丢。
       const base = (isNew ? {} : { ...form.source }) as Record<string, unknown>
       const payload = {
         ...base,
@@ -262,6 +288,7 @@ export function ProfileDetailDrawer({
         ...(form.model.trim() !== '' ? { model: form.model.trim() } : {}),
         // 整体替换契约：thinkingLevel 必须显式提交（省略即清除，跟随全局缺省）
         ...(form.thinkingLevel !== '' ? { thinkingLevel: form.thinkingLevel } : {}),
+        ...(form.nodeId.trim() !== '' ? { nodeId: form.nodeId.trim() } : {}),
         ...(form.cwd.trim() !== '' ? { cwd: form.cwd.trim() } : {}),
         ...(form.starters.length > 0
           ? { starters: form.starters.map((s) => ({ label: s.label.trim(), prompt: s.prompt })) }
@@ -274,6 +301,8 @@ export function ProfileDetailDrawer({
       if (form.name.trim() === '') delete (payload as { name?: string }).name
       if (form.model.trim() === '') delete (payload as { model?: string }).model
       if (form.thinkingLevel === '') delete (payload as { thinkingLevel?: string }).thinkingLevel
+      // 置空即解绑：base（既有详情）携带的 nodeId 必须显式删除，否则整体替换会复活旧绑定
+      if (form.nodeId.trim() === '') delete (payload as { nodeId?: string }).nodeId
       if (form.cwd.trim() === '') delete (payload as { cwd?: string }).cwd
 
       let saved: Profile
@@ -503,6 +532,24 @@ export function ProfileDetailDrawer({
                       当前档位 {form.thinkingLevel} 不在所选模型支持列表，保存前请调整。
                     </span>
                   )}
+                </div>
+
+                <label htmlFor="profile-form-node" className="form-grid-label">
+                  默认节点
+                </label>
+                <div className="form-grid-value">
+                  <Select
+                    id="profile-form-node"
+                    value={form.nodeId}
+                    options={nodeOptions}
+                    popoverClassName="helm-select-popover-wide"
+                    className="w-full mono"
+                    inline={inline}
+                    placeholder="未绑定（本机 local）"
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, nodeId: e.target.value }))
+                    }
+                  />
                 </div>
 
                 <label htmlFor="profile-form-cwd" className="form-grid-label">
