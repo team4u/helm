@@ -157,14 +157,15 @@ function assertConversationSummaryShape(value: unknown): void {
   }
 }
 
-/** contextUsage 形状校验（可缺不可错；契约收敛为 tokens/contextWindow/compacting/
- * response 四字段，未知字段拒绝——不留死字段；tokens 为 null 表示上下文未知）。 */
+/** contextUsage 形状校验（可缺不可错；契约收敛为 tokens/contextWindow/compacting
+ * 三字段，未知字段拒绝——不留死字段；tokens 为 null 表示上下文未知；速率类
+ * 指标不随用量携带，由可选插件策略层自行展示）。 */
 function isContextUsageShape(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false
   const usage = value as Record<string, unknown>
   if (
     !Object.keys(usage).every(
-      (key) => key === 'tokens' || key === 'contextWindow' || key === 'compacting' || key === 'response',
+      (key) => key === 'tokens' || key === 'contextWindow' || key === 'compacting',
     )
   ) {
     return false
@@ -186,29 +187,59 @@ function isContextUsageShape(value: unknown): boolean {
   if (usage['compacting'] !== undefined && typeof usage['compacting'] !== 'boolean') {
     return false
   }
-  if (usage['response'] !== undefined && !isResponseMetricShape(usage['response'])) {
-    return false
-  }
   return true
 }
 
-/** 最近响应速率指标形状：responseTps/responseOutputTokens/responseDurationMs
- * 三字段恰为正有限数，未知字段拒绝。 */
-function isResponseMetricShape(value: unknown): boolean {
+/** conversation.live 的通用流式 generation 事实形状（可缺不可错）：
+ * attempt 正整数；message.content 为数组且仅含受限块形状；usage.output
+ * 正有限数。非法即拒绝，不静默降级。 */
+function isLiveGenerationShape(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false
-  const metric = value as Record<string, unknown>
+  const generation = value as Record<string, unknown>
   if (
-    !Object.keys(metric).every(
-      (key) => key === 'responseTps' || key === 'responseOutputTokens' || key === 'responseDurationMs',
+    !Object.keys(generation).every(
+      (key) => key === 'attempt' || key === 'message',
     )
   ) {
     return false
   }
-  for (const key of ['responseTps', 'responseOutputTokens', 'responseDurationMs'] as const) {
-    const raw = metric[key]
-    if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return false
+  if (
+    typeof generation['attempt'] !== 'number' ||
+    !Number.isInteger(generation['attempt']) ||
+    generation['attempt'] <= 0
+  ) {
+    return false
   }
-  return true
+  const message = generation['message']
+  if (message === undefined) return true
+  if (message === null || typeof message !== 'object') return false
+  const m = message as Record<string, unknown>
+  if (!Object.keys(m).every((key) => key === 'content' || key === 'usage')) return false
+  if (!Array.isArray(m['content'])) return false
+  for (const block of m['content']) {
+    if (block === null || typeof block !== 'object') return false
+    const b = block as Record<string, unknown>
+    if (b['type'] === 'text') {
+      if (typeof b['text'] !== 'string' || !Object.keys(b).every((k) => k === 'type' || k === 'text')) return false
+    } else if (b['type'] === 'thinking') {
+      if (typeof b['thinking'] !== 'string' || !Object.keys(b).every((k) => k === 'type' || k === 'thinking')) return false
+    } else if (b['type'] === 'toolCall') {
+      if (
+        typeof b['name'] !== 'string' ||
+        !Object.keys(b).every((k) => k === 'type' || k === 'name' || k === 'arguments')
+      ) {
+        return false
+      }
+    } else {
+      return false
+    }
+  }
+  const usage = m['usage']
+  if (usage === undefined) return true
+  if (usage === null || typeof usage !== 'object') return false
+  const u = usage as Record<string, unknown>
+  if (!Object.keys(u).every((key) => key === 'output')) return false
+  return typeof u['output'] === 'number' && Number.isFinite(u['output']) && u['output'] > 0
 }
 
 /** ask.upsert 载荷校验：AskSpec 核心字段形状（业务级规则由 createAsk 的 validateAskSpec 把守）。 */
@@ -854,6 +885,14 @@ export class EventHub {
           throw new HelmError(
             'invalid_event',
             'conversation.live 需要 { conversationId, text, tools, updatedAt } 形状的 live',
+            500,
+          )
+        }
+        const generation = (live as { generation?: unknown }).generation
+        if (generation !== undefined && !isLiveGenerationShape(generation)) {
+          throw new HelmError(
+            'invalid_event',
+            'conversation.live 的 generation 需要 { attempt: 正整数, message?: { content, usage? } } 形状',
             500,
           )
         }

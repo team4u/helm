@@ -7,7 +7,9 @@
  *   >90 红（composer-context-status-high）、>70 黄（-warn）、其余默认灰；
  * - tokens=null（压缩后尚无有效 usage）显示 `?/窗口`；窗口未知显示紧凑估算量；
  * - tokens=0（空会话/刚 reset）不渲染；压缩中显示「精简中…」；
- * - 无 contextUsage（内核尚未刷新）不渲染。
+ * - 无 contextUsage（内核尚未刷新）不渲染；
+ * - 速率类只读指标不在宿主内置渲染（策略归可选插件 builtin:token-speed，
+ *   经 COMPOSER_STATUS_SLOT 插槽贡献）。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -58,10 +60,6 @@ async function mountComposer(conversation: ConversationSummary): Promise<{ host:
 
 function statusSpan(host: HTMLElement): HTMLElement | null {
   return host.querySelector<HTMLElement>('.composer-context-status')
-}
-
-function tpsSpan(host: HTMLElement): HTMLElement | null {
-  return host.querySelector<HTMLElement>('.composer-context-tps')
 }
 
 /** 断言只读：无按钮、无 gauge 图标、点击不弹浮层。 */
@@ -205,36 +203,13 @@ test('CSS 优先级回归：加载真实 forms.css，色调类必须真正覆盖
   }
 })
 
-test('最近响应速率：紧邻上下文用量显示 xx.x tok/s（mono/tabular），title 标注端到端语义', { timeout: 60_000 }, async () => {
-  const { host, unmount } = await mountComposer(
-    conv({
-      tokens: 75_000,
-      contextWindow: 200_000,
-      response: { responseTps: 52.4, responseOutputTokens: 524, responseDurationMs: 10_000 },
-    }),
-  )
-  try {
-    const status = statusSpan(host)
-    const tps = tpsSpan(host)
-    assert.ok(status, '上下文状态仍渲染')
-    assert.ok(tps, '最近响应速率必须渲染')
-    assert.equal(status!.contains(tps), true, 'TPS 位于同一状态容器内（紧邻上下文用量）')
-    assert.equal(tps!.textContent, '52.4 tok/s')
-    assert.match(tps!.getAttribute('title') ?? '', /端到端/)
-    assert.match(tps!.getAttribute('title') ?? '', /含首字延迟，非纯解码速率/)
-    assert.ok(tps!.classList.contains('mono') && tps!.classList.contains('tabular-nums'), '紧凑 mono/tabular 样式')
-    // 组合文本：上下文百分比在前，速率在后。
-    assert.equal(status!.textContent, '37.5%/200k52.4 tok/s')
-  } finally {
-    unmount()
-  }
-})
-
-test('无 response 指标：不渲染任何 TPS 占位符（与既有状态文本互不影响）', { timeout: 60_000 }, async () => {
+test('速率类指标不在宿主内置渲染：contextUsage 无 response 字段（策略归可选插件）', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ tokens: 75_000, contextWindow: 200_000 }))
   try {
-    assert.equal(tpsSpan(host), null, '无指标不得显示占位符')
-    assert.equal(statusSpan(host)?.textContent, '37.5%/200k')
+    // @ts-expect-error response 已删除：速率展示完全交给 builtin:token-speed 插件经 COMPOSER_STATUS_SLOT 贡献
+    conv({ tokens: 1, response: { responseTps: 52.4 } })
+    assert.equal(host.querySelector('.composer-context-tps'), null, '宿主不渲染任何内置速率文本')
+    assert.equal(statusSpan(host)?.textContent, '37.5%/200k', '上下文状态不受影响')
   } finally {
     unmount()
   }
@@ -256,7 +231,6 @@ test('composer/status 宿主保留插槽：PluginSlot 挂载在状态区，贡�
   const conversation = conv({
     tokens: 75_000,
     contextWindow: 200_000,
-    response: { responseTps: 52.4, responseOutputTokens: 524, responseDurationMs: 10_000 },
   })
   const store = makeTestStore({
     conversations: [conversation],
@@ -286,7 +260,7 @@ test('composer/status 宿主保留插槽：PluginSlot 挂载在状态区，贡�
   assert.ok(leftAt >= 0 && leftAt < slotAt, '状态贡献位于工具栏状态区（移动端同样不收入 more 菜单）')
   assert.ok(statusAt >= 0 && statusAt < slotAt, '插槽紧邻 ContextUsageStatus 之后')
   assert.ok(extrasAt < 0 || slotAt < extrasAt, '插槽不在 more 菜单容器内')
-  assert.ok(html.includes('52.4 tok/s'), '上下文状态与 TPS 同区渲染')
+  assert.ok(html.includes('probe-composer-status'), '插槽贡献与上下文状态同区渲染')
 })
 
 test('composer/status 插槽无贡献时不渲染任何容器（宿主状态区零噪声）', { timeout: 60_000 }, async () => {

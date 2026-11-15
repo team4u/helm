@@ -840,7 +840,7 @@
 .composer-model-button > svg { flex-shrink: 0; }
 .composer-model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: normal; }
 .composer-model-level { flex-shrink: 0; color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
-/* 上下文用量与最近响应速率只读状态（模型选择器右侧）：不可点击，仅色调差异。
+/* 上下文用量只读状态（模型选择器右侧）：不可点击，仅色调差异。
  * 色调类与基础规则同 specificity（.composer-toolbar 前缀一致），
  * 声明在后覆盖默认灰，否则 0,1,0 < 0,2,0 黄红永远不生效。 */
 .composer-toolbar .composer-context-status {
@@ -857,8 +857,9 @@
 }
 .composer-toolbar .composer-context-status-warn { color: var(--warn); }
 .composer-toolbar .composer-context-status-high { color: var(--err); }
-/* 宿主状态行插件插槽（上下文用量/响应速率旁）：状态贡献非操作项，
- * 移动端同样保留在工具栏状态区（不收入 more 菜单）；可收缩防挤压发送区。 */
+/* 宿主状态行插件插槽（上下文用量旁，如 builtin:token-speed 速率贡献）
+ * ：状态贡献非操作项，移动端同样保留在工具栏状态区（不收入 more 菜单）；
+ * 可收缩防挤压发送区。 */
 .composer-toolbar .composer-status-slot {
   display: inline-flex;
   align-items: center;

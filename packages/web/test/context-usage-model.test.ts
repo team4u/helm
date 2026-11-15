@@ -5,11 +5,12 @@
  * - 只读文本：窗口已知 `${percent.toFixed(1)}%/${formatTokens(window)}`；
  *   压缩后未知 `?/${formatTokens(window)}`；窗口未知只显示紧凑估算量；
  * - 色调阈值严格 >90 红 / >70 黄，其余（含窗口未知）恒默认灰；
- * - tokens=0 与空 usage 不渲染；压缩中显示「精简中…」。
+ * - tokens=0 与空 usage 不渲染；压缩中显示「精简中…」；
+ * - 速率展示已收敛到可选插件 builtin:token-speed（responseTpsLabel 已删除）。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { contextUsageLabel, responseTpsLabel } from '../src/conversation/context-usage-model.js'
+import { contextUsageLabel } from '../src/conversation/context-usage-model.js'
 import { formatTokens } from '../src/lib/format.js'
 
 test('formatTokens：pi footer 分档（<1000 原值；<10000 一位小数 k；<1M 取整 k；<10M 一位小数 M）', { timeout: 60_000 }, () => {
@@ -71,27 +72,4 @@ test('tokens=0（空会话/刚 reset）与压缩中：0 不渲染；压缩中显
   assert.equal(compacting?.tone, 'default')
   // tokens=null 但压缩进行中：同样显示精简中（压缩未完成时占比未知是常态）。
   assert.equal(contextUsageLabel({ tokens: null, contextWindow: 128_000, compacting: true })?.text, '精简中…')
-})
-
-test('responseTpsLabel：一位小数 tok/s；title 标注端到端（含首字延迟）语义', { timeout: 60_000 }, () => {
-  const label = responseTpsLabel({ tokens: 1_000, response: { responseTps: 52.4, responseOutputTokens: 524, responseDurationMs: 10_000 } })
-  assert.equal(label?.text, '52.4 tok/s')
-  assert.match(label!.title, /端到端/)
-  assert.match(label!.title, /含首字延迟/)
-  assert.match(label!.title, /非纯解码速率/)
-  assert.match(label!.title, /524 输出 tokens/)
-  assert.match(label!.title, /10\.0s/)
-  // 小数位数：一律 toFixed(1)，不做分档。
-  assert.equal(responseTpsLabel({ tokens: 0, response: { responseTps: 3.14159, responseOutputTokens: 31, responseDurationMs: 9_866 } })?.text, '3.1 tok/s')
-})
-
-test('responseTpsLabel：无指标或非法值不渲染（无占位符，不用过期速度冒充）', { timeout: 60_000 }, () => {
-  assert.equal(responseTpsLabel({ tokens: 1_000 }), null, '无 response 不显示占位符')
-  assert.equal(responseTpsLabel({ tokens: null, contextWindow: 128_000 }), null, '压缩后未知同样无 TPS')
-  assert.equal(responseTpsLabel({ tokens: 0, response: { responseTps: 0, responseOutputTokens: 0, responseDurationMs: 0 } }), null, '非法速率不渲染')
-  assert.equal(
-    responseTpsLabel({ tokens: 1, response: { responseTps: Number.NaN, responseOutputTokens: 5, responseDurationMs: 5_000 } }),
-    null,
-    'NaN 防御',
-  )
 })

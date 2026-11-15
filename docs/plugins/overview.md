@@ -15,7 +15,7 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 
 ## 内置插件全景
 
-官方插件实现与资产位于 `packages/plugins`。产品启动时由 `@helm/hub` 的 `createHelm` 组合层注册 10 个内置插件；内核包不注册默认插件，也不依赖这个包。前 7 个默认启用，后 3 个默认停用、按需开启：
+官方插件实现与资产位于 `packages/plugins`。产品启动时由 `@helm/hub` 的 `createHelm` 组合层注册 11 个内置插件；内核包不注册默认插件，也不依赖这个包。前 7 个默认启用，后 4 个默认停用、按需开启：
 
 | 插件 ID | 名称 | 职责一句话 | 默认状态 | locked |
 | :--- | :--- | :--- | :--- | :--- |
@@ -29,8 +29,9 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 | `builtin:herdr` | Herdr 终端 | 拦截 `agent_spawn` 驱动本机/远端 Herdr CLI Agent，带 CAS 审批桥 | 停用 | 否 |
 | `builtin:superagent` | SuperAgent 中枢 | 双层中枢（总控路由 + 驻留 Worker）与两层巡检看门狗 | 停用 | 否 |
 | `builtin:magpie` | Magpie 网关 | 动态模型网关接入：模型目录、配额与路由组诊断 | 停用 | 否 |
+| `builtin:token-speed` | Token 速率 | 输入区状态行实时解码速率（滑动窗口 / 首字延迟 / 终态对账）；内核零速率计算，只透传 ConversationLive.generation 通用事实 | 停用 | 否 |
 
-10 个插件之间正交且可组合：`builtin:profile` 为所有会话提供认知底座；`builtin:memory` 与之正交（内核对记忆零感知）；`builtin:apps` 经 `ctx.host.plugins` 受管包端口管理用户全栈微应用的预检与发布；`builtin:workflow` 的编排引擎消费 `builtin:herdr` 接管的外部运行时（经 `agent_spawn` 管道，对脚本层透明）；`builtin:superagent` 的 Watchdog 经 `diagnostics.collect` 进程内事件采集 Herdr 窗格探针；`builtin:json-render` 与 `builtin:mermaid` 是扩展点之上的普通消费者，停用即回退普通代码块，不影响其他插件。
+11 个插件之间正交且可组合：`builtin:profile` 为所有会话提供认知底座；`builtin:memory` 与之正交（内核对记忆零感知）；`builtin:apps` 经 `ctx.host.plugins` 受管包端口管理用户全栈微应用的预检与发布；`builtin:workflow` 的编排引擎消费 `builtin:herdr` 接管的外部运行时（经 `agent_spawn` 管道，对脚本层透明）；`builtin:superagent` 的 Watchdog 经 `diagnostics.collect` 进程内事件采集 Herdr 窗格探针；`builtin:json-render` 与 `builtin:mermaid` 是扩展点之上的普通消费者，停用即回退普通代码块，不影响其他插件；`builtin:token-speed` 同样是纯消费者（订阅 conversation.live/entry 事件 + `slot` 扩展点），停用后内核照常透传事实、零额外计算。
 
 ## `definePlugin(ctx)` 契约
 
@@ -148,6 +149,6 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 
 ## 延伸阅读
 
-- 各内置插件深度文档：[workflow](workflow.md) · [profile](profile.md) · [memory](memory.md) · [apps](apps.md) · [herdr](herdr.md) · [superagent](superagent.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md)
+- 各内置插件深度文档：[workflow](workflow.md) · [profile](profile.md) · [memory](memory.md) · [apps](apps.md) · [herdr](herdr.md) · [superagent](superagent.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md)
 - 扩展点契约详解：[后端生命周期 Hook 与前端全界面扩展点](../architecture/extension-points.md)
 - 外部插件开发实战：[plugin-development.md](plugin-development.md)

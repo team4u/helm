@@ -61,6 +61,14 @@
     "./mermaid": {
       "types": "./dist/mermaid.d.ts",
       "import": "./dist/mermaid.js"
+    },
+    "./token-speed": {
+      "types": "./dist/token-speed.d.ts",
+      "import": "./dist/token-speed.js"
+    },
+    "./token-speed/contracts": {
+      "types": "./dist/token-speed/contracts.d.ts",
+      "import": "./dist/token-speed/contracts.js"
     }
   },
   "scripts": {

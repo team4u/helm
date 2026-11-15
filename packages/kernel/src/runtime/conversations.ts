@@ -53,7 +53,7 @@ import {
 /** SDK pi.live 文档的结构子集（tracker 观察形状）。 */
 export interface LiveStateShape {
   run?: { taskId: number; inputs: number[]; turns?: number; first?: number }
-  generation?: { message?: unknown }
+  generation?: { attempt?: unknown; message?: unknown; retry?: unknown; deferred?: unknown }
   tools?: Array<{ callId: string; name: string; status: string; arguments?: unknown; output?: string }>
   nestedTools?: Array<{ callId: string; name: string; status: string; arguments?: unknown; output?: string }>
   runFailure?: { taskId: number; inputs: number[]; reason: string; detail?: string }
@@ -805,9 +805,17 @@ export class ConversationTracker {
     this.liveTimers.set(id, timer)
   }
 
-  /** live 帧内容指纹：text/thinking/tools/queuedInputs（发送与去重两处共用同一公式）。 */
+  /** live 帧内容指纹：text/thinking/tools/generation/queuedInputs（发送与去重两处共用同一公式）。
+   * generation 参与指纹：纯 tool-call 参数流式期间 text/thinking 恒空，
+   * 不计 generation 则参数增长完全不发帧。 */
   private liveKeyOf(snapshot: ConversationLive): string {
-    return JSON.stringify([snapshot.text, snapshot.thinking ?? '', snapshot.tools, snapshot.queuedInputs ?? []])
+    return JSON.stringify([
+      snapshot.text,
+      snapshot.thinking ?? '',
+      snapshot.tools,
+      snapshot.generation ?? null,
+      snapshot.queuedInputs ?? [],
+    ])
   }
 
   /** 同步发送一帧 live（终态冲刷 / queued 清理共用）：登记两处指纹。 */

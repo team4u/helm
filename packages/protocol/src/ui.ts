@@ -244,8 +244,9 @@ export const NODE_DETAIL_SECTION_SLOT = 'builtin:node/detail-section' as const
 
 /** 宿主输入区状态行保留的命名空间，不代表存在 builtin:composer 插件。
  * 贡献组件收到与 composer.pill/widget 同形的 ComposerScopeProps
- * （conversation + composer），在上下文用量/响应速率只读状态旁渲染；
- * 移动端同样保留在工具栏状态区（不收入 more 菜单）。 */
+ * （conversation + composer），在上下文用量只读状态旁渲染；速率类只读
+ * 指标（如 builtin:token-speed）经此插槽贡献；移动端同样保留在工具栏
+ * 状态区（不收入 more 菜单）。 */
 export const COMPOSER_STATUS_SLOT = 'builtin:composer/status' as const
 
 /** 仅已有节点挂载；不包含节点接入令牌或其他凭据。 */

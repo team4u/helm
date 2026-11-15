@@ -56,7 +56,7 @@ import {
   ENV_BLOCKER_CLEAR,
 } from './composer-model.js'
 import { lastEditableHumanInput } from './timeline-model.js'
-import { contextUsageLabel, responseTpsLabel } from './context-usage-model.js'
+import { contextUsageLabel } from './context-usage-model.js'
 import { formatBytes } from '../lib/format.js'
 
 export interface ComposerProps {
@@ -287,26 +287,22 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
 }
 
 // ---------------------------------------------------------------------------
-// 上下文用量与最近响应速率只读状态（ModelPicker 右侧；对齐 pi footer 展示，不可交互）
+// 上下文用量只读状态（ModelPicker 右侧；对齐 pi footer 展示，不可交互）。
+// 速率类只读指标（如 builtin:token-speed）经下方 COMPOSER_STATUS_SLOT 插槽
+// 由可选插件贡献，宿主不再内置任何响应速率计算与展示。
 // ---------------------------------------------------------------------------
 
 function ContextUsageStatus({ conversation }: { conversation: ConversationSummary }) {
   const usage = conversation.contextUsage
   if (usage === undefined) return null
   const label = contextUsageLabel(usage)
-  const tps = responseTpsLabel(usage)
-  if (label === null && tps === null) return null
+  if (label === null) return null
   return (
     <span
-      className={`composer-context-status${label?.tone === 'high' ? ' composer-context-status-high' : label?.tone === 'warn' ? ' composer-context-status-warn' : ''}`}
-      title={label?.title}
+      className={`composer-context-status${label.tone === 'high' ? ' composer-context-status-high' : label.tone === 'warn' ? ' composer-context-status-warn' : ''}`}
+      title={label.title}
     >
       {label !== null ? <span className="mono tabular-nums">{label.text}</span> : null}
-      {tps !== null ? (
-        <span className="mono tabular-nums composer-context-tps" title={tps.title}>
-          {tps.text}
-        </span>
-      ) : null}
     </span>
   )
 }
@@ -1363,8 +1359,9 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
               </Tooltip>
               <ModelPicker conversation={conversation} />
               <ContextUsageStatus conversation={conversation} />
-              {/* 宿主状态行保留插槽：插件向上下文用量/响应速率同一状态区贡献
-                  只读内容；移动端同样保留在工具栏（不收入 more 菜单）。 */}
+              {/* 宿主状态行保留插槽：插件向上下文用量同一状态区贡献只读内容
+                  （如 builtin:token-speed 的实时/终态解码速率）；移动端同样
+                  保留在工具栏（不收入 more 菜单）。 */}
               <PluginSlot
                 ownerPluginId="builtin:composer"
                 name={COMPOSER_STATUS_SLOT}

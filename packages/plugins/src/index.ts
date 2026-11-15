@@ -1,5 +1,5 @@
 /**
- * @helm/plugins 聚合出口：十个内置插件的生产者侧工厂与公开契约。
+ * @helm/plugins 聚合出口：十一个内置插件的生产者侧工厂与公开契约。
  *
  * 消费方向（包拓扑铁律）：本包只依赖 @helm/protocol 与外部 SDK，绝不依赖
  * @helm/kernel 实现；产品组合（注册顺序与缺省启停）由 @helm/hub 负责。
@@ -30,4 +30,6 @@ export { createJsonRenderPlugin, JSON_RENDER_PLUGIN_ID } from './json-render.js'
 export { createMermaidPlugin, MERMAID_PLUGIN_ID } from './mermaid.js';
 export { createMagpiePlugin, MAGPIE_PLUGIN_ID } from './magpie.js';
 export { MAGPIE_PROVIDER_ID, type MagpiePluginConfig, type MagpieStatusDoc } from './magpie/contracts.js';
+export { createTokenSpeedPlugin, TOKEN_SPEED_PLUGIN_ID } from './token-speed.js';
+export { TOKEN_SPEED_DOC, type TokenSpeedStatus } from './token-speed/contracts.js';
 export type { HerdrPluginDependencies, HerdrTransport, HerdrTarget, HerdrEvent } from './herdr/contracts.js';

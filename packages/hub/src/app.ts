@@ -11,6 +11,7 @@ import {
   createTriggersPlugin,
   createMagpiePlugin,
   createAppsPlugin,
+  createTokenSpeedPlugin,
 } from '@helm/plugins';
 
 export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
@@ -36,6 +37,7 @@ export async function createHelm(options: HelmOptions = {}) {
     await kernel.plugins.register(createHerdrPlugin(), { enabled: false });
     await kernel.plugins.register(createSuperAgentPlugin(), { enabled: false });
     await kernel.plugins.register(createMagpiePlugin(), { enabled: false });
+    await kernel.plugins.register(createTokenSpeedPlugin(), { enabled: false });
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
     // 全部工具注册后统一 prepare -> start，最后恢复 SDK 调度器。
     await kernel.start();

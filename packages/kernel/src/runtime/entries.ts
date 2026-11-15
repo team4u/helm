@@ -16,6 +16,8 @@ import {
   HelmError,
   type ConversationEntry,
   type ConversationLive,
+  type ConversationLiveGeneration,
+  type ConversationLiveMessage,
   type QueuedConversationInput,
 } from '@helm/protocol'
 
@@ -139,6 +141,49 @@ function toolInputOf(slot: { arguments?: unknown } | { input?: unknown }): unkno
   return (slot as { input?: unknown }).input
 }
 
+/**
+ * SDK generation（pi.live generation 字段）-> 协议受限投影（通用事实，零策略）。
+ * - attempt 非正整数时整体省略（形状并非法，不伪造序号）；
+ * - message 仅保留 content 受限块（text/thinking/toolCall name+arguments）与
+ *   供应商累计 usage.output（正有限数）；无有效内容块时 message 省略；
+ * - 不透传其他字段（时间戳/模型元数据不外泄，速率策略不依赖它们）。
+ */
+export function liveGenerationOf(
+  generation: { attempt?: unknown; message?: unknown } | undefined,
+): ConversationLiveGeneration | undefined {
+  if (generation === null || typeof generation !== 'object') return undefined
+  const attempt = (generation as { attempt?: unknown }).attempt
+  if (typeof attempt !== 'number' || !Number.isInteger(attempt) || attempt <= 0) return undefined
+  const message = liveMessageOf((generation as { message?: unknown }).message)
+  return { attempt, ...(message !== undefined ? { message } : {}) }
+}
+
+/** partial assistant message -> 受限 JSON-safe 投影；无有效内容块返回 undefined。 */
+function liveMessageOf(message: unknown): ConversationLiveMessage | undefined {
+  if (message === null || typeof message !== 'object') return undefined
+  const content = (message as { content?: unknown }).content
+  if (!Array.isArray(content)) return undefined
+  const blocks: ConversationLiveMessage['content'] = []
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue
+    const b = block as { type?: unknown; text?: unknown; thinking?: unknown; name?: unknown; arguments?: unknown }
+    if (b.type === 'text' && typeof b.text === 'string') {
+      blocks.push({ type: 'text', text: b.text })
+    } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
+      blocks.push({ type: 'thinking', thinking: b.thinking })
+    } else if (b.type === 'toolCall' && typeof b.name === 'string') {
+      blocks.push({ type: 'toolCall', name: b.name, ...('arguments' in b ? { arguments: b.arguments } : {}) })
+    }
+  }
+  if (blocks.length === 0) return undefined
+  const output = (message as { usage?: { output?: unknown } }).usage?.output
+  const usage =
+    typeof output === 'number' && Number.isFinite(output) && output > 0
+      ? { output }
+      : undefined
+  return { content: blocks, ...(usage !== undefined ? { usage } : {}) }
+}
+
 /** pi.inbox queued 项的结构子集（tracker 传入；形状非法项直接跳过，不伪造）。 */
 export interface InboxItemLike {
   readonly id: number | string
@@ -181,13 +226,15 @@ function sortQueuedInputs(items: QueuedConversationInput[]): void {
  * - tools：模型发起的工具轮（tools）与嵌套调用（nestedTools）统一映射；
  *   输入取 slot 的运行参数（模型发起调用参数在 assistant entry，slot 的
  *   arguments/output 仅嵌套调用携带），结果文本不进入 live（详情走 entry）；
+ * - generation：通用流式事实（attempt + 受限 message 投影），供速率类
+ *   插件策略消费；内核零速率计算；
  * - queuedInputs：从 pi.inbox 排队项派生的待生效输入清单（steer 优先），
  *   无排队项时省略。
  */
 export function deriveConversationLive(
   conversationId: number,
   live: {
-    generation?: { message?: unknown }
+    generation?: { attempt?: unknown; message?: unknown }
     tools?: ReadonlyArray<{
       callId: string
       name: string
@@ -223,6 +270,7 @@ export function deriveConversationLive(
   collect(source.tools)
   collect(source.nestedTools)
   const thinking = streamedThinkingOf(source.generation?.message)
+  const generation = liveGenerationOf(source.generation)
   const queuedInputs: QueuedConversationInput[] = []
   for (const item of inboxItems ?? []) {
     const queued = queuedInputOf(item, updatedAt)
@@ -234,6 +282,7 @@ export function deriveConversationLive(
     text: streamedTextOf(source.generation?.message),
     ...(thinking !== '' ? { thinking } : {}),
     tools,
+    ...(generation !== undefined ? { generation } : {}),
     ...(queuedInputs.length > 0 ? { queuedInputs } : {}),
     updatedAt,
   }

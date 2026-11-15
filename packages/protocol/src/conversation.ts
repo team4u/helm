@@ -21,30 +21,16 @@ export type InputOrigin = 'human' | 'agent' | 'trigger'
 /** 会话正忙时新输入的处理策略；省略时内核默认 steer（插话引导）。 */
 export type WhenBusy = 'steer' | 'followUp' | 'reject'
 
-/** 最近一次成功且可测量的 assistant 响应的端到端速率指标（派生展示数据）。
- *
- * 语义诚实性：分子是供应商上报的 `usage.output`（真实输出 tokens，绝不用
- * 字符估算冒充）；分母是 AssistantMessageEventStream 以 monotonic clock 实测
- * 的单次请求 `durationMs`——从请求开始到响应结束的端到端耗时（包含 TTFT
- * 首字延迟），因此 responseTps 是端到端响应速率，不是纯 decode 解码速率，
- * 展示端文案必须如实标注。锚点与上下文 tokens 估算共用同一有效 assistant
- * 判定（stopReason 非 aborted/error 且上下文 tokens > 0 的最近一条）。 */
-export interface ConversationResponseMetric {
-  /** 端到端输出速率 tokens/sec = responseOutputTokens / responseDurationMs × 1000。 */
-  responseTps: number
-  /** 供应商上报的输出 tokens（分子；非字符估算）。 */
-  responseOutputTokens: number
-  /** 单次请求端到端耗时（毫秒，monotonic clock 实测；含 TTFT）。 */
-  responseDurationMs: number
-}
-
 /** 会话上下文用量（派生展示数据；内核异步刷新，可能短暂滞后于真实上下文）。
  *
  * 估算语义对齐 pi agent 1.5.2 的 `getContextUsage`：优先采用最近一次有效
  * assistant usage 实测值（stopReason 非 aborted/error 且上下文 tokens > 0）
  * 加上其后消息的字符估算；head（pi.compaction / pi.reset）与 rewind 之后的
  * 失效锚点自动退化为当前有效消息全量估算；最近一次压缩后尚无新的有效
- * usage 时 tokens 为 null——真实上下文规模未知，不拿摘要字符估算冒充。 */
+ * usage 时 tokens 为 null——真实上下文规模未知，不拿摘要字符估算冒充。
+ *
+ * 响应速率类只读指标不随用量携带：那是可选插件（如 builtin:token-speed）
+ * 的策略职责，经 COMPOSER_STATUS_SLOT 插槽与专用会话文档展示。 */
 export interface ConversationContextUsage {
   /** 当前有效上下文的估算 tokens；null = 未知（压缩后尚无新的有效 assistant usage）。 */
   tokens: number | null
@@ -52,10 +38,6 @@ export interface ConversationContextUsage {
   contextWindow?: number
   /** 压缩任务进行中（pi.live compactions 非空透传；展示「精简中…」）。 */
   compacting?: boolean
-  /** 最近一次成功且可测量的 assistant 响应指标。无效（压缩/reset 后尚无新的
-   * 有效 assistant、缺 durationMs/usage.output、中止或失败）时省略——绝不显示
-   * 过期速度，也不用历史平均值冒充最近响应。 */
-  response?: ConversationResponseMetric
 }
 
 /** 会话列表 / SSE 快照中的通用会话摘要。 */
@@ -268,9 +250,43 @@ export interface ConversationLive {
     status: 'running' | 'done' | 'error'
     result?: unknown
   }>
+  /** 插件策略（如实时解码速率）所需的通用流式事实；generation 进行中且
+   * 快照可投影时携带（idle/终态帧省略）。内核只透传事实，不做任何速率计算。 */
+  generation?: ConversationLiveGeneration
   /** 当前在 pi.inbox 中排队待生效的输入（steer 优先于 followUp）；无排队项时省略或为空。 */
   queuedInputs?: QueuedConversationInput[]
   updatedAt: number
+}
+
+/** 当前 generation 的通用流式执行事实（内核仪透传观察事实，绝不计算速率；
+ * 解码速率 / TTFT / 对账等策略由消费方（如 builtin:token-speed 插件）自行推导）。
+ *
+ * 时间口径诚实性：SDK LiveState 不提供请求开始的 wall/monotonic 锚点，
+ * 内核不伪造；消费方只能以「首次观测到 generation 的帧时间」为 TTFT 起点
+ * 近似（受 live 节流与 partial 提交节流双重限制），展示端必须如实标注。 */
+export interface ConversationLiveGeneration {
+  /** generation attempt 序号（重试 / 工具轮 handOver 重启时变化）。 */
+  attempt: number
+  /** 当前累计 assistant message 快照（受限投影；message 尚无内容时省略）。 */
+  message?: ConversationLiveMessage
+}
+
+/** 流式 assistant message 的受限 JSON-safe 投影（只含生成内容事实）。
+ *
+ * - text / thinking 块：字符串快照；
+ * - toolCall 块：name 与 arguments（partial 为解析中的 JSON 值；参数是模型
+ *   生成 token，速率策略不得漏计）；
+ * - usage：仅供应商累计上报口径（无上报省略）——绝不用字符估算冒充；
+ * - 不透传内容与 usage 之外的字段（不泄露 provider request 私有数据；
+ *   内容与既有 text/thinking/tools 字段同源同类）。 */
+export interface ConversationLiveMessage {
+  content: Array<
+    | { type: 'text'; text: string }
+    | { type: 'thinking'; thinking: string }
+    | { type: 'toolCall'; name: string; arguments?: unknown }
+  >
+  /** 供应商累计输出 tokens（partial.usage.output；正有限数才携带）。 */
+  usage?: { output: number }
 }
 
 /** 回合终态；turn_settled 钩子统一覆盖三态。 */

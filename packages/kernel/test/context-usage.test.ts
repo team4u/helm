@@ -8,7 +8,8 @@
  *    最近一次压缩（head 为 pi.compaction）后尚无有效 usage 时 tokens=null
  *    （摘要字符估算不冒充已知上下文）；reset 是全新上下文，全量估算为真实值；
  * 2. 组装与透传：compacting 布尔透传；压缩失败经 notification 通知（脱敏 +
- *    按 taskId 去重），不再随用量携带失败摘要；
+ *    按 taskId 去重），不再随用量携带失败摘要；速率类指标（response）已收敛
+ *    到可选插件 builtin:token-speed（内核零速率计算，契约级死字段锁定）；
  * 3. 集成（真实 KernelRuntime + faux provider + SQLite）：回合结算后摘要携带
  *    contextUsage；usage-only 变化发布 conversation.upsert 但不推进
  *    stateChangeSeq；reset 后归零；手动压缩期间 compacting=true 可达、完成后
@@ -35,7 +36,6 @@ import {
   contextUsageKeyOf,
   estimateContextUsage,
   estimateTokens,
-  measuredResponseOf,
 } from '../src/runtime/context-usage.js'
 import { buildModels } from '../src/runtime/models.js'
 import { EventHub } from '../src/runtime/events.js'
@@ -355,109 +355,6 @@ describe('estimateContextUsage：与 pi agent getContextUsage 语义对齐（固
   })
 })
 
-describe('estimateContextUsage：最近响应速率（responseTps）与锚点一致', { timeout: 60_000 }, () => {
-  it('成功且可测量：responseTps = usage.output / durationMs × 1000，与 tokens 同一锚点', { timeout: 60_000 }, () => {
-    const anchor = assistantMessage(
-      { input: 1_000, output: 524 },
-      'm'.repeat(400),
-      'stop',
-      { durationMs: 10_000 },
-    )
-    const view = viewOf({ headId: 10, entries: [[11, [anchor]]] })
-    const estimate = estimateContextUsage(view)
-    assert.equal(estimate.tokens, 1_524)
-    assert.deepEqual(estimate.response, {
-      // 与实现同式计算（浮点一致性）：output / durationMs × 1000。
-      responseTps: (524 / 10_000) * 1000,
-      responseOutputTokens: 524,
-      responseDurationMs: 10_000,
-    })
-    assert.ok(Math.abs(estimate.response!.responseTps - 52.4) < 1e-9, '52.4 tok/s 语义值')
-  })
-
-  it('多条实测 assistant：response 取最新一条（与 tokens 锚点同源，不用旧速度冒充）', { timeout: 60_000 }, () => {
-    const older = assistantMessage({ input: 2_000, output: 10 }, 'a'.repeat(400), 'stop', { durationMs: 1_000 })
-    const newer = assistantMessage({ input: 3_000, output: 20 }, 'b'.repeat(400), 'stop', { durationMs: 4_000 })
-    const view = viewOf({ entries: [[11, [older]], [12, [newer]]] })
-    const estimate = estimateContextUsage(view)
-    assert.equal(estimate.tokens, 3_020)
-    assert.deepEqual(estimate.response, { responseTps: 5, responseOutputTokens: 20, responseDurationMs: 4_000 })
-  })
-
-  it('最新锚点缺 durationMs：省略 response，不回退到更早的可测量 assistant', { timeout: 60_000 }, () => {
-    const older = assistantMessage({ input: 2_000, output: 10 }, 'a'.repeat(400), 'stop', { durationMs: 1_000 })
-    const newer = assistantMessage({ input: 3_000, output: 20 }, 'b'.repeat(400)) // 无 durationMs（旧消息/deferred）
-    const view = viewOf({ entries: [[11, [older]], [12, [newer]]] })
-    const estimate = estimateContextUsage(view)
-    assert.equal(estimate.tokens, 3_020, 'tokens 锚点仍取最新有效 assistant')
-    assert.equal(estimate.response, undefined, '锚点不可测量时不得拿旧速度冒充最近响应')
-  })
-
-  it('usage.output 非正或 durationMs 非正：省略 response（不用字符估算冒充分子）', { timeout: 60_000 }, () => {
-    // output=0 但 input>0：锚点仍有效（上下文 tokens>0），但输出侧不可测量。
-    const noOutput = assistantMessage({ input: 1_000, output: 0 }, 'm'.repeat(400), 'stop', { durationMs: 1_000 })
-    assert.equal(estimateContextUsage(viewOf({ headId: 10, entries: [[11, [noOutput]]] })).response, undefined)
-    // durationMs=0（极快流式被 round 成 0）：分母非正不可测速。
-    const zeroDuration = assistantMessage({ input: 1_000, output: 50 }, 'm'.repeat(400), 'stop', { durationMs: 0 })
-    assert.equal(estimateContextUsage(viewOf({ headId: 10, entries: [[11, [zeroDuration]]] })).response, undefined)
-    // 负数防御：非有限/非正测量值一律拒绝。
-    const negative = { ...assistantMessage({ input: 1_000, output: 50 }, 'm'.repeat(400), 'stop', { durationMs: -5 }) }
-    assert.equal(estimateContextUsage(viewOf({ headId: 10, entries: [[11, [negative]]] })).response, undefined)
-  })
-
-  it('stopReason 为 aborted/error 的响应不生成 TPS（无锚点）', { timeout: 60_000 }, () => {
-    const aborted = assistantMessage({ input: 8_000, output: 10 }, 'a'.repeat(400), 'aborted', { durationMs: 1_000 })
-    const errored = assistantMessage({ input: 8_500, output: 10 }, 'b'.repeat(400), 'error', { durationMs: 1_000 })
-    const view = viewOf({ entries: [[11, [aborted]], [12, [errored]], [13, [userMessage('c'.repeat(400))]]] })
-    const estimate = estimateContextUsage(view)
-    assert.equal(estimate.tokens, 300, '全量估算（无锚点，同 pi getAssistantUsage 过滤）')
-    assert.equal(estimate.response, undefined, '中止/失败响应不得生成速率')
-  })
-
-  it('压缩后尚无有效 assistant（tokens=null）：response 一并省略', { timeout: 60_000 }, () => {
-    const kept = assistantMessage({ input: 40_000, output: 100 }, 'k'.repeat(400), 'stop', { durationMs: 2_000 })
-    const summary = userMessage('s'.repeat(400))
-    const view = viewOf({
-      headId: 100,
-      headKind: 'pi.compaction',
-      entries: [[100, [summary]], [99, [kept]]],
-    })
-    const estimate = estimateContextUsage(view)
-    assert.equal(estimate.tokens, null)
-    assert.equal(estimate.response, undefined, '压缩后未知：不得残留压缩前速度')
-  })
-
-  it('压缩后有新回答：response 随新锚点恢复；reset 后无有效 assistant：response 省略', { timeout: 60_000 }, () => {
-    const fresh = assistantMessage({ input: 3_000, output: 40 }, 'p'.repeat(400), 'stop', { durationMs: 8_000 })
-    const compacted = estimateContextUsage(
-      viewOf({ headId: 100, headKind: 'pi.compaction', entries: [[100, [userMessage('s'.repeat(400))]], [99, []], [101, [fresh]]] }),
-    )
-    assert.deepEqual(compacted.response, { responseTps: 5, responseOutputTokens: 40, responseDurationMs: 8_000 })
-    const reset = estimateContextUsage(
-      viewOf({ headId: 50, headKind: 'pi.reset', entries: [[50, [userMessage('h'.repeat(400))]], [51, []]] }),
-    )
-    assert.equal(reset.response, undefined, 'reset 是全新上下文：不得携带旧速度')
-  })
-
-  it('rewind 边界之后的旧锚点失效：response 一并省略（不泄露被覆盖区间的速度）', { timeout: 60_000 }, () => {
-    const stale = assistantMessage({ input: 5_000, output: 10 }, 'm'.repeat(400), 'stop', { durationMs: 2_000 })
-    const view = viewOf({
-      editEntryIds: [9],
-      entries: [[8, [stale]], [9, []], [10, []], [11, [userMessage('n'.repeat(400))]]],
-    })
-    const estimate = estimateContextUsage(view)
-    assert.equal(estimate.tokens, 200, '全量估算（锚点失效）')
-    assert.equal(estimate.response, undefined)
-  })
-
-  it('measuredResponseOf：非有限数防御（NaN/Infinity 拒绝）', { timeout: 60_000 }, () => {
-    const nanDuration = { ...assistantMessage({ input: 1_000, output: 50 }, 'm'.repeat(400), 'stop', { durationMs: Number.NaN }) }
-    assert.equal(measuredResponseOf(nanDuration as never), undefined)
-    const nanOutput: never = { role: 'assistant', usage: { output: Number.POSITIVE_INFINITY }, durationMs: 1_000 } as never
-    assert.equal(measuredResponseOf(nanOutput), undefined)
-  })
-})
-
 describe('contextUsage 组装与压缩失败通知', { timeout: 60_000 }, () => {
   it('compactingOf：compactions 非空即 true；空/缺省省略', { timeout: 60_000 }, () => {
     assert.equal(compactingOf(undefined), undefined)
@@ -480,31 +377,26 @@ describe('contextUsage 组装与压缩失败通知', { timeout: 60_000 }, () => 
     assert.ok(long.length < 500, '错误摘要截断')
   })
 
-  it('assembleContextUsage：可缺字段省略；指纹区分全部承载字段（含 response）', { timeout: 60_000 }, () => {
+  it('assembleContextUsage：可缺字段省略；指纹区分全部承载字段', { timeout: 60_000 }, () => {
     const base = assembleContextUsage({ estimate: { tokens: 100 } })
     assert.deepEqual(base, { tokens: 100 })
     const nullTokens = assembleContextUsage({ estimate: { tokens: null }, contextWindow: 128_000 })
     assert.deepEqual(nullTokens, { tokens: null, contextWindow: 128_000 })
-    const response = { responseTps: 52.4, responseOutputTokens: 524, responseDurationMs: 10_000 }
     const full = assembleContextUsage({
-      estimate: { tokens: 100, response },
+      estimate: { tokens: 100 },
       contextWindow: 1_000,
       compacting: true,
     })
-    assert.deepEqual(full, { tokens: 100, response, contextWindow: 1_000, compacting: true })
+    assert.deepEqual(full, { tokens: 100, contextWindow: 1_000, compacting: true })
     const variants = [
       full,
       { ...full, tokens: 101 },
       { ...full, tokens: null },
       { ...full, contextWindow: undefined },
       { ...full, compacting: undefined },
-      { ...full, response: undefined },
-      { ...full, response: { responseTps: 52.5, responseOutputTokens: 524, responseDurationMs: 10_000 } },
-      { ...full, response: { responseTps: 52.4, responseOutputTokens: 525, responseDurationMs: 10_000 } },
-      { ...full, response: { responseTps: 52.4, responseOutputTokens: 524, responseDurationMs: 10_001 } },
     ]
     const keys = new Set(variants.map((v) => contextUsageKeyOf(v)))
-    assert.equal(keys.size, variants.length, '任一承载字段（含 response 三元组）变化必须产生新指纹')
+    assert.equal(keys.size, variants.length, '任一承载字段变化必须产生新指纹')
     assert.equal(contextUsageKeyOf(undefined), '')
   })
 })
@@ -544,7 +436,7 @@ describe('事件边界：conversation.upsert 携带 contextUsage 的形状校验
     updatedAt: 0,
   }
 
-  it('合法形状通过（tokens 可为 null；compacting 布尔；response 三元组）；死字段与非法形状拒绝', { timeout: 60_000 }, () => {
+  it('合法形状通过（tokens 可为 null；compacting 布尔）；死字段与非法形状拒绝', { timeout: 60_000 }, () => {
     const hub = hubOf()
     hub.publish('conversation.upsert', {
       conversation: {
@@ -555,10 +447,7 @@ describe('事件边界：conversation.upsert 携带 contextUsage 的形状校验
     hub.publish('conversation.upsert', {
       conversation: {
         ...baseSummary,
-        contextUsage: {
-          tokens: 1_500,
-          response: { responseTps: 52.4, responseOutputTokens: 524, responseDurationMs: 10_000 },
-        },
+        contextUsage: { tokens: 1_500, contextWindow: 128_000 },
       },
     })
     assert.equal(hub.seq, 2)
@@ -570,15 +459,9 @@ describe('事件边界：conversation.upsert 携带 contextUsage 的形状校验
       { tokens: 1, compactionError: 'boom' }, // 已删除的死字段
       { tokens: 1, compacting: { trigger: 'manual', blocking: false } }, // compacting 已收敛为布尔
       { tokens: 1, contextWindow: 0 }, // 非正窗口
-      { tokens: 1, tps: 52.4 }, // 已删除的死字段（速率收敛为 response 三元组）
-      { tokens: 1, response: { responseTps: 52.4 } }, // 缺输出 tokens/耗时
-      { tokens: 1, response: { responseTps: 0, responseOutputTokens: 524, responseDurationMs: 10_000 } }, // 非正速率
-      { tokens: 1, response: { responseTps: 52.4, responseOutputTokens: -1, responseDurationMs: 10_000 } }, // 非正 tokens
-      { tokens: 1, response: { responseTps: 52.4, responseOutputTokens: 524, responseDurationMs: '10s' } }, // 非数字耗时
-      {
-        tokens: 1,
-        response: { responseTps: 52.4, responseOutputTokens: 524, responseDurationMs: 10_000, extra: 1 }, // 未知字段
-      },
+      { tokens: 1, tps: 52.4 }, // 已删除的死字段（速率归插件策略，不随用量携带）
+      { tokens: 1, response: { responseTps: 52.4 } }, // 已删除的死字段（同上）
+      { tokens: 1, response: { responseTps: 52.4, responseOutputTokens: 524, responseDurationMs: 10_000 } }, // 已删除的死字段（同上）
     ]
     for (const contextUsage of rejects) {
       assert.throws(
@@ -710,11 +593,7 @@ describe('集成：摘要携带 contextUsage 与事件发布', { timeout: 60_000
   it('回合结算后 tokens 为实测锚点值；usage-only 变化不推进 stateChangeSeq', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime('settle-usage')
     try {
-      // 预置 durationMs：faux 消息 timestamp 早于流创建（事件流不补测），
-      // 预置值如实保留——锁定「回合结算后最近响应指标随摘要发布」的链路。
-      const measured = fauxAssistantMessage('回答一')
-      measured.durationMs = 8_000
-      kernel.__faux.setResponses([measured])
+      kernel.__faux.setResponses([fauxAssistantMessage('回答一')])
       const recorded = recordUpserts(kernel, 1)
       await kernel.submitInput(1, '第一个问题')
       await kernel.waitForIdle(1)
@@ -727,16 +606,8 @@ describe('集成：摘要携带 contextUsage 与事件发布', { timeout: 60_000
       assert.ok(usage, '回合结算后摘要必须携带 contextUsage')
       // 单回合：锚点（最终 assistant usage）之后无尾段消息，tokens 全为实测。
       assert.ok(typeof usage.tokens === 'number' && usage.tokens > 0, 'faux 注入真实 usage，实测锚点必须存在')
-      // 最近响应速率：与锚点同一 assistant 的 usage.output / durationMs。
-      assert.ok(usage.response, '预置 durationMs 的有效回答必须携带最近响应指标')
-      assert.equal(usage.response.responseDurationMs, 8_000)
-      assert.ok(usage.response.responseOutputTokens > 0, '分子是供应商（faux 估算）上报的输出 tokens')
-      assert.ok(
-        Math.abs(usage.response.responseTps - (usage.response.responseOutputTokens / 8_000) * 1000) < 1e-9,
-        'responseTps = output / durationMs × 1000',
-      )
-      // usage-only 帧同样携带 response（指纹含 response，回合结算后发布）。
-      await waitFor(() => recorded.frames.some((f) => f.contextUsage?.response !== undefined))
+      // 速率类指标不随用量携带（策略归可选插件 builtin:token-speed）。
+      assert.equal('response' in usage, false, 'contextUsage 不再携带 response 速率字段')
       // faux 模型窗口 128k 已知（内置策展数据）：如实携带。
       assert.equal(usage.contextWindow, 128_000)
       assert.equal(usage.compacting, undefined)
