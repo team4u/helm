@@ -80,7 +80,8 @@ import {
   parseQualifiedActionId,
 } from './capability-registry.js';
 import { UiRegistry } from './ui-registry.js';
-import { isCrossPlatformAbsolutePath, jsonClone, toJsonSafeError, type JsonSafeErrorInfo } from './shared.js';
+import { assertDoctorTargetDir } from './doctor-target.js';
+import { jsonClone, toJsonSafeError, type JsonSafeErrorInfo } from './shared.js';
 import type {
   PluginConfigStore,
   PluginHostBackend,
@@ -265,8 +266,7 @@ export class PluginHost {
       this.plugins.set(pluginId, state);
 
       try {
-        await definition.definePlugin(this.createContext(state, state.epoch));
-        this.validateUiDeclarations(definition.id, false);
+        await this.runDefinition(state);
       } catch (err) {
         if (isolate) {
           // 外部插件 define 阶段故障：清理残余注册但保留占位条目为 failed
@@ -278,17 +278,14 @@ export class PluginHost {
 
       if (wantsEnabled) {
         try {
-          this.uiRegistry.assertCrossPluginUnique(definition.id, this.getActiveEnabledPluginIds());
-          this.validateUiDeclarations(definition.id, true);
-          // 提交点终检：依赖被停用的并发场景在此拦截，绝不留下依赖不满足的启用态。
-          this.assertDependenciesSatisfied(pluginId, dependencies);
+          // 与 enable() 共用提交序列：先过提交点终检（跨插件唯一性 / 补全绑定 /
+          // 依赖满足），再挂载 Provider 与服务，最后同步置 enabled+idle（避免
+          // 清单（按 enabled 过滤）先暴露能力而 invokeAction 因 phase 仍为
+          // defining 而 409 的撕裂窗口）。
+          this.assertEnableCommitChecks(state);
           await registerProviders(state, this.options.providers);
           await this.activateServices(state);
-          // 与 enable() 同序：能力挂载完成后才同步置 enabled+idle，避免清单
-          //（按 enabled 过滤）先暴露能力而 invokeAction 因 phase 仍为 defining
-          // 409 的撕裂窗口。
-          state.enabled = true;
-          state.phase = 'idle';
+          this.commitEnabled(state);
         } catch (err) {
           if (isolate) {
             // 外部插件启用阶段故障：回滚挂载资源但保留条目为 failed；
@@ -454,19 +451,16 @@ export class PluginHost {
       state.phase = 'defining';
       let persistedEnabled = false;
       try {
-        await state.definition.definePlugin(this.createContext(state, state.epoch));
-        this.validateUiDeclarations(pluginId, false);
+        await this.runDefinition(state);
+        // 定义期提前检查：只比对插件自身（跨插件冲突在提交点终检兜座）。
         this.uiRegistry.assertCrossPluginUnique(pluginId, this.getActiveEnabledPluginIds());
         await registerProviders(state, this.options.providers);
         await this.activateServices(state);
         await persistEnabled(this.configStore, state, true);
         persistedEnabled = true;
-        this.uiRegistry.assertCrossPluginUnique(pluginId, this.getActiveEnabledPluginIds());
-        this.validateUiDeclarations(pluginId, true);
         // 提交点终检（与 enabled=true 同一同步段）：并发停用依赖的窗口在此关闭。
-        this.assertDependenciesSatisfied(pluginId, state.dependencies);
-        state.enabled = true;
-        state.phase = 'idle';
+        this.assertEnableCommitChecks(state);
+        this.commitEnabled(state);
         state.lastError = undefined;
       } catch (err) {
         await this.rollbackEnable(state, prevConfigSchema, err, persistedEnabled);
@@ -1012,6 +1006,34 @@ export class PluginHost {
     );
   }
 
+  /**
+   * 定义阶段公共入口（register 与 enable 共用）：在当前 epoch 的 ctx 上执行
+   * definePlugin，随后做定义期末 UI 校验（仅本插件维度，crossPlugin=false）。
+   */
+  private async runDefinition(state: PluginState): Promise<void> {
+    await state.definition.definePlugin(this.createContext(state, state.epoch));
+    this.validateUiDeclarations(state.definition.id, false);
+  }
+
+  /**
+   * 启用提交点终检（register 与 enable 共用，同步段）：跨插件唯一性
+   * （profile.runtime kind / commandPalette slash）→ 补全绑定的跨插件校验
+   * → 依赖满足终检。调用位置两处保持拆分前顺序：register 在挂载前，
+   * enable 在 persistEnabled 之后（与 enabled=true 同一同步块）。
+   */
+  private assertEnableCommitChecks(state: PluginState): void {
+    const pluginId = state.definition.id;
+    this.uiRegistry.assertCrossPluginUnique(pluginId, this.getActiveEnabledPluginIds());
+    this.validateUiDeclarations(pluginId, true);
+    this.assertDependenciesSatisfied(pluginId, state.dependencies);
+  }
+
+  /** 同步置 enabled+idle（能力挂载/持久化完成后才执行，避免清单先暴露能力的撕裂窗口）。 */
+  private commitEnabled(state: PluginState): void {
+    state.enabled = true;
+    state.phase = 'idle';
+  }
+
   assertProviderAvailable(pluginId: string): void {
     assertProviderAvailable(this.plugins.get(pluginId), pluginId);
   }
@@ -1071,19 +1093,9 @@ export class PluginHost {
       dir = source;
       requestedId = target.id;
     } else if (target.dir !== undefined && target.dir.length > 0) {
-      // dir 模式为目录绝对路径（与 HTTP parseDoctorTarget 同一约束；host.plugins
-      // 端口与 HTTP 同权，边界校验也同权）：拒绝相对路径与穿越段。
-      if (
-        !isCrossPlatformAbsolutePath(target.dir) ||
-        target.dir.split(/[\\/]/).includes('..')
-      ) {
-        throw new HelmError(
-          'validation_error',
-          `doctor 目标 dir 需为不含 .. 段的跨平台绝对目录路径（以 / 或盘符开头）：${target.dir}`,
-          400,
-          { dir: target.dir },
-        );
-      }
+      // dir 模式为目录绝对路径（与 HTTP parseDoctorTarget 同一约束、同一实现；
+      // host.plugins 端口与 HTTP 同权，边界校验也同权）：拒绝相对路径与穿越段。
+      assertDoctorTargetDir(target.dir, 'dir');
       dir = target.dir;
     } else {
       throw new HelmError('validation_error', 'doctor 需提供目标：dir/path（目录绝对路径）或 id（已注册插件）', 400);
@@ -1129,15 +1141,11 @@ export class PluginHost {
             }
           },
     });
-    const summary = this.list().find((s) => s.id === pluginId);
-    if (!summary) {
-      throw new HelmError(
-        'plugin_reload_failed',
-        `重载后未在宿主清单中发现插件 ${pluginId}（内部状态不一致）`,
-        500,
-        { pluginId },
-      );
-    }
+    const summary = this.requireSummary(pluginId, {
+      code: 'plugin_reload_failed',
+      message: `重载后未在宿主清单中发现插件 ${pluginId}（内部状态不一致）`,
+      details: { pluginId },
+    });
     return {
       pluginId,
       wasEnabled: result.wasEnabled,
@@ -1191,15 +1199,11 @@ export class PluginHost {
           if (options.enabled) {
             await this.enable(definition.id);
           }
-          const summary = this.list().find((s) => s.id === definition.id);
-          if (!summary) {
-            throw new HelmError(
-              'plugin_package_install_failed',
-              `受管安装注册后未在宿主清单中发现插件 ${definition.id}`,
-              500,
-              { pluginId: definition.id, dir },
-            );
-          }
+          const summary = this.requireSummary(definition.id, {
+            code: 'plugin_package_install_failed',
+            message: `受管安装注册后未在宿主清单中发现插件 ${definition.id}`,
+            details: { pluginId: definition.id, dir },
+          });
           return { summary, pluginId: definition.id };
         } catch (err) {
           releaseTsRoot();
@@ -1208,15 +1212,11 @@ export class PluginHost {
       },
       enableManagedPlugin: async (pluginId) => {
         await this.enable(pluginId);
-        const summary = this.list().find((s) => s.id === pluginId);
-        if (!summary) {
-          throw new HelmError(
-            'plugin_enable_failed',
-            `启用后未在宿主清单中发现插件 ${pluginId}`,
-            500,
-            { pluginId },
-          );
-        }
+        const summary = this.requireSummary(pluginId, {
+          code: 'plugin_enable_failed',
+          message: `启用后未在宿主清单中发现插件 ${pluginId}`,
+          details: { pluginId },
+        });
         return summary;
       },
       assertManagedPluginUpdateSafe: (pluginId) => {
@@ -1230,15 +1230,11 @@ export class PluginHost {
         const result = await this.reloadExternalPlugin(pluginId, { doctor: false });
         void dir;
         void options;
-        const summary = this.list().find((s) => s.id === pluginId);
-        if (!summary) {
-          throw new HelmError(
-            'plugin_package_update_failed',
-            `更新重载后未在宿主清单中发现插件 ${pluginId}`,
-            500,
-            { pluginId },
-          );
-        }
+        const summary = this.requireSummary(pluginId, {
+          code: 'plugin_package_update_failed',
+          message: `更新重载后未在宿主清单中发现插件 ${pluginId}`,
+          details: { pluginId },
+        });
         return { summary };
       },
       removeManagedPlugin: async (pluginId) => {
@@ -1622,6 +1618,19 @@ export class PluginHost {
     const state = this.plugins.get(pluginId);
     if (!state) throw new HelmError('unknown_plugin', `未注册的插件：${pluginId}`, 404, { pluginId });
     return state;
+  }
+
+  /**
+   * 宿主清单必达断言：生命周期操作完成后 list() 仍找不到插件即「内部状态
+   * 不一致」（错误规格由调用方给定，保持各端点既有错误码/消息/details 不变）。
+   */
+  private requireSummary(
+    pluginId: string,
+    error: { code: string; message: string; details?: Record<string, unknown> },
+  ): PluginSummary {
+    const summary = this.list().find((s) => s.id === pluginId);
+    if (!summary) throw new HelmError(error.code, error.message, 500, error.details);
+    return summary;
   }
 
   private assertNotDisposed(): void {
