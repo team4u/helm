@@ -1,57 +1,38 @@
 /**
- * service.ts — WorkflowService：工作流引擎对内核/HTTP 层的唯一出口。
+ * service.ts — WorkflowService：工作流引擎对内核/HTTP 层的唯一出口（facade）。
  *
- * 职责：
- * - 请求校验（name/script/scriptPath 恰一、512KB 上限、安全 name、caps 正数）；
- * - run 生命周期（后台启动立即返回 summary、wait/abort）；abort(runId) 级联
- *   取消本 run + 其子会话子树内的全部后代 run（兄弟不牵连；取消窗口内拒绝
- *   该子树新 run/spawn，返回时全部 settle）；cancelRunsUnderConversation 供
- *   插件在父会话 abort 后取消子树内属于它的全部 run；子会话中止一律经宿主
- *   守卫端口（human 红线由内核原子复核，无普通中止回退）；经工具 background
- *   启动的 workflow run（notifyParentOnSettle=true）与 subagent run 同款后台
- *   语义：结算后恰一次向父会话投递通知（notifiedAt 防重复，init() outbox
- *   补发）、重启恢复时按即时持久化的 childConversationIds（onResolved 登记
- *   即落盘）守卫中止其在途子会话并标 failed(interrupted)；
- * - 持久化（单库设计）：run 索引与每 run summary 存入注入的 state store
- *   （@helm/kernel 唯一 state.sqlite 的命名空间 doc），启动恢复时把遗留
- *   running 显式标 failed(interrupted)。唯一文件例外是统一前缀重放账本
- *   dataDir/artifacts/<convId>/workflow-<runId>.jsonl——副作用重放语义要求
- *   append+fsync，SQLite 不适配；
- * - host 适配：runtime.ts 的 WorkflowHost（引擎接缝）↔ WorkflowServiceHost
- *   （KernelRuntime 注入：spawnAgent=agent_spawn 管道、invokeAction=PluginHost
- *   动作总线、getConversation/abortConversation、emitEvent、可选 runGate）；
- * - 恢复语义：resumeFromRunId 重放 journal；账本缺失/不可读/存在失败或悬挡
- *   action（副作用不可判定）一律显式拒绝，由人类确认，绝不自动重跑副作用。
+ * 内部职责按模块拆分（均在同目录）：
+ * - library-store.ts：已保存工作流文件库（<dataDir>/workflows/<name>.js 的
+ *   CRUD、路径解析与 symlink 防逃逸、meta 摘要）；
+ * - run-store.ts：run 记录与 run 索引持久层（RunRecord/RunIndexEntry 原子
+ *   读写、形状校验、接管标记甄别）与 summary 派生 / 脱敏 / progress 折叠；
+ * - cancellation-tracker.ts：取消窗口（引用计数）与子树边界取消；
+ * - host-adapter.ts：引擎 WorkflowHost ↔ WorkflowServiceHost 适配
+ *   （spawnAgent/abortAgent/invokeAction/内建 env.exec/runGate）；
+ * - active-run.ts：在途 run 的内存运行态（ActiveRun）与节流常量。
+ *
+ * 本文件保留服务的编排与生命周期：请求校验（name/script/scriptPath 恰一、
+ * 512KB 上限、caps 正数）；run 生命周期（后台启动立即返回 summary、
+ * wait/abort 级联、resume 重放与接管保留）；startBackgroundAgent（受信后台
+ * 单子代理，不拼 DSL 脚本）；启动恢复（prepareRecovery/init 的 interrupted
+ * 标记与通知 outbox 补发）。持久化格式、错误码与行为契约不变。
  *
  * 引擎本体（runtime.ts）零内核依赖；本文件是唯一 import kernel 侧类型的适配层。
  */
 
-import { randomUUID } from 'node:crypto'
-import {
-  closeSync,
-  fsyncSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs'
-import { join, resolve } from 'node:path'
+import { mkdirSync } from 'node:fs'
 import {
   HelmError,
-  type ActionManifest,
   type AgentExecutionInfo,
   type AgentGateResult,
   type AgentSpawnRequest,
   type ConversationSummary,
-  type EnvExecRequest,
-  type EnvExecResponse,
+} from '@helm/protocol'
+import { redactJsonValue } from '@helm/protocol'
+import {
+  agentGateResultMissingError as gateResultMissingError,
+  sanitizeAgentExecutionInfo as sanitizeExecutionInfo,
+  sanitizeAgentGateResult as sanitizeGateResult,
 } from '@helm/protocol'
 import {
   extractWorkflowExecutionMeta,
@@ -59,141 +40,59 @@ import {
   type SavedWorkflowDetail,
   type SavedWorkflowSummary,
   type WorkflowDeleteResult,
-  type WorkflowProgressEntry,
-  type WorkflowRunRequest,
-  type WorkflowRunStatus,
   type WorkflowNodeState,
+  type WorkflowRunRequest,
   type WorkflowRunSummary,
   type WorkflowSaveRequest,
   type WorkflowSaveResult,
 } from '../../contracts.js'
-import { JournalWriter, readJournal, redactJournalEntry, type WorkflowJournalEntry } from './journal.js'
-import { extractMeta, hasMetaDeclaration, type WorkflowMeta } from './meta.js'
-import { collapse, type WorkflowEntry } from './progress.js'
-import { isAbsoluteTargetPath, redactJsonValue } from '@helm/protocol'
-
 import {
-  agentGateResultMissingError as gateResultMissingError,
-  sanitizeAgentExecutionInfo as sanitizeExecutionInfo,
-  sanitizeAgentGateResult as sanitizeGateResult,
-} from '@helm/protocol'
+  JournalWriter,
+  readJournal,
+  redactJournalEntry,
+  type WorkflowJournalEntry,
+} from './journal.js'
 import {
   MAX_SCRIPT_LENGTH,
   normalizeWorkflowArgs,
-  precheckScriptSyntax,
   runWorkflow,
   type WorkflowHost,
   type WorkflowRunResult,
   type WorkflowSpawnRequest,
   type WorkflowSpawnResult,
 } from './runtime.js'
+import {
+  NODE_EVENT_INTERVAL_MS,
+  PROGRESS_PERSIST_INTERVAL_MS,
+  type ActiveRun,
+} from './active-run.js'
+import { CancellationTracker } from './cancellation-tracker.js'
+import {
+  abortChildConversation as abortChildViaHost,
+  createEngineHost,
+  invokeAgentSpawn,
+  type EngineHostDeps,
+  type WorkflowServiceHost,
+} from './host-adapter.js'
+import { WorkflowLibrary } from './library-store.js'
+import {
+  RunStore,
+  backgroundChildIds,
+  errorMessage,
+  isBackgroundRecord,
+  isNonRetryableWorkflowError,
+  newRunId,
+  type RunRecord,
+  type WorkflowStateStore,
+} from './run-store.js'
 
-export const BUILTIN_ENV_EXEC_PLUGIN = 'env'
-export const BUILTIN_ENV_EXEC_ACTION = 'exec'
-const NODE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
-
-export interface ValidatedEnvExecInput {
-  command: string | string[]
-  nodeId?: string
-  cwd?: string
-  env?: Record<string, string>
-  timeoutMs?: number
-  allowFailure?: boolean
-}
-
-/**
- * run 索引与 summary 的持久层：内核唯一 state.sqlite 的命名空间 doc 视图
- * （与 PluginDocStore 同构，但不依赖 plugins 模块）。get/set 同步；flush
- * 可选（SQLite 即时落页时可为空）。
- */
-export interface WorkflowStateStore {
-  get<T>(key: string, initial: T): T
-  set<T>(key: string, value: T): void
-  flush?(): Promise<void>
-}
-
-/** 引擎测试注入边界：宿主能力由 KernelRuntime 提供，测试可用确定性 fake 替换。 */
-export interface WorkflowServiceHost {
-  /** agent_spawn 管道入口（KernelRuntime.spawnAgent：hook 链 + 原生子会话默认行）。 */
-  spawnAgent(request: AgentSpawnRequest): Promise<unknown>
-  /**
-   * 守卫式中止（通用取消机制）：SDK 调度器 paused（服务 prepare 屏障）时
-   * 对会话存活任务只落持久 abort 标记（不唤醒调度器）；运行中则真中止。
-   * 恢复屏障（调度器启动前持久取消遗留子会话）由此相位自适应兑现。
-   */
-  abortConversationGuarded(id: number): Promise<void>
-  /**
-   * 插件动作调用（PluginHost.invokeAction：manifest 精确匹配 + 输入输出 schema
-   * 边界校验）。返回值必须已是安全 JSON（上游 app 层做 stash redact）。
-   */
-  invokeAction(
-    pluginId: string,
-    actionId: string,
-    input: unknown,
-    context?: { conversationId?: number; signal?: AbortSignal },
-  ): Promise<unknown>
-  /**
-   * 插件动作前置校验（PluginHost.prepareAction）：在落盘 action_started 前校验
-   * 插件状态、会话 scope 与 inputSchema，并返回定义端 idempotent。
-   */
-  prepareAction?(
-    pluginId: string,
-    actionId: string,
-    input: unknown,
-    context?: { conversationId?: number },
-  ): { idempotent?: boolean }
-  /**
-   * 跨节点命令执行（KernelRuntime.execEnv：EnvFabric + SecretStash + 超时 + 脱敏）。
-   * 供工作流内建动作 `env.exec`（或无冲突短名 `exec`）调用。
-   */
-  execEnv?(
-    req: Omit<EnvExecRequest, 'stream'>,
-    signal?: AbortSignal,
-  ): Promise<EnvExecResponse>
-  listActions(): ActionManifest[]
-  getConversation(id: number): ConversationSummary
-  /**
-   * 守卫式子会话中止：自动化取消（abort 级联 / init 恢复 / 引擎 abortAgent /
-   * 迟到 onResolved 补杀）的唯一入口。实现职责：现读归属事实（human-owned
-   * 一律拒绝——看门狗红线）并经内核 abortConversationGuarded 对
-   * expectedOwnership + expectedStateSeq 原子复核；目标已删除/守卫冲突时
-   * 确定性放弃（诊断），绝不回退普通 abortConversation。
-   */
-  abortConversationGuarded(id: number): Promise<void>
-  emitEvent(type: string, payload: unknown): void
-  /**
-   * run 终态结算通知（每 run 恰一次；wait/close 必须等待它结束）。宿主用它
-   * 驱动 app->kernel 的工作流结算广播（onWorkflowSettled 监听器）。清理异常
-   * 在 service 内如实上报为 failed/诊断，不破坏 journal 副作用保护。
-   */
-  onRunSettled?(summary: WorkflowRunSummary): Promise<void> | void
-  /**
-   * 后台 run 终态汇报回调：对 notifyParentOnSettle=true 的后台 run 触发——
-   * 包括 startBackgroundAgent 的后台子代理与经工具 background 启动的
-   * workflow run（同步 SubagentWorkflow / 同步 workflow 不触发）。调用方
-   * （app/kernel）向父会话投递完成/失败/中止通知；恰一次（notifiedAt 防重复，
-   * init() 补发遗留）。
-   */
-  onBackgroundAgentSettled?(
-    summary: WorkflowRunSummary,
-    info: {
-      parentConversationId: number
-      agentType?: string
-      execution?: AgentExecutionInfo
-    },
-  ): Promise<void> | void
-  /**
-   * gate 门禁执行（KernelRuntime.runGate：shell + SecretStash env 合并 + 超时）。
-   * 这是宿主自跑 fallback：执行环境（native/herdr）已在实际 cwd 内执行过
-   * gate 并经 onGateResult 回报时不会走到这里。缺省宿主让带 gate 的 agent
-   * 调用显式失败——静默跳过的 gate 等于把未验证的工作标记为已验证。
-   * cwd 传子会话工作目录（如有），否则父会话 cwd。
-   */
-  runGate?(
-    command: string,
-    options: { cwd?: string; conversationId?: number; signal?: AbortSignal; gateTimeoutMs?: number },
-  ): Promise<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }>
-}
+export {
+  BUILTIN_ENV_EXEC_PLUGIN,
+  BUILTIN_ENV_EXEC_ACTION,
+  type ValidatedEnvExecInput,
+  type WorkflowServiceHost,
+} from './host-adapter.js'
+export type { WorkflowStateStore } from './run-store.js'
 
 export interface WorkflowAutoResumeCandidate {
   runId: string
@@ -221,287 +120,15 @@ export interface WorkflowServiceOptions {
   redact?: (text: string) => string
 }
 
-/** 已保存工作流的安全名称：字母数字开头，限 [A-Za-z0-9._-]，防路径穿越。 */
-const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
-
-const INDEX_KEY = 'workflow/runs'
-/** run id：wf_ + 12 hex（沿用上游格式便于识别）。 */
-function newRunId(): string {
-  return `wf_${randomUUID().replaceAll('-', '').slice(0, 12)}`
-}
-
-interface RunIndexEntry {
-  id: string
-  conversationId: number
-  status: WorkflowRunStatus
-  createdAt: number
-  updatedAt: number
-  /** 后台启动标记（resume 新 run 继承；诊断/探针判定用）。 */
-  notifyParentOnSettle?: boolean
-  /** 当前累计自动续跑次数（初始缺省 = 0；每次 resumeFromRunId 接管时 +1）。 */
-  autoResumeCount?: number
-  /** 已接替本失败 run 的新 run ID（防重复续跑；缺省 = 未被接管）。 */
-  resumedByRunId?: string
-}
-
-/** state store 中的每 run 完整 doc（summary + 恢复所需书目信息）。 */
-interface RunRecord {
-  id: string
-  name: string
-  conversationId: number
-  /** 触发本次 run 的父会话工具调用 ID（内核受信注入；非用户输入）。 */
-  parentToolCallId?: string
-  status: WorkflowRunStatus
-  createdAt: number
-  updatedAt: number
-  result?: unknown
-  error?: string
-  nodes?: WorkflowRunSummary['nodes']
-  progress?: WorkflowProgressEntry[]
-  /** resume 用的脚本源（inline script 或文件路径二选一）。 */
-  script?: string
-  scriptPath?: string
-  /** 保存目录里的具名工作流。 */
-  savedName?: string
-  /** 脚本 meta.description（脱敏后持久）。 */
-  description?: string
-  /** 脚本 meta.phases 阶段蓝图（脱敏后持久）。 */
-  phases?: Array<{ title: string; detail?: string; model?: string }>
-  /** 本次运行的实际 args（安全 JSON；resume 缺省沿用）。 */
-  args?: unknown
-  journalPath: string
-  replayedFrom?: string
-  /**
-   * 账本记账失败诊断（agent 行写失败 / resume 旧账本損行），脱敏后持久；
-   * 不影响终态判定，仅为如实可见（summary 面透传）。
-   */
-  journalIoErrors?: string[]
-  /** run 种类：DSL 工作流（缺省）或受信后台单子代理（startBackgroundAgent）。 */
-  kind?: 'workflow' | 'subagent'
-  /**
-   * 后台启动标记：终态结算后须向父会话投递通知（notifiedAt 防重复投递，
-   * init() outbox 补发）。subagent run 恒为后台；workflow run 仅在经工具
-   * background 启动时置位——它同时决定重启恢复语义（isBackgroundRecord：
-   * 在途子会话先落 abort 标记并守卫中止）。同步 workflow 不置位、不通知。
-   */
-  notifyParentOnSettle?: boolean
-  notifiedAt?: number
-  /** 后台子代理的 Profile 与执行环境元数据（onResolved 回传后补全）。 */
-  subagentMeta?: { agentType?: string; execution?: AgentExecutionInfo }
-  /**
-   * 私有恢复元数据：本 run 派生过的子会话 ID 集（onResolved 登记即持久；
-   * writeRecord 统一从活跃 run 的 childConversations 合入，杜绝旧副本覆盖）。
-   * 后台 run 崩溃恢复（prepareRecovery/init 守卫中止）以这组持久 IDs 为权威
-   * 坐标——真实 run 运行期 nodes 要到 settleRun 才落盘，不能作为恢复依据。
-   */
-  childConversationIds?: number[]
-  /** 当前累计自动续跑次数（resume 接管时 +1；与索引同步）。 */
-  autoResumeCount?: number
-  /** 已接替本失败 run 的新 run ID（防重复续跑；与索引同步）。 */
-  resumedByRunId?: string
-}
-
-/** 持久层读出的错误可打印形态（store 异常诊断用）。 */
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-/**
- * run 索引最低限度形状校验：非数组、null 项、必需字段非法都是持久层损坏
- * （旧实现对每项直接 entry.id 访问，null 项会 TypeError）。只校验现行
- * RunIndexEntry 契约，无旧格式适配。合法返回 undefined；损坏返回问题描述
- * + 可辨识 runId（id 非法时用 `#位置` 定位）。
- */
-function runIndexProblem(raw: unknown): { problem: string; runId: string } | undefined {
-  if (!Array.isArray(raw)) return { problem: `索引非数组（${raw === null ? 'null' : typeof raw}）`, runId: '#root' }
-  for (let i = 0; i < raw.length; i++) {
-    const entry: unknown = raw[i]
-    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-      return { problem: `第 ${i} 项非对象（${entry === null ? 'null' : typeof entry}）`, runId: `#${i}` }
-    }
-    const e = entry as Record<string, unknown>
-    const at = `#${i}`
-    if (typeof e['id'] !== 'string' || e['id'] === '') {
-      return { problem: `第 ${i} 项 id 非字符串`, runId: at }
-    }
-    const runId = e['id'] as string
-    if (!Number.isInteger(e['conversationId']) || (e['conversationId'] as number) < 1) {
-      return { problem: `第 ${i} 项 conversationId 非正整数`, runId }
-    }
-    if (!RUN_STATUSES.includes(e['status'] as WorkflowRunStatus)) {
-      return { problem: `第 ${i} 项 status 非法（${JSON.stringify(e['status'])}）`, runId }
-    }
-    if (typeof e['createdAt'] !== 'number' || !Number.isFinite(e['createdAt'])) {
-      return { problem: `第 ${i} 项 createdAt 非有限数值`, runId }
-    }
-    if (typeof e['updatedAt'] !== 'number' || !Number.isFinite(e['updatedAt'])) {
-      return { problem: `第 ${i} 项 updatedAt 非有限数值`, runId }
-    }
-    if (e['notifyParentOnSettle'] !== undefined && typeof e['notifyParentOnSettle'] !== 'boolean') {
-      return { problem: `第 ${i} 项 notifyParentOnSettle 非布尔`, runId }
-    }
-    if (
-      e['autoResumeCount'] !== undefined &&
-      (!Number.isInteger(e['autoResumeCount']) || (e['autoResumeCount'] as number) < 0)
-    ) {
-      return { problem: `第 ${i} 项 autoResumeCount 非负整数`, runId }
-    }
-    if (e['resumedByRunId'] !== undefined && (typeof e['resumedByRunId'] !== 'string' || e['resumedByRunId'] === '')) {
-      return { problem: `第 ${i} 项 resumedByRunId 非非空字符串`, runId }
-    }
-  }
-  return undefined
-}
-
-const RUN_STATUSES: readonly WorkflowRunStatus[] = ['running', 'completed', 'failed', 'aborted']
-
-function isNonRetryableWorkflowError(error: string | undefined): boolean {
-  if (error === undefined) return false
-  const normalized = error.toLowerCase()
-  return normalized.includes('workflow_action_uncertain') ||
-    normalized.includes('[validation_error]') ||
-    normalized.includes('workflow script has a syntax error')
-}
-
-/**
- * 持久记录最低限度形状校验：只检查现行 RunRecord 契约的必需字段（summary
- * 面所需），不做旧格式适配、不深校验可选段（nodes/progress 由消费方各自
- * 容错）。返回首个问题描述，合法则 undefined。
- */
-function runRecordProblem(record: unknown): string | undefined {
-  if (record === null || typeof record !== 'object' || Array.isArray(record)) {
-    return `非对象结构（${typeof record}）`
-  }
-  const r = record as Record<string, unknown>
-  if (typeof r['id'] !== 'string' || r['id'] === '') return 'id 非字符串'
-  if (typeof r['name'] !== 'string') return 'name 非字符串'
-  if (!Number.isInteger(r['conversationId']) || (r['conversationId'] as number) < 1) {
-    return 'conversationId 非正整数'
-  }
-  if (!RUN_STATUSES.includes(r['status'] as WorkflowRunStatus)) {
-    return `status 非法（${JSON.stringify(r['status'])}）`
-  }
-  if (!Number.isFinite(r['createdAt']) || typeof r['createdAt'] !== 'number') return 'createdAt 非数值'
-  if (!Number.isFinite(r['updatedAt']) || typeof r['updatedAt'] !== 'number') return 'updatedAt 非数值'
-  if (typeof r['journalPath'] !== 'string') return 'journalPath 非字符串'
-  const childIds = r['childConversationIds']
-  if (
-    childIds !== undefined &&
-    (!Array.isArray(childIds) || !childIds.every((id) => Number.isInteger(id) && id >= 1))
-  ) {
-    return 'childConversationIds 非法（需正整数数组）'
-  }
-  if (r['error'] !== undefined && typeof r['error'] !== 'string') return 'error 非字符串'
-  if (
-    r['autoResumeCount'] !== undefined &&
-    (!Number.isInteger(r['autoResumeCount']) || (r['autoResumeCount'] as number) < 0)
-  ) {
-    return 'autoResumeCount 非负整数'
-  }
-  if (r['resumedByRunId'] !== undefined && (typeof r['resumedByRunId'] !== 'string' || r['resumedByRunId'] === '')) {
-    return 'resumedByRunId 非非空字符串'
-  }
-  return undefined
-}
-
-interface ActiveRun {
-  runId: string
-  conversationId: number
-  abort: AbortController
-  /** run 结束（含 abort、子会话中止收尾、终态落盘）后 resolve；绝不 reject。 */
-  done: Promise<void>
-  /** 终态落盘/flush 失败时由 wait() 原样抛出（done 不 reject，避免无人 await 时 unhandled）。 */
-  settleError?: unknown
-  summary: WorkflowRunSummary
-  journalPath: string
-  writer: JournalWriter
-  progress: WorkflowEntry[]
-  timeline: WorkflowProgressEntry[]
-  /** 在途子会话的中止 promise（close/abort 需 await 后才算真正结束）。 */
-  pendingAborts: Set<Promise<void>>
-  /** 在途命令执行通道的 promise（收尾时 abort 并在结算前等待退出，避免脱管进程）。 */
-  pendingExecs: Set<Promise<unknown>>
-  /**
-   * 本 run 派生的子会话集合（onResolved 回传即登记）：abort 级联时逐个经
-   * host.abortConversationGuarded 守卫中止；迟到 onResolved 在登记时若已
-   * 取消则立即补杀（防快照时序漏杀）。
-   */
-  childConversations: Set<number>
-  /** 本 run 的持久记录引用（同一对象）：子会话事实即时落盘与终态写共用。 */
-  record: RunRecord
-  /** progress 持久化节流（timeline 非空后定期落盘）。 */
-  lastPersistAt: number
-  /** 节点开始/结束必须推送的 workflow.updated 事件（有界频率内的强制点）。 */
-  lastNodeEventAt: number
-  /** 250ms 窗口内节点边界事件的 trailing timer：窗口内启动绝不丢失。 */
-  pendingEventTimer?: ReturnType<typeof setTimeout>
-}
-
-/** progress 持久化最小间隔：高频进度不逐条落库。 */
-const PROGRESS_PERSIST_INTERVAL_MS = 1_000
-
-/** workflow.updated 节点事件最小间隔：有界频率，但节点开始/结束强制推送。 */
-const NODE_EVENT_INTERVAL_MS = 250
-
-/**
- * 进度树长文本预览上限（§4.3）：完整内容已在子会话与 .jsonl 账本，进度文档
- * 只存预览，防止千级节点把 sessionDoc/runs 撑到 2 MiB 上限（413）。
- */
-const NODE_TEXT_PREVIEW_LIMIT = 1024
-const NODE_TRUNCATION_HINT = '\n...[truncated, full content in conversation/journal]'
-
-function nodeTextPreview(text: string): string {
-  return text.length > NODE_TEXT_PREVIEW_LIMIT
-    ? text.slice(0, NODE_TEXT_PREVIEW_LIMIT) + NODE_TRUNCATION_HINT
-    : text
-}
-
-/** 真实文件事实（mtime 毫秒 + 字节数）；读取失败显式抛 io_error。 */
-function fileStatsOf(path: string): { updatedAt: number; size: number } {
-  try {
-    const stats = statSync(path)
-    return { updatedAt: Math.trunc(stats.mtimeMs), size: stats.size }
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException
-    throw new HelmError('io_error', `无法读取文件事实 ${path}：${err.message}`, 500, {
-      path,
-      code: err.code,
-    })
-  }
-}
-
-/** 单个脚本的元数据损坏不阻断整个目录；保留该条目并返回诊断。 */
-function summaryFromSource(
-  name: string,
-  path: string,
-  source: string,
-  stats: { updatedAt: number; size: number },
-): SavedWorkflowSummary {
-  try {
-    const { meta } = extractMeta(source)
-    return {
-      name,
-      path,
-      updatedAt: stats.updatedAt,
-      size: stats.size,
-      description: meta.description,
-      ...(meta.whenToUse !== undefined ? { whenToUse: meta.whenToUse } : {}),
-      ...(meta.phases !== undefined ? { phases: meta.phases } : {}),
-    }
-  } catch (error) {
-    return { name, path, updatedAt: stats.updatedAt, size: stats.size, metadataError: error instanceof Error ? error.message : String(error) }
-  }
-}
-
 export class WorkflowService {
-  private readonly dataDir: string
   private readonly host: WorkflowServiceHost
   private readonly state: WorkflowStateStore
   private readonly caps: Pick<WorkflowServiceOptions, 'concurrency' | 'agentCap' | 'itemCap' | 'nestedCap'>
   private readonly redact: (text: string) => string
+  private readonly runs: RunStore
+  private readonly library: WorkflowLibrary
+  private readonly cancellation: CancellationTracker
   private readonly active = new Map<string, ActiveRun>()
-  /** 取消窗口中的会话集合（引用计数：并发取消重叠时最后一个释放才解除）：窗口内拒绝该会话新 run/spawn（防取消期间又派新任务）。 */
-  private readonly cancellingCounts = new Map<number, number>()
   /**
    * 进程内接管保留（防并发双接管）：resume 已在旧 record 落接管标记、新 run
    * 快照尚未落盘的窗口内，新 runId 在索引与磁盘上均无痕迹——幽灵检测会误
@@ -509,8 +136,6 @@ export class WorkflowService {
    * 失败即释放，不放宽到整个活跃期。
    */
   private readonly takeoverReservations = new Set<string>()
-  /** 进行中的边界取消（key -> promise）：同边界重入共享同一次取消，防回调相互等待死锁。 */
-  private readonly boundaryCancels = new Map<string, Promise<void>>()
   private closed = false
   /** init 幂等标记：仅恢复完整成功后置位；失败可重试。 */
   private recovered = false
@@ -518,7 +143,6 @@ export class WorkflowService {
   private initPromise?: Promise<void>
 
   constructor(options: WorkflowServiceOptions) {
-    this.dataDir = options.dataDir
     this.host = options.host
     this.state = options.state
     const capError = (field: string, value: number): HelmError =>
@@ -544,22 +168,15 @@ export class WorkflowService {
       ...(nestedCap !== undefined ? { nestedCap } : {}),
     }
     this.redact = options.redact ?? ((text: string) => text)
-  }
-
-  // ------------------------------------------------------------------
-  // 目录布局（journal 是唯一文件持久化）
-  // ------------------------------------------------------------------
-
-  private workflowsDir(): string {
-    return join(this.dataDir, 'workflows')
-  }
-
-  private artifactsDir(conversationId: number): string {
-    return join(this.dataDir, 'artifacts', String(conversationId))
-  }
-
-  private journalPathFor(conversationId: number, runId: string): string {
-    return join(this.artifactsDir(conversationId), `workflow-${runId}.jsonl`)
+    this.runs = new RunStore({ dataDir: options.dataDir, state: options.state, redact: this.redact })
+    this.library = new WorkflowLibrary({
+      dataDir: options.dataDir,
+      loadRunRecord: (runId) => this.runs.load(runId),
+    })
+    this.cancellation = new CancellationTracker({
+      active: this.active,
+      parentConversationOf: (id) => this.host.getConversation(id).parentConversationId,
+    })
   }
 
   /**
@@ -572,20 +189,20 @@ export class WorkflowService {
    */
   async prepareRecovery(): Promise<void> {
     if (this.recoveryPrepared) return
-    const index = this.readRunIndex()
+    const index = this.runs.readIndex()
     const childIds = new Set<number>()
     for (const entry of index) {
       let record: RunRecord
       try {
-        record = this.loadRecord(entry.id)
+        record = this.runs.load(entry.id)
       } catch (error) {
         // 记录缺失（索引残留）：恢复只处理真实存在的记录；索引损坏诊断
         // 留给 listRuns（与 init 同契约，绝不删除索引掩盖）。
         if (error instanceof HelmError && error.code === 'not_found') continue
         throw error
       }
-      if (record.status !== 'running' || !this.isBackgroundRecord(record)) continue
-      for (const id of this.backgroundChildIds(record)) childIds.add(id)
+      if (record.status !== 'running' || !isBackgroundRecord(record)) continue
+      for (const id of backgroundChildIds(record)) childIds.add(id)
     }
     // 逐会话守卫取消。仅两类确定性可接受失败可诊断后继续：not_found（会话
     // 已删除）/ ownership_conflict（human 接管，红线拒绝——human 绝不 abort）。
@@ -617,7 +234,7 @@ export class WorkflowService {
     this.initPromise = (async () => {
       try {
         await this.prepareRecovery()
-        const index = this.readRunIndex()
+        const index = this.runs.readIndex()
         let changed = false
         // 通知 outbox 补发：崩溃前已达终态但 onBackgroundAgentSettled 未成功（或
         // 未及调用）的记录。回调失败不阻断 init（stderr 诊断，notifiedAt 不置位，
@@ -626,7 +243,7 @@ export class WorkflowService {
         for (const entry of index) {
           let record: RunRecord
           try {
-            record = this.loadRecord(entry.id)
+            record = this.runs.load(entry.id)
           } catch (error) {
             // 记录缺失（索引残留）：恢复只处理真实存在的记录；索引损坏诊断
             // 留给 listRuns（与 prepareRecovery 同契约，绝不删除索引掩盖）。
@@ -641,7 +258,7 @@ export class WorkflowService {
             const target = record
             pendingNotifies.push(async () => {
               if (this.host.onBackgroundAgentSettled === undefined) return
-              await this.host.onBackgroundAgentSettled(this.toSummary(target), {
+              await this.host.onBackgroundAgentSettled(this.runs.toSummary(target), {
                 parentConversationId: target.conversationId,
                 ...(target.subagentMeta ?? {}),
               })
@@ -650,12 +267,12 @@ export class WorkflowService {
             })
           }
           if (record.status !== 'running') continue
-          if (this.isBackgroundRecord(record)) {
+          if (isBackgroundRecord(record)) {
             // 权威坐标 = 运行期即时持久化的 childConversationIds（合并 subagentMeta/
             // nodes 冗余投影）。全部执行已在 prepareRecovery 持久标记取消；此处仅
             // 等待真实终态，不能先回报 interrupted 却让旧模型回合继续运行。守卫
             // 中止逐个诊断：单个子会话拒绝（human 接管等红线事实）不阻断其余恢复。
-            const children = new Set<number>(this.backgroundChildIds(record))
+            const children = new Set<number>(backgroundChildIds(record))
             await Promise.all([...children].map(async (id) => {
               try {
                 await this.host.abortConversationGuarded(id)
@@ -672,7 +289,7 @@ export class WorkflowService {
             record.kind === 'subagent'
               ? 'subagent run interrupted by process restart（可凭 conversationId/executionId 通过 resume 续接）'
               : `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）：${record.error ?? ''}`.trim()
-          if (this.isBackgroundRecord(record) && record.nodes !== undefined) {
+          if (isBackgroundRecord(record) && record.nodes !== undefined) {
             record.nodes = record.nodes.map((node) => node.status === 'running' || node.status === 'pending'
               ? { ...node, status: 'failed', settledAt: record.updatedAt, error: record.error }
               : node)
@@ -685,7 +302,7 @@ export class WorkflowService {
             const target = record
             pendingNotifies.push(async () => {
               if (this.host.onBackgroundAgentSettled === undefined) return
-              await this.host.onBackgroundAgentSettled(this.toSummary(target), {
+              await this.host.onBackgroundAgentSettled(this.runs.toSummary(target), {
                 parentConversationId: target.conversationId,
                 ...(target.subagentMeta ?? {}),
               })
@@ -693,7 +310,7 @@ export class WorkflowService {
               this.writeRecord(target)
             })
           }
-          this.emitEventSafe('workflow.updated', { run: this.toSummary(record) })
+          this.emitEventSafe('workflow.updated', { run: this.runs.toSummary(record) })
         }
         if (changed) await this.state.flush?.()
         this.recovered = true
@@ -731,287 +348,27 @@ export class WorkflowService {
   }
 
   // ------------------------------------------------------------------
-  // list：已保存工作流目录
+  // 工作流库：list / get / save / delete（实现位于 library-store）
   // ------------------------------------------------------------------
 
   /** 列出带 meta 声明的工作流脚本；非法 meta 附 metadataError，文件读取错误显式失败。 */
   list(): SavedWorkflowSummary[] {
-    const dir = this.workflowsDir()
-    let entries: string[]
-    try {
-      entries = readdirSync(dir)
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException
-      // 目录尚不存在：空列表是事实，不是降级。
-      if (err.code === 'ENOENT') return []
-      throw new HelmError('io_error', `无法读取工作流目录 ${dir}：${err.message}`, 500, {
-        path: dir,
-        code: err.code,
-      })
-    }
-    const out: SavedWorkflowSummary[] = []
-    for (const entry of entries.sort()) {
-      if (!entry.endsWith('.js')) continue
-      const name = entry.slice(0, -3)
-      if (!SAFE_NAME.test(name)) continue
-      const path = join(dir, entry)
-      let source: string
-      try {
-        source = readFileSync(path, 'utf-8')
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException
-        // 列表是尽力而为的目录视图：单个文件不可读跳过但不隐瞒。
-        if (err.code === 'ENOENT') continue
-        throw new HelmError('io_error', `无法读取工作流脚本 ${path}：${err.message}`, 500, {
-          path,
-          code: err.code,
-        })
-      }
-      // 非 workflow 的普通 .js（构建产物、草稿）不应出现在列表里。
-      if (!hasMetaDeclaration(source)) continue
-      const stats = fileStatsOf(path)
-      out.push(summaryFromSource(name, path, source, stats))
-    }
-    return out
+    return this.library.list()
   }
-
-  // ------------------------------------------------------------------
-  // 工作流库：get / save / delete（<dataDir>/workflows/<name>.js 是唯一真源）
-  // ------------------------------------------------------------------
 
   /** 读取已保存工作流的完整定义（只读源码 + 元数据 + 真实文件事实）。 */
   get(name: string): SavedWorkflowDetail {
-    const path = this.resolveSavedName(name)
-    const source = this.readScriptFile(path)
-    const stats = fileStatsOf(path)
-    return { ...summaryFromSource(name, path, source, stats), script: source }
+    return this.library.get(name)
   }
 
-  /**
-   * 保存工作流定义（script / fromRunId 恰一）：
-   * - 严格边界校验 + validateScript 全量检查 + 与 worker 同形状的纯语法预检
-   *   （compile-only，零副作用）；
-   * - 名称安全（SAFE_NAME 防路径穿越）；显式 name 与 meta.name 不一致拒绝；
-   * - 覆盖默认拒绝（409 workflow_already_exists），overwrite: true 才覆盖；
-   * - 原子写入：同目录临时文件 + fsync，新建经 link 原子占位（并发同名
-   *   创建恰好一个成功），覆盖经 rename 原子替换；
-   * - 防符号链接逃逸：目标存在时 realpath 必须仍在 workflows 目录内同名位置。
-   */
+  /** 保存工作流定义（script / fromRunId 恰一；边界校验与原子写入见 library-store.save）。 */
   save(request: WorkflowSaveRequest): WorkflowSaveResult {
-    const sources = [request.script, request.fromRunId].filter((v) => v !== undefined)
-    if (sources.length !== 1) {
-      throw new HelmError(
-        'validation_error',
-        'save 需要 script 或 fromRunId 恰好提供一个',
-        400,
-        { provided: sources.length },
-      )
-    }
-
-    let script: string
-    if (request.script !== undefined) {
-      script = request.script
-    } else {
-      const record = this.loadRecord(request.fromRunId!)
-      if (record.kind === 'subagent') {
-        throw new HelmError(
-          'validation_error',
-          `运行 ${request.fromRunId} 是后台子代理（subagent），没有可保存的工作流脚本`,
-          400,
-          { runId: request.fromRunId, kind: 'subagent' },
-        )
-      }
-      if (record.script !== undefined) {
-        script = record.script
-      } else if (record.scriptPath !== undefined) {
-        script = this.readScriptFile(record.scriptPath)
-      } else {
-        throw new HelmError(
-          'validation_error',
-          `运行 ${request.fromRunId} 未持久化脚本源（无内联 script 与 scriptPath），无法保存`,
-          400,
-          { runId: request.fromRunId },
-        )
-      }
-    }
-
-    let meta: WorkflowMeta
-    try {
-      meta = precheckScriptSyntax(script).meta
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      throw new HelmError('workflow_script_invalid', `工作流脚本校验失败：${message}`, 400)
-    }
-
-    const name = request.name ?? meta.name
-    if (!SAFE_NAME.test(name)) {
-      throw new HelmError(
-        'validation_error',
-        `工作流名称 "${name}" 非法：需匹配 ${SAFE_NAME.source}（防路径穿越）`,
-        400,
-        { name },
-      )
-    }
-    if (request.name !== undefined && request.name !== meta.name) {
-      throw new HelmError(
-        'validation_error',
-        `保存名称 ${request.name} 与脚本 meta.name "${meta.name}" 不一致；请先统一名称`,
-        400,
-        { name: request.name, metaName: meta.name },
-      )
-    }
-
-    const dir = this.workflowsDir()
-    mkdirSync(dir, { recursive: true })
-    const target = join(dir, `${name}.js`)
-    const existing = this.savedEntryStats(name, target)
-    if (existing !== undefined && request.overwrite !== true) {
-      throw new HelmError(
-        'workflow_already_exists',
-        `已存在同名工作流 ${name}（${target}）；需 overwrite: true 才覆盖`,
-        409,
-        { name, path: target },
-      )
-    }
-
-    // 原子写入：同目录临时文件 + fsync；新建 link 原子占位（并发创建恰好一个
-    // 成功），覆盖 rename 原子替换。临时文件名不以 .js 结尾，不会泄入 list()。
-    const tmp = join(dir, `.save-${name}-${randomUUID()}.tmp`)
-    try {
-      const fd = openSync(tmp, 'wx', 0o644)
-      try {
-        writeSync(fd, script, null, 'utf8')
-        fsyncSync(fd)
-      } finally {
-        closeSync(fd)
-      }
-      if (existing === undefined) {
-        try {
-          linkSync(tmp, target)
-        } catch (error) {
-          const err = error as NodeJS.ErrnoException
-          if (err.code === 'EEXIST') {
-            throw new HelmError(
-              'workflow_already_exists',
-              `已存在同名工作流 ${name}（并发写入已抢先创建）；需 overwrite: true 才覆盖`,
-              409,
-              { name, path: target },
-            )
-          }
-          throw error
-        }
-        unlinkSync(tmp)
-      } else {
-        renameSync(tmp, target)
-      }
-    } catch (error) {
-      // 临时文件清理尽力而为：清理失败不是业务结果的一部分（tmp 不泄入 list）。
-      try {
-        unlinkSync(tmp)
-      } catch {
-        // 已被 rename/link 消费或本就不存在
-      }
-      if (error instanceof HelmError) throw error
-      const err = error as NodeJS.ErrnoException
-      throw new HelmError('io_error', `写入工作流定义 ${target} 失败：${err.message}`, 500, {
-        path: target,
-        code: err.code,
-      })
-    }
-
-    // 真实摘要：保存后从真实 fs 重新读事实（不返回入参拼装的假状态）。
-    const written = fileStatsOf(target)
-    return {
-      created: existing === undefined,
-      workflow: summaryFromSource(name, target, script, written),
-    }
+    return this.library.save(request)
   }
 
   /** 删除已保存工作流定义文件（历史 run 记录不受影响；不存在显式 404）。 */
   delete(name: string): WorkflowDeleteResult {
-    if (!SAFE_NAME.test(name)) {
-      throw new HelmError(
-        'validation_error',
-        `工作流名称 "${name}" 非法：需匹配 ${SAFE_NAME.source}（防路径穿越）`,
-        400,
-        { name },
-      )
-    }
-    const dir = this.workflowsDir()
-    const target = join(dir, `${name}.js`)
-    let entry: ReturnType<typeof lstatSync>
-    try {
-      entry = lstatSync(target)
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException
-      if (err.code === 'ENOENT') {
-        throw new HelmError('not_found', `工作流 ${name} 不存在`, 404, { name, path: target })
-      }
-      throw new HelmError('io_error', `无法读取工作流定义条目 ${target}：${err.message}`, 500, {
-        path: target,
-        code: err.code,
-      })
-    }
-    // 符号链接：realpath 必须解析回 workflows 目录内同名位置（目录外一律拒绝，
-    // 既不删目标也不删链接本身——链接存在即目录已被动过手脚，交人类处置）。
-    if (entry.isSymbolicLink()) {
-      const real = realpathSync(target)
-      const expected = join(realpathSync(dir), `${name}.js`)
-      if (real !== expected) {
-        throw new HelmError(
-          'validation_error',
-          `工作流 "${name}" 是指向目录外的符号链接（${real}），已拒绝删除`,
-          400,
-          { name, real },
-        )
-      }
-    } else if (!entry.isFile()) {
-      throw new HelmError(
-        'validation_error',
-        `工作流定义条目 ${target} 不是常规文件，已拒绝删除`,
-        400,
-        { name, path: target },
-      )
-    }
-    try {
-      unlinkSync(target)
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException
-      throw new HelmError('io_error', `删除工作流定义 ${target} 失败：${err.message}`, 500, {
-        path: target,
-        code: err.code,
-      })
-    }
-    return { deleted: true, name, path: target }
-  }
-
-  /**
-   * 保存目标的现存条目检查：返回真实文件事实，或 undefined（不存在）。
-   * 符号链接指到目录外（resolveSavedName 同款 realpath 校验）一律拒绝。
-   */
-  private savedEntryStats(name: string, target: string): { updatedAt: number; size: number } | undefined {
-    try {
-      // resolveSavedName 对不存在目标返回路径本身，对越界 symlink 显式拒绝。
-      const resolved = this.resolveSavedName(name)
-      const stats = statSync(resolved)
-      if (!stats.isFile()) {
-        throw new HelmError(
-          'validation_error',
-          `工作流定义条目 ${target} 不是常规文件，无法覆盖`,
-          400,
-          { name, path: target },
-        )
-      }
-      return { updatedAt: Math.trunc(stats.mtimeMs), size: stats.size }
-    } catch (error) {
-      if (error instanceof HelmError) throw error
-      const err = error as NodeJS.ErrnoException
-      if (err.code === 'ENOENT') return undefined
-      throw new HelmError('io_error', `无法检查工作流定义条目 ${target}：${err.message}`, 500, {
-        path: target,
-        code: err.code,
-      })
-    }
+    return this.library.delete(name)
   }
 
   // ------------------------------------------------------------------
@@ -1051,7 +408,7 @@ export class WorkflowService {
     // --- resume 目标解析 ---------------------------------------------
     let replayFrom: RunRecord | undefined
     if (request.resumeFromRunId !== undefined) {
-      replayFrom = this.loadRecord(request.resumeFromRunId)
+      replayFrom = this.runs.load(request.resumeFromRunId)
       if (replayFrom.kind === 'subagent') {
         throw new HelmError('validation_error', '后台子代理运行没有工作流重放脚本；请用 execution.conversationId/executionId 通过 subagent resume 续接', 400, { runId: replayFrom.id })
       }
@@ -1102,17 +459,17 @@ export class WorkflowService {
       script = request.script
     } else if (request.name !== undefined) {
       savedName = request.name
-      scriptPath = this.resolveSavedName(request.name)
-      script = this.readScriptFile(scriptPath)
+      scriptPath = this.library.resolveSavedName(request.name)
+      script = this.library.readScriptFile(scriptPath)
     } else if (request.scriptPath !== undefined) {
-      scriptPath = this.resolveExplicitPath(request.scriptPath)
-      script = this.readScriptFile(scriptPath)
+      scriptPath = this.library.resolveExplicitPath(request.scriptPath)
+      script = this.library.readScriptFile(scriptPath)
     } else if (replayFrom !== undefined) {
       if (replayFrom.script !== undefined) {
         script = replayFrom.script
       } else if (replayFrom.scriptPath !== undefined) {
         scriptPath = replayFrom.scriptPath
-        script = this.readScriptFile(scriptPath)
+        script = this.library.readScriptFile(scriptPath)
         if (replayFrom.savedName !== undefined) savedName = replayFrom.savedName
       } else {
         throw new HelmError(
@@ -1145,8 +502,8 @@ export class WorkflowService {
 
     // --- journal（resume 重放 + 本 run 记账） -------------------------
     const runId = newRunId()
-    mkdirSync(this.artifactsDir(conversationId), { recursive: true })
-    const journalPath = this.journalPathFor(conversationId, runId)
+    mkdirSync(this.runs.artifactsDir(conversationId), { recursive: true })
+    const journalPath = this.runs.journalPathFor(conversationId, runId)
 
     let replayEntries: readonly WorkflowJournalEntry[] = []
     /** resume 读旧账本时的損行诊断（计数形态，结算时入 run 诊断面）。 */
@@ -1200,14 +557,17 @@ export class WorkflowService {
       // 后已经过 init()/flush 等 await 点，并发 resume 可能已抢先落标记；从
       // 现读检查到标记写入之间无 await（单线程事件循环），后到者必然读到先
       // 到者的标记并 409，不可能双双接管。
-      const currentMarker = this.loadRecord(replayFrom.id).resumedByRunId
+      const currentMarker = this.runs.load(replayFrom.id).resumedByRunId
       if (currentMarker !== undefined) {
         // 幽灵标记甄别：索引 not_found 不等于新 run 从未存在——接管 run 可能
         // 已写记录/账本后索引才丢失。只有进程内保留、活跃表、索引与磁盘
         // （同会话的记录与账本文件）四面都无痕迹才确证可重接管；仍有痕迹
         // （即使索引缺失）保持 409 诊断，防对已产生副作用的 run 重复续跑。
         // 接管记录损坏如实上抛。
-        const takeover = this.inspectTakeoverMarker(currentMarker, replayFrom.conversationId)
+        const takeover = this.runs.inspectTakeoverMarker(currentMarker, replayFrom.conversationId, {
+          reserved: this.takeoverReservations.has(currentMarker),
+          active: this.active.has(currentMarker),
+        })
         if (!takeover.ghost) {
           throw new HelmError(
             'conflict',
@@ -1246,7 +606,7 @@ export class WorkflowService {
 
     const abort = new AbortController()
     const createdAt = Date.now()
-    const meta = this.peekMeta(script)
+    const meta = this.library.peekMeta(script)
 
     const record: RunRecord = {
       id: runId,
@@ -1290,7 +650,7 @@ export class WorkflowService {
       abort,
       record,
       done: doneGate,
-      summary: this.toSummary(record),
+      summary: this.runs.toSummary(record),
       journalPath,
       writer: new JournalWriter(journalPath),
       progress: [],
@@ -1309,7 +669,7 @@ export class WorkflowService {
     // （新 run 未落任何快照，标记交由磁盘事实判定）。
     try {
       this.assertNotClosed()
-      this.assertNotCancelling(conversationId)
+      this.cancellation.assertNotCancelling(conversationId)
     } catch (error) {
       releaseTakeoverReservation()
       throw error
@@ -1362,9 +722,9 @@ export class WorkflowService {
         // 只跟踪内建执行通道，不等待任意插件；取消后必须确认命令已退出，不能超时后假装完成清理。
         run.abort.abort()
         await Promise.allSettled([...run.pendingExecs])
-        record.nodes = this.redactNodes(this.nodesFromProgress(run.progress))
+        record.nodes = this.runs.redactNodes(this.runs.nodesFromProgress(run.progress))
         record.progress = run.timeline
-        run.summary = this.toSummary(record)
+        run.summary = this.runs.toSummary(record)
         try {
           this.writeRecord(record)
           await this.state.flush?.()
@@ -1465,7 +825,7 @@ export class WorkflowService {
       resolveRunDone()
       throw error
     }
-    this.emitEventSafe('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
+    this.emitEventSafe('workflow.updated', { run: this.runs.redactSummaryNodes({ ...run.summary }) })
 
     const engineHost = this.makeEngineHost(run, parent)
 
@@ -1535,10 +895,10 @@ export class WorkflowService {
 
             const emitUpdated = (at: number): void => {
               this.emitEventSafe('workflow.updated', {
-                run: this.redactSummaryNodes({
+                run: this.runs.redactSummaryNodes({
                   ...run.summary,
                   updatedAt: at,
-                  nodes: this.nodesFromProgress(run.progress),
+                  nodes: this.runs.nodesFromProgress(run.progress),
                   ...(run.timeline.length > 0 ? { progress: [...run.timeline] } : {}),
                 }),
               })
@@ -1660,8 +1020,8 @@ export class WorkflowService {
           ? `subagent:${request.agentType}`
           : 'subagent'
 
-    mkdirSync(this.artifactsDir(request.parentConversationId), { recursive: true })
-    const journalPath = this.journalPathFor(request.parentConversationId, runId)
+    mkdirSync(this.runs.artifactsDir(request.parentConversationId), { recursive: true })
+    const journalPath = this.runs.journalPathFor(request.parentConversationId, runId)
 
     const node: WorkflowNodeState = {
       id: 'subagent-0',
@@ -1701,7 +1061,7 @@ export class WorkflowService {
       record,
       // done 立即挂后台兜底链：从创建第一刻起 wait/abort/close 都有可等的终点。
       done: doneGate.then(() => undefined),
-      summary: this.toSummary(record),
+      summary: this.runs.toSummary(record),
       journalPath,
       writer: new JournalWriter(journalPath),
       progress: [],
@@ -1714,7 +1074,7 @@ export class WorkflowService {
     }
     // 取消窗口复查（与 active.set 零 await 间隔）：入口检查后已经过 getConversation
     // 等多个 await 点，父会话可能已进入级联取消边界——在此拒绝，不留漏网 run。
-    this.assertNotCancelling(request.parentConversationId)
+    this.cancellation.assertNotCancelling(request.parentConversationId)
     this.active.set(runId, run)
 
     // abort(runId)/close()/级联取消 → 取消本 run 信号（spawn 信号桥停子会话回合）+
@@ -1784,8 +1144,8 @@ export class WorkflowService {
           record.error = this.redact(message)
         }
         record.updatedAt = settledAt
-        record.nodes = this.redactNodes([node])
-        run.summary = this.toSummary(record)
+        record.nodes = this.runs.redactNodes([node])
+        run.summary = this.runs.toSummary(record)
         try {
           this.writeRecord(record)
           await this.state.flush?.()
@@ -1923,7 +1283,7 @@ export class WorkflowService {
       resolveDone()
       throw persistError
     }
-    this.emitEventSafe('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
+    this.emitEventSafe('workflow.updated', { run: this.runs.redactSummaryNodes({ ...run.summary }) })
 
     // --- 组装 proto 并发起 spawn -----------------------------------------
     const proto: AgentSpawnRequest = {
@@ -1955,8 +1315,8 @@ export class WorkflowService {
           // 持久面统一脱敏（effectiveCwd/worktree 路径可能含秘密 token）。
           execution: redactJsonValue(info, this.redact) as typeof info,
         }
-        record.nodes = this.redactNodes([node])
-        run.summary = this.toSummary(record)
+        record.nodes = this.runs.redactNodes([node])
+        run.summary = this.runs.toSummary(record)
         this.writeRecord(record)
         onResolvedFired = true
         resolveHorizon()
@@ -2037,10 +1397,10 @@ export class WorkflowService {
       const message = persistError instanceof Error ? persistError.message : String(persistError)
       process.stderr.write(`workflow ${runId}: execution metadata persist failed: ${message}\n`)
     }
-    this.emitEventSafe('workflow.updated', { run: this.redactSummaryNodes({ ...run.summary }) })
+    this.emitEventSafe('workflow.updated', { run: this.runs.redactSummaryNodes({ ...run.summary }) })
 
     return {
-      run: this.redactSummaryNodes({ ...run.summary }),
+      run: this.runs.redactSummaryNodes({ ...run.summary }),
       ...(executionInfo !== undefined ? { execution: executionInfo } : {}),
     }
   }
@@ -2054,14 +1414,14 @@ export class WorkflowService {
     if (activeRun !== undefined) {
       // 后台单子代理不经引擎 progress：直接用 record.nodes（实时维护）。
       const collapsed =
-        activeRun.progress.length > 0 ? this.nodesFromProgress(activeRun.progress) : activeRun.summary.nodes
-      return this.redactSummaryNodes({
+        activeRun.progress.length > 0 ? this.runs.nodesFromProgress(activeRun.progress) : activeRun.summary.nodes
+      return this.runs.redactSummaryNodes({
         ...activeRun.summary,
         ...(collapsed !== undefined ? { nodes: collapsed } : {}),
         ...(activeRun.timeline.length > 0 ? { progress: [...activeRun.timeline] } : {}),
       })
     }
-    return this.toSummary(this.loadRecord(runId))
+    return this.runs.toSummary(this.runs.load(runId))
   }
 
   /**
@@ -2078,15 +1438,15 @@ export class WorkflowService {
     // 索引读取与其他全部入口统一（readRunIndex）：store 抛错/形状损坏显式
     // workflow_index_corrupt（带 key 与可辨识 runId），绝不强转后拿 entry.id
     // TypeError 或当有效列表。
-    const index = this.readRunIndex()
+    const index = this.runs.readIndex()
     const out: WorkflowRunSummary[] = []
     const seen = new Set<string>()
     for (const active of this.active.values()) {
       seen.add(active.runId)
       const collapsed =
-        active.progress.length > 0 ? this.nodesFromProgress(active.progress) : active.summary.nodes
+        active.progress.length > 0 ? this.runs.nodesFromProgress(active.progress) : active.summary.nodes
       out.push(
-        this.redactSummaryNodes({
+        this.runs.redactSummaryNodes({
           ...active.summary,
           ...(collapsed !== undefined ? { nodes: collapsed } : {}),
           ...(active.timeline.length > 0 ? { progress: [...active.timeline] } : {}),
@@ -2099,13 +1459,13 @@ export class WorkflowService {
       // loadRecord 对 not_found（普通不存在）抛 404：在 list 语境里这是索引
       // 指向缺失记录的服务故障，改报 workflow_index_corrupt；ID 不符同理。
       try {
-        out.push(this.toSummary(this.loadRecord(entry.id)))
+        out.push(this.runs.toSummary(this.runs.load(entry.id)))
       } catch (error) {
         if (error instanceof HelmError && error.code === 'not_found') {
-          throw this.indexCorruptError(entry.id, `记录缺失或 ID 不符：${error.message}`)
+          throw this.runs.indexCorruptError(entry.id, `记录缺失或 ID 不符：${error.message}`)
         }
         if (error instanceof HelmError && error.code === 'workflow_record_corrupt') throw error
-        throw this.indexCorruptError(entry.id, `记录损坏：${errorMessage(error)}`)
+        throw this.runs.indexCorruptError(entry.id, `记录损坏：${errorMessage(error)}`)
       }
     }
     // 新建在前契约是全局的：active.values() 是旧先新后的插入序，较早创建的
@@ -2124,12 +1484,12 @@ export class WorkflowService {
     }
     // 索引读取与其他全部入口统一：损坏显式 workflow_index_corrupt，绝不静默
     // 当空索引返回空候选（那会让 Watchdog 误以为无事可做）。
-    const index = this.readRunIndex()
+    const index = this.runs.readIndex()
     const candidates: WorkflowAutoResumeCandidate[] = []
     for (const entry of index) {
       let record: RunRecord
       try {
-        record = this.loadRecord(entry.id)
+        record = this.runs.load(entry.id)
       } catch (error) {
         // 单条损坏记录不能让所有其它候选静默消失；记录明确诊断后跳过，
         // Watchdog 仍可恢复账本完整的 Run。listRuns 继续对外严格失败。
@@ -2148,7 +1508,10 @@ export class WorkflowService {
         // 无痕（从未写记录/账本）才放行重接管；仍存在或损坏（含磁盘仍有
         // 文件、并发启动窗口）一律不放行。损坏诊断后跳过本条，不影响其他候选。
         try {
-          const takeover = this.inspectTakeoverMarker(record.resumedByRunId, record.conversationId)
+          const takeover = this.runs.inspectTakeoverMarker(record.resumedByRunId, record.conversationId, {
+            reserved: this.takeoverReservations.has(record.resumedByRunId),
+            active: this.active.has(record.resumedByRunId),
+          })
           if (!takeover.ghost) continue
         } catch (error) {
           process.stderr.write(
@@ -2200,7 +1563,7 @@ export class WorkflowService {
       return
     }
     const seeds = [...activeRun.childConversations]
-    await this.cancelBoundary(`run:${runId}`, seeds, (run, isWithin) => {
+    await this.cancellation.cancelBoundary(`run:${runId}`, seeds, (run, isWithin) => {
       if (run === activeRun) return true
       // 后代归属：run 的发起会话落在任一子会话子树内（沿真实会话父链）。
       for (const seed of seeds) {
@@ -2213,7 +1576,7 @@ export class WorkflowService {
 
   /** 会话是否处于级联取消窗口（插件层据此跳过向被取消父会话的结算汇报投递）。 */
   isConversationCancelling(conversationId: number): boolean {
-    return this.cancellingCounts.has(conversationId)
+    return this.cancellation.isCancelling(conversationId)
   }
 
   /**
@@ -2222,148 +1585,19 @@ export class WorkflowService {
    * 才返回（各自子会话的守卫中止在 run 结算链内等待）。
    */
   async cancelRunsUnderConversation(conversationId: number): Promise<void> {
-    await this.cancelBoundary(`conv:${conversationId}`, [conversationId], (run, isWithin) =>
+    await this.cancellation.cancelBoundary(`conv:${conversationId}`, [conversationId], (run, isWithin) =>
       isWithin(run.conversationId, conversationId),
     )
-  }
-
-  /** 取消窗口断言：边界内会话拒绝新 run（HelmError aborted，不静默排队）。 */
-  private assertNotCancelling(conversationId: number): void {
-    if (this.cancellingCounts.has(conversationId)) {
-      throw new HelmError(
-        'aborted',
-        `会话 ${conversationId} 所在任务树正在取消，拒绝启动新运行`,
-        409,
-        { conversationId },
-      )
-    }
   }
 
   /**
    * 守卫中止一个 run 的子会话：经宿主守卫入口（human 红线由内核原子复核；
    * 拒绝/失败诊断不吞 stderr），绝不回退普通中止；完成前计入 pendingAborts
    * （settle 前必等完——迟到调用在结算后仅诊断，同样不阻断终态）。
+   * 实现位于 host-adapter（引擎 abortAgent / 迟到 onResolved 补杀同款复用）。
    */
   private abortChildConversation(run: ActiveRun, conversationId: number): Promise<void> {
-    const pending = this.host
-      .abortConversationGuarded(conversationId)
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error)
-        process.stderr.write(
-          `workflow ${run.runId}: guarded abort conversation ${conversationId} rejected: ${message}\n`,
-        )
-      })
-      .then(() => {
-        run.pendingAborts.delete(pending)
-      })
-    // 先注册再执行：catch 链已保证 pending 不 reject，then 删除自引用安全。
-    run.pendingAborts.add(pending)
-    // 返回该 pending（绝不 reject）：单回合超时路径需在返回失败前等完自己
-    // 触发的守卫中止，避免紧随的 resume 撞上在途 abort。
-    return pending
-  }
-
-  /**
-   * 边界取消核心：先落取消标记（窗口内新 run 在注册点被拒），再反复扫描
-   * active 中命中边界的 run 逐个取消，直到无新增；最后等待全部 settle。
-   * 标记引用计数（并发取消重叠时最后一个释放才解除）；同 key 重入共享同
-   * 一次取消，防回调相互等待死锁。
-   */
-  private async cancelBoundary(
-    key: string,
-    seeds: readonly number[],
-    match: (run: ActiveRun, isWithin: (candidate: number, seed: number) => boolean) => boolean,
-  ): Promise<void> {
-    const inflight = this.boundaryCancels.get(key)
-    if (inflight !== undefined) return inflight
-    const cancel = this.runBoundaryCancel(key, seeds, match)
-    this.boundaryCancels.set(key, cancel)
-    try {
-      await cancel
-    } finally {
-      if (this.boundaryCancels.get(key) === cancel) this.boundaryCancels.delete(key)
-    }
-  }
-
-  private runBoundaryCancel(
-    key: string,
-    seeds: readonly number[],
-    match: (run: ActiveRun, isWithin: (candidate: number, seed: number) => boolean) => boolean,
-  ): Promise<void> {
-    return (async () => {
-      /** 本次取消持有的标记增量（finally 逐一释放）。 */
-      const held: number[] = []
-      const mark = (id: number): void => {
-        this.cancellingCounts.set(id, (this.cancellingCounts.get(id) ?? 0) + 1)
-        held.push(id)
-      }
-      // 先落边界标记再扫描：注册点断言保证标记后的新 run 必被拒。
-      for (const seed of seeds) mark(seed)
-
-      /** 发起会话父链缓存（getConversation 网络式读取；缺失即链断）。 */
-      const parentCache = new Map<number, number | undefined>()
-      const parentOf = (id: number): number | undefined => {
-        if (!parentCache.has(id)) {
-          let parent: number | undefined
-          try {
-            parent = this.host.getConversation(id).parentConversationId
-          } catch {
-            parent = undefined
-          }
-          parentCache.set(id, parent)
-        }
-        return parentCache.get(id)
-      }
-      /** 沿真实会话父链判定 candidate 是否在 seed 子树内：visited 防环（父链
-       * 环按不可达处理），缺父即止（不虚构可达）。 */
-      const isWithin = (candidate: number, seed: number): boolean => {
-        if (candidate === seed) return true
-        const visited = new Set<number>()
-        let current: number | undefined = candidate
-        while (current !== undefined && !visited.has(current)) {
-          visited.add(current)
-          if (current === seed) return true
-          current = parentOf(current)
-        }
-        return false
-      }
-
-      const aborted = new Set<ActiveRun>()
-      try {
-        // 扫描-取消循环：每轮取全部命中且未取消的 run；标记其发起会话（窗口
-        // 内该会话不能再派新任务）后取消控制器。标记先于取消到位 + 注册点
-        // 断言 ⇒ 不会出现越标新 run；循环收敛（上限 64 轮防御，超出如实诊断）。
-        for (let round = 0; round < 64; round++) {
-          const next = [...this.active.values()].filter((r) => !aborted.has(r) && match(r, isWithin))
-          if (next.length === 0) break
-          for (const run of next) {
-            mark(run.conversationId)
-            aborted.add(run)
-            run.abort.abort()
-          }
-        }
-        if (aborted.size > 0 && [...this.active.values()].some((r) => !aborted.has(r) && match(r, isWithin))) {
-          process.stderr.write(
-            `workflow: 边界取消 ${key} 64 轮扫描后仍有命中 run（防御上限，剩余项由后续事件链结算）\n`,
-          )
-        }
-        // 全部 settle：各 run 的结算链内等待子会话守卫中止与结算通知完成。
-        await Promise.all([...aborted].map((r) => r.done))
-        // 防御性收尾扫描：等待期间理论不存在新注册（注册点已拒），仍兜底一轮。
-        const stragglers = [...this.active.values()].filter((r) => !aborted.has(r) && match(r, isWithin))
-        for (const run of stragglers) {
-          mark(run.conversationId)
-          run.abort.abort()
-          await run.done
-        }
-      } finally {
-        for (const id of held) {
-          const count = this.cancellingCounts.get(id) ?? 1
-          if (count <= 1) this.cancellingCounts.delete(id)
-          else this.cancellingCounts.set(id, count - 1)
-        }
-      }
-    })()
+    return abortChildViaHost(this.host, run, conversationId)
   }
 
   async close(): Promise<void> {
@@ -2375,144 +1609,29 @@ export class WorkflowService {
   }
 
   // ------------------------------------------------------------------
-  // host 适配：引擎 WorkflowHost <-> WorkflowServiceHost
+  // host 适配：引擎 WorkflowHost <-> WorkflowServiceHost（实现位于 host-adapter）
   // ------------------------------------------------------------------
 
-  private makeEngineHost(run: ActiveRun, parent: ConversationSummary): WorkflowHost {
-    const service = this
-    /** agentId → 子会话 id（onResolved 建立；abort 使用）。 */
-    const conversationByAgent = new Map<string, number>()
-
+  private engineHostDeps(): EngineHostDeps {
     return {
-      async spawnAgent(request: WorkflowSpawnRequest): Promise<WorkflowSpawnResult> {
-        return service.invokeSpawn(run, parent, conversationByAgent, request, false)
-      },
-      async resumeAgent(agentId, prompt, options): Promise<WorkflowSpawnResult> {
-        return service.invokeSpawn(
-          run,
-          parent,
-          conversationByAgent,
-          {
-            agentId,
-            index: -1,
-            prompt,
-            label: agentId,
-            // resume 缺省不携带 agentType（不重配原子会话 Profile）；
-            // schema/gate/attachments/回调由引擎续接调用原样下传（附件仅属本轮提交）。
-            agentType: '',
-            ...(options?.schema !== undefined ? { schema: options.schema } : {}),
-            ...(options?.gate !== undefined ? { gate: options.gate } : {}),
-            ...(options?.attachments !== undefined ? { attachments: options.attachments } : {}),
-            // 显式续接授权透传（ResumeAgentOptions.maxSubagentDepth）：静默丢弃
-            // 等于假装授予了子树深度；引擎/内核边界照常校验非法值。
-            ...(options?.maxSubagentDepth !== undefined ? { maxSubagentDepth: options.maxSubagentDepth } : {}),
-            ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-            ...(options?.gateTimeoutMs !== undefined ? { gateTimeoutMs: options.gateTimeoutMs } : {}),
-            ...(options?.resumeRef !== undefined ? { resumeRef: options.resumeRef } : {}),
-            ...(options?.onResolved !== undefined ? { onResolved: options.onResolved } : {}),
-            ...(options?.onGateResult !== undefined ? { onGateResult: options.onGateResult } : {}),
-          },
-          true,
-        )
-      },
-      abortAgent(agentId: string): void {
-        const convId = conversationByAgent.get(agentId)
-        if (convId === undefined) return
-        // 只中止本 run 派生的子会话（守卫中止：human 红线由内核原子复核）；
-        // fire-and-forget 会让 abort/close 返回时子会话仍在跑——记入
-        // pendingAborts 由 done 收尾统一 await；不存在（已结束）时幂等静默，
-        // 但 rejection 仍须诊断，绝不吞。
-        service.abortChildConversation(run, convId)
-      },
-      ...(service.host.runGate !== undefined
-        ? {
-            runGate: async (command: string, options: { agentId: string; cwd?: string; gateTimeoutMs?: number }) => {
-              const convId = conversationByAgent.get(options.agentId)
-              // cwd 只用引擎确认过的值（result.cwd / 回传元数据）；缺省父会话
-              // cwd，绝不猜测远端工作目录。
-              return service.host.runGate!(command, {
-                ...(options.cwd !== undefined ? { cwd: options.cwd } : { cwd: parent.cwd }),
-                ...(convId !== undefined ? { conversationId: convId } : { conversationId: parent.id }),
-                signal: run.abort.signal,
-                ...(options.gateTimeoutMs !== undefined ? { gateTimeoutMs: options.gateTimeoutMs } : {}),
-              })
-            },
-          }
-        : {}),
-      prepareAction: async (actionId, input) => {
-        const resolved = service.resolveActionId(actionId)
-        if (resolved.builtin === 'env.exec') {
-          service.validateEnvExecInput(input)
-          return { pluginId: resolved.pluginId, actionId: resolved.actionId, idempotent: false }
-        }
-        if (service.host.prepareAction !== undefined) {
-          const prep = service.host.prepareAction(resolved.pluginId, resolved.actionId, input, {
-            conversationId: run.conversationId,
-          })
-          return { pluginId: resolved.pluginId, actionId: resolved.actionId, idempotent: prep?.idempotent }
-        }
-        const manifests = service.host.listActions()
-        const manifest = manifests.find((m) => m.pluginId === resolved.pluginId && m.id === resolved.actionId)
-        return { pluginId: resolved.pluginId, actionId: resolved.actionId, idempotent: manifest?.idempotent }
-      },
-      async invokeAction(actionId, input, context) {
-        const resolved = service.resolveActionId(actionId)
-        if (resolved.builtin === 'env.exec') {
-          const parsed = service.validateEnvExecInput(input)
-          const execPromise = service.host.execEnv?.(
-            {
-              command: parsed.command,
-              ...(parsed.nodeId !== undefined ? { nodeId: parsed.nodeId } : {}),
-              ...(parsed.cwd !== undefined ? { cwd: parsed.cwd } : {}),
-              ...(parsed.env !== undefined ? { env: parsed.env } : {}),
-              ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
-              conversationId: run.conversationId,
-            },
-            context.signal,
-          )
-          if (execPromise === undefined) {
-            throw new HelmError('not_supported', '当前工作流宿主未配置 env.exec 命令执行端口', 501)
-          }
-          run.pendingExecs.add(execPromise)
-          let res: EnvExecResponse
-          try {
-            res = await execPromise
-          } finally {
-            run.pendingExecs.delete(execPromise)
-          }
-          const redactedOutput = service.redact(res.output)
-          const succeeded = res.ok && res.exitCode === 0 && !res.timedOut
-          if (!succeeded && parsed.allowFailure !== true) {
-            const tail = redactedOutput.length > 2000 ? redactedOutput.slice(-2000) : redactedOutput
-            throw new HelmError(
-              'env_exec_failed',
-              `命令执行失败${res.timedOut ? '（超时）' : ''}（exitCode=${String(res.exitCode)}）${tail ? ': ' + tail : ''}`,
-              502,
-              { exitCode: res.exitCode, timedOut: res.timedOut },
-            )
-          }
-          return {
-            pluginId: 'env',
-            actionId: 'exec',
-            result: {
-              ok: succeeded,
-              exitCode: res.exitCode,
-              output: redactedOutput,
-              timedOut: res.timedOut,
-            },
-          }
-        }
-        const result = await service.host.invokeAction(resolved.pluginId, resolved.actionId, input, {
-          conversationId: run.conversationId,
-          ...(context.signal !== undefined ? { signal: context.signal } : {}),
-        })
-        return { pluginId: resolved.pluginId, actionId: resolved.actionId, result }
-      },
-      loadWorkflow: (ref) => service.loadWorkflowRef(ref),
+      host: this.host,
+      redact: this.redact,
+      isClosed: () => this.closed,
+      isCancelling: (conversationId) => this.cancellation.isCancelling(conversationId),
+      persistChildConversationFact: (activeRun, conversationId) =>
+        this.persistChildConversationFact(activeRun, conversationId),
+      loadWorkflowRef: (ref) => this.loadWorkflowRef(ref),
     }
   }
 
-  /** 单次 agent/resume 调用：组装 protocol AgentSpawnRequest 投 agent_spawn 管道。 */
+  private makeEngineHost(run: ActiveRun, parent: ConversationSummary): WorkflowHost {
+    return createEngineHost(this.engineHostDeps(), run, parent)
+  }
+
+  /**
+   * 单次 agent/resume 调用（实现位于 host-adapter；保留私有接缝供建引擎
+   * 适配与直测共用同一入口）。签名与历史版本一致。
+   */
   private async invokeSpawn(
     run: ActiveRun,
     parent: ConversationSummary,
@@ -2520,360 +1639,7 @@ export class WorkflowService {
     request: WorkflowSpawnRequest,
     isResume: boolean,
   ): Promise<WorkflowSpawnResult> {
-    if (this.closed || run.abort.signal.aborted) {
-      return { ok: false, error: 'Workflow aborted.' }
-    }
-    // 级联取消窗口内的会话不再派生（防取消期间又派新任务；返回节点错误而非
-    // 抛出——引擎把 agent 节点结算为失败，不阻断同批其他节点）。
-    if (this.isConversationCancelling(run.conversationId)) {
-      return { ok: false, error: '[aborted] 发起会话所在任务树正在取消，拒绝派生子代理' }
-    }
-
-    // 引擎内 agentId（wf-agent-N）跨 run 重复；全局 agentSessions 是进程级
-    // Map，两个同 parent 的并行 run 会互相覆盖对方的映射，resume 可能续接错
-    // child。投给 native 的稳定 ID加 runId 命名空间；引擎内部 ID/label 不变。
-    const nativeAgentId = `${run.runId}:${request.agentId}`
-    // resume 严格续接：优先用本 run 内 spawn 时记录的 convId；仅当本 run 未见
-    // 过（如 resume 自重放账本的 agent）才退回 native 全局映射。
-    const knownConvId = conversationByAgent.get(request.agentId)
-    // resumeRef 已是 WorkflowSpawnRequest 正式字段（runtime 重放/续接时透传
-    // executionId 或 conversationId 字符串），无需再经交集类型强转读取。
-    const resumeRef = isResume ? String(request.resumeRef ?? knownConvId ?? nativeAgentId) : undefined
-
-    /** 已 sanitized 的执行元数据（onResolved 可能与 spawn 返回前多次回调——幂等只记最新）。 */
-    let executionInfo: AgentExecutionInfo | undefined
-    /** 已 sanitized 的 gate 回报（执行环境内恰好一次执行后的结果）。 */
-    let gateResult: AgentGateResult | undefined
-
-    // agent({ timeoutMs }) 单回合超时：runtime 侧 WorkflowSpawnRequest 的扩展
-    // 字段（DSL 接入由 runtime 分支落地）；服务边界按设计范围强校验。
-    const timeoutMs = this.readAgentTimeoutMs(request)
-    /**
-     * 自有 AbortController + unref 计时器（不用 AbortSignal.timeout：其计时器
-     * 不可撤销，旧 attempt 的超时会在 spawn 终局后迟到触发，经 agentId 映射
-     * 误中止同会话的新 attempt）。超时 abort 以 TimeoutError 为 reason（Herdr
-     * 按 signal.reason.name === 'TimeoutError' 识别单回合超时，无需新增协议
-     * 字段）；成功/失败出口统一清计时器。
-     */
-    let timeoutController: AbortController | undefined
-    let timeoutTimer: ReturnType<typeof setTimeout> | undefined
-    let timedOut = false
-    /** 本 attempt 因超时触发的守卫中止（返回前必等完，防 resume 撞在途 abort）。 */
-    const timeoutAborts = new Set<Promise<void>>()
-    if (timeoutMs !== undefined) {
-      timeoutController = new AbortController()
-      const controller = timeoutController
-      timeoutTimer = setTimeout(() => {
-        timeoutTimer = undefined
-        // run 级取消已另有归因；此处只记录单回合超时事实。
-        if (run.abort.signal.aborted) return
-        timedOut = true
-        controller.abort(new DOMException(`子代理回合超过 ${timeoutMs}ms 上限`, 'TimeoutError'))
-        // 超时即守卫中止子会话（human 红线由内核原子复核）：优先 onResolved
-        // 已回传的 conversationId，否则用本 run 内登记的 agentId 映射。
-        const childId = executionInfo?.conversationId ?? conversationByAgent.get(request.agentId)
-        if (childId !== undefined) timeoutAborts.add(this.abortChildConversation(run, childId))
-      }, timeoutMs)
-      timeoutTimer.unref?.()
-    }
-    const timeoutSignal = timeoutController?.signal
-    /** 成功/失败出口统一撤销计时器（监听随 controller 置空一并失效可回收）。 */
-    const disarmTimeout = (): void => {
-      if (timeoutTimer !== undefined) {
-        clearTimeout(timeoutTimer)
-        timeoutTimer = undefined
-      }
-      timeoutController = undefined
-    }
-    /** 超时失败返回前等完自己触发的守卫中止（后续 resume 不撞忙）。 */
-    const awaitTimeoutAborts = async (): Promise<void> => {
-      if (timeoutAborts.size > 0) await Promise.allSettled([...timeoutAborts])
-    }
-    const timeoutMessage = (cause?: unknown): string =>
-      `[agent_timeout] 子代理 ${request.label} 回合超过 ${timeoutMs}ms 上限；已请求取消，` +
-      '实际执行状态与续接条件以 execution 和执行方诊断为准' +
-      (cause === undefined ? '' : `\n${this.redact(errorMessage(cause))}`)
-
-    const proto: AgentSpawnRequest = {
-      parentConversationId: run.conversationId,
-      prompt: request.prompt,
-      agentId: nativeAgentId,
-      // gate 原样下传：执行权在实际执行环境（native 子会话 cwd / herdr 窗格），
-      // 经 onGateResult 回报后引擎免二次执行。
-      ...(request.gate !== undefined ? { gate: request.gate } : {}),
-      ...(request.agentType !== '' ? { agentType: request.agentType } : {}),
-      ...(request.model !== undefined ? { model: request.model } : {}),
-      ...(request.effort !== undefined ? { effort: request.effort } : {}),
-      ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
-      ...(!isResume && request.cwd !== undefined ? { cwd: request.cwd } : {}),
-      ...(request.gateTimeoutMs !== undefined ? { gateTimeoutMs: request.gateTimeoutMs } : {}),
-      meta: withWorkflowSpawnMeta(undefined, {
-        runId: run.runId,
-        ...(request.maxSubagentDepth !== undefined ? { maxSubagentDepth: request.maxSubagentDepth } : {}),
-      }),
-      ...(request.schema !== undefined ? { schema: request.schema.schema } : {}),
-      ...(request.attachments !== undefined ? { attachments: request.attachments } : {}),
-      ...(request.secretNames !== undefined ? { secretNames: request.secretNames } : {}),
-      ...(resumeRef !== undefined ? { resume: resumeRef } : {}),
-      // cwd 不注入：执行行按自身链解析（原生 request>Profile>parent镜像>Hub；
-      // herdr request>Profile.workspace>parent>Hub）。引擎层注入会压过 Profile
-      // 路由，resume 时更会把已建子会话/Worktree 的实际 cwd 重置回父目录。
-      onResolved: (raw: unknown) => {
-        const info = sanitizeExecutionInfo(raw, { agentId: nativeAgentId })
-        executionInfo = info
-        if (info.conversationId !== undefined) {
-          conversationByAgent.set(request.agentId, info.conversationId)
-          run.childConversations.add(info.conversationId)
-          // 迟到 onResolved 补杀：abort/超时先于执行元数据落地时，abortAgent
-          // 的映射里还没有该子会话——在登记点立即补守卫中止，绝不因时序漏杀；
-          // 超时路径计入本 attempt 等待面（返回前等完）。
-          if (run.abort.signal.aborted) {
-            this.abortChildConversation(run, info.conversationId)
-          } else if (timedOut) {
-            timeoutAborts.add(this.abortChildConversation(run, info.conversationId))
-          }
-          // 子会话事实即时持久：崩溃恢复以这组 IDs 为权威坐标（见
-          // persistChildConversationFact）。同步/后台 workflow 一视同仁——
-          // 统一经 invokeSpawn，不按启动形态分支。
-          this.persistChildConversationFact(run, info.conversationId)
-        }
-        request.onResolved?.(info)
-      },
-      ...(request.gate !== undefined
-        ? {
-            onGateResult: (raw: unknown) => {
-              gateResult = sanitizeGateResult(raw, { agentId: nativeAgentId })
-              request.onGateResult?.(gateResult)
-            },
-          }
-        : {}),
-      signal: timeoutSignal === undefined ? run.abort.signal : AbortSignal.any([run.abort.signal, timeoutSignal]),
-    }
-
-    try {
-      const raw = await this.host.spawnAgent(proto)
-      // 超时已触发：子会话已被守卫中止，迟到的返回不可信，按超时失败处理；
-      // 返回前等完自己触发的守卫中止（后续 resume 不撞在途 abort）。
-      if (timedOut) {
-        await awaitTimeoutAborts()
-        return {
-          ok: false,
-          error: timeoutMessage(),
-          timedOut: true,
-          ...(executionInfo !== undefined ? { executionInfo } : {}),
-          ...(gateResult !== undefined ? { gate: gateResult } : {}),
-        }
-      }
-      // native 返回：有 schema → 已校验对象（转 JSON 交引擎复核）；无 schema → 文本。
-      const text = typeof raw === 'string' ? raw : JSON.stringify(raw)
-      // 外部执行环境（executionId 存在）必须回报 gate；缺失即显式失败，
-      // 绝不在本机猜远端工作目录补跑。
-      if (request.gate !== undefined && gateResult === undefined && executionInfo?.executionId !== undefined) {
-        throw gateResultMissingError({
-          agentId: nativeAgentId,
-          executionId: executionInfo.executionId,
-          command: request.gate,
-        })
-      }
-      return {
-        ok: true,
-        text,
-        ...(executionInfo !== undefined ? { executionInfo } : {}),
-        ...(gateResult !== undefined ? { gate: gateResult } : {}),
-      }
-    } catch (error) {
-      // 失败分支保留已拿到的执行元数据与门禁结果：已创建的 Worktree 与
-      // conversationId 不随失败丢弃，供 agent.withMeta/goal 上报与原地 resume。
-      const retained: Pick<WorkflowSpawnResult, 'executionInfo' | 'gate'> = {
-        ...(executionInfo !== undefined ? { executionInfo } : {}),
-        ...(gateResult !== undefined ? { gate: gateResult } : {}),
-      }
-      if (timedOut) {
-        await awaitTimeoutAborts()
-        return {
-          ok: false,
-          error: timeoutMessage(error),
-          timedOut: true,
-          ...retained,
-        }
-      }
-      if (error instanceof HelmError) {
-        // 错误码随消息透传（节点 error 面向用户，码即诊断锚点）。
-        return { ok: false, error: `[${error.code}] ${error.message}`, ...retained }
-      }
-      const message = error instanceof Error ? error.message : String(error)
-      return { ok: false, error: message, ...retained }
-    } finally {
-      // 成功/失败出口统一清计时器与监听：旧 attempt 的超时绝不允许在未来
-      // 触发（同会话可能已被新 attempt 续接，迟到超时会误杀新回合）。
-      disarmTimeout()
-    }
-  }
-
-  /**
-   * agent({ timeoutMs }) 边界校验：runtime 侧 WorkflowSpawnRequest 扩展字段
-   * （DSL 侧由 runtime 分支接入；未携带 = 无单回合超时）。取值 1_000..
-   * 3_600_000 整数毫秒，非法显式拒绝，绝不静默锐化。
-   */
-  private readAgentTimeoutMs(request: WorkflowSpawnRequest): number | undefined {
-    // timeoutMs 已是 WorkflowSpawnRequest 正式字段；运行时值仍做形状校验
-    // （边界校验纪律：引擎侧输入不因类型声明而免检）。
-    const raw: unknown = request.timeoutMs
-    if (raw === undefined) return undefined
-    if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1_000 || raw > 3_600_000) {
-      throw new HelmError(
-        'validation_error',
-        `agent timeoutMs 必须是 1_000..3_600_000 的整数毫秒值（收到 ${JSON.stringify(raw)}）`,
-        400,
-        { timeoutMs: raw },
-      )
-    }
-    return raw
-  }
-
-  /**
-   * 全限定 actionId 解析：以 listActions() 的 manifest 精确匹配，支持内建 env.exec。
-   * pluginId 含 ':'（builtin:profile），actionId 理论上可含 '.'，简单 split
-   * 会在坏点号上错位——只信 manifest 与内建白名单。
-   */
-  private resolveActionId(qualified: string): { pluginId: string; actionId: string; builtin?: 'env.exec' } {
-    if (qualified === `${BUILTIN_ENV_EXEC_PLUGIN}.${BUILTIN_ENV_EXEC_ACTION}`) {
-      return {
-        pluginId: BUILTIN_ENV_EXEC_PLUGIN,
-        actionId: BUILTIN_ENV_EXEC_ACTION,
-        builtin: 'env.exec',
-      }
-    }
-
-    const manifests = this.host.listActions()
-    if (qualified === BUILTIN_ENV_EXEC_ACTION) {
-      const sameShort = manifests.filter((m) => m.id === BUILTIN_ENV_EXEC_ACTION)
-      if (sameShort.length === 0) {
-        return {
-          pluginId: BUILTIN_ENV_EXEC_PLUGIN,
-          actionId: BUILTIN_ENV_EXEC_ACTION,
-          builtin: 'env.exec',
-        }
-      }
-      throw new HelmError(
-        'ambiguous_action',
-        `动作短 id "${qualified}" 命中多个动作（含内建 env.exec），请用全限定 id：env.exec, ${sameShort.map((m) => `${m.pluginId}.${m.id}`).join(', ')}`,
-        400,
-        { qualified },
-      )
-    }
-
-    // 1) 全限定精确匹配。
-    for (const manifest of manifests) {
-      if (`${manifest.pluginId}.${manifest.id}` === qualified) {
-        return { pluginId: manifest.pluginId, actionId: manifest.id }
-      }
-    }
-    // 2) 裸短 id：唯一时允许，歧义拒绝。
-    const sameShort = manifests.filter((m) => m.id === qualified)
-    if (sameShort.length === 1) {
-      return { pluginId: sameShort[0]!.pluginId, actionId: sameShort[0]!.id }
-    }
-    if (sameShort.length > 1) {
-      throw new HelmError(
-        'ambiguous_action',
-        `动作短 id "${qualified}" 命中多个插件，请用全限定 id：${sameShort.map((m) => `${m.pluginId}.${m.id}`).join(', ')}`,
-        400,
-        { qualified },
-      )
-    }
-    throw new HelmError('unknown_action', `未注册的动作：${qualified}`, 404, { qualified })
-  }
-
-  private validateEnvExecInput(input: unknown): ValidatedEnvExecInput {
-    if (this.host.execEnv === undefined) {
-      throw new HelmError('not_supported', '当前工作流宿主未配置 env.exec 命令执行端口', 501)
-    }
-    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
-      throw new HelmError('validation_error', 'env.exec 入参必须是 JSON 对象', 400)
-    }
-    const raw = input as Record<string, unknown>
-    const allowedKeys = new Set(['command', 'nodeId', 'cwd', 'env', 'timeoutMs', 'allowFailure'])
-    for (const key of Object.keys(raw)) {
-      if (!allowedKeys.has(key)) {
-        throw new HelmError('validation_error', `env.exec 发现未知选项 "${key}"`, 400)
-      }
-    }
-
-    const rawCommand = raw.command
-    let command: string | string[]
-    if (typeof rawCommand === 'string') {
-      if (rawCommand.trim().length === 0) {
-        throw new HelmError('validation_error', 'env.exec command 不能为空字符串', 400)
-      }
-      command = rawCommand
-    } else if (Array.isArray(rawCommand)) {
-      if (
-        rawCommand.length === 0 ||
-        !rawCommand.every((item) => typeof item === 'string') ||
-        rawCommand[0]!.trim().length === 0
-      ) {
-        throw new HelmError('validation_error', 'env.exec command 数组必须非空且首项为非空字符串', 400)
-      }
-      command = rawCommand as string[]
-    } else {
-      throw new HelmError('validation_error', 'env.exec command 必须是非空字符串或非空字符串数组', 400)
-    }
-
-    let nodeId: string | undefined
-    if (raw.nodeId !== undefined) {
-      if (typeof raw.nodeId !== 'string' || !NODE_ID_RE.test(raw.nodeId)) {
-        throw new HelmError(
-          'validation_error',
-          'env.exec nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（字母数字开头，可含 . _ -）',
-          400,
-        )
-      }
-      nodeId = raw.nodeId
-    }
-
-    let cwd: string | undefined
-    if (raw.cwd !== undefined) {
-      if (typeof raw.cwd !== 'string' || raw.cwd.trim().length === 0 || !isAbsoluteTargetPath(raw.cwd)) {
-        throw new HelmError(
-          'validation_error',
-          'env.exec cwd 必须为跨平台绝对路径（POSIX/Windows/UNC）',
-          400,
-        )
-      }
-      cwd = raw.cwd
-    }
-
-    let env: Record<string, string> | undefined
-    if (raw.env !== undefined) {
-      if (typeof raw.env !== 'object' || raw.env === null || Array.isArray(raw.env)) {
-        throw new HelmError('validation_error', 'env.exec env 必须是键值对象', 400)
-      }
-      for (const [k, v] of Object.entries(raw.env)) {
-        if (typeof v !== 'string') {
-          throw new HelmError('validation_error', `env.exec env.${k} 必须为字符串`, 400)
-        }
-      }
-      env = raw.env as Record<string, string>
-    }
-
-    let timeoutMs: number | undefined
-    if (raw.timeoutMs !== undefined) {
-      if (typeof raw.timeoutMs !== 'number' || !Number.isInteger(raw.timeoutMs) || raw.timeoutMs < 1 || raw.timeoutMs > 600_000) {
-        throw new HelmError('validation_error', 'env.exec timeoutMs 必须是 1 到 600000 之间的整数', 400)
-      }
-      timeoutMs = raw.timeoutMs
-    }
-
-    let allowFailure: boolean | undefined
-    if (raw.allowFailure !== undefined) {
-      if (typeof raw.allowFailure !== 'boolean') {
-        throw new HelmError('validation_error', 'env.exec allowFailure 必须为 boolean', 400)
-      }
-      allowFailure = raw.allowFailure
-    }
-
-    return { command, nodeId, cwd, env, timeoutMs, allowFailure }
+    return invokeAgentSpawn(this.engineHostDeps(), run, parent, conversationByAgent, request, isResume)
   }
 
   /** 嵌套 workflow() 引用解析：仅允许保存目录安全名或显式本地路径。 */
@@ -2882,12 +1648,12 @@ export class WorkflowService {
   ): { ok: true; script: string; path?: string } | { ok: false; message: string } {
     try {
       if (ref.name !== undefined) {
-        const path = this.resolveSavedName(ref.name)
-        return { ok: true, script: this.readScriptFile(path), path }
+        const path = this.library.resolveSavedName(ref.name)
+        return { ok: true, script: this.library.readScriptFile(path), path }
       }
       if (ref.scriptPath !== undefined) {
-        const path = this.resolveExplicitPath(ref.scriptPath)
-        return { ok: true, script: this.readScriptFile(path), path }
+        const path = this.library.resolveExplicitPath(ref.scriptPath)
+        return { ok: true, script: this.library.readScriptFile(path), path }
       }
       return { ok: false, message: 'workflow() 引用需要 name 或 scriptPath' }
     } catch (error) {
@@ -2896,481 +1662,25 @@ export class WorkflowService {
   }
 
   // ------------------------------------------------------------------
-  // 脚本源解析
-  // ------------------------------------------------------------------
-
-  private resolveSavedName(name: string): string {
-    if (!SAFE_NAME.test(name)) {
-      throw new HelmError(
-        'validation_error',
-        `工作流名称 "${name}" 非法：需匹配 ${SAFE_NAME.source}（防路径穿越）`,
-        400,
-        { name },
-      )
-    }
-    // SAFE_NAME 已排除 '/'，但 symlink 可能把名字重新指到目录外：realpath 校验
-    // 解析后的真实路径仍在 workflows 目录内。
-    const dir = this.workflowsDir()
-    const target = join(dir, `${name}.js`)
-    try {
-      const real = realpathSync(target)
-      const realDir = realpathSync(dir)
-      if (real !== join(realDir, `${name}.js`)) {
-        throw new HelmError(
-          'validation_error',
-          `工作流 "${name}" 是指向目录外的符号链接（${real}），已拒绝`,
-          400,
-          { name, real },
-        )
-      }
-      return target
-    } catch (error) {
-      if (error instanceof HelmError) throw error
-      const err = error as NodeJS.ErrnoException
-      if (err.code === 'ENOENT') return target // 不存在：readScriptFile 报 not_found
-      throw new HelmError('io_error', `无法解析工作流路径 ${target}：${err.message}`, 500, {
-        path: target,
-        code: err.code,
-      })
-    }
-  }
-
-  private resolveExplicitPath(scriptPath: string): string {
-    // 显式用户文件路径：可读即用，不承诺沙箱（与文档一致）。
-    return resolve(scriptPath)
-  }
-
-  private readScriptFile(path: string): string {
-    let source: string
-    try {
-      const st = statSync(path)
-      if (!st.isFile()) {
-        throw new HelmError('not_found', `工作流脚本不是常规文件：${path}`, 404, { path })
-      }
-      source = readFileSync(path, 'utf-8')
-    } catch (error) {
-      if (error instanceof HelmError) throw error
-      const err = error as NodeJS.ErrnoException
-      throw new HelmError('not_found', `工作流脚本文件不可读（${err.code ?? 'unknown'}）：${path}`, 404, {
-        path,
-        code: err.code,
-      })
-    }
-    if (source.length > MAX_SCRIPT_LENGTH) {
-      throw new HelmError(
-        'validation_error',
-        `工作流脚本 ${source.length} 字符，超过上限 ${MAX_SCRIPT_LENGTH}`,
-        400,
-        { path },
-      )
-    }
-    return source
-  }
-
-  /** 提取完整 meta（失败回退 undefined，完整校验在引擎 validateScript）。 */
-  private peekMeta(script: string): WorkflowMeta | undefined {
-    try {
-      return extractMeta(script).meta
-    } catch {
-      return undefined
-    }
-  }
-
-  // ------------------------------------------------------------------
-  // state store 读写（单库）
+  // state store 读写（单库；持久化实现位于 run-store）
   // ------------------------------------------------------------------
 
   /**
-   * 写 run 记录（§4.3）：完整 RunRecord 原子落文件（.tmp + fsync + rename），
-   * records doc 只维护轻量索引（id/conversationId/status/createdAt/updatedAt/
-   * notifyParentOnSettle/autoResumeCount/resumedByRunId）。顺序纪律：先读校验
-   * 索引、再写文件、最后更新索引——索引已损坏时绝不继续写文件（避免在未知
-   * 全局状态下覆盖持久事实，徒增不一致面）；文件写失败时索引未动（不会出现
-   * 索引指向缺失文件的中间态；loadRecord 对缺失文件显式报
-   * workflow_record_corrupt，绝不假装记录存在）。
+   * 写 run 记录：活跃 run 的在途子会话以内存 Set 为唯一真源，任何写入
+   * （onResolved 即时 / progress 节流 / 终态）统一从 active 合入
+   * childConversationIds，杜绝用旧 record 副本覆盖掉已登记的子会话事实；
+   * 随后交 run store 原子落文件并更新索引（顺序纪律见 RunStore.write）。
    */
   private writeRecord(record: RunRecord): void {
-    // 活跃 run 的在途子会话以内存 Set 为唯一真源：任何写入（onResolved 即时 /
-    // progress 节流 / 终态）统一从 active 合入 childConversationIds，杜绝用旧
-    // record 副本覆盖掉已登记的子会话事实。
     const active = this.active.get(record.id)
     if (active !== undefined && active.childConversations.size > 0) {
       record.childConversationIds = [...active.childConversations]
     }
-    // 索引损坏在写文件前显式拦下（workflow_index_corrupt）：带着损坏索引继续
-    // 写只会在下一次读取时爆炸，且掩盖了最早的不一致时刻。
-    const index = this.readRunIndex()
-    this.writeRecordFile(record)
-    const entry: RunIndexEntry = {
-      id: record.id,
-      conversationId: record.conversationId,
-      status: record.status,
-      createdAt: record.createdAt,
-      updatedAt: record.updatedAt,
-      ...(record.notifyParentOnSettle === true ? { notifyParentOnSettle: true } : {}),
-      ...(record.autoResumeCount !== undefined ? { autoResumeCount: record.autoResumeCount } : {}),
-      ...(record.resumedByRunId !== undefined ? { resumedByRunId: record.resumedByRunId } : {}),
-    }
-    const at = index.findIndex((candidate) => candidate.id === record.id)
-    if (at >= 0) index[at] = entry
-    else index.push(entry)
-    this.state.set(INDEX_KEY, index)
-  }
-
-  /** 完整 RunRecord 的文件路径（与账本同目录：dataDir/artifacts/<convId>/）。 */
-  private recordPathFor(conversationId: number, runId: string): string {
-    return join(this.artifactsDir(conversationId), `workflow-${runId}.record.json`)
-  }
-
-  /** 原子写完整 RunRecord：同目录临时文件 + fsync + rename（读端任一时刻只见完整旧/新版本）。 */
-  private writeRecordFile(record: RunRecord): void {
-    const dir = this.artifactsDir(record.conversationId)
-    mkdirSync(dir, { recursive: true })
-    const target = this.recordPathFor(record.conversationId, record.id)
-    const tmp = join(dir, `.record-${record.id}-${randomUUID()}.tmp`)
-    try {
-      const fd = openSync(tmp, 'wx', 0o644)
-      try {
-        writeSync(fd, JSON.stringify(record), null, 'utf8')
-        fsyncSync(fd)
-      } finally {
-        closeSync(fd)
-      }
-      renameSync(tmp, target)
-    } catch (error) {
-      try {
-        unlinkSync(tmp)
-      } catch {
-        // 已被 rename 消费或本就不存在
-      }
-      if (error instanceof HelmError) throw error
-      const err = error as NodeJS.ErrnoException
-      throw new HelmError('io_error', `写入工作流运行记录 ${target} 失败：${err.message}`, 500, {
-        path: target,
-        code: err.code,
-      })
-    }
-  }
-
-  private loadRecord(runId: string): RunRecord {
-    // 索引是唯一入口（开发期无迁移：无旧 per-run doc 读取）；索引级故障
-    // 统一 workflow_index_corrupt（与其他全部索引入口同契约），附 runId 上下文。
-    let index: RunIndexEntry[]
-    try {
-      index = this.readRunIndex()
-    } catch (error) {
-      if (error instanceof HelmError && error.code === 'workflow_index_corrupt') {
-        throw new HelmError(
-          error.code,
-          `读取工作流运行 ${runId} 所需的 run 索引失败：${error.message}`,
-          500,
-          { runId, key: INDEX_KEY },
-        )
-      }
-      throw error
-    }
-    const entry = index.find((candidate) => candidate.id === runId)
-    if (entry === undefined) {
-      throw new HelmError('not_found', `工作流运行 ${runId} 不存在`, 404, { runId })
-    }
-    const path = this.recordPathFor(entry.conversationId, runId)
-    let record: unknown
-    try {
-      record = JSON.parse(readFileSync(path, 'utf-8'))
-    } catch (error) {
-      if (error instanceof HelmError) throw error
-      const err = error as NodeJS.ErrnoException
-      if (err.code === 'ENOENT') {
-        // 索引指向但文件缺失：持久层不一致，绝不假账本缺口静默降级。
-        throw new HelmError(
-          'workflow_record_corrupt',
-          `工作流运行 ${runId} 的记录文件缺失（索引指向 ${path}）；请检查 dataDir 完整性`,
-          500,
-          { runId, path },
-        )
-      }
-      throw new HelmError(
-        'workflow_record_corrupt',
-        `读取工作流运行 ${runId} 记录文件失败：${errorMessage(error)}`,
-        500,
-        { runId, path },
-      )
-    }
-    // 先验证是对象再访问 id：null/原始值/数组绝不 record.id TypeError。
-    if (record === null || typeof record !== 'object' || Array.isArray(record)) {
-      throw new HelmError(
-        'workflow_record_corrupt',
-        `工作流运行 ${runId} 记录文件损坏（非对象结构：${Array.isArray(record) ? 'array' : typeof record}）`,
-        500,
-        { runId, path },
-      )
-    }
-    const asRecord = record as Record<string, unknown>
-    if (asRecord['id'] !== runId) {
-      // 索引命中但文件内容 id 篡改：持久层不一致，绝不伪装「不存在」。
-      throw new HelmError(
-        'workflow_record_corrupt',
-        `工作流运行 ${runId} 记录文件损坏（id 不匹配）`,
-        500,
-        { runId, path },
-      )
-    }
-    // 边界形状校验：持久层是外部输入（state.sqlite 命名空间 doc），TS 强转
-    // 会把错误结构当有效摘要。缺关键字段/状态非法即 workflow_record_corrupt
-    // （500），与「run 不存在」的 404 区分；只校验现行 RunRecord 契约，无旧
-    // 格式适配。
-    const problem = runRecordProblem(record)
-    if (problem !== undefined) {
-      throw new HelmError(
-        'workflow_record_corrupt',
-        `工作流运行 ${runId} 持久记录损坏（${problem}）`,
-        500,
-        { runId, problem },
-      )
-    }
-    return record as RunRecord
-  }
-
-  /**
-   * 统一读取并校验 run 索引（list/get/prepare/init/write 全部入口共用）：
-   * store 抛错与形状损坏一律 workflow_index_corrupt（500，带 key 与可辨识
-   * runId），绝不把损坏数据当空数组、绝不让调用方强转后 TypeError。
-   */
-  private readRunIndex(): RunIndexEntry[] {
-    let raw: unknown
-    try {
-      raw = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
-    } catch (error) {
-      throw new HelmError(
-        'workflow_index_corrupt',
-        `读取工作流 run 索引失败：${errorMessage(error)}`,
-        500,
-        { key: INDEX_KEY },
-      )
-    }
-    const broken = runIndexProblem(raw)
-    if (broken !== undefined) throw this.indexCorruptError(broken.runId, broken.problem)
-    return raw as RunIndexEntry[]
-  }
-
-  /** 索引损坏诊断（不自动删索引或记录：修复由人类确认）。 */
-  private indexCorruptError(runId: string, reason: string): HelmError {
-    return new HelmError(
-      'workflow_index_corrupt',
-      `工作流 run 索引损坏（${reason}）；请检查 state store（不自动删除索引或记录）`,
-      500,
-      { key: INDEX_KEY, runId },
-    )
-  }
-
-  /**
-   * 接管标记甄别：ghost=true 表示接管 run 在进程内保留（标记已落盘、快照
-   * 未落盘的并发窗口）、活跃表、run 索引与磁盘（同会话的记录文件与账本
-   * 文件）四面都无任何痕迹——新 run 从未落任何持久事实，允许重接管；
-   * 否则返回不放行原因。接管记录损坏（索引指向但文件不可读/形状非法）
-   * 如实上抛 workflow_record_corrupt：损坏即无法确证无副作用，绝不放行。
-   */
-  private inspectTakeoverMarker(
-    takeoverRunId: string,
-    conversationId: number,
-  ): { ghost: true } | { ghost: false; reason: string } {
-    if (this.takeoverReservations.has(takeoverRunId)) {
-      return { ghost: false, reason: '接管 run 标记已落盘、快照尚未落盘（并发启动窗口）' }
-    }
-    if (this.active.has(takeoverRunId)) return { ghost: false, reason: '接管 run 仍在运行' }
-    try {
-      this.loadRecord(takeoverRunId)
-      return { ghost: false, reason: '接管 run 的记录仍存在' }
-    } catch (error) {
-      if (!(error instanceof HelmError && error.code === 'not_found')) throw error
-    }
-    // 索引已无此 run：磁盘文件是最后的副作用事实（索引缺失可能是损坏/重建，
-    // 文件在即按已产生副作用保守处理）。
-    const traces: string[] = []
-    const recordPath = this.recordPathFor(conversationId, takeoverRunId)
-    const journalPath = this.journalPathFor(conversationId, takeoverRunId)
-    for (const [path, label] of [[recordPath, '记录文件'], [journalPath, '账本']] as const) {
-      try {
-        lstatSync(path)
-        traces.push(`${label} ${path}`)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
-        throw new HelmError('io_error', `无法确认接管运行 ${takeoverRunId} 的${label}：${errorMessage(error)}`, 500, {
-          runId: takeoverRunId, path,
-        })
-      }
-    }
-    if (traces.length > 0) return { ghost: false, reason: `磁盘仍存在接管 run 的${traces.join('、')}` }
-    return { ghost: true }
-  }
-
-  private toSummary(record: RunRecord): WorkflowRunSummary {
-    return {
-      id: record.id,
-      name: record.name,
-      conversationId: record.conversationId,
-      ...(record.kind !== undefined ? { kind: record.kind } : {}),
-      ...(record.savedName !== undefined ? { savedName: record.savedName } : {}),
-      ...(record.description !== undefined ? { description: record.description } : {}),
-      ...(record.phases !== undefined ? { phases: record.phases } : {}),
-      ...(record.parentToolCallId !== undefined && record.parentToolCallId !== ''
-        ? { parentToolCallId: record.parentToolCallId }
-        : {}),
-      status: record.status,
-      createdAt: record.createdAt,
-      updatedAt: record.updatedAt,
-      ...(record.result !== undefined ? { result: record.result } : {}),
-      ...(record.error !== undefined ? { error: record.error } : {}),
-      ...(record.nodes !== undefined ? { nodes: record.nodes } : {}),
-      ...(record.progress !== undefined ? { progress: record.progress } : {}),
-      ...(record.replayedFrom !== undefined ? { replayedFrom: record.replayedFrom } : {}),
-      ...(record.journalIoErrors !== undefined ? { journalIoErrors: record.journalIoErrors } : {}),
-    }
-  }
-
-  /** summary 出口统一逐值脱敏（nodes 里的元数据不能漏 Token）。 */
-  private redactSummaryNodes(summary: WorkflowRunSummary): WorkflowRunSummary {
-    if (summary.nodes === undefined) return summary
-    return { ...summary, nodes: summary.nodes.map((node) => this.redactNode(node)) }
-  }
-
-  /** progress 折叠后的节点元数据逐值脱敏（落库/事件前）。 */
-  private redactNodes(nodes: NonNullable<WorkflowRunSummary['nodes']>): NonNullable<WorkflowRunSummary['nodes']> {
-    return nodes.map((node) => this.redactNode(node))
-  }
-
-  private redactNode(node: NonNullable<WorkflowRunSummary['nodes']>[number]): NonNullable<WorkflowRunSummary['nodes']>[number] {
-    const redacted = redactJsonValue(node, this.redact) as NonNullable<WorkflowRunSummary['nodes']>[number]
-    if (redacted.label !== undefined) redacted.label = this.redact(redacted.label)
-    if (redacted.prompt !== undefined) redacted.prompt = this.redact(redacted.prompt)
-    if (redacted.effectiveCwd !== undefined) redacted.effectiveCwd = this.redact(redacted.effectiveCwd)
-    if (redacted.worktree !== undefined) {
-      redacted.worktree = redactJsonValue(redacted.worktree, this.redact) as NonNullable<WorkflowNodeState['worktree']>
-    }
-    if (redacted.gate !== undefined) {
-      // exitCode/timedOut 是诊断事实（非机密），脱敏时保留不丢。
-      redacted.gate = {
-        ok: redacted.gate.ok,
-        output: this.redact(redacted.gate.output),
-        ...(redacted.gate.exitCode !== undefined ? { exitCode: redacted.gate.exitCode } : {}),
-        ...(redacted.gate.timedOut !== undefined ? { timedOut: redacted.gate.timedOut } : {}),
-      }
-    }
-    if (redacted.gateCommand !== undefined) redacted.gateCommand = this.redact(redacted.gateCommand)
-    if (redacted.model !== undefined) redacted.model = this.redact(redacted.model)
-    if (redacted.error !== undefined) redacted.error = this.redact(redacted.error)
-    if (redacted.output !== undefined) redacted.output = redactJsonValue(redacted.output, this.redact)
-    return redacted
-  }
-
-  // ------------------------------------------------------------------
-  // progress → nodes 折叠（inspect 视图）
-  // ------------------------------------------------------------------
-
-  private nodesFromProgress(progress: readonly WorkflowEntry[]): NonNullable<WorkflowRunSummary['nodes']> {
-    const collapsed = collapse(progress)
-    // agent 与 action 共享同一全序位次：混合调用时必须按 index 升序输出，
-    // 先遍历 agents 再遍历 actions 会把两类节点拆散重排。
-    const merged: Array<{ index: number; node: NonNullable<WorkflowRunSummary['nodes']>[number] }> = []
-    for (const agent of collapsed.agents) {
-      merged.push({
-        index: agent.index,
-        node: {
-          id: `agent-${agent.index}`,
-          kind: 'agent',
-          status:
-            agent.state === 'done'
-              ? 'done'
-              : agent.state === 'error'
-                ? agent.skipped
-                  ? 'skipped'
-                  : 'failed'
-                : agent.queuedAt !== undefined && agent.startedAt === undefined
-                  ? 'pending'
-                  : 'running',
-          ...(agent.cached !== undefined ? { cached: agent.cached } : {}),
-          ...(agent.agentType !== undefined ? { agentType: agent.agentType } : {}),
-          ...(agent.label !== undefined ? { label: agent.label } : {}),
-          ...(agent.nodeId !== undefined ? { nodeId: agent.nodeId } : {}),
-          ...(agent.conversationId !== undefined ? { conversationId: agent.conversationId } : {}),
-          ...(agent.executionId !== undefined ? { executionId: agent.executionId } : {}),
-          ...(agent.effectiveCwd !== undefined ? { effectiveCwd: agent.effectiveCwd } : {}),
-          ...(agent.worktree !== undefined ? { worktree: agent.worktree } : {}),
-          ...(agent.phaseIndex !== undefined ? { phaseIndex: agent.phaseIndex } : {}),
-          ...(agent.phaseTitle !== undefined ? { phaseTitle: agent.phaseTitle } : {}),
-          ...(agent.gateCommand !== undefined ? { gateCommand: agent.gateCommand } : {}),
-          ...(agent.model !== undefined ? { model: agent.model } : {}),
-          ...(agent.attempt !== undefined ? { attempt: agent.attempt } : {}),
-          ...(agent.prompt !== undefined ? { prompt: nodeTextPreview(agent.prompt) } : {}),
-          ...(agent.schema !== undefined ? { schema: agent.schema } : {}),
-          ...(agent.gate !== undefined
-            ? {
-                gate: {
-                  ok: agent.gate.ok,
-                  output: nodeTextPreview(agent.gate.output),
-                  // exitCode/timedOut 是诊断事实（非机密），折叠时保留不丢。
-                  ...(agent.gate.exitCode !== undefined ? { exitCode: agent.gate.exitCode } : {}),
-                  ...(agent.gate.timedOut !== undefined ? { timedOut: agent.gate.timedOut } : {}),
-                },
-              }
-            : {}),
-          ...(agent.tokens !== undefined ? { tokens: agent.tokens } : {}),
-          ...(agent.durationMs !== undefined ? { durationMs: agent.durationMs } : {}),
-          ...(agent.startedAt !== undefined ? { startedAt: agent.startedAt } : {}),
-          ...(agent.lastProgressAt !== undefined ? { settledAt: agent.lastProgressAt } : {}),
-          ...(agent.state === 'done' && agent.resultPreview !== undefined ? { output: agent.resultPreview } : {}),
-          ...(agent.error !== undefined ? { error: nodeTextPreview(agent.error) } : {}),
-        },
-      })
-    }
-    for (const action of collapsed.actions) {
-      merged.push({
-        index: action.index,
-        node: {
-          id: `action-${action.index}`,
-          kind: 'action',
-          label: action.label ?? action.actionId,
-          status:
-            action.state === 'done'
-              ? 'done'
-              : action.state === 'error'
-                ? 'failed'
-                : action.queuedAt !== undefined && action.startedAt === undefined
-                  ? 'pending'
-                  : 'running',
-          ...(action.cached !== undefined ? { cached: action.cached } : {}),
-          ...(action.phaseIndex !== undefined ? { phaseIndex: action.phaseIndex } : {}),
-          ...(action.phaseTitle !== undefined ? { phaseTitle: action.phaseTitle } : {}),
-          ...(action.startedAt !== undefined ? { startedAt: action.startedAt } : {}),
-          ...(action.lastProgressAt !== undefined ? { settledAt: action.lastProgressAt } : {}),
-          ...(action.durationMs !== undefined ? { durationMs: action.durationMs } : {}),
-          ...(action.state === 'done' && action.resultPreview !== undefined ? { output: action.resultPreview } : {}),
-          ...(action.error !== undefined ? { error: nodeTextPreview(action.error) } : {}),
-        },
-      })
-    }
-    merged.sort((a, b) => a.index - b.index)
-    return merged.map((entry) => entry.node)
+    this.runs.write(record)
   }
 
   private assertNotClosed(): void {
     if (this.closed) throw new HelmError('closed', 'WorkflowService 已关闭', 409)
-  }
-
-  /**
-   * 后台 run 恢复所需的在途子会话坐标：childConversationIds 是运行期即时持久
-   * 的权威面；subagentMeta/nodes 坐标是既有冗余投影（子代理路径/终态落盘），
-   * 恢复时合并去重，不做旧格式迁移读取。
-   */
-  private backgroundChildIds(record: RunRecord): number[] {
-    const ids = new Set<number>()
-    for (const id of record.childConversationIds ?? []) ids.add(id)
-    const known = record.subagentMeta?.execution?.conversationId
-    if (known !== undefined) ids.add(known)
-    for (const node of record.nodes ?? []) {
-      if (node.conversationId !== undefined) ids.add(node.conversationId)
-    }
-    return [...ids]
   }
 
   /**
@@ -3396,18 +1706,6 @@ export class WorkflowService {
         `workflow ${run.runId}: child conversation ${conversationId} persist failed: ${errorMessage(error)}\n`,
       )
     }
-  }
-
-  /**
-   * 后台形态判定（恢复语义用）：kind=subagent 恒后台；kind=workflow 仅在
-   * notifyParentOnSettle=true（经工具 background 启动）时按后台恢复——重启后
-   * 其在途子会话须先落 abort 标记（prepareRecovery）再守卫中止，随后
-   * failed(interrupted) 并补发通知，否则后台工作流子会话会遗留。常规同步
-   * workflow（无 notify）沿用账本恢复语义：不中止子会话，报
-   * resumeFromRunId 提示，通知 outbox 与它无关。
-   */
-  private isBackgroundRecord(record: RunRecord): boolean {
-    return record.kind === 'subagent' || record.notifyParentOnSettle === true
   }
 
   /**
