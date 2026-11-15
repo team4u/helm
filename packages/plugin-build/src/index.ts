@@ -18,14 +18,15 @@ export {
   compilePluginClientModule,
   clearClientCompilerMemoryCache,
   readCachedChunk,
-  registerNodeChunkLocation,
-  getNodeChunkText,
-  ensureNodeGlobalImportChunk,
+  safeDirName,
+  safeFileName,
   CLIENT_SHARED_EXTERNALS,
   CLIENT_SHARED_GLOBALS,
   type ClientCompileResult,
   type ClientNpmRoot,
 } from './client-compiler.js';
+// 测试专用入口：Node 进程内执行编译产物时显式安装 chunk 桥（生产编译路径不改写 globalThis）
+export { installNodeChunkBridge } from './node-chunk-bridge.js';
 
 /** 构造默认插件构建端口（client 编译 + 后端 TS 转译；同一 esbuild 实例）。 */
 export function createPluginBuildProvider(): PluginBuildProvider {
