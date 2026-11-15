@@ -85,6 +85,25 @@ test('agent 行携带 execution/gate 落盘可回读，不触发 actionUncertain
   assert.equal(corrupt.actionUncertain, false, 'agent 行损坏不冒充 action 不确定')
 })
 
+test('账本版本/序号损坏和相同 seq 的冲突记录不能掩盖已执行 action', timeout, (t) => {
+  const env = makeEnv(t, async () => 'unused')
+  const path = join(env.dataDir, 'journal-corrupt.jsonl')
+  const agent = { v: 1, seq: 0, type: 'agent', index: 0, key: 'agent', ok: true, text: 'done' }
+  const action = { v: 1, seq: 0, type: 'action', index: 1, key: 'effect', ok: true, result: 'sent' }
+  for (const row of [{ ...action, seq: -1 }, { ...action, v: 2 }, { ...action, seq: null }]) {
+    writeFileSync(path, `${JSON.stringify(row)}\n`)
+    assert.equal(readJournal(path).actionUncertain, true)
+  }
+  writeFileSync(path, `${JSON.stringify(agent)}\n${JSON.stringify(action)}\n`)
+  const conflict = readJournal(path)
+  assert.equal(conflict.actionUncertain, true, '相同 seq 的冲突行不能通过去重丢掉 action')
+  assert.equal(conflict.ioErrors, 1)
+  writeFileSync(path, `${JSON.stringify(agent)}\n${JSON.stringify(agent)}\n`)
+  const duplicate = readJournal(path)
+  assert.equal(duplicate.actionUncertain, false)
+  assert.equal(duplicate.entries.length, 1)
+})
+
 test('redactJournalEntry：text/execution/gate 逐值脱敏，action 行原样透传', timeout, () => {
   const redact = (text: string): string => text.replaceAll('sec', '***')
   const agentEntry: JournalWriteInput = {

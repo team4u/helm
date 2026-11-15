@@ -75,6 +75,7 @@ flowchart TD
 | 悬挂非幂等意图行 | 存在 `action_started`（未标 `idempotent`）且无对应终态行——不论 `seq` 位置 |
 | 损坏行无法判定类型 | 单条损坏但能从残余文本读出完整 `"type":"agent"` 前缀的候选行计 `ioError` 后跳过（诊断暴露、不阻断其余行重放）；其余（含可解析但形状未知的行）一律保守 uncertain |
 | 非幂等动作失败终态 | 存在 `ok: false` 且未标幂等的 action 行（handler 抛错不等于零副作用） |
+| 序号冲突 | 相同 `seq` 对应不同记录，无法安全去重；版本或序号字段非法的 action 行也显式拒绝恢复 |
 | 文件不可读 | 权限或磁盘错误（`journal_read_failed`）；ENOENT 视为正常空账本 |
 
 一旦判定 uncertain，恢复以 `workflow_action_uncertain` 显式拒绝并附账本路径与计数，禁止自动重跑，必须人工确认外部系统实际状态后，从账本移除对应 action 行或放弃 resume。所有失败或中断的动作为幂等时放行断链恢复，从该步起 live 重跑。

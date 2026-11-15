@@ -280,8 +280,9 @@ function isAgentEntry(value: unknown): value is Extract<WorkflowJournalEntry, { 
   if (typeof value !== 'object' || value === null) return false
   const e = value as Record<string, unknown>
   return (
+    e['v'] === 1 && Number.isSafeInteger(e['seq']) && (e['seq'] as number) >= 0 &&
     e['type'] === 'agent' &&
-    Number.isInteger(e['index']) &&
+    Number.isSafeInteger(e['index']) &&
     (e['index'] as number) >= 0 &&
     typeof e['key'] === 'string' &&
     typeof e['ok'] === 'boolean' &&
@@ -303,8 +304,9 @@ function isActionStartedEntry(value: unknown): value is Extract<WorkflowJournalE
   if (typeof value !== 'object' || value === null) return false
   const e = value as Record<string, unknown>
   return (
+    e['v'] === 1 && Number.isSafeInteger(e['seq']) && (e['seq'] as number) >= 0 &&
     e['type'] === 'action_started' &&
-    Number.isInteger(e['index']) &&
+    Number.isSafeInteger(e['index']) &&
     (e['index'] as number) >= 0 &&
     typeof e['key'] === 'string' &&
     (e['idempotent'] === undefined || e['idempotent'] === true)
@@ -315,8 +317,9 @@ function isActionEntry(value: unknown): value is Extract<WorkflowJournalEntry, {
   if (typeof value !== 'object' || value === null) return false
   const e = value as Record<string, unknown>
   return (
+    e['v'] === 1 && Number.isSafeInteger(e['seq']) && (e['seq'] as number) >= 0 &&
     e['type'] === 'action' &&
-    Number.isInteger(e['index']) &&
+    Number.isSafeInteger(e['index']) &&
     (e['index'] as number) >= 0 &&
     typeof e['key'] === 'string' &&
     typeof e['ok'] === 'boolean' &&
@@ -410,8 +413,20 @@ export function readJournal(path: string): JournalReadResult {
 
   const failedActions = entries.filter((e) => e.type === 'action' && !e.ok && e.idempotent !== true).length
 
-  // 落盘顺序稳定化：seq 严格升序（去重：同 seq 以首行为准），index 顺序由前缀
-  // 匹配逻辑按需检查。
+  // 重复序号只有整行一致才可去重。冲突可能丢失已执行的 action，不能把
+  // 去重后的残缺账本当安全前缀再执行副作用。
+  const bySeq = new Map<number, string>()
+  for (const entry of entries) {
+    const serialized = JSON.stringify(entry)
+    const previous = bySeq.get(entry.seq)
+    if (previous !== undefined && previous !== serialized) {
+      corruptUncertain = true
+      ioErrors++
+    }
+    bySeq.set(entry.seq, serialized)
+  }
+  // 落盘顺序稳定化：seq 严格升序，完全相同的重复行只保留一次。
+  // index 顺序由前缀匹配逻辑按需检查。
   entries.sort((a, b) => a.seq - b.seq)
   const deduped: WorkflowJournalEntry[] = []
   let lastSeq = -1
