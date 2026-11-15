@@ -22,7 +22,7 @@
 - 检视或合入后调用 `cleanup_worktree({ worktreeId: execution.worktree.id })`；也可按子会话 ID，或实际 `nodeId` + `path` 清理。先把需要交付的文件用 `register_artifact({ path })` 或目标节点上的 `helm artifacts put <绝对路径> --current` 保存为产物，登记成功后副本不依赖源工作树。未提交修改、未跟踪/被忽略文件、未合入提交及在用工作树默认拒绝清理。`force: true` 仅显式允许丢弃修改，不绕过归属或占用检查。
 - 清理前会探测目标节点上的进程是否仍以工作树或其子目录为 cwd，或持有其中的文件句柄；命中 `worktree_process_in_use` 时，依据返回的 PID 和进程名核对占用。只对已确认属于自己的任务做收尾，不终止其他会话或人类进程。进程探测不支持或不完整时显式拒绝清理，`force: true` 也不能跳过。
 - 只读检视（不执行任何写操作）：`helm worktrees list` 列出全部登记（含已清理记录元数据）；`helm worktrees inspect <worktreeId>` 返回登记元数据 + 目标节点真实 git 只读探测（当前分支/HEAD、未提交文件清单、领先基线提交数、diff 统计与有上限预览；`--conversation-id <id>` / `--path <path> [--node-id <nodeId>]` 可替代选择器）。仅登记记录可检视，不支持任意目录；目录缺失/已清理时如实返回 unavailableReason，git 失败显式报错。
-- CLI：`helm worktrees cleanup --worktree-id <worktreeId> --json`；`--current` 使用当前子会话；`--path <path> --node-id <nodeId>` 精确选择节点目录。`--delete-branch` 同时删除分支（默认保留）。
+- CLI：`helm worktrees cleanup --worktree-id <worktreeId> --json`；`--current` 使用当前子会话；`--path <path> --node-id <nodeId>` 精确选择节点目录。`--delete-branch` 同时删除分支（默认保留）；`--merged-into <ref>` 显式指定已合入的目标分支或提交，未传时优先用登记的 `baseBranch`（父模块分支，已删或未登记则回退主工作树 HEAD）；`--force` 显式允许丢弃未提交修改与未合入提交（不绕过占用、归属、locked 与进程探测检查）。
 - Hub 重启会将中断的后台运行明确标为失败并汇报；需要时凭原 execution 的 resume 标识续接，不自动重新派工或重跑 gate。
 - 中断运行或外部执行失败后，若无法确认底层已停止，持久租约会阻止自动清理（worktree_execution_unknown）；先检查目标节点并续接收尾，或确认停止后通过 helm env exec 在原节点手动执行 Git 清理。force 不绕过此检查。
 

@@ -6,7 +6,9 @@
  * 1. 真实 spawnAgent isolation:'worktree'（agent_spawn continuation 由
  *    builtin:workflow 兜底）：真实隔离树创建、子会话与 gate 在树内执行、
  *    onResolved 回传受管 id；cleanup_worktree 动作默认保留分支。
- * 2. gate 失败 / 模型失败 / 取消后 worktree 与未提交产物保留（防误删回归）。
+ * 2. gate 失败 / 模型失败 / 取消后 worktree 与未提交产物保留直到显式 cleanup
+ *    （防误删回归；gate 失败与 abort 确认原生子会话停止后运行租约按 §1.2
+ *    释放，force 清理可成功）。
  * 3. 子代理运行中（spawn 未 settle）cleanup force:true 仍 worktree_in_use；
  *    settle 后经动作清理成功。
  * 4. 动作边界校验：未知键/多选择器/零选择器/非法类型显式 400（HTTP 动作
@@ -350,23 +352,28 @@ describe('失败路径资源保留（防 continuation 收敛误删回归）', { 
       )
       assert.ok(worktreeOf(resolved), 'gate 失败前 onResolved 已回传 worktree')
       const wtPath = worktreeOf(resolved)!.path
-      // 关键防回归：gate 失败（子会话已 settle）绝不触发回收误删。
+      // 关键防回归：gate 失败（子会话已 settle）绝不触发回收误删；目录与
+      // 未提交产物保留直到显式 cleanup（保护点不因租约释放而消失）。
       assert.ok(existsSync(wtPath), 'gate 失败后 worktree 必须保留（供人类检视）')
       assert.ok(existsSync(join(wtPath, 'wip-artifact.txt')), '子会话未提交产物必须保留')
-      // 失败路径租约 fail-closed：不释放（不能证明停止就不能清理）。
-      await assert.rejects(
-        () => env.invoke.cleanupWorktree({ conversationId: resolved!.conversationId, force: true }),
-        (err: unknown) => {
-          assert.ok(err instanceof HelmError)
-          assert.equal(
-            err.code,
-            'worktree_execution_unknown',
-            `gate 失败后租约未释放，清理应显式拒绝（fail-closed），实得 ${(err as HelmError).code}`,
-          )
-          return true
-        },
-      )
-      assert.ok(existsSync(wtPath), '拒绝清理时目录不得被动')
+      // §1.2 租约释放：gate 失败 = 原生子会话回合以失败收场且宿主确认已
+      // 停止，运行租约应释放（保留 Worktree 记录与子会话映射）；显式 force
+      // 清理不再被 worktree_execution_unknown 阻塞，可成功移除目录。
+      if (PROCESS_SCAN_ON) {
+        const cleaned = await env.invoke.cleanupWorktree({
+          conversationId: resolved!.conversationId,
+          force: true,
+        })
+        assert.equal(cleaned.removed, true, '租约释放后显式 force 清理应成功')
+        assert.equal(cleaned.branchDeleted, false, '默认清理必须保留分支')
+        assert.ok(!existsSync(wtPath), '显式清理后 worktree 目录应被移除（产物随目录丢弃，此前后置为已检视）')
+      } else {
+        // 非 Linux：租约门已过，拒绝只允许来自进程扫描平台限制。
+        await assertCleanupPlatformRejected(() =>
+          env.invoke.cleanupWorktree({ conversationId: resolved!.conversationId, force: true }),
+        )
+        assert.ok(existsSync(wtPath), '非 Linux 拒绝清理时目录不得被移除')
+      }
     } finally {
       await env.close()
     }
@@ -519,16 +526,18 @@ describe('占用中的 worktree 清理保护', { timeout: 60_000 }, () => {
       await assert.rejects(() => pending, (e: unknown) => e instanceof HelmError && e.code === 'aborted')
       await env.kernel.waitForIdle(childId)
 
-      // settle 后（abort 路径租约按 fail-closed 保留）：清理显式
-      // worktree_execution_unknown（不能证明外部执行已停止就不能清理）。
-      await assert.rejects(
-        () => env.invoke.cleanupWorktree({ conversationId: childId, force: true }),
-        (err: unknown) => {
-          assert.ok(err instanceof HelmError)
-          assert.equal(err.code, 'worktree_execution_unknown', `settle 后租约 fail-closed 应保留并拒绝清理，实得 ${(err as HelmError).code}`)
-          return true
-        },
-      )
+      // settle 后（abort 路径：原生子会话回合以失败收场且已确认停止）：
+      // §1.2 运行租约释放，显式 force 清理不再被 worktree_execution_unknown
+      // 阻塞，可成功移除目录（分支默认保留）。
+      if (PROCESS_SCAN_ON) {
+        const cleaned = await env.invoke.cleanupWorktree({ conversationId: childId, force: true })
+        assert.equal(cleaned.removed, true, 'abort 确认停止后租约应释放，force 清理可成功')
+        assert.equal(cleaned.branchDeleted, false, '默认清理必须保留分支')
+        assert.ok(!existsSync(worktreeOf(resolved)!.path), '显式清理后 worktree 目录应被移除')
+      } else {
+        await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ conversationId: childId, force: true }))
+        assert.ok(existsSync(worktreeOf(resolved)!.path), '非 Linux 拒绝清理时目录不得被移除')
+      }
     } finally {
       await env.close()
     }

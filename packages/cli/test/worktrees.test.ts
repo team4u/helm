@@ -40,6 +40,7 @@ const WT_MANIFESTS = [
         path: { type: 'string', description: 'worktree 绝对路径（可附 nodeId 消歧）' },
         nodeId: { type: 'string', description: '目标节点 ID（仅可与 path 搭配）' },
         deleteBranch: { type: 'boolean', description: '同时删除 helm/spawn-* 分支（默认保留）' },
+        mergedInto: { type: 'string', description: '判定未合入的基准 ref（默认用登记 baseBranch，再回退主工作树 HEAD）' },
         force: { type: 'boolean', description: '强制清理（脏工作区默认拒绝）' },
       },
       additionalProperties: false,
@@ -215,6 +216,25 @@ test('--delete-branch/--force 透传 input；--json 原样输出与人类模式�
   }
 })
 
+test('--merged-into 透传 mergedInto 基准 ref；未传时不注入该键（缺省走服务端 baseBranch 优先级）', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startWorktreesHub()
+  const env = makeEnv(hub.url, dir)
+  try {
+    const r = await run(['worktrees', 'cleanup', '--conversation-id', '7', '--merged-into', 'dev', '--json'], env)
+    assert.equal(r.code, 0, r.err)
+    assert.deepEqual(inputOf(hub.hits.at(-1)), { conversationId: 7, mergedInto: 'dev' })
+    assert.deepEqual(JSON.parse(r.out), CLEANUP_OK)
+
+    // 未传 flag：不注入 mergedInto 键（基准由服务端按 mergedInto > baseBranch > 主仓 HEAD 决定）
+    const bare = await run(['worktrees', 'cleanup', '--conversation-id', '7', '--json'], env)
+    assert.equal(bare.code, 0, bare.err)
+    assert.deepEqual(inputOf(hub.hits.at(-1)), { conversationId: 7 })
+  } finally {
+    await hub.close()
+  }
+})
+
 test('未知 flag / 多余位置参数 / --input 互斥拒绝；失败不触达 Hub 动作端点', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const hub = await startWorktreesHub()
@@ -268,6 +288,7 @@ test('服务端错误信封原样透传（脏工作区 409）；帮助列出动�
     assert.equal(help.code, 0)
     assert.match(help.out, /worktrees cleanup/)
     assert.match(help.out, /--delete-branch/)
+    assert.match(help.out, /--merged-into/)
     assert.match(help.out, /--node-id/)
   } finally {
     await hub.close()
