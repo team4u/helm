@@ -53,6 +53,8 @@ import { formatBytes, formatDurationMs, formatFullTimestamp, formatMessageTime }
 export interface OutlineScrollRequest {
   entryId: string
   headingIndex?: number
+  /** 回合内业务卡二级锚：匹配 AssistantTurn 顶层 tool.view 卡 trace 元素的 `data-outline-card-id`（即 tool.key）。 */
+  cardId?: string
   tick: number
 }
 
@@ -413,6 +415,11 @@ function buildToolViewProps(
   }
 }
 
+/** CSS 属性选择器值转义（双引号与反斜杠）；大纲二级锚定位查询用。 */
+function escapeAttrSelectorValue(value: string): string {
+  return value.replace(/["\\]/g, (ch) => `\\${ch}`)
+}
+
 export function TraceRow({
   tool,
   conversationId,
@@ -446,11 +453,15 @@ export function TraceRow({
   // 命中插件 tool.view：replaceRow=true 时插件组件完全替换默认工具行；
   // 未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
   // inline 插件视图保留工具行的原始数据入口，专属展开体仅用于宿主工具。
+  // 顶层业务卡标记 data-outline-card-id（tool.key）：会话大纲二级锚精确定位。
   const toolView = tool.toolView
   const replaceRow = toolView !== undefined && (toolView.spec as ToolViewSpec).replaceRow === true
 
   return (
-    <div className={`trace-entry${rowFailed ? ' trace-entry-error' : ''}`}>
+    <div
+      className={`trace-entry${rowFailed ? ' trace-entry-error' : ''}`}
+      {...(toolView !== undefined ? { 'data-outline-card-id': tool.key } : {})}
+    >
       {toolView !== undefined && replaceRow ? (
         <div className="trace-block">
           <PluginUiView
@@ -1373,7 +1384,14 @@ export function ConversationTimeline({
     stickToBottomRef.current = false
 
     let scrollEl: HTMLElement = targetWrapper
-    if (outlineScrollRequest.headingIndex !== undefined) {
+    if (outlineScrollRequest.cardId !== undefined) {
+      const cardEl = targetWrapper.querySelector<HTMLElement>(
+        `[data-outline-card-id="${escapeAttrSelectorValue(outlineScrollRequest.cardId)}"]`,
+      )
+      if (cardEl !== null) {
+        scrollEl = cardEl
+      }
+    } else if (outlineScrollRequest.headingIndex !== undefined) {
       const headings = targetWrapper.querySelectorAll<HTMLElement>('.msg-ai-body h1, .msg-ai-body h2, .msg-ai-body h3')
       const matchedHeading = headings[outlineScrollRequest.headingIndex]
       if (matchedHeading !== undefined) {

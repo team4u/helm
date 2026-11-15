@@ -10,6 +10,8 @@ import {
 export interface OutlineJumpTarget {
   entryId: string
   headingIndex?: number
+  /** 回合内业务卡二级锚（AssistantTurn 顶层 tool.view 卡的 tool key）。 */
+  cardId?: string
   nodeKey?: string
 }
 
@@ -44,9 +46,11 @@ export interface ConversationOutlinePopoverProps {
 
 /**
  * 会话顶栏「大纲」快速导航浮层（基于 Radix Popover 原语）：
- * - 按时间序列出全部提问回合（#1, #2...）、助手回复内 Markdown 标题（H1~H3）与上下文分割线；
- * - 支持实时关键词检索与「仅看提问 / 含章节标题」切换；
- * - 支持 ↑ / ↓ / Enter 键盘快速跳转，点击或回车后平滑定位并闪烁高亮目标消息。
+ * - 按时间序列出全部提问回合（#1, #2...）、助手回复摘要/Markdown 标题（H1~H3）、
+ *   业务卡（tool.view 顶层卡与 timeline.renderer 接管卡）与上下文分割线；
+ * - 支持实时关键词检索（提问/回复全文、卡片摘要与标题）与「全部 / 仅提问」切换；
+ * - 支持 ↑ / ↓ / Enter 键盘快速跳转，点击或回车后平滑定位并闪烁高亮目标消息
+ *   （标题按 headingIndex、业务卡按 cardId 二级锚精确到具体卡片 DOM）。
  */
 export function ConversationOutlinePopover({
   nodes,
@@ -55,7 +59,7 @@ export function ConversationOutlinePopover({
   triggerLabel = '大纲',
   triggerTitle,
   badgeCount,
-  searchPlaceholder = '搜索提问或章节标题…',
+  searchPlaceholder = '搜索提问、回复与卡片…',
   accessibilityLabel = '会话大纲',
   showModeToggle = true,
   portalled = true,
@@ -67,18 +71,21 @@ export function ConversationOutlinePopover({
 }: ConversationOutlinePopoverProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [includeHeadings, setIncludeHeadings] = useState(true)
+  const [questionsOnly, setQuestionsOnly] = useState(false)
   const [selectedIdx, setSelectedIdx] = useState(0)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
 
   const turnCount = useMemo(() => countOutlineTurns(nodes), [nodes])
   const displayCount = badgeCount ?? turnCount
-  const hasAnyHeadings = useMemo(() => nodes.some((n) => n.kind === 'heading'), [nodes])
+  const hasSubNodes = useMemo(
+    () => nodes.some((n) => n.kind !== 'human' && n.kind !== 'divider'),
+    [nodes],
+  )
 
   const filtered = useMemo(
-    () => filterOutlineNodes(nodes, { query, includeHeadings }),
-    [nodes, query, includeHeadings],
+    () => filterOutlineNodes(nodes, { query, questionsOnly }),
+    [nodes, query, questionsOnly],
   )
 
   // 打开浮层时：默认将键盘焦点索引对齐到当前激活项（若存在），否则置为最后一项（最新提问）或首项。
@@ -107,7 +114,7 @@ export function ConversationOutlinePopover({
   // 搜索词或过滤开关变化时重置选中索引
   useEffect(() => {
     setSelectedIdx(0)
-  }, [query, includeHeadings])
+  }, [query, questionsOnly])
 
   // 键盘移动或初次打开时将选中项滚动进浮层可视区
   useEffect(() => {
@@ -124,6 +131,7 @@ export function ConversationOutlinePopover({
       entryId: node.entryId,
       nodeKey: node.key,
       ...(node.kind === 'heading' ? { headingIndex: node.headingIndex } : {}),
+      ...(node.kind === 'card' && node.cardId !== undefined ? { cardId: node.cardId } : {}),
     })
   }
 
@@ -197,21 +205,21 @@ export function ConversationOutlinePopover({
                 </button>
               ) : null}
             </div>
-            {hasAnyHeadings && showModeToggle ? (
+            {hasSubNodes && showModeToggle ? (
               <div className="segmented-control conversation-outline-mode" role="group" aria-label="大纲层级切换">
                 <button
                   type="button"
-                  className={`segmented-control-btn${includeHeadings ? ' is-active' : ''}`}
-                  aria-pressed={includeHeadings}
-                  onClick={() => setIncludeHeadings(true)}
+                  className={`segmented-control-btn${!questionsOnly ? ' is-active' : ''}`}
+                  aria-pressed={!questionsOnly}
+                  onClick={() => setQuestionsOnly(false)}
                 >
                   全部
                 </button>
                 <button
                   type="button"
-                  className={`segmented-control-btn${!includeHeadings ? ' is-active' : ''}`}
-                  aria-pressed={!includeHeadings}
-                  onClick={() => setIncludeHeadings(false)}
+                  className={`segmented-control-btn${questionsOnly ? ' is-active' : ''}`}
+                  aria-pressed={questionsOnly}
+                  onClick={() => setQuestionsOnly(true)}
                 >
                   仅提问
                 </button>
@@ -278,6 +286,62 @@ export function ConversationOutlinePopover({
                     >
                       <span className="conversation-outline-heading-marker mono">H{node.level}</span>
                       <span className="conversation-outline-item-label">{node.text}</span>
+                    </button>
+                  )
+                }
+
+                if (node.kind === 'assistant') {
+                  const timeText = formatMessageTime(node.createdAt)
+                  return (
+                    <button
+                      key={node.key}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      data-outline-idx={idx}
+                      className={`conversation-outline-item conversation-outline-assistant${isSelected ? ' is-selected' : ''}${isActive ? ' is-current' : ''}`}
+                      title={node.fullText !== '' ? node.fullText : node.label}
+                      onMouseEnter={() => setSelectedIdx(idx)}
+                      onClick={() => triggerSelect(node)}
+                    >
+                      <HelmIcon
+                        name={node.live ? 'loader' : 'sparkles'}
+                        size={11}
+                        className={node.live ? 'spin-slow' : undefined}
+                      />
+                      <span className="conversation-outline-item-label">{node.label}</span>
+                      {node.status === 'failed' ? (
+                        <span className="conversation-outline-status-badge">失败</span>
+                      ) : null}
+                      {timeText !== '' ? (
+                        <span className="conversation-outline-time mono tabular-nums">{timeText}</span>
+                      ) : null}
+                    </button>
+                  )
+                }
+
+                if (node.kind === 'card') {
+                  const cardIcon =
+                    node.status === 'running' ? 'loader' : node.status === 'error' ? 'alert-triangle' : 'layout-grid'
+                  return (
+                    <button
+                      key={node.key}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      data-outline-idx={idx}
+                      {...(node.status !== undefined ? { 'data-status': node.status } : {})}
+                      className={`conversation-outline-item conversation-outline-card${isSelected ? ' is-selected' : ''}${isActive ? ' is-current' : ''}`}
+                      title={node.searchText}
+                      onMouseEnter={() => setSelectedIdx(idx)}
+                      onClick={() => triggerSelect(node)}
+                    >
+                      <HelmIcon
+                        name={cardIcon}
+                        size={11}
+                        className={node.status === 'running' ? 'spin-slow' : undefined}
+                      />
+                      <span className="conversation-outline-item-label">{node.label}</span>
                     </button>
                   )
                 }
