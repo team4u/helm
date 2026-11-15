@@ -19,6 +19,9 @@ export type EditToolResultCheck =
 
 /** 与内核复用同一校验器，避免展示层悄悄接受不同的 Schema 语义。 */
 export function checkEditToolResult(structuredOutput: unknown): EditToolResultCheck {
+  if (structuredOutput === undefined || structuredOutput === null) {
+    return { ok: false, reason: 'toolResult 消息缺少 details（工具未声明 schema 或旧数据未落库）' }
+  }
   try {
     validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, structuredOutput, 'edit 差异结果无效')
     const value = structuredOutput as EditToolResult

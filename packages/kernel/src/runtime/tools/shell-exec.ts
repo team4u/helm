@@ -303,7 +303,7 @@ const bashParameters = obj({
 })
 
 /** bash 工具（SDK defineTool；输出超阈值经 services spill）。 */
-export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bashParameters, never> {
+export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bashParameters> {
   return defineTool({
     name: 'bash',
     description:
@@ -357,10 +357,14 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
         },
         (t) => deps.redact(t),
       )
+      // details 是持久化 UI 通道（structuredOutput 不落库）；不再携带 output——
+      // 文本通道已有同一内容，避免每条 bash 结果双写 spill 预算内的全文。
+      const { output: _uiDropped, ...uiFacts } = structured as Record<string, JsonValue>
       return {
         output: [{ type: 'text', text: spill.text }],
         isError: !result.ok,
         structuredOutput: structured as JsonValue,
+        details: uiFacts as JsonValue,
       }
     },
   })

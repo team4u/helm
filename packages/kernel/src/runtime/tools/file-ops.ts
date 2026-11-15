@@ -42,7 +42,7 @@ const readParameters = obj({
  * 128KiB 上限；远端经 env RPC（canonicalPath 先解析软链，使 lstat 语义的
  * fileInfo 看到真实目标）。
  */
-export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof readParameters, never> {
+export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof readParameters> {
   return defineTool({
     name: 'read',
     description:
@@ -103,9 +103,13 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
           `read-${api.callId}`,
           content,
         )
+        const structured = { path: readR.displayPath, nodeId, content: spill.text } as JsonValue
         return {
           output: [{ type: 'text', text: spill.text }],
-          structuredOutput: { path: readR.displayPath, nodeId, content: spill.text } as JsonValue,
+          structuredOutput: structured,
+          // details 是 SDK 持久化到 toolResult 消息的 UI 通道（structuredOutput 不落库，
+          // 仅供嵌套调用方）；文本通道已携带内容，不重复存 content，避免双写。
+          details: { path: readR.displayPath, nodeId } as JsonValue,
         }
       } catch (error) {
         return {
@@ -135,7 +139,7 @@ const editTextNotUnique = (abs: string, count: number): string =>
 const editOkText = (abs: string, nodeId: string): string => `edit_ok: ${abs}（节点 ${nodeId}，已替换 1 处）`
 
 /** write 工具：按会话 (nodeId, cwd) 靶点写入文本文件（路径与 bash 同权，不设 cwd 沙箱）。 */
-export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof writeParameters, never> {
+export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof writeParameters> {
   return defineTool({
     name: 'write',
     description:
@@ -189,6 +193,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
                 bytesWritten: bytes,
                 artifactId: meta.id,
               } as JsonValue,
+              details: { path: targetAbs, nodeId, bytesWritten: bytes, artifactId: meta.id } as JsonValue,
             }
           }
           return {
@@ -196,6 +201,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
               { type: 'text' as const, text: `write_ok: ${targetAbs}（节点 ${nodeId}，${bytes} 字节）` },
             ],
             structuredOutput: { path: targetAbs, nodeId, bytesWritten: bytes } as JsonValue,
+            details: { path: targetAbs, nodeId, bytesWritten: bytes } as JsonValue,
           }
         }
 
@@ -251,11 +257,13 @@ function countOccurrences(haystack: string, needle: string): number {
  * 或出现多次均显式报错，绝不模糊替换或静默跳过）；newText 按字面替换写入
  * （不解释 $& 系替换模式，与「精确替换」契约及差异展示一致）；替换后写回
  * 原文件；路径解析与 write 同契约（与 bash 同权，不设 cwd 沙箱）。成功结构
- * 化输出为 @helm/protocol EditToolResult：差异在 canonical 互斥锁内、写盘前
+ * 化输出为 @helm/protocol EditToolResult，并同步镜像到 details（SDK 持久化
+ * 到 toolResult 消息的 UI 通道，Web 差异展示读它；structuredOutput 不落库，
+ * 仅供嵌套调用方）：差异在 canonical 互斥锁内、写盘前
  * 基于实读内容计算（computeEditDiff 抛错则 edit_failed 且文件未被修改），
  * 仅在写入成功后返回。
  */
-export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof editParameters, never> {
+export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof editParameters> {
   return defineTool({
     name: 'edit',
     description:
@@ -310,14 +318,18 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
             deps.redact,
           )
           await envR.env.writeFile(target.abs, updated, context)
+          const structured = {
+            path: target.abs,
+            nodeId,
+            replaced: true,
+            diff,
+          } satisfies EditToolResult as unknown as JsonValue
           return {
             output: [{ type: 'text', text: editOkText(target.abs, nodeId) }],
-            structuredOutput: {
-              path: target.abs,
-              nodeId,
-              replaced: true,
-              diff,
-            } satisfies EditToolResult as unknown as JsonValue,
+            structuredOutput: structured,
+            // Web 时间线的差异展示读持久化 details 通道（structuredOutput 不落库）；
+            // 两通道同值，展示层只依赖 EDIT_TOOL_RESULT_SCHEMA 一份契约。
+            details: structured,
           }
         }, context)
       } catch (error) {

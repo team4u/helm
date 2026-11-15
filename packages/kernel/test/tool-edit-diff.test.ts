@@ -551,6 +551,9 @@ describe('edit 工具：local 真实差异结构化输出', { timeout: 60_000 },
     )
     assert.equal(!!result.isError, false)
     const structured = assertSchemaValid(result.structuredOutput)
+    // details 是持久化 UI 通道（Web 差异展示读它），必须与 structuredOutput
+    // 同值且同样符合协议 Schema。
+    assert.deepEqual(assertSchemaValid(result.details), structured)
     assert.equal(structured.path, file)
     assert.equal(structured.nodeId, 'local')
     assert.equal(structured.replaced, true)
@@ -604,6 +607,8 @@ describe('edit 工具：local 真实差异结构化输出', { timeout: 60_000 },
     const serialized = JSON.stringify(structured)
     assert.ok(!serialized.includes('hunter2-super-secret'), '序列化结果不得包含秘密')
     assert.ok(serialized.includes('[REDACTED]'))
+    // details 镜像同一脱敏后的对象：持久化 UI 通道同样不泄漏。
+    assert.ok(!JSON.stringify(result.details).includes('hunter2-super-secret'), 'details 不得包含秘密')
     // 含秘密的巨长行被截断显示：预算生效且统计完整。
     assert.equal(structured.diff.truncated, true)
     assert.equal(structured.diff.removedLines, 1)

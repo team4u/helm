@@ -64,6 +64,8 @@ describe('write 工具登记产物特性', { timeout: 60_000 }, () => {
     assert.equal(structured.nodeId, 'local')
     assert.equal(structured.bytesWritten, 11)
     assert.equal(structured.artifactId, undefined)
+    // details 持久化 UI 通道与 structuredOutput 同值（Web 写入字节/产物展示读它）。
+    assert.deepEqual(res.details, structured)
     assert.equal(readFileSync(noteAbs, 'utf8'), 'hello world')
     // 产物仓库应为空
     assert.equal((await artifacts.list(1)).length, 0)

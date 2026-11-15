@@ -62,7 +62,7 @@ export interface ToolTrace {
   durationMs?: number
   /** 输出中检测到的产物引用（内核超长 Spill 标记 / art_ 前缀），供「打开完整产物」按钮。 */
   artifactRef?: string
-  /** 工具结构化输出（声明 structuredOutputSchema 的工具结果）；未声明或未落库时省略。 */
+  /** 工具结构化结果的持久化视图（toolResult 消息的 details 通道；声明 structuredOutputSchema 的工具在成功结果携带）；未声明或未落库时省略。 */
   structuredOutput?: unknown
   /** 命中插件 tool.view（如 dispatch_worker）：豁免折叠，直接渲染业务卡片。 */
   toolView?: QualifiedToolView
@@ -645,14 +645,18 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
   for (let mi = 0; mi < model.length; mi++) {
     const msg = model[mi]
     if (msg === null || typeof msg !== 'object') continue
-    const m = msg as { role?: unknown; toolCallId?: unknown; toolName?: unknown; content?: unknown; isError?: unknown; durationMs?: unknown; structuredOutput?: unknown }
+    const m = msg as { role?: unknown; toolCallId?: unknown; toolName?: unknown; content?: unknown; isError?: unknown; durationMs?: unknown; details?: unknown }
     if (m.role !== 'toolResult' && m.role !== 'tool') continue
     const callId = typeof m.toolCallId === 'string' ? m.toolCallId : undefined
     const toolName = typeof m.toolName === 'string' ? m.toolName : '(unknown tool)'
     const resultText = contentTextOf(m.content)
     const isError = m.isError === true
     const durationMs = typeof m.durationMs === 'number' && Number.isFinite(m.durationMs) ? m.durationMs : undefined
-    const structuredOutput = m.structuredOutput
+    // 结构化结果的持久化通道是 toolResult 消息的 details（pi-durable 不把
+    // structuredOutput 写入会话条目，它只给嵌套调用方）；非对象值不采纳。
+    const details = m.details
+    const structuredOutput =
+      details !== null && typeof details === 'object' && !Array.isArray(details) ? details : undefined
     if (callId !== undefined) {
       let paired = false
       for (let i = acc.segments.length - 1; i >= 0; i--) {

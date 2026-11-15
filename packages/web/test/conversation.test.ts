@@ -77,7 +77,7 @@ function toolResultEntry(
   id: string,
   callId: string,
   toolName: string,
-  opts: { isError?: boolean; text?: string; durationMs?: number } = {},
+  opts: { isError?: boolean; text?: string; durationMs?: number; details?: unknown } = {},
 ): ConversationEntry {
   return entry(id, 'pi.tool-result', {
     model: [
@@ -88,6 +88,7 @@ function toolResultEntry(
         content: opts.text !== undefined ? [{ type: 'text', text: opts.text }] : [],
         isError: opts.isError === true,
         ...(opts.durationMs !== undefined ? { durationMs: opts.durationMs } : {}),
+        ...(opts.details !== undefined ? { details: opts.details } : {}),
       },
     ],
   })
@@ -171,6 +172,7 @@ test('toolCall + toolResult 按 callId 配对：状态、isError、耗时与结�
   assert.equal(traces[0]!.isError, false)
   assert.equal(traces[0]!.resultText, '文件内容')
   assert.equal(traces[0]!.durationMs, 120)
+  assert.equal(traces[0]!.structuredOutput, undefined, '无 details 时不得伪造结构化结果')
   assert.equal(traces[1]!.toolName, 'bash')
   assert.equal(traces[1]!.status, 'error')
   assert.equal(traces[1]!.isError, true)
@@ -178,6 +180,34 @@ test('toolCall + toolResult 按 callId 配对：状态、isError、耗时与结�
   const turn = items.find((i) => i.kind === 'assistant')!
   assert.ok(turn.kind === 'assistant')
   assert.ok(turn.segments.some((s) => s.kind === 'text' && s.text === '先看文件'))
+})
+
+test('toolResult 消息的 details 映射为结构化结果；非对象值不采纳', { timeout: 60_000 }, () => {
+  const editMeta = {
+    path: '/abs/a.ts',
+    nodeId: 'local',
+    replaced: true,
+    diff: {
+      rows: [{ kind: 'add' as const, newLine: 2, text: 'x' }],
+      addedLines: 1,
+      removedLines: 0,
+      firstChangedLine: 2,
+      truncated: false,
+    },
+  }
+  const items = buildTimelineItems([
+    assistantEntry('1', [toolCallBlock('c1', 'edit', { path: 'a.ts' })]),
+    assistantEntry('2', [toolCallBlock('c2', 'bash', { command: 'ls' })]),
+    assistantEntry('3', [toolCallBlock('c3', 'bash', { command: 'pwd' })]),
+    toolResultEntry('4', 'c1', 'edit', { text: 'edit_ok', details: editMeta }),
+    toolResultEntry('5', 'c2', 'bash', { text: 'ok', details: 'not-an-object' }),
+    toolResultEntry('6', 'c3', 'bash', { text: 'ok', details: [{ array: true }] }),
+  ])
+  const traces = collectToolTraces(items)
+  assert.equal(traces.length, 3)
+  assert.deepEqual(traces[0]!.structuredOutput, editMeta, 'details 对象进入 ToolTrace.structuredOutput')
+  assert.equal(traces[1]!.structuredOutput, undefined, '字符串 details 不采纳')
+  assert.equal(traces[2]!.structuredOutput, undefined, '数组 details 不采纳')
 })
 
 test('未配对的孤儿 toolResult 生成独立工具行', { timeout: 60_000 }, () => {

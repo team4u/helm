@@ -13,11 +13,13 @@ import {
   fauxProvider,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { Ajv } from 'ajv'
+import { EDIT_TOOL_RESULT_SCHEMA, type EditToolResult } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import {
   ArtifactService,
@@ -361,6 +363,11 @@ describe('read 工具真实文件行为', { timeout: 60_000 }, () => {
     assert.equal(!!result.isError, false)
     const structured = result.structuredOutput as { content: string }
     assert.ok(structured.content.includes('# 标题'))
+    // details 是持久化 UI 通道：只携带事实元数据，不双写 content。
+    const details = result.details as { path?: string; nodeId?: string; content?: string }
+    assert.equal(typeof details.path, 'string')
+    assert.equal(details.nodeId, 'local')
+    assert.equal('content' in details, false)
   })
 
   it('../ 跨目录与 cwd 外绝对路径读取成功（与 bash 同权）', { timeout: 60_000 }, async () => {
@@ -593,6 +600,12 @@ describe('bash 工具（SDK execute 直调，真实服务依赖）', { timeout: 
     const structured = result.structuredOutput as { ok: boolean; output: string }
     assert.equal(structured.ok, true)
     assert.ok(structured.output.includes('hello-tools'))
+    // details 持久化 UI 通道：保留执行事实，不再携带 output 文本。
+    const details = result.details as Record<string, unknown>
+    assert.equal(details['ok'], true)
+    assert.equal(details['exitCode'], 0)
+    assert.equal(details['timedOut'], false)
+    assert.equal('output' in details, false)
   })
 
   it('失败命令 isError 如实；timeoutMs 非法值显式拒绝', { timeout: 60_000 }, async () => {
@@ -648,6 +661,45 @@ describe('SDK 真实链路（faux 模型驱动工具调用）', { timeout: 60_00
       // 真实 read_artifact 链路读回（授权链允许会话 1）
       const content = await kernel.services.artifacts.readContent(spill!.id)
       assert.ok(content.includes('BBBBB'))
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('edit 差异经真实 harness 落库为 toolResult 消息 details（Web 差异展示的持久化通道）', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'sdk3')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'code.ts'), 'alpha\nbeta\n')
+    const kernel = (await openRuntime(dir)) as never as ReturnType<typeof openRuntime> & {
+      __faux: FauxHandle
+      close(): Promise<void>
+      submitInput(id: number, text: string): Promise<unknown>
+      waitForIdle(id: number): Promise<void>
+      getConversationDetail(id: number): Promise<{ entries: Array<{ kind: string; model?: unknown[] }> }>
+    }
+    try {
+      kernel.__faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('edit', { path: 'code.ts', oldText: 'beta', newText: 'BETA' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('完成'),
+      ])
+      await kernel.submitInput(1, '改文件')
+      await kernel.waitForIdle(1)
+      assert.equal(readFileSync(join(dir, 'code.ts'), 'utf8'), 'alpha\nBETA\n')
+      const detail = await kernel.getConversationDetail(1)
+      const messages = detail.entries
+        .filter((e: { kind: string; model?: unknown[] }) => e.kind === 'pi.tool-result')
+        .flatMap((e: { kind: string; model?: unknown[] }) => ((e.model ?? []) as Array<Record<string, unknown>>))
+      const editMessage = messages.find((m: Record<string, unknown>) => m['toolName'] === 'edit')
+      assert.ok(editMessage, '应有 edit 的 toolResult 消息')
+      // SDK 契约：structuredOutput 不写入会话条目（只给嵌套调用方）——持久化
+      // UI 通道是 details，Web 差异展示读它（回归：曾全部读不到导致无法展示差异）。
+      assert.equal('structuredOutput' in editMessage!, false)
+      const validate = new Ajv({ allErrors: true, strict: false }).compile<EditToolResult>(EDIT_TOOL_RESULT_SCHEMA)
+      assert.ok(validate(editMessage!['details']), `details 应符合 EDIT_TOOL_RESULT_SCHEMA：${JSON.stringify(validate.errors)}`)
+      assert.equal((editMessage!['details'] as EditToolResult).diff.addedLines, 1)
     } finally {
       await kernel.close()
     }
