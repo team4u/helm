@@ -52,13 +52,14 @@ return { reports: reports.filter(report => report !== null) }
 
 - `meta`：必须是纯字面量对象（`export const meta = { name, description, phases? }`，phases 为 `[{ title, detail?, model? }]`）；禁止模板串/变量/函数调用。
 - `args`：运行时经 `--args` 或工具入参传入的 JSON（对象/数组/标量，经反序列化注入；缺省 undefined，可自由约定形状）。
-- `agent(prompt, opts?)`：调用同一子代理执行接口并等待真实结果；opts 为 `{ label?, phase?, model?, agentType?, isolation?("worktree"), gate?, resume?, effort?, schema?, attachments?, secretNames?, maxSubagentDepth? }`。脚本用 pipeline/parallel 表达并发，节点不提前返回后台句柄。
+- `agent(prompt, opts?)`：调用同一子代理执行接口并等待真实结果；opts 为 `{ label?, phase?, model?, agentType?, isolation?("worktree"), gate?, resume?, effort?, schema?, attachments?, maxSubagentDepth?, cwd?, timeoutMs?, gateTimeoutMs?, maxAttempts? }`（机密授予 `secretNames` 是独立 `subagent` 工具的参数，不是 DSL 选项）。脚本用 pipeline/parallel 表达并发，节点不提前返回后台句柄。
 - `pipeline(items, ...stages)`：对每个 item 依序过全部 stage（同一 item 串行、不同 item 并行），单条失败该项置 null 不炸全局；优先于 parallel 组织批量任务。
 - `parallel(thunks)`：全量并发，单项失败置 null。
 - `action(actionId, input?, opts?)`：零 Token 确定性调用宿主动作总线（`pluginId.actionId` 全限定或无冲突短名；输入输出经 schema 校验；opts 支持 `{ idempotent?, label?, phase? }`）。
   - 内建跨节点命令动作：`action("env.exec", { command, cwd?, nodeId?, env?, timeoutMs?, allowFailure? }, { idempotent?, label?, phase? })`（无冲突时可用短名 `"exec"`），底层复用内核 EnvFabric 跨节点通道、SecretStash 机密注入与脱敏，返回 `{ ok, exitCode, output, timedOut }`。
+- `agent.withMeta(prompt, opts?)` / `goal(spec)`：与 `agent()` 同参数面，但返回 `{ ok, output, attempts, error?, timedOut?, execution?, gate? }`；`goal` 以 `objective` 为提示词、`maxAttempts` 缺省 3，配合 `gate` / `timeoutMs` 做门禁与超时自动重试（同一子会话原地续接，`output` 恒为字符串，`schema` 只负责校验不代为解析）。
 - `phase(title)` / `log(message)`：进度标注与日志。
-- `workflow(ref, args?)`：按名或 `{ scriptPath }` 嵌套子工作流（仅一层深）。
+- `workflow(ref, args?)`：按名或 `{ scriptPath }` 嵌套子工作流（最深 4 层，根为第 0 层；整棵树共用同一账本与递增 callIndex，可对根 runId 一次断点续跑）。
 - `budget.spent()`：已消耗输出字节；`budget.total` 为 null、`budget.remaining()` 为 Infinity，不能据此承诺成本预算。
 - `schema` 用于验证子代理结果，`gate` 在子代理实际工作目录中运行 shell 命令；非零退出表示失败。批量结果需检查 null，不能把部分失败汇报成全部完成。
 

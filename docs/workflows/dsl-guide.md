@@ -50,14 +50,13 @@ helm workflows run ./review.js --args '{"pr": 1024, "strict": true}'
 | `effort` | `string` | 思考力度：`minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
 | `schema` | `object` | 结构化输出的 JSON Schema |
 | `attachments` | `string[]` | 本次调用携带的产物 ID 列表 |
-| `secretNames` | `string[]` | 显式授予外部运行时（如 `herdr:` 窗格）注入的父会话机密环境变量名列表。缺省不携带任何父会话机密；名字需为合法环境变量名且在父会话 stash 内现存（缺失显式报错）；仅外部运行时消费，原生 Profile 子会话不支持——非空授予到达原生执行行显式报错 `unsupported_secret_grant`（空数组等同未授予）；按次授予，resume 不自动沿用；字段参与恢复缓存指纹 |
 | `maxSubagentDepth` | `number` | 相对任务树根的绝对子代理层级上限（1..5 整数；默认继承上限 2，根会话为第 0 层）。根会话可为大任务提高上限；受管子代理不得提高继承上限。续接未传时保留授权，显式设置重新校验；字段参与恢复缓存指纹 |
 | `cwd` | `string` | 子代理工作目录（跨平台绝对路径）。不带 `isolation` 时直接在该目录运行；带 `isolation: 'worktree'` 时从该目录切出子级 Worktree。字段参与恢复缓存指纹 |
 | `timeoutMs` | `number` | 单回合超时毫秒数（1_000 .. 3_600_000 整数）。超时中止子会话并按失败返回；只限制执行时限，不改变调用身份，不记入恢复缓存 Key |
 | `gateTimeoutMs` | `number` | 单次门禁命令超时毫秒数（1_000 .. 600_000 整数，默认 120_000）。仅在设置 `gate` 时有效 |
 | `maxAttempts` | `number` | 失败自动重试次数上限（1 .. 10 整数，默认 1）。配合 `gate` 或 `timeoutMs` 使用；需要 `label`，未传时自动生成 |
 
-选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort`、`cwd` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置；`resume` 沿用原会话的工作目录，不能用 `cwd` 改指他处，需要换目录就新建节点），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, secretNames, maxSubagentDepth, cwd, timeoutMs, gateTimeoutMs, maxAttempts`。
+选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort`、`cwd` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置；`resume` 沿用原会话的工作目录，不能用 `cwd` 改指他处，需要换目录就新建节点），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, maxSubagentDepth, cwd, timeoutMs, gateTimeoutMs, maxAttempts`。注意机密授予（`secretNames`）不是 DSL 选项——它是独立 `subagent` 模型工具的参数，工作流脚本里的子代理统一经 `env` 预置或 SecretStash 动作获取机密。
 
 **结构化输出**：配置 `schema` 时宿主为子智能体挂载结构化契约，引擎解析其 JSON 回复并按 Schema 校验，通过则返回原生对象，不通过（非 JSON 或不合契约）返回 `null`：
 
@@ -130,7 +129,9 @@ if (!res.ok) throw new Error(`重试 ${res.attempts} 次后未通过: ${res.erro
 const wt = res.execution?.worktree  // { id, path, branch, ... }，后续可据此合入或清理
 ```
 
-**`maxAttempts` 重试语义**：第 1 次尝试因门禁失败、门禁超时或回合超时而失败，且已取得子会话 ID 时，引擎自动以 `resume: label` 携带失败原因与报错输出续跑，最多执行 `maxAttempts` 次。重试沿用同一子会话与同一 Worktree，不重建隔离树。每次尝试在账本中各占一条独立 `index` 记录；进程重启后 `resumeFromRunId` 直接跳过已完成的尝试。失败分支同样保留 `execution`（含 Worktree 描述）与 `gate` 结果，脚本可据此决定人工介入或清理。
+**`maxAttempts` 重试语义**：第 1 次尝试因门禁失败、门禁超时或回合超时而失败，且已取得子会话 ID 时，引擎自动以 `resume: label` 携带失败原因与报错输出续跑，最多执行 `maxAttempts` 次。重试沿用同一子会话与同一 Worktree，不重建隔离树；第 2 次起的提示词为原文追加 `[attempt N failed]` 失败块（失败原因先经宿主脱敏再生成重试提示词与账本 Key）。失败分支同样保留 `execution`（含 Worktree 描述）与 `gate` 结果，脚本可据此决定人工介入或清理；只有带执行句柄（`conversationId` / `executionId`）的失败才能作为续接锚点，无句柄的失败不可续接。
+
+重试与恢复的账本细节（每次尝试各占一条独立 `index` 记录、进度条目仍按所属调用稳定折叠、耗尽 `maxAttempts` 的失败目标在重放时如实回放失败、默认 `maxAttempts: 1` 的失败行照旧断链转 live）见[状态流水与故障恢复](journaling-recovery.md)。
 
 ### `parallel(thunks)` 与 `pipeline(items, ...stages)`
 
@@ -218,6 +219,8 @@ if (diff.ok) log(diff.output)
 脚本含控制字符（制表符、回车、换行除外）会在编译前被拒绝。单个 Run 的并发子代理数由插件配置 `maxConcurrentAgents` 控制（`1 .. 128`，缺省 `max(2, min(32, CPU 核数 × 2))`），超出并发的调用在信号量上排队。经 `workflow()` 调用的子工作流共用当前 Run 的信号量；子代理在回合内经工具同步派发的子任务使用独立信号量。这样父节点不会占着槽位等子节点完成，子节点也不会在队列外等父节点释放槽位。
 
 ## 完整示例
+
+可运行的端到端脚本位于 `docs/workflows/examples/`（`cross-review.js` 多视角交叉审查、`module-dev.js` 单模块开发、`arch-master.js` 多模块总控），覆盖本节的 `goal` 重试、幂等 Git 合并、`workflow()` 多级嵌套与 null 显式处理等策略分支，配套回归见 `packages/plugins/test/workflow-examples.test.ts`。
 
 ```javascript
 export const meta = {

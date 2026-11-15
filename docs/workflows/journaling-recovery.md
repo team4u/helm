@@ -16,13 +16,13 @@
 
 | `type` | 语义 | 关键字段 |
 | :--- | :--- | :--- |
-| `agent` | 智能体调用终态 | `index`, `key`, `ok`, `text`（成功时的回复文本）, `resumed?`, `execution?`（执行信息，含 worktree 描述；落盘前脱敏）, `gate?`（`AgentGateResult`） |
+| `agent` | 智能体调用终态（每次尝试各占一行） | `index`（本次尝试的独立位次）, `key`, `ok`, `text`（成功时的回复文本）, `attempt?`（尝试序号）, `invocationIndex?`（所属调用的首位次，并发下重试槽位按它对齐）, `prompt?`（本次尝试的实际提示词，已脱敏）, `error?`（失败原因，已脱敏）, `timedOut?`, `resumed?`, `skipped?`, `retryKind?: 'manual'`（人工控制台重试）, `execution?`（执行信息，含 worktree 描述）, `gate?`（`AgentGateResult`） |
 | `action_started` | 动作执行意图（先于 handler 落盘） | `index`, `key`, `idempotent?` |
 | `action` | 动作调用终态 | `index`, `key`, `ok`, `result` / `error`, `idempotent?` |
 
 `index` 是调用发起位次（agent 与 action 共享同一全序，并发完成顺序不影响分配）；`seq` 是落盘物理单调序号（恢复时按 `index` 前缀校验、按 `seq` 去重）；`key` 是调用载荷的哈希摘要。
 
-**Key 计算**（SHA-256，取 32 位十六进制）：agent 的 Key 覆盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`attachments`（原样序列化，不去重不排序——ID 或次序变化都是不同调用；未提供与空数组语义不同，不归一化）、`schema` 的序列化形式、`maxSubagentDepth`（派工上限）、`secretNames`（机密授予）与 `cwd`（工作目录），采用带版本标记的固定槽 canonical 形态（新增字段只追加在版本号之后，杜绝槽位碰撞）。`timeoutMs` 与 `gateTimeoutMs` 只限制执行时限，不改变调用身份，不记入 Key；`maxAttempts` 的每次尝试各占一条独立 `index` 记录，不做归并。action 的 Key 覆盖全限定 `actionId` 与序列化后的输入。任何参数微调都会改变 Key，防止误用过期缓存。
+**Key 计算**（SHA-256，取 32 位十六进制）：agent 的 Key 覆盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`attachments`（原样序列化，不去重不排序——ID 或次序变化都是不同调用；未提供与空数组语义不同，不归一化）、`schema` 的序列化形式、`maxSubagentDepth`（派工上限）、`secretNames`（机密授予槽；DSL `agent()` 不支持该选项，此槽仅预留恒为空占位）与 `cwd`（工作目录），采用带版本标记的固定槽 canonical 形态（新增字段只追加在版本号之后，杜绝槽位碰撞）。`timeoutMs` 与 `gateTimeoutMs` 只限制执行时限，不改变调用身份，不记入 Key；`maxAttempts` 的每次尝试各占一条独立 `index` 记录，不做归并。action 的 Key 覆盖全限定 `actionId` 与序列化后的输入。任何参数微调都会改变 Key，防止误用过期缓存。自动重试的失败原因先经宿主脱敏，再生成本次尝试的重试提示词（原文追加 `[attempt N failed]` 失败块）与 Key——重试提示词不同，每次尝试的 Key 也不同。
 
 当前 Key 版本为 **v3**：在 v2 的固定槽上无条件追加 `cwd` 槽。无条件占位使升版后全部调用 Key 与旧账本失配（含未携带 `cwd` 的调用）。开发阶段不做迁移：旧账本安全降级为断链重跑，不存在「未携带新字段则 Key 不变」的兼容承诺。
 
@@ -35,6 +35,8 @@
 两类特殊失配的守卫：伪造或不一致的缓存行拒绝——`resumed` 标记必须与本次调用是否 resume 严格对应；重放命中的行若带 `schema`，还会用当前契约复检一次。前缀失配后命中「仅存在于账本缓存」的 resume 目标时显式失败（无活会话可续接，绝不伪造 live 续接）。
 
 重放命中 `agent` 行时，`agent.withMeta` 与 `goal` 从账本还原该行的 `execution`（含 Worktree 描述）与 `gate` 字段，脚本可继续对该 Worktree 执行合入或清理。多级工作流的 `label` 以 `${scopeId}:${label}` 登记（见 DSL 手册的 `workflow()` 一节）：同名 `label` 在不同子工作流内是不同节点，前缀匹配按各自的 Key 逐项比对，整棵树对根 `runId` 一次续跑。
+
+**尝试链的重放**：`maxAttempts` 的每次尝试各占一条独立 `index` 行；`invocationIndex` 记录所属调用的首位次，并发下重试槽位按它还原（不会因别的调用插队错位），进度树也按它把同一调用的多次尝试折叠为稳定节点身份。账本终态齐全时整份重放零执行：已成功的尝试直接复用结果；进程重启后从最后一次尝试继续——已失败的尝试行按 `attempt` 链重放登记，下次尝试从最后失败处续接同一子会话。目标已耗尽 `maxAttempts` 仍失败时，重放如实回放失败（`goal` / `agent.withMeta` 拿到 `ok: false` 与历次 `error`），不重跑也不伪装成功；未配置重试（默认 `maxAttempts: 1`）的失败行保持旧语义：不作为成功前缀，断链后转 live 重试。只有带执行句柄（`execution.conversationId` / `executionId`）的失败行才能作为续接锚点，无句柄的失败不可续接。
 
 ## Agent 尽力记账 vs Action 强一致
 
@@ -71,7 +73,7 @@ flowchart TD
 | 触发情形 | 说明 |
 | :--- | :--- |
 | 悬挂非幂等意图行 | 存在 `action_started`（未标 `idempotent`）且无对应终态行——不论 `seq` 位置 |
-| 损坏行无法判定类型 | 只有能从残余文本读出完整 `"type":"agent"` 前缀才归为 agent 行（计 ioError），其余一律保守 uncertain |
+| 损坏行无法判定类型 | 单条损坏但能从残余文本读出完整 `"type":"agent"` 前缀的候选行计 `ioError` 后跳过（诊断暴露、不阻断其余行重放）；其余（含可解析但形状未知的行）一律保守 uncertain |
 | 非幂等动作失败终态 | 存在 `ok: false` 且未标幂等的 action 行（handler 抛错不等于零副作用） |
 | 文件不可读 | 权限或磁盘错误（`journal_read_failed`）；ENOENT 视为正常空账本 |
 
