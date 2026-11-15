@@ -7,9 +7,31 @@ import { matchTimelineEntryActions, timelineEntryActionContextOf } from './actio
 import { MarkdownView } from './MarkdownView.js'
 import { StepGroup, TraceRow } from './TimelineRows.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'
-import { isAssistantTurnBusy, type AssistantTurn } from './timeline-model.js'
+import { isAssistantTurnBusy, assistantModelFullLabel, assistantModelShortLabel, type AssistantModelIdentity, type AssistantTurn } from './timeline-model.js'
 import { formatDurationMs, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
 import { Tooltip } from '../ui/Tooltip.js'
+
+// ---------------------------------------------------------------------------
+// 实际生成模型边界（回看最近 assistant 回合模型不同时，锚定新模型 entry 之前；
+// 判定纯函数见 timeline-model.ts 的 buildAssistantModelBoundaries）
+// ---------------------------------------------------------------------------
+
+export function AssistantModelBoundary({ model }: { model: AssistantModelIdentity }) {
+  const full = assistantModelFullLabel(model)
+  return (
+    <div
+      className="model-boundary"
+      role="separator"
+      aria-label={`实际生成模型切换为 ${full}`}
+      title={`实际生成模型已切换：${full}`}
+    >
+      <span className="model-boundary-label">
+        <HelmIcon name="cpu" size={11} />
+        <span className="mono">{assistantModelShortLabel(model)}</span>
+      </span>
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Assistant 回合（自 ConversationTimeline 拆出的子组件）
@@ -86,6 +108,11 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
   }
 
   const showHoverBar = !isBusy && (lastText !== '' || turn.entryIds.length > 0)
+  // 实际生成模型标签：仅来自本回合已落库 pi.assistant 的可信身份；busy（live/
+  // 在途）回合不展示，避免把待生成内容归到任何模型；缺失则不显示。
+  const modelFull = turn.model !== undefined ? assistantModelFullLabel(turn.model) : ''
+  const modelShort = turn.model !== undefined ? assistantModelShortLabel(turn.model) : ''
+  const showModelTag = !isBusy && modelShort !== ''
 
   return (
     <div className="msg-ai-block" tabIndex={0}>
@@ -126,8 +153,16 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
           <HelmIcon name="loader" size={12.5} className="spin-slow" />
         </span>
       ) : null}
-      {hasTimeInfo || showHoverBar ? (
+      {hasTimeInfo || showHoverBar || showModelTag ? (
         <div className="msg-ai-footer">
+          {showModelTag ? (
+            <Tooltip content={`实际生成模型：${modelFull}`}>
+              <span className="msg-time-meta" title={`实际生成模型：${modelFull}`}>
+                <HelmIcon name="cpu" size={11} />
+                <span className="mono">{modelShort}</span>
+              </span>
+            </Tooltip>
+          ) : null}
           {hasTimeInfo ? (
             <Tooltip content={tooltipText}>
               <span className="msg-time-meta" title={tooltipText}>

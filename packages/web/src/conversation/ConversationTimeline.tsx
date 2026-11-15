@@ -12,9 +12,10 @@ import { HelmIcon, CopyButton } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { AssistantTurnView } from './AssistantTurn.js'
+import { AssistantTurnView, AssistantModelBoundary } from './AssistantTurn.js'
 import {
   buildActiveEntryIndex,
+  buildAssistantModelBoundaries,
   buildTimelineItems,
   collectSiblingCalls,
   lastEditableHumanInput,
@@ -678,6 +679,10 @@ export function ConversationTimeline({
   //（siblingCalls 供其自行计算同目标多次调用折叠 / resume 续接关系）。
   const siblingCalls = useMemo(() => collectSiblingCalls(items), [items])
 
+  // 实际生成模型边界索引（纯函数一次扫描）：为每个发生模型切换的 assistant
+  // 回合按 key 索引新模型身份，渲染层只查表，不堆业务判断。
+  const modelBoundaries = useMemo(() => buildAssistantModelBoundaries(items), [items])
+
   const lastAssistantKey = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
       if (items[i]!.kind === 'assistant') return items[i]!.key
@@ -1067,6 +1072,7 @@ export function ConversationTimeline({
             )
           }
           const anchorId = timelineAnchorId(item)
+          const modelBoundary = modelBoundaries.get(item.key)
           return (
             <div
               key={item.key}
@@ -1074,6 +1080,7 @@ export function ConversationTimeline({
               ref={highlightScrollRef}
               data-entry-id={anchorId}
             >
+              {modelBoundary !== undefined ? <AssistantModelBoundary model={modelBoundary} /> : null}
               <AssistantTurnView
                 turn={item}
                 conversation={conversation}

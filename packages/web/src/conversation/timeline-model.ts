@@ -83,6 +83,16 @@ export type AssistantSegment =
   | { kind: 'step-group'; key: string; stepCount: number; steps: FoldableStep[]; active?: boolean }
   | { kind: 'tool'; key: string; tool: ToolTrace }
 
+/** pi.assistant entry model[0]（AssistantMessage）携带的实际生成模型身份。
+ * provider+model 是模型身份（拆分与边界只比较这两项）；thinkingLevel 只是
+ * 展示元数据，且仅在本回合全部 assistant entry 一致时才保留。 */
+export interface AssistantModelIdentity {
+  provider: string
+  model: string
+  /** 请求的思考档位（off/minimal/low/medium/high/xhigh/max）；legacy 或整块不一致时缺省。 */
+  thinkingLevel?: string
+}
+
 export interface AssistantTurn {
   kind: 'assistant'
   key: string
@@ -91,6 +101,11 @@ export interface AssistantTurn {
   segments: AssistantSegment[]
   /** true = 已与 ConversationLive 合并的进行中回合。 */
   live: boolean
+  /** 本回合实际生成模型（首个 pi.assistant entry 的 model[0] 派生；身份不完整、
+   * 非法或回合内混入不可信 entry 时缺省——未知内容不归因任何已知模型，也绝不
+   * 回退 conversation.model 等当前配置冒充历史事实。thinkingLevel 仅在本回合
+   * 全部条目一致时保留）。 */
+  model?: AssistantModelIdentity
   /** 回合开始时间戳（毫秒）；未采集时省略。 */
   startedAt?: number
   /** 回合结算时间戳（毫秒）；未结算或未采集时省略。 */
@@ -411,6 +426,87 @@ export function detectArtifactRef(text: string | undefined): string | undefined 
 }
 
 // ---------------------------------------------------------------------------
+// 实际生成模型身份（pi.assistant model[0] 派生；不读会话当前配置）
+// ---------------------------------------------------------------------------
+
+/**
+ * 解析 pi.assistant entry 的 model[0]（AssistantMessage）携带的实际生成模型身份。
+ * 形状不完整或非法（非 pi.assistant / model 非数组或空 / 首消息非 assistant 角色 /
+ * provider|model 缺失或空白）返回 undefined——绝不伪造，也不回退 conversation.model。
+ */
+export function parseAssistantModelIdentity(entry: ConversationEntry): AssistantModelIdentity | undefined {
+  if (entry.kind !== 'pi.assistant') return undefined
+  const model = entry.model
+  if (!Array.isArray(model) || model.length === 0) return undefined
+  const msg = model[0]
+  if (msg === null || typeof msg !== 'object') return undefined
+  const m = msg as { role?: unknown; provider?: unknown; model?: unknown; thinkingLevel?: unknown }
+  if (m.role !== 'assistant') return undefined
+  if (typeof m.provider !== 'string' || m.provider.trim() === '') return undefined
+  if (typeof m.model !== 'string' || m.model.trim() === '') return undefined
+  const thinkingLevel =
+    typeof m.thinkingLevel === 'string' && m.thinkingLevel.trim() !== '' ? m.thinkingLevel : undefined
+  return {
+    provider: m.provider,
+    model: m.model,
+    ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+  }
+}
+
+/** 模型身份相等性：只比较 provider + model；thinkingLevel 不参与（档位变化
+ * 不构成模型切换，不拆回合、不渲染边界）。 */
+export function sameAssistantModelIdentity(a: AssistantModelIdentity, b: AssistantModelIdentity): boolean {
+  return a.provider === b.provider && a.model === b.model
+}
+
+/** 短标签：model 段（与 Composer 模型按钮同口径，取 '/' 末段）。 */
+export function assistantModelShortLabel(identity: AssistantModelIdentity): string {
+  return identity.model.split('/').pop() ?? identity.model
+}
+
+/** 完整标签：'provider/model'（+ 思考档位），与 conversation.model 同格式。 */
+export function assistantModelFullLabel(identity: AssistantModelIdentity): string {
+  const base = `${identity.provider}/${identity.model}`
+  return identity.thinkingLevel !== undefined ? `${base} · 思考 ${identity.thinkingLevel}` : base
+}
+
+/**
+ * 扫描整条时间线，为每个「实际生成模型发生切换」的 assistant 回合生成边界身份，
+ * 按回合 key 索引（供渲染层在该回合之前画模型边界）。
+ *
+ * 回看规则：从当前回合向前回看最近一个 assistant 回合，中间的 human 输入、
+ * 插件卡片等不阻断（正常对话回合间几乎必有 human 输入）；遇到 reset / compaction
+ * 分割线即停止（上下文边界之前的模型历史与当前回合无关）；首个 assistant 回合
+ * 无边界。仅当两个回合均有可信 provider+model 且不同才构成边界——任一侧身份
+ * 缺失/非法不产生边界（不把未知模型与已知模型比较、不造假）。边界锚定新模型
+ * 实际 entry 落库后的回合位置，而非 Composer 切换配置的时刻。
+ */
+export function buildAssistantModelBoundaries(
+  items: ReadonlyArray<TimelineItem>,
+): Map<string, AssistantModelIdentity> {
+  const boundaries = new Map<string, AssistantModelIdentity>()
+  let prevAssistant: AssistantTurn | undefined
+  for (const item of items) {
+    // 上下文分割线（reset / compaction）：不跨边界回看。
+    if (item.kind === 'divider') {
+      prevAssistant = undefined
+      continue
+    }
+    if (item.kind !== 'assistant') continue
+    if (
+      prevAssistant !== undefined &&
+      prevAssistant.model !== undefined &&
+      item.model !== undefined &&
+      !sameAssistantModelIdentity(prevAssistant.model, item.model)
+    ) {
+      boundaries.set(item.key, item.model)
+    }
+    prevAssistant = item
+  }
+  return boundaries
+}
+
+// ---------------------------------------------------------------------------
 // 回合构建
 // ---------------------------------------------------------------------------
 
@@ -424,6 +520,18 @@ interface RawSegment {
 interface TurnAcc {
   entryIds: string[]
   segments: RawSegment[]
+  /** 回合展示身份核心（provider+model）；回合内混入不可信 entry 时置空
+   * （未知内容绝不归因已知模型，也不回退当前会话配置）。 */
+  model?: { provider: string; model: string }
+  /** 拆分比较基准：回合内首个可信 entry 的身份核心；与展示标签解耦，
+   * 展示被污染后仍保留，供后续明确不同模型重新开回合。 */
+  modelReference?: { provider: string; model: string }
+  /** 首个可信 entry 锁定的思考档位（仅展示用）。 */
+  modelThinkingLevel?: string
+  /** 回合内档位不一致时丢弃单一档位展示。 */
+  modelThinkingMixed?: boolean
+  /** 已见过 pi.assistant（身份锁定后，仅在新身份可证不同时拆分回合）。 */
+  modelLocked?: boolean
   startedAt?: number
   settledAt?: number
   durationMs?: number
@@ -552,21 +660,60 @@ function flushTurn(acc: TurnAcc | null, items: TimelineItem[], live: boolean): v
         ? acc.settledAt - acc.startedAt
         : undefined
 
+  // 实际生成模型：首个可信 entry 锁定 provider+model 与档位；后续条目档位
+  // 不一致（或身份不可信）时丢弃单一档位展示，provider+model 不受影响。
+  const turnModel: AssistantModelIdentity | undefined =
+    acc.model !== undefined
+      ? {
+          provider: acc.model.provider,
+          model: acc.model.model,
+          ...(acc.modelThinkingMixed !== true && acc.modelThinkingLevel !== undefined
+            ? { thinkingLevel: acc.modelThinkingLevel }
+            : {}),
+        }
+      : undefined
   items.push({
     kind: 'assistant',
     key: `turn:${prevKey}`,
     entryIds: [...acc.entryIds],
     segments,
     live,
+    ...(turnModel !== undefined ? { model: turnModel } : {}),
     ...(acc.startedAt !== undefined ? { startedAt: acc.startedAt } : {}),
     ...(acc.settledAt !== undefined ? { settledAt: acc.settledAt } : {}),
     ...(durationMs !== undefined ? { durationMs } : {}),
   })
 }
 
-/** 提取 assistant 消息内容块（thinking / text / toolCall）。 */
-function appendAssistantEntry(acc: TurnAcc, entry: ConversationEntry, opts: BuildTimelineOptions): void {
+/** 提取 assistant 消息内容块（thinking / text / toolCall）；首个 assistant 锁定
+ * 回合模型身份，后续条目维持档位一致性标记与未知污染标记。 */
+function appendAssistantEntry(
+  acc: TurnAcc,
+  entry: ConversationEntry,
+  opts: BuildTimelineOptions,
+  modelIdentity: AssistantModelIdentity | undefined,
+): void {
   acc.entryIds.push(entry.id)
+  if (acc.modelLocked !== true) {
+    if (modelIdentity !== undefined) {
+      const core = { provider: modelIdentity.provider, model: modelIdentity.model }
+      acc.model = core
+      acc.modelReference = core
+      acc.modelThinkingLevel = modelIdentity.thinkingLevel
+    }
+    acc.modelLocked = true
+  } else if (modelIdentity === undefined) {
+    // 已知身份之后混入不可信 entry：不拆分、不比较、无边界，但回合整体不再
+    // 归因任何已知模型（不能把未知 entry 内容伪装成 A 的产出）；比较基准
+    // modelReference 保留，供后续明确不同模型 entry 重新开回合。
+    acc.model = undefined
+  } else if (
+    acc.modelReference !== undefined &&
+    modelIdentity.thinkingLevel !== acc.modelThinkingLevel
+  ) {
+    // 身份可信但档位与本回合不一致：不伪造单一 thinkingLevel。
+    acc.modelThinkingMixed = true
+  }
   const model = entry.model
   if (Array.isArray(model)) {
     for (let mi = 0; mi < model.length; mi++) {
@@ -822,8 +969,23 @@ export function buildTimelineItems(
         break
       }
       case 'pi.assistant': {
+        // 实际生成模型边界：与回合比较基准（首个可信身份，展示被污染后仍保留）
+        // 可信且 provider+model 不同（含同一工具回合 A→B）时，在新模型 entry
+        // 之前拆分回合；任一侧身份不完整/非法不拆分、不造假，也不回退当前会话
+        // 配置；thinkingLevel 不参与比较。
+        const modelIdentity = parseAssistantModelIdentity(entry)
+        if (
+          turn !== null &&
+          turn.modelLocked === true &&
+          turn.modelReference !== undefined &&
+          modelIdentity !== undefined &&
+          !sameAssistantModelIdentity(modelIdentity, turn.modelReference)
+        ) {
+          flushTurn(turn, items, false)
+          turn = newTurn()
+        }
         if (turn === null) turn = newTurn()
-        appendAssistantEntry(turn, entry, options)
+        appendAssistantEntry(turn, entry, options, modelIdentity)
         break
       }
       case 'pi.tool-result': {

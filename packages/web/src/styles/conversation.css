@@ -924,3 +924,29 @@
   display: flex;
 }
 
+/* 实际生成模型边界（相邻 assistant 回合模型不同；锚定新模型 entry 位置） */
+.model-boundary {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  margin: 2px 0;
+  cursor: default;
+  user-select: none;
+}
+.model-boundary::before,
+.model-boundary::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.model-boundary-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
