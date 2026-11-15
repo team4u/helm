@@ -21,7 +21,13 @@ import process from 'node:process';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import type { NodeUpgradeCheckResult, NodeUpgradeResult } from '@helm/protocol';
+import {
+  compareStrictSemver as compareStrictSemverShared,
+  isStrictSemver,
+  stripSemverVPrefix,
+  type NodeUpgradeCheckResult,
+  type NodeUpgradeResult,
+} from '@helm/protocol';
 import { killProcessTree } from './local-env.js';
 
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
@@ -108,58 +114,26 @@ export interface BlockedReleaseRecord {
 
 // —— 版本 ——————————————————————————————————————————————————————————
 
-const STRICT_SEMVER =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
-
-interface ParsedSemver {
-  core: [number, number, number];
-  pre: string[];
-}
-
-function parseStrictSemver(input: string, label: string): ParsedSemver {
-  const match = STRICT_SEMVER.exec(input);
-  if (!match) {
-    throw new UpgradeRejectedError(`非法 SemVer 版本号（${label}）："${input}"（要求严格 x.y.z[-pre][+build]，不允许 v 前缀）`);
+/** 严格 SemVer 解析/比较唯一实现位于 @helm/protocol/semver；此处仅保留本引擎的错误信封（UpgradeRejectedError → RPC invalid）。 */
+function requireStrictVersion(input: string, label: string): void {
+  if (!isStrictSemver(input)) {
+    throw new UpgradeRejectedError(
+      `非法 SemVer 版本号（${label}）："${input}"（要求严格 x.y.z[-pre][+build]，不允许 v 前缀）`,
+    );
   }
-  const [, major, minor, patch, pre] = match;
-  return {
-    core: [Number(major), Number(minor), Number(patch)],
-    pre: pre === undefined ? [] : pre.split('.'),
-  };
 }
 
 /** 严格 SemVer 比较（预发布优先级：正式版 > 预发布；数字段按数值、字母段按 ASCII；build metadata 按规范不参与比较）。非法输入抛 UpgradeRejectedError。 */
 export function compareSemver(a: string, b: string): number {
-  const pa = parseStrictSemver(a, 'a');
-  const pb = parseStrictSemver(b, 'b');
-  for (let i = 0; i < 3; i++) {
-    if (pa.core[i]! > pb.core[i]!) return 1;
-    if (pa.core[i]! < pb.core[i]!) return -1;
-  }
-  if (pa.pre.length === 0 && pb.pre.length === 0) return 0;
-  if (pa.pre.length === 0) return 1;
-  if (pb.pre.length === 0) return -1;
-  const len = Math.max(pa.pre.length, pb.pre.length);
-  for (let i = 0; i < len; i++) {
-    const sa = pa.pre[i];
-    const sb = pb.pre[i];
-    if (sa === undefined) return -1;
-    if (sb === undefined) return 1;
-    if (sa === sb) continue;
-    const na = /^\d+$/.test(sa) ? Number(sa) : undefined;
-    const nb = /^\d+$/.test(sb) ? Number(sb) : undefined;
-    if (na !== undefined && nb !== undefined) return na > nb ? 1 : -1;
-    if (na !== undefined) return -1; // 数字标识符 < 字母标识符
-    if (nb !== undefined) return 1;
-    return sa < sb ? -1 : 1; // ASCII 字典序，不用 localeCompare
-  }
-  return 0;
+  requireStrictVersion(a, 'a');
+  requireStrictVersion(b, 'b');
+  return compareStrictSemverShared(a, b);
 }
 
-/** Web/UI 允许 ` v1.0.0 ` 形态：trim 并去掉一个 v 前缀，再严格校验。 */
+/** Web/UI 允许 ` v1.0.0 ` 形态：trim 并去掉一个 v/V 前缀，再严格校验。 */
 export function normalizeTargetVersion(input: string): string {
-  const trimmed = input.trim().replace(/^v/, '');
-  parseStrictSemver(trimmed, 'targetVersion');
+  const trimmed = stripSemverVPrefix(input);
+  requireStrictVersion(trimmed, 'targetVersion');
   return trimmed;
 }
 
@@ -174,7 +148,7 @@ export function getNodeVersion(): string {
     let version: string;
     try {
       const parsed = JSON.parse(rawFs.readFileSync(pkgPath, 'utf8')) as { version?: unknown };
-      if (typeof parsed.version !== 'string' || !STRICT_SEMVER.test(parsed.version)) {
+      if (typeof parsed.version !== 'string' || !isStrictSemver(parsed.version)) {
         throw new Error(`version 字段缺失或非法：${JSON.stringify(parsed.version)}`);
       }
       version = parsed.version;
@@ -332,7 +306,7 @@ export async function checkNodeUpgrade(
     throw new Error(`查询 ${url} 最新版本失败：${error instanceof Error ? error.message : String(error)}`);
   }
   // registry 返回非法版本是明确的坏数据，直接拒绝而不是带病比较。
-  parseStrictSemver(latestVersion, 'latest');
+  requireStrictVersion(latestVersion, 'latest');
 
   const currentVersion =
     options?.currentVersion ?? (await readCurrentRelease(dataDir))?.version ?? getNodeVersion();
@@ -655,7 +629,7 @@ export async function stageReleaseFromNpm(
   targetVersion: string,
   options?: StageReleaseOptions,
 ): Promise<StagedNodeRelease> {
-  parseStrictSemver(targetVersion, 'targetVersion');
+  requireStrictVersion(targetVersion, 'targetVersion');
 
   const versionRoot = path.join(dataDir, 'releases', targetVersion);
   const completePath = path.join(versionRoot, '.complete');

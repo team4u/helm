@@ -1,26 +1,31 @@
 /**
- * 严格 SemVer 与节点升级结果边界校验（独立小模块，零 SDK 依赖）。
+ * 节点升级的版本与结果边界校验（独立小模块，零 SDK 依赖）。
  *
- * 从 runtime.ts 拆出：版本比较是纯函数，升级结果校验只依赖 @helm/protocol
- * 的错误类型；独立成文件便于单测（node-upgrade.test 直接引用）。
+ * 从 runtime.ts 拆出：升级结果校验只依赖 @helm/protocol 的错误类型；
+ * 严格 SemVer 的解析/比较只此一份（@helm/protocol/semver），本文件保留
+ * kernel 侧错误信封（HelmError）并对外签名不变，便于 node-upgrade.test 直接引用。
  */
-import { HelmError, type NodeUpgradeCheckResult, type NodeUpgradeResult } from '@helm/protocol'
+import {
+  HelmError,
+  compareStrictSemver as compareStrictSemverShared,
+  isStrictSemver as isStrictSemverShared,
+  stripSemverVPrefix,
+  type NodeUpgradeCheckResult,
+  type NodeUpgradeResult,
+} from '@helm/protocol'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const STRICT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/
-
 /** 严格 SemVer 判定（不接受 v 前缀/宽松格式）。 */
 export function isStrictSemVer(text: string): boolean {
-  return STRICT_SEMVER.test(text)
+  return isStrictSemverShared(text)
 }
 
-/** 规范化显式目标版本：trim 后允许去掉单个 v 前缀（Web 输入容错），再严格校验。 */
+/** 规范化显式目标版本：trim 后允许去掉单个 v/V 前缀（Web 输入容错），再严格校验。 */
 export function normalizeExplicitVersion(raw: string): string {
-  const trimmed = raw.trim()
-  const bare = trimmed.startsWith('v') || trimmed.startsWith('V') ? trimmed.slice(1) : trimmed
-  if (!isStrictSemVer(bare)) {
+  const bare = stripSemverVPrefix(raw)
+  if (!isStrictSemverShared(bare)) {
     throw new HelmError(
       'validation_error',
       `targetVersion 需为严格 SemVer（可带单个 v 前缀，如 1.2.3 / v1.2.3），实得 "${raw}"`,
@@ -31,47 +36,15 @@ export function normalizeExplicitVersion(raw: string): string {
   return bare
 }
 
-/** 比较两个严格 SemVer：-1 / 0 / 1；prerelease 排序按 SemVer 规范。 */
+/** 比较两个严格 SemVer：-1 / 0 / 1；prerelease 排序按 SemVer 规范，非法输入是 kernel 内部错误（500）。 */
 export function compareStrictSemVer(a: string, b: string): number {
-  const pa = parseSemVer(a)
-  const pb = parseSemVer(b)
-  for (let i = 0; i < 3; i++) {
-    if (pa.numeric[i] !== pb.numeric[i]) return pa.numeric[i]! < pb.numeric[i]! ? -1 : 1
-  }
-  const ap = pa.prerelease
-  const bp = pb.prerelease
-  if (ap === undefined && bp === undefined) return 0
-  // 无预发布 > 有预发布。
-  if (ap === undefined) return 1
-  if (bp === undefined) return -1
-  for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
-    const x = ap[i]
-    const y = bp[i]
-    if (x === undefined) return -1
-    if (y === undefined) return 1
-    const xn = /^\d+$/.test(x)
-    const yn = /^\d+$/.test(y)
-    if (xn && yn) {
-      const diff = Number(x) - Number(y)
-      if (diff !== 0) return diff < 0 ? -1 : 1
-    } else {
-      if (x === y) continue
-      // 数字标识 < 字母数字标识。
-      if (xn) return -1
-      if (yn) return 1
-      return x < y ? -1 : 1
+  // 进入比较前已过边界校验，非法属内部错误；逐参复核保持报错可定位。
+  for (const v of [a, b]) {
+    if (!isStrictSemverShared(v)) {
+      throw new HelmError('validation_error', `内部错误：非严格 SemVer 进入比较：${v}`, 500)
     }
   }
-  return 0
-}
-
-function parseSemVer(v: string): { numeric: [number, number, number]; prerelease?: string[] } {
-  const m = STRICT_SEMVER.exec(v)
-  if (m === null) throw new HelmError('validation_error', `内部错误：非严格 SemVer 进入比较：${v}`, 500)
-  return {
-    numeric: [Number(m[1]), Number(m[2]), Number(m[3])],
-    ...(m[4] !== undefined ? { prerelease: m[4].split('.') } : {}),
-  }
+  return compareStrictSemverShared(a, b)
 }
 
 /**
