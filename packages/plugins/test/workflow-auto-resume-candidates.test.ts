@@ -329,6 +329,17 @@ test('账本无 ok agent/action（空文件 / 仅失败 agent 行 / 文件缺失
   assert.deepEqual(ids, ['wf_actok000001', 'wf_attempt005'])
 })
 
+test('仅有外部失败尝试句柄不能作为跨 Run 自动续跑锚点', timeout, (t) => {
+  const env = makeEnv(t)
+  seedCandidateRun(env, 'wf_externalonly', 307, 1_700_001_008_000, {
+    journal: [JSON.stringify({
+      v: 1, seq: 0, type: 'agent', index: 0, key: 'external', ok: false, attempt: 1,
+      invocationIndex: 0, error: 'external timeout', execution: { nodeId: 'local', executionId: 'pane-7' },
+    })],
+  })
+  assert.deepEqual(env.service.listAutoResumeCandidates(), [])
+})
+
 // ---------------------------------------------------------------------------
 // 5. 排序：failedAt 升序（最旧失败优先），与索引写入顺序无关
 // ---------------------------------------------------------------------------

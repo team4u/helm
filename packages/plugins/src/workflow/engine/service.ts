@@ -29,7 +29,6 @@
 import { randomUUID } from 'node:crypto'
 import {
   closeSync,
-  existsSync,
   fsyncSync,
   linkSync,
   lstatSync,
@@ -2161,7 +2160,9 @@ export class WorkflowService {
       const hasSafeReplayAnchor = journal.entries.some((line) =>
         line.type === 'action'
           ? line.ok
-          : line.type === 'agent' && (line.ok || (line.attempt !== undefined && line.execution !== undefined)),
+          : line.type === 'agent' && (line.ok || (
+              line.attempt !== undefined && line.execution?.conversationId !== undefined && line.execution.executionId === undefined
+            )),
       )
       if (journal.actionUncertain || !hasSafeReplayAnchor) continue
       candidates.push({
@@ -2587,6 +2588,10 @@ export class WorkflowService {
     const awaitTimeoutAborts = async (): Promise<void> => {
       if (timeoutAborts.size > 0) await Promise.allSettled([...timeoutAborts])
     }
+    const timeoutMessage = (cause?: unknown): string =>
+      `[agent_timeout] 子代理 ${request.label} 回合超过 ${timeoutMs}ms 上限；已请求取消，` +
+      '实际执行状态与续接条件以 execution 和执行方诊断为准' +
+      (cause === undefined ? '' : `\n${this.redact(errorMessage(cause))}`)
 
     const proto: AgentSpawnRequest = {
       parentConversationId: run.conversationId,
@@ -2652,7 +2657,7 @@ export class WorkflowService {
         await awaitTimeoutAborts()
         return {
           ok: false,
-          error: `[agent_timeout] 子代理 ${request.label} 回合超过 ${timeoutMs}ms 上限，已中止子会话（可凭 execution.conversationId resume 续接）`,
+          error: timeoutMessage(),
           timedOut: true,
           ...(executionInfo !== undefined ? { executionInfo } : {}),
           ...(gateResult !== undefined ? { gate: gateResult } : {}),
@@ -2686,7 +2691,7 @@ export class WorkflowService {
         await awaitTimeoutAborts()
         return {
           ok: false,
-          error: `[agent_timeout] 子代理 ${request.label} 回合超过 ${timeoutMs}ms 上限，已中止子会话（可凭 execution.conversationId resume 续接）`,
+          error: timeoutMessage(error),
           timedOut: true,
           ...retained,
         }
@@ -3183,8 +3188,17 @@ export class WorkflowService {
     const traces: string[] = []
     const recordPath = this.recordPathFor(conversationId, takeoverRunId)
     const journalPath = this.journalPathFor(conversationId, takeoverRunId)
-    if (existsSync(recordPath)) traces.push(`记录文件 ${recordPath}`)
-    if (existsSync(journalPath)) traces.push(`账本 ${journalPath}`)
+    for (const [path, label] of [[recordPath, '记录文件'], [journalPath, '账本']] as const) {
+      try {
+        lstatSync(path)
+        traces.push(`${label} ${path}`)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw new HelmError('io_error', `无法确认接管运行 ${takeoverRunId} 的${label}：${errorMessage(error)}`, 500, {
+          runId: takeoverRunId, path,
+        })
+      }
+    }
     if (traces.length > 0) return { ghost: false, reason: `磁盘仍存在接管 run 的${traces.join('、')}` }
     return { ghost: true }
   }

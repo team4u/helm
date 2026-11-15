@@ -73,7 +73,7 @@ export function workflowConcurrency(cpuCount: number = cpus().length): number {
 /** 脚本请求的一个 agent 调用。`agentId` 是宿主侧 abort/resume 的句柄。 */
 export interface WorkflowSpawnRequest {
   agentId: string
-  /** run 内调用位次（agent 与 action 共享同一全序），进度条目的稳定身份。 */
+  /** 本次尝试的账本位次；进度条目仍以所属调用的首位次标识。 */
   index: number
   prompt: string
   label: string
@@ -688,6 +688,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     if (entry.type === 'agent' || entry.type === 'action') settledByIndex.set(entry.index, entry)
   }
 
+  // 缓存失败会比真实模型更快结算。保留历史重试槽位，避免恢复时挤占
+  // 同时发起的其他调用；首调用继续按原消息顺序分配其余槽位。
   const retrySlots = new Map<string, number>()
   const reservedRetryIndices = new Set<number>()
   const allocatedIndices = new Set<number>()
@@ -765,6 +767,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     return { hit: true, entry }
   }
 
+  // 并发调用可能在较高位次断链后才到达：已断链时也逐位检查副作用后缀。
   function replayMiss(index: number): ReplayResult {
     prefixIntact = false
     return hasNonIdempotentActionSuffix(index)

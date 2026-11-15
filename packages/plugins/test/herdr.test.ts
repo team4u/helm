@@ -1225,7 +1225,9 @@ test('超时（TimeoutError）保留 pane：working 时 resume 显式拒绝不�
       timedOut = e
       return e instanceof HelmError && e.code === 'agent_timeout'
     })
-    const snapshotOfTimeout = String((timedOut as HelmError).details?.snapshot ?? '')
+    assert.ok(timedOut instanceof HelmError)
+    const details = timedOut.details as { snapshot?: unknown } | undefined
+    const snapshotOfTimeout = String(details?.snapshot ?? '')
     assert.ok(snapshotOfTimeout.length > 0, '超时错误附终端诊断快照')
 
     const pane = [...env.transport.panes.values()][0]!
@@ -1470,7 +1472,7 @@ test('启动期超时后 resume：agent.start 完成与否未定时权威确认�
     const starts = env.transport.calls.filter((c) => c.method === 'agent.start').length
     assert.equal(starts, 1)
 
-    // resume 党权威 agent.get 确认：窗格无受管 Agent 身份（name 缺失）→
+    // resume 先由权威 agent.get 确认：窗格无受管 Agent 身份（name 缺失）→
     // 显式拒绝；不重发 agent.start、不新建、不发 prompt。
     await assert.rejects(
       spawnDirect(env, { agentType: 'herdr:agy', resume: 'wf_su:a' }),

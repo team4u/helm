@@ -14,7 +14,7 @@
  * - nodesFromProgress 长文本截断（1024 + 指示）与 gate.exitCode/timedOut 全链保留。
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
@@ -449,6 +449,28 @@ test('invokeSpawn 成功返回后撤销超时计时器：旧 attempt 迟到超�
   assert.deepEqual(custom.guardedAborts, [], '成功出口后不得有迟到超时中止')
 })
 
+test('外部回合超时保留执行方诊断，不宣称底层进程已停止', timeout, async (t) => {
+  const custom = makeEnv(t, (proto: unknown) => {
+    const request = proto as { onResolved?: (info: unknown) => void; signal?: AbortSignal }
+    request.onResolved?.({ nodeId: 'local', executionId: 'pane-timeout' })
+    return new Promise((_resolve, reject) => {
+      request.signal?.addEventListener('abort', () => reject(new HelmError(
+        'agent_timeout', '底层 CLI 可能仍在执行\n终端最后 40 行（脱敏）：\nworking at task', 408,
+      )), { once: true })
+    })
+  })
+  const result = await callInvokeSpawn(custom, {
+    agentId: 'external-timeout', index: 0, prompt: 'p', label: 'external', agentType: '', timeoutMs: 1_000,
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.timedOut, true)
+  assert.equal(result.executionInfo?.executionId, 'pane-timeout')
+  assert.match(result.error ?? '', /底层 CLI 可能仍在执行/)
+  assert.match(result.error ?? '', /终端最后 40 行/)
+  assert.doesNotMatch(result.error ?? '', /已中止子会话/)
+  assert.deepEqual(custom.guardedAborts, [])
+})
+
 test('invokeSpawn timeoutMs 非法值在边界显式拒绝（1_000..3_600_000）', timeout, async (t) => {
   const custom = makeEnv(t, async () => 'unused')
   await assert.rejects(
@@ -547,17 +569,15 @@ test('跨重启 resume：失败 attempt 行的 execution.conversationId 经 resu
   const prompt = '跨重启续接任务'
   // 手工 seed 失败 attempt 行：attempt=1 + execution.conversationId=77（无
   // executionId → persistedHandle=String(77)）；invocationIndex=0 为账本新增
-  // 可选字段（agentJournalKey 不含该字段，键值稳定）。maxAttempts=3 的重放
-  // 语义：attempt 1 失败已入账，第 2 次 live 调用经 resume 续接（需
-  // failedAttempt+1 < maxAttempts；maxAttempts=2 时 attempt=2 达上限直接
-  // 终态回应，不再 live）。
+  // 可选字段（agentJournalKey 不含该字段，键值稳定）。maxAttempts=2 时
+  // attempt 1 失败已入账，第 2 次必须经 resume 续接，不能提前返回失败。
   const docs = new Map<string, unknown>()
   seedPersistedRun(dataDir, docs, {
     runId: priorRunId,
     conversationId: convId,
     status: 'failed',
     error: '[agent_failed] 尝试失败',
-    script: `export const meta = { name: "restart-resume", description: "d" }\nreturn await agent(${JSON.stringify(prompt)}, { maxAttempts: 3 })`,
+    script: `export const meta = { name: "restart-resume", description: "d" }\nreturn await agent(${JSON.stringify(prompt)}, { maxAttempts: 2 })`,
     journal: [
       JSON.stringify({
         v: 1,
@@ -721,6 +741,25 @@ test('resume 幽灵接管标记：索引与磁盘均无痕迹才清标记重接�
       error instanceof HelmError &&
       error.code === 'conflict' &&
       (error.details as { resumedByRunId?: string }).resumedByRunId === 'wf_keptr9997',
+  )
+})
+
+test('接管账本为失效符号链接时仍保留接管标记，不能当成从未运行', timeout, async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows 创建符号链接需要额外权限；此用例验证 POSIX 失效链接')
+    return
+  }
+  const env = makeEnv(t, async () => 'unused')
+  const takeoverRunId = 'wf_linktarget001'
+  seedPersistedRun(env.dataDir, env.docs, {
+    runId: 'wf_linkprior001', conversationId: 23, status: 'failed',
+    script: 'export const meta = { name: "link-marker", description: "d" }\nreturn 41',
+    resumedByRunId: takeoverRunId,
+  })
+  symlinkSync(join(env.dataDir, 'missing-journal'), join(env.dataDir, 'artifacts', '23', `workflow-${takeoverRunId}.jsonl`))
+  await assert.rejects(
+    () => env.service.run({ resumeFromRunId: 'wf_linkprior001' }),
+    (error: unknown) => error instanceof HelmError && error.code === 'conflict',
   )
 })
 
