@@ -21,8 +21,8 @@
  *   goal(worktree)），另一模块再用同名 'plan'（三个同名 label 会话在同一
  *   run 内共存，按 scopeId 隔离）。
  * - 模块 A：goal + 幂等 git merge（idempotent: true）+ cleanup_worktree
- *   全部成功；模块 B：普通 agent 因 Schema 校验失败返回 null，脚本 throw
- *   导致 Run failed。
+ *   全部成功；模块 B：goal 因 Schema 校验失败耗尽 2 次尝试，脚本 throw
+ *   导致 Run failed，恢复后沿同一会话继续第 3 次尝试。
  * - 修复 faux 模型响应后 run({ resumeFromRunId })：模块 A 的全部 agent（含
  *   withMeta 的 execution.worktree）与 action 命中账本缓存（cached: true，
  *   副作用计数零新增），仅模块 B 失败节点 live 重跑并最终 completed；
@@ -480,13 +480,14 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
       'return { sub, goal: g, mergeOk: merge.ok, cleaned, branch }\n'
 
     const modBScript =
-      'export const meta = { name: "t3-mod-b", description: "模块B：同名 plan agent 失败（resume 后成功）" }\n' +
-      'const plan = await agent("MODB-PLAN-OBJECTIVE：按 Schema 返回答案", { label: "plan", schema: ' +
+      'export const meta = { name: "t3-mod-b", description: "模块B：同名 plan goal 耗尽后恢复" }\n' +
+      'const result = await goal({ objective: "MODB-PLAN-OBJECTIVE：按 Schema 返回答案", label: "plan", maxAttempts: 2, schema: ' +
       JSON.stringify(planSchema) +
       ' })\n' +
-      'if (!plan) throw new Error("mod-b plan agent failed (schema)")\n' +
+      'if (!result.ok) throw new Error("mod-b plan goal failed (schema)")\n' +
+      'const plan = JSON.parse(result.output)\n' +
       'const fix = await agent("MODB-FIX-OBJECTIVE：确认已续接本模块 plan 会话", { resume: "plan" })\n' +
-      'return { plan, fix }\n'
+      'return { plan, fix, attempts: result.attempts }\n'
 
     const masterScript =
       'export const meta = { name: "t3-master", description: "总控：两个同名 plan 模块并发启动" }\n' +
@@ -508,7 +509,7 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
 
       const runArgs = { repoDir: repo, linux: PROCESS_SCAN_ON }
 
-      // ---- 第 1 次运行：模块 B 的 plan agent Schema 失败 → run failed。----
+      // ---- 第 1 次运行：模块 B 的 plan goal 耗尽尝试 → run failed。----
       env.faux.setResponses(routedResponses(route, 24))
       let failedRunId = ''
       await assert.rejects(
@@ -571,7 +572,9 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
       }
       const failedPlanConversationId = failedPlan!['execution']['conversationId'] as number
       // 同名 'plan' 三会话共存互不混淆：goal / 叶子 / 模块 B 各自独立子会话。
+      assert.equal(agentEntries.filter(e => e['ok'] === false).length, 2, '模块 B 应耗尽两次尝试')
       const planConversationIds = agentEntries
+        .filter(e => (e['attempt'] ?? 1) === 1)
         .map((e) => e['execution']?.['conversationId'])
         .filter((id) => typeof id === 'number')
       assert.equal(
@@ -606,10 +609,11 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
       assert.equal(a.mergeOk, true)
       assert.equal(a.cleaned, PROCESS_SCAN_ON ? true : null)
 
-      // 模块 B：plan live 重跑成功（新子会话），fix 续接 B 自己的 plan 会话。
+      // 模块 B：沿原失败 goal 会话续接，fix 仍续接 B 自己的 plan。
       const b = resumed.result.b
       assert.deepEqual(b.plan, { answer: 'b-plan-ok' })
       assert.equal(b.fix, 'B-FIX-OK')
+      assert.equal(b.attempts, 3, '恢复轮应在两次历史失败后继续第 3 次尝试')
 
       // 副作用零重复：信号计数保持一行；合入提交不重复。
       assert.equal(readFileSync(signalPath, 'utf8'), 'x\n', 'resume 不得重复执行模块 A 的幂等动作')
@@ -624,8 +628,8 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
       const livePlan = liveAgentNodes.find((n) => n['label'] === 'plan')
       assert.ok(livePlan, 'live 重跑的失败节点应保留 label plan')
       assert.ok(
-        typeof livePlan!['conversationId'] === 'number' && livePlan!['conversationId'] !== failedPlanConversationId,
-        'live 重跑应派生新子会话（不复用失败会话，也不与 A 侧会话混淆）',
+        livePlan!['conversationId'] === failedPlanConversationId,
+        '失败 goal 应续接原生会话，不与 A 侧同名 plan 混淆',
       )
       const cachedAgentNodes = agentNodes.filter((n) => n['cached'] === true)
       assert.equal(cachedAgentNodes.length, 2, '模块 A 的 sub-a plan 与 goal 两个 agent 节点应全部命中缓存')

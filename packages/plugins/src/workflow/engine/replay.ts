@@ -40,6 +40,17 @@ export class JournalReplay {
     return this.settled.get(this.key(scope, attempt))
   }
 
+  terminalFailureAttempt(scope: ReplayScope): number {
+    let last: Extract<SettledEntry, { type: 'agent' }> | undefined
+    for (const entry of this.entries) {
+      if (entry.scopePath !== scope.scopePath) continue
+      if (entry.scopeCallIndex > scope.scopeCallIndex) return 0
+      if (entry.scopeCallIndex !== scope.scopeCallIndex || entry.type !== 'agent') continue
+      if (last === undefined || (entry.attempt ?? 1) > (last.attempt ?? 1)) last = entry
+    }
+    return last !== undefined && !last.ok && last.skipped !== true ? last.attempt ?? 1 : 0
+  }
+
   private isBroken(path: string): boolean {
     for (const parent of this.broken) {
       if (path === parent || path.startsWith(`${parent}/`)) return true

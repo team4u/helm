@@ -38,7 +38,7 @@
 
 重放命中 `agent` 行时，`agent.withMeta` 与 `goal` 从账本还原该行的 `execution`（含 Worktree 描述）与 `gate` 字段，脚本可继续对该 Worktree 执行合入或清理。多级工作流的 `label` 以 `${scopeId}:${label}` 登记（见 DSL 手册的 `workflow()` 一节）：同名 `label` 在不同子工作流内是不同节点，前缀匹配按各自的 Key 逐项比对，整棵树对根 `runId` 一次续跑。
 
-**尝试链的重放**：`maxAttempts` 的每次尝试各占一条独立 `index` 行；恢复使用同一 `scopePath + scopeCallIndex` 下的 `attempt` 链匹配，进度树按本次 Run 的 `invocationIndex` 折叠节点。重试句柄使用稳定调用身份，不依赖上一次 Run 的全局序号。账本终态齐全时整份重放零执行：已成功的尝试直接复用结果；进程重启后从最后一次尝试继续——已失败的尝试行按 `attempt` 链重放登记，下次尝试从最后失败处续接同一子会话。目标已耗尽 `maxAttempts` 仍失败时，重放如实回放失败（`goal` / `agent.withMeta` 拿到 `ok: false` 与最后一次 `error`，完整尝试链保留在账本中），不重跑也不伪装成功；未配置重试（默认 `maxAttempts: 1`）的失败行保持旧语义：不作为成功前缀，断链后转 live 重试。只有带执行句柄（`execution.conversationId` / `executionId`）的失败行才能作为续接锚点，无句柄的失败不可续接。
+**尝试链的重放**：`maxAttempts` 的每次尝试各占一条独立 `index` 行；恢复使用同一 `scopePath + scopeCallIndex` 下的 `attempt` 链匹配，进度树按本次 Run 的 `invocationIndex` 折叠节点。重试句柄使用稳定调用身份，不依赖上一次 Run 的全局序号。账本终态齐全时整份重放零执行：已成功的尝试直接复用结果；进程重启后从最后一次尝试继续——已失败的尝试行按 `attempt` 链重放登记，下次尝试从最后失败处续接同一子会话。目标已耗尽 `maxAttempts` 后，若原 Run 已完成，或脚本随后仍执行了同一 scope 内的其他调用，重放如实回放失败（`goal` / `agent.withMeta` 得到 `ok: false` 与最后一次 `error`），保留既有后续结果。若原 Run 为 `failed`，且该目标是其 scope 的末尾失败调用，新 Run 会给它新的 `maxAttempts` 次执行预算，沿原句柄继续；历史失败不消耗新预算，`attempt` 与返回的 `attempts` 累计计数。例如历史两次失败，恢复首次成功即为第 3 次尝试。未配置重试（默认 `maxAttempts: 1`）的失败行不作为成功前缀，断链后转 live 重试。只有带执行句柄（`execution.conversationId` / `executionId`）的失败行才能作为续接锚点，无句柄的失败不可续接。
 
 ## Agent 尽力记账 vs Action 强一致
 
@@ -114,7 +114,7 @@ helm workflows run ./pipeline.js --resume-from-run-id wf_1a2b3c4d5e6f --wait
 
 候选扫描遇到单条 Run 记录损坏或文件缺失时，输出含 Run ID 的诊断并跳过该条，保留其他健康候选；面向用户的 `listRuns` 仍显式报错。索引本身的形状损坏会以 `workflow_index_corrupt` 拒绝读取、启动恢复和写入，不将损坏索引当空列表。
 
-Watchdog 按 `autoResumeCount` 等待冷却时间：第 0 次等 2 分钟，第 1 次等 5 分钟，第 2 次等 15 分钟。冷却期满后调用 `workflow.run({ resumeFromRunId })` 从断点续跑，并把原 Run 的 `resumedByRunId` 指向新 Run，防止重复触发；新 Run 的 `autoResumeCount` 在原值上递增。每轮巡检最多恢复 1 个 Run，按 `failedAt` 从早到晚排序：网关刚恢复时避免同时唤醒多个大工作流再次压垮接口。人工续跑与自动续跑走同一入口（`helm workflows run --resume-from-run-id`），自动机制只在冷却与次数上收敛，不改变重放语义。
+Watchdog 按 `autoResumeCount` 等待冷却时间：第 0 次等 2 分钟，第 1 次等 5 分钟，第 2 次等 15 分钟。冷却期满后调用 `workflow.run({ resumeFromRunId })` 从断点续跑，并把原 Run 的 `resumedByRunId` 指向新 Run，防止重复触发；新 Run 的 `autoResumeCount` 在原值上递增。每轮巡检最多恢复 1 个 Run，按 `failedAt` 从早到晚排序：网关刚恢复时避免同时唤醒多个大工作流再次压垮接口。人工续跑与自动续跑走同一入口（`helm workflows run --resume-from-run-id`），末尾失败目标按新恢复轮获得重试预算；成功兄弟节点继续复用。自动机制只额外限制冷却与续跑次数。
 
 ## 边界与约束
 

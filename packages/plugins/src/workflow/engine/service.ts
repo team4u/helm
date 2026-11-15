@@ -1568,6 +1568,7 @@ export class WorkflowService {
           },
           journal: {
             ...(replayEntries.length > 0 ? { entries: replayEntries } : {}),
+            retryFailedCalls: replayFrom?.status === 'failed',
             append: async (entry) => {
               // agent 行 execution/gate（effectiveCwd、worktree 路径、gate 输出
               // 可含机密 token）落盘前统一脱敏；幂等替换，重复脱敏无害。

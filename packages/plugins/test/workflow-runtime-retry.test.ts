@@ -160,7 +160,7 @@ describe('workflow runtime attempt journal replay', () => {
     })
     assert.equal(first.status, 'completed', first.error)
     assert.deepEqual(first.value, { ok: true, output: 'fixed', attempts: 2, execution: { conversationId: 77 } })
-    assert.deepEqual(calls, ['spawn:0', 'resume:wf-agent-0:mapped:true'])
+    assert.deepEqual(calls, ['spawn:0', 'resume:wf-agent-0:77:true'])
     assert.equal(writes.length, 2)
     assert.equal(writes[0]!.type, 'agent')
     assert.equal(writes[0]!.ok, false)

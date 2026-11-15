@@ -263,6 +263,8 @@ export interface RunWorkflowOptions {
    */
   journal?: {
     entries?: readonly WorkflowJournalEntry[]
+    /** Failed source runs get a fresh budget for their terminal failed goals. */
+    retryFailedCalls?: boolean
     append?(entry: JournalWriteInput): Promise<void> | void
   }
   /**
@@ -964,6 +966,9 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         recordAgent({ ...entry, ...scope, invocationIndex: index })
       agentCount++
       const maxAttempts = payload.maxAttempts ?? 1
+      const previousAttempts = options.journal?.retryFailedCalls === true && maxAttempts > 1
+        ? replay.terminalFailureAttempt(scope) : 0
+      const attemptLimit = previousAttempts + maxAttempts
       const logicalId = scopePath === 'root' ? String(scopeCallIndex) : `${scopePath}:${scopeCallIndex}`
       const agentId = resumed?.agentId ?? `wf-agent-${logicalId}`
       const label = payload.label ?? resumed?.label ?? derivedLabel(payload.prompt)
@@ -1050,7 +1055,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           (execution?.conversationId !== undefined ? String(execution.conversationId) : undefined)
         const manualRetry = failed.retryKind === 'manual'
         const canRetry = failed.skipped !== true && (manualRetry ||
-          (attempt < maxAttempts && persistedHandle !== undefined && resumeAgent !== undefined))
+          (attempt < attemptLimit && persistedHandle !== undefined && resumeAgent !== undefined))
         if (!canRetry) {
           if (replay.history(scope, attempt + 1) !== undefined) {
             const conflict = replay.miss(scope)
@@ -1420,7 +1425,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           // maxAttempts 自动重试（与手动 control.retry 共用同一 attempt 环）：
           // 失败原因以增量块追加进下次尝试 prompt，经 resumeAgent 续接同一
           // 子会话继续修改，而非另起新会话重跑。
-          if (failureHandle !== undefined && attempt < maxAttempts && resumeAgent !== undefined) {
+          if (failureHandle !== undefined && attempt < attemptLimit && resumeAgent !== undefined) {
             const failedError = redactText(result.error ?? 'Agent failed.')
             const execution = executionInfoForMeta(base)
             await recordAttempt({
@@ -1438,9 +1443,10 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             })
             attemptPrompt = agentRetryPrompt(payload.prompt!, attempt, failedError)
             attempt++
+            const resumeRef = base.executionId ?? (base.conversationId !== undefined ? String(base.conversationId) : undefined)
             resumeTarget = {
               ...failureHandle,
-              ...(base.executionId !== undefined ? { resumeRef: base.executionId } : {}),
+              ...(resumeRef !== undefined ? { resumeRef } : {}),
             }
             attemptIndex = allocateIndex()
             attemptKey = agentJournalKey({ ...keyInput, prompt: attemptPrompt, resume: agentId })

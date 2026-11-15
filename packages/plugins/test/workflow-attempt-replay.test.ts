@@ -82,10 +82,35 @@ test('exhausted goal replays its failed result and later action without spawning
     }),
   })
   assert.equal(initial.status, 'completed', initial.error)
-  const replay = await runWorkflow({ script: source, journal: { entries: log.entries }, host: host({ async resumeAgent() { throw new Error('unexpected resume') } }) })
+  const replay = await runWorkflow({ script: source, journal: { entries: log.entries, retryFailedCalls: true }, host: host({ async resumeAgent() { throw new Error('unexpected resume') } }) })
   assert.equal(replay.status, 'completed', replay.error)
   assert.deepEqual(replay.value, initial.value)
   assert.equal(replay.progress.some((entry) => entry.type === 'workflow_agent' && entry.state === 'error' && entry.error === 'last'), true)
+})
+
+test('a failed source run grants its terminal goal a fresh bounded budget using the persisted conversation', timeout, async () => {
+  const log = journal()
+  const source = script('const r = await goal({ objective: "build", maxAttempts: 2 }); if (!r.ok) throw new Error("exhausted"); return r')
+  const failed = await runWorkflow({ script: source, journal: log, host: host({
+    async spawnAgent(request) { request.onResolved?.({ conversationId: 77 }); return { ok: false, error: 'provider down' } },
+    async resumeAgent() { return { ok: false, error: 'provider down' } },
+  }) })
+  assert.equal(failed.status, 'failed')
+  const nextLog = journal()
+  const prompts: string[] = []
+  const recovered = await runWorkflow({ script: source,
+    journal: { entries: log.entries, append: nextLog.append, retryFailedCalls: true },
+    host: host({ async resumeAgent(_agentId, prompt, options) {
+      assert.equal(options?.resumeRef, '77')
+      prompts.push(prompt)
+      return { ok: false, error: 'still unavailable' }
+    } }),
+  })
+  assert.equal(recovered.status, 'failed')
+  assert.equal(prompts.length, 2, 'only the new recovery round consumes the new two-attempt budget')
+  assert.match(prompts[0]!, /attempt 2 failed/)
+  assert.match(prompts[1]!, /attempt 3 failed/)
+  assert.deepEqual(nextLog.entries.map(entry => entry.type === 'agent' ? entry.attempt : null), [1, 2, 3, 4])
 })
 
 test('lowering maxAttempts cannot skip a historical attempt and replay a later non-idempotent action', timeout, async () => {
