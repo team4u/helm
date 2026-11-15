@@ -50,9 +50,15 @@ export async function waitForegroundRun(
 ): Promise<ForegroundWaitOutcome> {
   const activeRun = svc.active.get(runId)
   if (activeRun === undefined) {
-    // 历史/未知 run：不存在显式 404；存在但不在活跃表（跨重启或已结算
-    // 收尾）按已终态处理——工具读终态记录即为诚实结果。
-    svc.runs.load(runId)
+    // 历史/未知 run：不存在显式 404。不在活跃表（已结算收尾或跨重启）时以
+    // 持久记录为权威：detachedAt 已落盘说明 detach 先于工具登记到达——
+    // 事件不可丢失（返回 'detached' 让工具交还后台句柄，并同步执行
+    // onDetached 解绑父 signal）；未 detach 则按已终态处理。
+    const record = svc.runs.load(runId)
+    if (record.detachedAt !== undefined) {
+      hooks?.onDetached?.()
+      return 'detached'
+    }
     return 'settled'
   }
   // 同步临界段：登记前的即读判定与 detach 的临界段互斥（见模块头）。

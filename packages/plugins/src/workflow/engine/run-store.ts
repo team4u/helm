@@ -242,6 +242,15 @@ function runRecordProblem(record: unknown): string | undefined {
   if (r['resumedByRunId'] !== undefined && (typeof r['resumedByRunId'] !== 'string' || r['resumedByRunId'] === '')) {
     return 'resumedByRunId 非非空字符串'
   }
+  if (r['syncForeground'] !== undefined && typeof r['syncForeground'] !== 'boolean') {
+    return 'syncForeground 非布尔'
+  }
+  if (
+    r['detachedAt'] !== undefined &&
+    (typeof r['detachedAt'] !== 'number' || !Number.isFinite(r['detachedAt'] as number))
+  ) {
+    return 'detachedAt 非有限数值'
+  }
   return undefined
 }
 

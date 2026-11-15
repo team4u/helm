@@ -467,6 +467,46 @@ describe('WorkflowService listRuns integrity', () => {
     await service.close()
   })
 
+  it('record 前台同步字段（syncForeground/detachedAt）类型非法 fails as workflow_record_corrupt', timeout, async () => {
+    const state = makeStateStore()
+    const service = await runTwoSettledRuns(dataDir, state)
+    const index = state.get<Array<{ id: string }>>('workflow/runs', [])
+    const victim = index[0]!.id
+    const record = readRecordFile(dataDir, victim)
+
+    // syncForeground 非布尔：绝不 TS 强转当有效前台标记。
+    writeRecordFile(dataDir, { ...record, syncForeground: 'yes' })
+    assert.throws(
+      () => service.getRun(victim),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'workflow_record_corrupt')
+        assert.equal(error.status, 500)
+        assert.ok(error.message.includes('syncForeground'), `message should name the problem: ${error.message}`)
+        return true
+      },
+    )
+
+    // detachedAt 非数值（字符串时间戳等）：同 corrupt，不伪造 detach 事实。
+    writeRecordFile(dataDir, { ...record, syncForeground: true, detachedAt: '2024-01-01T00:00:00Z' })
+    assert.throws(
+      () => service.listRuns(),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'workflow_record_corrupt')
+        assert.equal((error.details as { runId?: string }).runId, victim)
+        return true
+      },
+    )
+
+    // 合法形状（布尔 + 有限数值）正常读回：不因新增字段误伤既有记录。
+    writeRecordFile(dataDir, { ...record, syncForeground: true, detachedAt: 1_700_000_000_000 })
+    const summary = service.getRun(victim)
+    assert.equal(summary.syncForeground, true)
+    assert.equal(summary.detachedAt, 1_700_000_000_000)
+    await service.close()
+  })
+
   it('record file with invalid shape (status out of enum / missing name) fails as workflow_record_corrupt', timeout, async () => {
     const state = makeStateStore()
     const service = await runTwoSettledRuns(dataDir, state)

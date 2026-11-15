@@ -77,13 +77,17 @@ interface ProgrammableHost extends WorkflowServiceHost {
   spawnArrived(): Promise<void>
 }
 
-function makeHost(): ProgrammableHost {
+function makeHost(options: { immediatePrompts?: string[] } = {}): ProgrammableHost {
+  const immediatePrompts = new Set(options.immediatePrompts ?? [])
   const settledCalls: SettledCall[] = []
   const abortedConversations: number[] = []
   let releaseSpawn: (() => void) | undefined
-  let notifySpawnArrived: (() => void) | undefined
-  const spawnArrivedPromise = new Promise<void>((resolve) => {
-    notifySpawnArrived = resolve
+  // spawn 到达通知（可重臂）：每次 spawn 解析当前 promise 并为下一次重臂——
+  // journal 缓存命中的 agent 不产生 spawn 调用，等待方需精确等到「下一个真实
+  // spawn」而非首个历史 spawn。
+  let spawnArrivedResolve: (() => void) | undefined
+  let arrivalPromise: Promise<void> = new Promise<void>((resolve) => {
+    spawnArrivedResolve = resolve
   })
   const host: ProgrammableHost = {
     settledCalls,
@@ -92,12 +96,16 @@ function makeHost(): ProgrammableHost {
       releaseSpawn?.()
     },
     spawnArrived() {
-      return spawnArrivedPromise
+      return arrivalPromise
     },
     async spawnAgent(request) {
       const execution: AgentExecutionInfo = { conversationId: 42 }
       request.onResolved?.(execution)
-      notifySpawnArrived?.()
+      spawnArrivedResolve?.()
+      arrivalPromise = new Promise<void>((resolve) => {
+        spawnArrivedResolve = resolve
+      })
+      if (immediatePrompts.has(request.prompt)) return 'quick-result'
       const wait = new Promise<void>((resolve) => {
         releaseSpawn = resolve
       })
@@ -435,6 +443,139 @@ describe('前台同步 workflow detach（service.run foreground 上下文）', (
     host.release()
     assert.equal(await service.wait(run.id), 'slow-result')
     assert.equal(host.settledCalls.length, 1)
+    await service.close()
+  })
+
+  it('detach 后 run 快速终态而工具尚未登记等待：waitForeground 以持久 detachedAt 交还 detach 事件', timeout, async () => {
+    const host = makeHost()
+    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const { run } = await service.startBackgroundAgent(
+      { parentConversationId: 1, prompt: '同步任务' },
+      { foreground: true },
+    )
+    // detach（此刻无等待者）→ run 随即自然完成并从活跃表移除，工具才登记等待。
+    await service.detachForegroundRun(run.id)
+    host.release()
+    assert.equal(await service.wait(run.id), 'slow-result')
+    assert.equal(service.getRun(run.id).status, 'completed')
+    let onDetachedCalls = 0
+    const outcome = await service.waitForeground(run.id, {
+      onDetached: () => {
+        onDetachedCalls++
+      },
+    })
+    assert.equal(outcome, 'detached', '已落盘的 detach 事件不可因等待者迟到而丢失')
+    assert.equal(onDetachedCalls, 1, '迟到的 detached 判定同样同步执行 onDetached（解绑父 signal）')
+
+    // 对照：未 detach 的已终态 run（活跃表已删）仍按 settled 返回。
+    const { run: quick } = await service.startBackgroundAgent(
+      { parentConversationId: 1, prompt: '快任务' },
+      { foreground: true },
+    )
+    host.release()
+    assert.equal(await service.wait(quick.id), 'slow-result')
+    assert.equal(await service.waitForeground(quick.id), 'settled')
+    await service.close()
+  })
+
+  it('显式 foreground 的 resume 覆盖继承的后台通知标记；普通 resume 仍继承', timeout, async () => {
+    const host = makeHost({ immediatePrompts: ['快速节点'] })
+    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const gatedScript =
+      'export const meta = { name: "fg-resume-notify", description: "t" }\n' +
+      'const a = await agent("快速节点")\n' +
+      'if (args.fail) throw new Error("boom")\n' +
+      'const b = await agent("慢节点")\n' +
+      'return [a, b]'
+    const notificationsOf = (runId: string): number =>
+      host.settledCalls.filter((call) => call.summary.id === runId).length
+
+    // 后台源 run：快速节点完成后脚本失败（journal 留下可缓存的前缀）。
+    const source = await service.run(
+      { conversationId: 1, script: gatedScript, args: { fail: true } },
+      { notifyParentOnSettle: true },
+    )
+    await service.wait(source.id)
+    assert.equal(service.getRun(source.id).status, 'failed')
+    assert.equal(notificationsOf(source.id), 1, '后台源 run 终态通知一次')
+
+    // 普通 resume（CLI/action 语义：未传 foreground）：继承源 run 的后台通知标记。
+    const plain = await service.run({ resumeFromRunId: source.id })
+    await service.wait(plain.id)
+    const plainRecord = readRecord(dataDir, plain.id)
+    assert.equal(plainRecord['notifyParentOnSettle'], true, '普通 resume 仍继承后台通知标记')
+    assert.equal(plainRecord['syncForeground'], undefined)
+    assert.equal(notificationsOf(plain.id), 1, '继承标记的 resume run 终态通知一次')
+
+    // 显式 foreground 的 resume（工具 background:false 语义）：不继承通知标记，
+    // 标记 syncForeground——此前的继承会让 detach 被误判 detach_not_foreground
+    // 且自然完成多发汇报。用第二个同型源 run（首个源 run 已被 plain 接管）。
+    const source2 = await service.run(
+      { conversationId: 1, script: gatedScript, args: { fail: true } },
+      { notifyParentOnSettle: true },
+    )
+    await service.wait(source2.id)
+    const fg = await service.run(
+      { resumeFromRunId: source2.id, args: { fail: false } },
+      { foreground: true },
+    )
+    assert.equal(fg.syncForeground, true)
+    // 等待慢节点真实发起（快速节点被 journal 缓存，不产生 spawn 调用）。
+    await host.spawnArrived()
+    const fgRecord = readRecord(dataDir, fg.id)
+    assert.notEqual(fgRecord['notifyParentOnSettle'], true, '显式前台覆盖继承的后台通知标记')
+    assert.equal(fgRecord['syncForeground'], true)
+    // detach 可用（回归：此前被继承标记误拒）；转后台后终态恰一次通知。
+    const waitPromise = service.waitForeground(fg.id)
+    await service.detachForegroundRun(fg.id)
+    assert.equal(await waitPromise, 'detached')
+    host.release()
+    await service.wait(fg.id)
+    assert.equal(service.getRun(fg.id).status, 'completed')
+    assert.equal(notificationsOf(fg.id), 1, '转后台的 resume run 终态恰一次通知')
+    await service.close()
+  })
+
+  it('启动窗口父 signal 已中止：装 listener 后补检立即中止 run（不依赖级联兜底）', timeout, async () => {
+    const host = makeHost()
+    // durable 快照 flush 全部阻塞在预置闸门：run() 在途期间（返回 summary 之前）
+    // 确定性注入父 signal abort，复刻工具「listener 尚未安装」的启动窗口。
+    const inner = makeStateStore()
+    let releaseHold!: () => void
+    const hold = new Promise<void>((resolve) => {
+      releaseHold = resolve
+    })
+    const state: WorkflowStateStore = {
+      ...inner,
+      flush: async (): Promise<void> => {
+        await hold
+      },
+    }
+    const service = new WorkflowService({ dataDir, host, state })
+    const parentSignal = new AbortController()
+    const startedPromise = service.run(
+      {
+        conversationId: 1,
+        script:
+          'export const meta = { name: "fg-startup-abort", description: "t" }\n' +
+          'const r = await agent("挂起节点")\nreturn r',
+      },
+      { foreground: true },
+    )
+    // run() 尚未返回（durable 快照 flush 阻塞在闸门）：父回合中止，随后放行。
+    parentSignal.abort()
+    releaseHold()
+    const started = await startedPromise
+
+    // 复刻 tools.ts 同步工作流路径的接线：先装 listener 再补检已中止信号。
+    const onAbort = (): void => {
+      void service.abort(started.id).catch(() => {})
+    }
+    parentSignal.signal.addEventListener('abort', onAbort, { once: true })
+    if (parentSignal.signal.aborted) onAbort()
+
+    assert.equal(await service.waitForeground(started.id), 'settled')
+    assert.equal(service.getRun(started.id).status, 'aborted', '启动窗口已中止的父 signal 必须立即中止 run')
     await service.close()
   })
 })

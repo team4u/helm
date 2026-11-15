@@ -266,6 +266,11 @@ export async function startWorkflowRun(
   const abort = new AbortController()
   const createdAt = Date.now()
   const meta = svc.library.peekMeta(script)
+  // 显式前台同步（工具 background:false 的 resume）：接管 run 的等待方是新
+  // 调用方，不继承源 run 的后台通知标记——否则后台 run 的同步 resume 会被
+  // 误判已后台（detach 拒绝）且自然完成多发汇报；通知链在 detach 置位后才
+  // 接入。CLI/action 的后台 resume（未传 foreground）仍继承原标记。
+  const foregroundContext = context?.foreground === true
 
   const record: RunRecord = {
     id: runId,
@@ -276,15 +281,16 @@ export async function startWorkflowRun(
     createdAt,
     updatedAt: createdAt,
     kind: 'workflow',
-    // 后台启动（工具 background）：结算后向父会话投递通知并参与重启恢复
-    // 的守卫中止（isBackgroundRecord）；同步 run 不置位、不通知。resume 新
-    // run 继承原记录的后台标记（自动续跑保持父会话通知链路）。
-    ...(context?.notifyParentOnSettle === true || replayFrom?.notifyParentOnSettle === true
+    // 后台启动（工具 background / CLI-action 后台 resume 继承源标记）：结算后
+    // 向父会话投递通知并参与重启恢复的守卫中止（isBackgroundRecord）；同步
+    // run 不置位、不通知（显式前台覆盖继承，见 foregroundContext 注释）。
+    ...(!foregroundContext &&
+      (context?.notifyParentOnSettle === true || replayFrom?.notifyParentOnSettle === true)
       ? { notifyParentOnSettle: true }
       : {}),
     // 前台同步标记（工具 background:false）：可被 detach 转后台；resume 不
     // 继承（接管 run 的等待方由新调用方决定，不伪造前台事实）。
-    ...(context?.foreground === true ? { syncForeground: true } : {}),
+    ...(foregroundContext ? { syncForeground: true } : {}),
     ...(replayFrom !== undefined ? { autoResumeCount: (replayFrom.autoResumeCount ?? 0) + 1 } : {}),
     ...(meta?.description !== undefined ? { description: svc.redact(meta.description) } : {}),
     ...(meta?.phases !== undefined

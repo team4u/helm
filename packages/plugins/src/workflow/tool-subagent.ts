@@ -214,13 +214,14 @@ export function registerSubagentTool(
         if (outcome === 'detached') {
           // detach 转后台：立即返回后台句柄（与 background:true 返回形状兼容），
           // 终态经 BackgroundReporter followUp 汇报；父 signal 已由 detach
-          // 临界段解绑，不再中止本 run。
+          // 临界段解绑，不再中止本 run。status 现读真实值（detach 后 run 可能
+          // 已快速终态，不伪造 running）。
           syncRunsDoc()
           const payload = {
             ok: true,
             background: true,
             runId: started.run.id,
-            status: 'running',
+            status: workflows.getRun(started.run.id).status,
             ...(execution !== undefined ? { execution: executionOf(execution) } : {}),
           }
           const footer = subagentFooter(undefined, execution)
