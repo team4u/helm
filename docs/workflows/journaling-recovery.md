@@ -1,6 +1,6 @@
 # 状态流水与故障恢复
 
-本文介绍 `builtin:workflow` 的确定性执行流水（Journaling）：账本如何记账、恢复时为何坚持前缀重放而非无序查表、Agent 与 Action 的不同失败语义，以及 Hub 重启后的两阶段恢复。所有机制位于插件引擎内（`engine/journal.ts` 与 `engine/runtime.ts`）。
+本文介绍 `builtin:workflow` 的确定性执行流水（Journaling）：账本如何记账、恢复时为何坚持前缀重放而非无序查表、Agent 与 Action 的不同失败语义，以及 Hub 重启后的两阶段恢复。所有机制位于插件引擎内（`engine/journal.ts`、`engine/replay.ts` 与 `engine/runtime.ts`）。
 
 ## 账本布局与事件契约
 
@@ -10,7 +10,7 @@
 <Hub 数据目录>/plugins/builtin%3Aworkflow/artifacts/<conversationId>/workflow-<runId>.jsonl
 ```
 
-默认数据目录下示例：`~/.helm/plugins/builtin%3Aworkflow/artifacts/42/workflow-wf_1a2b3c4d5e6f.jsonl`（`runId` 形如 `wf_<12位十六进制>`）。已保存的工作流脚本位于 `<插件数据目录>/workflows/`；运行索引（轻量字段：`id`、`conversationId`、`status`、`createdAt`、`updatedAt`、`notifyParentOnSettle`、`autoResumeCount`、`resumedByRunId`）持久化在插件私有 `records` 文档（Hub 的 `state.sqlite` 插件文档表），每个 Run 的完整记录经原子写（`.tmp` + `fsync` + `rename`）存为 `<插件数据目录>/artifacts/<conversationId>/workflow-<runId>.record.json`，`worktree-state` 保留全部登记不删减历史。Web 界面摘要经按会话分片的 `runs` 投影订阅；进度树中节点的 `prompt`、`gate.output` 与 `error` 只保留最多 1024 字符的截断预览，完整内容以子会话与账本为准。经 `workflow()` 嵌套的整棵工作流树共用同一份账本与同一递增 `callIndex`，不按子工作流拆分账本。
+默认数据目录下示例：`~/.helm/plugins/builtin%3Aworkflow/artifacts/42/workflow-wf_1a2b3c4d5e6f.jsonl`（`runId` 形如 `wf_<12位十六进制>`）。已保存的工作流脚本位于 `<插件数据目录>/workflows/`；运行索引（轻量字段：`id`、`conversationId`、`status`、`createdAt`、`updatedAt`、`notifyParentOnSettle`、`autoResumeCount`、`resumedByRunId`）持久化在插件私有 `records` 文档（Hub 的 `state.sqlite` 插件文档表），每个 Run 的完整记录经原子写（`.tmp` + `fsync` + `rename`）存为 `<插件数据目录>/artifacts/<conversationId>/workflow-<runId>.record.json`，`worktree-state` 保留全部登记不删减历史。Web 界面摘要经按会话分片的 `runs` 投影订阅；进度树中节点的 `prompt`、`gate.output` 与 `error` 只保留最多 1024 字符的截断预览，完整内容以子会话与账本为准。经 `workflow()` 嵌套的整棵工作流树共用同一份账本与本次运行的全局审计序号；恢复身份按各工作流的稳定 scope 路径与局部调用序号区分。
 
 每行一个 JSON 对象，三类事件行：
 
@@ -20,23 +20,25 @@
 | `action_started` | 动作执行意图（先于 handler 落盘） | `index`, `key`, `idempotent?` |
 | `action` | 动作调用终态 | `index`, `key`, `ok`, `result` / `error`, `idempotent?` |
 
-`index` 是调用发起位次（agent 与 action 共享同一全序，并发完成顺序不影响分配）；`seq` 是落盘物理单调序号（恢复时按 `index` 前缀校验、按 `seq` 去重）；`key` 是调用载荷的哈希摘要。
+每行必须携带 `scopePath` 与 `scopeCallIndex`：前者由父工作流路径和嵌套调用的位置组成（根为 `root`），后者是该 scope 内 agent/action 调用的发起序号。自动重试共用同一局部调用序号，以 `attempt` 区分。嵌套加载或模型完成的先后顺序不改变恢复身份。
+
+`index` 是本次 Run 内的全局尝试/动作位次，`invocationIndex` 用于把多次尝试折叠到同一进度节点；恢复时重新分配这些审计序号。`seq` 是落盘物理单调序号；`key` 是调用载荷的哈希摘要。缺少必需 scope 字段的账本不属于当前格式，不提供旧格式读取或迁移。
 
 **Key 计算**（SHA-256，取 32 位十六进制）：agent 的 Key 覆盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`attachments`（原样序列化，不去重不排序——ID 或次序变化都是不同调用；未提供与空数组语义不同，不归一化）、`schema` 的序列化形式、`maxSubagentDepth`（派工上限）、`secretNames`（机密授予槽；DSL `agent()` 不支持该选项，此槽仅预留恒为空占位）与 `cwd`（工作目录），采用带版本标记的固定槽 canonical 形态（新增字段只追加在版本号之后，杜绝槽位碰撞）。`timeoutMs` 与 `gateTimeoutMs` 只限制执行时限，不改变调用身份，不记入 Key；`maxAttempts` 的每次尝试各占一条独立 `index` 记录，不做归并。action 的 Key 覆盖全限定 `actionId` 与序列化后的输入。任何参数微调都会改变 Key，防止误用过期缓存。自动重试的失败原因先经宿主脱敏，再生成本次尝试的重试提示词（原文追加 `[attempt N failed]` 失败块）与 Key——重试提示词不同，每次尝试的 Key 也不同。
 
-当前 Key 版本为 **v3**：在 v2 的固定槽上无条件追加 `cwd` 槽。无条件占位使升版后全部调用 Key 与旧账本失配（含未携带 `cwd` 的调用）。开发阶段不做迁移：旧账本安全降级为断链重跑，不存在「未携带新字段则 Key 不变」的兼容承诺。
+当前 Key 版本为 **v3**，固定槽包含 `cwd`。开发阶段不提供旧格式兼容或迁移；不符合当前契约的开发账本应清理后新建运行。
 
 ## 前缀重放，不是查表缓存
 
-恢复时引擎按调用位次 `index`、载荷哈希 `key` 与调用类型逐项匹配（agent 槽位撞上 action 行视同失配）。成功终态复用历史结果；可识别的失败尝试沿 `attempt` 链还原重试进度。遇到首个失配点立即断链，此后转为实时执行；每次转入实时执行前都检查剩余非幂等动作，存在副作用风险则显式拒绝恢复。
+恢复时引擎在每个 scope 内按 `scopeCallIndex`、`attempt`、载荷哈希 `key` 与调用类型匹配。成功终态复用历史结果；可识别的失败尝试沿 `attempt` 链还原重试进度。首次失配会使该 scope 及其后续子 scope 断链；兄弟 scope 保持各自的前缀，因此并发模块 B 失败不会让已完成的模块 A 重跑。每次转入实时执行前仍检查未复用的非幂等动作，存在副作用风险则显式拒绝。
 
-为什么不做「输入相同就复用」的无序查表？因为在编排流程里，上游环境变化意味着后续调用处于不同业务状态——另一场 run 第 12 位恰好相同的 prompt 不是同一份工作。乱序复用后续匹配，等同于在不同上下文中冒用历史结果。前缀单调匹配保证：只有当此前的每一步都确认与账本一致时，本步的历史结果才有资格被复用。
+为什么不做「输入相同就复用」的无序查表？因为在编排流程里，上游环境变化意味着后续调用处于不同业务状态——另一场 run 第 12 位恰好相同的 prompt 不是同一份工作。乱序复用后续匹配，等同于在不同上下文中冒用历史结果。每个 scope 的前缀单调匹配保证：只有当前 scope 的前序调用仍匹配时，历史结果才可复用。父 scope 断链后，后续子 scope 也不能冒用旧结果。同一 scope 的调用发起顺序须确定；各 scope 之间的并发结算顺序可以改变。
 
 两类特殊失配的守卫：伪造或不一致的缓存行拒绝——`resumed` 标记必须与本次调用是否 resume 严格对应；重放命中的行若带 `schema`，还会用当前契约复检一次。前缀失配后命中「仅存在于账本缓存」的 resume 目标时显式失败（无活会话可续接，绝不伪造 live 续接）。
 
 重放命中 `agent` 行时，`agent.withMeta` 与 `goal` 从账本还原该行的 `execution`（含 Worktree 描述）与 `gate` 字段，脚本可继续对该 Worktree 执行合入或清理。多级工作流的 `label` 以 `${scopeId}:${label}` 登记（见 DSL 手册的 `workflow()` 一节）：同名 `label` 在不同子工作流内是不同节点，前缀匹配按各自的 Key 逐项比对，整棵树对根 `runId` 一次续跑。
 
-**尝试链的重放**：`maxAttempts` 的每次尝试各占一条独立 `index` 行；`invocationIndex` 记录所属调用的首位次，并发下重试槽位按它还原（不会因别的调用插队错位），进度树也按它把同一调用的多次尝试折叠为稳定节点身份。账本终态齐全时整份重放零执行：已成功的尝试直接复用结果；进程重启后从最后一次尝试继续——已失败的尝试行按 `attempt` 链重放登记，下次尝试从最后失败处续接同一子会话。目标已耗尽 `maxAttempts` 仍失败时，重放如实回放失败（`goal` / `agent.withMeta` 拿到 `ok: false` 与最后一次 `error`，完整尝试链保留在账本中），不重跑也不伪装成功；未配置重试（默认 `maxAttempts: 1`）的失败行保持旧语义：不作为成功前缀，断链后转 live 重试。只有带执行句柄（`execution.conversationId` / `executionId`）的失败行才能作为续接锚点，无句柄的失败不可续接。
+**尝试链的重放**：`maxAttempts` 的每次尝试各占一条独立 `index` 行；恢复使用同一 `scopePath + scopeCallIndex` 下的 `attempt` 链匹配，进度树按本次 Run 的 `invocationIndex` 折叠节点。重试句柄使用稳定调用身份，不依赖上一次 Run 的全局序号。账本终态齐全时整份重放零执行：已成功的尝试直接复用结果；进程重启后从最后一次尝试继续——已失败的尝试行按 `attempt` 链重放登记，下次尝试从最后失败处续接同一子会话。目标已耗尽 `maxAttempts` 仍失败时，重放如实回放失败（`goal` / `agent.withMeta` 拿到 `ok: false` 与最后一次 `error`，完整尝试链保留在账本中），不重跑也不伪装成功；未配置重试（默认 `maxAttempts: 1`）的失败行保持旧语义：不作为成功前缀，断链后转 live 重试。只有带执行句柄（`execution.conversationId` / `executionId`）的失败行才能作为续接锚点，无句柄的失败不可续接。
 
 ## Agent 尽力记账 vs Action 强一致
 
@@ -62,7 +64,7 @@ flowchart TD
 
 **幂等承诺的边界**：`idempotent` 是动作作者（`PluginActionSpec.idempotent`）或脚本作者（`action(..., { idempotent: true })`）对「可安全重复执行（包括部分完成或中断状态下重试）」的主观承诺，不是引擎静态分析或动态检测所得。已声明幂等的动作，其悬挂 `action_started` 或失败终态行不触发不确定性拒绝；成功时前缀重放照常 100% 复用，失败或中断时允许 `resumeFromRunId` 放行并断链重跑。内建 `env.exec` 定义为非幂等。
 
-**后缀非幂等断链保护**：重放严格保持前缀单调。当首次前缀失配、执行失败或缺行发生断链时，若旧账本剩余后缀中存在任何非幂等动作（无论成功、失败还是未完成），恢复以 `workflow_action_uncertain` 显式拒绝——自动转 live 重跑会重复执行外部副作用，此时只能开新 run 或人工确认后处理旧账本。
+**后缀非幂等断链保护**：当前 scope 断链时，若其后续调用或子 scope 中仍有未复用的非幂等动作，恢复以 `workflow_action_uncertain` 显式拒绝。已经补记并复用的动作不重复执行；兄弟 scope 的动作不受另一个模块失败影响。父 scope 变化仍会检查后代动作，避免在上游条件变化后冒用旧结果。
 
 **agent 的弹性语义**：账本写入异常仅计数 `ioErrors` 供宿主诊断。默认 `maxAttempts: 1` 的失败调用在恢复时断链转 live；自动重试的失败尝试按尝试链重放，人工 retry 与 skip 也保留原决定。节点重试安全由任务作者自行保证——引擎不为智能体调用执行命令、写文件等副作用提供恰好一次承诺。
 
@@ -84,7 +86,7 @@ flowchart TD
 
 插件服务生命周期分两个阶段，由宿主的统一启动屏障保证顺序（全部插件 `prepare` 完成后才开始 `start`）：
 
-**阶段一 `prepareRecovery`（全局 prepare 屏障内）**：只读遗留记录，为仍在 `running` 状态的 subagent run 关联的子会话落持久 abort 标记——不唤醒 SDK 调度器、不提交任何输入。此刻其他插件的工具尚未注册完成，任何输入提交都会产生孤儿回合。
+**阶段一 `prepareRecovery`（全局 prepare 屏障内）**：读取遗留记录，为仍在 `running` 状态的后台 workflow / subagent run 关联的子会话落持久 abort 标记——不唤醒 SDK 调度器、不提交任何输入。此刻其他插件的工具尚未注册完成，任何输入提交都会产生孤儿回合。
 
 **阶段二 `init`（服务 start）**：终止遗留任务、把跨重启的 `running` run 显式标 `failed` 并附原因（workflow 记 `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）`，subagent 记 `subagent run interrupted by process restart（可凭 conversationId/executionId 通过 resume 续接）`），经 outbox 补发父会话通知（`notifiedAt` 标记保证 at-least-once，不重复打扰）。此刻工具已注册，补发输入消费安全。
 

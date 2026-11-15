@@ -4,9 +4,9 @@
  * 基于 @tintinweb/pi-subagents v0.23.1 (MIT) journal.ts 移植并按 helm 语义加固：
  *
  * ## 前缀重放，不是查表
- * 每行同时按调用发起位次（index，agent 与 action 共享同一全序）与调用载荷哈希
- * （key）双重校验；首次失配起全部转 live 执行。乱序复用后续匹配等于复用在不同
- * 上游条件下产生的结果——另一场 run 的第 12 位 prompt 不是同一份工作。
+ * 每行按稳定 scope 路径、scope 内调用位次、尝试序号与载荷哈希（key）匹配。
+ * 一个 scope 失配后，其后续调用及子 scope 转 live；兄弟 scope 独立恢复。
+ * 全局 index 只用于本次 run 的审计与进度，不受历史并发完成顺序约束。
  *
  * ## agent 与 action 的不同失败语义
  * - agent 失败行照记（断链后下次 live 重试）；I/O 写失败不阻断运行（账本只是
@@ -30,7 +30,7 @@
  *
  * ## 排序
  * 行内 seq 为引擎内单调递增的落盘顺序号（并发下按调用发起顺序分配 index，
- * 落盘顺序可能与 index 顺序交错，恢复时按 index 前缀校验、按 seq 去重）。
+ * 落盘顺序可能与 index 顺序交错，恢复时按 scope 内前缀校验、按 seq 去重）。
  */
 
 import { createHash } from 'node:crypto'
@@ -42,7 +42,12 @@ import { existsSync, readFileSync } from 'node:fs'
  * 显式按 variant 声明而非 `Omit<Union, 'v'|'seq'>`——Omit 不分布，会把
  * agent/action 各自的合法字段（ok/text/result…）从联合上剥掉。
  */
-export type JournalWriteInput =
+export interface JournalScope {
+  scopePath: string
+  scopeCallIndex: number
+}
+
+export type JournalWriteInput = JournalScope & (
   | {
       type: 'agent'
       index: number
@@ -54,9 +59,9 @@ export type JournalWriteInput =
       execution?: JournalAgentExecution
       /** 门禁结果（gate 失败/超时回传）：落盘前经 redactJournalEntry 脱敏。 */
       gate?: JournalGateResult
-      /** 自动重试尝试序号；普通 agent 行缺省以保持旧语义。 */
+      /** 自动重试尝试序号；缺省表示第一次尝试。 */
       attempt?: number
-      /** 同一调用的首个 index；重放并发重试时用于还原原尝试槽位。 */
+      /** 本次 run 中所属调用的首个 index，用于审计和进度折叠。 */
       invocationIndex?: number
       prompt?: string
       /** 当前失败后由人工发起重试。自动重试按 maxAttempts 判断。 */
@@ -67,7 +72,13 @@ export type JournalWriteInput =
       timedOut?: boolean
       seq?: number
     }
-  | { type: 'action_started'; index: number; key: string; seq?: number; idempotent?: true }
+  | {
+      type: 'action_started'
+      index: number
+      key: string
+      seq?: number
+      idempotent?: true
+    }
   | {
       type: 'action'
       index: number
@@ -78,6 +89,7 @@ export type JournalWriteInput =
       seq?: number
       idempotent?: true
     }
+)
 
 /**
  * agent 行附带的执行元数据（AgentWithMetaResult['execution'] 的持久形状）。
@@ -105,14 +117,14 @@ export interface JournalGateResult {
  *
  * 这是编排引擎的恢复账本，**不是公开 API 数据形状**（原 protocol 契约迁回引擎）：
  * - `seq` 是落盘顺序号（引擎内单调递增）；`index` 是调用发起位次（agent 与 action 共享同一全序）。
- * - `key` 是调用载荷哈希；重放按 index 前缀匹配，首次失配起全部转 live 执行。
+ * - `scopePath` / `scopeCallIndex` 是必需的恢复身份；`key` 校验实际载荷，`attempt` 区分重试。
  * - agent 失败行断链后 live 重试（沿用上游语义）；action 已确认的成败行重放时直接复用，
  *   绝不重执行副作用；`action_started` 无对应终态行 = 进程在动作执行中崩溃，恢复必须
  *   显式报 `workflow_action_uncertain`，由人类确认后再决定，禁止自动重放。
  *
  * HTTP / CLI 客户端不得依赖本类型的字段细节做任何重放决策；如需展示只应只读透传。
  */
-export type WorkflowJournalEntry =
+export type WorkflowJournalEntry = JournalScope & (
   | {
       v: 1
       seq: number
@@ -121,7 +133,7 @@ export type WorkflowJournalEntry =
       key: string
       ok: boolean
       text?: string
-      /** 该调用续接了既有子会话（agent({ resume })）；重放时同其他行一样按 index+key 逐项匹配。 */
+      /** 该调用续接了既有子会话；恢复时校验实际续接语义。 */
       resumed?: true
       /** 执行元数据快照（含 worktree；已脱敏）。maxAttempts 每次尝试各占独立 index 行。 */
       execution?: JournalAgentExecution
@@ -158,6 +170,7 @@ export type WorkflowJournalEntry =
       /** 与 action_started 行的幂等声明一致；恢复判定见 readJournal。 */
       idempotent?: true
     }
+)
 
 /** agent 调用的 key 输入（决定该 agent 做什么的所有字段）。 */
 export interface AgentJournalKeyInput {
@@ -276,6 +289,14 @@ function isAgentGateShape(value: unknown): value is JournalGateResult {
   return true
 }
 
+export function hasValidScopeIdentity(value: unknown): value is JournalScope {
+  if (typeof value !== 'object' || value === null) return false
+  const entry = value as Record<string, unknown>
+  return typeof entry['scopePath'] === 'string' && entry['scopePath'].length <= 4096 &&
+    /^root(?:\/(?:0|[1-9][0-9]*))*$/.test(entry['scopePath']) &&
+    Number.isSafeInteger(entry['scopeCallIndex']) && (entry['scopeCallIndex'] as number) >= 0
+}
+
 function isAgentEntry(value: unknown): value is Extract<WorkflowJournalEntry, { type: 'agent' }> {
   if (typeof value !== 'object' || value === null) return false
   const e = value as Record<string, unknown>
@@ -284,6 +305,7 @@ function isAgentEntry(value: unknown): value is Extract<WorkflowJournalEntry, { 
     e['type'] === 'agent' &&
     Number.isSafeInteger(e['index']) &&
     (e['index'] as number) >= 0 &&
+    hasValidScopeIdentity(e) &&
     typeof e['key'] === 'string' &&
     typeof e['ok'] === 'boolean' &&
     (e['text'] === undefined || typeof e['text'] === 'string') &&
@@ -308,6 +330,7 @@ function isActionStartedEntry(value: unknown): value is Extract<WorkflowJournalE
     e['type'] === 'action_started' &&
     Number.isSafeInteger(e['index']) &&
     (e['index'] as number) >= 0 &&
+    hasValidScopeIdentity(e) &&
     typeof e['key'] === 'string' &&
     (e['idempotent'] === undefined || e['idempotent'] === true)
   )
@@ -321,6 +344,7 @@ function isActionEntry(value: unknown): value is Extract<WorkflowJournalEntry, {
     e['type'] === 'action' &&
     Number.isSafeInteger(e['index']) &&
     (e['index'] as number) >= 0 &&
+    hasValidScopeIdentity(e) &&
     typeof e['key'] === 'string' &&
     typeof e['ok'] === 'boolean' &&
     (e['idempotent'] === undefined || e['idempotent'] === true)
@@ -393,15 +417,15 @@ export function readJournal(path: string): JournalReadResult {
     if (verdict.kind === 'uncertain') corruptUncertain = true
   }
 
-  // 按 index+key 配对 action_started 与终态。seq 单调但 index 并发交错，配对按
-  // index+key 双匹配，不假设相邻。任何悬挂 started（不论 seq 位置）都不确定：
+  // scope、调用位次、全局 index 与 key 都须一致，才能配对意图与终态。
+  // 不能让另一个 scope 的终态掩盖悬挂意图。任何悬挂 started 都不确定：
   // 终态行可能因损坏丢失，"started 落盘后 handler 被允许执行"是唯一事实。
   const startedByKey = new Map<string, Extract<WorkflowJournalEntry, { type: 'action_started' }>>()
   for (const entry of entries) {
-    if (entry.type === 'action_started') startedByKey.set(`${entry.index}:${entry.key}`, entry)
+    if (entry.type === 'action_started') startedByKey.set(JSON.stringify([entry.scopePath, entry.scopeCallIndex, entry.index, entry.key]), entry)
   }
   for (const entry of entries) {
-    if (entry.type === 'action') startedByKey.delete(`${entry.index}:${entry.key}`)
+    if (entry.type === 'action') startedByKey.delete(JSON.stringify([entry.scopePath, entry.scopeCallIndex, entry.index, entry.key]))
   }
   let dangling = false
   for (const started of startedByKey.values()) {

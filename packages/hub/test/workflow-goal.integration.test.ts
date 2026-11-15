@@ -28,10 +28,8 @@
  *   副作用计数零新增），仅模块 B 失败节点 live 重跑并最终 completed；
  *   B 侧 resume('plan') 续接的是 B 自己的子会话（按会话 transcript 证据
  *   核验，同名 label 不得串到 A 侧会话）。
- * - 顺序约束（如实声明）：账本前缀重放按 index+key 严格匹配，跨模块并发
- *   调用的落账顺序在重放 run 中不可复现（实验验证：缓存节点即时回放会使
- *   并发交错翻转变 live 重跑），故总控顺序启动两个模块；同名 label 的并发
- *   验收由模块 A 内部 parallel 的两个同名 'plan' 节点承载。
+ * - 总控并发启动 A/B，A 内部再并发 goal 与叶子工作流；恢复时缓存节点
+ *   即时返回也不得让成功模块重新执行模型、合并或清理。
  *
  * 诚实性纪律：真 SQLite + 真 pi-durable + 真 Git 仓库 + 真文件账本；faux
  * provider 只按 transcript 标记路由脚本化模型响应，不伪造引擎/内核结果。
@@ -313,8 +311,7 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
         `尝试账本应按 index/attempt/ok 落账：${JSON.stringify(entries.map((e) => ({ i: e['index'], a: e['attempt'], ok: e['ok'] })))}`,
       )
       // 第 1 次：门禁 1.5s 进程组超时强杀（真实 runShell 超时路径）。
-      //（原生链路门禁事实在 gate.timedOut/exitCode；attempt 级 timedOut 仅在
-      // 宿主 fallback 门禁路径透传，不在此断言。）
+      assert.equal(first['timedOut'], true, '原生门禁超时也应标记本次尝试 timedOut')
       assert.equal(first['gate'].ok, false)
       assert.equal(first['gate'].timedOut, true, '第 1 次门禁应如实回传 timedOut=true')
       assert.equal(first['gate'].exitCode, null, '被杀进程无退出码，应为 null')
@@ -425,7 +422,7 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
 
     // ---- 三级脚本：总控（内联）→ 模块 t3-mod-a / t3-mod-b → 叶子 t3-sub-a。----
     // 模块 A 内部 parallel 承载同名 'plan' 的真并发（goal 与叶子子工作流）；
-    // 总控顺序启动两模块（账本前缀重放的调用顺序确定性约束，见文件头）。
+    // 总控也并发启动两个模块，验证恢复时独立 scope 的缓存调用仍可命中。
     const goalGate = 'node -e "process.exit(require(\'fs\').existsSync(\'mod-a-done.txt\')?0:1)"'
     // 信号动作追加写一行，兼作副作用计数器——resume 不得追加第二行。
     const signalCommand = [
@@ -492,10 +489,14 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
       'return { plan, fix }\n'
 
     const masterScript =
-      'export const meta = { name: "t3-master", description: "总控：两个同名 plan 模块（顺序启动，见测试文件头顺序约束说明）" }\n' +
-      'const a = await workflow("t3-mod-a", args)\n' +
+      'export const meta = { name: "t3-master", description: "总控：两个同名 plan 模块并发启动" }\n' +
+      'const pair = await parallel([\n' +
+      '  () => workflow("t3-mod-a", args),\n' +
+      '  () => workflow("t3-mod-b", args),\n' +
+      '])\n' +
+      'const a = pair[0]\n' +
+      'const b = pair[1]\n' +
       'if (!a) throw new Error("module A workflow failed")\n' +
-      'const b = await workflow("t3-mod-b", args)\n' +
       'if (!b) throw new Error("module B workflow failed")\n' +
       'return { a, b }\n'
 
@@ -529,8 +530,8 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
       )
       const failed = (await env.inspectRun(failedRunId)).run
       assert.equal(failed.status, 'failed')
-      assert.match(String(failed.error), /mod-b plan agent failed/, `失败应源于模块 B 的 plan agent：${failed.error}`)
-      assert.doesNotMatch(String(failed.error), /mod-a|module A/, `模块 A 不应失败：${failed.error}`)
+      assert.match(String(failed.error), /module B workflow failed/, `并发模块 B 失败应由总控显式报告：${failed.error}`)
+      assert.doesNotMatch(String(failed.error), /module A workflow failed/, `模块 A 不应先于模块 B 报失败：${failed.error}`)
 
       // 第 1 次账本：模块 A 全部成功；模块 B 的 plan 失败但保留执行元数据。
       const journal1 = readJournal(dataDir, env.conversationId, failedRunId)

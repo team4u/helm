@@ -284,12 +284,13 @@ const AGENT_OPTIONS = ["label", "phase", "model", "agentType", "isolation", "gat
 let nextPhaseIndex = 0;
 let nextScopeId = 0;
 
-function makeScope(name, depth) {
+function makeScope(name, depth, path) {
   const scope = {
-    // 每个 scope（根或 workflow() 子工作流）分配递增 id；根 scope 最先创建恒为 0。
-    // agent payload 携带 scopeId，宿主据此把 label/resume 登记按 scope 隔离
-    //（设计 §4.1：并发子工作流可用同名 label 互不覆盖）。
+    // live label 使用会话内编号；恢复使用由调用位置决定的稳定路径。
     id: nextScopeId++,
+    path: path || "root",
+    nextJournalCallIndex: 0,
+    nextWorkflowIndex: 0,
     name: name,
     depth: depth,
     prefix: name === undefined ? "" : "\\u25b8 " + name,
@@ -556,6 +557,8 @@ async function callAgentHost(scope, options, withMeta) {
     gateTimeoutMs: options.gateTimeoutMs,
     maxAttempts: options.maxAttempts,
     scopeId: scope.id,
+    scopePath: scope.path,
+    scopeCallIndex: scope.nextJournalCallIndex++,
     ...(withMeta ? { withMeta: true } : {}),
   });
 }
@@ -655,6 +658,8 @@ async function actionIn(scope, actionId, input, opts) {
   const phaseTitle = phaseName !== undefined ? scopedTitle(scope, phaseName) : scope.ambientPhaseTitle;
 
   return await callHost("action", {
+    scopePath: scope.path,
+    scopeCallIndex: scope.nextJournalCallIndex++,
     actionId: id,
     input: input,
     label: label,
@@ -742,6 +747,7 @@ async function workflowIn(scope, nameOrRef, args) {
     throw error;
   }
   nestedCount++;
+  const workflowIndex = scope.nextWorkflowIndex++;
 
   let loaded;
   try {
@@ -751,7 +757,8 @@ async function workflowIn(scope, nameOrRef, args) {
     throw new Error('workflow("' + label + '"): ' + describe(error));
   }
 
-  const child = makeScope(loaded.name, scope.depth + 1);
+  const childPath = scope.path + "/" + workflowIndex;
+  const child = makeScope(loaded.name, scope.depth + 1, childPath);
   child.ambientPhaseIndex = definePhaseIn(child, undefined);
   child.ambientPhaseTitle = scopedTitle(child, undefined);
 

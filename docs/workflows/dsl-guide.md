@@ -185,7 +185,7 @@ if (diff.ok) log(diff.output)
 
 嵌套调用其他工作流。`ref` 是已保存工作流名字符串，或 `{ scriptPath }` 对象（不提供则抛错）；`args` 原样传给子工作流。子工作流的名字用于进度前缀与错误定位（进度条目会带子工作流派生前缀）。
 
-嵌套深度上限为 4 层（根工作流为第 0 层），总调用数仍受 `WORKFLOW_NESTED_CAP = 256` 约束。整棵工作流树在同一 Worker 进程内执行，所有 `agent` 与 `action` 节点共用同一份递增 `callIndex` 与同一个 `workflow-<runId>.jsonl` 账本。中途中断后对根 `runId` 调一次 `resumeFromRunId`，即可按账本前缀跳过全部已完成节点，整树续跑。
+嵌套深度上限为 4 层（根工作流为第 0 层），总调用数仍受 `WORKFLOW_NESTED_CAP = 256` 约束。整棵工作流树在同一 Worker 进程内执行，所有 `agent` 与 `action` 节点共用一个 `workflow-<runId>.jsonl` 账本。全局 `index` 记录本次 Run 的审计顺序；恢复按稳定 scope 路径、局部调用序号和尝试序号匹配。中途中断后对根 `runId` 调一次 `resumeFromRunId`，可复用各 scope 的成功前缀；并发模块中一个失败，不会让另一个模块的成功节点和动作重跑。同一 scope 内的调用发起顺序须保持确定。
 
 每次 `workflow()` 调用分配递增的 `scopeId`（根工作流为 `0`）。`label` 与 `resume` 以 `${scopeId}:${label}` 为键登记：并发运行的多个子工作流可以各自使用同名 `label`（如 `"plan"`），互不覆盖对方的续接目标。
 

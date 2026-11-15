@@ -490,7 +490,7 @@ describe('workflow journal replay (agent)', () => {
     const replay1 = await runWorkflow({
       script: META('j1') + 'const a = await agent("one")\nconst b = await agent("two")\nreturn [a, b]',
       host: host2,
-      journal: { entries: [...entries], append },
+      journal: { entries: [...entries], append: () => {} },
     })
     assert.equal(replay1.status, 'completed')
     assert.equal(spawns, 0, 'prefix replay should spawn nothing')
@@ -507,7 +507,7 @@ describe('workflow journal replay (agent)', () => {
     const replay2 = await runWorkflow({
       script: META('j1') + 'const a = await agent("CHANGED")\nconst b = await agent("two")\nreturn [a, b]',
       host: host3,
-      journal: { entries: [...entries], append },
+      journal: { entries: [...entries], append: () => {} },
     })
     assert.equal(replay2.status, 'completed')
     assert.equal(spawns3, 2, 'first mismatch makes all calls live')

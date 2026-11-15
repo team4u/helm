@@ -90,7 +90,11 @@ test('账本版本/序号损坏和相同 seq 的冲突记录不能掩盖已执�
   const path = join(env.dataDir, 'journal-corrupt.jsonl')
   const agent = { v: 1, seq: 0, type: 'agent', index: 0, key: 'agent', scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'done' }
   const action = { v: 1, seq: 0, type: 'action', index: 1, key: 'effect', scopePath: 'root', scopeCallIndex: 1, ok: true, result: 'sent' }
-  for (const row of [{ ...action, seq: -1 }, { ...action, v: 2 }, { ...action, seq: null }]) {
+  for (const row of [
+    { ...action, seq: -1 }, { ...action, v: 2 }, { ...action, seq: null },
+    { ...action, scopePath: undefined }, { ...action, scopeCallIndex: -1 },
+    { ...action, scopePath: 'outside/0' }, { ...action, scopePath: 'root/../1' },
+  ]) {
     writeFileSync(path, `${JSON.stringify(row)}\n`)
     assert.equal(readJournal(path).actionUncertain, true)
   }
@@ -102,6 +106,10 @@ test('账本版本/序号损坏和相同 seq 的冲突记录不能掩盖已执�
   const duplicate = readJournal(path)
   assert.equal(duplicate.actionUncertain, false)
   assert.equal(duplicate.entries.length, 1)
+  const intent = { ...action, type: 'action_started', scopePath: 'root/0', scopeCallIndex: 0 }
+  const otherScopeResult = { ...action, seq: 1, scopePath: 'root/1', scopeCallIndex: 0 }
+  writeFileSync(path, `${JSON.stringify(intent)}\n${JSON.stringify(otherScopeResult)}\n`)
+  assert.equal(readJournal(path).actionUncertain, true, '其他 scope 的终态不能掩盖悬挂的非幂等意图')
 })
 
 test('redactJournalEntry：text/execution/gate 逐值脱敏，action 行原样透传', timeout, () => {
