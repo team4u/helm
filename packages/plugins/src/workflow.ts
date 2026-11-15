@@ -53,10 +53,8 @@
  * - ./workflow/actions.ts: 12 个动作（五端复用）
  * - ./workflow/ui.ts: 前端 UI 扩展点声明
  */
-import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { resolvePluginClientRoot } from './asset-paths.js'
 import {
   WORKFLOW_PLUGIN_ID,
   WORKFLOW_RUNS_DOC,
@@ -78,25 +76,6 @@ import { registerWorkflowUi } from './workflow/ui.js'
 
 export { WORKFLOW_PLUGIN_ID }
 
-/**
- * clientRoot 兼容 src / dist 运行路径：编译后 dist/workflow.js
- * 的同级目录无 client/（tsx 源目录有）；探测失败回退包内 src 源目录。
- */
-function resolveClientRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'workflow', 'client')
-  if (existsSync(local)) return local
-  // dist/workflow.js -> src/workflow/client
-  const pkgRoot = dirname(here) // dist -> package root 或 src -> package root
-  const srcFallback = join(pkgRoot, 'src', 'workflow', 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    'workflow_plugin_client_missing',
-    `内置插件 ${WORKFLOW_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
-}
-
 export function createWorkflowPlugin(): PluginDefinition {
   return {
     id: WORKFLOW_PLUGIN_ID,
@@ -104,7 +83,7 @@ export function createWorkflowPlugin(): PluginDefinition {
     description: '多智能体确定性编排：subagent / SubagentWorkflow 工具、受管 Git Worktree、运行记录与任务面板。',
     icon: 'workflow',
     version: '0.1.0',
-    clientRoot: resolveClientRoot(),
+    clientRoot: resolvePluginClientRoot(WORKFLOW_PLUGIN_ID, 'workflow', 'workflow_plugin_client_missing'),
     definePlugin(ctx) {
       // ---- 会话分片公共文档：runs（每父会话只写自己的 run 列表） ----
       // 不进全局首帧/全局 SSE；前端经专用订阅流按会话拉取与增量更新。
