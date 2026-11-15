@@ -11,8 +11,8 @@
  *    不敏感；无括号的普通 validation 字样不在排除面）；
  * 3. 账本不确定（悬挂 action_started / ok:false action / 損坏行）一律排除，
  *    即便存在 ok agent 行；
- * 4. 账本无任何 ok agent/action（空文件 / 仅失败 agent 行 / 文件缺失 ENOENT）
- *    排除；action_started+action ok 配对放行；
+ * 4. 账本无任何可安全恢复锚点（空文件 / 无 execution 的失败 agent 行 / 文件缺失 ENOENT）
+ *    排除；带 execution 的失败尝试与 action_started+action ok 配对放行；
  * 5. 按 failedAt 升序（最旧失败优先），与索引写入顺序无关；
  * 6. maxAttempts 边界：非正整数显式 validation_error；1 时 count 1 排除、
  *    0 保留；
@@ -342,10 +342,10 @@ test('maxAttempts 非正整数显式 validation_error；1 时 count 1 排除、0
 })
 
 // ---------------------------------------------------------------------------
-// 7. 记录文件缺失：显式 workflow_record_corrupt 上抛，不静默跳过
+// 7. 记录文件缺失：诊断后跳过该条，不影响其他候选
 // ---------------------------------------------------------------------------
 
-test('索引指向缺失记录文件：显式 workflow_record_corrupt 上抛，绝不静默降级为残缺列表', timeout, (t) => {
+test('索引指向缺失记录文件：诊断后跳过该条，保留其他健康候选', timeout, (t) => {
   const env = makeEnv(t)
   const journal = { journal: [agentOk(0)] }
   seedCandidateRun(env, 'wf_ok000000001', 601, 1_700_004_000_000, journal)
@@ -358,12 +358,5 @@ test('索引指向缺失记录文件：显式 workflow_record_corrupt 上抛，�
     'workflow-wf_miss0000002.record.json',
   )
   rmSync(recordFile)
-  assert.throws(
-    () => env.service.listAutoResumeCandidates(),
-    (error: unknown) =>
-      error instanceof HelmError &&
-      error.code === 'workflow_record_corrupt' &&
-      error.message.includes('wf_miss0000002'),
-    '缺记录文件必须显式报损坏并带 runId 诊断',
-  )
+  assert.deepEqual(env.service.listAutoResumeCandidates().map((candidate) => candidate.runId), ['wf_ok000000001'])
 })

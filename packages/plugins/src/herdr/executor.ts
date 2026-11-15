@@ -197,6 +197,14 @@ export class HerdrExecutor {
    *   （remote_hub_unreachable_for_artifacts，零远端副作用）。
    */
   async handle(request: AgentSpawnRequest): Promise<HandleOutcome> {
+    if (request.gateTimeoutMs !== undefined) {
+      throw new HelmError(
+        'unsupported_runtime',
+        'Herdr 当前不支持 gateTimeoutMs；请在 gate 命令中自行设置超时，或移除该选项',
+        400,
+        { gateTimeoutMs: request.gateTimeoutMs },
+      )
+    }
     if (request.resume !== undefined) {
       const candidates = this.registry.findByResumeRef(request.resume)
       if (candidates.length === 0) {
@@ -720,6 +728,10 @@ export class HerdrExecutor {
     let rejectAbort!: (error: Error) => void
     const aborted = new Promise<never>((_, reject) => { rejectAbort = reject })
     const onAbort = () => {
+      if (isTimeoutSignal(request.signal)) {
+        rejectAbort(new HelmError('agent_timeout', `pane ${pane.paneId} 执行超时，保留窗格供 resume 续接`, 408))
+        return
+      }
       cleanup ??= this.closePane(pane, 'cancelled')
       void cleanup.catch(() => {})
       rejectAbort(new HelmError('aborted', `pane ${pane.paneId} 执行已取消`, 499))
@@ -743,6 +755,16 @@ export class HerdrExecutor {
     try {
       return await Promise.race([aborted, task()])
     } catch (error) {
+      if (isTimeoutSignal(request.signal)) {
+        await this.markFailed(pane, error instanceof Error ? error.message : 'execution timed out')
+        const snapshot = await this.readDiagnostic(pane)
+        throw new HelmError(
+          'agent_timeout',
+          `pane ${pane.paneId} 执行超时，窗格已保留供 resume 续接\n终端最后 40 行（脱敏）：\n${snapshot}`,
+          408,
+          { paneId: pane.paneId, snapshot },
+        )
+      }
       if (request.signal?.aborted || (error as { code?: string }).code === 'aborted') {
         cleanup ??= this.closePane(pane, 'cancelled')
         try { await cleanup }
@@ -1996,6 +2018,11 @@ export class HerdrExecutor {
   private async project(pane: ManagedPane, token: string): Promise<void> {
     await this.projector.project(nodeIdOf(pane), pane.paneId, token)
   }
+}
+
+function isTimeoutSignal(signal: AbortSignal | undefined): boolean {
+  const reason = signal?.reason
+  return reason instanceof Error && reason.name === 'TimeoutError'
 }
 
 function signalOf(request: AgentSpawnRequest): AbortSignal {

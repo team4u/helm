@@ -135,7 +135,70 @@ describe('workflow runtime failure handle registration', () => {
 })
 
 // ---------------------------------------------------------------------------
-// ③ 手动 retry 环（maxAttempts 自动重试共用该环；载荷接线前的环回归锁定）
+// ③ 自动重试尝试级账本与跨重启恢复
+// ---------------------------------------------------------------------------
+
+describe('workflow runtime attempt journal replay', () => {
+  it('journals each attempt and resumes from a persisted conversation handle', timeout, async () => {
+    const writes: Array<Record<string, unknown>> = []
+    const calls: string[] = []
+    const host = baseHost({
+      async spawnAgent(request) {
+        calls.push(`spawn:${request.index}`)
+        request.onResolved?.({ conversationId: 77 })
+        return { ok: false, error: 'gate failed' }
+      },
+      async resumeAgent(agentId, prompt, options) {
+        calls.push(`resume:${agentId}:${options?.resumeRef ?? 'mapped'}:${prompt.includes('[attempt 1 failed]')}`)
+        return { ok: true, text: 'fixed' }
+      },
+    })
+    const first = await runWorkflow({
+      script: META('attempt-journal') + 'return await agent.withMeta("job", { label: "worker", maxAttempts: 2 })',
+      host,
+      journal: { append(entry) { writes.push({ ...entry }) } },
+    })
+    assert.equal(first.status, 'completed', first.error)
+    assert.deepEqual(first.value, { ok: true, output: 'fixed', attempts: 2, execution: { conversationId: 77 } })
+    assert.deepEqual(calls, ['spawn:0', 'resume:wf-agent-0:mapped:true'])
+    assert.equal(writes.length, 2)
+    assert.equal(writes[0]!.type, 'agent')
+    assert.equal(writes[0]!.ok, false)
+    assert.equal(writes[0]!.attempt, 1)
+    assert.equal(writes[0]!.index, 0)
+    assert.equal(writes[1]!.ok, true)
+    assert.equal(writes[1]!.attempt, 2)
+    assert.equal(writes[1]!.index, 1)
+
+    const replayCalls: string[] = []
+    const replayWrites: Array<Record<string, unknown>> = []
+    const replayHost = baseHost({
+      async spawnAgent() {
+        replayCalls.push('spawn')
+        throw new Error('replay must not spawn')
+      },
+      async resumeAgent(agentId, _prompt, options) {
+        replayCalls.push(`resume:${agentId}:${options?.resumeRef ?? 'missing'}`)
+        throw new Error('completed attempt must be reused')
+      },
+    })
+    const resumed = await runWorkflow({
+      script: META('attempt-journal') + 'return await agent.withMeta("job", { label: "worker", maxAttempts: 2 })',
+      host: replayHost,
+      journal: {
+        entries: writes as never,
+        append(entry) { replayWrites.push({ ...entry }) },
+      },
+    })
+    assert.equal(resumed.status, 'completed')
+    assert.deepEqual(resumed.value, { ok: true, output: 'fixed', attempts: 2, execution: { conversationId: 77 } }, JSON.stringify({ writes, replayCalls, replayWrites, progress: resumed.progress, error: resumed.error }))
+    assert.deepEqual(replayCalls, [])
+    assert.deepEqual(replayWrites.map((entry) => [entry.index, entry.attempt, entry.ok]), [[0, 1, false], [1, 2, true]])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ④ 手动 retry 环（maxAttempts 自动重试共用该环）
 // ---------------------------------------------------------------------------
 
 describe('workflow runtime manual retry ring', () => {

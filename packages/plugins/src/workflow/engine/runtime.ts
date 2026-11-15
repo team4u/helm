@@ -82,6 +82,8 @@ export interface WorkflowSpawnRequest {
   cwd?: string
   timeoutMs?: number
   gateTimeoutMs?: number
+  /** 跨重启恢复时传递账本中的 execution handle。 */
+  resumeRef?: string
   /**
    * 执行环境确定后回传（原生子会话或外部运行时均适用）：conversationId /
    * executionId / effectiveCwd / worktree 等元数据 + 实际模型信息。引擎把
@@ -214,6 +216,8 @@ export interface ResumeAgentOptions {
   maxSubagentDepth?: number
   timeoutMs?: number
   gateTimeoutMs?: number
+  /** 跨重启恢复时使用的持久 execution handle；缺省沿用 agentId 映射。 */
+  resumeRef?: string
   onResolved?: WorkflowSpawnRequest['onResolved']
   onGateResult?: WorkflowSpawnRequest['onGateResult']
 }
@@ -534,6 +538,8 @@ interface CompletedChild {
    * 需要真正续接时必须显式失败，绝不伪造 live 续接。
    */
   replayed?: true
+  /** 跨进程恢复时从账本还原的原生/外部执行句柄。 */
+  resumeRef?: string
 }
 
 function executionInfoForMeta(base: WorkflowAgentEntry): Record<string, unknown> | undefined {
@@ -702,15 +708,27 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
    * 首次断链时，若旧账本后续存在任何非幂等 action（无论成功、失败或未完成），
    * 必须显式报错拒绝继续恢复转 live，防止自动重跑导致外部副作用重复执行。
    */
-  function replayAt(index: number, key: string, kind: 'agent' | 'action'): ReplayResult {
+  function replayAt(
+    index: number,
+    key: string,
+    kind: 'agent' | 'action',
+    allowFailedAgentAttempt = false,
+    maxAttempts = 1,
+  ): ReplayResult {
     if (!prefixIntact) return { hit: false }
     const entry = settledByIndex.get(index)
+    const replayableFailure =
+      entry?.type === 'agent' &&
+      !entry.ok &&
+      allowFailedAgentAttempt &&
+      entry.attempt !== undefined &&
+      entry.attempt <= maxAttempts
     if (
       entry === undefined ||
       entry.index !== index ||
       entry.key !== key ||
       entry.type !== kind ||
-      !entry.ok
+      (!entry.ok && !replayableFailure)
     ) {
       prefixIntact = false
       if (hasNonIdempotentActionSuffix(index)) {
@@ -991,6 +1009,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       // 调用位次在发起时分配（agent 与 action 共享全序）；并发完成顺序不参与。
       const index = callIndex++
       agentCount++
+      const maxAttempts = payload.maxAttempts ?? 1
       const agentId = resumed?.agentId ?? `wf-agent-${index}`
       const label = payload.label ?? resumed?.label ?? derivedLabel(payload.prompt)
       // agentType 缺省 'assistant'：helm 的 agentType 是 Profile ID，宿主
@@ -1036,7 +1055,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         cwd: payload.cwd,
         schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,
       }
-      const replayed = replayAt(index, agentJournalKey(keyInput), 'agent')
+      const firstAttemptKey = agentJournalKey(keyInput)
+      const replayed = replayAt(index, firstAttemptKey, 'agent', true, maxAttempts)
       if (replayed.conflictError !== undefined) {
         respond(callId, false, undefined, replayed.conflictError, true)
         return
@@ -1048,7 +1068,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       if (
         replayedEntry !== undefined &&
         replayedEntry.type === 'agent' &&
-        replayedEntry.resumed === true !== (payload.resume !== undefined)
+        replayedEntry.resumed === true !== (payload.resume !== undefined || (replayedEntry.attempt ?? 1) > 1)
       ) {
         prefixIntact = false
         replayedEntry = undefined
@@ -1066,7 +1086,126 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           return
         }
       }
-      if (replayedEntry !== undefined && compiledSchema !== undefined) {
+      let attempt = 1
+      let attemptIndex = index
+      let attemptPrompt = payload.prompt!
+      let attemptKey = firstAttemptKey
+      let resumeTarget: CompletedChild | undefined = resumed
+      let replayedIndex = index
+      let terminalReplayFailure: Extract<WorkflowJournalEntry, { type: 'agent' }> | undefined
+      while (replayedEntry?.type === 'agent' && !replayedEntry.ok) {
+        const failedAttempt = replayedEntry.attempt
+        const expectedResumed = payload.resume !== undefined || (failedAttempt ?? 1) > 1
+        if (
+          failedAttempt === undefined ||
+          failedAttempt > maxAttempts ||
+          replayedEntry.resumed === true !== expectedResumed
+        ) {
+          prefixIntact = false
+          replayedEntry = undefined
+          break
+        }
+        terminalReplayFailure = replayedEntry
+        replayedCount++
+        await recordAgent({
+          index: replayedEntry.index,
+          key: replayedEntry.key,
+          ok: false,
+          ...(expectedResumed ? { resumed: true } : {}),
+          attempt: failedAttempt,
+          ...(replayedEntry.error !== undefined ? { error: replayedEntry.error } : {}),
+          ...(replayedEntry.timedOut === true ? { timedOut: true } : {}),
+          ...(replayedEntry.execution !== undefined ? { execution: replayedEntry.execution } : {}),
+          ...(replayedEntry.gate !== undefined ? { gate: replayedEntry.gate } : {}),
+        })
+        emit([{
+          ...base,
+          queuedAt,
+          state: 'error',
+          error: replayedEntry.error ?? 'Agent failed.',
+          ...(replayedEntry.timedOut === true ? { timedOut: true } : {}),
+          attempt: failedAttempt,
+        }])
+        const execution = replayedEntry.execution
+        if (execution !== undefined) {
+          base.nodeId = execution.nodeId
+          base.conversationId = execution.conversationId
+          base.executionId = execution.executionId
+          base.effectiveCwd = execution.effectiveCwd
+          base.worktree = execution.worktree as WorkflowAgentEntry['worktree']
+        }
+        if (replayedEntry.gate !== undefined) base.gate = replayedEntry.gate
+        const persistedHandle = execution?.executionId ??
+          (execution?.conversationId !== undefined ? String(execution.conversationId) : undefined)
+        if (failedAttempt >= maxAttempts || persistedHandle === undefined || resumeAgent === undefined) {
+          prefixIntact = false
+          if (hasNonIdempotentActionSuffix(replayedEntry.index)) {
+            respond(
+              callId,
+              false,
+              undefined,
+              `workflow_action_uncertain: journal replay stopped at failed agent index ${replayedEntry.index}, ` +
+                'but the remaining journal suffix contains non-idempotent action(s).',
+              true,
+            )
+            return
+          }
+          break
+        }
+        resumeTarget = {
+          agentId,
+          label,
+          agentType,
+          ...(model !== undefined ? { model } : {}),
+          ...(isolation !== undefined ? { isolation } : {}),
+          scopeId,
+          resumeRef: persistedHandle,
+        }
+        attempt = failedAttempt + 1
+        attemptPrompt = agentRetryPrompt(payload.prompt!, failedAttempt, replayedEntry.error ?? 'Agent failed.')
+        attemptIndex = callIndex++
+        attemptKey = agentJournalKey({ ...keyInput, prompt: attemptPrompt, resume: agentId })
+        const next = replayAt(attemptIndex, attemptKey, 'agent', true, maxAttempts)
+        if (next.conflictError !== undefined) {
+          respond(callId, false, undefined, next.conflictError, true)
+          return
+        }
+        replayedIndex = attemptIndex
+        replayedEntry = next.hit ? next.entry : undefined
+        if (replayedEntry === undefined) {
+          prefixIntact = false
+          if (hasNonIdempotentActionSuffix(attemptIndex)) {
+            respond(
+              callId,
+              false,
+              undefined,
+              `workflow_action_uncertain: journal replay broke prefix at index ${attemptIndex}, ` +
+                'but the remaining journal suffix contains non-idempotent action(s).',
+              true,
+            )
+            return
+          }
+        }
+      }
+      if (
+        terminalReplayFailure !== undefined &&
+        replayedEntry?.type !== 'agent' &&
+        (attempt >= maxAttempts || resumeTarget === undefined || resumeAgent === undefined)
+      ) {
+        const error = terminalReplayFailure.error ?? 'Agent failed.'
+        openLaunches.delete(callId)
+        respond(callId, true, payload.withMeta === true ? {
+          ok: false,
+          output: null,
+          attempts: terminalReplayFailure.attempt ?? attempt,
+          error,
+          ...(terminalReplayFailure.timedOut === true ? { timedOut: true } : {}),
+          ...(terminalReplayFailure.execution !== undefined ? { execution: terminalReplayFailure.execution } : {}),
+          ...(terminalReplayFailure.gate !== undefined ? { gate: terminalReplayFailure.gate } : {}),
+        } : null)
+        return
+      }
+      if (replayedEntry !== undefined && replayedEntry.type === 'agent' && replayedEntry.ok && compiledSchema !== undefined) {
         const recheck = applySchema({ ok: true, text: replayedEntry.type === 'agent' ? replayedEntry.text ?? '' : '' }, compiledSchema)
         if (!recheck.ok) {
           prefixIntact = false
@@ -1086,7 +1225,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           }
         }
       }
-      if (replayedEntry !== undefined && replayedEntry.type === 'agent') {
+      if (replayedEntry !== undefined && replayedEntry.type === 'agent' && replayedEntry.ok) {
         replayedCount++
         const replayedText = replayedEntry.text ?? ''
         // 缓存节点也登记为可 resume 的 child（标 replayed）：同一脚本内后续
@@ -1117,18 +1256,19 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         openLaunches.delete(callId)
         // 缓存分支记账保留 resumed 标记：原始调用是 resume 的，新账本必须如实。
         await recordAgent({
-          index,
+          index: replayedIndex,
           key: replayedEntry.key,
           ok: true,
           text: replayedText,
           ...(replayedEntry.type === 'agent' && replayedEntry.resumed === true ? { resumed: true } : {}),
           ...(replayedEntry.execution !== undefined ? { execution: replayedEntry.execution } : {}),
           ...(replayedEntry.gate !== undefined ? { gate: replayedEntry.gate } : {}),
+          ...(replayedEntry.attempt !== undefined ? { attempt: replayedEntry.attempt } : {}),
         })
         respond(callId, true, payload.withMeta === true ? {
           ok: true,
           output: replayedText,
-          attempts: 1,
+          attempts: replayedEntry.attempt ?? 1,
           ...(replayedEntry.execution !== undefined ? { execution: replayedEntry.execution } : {}),
           ...(replayedEntry.gate !== undefined ? { gate: replayedEntry.gate } : {}),
         } : replayedText)
@@ -1151,11 +1291,10 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         return
       }
 
-      const key = agentJournalKey(keyInput)
       const resumeMark = payload.resume !== undefined ? ({ resumed: true } as const) : {}
 
       const settleSkipped = (extra: Partial<WorkflowAgentEntry>) => {
-        void recordAgent({ index, key, ok: false, ...resumeMark })
+        void recordAgent({ index: attemptIndex, key: attemptKey, ok: false, ...resumeMark, attempt, error: 'Skipped by user.' })
         emit([{ ...base, queuedAt, ...extra, state: 'error', skipped: true, error: 'Skipped by user.' }])
         respond(callId, true, null)
       }
@@ -1163,12 +1302,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       const live: LiveAgent = { agentId, started: false }
       liveAgents.set(index, live)
       const intent = (): LiveAgent['intent'] => live.intent
-      const maxAttempts = payload.maxAttempts ?? 1
-      let attempt = 1
-      // 续接路由目标：脚本级 resume 的既有 child，或自动重试登记的失败句柄。
-      let resumeTarget: CompletedChild | undefined = resumed
-      // 下次尝试发送的 prompt：自动重试时在原文末尾追加失败原因（增量，不累计）。
-      let attemptPrompt = payload.prompt!
+
       /** 吸收执行环境元数据到进度行；失败分支同样吸收——conversationId/executionId 是登记续接句柄的依据。 */
       const absorbExecutionInfo = (info: AgentExecutionInfo): void => {
         if (info.nodeId !== undefined) base.nodeId = info.nodeId
@@ -1233,6 +1367,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             result =
               resumeTarget !== undefined && resumeAgent !== undefined
                 ? await resumeAgent(resumeTarget.agentId, attemptPrompt, {
+                    ...(resumeTarget.resumeRef !== undefined ? { resumeRef: resumeTarget.resumeRef } : {}),
                     ...(compiledSchema !== undefined ? { schema: compiledSchema } : {}),
                     ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
                     ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
@@ -1244,7 +1379,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                   })
                 : await host.spawnAgent({
                     agentId,
-                    index,
+                    index: attemptIndex,
                     prompt: attemptPrompt,
                     label,
                     agentType,
@@ -1304,7 +1439,23 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
           if (intent() === 'retry' && !aborted) {
             live.intent = undefined
+            const retryError = result.error ?? 'Agent failed.'
+            const retryExecution = executionInfoForMeta(base)
+            await recordAgent({
+              index: attemptIndex,
+              key: attemptKey,
+              ok: false,
+              ...(payload.resume !== undefined || attempt > 1 ? { resumed: true } : {}),
+              attempt,
+              error: retryError,
+              ...(result.timedOut === true ? { timedOut: true } : {}),
+              ...(retryExecution !== undefined ? { execution: retryExecution as import('./journal.js').JournalAgentExecution } : {}),
+              ...(base.gate !== undefined ? { gate: base.gate } : {}),
+            })
             attempt++
+            attemptIndex = callIndex++
+            attemptPrompt = payload.prompt!
+            attemptKey = agentJournalKey({ ...keyInput, prompt: attemptPrompt, resume: agentId })
             emit([{ ...base, queuedAt, attempt }])
             continue
           }
@@ -1327,7 +1478,12 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             emit([{ ...common, state: 'done', resultPreview: preview(text) }])
             const execution = executionInfoForMeta(base)
             await recordAgent({
-              index, key, ok: true, text, ...resumeMark,
+              index: attemptIndex,
+              key: attemptKey,
+              ok: true,
+              text,
+              ...(payload.resume !== undefined || attempt > 1 ? { resumed: true } : {}),
+              attempt,
               ...(execution !== undefined ? { execution } : {}),
               ...(base.gate !== undefined ? { gate: base.gate } : {}),
             })
@@ -1359,15 +1515,39 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           // 失败原因以增量块追加进下次尝试 prompt，经 resumeAgent 续接同一
           // 子会话继续修改，而非另起新会话重跑。
           if (failureHandle !== undefined && attempt < maxAttempts && resumeAgent !== undefined) {
-            attemptPrompt = agentRetryPrompt(payload.prompt!, attempt, result.error ?? 'Agent failed.')
+            const failedError = result.error ?? 'Agent failed.'
+            const execution = executionInfoForMeta(base)
+            await recordAgent({
+              index: attemptIndex,
+              key: attemptKey,
+              ok: false,
+              ...(payload.resume !== undefined || attempt > 1 ? { resumed: true } : {}),
+              attempt,
+              error: redactText(failedError),
+              ...(result.timedOut === true ? { timedOut: true } : {}),
+              ...(execution !== undefined ? { execution: execution as import('./journal.js').JournalAgentExecution } : {}),
+              ...(base.gate !== undefined ? { gate: base.gate } : {}),
+            })
+            attemptPrompt = agentRetryPrompt(payload.prompt!, attempt, failedError)
             attempt++
-            resumeTarget = failureHandle
+            resumeTarget = {
+              ...failureHandle,
+              ...(base.executionId !== undefined ? { resumeRef: base.executionId } : {}),
+            }
+            attemptIndex = callIndex++
+            attemptKey = agentJournalKey({ ...keyInput, prompt: attemptPrompt, resume: agentId })
             emit([{ ...base, queuedAt, attempt }])
             continue
           }
           const execution = executionInfoForMeta(base)
           await recordAgent({
-            index, key, ok: false, ...resumeMark,
+            index: attemptIndex,
+            key: attemptKey,
+            ok: false,
+            ...(payload.resume !== undefined || attempt > 1 ? { resumed: true } : {}),
+            attempt,
+            error: result.error ?? 'Agent failed.',
+            ...(result.timedOut === true ? { timedOut: true } : {}),
             ...(execution !== undefined ? { execution } : {}),
             ...(base.gate !== undefined ? { gate: base.gate } : {}),
           })

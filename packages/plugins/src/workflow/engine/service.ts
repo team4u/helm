@@ -565,7 +565,8 @@ export class WorkflowService {
    */
   async prepareRecovery(): Promise<void> {
     if (this.recoveryPrepared) return
-    const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+    const rawIndex = this.readRunIndexForRecovery()
+    const index = rawIndex as RunIndexEntry[]
     const childIds = new Set<number>()
     for (const entry of index) {
       let record: RunRecord
@@ -610,7 +611,8 @@ export class WorkflowService {
     this.initPromise = (async () => {
       try {
         await this.prepareRecovery()
-        const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+        const rawIndex = this.readRunIndexForRecovery()
+        const index = rawIndex as RunIndexEntry[]
         let changed = false
         // 通知 outbox 补发：崩溃前已达终态但 onBackgroundAgentSettled 未成功（或
         // 未及调用）的记录。回调失败不阻断 init（stderr 诊断，notifiedAt 不置位，
@@ -1185,12 +1187,27 @@ export class WorkflowService {
     // 可见），不会出现双 run 同时可续跑。
     if (replayFrom !== undefined) {
       if (replayFrom.resumedByRunId !== undefined) {
-        throw new HelmError(
-          'conflict',
-          `工作流 ${replayFrom.id} 已被运行 ${replayFrom.resumedByRunId} 接管续跑；请从接管的 run 继续`,
-          409,
-          { runId: replayFrom.id, resumedByRunId: replayFrom.resumedByRunId },
-        )
+        let takeoverExists = this.active.has(replayFrom.resumedByRunId)
+        if (!takeoverExists) {
+          try {
+            this.loadRecord(replayFrom.resumedByRunId)
+            takeoverExists = true
+          } catch (error) {
+            if (!(error instanceof HelmError && error.code === 'not_found')) throw error
+            process.stderr.write(
+              `workflow resume: clearing orphaned takeover marker ${replayFrom.resumedByRunId} on ${replayFrom.id}\n`,
+            )
+          }
+        }
+        if (takeoverExists) {
+          throw new HelmError(
+            'conflict',
+            `工作流 ${replayFrom.id} 已被运行 ${replayFrom.resumedByRunId} 接管续跑；请从接管的 run 继续`,
+            409,
+            { runId: replayFrom.id, resumedByRunId: replayFrom.resumedByRunId },
+          )
+        }
+        replayFrom.resumedByRunId = undefined
       }
       replayFrom.resumedByRunId = runId
       replayFrom.updatedAt = Date.now()
@@ -2102,7 +2119,12 @@ export class WorkflowService {
         isNonRetryableWorkflowError(record.error)
       ) continue
       const journal = readJournal(record.journalPath)
-      if (journal.actionUncertain || !journal.entries.some((line) => (line.type === 'agent' || line.type === 'action') && line.ok)) continue
+      const hasSafeReplayAnchor = journal.entries.some((line) =>
+        line.type === 'action'
+          ? line.ok
+          : line.type === 'agent' && (line.ok || (line.attempt !== undefined && line.execution !== undefined)),
+      )
+      if (journal.actionUncertain || !hasSafeReplayAnchor) continue
       candidates.push({
         runId: record.id,
         conversationId: record.conversationId,
@@ -2342,6 +2364,7 @@ export class WorkflowService {
             ...(options?.maxSubagentDepth !== undefined ? { maxSubagentDepth: options.maxSubagentDepth } : {}),
             ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
             ...(options?.gateTimeoutMs !== undefined ? { gateTimeoutMs: options.gateTimeoutMs } : {}),
+            ...(options?.resumeRef !== undefined ? { resumeRef: options.resumeRef } : {}),
             ...(options?.onResolved !== undefined ? { onResolved: options.onResolved } : {}),
             ...(options?.onGateResult !== undefined ? { onGateResult: options.onGateResult } : {}),
           },
@@ -2469,7 +2492,8 @@ export class WorkflowService {
     // resume 严格续接：优先用本 run 内 spawn 时记录的 convId；仅当本 run 未见
     // 过（如 resume 自重放账本的 agent）才退回 native 全局映射。
     const knownConvId = conversationByAgent.get(request.agentId)
-    const resumeRef = isResume ? String(knownConvId ?? nativeAgentId) : undefined
+    const requestedResumeRef = (request as WorkflowSpawnRequest & { resumeRef?: string }).resumeRef
+    const resumeRef = isResume ? String(requestedResumeRef ?? knownConvId ?? nativeAgentId) : undefined
 
     /** 已 sanitized 的执行元数据（onResolved 可能与 spawn 返回前多次回调——幂等只记最新）。 */
     let executionInfo: AgentExecutionInfo | undefined
@@ -2509,7 +2533,6 @@ export class WorkflowService {
       ...(request.effort !== undefined ? { effort: request.effort } : {}),
       ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
       ...(!isResume && request.cwd !== undefined ? { cwd: request.cwd } : {}),
-      ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
       ...(request.gateTimeoutMs !== undefined ? { gateTimeoutMs: request.gateTimeoutMs } : {}),
       meta: withWorkflowSpawnMeta(undefined, {
         runId: run.runId,
@@ -2894,7 +2917,8 @@ export class WorkflowService {
       ...(record.autoResumeCount !== undefined ? { autoResumeCount: record.autoResumeCount } : {}),
       ...(record.resumedByRunId !== undefined ? { resumedByRunId: record.resumedByRunId } : {}),
     }
-    const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+    const rawIndex = this.readRunIndexForRecovery()
+    const index = rawIndex as RunIndexEntry[]
     const at = index.findIndex((candidate) => candidate.id === record.id)
     if (at >= 0) index[at] = entry
     else index.push(entry)
@@ -2950,9 +2974,11 @@ export class WorkflowService {
         { runId, key: INDEX_KEY },
       )
     }
-    const entry = Array.isArray(rawIndex)
-      ? (rawIndex as RunIndexEntry[]).find((candidate) => candidate.id === runId)
-      : undefined
+    const broken = runIndexProblem(rawIndex)
+    if (broken !== undefined) {
+      throw this.indexCorruptError(broken.runId, broken.problem)
+    }
+    const entry = (rawIndex as RunIndexEntry[]).find((candidate) => candidate.id === runId)
     if (entry === undefined) {
       throw new HelmError('not_found', `工作流运行 ${runId} 不存在`, 404, { runId })
     }
@@ -3012,6 +3038,24 @@ export class WorkflowService {
       )
     }
     return record as RunRecord
+  }
+
+  /** 统一读取并校验 run 索引；恢复/写入路径不得把损坏数据当空数组。 */
+  private readRunIndexForRecovery(): RunIndexEntry[] {
+    let raw: unknown
+    try {
+      raw = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+    } catch (error) {
+      throw new HelmError(
+        'workflow_index_corrupt',
+        `读取工作流 run 索引失败：${errorMessage(error)}`,
+        500,
+        { key: INDEX_KEY },
+      )
+    }
+    const broken = runIndexProblem(raw)
+    if (broken !== undefined) throw this.indexCorruptError(broken.runId, broken.problem)
+    return raw as RunIndexEntry[]
   }
 
   /** listRuns 索引损坏诊断（不自动删索引或记录：修复由人类确认）。 */

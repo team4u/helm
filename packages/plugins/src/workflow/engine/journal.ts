@@ -54,6 +54,11 @@ export type JournalWriteInput =
       execution?: JournalAgentExecution
       /** 门禁结果（gate 失败/超时回传）：落盘前经 redactJournalEntry 脱敏。 */
       gate?: JournalGateResult
+      /** 自动重试尝试序号；普通 agent 行缺省以保持旧语义。 */
+      attempt?: number
+      /** 失败原因（已脱敏）。 */
+      error?: string
+      timedOut?: boolean
       seq?: number
     }
   | { type: 'action_started'; index: number; key: string; seq?: number; idempotent?: true }
@@ -116,6 +121,9 @@ export type WorkflowJournalEntry =
       execution?: JournalAgentExecution
       /** 门禁结果（已脱敏）。 */
       gate?: JournalGateResult
+      attempt?: number
+      error?: string
+      timedOut?: boolean
     }
   | {
       v: 1
@@ -269,6 +277,9 @@ function isAgentEntry(value: unknown): value is Extract<WorkflowJournalEntry, { 
     typeof e['ok'] === 'boolean' &&
     (e['text'] === undefined || typeof e['text'] === 'string') &&
     (e['resumed'] === undefined || e['resumed'] === true) &&
+    (e['attempt'] === undefined || (Number.isInteger(e['attempt']) && (e['attempt'] as number) >= 1)) &&
+    (e['error'] === undefined || typeof e['error'] === 'string') &&
+    (e['timedOut'] === undefined || typeof e['timedOut'] === 'boolean') &&
     (e['execution'] === undefined || isAgentExecutionShape(e['execution'])) &&
     (e['gate'] === undefined || isAgentGateShape(e['gate']))
   )
@@ -533,6 +544,7 @@ export function redactJournalEntry(
   const out: JournalWriteInput = { ...entry }
   if (out.text !== undefined) out.text = redact(out.text)
   if (out.execution !== undefined) out.execution = redactValue(out.execution, redact) as JournalAgentExecution
+  if (out.error !== undefined) out.error = redact(out.error)
   if (out.gate !== undefined) {
     out.gate = { ...out.gate, output: redact(out.gate.output) }
   }

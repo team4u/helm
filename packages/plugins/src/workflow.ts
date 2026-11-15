@@ -676,8 +676,8 @@ export function createWorkflowPlugin(): PluginDefinition {
 
       // 只把账本已证明可安全续跑的后台失败 Run 交给 Watchdog。
       ctx.host.onEvent(DIAGNOSTICS_COLLECT_EVENT, (raw) => {
-        const collection = parseCollection(raw)
         if (stopping) return
+        const collection = parseCollection(raw)
         appendProbes(
           collection,
           workflows.listAutoResumeCandidates(3).map((run) => ({

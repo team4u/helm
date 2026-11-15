@@ -683,6 +683,19 @@ function scriptSuccess(env: Env, content: string, schema = false): void {
 // 文件交接 A/B/C
 // ---------------------------------------------------------------------------
 
+test('Herdr 显式拒绝 gateTimeoutMs，避免静默丢弃外部超时语义', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    await assert.rejects(
+      spawnDirect(env, { agentType: 'herdr:agy', gate: 'true', gateTimeoutMs: 1_000 }),
+      (error: unknown) => error instanceof HelmError && error.code === 'unsupported_runtime',
+    )
+    assert.equal(env.transport.calls.some((call) => call.method === 'agent.start'), false)
+  } finally {
+    await env.close()
+  }
+})
+
 test('文件交接A: 成功路径——两步建窗、交接读取、文件清理、gate 一次、保活登记', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
