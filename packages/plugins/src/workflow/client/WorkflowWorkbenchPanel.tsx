@@ -55,7 +55,7 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
           resultOpen
           onToggleResult={() => undefined}
           inWorkbench
-          viewerConversationId={props.conversation.id}
+          viewer={{ conversationId: props.conversation.id, ownedBy: props.conversation.ownedBy }}
         />
       </div>
     )
@@ -75,7 +75,7 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
             resultOpen={false}
             onToggleResult={() => undefined}
             inWorkbench
-            viewerConversationId={props.conversation.id}
+            viewer={{ conversationId: props.conversation.id, ownedBy: props.conversation.ownedBy }}
           />
         </div>
       ))}
@@ -85,7 +85,7 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
           key={node.key}
           run={node.run}
           toolStatus={node.run!.status === 'running' ? 'running' : node.run!.status === 'completed' ? 'done' : 'error'}
-          viewerConversationId={props.conversation.id}
+          viewer={{ conversationId: props.conversation.id, ownedBy: props.conversation.ownedBy }}
         />
       ))}
       {conversationNodes.length > 0 ? (
@@ -103,7 +103,7 @@ export function WorkflowWorkbenchPanel(props: WorkbenchPanelProps): ReactNode {
                 ...(node.summary?.nodeId ? { nodeId: node.summary.nodeId } : {}),
               }}
               expanded={false}
-              viewerConversationId={props.conversation.id}
+              viewer={{ conversationId: props.conversation.id, ownedBy: props.conversation.ownedBy }}
             />
           ))}
         </>

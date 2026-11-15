@@ -199,18 +199,24 @@ export class WorkflowService {
   /**
    * 前台同步等待（同步工具 execute 内使用）：resolve 为 'detached'（detach
    * 动作已转后台，工具立即返回后台句柄）或 'settled'（run 终态，settleError
-   * 与 wait() 同语义抛出）。
+   * 与 wait() 同语义抛出）。hooks.onDetached 在 detach 临界段同步执行
+   * （工具侧解绑父 signal listener，转后台后父回合 signal 不再杀 run）。
    */
-  async waitForeground(runId: string): Promise<'detached' | 'settled'> {
-    return waitForegroundRun(this.ctx, runId)
+  async waitForeground(
+    runId: string,
+    hooks?: { onDetached?: () => void },
+  ): Promise<'detached' | 'settled'> {
+    return waitForegroundRun(this.ctx, runId, hooks)
   }
 
   /**
    * 把运行中的前台同步 run 原子转为后台（detach 动作入口；同步临界段实现
    * 见 run-detach）：置位 detachedAt/notifyParentOnSettle、持久化、解绑父
-   * signal 并唤醒等待者。状态/前台标记不满足时显式拒绝。
+   * signal（引擎绑定 + 等待者 onDetached）并唤醒等待者，随后 await 状态
+   * 存储 flush（失败如实抛 detach_flush_failed，不回滚已持久记录）。
+   * 状态/前台标记不满足时显式拒绝。
    */
-  detachForegroundRun(runId: string): WorkflowRunSummary {
+  async detachForegroundRun(runId: string): Promise<WorkflowRunSummary> {
     this.assertNotClosed()
     return detachRun(this.ctx, runId)
   }

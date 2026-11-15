@@ -239,16 +239,29 @@ export function canResumeWorkflowRun(run: WorkflowRunSummary): boolean {
 }
 
 /**
- * 前台同步 run「转入后台」可用判定：仅明确 runId 的运行中前台同步 run
- *（syncForeground 标记且尚未 detached），且当前查看会话即发起会话（父
- * 回合工具调用阻塞处；跨会话/工作台他处不显示，服务端仍会复核授权）。
+ * 「转入后台」查看方判定：当前查看会话（时间线即发起会话；工作台为面板会话）
+ * 及其归属。ownedBy 缺省按 human（内核缺省值）；bot/helm（automation 会话）
+ * 的前台同步 run 不显示按钮——服务端对 automation 归属一律拒绝（防早结算），
+ * 前端如实隐藏，不展示注定失败的入口。
  */
-export function canDetachForegroundRun(run: WorkflowRunSummary, viewerConversationId: number | undefined): boolean {
+export interface DetachViewerScope {
+  conversationId?: number
+  ownedBy?: string
+}
+
+/**
+ * 前台同步 run「转入后台」可用判定：仅明确 runId 的运行中前台同步 run
+ *（syncForeground 标记且尚未 detached），且当前查看会话即发起会话、归属
+ * human（或缺省 human）；跨会话/工作台他处不显示，服务端仍会复核授权。
+ */
+export function canDetachForegroundRun(run: WorkflowRunSummary, viewer: DetachViewerScope | undefined): boolean {
   return (
     run.status === 'running' &&
     run.syncForeground === true &&
     run.detachedAt === undefined &&
-    viewerConversationId === run.conversationId
+    viewer?.conversationId === run.conversationId &&
+    viewer.ownedBy !== 'bot' &&
+    viewer.ownedBy !== 'helm'
   )
 }
 

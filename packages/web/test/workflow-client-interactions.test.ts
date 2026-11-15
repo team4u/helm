@@ -426,7 +426,7 @@ test('前台同步运行卡「转入后台」点击调用 detach 动作（工作
     spy,
     e(Body, {
       run: fgRun, cardOpen: false, onToggleCard: () => {}, resultOpen: false, onToggleResult: () => {},
-      viewerConversationId: 1,
+      viewer: { conversationId: 1 },
     }),
   )
   try {
@@ -447,7 +447,7 @@ test('前台同步运行卡「转入后台」点击调用 detach 动作（工作
       e(Card, {
         childConversationId: 11, toolStatus: 'running',
         backgroundRun: { ...fgRun, id: 'wf_fg_sub', kind: 'subagent' },
-        viewerConversationId: 1,
+        viewer: { conversationId: 1, ownedBy: 'human' },
       }),
     )
     try {

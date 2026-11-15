@@ -159,14 +159,17 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
           }
         }
         // 同步模式：父 signal abort 中止本 run（保留同步语义）；等待 detach
-        // 唤醒或终态。detach 唤醒后 finally 即解绑父 signal（转后台后父回合
-        // signal 不再杀 run），立即返回后台句柄。
+        // 唤醒或终态。onDetached 在 detach 临界段同步解绑父 signal（转后台后
+        // 父回合 signal 不再杀 run，与 subagent 前台模式的引擎解绑同语义），
+        // 工具随即返回后台句柄。
         const onAbort = () => {
           void workflows.abort(started.id).catch(() => {})
         }
         context.signal?.addEventListener('abort', onAbort, { once: true })
         try {
-          const outcome = await workflows.waitForeground(started.id)
+          const outcome = await workflows.waitForeground(started.id, {
+            onDetached: () => context.signal?.removeEventListener('abort', onAbort),
+          })
           if (outcome === 'detached') {
             syncRunsDoc()
             // 与后台返回形状兼容：ok/background/summary（summary.id 即 runId）。

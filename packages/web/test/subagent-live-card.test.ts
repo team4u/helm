@@ -115,7 +115,7 @@ function renderCard(
     worktree?: { path: string; branch: string }
     expanded?: boolean
     toolSummary?: SubagentParentToolSummary
-    viewerConversationId?: number
+    viewer?: { conversationId?: number; ownedBy?: string }
   } = {},
 ): string {
   // 存量流式行 / 截断 / 报错测试均针对展开态流内容：默认展开保持覆盖语义，extra 可覆盖。
@@ -356,36 +356,54 @@ test('backgroundRun failed：副栏渲染错误提示，不被子会话旧 idle 
   assert.ok(html.includes('异常'), '徽章应显示异常态')
 })
 
-test('前台同步 run：查看会话即发起会话时显示「转入后台」，普通后台 / 已转后台 / 非本会话不显示', { timeout: 60_000 }, () => {
+test('前台同步 run：查看会话即发起会话且 human 归属显示「转入后台」；automation / 后台 / 已转后台 / 非本会话不显示', { timeout: 60_000 }, () => {
   const store = makeStore({
     conversations: [summary(11, 'working')],
     conversationDetails: { 11: { ...summary(11, 'working'), entries: [] } },
   })
-  // 前台同步（syncForeground 未 detached）+ 查看会话 1 = 发起会话 1。
+  // 前台同步（syncForeground 未 detached）+ 查看会话 1 = 发起会话 1（缺省 human）。
   const visible = renderCard(store, 'running', {
     backgroundRun: bgRun({ status: 'running', syncForeground: true }),
-    viewerConversationId: 1,
+    viewer: { conversationId: 1 },
   })
   assert.ok(visible.includes('转入后台'), '前台同步 running run 应显示转入后台按钮')
+
+  // 查看会话归属 human：显示；归属 automation（helm/bot）：隐藏。
+  assert.ok(
+    renderCard(store, 'running', {
+      backgroundRun: bgRun({ status: 'running', syncForeground: true }),
+      viewer: { conversationId: 1, ownedBy: 'human' },
+    }).includes('转入后台'),
+    'human 查看方应显示转入后台按钮',
+  )
+  for (const ownedBy of ['helm', 'bot']) {
+    assert.ok(
+      !renderCard(store, 'running', {
+        backgroundRun: bgRun({ status: 'running', syncForeground: true }),
+        viewer: { conversationId: 1, ownedBy },
+      }).includes('转入后台'),
+      `automation（${ownedBy}）查看方不得显示转入后台按钮`,
+    )
+  }
 
   // 普通（非前台同步）后台 run：不显示。
   const background = renderCard(store, 'running', {
     backgroundRun: bgRun({ status: 'running' }),
-    viewerConversationId: 1,
+    viewer: { conversationId: 1 },
   })
   assert.ok(!background.includes('转入后台'), '普通后台 run 不得显示转入后台按钮')
 
   // 已转后台（detachedAt）：不显示。
   const detached = renderCard(store, 'running', {
     backgroundRun: bgRun({ status: 'running', syncForeground: true, detachedAt: 5 }),
-    viewerConversationId: 1,
+    viewer: { conversationId: 1 },
   })
   assert.ok(!detached.includes('转入后台'), '已转后台的 run 不得再显示转入后台按钮')
 
-  // 查看会话非发起会话（viewerConversationId=2 ≠ run.conversationId=1）：不显示。
+  // 查看会话非发起会话（viewer 2 ≠ run.conversationId=1）：不显示。
   const otherViewer = renderCard(store, 'running', {
     backgroundRun: bgRun({ status: 'running', syncForeground: true }),
-    viewerConversationId: 2,
+    viewer: { conversationId: 2 },
   })
   assert.ok(!otherViewer.includes('转入后台'), '查看会话非发起会话时不得显示转入后台按钮')
 })

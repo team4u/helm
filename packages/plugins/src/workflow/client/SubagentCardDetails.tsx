@@ -12,7 +12,7 @@ import type { WorkflowRunSummary } from '../../contracts.js'
 import { SPIN, EXECUTION_BADGE, EXECUTION_LABEL } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildWorktreeSelector } from './model-worktree.ts'
-import { canDetachForegroundRun } from './model-run.ts'
+import { canDetachForegroundRun, type DetachViewerScope } from './model-run.ts'
 import type { ExecutionAggregate, ExecutionNodeStatus } from './model-execution-status.ts'
 import type { SubagentBadge, SubagentHeaderSnippet } from './model-subagent-card.ts'
 import type { ExecutionApprovalItem, ExecutionFrontlineItem } from './model-execution-view.ts'
@@ -107,7 +107,7 @@ export function SubagentCardActions(props: {
   inspectNodeId: string | undefined
   detailError: string | undefined
   onReload: () => void
-  viewerConversationId: number | undefined
+  viewer: DetachViewerScope | undefined
 }): ReactNode {
   const ctx = usePluginContext()
   const { backgroundRun, worktree, inspectNodeId, detailError } = props
@@ -131,7 +131,7 @@ export function SubagentCardActions(props: {
           <span className="subagent-action-label">中止</span>
         </button>
       ) : null}
-      {backgroundRun !== undefined && canDetachForegroundRun(backgroundRun, props.viewerConversationId) ? (
+      {backgroundRun !== undefined && canDetachForegroundRun(backgroundRun, props.viewer) ? (
         <button
           type="button"
           className="btn btn-xs"

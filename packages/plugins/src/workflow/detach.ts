@@ -37,7 +37,7 @@ export interface DetachEnginePorts {
   /** 只读 run 查询（不存在抛 not_found 404）。 */
   getRun(runId: string): WorkflowRunSummary
   /** 原子转后台（状态判定在引擎同步临界段；不满足显式抛错）。 */
-  detach(runId: string): WorkflowRunSummary
+  detach(runId: string): Promise<WorkflowRunSummary>
 }
 
 export interface DetachActionInput {
@@ -60,13 +60,14 @@ function detachError(code: string, message: string, status: number, details?: Re
 
 /**
  * 前台同步 run 转后台主入口。任何不支持情况显式抛 HelmError（错误码稳定）；
- * 授权判定在本模块，权威状态判定与原子置位在引擎（竞态安全）。
+ * 授权判定在本模块，权威状态判定与原子置位在引擎（竞态安全；detach 端口
+ * 为 async——临界段后等待状态存储 flush，失败如实上抛）。
  */
-export function detachForegroundSyncRun(
+export async function detachForegroundSyncRun(
   ports: DetachHostPorts & DetachEnginePorts,
   input: DetachActionInput,
   context: DetachActionContext,
-): DetachActionOutput {
+): Promise<DetachActionOutput> {
   // 入参边界校验（外部输入显式拒绝；schema 之外的防御）。
   const runId = typeof input.runId === 'string' ? input.runId.trim() : ''
   if (runId === '') {
@@ -102,7 +103,7 @@ export function detachForegroundSyncRun(
 
   // 4) 权威状态判定 + 原子置位（引擎同步临界段）：非 running、非前台同步、
   //    已后台/已 detach 均显式拒绝（detach_not_running / detach_not_foreground）。
-  const detached = ports.detach(runId)
+  const detached = await ports.detach(runId)
   return { detached: true, runId, run: detached }
 }
 

@@ -124,7 +124,10 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
           worktree={meta.worktree}
           toolStatus={props.status}
           executionId={meta.executionId}
-          viewerConversationId={props.conversationId}
+          viewer={{
+            conversationId: props.conversationId,
+            ownedBy: conversations.find((conversation) => conversation.id === props.conversationId)?.ownedBy,
+          }}
         />
       </div>
     )
@@ -157,7 +160,10 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       startedAt={props.startedAt}
       expanded={false}
       childNodes={childNodes}
-      viewerConversationId={props.conversationId}
+      viewer={{
+        conversationId: props.conversationId,
+        ownedBy: conversations.find((conversation) => conversation.id === props.conversationId)?.ownedBy,
+      }}
     />
   )
 }

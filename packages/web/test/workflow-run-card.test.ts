@@ -681,8 +681,30 @@ test('SSR：running 工作流显示中止按钮与执行中徽章', { timeout: 6
   assert.ok(!html.includes('转入后台'), '普通（非前台同步）running run 不得显示转入后台按钮')
 })
 
-test('SSR：前台同步 run 仅在查看会话即发起会话时显示「转入后台」', { timeout: 60_000 }, async () => {
-  // 前台同步（syncForeground 未 detach）+ 当前会话 = 发起会话（stubCtx.conversationId=1）。
+// ---------------------------------------------------------------------------
+// 纯逻辑：canDetachForegroundRun（前台同步「转入后台」可见性）
+// ---------------------------------------------------------------------------
+
+test('canDetachForegroundRun：仅运行中前台同步 + 发起会话 + human（或缺省）查看方可见', { timeout: 60_000 }, () => {
+  const fg = run({ id: 'wf_fg', status: 'running', syncForeground: true, conversationId: 1 })
+  // human / 未标注（缺省 human）：可见。
+  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'human' }), true)
+  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1 }), true, 'ownedBy 缺省按 human')
+  // automation（bot/helm）：隐藏（服务端同样拒绝，不显示注定失败的入口）。
+  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'helm' }), false)
+  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'bot' }), false)
+  // 非发起会话 / 无查看方：隐藏。
+  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 2 }), false)
+  assert.equal(m.canDetachForegroundRun(fg, undefined), false)
+  // 已转后台 / 终态 / 普通后台 run：隐藏。
+  assert.equal(m.canDetachForegroundRun(run({ id: 'wf_d', status: 'running', syncForeground: true, detachedAt: 1, conversationId: 1 }), { conversationId: 1 }), false)
+  assert.equal(m.canDetachForegroundRun(run({ id: 'wf_t', status: 'completed', syncForeground: true, conversationId: 1 }), { conversationId: 1 }), false)
+  assert.equal(m.canDetachForegroundRun(run({ id: 'wf_b', status: 'running', conversationId: 1 }), { conversationId: 1 }), false)
+})
+
+test('SSR：前台同步 run 仅在查看会话即发起会话且 human 归属时显示「转入后台」', { timeout: 60_000 }, async () => {
+  // 前台同步（syncForeground 未 detached）+ 当前会话 = 发起会话；会话列表
+  // 未提供 ownedBy（缺省 human）。
   const visible = await renderWorkflowToolView(
     {
       callId: 'call-fg', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
@@ -691,6 +713,30 @@ test('SSR：前台同步 run 仅在查看会话即发起会话时显示「转入
     { runs: [run({ id: 'wf_fg', status: 'running', syncForeground: true, parentToolCallId: 'call-fg', nodes: [node({ id: 'a', status: 'running' })] })] },
   )
   assert.ok(visible.includes('转入后台'), '前台同步 running run 应显示转入后台按钮')
+
+  // 查看会话归属 human：显示。
+  const humanViewer = await renderWorkflowToolView(
+    {
+      callId: 'call-fg-h', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
+      siblingCalls: [],
+    },
+    { runs: [run({ id: 'wf_fg_h', status: 'running', syncForeground: true, parentToolCallId: 'call-fg-h', nodes: [node({ id: 'a', status: 'running' })] })] },
+    [{ ...summary(1, 'working'), ownedBy: 'human' }],
+  )
+  assert.ok(humanViewer.includes('转入后台'), 'human 查看方应显示转入后台按钮')
+
+  // 查看会话归属 automation（helm/bot）：隐藏（服务端同样拒绝，不显示注定失败的入口）。
+  for (const ownedBy of ['helm', 'bot'] as const) {
+    const automationViewer = await renderWorkflowToolView(
+      {
+        callId: 'call-fg-a', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
+        siblingCalls: [],
+      },
+      { runs: [run({ id: 'wf_fg_a', status: 'running', syncForeground: true, parentToolCallId: 'call-fg-a', nodes: [node({ id: 'a', status: 'running' })] })] },
+      [{ ...summary(1, 'working'), ownedBy }],
+    )
+    assert.ok(!automationViewer.includes('转入后台'), `automation（${ownedBy}）查看方不得显示转入后台按钮`)
+  }
 
   // 已转后台（detachedAt）：按钮消失（不可重复 detach）。
   const detached = await renderWorkflowToolView(

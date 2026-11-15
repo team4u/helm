@@ -211,7 +211,7 @@ export function registerWorkflowRunActions(
     },
     async handler(input, context) {
       const { runId } = input as { runId: string }
-      const output = detachForegroundSyncRun(
+      const output = await detachForegroundSyncRun(
         {
           getRun: (id) => workflows.getRun(id),
           detach: (id) => workflows.detachForegroundRun(id),

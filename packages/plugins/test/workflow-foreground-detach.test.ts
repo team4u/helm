@@ -40,6 +40,24 @@ function makeStateStore(): WorkflowStateStore {
   }
 }
 
+/** 可控 flush 失败的 state store（模拟状态存储队列落盘故障；按需武装下一次失败）。 */
+function makeFlushGateStore(): WorkflowStateStore & { failNext(): void } {
+  const inner = makeStateStore()
+  let failNext = false
+  return {
+    ...inner,
+    flush: async (): Promise<void> => {
+      if (failNext) {
+        failNext = false
+        throw new Error('simulated state flush io failure')
+      }
+    },
+    failNext: (): void => {
+      failNext = true
+    },
+  }
+}
+
 function readRecord(dataDir: string, runId: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(dataDir, 'artifacts', '1', `workflow-${runId}.record.json`), 'utf-8'))
 }
@@ -156,7 +174,7 @@ describe('前台同步 subagent detach（startBackgroundAgent foreground 模式�
 
     // 模拟同步工具的挂起等待（waitForeground），并 detach。
     const waitPromise = service.waitForeground(run.id)
-    const detached = service.detachForegroundRun(run.id)
+    const detached = await service.detachForegroundRun(run.id)
     assert.equal(detached.status, 'running')
     assert.equal(detached.syncForeground, true)
     assert.ok(typeof detached.detachedAt === 'number')
@@ -211,7 +229,7 @@ describe('前台同步 subagent detach（startBackgroundAgent foreground 模式�
     assert.equal(await waitPromise, 'settled')
     assert.equal(await service.wait(run.id), 'slow-result')
     assert.equal(host.settledCalls.length, 0, '自然完成的前台 run 不通知')
-    assert.throws(
+    await assert.rejects(
       () => service.detachForegroundRun(run.id),
       (err: unknown) => err instanceof HelmError && err.code === 'detach_not_running' && err.status === 409,
     )
@@ -225,8 +243,8 @@ describe('前台同步 subagent detach（startBackgroundAgent foreground 模式�
       { parentConversationId: 1, prompt: '同步任务' },
       { foreground: true },
     )
-    service.detachForegroundRun(run.id)
-    assert.throws(
+    await service.detachForegroundRun(run.id)
+    await assert.rejects(
       () => service.detachForegroundRun(run.id),
       (err: unknown) =>
         err instanceof HelmError && err.code === 'detach_not_foreground' && err.status === 409 && /已在后台/.test(err.message),
@@ -240,12 +258,12 @@ describe('前台同步 subagent detach（startBackgroundAgent foreground 模式�
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     const { run } = await service.startBackgroundAgent({ parentConversationId: 1, prompt: '后台任务' })
     assert.equal(run.syncForeground, undefined, '后台 run 不携带前台标记')
-    assert.throws(
+    await assert.rejects(
       () => service.detachForegroundRun(run.id),
       (err: unknown) =>
         err instanceof HelmError && err.code === 'detach_not_foreground' && /已在后台/.test(err.message),
     )
-    assert.throws(
+    await assert.rejects(
       () => service.detachForegroundRun('wf_nonexistent'),
       (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
     )
@@ -282,7 +300,7 @@ describe('前台同步 workflow detach（service.run foreground 上下文）', (
     await host.spawnArrived()
 
     const waitPromise = service.waitForeground(started.id)
-    const detached = service.detachForegroundRun(started.id)
+    const detached = await service.detachForegroundRun(started.id)
     assert.equal(await waitPromise, 'detached', '工作流同步等待同样被 detach 唤醒')
     assert.ok(typeof detached.detachedAt === 'number')
 
@@ -312,6 +330,113 @@ describe('前台同步 workflow detach（service.run foreground 上下文）', (
     assert.equal(host.settledCalls.length, 0, '自然完成的前台工作流不通知')
     await service.close()
   })
+
+  it('同步工作流工具形状 onDetached：detach 临界段同步解绑父 signal，紧邻 abort 不误杀', timeout, async () => {
+    const host = makeHost()
+    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const started = await service.run(
+      {
+        conversationId: 1,
+        script:
+          'export const meta = { name: "fg-detach-signal", description: "t" }\n' +
+          'const r = await agent("挂起节点")\nreturn r',
+      },
+      { foreground: true },
+    )
+    await host.spawnArrived()
+
+    // 复刻 tools.ts 同步工作流路径的工具侧绑定：父 signal → abort(runId)，
+    // waitForeground 以 onDetached 解绑（detach 临界段在唤醒前同步执行）。
+    const parentSignal = new AbortController()
+    const onAbort = (): void => {
+      void service.abort(started.id).catch(() => {})
+    }
+    parentSignal.signal.addEventListener('abort', onAbort, { once: true })
+    const waitPromise = service.waitForeground(started.id, {
+      onDetached: () => parentSignal.signal.removeEventListener('abort', onAbort),
+    })
+    await service.detachForegroundRun(started.id)
+    // detach 临界段已同步解绑：紧随其后的父 signal abort 不得取消已转后台 run。
+    parentSignal.abort()
+    assert.equal(await waitPromise, 'detached')
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(service.getRun(started.id).status, 'running', 'detach 后紧邻的父 signal abort 不得中止 run')
+
+    host.release()
+    assert.equal(await service.wait(started.id), 'slow-result')
+    assert.equal(host.settledCalls.length, 1, '转后台 run 终态恰一次汇报')
+    await service.close()
+  })
+
+  it('同步工作流工具形状：detach 前父 signal abort 仍中止 run（同步语义保留）', timeout, async () => {
+    const host = makeHost()
+    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const started = await service.run(
+      {
+        conversationId: 1,
+        script:
+          'export const meta = { name: "fg-abort-signal", description: "t" }\n' +
+          'const r = await agent("挂起节点")\nreturn r',
+      },
+      { foreground: true },
+    )
+    await host.spawnArrived()
+
+    const parentSignal = new AbortController()
+    const onAbort = (): void => {
+      void service.abort(started.id).catch(() => {})
+    }
+    parentSignal.signal.addEventListener('abort', onAbort, { once: true })
+    const waitPromise = service.waitForeground(started.id, {
+      onDetached: () => parentSignal.signal.removeEventListener('abort', onAbort),
+    })
+    // detach 之前父 signal abort：onAbort 生效，run 中止并唤醒等待为 settled。
+    parentSignal.abort()
+    assert.equal(await waitPromise, 'settled')
+    assert.equal(service.getRun(started.id).status, 'aborted', 'detach 前父 signal abort 应中止 run')
+    assert.equal(host.settledCalls.length, 0, '未 detach 的前台 run 中止不通知')
+    await service.close()
+  })
+
+  it('状态存储 flush 失败：动作如实报错但不回滚已持久 detach（run 继续后台语义并汇报）', timeout, async () => {
+    const host = makeHost()
+    const state = makeFlushGateStore()
+    const service = new WorkflowService({ dataDir, host, state })
+    const { run } = await service.startBackgroundAgent(
+      { parentConversationId: 1, prompt: '同步任务' },
+      { foreground: true },
+    )
+    const waitPromise = service.waitForeground(run.id)
+    // 武装下一次 flush 失败（即 detach 临界段之后的落盘等待），再 detach：
+    // 临界段完成（记录文件已 fsync、等待者已唤醒）后 flush 失败——如实抛
+    // detach_flush_failed，绝不回滚已落盘事实。
+    state.failNext()
+    const failure = await service.detachForegroundRun(run.id).then(
+      () => assert.fail('flush 失败必须显式报错'),
+      (error: unknown) => error,
+    )
+    assert.ok(failure instanceof HelmError)
+    assert.equal((failure as HelmError).code, 'detach_flush_failed')
+    assert.equal((failure as HelmError).status, 500)
+    assert.ok(/已转入后台/.test((failure as HelmError).message), '错误须如实说明 detach 已生效')
+    // 语义锁定：记录文件已持久 detachedAt/notifyParentOnSettle；等待者已被
+    // 唤醒为 detached（工具返回后台句柄，不悬挂）；run 不被取消。
+    assert.equal(await waitPromise, 'detached', 'flush 失败不得误取消/悬挂等待中的工具调用')
+    const record = readRecord(dataDir, run.id)
+    assert.ok(typeof record['detachedAt'] === 'number', '记录文件已持久 detachedAt（不回滚）')
+    assert.equal(record['notifyParentOnSettle'], true)
+    assert.equal(service.getRun(run.id).status, 'running')
+    // 重复 detach：已是后台（幂等拒绝），不得因 flush 失败重放转后台。
+    await assert.rejects(
+      () => service.detachForegroundRun(run.id),
+      (err: unknown) => err instanceof HelmError && err.code === 'detach_not_foreground',
+    )
+    // 终态：notify 已翻转 → 恰一次结算汇报（重启恢复以 record 文件为权威）。
+    host.release()
+    assert.equal(await service.wait(run.id), 'slow-result')
+    assert.equal(host.settledCalls.length, 1)
+    await service.close()
+  })
 })
 
 describe('detachForegroundSyncRun 纯逻辑授权（动作入口）', () => {
@@ -331,7 +456,7 @@ describe('detachForegroundSyncRun 纯逻辑授权（动作入口）', () => {
         if (run === undefined || run.id !== id) throw new HelmError('not_found', `工作流运行 ${id} 不存在`, 404, { runId: id })
         return run
       },
-      detach: (id: string): WorkflowRunSummary => {
+      detach: async (id: string): Promise<WorkflowRunSummary> => {
         if (run === undefined || run.id !== id) throw new HelmError('not_found', '不存在', 404)
         return { ...run, detachedAt: 123 }
       },
@@ -371,58 +496,58 @@ describe('detachForegroundSyncRun 纯逻辑授权（动作入口）', () => {
     syncForeground: true,
   }
 
-  it('发起会话自身 detach 放行（human-owned）', timeout, () => {
-    const output = detachForegroundSyncRun(ports(fgRun), { runId: 'wf_fg1' }, { conversationId: 1 })
+  it('发起会话自身 detach 放行（human-owned）', timeout, async () => {
+    const output = await detachForegroundSyncRun(ports(fgRun), { runId: 'wf_fg1' }, { conversationId: 1 })
     assert.equal(output.detached, true)
     assert.equal(output.runId, 'wf_fg1')
     assert.ok(typeof output.run.detachedAt === 'number')
   })
 
-  it('人工 HTTP/CLI（无会话上下文）放行；发起会话祖先放行', timeout, () => {
+  it('人工 HTTP/CLI（无会话上下文）放行；发起会话祖先放行', timeout, async () => {
     // 祖先：conversationId 101（父 = 1）。
     const childRun = { ...fgRun, conversationId: 101 }
-    assert.equal(detachForegroundSyncRun(ports(childRun), { runId: 'wf_fg1' }, {}).detached, true)
-    assert.equal(detachForegroundSyncRun(ports(childRun), { runId: 'wf_fg1' }, { conversationId: 1 }).detached, true)
+    assert.equal((await detachForegroundSyncRun(ports(childRun), { runId: 'wf_fg1' }, {})).detached, true)
+    assert.equal((await detachForegroundSyncRun(ports(childRun), { runId: 'wf_fg1' }, { conversationId: 1 })).detached, true)
   })
 
-  it('automation 归属会话的前台 run 拒绝（防早结算）', timeout, () => {
+  it('automation 归属会话的前台 run 拒绝（防早结算）', timeout, async () => {
     const helmRun = { ...fgRun, conversationId: 2 }
-    assert.throws(
+    await assert.rejects(
       () => detachForegroundSyncRun(ports(helmRun), { runId: 'wf_fg1' }, { conversationId: 2 }),
       (err: unknown) =>
         err instanceof HelmError && err.code === 'detach_forbidden' && err.status === 403 && /归属 helm/.test(err.message),
     )
     // 无会话上下文的人工通道同样拒绝 automation run。
-    assert.throws(
+    await assert.rejects(
       () => detachForegroundSyncRun(ports(helmRun), { runId: 'wf_fg1' }, {}),
       (err: unknown) => err instanceof HelmError && err.code === 'detach_forbidden',
     )
   })
 
-  it('跨树 caller（非自身亦非祖先）拒绝；未知 run 404 透传；空 runId 拒绝', timeout, () => {
+  it('跨树 caller（非自身亦非祖先）拒绝；未知 run 404 透传；空 runId 拒绝', timeout, async () => {
     // conversationId 300 的父链是 200 → 100，不经过 1。
     const otherRun = { ...fgRun, conversationId: 300 }
-    assert.throws(
+    await assert.rejects(
       () => detachForegroundSyncRun(ports(otherRun), { runId: 'wf_fg1' }, { conversationId: 1 }),
       (err: unknown) =>
         err instanceof HelmError && err.code === 'detach_out_of_scope' && err.status === 403 && /自身或祖先/.test(err.message),
     )
-    assert.throws(
+    await assert.rejects(
       () => detachForegroundSyncRun(ports(undefined), { runId: 'wf_none' }, {}),
       (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
     )
-    assert.throws(
+    await assert.rejects(
       () => detachForegroundSyncRun(ports(fgRun), { runId: '   ' }, {}),
       (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
     )
   })
 
-  it('引擎状态拒绝原样透传（终态 run：detach_not_running）', timeout, () => {
+  it('引擎状态拒绝原样透传（终态 run：detach_not_running）', timeout, async () => {
     const engineRejecting = ports(fgRun)
-    engineRejecting.detach = () => {
+    engineRejecting.detach = async () => {
       throw new HelmError('detach_not_running', '运行 wf_fg1 已终态', 409, { runId: 'wf_fg1' })
     }
-    assert.throws(
+    await assert.rejects(
       () => detachForegroundSyncRun(engineRejecting, { runId: 'wf_fg1' }, { conversationId: 1 }),
       (err: unknown) => err instanceof HelmError && err.code === 'detach_not_running' && err.status === 409,
     )

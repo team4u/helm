@@ -9,15 +9,15 @@ import { useElapsedNowMs } from './hooks.ts'
 import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { subagentBadge } from './model-subagent-card.ts'
-import { canDetachForegroundRun, resolveRunElapsedMs } from './model-run.ts'
+import { canDetachForegroundRun, resolveRunElapsedMs, type DetachViewerScope } from './model-run.ts'
 
 export function ExternalRunSummary(props: {
   run?: WorkflowRunSummary
   worktree?: { path: string; branch: string }
   toolStatus: 'running' | 'done' | 'error'
   executionId?: string
-  /** 当前查看会话（时间线即发起会话）：前台同步 run 的「转入后台」可见性判定。 */
-  viewerConversationId?: number
+  /** 查看方作用域（会话 + 归属）：前台同步 run 的「转入后台」可见性判定。 */
+  viewer?: DetachViewerScope
 }): ReactNode {
   const ctx = usePluginContext()
   const { run, worktree, toolStatus, executionId } = props
@@ -48,7 +48,7 @@ export function ExternalRunSummary(props: {
         {elapsedMs !== undefined ? (
           <span className="subagent-live-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
         ) : null}
-        {run !== undefined && canDetachForegroundRun(run, props.viewerConversationId) ? (
+        {run !== undefined && canDetachForegroundRun(run, props.viewer) ? (
           <button
             type="button"
             className="btn btn-xs"

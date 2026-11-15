@@ -27,6 +27,7 @@ import {
   resolveRunElapsedMs,
   resolveWorkflowRunForTool,
 } from './model-run.ts'
+import type { DetachViewerScope } from './model-run.ts'
 import { aggregateExecutionNodes, buildExecutionTree } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { collectExecutionApprovals } from './model-execution-view.ts'
@@ -86,7 +87,10 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
       onToggleResult={() => setResultOpen((v) => !v)}
       toolProps={props}
       inWorkbench={false}
-      viewerConversationId={props.conversationId}
+      viewer={{
+        conversationId: props.conversationId,
+        ownedBy: conversations.find((conversation) => conversation.id === props.conversationId)?.ownedBy,
+      }}
     />
   )
 }
@@ -100,8 +104,8 @@ export function WorkflowRunCardBody(props: {
   onToggleResult: () => void
   toolProps?: { input?: unknown; result?: unknown; artifactRef?: string }
   inWorkbench: boolean
-  /** 当前查看会话（时间线即发起会话；工作台为面板会话）：前台同步 run 的「转入后台」可见性判定。 */
-  viewerConversationId?: number
+  /** 查看方作用域（会话 + 归属）：前台同步 run 的「转入后台」可见性判定。 */
+  viewer?: DetachViewerScope
   /** 统一执行树子节点（agent 节点会话的深层后代；缺省仅展示 run 自身节点）。 */
   childNodes?: ExecutionNode[]
 }): ReactNode {
@@ -265,7 +269,7 @@ export function WorkflowRunCardBody(props: {
             中止
           </button>
         ) : null}
-        {canDetachForegroundRun(run, props.viewerConversationId) ? (
+        {canDetachForegroundRun(run, props.viewer) ? (
           <button
             type="button"
             className="btn btn-sm"
