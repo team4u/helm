@@ -1,5 +1,5 @@
 /**
- * worktree 隔离生命周期（builtin:workflow 插件自有资产）。
+ * worktree 隔离生命周期编排（builtin:workflow 插件自有资产）。
  *
  * 职责（经 agent_spawn continuation 包裹完整生命周期）：
  * - 新建：resolveSpawnTarget 按真实最终节点（显式 profile.nodeId > 父会话
@@ -8,92 +8,38 @@
  * - resume：严格沿用旧绑定隔离树（无显式 isolation 也不忽略旧绑定）；中途
  *   迁移节点/cwd 显式拒绝；目录缺失经节点真实探测证明后显式失败；
  * - 外部运行时（namespace:kind 形式 agentType）：不预分配（外部运行时自行
- *   决定隔离方式，如 Herdr 的 worktree.create）；仅回填登记与租约；
+ *   决定隔离方式，如 Herdr 的 worktree.create）；仅回填登记与租约。
  *
- * durable 租约（lease）安全红线（fail-closed）：
- * - 分配路径：git worktree add 副作用【之前】经 allocator.beforeCreate 持久
- *   登记占位（携带目标 nodeId/path/branch；executionId/conversationId 空），
- *   崩溃/重启后该占位仍存在且无在途执行 -> 显式 worktree_execution_unknown
- *   阻塞清理（不能证明停止就不能清理）；
- * - 释放条件（仅两种）：执行确认成功；或执行【确认从未启动】——next 前抛错
- *   （尚未进入执行链）。onResolved 失败、外部进程已启动但未回填 executionId、
- *   以及一切未知状态均保留租约（fail-closed）；
- * - 外部运行时回填路径：onResolved 首次回传 worktree 即登记租约；终态收敛
- *   同上（成功释放；失败且已回填 executionId 保留；未回填且 next 从未完成
- *   的未知状态保留——不能证明外部执行未启动）。
+ * 模块拆分（职责单一）：durable 租约持久化、占用判定与绑定解析在
+ * isolation-lease-store.ts（WorktreeLeaseStore）；三个生命周期流程（新建 /
+ * resume / 外部回填）在 isolation-spawn.ts。本文件保留 WorktreeIsolation
+ * 编排门面：节点端口适配（execGit / probeFs）、aroundSpawn 分发、cleanup
+ * 与 getForConversation 入口，以及依赖契约（WorktreeIsolationDeps）。
  *
  * 诚实性纪律：Profile 读取 IO 错误如实上抛（仅 not_found 视为 Profile 不存在）；
  * 会话状态读取错误不当作安全（fail-closed）；节点探测失败不当作目录缺失；
  * 机密元数据拒绝落库。
  */
-import { HelmError, sanitizeAgentExecutionInfo as sanitizeExecutionInfo, redactJsonValue, type AgentExecutionInfo, type AgentSpawnRequest, type NodePathUsage } from '@helm/protocol'
-import { randomUUID } from 'node:crypto'
-import {
-  extractWorkflowExecutionMeta,
-  workflowExecutionMeta,
-  type WorktreeExecutionDescriptor,
-} from '../contracts.js'
+import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest, type NodePathUsage } from '@helm/protocol'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from './worktree.js'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
 import { ExecutionError, FileError, type Result, type ShellExecResult } from '@earendil-works/pi-durable/env'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
+import { WorktreeLeaseStore } from './isolation-lease-store.js'
+import {
+  resumeWithWorktree,
+  spawnWithWorktree,
+  trackWithoutPreallocation,
+  type IsolationSpawnContext,
+} from './isolation-spawn.js'
+
+/** 持久租约记录（形状与 fail-closed 纪律见 isolation-lease-store.ts）。 */
+export type { WorktreeLeaseRecord } from './isolation-lease-store.js'
 
 /** 外部运行时 agentType 命名空间形态：'namespace:kind'（通用约定，零插件点名）。 */
 function isExternalRuntimeAgentType(agentType: string | undefined): boolean {
   return agentType !== undefined && agentType.includes(':')
-}
-
-/**
- * 每次启动注入的 worktree 上下文（新建与 resume 均生效）：携带 worktree 元
- * 信息（worktreeId/path/branch/baseCommit/baseBranch/parentWorktreeId）与
- * dirtySource 诚实提示，提醒子代理在结束回合前 git add + git commit 提交
- * 全部改动（未提交内容会阻塞 cleanup 且不随树合入）。
- */
-function worktreeContextPrompt(record: ManagedWorktreeRecord): string {
-  const lines = [
-    '当前工作目录为独立 Git Worktree：',
-    `- worktreeId: ${record.id}`,
-    `- path: ${record.path}`,
-    `- branch: ${record.branch}`,
-    ...(record.baseCommit !== '' ? [`- baseCommit: ${record.baseCommit.slice(0, 12)}`] : []),
-    ...(record.baseBranch !== undefined && record.baseBranch !== '' ? [`- baseBranch: ${record.baseBranch}`] : []),
-    ...(record.parentWorktreeId !== undefined && record.parentWorktreeId !== ''
-      ? [`- parentWorktreeId: ${record.parentWorktreeId}`]
-      : []),
-    record.dirtySource
-      ? '- 注意：源工作区存在未提交修改，本隔离工作树基于源 HEAD 创建，不包含源工作区未提交的改动。'
-      : '- 源工作区干净。',
-    '请在结束回合前运行 git add 与 git commit 提交全部改动，保持工作区干净。',
-  ]
-  return `\n\n<worktree_context>\n${lines.join('\n')}\n</worktree_context>`
-}
-
-/**
- * 把受管 worktree 描述写进 execution meta 的 workflow 命名空间：合并保留
- * 信封其余字段、其他插件命名空间与 workflow 命名空间未提及的既有键（如
- * 外部运行时回传的 controls）；本层是原生路径 worktree 业务值的唯一生产方。
- */
-function withWorktreeExecutionMeta(
-  info: AgentExecutionInfo,
-  worktree: WorktreeExecutionDescriptor,
-): AgentExecutionInfo {
-  return { ...info, meta: workflowExecutionMeta({ worktree }, info.meta) }
-}
-
-/**
- * 持久租约记录（'worktree-leases' doc）。
- * phase：'pending'（占位：副作用前/未启动确认）| 'running'（onResolved 已回填）。
- */
-export interface WorktreeLeaseRecord {
-  phase: 'pending' | 'running'
-  /** 执行元数据（pending 阶段 executionId/conversationId 可能为空）。 */
-  info: AgentExecutionInfo
-  /** 关联的受管 worktree 登记 ID（`${nodeId}:${path}`；始终非空）。 */
-  worktreeId: string
-  /** 是否已确认执行从未启动（next 前抛错置 true；唯一安全释放条件之一）。 */
-  neverStarted?: boolean
-  createdAt: number
 }
 
 /** 隔离服务依赖（插件 definePlugin 闭包注入；全部为已启用周期内稳定引用）。 */
@@ -125,13 +71,16 @@ export interface WorktreeIsolationDeps {
   docStore: { get<T>(key: string, initial: T): T; set<T>(key: string, value: T): void; flush(): Promise<void> }
 }
 
-const LEASES_DOC_KEY = 'worktree-leases'
-const AGENT_BINDINGS_DOC_KEY = 'worktree-agent-bindings'
-
 export class WorktreeIsolation {
   readonly allocator: WorktreeAllocator
 
+  private readonly leases: WorktreeLeaseStore
+
   constructor(private readonly deps: WorktreeIsolationDeps) {
+    // allocator 与租约存储互引：allocator 的占用检查经本存储查租约并反查
+    // 登记，本存储解析租约路径时引用 allocator 记录（延迟引用，首次占用
+    // 判定发生时 allocator 已构造完成）。
+    this.leases = new WorktreeLeaseStore(deps.docStore, deps.host, () => this.allocator)
     this.allocator = new WorktreeAllocator({
       exec: (nodeId, cwd, args, options, context) => this.execGit(nodeId, cwd, args, options, context),
       nodeExists: (nodeId, path) => this.probeFs(nodeId, path, 'exists') as Promise<Result<boolean, FileError>>,
@@ -139,9 +88,14 @@ export class WorktreeIsolation {
       inspectPathUsage: (nodeId, path, signal) => deps.host.inspectNodePathUsage({ nodeId, path, signal }),
       docStore: deps.docStore,
       redact: (text) => deps.host.redact(text),
-      isConversationWorking: (id) => this.isConversationWorking(id),
-      isPathInUse: (nodeId, path) => this.isPathInUse(nodeId, path),
+      isConversationWorking: (id) => this.leases.isConversationWorking(id),
+      isPathInUse: (nodeId, path) => this.leases.isPathInUse(nodeId, path),
     })
+  }
+
+  /** 生命周期流程上下文（isolation-spawn.ts 流程函数的最小依赖组装）。 */
+  private spawnCtx(): IsolationSpawnContext {
+    return { deps: this.deps, allocator: this.allocator, leases: this.leases }
   }
 
   // ------------------------------------------------------------------
@@ -220,171 +174,6 @@ export class WorktreeIsolation {
   }
 
   // ------------------------------------------------------------------
-  // 占用判定（cleanup 拒绝清理在途树；fail-closed）
-  // ------------------------------------------------------------------
-
-  private contains(path: string, candidate: string): boolean {
-    const windows = /^[A-Za-z]:[\\/]|^\\\\/.test(path)
-    const normalize = (value: string) => {
-      const normalized = value.replaceAll('\\', '/').replace(/\/$/, '')
-      return windows ? normalized.toLowerCase() : normalized
-    }
-    const base = normalize(path)
-    const probe = normalize(candidate)
-    return probe === base || probe.startsWith(`${base}/`)
-  }
-
-  /** 会话工作状态：读取错误如实上抛（不当作安全）；仅 working/blocked 视为占用。 */
-  private isConversationWorking(id: number): boolean {
-    const conv = this.deps.host.getConversation(id)
-    return conv.status === 'working' || conv.status === 'blocked'
-  }
-
-  /**
-   * 路径占用：宿主在途 spawn 执行坐标 + 本插件租约（按 worktreeId 关联
-   * allocator 记录定位路径，pending 占位同样计入）。
-   */
-  private isPathInUse(nodeId: string, path: string): boolean {
-    // 1) 宿主在途 spawn 执行（含外部运行时回传坐标）。
-    for (const info of this.deps.host.listActiveSpawnExecutions()) {
-      if (info.nodeId !== nodeId) continue
-      if (info.effectiveCwd !== undefined && this.contains(path, info.effectiveCwd)) return true
-      const wt = extractWorkflowExecutionMeta(info).worktree
-      if (wt !== undefined && this.contains(path, wt.path)) return true
-    }
-    // 2) 本插件租约：pending（占位）与 running 一视同仁——按 worktreeId 从
-    //    allocator 记录解析路径（占位记录尚未登记 allocator 时直接用
-    //    worktreeId 中的 path 部分解析）。
-    for (const lease of this.listLeases().values()) {
-      const leasePath = this.leasePathOf(lease, nodeId)
-      if (leasePath !== undefined && this.contains(path, leasePath)) return true
-    }
-    return false
-  }
-
-  /** 租约路径解析：优先 allocator 记录；无记录时从 worktreeId（node:path）解析。 */
-  private leasePathOf(lease: WorktreeLeaseRecord, nodeId: string): string | undefined {
-    const record = this.allocator.findActive({ worktreeId: lease.worktreeId })
-    if (record !== undefined) return record.nodeId === nodeId ? record.path : undefined
-    const prefix = `${nodeId}:`
-    return lease.worktreeId.startsWith(prefix) ? lease.worktreeId.slice(prefix.length) : undefined
-  }
-
-  // ------------------------------------------------------------------
-  // durable 租约
-  // ------------------------------------------------------------------
-
-  private listLeases(): Map<string, WorktreeLeaseRecord> {
-    const raw = this.deps.docStore.get<Record<string, WorktreeLeaseRecord>>(LEASES_DOC_KEY, {})
-    return new Map(Object.entries(raw))
-  }
-
-  private saveLeases(map: Map<string, WorktreeLeaseRecord>): void {
-    this.deps.docStore.set(LEASES_DOC_KEY, Object.fromEntries(map))
-  }
-
-  /**
-   * 占位租约（分配路径专用）：git worktree add 副作用之前登记（经
-   * allocator.beforeCreate 回调，先于任何 Git 副作用）并 flush 落盘。
-   * worktreeId 即 `${nodeId}:${path}`（与 allocator 登记同构）。
-   */
-  private async openPendingLease(worktreeId: string): Promise<string> {
-    const token = randomUUID()
-    const map = this.listLeases()
-    map.set(token, {
-      phase: 'pending',
-      info: { nodeId: worktreeId.slice(0, worktreeId.indexOf(':')) || '' },
-      worktreeId,
-      createdAt: Date.now(),
-    })
-    this.saveLeases(map)
-    await this.deps.docStore.flush()
-    return token
-  }
-
-  /** onResolved 回填：升级为 running 并记录真实执行坐标（幂等取最新）。 */
-  private updateLease(token: string, info: AgentExecutionInfo): void {
-    const map = this.listLeases()
-    const lease = map.get(token)
-    if (lease === undefined) return
-    map.set(token, { ...lease, phase: 'running', info })
-    this.saveLeases(map)
-  }
-
-  /**
-   * 终态收敛。释放仅限两种确认状态（安全红线）：
-   * 1) succeeded = true（执行确认成功，或原生子会话回合确认停止）；
-   * 2) neverStarted = true（next 从未被调用/尚未进入执行链就抛错——此时
-   *    占位租约自身可证明无执行）。
-   * 其余（onResolved 失败、外部进程已启动但未回填 executionId、未知状态）
-   * 一律保留租约（fail-closed：不能证明停止就不能允许清理）。
-   */
-  private async settleLease(token: string, succeeded: boolean, neverStarted: boolean): Promise<void> {
-    if (!succeeded && !neverStarted) return
-    const map = this.listLeases()
-    if (!map.has(token)) return
-    map.delete(token)
-    this.saveLeases(map)
-    await this.deps.docStore.flush()
-  }
-
-  /**
-   * next 抛错后的原生子会话租约释放判定：仅当 onResolved 已回传原生子会话
-   * （conversationId 存在且无 executionId——runNativeSpawn 的 finally 已在
-   * next 返回前释放会话锁，子会话回合确定已停止）且该会话当前确认不在
-   * 运行时释放本次运行租约（保留 Worktree 记录与 agentId 绑定，供下一轮
-   * resume 或 cleanup_worktree 使用）；onResolved 未触发、外部执行
-   * （executionId）或会话状态不可读一律保留（fail-closed）。
-   */
-  private async settleLeaseAfterNextFailure(token: string, execution: AgentExecutionInfo | undefined): Promise<void> {
-    if (execution === undefined) return
-    if (execution.conversationId === undefined || execution.executionId !== undefined) return
-    let working: boolean
-    try {
-      working = this.isConversationWorking(execution.conversationId)
-    } catch {
-      return
-    }
-    if (!working) await this.settleLease(token, true, false)
-  }
-
-  /** 清除指定 worktree 下全部残留租约（resume 确认成功后调用；旧租约只会误阻塞后续 cleanup）。 */
-  private async clearStaleLeases(worktreeId: string): Promise<void> {
-    const map = this.listLeases()
-    let changed = false
-    for (const [token, lease] of map) {
-      if (lease.worktreeId === worktreeId) {
-        map.delete(token)
-        changed = true
-      }
-    }
-    if (!changed) return
-    this.saveLeases(map)
-    await this.deps.docStore.flush()
-  }
-
-  // ------------------------------------------------------------------
-  // agentId 绑定（resume ref 解析）
-  // ------------------------------------------------------------------
-
-  /** resume ref -> childConversationId（纯数字直转；agentId 经绑定表）。 */
-  private resolveResumeChildId(request: AgentSpawnRequest): number | undefined {
-    if (request.resume === undefined) return undefined
-    if (/^\d+$/.test(request.resume)) return Number(request.resume)
-    const bindings = this.deps.docStore.get<Record<string, number>>(AGENT_BINDINGS_DOC_KEY, {})
-    return bindings[request.resume]
-  }
-
-  /** agentId -> childId 绑定（spawn 的 onResolved 后记录）。 */
-  private recordAgentBinding(agentId: string | undefined, childId: number | undefined): void {
-    if (agentId === undefined || agentId === '' || childId === undefined) return
-    const bindings = this.deps.docStore.get<Record<string, number>>(AGENT_BINDINGS_DOC_KEY, {})
-    if (bindings[agentId] === childId) return
-    bindings[agentId] = childId
-    this.deps.docStore.set(AGENT_BINDINGS_DOC_KEY, bindings)
-  }
-
-  // ------------------------------------------------------------------
   // agent_spawn continuation（around 主流程）
   // ------------------------------------------------------------------
 
@@ -396,12 +185,12 @@ export class WorktreeIsolation {
     request: AgentSpawnRequest,
     next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
   ): Promise<unknown> {
-    const resumeChildId = request.resume !== undefined ? this.resolveResumeChildId(request) : undefined
+    const resumeChildId = request.resume !== undefined ? this.leases.resolveResumeChildId(request) : undefined
     // resume + 已绑定隔离树：严格沿用（无显式 isolation 也不忽略旧绑定）。
     if (resumeChildId !== undefined) {
       const existing = this.allocator.getForConversation(resumeChildId)
       if (existing !== undefined) {
-        return this.resumeWithWorktree(request, resumeChildId, existing, next)
+        return resumeWithWorktree(this.spawnCtx(), request, resumeChildId, existing, next)
       }
       // resume 无旧绑定但请求 isolation：中途切换显式拒绝（诚实性）。
       if (request.isolation === 'worktree') {
@@ -416,257 +205,12 @@ export class WorktreeIsolation {
     // 新建 + isolation：解析最终节点后预分配（外部运行时不预分配）。
     if (request.isolation === 'worktree') {
       if (isExternalRuntimeAgentType(request.agentType)) {
-        return this.trackWithoutPreallocation(request, next)
+        return trackWithoutPreallocation(this.spawnCtx(), request, next)
       }
-      return this.spawnWithWorktree(request, next)
+      return spawnWithWorktree(this.spawnCtx(), request, next)
     }
     // 其余（外部运行时带 isolation / 普通派生回传 worktree）：仅回填登记与租约。
-    return this.trackWithoutPreallocation(request, next)
-  }
-
-  /**
-   * 新建 + isolation: 'worktree'：占位租约（副作用前）-> 分配 -> 改写 cwd ->
-   * next -> 终态收敛。next 前任何失败都标记 neverStarted（占位可安全释放）；
-   * next 后（含 next 抛错）一律 fail-closed 保留。
-   */
-  private async spawnWithWorktree(
-    request: AgentSpawnRequest,
-    next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
-  ): Promise<unknown> {
-    // 最终节点与源目录解析（内核权威：与原生执行行同构链；IO/不存在错误如实上抛）。
-    const profileId = request.agentType || 'assistant'
-    const target = await this.deps.host.resolveSpawnTarget({
-      parentConversationId: request.parentConversationId,
-      profileId,
-      ...(request.cwd !== undefined ? { requestCwd: request.cwd } : {}),
-    })
-    const sourceCwd = target.sourceCwd
-    let leaseToken = ''
-    let enteredNext = false
-    let execution: AgentExecutionInfo | undefined
-    try {
-      const record = await this.allocator.allocate({
-        nodeId: target.nodeId,
-        sourceCwd,
-        parentConversationId: request.parentConversationId,
-        signal: request.signal,
-        beforeCreate: async (pending) => {
-          // git worktree add 之前持久占位（worktreeId 与 allocator 登记同构）。
-          leaseToken = await this.openPendingLease(`${pending.nodeId}:${pending.path}`)
-        },
-      })
-      // 每次启动都注入 worktree 上下文（含元信息与 dirtySource 诚实提示；
-      // 提醒结束回合前提交全部改动）。隔离树基于 HEAD 创建，不含源工作区
-      // 未提交改动的事实由 dirtySource 行如实说明。
-      const finalRequest: AgentSpawnRequest = {
-        ...request,
-        cwd: record.path,
-        isolation: undefined,
-        prompt: `${request.prompt}${worktreeContextPrompt(record)}`,
-        onResolved: (raw) => {
-          const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-          const enriched: AgentExecutionInfo = withWorktreeExecutionMeta(
-            { ...info, nodeId: info.nodeId ?? target.nodeId },
-            {
-              path: record.path,
-              branch: record.branch,
-              id: record.id,
-              ...(record.repoRoot !== '' ? { repoRoot: record.repoRoot } : {}),
-              ...(record.baseCommit !== '' ? { baseCommit: record.baseCommit, dirtySource: record.dirtySource } : {}),
-              ...(record.baseBranch !== undefined && record.baseBranch !== '' ? { baseBranch: record.baseBranch } : {}),
-              ...(record.parentWorktreeId !== undefined && record.parentWorktreeId !== ''
-                ? { parentWorktreeId: record.parentWorktreeId }
-                : {}),
-            },
-          )
-          if (info.conversationId !== undefined) {
-            this.allocator.bindConversation(record.path, record.nodeId, info.conversationId)
-            this.recordAgentBinding(request.agentId, info.conversationId)
-          }
-          this.updateLease(leaseToken, enriched)
-          execution = enriched
-          request.onResolved?.(enriched)
-        },
-      }
-      enteredNext = true
-      const result = await next(finalRequest)
-      await this.settleLease(leaseToken, true, false)
-      return result
-    } catch (error) {
-      // next 前失败（分配失败/目标解析失败）：占位租约可证明无执行，安全释放。
-      // next 后失败：原生子会话且已确认停止时同样释放（保留 Worktree 记录与
-      // agentId 绑定供 resume/cleanup）；其余不确定状态保留租约 fail-closed。
-      await (enteredNext
-        ? this.settleLeaseAfterNextFailure(leaseToken, execution)
-        : this.settleLease(leaseToken, false, true)
-      ).catch(() => {})
-      throw error
-    }
-  }
-
-  /** resume + 旧绑定：沿用原树（禁止中途迁移节点/cwd）；目录缺失显式失败。 */
-  private async resumeWithWorktree(
-    request: AgentSpawnRequest,
-    childId: number,
-    record: ManagedWorktreeRecord,
-    next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
-  ): Promise<unknown> {
-    if (record.status === 'removed') {
-      throw new HelmError('worktree_missing', `子会话绑定的隔离 worktree '${record.path}' 已被清理（branch: ${record.branch}）`, 409)
-    }
-    const conv = this.deps.host.getConversation(childId) // 错误如实上抛
-    if ((conv.nodeId ?? 'local') !== record.nodeId) {
-      throw new HelmError('resume_cwd_conflict', '隔离子会话必须在原节点和工作树上续接，不能切换节点', 409, { conversationId: childId, nodeId: record.nodeId })
-    }
-    if (request.cwd !== undefined && request.cwd !== record.path) {
-      throw new HelmError('resume_cwd_conflict', `子会话已绑定隔离 worktree '${record.path}'，不支持在 resume 时改写 cwd 为 '${request.cwd}'`, 409, { existingCwd: record.path, requestedCwd: request.cwd })
-    }
-    // 占位租约先于远端验证打开：verifyForResume 的多次远端 git/fs 探测是秒级
-    // await 窗口，期间子会话不 working、无在途执行、无租约——并发 cleanup 可
-    // 通过全部占用检查移除树，resume 随后携 stale cwd 派生会话，并为已 removed
-    // 记录留永久占位租约。租约前置后 isPathInUse 在验证期即拒绝 cleanup（与
-    // spawnWithWorktree 的 beforeCreate 副作用前置同构）；验证失败走
-    // neverStarted 释放，不留占位。
-    const leaseToken = await this.openPendingLease(record.id)
-    let enteredNext = false
-    let execution: AgentExecutionInfo | undefined
-    try {
-      await this.allocator.verifyForResume(record, request.cwd, request.signal)
-      // 每次启动都注入 worktree 上下文（与新建同构；resume 续接同样携带元
-      // 信息与提交提醒）。
-      const finalRequest: AgentSpawnRequest = {
-        ...request,
-        cwd: record.path,
-        isolation: undefined,
-        prompt: `${request.prompt}${worktreeContextPrompt(record)}`,
-        onResolved: (raw) => {
-          const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-          const enriched: AgentExecutionInfo = withWorktreeExecutionMeta(
-            { ...info, nodeId: info.nodeId ?? record.nodeId },
-            {
-              path: record.path,
-              branch: record.branch,
-              id: record.id,
-              ...(record.repoRoot !== '' ? { repoRoot: record.repoRoot } : {}),
-              ...(record.baseCommit !== '' ? { baseCommit: record.baseCommit, dirtySource: record.dirtySource } : {}),
-              ...(record.baseBranch !== undefined && record.baseBranch !== '' ? { baseBranch: record.baseBranch } : {}),
-              ...(record.parentWorktreeId !== undefined && record.parentWorktreeId !== ''
-                ? { parentWorktreeId: record.parentWorktreeId }
-                : {}),
-            },
-          )
-          this.updateLease(leaseToken, enriched)
-          execution = enriched
-          request.onResolved?.(enriched)
-        },
-      }
-      enteredNext = true
-      const result = await next(finalRequest)
-      await this.settleLease(leaseToken, true, false)
-      // resume 确认成功：该 worktree 下此前失败/中断轮次残留的旧租约一并
-      // 清除（本次执行已确认成功，残留租约只会以 worktree_execution_unknown
-      // 误阻塞后续 cleanup）。清理失败不改变 resume 结果，stderr 如实诊断。
-      await this.clearStaleLeases(record.id).catch((error: unknown) => {
-        process.stderr.write(
-          `builtin:workflow: worktree ${record.id} 残留租约清理失败（后续 cleanup 可能被 worktree_execution_unknown 阻塞，可重试 resume 或人工核对）: ${
-            error instanceof Error ? error.message : String(error)
-          }\n`,
-        )
-      })
-      return result
-    } catch (error) {
-      // 与新建同构：next 前失败释放占位；next 后原生子会话确认停止即释放，
-      // 其余不确定状态保留租约 fail-closed。
-      await (enteredNext
-        ? this.settleLeaseAfterNextFailure(leaseToken, execution)
-        : this.settleLease(leaseToken, false, true)
-      ).catch(() => {})
-      throw error
-    }
-  }
-
-  /**
-   * 外部运行时 / 普通派生：不预分配；onResolved 回传 worktree 时登记 + 租约。
-   * 终态收敛：成功释放；失败保留（外部执行启动与否不可证明——onResolved
-   * 未触发不等于未启动）。请求了 isolation 但外部运行时未兑现：显式拒绝。
-   */
-  private async trackWithoutPreallocation(
-    request: AgentSpawnRequest,
-    next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
-  ): Promise<unknown> {
-    if (request.onResolved === undefined) return next(request)
-    let leaseToken: string | undefined
-    let execution: AgentExecutionInfo | undefined
-    const finalRequest: AgentSpawnRequest = {
-      ...request,
-      onResolved: (raw) => {
-        const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-        const externalWorktree = extractWorkflowExecutionMeta(info).worktree
-        if (externalWorktree !== undefined) {
-          if (info.nodeId === undefined) {
-            throw new HelmError('execution_info_invalid', '隔离工作树必须回传实际 nodeId，不能推测外部运行时的节点', 502)
-          }
-          const managed =
-            this.allocator.findActive({ path: externalWorktree.path, nodeId: info.nodeId }) ??
-            this.allocator.registerExternal({
-              nodeId: info.nodeId,
-              path: externalWorktree.path,
-              branch: externalWorktree.branch,
-              parentConversationId: request.parentConversationId,
-              ...(info.conversationId !== undefined ? { conversationId: info.conversationId } : {}),
-              ...(info.executionId !== undefined ? { executionId: info.executionId } : {}),
-            })
-          // 机密检查：元数据将落库，含已登记机密显式拒绝。
-          const safe = redactJsonValue(managed, (text) => this.deps.host.redact(text))
-          if (JSON.stringify(safe) !== JSON.stringify(managed)) {
-            throw new HelmError('worktree_metadata_secret', `隔离执行元数据包含已登记机密，拒绝持久化；执行标识 ${info.executionId ?? info.conversationId ?? '未知'}`, 400)
-          }
-          const enriched: AgentExecutionInfo = withWorktreeExecutionMeta(info, {
-            ...externalWorktree,
-            id: managed.id,
-            ...(managed.repoRoot !== '' ? { repoRoot: managed.repoRoot } : {}),
-            ...(managed.baseCommit !== '' ? { baseCommit: managed.baseCommit, dirtySource: managed.dirtySource } : {}),
-          })
-          if (info.conversationId !== undefined) {
-            this.recordAgentBinding(request.agentId, info.conversationId)
-          }
-          // 首次回填：开租约（running；后续多次回调幂等更新）。onResolved 是
-          // 同步回调无法 await flush：落盘失败不能静默（租约是 crash 窗口内拒绝
-          // cleanup 的唯一证据），也不撤销 staged 租约（同进程 isPathInUse 读
-          // doc 现值，撤销立即打开清理窗口）——即时 stderr 诊断，结算写同一
-          // doc 时会重试整页落盘（settleLease 的 flush 失败仍如实上抛）。
-          if (leaseToken === undefined) {
-            leaseToken = randomUUID()
-            const map = this.listLeases()
-            map.set(leaseToken, { phase: 'running', info: enriched, worktreeId: managed.id, createdAt: Date.now() })
-            this.saveLeases(map)
-            void this.deps.docStore.flush().catch((error: unknown) => {
-              process.stderr.write(
-                `builtin:workflow: worktree 租约 ${managed.id} 落盘失败（执行期间崩溃将失去清理保护，结算写会重试）: ${
-                  error instanceof Error ? error.message : String(error)
-                }\n`,
-              )
-            })
-          } else {
-            this.updateLease(leaseToken, enriched)
-          }
-          execution = enriched
-          request.onResolved?.(enriched)
-          return
-        }
-        execution = info
-        request.onResolved?.(info)
-      },
-    }
-    try {
-      const result = await next(finalRequest)
-      if (leaseToken !== undefined) await this.settleLease(leaseToken, true, false)
-      return result
-    } catch (error) {
-      // 外部执行启动与否不可证明（onResolved 未触发不等于未启动）：保留租约。
-      if (leaseToken !== undefined) await this.settleLease(leaseToken, false, false).catch(() => {})
-      throw error
-    }
+    return trackWithoutPreallocation(this.spawnCtx(), request, next)
   }
 
   // ------------------------------------------------------------------
@@ -674,28 +218,13 @@ export class WorktreeIsolation {
   // ------------------------------------------------------------------
 
   /**
-   * cleanup 前置租约检查：存在「重启中断或未确认停止」的执行租约时显式
-   * worktree_execution_unknown（不能证明外部执行已停止就不能清理）。
-   * 在途（宿主 activeSpawnExecutions 命中）的租约由 allocator 的
-   * isPathInUse 拒绝（worktree_in_use）。
+   * cleanup 前置租约检查（转发 isolation-lease-store.ts）：存在「重启中断
+   * 或未确认停止」的执行租约时显式 worktree_execution_unknown（不能证明
+   * 外部执行已停止就不能清理）；在途（宿主 activeSpawnExecutions 命中）的
+   * 租约由 allocator 的 isPathInUse 拒绝（worktree_in_use）。
    */
   assertNoUnknownExecution(nodeId: string, path: string): void {
-    const active = new Set(
-      this.deps.host.listActiveSpawnExecutions().map((info) => `${info.executionId ?? ''}\u0000${info.conversationId ?? ''}`),
-    )
-    for (const lease of this.listLeases().values()) {
-      const leasePath = this.leasePathOf(lease, nodeId)
-      if (leasePath === undefined || !this.contains(path, leasePath)) continue
-      const key = `${lease.info.executionId ?? ''}\u0000${lease.info.conversationId ?? ''}`
-      if (!active.has(key)) {
-        throw new HelmError(
-          'worktree_execution_unknown',
-          '工作树存在重启中断或未确认停止的执行，不能清理；请先检视并续接收尾，或确认停止后在目标节点手动清理 Git 工作树',
-          409,
-          { nodeId, path, executionId: lease.info.executionId, conversationId: lease.info.conversationId, phase: lease.phase },
-        )
-      }
-    }
+    this.leases.assertNoUnknownExecution(nodeId, path)
   }
 
   /** cleanup 入口：先做未知占用 fail-closed 检查，再执行 allocator 清理。 */
@@ -709,7 +238,7 @@ export class WorktreeIsolation {
       ...(input.path !== undefined ? { path: input.path } : {}),
       ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}),
     })
-    if (record !== undefined) this.assertNoUnknownExecution(record.nodeId, record.path)
+    if (record !== undefined) this.leases.assertNoUnknownExecution(record.nodeId, record.path)
     return this.allocator.cleanup({ ...input, signal })
   }
 
