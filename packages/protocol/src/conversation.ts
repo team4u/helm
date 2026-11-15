@@ -206,6 +206,10 @@ export interface ConversationEntry {
   data?: unknown
   /** 模型上下文消息（如 assistant 文本）；纯展示/簿记 entry 无此字段。 */
   model?: unknown[]
+  /** 追加该 entry 的生成任务（SDK byTaskId；scheduler 上下文等无归属时缺省）。
+   * 消费方据它与 ConversationLiveGeneration.taskId 精确关联「哪次模型请求
+   * 产生了这条 entry」；缺省时不可猜测归属。 */
+  taskId?: number
   createdAt?: number
 }
 
@@ -265,7 +269,11 @@ export interface ConversationLive {
  * 内核不伪造；消费方只能以「首次观测到 generation 的帧时间」为 TTFT 起点
  * 近似（受 live 节流与 partial 提交节流双重限制），展示端必须如实标注。 */
 export interface ConversationLiveGeneration {
-  /** generation attempt 序号（重试 / 工具轮 handOver 重启时变化）。 */
+  /** generation 所属生成任务（SDK live.run.taskId；每工具轮 handOver 换新
+   * 任务，同任务内重试不变）。与 entry.taskId 同源，是流式快照与最终落库
+   * 结果精确关联的连接键——内核只透传，绝不伪造。 */
+  taskId: number
+  /** 同一生成任务内的 attempt 序号（重试时递增；每工具轮新任务重置为 1）。 */
   attempt: number
   /** 当前累计 assistant message 快照（受限投影；message 尚无内容时省略）。 */
   message?: ConversationLiveMessage

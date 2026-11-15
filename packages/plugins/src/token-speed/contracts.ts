@@ -64,8 +64,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * conversation.live 事件守卫（速率策略消费的最小子集）：HelmEvent 信封 +
- * live.{conversationId 正整数, generation 可选受限形状, updatedAt 有限非负}。
- * 非法返回 undefined（调用方丢弃），绝不粗 as 信任。
+ * live.{conversationId 正整数, generation 可选受限形状（taskId+attempt 正整数
+ * 为必需身份）, updatedAt 有限非负}。非法返回 undefined（调用方丢弃），
+ * 绝不粗 as 信任。
  */
 export function asConversationLiveFrame(payload: unknown):
   | {
@@ -87,40 +88,63 @@ export function asConversationLiveFrame(payload: unknown):
   const generation = live['generation']
   if (generation === undefined) return { conversationId, hasTools, updatedAt }
   if (!isPlainObject(generation)) return undefined
+  const taskId = generation['taskId']
+  if (typeof taskId !== 'number' || !Number.isInteger(taskId) || taskId <= 0) return undefined
   const attempt = generation['attempt']
   if (typeof attempt !== 'number' || !Number.isInteger(attempt) || attempt <= 0) return undefined
   const message = generation['message']
-  if (message === undefined) return { conversationId, generation: { attempt }, hasTools, updatedAt }
+  if (message === undefined) return { conversationId, generation: { taskId, attempt }, hasTools, updatedAt }
   if (!isPlainObject(message) || !Array.isArray(message['content'])) return undefined
   const usage = message['usage']
   if (usage !== undefined && (!isPlainObject(usage) || typeof usage['output'] !== 'number')) return undefined
   return {
     conversationId,
-    generation: { attempt, ...(message !== undefined ? { message: message as never } : {}) },
+    generation: { taskId, attempt, message: message as never },
     hasTools,
     updatedAt,
   }
 }
 
+/** pi.assistant entry 的结构化完成事实（速率对账消费）：
+ * - taskId：entry.taskId（byTaskId 投影；scheduler 上下文等无归属时缺省，
+ *   身份不明不关联不猜测）；
+ * - usageOutput：model[0].usage.output（有限非负；载荷异常缺省）；
+ * - stopReason：model[0].stopReason（aborted / error 为失败尝试，计数剔除）。 */
+export interface AssistantCompletion {
+  conversationId: number
+  taskId: number | undefined
+  entryId: string | undefined
+  usageOutput: number | undefined
+  stopReason: string | undefined
+}
+
 /**
- * conversation.entry 事件守卫（终值对账消费）：pi.assistant entry 的
- * model[0].usage.output（正有限数；载荷异常返回 undefined 不对账）。
+ * conversation.entry 事件守卫（终值对账消费）：pi.assistant entry -> 完成
+ * 事实投影。非 pi.assistant / 载荷非法返回 undefined。
  */
-export function asAssistantUsageOutput(payload: unknown): { conversationId: number; usageOutput: number | undefined } | undefined {
+export function asAssistantCompletion(payload: unknown): AssistantCompletion | undefined {
   if (!isPlainObject(payload) || payload['type'] !== 'conversation.entry') return undefined
   const conversationId = payload['conversationId']
   if (typeof conversationId !== 'number' || !Number.isInteger(conversationId) || conversationId <= 0) return undefined
   const entry = payload['entry']
   if (!isPlainObject(entry) || entry['kind'] !== 'pi.assistant') return undefined
+  const rawTaskId = entry['taskId']
+  const taskId =
+    typeof rawTaskId === 'number' && Number.isInteger(rawTaskId) && rawTaskId > 0 ? rawTaskId : undefined
+  const rawEntryId = entry['id']
+  const entryId = typeof rawEntryId === 'string' ? rawEntryId : undefined
   const model = entry['model']
   if (!Array.isArray(model) || !isPlainObject(model[0])) return undefined
-  const usage = (model[0] as { usage?: unknown }).usage
+  const first = model[0] as Record<string, unknown>
+  const usage = first['usage']
   let usageOutput: number | undefined
   if (isPlainObject(usage)) {
     const output = usage['output']
     if (typeof output === 'number' && Number.isFinite(output) && output >= 0) usageOutput = output
   }
-  return { conversationId, usageOutput }
+  const rawStopReason = first['stopReason']
+  const stopReason = typeof rawStopReason === 'string' ? rawStopReason : undefined
+  return { conversationId, taskId, entryId, usageOutput, stopReason }
 }
 
 /** conversation.deleted 事件守卫：返回会话 id。 */

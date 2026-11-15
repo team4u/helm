@@ -71,6 +71,8 @@ function assertJsonUsable(value: unknown, path: string, seen: WeakSet<object>): 
  * SDK EntryRecord -> 协议 ConversationEntry。
  * - id 统一转 string（协议契约）；
  * - kind/data/model 原样保留（model 是模型上下文消息数组，assistant 文本在其中）；
+ * - taskId：byTaskId 为正整数时投射（追加该 entry 的生成任务；scheduler
+ *   上下文等无归属时缺省，绝不伪造）；
  * - 边界 JSON 可用校验：非 JSON 值显式抛 HelmError，不静默降级、不伪造截断。
  */
 export function toConversationEntry(record: EntryRecordLike): ConversationEntry {
@@ -80,11 +82,16 @@ export function toConversationEntry(record: EntryRecordLike): ConversationEntry 
   if (typeof record.kind !== 'string') {
     throw new HelmError('invalid_json_value', `entry.kind 必须是 string，实得 ${typeof record.kind}`, 500)
   }
+  const taskId =
+    typeof record.byTaskId === 'number' && Number.isInteger(record.byTaskId) && record.byTaskId > 0
+      ? record.byTaskId
+      : undefined
   const entry: ConversationEntry = {
     id: String(record.id),
     kind: record.kind,
     ...(record.data !== undefined ? { data: record.data } : {}),
     ...(record.model !== undefined ? { model: [...record.model] } : {}),
+    ...(taskId !== undefined ? { taskId } : {}),
   }
   // 边界校验：kind 之外的载荷必须整体可 JSON 序列化（HTTP/SSE 共用出口）。
   assertJsonUsable(entry, 'payload', new WeakSet())
@@ -143,19 +150,23 @@ function toolInputOf(slot: { arguments?: unknown } | { input?: unknown }): unkno
 
 /**
  * SDK generation（pi.live generation 字段）-> 协议受限投影（通用事实，零策略）。
- * - attempt 非正整数时整体省略（形状并非法，不伪造序号）；
+ * - taskId 来自同快照 live.run.taskId（generation 实际所属生成任务）：缺失或
+ *   非正整数时整体省略 generation——身份不可伪造，无身份的流式事实不可关联；
+ * - attempt 非正整数时同样整体省略；
  * - message 仅保留 content 受限块（text/thinking/toolCall name+arguments）与
  *   供应商累计 usage.output（正有限数）；无有效内容块时 message 省略；
  * - 不透传其他字段（时间戳/模型元数据不外泄，速率策略不依赖它们）。
  */
 export function liveGenerationOf(
   generation: { attempt?: unknown; message?: unknown } | undefined,
+  runTaskId: unknown,
 ): ConversationLiveGeneration | undefined {
   if (generation === null || typeof generation !== 'object') return undefined
   const attempt = (generation as { attempt?: unknown }).attempt
   if (typeof attempt !== 'number' || !Number.isInteger(attempt) || attempt <= 0) return undefined
+  if (typeof runTaskId !== 'number' || !Number.isInteger(runTaskId) || runTaskId <= 0) return undefined
   const message = liveMessageOf((generation as { message?: unknown }).message)
-  return { attempt, ...(message !== undefined ? { message } : {}) }
+  return { taskId: runTaskId, attempt, ...(message !== undefined ? { message } : {}) }
 }
 
 /** partial assistant message -> 受限 JSON-safe 投影；无有效内容块返回 undefined。 */
@@ -226,8 +237,9 @@ function sortQueuedInputs(items: QueuedConversationInput[]): void {
  * - tools：模型发起的工具轮（tools）与嵌套调用（nestedTools）统一映射；
  *   输入取 slot 的运行参数（模型发起调用参数在 assistant entry，slot 的
  *   arguments/output 仅嵌套调用携带），结果文本不进入 live（详情走 entry）；
- * - generation：通用流式事实（attempt + 受限 message 投影），供速率类
- *   插件策略消费；内核零速率计算；
+ * - generation：通用流式事实（taskId + attempt + 受限 message 投影），供速率类
+ *   插件策略消费；taskId 取同快照 live.run.taskId（无身份不投影）；
+ *   内核零速率计算；
  * - queuedInputs：从 pi.inbox 排队项派生的待生效输入清单（steer 优先），
  *   无排队项时省略。
  */
@@ -235,6 +247,7 @@ export function deriveConversationLive(
   conversationId: number,
   live: {
     generation?: { attempt?: unknown; message?: unknown }
+    run?: { taskId?: unknown }
     tools?: ReadonlyArray<{
       callId: string
       name: string
@@ -270,7 +283,7 @@ export function deriveConversationLive(
   collect(source.tools)
   collect(source.nestedTools)
   const thinking = streamedThinkingOf(source.generation?.message)
-  const generation = liveGenerationOf(source.generation)
+  const generation = liveGenerationOf(source.generation, source.run?.taskId)
   const queuedInputs: QueuedConversationInput[] = []
   for (const item of inboxItems ?? []) {
     const queued = queuedInputOf(item, updatedAt)

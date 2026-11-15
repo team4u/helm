@@ -2,7 +2,8 @@
  * builtin:token-speed：实时解码速率（tok/s）只读状态插件（默认停用，可选启用）。
  *
  * 职责边界（机制与策略分离）：
- * - 内核只透传 ConversationLive.generation 通用流式事实（attempt + 受限
+ * - 内核只透传 ConversationLive.generation 通用流式事实（taskId + attempt +
+ *   受限
  *   message 投影），零速率计算；本插件消费这些事实自行推导全部策略：
  *   时间滑动窗口速率、chars/4 估算、TTFT（起点=首次观测，不伪造）、
  *   burst/stall 平滑、provider usage 终值对账、工具执行时间剔除（见
@@ -16,7 +17,8 @@
  *
  * 事件时序事实（内核观察链路，跨同提交折叠稳定）：
  * - conversation.entry（pi.assistant 最终 usage）先于同提交的 conversation.live
- *   帧到达——终值进待对账队列，段关闭时 FIFO 消费；
+ *   帧到达——完成事实按 taskId 精确关联到段（失败尝试计数剔除，无身份
+ *   entry 不关联）；
  * - pi-durable 每个工具轮 handOver 换 generation 任务，回合内每个模型请求
  *   各结算一次 turn_settled：payload.conversation.status 仍为 working 表示
  *   链延续（继续累计）；非 working 为链终点（终态发布 + 下一 generation 帧
@@ -33,7 +35,7 @@ import {
   MIN_SLIDING_WINDOW_MS,
   TOKEN_SPEED_DOC,
   TOKEN_SPEED_PLUGIN_ID,
-  asAssistantUsageOutput,
+  asAssistantCompletion,
   asConversationDeletedId,
   asConversationLiveFrame,
   type TokenSpeedStatus,
@@ -144,11 +146,17 @@ export function createTokenSpeedPlugin(): PluginDefinition {
         publish(frame.conversationId, status, force, now)
       })
 
-      // 最终 usage 对账：pi.assistant entry 先于同提交 live 帧到达。
+      // 最终 usage 对账：pi.assistant entry 先于同提交 live 帧到达；按 taskId
+      // 精确关联到段（无 taskId 的 entry 身份不明，不关联不猜测）。
       ctx.host.onEvent('conversation.entry', (raw) => {
-        const entry = asAssistantUsageOutput(raw)
-        if (entry === undefined) return
-        trackers.get(entry.conversationId)?.noteAssistantUsage(entry.usageOutput)
+        const completion = asAssistantCompletion(raw)
+        if (completion === undefined) return
+        trackers.get(completion.conversationId)?.noteCompletion({
+          taskId: completion.taskId,
+          entryId: completion.entryId,
+          usageOutput: completion.usageOutput,
+          stopReason: completion.stopReason,
+        })
       })
 
       // 回合结算：working = 工具轮 handOver 的中间结算（链继续）；其余为链

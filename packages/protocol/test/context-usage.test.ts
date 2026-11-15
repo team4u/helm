@@ -71,8 +71,9 @@ describe('ConversationLive.generation 通用流式事实契约', () => {
     updatedAt: 0,
   }
 
-  it('最小 generation（仅 attempt，message 尚无内容时省略）合法', { timeout: 60_000 }, () => {
-    const live: ConversationLive = { ...base, generation: { attempt: 1 } }
+  it('最小 generation（仅 taskId+attempt，message 尚无内容时省略）合法', { timeout: 60_000 }, () => {
+    const live: ConversationLive = { ...base, generation: { taskId: 7, attempt: 1 } }
+    assert.equal(live.generation?.taskId, 7)
     assert.equal(live.generation?.attempt, 1)
     assert.equal(live.generation?.message, undefined)
   })
@@ -81,6 +82,7 @@ describe('ConversationLive.generation 通用流式事实契约', () => {
     const live: ConversationLive = {
       ...base,
       generation: {
+        taskId: 7,
         attempt: 2,
         message: {
           content: [

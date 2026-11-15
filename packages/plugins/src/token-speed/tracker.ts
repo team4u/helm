@@ -5,27 +5,35 @@
  * 工具执行暂停时钟），按内核 ConversationLive 可观察事实重写：
  *
  * - 输入是内核 live 节流帧（默认 75ms）里的 generation 累计快照
- *   （attempt + 受限 message 投影），不是逐 token 事件；pi-durable partial
- *   提交节流（默认 100ms）再叠加一层粒度限制。全部时间测量的粒度是帧粒度：
- *   decode 段跨度按「首增长帧 -> 末增长帧」计算，两端各保守少计至多约一个
- *   节流窗；TTFT 起点只能取「首次观测到 generation 的帧时间」（内核不提供
- *   请求开始锚点，不伪造），展示端必须如实标注。
- * - 段（segment）：同一 generation attempt 的连续内容增长。attempt 变化或
- *   内容快照大幅回退（message 清空 / 工具轮 handOver 重启）都视为新段——
- *   重试 / partial 重放绝不重复累计；小幅回退（provider 在 *_end 重发整块
- *   文本）不构成段重置。工具执行时间落在 generation 缺席帧（tools 阶段），
- *   段间解码计时自然拼接，绝不计入工具耗时。
- * - provider usage：generation.message.usage.output 是供应商累计口径（如
- *   Anthropic 持续上报；OpenAI 兼容网关常只在终值）。优先用其增量；无推进
- *   时退回 chars/4 估算。conversation.entry 落库的最终 usage.output 是权威
- *   值，到达即对账覆盖该段流式口径（FIFO 对应最近未对账段；entry 事件先于
- *   同提交的 live 帧到达，折叠提交下按待对账队列消费）。
+ *   （taskId + attempt + 受限 message 投影），不是逐 token 事件；pi-durable
+ *   partial 提交节流（默认 100ms）再叠加一层粒度限制。全部时间测量的粒度是
+ *   帧粒度：decode 段跨度按「首增长帧 -> 末增长帧」计算，两端各保守少计至多
+ *   约一个节流窗；TTFT 起点只能取「首次观测到 generation 的帧时间」（内核
+ *   不提供请求开始锚点，不伪造），展示端必须如实标注。
+ *
+ * 显式请求身份（彻底取代内容回退启发式与 FIFO 对账猜测）：
+ * - 一次模型请求 = 一个 (taskId, attempt)：taskId 是 SDK generation 任务
+ *   （每工具轮 handOver 换新任务），attempt 只标记同任务内重试递增。工具
+ *   轮边界即使 generation 缺席帧被 75ms 节流合并丢失，taskId 变化仍能精确
+ *   分段——工具/请求间隙绝不计入任何段的解码跨度。
+ * - 段（segment）= 一次模型请求的流式观测。conversation.entry 携带同源
+ *   taskId（byTaskId 投影）：完成事实按 taskId 精确关联到段，entry 先于
+ *   同提交 live 帧、迟到于段关闭帧均正确；无 taskId 的 entry（scheduler
+ *   上下文等）身份不明，不关联不猜测。
+ * - 完成事实按 stopReason 分流：aborted / error 是失败尝试——该段计数与解码
+ *   时间全部丢弃（其 usage 不误配到成功重试，废弃估算不进回合总量）；
+ *   成功请求的最终 usage.output 是权威值，到达即覆盖该段流式口径。
+ *   无 usage 的成功完成也消费关闭对应段（保持流式估算口径）。
+ * - 速率配对诚实性（不伪造分母）：中途接入（首帧即带历史内容、无空
+ *   generation 基线）的段只测得 suffix 时间，而被整条 usage 对账后计数是
+ *   全量——两者不可配对，该段只进 token 总量、绝不进终态速率的分子分母；
+ *   单增长帧段（跨度 0）同样不进速率对。无可配对测量就不产终态速率。
  * - burst/stall 防尖峰：窗口内全部事件同一时间戳且同段（缓冲后一次冲刷）且
  *   存在同段前驱事件时，跨度向前延伸到前驱事件时间（把缓冲停滞期计入有效
- *   吞吐，对齐 pi-token-speed Sliding Window 语义）；跨段（工具轮/重试间隙）
- *   绝不延伸。跨度下限 100ms。
- * - 中途接入（插件启用 / 重启发生在流中）：首帧内容只作基线，不记窗口事件
- *   （历史内容时间不可归属，绝不制造首帧尖峰）；TTFT 同理不可测，省略。
+ *   吞吐）；跨段（工具轮/重试间隙）绝不延伸。跨度下限 100ms。
+ * - provider usage：generation.message.usage.output 是供应商累计口径（如
+ *   Anthropic 持续上报；OpenAI 兼容网关常只在终值）。优先用其增量；无推进
+ *   时退回 chars/4 估算。
  */
 import type { ConversationLiveMessage } from '@helm/protocol'
 import type { TokenSpeedSource, TokenSpeedStatus } from './contracts.js'
@@ -40,8 +48,11 @@ interface WindowEvent {
 /** 事件数组死前缀压缩阈值（对齐 pi-token-speed COMPACTION_THRESHOLD）。 */
 const WINDOW_COMPACTION_THRESHOLD = 5000
 
-/** 待对账 usage 队列上限：防御异常事件序列无界堆积。 */
-const PENDING_USAGE_LIMIT = 64
+/** 链内段记录上限：防御异常事件序列无界堆积（真实回合远小于此）。 */
+const MAX_SEGMENTS = 64
+
+/** 已消费 entry id 上限（防重去重有界）。 */
+const MAX_SEEN_ENTRIES = 256
 
 /** 时间滑动窗口（参考 pi-token-speed SlidingWindow）。 */
 export class SlidingWindow {
@@ -134,37 +145,59 @@ export function estimateTokensOf(deltaChars: number): number {
   return Math.max(1, Math.ceil(deltaChars / 4))
 }
 
-/** 一个解码段（同一 generation attempt 的连续内容增长）。 */
+/** 一次模型请求的流式观测段。 */
 interface Segment {
+  /** 窗口聚类用的链内序号。 */
   id: number
+  taskId: number
   attempt: number
+  /** open = 观测中；closed = 边界帧已关、等完成事实；done = 成功完成已对账；
+   * discarded = 失败尝试（计数与时间全部剔除）。 */
+  state: 'open' | 'closed' | 'done' | 'discarded'
   /** 段内累计快照基线（字符）。 */
   chars: number
   /** 段内最后见到的供应商累计 output（0 = 未见）。 */
   providerOutput: number
-  /** 段内累计 tokens（流式口径）。 */
+  /** 段内累计 tokens（流式口径；成功对账后为权威值）。 */
   tokens: number
   usedEstimate: boolean
   usedProvider: boolean
   firstGrowthAt: number | undefined
   lastGrowthAt: number | undefined
+  /** 中途接入基线段：历史内容时间不可归属（只测得 suffix）。 */
+  baselineOnly: boolean
+  /** 被整条 usage 对账后的基线段：计数与时间不可配对，不进速率对。 */
+  rateExcluded: boolean
+}
+
+/** observeFrame 的 generation 输入形状（contracts 守卫产物）。 */
+export interface GenerationFrame {
+  taskId: number
+  attempt: number
+  message?: ConversationLiveMessage
+}
+
+/** 完成事实（conversation.entry 的结构化投影；taskId 缺省 = 身份不明）。 */
+export interface CompletionFact {
+  taskId: number | undefined
+  entryId: string | undefined
+  /** 供应商最终 usage.output（正有限数；无上报缺省）。 */
+  usageOutput: number | undefined
+  stopReason: string | undefined
 }
 
 /**
- * 单会话速率状态机：链（用户回合，跨工具轮 handOver）为累积单位，段
- * （generation attempt）为窗口 / 计时单位。全部时间由调用方注入。
+ * 单会话速率状态机：链（用户回合，跨工具轮）为累积单位，段（一次模型请求，
+ * (taskId, attempt) 唯一标识）为窗口 / 计时单位。全部时间由调用方注入。
  */
 export class ConversationTokenSpeedTracker {
   private segmentSeq = 0
+  private readonly segments: Segment[] = []
   private active: Segment | undefined
-  private committedTokens = 0
-  private committedDecodeMs = 0
-  /** 已关闭段中尚未被最终 usage 对账的段（FIFO）。 */
-  private readonly unreconciled: Segment[] = []
-  /** 先于段关闭到达的最终 usage（entry 事件先于同提交 live 帧）。 */
-  private readonly pendingUsages: number[] = []
-  private providerSegments = 0
-  private estimateSegments = 0
+  /** taskId -> 最新未消费段（open / closed）；完成事实按此精确关联。 */
+  private readonly byTask = new Map<number, Segment>()
+  /** 已消费完成事实的 entry id（重复 entry 不重复计量）。 */
+  private readonly seenEntryIds = new Set<string>()
   private readonly window: SlidingWindow
   private readonly windowMs: number
   /** 最近一次观测到无内容 generation 的帧时间（TTFT 起点锚；仅干净观测可测）。 */
@@ -180,38 +213,40 @@ export class ConversationTokenSpeedTracker {
     this.window = new SlidingWindow(options.windowMs, options.minSpanMs)
   }
 
-  /** 新落库 assistant entry 的最终 usage.output（FIFO 对账最近未对账段）。 */
-  noteAssistantUsage(usageOutput: number | undefined): void {
-    if (usageOutput === undefined) return
-    const queued = this.unreconciled.shift()
-    if (queued !== undefined) {
-      this.reconcileSegment(queued, usageOutput)
+  /** 新落库 pi.assistant entry 的完成事实：按 taskId 精确关联段。 */
+  noteCompletion(fact: CompletionFact): void {
+    if (fact.taskId === undefined) return // 身份不明：不关联不猜测
+    if (fact.entryId !== undefined) {
+      if (this.seenEntryIds.has(fact.entryId)) return
+      this.seenEntryIds.add(fact.entryId)
+      if (this.seenEntryIds.size > MAX_SEEN_ENTRIES) this.seenEntryIds.clear()
+    }
+    const segment = this.byTask.get(fact.taskId)
+    if (segment === undefined) return // 从未观测该请求的流（中途启用/迟到）：不可关联
+    this.byTask.delete(fact.taskId)
+    const failed = fact.stopReason === 'error' || fact.stopReason === 'aborted'
+    if (failed) {
+      // 失败尝试：段计数与解码时间全部丢弃，usage 不误配到成功重试。
+      segment.state = 'discarded'
+      if (this.active === segment) this.active = undefined
       return
     }
-    if (this.pendingUsages.length < PENDING_USAGE_LIMIT) this.pendingUsages.push(usageOutput)
-  }
-
-  private reconcileSegment(segment: Segment, usageOutput: number): void {
-    // 权威值覆盖段流式口径（关闭时已按估算并入 committedTokens，此处补差）。
-    this.committedTokens += usageOutput - segment.tokens
-    segment.tokens = usageOutput
-    // 来源计数翻转：对账后该段是 provider 口径（抹去此前的估算计数）。
-    if (segment.usedEstimate) {
-      this.estimateSegments -= 1
-      segment.usedEstimate = false
-    }
-    if (!segment.usedProvider) {
-      this.providerSegments += 1
+    segment.state = 'done'
+    if (this.active === segment) this.active = undefined
+    if (typeof fact.usageOutput === 'number' && fact.usageOutput >= 0) {
+      if (segment.baselineOnly) segment.rateExcluded = true
+      segment.tokens = fact.usageOutput
       segment.usedProvider = true
+      segment.usedEstimate = false
     }
   }
 
   /** 采纳一帧 conversation.live（generation 缺席 = 工具阶段 / 段间间隙）。 */
-  observeFrame(now: number, frame: { generation?: { attempt: number; message?: ConversationLiveMessage }; hasTools: boolean }): void {
+  observeFrame(now: number, frame: { generation?: GenerationFrame; hasTools: boolean }): void {
     const generation = frame.generation
     if (generation === undefined) {
       this.phase = 'tools'
-      this.closeSegment()
+      this.closeActive()
       return
     }
     this.phase = 'decoding'
@@ -223,27 +258,43 @@ export class ConversationTokenSpeedTracker {
       this.sawEmptyGeneration = true
     }
     const current = this.active
-    if (current === undefined || this.isSegmentReset(current, generation.attempt, chars)) {
-      this.closeSegment()
-      // 中途接入判定：链首帧即带内容且从未见过空 generation——历史内容时间
-      // 不可归属，只建基线（不记窗口事件、不测 TTFT），绝不制造首帧尖峰。
-      const baselineOnly = chars > 0 && this.firstContentAt === undefined && !this.sawEmptyGeneration
-      const segment: Segment = {
-        id: (this.segmentSeq += 1),
-        attempt: generation.attempt,
-        chars: baselineOnly ? chars : 0,
-        providerOutput: 0,
-        tokens: 0,
-        usedEstimate: false,
-        usedProvider: false,
-        firstGrowthAt: undefined,
-        lastGrowthAt: undefined,
-      }
-      this.active = segment
-      if (baselineOnly) {
-        const seenOutput = generation.message?.usage?.output
-        if (seenOutput !== undefined) segment.providerOutput = seenOutput
-        return
+    const identityChanged =
+      current !== undefined &&
+      (current.taskId !== generation.taskId || current.attempt !== generation.attempt)
+    if (identityChanged) {
+      this.closeActive()
+    }
+    if (this.active === undefined) {
+      const held = this.byTask.get(generation.taskId)
+      if (held !== undefined && held.attempt === generation.attempt && held.state === 'closed') {
+        // 同请求身份在边界帧（如压缩等待间隙）后回归：重新打开续测。
+        held.state = 'open'
+        this.active = held
+      } else {
+        // 中途接入判定：链首帧即带内容且从未见过空 generation——历史内容时间
+        // 不可归属，只建基线（不记窗口事件、不测 TTFT），绝不制造首帧尖峰。
+        const baselineOnly = chars > 0 && this.firstContentAt === undefined && !this.sawEmptyGeneration
+        const segment: Segment = {
+          id: (this.segmentSeq += 1),
+          taskId: generation.taskId,
+          attempt: generation.attempt,
+          state: 'open',
+          chars: baselineOnly ? chars : 0,
+          providerOutput: 0,
+          tokens: 0,
+          usedEstimate: false,
+          usedProvider: false,
+          firstGrowthAt: undefined,
+          lastGrowthAt: undefined,
+          baselineOnly,
+          rateExcluded: false,
+        }
+        if (baselineOnly) {
+          const seenOutput = generation.message?.usage?.output
+          if (seenOutput !== undefined) segment.providerOutput = seenOutput
+        }
+        this.pushSegment(segment)
+        this.active = segment
       }
     }
 
@@ -276,56 +327,51 @@ export class ConversationTokenSpeedTracker {
     this.window.record(now, deltaTokens, segment.id)
   }
 
-  private isSegmentReset(segment: Segment, attempt: number, chars: number): boolean {
-    if (attempt !== segment.attempt) return true
-    if (chars < segment.chars) return chars === 0 || chars * 2 < segment.chars
-    return false
-  }
-
-  /** 关闭活动段：解码跨度并账；估算口径立即计入总数；待对账 usage 立即对账，
- * 否则挂未对账队列（后续 entry 到达时补差）。 */
-  private closeSegment(): void {
+  /** 关闭活动段（边界帧 / 完成事实）：等待完成事实精确对账。 */
+  private closeActive(): void {
     const segment = this.active
     if (segment === undefined) return
     this.active = undefined
-    if (segment.firstGrowthAt !== undefined && segment.lastGrowthAt !== undefined) {
-      this.committedDecodeMs += Math.max(0, segment.lastGrowthAt - segment.firstGrowthAt)
-    }
-    this.committedTokens += segment.tokens
-    this.accountSource(segment)
-    const pending = this.pendingUsages.shift()
-    if (pending !== undefined) {
-      this.reconcileSegment(segment, pending)
-      return
-    }
-    if (segment.tokens > 0) {
-      this.unreconciled.push(segment)
-      if (this.unreconciled.length > PENDING_USAGE_LIMIT) this.unreconciled.shift()
+    if (segment.state === 'open') segment.state = 'closed'
+  }
+
+  /** 段入册（有界）：超出上限丢弃最旧的非活动段（防御异常序列）。 */
+  private pushSegment(segment: Segment): void {
+    this.segments.push(segment)
+    this.byTask.set(segment.taskId, segment)
+    if (this.segments.length <= MAX_SEGMENTS) return
+    const index = this.segments.findIndex((item) => item !== this.active)
+    if (index >= 0) {
+      const [dropped] = this.segments.splice(index, 1)
+      if (dropped !== undefined && this.byTask.get(dropped.taskId) === dropped) {
+        this.byTask.delete(dropped.taskId)
+      }
     }
   }
 
-  /** 段来源计数（关闭时按流式口径；后续对账会翻转）。 */
-  private accountSource(segment: Segment): void {
-    if (segment.usedProvider) this.providerSegments += 1
-    if (segment.usedEstimate) this.estimateSegments += 1
+  /** 段解码跨度（毫秒）；无增长观测为 0。 */
+  private spanOf(segment: Segment): number {
+    if (segment.firstGrowthAt === undefined || segment.lastGrowthAt === undefined) return 0
+    return Math.max(0, segment.lastGrowthAt - segment.firstGrowthAt)
   }
 
-  /** 当前累计（live 帧口径：已关闭段 + 活动段）。 */
-  private totals(): { tokens: number; decodeMs: number } {
-    const active = this.active
-    const activeDecode =
-      active !== undefined && active.firstGrowthAt !== undefined && active.lastGrowthAt !== undefined
-        ? Math.max(0, active.lastGrowthAt - active.firstGrowthAt)
-        : 0
-    return {
-      tokens: this.committedTokens + (active?.tokens ?? 0),
-      decodeMs: this.committedDecodeMs + activeDecode,
+  /** 计入总量的段（失败尝试全部剔除）。 */
+  private countedSegments(): Segment[] {
+    return this.segments.filter((segment) => segment.state !== 'discarded')
+  }
+
+  /** 速率可配对的段：计数与时间同源（非整条对账的基线段、跨度 > 0）。 */
+  private rateableSegments(): Segment[] {
+    return this.countedSegments().filter((segment) => !segment.rateExcluded && this.spanOf(segment) > 0)
+  }
+
+  private sourceOf(): TokenSpeedSource {
+    let provider = 0
+    let estimate = 0
+    for (const segment of this.countedSegments()) {
+      if (segment.usedProvider) provider += 1
+      if (segment.usedEstimate) estimate += 1
     }
-  }
-
-  private sourceOf(activeProvider = false, activeEstimate = false): TokenSpeedSource {
-    const provider = this.providerSegments + (activeProvider ? 1 : 0)
-    const estimate = this.estimateSegments + (activeEstimate ? 1 : 0)
     if (provider > 0 && estimate > 0) return 'mixed'
     if (provider > 0) return 'provider'
     return 'estimate'
@@ -333,13 +379,15 @@ export class ConversationTokenSpeedTracker {
 
   /** 组装当前实时状态；尚无可显示测量返回 undefined。 */
   liveStatus(now: number): TokenSpeedStatus | undefined {
-    const { tokens, decodeMs } = this.totals()
+    const counted = this.countedSegments()
+    const tokens = counted.reduce((acc, segment) => acc + segment.tokens, 0)
     if (tokens <= 0) return undefined
+    const decodeMs = counted.reduce((acc, segment) => acc + this.spanOf(segment), 0)
     const status: TokenSpeedStatus = {
       phase: this.phase,
       outputTokens: tokens,
       decodeMs,
-      source: this.sourceOf(this.active?.usedProvider === true, this.active?.usedEstimate === true),
+      source: this.sourceOf(),
       ...(this.ttftMs !== undefined ? { ttftMs: this.ttftMs } : {}),
       windowMs: this.windowMs,
       updatedAt: now,
@@ -351,11 +399,14 @@ export class ConversationTokenSpeedTracker {
     return status
   }
 
-  /** 回合结算：关闭活动段并对账待处理 usage，产出终态；无可测累计返回 undefined。 */
+  /** 回合结算：关闭活动段，产出终态；速率只由可配对段计算（不伪造分母），
+ * 无可测累计返回 undefined。 */
   settle(now: number): TokenSpeedStatus | undefined {
-    this.closeSegment()
-    const { tokens, decodeMs } = this.totals()
-    if (tokens <= 0 || decodeMs <= 0) return undefined
+    this.closeActive()
+    const counted = this.countedSegments()
+    const tokens = counted.reduce((acc, segment) => acc + segment.tokens, 0)
+    if (tokens <= 0) return undefined
+    const decodeMs = counted.reduce((acc, segment) => acc + this.spanOf(segment), 0)
     const status: TokenSpeedStatus = {
       phase: 'settled',
       outputTokens: tokens,
@@ -365,19 +416,24 @@ export class ConversationTokenSpeedTracker {
       windowMs: this.windowMs,
       updatedAt: now,
     }
-    const tps = (tokens / decodeMs) * 1000
-    return Number.isFinite(tps) && tps > 0 ? { ...status, tps } : status
+    // 终态速率 = 可配对段（计数与时间同源）的 tokens / decodeMs；整条对账的
+    // 基线段与单帧段（跨度 0）不进分子分母——无可配对测量就不产速率。
+    const rateable = this.rateableSegments()
+    const rateTokens = rateable.reduce((acc, segment) => acc + segment.tokens, 0)
+    const rateDecodeMs = rateable.reduce((acc, segment) => acc + this.spanOf(segment), 0)
+    if (rateTokens > 0 && rateDecodeMs > 0) {
+      const tps = (rateTokens / rateDecodeMs) * 1000
+      if (Number.isFinite(tps) && tps > 0) return { ...status, tps }
+    }
+    return status
   }
 
   /** 链结束后彻底重置（下一回合从零开始，绝不跨链累计）。 */
   resetChain(): void {
+    this.segments.length = 0
     this.active = undefined
-    this.committedTokens = 0
-    this.committedDecodeMs = 0
-    this.unreconciled.length = 0
-    this.pendingUsages.length = 0
-    this.providerSegments = 0
-    this.estimateSegments = 0
+    this.byTask.clear()
+    this.seenEntryIds.clear()
     this.window.reset()
     this.emptyGenerationSeenAt = undefined
     this.firstContentAt = undefined

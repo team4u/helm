@@ -191,15 +191,22 @@ function isContextUsageShape(value: unknown): boolean {
 }
 
 /** conversation.live 的通用流式 generation 事实形状（可缺不可错）：
- * attempt 正整数；message.content 为数组且仅含受限块形状；usage.output
- * 正有限数。非法即拒绝，不静默降级。 */
+ * taskId / attempt 正整数（身份不可伪造）；message.content 为数组且仅含
+ * 受限块形状；usage.output 正有限数。非法即拒绝，不静默降级。 */
 function isLiveGenerationShape(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false
   const generation = value as Record<string, unknown>
   if (
     !Object.keys(generation).every(
-      (key) => key === 'attempt' || key === 'message',
+      (key) => key === 'taskId' || key === 'attempt' || key === 'message',
     )
+  ) {
+    return false
+  }
+  if (
+    typeof generation['taskId'] !== 'number' ||
+    !Number.isInteger(generation['taskId']) ||
+    generation['taskId'] <= 0
   ) {
     return false
   }
@@ -869,6 +876,13 @@ export class EventHub {
             500,
           )
         }
+        const taskId = (entry as { taskId?: unknown }).taskId
+        if (
+          taskId !== undefined &&
+          (typeof taskId !== 'number' || !Number.isInteger(taskId) || taskId <= 0)
+        ) {
+          throw new HelmError('invalid_event', 'conversation.entry 的 taskId 必须是正整数（可缺不可错）', 500)
+        }
         return { type, conversationId, entry: entry as ConversationEntry }
       }
       case 'conversation.live': {
@@ -892,7 +906,7 @@ export class EventHub {
         if (generation !== undefined && !isLiveGenerationShape(generation)) {
           throw new HelmError(
             'invalid_event',
-            'conversation.live 的 generation 需要 { attempt: 正整数, message?: { content, usage? } } 形状',
+            'conversation.live 的 generation 需要 { taskId: 正整数, attempt: 正整数, message?: { content, usage? } } 形状',
             500,
           )
         }

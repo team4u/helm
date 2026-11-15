@@ -35,6 +35,7 @@ import {
   SlidingWindow,
   estimateTokensOf,
   generatedCharsOf,
+  type CompletionFact,
 } from '../src/token-speed/tracker.js'
 // 展示模型是零依赖纯模块（客户端资产目录内的 .ts，tsx 直接可测）。
 import { tokenSpeedLabelOf } from '../src/token-speed/client/label.js'
@@ -50,7 +51,18 @@ function trackerOf(): ConversationTokenSpeedTracker {
   return new ConversationTokenSpeedTracker({ windowMs: WINDOW, minSpanMs: MIN_SPAN })
 }
 
-type Frame = { generation?: { attempt: number; message?: never }; hasTools?: boolean }
+type Frame = { generation?: { taskId: number; attempt: number; message?: never }; hasTools?: boolean }
+
+/** 完成事实速记：成功 / 失败（entryId 保证不重复消费）。 */
+let entrySeq = 0
+function success(taskId: number, usageOutput?: number): CompletionFact {
+  entrySeq += 1
+  return { taskId, entryId: `e${entrySeq}`, usageOutput, stopReason: undefined }
+}
+function failure(taskId: number, stopReason: 'aborted' | 'error'): CompletionFact {
+  entrySeq += 1
+  return { taskId, entryId: `e${entrySeq}`, usageOutput: undefined, stopReason }
+}
 
 test('SlidingWindow：spread 事件按实际跨度；最小跨度 100ms 防单点尖峰', { timeout: 60_000 }, () => {
   const window = new SlidingWindow(WINDOW, MIN_SPAN)
@@ -111,11 +123,11 @@ const text = (t: string): never => ({ type: 'text', text: t }) as never
 
 test('状态机：累计快照差分；重复帧 / 内容不变不重复计数', { timeout: 60_000 }, () => {
   const tracker = trackerOf()
-  tracker.observeFrame(0, { generation: { attempt: 1 } })
-  tracker.observeFrame(100, { generation: { attempt: 1, message: message([text('a'.repeat(40))]) } })
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(40))]) } })
   // 重复帧（同快照）：无增量。
-  tracker.observeFrame(200, { generation: { attempt: 1, message: message([text('a'.repeat(40))]) } })
-  tracker.observeFrame(300, { generation: { attempt: 1, message: message([text('a'.repeat(80))]) } })
+  tracker.observeFrame(200, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(40))]) } })
+  tracker.observeFrame(300, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(80))]) } })
   const status = tracker.liveStatus(300)!
   assert.equal(status.phase, 'decoding')
   assert.equal(status.outputTokens, 20, '40+40 字符 / 4')
@@ -125,33 +137,33 @@ test('状态机：累计快照差分；重复帧 / 内容不变不重复计数',
   assert.ok(Math.abs((status.tps ?? 0) - (20 / 200) * 1000) < 1e-6, '窗口速率 20 tok / 0.2s')
 })
 
-test('状态机：attempt 变化与内容大幅回退都构成段重置（重试不重复累计）', { timeout: 60_000 }, () => {
+test('状态机：身份变化构成段重置（重试 / 新任务不重复累计）；同身份回退只钳不重置', { timeout: 60_000 }, () => {
   const tracker = trackerOf()
-  tracker.observeFrame(0, { generation: { attempt: 1, message: message([text('x'.repeat(400))]) } })
-  // attempt 重启（重试）：message 清空 -> 新段。
-  tracker.observeFrame(100, { generation: { attempt: 2 } })
-  tracker.observeFrame(200, { generation: { attempt: 2, message: message([text('y'.repeat(40))]) } })
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  tracker.observeFrame(50, { generation: { taskId: 1, attempt: 1, message: message([text('x'.repeat(400))]) } })
+  // 同任务重试（attempt 递增）：message 清空 -> 新段，重放的 x 不重复计。
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 2 } })
+  tracker.observeFrame(200, { generation: { taskId: 1, attempt: 2, message: message([text('y'.repeat(40))]) } })
   let status = tracker.liveStatus(200)!
-  // 重启段只计 y 的 10 tokens（重放的 x 不重复计）。
-  assert.equal(status.outputTokens, 10)
-  // 同 attempt 内容大幅回退（interrupted 转换后 message 清空、attempt 未变）：
-  tracker.observeFrame(300, { generation: { attempt: 2 } })
-  tracker.observeFrame(400, { generation: { attempt: 2, message: message([text('z'.repeat(80))]) } })
+  assert.equal(status.outputTokens, 100 + 10, '旧段估算 100 + 重试段 10')
+  // 跨任务（工具轮 handOver，attempt 重置 1）：身份变化 -> 新段。
+  tracker.observeFrame(300, { generation: { taskId: 2, attempt: 1 } })
+  tracker.observeFrame(400, { generation: { taskId: 2, attempt: 1, message: message([text('z'.repeat(80))]) } })
   status = tracker.liveStatus(400)!
-  assert.equal(status.outputTokens, 30, '10 + 20（回退段重置，旧段并账）')
-  // 小幅回退（provider *_end 重发整块文本）不重置段。
-  tracker.observeFrame(500, { generation: { attempt: 2, message: message([text('z'.repeat(70))]) } })
-  tracker.observeFrame(600, { generation: { attempt: 2, message: message([text('z'.repeat(160))]) } })
+  assert.equal(status.outputTokens, 100 + 10 + 20, '跨任务段重置，各段分别累计')
+  // 同身份小幅回退（provider *_end 重发整块文本）：不重置，钳位后续继续差分。
+  tracker.observeFrame(500, { generation: { taskId: 2, attempt: 1, message: message([text('z'.repeat(70))]) } })
+  tracker.observeFrame(600, { generation: { taskId: 2, attempt: 1, message: message([text('z'.repeat(160))]) } })
   status = tracker.liveStatus(600)!
-  assert.equal(status.outputTokens, 50, '小幅回退不重置：10（旧段）+ 20 + 20（回退帧 0 增量，随后 160-80 字符继续同段累计）')
+  assert.equal(status.outputTokens, 100 + 10 + 20 + 20, '回退帧 0 增量，随后 160-80 字符继续同段差分')
 })
 
 test('状态机：工具阶段暂停解码时钟——段间间隙绝不计入 decodeMs', { timeout: 60_000 }, () => {
   const tracker = trackerOf()
   // 段一：0-400ms 生成 40 tokens。
-  tracker.observeFrame(0, { generation: { attempt: 1 } })
-  tracker.observeFrame(100, { generation: { attempt: 1, message: message([text('a'.repeat(400))]) } })
-  tracker.observeFrame(400, { generation: { attempt: 1, message: message([text('a'.repeat(800))]) } })
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) } })
+  tracker.observeFrame(400, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(800))]) } })
   // 工具阶段：generation 缺席（5s 工具执行）。
   tracker.observeFrame(500, { hasTools: true })
   tracker.observeFrame(5_000, { hasTools: true })
@@ -159,10 +171,10 @@ test('状态机：工具阶段暂停解码时钟——段间间隙绝不计入 d
   assert.equal(status.phase, 'tools')
   assert.equal(status.decodeMs, 300, '只有段一的 100->400ms')
   assert.equal(status.tps, undefined, '工具阶段不给速率（不以 0 冒充）')
-  // 段二（工具轮 handOver）：attempt 回到 1、内容从零。
-  tracker.observeFrame(5_100, { generation: { attempt: 1 } })
-  tracker.observeFrame(5_200, { generation: { attempt: 1, message: message([text('b'.repeat(400))]) } })
-  tracker.observeFrame(5_500, { generation: { attempt: 1, message: message([text('b'.repeat(800))]) } })
+  // 段二（工具轮 handOver：新任务 taskId，attempt 重置 1、内容从零）。
+  tracker.observeFrame(5_100, { generation: { taskId: 2, attempt: 1 } })
+  tracker.observeFrame(5_200, { generation: { taskId: 2, attempt: 1, message: message([text('b'.repeat(400))]) } })
+  tracker.observeFrame(5_500, { generation: { taskId: 2, attempt: 1, message: message([text('b'.repeat(800))]) } })
   status = tracker.liveStatus(5_500)!
   assert.equal(status.decodeMs, 300 + 300, '两段解码拼接，5s 工具时间被剔除')
   assert.equal(status.outputTokens, 400, '两段各 200 tokens')
@@ -170,51 +182,62 @@ test('状态机：工具阶段暂停解码时钟——段间间隙绝不计入 d
 
 test('状态机：provider usage 增量优先；无上报退回估算（mixed 口径如实标注）', { timeout: 60_000 }, () => {
   const tracker = trackerOf()
-  tracker.observeFrame(0, { generation: { attempt: 1 } })
-  tracker.observeFrame(100, { generation: { attempt: 1, message: message([text('a'.repeat(400))], 50) } })
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))], 50) } })
   let status = tracker.liveStatus(100)!
   assert.equal(status.outputTokens, 50)
   assert.equal(status.source, 'provider')
   // usage 停滞（OpenAI 兼容网关只在终值上报）：本帧退回估算。
-  tracker.observeFrame(200, { generation: { attempt: 1, message: message([text('a'.repeat(800))], 50) } })
+  tracker.observeFrame(200, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(800))], 50) } })
   status = tracker.liveStatus(200)!
   assert.equal(status.outputTokens, 150, '50 provider + 100 字符估算')
   assert.equal(status.source, 'mixed')
 })
 
-test('状态机：最终 usage 对账覆盖估算（entry 事件先于同提交 live 帧，FIFO）', { timeout: 60_000 }, () => {
+test('状态机：最终 usage 对账覆盖估算（entry 先于同提交 live 帧，按 taskId 关联）', { timeout: 60_000 }, () => {
   const tracker = trackerOf()
-  tracker.observeFrame(0, { generation: { attempt: 1 } })
-  tracker.observeFrame(100, { generation: { attempt: 1, message: message([text('a'.repeat(400))]) } })
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) } })
   // 折叠提交：assistant entry（权威 usage 120）先到，段随后关闭。
-  tracker.noteAssistantUsage(120)
+  tracker.noteCompletion(success(1, 120))
   tracker.observeFrame(200, {})
   // 对账后：估算 100 被权威 120 覆盖；source 回到 provider。
   const status = tracker.liveStatus(200)!
   assert.equal(status.outputTokens, 120)
   assert.equal(status.source, 'provider')
-  // 段已关闭后再到的 usage 不重复消费（防御）。
-  tracker.noteAssistantUsage(999)
+  // 重复 entry（同 entryId）与未知 taskId 的 usage 不重复消费（防御）。
+  tracker.noteCompletion(success(1, 999))
+  tracker.noteCompletion(success(99, 999))
   assert.equal(tracker.liveStatus(200)!.outputTokens, 120)
 })
 
 test('状态机：中途接入（首帧即带内容）只建基线——无首帧尖峰、无 TTFT', { timeout: 60_000 }, () => {
   const tracker = trackerOf()
-  tracker.observeFrame(0, { generation: { attempt: 1, message: message([text('历史内容'.repeat(200))], 10_000) } })
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1, message: message([text('历史内容'.repeat(200))], 10_000) } })
   let status = tracker.liveStatus(0)
   assert.equal(status, undefined, '首帧历史内容不产生测量')
-  tracker.observeFrame(100, { generation: { attempt: 1, message: message([text('历史内容'.repeat(200) + '新增'), ], 10_040) } })
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message([text('历史内容'.repeat(200) + '新增'), ], 10_040) } })
   status = tracker.liveStatus(100)!
   assert.equal(status.outputTokens, 40, '只计接入后的增量（provider 增量 40）')
   assert.equal(status.ttftMs, undefined, '拿不到可靠起点，不伪造 TTFT')
 })
 
+test('状态机：中途接入被整条 usage 对账——计数入总量但不进终态速率（不伪造分母）', { timeout: 60_000 }, () => {
+  const tracker = trackerOf()
+  tracker.observeFrame(0, { generation: { taskId: 7, attempt: 1, message: message([text('历史'.repeat(2000))], 5_000) } })
+  tracker.observeFrame(100, { generation: { taskId: 7, attempt: 1, message: message([text('历史'.repeat(2000) + '尾部'), ], 5_020) } })
+  tracker.noteCompletion(success(7, 5_000))
+  const settled = tracker.settle(200)!
+  assert.equal(settled.outputTokens, 5_000, '权威整条总量计入')
+  assert.equal(settled.tps, undefined, 'suffix 时间 × 整条计数不可配对，不产终态速率')
+})
+
 test('状态机：settle 产出终态（对账速率）；resetChain 彻底清零', { timeout: 60_000 }, () => {
   const tracker = trackerOf()
-  tracker.observeFrame(0, { generation: { attempt: 1 } })
-  tracker.observeFrame(100, { generation: { attempt: 1, message: message([text('a'.repeat(400))], 100) } })
-  tracker.observeFrame(500, { generation: { attempt: 1, message: message([text('a'.repeat(2000))], 500) } })
-  tracker.noteAssistantUsage(500)
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))], 100) } })
+  tracker.observeFrame(500, { generation: { taskId: 1, attempt: 1, message: message([text('a'.repeat(2000))], 500) } })
+  tracker.noteCompletion(success(1, 500))
   const settled = tracker.settle(600)!
   assert.equal(settled.phase, 'settled')
   assert.equal(settled.outputTokens, 500)
@@ -252,20 +275,25 @@ test('事件守卫：非法载荷丢弃（asConversationLiveFrame），合法最
   assert.equal(asConversationLiveFrame({ type: 'conversation.live', live: null }), undefined)
   assert.equal(asConversationLiveFrame({ type: 'other' }), undefined)
   assert.equal(
-    asConversationLiveFrame({ type: 'conversation.live', live: { conversationId: 1, text: '', tools: [], updatedAt: 1, generation: { attempt: 0 } } }),
+    asConversationLiveFrame({ type: 'conversation.live', live: { conversationId: 1, text: '', tools: [], updatedAt: 1, generation: { taskId: 1, attempt: 0 } } }),
     undefined,
     'attempt 非正整数拒绝',
   )
   assert.equal(
-    asConversationLiveFrame({ type: 'conversation.live', live: { conversationId: 1, text: '', tools: [], updatedAt: 1, generation: { attempt: 1, message: { content: 'bad' } } } }),
+    asConversationLiveFrame({ type: 'conversation.live', live: { conversationId: 1, text: '', tools: [], updatedAt: 1, generation: { attempt: 1 } } }),
+    undefined,
+    'generation 缺 taskId（身份不明）拒绝',
+  )
+  assert.equal(
+    asConversationLiveFrame({ type: 'conversation.live', live: { conversationId: 1, text: '', tools: [], updatedAt: 1, generation: { taskId: 1, attempt: 1, message: { content: 'bad' } } } }),
     undefined,
     'message 形状非法拒绝',
   )
   const frame = asConversationLiveFrame({
     type: 'conversation.live',
-    live: { conversationId: 2, text: '', tools: [], updatedAt: 42, generation: { attempt: 3 } },
+    live: { conversationId: 2, text: '', tools: [], updatedAt: 42, generation: { taskId: 9, attempt: 3 } },
   })
-  assert.deepEqual(frame, { conversationId: 2, generation: { attempt: 3 }, hasTools: false, updatedAt: 42 })
+  assert.deepEqual(frame, { conversationId: 2, generation: { taskId: 9, attempt: 3 }, hasTools: false, updatedAt: 42 })
 })
 
 // ---------------------------------------------------------------------------
@@ -366,7 +394,7 @@ function conversationOf(id: number, status: ConversationSummary['status']): Conv
   }
 }
 
-function liveEvent(conversationId: number, updatedAt: number, generation?: { attempt: number; message?: never }, tools: unknown[] = []): unknown {
+function liveEvent(conversationId: number, updatedAt: number, generation?: { taskId: number; attempt: number; message?: never }, tools: unknown[] = []): unknown {
   return {
     type: 'conversation.live',
     live: {
@@ -377,6 +405,7 @@ function liveEvent(conversationId: number, updatedAt: number, generation?: { att
       ...(generation !== undefined
         ? {
             generation: {
+              taskId: generation.taskId,
               attempt: generation.attempt,
               ...(generation.message !== undefined
                 ? { message: JSON.parse(JSON.stringify(generation.message)) }
@@ -389,11 +418,16 @@ function liveEvent(conversationId: number, updatedAt: number, generation?: { att
   }
 }
 
-function entryEvent(conversationId: number, output: number): unknown {
+function entryEvent(conversationId: number, taskId: number, output: number, options?: { stopReason?: string; entryId?: string }): unknown {
   return {
     type: 'conversation.entry',
     conversationId,
-    entry: { id: '9', kind: 'pi.assistant', model: [{ role: 'assistant', usage: { output } }] },
+    entry: {
+      id: options?.entryId ?? `entry-${conversationId}-${taskId}`,
+      kind: 'pi.assistant',
+      ...(taskId !== undefined ? { taskId } : {}),
+      model: [{ role: 'assistant', usage: { output }, ...(options?.stopReason !== undefined ? { stopReason: options.stopReason } : {}) }],
+    },
   }
 }
 
@@ -441,10 +475,10 @@ test('插件装配：流式帧驱动 sessionDoc（首测立即写 + 节流 + 阶
   try {
     const CONV = 1
     // 空 generation 帧：尚无测量，不写文档。
-    await backend.dispatch('conversation.live', liveEvent(CONV, 0, { attempt: 1 }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 0, { taskId: 1, attempt: 1 }))
     assert.equal(docOf(CONV), null)
     // 首测：立即写。
-    await backend.dispatch('conversation.live', liveEvent(CONV, 100, { attempt: 1, message: message([text('a'.repeat(400))]) }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
     const first = docOf(CONV)!
     assert.equal(first.phase, 'decoding')
     assert.equal(first.outputTokens, 100)
@@ -452,8 +486,8 @@ test('插件装配：流式帧驱动 sessionDoc（首测立即写 + 节流 + 阶
     assert.equal(first.windowMs, 1000)
     const writesAfterFirst = writesOf(CONV)
     // 同阶段密集帧：250ms 节流内不重复写。
-    await backend.dispatch('conversation.live', liveEvent(CONV, 120, { attempt: 1, message: message([text('a'.repeat(440))]) }))
-    await backend.dispatch('conversation.live', liveEvent(CONV, 140, { attempt: 1, message: message([text('a'.repeat(480))]) }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 120, { taskId: 1, attempt: 1, message: message([text('a'.repeat(440))]) }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 140, { taskId: 1, attempt: 1, message: message([text('a'.repeat(480))]) }))
     assert.equal(writesOf(CONV), writesAfterFirst, '同阶段节流窗口内不写')
     // 阶段变化（工具）：立即写。
     await backend.dispatch('conversation.live', liveEvent(CONV, 160, undefined, [{ callId: 'c1', toolName: 'bash', status: 'running' }]))
@@ -470,9 +504,9 @@ test('插件装配：终态对账——entry usage 到达 + turn_settled 结算�
   const { backend, host, docOf, close } = await openPlugin()
   try {
     const CONV = 2
-    await backend.dispatch('conversation.live', liveEvent(CONV, 0, { attempt: 1 }))
-    await backend.dispatch('conversation.live', liveEvent(CONV, 100, { attempt: 1, message: message([text('a'.repeat(400))]) }))
-    await backend.dispatch('conversation.live', liveEvent(CONV, 500, { attempt: 1, message: message([text('a'.repeat(2000))]) }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 0, { taskId: 1, attempt: 1 }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 500, { taskId: 1, attempt: 1, message: message([text('a'.repeat(2000))]) }))
     // 工具轮中间结算（conversation.status 仍 working）：链延续，不写终态。
     await host.runHook('turn_settled', {
       conversation: conversationOf(CONV, 'working'),
@@ -482,7 +516,7 @@ test('插件装配：终态对账——entry usage 到达 + turn_settled 结算�
     })
     assert.equal(docOf(CONV)?.phase ?? 'decoding', 'decoding', 'working 中间结算不产生终态')
     // 最终权威 usage + 终态结算。
-    await backend.dispatch('conversation.entry', entryEvent(CONV, 600))
+    await backend.dispatch('conversation.entry', entryEvent(CONV, 1, 600))
     await host.runHook('turn_settled', {
       conversation: conversationOf(CONV, 'done'),
       inputs: [],
@@ -495,8 +529,8 @@ test('插件装配：终态对账——entry usage 到达 + turn_settled 结算�
     assert.equal(settled.source, 'provider')
     assert.ok(Math.abs(settled.tps! - (600 / 400) * 1000) < 1e-6, '600 tok / 0.4s 解码净耗时')
     // 下一回合首帧：链重置（累计从零，终态值保留到新首测覆盖）。
-    await backend.dispatch('conversation.live', liveEvent(CONV, 800, { attempt: 1 }))
-    await backend.dispatch('conversation.live', liveEvent(CONV, 900, { attempt: 1, message: message([text('b'.repeat(40))]) }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 800, { taskId: 2, attempt: 1 }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 900, { taskId: 2, attempt: 1, message: message([text('b'.repeat(40))]) }))
     const next = docOf(CONV)!
     assert.equal(next.phase, 'decoding')
     assert.equal(next.outputTokens, 10, '新回合计数从零开始')
@@ -509,15 +543,15 @@ test('插件装配：会话删除彻底清理（内存态清理；会话行已�
   const { backend, sessionDocs, close } = await openPlugin()
   try {
     const CONV = 3
-    await backend.dispatch('conversation.live', liveEvent(CONV, 0, { attempt: 1 }))
-    await backend.dispatch('conversation.live', liveEvent(CONV, 100, { attempt: 1, message: message([text('a'.repeat(400))]) }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 0, { taskId: 1, attempt: 1 }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
     assert.ok(sessionDocs.get('builtin:token-speed', TOKEN_SPEED_DOC, CONV) !== undefined)
     // 会话行先于事件消失（真实时序）：sessionDoc.delete 被 404 拒绝但不抛出。
     backend.deletedConversations.add(CONV)
     await backend.dispatch('conversation.deleted', { type: 'conversation.deleted', conversationId: CONV })
     // 删除后事件不再驱动任何写入（状态机已清理；会话也不存在了）。
     const writesBefore = sessionDocs.writes.length
-    await backend.dispatch('conversation.live', liveEvent(CONV, 200, { attempt: 1, message: message([text('b'.repeat(400))]) }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 200, { taskId: 1, attempt: 1, message: message([text('b'.repeat(400))]) }))
     assert.equal(sessionDocs.writes.length, writesBefore, '删除后无残留写入')
   } finally {
     await close()
@@ -534,8 +568,8 @@ test('插件装配：UI 插槽注册到 COMPOSER_STATUS_SLOT；停用后监听�
     assert.ok(slot, '必须向 COMPOSER_STATUS_SLOT 注册贡献')
     // 停用：监听解除，事件不再产生文档写入。
     await host.disable(TOKEN_SPEED_PLUGIN_ID)
-    await backend.dispatch('conversation.live', liveEvent(4, 0, { attempt: 1 }))
-    await backend.dispatch('conversation.live', liveEvent(4, 100, { attempt: 1, message: message([text('a'.repeat(400))]) }))
+    await backend.dispatch('conversation.live', liveEvent(4, 0, { taskId: 1, attempt: 1 }))
+    await backend.dispatch('conversation.live', liveEvent(4, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
     assert.equal(docOf(4), null, '停用后事件监听解除，无任何写入')
   } finally {
     await close()
@@ -545,7 +579,7 @@ test('插件装配：UI 插槽注册到 COMPOSER_STATUS_SLOT；停用后监听�
 test('插件装配：非法事件载荷丢弃，不抛错不写入', { timeout: 60_000 }, async () => {
   const { backend, docOf, close } = await openPlugin()
   try {
-    await backend.dispatch('conversation.live', { type: 'conversation.live', live: { conversationId: 5, text: '', tools: [], updatedAt: 1, generation: { attempt: -1 } } })
+    await backend.dispatch('conversation.live', { type: 'conversation.live', live: { conversationId: 5, text: '', tools: [], updatedAt: 1, generation: { taskId: 1, attempt: -1 } } })
     await backend.dispatch('conversation.entry', { type: 'conversation.entry', conversationId: 5, entry: { id: '1', kind: 'pi.user' } })
     assert.equal(docOf(5), null)
   } finally {
