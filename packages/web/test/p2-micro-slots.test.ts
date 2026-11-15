@@ -575,7 +575,14 @@ test('ConversationPane SSR：placement=toolbar 的插件动作直出顶栏，men
 })
 
 test('Sidebar 源码契约：会话行消费 conversation.row.action，不干扰宿主行点击', { timeout: 60_000 }, () => {
-  const src = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
+  // Sidebar 拆分后源码断言拼接主文件与拆出的子模块（断言本身不变）。
+  const src = [
+    '../src/shell/Sidebar.tsx',
+    '../src/shell/SidebarAgentStandings.tsx',
+    '../src/shell/SidebarPrimitives.tsx',
+  ]
+    .map((p) => readFileSync(new URL(p, import.meta.url), 'utf8'))
+    .join('\n')
   // 两类会话行（Agent 二级行 + 插件 section 行）均挂载菜单
   const matches = src.match(/<ConversationRowActionsMenu conversation=\{conv\} \/>/g) ?? []
   assert.ok(matches.length >= 2, `至少 Agent 二级行与插件 section 行挂载菜单，实际 ${matches.length}`)

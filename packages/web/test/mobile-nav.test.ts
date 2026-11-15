@@ -7,7 +7,14 @@ const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8'
 const faviconSvg = readFileSync(new URL('../public/favicon.svg', import.meta.url), 'utf8')
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
 const authGateSource = readFileSync(new URL('../src/shell/AuthGate.tsx', import.meta.url), 'utf8')
-const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
+// Sidebar 拆分后源码断言拼接主文件与拆出的子模块（断言本身不变）。
+const sidebarSource = [
+  '../src/shell/Sidebar.tsx',
+  '../src/shell/SidebarAgentStandings.tsx',
+  '../src/shell/SidebarPrimitives.tsx',
+]
+  .map((p) => readFileSync(new URL(p, import.meta.url), 'utf8'))
+  .join('\n')
 const workbenchSource = readFileSync(new URL('../src/conversation/WorkbenchDrawer.tsx', import.meta.url), 'utf8')
 const conversationDrawerSource = readFileSync(new URL('../src/conversation/ConversationDrawer.tsx', import.meta.url), 'utf8')
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
