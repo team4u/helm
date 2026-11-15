@@ -1030,3 +1030,84 @@ export function isAssistantTurnBusy(
 
   return false
 }
+
+// ---------------------------------------------------------------------------
+// 视图纯函数（自 ConversationTimeline 组件迁入，单测直测）
+// ---------------------------------------------------------------------------
+
+/** 工具行状态图标名：运行中 loader / 失败 x / 完成 check / 其他 circle。 */
+export function toolStatusIcon(tool: ToolTrace): string {
+  if (tool.status === 'running') return 'loader'
+  if (tool.isError) return 'x'
+  if (tool.status === 'done') return 'check'
+  return 'circle'
+}
+
+/** tool.view 完整标准 Props 构造（含 siblingCalls，供插件组件去重/续接计算）。 */
+export function buildToolViewProps(
+  tool: ToolTrace,
+  conversationId: number,
+  siblingCalls: ReadonlyArray<ToolViewSiblingCall>,
+): Record<string, unknown> {
+  return {
+    callId: tool.callId ?? '',
+    toolName: tool.toolName,
+    ...(tool.input !== undefined ? { input: tool.input } : {}),
+    status: tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'done',
+    ...(tool.resultText !== undefined ? { result: tool.resultText } : {}),
+    ...(tool.structuredOutput !== undefined ? { structuredOutput: tool.structuredOutput } : {}),
+    isError: tool.isError,
+    ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}),
+    ...(tool.durationMs !== undefined ? { durationMs: tool.durationMs } : {}),
+    ...(tool.artifactRef !== undefined ? { artifactRef: tool.artifactRef } : {}),
+    conversationId,
+    siblingCalls,
+  }
+}
+
+/** timeline.entry.action 锚点索引：按 id 索引未被 rewind 覆盖的真实条目。 */
+export function buildActiveEntryIndex(entries: ReadonlyArray<ConversationEntry>): Map<string, ConversationEntry> {
+  const index = new Map<string, ConversationEntry>()
+  for (const entry of filterRewoundEntries(entries)) index.set(entry.id, entry)
+  return index
+}
+
+function hasAssistantText(entry: ConversationEntry): boolean {
+  if (!Array.isArray(entry.model)) return false
+  for (const msg of entry.model) {
+    if ((msg as { role?: unknown } | null)?.role !== 'assistant') continue
+    const content = (msg as { content?: unknown }).content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      if (
+        (block as { type?: unknown } | null)?.type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string' &&
+        (block as { text: string }).text !== ''
+      ) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * assistant 回合 action 锚点：优先取最后一个携带 assistant 正文文本块的
+ * pi.assistant 条目（与 hover 条复制语义同载体）；全无则退回最后一个
+ * pi.assistant（含纯 toolCall 载体）；回合仅有工具条目（live 起步）时
+ * undefined——绝不拿 pi.tool-result 伪造。
+ */
+export function resolveAssistantAnchorEntry(
+  entryIds: ReadonlyArray<string>,
+  entriesById: ReadonlyMap<string, ConversationEntry>,
+): ConversationEntry | undefined {
+  let lastAssistant: ConversationEntry | undefined
+  let lastTextEntry: ConversationEntry | undefined
+  for (const id of entryIds) {
+    const entry = entriesById.get(id)
+    if (entry === undefined || entry.kind !== 'pi.assistant') continue
+    lastAssistant = entry
+    if (hasAssistantText(entry)) lastTextEntry = entry
+  }
+  return lastTextEntry ?? lastAssistant
+}

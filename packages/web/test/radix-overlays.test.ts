@@ -216,13 +216,10 @@ test('Tooltip 原语挂载、无障碍属性与独立使用能力（SSR）', { t
 })
 
 test('Composer ModelPicker 接入 Radix Popover 替代手写绝对定位与事件监听', { timeout: 60_000 }, () => {
-  // 提取 ModelPicker 源码片段进行精准断言
-  const modelPickerSlice = composerSource.slice(
-    composerSource.indexOf('function ModelPicker'),
-    composerSource.indexOf('// ---------------------------------------------------------------------------', composerSource.indexOf('function ModelPicker')),
-  )
+  // ModelPicker 拆至独立文件后，整文件即 ModelPicker 源码片段（断言不变）。
+  const modelPickerSlice = readFileSync(new URL('../src/conversation/ModelPicker.tsx', import.meta.url), 'utf8')
   // 引入 Popover 原语
-  assert.match(composerSource, /import\s*\{[^}]*Popover[^}]*\}\s*from\s*'@helm\/plugin-client'/)
+  assert.match(modelPickerSlice, /import\s*\{[^}]*Popover[^}]*\}\s*from\s*'@helm\/plugin-client'/)
   assert.match(modelPickerSlice, /<Popover open=\{open\} onOpenChange=\{setOpen\}>/)
   assert.match(modelPickerSlice, /<PopoverTrigger asChild>/)
   assert.match(modelPickerSlice, /<PopoverPortal>/)

@@ -257,7 +257,7 @@ test('PluginDetailDrawer：布尔字段使用 Switch，停用按钮使用低饱�
 
 test('Composer：SessionEnvBar 消除外挂图标套娃，内嵌 folder 图标', { timeout: 60_000 }, () => {
   const composerSource = readFileSync(
-    join(PKG_ROOT, 'src/conversation/Composer.tsx'),
+    join(PKG_ROOT, 'src/conversation/SessionEnvBar.tsx'),
     'utf-8',
   )
 

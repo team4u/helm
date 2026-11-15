@@ -27,7 +27,7 @@ const e = React.createElement
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
-const { TraceRow } = await import('../src/conversation/ConversationTimeline.js')
+const { TraceRow } = await import('../src/conversation/TimelineRows.js')
 
 // ---------------------------------------------------------------------------
 // 挂载工具

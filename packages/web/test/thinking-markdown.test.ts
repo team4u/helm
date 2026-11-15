@@ -9,7 +9,8 @@ import { HostStoreProviders } from './helpers/host-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
-const { ConversationTimeline, ThinkingRow } = await import('../src/conversation/ConversationTimeline.js')
+const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
+const { ThinkingRow } = await import('../src/conversation/TimelineRows.js')
 const stylesCss = readHostStyles()
 
 test('思考样式契约：.thinking-expanded-body 100% 宽度撑满，段落与列表解除 74ch 限制', { timeout: 60_000 }, () => {

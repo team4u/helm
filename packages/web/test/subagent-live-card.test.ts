@@ -994,9 +994,12 @@ test('折叠子代理卡：不渲染内联流与展开箭头，整卡通过抽�
 })
 
 test('宿主只按通用 tool.view 挂载，工作流状态不渗入父回合在途判定', { timeout: 60_000 }, () => {
+  // 工具行渲染单元拆至 TimelineRows.tsx：两处渲染文件均不得渗入工作流私有状态。
   const src = readFileSync(new URL('../src/conversation/ConversationTimeline.tsx', import.meta.url), 'utf8')
+  const rowsSrc = readFileSync(new URL('../src/conversation/TimelineRows.tsx', import.meta.url), 'utf8')
   assert.ok(!/builtin:workflow|workflowRuns|SubagentLiveCard|WorkflowRunSummary/.test(src))
-  assert.match(src, /replaceRow/)
+  assert.ok(!/builtin:workflow|workflowRuns|SubagentLiveCard|WorkflowRunSummary/.test(rowsSrc))
+  assert.match(rowsSrc, /replaceRow/)
 })
 
 test('SubagentLiveCard 整体大卡片点击契约：外层整卡可点击，第 1 层和第 2 层无割裂的内层按钮链接', { timeout: 60_000 }, () => {

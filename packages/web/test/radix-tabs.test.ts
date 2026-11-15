@@ -402,8 +402,9 @@ test('设计系统契约：styles.css 完美映射 [data-state=active] 到 .segm
 })
 
 test('源码级重构契约：5 大业务组件均已迁移至 Radix Tabs / SegmentedControl', { timeout: 60_000 }, () => {
-  // 1. Composer 思考档位：共享 ThinkingLevelControl（基于 Tabs segmented 原语）
-  assert.match(composerSource, /import\s*\{[^}]*ThinkingLevelControl[^}]*\}\s*from\s*['"]\.\.\/ui\/ThinkingLevelControl(?:\.js)?['"]/)
+  // 1. Composer 思考档位：共享 ThinkingLevelControl（基于 Tabs segmented 原语；拆分后在 ModelPicker.tsx 引入）
+  const modelPickerSource = readFileSync(join(PKG_ROOT, 'src/conversation/ModelPicker.tsx'), 'utf8')
+  assert.match(modelPickerSource, /import\s*\{[^}]*ThinkingLevelControl[^}]*\}\s*from\s*['"]\.\.\/ui\/ThinkingLevelControl(?:\.js)?['"]/)
   assert.match(thinkingControlSource, /import\s*\{[^}]*Tabs[^}]*\}\s*from\s*['"]@helm\/plugin-client['"]/)
   assert.match(thinkingControlSource, /<Tabs[\s\S]*?<TabsList[^>]*segmented-control \$\{className\}[\s\S]*?<TabsTrigger/)
   assert.match(thinkingControlSource, /className = 'composer-thinking-row'/)

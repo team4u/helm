@@ -29,6 +29,8 @@ import {
 import { HostStoreProviders } from './helpers/host-store.js'
 
 const composerSource = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8')
+// 发送管线拆至 composer-send.ts 后，发送相关源码断言指向该实现文件（断言本身不变）。
+const composerSendSource = readFileSync(new URL('../src/conversation/composer-send.ts', import.meta.url), 'utf8')
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8')
 const timelineSource = readFileSync(new URL('../src/conversation/ConversationTimeline.tsx', import.meta.url), 'utf8')
 
@@ -150,16 +152,16 @@ test('shouldRestoreEditOnFailure：仅当 Composer 仍处于乐观清空后的�
 
 test('Composer 源码级回归：发送失败恢复受活草稿保护，编辑态跳过立即管理命令', { timeout: 60_000 }, () => {
   // 编辑态正文中的管理命令不进入 runSlashCommand（只是被编辑消息的文本）。
-  assert.match(composerSource, /const slash = editing \? false : runSlashCommand\(payload\)/)
+  assert.match(composerSendSource, /const slash = editing \? false : runSlashCommand\(payload\)/)
   // 失败恢复前先比较活草稿与乐观清空后的期望版本。
-  assert.match(composerSource, /shouldRestoreEditOnFailure\(liveDraftRef\.current, expectedAfterClear\)/)
+  assert.match(composerSendSource, /shouldRestoreEditOnFailure\(liveDraftRef\.current, expectedAfterClear\)/)
   // 恢复时回滚到冻结的编辑目标，而不是无条件把当前空 target 补成旧 target。
-  assert.doesNotMatch(composerSource, /setEditingEntryId\(\(current\) => current \?\? targetEntryId\)/)
+  assert.doesNotMatch(composerSendSource, /setEditingEntryId\(\(current\) => current \?\? targetEntryId\)/)
   // ↑ 进入历史编辑同样整体替换附件。
-  assert.match(composerSource, /setAttachments\(attachmentsOfEditTarget\(target\)\)\s*\n\s*syncLiveDraft\(target\.text/)
+  assert.match(composerSendSource, /setAttachments\(attachmentsOfEditTarget\(target\)\)\s*\n\s*syncLiveDraft\(target\.text/)
   // prefill 回填：附件整体替换且目标编辑态以 isHistoricalEdit 判定。
-  assert.match(composerSource, /setAttachments\(attachmentsOfEditTarget\(target\)\)/)
-  assert.match(composerSource, /const nextEditing = isHistoricalEdit\(target\) \? prefill\.entryId! : null/)
+  assert.match(composerSendSource, /setAttachments\(attachmentsOfEditTarget\(target\)\)/)
+  assert.match(composerSendSource, /const nextEditing = isHistoricalEdit\(target\) \? prefill\.entryId! : null/)
 })
 
 test('跨会话隔离：ConversationPane 按会话 key 挂载 Composer，prefill 不跨会话复用', { timeout: 60_000 }, () => {

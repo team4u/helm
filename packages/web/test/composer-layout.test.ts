@@ -6,6 +6,11 @@ import { canConfigureSessionEnv, envDraftError, envDraftOnNodeChange, envDraftUn
 
 // 读取源码后统一换行（Windows checkout 下 autocrlf 会产生 CRLF，正则不得依赖 LF）
 const source = readFileSync(new URL('../src/conversation/Composer.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+// Composer 拆分后各实现模块分文件维护：源码断言指向各自实现文件（断言本身不变）。
+const modelPickerSource = readFileSync(new URL('../src/conversation/ModelPicker.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const envBarSource = readFileSync(new URL('../src/conversation/SessionEnvBar.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const composerSendSource = readFileSync(new URL('../src/conversation/composer-send.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const sendControlsSource = readFileSync(new URL('../src/conversation/ComposerSendControls.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const thinkingControlSource = readFileSync(new URL('../src/ui/ThinkingLevelControl.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
@@ -191,22 +196,22 @@ test('Composer 空会话起始环境配置条：草稿式编辑，跨节点清�
   assert.match(source, /detail\?\.nextCursor && !detail\.entries\.some\(\(entry\) => entry\.kind === 'pi.reset'\)/)
   assert.match(source, /canConfigureSessionEnv\(detailEntries, conversation\.status\)/)
   // 节点选择只进入草稿：跨节点经 envDraftOnNodeChange 清空 cwd，绝不沿用旧节点路径。
-  assert.match(source, /envDraftOnNodeChange\(prev, e\.target\.value\)/)
-  assert.doesNotMatch(source, /onBlur=\{\(\) => void save/)
+  assert.match(envBarSource, /envDraftOnNodeChange\(prev, e\.target\.value\)/)
+  assert.doesNotMatch(envBarSource, /onBlur=\{\(\) => void save/)
   // 保存一次提交 nodeId + cwd，以 PATCH 返回值确认。
-  assert.match(source, /conversationsApi\.patch\(conversation\.id, \{ nodeId: draft\.nodeId, cwd: draft\.cwd\.trim\(\) \}\)/)
+  assert.match(envBarSource, /conversationsApi\.patch\(conversation\.id, \{ nodeId: draft\.nodeId, cwd: draft\.cwd\.trim\(\) \}\)/)
   // 保存失败保留草稿并显式报错。
-  assert.match(source, /role="alert"/)
+  assert.match(envBarSource, /role="alert"/)
   // 未保存/保存中阻塞发送：发送函数自身与按钮同时拦截（覆盖 Enter）。
-  assert.match(source, /if \(envBlockedRef\.current\) \{[\s\S]*?请先保存或取消起始环境修改[\s\S]*?return\r?\n    \}/)
-  assert.match(source, /envBlocker\.blocked \|\| text\.trim\(\) === ''/)
+  assert.match(composerSendSource, /if \(envBlockedRef\.current\) \{[\s\S]*?请先保存或取消起始环境修改[\s\S]*?return\r?\n    \}/)
+  assert.match(sendControlsSource, /envBlocker\.blocked \|\| text\.trim\(\) === ''/)
   // 发送中禁止改环境：SessionEnvBar 接收 sendBlocked。
   assert.match(source, /sendBlocked=\{sendInFlight\}/)
   // 按会话 id 隔离草稿。
   assert.match(source, /key=\{`env-\$\{conversation\.id\}`\}/)
-  assert.match(source, /aria-label="会话执行节点"/)
-  assert.match(source, /aria-label="会话工作目录"/)
-  assert.match(source, /首条消息发送后锁定/)
+  assert.match(envBarSource, /aria-label="会话执行节点"/)
+  assert.match(envBarSource, /aria-label="会话工作目录"/)
+  assert.match(envBarSource, /首条消息发送后锁定/)
   // 样式：轻量无框，窄屏隐藏提示防溢出；select 不再被 .input 默认 padding 裁切。
   assert.match(styles, /\.composer-env-bar \{[^}]*flex-wrap: wrap;/)
   assert.match(styles, /\.input\.composer-env-select \{[^}]*padding: 0 6px;[^}]*line-height: normal;/)
@@ -225,20 +230,22 @@ test('侧边栏远端节点标记：非本机会话行展示 @nodeId', { timeout
 
 test('工具栏仅保留左右两组，模型归入左组，避免三个子项落入两列后换行', { timeout: 60_000 }, () => {
   assert.match(source, /className="composer-toolbar">\s*<div className="composer-toolbar-left">/)
-  const leftGroup = source.slice(source.indexOf('className="composer-toolbar-left"'), source.indexOf('className="composer-toolbar-right"'))
+  // 发送控件拆至 ComposerSendControls.tsx 后，左组切片取到文件尾仍覆盖全部左组内容。
+  const rightIdx = source.indexOf('className="composer-toolbar-right"')
+  const leftGroup = source.slice(source.indexOf('className="composer-toolbar-left"'), rightIdx > 0 ? rightIdx : undefined)
   assert.match(leftGroup, /<ModelPicker conversation=\{conversation\} \/>/)
-  assert.match(source, /className="composer-model-label"/)
+  assert.match(modelPickerSource, /className="composer-model-label"/)
   // 思考档位已并入模型浮层，工具栏不再有独立 <select>；分段按钮组收敛到共享 ThinkingLevelControl
-  assert.doesNotMatch(source, /composer-thinking-select/)
-  assert.match(source, /<ThinkingLevelControl/)
+  assert.doesNotMatch(modelPickerSource, /composer-thinking-select/)
+  assert.match(modelPickerSource, /<ThinkingLevelControl/)
   assert.match(thinkingControlSource, /composer-thinking-row/)
   assert.match(styles, /\.composer-pills \{[^}]*overflow-x: auto;/)
   assert.match(styles, /\.composer-toolbar-right \{ justify-content: flex-end;/)
 })
 
 test('思考档位合并进模型浮层：按钮组切换，当前档位随模型短名展示', { timeout: 60_000 }, () => {
-  assert.match(source, /composer-model-level/)
-  assert.match(source, /onPick=\{\(level\) => void pickThinking\(level\)\}/)
+  assert.match(modelPickerSource, /composer-model-level/)
+  assert.match(modelPickerSource, /onPick=\{\(level\) => void pickThinking\(level\)\}/)
   // 浮层内纯实体档位分段按钮组（对齐 Pi Agent，无默认伪档位），所见即所得（共享 ThinkingLevelControl）
   assert.match(thinkingControlSource, /levels\.map/)
   assert.match(thinkingControlSource, /composer-thinking-row/)
@@ -262,9 +269,9 @@ test('窄面板单行工具栏：取消思考下拉独占行，配置与发送�
 })
 
 test('发送 / 停止按钮图标化：无文字仍可辨识（title + aria-label）', { timeout: 60_000 }, () => {
-  assert.match(source, /btn-send/)
-  assert.match(source, /aria-label=\{editingEntryId !== null \? '更新并重新生成' : uploading > 0 \? `上传中 \(\$\{uploading\}\)` : '发送'\}/)
-  assert.match(source, /aria-label="停止当前执行"/)
+  assert.match(sendControlsSource, /btn-send/)
+  assert.match(sendControlsSource, /aria-label=\{editingEntryId !== null \? '更新并重新生成' : uploading > 0 \? `上传中 \(\$\{uploading\}\)` : '发送'\}/)
+  assert.match(sendControlsSource, /aria-label="停止当前执行"/)
   assert.match(styles, /\.btn-send\s*\{[^}]*width: 32px;[^}]*height: 32px;[^}]*border-radius: 50%/)
 })
 
@@ -277,23 +284,23 @@ test('移动端插件入口收进会话工具菜单，挂件默认折叠', { tim
 })
 
 test('ModelPicker 内置原生动态模型刷新按钮，调用 assetsApi.refreshModels', { timeout: 60_000 }, () => {
-  assert.match(source, /assetsApi\.refreshModels\(\)/, '必须调用通用的 assetsApi.refreshModels')
-  assert.match(source, /store\.refreshAssets\(\)/, '刷新完成后需同步更新前端资产')
-  assert.match(source, /composer-model-refresh-btn/, '刷新按钮具有专属类名')
-  assert.match(source, /aria-label="刷新动态模型目录"/, '具备无障碍描述')
-  assert.match(source, /name="rotate-cw"/, '使用 rotate-cw 线性图标')
+  assert.match(modelPickerSource, /assetsApi\.refreshModels\(\)/, '必须调用通用的 assetsApi.refreshModels')
+  assert.match(modelPickerSource, /store\.refreshAssets\(\)/, '刷新完成后需同步更新前端资产')
+  assert.match(modelPickerSource, /composer-model-refresh-btn/, '刷新按钮具有专属类名')
+  assert.match(modelPickerSource, /aria-label="刷新动态模型目录"/, '具备无障碍描述')
+  assert.match(modelPickerSource, /name="rotate-cw"/, '使用 rotate-cw 线性图标')
 })
 
 test('ModelPicker 候选模型双重过滤：available 且非 disabled（禁用模型不作为可选项）', { timeout: 60_000 }, () => {
   // 模型候选列表过滤契约：凭据可用 + 未被用户禁用，两者独立表达。
   assert.match(
-    source,
+    modelPickerSource,
     /store\.models\.filter\(\(model\) => model\.available && model\.disabled !== true &&/,
     '模型候选必须同时过滤 available 与 disabled',
   )
   // 空态提示同步覆盖「全部不可用或全部禁用」两种情形。
   assert.match(
-    source,
+    modelPickerSource,
     /store\.models\.every\(\(model\) => !model\.available \|\| model\.disabled === true\)/,
     '空态判定需把禁用模型也视为不可选',
   )

@@ -362,5 +362,68 @@
   color: var(--fg-muted);
 }
 
+/* --------------------------------------------------------------------------
+ * 全局待审批浮层（PendingAsksPanel）
+ * 复合选择器（.sidebar-group/.badge/.list/.row 前缀）保证覆盖级联顺序在后的
+ * primitives.css 基础原语规则，视觉与原内联样式完全一致。
+ * -------------------------------------------------------------------------- */
+
+.sidebar-group.pending-asks-group {
+  gap: 4px;
+}
+
+.badge.pending-asks-toggle {
+  width: 100%;
+  justify-content: space-between;
+  height: 26px;
+  cursor: pointer;
+}
+
+.pending-asks-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.list.pending-asks-list {
+  box-shadow: var(--shadow-md);
+}
+
+.row.pending-asks-row {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pending-asks-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
+}
+
+.pending-asks-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-asks-desc {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  white-space: normal;
+  word-break: break-word;
+}
+
+.pending-asks-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 /* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */
 
