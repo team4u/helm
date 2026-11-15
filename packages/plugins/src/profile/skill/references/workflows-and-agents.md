@@ -57,7 +57,7 @@ return { reports: reports.filter(report => report !== null) }
 - `parallel(thunks)`：全量并发，单项失败置 null。
 - `action(actionId, input?, opts?)`：零 Token 确定性调用宿主动作总线（`pluginId.actionId` 全限定或无冲突短名；输入输出经 schema 校验；opts 支持 `{ idempotent?, label?, phase? }`）。
   - 内建跨节点命令动作：`action("env.exec", { command, cwd?, nodeId?, env?, timeoutMs?, allowFailure? }, { idempotent?, label?, phase? })`（无冲突时可用短名 `"exec"`），底层复用内核 EnvFabric 跨节点通道、SecretStash 机密注入与脱敏，返回 `{ ok, exitCode, output, timedOut }`。
-- `agent.withMeta(prompt, opts?)` / `goal(spec)`：与 `agent()` 同参数面，但返回 `{ ok, output, attempts, error?, timedOut?, execution?, gate? }`；`goal` 以 `objective` 为提示词、`maxAttempts` 缺省 3，配合 `gate` / `timeoutMs` 做门禁与超时自动重试（同一子会话原地续接，`output` 恒为字符串，`schema` 只负责校验不代为解析）。
+- `agent.withMeta(prompt, opts?)` / `goal(spec)`：与 `agent()` 同参数面，但返回 `{ ok, output, attempts, error?, timedOut?, execution?, gate? }`；`goal` 以 `objective` 为提示词、`maxAttempts` 缺省 3，配合 `gate` / `timeoutMs` 做门禁与超时自动重试（同一子会话原地续接，成功时 `output` 为字符串、失败时为 null，`schema` 只负责校验不代为解析）。
 - `phase(title)` / `log(message)`：进度标注与日志。
 - `workflow(ref, args?)`：按名或 `{ scriptPath }` 嵌套子工作流（最深 4 层，根为第 0 层；整棵树共用同一账本与递增 callIndex，可对根 runId 一次断点续跑）。
 - `budget.spent()`：已消耗输出字节；`budget.total` 为 null、`budget.remaining()` 为 Infinity，不能据此承诺成本预算。

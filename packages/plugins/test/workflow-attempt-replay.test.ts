@@ -88,6 +88,24 @@ test('exhausted goal replays its failed result and later action without spawning
   assert.equal(replay.progress.some((entry) => entry.type === 'workflow_agent' && entry.state === 'error' && entry.error === 'last'), true)
 })
 
+test('lowering maxAttempts cannot skip a historical attempt and replay a later non-idempotent action', timeout, async () => {
+  const log = journal()
+  const source = (maxAttempts: number) => script(`const result = await goal({ objective: "build", maxAttempts: ${maxAttempts} }); return [result, await action("effect", {})]`)
+  let resumes = 0
+  const original = await runWorkflow({
+    script: source(3), journal: log,
+    host: host({
+      async spawnAgent(request) { request.onResolved?.({ conversationId: 7 }); return { ok: false, error: 'first' } },
+      async resumeAgent() { return ++resumes === 1 ? { ok: false, error: 'second' } : { ok: true, text: 'done' } },
+      async invokeAction() { return { pluginId: 'test', actionId: 'effect', result: 'sent' } },
+    }),
+  })
+  assert.equal(original.status, 'completed', original.error)
+  const replay = await runWorkflow({ script: source(2), host: host(), journal: { entries: log.entries } })
+  assert.equal(replay.status, 'failed')
+  assert.match(replay.error ?? '', /workflow_action_uncertain/)
+})
+
 test('parallel agent retries retain their journal slots while the following non-idempotent action replays', timeout, async () => {
   const log = journal()
   const source = script('const first = agent("first", { maxAttempts: 2 }); const second = agent("second"); const values = await Promise.all([first, second]); return [values, await action("effect", {})]')

@@ -56,7 +56,7 @@ helm workflows run ./review.js --args '{"pr": 1024, "strict": true}'
 | `gateTimeoutMs` | `number` | 单次门禁命令超时毫秒数（1_000 .. 600_000 整数，默认 120_000）。仅在设置 `gate` 时有效 |
 | `maxAttempts` | `number` | 失败自动重试次数上限（1 .. 10 整数，默认 1）。配合 `gate` 或 `timeoutMs` 使用；需要 `label`，未传时自动生成 |
 
-选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort`、`cwd` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置；`resume` 沿用原会话的工作目录，不能用 `cwd` 改指他处，需要换目录就新建节点），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, maxSubagentDepth, cwd, timeoutMs, gateTimeoutMs, maxAttempts`。注意机密授予（`secretNames`）不是 DSL 选项——它是独立 `subagent` 模型工具的参数，工作流脚本里的子代理统一经 `env` 预置或 SecretStash 动作获取机密。
+选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort`、`cwd` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置；`resume` 沿用原会话的工作目录，不能用 `cwd` 改指他处，需要换目录就新建节点），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, maxSubagentDepth, cwd, timeoutMs, gateTimeoutMs, maxAttempts`。机密授予（`secretNames`）不是 DSL 选项；需要显式授予父会话机密时，使用独立 `subagent` 模型工具的 `secretNames` 参数。
 
 **结构化输出**：配置 `schema` 时宿主为子智能体挂载结构化契约，引擎解析其 JSON 回复并按 Schema 校验，通过则返回原生对象，不通过（非 JSON 或不合契约）返回 `null`：
 

@@ -1163,6 +1163,14 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         const canRetry = failed.skipped !== true && (manualRetry ||
           (attempt < maxAttempts && persistedHandle !== undefined && resumeAgent !== undefined))
         if (!canRetry) {
+          const omittedAttempt = retrySlots.get(`${index}:${attempt + 1}`)
+          if (omittedAttempt !== undefined) {
+            const conflict = replayMiss(omittedAttempt)
+            if (conflict.conflictError !== undefined) {
+              respond(callId, false, undefined, conflict.conflictError, true)
+              return
+            }
+          }
           if (persistedHandle !== undefined) completedByLabel.set(scopedResumeKey(scopeId, label), {
             agentId, label, agentType, scopeId, resumeRef: persistedHandle,
             ...(model !== undefined ? { model } : {}),
