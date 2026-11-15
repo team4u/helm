@@ -126,6 +126,22 @@ export interface ComposerController {
 
 每个候选提供 `id / label / insertText` 与可选 `hint / icon`；选中仅替换光标前的触发词，不提交输入或执行命令。异步查询防抖并防止旧请求覆盖新会话、新草稿或已停用源。动作源复用既有 Action HTTP 端点，不新增补全专用 RPC。
 
+### 状态栏插件
+
+插件可以复用 `slot` 向输入区状态行贡献只读内容，不需要新增 `ctx.ui` 注册方法：
+
+```typescript
+import { COMPOSER_STATUS_SLOT } from '@helm/protocol'
+
+ctx.ui.slot({
+  id: 'metrics',
+  target: COMPOSER_STATUS_SLOT,
+  client: { module: 'client.tsx', export: 'MetricsStatus' },
+})
+```
+
+组件接收 `ComposerScopeProps`（`conversation / composer`）。后端通过 `ctx.host.onEvent('conversation.live', ...)` 读取通用流式执行事实，前端可通过 `useConversation(conversation.id).live` 读取同源快照；需要已完成响应时，使用 `conversation.entry` 事件或分页的 `ctx.host.getConversationDetail`。快照不是逐 token 事件，速率类插件必须如实标注估算口径。高频会话级派生状态使用 `ctx.sessionDoc` 按需订阅；停用插件后，状态栏贡献和订阅随生命周期移除。`builtin:token-speed` 是这条链路的内置消费者，具体口径见 [Token 速率插件](../plugins/token-speed.md)。
+
 ### 插件间组合
 
 插件视图可从 `@helm/plugin-client` 导入 `<PluginSlot name="cards" />`，其他插件用 `ctx.ui.slot({ id, target: 'owner-plugin/cards', ... })` 注入；短名相对当前插件，全限定名显式指定。`mode="list"` 渲染全部命中贡献（priority 降序、order 升序稳定排列），`mode="single"` 只取第一项；每个子项重新绑定贡献者插件上下文并有独立错误边界；循环引用与过深嵌套显示错误提示，不继续递归。
