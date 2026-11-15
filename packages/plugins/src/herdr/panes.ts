@@ -240,3 +240,13 @@ export class PaneRegistry {
 export function scopeKey(nodeId: string | undefined, paneId: string): string {
   return `${nodeId ?? 'local'}:${paneId}`
 }
+
+/** executor 内存表主键：与 target 完整坐标绑定的 pane 唯一键（跨节点不撞号）。 */
+export function paneStateKey(pane: { target: HerdrTarget; paneId: string }): string {
+  return JSON.stringify([pane.target, pane.paneId])
+}
+
+/** closePane 单飞键（node 坐标折叠 'local'；与 steer 门禁共用同一坐标）。 */
+export function paneCloseKey(pane: { target?: HerdrTarget; paneId: string }): string {
+  return scopeKey(nodeIdOf(pane), pane.paneId)
+}
