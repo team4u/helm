@@ -12,7 +12,7 @@ import type {
   SidebarSectionSpec,
   SkillSummary,
 } from '@helm/protocol'
-import type { QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
+import type { HelmStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
 
 export interface SidebarPartition {
@@ -410,6 +410,43 @@ export function filterAgentStandings(
           (numeric !== null && c.id === numeric),
       ),
   )
+}
+
+// ---------------------------------------------------------------------------
+// 侧栏交互辅助：激活态推导与待命入口（无 React 依赖，Sidebar 各子组件共用）
+// ---------------------------------------------------------------------------
+
+/** 会话行是否属于当前激活目标。 */
+export function isConversationActive(store: HelmStoreValue, convId: number): boolean {
+  return store.primaryTarget.kind === 'conversation' && store.primaryTarget.conversationId === convId
+}
+
+/** 该 Agent 的待命页是否正被主屏或分屏查看。 */
+export function isAgentStandbyActive(store: HelmStoreValue, profileId: string): boolean {
+  return (
+    (store.primaryTarget.kind === 'agent' && store.primaryTarget.profileId === profileId) ||
+    (store.splitTarget?.kind === 'agent' && store.splitTarget.profileId === profileId)
+  )
+}
+
+/** 话题列表展开推导：当前主屏/分屏会话或待命页所属的 profileId（无则 null）。 */
+export function activeProfileIdOf(store: HelmStoreValue): string | null {
+  if (store.primaryTarget.kind === 'agent') return store.primaryTarget.profileId
+  if (store.splitTarget?.kind === 'agent') return store.splitTarget.profileId
+  const ids: number[] = []
+  if (store.primaryTarget.kind === 'conversation') ids.push(store.primaryTarget.conversationId)
+  if (store.splitTarget?.kind === 'conversation') ids.push(store.splitTarget.conversationId)
+  for (const id of ids) {
+    const conv = store.conversations.find((c) => c.id === id)
+    if (conv) return conv.profileId
+  }
+  return null
+}
+
+/** 在指定 Agent 下进入待命页（所有用户新建入口的统一路径；首次发送才创建会话）。 */
+export function openAgentStandby(store: HelmStoreValue, profileId: string, onNavigate?: () => void): void {
+  store.openTarget({ kind: 'agent', profileId })
+  onNavigate?.()
 }
 
 /** 当前 Profile 的话题（根会话）行：供主舞台顶栏话题切换 Popover 消费。 */

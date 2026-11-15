@@ -762,7 +762,14 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
 })
 
 test('批量删除导航契约：Sidebar 不做二次导航，回退统一由 Provider 删除管道负责', { timeout: 60_000 }, () => {
-  const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
+  // Sidebar 拆分后源码断言拼接主文件与拆出的子模块（断言本身不变）。
+  const sidebarSource = [
+    '../src/shell/Sidebar.tsx',
+    '../src/shell/SidebarAgentStandings.tsx',
+    '../src/shell/SidebarPrimitives.tsx',
+  ]
+    .map((p) => readFileSync(new URL(p, import.meta.url), 'utf8'))
+    .join('\n')
   const batchStart = sidebarSource.indexOf('const executeBatchDelete')
   const batchEnd = sidebarSource.indexOf('return (', batchStart)
   assert.ok(batchStart > 0 && batchEnd > batchStart, 'executeBatchDelete 存在')
@@ -845,7 +852,14 @@ test('SSR 渲染回归：Sidebar 包含批量管理按钮与极简无 Emoji 验�
 })
 
 test('批量模式勾选框只存在于会话子项，机器人站位行绝不含勾选框（源码结构回归）', { timeout: 60_000 }, () => {
-  const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
+  // Sidebar 拆分后源码断言拼接主文件与拆出的子模块（断言本身不变）。
+  const sidebarSource = [
+    '../src/shell/Sidebar.tsx',
+    '../src/shell/SidebarAgentStandings.tsx',
+    '../src/shell/SidebarPrimitives.tsx',
+  ]
+    .map((p) => readFileSync(new URL(p, import.meta.url), 'utf8'))
+    .join('\n')
 
   // sidebar-batch-checkbox 仅出现在 AgentConversationRow（会话子行）内，
   // 且位于其受控渲染块中；Agent 站位头部行只使用 nav-item-main 名称按钮（折叠展开钮已移除）。

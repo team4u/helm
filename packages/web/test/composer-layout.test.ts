@@ -13,7 +13,15 @@ const composerSendSource = readFileSync(new URL('../src/conversation/composer-se
 const sendControlsSource = readFileSync(new URL('../src/conversation/ComposerSendControls.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const thinkingControlSource = readFileSync(new URL('../src/ui/ThinkingLevelControl.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
-const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+// Sidebar 拆分后源码断言拼接主文件与拆出的子模块（断言本身不变）；读取后统一换行。
+const sidebarSource = [
+  '../src/shell/Sidebar.tsx',
+  '../src/shell/SidebarAgentStandings.tsx',
+  '../src/shell/SidebarPrimitives.tsx',
+]
+  .map((p) => readFileSync(new URL(p, import.meta.url), 'utf8'))
+  .join('\n')
+  .replace(/\r\n/g, '\n')
 const styles = readHostStyles().replace(/\r\n/g, '\n')
 const responsive = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 

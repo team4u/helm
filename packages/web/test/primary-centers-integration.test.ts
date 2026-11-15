@@ -323,6 +323,12 @@ test('零 Emoji 铁律：四大中心全部组件、样式与核心入口绝对 
   const sidebarSrc = readFileSync(join(PKG_ROOT, 'src/shell/Sidebar.tsx'), 'utf-8')
   assert.doesNotMatch(sidebarSrc, emojiRegex, 'Sidebar.tsx 不得含有任何 Emoji 表情')
 
+  // Sidebar 拆分出的子模块同步纳入零 Emoji 静态检查。
+  const sidebarStandingsSrc = readFileSync(join(PKG_ROOT, 'src/shell/SidebarAgentStandings.tsx'), 'utf-8')
+  assert.doesNotMatch(sidebarStandingsSrc, emojiRegex, 'SidebarAgentStandings.tsx 不得含有任何 Emoji 表情')
+  const sidebarPrimitivesSrc = readFileSync(join(PKG_ROOT, 'src/shell/SidebarPrimitives.tsx'), 'utf-8')
+  assert.doesNotMatch(sidebarPrimitivesSrc, emojiRegex, 'SidebarPrimitives.tsx 不得含有任何 Emoji 表情')
+
   const cmdSrc = readFileSync(join(PKG_ROOT, 'src/modals/CommandPaletteModal.tsx'), 'utf-8')
   assert.doesNotMatch(cmdSrc, emojiRegex, 'CommandPaletteModal.tsx 不得含有任何 Emoji 表情')
 })
