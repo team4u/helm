@@ -1143,6 +1143,14 @@ export interface HelmHostApi {
    * 父会话 cwd 供插件层在分配资源前解析源目录。链实现由内核唯一提取函数
    * 提供（原生子会话派生与本端口同源），插件不得自行复制规则。
    * 返回值是内核权威事实；节点离线校验不在本端口（由 execEnv/gate 各自执行）。
+   *
+   * 为何按需求值而非预归一化进请求字段：agent_spawn around 链上任一前置
+   * 插件可经 next(finalRequest) 改写 cwd/agentType，continuation（如
+   * worktree 预分配）必须按改写后的当前请求解析靶点，管道入口快照必然
+   * 过期；原生执行行在链收敛后重新走同一权威链（cwd 可能已被改写为隔离
+   * 树路径）。且 request.cwd === undefined 承载「走继承链」的显式语义
+   * （resume 严格沿用原子会话 cwd，绝不重算），预填即破坏。故本端口是
+   * 同一纯函数在链上任意时点的按需求值，不缓存、不驻留请求字段。
    */
   resolveSpawnTarget(input: {
     parentConversationId: number

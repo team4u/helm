@@ -2,6 +2,11 @@
  * spawn 靶点解析唯一权威链（kernel 内纯函数；原生执行行与
  * ctx.host.resolveSpawnTarget 共用，插件不得自行复制规则）。
  *
+ * 按需求值是刻意形态而非入口预归一化：agent_spawn around 链可经
+ * next(finalRequest) 改写请求，入口快照会过期；resume 语义依赖
+ * request.cwd === undefined（显式继承链回退），预填即破坏
+ * （完整论证见 protocol/plugin.ts 的 resolveSpawnTarget 端口注释）。
+ *
  * 语义（与既有原生派生行为逐字一致）：
  * - 节点链：显式 profile.nodeId > 父会话绑定节点 > 'local'；
  * - cwd 链：request.cwd > profile.cwd > 父会话 cwd > 宿主缺省目录；

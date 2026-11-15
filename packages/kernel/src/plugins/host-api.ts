@@ -251,8 +251,6 @@ export function wrapHostApi(
       return backend.isClosing();
     },
 
-    ...(pluginsPort !== undefined ? { plugins: pluginsPort } : {}),
-
     // 1. profiles
     profiles: {
       list: () => tracked('host.profiles.list', () => backend.profiles.list()),
