@@ -226,6 +226,10 @@ describe('ConversationTracker 真实 SDK：live 帧 generation 事实', { timeou
       lives,
       faux,
       close: async () => {
+        for (const { id } of store.listConvs()) {
+          await tracker.ensureContextUsage(id)
+          tracker.stopObserving(id)
+        }
         await harness.close(BACKGROUND_CONTEXT)
         const err = await store.close()
         await database.close()
