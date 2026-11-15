@@ -16,6 +16,10 @@
  * - worker 线程 + vm 双层边界：terminate 可杀死循环脚本；vm 禁动态代码生成与
  *   非确定 API（见 worker-source.ts）。这是可终止/确定性边界，不是恶意代码
  *   安全沙箱。
+ * - label/resume 句柄按 scopeId 命名空间隔离（根 = 0，未传视为根）：嵌套
+ *   workflow() 的同名 label 互不干扰；失败调用只要拿到 conversationId /
+ *   executionId 即登记续接句柄；maxAttempts > 1 复用同一 attempt 环，经
+ *   resumeAgent 续接重试，失败原因以增量块追加进下次尝试 prompt。
  */
 
 import { cpus } from 'node:os'
@@ -47,6 +51,9 @@ export const WORKFLOW_ITEM_CAP = 4096
 
 /** 嵌套 workflow() 调用总数上限。 */
 export const WORKFLOW_NESTED_CAP = 256
+
+/** 单次 agent() 调用自动重试上限（设计 §2.2：1..10；缺省 1 = 不自动重试）。 */
+export const MAX_AGENT_ATTEMPTS = 10
 
 /** UI 保留的 prompt/result 预览长度。 */
 const PREVIEW_LENGTH = 200
@@ -134,6 +141,10 @@ export interface WorkflowSpawnResult {
 export interface WorkflowGateResult {
   ok: boolean
   output: string
+  /** gate 进程退出码（null = 被信号杀死或不可知）。 */
+  exitCode?: number | null
+  /** gate 命令是否因超时被终止（runShell 进程组 SIGTERM→SIGKILL）。 */
+  timedOut?: boolean
 }
 
 export interface WorkflowScriptRef {
@@ -433,6 +444,10 @@ interface AgentCallPayload {
   maxSubagentDepth?: number
   /** 显式授予外部运行时注入的父会话机密环境变量名（宿主边界二次校验；仅新鲜 spawn 下发）。 */
   secretNames?: string[]
+  /** 发起调用的 workflow scope（worker makeScope 分配；根 = 0，缺省视为根）。label/resume 按它命名空间隔离。 */
+  scopeId?: number
+  /** 自动重试上限（1..MAX_AGENT_ATTEMPTS，缺省 1）：失败且已登记续接句柄时按 attempt 环自动续接重试。 */
+  maxAttempts?: number
 }
 
 interface ActionCallPayload {
@@ -478,13 +493,31 @@ function isValidSecretNames(value: unknown): value is string[] {
   return value.every((name) => typeof name === 'string' && name.trim() !== '')
 }
 
-/** resume 可复活的子代理，按 label 记忆。 */
+/**
+ * scopeId 命名空间的 resume 登记键（根 scope = 0；未传 scopeId 视为根，与
+ * 旧版裸 label 语义一致——不带 scope 的调用全部落在根命名空间）。
+ */
+export function scopedResumeKey(scopeId: number | undefined, label: string): string {
+  return `${scopeId ?? 0}:${label}`
+}
+
+/**
+ * 自动重试时下次尝试的 prompt：原文 + 增量失败块。续接的是同一子会话，
+ * 历史失败已在会话上下文里，只追加最新一次的原因，不累计。
+ */
+export function agentRetryPrompt(originalPrompt: string, failedAttempt: number, reason: string): string {
+  return `${originalPrompt}\n\n[attempt ${failedAttempt} failed]\n${reason}\nFix the problem above and complete the original task.`
+}
+
+/** resume 可复活的子代理，按 scopedResumeKey 键记忆。 */
 interface CompletedChild {
   agentId: string
   label: string
   agentType: string
   model?: string
   isolation?: 'worktree'
+  /** 登记时所属 scope（根 = 0；用于同 scope 的已知 label 提示过滤）。 */
+  scopeId?: number
   /**
    * 该 child 来自账本缓存（replayed）：只有文本结果，无活会话可续接。
    * 后续 agent({ resume }) 命中账本时可直接返回缓存文本，但前缀失配后
@@ -531,7 +564,15 @@ async function applyGate(
   if (outcome.ok) return kept
   const { text: _discarded, ...rest } = kept
   const output = outcome.output.trim()
-  return { ...rest, ok: false, error: output === '' ? `Gate command failed: ${command}` : output }
+  if (output !== '') return { ...rest, ok: false, error: output }
+  // 输出为空时用结构化原因区分超时/退出码，供重试 prompt 与用户诊断使用。
+  const detail =
+    outcome.timedOut === true
+      ? `Gate command timed out: ${command}`
+      : outcome.exitCode !== undefined && outcome.exitCode !== null
+        ? `Gate command failed with exit code ${outcome.exitCode}: ${command}`
+        : `Gate command failed: ${command}`
+  return { ...rest, ok: false, error: detail }
 }
 
 function unawaitedLaunchMessage(labels: readonly string[]): string {
@@ -830,11 +871,21 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       void runGate
       void resumeAgent
 
+      // scopeId 是 scope 命名空间字段（worker makeScope 分配，根 = 0）。
+      // 非法形状在边界显式拒绝：不信任 worker 消息面，也不静默钳制。
+      if (payload.scopeId !== undefined && (!Number.isInteger(payload.scopeId) || payload.scopeId < 0)) {
+        respond(callId, false, undefined, 'agent() opts.scopeId must be a non-negative integer.', true)
+        return
+      }
+      const scopeId = payload.scopeId ?? 0
+
       let resumed: CompletedChild | undefined
       if (payload.resume !== undefined) {
-        resumed = completedByLabel.get(payload.resume)
+        resumed = completedByLabel.get(scopedResumeKey(scopeId, payload.resume))
         if (resumed === undefined) {
-          const known = [...completedByLabel.keys()]
+          const known = [...completedByLabel.values()]
+            .filter((child) => (child.scopeId ?? 0) === scopeId)
+            .map((child) => child.label)
           respond(
             callId,
             false,
@@ -888,6 +939,23 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           false,
           undefined,
           `agent() opts.maxSubagentDepth must be an integer between 1 and ${HARD_MAX_SUBAGENT_DEPTH}.`,
+          true,
+        )
+        return
+      }
+      // 同上：maxAttempts 是自动重试策略字段，非法值显式拒绝（策略值被静默
+      // 改写会让重试语义失真）。
+      if (
+        payload.maxAttempts !== undefined &&
+        (!Number.isInteger(payload.maxAttempts) ||
+          payload.maxAttempts < 1 ||
+          payload.maxAttempts > MAX_AGENT_ATTEMPTS)
+      ) {
+        respond(
+          callId,
+          false,
+          undefined,
+          `agent() opts.maxAttempts must be an integer between 1 and ${MAX_AGENT_ATTEMPTS}.`,
           true,
         )
         return
@@ -1000,12 +1068,13 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
         // 缓存节点也登记为可 resume 的 child（标 replayed）：同一脚本内后续
         // 匹配账本的 resume 调用可直接返回缓存文本；但它无活会话，前缀失配
         // 后需要真正续接时由上方 replayed 守卫显式失败。
-        completedByLabel.set(label, {
+        completedByLabel.set(scopedResumeKey(scopeId, label), {
           agentId,
           label,
           agentType,
           ...(model !== undefined ? { model } : {}),
           ...(isolation !== undefined ? { isolation } : {}),
+          scopeId,
           replayed: true,
         })
         const at = Date.now()
@@ -1062,7 +1131,21 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       const live: LiveAgent = { agentId, started: false }
       liveAgents.set(index, live)
       const intent = (): LiveAgent['intent'] => live.intent
+      const maxAttempts = payload.maxAttempts ?? 1
       let attempt = 1
+      // 续接路由目标：脚本级 resume 的既有 child，或自动重试登记的失败句柄。
+      let resumeTarget: CompletedChild | undefined = resumed
+      // 下次尝试发送的 prompt：自动重试时在原文末尾追加失败原因（增量，不累计）。
+      let attemptPrompt = payload.prompt!
+      /** 吸收执行环境元数据到进度行；失败分支同样吸收——conversationId/executionId 是登记续接句柄的依据。 */
+      const absorbExecutionInfo = (info: AgentExecutionInfo): void => {
+        if (info.nodeId !== undefined) base.nodeId = info.nodeId
+        if (info.conversationId !== undefined) base.conversationId = info.conversationId
+        if (info.executionId !== undefined) base.executionId = info.executionId
+        if (info.effectiveCwd !== undefined) base.effectiveCwd = info.effectiveCwd
+        const wfExecMeta = extractWorkflowExecutionMeta(info)
+        if (wfExecMeta.worktree !== undefined) base.worktree = wfExecMeta.worktree
+      }
       try {
         for (;;) {
           await pauseGate(live)
@@ -1084,6 +1167,9 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           }
 
           const attemptMark = attempt > 1 ? { attempt } : {}
+          // 跨尝试不沿用旧 gate 回报：每次尝试的 gate 结论必须来自本次执行，
+          // 旧失败/旧成功冒充新结果都会失真。
+          if (attempt > 1) base.gate = undefined
 
           const startedAt = Date.now()
           emit([{ ...base, queuedAt, startedAt, ...attemptMark }])
@@ -1113,8 +1199,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           let result: WorkflowSpawnResult
           try {
             result =
-              resumed !== undefined && resumeAgent !== undefined
-                ? await resumeAgent(resumed.agentId, payload.prompt!, {
+              resumeTarget !== undefined && resumeAgent !== undefined
+                ? await resumeAgent(resumeTarget.agentId, attemptPrompt, {
                     ...(compiledSchema !== undefined ? { schema: compiledSchema } : {}),
                     ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
                     ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
@@ -1125,7 +1211,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                 : await host.spawnAgent({
                     agentId,
                     index,
-                    prompt: payload.prompt!,
+                    prompt: attemptPrompt,
                     label,
                     agentType,
                     ...(model !== undefined ? { model } : {}),
@@ -1142,22 +1228,15 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                     ...(payload.gate !== undefined ? { onGateResult } : {}),
                   })
             if (result.ok) {
-              completedByLabel.set(label, {
+              completedByLabel.set(scopedResumeKey(scopeId, label), {
                 agentId,
                 label,
                 agentType,
                 ...(model !== undefined ? { model } : {}),
                 ...(isolation !== undefined ? { isolation } : {}),
+                scopeId,
               })
-              if (result.executionInfo !== undefined) {
-                const info = result.executionInfo
-                if (info.nodeId !== undefined) base.nodeId = info.nodeId
-                if (info.conversationId !== undefined) base.conversationId = info.conversationId
-                if (info.executionId !== undefined) base.executionId = info.executionId
-                if (info.effectiveCwd !== undefined) base.effectiveCwd = info.effectiveCwd
-                const wfExecMeta = extractWorkflowExecutionMeta(info)
-                if (wfExecMeta.worktree !== undefined) base.worktree = wfExecMeta.worktree
-              }
+              if (result.executionInfo !== undefined) absorbExecutionInfo(result.executionInfo)
               if (result.gate !== undefined && base.gate === undefined) base.gate = result.gate
               if (compiledSchema !== undefined && result.ok) {
                 result = applySchema(result, compiledSchema)
@@ -1168,8 +1247,13 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
                 result = await applyGate(result, payload.gate, agentId, runGate, base.gate)
                 if (result.ok && base.gate === undefined) base.gate = { ok: true, output: '' }
               }
-            } else if (payload.gate !== undefined && result.gate !== undefined && base.gate === undefined) {
-              base.gate = result.gate
+            } else {
+              // 失败分支同样吸收 executionInfo（§2.3：service 失败时保留元数据
+              // 回传），供失败句柄登记与进度行使用。
+              if (result.executionInfo !== undefined) absorbExecutionInfo(result.executionInfo)
+              if (payload.gate !== undefined && result.gate !== undefined && base.gate === undefined) {
+                base.gate = result.gate
+              }
             }
           } catch (error) {
             result = { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -1207,6 +1291,33 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             await recordAgent({ index, key, ok: true, text, ...resumeMark })
             respond(callId, true, text)
             return
+          }
+          // 失败但已观察到执行环境（conversationId/executionId，含 service 失败
+          // 分支回传的 executionInfo）：登记续接句柄。同 scope 后续
+          // agent({ resume: label }) 可续接该子会话与其 Worktree（设计 §2.3）。
+          const failureHandle: CompletedChild | undefined =
+            base.conversationId !== undefined || base.executionId !== undefined
+              ? {
+                  agentId,
+                  label,
+                  agentType,
+                  ...(model !== undefined ? { model } : {}),
+                  ...(isolation !== undefined ? { isolation } : {}),
+                  scopeId,
+                }
+              : undefined
+          if (failureHandle !== undefined) {
+            completedByLabel.set(scopedResumeKey(scopeId, label), failureHandle)
+          }
+          // maxAttempts 自动重试（与手动 control.retry 共用同一 attempt 环）：
+          // 失败原因以增量块追加进下次尝试 prompt，经 resumeAgent 续接同一
+          // 子会话继续修改，而非另起新会话重跑。
+          if (failureHandle !== undefined && attempt < maxAttempts && resumeAgent !== undefined) {
+            attemptPrompt = agentRetryPrompt(payload.prompt!, attempt, result.error ?? 'Agent failed.')
+            attempt++
+            resumeTarget = failureHandle
+            emit([{ ...base, queuedAt, attempt }])
+            continue
           }
           await recordAgent({ index, key, ok: false, ...resumeMark })
           emit([
