@@ -8,3 +8,26 @@ node_modules
 # desktop 打包：electron-builder 产物目录与 assemble-hub 组装目录（均为可重建产物）
 packages/desktop/release/
 packages/desktop/hub/
+
+# Build & artifacts
+/build/
+*.tsbuildinfo
+*.tgz
+
+# ActionDock runtime & local stores
+.actiondock/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDE & OS
+.idea/
+.vscode/
+*.iml
+.planning/
+.claude/
+.pi/
+.zvec-grep/
+.codekb/
+tmp/
