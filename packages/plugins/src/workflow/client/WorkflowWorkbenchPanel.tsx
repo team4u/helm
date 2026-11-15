@@ -8,10 +8,12 @@ import type { WorkbenchPanelProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { useConversations } from '@helm/plugin-client'
 import { usePluginSessionDoc } from './hooks.ts'
-import { buildExecutionTree, executionToolStatus } from './model-execution-tree.ts'
-import { ExternalRunSummary, SubagentLiveCard } from './SubagentCard.tsx'
+import { buildExecutionTree } from './model-execution-tree.ts'
+import { executionToolStatus } from './model-execution-status.ts'
+import { ExternalRunSummary } from './ExternalRunSummary.tsx'
+import { SubagentLiveCard } from './SubagentCard.tsx'
 import { WorkflowRunCardBody } from './WorkflowRunCard.tsx'
-import { WorkflowLibrarySection } from './WorkflowLibrary.tsx'
+import { WorkflowLibrarySection } from './WorkflowLibrarySection.tsx'
 
 // ---------------------------------------------------------------------------
 // WorkflowWorkbenchPanel：workbench.panel 扩展点组件

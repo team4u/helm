@@ -33,3 +33,22 @@ export function inspectString(source: Record<string, unknown>, key: string): str
   const value = source[key]
   return typeof value === 'string' && value !== '' ? value : undefined
 }
+
+/** 模型短名：剥离 provider/ 前缀，空串返回 undefined。 */
+export function formatShortModelName(model: string | undefined): string | undefined {
+  if (model === undefined) return undefined
+  const trimmed = model.trim()
+  if (trimmed === '') return undefined
+  const slash = trimmed.lastIndexOf('/')
+  return slash >= 0 && slash < trimmed.length - 1 ? trimmed.slice(slash + 1) : trimmed
+}
+
+/** 结构化值只读展示序列化（缩进 JSON；无法序列化时回退 String，不伪造）。 */
+export function stringifyPretty(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value)
+  } catch {
+    return String(value)
+  }
+}

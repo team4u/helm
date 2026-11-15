@@ -2,6 +2,7 @@
  * builtin:workflow 插件 client 纯逻辑：工作流库（list/get/save 动作结果的
  * 严格解析、库运行 args 严格解析与「让 AI 修改」请求文案；零 React/DOM 依赖）。
  */
+import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { firstLineOf, inspectString } from './model-format.ts'
 
@@ -143,4 +144,29 @@ export function parseWorkflowArgsInput(text: string): { ok: true; args?: unknown
   } catch (error) {
     return { ok: false, error: `args 需为合法 JSON：${error instanceof Error ? error.message : String(error)}` }
   }
+}
+
+/** 库全屏视图检索：按名称 / 描述 / 适用场景小写包含匹配（query 为已归一小写词）。 */
+export function filterSavedWorkflows(items: SavedWorkflowView[], query: string): SavedWorkflowView[] {
+  if (query === '') return items
+  return items.filter(
+    (item) =>
+      item.name.toLowerCase().includes(query) ||
+      (item.description ?? '').toLowerCase().includes(query) ||
+      (item.whenToUse ?? '').toLowerCase().includes(query),
+  )
+}
+
+/** 运行目标会话选项：顶层会话优先（子代理会话不出现在选择器里），最近更新前 50 条。 */
+export function buildWorkflowRunTargetOptions(
+  conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'parentConversationId' | 'updatedAt' | 'title' | 'profileId'>>,
+): Array<{ value: string; label: string }> {
+  const topLevel = conversations.filter((c) => c.parentConversationId === undefined)
+  return [...topLevel]
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 50)
+    .map((c) => ({
+      value: String(c.id),
+      label: `#${c.id} ${c.title !== '' && c.title !== undefined ? c.title : c.profileId}`.slice(0, 40),
+    }))
 }

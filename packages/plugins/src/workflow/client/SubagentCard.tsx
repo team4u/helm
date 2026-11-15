@@ -1,178 +1,55 @@
 /**
  * builtin:workflow 插件子代理卡组件：
- * - ExecutionChildrenRows：统一执行树父卡内下一级紧凑子项行；
  * - SubagentLiveCard：子会话双层胶囊实时卡（会话节点卡）；
- * - SubagentToolView：时间线内 subagent 工具调用（tool.view 扩展点）；
- * - ExternalRunSummary：无原生子会话的外部执行（如 Herdr 窗格）后台任务摘要。
+ * - SubagentToolView：时间线内 subagent 工具调用（tool.view 扩展点）。
+ * 执行树紧凑子项行与外部执行摘要在同目录独立模块（ExecutionChildrenRows /
+ * ExternalRunSummary），此处按原 client 模块形状再导出（workflow.ts UI 注册
+ * 与既有消费方经 SubagentCard.tsx 引用）。
  * 数据经 @helm/plugin-client 共享 hooks 响应式读取；动作经 ctx.callAction 走
  * POST /api/actions/builtin:workflow/<actionId>，无任何宿主私有依赖。
  */
-import { Fragment, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { useConversation, useConversations, usePluginContext, useToolActivity, formatDurationMs } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { ExecutionCard } from './ExecutionCard.tsx'
+import { ExecutionChildrenRows } from './ExecutionChildrenRows.tsx'
+import { ExternalRunSummary } from './ExternalRunSummary.tsx'
+import { SubagentStream } from './SubagentStream.tsx'
 import { useElapsedNowMs, usePluginSessionDoc, useStreamFollow } from './hooks.ts'
-import { SPIN, EXECUTION_BADGE, EXECUTION_ICON, EXECUTION_LABEL } from './presentation.ts'
+import { SPIN, EXECUTION_BADGE, EXECUTION_LABEL } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { WorktreeInspectSection } from './WorktreeInspectSection.tsx'
 import { buildWorktreeSelector } from './model-worktree.ts'
-import { toolResultPreviewTruncated } from './model-format.ts'
 import { resolveRunElapsedMs } from './model-run.ts'
+import { aggregateExecutionNodes, buildExecutionTree } from './model-execution-tree.ts'
+import type { ExecutionNode } from './model-execution-tree.ts'
+import { aggregateExecutionStatuses } from './model-execution-status.ts'
+import type { ExecutionNodeStatus } from './model-execution-status.ts'
+import { collectExecutionApprovals, collectExecutionFrontline } from './model-execution-view.ts'
 import {
-  aggregateExecutionNodes,
-  aggregateExecutionStatuses,
-  buildExecutionTree,
-  collectExecutionApprovals,
-  collectExecutionFrontline,
-  executionNodeTitle,
-  resolveExecutionNodeElapsedMs,
-} from './model-execution-tree.ts'
-import type { ExecutionNode, ExecutionNodeStatus } from './model-execution-tree.ts'
-import {
-  buildSubagentStatSegments,
-  buildSubagentStreamLines,
   isLatestSubagentCallForTarget,
   parentToolSummaryOf,
   resolveSubagentConversationId,
-  resolveSubagentElapsedMs,
   resolveSubagentExecutionMeta,
+} from './model-subagent-link.ts'
+import {
+  buildSubagentStatSegments,
+  buildSubagentStreamLines,
+} from './model-subagent-stream.ts'
+import {
+  resolveSubagentElapsedMs,
   resolveSubagentHeaderSnippet,
   resolveSubagentTaskTitle,
   subagentBadge,
-} from './model-subagent.ts'
-import type { SubagentBadge } from './model-subagent.ts'
+} from './model-subagent-card.ts'
+import type { SubagentBadge } from './model-subagent-card.ts'
 
-// ---------------------------------------------------------------------------
-// 统一执行树：父卡内下一级紧凑子项（ExecutionNode 递归视图模型）
-// ---------------------------------------------------------------------------
-
-/** 下一级紧凑子项行：会话行点击 / 回车打开任意深度会话抽屉；无会话执行
- * 行（深层 workflow / external run）原位展开其直系子项（不伪造会话入口），
- * 点击均不冒泡触发父卡。 */
-export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): ReactNode {
-  const ctx = usePluginContext()
-  const [expandedKey, setExpandedKey] = useState<string | undefined>(undefined)
-  // 父级统一秒表：仅当本级存在运行中的真实边界（runNode / 无 runNode 的
-  // run）才启动，单一 interval 供本级全部行复用（避免每行各建 interval）；
-  // 递归子层是独立组件实例，各自持表不违反 hooks 规则。
-  const needsTick = nodes.some(
-    (node) =>
-      node.runNode?.status === 'running' ||
-      (node.runNode === undefined && node.run?.status === 'running'),
-  )
-  const nowMs = useElapsedNowMs(needsTick)
-  if (nodes.length === 0) return null
-  return (
-    <div className="execution-children" onClick={(e) => e.stopPropagation()}>
-      {nodes.map((node) => {
-        const aggregated = node.aggregated
-        const title = executionNodeTitle(node)
-        const openConversation =
-          node.conversationId !== undefined ? () => ctx.openConversationDrawer(node.conversationId!) : undefined
-        // 无会话执行节点（深层 workflow / external run）：原位展开直系子项。
-        const expandable = openConversation === undefined && node.children.length > 0
-        const expanded = expandable && expandedKey === node.key
-        const activate =
-          openConversation ??
-          (expandable ? () => setExpandedKey((current) => (current === node.key ? undefined : node.key)) : undefined)
-        const doing =
-          aggregated.status === 'working' && node.summary?.doing !== undefined
-            ? node.summary.doing.trim()
-            : undefined
-        // 审批徽章只统计后代（自身 blocked 已由状态徽章表达）。
-        const descendantApprovals = aggregated.blocked - (node.status === 'blocked' ? 1 : 0)
-        // 总耗时：仅以真实 run/runNode 边界解析（运行中随父级秒表动态、结算
-        // 定格持久化 duration；无本轮边界如实省略）。
-        const elapsedMs = resolveExecutionNodeElapsedMs(node, nowMs)
-        return (
-          <Fragment key={node.key}>
-            <div
-              {...(activate !== undefined
-                ? {
-                    role: 'button' as const,
-                    tabIndex: 0,
-                    'aria-label': openConversation !== undefined
-                      ? `打开会话 #${node.conversationId} 抽屉`
-                      : expanded
-                        ? `收起 ${title} 直系子项`
-                        : `展开 ${title} 直系子项`,
-                    ...(expandable ? { 'aria-expanded': expanded } : {}),
-                  }
-                : {})}
-              className={`execution-child-row execution-child-${aggregated.status}${activate !== undefined ? ' execution-child-clickable' : ''}`}
-              title={
-                [
-                  title,
-                  openConversation !== undefined
-                    ? `点击打开会话 #${node.conversationId} 抽屉`
-                    : expandable
-                      ? expanded
-                        ? '点击收起直系子项'
-                        : '点击展开直系子项（深层工作流 / 外部执行，无独立会话）'
-                      : undefined,
-                ]
-                  .filter(Boolean)
-                  .join('\n')
-              }
-              onClick={activate}
-              onKeyDown={
-                activate !== undefined
-                  ? (e) => {
-                      if (e.target !== e.currentTarget) return
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        activate()
-                      }
-                    }
-                  : undefined
-              }
-            >
-              <Icon
-                name={EXECUTION_ICON[aggregated.status] ?? 'circle'}
-                size={11}
-                className={aggregated.status === 'working' ? SPIN : undefined}
-              />
-              {expandable ? (
-                <Icon
-                  name={expanded ? 'chevron-down' : 'chevron-right'}
-                  size={11}
-                  className="execution-child-expand"
-                />
-              ) : null}
-              {node.conversationId !== undefined ? (
-                <span className="execution-child-id">{`#${node.conversationId}`}</span>
-              ) : null}
-              <span className="execution-child-title">{title}</span>
-              {doing !== undefined && doing !== '' ? (
-                <span className="execution-child-doing" title={doing}>
-                  {doing}
-                </span>
-              ) : null}
-              <span className="execution-child-right">
-                {elapsedMs !== undefined ? (
-                  <span className="execution-child-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
-                ) : null}
-                {descendantApprovals > 0 ? (
-                  <span className="badge badge-warn">{`审批 ${descendantApprovals}`}</span>
-                ) : null}
-                {node.children.length > 0 ? (
-                  <span className="execution-child-count tabular-nums">{`${aggregated.done}/${aggregated.total}`}</span>
-                ) : null}
-                <span className={`badge ${EXECUTION_BADGE[aggregated.status] ?? 'badge-neutral'}`}>
-                  {EXECUTION_LABEL[aggregated.status] ?? aggregated.status}
-                </span>
-              </span>
-            </div>
-            {expanded ? <ExecutionChildrenRows nodes={node.children} /> : null}
-          </Fragment>
-        )
-      })}
-    </div>
-  )
-}
+// 既有模块形状再导出（同目录独立组件；见文件头说明）。
+export { ExecutionChildrenRows } from './ExecutionChildrenRows.tsx'
+export { ExternalRunSummary } from './ExternalRunSummary.tsx'
 
 // ---------------------------------------------------------------------------
 // 子代理双层胶囊卡（原 SubagentLiveCard 语义；统一为 ExecutionNode 的会话节点卡）
@@ -464,34 +341,7 @@ export function SubagentLiveCard(props: {
     >
       {childNodes.length > 0 ? <ExecutionChildrenRows nodes={childNodes} /> : null}
       {props.expanded === true && streamLines.length > 0 ? (
-        <div className="subagent-live-stream" ref={stream.ref} onScroll={stream.onScroll}>
-          {streamLines.slice(-30).map((line) =>
-            line.kind === 'prompt' ? (
-              <div key={line.key} className="subagent-stream-line subagent-stream-prompt">
-                <span className="subagent-stream-tag">指令</span>
-                <span className="subagent-stream-body">{line.text}</span>
-              </div>
-            ) : line.kind === 'thinking' ? (
-              <div key={line.key} className="subagent-stream-line subagent-stream-thinking">
-                <span className="subagent-stream-tag">思考</span>
-                <span className="subagent-stream-body">{line.text}</span>
-              </div>
-            ) : line.kind === 'tool' ? (
-              <div key={line.key} className="subagent-stream-line subagent-stream-tool">
-                <Icon name={line.status === 'running' ? 'loader' : line.isError ? 'x' : 'check'} size={11} className={line.status === 'running' ? SPIN : undefined} />
-                <span className="subagent-stream-body">
-                {line.toolName} {line.summary}{line.resultPreview !== undefined ? `：${line.resultPreview}` : ''}
-                {toolResultPreviewTruncated(line.resultPreview) ? <span className="subagent-stream-truncated">（已截断）</span> : null}
-              </span>
-              </div>
-            ) : (
-              <div key={line.key} className="subagent-stream-line">
-                <span className="subagent-stream-tag">回复</span>
-                <span className="subagent-stream-body">{line.text}</span>
-              </div>
-            ),
-          )}
-        </div>
+        <SubagentStream lines={streamLines} followRef={stream.ref} onScroll={stream.onScroll} />
       ) : null}
       {props.expanded === true ? (
         <ToolCallDetailsInline
@@ -634,75 +484,5 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       expanded={false}
       childNodes={childNodes}
     />
-  )
-}
-
-/** 外部运行时（如 Herdr 窗格）的后台任务摘要（无原生子会话时如实展示）。 */
-export function ExternalRunSummary(props: {
-  run?: WorkflowRunSummary
-  worktree?: { path: string; branch: string }
-  toolStatus: 'running' | 'done' | 'error'
-  executionId?: string
-}): ReactNode {
-  const { run, worktree, toolStatus, executionId } = props
-  const nodes = run?.nodes ?? []
-  const running = nodes.filter((n) => n.status === 'running').length
-  const failed = nodes.find((n) => n.status === 'failed')
-  const runError = run?.status === 'failed' || run?.status === 'aborted' ? (run.error ?? '后台执行失败') : undefined
-  const badge = subagentBadge(undefined, toolStatus, run?.status)
-  const active = badge.status === 'working'
-  const failedState = badge.status === 'error'
-  // run 总耗时：运行中随秒表动态推进，结束定格在 createdAt → updatedAt；
-  // 无 run 数据时如实省略。
-  const nowMs = useElapsedNowMs(active && run?.status === 'running')
-  const elapsedMs = run !== undefined ? resolveRunElapsedMs(run, nowMs) : undefined
-  return (
-    <div className="subagent-live-card subagent-external-card">
-      <div className="subagent-live-header">
-        <Icon name={failedState ? 'x' : active ? 'loader' : 'bot'} size={13} className={active ? SPIN : undefined} />
-        <span className="subagent-live-title">外部执行</span>
-        {executionId !== undefined ? <span className="badge badge-neutral">{executionId}</span> : null}
-        {worktree !== undefined ? (
-          <span className="badge badge-neutral subagent-worktree-badge" title={`隔离工作树：${worktree.path}`}>
-            <Icon name="git-branch" size={11} />
-            {worktree.branch}
-          </span>
-        ) : null}
-        <span className={`badge ${badge.badge}`}>{badge.label}</span>
-        {elapsedMs !== undefined ? (
-          <span className="subagent-live-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
-        ) : null}
-      </div>
-      <div className="subagent-live-stream subagent-external-body">
-        {nodes.length > 0 ? (
-          <div className="workflow-node-list">
-            {nodes.map((n) => (
-              <div key={n.id} className="workflow-node-line">
-                <Icon name={n.status === 'running' ? 'loader' : n.status === 'failed' ? 'x' : n.status === 'done' ? 'check' : 'circle'} size={11} className={n.status === 'running' ? SPIN : undefined} />
-                <span className="workflow-node-label">{n.label ?? n.id}</span>
-                {n.executionId !== undefined ? <span className="subagent-external-exec">{n.executionId}</span> : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="subagent-stream-line subagent-stream-empty">
-            {run === undefined ? `外部执行${active ? '进行中' : failedState ? '异常' : '已结束'}（无子会话）` : `后台任务 ${run.id}`}
-          </div>
-        )}
-        {runError !== undefined ? (
-          <div className="subagent-stream-line subagent-stream-error subagent-bg-error" title={runError}>
-            <Icon name="x" size={11} />
-            <span className="subagent-stream-body">后台执行失败：{runError}</span>
-          </div>
-        ) : null}
-        {failed !== undefined && failed.error !== undefined ? (
-          <div className="subagent-stream-line subagent-stream-error subagent-bg-error" title={failed.error}>
-            <Icon name="x" size={11} />
-            <span className="subagent-stream-body">节点失败：{failed.error}</span>
-          </div>
-        ) : null}
-        {running > 0 ? <div className="subagent-stream-line subagent-stream-empty">{running} 个节点执行中</div> : null}
-      </div>
-    </div>
   )
 }

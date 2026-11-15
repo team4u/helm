@@ -4,6 +4,7 @@
  */
 import { useMemo, useState } from 'react'
 import { usePluginContext } from '@helm/plugin-client'
+import { stringifyPretty } from './model-format.ts'
 
 export interface ToolCallDetailsInlineProps {
   /** 本次工具调用的原始入参。 */
@@ -17,23 +18,11 @@ export interface ToolCallDetailsInlineProps {
 export function ToolCallDetailsInline({ input, result, artifactRef }: ToolCallDetailsInlineProps) {
   const ctx = usePluginContext()
   const [open, setOpen] = useState(false)
-  const inputJson = useMemo(() => {
-    if (input === undefined) return undefined
-    try {
-      return JSON.stringify(input, null, 2)
-    } catch {
-      return String(input)
-    }
-  }, [input])
-  const resultText = useMemo(() => {
-    if (result === undefined) return undefined
-    if (typeof result === 'string') return result
-    try {
-      return JSON.stringify(result, null, 2)
-    } catch {
-      return String(result)
-    }
-  }, [result])
+  const inputJson = useMemo(() => stringifyPretty(input), [input])
+  const resultText = useMemo(
+    () => (typeof result === 'string' ? result : stringifyPretty(result)),
+    [result],
+  )
 
   return (
     <details
