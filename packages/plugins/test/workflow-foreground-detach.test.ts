@@ -282,6 +282,66 @@ describe('前台同步 subagent detach（startBackgroundAgent foreground 模式�
     await service.abort(run.id)
     await service.close()
   })
+
+  it('durable 快照 flush 窗口内 detach：绑定点跳过父 signal，abort 不误杀已转后台 run', timeout, async () => {
+    const host = makeHost()
+    // 首次 flush（durable running 快照落盘）阻塞在预置闸门并显式通知测试：
+    // startBackgroundAgent 在该 await 窗口内挂起（runId 已随 writeRecord 进入
+    // runs 索引镜像，外部动作可观察到），确定性复刻 detach 竞态。
+    const inner = makeStateStore()
+    let releaseHold!: () => void
+    const hold = new Promise<void>((resolve) => {
+      releaseHold = resolve
+    })
+    let notifyFlushStarted!: () => void
+    const flushStarted = new Promise<void>((resolve) => {
+      notifyFlushStarted = resolve
+    })
+    let firstFlush = true
+    const state: WorkflowStateStore = {
+      ...inner,
+      flush: async (): Promise<void> => {
+        if (firstFlush) {
+          firstFlush = false
+          notifyFlushStarted()
+          await hold
+        }
+      },
+    }
+    const service = new WorkflowService({ dataDir, host, state })
+    const parentSignal = new AbortController()
+    const startedPromise = service.startBackgroundAgent(
+      { parentConversationId: 1, prompt: '同步任务', signal: parentSignal.signal },
+      { foreground: true },
+    )
+    await flushStarted
+    // 窗口内取得 runId（与外部 runs 动作同源读索引）并完成 detach。
+    const index = state.get<Array<{ id: string }>>('workflow/runs', [])
+    assert.equal(index.length, 1, 'durable 快照已写入索引，runId 对外部可观察')
+    const raceRunId = index[0]!.id
+    await service.detachForegroundRun(raceRunId)
+    // 放行启动 flush：runner 继续到父 signal 绑定点（须因 detachedAt 跳过）。
+    releaseHold()
+    const { run: started } = await startedPromise
+    assert.equal(started.id, raceRunId)
+    assert.ok(typeof started.detachedAt === 'number', '转后台事实随启动返回可见')
+
+    // 父回合后续 abort 不得误杀已转后台 run（修复前补装的 listener 会触发）。
+    parentSignal.abort()
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(service.getRun(raceRunId).status, 'running', '已转后台 run 不受父 signal abort 影响')
+
+    // run 仍可完成并恰一次结算汇报（detach 已翻转通知标记）。
+    host.release()
+    assert.equal(await service.wait(raceRunId), 'slow-result')
+    assert.equal(service.getRun(raceRunId).status, 'completed')
+    assert.equal(
+      host.settledCalls.filter((call) => call.summary.id === raceRunId).length,
+      1,
+      '已转后台 run 终态恰一次汇报',
+    )
+    await service.close()
+  })
 })
 
 describe('前台同步 workflow detach（service.run foreground 上下文）', () => {

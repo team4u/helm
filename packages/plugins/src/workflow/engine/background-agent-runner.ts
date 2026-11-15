@@ -43,7 +43,8 @@ import type { WorkflowServiceContext } from './service-context.js'
  *    传播，就绪即解绑——父回合结束后的 signal abort 不误杀后台子代理；
  *    前台同步模式（foreground:true，同步 subagent 工具）绑定持续到 detach
  *    或终态——detach 的临界段解绑（转后台后父 signal 不再杀 run），此后
- *    只受 abort(runId)/close() 控制；
+ *    只受 abort(runId)/close() 控制；durable 快照 flush 窗口内已完成 detach
+ *    的 run 在绑定点直接跳过（不补装 listener、不挂 unbind 口）；
  * 5. 插件从不 onResolved 但 settle：execution 留空（绝不伪造），abort 无子会话
  *    可停，仅取消本 run；
  * 6. onBackgroundAgentSettled 失败不推翻终态：notifiedAt 不置位，init() 按
@@ -442,14 +443,27 @@ export async function startBackgroundAgent(
     if (settled) return
     if (foreground || !onResolvedFired) abort.abort()
   }
-  parentSignal?.addEventListener('abort', onParentAbort, { once: true })
-  const detachParentSignal = (): void => {
-    parentSignal?.removeEventListener('abort', onParentAbort)
+  // 绑定前补检 detach 竞态：durable running 快照的 flush await 窗口内，外部
+  // 动作可经 runs 索引观察到本 run（runId 已随 writeRecord 进索引镜像）并
+  // 完成 detach——record.detachedAt 已置位且 detach 已消费（不存在的）
+  // unbind 口。此时绝不能再补装父 signal listener（父回合 abort 会误杀已转
+  // 后台的 run，晚到挂载的 unbind 也永远不会被解绑）：已转后台的 run 只受
+  // abort(runId)/close() 控制。普通后台模式与未 detach 的前台模式行为不变。
+  const detachedBeforeBind = record.detachedAt !== undefined
+  let detachParentSignal: () => void = () => {}
+  if (!detachedBeforeBind) {
+    parentSignal?.addEventListener('abort', onParentAbort, { once: true })
+    detachParentSignal = (): void => {
+      parentSignal?.removeEventListener('abort', onParentAbort)
+    }
+    cleanupParentSignal = detachParentSignal
+    if (foreground) run.unbindForegroundSignal = detachParentSignal
   }
-  cleanupParentSignal = detachParentSignal
-  if (foreground) run.unbindForegroundSignal = detachParentSignal
 
-  if (parentSignal?.aborted || svc.isClosed()) abort.abort()
+  // svc.isClosed() 是启动屏障（关停窗口内启动一律取消，语义不变）；父 signal
+  // 已中止的立即取消仅对未 detach 的 run 生效（已转后台的忽略父 signal）。
+  if (svc.isClosed()) abort.abort()
+  else if (!detachedBeforeBind && parentSignal?.aborted) abort.abort()
   const spawnPromise = (async () => {
     if (abort.signal.aborted) throw new HelmError('aborted', '后台子代理启动期间已取消', 409)
     return svc.host.spawnAgent(proto)
