@@ -22,6 +22,7 @@ import {
 } from './validate.js'
 import { parseOptionalBooleanFlag, parseOptionalJsonObjectBody, type RouteContext } from './route-context.js'
 import { methodNotAllowed } from './route-context.js'
+import { assertDoctorTargetDir } from '../plugins/doctor-target.js'
 
 export async function handlePluginsDomain(
   ctx: RouteContext,
@@ -229,9 +230,9 @@ function parseDoctorTarget(body: Record<string, unknown>): { dir?: string; id?: 
   )
   const dirLike = (v: unknown, field: string): string | undefined => {
     if (typeof v !== 'string') return undefined
-    if (!v.startsWith('/') && !/^[a-zA-Z]:[\\/]/.test(v) && !v.startsWith('\\\\')) {
-      throw new ValidationError(`${field} 需为绝对路径（以 / 或盘符开头）`)
-    }
+    // 绝对路径与 .. 穿越段的统一规则（与 PluginHost.doctorExternalPlugin 同一
+    // 实现，见 plugins/doctor-target.ts）：HTTP 边界早拒，不进入 doctor 检查链。
+    assertDoctorTargetDir(v, field)
     return v
   }
   const pathDir = dirLike(body.path, 'path')

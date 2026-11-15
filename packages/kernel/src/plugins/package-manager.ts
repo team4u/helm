@@ -34,7 +34,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { HelmError, type PluginBuildProvider, type PluginInstallResult, type PluginPackageRecord, type PluginRemoveResult, type PluginPackageSource, type PluginSummary, type PluginUpdateResult } from '@helm/protocol';
 import { parsePluginSource } from './package-source.js';
 import { doctorPluginDir } from './plugin-doctor.js';
-import { readHelmClientDependencies } from './external-loader.js';
+import { readHelmClientDependencies } from './plugin-manifest.js';
 import type { PluginPackageManagerStore } from './package-store.js';
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,9 @@
  * 契约类型统一从 @helm/protocol 再导出，保证消费方单一依赖入口。
  */
 export * from './plugin-host.js';
-export { loadExternalPlugins, type ExternalPluginHost, type ReloadablePluginHost, reloadExternalPlugin, rescanExternalPlugins, readHelmClientDependencies } from './external-loader.js';
+export { reloadExternalPlugin, type ExternalPluginHost, type ReloadablePluginHost } from './external-loader.js';
+export { loadExternalPlugins, rescanExternalPlugins } from './scan-visitor.js';
+export { readHelmClientDependencies } from './plugin-manifest.js';
 export { registerPluginTsRoot, nextPluginGeneration, type BackendTsTransformFn } from './backend-ts-loader.js';
 export { doctorPluginDir } from './plugin-doctor.js';
 export { PluginPackageManager, defaultPackageRunner, tailLines, type PackageRunner, type PackageManagerHost, type PluginPackageManagerOptions } from './package-manager.js';
