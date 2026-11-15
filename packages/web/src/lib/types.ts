@@ -397,6 +397,8 @@ export interface HelmStoreValue {
   sseConnected: boolean
   theme: ThemeMode
   themePreference: ThemePreference
+  /** 「全部空闲」浏览器通知偏好（localStorage 持久化；权限授予才真正投递）。 */
+  quietNotifyEnabled: boolean
 
   // 核心实时数据
   conversations: ConversationSummary[]
@@ -435,6 +437,8 @@ export interface HelmStoreValue {
   setTheme(theme: ThemeMode): void
   setThemePreference(pref: ThemePreference): void
   toggleTheme(): void
+  /** 开启时先请求浏览器通知权限，被拒则不启用并 toast 说明；关闭立即生效。 */
+  setQuietNotify(on: boolean): Promise<void>
   checkAuth(): Promise<void>
   onAuthenticated(token: string): Promise<void>
   logout(): void

@@ -645,6 +645,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     sseConnected: true,
     theme: 'dark',
     themePreference: 'system',
+    quietNotifyEnabled: false,
     conversations: [
       conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
       conv({ id: 10, title: '用户会话1', profileId: 'assistant' }),
@@ -685,6 +686,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     setTheme: () => {},
     setThemePreference: () => {},
     toggleTheme: () => {},
+    setQuietNotify: async () => {},
     checkAuth: async () => {},
     onAuthenticated: async () => {},
     logout: () => {},

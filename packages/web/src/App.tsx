@@ -20,10 +20,13 @@ import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
 import { ToastOverlay } from './shell/ToastOverlay.js'
 import { TooltipProvider } from './ui/Tooltip.js'
+import { useQuietNotifier } from './shell/use-quiet-notifier.js'
 
 function HelmShellInner() {
   const store = useHelmStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // 「全部空闲」浏览器通知：全局装配一次（内部自行门控偏好/认证状态）。
+  useQuietNotifier()
   const setActiveModal = store.setActiveModal
   const closeModal = useCallback(() => setActiveModal(null), [setActiveModal])
 

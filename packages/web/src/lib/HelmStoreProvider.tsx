@@ -24,6 +24,7 @@ import { createPluginClientHostPort } from './plugin-client-host.js'
 import { formatLocationHash, isSameLocationState, parseLocationHash, shouldPushLocationHistory, upgradeLegacyLocationState, type WorkspaceLocationState } from './url-hash-model.js'
 import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, spaceForTarget, type ActiveModal, type GroupedUiSpecs, type HelmStoreValue, type ResolvedTarget, type SidebarSpace, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 import { errorText } from './format.js'
+import { requestBrowserNotificationPermission } from './browser-notification.js'
 
 const getStoredPreference = (): ThemePreference => {
   try {
@@ -32,6 +33,15 @@ const getStoredPreference = (): ThemePreference => {
     return 'system'
   } catch {
     return 'system'
+  }
+}
+
+/** 「全部空闲」浏览器通知偏好（localStorage 'helm:quiet-notify' = '1'）。 */
+const getStoredQuietNotify = (): boolean => {
+  try {
+    return localStorage.getItem('helm:quiet-notify') === '1'
+  } catch {
+    return false
   }
 }
 const getSystemTheme = (): ThemeMode =>
@@ -112,6 +122,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [themePreference, setThemePreferenceState] = useState<ThemePreference>(getStoredPreference)
   const [theme, setThemeState] = useState<ThemeMode>(() => resolveTheme(getStoredPreference()))
+  const [quietNotifyEnabled, setQuietNotifyEnabledState] = useState<boolean>(getStoredQuietNotify)
   const [live, setLive] = useState<LiveState>(emptyLiveState)
   const liveRef = useRef(live)
   const [conversationArtifacts, setConversationArtifacts] = useState<Record<number, ArtifactMetadata[]>>({})
@@ -218,6 +229,33 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       return next
     })
   }, [])
+
+  /** 开启前先请求浏览器通知权限（用户手势内）：被拒不启用并明确提示，绝不静默装作已开启。 */
+  const setQuietNotify = useCallback(
+    async (on: boolean) => {
+      if (!on) {
+        setQuietNotifyEnabledState(false)
+        try {
+          localStorage.removeItem('helm:quiet-notify')
+        } catch { /* 偏好仍生效于本次会话。 */ }
+        return
+      }
+      const permission = await requestBrowserNotificationPermission()
+      if (permission === 'unsupported') {
+        pushNotice({ type: 'notification', level: 'warning', title: '当前浏览器不支持通知', body: '浏览器通知 API 不可用，无法开启全部空闲提醒。' })
+        return
+      }
+      if (permission !== 'granted') {
+        pushNotice({ type: 'notification', level: 'warning', title: '浏览器通知权限未授予', body: '请在浏览器站点设置中允许通知后重新开启。' })
+        return
+      }
+      setQuietNotifyEnabledState(true)
+      try {
+        localStorage.setItem('helm:quiet-notify', '1')
+      } catch { /* 内存偏好仍生效于本次会话。 */ }
+    },
+    [pushNotice],
+  )
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return
@@ -812,12 +850,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   // Context value 需引用稳定：任何一处局部状态变化都不应触发全量消费组件重渲染。
   const store: HelmStoreValue = useMemo(
     () => ({
-      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts, assetsLoaded,
+      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
-      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, conversationArtifacts, assetsLoaded,
+      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
       setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],

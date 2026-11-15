@@ -168,6 +168,16 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
               : 'moon',
         run: () => store.toggleTheme(),
       },
+      {
+        kind: 'command',
+        id: 'builtin:toggle-quiet-notify',
+        title: store.quietNotifyEnabled ? '关闭全部空闲浏览器通知' : '开启全部空闲浏览器通知（所有会话与后台在途结束后提醒）',
+        icon: store.quietNotifyEnabled ? 'bell' : 'bell-off',
+        keywords: ['notify', 'notification', 'quiet', 'idle', '通知', '提醒', '空闲'],
+        run: () => {
+          void store.setQuietNotify(!store.quietNotifyEnabled)
+        },
+      },
     ]
     if (store.splitTarget) {
       rows.push({

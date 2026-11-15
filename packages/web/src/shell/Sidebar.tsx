@@ -6,6 +6,7 @@ import { PluginUiView } from '../ui/PluginUiView.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type HelmStoreValue, type SidebarSpace } from '../lib/types.js'
+import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
 import { extractSidebarViews, filterConversationsByTag, isConversationActive } from './sidebar-model.js'
 import {
   collectBackgroundBadgeDocs,
@@ -390,6 +391,14 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
     for (const ref of badgeDocs) void ensurePluginDoc(ref.pluginId, ref.doc)
   }, [badgeDocs, authenticated, ensurePluginDoc])
 
+  // 「全部空闲」浏览器通知开关：权限现场读取（浏览器设置可随时收回），
+  // 偏好开而权限未授予时如实提示，绝不静默装作已开启。
+  const quietNotifyTooltip = !store.quietNotifyEnabled
+    ? '全部空闲通知：已关闭（所有会话与后台在途结束后提醒）'
+    : readBrowserNotificationPermission() !== 'granted'
+      ? '全部空闲通知：浏览器权限未授予，请在浏览器站点设置中允许通知后重开'
+      : '全部空闲通知：已开启（所有会话与后台在途结束且页面失焦时提醒；需保持本页打开）'
+
   return (
     <aside className="helm-sidebar">
       {/* 移动端抽屉：切换空间后保持抽屉展开——该空间的二级列表（设置中心清单/
@@ -413,6 +422,20 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
             <span>{space === 'conversations' ? '对话' : space === 'views' ? '视图' : '设置'}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Tooltip content="全部空闲通知：点击开启或关闭" side="bottom">
+              <button
+                type="button"
+                className="btn btn-sm btn-icon"
+                title={quietNotifyTooltip}
+                aria-label={quietNotifyTooltip}
+                aria-pressed={store.quietNotifyEnabled}
+                onClick={() => {
+                  void store.setQuietNotify(!store.quietNotifyEnabled)
+                }}
+              >
+                <HelmIcon name={store.quietNotifyEnabled && readBrowserNotificationPermission() === 'granted' ? 'bell' : 'bell-off'} size={13} />
+              </button>
+            </Tooltip>
             <Tooltip content="打开 Cmd K 全局搜索与命令面板" side="bottom">
               <button
                 type="button"
