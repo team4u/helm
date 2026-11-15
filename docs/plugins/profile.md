@@ -1,6 +1,6 @@
 # 角色与技能底座插件
 
-`builtin:profile` 是系统常驻底座插件（`locked: true`，不可停用、不可卸载），为所有会话按其绑定的 `profileId` 注入人格定义（SYSTEM.md）、可用技能目录与跨 Profile 协作认知。长期记忆已拆分至独立的 [`builtin:memory`](memory.md)，本插件零记忆逻辑；内核与 `@helm/protocol` 对两者均无感知，全靠插件在 `before_turn` 注入。
+`builtin:profile` 是系统常驻底座插件（`locked: true`，不可停用、不可卸载），为所有会话按其绑定的 `profileId` 注入人格定义（SYSTEM.md）、工作区项目约定（AGENTS.md）、可用技能目录与跨 Profile 协作认知。长期记忆已拆分至独立的 [`builtin:memory`](memory.md)，本插件零记忆逻辑；内核与 `@helm/protocol` 对两者均无感知，全靠插件在 `before_turn` 注入。
 
 ## 启动自举
 
@@ -19,10 +19,18 @@
 | :--- | :--- | :--- |
 | `profile.system` | SYSTEM.md 非空白 | SYSTEM.md 原始全文（人格、语气与行为准则） |
 | `profile.assets-missing` | SYSTEM.md 缺失或为空 | `<profile_assets_missing>` 包裹的显式说明：本回合无该 Profile 人格，要求模型告知用户、谨慎回答、不假装特定人格 |
+| `profile.agents` | 会话靶点工作区存在非空白 `AGENTS.md` | `<project_instructions path="...">` 包裹的项目约定全文（先经全局脱敏，超过 64000 字符显式截断） |
+| `profile.agents-unavailable` | 远端节点离线，或读取 `AGENTS.md` 遭遇 `not_found` / `is_directory` 之外的真实错误 | `<project_instructions_unavailable>` 包裹的显式说明：本回合未能取得项目约定及原因，绝不静默降级为「无文件」 |
 | `profile.skills` | 可用技能非空 | `<available_skills>` 包裹的技能目录（id/name/description/references），提示经 `load_skill` 按需加载 |
 | `profile.catalog` | 当回合实际有 `subagent` / `SubagentWorkflow` 派工工具 | `<available_profiles>` 协作目录与委派指引 |
 
 **资产缺失自愈防线**：外部误删 SYSTEM.md 时降级为空文本但不静默换人格——先向人类发一次性 warning 通知（按 profileId 独立去重，文件恢复即停、再次缺失可重新告警），再向模型注入 `profile.assets-missing` 显式说明，后续经 `helm profiles update --system` 等写入自愈重建（不是启动时自动恢复）。`not_found` 之外的 IO/权限错误如实上抛，不吞、不降级。
+
+**工作区 AGENTS.md 项目约定**：每回合开始前按会话靶点（节点缺省 `local` + `cwd`）读取工作区根目录的 `AGENTS.md`，注入 `profile.agents`（紧随人格资产、先于技能目录），文件修改下一回合实时生效（无缓存）。路径按 `cwd` 自身形状选择词法规则合成，POSIX 与 Windows 靶点路径均正确。行为契约：
+
+- **常态跳过**：工作区无该文件（`not_found`）、同名目录（`is_directory` / `EISDIR`）或内容纯空白时，本回合不注入任何相关段落；
+- **诚实性红线**：远端节点经在线预检判定离线时直接注入 `profile.agents-unavailable` 显式说明（不进入远程执行通道阻塞等待）；权限、连接中断等真实读取失败同样注入该段并附错误码与脱敏后的错误消息，绝不静默降级为「文件不存在」；
+- **机密与上限防线**：内容与错误消息注入前先经宿主全局脱敏（工作区文件可能意外包含机密明文）；超过 64000 字符上限时截取前缀并附显式截断说明，绝不静默截断。
 
 `profile.catalog` 的注入钩子以低于默认值的 priority（-100）运行，确保在默认优先级的工具剥离钩子（如 superagent 路由模式收敛、`builtin:workflow` 对达到层级上限的受管子代理剥离派工工具）之后、按届时的实际 `turn.tools` 决定注入与否——没有可用派工工具的回合不注入目录，避免教唆模型调用不存在的工具。不按 `parentConversationId` 一刀切排除（fork 会话或 SuperAgent 驻留 Worker 同样有父链，但只要当回合仍持有派工工具即保留完整协作能力）。
 

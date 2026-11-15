@@ -5,7 +5,9 @@
  * - 启动自举系统级内置技能 skills/helm-cli（受管覆盖）与默认 assistant
  *   Profile 的托管元数据；
  * - before_turn 注入 profile.system（SYSTEM.md）、profile.skills（可用技能
- *   目录）与 profile.assets-missing（SYSTEM.md 缺失告警）；
+ *   目录）、profile.assets-missing（SYSTEM.md 缺失告警）与 profile.agents /
+ *   profile.agents-unavailable（工作区 AGENTS.md 项目约定，读取失败或远端
+ *   节点离线时显式说明，绝不静默降级）；
  * - 低优先级 before_turn（在默认优先级的工具剥离钩子之后运行）按当回合
  *   实际 turn.tools 注入 profile.catalog（跨 Profile 协作目录；派工工具被
  *   剥离的叶子子代理不注入、builtin:workflow 停用时无派工工具则不注入）；
@@ -26,6 +28,7 @@ import {
   toCatalogEntry,
   type ProfileCatalogEntry,
 } from './profile/catalog.js';
+import { computeAgentsMdSection } from './profile/agents-md.js';
 
 const DEFAULT_PROFILE_ID = 'assistant';
 
@@ -35,6 +38,13 @@ export {
   PROFILE_MANAGED_BY,
   renderSkillTemplate,
 } from './profile/assets.js'
+export {
+  AGENTS_MD_FILENAME,
+  MAX_AGENTS_MD_CHARS,
+  computeAgentsMdSection,
+  type AgentsMdHostPort,
+  type AgentsMdInjection,
+} from './profile/agents-md.js'
 export {
   PROFILE_SUMMARY_MAX_CODEPOINTS,
   activeRuntimeKinds,
@@ -147,9 +157,13 @@ export function createProfilePlugin(): PluginDefinition {
 
       ctx.hook.onBeforeTurn(async (turn) => {
         const profileId = turn.conversation.profileId;
-        const [rawSystem, available] = await Promise.all([
+        // 工作区 AGENTS.md（项目级约定）与人格/技能并行读取：每回合实时重读，
+        // 文件修改下一回合即时生效；读取失败或远端节点离线的显式说明策略
+        // 见 profile/agents-md.ts（诚实性：缺失属常态静默跳过，故障不吞）。
+        const [rawSystem, available, agentsMd] = await Promise.all([
           readSystemOrEmpty(profileId),
           listAvailableSkills(profileId),
+          computeAgentsMdSection(ctx.host, turn.conversation.nodeId, turn.conversation.cwd),
         ]);
         const sections = [...turn.sections];
         if (rawSystem.trim()) sections.push({ id: 'profile.system', text: rawSystem });
@@ -165,6 +179,8 @@ export function createProfilePlugin(): PluginDefinition {
             ].join('\n'),
           });
         }
+        // 工作区项目约定紧随人格资产、先于技能目录注入。
+        if (agentsMd.kind === 'section') sections.push({ id: agentsMd.id, text: agentsMd.text });
         if (available.length) {
           const catalog = available.map((skill) =>
             `<skill id="${escapeXml(skill.id)}"><name>${escapeXml(skill.name)}</name><description>${escapeXml(skill.description ?? '')}</description><references>${skill.references.map(escapeXml).join(', ')}</references></skill>`,
