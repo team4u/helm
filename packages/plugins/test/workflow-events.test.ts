@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
@@ -110,11 +110,18 @@ test('节点更新跨过 250ms 窗口时仍发布合法 run 信封，不把成�
 test('启动恢复中断的 run 时发布合法 workflow.updated 信封', { timeout: 60_000 }, async (t) => {
   const env = makeEnv(t, async () => '未调用')
   const id = 'wf_interrupted'
-  env.state.set('workflow/runs', [{ id, conversationId: 1, createdAt: 1 }])
-  env.state.set(`workflow/run/${id}`, {
-    id, name: 'interrupted', conversationId: 1, status: 'running', createdAt: 1,
-    updatedAt: 1, journalPath: join(env.dataDir, 'unused.workflow.jsonl'),
-  })
+  // 新契约：records doc 只存轻量索引，完整体在 dataDir/artifacts/<convId>/workflow-<runId>.record.json。
+  env.state.set('workflow/runs', [{ id, conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
+  const artifactsDir = join(env.dataDir, 'artifacts', '1')
+  mkdirSync(artifactsDir, { recursive: true })
+  writeFileSync(
+    join(artifactsDir, `workflow-${id}.record.json`),
+    JSON.stringify({
+      id, name: 'interrupted', conversationId: 1, status: 'running', createdAt: 1,
+      updatedAt: 1, journalPath: join(env.dataDir, 'unused.workflow.jsonl'),
+    }),
+    'utf8',
+  )
   await env.service.init()
   assert.equal(env.service.getRun(id).status, 'failed')
   assert.equal(env.updates.length, 1)

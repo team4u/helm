@@ -25,7 +25,7 @@
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it, test } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -44,6 +44,26 @@ import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin
 import { createPluginBuildProvider } from '@helm/plugin-build'
 
 const timeout = { timeout: 60_000 } as const
+
+/** 新契约辅助：完整 RunRecord 在 dataDir/artifacts/<convId>/workflow-<runId>.record.json。 */
+function recordFileOf(dataDir: string, runId: string, conversationId = 1): string {
+  return join(dataDir, 'artifacts', String(conversationId), `workflow-${runId}.record.json`)
+}
+
+function readRecordFile(dataDir: string, runId: string, conversationId = 1): Record<string, unknown> {
+  return JSON.parse(readFileSync(recordFileOf(dataDir, runId, conversationId), 'utf-8'))
+}
+
+function writeRecordFile(dataDir: string, record: Record<string, unknown>): void {
+  const dir = join(dataDir, 'artifacts', String(record['conversationId']))
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, `workflow-${String(record['id'])}.record.json`), JSON.stringify(record), 'utf8')
+}
+
+/** 插件引擎的真实 dataDir：PluginHost 会为每个插件派生 <host>/plugins/<pluginId> 命名空间。 */
+function pluginEngineDataDir(hostDataDir: string): string {
+  return join(hostDataDir, 'plugins', 'builtin%3Aworkflow')
+}
 
 /** 内存会话文档存储（workflow 插件 runs 分片用；与真实契约同键语义）。 */
 const memorySessionDocData = new Map<string, string>()
@@ -157,8 +177,8 @@ async function runTwoSettledRuns(dataDir: string, state: WorkflowStateStore): Pr
 }
 
 /**
- * 在插件 records 文档存储上重建两个终态 run（直接实例化引擎写入同构
- * PluginDocStore，再把键值复制进目标 store；用于 PluginHost 级损坏注入测试）。
+ * 在插件 records 文档存储上重建两个终态 run：记录文件直接落在目标引擎
+ * dataDir（与 PluginHost 同目录），索引写入 records doc。
  */
 async function seedRecordsDocInto(
   store: { set(key: string, value: unknown): void },
@@ -239,22 +259,48 @@ describe('WorkflowService listRuns integrity', () => {
   })
 
   it('index shape violations (non-array / null / null-item / bad fields) fail as workflow_index_corrupt with key + identifiable runId', timeout, async () => {
+    const entry = (over: Record<string, unknown>): unknown => ({
+      id: 'wf_aaaaaaaaaaaa',
+      conversationId: 1,
+      status: 'completed',
+      createdAt: 1,
+      updatedAt: 1,
+      ...over,
+    })
     const cases: Array<{ name: string; value: unknown; wantRunId: string; wantProblem: string }> = [
       { name: 'null 索引', value: null, wantRunId: '#root', wantProblem: '索引非数组' },
       { name: '对象伪装索引', value: { 0: {} }, wantRunId: '#root', wantProblem: '索引非数组' },
-      { name: 'null 项', value: [{ id: 'wf_aaaaaaaaaaaa', conversationId: 1, createdAt: 1 }, null], wantRunId: '#1', wantProblem: '第 1 项非对象' },
-      { name: 'id 非字符串', value: [{ id: 42, conversationId: 1, createdAt: 1 }], wantRunId: '#0', wantProblem: 'id 非字符串' },
+      { name: 'null 项', value: [entry({}), null], wantRunId: '#1', wantProblem: '第 1 项非对象' },
+      { name: 'id 非字符串', value: [entry({ id: 42 })], wantRunId: '#0', wantProblem: 'id 非字符串' },
       {
         name: 'conversationId 非法',
-        value: [{ id: 'wf_bbbbbbbbbbbb', conversationId: 0, createdAt: 1 }],
+        value: [entry({ id: 'wf_bbbbbbbbbbbb', conversationId: 0 })],
         wantRunId: 'wf_bbbbbbbbbbbb',
         wantProblem: 'conversationId 非正整数',
       },
       {
+        name: 'status 非法',
+        value: [entry({ id: 'wf_b0b0b0b0b0b0', status: 'weird' })],
+        wantRunId: 'wf_b0b0b0b0b0b0',
+        wantProblem: 'status 非法',
+      },
+      {
         name: 'createdAt 非法',
-        value: [{ id: 'wf_cccccccccccc', conversationId: 1, createdAt: 'soon' }],
+        value: [entry({ id: 'wf_cccccccccccc', createdAt: 'soon' })],
         wantRunId: 'wf_cccccccccccc',
         wantProblem: 'createdAt 非有限数值',
+      },
+      {
+        name: 'updatedAt 非法',
+        value: [entry({ id: 'wf_d0d0d0d0d0d0', updatedAt: null })],
+        wantRunId: 'wf_d0d0d0d0d0d0',
+        wantProblem: 'updatedAt 非有限数值',
+      },
+      {
+        name: 'autoResumeCount 非法',
+        value: [entry({ id: 'wf_e0e0e0e0e0e0', autoResumeCount: -1 })],
+        wantRunId: 'wf_e0e0e0e0e0e0',
+        wantProblem: 'autoResumeCount 非负整数',
       },
     ]
     for (const c of cases) {
@@ -331,13 +377,23 @@ describe('WorkflowService listRuns integrity', () => {
     await service.close()
   })
 
-  it('loadRecord tolerates non-object stored values: string corrupt, never TypeError; 404 preserved', timeout, async () => {
+  it('record file corruption (invalid JSON / non-object) fails as workflow_record_corrupt, never TypeError; 404 preserved for unknown id', timeout, async () => {
     const state = makeStateStore()
     const service = await runTwoSettledRuns(dataDir, state)
     const index = state.get<Array<{ id: string }>>('workflow/runs', [])
     const victim = index[0]!.id
-    // 键下是字符串（store 返回非对象非 null）：损坏，不是 TypeError。
-    state.set(`workflow/run/${victim}`, 'garbage')
+    // 记录文件被外部写成非 JSON 文本：损坏，不是 TypeError。
+    writeFileSync(recordFileOf(dataDir, victim), 'garbage', 'utf8')
+    assert.throws(
+      () => service.getRun(victim),
+      (error: unknown) => {
+        assert.ok(error instanceof HelmError)
+        assert.equal(error.code, 'workflow_record_corrupt')
+        return true
+      },
+    )
+    // 记录文件是合法 JSON 但非对象（数组）：损坏。
+    writeFileSync(recordFileOf(dataDir, victim), '[]', 'utf8')
     assert.throws(
       () => service.getRun(victim),
       (error: unknown) => {
@@ -347,10 +403,9 @@ describe('WorkflowService listRuns integrity', () => {
         return true
       },
     )
-    // 键下是 null（真实 documentStore 存 JSON null 读回 null）：不存在，404。
-    state.set(`workflow/run/${victim}`, null)
+    // 索引中不存在的 run：404（不是服务故障）。
     assert.throws(
-      () => service.getRun(victim),
+      () => service.getRun('wf_nosuchrun0000'),
       (error: unknown) => {
         assert.ok(error instanceof HelmError)
         assert.equal(error.code, 'not_found')
@@ -358,31 +413,22 @@ describe('WorkflowService listRuns integrity', () => {
         return true
       },
     )
-    // 普通 getRun 不存在保持 404。
-    assert.throws(
-      () => service.getRun('wf_nosuchrun0000'),
-      (error: unknown) => {
-        assert.ok(error instanceof HelmError)
-        assert.equal(error.code, 'not_found')
-        return true
-      },
-    )
     await service.close()
   })
 
-  it('index entry pointing at a missing record fails explicitly (no silent short list)', timeout, async () => {
+  it('index entry pointing at a missing record file fails explicitly (no silent short list)', timeout, async () => {
     const state = makeStateStore()
     const service = await runTwoSettledRuns(dataDir, state)
-    // 模拟索引指向缺失记录：删掉 store 中的 record doc（外部删改）。
+    // 模拟索引指向缺失记录文件（外部删改）。
     const index = state.get<Array<{ id: string }>>('workflow/runs', [])
     assert.equal(index.length, 2)
     const victim = index[0]!.id
-    state.map.delete(`workflow/run/${victim}`)
+    unlinkSync(recordFileOf(dataDir, victim))
     assert.throws(
       () => service.listRuns(),
       (error: unknown) => {
         assert.ok(error instanceof HelmError, `expect HelmError, got: ${String(error)}`)
-        assert.equal(error.code, 'workflow_index_corrupt')
+        assert.equal(error.code, 'workflow_record_corrupt')
         assert.equal(error.status, 500)
         assert.equal((error as HelmError).details && (error.details as { runId?: string }).runId, victim)
         assert.ok(error.message.includes(victim), 'diagnostic names the runId')
@@ -392,47 +438,44 @@ describe('WorkflowService listRuns integrity', () => {
     await service.close()
   })
 
-  it('index entry whose stored record carries a different id fails explicitly', timeout, async () => {
+  it('record file carrying a different id fails explicitly', timeout, async () => {
     const state = makeStateStore()
     const service = await runTwoSettledRuns(dataDir, state)
     const index = state.get<Array<{ id: string }>>('workflow/runs', [])
     const victim = index[1]!.id
-    const record = state.get<Record<string, unknown> | null>(`workflow/run/${victim}`, null)
+    const record = readRecordFile(dataDir, victim)
     assert.ok(record !== null)
-    // 键下躺着别的 run 的 record（id 不符）。
-    state.set(`workflow/run/${victim}`, { ...record, id: 'wf_someother9999' })
+    // 文件里躺着别的 run 的 record（id 不符；写到 victim 路径，内容 id 篡改）。
+    writeFileSync(recordFileOf(dataDir, victim), JSON.stringify({ ...record, id: 'wf_someother9999' }), 'utf8')
     assert.throws(
       () => service.listRuns(),
       (error: unknown) => {
         assert.ok(error instanceof HelmError)
-        assert.equal(error.code, 'workflow_index_corrupt')
+        assert.equal(error.code, 'workflow_record_corrupt')
         assert.equal((error.details as { runId?: string }).runId, victim)
         return true
       },
     )
-    // 单 run 语境：loadRecord 的 id 不符仍按 not_found（404）报——列表语境
-    // 才升级为索引损坏。
     assert.throws(
       () => service.getRun(victim),
       (error: unknown) => {
         assert.ok(error instanceof HelmError)
-        assert.equal(error.code, 'not_found')
+        assert.equal(error.code, 'workflow_record_corrupt')
         return true
       },
     )
     await service.close()
   })
 
-  it('record with invalid shape (status out of enum / missing name) fails as workflow_record_corrupt', timeout, async () => {
+  it('record file with invalid shape (status out of enum / missing name) fails as workflow_record_corrupt', timeout, async () => {
     const state = makeStateStore()
     const service = await runTwoSettledRuns(dataDir, state)
     const index = state.get<Array<{ id: string }>>('workflow/runs', [])
     const victim = index[0]!.id
-    const record = state.get<Record<string, unknown> | null>(`workflow/run/${victim}`, null)
-    assert.ok(record !== null)
+    const record = readRecordFile(dataDir, victim)
 
     // status 越界：TS 强转旧实现会造出 status:"weird" 的伪摘要。
-    state.set(`workflow/run/${victim}`, { ...record, status: 'weird' })
+    writeRecordFile(dataDir, { ...record, status: 'weird' })
     assert.throws(
       () => service.getRun(victim),
       (error: unknown) => {
@@ -454,7 +497,9 @@ describe('WorkflowService listRuns integrity', () => {
     )
 
     // 必需字段缺失（name 没了）。
-    state.set(`workflow/run/${victim}`, { ...record, status: 'completed', name: undefined })
+    const nameless = { ...record, status: 'completed' } as Record<string, unknown>
+    delete nameless['name']
+    writeRecordFile(dataDir, nameless)
     assert.throws(
       () => service.listRuns(),
       (error: unknown) => {
@@ -471,22 +516,21 @@ describe('WorkflowService listRuns integrity', () => {
     const service = await runTwoSettledRuns(dataDir, state)
     const index = state.get<Array<{ id: string }>>('workflow/runs', [])
     const victim = index[0]!.id
-    // IO 故障注入：新 service 用「读取该 run doc 即抛错」的 store（真实
-    // documentStore 损坏同路径），其余数据从原 store 复制。
-    const failing = makeFailingGetStore([`workflow/run/${victim}`])
+    // IO 故障注入：新 service 用「读取索引即抛错」的 store（真实 documentStore
+    // 损坏同路径），其余数据从原 store 复制。索引是 records doc 的唯一入口。
+    const failing = makeFailingGetStore(['workflow/runs'])
     for (const [k, v] of state.map) failing.map.set(k, v)
     const failingService = new WorkflowService({ dataDir, host: makeServiceHost(), state: failing })
     assert.throws(
       () => failingService.listRuns(),
       (error: unknown) => {
         assert.ok(error instanceof HelmError)
-        assert.equal(error.code, 'workflow_record_corrupt', 'store 抛错直接以记录级 corrupt 信封透传')
+        assert.equal(error.code, 'workflow_index_corrupt', 'listRuns 索引读失败以索引级 corrupt 信封透传')
         assert.ok(error.message.includes('simulated store read failure'), `cause surfaced: ${error.message}`)
-        assert.equal((error.details as { runId?: string }).runId, victim)
         return true
       },
     )
-    // 单 run 语境同样显式（不吞成 not_found）。
+    // 单 run 语境同样显式（不吞成 not_found），带 runId 诊断。
     assert.throws(
       () => failingService.getRun(victim),
       (error: unknown) => {
@@ -499,17 +543,20 @@ describe('WorkflowService listRuns integrity', () => {
     await service.close()
   })
 
-  it('restart (init) over an index entry with missing record does not mask later listRuns failure', timeout, async () => {
-    // init 恢复只关心 running 记录；索引损坏仍由 listRuns 显式报错——两条
-    // 路径互不掩盖。这里保证 init 不抛、不删除索引（诊断面留给 listRuns）。
+  it('restart (init) over an index entry with missing record file blocks recovery explicitly (no silent skip)', timeout, async () => {
+    // 索引指向缺失记录文件 = 持久层不一致：init 显式阻断（与 prepareRecovery 同
+    // 纪律——恢复屏障不被带病启动），不删除索引、不静默跳过；诊断面留给调用方。
     const state = makeStateStore()
     const service = await runTwoSettledRuns(dataDir, state)
     const index = state.get<Array<{ id: string; conversationId: number; createdAt: number }>>('workflow/runs', [])
     const victim = index[0]!.id
-    state.map.delete(`workflow/run/${victim}`)
+    unlinkSync(recordFileOf(dataDir, victim))
     const revived = new WorkflowService({ dataDir, host: makeServiceHost(), state })
-    await revived.init() // 记录缺失不炸 init（恢复只处理存在的 running 记录）
-    assert.throws(() => revived.listRuns(), /workflow_index_corrupt|工作流 run 索引损坏/)
+    await assert.rejects(() => revived.init(), (error: unknown) => {
+      assert.ok(error instanceof HelmError)
+      assert.equal(error.code, 'workflow_record_corrupt')
+      return true
+    })
     const after = state.get<Array<{ id: string }>>('workflow/runs', [])
     assert.equal(after.length, 2, 'index is not silently pruned')
     await revived.close()
@@ -595,7 +642,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
       deletePlugin: () => {},
       flush: async () => {},
     }
-    const index = await seedRecordsDocInto(docsStore, join(dataDir, 'corrupt-index-seed'))
+    const index = await seedRecordsDocInto(docsStore, pluginEngineDataDir(join(dataDir, 'corrupt-index-plugins')))
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir: join(dataDir, 'corrupt-index-plugins'),
       host: makeBackend(),
@@ -603,7 +650,8 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
       sessionDocs: memorySessionDocs,
     })
     await host.register(createWorkflowPlugin())
-    delete recordsDoc[`workflow/run/${index[0]!.id}`]
+    // 注册后删除一条记录文件（模拟外部损坏）：索引指向缺失文件 → 500，绝非短列表 200。
+    unlinkSync(recordFileOf(pluginEngineDataDir(join(dataDir, 'corrupt-index-plugins')), index[0]!.id))
     const handler = createHubHandler(
       { dataDir, auth, events: new NoopEventHub(), plugins: host } as unknown as KernelRuntimeLike,
     )
@@ -614,9 +662,9 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
         body: JSON.stringify({ input: {} }),
       }),
     )
-    assert.equal(res.status, 500, 'index corruption must be a server error, not a short 200 list')
+    assert.equal(res.status, 500, 'record corruption must be a server error, not a short 200 list')
     const body = (await res.json()) as { error: { code: string; details?: { runId?: string } } }
-    assert.equal(body.error.code, 'workflow_index_corrupt')
+    assert.equal(body.error.code, 'workflow_record_corrupt')
     await host.dispose()
   })
 
@@ -634,7 +682,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
       deletePlugin: () => {},
       flush: async () => {},
     }
-    const index = await seedRecordsDocInto(docsStore, join(dataDir, 'corrupt-record-seed'))
+    const index = await seedRecordsDocInto(docsStore, pluginEngineDataDir(join(dataDir, 'corrupt-record-plugins')))
     const victim = index[0]!.id
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
       dataDir: join(dataDir, 'corrupt-record-plugins'),
@@ -645,8 +693,12 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
     await host.register(createWorkflowPlugin())
     // 注册后（prepare 已通过）再注入损坏：模拟持久层外部篡改，验证 HTTP
     // 动作边界的显式 500（不是短列表或假成功）。
-    const record = recordsDoc[`workflow/run/${victim}`] as Record<string, unknown>
-    recordsDoc[`workflow/run/${victim}`] = { ...record, status: 42 }
+    const record = readRecordFile(pluginEngineDataDir(join(dataDir, 'corrupt-record-plugins')), victim)
+    writeFileSync(
+      recordFileOf(pluginEngineDataDir(join(dataDir, 'corrupt-record-plugins')), victim),
+      JSON.stringify({ ...record, status: 42 }),
+      'utf8',
+    )
     const handler = createHubHandler(
       { dataDir, auth, events: new NoopEventHub(), plugins: host } as unknown as KernelRuntimeLike,
     )
@@ -737,12 +789,9 @@ test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码�
     assert.equal(healthy.code, 0, `healthy list should exit 0: ${healthy.err}`)
     assert.equal((JSON.parse(healthy.out) as { runs: unknown[] }).runs.length, 2)
 
-    // 注入索引损坏：从插件 records 文档中删一条 run 记录（模拟外部损坏）。
-    // 引擎 state 现住在插件私有 doc（PluginDocStore 键 builtin:workflow:records，
-    // 即 state.sqlite helm_plugin_docs 插件命名空间），不再是 __global documentStore。
-    // 经第二连接直改 SQLite 行：真实外部损坏路径（进程内 store 镜像与库同步
-    // 更新会在下次 get 重读时按存储值反序列化——HelmStore.getPluginDoc 每次读
-    // 内存镜像，放这里改为写库 + 内存镜像同键，双通道保持一致）。
+    // 注入记录损坏：删除一条记录文件（模拟外部删改；索引指向缺失文件）。
+    // 引擎记录文件在 <dataDir>/artifacts/<convId>/workflow-<runId>.record.json，
+    // records doc 只存轻量索引。
     const runsList = (await plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: Array<{ id: string }> }
     assert.equal(runsList.runs.length, 2)
     const victim = runsList.runs[0]!.id
@@ -751,8 +800,18 @@ test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码�
     }).documentStore
     const records = documentStore.get<Record<string, unknown>>('builtin:workflow:records', {})
     assert.ok(Object.keys(records).length > 0, '插件 records 文档必须已持久化')
-    delete records[`workflow/run/${victim}`]
-    documentStore.set('builtin:workflow:records', records)
+    // 插件引擎 dataDir 由 PluginHost 派生（真实布局随宿主版本）：按文件名在
+    // dataDir 下递归定位，删真实文件注入外部损坏。
+    let recordFile = ''
+    const locate = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === `workflow-${victim}.record.json`) recordFile = join(dir, entry.name)
+        else if (entry.isDirectory() && entry.name !== 'cli-home') locate(join(dir, entry.name))
+      }
+    }
+    locate(dataDir)
+    assert.ok(recordFile !== '', `记录文件必须存在于 dataDir 下（runId=${victim}）`)
+    unlinkSync(recordFile)
 
     const broken = await runCliChild(['workflows', 'runs', '--json'], {
       ...process.env,
@@ -760,8 +819,8 @@ test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码�
       HELM_DATA_DIR: join(dataDir, 'cli-home'),
       HELM_TOKEN: userToken,
     })
-    assert.notEqual(broken.code, 0, 'corrupt index must make CLI exit non-zero')
-    assert.ok(broken.err.includes('workflow_index_corrupt'), `stderr should carry the error code: ${broken.err}`)
+    assert.notEqual(broken.code, 0, 'corrupt record must make CLI exit non-zero')
+    assert.ok(broken.err.includes('workflow_record_corrupt'), `stderr should carry the error code: ${broken.err}`)
     assert.ok(broken.err.includes(victim), `stderr should name the runId: ${broken.err}`)
     assert.ok(!broken.out.includes('[{'), 'CLI must not print a fake successful list')
   } finally {

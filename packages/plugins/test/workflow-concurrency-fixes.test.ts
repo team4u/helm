@@ -258,12 +258,18 @@ describe('run 注册时序（done gate）', timeout, () => {
   it('启动窗口内 wait() 不得假返回：放行 running 快照后才拿真实结果', timeout, async () => {
     const host = makeServiceHost()
     const state = makeGatedSnapshotStore()
-    // 从 running 快照 writeRecord 捕获 runId（run() 在 flush 挂起期间尚未返回）。
+    // 从 running 快照的索引写入捕获 runId（records doc 只存轻量索引；
+    // run() 在 flush 挂起期间尚未返回）。
     let runId = ''
+    const captureFromIndex = (key: string, value: unknown): void => {
+      if (runId !== '' || key !== 'workflow/runs' || !Array.isArray(value)) return
+      const last = (value as Array<{ id?: string }>)[value.length - 1]
+      if (typeof last?.id === 'string') runId = last.id
+    }
     const capturing: WorkflowStateStore = {
       get: state.get,
       set(key, value) {
-        if (runId === '' && key.startsWith('workflow/run/')) runId = key.slice('workflow/run/'.length)
+        captureFromIndex(key, value)
         state.set(key, value)
       },
       flush: async () => {
@@ -291,10 +297,15 @@ describe('run 注册时序（done gate）', timeout, () => {
     const host = makeServiceHost()
     const state = makeGatedSnapshotStore()
     let runId = ''
+    const captureFromIndex = (key: string, value: unknown): void => {
+      if (runId !== '' || key !== 'workflow/runs' || !Array.isArray(value)) return
+      const last = (value as Array<{ id?: string }>)[value.length - 1]
+      if (typeof last?.id === 'string') runId = last.id
+    }
     const capturing: WorkflowStateStore = {
       get: state.get,
       set(key, value) {
-        if (runId === '' && key.startsWith('workflow/run/')) runId = key.slice('workflow/run/'.length)
+        captureFromIndex(key, value)
         state.set(key, value)
       },
       flush: async () => {

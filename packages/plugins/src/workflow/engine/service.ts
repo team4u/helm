@@ -67,7 +67,7 @@ import {
   type WorkflowSaveRequest,
   type WorkflowSaveResult,
 } from '../../contracts.js'
-import { JournalWriter, readJournal, type WorkflowJournalEntry } from './journal.js'
+import { JournalWriter, readJournal, redactJournalEntry, type WorkflowJournalEntry } from './journal.js'
 import { extractMeta, hasMetaDeclaration, type WorkflowMeta } from './meta.js'
 import { collapse, type WorkflowEntry } from './progress.js'
 import { isAbsoluteTargetPath, redactJsonValue } from '@helm/protocol'
@@ -218,8 +218,6 @@ export interface WorkflowServiceOptions {
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 const INDEX_KEY = 'workflow/runs'
-const runKey = (runId: string) => `workflow/run/${runId}`
-
 /** run id：wf_ + 12 hex（沿用上游格式便于识别）。 */
 function newRunId(): string {
   return `wf_${randomUUID().replaceAll('-', '').slice(0, 12)}`
@@ -228,7 +226,15 @@ function newRunId(): string {
 interface RunIndexEntry {
   id: string
   conversationId: number
+  status: WorkflowRunStatus
   createdAt: number
+  updatedAt: number
+  /** 后台启动标记（resume 新 run 继承；诊断/探针判定用）。 */
+  notifyParentOnSettle?: boolean
+  /** 当前累计自动续跑次数（初始缺省 = 0；每次 resumeFromRunId 接管时 +1）。 */
+  autoResumeCount?: number
+  /** 已接替本失败 run 的新 run ID（防重复续跑；缺省 = 未被接管）。 */
+  resumedByRunId?: string
 }
 
 /** state store 中的每 run 完整 doc（summary + 恢复所需书目信息）。 */
@@ -282,6 +288,10 @@ interface RunRecord {
    * 坐标——真实 run 运行期 nodes 要到 settleRun 才落盘，不能作为恢复依据。
    */
   childConversationIds?: number[]
+  /** 当前累计自动续跑次数（resume 接管时 +1；与索引同步）。 */
+  autoResumeCount?: number
+  /** 已接替本失败 run 的新 run ID（防重复续跑；与索引同步）。 */
+  resumedByRunId?: string
 }
 
 /** 持久层读出的错误可打印形态（store 异常诊断用）。 */
@@ -290,10 +300,10 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * run 索引最低限度形状校验：非数组、null 项、id/conversationId/createdAt
- * 非法都是持久层损坏（旧实现对每项直接 entry.id 访问，null 项会 TypeError）。
- * 只校验现行 RunIndexEntry 契约，无旧格式适配。合法返回 undefined；损坏
- * 返回问题描述 + 可辨识 runId（id 非法时用 `#位置` 定位）。
+ * run 索引最低限度形状校验：非数组、null 项、必需字段非法都是持久层损坏
+ * （旧实现对每项直接 entry.id 访问，null 项会 TypeError）。只校验现行
+ * RunIndexEntry 契约，无旧格式适配。合法返回 undefined；损坏返回问题描述
+ * + 可辨识 runId（id 非法时用 `#位置` 定位）。
  */
 function runIndexProblem(raw: unknown): { problem: string; runId: string } | undefined {
   if (!Array.isArray(raw)) return { problem: `索引非数组（${raw === null ? 'null' : typeof raw}）`, runId: '#root' }
@@ -311,8 +321,26 @@ function runIndexProblem(raw: unknown): { problem: string; runId: string } | und
     if (!Number.isInteger(e['conversationId']) || (e['conversationId'] as number) < 1) {
       return { problem: `第 ${i} 项 conversationId 非正整数`, runId }
     }
+    if (!RUN_STATUSES.includes(e['status'] as WorkflowRunStatus)) {
+      return { problem: `第 ${i} 项 status 非法（${JSON.stringify(e['status'])}）`, runId }
+    }
     if (typeof e['createdAt'] !== 'number' || !Number.isFinite(e['createdAt'])) {
       return { problem: `第 ${i} 项 createdAt 非有限数值`, runId }
+    }
+    if (typeof e['updatedAt'] !== 'number' || !Number.isFinite(e['updatedAt'])) {
+      return { problem: `第 ${i} 项 updatedAt 非有限数值`, runId }
+    }
+    if (e['notifyParentOnSettle'] !== undefined && typeof e['notifyParentOnSettle'] !== 'boolean') {
+      return { problem: `第 ${i} 项 notifyParentOnSettle 非布尔`, runId }
+    }
+    if (
+      e['autoResumeCount'] !== undefined &&
+      (!Number.isInteger(e['autoResumeCount']) || (e['autoResumeCount'] as number) < 0)
+    ) {
+      return { problem: `第 ${i} 项 autoResumeCount 非负整数`, runId }
+    }
+    if (e['resumedByRunId'] !== undefined && (typeof e['resumedByRunId'] !== 'string' || e['resumedByRunId'] === '')) {
+      return { problem: `第 ${i} 项 resumedByRunId 非非空字符串`, runId }
     }
   }
   return undefined
@@ -349,6 +377,15 @@ function runRecordProblem(record: unknown): string | undefined {
     return 'childConversationIds 非法（需正整数数组）'
   }
   if (r['error'] !== undefined && typeof r['error'] !== 'string') return 'error 非字符串'
+  if (
+    r['autoResumeCount'] !== undefined &&
+    (!Number.isInteger(r['autoResumeCount']) || (r['autoResumeCount'] as number) < 0)
+  ) {
+    return 'autoResumeCount 非负整数'
+  }
+  if (r['resumedByRunId'] !== undefined && (typeof r['resumedByRunId'] !== 'string' || r['resumedByRunId'] === '')) {
+    return 'resumedByRunId 非非空字符串'
+  }
   return undefined
 }
 
@@ -390,6 +427,19 @@ const PROGRESS_PERSIST_INTERVAL_MS = 1_000
 
 /** workflow.updated 节点事件最小间隔：有界频率，但节点开始/结束强制推送。 */
 const NODE_EVENT_INTERVAL_MS = 250
+
+/**
+ * 进度树长文本预览上限（§4.3）：完整内容已在子会话与 .jsonl 账本，进度文档
+ * 只存预览，防止千级节点把 sessionDoc/runs 撑到 2 MiB 上限（413）。
+ */
+const NODE_TEXT_PREVIEW_LIMIT = 1024
+const NODE_TRUNCATION_HINT = '\n...[truncated, full content in conversation/journal]'
+
+function nodeTextPreview(text: string): string {
+  return text.length > NODE_TEXT_PREVIEW_LIMIT
+    ? text.slice(0, NODE_TEXT_PREVIEW_LIMIT) + NODE_TRUNCATION_HINT
+    : text
+}
 
 /** 真实文件事实（mtime 毫秒 + 字节数）；读取失败显式抛 io_error。 */
 function fileStatsOf(path: string): { updatedAt: number; size: number } {
@@ -552,8 +602,15 @@ export class WorkflowService {
         // 下次 init 重试）。
         const pendingNotifies: Array<() => Promise<void>> = []
         for (const entry of index) {
-          const record = this.state.get<RunRecord | null>(runKey(entry.id), null)
-          if (record === null) continue
+          let record: RunRecord
+          try {
+            record = this.loadRecord(entry.id)
+          } catch (error) {
+            // 记录缺失（索引残留）：恢复只处理真实存在的记录；索引损坏诊断
+            // 留给 listRuns（与 prepareRecovery 同契约，绝不删除索引掩盖）。
+            if (error instanceof HelmError && error.code === 'not_found') continue
+            throw error
+          }
           if (
             record.notifyParentOnSettle === true &&
             record.status !== 'running' &&
@@ -598,7 +655,7 @@ export class WorkflowService {
               ? { ...node, status: 'failed', settledAt: record.updatedAt, error: record.error }
               : node)
           }
-          this.state.set(runKey(entry.id), record)
+          this.writeRecord(record)
           changed = true
           // interrupted 的后台 run（subagent 与后台 workflow）同样须补发通知
           //（通知内容即 failed 终态本身）。
@@ -980,7 +1037,7 @@ export class WorkflowService {
         // init() 已把跨重启 running 标 failed；此处 running 只可能是同进程旧状态。
         replayFrom.status = 'failed'
         replayFrom.error = 'run interrupted（账本完好，可经 resumeFromRunId 恢复）'
-        this.state.set(runKey(replayFrom.id), replayFrom)
+        this.writeRecord(replayFrom)
         await this.state.flush?.()
       }
       if (this.active.has(replayFrom.id)) {
@@ -1106,6 +1163,26 @@ export class WorkflowService {
       }
     }
 
+    // --- resume 接管（§3.2）：账本可安全重放已验证，新 run 建立即标记原 run
+    // 被接管（防重复续跑，重复 resume 显式 409），并让新记录继承
+    // notifyParentOnSettle、累计 autoResumeCount +1。接管标记先于新 run 快照
+    // 落盘：进程死在两写之间只会留下「指向不存在 run 的接管标记」（诊断
+    // 可见），不会出现双 run 同时可续跑。
+    if (replayFrom !== undefined) {
+      if (replayFrom.resumedByRunId !== undefined) {
+        throw new HelmError(
+          'conflict',
+          `工作流 ${replayFrom.id} 已被运行 ${replayFrom.resumedByRunId} 接管续跑；请从接管的 run 继续`,
+          409,
+          { runId: replayFrom.id, resumedByRunId: replayFrom.resumedByRunId },
+        )
+      }
+      replayFrom.resumedByRunId = runId
+      replayFrom.updatedAt = Date.now()
+      this.writeRecord(replayFrom)
+      await this.state.flush?.()
+    }
+
     const abort = new AbortController()
     const createdAt = Date.now()
     const meta = this.peekMeta(script)
@@ -1120,8 +1197,12 @@ export class WorkflowService {
       updatedAt: createdAt,
       kind: 'workflow',
       // 后台启动（工具 background）：结算后向父会话投递通知并参与重启恢复
-      // 的守卫中止（isBackgroundRecord）；同步 run 不置位、不通知。
-      ...(context?.notifyParentOnSettle === true ? { notifyParentOnSettle: true } : {}),
+      // 的守卫中止（isBackgroundRecord）；同步 run 不置位、不通知。resume 新
+      // run 继承原记录的后台标记（自动续跑保持父会话通知链路）。
+      ...(context?.notifyParentOnSettle === true || replayFrom?.notifyParentOnSettle === true
+        ? { notifyParentOnSettle: true }
+        : {}),
+      ...(replayFrom !== undefined ? { autoResumeCount: (replayFrom.autoResumeCount ?? 0) + 1 } : {}),
       ...(meta?.description !== undefined ? { description: this.redact(meta.description) } : {}),
       ...(meta?.phases !== undefined
         ? { phases: redactJsonValue(meta.phases, this.redact) as RunRecord['phases'] }
@@ -1301,7 +1382,7 @@ export class WorkflowService {
 
     // 先落 running 快照（state store）：进程若死于此 run，重启后 init() 显式发现并标 failed。
     try {
-      this.writeRecord(record, { index: true })
+      this.writeRecord(record)
       await this.state.flush?.()
     } catch (error) {
       // running 快照都没能落库：不启动执行，不留任何 active/writer。
@@ -1415,7 +1496,9 @@ export class WorkflowService {
           journal: {
             ...(replayEntries.length > 0 ? { entries: replayEntries } : {}),
             append: async (entry) => {
-              await run.writer.append(entry)
+              // agent 行 execution/gate（effectiveCwd、worktree 路径、gate 输出
+              // 可含机密 token）落盘前统一脱敏；幂等替换，重复脱敏无害。
+              await run.writer.append(redactJournalEntry(entry, this.redact))
             },
           },
         })
@@ -1758,7 +1841,7 @@ export class WorkflowService {
 
     // --- durable running 快照（副作用 spawnAgent 之前！）------------------
     try {
-      this.writeRecord(record, { index: true })
+      this.writeRecord(record)
       await this.state.flush?.()
     } catch (persistError) {
       this.active.delete(runId)
@@ -2331,6 +2414,27 @@ export class WorkflowService {
     /** 已 sanitized 的 gate 回报（执行环境内恰好一次执行后的结果）。 */
     let gateResult: AgentGateResult | undefined
 
+    // agent({ timeoutMs }) 单回合超时：runtime 侧 WorkflowSpawnRequest 的扩展
+    // 字段（DSL 接入由 runtime 分支落地）；服务边界按设计范围强校验。
+    const timeoutMs = this.readAgentTimeoutMs(request)
+    const timeoutSignal = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs)
+    let timedOut = false
+    if (timeoutSignal !== undefined) {
+      timeoutSignal.addEventListener(
+        'abort',
+        () => {
+          // run 级取消已另有归因；此处只记录单回合超时事实。
+          if (run.abort.signal.aborted) return
+          timedOut = true
+          // 超时即守卫中止子会话（human 红线由内核原子复核）：优先 onResolved
+          // 已回传的 conversationId，否则用本 run 内登记的 agentId 映射。
+          const childId = executionInfo?.conversationId ?? conversationByAgent.get(request.agentId)
+          if (childId !== undefined) this.abortChildConversation(run, childId)
+        },
+        { once: true },
+      )
+    }
+
     const proto: AgentSpawnRequest = {
       parentConversationId: run.conversationId,
       prompt: request.prompt,
@@ -2377,11 +2481,20 @@ export class WorkflowService {
             },
           }
         : {}),
-      signal: run.abort.signal,
+      signal: timeoutSignal === undefined ? run.abort.signal : AbortSignal.any([run.abort.signal, timeoutSignal]),
     }
 
     try {
       const raw = await this.host.spawnAgent(proto)
+      // 超时已触发：子会话已被守卫中止，迟到的返回不可信，按超时失败处理。
+      if (timedOut) {
+        return {
+          ok: false,
+          error: `[agent_timeout] 子代理 ${request.label} 回合超过 ${timeoutMs}ms 上限，已中止子会话（可凭 execution.conversationId resume 续接）`,
+          ...(executionInfo !== undefined ? { executionInfo } : {}),
+          ...(gateResult !== undefined ? { gate: gateResult } : {}),
+        }
+      }
       // native 返回：有 schema → 已校验对象（转 JSON 交引擎复核）；无 schema → 文本。
       const text = typeof raw === 'string' ? raw : JSON.stringify(raw)
       // 外部执行环境（executionId 存在）必须回报 gate；缺失即显式失败，
@@ -2400,17 +2513,45 @@ export class WorkflowService {
         ...(gateResult !== undefined ? { gate: gateResult } : {}),
       }
     } catch (error) {
-      if (error instanceof HelmError) {
-        // 错误码随消息透传（节点 error 面向用户，码即诊断锚点）。
+      // 失败分支保留已拿到的执行元数据与门禁结果：已创建的 Worktree 与
+      // conversationId 不随失败丢弃，供 agent.withMeta/goal 上报与原地 resume。
+      const retained: Pick<WorkflowSpawnResult, 'executionInfo' | 'gate'> = {
+        ...(executionInfo !== undefined ? { executionInfo } : {}),
+        ...(gateResult !== undefined ? { gate: gateResult } : {}),
+      }
+      if (timedOut) {
         return {
           ok: false,
-          error: `[${error.code}] ${error.message}`,
-          ...(gateResult !== undefined ? { gate: gateResult } : {}),
+          error: `[agent_timeout] 子代理 ${request.label} 回合超过 ${timeoutMs}ms 上限，已中止子会话（可凭 execution.conversationId resume 续接）`,
+          ...retained,
         }
       }
+      if (error instanceof HelmError) {
+        // 错误码随消息透传（节点 error 面向用户，码即诊断锚点）。
+        return { ok: false, error: `[${error.code}] ${error.message}`, ...retained }
+      }
       const message = error instanceof Error ? error.message : String(error)
-      return { ok: false, error: message }
+      return { ok: false, error: message, ...retained }
     }
+  }
+
+  /**
+   * agent({ timeoutMs }) 边界校验：runtime 侧 WorkflowSpawnRequest 扩展字段
+   * （DSL 侧由 runtime 分支接入；未携带 = 无单回合超时）。取值 1_000..
+   * 3_600_000 整数毫秒，非法显式拒绝，绝不静默锐化。
+   */
+  private readAgentTimeoutMs(request: WorkflowSpawnRequest): number | undefined {
+    const raw = (request as { timeoutMs?: unknown }).timeoutMs
+    if (raw === undefined) return undefined
+    if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1_000 || raw > 3_600_000) {
+      throw new HelmError(
+        'validation_error',
+        `agent timeoutMs 必须是 1_000..3_600_000 的整数毫秒值（收到 ${JSON.stringify(raw)}）`,
+        400,
+        { timeoutMs: raw },
+      )
+    }
+    return raw
   }
 
   /**
@@ -2662,8 +2803,14 @@ export class WorkflowService {
   // state store 读写（单库）
   // ------------------------------------------------------------------
 
-  /** 写 run doc；新 run 同时追加索引。 */
-  private writeRecord(record: RunRecord, options: { index?: boolean } = {}): void {
+  /**
+   * 写 run 记录（§4.3）：完整 RunRecord 原子落文件（.tmp + fsync + rename），
+   * records doc 只维护轻量索引（id/conversationId/status/createdAt/updatedAt/
+   * notifyParentOnSettle/autoResumeCount/resumedByRunId）。先文件后索引：
+   * 文件写失败时索引未动，不会出现索引指向缺失文件的中间态（loadRecord
+   * 对缺失文件显式报 workflow_record_corrupt，绝不假装记录存在）。
+   */
+  private writeRecord(record: RunRecord): void {
     // 活跃 run 的在途子会话以内存 Set 为唯一真源：任何写入（onResolved 即时 /
     // progress 节流 / 终态）统一从 active 合入 childConversationIds，杜绝用旧
     // record 副本覆盖掉已登记的子会话事实。
@@ -2671,42 +2818,120 @@ export class WorkflowService {
     if (active !== undefined && active.childConversations.size > 0) {
       record.childConversationIds = [...active.childConversations]
     }
-    this.state.set(runKey(record.id), record)
-    if (options.index === true) {
-      const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
-      index.push({ id: record.id, conversationId: record.conversationId, createdAt: record.createdAt })
-      this.state.set(INDEX_KEY, index)
+    this.writeRecordFile(record)
+    const entry: RunIndexEntry = {
+      id: record.id,
+      conversationId: record.conversationId,
+      status: record.status,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      ...(record.notifyParentOnSettle === true ? { notifyParentOnSettle: true } : {}),
+      ...(record.autoResumeCount !== undefined ? { autoResumeCount: record.autoResumeCount } : {}),
+      ...(record.resumedByRunId !== undefined ? { resumedByRunId: record.resumedByRunId } : {}),
+    }
+    const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+    const at = index.findIndex((candidate) => candidate.id === record.id)
+    if (at >= 0) index[at] = entry
+    else index.push(entry)
+    this.state.set(INDEX_KEY, index)
+  }
+
+  /** 完整 RunRecord 的文件路径（与账本同目录：dataDir/artifacts/<convId>/）。 */
+  private recordPathFor(conversationId: number, runId: string): string {
+    return join(this.artifactsDir(conversationId), `workflow-${runId}.record.json`)
+  }
+
+  /** 原子写完整 RunRecord：同目录临时文件 + fsync + rename（读端任一时刻只见完整旧/新版本）。 */
+  private writeRecordFile(record: RunRecord): void {
+    const dir = this.artifactsDir(record.conversationId)
+    mkdirSync(dir, { recursive: true })
+    const target = this.recordPathFor(record.conversationId, record.id)
+    const tmp = join(dir, `.record-${record.id}-${randomUUID()}.tmp`)
+    try {
+      const fd = openSync(tmp, 'wx', 0o644)
+      try {
+        writeSync(fd, JSON.stringify(record), null, 'utf8')
+        fsyncSync(fd)
+      } finally {
+        closeSync(fd)
+      }
+      renameSync(tmp, target)
+    } catch (error) {
+      try {
+        unlinkSync(tmp)
+      } catch {
+        // 已被 rename 消费或本就不存在
+      }
+      if (error instanceof HelmError) throw error
+      const err = error as NodeJS.ErrnoException
+      throw new HelmError('io_error', `写入工作流运行记录 ${target} 失败：${err.message}`, 500, {
+        path: target,
+        code: err.code,
+      })
     }
   }
 
   private loadRecord(runId: string): RunRecord {
-    let record: unknown
+    // 索引是唯一入口（开发期无迁移：无旧 per-run doc 读取）。
+    let rawIndex: unknown
     try {
-      record = this.state.get<RunRecord | null>(runKey(runId), null)
+      rawIndex = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
     } catch (error) {
       // store 抛错（IO/解析）是持久层故障，绝不 TS 强转后当 not_found 混过。
       throw new HelmError(
         'workflow_record_corrupt',
-        `读取工作流运行 ${runId} 持久记录失败：${errorMessage(error)}`,
+        `读取工作流运行 ${runId} 所需的 run 索引失败：${errorMessage(error)}`,
         500,
-        { runId, key: runKey(runId) },
+        { runId, key: INDEX_KEY },
+      )
+    }
+    const entry = Array.isArray(rawIndex)
+      ? (rawIndex as RunIndexEntry[]).find((candidate) => candidate.id === runId)
+      : undefined
+    if (entry === undefined) {
+      throw new HelmError('not_found', `工作流运行 ${runId} 不存在`, 404, { runId })
+    }
+    const path = this.recordPathFor(entry.conversationId, runId)
+    let record: unknown
+    try {
+      record = JSON.parse(readFileSync(path, 'utf-8'))
+    } catch (error) {
+      if (error instanceof HelmError) throw error
+      const err = error as NodeJS.ErrnoException
+      if (err.code === 'ENOENT') {
+        // 索引指向但文件缺失：持久层不一致，绝不假账本缺口静默降级。
+        throw new HelmError(
+          'workflow_record_corrupt',
+          `工作流运行 ${runId} 的记录文件缺失（索引指向 ${path}）；请检查 dataDir 完整性`,
+          500,
+          { runId, path },
+        )
+      }
+      throw new HelmError(
+        'workflow_record_corrupt',
+        `读取工作流运行 ${runId} 记录文件失败：${errorMessage(error)}`,
+        500,
+        { runId, path },
       )
     }
     // 先验证是对象再访问 id：null/原始值/数组绝不 record.id TypeError。
     if (record === null || typeof record !== 'object' || Array.isArray(record)) {
-      if (record === null) {
-        throw new HelmError('not_found', `工作流运行 ${runId} 不存在`, 404, { runId })
-      }
       throw new HelmError(
         'workflow_record_corrupt',
-        `工作流运行 ${runId} 持久记录损坏（非对象结构：${Array.isArray(record) ? 'array' : typeof record}）`,
+        `工作流运行 ${runId} 记录文件损坏（非对象结构：${Array.isArray(record) ? 'array' : typeof record}）`,
         500,
-        { runId },
+        { runId, path },
       )
     }
     const asRecord = record as Record<string, unknown>
     if (asRecord['id'] !== runId) {
-      throw new HelmError('not_found', `工作流运行 ${runId} 不存在`, 404, { runId })
+      // 索引命中但文件内容 id 篡改：持久层不一致，绝不伪装「不存在」。
+      throw new HelmError(
+        'workflow_record_corrupt',
+        `工作流运行 ${runId} 记录文件损坏（id 不匹配）`,
+        500,
+        { runId, path },
+      )
     }
     // 边界形状校验：持久层是外部输入（state.sqlite 命名空间 doc），TS 强转
     // 会把错误结构当有效摘要。缺关键字段/状态非法即 workflow_record_corrupt
@@ -2825,15 +3050,17 @@ export class WorkflowService {
           ...(agent.gateCommand !== undefined ? { gateCommand: agent.gateCommand } : {}),
           ...(agent.model !== undefined ? { model: agent.model } : {}),
           ...(agent.attempt !== undefined ? { attempt: agent.attempt } : {}),
-          ...(agent.prompt !== undefined ? { prompt: agent.prompt } : {}),
+          ...(agent.prompt !== undefined ? { prompt: nodeTextPreview(agent.prompt) } : {}),
           ...(agent.schema !== undefined ? { schema: agent.schema } : {}),
-          ...(agent.gate !== undefined ? { gate: agent.gate } : {}),
+          ...(agent.gate !== undefined
+            ? { gate: { ok: agent.gate.ok, output: nodeTextPreview(agent.gate.output) } }
+            : {}),
           ...(agent.tokens !== undefined ? { tokens: agent.tokens } : {}),
           ...(agent.durationMs !== undefined ? { durationMs: agent.durationMs } : {}),
           ...(agent.startedAt !== undefined ? { startedAt: agent.startedAt } : {}),
           ...(agent.lastProgressAt !== undefined ? { settledAt: agent.lastProgressAt } : {}),
           ...(agent.state === 'done' && agent.resultPreview !== undefined ? { output: agent.resultPreview } : {}),
-          ...(agent.error !== undefined ? { error: agent.error } : {}),
+          ...(agent.error !== undefined ? { error: nodeTextPreview(agent.error) } : {}),
         },
       })
     }
@@ -2859,7 +3086,7 @@ export class WorkflowService {
           ...(action.lastProgressAt !== undefined ? { settledAt: action.lastProgressAt } : {}),
           ...(action.durationMs !== undefined ? { durationMs: action.durationMs } : {}),
           ...(action.state === 'done' && action.resultPreview !== undefined ? { output: action.resultPreview } : {}),
-          ...(action.error !== undefined ? { error: action.error } : {}),
+          ...(action.error !== undefined ? { error: nodeTextPreview(action.error) } : {}),
         },
       })
     }

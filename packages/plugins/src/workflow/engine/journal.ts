@@ -43,7 +43,19 @@ import { existsSync, readFileSync } from 'node:fs'
  * agent/action 各自的合法字段（ok/text/result…）从联合上剥掉。
  */
 export type JournalWriteInput =
-  | { type: 'agent'; index: number; key: string; ok: boolean; text?: string; resumed?: true; seq?: number }
+  | {
+      type: 'agent'
+      index: number
+      key: string
+      ok: boolean
+      text?: string
+      resumed?: true
+      /** 执行元数据快照（agent.withMeta 失败保留面）：落盘前经 redactJournalEntry 脱敏。 */
+      execution?: JournalAgentExecution
+      /** 门禁结果（gate 失败/超时回传）：落盘前经 redactJournalEntry 脱敏。 */
+      gate?: JournalGateResult
+      seq?: number
+    }
   | { type: 'action_started'; index: number; key: string; seq?: number; idempotent?: true }
   | {
       type: 'action'
@@ -55,6 +67,27 @@ export type JournalWriteInput =
       seq?: number
       idempotent?: true
     }
+
+/**
+ * agent 行附带的执行元数据（AgentWithMetaResult['execution'] 的持久形状）。
+ * worktree 为插件契约对象，账本只做 JSON 对象边界校验不解释业务字段；
+ * 重放命中缓存时原样还原给调用方（值已脱敏，秘密不得依赖重放还原）。
+ */
+export interface JournalAgentExecution {
+  nodeId?: string
+  conversationId?: number
+  executionId?: string
+  effectiveCwd?: string
+  worktree?: Record<string, unknown>
+}
+
+/** agent 行附带的门禁结果（AgentGateResult 持久形状；exitCode/timedOut 为协议扩展预留槽）。 */
+export interface JournalGateResult {
+  ok: boolean
+  output: string
+  exitCode?: number | null
+  timedOut?: boolean
+}
 
 /**
  * 引擎私有前缀重放账本行（`dataDir/artifacts/<convId>/workflow-<runId>.jsonl`，每行一个 JSON 对象）。
@@ -79,6 +112,10 @@ export type WorkflowJournalEntry =
       text?: string
       /** 该调用续接了既有子会话（agent({ resume })）；重放时同其他行一样按 index+key 逐项匹配。 */
       resumed?: true
+      /** 执行元数据快照（含 worktree；已脱敏）。maxAttempts 每次尝试各占独立 index 行。 */
+      execution?: JournalAgentExecution
+      /** 门禁结果（已脱敏）。 */
+      gate?: JournalGateResult
     }
   | {
       v: 1
@@ -126,6 +163,8 @@ export interface AgentJournalKeyInput {
   maxSubagentDepth?: number
   /** 机密授予变化会改变外部运行时环境，不得重放旧授权下的缓存结果。 */
   secretNames?: string[]
+  /** 工作目录（agent({ cwd })）：目录变化即不同执行上下文，不得命中旧缓存。 */
+  cwd?: string
 }
 
 /**
@@ -138,13 +177,15 @@ export interface AgentJournalKeyInput {
  * 因此 v2 一次性收敛为带版本标记的固定槽：attachments 恒占第 10 槽（null =
  * 未提供），schema 恒占第 11 槽（null = 未提供），任何后续新字段只能追加在
  * 版本号之后。secretNames 追加为第 13 槽（null = 未提供；无条件占位，不与
- * 任何旧尾槽碰撞）。注意：无条件占位使本变更后**全部调用 key 与旧账本失配**
- * （含未携带 secretNames 的调用）——开发阶段无迁移，旧账本安全降级为断链
- * 重跑，不存在「未携带新字段则 key 不变」的兼容承诺。
+ * 任何旧尾槽碰撞）。v3 追加 cwd 为第 14 槽（同规则无条件占位）：cwd 改变
+ * 执行上下文（可从该目录切子 Worktree），不得重放旧目录下的缓存结果。注意：
+ * 无条件占位使每次版本变更后**全部调用 key 与旧账本失配**（含未携带新字段的
+ * 调用）——开发阶段无迁移，旧账本安全降级为断链重跑，不存在「未携带新字段
+ * 则 key 不变」的兼容承诺。
  */
 export function agentJournalKey(input: AgentJournalKeyInput): string {
   const canonical = JSON.stringify([
-    'v2',
+    'v3',
     input.prompt,
     input.label ?? null,
     input.model ?? null,
@@ -157,6 +198,7 @@ export function agentJournalKey(input: AgentJournalKeyInput): string {
     input.schema !== undefined ? input.schema : null,
     input.maxSubagentDepth ?? null,
     input.secretNames !== undefined ? input.secretNames : null,
+    input.cwd !== undefined ? input.cwd : null,
   ])
   return createHash('sha256').update(canonical).digest('hex').slice(0, 32)
 }
@@ -183,6 +225,39 @@ export interface JournalReadResult {
   readFailed?: { code: string; message: string }
 }
 
+function isAgentExecutionShape(value: unknown): value is JournalAgentExecution {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const e = value as Record<string, unknown>
+  for (const key of Object.keys(e)) {
+    if (key !== 'nodeId' && key !== 'conversationId' && key !== 'executionId' && key !== 'effectiveCwd' && key !== 'worktree') {
+      return false
+    }
+  }
+  if (e['nodeId'] !== undefined && typeof e['nodeId'] !== 'string') return false
+  if (e['conversationId'] !== undefined && (!Number.isInteger(e['conversationId']) || (e['conversationId'] as number) < 1)) return false
+  if (e['executionId'] !== undefined && typeof e['executionId'] !== 'string') return false
+  if (e['effectiveCwd'] !== undefined && typeof e['effectiveCwd'] !== 'string') return false
+  if (
+    e['worktree'] !== undefined &&
+    (typeof e['worktree'] !== 'object' || e['worktree'] === null || Array.isArray(e['worktree']))
+  ) {
+    return false
+  }
+  return true
+}
+
+function isAgentGateShape(value: unknown): value is JournalGateResult {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const e = value as Record<string, unknown>
+  for (const key of Object.keys(e)) {
+    if (key !== 'ok' && key !== 'output' && key !== 'exitCode' && key !== 'timedOut') return false
+  }
+  if (typeof e['ok'] !== 'boolean' || typeof e['output'] !== 'string') return false
+  if (e['exitCode'] !== undefined && e['exitCode'] !== null && !Number.isInteger(e['exitCode'])) return false
+  if (e['timedOut'] !== undefined && typeof e['timedOut'] !== 'boolean') return false
+  return true
+}
+
 function isAgentEntry(value: unknown): value is Extract<WorkflowJournalEntry, { type: 'agent' }> {
   if (typeof value !== 'object' || value === null) return false
   const e = value as Record<string, unknown>
@@ -193,7 +268,9 @@ function isAgentEntry(value: unknown): value is Extract<WorkflowJournalEntry, { 
     typeof e['key'] === 'string' &&
     typeof e['ok'] === 'boolean' &&
     (e['text'] === undefined || typeof e['text'] === 'string') &&
-    (e['resumed'] === undefined || e['resumed'] === true)
+    (e['resumed'] === undefined || e['resumed'] === true) &&
+    (e['execution'] === undefined || isAgentExecutionShape(e['execution'])) &&
+    (e['gate'] === undefined || isAgentGateShape(e['gate']))
   )
 }
 
@@ -429,4 +506,35 @@ export class JournalWriteError extends Error {
 /** 便捷：文件是否存在（resume 探测用）。 */
 export function journalExists(path: string): boolean {
   return existsSync(path)
+}
+
+/** 值级递归脱敏（字符串逐值替换；数组/对象逐层递归，原始值原样）。 */
+function redactValue(value: unknown, redact: (text: string) => string): unknown {
+  if (typeof value === 'string') return redact(value)
+  if (Array.isArray(value)) return value.map((item) => redactValue(item, redact))
+  if (typeof value === 'object' && value !== null) {
+    const out: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) out[key] = redactValue(item, redact)
+    return out
+  }
+  return value
+}
+
+/**
+ * agent 行落盘前的统一脱敏：text / execution（effectiveCwd、worktree 路径可含
+ * token）/ gate.output 逐值替换后再交 JournalWriter。action 行由引擎层自行
+ * 处理（result/error 已是安全 JSON），此处原样透传。幂等：重复替换无害。
+ */
+export function redactJournalEntry(
+  entry: JournalWriteInput,
+  redact: (text: string) => string,
+): JournalWriteInput {
+  if (entry.type !== 'agent') return entry
+  const out: JournalWriteInput = { ...entry }
+  if (out.text !== undefined) out.text = redact(out.text)
+  if (out.execution !== undefined) out.execution = redactValue(out.execution, redact) as JournalAgentExecution
+  if (out.gate !== undefined) {
+    out.gate = { ...out.gate, output: redact(out.gate.output) }
+  }
+  return out
 }

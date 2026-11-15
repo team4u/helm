@@ -236,12 +236,16 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
 
 describe('WorkflowService.save：fromRunId 源', { timeout: 60_000 }, () => {
   function seededService(dir: string, record: Record<string, unknown>): WorkflowService {
+    const dataDir = join(root, dir)
+    // 新契约：完整体落 dataDir/artifacts/1/workflow-<runId>.record.json，records doc 只存轻量索引。
+    const recordDir = join(dataDir, 'artifacts', '1')
+    mkdirSync(recordDir, { recursive: true })
+    writeFileSync(join(recordDir, 'workflow-wf_seed1.record.json'), JSON.stringify(runRecord(record)), 'utf-8')
     return new WorkflowService({
-      dataDir: join(root, dir),
+      dataDir,
       host,
       state: makeStateStore({
-        'workflow/runs': [{ id: 'wf_seed1', conversationId: 1, createdAt: 1 }],
-        'workflow/run/wf_seed1': runRecord(record),
+        'workflow/runs': [{ id: 'wf_seed1', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 2 }],
       }),
     })
   }

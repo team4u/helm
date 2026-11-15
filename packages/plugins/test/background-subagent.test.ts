@@ -19,7 +19,7 @@
 
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
@@ -27,6 +27,19 @@ import type { WorkflowRunSummary } from '../src/contracts.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 
 const timeout = { timeout: 60_000 } as const
+
+/** 新契约：完整体在 dataDir/artifacts/<convId>/workflow-<runId>.record.json（本文件均属会话 1）。 */
+function readRecord(dataDir: string, runId: string): Record<string, unknown> {
+  return JSON.parse(
+    readFileSync(join(dataDir, 'artifacts', '1', `workflow-${runId}.record.json`), 'utf-8'),
+  )
+}
+
+function seedRecord(dataDir: string, record: Record<string, unknown>): void {
+  const dir = join(dataDir, 'artifacts', String(record['conversationId']))
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, `workflow-${String(record['id'])}.record.json`), JSON.stringify(record), 'utf8')
+}
 
 // ---------------------------------------------------------------------------
 // 确定性 fixtures
@@ -223,10 +236,9 @@ describe('startBackgroundAgent', () => {
     assert.equal(host.settledCalls[0]!.execution?.conversationId, 42)
 
     // notifiedAt 已持久化（重开服务 init 不再补发）。
-    const record = state.get<{ notifiedAt?: number; kind?: string } | null>(`workflow/run/${run.id}`, null)
-    assert.ok(record !== null)
-    assert.equal(record.kind, 'subagent')
-    assert.ok(typeof record.notifiedAt === 'number')
+    const record = readRecord(dataDir, run.id)
+    assert.equal(record['kind'], 'subagent')
+    assert.ok(typeof record['notifiedAt'] === 'number')
     await service.close()
     const reopened = new WorkflowService({ dataDir, host, state })
     await reopened.init()
@@ -241,9 +253,8 @@ describe('startBackgroundAgent', () => {
     const service = new WorkflowService({ dataDir, host, state })
     const { run } = await service.startBackgroundAgent({ parentConversationId: 1, prompt: '挂起' })
     // 仍挂起中：durable 记录已是 running 且在索引里。
-    const record = state.get<{ status: string } | null>(`workflow/run/${run.id}`, null)
-    assert.ok(record !== null)
-    assert.equal(record.status, 'running')
+    const record = readRecord(dataDir, run.id)
+    assert.equal(record['status'], 'running')
     const index = state.get<Array<{ id: string } | null>>('workflow/runs', [])
     assert.ok(index.some((e) => e?.id === run.id))
     // active 已登记：abort/close 可达。
@@ -492,9 +503,9 @@ describe('startBackgroundAgent', () => {
     await service.wait(run.id)
     // 首次通知失败：终态已落库但 notifiedAt 缺失。
     assert.equal(host.settledCalls.length, 0)
-    const record = state.get<{ status: string; notifiedAt?: number } | null>(`workflow/run/${run.id}`, null)
-    assert.equal(record!.status, 'completed')
-    assert.equal(record!.notifiedAt, undefined)
+    const record = readRecord(dataDir, run.id)
+    assert.equal(record['status'], 'completed')
+    assert.equal(record['notifiedAt'], undefined)
     await service.close()
 
     // 重启 init：补发一次并落 notifiedAt。
@@ -502,8 +513,8 @@ describe('startBackgroundAgent', () => {
     await reopened.init()
     assert.equal(host.settledCalls.length, 1)
     assert.equal(host.settledCalls[0]!.summary.status, 'completed')
-    const after = state.get<{ notifiedAt?: number } | null>(`workflow/run/${run.id}`, null)
-    assert.ok(typeof after!.notifiedAt === 'number')
+    const after = readRecord(dataDir, run.id)
+    assert.ok(typeof after['notifiedAt'] === 'number')
     // 再次 init 不重复。
     await reopened.close()
     const again = new WorkflowService({ dataDir, host, state })
@@ -516,8 +527,8 @@ describe('startBackgroundAgent', () => {
     const host = makeHost()
     const state = makeStateStore()
     const journalPath = join(dataDir, 'artifacts', '1', 'workflow-wf_restartdead0001.jsonl')
-    state.set('workflow/runs', [{ id: 'wf_restartdead0001', conversationId: 1, createdAt: 1 }])
-    state.set('workflow/run/wf_restartdead0001', {
+    state.set('workflow/runs', [{ id: 'wf_restartdead0001', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
+    seedRecord(dataDir, {
       id: 'wf_restartdead0001',
       name: 'subagent:researcher',
       conversationId: 1,
@@ -540,8 +551,8 @@ describe('startBackgroundAgent', () => {
     assert.equal(host.settledCalls[0]!.summary.status, 'failed')
     assert.equal(host.settledCalls[0]!.agentType, 'researcher')
     assert.equal(host.settledCalls[0]!.execution?.conversationId, 42)
-    const record = state.get<{ notifiedAt?: number } | null>('workflow/run/wf_restartdead0001', null)
-    assert.ok(typeof record!.notifiedAt === 'number')
+    const record = readRecord(dataDir, 'wf_restartdead0001')
+    assert.ok(typeof record['notifiedAt'] === 'number')
     // 已终态且未通知的常规 workflow 记录不受影响（不通知）。
     await service.close()
   })
@@ -550,8 +561,8 @@ describe('startBackgroundAgent', () => {
     const host = makeHost()
     const state = makeStateStore()
     const journalPath = join(dataDir, 'artifacts', '1', 'workflow-wf_wfdsldead00001.jsonl')
-    state.set('workflow/runs', [{ id: 'wf_wfdsldead00001', conversationId: 1, createdAt: 1 }])
-    state.set('workflow/run/wf_wfdsldead00001', {
+    state.set('workflow/runs', [{ id: 'wf_wfdsldead00001', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
+    seedRecord(dataDir, {
       id: 'wf_wfdsldead00001',
       name: 'old',
       conversationId: 1,

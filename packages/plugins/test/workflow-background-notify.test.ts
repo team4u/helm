@@ -19,7 +19,7 @@
  */
 
 import { strict as assert } from 'node:assert'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
@@ -32,6 +32,22 @@ import {
 } from '../src/workflow/engine/service.js'
 
 const timeout = { timeout: 60_000 } as const
+
+/**
+ * 新契约读回 helper：完整体在 dataDir/artifacts/<convId>/workflow-<runId>.record.json
+ * （本文件全部 run 均属会话 1）；records doc 只存轻量索引。
+ */
+function readRecord(dataDir: string, runId: string, conversationId = 1): Record<string, unknown> {
+  return JSON.parse(
+    readFileSync(join(dataDir, 'artifacts', String(conversationId), `workflow-${runId}.record.json`), 'utf-8'),
+  )
+}
+
+function seedRecord(dataDir: string, record: Record<string, unknown>): void {
+  const dir = join(dataDir, 'artifacts', String(record['conversationId']))
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, `workflow-${String(record['id'])}.record.json`), JSON.stringify(record), 'utf8')
+}
 
 function makeStateStore(): WorkflowStateStore {
   const map = new Map<string, unknown>()
@@ -131,10 +147,10 @@ describe('后台 workflow run 通知与恢复', () => {
     assert.equal(call.agentType, undefined, 'workflow kind 通知不携带 agentType')
     assert.equal(call.execution, undefined, 'workflow kind 通知不携带 execution')
 
-    const record = state.get<{ kind?: string; notifyParentOnSettle?: boolean; notifiedAt?: number } | null>(`workflow/run/${started.id}`, null)
-    assert.equal(record!.kind, 'workflow')
-    assert.equal(record!.notifyParentOnSettle, true)
-    assert.ok(typeof record!.notifiedAt === 'number', 'notifiedAt 必须持久化')
+    const record = readRecord(dataDir, started.id)
+    assert.equal(record['kind'], 'workflow')
+    assert.equal(record['notifyParentOnSettle'], true)
+    assert.ok(typeof record['notifiedAt'] === 'number', 'notifiedAt 必须持久化')
 
     await service.close()
     const reopened = new WorkflowService({ dataDir, host, state })
@@ -151,8 +167,8 @@ describe('后台 workflow run 通知与恢复', () => {
     await service.wait(started.id)
     assert.equal(service.getRun(started.id).status, 'completed')
     assert.equal(host.settledCalls.length, 0, '同步 run 不得触发父会话通知')
-    const record = state.get<{ notifyParentOnSettle?: boolean } | null>(`workflow/run/${started.id}`, null)
-    assert.equal(record!.notifyParentOnSettle, undefined)
+    const record = readRecord(dataDir, started.id)
+    assert.equal(record['notifyParentOnSettle'], undefined)
     await service.close()
     await new WorkflowService({ dataDir, host, state }).init()
     assert.equal(host.settledCalls.length, 0)
@@ -167,17 +183,17 @@ describe('后台 workflow run 通知与恢复', () => {
     await service.wait(started.id)
     assert.equal(service.getRun(started.id).status, 'completed', '通知失败不得推翻终态')
     assert.equal(host.settledCalls.length, 0, '首次通知失败：未成功投递')
-    const record = state.get<{ status: string; notifiedAt?: number } | null>(`workflow/run/${started.id}`, null)
-    assert.equal(record!.status, 'completed')
-    assert.equal(record!.notifiedAt, undefined)
+    const record = readRecord(dataDir, started.id)
+    assert.equal(record['status'], 'completed')
+    assert.equal(record['notifiedAt'], undefined)
     await service.close()
 
     const reopened = new WorkflowService({ dataDir, host, state })
     await reopened.init()
     assert.equal(host.settledCalls.length, 1, 'init 应按 outbox 补发恰一次')
     assert.equal(host.settledCalls[0]!.summary.status, 'completed')
-    const after = state.get<{ notifiedAt?: number } | null>(`workflow/run/${started.id}`, null)
-    assert.ok(typeof after!.notifiedAt === 'number')
+    const after = readRecord(dataDir, started.id)
+    assert.ok(typeof after['notifiedAt'] === 'number')
     await reopened.close()
 
     const again = new WorkflowService({ dataDir, host, state })
@@ -190,8 +206,8 @@ describe('后台 workflow run 通知与恢复', () => {
     const host = makeHost()
     const state = makeStateStore()
     const journalPath = join(dataDir, 'artifacts', '1', 'workflow-wf_bgdead000001.jsonl')
-    state.set('workflow/runs', [{ id: 'wf_bgdead000001', conversationId: 1, createdAt: 1 }])
-    state.set('workflow/run/wf_bgdead000001', {
+    state.set('workflow/runs', [{ id: 'wf_bgdead000001', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
+    seedRecord(dataDir, {
       id: 'wf_bgdead000001',
       name: 'bg-notify',
       conversationId: 1,
@@ -222,8 +238,8 @@ describe('后台 workflow run 通知与恢复', () => {
     assert.equal(host.settledCalls.length, 1, '中断的后台 workflow 须补发通知恰一次')
     assert.equal(host.settledCalls[0]!.summary.status, 'failed')
     assert.equal(host.settledCalls[0]!.parentConversationId, 1)
-    const record = state.get<{ notifiedAt?: number } | null>('workflow/run/wf_bgdead000001', null)
-    assert.ok(typeof record!.notifiedAt === 'number')
+    const record = readRecord(dataDir, 'wf_bgdead000001')
+    assert.ok(typeof record['notifiedAt'] === 'number')
     await service.close()
   })
 
@@ -259,14 +275,14 @@ describe('后台 workflow run 通知与恢复', () => {
 
     // 崩溃前事实：running 记录已持久权威子会话 IDs；nodes 尚未落盘（旧实现
     // 此处没有任何子会话坐标，重启恢复无从标记/中止——本用例守护的缺陷）。
-    const crashed = state.get<{
+    const crashed = readRecord(dataDir, started.id) as {
       status: string
       childConversationIds?: number[]
       nodes?: unknown
-    } | null>(`workflow/run/${started.id}`, null)
-    assert.equal(crashed!.status, 'running')
-    assert.deepEqual(crashed!.childConversationIds, [42], 'onResolved 子会话必须在 running 记录中即时持久')
-    assert.equal(crashed!.nodes, undefined, '真实运行中 nodes 尚未落盘，恢复不得依赖它')
+    }
+    assert.equal(crashed.status, 'running')
+    assert.deepEqual(crashed.childConversationIds, [42], 'onResolved 子会话必须在 running 记录中即时持久')
+    assert.equal(crashed.nodes, undefined, '真实运行中 nodes 尚未落盘，恢复不得依赖它')
 
     // 模拟重启：第二个 WorkflowService 读同一 state 做恢复（首服务视为已死）。
     const revived = new WorkflowService({ dataDir, host, state })
@@ -282,8 +298,8 @@ describe('后台 workflow run 通知与恢复', () => {
     assert.equal(host.settledCalls[0]!.summary.id, started.id)
     assert.equal(host.settledCalls[0]!.summary.status, 'failed')
     assert.equal(host.settledCalls[0]!.parentConversationId, 1)
-    const record = state.get<{ notifiedAt?: number } | null>(`workflow/run/${started.id}`, null)
-    assert.ok(typeof record!.notifiedAt === 'number')
+    const record = readRecord(dataDir, started.id)
+    assert.ok(typeof record['notifiedAt'] === 'number')
 
     // 清理：终止仍挂起的首服务（其结算不再影响以上事实断言）。
     await revived.close()
@@ -294,8 +310,8 @@ describe('后台 workflow run 通知与恢复', () => {
     const host = makeHost()
     const state = makeStateStore()
     const journalPath = join(dataDir, 'artifacts', '1', 'workflow-wf_syncdead0001.jsonl')
-    state.set('workflow/runs', [{ id: 'wf_syncdead0001', conversationId: 1, createdAt: 1 }])
-    state.set('workflow/run/wf_syncdead0001', {
+    state.set('workflow/runs', [{ id: 'wf_syncdead0001', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
+    seedRecord(dataDir, {
       id: 'wf_syncdead0001',
       name: 'sync',
       conversationId: 1,
@@ -324,11 +340,11 @@ describe('后台 workflow run 通知与恢复', () => {
 // 拒绝（ownership_conflict = human 接管）与 not_found 可诊断跳过
 // ---------------------------------------------------------------------------
 
-/** 种子一条含两个子会话的后台 running run。 */
-function seedTwoChildren(state: WorkflowStateStore, runId: string): void {
+/** 种子一条含两个子会话的后台 running run（索引入 state，完整体入文件）。 */
+function seedTwoChildren(dataDir: string, state: WorkflowStateStore, runId: string): void {
   const now = Date.now()
-  state.set('workflow/runs', [{ id: runId, conversationId: 1, createdAt: now }])
-  state.set(`workflow/run/${runId}`, {
+  state.set('workflow/runs', [{ id: runId, conversationId: 1, status: 'running', createdAt: now, updatedAt: now }])
+  seedRecord(dataDir, {
     id: runId,
     name: 'subagent:worker',
     conversationId: 1,
@@ -347,8 +363,10 @@ function seedTwoChildren(state: WorkflowStateStore, runId: string): void {
 }
 
 it('prepareRecovery 屏障：意外错误上抛且 recoveryPrepared 不置位（重试可恢复），绝不带未落标记启动', timeout, async () => {
+  const barrierDir = mkdtempSync(join(tmpdir(), 'wf-barrier-io-'))
+  after(() => rmSync(barrierDir, { recursive: true, force: true }))
   const state = makeStateStore()
-  seedTwoChildren(state, 'wf_barrier_io')
+  seedTwoChildren(barrierDir, state, 'wf_barrier_io')
   const host = makeHost()
   const realAbort = host.abortConversationGuarded.bind(host)
   let failFirst = true
@@ -356,7 +374,7 @@ it('prepareRecovery 屏障：意外错误上抛且 recoveryPrepared 不置位（
     if (failFirst && id === 31) throw new Error('simulated persistence IO failure')
     return realAbort(id)
   }
-  const service = new WorkflowService({ dataDir: '/tmp/unused', state, host })
+  const service = new WorkflowService({ dataDir: barrierDir, state, host })
 
   // 意外错误必须上抛：服务 prepare 失败 -> 宿主屏障阻断 start（调度器不 resume）。
   await assert.rejects(() => service.prepareRecovery(), /simulated persistence IO failure/)
@@ -369,8 +387,10 @@ it('prepareRecovery 屏障：意外错误上抛且 recoveryPrepared 不置位（
 })
 
 it('prepareRecovery 容忍边界：ownership_conflict（human 接管）与 not_found 诊断跳过，其余子会话仍落标记', timeout, async () => {
+  const barrierDir = mkdtempSync(join(tmpdir(), 'wf-barrier-human-'))
+  after(() => rmSync(barrierDir, { recursive: true, force: true }))
   const state = makeStateStore()
-  seedTwoChildren(state, 'wf_barrier_human')
+  seedTwoChildren(barrierDir, state, 'wf_barrier_human')
   const host = makeHost()
   const realAbort = host.abortConversationGuarded.bind(host)
   host.abortConversationGuarded = async (id: number) => {
@@ -380,7 +400,7 @@ it('prepareRecovery 容忍边界：ownership_conflict（human 接管）与 not_f
     if (id === 32) throw new HelmError('not_found', '会话不存在：32', 404, { conversationId: 32 })
     return realAbort(id)
   }
-  const service = new WorkflowService({ dataDir: '/tmp/unused', state, host })
+  const service = new WorkflowService({ dataDir: barrierDir, state, host })
   await service.prepareRecovery()
   assert.deepEqual(host.guardedAborts, [31, 32], '两个子会话都尝试过守卫中止（human 由内核拒绝、已删会话 404），屏障不放行前先尝试')
 })
