@@ -1,0 +1,141 @@
+/**
+ * builtin:workflow 子代理卡展开态实时流样式（自 styles.css 拆出）：
+ * SubagentStream 组件的流容器与 prompt/thinking/tool/text 各类行排版。
+ * 由 index.tsx 一并引入，编译器合并为插件样式文本导出。
+ */
+.subagent-live-stream {
+  max-height: 220px;
+  overflow-y: auto;
+  /* 不设 overscroll-behavior: contain：滚动到边界须链回会话时间线，否则悬停卡片时滚轮被吞 */
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.subagent-stream-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.subagent-stream-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+  line-height: 16px;
+  user-select: none;
+}
+
+.subagent-stream-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.subagent-stream-prompt .subagent-stream-body {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+/* 仅指令（prompt）保持两行紧凑截断；thinking/text 完整换行，由外层
+   .subagent-live-stream max-height 限高与滚动保证尾部可见，
+   不会因行截断永远看不到最新内容。 */
+.subagent-stream-prompt .subagent-stream-body {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: pre-wrap;
+}
+
+.subagent-stream-thinking {
+  color: var(--fg-muted);
+}
+
+.subagent-stream-thinking .subagent-stream-body {
+  font-style: italic;
+  white-space: pre-wrap;
+}
+
+.subagent-stream-tool {
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.subagent-stream-tool > svg {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.subagent-stream-tool-name {
+  flex-shrink: 0;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.subagent-stream-tool-summary {
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* 工具结果首行预览：明确标识“预览且可能截断”，不伪装全文。 */
+.subagent-stream-tool-preview {
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-subtle);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.subagent-stream-preview-more {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--fg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 5px;
+  line-height: 14px;
+  user-select: none;
+}
+
+.subagent-stream-error {
+  color: var(--fg-muted);
+}
+
+.subagent-stream-meta {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.subagent-stream-text .subagent-stream-body {
+  color: var(--fg);
+  white-space: pre-wrap;
+}
+
+.subagent-stream-empty {
+  align-items: center;
+  color: var(--fg-muted);
+  gap: 7px;
+}
+
+.subagent-stream-empty > svg {
+  align-self: center;
+}

@@ -1,0 +1,106 @@
+/**
+ * builtin:workflow 统一执行树样式（自 styles.css 拆出）：父卡内下一级
+ * 紧凑子项（任意深度经点击打开会话抽屉）。
+ *
+ * 注意：.execution-child-clickable 的 hover/active/focus 交互四规则保留在
+ * styles.css——宿主契约测试（packages/web/test/subagent-live-card.test.ts）
+ * 直读该文件断言子会话行 hover 强调底色契约。
+ */
+.execution-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 8px 6px 26px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+}
+
+.execution-child-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  background: var(--bg-elevated);
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.execution-child-row > svg {
+  flex-shrink: 0;
+}
+
+.execution-child-id {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+}
+
+.execution-child-title {
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.execution-child-doing {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+
+.execution-child-right {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.execution-child-right .badge {
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 5px;
+}
+
+.execution-child-count {
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 紧凑行总耗时：仅真实 run/runNode 边界才渲染（运行中随父级秒表动态变化） */
+.execution-child-elapsed {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.execution-child-blocked .execution-child-title,
+.execution-child-blocked .execution-child-doing {
+  color: var(--warn);
+}
+
+/* 无会话执行行（深层 workflow / external run）的展开指示 */
+.execution-child-expand {
+  color: var(--fg-subtle);
+}
+
+/* 原位展开的深层直系子项：仅小幅追加缩进，视觉嵌套受限不逐级叠加边距 */
+.execution-children .execution-children {
+  margin: 0 0 2px 14px;
+}
+
+/* 前线活动摘要行：与第 2 层副栏同构，tag 强调色 */
+.execution-frontline .subagent-live-subline-tag {
+  color: var(--accent);
+}
