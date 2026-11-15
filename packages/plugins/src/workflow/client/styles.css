@@ -1,11 +1,13 @@
 /**
- * builtin:workflow 插件自有样式（clientRoot 内本地 CSS）：子代理实时卡与统一执行树
- * 紧凑子项两族规则。
+ * builtin:workflow 插件自有样式（clientRoot 内本地 CSS）：子代理实时卡
+ * 家族（双层胶囊卡 / 头部徽章统计 / 副栏 / 外部执行摘要）。
  *
  * 文件名被宿主契约测试锁定（packages/web/test/subagent-live-card.test.ts 直读
- * 本文件断言整卡交互与执行树 hover 样式契约），故子代理/执行树两族保留在此；
- * 运行卡 / 工作树检视 / 工作流库样式在 styles-workflow-run / styles-worktree-inspect /
- * styles-workflow-library，由 index.tsx 一并引入，编译器合并为插件样式文本导出。
+ * 本文件断言整卡交互与执行树 hover 样式契约）：整卡 hover 与执行树行
+ * hover 的交互态规则保留在此；执行树结构样式在 styles-execution-tree.css，
+ * 展开态实时流在 styles-subagent-stream.css；运行卡 / 工作树检视 / 工作流库
+ * 样式在 styles-workflow-run / styles-worktree-inspect / styles-workflow-library。
+ * 以上均由 index.tsx 一并引入，编译器合并为插件样式文本导出。
  */
 .subagent-live-card {
   container: subagent-card / inline-size;
@@ -183,36 +185,6 @@
   color: var(--fg-muted);
 }
 
-/* 工作台顶部 Fleet 状态摘要条 */
-.workbench-fleet-bar {
-  flex-wrap: wrap;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
-  font-size: 11.5px;
-  color: var(--fg-muted);
-}
-
-.workbench-fleet-item {
-  white-space: nowrap;
-}
-
-.workbench-fleet-warn {
-  color: var(--warn);
-}
-
-.workbench-fleet-err {
-  color: var(--err);
-}
-
-.workbench-fleet-done {
-  color: var(--fg-subtle);
-}
-
 .subagent-live-title {
   flex: 1;
   overflow: hidden;
@@ -323,143 +295,6 @@
 .tool-call-details > summary { cursor: pointer; }
 .tool-call-details .code-block-pre { max-height: 220px; overflow: auto; }
 
-.subagent-live-stream {
-  max-height: 220px;
-  overflow-y: auto;
-  /* 不设 overscroll-behavior: contain：滚动到边界须链回会话时间线，否则悬停卡片时滚轮被吞 */
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-}
-
-.subagent-stream-line {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-}
-
-.subagent-stream-tag {
-  flex-shrink: 0;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: 0 6px;
-  line-height: 16px;
-  user-select: none;
-}
-
-.subagent-stream-body {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.subagent-stream-prompt .subagent-stream-body {
-  color: var(--fg);
-  font-weight: 500;
-}
-
-/* 仅指令（prompt）保持两行紧凑截断；thinking/text 完整换行，由外层
-   .subagent-live-stream max-height 限高与滚动保证尾部可见，
-   不会因行截断永远看不到最新内容。 */
-.subagent-stream-prompt .subagent-stream-body {
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  white-space: pre-wrap;
-}
-
-.subagent-stream-thinking {
-  color: var(--fg-muted);
-}
-
-.subagent-stream-thinking .subagent-stream-body {
-  font-style: italic;
-  white-space: pre-wrap;
-}
-
-.subagent-stream-tool {
-  align-items: center;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-}
-
-.subagent-stream-tool > svg {
-  flex-shrink: 0;
-  align-self: center;
-}
-
-.subagent-stream-tool-name {
-  flex-shrink: 0;
-  font-weight: 500;
-  color: var(--fg);
-}
-
-.subagent-stream-tool-summary {
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-/* 工具结果首行预览：明确标识“预览且可能截断”，不伪装全文。 */
-.subagent-stream-tool-preview {
-  min-width: 0;
-  max-width: 45%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--fg-subtle);
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-}
-
-.subagent-stream-preview-more {
-  flex-shrink: 0;
-  font-size: 10px;
-  color: var(--fg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: 0 5px;
-  line-height: 14px;
-  user-select: none;
-}
-
-.subagent-stream-error {
-  color: var(--fg-muted);
-}
-
-.subagent-stream-meta {
-  flex-shrink: 0;
-  margin-left: auto;
-  font-size: 10.5px;
-  color: var(--fg-subtle);
-  font-variant-numeric: tabular-nums;
-}
-
-.subagent-stream-text .subagent-stream-body {
-  color: var(--fg);
-  white-space: pre-wrap;
-}
-
-.subagent-stream-empty {
-  align-items: center;
-  color: var(--fg-muted);
-  gap: 7px;
-}
-
-.subagent-stream-empty > svg {
-  align-self: center;
-}
-
 /* 外部运行时（无子会话）后台任务摘要卡 */
 .subagent-external-body {
   gap: 6px;
@@ -487,35 +322,10 @@
 }
 
 /* ==========================================================================
- * 11. 统一执行树：父卡内下一级紧凑子项（任意深度经点击打开会话抽屉）
+ * 执行树行交互态（结构样式见 styles-execution-tree.css）：保留在本文件是
+ * 宿主契约测试要求——直读 styles.css 断言 hover 强调底色
+ * （background: var(--accent-bg)）与外层父卡 hover 的区分契约。
  * ========================================================================== */
-
-.execution-children {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0 8px 6px 26px;
-  padding-left: 8px;
-  border-left: 2px solid var(--border);
-}
-
-.execution-child-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 2px 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-xs);
-  font-size: 11.5px;
-  color: var(--fg-secondary);
-  background: var(--bg-elevated);
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-
-.execution-child-row > svg {
-  flex-shrink: 0;
-}
 
 .execution-child-clickable {
   cursor: pointer;
@@ -535,76 +345,3 @@
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-
-.execution-child-id {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--fg-subtle);
-}
-
-.execution-child-title {
-  flex-shrink: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.execution-child-doing {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--fg-muted);
-}
-
-.execution-child-right {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.execution-child-right .badge {
-  font-size: 10px;
-  line-height: 16px;
-  padding: 0 5px;
-}
-
-.execution-child-count {
-  font-size: 10.5px;
-  color: var(--fg-subtle);
-  font-variant-numeric: tabular-nums;
-}
-
-/* 紧凑行总耗时：仅真实 run/runNode 边界才渲染（运行中随父级秒表动态变化） */
-.execution-child-elapsed {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--fg-subtle);
-  font-variant-numeric: tabular-nums;
-}
-
-.execution-child-blocked .execution-child-title,
-.execution-child-blocked .execution-child-doing {
-  color: var(--warn);
-}
-
-/* 无会话执行行（深层 workflow / external run）的展开指示 */
-.execution-child-expand {
-  color: var(--fg-subtle);
-}
-
-/* 原位展开的深层直系子项：仅小幅追加缩进，视觉嵌套受限不逐级叠加边距 */
-.execution-children .execution-children {
-  margin: 0 0 2px 14px;
-}
-
-/* 前线活动摘要行：与第 2 层副栏同构，tag 强调色 */
-.execution-frontline .subagent-live-subline-tag {
-  color: var(--accent);
-}
-
