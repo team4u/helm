@@ -9,7 +9,6 @@ import {
   collectDynamicImportTargets,
   collectStaticImportClosure,
   computeAsyncChunkPlan,
-  type ChunkGraph,
 } from '../src/client-chunk-graph.js'
 
 interface NodeSpec {
@@ -19,8 +18,10 @@ interface NodeSpec {
   dynamic?: string[]
 }
 
-function buildGraph(spec: Record<string, NodeSpec>): ChunkGraph {
-  const graph = new Map<string, { imports?: Array<{ path: string; kind: string; external?: boolean }> }>()
+type MutableChunkGraph = Map<string, { imports: Array<{ path: string; kind: string; external?: boolean }> }>
+
+function buildGraph(spec: Record<string, NodeSpec>): MutableChunkGraph {
+  const graph: MutableChunkGraph = new Map()
   for (const [name, node] of Object.entries(spec)) {
     graph.set(name, {
       imports: [

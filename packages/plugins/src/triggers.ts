@@ -17,10 +17,8 @@
  * - create/delete 无跨存储事务：顺序写入 + 显式回滚/报错，成功前 doc.flush()
  *   真实冲刷，不承诺原子 exactly-once（重启 catch-up 策略由 cron 模块文档声明）。
  */
-import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { resolvePluginClientRoot } from './asset-paths.js'
 import { TRIGGERS_PLUGIN_ID } from './triggers/contracts.js'
 import { createDeliveryDispatch } from './triggers/delivery.js'
 import { registerWebhook } from './triggers/webhook.js'
@@ -29,21 +27,6 @@ import { registerCron } from './triggers/cron.js'
 export const TRIGGERS_SCREEN_ID = 'manager'
 export { TRIGGERS_PLUGIN_ID }
 
-/** clientRoot 兼容 src / dist 运行路径（与 workflow/herdr/memory 插件同机制）。 */
-function resolveTriggersClientRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'triggers', 'client')
-  if (existsSync(local)) return local
-  const pkgRoot = dirname(here)
-  const srcFallback = join(pkgRoot, 'src', 'triggers', 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    'triggers_plugin_client_missing',
-    `内置插件 ${TRIGGERS_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
-}
-
 export function createTriggersPlugin(): PluginDefinition {
   return {
     id: TRIGGERS_PLUGIN_ID,
@@ -51,7 +34,7 @@ export function createTriggersPlugin(): PluginDefinition {
     description: '入站连接器：cron 定时与 webhook 入站触发，经防逃逸信封投递到目标会话。',
     icon: 'webhook',
     version: '0.1.0',
-    clientRoot: resolveTriggersClientRoot(),
+    clientRoot: resolvePluginClientRoot(TRIGGERS_PLUGIN_ID, 'triggers', 'triggers_plugin_client_missing'),
     definePlugin(ctx) {
       // 共享投递 helper：cron（targetProfileId 第二参）与 webhook（envelope
       // 携带已解析 target）同一实现；isClosing 在 helper 内检查（ctx.host

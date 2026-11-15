@@ -19,10 +19,8 @@
  * - 从未初始化的合法 Profile 首次需要记忆时惰性创建（不误报缺失）；
  * - 空白 MEMORY.md 是合法的 memory.guide 状态（无缺失告警）。
  */
-import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { HelmError, PROFILE_DETAIL_SECTION_SLOT, type HelmHostProfilesPort, type PluginActionContext, type PluginDefinition } from '@helm/protocol'
+import { resolvePluginClientRoot } from './asset-paths.js'
 import { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MemoryStore } from './memory/store.js'
 
 export { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MEMORY_DEFAULT, MemoryStore } from './memory/store.js'
@@ -49,21 +47,6 @@ const MEMORY_TRUNCATION_NOTE = `\n[ helm 提示：MEMORY.md 超过 ${MAX_MEMORY_
 
 /** 记忆工具用法提示（动态注入，SYSTEM.md 不再硬编码）。 */
 const MEMORY_USAGE_NOTE = '用 `update_memory` 保存稳定的用户偏好与约定。'
-
-/** clientRoot 兼容 src / dist 运行路径（与 workflow/herdr 插件同机制）。 */
-function resolveClientRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'memory', 'client')
-  if (existsSync(local)) return local
-  const pkgRoot = dirname(here)
-  const srcFallback = join(pkgRoot, 'src', 'memory', 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    'memory_plugin_client_missing',
-    `内置插件 ${MEMORY_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
-}
 
 /** 公共端口校验 ID 并读取 Profile（不猜测缺失目标）。 */
 async function requireProfile(profiles: HelmHostProfilesPort, profileId: string): Promise<void> {
@@ -96,7 +79,7 @@ export function createMemoryPlugin(): PluginDefinition {
     icon: 'sparkles',
     version: '0.1.0',
     locked: false,
-    clientRoot: resolveClientRoot(),
+    clientRoot: resolvePluginClientRoot(MEMORY_PLUGIN_ID, 'memory', 'memory_plugin_client_missing'),
     definePlugin(ctx) {
       const { profiles } = ctx.host
       const store = new MemoryStore(ctx.host)

@@ -9,23 +9,9 @@ import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { resolvePluginClientRoot } from './asset-paths.js'
 
 export const MERMAID_PLUGIN_ID = 'builtin:mermaid'
-
-/** clientRoot 兼容 src / dist 运行路径（与 workflow/json-render 插件同机制）。 */
-function resolveClientRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'mermaid', 'client')
-  if (existsSync(local)) return local
-  const pkgRoot = resolve(here, '..')
-  const srcFallback = join(pkgRoot, 'src', 'mermaid', 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    'mermaid_client_missing',
-    `内置插件 ${MERMAID_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
-}
 
 /** 从插件包位置按 Node 的逐级 node_modules 规则找到声明依赖的解析根。 */
 function resolvePluginsPackageRoot(): string {
@@ -46,7 +32,7 @@ export function createMermaidPlugin(): PluginDefinition {
     description: '聊天 ```mermaid 代码块渲染：把 Mermaid 文本渲染为流程图/时序图/甘特图等矢量图表。',
     icon: 'git-branch',
     version: '0.1.0',
-    clientRoot: resolveClientRoot(),
+    clientRoot: resolvePluginClientRoot(MERMAID_PLUGIN_ID, 'mermaid', 'mermaid_client_missing'),
     npmDependencies: { mermaid: resolvePluginsPackageRoot() },
     definePlugin(ctx) {
       ctx.ui.markdownCodeBlock({

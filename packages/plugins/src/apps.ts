@@ -32,6 +32,7 @@ import {
   type PluginDoctorReport,
   type PluginSummary,
 } from '@helm/protocol'
+import { resolvePluginClientRoot } from './asset-paths.js'
 
 export const APPS_PLUGIN_ID = 'builtin:apps'
 export const APPS_SCREEN_ID = 'center'
@@ -82,21 +83,6 @@ const CATALOG_DOC = 'catalog'
 // ---------------------------------------------------------------------------
 // 资产目录解析（client / skill）
 // ---------------------------------------------------------------------------
-
-/** clientRoot 兼容 src / dist 运行路径（与 workflow/herdr/json-render 同机制）。 */
-function resolveClientRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'apps', 'client')
-  if (existsSync(local)) return local
-  const pkgRoot = dirname(here)
-  const srcFallback = join(pkgRoot, 'src', 'apps', 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    'apps_plugin_client_missing',
-    `内置插件 ${APPS_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
-}
 
 function readSkillAssets(): { skillMd: string; references: Record<string, string> } {
   const here = dirname(fileURLToPath(import.meta.url))
@@ -274,7 +260,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
     icon: 'boxes',
     version: '0.1.0',
     locked: false,
-    clientRoot: resolveClientRoot(),
+    clientRoot: resolvePluginClientRoot(APPS_PLUGIN_ID, 'apps', 'apps_plugin_client_missing'),
     definePlugin(ctx) {
       const catalog = ctx.doc<AppsCatalogDoc>(CATALOG_DOC, EMPTY_APPS_CATALOG, { public: true })
 
