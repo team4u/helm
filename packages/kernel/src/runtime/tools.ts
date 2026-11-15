@@ -407,6 +407,8 @@ export async function runShell(
  * gate 门禁命令执行（独立 subagent 与 Workflow adapter 共用，保证只执行一次）。
  * env 使本机 Gate 与实际 Herdr 任务环境一致（插件传 Profile.runtime.env 与
  * 管理环境组成的 spawnEnv，同一 CI/工具 PATH）；受管变量仍固定覆盖。
+ * timeoutMs 可选（缺省 120_000）：单次门禁超时；超时由 runShell 终止整个
+ * 进程组（SIGTERM -> SIGKILL）并如实透出底层结果（timedOut=true、exitCode=null）。
  * 失败永不返回成功；输出脱敏。
  */
 export async function runGate(
@@ -416,12 +418,17 @@ export async function runGate(
     cwd?: string
     conversationId?: number
     nodeId?: string
+    /** 单次门禁超时毫秒数（缺省 120_000；(0, 600_000] 整数由 runShell 校验）。 */
+    timeoutMs?: number
     signal?: AbortSignal
     env?: Record<string, string>
   } = {},
-): Promise<{ ok: boolean; output: string }> {
-  const result = await runShell(deps, command, { ...options, timeoutMs: DEFAULT_TIMEOUT_MS })
-  return { ok: result.ok, output: result.output }
+): Promise<{ ok: boolean; output: string; exitCode: number | null; timedOut: boolean }> {
+  const result = await runShell(deps, command, {
+    ...options,
+    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  })
+  return { ok: result.ok, output: result.output, exitCode: result.exitCode, timedOut: result.timedOut }
 }
 
 /** 组装工具环境：process.env < options.env < 受管变量（固定覆盖，见 buildManagedEnv）。 */

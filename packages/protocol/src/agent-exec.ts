@@ -85,28 +85,58 @@ export function sanitizeAgentExecutionInfo(
   return out
 }
 
-/** 校验并克隆插件回传的 AgentGateResult。 */
+/**
+ * 校验并克隆插件回传的 AgentGateResult（拒绝多余/畸形字段，防注入）。
+ * exitCode 可选（整数或 null：超时/被杀无退出码可考）；timedOut 可选布尔。
+ */
 export function sanitizeAgentGateResult(
   value: unknown,
   context: { agentId: string },
 ): AgentGateResult {
   const source = value as Partial<AgentGateResult> | null
+  const allowed = ['ok', 'output', 'exitCode', 'timedOut'] as const
   if (
     source === null ||
     typeof source !== 'object' ||
     Array.isArray(source) ||
     typeof source.ok !== 'boolean' ||
     typeof source.output !== 'string' ||
-    Object.keys(source).some((key) => key !== 'ok' && key !== 'output')
+    Object.keys(source).some((key) => !(allowed as readonly string[]).includes(key))
   ) {
     throw new HelmError(
       'gate_result_invalid',
-      `agent '${context.agentId}' 的 onGateResult 回传必须是 { ok: boolean, output: string }`,
+      `agent '${context.agentId}' 的 onGateResult 回传必须是 ` +
+        `{ ok: boolean, output: string, exitCode?: number | null, timedOut?: boolean }，` +
+        `且不得携带未知字段`,
       502,
       { agentId: context.agentId },
     )
   }
-  return { ok: source.ok, output: source.output }
+  if (
+    source.exitCode !== undefined &&
+    source.exitCode !== null &&
+    (typeof source.exitCode !== 'number' || !Number.isInteger(source.exitCode))
+  ) {
+    throw new HelmError(
+      'gate_result_invalid',
+      `agent '${context.agentId}' 的 onGateResult 回传 exitCode 必须是整数或 null，` +
+        `收到 ${String(source.exitCode)}`,
+      502,
+      { agentId: context.agentId, field: 'exitCode' },
+    )
+  }
+  if (source.timedOut !== undefined && typeof source.timedOut !== 'boolean') {
+    throw new HelmError(
+      'gate_result_invalid',
+      `agent '${context.agentId}' 的 onGateResult 回传 timedOut 必须是布尔值`,
+      502,
+      { agentId: context.agentId, field: 'timedOut' },
+    )
+  }
+  const out: AgentGateResult = { ok: source.ok, output: source.output }
+  if (source.exitCode !== undefined) out.exitCode = source.exitCode === null ? null : source.exitCode
+  if (source.timedOut !== undefined) out.timedOut = source.timedOut
+  return out
 }
 
 /** gate 回传缺失的显式错误（外部执行环境已执行但未回报；不本机猜 cwd 补跑）。 */

@@ -33,7 +33,7 @@ import { clampThinkingLevelForModel } from './models.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { resolveSpawnTargetChain } from './spawn-target.js'
 import type { HelmToolDeps } from './tool-deps.js'
-import { runGate } from './tools.js'
+import { runGate, MAX_TIMEOUT_MS } from './tools.js'
 
 const bg = BACKGROUND_CONTEXT
 
@@ -262,6 +262,7 @@ async function runNativeSpawnTurn(
       400,
     )
   }
+  if (request.gateTimeoutMs !== undefined) assertGateTimeoutMs(request.gateTimeoutMs)
 
   // ---- resume 解析：纯数字 convId 或 agentId 映射；绝不猜测续接（'12abc' 拒绝）。----
   let childId: number | undefined
@@ -723,16 +724,45 @@ async function settleGate(
   if (!request.gate) return
   // cwd 用子会话实际工作目录，不依赖请求缺省 main cwd；gate 是验收命令，
   // 输出直接进错误诊断（不挂会话，避免误注入会话级 stash 环境）。
-  // conversationId 使 runGate 解析子会话绑定节点（远端 gate 在远端执行）。
-  const gate = await runGate(deps, request.gate, { cwd, conversationId: childId, signal: request.signal })
-  // 执行环境内恰好一次执行后回传结果（宿主引擎据此免二次执行）。
-  request.onGateResult?.({ ok: gate.ok, output: gate.output })
+  // conversationId 使 runGate 解析子会话绑定节点（远端 gate 在远端执行）；
+  // gateTimeoutMs 缺省 120_000（runGate 内），超时杀整个进程组并如实回传。
+  const gate = await runGate(deps, request.gate, {
+    cwd,
+    conversationId: childId,
+    signal: request.signal,
+    ...(request.gateTimeoutMs !== undefined ? { timeoutMs: request.gateTimeoutMs } : {}),
+  })
+  // 执行环境内恰好一次执行后回传完整结果（exitCode/timedOut 供宿主引擎
+  // 判定失败与重试策略；宿主引擎据此免二次执行）。
+  request.onGateResult?.({
+    ok: gate.ok,
+    output: gate.output,
+    exitCode: gate.exitCode,
+    timedOut: gate.timedOut,
+  })
   if (!gate.ok) {
+    const label = gate.timedOut ? '执行超时，已被强制终止' : `exitCode=${gate.exitCode}`
     throw new HelmError(
       'gate_failed',
-      `验收命令失败（exit≠0）：${request.gate}\n${gate.output.slice(-2000)}`,
+      `验收命令失败（${label}）：${request.gate}\n${gate.output.slice(-2000)}`,
       502,
-      { output: gate.output.slice(-4000) },
+      {
+        exitCode: gate.exitCode,
+        timedOut: gate.timedOut,
+        output: gate.output.slice(-4000),
+      },
+    )
+  }
+}
+
+/** gateTimeoutMs 边界：正整数且 ≤ MAX_TIMEOUT_MS（与 bash/runGate 超时同界）；非法显式拒绝（不静默改默认）。 */
+function assertGateTimeoutMs(value: number): void {
+  if (!Number.isInteger(value) || value <= 0 || value > MAX_TIMEOUT_MS) {
+    throw new HelmError(
+      'validation_error',
+      `gateTimeoutMs 必须是 (0, ${MAX_TIMEOUT_MS}] 的整数，收到 ${value}`,
+      400,
+      { gateTimeoutMs: value },
     )
   }
 }

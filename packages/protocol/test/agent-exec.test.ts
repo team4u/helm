@@ -9,7 +9,7 @@
  */
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import { HelmError, sanitizeAgentExecutionInfo, sanitizeAgentNamespacedMeta } from '../src/index.js'
+import { HelmError, sanitizeAgentExecutionInfo, sanitizeAgentGateResult, sanitizeAgentNamespacedMeta } from '../src/index.js'
 
 const timeout = { timeout: 60_000 } as const
 const ctx = { agentId: 'agent-x' }
@@ -141,6 +141,68 @@ describe('sanitizeAgentExecutionInfo.meta envelope', () => {
       ctx,
     )
     assert.deepEqual(info, { nodeId: ' node-1 ', conversationId: 7, executionId: 'e', effectiveCwd: '/abs' })
+  })
+})
+
+describe('sanitizeAgentGateResult（门禁结果契约）', () => {
+  it('最小合法载荷通过且不携带可选字段（旧回传方兼容）', timeout, () => {
+    const out = sanitizeAgentGateResult({ ok: true, output: 'done' }, ctx)
+    assert.deepEqual(out, { ok: true, output: 'done' })
+  })
+
+  it('完整结构通过并原样保留 exitCode（含 null）与 timedOut', timeout, () => {
+    const failed = sanitizeAgentGateResult(
+      { ok: false, output: 'oops', exitCode: 3, timedOut: false },
+      ctx,
+    )
+    assert.deepEqual(failed, { ok: false, output: 'oops', exitCode: 3, timedOut: false })
+    const timedOut = sanitizeAgentGateResult(
+      { ok: false, output: 'killed', exitCode: null, timedOut: true },
+      ctx,
+    )
+    assert.deepEqual(timedOut, { ok: false, output: 'killed', exitCode: null, timedOut: true })
+    // 负整数退出码（信号语义）也是合法整数。
+    const signalled = sanitizeAgentGateResult({ ok: false, output: '', exitCode: -1 }, ctx)
+    assert.equal(signalled.exitCode, -1)
+  })
+
+  it('非对象 / 缺 ok / output 非字符串拒绝', timeout, () => {
+    for (const bad of ['str', null, [], 42, { output: 'x' }, { ok: 1, output: 'x' }, { ok: true }]) {
+      assert.throws(
+        () => sanitizeAgentGateResult(bad, ctx),
+        (error: unknown) => error instanceof HelmError && error.code === 'gate_result_invalid',
+      )
+    }
+  })
+
+  it('未知字段拒绝（防注入）', timeout, () => {
+    assert.throws(
+      () => sanitizeAgentGateResult({ ok: true, output: 'x', signal: 'SIGKILL' }, ctx),
+      (error: unknown) =>
+        error instanceof HelmError &&
+        error.code === 'gate_result_invalid' &&
+        error.message.includes('不得携带未知字段'),
+    )
+  })
+
+  it('exitCode 非整数或非 null 拒绝；timedOut 非布尔拒绝', timeout, () => {
+    for (const badExit of [1.5, '3', true, {}, Number.NaN]) {
+      assert.throws(
+        () => sanitizeAgentGateResult({ ok: false, output: '', exitCode: badExit as never }, ctx),
+        (error: unknown) =>
+          error instanceof HelmError &&
+          error.code === 'gate_result_invalid' &&
+          error.message.includes('exitCode'),
+        `exitCode=${String(badExit)} 应拒绝`,
+      )
+    }
+    assert.throws(
+      () => sanitizeAgentGateResult({ ok: false, output: '', timedOut: 'yes' as never }, ctx),
+      (error: unknown) =>
+        error instanceof HelmError &&
+        error.code === 'gate_result_invalid' &&
+        error.message.includes('timedOut'),
+    )
   })
 })
 

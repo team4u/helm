@@ -31,6 +31,7 @@ import {
   createBashTool,
   createReadArtifactTool,
   createReadTool,
+  runGate,
   runShell,
 } from '../src/runtime/tools.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
@@ -305,6 +306,44 @@ describe('runShell 真实进程行为', { timeout: 60_000 }, () => {
     managed.dispose()
     assert.equal(await new AuthService(join(rootDir, 'rs10')).verifyToken(managed.token), false)
     releaseRedaction.release()
+  })
+})
+
+describe('runGate 门禁真实执行', { timeout: 60_000 }, () => {
+  it('透出底层结果：exitCode/timedOut 如实（成功 0、失败非 0）', { timeout: 60_000 }, async () => {
+    const deps = await makeRealDeps(join(rootDir, 'rg1'))
+    const ok = await runGate(deps, 'echo gate-ok')
+    assert.equal(ok.ok, true)
+    assert.equal(ok.exitCode, 0)
+    assert.equal(ok.timedOut, false)
+    assert.ok(ok.output.includes('gate-ok'))
+    const fail = await runGate(deps, 'echo gate-err >&2; exit 3')
+    assert.equal(fail.ok, false)
+    assert.equal(fail.exitCode, 3)
+    assert.equal(fail.timedOut, false)
+    assert.ok(fail.output.includes('gate-err'))
+  })
+
+  it('timeoutMs 可配：短超时杀进程组并返回 timedOut=true / exitCode=null', { timeout: 60_000 }, async () => {
+    const deps = await makeRealDeps(join(rootDir, 'rg2'))
+    const started = Date.now()
+    const result = await runGate(deps, 'sleep 30', { timeoutMs: 500 })
+    assert.equal(result.ok, false)
+    assert.equal(result.timedOut, true)
+    assert.equal(result.exitCode, null)
+    assert.ok(Date.now() - started < 10_000, '超时应杀组而非等满 30s')
+    assert.ok(result.output.includes('timeout'))
+  })
+
+  it('timeoutMs 非法值经 runShell 显式拒绝（不静默改默认）', { timeout: 60_000 }, async () => {
+    const deps = await makeRealDeps(join(rootDir, 'rg3'))
+    for (const bad of [0, -5, 1.5, Number.NaN, 601_000]) {
+      await assert.rejects(
+        () => runGate(deps, 'true', { timeoutMs: bad }),
+        /invalid_timeout/,
+        `timeoutMs=${bad} 应显式拒绝`,
+      )
+    }
   })
 })
 

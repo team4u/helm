@@ -421,6 +421,98 @@ describe('工具真实执行', { timeout: 60_000 }, () => {
       await kernel.close()
     }
   })
+
+  it('spawn gateTimeoutMs：门禁超时杀组，onGateResult 回完整结构，gate_failed details 携带事实', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 't19'))
+    try {
+      kernel.__faux.setResponses([fauxAssistantMessage('答案')])
+      const reported: Array<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }> = []
+      const started = Date.now()
+      await assert.rejects(
+        () =>
+          kernel.spawnAgent({
+            parentConversationId: 1,
+            prompt: '做事',
+            gate: 'sleep 30',
+            gateTimeoutMs: 800,
+            onGateResult: (result) => reported.push({ ...result }),
+          }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError, `应为 HelmError，实际 ${err}`)
+          assert.equal(err.code, 'gate_failed')
+          const details = err.details as { exitCode?: number | null; timedOut?: boolean; output?: string }
+          assert.equal(details.exitCode, null, '超时无退出码可考，exitCode=null')
+          assert.equal(details.timedOut, true)
+          assert.ok(typeof details.output === 'string' && details.output.length > 0)
+          assert.ok(err.message.includes('超时'), `错误信息应含超时事实（实际 ${err.message}）`)
+          return true
+        },
+      )
+      assert.ok(Date.now() - started < 15_000, 'gateTimeoutMs 应杀组而非等满 30s')
+      // 恰好一次回传，且为完整结构（经 sanitizeAgentGateResult 后仍是四字段）。
+      assert.equal(reported.length, 1)
+      assert.equal(reported[0]!.ok, false)
+      assert.equal(reported[0]!.exitCode, null)
+      assert.equal(reported[0]!.timedOut, true)
+      assert.ok((reported[0]!.output as string).includes('timeout'))
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('spawn 门禁失败：onGateResult 带 exitCode，gate_failed details 带最近 4000 字输出', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 't20'))
+    try {
+      kernel.__faux.setResponses([fauxAssistantMessage('答案')])
+      const reported: Array<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }> = []
+      await assert.rejects(
+        () =>
+          kernel.spawnAgent({
+            parentConversationId: 1,
+            prompt: '做事',
+            gate: "python3 -c \"print('A'*5000)\"; echo gate-out-marker; exit 3",
+            onGateResult: (result) => reported.push({ ...result }),
+          }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError, `应为 HelmError，实际 ${err}`)
+          assert.equal(err.code, 'gate_failed')
+          const details = err.details as { exitCode?: number | null; timedOut?: boolean; output?: string }
+          assert.equal(details.exitCode, 3)
+          assert.equal(details.timedOut, false)
+          assert.ok(details.output!.includes('gate-out-marker'), 'details 输出应含门禁输出尾部')
+          assert.ok(details.output!.length <= 4000, `details.output 应截为最近 4000 字（实际 ${details.output!.length}）`)
+          return true
+        },
+      )
+      assert.equal(reported.length, 1)
+      assert.equal(reported[0]!.exitCode, 3)
+      assert.equal(reported[0]!.timedOut, false)
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('spawn gateTimeoutMs 非法值在执行行边界显式拒绝', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 't21'))
+    try {
+      for (const bad of [0, -5, 1.5, Number.NaN, 600_001]) {
+        await assert.rejects(
+          () =>
+            kernel.spawnAgent({
+              parentConversationId: 1,
+              prompt: '做事',
+              gate: 'true',
+              gateTimeoutMs: bad,
+            }),
+          (err: unknown) =>
+            err instanceof HelmError && err.code === 'validation_error' && err.message.includes('gateTimeoutMs'),
+          `gateTimeoutMs=${bad} 应显式拒绝`,
+        )
+      }
+    } finally {
+      await kernel.close()
+    }
+  })
 })
 
 describe('原生 subagent', { timeout: 60_000 }, () => {

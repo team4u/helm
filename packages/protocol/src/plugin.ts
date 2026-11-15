@@ -163,6 +163,13 @@ export interface AgentSpawnRequest {
   schema?: JsonSchema
   /** Shell 验收门禁命令；唯一命令来源，宿主不得另行叠加。 */
   gate?: string
+  /**
+   * 单次门禁命令超时毫秒数（可选，缺省由执行方默认 120_000，上限 600_000）。
+   * 原生执行行的 runGate 消费：超时终止整个进程组并按门禁失败如实回传
+   * （AgentGateResult.exitCode=null、timedOut=true）；外部运行时（如 herdr）
+   * 按自身执行环境解释同一语义。
+   */
+  gateTimeoutMs?: number
   /** 续接既有子代理的标识。 */
   resume?: string
   /** 随本次子代理派生传递的产物 ID 列表。 */
@@ -214,6 +221,10 @@ export interface AgentExecutionInfo {
 export interface AgentGateResult {
   ok: boolean
   output: string
+  /** 命令退出码；超时或被强杀（无退出码可考）与无法执行时为 null。 */
+  exitCode?: number | null
+  /** true 表示命令超时被强制终止（进程组 SIGTERM -> SIGKILL）。 */
+  timedOut?: boolean
 }
 
 /*
