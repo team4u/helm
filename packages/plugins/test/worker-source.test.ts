@@ -378,7 +378,7 @@ describe('worker-source goal()', () => {
  * ------------------------------------------------------------------------- */
 
 describe('worker-source workflow() nesting and scopeId', () => {
-  it('exports MAX_WORKFLOW_NESTING_DEPTH = 4', () => {
+  it('exports MAX_WORKFLOW_NESTING_DEPTH = 4', timeout, () => {
     assert.equal(MAX_WORKFLOW_NESTING_DEPTH, 4)
   })
 

@@ -249,14 +249,14 @@ describe('workflow gate result exitCode/timedOut', () => {
 // ---------------------------------------------------------------------------
 
 describe('scoped resume keys and retry prompt helpers', () => {
-  it('namespaces labels by scope with root defaulting to 0 (old semantics)', () => {
+  it('namespaces labels by scope with root defaulting to 0 (old semantics)', timeout, () => {
     assert.equal(scopedResumeKey(undefined, 'a'), '0:a')
     assert.equal(scopedResumeKey(0, 'a'), '0:a')
     assert.equal(scopedResumeKey(2, 'a'), '2:a')
     assert.notEqual(scopedResumeKey(1, 'a'), scopedResumeKey(2, 'a'))
   })
 
-  it('appends an incremental failure block to the original prompt', () => {
+  it('appends an incremental failure block to the original prompt', timeout, () => {
     const prompt = agentRetryPrompt('do the task', 1, 'gate failed')
     assert.ok(prompt.startsWith('do the task\n\n[attempt 1 failed]\ngate failed\n'))
     assert.ok(prompt.endsWith('Fix the problem above and complete the original task.'))
