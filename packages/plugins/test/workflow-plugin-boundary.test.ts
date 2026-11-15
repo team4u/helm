@@ -642,9 +642,8 @@ test('cleanup_worktree 工具错误信封：structuredOutput 仅 { ok:false, err
 
 /**
  * 预置插件 records 文档：wf_a 为跨重启遗留 running（init 会标 failed 并发
- * workflow.updated）；wf_c 索引项 conversationId 非法——适配器内 syncRunsDoc →
- * listRuns 将抛 workflow_index_corrupt（观察面持久层故障），但
- * prepareRecovery/init 逐记录读取仍可完成（记录本体存在且形状合法）。
+ * workflow.updated）；wf_c 索引项 status 非法。测试恢复事件适配器时须先
+ * 修复索引，否则恢复入口会以 workflow_index_corrupt 拒绝启动。
  */
 function seedCorruptRunsIndex(docStore: MemoryDocStore): void {
   docStore.set('builtin:workflow:records', {
@@ -665,11 +664,18 @@ function seedCorruptRunsIndex(docStore: MemoryDocStore): void {
   }))
 }
 
-test('emitEvent 适配器：runs 投影损坏时引擎语义完整、显式诊断、无 unhandledRejection', { timeout: 60_000 }, async () => {
-  // 真实插件链路（服务适配器 async 且内部 syncRunsDoc 可抛）：遗留 run 照常被
-  // init 标 failed（终态写入 records），事件投影失败只诊断（stderr +
-  // notification），不得放大成 unhandledRejection 拖垮进程。
+test('emitEvent 适配器：广播失败时引擎语义完整、显式诊断、无 unhandledRejection', { timeout: 60_000 }, async () => {
+  // 恢复索引须先合法；广播观察面故障不能破坏已持久的恢复终态。
   seedCorruptRunsIndex(docs)
+  docs.set('builtin:workflow:records', {
+    'workflow/runs': [
+      { id: 'wf_a', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 },
+      { id: 'wf_c', conversationId: 1, status: 'completed', createdAt: 2, updatedAt: 2 },
+    ],
+  })
+  const unsubscribe = backend.onEvent('workflow.updated', async () => {
+    throw new Error('simulated broadcast failure')
+  })
   const unhandled: unknown[] = []
   const onUnhandled = (reason: unknown): void => {
     unhandled.push(reason)
@@ -679,12 +685,7 @@ test('emitEvent 适配器：runs 投影损坏时引擎语义完整、显式诊�
   try {
     host = makeHost()
     const { createWorkflowPlugin } = await import('../src/workflow.js')
-    // start 末尾的 syncRunsDoc 会因索引损坏同步失败（既有诚实行为）；
-    // 关键在于 init 路径的 workflow.updated 事件不产生逃逸 rejection。
-    await assert.rejects(
-      () => host!.register(createWorkflowPlugin()),
-      (err: unknown) => err instanceof HelmError && err.code === 'workflow_index_corrupt',
-    )
+    await host.register(createWorkflowPlugin())
     await new Promise((resolve) => setTimeout(resolve, 30))
     assert.deepEqual(unhandled, [], '事件适配器故障不得逃逸为 unhandledRejection')
     // wf_a 仍被 init 如实标 failed（引擎终态语义不被观察面故障破坏）。
@@ -698,6 +699,7 @@ test('emitEvent 适配器：runs 投影损坏时引擎语义完整、显式诊�
     )
     assert.ok(notifications.length > 0, `应发布投影失败诊断 notification（实际 ${JSON.stringify(backend.emitted.map((e) => e.type))}）`)
   } finally {
+    unsubscribe()
     process.off('unhandledRejection', onUnhandled)
     await host?.dispose()
   }
