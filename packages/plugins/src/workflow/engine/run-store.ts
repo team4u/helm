@@ -1,6 +1,5 @@
 /**
- * run-store.ts — run 记录 / run 索引持久层与 summary 派生（自 WorkflowService
- * 拆出的内部模块）。
+ * run-store.ts — run 记录 / run 索引持久层（自 WorkflowService 拆出的内部模块）。
  *
  * 职责：
  * - 单库设计：run 索引存注入的 state store（@helm/kernel 唯一 state.sqlite
@@ -9,12 +8,12 @@
  * - 形状校验纪律：索引与记录是持久层外部输入，读取端显式校验，损坏一律
  *   workflow_index_corrupt / workflow_record_corrupt（500），绝不把损坏数据
  *   当空数组或有效记录强转使用；
- * - summary 派生与脱敏：RunRecord → WorkflowRunSummary、progress → nodes
- *   折叠（预览截断）、节点元数据逐值脱敏；
  * - 接管标记甄别（inspectTakeoverMarker）：进程内活性事实由调用方注入
  *   （保留集合/活跃表），磁盘事实（索引 + 记录/账本文件）由本模块核查。
  *
- * 写入顺序纪律见 write()：先读校验索引、再写文件、最后更新索引。
+ * summary 派生 / 脱敏 / progress 折叠投影见 run-summary.ts（纯函数，与
+ * 本持久层正交）。写入顺序纪律见 write()：先读校验索引、再写文件、最后
+ * 更新索引。
  */
 
 import { randomUUID } from 'node:crypto'
@@ -30,14 +29,12 @@ import {
   writeSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { HelmError, redactJsonValue, type AgentExecutionInfo } from '@helm/protocol'
+import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
 import type {
-  WorkflowNodeState,
   WorkflowProgressEntry,
   WorkflowRunStatus,
   WorkflowRunSummary,
 } from '../../contracts.js'
-import { collapse, type WorkflowEntry } from './progress.js'
 
 /**
  * run 索引与 summary 的持久层：内核唯一 state.sqlite 的命名空间 doc 视图
@@ -232,19 +229,6 @@ function runRecordProblem(record: unknown): string | undefined {
 }
 
 /**
- * 进度树长文本预览上限（§4.3）：完整内容已在子会话与 .jsonl 账本，进度文档
- * 只存预览，防止千级节点把 sessionDoc/runs 撑到 2 MiB 上限（413）。
- */
-const NODE_TEXT_PREVIEW_LIMIT = 1024
-const NODE_TRUNCATION_HINT = '\n...[truncated, full content in conversation/journal]'
-
-function nodeTextPreview(text: string): string {
-  return text.length > NODE_TEXT_PREVIEW_LIMIT
-    ? text.slice(0, NODE_TEXT_PREVIEW_LIMIT) + NODE_TRUNCATION_HINT
-    : text
-}
-
-/**
  * 后台 run 恢复所需的在途子会话坐标：childConversationIds 是运行期即时持久
  * 的权威面；subagentMeta/nodes 坐标是既有冗余投影（子代理路径/终态落盘），
  * 恢复时合并去重，不做旧格式迁移读取。
@@ -276,19 +260,15 @@ export interface RunStoreOptions {
   dataDir: string
   /** run 索引的 SQLite doc store（主 app 注入 KernelRuntime.documentStore）。 */
   state: WorkflowStateStore
-  /** 持久面值级脱敏钩子（与 WorkflowService 共用同一实例）。 */
-  redact: (text: string) => string
 }
 
 export class RunStore {
   private readonly dataDir: string
   private readonly state: WorkflowStateStore
-  private readonly redact: (text: string) => string
 
   constructor(options: RunStoreOptions) {
     this.dataDir = options.dataDir
     this.state = options.state
-    this.redact = options.redact
   }
 
   artifactsDir(conversationId: number): string {
@@ -515,154 +495,5 @@ export class RunStore {
     }
     if (traces.length > 0) return { ghost: false, reason: `磁盘仍存在接管 run 的${traces.join('、')}` }
     return { ghost: true }
-  }
-
-  toSummary(record: RunRecord): WorkflowRunSummary {
-    return {
-      id: record.id,
-      name: record.name,
-      conversationId: record.conversationId,
-      ...(record.kind !== undefined ? { kind: record.kind } : {}),
-      ...(record.savedName !== undefined ? { savedName: record.savedName } : {}),
-      ...(record.description !== undefined ? { description: record.description } : {}),
-      ...(record.phases !== undefined ? { phases: record.phases } : {}),
-      ...(record.parentToolCallId !== undefined && record.parentToolCallId !== ''
-        ? { parentToolCallId: record.parentToolCallId }
-        : {}),
-      status: record.status,
-      createdAt: record.createdAt,
-      updatedAt: record.updatedAt,
-      ...(record.result !== undefined ? { result: record.result } : {}),
-      ...(record.error !== undefined ? { error: record.error } : {}),
-      ...(record.nodes !== undefined ? { nodes: record.nodes } : {}),
-      ...(record.progress !== undefined ? { progress: record.progress } : {}),
-      ...(record.replayedFrom !== undefined ? { replayedFrom: record.replayedFrom } : {}),
-      ...(record.journalIoErrors !== undefined ? { journalIoErrors: record.journalIoErrors } : {}),
-    }
-  }
-
-  /** summary 出口统一逐值脱敏（nodes 里的元数据不能漏 Token）。 */
-  redactSummaryNodes(summary: WorkflowRunSummary): WorkflowRunSummary {
-    if (summary.nodes === undefined) return summary
-    return { ...summary, nodes: summary.nodes.map((node) => this.redactNode(node)) }
-  }
-
-  /** progress 折叠后的节点元数据逐值脱敏（落库/事件前）。 */
-  redactNodes(nodes: NonNullable<WorkflowRunSummary['nodes']>): NonNullable<WorkflowRunSummary['nodes']> {
-    return nodes.map((node) => this.redactNode(node))
-  }
-
-  private redactNode(node: NonNullable<WorkflowRunSummary['nodes']>[number]): NonNullable<WorkflowRunSummary['nodes']>[number] {
-    const redacted = redactJsonValue(node, this.redact) as NonNullable<WorkflowRunSummary['nodes']>[number]
-    if (redacted.label !== undefined) redacted.label = this.redact(redacted.label)
-    if (redacted.prompt !== undefined) redacted.prompt = this.redact(redacted.prompt)
-    if (redacted.effectiveCwd !== undefined) redacted.effectiveCwd = this.redact(redacted.effectiveCwd)
-    if (redacted.worktree !== undefined) {
-      redacted.worktree = redactJsonValue(redacted.worktree, this.redact) as NonNullable<WorkflowNodeState['worktree']>
-    }
-    if (redacted.gate !== undefined) {
-      // exitCode/timedOut 是诊断事实（非机密），脱敏时保留不丢。
-      redacted.gate = {
-        ok: redacted.gate.ok,
-        output: this.redact(redacted.gate.output),
-        ...(redacted.gate.exitCode !== undefined ? { exitCode: redacted.gate.exitCode } : {}),
-        ...(redacted.gate.timedOut !== undefined ? { timedOut: redacted.gate.timedOut } : {}),
-      }
-    }
-    if (redacted.gateCommand !== undefined) redacted.gateCommand = this.redact(redacted.gateCommand)
-    if (redacted.model !== undefined) redacted.model = this.redact(redacted.model)
-    if (redacted.error !== undefined) redacted.error = this.redact(redacted.error)
-    if (redacted.output !== undefined) redacted.output = redactJsonValue(redacted.output, this.redact)
-    return redacted
-  }
-
-  // ------------------------------------------------------------------
-  // progress → nodes 折叠（inspect 视图）
-  // ------------------------------------------------------------------
-
-  nodesFromProgress(progress: readonly WorkflowEntry[]): NonNullable<WorkflowRunSummary['nodes']> {
-    const collapsed = collapse(progress)
-    // agent 与 action 共享同一全序位次：混合调用时必须按 index 升序输出，
-    // 先遍历 agents 再遍历 actions 会把两类节点拆散重排。
-    const merged: Array<{ index: number; node: NonNullable<WorkflowRunSummary['nodes']>[number] }> = []
-    for (const agent of collapsed.agents) {
-      merged.push({
-        index: agent.index,
-        node: {
-          id: `agent-${agent.index}`,
-          kind: 'agent',
-          status:
-            agent.state === 'done'
-              ? 'done'
-              : agent.state === 'error'
-                ? agent.skipped
-                  ? 'skipped'
-                  : 'failed'
-                : agent.queuedAt !== undefined && agent.startedAt === undefined
-                  ? 'pending'
-                  : 'running',
-          ...(agent.cached !== undefined ? { cached: agent.cached } : {}),
-          ...(agent.agentType !== undefined ? { agentType: agent.agentType } : {}),
-          ...(agent.label !== undefined ? { label: agent.label } : {}),
-          ...(agent.nodeId !== undefined ? { nodeId: agent.nodeId } : {}),
-          ...(agent.conversationId !== undefined ? { conversationId: agent.conversationId } : {}),
-          ...(agent.executionId !== undefined ? { executionId: agent.executionId } : {}),
-          ...(agent.effectiveCwd !== undefined ? { effectiveCwd: agent.effectiveCwd } : {}),
-          ...(agent.worktree !== undefined ? { worktree: agent.worktree } : {}),
-          ...(agent.phaseIndex !== undefined ? { phaseIndex: agent.phaseIndex } : {}),
-          ...(agent.phaseTitle !== undefined ? { phaseTitle: agent.phaseTitle } : {}),
-          ...(agent.gateCommand !== undefined ? { gateCommand: agent.gateCommand } : {}),
-          ...(agent.model !== undefined ? { model: agent.model } : {}),
-          ...(agent.attempt !== undefined ? { attempt: agent.attempt } : {}),
-          ...(agent.prompt !== undefined ? { prompt: nodeTextPreview(agent.prompt) } : {}),
-          ...(agent.schema !== undefined ? { schema: agent.schema } : {}),
-          ...(agent.gate !== undefined
-            ? {
-                gate: {
-                  ok: agent.gate.ok,
-                  output: nodeTextPreview(agent.gate.output),
-                  // exitCode/timedOut 是诊断事实（非机密），折叠时保留不丢。
-                  ...(agent.gate.exitCode !== undefined ? { exitCode: agent.gate.exitCode } : {}),
-                  ...(agent.gate.timedOut !== undefined ? { timedOut: agent.gate.timedOut } : {}),
-                },
-              }
-            : {}),
-          ...(agent.tokens !== undefined ? { tokens: agent.tokens } : {}),
-          ...(agent.durationMs !== undefined ? { durationMs: agent.durationMs } : {}),
-          ...(agent.startedAt !== undefined ? { startedAt: agent.startedAt } : {}),
-          ...(agent.lastProgressAt !== undefined ? { settledAt: agent.lastProgressAt } : {}),
-          ...(agent.state === 'done' && agent.resultPreview !== undefined ? { output: agent.resultPreview } : {}),
-          ...(agent.error !== undefined ? { error: nodeTextPreview(agent.error) } : {}),
-        },
-      })
-    }
-    for (const action of collapsed.actions) {
-      merged.push({
-        index: action.index,
-        node: {
-          id: `action-${action.index}`,
-          kind: 'action',
-          label: action.label ?? action.actionId,
-          status:
-            action.state === 'done'
-              ? 'done'
-              : action.state === 'error'
-                ? 'failed'
-                : action.queuedAt !== undefined && action.startedAt === undefined
-                  ? 'pending'
-                  : 'running',
-          ...(action.cached !== undefined ? { cached: action.cached } : {}),
-          ...(action.phaseIndex !== undefined ? { phaseIndex: action.phaseIndex } : {}),
-          ...(action.phaseTitle !== undefined ? { phaseTitle: action.phaseTitle } : {}),
-          ...(action.startedAt !== undefined ? { startedAt: action.startedAt } : {}),
-          ...(action.lastProgressAt !== undefined ? { settledAt: action.lastProgressAt } : {}),
-          ...(action.durationMs !== undefined ? { durationMs: action.durationMs } : {}),
-          ...(action.state === 'done' && action.resultPreview !== undefined ? { output: action.resultPreview } : {}),
-          ...(action.error !== undefined ? { error: nodeTextPreview(action.error) } : {}),
-        },
-      })
-    }
-    merged.sort((a, b) => a.index - b.index)
-    return merged.map((entry) => entry.node)
   }
 }
