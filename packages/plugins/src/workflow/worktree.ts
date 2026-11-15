@@ -41,51 +41,37 @@
  * （路径/分支/仓路径）含已登记机密时显式 worktree_metadata_secret 拒绝
  * 落库（诊断仅用脱敏值）；清理仅针对 docStore 已登记记录，分支名严格
  * 校验 helm/spawn-* | helm/wf-* 前缀（绝不误删人类分支/目录）。
+ *
+ * 模块拆分（职责单一）：节点侧 git 命令执行 / porcelain 解析 / 路径与
+ * 状态计算在 worktree-git.ts（纯函数 + 显式端口）；登记持久化、记录校验
+ * 与选择器查询在 worktree-store.ts（WorktreeStore）。本文件只保留核心
+ * 状态机：allocate/registerExternal/inspect/verifyForResume/cleanup 的
+ * 编排、per-repo 串行锁与策略校验（受管分支前缀、占用与脏工作区保护）。
  */
 
-import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
 import type { ExecutionError, FileError, Result, ShellExecResult } from '@earendil-works/pi-durable/env'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, pathRulesForShape, targetPathShape, type NodePathUsage } from '@helm/protocol'
+import {
+  canonicalPathOnNode,
+  countUnmergedCommits,
+  deleteManagedBranch,
+  dirExistsOnNode,
+  gitExec,
+  matchWorktreeEntry,
+  normalizePathValue,
+  resolveMergeReferenceHead,
+  resolveRepoAuthority,
+  type GitCapture,
+  type GitOkResult,
+  type RepoAuthority,
+} from './worktree-git.js'
+import { WorktreeStore, type ManagedWorktreeRecord } from './worktree-store.js'
 
-/** 受管 worktree 持久化 key（docStore 命名空间 'runtime/worktrees'）。 */
-const DOC_KEY = 'runtime/worktrees'
-
-/** 持久化文档形状（版本化，向后不兼容时整体重建——开发阶段无迁移）。 */
-interface WorktreeDoc {
-  version: 1
-  records: ManagedWorktreeRecord[]
-}
-
-/** 单条受管 worktree 记录。 */
-export interface ManagedWorktreeRecord {
-  /** 唯一标识（`${nodeId}:${path}`）。 */
-  id: string
-  nodeId: string
-  /** 主工作树路径（权威 `git worktree list` 首条登记；external 首次清理时解析并持久化）。 */
-  repoRoot: string
-  path: string
-  branch: string
-  baseCommit: string
-  /** 创建时源目录检出的本地分支名（detached HEAD 时缺省）。 */
-  baseBranch?: string
-  /** 源目录本身是受管 Worktree 时记录其登记 ID（多级派生父子关系）。 */
-  parentWorktreeId?: string
-  dirtySource: boolean
-  parentConversationId: number
-  conversationId?: number
-  executionId?: string
-  origin: 'native' | 'external'
-  status: 'active' | 'removed'
-  createdAt: number
-  removedAt?: number
-  /** 分支是否已删除（worktree 已移除但分支删除部分失败时为 false，可重试 cleanup deleteBranch）。 */
-  branchDeleted?: boolean
-  /** 分支删除失败的最后诊断（已脱敏；重试成功后清除）。 */
-  branchDeleteError?: string
-}
+/** 单条受管 worktree 记录（登记形状与持久化见 worktree-store.ts）。 */
+export type { ManagedWorktreeRecord } from './worktree-store.js'
 
 export interface WorktreeAllocatorDeps {
   /**
@@ -228,9 +214,6 @@ export interface CleanupResult {
 /** 允许清理的分支前缀（helm 受管命名空间；绝不碰人类分支）。 */
 const MANAGED_BRANCH_PREFIXES = ['helm/spawn-', 'helm/wf-'] as const
 
-/** 单条 git 命令的执行超时（秒）。 */
-const GIT_TIMEOUT_SECONDS = 120
-
 /** inspect 未提交文件行上限（超出截断，dirtyFileCount 保留真实计数）。 */
 const INSPECT_DIRTY_FILES_LIMIT = 200
 /** inspect diff 预览字符上限（超出截断并标记 diffTruncated）。 */
@@ -242,244 +225,18 @@ const INSPECT_PROBE_LIMIT = 4_096
 /** inspect git 失败诊断进入错误消息的字符上限（details.output 同限）。 */
 const INSPECT_ERROR_DIAGNOSTIC_LIMIT = 2_000
 
-/** `git worktree list --porcelain -z` 的单条权威登记。 */
-interface WorktreeEntry {
-  path: string
-  head: string
-  branch?: string
-  detached: boolean
-  locked: boolean
-  lockedReason?: string
-  prunable: boolean
-  prunableReason?: string
-}
-
-/** 同一仓库的权威信息（主工作树 + common-dir + 全部登记）。 */
-interface RepoAuthority {
-  /** 主工作树路径（porcelain 输出首条登记）。 */
-  mainPath: string
-  /** 绝对 git common-dir（`<mainPath>/.git`，布局校验通过的前提下）。 */
-  commonDir: string
-  /** common-dir 的真实路径（per-repo 锁键；解析失败回退原值）。 */
-  canonicalCommonDir: string
-  entries: WorktreeEntry[]
-}
-
-type GitOkResult = { ok: true; output: string; truncated: boolean; lines: string[]; totalNonEmptyLines: number }
-type GitResult = GitOkResult | { ok: false; output: string; exitCode: number | null; truncated: boolean }
-
-/**
- * git 输出受限采集模式（inspect 只读预览专用；不声明则不限制，
- * allocate/cleanup/verify 语义保持不变）：
- * - chars：字符上限——onOutput 阶段先到先截，绝不无限聚合内存后再 slice；
- * - lines：流式按行结算——只保留前 maxLines 条非空原行（含 porcelain 首列），
- *   同时对全部非空行保持真实计数（status 清单截断不失真总量）。
- */
-interface GitCaptureChars {
-  kind: 'chars'
-  limit: number
-}
-interface GitCaptureLines {
-  kind: 'lines'
-  maxLines: number
-}
-type GitCapture = GitCaptureChars | GitCaptureLines
-
-/** 解析 `git worktree list --porcelain -z` 输出（NUL 分隔记录，空 token 分隔条目）。 */
-function parseWorktreeList(output: string): WorktreeEntry[] {
-  const entries: WorktreeEntry[] = []
-  let current: WorktreeEntry | undefined
-  const flush = (): void => {
-    if (current !== undefined) entries.push(current)
-    current = undefined
-  }
-  for (const token of output.split('\0')) {
-    if (token === '') {
-      flush()
-      continue
-    }
-    if (token.startsWith('worktree ')) {
-      flush()
-      current = { path: token.slice('worktree '.length), head: '', detached: false, locked: false, prunable: false }
-      continue
-    }
-    if (current === undefined) continue
-    if (token.startsWith('HEAD ')) current.head = token.slice('HEAD '.length)
-    else if (token.startsWith('branch ')) current.branch = token.slice('branch '.length)
-    else if (token === 'detached') current.detached = true
-    else if (token === 'locked') current.locked = true
-    else if (token.startsWith('locked ')) {
-      current.locked = true
-      current.lockedReason = token.slice('locked '.length)
-    } else if (token === 'prunable') current.prunable = true
-    else if (token.startsWith('prunable ')) {
-      current.prunable = true
-      current.prunableReason = token.slice('prunable '.length)
-    }
-  }
-  flush()
-  return entries
-}
-
-/** 路径形状感知的归一化比较（跨 POSIX/Windows 拼写差异；形状未知时原值）。 */
-function normalizePathValue(path: string): string {
-  const rules = pathRulesForShape(targetPathShape(path))
-  return rules === undefined ? path : rules.normalize(path)
-}
-
-/** 外部 AbortSignal 挂到 SDK Context（预 aborted 时 exec 直接拒绝 spawn）。 */
-function contextWithSignal(signal: AbortSignal | undefined): Context {
-  return signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
-}
-
-/**
- * 在目标节点执行单条 git 命令（argv 数组直跑程序、无 shell 解析，路径含
- * 空格/特殊字符或 Windows 目标 shell 未知时同样安全）；非零退出显式失败。
- * capture（可选）：声明后按受限模式在 onOutput 阶段即限内存（chars 截断
- * 置 truncated；lines 只保留前 N 条非空原行并保持全量非空行计数），
- * 错误诊断同样受限并经 redact 脱敏；不声明时行为与原无限聚合一致。
- */
-async function gitExec(
-  deps: WorktreeAllocatorDeps,
-  nodeId: string,
-  cwd: string,
-  args: readonly string[],
-  signal?: AbortSignal,
-  capture?: GitCapture,
-): Promise<GitResult> {
-  const redact = deps.redact ?? ((t: string) => t)
-  const maxLines = capture?.kind === 'lines' ? capture.maxLines : undefined
-  let combined = ''
-  let truncated = false
-  const lines: string[] = []
-  let totalNonEmptyLines = 0
-  let pendingLine = ''
-  /** lines 模式：结算一条完整行（空行不计不入；超保留上限仍计数并置 truncated）。 */
-  const settleLine = (line: string): void => {
-    if (maxLines === undefined || line === '') return
-    totalNonEmptyLines += 1
-    if (lines.length < maxLines) lines.push(line)
-    else truncated = true
-  }
-  const result = await deps.exec(
-    nodeId,
-    cwd,
-    ['git', ...args],
-    {
-      cwd,
-      timeout: GIT_TIMEOUT_SECONDS,
-      onOutput: (text: string) => {
-        if (capture === undefined) {
-          combined += text
-          return
-        }
-        if (capture.kind === 'chars') {
-          if (truncated) return
-          if (combined.length + text.length <= capture.limit) {
-            combined += text
-            return
-          }
-          combined += text.slice(0, capture.limit - combined.length)
-          truncated = true
-          return
-        }
-        // lines 模式：块内可能切在行中间，仅结算完整行，残行留待下一块/收尾。
-        pendingLine += text
-        const parts = pendingLine.split('\n')
-        pendingLine = parts.pop() ?? ''
-        for (const line of parts) settleLine(line)
-      },
-    },
-    contextWithSignal(signal),
-  )
-  // 流末尾：残留半行按完整行结算（porcelain 输出以换行结尾时此处为空）。
-  if (pendingLine !== '') settleLine(pendingLine)
-  if (!result.ok) {
-    const captured = capture?.kind === 'lines' ? lines.join('\n') : combined
-    return {
-      ok: false,
-      truncated,
-      output: redact(captured + (captured === '' ? '' : '\n') + `[git ${result.error.code}: ${result.error.message}]`),
-      exitCode: null,
-    }
-  }
-  if (result.value.exitCode !== 0) {
-    const captured = capture?.kind === 'lines' ? lines.join('\n') : combined
-    return { ok: false, truncated, output: redact(captured), exitCode: result.value.exitCode }
-  }
-  return capture?.kind === 'lines'
-    ? { ok: true, output: lines.join('\n'), truncated, lines, totalNonEmptyLines }
-    : { ok: true, output: combined, truncated, lines, totalNonEmptyLines }
-}
-
 export class WorktreeAllocator {
   /** per-repo 进程内串行队列尾（键为 canonical git common-dir：同仓库不同 worktree 也串行）。 */
   private readonly repoLocks = new Map<string, Promise<unknown>>()
 
   private readonly redact: (text: string) => string
 
+  /** 登记持久层（docStore 读写 + 记录校验 + 选择器查询；见 worktree-store.ts）。 */
+  private readonly store: WorktreeStore
+
   constructor(private readonly deps: WorktreeAllocatorDeps) {
     this.redact = deps.redact ?? ((t: string) => t)
-  }
-
-  // ------------------------------------------------------------------
-  // 持久化
-  // ------------------------------------------------------------------
-
-  private loadDoc(): WorktreeDoc {
-    const doc = this.deps.docStore.get<WorktreeDoc>(DOC_KEY, { version: 1, records: [] })
-    if (doc === null || typeof doc !== 'object' || !Array.isArray(doc.records)) {
-      // 开发阶段不迁移：损坏文档显式失败，绝不静默当空表（丢失已登记记录
-      // 会让 cleanup 误判“未登记”而拒绝清理，或误把人类目录当可清理）。
-      throw new HelmError('worktree_doc_corrupted', `受管 worktree 文档 '${DOC_KEY}' 损坏（records 非数组）`, 500)
-    }
-    return doc
-  }
-
-  private saveDoc(doc: WorktreeDoc): void {
-    this.deps.docStore.set(DOC_KEY, doc)
-  }
-
-  private updateRecord(id: string, mutate: (record: ManagedWorktreeRecord) => ManagedWorktreeRecord): void {
-    const doc = this.loadDoc()
-    const index = doc.records.findIndex((r) => r.id === id)
-    if (index === -1) {
-      throw new HelmError('not_found', `受管 worktree 记录 ${id} 不存在（文档状态不一致）`, 404, { id })
-    }
-    doc.records[index] = mutate(doc.records[index]!)
-    this.saveDoc(doc)
-  }
-
-  /**
-   * 持久化元数据机密检查：docStore 原始 JSON 落库不自动脱敏，任何将保存的
-   * 路径/分支/仓路径经 redact 后有差异（含已登记 secret）即显式拒绝登记
-   * （诊断仅用脱敏值；绝不脱敏后再当真实路径使用，也绝不 raw 落库）。
-   * identity 为非机密定位字段（nodeId/conversationId/executionId 等），
-   * 原样进 message/details——拒绝后仍能定位对应的外部执行。
-   */
-  private assertMetadataSecretFree(
-    fields: Record<string, string>,
-    identity: Record<string, string | number | undefined>,
-  ): void {
-    const offenders: string[] = []
-    for (const [name, value] of Object.entries(fields)) {
-      if (value === '') continue
-      const redacted = this.redact(value)
-      if (redacted !== value) offenders.push(`${name}=${redacted}`)
-    }
-    if (offenders.length > 0) {
-      const identityEntries = Object.entries(identity).filter(([, v]) => v !== undefined && v !== '')
-      const identityText = identityEntries.map(([k, v]) => `${k}: ${String(v)}`).join('，')
-      throw new HelmError(
-        'worktree_metadata_secret',
-        `受管 worktree 元数据疑似包含已登记机密，拒绝登记与原始落库（脱敏值：${offenders.join('；')}）${identityText !== '' ? `【定位：${identityText}】` : ''}；请调整路径/分支命名或先轮换机密`,
-        400,
-        {
-          ...Object.fromEntries(identityEntries),
-          redactedFields: offenders,
-        },
-      )
-    }
+    this.store = new WorktreeStore(deps.docStore, this.redact)
   }
 
   // ------------------------------------------------------------------
@@ -501,184 +258,6 @@ export class WorktreeAllocator {
       if (this.repoLocks.get(key) === tail) this.repoLocks.delete(key)
     })
     return run
-  }
-
-  // ------------------------------------------------------------------
-  // 节点侧 fs / 权威 repo 信息
-  // ------------------------------------------------------------------
-
-  /**
-   * 经目标节点真实 fs stat 证明路径存在（Result/异常都显式处理）：探测失败
-   * （节点离线/权限/超时）一律 fail closed 抛 worktree_check_failed，绝不
-   * 当作目录缺失（目录缺失只能由本方法返回 false 或权威 worktree 记录证明）。
-   */
-  private async dirExistsOnNode(nodeId: string, path: string): Promise<boolean> {
-    let failure: string
-    try {
-      const result = await this.deps.nodeExists(nodeId, path, BACKGROUND_CONTEXT)
-      if (result.ok) return result.value
-      failure = `${result.error.code}: ${result.error.message}`
-    } catch (error) {
-      failure = error instanceof Error ? error.message : String(error)
-    }
-    throw new HelmError(
-      'worktree_check_failed',
-      `无法探测节点 ${nodeId} 上 '${this.redact(path)}' 是否存在（${failure}）：节点离线/权限/超时一律不当作目录缺失，操作中止`,
-      502,
-      { nodeId, path: this.redact(path), failure },
-    )
-  }
-
-  /** 节点侧真实路径用于锁与归属校验；探测失败必须拒绝，不能退回词法路径。 */
-  private async canonicalPathOnNode(nodeId: string, path: string): Promise<string> {
-    const result = await this.deps.nodeCanonicalPath(nodeId, path, BACKGROUND_CONTEXT)
-    if (!result.ok) {
-      throw new HelmError('worktree_check_failed', `节点 ${nodeId} 无法确认真实路径 ${this.redact(path)}：${this.redact(result.error.message)}`, 502)
-    }
-    return result.value
-  }
-
-  /**
-   * 从 cwd 出发取同一仓库的权威信息：`git rev-parse --git-common-dir` +
-   * `git worktree list --porcelain -z`（首条登记即主工作树）。布局校验：
-   * common-dir 必须位于主工作树下（`<mainPath>/.git`），裸仓库 /
-   * --separate-git-dir 等非常规形态显式拒绝（绝不 dirname 猜根）。
-   */
-  private async resolveRepoAuthority(nodeId: string, cwd: string, signal?: AbortSignal): Promise<RepoAuthority> {
-    const common = await gitExec(this.deps, nodeId, cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'], signal)
-    const commonDir = common.ok ? common.output.trim() : ''
-    if (!common.ok || commonDir === '') {
-      throw new HelmError(
-        'worktree_check_failed',
-        `无法在节点 ${nodeId} 解析 '${this.redact(cwd)}' 的 git common-dir（不猜测主仓路径，操作中止）：\n${common.output.trim()}`,
-        502,
-        { nodeId, cwd: this.redact(cwd), output: common.output.slice(0, 2000) },
-      )
-    }
-    const list = await gitExec(this.deps, nodeId, cwd, ['worktree', 'list', '--porcelain', '-z'], signal)
-    if (!list.ok) {
-      throw new HelmError(
-        'worktree_check_failed',
-        `无法在节点 ${nodeId} 读取 '${this.redact(cwd)}' 的权威 worktree 登记（git worktree list 失败，操作中止）：\n${list.output.trim()}`,
-        502,
-        { nodeId, cwd: this.redact(cwd), output: list.output.slice(0, 2000) },
-      )
-    }
-    const entries = parseWorktreeList(list.output)
-    const main = entries[0]
-    if (main === undefined || main.path === '') {
-      throw new HelmError(
-        'worktree_check_failed',
-        `节点 ${nodeId} 上 '${this.redact(cwd)}' 的权威 worktree 登记为空（无法确定主工作树，操作中止）`,
-        502,
-        { nodeId, cwd: this.redact(cwd) },
-      )
-    }
-    const rules = pathRulesForShape(targetPathShape(commonDir) ?? targetPathShape(main.path))
-    if (rules.normalize(commonDir) !== rules.normalize(rules.join(main.path, '.git'))) {
-      throw new HelmError(
-        'worktree_unsupported_layout',
-        `仓库布局不受支持：git common-dir '${this.redact(commonDir)}' 不在主工作树 '${this.redact(main.path)}' 下（--separate-git-dir / 裸仓库等形态不猜测主仓路径，显式拒绝）`,
-        400,
-        { nodeId, commonDir: this.redact(commonDir), mainPath: this.redact(main.path) },
-      )
-    }
-    return { mainPath: main.path, commonDir, canonicalCommonDir: await this.canonicalPathOnNode(nodeId, commonDir), entries }
-  }
-
-  /** 权威登记中按归一化路径匹配条目。 */
-  private matchEntry(entries: readonly WorktreeEntry[], path: string): WorktreeEntry | undefined {
-    return entries.find((e) => normalizePathValue(e.path) === normalizePathValue(path)) ?? entries.find((e) => e.path === path)
-  }
-
-  /** 删除受管分支（幂等：分支已不存在视为已删除；失败返回真实输出供重试诊断）。 */
-  private async deleteManagedBranch(
-    nodeId: string,
-    repoRoot: string,
-    branch: string,
-    force: boolean,
-    signal?: AbortSignal,
-  ): Promise<{ deleted: boolean; failureOutput?: string }> {
-    const verify = await gitExec(this.deps, nodeId, repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], signal)
-    if (!verify.ok && verify.exitCode === 1) return { deleted: true }
-    const del = await gitExec(this.deps, nodeId, repoRoot, ['branch', force ? '-D' : '-d', branch], signal)
-    return del.ok ? { deleted: true } : { deleted: false, failureOutput: del.output }
-  }
-
-  /**
-   * 「已合入」参考提交解析（cleanup 脏工作区检查与分支删除共用）：
-   * 1) 显式 mergedInto：rev-parse --verify 严格校验，目标不存在显式
-   *    validation_error（绝不静默回退主工作树）；
-   * 2) 记录的 baseBranch：父分支仍存在则用其当前提交（多级派生时父模块
-   *    分支才是合入目标）；
-   * 3) 其余（含 baseBranch 已删）：回退主工作树当前 HEAD。
-   */
-  private async resolveMergeReferenceHead(
-    nodeId: string,
-    repoRoot: string,
-    mainHead: string,
-    mergedInto: string | undefined,
-    baseBranch: string | undefined,
-    signal?: AbortSignal,
-  ): Promise<string> {
-    if (mergedInto !== undefined) {
-      const verify = await gitExec(
-        this.deps,
-        nodeId,
-        repoRoot,
-        ['rev-parse', '--verify', '--quiet', `${mergedInto}^{commit}`],
-        signal,
-      )
-      const commit = verify.output.trim()
-      if (!verify.ok || !/^[0-9a-f]{7,64}$/i.test(commit)) {
-        throw new HelmError(
-          'validation_error',
-          `mergedInto 指向的分支或提交不存在：${this.redact(mergedInto)}（不回退主工作树，操作中止）`,
-          400,
-          { mergedInto: this.redact(mergedInto) },
-        )
-      }
-      return commit
-    }
-    if (baseBranch !== undefined && baseBranch !== '') {
-      const verify = await gitExec(
-        this.deps,
-        nodeId,
-        repoRoot,
-        ['rev-parse', '--verify', '--quiet', `refs/heads/${baseBranch}^{commit}`],
-        signal,
-      )
-      const commit = verify.output.trim()
-      if (verify.ok && /^[0-9a-f]{7,64}$/i.test(commit)) return commit
-      // 父分支已删：回退主工作树 HEAD（不猜测其他基线）。
-    }
-    return mainHead
-  }
-
-  /** 分支相对参考提交的未合入提交数（rev-list count）；git 失败显式 worktree_check_failed。 */
-  private async countUnmergedCommits(
-    nodeId: string,
-    repoRoot: string,
-    referenceHead: string,
-    branch: string,
-    signal?: AbortSignal,
-  ): Promise<number> {
-    const unmerged = await gitExec(
-      this.deps,
-      nodeId,
-      repoRoot,
-      ['rev-list', '--count', `${referenceHead}..${branch}`],
-      signal,
-    )
-    if (!unmerged.ok) {
-      throw new HelmError(
-        'worktree_check_failed',
-        `无法确认分支 ${branch} 相对参考提交 ${referenceHead} 的未合入提交（git rev-list 失败，清理中止）：\n${unmerged.output.trim()}`,
-        502,
-        { referenceHead, branch, output: unmerged.output.slice(0, 2000) },
-      )
-    }
-    return Number.parseInt(unmerged.output.trim(), 10) || 0
   }
 
   // ------------------------------------------------------------------
@@ -720,7 +299,7 @@ export class WorktreeAllocator {
     // Step B：权威 repo 信息（主工作树来自 `git worktree list` 首条登记——
     // 从已有隔离 worktree 再派生也定位到真正主仓；锁键为 canonical
     // common-dir，同仓库不同 worktree 的操作同样串行）。
-    const authority = await this.resolveRepoAuthority(nodeId, sourceToplevel, signal)
+    const authority = await resolveRepoAuthority(this.deps, nodeId, sourceToplevel, signal)
 
     // Step C：baseCommit 与 dirtySource 取实际 sourceCwd（父隔离工作树已
     // 提交的改动不丢失；不从主工作树取 HEAD）。
@@ -767,7 +346,7 @@ export class WorktreeAllocator {
     const worktreePath = pathRules.join(worktreeBase, `${repoName}-${shortId}`)
 
     // Step E：机密检查（git worktree add 之前拦截全部将落库的持久字段）。
-    this.assertMetadataSecretFree(
+    this.store.assertMetadataSecretFree(
       {
         repoRoot: authority.mainPath,
         path: worktreePath,
@@ -783,7 +362,8 @@ export class WorktreeAllocator {
     return this.withRepoLock(nodeId, authority.canonicalCommonDir, async () => {
       // 锁内从当前活跃登记查找父 Worktree（源目录本身是受管隔离树时
       // 记录其登记 ID，建立多级派生父子关系；多条同路径活跃记录取最新）。
-      const parent = this.loadDoc().records
+      const parent = this.store
+        .records()
         .filter(
           (r) =>
             r.status === 'active' &&
@@ -796,7 +376,7 @@ export class WorktreeAllocator {
         )
       const parentWorktreeId = parent?.id
       if (parentWorktreeId !== undefined) {
-        this.assertMetadataSecretFree({ parentWorktreeId }, { nodeId, parentConversationId: input.parentConversationId })
+        this.store.assertMetadataSecretFree({ parentWorktreeId }, { nodeId, parentConversationId: input.parentConversationId })
       }
       if (input.beforeCreate !== undefined) {
         await input.beforeCreate({
@@ -842,9 +422,7 @@ export class WorktreeAllocator {
       // 登记持久化失败：如实报 worktree_register_failed 并保留已创建资源
       // 坐标（不擅自回收——调用方可能已基于该 worktree 派生子会话）。
       try {
-        const doc = this.loadDoc()
-        doc.records.push(record)
-        this.saveDoc(doc)
+        this.store.append(record)
       } catch (error) {
         const cause = error instanceof Error ? error.message : String(error)
         throw new HelmError(
@@ -865,7 +443,7 @@ export class WorktreeAllocator {
   /** 子会话创建后把 conversationId 关联写回记录。 */
   bindConversation(worktreePath: string, nodeId: string, conversationId: number): void {
     const id = `${nodeId}:${worktreePath}`
-    const existing = this.loadDoc().records.find((r) => r.id === id)
+    const existing = this.store.findById(id)
     if (existing === undefined) {
       throw new HelmError(
         'not_found',
@@ -874,25 +452,24 @@ export class WorktreeAllocator {
         { id, conversationId },
       )
     }
-    this.updateRecord(id, (r) => ({ ...r, conversationId }))
+    this.store.updateRecord(id, (r) => ({ ...r, conversationId }))
   }
 
   /** 外部运行时（如 builtin:herdr）回传 worktree 时统一登记/更新（同 (nodeId,path) 去重）。 */
   registerExternal(input: RegisterExternalInput): ManagedWorktreeRecord {
     const id = `${input.nodeId}:${input.path}`
-    this.assertMetadataSecretFree(
+    this.store.assertMetadataSecretFree(
       { path: input.path, branch: input.branch, repoRoot: input.sourceCwd ?? '', nodeId: input.nodeId, executionId: input.executionId ?? '' },
       { nodeId: this.redact(input.nodeId), parentConversationId: input.parentConversationId, conversationId: input.conversationId, executionId: input.executionId !== undefined ? this.redact(input.executionId) : undefined },
     )
-    const doc = this.loadDoc()
-    const existing = doc.records.find((r) => r.id === id)
+    const existing = this.store.findById(id)
     if (existing !== undefined) {
       const updated: ManagedWorktreeRecord = {
         ...existing,
         ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
         ...(input.executionId !== undefined ? { executionId: input.executionId } : {}),
       }
-      this.updateRecord(id, () => updated)
+      this.store.updateRecord(id, () => updated)
       return updated
     }
     // 机密检查：docStore 原始 JSON 落库不自动脱敏，含已登记 secret 的
@@ -914,24 +491,18 @@ export class WorktreeAllocator {
       status: 'active',
       createdAt: Date.now(),
     }
-    doc.records.push(record)
-    this.saveDoc(doc)
+    this.store.append(record)
     return record
   }
 
   /** 查询会话当前绑定的受管 worktree（最新优先；无绑定返回 undefined）。 */
   getForConversation(conversationId: number): ManagedWorktreeRecord | undefined {
-    const records = this.loadDoc().records.filter((r) => r.conversationId === conversationId)
-    if (records.length === 0) return undefined
-    // 多条（历史遗留）时取最新创建的 active 记录；无 active 取最新。
-    const active = records.filter((r) => r.status === 'active')
-    const pool = active.length > 0 ? active : records
-    return pool.reduce((a, b) => (b.createdAt >= a.createdAt ? b : a))
+    return this.store.getForConversation(conversationId)
   }
 
   /** 全部登记记录（新建在前；含已 removed，供只读检视/列表消费）。 */
   list(): ManagedWorktreeRecord[] {
-    return [...this.loadDoc().records].sort((a, b) => b.createdAt - a.createdAt)
+    return this.store.list()
   }
 
   /**
@@ -940,84 +511,12 @@ export class WorktreeAllocator {
    * （绝不任选首条静默清理别的节点）。
    */
   findActive(query: { worktreeId?: string; conversationId?: number; path?: string; nodeId?: string }): ManagedWorktreeRecord | undefined {
-    const records = this.loadDoc().records.filter((r) => r.status === 'active')
-    if (query.worktreeId !== undefined) return records.find((r) => r.id === query.worktreeId)
-    if (query.conversationId !== undefined) {
-      const byConversation = records.filter((r) => r.conversationId === query.conversationId)
-      return byConversation.length === 0
-        ? undefined
-        : byConversation.reduce((a, b) => (b.createdAt >= a.createdAt ? b : a))
-    }
-    if (query.path !== undefined) {
-      const byPath = records.filter(
-        (r) => r.path === query.path && (query.nodeId === undefined || r.nodeId === query.nodeId),
-      )
-      const nodeIds = new Set(byPath.map((r) => r.nodeId))
-      if (nodeIds.size > 1) {
-        throw new HelmError(
-          'validation_error',
-          `路径 ${query.path} 在多个节点存在 active 登记（${[...nodeIds].join(', ')}），查询需指定 nodeId 消歧`,
-          400,
-          { path: query.path, nodeIds: [...nodeIds] },
-        )
-      }
-      return byPath.length === 0 ? undefined : byPath.reduce((a, b) => (b.createdAt >= a.createdAt ? b : a))
-    }
-    return undefined
+    return this.store.findActive(query)
   }
 
   // ------------------------------------------------------------------
   // inspect（只读检视：登记元数据 + 节点真实 git 只读探测）
   // ------------------------------------------------------------------
-
-  /**
-   * 解析检视目标记录（选择器互斥规则与 cleanup 同构；含已 removed 记录——
-   * 检视是只读面，元数据本身诚实可返）。未登记选择器显式 not_found：
-   * 只检视 helm 登记的受管 worktree，绝不接受任意目录读文件。
-   */
-  private resolveInspectRecord(input: WorktreeInspectInput): ManagedWorktreeRecord {
-    const records = this.loadDoc().records
-    if (input.worktreeId !== undefined) {
-      const record = records.find((r) => r.id === input.worktreeId)
-      if (record === undefined) {
-        throw new HelmError('not_found', `未找到受管 worktree 记录 ${input.worktreeId}`, 404, { worktreeId: input.worktreeId })
-      }
-      return record
-    }
-    if (input.conversationId !== undefined) {
-      const record = this.getForConversation(input.conversationId)
-      if (record === undefined) {
-        throw new HelmError(
-          'not_found',
-          `未找到会话 ${input.conversationId} 绑定的受管 worktree 记录；inspect 仅检视 helm 登记的隔离 worktree`,
-          404,
-          { conversationId: input.conversationId },
-        )
-      }
-      return record
-    }
-    const matches = records.filter(
-      (r) => r.path === input.path && (input.nodeId === undefined || r.nodeId === input.nodeId),
-    )
-    if (matches.length === 0) {
-      throw new HelmError(
-        'not_found',
-        `未找到路径 ${input.path}${input.nodeId !== undefined ? `（节点 ${input.nodeId}）` : ''} 的受管 worktree 记录；inspect 仅检视 helm 登记的隔离 worktree，不支持任意目录`,
-        404,
-        { path: input.path, ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}) },
-      )
-    }
-    const nodeIds = new Set(matches.map((r) => r.nodeId))
-    if (nodeIds.size > 1) {
-      throw new HelmError(
-        'validation_error',
-        `路径 ${input.path} 在多个节点存在登记（${[...nodeIds].join(', ')}），检视需指定 nodeId 消歧（或改用 worktreeId 精确指定）`,
-        400,
-        { path: input.path, nodeIds: [...nodeIds] },
-      )
-    }
-    return matches.reduce((a, b) => (b.createdAt >= a.createdAt ? b : a))
-  }
 
   /**
    * 只读检视一个受管 worktree：登记元数据 + 在目标节点真实执行的 git 只读
@@ -1051,7 +550,7 @@ export class WorktreeAllocator {
       throw new HelmError('validation_error', 'conversationId 与 path 择一提供', 400)
     }
 
-    const record = this.resolveInspectRecord(input)
+    const record = this.store.resolveInspectRecord(input)
     const diffBase: WorktreeInspectResult['diffBase'] = record.baseCommit !== '' ? 'baseCommit' : 'HEAD'
     const metadata: Pick<WorktreeInspectResult, 'record' | 'diffBase'> = { record, diffBase }
     if (record.status === 'removed') {
@@ -1065,7 +564,7 @@ export class WorktreeAllocator {
         diffTruncated: false,
       }
     }
-    if (!(await this.dirExistsOnNode(record.nodeId, record.path))) {
+    if (!(await dirExistsOnNode(this.deps, record.nodeId, record.path))) {
       return {
         ...metadata,
         exists: false,
@@ -1204,7 +703,7 @@ export class WorktreeAllocator {
         { path: record.path, branch: record.branch },
       )
     }
-    if (!(await this.dirExistsOnNode(record.nodeId, record.path))) {
+    if (!(await dirExistsOnNode(this.deps, record.nodeId, record.path))) {
       throw new HelmError(
         'worktree_missing',
         `子会话绑定的隔离 worktree '${record.path}'（节点 ${record.nodeId}）目录已不存在（节点真实 fs 探测证实）`,
@@ -1241,54 +740,6 @@ export class WorktreeAllocator {
   // ------------------------------------------------------------------
   // cleanup
   // ------------------------------------------------------------------
-
-  /** 解析清理目标记录（选择器互斥：worktreeId 单用；nodeId 仅搭 path；conversationId/path 择一）。 */
-  private resolveCleanupRecord(input: CleanupInput): ManagedWorktreeRecord {
-    const records = this.loadDoc().records
-    if (input.worktreeId !== undefined) {
-      const record = records.find((r) => r.id === input.worktreeId)
-      if (record === undefined) {
-        throw new HelmError('not_found', `未找到受管 worktree 记录 ${input.worktreeId}`, 404, { worktreeId: input.worktreeId })
-      }
-      return record
-    }
-    if (input.conversationId !== undefined) {
-      const record = this.getForConversation(input.conversationId)
-      if (record === undefined) {
-        throw new HelmError(
-          'not_found',
-          `未找到会话 ${input.conversationId} 绑定的受管 worktree 记录；cleanup 仅清理 helm 登记的隔离 worktree，绝不触碰未登记目录`,
-          404,
-          { conversationId: input.conversationId },
-        )
-      }
-      return record
-    }
-    const matches = records.filter(
-      (r) => r.path === input.path && (input.nodeId === undefined || r.nodeId === input.nodeId),
-    )
-    if (matches.length === 0) {
-      throw new HelmError(
-        'not_found',
-        `未找到路径 ${input.path}${input.nodeId !== undefined ? `（节点 ${input.nodeId}）` : ''} 的受管 worktree 记录；cleanup 仅清理 helm 登记的隔离 worktree，绝不触碰未登记目录`,
-        404,
-        { path: input.path, ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}) },
-      )
-    }
-    const active = matches.filter((r) => r.status === 'active')
-    const nodeIds = new Set(active.map((r) => r.nodeId))
-    if (nodeIds.size > 1) {
-      throw new HelmError(
-        'validation_error',
-        `路径 ${input.path} 在多个节点存在 active 登记（${[...nodeIds].join(', ')}），清理需指定 nodeId 消歧（或改用 worktreeId 精确指定）`,
-        400,
-        { path: input.path, nodeIds: [...nodeIds] },
-      )
-    }
-    if (active.length > 0) return active.reduce((a, b) => (b.createdAt >= a.createdAt ? b : a))
-    // 全部已 removed：幂等返回最新一条（供重复清理拿 removed:false）。
-    return matches.reduce((a, b) => ((b.removedAt ?? b.createdAt) >= (a.removedAt ?? a.createdAt) ? b : a))
-  }
 
   /** 归属不匹配的显式拒绝（登记路径上的工作树已被替换/挪用，force 也不可越过）。 */
   private ownerMismatch(record: ManagedWorktreeRecord, reason: string, detail: string, extra?: Record<string, unknown>): HelmError {
@@ -1425,7 +876,7 @@ export class WorktreeAllocator {
       }
     }
 
-    const record = this.resolveCleanupRecord(input)
+    const record = this.store.resolveCleanupRecord(input)
     if (!MANAGED_BRANCH_PREFIXES.some((prefix) => record.branch.startsWith(prefix))) {
       throw new HelmError(
         'validation_error',
@@ -1448,12 +899,13 @@ export class WorktreeAllocator {
             { worktreeId: record.id, branch: record.branch },
           )
         }
-        const authority = await this.resolveRepoAuthority(record.nodeId, record.repoRoot, input.signal)
+        const authority = await resolveRepoAuthority(this.deps, record.nodeId, record.repoRoot, input.signal)
         await this.withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
           // 与主路径同规则解析「已合入」参考（显式 mergedInto 优先，不存在
           // 显式拒绝；其次 baseBranch；再主 HEAD）；确认已全部合入时统一 -D
           // 删除（参考非 main 时 git branch -d 的上游合入检查会拒绝）。
-          const referenceHead = await this.resolveMergeReferenceHead(
+          const referenceHead = await resolveMergeReferenceHead(
+            this.deps,
             record.nodeId,
             authority.mainPath,
             authority.entries[0]!.head,
@@ -1462,8 +914,9 @@ export class WorktreeAllocator {
             input.signal,
           )
           const mergedIntoReference =
-            (await this.countUnmergedCommits(record.nodeId, authority.mainPath, referenceHead, record.branch, input.signal)) === 0
-          const del = await this.deleteManagedBranch(
+            (await countUnmergedCommits(this.deps, record.nodeId, authority.mainPath, referenceHead, record.branch, input.signal)) === 0
+          const del = await deleteManagedBranch(
+            this.deps,
             record.nodeId,
             authority.mainPath,
             record.branch,
@@ -1472,12 +925,12 @@ export class WorktreeAllocator {
           )
           branchDeleted = del.deleted
           if (del.deleted) {
-            this.updateRecord(record.id, (r) => {
+            this.store.updateRecord(record.id, (r) => {
               const { branchDeleteError: _previousError, ...clean } = r
               return { ...clean, branchDeleted: true }
             })
           } else {
-            this.updateRecord(record.id, (r) => ({ ...r, branchDeleted: false, branchDeleteError: (del.failureOutput ?? '').slice(0, 2000) }))
+            this.store.updateRecord(record.id, (r) => ({ ...r, branchDeleted: false, branchDeleteError: (del.failureOutput ?? '').slice(0, 2000) }))
             throw new HelmError(
               'branch_delete_failed',
               `重试删除分支 ${record.branch} 失败（登记保持 removed，可再次重试）：\n${(del.failureOutput ?? '').trim()}`,
@@ -1511,7 +964,7 @@ export class WorktreeAllocator {
     // 目录存在性证明：仅节点真实 fs stat（或后续权威 worktree 登记）可证明
     // 缺失；探测失败 fail closed。缺失时显式 worktree_missing 并保留登记
     //（绝不全仓 prune 其他节点的登记，也绝不假成功）。
-    if (!(await this.dirExistsOnNode(record.nodeId, record.path))) {
+    if (!(await dirExistsOnNode(this.deps, record.nodeId, record.path))) {
       throw new HelmError(
         'worktree_missing',
         `受管 worktree '${record.path}'（节点 ${record.nodeId}）目录已不存在（节点真实 fs 探测证实）；登记保留，请人工核对后处理（不自动 prune）`,
@@ -1523,17 +976,17 @@ export class WorktreeAllocator {
     // 权威 repo 信息（external 记录首次清理时解析并持久化主工作树）。
     let authority: RepoAuthority
     if (record.repoRoot !== '') {
-      authority = await this.resolveRepoAuthority(record.nodeId, record.repoRoot, input.signal)
+      authority = await resolveRepoAuthority(this.deps, record.nodeId, record.repoRoot, input.signal)
     } else {
-      authority = await this.resolveRepoAuthority(record.nodeId, record.path, input.signal)
-      this.assertMetadataSecretFree({ repoRoot: authority.mainPath }, { nodeId: record.nodeId, executionId: record.executionId })
-      this.updateRecord(record.id, (r) => ({ ...r, repoRoot: authority.mainPath }))
+      authority = await resolveRepoAuthority(this.deps, record.nodeId, record.path, input.signal)
+      this.store.assertMetadataSecretFree({ repoRoot: authority.mainPath }, { nodeId: record.nodeId, executionId: record.executionId })
+      this.store.updateRecord(record.id, (r) => ({ ...r, repoRoot: authority.mainPath }))
     }
 
     let outcome: { removed: boolean; branchDeleted: boolean } | undefined
     await this.withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
       // 锁内以最新记录为准（并发清理/状态变更在此收敛）。
-      const fresh = this.loadDoc().records.find((r) => r.id === record.id)
+      const fresh = this.store.findById(record.id)
       if (fresh === undefined) {
         throw new HelmError('not_found', `受管 worktree 记录 ${record.id} 不存在（文档状态不一致）`, 404, { id: record.id })
       }
@@ -1560,10 +1013,10 @@ export class WorktreeAllocator {
       }
 
       // 锁内重新取证权威登记，做 path/branch/head 归属匹配。
-      const locked = await this.resolveRepoAuthority(fresh.nodeId, fresh.repoRoot !== '' ? fresh.repoRoot : fresh.path, input.signal)
+      const locked = await resolveRepoAuthority(this.deps, fresh.nodeId, fresh.repoRoot !== '' ? fresh.repoRoot : fresh.path, input.signal)
       const entries = locked.entries
       const mainEntry = entries[0]!
-      const match = this.matchEntry(entries, fresh.path)
+      const match = matchWorktreeEntry(entries, fresh.path)
       if (match === undefined) {
         throw this.ownerMismatch(
           fresh,
@@ -1604,8 +1057,8 @@ export class WorktreeAllocator {
       }
 
       // realpath canonical 校验：登记路径不得经软链跳到主工作树或其他工作树。
-      const canonicalRecord = await this.canonicalPathOnNode(fresh.nodeId, fresh.path)
-      const canonicalMain = await this.canonicalPathOnNode(fresh.nodeId, mainEntry.path)
+      const canonicalRecord = await canonicalPathOnNode(this.deps, fresh.nodeId, fresh.path)
+      const canonicalMain = await canonicalPathOnNode(this.deps, fresh.nodeId, mainEntry.path)
       if (canonicalRecord === canonicalMain) {
         throw this.ownerMismatch(fresh, 'main_worktree', `经真实路径解析指向主工作树 ${this.redact(mainEntry.path)}`, {
           mainPath: this.redact(mainEntry.path),
@@ -1613,7 +1066,7 @@ export class WorktreeAllocator {
       }
       for (const other of entries) {
         if (other === match) continue
-        const canonicalOther = await this.canonicalPathOnNode(fresh.nodeId, other.path)
+        const canonicalOther = await canonicalPathOnNode(this.deps, fresh.nodeId, other.path)
         if (canonicalRecord === canonicalOther) {
           throw this.ownerMismatch(
             fresh,
@@ -1653,7 +1106,8 @@ export class WorktreeAllocator {
           .split('\n')
           .map((l) => l.trim())
           .filter((l) => l !== '')
-        const referenceHead = await this.resolveMergeReferenceHead(
+        const referenceHead = await resolveMergeReferenceHead(
+          this.deps,
           fresh.nodeId,
           locked.mainPath,
           mainEntry.head,
@@ -1661,7 +1115,7 @@ export class WorktreeAllocator {
           fresh.baseBranch,
           input.signal,
         )
-        unmergedCommits = await this.countUnmergedCommits(fresh.nodeId, locked.mainPath, referenceHead, fresh.branch, input.signal)
+        unmergedCommits = await countUnmergedCommits(this.deps, fresh.nodeId, locked.mainPath, referenceHead, fresh.branch, input.signal)
         if (dirtyFiles.length > 0 || unmergedCommits > 0) {
           throw new HelmError(
             'worktree_dirty',
@@ -1702,7 +1156,8 @@ export class WorktreeAllocator {
       // active，也不掩盖分支删除失败。
       let branchDeleted = false
       if (input.deleteBranch === true) {
-        const del = await this.deleteManagedBranch(
+        const del = await deleteManagedBranch(
+          this.deps,
           fresh.nodeId,
           locked.mainPath,
           fresh.branch,
@@ -1711,7 +1166,7 @@ export class WorktreeAllocator {
         )
         branchDeleted = del.deleted
         if (!del.deleted) {
-          this.updateRecord(fresh.id, (r) => ({
+          this.store.updateRecord(fresh.id, (r) => ({
             ...r,
             status: 'removed' as const,
             removedAt: Date.now(),
@@ -1726,7 +1181,7 @@ export class WorktreeAllocator {
           )
         }
       }
-      this.updateRecord(fresh.id, (r) => {
+      this.store.updateRecord(fresh.id, (r) => {
         if (input.deleteBranch !== true) return { ...r, status: 'removed' as const, removedAt: Date.now() }
         const { branchDeleteError: _previousError, ...clean } = r
         return { ...clean, status: 'removed' as const, removedAt: Date.now(), branchDeleted: true }
