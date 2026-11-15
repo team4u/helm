@@ -97,6 +97,19 @@ const WATCHDOG_EXCLUSIVE_TOOLS: ReadonlySet<string> = new Set([
 /** 外部目标（无权威 seq，以哨兵水位去重）的同类动作再触发间隔。 */
 const EXTERNAL_REFRACTORY_MS = 60 * 60 * 1000
 
+/**
+ * workflow_run 失败自动续跑冷却退避表（按 autoResumeCount 索引：
+ * 第 0 次失败后等 2 分钟、第 1 次后 5 分钟、第 2 次后 15 分钟）。
+ * 网关则恢复时避免立刻重放大工作流把接口再次打挂。
+ */
+const WORKFLOW_RESUME_BACKOFF_MS = [2 * 60_000, 5 * 60_000, 15 * 60_000]
+
+/** 自动续跑次数上限：autoResumeCount 达 3 后不再自动续跑，交人类处置。 */
+const WORKFLOW_RESUME_MAX_COUNT = 3
+
+/** 续跑调用失败后的内存重试推迟（跨重启重置；防止每 tick 重试刷屏）。 */
+const WORKFLOW_RESUME_RETRY_DEFER_MS = 10 * 60_000
+
 /** 定时巡检间隔（毫秒；与原内核 watchdog 定时器口径一致）。 */
 const TICK_INTERVAL_MS = 15_000
 
@@ -146,6 +159,13 @@ interface Finding {
   evidence: string
   /** 0-Token 层已定处置，供 L2 知晓上下文。 */
   disposition: string
+  /** workflow_run 探针事实（严格校验后的权威续跑参数；仅 resume 链路使用）。 */
+  workflowRun?: {
+    runId: string
+    conversationId: number
+    failedAt: number
+    autoResumeCount: number
+  }
 }
 
 type PlannedOp =
@@ -153,6 +173,7 @@ type PlannedOp =
   | { type: 'wake'; finding: Finding; refractoryMs: number }
   | { type: 'abort'; finding: Finding }
   | { type: 'bridge'; finding: Finding }
+  | { type: 'resume'; finding: Finding }
 
 // ---------------------------------------------------------------------------
 // 纯辅助：探针字段归一 / 去重文档校验 / 文本转义
@@ -244,6 +265,10 @@ export function registerSuperAgentWatchdog(
   const inFlightBridges = new Map<string, string>()
   /** 提交中的目标水位，防止不同 tick 对同一异常重复投递。 */
   const inFlightWakes = new Set<string>()
+  /** 续跑调用在途的 runId（防相邻 tick 重叠重复 invoke；探针侧才是权威防重）。 */
+  const inFlightWorkflowResumes = new Set<string>()
+  /** 续跑调用失败后的重试推迟时刻（runId -> notBefore；内存态，跨重启重置）。 */
+  const workflowResumeRetryNotBefore = new Map<string, number>()
   /** 服务停止后不再发起新的自动处置（close 期间不无边界等待）。 */
   let closing = false
   /** 定时巡检定时器（unref 不阻退出；stop 清理）。 */
@@ -809,12 +834,19 @@ export function registerSuperAgentWatchdog(
     const nodeId = probe.nodeId ?? 'local'
     const key = targetKey('external', nodeId, probe.targetId)
     lastExternalProbes.set(targetKey('external', nodeId, probe.targetId), probe)
+    const seq = asNonNegativeInt(probe.stateChangeSeq)
 
     // 由 watchdog 会话派生的窗格同样排除，防自激。
     const parent = asNonNegativeInt(probe.facts?.['parentConversationId'])
     if (parent !== undefined && watchdogIds.has(parent)) return
 
-    const seq = asNonNegativeInt(probe.stateChangeSeq)
+    // workflow_run 失败探针（builtin:workflow 采集）：走确定性 0-Token 断点
+    // 续跑链路，不进通用外部状态规则（error 直接唤醒 L2 会绕过冷却与限流）。
+    if (probe.facts?.['kind'] === 'workflow_run') {
+      classifyWorkflowRun(probe, key, seq, findings, ops)
+      return
+    }
+
     const stalledMs = asNonNegativeFinite(probe.stalledMs)
     const errors = asNonNegativeInt(probe.consecutiveErrors) ?? 0
     const pendingAskCount = asNonNegativeInt(probe.facts?.['pendingAskCount']) ?? 0
@@ -897,6 +929,84 @@ export function registerSuperAgentWatchdog(
     }
   }
 
+  /**
+   * workflow_run 失败探针分类（§3.2 断点续跑）：
+   * - 事实严格校验（kind/runId/conversationId/failedAt/autoResumeCount），
+   *   残缺只读告知，绝不猜造；
+   * - 严格仅 helm 归属后台探针（human/bot 一律不自动续跑）；
+   * - 冷却退避：autoResumeCount 0/1/2 → 2/5/15 分钟；未满冷却不产生任何
+   *   动作（每 15s tick 通知会刷屏）；
+   * - autoResumeCount 达上限后交人类（限频告知）；
+   * - 防重不占本地去重坑：依赖探针侧 resumedByRunId（续跑按档的旧 Run 不
+   *   再上报）与 stateChangeSeq=autoResumeCount（新失败 Run 携带新水位）
+   *   机制；执行层仅加内存 in-flight 与失败重试推迟（见 executeOps）。
+   */
+  function classifyWorkflowRun(
+    probe: WatchdogProbe,
+    key: string,
+    seq: number | undefined,
+    findings: Finding[],
+    ops: PlannedOp[],
+  ): void {
+    const facts = probe.facts ?? {}
+    const runId =
+      typeof facts['runId'] === 'string' && facts['runId'].length > 0 ? facts['runId'] : undefined
+    const conversationIdRaw = asNonNegativeInt(facts['conversationId'])
+    const failedAt =
+      typeof facts['failedAt'] === 'number' && Number.isFinite(facts['failedAt'])
+        ? facts['failedAt']
+        : undefined
+    const autoResumeCount = asNonNegativeInt(facts['autoResumeCount'])
+
+    const finding: Finding = {
+      key,
+      targetKind: 'external',
+      nodeId: probe.nodeId ?? 'local',
+      targetId: probe.targetId,
+      ownedBy: probe.ownedBy,
+      status: probe.status,
+      ...(seq !== undefined ? { stateChangeSeq: seq } : {}),
+      evidence: `外部工作流探针 ${probe.targetId}@${probe.nodeId ?? 'local'} 状态 ${probe.status}`,
+      disposition: '',
+    }
+    findings.push(finding)
+
+    if (runId === undefined || conversationIdRaw === undefined || conversationIdRaw <= 0 || failedAt === undefined || autoResumeCount === undefined) {
+      finding.disposition = 'notify_only（workflow_run 事实残缺，不猜测）'
+      ops.push({ type: 'notify', finding, refractoryMs: EXTERNAL_REFRACTORY_MS })
+      return
+    }
+    const conversationId = conversationIdRaw
+    finding.conversationId = conversationId
+    finding.workflowRun = { runId, conversationId, failedAt, autoResumeCount }
+    finding.evidence = `失败工作流 run ${runId}（会话 ${conversationId}）failedAt=${new Date(failedAt).toISOString()}，已自动续跑 ${autoResumeCount} 次`
+
+    if (seq === undefined) {
+      finding.disposition = 'notify_only（缺权威 seq，只读）'
+      ops.push({ type: 'notify', finding, refractoryMs: EXTERNAL_REFRACTORY_MS })
+      return
+    }
+    if (probe.ownedBy !== 'helm') {
+      // 严格仅 helm 归属后台探针：human/bot（含缺省未知）一律不自动续跑。
+      finding.disposition = 'notify_only（非 helm 归属，拒绝自动续跑）'
+      ops.push({ type: 'notify', finding, refractoryMs: EXTERNAL_REFRACTORY_MS })
+      return
+    }
+    if (autoResumeCount >= WORKFLOW_RESUME_MAX_COUNT || autoResumeCount >= WORKFLOW_RESUME_BACKOFF_MS.length) {
+      finding.disposition = `notify_only（自动续跑次数用尽（上限 ${WORKFLOW_RESUME_MAX_COUNT}），交人类处置）`
+      ops.push({ type: 'notify', finding, refractoryMs: EXTERNAL_REFRACTORY_MS })
+      return
+    }
+    const cooldownMs = WORKFLOW_RESUME_BACKOFF_MS[autoResumeCount]!
+    if (Date.now() - failedAt < cooldownMs) {
+      // 冷却未满：零动作（不通知——冷却期内每 15s tick 会刷屏），仅记事实。
+      finding.disposition = `wait_cooldown（第 ${autoResumeCount + 1} 次续跑冷却 ${Math.round(cooldownMs / 60_000)} 分钟未满）`
+      return
+    }
+    finding.disposition = 'auto_resume（冷却期满，断点续跑）'
+    ops.push({ type: 'resume', finding })
+  }
+
   // ---------------------------------------------------------------------------
   // 动作执行：notify / abort / bridge / wake
   // ---------------------------------------------------------------------------
@@ -938,7 +1048,58 @@ export function registerSuperAgentWatchdog(
       fireAndForget('watchdog:bridge-ask', () => bridgeToAsk(finding))
     }
 
-    // 4) L2 唤醒：仅当 due 异常实际投递成功后才消耗 wake 水位；提交被拒绝
+    // 4) workflow_run 失败自动续跑（0-Token 断点续跑）：每 tick 最多恢复 1 个
+    //    （failedAt 升序，最旧失败优先，避免网关则恢复时同时唤醒十几个大
+    //    工作流再次打挂接口）；防重依赖探针侧 resumedByRunId / stateChangeSeq
+    //    机制（续跑成功的旧 Run 不再上报、新失败 Run 携带新水位），执行层仅
+    //    加内存 in-flight（防相邻 tick 重叠）与失败重试推迟（防每 tick 刷屏）。
+    const resumeOps = ops.filter((op): op is Extract<PlannedOp, { type: 'resume' }> => op.type === 'resume')
+    if (resumeOps.length > 0 && !closing && !ctx.host.isClosing) {
+      const now = Date.now()
+      const eligible = resumeOps.filter((op) => {
+        const run = op.finding.workflowRun!
+        return !inFlightWorkflowResumes.has(run.runId) && (workflowResumeRetryNotBefore.get(run.runId) ?? 0) <= now
+      })
+      eligible.sort((a, b) => a.finding.workflowRun!.failedAt - b.finding.workflowRun!.failedAt)
+      const pick = eligible[0]
+      if (pick !== undefined) {
+        const { runId, conversationId } = pick.finding.workflowRun!
+        inFlightWorkflowResumes.add(runId)
+        fireAndForget('watchdog:workflow-resume', async () => {
+          try {
+            if (closing || ctx.host.isClosing) return
+            await ctx.host.invokeAction('builtin:workflow', 'run', {
+              resumeFromRunId: runId,
+              conversationId,
+            })
+            workflowResumeRetryNotBefore.delete(runId)
+            notify(
+              'info',
+              'Watchdog 已自动续跑失败工作流',
+              `${pick.finding.evidence}；已调用 builtin:workflow run（resumeFromRunId=${runId}）从断点恢复，防重由探针 resumedByRunId/stateChangeSeq 机制保证`,
+              conversationId,
+            )
+          } catch (err) {
+            // 失败如实告知并推迟重试：探针下一轮仍会上报，冷却条件仍满足即可重试。
+            workflowResumeRetryNotBefore.set(runId, Date.now() + WORKFLOW_RESUME_RETRY_DEFER_MS)
+            const seq = pick.finding.stateChangeSeq ?? SENTINEL_SEQ
+            if (shouldFire(pick.finding.key, 'notify', seq, EXTERNAL_REFRACTORY_MS)) {
+              markFired(pick.finding.key, 'notify', seq)
+              notify(
+                'error',
+                'Watchdog 工作流自动续跑失败',
+                `${pick.finding.evidence}；resumeFromRunId=${runId} 调用失败：${describeError(err)}；已推迟 ${Math.round(WORKFLOW_RESUME_RETRY_DEFER_MS / 60_000)} 分钟重试`,
+                conversationId,
+              )
+            }
+          } finally {
+            inFlightWorkflowResumes.delete(runId)
+          }
+        })
+      }
+    }
+
+    // 5) L2 唤醒：仅当 due 异常实际投递成功后才消耗 wake 水位；提交被拒绝
     //    （未就绪/关闭/submit 失败）不标记，下一 tick 可重试；提示词只含 due 异常，
     //    不携带同 tick 大量正常事实（防真异常被截断）；单次提交仅 track 一次。
     const wakeOps = ops.filter((op): op is Extract<PlannedOp, { type: 'wake' }> => op.type === 'wake')
