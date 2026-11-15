@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <style>
+    .bg { fill: #ededf2; }
+    .mark { stroke: #1c1c21; }
+    .core { fill: #4f46e5; }
+
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #232327; }
+      .mark { stroke: #ededf1; }
+      .core { fill: #a5b4fc; }
+    }
+  </style>
+
+  <!-- 纯色扁平底座（零渐变、零高光、零描边） -->
+  <rect class="bg" x="2" y="2" width="28" height="28" rx="7" />
+
+  <!-- 极简几何 H 字标（双立柱 + 中心微内核节点） -->
+  <path class="mark" d="M10.5 9.5V22.5M21.5 9.5V22.5M10.5 16H12.5M19.5 16H21.5" stroke-width="2.6" stroke-linecap="round" />
+  <circle class="core" cx="16" cy="16" r="2.2" />
+</svg>

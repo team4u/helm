@@ -4,6 +4,7 @@ import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 
 const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
+const faviconSvg = readFileSync(new URL('../public/favicon.svg', import.meta.url), 'utf8')
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
 const authGateSource = readFileSync(new URL('../src/shell/AuthGate.tsx', import.meta.url), 'utf8')
 const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
@@ -18,6 +19,29 @@ test('index.html viewport 配置包含 viewport-fit=cover', { timeout: 60_000 },
     indexHtml,
     /<meta\s+name=["']viewport["']\s+content=["'][^"']*viewport-fit=cover[^"']*["']\s*\/?>/i,
     'index.html 必须声明 viewport-fit=cover 以适配移动端全面屏安全区',
+  )
+})
+
+test('index.html 挂载自适应明暗双模式 SVG Favicon 与 theme-color', { timeout: 60_000 }, () => {
+  assert.match(
+    indexHtml,
+    /<link\s+rel=["']icon["']\s+type=["']image\/svg\+xml["']\s+href=["']\/favicon\.svg["']\s*\/?>/i,
+    'index.html 必须挂载 /favicon.svg 矢量图标',
+  )
+  assert.match(
+    indexHtml,
+    /<meta\s+name=["']theme-color["'][^>]*prefers-color-scheme:\s*light/i,
+    'index.html 必须声明浅色模式 theme-color',
+  )
+  assert.match(
+    indexHtml,
+    /<meta\s+name=["']theme-color["'][^>]*prefers-color-scheme:\s*dark/i,
+    'index.html 必须声明暗黑模式 theme-color',
+  )
+  assert.match(
+    faviconSvg,
+    /@media\s*\(\s*prefers-color-scheme:\s*dark\s*\)/,
+    'favicon.svg 必须内置 prefers-color-scheme: dark 自适应样式',
   )
 })
 
