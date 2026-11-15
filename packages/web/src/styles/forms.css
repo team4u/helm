@@ -801,8 +801,9 @@
   outline: none;
   background: transparent;
   resize: none;
-  font-size: 13.5px;
-  line-height: 1.5;
+  /* 待命页与会话共用输入框，保持发送前后字号一致。 */
+  font-size: 15px;
+  line-height: 1.55;
   overflow-y: auto;
 }
 

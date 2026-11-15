@@ -58,7 +58,7 @@ pnpm build && pnpm typecheck && pnpm test:all   # 全量验收；日常按第 5 
 - **编写 / 重构 Web 界面或插件 `client.tsx`** → 先读 [`docs/conventions/web-frontend.md`](docs/conventions/web-frontend.md)（布局/组件/样式/移动端）与 [`docs/conventions/web-navigation.md`](docs/conventions/web-navigation.md)（路由/深链/分屏/待命页/弹窗），并遵守五条硬铁律：
   1. **零 Emoji**：界面文案、导航、标题、按钮、徽章、卡片严禁 Emoji；图标统一 `lucide-react`（`HelmIcon`）或纯文本；
   2. **视图形态三级**：海量项 / 多维检索 / 管理与市场类必须用「全屏一级主舞台卡片网格 + 右侧 520px~560px 详情抽屉」，严禁塞居中弹窗；
-  3. **Radix UI 唯一交互原语**：共享组件使用 `@helm/plugin-client` 的 Radix 封装；Web 专有组件位于 `packages/web/src/ui/`（全仓禁原生 `<select>` 与手写无障碍浮层）；插件优先复用 `@helm/plugin-client` 的 `Screen / ScreenSection / DataTable / KvGrid` 与宿主原语类，禁大面积内联样式或复制通用 CSS；正文 13/14px，移动端（≤680px）与分屏下禁输入框字号突兀放大；
+  3. **Radix UI 唯一交互原语**：共享组件使用 `@helm/plugin-client` 的 Radix 封装；Web 专有组件位于 `packages/web/src/ui/`（全仓禁原生 `<select>` 与手写无障碍浮层）；插件优先复用 `@helm/plugin-client` 的 `Screen / ScreenSection / DataTable / KvGrid` 与宿主原语类，禁大面积内联样式或复制通用 CSS；工作台正文 13/14px，会话正文、提问胶囊与 Composer 输入 15px（详见 `docs/conventions/web-frontend.md`），移动端（≤680px）与分屏下禁输入框字号突兀放大；
   4. **唯一 Hash 导航**：全站位置由 `url-hash-model.ts` + `HelmStoreProvider` 唯一管理（`#/a/<profileId>` 待命真草稿、`#/c/<id>` 会话、`#/s/<pluginId>/<screenId>` 视图、`sp.*`/`ssp.*` 参数、`split` 分屏、`sidebar` 空间）；组件统一调 `store.openTarget / setScreenParams / setSidebarSpace` 等，**新建对话进待命页、首次发送才落库**，严禁自建平行路由或直接操作 `history.*`；
   5. **Fast Refresh**：`.tsx` 组件文件只导出组件与 TS 类型，纯函数/常量剥离至独立模块。
 

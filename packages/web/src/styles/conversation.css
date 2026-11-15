@@ -285,7 +285,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--fg);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
@@ -402,6 +402,32 @@
   background: var(--prose-code-bg);
   border: 1px solid var(--prose-code-border);
   border-radius: 4px;
+}
+
+/* Markdown 与代码块也用于技能阅读器和产物预览，阅读档仅作用于会话回合。
+ * 思考展开体在后文覆盖正文与标题字号，保留紧凑层次。 */
+.msg-ai-block .msg-ai-body {
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.msg-ai-block .msg-ai-body h1 { font-size: 1.35em; }
+.msg-ai-block .msg-ai-body h2 { font-size: 1.2em; }
+.msg-ai-block .msg-ai-body h3 { font-size: 1.08em; }
+.msg-ai-block .msg-ai-body h4 { font-size: 1em; }
+
+.msg-ai-block .msg-ai-body li + li {
+  margin-top: 3px;
+}
+
+.msg-ai-block .msg-ai-body code:not(pre code) {
+  font-size: 0.88em;
+}
+
+/* 交接与精简摘要位于回合容器外，仍使用同一会话代码字号。 */
+.msg-ai-block .code-block-pre,
+.context-divider-wrap .code-block-pre {
+  font-size: 13px;
 }
 
 /* 消息悬停操作条（纯图标按钮，无卡边框与背景，避免喧宾夺主） */
@@ -627,7 +653,7 @@
 .thinking-expanded-body .msg-ai-body {
   width: 100%;
   max-width: 100%;
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.6;
   color: var(--fg-muted);
 }
@@ -651,10 +677,6 @@
   font-size: 13.5px;
   color: var(--fg);
   max-width: 100%;
-}
-
-.thinking-expanded-body .msg-ai-body code:not(pre code) {
-  font-size: 12px;
 }
 
 /* 思考过程整体弱化：加粗/行内代码/链接继承弱化色，仅靠字重与底色区分 */
@@ -741,7 +763,7 @@
   display: grid;
   grid-template-columns: 3.4em 3.4em 1fr;
   align-items: baseline;
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.55;
 }
 .trace-diff-pending .trace-diff-row {
@@ -801,7 +823,7 @@
   flex: 1;
   min-width: 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
 }
