@@ -118,17 +118,39 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
     bad({ worktree: { path: '/wt', branch: '' } })
     bad({ worktree: { path: '/wt', branch: 'b', repoRoot: 'rel' } })
     bad({ worktree: { path: '/wt', branch: 'b', dirtySource: 'yes' } })
-    // 可选登记字段合法形状通过。
+    bad({ worktree: { path: '/wt', branch: 'b', baseBranch: '' } })
+    bad({ worktree: { path: '/wt', branch: 'b', baseBranch: 7 } })
+    bad({ worktree: { path: '/wt', branch: 'b', parentWorktreeId: '' } })
+    bad({ worktree: { path: '/wt', branch: 'b', parentWorktreeId: false } })
+    // 可选登记字段合法形状通过（含多级派生父子字段）。
     const ok = extractWorkflowExecutionMeta({
       nodeId: 'local',
       executionId: 'e',
       meta: {
         [WORKFLOW_META_NAMESPACE]: {
-          worktree: { path: '/wt', branch: 'b', id: 'local:/wt', repoRoot: '/repo', baseCommit: 'c1', dirtySource: true },
+          worktree: {
+            path: '/wt',
+            branch: 'b',
+            id: 'local:/wt',
+            repoRoot: '/repo',
+            baseCommit: 'c1',
+            baseBranch: 'helm/spawn-12ab34cd',
+            parentWorktreeId: 'local:/repo/../.helm-worktrees/repo-12ab34cd',
+            dirtySource: true,
+          },
         },
       },
     })
-    assert.deepEqual(ok.worktree, { path: '/wt', branch: 'b', id: 'local:/wt', repoRoot: '/repo', baseCommit: 'c1', dirtySource: true })
+    assert.deepEqual(ok.worktree, {
+      path: '/wt',
+      branch: 'b',
+      id: 'local:/wt',
+      repoRoot: '/repo',
+      baseCommit: 'c1',
+      baseBranch: 'helm/spawn-12ab34cd',
+      parentWorktreeId: 'local:/repo/../.helm-worktrees/repo-12ab34cd',
+      dirtySource: true,
+    })
   })
 
   it('envelope 复验：坏 JSON-safe meta 在业务消费前显式拒绝（不当空处理）', timeout, () => {

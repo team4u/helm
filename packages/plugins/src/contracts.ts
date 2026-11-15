@@ -227,6 +227,8 @@ export interface WorktreeCleanupRequest {
   conversationId?: number
   path?: string
   nodeId?: string
+  /** 指定已合入的目标分支或提交（缺省优先用记录里的 baseBranch，再回退到主工作树 HEAD）。 */
+  mergedInto?: string
   deleteBranch?: boolean
   force?: boolean
 }
@@ -329,6 +331,10 @@ export type WorktreeExecutionDescriptor = {
   id?: string
   repoRoot?: string
   baseCommit?: string
+  /** 创建 Worktree 时源目录检出的本地分支名（detached HEAD 时缺省）。 */
+  baseBranch?: string
+  /** 源目录本身是受管 Worktree 时记录其 worktreeId（多级派生父子关系）。 */
+  parentWorktreeId?: string
   dirtySource?: boolean
 }
 
@@ -458,7 +464,7 @@ function sanitizeWorktreeDescriptor(value: unknown): WorktreeExecutionDescriptor
     throw workflowMetaError('worktree 必须是 { path: 绝对路径, branch: 非空 }')
   }
   const out: WorktreeExecutionDescriptor = { path: source.path, branch: source.branch }
-  for (const key of ['id', 'repoRoot', 'baseCommit'] as const) {
+  for (const key of ['id', 'repoRoot', 'baseCommit', 'baseBranch', 'parentWorktreeId'] as const) {
     const field = source[key]
     if (field !== undefined) {
       if (typeof field !== 'string' || field === '' || (key === 'repoRoot' && !isAbsoluteAgentPath(field))) {

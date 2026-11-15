@@ -115,6 +115,8 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
    */
   spawnIsolated: (request: Record<string, unknown>) => Promise<unknown>
   markIdle: (childId: number) => void
+  /** 标记子会话运行中（隔离层 host.getConversation 的 working 语义）。 */
+  markWorking: (childId: number) => void
   mirrors: Map<number, { profileId: string; cwd: string; model: string; modelOverride?: string; title: string; tags: string[]; createdAt: number }>
   /** docStore 原始落库内容（记录状态/branchDeleted 等断言用）。 */
   docs: Map<string, unknown>
@@ -230,6 +232,9 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
   const markIdle = (childId: number): void => {
     working.delete(childId)
   }
+  const markWorking = (childId: number): void => {
+    working.add(childId)
+  }
 
   const deps: NativeSpawnDeps = {
     dataDir,
@@ -329,6 +334,7 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
       isolation.aroundSpawn(request as never, (final) => runNativeSpawn(deps, final)),
     mirrors,
     markIdle,
+    markWorking,
     docs,
     async close() {
       for (const detach of observers.values()) detach()
@@ -419,6 +425,8 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
       assert.equal(th.mirrors.get(childId)?.cwd, wtPath, '子会话镜像 cwd 应为 worktree 目录')
       const prompt = await childPromptText(th.harness, childId)
       assert.ok(prompt.includes('在 worktree 里执行 pwd'), 'prompt 应原样提交给子会话')
+      // 每次启动都注入 worktree 上下文（干净源也不例外）。n      assert.ok(prompt.includes('<worktree_context>'), `干净源也应注入 worktree 上下文：${prompt.slice(-400)}`)
+      assert.ok(prompt.includes('git add') && prompt.includes('git commit'), '上下文应提醒结束回合前提交改动')
       // gate 在 worktree 目录内执行：gate 命令校验 pwd 与 worktree 一致
       //（HELM_EXPECTED_WT 由下方第二次调用验证；首次用 gate 已通过的事实）。
       const allocatorRecord = th.allocator.findActive({ path: wtPath })
@@ -549,7 +557,7 @@ describe('非 Git 目录显式拒绝', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('dirty 源仓库诚实提示', { timeout: 60_000 }, () => {
-  it('dirtySource 如实记录；子代理 prompt 含 <worktree_isolation_notice>', { timeout: 60_000 }, async () => {
+  it('dirtySource 如实记录；子代理 prompt 含 <worktree_context>（dirty 提示 + 提交提醒）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't4')
     const repo = makeGitRepo(join(dir, 'repo'))
     // 源工作区制造未提交修改（不 commit）。
@@ -572,10 +580,11 @@ describe('dirty 源仓库诚实提示', { timeout: 60_000 }, () => {
       assert.equal(record!.dirtySource, true, 'dirty 源仓库应如实记录 dirtySource=true')
       // 隔离工作树不包含源工作区未提交文件。
       assert.ok(!existsSync(join(record!.path, 'uncommitted.txt')), '隔离工作树基于 HEAD，不应包含源未提交文件')
-      // 子代理收到的 prompt 含诚实提示。
+      // 子代理收到的 prompt 含诚实提示（每次启动都注入 worktree 上下文）。
       const prompt = await childPromptText(th.harness, childId)
-      assert.ok(prompt.includes('<worktree_isolation_notice>'), `prompt 应含隔离通知：${prompt.slice(-400)}`)
-      assert.ok(prompt.includes('不包含源工作区未提交的改动'), '通知应说明不含未提交改动')
+      assert.ok(prompt.includes('<worktree_context>'), `prompt 应含 worktree 上下文：${prompt.slice(-400)}`)
+      assert.ok(prompt.includes('不包含源工作区未提交的改动'), 'dirty 源应说明不含未提交改动')
+      assert.ok(prompt.includes(record!.branch), '上下文应含分支名')
     } finally {
       await th.close()
     }
@@ -622,6 +631,9 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
       assert.equal(resumedWt!.path, firstWt!.path, 'resume 应沿用原 worktree 路径')
       assert.equal(resumedWt!.branch, firstWt!.branch, 'resume 应沿用原 worktree 分支')
       assert.equal(th.mirrors.size, 1, 'resume 不得新建子会话')
+      // resume 也每次注入 worktree 上下文。
+      const resumedPrompt = await childPromptText(th.harness, childId)
+      assert.ok(resumedPrompt.includes('<worktree_context>'), 'resume 也应注入 worktree 上下文')
       // 受管记录仍只有一条 active（未二次创建）。
       const record = th.allocator.getForConversation(childId)
       assert.ok(record)
@@ -1454,6 +1466,11 @@ describe('从已有 worktree 再派生（嵌套隔离）', { timeout: 60_000 }, 
       const child = await allocator.allocate({ nodeId: 'local', sourceCwd: parent.path, parentConversationId: 1 })
       assert.equal(child.repoRoot, repo, 'repoRoot 应为真正主工作树（不把隔离树当主仓）')
       assert.equal(child.baseCommit, parentHead, 'baseCommit 取实际源 HEAD（含父隔离树已提交改动）')
+      // 多级派生父子字段：顶级记录源分支 main；子级记录父模块分支与父登记 ID。
+      assert.equal(parent.baseBranch, 'main', '顶级派生应记录源目录检出的 main 分支')
+      assert.equal(parent.parentWorktreeId, undefined, '主工作树不是受管 Worktree，无父登记 ID')
+      assert.equal(child.baseBranch, parent.branch, '子级派生应记录父 Worktree 检出的分支')
+      assert.equal(child.parentWorktreeId, parent.id, '源目录是受管隔离树时应记录父登记 ID')
       // 同级分配：child.path 与 parent.path 同在 <repo>/../.helm-worktrees 下。
       assert.equal(
         dirnameOf(child.path),
@@ -1868,5 +1885,347 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
         return true
       },
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 多级派生字段：baseBranch / parentWorktreeId / detached HEAD / 机密检查
+// ---------------------------------------------------------------------------
+
+describe('多级派生 baseBranch 字段', { timeout: 60_000 }, () => {
+  it('detached HEAD 源目录：baseBranch 不记录（undefined），worktree 正常创建', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't19')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      execFileSync('git', ['checkout', '-q', '--detach'], { cwd: repo })
+      const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      assert.equal(record.baseBranch, undefined, 'detached HEAD 不得记录 baseBranch')
+      assert.ok(existsSync(record.path), 'detached HEAD 仍可正常派生 worktree')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('baseBranch 含已登记 secret：显式 worktree_metadata_secret 拒绝且不落库', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't19b')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const SECRET = '{{SECRET_bbrnch77}}'
+    const allocator = bareAllocator(docs, { redact: (t) => t.replaceAll(SECRET, '***') })
+    try {
+      execFileSync('git', ['checkout', '-q', '-b', `dev-${SECRET}`], { cwd: repo })
+      await assert.rejects(
+        () => allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError)
+          assert.equal(err.code, 'worktree_metadata_secret')
+          assert.ok(!err.message.includes(SECRET), 'message 绝不泄漏 secret 原文')
+          return true
+        },
+      )
+      assert.equal(rawRecords(docs).length, 0, '拒绝后不得有任何记录落库')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// cleanup mergedInto：严格校验 / 参考优先级 / 已合入允许删除（branch -D）
+// ---------------------------------------------------------------------------
+
+describe('cleanup mergedInto 与参考提交优先级', { timeout: 60_000 }, () => {
+  it('mergedInto 严格形状校验：空白/范围操作符/前置 - 均 validation_error 且不清理', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't20')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      for (const bad of ['a b', 'a..b', 'HEAD~1', 'a^', 'a:b', '-x', '']) {
+        await assert.rejects(
+          () => allocator.cleanup({ worktreeId: record.id, mergedInto: bad }),
+          (err: unknown) => {
+            assert.ok(err instanceof HelmError, `mergedInto=${JSON.stringify(bad)} 应抛 HelmError`)
+            assert.equal(err.code, 'validation_error')
+            assert.ok(err.message.includes('mergedInto'), '错误消息应指向 mergedInto')
+            return true
+          },
+        )
+      }
+      assert.ok(existsSync(record.path), '形状校验拒绝时目录不得被移除')
+      assert.equal(rawRecords(docs).find((r) => r.id === record.id)!.status, 'active')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('mergedInto 指向不存在的分支/提交：显式拒绝且不回退（记录保留）', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't20b')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      await assert.rejects(
+        () => allocator.cleanup({ worktreeId: record.id, mergedInto: 'no-such-ref' }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError)
+          assert.equal(err.code, 'validation_error', '显式目标不存在必须显式拒绝，绝不回退主工作树')
+          assert.ok(err.message.includes('不存在'))
+          return true
+        },
+      )
+      assert.ok(existsSync(record.path), '拒绝时目录不得被移除')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('显式 mergedInto 优先于 baseBranch；缺省走 baseBranch 已合入即允许删除（branch -D）', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't20c')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      // 主工作树留在 main；父隔离树改签 dev；子树从父树派生（baseBranch=dev）。
+      const parent = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      execFileSync('git', ['checkout', '-q', '-b', 'dev'], { cwd: parent.path })
+      const child = await allocator.allocate({ nodeId: 'local', sourceCwd: parent.path, parentConversationId: 1 })
+      assert.equal(child.baseBranch, 'dev')
+      assert.equal(child.parentWorktreeId, parent.id)
+      // 子树提交 feature，并合入 dev（主工作树 main 不含 feature）。
+      writeFileSync(join(child.path, 'feature.txt'), 'x\n')
+      execFileSync('git', ['add', '.'], { cwd: child.path })
+      execFileSync('git', ['commit', '-qm', 'feature'], { cwd: child.path })
+      execFileSync('git', ['merge', '-q', child.branch], { cwd: parent.path })
+
+      // 显式 mergedInto=main 优先：即使已合入 baseBranch dev，仍按 main 报未合入。
+      await assert.rejects(
+        () => allocator.cleanup({ worktreeId: child.id, mergedInto: 'main' }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError)
+          assert.equal(err.code, 'worktree_dirty')
+          const details = err.details as { unmergedCommits?: number; referenceHead?: string }
+          assert.ok((details?.unmergedCommits ?? 0) >= 1, '相对 main 应报告未合入提交（显式目标优先）')
+          return true
+        },
+      )
+
+      if (PROCESS_SCAN_ON) {
+        // 缺省 mergedInto：走 baseBranch dev 参考，已合入即允许删除；
+        // 分支删除用 -D（相对 main 未合入，git branch -d 会拒绝）。
+        const first = await allocator.cleanup({ worktreeId: child.id, deleteBranch: true })
+        assert.equal(first.removed, true, '已合入 baseBranch（dev）即允许无 force 删除')
+        assert.equal(first.branchDeleted, true, '确认合入参考后应统一用 -D 删除分支')
+        assert.ok(!existsSync(child.path), 'worktree 目录应被移除')
+        assert.equal(
+          execFileSync('git', ['branch', '--list', child.branch], { cwd: repo, encoding: 'utf8' }).trim(),
+          '',
+          '受管分支应被删除',
+        )
+        assert.notEqual(
+          execFileSync('git', ['branch', '--list', 'dev'], { cwd: repo, encoding: 'utf8' }).trim(),
+          '',
+          'dev 是人类/父模块分支，不得误删',
+        )
+        assert.equal(rawRecords(docs).find((r) => r.id === child.id)!.status, 'removed')
+      } else {
+        await assertCleanupPlatformRejected(() => allocator.cleanup({ worktreeId: child.id, deleteBranch: true }))
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('removed 记录重试删除分支同样按参考确认后用 -D（mergedInto 优先 baseBranch）', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't20d')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      const parent = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      execFileSync('git', ['checkout', '-q', '-b', 'dev'], { cwd: parent.path })
+      const child = await allocator.allocate({ nodeId: 'local', sourceCwd: parent.path, parentConversationId: 1 })
+      writeFileSync(join(child.path, 'feature.txt'), 'x\n')
+      execFileSync('git', ['add', '.'], { cwd: child.path })
+      execFileSync('git', ['commit', '-qm', 'feature'], { cwd: child.path })
+      execFileSync('git', ['merge', '-q', child.branch], { cwd: parent.path })
+      if (!PROCESS_SCAN_ON) {
+        await assertCleanupPlatformRejected(() => allocator.cleanup({ worktreeId: child.id, mergedInto: 'dev' }))
+        return
+      }
+      // 先移除树但保留分支（deleteBranch 未传）。
+      const removedKeepBranch = await allocator.cleanup({ worktreeId: child.id, mergedInto: 'dev' })
+      assert.equal(removedKeepBranch.removed, true)
+      assert.equal(removedKeepBranch.branchDeleted, false)
+      assert.notEqual(
+        execFileSync('git', ['branch', '--list', child.branch], { cwd: repo, encoding: 'utf8' }).trim(),
+        '',
+        '分支应保留（本次未要求删除）',
+      )
+      // 重试删除：removed 记录路径同样按 mergedInto 参考确认已合入后 -D。
+      const retry = await allocator.cleanup({ worktreeId: child.id, mergedInto: 'dev', deleteBranch: true })
+      assert.equal(retry.removed, false, '树已移除，幂等 removed:false')
+      assert.equal(retry.branchDeleted, true, '重试删除分支成功（-D，相对 main 未合入 -d 会拒绝）')
+      assert.equal(
+        execFileSync('git', ['branch', '--list', child.branch], { cwd: repo, encoding: 'utf8' }).trim(),
+        '',
+        '受管分支应被删除',
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 运行租约释放（§1.2）：原生子会话 next 抛错且确认停止 -> 释放；不确定 -> 保留
+// ---------------------------------------------------------------------------
+
+/** 读取隔离层租约表原始落库内容。 */
+function leasesOf(docs: Map<string, unknown>): Record<string, { phase: string; worktreeId: string }> {
+  const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+  return ((all['worktree-leases'] as Record<string, unknown> | undefined) ?? {}) as never
+}
+
+describe('运行租约释放（原生子会话失败路径）', { timeout: 60_000 }, () => {
+  it('next 抛错且原生子会话确认停止：释放运行租约，保留 Worktree 记录与 agentId 绑定，cleanup 不再被 unknown 阻塞', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't21')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const th = await openSpawnHarness(repo, join(dir, 'data'))
+    try {
+      th.mirrors.set(5, { profileId: 'assistant', cwd: repo, model: 'faux/faux-1', title: '子代理 5', tags: [], createdAt: Date.now() })
+      await assert.rejects(
+        () =>
+          th.isolation.aroundSpawn(
+            { parentConversationId: 1, prompt: '任务', isolation: 'worktree', agentId: 'agent-rel-1' } as never,
+            async (final) => {
+              final.onResolved?.({ conversationId: 5, nodeId: 'local', effectiveCwd: final.cwd } as never)
+              throw new HelmError('gate_failed', '模拟门禁失败', 500)
+            },
+          ),
+        (err: unknown) => err instanceof HelmError && err.code === 'gate_failed',
+      )
+      assert.equal(Object.keys(leasesOf(th.docs)).length, 0, '确认停止的原生子会话租约应释放')
+      const record = th.allocator.getForConversation(5)
+      assert.ok(record, 'Worktree 记录保留（供下一轮 resume / cleanup）')
+      assert.equal(record!.conversationId, 5)
+      const state = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      const bindings = state['worktree-agent-bindings'] as Record<string, number>
+      assert.equal(bindings['agent-rel-1'], 5, 'agentId -> childId 绑定保留（供 resume ref 解析）')
+      // 释放后 cleanup 不再报 worktree_execution_unknown（租约门已过；Linux 上
+      // 通常全量成功，但沙箱 /proc 可能含不可读 fd 的外部进程——快照不完整
+      // 时 fail-closed 的 worktree_process_check_failed 是环境事实，也证明已越过租约检查）。
+      try {
+        const done = await th.isolation.cleanup({ conversationId: 5, deleteBranch: true })
+        assert.equal(done.removed, true)
+      } catch (error) {
+        assert.ok(
+          error instanceof HelmError && error.code === 'worktree_process_check_failed',
+          `租约释放后 cleanup 只允许进程扫描环境限制，实得：${error instanceof HelmError ? error.code : String(error)}`,
+        )
+      }
+    } finally {
+      await th.close()
+    }
+  })
+
+  it('onResolved 未触发或会话仍在运行：保留租约 fail-closed，cleanup 报 worktree_execution_unknown', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't21b')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const th = await openSpawnHarness(repo, join(dir, 'data'))
+    try {
+      // a) next 抛错且 onResolved 未触发：不能证明执行未启动 -> 保留。
+      await assert.rejects(
+        () =>
+          th.isolation.aroundSpawn(
+            { parentConversationId: 1, prompt: 'p', isolation: 'worktree' } as never,
+            async () => {
+              throw new HelmError('gate_failed', 'x', 500)
+            },
+          ),
+        (err: unknown) => err instanceof HelmError && err.code === 'gate_failed',
+      )
+      let leases = leasesOf(th.docs)
+      assert.equal(Object.keys(leases).length, 1, '不确定状态租约必须保留')
+      const pendingId = Object.values(leases)[0]!.worktreeId
+      await assert.rejects(
+        () => th.isolation.cleanup({ worktreeId: pendingId }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError)
+          assert.equal(err.code, 'worktree_execution_unknown', '保留租约应阻塞 cleanup')
+          return true
+        },
+      )
+      // b) 会话仍在运行（working）：即使 onResolved 已回传也不释放。
+      th.mirrors.set(7, { profileId: 'assistant', cwd: repo, model: 'faux/faux-1', title: '子代理 7', tags: [], createdAt: Date.now() })
+      th.markWorking(7)
+      await assert.rejects(
+        () =>
+          th.isolation.aroundSpawn(
+            { parentConversationId: 1, prompt: 'p', isolation: 'worktree', agentId: 'a7' } as never,
+            async (final) => {
+              final.onResolved?.({ conversationId: 7, nodeId: 'local' } as never)
+              throw new HelmError('gate_failed', 'x', 500)
+            },
+          ),
+        (err: unknown) => err instanceof HelmError && err.code === 'gate_failed',
+      )
+      leases = leasesOf(th.docs)
+      assert.equal(Object.keys(leases).length, 2, '会话仍运行时租约必须保留')
+    } finally {
+      await th.close()
+    }
+  })
+
+  it('resume 成功：清除该 worktree 下残留旧租约（不再阻塞后续 cleanup）', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't21c')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const th = await openSpawnHarness(repo, join(dir, 'data'))
+    try {
+      let childId = 0
+      th.faux.setResponses([fauxAssistantMessage('第一轮')])
+      await th.spawnIsolated({
+        parentConversationId: 1,
+        prompt: '第一轮',
+        isolation: 'worktree',
+        onResolved: (info: AgentExecutionInfo) => {
+          childId = info.conversationId ?? 0
+        },
+      } as never)
+      const record = th.allocator.getForConversation(childId)
+      assert.ok(record)
+      // 注入残留旧租约（模拟此前失败/中断轮次未收敛）。
+      const state = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      const leases = (state['worktree-leases'] as Record<string, unknown>) ?? {}
+      leases['stale-token'] = { phase: 'running', info: { nodeId: 'local' }, worktreeId: record!.id, createdAt: 1 }
+      state['worktree-leases'] = leases
+      th.docs.set('builtin:workflow:worktree-state', state)
+      await assert.rejects(
+        () => th.isolation.cleanup({ conversationId: childId }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmError)
+          assert.equal(err.code, 'worktree_execution_unknown', '残留租约应阻塞 cleanup')
+          return true
+        },
+      )
+      // resume 成功 -> 本次租约与残留旧租约一并清除。
+      th.faux.setResponses([fauxAssistantMessage('续接完成')])
+      await th.spawnIsolated({
+        parentConversationId: 1,
+        prompt: '续接',
+        resume: String(childId),
+      } as never)
+      assert.equal(Object.keys(leasesOf(th.docs)).length, 0, 'resume 成功后残留旧租约与本次租约均应清除')
+    } finally {
+      await th.close()
+    }
   })
 })

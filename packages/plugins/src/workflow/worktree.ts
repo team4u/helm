@@ -69,6 +69,10 @@ export interface ManagedWorktreeRecord {
   path: string
   branch: string
   baseCommit: string
+  /** 创建时源目录检出的本地分支名（detached HEAD 时缺省）。 */
+  baseBranch?: string
+  /** 源目录本身是受管 Worktree 时记录其登记 ID（多级派生父子关系）。 */
+  parentWorktreeId?: string
   dirtySource: boolean
   parentConversationId: number
   conversationId?: number
@@ -162,6 +166,8 @@ export interface CleanupInput {
   path?: string
   /** 目标节点 ID（仅可与 path 搭配）。 */
   nodeId?: string
+  /** 指定已合入的目标分支或提交（缺省优先用记录里的 baseBranch，再回退到主工作树 HEAD）。 */
+  mergedInto?: string
   deleteBranch?: boolean
   force?: boolean
   signal?: AbortSignal
@@ -599,6 +605,82 @@ export class WorktreeAllocator {
     return del.ok ? { deleted: true } : { deleted: false, failureOutput: del.output }
   }
 
+  /**
+   * 「已合入」参考提交解析（cleanup 脏工作区检查与分支删除共用）：
+   * 1) 显式 mergedInto：rev-parse --verify 严格校验，目标不存在显式
+   *    validation_error（绝不静默回退主工作树）；
+   * 2) 记录的 baseBranch：父分支仍存在则用其当前提交（多级派生时父模块
+   *    分支才是合入目标）；
+   * 3) 其余（含 baseBranch 已删）：回退主工作树当前 HEAD。
+   */
+  private async resolveMergeReferenceHead(
+    nodeId: string,
+    repoRoot: string,
+    mainHead: string,
+    mergedInto: string | undefined,
+    baseBranch: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (mergedInto !== undefined) {
+      const verify = await gitExec(
+        this.deps,
+        nodeId,
+        repoRoot,
+        ['rev-parse', '--verify', '--quiet', `${mergedInto}^{commit}`],
+        signal,
+      )
+      const commit = verify.output.trim()
+      if (!verify.ok || !/^[0-9a-f]{7,64}$/i.test(commit)) {
+        throw new HelmError(
+          'validation_error',
+          `mergedInto 指向的分支或提交不存在：${this.redact(mergedInto)}（不回退主工作树，操作中止）`,
+          400,
+          { mergedInto: this.redact(mergedInto) },
+        )
+      }
+      return commit
+    }
+    if (baseBranch !== undefined && baseBranch !== '') {
+      const verify = await gitExec(
+        this.deps,
+        nodeId,
+        repoRoot,
+        ['rev-parse', '--verify', '--quiet', `refs/heads/${baseBranch}^{commit}`],
+        signal,
+      )
+      const commit = verify.output.trim()
+      if (verify.ok && /^[0-9a-f]{7,64}$/i.test(commit)) return commit
+      // 父分支已删：回退主工作树 HEAD（不猜测其他基线）。
+    }
+    return mainHead
+  }
+
+  /** 分支相对参考提交的未合入提交数（rev-list count）；git 失败显式 worktree_check_failed。 */
+  private async countUnmergedCommits(
+    nodeId: string,
+    repoRoot: string,
+    referenceHead: string,
+    branch: string,
+    signal?: AbortSignal,
+  ): Promise<number> {
+    const unmerged = await gitExec(
+      this.deps,
+      nodeId,
+      repoRoot,
+      ['rev-list', '--count', `${referenceHead}..${branch}`],
+      signal,
+    )
+    if (!unmerged.ok) {
+      throw new HelmError(
+        'worktree_check_failed',
+        `无法确认分支 ${branch} 相对参考提交 ${referenceHead} 的未合入提交（git rev-list 失败，清理中止）：\n${unmerged.output.trim()}`,
+        502,
+        { referenceHead, branch, output: unmerged.output.slice(0, 2000) },
+      )
+    }
+    return Number.parseInt(unmerged.output.trim(), 10) || 0
+  }
+
   // ------------------------------------------------------------------
   // allocate（原生 isolation: 'worktree'）
   // ------------------------------------------------------------------
@@ -660,6 +742,10 @@ export class WorktreeAllocator {
         { nodeId, sourceCwd, head: baseCommit },
       )
     }
+    // 源目录当前检出的本地分支（多级派生时即父 Worktree 分支，如
+    // 'helm/spawn-12ab34cd'）；detached HEAD（symbolic-ref 非零退出）不记录。
+    const symbolic = await gitExec(this.deps, nodeId, sourceCwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'], signal)
+    const baseBranch = symbolic.ok && symbolic.output.trim() !== '' ? symbolic.output.trim() : undefined
     const status = await gitExec(this.deps, nodeId, sourceCwd, ['status', '--porcelain'], signal)
     if (!status.ok) {
       throw new HelmError(
@@ -682,7 +768,12 @@ export class WorktreeAllocator {
 
     // Step E：机密检查（git worktree add 之前拦截全部将落库的持久字段）。
     this.assertMetadataSecretFree(
-      { repoRoot: authority.mainPath, path: worktreePath, branch },
+      {
+        repoRoot: authority.mainPath,
+        path: worktreePath,
+        branch,
+        ...(baseBranch !== undefined ? { baseBranch } : {}),
+      },
       { nodeId, parentConversationId: input.parentConversationId },
     )
 
@@ -690,6 +781,23 @@ export class WorktreeAllocator {
     //（不追易变 HEAD——锁内创建瞬间主仓 HEAD 可能已被推进）。
     // beforeCreate（若声明）在 git 副作用前执行：持久占位先于树创建落盘。
     return this.withRepoLock(nodeId, authority.canonicalCommonDir, async () => {
+      // 锁内从当前活跃登记查找父 Worktree（源目录本身是受管隔离树时
+      // 记录其登记 ID，建立多级派生父子关系；多条同路径活跃记录取最新）。
+      const parent = this.loadDoc().records
+        .filter(
+          (r) =>
+            r.status === 'active' &&
+            r.nodeId === nodeId &&
+            normalizePathValue(r.path) === normalizePathValue(sourceToplevel),
+        )
+        .reduce<ManagedWorktreeRecord | undefined>(
+          (a, b) => (a === undefined || b.createdAt >= a.createdAt ? b : a),
+          undefined,
+        )
+      const parentWorktreeId = parent?.id
+      if (parentWorktreeId !== undefined) {
+        this.assertMetadataSecretFree({ parentWorktreeId }, { nodeId, parentConversationId: input.parentConversationId })
+      }
       if (input.beforeCreate !== undefined) {
         await input.beforeCreate({
           nodeId,
@@ -723,6 +831,8 @@ export class WorktreeAllocator {
         path: worktreePath,
         branch,
         baseCommit,
+        ...(baseBranch !== undefined ? { baseBranch } : {}),
+        ...(parentWorktreeId !== undefined ? { parentWorktreeId } : {}),
         dirtySource,
         parentConversationId: input.parentConversationId,
         origin: 'native',
@@ -1293,6 +1403,27 @@ export class WorktreeAllocator {
     if (input.conversationId !== undefined && input.path !== undefined) {
       throw new HelmError('validation_error', 'conversationId 与 path 择一提供', 400)
     }
+    // mergedInto 严格形状校验（argv 直跑无 shell 注入面，但必须拒绝范围
+    // 操作符与以 - 开头的值，防止意外解析成其他引用或选项）。
+    if (input.mergedInto !== undefined) {
+      if (
+        typeof input.mergedInto !== 'string' ||
+        input.mergedInto === '' ||
+        /[\s\u0000-\u001f]/.test(input.mergedInto) ||
+        input.mergedInto.includes('..') ||
+        input.mergedInto.includes('~') ||
+        input.mergedInto.includes('^') ||
+        input.mergedInto.includes(':') ||
+        input.mergedInto.startsWith('-')
+      ) {
+        throw new HelmError(
+          'validation_error',
+          `mergedInto 必须是不含空白与范围操作符（.. ~ ^ :）且不以 - 开头的非空分支/提交名`,
+          400,
+          { mergedInto: input.mergedInto },
+        )
+      }
+    }
 
     const record = this.resolveCleanupRecord(input)
     if (!MANAGED_BRANCH_PREFIXES.some((prefix) => record.branch.startsWith(prefix))) {
@@ -1319,7 +1450,26 @@ export class WorktreeAllocator {
         }
         const authority = await this.resolveRepoAuthority(record.nodeId, record.repoRoot, input.signal)
         await this.withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
-          const del = await this.deleteManagedBranch(record.nodeId, authority.mainPath, record.branch, input.force === true, input.signal)
+          // 与主路径同规则解析「已合入」参考（显式 mergedInto 优先，不存在
+          // 显式拒绝；其次 baseBranch；再主 HEAD）；确认已全部合入时统一 -D
+          // 删除（参考非 main 时 git branch -d 的上游合入检查会拒绝）。
+          const referenceHead = await this.resolveMergeReferenceHead(
+            record.nodeId,
+            authority.mainPath,
+            authority.entries[0]!.head,
+            input.mergedInto,
+            record.baseBranch,
+            input.signal,
+          )
+          const mergedIntoReference =
+            (await this.countUnmergedCommits(record.nodeId, authority.mainPath, referenceHead, record.branch, input.signal)) === 0
+          const del = await this.deleteManagedBranch(
+            record.nodeId,
+            authority.mainPath,
+            record.branch,
+            input.force === true || mergedIntoReference,
+            input.signal,
+          )
           branchDeleted = del.deleted
           if (del.deleted) {
             this.updateRecord(record.id, (r) => {
@@ -1474,9 +1624,9 @@ export class WorktreeAllocator {
         }
       }
 
-      // 脏工作区保护（force=false；external 记录同样检查；合入参考为主
-      // 工作树当前 HEAD——分支可能已相对 baseCommit 演进，不以 baseCommit
-      // 缺失为由跳过）。ignored 文件也计入：实测 git worktree remove 无
+      // 脏工作区保护（force=false；external 记录同样检查；合入参考优先
+      // 显式 mergedInto，其次记录 baseBranch，再主工作树 HEAD——不以
+      // baseCommit 缺失为由跳过）。ignored 文件也计入：实测 git worktree remove 无
       // --force 也会删除仅含 ignored 内容（.env 等）的 worktree，默认检查
       // 必须显式拦下（force 允许显式清除）。状态命令失败显式报错，绝不
       // 当作干净或目录缺失。
@@ -1503,29 +1653,21 @@ export class WorktreeAllocator {
           .split('\n')
           .map((l) => l.trim())
           .filter((l) => l !== '')
-        const mainHead = mainEntry.head
-        const unmerged = await gitExec(
-          this.deps,
+        const referenceHead = await this.resolveMergeReferenceHead(
           fresh.nodeId,
           locked.mainPath,
-          ['rev-list', '--count', `${mainHead}..${fresh.branch}`],
+          mainEntry.head,
+          input.mergedInto,
+          fresh.baseBranch,
           input.signal,
         )
-        if (!unmerged.ok) {
-          throw new HelmError(
-            'worktree_check_failed',
-            `无法确认分支 ${fresh.branch} 相对主工作树 HEAD（${mainHead}）的未合入提交（git rev-list 失败，清理中止）：\n${unmerged.output.trim()}`,
-            502,
-            { worktreeId: fresh.id, path: fresh.path, referenceHead: mainHead, output: unmerged.output.slice(0, 2000) },
-          )
-        }
-        unmergedCommits = Number.parseInt(unmerged.output.trim(), 10) || 0
+        unmergedCommits = await this.countUnmergedCommits(fresh.nodeId, locked.mainPath, referenceHead, fresh.branch, input.signal)
         if (dirtyFiles.length > 0 || unmergedCommits > 0) {
           throw new HelmError(
             'worktree_dirty',
-            `worktree '${fresh.path}' (branch: ${fresh.branch}) 含未提交修改、未跟踪/被忽略文件或未合入提交（相对主工作树 HEAD ${mainHead}）；请先检视/合入，或显式传 force: true 强制清理`,
+            `worktree '${fresh.path}' (branch: ${fresh.branch}) 含未提交修改、未跟踪/被忽略文件或未合入提交（相对参考提交 ${referenceHead}）；请先检视/合入，或显式传 force: true 强制清理`,
             409,
-            { worktreeId: fresh.id, path: fresh.path, branch: fresh.branch, dirtyFiles: dirtyFiles.slice(0, 200), unmergedCommits, referenceHead: mainHead },
+            { worktreeId: fresh.id, path: fresh.path, branch: fresh.branch, dirtyFiles: dirtyFiles.slice(0, 200), unmergedCommits, referenceHead },
           )
         }
       }
@@ -1552,12 +1694,21 @@ export class WorktreeAllocator {
         )
       }
 
-      // 分支删除：部分失败先固化 worktree 已 removed 事实（branchDeleted
+      // 分支删除：锁内已确认相对 referenceHead 全部合入（unmergedCommits
+      // === 0；force 路径恒为 0）或显式 force 时统一 -D——referenceHead 非
+      // main 时 git branch -d 的上游/HEAD 合入检查不认参考，会拒绝实际已
+      // 合入的分支。部分失败先固化 worktree 已 removed 事实（branchDeleted
       // 状态与诊断保留，可重试），再显式报错——绝不把已消失的树永远留在
       // active，也不掩盖分支删除失败。
       let branchDeleted = false
       if (input.deleteBranch === true) {
-        const del = await this.deleteManagedBranch(fresh.nodeId, locked.mainPath, fresh.branch, input.force === true, input.signal)
+        const del = await this.deleteManagedBranch(
+          fresh.nodeId,
+          locked.mainPath,
+          fresh.branch,
+          input.force === true || unmergedCommits === 0,
+          input.signal,
+        )
         branchDeleted = del.deleted
         if (!del.deleted) {
           this.updateRecord(fresh.id, (r) => ({

@@ -45,6 +45,31 @@ function isExternalRuntimeAgentType(agentType: string | undefined): boolean {
 }
 
 /**
+ * 每次启动注入的 worktree 上下文（新建与 resume 均生效）：携带 worktree 元
+ * 信息（worktreeId/path/branch/baseCommit/baseBranch/parentWorktreeId）与
+ * dirtySource 诚实提示，提醒子代理在结束回合前 git add + git commit 提交
+ * 全部改动（未提交内容会阻塞 cleanup 且不随树合入）。
+ */
+function worktreeContextPrompt(record: ManagedWorktreeRecord): string {
+  const lines = [
+    '当前工作目录为独立 Git Worktree：',
+    `- worktreeId: ${record.id}`,
+    `- path: ${record.path}`,
+    `- branch: ${record.branch}`,
+    ...(record.baseCommit !== '' ? [`- baseCommit: ${record.baseCommit.slice(0, 12)}`] : []),
+    ...(record.baseBranch !== undefined && record.baseBranch !== '' ? [`- baseBranch: ${record.baseBranch}`] : []),
+    ...(record.parentWorktreeId !== undefined && record.parentWorktreeId !== ''
+      ? [`- parentWorktreeId: ${record.parentWorktreeId}`]
+      : []),
+    record.dirtySource
+      ? '- 注意：源工作区存在未提交修改，本隔离工作树基于源 HEAD 创建，不包含源工作区未提交的改动。'
+      : '- 源工作区干净。',
+    '请在结束回合前运行 git add 与 git commit 提交全部改动，保持工作区干净。',
+  ]
+  return `\n\n<worktree_context>\n${lines.join('\n')}\n</worktree_context>`
+}
+
+/**
  * 把受管 worktree 描述写进 execution meta 的 workflow 命名空间：合并保留
  * 信封其余字段、其他插件命名空间与 workflow 命名空间未提及的既有键（如
  * 外部运行时回传的 controls）；本层是原生路径 worktree 业务值的唯一生产方。
@@ -288,7 +313,7 @@ export class WorktreeIsolation {
 
   /**
    * 终态收敛。释放仅限两种确认状态（安全红线）：
-   * 1) succeeded = true（执行确认成功）；
+   * 1) succeeded = true（执行确认成功，或原生子会话回合确认停止）；
    * 2) neverStarted = true（next 从未被调用/尚未进入执行链就抛错——此时
    *    占位租约自身可证明无执行）。
    * 其余（onResolved 失败、外部进程已启动但未回填 executionId、未知状态）
@@ -299,6 +324,41 @@ export class WorktreeIsolation {
     const map = this.listLeases()
     if (!map.has(token)) return
     map.delete(token)
+    this.saveLeases(map)
+    await this.deps.docStore.flush()
+  }
+
+  /**
+   * next 抛错后的原生子会话租约释放判定：仅当 onResolved 已回传原生子会话
+   * （conversationId 存在且无 executionId——runNativeSpawn 的 finally 已在
+   * next 返回前释放会话锁，子会话回合确定已停止）且该会话当前确认不在
+   * 运行时释放本次运行租约（保留 Worktree 记录与 agentId 绑定，供下一轮
+   * resume 或 cleanup_worktree 使用）；onResolved 未触发、外部执行
+   * （executionId）或会话状态不可读一律保留（fail-closed）。
+   */
+  private async settleLeaseAfterNextFailure(token: string, execution: AgentExecutionInfo | undefined): Promise<void> {
+    if (execution === undefined) return
+    if (execution.conversationId === undefined || execution.executionId !== undefined) return
+    let working: boolean
+    try {
+      working = this.isConversationWorking(execution.conversationId)
+    } catch {
+      return
+    }
+    if (!working) await this.settleLease(token, true, false)
+  }
+
+  /** 清除指定 worktree 下全部残留租约（resume 确认成功后调用；旧租约只会误阻塞后续 cleanup）。 */
+  private async clearStaleLeases(worktreeId: string): Promise<void> {
+    const map = this.listLeases()
+    let changed = false
+    for (const [token, lease] of map) {
+      if (lease.worktreeId === worktreeId) {
+        map.delete(token)
+        changed = true
+      }
+    }
+    if (!changed) return
     this.saveLeases(map)
     await this.deps.docStore.flush()
   }
@@ -395,16 +455,14 @@ export class WorktreeIsolation {
           leaseToken = await this.openPendingLease(`${pending.nodeId}:${pending.path}`)
         },
       })
-      // Dirty 源仓库诚实提示：隔离树基于 HEAD 创建，不含源工作区未提交改动。
-      const isolationNotice =
-        record.dirtySource
-          ? `\n\n<worktree_isolation_notice>\n当前工作目录为独立 Git Worktree (${record.path}，分支 ${record.branch}，基于提交 ${record.baseCommit.slice(0, 12)})。注意：源工作区存在未提交修改，本隔离工作树基于 HEAD 创建，不包含源工作区未提交的改动。\n</worktree_isolation_notice>`
-          : ''
+      // 每次启动都注入 worktree 上下文（含元信息与 dirtySource 诚实提示；
+      // 提醒结束回合前提交全部改动）。隔离树基于 HEAD 创建，不含源工作区
+      // 未提交改动的事实由 dirtySource 行如实说明。
       const finalRequest: AgentSpawnRequest = {
         ...request,
         cwd: record.path,
         isolation: undefined,
-        ...(isolationNotice !== '' ? { prompt: `${request.prompt}${isolationNotice}` } : {}),
+        prompt: `${request.prompt}${worktreeContextPrompt(record)}`,
         onResolved: (raw) => {
           const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
           const enriched: AgentExecutionInfo = withWorktreeExecutionMeta(
@@ -415,6 +473,10 @@ export class WorktreeIsolation {
               id: record.id,
               ...(record.repoRoot !== '' ? { repoRoot: record.repoRoot } : {}),
               ...(record.baseCommit !== '' ? { baseCommit: record.baseCommit, dirtySource: record.dirtySource } : {}),
+              ...(record.baseBranch !== undefined && record.baseBranch !== '' ? { baseBranch: record.baseBranch } : {}),
+              ...(record.parentWorktreeId !== undefined && record.parentWorktreeId !== ''
+                ? { parentWorktreeId: record.parentWorktreeId }
+                : {}),
             },
           )
           if (info.conversationId !== undefined) {
@@ -432,7 +494,12 @@ export class WorktreeIsolation {
       return result
     } catch (error) {
       // next 前失败（分配失败/目标解析失败）：占位租约可证明无执行，安全释放。
-      await this.settleLease(leaseToken, false, !enteredNext).catch(() => {})
+      // next 后失败：原生子会话且已确认停止时同样释放（保留 Worktree 记录与
+      // agentId 绑定供 resume/cleanup）；其余不确定状态保留租约 fail-closed。
+      await (enteredNext
+        ? this.settleLeaseAfterNextFailure(leaseToken, execution)
+        : this.settleLease(leaseToken, false, true)
+      ).catch(() => {})
       throw error
     }
   }
@@ -465,10 +532,13 @@ export class WorktreeIsolation {
     let execution: AgentExecutionInfo | undefined
     try {
       await this.allocator.verifyForResume(record, request.cwd, request.signal)
+      // 每次启动都注入 worktree 上下文（与新建同构；resume 续接同样携带元
+      // 信息与提交提醒）。
       const finalRequest: AgentSpawnRequest = {
         ...request,
         cwd: record.path,
         isolation: undefined,
+        prompt: `${request.prompt}${worktreeContextPrompt(record)}`,
         onResolved: (raw) => {
           const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
           const enriched: AgentExecutionInfo = withWorktreeExecutionMeta(
@@ -479,6 +549,10 @@ export class WorktreeIsolation {
               id: record.id,
               ...(record.repoRoot !== '' ? { repoRoot: record.repoRoot } : {}),
               ...(record.baseCommit !== '' ? { baseCommit: record.baseCommit, dirtySource: record.dirtySource } : {}),
+              ...(record.baseBranch !== undefined && record.baseBranch !== '' ? { baseBranch: record.baseBranch } : {}),
+              ...(record.parentWorktreeId !== undefined && record.parentWorktreeId !== ''
+                ? { parentWorktreeId: record.parentWorktreeId }
+                : {}),
             },
           )
           this.updateLease(leaseToken, enriched)
@@ -489,9 +563,24 @@ export class WorktreeIsolation {
       enteredNext = true
       const result = await next(finalRequest)
       await this.settleLease(leaseToken, true, false)
+      // resume 确认成功：该 worktree 下此前失败/中断轮次残留的旧租约一并
+      // 清除（本次执行已确认成功，残留租约只会以 worktree_execution_unknown
+      // 误阻塞后续 cleanup）。清理失败不改变 resume 结果，stderr 如实诊断。
+      await this.clearStaleLeases(record.id).catch((error: unknown) => {
+        process.stderr.write(
+          `builtin:workflow: worktree ${record.id} 残留租约清理失败（后续 cleanup 可能被 worktree_execution_unknown 阻塞，可重试 resume 或人工核对）: ${
+            error instanceof Error ? error.message : String(error)
+          }\n`,
+        )
+      })
       return result
     } catch (error) {
-      await this.settleLease(leaseToken, false, !enteredNext).catch(() => {})
+      // 与新建同构：next 前失败释放占位；next 后原生子会话确认停止即释放，
+      // 其余不确定状态保留租约 fail-closed。
+      await (enteredNext
+        ? this.settleLeaseAfterNextFailure(leaseToken, execution)
+        : this.settleLease(leaseToken, false, true)
+      ).catch(() => {})
       throw error
     }
   }
