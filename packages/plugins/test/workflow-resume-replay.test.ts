@@ -281,7 +281,7 @@ describe('workflow resume replay side-effect safety', () => {
     // 引擎真实产生一致写出。该行按失配处理：live 重跑，绝不当作合法缓存复用。
     const key = agentJournalKey({ prompt: 'p' })
     const entries: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'agent', index: 0, key, ok: true, text: 'x', resumed: true },
+      { v: 1, seq: 0, type: 'agent', index: 0, key, scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'x', resumed: true },
     ]
     const host = makeAuditedHost()
     const result = await runWorkflow({
@@ -305,9 +305,9 @@ describe('workflow resume replay side-effect safety', () => {
     const firstKey = agentJournalKey({ prompt: 'first', label: 'a' })
     const resumeKey = agentJournalKey({ prompt: 'again', resume: 'a' })
     const entries: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'agent', index: 0, key: firstKey, ok: true, text: 'ok:first' },
+      { v: 1, seq: 0, type: 'agent', index: 0, key: firstKey, scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'ok:first' },
       // 不一致 fixture：resume 调用的行却无 resumed 标记。
-      { v: 1, seq: 1, type: 'agent', index: 1, key: resumeKey, ok: true, text: 'forged' },
+      { v: 1, seq: 1, type: 'agent', index: 1, key: resumeKey, scopePath: 'root', scopeCallIndex: 1, ok: true, text: 'forged' },
     ]
     const host = makeAuditedHost()
     const result = await runWorkflow({ script, host, journal: { entries, append: () => {} } })

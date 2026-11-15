@@ -55,13 +55,13 @@ test('agent 行携带 execution/gate 落盘可回读，不触发 actionUncertain
   await writer.append({
     type: 'agent',
     index: 0,
-    key: 'k0',
+    key: 'k0', scopePath: 'root', scopeCallIndex: 0,
     ok: false,
     execution: { conversationId: 7, effectiveCwd: '/w', worktree: { path: '/w', branch: 'helm/spawn-x' } },
     gate: { ok: false, output: 'gate output', exitCode: null, timedOut: true },
   })
   // 每次重试独立 index：同 key 不同 index 各占一行，互不覆盖。
-  await writer.append({ type: 'agent', index: 1, key: 'k1', ok: true, text: 'ok' })
+  await writer.append({ type: 'agent', index: 1, key: 'k1', scopePath: 'root', scopeCallIndex: 1, ok: true, text: 'ok' })
   await writer.close()
   const journal = readJournal(path)
   assert.equal(journal.actionUncertain, false)
@@ -77,7 +77,7 @@ test('agent 行携带 execution/gate 落盘可回读，不触发 actionUncertain
   const corruptPath = join(dir, 'workflow-wf_bad.jsonl')
   writeFileSync(
     corruptPath,
-    `${JSON.stringify({ v: 1, seq: 0, type: 'agent', index: 0, key: 'k', ok: true, execution: { conversationId: 'x' } })}\n`,
+    `${JSON.stringify({ v: 1, seq: 0, type: 'agent', index: 0, key: 'k', scopePath: 'root', scopeCallIndex: 0, ok: true, execution: { conversationId: 'x' } })}\n`,
     'utf8',
   )
   const corrupt = readJournal(corruptPath)
@@ -88,8 +88,8 @@ test('agent 行携带 execution/gate 落盘可回读，不触发 actionUncertain
 test('账本版本/序号损坏和相同 seq 的冲突记录不能掩盖已执行 action', timeout, (t) => {
   const env = makeEnv(t, async () => 'unused')
   const path = join(env.dataDir, 'journal-corrupt.jsonl')
-  const agent = { v: 1, seq: 0, type: 'agent', index: 0, key: 'agent', ok: true, text: 'done' }
-  const action = { v: 1, seq: 0, type: 'action', index: 1, key: 'effect', ok: true, result: 'sent' }
+  const agent = { v: 1, seq: 0, type: 'agent', index: 0, key: 'agent', scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'done' }
+  const action = { v: 1, seq: 0, type: 'action', index: 1, key: 'effect', scopePath: 'root', scopeCallIndex: 1, ok: true, result: 'sent' }
   for (const row of [{ ...action, seq: -1 }, { ...action, v: 2 }, { ...action, seq: null }]) {
     writeFileSync(path, `${JSON.stringify(row)}\n`)
     assert.equal(readJournal(path).actionUncertain, true)
@@ -109,7 +109,7 @@ test('redactJournalEntry：text/execution/gate 逐值脱敏，action 行原样�
   const agentEntry: JournalWriteInput = {
     type: 'agent',
     index: 0,
-    key: 'k',
+    key: 'k', scopePath: 'root', scopeCallIndex: 0,
     ok: false,
     text: 'contains sec-ret',
     execution: { conversationId: 1, effectiveCwd: '/sec-dir', worktree: { path: '/sec-dir/wt', branch: 'b' } },
@@ -123,7 +123,7 @@ test('redactJournalEntry：text/execution/gate 逐值脱敏，action 行原样�
   // 原条目不被原地改写（纯函数）。
   const original = agentEntry as Extract<JournalWriteInput, { type: 'agent' }>
   assert.equal(original.text, 'contains sec-ret')
-  const actionEntry: JournalWriteInput = { type: 'action', index: 1, key: 'a', ok: true, result: { out: 'sec' } }
+  const actionEntry: JournalWriteInput = { type: 'action', index: 1, key: 'a', scopePath: 'root', scopeCallIndex: 1, ok: true, result: { out: 'sec' } }
   assert.equal(redactJournalEntry(actionEntry, redact), actionEntry, 'action 行由引擎层处理，此处原样透传')
 })
 
@@ -603,7 +603,7 @@ test('跨重启 resume：失败 attempt 行的 execution.conversationId 经 resu
         seq: 0,
         type: 'agent',
         index: 0,
-        key: agentJournalKey({ prompt }),
+        key: agentJournalKey({ prompt }), scopePath: 'root', scopeCallIndex: 0,
         ok: false,
         attempt: 1,
         error: '[agent_failed] 尝试失败',
@@ -720,7 +720,7 @@ test('resume 幽灵接管标记：索引与磁盘均无痕迹才清标记重接�
   })
   writeFileSync(
     join(env.dataDir, 'artifacts', '23', 'workflow-wf_keptj9998.jsonl'),
-    `${JSON.stringify({ v: 1, seq: 0, type: 'agent', index: 0, key: 'k', ok: true, text: 'x' })}\n`,
+    `${JSON.stringify({ v: 1, seq: 0, type: 'agent', index: 0, key: 'k', scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'x' })}\n`,
     'utf8',
   )
   await assert.rejects(

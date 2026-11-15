@@ -100,28 +100,30 @@ function makeEnv(t: TestContext) {
 
 /** 账本行构造（与 WorkflowJournalEntry 同形；同文件内 seq 必须唯一——读端按 seq 去重）。
  * agent 行携带 invocationIndex: 0（账本新增可选字段，未落入前解析器容忍未知键，
- * 落地后即契合新行格式；agentJournalKey 不含该字段，键值稳定）。 */
+ * 落地后即契合新行格式；agentJournalKey 不含该字段，键值稳定）。所有行携带
+ * scopePath: 'root'；scopeCallIndex 为 DSL 调用序号（agent 行取 invocationIndex，
+ * action 行取 index；自动重试共用同一序号）。 */
 const agentOk = (seq: number, index = 0, key = `k${seq}`) =>
-  JSON.stringify({ v: 1, seq, type: 'agent', index, key, ok: true, text: 'done', invocationIndex: 0 })
+  JSON.stringify({ v: 1, seq, type: 'agent', index, key, scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'done', invocationIndex: 0 })
 const agentFail = (seq: number, index = 0, key = `k${seq}`) =>
-  JSON.stringify({ v: 1, seq, type: 'agent', index, key, ok: false, invocationIndex: 0 })
+  JSON.stringify({ v: 1, seq, type: 'agent', index, key, scopePath: 'root', scopeCallIndex: 0, ok: false, invocationIndex: 0 })
 /** 带 execution 的失败尝试行（可安全恢复锚点；attempt ≥ 1）。 */
 const agentFailAttempt = (seq: number, conversationId: number, index = 0, key = `k${seq}`) =>
   JSON.stringify({
-    v: 1, seq, type: 'agent', index, key, ok: false, attempt: 1,
+    v: 1, seq, type: 'agent', index, key, scopePath: 'root', scopeCallIndex: 0, ok: false, attempt: 1,
     error: '[agent_failed] 尝试失败', invocationIndex: 0,
     execution: { conversationId },
   })
 /** 无 execution 的失败尝试行（无锚点）。 */
 const agentFailAttemptNoExec = (seq: number, index = 0, key = `k${seq}`) =>
   JSON.stringify({
-    v: 1, seq, type: 'agent', index, key, ok: false, attempt: 1,
+    v: 1, seq, type: 'agent', index, key, scopePath: 'root', scopeCallIndex: 0, ok: false, attempt: 1,
     error: '[agent_failed] 尝试失败', invocationIndex: 0,
   })
 const actionStarted = (seq: number, index = 0, key = `a${index}`) =>
-  JSON.stringify({ v: 1, seq, type: 'action_started', index, key })
+  JSON.stringify({ v: 1, seq, type: 'action_started', index, key, scopePath: 'root', scopeCallIndex: index })
 const actionOk = (seq: number, index = 0, key = `a${index}`) =>
-  JSON.stringify({ v: 1, seq, type: 'action', index, key, ok: true, result: 1 })
+  JSON.stringify({ v: 1, seq, type: 'action', index, key, scopePath: 'root', scopeCallIndex: index, ok: true, result: 1 })
 
 interface SeedSpec {
   runId: string
@@ -290,7 +292,7 @@ test('账本不确定（悬挂 action_started / ok:false action / 損坏行）�
   seedCandidateRun(env, 'wf_failact0003', 203, at(3), {
     journal: [
       actionStarted(0, 0),
-      JSON.stringify({ v: 1, seq: 1, type: 'action', index: 0, key: 'a0', ok: false, error: 'boom' }),
+      JSON.stringify({ v: 1, seq: 1, type: 'action', index: 0, key: 'a0', scopePath: 'root', scopeCallIndex: 0, ok: false, error: 'boom' }),
       agentOk(2, 1),
     ],
   })
@@ -333,7 +335,7 @@ test('仅有外部失败尝试句柄不能作为跨 Run 自动续跑锚点', tim
   const env = makeEnv(t)
   seedCandidateRun(env, 'wf_externalonly', 307, 1_700_001_008_000, {
     journal: [JSON.stringify({
-      v: 1, seq: 0, type: 'agent', index: 0, key: 'external', ok: false, attempt: 1,
+      v: 1, seq: 0, type: 'agent', index: 0, key: 'external', scopePath: 'root', scopeCallIndex: 0, ok: false, attempt: 1,
       invocationIndex: 0, error: 'external timeout', execution: { nodeId: 'local', executionId: 'pane-7' },
     })],
   })

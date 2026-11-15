@@ -518,7 +518,7 @@ describe('workflow journal replay (agent)', () => {
     // 手工构造一条 schema 不符的 journal 行。
     const key = agentJournalKey({ prompt: 'p' })
     const bad: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'agent', index: 0, key, ok: true, text: 'not-json' },
+      { v: 1, seq: 0, type: 'agent', index: 0, key, scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'not-json' },
     ]
     let spawns = 0
     const host = makeFakeHost({ agentResult: () => JSON.stringify({ a: 1 }) })
@@ -549,7 +549,7 @@ describe('workflow journal replay (agent)', () => {
     // 套件的副作用零重复回归），不再整段禁用重放。
     const key = agentJournalKey({ prompt: 'p' })
     const entries: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'agent', index: 0, key, ok: true, text: 'x', resumed: true },
+      { v: 1, seq: 0, type: 'agent', index: 0, key, scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'x', resumed: true },
     ]
     let spawns = 0
     const host = makeFakeHost()
@@ -606,8 +606,8 @@ describe('workflow action primitive', () => {
   it('action key mismatch (changed input) runs live for idempotent action', timeout, async () => {
     const { host, getCount } = makeCountingActionHost()
     const lines: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), idempotent: true },
-      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), ok: true, result: { n: 1 }, idempotent: true },
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0, idempotent: true },
+      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0, ok: true, result: { n: 1 }, idempotent: true },
     ]
     const result = await runWorkflow({
       script: META('a2') + 'const v = await action("p.echo", { x: 999 }, { idempotent: true })\nreturn v',
@@ -622,8 +622,8 @@ describe('workflow action primitive', () => {
   it('action key mismatch for non-idempotent action rejects replay to prevent repeating side effects', timeout, async () => {
     const { host, getCount } = makeCountingActionHost()
     const lines: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', '{"x":1}') },
-      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), ok: true, result: { n: 1 } },
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0 },
+      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0, ok: true, result: { n: 1 } },
     ]
     const result = await runWorkflow({
       script: META('a2-non-idem') + 'const v = await action("p.echo", { x: 999 })\nreturn v',
@@ -651,10 +651,10 @@ describe('workflow action primitive', () => {
     const key0 = actionJournalKey('p.idem', '{}')
     const key1 = actionJournalKey('p.non_idem', '{}')
     const lines: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'action_started', index: 0, key: key0, idempotent: true },
-      { v: 1, seq: 1, type: 'action', index: 0, key: key0, ok: false, error: 'temp fail', idempotent: true },
-      { v: 1, seq: 2, type: 'action_started', index: 1, key: key1 },
-      { v: 1, seq: 3, type: 'action', index: 1, key: key1, ok: true, result: { sent: true } },
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: key0, scopePath: 'root', scopeCallIndex: 0, idempotent: true },
+      { v: 1, seq: 1, type: 'action', index: 0, key: key0, scopePath: 'root', scopeCallIndex: 0, ok: false, error: 'temp fail', idempotent: true },
+      { v: 1, seq: 2, type: 'action_started', index: 1, key: key1, scopePath: 'root', scopeCallIndex: 1 },
+      { v: 1, seq: 3, type: 'action', index: 1, key: key1, scopePath: 'root', scopeCallIndex: 1, ok: true, result: { sent: true } },
     ]
     const result = await runWorkflow({
       script:
@@ -684,8 +684,8 @@ describe('workflow action primitive', () => {
         host,
         journal: {
           entries: [
-            { v: 1, seq: 0, type: 'action', index: 0, key: actionJournalKey('p.read', '{}'), ok: false, idempotent: true },
-            { v: 1, seq: 1, type: 'action', index: 1, key: actionJournalKey('p.write', '{}'), ok: true, result: {} },
+            { v: 1, seq: 0, type: 'action', index: 0, key: actionJournalKey('p.read', '{}'), scopePath: 'root', scopeCallIndex: 0, ok: false, idempotent: true },
+            { v: 1, seq: 1, type: 'action', index: 1, key: actionJournalKey('p.write', '{}'), scopePath: 'root', scopeCallIndex: 1, ok: true, result: {} },
           ],
           append: () => {},
         },
@@ -712,10 +712,10 @@ describe('workflow action primitive', () => {
     const key0 = actionJournalKey('p.idem0', '{}')
     const key1 = actionJournalKey('p.idem1', '{}')
     const lines: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'action_started', index: 0, key: key0, idempotent: true },
-      { v: 1, seq: 1, type: 'action', index: 0, key: key0, ok: false, error: 'retryable', idempotent: true },
-      { v: 1, seq: 2, type: 'action_started', index: 1, key: key1, idempotent: true },
-      { v: 1, seq: 3, type: 'action', index: 1, key: key1, ok: true, result: { v: 1 }, idempotent: true },
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: key0, scopePath: 'root', scopeCallIndex: 0, idempotent: true },
+      { v: 1, seq: 1, type: 'action', index: 0, key: key0, scopePath: 'root', scopeCallIndex: 0, ok: false, error: 'retryable', idempotent: true },
+      { v: 1, seq: 2, type: 'action_started', index: 1, key: key1, scopePath: 'root', scopeCallIndex: 1, idempotent: true },
+      { v: 1, seq: 3, type: 'action', index: 1, key: key1, scopePath: 'root', scopeCallIndex: 1, ok: true, result: { v: 1 }, idempotent: true },
     ]
     const result = await runWorkflow({
       script:
@@ -779,8 +779,8 @@ describe('workflow action primitive', () => {
     // 下次 resume 可能重执行该 action 的副作用）。
     const { host, getCount } = makeCountingActionHost()
     const lines: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', '{"x":1}') },
-      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), ok: true, result: { n: 1 } },
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0 },
+      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0, ok: true, result: { n: 1 } },
     ]
     const result = await runWorkflow({
       script: META('a-replay-fatal') + 'const v = await action("p.echo", { x: 1 })\nreturn v',
@@ -1037,8 +1037,8 @@ describe('workflow action primitive', () => {
     // 若原账本中幂等动作失败（ok: false, idempotent: true）：
     const failKey = actionJournalKey('p.echo', '{"a":1}')
     const failLines: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'action_started', index: 0, key: failKey, idempotent: true },
-      { v: 1, seq: 1, type: 'action', index: 0, key: failKey, ok: false, error: 'transient error', idempotent: true },
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: failKey, scopePath: 'root', scopeCallIndex: 0, idempotent: true },
+      { v: 1, seq: 1, type: 'action', index: 0, key: failKey, scopePath: 'root', scopeCallIndex: 0, ok: false, error: 'transient error', idempotent: true },
     ]
     // 写入文件并用 readJournal 验证 actionUncertain 为 false
     const failJournalPath = tmpJournalPath('idem-fail.jsonl')
@@ -1093,9 +1093,9 @@ describe('journal writer and reader', () => {
   it('reads back written lines in seq order', timeout, async () => {
     const path = tmpJournalPath('ok.jsonl')
     const writer = new JournalWriter(path)
-    await writer.append({ type: 'agent', index: 0, key: 'k0', ok: true, text: 'a' })
-    await writer.append({ type: 'action_started', index: 1, key: 'k1' })
-    await writer.append({ type: 'action', index: 1, key: 'k1', ok: true, result: { r: 1 } })
+    await writer.append({ type: 'agent', index: 0, key: 'k0', scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'a' })
+    await writer.append({ type: 'action_started', index: 1, key: 'k1', scopePath: 'root', scopeCallIndex: 1 })
+    await writer.append({ type: 'action', index: 1, key: 'k1', scopePath: 'root', scopeCallIndex: 1, ok: true, result: { r: 1 } })
     await writer.close()
     const read = readJournal(path)
     assert.equal(read.actionUncertain, false)
@@ -1109,8 +1109,8 @@ describe('journal writer and reader', () => {
   it('dangling action_started (crash mid-execution) reports actionUncertain regardless of seq position', timeout, async () => {
     const path = tmpJournalPath('dangling.jsonl')
     const writer = new JournalWriter(path)
-    await writer.append({ type: 'agent', index: 0, key: 'k0', ok: true, text: 'a' })
-    await writer.append({ type: 'action_started', index: 1, key: 'k1' })
+    await writer.append({ type: 'agent', index: 0, key: 'k0', scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'a' })
+    await writer.append({ type: 'action_started', index: 1, key: 'k1', scopePath: 'root', scopeCallIndex: 1 })
     await writer.close()
     const read = readJournal(path)
     assert.equal(read.actionUncertain, true)
@@ -1118,8 +1118,8 @@ describe('journal writer and reader', () => {
     // 损坏丢失，"started 落盘后 handler 被允许执行"是唯一事实。
     const path2 = tmpJournalPath('dangling-mid.jsonl')
     const w2 = new JournalWriter(path2)
-    await w2.append({ type: 'action_started', index: 1, key: 'k1' })
-    await w2.append({ type: 'agent', index: 0, key: 'k0', ok: true, text: 'after' })
+    await w2.append({ type: 'action_started', index: 1, key: 'k1', scopePath: 'root', scopeCallIndex: 1 })
+    await w2.append({ type: 'agent', index: 0, key: 'k0', scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'after' })
     await w2.close()
     assert.equal(readJournal(path2).actionUncertain, true)
   })
@@ -1127,8 +1127,8 @@ describe('journal writer and reader', () => {
   it('failed action terminal line (ok:false) is uncertain for resume (side effect may have happened)', timeout, async () => {
     const path = tmpJournalPath('failed-action.jsonl')
     const writer = new JournalWriter(path)
-    await writer.append({ type: 'action_started', index: 0, key: 'k0' })
-    await writer.append({ type: 'action', index: 0, key: 'k0', ok: false, error: 'boom' })
+    await writer.append({ type: 'action_started', index: 0, key: 'k0', scopePath: 'root', scopeCallIndex: 0 })
+    await writer.append({ type: 'action', index: 0, key: 'k0', scopePath: 'root', scopeCallIndex: 0, ok: false, error: 'boom' })
     await writer.close()
     const read = readJournal(path)
     assert.equal(read.actionUncertain, true)
@@ -1138,7 +1138,7 @@ describe('journal writer and reader', () => {
   it('corrupt terminal line after action makes it uncertain, not silently re-runnable', timeout, async () => {
     const path = tmpJournalPath('corrupt.jsonl')
     const writer = new JournalWriter(path)
-    await writer.append({ type: 'action_started', index: 0, key: 'k0' })
+    await writer.append({ type: 'action_started', index: 0, key: 'k0', scopePath: 'root', scopeCallIndex: 0 })
     await writer.close()
     // 模拟半写的终态行。
     writeFileSync(path, '{"v":1,"seq":1,"type":"acti', { flag: 'a' })
@@ -1151,7 +1151,7 @@ describe('journal writer and reader', () => {
     writeFileSync(
       path,
       [
-        JSON.stringify({ v: 1, seq: 0, type: 'agent', index: 0, key: 'k0', ok: true, text: 'a' }),
+        JSON.stringify({ v: 1, seq: 0, type: 'agent', index: 0, key: 'k0', scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'a' }),
         JSON.stringify({ v: 1, seq: 1, type: 'gate', index: 1, key: 'kx', ok: true }),
         '',
       ].join('\n'),
@@ -1164,7 +1164,7 @@ describe('journal writer and reader', () => {
   it('truncated agent-only tail counts ioErrors but stays replayable', timeout, async () => {
     const path = tmpJournalPath('agenttail.jsonl')
     const writer = new JournalWriter(path)
-    await writer.append({ type: 'agent', index: 0, key: 'k0', ok: true, text: 'a' })
+    await writer.append({ type: 'agent', index: 0, key: 'k0', scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'a' })
     await writer.close()
     // 引擎 writer 的行序：{ ...entry, v, seq } → type 在首键。
     writeFileSync(path, '{"type":"agent","index":0,"key":"k0","ok":tr', { flag: 'a' })
@@ -1190,10 +1190,10 @@ describe('journal writer and reader', () => {
 
   it('writer to unopenable path fails action lines explicitly, tolerates agent lines', timeout, async () => {
     const writer = new JournalWriter('/proc/definitely/not/writable.jsonl')
-    await writer.append({ type: 'agent', index: 0, key: 'k', ok: true })
+    await writer.append({ type: 'agent', index: 0, key: 'k', scopePath: 'root', scopeCallIndex: 0, ok: true })
     assert.ok(writer.agentIoErrors >= 1)
     await assert.rejects(
-      () => writer.append({ type: 'action_started', index: 1, key: 'k1' }),
+      () => writer.append({ type: 'action_started', index: 1, key: 'k1', scopePath: 'root', scopeCallIndex: 1 }),
       /workflow journal/i,
     )
   })
@@ -1201,8 +1201,8 @@ describe('journal writer and reader', () => {
   it('dangling action_started with idempotent:true reports actionUncertain as false', timeout, async () => {
     const path = tmpJournalPath('idem-dangling.jsonl')
     const writer = new JournalWriter(path)
-    await writer.append({ type: 'agent', index: 0, key: 'k0', ok: true, text: 'a' })
-    await writer.append({ type: 'action_started', index: 1, key: 'k1', idempotent: true })
+    await writer.append({ type: 'agent', index: 0, key: 'k0', scopePath: 'root', scopeCallIndex: 0, ok: true, text: 'a' })
+    await writer.append({ type: 'action_started', index: 1, key: 'k1', scopePath: 'root', scopeCallIndex: 1, idempotent: true })
     await writer.close()
     const read = readJournal(path)
     assert.equal(read.actionUncertain, false, 'dangling idempotent action_started should not be uncertain')
@@ -1211,8 +1211,8 @@ describe('journal writer and reader', () => {
   it('failed action with idempotent:true reports actionUncertain as false and failedActions=0', timeout, async () => {
     const path = tmpJournalPath('idem-failed.jsonl')
     const writer = new JournalWriter(path)
-    await writer.append({ type: 'action_started', index: 0, key: 'k0', idempotent: true })
-    await writer.append({ type: 'action', index: 0, key: 'k0', ok: false, error: 'err', idempotent: true })
+    await writer.append({ type: 'action_started', index: 0, key: 'k0', scopePath: 'root', scopeCallIndex: 0, idempotent: true })
+    await writer.append({ type: 'action', index: 0, key: 'k0', scopePath: 'root', scopeCallIndex: 0, ok: false, error: 'err', idempotent: true })
     await writer.close()
     const read = readJournal(path)
     assert.equal(read.actionUncertain, false, 'idempotent ok:false action must not make journal uncertain')
@@ -1221,7 +1221,7 @@ describe('journal writer and reader', () => {
 
   it('invalid idempotent value (non-boolean/false) is treated as corrupt uncertain', timeout, async () => {
     const path = tmpJournalPath('idem-corrupt.jsonl')
-    writeFileSync(path, '{"v":1,"seq":0,"type":"action_started","index":0,"key":"k0","idempotent":false}\n')
+    writeFileSync(path, '{"v":1,"seq":0,"type":"action_started","index":0,"key":"k0","scopePath":"root","scopeCallIndex":0,"idempotent":false}\n')
     const read = readJournal(path)
     assert.equal(read.actionUncertain, true, 'idempotent:false or invalid must be treated as corrupt/uncertain')
   })
@@ -1531,7 +1531,7 @@ describe('WorkflowService', () => {
 
     // 构造 uncertain：直接写一个悬挂 started 到该 journal 再 resume。
     const { appendFileSync } = await import('node:fs')
-    appendFileSync(record.journalPath, `${JSON.stringify({ v: 1, seq: 999, type: 'action_started', index: 5, key: 'zz' })}\n`)
+    appendFileSync(record.journalPath, `${JSON.stringify({ v: 1, seq: 999, type: 'action_started', index: 5, key: 'zz', scopePath: 'root', scopeCallIndex: 5 })}\n`)
     await assert.rejects(
       () => service.run({ resumeFromRunId: first.id }),
       (error: unknown) => {
