@@ -12,26 +12,12 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { resolvePluginClientRoot } from './asset-paths.js'
 
 export const JSON_RENDER_PLUGIN_ID = 'builtin:json-render'
 
 /** 本插件自举的受管技能 ID。 */
 export const GENERATIVE_UI_SKILL_ID = 'generative-ui'
-
-/** clientRoot 兼容 src / dist 运行路径（与 workflow/herdr 插件同机制）。 */
-function resolveClientRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'json-render', 'client')
-  if (existsSync(local)) return local
-  const pkgRoot = dirname(here)
-  const srcFallback = join(pkgRoot, 'src', 'json-render', 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    'json_render_client_missing',
-    `内置插件 ${JSON_RENDER_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
-}
 
 function resolveSkillDir(): string {
   const here = dirname(fileURLToPath(import.meta.url))
@@ -62,7 +48,7 @@ export function createJsonRenderPlugin(): PluginDefinition {
     description: '聊天 ```ui 代码块渲染：把模型输出的安全 JSON Spec 渲染为交互卡片（表单/列表/图表原语），并随插件启停维护 generative-ui 技能。',
     icon: 'layout',
     version: '0.1.0',
-    clientRoot: resolveClientRoot(),
+    clientRoot: resolvePluginClientRoot(JSON_RENDER_PLUGIN_ID, 'json-render', 'json_render_client_missing'),
     definePlugin(ctx) {
       ctx.ui.markdownCodeBlock({
         id: 'json-cards',

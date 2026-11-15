@@ -25,7 +25,7 @@ import { createMermaidPlugin } from '../src/mermaid.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createHubHandler } from '../../kernel/src/http/index.js'
 import type { EventHub, KernelRuntimeLike} from '../../kernel/src/http/index.js'
-import { compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
+import { compilePluginClientModule, createPluginBuildProvider, installNodeChunkBridge } from '@helm/plugin-build'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
 
 // ---------------------------------------------------------------------------
@@ -695,6 +695,8 @@ test('端到端执行：编译产物在 Node 环境通过 __helm_import_chunk �
   try {
     const result = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx')
     assert.ok(result.code.length > 0)
+    // Node 环境执行产物：显式安装 chunk 桥（生产编译路径不再自动改写 globalThis）
+    installNodeChunkBridge([dataDir])
 
     // 挂载运行时依赖 mock
     const g = globalThis as Record<string, unknown>
@@ -980,6 +982,8 @@ test('共享 Chunk 桥导出完整性：default 表达式 / 再导出 / 字符�
     )
     const { code, contentHash, chunks } = await compilePluginClientModule('test:ns-bridge', clientRoot, 'index.tsx', scratch)
     assert.ok(Object.keys(chunks ?? {}).length > 0, '分包路径必须产出异步 chunk')
+    // Node 环境执行产物：显式安装 chunk 桥（chunk 落盘于 scratch）
+    installNodeChunkBridge([scratch])
     const g = globalThis as unknown as Record<string, unknown>
     const shareBefore = g.__helm_chunk_share
     const mod = (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)) as {
@@ -1028,6 +1032,8 @@ test('两插件同源同 hash：停用 A 后 B 的 chunk 共享表条目不受�
     )
     const compileA = await compilePluginClientModule('iso:pluginA', clientRoot, 'index.tsx', join(scratch, 'ca'))
     const compileB = await compilePluginClientModule('iso:pluginB', clientRoot, 'index.tsx', join(scratch, 'cb'))
+    // Node 环境执行产物：显式安装 chunk 桥（两插件各自 cacheDir）
+    installNodeChunkBridge([join(scratch, 'ca'), join(scratch, 'cb')])
     const g = globalThis as unknown as Record<string, unknown>
     const shareBefore = g.__helm_chunk_share
     try {
@@ -1077,6 +1083,8 @@ test('主模块缓存命中不预读全部 chunk：磁盘路径惰性读盘，ch
     clearClientCompilerMemoryCache()
     const mainHit = await compilePluginClientModule('test:lazy-chunks', clientRoot, 'index.tsx', scratch)
     assert.equal(mainHit.contentHash, first.contentHash)
+    // Node 环境执行产物：显式安装 chunk 桥（磁盘缓存路径）
+    installNodeChunkBridge([scratch])
     // 磁盘缓存命中的 chunks 是惰性 getter：访问前不读盘（描述符存在且为 get，无已求值 value）
     const chunkName = Object.keys(mainHit.chunks ?? {})[0]!
     const desc = Object.getOwnPropertyDescriptor(mainHit.chunks, chunkName)

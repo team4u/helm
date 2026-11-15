@@ -32,10 +32,8 @@
  * - 失败 / 中止回合（turn_settled outcome）：直接清空当前测量，未完成回答
  *   绝不冒充正常终态；运行期 completed 终态保留显示到下一回合首测覆盖。
  */
-import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { COMPOSER_STATUS_SLOT, HelmError, type PluginDefinition } from '@helm/protocol'
+import { resolvePluginClientRoot } from './asset-paths.js'
 import {
   CONTEXT_INVALIDATION_ENTRY_KINDS,
   DEFAULT_SLIDING_WINDOW_MS,
@@ -54,20 +52,6 @@ import { ConversationTokenSpeedTracker } from './token-speed/tracker.js'
 
 export { TOKEN_SPEED_PLUGIN_ID }
 
-/** clientRoot 兼容 src / dist 运行路径（与 memory / magpie 插件同机制）。 */
-function resolveTokenSpeedClientRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'token-speed', 'client')
-  if (existsSync(local)) return local
-  const srcFallback = join(dirname(here), 'src', 'token-speed', 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    'token_speed_plugin_client_missing',
-    `内置插件 ${TOKEN_SPEED_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
-}
-
 export function createTokenSpeedPlugin(): PluginDefinition {
   return {
     id: TOKEN_SPEED_PLUGIN_ID,
@@ -76,7 +60,7 @@ export function createTokenSpeedPlugin(): PluginDefinition {
       '输入区状态行的实时解码速率（tok/s）：流式观测速率、首字延迟与终态对账（节流帧观测估算，徽标以 ≈ 标注）。',
     icon: 'gauge',
     version: '0.1.0',
-    clientRoot: resolveTokenSpeedClientRoot(),
+    clientRoot: resolvePluginClientRoot(TOKEN_SPEED_PLUGIN_ID, 'token-speed', 'token_speed_plugin_client_missing'),
     definePlugin(rawCtx) {
       const ctx = rawCtx
 

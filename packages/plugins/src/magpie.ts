@@ -21,12 +21,10 @@
  *   网络读取用 global fetch，本机 CLI 经 execFile 公开端口
  *   （无注入后门；测试用 PATH fixture / global fetch mock）。
  */
-import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { HelmError, type PluginDefinition, type TurnSettledPayload } from '@helm/protocol'
+import { resolvePluginClientRoot } from './asset-paths.js'
 import {
   DEFAULT_MAGPIE_ROOT,
   MAGPIE_PLUGIN_ID,
@@ -140,21 +138,6 @@ function sanitizeErrorText(error: unknown): string {
   return message.replace(/Bearer\s+\S+/g, 'Bearer ***').slice(0, 300)
 }
 
-/** clientRoot 兼容 src / dist 运行路径（与 workflow/herdr/memory 插件同机制）。 */
-function resolveMagpieClientRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'magpie', 'client')
-  if (existsSync(local)) return local
-  const pkgRoot = dirname(here)
-  const srcFallback = join(pkgRoot, 'src', 'magpie', 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    'magpie_plugin_client_missing',
-    `内置插件 ${MAGPIE_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
-}
-
 const execFileAsync = promisify(execFile)
 
 /** 本机 magpie CLI 经 execFile（PATH 解析，无隐藏注入）。
@@ -186,7 +169,7 @@ export function createMagpiePlugin(): PluginDefinition {
     description: 'Magpie 模型网关接入：动态模型目录、配额与路由组，静默刷新与状态面板。',
     icon: 'globe',
     version: '0.1.0',
-    clientRoot: resolveMagpieClientRoot(),
+    clientRoot: resolvePluginClientRoot(MAGPIE_PLUGIN_ID, 'magpie', 'magpie_plugin_client_missing'),
     definePlugin(rawCtx) {
       const ctx = rawCtx
 
