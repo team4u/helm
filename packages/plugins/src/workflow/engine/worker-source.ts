@@ -6,8 +6,13 @@
  *    `const Date`，`new globalThis.Date()` 仍可读到真实时钟）；`Date.now` /
  *    `Math.random` / 无参 `new Date()` 继续全部拒绝。
  * 2. 新增 `action(actionId, input)` 原语（helm：零 Token 调用 ctx.action）。
+ * 3. 多级编排原语（设计 §2.2-2.3/§4.1）：`agent.withMeta(prompt, opts)` 与
+ *    `goal(spec)`（默认 maxAttempts=3）；AGENT_OPTIONS 新增 cwd / timeoutMs /
+ *    gateTimeoutMs / maxAttempts；workflow() 嵌套放宽到 4 层，scope 分配递增
+ *    scopeId（根为 0）并随 agent payload 下发。
  *
  * 两层边界（与上游一致）：
+ *
  *   host thread ←postMessage→ worker thread ←vm context→ workflow script
  * worker 层负责可杀性（terminate 停死循环）；vm 层负责确定性与事故防范。
  * `codeGeneration: { strings: false, wasm: false }` 使 eval/Function 抛 EvalError。
@@ -24,6 +29,57 @@
  * - 同时写回 globalThis.Date：词法 shadow 只保护脚本源码里的裸 `Date`，
  *   `globalThis.Date` 别名不受 shadow 影响（helm 加固点）。
  */
+/**
+ * workflow() 嵌套深度上限（设计 §4.1）：根 scope 为第 0 层，depth 达到该值后
+ * 禁止再嵌套（即整棵工作流树最多 4 层）。与 runtime.ts 的 WORKFLOW_NESTED_CAP
+ * （单 run 内嵌套调用总量 256）正交：一个限深度，一个限总量。
+ */
+export const MAX_WORKFLOW_NESTING_DEPTH = 4
+
+/**
+ * `agent.withMeta(prompt, opts)` / `goal(spec)` 的返回契约（设计 §2.3）。
+ *
+ * 本文件是内联 worker 源码的宿主模块：这些类型描述 worker ↔ host 消息面上的
+ * JSON 形状，按设计文档自包含声明，不导入 host 侧类型（protocol 的
+ * AgentGateResult 扩展字段与 contracts 的 WorktreeExecutionDescriptor 扩展
+ * 字段合入后以那两处为权威；此处只锁消息面形状）。
+ */
+export interface AgentWithMetaResult<T = unknown> {
+  ok: boolean
+  output: T | null
+  attempts: number
+  error?: string
+  timedOut?: boolean
+  execution?: AgentWithMetaExecution
+  gate?: AgentWithMetaGateResult
+}
+
+/** 子代理执行环境元数据（onResolved 快照的回传侧投影）。 */
+export interface AgentWithMetaExecution {
+  nodeId?: string
+  conversationId?: number
+  executionId?: string
+  effectiveCwd?: string
+  worktree?: AgentWithMetaWorktree
+}
+
+/** 门禁结果（设计 §2.1：ok/output 之外扩展 exitCode 与 timedOut）。 */
+export interface AgentWithMetaGateResult {
+  ok: boolean
+  output: string
+  exitCode?: number | null
+  timedOut?: boolean
+}
+
+/** isolation: 'worktree' 兑现后的最小工作树描述。 */
+export interface AgentWithMetaWorktree {
+  path: string
+  branch: string
+  id?: string
+  repoRoot?: string
+  baseCommit?: string
+}
+
 const DETERMINISM_PRELUDE =
   'const Date = (function () {' +
   ' const RealDate = globalThis.Date;' +
@@ -48,6 +104,7 @@ const vm = require("node:vm");
 const port = parentPort;
 const ITEM_CAP = workerData.itemCap;
 const PRELUDE = ${JSON.stringify(DETERMINISM_PRELUDE)};
+const MAX_WORKFLOW_NESTING_DEPTH = ${MAX_WORKFLOW_NESTING_DEPTH};
 
 /* ------------------------------------------------------------------ *
  * RPC to the host。脚本接触不到 agent/动作总线：一切副作用都以 "call"
@@ -218,16 +275,21 @@ function optionalText(value, what) {
 
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
-const AGENT_OPTIONS = ["label", "phase", "model", "agentType", "isolation", "gate", "resume", "effort", "schema", "attachments", "maxSubagentDepth"];
+const AGENT_OPTIONS = ["label", "phase", "model", "agentType", "isolation", "gate", "resume", "effort", "schema", "attachments", "maxSubagentDepth", "cwd", "timeoutMs", "gateTimeoutMs", "maxAttempts"];
 
 /* ------------------------------------------------------------------ *
  * Script globals
  * ------------------------------------------------------------------ */
 
 let nextPhaseIndex = 0;
+let nextScopeId = 0;
 
 function makeScope(name, depth) {
   const scope = {
+    // 每个 scope（根或 workflow() 子工作流）分配递增 id；根 scope 最先创建恒为 0。
+    // agent payload 携带 scopeId，宿主据此把 label/resume 登记按 scope 隔离
+    //（设计 §4.1：并发子工作流可用同名 label 互不覆盖）。
+    id: nextScopeId++,
     name: name,
     depth: depth,
     prefix: name === undefined ? "" : "\\u25b8 " + name,
@@ -237,6 +299,12 @@ function makeScope(name, depth) {
   };
   scope.agent = function (prompt, opts) {
     return agentIn(scope, prompt, opts);
+  };
+  scope.agent.withMeta = function (prompt, opts) {
+    return agentWithMetaIn(scope, prompt, opts);
+  };
+  scope.goal = function (spec) {
+    return goalIn(scope, spec);
   };
   scope.phase = function (title) {
     return phaseIn(scope, title);
@@ -306,6 +374,23 @@ function makeConsole(scope) {
 }
 
 async function agentIn(scope, prompt, opts) {
+  const options = readAgentOptions(prompt, opts);
+  const result = await callAgentHost(scope, options, false);
+  if (result === undefined || result === null) return null;
+  if (options.schema === undefined) return result;
+  try {
+    return realmParse(result);
+  } catch (error) {
+    logIn(scope, "agent(): the host returned a structured result that is not JSON");
+    return null;
+  }
+}
+
+/**
+ * agent(prompt, opts) / agent.withMeta(prompt, opts) 共用的参数读取与校验。
+ * 返回已归一化的选项对象；两个入口共享同一套规则，差别只在返回包装。
+ */
+function readAgentOptions(prompt, opts) {
   const text = requireText(prompt, "agent(prompt)");
   const options = opts === undefined || opts === null ? {} : opts;
   if (typeof options !== "object" || Array.isArray(options)) {
@@ -365,6 +450,35 @@ async function agentIn(scope, prompt, opts) {
   ) {
     throw new Error("agent() opts.maxSubagentDepth must be an integer between 1 and 5.");
   }
+  // 目标节点绝对路径：不带 isolation 时直接在该目录运行；带 isolation:
+  // 'worktree' 时从该 cwd 切出于工作树（设计 §2.2）。与 resume 互斥。
+  const cwd = optionalText(options.cwd, "agent() opts.cwd");
+  // 单回合超时与门禁超时（毫秒整数）：范围在 worker 侧先行拒绝，宿主只做二次校验。
+  const timeoutMs = options.timeoutMs;
+  if (
+    timeoutMs !== undefined &&
+    (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 3600000)
+  ) {
+    throw new Error("agent() opts.timeoutMs must be an integer between 1000 and 3600000 (milliseconds).");
+  }
+  const gateTimeoutMs = options.gateTimeoutMs;
+  if (
+    gateTimeoutMs !== undefined &&
+    (typeof gateTimeoutMs !== "number" || !Number.isInteger(gateTimeoutMs) || gateTimeoutMs < 1000 || gateTimeoutMs > 600000)
+  ) {
+    throw new Error("agent() opts.gateTimeoutMs must be an integer between 1000 and 600000 (milliseconds).");
+  }
+  if (gateTimeoutMs !== undefined && gate === undefined) {
+    throw new Error("agent() opts.gateTimeoutMs requires opts.gate: it bounds how long the gate command may run.");
+  }
+  // 失败自动重试次数（门禁失败/门禁超时/回合超时才触发，重试循环在宿主）。
+  const maxAttempts = options.maxAttempts;
+  if (
+    maxAttempts !== undefined &&
+    (typeof maxAttempts !== "number" || !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10)
+  ) {
+    throw new Error("agent() opts.maxAttempts must be an integer between 1 and 10.");
+  }
 
   if (resume !== undefined) {
     if (agentType !== undefined) {
@@ -382,6 +496,11 @@ async function agentIn(scope, prompt, opts) {
         "agent() opts.resume and opts.isolation are mutually exclusive: a resumed agent keeps the working tree it was started in."
       );
     }
+    if (cwd !== undefined) {
+      throw new Error(
+        "agent() opts.resume and opts.cwd are mutually exclusive: a resumed agent keeps the working directory it was started in."
+      );
+    }
     if (effort !== undefined) {
       throw new Error(
         "agent() opts.resume and opts.effort are mutually exclusive: a resumed agent keeps the reasoning effort it was started with."
@@ -393,32 +512,97 @@ async function agentIn(scope, prompt, opts) {
     // 扩展；gate 在实际执行环境内恰好一次执行并经 onGateResult 回报）。
   }
 
-  const phaseIndex = phaseName !== undefined ? definePhaseIn(scope, phaseName) : scope.ambientPhaseIndex;
-  const phaseTitle = phaseName !== undefined ? scopedTitle(scope, phaseName) : scope.ambientPhaseTitle;
-
-  const result = await callHost("agent", {
-    prompt: text,
+  return {
+    text: text,
     label: label,
+    phaseName: phaseName,
     model: model,
     agentType: agentType,
     isolation: isolation,
-    phaseIndex: phaseIndex,
-    phaseTitle: phaseTitle,
     gate: gate,
     resume: resume,
     effort: effort,
     schema: schema,
     attachments: attachments,
     maxSubagentDepth: maxSubagentDepth,
+    cwd: cwd,
+    timeoutMs: timeoutMs,
+    gateTimeoutMs: gateTimeoutMs,
+    maxAttempts: maxAttempts,
+  };
+}
+
+/** 统一的 agent 下发面：scopeId 标识调用方 scope，withMeta 标记需要带执行元数据的返回包装。 */
+async function callAgentHost(scope, options, withMeta) {
+  const phaseIndex = options.phaseName !== undefined ? definePhaseIn(scope, options.phaseName) : scope.ambientPhaseIndex;
+  const phaseTitle = options.phaseName !== undefined ? scopedTitle(scope, options.phaseName) : scope.ambientPhaseTitle;
+
+  return await callHost("agent", {
+    prompt: options.text,
+    label: options.label,
+    model: options.model,
+    agentType: options.agentType,
+    isolation: options.isolation,
+    phaseIndex: phaseIndex,
+    phaseTitle: phaseTitle,
+    gate: options.gate,
+    resume: options.resume,
+    effort: options.effort,
+    schema: options.schema,
+    attachments: options.attachments,
+    maxSubagentDepth: options.maxSubagentDepth,
+    cwd: options.cwd,
+    timeoutMs: options.timeoutMs,
+    gateTimeoutMs: options.gateTimeoutMs,
+    maxAttempts: options.maxAttempts,
+    scopeId: scope.id,
+    ...(withMeta ? { withMeta: true } : {}),
   });
-  if (result === undefined || result === null) return null;
-  if (schema === undefined) return result;
-  try {
-    return realmParse(result);
-  } catch (error) {
-    logIn(scope, "agent(): the host returned a structured result that is not JSON");
-    return null;
+}
+
+/**
+ * agent.withMeta(prompt, opts) — 与 agent() 同一参数面，但返回带执行元数据的
+ * AgentWithMetaResult（ok/output/attempts/execution/gate）。宿主必须回传
+ * { ok: boolean, ... } 元数据对象；回退为文本或 null 时显式报错，绝不把裸
+ * 文本伪装成元数据对象（诚实性红线：能力未支持就报错，不静默降级）。
+ */
+async function agentWithMetaIn(scope, prompt, opts) {
+  const options = readAgentOptions(prompt, opts);
+  const result = await callAgentHost(scope, options, true);
+  if (result === null || typeof result !== "object" || typeof result.ok !== "boolean") {
+    throw new Error(
+      "agent.withMeta(): the host returned a result that is not an execution meta object " +
+        "(expected { ok: boolean, output, attempts, ... })."
+    );
   }
+  // 宿主回传的是 worker realm 的 structured-clone 对象；经 JSON 往返重建为
+  // VM realm 原生对象（与 schema 结果同构处理），杜绝跨 realm prototype 泄入脚本。
+  return realmParse(JSON.stringify(result));
+}
+
+/**
+ * goal(spec) — agent.withMeta(objective, opts) 的简写，默认 maxAttempts = 3
+ *（设计 §2.3：面向门禁/超时自动重试的目标式调用）。spec 键 = objective +
+ * 全部 AGENT_OPTIONS；其余语义与 agent.withMeta 完全一致。
+ */
+async function goalIn(scope, spec) {
+  if (spec === undefined || spec === null || typeof spec !== "object" || Array.isArray(spec)) {
+    throw new Error("goal(spec) expects an options object.");
+  }
+  for (const key of Object.keys(spec)) {
+    if (key === "objective" || AGENT_OPTIONS.indexOf(key) !== -1) continue;
+    throw new Error(
+      "goal() spec." + key + " is not a recognised option. Supported: objective, " + AGENT_OPTIONS.join(", ") + "."
+    );
+  }
+  const objective = requireText(spec.objective, "goal() spec.objective");
+  const options = {};
+  for (const key of Object.keys(spec)) {
+    if (key === "objective" || spec[key] === undefined) continue;
+    options[key] = spec[key];
+  }
+  if (options.maxAttempts === undefined) options.maxAttempts = 3;
+  return agentWithMetaIn(scope, objective, options);
 }
 
 const ACTION_OPT_KEYS = ["idempotent", "label", "phase"];
@@ -525,9 +709,9 @@ async function pipeline(items, ...stages) {
 }
 
 async function workflowIn(scope, nameOrRef, args) {
-  if (scope.depth > 0) {
+  if (scope.depth >= MAX_WORKFLOW_NESTING_DEPTH) {
     throw new Error(
-      "workflow() cannot be nested more than one level deep — you are already inside the workflow '" +
+      "workflow() cannot be nested more than " + MAX_WORKFLOW_NESTING_DEPTH + " levels deep — you are already inside the workflow '" +
         scope.name + "'. Call the agents inline instead."
     );
   }
@@ -574,7 +758,7 @@ async function workflowIn(scope, nameOrRef, args) {
   let run;
   try {
     const compiled = new vm.Script(
-      "(async (agent, phase, log, workflow, action, console, args) => {" + PRELUDE + "\\n" + loaded.body + "\\n})",
+      "(async (agent, phase, log, workflow, action, console, args, goal) => {" + PRELUDE + "\\n" + loaded.body + "\\n})",
       { filename: "workflow:" + loaded.name + ".js", lineOffset: -1 }
     );
     run = compiled.runInContext(realmContext);
@@ -582,7 +766,7 @@ async function workflowIn(scope, nameOrRef, args) {
     throw new Error('workflow("' + label + '"): ' + describe(error));
   }
 
-  const value = await run(child.agent, child.phase, child.log, child.workflow, child.action, child.console, args);
+  const value = await run(child.agent, child.phase, child.log, child.workflow, child.action, child.console, args, child.goal);
   checkBoundary(value, 'the result of workflow("' + label + '")');
   return value;
 }
@@ -607,6 +791,7 @@ async function main() {
   rootScope = makeScope(undefined, 0);
   const sandbox = {
     agent: rootScope.agent,
+    goal: rootScope.goal,
     parallel: parallel,
     pipeline: pipeline,
     phase: rootScope.phase,
