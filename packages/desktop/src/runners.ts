@@ -18,6 +18,76 @@ import { buildHubChildEnv, resolveHubEntry } from './config.js';
 /** kernel 对 Node 的最低要求（engines.node）。 */
 export const KERNEL_NODE_FLOOR = '24.12.0';
 
+// ---- 严格 SemVer（desktop 本地唯一实现） ----
+
+/**
+ * desktop 不依赖任何工作区包（独立 Electron 壳，见 package.json），无法直接
+ * 引用 @helm/protocol/semver；在此保留与其同契约的本地实现，供 runners 的
+ * Node floor 判定与 updater 的版本契约共用（契约以 @helm/protocol/semver 为准）。
+ */
+const STRICT_SEMVER_RE =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+
+/** 非法版本号进入需要严格 SemVer 的路径时抛出；调用方显式处理，不静默吞掉。 */
+export class SemverFormatError extends Error {
+  constructor(text: string) {
+    super(`非法严格 SemVer："${text}"（要求 x.y.z[-pre][+build]，不允许 v 前缀）`);
+    this.name = 'SemverFormatError';
+  }
+}
+
+/** 是否为严格 SemVer（不抛错版本，供「是否合法」判断场景）。 */
+export function isStrictSemver(text: string): boolean {
+  return STRICT_SEMVER_RE.test(text);
+}
+
+/**
+ * 严格 SemVer 优先级比较：-1 / 0 / 1；任一侧非法抛 SemverFormatError（显式拒绝）。
+ * 预发布优先级：正式版 > 预发布；数字标识按数值且 < 字母数字标识；字母段 ASCII 字典序；
+ * build metadata 按规范不参与比较。
+ */
+export function compareStrictSemver(a: string, b: string): number {
+  if (!isStrictSemver(a)) throw new SemverFormatError(a);
+  if (!isStrictSemver(b)) throw new SemverFormatError(b);
+  const pa = a.match(STRICT_SEMVER_RE)!;
+  const pb = b.match(STRICT_SEMVER_RE)!;
+  const coreA = [Number(pa[1]), Number(pa[2]), Number(pa[3])] as const;
+  const coreB = [Number(pb[1]), Number(pb[2]), Number(pb[3])] as const;
+  for (let i = 0; i < 3; i++) {
+    if (coreA[i]! > coreB[i]!) return 1;
+    if (coreA[i]! < coreB[i]!) return -1;
+  }
+  const preA = pa[4] === undefined ? [] : pa[4].split('.');
+  const preB = pb[4] === undefined ? [] : pb[4].split('.');
+  if (preA.length === 0 && preB.length === 0) return 0;
+  if (preA.length === 0) return 1;
+  if (preB.length === 0) return -1;
+  const len = Math.max(preA.length, preB.length);
+  for (let i = 0; i < len; i++) {
+    const sa = preA[i];
+    const sb = preB[i];
+    if (sa === undefined) return -1;
+    if (sb === undefined) return 1;
+    if (sa === sb) continue;
+    const na = /^\d+$/.test(sa) ? Number(sa) : undefined;
+    const nb = /^\d+$/.test(sb) ? Number(sb) : undefined;
+    if (na !== undefined && nb !== undefined) return na > nb ? 1 : -1;
+    if (na !== undefined) return -1;
+    if (nb !== undefined) return 1;
+    return sa < sb ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * 候选运行器是否满足 kernel 运行需要（Node >= 24.12.0 且 node:sqlite 可用）。
+ * 严格 SemVer 口径：版本非法或 floor 同号的预发布（如 24.12.0-nightly）均不达标，
+ * 由调用方以 hub_runner_incapable 显式拒绝并如实上报探测到的版本。
+ */
+export function probeMeetsFloor(probe: RunnerProbe): boolean {
+  return probe.sqlite && isStrictSemver(probe.node) && compareStrictSemver(probe.node, KERNEL_NODE_FLOOR) >= 0;
+}
+
 /** 能力探测脚本：单行 JSON 输出（-e 直评，CJS require 语义在所有 Node 可用）。 */
 const PROBE_SOURCE =
   "const r={node:process.versions.node,electron:process.versions.electron||null,sqlite:true};" +
@@ -41,22 +111,6 @@ export interface RunnerInfo {
   nodeVersion?: string;
   /** 未采用候选的说明（诚实记录决策链）。 */
   detail?: string;
-}
-
-function compareSemver(a: string, b: string): number {
-  const pa = a.split('.').map((s) => Number.parseInt(s, 10) || 0);
-  const pb = b.split('.').map((s) => Number.parseInt(s, 10) || 0);
-  for (let i = 0; i < 3; i++) {
-    const av = pa[i] ?? 0;
-    const bv = pb[i] ?? 0;
-    if (av !== bv) return av < bv ? -1 : 1;
-  }
-  return 0;
-}
-
-/** 候选运行器是否满足 kernel 运行需要（Node >= 24.12.0 且 node:sqlite 可用）。 */
-export function probeMeetsFloor(probe: RunnerProbe): boolean {
-  return probe.sqlite && compareSemver(probe.node, KERNEL_NODE_FLOOR) >= 0;
 }
 
 /**

@@ -2,7 +2,16 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { KERNEL_NODE_FLOOR, probeMeetsFloor, probeRunner, selectRunner, type RunnerProbe } from '../src/runners.js';
+import {
+  compareStrictSemver,
+  isStrictSemver,
+  KERNEL_NODE_FLOOR,
+  probeMeetsFloor,
+  probeRunner,
+  selectRunner,
+  SemverFormatError,
+  type RunnerProbe,
+} from '../src/runners.js';
 import { resolveDesktopConfig, resolveHubEntry } from '../src/config.js';
 import { DesktopError } from '../src/errors.js';
 
@@ -15,6 +24,32 @@ test('probeMeetsFloor：版本与 sqlite 双条件', { timeout: 60_000 }, () => 
   assert.equal(probeMeetsFloor(p('24.12.0', true)), true);
   assert.equal(probeMeetsFloor(p('26.1.0', true)), true);
   assert.equal(probeMeetsFloor(p('25.0.0', false)), false, '缺 node:sqlite 不达标');
+});
+
+test('probeMeetsFloor：严格 SemVer 口径（新增）——非法版本与 floor 同号预发布不达标', { timeout: 60_000 }, () => {
+  const p = (node: string, sqlite: boolean): RunnerProbe => ({ node, electron: null, sqlite });
+  // 预发布 < 同号正式版：nightly/beta 形态的 24.12.0 不满足 floor（原宽松比较会放行）。
+  assert.equal(probeMeetsFloor(p('24.12.0-nightly.20250101', true)), false);
+  assert.equal(probeMeetsFloor(p('24.12.0-beta.1', true)), false);
+  // 更高号的预发布仍达标（24.13.0-pre > 24.12.0）。
+  assert.equal(probeMeetsFloor(p('24.13.0-pre.1', true)), true);
+  // 非严格版本号（缺段/前缀/脏字符）不再被 parseInt 宽松比较放行。
+  assert.equal(probeMeetsFloor(p('24.12', true)), false);
+  assert.equal(probeMeetsFloor(p('v25.0.0', true)), false);
+  assert.equal(probeMeetsFloor(p('garbage', true)), false);
+});
+
+test('compareStrictSemver（desktop 本地实现，与 @helm/protocol/semver 同契约）：排序与显式拒绝（新增）', { timeout: 60_000 }, () => {
+  assert.equal(compareStrictSemver('1.0.0', '1.0.0'), 0);
+  assert.equal(compareStrictSemver('1.2.0', '1.10.0'), -1);
+  assert.equal(compareStrictSemver('1.0.0', '1.0.0-beta.11'), 1);
+  assert.equal(compareStrictSemver('1.0.0-beta.2', '1.0.0-beta.11'), -1);
+  assert.equal(compareStrictSemver('1.0.0-alpha.1', '1.0.0-alpha.beta'), -1);
+  assert.equal(compareStrictSemver('1.0.0+build.1', '1.0.0'), 0);
+  assert.throws(() => compareStrictSemver('1.2', '1.0.0'), SemverFormatError);
+  assert.throws(() => compareStrictSemver('1.0.0', 'v1.0.0'), SemverFormatError);
+  assert.equal(isStrictSemver('24.12.0'), true);
+  assert.equal(isStrictSemver('24.12'), false);
 });
 
 test('probeRunner 真实探测宿主 Node：版本达标且 node:sqlite 可用', { timeout: 60_000 }, async () => {

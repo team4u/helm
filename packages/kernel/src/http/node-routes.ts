@@ -2,7 +2,7 @@
  * 节点领域路由：/api/nodes（清单/签发/移除/升级/端口转发）与
  * POST /api/env/exec（跨节点命令执行，NDJSON 流式或 JSON 一次性）。
  */
-import { HelmError } from '@helm/protocol'
+import { HelmError, isStrictSemver, stripSemverVPrefix } from '@helm/protocol'
 import type { EnvExecStreamFrame, JsonSchema } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
 import { isAbsoluteTargetPath } from '@helm/protocol'
@@ -218,14 +218,10 @@ function requireHttpUrl(raw: unknown, field: string): string {
   return raw
 }
 
-/** 严格 SemVer（与 runtime 同一规则）。 */
-const STRICT_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$/
-
-/** 边界校验目标版本：trim 后允许单个 v/V 前缀，余下必须严格 SemVer。 */
+/** 边界校验目标版本：trim 后允许单个 v/V 前缀，余下必须严格 SemVer（解析/判定唯一实现：@helm/protocol/semver）。 */
 function requireVersionField(raw: string): string {
-  const trimmed = raw.trim()
-  const bare = trimmed.startsWith('v') || trimmed.startsWith('V') ? trimmed.slice(1) : trimmed
-  if (!STRICT_SEMVER_RE.test(bare)) {
+  const bare = stripSemverVPrefix(raw)
+  if (!isStrictSemver(bare)) {
     throw new ValidationError('targetVersion 需为严格 SemVer（可带单个 v 前缀，如 1.2.3 / v1.2.3）')
   }
   return raw

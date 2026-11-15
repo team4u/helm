@@ -29,7 +29,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { DesktopError } from './errors.js';
 import type { DesktopConfig } from './config.js';
-import { KERNEL_NODE_FLOOR, probeMeetsFloor, probeRunner } from './runners.js';
+import { KERNEL_NODE_FLOOR, compareStrictSemver, isStrictSemver, probeMeetsFloor, probeRunner, SemverFormatError } from './runners.js';
 import { extractTarGzip } from './payload-tar.js';
 import { PayloadFileLock } from './payload-lock.js';
 import { readJsonState, writeJsonAtomic } from './payload-json.js';
@@ -130,48 +130,19 @@ const ARTIFACT_FAULT_CODES = new Set([
   'tar_link_escape',
 ]);
 
-// ---- 严格 SemVer（npm 版本号即 SemVer；不引运行时依赖，按 semver.org 优先级实现） ----
+// ---- 严格 SemVer：唯一实现在 runners.ts（desktop 不依赖工作区包，与 @helm/protocol/semver 同契约） ----
 
-/** 官方 SemVer 语法（build metadata 允许但优先级比较忽略）。 */
-const SEMVER_RE =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
-
-function parseSemVer(value: string): { major: number; minor: number; patch: number; prerelease: (number | string)[] } | null {
-  const matched = SEMVER_RE.exec(value);
-  if (matched === null) return null;
-  return {
-    major: Number(matched[1]),
-    minor: Number(matched[2]),
-    patch: Number(matched[3]),
-    prerelease:
-      matched[4] === undefined
-        ? []
-        : matched[4].split('.').map((identifier) => (/^\d+$/.test(identifier) ? Number(identifier) : identifier)),
-  };
-}
-
-/** SemVer 优先级比较（build metadata 忽略；release > prerelease；数字标识 < 字母标识）。 */
+/**
+ * 排序或「无法比较」语义（保留既有导出契约：消费方 bootstrap.ts 依赖 null 判断）。
+ * 内部需要显式拒绝语义的路径（如 isNewerTarget）直接用 compareStrictSemver（非法抛错）。
+ */
 export function compareSemVer(a: string, b: string): number | null {
-  const pa = parseSemVer(a);
-  const pb = parseSemVer(b);
-  if (pa === null || pb === null) return null;
-  if (pa.major !== pb.major) return pa.major - pb.major;
-  if (pa.minor !== pb.minor) return pa.minor - pb.minor;
-  if (pa.patch !== pb.patch) return pa.patch - pb.patch;
-  if (pa.prerelease.length === 0 && pb.prerelease.length === 0) return 0;
-  if (pa.prerelease.length === 0) return 1;
-  if (pb.prerelease.length === 0) return -1;
-  const shared = Math.min(pa.prerelease.length, pb.prerelease.length);
-  for (let i = 0; i < shared; i++) {
-    const x = pa.prerelease[i]!;
-    const y = pb.prerelease[i]!;
-    if (x === y) continue;
-    if (typeof x === 'number' && typeof y === 'string') return -1;
-    if (typeof x === 'string' && typeof y === 'number') return 1;
-    if (typeof x === 'number' && typeof y === 'number') return x - y;
-    return x < y ? -1 : 1;
+  try {
+    return compareStrictSemver(a, b);
+  } catch (error) {
+    if (error instanceof SemverFormatError) return null;
+    throw error;
   }
-  return pa.prerelease.length - pb.prerelease.length;
 }
 
 interface RegistryVersion {
@@ -288,12 +259,8 @@ export class NpmPayloadUpdater implements PayloadUpdater {
    */
   private isNewerTarget(currentVersion: string, targetVersion: string): boolean {
     if (this.pinnedVersion !== undefined && this.pinnedVersion !== 'latest') return currentVersion !== targetVersion;
-    const ordering = compareSemVer(currentVersion, targetVersion);
-    if (ordering === null) {
-      // current.version 来自已通过严格校验的 manifest/meta，正常不可达；fail-closed 不放行。
-      return false;
-    }
-    return ordering < 0;
+    // 两侧版本均来自已通过严格校验的 manifest/meta，非法属状态损坏：显式抛错，不静默当作无需更新。
+    return compareStrictSemver(currentVersion, targetVersion) < 0;
   }
 
   // ---- stage：下载验收 + pending，不动 current ----
@@ -384,7 +351,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     await this.lock.run(async () => {
       const problems: string[] = [];
       if (info.name !== this.packageName) problems.push(`name 与配置的 payload 包不一致: ${info.name}`);
-      if (typeof info.version !== 'string' || parseSemVer(info.version) === null) {
+      if (typeof info.version !== 'string' || !isStrictSemver(info.version)) {
         problems.push(`version 不是合法 SemVer: ${String(info.version)}`);
       }
       if (problems.length > 0) {
@@ -498,7 +465,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     } else if (s.name !== this.packageName) {
       problems.push(`name 与 updater 配置的 payload 包不一致: ${s.name}`);
     }
-    if (typeof s.version !== 'string' || parseSemVer(s.version) === null) {
+    if (typeof s.version !== 'string' || !isStrictSemver(s.version)) {
       problems.push(`version 不是合法 SemVer: ${JSON.stringify(s.version)}`);
     }
     const releaseDirOk = this.checkManagedPath(s.releaseDir, problems, 'releaseDir');
@@ -603,7 +570,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
   // ---- registry 元数据 ----
 
   private async fetchRegistryVersion(spec: string): Promise<RegistryVersion> {
-    if (spec !== 'latest' && parseSemVer(spec) === null) {
+    if (spec !== 'latest' && !isStrictSemver(spec)) {
       throw new DesktopError('registry_metadata_invalid', `版本说明符不是合法 SemVer: ${spec}`);
     }
     const url = `${this.registry}/${encodeURIComponent(this.packageName)}`;
@@ -654,7 +621,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     const distTags = d['dist-tags'];
     const latestTag = typeof distTags === 'object' && distTags !== null ? (distTags as Record<string, unknown>)['latest'] : undefined;
     const version = spec === 'latest' ? latestTag : spec;
-    if (typeof version !== 'string' || parseSemVer(version) === null) {
+    if (typeof version !== 'string' || !isStrictSemver(version)) {
       problems.push(`无法解析合法 SemVer 目标版本（spec=${spec}，latest tag=${JSON.stringify(latestTag)}）`);
     }
     const versions = d['versions'];
@@ -951,7 +918,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
         throw new DesktopError('registry_metadata_invalid', `包名不可用作路径: ${name}`);
       }
     }
-    if (parseSemVer(version) === null) {
+    if (!isStrictSemver(version)) {
       throw new DesktopError('registry_metadata_invalid', `版本号不是合法 SemVer: ${version}`);
     }
     return path.join(this.payloadRoot, 'releases', ...segments, version);
