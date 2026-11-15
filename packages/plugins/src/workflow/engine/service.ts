@@ -195,6 +195,13 @@ export interface WorkflowServiceHost {
   ): Promise<{ ok: boolean; output: string }>
 }
 
+export interface WorkflowAutoResumeCandidate {
+  runId: string
+  conversationId: number
+  failedAt: number
+  autoResumeCount: number
+}
+
 export interface WorkflowServiceOptions {
   dataDir: string
   host: WorkflowServiceHost
@@ -347,6 +354,14 @@ function runIndexProblem(raw: unknown): { problem: string; runId: string } | und
 }
 
 const RUN_STATUSES: readonly WorkflowRunStatus[] = ['running', 'completed', 'failed', 'aborted']
+
+function isNonRetryableWorkflowError(error: string | undefined): boolean {
+  if (error === undefined) return false
+  const normalized = error.toLowerCase()
+  return normalized.includes('workflow_action_uncertain') ||
+    normalized.includes('[validation_error]') ||
+    normalized.includes('workflow script has a syntax error')
+}
 
 /**
  * 持久记录最低限度形状校验：只检查现行 RunRecord 契约的必需字段（summary
@@ -2052,6 +2067,38 @@ export class WorkflowService {
     // 活跃 run 不能排在较新的终态历史之前——合并去重后统一 createdAt 倒序。
     out.sort((a, b) => b.createdAt - a.createdAt)
     return out
+  }
+
+  /**
+   * 返回满足自动断点续跑条件的后台工作流。安全条件在引擎内读取并验证账本，
+   * Watchdog 只消费明确候选，不自行推断 action 是否可能已执行。
+   */
+  listAutoResumeCandidates(maxAttempts = 3): WorkflowAutoResumeCandidate[] {
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+      throw new HelmError('validation_error', 'maxAttempts 必须是正整数', 400, { maxAttempts })
+    }
+    const index = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
+    const candidates: WorkflowAutoResumeCandidate[] = []
+    for (const entry of index) {
+      const record = this.loadRecord(entry.id)
+      if (
+        record.status !== 'failed' ||
+        record.kind === 'subagent' ||
+        record.notifyParentOnSettle !== true ||
+        record.resumedByRunId !== undefined ||
+        (record.autoResumeCount ?? 0) >= maxAttempts ||
+        isNonRetryableWorkflowError(record.error)
+      ) continue
+      const journal = readJournal(record.journalPath)
+      if (journal.actionUncertain || !journal.entries.some((line) => (line.type === 'agent' || line.type === 'action') && line.ok)) continue
+      candidates.push({
+        runId: record.id,
+        conversationId: record.conversationId,
+        failedAt: record.updatedAt,
+        autoResumeCount: record.autoResumeCount ?? 0,
+      })
+    }
+    return candidates.sort((a, b) => a.failedAt - b.failedAt)
   }
 
   /** 等待 run 完成并返回其结果（历史 run 直接返回 result）。 */

@@ -42,6 +42,7 @@
  */
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { availableParallelism } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { HelmError, safeResultText, type AgentExecutionInfo, type AgentSpawnRequest, type PluginDefinition } from '@helm/protocol'
 import {
@@ -62,6 +63,7 @@ import { normalizeWorkflowArgs } from './workflow/engine/runtime.js'
 import { steerBackgroundSubagent } from './workflow/steer.js'
 import { WorktreeIsolation } from './workflow/isolation.js'
 import { executionOf, subagentFooter } from './workflow/tool-result.js'
+import { DIAGNOSTICS_COLLECT_EVENT, appendProbes, parseCollection } from './diagnostics.js'
 
 export { WORKFLOW_PLUGIN_ID }
 
@@ -224,7 +226,17 @@ export function createWorkflowPlugin(): PluginDefinition {
       const subagentConvDoc = ctx.doc<Record<string, ManagedSubagentEntry>>('subagent-conversations', {})
 
       // 复用宿主配置入口：插件中心与 helm plugins config 同权读写。
+      const defaultMaxConcurrentAgents = Math.max(2, Math.min(32, availableParallelism() * 2))
       ctx.configSchema({
+        maxConcurrentAgents: {
+          type: 'number',
+          label: '工作流最大并发子代理数',
+          minimum: 1,
+          maximum: 128,
+          integer: true,
+          description: '单个工作流 Run 的并发 agent 上限，默认按 CPU 并行度计算并限制在 2..32。',
+          default: defaultMaxConcurrentAgents,
+        },
         maxSubagentDepth: {
           type: 'number',
           label: '子代理最大层级',
@@ -235,6 +247,14 @@ export function createWorkflowPlugin(): PluginDefinition {
           default: DEFAULT_MAX_SUBAGENT_DEPTH,
         },
       })
+      function configuredMaxConcurrentAgents(): number {
+        const raw = ctx.getConfig().maxConcurrentAgents
+        if (raw === undefined) return defaultMaxConcurrentAgents
+        if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 128) {
+          throw new HelmError('validation_error', `builtin:workflow 配置 maxConcurrentAgents 非法：${JSON.stringify(raw)}（需 1..128 的整数）`, 500, { configured: raw })
+        }
+        return raw
+      }
       function configuredMaxSubagentDepth(): number {
         const raw = ctx.getConfig().maxSubagentDepth
         if (raw === undefined) return DEFAULT_MAX_SUBAGENT_DEPTH
@@ -250,6 +270,7 @@ export function createWorkflowPlugin(): PluginDefinition {
       }
 
       // 启动即校验配置：非法值在插件定义阶段显式失败，不带病运行。
+      configuredMaxConcurrentAgents()
       configuredMaxSubagentDepth()
 
       /** 非受管会话从 depth=0 开始；受管会话严格采用派生时的持久事实。 */
@@ -505,6 +526,7 @@ export function createWorkflowPlugin(): PluginDefinition {
       const workflows = new WorkflowService({
         dataDir: ctx.dataDir,
         state: stateStore,
+        concurrency: configuredMaxConcurrentAgents(),
         // 持久面值级脱敏钩子（契约声明主 app 注入；实际唯一来源是宿主统一
         // redact 端口）：run 记录/账本写入前过 stash 脱敏，防机密落库。
         redact: (text) => ctx.host.redact(text),
@@ -649,6 +671,30 @@ export function createWorkflowPlugin(): PluginDefinition {
           const message = error instanceof Error ? error.message : String(error)
           process.stderr.write(`builtin:workflow: 会话删除后的 runs 投影失败: ${message}\n`)
         }
+      })
+
+      // 只把账本已证明可安全续跑的后台失败 Run 交给 Watchdog。
+      ctx.host.onEvent(DIAGNOSTICS_COLLECT_EVENT, (raw) => {
+        const collection = parseCollection(raw)
+        if (stopping) return
+        appendProbes(
+          collection,
+          workflows.listAutoResumeCandidates(3).map((run) => ({
+            targetKind: 'external' as const,
+            targetId: `workflow:${run.runId}`,
+            nodeId: 'local',
+            ownedBy: 'helm' as const,
+            status: 'error',
+            stateChangeSeq: run.autoResumeCount,
+            facts: {
+              kind: 'workflow_run',
+              runId: run.runId,
+              conversationId: run.conversationId,
+              failedAt: run.failedAt,
+              autoResumeCount: run.autoResumeCount,
+            },
+          })),
+        )
       })
 
       /** 上一轮已写分片的值缓存（值相等时跳过写入，不发重复事件）。 */
@@ -1151,6 +1197,7 @@ export function createWorkflowPlugin(): PluginDefinition {
             path: { type: 'string', description: 'worktree 绝对路径（与 conversationId 择一；多节点同名路径需另附 nodeId）' },
             nodeId: { type: 'string', description: '目标节点 ID（仅可与 path 搭配，跨节点同名路径消歧）' },
             deleteBranch: { type: 'boolean', description: '同时删除 helm/spawn-* 分支（默认保留）' },
+            mergedInto: { type: 'string', description: '已合入的目标分支或提交；缺省按记录 baseBranch 再回退主工作树 HEAD' },
             force: { type: 'boolean', description: '强制清理（仅越过未提交修改/未合入提交保护；不可越过占用/归属/locked 校验）' },
           },
           additionalProperties: false,
@@ -1171,6 +1218,7 @@ export function createWorkflowPlugin(): PluginDefinition {
                 ...(a['path'] !== undefined ? { path: String(a['path']) } : {}),
                 ...(a['nodeId'] !== undefined ? { nodeId: String(a['nodeId']) } : {}),
                 ...(a['deleteBranch'] !== undefined ? { deleteBranch: a['deleteBranch'] === true } : {}),
+                ...(a['mergedInto'] !== undefined ? { mergedInto: String(a['mergedInto']) } : {}),
                 ...(a['force'] !== undefined ? { force: a['force'] === true } : {}),
               },
               context.signal,
@@ -1568,6 +1616,7 @@ export function createWorkflowPlugin(): PluginDefinition {
             path: { type: 'string', description: 'worktree 绝对路径（可附 nodeId 消歧）' },
             nodeId: { type: 'string', description: '目标节点 ID（仅可与 path 搭配）' },
             deleteBranch: { type: 'boolean', description: '同时删除 helm/spawn-* 分支（默认保留）' },
+            mergedInto: { type: 'string', description: '已合入的目标分支或提交；缺省按记录 baseBranch 再回退主工作树 HEAD' },
             force: { type: 'boolean', description: '强制清理（脏工作区默认拒绝）' },
           },
           additionalProperties: false,
@@ -1612,6 +1661,7 @@ export function createWorkflowPlugin(): PluginDefinition {
               ...(a['path'] !== undefined ? { path: String(a['path']) } : {}),
               ...(a['nodeId'] !== undefined ? { nodeId: String(a['nodeId']) } : {}),
               ...(a['deleteBranch'] !== undefined ? { deleteBranch: a['deleteBranch'] === true } : {}),
+              ...(a['mergedInto'] !== undefined ? { mergedInto: String(a['mergedInto']) } : {}),
               ...(a['force'] !== undefined ? { force: a['force'] === true } : {}),
             } as Record<string, never>,
             context.signal,

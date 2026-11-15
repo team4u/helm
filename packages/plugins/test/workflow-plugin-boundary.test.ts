@@ -5,7 +5,7 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmError, type ConversationSummary, type MaybePromise, type PluginDefinition, type PluginToolContext } from '@helm/protocol'
@@ -649,30 +649,20 @@ test('cleanup_worktree 工具错误信封：structuredOutput 仅 { ok:false, err
 function seedCorruptRunsIndex(docStore: MemoryDocStore): void {
   docStore.set('builtin:workflow:records', {
     'workflow/runs': [
-      { id: 'wf_a', conversationId: 1, createdAt: 1 },
-      { id: 'wf_c', conversationId: 0, createdAt: 2 },
+      { id: 'wf_a', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 },
+      { id: 'wf_c', conversationId: 1, status: 42, createdAt: 2, updatedAt: 2 },
     ],
-    'workflow/run/wf_a': {
-      id: 'wf_a',
-      name: 'a',
-      conversationId: 1,
-      status: 'running',
-      createdAt: 1,
-      updatedAt: 1,
-      kind: 'workflow',
-      journalPath: '/tmp/nonexistent-a.jsonl',
-    },
-    'workflow/run/wf_c': {
-      id: 'wf_c',
-      name: 'c',
-      conversationId: 1,
-      status: 'completed',
-      createdAt: 2,
-      updatedAt: 2,
-      kind: 'workflow',
-      journalPath: '/tmp/nonexistent-c.jsonl',
-    },
   })
+  const artifactsDir = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1')
+  mkdirSync(artifactsDir, { recursive: true })
+  writeFileSync(join(artifactsDir, 'workflow-wf_a.record.json'), JSON.stringify({
+    id: 'wf_a', name: 'a', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1,
+    kind: 'workflow', journalPath: '/tmp/nonexistent-a.jsonl',
+  }))
+  writeFileSync(join(artifactsDir, 'workflow-wf_c.record.json'), JSON.stringify({
+    id: 'wf_c', name: 'c', conversationId: 1, status: 'completed', createdAt: 2, updatedAt: 2,
+    kind: 'workflow', journalPath: '/tmp/nonexistent-c.jsonl',
+  }))
 }
 
 test('emitEvent 适配器：runs 投影损坏时引擎语义完整、显式诊断、无 unhandledRejection', { timeout: 60_000 }, async () => {
@@ -698,8 +688,8 @@ test('emitEvent 适配器：runs 投影损坏时引擎语义完整、显式诊�
     await new Promise((resolve) => setTimeout(resolve, 30))
     assert.deepEqual(unhandled, [], '事件适配器故障不得逃逸为 unhandledRejection')
     // wf_a 仍被 init 如实标 failed（引擎终态语义不被观察面故障破坏）。
-    const records = docs.get<Record<string, { status?: string }>>('builtin:workflow:records', {})
-    assert.equal(records['workflow/run/wf_a']?.status, 'failed')
+    const record = JSON.parse(readFileSync(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', 'workflow-wf_a.record.json'), 'utf8')) as { status?: string }
+    assert.equal(record.status, 'failed')
     // 适配器收口后的显式诊断事件（区别于 stop 路径的「工作流最终投影未同步」）。
     const notifications = backend.emitted.filter(
       (e) =>
@@ -802,19 +792,21 @@ test('工作流库动作全链路：save 真实写入 → list 携带文件事�
 test('save 动作 fromRunId：内联 run 固化为定义（经真实插件 records doc 种子）', { timeout: 60_000 }, async () => {
   // 预置插件私有 records 文档：一条 completed 内联 workflow run。
   docs.set('builtin:workflow:records', {
-    'workflow/runs': [{ id: 'wf_inline1', conversationId: 1, createdAt: 1 }],
-    'workflow/run/wf_inline1': {
-      id: 'wf_inline1',
-      name: 'inline',
-      conversationId: 1,
-      status: 'completed',
-      createdAt: 1,
-      updatedAt: 2,
-      kind: 'workflow',
-      script: 'export const meta = { name: "fromrun", description: "固化" }\nreturn 1',
-      journalPath: '/tmp/none.jsonl',
-    },
+    'workflow/runs': [{ id: 'wf_inline1', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 2 }],
   })
+  const artifactsDir = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1')
+  mkdirSync(artifactsDir, { recursive: true })
+  writeFileSync(join(artifactsDir, 'workflow-wf_inline1.record.json'), JSON.stringify({
+    id: 'wf_inline1',
+    name: 'inline',
+    conversationId: 1,
+    status: 'completed',
+    createdAt: 1,
+    updatedAt: 2,
+    kind: 'workflow',
+    script: 'export const meta = { name: "fromrun", description: "固化" }\nreturn 1',
+    journalPath: '/tmp/none.jsonl',
+  }))
   const host = makeHost()
   const { createWorkflowPlugin } = await import('../src/workflow.js')
   await host.register(createWorkflowPlugin())

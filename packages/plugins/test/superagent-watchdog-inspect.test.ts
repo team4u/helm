@@ -24,6 +24,7 @@ import {
   HelmError,
   type ConversationSummary,
   type MaybePromise,
+  type NodePathUsage,
   type PluginDefinition,
 } from '@helm/protocol'
 import {
@@ -86,7 +87,7 @@ function makeConversationSummary(id: number, over: Partial<ConversationSummary> 
 interface InspectHarnessOptions {
   summary: ConversationSummary
   /** inspectNodePathUsage 受控实现：入参记录 + 返回值或抛错。 */
-  pathUsage: (input: { nodeId: string; path: string }) => MaybePromise<{ processes: Array<{ pid: number; name?: string; source: 'cwd' | 'fd'; path: string }> }>
+  pathUsage: (input: { nodeId: string; path: string }) => MaybePromise<NodePathUsage>
   /** 脱敏函数（默认恒等；用可观察变换验证脱敏链路）。 */
   redact?: (text: string) => string
 }
@@ -167,10 +168,15 @@ test('activeProcesses：按 (nodeId ?? local, cwd) 现查并逐项脱敏为 {pid
     pathUsage: (input) => {
       assert.deepEqual(input, { nodeId: 'local', path: '/root/worktrees/hotfix' })
       return {
+        path: input.path,
         processes: [
           { pid: 4321, name: 'vitest', source: 'cwd', path: '/root/worktrees/hotfix' },
           { pid: 4322, source: 'fd', path: '/root/worktrees/hotfix/node_modules/.tmp' },
         ],
+        matchedTotal: 2,
+        processesTruncated: false,
+        complete: true,
+        diagnostics: [],
       }
     },
   })
@@ -191,7 +197,14 @@ test('activeProcesses：按 (nodeId ?? local, cwd) 现查并逐项脱敏为 {pid
 test('activeProcesses：显式 nodeId 透传给 inspectNodePathUsage', { timeout: 60_000 }, async () => {
   const h = await makeInspectHarness({
     summary: makeConversationSummary(56, { nodeId: 'edge-1', cwd: '/srv/data' }),
-    pathUsage: () => ({ processes: [{ pid: 9, name: 'python', source: 'cwd', path: '/srv/data' }] }),
+    pathUsage: () => ({
+      path: '/srv/data',
+      processes: [{ pid: 9, name: 'python', source: 'cwd', path: '/srv/data' }],
+      matchedTotal: 1,
+      processesTruncated: false,
+      complete: true,
+      diagnostics: [],
+    }),
   })
   const out = await h.inspect(56)
   assert.deepEqual(h.pathUsageCalls, [{ nodeId: 'edge-1', path: '/srv/data' }])

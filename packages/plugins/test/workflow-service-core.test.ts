@@ -109,7 +109,7 @@ test('redactJournalEntry：text/execution/gate 逐值脱敏，action 行原样�
 function makeParentSummary(id: number, cwd: string) {
   return {
     id, title: '测试父会话', profileId: 'assistant', tags: [], cwd,
-    model: 'test/model', thinkingLevel: '', status: 'idle', stateChangeSeq: 1, completionSeq: 0,
+    model: 'test/model', thinkingLevel: '', status: 'idle' as const, stateChangeSeq: 1, completionSeq: 0,
     unread: false, pinned: false, pendingAskCount: 0, createdAt: 0, updatedAt: 0,
   }
 }
