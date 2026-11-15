@@ -96,6 +96,11 @@ export const WATCHDOG_PLAYBOOK_CI_FAILURE_MD = renderSkillTemplate(
   superagentVars,
 )
 
+export const WATCHDOG_PLAYBOOK_CODE_HANG_LOOP_MD = renderSkillTemplate(
+  readFileSync(join(assetsDir, 'skill', 'references', 'code-hang-loop.md'), 'utf-8'),
+  superagentVars,
+)
+
 /** 读取缺失文件检测：ENOENT → false（缺失）；损坏/权限错误原样抛出。 */
 async function fileExists(path: string): Promise<boolean> {
   try {
@@ -195,5 +200,6 @@ export const WATCHDOG_PLAYBOOK_SKILL_ASSET: SuperAgentSkillAsset = {
   references: {
     'herdr-stalled.md': WATCHDOG_PLAYBOOK_HERDR_STALLED_MD,
     'ci-failure.md': WATCHDOG_PLAYBOOK_CI_FAILURE_MD,
+    'code-hang-loop.md': WATCHDOG_PLAYBOOK_CODE_HANG_LOOP_MD,
   },
 }

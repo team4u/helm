@@ -1442,6 +1442,7 @@ export function registerSuperAgentWatchdog(
       createdAt: entry.createdAt,
       preview: ctx.host.redact(truncatePreview(JSON.stringify(entry.model ?? entry.data ?? null))),
     }))
+    const activeProcesses = await inspectActiveProcesses(summary)
     return {
       kind: 'conversation' as const,
       conversation: {
@@ -1453,8 +1454,40 @@ export function registerSuperAgentWatchdog(
         completionSeq: summary.completionSeq,
         pendingAskCount: summary.pendingAskCount,
         ownedBy: ctx.host.getConversationOwnership(summary.id), // 现查，非探针旧值
+        // 探测失败时缺省（undefined）：诊断附加项缺失不影响主消息，也绝不
+        // 伪造空清单冒充「无占用」（诚实性纪律见 inspectActiveProcesses）。
+        ...(activeProcesses !== undefined ? { activeProcesses } : {}),
       },
       entries,
+    }
+  }
+
+  /**
+   * 会话工作目录的进程占用快照（L2 排障输入，如卡死在工作树里的 vitest /
+   * node / python 进程）：按会话物理坐标 (nodeId ?? 'local', cwd) 现查
+   * host.inspectNodePathUsage，逐项脱敏为 {pid, name, source, path}。
+   * cwd 为空（无目录语义）或节点离线 / 守护进程不支持等显式失败时返回
+   * undefined——诊断附加项缺失不影响 inspect 主消息；绝不用空数组冒充
+   * 「无占用」（快照不完整与探测失败对调用方同为字段缺省，不伪造事实）。
+   */
+  async function inspectActiveProcesses(
+    summary: ConversationSummary,
+  ): Promise<Array<{ pid: number; name?: string; source: string; path: string }> | undefined> {
+    if (summary.cwd.length === 0) return undefined
+    try {
+      const usage = await ctx.host.inspectNodePathUsage({
+        nodeId: summary.nodeId ?? 'local',
+        path: summary.cwd,
+      })
+      return usage.processes.map((process) => ({
+        pid: process.pid,
+        ...(process.name !== undefined ? { name: ctx.host.redact(process.name) } : {}),
+        source: process.source,
+        path: ctx.host.redact(process.path),
+      }))
+    } catch {
+      // 节点离线 / 平台不支持等：activeProcesses 字段缺省（见上方注释）。
+      return undefined
     }
   }
 
@@ -1554,7 +1587,26 @@ export function registerSuperAgentWatchdog(
     type: 'object',
     properties: {
       kind: { type: 'string', enum: ['conversation', 'external'] },
-      conversation: { type: 'object' },
+      conversation: {
+        type: 'object',
+        properties: {
+          activeProcesses: {
+            type: 'array',
+            description: '会话工作目录 (nodeId ?? local, cwd) 的进程占用快照（已脱敏；探测失败时字段缺省）',
+            items: {
+              type: 'object',
+              properties: {
+                pid: { type: 'integer', minimum: 1 },
+                name: { type: 'string', description: '进程名（读取失败时缺省）' },
+                source: { type: 'string', enum: ['cwd', 'fd'] },
+                path: { type: 'string', description: '引用方绝对路径（已脱敏）' },
+              },
+              required: ['pid', 'source', 'path'],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
       entries: { type: 'array', items: { type: 'object' } },
       probe: { type: 'object' },
     },

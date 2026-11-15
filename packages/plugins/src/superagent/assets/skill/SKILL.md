@@ -10,3 +10,4 @@ managedByPlugin: {{MANAGED_BY}}
 
 - `references/herdr-stalled.md`：Herdr 终端窗格停滞处置
 - `references/ci-failure.md`：CI 失败处置
+- `references/code-hang-loop.md`：代码死循环与测试卡死处置
