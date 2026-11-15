@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type {
   AskSpec,
   ConversationAttachmentRef,
@@ -6,35 +6,28 @@ import type {
   ConversationLive,
   ConversationSummary,
   ProfileStarterPrompt,
-  ToolViewSpec,
 } from '@helm/protocol'
-import { artifactsApi, conversationsApi } from '../lib/api.js'
-import { HelmIcon, ToolActivityContext, CopyButton } from '@helm/plugin-client'
+import { artifactsApi } from '../lib/api.js'
+import { HelmIcon, CopyButton } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { ToolActivityProvider } from './ToolActivityProvider.js'
-import { MarkdownView } from './MarkdownView.js'
+import { AssistantTurnView } from './AssistantTurn.js'
 import {
+  buildActiveEntryIndex,
   buildTimelineItems,
   collectSiblingCalls,
-  filterRewoundEntries,
-  isAssistantTurnBusy,
   lastEditableHumanInput,
   queuedAgentTextCollapse,
-  toolSummaryText,
-  type AssistantTurn,
+  resolveAssistantAnchorEntry,
   type DividerItem,
   type EditRequestTarget,
-  type FoldableStep,
   type HumanInputItem,
   type PluginCardItem,
   type TimelineItem,
-  type ToolTrace,
 } from './timeline-model.js'
+import { useTimelineEntryActions } from './timeline-actions.js'
 import { resolveActiveOutlineEntryId } from './outline-model.js'
-import { ToolExpandedBody, ToolRawBody } from './ToolExpandedBody.js'
-import { toolRowStats } from './tool-body-model.js'
 import { calibrateAnchorAfterSmoothScroll, calibrateInitialStickToBottom, type AnchorAlignment } from './timeline-scroll-calibration.js'
 import { captureTimelineScrollAnchor, restoreTimelineScrollAnchor } from './timeline-scroll-anchor.js'
 import {
@@ -186,12 +179,18 @@ function HumanMessage({
   conversation,
   anchorEntry,
   onRequestEdit,
+  onForkFromHere,
+  onWithdrawQueuedEdit,
 }: {
   item: HumanInputItem
   conversation: ConversationSummary
   /** item.entryId 对应的真实持久化条目；queued（无持久锚点）时 undefined。 */
   anchorEntry?: ConversationEntry
   onRequestEdit: (target: EditRequestTarget) => void
+  /** 从该消息分叉新会话（ConversationTimeline 统一实例化的动作服务）。 */
+  onForkFromHere: (entryId: string) => Promise<void>
+  /** 撤回排队输入并转入编辑（withdrawn → 原文本回填；已落库 → 原地编辑）。 */
+  onWithdrawQueuedEdit: (subId: string, target: EditRequestTarget) => Promise<void>
 }) {
   const store = useHelmStore()
   const [forking, setForking] = useState(false)
@@ -245,28 +244,7 @@ function HumanMessage({
     const subId = item.entryId.startsWith('queued:') ? item.entryId.slice('queued:'.length) : item.entryId
     setWithdrawing(true)
     try {
-      const res = await conversationsApi.withdraw(conversation.id, subId)
-      if (res.status === 'withdrawn') {
-        onRequestEdit({ text: item.text, ...attachments })
-      } else if ((res.status === 'already_placed' || res.status === 'settled') && res.entryId !== undefined) {
-        onRequestEdit({ text: item.text, entryId: res.entryId, ...attachments })
-      } else {
-        store.pushNotice({
-          type: 'notification',
-          level: 'warning',
-          title: '无法撤回排队消息',
-          body: `提交已进入执行（status=${res.status}）`,
-          conversationId: conversation.id,
-        })
-      }
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '撤回排队消息失败',
-        body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
-      })
+      await onWithdrawQueuedEdit(subId, { text: item.text, ...attachments })
     } finally {
       setWithdrawing(false)
     }
@@ -275,23 +253,7 @@ function HumanMessage({
   const forkFromHere = async (): Promise<void> => {
     setForking(true)
     try {
-      const forked = await conversationsApi.fork(conversation.id, item.entryId)
-      store.openTarget({ kind: 'conversation', conversationId: forked.id }, { split: store.splitTarget === null })
-      store.pushNotice({
-        type: 'notification',
-        level: 'info',
-        title: '已创建分叉会话',
-        body: `#${forked.id} ${forked.title}`,
-        conversationId: forked.id,
-      })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '分叉失败',
-        body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
-      })
+      await onForkFromHere(item.entryId)
     } finally {
       setForking(false)
     }
@@ -383,276 +345,13 @@ function HumanMessage({
 }
 
 // ---------------------------------------------------------------------------
-// 工具单行轨迹
+// 工具行 / 思考组 / Assistant 回合见 TimelineRows.tsx 与 AssistantTurn.tsx
+// （自 ConversationTimeline 拆出的行级渲染单元）。
 // ---------------------------------------------------------------------------
-
-function toolStatusIcon(tool: ToolTrace): string {
-  if (tool.status === 'running') return 'loader'
-  if (tool.isError) return 'x'
-  if (tool.status === 'done') return 'check'
-  return 'circle'
-}
-
-/** tool.view 完整标准 Props 构造（含 siblingCalls，供插件组件去重/续接计算）。 */
-function buildToolViewProps(
-  tool: ToolTrace,
-  conversationId: number,
-  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>,
-): Record<string, unknown> {
-  return {
-    callId: tool.callId ?? '',
-    toolName: tool.toolName,
-    ...(tool.input !== undefined ? { input: tool.input } : {}),
-    status: tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'done',
-    ...(tool.resultText !== undefined ? { result: tool.resultText } : {}),
-    ...(tool.structuredOutput !== undefined ? { structuredOutput: tool.structuredOutput } : {}),
-    isError: tool.isError,
-    ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}),
-    ...(tool.durationMs !== undefined ? { durationMs: tool.durationMs } : {}),
-    ...(tool.artifactRef !== undefined ? { artifactRef: tool.artifactRef } : {}),
-    conversationId,
-    siblingCalls,
-  }
-}
 
 /** CSS 属性选择器值转义（双引号与反斜杠）；大纲二级锚定位查询用。 */
 function escapeAttrSelectorValue(value: string): string {
   return value.replace(/["\\]/g, (ch) => `\\${ch}`)
-}
-
-export function TraceRow({
-  tool,
-  conversationId,
-  defaultOpen,
-  siblingCalls,
-}: {
-  tool: ToolTrace
-  conversationId: number
-  defaultOpen: boolean
-  /** 当前时间线内全部工具调用轻量摘要（透传给 tool.view 插件组件）。 */
-  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
-}) {
-  const [open, setOpen] = useState(defaultOpen)
-
-  const rowFailed = Boolean(tool.isError)
-  const right =
-    tool.status === 'running'
-      ? '运行中'
-      : rowFailed && tool.durationMs === undefined
-        ? '失败'
-        : tool.durationMs !== undefined
-          ? formatDurationMs(tool.durationMs)
-          : tool.status === 'done'
-            ? '完成'
-            : ''
-  const rowIcon = toolStatusIcon(tool)
-
-  // 单行极简统计（edit +N −N / write 行数）：只报事实，运行态不伪称成功。
-  const stats = useMemo(() => toolRowStats(tool), [tool])
-
-  // 命中插件 tool.view：replaceRow=true 时插件组件完全替换默认工具行；
-  // 未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
-  // inline 插件视图保留工具行的原始数据入口，专属展开体仅用于宿主工具。
-  // 顶层业务卡标记 data-outline-card-id（tool.key）：会话大纲二级锚精确定位。
-  const toolView = tool.toolView
-  const replaceRow = toolView !== undefined && (toolView.spec as ToolViewSpec).replaceRow === true
-
-  return (
-    <div
-      className={`trace-entry${rowFailed ? ' trace-entry-error' : ''}`}
-      {...(toolView !== undefined ? { 'data-outline-card-id': tool.key } : {})}
-    >
-      {toolView !== undefined && replaceRow ? (
-        <div className="trace-block">
-          <PluginUiView
-            pluginId={toolView.pluginId}
-            spec={toolView.spec}
-            conversationId={conversationId}
-            label={`工具视图 ${tool.toolName}`}
-            slotProps={buildToolViewProps(tool, conversationId, siblingCalls)}
-          />
-        </div>
-      ) : (
-        <>
-          <div
-            className={`trace-row${rowFailed ? ' trace-row-error' : ''}`}
-            role="button"
-            tabIndex={0}
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                setOpen((v) => !v)
-              }
-            }}
-          >
-            <span className="trace-row-left">
-              <HelmIcon
-                name={rowIcon}
-                size={12}
-                className={tool.status === 'running' ? 'spin-slow' : undefined}
-              />
-              <span className="trace-tool-name">{tool.toolName}</span>
-              <span className="trace-tool-summary">{toolSummaryText(tool.toolName, tool.input)}</span>
-              {stats !== undefined ? (
-                <span className="trace-row-stats" title={stats.title}>
-                  {stats.removeCount !== undefined ? (
-                    <span className="trace-row-stats-remove">−{stats.removeCount}</span>
-                  ) : null}
-                  {stats.addCount !== undefined ? (
-                    <span className="trace-row-stats-add">+{stats.addCount}</span>
-                  ) : null}
-                  {stats.text !== undefined ? <span>{stats.text}</span> : null}
-                </span>
-              ) : null}
-            </span>
-            <span className="trace-row-right">{right}</span>
-          </div>
-          {toolView !== undefined ? (
-            <div className="trace-toolview">
-              <PluginUiView
-                pluginId={toolView.pluginId}
-                spec={toolView.spec}
-                conversationId={conversationId}
-                label={`工具视图 ${tool.toolName}`}
-                slotProps={buildToolViewProps(tool, conversationId, siblingCalls)}
-              />
-            </div>
-          ) : null}
-          {open ? (
-            <div className="trace-expanded-body selectable">
-              {toolView === undefined
-                ? <ToolExpandedBody tool={tool} conversationId={conversationId} />
-                : <ToolRawBody tool={tool} conversationId={conversationId} />}
-            </div>
-          ) : null}
-        </>
-      )}
-    </div>
-  )
-}
-
-function StepGroup({
-  steps,
-  active,
-  conversationId,
-  siblingCalls,
-}: {
-  steps: FoldableStep[]
-  active: boolean
-  conversationId: number
-  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
-}) {
-  const firstStep = steps[0]
-  if (steps.length === 1 && firstStep !== undefined && firstStep.kind === 'thinking') {
-    return (
-      <ThinkingRow
-        text={firstStep.thinking.text}
-        active={firstStep.thinking.active ?? active}
-        conversationId={conversationId}
-      />
-    )
-  }
-
-  const [userOverride, setUserOverride] = useState<boolean | null>(null)
-  const prevActiveRef = useRef(active)
-  if (prevActiveRef.current !== active) {
-    prevActiveRef.current = active
-    if (!active && userOverride !== null) {
-      setUserOverride(null)
-    }
-  }
-  const open = userOverride ?? active
-
-  const hasOnlyThinking = steps.every((s) => s.kind === 'thinking')
-  const summaryTitle = hasOnlyThinking
-    ? active
-      ? `正在思考 (${steps.length} 步)…`
-      : `思考过程 (${steps.length} 步)`
-    : active
-      ? `正在思考与执行 (${steps.length} 步)…`
-      : `思考与执行过程 (${steps.length} 步)`
-
-  return (
-    <div className="trace-group">
-      <button
-        type="button"
-        className="trace-group-summary"
-        onClick={() => setUserOverride(!open)}
-        title={open ? '收起思考与执行过程' : '展开思考与执行过程'}
-      >
-        <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-        {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
-        {summaryTitle}
-      </button>
-      {open ? (
-        <div className="trace-group-steps">
-          {steps.map((step, idx) =>
-            step.kind === 'thinking' ? (
-              <ThinkingRow
-                key={`think:${idx}`}
-                text={step.thinking.text}
-                active={step.thinking.active}
-                conversationId={conversationId}
-              />
-            ) : (
-              <TraceRow
-                key={step.tool.key}
-                tool={step.tool}
-                conversationId={conversationId}
-                defaultOpen={false}
-                siblingCalls={siblingCalls}
-              />
-            ),
-          )}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-export function ThinkingRow({
-  text,
-  conversationId,
-  active = false,
-  defaultOpen = false,
-}: {
-  text: string
-  conversationId?: number
-  active?: boolean
-  defaultOpen?: boolean
-}) {
-  const [userOverride, setUserOverride] = useState<boolean | null>(null)
-  const prevActiveRef = useRef(active)
-  if (prevActiveRef.current !== active) {
-    prevActiveRef.current = active
-    if (!active && userOverride !== null) {
-      setUserOverride(null)
-    }
-  }
-  const open = userOverride ?? (active || defaultOpen)
-
-  return (
-    <div className="trace-group">
-      <button
-        type="button"
-        className="trace-group-summary"
-        onClick={() => setUserOverride(!open)}
-        title={open ? '收起思考过程' : '展开思考过程'}
-      >
-        <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-        {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
-        {active ? '正在思考…' : '思考过程'}
-      </button>
-      {open ? (
-        <div className="trace-expanded-body selectable thinking-expanded-body">
-          {/* active 思考块是仍在增长的 live 文本；静止思考不启用流式路径 */}
-          <MarkdownView text={text} conversationId={conversationId} streaming={active} />
-        </div>
-      ) : null}
-    </div>
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -762,58 +461,6 @@ function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answered' | 'c
 }
 
 // ---------------------------------------------------------------------------
-// timeline.entry.action 真实锚点解析：从 detailEntries（props 实参）按
-// 归一化 item 的 entryId / entryIds 定位真实 ConversationEntry，不查 store、
-// 不编造占位。
-// ---------------------------------------------------------------------------
-
-function buildActiveEntryIndex(entries: ReadonlyArray<ConversationEntry>): Map<string, ConversationEntry> {
-  const index = new Map<string, ConversationEntry>()
-  for (const entry of filterRewoundEntries(entries)) index.set(entry.id, entry)
-  return index
-}
-
-function hasAssistantText(entry: ConversationEntry): boolean {
-  if (!Array.isArray(entry.model)) return false
-  for (const msg of entry.model) {
-    if ((msg as { role?: unknown } | null)?.role !== 'assistant') continue
-    const content = (msg as { content?: unknown }).content
-    if (!Array.isArray(content)) continue
-    for (const block of content) {
-      if (
-        (block as { type?: unknown } | null)?.type === 'text' &&
-        typeof (block as { text?: unknown }).text === 'string' &&
-        (block as { text: string }).text !== ''
-      ) {
-        return true
-      }
-    }
-  }
-  return false
-}
-
-/**
- * assistant 回合 action 锚点：优先取最后一个携带 assistant 正文文本块的
- * pi.assistant 条目（与 hover 条复制语义同载体）；全无则退回最后一个
- * pi.assistant（含纯 toolCall 载体）；回合仅有工具条目（live 起步）时
- * undefined——绝不拿 pi.tool-result 伪造。
- */
-function resolveAssistantAnchorEntry(
-  entryIds: ReadonlyArray<string>,
-  entriesById: ReadonlyMap<string, ConversationEntry>,
-): ConversationEntry | undefined {
-  let lastAssistant: ConversationEntry | undefined
-  let lastTextEntry: ConversationEntry | undefined
-  for (const id of entryIds) {
-    const entry = entriesById.get(id)
-    if (entry === undefined || entry.kind !== 'pi.assistant') continue
-    lastAssistant = entry
-    if (hasAssistantText(entry)) lastTextEntry = entry
-  }
-  return lastTextEntry ?? lastAssistant
-}
-
-// ---------------------------------------------------------------------------
 // 高亮定位
 // ---------------------------------------------------------------------------
 
@@ -844,178 +491,6 @@ function useHighlightScroll(
     node.scrollIntoView({ behavior: 'smooth', block: 'center' })
     armCalibration(node, 'center')
   }, [conversationId, h?.conversationId, h?.entryId, armCalibration])
-}
-
-// ---------------------------------------------------------------------------
-// Assistant 回合
-// ---------------------------------------------------------------------------
-
-interface AssistantTurnViewProps {
-  turn: AssistantTurn
-  conversation: ConversationSummary
-  siblingCalls: ReadonlyArray<import('@helm/protocol').ToolViewSiblingCall>
-  isLatestTurn?: boolean
-  /** 回合锚点对应的真实持久化 pi.assistant 条目（见 resolveAssistantAnchorEntry）。 */
-  anchorEntry?: ConversationEntry
-}
-
-function AssistantTurnView(props: AssistantTurnViewProps) {
-  return <ToolActivityProvider><AssistantTurnContent {...props} /></ToolActivityProvider>
-}
-
-function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn = false, anchorEntry }: AssistantTurnViewProps) {
-  const store = useHelmStore()
-  const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
-  const [forking, setForking] = useState(false)
-  const lastText = useMemo(() => {
-    const texts = turn.segments.filter((s) => s.kind === 'text') as Array<{ kind: 'text'; text: string }>
-    return texts.map((t) => t.text).join('\n\n')
-  }, [turn.segments])
-  // 流式正文提示：live 回合的最后一个文本段是仍在增长的真 live 文本（流式增量
-  // 总并入末段），传 streaming 启用 MarkdownView 流式渲染路径；已结算回合与
-  // 其他静态 Markdown 不启用。
-  const lastTextSegIndex = useMemo(() => {
-    for (let i = turn.segments.length - 1; i >= 0; i--) {
-      if (turn.segments[i]!.kind === 'text') return i
-    }
-    return -1
-  }, [turn.segments])
-
-  const forkFromHere = async (): Promise<void> => {
-    const entryId = turn.entryIds.length > 0 ? turn.entryIds[turn.entryIds.length - 1]! : undefined
-    if (entryId === undefined) return
-    setForking(true)
-    try {
-      const forked = await conversationsApi.fork(conversation.id, entryId)
-      store.openTarget({ kind: 'conversation', conversationId: forked.id }, { split: store.splitTarget === null })
-      store.pushNotice({
-        type: 'notification',
-        level: 'info',
-        title: '已创建分叉会话',
-        body: `#${forked.id} ${forked.title}`,
-        conversationId: forked.id,
-      })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '分叉失败',
-        body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
-      })
-    } finally {
-      setForking(false)
-    }
-  }
-
-  const isBusy = isAssistantTurnBusy(turn, conversation, { isLatestTurn, activeToolCallIds })
-  // 插件微插槽 timeline.entry.action：锚点必须是真实持久化 pi.assistant 条目；
-  // live 回合（尚无落库锚点）不渲染，绝不拿 pi.tool-result 或 key 伪造。
-  const entryActions =
-    !isBusy && anchorEntry !== undefined
-      ? matchTimelineEntryActions(
-          store.groupedUi.uiActions,
-          conversation,
-          timelineEntryActionContextOf(anchorEntry),
-        )
-      : []
-
-  const timeMs = turn.settledAt ?? turn.startedAt
-  const displayTime = formatMessageTime(timeMs)
-  const durationText = turn.durationMs !== undefined && turn.durationMs > 0 ? formatDurationMs(turn.durationMs) : ''
-  const hasTimeInfo = !isBusy && (displayTime !== '' || durationText !== '')
-  const fullTimestamp = formatFullTimestamp(timeMs)
-  let tooltipText = ''
-  if (fullTimestamp !== '' && durationText !== '') {
-    tooltipText = `完成于 ${fullTimestamp} · 耗时 ${durationText}`
-  } else if (fullTimestamp !== '') {
-    tooltipText = `完成于 ${fullTimestamp}`
-  } else if (durationText !== '') {
-    tooltipText = `耗时 ${durationText}`
-  }
-
-  const showHoverBar = !isBusy && (lastText !== '' || turn.entryIds.length > 0)
-
-  return (
-    <div className="msg-ai-block" tabIndex={0}>
-      {turn.segments.map((seg, segIndex) => {
-        if (seg.kind === 'text') {
-          return (
-            <MarkdownView
-              key={seg.key}
-              text={seg.text}
-              conversationId={conversation.id}
-              streaming={turn.live && segIndex === lastTextSegIndex}
-            />
-          )
-        }
-        if (seg.kind === 'step-group') {
-          return (
-            <StepGroup
-              key={seg.key}
-              steps={seg.steps}
-              active={seg.active === true}
-              conversationId={conversation.id}
-              siblingCalls={siblingCalls}
-            />
-          )
-        }
-        return (
-          <TraceRow
-            key={seg.key}
-            tool={seg.tool}
-            conversationId={conversation.id}
-            defaultOpen={false}
-            siblingCalls={siblingCalls}
-          />
-        )
-      })}
-      {turn.live ? (
-        <span className="msg-origin-tag" aria-label="正在生成" role="status">
-          <HelmIcon name="loader" size={12.5} className="spin-slow" />
-        </span>
-      ) : null}
-      {hasTimeInfo || showHoverBar ? (
-        <div className="msg-ai-footer">
-          {hasTimeInfo ? (
-            <Tooltip content={tooltipText}>
-              <span className="msg-time-meta" title={tooltipText}>
-                {displayTime !== '' ? <span>{displayTime}</span> : null}
-                {displayTime !== '' && durationText !== '' ? <span className="msg-time-sep">·</span> : null}
-                {durationText !== '' ? <span>耗时 {durationText}</span> : null}
-              </span>
-            </Tooltip>
-          ) : null}
-          {showHoverBar ? (
-            <span className="msg-hover-bar">
-              {anchorEntry !== undefined
-                ? entryActions.map((action) => (
-                    <PluginMicroAction
-                      key={`entry:${action.pluginId}/${action.spec.id}`}
-                      action={action}
-                      variant="hover"
-                      conversationId={conversation.id}
-                      entryId={anchorEntry.id}
-                      slotProps={{ conversationId: conversation.id, entry: anchorEntry }}
-                    />
-                  ))
-                : null}
-              {lastText !== '' ? <CopyButton text={lastText} /> : null}
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                title="从此处分叉新会话"
-                disabled={forking || turn.entryIds.length === 0}
-                onClick={() => void forkFromHere()}
-              >
-                <HelmIcon name={forking ? 'loader' : 'git-fork'} size={12} />
-              </button>
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,6 +554,8 @@ export function ConversationTimeline({
   starters,
 }: ConversationTimelineProps) {
   const store = useHelmStore()
+  // 行级动作服务（分叉 / 排队撤回转编辑）统一实例化一次，行组件经 props 消费。
+  const entryActions = useTimelineEntryActions(conversation, onRequestEdit)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [localHighlightEntryId, setLocalHighlightEntryId] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -1559,6 +1036,8 @@ export function ConversationTimeline({
                   conversation={conversation}
                   anchorEntry={activeEntriesById.get(item.entryId)}
                   onRequestEdit={onRequestEdit}
+                  onForkFromHere={entryActions.forkFromHere}
+                  onWithdrawQueuedEdit={entryActions.withdrawQueuedForEdit}
                 />
               </div>
             )
@@ -1601,6 +1080,7 @@ export function ConversationTimeline({
                 siblingCalls={siblingCalls}
                 anchorEntry={resolveAssistantAnchorEntry(item.entryIds, activeEntriesById)}
                 isLatestTurn={item.key === lastAssistantKey}
+                onForkFromHere={entryActions.forkFromHere}
               />
             </div>
           )

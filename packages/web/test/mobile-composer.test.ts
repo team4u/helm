@@ -9,6 +9,7 @@ const paneSource = readFileSync(new URL('../src/conversation/ConversationPane.ts
 const splitControlsSource = readFileSync(new URL('../src/ui/SplitControls.tsx', import.meta.url), 'utf8')
 const sidebarSource = readFileSync(new URL('../src/shell/Sidebar.tsx', import.meta.url), 'utf8')
 const timelineSource = readFileSync(new URL('../src/conversation/ConversationTimeline.tsx', import.meta.url), 'utf8')
+const assistantTurnSource = readFileSync(new URL('../src/conversation/AssistantTurn.tsx', import.meta.url), 'utf8')
 const stylesCss = readHostStyles()
 const responsiveCss = readFileSync(new URL('../src/responsive.css', import.meta.url), 'utf8')
 const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
@@ -85,9 +86,9 @@ test('移动端窄屏（<860px）下隐藏顶部与侧栏中的分屏入口', { 
 })
 
 test('移动端触屏与聚焦优化：消息操作栏支持轻点唤起并提供可见性', { timeout: 60_000 }, () => {
-  // ConversationTimeline.tsx 中的用户消息与 AI 回复行添加 tabIndex 聚焦唤起
+  // ConversationTimeline.tsx 中的用户消息与 AI 回复行（AssistantTurn.tsx）添加 tabIndex 聚焦唤起
   assert.match(timelineSource, /className="msg-human-row"\s+tabIndex=\{0\}/)
-  assert.match(timelineSource, /className="msg-ai-block"\s+tabIndex=\{0\}/)
+  assert.match(assistantTurnSource, /className="msg-ai-block"\s+tabIndex=\{0\}/)
 
   // responsive.css 提供 focus-within 与 focus 触发
   assert.match(responsiveCss, /\.msg-human-row:focus-within\s+\.msg-hover-bar/)

@@ -168,35 +168,34 @@ function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
   }
 
   return (
-    <div className="sidebar-group" style={{ gap: 4 }}>
+    <div className="sidebar-group pending-asks-group">
       <button
-        className={`badge badge-warn${expanded ? ' badge-err' : ''}`}
-        style={{ width: '100%', justifyContent: 'space-between', height: 26, cursor: 'pointer' }}
+        className={`badge badge-warn pending-asks-toggle${expanded ? ' badge-err' : ''}`}
         title="展开待审批列表"
         onClick={() => setExpanded((v) => !v)}
       >
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span className="pending-asks-toggle-label">
           <HelmIcon name="alert-triangle" size={12} />
           待确认 ({asks.length})
         </span>
         <HelmIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} />
       </button>
       {expanded && (
-        <div className="list" style={{ boxShadow: 'var(--shadow-md)' }}>
+        <div className="list pending-asks-list">
           {asks.map((ask) => (
-            <div key={ask.id} className="row" style={{ alignItems: 'flex-start', flexDirection: 'column', gap: 6 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 8 }}>
-                <span style={{ fontSize: 12.5, fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div key={ask.id} className="row pending-asks-row">
+              <div className="pending-asks-row-head">
+                <span className="pending-asks-title">
                   {ask.title}
                 </span>
                 <span className="badge badge-neutral tabular-nums">#{ask.conversationId}</span>
               </div>
               {ask.description && (
-                <div style={{ fontSize: 11.5, color: 'var(--fg-muted)', whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                <div className="pending-asks-desc">
                   {ask.description}
                 </div>
               )}
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <div className="pending-asks-actions">
                 <button
                   className="btn btn-sm"
                   onClick={() => {
