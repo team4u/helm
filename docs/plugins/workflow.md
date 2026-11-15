@@ -6,7 +6,7 @@
 
 | 工具 | 核心入参 | 语义 |
 | :--- | :--- | :--- |
-| `subagent` | `prompt` 必填；`agentType`（Profile ID 或 `herdr:agy` 等外部运行时标识）、`cwd`、`background`、`isolation: 'worktree'`、`schema`、`gate`、`resume`、`model`、`effort`、`attachments`、`maxSubagentDepth`（显式授予子树深度上限，1..5，缺省继承 2） | 派生单个子代理。生命周期缺省按当前会话归属判定：人类直连会话缺省后台，自动化会话（非 human-owned）缺省同步等待最终结果；自动化会话显式 `background: true` 被拒绝。`agentType` 只选择目标执行体，不参与生命周期判定 |
+| `subagent` | `prompt` 必填；`agentType`（Profile ID 或 `herdr:agy` 等外部运行时标识）、`cwd`、`background`、`isolation: 'worktree'`、`schema`、`gate`、`resume`、`model`、`effort`、`attachments`、`maxSubagentDepth`（显式授予子树深度上限，1..5，缺省继承 2）、`secretNames`（外部运行时窗格的父会话机密逐名授予，仅外部运行时消费，原生 Profile 不支持） | 派生单个子代理。生命周期缺省按当前会话归属判定：人类直连会话缺省后台，自动化会话（非 human-owned）缺省同步等待最终结果；自动化会话显式 `background: true` 被拒绝。`agentType` 只选择目标执行体，不参与生命周期判定 |
 | `SubagentWorkflow` | `script / scriptPath / name` 三择一；`args` 任意 JSON（字符串形 JSON 自动解包）；`resumeFromRunId`；`background`（同一归属策略） | 在当前会话执行确定性编排脚本。生命周期缺省同 `subagent` 按会话归属判定（人类直连缺省后台、自动化缺省同步，自动化显式 `background: true` 拒绝）；后台启动即返回 running summary，终态经幂等汇报链投递；同步返回真实执行 summary（runId/status/nodes/result） |
 | `cleanup_worktree` | `worktreeId`（`node:path`）/ `conversationId` / `path`（可附 `nodeId` 消歧）三择一；`deleteBranch`、`force` | 清理一个受管隔离 Git Worktree；无任何显式选择器时以当前会话为选择器（`--current` 语义） |
 
@@ -113,10 +113,10 @@ Worktree 隔离经 `agent_spawn` around continuation（priority 200，先于外�
 
 ## 前端扩展
 
-插件注册五个 client.tsx 视图（组件经 `usePluginSessionDoc` 自行订阅 runs 分片，动作经 `ctx.callAction`，零宿主私有依赖）：
+插件注册五个 client 模块视图（组件经 `usePluginSessionDoc` 自行订阅 runs 分片，动作经 `ctx.callAction`，零宿主私有依赖）：
 
 - `toolView` `subagent-card`（`replaceRow: true`）：时间线内 subagent 工具调用的双层胶囊实时卡，多次 resume 折叠展示；
-- `toolView` `workflow-card`（`replaceRow: true`）：时间线内 SubagentWorkflow 调用的工作流运行卡。适合的 run（非 subagent 且非已保存定义发起）提供一键「保存为工作流」（`save fromRunId`，保存名取脚本 `meta.name`；重名 / 校验失败如实报错，绝不伪造成功）。已完成的 DSL run（含内联脚本）提供「重放」表单，经 `resumeFromRunId` 发起新 run，保留原会话；空白沿用原 args，显式 args 经 JSON 校验后覆盖。文件脚本重读最新内容，内联脚本沿用原源码。缓存仅复用调用载荷相同的前缀，首次失配起重新执行；副作用不确定时按引擎契约显式拒绝。失败/中止 run 提供「断点恢复」。重放、恢复和中止在途均防止重复提交。
+- `toolView` `workflow-card`（`replaceRow: true`）：时间线内 SubagentWorkflow 调用的工作流运行卡。适合的 run（非 subagent 且非已保存定义发起）提供一键「保存为工作流」（`save fromRunId`，保存名取脚本 `meta.name`；重名 / 校验失败如实报错，绝不伪造成功）。已完成的 DSL run（含内联脚本）提供「重放」表单，经 `resumeFromRunId` 发起新 run，保留原会话；空白沿用原 args，显式 args 经 JSON 校验后覆盖。文件脚本重读最新内容，内联脚本沿用原源码。缓存按稳定作用域复用调用载荷相同的前缀，失配只断链所在作用域及其子作用域，兄弟作用域的成功节点照常复用；副作用不确定时按引擎契约显式拒绝。失败/中止 run 提供「断点恢复」。重放、恢复和中止在途均防止重复提交。
 - `sidebarItem` `workflow-library` + `screen` `library`：工作流库全屏视图（一级主舞台卡片网格 + 右侧标准详情抽屉）。工作流定义是跨会话资产、不属会话 workbench 管理范畴；Screen 只读浏览（`updatedAt` / `size` 文件事实）、`get` 只读源码（`pre`/`code` + 复制，无任何编辑器）、运行（Radix `Select` 显式选择目标会话 + args 严格 JSON 解析）、删除（两步确认）与刷新；「让 AI 修改」仅提供可复制的明确请求文本（经 AI 调用 `save` 写回），不在 Web 内改文件。选中项与搜索词写入 `sp.*` 深链参数（`setParams` 唯一导航）。
 - `workbenchPanel` `tasks`：工作台面板（当前会话执行树 + 紧凑工作流库运行入口），`badge` 绑定 `run-badges` 文档。工作流库分节经 `list` 动作展示已保存定义并支持在当前会话运行（每行 args 草稿独立、按会话隔离、严格解析 JSON），并提供到工作流库 Screen 的导航；定义管理（源码/删除）不在此承担。有 worktree 的节点卡与独立子代理卡均提供只读改动概览（`inspect_worktree`），优先按登记 ID 定位，无 ID 时以 path 与节点消歧。审阅按钮仅向父会话提交请求，Web 不执行 git 写操作。Diff 仅覆盖已跟踪文件，未跟踪文件见状态列表；清理按钮使用同一精确选择器并在途禁用。
 

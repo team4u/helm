@@ -6,11 +6,11 @@
 
 Mermaid 图表库体量可观，且版本迭代频繁。本插件采用**受控 npm 依赖**机制把它打包进编译产物：
 
-- 插件定义声明 `npmDependencies: { mermaid: <内核包根> }`——解析根绑定内核包根（其 `node_modules` 内由 pnpm-lock 锁定的 mermaid 版本），插件自身不携带依赖、版本随锁文件演进；
+- 插件定义声明 `npmDependencies: { mermaid: <插件包根> }`——解析根绑定 `@helm/plugins` 插件包根（其 `node_modules` 内由 pnpm-lock 锁定的 mermaid 版本），插件自身不携带依赖、版本随锁文件演进；
 - 宿主 `PluginClientCompiler` 编译时把该说明符解析进 bundle，逐文件 containment 校验（不越解析根）；依赖文件内容 hash 随缓存清单持久化，缓存命中时复查——解析根消失或文件变化即失效重编译，绝不静默复用旧产物；
 - 浏览器端**零预加载**：宿主不预先加载任何图表库，`mermaid` 只在本插件的编译产物 chunk 中按需 `import()`，未启用本插件或页面无图表时零成本。
 
-内置插件在定义中声明 `npmDependencies: { mermaid: <内核包根> }`；外部插件则在 `plugin.json` 或 `package.json` 的 `helm` 字段中声明 `clientDependencies: string[]`（裸包名或子路径说明符），宿主统一将其映射为「解析根 = 插件自身目录（`<插件目录>/node_modules`）」的受控 npm 依赖（代码内自指任意解析根对外部插件无效）。两者的编译、containment 校验与 hash 复查遵循同一管道。
+内置插件在定义中声明 `npmDependencies: { mermaid: <插件包根> }`；外部插件则在 `plugin.json` 或 `package.json` 的 `helm` 字段中声明 `clientDependencies: string[]`（裸包名或子路径说明符），宿主统一将其映射为「解析根 = 插件自身目录（`<插件目录>/node_modules`）」的受控 npm 依赖（代码内自指任意解析根对外部插件无效）。两者的编译、containment 校验与 hash 复查遵循同一管道。
 
 ## 渲染行为
 

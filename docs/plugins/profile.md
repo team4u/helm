@@ -6,7 +6,7 @@
 
 插件服务 `profile-skills` 在启动时完成两件事：
 
-1. **同步受管系统技能 `helm-cli`**：经 `ctx.host.skills.ensureSkill` 把 `skills/helm-cli/`（SKILL.md + `references/workflows-and-agents.md` + `references/skill-and-plugin-dev.md`）以源码版本为准逐文件覆盖、缺失补齐。PluginHost 校验 SKILL.md frontmatter 的 `managedByPlugin` 绑定 `builtin:profile`，登记受管后常规写入接口统一 403 拒绝。
+1. **同步受管系统技能 `helm-cli`**：经 `ctx.host.skills.ensureSkill` 把 `skills/helm-cli/`（SKILL.md + `references/workflows-and-agents.md` + `references/skill-and-plugin-dev.md` + `references/plugin-client-code-splitting.md`）以源码版本为准逐文件覆盖、缺失补齐。PluginHost 校验 SKILL.md frontmatter 的 `managedByPlugin` 绑定 `builtin:profile`，登记受管后常规写入接口统一 403 拒绝。
 2. **补写默认 Profile 托管声明**：默认 `assistant` Profile 由内核 `ProfileService.ensureDefault` 先行创建；插件启动时若其 `profile.json` 缺少 `managedByPlugin`，经 `ctx.host.profiles.save` 显式补写 `builtin:profile`（已存在或已是其他值时原样保留，不做旧数据归一化）。默认 Profile 不存在属内核未初始化异常，如实上抛。
 
 自举不重建被外部删除的资产——缺失告警与自愈见下文。生成式 UI 手册（`generative-ui` 技能）归 `builtin:json-render` 自举，随其启停进入或离开可用目录，与本插件无耦合。

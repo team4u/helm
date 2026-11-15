@@ -55,10 +55,11 @@ CLI 登录态保存于 `<dataDir>/cli-token`（0600，`{ hubUrl, token }`）；�
 
 **`helm conversations withdraw [id] [--current] --submission-id <n>`** — 撤回排队中的输入。
 
-**`helm send [id] <text>`** — 提交输入（`POST /api/conversations/:id/input`）：
+**`helm send [id] <text> [--current]`** — 提交输入（`POST /api/conversations/:id/input`）：
 
 | 标志 | 说明 |
 | :--- | :--- |
+| `--current` | 读 `HELM_CONVERSATION_ID` 解析会话目标，可省略位置 `id`（此时 `<text>` 即第一个位置参数） |
 | `--wait` | 同步等待回答（`?wait=1`，无超时）；人类模式直出 assistant 文本 |
 | `--when-busy <mode>` | `steer`（默认）/ `followUp` / `reject` |
 | `--origin <src>` | `human`（默认）/ `agent` / `trigger` |
@@ -197,7 +198,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helm herdr list / read / focus` | builtin:herdr | 窗格管理；read 返回 40 行脱敏终端尾部快照，`--node-id` 消歧跨节点同 ID（歧义 409） |
 | `helm herdr steer` | builtin:herdr | 向受管且由 workflow run 派生的窗格插话（`--execution-id` `--node-id` `--workflow-run-id` `--parent-conversation-id` `--text`）。使用现有 `agent.prompt`，`guardLevel=preflight` 表示发送前检查，不要求新增服务端能力；通常用 `helm workflows steer <runId> --text` 自动路由，勿手动拼坐标 |
 | `helm superagent <action>` | builtin:superagent | `dispatch_worker / inspect_worker / recall_context / subscribe_thread / archive_worker / set_router_mode` 等 |
-| `helm magpie status / refresh / quota / groups` | builtin:magpie | Magpie 网关状态、目录刷新、配额查询与路由组列表 |
+| `helm magpie status / refresh / quota / groups / group <id>` | builtin:magpie | Magpie 网关状态、目录刷新、配额查询与路由组列表/单组详情 |
 
 插件停用后其动态命令随动作清单一并消失。
 

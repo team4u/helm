@@ -64,4 +64,5 @@ Helm 是极简持久微内核多智能体编排系统：内核只保留持久会
 | [CLI 全量命令参考手册](cli/reference.md) | `helm` 与 `helm-node` 全量命令字典（含 `--json` 与 `--current`） |
 | [Web 前端设计系统与开发约定](conventions/web-frontend.md) | 视图形态分级、Radix 原语与移动端规范 |
 | [Web 导航与 URL Hash 约定](conventions/web-navigation.md) | 深链、分屏与刷新恢复的路由规范 |
+| [发布流程](releasing.md) | `release.yml` 职责链、发布门槛与 npm Hub payload 发布 |
 | [历史设计与交接归档](archive/README.md) | 早期架构演进与阶段性验收记录（只读） |

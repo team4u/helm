@@ -43,9 +43,9 @@ Helm 仅在任务执行期接受插话，按窗格单飞；startup、handoff、G
 
 `steered=true` 仅表示投递成功。控制动作不幂等，超时、断线或坏响应不自动重发；不确定投递使原任务显式失败并保留现场，不能回读旧结果或自动追问冒充成功。明确未写入的服务端拒绝保留原任务及其有效交接路径。
 
-不能用运行中 `resume` 代替插话（`resumeInto` 拒绝被占用窗格）；`resume` 仍只适用于存在、空闲且归属验证通过的执行。外部运行时不改变派生方会话的后台缺省策略（见 workflow 插件文档「默认后台协同」）。
+不能用运行中 `resume` 代替插话（`resumeInto` 拒绝被占用窗格）；`resume` 仍只适用于存在、空闲且归属验证通过的执行——续接在任何 prompt 发送前以权威 `agent.get` 复核身份与状态，仅 `idle` / `done` 放行（回合超时保留的窗格同样先安全确认，不重发 `agent.start`）。外部运行时不改变派生方会话的后台缺省策略（见 workflow 插件文档「默认后台协同」）。
 
-**Gate 恰好一次验收**：文件成功后若请求带 `gate` 命令，在窗格实际节点与实际 cwd（worktree 模式为隔离树路径）、以建窗时的同一 env 执行恰好一次门禁命令（本机 `runLocalGate`，远端经节点通道）；`exit != 0` 即失败。
+**Gate 恰好一次验收**：文件成功后若请求带 `gate` 命令，在窗格实际节点与实际 cwd（worktree 模式为隔离树路径）、以建窗时的同一 env 执行恰好一次门禁命令（本机 `runLocalGate`，远端经节点通道）；`exit != 0` 即失败。Herdr 路径不支持 `gateTimeoutMs`——本机 `runLocalGate` 与远端 `transport.runGate` 均未暴露门禁超时参数，携带该选项的请求（运行时新建与已登记 resume）在进入建窗/续接前显式拒绝（`unsupported_runtime`），原生执行行不受影响；需要限时验收时在 gate 命令内自行包装超时。
 
 ### 归属校验与孤儿回收
 
@@ -68,6 +68,7 @@ CAS 语义双向防冲突：**人类先在 Web 审批**——提交时经 `regis
 | `list` | `helm herdr list` | 列出本插件管理的全部窗格（nodeId / pane / 状态 / 归属 / 父会话 / workflowRunId） |
 | `read` | `helm herdr read <paneId>` | 读取窗格终端尾部 40 行脱敏快照（`agent.read recent_unwrapped`） |
 | `focus` | `helm herdr focus <paneId>` | 在 Herdr 终端聚焦指定窗格（用户显式操作） |
+| `steer` | `helm herdr steer` | 向受管且由 workflow run 派生的运行中窗格插话补充指导（仅任务执行期；详见「运行中插话（steer 动作）」） |
 
 `read` 与 `focus` 支持 `--node-id` 消歧：多节点存在同 ID 窗格且未提供 `nodeId` 时显式 `409 pane_ambiguous`（附候选节点清单），拒绝猜谜执行；不由本插件管理的窗格显式 `404`。
 

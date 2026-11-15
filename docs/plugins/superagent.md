@@ -11,7 +11,7 @@
 | SuperAgent 中枢 | `superagent` | 承接综合需求，识别意图并派工；`skills: []` 禁用全部技能（只做路由调度，不消费排障手册） |
 | 巡检看门狗 | `watchdog` | 接收异常事实、按技能规则推理处置；`skills: ['watchdog-playbooks']` 仅可见本插件自举的排障手册 |
 
-插件启动时经 `ctx.host.manageConversation` 接管两个会话（启用期间删除保护，`409 conversation_managed_by_plugin`）并标记归属权 `ownedBy: 'helm'`；停用时自动释放。自举资产（`superagent` / `watchdog` Profile 的 profile.json + SYSTEM.md、`watchdog-playbooks` 技能含 `references/herdr-stalled.md` 与 `references/ci-failure.md`）逐文件幂等补齐，既有文件一律不覆盖。归属冲突防护：记录的会话当前 `profileId` 与期望不符时显式 `409 superagent_resident_conversation_conflict` 拒绝占用，请人工核对。
+插件启动时经 `ctx.host.manageConversation` 接管两个会话（启用期间删除保护，`409 conversation_managed_by_plugin`）并标记归属权 `ownedBy: 'helm'`；停用时自动释放。自举资产（`superagent` / `watchdog` Profile 的 profile.json + SYSTEM.md、`watchdog-playbooks` 技能含 `references/herdr-stalled.md`、`references/ci-failure.md` 与 `references/code-hang-loop.md`）逐文件幂等补齐，既有文件一律不覆盖。归属冲突防护：记录的会话当前 `profileId` 与期望不符时显式 `409 superagent_resident_conversation_conflict` 拒绝占用，请人工核对。
 
 启用期间还补偿停用遗漏的 `helm.rewind` 联动：分页重放全部有召回节点会话的 rewind 标记，删除 `omittedInputIds` 命中的 RecallGraph 节点；运行期则经 `conversation.entry` 事件实时联动。
 
@@ -58,12 +58,15 @@
 | 停滞达唤醒阈值（`stalledAfterMs`，默认 5 分钟） | `wake_watchdog` |
 | human 归属异常 / 外部窗格无权威 seq | 仅只读通知 |
 | 外部窗格连续不可达达阈值 | 唤醒 L2 + 通知 |
+| `workflow_run` 失败探针（helm 归属，冷却期满） | `auto_resume` 断点续跑（见下文） |
 
 去重状态持久化于私有 doc：同 `(targetKind, nodeId, targetId, stateChangeSeq)` 同类动作恰好一次，未达阈值绝不预先占坑，跨重启不重复危险动作；文档损坏显式报错拒绝巡检（回空会令已处理动作重放）。
 
+**workflow_run 失败断点续跑**：`builtin:workflow` 经 `diagnostics.collect` 事件追加 `kind=workflow_run` 的失败 Run 探针（`ownedBy: 'helm'`，`stateChangeSeq` 即 `autoResumeCount`）。该类探针走独立确定性 0-Token 链路，不进通用外部状态规则（error 直接唤醒 L2 会绕过冷却与限流）：事实（`runId` / `conversationId` / `failedAt` / `autoResumeCount`）严格校验，残缺或缺权威 seq 时 `notify_only` 不猜造；严格仅 `helm` 归属后台探针（human/bot 只通知）；冷却退避按已续跑次数 0/1/2 → 2/5/15 分钟，未满冷却零动作，续跑达 3 次上限后交人类处置。冷却期满经 `host.invokeAction('builtin:workflow', 'run', { resumeFromRunId, conversationId })` 从断点恢复；每 tick 最多恢复 1 个 Run 且按 `failedAt` 升序（最旧失败优先，防网关刚恢复时同时唤醒多个大工作流再次打挂接口）。防重不占去重文档坑位——依赖探针侧 `resumedByRunId` / `stateChangeSeq` 机制（续跑成功的旧 Run 不再上报、新失败 Run 携带新水位），执行层仅加内存 in-flight（防相邻 tick 重叠）与失败后 10 分钟重试推迟。
+
 会话活动统计（真实无活动时钟与连续失败计数）由插件订阅真实事件维护：`conversation.live`（内核已按内容指纹去重，插件侧再按 run 进度字段过滤，仅 queuedInputs 变化的帧不算活动）、`conversation.upsert`（working 摘要即 run 启动/doing 翻转，首字前唯一活动信号）、`turn_settled` 钩子（failed 递增、completed 归零、aborted 保持；回合结束清活动时钟）与 `conversation.deleted`（统计清理）。绝不用每帧心跳假活动；停用后随订阅自动解除，无统计 timer/observer 残留；重启后无活动记录时不报停滞（不伪造时钟起点）。
 
-**Layer 2 认知推理**：Layer 1 判定需认知排障时，把异常事实（XML 转义防逃逸，不用反引号围栏杜绝 prompt 注入面）合并投递到看门狗会话（`origin: 'agent'` / `followUp`）。模型结合 `watchdog-playbooks` 技能手册推理根因与处置，经专属工具落地：`watchdog_inspect`（现查目标真实详情，只读）、`watchdog_recover`（向 owned 会话提交恢复提示）、`watchdog_abort`（中止 owned 会话，human/中枢/看门狗自身拒绝）。三个工具 `scope` 限定 watchdog Profile 且执行期核对实际 watchdog 会话 ID（防同 Profile 人类直聊滥用）；同名 `ctx.action` 供 HTTP/CLI（`helm superagent watchdog_*`）。
+**Layer 2 认知推理**：Layer 1 判定需认知排障时，把异常事实（XML 转义防逃逸，不用反引号围栏杜绝 prompt 注入面）合并投递到看门狗会话（`origin: 'agent'` / `followUp`）。模型结合 `watchdog-playbooks` 技能手册推理根因与处置，经专属工具落地：`watchdog_inspect`（现查目标真实详情，只读；conversation 模式附会话工作目录 `(nodeId ?? 'local', cwd)` 的进程占用快照 `activeProcesses`——经 `host.inspectNodePathUsage` 现查并逐项脱敏为 `{pid, name, source, path}`，探测失败（节点离线等）或 cwd 为空时字段缺省、不伪造空清单）、`watchdog_recover`（向 owned 会话提交恢复提示，`whenBusy: 'steer'`）、`watchdog_abort`（中止 owned 会话，human/中枢/看门狗自身拒绝）。三个工具 `scope` 限定 watchdog Profile 且执行期核对实际 watchdog 会话 ID（防同 Profile 人类直聊滥用）；同名 `ctx.action` 供 HTTP/CLI（`helm superagent watchdog_*`）。手册 `references/code-hang-loop.md` 即围绕该快照展开：结合最近时间线与 `activeProcesses` 定位卡死进程（如卡在工作树目录里的 vitest / node / python，按 `pid` / `name` / `path` 识别归属），经 `watchdog_recover` 以 steer 提示交目标会话自行终止进程并续跑；停滞达 `abortAfterMs` 时 L1 已 `auto_abort_and_notify` 中止回合交外层重试，L2 只复核中止与重试结果，不重复中止。
 
 ### 归属权红线（内核执行层强制）
 

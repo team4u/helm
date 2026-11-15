@@ -4,19 +4,19 @@
 
 ## 多协议自动分发
 
-Provider 按模型 `api` 类型自动匹配协议族并动态修正 BaseURL（每次推理请求读取当前生效配置，绝不依赖目录缓存中的静态地址）：
+目录项的 `native_endpoints` 原生转发路径决定协议族与 BaseURL 挂点，Provider 每次推理请求读取当前生效配置动态修正 BaseURL（绝不依赖目录缓存中的静态地址）：
 
-| 协议族 | 规范 | BaseURL 修正 |
+| 协议族 | 判定 | BaseURL 修正 |
 | :--- | :--- | :--- |
-| Anthropic | Messages | 网关根路径（如 `http://127.0.0.1:3425`） |
-| OpenAI 兼容 | Chat Completions | 根路径 + `/v1` |
-| Gemini | Google 协议 | 经 pi-ai compat 委托实现 |
+| Anthropic | Messages（`native_endpoints` 含 `/v1/messages`） | 网关根路径（如 `http://127.0.0.1:3425`） |
+| OpenAI Responses | Responses（`native_endpoints` 含 `/v1/responses`） | 根路径 + `/v1` |
+| OpenAI 兼容 | Chat Completions（其余目录项） | 根路径 + `/v1` |
 
 模型经 `magpie/<model>` 形式的 ID 进入全局模型目录；本机 loopback 网关免登录即用（auth.check 恒有效）。
 
 ## 动态模型目录与本地缓存
 
-模型目录不静态硬编码：Provider 的 `refreshModels` 经 `GET /v1/models` 从网关拉取最新清单，成功后原子写回内核持久缓存 `models-store.json`（按 provider 分区）；`allowNetwork: false` 的 cache-only 恢复只读磁盘缓存、不触网。目录恢复与发布按当前网关 root 过滤——切换网关后旧目录绝不冒充新网关的缓存。
+模型目录不静态硬编码：Provider 的 `refreshModels` 经 `GET /v1/models` 从网关拉取最新清单，成功后原子写回内核持久缓存 `models-store.json`（按 provider 分区）；`allowNetwork: false` 的 cache-only 恢复只读磁盘缓存、不触网。目录恢复与发布按当前网关 root 过滤——切换网关后旧目录绝不冒充新网关的缓存。目录项未提供正数上下文窗口时以保守缺省值兜底并标记「窗口未知」（`helmContextWindowKnown`），兜底值绝不冒充上游真实窗口。
 
 诚实性契约在此是硬约束：网络失败（含默认 loopback 网关未运行）一律 throw，通用目录刷新（`helm models refresh` / `POST /api/models/refresh`）把失败显式呈现在 `errors['magpie']`，绝不静默吞成「刷新成功」。插件 `service.start` 的后台刷新失败只更新 `reachable: false / lastError`，不阻断插件启用与内核启动；手动 `refresh` 动作显式抛 `502 magpie_gateway_unreachable`。`reachable: false` 时的 `modelCount` 是缓存计数，绝不冒充实时刷新成功。
 

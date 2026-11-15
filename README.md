@@ -28,6 +28,8 @@ Helm 按机制、插件和产品组合分包。`@helm/hub` 连接 `@helm/kernel`
 | `@helm/cli` | 命令行客户端，与 API 完全同权 | 控制命令（`helm`） |
 | `@helm/node` | 受控节点守护进程，反向连接 Hub | 节点服务（`helm-node`） |
 | `@helm/web` | 响应式 Web 主控台 | Web 界面（Vite SPA） |
+| `@helm/payload` | Hub npm 发布包组装器，组织可发布目录与零依赖启动入口 | npm Hub payload（`@team4u/helm-hub`） |
+| `@helm/desktop` | Electron 桌面壳，复用 Web 界面并以子进程运行 Hub | 三平台桌面安装包 |
 
 ---
 
@@ -391,11 +393,13 @@ pnpm helm custom-checker lint --input '{"targetDir":"/workspace"}' --json
   - [动态模型网关](docs/plugins/magpie.md)：原生协议分发、动态模型目录与配额诊断
   - [声明式渲染](docs/plugins/json-render.md)：JSON DSL、界面原语与 `generative-ui` 技能
   - [图表渲染](docs/plugins/mermaid.md)：Mermaid 围栏渲染与停用回退
+  - [Token 速率徽标](docs/plugins/token-speed.md)：输入区状态行实时解码速率（流式观测估算，默认停用）
 - **Web 开发约定**
   - [Web 前端设计系统与开发约定](docs/conventions/web-frontend.md)：视图形态分级、Radix 原语底座与移动端规范
   - [Web 导航与 URL Hash 约定](docs/conventions/web-navigation.md)：深链、分屏参数与前进后退语义
 - **参考手册与历史归档**
   - [CLI 全量命令参考手册](docs/cli/reference.md)：`helm` 与 `helm-node` 命令字典
+  - [发布流程](docs/releasing.md)：`release.yml` 职责链、发布门槛与 npm Hub payload 发布
   - [历史设计与开发交接归档](docs/archive/README.md)：早期架构演进与阶段验收记录索引
 
 ---
