@@ -505,3 +505,23 @@ test('computeAgentsMdSection：远端 not_found / is_directory（含 EISDIR 消�
   assert.deepEqual(await computeAgentsMdSection(eisdir, 'remote-1', '/srv/app'), { kind: 'none' })
 })
 
+test('computeAgentsMdSection：远端在线预检异常显式注入不可用段并脱敏', { timeout: 60_000 }, async () => {
+  const host: AgentsMdHostPort = {
+    executionEnv() {
+      throw new Error('在线预检失败后不应继续访问执行环境')
+    },
+    redact: (text) => text.replaceAll('SECRET_probe', '[REDACTED]'),
+    nodeIpc: {
+      isOnline() {
+        throw new Error('探测失败 SECRET_probe')
+      },
+    },
+  }
+  const result = await computeAgentsMdSection(host, 'remote-1', '/srv/app')
+  assert.equal(result.kind, 'section')
+  if (result.kind !== 'section') return
+  assert.equal(result.id, 'profile.agents-unavailable')
+  assert.ok(result.text.includes('在线状态失败（unknown）'))
+  assert.ok(result.text.includes('[REDACTED]'))
+  assert.ok(!result.text.includes('SECRET_probe'))
+})

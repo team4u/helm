@@ -84,7 +84,19 @@ export async function computeAgentsMdSection(
         )
       }
     } catch (err) {
-      if (!(err instanceof HelmError)) throw err
+      if (
+        err instanceof HelmError &&
+        (err.code === 'node_ipc_unavailable' || err.code === 'not_supported' || err.code === 'unsupported')
+      ) {
+        // Minimal/test hosts may intentionally omit nodeIpc; let executionEnv
+        // provide the authoritative result in that case.
+      } else {
+        return unavailableSection(
+          agentsPath,
+          nodeId,
+          `检查目标节点 ${escapeXmlText(nodeId)} 在线状态失败（${escapeXmlText(errorCodeOf(err))}）：${escapeXmlText(host.redact(errorMessageOf(err)))}`,
+        )
+      }
     }
   }
 
