@@ -1,21 +1,25 @@
 import { homedir } from 'node:os'
 import { posix, win32 } from 'node:path'
 import type { Socket } from 'node:net'
-import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
-import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { HelmError } from '@helm/protocol'
-import type { AgentGateResult } from '@helm/protocol'
 import { connectHerdrEndpoint } from './local-node-channel.js'
 import type {
   HerdrCallOptions,
   HerdrEvent,
   HerdrNodeChannel,
-  HerdrNodeEnv,
   HerdrSubscribeOptions,
   HerdrTarget,
   HerdrTransport,
 } from './contracts.js'
 import { targetNodeId } from './contracts.js'
+import { assertSafeOutputName, isWindowsShapedPath, readLocalOutput, readNodeOutput, removeLocalOutput, removeNodeOutput } from './transport-output.js'
+import { runLocalGate, runNodeGate } from './transport-gate.js'
+import { checkAborted, HerdrTransportError } from './transport-shared.js'
+
+// 拆分 re-export：交接文件 IO 与 Gate 执行迁至同级子模块，原有导出符号
+// 从 transport.js 导入的既有消费方（executor / local-node-channel / 测试）不变。
+export { MAX_OUTPUT_BYTES, isAbsoluteAnyPath, isWindowsShapedPath, pathContains } from './transport-output.js'
+export { MAX_GATE_OUTPUT_BYTES } from './transport-gate.js'
+export { HerdrTransportError } from './transport-shared.js'
 
 /**
  * Herdr 官方行协议 IPC 的最小 NDJSON 传输。
@@ -60,10 +64,6 @@ export const HERDR_START_TIMEOUT_MARGIN_MS = 15_000
 export const HERDR_WAIT_METHODS = new Set(['agent.prompt', 'agent.wait', 'pane.wait_for_output', 'events.wait'])
 /** 单帧（单行 JSON）大小上限；订阅流按帧限额，不按连接生命周期累计。 */
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024
-/** Gate 输出保留上限；超限显式失败，绝不静默截断充当成功。 */
-export const MAX_GATE_OUTPUT_BYTES = 1024 * 1024
-export const MAX_OUTPUT_BYTES = 32 * 1024 * 1024
-const OUTPUT_FILE_PATTERN = /^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$/
 const SUBSCRIPTION_METHOD = 'events.subscribe'
 /** 状态事件类型：官方契约要求订阅时按 pane_id 逐窗格过滤，无全量订阅。 */
 const PANE_STATUS_EVENT_TYPE = 'pane.agent_status_changed'
@@ -91,22 +91,8 @@ const WIRE_EVENT_TYPES = new Map<string, HerdrEvent['type']>(
 const SUBSCRIBE_ACK_TIMEOUT_MS = 15_000
 /** 远端 RPC 单行请求 ID：wire 校验必须精确匹配。 */
 const REMOTE_RPC_ID = 'helm-remote-1'
-/** Gate 超时（秒；NodeExecutionEnv timeout 单位）：600s 预算 + 收尾余量。 */
-const GATE_TIMEOUT_SECONDS = 620
 /** 节点 ID 单一安全 token（含 'local'；空串与超长显式拒绝）。 */
 const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
-
-export class HerdrTransportError extends Error {
-  readonly code: string
-  readonly target: string
-
-  constructor(code: string, message: string, target: string, options?: { cause?: unknown }) {
-    super(message, options)
-    this.name = 'HerdrTransportError'
-    this.code = code
-    this.target = target
-  }
-}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -170,15 +156,6 @@ function resolveCallTimeoutMs(method: string, params: Record<string, unknown>, o
     return Math.min(Math.max(requested, 1), HERDR_START_TIMEOUT_CEILING_MS) + HERDR_START_TIMEOUT_MARGIN_MS
   }
   return HERDR_CALL_TIMEOUT_MS
-}
-
-function checkAborted(signal: AbortSignal | undefined, target: string): void {
-  if (signal?.aborted) throw new HerdrTransportError('herdr_aborted', 'operation aborted', target)
-}
-
-function contextOf(signal: AbortSignal | undefined, target: string): Context {
-  checkAborted(signal, target)
-  return signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
 }
 
 function timeoutPromise(ms: number, target: string): { promise: Promise<never>; clear: () => void } {
@@ -675,378 +652,6 @@ async function callRemote(
   }
   checkWireError(envelope, targetLabel, redact)
   return envelope['result']
-}
-
-// ------------------------------------------------------- 文件与门禁 --
-
-function assertSafeOutputName(fileName: string, target: string): void {
-  if (!OUTPUT_FILE_PATTERN.test(fileName)) {
-    throw new HerdrTransportError('herdr_invalid_output_name', `refusing unsafe output file name: ${fileName}`, target)
-  }
-}
-
-/** 本机输出路径：校验 cwd 真实存在、.helm 是真实目录（非软链）且在真实 cwd 内。 */
-async function resolveLocalOutputPath(cwd: string, fileName: string, target: string): Promise<string> {
-  const fs = await import('node:fs/promises')
-  const path = await import('node:path')
-  let realCwd: string
-  try {
-    realCwd = await fs.realpath(cwd)
-  } catch (err) {
-    throw new HerdrTransportError('herdr_invalid_cwd', `cwd not accessible: ${cwd}`, target, { cause: err })
-  }
-  const helmDir = path.join(realCwd, '.helm')
-  let helmStat
-  try {
-    helmStat = await fs.lstat(helmDir)
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT' || code === 'ENOTDIR') {
-      // 目录缺失 = 交接文件缺失：read 报 404、remove 幂等（一次自愈边界）。
-      throw new HelmError('herdr_output_missing', `交接目录不存在: ${helmDir}`, 404)
-    }
-    throw new HerdrTransportError('herdr_io', `failed to inspect ${helmDir}: ${code ?? String(err)}`, target, { cause: err })
-  }
-  if (helmStat.isSymbolicLink() || !helmStat.isDirectory()) {
-    throw new HerdrTransportError('herdr_output_escaping', `.helm must be a real directory inside cwd`, target)
-  }
-  // realpath 再验证：目录内不允许任何中间软链把最终路径移出 cwd。
-  const realHelm = await fs.realpath(helmDir)
-  if (realHelm !== helmDir) {
-    throw new HerdrTransportError('herdr_output_escaping', `.helm resolves outside cwd`, target)
-  }
-  return path.join(helmDir, fileName)
-}
-
-async function readLocalOutput(cwd: string, fileName: string, signal: AbortSignal | undefined, target: string, redact: (s: string) => string): Promise<string> {
-  const fs = await import('node:fs/promises')
-  const { dirname } = await import('node:path')
-  checkAborted(signal, target)
-  const path = await resolveLocalOutputPath(cwd, fileName, target)
-  // 以 O_NOFOLLOW 打开收敛 TOCTOU：lstat 与 readFile 分离时，窗口内文件可被
-  // 替换为符号链接越出 .helm；在打开时点拒绝 symlink 后从同一句柄 fstat+读
-  // （Windows 无 O_NOFOLLOW，退回读后 realpath 复核仍锚定 .helm 内）。
-  const noFollow = fs.constants.O_NOFOLLOW ?? 0
-  let fh: Awaited<ReturnType<typeof fs.open>>
-  try {
-    fh = await fs.open(path, fs.constants.O_RDONLY | noFollow)
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') {
-      throw new HelmError('herdr_output_missing', `交接文件不存在: ${path}`, 404)
-    }
-    if (code === 'ELOOP') {
-      throw new HerdrTransportError('herdr_output_escaping', `output path is a symlink: ${path}`, target)
-    }
-    throw new HerdrTransportError('herdr_io', `failed to open output file: ${redact(String(err))}`, target, { cause: err })
-  }
-  try {
-    const stat = await fh.stat()
-    if (!stat.isFile()) {
-      throw new HerdrTransportError('herdr_output_not_file', `output path is not a regular file: ${path}`, target)
-    }
-    if (stat.size > MAX_OUTPUT_BYTES) {
-      throw new HerdrTransportError('herdr_output_too_large', `output exceeds ${MAX_OUTPUT_BYTES} bytes`, target)
-    }
-    const content = await fh.readFile('utf8')
-    if (Buffer.byteLength(content, 'utf8') > MAX_OUTPUT_BYTES) {
-      throw new HerdrTransportError('herdr_output_too_large', `output grew past limit while reading`, target)
-    }
-    if (!noFollow) {
-      const real = await fs.realpath(path)
-      if (!pathContains(await fs.realpath(dirname(path)), real)) {
-        throw new HerdrTransportError('herdr_output_escaping', `output resolves outside .helm`, target)
-      }
-    }
-    return content
-  } finally {
-    await fh.close().catch(() => {})
-  }
-}
-
-async function removeLocalOutput(cwd: string, fileName: string, signal: AbortSignal | undefined, target: string, redact: (s: string) => string): Promise<void> {
-  const fs = await import('node:fs/promises')
-  checkAborted(signal, target)
-  let path: string
-  try {
-    path = await resolveLocalOutputPath(cwd, fileName, target)
-  } catch (err) {
-    // 目录/文件缺失：remove 语义是幂等无操作（与插件一次自愈边界一致）。
-    if (err instanceof HelmError && err.code === 'herdr_output_missing') return
-    throw err
-  }
-  try {
-    const stat = await fs.lstat(path)
-    if (!stat.isFile()) {
-      throw new HerdrTransportError('herdr_output_not_file', `output path is not a regular file: ${path}`, target)
-    }
-    await fs.unlink(path)
-  } catch (err) {
-    if (err instanceof HerdrTransportError || err instanceof HelmError) throw err
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
-    throw new HerdrTransportError('herdr_io', `failed to remove output file: ${redact(String(err))}`, target, { cause: err })
-  }
-}
-
-/**
- * 目标路径形状对应的纯路径规则（不依赖 Hub 进程平台）：
- * Windows 形状（盘符或 UNC `\\server\share`）用 win32 规则，其余 POSIX。
- */
-function pathRulesFor(path: string): typeof posix | typeof win32 {
-  return isWindowsShapedPath(path) ? win32 : posix
-}
-
-/** Windows 路径形状：盘符（C:\ 或 C:/）或 UNC（\\server\share）。纯规则判断。 */
-export function isWindowsShapedPath(path: string): boolean {
-  return /^([A-Za-z]:[\\/]|\\\\[^\\])/.test(path)
-}
-
-/** 路径是否为绝对路径（POSIX `/` 或 Windows 盘符/UNC；拒绝 `C:relative`）。纯规则。 */
-export function isAbsoluteAnyPath(path: string): boolean {
-  return isWindowsShapedPath(path) ? win32.isAbsolute(path) : posix.isAbsolute(path)
-}
-
-/**
- * 跨平台安全 containment：child 必须等于 root 或位于 root 之下（规范化比较，
- * 不多加目录分隔——root 为 `/` 时 `/foo` 合法包含，`//foo` 不额外产生）。
- * root 与 child 均为已 canonical 解析的路径（调用方保证）。
- */
-export function pathContains(root: string, child: string): boolean {
-  if (root === child) return true
-  const rules = pathRulesFor(root)
-  const rootPrefix = root.endsWith(rules.sep) ? root.slice(0, -1) : root
-  return child.startsWith(rootPrefix + rules.sep)
-}
-
-/**
- * 远端节点输出目录解析（与本地 resolveLocalOutputPath 同一安全边界）：
- * - cwd 依据自身路径形状选用 win32/posix 纯规则拼 `<cwd>/.helm`（Hub 的
- *   node:path.join 会按 Hub 平台拆 Windows 路径——Linux Hub 会把 `\` 当
- *   普通字符产生错误目录名，Windows Hub 会把 POSIX cwd 拆碎）；
- * - cwd 经 env.canonicalPath 校验真实可解析（不可达 = invalid_cwd）；
- * - `<realCwd>/.helm` 必须是真实目录（缺失 = 404 可自愈边界；symlink/非目录 = 逃逸拒绝）；
- * - canonical 后必须仍落在 realCwd 之内（pathContains，中间软链拦截）。
- */
-async function resolveNodeOutputDir(
-  env: HerdrNodeEnv,
-  cwd: string,
-  target: string,
-  context: Context,
-): Promise<{ realCwd: string; realHelm: string }> {
-  const rules = pathRulesFor(cwd)
-  const canonicalCwd = await env.canonicalPath(cwd, context)
-  if (!canonicalCwd.ok) {
-    throw new HerdrTransportError(
-      'herdr_invalid_cwd',
-      `cwd not accessible on node: ${canonicalCwd.error.code}: ${canonicalCwd.error.message}`,
-      target,
-      { cause: new Error(canonicalCwd.error.message) },
-    )
-  }
-  const realCwd = canonicalCwd.value
-  const helmDir = rules.join(realCwd, '.helm')
-  const helmInfo = await env.fileInfo(helmDir, context)
-  if (!helmInfo.ok) {
-    const code = helmInfo.error.code
-    if (code === 'not_found' || code === 'not_directory') {
-      // 目录缺失 = 交接文件缺失：read 报 404、remove 幂等（一次自愈边界）。
-      throw new HelmError('herdr_output_missing', `交接目录不存在: ${helmDir}`, 404)
-    }
-    throw new HerdrTransportError(
-      'herdr_io',
-      `failed to inspect ${helmDir}: ${code}: ${helmInfo.error.message}`,
-      target,
-    )
-  }
-  if (helmInfo.value.kind === 'symlink' || helmInfo.value.kind !== 'directory') {
-    throw new HerdrTransportError('herdr_output_escaping', `.helm must be a real directory inside cwd`, target)
-  }
-  const canonicalHelm = await env.canonicalPath(helmDir, context)
-  if (!canonicalHelm.ok) {
-    throw new HerdrTransportError('herdr_io', `failed to resolve ${helmDir}: ${canonicalHelm.error.message}`, target)
-  }
-  const realHelm = canonicalHelm.value
-  if (!pathContains(realCwd, realHelm)) {
-    throw new HerdrTransportError('herdr_output_escaping', `.helm resolves outside cwd`, target)
-  }
-  return { realCwd, realHelm }
-}
-
-async function readNodeOutput(
-  nodeChannel: HerdrNodeChannel,
-  nodeId: string,
-  target: HerdrTarget,
-  targetLabel: string,
-  cwd: string,
-  fileName: string,
-  signal: AbortSignal | undefined,
-): Promise<string> {
-  const context = contextOf(signal, targetLabel)
-  const env = nodeChannel.envFor(nodeId, cwd)
-  const { realHelm } = await resolveNodeOutputDir(env, cwd, targetLabel, context)
-  const filePath = pathRulesFor(realHelm).join(realHelm, fileName)
-  const info = await env.fileInfo(filePath, context)
-  if (!info.ok) {
-    if (info.error.code === 'not_found') {
-      throw new HelmError('herdr_output_missing', `交接文件不存在: ${filePath}`, 404)
-    }
-    throw new HerdrTransportError('herdr_io', `failed to inspect output file: ${info.error.code}: ${info.error.message}`, targetLabel)
-  }
-  if (info.value.kind !== 'file') {
-    throw new HerdrTransportError('herdr_output_not_file', `output path is not a regular file: ${filePath}`, targetLabel)
-  }
-  if (info.value.size > MAX_OUTPUT_BYTES) {
-    throw new HerdrTransportError('herdr_output_too_large', `output exceeds ${MAX_OUTPUT_BYTES} bytes`, targetLabel)
-  }
-  const content = await env.readTextFile(filePath, context)
-  if (!content.ok) {
-    throw new HerdrTransportError('herdr_io', `failed to read output file: ${content.error.code}: ${content.error.message}`, targetLabel)
-  }
-  // 读后 canonical 复核（TOCTOU 收敛）：fileInfo(lstat) 与 readTextFile（跟随
-  // 软链）之间文件可被替换为符号链接越出 .helm；节点 env 无 O_NOFOLLOW 语义，
-  // 以 realpath 复核实际读到的路径仍锚定 realHelm 内（内容已读入但绝不返回）。
-  const canonical = await env.canonicalPath(filePath, context)
-  if (!canonical.ok) {
-    throw new HerdrTransportError('herdr_io', `failed to resolve ${filePath}: ${canonical.error.message}`, targetLabel)
-  }
-  if (!pathContains(realHelm, canonical.value)) {
-    throw new HerdrTransportError('herdr_output_escaping', `output resolves outside .helm`, targetLabel)
-  }
-  if (Buffer.byteLength(content.value, 'utf8') > MAX_OUTPUT_BYTES) {
-    throw new HerdrTransportError('herdr_output_too_large', `output grew past limit while reading`, targetLabel)
-  }
-  return content.value
-}
-
-async function removeNodeOutput(
-  nodeChannel: HerdrNodeChannel,
-  nodeId: string,
-  targetLabel: string,
-  cwd: string,
-  fileName: string,
-  signal: AbortSignal | undefined,
-): Promise<void> {
-  const context = contextOf(signal, targetLabel)
-  const env = nodeChannel.envFor(nodeId, cwd)
-  let realHelm: string
-  try {
-    realHelm = (await resolveNodeOutputDir(env, cwd, targetLabel, context)).realHelm
-  } catch (err) {
-    // 目录缺失：remove 幂等无操作（与本地语义一致）。
-    if (err instanceof HelmError && err.code === 'herdr_output_missing') return
-    throw err
-  }
-  const filePath = pathRulesFor(realHelm).join(realHelm, fileName)
-  const info = await env.fileInfo(filePath, context)
-  if (!info.ok) {
-    if (info.error.code === 'not_found') return // 文件缺失：幂等
-    throw new HerdrTransportError('herdr_io', `failed to inspect output file: ${info.error.code}: ${info.error.message}`, targetLabel)
-  }
-  if (info.value.kind !== 'file') {
-    throw new HerdrTransportError('herdr_output_not_file', `output path is not a regular file: ${filePath}`, targetLabel)
-  }
-  const removed = await env.remove(filePath, { force: true }, context)
-  if (!removed.ok) {
-    throw new HerdrTransportError('herdr_io', `failed to remove output file: ${removed.error.code}: ${removed.error.message}`, targetLabel)
-  }
-}
-
-function validEnvEntries(env: Record<string, string> | undefined): [string, string][] {
-  return Object.entries(env ?? {}).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-}
-
-/**
- * Gate 执行核心（本机与远端同构）：SDK `NodeExecutionEnv.exec`——跨平台 shell
- * 选择（Unix /bin/bash→sh；Windows Git Bash/WSL 探测）与进程树终止
- * （Unix 进程组 SIGKILL；Windows taskkill /F /T）由 SDK 承担。
- * `inheritEnv: false`：只注入显式受管 env（宿主 HELM_TOKEN 等绝不泄漏进
- * gate 子进程；token 只能经显式 env 提供）。流式累计超限即取消并显式失败。
- */
-async function execGate(
-  env: HerdrNodeEnv,
-  command: string,
-  cwd: string,
-  signal: AbortSignal | undefined,
-  target: string,
-  envVars: Record<string, string>,
-  redact: (s: string) => string,
-): Promise<AgentGateResult> {
-  const controller = new AbortController()
-  const onAbort = () => controller.abort()
-  signal?.addEventListener('abort', onAbort, { once: true })
-  const chunks: string[] = []
-  let total = 0
-  let overflow = false
-  try {
-    const result = await env.exec(
-      command,
-      {
-        cwd,
-        env: envVars,
-        inheritEnv: false,
-        timeout: GATE_TIMEOUT_SECONDS,
-        onOutput: (text) => {
-          total += Buffer.byteLength(text, 'utf8')
-          if (total > MAX_GATE_OUTPUT_BYTES) {
-            overflow = true
-            controller.abort() // 立即取消远端命令，不先聚合无限输出
-            return
-          }
-          chunks.push(text)
-        },
-      },
-      withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
-    )
-    if (!result.ok) {
-      if (overflow) return { ok: false, output: `gate output exceeded ${MAX_GATE_OUTPUT_BYTES} bytes` }
-      if (result.error.code === 'aborted' && signal?.aborted) {
-        throw new HerdrTransportError('herdr_aborted', 'gate aborted', target)
-      }
-      if (result.error.code === 'timeout') {
-        throw new HerdrTransportError('herdr_timeout', `gate timed out: ${result.error.message}`, target)
-      }
-      throw new HerdrTransportError('herdr_node_error', `gate failed: ${result.error.code}: ${result.error.message}`, target)
-    }
-    if (total > MAX_GATE_OUTPUT_BYTES) {
-      return { ok: false, output: `gate output exceeded ${MAX_GATE_OUTPUT_BYTES} bytes` }
-    }
-    return { ok: result.value.exitCode === 0, output: redact(chunks.join('')) }
-  } finally {
-    signal?.removeEventListener('abort', onAbort)
-  }
-}
-
-/** 本机 Gate：NodeExecutionEnv（真实本机环境）+ 显式受管 env。 */
-async function runLocalGate(
-  command: string,
-  cwd: string,
-  signal: AbortSignal | undefined,
-  env: Record<string, string> | undefined,
-  target: string,
-  redact: (s: string) => string,
-): Promise<AgentGateResult> {
-  checkAborted(signal, target)
-  const sanitized: Record<string, string> = {}
-  for (const [key, value] of validEnvEntries(env)) sanitized[key] = value
-  const localEnv = new NodeExecutionEnv({ cwd })
-  return execGate(localEnv, command, cwd, signal, target, sanitized, redact)
-}
-
-/** 远端 Gate：经节点 env.exec 在目标节点执行（同一安全边界）。 */
-async function runNodeGate(
-  nodeChannel: HerdrNodeChannel,
-  nodeId: string,
-  targetLabel: string,
-  command: string,
-  cwd: string,
-  signal: AbortSignal | undefined,
-  env: Record<string, string> | undefined,
-  redact: (s: string) => string,
-): Promise<AgentGateResult> {
-  checkAborted(signal, targetLabel)
-  const sanitized: Record<string, string> = {}
-  for (const [key, value] of validEnvEntries(env)) sanitized[key] = value
-  return execGate(nodeChannel.envFor(nodeId, cwd), command, cwd, signal, targetLabel, sanitized, redact)
 }
 
 // ------------------------------------------------------------- 工厂 --
