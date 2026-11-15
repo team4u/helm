@@ -37,19 +37,15 @@ import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, H
 import { targetNodeId } from './contracts.js'
 import { validateOrThrow } from '@helm/protocol'
 import { AskCoordinator, backoffForDuplicateBlocked, type AskEntry } from './asks.js'
-import { buildHerdrAskPromptPlan, extractMenuItemsFromSnapshot, parseCustomKeys, type BlockedSnapshotAnalysis, type HerdrAskPromptPlan } from './prompt-options.js'
+import { ApprovalBridge } from './approval-bridge.js'
 import { MetadataProjector } from './metadata.js'
 import { PaneRegistry, nodeIdOf, targetOf, type ManagedPane, type PaneRouting } from './panes.js'
 import {
   assertOkResult,
-  buildSendKeysParams,
-  isStaleStateError,
   parseAgentResult,
   parsePaneRead,
-  parsePong,
   parseTabCreated,
   parseWorktreeCreated,
-  SEND_KEYS_CAS_CAPABILITY,
   type HerdrAgentInfo,
 } from './rpc.js'
 import {
@@ -180,6 +176,9 @@ export class HerdrExecutor {
   /** 本机冻结连接目标（启用时注入）。 */
   private readonly localTarget: HerdrTarget
 
+  /** 审批桥（blocked Ask 创建与终态消费；依赖经端口注入，见 approval-bridge.ts）。 */
+  private readonly approvalBridge: ApprovalBridge
+
   constructor(
     private readonly deps: HerdrPluginDependencies,
     private readonly registry: PaneRegistry,
@@ -192,6 +191,17 @@ export class HerdrExecutor {
     private readonly pollIntervalMs = 100,
   ) {
     this.localTarget = localTarget
+    this.approvalBridge = new ApprovalBridge({
+      asks,
+      transport: this.transport,
+      host: { notify: host.notify, createAsk: host.createAsk },
+      redact: deps.redact,
+      analyzeBlockedSnapshot: deps.analyzeBlockedSnapshot,
+      agentGet: (target, paneId, signal) => this.agentGet(target, paneId, signal),
+      readDiagnostic: (pane) => this.readDiagnostic(pane),
+      cancelAskQuietly: (askId, reason) => this.cancelAskQuietly(askId, reason),
+      pollIntervalMs: this.pollIntervalMs,
+    })
   }
 
   /**
@@ -962,11 +972,6 @@ export class HerdrExecutor {
   /** 已结算的 blocked 水位先做短暂退避防抖；若发键后连续退避仍停留在同一 blocked seq，重开审批让人类重选。 */
   private static readonly MAX_SETTLED_BLOCKED_BACKOFFS = 2
 
-  /** Ask 存续复核对瞬时故障（herdr_timeout/节点闪断）的最大连续容忍次数（退避重试）；超过才销单并显式失败。 */
-  private static readonly MAX_ASK_POLL_TRANSIENT_FAILURES = 6
-  /** abort 后循环销单的最大尝试次数（防 cancel 持续失败时重试+通知风暴；剩余兑底交给 closePane）。 */
-  private static readonly MAX_ABORT_CANCEL_ATTEMPTS = 5
-  private static readonly ABORT_CANCEL_BACKOFF_CAP_MS = 3_200
   /** md 交接稳定性复检的间隔（两次读一致才接受；json 有 schema 硬校验无需此检）。 */
   private static readonly MD_STABLE_RECHECK_MS = 300
 
@@ -1062,8 +1067,8 @@ export class HerdrExecutor {
     if (existing !== undefined) return existing
     const task = Promise.resolve().then(async () => {
       await this.project(pane, `ask:${entry.askId}`)
-      const { outcome, plan } = await this.createAsk(request, pane, entry, this.host.askConversationId(request.parentConversationId))
-      return this.consumeAskOutcome(request, pane, entry, outcome, plan)
+      const { outcome, plan } = await this.approvalBridge.createAsk(request, pane, entry, this.host.askConversationId(request.parentConversationId))
+      return this.approvalBridge.consumeAskOutcome(request, pane, entry, outcome, plan)
     }).catch(async (error: unknown) => {
       // 任务链失败时条目若仍 pending（宿主 AskDoc 已入库未结算），必须先显式
       // 销单再清条目——failCreate 只清协调器，否则宿主留下永远 pending 的
@@ -1076,289 +1081,6 @@ export class HerdrExecutor {
     }).finally(() => this.blockedTasks.delete(entry.askId))
     this.blockedTasks.set(entry.askId, task)
     return task
-  }
-
-  /**
-   * createAsk（预分配 id，条目已先登记）：返回终态结果与本次快照生成的
-   * 按键规划（plan 供 consumeAskOutcome 将 decision 映射为按键序列）。
-   * - 创建前权威复核：seq 已推进/已非 blocked -> 无需再问（synthetic superseded）；
-   * - 宿主返回 cancelled 且条目已被销（404 竞态确认）-> 同样 synthetic superseded
-   *   回主循环，绝不留 pending；
-   * - 重试 attempt（重开审批）时描述开头附「上次按键未解除阻塞」提示，
-   *   终端快照用代码块围栏包裹（前端 AskDock 据此提取折叠快照）。
-   */
-  private async createAsk(
-    request: AgentSpawnRequest,
-    pane: ManagedPane,
-    entry: AskEntry,
-    conversationId: number,
-  ): Promise<{ outcome: CreateAskResultLike; plan: HerdrAskPromptPlan }> {
-    const authority = await this.agentGet(targetOf(pane), pane.paneId, request.signal)
-    for (const superseded of this.asks.observeAuthority({
-      paneId: pane.paneId,
-      nodeId: nodeIdOf(pane),
-      seq: authority.stateChangeSeq,
-      status: authority.agentStatus,
-    })) {
-      await this.cancelAskQuietly(superseded.askId, 'superseded')
-    }
-    if (authority.stateChangeSeq !== entry.seq || authority.agentStatus !== 'blocked') {
-      this.asks.settle(entry, { keysSent: false })
-      return { outcome: { id: entry.askId, status: 'superseded', answers: {} }, plan: buildHerdrAskPromptPlan('') }
-    }
-    const snapshot = await this.readDiagnostic(pane)
-    // 混合快慢路径：正则已识别标准菜单（>= 2 项）时走 0ms 确定性快路径，
-    // 绝不调 AI（省延迟、省 Token）；仅非标 TUI 快照（如横向按钮 / 快捷键提示）
-    // 且配置了模型端口时，才异步解析候选按键选项。
-    let aiAnalysis: BlockedSnapshotAnalysis | undefined
-    let aiDiagnostic: string | undefined
-    const fastItems = extractMenuItemsFromSnapshot(snapshot)
-    if (fastItems.length < 2 && snapshot.trim().length > 0 && this.deps.analyzeBlockedSnapshot !== undefined) {
-      try {
-        const outcome = await this.deps.analyzeBlockedSnapshot({
-          snapshot,
-          conversationId,
-          signal: request.signal,
-        })
-        aiAnalysis = outcome.analysis
-        aiDiagnostic = outcome.diagnostic
-        if (aiDiagnostic !== undefined) {
-          // 增强未完成不阻塞审批主流程，但绝不静默：通知人类已回退通用选项。
-          this.host.notify('阻塞快照 AI 解析未完成', this.deps.redact(aiDiagnostic), 'info')
-        }
-      } catch (error) {
-        // 外部取消立即传播；其余情况（含注入端口直接 throw）如实通知后回退。
-        // 诊断用固定安全文案，不回显上游 Error.message（可含 raw response/快照）。
-        if (request.signal?.aborted) throw error
-        aiAnalysis = undefined
-        aiDiagnostic = '阻塞快照 AI 解析异常（请求失败），已回退通用按键选项'
-        this.host.notify('阻塞快照 AI 解析未完成', aiDiagnostic, 'info')
-      }
-      // AI 等待期间终端可能自行推进：权威复核 seq，过期则不挂旧 AskDoc。
-      const latest = await this.agentGet(targetOf(pane), pane.paneId, request.signal)
-      for (const superseded of this.asks.observeAuthority({
-        paneId: pane.paneId,
-        nodeId: nodeIdOf(pane),
-        seq: latest.stateChangeSeq,
-        status: latest.agentStatus,
-      })) {
-        await this.cancelAskQuietly(superseded.askId, 'superseded')
-      }
-      if (latest.stateChangeSeq !== entry.seq || latest.agentStatus !== 'blocked') {
-        this.asks.settle(entry, { keysSent: false })
-        return { outcome: { id: entry.askId, status: 'superseded', answers: {} }, plan: buildHerdrAskPromptPlan('') }
-      }
-    }
-    const plan = buildHerdrAskPromptPlan(snapshot, aiAnalysis, (t) => this.deps.redact(t))
-    const retryHint =
-      entry.attempt > 0 && entry.lastSentKeys && entry.lastSentKeys.length > 0
-        ? `上次发送的按键 [${entry.lastSentKeys.join(', ')}] 未解除阻塞（终端仍停留在 seq ${entry.seq}），请对照快照重新选择。\n\n`
-        : ''
-    const aiSummaryLine = plan.summary ? `阻塞摘要：${this.deps.redact(plan.summary)}\n\n` : ''
-    const aiFallbackLine = aiDiagnostic ? `${this.deps.redact(aiDiagnostic)}\n\n` : ''
-    // 快照统一取尾部 1500 字符：与 AI 解析所据内容同口径，保证人类看到
-    // 模型做出判断所依据的当前菜单（长快照头部往往是无关节奏输出）。
-    const description = `${retryHint}${aiSummaryLine}${aiFallbackLine}终端 agent (${pane.agentName}) 在 ${pane.effectiveCwd} 等待选择。终端快照（脱敏）：\n\`\`\`\n${snapshot.slice(-1500)}\n\`\`\``
-    const pending = this.host.createAsk({
-      id: entry.askId,
-      conversationId,
-      ownerPluginId: 'builtin:herdr',
-      title: `Herdr 审批：pane ${pane.paneId}`,
-      description,
-      fields: [
-        {
-          name: 'decision',
-          label: '如何处理该阻塞？',
-          type: 'select',
-          required: true,
-          options: plan.options,
-        },
-        {
-          name: 'key',
-          label: '自定义按键序列（仅 decision=custom 时使用，多键用空格或逗号分隔，如 enter / esc / down, enter）',
-          type: 'text',
-          required: false,
-        },
-      ],
-      expectedStateSeq: entry.seq,
-    })
-    this.asks.markPending(entry)
-    // createAsk 返回的是终态 promise；其入库可晚于事件销单的 404。
-    // 在该 promise 结束前持续复核并销单，远端同样无需依赖本机 socket 事件。
-    const monitor = new AbortController()
-    const result = pending.finally(() => monitor.abort())
-    const polling = (async () => {
-      // 存续复核容错边界：瞬时故障（herdr_timeout/节点闪断）退避重试，超过
-      // 上限才先销宿主 AskDoc 再显式失败；绝不让一次抖动击穿任务，也绝不
-      // 留下永远 pending 的孤儿审批卡。
-      let transientFailures = 0
-      let abortCancelAttempts = 0
-      while (!monitor.signal.aborted) {
-        try { await delay(this.pollIntervalMs, undefined, { signal: monitor.signal }) }
-        catch (error) { if (monitor.signal.aborted) return; throw error }
-        if (request.signal?.aborted) {
-          // abort 后销单退避有界：cancel 持续非 404 失败时不得每 100ms
-          // 重试+通知风暴；超限后交由 closePane 的 paneClosed 清单兑底。
-          if (abortCancelAttempts >= HerdrExecutor.MAX_ABORT_CANCEL_ATTEMPTS) return
-          if (abortCancelAttempts > 0) {
-            try {
-              await delay(
-                Math.min(this.pollIntervalMs * 2 ** abortCancelAttempts, HerdrExecutor.ABORT_CANCEL_BACKOFF_CAP_MS),
-                undefined,
-                { signal: monitor.signal },
-              )
-            } catch (error) { if (monitor.signal.aborted) return; throw error }
-          }
-          await this.cancelAskQuietly(entry.askId, 'cancelled')
-          abortCancelAttempts += 1
-          continue
-        }
-        let current: HerdrAgentInfo
-        try {
-          current = await this.agentGet(targetOf(pane), pane.paneId, monitor.signal)
-          transientFailures = 0
-        } catch (error) {
-          if (monitor.signal.aborted) return
-          if ((error as { code?: string }).code === 'herdr_aborted') throw error
-          transientFailures += 1
-          if (transientFailures > HerdrExecutor.MAX_ASK_POLL_TRANSIENT_FAILURES) {
-            // 最终失败：异步销宿主 AskDoc 后立即上抛真实错误（不 await——
-            // 等待会让宿主 cancelled 终态先赢 Promise.race，把基础设施失败
-            // 伪装成「人类取消」abort 路径关掉失败现场）；兑底 cancel 由
-            // 任务链 catch 的同步销单保证，绝不留 pending 孤儿审批卡。
-            void this.cancelAskQuietly(entry.askId, 'cancelled')
-            throw error
-          }
-          try {
-            await delay(
-              Math.min(500 * 2 ** (transientFailures - 1), 4_000),
-              undefined,
-              { signal: monitor.signal },
-            )
-          } catch (error) { if (monitor.signal.aborted) return; throw error }
-          continue
-        }
-        if (current.stateChangeSeq !== entry.seq || current.agentStatus !== 'blocked') {
-          this.asks.observeAuthority({ nodeId: nodeIdOf(pane), paneId: pane.paneId, seq: current.stateChangeSeq, status: current.agentStatus })
-          await this.cancelAskQuietly(entry.askId, 'superseded')
-        }
-      }
-    })()
-    try {
-      return { outcome: await Promise.race([result, polling.then(() => result)]), plan }
-    } finally {
-      monitor.abort()
-      await polling.catch((error: unknown) => {
-        if ((error as { code?: string }).code !== 'herdr_aborted') throw error
-      })
-    }
-  }
-
-  /** 消费终态：answered 且权威 seq 未推进 -> 能力门禁 -> 带 expected_state_seq 的 CAS send_keys（stale_state 拒绝 = 键未发送，绝不重试）；cancelled -> false。 */
-  private async consumeAskOutcome(
-    request: AgentSpawnRequest,
-    pane: ManagedPane,
-    entry: AskEntry,
-    outcome: CreateAskResultLike,
-    plan: HerdrAskPromptPlan,
-  ): Promise<boolean> {
-    if (outcome.status !== 'answered') {
-      this.asks.settle(entry, { keysSent: false })
-      if (outcome.status === 'superseded') return true
-      return false
-    }
-    const decision = outcome.answers['decision'] ?? ''
-    let keys: string[] | undefined
-    if (decision === 'custom') {
-      const custom = parseCustomKeys(outcome.answers['key'] ?? '')
-      if (custom.length === 0) {
-        this.asks.settle(entry, { keysSent: false })
-        return false
-      }
-      keys = custom
-    } else {
-      keys = plan.decisionKeys.get(decision)
-    }
-    if (keys === undefined || keys.length === 0) {
-      this.asks.settle(entry, { keysSent: false })
-      return false
-    }
-    const authority = await this.agentGet(targetOf(pane), pane.paneId, request.signal)
-    for (const superseded of this.asks.observeAuthority({
-      paneId: pane.paneId,
-      nodeId: nodeIdOf(pane),
-      seq: authority.stateChangeSeq,
-      status: authority.agentStatus,
-    })) {
-      await this.cancelAskQuietly(superseded.askId, 'superseded')
-    }
-    if (authority.name !== pane.agentName) throw new HelmError('herdr_ownership_lost', `pane ${pane.paneId} 的 Agent 身份已变化，不能发送按键`, 409)
-    if (authority.stateChangeSeq !== entry.seq || authority.agentStatus !== 'blocked') {
-      this.asks.settle(entry, { keysSent: false })
-      return true
-    }
-    // 协议级 CAS：send_keys 携带 expected_state_seq（entry.seq），彻底关闭上方
-    // 权威 agent.get 与写键之间的毫秒级残窗——人类在终端直接按键推进 seq 时
-    // 服务端必须以 stale_state 拒绝且不写入任何按键。
-    await this.assertSendKeysCas(targetOf(pane), request.signal)
-    try {
-      await assertOkResult(
-        await this.transport.call(
-          targetOf(pane),
-          'agent.send_keys',
-          buildSendKeysParams({ target: pane.paneId, keys, expectedStateSeq: entry.seq }),
-          { signal: request.signal },
-        ),
-        'agent.send_keys',
-      )
-    } catch (error) {
-      if (!isStaleStateError(error)) throw error
-      // 服务端 CAS 拒绝 = 键未发送：按「终端已先行推进」收敛（同 superseded
-      // 语义回主循环等权威状态），绝不重试同一批 keys，绝不记发送成功。
-      this.asks.settle(entry, { keysSent: false })
-      this.host.notify(
-        'Herdr 审批已过时',
-        `pane ${pane.paneId} 的按键选择因终端状态已推进（stale_state）被服务端拒绝，未发送任何按键；主循环将继续按权威状态收敛`,
-        'info',
-      )
-      return true
-    }
-    this.asks.settle(entry, { keysSent: true, sentKeys: keys })
-    this.host.notify('Herdr 审批已发送', `pane ${pane.paneId} 已按人类选择发送按键：${keys.join(' ')}`, 'info')
-    return true
-  }
-
-  /**
-   * agent.send_keys 的 CAS 能力门禁（显式探测，绝不静默降级）：
-   * 目标 Herdr 未在 ping capabilities 通告 SEND_KEYS_CAS_CAPABILITY 时拒绝发键
-   * （herdr_cas_unsupported）——旧服务端 serde 忽略未知字段，盲发
-   * expected_state_seq 会被静默当作无 CAS 写键，恰好复现本修复要关闭的残窗。
-   * 探测结果在同一启用周期内按 target 冻结（Herdr 升级后重新启用插件生效）。
-   */
-  private readonly sendKeysCasSupport = new Map<string, boolean>()
-
-  private async assertSendKeysCas(target: HerdrTarget, signal?: AbortSignal): Promise<void> {
-    const key = JSON.stringify(target)
-    const cached = this.sendKeysCasSupport.get(key)
-    if (cached === true) return
-    if (cached === false) throw this.casUnsupportedError(target)
-    const pong = parsePong(await this.transport.call(target, 'ping', {}, { signal, timeoutMs: 5_000 }))
-    this.sendKeysCasSupport.set(key, pong.sendKeysCas)
-    if (!pong.sendKeysCas) throw this.casUnsupportedError(target, pong)
-  }
-
-  private casUnsupportedError(target: HerdrTarget, server?: { version: string; protocol: number }): HelmError {
-    const serverLabel = server !== undefined ? `（version ${server.version}, protocol ${server.protocol}）` : ''
-    return new HelmError(
-      'herdr_cas_unsupported',
-      `目标 Herdr${serverLabel} 未在 ping capabilities 通告 '${SEND_KEYS_CAS_CAPABILITY}'，拒绝无 CAS 的 agent.send_keys：旧服务端会静默忽略 expected_state_seq 并照常写键（复现审批桥 CAS 残窗）；请升级 Herdr 服务端至通告该能力的版本，并重新启用 herdr 插件`,
-      502,
-      {
-        capability: SEND_KEYS_CAS_CAPABILITY,
-        ...(server !== undefined ? { serverVersion: server.version, serverProtocol: server.protocol } : {}),
-        target: JSON.stringify(target),
-      },
-    )
   }
 
   // ------------------------------------------------------------------
