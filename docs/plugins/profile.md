@@ -20,7 +20,7 @@
 | `profile.system` | SYSTEM.md 非空白 | SYSTEM.md 原始全文（人格、语气与行为准则） |
 | `profile.assets-missing` | SYSTEM.md 缺失或为空 | `<profile_assets_missing>` 包裹的显式说明：本回合无该 Profile 人格，要求模型告知用户、谨慎回答、不假装特定人格 |
 | `profile.agents` | 会话靶点工作区存在非空白 `AGENTS.md` | `<project_instructions path="...">` 包裹的项目约定全文（先经全局脱敏，超过 64000 字符显式截断） |
-| `profile.agents-unavailable` | 远端节点离线，或读取 `AGENTS.md` 遭遇 `not_found` / `is_directory` 之外的真实错误 | `<project_instructions_unavailable>` 包裹的显式说明：本回合未能取得项目约定及原因，绝不静默降级为「无文件」 |
+| `profile.agents-unavailable` | 远端节点离线、宿主能力未接线（nodeIpc / executionEnv）、`AGENTS.md` 为特殊文件或超过 256 KiB 字节读取上限、读取期间文件发生变化，或读取遭遇 `not_found` / `is_directory` 之外的真实错误 | `<project_instructions_unavailable>` 包裹的显式说明：本回合未能取得项目约定及原因，绝不静默降级为「无文件」 |
 | `profile.skills` | 可用技能非空 | `<available_skills>` 包裹的技能目录（id/name/description/references），提示经 `load_skill` 按需加载 |
 | `profile.catalog` | 当回合实际有 `subagent` / `SubagentWorkflow` 派工工具 | `<available_profiles>` 协作目录与委派指引 |
 
@@ -28,8 +28,11 @@
 
 **工作区 AGENTS.md 项目约定**：每回合开始前按会话靶点（节点缺省 `local` + `cwd`）读取工作区根目录的 `AGENTS.md`，注入 `profile.agents`（紧随人格资产、先于技能目录），文件修改下一回合实时生效（无缓存）。路径按 `cwd` 自身形状选择词法规则合成，POSIX 与 Windows 靶点路径均正确。行为契约：
 
-- **常态跳过**：工作区无该文件（`not_found`）、同名目录（`is_directory` / `EISDIR`）或内容纯空白时，本回合不注入任何相关段落；
-- **诚实性红线**：远端节点经在线预检判定离线时直接注入 `profile.agents-unavailable` 显式说明（不进入远程执行通道阻塞等待）；权限、连接中断等真实读取失败同样注入该段并附错误码与脱敏后的错误消息，绝不静默降级为「文件不存在」；
+- **常态跳过**：工作区无该文件（`not_found`）、同名目录（`is_directory` / `EISDIR`）、悬空软链或内容纯空白时，本回合不注入任何相关段落；
+- **有界安全读取**：正文绝不整读——先经 `canonicalPath` 解析软链，再以 `openBinaryReader({ noFollow: true })` 在解析后的真实路径上打开普通文件，kind / size 以同一打开句柄上的元信息为权威（预检后路径被换成软链或 FIFO 都无法劫持本次读取：软链被 `noFollow` 拒绝，FIFO 过不了普通文件检查且不阻塞）；正文只做有界定位读，至多请求 256 KiB + 1 字节；
+- **字节上限**：单次读取上限 256 KiB（`MAX_AGENTS_MD_BYTES`；64k 字符的最坏 UTF-8 编码约 192 KiB，仍有余量）。句柄元信息报告超过上限、或一次有界读取实证超过上限的文件，不读 / 不注入正文，注入 `profile.agents-unavailable` 并附实际字节数；FIFO 等特殊文件同样显式不可用，绝不读正文；
+- **读取期间变化**：读后同句柄二次复核 size / mtime 与实读字节数，文件在读取期间增长、截断或改写（不一致）时不注入可能不完整的旧前缀，显式注入 `profile.agents-unavailable` 说明变化；
+- **诚实性红线**：远端节点经在线预检判定离线时直接注入 `profile.agents-unavailable` 显式说明（不进入远程执行通道阻塞等待）；宿主能力未接线（在线探测、执行环境抛 `unsupported` 等）、权限、连接中断、句柄关闭失败等真实故障同样注入该段并附错误码与脱敏后的错误消息，绝不静默降级为「文件不存在」；
 - **机密与上限防线**：内容与错误消息注入前先经宿主全局脱敏（工作区文件可能意外包含机密明文）；超过 64000 字符上限时截取前缀并附显式截断说明，绝不静默截断。
 
 `profile.catalog` 的注入钩子以低于默认值的 priority（-100）运行，确保在默认优先级的工具剥离钩子（如 superagent 路由模式收敛、`builtin:workflow` 对达到层级上限的受管子代理剥离派工工具）之后、按届时的实际 `turn.tools` 决定注入与否——没有可用派工工具的回合不注入目录，避免教唆模型调用不存在的工具。不按 `parentConversationId` 一刀切排除（fork 会话或 SuperAgent 驻留 Worker 同样有父链，但只要当回合仍持有派工工具即保留完整协作能力）。
