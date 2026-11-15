@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ConversationAttachmentRef, ConversationSummary, WhenBusy } from '@helm/protocol'
+import type { ComposerScopeProps, ConversationAttachmentRef, ConversationSummary, WhenBusy } from '@helm/protocol'
+import { COMPOSER_STATUS_SLOT } from '@helm/protocol'
 import { assetsApi, conversationsApi } from '../lib/api.js'
 import {
   buildSlashMenuItems,
@@ -10,7 +11,7 @@ import {
   removeTokenBeforeCaret,
   type QualifiedCommand,
 } from '../lib/commands-model.js'
-import { HelmIcon, Popover, PopoverContent, PopoverPortal, PopoverTrigger, Select, type SelectOption } from '@helm/plugin-client'
+import { HelmIcon, PluginSlot, Popover, PopoverContent, PopoverPortal, PopoverTrigger, Select, type SelectOption } from '@helm/plugin-client'
 import { matchesUiScope } from '../lib/types.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { useHelmStore } from '../lib/store-context.js'
@@ -55,7 +56,7 @@ import {
   ENV_BLOCKER_CLEAR,
 } from './composer-model.js'
 import { lastEditableHumanInput } from './timeline-model.js'
-import { contextUsageLabel } from './context-usage-model.js'
+import { contextUsageLabel, responseTpsLabel } from './context-usage-model.js'
 import { formatBytes } from '../lib/format.js'
 
 export interface ComposerProps {
@@ -286,20 +287,26 @@ function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
 }
 
 // ---------------------------------------------------------------------------
-// 上下文用量只读状态文本（ModelPicker 右侧；对齐 pi footer 展示，不可交互）
+// 上下文用量与最近响应速率只读状态（ModelPicker 右侧；对齐 pi footer 展示，不可交互）
 // ---------------------------------------------------------------------------
 
 function ContextUsageStatus({ conversation }: { conversation: ConversationSummary }) {
   const usage = conversation.contextUsage
   if (usage === undefined) return null
   const label = contextUsageLabel(usage)
-  if (label === null) return null
+  const tps = responseTpsLabel(usage)
+  if (label === null && tps === null) return null
   return (
     <span
-      className={`composer-context-status${label.tone === 'high' ? ' composer-context-status-high' : label.tone === 'warn' ? ' composer-context-status-warn' : ''}`}
-      title={label.title}
+      className={`composer-context-status${label?.tone === 'high' ? ' composer-context-status-high' : label?.tone === 'warn' ? ' composer-context-status-warn' : ''}`}
+      title={label?.title}
     >
-      <span className="mono tabular-nums">{label.text}</span>
+      {label !== null ? <span className="mono tabular-nums">{label.text}</span> : null}
+      {tps !== null ? (
+        <span className="mono tabular-nums composer-context-tps" title={tps.title}>
+          {tps.text}
+        </span>
+      ) : null}
     </span>
   )
 }
@@ -1356,6 +1363,16 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
               </Tooltip>
               <ModelPicker conversation={conversation} />
               <ContextUsageStatus conversation={conversation} />
+              {/* 宿主状态行保留插槽：插件向上下文用量/响应速率同一状态区贡献
+                  只读内容；移动端同样保留在工具栏（不收入 more 菜单）。 */}
+              <PluginSlot
+                ownerPluginId="builtin:composer"
+                name={COMPOSER_STATUS_SLOT}
+                conversationId={conversation.id}
+                composer={composer}
+                className="composer-status-slot"
+                slotProps={{ conversation, composer } satisfies ComposerScopeProps}
+              />
               <input
                 ref={fileInputRef}
                 type="file"

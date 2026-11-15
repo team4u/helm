@@ -21,6 +21,23 @@ export type InputOrigin = 'human' | 'agent' | 'trigger'
 /** 会话正忙时新输入的处理策略；省略时内核默认 steer（插话引导）。 */
 export type WhenBusy = 'steer' | 'followUp' | 'reject'
 
+/** 最近一次成功且可测量的 assistant 响应的端到端速率指标（派生展示数据）。
+ *
+ * 语义诚实性：分子是供应商上报的 `usage.output`（真实输出 tokens，绝不用
+ * 字符估算冒充）；分母是 AssistantMessageEventStream 以 monotonic clock 实测
+ * 的单次请求 `durationMs`——从请求开始到响应结束的端到端耗时（包含 TTFT
+ * 首字延迟），因此 responseTps 是端到端响应速率，不是纯 decode 解码速率，
+ * 展示端文案必须如实标注。锚点与上下文 tokens 估算共用同一有效 assistant
+ * 判定（stopReason 非 aborted/error 且上下文 tokens > 0 的最近一条）。 */
+export interface ConversationResponseMetric {
+  /** 端到端输出速率 tokens/sec = responseOutputTokens / responseDurationMs × 1000。 */
+  responseTps: number
+  /** 供应商上报的输出 tokens（分子；非字符估算）。 */
+  responseOutputTokens: number
+  /** 单次请求端到端耗时（毫秒，monotonic clock 实测；含 TTFT）。 */
+  responseDurationMs: number
+}
+
 /** 会话上下文用量（派生展示数据；内核异步刷新，可能短暂滞后于真实上下文）。
  *
  * 估算语义对齐 pi agent 1.5.2 的 `getContextUsage`：优先采用最近一次有效
@@ -35,6 +52,10 @@ export interface ConversationContextUsage {
   contextWindow?: number
   /** 压缩任务进行中（pi.live compactions 非空透传；展示「精简中…」）。 */
   compacting?: boolean
+  /** 最近一次成功且可测量的 assistant 响应指标。无效（压缩/reset 后尚无新的
+   * 有效 assistant、缺 durationMs/usage.output、中止或失败）时省略——绝不显示
+   * 过期速度，也不用历史平均值冒充最近响应。 */
+  response?: ConversationResponseMetric
 }
 
 /** 会话列表 / SSE 快照中的通用会话摘要。 */

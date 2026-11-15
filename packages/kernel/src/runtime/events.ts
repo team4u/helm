@@ -157,12 +157,16 @@ function assertConversationSummaryShape(value: unknown): void {
   }
 }
 
-/** contextUsage 形状校验（可缺不可错；契约收敛为 tokens/contextWindow/compacting
- * 三字段，未知字段拒绝——不留死字段；tokens 为 null 表示上下文未知）。 */
+/** contextUsage 形状校验（可缺不可错；契约收敛为 tokens/contextWindow/compacting/
+ * response 四字段，未知字段拒绝——不留死字段；tokens 为 null 表示上下文未知）。 */
 function isContextUsageShape(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false
   const usage = value as Record<string, unknown>
-  if (!Object.keys(usage).every((key) => key === 'tokens' || key === 'contextWindow' || key === 'compacting')) {
+  if (
+    !Object.keys(usage).every(
+      (key) => key === 'tokens' || key === 'contextWindow' || key === 'compacting' || key === 'response',
+    )
+  ) {
     return false
   }
   if (
@@ -181,6 +185,28 @@ function isContextUsageShape(value: unknown): boolean {
   }
   if (usage['compacting'] !== undefined && typeof usage['compacting'] !== 'boolean') {
     return false
+  }
+  if (usage['response'] !== undefined && !isResponseMetricShape(usage['response'])) {
+    return false
+  }
+  return true
+}
+
+/** 最近响应速率指标形状：responseTps/responseOutputTokens/responseDurationMs
+ * 三字段恰为正有限数，未知字段拒绝。 */
+function isResponseMetricShape(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false
+  const metric = value as Record<string, unknown>
+  if (
+    !Object.keys(metric).every(
+      (key) => key === 'responseTps' || key === 'responseOutputTokens' || key === 'responseDurationMs',
+    )
+  ) {
+    return false
+  }
+  for (const key of ['responseTps', 'responseOutputTokens', 'responseDurationMs'] as const) {
+    const raw = metric[key]
+    if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return false
   }
   return true
 }

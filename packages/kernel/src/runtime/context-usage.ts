@@ -34,17 +34,23 @@
 import type { ContextView } from '@earendil-works/pi-durable'
 import { getCurrentSystemMessage, type Message } from '@earendil-works/pi-ai'
 import { calculateContextTokens } from '@earendil-works/pi-ai/utils/estimate'
-import type { ConversationContextUsage } from '@helm/protocol'
+import type { ConversationContextUsage, ConversationResponseMetric } from '@helm/protocol'
 
 /** 有效 assistant usage 的消息形状（pi getAssistantUsage 判定的结构子集）。 */
 type MeasuredAssistant = {
   role: 'assistant'
   usage: Parameters<typeof calculateContextTokens>[0]
+  /** AssistantMessageEventStream 实测的单次请求端到端耗时；旧消息/延迟取回的
+   * deferred 结果缺省（不可测量）。 */
+  durationMs?: number
 }
 
 /** 估算结果；tokens 为 null 表示真实上下文未知（压缩后尚无有效 usage）。 */
 export interface ContextUsageEstimate {
   tokens: number | null
+  /** 与 tokens 同一有效 assistant 锚点的最近响应端到端速率；锚点缺失或
+   * 不可测量（无 durationMs / usage.output 非正）时省略。 */
+  response?: ConversationResponseMetric
 }
 
 /** pi agent compaction.js `ESTIMATED_IMAGE_CHARS`：图片按 4800 字符计。 */
@@ -123,6 +129,22 @@ function isValidMeasuredAssistant(message: unknown): message is MeasuredAssistan
   return calculateContextTokens(m.usage as Parameters<typeof calculateContextTokens>[0]) > 0
 }
 
+/** 从有效 assistant 锚点提取可解释的最近响应速率指标（纯函数）。
+ *
+ * durationMs 由 AssistantMessageEventStream 以 monotonic clock 实测（含 TTFT
+ * 首字延迟）；旧消息、延迟取回的 deferred 结果无此字段。任一测量值缺失或
+ * 非正（含流式极快破零的 durationMs=0）时返回 undefined——绝不用字符估算
+ * 或历史平均值冒充最近响应速率。分子只用供应商上报的 usage.output。 */
+export function measuredResponseOf(anchor: MeasuredAssistant): ConversationResponseMetric | undefined {
+  const output = (anchor.usage as { output?: unknown }).output
+  const durationMs = anchor.durationMs
+  if (typeof output !== 'number' || !Number.isFinite(output) || output <= 0) return undefined
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs <= 0) return undefined
+  const tps = (output / durationMs) * 1000
+  if (!Number.isFinite(tps)) return undefined
+  return { responseTps: tps, responseOutputTokens: output, responseDurationMs: durationMs }
+}
+
 /**
  * 对齐 pi agent `getContextUsage` 的上下文估算。
  *
@@ -176,6 +198,10 @@ export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
 
   if (head?.kind === 'pi.compaction' && !postHeadValidAssistant) return { tokens: null }
 
+  // 最近响应速率与 tokens 共用同一锚点：锚点不可测量（无 durationMs /
+  // usage.output 非正）时省略，不拿更早 assistant 的旧速度冒充最近响应。
+  const response = anchor === undefined ? undefined : measuredResponseOf(anchor)
+
   // 锚点对象来自 contributions，与 messages 同源同引用（lastIndexOf 按身份
   // 命中）；定位失败（-1）按无锚点走全量估算，绝不重复计量。
   const anchorIndex = anchor === undefined ? -1 : view.messages.lastIndexOf(anchor as Message)
@@ -184,7 +210,7 @@ export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
     for (const message of view.messages.slice(anchorIndex + 1)) {
       tokens += estimateTokens(message)
     }
-    return { tokens }
+    return { tokens, ...(response !== undefined ? { response } : {}) }
   }
   const currentSystem = getCurrentSystemMessage(view.messages)
   let tokens = currentSystem === undefined ? 0 : estimateTokens(currentSystem)
@@ -242,6 +268,7 @@ export function assembleContextUsage(parts: {
 }): ConversationContextUsage {
   return {
     tokens: parts.estimate.tokens,
+    ...(parts.estimate.response !== undefined ? { response: parts.estimate.response } : {}),
     ...(parts.contextWindow !== undefined ? { contextWindow: parts.contextWindow } : {}),
     ...(parts.compacting !== undefined ? { compacting: parts.compacting } : {}),
   }
@@ -249,9 +276,13 @@ export function assembleContextUsage(parts: {
 
 /**
  * contextUsage 语义指纹（发布去重）：任一承载字段变化才发布 conversation.upsert。
- * tokens 参与指纹（回合结束后真实变化）；compacting 变化同样发布。
+ * tokens 与最近响应指标参与指纹（回合结束后真实变化）；compacting 变化同样发布。
  */
 export function contextUsageKeyOf(usage: ConversationContextUsage | undefined): string {
   if (usage === undefined) return ''
-  return JSON.stringify([usage.tokens, usage.contextWindow ?? null, usage.compacting ?? null])
+  const response =
+    usage.response === undefined
+      ? null
+      : [usage.response.responseTps, usage.response.responseOutputTokens, usage.response.responseDurationMs]
+  return JSON.stringify([usage.tokens, usage.contextWindow ?? null, usage.compacting ?? null, response])
 }

@@ -112,7 +112,7 @@ export interface ComposerController {
 
 微操作 `ctx.ui.action({ target, actionId?, client?, ... })` 以 target 区分三类容器：`conversation:header`（顶栏，`placement: 'toolbar' | 'menu'` 直出按钮或收纳菜单）、`conversation:row`（左栏会话行菜单）、`timeline:entry`（消息操作栏，`kinds`/`roles` 过滤）。声明 `actionId` 时由宿主代管按钮、pending 状态与失败通知（`actionPluginId` 可显式指向另一插件）；声明 `client` 时自渲染。`actionId` 与 `client` 二选一，两者皆缺在注册边界拒绝；调用上下文固定为实际会话，`input` 不得覆盖宿主注入的 `conversationId` / `entryId`。
 
-宿主保留两个详情子插槽常量：`PROFILE_DETAIL_SECTION_SLOT`（`builtin:profile/detail-section`，传 `ProfileDetailSlotProps`：`profileId / isNew / disabled`）与 `NODE_DETAIL_SECTION_SLOT`（`builtin:node/detail-section`，仅已有节点挂载，传 `NodeDetailSlotProps`：`nodeId / isLocal / isOnline / isNew: false`；`builtin:node` 是宿主保留命名空间，不代表节点底座依赖同名插件）。插槽不传接入令牌，也不隐式借用当前会话。空白会话引导是 `Profile.starters` 静态配置（最多六项，label ≤ 24 码点、prompt ≤ 4000 码点），不是 UI 扩展点。
+宿主保留三个子插槽常量：`PROFILE_DETAIL_SECTION_SLOT`（`builtin:profile/detail-section`，传 `ProfileDetailSlotProps`：`profileId / isNew / disabled`）、`NODE_DETAIL_SECTION_SLOT`（`builtin:node/detail-section`，仅已有节点挂载，传 `NodeDetailSlotProps`：`nodeId / isLocal / isOnline / isNew: false`；`builtin:node` 是宿主保留命名空间，不代表节点底座依赖同名插件）与 `COMPOSER_STATUS_SLOT`（`builtin:composer/status`，输入区工具栏上下文用量/响应速率只读状态旁，传 `ComposerScopeProps`：`conversation / composer`；`builtin:composer` 同为宿主保留命名空间，移动端同样保留在工具栏状态区、不收入 more 菜单）。插槽不传接入令牌，也不隐式借用当前会话。空白会话引导是 `Profile.starters` 静态配置（最多六项，label ≤ 24 码点、prompt ≤ 4000 码点），不是 UI 扩展点。
 
 `artifactPreviewer` 组件收到 `ArtifactPreviewerProps`：`size` 来自真实 Blob；`name` 未获得元数据时省缺（不用 artifactId 冒充）；`text` 仅提供最多 1 MiB 的解码文本，二进制或超限为 `null`；`blobUrl` 由宿主管理生命周期，插件不得撤销。插件预览保留宿主默认视图与下载；插件失败显示诊断而非改用其他内容冒充。`client.tsx` 是可信代码，不因进入产物预览而成为沙箱——展示不可信 HTML 必须用 `iframe sandbox` 且默认不授予脚本、同源、表单或导航权限；禁止把产物 HTML 直接注入宿主 DOM。
 

@@ -13,6 +13,7 @@
  */
 import { createContext, useContext } from 'react'
 import type { ReactNode } from 'react'
+import type { ComposerController } from '@helm/protocol'
 import { HelmIcon } from './icons.js'
 import { usePluginClientHost } from './host-port.js'
 import { PluginClientContext } from './plugin-context.js'
@@ -30,6 +31,9 @@ export interface PluginSlotProps {
   /** 声明式轨道等无 PluginClientContext 的场景：显式提供 owner 插件与会话。 */
   ownerPluginId?: string
   conversationId?: number
+  /** 宿主在输入区挂载插槽时显式提供输入控制器（注入子项 usePluginContext().composer）；
+   * 插件组件内缺省沿用自身上下文的 composer。 */
+  composer?: ComposerController
 }
 
 /** 渲染链祖先记录：环检测用（同一贡献项再次出现即环）。 */
@@ -44,11 +48,12 @@ const SlotAncestryContext = createContext<SlotAncestry>({ chain: [], depth: 0 })
 const MAX_SLOT_DEPTH = 16
 
 export function PluginSlot(props: PluginSlotProps): ReactNode {
-  const { name, slotProps, mode = 'list', fallback, className, ownerPluginId, conversationId: explicitConversationId } = props
+  const { name, slotProps, mode = 'list', fallback, className, ownerPluginId, conversationId: explicitConversationId, composer: explicitComposer } = props
   const clientCtx = useContext(PluginClientContext)
   const host = usePluginClientHost()
   const owner = ownerPluginId ?? clientCtx?.pluginId
   const conversationId = explicitConversationId ?? clientCtx?.conversationId
+  const composer = explicitComposer ?? clientCtx?.composer
   const ancestry = useContext(SlotAncestryContext)
 
   if (owner === undefined) {
@@ -95,7 +100,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
             {host.slots.renderItem(item, {
               slotProps,
               conversationId,
-              composer: clientCtx?.composer,
+              composer,
               label: `插槽 ${qualified}/${item.contributionId}`,
             })}
           </SlotAncestryContext.Provider>
