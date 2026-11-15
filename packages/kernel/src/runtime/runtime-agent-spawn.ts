@@ -36,7 +36,8 @@ import {
   sanitizeAgentGateResult,
   sanitizeAgentNamespacedMeta,
 } from '@helm/protocol'
-import { isSpawnConversationInTurn, runNativeSpawn, validateJsonSchema } from './spawn.js'
+import { isSpawnConversationInTurn, runNativeSpawn } from './spawn.js'
+import { validateJsonSchema, type StructuredOutputSession } from './structured-output.js'
 import type { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { buildManagedEnv, runGate } from './tools.js'
@@ -91,6 +92,10 @@ export class RuntimeAgentSpawn {
 
   /** 原生 spawn session 映射：sessionId -> childConversationId。 */
   readonly agentSessions = new Map<string, number>()
+  /** 本 Harness 共享的结构化输出结果槽（conversationId -> session）：并发 spawn
+   * 的同名扩展被 registry 原地替换后，旧扩展闭包仍经此共享 map 按 conversationId
+   * 动态命中自己的结果槽（与原模块级 WeakMap<Harness, Map> 同语义，改为显式注入）。 */
+  readonly structuredOutputSessions = new Map<number, StructuredOutputSession>()
 
   constructor(private readonly deps: RuntimeAgentSpawnDeps) {}
 
@@ -262,6 +267,7 @@ export class RuntimeAgentSpawn {
             models: () => this.deps.modelsRegistry.models,
             assertModelEnabled: (provider, modelId) => this.deps.modelsRegistry.assertModelEnabled(provider, modelId),
             agentSessions: this.agentSessions,
+            structuredOutputSessions: this.structuredOutputSessions,
             resolvedAttachments,
             isNodeOnline: (nodeId) => this.deps.envFabric.isOnline(nodeId),
             buildAttachmentBlock: (resolved) => this.deps.conversations.buildAttachmentBlock(resolved),

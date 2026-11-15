@@ -9,9 +9,9 @@
  *   effort 显式时经 updateConversation 同步覆盖与 SDK 配置；onResolved/Gate 用
  *   配置落定后的实际 cwd（与 SDK 一致）；
  * - schema：AJV 全量校验（复用 plugins/schema，$async 显式拒绝），回合内
- *   register_structured_output 工具自愈（per-child 扩展注入），工具拒绝错误
- *   参数同回合重试，最终未走工具可再文本追问一次，仍失败显式
- *   schema_validation_failed（不吞错、不假数据）；
+ *   register_structured_output 工具自愈（per-child 扩展注入，见
+ *   structured-output.ts），工具拒绝错误参数同回合重试，最终未走工具可再文本
+ *   追问一次，仍失败显式 schema_validation_failed（不吞错、不假数据）；
  * - profile：经 resolveProfile 端口读取真实 Profile（model/runtime），无效
  *   profile 显式报错；herdr runtime 未被插件接管时 unsupported_runtime；
  * - gate：真实 shell 执行（runGate，cwd 用子会话实际 cwd），失败即 spawn 失败；
@@ -22,18 +22,23 @@
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { defineExtension, defineTool, type AgentChange, type Extension, type ToolRegistration } from '@earendil-works/pi-durable'
+import type { AgentChange, Extension } from '@earendil-works/pi-durable'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '@helm/protocol'
 import { HelmError, sanitizeAgentNamespacedMeta } from '@helm/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
-import { validateOrThrow } from '../plugins/schema.js'
 import { clampThinkingLevelForModel } from './models.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { resolveSpawnTargetChain } from './spawn-target.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { runGate, MAX_TIMEOUT_MS } from './tools.js'
+import {
+  assertSchemaNotAsync,
+  buildStructuredOutputExtension,
+  parseSchemaCandidate,
+  type StructuredOutputSession,
+} from './structured-output.js'
 
 const bg = BACKGROUND_CONTEXT
 
@@ -78,6 +83,15 @@ export interface NativeSpawnDeps extends HelmToolDeps {
   resolveThinkingLevel?(): string | undefined
   /** agentId -> child convId（resume 映射，进程内稳定）。 */
   agentSessions: Map<string, number>
+  /**
+   * 本 Harness 共享的结构化输出结果槽（conversationId -> session）：完整装配
+   * 的宿主（RuntimeAgentSpawn / buildSpawnHost）持有并注入，替代原模块级全局
+   * WeakMap<Harness, Map>；并发 spawn 的隔离靠 conversationId 键（同名扩展被
+   * registry 原地替换后，旧扩展闭包仍经此共享 map 动态命中自己的结果槽）。
+   * 直调 runNativeSpawn 的最小装配（无 schema 场景）可缺省；请求携带 schema
+   * 而未注入时显式报错（装配缺陷不静默丢结果）。
+   */
+  structuredOutputSessions?: Map<number, StructuredOutputSession>
   /**
    * 记录子会话与父会话关系并校验 profile 合法性；无效 profileId 必须抛
    * HelmError('not_found')。childCwd 为子会话将使用的实际 cwd（gate 也用它）。
@@ -225,13 +239,95 @@ interface NativeSpawnExecution {
   childId?: number
 }
 
-const structuredSessions = new WeakMap<Harness, Map<number, StructuredOutputSession>>()
+/** resume 解析结果：childId（resume 时必有）+ 原子会话镜像。 */
+interface SpawnResumeContext {
+  childId: number | undefined
+  isResume: boolean
+  existing: ConversationSummary | undefined
+}
+
+/** spawn 靶点解析结果：目标节点 + 子会话实际 cwd（gate 与 onResolved 同源）。 */
+interface SpawnTarget {
+  nodeId: string
+  childCwd: string
+}
 
 async function runNativeSpawnTurn(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
   execution: NativeSpawnExecution,
 ): Promise<unknown> {
+  assertSpawnRequestShape(request)
+
+  // ---- resume 解析：纯数字 convId 或 agentId 映射；绝不猜测续接（'12abc' 拒绝）。----
+  // resume 配置基线：原子会话镜像（profileId/cwd/model）是唯一事实来源。
+  // 缺省沿用；显式 agentType/cwd/model 变更经同一 updateConversation 路径应用
+  // （真实 SDK configure + 镜像持久化，不重建身份字段）。
+  const resume = resolveSpawnResume(deps, request)
+
+  // profile 解析：resume 缺省用原子会话 Profile（不偷偷回默认 assistant）；
+  // 新建路径沿用 agentType || 默认。resume 显式 agentType 为本次 Profile 变更。
+  const profileId = resume.isResume
+    ? (request.agentType ?? resume.existing!.profileId)
+    : (request.agentType ?? '') || DEFAULT_SPAWN_PROFILE
+  const profile = await resolveProfileForSpawn(deps, profileId)
+
+  let summary: ConversationSummary | undefined = resume.existing
+  if (resume.isResume) {
+    summary = await applyResumeConfiguration(deps, request, resume.childId!, resume.existing!, profileId)
+  }
+
+  // 新建路径靶点：request > profile > 父会话镜像（引擎层不再注入 cwd，父
+  // 目录回退在此完成）。与 ctx.host.resolveSpawnTarget 同一权威链
+  // （spawn-target.ts），绝不各自维护；resume 严格沿用原子会话镜像
+  // （nodeId/cwd 不重算），显式 cwd 变更已在上方 updateConversation 收口。
+  const parentSummary = deps.getConversation(request.parentConversationId)
+  const target = resolveSpawnTargetForRequest(deps, request, resume.isResume, profile, summary, parentSummary)
+  // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
+  const gateCwd = target.childCwd
+
+  const structured = prepareStructuredSession(request)
+  if (structured !== undefined && deps.structuredOutputSessions === undefined) {
+    // 装配缺陷显式报错：结果槽无处登记，绝不静默丢结构化结果。
+    throw new HelmError(
+      'invalid_state',
+      '请求携带 schema 但宿主未注入 structuredOutputSessions（装配缺陷）：结构化输出结果槽无处登记',
+      500,
+    )
+  }
+  let childId = resume.childId
+  if (!resume.isResume) {
+    childId = await createChildConversation(
+      deps,
+      request,
+      execution,
+      profile,
+      profileId,
+      structured,
+      target,
+    )
+  } else {
+    notifyResumeResolved(deps, request, childId!, target)
+  }
+
+  const conversation = await deps.harness.conversation(childId as never, bg)
+  if (!conversation) {
+    throw new HelmError('not_found', `子会话不存在：${childId}`, 404)
+  }
+
+  // resume 续接时补挂结构化输出扩展（原会话创建时可能没有；同样需真实注册）。
+  if (resume.isResume && structured) {
+    const extension = buildStructuredOutputExtension(deps.structuredOutputSessions!)
+    deps.installChildExtension(extension)
+    await conversation.configure({ extensions: { add: [extension] } }, bg)
+  }
+
+  // 同名扩展由 Registry 按名字解析；结果槽必须按会话隔离，不能被并发派生的闭包覆盖。
+  return await runChildTurn(deps, request, conversation, childId as number, structured, gateCwd)
+}
+
+/** 请求形状硬校验（同步段；全部显式拒绝，绝不静默改默认）。 */
+function assertSpawnRequestShape(request: AgentSpawnRequest): void {
   if (request.isolation !== undefined && request.isolation !== null && request.isolation !== '') {
     // 内核零业务分支：非空 isolation 到达原生执行行 = 没有插件经 agent_spawn
     // continuation 兑现（如 builtin:workflow 停用时的 worktree 隔离）。
@@ -263,45 +359,35 @@ async function runNativeSpawnTurn(
     )
   }
   if (request.gateTimeoutMs !== undefined) assertGateTimeoutMs(request.gateTimeoutMs)
+}
 
-  // ---- resume 解析：纯数字 convId 或 agentId 映射；绝不猜测续接（'12abc' 拒绝）。----
-  let childId: number | undefined
-  let isResume = false
+/** resume 严格解析：ref 不存在/父归属不符/镜像缺失均显式拒绝，绝不静默新建续接。 */
+function resolveSpawnResume(deps: NativeSpawnDeps, request: AgentSpawnRequest): SpawnResumeContext {
   const resumeRef = request.resume
-  if (resumeRef !== undefined) {
-    childId = resolveResumeRef(deps, resumeRef, request.parentConversationId)
-    if (childId === undefined) {
-      throw new HelmError(
-        'not_found',
-        `resume ref '${resumeRef}' 不存在或不属于父会话 ${request.parentConversationId}：` +
-          `既非既有 agentId 会话映射，也非有效子会话 ID；绝不静默新建续接会话`,
-        404,
-      )
-    }
-    isResume = true
+  if (resumeRef === undefined) return { childId: undefined, isResume: false, existing: undefined }
+  const childId = resolveResumeRef(deps, resumeRef, request.parentConversationId)
+  if (childId === undefined) {
+    throw new HelmError(
+      'not_found',
+      `resume ref '${resumeRef}' 不存在或不属于父会话 ${request.parentConversationId}：` +
+        `既非既有 agentId 会话映射，也非有效子会话 ID；绝不静默新建续接会话`,
+      404,
+    )
   }
-
-  // ---- resume 配置基线：原子会话镜像（profileId/cwd/model）是唯一事实来源。
-  // 缺省沿用；显式 agentType/cwd/model 变更经同一 updateConversation 路径应用
-  // （真实 SDK configure + 镜像持久化，不重建身份字段）。----
-  let existing: ConversationSummary | undefined
-  if (isResume) {
-    existing = deps.getConversation(childId!)
-    if (existing === undefined) {
-      throw new HelmError(
-        'not_found',
-        `resume 会话 ${childId} 无镜像记录（宿主状态不一致）；拒绝盲目续接`,
-        404,
-        { conversationId: childId },
-      )
-    }
+  const existing = deps.getConversation(childId)
+  if (existing === undefined) {
+    throw new HelmError(
+      'not_found',
+      `resume 会话 ${childId} 无镜像记录（宿主状态不一致）；拒绝盲目续接`,
+      404,
+      { conversationId: childId },
+    )
   }
+  return { childId, isResume: true, existing }
+}
 
-  // profile 解析：resume 缺省用原子会话 Profile（不偷偷回默认 assistant）；
-  // 新建路径沿用 agentType || 默认。resume 显式 agentType 为本次 Profile 变更。
-  const profileId = isResume
-    ? (request.agentType ?? existing!.profileId)
-    : (agentType || DEFAULT_SPAWN_PROFILE)
+/** profile 解析：不存在显式 404；声明外部运行时而无插件接管显式 400（不默默降级原生）。 */
+async function resolveProfileForSpawn(deps: NativeSpawnDeps, profileId: string): Promise<ResolvedProfile> {
   const profile = await deps.resolveProfile(profileId)
   if (profile === undefined) {
     throw new HelmError(
@@ -319,44 +405,62 @@ async function runNativeSpawnTurn(
       400,
     )
   }
+  return profile
+}
 
+/** resume 配置应用：显式 agentType/cwd/model/effort 变更经 updateConversation 同步
+ * SDK 与镜像；配置落定后对生效模型做禁用预检（409 model_disabled）。 */
+async function applyResumeConfiguration(
+  deps: NativeSpawnDeps,
+  request: AgentSpawnRequest,
+  childId: number,
+  existing: ConversationSummary,
+  profileId: string,
+): Promise<ConversationSummary> {
   let summary: ConversationSummary | undefined = existing
-  if (isResume) {
-    const patch: ConversationPatch = {}
-    // 显式 agentType 与原子会话 Profile 不同才是变更（相同则不产生无意义写）。
-    if (request.agentType !== undefined && request.agentType !== existing!.profileId) {
-      patch.profileId = profileId
-    }
-    // 显式 cwd 才改写；缺省严格沿用原子会话 cwd（绝不重算到 Profile/Hub 目录）。
-    if (request.cwd !== undefined && request.cwd !== existing!.cwd) patch.cwd = request.cwd
-    // 显式 model 才改写（'provider/model' 覆盖；清覆盖由 '' 显式表达，走同一
-    // updateConversation 语义：重算继承链 + 真实 SDK configure + 镜像持久化）。
-    if (request.model !== undefined && request.model !== deps.getModelOverride(childId!)) {
-      patch.model = request.model
-    }
-    if (request.effort !== undefined) patch.thinkingLevel = request.effort
-    if (Object.keys(patch).length > 0) {
-      summary = await deps.updateConversation(childId!, patch)
-    }
-    // resume 禁用预检：配置落定后、提交输入前对生效模型收口。显式 model 变更
-    // 已在 updateConversation 内检查；这里覆盖其余路径——子会话绑定/继承的
-    // 模型后来被用户禁用时拒绝 resume（409 model_disabled），绝不绕过禁用策略。
-    // 空模型沿用既有未配置语义（submit 阶段 no_model），不在此伪造错误。
-    if (summary!.model !== '') {
-      const resumeRef = parseSpawnModel(summary!.model)
-      deps.assertModelEnabled?.(resumeRef.provider, resumeRef.modelId)
-    }
+  const patch: ConversationPatch = {}
+  // 显式 agentType 与原子会话 Profile 不同才是变更（相同则不产生无意义写）。
+  if (request.agentType !== undefined && request.agentType !== existing.profileId) {
+    patch.profileId = profileId
   }
+  // 显式 cwd 才改写；缺省严格沿用原子会话 cwd（绝不重算到 Profile/Hub 目录）。
+  if (request.cwd !== undefined && request.cwd !== existing.cwd) patch.cwd = request.cwd
+  // 显式 model 才改写（'provider/model' 覆盖；清覆盖由 '' 显式表达，走同一
+  // updateConversation 语义：重算继承链 + 真实 SDK configure + 镜像持久化）。
+  if (request.model !== undefined && request.model !== deps.getModelOverride(childId)) {
+    patch.model = request.model
+  }
+  if (request.effort !== undefined) patch.thinkingLevel = request.effort
+  if (Object.keys(patch).length > 0) {
+    summary = await deps.updateConversation(childId, patch)
+  }
+  // resume 禁用预检：配置落定后、提交输入前对生效模型收口。显式 model 变更
+  // 已在 updateConversation 内检查；这里覆盖其余路径——子会话绑定/继承的
+  // 模型后来被用户禁用时拒绝 resume（409 model_disabled），绝不绕过禁用策略。
+  // 空模型沿用既有未配置语义（submit 阶段 no_model），不在此伪造错误。
+  if (summary!.model !== '') {
+    const modelRef = parseSpawnModel(summary!.model)
+    deps.assertModelEnabled?.(modelRef.provider, modelRef.modelId)
+  }
+  return summary!
+}
 
-  // 新建路径靶点：request > profile > 父会话镜像（引擎层不再注入 cwd，父
-  // 目录回退在此完成）。与 ctx.host.resolveSpawnTarget 同一权威链
-  // （spawn-target.ts），绝不各自维护；resume 严格沿用原子会话镜像
-  // （nodeId/cwd 不重算），显式 cwd 变更已在上方 updateConversation 收口。
-  const parentSummary = deps.getConversation(request.parentConversationId)
-  let targetNodeId: string
+/** 靶点解析：resume 严格沿用镜像；新建走 request > profile > 父会话权威链
+ * （进入 SDK createConversation / 镜像登记 / gate / onResolved 前按目标节点
+ * 平台统一收口：win32 目标上不可映射的 POSIX cwd 显式拒绝，绝不落库；
+ * 远端平台无可信信息时透传，不改写）。 */
+function resolveSpawnTargetForRequest(
+  deps: NativeSpawnDeps,
+  request: AgentSpawnRequest,
+  isResume: boolean,
+  profile: ResolvedProfile,
+  summary: ConversationSummary | undefined,
+  parentSummary: ConversationSummary | undefined,
+): SpawnTarget {
+  let nodeId: string
   let childCwd: string
   if (isResume) {
-    targetNodeId = summary!.nodeId ?? 'local'
+    nodeId = summary!.nodeId ?? 'local'
     childCwd = summary!.cwd
   } else {
     const chain = resolveSpawnTargetChain({
@@ -366,185 +470,185 @@ async function runNativeSpawnTurn(
       profileCwd: profile.cwd,
       parentCwd: parentSummary?.cwd,
       defaultCwd: deps.defaultCwd,
-      // 进入 SDK createConversation / 子会话镜像登记 / gate / onResolved 前
-      // 按目标节点平台统一收口（win32 目标上不可映射的 POSIX cwd 显式拒绝，
-      // 绝不落库；远端平台无可信信息时透传，不改写）。
-      normalize: (cwd, nodeId) =>
+      normalize: (cwd, targetNodeId) =>
         normalizeSessionCwd(cwd, {
-          nodeId,
+          nodeId: targetNodeId,
           trustedPlatform: trustedPlatformFromEnvFabric(deps.envFabric),
           entry: 'agent_spawn',
         }),
     })
-    targetNodeId = chain.nodeId
+    nodeId = chain.nodeId
     childCwd = chain.sourceCwd
   }
-  deps.assertNodeAvailable?.(targetNodeId)
-  // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
-  const gateCwd = childCwd
-  {
-    let structured: StructuredOutputSession | undefined
-    if (request.schema) {
-      // 声明边界即拒绝 $async：AJV 异步校验返回 Promise，同步 boolean 判断会
-      // 把 Promise 当 truthy 放行非法数据（诚实性红线）。
-      if ((request.schema as { $async?: unknown }).$async !== undefined) {
-        throw new HelmError(
-          'invalid_plugin_schema',
-          `schema 含 $async：原生 subagent 同步校验边界不支持异步 Schema`,
-          400,
-        )
-      }
-      structured = { schema: request.schema, accepted: undefined }
-    }
+  deps.assertNodeAvailable?.(nodeId)
+  return { nodeId, childCwd }
+}
 
-    if (!isResume) {
-      // 模型解析链（与会话策略同构）：请求显式 model > profile.model > 全局默认。
-      const modelRef = request.model ? parseSpawnModel(request.model) : undefined
-      const profileModelRef = profile.model ? parseSpawnModel(profile.model) : undefined
-      const resolvedModel = modelRef ?? profileModelRef ?? deps.resolveModel()
-      // 禁用模型在创建前显式拒绝（409 model_disabled）：三条解析路径
-      //（显式 request / profile / 全局默认）统一在此收口，绝不静默落到禁用模型。
-      deps.assertModelEnabled?.(resolvedModel.provider, resolvedModel.modelId)
-      const createModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
-      const extension = structured ? buildStructuredOutputExtension(deps.harness) : undefined
-      if (extension) deps.installChildExtension(extension)
-      const inheritedLevel = request.effort ?? profile.thinkingLevel ?? deps.resolveThinkingLevel?.()
-      const modelsInstance = deps.modelsForClamp?.()
-      const thinkingLevel = modelsInstance
-        ? clampThinkingLevelForModel(modelsInstance, resolvedModel, inheritedLevel)
-        : inheritedLevel
-      const agentChange: AgentChange = {
-        model: { provider: resolvedModel.provider, modelId: resolvedModel.modelId },
-        cwd: childCwd,
-        ...(thinkingLevel ? { thinkingLevel: thinkingLevel as ModelThinkingLevel } : {}),
-        // extensions 需传扩展对象：SDK 存名（names()）但快照解析发生在 install 之后。
-        ...(extension ? { extensions: { add: [extension] } } : {}),
-      }
-      const conv = await deps.harness.createConversation(
-        { ownership: { kind: 'ownerless' }, agent: agentChange },
-        bg,
-      )
-      childId = conv.id as number
-      if (request.agentId) deps.agentSessions.set(request.agentId, childId)
-      // 空窗闭合（见 conversationInTurn 注释）：子会话已存在但 onResolved 尚未
-      // 回传、镜像状态尚非 working 的窗口内，仅此同步占用可见——与 agentSessions
-      // 登记同一同步段 claim，任何并发 resume（宿主管道或直调）立即被拒。
-      claimSpawnConversation(deps.harness, childId)
-      execution.childId = childId
-      // 原生 spawn 不打业务角色标签（tags 由宿主策略决定，内核零角色硬编码）。
-      await deps.registerChildConversation(
-        childId,
-        request.parentConversationId,
-        profileId,
-        childCwd,
-        createModelRef,
-        [],
-        thinkingLevel,
-        targetNodeId,
-        request.effort !== undefined ? thinkingLevel : undefined,
-      )
-      // onResolved 在配置全部落定（创建 + 镜像登记）后回传实际元数据。
-      request.onResolved?.({
-        nodeId: targetNodeId,
-        conversationId: childId,
-        effectiveCwd: childCwd,
-      })
-    } else {
-      // resume：显式 model/cwd/effort 变更已由 updateConversation 同步 SDK 与镜像。
-      // onResolved 移到配置完成后回传更新后的实际 cwd（修复首调自定义 cwd 再 resume
-      // 时 metadata/Gate 指向 Hub 目录而 SDK 仍在旧目录的不一致）。
-      // parentToolCallId 同步更新：本次工具调用的运行期关联立即指向该子会话。
-      if (request.parentToolCallId !== undefined && request.parentToolCallId !== '') {
-        deps.bindChildToolCall?.(childId!, request.parentToolCallId)
-      }
-      request.onResolved?.({
-        nodeId: targetNodeId,
-        conversationId: childId!,
-        effectiveCwd: childCwd,
-      })
-    }
+/** 结构化输出任务槽初始化（无 schema 即纯文本 spawn）。 */
+function prepareStructuredSession(request: AgentSpawnRequest): StructuredOutputSession | undefined {
+  if (!request.schema) return undefined
+  assertSchemaNotAsync(request.schema)
+  return { schema: request.schema, accepted: undefined }
+}
 
-    const conversation = await deps.harness.conversation(childId as never, bg)
-    if (!conversation) {
-      throw new HelmError('not_found', `子会话不存在：${childId}`, 404)
-    }
+/** 新建子会话：模型解析链 -> 禁用预检 -> 扩展安装 -> 创建 -> 空窗 claim ->
+ * 镜像登记 -> onResolved 回传实际元数据。 */
+async function createChildConversation(
+  deps: NativeSpawnDeps,
+  request: AgentSpawnRequest,
+  execution: NativeSpawnExecution,
+  profile: ResolvedProfile,
+  profileId: string,
+  structured: StructuredOutputSession | undefined,
+  target: SpawnTarget,
+): Promise<number> {
+  // 模型解析链（与会话策略同构）：请求显式 model > profile.model > 全局默认。
+  const modelRef = request.model ? parseSpawnModel(request.model) : undefined
+  const profileModelRef = profile.model ? parseSpawnModel(profile.model) : undefined
+  const resolvedModel = modelRef ?? profileModelRef ?? deps.resolveModel()
+  // 禁用模型在创建前显式拒绝（409 model_disabled）：三条解析路径
+  //（显式 request / profile / 全局默认）统一在此收口，绝不静默落到禁用模型。
+  deps.assertModelEnabled?.(resolvedModel.provider, resolvedModel.modelId)
+  const createModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
+  const extension = structured ? buildStructuredOutputExtension(deps.structuredOutputSessions!) : undefined
+  if (extension) deps.installChildExtension(extension)
+  const inheritedLevel = request.effort ?? profile.thinkingLevel ?? deps.resolveThinkingLevel?.()
+  const modelsInstance = deps.modelsForClamp?.()
+  const thinkingLevel = modelsInstance
+    ? clampThinkingLevelForModel(modelsInstance, resolvedModel, inheritedLevel)
+    : inheritedLevel
+  const agentChange: AgentChange = {
+    model: { provider: resolvedModel.provider, modelId: resolvedModel.modelId },
+    cwd: target.childCwd,
+    ...(thinkingLevel ? { thinkingLevel: thinkingLevel as ModelThinkingLevel } : {}),
+    // extensions 需传扩展对象：SDK 存名（names()）但快照解析发生在 install 之后。
+    ...(extension ? { extensions: { add: [extension] } } : {}),
+  }
+  const conv = await deps.harness.createConversation(
+    { ownership: { kind: 'ownerless' }, agent: agentChange },
+    bg,
+  )
+  const childId = conv.id as number
+  if (request.agentId) deps.agentSessions.set(request.agentId, childId)
+  // 空窗闭合（见 conversationInTurn 注释）：子会话已存在但 onResolved 尚未
+  // 回传、镜像状态尚非 working 的窗口内，仅此同步占用可见——与 agentSessions
+  // 登记同一同步段 claim，任何并发 resume（宿主管道或直调）立即被拒。
+  claimSpawnConversation(deps.harness, childId)
+  execution.childId = childId
+  // 原生 spawn 不打业务角色标签（tags 由宿主策略决定，内核零角色硬编码）。
+  await deps.registerChildConversation(
+    childId,
+    request.parentConversationId,
+    profileId,
+    target.childCwd,
+    createModelRef,
+    [],
+    thinkingLevel,
+    target.nodeId,
+    request.effort !== undefined ? thinkingLevel : undefined,
+  )
+  // onResolved 在配置全部落定（创建 + 镜像登记）后回传实际元数据。
+  request.onResolved?.({
+    nodeId: target.nodeId,
+    conversationId: childId,
+    effectiveCwd: target.childCwd,
+  })
+  return childId
+}
 
-    // resume 续接时补挂结构化输出扩展（原会话创建时可能没有；同样需真实注册）。
-    if (isResume && structured) {
-      const extension = buildStructuredOutputExtension(deps.harness)
-      deps.installChildExtension(extension)
-      await conversation.configure({ extensions: { add: [extension] } }, bg)
-    }
+/** resume 续接：显式 model/cwd/effort 变更已由 updateConversation 同步 SDK 与镜像。
+ * parentToolCallId 同步更新（本次工具调用的运行期关联立即指向该子会话）；
+ * onResolved 回传更新后的实际 cwd（与 SDK 一致）。 */
+function notifyResumeResolved(
+  deps: NativeSpawnDeps,
+  request: AgentSpawnRequest,
+  childId: number,
+  target: SpawnTarget,
+): void {
+  if (request.parentToolCallId !== undefined && request.parentToolCallId !== '') {
+    deps.bindChildToolCall?.(childId, request.parentToolCallId)
+  }
+  request.onResolved?.({
+    nodeId: target.nodeId,
+    conversationId: childId,
+    effectiveCwd: target.childCwd,
+  })
+}
 
-    // 同名扩展由 Registry 按名字解析；结果槽必须按会话隔离，不能被并发派生的闭包覆盖。
-    let outputSessions = structuredSessions.get(deps.harness)
-    if (outputSessions === undefined) {
-      outputSessions = new Map<number, StructuredOutputSession>()
-      structuredSessions.set(deps.harness, outputSessions)
-    }
-    if (structured !== undefined) outputSessions.set(childId!, structured)
+/** 提交并守卫子会话回合。
+ *
+ * ---- signal 桥：运行中 abort -> 守卫中止子会话；listener 在 finally 摘除。----
+ * 经宿主守卫入口（内核串行域内原子复核归属+水位；human-owned 拒绝），
+ * 不再直接 conversation.abort——自动取消无条件杀子会话会越过看门狗红线
+ *（ownership 已翻转为 human 的续接子会话受保护）。守卫拒绝时：子会话
+ * 受保护继续独立运行，父侧等待立即以 aborted 终结（本 spawn 不再持有
+ * 父任务），绝不强杀受保护子会话。
+ */
+async function runChildTurn(
+  deps: NativeSpawnDeps,
+  request: AgentSpawnRequest,
+  conversation: Awaited<ReturnType<Harness['conversation']>> & object,
+  childId: number,
+  structured: StructuredOutputSession | undefined,
+  gateCwd: string,
+): Promise<unknown> {
+  const outputSessions = deps.structuredOutputSessions
+  if (structured !== undefined) outputSessions?.set(childId, structured)
 
-    // ---- signal 桥：运行中 abort -> 守卫中止子会话；listener 在 finally 摘除。----
-    // 经宿主守卫入口（内核串行域内原子复核归属+水位；human-owned 拒绝），
-    // 不再直接 conversation.abort——自动取消无条件杀子会话会越过看门狗红线
-    //（ownership 已翻转为 human 的续接子会话受保护）。守卫拒绝时：子会话
-    // 受保护继续独立运行，父侧等待立即以 aborted 终结（本 spawn 不再持有
-    // 父任务），绝不强杀受保护子会话。
-    const abortChildTurn = (): Promise<void> => {
-      const guarded = deps.abortChildConversationGuarded
-      if (guarded !== undefined) return guarded(childId as number)
-      return Promise.resolve(conversation.abort(bg)).then(() => undefined)
-    }
-    let abortError: HelmError | undefined
-    /** 守卫拒绝时的父侧释放（race 败者已吸收，迟到结果不外溢）。 */
-    let releaseParentOnGuardRefusal: ((error: HelmError) => void) | undefined
-    const onAbort = () => {
-      abortError = new HelmError('aborted', '子代理执行被取消（request.signal abort）', 499, {
-        conversationId: childId,
-      })
-      void abortChildTurn().then(
-        () => {
-          // 子会话已中止：其回合结算后 driveTurn 自然返回（abortError 兑底）。
-        },
-        (guardError: unknown) => {
-          const message = guardError instanceof Error ? guardError.message : String(guardError)
-          abortError = new HelmError(
-            'aborted',
-            `子代理执行已取消；子会话 ${String(childId)} 受守卫保护未中止（${message}）`,
-            499,
-            { conversationId: childId },
-          )
-          process.stderr.write(`[helm] 子会话 ${String(childId)} 取消被拒/失败: ${message}\n`)
-          releaseParentOnGuardRefusal?.(abortError)
-        },
-      )
-    }
-    if (request.signal) request.signal.addEventListener('abort', onAbort, { once: true })
-    const guardRefusal = new Promise<never>((_, reject) => {
-      releaseParentOnGuardRefusal = reject
+  const abortChildTurn = (): Promise<void> => {
+    const guarded = deps.abortChildConversationGuarded
+    if (guarded !== undefined) return guarded(childId)
+    return Promise.resolve(conversation.abort(bg)).then(() => undefined)
+  }
+  let abortError: HelmError | undefined
+  /** 守卫拒绝时的父侧释放（race 败者已吸收，迟到结果不外溢）。 */
+  let releaseParentOnGuardRefusal: ((error: HelmError) => void) | undefined
+  const onAbort = () => {
+    abortError = new HelmError('aborted', '子代理执行被取消（request.signal abort）', 499, {
+      conversationId: childId,
     })
-    try {
-      if (request.signal?.aborted) {
-        await abortChildTurn().catch((error: unknown) => {
-          process.stderr.write(
-            `[helm] 子会话 ${String(childId)} 启动期取消被拒/失败: ${
-              error instanceof Error ? error.message : String(error)
-            }\n`,
-          )
-        })
-        throw new HelmError('aborted', '子代理启动期间已取消', 499, { conversationId: childId })
-      }
-      const turn = driveTurn(deps, request, conversation, childId as number, structured, gateCwd)
-      // 守卫拒绝先行后，迟到的子回合结果/异常不再外溢（race 已由拒绝终结）。
-      void turn.catch(() => {})
-      return await Promise.race([turn, guardRefusal])
-    } catch (error) {
-      if (abortError !== undefined && error !== abortError) throw abortError
-      throw error
-    } finally {
-      if (request.signal) request.signal.removeEventListener('abort', onAbort)
-      if (outputSessions.get(childId!) === structured) outputSessions.delete(childId!)
+    void abortChildTurn().then(
+      () => {
+        // 子会话已中止：其回合结算后 driveTurn 自然返回（abortError 兜底）。
+      },
+      (guardError: unknown) => {
+        const message = guardError instanceof Error ? guardError.message : String(guardError)
+        abortError = new HelmError(
+          'aborted',
+          `子代理执行已取消；子会话 ${String(childId)} 受守卫保护未中止（${message}）`,
+          499,
+          { conversationId: childId },
+        )
+        process.stderr.write(`[helm] 子会话 ${String(childId)} 取消被拒/失败: ${message}\n`)
+        releaseParentOnGuardRefusal?.(abortError)
+      },
+    )
+  }
+  if (request.signal) request.signal.addEventListener('abort', onAbort, { once: true })
+  const guardRefusal = new Promise<never>((_, reject) => {
+    releaseParentOnGuardRefusal = reject
+  })
+  try {
+    if (request.signal?.aborted) {
+      await abortChildTurn().catch((error: unknown) => {
+        process.stderr.write(
+          `[helm] 子会话 ${String(childId)} 启动期取消被拒/失败: ${
+            error instanceof Error ? error.message : String(error)
+          }\n`,
+        )
+      })
+      throw new HelmError('aborted', '子代理启动期间已取消', 499, { conversationId: childId })
     }
+    const turn = driveTurn(deps, request, conversation, childId, structured, gateCwd)
+    // 守卫拒绝先行后，迟到的子回合结果/异常不再外溢（race 已由拒绝终结）。
+    void turn.catch(() => {})
+    return await Promise.race([turn, guardRefusal])
+  } catch (error) {
+    if (abortError !== undefined && error !== abortError) throw abortError
+    throw error
+  } finally {
+    if (request.signal) request.signal.removeEventListener('abort', onAbort)
+    if (outputSessions !== undefined && outputSessions.get(childId) === structured) outputSessions.delete(childId)
   }
 }
 
@@ -644,77 +748,6 @@ function assertNotUnanswered(settled: { status: string; reason?: string }, child
   )
 }
 
-interface StructuredOutputSession {
-  schema: Record<string, unknown>
-  accepted: unknown | undefined
-}
-
-/** 工具定义可复用；输出校验与结果槽按当前 Harness 的真实会话 ID 定位。 */
-function buildStructuredOutputExtension(harness: Harness): Extension {
-  const tool: ToolRegistration = defineTool({
-    name: 'register_structured_output',
-    description:
-      '提交最终结构化结果。output 必须满足任务给定的 JSON Schema；校验失败会收到错误并被要求重试。',
-    parameters: {
-      type: 'object',
-      properties: {
-        output: {
-          description: '满足任务 JSON Schema 的结构化结果（任意 JSON 值，含 null）',
-        },
-      },
-      required: ['output'],
-      // output 值形状由任务 Schema 全量校验，这里不限制其内部结构。
-      additionalProperties: false,
-    },
-    structuredOutputSchema: {
-      type: 'object',
-      properties: { accepted: { type: 'boolean' } },
-      required: ['accepted'],
-    },
-    async execute(args, api) {
-      const session = structuredSessions.get(harness)?.get(api.conversationId as number)
-      if (session === undefined) {
-        return { output: [{ type: 'text', text: '当前会话没有在途的结构化输出任务。' }], isError: true }
-      }
-      let payload = (args as { output?: unknown }).output
-      let result = validateAgainstSchema(payload, session.schema)
-      // 防御性反序列化：若初始校验未通过且入参为字符串，尝试 JSON.parse 后再次校验
-      // （兼容模型因无强类型声明或传输层序列化而将结构化 JSON 编码为字符串的场景）。
-      if (!result.ok && typeof payload === 'string') {
-        try {
-          const parsed = JSON.parse(payload)
-          const secondResult = validateAgainstSchema(parsed, session.schema)
-          if (secondResult.ok) {
-            payload = parsed
-            result = secondResult
-          }
-        } catch {
-          // 非合法 JSON 字符串，保持初始校验报错
-        }
-      }
-      if (!result.ok) {
-        return {
-          output: [
-            {
-              type: 'text',
-              text:
-                `结构化输出校验失败，请修正后重新调用 register_structured_output：\n${result.errors}` +
-                `\n\nSchema: ${JSON.stringify(session.schema)}`,
-            },
-          ],
-          isError: true,
-        }
-      }
-      session.accepted = payload
-      return {
-        output: [{ type: 'text', text: '结构化输出已接受。' }],
-        structuredOutput: { accepted: true },
-      }
-    },
-  }) as ToolRegistration
-  return defineExtension({ name: 'helm-structured-output', tools: [tool] }) as Extension
-}
-
 async function settleGate(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
@@ -765,121 +798,6 @@ function assertGateTimeoutMs(value: number): void {
       { gateTimeoutMs: value },
     )
   }
-}
-
-/** AJV 全量校验（复用 plugins/schema；$async 在编译期已拒绝）。 */
-function validateAgainstSchema(
-  value: unknown,
-  schema: Record<string, unknown>,
-): { ok: true; value: unknown } | { ok: false; errors: string } {
-  try {
-    validateOrThrow(schema, value, '结构化输出校验失败', 'schema_validation_failed', 502)
-    return { ok: true, value }
-  } catch (error) {
-    if (error instanceof HelmError && error.code === 'schema_validation_failed') {
-      return { ok: false, errors: error.message }
-    }
-    throw error
-  }
-}
-
-/** 从文本提取候选并做全量 Schema 校验；支持任意合法 JSON 顶层（null/bool/number/string/跨行）。 */
-export function parseSchemaCandidate(
-  text: string,
-  schema: Record<string, unknown>,
-): { ok: true; value: unknown } | { ok: false; raw: string } {
-  for (const candidate of extractJsonCandidates(text)) {
-    const result = validateAgainstSchema(candidate, schema)
-    if (result.ok) return { ok: true, value: result.value }
-  }
-  return { ok: false, raw: text }
-}
-
-function extractJsonCandidates(text: string): unknown[] {
-  const out: unknown[] = []
-  const seen = new Set<unknown>()
-  const push = (value: unknown) => {
-    const key = JSON.stringify(value)
-    if (!seen.has(key)) {
-      seen.add(key)
-      out.push(value)
-    }
-  }
-  // 1) fenced json block（优先：明确的意图标记）。
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/g
-  for (const match of text.matchAll(fenced)) {
-    const parsed = safeParse(match[1] ?? '')
-    if (parsed !== undefined) push(parsed)
-  }
-  // 2) 平衡扫描提取全部 {...} / [...] 字面量（含跨行；后出现的优先，unshift 保持顺序倒序）。
-  const bracketed = scanBalanced(text)
-  for (const candidate of bracketed) push(candidate)
-  // 3) 整体文本是合法 JSON（null/true/42/"text" 等标量顶层）。
-  const whole = safeParse(text)
-  if (whole !== undefined) push(whole)
-  return out
-}
-
-/** 扫描文本中所有平衡的 {...}/[...] 片段，返回按出现顺序的解析结果。 */
-function scanBalanced(text: string): unknown[] {
-  const results: unknown[] = []
-  const stack: Array<{ start: number; ch: string }> = []
-  let inString = false
-  let escape = false
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i] as string
-    if (inString) {
-      if (escape) escape = false
-      else if (ch === '\\') escape = true
-      else if (ch === '"') inString = false
-      continue
-    }
-    if (ch === '"') {
-      inString = true
-      continue
-    }
-    if (ch === '{' || ch === '[') {
-      stack.push({ start: i, ch })
-      continue
-    }
-    if ((ch === '}' || ch === ']') && stack.length > 0) {
-      const open = stack[stack.length - 1] as { start: number; ch: string }
-      if ((ch === '}' && open.ch === '{') || (ch === ']' && open.ch === '[')) {
-        stack.pop()
-        if (stack.length === 0) {
-          // 顶层闭合：整个片段是候选（嵌套子对象由外层覆盖，不重复提取）。
-          const parsed = safeParse(text.slice(open.start, i + 1))
-          if (parsed !== undefined) results.push(parsed)
-        }
-      } else {
-        // 不平衡（如 "}" 出现但栈顶是 "["）：丢弃当前片段，防止提取残缺 JSON。
-        stack.length = 0
-      }
-    }
-  }
-  return results
-}
-
-function safeParse(text: string): unknown | undefined {
-  const trimmed = text.trim()
-  if (trimmed === '') return undefined
-  try {
-    return JSON.parse(trimmed) as unknown
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * 兼容入口：完整 AJV 校验（plugins/schema 复用；$async 显式拒绝）。
- * 保留导出供既有消费方；行为等价 validateOrThrow 的 boolean 包装。
- */
-export function validateJsonSchema(
-  value: unknown,
-  schema: Record<string, unknown>,
-): { ok: boolean; errors: string[] } {
-  const result = validateAgainstSchema(value, schema)
-  return result.ok ? { ok: true, errors: [] } : { ok: false, errors: [result.errors] }
 }
 
 function parseSpawnModel(ref: string): { provider: string; modelId: string } {

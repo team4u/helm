@@ -91,6 +91,7 @@ async function openSpawnEnv(options: {
     getLastAssistantText: (id) => lastTexts.get(id),
     resolveModel: () => ({ provider: 'faux', modelId: 'faux-1' }),
     agentSessions: new Map(),
+    structuredOutputSessions: new Map(),
     registerChildConversation: async (childId, parentId, profileId, childCwd, _modelMirror, _tags, _thinking, nodeId) => {
       parents.set(childId, parentId)
       mirrors.set(childId, { profileId, cwd: childCwd, ...(nodeId !== undefined ? { nodeId } : {}), model: 'faux/faux-1' })

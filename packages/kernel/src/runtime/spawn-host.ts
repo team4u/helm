@@ -14,6 +14,7 @@ import type { Profile } from '../services/index.js'
 import { requireModelRef } from './models.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import type { NativeSpawnDeps, ResolvedProfile } from './spawn.js'
+import type { StructuredOutputSession } from './structured-output.js'
 
 /**
  * 宿主注入 runNativeSpawn 的完整依赖集（镜像登记、Profile 解析、会话配置
@@ -44,6 +45,8 @@ export interface SpawnHostSource {
   /** 模型禁用预检（ModelRegistry.assertModelEnabled；创建子会话前拒绝禁用模型）。 */
   assertModelEnabled?(provider: string, modelId: string): void
   readonly agentSessions: Map<string, number>
+  /** 本 Harness 共享的结构化输出结果槽（宿主持有；并发 spawn 隔离靠 conversationId 键）。 */
+  readonly structuredOutputSessions: Map<number, StructuredOutputSession>
   readonly resolvedAttachments: ResolvedAttachmentRef[] | undefined
   isNodeOnline(nodeId: string): boolean
   /** [Attached Files] 清单块（无正文前缀；spawn 任务提示词用）。 */
@@ -119,6 +122,7 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
       ? { modelsForClamp: source.models }
       : {}),
     agentSessions: source.agentSessions,
+    structuredOutputSessions: source.structuredOutputSessions,
     assertNodeAvailable: (nodeId) => {
       if (!source.isNodeOnline(nodeId)) {
         throw new HelmError('node_offline', `目标节点 ${nodeId} 离线，不能启动子代理`, 409, { nodeId })
