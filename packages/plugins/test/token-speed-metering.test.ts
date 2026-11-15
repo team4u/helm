@@ -169,3 +169,52 @@ test('精度：单增长帧段（跨度 0）不进速率对——终态无速率
   assert.equal(settled.outputTokens, 100)
   assert.equal(settled.tps, undefined, '跨度 0 无可靠时间测量，不以最小跨度伪造终态速率')
 })
+
+test('完成后的迟到内容帧与旧任务帧均不能复活已消费的请求', { timeout: 60_000 }, () => {
+  const tracker = trackerOf()
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message({ text: 'a'.repeat(40) }) } })
+  tracker.noteCompletion(success(1, 20))
+  tracker.observeFrame(150, { generation: { taskId: 1, attempt: 1, message: message({ text: 'a'.repeat(80) }) } })
+  assert.equal(tracker.liveStatus(150)!.outputTokens, 20)
+  tracker.observeFrame(200, { generation: { taskId: 2, attempt: 1 } })
+  tracker.observeFrame(250, { generation: { taskId: 2, attempt: 1, message: message({ text: 'b'.repeat(40) }) } })
+  tracker.observeFrame(300, { generation: { taskId: 1, attempt: 2, message: message({ text: 'a'.repeat(400) }) } })
+  tracker.noteCompletion(success(2, 30))
+  assert.equal(tracker.settle(400)!.outputTokens, 50, '旧任务不挤掉当前请求，不额外累计')
+})
+
+test('跨请求的实时窗口清空，短工具间隙也不混入上一请求的速率', { timeout: 60_000 }, () => {
+  const tracker = trackerOf()
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message({ text: 'a'.repeat(400) }) } })
+  tracker.observeFrame(200, { generation: { taskId: 1, attempt: 1, message: message({ text: 'a'.repeat(800) }) } })
+  tracker.noteCompletion(success(1, 200))
+  tracker.observeFrame(250, { generation: { taskId: 2, attempt: 1, message: message({ text: 'b'.repeat(4) }) } })
+  assert.equal(tracker.liveStatus(250)!.tps, 10, '只计本次生成的1 token / 最小100ms窗口')
+})
+
+test('长回合超过段缓存上限仍保留全部成功响应的计数与解码时间', { timeout: 60_000 }, () => {
+  const tracker = trackerOf()
+  for (let taskId = 1; taskId <= 100; taskId += 1) {
+    const start = taskId * 1000
+    tracker.observeFrame(start, { generation: { taskId, attempt: 1 } })
+    tracker.observeFrame(start + 100, { generation: { taskId, attempt: 1, message: message({ text: 'a'.repeat(20) }) } })
+    tracker.observeFrame(start + 200, { generation: { taskId, attempt: 1, message: message({ text: 'a'.repeat(40) }) } })
+    tracker.noteCompletion(success(taskId, 10))
+  }
+  const settled = tracker.settle(101_000)!
+  assert.equal(settled.outputTokens, 1000)
+  assert.equal(settled.decodeMs, 10_000)
+  assert.equal(settled.tps, 100)
+})
+
+test('字符估算按累计量取整，不因逐字小帧而成倍计量', { timeout: 60_000 }, () => {
+  const tracker = trackerOf()
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  for (let chars = 1; chars <= 8; chars += 1) {
+    tracker.observeFrame(chars * 100, { generation: { taskId: 1, attempt: 1, message: message({ text: 'x'.repeat(chars) }) } })
+  }
+  assert.equal(tracker.liveStatus(800)!.outputTokens, 2, '8字符约2 tokens，不是每帧1 token累计8次')
+  assert.equal(tracker.liveStatus(800)!.decodeMs, 700, '不增加取整后token数的内容增长仍推进观测时间')
+})

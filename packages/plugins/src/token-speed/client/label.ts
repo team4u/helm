@@ -54,7 +54,7 @@ export function tokenSpeedLabelOf(status: {
   if (status.phase === 'settled') {
     return {
       text: `≈${tps.toFixed(1)} tok/s`,
-      title: `最近回合解码 ≈${tps.toFixed(1)} tok/s（对账 ${tokens} tok / 观测解码净耗时 ${secondsLabel(status.decodeMs)}，口径 ${source}；时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行${ttft}）`,
+      title: `最近回合解码 ≈${tps.toFixed(1)} tok/s（对账累计 ${tokens} tok，观测解码净耗时 ${secondsLabel(status.decodeMs)}，口径 ${source}；速率仅统计计数与时长可配对的响应；时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行${ttft}）`,
     }
   }
   const windowSeconds = status.windowMs / 1000

@@ -50,7 +50,7 @@ export interface TokenSpeedStatus {
    * settled = 回合已结算（终态对账值，保留到下一回合开始）。 */
   phase: 'decoding' | 'tools' | 'settled'
   /** 当前速率 tokens/sec：decoding = 时间滑动窗口速率；settled = 对账解码
-   * 速率（outputTokens / decodeMs）。无可靠测量（首字前 / 窗口滑空 / 工具
+   * 速率（仅汇总计数与时长可配对的响应）。无可靠测量（首字前 / 窗口滑空 / 工具
    * 暂停 / 终态无可测累计）时省略——绝不以 0.0 冒充真实速率。 */
   tps?: number
   /** 累计输出 tokens（口径见 source；终态已尽量用最终 usage.output 对账）。 */
@@ -61,7 +61,7 @@ export interface TokenSpeedStatus {
   decodeMs: number
   source: TokenSpeedSource
   /** 本回合首字延迟（毫秒）。起点是插件首次观测到空 generation 的帧时间
-   * （内核不提供请求开始锚点，不伪造；受双重节流限制，略偏大）。 */
+   * （内核不提供请求开始锚点，不伪造；受双重节流影响，可能偏大或偏小）。 */
   ttftMs?: number
   /** 生效的时间滑动窗口（毫秒）；速率口径说明用。 */
   windowMs: number

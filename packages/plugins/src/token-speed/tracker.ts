@@ -48,7 +48,7 @@ interface WindowEvent {
 /** 事件数组死前缀压缩阈值（对齐 pi-token-speed COMPACTION_THRESHOLD）。 */
 const WINDOW_COMPACTION_THRESHOLD = 5000
 
-/** 链内段记录上限：防御异常事件序列无界堆积（真实回合远小于此）。 */
+/** 已完成段超过此数即折叠为累计值；不丢失长回合的 token 与时间。 */
 const MAX_SEGMENTS = 64
 
 /** 已消费 entry id 上限（防重去重有界）。 */
@@ -198,6 +198,11 @@ export class ConversationTokenSpeedTracker {
   private readonly byTask = new Map<number, Segment>()
   /** 已消费完成事实的 entry id（重复 entry 不重复计量）。 */
   private readonly seenEntryIds = new Set<string>()
+  /** 已消费的任务/尝试水位，拒绝完成后的迟到快照；SDK 任务 ID 单调递增。 */
+  private readonly completedAttempts = new Map<number, number>()
+  private highestTaskId = 0
+  /** 已折叠成功段的累计事实，长回合不因记录上限丢失计数。 */
+  private readonly retired = { tokens: 0, decodeMs: 0, rateTokens: 0, rateDecodeMs: 0, provider: false, estimate: false }
   private readonly window: SlidingWindow
   private readonly windowMs: number
   /** 最近一次观测到无内容 generation 的帧时间（TTFT 起点锚；仅干净观测可测）。 */
@@ -224,11 +229,18 @@ export class ConversationTokenSpeedTracker {
     const segment = this.byTask.get(fact.taskId)
     if (segment === undefined) return // 从未观测该请求的流（中途启用/迟到）：不可关联
     this.byTask.delete(fact.taskId)
+    this.completedAttempts.set(fact.taskId, segment.attempt)
+    if (this.completedAttempts.size > MAX_SEEN_ENTRIES) {
+      this.completedAttempts.delete(this.completedAttempts.keys().next().value!)
+    }
     const failed = fact.stopReason === 'error' || fact.stopReason === 'aborted'
     if (failed) {
       // 失败尝试：段计数与解码时间全部丢弃，usage 不误配到成功重试。
       segment.state = 'discarded'
-      if (this.active === segment) this.active = undefined
+      if (this.active === segment) {
+        this.active = undefined
+        this.window.reset()
+      }
       return
     }
     segment.state = 'done'
@@ -249,6 +261,13 @@ export class ConversationTokenSpeedTracker {
       this.closeActive()
       return
     }
+    // 工具轮 taskId 单调递增；同任务的 attempt 也单调递增。定时器中迟到的
+    // 已完成/旧任务快照不能重新打开测量段，更不能污染当前请求的窗口。
+    if (generation.taskId < this.highestTaskId) return
+    if (generation.attempt <= (this.completedAttempts.get(generation.taskId) ?? 0)) return
+    const heldRequest = this.byTask.get(generation.taskId)
+    if (heldRequest !== undefined && generation.attempt < heldRequest.attempt) return
+    this.highestTaskId = Math.max(this.highestTaskId, generation.taskId)
     this.phase = 'decoding'
 
     const chars = generatedCharsOf(generation.message)
@@ -293,6 +312,8 @@ export class ConversationTokenSpeedTracker {
           const seenOutput = generation.message?.usage?.output
           if (seenOutput !== undefined) segment.providerOutput = seenOutput
         }
+        // 实时窗口仅描述本次请求；前一请求与工具执行间隙不进入窗口分母。
+        this.window.reset()
         this.pushSegment(segment)
         this.active = segment
       }
@@ -307,11 +328,12 @@ export class ConversationTokenSpeedTracker {
       segment.providerOutput = provider
       segment.usedProvider = true
     } else if (deltaChars > 0) {
-      deltaTokens = estimateTokensOf(deltaChars)
-      segment.usedEstimate = true
+      // 对累计字符量取整后再求差，避免每个小帧分别 ceil 导致持续高估。
+      deltaTokens = estimateTokensOf(chars) - estimateTokensOf(segment.chars)
+      segment.usedEstimate ||= deltaTokens > 0
     }
     segment.chars = Math.max(segment.chars, chars)
-    if (deltaTokens <= 0) return
+    if (deltaChars <= 0 && deltaTokens <= 0) return
 
     if (this.firstContentAt === undefined) {
       this.firstContentAt = now
@@ -324,7 +346,7 @@ export class ConversationTokenSpeedTracker {
     if (segment.firstGrowthAt === undefined) segment.firstGrowthAt = now
     segment.lastGrowthAt = now
     segment.tokens += deltaTokens
-    this.window.record(now, deltaTokens, segment.id)
+    if (deltaTokens > 0) this.window.record(now, deltaTokens, segment.id)
   }
 
   /** 关闭活动段（边界帧 / 完成事实）：等待完成事实精确对账。 */
@@ -335,17 +357,23 @@ export class ConversationTokenSpeedTracker {
     if (segment.state === 'open') segment.state = 'closed'
   }
 
-  /** 段入册（有界）：超出上限丢弃最旧的非活动段（防御异常序列）。 */
+  /** 只折叠已完成段，保留累计量；尚待完成事实的段不可静默丢弃。 */
   private pushSegment(segment: Segment): void {
     this.segments.push(segment)
     this.byTask.set(segment.taskId, segment)
     if (this.segments.length <= MAX_SEGMENTS) return
-    const index = this.segments.findIndex((item) => item !== this.active)
-    if (index >= 0) {
-      const [dropped] = this.segments.splice(index, 1)
-      if (dropped !== undefined && this.byTask.get(dropped.taskId) === dropped) {
-        this.byTask.delete(dropped.taskId)
-      }
+    const index = this.segments.findIndex((item) => item.state === 'done' || item.state === 'discarded')
+    if (index < 0) return
+    const [retired] = this.segments.splice(index, 1)
+    if (retired === undefined || retired.state === 'discarded') return
+    const span = this.spanOf(retired)
+    this.retired.tokens += retired.tokens
+    this.retired.decodeMs += span
+    this.retired.provider ||= retired.usedProvider
+    this.retired.estimate ||= retired.usedEstimate
+    if (!retired.rateExcluded && span > 0) {
+      this.retired.rateTokens += retired.tokens
+      this.retired.rateDecodeMs += span
     }
   }
 
@@ -366,8 +394,8 @@ export class ConversationTokenSpeedTracker {
   }
 
   private sourceOf(): TokenSpeedSource {
-    let provider = 0
-    let estimate = 0
+    let provider = this.retired.provider ? 1 : 0
+    let estimate = this.retired.estimate ? 1 : 0
     for (const segment of this.countedSegments()) {
       if (segment.usedProvider) provider += 1
       if (segment.usedEstimate) estimate += 1
@@ -380,9 +408,9 @@ export class ConversationTokenSpeedTracker {
   /** 组装当前实时状态；尚无可显示测量返回 undefined。 */
   liveStatus(now: number): TokenSpeedStatus | undefined {
     const counted = this.countedSegments()
-    const tokens = counted.reduce((acc, segment) => acc + segment.tokens, 0)
+    const tokens = counted.reduce((acc, segment) => acc + segment.tokens, this.retired.tokens)
     if (tokens <= 0) return undefined
-    const decodeMs = counted.reduce((acc, segment) => acc + this.spanOf(segment), 0)
+    const decodeMs = counted.reduce((acc, segment) => acc + this.spanOf(segment), this.retired.decodeMs)
     const status: TokenSpeedStatus = {
       phase: this.phase,
       outputTokens: tokens,
@@ -404,9 +432,9 @@ export class ConversationTokenSpeedTracker {
   settle(now: number): TokenSpeedStatus | undefined {
     this.closeActive()
     const counted = this.countedSegments()
-    const tokens = counted.reduce((acc, segment) => acc + segment.tokens, 0)
+    const tokens = counted.reduce((acc, segment) => acc + segment.tokens, this.retired.tokens)
     if (tokens <= 0) return undefined
-    const decodeMs = counted.reduce((acc, segment) => acc + this.spanOf(segment), 0)
+    const decodeMs = counted.reduce((acc, segment) => acc + this.spanOf(segment), this.retired.decodeMs)
     const status: TokenSpeedStatus = {
       phase: 'settled',
       outputTokens: tokens,
@@ -419,8 +447,8 @@ export class ConversationTokenSpeedTracker {
     // 终态速率 = 可配对段（计数与时间同源）的 tokens / decodeMs；整条对账的
     // 基线段与单帧段（跨度 0）不进分子分母——无可配对测量就不产速率。
     const rateable = this.rateableSegments()
-    const rateTokens = rateable.reduce((acc, segment) => acc + segment.tokens, 0)
-    const rateDecodeMs = rateable.reduce((acc, segment) => acc + this.spanOf(segment), 0)
+    const rateTokens = rateable.reduce((acc, segment) => acc + segment.tokens, this.retired.rateTokens)
+    const rateDecodeMs = rateable.reduce((acc, segment) => acc + this.spanOf(segment), this.retired.rateDecodeMs)
     if (rateTokens > 0 && rateDecodeMs > 0) {
       const tps = (rateTokens / rateDecodeMs) * 1000
       if (Number.isFinite(tps) && tps > 0) return { ...status, tps }
@@ -434,6 +462,9 @@ export class ConversationTokenSpeedTracker {
     this.active = undefined
     this.byTask.clear()
     this.seenEntryIds.clear()
+    this.completedAttempts.clear()
+    this.highestTaskId = 0
+    Object.assign(this.retired, { tokens: 0, decodeMs: 0, rateTokens: 0, rateDecodeMs: 0, provider: false, estimate: false })
     this.window.reset()
     this.emptyGenerationSeenAt = undefined
     this.firstContentAt = undefined

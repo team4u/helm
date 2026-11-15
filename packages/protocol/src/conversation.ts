@@ -206,9 +206,9 @@ export interface ConversationEntry {
   data?: unknown
   /** 模型上下文消息（如 assistant 文本）；纯展示/簿记 entry 无此字段。 */
   model?: unknown[]
-  /** 追加该 entry 的生成任务（SDK byTaskId；scheduler 上下文等无归属时缺省）。
-   * 消费方据它与 ConversationLiveGeneration.taskId 精确关联「哪次模型请求
-   * 产生了这条 entry」；缺省时不可猜测归属。 */
+  /** 追加该 entry 的执行任务（SDK byTaskId；scheduler 上下文等无归属时缺省）。
+   * assistant 条目可据它与 ConversationLiveGeneration.taskId 关联；其他
+   * 条目也可能来自工具等任务，缺省时不可猜测归属。 */
   taskId?: number
   createdAt?: number
 }
@@ -262,7 +262,7 @@ export interface ConversationLive {
   updatedAt: number
 }
 
-/** 当前 generation 的通用流式执行事实（内核仪透传观察事实，绝不计算速率；
+/** 当前 generation 的通用流式执行事实（内核仅透传观察事实，绝不计算速率；
  * 解码速率 / TTFT / 对账等策略由消费方（如 builtin:token-speed 插件）自行推导）。
  *
  * 时间口径诚实性：SDK LiveState 不提供请求开始的 wall/monotonic 锚点，
