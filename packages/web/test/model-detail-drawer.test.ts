@@ -360,3 +360,105 @@ test('ModelDetailDrawer DOM: 胶囊徽章按 tags 顺序真实挂载，无标签
   })
   container.remove()
 })
+
+// ---------------------------------------------------------------------------
+// 4. 服务端点编辑性：插件/内置供应商只读，自定义网关可编辑且空值阻断保存
+// ---------------------------------------------------------------------------
+
+test('ModelDetailDrawer: 插件网关服务端点只读展示并指向插件配置（不再假编辑）', { timeout: 60_000 }, () => {
+  // 复现用户场景：在模型界面试图修改 magpie 网关地址——此前该字段可编辑
+  // 但保存链路从不持久化 baseUrl，改了也回默认地址。
+  const provider: ProviderItem = {
+    id: 'magpie',
+    name: 'Magpie',
+    type: 'commercial',
+    configured: true,
+    modelsCount: 3,
+    baseUrl: 'http://127.0.0.1:3425/v1',
+    dynamic: true,
+    pluginId: 'builtin:magpie',
+    models: [{ id: 'glm-4.6', name: 'GLM 4.6', enabled: true }],
+  }
+
+  const html = renderToStaticMarkup(
+    e(ModelDetailDrawer, { provider, open: true, inline: true, onClose: () => {} }),
+  )
+
+  // 无可编辑端点输入框：只读展示当前生效端点
+  assert.doesNotMatch(html, /id="model-drawer-base-url"/, '插件网关端点不得渲染可编辑输入框')
+  assert.match(html, /http:\/\/127\.0\.0\.1:3425\/v1/)
+  // 提示如实指向真正的配置入口（插件配置），不装作已保存
+  assert.match(html, /该端点由插件 builtin:magpie 的配置管理/)
+  assert.match(html, /插件中心/)
+})
+
+test('ModelDetailDrawer: 内置供应商服务端点只读且提示固定不可改', { timeout: 60_000 }, () => {
+  const provider: ProviderItem = {
+    id: 'ollama',
+    name: 'Ollama',
+    type: 'local',
+    configured: false,
+    modelsCount: 0,
+    baseUrl: 'http://127.0.0.1:11434',
+    models: [],
+  }
+
+  const html = renderToStaticMarkup(
+    e(ModelDetailDrawer, { provider, open: true, inline: true, onClose: () => {} }),
+  )
+
+  assert.doesNotMatch(html, /id="model-drawer-base-url"/)
+  assert.match(html, /http:\/\/127\.0\.0\.1:11434/)
+  assert.match(html, /内置固定值/)
+})
+
+test('ModelDetailDrawer: 自定义网关端点可编辑，清空后保存显式报错且不提交', { timeout: 60_000 }, async () => {
+  const provider: ProviderItem = {
+    id: 'my-gateway',
+    name: 'My Gateway',
+    type: 'commercial',
+    configured: true,
+    modelsCount: 1,
+    baseUrl: 'http://10.0.0.8:8000/v1',
+    custom: true,
+    models: [{ id: 'gw-model', name: 'GW Model', enabled: true }],
+  }
+
+  const saved: Array<{ baseUrl?: string }> = []
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  await act(async () => {
+    root.render(
+      e(ModelDetailDrawer, {
+        provider,
+        open: true,
+        inline: true,
+        onClose: () => {},
+        onSave: async (_id, data) => {
+          saved.push({ baseUrl: data.baseUrl })
+        },
+      }),
+    )
+  })
+
+  // 自定义网关保留可编辑输入框
+  const endpointInput = container.querySelector('input#model-drawer-base-url') as HTMLInputElement
+  assert.ok(endpointInput, '自定义网关应渲染可编辑端点输入框')
+
+  // 清空端点后保存：显式报错，绝不静默提交
+  await act(async () => {
+    typeIntoInput(endpointInput, '')
+  })
+  await act(async () => {
+    findButtonByText(container, '保存配置')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  })
+  assert.equal(saved.length, 0, '端点为空时不得触发保存回调')
+  assert.match(container.textContent ?? '', /自定义网关的服务端点不能为空/)
+
+  await act(async () => {
+    root.unmount()
+  })
+  container.remove()
+})

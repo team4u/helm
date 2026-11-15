@@ -467,12 +467,14 @@ test('ModelDetailDrawer SSR: inline={true} 渲染凭据表单、连通性按钮�
   assert.match(html, /OpenAI/)
   assert.match(html, /class="[^"]*mono[^"]*"[^>]*>openai<\/div>/)
 
-  // 2. 表单字段（API Key 输入框与 Base URL 输入框）
+  // 2. 表单字段（API Key 输入框；内置供应商服务端点只读展示，不可假编辑）
   assert.match(html, /API 密钥/)
   assert.match(html, /type="password"/)
   assert.match(html, /placeholder="已配置（留空保持不变）"/)
   assert.match(html, /服务端点/)
-  assert.match(html, /value="https:\/\/api\.openai\.com\/v1"/)
+  assert.doesNotMatch(html, /id="model-drawer-base-url"/, '内置供应商端点不得渲染可编辑输入框')
+  assert.match(html, /https:\/\/api\.openai\.com\/v1/)
+  assert.match(html, /内置固定值/)
 
   // 3. 测试连接按钮
   assert.match(html, /测试连接/)
@@ -741,3 +743,158 @@ test('契约：ModelCenter 主 Tab 容器接入 model-center-main-tabs 保持视
   )
 })
 
+
+// ---------------------------------------------------------------------------
+// 4b. 自定义网关服务端点真实持久化（修复：模型界面的端点编辑此前被静默丢弃）
+// ---------------------------------------------------------------------------
+
+test('ModelCenter: 自定义网关端点保存经 PUT /api/providers 只改该条 baseUrl（其余网关原样保留）', { timeout: 60_000 }, async () => {
+  const { act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const gateways: ProviderConfig[] = [
+    {
+      id: 'my-gateway',
+      protocol: 'openai',
+      baseUrl: 'http://10.0.0.8:8000/v1',
+      models: ['gw-model'],
+      label: 'My Gateway',
+      enabled: true,
+    },
+    {
+      id: 'other-gateway',
+      protocol: 'anthropic',
+      baseUrl: 'https://other.example.com/v1',
+      models: ['other-model'],
+      enabled: true,
+    },
+  ]
+
+  // 深链直达自定义网关抽屉；真实 handleSave 链路（保存 → saveProviders → PUT）
+  const store = makeTestStore({
+    providers: gateways,
+    primaryTarget: { kind: 'models', providerId: 'my-gateway' },
+  })
+
+  const putBodies: Array<unknown> = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === 'string' ? input : (input as URL).toString()
+    if (init?.method === 'PUT' && path === '/api/providers') {
+      putBodies.push(JSON.parse(String(init.body)))
+    }
+    if (path === '/api/models/providers') return new Response(JSON.stringify([]), { status: 200 })
+    if (path === '/api/models/default') return new Response(JSON.stringify({}), { status: 200 })
+    return new Response(JSON.stringify({ ok: true }), { status: 200 })
+  }) as typeof fetch
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })))
+    })
+
+    // 融合自 store.providers 的自定义网关：端点可编辑
+    const endpointInput = container.querySelector('input#model-drawer-base-url') as HTMLInputElement
+    assert.ok(endpointInput, '自定义网关应渲染可编辑端点输入框')
+    assert.equal(endpointInput.value, 'http://10.0.0.8:8000/v1')
+
+    // 修改端点并保存：真实走 ModelCenter.handleSave → assetsApi.saveProviders
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+    setter?.call(endpointInput, 'http://192.168.1.5:9000/v1')
+    endpointInput.dispatchEvent(new Event('input', { bubbles: true }))
+    const saveBtn = Array.from(container.querySelectorAll('button')).find(
+      (btn) => (btn.textContent ?? '').includes('保存配置'),
+    )!
+    await act(async () => {
+      saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+
+    assert.equal(putBodies.length, 1, '端点变更应恰好触发一次 PUT /api/providers')
+    const body = putBodies[0] as { providers: ProviderConfig[] }
+    const updated = body.providers.find((g) => g.id === 'my-gateway')
+    const untouched = body.providers.find((g) => g.id === 'other-gateway')
+    assert.equal(updated?.baseUrl, 'http://192.168.1.5:9000/v1')
+    assert.equal(updated?.protocol, 'openai', '本网关其余字段原样保留')
+    assert.equal(untouched?.baseUrl, 'https://other.example.com/v1', '其它网关 baseUrl 不得被波及')
+    assert.equal(untouched?.protocol, 'anthropic')
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('ModelCenter: 插件网关端点保存不触发任何 providers 写入（端点归插件配置管理）', { timeout: 60_000 }, async () => {
+  const { act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const catalog: ModelProviderSummary[] = [
+    {
+      id: 'magpie',
+      name: 'Magpie',
+      modelCount: 3,
+      dynamic: true,
+      baseUrl: 'http://127.0.0.1:3425/v1',
+      pluginId: 'builtin:magpie',
+      authMethods: [{ type: 'api_key', label: 'Magpie gateway' }],
+    },
+  ]
+  const store = makeTestStore({
+    primaryTarget: { kind: 'models', providerId: 'magpie' },
+  })
+  const merged = buildMergedProviders(DEFAULT_PROVIDERS, [], [], [], catalog)
+  const magpie = merged.find((p) => p.id === 'magpie')
+  assert.equal(magpie?.pluginId, 'builtin:magpie')
+
+  const writes: string[] = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === 'string' ? input : (input as URL).toString()
+    if (init?.method === 'PUT' || init?.method === 'POST') writes.push(`${init.method} ${path}`)
+    if (path === '/api/models/providers') return new Response(JSON.stringify(catalog), { status: 200 })
+    if (path === '/api/models/default') return new Response(JSON.stringify({}), { status: 200 })
+    return new Response(JSON.stringify({ ok: true }), { status: 200 })
+  }) as typeof fetch
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(ModelCenter, { providers: merged, inlineDrawer: true }),
+        ),
+      )
+    })
+
+    // 插件网关端点只读：没有可编辑输入框，保存不产生 providers 写入
+    // （模型清单的 filter 写入合法存在，与端点无关）
+    assert.equal(container.querySelector('input#model-drawer-base-url'), null)
+    assert.match(container.textContent ?? '', /该端点由插件 builtin:magpie 的配置管理/)
+    const saveBtn = Array.from(container.querySelectorAll('button')).find(
+      (btn) => (btn.textContent ?? '').includes('保存配置'),
+    )!
+    await act(async () => {
+      saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(
+      writes.filter((w) => w.includes('/api/providers')).length,
+      0,
+      '插件网关保存不得产生任何 providers 写请求',
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})

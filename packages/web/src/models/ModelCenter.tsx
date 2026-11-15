@@ -188,6 +188,21 @@ export function ModelCenter({
       if (data.apiKey) {
         await assetsApi.setCredential(providerId, data.apiKey)
       }
+      // 自定义网关（providers.json）服务端点变更：全量替换语义下只改该条
+      // baseUrl，其余网关与字段原样保留；插件网关（如 magpie）端点由所属
+      // 插件配置管理，不归模型层写，绝不在此假装已保存。
+      if (provider?.custom === true && data.baseUrl !== undefined && data.baseUrl !== '') {
+        const gateways = store.providers ?? []
+        const gateway = gateways.find((g) => g.id === providerId)
+        if (gateway === undefined) {
+          throw new Error(`自定义网关 ${providerId} 不在 providers.json 中，无法更新服务端点`)
+        }
+        if (data.baseUrl !== gateway.baseUrl) {
+          await assetsApi.saveProviders(
+            gateways.map((g) => (g.id === providerId ? { ...g, baseUrl: data.baseUrl! } : g)),
+          )
+        }
+      }
       if (data.models && filterEligible) {
         // 全量替换：当前未勾选的模型 id 即该 provider 的完整禁用集（与后端语义一致）。
         const disabledModels = data.models.filter((m) => !m.enabled).map((m) => m.id)
@@ -197,7 +212,7 @@ export function ModelCenter({
         type: 'notification',
         level: 'info',
         title: '供应商配置已更新',
-        body: `${providerId} 凭证与模型清单配置已成功持久化。`,
+        body: `${providerId} 配置已成功保存。`,
       })
       if (store.refreshAssets) {
         await store.refreshAssets()

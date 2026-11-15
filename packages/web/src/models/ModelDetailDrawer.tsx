@@ -69,6 +69,18 @@ export function ModelDetailDrawer({
   const [modelFilter, setModelFilter] = useState('')
   const [isExpanded, setIsExpanded] = useState(false)
 
+  // 服务端点可编辑性：只有自定义网关（providers.json）的端点能在本界面真正
+  // 持久化。插件网关（pluginId 存在，如 builtin:magpie）端点由所属插件的
+  // 配置管理，内置供应商端点固定——一律只读展示，杜绝「可编辑却保存无效」
+  // 的假入口（改了也改不回默认地址的根因）。
+  const endpointEditable = provider?.custom === true
+  const endpointHint =
+    endpointEditable === true
+      ? '用于反向代理、内网转发端点或本地推理服务接口。'
+      : provider?.pluginId
+        ? `该端点由插件 ${provider.pluginId} 的配置管理，请前往插件中心对应插件的配置项修改。`
+        : '该供应商端点为内置固定值，不支持在此修改。'
+
   // 当选中的供应商变化时同步本地表单状态
   useEffect(() => {
     if (provider) {
@@ -262,6 +274,13 @@ export function ModelDetailDrawer({
   // 保存常规供应商配置
   const handleSaveProvider = async () => {
     if (!provider) return
+    // 自定义网关端点为 providers.json 必填字段：清空后保存显式拒绝，
+    // 绝不静默保留旧值冒充保存成功。
+    if (provider.custom === true && !baseUrl.trim()) {
+      setSaveSuccess(false)
+      setSaveError('自定义网关的服务端点不能为空。')
+      return
+    }
     setSaving(true)
     setSaveError(null)
     try {
@@ -394,22 +413,26 @@ export function ModelDetailDrawer({
                         服务端点
                       </label>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <input
-                          id="model-drawer-base-url"
-                          type="text"
-                          className="input mono"
-                          value={baseUrl}
-                          onChange={(e) => setBaseUrl(e.target.value)}
-                          placeholder={
-                            provider.baseUrl ||
-                            (provider.type === 'local'
-                              ? 'http://127.0.0.1:11434'
-                              : 'https://api.example.com/v1（留空使用默认地址）')
-                          }
-                        />
-                        <span className="text-xs text-subtle">
-                          用于反向代理、内网转发端点或本地推理服务接口。
-                        </span>
+                        {endpointEditable ? (
+                          <input
+                            id="model-drawer-base-url"
+                            type="text"
+                            className="input mono"
+                            value={baseUrl}
+                            onChange={(e) => setBaseUrl(e.target.value)}
+                            placeholder={
+                              provider.baseUrl ||
+                              (provider.type === 'local'
+                                ? 'http://127.0.0.1:11434'
+                                : 'https://api.example.com/v1（留空使用默认地址）')
+                            }
+                          />
+                        ) : (
+                          <div className="form-grid-value mono" title="只读端点">
+                            {provider.baseUrl || '—'}
+                          </div>
+                        )}
+                        <span className="text-xs text-subtle">{endpointHint}</span>
                       </div>
                     </div>
 
