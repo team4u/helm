@@ -78,6 +78,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
     getLastAssistantText: (id) => lastTexts.get(id),
     resolveModel: () => ({ provider: 'faux', modelId: 'faux-1' }),
     agentSessions: new Map(),
+    structuredOutputSessions: new Map(),
     registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, _tags) => {
       parents.set(childId, parentId)
       mirrors.set(childId, {

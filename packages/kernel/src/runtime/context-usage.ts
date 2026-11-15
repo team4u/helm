@@ -208,6 +208,24 @@ export interface LiveCompactionFailureShape {
   error: string
 }
 
+/** pi.live 压缩相关字段的结构子集（compactionLiveKeyOf 指纹比对用）。 */
+export interface LiveCompactionStateShape {
+  compactions?: LiveCompactionShape[]
+  compactionFailure?: LiveCompactionFailureShape
+}
+
+/** pi.live 压缩状态指纹（仅内存比对用，不对外发布）：compactions 的
+ * (taskId,trigger,blocking) 序列 + compactionFailure 的 (taskId,trigger,error)。 */
+export function compactionLiveKeyOf(live: LiveCompactionStateShape | undefined): string {
+  if (live === undefined) return ''
+  return JSON.stringify([
+    (live.compactions ?? []).map((c) => [c.taskId, c.trigger, c.blocking === true]),
+    live.compactionFailure !== undefined
+      ? [live.compactionFailure.taskId, live.compactionFailure.trigger, live.compactionFailure.error]
+      : null,
+  ])
+}
+
 /** pi.live compactions 非空即压缩进行中（只读展示「精简中…」；多项任务
  * 取任何一项在途都为真，不伪造 trigger 细节）。 */
 export function compactingOf(compactions: readonly LiveCompactionShape[] | undefined): boolean | undefined {
