@@ -100,6 +100,8 @@ export const WORKER_SOURCE = `"use strict";
 
 const { parentPort, workerData } = require("node:worker_threads");
 const vm = require("node:vm");
+const { AsyncLocalStorage } = require("node:async_hooks");
+const journalContext = new AsyncLocalStorage();
 
 const port = parentPort;
 const ITEM_CAP = workerData.itemCap;
@@ -290,7 +292,7 @@ function makeScope(name, depth, path) {
     id: nextScopeId++,
     path: path || "root",
     nextJournalCallIndex: 0,
-    nextWorkflowIndex: 0,
+    nextChildIndex: 0,
     name: name,
     depth: depth,
     prefix: name === undefined ? "" : "\\u25b8 " + name,
@@ -321,6 +323,21 @@ function makeScope(name, depth, path) {
   };
   scope.console = makeConsole(scope);
   return scope;
+}
+
+function journalScopeIn(scope) {
+  const active = journalContext.getStore();
+  return active && active.ownerId === scope.id ? active.state : scope;
+}
+
+function branchRunner() {
+  const active = journalContext.getStore();
+  if (!active) throw new Error("Workflow journal context is unavailable.");
+  const path = active.state.path + "/" + active.state.nextChildIndex++;
+  return function (index, run) {
+    const state = { path: path + "/" + index, nextJournalCallIndex: 0, nextChildIndex: 0 };
+    return journalContext.run({ ownerId: active.ownerId, state: state }, run);
+  };
 }
 
 function scopedTitle(scope, title) {
@@ -535,6 +552,7 @@ function readAgentOptions(prompt, opts) {
 
 /** 统一的 agent 下发面：scopeId 标识调用方 scope，withMeta 标记需要带执行元数据的返回包装。 */
 async function callAgentHost(scope, options, withMeta) {
+  const journalScope = journalScopeIn(scope);
   const phaseIndex = options.phaseName !== undefined ? definePhaseIn(scope, options.phaseName) : scope.ambientPhaseIndex;
   const phaseTitle = options.phaseName !== undefined ? scopedTitle(scope, options.phaseName) : scope.ambientPhaseTitle;
 
@@ -557,8 +575,8 @@ async function callAgentHost(scope, options, withMeta) {
     gateTimeoutMs: options.gateTimeoutMs,
     maxAttempts: options.maxAttempts,
     scopeId: scope.id,
-    scopePath: scope.path,
-    scopeCallIndex: scope.nextJournalCallIndex++,
+    scopePath: journalScope.path,
+    scopeCallIndex: journalScope.nextJournalCallIndex++,
     ...(withMeta ? { withMeta: true } : {}),
   });
 }
@@ -657,9 +675,10 @@ async function actionIn(scope, actionId, input, opts) {
   const phaseIndex = phaseName !== undefined ? definePhaseIn(scope, phaseName) : scope.ambientPhaseIndex;
   const phaseTitle = phaseName !== undefined ? scopedTitle(scope, phaseName) : scope.ambientPhaseTitle;
 
+  const journalScope = journalScopeIn(scope);
   return await callHost("action", {
-    scopePath: scope.path,
-    scopeCallIndex: scope.nextJournalCallIndex++,
+    scopePath: journalScope.path,
+    scopeCallIndex: journalScope.nextJournalCallIndex++,
     actionId: id,
     input: input,
     label: label,
@@ -676,14 +695,17 @@ async function parallel(thunks) {
       throw new Error("parallel(thunks) expects an array of functions; item " + i + " is not one.");
     }
   }
+  const inBranch = branchRunner();
   const settled = await Promise.all(
-    list.map(async function (thunk) {
-      try {
-        return await thunk();
-      } catch (error) {
-        if (isFatal(error)) throw error;
-        return null;
-      }
+    list.map(function (thunk, index) {
+      return inBranch(index, async function () {
+        try {
+          return await thunk();
+        } catch (error) {
+          if (isFatal(error)) throw error;
+          return null;
+        }
+      });
     })
   );
   return toRealmArray(settled);
@@ -696,18 +718,21 @@ async function pipeline(items, ...stages) {
       throw new Error("pipeline(items, ...stages) expects stages to be functions; stage " + i + " is not one.");
     }
   }
+  const inBranch = branchRunner();
   const settled = await Promise.all(
-    list.map(async function (item, index) {
-      let value = item;
-      for (let s = 0; s < stages.length; s++) {
-        try {
-          value = await stages[s](value, item, index);
-        } catch (error) {
-          if (isFatal(error)) throw error;
-          return null;
+    list.map(function (item, index) {
+      return inBranch(index, async function () {
+        let value = item;
+        for (let s = 0; s < stages.length; s++) {
+          try {
+            value = await stages[s](value, item, index);
+          } catch (error) {
+            if (isFatal(error)) throw error;
+            return null;
+          }
         }
-      }
-      return value;
+        return value;
+      });
     })
   );
   return toRealmArray(settled);
@@ -747,7 +772,8 @@ async function workflowIn(scope, nameOrRef, args) {
     throw error;
   }
   nestedCount++;
-  const workflowIndex = scope.nextWorkflowIndex++;
+  const parentJournal = journalScopeIn(scope);
+  const workflowIndex = parentJournal.nextChildIndex++;
 
   let loaded;
   try {
@@ -757,7 +783,7 @@ async function workflowIn(scope, nameOrRef, args) {
     throw new Error('workflow("' + label + '"): ' + describe(error));
   }
 
-  const childPath = scope.path + "/" + workflowIndex;
+  const childPath = parentJournal.path + "/" + workflowIndex;
   const child = makeScope(loaded.name, scope.depth + 1, childPath);
   child.ambientPhaseIndex = definePhaseIn(child, undefined);
   child.ambientPhaseTitle = scopedTitle(child, undefined);
@@ -773,7 +799,9 @@ async function workflowIn(scope, nameOrRef, args) {
     throw new Error('workflow("' + label + '"): ' + describe(error));
   }
 
-  const value = await run(child.agent, child.phase, child.log, child.workflow, child.action, child.console, args, child.goal);
+  const value = await journalContext.run({ ownerId: child.id, state: child }, function () {
+    return run(child.agent, child.phase, child.log, child.workflow, child.action, child.console, args, child.goal);
+  });
   checkBoundary(value, 'the result of workflow("' + label + '")');
   return value;
 }
@@ -827,7 +855,9 @@ async function main() {
     lineOffset: -1,
   });
 
-  const value = await script.runInContext(context);
+  const value = await journalContext.run({ ownerId: rootScope.id, state: rootScope }, function () {
+    return script.runInContext(context);
+  });
   checkBoundary(value, "the workflow result");
   flushProgress();
   port.postMessage({

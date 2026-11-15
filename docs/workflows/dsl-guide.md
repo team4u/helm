@@ -135,7 +135,7 @@ const wt = res.execution?.worktree  // { id, path, branch, ... }，后续可据�
 
 ### `parallel(thunks)` 与 `pipeline(items, ...stages)`
 
-`parallel` 接收无参异步函数数组，并发执行全部任务并按原顺序返回结算结果；`pipeline` 接收数据项数组与若干顺序处理函数，对每个 item 依次流过全部 stage（stage 签名为 `(value, item, index)`）。两者容错语义一致：普通失败折叠为 `null`（`parallel` 不影响其余任务；`pipeline` 跳过该 item 的后续 stage），只有致命错误（配额突破、账本失效）才向外抛出。
+`parallel` 接收无参异步函数数组，并发执行全部任务并按原顺序返回结算结果；`pipeline` 接收数据项数组与若干顺序处理函数，对每个 item 依次流过全部 stage（stage 签名为 `(value, item, index)`）。两者容错语义一致：普通失败折叠为 `null`（`parallel` 不影响其余任务；`pipeline` 跳过该 item 的后续 stage），只有致命错误（配额突破、账本失效）才向外抛出。每个分支或 item 有独立恢复路径，`pipeline` 的同一 item 跨 stage 保持该身份；缓存返回速度变化不会把不同 item 的 action 账本混在一起。
 
 ```javascript
 // pipeline：item 在 stage 间流水推进，无需等全部 item 完成第一个 stage

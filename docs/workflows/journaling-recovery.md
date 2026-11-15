@@ -20,7 +20,7 @@
 | `action_started` | 动作执行意图（先于 handler 落盘） | `index`, `key`, `idempotent?` |
 | `action` | 动作调用终态 | `index`, `key`, `ok`, `result` / `error`, `idempotent?` |
 
-每行必须携带 `scopePath` 与 `scopeCallIndex`：前者由父工作流路径和嵌套调用的位置组成（根为 `root`），后者是该 scope 内 agent/action 调用的发起序号。自动重试共用同一局部调用序号，以 `attempt` 区分。嵌套加载或模型完成的先后顺序不改变恢复身份。
+每行必须携带 `scopePath` 与 `scopeCallIndex`：前者由父工作流路径和嵌套调用的位置组成（根为 `root`），后者是该 scope 内 agent/action 调用的发起序号。自动重试共用同一局部调用序号，以 `attempt` 区分。`parallel` 的每个分支和 `pipeline` 的每个 item 也有独立路径；同一 item 的各 stage 共用该路径。异步上下文负责把这些身份传到 agent/action，嵌套加载或模型完成的先后顺序不改变恢复身份。
 
 `index` 是本次 Run 内的全局尝试/动作位次，`invocationIndex` 用于把多次尝试折叠到同一进度节点；恢复时重新分配这些审计序号。`seq` 是落盘物理单调序号；`key` 是调用载荷的哈希摘要。缺少必需 scope 字段的账本不属于当前格式，不提供旧格式读取或迁移。
 
@@ -64,7 +64,7 @@ flowchart TD
 
 **幂等承诺的边界**：`idempotent` 是动作作者（`PluginActionSpec.idempotent`）或脚本作者（`action(..., { idempotent: true })`）对「可安全重复执行（包括部分完成或中断状态下重试）」的主观承诺，不是引擎静态分析或动态检测所得。已声明幂等的动作，其悬挂 `action_started` 或失败终态行不触发不确定性拒绝；成功时前缀重放照常 100% 复用，失败或中断时允许 `resumeFromRunId` 放行并断链重跑。内建 `env.exec` 定义为非幂等。
 
-**后缀非幂等断链保护**：当前 scope 断链时，若其后续调用或子 scope 中仍有未复用的非幂等动作，恢复以 `workflow_action_uncertain` 显式拒绝。已经补记并复用的动作不重复执行；兄弟 scope 的动作不受另一个模块失败影响。父 scope 变化仍会检查后代动作，避免在上游条件变化后冒用旧结果。
+**后缀非幂等断链保护**：当前 scope 断链时，若其后续调用或子 scope 中仍有未复用的非幂等动作，恢复以 `workflow_action_uncertain` 显式拒绝。已经补记并复用的动作不重复执行；兄弟 scope 的动作不受另一个模块失败影响。父 scope 变化仍会检查后代动作；分支断链也会检查祖先中未复用的后续动作。未知 scope 可能由脚本移动调用位置产生，存在未复用非幂等动作时显式拒绝，避免把位置变化当成全新安全调用。
 
 **agent 的弹性语义**：账本写入异常仅计数 `ioErrors` 供宿主诊断。默认 `maxAttempts: 1` 的失败调用在恢复时断链转 live；自动重试的失败尝试按尝试链重放，人工 retry 与 skip 也保留原决定。节点重试安全由任务作者自行保证——引擎不为智能体调用执行命令、写文件等副作用提供恰好一次承诺。
 

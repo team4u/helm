@@ -131,3 +131,49 @@ test('changing a parent agent cannot replay descendant non-idempotent actions un
   assert.equal(spawns, 1)
   assert.equal(effects, 1)
 })
+
+test('pipeline item histories remain replayable when cache hits reverse stage completion order', timeout, async () => {
+  let releaseSlow!: () => void
+  const fastEffect = new Promise<void>(resolve => { releaseSlow = resolve })
+  const effects: string[] = []
+  const script = source('pipeline-replay', `return await pipeline(['slow', 'fast'],
+    item => agent(item),
+    (answer, item) => action('charge', { item, answer }))`)
+  const log = ledger()
+  const first = await runWorkflow({ script, journal: log, host: makeHost({
+    async spawnAgent(request) {
+      if (request.prompt === 'slow') await fastEffect
+      return { ok: true, text: request.prompt }
+    },
+    async invokeAction(actionId, input) {
+      const item = (input as { item: string }).item
+      effects.push(item)
+      if (item === 'fast') releaseSlow()
+      return { pluginId: 'test', actionId, result: item }
+    },
+  }) })
+  assert.equal(first.status, 'completed', first.error)
+  assert.deepEqual(effects, ['fast', 'slow'])
+  const restored = await runWorkflow({ script, journal: { entries: log.entries }, host: makeHost({}) })
+  assert.equal(restored.status, 'completed', restored.error)
+  assert.deepEqual(restored.value, first.value)
+  assert.deepEqual(effects, ['fast', 'slow'])
+})
+
+test('moving a nested call past an empty workflow cannot repeat an old non-idempotent action', timeout, async () => {
+  let effects = 0
+  const host = makeHost({
+    loadWorkflow: ref => ({ ok: true, script: source(ref.name!, ref.name === 'empty' ? 'return null' : `return await action('charge', {})`) }),
+    async invokeAction(actionId) { effects++; return { pluginId: 'test', actionId, result: 'sent' } },
+  })
+  const log = ledger()
+  const initial = await runWorkflow({ script: source('move', `return await workflow('effect')`), host, journal: log })
+  assert.equal(initial.status, 'completed', initial.error)
+  const changed = await runWorkflow({
+    script: source('move', `await workflow('empty'); return await workflow('effect')`),
+    host, journal: { entries: log.entries },
+  })
+  assert.equal(changed.status, 'failed')
+  assert.match(changed.error ?? '', /workflow_action_uncertain/)
+  assert.equal(effects, 1)
+})

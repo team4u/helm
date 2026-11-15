@@ -13,12 +13,16 @@ export interface ReplayResult {
 /** Global indices describe this run; stable scope coordinates describe the script. */
 export class JournalReplay {
   private readonly settled = new Map<string, SettledEntry>()
+  private readonly scopes = new Set<string>()
   private readonly broken = new Set<string>()
   private readonly consumedActions = new Set<WorkflowJournalEntry>()
 
   constructor(private readonly entries: readonly WorkflowJournalEntry[]) {
-    for (const entry of entries) {
+    // Appending the new run must never extend the recovery snapshot.
+    this.entries = [...entries]
+    for (const entry of this.entries) {
       if (!hasValidScopeIdentity(entry)) throw new Error('workflow_action_uncertain: invalid journal scope identity')
+      this.scopes.add(entry.scopePath)
       if (entry.type === 'action_started') continue
       const key = this.key(entry, entry.type === 'agent' ? entry.attempt ?? 1 : 1)
       if (this.settled.has(key)) {
@@ -73,8 +77,11 @@ export class JournalReplay {
     const childPrefix = `${scope.scopePath}/`
     const uncertain = this.entries.some((entry) => {
       if ((entry.type !== 'action' && entry.type !== 'action_started') || entry.idempotent === true || this.consumedActions.has(entry)) return false
+      // A new scope may be a moved call site. Keep unknown coordinates closed
+      // until previous non-idempotent effects have been accounted for.
+      if (!this.scopes.has(scope.scopePath)) return true
       if (entry.scopePath === scope.scopePath) return entry.scopeCallIndex >= scope.scopeCallIndex
-      return entry.scopePath.startsWith(childPrefix)
+      return entry.scopePath.startsWith(childPrefix) || scope.scopePath.startsWith(`${entry.scopePath}/`)
     })
     return uncertain ? {
       hit: false,
