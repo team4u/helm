@@ -355,38 +355,41 @@ function appendAssistantNodes(
 
   let bodyEmitted = false
   let cardEmitted = false
-  for (let i = 0; i < turn.segments.length; i++) {
-    const seg = turn.segments[i]!
+  let headingCursor = 0
+  let accumulatedText = ''
+  for (const seg of turn.segments) {
     if (seg.kind === 'text') {
-      if (!bodyEmitted && i === firstTextSegIndex) {
-        bodyEmitted = true
-        if (headings.length > 0) {
-          for (let h = 0; h < headings.length; h++) {
-            const heading = headings[h]!
-            out.push({
-              kind: 'heading',
-              key: `outline:heading:${turn.key}:${h}`,
-              entryId: anchorId,
-              headingIndex: h,
-              level: heading.level,
-              text: heading.text,
-              ...(parentHumanKey !== undefined ? { parentHumanKey } : {}),
-            })
-          }
-        } else {
+      if (headings.length > 0) {
+        // 保持标题节点与正文/业务卡在时间线中的真实顺序。用累计正文重新解析，
+        // 保留跨 segment 的代码围栏状态，同时让 headingIndex 继续对应 DOM 顺序。
+        accumulatedText = accumulatedText === '' ? seg.text : `${accumulatedText}\n\n${seg.text}`
+        const parsed = extractMarkdownHeadings(accumulatedText)
+        for (; headingCursor < parsed.length; headingCursor++) {
+          const heading = parsed[headingCursor]!
           out.push({
-            kind: 'assistant',
-            key: `outline:assistant:${turn.key}`,
+            kind: 'heading',
+            key: `outline:heading:${turn.key}:${headingCursor}`,
             entryId: anchorId,
-            label: summarizeOutlineText(fullMarkdown),
-            fullText: fullMarkdown,
-            live: turn.live,
-            ...(turn.settledAt !== undefined || turn.startedAt !== undefined
-              ? { createdAt: turn.settledAt ?? turn.startedAt }
-              : {}),
+            headingIndex: headingCursor,
+            level: heading.level,
+            text: heading.text,
             ...(parentHumanKey !== undefined ? { parentHumanKey } : {}),
           })
         }
+      } else if (!bodyEmitted) {
+        bodyEmitted = true
+        out.push({
+          kind: 'assistant',
+          key: `outline:assistant:${turn.key}`,
+          entryId: anchorId,
+          label: summarizeOutlineText(fullMarkdown),
+          fullText: fullMarkdown,
+          live: turn.live,
+          ...(turn.settledAt !== undefined || turn.startedAt !== undefined
+            ? { createdAt: turn.settledAt ?? turn.startedAt }
+            : {}),
+          ...(parentHumanKey !== undefined ? { parentHumanKey } : {}),
+        })
       }
       continue
     }
@@ -395,7 +398,7 @@ function appendAssistantNodes(
       out.push(buildToolCardNode(turn, seg.tool, anchorId, parentHumanKey))
     }
   }
-  if (!bodyEmitted && !cardEmitted) {
+  if (!bodyEmitted && headings.length === 0 && !cardEmitted) {
     const status: OutlineAssistantStatus = turn.live ? 'generating' : failed ? 'failed' : 'no-content'
     out.push({
       kind: 'assistant',

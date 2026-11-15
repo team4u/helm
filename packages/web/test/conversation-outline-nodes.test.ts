@@ -160,6 +160,22 @@ test('正文与顶层业务卡共存：assistant 摘要与卡片按段落真实�
 // 业务卡节点（tool.view 顶层卡 + plugin-card）
 // ---------------------------------------------------------------------------
 
+test('同一助手回合标题与业务卡按时间线真实顺序排列，headingIndex 仍与正文 DOM 顺序一致', { timeout: 60_000 }, () => {
+  const items = buildTimelineItems([
+    humanEntry('1', '按顺序执行并总结'),
+    assistantTextEntry('2', '# 执行前说明'),
+    toolCallEntry('3', 'call-1', 'subagent', { prompt: '检查并执行' }),
+    toolResultEntry('4', 'call-1', 'subagent'),
+    assistantTextEntry('5', '## 执行后总结'),
+  ], { toolViews: TOOL_VIEWS })
+  const nodes = buildConversationOutline(items)
+  assert.deepEqual(kindsOf(nodes), ['human', 'heading', 'card', 'heading'])
+  assert.deepEqual(
+    nodes.filter((node): node is OutlineHeadingNode => node.kind === 'heading').map((node) => [node.headingIndex, node.text]),
+    [[0, '执行前说明'], [1, '执行后总结']],
+  )
+})
+
 test('无正文有顶层 tool.view 业务卡：卡片代表回合，不产生空 assistant 节点；cardId 二级锚可用', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
     humanEntry('1', '派一个子代理去调研'),
