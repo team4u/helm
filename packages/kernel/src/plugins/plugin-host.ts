@@ -53,12 +53,11 @@ import type { PluginBuildProvider, PluginClientBundle } from '@helm/protocol';
 import {
   findSourceDirByPluginId,
   importPluginDefinition,
-  loadExternalPlugins,
   normalizeDefinition,
   reloadExternalPlugin,
-  rescanExternalPlugins,
   resolvePluginEntry,
 } from './external-loader.js';
+import { loadExternalPlugins, rescanExternalPlugins } from './scan-visitor.js';
 import { doctorPluginDir } from './plugin-doctor.js';
 import { pluginDataDirName } from './plugin-dir-name.js';
 import { registerPluginTsRoot } from './backend-ts-loader.js';

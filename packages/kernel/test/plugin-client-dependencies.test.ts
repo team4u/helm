@@ -24,9 +24,9 @@ import { clearClientCompilerMemoryCache, compilePluginClientModule, createPlugin
 import {
   importPluginDefinition,
   normalizeDefinition,
-  readHelmClientDependencies,
   resolvePluginEntry,
 } from '../src/plugins/external-loader.js'
+import { readHelmClientDependencies } from '../src/plugins/plugin-manifest.js'
 import { doctorPluginDir } from '../src/plugins/plugin-doctor.js'
 import { PluginPackageManager, type PackageRunner } from '../src/plugins/package-manager.js'
 import { PluginPackageManagerStore } from '../src/plugins/package-store.js'
