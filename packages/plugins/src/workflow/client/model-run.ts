@@ -5,7 +5,7 @@
  */
 import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
-import { formatShortModelName } from './model-subagent.ts'
+import { formatShortModelName } from './model-format.ts'
 
 /** 工具输出 JSON 里的 run id 字段（"id":"wf_xxx"）精确提取（不匹配子串/前缀）。 */
 const WORKFLOW_RUN_ID_IN_RESULT_RE = /"id"\s*:\s*"([^"]+)"/
