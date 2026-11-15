@@ -322,6 +322,7 @@ test('working/blocked/error 会话 + 后台在途：只渲染主会话状态灯�
           status,
           doing: status === 'working' ? '正在思考方案' : undefined,
           lastError: status === 'error' ? 'model_error: boom' : undefined,
+          createdAt: 9000,
           updatedAt: 9000,
         }),
         conv({ id: 50, title: '别处', profileId: 'coder' }),
@@ -343,7 +344,7 @@ test('working/blocked/error 会话 + 后台在途：只渲染主会话状态灯�
 test('idle 会话 + 后台在途：仅渲染后台空心环，tooltip 陈述空闲 + 后台摘要', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
@@ -362,7 +363,7 @@ test('idle 会话 + 后台在途：仅渲染后台空心环，tooltip 陈述空�
 test('done 会话 + 后台在途：绿点让位，仅渲染后台空心环', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
@@ -381,7 +382,7 @@ test('done 会话 + 后台在途：绿点让位，仅渲染后台空心环', { t
 test('无后台在途：保持五态原样（done 绿点、idle 无灯）', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 2, title: '闲置话题', profileId: 'assistant' }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
@@ -400,7 +401,7 @@ test('无后台在途：保持五态原样（done 绿点、idle 无灯）', { ti
 test('展开态：站位行不重复显示指示，每个子会话行各自一个灯', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
       conv({ id: 3, title: '失败话题', profileId: 'assistant', status: 'error', lastError: 'model_error: boom' }),
     ],
@@ -428,7 +429,7 @@ test('折叠站位行：非 primary 后台在途 + 代表会话 working/blocked/
   // primary idle + 次会话 error：站位行透出 error（代表会话 = 次会话）
   const errorStore = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 2, title: '失败话题', profileId: 'assistant', status: 'error', lastError: 'model_error: boom' }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
@@ -442,7 +443,7 @@ test('折叠站位行：非 primary 后台在途 + 代表会话 working/blocked/
   // primary idle + 次会话后台在途 + 另一次会话 blocked：状态灯独占，隐藏整个站位的后台环
   const blockedStore = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
       conv({ id: 3, title: '阻塞话题', profileId: 'assistant', status: 'blocked' }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
@@ -463,7 +464,7 @@ test('折叠站位行：代表会话 idle/done 时仅渲染一个后台空心环
   // primary idle + 次会话后台在途：站位行仅一个空心环（代表会话仍为 primary）
   const idleStore = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
@@ -481,7 +482,7 @@ test('折叠站位行：代表会话 idle/done 时仅渲染一个后台空心环
   // primary done + 次会话后台在途：done 绿点让位，同样仅一个空心环
   const doneStore = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
@@ -541,7 +542,7 @@ test('sidebar.section 分组会话行同样遵守单灯语义', { timeout: 60_00
 
 test('插件停用（贡献消失）或仅剩 neutral 历史计数时无任何在途指示', { timeout: 60_000 }, () => {
   const conversations = [
-    conv({ id: 1, title: '主会话', profileId: 'assistant', updatedAt: 9000 }),
+    conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
     conv({ id: 50, title: '别处', profileId: 'coder' }),
   ]
   const common = { conversations, primaryTarget: { kind: 'conversation' as const, conversationId: 50 } }
@@ -565,7 +566,7 @@ test('Sidebar 挂载后按需 ensurePluginDoc 加载命中面板的 badge doc', 
   const loaded: Array<{ pluginId: string; doc: string }> = []
   const store = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },

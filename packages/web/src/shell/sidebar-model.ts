@@ -75,7 +75,7 @@ export interface AgentStanding {
   order: number
   /** 是否允许人类在该 Agent 下新建多个对话（由 isHumanSelectableProfile 决定；常驻单例为 false）。 */
   canCreateConversation: boolean
-  /** 该 Agent 名下的所有有效对话（常驻/根会话置顶，其余按 updatedAt 倒序）。 */
+  /** 该 Agent 名下的所有有效对话（常驻/根会话置顶，其余按 createdAt 倒序）。 */
   conversations: ConversationSummary[]
   /** 点击该 Agent 站位时的主对话（即 conversations[0] ?? null）。 */
   primaryConversation: ConversationSummary | null
@@ -176,7 +176,8 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
     }
   }
 
-  // 站位内排序：常驻会话置顶，其余 updatedAt 倒序（同刻按 id 倒序）。
+  // 站位内排序：常驻会话置顶，其余按创建时间倒序（同刻按 id 倒序）——
+  // 刻意不用 updatedAt：AI 正在输出会持续推进 updatedAt，若作为排序键历史对话会不停跳位。
   const residentTier = (c: ConversationSummary): number => {
     if (c.ownedBy === 'helm') return 1
     if (partition.pinnedConversationIds.has(c.id)) return 2
@@ -187,7 +188,7 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
       const ta = residentTier(a)
       const tb = residentTier(b)
       if (ta !== tb) return ta - tb
-      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt
+      if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt
       return b.id - a.id
     })
 
@@ -457,7 +458,8 @@ export interface TopicListItem {
 
 /**
  * 构建当前 profileId 的话题列表：仅取无父链的根会话，稳定按
- * pinned 置顶 -> updatedAt 倒序 -> id 倒序排序；markActiveId 为当前激活会话。
+ * pinned 置顶 -> createdAt 倒序 -> id 倒序排序（createdAt 固定不变，
+ * AI 输出推进 updatedAt 不会让话题跳位）；markActiveId 为当前激活会话。
  */
 export function buildProfileTopics(
   conversations: ConversationSummary[],
@@ -469,7 +471,7 @@ export function buildProfileTopics(
   )
   const sorted = [...roots].sort((a, b) => {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
-    if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt
+    if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt
     return b.id - a.id
   })
   return sorted.map((conv) => ({ conv, active: conv.id === markActiveId }))

@@ -105,7 +105,11 @@ function SidebarSectionGroup({
   const spec = section.spec
   const tag = spec.filterTag as string
   const convs = useMemo(
-    () => filterConversationsByTag(store.conversations, tag).sort((a, b) => b.updatedAt - a.updatedAt),
+    // 按创建时间倒序固定排列（同刻按 id 决胜）：分组内会话后台跑动推进 updatedAt 不再引起跳位。
+    () =>
+      filterConversationsByTag(store.conversations, tag).sort(
+        (a, b) => b.createdAt - a.createdAt || b.id - a.id,
+      ),
     [store.conversations, tag],
   )
   const collapsible = spec.collapsible === true

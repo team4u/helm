@@ -296,11 +296,12 @@ test('buildAgentStandings：子代理派生会话（有父链）不挂 Agent 站
   assert.equal(assistant.conversations.some((c) => c.id === 22), false)
 })
 
-test('buildAgentStandings：同刻 updatedAt 按 id 倒序；被 sidebar.item 指向的会话置顶', { timeout: 60_000 }, () => {
+test('buildAgentStandings：按 createdAt 倒序（updatedAt 推进不重排）；被 sidebar.item 指向的会话置顶', { timeout: 60_000 }, () => {
   const sameTime: ConversationSummary[] = [
     conv({ id: 1, profileId: 'assistant' }),
-    conv({ id: 10, profileId: 'assistant', updatedAt: 5000 }),
-    conv({ id: 11, profileId: 'assistant', updatedAt: 5000 }),
+    conv({ id: 10, profileId: 'assistant', createdAt: 5000, updatedAt: 5000 }),
+    // #11 模拟 AI 正在输出：updatedAt 远大于创建时间，但位置仍由 createdAt 决定
+    conv({ id: 11, profileId: 'assistant', createdAt: 5000, updatedAt: 99999 }),
   ]
   const standings = buildAgentStandings({
     profiles: [{ id: 'assistant', name: '个人助理' }],
@@ -311,7 +312,7 @@ test('buildAgentStandings：同刻 updatedAt 按 id 倒序；被 sidebar.item �
     ],
     sidebarSections: [],
   })
-  // #10 被 sidebar.item 指向置顶 -> 其余（含 #1）同刻按 id 倒序（无根会话特判）
+  // #10 被 sidebar.item 指向置顶 -> 其余（含 #1）按 createdAt 倒序、同刻按 id 倒序（无根会话特判）
   assert.deepEqual(standings[0]!.conversations.map((c) => c.id), [10, 11, 1])
 })
 
@@ -582,13 +583,14 @@ test('filterAgentStandings 按 label / profileId / 会话标题过滤智能体�
   assert.equal(filterAgentStandings(standings, '不存在的关键词').length, 0)
 })
 
-test('buildProfileTopics 构建当前 profile 的根话题列表：pinned/updatedAt/id 稳定排序', { timeout: 60_000 }, () => {
+test('buildProfileTopics 构建当前 profile 的根话题列表：pinned/createdAt/id 稳定排序', { timeout: 60_000 }, () => {
   const topics = buildProfileTopics(
     [
-      conv({ id: 1, profileId: 'assistant', updatedAt: 1000 }),
-      conv({ id: 10, profileId: 'assistant', updatedAt: 5000 }),
-      conv({ id: 11, profileId: 'assistant', updatedAt: 5000, pinned: true }),
-      conv({ id: 12, profileId: 'assistant', updatedAt: 9000 }),
+      // #1 最老会话但 AI 正在输出（updatedAt 最大），位置仍由 createdAt 决定、不被顶到最前
+      conv({ id: 1, profileId: 'assistant', updatedAt: 99999 }),
+      conv({ id: 10, profileId: 'assistant', createdAt: 5000, updatedAt: 5000 }),
+      conv({ id: 11, profileId: 'assistant', createdAt: 5000, updatedAt: 5000, pinned: true }),
+      conv({ id: 12, profileId: 'assistant', createdAt: 9000, updatedAt: 1000 }),
       // 非 profile 会话与子代理派生会话不进入话题列表
       conv({ id: 40, profileId: 'coder', updatedAt: 9999 }),
       conv({ id: 41, profileId: 'assistant', parentConversationId: 1, updatedAt: 9999 }),
