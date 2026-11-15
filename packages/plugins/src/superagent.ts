@@ -8,7 +8,8 @@
  * - ./superagent/actions.ts: 派工、检视、召回、订阅、归档动作与中枢模型工具
  * - ./superagent/hooks.ts: L0 确定性路由、L1 认知路由与结算汇报 Hook
  * - ./superagent/ui.ts: 前端侧栏、挂件、药丸、工具视图与全屏视图声明
- * - ./superagent/watchdog.ts: 两层巡检看门狗与人类审批桥
+ * - ./superagent/watchdog.ts: 两层巡检看门狗组合根（装配 watchdog-core/activity/
+ *   dedup/tick/classify/ops/guards/tools 同级子模块）
  */
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
