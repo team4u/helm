@@ -61,7 +61,10 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
       }),
     [detailEntries, live, isWorking, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
   )
-  const outlineNodes = useMemo(() => buildConversationOutline(timelineItems), [timelineItems])
+  const outlineNodes = useMemo(
+    () => buildConversationOutline(timelineItems, { latestAssistantTurnFailed: conversation?.status === 'error' }),
+    [timelineItems, conversation?.status],
+  )
 
   const loadDetail = store.loadConversationDetail
   useEffect(() => {
@@ -90,6 +93,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     setOutlineScrollReq({
       entryId: target.entryId,
       ...(target.headingIndex !== undefined ? { headingIndex: target.headingIndex } : {}),
+      ...(target.cardId !== undefined ? { cardId: target.cardId } : {}),
       tick: outlineTickRef.current,
     })
   }

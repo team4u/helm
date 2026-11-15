@@ -13,10 +13,12 @@ import {
   filterOutlineNodes,
   resolveActiveOutlineEntryId,
   stripInlineMarkdown,
-  summarizeHumanOutlineText,
+  summarizeOutlineText,
 } from '../src/conversation/outline-model.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import { makeTestStore } from './helpers/store.js'
+import { groupUiContributions } from '../src/lib/types.js'
+import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 
 try {
   GlobalRegistrator.register()
@@ -44,11 +46,12 @@ afterEach(() => {
 // 1. outline-model 纯函数测试
 // ---------------------------------------------------------------------------
 
-test('stripInlineMarkdown 与 summarizeHumanOutlineText：清理行内格式、取首个非空行并回退附件计数', { timeout: 60_000 }, () => {
+test('stripInlineMarkdown 与 summarizeOutlineText：清理行内格式、取首个非空行并回退附件计数', { timeout: 60_000 }, () => {
   assert.equal(stripInlineMarkdown('**加粗** 与 `code` 及 [链接](https://example.com)'), '加粗 与 code 及 链接')
-  assert.equal(summarizeHumanOutlineText('\n\n# 第一行标题\n第二行正文'), '第一行标题')
-  assert.equal(summarizeHumanOutlineText('   ', 2), '[附件 ×2]')
-  assert.equal(summarizeHumanOutlineText(''), '（空消息）')
+  assert.equal(summarizeOutlineText('\n\n# 第一行标题\n第二行正文'), '第一行标题')
+  assert.equal(summarizeOutlineText('- 列表首项\n第二行'), '列表首项')
+  assert.equal(summarizeOutlineText('   ', 2), '[附件 ×2]')
+  assert.equal(summarizeOutlineText(''), '（空消息）')
 })
 
 test('buildMarkdownOutline：为 Markdown H1~H3 生成稳定定位节点', { timeout: 60_000 }, () => {
@@ -117,7 +120,7 @@ test('buildConversationOutline 与 filterOutlineNodes：构建完整树、支持
 
   assert.equal(countOutlineTurns(nodes), 2)
   assert.deepEqual(
-    nodes.map((n) => (n.kind === 'human' ? `Q#${n.turnIndex}:${n.label}` : n.kind === 'heading' ? `H${n.level}:${n.text}` : `D:${n.divider}`)),
+    nodes.map((n) => (n.kind === 'human' ? `Q#${n.turnIndex}:${n.label}` : n.kind === 'heading' ? `H${n.level}:${n.text}` : n.kind === 'divider' ? `D:${n.divider}` : `${n.kind}:${n.label}`)),
     [
       'Q#1:帮我分析数据库慢查询',
       'H1:慢查询根因',
@@ -128,8 +131,8 @@ test('buildConversationOutline 与 filterOutlineNodes：构建完整树、支持
     ],
   )
 
-  // 仅看提问模式：过滤掉所有 heading，保留 human 与 divider
-  const questionsOnly = filterOutlineNodes(nodes, { includeHeadings: false })
+  // 仅看提问模式：过滤掉所有助手子节点（正文/标题/卡片），保留 human 与 divider
+  const questionsOnly = filterOutlineNodes(nodes, { questionsOnly: true })
   assert.deepEqual(
     questionsOnly.map((n) => n.kind),
     ['human', 'divider', 'human'],
@@ -255,7 +258,7 @@ test('ConversationPane 顶栏渲染大纲按钮，打开浮层后支持搜索过
   assert.ok(popover, '点击后应展开会话大纲浮层')
 
   const options = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')]
-  assert.equal(options.length, 4, '应渲染 2 条提问 + 2 条 Markdown 标题')
+  assert.equal(options.length, 5, '应渲染 2 条提问 + 2 条 Markdown 标题 + 1 条助手正文摘要（无标题回合）')
 
   // 3. 点击第 2 个标题（H2 端口转发命令，对应 entryId=102, headingIndex=1）触发精准滚动
   const scrolledElements: HTMLElement[] = []
@@ -281,5 +284,119 @@ test('ConversationPane 顶栏渲染大纲按钮，打开浮层后支持搜索过
     assert.ok(turnWrapper?.className.includes('entry-highlighted'), '目标回合容器应触发 entry-highlighted 高亮动效')
   } finally {
     HTMLElement.prototype.scrollIntoView = origScrollIntoView
+  }
+})
+
+test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚精确定位卡片 DOM，plugin-card 按 entryId 定位', { timeout: 60_000 }, async () => {
+  // 机制信号替身：宿主注册表命中 subagent 工具与背景汇报 renderer（零插件特判）；
+  // 预置插件 client 模块缓存并以同 hash fetch 探测命中缓存（不落网络）。
+  seedPluginClientModule('builtin:workflow', 'index.tsx', {
+    SubagentToolView: () => e('div', { className: 'stub-subagent-card' }, 'subagent stub'),
+    BackgroundReportCard: () => e('div', { className: 'stub-report-card' }, 'report stub'),
+  })
+  const origFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response('', { headers: { 'x-helm-client-hash': 'seeded' } })
+  const conv = makeConv(11)
+  const entries: ConversationEntry[] = [
+    { id: '201', kind: 'helm.input', data: { id: 'q1', text: '派子代理调研大纲现状', origin: 'human' }, createdAt: 1000 },
+    {
+      id: '202',
+      kind: 'pi.assistant',
+      model: [
+        { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'subagent', arguments: { prompt: '调研大纲现状' } }] },
+      ],
+    },
+    {
+      id: '203',
+      kind: 'pi.tool-result',
+      model: [{ role: 'toolResult', toolCallId: 'call-1', toolName: 'subagent', content: [{ type: 'text', text: '完成' }] }],
+    },
+    {
+      id: '204',
+      kind: 'helm.input',
+      data: {
+        id: 'in-204',
+        text: '后台子代理任务已结算。以下为运行 abc123 的结果数据。',
+        origin: 'agent',
+        whenBusy: 'followUp',
+        meta: { renderer: 'workflow:background-report', backgroundRunId: 'abc123', kind: 'subagent_report' },
+      },
+      createdAt: 3000,
+    },
+  ]
+
+  const store = makeTestStore({
+    conversations: [conv],
+    conversationDetails: { 11: { ...conv, entries } },
+    groupedUi: {
+      ...groupUiContributions([]),
+      toolViews: [
+        { pluginId: 'builtin:workflow', spec: { id: 'subagent-card', toolNames: ['subagent'], replaceRow: true, client: { module: 'index.tsx', export: 'SubagentToolView' } } },
+      ],
+      timelineRenderers: [
+        {
+          pluginId: 'builtin:workflow',
+          spec: { id: 'background-report', kinds: ['helm.input'], matchMeta: { renderer: 'workflow:background-report' }, client: { module: 'index.tsx', export: 'BackgroundReportCard' } },
+        },
+      ],
+    },
+  })
+
+  host = document.createElement('div')
+  document.body.appendChild(host)
+  await act(async () => {
+    root = createRoot(host!)
+    root.render(e(HostStoreProviders, { value: store }, e(ConversationPane, { conversationId: 11 })))
+  })
+
+  // 时间线：顶层 tool.view 业务卡携带 data-outline-card-id 二级锚
+  const cardTrace = host.querySelector<HTMLElement>('[data-outline-card-id="tool:call-1"]')
+  assert.ok(cardTrace, '顶层 tool.view 卡片 DOM 应携带 data-outline-card-id 二级锚')
+
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('.conversation-outline-trigger')!.click()
+  })
+  const options = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')]
+  assert.deepEqual(
+    options.map((btn) => btn.className.match(/conversation-outline-(human|assistant|heading|card|divider)/)?.[1]),
+    ['human', 'card', 'card'],
+    '大纲应包含提问 + subagent 业务卡 + 背景汇报卡（无空 assistant 节点）',
+  )
+
+  const scrolledElements: HTMLElement[] = []
+  const origScrollIntoView = HTMLElement.prototype.scrollIntoView
+  HTMLElement.prototype.scrollIntoView = function () {
+    scrolledElements.push(this)
+  }
+  try {
+    // 1. 点击 subagent 业务卡：经 cardId 二级锚精确滚动到卡片 trace 元素，回合容器高亮
+    const subagentOption = options.find((btn) => (btn.textContent ?? '').includes('subagent：调研大纲现状'))
+    assert.ok(subagentOption, '大纲应包含 subagent 业务卡节点（toolName + 入参摘要）')
+    await act(async () => {
+      subagentOption.click()
+    })
+    const lastScrolled = scrolledElements[scrolledElements.length - 1]!
+    assert.equal(lastScrolled.getAttribute('data-outline-card-id'), 'tool:call-1', '应精确滚动到二级锚标记的卡片 DOM')
+    assert.ok(
+      host.querySelector<HTMLElement>('[data-entry-id="202"]')?.className.includes('entry-highlighted'),
+      '所属回合容器应触发 entry-highlighted 高亮',
+    )
+
+    // 2. 点击背景汇报 plugin-card：按自身 entryId 定位包装容器
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('.conversation-outline-trigger')!.click()
+    })
+    const reportOption = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')]
+      .find((btn) => (btn.textContent ?? '').includes('后台子代理任务已结算'))
+    assert.ok(reportOption, '大纲应包含背景汇报 plugin-card 节点')
+    await act(async () => {
+      reportOption.click()
+    })
+    const reportScrolled = scrolledElements[scrolledElements.length - 1]!
+    assert.equal(reportScrolled.getAttribute('data-entry-id'), '204', 'plugin-card 应按自身 entryId 定位包装容器')
+    assert.ok(reportScrolled.querySelector('.stub-report-card') !== null, '定位目标内应包含插件卡片')
+  } finally {
+    HTMLElement.prototype.scrollIntoView = origScrollIntoView
+    globalThis.fetch = origFetch
   }
 })
