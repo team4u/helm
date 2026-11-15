@@ -177,6 +177,13 @@ export interface WorkflowRunSummary {
    * HTTP/CLI/Web 仅透传展示，不据其做任何重放决策。
    */
   journalIoErrors?: string[]
+  /**
+   * 前台同步标记：经同步工具（background:false / 自动化缺省）启动的 run，
+   * 父回合工具调用正阻塞等待；此状态下可被 detach 动作转入后台。
+   */
+  syncForeground?: boolean
+  /** detach 转后台时间戳（转后台即视为后台 run，不可再次 detach）。 */
+  detachedAt?: number
 }
 
 export type WorkflowRunState = WorkflowRunSummary

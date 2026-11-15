@@ -11,6 +11,9 @@ import type { JournalWriter } from './journal.js'
 import type { WorkflowEntry } from './progress.js'
 import type { RunRecord } from './run-store.js'
 
+/** 前台等待唤醒结果：detached = 已被 detach 动作转入后台；settled = run 已终态。 */
+export type ForegroundWaitOutcome = 'detached' | 'settled'
+
 export interface ActiveRun {
   runId: string
   conversationId: number
@@ -34,6 +37,18 @@ export interface ActiveRun {
    * 取消则立即补杀（防快照时序漏杀）。
    */
   childConversations: Set<number>
+  /**
+   * 前台同步等待者（同步工具的 waitForeground 挂起处）：detach 动作以
+   * 'detached' 唤醒（工具立即返回后台句柄）；结算链以 'settled' 收尾
+   * （工具继续读终态）。注册与唤醒互斥于单线程事件循环的同步临界段。
+   */
+  foregroundWaiters: Set<(outcome: ForegroundWaitOutcome) => void>
+  /**
+   * 前台父 signal 解绑口（startBackgroundAgent foreground 模式注入）：
+   * detach 的同步临界段调用，解除父工具调用 signal 对本 run 的中止绑定
+   * （父回合结束/中止不再误杀已转后台的 run）。
+   */
+  unbindForegroundSignal?: () => void
   /** 本 run 的持久记录引用（同一对象）：子会话事实即时落盘与终态写共用。 */
   record: RunRecord
   /** progress 持久化节流（timeline 非空后定期落盘）。 */
@@ -42,6 +57,12 @@ export interface ActiveRun {
   lastNodeEventAt: number
   /** 250ms 窗口内节点边界事件的 trailing timer：窗口内启动绝不丢失。 */
   pendingEventTimer?: ReturnType<typeof setTimeout>
+}
+
+/** 唤醒全部前台等待者（Promise 单次 resolve 幂等；detach 与结算链共用出口）。 */
+export function resolveForegroundWaiters(run: ActiveRun, outcome: ForegroundWaitOutcome): void {
+  for (const resolve of run.foregroundWaiters) resolve(outcome)
+  run.foregroundWaiters.clear()
 }
 
 /** progress 持久化最小间隔：高频进度不逐条落库。 */

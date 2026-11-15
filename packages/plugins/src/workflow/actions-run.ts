@@ -1,13 +1,15 @@
 /**
  * builtin:workflow 运行族动作（自 actions.ts 按域拆出）。
  *
- * 2 个动作：
+ * 3 个动作：
  * - run：启动工作流运行（会话目标显式优先、上下文冲突拒绝、深度前置拦截、
  *   wait 终态等待）；
- * - steer：后台子代理安全插话（授权证明与守卫细节见 ./steer.ts）。
+ * - steer：后台子代理安全插话（授权证明与守卫细节见 ./steer.ts）；
+ * - detach：前台同步 run 转后台（授权与状态纪律见 ./detach.ts）。
  */
 import { HelmError, type HelmPluginContext } from '@helm/protocol'
 import { steerBackgroundSubagent } from './steer.js'
+import { detachForegroundSyncRun } from './detach.js'
 import type { WorkflowActionDeps } from './actions.js'
 
 export function registerWorkflowRunActions(
@@ -171,6 +173,60 @@ export function registerWorkflowRunActions(
           ...(context.signal !== undefined ? { signal: context.signal } : {}),
         },
       )
+    },
+  })
+
+  // ---- 动作 detach：前台同步 run 转后台（同步工具阻塞等待的唯一放行口） ----
+  // 授权与状态纪律见 ./detach.ts：仅前台同步标记（record.syncForeground）且
+  // running 的 run；run 发起会话必须 human-owned（自动化同步等待是防早结算
+  // 策略，一律拒绝）；会话上下文调用须为发起会话自身或祖先。引擎在同步
+  // 临界段原子置位 detachedAt/notifyParentOnSettle 并唤醒阻塞中的工具调用
+  // （立即返回后台句柄），自然完成与 detach 竞态只能有一个终态/通知路径。
+  ctx.action({
+    id: 'detach',
+    description:
+      '把运行中的前台同步 run（subagent / SubagentWorkflow 同步等待路径）转入后台：阻塞中的工具调用立即返回后台句柄，run 继续执行并在终态后 followUp 汇报。仅前台同步标记且 running 的 run 可转（后台启动与已转后台的 run 拒绝）；run 发起会话必须 human-owned，自动化会话（bot/helm）同步等待是既定策略，拒绝 detach；会话内调用仅允许发起会话自身或其祖先。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        runId: { type: 'string', description: '前台同步运行 ID（同步工具启动的 run）' },
+      },
+      required: ['runId'],
+      additionalProperties: false,
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        detached: { type: 'boolean', const: true },
+        runId: { type: 'string' },
+        run: { type: 'object' },
+      },
+      required: ['detached', 'runId', 'run'],
+      additionalProperties: false,
+    },
+    cli: {
+      command: ['workflows', 'detach'],
+      description: '把运行中的前台同步运行转入后台（阻塞中的工具调用立即返回后台句柄）',
+      positional: [{ field: 'runId', required: true }],
+    },
+    async handler(input, context) {
+      const { runId } = input as { runId: string }
+      const output = detachForegroundSyncRun(
+        {
+          getRun: (id) => workflows.getRun(id),
+          detach: (id) => workflows.detachForegroundRun(id),
+          getConversation: (id) => ctx.host.getConversation(id),
+          getConversationOwnership: (id) => ctx.host.getConversationOwnership(id),
+        },
+        { runId },
+        {
+          ...(context.conversationId !== undefined
+            ? { conversationId: context.conversationId }
+            : {}),
+        },
+      )
+      syncRunsDoc()
+      return output
     },
   })
 }

@@ -26,7 +26,7 @@ import {
   type WorkflowRunSummary,
 } from '../../contracts.js'
 import { JournalWriter } from './journal.js'
-import type { ActiveRun } from './active-run.js'
+import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
 import { newRunId, type RunRecord } from './run-store.js'
 import { redactNodes, redactSummaryNodes, toSummary } from './run-summary.js'
 import type { WorkflowServiceContext } from './service-context.js'
@@ -39,12 +39,17 @@ import type { WorkflowServiceContext } from './service-context.js'
  * 3. 前置错误（onResolved 前 spawn reject）当场同步 rethrow 原始错误——但
  *    durable 记录已存在，由后台兜底链将其结算为 failed（诚实终态，不删记录
  *    留僵尸 running，也不伪造成功）；
- * 4. 父 signal 仅在启动阶段（onResolved 前）传播取消，就绪即解绑——父回合
- *    结束后的 signal abort 不误杀后台子代理；此后只受 abort(runId)/close() 控制；
+ * 4. 父 signal 传播分两种模式：后台模式（缺省）仅启动阶段（onResolved 前）
+ *    传播，就绪即解绑——父回合结束后的 signal abort 不误杀后台子代理；
+ *    前台同步模式（foreground:true，同步 subagent 工具）绑定持续到 detach
+ *    或终态——detach 的临界段解绑（转后台后父 signal 不再杀 run），此后
+ *    只受 abort(runId)/close() 控制；
  * 5. 插件从不 onResolved 但 settle：execution 留空（绝不伪造），abort 无子会话
  *    可停，仅取消本 run；
  * 6. onBackgroundAgentSettled 失败不推翻终态：notifiedAt 不置位，init() 按
  *    outbox 语义补发（至少一次；父侧 reportBackgroundAgent 幂等去重）。
+ * 前台模式（foreground:true）：record 标记 syncForeground（可被 detach 转入
+ * 后台），notifyParentOnSettle 缺省 false（detach 置位后才走结算汇报链）。
  */
 export async function startBackgroundAgent(
   svc: WorkflowServiceContext,
@@ -53,6 +58,8 @@ export async function startBackgroundAgent(
     parentToolCallId?: string
     label?: string
     notifyParentOnSettle?: boolean
+    /** 前台同步模式：record 标记 syncForeground、父 signal 绑定至 detach/终态。 */
+    foreground?: boolean
   },
 ): Promise<{
   run: WorkflowRunSummary
@@ -74,6 +81,7 @@ export async function startBackgroundAgent(
   const runId = newRunId()
   const createdAt = Date.now()
   const abort = new AbortController()
+  const foreground = options?.foreground === true
   const parentToolCallId =
     options?.parentToolCallId !== undefined && options.parentToolCallId !== ''
       ? options.parentToolCallId
@@ -111,7 +119,9 @@ export async function startBackgroundAgent(
     createdAt,
     updatedAt: createdAt,
     kind: 'subagent',
-    notifyParentOnSettle: options?.notifyParentOnSettle ?? true,
+    // 前台同步：缺省不通知（等待 detach 置位或终态）；后台：缺省通知。
+    notifyParentOnSettle: options?.notifyParentOnSettle ?? !foreground,
+    ...(foreground ? { syncForeground: true } : {}),
     journalPath,
     nodes: [node],
   }
@@ -136,6 +146,7 @@ export async function startBackgroundAgent(
     pendingAborts: new Set(),
     pendingExecs: new Set(),
     childConversations: new Set(),
+    foregroundWaiters: new Set(),
     lastPersistAt: createdAt,
     lastNodeEventAt: createdAt,
   }
@@ -143,6 +154,11 @@ export async function startBackgroundAgent(
   // 等多个 await 点，父会话可能已进入级联取消边界——在此拒绝，不留漏网 run。
   svc.cancellation.assertNotCancelling(request.parentConversationId)
   svc.active.set(runId, run)
+
+  // 父 signal 解绑口（下方 parentSignal 段赋值；settle/启动失败路径经此收口，
+  // 前台模式下 detach 临界段经 run.unbindForegroundSignal 解绑）。声明先于
+  // 首个 await：durable 写失败窗口内触发的 settle 不触碰 TDZ。
+  let cleanupParentSignal: (() => void) | undefined
 
   // abort(runId)/close()/级联取消 → 取消本 run 信号（spawn 信号桥停子会话回合）+
   // 经 host.abortConversationGuarded 守卫中止已 onResolved 的子会话（human
@@ -276,7 +292,12 @@ export async function startBackgroundAgent(
       svc.emitEventSafe('workflow.updated', { run: { ...run.summary } })
       svc.active.delete(runId)
       if (settleError !== undefined) run.settleError = settleError
+      cleanupParentSignal?.()
+      run.unbindForegroundSignal = undefined
       resolveDone()
+      // 前台等待者最后唤醒（settleError 已定稿）：工具侧 waitForegroundRun
+      // 以 'settled' 继续读终态；已 detach 的等待者早已返回（Promise 单次）。
+      resolveForegroundWaiters(run, 'settled')
     }
   }
 
@@ -348,6 +369,8 @@ export async function startBackgroundAgent(
     svc.active.delete(runId)
     await run.writer.close().catch(() => {})
     resolveDone()
+    // 此窗口内不可能有前台等待者（runId 尚未返回给调用方），防御性收口。
+    resolveForegroundWaiters(run, 'settled')
     throw persistError
   }
   svc.emitEventSafe('workflow.updated', { run: redactSummaryNodes(svc.redact, { ...run.summary }) })
@@ -408,15 +431,23 @@ export async function startBackgroundAgent(
     signal: abort.signal,
   }
 
-  // 父 signal 仅启动阶段传播（ready 前）；onResolved 即解绑。
+  // 父 signal 传播（按模式）：
+  // - 后台模式（缺省）：仅启动阶段（ready 前）传播，onResolved 即解绑——
+  //   父回合结束后的 signal abort 不误杀后台子代理；
+  // - 前台同步模式（foreground:true）：绑定持续到 detach 或终态——同步工具
+  //   的父 signal abort 中止本 run（保留同步语义）；detach 临界段经
+  //   run.unbindForegroundSignal 解绑（转后台后父 signal 不再杀 run）。
   const parentSignal = request.signal
   const onParentAbort = (): void => {
-    if (!onResolvedFired && !settled) abort.abort()
+    if (settled) return
+    if (foreground || !onResolvedFired) abort.abort()
   }
   parentSignal?.addEventListener('abort', onParentAbort, { once: true })
   const detachParentSignal = (): void => {
     parentSignal?.removeEventListener('abort', onParentAbort)
   }
+  cleanupParentSignal = detachParentSignal
+  if (foreground) run.unbindForegroundSignal = detachParentSignal
 
   if (parentSignal?.aborted || svc.isClosed()) abort.abort()
   const spawnPromise = (async () => {
@@ -453,8 +484,9 @@ export async function startBackgroundAgent(
   }
 
   // 情况 B：onResolved 已触发（真实 execution 元数据），或外部插件未回
-  // onResolved 但已同步 settle（execution 留空，绝不伪造）。
-  detachParentSignal()
+  // onResolved 但已同步 settle（execution 留空，绝不伪造）。后台模式就地
+  // 解绑父 signal；前台模式保持绑定至 detach/终态。
+  if (!foreground) detachParentSignal()
 
   try {
     svc.writeRecord(record)

@@ -19,6 +19,7 @@ import { stringifyPretty } from './model-format.ts'
 import { canSaveRunAsWorkflow, parseWorkflowArgsInput, parseWorkflowSaveResult } from './model-library.ts'
 import {
   buildWorkflowPhaseSections,
+  canDetachForegroundRun,
   canReplayWorkflowRun,
   canResumeWorkflowRun,
   extractWorkflowLogs,
@@ -85,6 +86,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
       onToggleResult={() => setResultOpen((v) => !v)}
       toolProps={props}
       inWorkbench={false}
+      viewerConversationId={props.conversationId}
     />
   )
 }
@@ -98,6 +100,8 @@ export function WorkflowRunCardBody(props: {
   onToggleResult: () => void
   toolProps?: { input?: unknown; result?: unknown; artifactRef?: string }
   inWorkbench: boolean
+  /** 当前查看会话（时间线即发起会话；工作台为面板会话）：前台同步 run 的「转入后台」可见性判定。 */
+  viewerConversationId?: number
   /** 统一执行树子节点（agent 节点会话的深层后代；缺省仅展示 run 自身节点）。 */
   childNodes?: ExecutionNode[]
 }): ReactNode {
@@ -146,6 +150,17 @@ export function WorkflowRunCardBody(props: {
   }
   const abort = (): void => {
     guarded(() => ctx.callAction('abort', { runId: run.id }), '中止工作流失败')
+  }
+  // 转入后台：仅运行中的前台同步 run（父回合工具调用阻塞等待处可放行）；
+  // detach 后阻塞中的调用立即返回后台句柄，终态 followUp 汇报。
+  const detach = (): void => {
+    guarded(
+      () =>
+        ctx
+          .callAction('detach', { runId: run.id })
+          .then(() => ctx.notify(`已转入后台（运行 ${run.id}）：当前调用将收到后台句柄，完成后自动汇报`)),
+      '转入后台失败',
+    )
   }
   const resume = (): void => {
     guarded(
@@ -248,6 +263,18 @@ export function WorkflowRunCardBody(props: {
           <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={abort}>
             <Icon name="square" size={11} />
             中止
+          </button>
+        ) : null}
+        {canDetachForegroundRun(run, props.viewerConversationId) ? (
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy}
+            onClick={detach}
+            title="把该前台同步运行转入后台：阻塞中的工具调用立即返回后台句柄，运行完成后自动 followUp 汇报"
+          >
+            <Icon name="arrow-down-to-line" size={11} />
+            转入后台
           </button>
         ) : null}
         {canResumeWorkflowRun(run) ? (

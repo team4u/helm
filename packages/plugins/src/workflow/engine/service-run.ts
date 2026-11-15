@@ -24,7 +24,7 @@ import {
   runWorkflow,
   type WorkflowRunResult,
 } from './runtime.js'
-import type { ActiveRun } from './active-run.js'
+import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
 import { newRunId, type RunRecord } from './run-store.js'
 import { redactSummaryNodes, toSummary } from './run-summary.js'
 import { settleWorkflowRun } from './run-settle.js'
@@ -35,12 +35,14 @@ import type { WorkflowServiceContext } from './service-context.js'
  * 启动一个工作流 run：后台执行，立即返回 summary（不等完成）。
  * context 由内核受信注入（工具链真实 callId），不是用户可写输入；
  * 新 run 必须提供 conversationId；resume 未另指定时复用原 run 的会话。
+ * context.foreground 置位 record.syncForeground（前台同步 run：父工具调用
+ * 阻塞等待，可被 detach 转后台；不通知父会话直至 detach 置位）。
  * @throws HelmError validation_error / not_found / workflow_action_uncertain / journal_read_failed。
  */
 export async function startWorkflowRun(
   svc: WorkflowServiceContext,
   request: WorkflowRunRequest,
-  context?: { parentToolCallId?: string; notifyParentOnSettle?: boolean },
+  context?: { parentToolCallId?: string; notifyParentOnSettle?: boolean; foreground?: boolean },
 ): Promise<WorkflowRunSummary> {
   svc.assertNotClosed()
   await svc.init()
@@ -280,6 +282,9 @@ export async function startWorkflowRun(
     ...(context?.notifyParentOnSettle === true || replayFrom?.notifyParentOnSettle === true
       ? { notifyParentOnSettle: true }
       : {}),
+    // 前台同步标记（工具 background:false）：可被 detach 转后台；resume 不
+    // 继承（接管 run 的等待方由新调用方决定，不伪造前台事实）。
+    ...(context?.foreground === true ? { syncForeground: true } : {}),
     ...(replayFrom !== undefined ? { autoResumeCount: (replayFrom.autoResumeCount ?? 0) + 1 } : {}),
     ...(meta?.description !== undefined ? { description: svc.redact(meta.description) } : {}),
     ...(meta?.phases !== undefined
@@ -315,6 +320,7 @@ export async function startWorkflowRun(
     pendingAborts: new Set(),
     pendingExecs: new Set(),
     childConversations: new Set(),
+    foregroundWaiters: new Set(),
     lastPersistAt: createdAt,
     lastNodeEventAt: createdAt,
   }
@@ -349,6 +355,8 @@ export async function startWorkflowRun(
     await run.writer.close().catch(() => {})
     svc.active.delete(runId)
     resolveRunDone()
+    // 此窗口内不可能有前台等待者（runId 尚未返回给调用方），防御性收口。
+    resolveForegroundWaiters(run, 'settled')
     throw error
   }
   svc.emitEventSafe('workflow.updated', { run: redactSummaryNodes(svc.redact, { ...run.summary }) })

@@ -115,6 +115,7 @@ function renderCard(
     worktree?: { path: string; branch: string }
     expanded?: boolean
     toolSummary?: SubagentParentToolSummary
+    viewerConversationId?: number
   } = {},
 ): string {
   // 存量流式行 / 截断 / 报错测试均针对展开态流内容：默认展开保持覆盖语义，extra 可覆盖。
@@ -353,6 +354,40 @@ test('backgroundRun failed：副栏渲染错误提示，不被子会话旧 idle 
   assert.ok(html.includes('gate 验收失败'), '应包含具体错误信息')
   assert.ok(html.includes('subagent-live-subline-error'), '副栏应使用 error 变体样式类')
   assert.ok(html.includes('异常'), '徽章应显示异常态')
+})
+
+test('前台同步 run：查看会话即发起会话时显示「转入后台」，普通后台 / 已转后台 / 非本会话不显示', { timeout: 60_000 }, () => {
+  const store = makeStore({
+    conversations: [summary(11, 'working')],
+    conversationDetails: { 11: { ...summary(11, 'working'), entries: [] } },
+  })
+  // 前台同步（syncForeground 未 detached）+ 查看会话 1 = 发起会话 1。
+  const visible = renderCard(store, 'running', {
+    backgroundRun: bgRun({ status: 'running', syncForeground: true }),
+    viewerConversationId: 1,
+  })
+  assert.ok(visible.includes('转入后台'), '前台同步 running run 应显示转入后台按钮')
+
+  // 普通（非前台同步）后台 run：不显示。
+  const background = renderCard(store, 'running', {
+    backgroundRun: bgRun({ status: 'running' }),
+    viewerConversationId: 1,
+  })
+  assert.ok(!background.includes('转入后台'), '普通后台 run 不得显示转入后台按钮')
+
+  // 已转后台（detachedAt）：不显示。
+  const detached = renderCard(store, 'running', {
+    backgroundRun: bgRun({ status: 'running', syncForeground: true, detachedAt: 5 }),
+    viewerConversationId: 1,
+  })
+  assert.ok(!detached.includes('转入后台'), '已转后台的 run 不得再显示转入后台按钮')
+
+  // 查看会话非发起会话（viewerConversationId=2 ≠ run.conversationId=1）：不显示。
+  const otherViewer = renderCard(store, 'running', {
+    backgroundRun: bgRun({ status: 'running', syncForeground: true }),
+    viewerConversationId: 2,
+  })
+  assert.ok(!otherViewer.includes('转入后台'), '查看会话非发起会话时不得显示转入后台按钮')
 })
 
 test('无 worktree 且无后台 run：不渲染空徽章与错误行', { timeout: 60_000 }, () => {

@@ -6,8 +6,8 @@
 
 | 工具 | 核心入参 | 语义 |
 | :--- | :--- | :--- |
-| `subagent` | `prompt` 必填；`agentType`（Profile ID 或 `herdr:agy` 等外部运行时标识）、`cwd`、`background`、`isolation: 'worktree'`、`schema`、`gate`、`resume`、`model`、`effort`、`attachments`、`maxSubagentDepth`（显式授予子树深度上限，1..5，缺省继承 2）、`secretNames`（外部运行时窗格的父会话机密逐名授予，仅外部运行时消费，原生 Profile 不支持） | 派生单个子代理。生命周期缺省按当前会话归属判定：人类直连会话缺省后台，自动化会话（非 human-owned）缺省同步等待最终结果；自动化会话显式 `background: true` 被拒绝。`agentType` 只选择目标执行体，不参与生命周期判定 |
-| `SubagentWorkflow` | `script / scriptPath / name` 三择一；`args` 任意 JSON（字符串形 JSON 自动解包）；`resumeFromRunId`；`background`（同一归属策略） | 在当前会话执行确定性编排脚本。生命周期缺省同 `subagent` 按会话归属判定（人类直连缺省后台、自动化缺省同步，自动化显式 `background: true` 拒绝）；后台启动即返回 running summary，终态经幂等汇报链投递；同步返回真实执行 summary（runId/status/nodes/result） |
+| `subagent` | `prompt` 必填；`agentType`（Profile ID 或 `herdr:agy` 等外部运行时标识）、`cwd`、`background`、`isolation: 'worktree'`、`schema`、`gate`、`resume`、`model`、`effort`、`attachments`、`maxSubagentDepth`（显式授予子树派生深度上限，1..5，缺省继承 2）、`secretNames`（外部运行时窗格的父会话机密逐名授予，仅外部运行时消费，原生 Profile 不支持） | 派生单个子代理。生命周期缺省按当前会话归属判定：人类直连会话缺省后台，自动化会话（非 human-owned）缺省同步等待最终结果；自动化会话显式 `background: true` 被拒绝。同步路径统一经受管后台单子代理启动（durable 前台 run，`syncForeground` 标记），阻塞等待期间可被 `detach` 动作按 runId 转后台（调用立即返回后台句柄，终态 followUp 汇报）。`agentType` 只选择目标执行体，不参与生命周期判定 |
+| `SubagentWorkflow` | `script / scriptPath / name` 三择一；`args` 任意 JSON（字符串形 JSON 自动解包）；`resumeFromRunId`；`background`（同一归属策略） | 在当前会话执行确定性编排脚本。生命周期缺省同 `subagent` 按会话归属判定（人类直连缺省后台、自动化缺省同步，自动化显式 `background: true` 拒绝）；后台启动即返回 running summary，终态经幂等汇报链投递；同步返回真实执行 summary（runId/status/nodes/result）。同步 run 标记 `syncForeground`，阻塞等待期间可被 `detach` 转后台（返回形状与后台启动兼容） |
 | `cleanup_worktree` | `worktreeId`（`node:path`）/ `conversationId` / `path`（可附 `nodeId` 消歧）三择一；`deleteBranch`、`force` | 清理一个受管隔离 Git Worktree；无任何显式选择器时以当前会话为选择器（`--current` 语义） |
 
 三个工具均返回结构化输出（`structuredOutput`），失败分支显式 `isError` 并附完整错误信息，绝不伪造空元数据。`subagent` 的 `resume` 凭上次执行的 `execution.conversationId` 或 `execution.executionId` 续接同一执行上下文；后台汇报经 `submitInput` 携带幂等 `requestId`（`helm:subagent-report:<runId>`），跨重启不重复投递。
@@ -58,6 +58,7 @@
 | `runs` | `helm workflows runs` | 列出运行记录；支持 `conversationId` 过滤，CLI `--current` 缺省按当前会话过滤 |
 | `inspect` | `helm workflows inspect <runId>` | 查看单个运行详情（含节点状态与进度时间线；已保存定义发起的 run 携带 `savedName`） |
 | `abort` | `helm workflows abort <runId>` | 中止运行中的工作流或后台子代理 |
+| `detach` | `helm workflows detach <runId>` | 把运行中的**前台同步** run（同步工具阻塞等待路径，`syncForeground` 标记）转入后台：引擎在同步临界段原子置位 `detachedAt`/`notifyParentOnSettle`，持久化并唤醒阻塞中的工具调用（立即返回后台句柄），父 signal 解绑（父回合结束/中止不再误杀）；终态经幂等汇报链 followUp。仅 running 且前台同步的 run 可转（后台启动与已转后台拒绝，幂等防重复）；run 发起会话必须 human-owned（automation 同步等待是防早结算既定策略，`detach_forbidden` 403）；会话内调用仅允许发起会话自身或其祖先（`detach_out_of_scope` 403）；未知 run 404。UI 在同步运行卡显示「转入后台」按钮（同一动作入口） |
 | `steer` | `helm workflows steer <runId> --text "<指导>"` | 向在途后台子代理插话；只允许发起会话或其祖先控制。原生节点按归属与 CAS 水位经内核 guarded 端口提交；外部执行按节点 `controls.steer` 动态委托插件动作，如实返回 `preflight`（发送前预检）或 `cas`（提交点原子复核）；Herdr 使用现有 `agent.prompt`，预检与投递之间刚变 idle 时允许接续一轮。原生已结束模型回合、human 归属、DSL 工作流、混合候选歧义均显式拒绝；`steered=true` 仅代表投递成功，不代表指导已执行完成；同步获得 HTTP、CLI、模型工具与 `run_action` 入口 |
 | `cleanup_worktree` | `helm worktrees cleanup` | 与工具同款语义；选择器三择一互斥，`--force` 清理脏工作树（不可越过占用/归属/locked 校验） |
 | `list_worktrees` | `helm worktrees list` | 列出受管工作树登记（含已清理记录的元数据；新建在前） |

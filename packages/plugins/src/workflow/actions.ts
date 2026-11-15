@@ -1,10 +1,10 @@
 /**
  * builtin:workflow 动作注册（自 workflow.ts 入口拆出；签名不变）。
  *
- * 12 个动作（五端复用：HTTP / CLI / run_action / Workflow / Web UI）按域分治：
+ * 13 个动作（五端复用：HTTP / CLI / run_action / Workflow / Web UI）按域分治：
  * - 工作流库（list/get/save/delete）与运行记录查询（runs/inspect/abort）
  *   保留在本模块；
- * - 运行族（run/steer）在 actions-run.ts；
+ * - 运行族（run/steer/detach）在 actions-run.ts；
  * - 受管 Worktree（cleanup_worktree/list_worktrees/inspect_worktree）在
  *   actions-worktree.ts。
  */

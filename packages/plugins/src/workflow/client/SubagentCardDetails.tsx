@@ -1,7 +1,7 @@
 /**
  * builtin:workflow 子代理卡内部子视图（自 SubagentCard.tsx 拆出）：
  * - SubagentCardHeading：第 1 层头部徽章区（图标 + 标题 + 徽章 + 统计尾注）；
- * - SubagentCardActions：头部动作栏（中止 / 清理工作树 / 重试）；
+ * - SubagentCardActions：头部动作栏（中止 / 转入后台 / 清理工作树 / 重试）；
  * - SubagentCardSublines：第 2 层动态副栏（当前动作摘要 + 前线活动）。
  * 纯展示组件：数据判定在 model-* 纯逻辑模块，本文件只做插槽排版。
  */
@@ -12,6 +12,7 @@ import type { WorkflowRunSummary } from '../../contracts.js'
 import { SPIN, EXECUTION_BADGE, EXECUTION_LABEL } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildWorktreeSelector } from './model-worktree.ts'
+import { canDetachForegroundRun } from './model-run.ts'
 import type { ExecutionAggregate, ExecutionNodeStatus } from './model-execution-status.ts'
 import type { SubagentBadge, SubagentHeaderSnippet } from './model-subagent-card.ts'
 import type { ExecutionApprovalItem, ExecutionFrontlineItem } from './model-execution-view.ts'
@@ -99,13 +100,14 @@ export function SubagentCardHeading(props: {
   )
 }
 
-/** 头部动作栏：中止后台任务 / 清理隔离工作树 / 重载详情（点击不冒泡整卡导航）。 */
+/** 头部动作栏：中止后台任务 / 前台同步转后台 / 清理隔离工作树 / 重载详情（点击不冒泡整卡导航）。 */
 export function SubagentCardActions(props: {
   backgroundRun: WorkflowRunSummary | undefined
   worktree: { path: string; branch: string; id?: string } | undefined
   inspectNodeId: string | undefined
   detailError: string | undefined
   onReload: () => void
+  viewerConversationId: number | undefined
 }): ReactNode {
   const ctx = usePluginContext()
   const { backgroundRun, worktree, inspectNodeId, detailError } = props
@@ -127,6 +129,24 @@ export function SubagentCardActions(props: {
         >
           <Icon name="square" size={11} />
           <span className="subagent-action-label">中止</span>
+        </button>
+      ) : null}
+      {backgroundRun !== undefined && canDetachForegroundRun(backgroundRun, props.viewerConversationId) ? (
+        <button
+          type="button"
+          className="btn btn-xs"
+          title="把该前台同步子代理转入后台：阻塞中的调用立即返回后台句柄，完成后自动 followUp 汇报"
+          aria-label="把该前台同步子代理转入后台"
+          onClick={(e) => {
+            e.stopPropagation()
+            void ctx
+              .callAction('detach', { runId: backgroundRun.id })
+              .then(() => ctx.notify(`已转入后台（运行 ${backgroundRun.id}）：当前调用将收到后台句柄，完成后自动汇报`))
+              .catch((err: unknown) => ctx.notify(`转入后台失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+          }}
+        >
+          <Icon name="arrow-down-to-line" size={11} />
+          <span className="subagent-action-label">转入后台</span>
         </button>
       ) : null}
       {worktree !== undefined ? (

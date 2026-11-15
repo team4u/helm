@@ -89,7 +89,7 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
       '工作流返回运行句柄时表示已启动；必须等终态汇报后才能交付最终结果。',
     ],
     description:
-      '在当前会话执行 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本（字符串形 JSON 自动解包）。人类交互会话缺省后台执行（background 缺省 true）：启动后立即返回运行中 summary，完成后向本会话 followUp 汇报；自动化会话（归属 bot/helm：受管子代理/驻留 Worker/触发会话）缺省同步等待终态（runId/status/nodes/result），显式 background=true 会被拒绝。',
+      '在当前会话执行 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本（字符串形 JSON 自动解包）。人类交互会话缺省后台执行（background 缺省 true）：启动后立即返回运行中 summary，完成后向本会话 followUp 汇报；自动化会话（归属 bot/helm：受管子代理/驻留 Worker/触发会话）缺省同步等待终态（runId/status/nodes/result），显式 background=true 会被拒绝。同步运行阻塞期间可经 workflows detach 动作或界面「转入后台」按 runId 转后台：调用立即返回后台句柄（ok/background/summary），终态 followUp 汇报。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -141,6 +141,9 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
         ...(context.callId !== undefined ? { parentToolCallId: context.callId } : {}),
         // 仅后台启动的 run 参与父会话通知与重启恢复的守卫中止。
         ...(backgroundChoice.background ? { notifyParentOnSettle: true } : {}),
+        // 同步启动：前台同步标记（syncForeground）——同步工具阻塞等待期间可
+        // 被 detach 动作按 runId 转后台；通知链在 detach 置位后才接入。
+        ...(backgroundChoice.background ? {} : { foreground: true }),
       }
       try {
         const started = await workflows.run({ ...input, conversationId: context.conversationId }, runContext)
@@ -155,12 +158,24 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
             structuredOutput: payload,
           }
         }
+        // 同步模式：父 signal abort 中止本 run（保留同步语义）；等待 detach
+        // 唤醒或终态。detach 唤醒后 finally 即解绑父 signal（转后台后父回合
+        // signal 不再杀 run），立即返回后台句柄。
         const onAbort = () => {
           void workflows.abort(started.id).catch(() => {})
         }
         context.signal?.addEventListener('abort', onAbort, { once: true })
         try {
-          await workflows.wait(started.id).catch(() => {})
+          const outcome = await workflows.waitForeground(started.id)
+          if (outcome === 'detached') {
+            syncRunsDoc()
+            // 与后台返回形状兼容：ok/background/summary（summary.id 即 runId）。
+            const payload = { ok: true, background: true, summary: workflows.getRun(started.id) }
+            return {
+              output: [{ type: 'text', text: safeResultText(payload) }],
+              structuredOutput: payload,
+            }
+          }
           return workflowResultEnvelope(workflows.getRun(started.id))
         } finally {
           context.signal?.removeEventListener('abort', onAbort)

@@ -101,6 +101,17 @@ async function until(predicate: () => Promise<boolean> | boolean, what: string, 
   }
 }
 
+/** 轮询直到谓词返回非 undefined 值（确定性等待，返回命中值）。 */
+async function untilValue<T>(resolve: () => Promise<T | undefined> | T | undefined, what: string, maxMs = 20_000): Promise<T> {
+  const start = Date.now()
+  for (;;) {
+    const value = await resolve()
+    if (value !== undefined) return value
+    if (Date.now() - start > maxMs) throw new Error(`等待超时: ${what}`)
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
+
 let rootDir: string
 
 before(() => {
@@ -166,7 +177,7 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
     }
   })
 
-  it('人类交互会话显式 background:false：保留同步路径（工具直接携带业务结果，不建 run）', { timeout: 60_000 }, async () => {
+  it('人类交互会话显式 background:false：同步路径携带业务结果（durable 前台 run，可 detach）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bg2')
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
@@ -186,7 +197,14 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
       const text = toolResultText(detail, 'subagent')
       assert.ok(text.includes('同步子代理回答'), `同步路径应直接携带业务结果：${text.slice(0, 300)}`)
       assert.ok(!text.includes('"background":true'), '同步路径不得回报后台句柄')
-      assert.equal((await runsOf(app, 1)).length, 0, '同步路径不得创建 run 记录')
+      // 同步路径统一走受管启动：durable 前台 run（kind=subagent + syncForeground），
+      // 自然完成后不通知父会话（notifyParentOnSettle 仅在 detach 置位）。
+      const runs = await runsOf(app, 1)
+      assert.equal(runs.length, 1, '同步路径应创建 durable run 记录（受管启动）')
+      assert.equal(runs[0]!.kind, 'subagent')
+      assert.equal(runs[0]!.status, 'completed')
+      assert.equal((runs[0] as { syncForeground?: boolean }).syncForeground, true, '同步 run 应标记 syncForeground（可 detach）')
+      assert.equal((await backgroundReports(app, 1)).length, 0, '自然完成的同步 run 不得投递结算汇报')
       assert.ok(app.kernel.listConversations().some((c) => c.parentConversationId === 1), '同步派生应创建子会话')
     } finally {
       await app.close()
@@ -214,7 +232,10 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
       let text = toolResultText(detail, 'subagent')
       assert.ok(text.includes('自动化子代理回答'), `自动化会话缺省应同步等待：${text.slice(0, 300)}`)
       assert.ok(!text.includes('"background":true'))
-      assert.equal((await runsOf(app, 1)).length, 0, '同步路径不得创建 run 记录')
+      // 同步缺省同样走受管启动：恰好一个 durable 前台 run（syncForeground）。
+      const syncRuns = await runsOf(app, 1)
+      assert.equal(syncRuns.length, 1, '同步路径应创建 durable run 记录（受管启动）')
+      assert.equal((syncRuns[0] as { syncForeground?: boolean }).syncForeground, true)
       const syncChild = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
       assert.ok(syncChild, '同步派生应创建子会话')
 
@@ -234,7 +255,7 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
         text.includes('subagent_failed') && text.includes('background') && text.includes('helm'),
         `拒绝信息应显式指出 background=true 不被允许并携带归属事实：${text.slice(0, 300)}`,
       )
-      assert.equal((await runsOf(app, 1)).length, 0, '被拒调用不得创建 run 记录')
+      assert.equal((await runsOf(app, 1)).length, 1, '被拒调用不得新增 run 记录（仅剩同步那一个）')
       assert.equal(
         app.kernel.listConversations().filter((c) => c.parentConversationId === 1).length,
         1,
@@ -334,6 +355,165 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
       )
       assert.equal((await runsOf(app, 1)).length, 1, '被拒调用不得创建新 run（仅剩同步那次）')
       assert.equal((await backgroundReports(app, 1)).length, 0, '被拒调用不产生任何汇报')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+describe('同步运行 detach 转后台（subagent / SubagentWorkflow 工具链）', { timeout: 60_000 }, () => {
+  /**
+   * 确定性 faux 响应步骤：子会话首回合（无 tool 结果消息）挂起等待手动放行；
+   * 父会话续答 / 汇报回合（上下文含 tool 结果）立即良性回答。消费次序在
+   * 父续答与子首答之间存在竞争，按调用方上下文分流使 FIFO 次序无关。
+   */
+  function gatedSteps(gate: { promise: Promise<unknown>; release: (message: unknown) => void }, count: number): unknown[] {
+    const step = async (context: { messages: Array<{ role: string }> }): Promise<unknown> => {
+      // 子会话首回合上下文只有 system + user；父会话续答/汇报回合含 toolResult。
+      const isChildFirstTurn = !context.messages.some((m) => m.role === 'tool' || m.role === 'toolResult')
+      if (isChildFirstTurn) return await gate.promise
+      return fauxAssistantMessage('良性回答')
+    }
+    return Array.from({ length: count }, () => step)
+  }
+
+  function makeGate(): { promise: Promise<unknown>; release: (message: unknown) => void } {
+    let release!: (message: unknown) => void
+    const promise = new Promise<unknown>((resolve) => {
+      release = resolve
+    })
+    return { promise, release }
+  }
+
+  it('同步 subagent 阻塞等待中 detach：工具立即返回后台句柄，run 继续并恰收一次汇报', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'fgdetach1')
+    const { models, faux } = makeFauxModels()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    try {
+      const gate = makeGate()
+      faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('subagent', { prompt: '慢同步任务', background: false })],
+          { stopReason: 'toolUse' },
+        ),
+        ...gatedSteps(gate, 5),
+      ])
+      const submitted = app.kernel.submitInput(1, '派一个同步子代理')
+      // run 就绪（受管启动：durable 前台 run + syncForeground）。
+      const run = await untilValue(async () => {
+        const runs = (await runsOf(app, 1)) as Array<{ id: string; status: string; syncForeground?: boolean }>
+        return runs.find((r) => r.syncForeground === true && r.status === 'running')
+      }, '前台同步 run 就绪')
+      // 会话内 detach（human-owned 父会话自身）：等待中的工具调用被唤醒。
+      const detached = (await app.kernel.plugins.invokeAction('builtin:workflow', 'detach', { runId: run.id }, { conversationId: 1 })) as {
+        detached: boolean
+        runId: string
+        run: { detachedAt?: number }
+      }
+      assert.equal(detached.detached, true)
+      assert.equal(detached.runId, run.id)
+      assert.ok(typeof detached.run.detachedAt === 'number')
+      await submitted
+      await app.kernel.waitForIdle(1)
+
+      // 工具输出：后台句柄（与 background:true 形状兼容），不含业务结果。
+      const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const text = toolResultText(detail, 'subagent')
+      assert.ok(text.includes('"background":true'), `detach 后工具应返回后台句柄：${text.slice(0, 300)}`)
+      assert.ok(text.includes(`"runId":"${run.id}"`), '后台句柄应携带原 runId')
+      assert.ok(!text.includes('慢同步任务回答'), 'detach 后同步调用不再携带业务结果')
+
+      // 重复 detach 显式拒绝（已转后台）。
+      await assert.rejects(
+        () => app.kernel.plugins.invokeAction('builtin:workflow', 'detach', { runId: run.id }, { conversationId: 1 }),
+        (err: unknown) => err instanceof Error && /已在后台/.test(err.message),
+      )
+
+      // 放行子会话：run 推进到终态，父会话恰收一次结算汇报。
+      gate.release(fauxAssistantMessage('慢同步任务回答'))
+      await until(async () => (await runsOf(app, 1)).find((r) => r.id === run.id)?.status !== 'running', 'detached run 到达终态')
+      await until(async () => (await backgroundReports(app, 1)).some((r) => r.backgroundRunId === run.id), '结算汇报到达')
+      const reports = (await backgroundReports(app, 1)).filter((r) => r.backgroundRunId === run.id)
+      assert.equal(reports.length, 1, 'detached run 结算汇报恰一次')
+      await app.kernel.waitForIdle(1).catch(() => {})
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('helm 归属会话的前台 run 拒绝 detach（automation 同步等待防早结算）', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'fgdetach2')
+    const { models, faux } = makeFauxModels()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    try {
+      app.kernel.markConversationOwnership(1, 'helm')
+      const gate = makeGate()
+      faux.setResponses([
+        fauxAssistantMessage([fauxToolCall('subagent', { prompt: '自动化同步任务' })], { stopReason: 'toolUse' }),
+        ...gatedSteps(gate, 5),
+      ])
+      const submitted = app.kernel.submitInput(1, '派一个同步子代理')
+      const run = await untilValue(async () => {
+        const runs = (await runsOf(app, 1)) as Array<{ id: string; status: string; syncForeground?: boolean }>
+        return runs.find((r) => r.syncForeground === true && r.status === 'running')
+      }, '前台同步 run 就绪')
+      await assert.rejects(
+        () => app.kernel.plugins.invokeAction('builtin:workflow', 'detach', { runId: run.id }, { conversationId: 1 }),
+        (err: unknown) => err instanceof Error && /归属 helm/.test(err.message),
+      )
+      // 拒绝不影响同步等待：放行后正常携带业务结果返回。
+      gate.release(fauxAssistantMessage('自动化子代理回答'))
+      await submitted
+      await app.kernel.waitForIdle(1)
+      const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const text = toolResultText(detail, 'subagent')
+      assert.ok(text.includes('自动化子代理回答'), `拒绝 detach 不影响同步语义：${text.slice(0, 300)}`)
+      assert.ok(!text.includes('"background":true'))
+      assert.equal((await backgroundReports(app, 1)).length, 0, '自然完成的前台 run 不汇报')
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('同步 SubagentWorkflow 阻塞等待中 detach：返回后台句柄形状，终态 followUp 汇报', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'fgdetach3')
+    const { models, faux } = makeFauxModels()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    try {
+      // 人类交互会话显式同步工作流（automation 拒绝已由上一用例覆盖）：脚本带
+      // agent 节点（子会话经 gate 挂起），run 停留在 running 供 detach。
+      const script =
+        'export const meta = { name: "fg-detach-tool", description: "t" }\n' +
+        'const a = await agent("工作流挂起节点")\nreturn { done: a }'
+      const gate = makeGate()
+      faux.setResponses([
+        fauxAssistantMessage([fauxToolCall('SubagentWorkflow', { script, background: false })], { stopReason: 'toolUse' }),
+        ...gatedSteps(gate, 5),
+      ])
+      const submitted = app.kernel.submitInput(1, '跑一个同步工作流')
+      const run = await untilValue(async () => {
+        const runs = (await runsOf(app, 1)) as Array<{ id: string; status: string; kind?: string; syncForeground?: boolean }>
+        return runs.find((r) => r.syncForeground === true && r.status === 'running' && r.kind !== 'subagent')
+      }, '前台同步工作流 run 就绪')
+      const detached = (await app.kernel.plugins.invokeAction('builtin:workflow', 'detach', { runId: run.id }, { conversationId: 1 })) as {
+        detached: boolean
+      }
+      assert.equal(detached.detached, true)
+      await submitted
+      await app.kernel.waitForIdle(1)
+      const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
+      const text = toolResultText(detail, 'SubagentWorkflow')
+      assert.ok(text.includes('"background":true'), `detach 后同步工作流应返回后台句柄：${text.slice(0, 300)}`)
+      assert.ok(text.includes(`"id":"${run.id}"`), '后台句柄 summary 应携带原 runId')
+
+      // 放行挂起的 agent 节点：run 推进到终态，父会话恰收一次 workflow_report。
+      gate.release(fauxAssistantMessage('工作流节点回答'))
+      await until(async () => (await runsOf(app, 1)).find((r) => r.id === run.id)?.status !== 'running', 'detached 工作流到达终态')
+      await until(async () => (await backgroundReports(app, 1)).some((r) => r.backgroundRunId === run.id), 'workflow_report 汇报到达')
+      const reports = (await backgroundReports(app, 1)).filter((r) => r.backgroundRunId === run.id)
+      assert.equal(reports.length, 1)
+      assert.equal(reports[0]!.kind, 'workflow_report')
+      await app.kernel.waitForIdle(1).catch(() => {})
     } finally {
       await app.close()
     }

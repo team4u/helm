@@ -678,6 +678,49 @@ test('SSR：running 工作流显示中止按钮与执行中徽章', { timeout: 6
   )
   assert.ok(html.includes('中止'), 'running run 应显示中止按钮')
   assert.ok(html.includes('执行中'), '应显示执行中徽章')
+  assert.ok(!html.includes('转入后台'), '普通（非前台同步）running run 不得显示转入后台按钮')
+})
+
+test('SSR：前台同步 run 仅在查看会话即发起会话时显示「转入后台」', { timeout: 60_000 }, async () => {
+  // 前台同步（syncForeground 未 detach）+ 当前会话 = 发起会话（stubCtx.conversationId=1）。
+  const visible = await renderWorkflowToolView(
+    {
+      callId: 'call-fg', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
+      siblingCalls: [],
+    },
+    { runs: [run({ id: 'wf_fg', status: 'running', syncForeground: true, parentToolCallId: 'call-fg', nodes: [node({ id: 'a', status: 'running' })] })] },
+  )
+  assert.ok(visible.includes('转入后台'), '前台同步 running run 应显示转入后台按钮')
+
+  // 已转后台（detachedAt）：按钮消失（不可重复 detach）。
+  const detached = await renderWorkflowToolView(
+    {
+      callId: 'call-fg2', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
+      siblingCalls: [],
+    },
+    { runs: [run({ id: 'wf_fg2', status: 'running', syncForeground: true, detachedAt: 123, parentToolCallId: 'call-fg2', nodes: [node({ id: 'a', status: 'running' })] })] },
+  )
+  assert.ok(!detached.includes('转入后台'), '已转后台的 run 不得再显示转入后台按钮')
+
+  // 非发起会话查看（run 属于后代会话 2）：按钮隐藏，服务端授权仍兜底。
+  const otherConv = await renderWorkflowToolView(
+    {
+      callId: 'call-fg3', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
+      siblingCalls: [],
+    },
+    { runs: [run({ id: 'wf_fg3', conversationId: 2, status: 'running', syncForeground: true, parentToolCallId: 'call-fg3', nodes: [node({ id: 'a', status: 'running' })] })] },
+  )
+  assert.ok(!otherConv.includes('转入后台'), '查看会话非发起会话时不得显示转入后台按钮')
+
+  // 终态 run：按钮消失。
+  const settled = await renderWorkflowToolView(
+    {
+      callId: 'call-fg4', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1,
+      siblingCalls: [],
+    },
+    { runs: [run({ id: 'wf_fg4', status: 'completed', syncForeground: true, parentToolCallId: 'call-fg4', nodes: [node({ id: 'a', status: 'done' })] })] },
+  )
+  assert.ok(!settled.includes('转入后台'), '终态 run 不得显示转入后台按钮')
 })
 
 test('SSR：WorkflowWorkbenchPanel 空态显示占位文案', { timeout: 60_000 }, async () => {

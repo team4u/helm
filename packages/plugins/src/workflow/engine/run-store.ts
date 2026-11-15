@@ -113,6 +113,14 @@ export interface RunRecord {
   /** 后台子代理的 Profile 与执行环境元数据（onResolved 回传后补全）。 */
   subagentMeta?: { agentType?: string; execution?: AgentExecutionInfo }
   /**
+   * 前台同步标记：经同步工具（background:false / 自动化缺省）启动的 run。
+   * 父回合工具调用阻塞等待（引擎 foregroundWaiters），可被 detach 动作
+   * 原子转入后台（转后台即置 notifyParentOnSettle + detachedAt）。
+   */
+  syncForeground?: boolean
+  /** detach 转后台时间戳（幂等标记：已转后台的 run 拒绝再次 detach）。 */
+  detachedAt?: number
+  /**
    * 私有恢复元数据：本 run 派生过的子会话 ID 集（onResolved 登记即持久；
    * writeRecord 统一从活跃 run 的 childConversations 合入，杜绝旧副本覆盖）。
    * 后台 run 崩溃恢复（prepareRecovery/init 守卫中止）以这组持久 IDs 为权威

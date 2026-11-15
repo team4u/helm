@@ -1,22 +1,25 @@
 /**
  * 外部运行时（如 Herdr 窗格）的后台任务摘要组件（无原生子会话时如实展示，
- * 不虚构子会话入口）。
+ * 不虚构子会话入口）。运行中的前台同步 run 附带「转入后台」动作（detach）。
  */
 import type { ReactNode } from 'react'
-import { formatDurationMs } from '@helm/plugin-client'
+import { formatDurationMs, usePluginContext } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { useElapsedNowMs } from './hooks.ts'
 import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { subagentBadge } from './model-subagent-card.ts'
-import { resolveRunElapsedMs } from './model-run.ts'
+import { canDetachForegroundRun, resolveRunElapsedMs } from './model-run.ts'
 
 export function ExternalRunSummary(props: {
   run?: WorkflowRunSummary
   worktree?: { path: string; branch: string }
   toolStatus: 'running' | 'done' | 'error'
   executionId?: string
+  /** 当前查看会话（时间线即发起会话）：前台同步 run 的「转入后台」可见性判定。 */
+  viewerConversationId?: number
 }): ReactNode {
+  const ctx = usePluginContext()
   const { run, worktree, toolStatus, executionId } = props
   const nodes = run?.nodes ?? []
   const running = nodes.filter((n) => n.status === 'running').length
@@ -44,6 +47,23 @@ export function ExternalRunSummary(props: {
         <span className={`badge ${badge.badge}`}>{badge.label}</span>
         {elapsedMs !== undefined ? (
           <span className="subagent-live-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
+        ) : null}
+        {run !== undefined && canDetachForegroundRun(run, props.viewerConversationId) ? (
+          <button
+            type="button"
+            className="btn btn-xs"
+            title="把该前台同步外部执行转入后台：阻塞中的调用立即返回后台句柄，完成后自动 followUp 汇报"
+            aria-label="把该前台同步外部执行转入后台"
+            onClick={() => {
+              void ctx
+                .callAction('detach', { runId: run.id })
+                .then(() => ctx.notify(`已转入后台（运行 ${run.id}）：当前调用将收到后台句柄，完成后自动汇报`))
+                .catch((err: unknown) => ctx.notify(`转入后台失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
+            }}
+          >
+            <Icon name="arrow-down-to-line" size={11} />
+            <span className="subagent-action-label">转入后台</span>
+          </button>
         ) : null}
       </div>
       <div className="subagent-live-stream subagent-external-body">

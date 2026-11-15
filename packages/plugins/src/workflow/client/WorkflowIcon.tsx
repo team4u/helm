@@ -3,10 +3,11 @@
  * 同一实例；无 Emoji）。全 client 仅此模块感知「图标名 → lucide 组件」映射。
  */
 import type { ReactNode } from 'react'
-import { Bot, Check, ChevronDown, ChevronRight, Circle, Clock, CornerDownRight, ExternalLink, GitBranch, GitPullRequest, Loader2, RotateCw, Square, Terminal, X } from 'lucide-react'
+import { ArrowDownToLine, Bot, Check, ChevronDown, ChevronRight, Circle, Clock, CornerDownRight, ExternalLink, GitBranch, GitPullRequest, Loader2, RotateCw, Square, Terminal, X } from 'lucide-react'
 
 export function Icon({ name, size = 12, className }: { name: string; size?: number; className?: string }): ReactNode {
   const map: Record<string, typeof Bot> = {
+    'arrow-down-to-line': ArrowDownToLine,
     bot: Bot,
     check: Check,
     'check-circle': Check,

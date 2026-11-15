@@ -239,6 +239,20 @@ export function canResumeWorkflowRun(run: WorkflowRunSummary): boolean {
 }
 
 /**
+ * 前台同步 run「转入后台」可用判定：仅明确 runId 的运行中前台同步 run
+ *（syncForeground 标记且尚未 detached），且当前查看会话即发起会话（父
+ * 回合工具调用阻塞处；跨会话/工作台他处不显示，服务端仍会复核授权）。
+ */
+export function canDetachForegroundRun(run: WorkflowRunSummary, viewerConversationId: number | undefined): boolean {
+  return (
+    run.status === 'running' &&
+    run.syncForeground === true &&
+    run.detachedAt === undefined &&
+    viewerConversationId === run.conversationId
+  )
+}
+
+/**
  * 已完成 run 重放可用判定：非 subagent 的 completed DSL run（含内联脚本）。
  * resumeFromRunId 对 completed run 同样合法：engine 沿用原脚本源（已保存定义
  * 重读最新文件、内联沿用源码）与原 args（显式 args 可覆盖），新 run 保留原会话。

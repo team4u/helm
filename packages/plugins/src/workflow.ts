@@ -28,7 +28,7 @@
  *   service.start 执行 init（终止遗留任务、标 failed、补发通知）与 close；
  *   liveTasks 声明在途任务（停用硬阻断）；
  * - 3 个模型工具（subagent / SubagentWorkflow / cleanup_worktree）与
- *   12 个动作（list/get/save/delete/run/runs/inspect/abort/steer/
+ *   13 个动作（list/get/save/delete/run/runs/inspect/abort/steer/detach/
  *   cleanup_worktree/list_worktrees/inspect_worktree）五端复用；
  * - 嵌套深度契约：受管子代理（经本插件派生的原生/外部子会话）默认可嵌套
  *   DEFAULT_MAX_SUBAGENT_DEPTH（2）层——主会话直接派生一层，一层子代理
@@ -50,7 +50,7 @@
  * - ./workflow/hooks.ts: agent_spawn 双钩（深度守卫 300 / worktree 隔离 200）、
  *   before_turn 工具剥离、turn_settled 级联取消与宿主事件订阅
  * - ./workflow/tools.ts: subagent / SubagentWorkflow / cleanup_worktree 工具
- * - ./workflow/actions.ts: 12 个动作（五端复用）
+ * - ./workflow/actions.ts: 13 个动作（五端复用）
  * - ./workflow/ui.ts: 前端 UI 扩展点声明
  */
 import { HelmError, type PluginDefinition } from '@helm/protocol'

@@ -119,7 +119,13 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   if (childId === undefined) {
     return (
       <div className="trace-entry">
-        <ExternalRunSummary run={meta.run} worktree={meta.worktree} toolStatus={props.status} executionId={meta.executionId} />
+        <ExternalRunSummary
+          run={meta.run}
+          worktree={meta.worktree}
+          toolStatus={props.status}
+          executionId={meta.executionId}
+          viewerConversationId={props.conversationId}
+        />
       </div>
     )
   }
@@ -151,6 +157,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       startedAt={props.startedAt}
       expanded={false}
       childNodes={childNodes}
+      viewerConversationId={props.conversationId}
     />
   )
 }

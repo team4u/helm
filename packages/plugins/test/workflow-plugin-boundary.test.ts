@@ -725,6 +725,34 @@ test('工作流库动作注册：get/save/delete 三动作登记且 CLI 映射�
   await host.dispose()
 })
 
+test('detach 动作注册：CLI 映射 helm workflows detach <runId>，输入 schema 收紧 additionalProperties', { timeout: 60_000 }, async () => {
+  const host = makeHost()
+  const { createWorkflowPlugin } = await import('../src/workflow.js')
+  await host.register(createWorkflowPlugin())
+  try {
+    const manifests = host.listActions().filter((m) => m.pluginId === WORKFLOW_PLUGIN_ID)
+    const detach = manifests.find((m) => m.id === 'detach')
+    assert.ok(detach, '应注册 detach 动作')
+    assert.deepEqual(detach!.cli?.command, ['workflows', 'detach'])
+    assert.deepEqual(detach!.cli?.positional, [{ field: 'runId', required: true }])
+    const inputSchema = detach!.inputSchema as Record<string, unknown>
+    assert.equal(inputSchema['additionalProperties'], false, '输入 schema 必须收紧 additionalProperties')
+    assert.deepEqual(inputSchema['required'], ['runId'])
+    // 边界：未知字段显式拒绝（validation_error），绝不静默丢弃。
+    await assert.rejects(
+      () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'detach', { runId: 'wf_x', bogus: 1 }),
+      (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+    )
+    // 未知 run 404 透传（真实 WorkflowService 无该记录）。
+    await assert.rejects(
+      () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'detach', { runId: 'wf_nonexistent' }),
+      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+    )
+  } finally {
+    await host.dispose()
+  }
+})
+
 test('工作流库动作全链路：save 真实写入 → list 携带文件事实 → get 只读源码 → delete 后 404', { timeout: 60_000 }, async () => {
   const host = makeHost()
   const { createWorkflowPlugin } = await import('../src/workflow.js')

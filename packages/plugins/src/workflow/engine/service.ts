@@ -62,6 +62,7 @@ import {
 import { StartupRecovery } from './service-recovery.js'
 import { startWorkflowRun } from './service-run.js'
 import { startBackgroundAgent as launchBackgroundAgent } from './background-agent-runner.js'
+import { detachForegroundRun as detachRun, waitForegroundRun } from './run-detach.js'
 
 export {
   BUILTIN_ENV_EXEC_PLUGIN,
@@ -159,11 +160,13 @@ export class WorkflowService {
 
   /**
    * 启动一个工作流 run：后台执行，立即返回 summary（不等完成）。
+   * context.foreground=true 标记前台同步 run（record.syncForeground，可被
+   * detach 转后台）。
    * @throws HelmError validation_error / not_found / workflow_action_uncertain / journal_read_failed。
    */
   async run(
     request: WorkflowRunRequest,
-    context?: { parentToolCallId?: string; notifyParentOnSettle?: boolean },
+    context?: { parentToolCallId?: string; notifyParentOnSettle?: boolean; foreground?: boolean },
   ): Promise<WorkflowRunSummary> {
     return startWorkflowRun(this.ctx, request, context)
   }
@@ -173,6 +176,8 @@ export class WorkflowService {
   /**
    * 启动后台单子代理：复用 run 记录 / 持久化 / abort / wait / getRun /
    * onRunSettled / 重启恢复，但不经 DSL 引擎（时序纪律见 background-agent-runner）。
+   * options.foreground=true 为前台同步模式（同步 subagent 工具）：record 标记
+   * syncForeground、notifyParentOnSettle 缺省 false、父 signal 绑定至 detach/终态。
    */
   async startBackgroundAgent(
     request: AgentSpawnRequest,
@@ -180,12 +185,34 @@ export class WorkflowService {
       parentToolCallId?: string
       label?: string
       notifyParentOnSettle?: boolean
+      foreground?: boolean
     },
   ): Promise<{
     run: WorkflowRunSummary
     execution?: AgentExecutionInfo
   }> {
     return launchBackgroundAgent(this.ctx, request, options)
+  }
+
+  // 前台同步 run 的 detach（实现位于 run-detach）
+
+  /**
+   * 前台同步等待（同步工具 execute 内使用）：resolve 为 'detached'（detach
+   * 动作已转后台，工具立即返回后台句柄）或 'settled'（run 终态，settleError
+   * 与 wait() 同语义抛出）。
+   */
+  async waitForeground(runId: string): Promise<'detached' | 'settled'> {
+    return waitForegroundRun(this.ctx, runId)
+  }
+
+  /**
+   * 把运行中的前台同步 run 原子转为后台（detach 动作入口；同步临界段实现
+   * 见 run-detach）：置位 detachedAt/notifyParentOnSettle、持久化、解绑父
+   * signal 并唤醒等待者。状态/前台标记不满足时显式拒绝。
+   */
+  detachForegroundRun(runId: string): WorkflowRunSummary {
+    this.assertNotClosed()
+    return detachRun(this.ctx, runId)
   }
 
   // getRun / wait / abort

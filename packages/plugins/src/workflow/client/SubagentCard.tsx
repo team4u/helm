@@ -67,6 +67,8 @@ export function SubagentLiveCard(props: {
   callDetails?: Pick<ToolViewProps, 'input' | 'result' | 'artifactRef'>
   /** 统一执行树下一级子节点（工作台 / 工作流节点卡注入；缺省不渲染深层子树）。 */
   childNodes?: ExecutionNode[]
+  /** 当前查看会话（时间线即发起会话）：前台同步 run 的「转入后台」可见性判定。 */
+  viewerConversationId?: number
 }) {
   const ctx = usePluginContext()
   const { childConversationId, toolStatus, backgroundRun, worktree, toolSummary, startedAt, statsOverride } = props
@@ -196,6 +198,7 @@ export function SubagentLiveCard(props: {
           inspectNodeId={inspectNodeId}
           detailError={detailError}
           onReload={() => conv.reload()}
+          viewerConversationId={props.viewerConversationId}
         />
       }
       snippet={<SubagentCardSublines snippet={snippet} frontline={frontline} />}

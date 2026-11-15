@@ -8,7 +8,7 @@
  */
 
 import { redactJsonValue } from '@helm/protocol'
-import type { ActiveRun } from './active-run.js'
+import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
 import { nodesFromProgress, redactNodes, toSummary } from './run-summary.js'
 import type { WorkflowRunResult } from './runtime.js'
 import type { WorkflowServiceContext } from './service-context.js'
@@ -147,5 +147,8 @@ export async function settleWorkflowRun(
     if (settleFailure !== undefined && run.settleError === undefined) {
       run.settleError = settleFailure
     }
+    // 前台等待者最后唤醒（settleError 已定稿）：工具侧 waitForegroundRun 以
+    // 'settled' 继续读终态；已 detach 的等待者早已返回（Promise 单次）。
+    resolveForegroundWaiters(run, 'settled')
   }
 }
