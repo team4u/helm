@@ -390,6 +390,11 @@ test('ModelDetailDrawer: 插件网关服务端点只读展示并指向插件配�
   // 提示如实指向真正的配置入口（插件配置），不装作已保存
   assert.match(html, /该端点由插件 builtin:magpie 的配置管理/)
   assert.match(html, /插件中心/)
+  // 插件网关密钥同样归插件配置管理：内核凭据库写入对插件 auth 不生效，
+  // 不得再渲染假输入框（magpie 的 auth.resolve 只读插件配置 token）
+  assert.doesNotMatch(html, /id="model-drawer-api-key"/, '插件网关密钥不得渲染内核凭据输入框')
+  assert.match(html, /由插件 builtin:magpie 的配置管理/)
+  assert.match(html, /不存入内核凭据库；在此填写不会生效/)
 })
 
 test('ModelDetailDrawer: 内置供应商服务端点只读且提示固定不可改', { timeout: 60_000 }, () => {

@@ -391,22 +391,35 @@ export function ModelDetailDrawer({
                         API 密钥
                       </label>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <input
-                          id="model-drawer-api-key"
-                          type="password"
-                          className="input"
-                          value={apiKey}
-                          onChange={(e) => setApiKey(e.target.value)}
-                          placeholder={
-                            provider.configured
-                              ? '已配置（留空保持不变）'
-                              : '请输入 API 密钥'
-                          }
-                          autoComplete="off"
-                        />
-                        <span className="text-xs text-subtle">
-                          密钥密文将安全存储于系统保密箱中，调用时由内核自动注入，不向模型泄露。
-                        </span>
+                        {provider.pluginId ? (
+                          <>
+                            <div className="form-grid-value" title="插件网关密钥">
+                              由插件 {provider.pluginId} 的配置管理
+                            </div>
+                            <span className="text-xs text-subtle">
+                              该密钥经插件中心对应插件的配置项设置，不存入内核凭据库；在此填写不会生效。
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <input
+                              id="model-drawer-api-key"
+                              type="password"
+                              className="input"
+                              value={apiKey}
+                              onChange={(e) => setApiKey(e.target.value)}
+                              placeholder={
+                                provider.configured
+                                  ? '已配置（留空保持不变）'
+                                  : '请输入 API 密钥'
+                              }
+                              autoComplete="off"
+                            />
+                            <span className="text-xs text-subtle">
+                              密钥密文将安全存储于系统保密箱中，调用时由内核自动注入，不向模型泄露。
+                            </span>
+                          </>
+                        )}
                       </div>
 
                       <label htmlFor="model-drawer-base-url" className="form-grid-label">
