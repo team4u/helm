@@ -68,6 +68,7 @@ function conv(partial: Partial<ConversationSummary> & { id: number }): Conversat
 
 const workerConv = conv({ id: 20, tags: ['worker'], ownedBy: 'bot' })
 const humanConv = conv({ id: 10 })
+const botConv = conv({ id: 21, ownedBy: 'bot' })
 
 function entry(id: string, kind: string, extra: Record<string, unknown> = {}) {
   return { id, kind, ...extra } as Parameters<typeof matchTimelineRenderer>[0]
@@ -531,11 +532,20 @@ test('ConversationRowActionsMenu：仅在该会话 scope 命中时渲染菜单�
   assert.match(html, /插件会话操作/)
 
   const humanStore = makeTestStore({ conversations: [humanConv], groupedUi: groupUiContributions(contributions) })
-  const emptyHtml = renderToString(
+  const humanHtml = renderToString(
     e(HostStoreProviders, { value: humanStore },
       e(ConversationRowActionsMenu, { conversation: humanConv })),
   )
-  assert.equal(emptyHtml, '', 'scope 未命中时零渲染、零视觉残留')
+  // 插件动作未命中但人类自有根会话命中宿主归档动作：菜单仍渲染（新契约）。
+  assert.match(humanHtml, /会话操作/)
+
+  // bot 托管会话：插件动作未命中且无宿主归档动作，零渲染、零视觉残留。
+  const botStore = makeTestStore({ conversations: [botConv], groupedUi: groupUiContributions(contributions) })
+  const emptyHtml = renderToString(
+    e(HostStoreProviders, { value: botStore },
+      e(ConversationRowActionsMenu, { conversation: botConv })),
+  )
+  assert.equal(emptyHtml, '', '无可渲染动作时零渲染、零视觉残留')
 })
 
 test('ConversationPane 源码契约：顶栏消费 conversation.header.action（toolbar 直出 + menu 收纳）', { timeout: 60_000 }, () => {

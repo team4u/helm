@@ -25,6 +25,7 @@ import { conversationStatusDotClass, conversationStatusTooltip } from '../src/sh
 import {
   backgroundAwareStatusTooltip,
   collectBackgroundBadgeDocs,
+  resolveAgentSubListPreview,
   resolveStandingStatusIndicator,
   resolveStatusLight,
   summarizeConversationBackgroundActivity,
@@ -194,6 +195,39 @@ test('多面板聚合：footerText 去重后拼接，在途取并集', { timeout
 // ---------------------------------------------------------------------------
 // 纯函数层：一级站位聚合、单灯优先级与 tooltip 组合
 // ---------------------------------------------------------------------------
+
+test('Agent 子列表折叠预览始终保留当前会话与在途会话', { timeout: 60_000 }, () => {
+  const conversations = Array.from({ length: 8 }, (_, index) => conv({ id: index + 1 }))
+  conversations[5] = conv({ id: 6, status: 'working' })
+  conversations[6] = conv({ id: 7, status: 'idle' })
+  conversations[7] = conv({ id: 8, status: 'done' })
+  const preview = resolveAgentSubListPreview({
+    conversations,
+    showAll: false,
+    activeId: 8,
+    background: new Map([[7, { active: true, summary: '工作流运行中' }]]),
+  })
+  assert.deepEqual(preview.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.equal(preview.hiddenCount, 0)
+
+  const activePreview = resolveAgentSubListPreview({
+    conversations,
+    showAll: false,
+    activeId: 8,
+    background: new Map(),
+  })
+  assert.equal(activePreview.visible.length, conversations.length, '既有行为：激活会话超出预览时展开整组')
+
+  const idlePreview = resolveAgentSubListPreview({
+    conversations,
+    showAll: false,
+    activeId: null,
+    background: new Map(),
+  })
+  assert.deepEqual(idlePreview.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6])
+  assert.equal(idlePreview.hiddenCount, 2)
+  assert.equal(resolveAgentSubListPreview({ conversations, showAll: true, activeId: null, background: new Map() }).hiddenCount, 0)
+})
 
 test('站位聚合优先级 error > blocked > working；并列取列表首个（primary 置顶序）', { timeout: 60_000 }, () => {
   const conversations = [

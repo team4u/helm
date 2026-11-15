@@ -22,7 +22,7 @@ import type { ConversationSummary, WorkbenchPanelSpec } from '@helm/protocol'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'
 import { resolveWorkbenchPanelBadge } from '../conversation/workbench-model.js'
-import { conversationStatusDotClass, conversationStatusTooltip } from './sidebar-model.js'
+import { AGENT_SUB_LIST_PREVIEW, conversationStatusDotClass, conversationStatusTooltip } from './sidebar-model.js'
 
 /** 摘要片段分隔符（与工作台底部状态栏 footerText 拼接风格一致）。 */
 const SUMMARY_SEPARATOR = ' · '
@@ -149,6 +149,60 @@ export function resolveStandingStatusIndicator(
     if (activity.summary !== '' && !parts.includes(activity.summary)) parts.push(activity.summary)
   }
   return { representative, backgroundActive, backgroundSummary: parts.join(SUMMARY_SEPARATOR) }
+}
+
+/**
+ * 会话在途判定（供折叠预览保留）：主回合 working/blocked，或存在后台在途
+ * （badge tone = accent）。复用本模型的后台在途索引，不重复实现后台活动判定。
+ */
+export function isConversationInFlight(
+  conv: Pick<ConversationSummary, 'id' | 'status'>,
+  background: ConversationBackgroundIndex,
+): boolean {
+  return (
+    conv.status === 'working' ||
+    conv.status === 'blocked' ||
+    background.get(conv.id)?.active === true
+  )
+}
+
+/** Agent 子列表折叠预览切片结果。 */
+export interface AgentSubListPreview {
+  /** 折叠态应渲染的会话（保持原排序，不重排）。 */
+  visible: ConversationSummary[]
+  /** 被折叠隐藏的会话数（驱动「展开更多」按钮）。 */
+  hiddenCount: number
+}
+
+/**
+ * Agent 子列表折叠预览切片：默认仅展示前 AGENT_SUB_LIST_PREVIEW 条，但三类行
+ * 绝不因折叠丢失——当前激活会话、working/blocked 会话、后台在途会话
+ * （在途需要被看见，埋在「展开更多」后面会误导用户以为空闲）。
+ * showAll 时全量展示。纯函数无副作用，组件与单测共用。
+ */
+export function resolveAgentSubListPreview(input: {
+  conversations: ReadonlyArray<ConversationSummary>
+  showAll: boolean
+  /** 当前激活会话 ID（主屏目标；无则 null）。 */
+  activeId: number | null
+  background: ConversationBackgroundIndex
+}): AgentSubListPreview {
+  const { conversations, showAll, activeId, background } = input
+  const list = [...conversations]
+  if (
+    showAll ||
+    list.length <= AGENT_SUB_LIST_PREVIEW ||
+    (activeId !== null && list.findIndex((conv) => conv.id === activeId) >= AGENT_SUB_LIST_PREVIEW)
+  ) {
+    return { visible: list, hiddenCount: 0 }
+  }
+  const visible = list.filter(
+    (conv, index) =>
+      index < AGENT_SUB_LIST_PREVIEW ||
+      conv.id === activeId ||
+      isConversationInFlight(conv, background),
+  )
+  return { visible, hiddenCount: list.length - visible.length }
 }
 
 /** 后台在途空心环完整类名（与基础状态圆点共用 status-dot 基类）。 */

@@ -14,7 +14,10 @@ import { groupUiContributions, resolveTargetString, type HelmStoreValue } from '
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import {
   type AgentStanding,
+  ARCHIVED_TAG,
+  archiveConversationTags,
   buildAgentStandings,
+  buildArchivedConversationList,
   buildProfileTopics,
   collectEnabledPluginIds,
   conversationStatusBadgeClass,
@@ -27,8 +30,11 @@ import {
   filterDeletableConversations,
   filterTopicList,
   fuzzyMatchConversations,
+  isConversationArchivable,
+  isConversationArchived,
   isConversationDeletable,
   isHumanSelectableProfile,
+  restoreConversationTags,
   isProfileVisible,
   isSkillVisible,
   partitionSidebarUi,
@@ -294,6 +300,43 @@ test('buildAgentStandings：子代理派生会话（有父链）不挂 Agent 站
   assert.deepEqual(hub.conversations.map((c) => c.id), [2])
   const assistant = standings.find((s) => s.profileId === 'assistant')!
   assert.equal(assistant.conversations.some((c) => c.id === 22), false)
+})
+
+test('人工归档 tags 幂等保留其他标签，恢复只移除 archived', { timeout: 60_000 }, () => {
+  const tags = ['important', 'worker-note']
+  assert.equal(ARCHIVED_TAG, 'helm:archived')
+  assert.deepEqual(archiveConversationTags(tags), [...tags, ARCHIVED_TAG])
+  assert.deepEqual(archiveConversationTags([...tags, ARCHIVED_TAG]), [...tags, ARCHIVED_TAG])
+  assert.deepEqual(restoreConversationTags([...tags, ARCHIVED_TAG, ARCHIVED_TAG]), tags)
+  assert.equal(isConversationArchived(conv({ id: 1, tags: [ARCHIVED_TAG] })), true)
+  assert.equal(isConversationArchivable(conv({ id: 1 }), new Set()), true)
+  assert.equal(isConversationArchivable(conv({ id: 2, parentConversationId: 1 }), new Set()), false)
+  assert.equal(isConversationArchivable(conv({ id: 3, ownedBy: 'bot' }), new Set()), false)
+  assert.equal(isConversationArchivable(conv({ id: 4, tags: ['worker'] }), new Set(['worker'])), false)
+})
+
+test('buildArchivedConversationList 只展示人类根会话并按创建时间稳定排序', { timeout: 60_000 }, () => {
+  const archived = [
+    conv({ id: 1, profileId: 'assistant', tags: [ARCHIVED_TAG], createdAt: 100 }),
+    conv({ id: 2, profileId: 'assistant', tags: [ARCHIVED_TAG], createdAt: 300 }),
+    conv({ id: 3, profileId: 'assistant', tags: [ARCHIVED_TAG], parentConversationId: 1 }),
+    conv({ id: 4, profileId: 'assistant', tags: [ARCHIVED_TAG], ownedBy: 'bot' }),
+    conv({ id: 5, profileId: 'assistant', tags: [ARCHIVED_TAG, 'worker'] }),
+    conv({ id: 6, profileId: 'assistant' }),
+  ]
+  const items = buildArchivedConversationList({
+    conversations: archived,
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+    sidebarSections: [{ pluginId: 'plugin', spec: { id: 'workers', label: 'Worker', filterTag: 'worker' } }],
+  })
+  assert.deepEqual(items.map((item) => item.conv.id), [2, 1])
+  assert.equal(items[0]?.profileLabel, '个人助理')
+  assert.equal(buildAgentStandings({
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+    conversations: archived,
+    plugins: [],
+    sidebarSections: [],
+  })[0]?.conversations.some((item) => item.id === 1), false)
 })
 
 test('buildAgentStandings：按 createdAt 倒序（updatedAt 推进不重排）；被 sidebar.item 指向的会话置顶', { timeout: 60_000 }, () => {
@@ -853,6 +896,21 @@ test('SSR 渲染回归：Sidebar 包含批量管理按钮与极简无 Emoji 验�
   const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u
   assert.ok(!EMOJI_RE.test(html), 'Sidebar 渲染输出全程不得包含任何 Emoji')
   assert.ok(!html.includes('✓') && !html.includes('✗') && !html.includes('▸'), '不得使用勾叉箭头类特殊字符')
+})
+
+test('已归档分组默认折叠，展开态才渲染归档会话', { timeout: 60_000 }, async () => {
+  const { ArchivedConversationsGroup } = await import('../src/shell/SidebarArchivedConversations.js')
+  const archived = conv({ id: 77, title: '已收尾的话题', tags: [ARCHIVED_TAG] })
+  const store = makeTestStore({
+    conversations: [archived],
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+  })
+  const html = renderToString(
+    e(HostStoreProviders, { value: store }, e(ArchivedConversationsGroup, { background: new Map() })),
+  )
+  assert.match(html, /已归档/)
+  assert.match(html, /aria-expanded="false"/)
+  assert.doesNotMatch(html, /已收尾的话题/)
 })
 
 test('批量模式勾选框只存在于会话子项，机器人站位行绝不含勾选框（源码结构回归）', { timeout: 60_000 }, () => {

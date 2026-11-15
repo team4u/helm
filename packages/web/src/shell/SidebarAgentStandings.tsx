@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
-import type { ConversationSummary } from '@helm/protocol'
 import { conversationsApi } from '../lib/api.js'
+import type { ConversationSummary } from '@helm/protocol'
+import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
 import { HelmIcon, Checkbox } from '@helm/plugin-client'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
@@ -20,6 +21,7 @@ import {
 } from './sidebar-model.js'
 import {
   resolveStandingStatusIndicator,
+  resolveAgentSubListPreview,
   type ConversationBackgroundActivity,
   type ConversationBackgroundIndex,
 } from './background-activity-model.js'
@@ -213,13 +215,16 @@ function AgentConversationsList({
   onToggleSelect?: (id: number) => void
 }) {
   const convs = agent.conversations
-  const activeIdx = convs.findIndex((c) => isConversationActive(store, c.id))
-  const visibleCount =
-    showAll || (activeIdx >= 0 && activeIdx >= AGENT_SUB_LIST_PREVIEW)
-      ? convs.length
-      : Math.min(AGENT_SUB_LIST_PREVIEW, convs.length)
-  const visible = convs.slice(0, visibleCount)
-  const hidden = convs.length - visibleCount
+  const activeId = convs.find((c) => isConversationActive(store, c.id))?.id ?? null
+  // 折叠预览切片（纯函数）：默认前 5 条，但激活 / working / blocked / 后台在途
+  // 会话绝不因折叠丢失；归档会话已在 buildAgentStandings 上游过滤，无从进入。
+  const { visible, hiddenCount } = resolveAgentSubListPreview({
+    conversations: convs,
+    showAll,
+    activeId,
+    background,
+  })
+  const hidden = hiddenCount
 
   return (
     <div className="agent-conversations-list">
@@ -286,15 +291,17 @@ function AgentConversationRow({
       }}
     >
       {batchMode && (
-        <Checkbox
-          className="sidebar-batch-checkbox"
-          checked={Boolean(selected)}
-          disabled={!deletable}
-          title={deletable ? undefined : '受保护会话不可删除'}
-          onChange={() => {
-            if (deletable) onToggleSelect?.(conv.id)
-          }}
-        />
+        <span onClick={(e) => e.stopPropagation()}>
+          <Checkbox
+            className="sidebar-batch-checkbox"
+            checked={Boolean(selected)}
+            disabled={!deletable}
+            title={deletable ? undefined : '受保护会话不可删除'}
+            onChange={() => {
+              if (deletable) onToggleSelect?.(conv.id)
+            }}
+          />
+        </span>
       )}
       <button
         type="button"
@@ -342,6 +349,7 @@ export function AgentStandingsGroup({
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [deleting, setDeleting] = useState(false)
+  const [archiving, setArchiving] = useState(false)
   const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
   const [search, setSearch] = useState('')
 
@@ -383,6 +391,27 @@ export function AgentStandingsGroup({
       }
       return next
     })
+  }
+
+  /**
+   * 批量归档：逐会话 PATCH 宿主归档 tag + allSettled 汇总（部分失败不掩盖
+   * 成功项）；归档不删除会话，当前目标仍有效，仅依赖 conversation.upsert
+   * 更新列表，与删除的 SSE 回退管道不同，此处不做任何导航。
+   */
+  const executeBatchArchive = async () => {
+    if (selectedIds.size === 0 || archiving || deleting) return
+    setArchiving(true)
+    try {
+      const convs = agentStandings
+        .flatMap((agent) => agent.conversations)
+        .filter((conversation) => selectedIds.has(conversation.id))
+      const outcome = await patchConversationsArchived(convs, true)
+      store.pushNotice(archiveBatchNotice(true, outcome))
+      setSelectedIds(new Set())
+      setBatchMode(false)
+    } finally {
+      setArchiving(false)
+    }
   }
 
   const executeBatchDelete = async () => {
@@ -507,8 +536,16 @@ export function AgentStandingsGroup({
             </button>
             <button
               type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={selectedIds.size === 0 || deleting || archiving}
+              onClick={() => void executeBatchArchive()}
+            >
+              {archiving ? '归档中...' : `归档所选 (${selectedIds.size})`}
+            </button>
+            <button
+              type="button"
               className="btn btn-sm btn-danger-sm"
-              disabled={selectedIds.size === 0 || deleting}
+              disabled={selectedIds.size === 0 || deleting || archiving}
               onClick={() => setBatchDeleteConfirmOpen(true)}
             >
               {deleting ? '删除中...' : `删除所选 (${selectedIds.size})`}

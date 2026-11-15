@@ -7,7 +7,7 @@ import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type HelmStoreValue, type SidebarSpace } from '../lib/types.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
-import { extractSidebarViews, filterConversationsByTag, isConversationActive } from './sidebar-model.js'
+import { extractSidebarViews, filterConversationsByTag, isConversationActive, isConversationArchived } from './sidebar-model.js'
 import {
   collectBackgroundBadgeDocs,
   summarizeConversationBackgroundActivity,
@@ -15,6 +15,7 @@ import {
   type ConversationBackgroundIndex,
 } from './background-activity-model.js'
 import { AgentStandingsGroup } from './SidebarAgentStandings.js'
+import { ArchivedConversationsGroup } from './SidebarArchivedConversations.js'
 import {
   ConversationStatusDot,
   HoverIconButton,
@@ -108,7 +109,7 @@ function SidebarSectionGroup({
   const convs = useMemo(
     // 按创建时间倒序固定排列（同刻按 id 决胜）：分组内会话后台跑动推进 updatedAt 不再引起跳位。
     () =>
-      filterConversationsByTag(store.conversations, tag).sort(
+      filterConversationsByTag(store.conversations, tag).filter((conversation) => !isConversationArchived(conversation)).sort(
         (a, b) => b.createdAt - a.createdAt || b.id - a.id,
       ),
     [store.conversations, tag],
@@ -469,6 +470,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
               <PendingAsksPanel store={store} />
               <AgentStandingsGroup store={store} background={background} onNavigate={onClose} />
               <SidebarSectionGroups store={store} background={background} />
+              <ArchivedConversationsGroup background={background} onNavigate={onClose} />
             </>
           ) : space === 'views' ? (
             <ViewNavGroup store={store} />

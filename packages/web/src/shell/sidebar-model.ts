@@ -14,6 +14,8 @@ import type {
 } from '@helm/protocol'
 import type { HelmStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
+import { ARCHIVED_TAG, isConversationArchived } from '../conversation/archive-model.js'
+export { ARCHIVED_TAG, archiveConversationTags, isConversationArchived, restoreConversationTags } from '../conversation/archive-model.js'
 
 export interface SidebarPartition {
   /** sidebar.item 的 'conversation:profile:<id>' 已指向的 profileId 集合。 */
@@ -59,6 +61,66 @@ export function filterConversationsByTag(
   tag: string,
 ): ConversationSummary[] {
   return conversations.filter((c) => c.tags.includes(tag))
+}
+
+// ---------------------------------------------------------------------------
+// 人工归档（Web 宿主策略）：宿主命名空间 tag + 现有会话 PATCH
+// ---------------------------------------------------------------------------
+
+/**
+ * 会话是否可被人工归档管理（与删除保护同界）：
+ * - 子代理派生会话（有父链）与 bot/helm 托管会话不参与——归档是人类整理行为；
+ * - 已被插件 sidebar.section filterTag 接管的会话不参与——归档对其无可见效果
+ *   （仍留在插件分组），避免「点了归档却什么都不发生」。
+ * 当前已归档的会话本函数仍可能返回 true（可管理性），菜单按归档态选择动作。
+ */
+export function isConversationArchivable(
+  conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy' | 'tags'>,
+  sectionTags?: ReadonlySet<string>,
+): boolean {
+  if (conv.parentConversationId !== undefined) return false
+  if ((conv.ownedBy ?? 'human') !== 'human') return false
+  if (sectionTags !== undefined && conv.tags.some((t) => t !== ARCHIVED_TAG && sectionTags.has(t))) {
+    return false
+  }
+  return true
+}
+
+/** 归档分组条目：会话 + 归属智能体展示名（供分组内辨识）。 */
+export interface ArchivedConversationListItem {
+  conv: ConversationSummary
+  profileLabel: string
+}
+
+/**
+ * 构建「已归档」分组条目：仅收人类自有根会话，沿用 Agent 站位同一暴露规则
+ * （有父链 / bot-helm 托管 / 已停用插件托管 Profile / 插件 section 接管的会话绝不进入，即使带宿主归档 tag），
+ * 按 createdAt 倒序（同刻按 id 倒序），排序键与普通列表一致。Profile 可见性与 Agent 站位保持一致。
+ */
+export function buildArchivedConversationList(input: {
+  conversations: ConversationSummary[]
+  profiles: Profile[]
+  plugins?: ReadonlyArray<{ id: string; enabled: boolean }>
+  sidebarSections?: Array<QualifiedUiSpec<SidebarSectionSpec>>
+}): ArchivedConversationListItem[] {
+  const { conversations, profiles, plugins = [], sidebarSections = [] } = input
+  const sectionTags = partitionSidebarUi([], sidebarSections).sectionTags
+  const enabledPluginIds = collectEnabledPluginIds(plugins)
+  const visibleProfileIds = new Set(
+    profiles.filter((profile) => isProfileVisible(profile, enabledPluginIds)).map((profile) => profile.id),
+  )
+  const profileNames = new Map(profiles.map((p) => [p.id, p.name] as const))
+  return conversations
+    .filter((c) => {
+      if (!isConversationArchived(c)) return false
+      if (c.parentConversationId !== undefined) return false
+      if ((c.ownedBy ?? 'human') !== 'human') return false
+      if (c.tags.some((t) => t !== ARCHIVED_TAG && sectionTags.has(t))) return false
+      if (profiles.some((profile) => profile.id === c.profileId) && !visibleProfileIds.has(c.profileId)) return false
+      return true
+    })
+    .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
+    .map((conv) => ({ conv, profileLabel: profileNames.get(conv.profileId) ?? conv.profileId }))
 }
 
 // ---------------------------------------------------------------------------
@@ -147,9 +209,11 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
   // 可挂到 Agent 站位下的会话：
   // 1. 排除子代理派生会话（有父链）；
   // 2. 排除被 sidebar.section 接管的会话（后台 Worker 等分组展示，不重复挂载）；
-  // 3. 非 human 会话仅保留可见 Profile 的常驻会话（ownedBy=helm 或被启用 sidebar.item 指向）。
+  // 3. 排除已人工归档会话（集中进「已归档」分组，绝不同时出现在活跃列表）；
+  // 4. 非 human 会话仅保留可见 Profile 的常驻会话（ownedBy=helm 或被启用 sidebar.item 指向）。
   const attachable = conversations.filter((c) => {
     if (c.parentConversationId !== undefined) return false
+    if (isConversationArchived(c)) return false
     if (c.tags.some((t) => partition.sectionTags.has(t))) return false
     if ((c.ownedBy ?? 'human') === 'human') return true
     return (
@@ -467,7 +531,10 @@ export function buildProfileTopics(
   markActiveId: number | null,
 ): TopicListItem[] {
   const roots = conversations.filter(
-    (c) => c.profileId === profileId && c.parentConversationId === undefined,
+    (c) =>
+      c.profileId === profileId &&
+      c.parentConversationId === undefined &&
+      !isConversationArchived(c),
   )
   const sorted = [...roots].sort((a, b) => {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1

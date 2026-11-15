@@ -44,6 +44,35 @@
   text-transform: uppercase;
 }
 
+/* 可折叠分组头部主按钮：头部行内还需容纳次要操作按钮（如已归档分组的批量
+   恢复入口），头部本身不再是按钮，主切换按钮占据左侧弹性区。 */
+.sidebar-group-header-toggle {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+/* 已归档分组行内的归属智能体徽标：防长名撑破行宽。 */
+.archived-profile-label {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .nav-item {
   min-height: 32px;
   padding: 5px 10px;

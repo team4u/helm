@@ -25,6 +25,7 @@ import { formatLocationHash, isSameLocationState, parseLocationHash, shouldPushL
 import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, spaceForTarget, type ActiveModal, type GroupedUiSpecs, type HelmStoreValue, type ResolvedTarget, type SidebarSpace, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 import { errorText } from './format.js'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
+import { isConversationArchived } from '../conversation/archive-model.js'
 
 const getStoredPreference = (): ThemePreference => {
   try {
@@ -94,7 +95,7 @@ function defaultSpaceTarget(space: SidebarSpace, input: SpaceTargetInput): Resol
   const agentUsable = (profileId: string): boolean =>
     !input.assetsLoaded || input.profiles.some((profile) => profile.id === profileId)
   const latestRoot = input.conversations
-    .filter((conv) => conv.parentConversationId === undefined)
+    .filter((conv) => conv.parentConversationId === undefined && !isConversationArchived(conv))
     .reduce<ConversationSummary | null>(
       (best, conv) =>
         best === null || conv.updatedAt > best.updatedAt || (conv.updatedAt === best.updatedAt && conv.id > best.id)
