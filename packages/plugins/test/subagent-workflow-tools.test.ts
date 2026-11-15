@@ -34,7 +34,7 @@ import {
 } from '@earendil-works/pi-ai/providers/faux'
 import type { AgentSpawnRequest } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it, test } from 'node:test'
@@ -532,12 +532,15 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       assert.equal(parsedSummary.result?.n, 42, 'args.n 真实保留')
       assert.deepEqual(parsedSummary.result?.topics, ['星辰', '大海'])
 
-      // 验证持久化层：插件私有 records 文档（PluginDocStore 键
-      // 'builtin:workflow:records'）中 run record 的 args 必须为真实 dict 而非 string。
+      // 验证持久化层（新契约）：records doc 只存 workflow/runs 轻量索引；完整
+      // run record（含 args）在插件私有记录文件，args 必须为真实 dict 而非 string。
       await app.kernel.documentStore.flush?.()
-      const recordsDoc = app.kernel.documentStore.get<Record<string, { args?: unknown } | undefined>>('builtin:workflow:records', {})
-      const persistedRecord = recordsDoc[`workflow/run/${runId}`] ?? null
-      assert.ok(persistedRecord, 'run 应在插件 records 文档中落盘')
+      const recordsDoc = app.kernel.documentStore.get<Record<string, unknown>>('builtin:workflow:records', {})
+      const index = (recordsDoc['workflow/runs'] as Array<{ id: string }> | undefined) ?? []
+      assert.ok(index.some((item) => item.id === runId), `records 索引应含该 run（实际 ${JSON.stringify(index)}）`)
+      const persistedRecord = JSON.parse(
+        readFileSync(join(dir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${runId}.record.json`), 'utf-8'),
+      ) as { args?: unknown }
       assert.equal(typeof persistedRecord.args, 'object', '持久化 args 必须为真对象而非字符串')
       assert.deepEqual(persistedRecord.args, { topics: ['星辰', '大海'], n: 42 })
 
@@ -568,9 +571,9 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       const parsedSummary2 = JSON.parse(text2) as { status: string; result?: unknown }
       assert.equal(parsedSummary2.status, 'completed')
       assert.deepEqual(parsedSummary2.result, [20, 40], '双重序列化自动解包，map 正常计算')
-      const recordsDoc2 = app.kernel.documentStore.get<Record<string, { args?: unknown } | undefined>>('builtin:workflow:records', {})
-      const persistedRecord2 = recordsDoc2[`workflow/run/${runId2}`] ?? null
-      assert.ok(persistedRecord2, 'run2 应在插件 records 文档中落盘')
+      const persistedRecord2 = JSON.parse(
+        readFileSync(join(dir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${runId2}.record.json`), 'utf-8'),
+      ) as { args?: unknown }
       assert.equal(typeof persistedRecord2.args, 'object', '持久化 args 必须为真对象')
       assert.deepEqual(persistedRecord2.args, { items: [10, 20] })
     } finally {

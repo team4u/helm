@@ -7,15 +7,15 @@
  *    从序列化测试存储读回（真实 SQLite 验证见 workflow-shutdown.integration.test.ts）；
  * 2. stop 之外（窗口外）同句柄写入被拒；stop 返回后拒绝；reenable 旧 epoch 拒绝；
  *    停止窗口允许当前周期已有回调收尾，窗口结束后残留回调一律被拒；
- * 3. 真实 builtin:workflow 带运行中任务受控 dispose/close：run 终态落私有 records
- *    与公共 runs，重启读取一致，无 unhandled rejection；
+ * 3. 真实 builtin:workflow 带运行中任务受控 dispose/close：run 终态落私有记录文件
+ *    （records doc 只存轻量索引）与公共 runs，重启读取一致，无 unhandled rejection；
  * 4. start 屏障后某插件 start 失败 + 先前插件 stop 失败：错误同时含原始 start
  *    失败与 rollback stop 失败诊断（pluginId + JSON-safe stop 错误）。
  * runner: tsx --test；每项 timeout: 60_000。
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -444,18 +444,23 @@ test('真实 workflow 插件：运行中 run 受控 dispose，终态落私有 re
   assert.equal(started.run.status, 'running', 'run 应在运行中（spawn 挂起）')
 
   // 受控 dispose：stop 链内 close() abort 运行中 run → 引擎 settle 链写终态到
-  // 私有 records doc（此时 phase=deactivating，必须经受控停止窗口放行）→ 最终
-  // runs 投影同步。
+  // 私有记录文件并同步 records 索引（此时 phase=deactivating，doc 写入必须经
+  // 受控停止窗口放行）→ 最终 runs 投影同步。
   releaseSpawn()
   await host.dispose()
 
-  // 私有 records：run 终态已持久（不是 running 残留）
+  // 私有 records doc（新契约）：只存 workflow/runs 轻量索引，无 per-run 完整键。
   const records = docs.get<Record<string, unknown>>('builtin:workflow:records', {})
-  const runIds = (records['workflow/runs'] as Array<{ id: string }> | undefined) ?? []
+  assert.deepEqual(Object.keys(records), ['workflow/runs'], `records doc 只应有索引键（实际 ${JSON.stringify(Object.keys(records))}）`)
+  const runIds = (records['workflow/runs'] as Array<{ id: string; status: string }> | undefined) ?? []
   assert.equal(runIds.length, 1, `应有恰好一条 run 索引（实际 ${JSON.stringify(runIds)}）`)
-  const record = records[`workflow/run/${started.run.id}`] as { status?: string } | undefined
-  assert.ok(record, `run 记录应已持久（实际 keys=${JSON.stringify(Object.keys(records))}）`)
-  assert.equal(record!.status, 'aborted', `close 应把运行中 run 显式结算为 aborted（实际 ${JSON.stringify(record)}）`)
+  assert.equal(runIds[0]!.id, started.run.id, '索引指向该 run')
+  assert.equal(runIds[0]!.status, 'aborted', '索引状态同步终态')
+  // 完整 RunRecord（新契约）：插件私有 artifacts 记录文件，终态已持久（不是 running 残留）。
+  const record = JSON.parse(
+    readFileSync(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${started.run.id}.record.json`), 'utf-8'),
+  ) as { status?: string }
+  assert.equal(record.status, 'aborted', `close 应把运行中 run 显式结算为 aborted（实际 ${JSON.stringify(record)}）`)
 
   // 公共 runs 会话分片投影：终态同步（dispose 的 stop 末尾最终投影）。
   const runsDoc = JSON.parse(sessionDocs.get('builtin:workflow', 'runs', 1) ?? '{"runs":[]}') as { runs: Array<{ id: string; status: string }> }

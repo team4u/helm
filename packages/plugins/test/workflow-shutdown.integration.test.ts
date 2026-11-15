@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -27,11 +27,17 @@ test('真实 SQLite：关闭在途工作流后，未启动插件也能从重开�
     // 不注册 workflow，防止其 start() 重算 runs 投影后掩盖停止阶段的漏写。
     reopened = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, autoResume: false })
     assert.equal(reopened.plugins.list().some((plugin) => plugin.id === 'builtin:workflow'), false)
+    // 新契约：records doc 只存 workflow/runs 轻量索引（从 SQLite 读回）；完整
+    // RunRecord 在插件私有记录文件 dataDir/plugins/builtin%3Aworkflow/
+    // artifacts/<convId>/workflow-<runId>.record.json。
     const records = reopened.documentStore.get<Record<string, unknown>>('builtin:workflow:records', {})
-    const persisted = Object.values(records).find((value): value is WorkflowRunSummary =>
-      value !== null && typeof value === 'object' && 'id' in value && value.id === run.id,
-    )
-    assert.ok(persisted, '私有 records 必须从 SQLite 读回该 run，而非仅存在于旧进程镜像')
+    const index = (records['workflow/runs'] as Array<Partial<WorkflowRunSummary>> | undefined) ?? []
+    const entry = index.find((item) => item?.id === run.id)
+    assert.ok(entry, `私有 records 索引必须从 SQLite 读回该 run（实际 ${JSON.stringify(index)}）`)
+    assert.equal(entry.status, 'aborted', JSON.stringify(entry))
+    const persisted = JSON.parse(
+      await readFile(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${run.id}.record.json`), 'utf-8'),
+    ) as WorkflowRunSummary
     assert.equal(persisted.status, 'aborted', JSON.stringify(persisted))
     await reopened.close()
     reopened = undefined

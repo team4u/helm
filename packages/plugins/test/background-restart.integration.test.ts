@@ -23,7 +23,7 @@
  */
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -56,7 +56,7 @@ const ROOT = ROOT_CONVERSATION_ID
 // 用例 1（确定性单元）：prepareRecovery 先于 abortConversation / 通知
 // ---------------------------------------------------------------------------
 
-test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abortConversation 并标 failed/interrupted，通知恰一次', { timeout: 60_000 }, async () => {
+test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abortConversation 并标 failed/interrupted，通知恰一次', { timeout: 60_000 }, async (t) => {
   const calls: string[] = []
   const stateMap = new Map<string, unknown>()
   const state: WorkflowStateStore = {
@@ -66,11 +66,20 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
     },
     flush: async () => {},
   }
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-bg-order-'))
+  t.after(() => {
+    rmSync(dataDir, { recursive: true, force: true })
+  })
   const CHILD = 42
   const now = Date.now()
-  const runKey = 'workflow/run/wf_seed_order'
-  state.set('workflow/runs', [{ id: 'wf_seed_order', conversationId: ROOT, createdAt: now }])
-  state.set(runKey, {
+  // 新契约：records doc 只存 workflow/runs 轻量索引；完整 RunRecord 落记录
+  // 文件 dataDir/artifacts/<convId>/workflow-<runId>.record.json（纯
+  // WorkflowService fake 的 dataDir 即传入 dataDir，无插件目录前缀）。
+  state.set('workflow/runs', [{ id: 'wf_seed_order', conversationId: ROOT, status: 'running', createdAt: now, updatedAt: now }])
+  const recordDir = join(dataDir, 'artifacts', String(ROOT))
+  const recordPath = join(recordDir, 'workflow-wf_seed_order.record.json')
+  mkdirSync(recordDir, { recursive: true })
+  writeFileSync(recordPath, JSON.stringify({
     id: 'wf_seed_order',
     name: 'subagent:worker',
     conversationId: ROOT,
@@ -82,7 +91,7 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
     journalPath: '/tmp/nonexistent.jsonl',
     nodes: [{ id: 'subagent-0', kind: 'agent', label: 'subagent:worker', status: 'running', startedAt: now, conversationId: CHILD }],
     subagentMeta: { agentType: 'worker', execution: { nodeId: 'local', conversationId: CHILD, effectiveCwd: '/tmp' } },
-  })
+  }), 'utf8')
   const settled: string[] = []
   const host: WorkflowServiceHost = {
     spawnAgent: async () => {
@@ -103,7 +112,7 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
       settled.push(`${summary.id}:${summary.status}`)
     },
   }
-  const svc = new WorkflowService({ dataDir: '/tmp/unused', state, host })
+  const svc = new WorkflowService({ dataDir, state, host })
 
   await svc.prepareRecovery()
   assert.deepEqual(calls, [`abort:${CHILD}`], 'prepareRecovery 必须先逐个守卫中止（paused 相位落持久 abort 标记）遗留子会话')
@@ -113,10 +122,14 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
   const firstAbort = calls.findIndex((c) => c.startsWith('abort:'))
   assert.ok(firstAbort === 0, `init 首个宿主调用必须是 abortConversation（实际：${calls.join(' | ')}）`)
 
-  const record = stateMap.get(runKey) as { status: string; error?: string; notifiedAt?: number }
+  const record = JSON.parse(readFileSync(recordPath, 'utf-8')) as { status: string; error?: string; notifiedAt?: number }
   assert.equal(record.status, 'failed', '遗留 running run 必须显式标 failed（不伪装 completed）')
   assert.match(record.error ?? '', /interrupted/, 'failed 原因必须是进程重启中断')
   assert.ok(record.notifiedAt !== undefined, '父会话通知必须落 notifiedAt（防重复投递）')
+  // records doc 只维护轻量索引：唯一键 workflow/runs，状态同步终态。
+  assert.deepEqual([...stateMap.keys()], ['workflow/runs'], 'records doc 只存轻量索引（无 per-run 完整键）')
+  const indexEntry = (stateMap.get('workflow/runs') as Array<{ id: string; status: string }>).find((e) => e.id === 'wf_seed_order')
+  assert.equal(indexEntry?.status, 'failed', '索引状态必须同步 failed 终态')
   assert.deepEqual(settled, ['wf_seed_order:failed'], 'onBackgroundAgentSettled 恰好补发一次 failed')
 })
 
@@ -127,6 +140,7 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
 /** 子进程 seeder 源码（真实 SDK 持久任务；写临时 .mts 由 tsx 直跑）。 */
 function seederSource(kernelSrc: string, piAiModelsSrc: string, piAiFauxSrc: string, pluginBuildSrc: string): string {
   return `import { join } from 'node:path'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createModels } from '${piAiModelsSrc}'
 import { fauxAssistantMessage, fauxProvider } from '${piAiFauxSrc}'
@@ -154,21 +168,23 @@ for (let i = 0; i < 200; i++) {
 }
 if (!childId) { process.stderr.write('seed: no child\\n'); process.exit(3) }
 await delay(1200) // 让部分 token 落盘（progress persistWithinMs 默认 1000ms）
-// 植入 startBackgroundAgent 的持久 run 记录（引擎 state 现住在插件私有
-// records 文档：PluginDocStore 键 'builtin:workflow:records'，值为引擎键值 dict）
+// 植入 startBackgroundAgent 的持久 run 记录（新契约：插件私有 records 文档
+// 只存 workflow/runs 轻量索引；完整 RunRecord 落插件数据目录记录文件
+// <dataDir>/plugins/builtin%3Aworkflow/artifacts/<convId>/workflow-<runId>.record.json）
 const now = Date.now()
+const recordDir = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1')
+mkdirSync(recordDir, { recursive: true })
+writeFileSync(join(recordDir, 'workflow-wf_seed_real.record.json'), JSON.stringify({
+  id: 'wf_seed_real', name: 'subagent', conversationId: 1, status: 'running',
+  createdAt: now, updatedAt: now, kind: 'subagent', notifyParentOnSettle: true,
+  journalPath: join(dataDir, 'wf-seed-real.jsonl'),
+  nodes: [{ id: 'subagent-0', kind: 'agent', label: 'subagent', status: 'running', startedAt: now, conversationId: childId }],
+  subagentMeta: { execution: { nodeId: 'local', conversationId: childId } },
+}))
 const doc = kernel.documentStore
-const records: Record<string, unknown> = {
-  'workflow/runs': [{ id: 'wf_seed_real', conversationId: 1, createdAt: now }],
-  'workflow/run/wf_seed_real': {
-    id: 'wf_seed_real', name: 'subagent', conversationId: 1, status: 'running',
-    createdAt: now, updatedAt: now, kind: 'subagent', notifyParentOnSettle: true,
-    journalPath: join(dataDir, 'wf-seed-real.jsonl'),
-    nodes: [{ id: 'subagent-0', kind: 'agent', label: 'subagent', status: 'running', startedAt: now, conversationId: childId }],
-    subagentMeta: { execution: { nodeId: 'local', conversationId: childId } },
-  },
-}
-doc.set('builtin:workflow:records', records)
+doc.set('builtin:workflow:records', {
+  'workflow/runs': [{ id: 'wf_seed_real', conversationId: 1, status: 'running', createdAt: now, updatedAt: now }],
+})
 await doc.flush()
 process.stdout.write('CHILD=' + childId + '\\n')
 await delay(300) // flush 落盘窗口
@@ -213,10 +229,11 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
   writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helm/plugin-build')), 'utf8')
   const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
+  // t.after 按注册顺序执行：先杀子进程/清理 seeder 目录；dataDir 必须等内核
+  // close（stop 链最终投影要读记录文件）之后再删，注册在后半部分。
   t.after(() => {
     if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
     rmSync(seedDir, { recursive: true, force: true })
-    rmSync(dataDir, { recursive: true, force: true })
   })
   try {
     // ---- 1) 子进程制造真实遗留（慢速流式中途 SIGKILL；cwd/env 全临时，无端口）----
@@ -263,6 +280,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
     t.after(async () => {
       await kernel.close().catch(() => {})
+      rmSync(dataDir, { recursive: true, force: true })
     })
     const rootInputs: Array<{ conversationId: number; origin?: string; kind?: string }> = []
     kernel.events.subscribe((frame: HelmEventFrame) => {
@@ -375,10 +393,10 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
   writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helm/plugin-build')), 'utf8')
   const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
+  // 同用例 2：先杀子进程/清理 seeder 目录，dataDir 在内核 close 后再删。
   t.after(() => {
     if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
     rmSync(seedDir, { recursive: true, force: true })
-    rmSync(dataDir, { recursive: true, force: true })
   })
   try {
     child = spawn(process.execPath, [tsxCli, seederPath], {
@@ -416,6 +434,7 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
     const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
     t.after(async () => {
       await kernel.close().catch(() => {})
+      rmSync(dataDir, { recursive: true, force: true })
     })
 
     // human 红线覆盖恢复窗口：paused 相位对 human 归属会话拒绝持久标记。
