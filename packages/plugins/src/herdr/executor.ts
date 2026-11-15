@@ -29,21 +29,21 @@
  * - 普通 AbortError 取消仍按现状关闭自有 pane（已授权路径不变）。
  */
 
-import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, targetPlatformOf, type AgentExecutionInfo, type AgentSpawnRequest, type TargetPlatform } from '@helm/protocol'
 import { parseWorkflowSpawnMeta, workflowExecutionMeta } from '../contracts.js'
 import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, HerdrTarget } from './contracts.js'
 import { targetNodeId } from './contracts.js'
-import { validateOrThrow } from '@helm/protocol'
 import { AskCoordinator, backoffForDuplicateBlocked, type AskEntry } from './asks.js'
 import { ApprovalBridge } from './approval-bridge.js'
 import { MetadataProjector } from './metadata.js'
-import { PaneRegistry, nodeIdOf, targetOf, type ManagedPane, type PaneRouting } from './panes.js'
+import { PaneRegistry, nodeIdOf, paneCloseKey, paneStateKey, targetOf, type ManagedPane, type PaneRouting } from './panes.js'
+import { SteerDispatcher } from './executor-steer.js'
+import { PaneHandoff } from './executor-handoff.js'
+import { ResumeCoordinator } from './executor-resume.js'
 import {
   assertOkResult,
   parseAgentResult,
-  parsePaneRead,
   parseTabCreated,
   parseWorktreeCreated,
   type HerdrAgentInfo,
@@ -161,23 +161,17 @@ export class HerdrExecutor {
   /** 在途受管任务的生命周期阶段与原始 spawn 请求（steer 门禁与尾读复核用）。 */
   private readonly panePhases = new Map<string, PaneTaskPhase>()
   private readonly activeTasks = new Map<string, AgentSpawnRequest>()
-  /** 在途 steer（按 pane 互斥；driveTask 结算前排空）。 */
-  private readonly activeSteers = new Map<string, Promise<{ stateChangeSeq: number }>>()
-  /**
-   * 不确定投递（超时/断线/坏响应）的插话失败记录（paneKey -> 脱敏原因）：
-   * 任务结算排空在途 steer 后据此显式失败并保留现场（绝不读旧结果或
-   * 自愈冒充），后续插话不得清除未确认的投递。服务端 admission
-   * 确定零写入拒绝（agent_not_ready/agent_blocked/agent_not_found）
-   * 不记本表。
-   */
-  private readonly steerFailures = new Map<string, string>()
-  /** 已被插话作废的旧交接文件名（paneKey -> 名单；仅成功交接后统一清理）。 */
-  private readonly steerRetiredFiles = new Map<string, string[]>()
   /** 本机冻结连接目标（启用时注入）。 */
   private readonly localTarget: HerdrTarget
 
   /** 审批桥（blocked Ask 创建与终态消费；依赖经端口注入，见 approval-bridge.ts）。 */
   private readonly approvalBridge: ApprovalBridge
+  /** steer 投递与交接文件轮转（在途/不确定/作废登记归其自管，见 executor-steer.ts）。 */
+  private readonly steerDispatcher: SteerDispatcher
+  /** 文件交接校验、原地追问自愈与 Gate（见 executor-handoff.ts）。 */
+  private readonly paneHandoff: PaneHandoff
+  /** resume 权威确认与路由恢复（见 executor-resume.ts）。 */
+  private readonly resumeCoordinator: ResumeCoordinator
 
   constructor(
     private readonly deps: HerdrPluginDependencies,
@@ -198,9 +192,54 @@ export class HerdrExecutor {
       redact: deps.redact,
       analyzeBlockedSnapshot: deps.analyzeBlockedSnapshot,
       agentGet: (target, paneId, signal) => this.agentGet(target, paneId, signal),
-      readDiagnostic: (pane) => this.readDiagnostic(pane),
+      readDiagnostic: (pane) => this.paneHandoff.readDiagnostic(pane),
       cancelAskQuietly: (askId, reason) => this.cancelAskQuietly(askId, reason),
       pollIntervalMs: this.pollIntervalMs,
+    })
+    this.steerDispatcher = new SteerDispatcher({
+      registry: this.registry,
+      transport: this.transport,
+      redact: deps.redact,
+      notify: host.notify,
+      agentGet: (target, paneId, signal) => this.agentGet(target, paneId, signal),
+      waitUntilSettled: (request, pane, initial) => this.waitUntilSettled(request, pane, initial),
+      startupTimeoutMs: () => host.startupTimeoutMs(),
+      activeTaskOf: (key) => this.activeTasks.get(key),
+      phaseOf: (key) => this.panePhases.get(key),
+      setPhase: (key, phase) => {
+        this.panePhases.set(key, phase)
+      },
+      isClosingPane: (pane) => this.activeCloses.has(this.closeKey(pane)),
+    })
+    this.paneHandoff = new PaneHandoff({
+      transport: this.transport,
+      redact: deps.redact,
+      notify: host.notify,
+      askConversationId: host.askConversationId,
+      paneEnvOf: (key) => this.paneEnvs.get(key),
+      applyPaneSecrets: (baseline, parentConversationId, cwd, target, secretNames) =>
+        this.applyPaneSecrets(baseline, parentConversationId, cwd, target, secretNames),
+      promptAndWait: (target, pane, text, signal) => this.promptAndWait(target, pane, text, signal),
+      waitUntilSettled: (request, pane, initial) => this.waitUntilSettled(request, pane, initial),
+      project: (pane, token) => this.project(pane, token),
+      markFailed: (pane, note) => this.markFailed(pane, note),
+      runLocalGate: deps.runLocalGate,
+    })
+    this.resumeCoordinator = new ResumeCoordinator({
+      registry: this.registry,
+      profiles: deps.profiles,
+      redact: deps.redact,
+      agentGet: (target, paneId, signal) => this.agentGet(target, paneId, signal),
+      assertAttachmentsReachable: (request, target, routing) => this.assertAttachmentsReachable(request, target, routing),
+      executionInfoOf: (pane) => this.executionInfoOf(pane),
+      hasPaneEnv: (key) => this.paneEnvs.has(key),
+      setPaneEnv: (key, env) => {
+        this.paneEnvs.set(key, env)
+      },
+      buildPaneBaselineEnv: (parentConversationId, cwd, routing, target) =>
+        this.buildPaneBaselineEnv(parentConversationId, cwd, routing, target),
+      preloadAttachmentMeta: (request) => this.preloadAttachmentMeta(request),
+      runManagedTask: (request, pane) => this.runManagedTask(request, pane),
     })
   }
 
@@ -793,7 +832,7 @@ export class HerdrExecutor {
     } catch (error) {
       if (isTimeoutSignal(request.signal)) {
         await this.markFailed(pane, error instanceof Error ? error.message : 'execution timed out')
-        const snapshot = await this.readDiagnostic(pane)
+        const snapshot = await this.paneHandoff.readDiagnostic(pane)
         throw new HelmError(
           'agent_timeout',
           `pane ${pane.paneId} 执行超时，窗格已保留（底层 CLI 可能仍在执行；resume 前将权威确认，仅 idle/done 可续接，绝不代发按键中止）\n终端最后 40 行（脱敏）：\n${snapshot}`,
@@ -812,7 +851,7 @@ export class HerdrExecutor {
         throw new HelmError('aborted', `pane ${pane.paneId} 执行已取消`, 499)
       }
       await this.markFailed(pane, error instanceof Error ? error.message : String(error))
-      const snapshot = await this.readDiagnostic(pane)
+      const snapshot = await this.paneHandoff.readDiagnostic(pane)
       const failure = error as { code?: unknown; status?: unknown }
       throw new HelmError(
         typeof failure?.code === 'string' ? failure.code : 'herdr_execution_failed',
@@ -826,8 +865,7 @@ export class HerdrExecutor {
       // 附件元数据缓存同步回收，后续 steer 按「无可插话任务」拒绝。
       this.activeTasks.delete(taskKey)
       this.panePhases.delete(taskKey)
-      this.steerFailures.delete(taskKey)
-      this.steerRetiredFiles.delete(taskKey)
+      this.steerDispatcher.forget(taskKey)
       this.releaseAttachmentMeta(request)
     }
   }
@@ -837,143 +875,27 @@ export class HerdrExecutor {
     this.panePhases.set(key, 'task')
     await this.project(pane, `run:${pane.agentName}`)
     const info = await this.promptAndWait(pane.target, pane, this.taskPrompt(request, pane), request.signal)
-    await this.settleThroughSteers(request, pane, pane.outputFileName!, info)
+    await this.steerDispatcher.settleThroughSteers(request, pane, pane.outputFileName!, info)
     // 结算以 registry 现值为准：插话可能已把唯一交接文件重定向到新名字
     //（绝不沿用起始快照误读旧路径）。
     const latest = this.registry.get(nodeIdOf(pane), pane.paneId)
     if (latest?.outputFileName === undefined) {
       throw new HelmError('herdr_context_unavailable', `pane ${pane.paneId} 的交接上下文已失效`, 409)
     }
-    const output = await this.readAndValidateOutput(request, latest)
+    const output = await this.paneHandoff.readAndValidateOutput(request, latest)
     if (request.gate !== undefined) {
       this.panePhases.set(key, 'gate')
-      await this.runGateFor(request, pane)
+      await this.paneHandoff.runGateFor(request, pane)
     }
     request.signal?.throwIfAborted()
     // 成功交接后清理已被插话作废的旧结果文件（失败路径保留现场）。
-    await this.clearRetiredSteerOutputs(request, pane)
+    await this.steerDispatcher.clearRetiredOutputs(request, pane)
     this.registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'keepalive', outputFileName: undefined })
     return output
   }
 
-  /**
-   * 结算等待 + 在途 steer 排空 + 权威复查 + 最新交接文件核验：
-   * - 首个 idle/done 可能早于 steer 投递（文本+回车多步序列）被 agent.wait
-   *   观察到——不能直接进交接。排空在途 steer（等待真实 RPC 终局，非固定
-   *   延时）后以权威 agent.get 复查：working 说明插话已开启新回合（回到
-   *   结算等待），blocked 交审批桥；unknown 如实失败；
-   * - 不确定投递（超时/断线/坏响应）已按 pane 记失败：结算显式
-   *   herdr_steer_uncertain 失败并保留现场（绝不读旧结果，也不经自愈追问
-   *   冒充按最新指导的交付）；后续插话不能抹去该不确定结果；
-   * - 成功插话即把唯一交接文件重定向到全新名字（旧结果天然防冒充）：
-   *   idle/done 时新文件未出现则不得进交接——有界 agent.wait(until
-   *   working/blocked) 等后续回合起步后复查（不宣称 idle 可证明 CLI 已
-   *   消费队列）；预算耗尽仍无新文件交由 readAndValidateOutput 的一次自愈
-   *   按最新文件名兑底（追问后仍缺则显式失败保留现场）；
-   * - 文件核验跨 await 期间可能又有插话（重定向更新名字）或留下不确定
-   *   记录：必须重新核验；终核验与切换 handoff 阶段在同一同步段完成，
-   *   此后插话被阶段门禁拒绝。
-   */
-  private async settleThroughSteers(
-    request: AgentSpawnRequest,
-    pane: ManagedPane,
-    initialFileName: string,
-    initial: HerdrAgentInfo,
-  ): Promise<void> {
-    const key = this.paneKey(pane)
-    const latestName = (): string | undefined => this.registry.get(nodeIdOf(pane), pane.paneId)?.outputFileName
-    const steerSettled = (): boolean => !this.activeSteers.has(key) && !this.steerFailures.has(key)
-    let info = initial
-    for (;;) {
-      await this.waitUntilSettled(request, pane, info)
-      const inFlight = this.activeSteers.get(key)
-      if (inFlight !== undefined) await inFlight.catch(() => {})
-      const uncertain = this.steerFailures.get(key)
-      if (uncertain !== undefined) {
-        throw new HelmError(
-          'herdr_steer_uncertain',
-          `pane ${pane.paneId} 的插话投递结果不确定（${this.deps.redact(uncertain)}）：拒绝以旧交接结果或自愈追问冒充按最新指导的交付，任务显式失败并保留现场`,
-          502,
-          { paneId: pane.paneId, reason: this.deps.redact(uncertain) },
-        )
-      }
-      const authority = await this.agentGet(pane.target, pane.paneId, request.signal)
-      if (authority.agentStatus === 'working' || authority.agentStatus === 'blocked') {
-        info = authority
-        continue
-      }
-      if (authority.agentStatus === 'unknown') {
-        throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} 状态 unknown，无法确认完成`, 502)
-      }
-      if (!steerSettled()) continue
-      const currentName = latestName()
-      if (currentName !== undefined && currentName !== initialFileName) {
-        // 插话已重定向唯一交接文件：新文件未出现前不得进交接（旧结果冒充防线）。
-        let present = false
-        try {
-          await this.transport.readOutput(targetOf(pane), pane.effectiveCwd, currentName, request.signal)
-          present = true
-        } catch (error) {
-          if (!(error instanceof HelmError && error.code === 'herdr_output_missing')) throw error
-        }
-        if (!steerSettled() || latestName() !== currentName) continue
-        if (!present) {
-          // 新结果未出现：有界等待后续回合起步后复查（working/blocked 回主循环）。
-          const resumed = await this.waitSteerTurnOrNone(request, pane)
-          if (resumed !== undefined) {
-            info = resumed
-            continue
-          }
-          // 超时附近可能刚起步：先复查权威状态，避免向仍工作中的 CLI 提前追问。
-          info = await this.agentGet(pane.target, pane.paneId, request.signal)
-          if (!steerSettled() || latestName() !== currentName) continue
-          if (info.agentStatus === 'working' || info.agentStatus === 'blocked') continue
-          if (info.agentStatus === 'unknown') {
-            throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} 状态 unknown，无法确认完成`, 502)
-          }
-          // 仍 settled 时交由原单次自愈按最新文件名兑底，绝不读旧文件。
-        }
-      }
-      // 终核验与切 handoff 同一同步段：此后插话被阶段门禁拒绝。
-      if (!steerSettled() || latestName() !== currentName) continue
-      request.signal?.throwIfAborted()
-      this.panePhases.set(key, 'handoff')
-      return
-    }
-  }
-
-  /**
-   * 有界等待后续回合（agent.wait until working/blocked，预算复用启动超时）：
-   * 返回新回合的权威 info（working/blocked）；预算耗尽返回 undefined。
-   * 超时交调用方复查状态，再按最新业务文件走原单次交接自愈。
-   */
-  private async waitSteerTurnOrNone(
-    request: AgentSpawnRequest,
-    pane: ManagedPane,
-  ): Promise<HerdrAgentInfo | undefined> {
-    try {
-      return parseAgentResult(
-        await this.transport.call(
-          pane.target,
-          'agent.wait',
-          { target: pane.paneId, until: ['working', 'blocked'], timeout_ms: this.host.startupTimeoutMs() },
-          { signal: request.signal, timeoutMs: this.host.startupTimeoutMs() + 1_000 },
-        ),
-        'agent.wait',
-        'agent_info',
-      )
-    } catch (error) {
-      const code = (error as { code?: string }).code
-      if (code === 'timeout' || code === 'herdr_timeout') return undefined
-      throw error
-    }
-  }
-
   /** 已结算的 blocked 水位先做短暂退避防抖；若发键后连续退避仍停留在同一 blocked seq，重开审批让人类重选。 */
   private static readonly MAX_SETTLED_BLOCKED_BACKOFFS = 2
-
-  /** md 交接稳定性复检的间隔（两次读一致才接受；json 有 schema 硬校验无需此检）。 */
-  private static readonly MD_STABLE_RECHECK_MS = 300
 
   /** 已结算的 blocked 水位只退避；新水位交给同一审批桥。 */
   private async waitUntilSettled(request: AgentSpawnRequest, pane: ManagedPane, initial: HerdrAgentInfo): Promise<void> {
@@ -1013,12 +935,12 @@ export class HerdrExecutor {
   }
 
   private paneKey(pane: ManagedPane): string {
-    return JSON.stringify([pane.target, pane.paneId])
+    return paneStateKey(pane)
   }
 
   /** closePane 单飞键（与 closePane 内部完全同构：steer 门禁复用同一坐标）。 */
   private closeKey(pane: ManagedPane): string {
-    return `${nodeIdOf(pane) ?? 'local'}:${pane.paneId}`
+    return paneCloseKey(pane)
   }
 
   /** prompt --wait（含自愈追问共用）：blocked 也可能立即返回（审批桥接管）。 */
@@ -1085,632 +1007,20 @@ export class HerdrExecutor {
 
   // ------------------------------------------------------------------
   // 运行中插话（steer）：仅 task 阶段 + agent.get 预检 + 现有 agent.prompt
+  // （投递、门禁、结算排空与作废文件清理见 executor-steer.ts）
   // ------------------------------------------------------------------
 
-  /** steer 投递短超时：预检后单次投递应远小于此；超时如实报不确定，不重试。 */
-  private static readonly STEER_PROMPT_TIMEOUT_MS = 5_000
-
-  /** 服务端 admission 确定零写入的拒绝码（其余超时/断线/坏响应一律按不确定投递处理）。 */
-  private static readonly STEER_ZERO_WRITE_CODES = new Set(['agent_not_ready', 'agent_blocked', 'agent_not_found'])
-
-  /**
-   * 受管窗格运行中插话（按 pane 互斥；单次投递不重试）：
-   *
-   * 门禁（任何一步失败确定性拒绝，绝无静默降级）：
-   * 1. live 执行上下文：registry 现值 outcome=running 且阶段为 'task'
-   *    （startup/handoff/gate/keepalive/failed/settled 一律拒绝）；
-   * 2. run/父会话强匹配：workflowRunId 与 parentConversationId 必须与受管
-   *    记录精确相等（仅限 workflow run 管理下的窗格）；
-   * 3. 原 run signal 未取消（跨节点冻结 target：不重算 node/socket，不接受
-   *    同 pane 不同 node——由 plugin 动作层精确 (nodeId, paneId) 定位保证）；
-   * 4. agent.get 预检：name/tab/pane 身份精确相等、working 且非
-   *    launch_pending；blocked 交原 Ask 审批桥（此处拒绝）；预检已
-   *    idle/done/unknown 拒绝（绝不主动新建回合）；
-   * 5. 预检跨 await 后复核阶段/registry/run signal；
-   * 6. 投递：现有 agent.prompt {target: 受管 agentName, text}，无 wait、
-   *    无附加守卫字段、显式短超时，单次调用即终局，绝不重试。预检到
-   *    服务端接收之间刚转 idle 的提交交由真实 admission 裁定（允许接续
-   *    新回合）；服务端确定零写入拒绝（agent_not_ready/agent_blocked/
-   *    agent_not_found）不动原交接路径；超时/断线/坏响应
-   *    为不确定投递——按 pane 记失败，任务结算时显式失败保留现场，
-   *    绝不落回旧交接文件或自动重发。
-   *
-   * 诚实语义：guardLevel='preflight'——预检不是提交点原子复核（不可伪称
-   * CAS）；steered=true 仅代表单次投递成功。每次成功插话把唯一交接文件
-   * 重定向到全新 wf-out-* 名（旧名作废）：任务结算只接受最新名字的交付，
-   * 旧结果/迟到写回天然无法冒充。
-   */
+  /** 受管窗格运行中插话（公共入口；门禁与单次投递语义见 SteerDispatcher.steerPane）。 */
   async steerPane(pane: ManagedPane, input: SteerPaneInput): Promise<{ stateChangeSeq: number }> {
-    if (typeof input.text !== 'string' || input.text.trim() === '') {
-      throw new HelmError('validation_error', '插话指导内容不能为空白', 400)
-    }
-    const key = this.paneKey(pane)
-    if (this.activeSteers.has(key)) {
-      throw new HelmError(
-        'herdr_steer_in_flight',
-        `pane ${pane.paneId} 已有在途插话，拒绝重入（按 pane 互斥）`,
-        409,
-        { paneId: pane.paneId },
-      )
-    }
-    const steer = (async (): Promise<{ stateChangeSeq: number }> => {
-      // 1-2) live 上下文 + 阶段 + run/父会话强匹配（以 registry 现值为准）。
-      const current = this.assertSteerable(pane, input)
-      // 3) 原 run signal 未取消。
-      const origin = this.activeTasks.get(key)
-      if (origin === undefined || origin.signal?.aborted) {
-        throw new HelmError(
-          'herdr_steer_task_ended',
-          `pane ${pane.paneId} 的原任务已结束或正在取消，拒绝插话`,
-          409,
-          { paneId: pane.paneId },
-        )
-      }
-      // 4) 预检：权威 agent.get 核验身份与工作状态（preflight，非提交点 CAS）。
-      const authority = await this.agentGet(current.target, current.paneId, input.signal)
-      if (
-        authority.paneId !== current.paneId ||
-        authority.tabId !== current.tabId ||
-        authority.name !== current.agentName
-      ) {
-        throw new HelmError(
-          'herdr_steer_identity_mismatch',
-          `pane ${current.paneId} 权威身份与受管记录不一致（name=${String(authority.name)} tab=${authority.tabId}），拒绝插话`,
-          409,
-          { paneId: current.paneId, authorityName: authority.name, authorityTabId: authority.tabId },
-        )
-      }
-      if (authority.launchPending === true) {
-        throw new HelmError(
-          'herdr_steer_not_ready',
-          `pane ${current.paneId} 仍在启动（launch_pending），拒绝插话`,
-          409,
-          { paneId: current.paneId },
-        )
-      }
-      if (authority.agentStatus === 'blocked') {
-        throw new HelmError(
-          'herdr_steer_agent_blocked',
-          `pane ${current.paneId} 当前 blocked（等待审批），插话交由原审批桥负责：请先在 AskDock 完成审批`,
-          409,
-          { paneId: current.paneId, stateChangeSeq: authority.stateChangeSeq },
-        )
-      }
-      if (authority.agentStatus !== 'working') {
-        throw new HelmError(
-          'herdr_steer_not_working',
-          `pane ${current.paneId} 当前状态为 ${authority.agentStatus}，仅 working 可插话（绝不新建回合）`,
-          409,
-          { paneId: current.paneId, agentStatus: authority.agentStatus },
-        )
-      }
-      // 5) 预检跨 await 复核：任务可能已结算/取消/进入新阶段。
-      this.assertSteerable(pane, input)
-      const originAfter = this.activeTasks.get(key)
-      if (originAfter === undefined || originAfter.signal?.aborted) {
-        throw new HelmError(
-          'herdr_steer_task_ended',
-          `pane ${pane.paneId} 插话期间原任务已结束或取消，投递中止（未发送任何输入）`,
-          409,
-          { paneId: pane.paneId },
-        )
-      }
-      // 6) 单次投递：全新唯一交接文件名 + 现有 agent.prompt（无 wait/无附加字段）。
-      const next = this.nextSteerOutputFileName(current)
-      const text = this.steerPromptText(current, input, next)
-      try {
-        parseAgentResult(
-          await this.transport.call(
-            current.target,
-            'agent.prompt',
-            { target: current.agentName, text },
-            { signal: input.signal, timeoutMs: HerdrExecutor.STEER_PROMPT_TIMEOUT_MS },
-          ),
-          'agent.prompt',
-          'agent_prompted',
-        )
-      } catch (error) {
-        const code = (error as { code?: string }).code
-        if (typeof code === 'string' && HerdrExecutor.STEER_ZERO_WRITE_CODES.has(code)) {
-          // 服务端 admission 确定零写入：不重定向交接文件、不记失败，
-          // 原任务按自身节奏继续（前一有效路径保持不变）。
-          throw error
-        }
-        // 超时/断线/坏响应：投递结果不确定（可能已写入）。按 pane 记失败，
-        // 任务结算时显式失败保留现场；绝不静默落回旧文件或自动重发。
-        if (this.activeTasks.get(key) === origin) {
-          this.steerFailures.set(key, error instanceof Error ? error.message : String(error))
-        }
-        throw error
-      }
-      if (this.activeTasks.get(key) !== origin || origin.signal?.aborted || this.activeCloses.has(this.closeKey(current))) {
-        throw new HelmError('herdr_steer_task_ended', `pane ${pane.paneId} 的输入已投递，但原任务已取消或关闭；请检查现场，不要重发`, 409)
-      }
-      // 成功投递后重定向唯一交接文件；结算排空在途 steer 时必然可见。
-      this.registry.update(nodeIdOf(current), current.paneId, { outputFileName: next })
-      const retired = this.steerRetiredFiles.get(key) ?? []
-      if (current.outputFileName !== undefined && current.outputFileName !== '') {
-        retired.push(current.outputFileName)
-      }
-      this.steerRetiredFiles.set(key, retired)
-      return { stateChangeSeq: authority.stateChangeSeq }
-    })().finally(() => this.activeSteers.delete(key))
-    this.activeSteers.set(key, steer)
-    return steer
-  }
-
-  /** steer 门禁前置（registry 现值复核；返回现值供后续步骤共用）。 */
-  private assertSteerable(pane: ManagedPane, input: SteerPaneInput): ManagedPane {
-    const current = this.registry.get(nodeIdOf(pane), pane.paneId)
-    if (current === undefined || current.outcome !== 'running') {
-      throw new HelmError(
-        'herdr_steer_not_running',
-        `pane ${pane.paneId} 不在受管运行中（outcome=${current?.outcome ?? 'unmanaged'}），拒绝插话`,
-        409,
-        { paneId: pane.paneId, outcome: current?.outcome ?? 'unmanaged' },
-      )
-    }
-    // 关闭中拒绝：closePane 在入口同步登记 activeCloses，但 phase/outcome 要
-    // 到若干次 await 之后才变更——非 abort 关闭过程（workflow/turn settle、
-    // 对账回收）同样必须挡住 steer，不能只看 task+running 门禁。
-    if (this.activeCloses.has(this.closeKey(pane))) {
-      throw new HelmError(
-        'herdr_steer_task_ended',
-        `pane ${pane.paneId} 正在关闭（结算/取消/回收中），拒绝插话`,
-        409,
-        { paneId: pane.paneId },
-      )
-    }
-    const phase = this.panePhases.get(this.paneKey(pane))
-    if (phase !== 'task') {
-      throw new HelmError(
-        'herdr_steer_phase',
-        `pane ${pane.paneId} 当前处于 ${phase ?? '无在途任务'} 阶段，仅任务执行期（task）可插话`,
-        409,
-        { paneId: pane.paneId, phase: phase ?? 'none' },
-      )
-    }
-    if (current.workflowRunId !== input.workflowRunId || current.parentConversationId !== input.parentConversationId) {
-      throw new HelmError(
-        'herdr_steer_context_mismatch',
-        `pane ${pane.paneId} 受管归属（workflow=${String(current.workflowRunId)} 父会话=${current.parentConversationId}）与插话目标（workflow=${input.workflowRunId} 父会话=${input.parentConversationId}）不一致，拒绝跨轨道插话`,
-        409,
-        {
-          paneId: pane.paneId,
-          managedWorkflowRunId: current.workflowRunId,
-          managedParentConversationId: current.parentConversationId,
-          requestedWorkflowRunId: input.workflowRunId,
-          requestedParentConversationId: input.parentConversationId,
-        },
-      )
-    }
-    if (this.steerFailures.has(this.paneKey(pane))) {
-      throw new HelmError(
-        'herdr_steer_uncertain',
-        `pane ${pane.paneId} 的前次插话投递结果不确定，请先检查现场，不能继续插话掩盖该结果`,
-        409,
-        { paneId: pane.paneId },
-      )
-    }
-    return current
-  }
-
-  /** 插话投递文本：来源前缀 + 脱敏指导 + 交接文件重定向（旧路径作废，仅最新指导有效）。 */
-  private steerPromptText(pane: ManagedPane, input: SteerPaneInput, nextFileName: string): string {
-    const previous = pane.outputFileName
-    if (previous === undefined || previous === '') {
-      throw new HelmError(
-        'herdr_context_unavailable',
-        `pane ${pane.paneId} 缺少交接文件名（任务阶段异常），拒绝插话`,
-        409,
-        { paneId: pane.paneId },
-      )
-    }
-    return [
-      `父会话插话纠偏（后台运行 ${input.workflowRunId}）：`,
-      this.deps.redact(input.text),
-      '',
-      '--- helm 交接契约更新（必须遵守）---',
-      `按本插话的最新指导完成剩余工作后，把最终结果写入新文件 ${pane.effectiveCwd}/.helm/${nextFileName}（内容要求与原交接契约一致，仍须通过原 Schema 与 Gate）。`,
-      `原交接文件 ${previous} 已作废：不要再写旧文件；helm 只接受新文件的交付，未写新文件视为任务失败。`,
-    ].join('\n')
-  }
-
-  /** 本次插话的全新唯一交接文件名（与当前业务文件同扩展；复用同一白名单）。 */
-  private nextSteerOutputFileName(pane: ManagedPane): string {
-    const fileName = pane.outputFileName
-    if (fileName === undefined || fileName === '') {
-      throw new HelmError(
-        'herdr_context_unavailable',
-        `pane ${pane.paneId} 缺少交接文件名（任务阶段异常），拒绝插话`,
-        409,
-        { paneId: pane.paneId },
-      )
-    }
-    const ext = fileName.endsWith('.json') ? 'json' : 'md'
-    return buildOutputFileName(`s${randomUUID()}`, ext)
-  }
-
-  /** 成功交接后清理已被插话作废的旧结果文件（失败路径保留现场；清理失败显式通知不拖垮已验证结果）。 */
-  private async clearRetiredSteerOutputs(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
-    const key = this.paneKey(pane)
-    const retired = this.steerRetiredFiles.get(key)
-    if (retired === undefined || retired.length === 0) return
-    try {
-      for (const fileName of retired) {
-        await this.transport.removeOutput(targetOf(pane), pane.effectiveCwd, fileName, request.signal)
-      }
-    } catch (error) {
-      this.host.notify(
-        'Herdr 作废交接文件清理未竟',
-        `插话作废的旧结果文件删除失败（结果已验证，不影响本次交付）：${error instanceof Error ? this.deps.redact(error.message) : String(error)}`,
-        'error',
-      )
-    } finally {
-      this.steerRetiredFiles.delete(key)
-    }
+    return this.steerDispatcher.steerPane(pane, input)
   }
 
   // ------------------------------------------------------------------
-  // 文件交接与 gate
+  // resume（权威确认与路由恢复实现见 executor-resume.ts）
   // ------------------------------------------------------------------
 
-  private async readAndValidateOutput(request: AgentSpawnRequest, pane: ManagedPane): Promise<unknown> {
-    const transport = this.transport
-    const fileName = pane.outputFileName!
-    const target = targetOf(pane)
-    const readOnce = async (): Promise<{ ok: true; value: unknown } | { ok: false; reason: string; recoverable: boolean }> => {
-      let raw: string
-      try {
-        raw = await transport.readOutput(target, pane.effectiveCwd, fileName, request.signal)
-      } catch (error) {
-        if (error instanceof HelmError && error.code === 'herdr_output_missing') {
-          return { ok: false, reason: `交接文件缺失：${fileName}`, recoverable: true }
-        }
-        // 其它 IO/SSH/权限错误：如实抛诊断，不当缺文件自愈。
-        throw error
-      }
-      if (request.schema === undefined) {
-        if (raw.trim() === '') return { ok: false, reason: '交接文件为空', recoverable: true }
-        return { ok: true, value: this.deps.redact(raw) }
-      }
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(raw)
-      } catch (err) {
-        return {
-          ok: false,
-          reason: `交接文件不是合法 JSON：${err instanceof Error ? err.message : String(err)}`,
-          recoverable: true,
-        }
-      }
-      try {
-        validateOrThrow(request.schema, parsed, '交接文件内容未通过 JSON Schema 校验', 'schema_validation_failed', 502)
-        return { ok: true, value: JSON.parse(this.deps.redact(JSON.stringify(parsed))) as unknown }
-      } catch (err) {
-        if (err instanceof HelmError && err.code === 'schema_validation_failed') {
-          return { ok: false, reason: err.message, recoverable: true }
-        }
-        throw err
-      }
-    }
-
-    /**
-     * md 交接的稳定性复检：agent 非原子多段写 + agent.wait 返回 idle 但后台
-     * 仍在写时，首读可能拿到截断 Markdown——间隔短时复读一致才接受，否则
-     * 按可自愈失败走追问路径（json 路径已有 parse+schema 硬校验，无需此检；
-     * 残余风险：两次读间隔内恰好写完且不再变化的前缀截断仍无法区分，由
-     * 自愈追问兑底）。
-     */
-    const readOnceStable = async (): Promise<{ ok: true; value: unknown } | { ok: false; reason: string; recoverable: boolean }> => {
-      const first = await readOnce()
-      if (!first.ok || request.schema !== undefined) return first
-      await delay(HerdrExecutor.MD_STABLE_RECHECK_MS, undefined, { signal: request.signal })
-      const second = await readOnce()
-      if (!second.ok) return second
-      if (second.value !== first.value) {
-        return { ok: false, reason: '交接文件仍在写入（间隔复读内容不一致）', recoverable: true }
-      }
-      return first
-    }
-
-    let attempt = await readOnceStable()
-    if (!attempt.ok) {
-      this.host.notify('Herdr 交接自愈', `pane ${pane.paneId} 首次交接失败（${attempt.reason}），追问一次`, 'info')
-      await this.project(pane, `heal:${pane.agentName}`)
-      // 自愈追问本身也可能 blocked：同一审批桥等待真实进展后再读文件，
-      // 不能读缺文件就判失败。
-      await this.promptAndWaitHeal(request, pane, attempt.reason)
-      attempt = await readOnceStable()
-    }
-    if (!attempt.ok) {
-      await this.markFailed(pane, attempt.reason)
-      const snapshot = await this.readDiagnostic(pane)
-      throw new HelmError(
-        'herdr_output_contract_violation',
-        `pane ${pane.paneId} 两次交接均失败（${attempt.reason}）；窗格保留供人工排查。终端最后 40 行（脱敏）：\n${snapshot}`,
-        502,
-        { paneId: pane.paneId, reason: attempt.reason, snapshot },
-      )
-    }
-    await transport.removeOutput(target, pane.effectiveCwd, fileName, request.signal)
-    return attempt.value
-  }
-
-  /** 自愈追问：与首轮同形（prompt --wait + blocked 桥循环）。 */
-  private async promptAndWaitHeal(request: AgentSpawnRequest, pane: ManagedPane, reason: string): Promise<void> {
-    const target = targetOf(pane)
-    const text =
-      `你上一轮未按要求交付。${reason}。请立即将最终结果写入 ${pane.effectiveCwd}/.helm/${pane.outputFileName}` +
-      (request.schema !== undefined ? `（满足 Schema 的单个 JSON 值）。\nJSON Schema: ${redactSchemaText(request.schema, this.deps.redact)}` : '（Markdown 全文）。')
-    const info = await this.promptAndWait(target, pane, this.deps.redact(text), request.signal)
-    await this.waitUntilSettled(request, pane, info)
-  }
-
-  /** agent.read recent_unwrapped 40 行脱敏快照（诊断专用）。 */
-  private async readDiagnostic(pane: ManagedPane): Promise<string> {
-    try {
-      const read = parsePaneRead(
-        await this.transport.call(targetOf(pane), 'agent.read', {
-          target: pane.paneId,
-          source: 'recent_unwrapped',
-          lines: 40,
-          format: 'text',
-        }, { timeoutMs: 5_000 }),
-      )
-      return this.deps.redact(read.text).slice(-4_000)
-    } catch (error) {
-      return `[快照读取失败：${error instanceof Error ? this.deps.redact(error.message) : String(error)}]`
-    }
-  }
-
-  /** gate：文件成功后恰好一次；本机 runLocalGate，远端 transport.runGate（同一实际 cwd 与路由基线 env）。机密不缓存：每次按本次请求 secretNames 从当前 stash 重新授权，缺失/过期/已结算在 gate 子进程启动前显式 404（零 gate 副作用）。 */
-  private async runGateFor(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
-    const baseline = this.paneEnvs.get(this.paneKey(pane))
-    if (baseline === undefined) throw new HelmError('herdr_context_unavailable', '任务环境已丢失，无法在同一环境执行 Gate', 409)
-    const env = this.applyPaneSecrets(baseline, request.parentConversationId, pane.effectiveCwd, targetOf(pane), request.secretNames ?? [])
-    const gate: { ok: boolean; output: string } =
-      nodeIdOf(pane) === undefined
-        ? await this.deps.runLocalGate(request.gate!, {
-            cwd: pane.effectiveCwd,
-            conversationId: this.host.askConversationId(request.parentConversationId),
-            signal: request.signal,
-            env,
-          })
-        : await this.transport.runGate(targetOf(pane), request.gate!, pane.effectiveCwd, request.signal, env)
-    request.onGateResult?.({ ...gate, output: this.deps.redact(gate.output) })
-    if (!gate.ok) {
-      await this.markFailed(pane, `gate 失败：${request.gate}`)
-      throw new HelmError(
-        'gate_failed',
-        `验收命令失败（exit≠0）：${request.gate}\n${this.deps.redact(gate.output).slice(-2000)}`,
-        502,
-        { output: this.deps.redact(gate.output).slice(-4000) },
-      )
-    }
-  }
-
-  // ------------------------------------------------------------------
-  // resume
-  // ------------------------------------------------------------------
-
-  /**
-   * 真实 resume 双入口（先识别自有记录，不依赖 request.agentType）：
-   * - standalone subagent：resume = onResolved.executionId（paneId），通常无
-   *   request.agentId；
-   * - workflow resumeAgent：resume = 本 run 记录的 agentId，无 agentType。
-   * 校验：只准同 workflow（含 undefined 轨道一致）及同父会话；拒绝 busy/
-   * settled/未知/歧义；显式 kind/nodeId/cwd 不一致显式拒绝（不静默忽略）；
-   * 任何 prompt 发送前经 assertResumeAgentConfirmed 权威确认底层 Agent
-   * （仅 idle/done 可续接；超时保留 pane 的 working/blocked 与启动期未定
-   * 状态一律显式拒绝，不新建、不按键中止）。
-   * 返回 undefined 表示该 ref 非本插件记录（交还内核原生 resume）。
-   */
   private async resumeInto(request: AgentSpawnRequest, candidates: ManagedPane[]): Promise<unknown> {
-    const resumeRef = request.resume!
-    if (candidates.length > 1) {
-      throw new HelmError(
-        'resume_ambiguous',
-        `resume ref '${resumeRef}' 命中 ${candidates.length} 个窗格（跨机器 paneId 撞号），请用稳定 agentId 消歧`,
-        409,
-        { resumeRef, panes: candidates.map((p) => `${nodeIdOf(p) ?? 'local'}:${p.paneId}`) },
-      )
-    }
-    const pane = candidates[0]!
-    if (pane.parentConversationId !== request.parentConversationId) {
-      throw new HelmError(
-        'cross_parent_resume_rejected',
-        `resume ref '${resumeRef}' 属于父会话 ${pane.parentConversationId}，当前父会话 ${request.parentConversationId} 无权续接`,
-        409,
-        { resumeRef, ownerParent: pane.parentConversationId, requesterParent: request.parentConversationId },
-      )
-    }
-    // workflow 轨道一致性：两边必须同为同一 workflow（或同为 undefined）。
-    const paneWf = pane.workflowRunId
-    const reqWf = parseWorkflowSpawnMeta(request.meta).runId
-    if (paneWf !== reqWf) {
-      throw new HelmError(
-        'resume_workflow_mismatch',
-        `resume ref '${resumeRef}' 属于 workflow ${String(paneWf)}，当前调用轨道 ${String(reqWf)}，拒绝跨轨道续接`,
-        409,
-        { resumeRef, paneWorkflowRunId: paneWf, requestWorkflowRunId: reqWf },
-      )
-    }
-    if (pane.outcome === 'running') {
-      throw new HelmError(
-        'pane_busy',
-        `pane ${pane.paneId} 正在被另一个执行占用（outcome=running），拒绝并发 resume`,
-        409,
-        { paneId: pane.paneId },
-      )
-    }
-    if (pane.outcome === 'settled') {
-      throw new HelmError(
-        'pane_settled',
-        `pane ${pane.paneId} 已结算关闭（outcome=settled），无 PTY 可续接`,
-        409,
-        { paneId: pane.paneId },
-      )
-    }
-    // 路由：缺 agentType 沿用登记路由；显式给出且 kind 不一致显式拒绝。
-    assertNoUnsupportedOverrides(request.model, request.effort)
-    const resumeRouting = await this.resolveResumeRouting(request, pane)
-    // resume 附件门禁：与新建同语义（远端窗格无可达 HELM_HUB_URL 拒绝）。
-    this.assertAttachmentsReachable(request, targetOf(pane), resumeRouting)
-    if (request.cwd !== undefined && request.cwd !== pane.effectiveCwd) {
-      throw new HelmError(
-        'resume_cwd_conflict',
-        `resume 显式 cwd '${request.cwd}' 与窗格实际工作目录 '${pane.effectiveCwd}' 不一致；续接必须保留原 worktree cwd`,
-        409,
-        { resumeRef, requestCwd: request.cwd, effectiveCwd: pane.effectiveCwd },
-      )
-    }
-    // 权威续接门禁：任何 prompt 发送前以 agent.get 确认底层 Agent 可安全续接
-    // （TimeoutError 保留 pane 的底层 CLI 可能仍 working/blocked；启动期超时
-    // 的 agent.start 完成与否未定——都先安全确认，绝不盲目投递）。
-    await this.assertResumeAgentConfirmed(request, pane)
-
-    const unique = `${Date.now()}-resume-${HashShort.of(request.prompt.slice(0, 160))}-${request.parentConversationId}-${Math.random().toString(36).slice(2, 6)}`
-    const safeId = `r${HashShort.of(unique)}`
-    const ext = request.schema !== undefined ? 'json' : 'md'
-    if (this.registry.get(nodeIdOf(pane), pane.paneId)?.outcome === 'running') {
-      throw new HelmError('pane_busy', `pane ${pane.paneId} 已由另一续接占用`, 409)
-    }
-    const spawnRunId = parseWorkflowSpawnMeta(request.meta).runId
-    const updated = this.registry.update(nodeIdOf(pane), pane.paneId, {
-      outcome: 'running',
-      outputFileName: buildOutputFileName(safeId, ext),
-      agentId: request.agentId ?? pane.agentId,
-      ...(spawnRunId !== undefined ? { workflowRunId: spawnRunId } : {}),
-    })!
-    request.onResolved?.(this.executionInfoOf(updated))
-    // request.cwd 缺省代表沿用窗格实际 cwd（不重开窗、不重建 env tab）。
-    // 续接不重跑 agent.start（窗格已有 agent）；直接进入投递-审批-交接循环。
-    // env 缺失（失败窗格清理后）：按当前路由与窗格实际 cwd 重建基线（不含机密；
-    // resume 的 Gate 按 resume 请求自身 secretNames 重新授权，不沿用建窗时授予）。
-    if (!this.paneEnvs.has(this.paneKey(updated))) {
-      this.paneEnvs.set(
-        this.paneKey(updated),
-        this.buildPaneBaselineEnv(request.parentConversationId, updated.effectiveCwd, resumeRouting, targetOf(updated)),
-      )
-    }
-    await this.preloadAttachmentMeta(request)
-    return this.runManagedTask(request, updated)
-  }
-
-  /**
-   * resume 权威就绪门禁（在任何 prompt 发送前执行；安全边界）：
-   * - TimeoutError 超时保留的 pane 底层 CLI 可能仍 working/blocked——没有
-   *   安全 stop/CAS 手段，不能把保留 pane 包装成可无条件续接；
-   * - 启动期超时（agent.start 完成与否不确定）同样以此门禁显式拒绝或安全
-   *   确认：身份与状态均权威确认才放行，绝不盲目重发 agent.start；
-   * - 放行条件：身份（pane/tab/name）与受管登记精确一致且状态 idle/done；
-   *   working/blocked/unknown/launch_pending、无法权威确认（agent.get 失败）
-   *   或身份不一致一律显式拒绝——不新建 Agent、不代发按键中止，交人类在
-   *   Herdr 终端确认后再续接。
-   */
-  private async assertResumeAgentConfirmed(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
-    const resumeRef = request.resume!
-    let authority: HerdrAgentInfo
-    try {
-      authority = await this.agentGet(targetOf(pane), pane.paneId, request.signal)
-    } catch (error) {
-      if (request.signal?.aborted) throw error
-      throw new HelmError(
-        'resume_agent_unconfirmed',
-        `pane ${pane.paneId} 无法权威确认底层 Agent 状态（${error instanceof Error ? this.deps.redact(error.message) : String(error)}）；常见于启动期超时后 agent.start 完成与否不确定，或窗格已无受管 Agent。拒绝盲目续接：不新建 Agent、不重发 agent.start、不代发按键；请先在 Herdr 终端人工确认该窗格后再 resume`,
-        409,
-        { resumeRef, paneId: pane.paneId, cause: (error as { code?: string }).code ?? 'agent_get_failed' },
-      )
-    }
-    if (authority.paneId !== pane.paneId || authority.tabId !== pane.tabId || authority.name !== pane.agentName) {
-      throw new HelmError(
-        'herdr_ownership_lost',
-        `pane ${pane.paneId} 权威身份与受管登记不一致（name=${String(authority.name)} tab=${authority.tabId}），无法确认受管 Agent 仍在该窗格（可能从未启动成功或已被替换），拒绝续接`,
-        409,
-        { resumeRef, paneId: pane.paneId, authorityName: authority.name, authorityTabId: authority.tabId },
-      )
-    }
-    if (authority.launchPending === true) {
-      throw new HelmError(
-        'resume_agent_busy',
-        `pane ${pane.paneId} 仍在启动（launch_pending），底层 CLI 状态未定，拒绝续接`,
-        409,
-        { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus },
-      )
-    }
-    if (authority.agentStatus === 'working') {
-      throw new HelmError(
-        'resume_agent_busy',
-        `pane ${pane.paneId} 底层 CLI 仍在执行（working；常见于超时保留的 pane），拒绝续接：不新建、不按键中止；请等其在 Herdr 终端完结（idle/done）后再 resume`,
-        409,
-        { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus },
-      )
-    }
-    if (authority.agentStatus === 'blocked') {
-      throw new HelmError(
-        'resume_agent_blocked',
-        `pane ${pane.paneId} 底层 CLI 正 blocked 等待审批按键，续接绝不代人类发键；请在 Herdr 终端直接处理该阻塞后再 resume`,
-        409,
-        { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus, stateChangeSeq: authority.stateChangeSeq },
-      )
-    }
-    if (authority.agentStatus !== 'idle' && authority.agentStatus !== 'done') {
-      throw new HelmError(
-        'resume_agent_unconfirmed',
-        `pane ${pane.paneId} 权威状态为 ${authority.agentStatus}，无法确认可安全续接（仅 idle/done 可续接）`,
-        409,
-        { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus },
-      )
-    }
-  }
-
-  /**
-   * resume 路由解析：显式 agentType 校验 kind 一致；缺省沿用 pane.routing。
-   * 节点语义：resume 沿用旧窗格登记的节点（缺省与显式一致仅校验不重算——
-   * 显式 nodeId 与旧节点不同即 resume_node_conflict 拒绝，绝不静默把续接
-   * 投到另一台机器；也不按当前父会话节点重新解析）。
-   */
-  private async resolveResumeRouting(request: AgentSpawnRequest, pane: ManagedPane): Promise<SpawnRouting> {
-    if (request.agentType === undefined || request.agentType === '') {
-      const routing = pane.routing
-      return {
-        kind: routing.kind,
-        ...(pane.routing.profileId !== undefined ? { profileId: pane.routing.profileId } : {}),
-        args: [],
-        profileEnv: {},
-        nodeId: nodeIdOf(pane) ?? 'local',
-      }
-    }
-    const routing = await resolveSpawnRouting(request.agentType, this.deps.profiles)
-    if (routing === undefined) {
-      throw new HelmError(
-        'resume_agent_type_rejected',
-        `resume 显式 agentType '${request.agentType}' 非 Herdr 运行时，与既有 herdr 窗格不匹配`,
-        409,
-        { resume: request.resume, agentType: request.agentType },
-      )
-    }
-    if (routing.kind !== pane.routing.kind || routing.profileId !== pane.routing.profileId) {
-      throw new HelmError(
-        'resume_kind_conflict',
-        `resume 显式 agentType kind '${routing.kind}' 与窗格 agent kind '${pane.routing.kind}' 不一致，拒绝静默改型`,
-        409,
-        { resume: request.resume, requestKind: routing.kind, paneKind: pane.routing.kind },
-      )
-    }
-    const requestNodeId = routing.nodeId !== undefined ? targetNodeId({ nodeId: routing.nodeId }) ?? 'local' : undefined
-    const paneNodeId = nodeIdOf(pane) ?? 'local'
-    if (requestNodeId !== undefined && requestNodeId !== paneNodeId) {
-      throw new HelmError(
-        'resume_node_conflict',
-        `resume 显式节点 '${requestNodeId}' 与窗格目标节点 '${paneNodeId}' 不一致，拒绝跨节点续接`,
-        409,
-        { resume: request.resume, requestNodeId, paneNodeId },
-      )
-    }
-    // 沿用窗格冻结目标（显式节点仅作一致性校验，不热换连接）。
-    return { ...routing, nodeId: paneNodeId }
+    return this.resumeCoordinator.resumeInto(request, candidates)
   }
 
   // ------------------------------------------------------------------
@@ -1779,8 +1089,7 @@ export class HerdrExecutor {
       this.unstartedPanes.delete(this.paneKey(pane))
       this.panePhases.delete(this.paneKey(pane))
       this.activeTasks.delete(this.paneKey(pane))
-      this.steerFailures.delete(this.paneKey(pane))
-      this.steerRetiredFiles.delete(this.paneKey(pane))
+      this.steerDispatcher.forget(this.paneKey(pane))
       for (const removed of this.asks.paneClosed(pane.paneId, nodeIdOf(pane))) {
         if (removed.phase === 'pending' || removed.phase === 'creating') {
           await this.cancelAskQuietly(removed.askId, 'superseded')
@@ -1804,8 +1113,7 @@ export class HerdrExecutor {
     this.unstartedPanes.delete(key)
     this.panePhases.delete(key)
     this.activeTasks.delete(key)
-    this.steerFailures.delete(key)
-    this.steerRetiredFiles.delete(key)
+    this.steerDispatcher.forget(key)
   }
 
   private async cancelAskQuietly(askId: string, reason: 'cancelled' | 'superseded'): Promise<void> {
