@@ -412,6 +412,9 @@ export interface HelmStoreValue {
   groupedUi: GroupedUiSpecs
   pluginDocs: Record<string, unknown> // key: `${pluginId}/${docName}`
   nodes: NodeInfo[]
+  /** 当前内核启动代（SSE snapshot 的 bootId；null/缺省 = 尚未收到快照）。内核重启后变化，
+   * 供版本感知等只读消费者作为「触发重新探测」信号；不等于 Web 产物一定更新。测试替身可省略。 */
+  kernelBootId?: string | null
 
   // 静态配置资产
   profiles: Profile[]

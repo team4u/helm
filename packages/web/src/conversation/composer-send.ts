@@ -21,6 +21,7 @@ import {
 } from '../lib/commands-model.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
+import { clearComposerDirty, setComposerDirty } from './composer-dirty.js'
 import { focusWithCaret } from './composer-controller.js'
 import {
   attachmentsOfEditTarget,
@@ -60,6 +61,8 @@ export interface ComposerSendInput {
   envConfigurable: boolean
   /** 会话是否正忙（发送 whenBusy 策略附着的唯一依据）。 */
   working: boolean
+  /** 版本自动刷新挂起判定的本地草稿上报键（组件实例唯一，如 useId()）；缺省不上报。 */
+  dirtyKey?: string
 }
 
 export interface ComposerSendApi {
@@ -99,7 +102,7 @@ export interface ComposerSendApi {
 }
 
 export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
-  const { conversation, prefill, onSendingChange, onNewThread, textareaRef, slashPluginCommands, envConfigurable, working } = input
+  const { conversation, prefill, onSendingChange, onNewThread, textareaRef, slashPluginCommands, envConfigurable, working, dirtyKey } = input
   const store = useHelmStore()
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
@@ -457,6 +460,23 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
   }, [working, onSendingChange, notifyError, store, conversation.id, uploadingRef, envBlocker])
 
   const readLiveDraft = useCallback((): string => liveDraftRef.current.text, [])
+
+  // 版本自动刷新挂起判定：本地草稿脏状态上报（外部桥接 store 聚合，见
+  // composer-dirty.ts）。状态变化即时同步；卸载按实例键清除（依赖数组仅
+  // dirtyKey，重渲染不重复清除上报）。
+  useEffect(() => {
+    if (dirtyKey === undefined) return
+    setComposerDirty(dirtyKey, {
+      hasDraftText: text.trim() !== '',
+      editingEntry: editingEntryId !== null,
+      hasAttachments: attachments.length > 0,
+      busy: sending || uploading > 0,
+    })
+  }, [dirtyKey, text, editingEntryId, attachments, sending, uploading])
+  useEffect(() => {
+    if (dirtyKey === undefined) return
+    return () => clearComposerDirty(dirtyKey)
+  }, [dirtyKey])
 
   return {
     text,

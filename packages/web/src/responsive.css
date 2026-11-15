@@ -10,6 +10,10 @@
 .connection-screen { height: 100dvh; }
 .connection-banner { padding: 7px 16px; background: var(--warn-bg); border-bottom: 1px solid var(--warn-border); color: var(--warn); font-size: 12px; }
 .connection-banner span { margin-left: 12px; }
+/* 版本更新横幅：与连接横幅同位置同量级的持久提示（不自动消失），提供显式刷新动作 */
+.version-banner { display: flex; align-items: center; gap: 8px; padding: 7px 16px; background: var(--ok-bg); border-bottom: 1px solid var(--ok-border); color: var(--ok); font-size: 12px; }
+.version-banner-text { flex: 1; min-width: 0; }
+.version-banner .btn { flex-shrink: 0; }
 .mobile-nav-toggle, .sidebar-backdrop, .mobile-sidebar-close { display: none; }
 .nav-open { border: 0; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; min-height: 22px; }
 button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }

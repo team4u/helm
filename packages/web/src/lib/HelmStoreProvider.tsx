@@ -128,6 +128,9 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const liveRef = useRef(live)
   const [conversationArtifacts, setConversationArtifacts] = useState<Record<number, ArtifactMetadata[]>>({})
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({})
+  // 当前内核启动代（SSE snapshot bootId）：只读事实暴露给版本感知等消费者，
+  // 不参与 SSE 续传状态机本身（续传凭据仍由 sseCursorRef 唯一维护）。
+  const [kernelBootId, setKernelBootId] = useState<string | null>(null)
   const [profiles, setProfiles] = useState<Profile[]>([])
   /** 静态资产是否已完成本轮会话首次加载（待命页区分「加载中」与「角色不存在」）。 */
   const [assetsLoaded, setAssetsLoaded] = useState(false)
@@ -707,6 +710,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
               setLoadErrors({})
               updateLive((state) => applySnapshot(state, snap))
               sseCursorRef.current = { bootId: snap.bootId, seq: snap.seq }
+              setKernelBootId(snap.bootId)
               setConversationArtifacts({})
               retry = 0
               announceLive()
@@ -851,12 +855,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   // Context value 需引用稳定：任何一处局部状态变化都不应触发全量消费组件重渲染。
   const store: HelmStoreValue = useMemo(
     () => ({
-      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
+      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
       setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
-      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
+      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
       setTheme, setThemePreference, toggleTheme, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],

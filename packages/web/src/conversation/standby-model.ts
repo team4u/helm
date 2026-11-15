@@ -94,9 +94,27 @@ function notifyListeners(): void {
   for (const listener of listeners) listener()
 }
 
-function subscribeDrafts(listener: DraftListener): () => void {
+/** 订阅草稿存储变化（版本自动刷新挂起判定等只读消费者用）。 */
+export function subscribeStandbyDrafts(listener: DraftListener): () => void {
   listeners.add(listener)
-  return () => listeners.delete(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+/**
+ * 任意坐标的待命草稿是否携带未提交本地现场（非空正文 / 待上传或已上传附件 /
+ * 首发在途）。版本自动刷新以浏览器本地未提交内容为挂起条件时消费；正文与
+ * 附件在首次发送成功前均未落库，sending 失败锚点（conversationId）同样以
+ * 草稿整体为现场。
+ */
+export function standbyDraftsDirty(): boolean {
+  for (const draft of drafts.values()) {
+    if (draft.text.trim() !== '') return true
+    if (draft.localFiles.length > 0 || draft.uploaded.length > 0) return true
+    if (draft.sending) return true
+  }
+  return false
 }
 
 /** 草稿入口坐标：面板 + Profile + 继承环境。同 Profile 不同远端坐标是两份独立草稿，
@@ -170,7 +188,7 @@ export function resetEnvStandbyDraft(from: string, to: string): boolean {
 
 /** React 绑定：草稿记录引用稳定（每次更新整体替换），供 useSyncExternalStore 消费。 */
 export function useStandbyDraft(key: string): StandbyDraftState {
-  return useSyncExternalStore(subscribeDrafts, () => getStandbyDraft(key), () => EMPTY_STANDBY_DRAFT)
+  return useSyncExternalStore(subscribeStandbyDrafts, () => getStandbyDraft(key), () => EMPTY_STANDBY_DRAFT)
 }
 
 // ---------------------------------------------------------------------------

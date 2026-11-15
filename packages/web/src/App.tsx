@@ -21,12 +21,16 @@ import { Sidebar } from './shell/Sidebar.js'
 import { ToastOverlay } from './shell/ToastOverlay.js'
 import { TooltipProvider } from './ui/Tooltip.js'
 import { useQuietNotifier } from './shell/use-quiet-notifier.js'
+import { useVersionWatcher } from './shell/use-version-watcher.js'
+import { versionDeferHint } from './shell/version-watch-model.js'
 
 function HelmShellInner() {
   const store = useHelmStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   // 「全部空闲」浏览器通知：全局装配一次（内部自行门控偏好/认证状态）。
   useQuietNotifier()
+  // 版本感知与自动刷新：全局装配一次（生产入口识别不到时内部休眠）。
+  const versionWatch = useVersionWatcher()
   const setActiveModal = store.setActiveModal
   const closeModal = useCallback(() => setActiveModal(null), [setActiveModal])
 
@@ -114,6 +118,17 @@ function HelmShellInner() {
           <div className="connection-banner" role="status">
             {store.connectionError ?? '正在同步会话…'}
             <span>连接恢复后会自动刷新。</span>
+          </div>
+        )}
+        {versionWatch.updateAvailable && (
+          <div className="version-banner" role="status">
+            <HelmIcon name="refresh-cw" size={13} />
+            <span className="version-banner-text">
+              {`Helm 已发布新版本${versionWatch.deferReason !== null ? `，${versionDeferHint(versionWatch.deferReason)}` : ''}`}
+            </span>
+            <button type="button" className="btn btn-sm" onClick={versionWatch.reloadNow}>
+              立即刷新
+            </button>
           </div>
         )}
         <div className="helm-panes">

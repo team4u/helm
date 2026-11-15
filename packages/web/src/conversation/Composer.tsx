@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol'
 import { COMPOSER_STATUS_SLOT } from '@helm/protocol'
 import { conversationsApi } from '../lib/api.js'
@@ -104,6 +104,8 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   )
 
   // 发送管线（草稿 / 编辑锚点 / 附件上传 / 提交与失败恢复 / 环境阻塞）。
+  // 版本自动刷新挂起判定：实例级脏状态上报键（主屏/分屏/抽屉可同屏渲染同一会话）。
+  const composerDirtyKey = useId()
   const {
     text,
     attachments,
@@ -133,6 +135,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     slashPluginCommands,
     envConfigurable,
     working,
+    dirtyKey: composerDirtyKey,
   })
 
   const widgets = store.groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))
