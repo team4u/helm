@@ -11,9 +11,6 @@
  * - ./superagent/watchdog.ts: 两层巡检看门狗组合根（装配 watchdog-core/activity/
  *   dedup/tick/classify/ops/guards/tools 同级子模块）
  */
-import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import {
   HelmError,
   type ConversationDetail,
@@ -22,6 +19,7 @@ import {
   type MaybePromise,
   type PluginDefinition,
 } from '@helm/protocol'
+import { resolvePluginClientRoot } from './asset-paths.js'
 import { registerSuperAgentWatchdog } from './superagent/watchdog.js'
 import {
   DEFAULT_CONFIG,
@@ -84,21 +82,6 @@ async function bootstrapAssets(host: Pick<HelmHostApi, 'profiles' | 'skills'> & 
   }
 }
 
-/** clientRoot 兼容 src / dist 运行路径（与 workflow/herdr/memory 插件同机制）。 */
-function resolveSuperAgentClientRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'superagent', 'client')
-  if (existsSync(local)) return local
-  const pkgRoot = dirname(here)
-  const srcFallback = join(pkgRoot, 'src', 'superagent', 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    'superagent_plugin_client_missing',
-    `内置插件 ${SUPERAGENT_PLUGIN_ID} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
-}
-
 // ---------------------------------------------------------------------------
 // 插件工厂
 // ---------------------------------------------------------------------------
@@ -110,7 +93,7 @@ export function createSuperAgentPlugin(): PluginDefinition {
     description: '双层中枢：总控路由点名专家 Profile 派生后台 Worker，附归档汇报与两层巡检看门狗。',
     icon: 'sparkles',
     version: '0.1.0',
-    clientRoot: resolveSuperAgentClientRoot(),
+    clientRoot: resolvePluginClientRoot(SUPERAGENT_PLUGIN_ID, 'superagent', 'superagent_plugin_client_missing'),
     definePlugin(ctx) {
       let active = false
       let shutdown = false
