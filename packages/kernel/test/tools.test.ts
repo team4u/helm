@@ -513,6 +513,35 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
     assert.equal(!!allowed.isError, false)
   })
 
+  it('存储读取失败不伪装成 artifact_not_found（诚实性：真实错误如实透出）', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'ra3b')
+    await ensureDataDir(dir)
+    const real = new ArtifactService(dir, new InMemoryArtifactRepository(), new SecretStash())
+    const storageBug = new Error('sqlite: disk I/O error')
+    const deps: HelmToolDeps = {
+      dataDir: dir,
+      defaultCwd: dir,
+      hubUrl: 'http://127.0.0.1:3202',
+      stashEnvFor: () => ({}),
+      redact: (t) => t,
+      artifacts: {
+        spill: (conversationId, callId, text) => real.spill(conversationId, callId, text),
+        get: async () => {
+          throw storageBug
+        },
+        readContent: (id) => real.readContent(id),
+        readBuffer: (id) => real.readBuffer(id),
+      },
+    }
+    const tool = createReadArtifactTool(deps, () => true)
+    const result = await tool.execute({ id: 'any-id' }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+    assert.equal(result.isError, true)
+    const text = (result.output as Array<{ text: string }>)[0]!.text
+    assert.ok(text.includes('artifact_read_failed'), `应如实报存储读取失败：${text}`)
+    assert.ok(text.includes('disk I/O error'), `真实错误文本必须透出：${text}`)
+    assert.ok(!text.includes('artifact_not_found'), `存储失败不得伪装成不存在：${text}`)
+  })
+
   it('不存在产物 artifact_not_found；offset 超范围显式拒绝；nextOffset 不输出 undefined 字段', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'ra4')
     const deps = await makeRealDeps(dir)
