@@ -759,7 +759,7 @@ export function SamplePanel(): React.JSX.Element {
 
 /**
  * app 模板后端：public doc 持久条目 + 两个双 Schema 动作 + screen 主视图 + 侧栏直达入口。
- * 与 apps/todo-demo 种子应用及 app-builder 技能 fullstack-template.md 保持同一形状；
+ * 与 app-builder 技能 fullstack-template.md 保持同一形状；
  * 写后 flush（诚实性：不谎报已持久化）；无 Emoji；动作同时声明 input/outputSchema
  * （单点 Schema 契约，缺失会在 doctor register 阶段被拒）。
  */
@@ -995,7 +995,7 @@ helm apps publish <本目录绝对路径>    # 预检通过后受管安装并启
 helm apps remove <pluginId>           # 卸载（本地源码目录不受影响）
 \`\`\`
 
-侧栏入口（ctx.ui.sidebarItem）可删；删除后应用仍可从应用中心打开。同形参考样本：仓库 \`apps/todo-demo\`。
+侧栏入口（ctx.ui.sidebarItem）可删；删除后应用仍可从应用中心打开。
 `
     : `# 外部插件（helm plugins init 生成）
 

@@ -1,6 +1,6 @@
 # 全栈微应用最小可运行模板
 
-直接参考本模板起步；替换 id、文案与数据结构即可。模板已通过 `apps_validate` 的全部检查点（含至少一个 screen）。更快路径：`helm plugins init <name> --template app` 生成的骨架与本模板同形（额外附带可删除的侧栏直达入口），仓库 `apps/todo-demo` 是同形种子样本。
+直接参考本模板起步；替换 id、文案与数据结构即可。模板已通过 `apps_validate` 的全部检查点（含至少一个 screen）。更快路径：`helm plugins init <name> --template app` 生成的骨架与本模板同形（额外附带可删除的侧栏直达入口）。
 
 ## 目录
 
