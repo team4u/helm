@@ -1,10 +1,10 @@
 /**
- * RuntimeNodeOperations：节点管理与远端守护进程编排（从 KernelRuntime 拆出）。
+ * RuntimeNodeOperations: node manage and remote daemon orchestration (from KernelRuntime split out).
  *
- * 职责：
- * - 集中管理多节点操作（listNodes, issueNodeToken, removeNode, checkNodeUpgrade, upgradeNode, execEnv）；
- * - 维护节点上下线事件投递与自动升级触发；
- * - 预热与初始化节点底座所需资源（nodeTokens, cliBinDir, localDiskStats）。
+ * responsibility:
+ * - concentrate manage many node operation (listNodes, issueNodeToken, removeNode, checkNodeUpgrade, upgradeNode, execEnv);
+ * - maintain node on take offline event delivery and automatically upgrade trigger;
+ * - warm up and initialize node bottom seat which must asset (nodeTokens, cliBinDir, localDiskStats).
  */
 
 import type {
@@ -30,10 +30,10 @@ export class RuntimeNodeOperations {
   constructor(private readonly deps: RuntimeNodeOperationsDeps) {}
 
   /**
-   * 绑定底层节点连接变更事件：
-   * - 节点上下线 -> 投递 node.changed SSE 事件（Web/CLI 实时感知）；
-   * - removeNode 触发断连时由于已先删索引，不重复发布离线事件；
-   * - 节点上线且版本落后 Hub 时，若 HELM_AUTO_UPGRADE_NODES=1 则异步触发升级。
+   * bind set underlying node connect change event:
+   * - node on take offline -> delivery node.changed SSE event (Web/CLI real-time aware);
+   * - removeNode trigger assert connect when because already first delete index, does not resend publish offline event;
+   * - node enable and version after Hub when, if HELM_AUTO_UPGRADE_NODES=1 then async trigger upgrade.
    */
   bindEvents(): void {
     this.deps.envFabric.registry.onNodeChanged((nodeId, online) => {
@@ -50,10 +50,10 @@ export class RuntimeNodeOperations {
   }
 
   /**
-   * 初始化节点底座环境：
-   * 1. 加载 config.json 节点签发表；
-   * 2. 生成 helm CLI 包装脚本；
-   * 3. 预热 local 磁盘统计。
+   * initialize node bottom seat environment:
+   * 1. load config.json node sign table;
+   * 2. generate helm CLI wrap script;
+   * 3. warm up local disk count.
    */
   async initialize(): Promise<void> {
     await this.deps.nodes.loadNodeTokens()

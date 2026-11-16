@@ -1,12 +1,12 @@
 /**
- * Hub 本机执行环境包装（LocalHostExecutionEnv）：
+ * Hub local machine execute environment wrap (LocalHostExecutionEnv):
  *
- * 复用 pi-durable `NodeExecutionEnv` 的文件 I/O、进程树杀组、流式增量解码与
- * 溢写逻辑（保持 `id === 'node:local'`，与 `file-env.ts` 文件互斥队列同源），
- * 同时把命令执行前的 Shell 探测委托给 `@helm/env-io` 的 `resolveHostShellConfig`：
- * - 补齐 Winget / Scoop / 非标盘符 Git Bash 探测；
- * - 跳过 System32 / Sysnative / WindowsApps 等 WSL 启动器，绝不让 Windows
- *   宿主机隐式跨进 WSL；无可用原生 bash 时显式返回 `shell_unavailable`。
+ * re- use pi-durable `NodeExecutionEnv` file I/O, process tree kill group, streaming incremental decode and
+ * overflow write logic (keep `id === 'node:local'`, and `file-env.ts` file mutual exclusion queue same source),
+ * also command execute before Shell probe delegate to `@helm/env-io`  `resolveHostShellConfig`:
+ * - patch complete Winget / Scoop / non- mark symbol Git Bash probe;
+ * - skip System32 / Sysnative / WindowsApps etc. WSL start, never let Windows
+ *   host machine implicit across enter WSL; without available original generate bash when explicit return `shell_unavailable`.
  */
 import type { Context } from '@earendil-works/chord/context'
 import {
@@ -25,7 +25,7 @@ export interface LocalHostExecutionEnvOptions {
   shellPath?: string
   shellEnv?: NodeJS.ProcessEnv
   watch?: NodeWatchOptions
-  /** 测试注入口：覆写宿主机 Shell 探测 I/O（生产不传）。 */
+  /** test inject opening: override host machine Shell probe I/O(produce do not pass). */
   shellProbeIo?: ShellProbeIo
 }
 
@@ -54,12 +54,12 @@ export class LocalHostExecutionEnv extends NodeExecutionEnv implements Execution
     options: ShellExecOptions | undefined,
     context: Context,
   ): Promise<Result<ShellExecResult, ExecutionError>> {
-    // argv 数组直接执行程序，不经 shell 解析。
+    // argv array directly execute program, do not via shell parse.
     if (typeof command !== 'string') {
       return super.exec(command, options, context)
     }
     const platform = this.#shellProbeIo?.platform ?? process.platform
-    // POSIX 宿主机无自定义 shellPath / 注入探测时与 SDK 原生行为完全一致，零额外探测开销。
+    // POSIX host machine without self define shellPath / inject probe when and SDK original generate behavior fully consistent, zero extra probe overhead.
     if (platform !== 'win32' && this.#explicitShellPath === undefined && this.#shellProbeIo === undefined) {
       return super.exec(command, options, context)
     }

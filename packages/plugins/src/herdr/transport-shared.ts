@@ -1,12 +1,12 @@
 import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
 
 /**
- * Herdr 传输层共享基元：错误类型与 abort/Context 助手。
+ * Herdr transport-layer shared primitives: error types and abort/Context helpers.
  *
- * 从 transport.ts 拆出（行为与拆分前逐行等价）：transport.ts（IPC 核心）、
- * transport-output.ts（交接文件 IO）与 transport-gate.ts（Gate 执行）共用，
- * 三个模块间保持依赖无环；HerdrTransportError 仍由 transport.ts re-export，
- * 既有导入方（executor / rpc / 测试）不受拆分影响。
+ * Split out of transport.ts (behavior line-for-line equivalent to before the split): shared by
+ * transport.ts (IPC core), transport-output.ts (handoff file IO) and transport-gate.ts (Gate
+ * execution); the three modules stay dependency-acyclic; HerdrTransportError is still re-exported
+ * by transport.ts, so existing importers (executor / rpc / tests) are unaffected.
  */
 
 export class HerdrTransportError extends Error {

@@ -1,6 +1,6 @@
 /**
- * 会话域：conversations list/get/create/update/delete/reset/compact/fork、
- * send、abort、events watch。create/update 支持 --node <nodeId> 绑定计算节点。
+ * conversation domain:conversations list/get/create/update/delete/reset/compact/fork,
+ * send,abort,events watch.create/update support --node <nodeId> bind set compute node.
  */
 import type { ConversationSummary } from '@helm/protocol'
 import { CliError } from '../errors.js'
@@ -23,15 +23,15 @@ import {
 const WHEN_BUSY = ['steer', 'followUp', 'reject'] as const
 const ORIGINS = ['human', 'agent', 'trigger'] as const
 
-const convFlags: FlagSpec[] = [{ name: 'current', type: 'boolean', help: '使用 env HELM_CONVERSATION_ID' }]
+const convFlags: FlagSpec[] = [{ name: 'current', type: 'boolean', help: 'use env HELM_CONVERSATION_ID' }]
 
 export function conversationsCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
 
-  // ---- events watch（全局 SSE，与 conversations 域共享打印辅助）----
+  // ---- events watch(global SSE, and conversations domain sharing print auxiliary)----
   cmds.push({
     path: ['events', 'watch'],
-    description: '订阅全局 SSE 事件流（GET /api/events；首帧 snapshot + 增量）',
+    description: 'subscribe global SSE event stream (GET /api/events; first frame snapshot + incremental)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -41,14 +41,14 @@ export function conversationsCommands(): CommandSpec[] {
       process.once('SIGTERM', onSignal)
       const render = (event: string, payload: unknown): void => {
         if (ctx.json) {
-          // NDJSON：snapshot 帧与增量帧均原样输出（每行一个 JSON）
+          // NDJSON:snapshot frame and incremental frame all original output (each row a JSON)
           ctx.io.out(`${JSON.stringify(payload ?? null)}\n`)
           return
         }
         if (event === 'snapshot') {
           const snap = payload as { seq?: number; conversations?: unknown[]; pendingAsks?: unknown[]; plugins?: unknown[] }
           ctx.io.out(
-            `快照 seq=${snap.seq ?? '?'} 会话=${snap.conversations?.length ?? 0} 待答=${snap.pendingAsks?.length ?? 0} 插件=${snap.plugins?.length ?? 0}\n`,
+            `snapshot seq=${snap.seq ?? '?'} conversation=${snap.conversations?.length ?? 0} await answer=${snap.pendingAsks?.length ?? 0} plugin=${snap.plugins?.length ?? 0}\n`,
           )
           return
         }
@@ -62,8 +62,8 @@ export function conversationsCommands(): CommandSpec[] {
             try {
               payload = JSON.parse(data)
             } catch {
-              // 畸形帧：诊断到 stderr 后跳过，不中断流（keepalive 等噪声合法）
-              ctx.io.err(`helm: 忽略非 JSON SSE 帧（${data.slice(0, 120)}）\n`)
+              // distortion shape frame: diagnose to stderr after skip, without interruption stream (keepalive etc. noise legal)
+              ctx.io.err(`helm: ignore non- JSON SSE frame (${data.slice(0, 120)})\n`)
               return
             }
             render(event, payload)
@@ -82,13 +82,13 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations list ----
   cmds.push({
     path: ['conversations', 'list'],
-    description: '列出会话（GET /api/conversations；默认仅顶层会话，--all 含子会话，--parent 精确直接子会话）',
+    description: 'column out conversation (GET /api/conversations; by default only top-level conversation,--all contains sub-conversation,--parent precise directly sub-conversation)',
     flags: [
-      { name: 'profile', type: 'string', help: '按 profileId 过滤' },
-      { name: 'status', type: 'string', help: '按状态过滤（working|blocked|done|idle|error）' },
-      { name: 'tag', type: 'string', help: '按 tag 过滤' },
-      { name: 'all', type: 'boolean', help: '列出全部会话（含子代理等派生子会话；默认仅顶层）' },
-      { name: 'parent', type: 'number', help: '仅列出该会话的直接子会话' },
+      { name: 'profile', type: 'string', help: 'by profileId filter' },
+      { name: 'status', type: 'string', help: 'by state filter (working|blocked|done|idle|error)' },
+      { name: 'tag', type: 'string', help: 'by tag filter' },
+      { name: 'all', type: 'boolean', help: 'column out all conversation (contains subagent etc. derive sub-conversation; by default only top-level)' },
+      { name: 'parent', type: 'number', help: 'only column out the conversation directly sub-conversation' },
     ],
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
@@ -109,11 +109,11 @@ export function conversationsCommands(): CommandSpec[] {
       const all = parsed.flags.get('all') === true
       const parent = flagValue<number>(parsed.flags, 'parent')
       if (all && parsed.flags.has('parent')) {
-        throw new CliError('--all 与 --parent 互斥：全量列出与精确子会话过滤不可同时指定', 'invalid_flag_value')
+        throw new CliError('--all and --parent mutual exclusion: all amount column out and precise sub-conversation filter cannot also designate', 'invalid_flag_value')
       }
       if (parent !== undefined) {
         if (!Number.isInteger(parent) || parent < 1) {
-          throw new CliError(`--parent 需为正整数会话 ID，实得 "${parent}"`, 'invalid_flag_value')
+          throw new CliError(`--parent must be a positive integer conversation ID, got "${parent}"`, 'invalid_flag_value')
         }
         query.set('parent', String(parent))
       } else if (all) {
@@ -122,7 +122,7 @@ export function conversationsCommands(): CommandSpec[] {
       if (profile !== undefined) query.set('profileId', profile)
       if (status !== undefined) {
         if (!['working', 'blocked', 'done', 'idle', 'error'].includes(status)) {
-          throw new CliError(`--status 需为 working|blocked|done|idle|error，实得 "${status}"`, 'invalid_flag_value')
+          throw new CliError(`--status must be working|blocked|done|idle|error, got "${status}"`, 'invalid_flag_value')
         }
         query.set('status', status)
       }
@@ -136,11 +136,11 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations get ----
   cmds.push({
     path: ['conversations', 'get'],
-    description: '查看会话详情（GET /api/conversations/:id；含分页时间线）',
+    description: 'view conversation detail situation (GET /api/conversations/:id; contains page timeline)',
     flags: [
       ...convFlags,
-      { name: 'limit', type: 'number', help: '时间线条数上限（缺省 50）' },
-      { name: 'cursor', type: 'string', help: '分页游标（上次响应 nextCursor 原样回传）' },
+      { name: 'limit', type: 'number', help: 'timeline count cap (default 50)' },
+      { name: 'cursor', type: 'string', help: 'page cursor (on time response nextCursor original back pass)' },
     ],
     positional: '[id]',
     async run(ctx: CommandContext) {
@@ -159,7 +159,7 @@ export function conversationsCommands(): CommandSpec[] {
       const cursor = flagValue<string>(parsed.flags, 'cursor')
       if (limit !== undefined) {
         if (!Number.isInteger(limit) || limit < 1) {
-          throw new CliError(`--limit 需为正整数，实得 "${limit}"`, 'invalid_flag_value')
+          throw new CliError(`--limit must be a positive integer, got "${limit}"`, 'invalid_flag_value')
         }
         query.set('limit', String(limit))
       }
@@ -170,10 +170,10 @@ export function conversationsCommands(): CommandSpec[] {
     },
   })
 
-  // ---- conversations entry（单条时间线条目全文）----
+  // ---- conversations entry(single timeline item all text)----
   cmds.push({
     path: ['conversations', 'entry'],
-    description: '查看单条时间线条目（GET /api/conversations/:id/entries/:entryId；详情投影截断后的未截断原文）',
+    description: 'view single timeline item (GET /api/conversations/:id/entries/:entryId; detail situation throw shadow truncate after not truncate original text)',
     flags: convFlags,
     positional: '[id] <entryId>',
     async run(ctx: CommandContext) {
@@ -182,9 +182,9 @@ export function conversationsCommands(): CommandSpec[] {
       const second = parsed.positionals[1]
       assertNoExtraPositionals(parsed.positionals, 2)
       if (second === undefined && first === undefined) {
-        throw new CliError('缺少 <entryId> 位置参数（[id] <entryId>，会话目标可用 --current）', 'missing_positional')
+        throw new CliError('missing <entryId> location parameter ([id] <entryId>, conversation target available --current)', 'missing_positional')
       }
-      // 单 positional 视为 entryId：会话目标必须来自 --current（或 env）。
+      // single positional treated as entryId: conversation target must from --current(or env).
       const id = resolveConversationTarget(parsed.flags, second === undefined ? undefined : first, ctx.env)
       const entryId = parsePositiveInt((second ?? first) as string, 'entryId')
       const hub = await ctx.hub()
@@ -192,17 +192,17 @@ export function conversationsCommands(): CommandSpec[] {
     },
   })
 
-  // ---- conversations create（支持 --node 绑定计算节点）----
+  // ---- conversations create(support --node bind set compute node)----
   cmds.push({
     path: ['conversations', 'create'],
-    description: '创建会话（POST /api/conversations；--node 绑定计算节点）',
+    description: 'create conversation (POST /api/conversations;--node bind set compute node)',
     flags: [
       { name: 'title', type: 'string' },
       { name: 'profile-id', type: 'string' },
-      { name: 'node', type: 'string', help: '绑定的计算节点 ID（缺省继承 Profile 或 local）' },
+      { name: 'node', type: 'string', help: 'bind set compute node ID(default inherit Profile or local)' },
       { name: 'cwd', type: 'string' },
       { name: 'model', type: 'string' },
-      { name: 'tags', type: 'string', help: 'JSON 数组或逗号分隔' },
+      { name: 'tags', type: 'string', help: 'JSON array or comma isolate' },
     ],
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
@@ -235,18 +235,18 @@ export function conversationsCommands(): CommandSpec[] {
     },
   })
 
-  // ---- conversations update（支持 --node 切换计算节点）----
+  // ---- conversations update(support --node switch compute node)----
   cmds.push({
     path: ['conversations', 'update'],
-    description: '更新会话（PATCH /api/conversations/:id；--node 切换计算节点）',
+    description: 'update conversation (PATCH /api/conversations/:id;--node switch compute node)',
     flags: [
       ...convFlags,
       { name: 'title', type: 'string' },
-      { name: 'model', type: 'string', help: '显式覆盖模型 provider/model；空串（--model= 或 --model ""）清除覆盖并重算继承链' },
-      { name: 'thinking', type: 'string', help: '思考档位 off/minimal/low/medium/high/xhigh/max；空串清除覆盖并继承 Profile / 全局' },
+      { name: 'model', type: 'string', help: 'explicit override model provider/model; empty string (--model= or --model "") clear override and heavy compute inherit chain' },
+      { name: 'thinking', type: 'string', help: 'think Profile off/minimal/low/medium/high/xhigh/max; empty string clear override and inherit Profile / global' },
       { name: 'profile-id', type: 'string' },
-      { name: 'node', type: 'string', help: '切换绑定的计算节点 ID' },
-      { name: 'cwd', type: 'string', help: '切换目标节点视角工作目录' },
+      { name: 'node', type: 'string', help: 'switch bind set compute node ID' },
+      { name: 'cwd', type: 'string', help: 'switch target node perspective work directory' },
       { name: 'pinned', type: 'boolean' },
       { name: 'unread', type: 'boolean' },
     ],
@@ -285,7 +285,7 @@ export function conversationsCommands(): CommandSpec[] {
         if (v !== undefined) body[key] = v
       }
       if (Object.keys(body).length === 0) {
-        throw new CliError('未提供任何更新字段（--title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread）', 'missing_update_fields')
+        throw new CliError('not provide any update field (--title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread)', 'missing_update_fields')
       }
       const hub = await ctx.hub()
       printResult(ctx, await hub.patch<ConversationSummary>(`/api/conversations/${id}`, body))
@@ -295,7 +295,7 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations delete ----
   cmds.push({
     path: ['conversations', 'delete'],
-    description: '删除会话（DELETE /api/conversations/:id；插件管理权会话受保护）',
+    description: 'delete conversation (DELETE /api/conversations/:id; plugin manage right conversation subject to protect)',
     flags: convFlags,
     positional: '[id]',
     async run(ctx: CommandContext) {
@@ -310,8 +310,8 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations reset ----
   cmds.push({
     path: ['conversations', 'reset'],
-    description: '重置会话上下文（POST /api/conversations/:id/reset；新上下文以 handoff 开始）',
-    flags: [...convFlags, { name: 'handoff', type: 'string', help: '重置后作为首条用户消息的交接文本' }],
+    description: 'reset conversation context (POST /api/conversations/:id/reset; new context with handoff start)',
+    flags: [...convFlags, { name: 'handoff', type: 'string', help: 'reset after as first user message handover text' }],
     positional: '[id]',
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
@@ -334,8 +334,8 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations compact ----
   cmds.push({
     path: ['conversations', 'compact'],
-    description: '手动压缩会话上下文（POST /api/conversations/:id/compact；后台摘要任务）',
-    flags: [...convFlags, { name: 'instructions', type: 'string', help: '压缩摘要自定义指令' }],
+    description: 'manually compress conversation context (POST /api/conversations/:id/compact; background summary task)',
+    flags: [...convFlags, { name: 'instructions', type: 'string', help: 'compress summary self define instruction' }],
     positional: '[id]',
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
@@ -358,11 +358,11 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations fork ----
   cmds.push({
     path: ['conversations', 'fork'],
-    description: '从指定条目分叉会话（POST /api/conversations/:id/fork）',
+    description: 'from designate item fork conversation (POST /api/conversations/:id/fork)',
     flags: [
       ...convFlags,
-      { name: 'entry-id', type: 'number', required: true, help: '分叉起点条目 ID' },
-      { name: 'title', type: 'string', help: '新会话标题（缺省「<源标题> (分叉)」）' },
+      { name: 'entry-id', type: 'number', required: true, help: 'fork start point item ID' },
+      { name: 'title', type: 'string', help: 'new conversation title (default<source title> (fork))' },
     ],
     positional: '[id]',
     async run(ctx: CommandContext) {
@@ -378,7 +378,7 @@ export function conversationsCommands(): CommandSpec[] {
       assertNoExtraPositionals(parsed.positionals, 1)
       const entryId = flagValue<number>(parsed.flags, 'entry-id')
       if (entryId === undefined || !Number.isInteger(entryId) || entryId <= 0) {
-        throw new CliError('--entry-id 需为正整数', 'invalid_flag_value')
+        throw new CliError('--entry-id must be a positive integer', 'invalid_flag_value')
       }
       const body: Record<string, unknown> = { entryId }
       const title = flagValue<string>(parsed.flags, 'title')
@@ -391,15 +391,15 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- send ----
   cmds.push({
     path: ['send'],
-    description: '向会话提交输入（POST /api/conversations/:id/input；--wait 等待本次回答）',
+    description: 'to conversation commit input (POST /api/conversations/:id/input;--wait wait for this time answer)',
     flags: [
       ...convFlags,
-      enumFlag('when-busy', WHEN_BUSY, '会话正忙时策略，默认 steer'),
-      enumFlag('origin', ORIGINS, '输入来源，默认 human'),
-      { name: 'meta', type: 'json', help: '自由元数据 JSON 对象（随输入传递到 turn_settled）' },
-      { name: 'attach', type: 'string', help: '挂载产物 ID（多个用逗号分隔）' },
-      { name: 'replace-from', type: 'number', help: '从指定历史条目 ID 起覆盖重发（截断该条及后续上下文）' },
-      { name: 'wait', type: 'boolean', help: '等待本次输入的回答（?wait=1；成功返回 ConversationInputResult）' },
+      enumFlag('when-busy', WHEN_BUSY, 'conversation correct busy when policy, by default steer'),
+      enumFlag('origin', ORIGINS, 'input source, by default human'),
+      { name: 'meta', type: 'json', help: 'self by metadata JSON object (follow input pass to turn_settled)' },
+      { name: 'attach', type: 'string', help: 'mount artifact ID(multiple use comma isolate)' },
+      { name: 'replace-from', type: 'number', help: 'from designate history item ID start override heavy (truncate the and after continue context)' },
+      { name: 'wait', type: 'boolean', help: 'wait for this time input answer (?wait=1; succeeded return ConversationInputResult)' },
     ],
     positional: '[id] <text>',
     async run(ctx: CommandContext) {
@@ -422,7 +422,7 @@ export function conversationsCommands(): CommandSpec[] {
       const textIndex = useCurrent ? 0 : 1
       const text = requirePositional(parsed.positionals, textIndex, 'text', 'missing_text')
       if (parsed.positionals.length > textIndex + 1) {
-        throw new CliError(`多余位置参数：${parsed.positionals.slice(textIndex + 1).join(' ')}（text 含空格请加引号）`, 'unexpected_positional')
+        throw new CliError(`redundant location parameter:${parsed.positionals.slice(textIndex + 1).join(' ')}(text contains space please add quotes)`, 'unexpected_positional')
       }
       const body: Record<string, unknown> = { text }
       const whenBusy = flagValue<string>(parsed.flags, 'when-busy')
@@ -438,7 +438,7 @@ export function conversationsCommands(): CommandSpec[] {
       const replaceFrom = flagValue<number>(parsed.flags, 'replace-from')
       if (replaceFrom !== undefined) {
         if (!Number.isInteger(replaceFrom) || replaceFrom <= 0) {
-          throw new CliError(`--replace-from 需为正整数，实得 "${replaceFrom}"`, 'invalid_flag_value')
+          throw new CliError(`--replace-from must be a positive integer, got "${replaceFrom}"`, 'invalid_flag_value')
         }
         body.replaceFromEntryId = replaceFrom
       }
@@ -450,7 +450,7 @@ export function conversationsCommands(): CommandSpec[] {
         { body, ...(wait ? { timeoutMs: 0 } : {}) },
       )
       if (wait && !ctx.json) {
-        // 人类模式：等待成功直出回答文本（entry.model 内 assistant 文本块）
+        // person class pattern: wait for succeeded direct out answer text (entry.model inside assistant text chunk)
         const answer = assistantTextOfResult(result)
         printPlainText(ctx, answer !== '' ? answer : JSON.stringify(result))
         return
@@ -462,8 +462,8 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations withdraw ----
   cmds.push({
     path: ['conversations', 'withdraw'],
-    description: '撤回排队中的输入（POST /api/conversations/:id/withdraw）',
-    flags: [...convFlags, { name: 'submission-id', type: 'number', required: true, help: '待撤回的排队提交 ID' }],
+    description: 'withdraw back queue up in input (POST /api/conversations/:id/withdraw)',
+    flags: [...convFlags, { name: 'submission-id', type: 'number', required: true, help: 'await withdraw back queue up commit ID' }],
     positional: '[id]',
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
@@ -477,7 +477,7 @@ export function conversationsCommands(): CommandSpec[] {
       assertNoExtraPositionals(parsed.positionals, 1)
       const submissionId = flagValue<number>(parsed.flags, 'submission-id')
       if (submissionId === undefined || !Number.isInteger(submissionId) || submissionId <= 0) {
-        throw new CliError('--submission-id 需为正整数', 'invalid_flag_value')
+        throw new CliError('--submission-id must be a positive integer', 'invalid_flag_value')
       }
       const hub = await ctx.hub()
       printResult(ctx, await hub.post<unknown>(`/api/conversations/${id}/withdraw`, { submissionId }))
@@ -487,7 +487,7 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- abort ----
   cmds.push({
     path: ['abort'],
-    description: '中止会话当前回合（POST /api/conversations/:id/abort）',
+    description: 'abort conversation when before turn (POST /api/conversations/:id/abort)',
     flags: convFlags,
     positional: '[id]',
     async run(ctx: CommandContext) {
@@ -502,7 +502,7 @@ export function conversationsCommands(): CommandSpec[] {
   return cmds
 }
 
-/** ConversationInputResult.entry.model -> assistant 回答文本块拼接。 */
+/** ConversationInputResult.entry.model -> assistant answer text chunk concatenate. */
 function assistantTextOfResult(result: unknown): string {
   if (result === null || typeof result !== 'object') return ''
   const entry = (result as { entry?: { model?: unknown } }).entry
@@ -530,7 +530,7 @@ function assistantTextOfResult(result: unknown): string {
   return parts.join('\n')
 }
 
-/** SSE 增量事件的人类可读单行摘要。 */
+/** SSE incremental event person class can read single row summary. */
 function summarizeEvent(payload: unknown): string {
   if (payload === null || typeof payload !== 'object') return JSON.stringify(payload)
   const frame = payload as { seq?: unknown; event?: Record<string, unknown> & { type?: string } }

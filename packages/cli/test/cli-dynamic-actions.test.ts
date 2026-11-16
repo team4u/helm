@@ -1,12 +1,12 @@
 /**
- * 动态插件命令边界测试（零业务特判）：
- * - manifest 外部输入校验：positional field 存在性、readFileInto 目标 string、
- *   required 连续性、重复 field/目标、timeoutMs 形状——CLI 侧显式报错，不依赖服务端。
- * - readFileInto 位置参数：路径形态跨平台识别（POSIX/win32/~/显式相对）、
- *   目录与权限等 IO 故障显式诊断（只把 ENOENT 且非路径形态当普通值）。
- * - 位置参数与同名属性 flag 冲突显式报错；--input 与 flags/positionals 互斥。
- * - positional 按 schema 类型转换（number 字段转数字、string 保持 string）。
- * - 真正通用的虚拟插件（非 workflow）：positional + readFileInto + timeoutMs 组合复用。
+ * motion state plugin command boundary test (zero business special judge):
+ * - manifest external input validate:positional field store in,readFileInto target string,
+ *   required connect continue, duplicate field/target,timeoutMs shape - -CLI side explicit errors, independent of server side.
+ * - readFileInto location parameter: path form across platform identify (POSIX/win32/~/explicit each other for),
+ *   directory and permission etc. IO fault explicit diagnose (only ENOENT and non- path form when ordinary value).
+ * - location parameter and same name property flag conflict explicit errors;--input and flags/positionals mutual exclusion.
+ * - positional by schema type convert (number field rotate number,string keep string).
+ * - truly through use virtual plugin (non- workflow):positional + readFileInto + timeoutMs combine re- use.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,7 +25,7 @@ import {
   type MockRouteHandler,
 } from './helpers/cli-harness.js'
 
-/** 启动注入 manifests 的模拟 Hub；默认动作端点回显 `{ received: body }`。 */
+/** start inject manifests simulated Hub; by default action end point back visible `{ received: body }`. */
 async function startActionsHub(
   manifests: readonly unknown[],
   extraRoutes: Record<string, MockRouteHandler> = {},
@@ -42,22 +42,22 @@ async function startActionsHub(
 }
 
 // ---------------------------------------------------------------------------
-// manifest 校验（外部输入在 CLI 边界显式报错）
+// manifest validate (external input in CLI boundary explicit errors)
 // ---------------------------------------------------------------------------
 
-/** 构造最小动作 manifest（cli 可覆盖）。 */
+/** construct most small action manifest(cli can override). */
 function action(cli: unknown, properties: Record<string, unknown> = {}, required: string[] = []): unknown {
   return {
     pluginId: 'builtin:gadget',
     id: 'deploy',
-    description: '部署小工具',
+    description: 'deploy small tool',
     inputSchema: { type: 'object', properties, required, additionalProperties: false },
     outputSchema: { type: 'object' },
     cli,
   }
 }
 
-test('manifest 校验：positional field 必须存在于 inputSchema.properties', { timeout: 60_000 }, async (t) => {
+test('manifest validate:positional field must store in at inputSchema.properties', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const hub = await startActionsHub([action({ command: ['gadget', 'deploy'], positional: [{ field: 'ghost' }] })], {}, t)
   const r = await runCliCaptured(['gadget', 'deploy', 'x', '--json'], makeCliEnv(hub.url, dir))
@@ -67,44 +67,44 @@ test('manifest 校验：positional field 必须存在于 inputSchema.properties'
   assert.match(err.message, /ghost/)
 })
 
-test('manifest 校验：readFileInto 目标需存在且为 string 类型；重复 field/目标拒绝', { timeout: 60_000 }, async (t) => {
+test('manifest validate:readFileInto target must store in and is string type; duplicate field/target reject', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const cases: Array<{ cli: unknown; properties: Record<string, unknown>; match: RegExp }> = [
     {
-      // 目标字段不存在
+      // target field missing
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'src', readFileInto: 'missing' }] },
       properties: { src: { type: 'string' } },
-      match: /missing.*不在 inputSchema\.properties/,
+      match: /missing.*do not in inputSchema\.properties/,
     },
     {
-      // 目标字段类型非 string（object）
+      // target field type non- string(object)
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'src', readFileInto: 'payload' }] },
       properties: { src: { type: 'string' }, payload: { type: 'object' } },
-      match: /需为 type: string 属性/,
+      match: /must be type: string property/,
     },
     {
-      // 枚举数字形态（flagTypeOf 会当 string）：readFileInto 目标必须是真 type:'string'，枚举拒绝
+      // enumeration number form (flagTypeOf will when string):readFileInto target must be true type:'string', enumeration reject
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'src', readFileInto: 'mode' }] },
       properties: { src: { type: 'string' }, mode: { enum: ['a', 'b'] } },
-      match: /需为 type: string 属性/,
+      match: /must be type: string property/,
     },
     {
-      // field 重复
+      // field duplicate
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'src' }, { field: 'src' }] },
       properties: { src: { type: 'string' } },
-      match: /重复写入字段 "src"/,
+      match: /duplicate write field "src"/,
     },
     {
-      // readFileInto 目标与另一 positional field 撞
+      // readFileInto target and another positional field collide
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'src', readFileInto: 'payload' }, { field: 'payload' }] },
       properties: { src: { type: 'string' }, payload: { type: 'string' } },
-      match: /重复写入字段 "payload"/,
+      match: /duplicate write field "payload"/,
     },
     {
-      // 两个 positional 读入同一目标
+      // two positional read the same target
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'a', readFileInto: 'payload' }, { field: 'b', readFileInto: 'payload' }] },
       properties: { a: { type: 'string' }, b: { type: 'string' }, payload: { type: 'string' } },
-      match: /重复写入字段 "payload"/,
+      match: /duplicate write field "payload"/,
     },
   ]
   for (const c of cases) {
@@ -121,12 +121,12 @@ test('manifest 校验：readFileInto 目标需存在且为 string 类型；重�
   }
 })
 
-test('manifest 校验：required positional 不得出现在 optional 之后；timeoutMs 形状', { timeout: 60_000 }, async (t) => {
+test('manifest validate:required positional must not appear in optional after;timeoutMs shape', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const cases: Array<{ cli: unknown; match: RegExp }> = [
     {
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'opt' }, { field: 'req', required: true }] },
-      match: /req.*出现在 optional 之后/,
+      match: /req.*appear in optional after/,
     },
     { cli: { command: ['gadget', 'deploy'], timeoutMs: -1 }, match: /timeoutMs/ },
     { cli: { command: ['gadget', 'deploy'], timeoutMs: Number.POSITIVE_INFINITY }, match: /timeoutMs/ },
@@ -145,7 +145,7 @@ test('manifest 校验：required positional 不得出现在 optional 之后；ti
     }
   }
 
-  // 合法形状：timeoutMs=0（无超时）与正数均接受
+  // legal shape:timeoutMs=0(without timeout) and correct count all accept
   for (const timeoutMs of [0, 30_000]) {
     const hub = await startActionsHub([action({ command: ['gadget', 'deploy'], timeoutMs }, { note: { type: 'string' } })], {}, t)
     try {
@@ -157,7 +157,7 @@ test('manifest 校验：required positional 不得出现在 optional 之后；ti
   }
 })
 
-test('manifest 校验：positional field 撞保留 flag 名（input/current）拒绝', { timeout: 60_000 }, async (t) => {
+test('manifest validate:positional field collide keep flag name (input/current) reject', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const hub = await startActionsHub(
     [action({ command: ['gadget', 'deploy'], positional: [{ field: 'current' }] }, { current: { type: 'string' } })],
@@ -168,12 +168,12 @@ test('manifest 校验：positional field 撞保留 flag 名（input/current）�
   assert.equal(r.code, 1)
   const err = parseCliError(r)
   assert.equal(err.code, 'invalid_action_manifest')
-  assert.match(err.message, /撞保留 flag 名/)
+  assert.match(err.message, /collide keep flag name/)
 })
 
-test('manifest 校验：未知键与原型污染字段名拒绝；继承属性不算自有', { timeout: 60_000 }, async (t) => {
+test('manifest validate: unknown key and prototype pollute field name reject; inherit property do not compute self has', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
-  // field 声明为 toString：`in` 会放行（继承），hasOwn 拒绝
+  // field declaration is toString:`in` will let through (inherit),hasOwn reject
   const hubToString = await startActionsHub(
     [action({ command: ['gadget', 'deploy'], positional: [{ field: 'toString' }] }, {})],
     {},
@@ -183,10 +183,10 @@ test('manifest 校验：未知键与原型污染字段名拒绝；继承属性�
   assert.equal(rToString.code, 1)
   const errToString = parseCliError(rToString)
   assert.equal(errToString.code, 'invalid_action_manifest')
-  assert.match(errToString.message, /toString.*不在 inputSchema\.properties/)
+  assert.match(errToString.message, /toString.*do not in inputSchema\.properties/)
   await hubToString.close()
 
-  // JSON 文本可携带自有 __proto__ 键：普通对象赋值会静默丢失/改原型，必须拒绝
+  // JSON text can carry self has __proto__ key: ordinary object assignment will static default lose/change prototype, must reject
   for (const bad of ['__proto__', 'constructor', 'prototype']) {
     const hub = await startActionsHub([action({ command: ['gadget', 'deploy'], positional: [{ field: bad }] }, {})], {}, t)
     try {
@@ -194,11 +194,11 @@ test('manifest 校验：未知键与原型污染字段名拒绝；继承属性�
       assert.equal(r.code, 1, bad)
       const err = parseCliError(r)
       assert.equal(err.code, 'invalid_action_manifest', bad)
-      assert.match(err.message, /原型污染键/, bad)
+      assert.match(err.message, /prototype pollute key/, bad)
     } finally {
       await hub.close()
     }
-    // readFileInto 目标同理拒绝
+    // readFileInto target same reject
     const hub2 = await startActionsHub(
       [action({ command: ['gadget', 'deploy'], positional: [{ field: 'src', readFileInto: bad }] }, { src: { type: 'string' } })],
       {},
@@ -213,7 +213,7 @@ test('manifest 校验：未知键与原型污染字段名拒绝；继承属性�
     }
   }
 
-  // 未知键（拼写错误等）：拒绝而非静默忽略
+  // unknown key (piece together write error etc.): reject while non- static default ignore
   const hubUnknown = await startActionsHub(
     [action({ command: ['gadget', 'deploy'], positional: [{ field: 'src', dest: 'payload' }] }, { src: { type: 'string' } })],
     {},
@@ -223,15 +223,15 @@ test('manifest 校验：未知键与原型污染字段名拒绝；继承属性�
   assert.equal(rUnknown.code, 1)
   const errUnknown = parseCliError(rUnknown)
   assert.equal(errUnknown.code, 'invalid_action_manifest')
-  assert.match(errUnknown.message, /未知键 .?dest/)
+  assert.match(errUnknown.message, /unknown key .?dest/)
 })
 
-test('positional 类型转换：boolean 严格 true/false、json 按类型解析、string 原样', { timeout: 60_000 }, async (t) => {
+test('positional type convert:boolean strictly true/false,json by type parse,string original', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const manifest = {
     pluginId: 'builtin:gadget',
     id: 'deploy',
-    description: '部署小工具',
+    description: 'deploy small tool',
     inputSchema: {
       type: 'object',
       properties: {
@@ -239,7 +239,7 @@ test('positional 类型转换：boolean 严格 true/false、json 按类型解析
         dryRun: { type: 'boolean' },
         labels: { type: 'array', items: { type: 'string' } },
         spec: { type: 'object' },
-        anything: {}, // 无 type 宽松 schema -> JSON 传递
+        anything: {}, // without type loosely schema -> JSON pass
       },
       additionalProperties: false,
     },
@@ -254,7 +254,7 @@ test('positional 类型转换：boolean 严格 true/false、json 按类型解析
   const inputOfLast = (): Record<string, unknown> =>
     ((hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } } | undefined)?.body as { input?: Record<string, unknown> })?.input ?? {}
 
-  // string / boolean / array / object / 无 type 全链路转换
+  // string / boolean / array / object / without type all link convert
   const r = await runCliCaptured(['gadget', 'deploy', 'demo', 'true', ' ["a","b"] ', '{"k":1}', '[1,2]'], env)
   assert.equal(r.code, 0, r.err)
   const input = inputOfLast()
@@ -264,35 +264,35 @@ test('positional 类型转换：boolean 严格 true/false、json 按类型解析
   assert.deepEqual(input.spec, { k: 1 })
   assert.deepEqual(input.anything, [1, 2])
 
-  // boolean 非严格值：本地显式报错
+  // boolean non- strictly value: local explicit errors
   const badBool = await runCliCaptured(['gadget', 'deploy', 'demo', 'yes', '[]', '{}', 'null', '--json'], env)
   assert.equal(badBool.code, 1)
   const badBoolErr = parseCliError(badBool)
   assert.equal(badBoolErr.code, 'invalid_flag_value')
   assert.match(badBoolErr.message, /dryRun.*true\/false/)
 
-  // json 位置参数非法 JSON：本地显式报错（不发请求）
+  // json location parameter illegal JSON: local explicit errors (do not request)
   const badJson = await runCliCaptured(['gadget', 'deploy', 'demo', 'true', 'not-json', '{}', 'null', '--json'], env)
   assert.equal(badJson.code, 1)
   const badJsonErr = parseCliError(badJson)
   assert.equal(badJsonErr.code, 'invalid_flag_value')
   assert.match(badJsonErr.message, /labels.*JSON/)
 
-  // 纯文本模式（无 --json）同样拦截
+  // pure text pattern (without --json) same intercept
   const badJsonHuman = await runCliCaptured(['gadget', 'deploy', 'demo', 'true', 'not-json', '{}', 'null'], env)
   assert.equal(badJsonHuman.code, 1)
-  assert.match(badJsonHuman.err, /位置参数/)
+  assert.match(badJsonHuman.err, /location parameter/)
 })
 
 // ---------------------------------------------------------------------------
-// readFileInto 位置参数：路径识别与 IO 诊断
+// readFileInto location parameter: path identify and IO diagnose
 // ---------------------------------------------------------------------------
 
-/** 带 readFileInto 的 gadget manifest。 */
+/** carries readFileInto  gadget manifest. */
 const READ_FILE_MANIFEST = {
   pluginId: 'builtin:gadget',
   id: 'deploy',
-  description: '部署小工具',
+  description: 'deploy small tool',
   inputSchema: {
     type: 'object',
     properties: {
@@ -309,14 +309,14 @@ const READ_FILE_MANIFEST = {
   },
 }
 
-test('readFileInto：文件读入目标字段；普通值按 schema 类型转换写入 field', { timeout: 60_000 }, async (t) => {
+test('readFileInto: file read target field; ordinary value by schema type convert write field', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const hub = await startActionsHub([READ_FILE_MANIFEST], {}, t)
   const env = makeCliEnv(hub.url, dir)
   const scriptPath = path.join(dir, 'site.workflow.js')
   await fsp.writeFile(scriptPath, 'export const meta = 1\n', 'utf8')
 
-  // 文件 + 数字位置参数（replicas 为 number schema -> 转数字而非字符串）
+  // file + number location parameter (replicas is number schema -> rotate number while non- string)
   const r = await runCliCaptured(['gadget', 'deploy', scriptPath, '3', '--json'], env)
   assert.equal(r.code, 0, r.err)
   const body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
@@ -324,7 +324,7 @@ test('readFileInto：文件读入目标字段；普通值按 schema 类型转换
   assert.equal(body?.input?.replicas, 3)
   assert.equal(body?.input?.src, undefined)
 
-  // 非路径形态 + ~/ 展开：~ 不存在文件时（路径形态）显式报错
+  // non- path form + ~/ expand:~ missing file when (path form) explicit errors
   const byValue = await runCliCaptured(['gadget', 'deploy', 'saved-name', '2', '--json'], env)
   assert.equal(byValue.code, 0, byValue.err)
   const valueBody = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
@@ -335,66 +335,66 @@ test('readFileInto：文件读入目标字段；普通值按 schema 类型转换
   assert.equal(tildeMissing.code, 1)
   assert.equal(parseCliError(tildeMissing).code, 'positional_file_not_found')
 
-  // 路径形态但目标不存在：显式报错（不静默当名字）。
-  // UNC 形态（\\srv\share\...）仅在非 Windows 断言 not_found：Windows 上 stat
-  // 会真实发起网络解析，不可达共享返回 EHOSTUNREACH/ENOENT 之外的 IO 错误，
-  // 生产逻辑如实报 unreadable（不伪装 not_found），此处接受平台真实结果。
+  // path form but target missing: explicit errors (not silently when name).
+  // UNC form (\\srv\share\...) only in non- Windows assertion not_found:Windows on stat
+  // will real start network parse, cannot reach sharing return EHOSTUNREACH/ENOENT of outside IO error,
+  // produce logic such as report unreadable(does not pretend to be not_found), this where accept platform real result.
   const missing: string[] = ['./nope.js', '/definitely/not/here.js', 'C:\\nope\\f.js']
   if (process.platform !== 'win32') missing.push('\\\\srv\\share\\f.js')
   for (const p of missing) {
     const miss = await runCliCaptured(['gadget', 'deploy', p, '1', '--json'], env)
-    assert.equal(miss.code, 1, `应报错：${p}`)
+    assert.equal(miss.code, 1, `should errors:${p}`)
     assert.equal(parseCliError(miss).code, 'positional_file_not_found', p)
   }
 
   if (process.platform === 'win32') {
-    // Windows 上 UNC 形态仍是路径形状：不得当普通值写入 field，必须是显式报错
-    // （网络不可达时为 unreadable；本地盘不存在的 \\?\ 前缀等价验证不触发网络解析）。
+    // Windows on UNC form still is path shape: must not when ordinary value write field, must be explicit errors
+    // (network cannot reach when is unreadable; local missing \\?\ prefix etc. price verify does not trigger network parse).
     const unc = await runCliCaptured(['gadget', 'deploy', '\\\\srv\\share\\f.js', '1', '--json'], env)
-    assert.equal(unc.code, 1, 'UNC 路径形态必须显式报错，不得当普通值')
+    assert.equal(unc.code, 1, 'UNC path form must explicit errors, must not when ordinary value')
     const uncCode = parseCliError(unc).code
     assert.ok(
       uncCode === 'positional_file_unreadable' || uncCode === 'positional_file_not_found',
-      `接受平台真实 IO 结果：${uncCode}`,
+      `accept platform real IO result:${uncCode}`,
     )
   }
 
-  // Windows 反斜杠显式相对与 ~ 形态：同样是路径，缺文件不得静默当名字
+  // Windows backslash explicit each other for and ~ form: same is path, missing file must not static default when name
   for (const p of ['.\\nope.js', '..\\nope.js', '~\\nope.js']) {
     const miss = await runCliCaptured(['gadget', 'deploy', p, '1', '--json'], env)
-    assert.equal(miss.code, 1, `应报错：${p}`)
+    assert.equal(miss.code, 1, `should errors:${p}`)
     assert.equal(parseCliError(miss).code, 'positional_file_not_found', p)
   }
 
-  // number schema 位置参数非法值：显式报错
+  // number schema location parameter illegal value: explicit errors
   const badNum = await runCliCaptured(['gadget', 'deploy', 'x', 'NaN-ish', '--json'], env)
   assert.equal(badNum.code, 1)
   assert.equal(parseCliError(badNum).code, 'invalid_flag_value')
 })
 
-test('readFileInto：目录不是普通文件；权限故障不静默当名字', { timeout: 60_000 }, async (t) => {
+test('readFileInto: directory is not ordinary file; permission fault not silently when name', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const hub = await startActionsHub([READ_FILE_MANIFEST], {}, t)
   const env = makeCliEnv(hub.url, dir)
 
-  // 已存在目录（哪怕不带 ./ 前缀）：不静默当 workflow 名，显式报错
+  // already exists directory (even if do not carries ./ prefix): not silently when workflow name, explicit errors
   const sub = path.join(dir, 'sub')
   await fsp.mkdir(sub)
   const asDir = await runCliCaptured(['gadget', 'deploy', sub, '1', '--json'], env)
   assert.equal(asDir.code, 1)
   const asDirErr = parseCliError(asDir)
   assert.equal(asDirErr.code, 'positional_not_a_file')
-  assert.match(asDirErr.message, /不是普通文件/)
+  assert.match(asDirErr.message, /is not ordinary file/)
 
-  // ./ 前缀目录同样不静默当名字：相对 cwd 解析后不存在 -> 路径形态显式报错
+  // ./ prefix directory same not silently when name: each other for cwd parse after missing -> path form explicit errors
   const asRelDir = await runCliCaptured(['gadget', 'deploy', './sub', '1', '--json'], env)
   assert.equal(asRelDir.code, 1)
   assert.equal(parseCliError(asRelDir).code, 'positional_file_not_found')
 
-  // ./ 前缀且真实存在（相对 cwd 构造）：目录同样拒绝。
-  // 目录建在 process.cwd() 下：跨卷环境（Windows CI 的 repo 在 D: 而 tmp 在
-  // C:）里 path.relative 对异卷返回绝对路径，`./<绝对路径>` 不再是合法
-  // 相对形态；cwd 下临时目录保证同卷可相对化。
+  // ./ prefix and real store in (each other for cwd construct): directory same reject.
+  // directory create in process.cwd() under: across volume environment (Windows CI  repo in D: while tmp in
+  // C:) in path.relative for different volume return absolute path,`./<absolute path>` no longer is legal
+  // each other for form;cwd under temp directory guarantee same volume can each other for.
   const relName = `.helm-cli-dyn-rel-${process.pid}-${Date.now()}`
   const relDir = path.join(process.cwd(), relName)
   await fsp.mkdir(relDir)
@@ -406,8 +406,8 @@ test('readFileInto：目录不是普通文件；权限故障不静默当名字',
     await fsp.rm(relDir, { recursive: true, force: true })
   }
 
-  // 无读权限文件：EACCES 显式诊断（不静默当名字、不静默跳过）。
-  // root 可绕过文件权限（DAC override），此时读成功属真实内核行为，跳过断言。
+  // without read permission file:EACCES explicit diagnose (not silently when name, not silently skip).
+  // root can bypass file permission (DAC override), now read succeeded belong real kernel behavior, skip assertion.
   const isRoot = typeof process.getuid === 'function' ? process.getuid() === 0 : false
   if (process.platform !== 'win32' && !isRoot) {
     const locked = path.join(dir, 'locked.js')
@@ -424,32 +424,32 @@ test('readFileInto：目录不是普通文件；权限故障不静默当名字',
 })
 
 // ---------------------------------------------------------------------------
-// positional 与 flag 冲突 / --input 互斥语义
+// positional and flag conflict / --input mutual exclusion semantics
 // ---------------------------------------------------------------------------
 
-test('positional 与同名属性 flag 冲突显式报错（不悄悄覆盖）；--input 仍整体保真', { timeout: 60_000 }, async (t) => {
+test('positional and same name property flag conflict explicit errors (do not silently override);--input still whole fidelity', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const hub = await startActionsHub([READ_FILE_MANIFEST], {}, t)
   const env = makeCliEnv(hub.url, dir)
   const scriptPath = path.join(dir, 'a.js')
   await fsp.writeFile(scriptPath, 'A\n', 'utf8')
 
-  // --src flag 与位置参数同时给 src：冲突报错
+  // --src flag and location parameter also to src: conflict errors
   const clashField = await runCliCaptured(['gadget', 'deploy', 'saved', '1', '--src', 'x', '--json'], env)
   assert.equal(clashField.code, 1)
   assert.equal(parseCliError(clashField).code, 'conflicting_positional')
 
-  // 文件位置参数读入 payload，同时又 --payload：readFileInto 目标也冲突报错
+  // file location parameter read payload, also again --payload:readFileInto target also conflict errors
   const clashTarget = await runCliCaptured(['gadget', 'deploy', scriptPath, '1', '--payload', 'inline', '--json'], env)
   assert.equal(clashTarget.code, 1)
   assert.equal(parseCliError(clashTarget).code, 'conflicting_positional')
 
-  // --input 整体与位置参数互斥（沿用 unexpected_positional 语义）
+  // --input whole and location parameter mutual exclusion (along use unexpected_positional semantics)
   const mixed = await runCliCaptured(['gadget', 'deploy', 'saved', '1', '--input', '{"src":"x"}', '--json'], env)
   assert.equal(mixed.code, 1)
   assert.equal(parseCliError(mixed).code, 'unexpected_positional')
 
-  // --input 原样保真（不与任何 positional/flag 组合）
+  // --input original fidelity (do not and any positional/flag combine)
   const whole = await runCliCaptured(['gadget', 'deploy', '--input', '{"src":"x","replicas":9}', '--json'], env)
   assert.equal(whole.code, 0, whole.err)
   const body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown> } }).body
@@ -457,16 +457,16 @@ test('positional 与同名属性 flag 冲突显式报错（不悄悄覆盖）；
 })
 
 // ---------------------------------------------------------------------------
-// 通用虚拟插件复用：positional + readFileInto + timeoutMs 组合（非 workflow 域）
+// through use virtual plugin re- use:positional + readFileInto + timeoutMs combine (non- workflow domain)
 // ---------------------------------------------------------------------------
 
-test('通用虚拟插件动态命令：positional+file+timeoutMs 完整链路复用（--current 仅注入上下文）', { timeout: 60_000 }, async (t) => {
+test('through use virtual plugin motion state command:positional+file+timeoutMs complete link re- use (--current only inject context)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
-  // 与 workflow 无关的域（报表导出）：证明扩展点通用可复用
+  // and workflow without closure domain (report table export): verify extension point through use can re- use
   const manifest = {
     pluginId: 'builtin:reporter',
     id: 'render',
-    description: '渲染报表',
+    description: 'render report table',
     inputSchema: {
       type: 'object',
       properties: {
@@ -489,37 +489,37 @@ test('通用虚拟插件动态命令：positional+file+timeoutMs 完整链路复
   }
   const hub = await startActionsHub([manifest], {}, t)
   const tpl = path.join(dir, 'tpl.md')
-  await fsp.writeFile(tpl, '# 标题\n正文\n', 'utf8')
+  await fsp.writeFile(tpl, '# title\nbody text\n', 'utf8')
   const envWithConv = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '5' })
   const envPlain = makeCliEnv(hub.url, dir)
 
-  // 文件位置参数 + string flag + number positional；--current 只注入 body.conversationId
+  // file location parameter + string flag + number positional;--current only inject body.conversationId
   const r = await runCliCaptured(['reporter', 'render', tpl, '2', '--format', 'pdf', '--current', '--json'], envWithConv)
   assert.equal(r.code, 0, r.err)
   const body = (hub.hits.at(-1) as { body?: { input?: Record<string, unknown>; conversationId?: number } }).body
-  assert.equal(body?.input?.body, '# 标题\n正文\n')
+  assert.equal(body?.input?.body, '# title\nbody text\n')
   assert.equal(body?.input?.template, undefined)
   assert.equal(body?.input?.format, 'pdf')
   assert.equal(body?.input?.page, 2)
   assert.equal(body?.conversationId, 5)
 
-  // 人类模式：通用 key-value 输出（无业务识别；received 回显 body）
+  // person class pattern: through use key-value output (without business identify;received back visible body)
   const human = await runCliCaptured(['reporter', 'render', tpl, '2'], envPlain)
   assert.equal(human.code, 0, human.err)
   assert.match(human.out, /received/)
 
-  // 不带 --current：不伪造任何会话 ID
+  // do not carries --current: do not fabricate any conversation ID
   const plain = await runCliCaptured(['reporter', 'render', tpl, '1', '--json'], envPlain)
   assert.equal(plain.code, 0, plain.err)
   const plainBody = (hub.hits.at(-1) as { body?: { conversationId?: number } }).body
   assert.equal(plainBody?.conversationId, undefined)
 
-  // required positional 缺失：missing_positional
+  // required positional missing:missing_positional
   const missing = await runCliCaptured(['reporter', 'render', '--json'], envPlain)
   assert.equal(missing.code, 1)
   assert.equal(parseCliError(missing).code, 'missing_positional')
 
-  // 帮助来自动态 manifest（含位置参数签名与 timeout 动作无特殊化文案）
+  // help from motion state manifest(contains location parameter signature and timeout action without special text proposal)
   const help = await runCliCaptured(['reporter', 'render', '--help'], envPlain)
   assert.equal(help.code, 0)
   assert.match(help.out, /<template> \[page\]/)
@@ -527,12 +527,12 @@ test('通用虚拟插件动态命令：positional+file+timeoutMs 完整链路复
 })
 
 // ---------------------------------------------------------------------------
-// --wait 语义核查（timeoutMs=0 透传；failed 终态由服务端错误信封驱动非零退出）
+// --wait semantics core inspect (timeoutMs=0 pass-through;failed terminal state by server side error message seal drive non-zero exit)
 // ---------------------------------------------------------------------------
 
-test('--wait 失败终态：服务端 workflow_failed 信封 -> 非零退出；--json 保真错误 details', { timeout: 60_000 }, async (t) => {
+test('--wait failed terminal state: server side workflow_failed message seal -> non-zero exit;--json fidelity error details', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
-  // 复用读文件 manifest 但让服务端返回失败信封：验证 CLI 不把 HTTP 200/500 语义伪装成成功
+  // re- use read file manifest but let server side return failed message seal: verify CLI does not HTTP 200/500 semantics disguise into succeeded
   const hub = await startActionsHub(
     [READ_FILE_MANIFEST],
     {
@@ -551,10 +551,10 @@ test('--wait 失败终态：服务端 workflow_failed 信封 -> 非零退出；-
 })
 
 // ---------------------------------------------------------------------------
-// cli.timeoutMs 透传：小超时覆盖实例默认并真实生效；0 表示不施加超时
+// cli.timeoutMs pass-through: small timeout override instance by default and real takes effect;0 means do not apply add timeout
 // ---------------------------------------------------------------------------
 
-test('cli.timeoutMs 覆盖真实生效：300ms 慢响应按覆盖值超时且错误信息含真实毫秒', { timeout: 60_000 }, async (t) => {
+test('cli.timeoutMs override real takes effect:300ms slow response by override value timeout and error information contains real milli second', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const manifest = {
     pluginId: 'builtin:gadget',
@@ -584,13 +584,13 @@ test('cli.timeoutMs 覆盖真实生效：300ms 慢响应按覆盖值超时且错
   const r = await runCliCaptured(['gadget', 'deploy', '--json'], makeCliEnv(hub.url, dir))
   const elapsed = Date.now() - started
   assert.equal(r.code, 1)
-  assert.ok(elapsed < 3000, `应在覆盖的 300ms 超时而非 ${elapsed}ms`)
+  assert.ok(elapsed < 3000, `should in override 300ms timeout while non- ${elapsed}ms`)
   const err = parseCliError(r)
   assert.equal(err.code, 'timeout')
-  assert.match(err.message, /300ms/, '错误信息需含真实覆盖毫秒数而非实例默认 30000ms')
+  assert.match(err.message, /300ms/, 'error information must contains real override milli second count while non- instance by default 30000ms')
 })
 
-test('cli.timeoutMs=0：慢响应不施加请求超时（--wait 长等待可用）', { timeout: 60_000 }, async (t) => {
+test('cli.timeoutMs=0: slow response do not apply add request timeout (--wait long wait for available)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-dyn-')
   const manifest = {
     pluginId: 'builtin:gadget',
@@ -604,7 +604,7 @@ test('cli.timeoutMs=0：慢响应不施加请求超时（--wait 长等待可用�
     [manifest],
     {
       'POST /api/actions/builtin%3Agadget/deploy': async () => {
-        // 400ms 已越过前一用例的 300ms 超时阈值，足以验证 timeoutMs=0 不施加请求超时。
+        // 400ms already exceeds before one case 300ms timeout threshold, enough with verify timeoutMs=0 do not apply add request timeout.
         await sleep(400)
         return { body: { done: true } }
       },

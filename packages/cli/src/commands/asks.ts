@@ -1,4 +1,4 @@
-/** AskDoc 域：asks list / answer / cancel。 */
+/** AskDoc domain:asks list / answer / cancel. */
 import type { AskSpec } from '@helm/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
@@ -10,7 +10,7 @@ export function asksCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['asks', 'list'],
-    description: '列出待答提问（GET /api/asks）',
+    description: 'column out await answer mention question (GET /api/asks)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -20,10 +20,10 @@ export function asksCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['asks', 'answer'],
-    description: '提交提问答案（POST /api/asks/:id/answer；支持 CAS）',
+    description: 'commit mention question answer proposal (POST /api/asks/:id/answer; support CAS)',
     flags: [
-      { name: 'answers', type: 'json', required: true, help: 'fieldName -> 答案 JSON 对象' },
-      { name: 'expected-state-seq', type: 'number', help: 'CAS 水位线，已推进则 superseded' },
+      { name: 'answers', type: 'json', required: true, help: 'fieldName -> answer proposal JSON object' },
+      { name: 'expected-state-seq', type: 'number', help: 'CAS watermark line, already push enter then superseded' },
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
@@ -38,7 +38,7 @@ export function asksCommands(): CommandSpec[] {
       assertNoExtraPositionals(parsed.positionals, 1)
       const answers = parsed.flags.get('answers')
       if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) {
-        throw new CliError('--answers 需为 JSON 对象（fieldName -> 答案）', 'invalid_flag_value')
+        throw new CliError('--answers must be JSON object (fieldName -> answer proposal)', 'invalid_flag_value')
       }
       const body: Record<string, unknown> = { answers }
       const seq = flagValue<number>(parsed.flags, 'expected-state-seq')
@@ -50,7 +50,7 @@ export function asksCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['asks', 'cancel'],
-    description: '取消提问（POST /api/asks/:id/cancel）',
+    description: 'cancel mention question (POST /api/asks/:id/cancel)',
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)

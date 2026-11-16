@@ -1,15 +1,15 @@
 /**
- * Hub attach-or-spawn 监督器（纯 Node，零 Electron 依赖，可独立测试）。
+ * Hub attach-or-spawn supervise (pure Node, zero Electron dependency, can independent test).
  *
- * 机制：
- * - start()：先探测 127.0.0.1:<port>/api/auth/status（hub 身份形状校验），就绪 → attached
- *   （外部已运行 Hub，不接管生命周期）；未就绪 → 选择运行器（runners.ts）spawn Hub
- *   子进程并轮询就绪，就绪 → owned（本进程托管）。
- * - owned 崩溃监督：意外退出按指数退避自动重启（上限 restartMaxRetries，稳定
- *   stableMs 后重置预算；耗尽 → failed + problem 事件，绝不静默装活）。
- * - stop()：attached 仅解除状态；owned SIGTERM → 优雅期 → SIGKILL，幂等。
- * - 诊断诚实：子进程 stderr 环形缓冲（默认尾部 40 行），端口冲突 / 启动失败 /
- *   就绪超时均显式错误码附诊断尾部。
+ * mechanism:
+ * - start(): first probe 127.0.0.1:<port>/api/auth/status(hub identity shape validate), ready → attached
+ *   (external already run Hub, do not take over lifecycle); not ready → choose run (runners.ts)spawn Hub
+ *   child process and polling ready, ready → owned(this process hosting).
+ * - owned crash supervise: unexpected exit by exponential backoff automatically restart (cap restartMaxRetries, stable
+ *   stableMs after reset pre- compute; exhausted → failed + problem event, never static default install).
+ * - stop():attached only solve except state;owned SIGTERM → graceful phase → SIGKILL, idempotent.
+ * - diagnose honest: child process stderr ring shape buffer (by default tail part 40 row), port conflict / failed to start /
+ *   ready timeout all explicit error code attach diagnose tail part.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -30,7 +30,7 @@ export interface SupervisorEvents {
   stateChange?(next: SupervisorState, prev: SupervisorState): void;
   runnerSelected?(info: RunnerInfo): void;
   restartScheduled?(attempt: number, delayMs: number, reason: string): void;
-  /** 非致命诊断（重启失败链路、重启预算耗尽等）。 */
+  /** non- lead to life diagnose (restart failed link, restart pre- compute exhausted etc.). */
   problem?(error: unknown): void;
 }
 
@@ -42,7 +42,7 @@ export interface HubSupervisorOptions {
   isElectron?: boolean;
   execPath?: string;
   childWrapper?: string;
-  /** stderr 环形缓冲行数（诊断尾部快照）。 */
+  /** stderr ring shape buffer row count (diagnose tail part snapshot). */
   stderrTailLines?: number;
 }
 
@@ -92,7 +92,7 @@ export class HubSupervisor {
     return this.config.hubUrl;
   }
 
-  /** 当前是否托管 Hub 子进程（stop 需回收）。 */
+  /** when before is otherwise hosting Hub child process (stop must reclaim). */
   get owned(): boolean {
     return this._state === 'owned' && this.handle !== null;
   }
@@ -111,26 +111,26 @@ export class HubSupervisor {
 
   async start(): Promise<StartResult> {
     if (this._state !== 'idle' && this._state !== 'stopped' && this._state !== 'failed') {
-      throw new DesktopError('supervisor_invalid_state', `start() 仅可在 idle/stopped/failed 状态调用，当前: ${this._state}`);
+      throw new DesktopError('supervisor_invalid_state', `start() only can in idle/stopped/failed state invoke, when before: ${this._state}`);
     }
     this.setState('starting');
     this.stopping = false;
     this.restartBudgetUsed = 0;
 
-    // 1) attach：外部 Hub 已在目标端口就绪 → 只借用，不托管。
+    // 1) attach: external Hub already in target port ready → only borrow use, do not hosting.
     if (await this.probeOnce()) {
       this.handle = null;
       this.setState('attached');
       return { mode: 'attached', hubUrl: this.config.hubUrl };
     }
 
-    // 2) spawn：入口存在性强校验（缺产物显式报错，不静默回退）。
+    // 2) spawn: entry store in strong validate (missing artifact explicit errors, not silently fall back).
     const entry = resolveHubEntry(this.config);
     if (entry !== null && !existsSync(entry.entry)) {
       const code = entry.source === 'payload' ? 'payload_entry_missing' : 'hub_entry_missing';
       const hint = entry.source === 'payload'
-        ? `payload 入口不存在: ${entry.entry}（检查 HELM_DESKTOP_PAYLOAD_ENTRY）`
-        : `kernel 构建产物不存在: ${entry.entry}（先在仓库根执行 pnpm build，或设置 HELM_DESKTOP_HUB_ENTRY / HELM_DESKTOP_PAYLOAD_ENTRY）`;
+        ? `payload entry missing: ${entry.entry}(check HELM_DESKTOP_PAYLOAD_ENTRY)`
+        : `kernel build artifact missing: ${entry.entry}(first in repository execute pnpm build, or settings HELM_DESKTOP_HUB_ENTRY / HELM_DESKTOP_PAYLOAD_ENTRY)`;
       this.setState('failed');
       throw new DesktopError(code, hint, { entry: entry.entry });
     }
@@ -141,7 +141,7 @@ export class HubSupervisor {
       execPath: this.execPath,
       childWrapper: this.childWrapper,
       env: this.env,
-      onSkip: (kind, reason) => this.events.problem?.(new DesktopError('hub_runner_skipped', `运行器候选 ${kind} 被跳过: ${reason}`, { kind, reason })),
+      onSkip: (kind, reason) => this.events.problem?.(new DesktopError('hub_runner_skipped', `run choose ${kind} by skip: ${reason}`, { kind, reason })),
     });
     } catch (error) {
       this.setState('failed');
@@ -162,11 +162,11 @@ export class HubSupervisor {
     return { mode: 'owned', hubUrl: this.config.hubUrl, runner: this.runner };
   }
 
-  /** 幂等停止：attached 仅解除状态；owned 优雅期后强杀。 */
+  /** idempotent stop:attached only solve except state;owned graceful phase after strong kill. */
   async stop(): Promise<void> {
     if (this._state === 'idle' || this._state === 'stopped') return;
     if (this._state === 'starting') {
-      throw new DesktopError('supervisor_invalid_state', 'start() 进行中，禁止并发 stop()');
+      throw new DesktopError('supervisor_invalid_state', 'start() in progress, forbidden concurrency stop()');
     }
     this.stopping = true;
     if (this.stableTimer !== null) clearTimeout(this.stableTimer);
@@ -193,7 +193,7 @@ export class HubSupervisor {
     this.setState('stopped');
   }
 
-  // ---- 内部机制 ----
+  // ---- internal mechanism ----
 
   private setState(next: SupervisorState): void {
     const prev = this._state;
@@ -201,7 +201,7 @@ export class HubSupervisor {
     this.events.stateChange?.(next, prev);
   }
 
-  /** hub 身份探测：/api/auth/status 返回 200 JSON 且含 boolean configured 才算 hub。 */
+  /** hub identity probe:/api/auth/status return 200 JSON and contains boolean configured only then compute hub. */
   private async probeOnce(): Promise<boolean> {
     try {
       const response = await this.fetchImpl(`${this.config.hubUrl}${ATTACH_PROBE_PATH}`, {
@@ -241,7 +241,7 @@ export class HubSupervisor {
         if (handle.stderrTail.length > this.tailLines) handle.stderrTail.shift();
       }
     });
-    // stdout 仅消费防背压（hub 启动横幅不进诊断）。
+    // stdout only consume guard against back press (hub start horizontal width does not enter diagnose).
     handle.child.stdout?.on('data', () => {});
     handle.child.once('exit', (code, signal) => {
       handle.exited = { code, signal };
@@ -249,7 +249,7 @@ export class HubSupervisor {
     return handle;
   }
 
-  /** 就绪等待：子进程先行退出 → 分类报错；超时 → 回收子进程后报错。 */
+  /** ready wait for: child process first row exit → classify errors; timeout → reclaim child process after errors. */
   private async waitReady(handle: ChildHandle): Promise<void> {
     const deadline = Date.now() + this.config.readyTimeoutMs;
     for (;;) {
@@ -262,7 +262,7 @@ export class HubSupervisor {
         await this.reap(handle);
         throw new DesktopError(
           'hub_ready_timeout',
-          `Hub 子进程 ${this.config.readyTimeoutMs}ms 内未就绪（${handle.runner.command.join(' ')}）`,
+          `Hub child process ${this.config.readyTimeoutMs}ms inside not ready (${handle.runner.command.join(' ')})`,
           { command: handle.runner.command, stderrTail: [...handle.stderrTail] },
         );
       }
@@ -273,17 +273,17 @@ export class HubSupervisor {
   private classifyExit(handle: ChildHandle): DesktopError {
     const tail = [...handle.stderrTail];
     const text = tail.join('\n');
-    const exitNote = handle.exited === null ? '未退出' : `code=${handle.exited.code} signal=${handle.exited.signal}`;
+    const exitNote = handle.exited === null ? 'not exit' : `code=${handle.exited.code} signal=${handle.exited.signal}`;
     if (text.includes('EADDRINUSE')) {
       return new DesktopError(
         'hub_port_conflict',
-        `端口 ${this.config.port} 已被占用且非可 attach 的 Hub（${exitNote}）；如外部 Hub 正在启动请稍后重试`,
+        `port ${this.config.port} already by occupy and non- can attach  Hub(${exitNote}); such as external Hub is now start retry later`,
         { port: this.config.port, exit: exitNote, stderrTail: tail },
       );
     }
     return new DesktopError(
       'hub_start_failed',
-      `Hub 子进程启动即退出（${exitNote}）`,
+      `Hub child process start i.e. exit (${exitNote})`,
       { command: handle.runner.command, exit: exitNote, stderrTail: tail },
     );
   }
@@ -323,13 +323,13 @@ export class HubSupervisor {
     });
   }
 
-  /** owned 崩溃监督：意外退出 → 指数退避重启；预算耗尽 → failed。 */
+  /** owned crash supervise: unexpected exit → exponential backoff restart; pre- compute exhausted → failed. */
   private watchChild(handle: ChildHandle): void {
     handle.child.once('exit', () => {
       if (this.stopping || this._state !== 'owned' || this.handle !== handle) return;
       if (this.stableTimer !== null) clearTimeout(this.stableTimer);
       this.stableTimer = null;
-      void this.recoverAfterCrash(`owned Hub 子进程意外退出（code=${handle.exited?.code} signal=${handle.exited?.signal}）`);
+      void this.recoverAfterCrash(`owned Hub child process unexpected exit (code=${handle.exited?.code} signal=${handle.exited?.signal})`);
     });
     this.armStabilityReset();
   }
@@ -347,7 +347,7 @@ export class HubSupervisor {
     if (this.restartBudgetUsed >= this.config.restartMaxRetries) {
       const error = new DesktopError(
         'hub_restart_exhausted',
-        `Hub 崩溃重启预算耗尽（${this.config.restartMaxRetries} 次）: ${reason}`,
+        `Hub crash restart pre- compute exhausted (${this.config.restartMaxRetries} time): ${reason}`,
         { stderrTail: this.stderrTail() },
       );
       this.setState('failed');

@@ -1,12 +1,12 @@
 /**
- * RuntimeBootstrap：KernelRuntime 启动自举环境（从 KernelRuntime 拆出）。
+ * RuntimeBootstrap:KernelRuntime start self raise environment (from KernelRuntime split out).
  *
- * 职责：
- * - 解析与确保数据目录（dataDir）；
- * - 打开 SQLite 数据库（HelmDatabase）并加载全局元数据（HelmStore）；
- * - 实例化 ProviderService 与 CredentialService，预热 API Key 缓存；
- * - 构造动态模型集合（Models）与缓存存储（ModelsStore）；
- * - 打开底座持久执行 Harness 并连接 models/redact 动态插槽。
+ * responsibility:
+ * - parse and ensure data directory (dataDir);
+ * - open SQLite database (HelmDatabase) and load global metadata (HelmStore);
+ * - instantiate ProviderService and CredentialService, warm up API Key cache;
+ * - construct motion state model set (Models) and cache store (ModelsStore);
+ * - open bottom seat durable execute Harness and connect models/redact motion state insert slot.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -28,7 +28,7 @@ import { HelmStore } from './store.js'
 import type { ConversationTracker } from './conversations.js'
 
 export interface KernelBootOptions {
-  /** Hub 平台事实注入（测试用；缺省 process.platform）。 */
+  /** Hub platform fact inject (test use; default process.platform). */
   hubPlatform?: () => string | undefined
   dataDir?: string
   model?: string
@@ -37,16 +37,16 @@ export interface KernelBootOptions {
   autoResume?: boolean
   models?: Models
   nodeUpgradeTimeoutMs?: number
-  /** 合入技能扫描的机器级共享来源根（缺省 defaultExternalSkillRoots()，即
-   * ~/.agents/skills；传空数组可完全隔离，测试用）。 */
+  /** together skill scan machine level sharing source (default defaultExternalSkillRoots(), i.e.
+   * ~/.agents/skills; pass empty array can fully isolated, test use). */
   externalSkillRoots?: readonly string[]
   /**
-   * 插件构建端口（client.tsx 编译 + 外部插件 TS 转译）：由产品组合根（hub）
-   * 注入默认实现（@helm/plugin-build）；内核不携带构建工具。缺失时相关能力
-   * 显式拒绝（unsupported_client_build / unsupported_backend_ts_build）。
+   * plugin build port (client.tsx compile + external plugin TS transpile): by produce product composition root (hub)
+   * inject by default implement (@helm/plugin-build); kernel does not carry build tool. missing when related capability
+   * explicit reject (unsupported_client_build / unsupported_backend_ts_build).
    */
   buildProvider?: PluginBuildProvider
-  /** 可选诊断通道 sink（接收内核脱敏后的内部错误/告警；缺省输出到 console.error）。 */
+  /** optional diagnose channel sink(receive kernel redaction after internal error/alert; default output to console.error). */
   onDiagnostic?: KernelDiagnosticSink
 }
 
@@ -72,7 +72,7 @@ export interface BootstrappedKernelContext {
 }
 
 /**
- * 自举内核持久存储与 Harness 执行引擎。
+ * self raise kernel durable store and Harness execute engine.
  */
 export async function bootstrapKernelRuntime(
   options: KernelBootOptions = {},
@@ -102,7 +102,7 @@ export async function bootstrapKernelRuntime(
     emitDiagnostic({
       level: 'error',
       source,
-      message: source === 'store' ? 'HelmStore 持久化失败' : 'Harness 因致命存储故障关闭',
+      message: source === 'store' ? 'HelmStore persist failed' : 'Harness because lead to life store fault close',
       error,
     })
   }
@@ -217,7 +217,7 @@ export async function bootstrapKernelRuntime(
 }
 
 /**
- * 确保初始入口会话（#1 承载，个人助理）已创建并纳管。
+ * ensure initial entry conversation (#1 bear load, person assist) already create and accept manage.
  */
 export async function ensureInitialConversation(deps: {
   harness: Harness
@@ -246,7 +246,7 @@ export async function ensureInitialConversation(deps: {
   if (!deps.store.getConv(id)) {
     deps.store.upsertConv({
       id,
-      title: '个人助理',
+      title: 'person assist',
       profileId: 'assistant',
       tags: ['assistant'],
       nodeId: 'local',
@@ -265,7 +265,7 @@ export async function ensureInitialConversation(deps: {
 }
 
 /**
- * 恢复并对齐未完成会话的状态机元数据。
+ * restore and align not complete conversation state machine metadata.
  */
 export async function recoverExistingConversations(deps: {
   conversations: {
@@ -281,7 +281,7 @@ export async function recoverExistingConversations(deps: {
     const agent = conversation ? await conversation.agent(BACKGROUND_CONTEXT).catch(() => undefined) : undefined
     deps.store.upsertConv({
       id,
-      title: `会话 ${id}`,
+      title: `conversation ${id}`,
       profileId: 'assistant',
       tags: [],
       parentConversationId,
@@ -303,7 +303,7 @@ export async function recoverExistingConversations(deps: {
 }
 
 /**
- * 运行时关闭资源释放与持久化刷新流程。
+ * runtime close asset release and persist refresh stream process.
  */
 export async function teardownKernelRuntime(deps: {
   modelsRegistry: {
@@ -346,9 +346,9 @@ export async function teardownKernelRuntime(deps: {
   }
   emitDiagnostic?: KernelDiagnosticEmitter
 }): Promise<void> {
-  // 每步独立隔离：任一步失败只记录并继续关停其余资源（否则 harness/store/
-  // database/events 的 close 被跳过，SQLite 句柄泄漏）；全部执行完后统一上抛，
-  // 绝不流报成功关停。
+  // each step independent isolated: any one step failed only record and continue closure stop the rest asset (otherwise harness/store/
+  // database/events  close by skip,SQLite handle leak leak); all execute completely after unify on throw,
+  // never stream report succeeded closure stop.
   const emitDiagnostic = deps.emitDiagnostic ?? createDiagnosticEmitter()
   const failures: string[] = []
   const step = async (name: string, run: () => Promise<void>): Promise<void> => {
@@ -359,7 +359,7 @@ export async function teardownKernelRuntime(deps: {
       emitDiagnostic({
         level: 'error',
         source: 'teardown',
-        message: `teardown 步骤 ${name} 失败（继续关停其余资源）`,
+        message: `teardown step ${name} failed (continue closure stop the rest asset)`,
         error,
       })
     }
@@ -370,14 +370,14 @@ export async function teardownKernelRuntime(deps: {
   await step('nodes.dispose', () => deps.nodes.dispose())
   await step('assetReloader.waitForInflight', () => deps.assetReloader.waitForInflight())
   await step('modelsRegistry.dispose', () => deps.modelsRegistry.dispose())
-  // 先行关闭 Harness：此时 pluginHost、envFabric、HelmStore 与受管 token 仍在线，
-  // 运行中 GenerationTask / ToolTask 经 writeAtClose() 退回 pending（不写 aborted、
-  // 不计 restarts），供下次启动原位恢复。
+  // first row close Harness: now pluginHost,envFabric,HelmStore and managed token still online,
+  // run in GenerationTask / ToolTask via writeAtClose() retreat back pending(do not write aborted,
+  // do not count restarts), supply under time start original restore.
   await step('harness.close', () => deps.harness.close(BACKGROUND_CONTEXT))
   await step('settledInflight', () => deps.settledInflight())
   deps.tracker.close()
   await step('pluginHost.dispose', () => deps.pluginHost?.dispose() ?? Promise.resolve())
-  // 排空插件停止窗口内排入的结算回调，防止写入与 store.close 竞态。
+  // arrange empty plugin stop window inside arrange compute call back, guard against write and store.close race.
   await step('settledInflight#2', () => deps.settledInflight())
   await step('nodeForward.close', () => deps.nodeForward?.close() ?? Promise.resolve())
   await step('envFabric.dispose', () => deps.envFabric.dispose())
@@ -391,7 +391,7 @@ export async function teardownKernelRuntime(deps: {
     emitDiagnostic({
       level: 'error',
       source: 'teardown',
-      message: 'teardown 步骤 store.close 失败（继续关停其余资源）',
+      message: 'teardown step store.close failed (continue closure stop the rest asset)',
       error,
     })
   }
@@ -405,12 +405,12 @@ export async function teardownKernelRuntime(deps: {
     if (storeError !== undefined) {
       throw new HelmError(
         'store_flush_failed',
-        `退出时持久化失败：${String(storeError)}` + (detail === '' ? '' : `；其余关停失败：${detail}`),
+        `on exit persist failed:${String(storeError)}` + (detail === '' ? '' : `; the rest closure stop failed:${detail}`),
         500,
         { error: String(storeError), ...(detail === '' ? {} : { failures: detail }) },
       )
     }
-    throw new HelmError('teardown_failed', `退出关停部分失败：${detail}`, 500, { failures: detail })
+    throw new HelmError('teardown_failed', `exit closure stop part failed:${detail}`, 500, { failures: detail })
   }
 }
 

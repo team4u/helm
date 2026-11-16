@@ -123,9 +123,9 @@ test('readBodyData：structuredOutput.content 优先且不受截断约束；resu
 })
 
 test('truncationPreviewNote：总量未知不伪造，绝不把预览行数当全文', { timeout: 60_000 }, () => {
-  assert.equal(truncationPreviewNote({ truncated: true }), '输出超长，服务端仅传回预览')
-  assert.equal(truncationPreviewNote({ truncated: true, totalLines: 300 }), '输出超长，服务端仅传回预览（全文 300 行）')
-  assert.equal(truncationPreviewNote({ truncated: true, totalChars: 9000 }), '输出超长，服务端仅传回预览（全文 9000 字符）')
+  assert.equal(truncationPreviewNote({ truncated: true }), 'Output too long; the server returned a preview only')
+  assert.equal(truncationPreviewNote({ truncated: true, totalLines: 300 }), 'Output too long; the server returned a preview only (300 lines in total)')
+  assert.equal(truncationPreviewNote({ truncated: true, totalChars: 9000 }), 'Output too long; the server returned a preview only (9000 chars in total)')
 })
 
 // ---------------------------------------------------------------------------

@@ -1,13 +1,13 @@
 /**
- * scripts/check-changed.mjs 与 scripts/check-test-hygiene.mjs（含 scripts/lib/* 库）的单元测试。
+ * scripts/check-changed.mjs and scripts/check-test-hygiene.mjs(contains scripts/lib/* store) unit test.
  *
- * 覆盖：变更集收集（多 commit + 工作区脏 + 未跟踪 + 删除 + rename + 空格路径 + 基线解析
- * 优先级与无基线拒绝）、受影响包反向闭包与根级全档触发、hygiene AST 分析（默认/具名/
- * 别名/命名空间导入、多行 options、共享 const 选项、describe timeout 继承、skip 理由、
- * todo 豁免、HELM_TEST_SUITE_TIMEOUT_MS 赋值）、CLI 退出码透传（含执行失败不吞码）、
- * 子进程树信号转发不留孤儿，以及 PACKAGE_TIERS 与 test-suites.mjs SUITES 的镜像锁定。
+ * override: changeset collect (many commit + work zone dirty + untracked + delete + rename + space path + baseline parse
+ * priority and without baseline reject), subject to affect package reverse closed package and level all Profile trigger,hygiene AST analyze (by default/tool name/
+ * alias/naming empty between import, many row options, sharing const option,describe timeout inherit,skip by,
+ * todo exemption,HELM_TEST_SUITE_TIMEOUT_MS assignment),CLI exit code pass-through (contains failed to execute do not swallow code),
+ * child process tree signal forwarding do not orphan child, and PACKAGE_TIERS and test-suites.mjs SUITES mirror lock.
  *
- * runner: tsx --test；每项显式 timeout: 60_000。
+ * runner: tsx --test; each items explicit timeout: 60_000.
  */
 import test, { after, describe } from 'node:test'
 import assert from 'node:assert/strict'
@@ -37,14 +37,14 @@ import { resolvePackageManagerInvoke, runManagedCommand } from '../../../scripts
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const scriptsDir = path.join(repoRoot, 'scripts')
 
-// ---------------------------------------------------------------- git 夹具
+// ---------------------------------------------------------------- git fixture
 
 function git(dir: string, ...args: string[]): void {
   const res = spawnSync('git', ['-c', 'user.email=dev@example.com', '-c', 'user.name=dev', ...args], {
     cwd: dir,
     encoding: 'utf8',
   })
-  assert.equal(res.status, 0, `git ${args.join(' ')} 失败: ${res.stderr}`)
+  assert.equal(res.status, 0, `git ${args.join(' ')} failed: ${res.stderr}`)
 }
 
 function write(dir: string, rel: string, content: string): void {
@@ -71,7 +71,7 @@ function getTemplateRepo(): string {
   git(dir, 'mv', 'src/one.ts', 'src/two renamed.ts')
   git(dir, 'rm', '-q', 'old.txt')
   git(dir, 'commit', '-m', 'c2: rename + delete')
-  // 工作区：未暂存修改 + 暂存新增 + 未跟踪，全部含空格路径。
+  // work zone: unstaged modify + staged new increase + untracked, all contains space path.
   write(dir, 'space dir/f.txt', 'v2')
   write(dir, 'staged file.ts', 's')
   git(dir, 'add', 'staged file.ts')
@@ -87,33 +87,33 @@ after(() => {
   }
 })
 
-/** 多 commit + 工作区脏（暂存/未暂存）+ 未跟踪 + 删除 + rename + 空格路径的完整夹具（复用模板仓库）。 */
+/** many commit + work zone dirty (staged/unstaged)+ untracked + delete + rename + space path complete fixture (re- use template repository). */
 function makeFixtureRepo(): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'helm-check-changed-'))
   cpSync(getTemplateRepo(), dir, { recursive: true })
   return dir
 }
 
-// ---------------------------------------------------------------- 变更集收集
+// ---------------------------------------------------------------- changeset collect
 
-test('变更集：多 commit ∪ 工作区 ∪ 未跟踪，rename 双侧 + 删除 + 空格路径全纳入', { timeout: 60_000 }, () => {
+test('changeset: many commit ∪ work zone ∪ untracked,rename double side + delete + space path all accept', { timeout: 60_000 }, () => {
   const dir = makeFixtureRepo()
   try {
     const { baseline, files } = collectChangedFiles({ base: 'HEAD~2', cwd: dir })
     assert.equal(baseline.kind, 'explicit')
     assert.equal(baseline.ref, 'HEAD~2')
     const byPath = new Map(files.map((f) => [f.path, f]))
-    // committed（两个 commit 累计）：修改、rename 新旧两侧、删除。
+    // committed(two commit cumulative): modify,rename new old two side, delete.
     assert.equal(byPath.get('base.txt')?.origin, 'committed')
-    assert.ok(byPath.has('src/one.ts'), 'rename 的旧路径必须纳入')
-    assert.ok(byPath.has('src/two renamed.ts'), 'rename 的新路径（含空格）必须纳入')
-    assert.ok(byPath.get('src/two renamed.ts')?.status.startsWith('R'), 'rename 状态以 R 开头')
+    assert.ok(byPath.has('src/one.ts'), 'rename old path must accept')
+    assert.ok(byPath.has('src/two renamed.ts'), 'rename new path (contains space) must accept')
+    assert.ok(byPath.get('src/two renamed.ts')?.status.startsWith('R'), 'rename state with R open head')
     assert.equal(byPath.get('old.txt')?.origin, 'committed')
     assert.equal(byPath.get('old.txt')?.status, 'D')
-    // 工作区：暂存与未暂存同源 worktree。
+    // work zone: staged and unstaged same source worktree.
     assert.equal(byPath.get('space dir/f.txt')?.origin, 'worktree')
     assert.equal(byPath.get('staged file.ts')?.origin, 'worktree')
-    // 未跟踪。
+    // untracked.
     assert.equal(byPath.get('untracked file.ts')?.origin, 'untracked')
     assert.equal(files.filter((f) => f.origin === 'committed').length, 4)
     assert.equal(files.filter((f) => f.origin === 'untracked').length, 1)
@@ -122,18 +122,18 @@ test('变更集：多 commit ∪ 工作区 ∪ 未跟踪，rename 双侧 + 删�
   }
 })
 
-test('基线解析：upstream 优先于 origin/HEAD；都无时显式报错而非静默 HEAD~1', { timeout: 60_000 }, () => {
+test('baseline parse:upstream takes precedence at origin/HEAD; all without when explicit errors while non- static default HEAD~1', { timeout: 60_000 }, () => {
   const dir = makeFixtureRepo()
   try {
-    // 初始无 remote：默认基线不可得 → resolveBaseline 如实返回 none，collect 显式报错并指引用 --base。
+    // initial without remote: by default baseline cannot obtain → resolveBaseline such as return none,collect explicit errors and refer reference --base.
     assert.deepEqual(resolveBaseline({ cwd: dir }), { kind: 'none', ref: null, mergeBase: null })
     assert.throws(() => collectChangedFiles({ cwd: dir }), (e: unknown) => {
       assert.ok(e instanceof GitChangeError)
-      assert.ok(e.message.includes('--base'), '错误信息必须指引用 --base')
+      assert.ok(e.message.includes('--base'), 'error information must refer reference --base')
       return true
     })
 
-    // 配置 upstream（指向 c1）后：merge-base = c1，c1..HEAD 的 c2 变更纳入，c1 自身不算。
+    // config upstream(points to c1) after:merge-base = c1,c1..HEAD  c2 change accept,c1 itself do not compute.
     const c1 = spawnSync('git', ['rev-parse', 'HEAD~1'], { cwd: dir, encoding: 'utf8' })
     git(dir, 'update-ref', 'refs/remotes/origin/main', (c1.stdout ?? '').trim())
     git(dir, 'config', 'remote.origin.url', 'https://example.com/probe.git')
@@ -145,14 +145,14 @@ test('基线解析：upstream 优先于 origin/HEAD；都无时显式报错而�
     assert.equal(baseline.ref, 'refs/remotes/origin/main')
     assert.equal(baseline.mergeBase, (c1.stdout ?? '').trim())
     const paths = files.map((f) => f.path)
-    assert.ok(!paths.includes('base.txt'), 'merge-base 之前的提交变更不纳入')
-    assert.ok(paths.includes('old.txt'), 'merge-base 之后的删除纳入')
+    assert.ok(!paths.includes('base.txt'), 'merge-base before commit change do not accept')
+    assert.ok(paths.includes('old.txt'), 'merge-base after delete accept')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('parseNameStatusZ：-z 流按 NUL 切分，rename/copy 展开新旧双侧', { timeout: 60_000 }, () => {
+test('parseNameStatusZ:-z stream by NUL cut,rename/copy expand new old double side', { timeout: 60_000 }, () => {
   const raw = ['M\0a.txt\0', 'R100\0new dir/two.ts\0old dir/one.ts\0', 'D\0gone.ts\0'].join('')
   assert.deepEqual(parseNameStatusZ(raw), [
     { path: 'a.txt', status: 'M' },
@@ -162,9 +162,9 @@ test('parseNameStatusZ：-z 流按 NUL 切分，rename/copy 展开新旧双侧',
   ])
 })
 
-// ---------------------------------------------------------------- 受影响包选集
+// ---------------------------------------------------------------- subject to affect package choose collection
 
-/** 与仓库真实 workspace 图同构的合成包图（含传递依赖链）。 */
+/** and repository real workspace diagram same construct together into package diagram (contains pass dependency chain). */
 const SYNTH_PKGS = [
   { name: '@helm/protocol', dir: 'protocol', workspaceDeps: [] },
   { name: '@helm/kernel', dir: 'kernel', workspaceDeps: ['@helm/protocol', '@helm/node'] },
@@ -177,7 +177,7 @@ const SYNTH_PKGS = [
   { name: '@helm/desktop', dir: 'desktop', workspaceDeps: [] },
 ]
 
-test('依赖闭包：protocol 改动扩散到全部消费方；node 改动经 kernel 传递到 hub/payload', { timeout: 60_000 }, () => {
+test('dependency closed package:protocol change expand scatter to all consumer;node change via kernel pass to hub/payload', { timeout: 60_000 }, () => {
   const r1 = computeAffectedPackages(['packages/protocol/src/index.ts'], SYNTH_PKGS)
   assert.deepEqual([...r1.affected].sort(), ['cli', 'hub', 'kernel', 'node', 'payload', 'plugins', 'protocol', 'web'])
 
@@ -188,12 +188,12 @@ test('依赖闭包：protocol 改动扩散到全部消费方；node 改动经 ke
   assert.deepEqual([...r3.affected], ['desktop'])
 })
 
-test('纯测试文件改动只选本包；包内非测试文件（含 test 助手）走闭包；根级触发全档', { timeout: 60_000 }, () => {
+test('pure test file change only choose this package; package inside non- test file (contains test assist manually) away closed package; level trigger all Profile', { timeout: 60_000 }, () => {
   const t1 = computeAffectedPackages(['packages/kernel/test/foo.test.ts'], SYNTH_PKGS)
   assert.deepEqual([...t1.affected], ['kernel'])
   assert.equal(t1.fullTier, false)
 
-  // test/ 下非 *.test.ts 的助手文件按 source 处理（保守闭包：kernel → hub → payload，hub 依赖 kernel）。
+  // test/ under non- *.test.ts assist manually file by source handle (keep guard closed package:kernel → hub → payload,hub dependency kernel).
   const t2 = computeAffectedPackages(['packages/kernel/test/helpers.ts'], SYNTH_PKGS)
   assert.deepEqual([...t2.affected].sort(), ['hub', 'kernel', 'payload', 'plugins'])
 
@@ -201,7 +201,7 @@ test('纯测试文件改动只选本包；包内非测试文件（含 test 助�
   assert.equal(t3.fullTier, true)
   assert.equal(t3.affected.size, 9)
 
-  // 单改快速门自身实现（scripts 源码）也触发全档，不允许「无检查通过」。
+  // single change fast gate itself implement (scripts source code) also trigger all Profile, disallows without check via.
   const t5 = computeAffectedPackages(['scripts/lib/spawn-checked.mjs'], SYNTH_PKGS)
   assert.equal(t5.fullTier, true)
   assert.equal(t5.affected.size, 9)
@@ -211,7 +211,7 @@ test('纯测试文件改动只选本包；包内非测试文件（含 test 助�
   assert.deepEqual(t4.outside, ['AGENTS.md', 'docs/foo.md'])
 })
 
-test('classifyChange：文件分类与边界（scripts 源码全档，纯文档不触发）', { timeout: 60_000 }, () => {
+test('classifyChange: file classify and boundary (scripts source code all Profile, pure document does not trigger)', { timeout: 60_000 }, () => {
   assert.deepEqual(classifyChange('packages/kernel/src/a.ts'), { pkg: 'kernel', kind: 'source' })
   assert.deepEqual(classifyChange('packages/kernel/test/a.test.ts'), { pkg: 'kernel', kind: 'test' })
   assert.deepEqual(classifyChange('packages/web/test/a.test.tsx'), { pkg: 'web', kind: 'test' })
@@ -224,24 +224,24 @@ test('classifyChange：文件分类与边界（scripts 源码全档，纯文档�
   assert.deepEqual(classifyChange('tsconfig.check.json'), { pkg: null, kind: 'root-trigger' })
 })
 
-test('PACKAGE_TIERS 与 test-suites.mjs SUITES 镜像锁定；全仓包都有档位', { timeout: 60_000 }, () => {
+test('PACKAGE_TIERS and test-suites.mjs SUITES mirror lock; all warehouse package all has Profile', { timeout: 60_000 }, () => {
   const src = readFileSync(path.join(scriptsDir, 'test-suites.mjs'), 'utf8')
   const unitMatch = /unit:\s*\[([^\]]*)\]/.exec(src)
   const integrationMatch = /integration:\s*\[([^\]]*)\]/.exec(src)
-  assert.ok(unitMatch && integrationMatch, 'test-suites.mjs SUITES 结构变化，请同步解析逻辑')
+  assert.ok(unitMatch && integrationMatch, 'test-suites.mjs SUITES structure change, please sync parse logic')
   const names = (s: string) => [...s.matchAll(/'([^']+)'/g)].map((m) => m[1] ?? '')
   const expected: Record<string, string> = {}
   for (const n of names(unitMatch?.[1] ?? '')) expected[n] = 'unit'
   for (const n of names(integrationMatch?.[1] ?? '')) expected[n] = 'integration'
-  assert.deepEqual(PACKAGE_TIERS, expected, '改 test-suites.mjs 分档必须同步 workspace-meta.mjs 的 PACKAGE_TIERS')
+  assert.deepEqual(PACKAGE_TIERS, expected, 'change test-suites.mjs Profile must sync workspace-meta.mjs  PACKAGE_TIERS')
 
   for (const p of loadWorkspacePackages(repoRoot)) {
-    assert.ok(PACKAGE_TIERS[p.dir], `新包 ${p.dir} 未登记档位，请同步 PACKAGE_TIERS 与 SUITES`)
+    assert.ok(PACKAGE_TIERS[p.dir], `new package ${p.dir} not register Profile, please sync PACKAGE_TIERS and SUITES`)
   }
   assert.ok(testFilesOfPackage(repoRoot, 'cli').some((f) => f.endsWith('.test.ts')))
 })
 
-test('planCheckCommands：有测试文件时前置 check-hygiene；desktop 选中时插入 dist build 前置；顺序固定；空选集无命令', { timeout: 60_000 }, () => {
+test('planCheckCommands: has test file when pre- check-hygiene;desktop choose in when insert dist build pre-; order fixed; empty choose collection without command', { timeout: 60_000 }, () => {
   const pm = { cmd: 'node', args: ['/pnpm/bin/pnpm.cjs'] }
   const withDesktop = planCheckCommands({
     affectedDirs: ['desktop', 'kernel'],
@@ -287,7 +287,7 @@ function rulesOf(source: string): string[] {
   return analyzeTestSource(ts, 'sample.test.ts', source).violations.map((v) => v.rule)
 }
 
-test('hygiene：具名/默认/别名/命名空间导入的 timeout 判定（含多行 options）', { timeout: 60_000 }, () => {
+test('hygiene: tool name/by default/alias/naming empty between import timeout decide (contains many row options)', { timeout: 60_000 }, () => {
   assert.deepEqual(rulesOf(`import test from 'node:test'
 test('a', { timeout: 60_000 }, () => {})
 test('b', () => {})`), ['timeout-missing'])
@@ -295,29 +295,29 @@ test('b', () => {})`), ['timeout-missing'])
   assert.deepEqual(rulesOf(`import { it } from 'node:test'
 it('a', () => {})`), ['timeout-missing'])
 
-  // as 别名：源名是 test/it 才算受管调用。
+  // as alias: source name is test/it only then compute managed invoke.
   assert.deepEqual(rulesOf(`import { test as it, describe as d } from 'node:test'
 it('ok', { timeout: 60_000 }, () => {})
 it('bad', () => {})`), ['timeout-missing'])
 
-  // 命名空间导入。
+  // naming empty between import.
   assert.deepEqual(rulesOf(`import * as nt from 'node:test'
 nt.test('ok', { timeout: 60_000 }, () => {})
 nt.it('bad', () => {})`), ['timeout-missing'])
 
-  // 多行 options：靠 AST 而非行内正则。
+  // many row options: rely AST while non- row inside regex.
   assert.deepEqual(rulesOf(`import test from 'node:test'
 test('multi', {
   timeout: 60_000,
 }, async () => {})`), [])
 
-  // 共享 const 选项对象（含 as const 解包）。
+  // sharing const option object (contains as const unwrap).
   assert.deepEqual(rulesOf(`import test from 'node:test'
 const opts = { timeout: 60_000 } as const
 test('shared', opts, () => {})`), [])
 })
 
-test('hygiene：describe timeout 按 node:test 语义被子测试继承', { timeout: 60_000 }, () => {
+test('hygiene:describe timeout by node:test semantics by sub- test inherit', { timeout: 60_000 }, () => {
   assert.deepEqual(rulesOf(`import { describe, it } from 'node:test'
 describe('d', { timeout: 60_000 }, () => {
   it('inherits', () => {})
@@ -328,32 +328,32 @@ describe('d', () => {
 })`), ['timeout-missing'])
 })
 
-test('hygiene：skip 必附理由；恒定 skip 豁免 timeout；条件 skip 仍需 timeout', { timeout: 60_000 }, () => {
-  // { skip: true }：无理由违规；恒定 skip 不再叠 timeout 违规。
+test('hygiene:skip must attach by; constant skip exemption timeout; condition skip still must timeout', { timeout: 60_000 }, () => {
+  // { skip: true }: without by violate rule; constant skip no longer stack timeout violate rule.
   assert.deepEqual(rulesOf(`import test from 'node:test'
 test('s', { timeout: 60_000, skip: true }, () => {})`), ['skip-without-reason'])
-  // 条件 skip（理由 : false）：会执行 → 缺 timeout 违规。
+  // condition skip(by : false): will execute → missing timeout violate rule.
   assert.deepEqual(rulesOf(`import test from 'node:test'
-test('c', { skip: process.platform === 'win32' ? 'Windows 不适用' : false }, () => {})`), [
+test('c', { skip: process.platform === 'win32' ? 'Windows do not fit use' : false }, () => {})`), [
     'timeout-missing',
   ])
-  // 条件 skip 且带 timeout：干净。
+  // condition skip and carries timeout: clean.
   assert.deepEqual(rulesOf(`import test from 'node:test'
-test('c2', { timeout: 60_000, skip: process.env.X !== '1' ? '需 X=1' : false }, () => {})`), [])
-  // 恒定 skip 带理由：不执行，无需 timeout。
+test('c2', { timeout: 60_000, skip: process.env.X !== '1' ? 'must X=1' : false }, () => {})`), [])
+  // constant skip carries by: do not execute, no need to timeout.
   assert.deepEqual(rulesOf(`import test from 'node:test'
-test('s2', { skip: '环境不具备' }, () => {})`), [])
-  // test.skip 简写未附理由。
+test('s2', { skip: 'environment do not tool prepare' }, () => {})`), [])
+  // test.skip simple write not attach by.
   assert.deepEqual(rulesOf(`import test from 'node:test'
 test.skip('s3', () => {})`), ['skip-without-reason'])
   assert.deepEqual(rulesOf(`import test from 'node:test'
-test.skip('s4', { skip: '理由' }, () => {})`), [])
-  // 无法静态确认的 skip 值如实报违规。
+test.skip('s4', { skip: 'by' }, () => {})`), [])
+  // cannot static confirm skip value such as report violate rule.
   assert.deepEqual(rulesOf(`import test from 'node:test'
 test('s5', { timeout: 60_000, skip: someFlag }, () => {})`), ['skip-without-reason'])
 })
 
-test('hygiene：todo 豁免；t.test 子测试仅计数；env 赋值违规', { timeout: 60_000 }, () => {
+test('hygiene:todo exemption;t.test sub- test only counter;env assignment violate rule', { timeout: 60_000 }, () => {
   const report = analyzeTestSource(
     ts,
     'sample.test.ts',
@@ -370,7 +370,7 @@ process.env.HELM_TEST_SUITE_TIMEOUT_MS = '999'`,
   assert.equal(report.stats.testCalls, 1)
 })
 
-// ---------------------------------------------------------------- CLI 退出码
+// ---------------------------------------------------------------- CLI exit code
 
 function runScript(script: string, args: string[], opts: { cwd?: string } = {}) {
   return spawnSync(process.execPath, [path.join(scriptsDir, script), ...args], {
@@ -380,8 +380,8 @@ function runScript(script: string, args: string[], opts: { cwd?: string } = {}) 
   })
 }
 
-test('check-test-hygiene CLI：违规文件退出 1，干净文件退出 0，未知参数退出 2', { timeout: 60_000 }, () => {
-  // 夹具必须位于仓库内（--files 拒绝仓库外路径）；node_modules 已被 gitignore，不污染工作区。
+test('check-test-hygiene CLI: violate rule file exit 1, clean file exit 0, unknown parameter exit 2', { timeout: 60_000 }, () => {
+  // fixture must at repository inside (--files reject repository outside path);node_modules already by gitignore, do not pollute work zone.
   const dir = path.join(repoRoot, 'node_modules', '.helm-hygiene-cli-fixtures')
   mkdirSync(dir, { recursive: true })
   try {
@@ -392,50 +392,50 @@ test('check-test-hygiene CLI：违规文件退出 1，干净文件退出 0，未
 
     const r1 = runScript('check-test-hygiene.mjs', ['--files', bad])
     assert.equal(r1.status, 1, `stderr: ${r1.stderr}`)
-    assert.ok(r1.stderr.includes('[timeout-missing]'), '违规明细必须打印规则与位置')
+    assert.ok(r1.stderr.includes('[timeout-missing]'), 'violate rule detail must print rule and location')
 
     const r2 = runScript('check-test-hygiene.mjs', ['--files', good])
     assert.equal(r2.status, 0, `stderr: ${r2.stderr}`)
 
     const r3 = runScript('check-test-hygiene.mjs', ['--wat'])
     assert.equal(r3.status, 2)
-    assert.ok(r3.stderr.includes('未知参数'))
+    assert.ok(r3.stderr.includes('unknown parameter'))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('check-changed CLI：--base 引用不存在退出 2；--list 打印选集不执行命令', { timeout: 60_000 }, () => {
+test('check-changed CLI:--base reference missing exit 2;--list print choose collection do not execute command', { timeout: 60_000 }, () => {
   const r1 = runScript('check-changed.mjs', ['--base', 'no-such-ref', '--list'])
   assert.equal(r1.status, 2, `stderr: ${r1.stderr}`)
   assert.ok(r1.stderr.includes('--base'))
 
   const r2 = runScript('check-changed.mjs', ['--list', '--base', 'HEAD'])
   assert.equal(r2.status, 0, `stderr: ${r2.stderr}`)
-  assert.ok(r2.stderr.includes('基线'), '必须明确报告所选基线')
-  assert.ok(r2.stderr.includes('将执行'), '必须打印将执行的命令供复核')
-  assert.ok(r2.stderr.includes('未执行任何命令'), '--list 模式绝不执行命令')
+  assert.ok(r2.stderr.includes('baseline'), 'must explicit report which choose baseline')
+  assert.ok(r2.stderr.includes('execute'), 'must print execute command supply re-check')
+  assert.ok(r2.stderr.includes('not execute any command'), '--list pattern never execute command')
 
   const r3 = runScript('check-changed.mjs', ['--bogus'])
   assert.equal(r3.status, 2)
 })
 
-test('check-test-hygiene CLI：仓库外路径与空 --files 均拒绝退出 2，不静默改查其他仓库或全仓', { timeout: 60_000 }, () => {
+test('check-test-hygiene CLI: repository outside path and empty --files all reject exit 2, not silently change inspect other repository or all warehouse', { timeout: 60_000 }, () => {
   const outside = path.join(tmpdir(), 'helm-outside-' + Date.now(), 'x.test.ts')
   const r1 = runScript('check-test-hygiene.mjs', ['--files', outside])
   assert.equal(r1.status, 2, `stderr: ${r1.stderr}`)
-  assert.ok(r1.stderr.includes('拒绝仓库外路径'), '必须显式拒绝而非静默检查其他仓库')
+  assert.ok(r1.stderr.includes('reject repository outside path'), 'must explicit reject while non- static default check other repository')
 
   const r2 = runScript('check-test-hygiene.mjs', ['--files'])
   assert.equal(r2.status, 2, `stderr: ${r2.stderr}`)
-  assert.ok(r2.stderr.includes('--files 需要至少一个'), '空 --files 必须报用法错误而非退回全仓')
+  assert.ok(r2.stderr.includes('--files need to at least a'), 'empty --files must report use method error while non- retreat back all warehouse')
 
-  // 开头 -- 分隔符（pnpm 透传形态）：与显式仓库内文件等价。
+  // open head -- isolate symbol (pnpm pass-through form): and explicit repository inside file etc. price.
   const r3 = runScript('check-test-hygiene.mjs', ['--', '--files', 'packages/cli/test/cli.test.ts'])
   assert.equal(r3.status, 0, `stderr: ${r3.stderr}`)
 })
 
-test('pnpm 真调用：pnpm check:changed -- --base HEAD --list 透传开头 -- 分隔符', { timeout: 60_000 }, () => {
+test('pnpm true invoke:pnpm check:changed -- --base HEAD --list pass-through open head -- isolate symbol', { timeout: 60_000 }, () => {
   const pm = resolvePackageManagerInvoke(process.env)
   const res = spawnSync(
     pm.cmd,
@@ -443,13 +443,13 @@ test('pnpm 真调用：pnpm check:changed -- --base HEAD --list 透传开头 -- 
     { cwd: repoRoot, encoding: 'utf8', timeout: 120_000 },
   )
   assert.equal(res.status, 0, `stderr: ${res.stderr}`)
-  assert.ok(res.stderr.includes('基线'), `必须报告基线：${res.stderr.slice(0, 400)}`)
-  assert.ok(res.stderr.includes('未执行任何命令'), '--list 绝不执行命令')
+  assert.ok(res.stderr.includes('baseline'), `must report baseline:${res.stderr.slice(0, 400)}`)
+  assert.ok(res.stderr.includes('not execute any command'), '--list never execute command')
 })
 
-test('resolvePackageManagerInvoke：npm_execpath 校验后缀后用当前 Node 运行；异常值回退 PATH pnpm', { timeout: 60_000 }, () => {
-  // 注：真实 Windows .cmd 行为无法在本 Linux 环境验证；本测试锁定平台无关的 argv 构造逻辑，
-  // Windows 下的实际效果由上述 pnpm 真调用 smoke 同路径覆盖（npm_execpath 分支）。
+test('resolvePackageManagerInvoke:npm_execpath validate suffix after use when before Node run; exception value fall back PATH pnpm', { timeout: 60_000 }, () => {
+  // note: real Windows .cmd behavior cannot in this Linux environment verify; this test lock platform without closure argv construct logic,
+  // Windows under actual effect by on state pnpm true invoke smoke same path override (npm_execpath branch).
   assert.deepEqual(resolvePackageManagerInvoke({}), { cmd: 'pnpm', args: [] })
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '/x/pnpm/bin/pnpm.cjs' }), {
     cmd: process.execPath,
@@ -461,20 +461,20 @@ test('resolvePackageManagerInvoke：npm_execpath 校验后缀后用当前 Node �
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '/x/pnpm/bin/pnpm.js' }).args, [
     '/x/pnpm/bin/pnpm.js',
   ])
-  // pnpm 官方 standalone 安装（Windows）：npm_execpath 指向 pnpm.exe 可执行启动器。
-  // .exe 是真实可执行文件（非 .cmd 脚本），无需 shell、无注入面，直接 spawn；否则回退
-  // 裸 'pnpm' 在 Windows 上解析为 pnpm.cmd，spawn EINVAL（产品 bug，非仅测试问题）。
+  // pnpm official standalone install (Windows):npm_execpath points to pnpm.exe can execute start.
+  // .exe is real can execute file (non- .cmd script), no need to shell, without inject side, directly spawn; otherwise fall back
+  // bare 'pnpm' in Windows on parse is pnpm.cmd,spawn EINVAL(produce product bug, non- only test issue).
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: 'C:\\Tools\\pnpm.exe' }), {
     cmd: 'C:\\Tools\\pnpm.exe',
     args: [],
   })
-  // 非脚本后缀（可执行 shim / 恶意值）不盲信，回退；.cmd 是脚本注入面，绝不直接 spawn。
+  // non- script suffix (can execute shim / malicious value) do not blind message, fall back;.cmd is script inject side, never directly spawn.
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '/x/pnpm.cmd' }), { cmd: 'pnpm', args: [] })
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '/x/evil.sh' }), { cmd: 'pnpm', args: [] })
   assert.deepEqual(resolvePackageManagerInvoke({ npm_execpath: '' }), { cmd: 'pnpm', args: [] })
 })
 
-test('runManagedCommand：失败退出码原样透传；命令不存在报 127', { timeout: 60_000 }, async () => {
+test('runManagedCommand: failed exit code original pass-through; command missing report 127', { timeout: 60_000 }, async () => {
   const code = await runManagedCommand(
     { cmd: process.execPath, args: ['-e', 'process.exit(3)'], label: 't-exit-3' },
     { cwd: repoRoot },
@@ -487,7 +487,7 @@ test('runManagedCommand：失败退出码原样透传；命令不存在报 127',
   assert.equal(missing, 127)
 })
 
-/** 进程存活判定：ESRCH 即止；Linux 下僵尸（Z 状态）视为已终止，不算存活孤儿。 */
+/** process store decide:ESRCH i.e. stop;Linux under zombie (Z state) treated as already terminate, do not compute store orphan child. */
 function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
@@ -507,9 +507,9 @@ function pidAlive(pid: number): boolean {
 }
 
 /**
- * 孙进程安装空 SIGTERM/SIGINT handler（什么都不做）并写 PID marker，验证包装器：
- * leader 退出后仍继续 owned 组存活性轮询 → 宽限后 SIGKILL 升级 → 最终整组消失、
- * 按信号码退出、重复信号幂等。注入短 timings 让升级在百毫秒级发生。
+ * descendant process install empty SIGTERM/SIGINT handler(what all does not) and write PID marker, verify wrap:
+ * leader exit after still continue owned group store polling → wide limit after SIGKILL upgrade → eventually whole group disappear,
+ * by signal code exit, duplicate signal idempotent. inject short timings let upgrade in hundred milli second level occur.
  */
 async function runSignalTreeTest(signal: 'SIGTERM' | 'SIGINT', expectedCode: number): Promise<void> {
   const dir = mkdtempSync(path.join(tmpdir(), 'helm-orphan-'))
@@ -548,20 +548,20 @@ process.exit(code)
   while (!existsSync(marker) && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50))
   }
-  assert.ok(existsSync(marker), '孙进程 PID marker 未出现')
+  assert.ok(existsSync(marker), 'descendant process PID marker not appear')
   const grandchildPid = Number(readFileSync(marker, 'utf8'))
   assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0)
 
   wrapper.kill(signal)
-  wrapper.kill(signal) // 重复信号：幂等，不得重复建定时器或重复日志
+  wrapper.kill(signal) // duplicate signal: idempotent, must not duplicate create timer or duplicate log
   const wrapperExit = await new Promise<number | null>((resolve) => {
     wrapper.on('exit', (c, s) => resolve(c ?? (s === signal ? expectedCode : -1)))
   })
-  assert.equal(wrapperExit, expectedCode, `被 ${signal} 终止必须按 128+signal 退出；stderr: ${stderr}`)
-  const signalLogs = stderr.split(`收到 ${signal}`).length - 1
-  assert.equal(signalLogs, 1, `重复信号只允许一条终止日志；stderr: ${stderr}`)
+  assert.equal(wrapperExit, expectedCode, `by ${signal} terminate must by 128+signal exit;stderr: ${stderr}`)
+  const signalLogs = stderr.split(`receives ${signal}`).length - 1
+  assert.equal(signalLogs, 1, `duplicate signal only allows a terminate log;stderr: ${stderr}`)
 
-  // 忽略信号的孙进程最终必须被 SIGKILL 升级收割：不留任何存活孤儿。
+  // ignore signal descendant process eventually must by SIGKILL upgrade cut: do not any store orphan child.
   const gone = await new Promise<boolean>((resolve) => {
     const start = Date.now()
     const poll = () => {
@@ -571,25 +571,25 @@ process.exit(code)
     }
     poll()
   })
-  assert.ok(gone, `忽略 ${signal} 的孙进程必须被整组收割，不留孤儿`)
+  assert.ok(gone, `ignore ${signal} descendant process must by whole group cut, do not orphan child`)
   rmSync(dir, { recursive: true, force: true })
 }
 
-describe('进程纪律与看门狗并发收割', { concurrency: true }, () => {
-  test('进程纪律：孙进程忽略 SIGTERM 时整组仍被收割，退出 143，重复信号幂等', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
+describe('process discipline and watchdog concurrency cut', { concurrency: true }, () => {
+  test('process discipline: descendant process ignore SIGTERM when whole group still by cut, exit 143, duplicate signal idempotent', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX process group signal semantics (128+n exit code / kill(-pid));Windows away taskkill path, do not fit use' : false }, async () => {
     await runSignalTreeTest('SIGTERM', 143)
   })
 
-  test('进程纪律：孙进程忽略 SIGINT 时同样收割，退出 130', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
+  test('process discipline: descendant process ignore SIGINT when same cut, exit 130', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX process group signal semantics (128+n exit code / kill(-pid));Windows away taskkill path, do not fit use' : false }, async () => {
     await runSignalTreeTest('SIGINT', 130)
   })
 
-  test('回归：runManagedCommand → 本仓 run-tests.mjs → 忽略 TERM 孙进程的真实拓扑无孤儿', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 进程组信号语义（128+n 退出码 / kill(-pid)）；Windows 走 taskkill 路径，不适用' : false }, async () => {
-    // 完整真实链路：外层受管命令 = node scripts/run-tests.mjs <holder>；holder 是一个
-    // 永不结束的 *.test.ts，其内 spawn 忽略 SIGTERM 的孙进程（写 PID marker）。
-    // 取消外层后：run-tests（G1 leader）收到 TERM → 转发其 owned G2 → tsx leader 退出但
-    // G2 孙进程存活 → run-tests 不得因 leader 退出即结算，须等 G2 排空（5s SIGKILL 升级）
-    // 后退 143 → 外层 G1 排空后同样退 143。全部使用生产默认 timings，验证实际拓扑。
+  test('regression:runManagedCommand → this warehouse run-tests.mjs → ignore TERM descendant process real topology without orphan child', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX process group signal semantics (128+n exit code / kill(-pid));Windows away taskkill path, do not fit use' : false }, async () => {
+    // complete real link: outside layer managed command = node scripts/run-tests.mjs <holder>;holder is a
+    // forever do not end *.test.ts, its inside spawn ignore SIGTERM descendant process (write PID marker).
+    // cancel outside layer after:run-tests(G1 leader) receives TERM → forwarding its owned G2 → tsx leader exit but
+    // G2 descendant process store → run-tests must not because leader exit i.e. compute, must etc. G2 arrange empty (5s SIGKILL upgrade)
+    // after retreat 143 → outside layer G1 arrange empty after same retreat 143. all use produce by default timings, verify actual topology.
     const dir = path.join(repoRoot, 'node_modules', '.helm-runtests-regression')
     rmSync(dir, { recursive: true, force: true })
     mkdirSync(dir, { recursive: true })
@@ -613,7 +613,7 @@ test('hold', { timeout: 60_000 }, () => {
 
     const wrapperCode = `
 const m = await import(${JSON.stringify(pathToFileURL(path.join(scriptsDir, 'lib', 'spawn-checked.mjs')).href)})
-// 剥离外层 node:test 注入的递归运行上下文，等价真实开发者 shell 环境。
+// strip outside layer node:test inject recursion run context, etc. price real developer shell environment.
 const env = { ...process.env }
 delete env.NODE_TEST_CONTEXT
 const code = await m.runManagedCommand(
@@ -640,7 +640,7 @@ process.exit(code)
       while (!existsSync(marker) && Date.now() < up) {
         await new Promise((r) => setTimeout(r, 100))
       }
-      assert.ok(existsSync(marker), `孙进程 marker 未出现；stderr: ${stderr}`)
+      assert.ok(existsSync(marker), `descendant process marker not appear;stderr: ${stderr}`)
       const grandchildPid = Number(readFileSync(marker, 'utf8'))
       assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0)
 
@@ -651,11 +651,11 @@ process.exit(code)
       assert.equal(
         wrapperExit,
         143,
-        `外层应等 G1（含 run-tests 排空 G2）后才按 143 退出；stderr: ${stderr}`,
+        `outside layer should etc. G1(contains run-tests arrange empty G2) after only then by 143 exit;stderr: ${stderr}`,
       )
-      assert.ok(stderr.includes('owned 测试进程组已排空'), `run-tests 应等待其 G2 排空；stderr: ${stderr}`)
+      assert.ok(stderr.includes('owned test process group already arrange empty'), `run-tests should wait for its G2 arrange empty;stderr: ${stderr}`)
 
-      // 忽略 TERM 的孙进程最终必须被 run-tests 的 SIGKILL 升级收割（Linux Z 状态视为已终止）。
+      // ignore TERM descendant process eventually must by run-tests  SIGKILL upgrade cut (Linux Z state treated as already terminate).
       const gone = await new Promise<boolean>((resolve) => {
         const start = Date.now()
         const poll = () => {
@@ -665,13 +665,13 @@ process.exit(code)
         }
         poll()
       })
-      assert.ok(gone, `忽略 TERM 的孙进程必须被真实拓扑整组收割，不留孤儿`)
+      assert.ok(gone, `ignore TERM descendant process must by real topology whole group cut, do not orphan child`)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test('进程纪律：run-tests.mjs 被 SIGKILL 强杀时父死看门狗自动收割 detached 测试进程组', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 父死看门狗与进程组信号语义；Windows 不适用' : false }, async () => {
+  test('process discipline:run-tests.mjs by SIGKILL strong kill when parent die watchdog automatically cut detached test process group', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX parent die watchdog and process group signal semantics;Windows do not fit use' : false }, async () => {
     const dir = path.join(repoRoot, 'node_modules', '.helm-runtests-sigkill')
     rmSync(dir, { recursive: true, force: true })
     mkdirSync(dir, { recursive: true })
@@ -710,10 +710,10 @@ test('hold-sigkill', { timeout: 60_000 }, () => {
       while (!existsSync(marker) && Date.now() < up) {
         await new Promise((r) => setTimeout(r, 100))
       }
-      assert.ok(existsSync(marker), `孙进程 PID marker 未出现；stderr: ${stderr}`)
+      assert.ok(existsSync(marker), `descendant process PID marker not appear;stderr: ${stderr}`)
       const grandchildPid = Number(readFileSync(marker, 'utf8'))
       assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0)
-      assert.ok(pidAlive(grandchildPid), '强杀 run-tests 前孙进程必须存活')
+      assert.ok(pidAlive(grandchildPid), 'strong kill run-tests before descendant process must store')
 
       runner.kill('SIGKILL')
       const exitSignal = await new Promise<string | null>((resolve) => {
@@ -721,7 +721,7 @@ test('hold-sigkill', { timeout: 60_000 }, () => {
       })
       assert.equal(exitSignal, 'SIGKILL')
 
-      // 父进程暴毙后，detached 看门狗应在 1s SIGKILL 升级内收割整棵 detached 测试进程组
+      // parent process expose kill after,detached watchdog should in 1s SIGKILL upgrade inside cut the whole detached test process group
       const gone = await new Promise<boolean>((resolve) => {
         const start = Date.now()
         const poll = () => {
@@ -731,17 +731,17 @@ test('hold-sigkill', { timeout: 60_000 }, () => {
         }
         poll()
       })
-      assert.ok(gone, 'run-tests.mjs 被 SIGKILL 后父死看门狗必须收割其 detached 测试进程组，不留孤儿')
+      assert.ok(gone, 'run-tests.mjs by SIGKILL after parent die watchdog must cut its detached test process group, do not orphan child')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 })
 
-// ---------------------------------------------------------------- unsafe-dom-assert / safe-test-assert / SIGKILL 看门狗
+// ---------------------------------------------------------------- unsafe-dom-assert / safe-test-assert / SIGKILL watchdog
 
-test('hygiene：unsafe-dom-assert 精确命中 DOM 节点断言并放行文本/普通 body/ok/notEqual null', { timeout: 60_000 }, () => {
-  // 正例（违规）：querySelector / getElementById / 局部变量 / document.activeElement 两侧 / document.body / 具名导入
+test('hygiene:unsafe-dom-assert precise hit DOM node assertion and let through text/ordinary body/ok/notEqual null', { timeout: 60_000 }, () => {
+  // correct example (violate rule):querySelector / getElementById / local variable / document.activeElement two side / document.body / tool name import
   assert.deepEqual(
     rulesOf(`import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -763,7 +763,7 @@ test('bad dom', { timeout: 60_000 }, () => {
     ],
   )
 
-  // 反例（干净）：textContent / innerHTML / getAttribute / length / req.body / hit.body / assert.ok / assert.notEqual(el, null)
+  // reverse example (clean):textContent / innerHTML / getAttribute / length / req.body / hit.body / assert.ok / assert.notEqual(el, null)
   assert.deepEqual(
     rulesOf(`import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -784,12 +784,12 @@ test('clean dom', { timeout: 60_000 }, () => {
   )
 })
 
-test('safe-test-assert：循环 __reactFiber$ 模拟 DOM 节点 assert.equal(el, null) 与 assert.deepEqual([el], []) 在 <50ms 内抛摘要化 AssertionError', { timeout: 60_000 }, async () => {
+test('safe-test-assert: loop __reactFiber$ simulated DOM node assert.equal(el, null) and assert.deepEqual([el], []) in <50ms inside throw summary AssertionError', { timeout: 60_000 }, async () => {
   const preloadUrl = pathToFileURL(path.join(scriptsDir, 'lib', 'safe-test-assert.mjs')).href
   await import(preloadUrl)
   const { equal, deepEqual } = await import('node:assert/strict')
 
-  // 构造带深度循环 React Fiber 引用的模拟 DOM 元素
+  // construct carries deep loop React Fiber reference simulated DOM element
   const fiber: Record<string, unknown> = { memoizedProps: {}, return: null, stateNode: null }
   fiber.child = fiber
   fiber.return = fiber
@@ -811,7 +811,7 @@ test('safe-test-assert：循环 __reactFiber$ 模拟 DOM 节点 assert.equal(el,
     () => assert.equal(el, null),
     (err: unknown) => {
       assert.ok(err instanceof assert.AssertionError)
-      assert.ok(err.message.includes('[DOM <div#card.box.active>]'), `未包含紧凑摘要: ${err.message}`)
+      assert.ok(err.message.includes('[DOM <div#card.box.active>]'), `not contains compact summary: ${err.message}`)
       return true
     },
   )
@@ -824,7 +824,7 @@ test('safe-test-assert：循环 __reactFiber$ 模拟 DOM 节点 assert.equal(el,
     (err: unknown) => {
       assert.ok(err instanceof assert.AssertionError)
       assert.deepEqual(err.actual, ['[DOM <div#card.box.active>]'])
-      assert.ok(err.message.includes('[DOM <div#card.box.active>]'), `数组元素未包含紧凑摘要: ${err.message}`)
+      assert.ok(err.message.includes('[DOM <div#card.box.active>]'), `array element not contains compact summary: ${err.message}`)
       return true
     },
   )
@@ -835,9 +835,9 @@ test('safe-test-assert：循环 __reactFiber$ 模拟 DOM 节点 assert.equal(el,
       err.message.includes('[DOM <div#card.box.active>]'),
   )
   const elapsedMs = performance.now() - t0
-  assert.ok(elapsedMs < 50, `危险 DOM 断言耗时 ${elapsedMs.toFixed(1)}ms 超过 50ms 阈值`)
+  assert.ok(elapsedMs < 50, `danger DOM assertion time cost ${elapsedMs.toFixed(1)}ms exceeds 50ms threshold`)
 
-  // 正常对象保留原生 diff，不被错误摘要化
+  // normal object keep original generate diff, do not by error summary
   assert.throws(
     () => assert.deepEqual({ alpha: 1 }, { alpha: 2 }),
     (err: unknown) => err instanceof assert.AssertionError && err.message.includes('alpha'),

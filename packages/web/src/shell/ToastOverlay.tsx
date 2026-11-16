@@ -49,7 +49,7 @@ export function ToastOverlay() {
                     store.dismissNotice(n.id)
                   }}
                 >
-                  <span>查看会话 #{n.conversationId}</span>
+                  <span>View conversation #{n.conversationId}</span>
                 </button>
               )}
             </div>

@@ -14,9 +14,9 @@ import {
 } from './plugin-center-model.js'
 
 const PLUGIN_STATUS_TABS: Array<{ key: PluginStatusFilter; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'enabled', label: '已启用' },
-  { key: 'disabled', label: '已停用' },
+  { key: 'all', label: 'All' },
+  { key: 'enabled', label: 'Enabled' },
+  { key: 'disabled', label: 'Disabled' },
 ]
 
 export interface PluginCenterProps {
@@ -115,7 +115,7 @@ export function PluginCenter({
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: '插件已安装，但启用失败',
+        title: 'Plugin installed, but enable failed',
         body: `${enableError.code}: ${enableError.message}`,
       })
     }
@@ -140,26 +140,26 @@ export function PluginCenter({
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: '插件已启用',
-          body: `${plugin.name || plugin.id} 已成功启用`,
+          title: 'Plugin enabled',
+          body: `${plugin.name || plugin.id} enabled successfully`,
         })
       } else {
         await pluginsApi.disable(plugin.id, options)
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: '插件已停用',
-          body: `${plugin.name || plugin.id} 已成功停用`,
+          title: 'Plugin disabled',
+          body: `${plugin.name || plugin.id} disabled successfully`,
         })
       }
     } catch (err) {
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: nextEnabled ? '启用插件失败' : '停用插件失败',
+        title: nextEnabled ? 'Failed to enable plugin' : 'Failed to disable plugin',
         body:
           err instanceof ApiClientError && err.status === 409
-            ? `操作失败：插件存在在途任务（${err.code}）`
+            ? `Operation failed: plugin has live tasks (${err.code})`
             : (err instanceof Error ? err.message : String(err)),
       })
       throw err
@@ -182,12 +182,12 @@ export function PluginCenter({
 
   return (
     <div className={`plugin-center${isSplit ? ' is-split' : ''}`} data-view="plugin-center">
-      {/* 顶栏：标题与操作 */}
+      {/* Top bar: title and actions */}
       <div className="primary-center-topbar pane-topbar">
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
             <HelmIcon name="puzzle" size={14} />
-            <span>扩展插件中心</span>
+            <span>Plugin Center</span>
           </div>
         </div>
 
@@ -195,12 +195,12 @@ export function PluginCenter({
           <button
             type="button"
             className="btn btn-sm"
-            title="从 npm、Git 或本地路径安装外部插件"
-            aria-label="安装插件"
+            title="Install external plugins from npm, Git or a local path"
+            aria-label="Install plugin"
             onClick={() => setInstallOpen(true)}
           >
             <HelmIcon name="download" size={12} />
-            <span className="pane-action-label">安装插件</span>
+            <span className="pane-action-label">Install plugin</span>
           </button>
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
@@ -213,23 +213,23 @@ export function PluginCenter({
         </div>
       </div>
 
-      {/* 检索工具栏 */}
+      {/* Search toolbar */}
       <div className="plugin-center-toolbar">
         <div className="plugin-search-box">
           <HelmIcon name="search" size={14} />
           <input
             type="text"
-            placeholder="搜索插件名称、ID、Tool 或 Action…"
+            placeholder="Search plugin name, ID, tool or action…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="搜索插件"
+            aria-label="Search plugins"
           />
           {query && (
             <button
               type="button"
               className="btn btn-ghost btn-sm plugin-search-clear"
-              title="清空搜索"
-              aria-label="清空搜索"
+              title="Clear search"
+              aria-label="Clear search"
               onClick={() => setQuery('')}
             >
               <HelmIcon name="x" size={12} />
@@ -240,7 +240,7 @@ export function PluginCenter({
         <div
           className="primary-category-pills"
           role="tablist"
-          aria-label="插件状态筛选"
+          aria-label="Filter by plugin status"
         >
           {PLUGIN_STATUS_TABS.map((tab) => {
             const count =
@@ -267,7 +267,7 @@ export function PluginCenter({
         </div>
       </div>
 
-      {/* 主视口：自适应响应式卡片网格或空状态 */}
+      {/* Main viewport: responsive card grid or empty state */}
       <div className="plugin-center-content">
         {filteredPlugins.length > 0 ? (
           <div className="plugin-center-grid">
@@ -287,9 +287,9 @@ export function PluginCenter({
             <div className="plugin-center-empty-icon">
               <HelmIcon name="search" size={28} />
             </div>
-            <div className="plugin-center-empty-text">未找到匹配的插件</div>
+            <div className="plugin-center-empty-text">No matching plugins</div>
             <div className="plugin-center-empty-hint text-subtle">
-              请尝试调整搜索关键字或切换启用状态筛选。
+              Try adjusting the search keywords or switching the status filter.
             </div>
             {(query || statusFilter !== 'all') && (
               <button
@@ -301,14 +301,14 @@ export function PluginCenter({
                 }}
               >
                 <HelmIcon name="rotate-ccw" size={12} />
-                <span>重置搜索条件</span>
+                <span>Reset search</span>
               </button>
             )}
           </div>
         )}
       </div>
 
-      {/* 右侧滑出式详情与配置抽屉 */}
+      {/* Right slide-over detail and configuration drawer */}
       <PluginDetailDrawer
         plugin={selectedPlugin}
         open={isDrawerOpen}
@@ -324,7 +324,7 @@ export function PluginCenter({
         inline={inlineDrawer}
       />
 
-      {/* 安装插件轻量模态：npm / git / 本地路径，成功后导航至新插件详情抽屉 */}
+      {/* Lightweight install modal: npm / git / local path; navigates to the new plugin drawer on success */}
       <PluginInstallModal
         open={installOpen}
         onClose={() => setInstallOpen(false)}

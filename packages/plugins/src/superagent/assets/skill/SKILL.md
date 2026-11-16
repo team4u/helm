@@ -1,13 +1,13 @@
 ---
 name: watchdog-playbooks
-description: 看门狗排障手册索引（references/ 内按需加载具体场景）
+description: Watchdog troubleshooting playbook index (load specific scenarios from references/ on demand)
 managedByPlugin: {{MANAGED_BY}}
 ---
 
-# Watchdog 排障手册
+# Watchdog Troubleshooting Playbooks
 
-按异常场景加载对应参考文件：
+Load the matching reference file per anomaly scenario:
 
-- `references/herdr-stalled.md`：Herdr 终端窗格停滞处置
-- `references/ci-failure.md`：CI 失败处置
-- `references/code-hang-loop.md`：代码死循环与测试卡死处置
+- `references/herdr-stalled.md`: handling stalled Herdr terminal panes
+- `references/ci-failure.md`: handling CI failures
+- `references/code-hang-loop.md`: handling code infinite loops and stuck tests

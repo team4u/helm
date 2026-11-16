@@ -1,5 +1,5 @@
 /**
- * 停用前的持久资源占用探测：服务自声明 + 依赖者占用 + Profile/会话引用。
+ * deactivate before durable asset occupy probe: service self declaration + dependency occupy + Profile/conversation reference.
  */
 import { HelmError } from '@helm/protocol';
 import { collectServiceInUse } from './service-coordinator.js';
@@ -27,15 +27,15 @@ function appendDependentUsages(
     additions.push({
       kind: 'plugin_dependency',
       id: dependent.definition.id,
-      label: `插件 ${dependent.definition.id} 依赖 ${pluginId}（${dependent.enabled ? '当前已启用' : '正在启用'}）`,
+      label: `plugin ${dependent.definition.id} dependency ${pluginId}(${dependent.enabled ? 'when before enabled' : 'is now enable'})`,
     });
   }
   if (additions.length > 0) usages.unshift(...additions);
 }
 
 /**
- * 聚合全部持久资源占用；轻量测试宿主未实现 profiles.list / listConversations
- * 时（501 unsupported）跳过对应宿主资产探测，真实错误照常上抛。
+ * aggregate all durable asset occupy; light amount test host not implemented profiles.list / listConversations
+ * when (501 unsupported) skip for should host asset probe, real error per common on throw.
  */
 export async function collectPluginInUse(
   pluginId: string,
@@ -67,7 +67,7 @@ export async function collectPluginInUse(
       usages.push({
         kind: 'profile_runtime',
         id: profile.id,
-        label: `角色 "${profile.name || profile.id}" 绑定了外部运行时 ${profile.runtime.kind}`,
+        label: `role "${profile.name || profile.id}" bind set external runtime ${profile.runtime.kind}`,
       });
     }
     if (
@@ -78,7 +78,7 @@ export async function collectPluginInUse(
       usages.push({
         kind: 'profile_model',
         id: profile.id,
-        label: `角色 "${profile.name || profile.id}" 默认模型使用了 ${profile.model}`,
+        label: `role "${profile.name || profile.id}" by default model use ${profile.model}`,
       });
     }
   }
@@ -99,12 +99,12 @@ export async function collectPluginInUse(
         usages.push({
           kind: 'conversation_model',
           id: String(conv.id),
-          label: `会话 #${conv.id} 正在使用模型 ${conv.model}`,
+          label: `conversation #${conv.id} is now use model ${conv.model}`,
         });
       }
     }
   }
-  // 异步引用探测期间可能有并发 enable 提交，结束前收口复查依赖者防止 TOCTOU
+  // async reference probe during may has concurrency enable commit, end before consolidate re- inspect dependency guard against TOCTOU
   appendDependentUsages(deps.plugins, pluginId, usages);
   return usages;
 }

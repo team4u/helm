@@ -1,26 +1,26 @@
 /**
- * builtin:apps：应用中心与全栈应用工坊（默认启用、非 locked 可停用）。
+ * builtin:apps: the app center and full-stack app workshop (enabled by default, non-locked and disableable).
  *
- * 职责（机制与策略分离：内核提供 PluginHost 受管包机制，本插件承载产品层
- * 应用目录与生命周期编排）：
- * - 公开持久文档 catalog（AppsCatalogDoc）：应用级产品元数据（icon/category/
- *   pinned/workspaceDir/originConversationId/时间戳），PluginSummary 不承载；
- * - 5 个 ctx.action：validate / publish / list / update_meta / remove，自动映射
- *   `helm apps …` CLI、HTTP、Agent Tool、Workflow 与 Web 五端；
- * - 左栏「应用中心」入口 + 全屏 screen `center`（client 组件由宿主端口分支
- *   提供，本文件只声明注册结构，client 占位模块保编译）；
- * - 受管技能 app-builder（SKILL.md + fullstack-template references），经
- *   ctx.host.skills.ensureSkill 随插件启停进入/离开技能目录。
+ * Responsibilities (mechanism vs policy: the kernel provides the PluginHost managed-package mechanism;
+ * this plugin carries the product-layer app catalog and lifecycle orchestration):
+ * - The public persistent doc catalog (AppsCatalogDoc): app-level product metadata (icon/category/
+ *   pinned/workspaceDir/originConversationId/timestamps) that PluginSummary does not carry;
+ * - 5 ctx.actions: validate / publish / list / update_meta / remove, auto-mapped to the `helm
+ *   apps ...` CLI, HTTP, Agent Tool, Workflow, and Web -- five ends;
+ * - The left-sidebar "App Center" entry + the fullscreen screen `center` (client components come
+ *   from the host-port branch; this file only declares the registration structure, with a placeholder client module kept for compilation);
+ * - The managed skill app-builder (SKILL.md + fullstack-template references), entering/leaving the
+ *   skill catalog with the plugin via ctx.host.skills.ensureSkill.
  *
- * 诚实性纪律：
- * - validate/publish 依赖宿主 plugins.doctor 真实四阶段自检（manifest/backend/
- *   register/client），不维护第二套近似校验；额外强制「至少一个 ctx.ui.screen」
- *   （全栈应用硬性要求，缺失以 missing_app_screen 失败项如实报告）；
- * - 宿主端口（HelmHostApi.plugins）由 protocol-host 分支提供；当前分支以本地
- *   兼容类型 + 缺失显式 501 访问，绝不静默降级或伪造安装成功；
- * - 远端节点会话 + 相对路径显式 400 app_source_must_be_on_hub（PluginHost 与
- *   PackageManager 运行在 Hub 主机，只在 local 节点文件系统上工作）；
- * - 停用本插件不影响已发布应用（它们是独立受管外部插件，生命周期归 PluginHost）。
+ * Honesty discipline:
+ * - validate/publish relies on the host plugins.doctor's real four-phase self-check (manifest/backend/
+ *   register/client), maintaining no second approximate validation; additionally enforcing "at least one
+ *   ctx.ui.screen" (a hard requirement of full-stack apps; a miss is reported honestly as a missing_app_screen failure item);
+ * - The host port (HelmHostApi.plugins) comes from the protocol-host branch; on this branch it is
+ *   accessed via local compatibility types + an explicit 501 when missing -- never silently degrading or faking install success;
+ * - Remote-node conversations + relative paths explicitly fail 400 app_source_must_be_on_hub (PluginHost
+ *   and PackageManager run on the Hub host and only work on the local node's filesystem);
+ * - Disabling this plugin does not affect published apps (they are independent managed external plugins whose lifecycle belongs to PluginHost).
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
@@ -39,7 +39,7 @@ export const APPS_SCREEN_ID = 'center'
 export const APP_BUILDER_SKILL_ID = 'app-builder'
 
 // ---------------------------------------------------------------------------
-// catalog 数据契约（公开持久文档）
+// Catalog data contract (public persistent doc)
 // ---------------------------------------------------------------------------
 
 export type AppCategory = 'productivity' | 'devops' | 'data' | 'finance' | 'automation' | 'other'
@@ -54,21 +54,21 @@ export const APP_CATEGORIES: readonly AppCategory[] = [
 ]
 
 export interface AppCatalogEntry {
-  /** 对应受管插件的 pluginId。 */
+  /** The pluginId of the corresponding managed plugin. */
   pluginId: string
-  /** 应用显示图标（lucide 图标名，缺省 'layout-grid'）。 */
+  /** App display icon (a lucide icon name, default 'layout-grid'). */
   icon: string
-  /** 业务分类标签。 */
+  /** Business category tag. */
   category: AppCategory
-  /** 是否在应用中心置顶收藏。 */
+  /** Whether pinned as a favorite in the app center. */
   pinned: boolean
-  /** 开发该应用的工作区源码绝对路径（供后续 AI 修改后直接 publish 热更新）。 */
+  /** Absolute workspace source path where the app was developed (for later AI edits + direct publish hot updates). */
   workspaceDir?: string
-  /** 首次生成或最近迭代该应用的会话 ID（供一键跳回原对话继续迭代）。 */
+  /** The conversation ID that first generated or most recently iterated the app (for one-click jump back to iterate). */
   originConversationId?: number
-  /** 首次发布时间戳（epoch 毫秒）。 */
+  /** First publish timestamp (epoch ms). */
   publishedAt: number
-  /** 最近一次发布/更新时间戳（epoch 毫秒）。 */
+  /** Most recent publish/update timestamp (epoch ms). */
   updatedAt: number
 }
 
@@ -81,7 +81,7 @@ export const EMPTY_APPS_CATALOG: AppsCatalogDoc = { apps: {} }
 const CATALOG_DOC = 'catalog'
 
 // ---------------------------------------------------------------------------
-// 资产目录解析（client / skill）
+// Asset directory resolution (client / skill)
 // ---------------------------------------------------------------------------
 
 function readSkillAssets(): { skillMd: string; references: Record<string, string> } {
@@ -91,7 +91,7 @@ function readSkillAssets(): { skillMd: string; references: Record<string, string
     ? local
     : join(dirname(here), 'src', 'apps', 'skill')
   if (!existsSync(dir)) {
-    throw new HelmError('apps_skill_missing', `内置插件 ${APPS_PLUGIN_ID} 找不到技能资产目录`, 500)
+    throw new HelmError('apps_skill_missing', `built-in plugin ${APPS_PLUGIN_ID} cannot find its skill asset directory`, 500)
   }
   return {
     skillMd: readFileSync(join(dir, 'SKILL.md'), 'utf-8'),
@@ -102,13 +102,13 @@ function readSkillAssets(): { skillMd: string; references: Record<string, string
 }
 
 // ---------------------------------------------------------------------------
-// 路径与输入校验
+// Path and input validation
 // ---------------------------------------------------------------------------
 
 /**
- * 解析 validate/publish 的 dir 输入为 Hub 本机绝对路径。
- * 相对路径按调用会话绑定 cwd（缺省 Hub cwd）解析；会话绑定远端节点时显式
- * 400（PluginHost/PackageManager 只在 Hub 主机文件系统上工作）。
+ * Resolve a validate/publish dir input into a Hub-local absolute path.
+ * Relative paths resolve against the calling conversation's bound cwd (Hub cwd by default); a conversation
+ * bound to a remote node explicitly fails 400 (PluginHost/PackageManager only work on the Hub host's filesystem).
  */
 function resolveAppSourceDir(
   dir: string,
@@ -116,7 +116,7 @@ function resolveAppSourceDir(
   deps: { getConversation(id: number): { nodeId?: string; cwd: string }; hubCwd: string },
 ): string {
   if (dir.includes('\0')) {
-    throw new HelmError('validation_error', '应用目录路径含非法字符', 400, { dir })
+    throw new HelmError('validation_error', 'app directory path contains illegal characters', 400, { dir })
   }
   let baseCwd = deps.hubCwd
   if (!isAbsolute(dir) && context.conversationId !== undefined) {
@@ -125,7 +125,7 @@ function resolveAppSourceDir(
     if (nodeId !== 'local') {
       throw new HelmError(
         'app_source_must_be_on_hub',
-        `会话绑定在远端节点 ${nodeId}，应用源码目录必须在 Hub 本机（local 节点）文件系统上；请提供 Hub 本机绝对路径，或改用 Git/npm 来源`,
+        `The conversation is bound to remote node ${nodeId}; the app source directory must live on the Hub's local (local-node) filesystem; provide a Hub-local absolute path, or use a Git/npm source instead`,
         400,
         { conversationId: context.conversationId, nodeId, dir },
       )
@@ -134,7 +134,7 @@ function resolveAppSourceDir(
   }
   const resolved = resolvePath(baseCwd, dir)
   if (!isAbsolute(resolved)) {
-    throw new HelmError('validation_error', `应用目录无法解析为绝对路径：${dir}`, 400, { dir, resolved })
+    throw new HelmError('validation_error', `app directory cannot be resolved to an absolute path: ${dir}`, 400, { dir, resolved })
   }
   return resolved
 }
@@ -143,7 +143,7 @@ function assertNotSelfTarget(pluginId: string): void {
   if (pluginId === APPS_PLUGIN_ID) {
     throw new HelmError(
       'app_target_is_self',
-      `不允许对 ${APPS_PLUGIN_ID} 自身执行本操作（应用中心自身不是可发布应用）`,
+      `This operation is not allowed on ${APPS_PLUGIN_ID} itself (the app center is not a publishable app)`,
       409,
       { pluginId },
     )
@@ -151,7 +151,7 @@ function assertNotSelfTarget(pluginId: string): void {
   if (pluginId.startsWith('builtin:')) {
     throw new HelmError(
       'app_target_is_builtin',
-      `内置插件 ${pluginId} 不是应用中心管理的全栈应用（仅外部受管插件可操作）`,
+      `built-in plugin ${pluginId} is not a full-stack app managed by the app center (only external managed plugins are operable)`,
       409,
       { pluginId },
     )
@@ -162,7 +162,7 @@ function assertCategory(value: string): AppCategory {
   if (!(APP_CATEGORIES as readonly string[]).includes(value)) {
     throw new HelmError(
       'validation_error',
-      `应用分类非法：${value}（允许 ${APP_CATEGORIES.join(' | ')}）`,
+      `invalid app category: ${value} (allowed: ${APP_CATEGORIES.join(' | ')})`,
       400,
       { category: value, allowed: APP_CATEGORIES },
     )
@@ -171,7 +171,7 @@ function assertCategory(value: string): AppCategory {
 }
 
 // ---------------------------------------------------------------------------
-// validate / publish 共用：doctor + screen 检查
+// Shared by validate / publish: doctor + screen checks
 // ---------------------------------------------------------------------------
 
 interface AppValidateResult {
@@ -180,18 +180,18 @@ interface AppValidateResult {
   dir: string
   checks: PluginDoctorReport['checks']
   screenIds: string[]
-  /** Screen 事实来源：host-doctor（真实临时注册捕获）/ registered（listUi 事实）/ deferred（诊断失败时无可用结论）。 */
+  /** Screen fact source: host-doctor (captured by real temporary registration) / registered (listUi fact) / deferred (no conclusion available when diagnostics fail). */
   screenBasis: 'host-doctor' | 'registered' | 'deferred'
   summary?: string
 }
 
 /**
- * 执行 validate：宿主 doctor 真实四阶段 + 全栈应用 Screen 强制检查。
+ * Run validate: the host doctor's real four phases + the mandatory full-stack app Screen check.
  *
- * Screen 事实来自真实声明执行：优先使用 doctor 临时宿主 register 阶段捕获的
- * screens；旧/定制宿主缺少字段时，已注册插件回退到 PluginHost listUi。若
- * doctor 报告成功但两处都没有 Screen，则作为 missing_app_screen 拒绝，绝不把
- * 未经验证的草稿标记为可发布。doctor 失败时保持原诊断，不使用部分注册结果。
+ * Screen facts come from real declaration execution: prefer the screens captured during the doctor's
+ * temporary host register stage; on older/custom hosts lacking the field, fall back to PluginHost
+ * listUi for registered plugins. If the doctor reports success but neither place has a Screen, reject
+ * as missing_app_screen -- never mark an unverified draft publishable. On doctor failure keep the original diagnostics; do not use partial registration results.
  */
 async function validateAppDir(
   port: HelmHostApi['plugins'],
@@ -206,7 +206,7 @@ async function validateAppDir(
     screenIds = report.screens
     screenBasis = 'host-doctor'
   } else if (report.pluginId !== undefined && port.list().some((s) => s.id === report.pluginId)) {
-    // 仅当目标确实已注册（草稿目录 doctor 也会报出 id）才以 listUi 为事实源
+    // Only use listUi as the fact source when the target is really registered (doctor also reports the id for draft directories)
     screenIds = screensOf(port, report.pluginId)
     screenBasis = 'registered'
   }
@@ -214,10 +214,10 @@ async function validateAppDir(
   if (screenIds.length === 0 && (screenBasis !== 'deferred' || report.ok)) {
     checks.push({
       id: 'missing_app_screen',
-      label: '全栈应用 Screen 检查',
+      label: 'Full-stack app Screen check',
       error: {
         code: 'missing_app_screen',
-        message: '应用必须声明至少一个 ctx.ui.screen（全栈应用的前端主视图）',
+        message: 'the app must declare at least one ctx.ui.screen (the frontend main view of a full-stack app)',
         details: { dir, pluginId: report.pluginId, screenBasis },
       },
     })
@@ -234,7 +234,7 @@ async function validateAppDir(
   }
 }
 
-/** 基于宿主 listUi 收集指定插件的 screen id 列表（已注册插件事实）。 */
+/** Collect the given plugin's screen id list from the host listUi (registered-plugin facts). */
 function screensOf(port: HelmHostApi['plugins'], pluginId: string): string[] {
   return port
     .listUi()
@@ -244,19 +244,19 @@ function screensOf(port: HelmHostApi['plugins'], pluginId: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// 插件定义
+// Plugin definition
 // ---------------------------------------------------------------------------
 
 /**
- * @param deps.hubCwd Hub 主机 cwd（相对路径兜底解析基准；缺省 process.cwd()）。
- * 测试可注入；运行时由宿主端口分支接入真实 init.cwd。
+ * @param deps.hubCwd The Hub host cwd (the fallback resolution base for relative paths; default process.cwd()).
+ * Injectable in tests; at runtime the host-port branch supplies the real init.cwd.
  */
 export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefinition {
   const hubCwd = deps.hubCwd ?? process.cwd()
   return {
     id: APPS_PLUGIN_ID,
-    name: '应用中心',
-    description: '全栈微应用目录与生命周期：validate/publish/list/remove 动作、应用中心视图与 app-builder 受管技能。',
+    name: 'App Center',
+    description: 'Full-stack micro-app catalog and lifecycle: validate/publish/list/remove actions, the app center view, and the managed app-builder skill.',
     icon: 'boxes',
     version: '0.1.0',
     locked: false,
@@ -264,13 +264,13 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
     definePlugin(ctx) {
       const catalog = ctx.doc<AppsCatalogDoc>(CATALOG_DOC, EMPTY_APPS_CATALOG, { public: true })
 
-      /** 会话解析依赖（延迟经 ctx.host 读取，保持与宿主端口一致的边界）。 */
+      /** Conversation-resolution dependency (read lazily via ctx.host, keeping the host-port boundary). */
       const getConversation = (id: number) => ctx.host.getConversation(id)
 
       // ---- validate ------------------------------------------------------
       ctx.action<{ dir: string }, AppValidateResult>({
         id: 'validate',
-        description: '对工作区应用目录执行静态预检（doctor 四阶段 + Screen 检查）；相对路径按调用会话 cwd 解析',
+        description: 'Run a static precheck (doctor four phases + Screen check) on a workspace app directory; relative paths resolve against the calling conversation cwd',
         inputSchema: {
           type: 'object',
           properties: { dir: { type: 'string', minLength: 1 } },
@@ -323,7 +323,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
         }
       >({
         id: 'publish',
-        description: '发布（或升级）工作区全栈应用：先 validate，再受管安装或热更新并启用，登记 catalog 元数据',
+        description: 'Publish (or upgrade) a workspace full-stack app: validate first, then managed-install or hot-update and enable, registering catalog metadata',
         inputSchema: {
           type: 'object',
           properties: {
@@ -359,13 +359,13 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
           const resolvedDir = resolveAppSourceDir(input.dir, context, { getConversation, hubCwd })
           const category = input.category !== undefined ? assertCategory(input.category) : undefined
 
-          // 1. 与 validate 相同的预检（未通过显式 422，附完整诊断）
+          // 1. The same precheck as validate (an explicit 422 on failure, with full diagnostics)
           const validation = await validateAppDir(port, resolvedDir)
           if (!validation.ok) {
             const failed = validation.checks.filter((c) => c.error !== undefined)
             throw new HelmError(
               'app_validate_failed',
-              `应用预检未通过（${failed.length} 项失败），已拒绝发布：${failed.map((c) => `${c.label}：${c.error!.message}`).join('；')}`,
+              `App precheck failed (${failed.length} failing items); publishing refused: ${failed.map((c) => `${c.label}: ${c.error!.message}`).join('; ')}`,
               422,
               { dir: resolvedDir, checks: validation.checks },
             )
@@ -374,14 +374,14 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
           if (pluginId === undefined) {
             throw new HelmError(
               'app_validate_failed',
-              `预检通过但未识别出插件 id（内部状态不一致）：${resolvedDir}`,
+              `Precheck passed but no plugin id identified (inconsistent internal state): ${resolvedDir}`,
               500,
               { dir: resolvedDir, checks: validation.checks },
             )
           }
           assertNotSelfTarget(pluginId)
 
-          // 2. 受管安装或热更新
+          // 2. Managed install or hot update
           const existing = port.list().find((s) => s.id === pluginId)
           const managedSource = existing?.managed?.source
           const sameSource =
@@ -394,10 +394,10 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
           if (existing === undefined || !sameSource) {
             const result = await port.install(resolvedDir, { enable: true })
             if (result.enableError !== undefined) {
-              // 安装成功但启用失败：如实报错（安装记录已保留，可重试 enable）
+              // Install succeeded but enable failed: report honestly (the install record is kept; enable can be retried)
               throw new HelmError(
                 'app_enable_failed',
-                `应用 ${pluginId} 已安装但启用失败（安装记录保留，可重试）：${result.enableError.message}`,
+                `App ${pluginId} installed but enabling failed (install record kept; retryable): ${result.enableError.message}`,
                 422,
                 { pluginId, enableError: result.enableError, installId: result.record.id },
               )
@@ -415,12 +415,12 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
             mode = 'updated'
           }
 
-          // 3. screen 复核与 catalog 登记（发布后从宿主 listUi 读取事实）
+          // 3. Screen recheck and catalog registration (facts read from the host listUi after publishing)
           const screenIds = screensOf(port, pluginId)
           if (screenIds.length === 0) {
             throw new HelmError(
               'missing_app_screen',
-              `应用 ${pluginId} 已安装但未发现任何已启用 Screen（应用中心无法打开）；请检查 ctx.ui.screen 声明与插件启用状态`,
+              `App ${pluginId} installed but no enabled Screen found (the app center cannot open it); check the ctx.ui.screen declarations and the plugin enablement state`,
               422,
               { pluginId },
             )
@@ -470,7 +470,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
         }
       >({
         id: 'list',
-        description: '汇总当前全部全栈应用（宿主插件/UI 清单左连接 catalog 元数据；孤儿 catalog 条目自动忽略）',
+        description: 'Aggregate all current full-stack apps (host plugin/UI list left-joined with catalog metadata; orphan catalog entries ignored automatically)',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: {
           type: 'object',
@@ -508,7 +508,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
           const apps = summaries
             .filter((s) => {
               if (s.id.startsWith('builtin:')) {
-                // 内置插件不混入用户应用列表（含本插件自身的 center screen）
+                // Built-in plugins are not mixed into the user app list (incl. this plugin's own center screen)
                 return false
               }
               const screens = ui
@@ -551,7 +551,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
         { pluginId: string; catalogEntry: AppCatalogEntry }
       >({
         id: 'update_meta',
-        description: '更新应用的 catalog 元数据（置顶/分类/图标/源码目录/来源会话）；不改插件本体',
+        description: 'Update an app catalog metadata (pinned/category/icon/source dir/origin conversation); does not touch the plugin itself',
         inputSchema: {
           type: 'object',
           properties: {
@@ -582,11 +582,11 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
           assertNotSelfTarget(input.pluginId)
           const category = input.category !== undefined ? assertCategory(input.category) : undefined
           const existing = catalog.get().apps[input.pluginId]
-          // 目标必须已存在于 catalog（未发布的应用没有元数据可改）
+          // The target must already exist in the catalog (unpublished apps have no metadata to change)
           if (existing === undefined) {
             throw new HelmError(
               'app_not_published',
-              `应用 ${input.pluginId} 未在应用中心登记（先 publish 再修改元数据）`,
+              `App ${input.pluginId} is not registered in the app center (publish first, then edit metadata)`,
               404,
               { pluginId: input.pluginId },
             )
@@ -611,7 +611,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
       // ---- remove --------------------------------------------------------
       ctx.action<{ pluginId: string }, { pluginId: string; installPath: string; wasEnabled: boolean }>({
         id: 'remove',
-        description: '卸载受管安装的全栈应用并清理 catalog 登记（本地源码目录不受影响）',
+        description: 'Uninstall a managed-installed full-stack app and clean the catalog registration (the local source directory is unaffected)',
         inputSchema: {
           type: 'object',
           properties: { pluginId: { type: 'string', minLength: 1 } },
@@ -635,9 +635,9 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
         async handler(input) {
           assertNotSelfTarget(input.pluginId)
           const port = ctx.host.plugins
-          // 卸载（宿主端口对无受管记录的插件显式 404；不静默跳过）
+          // Uninstall (the host port explicitly 404s plugins without a managed record; no silent skip)
           const result = await port.remove(input.pluginId)
-          // catalog 清理（未登记条目也幂等清理，保持一致）
+          // Catalog cleanup (unregistered entries are also cleaned idempotently, staying consistent)
           catalog.update((current) => {
             if (current.apps[input.pluginId] === undefined) return current
             const apps = { ...current.apps }
@@ -653,23 +653,23 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
         },
       })
 
-      // ---- UI：应用中心入口与全屏视图 ------------------------------------
+      // ---- UI: app center entry and fullscreen view ------------------------------------
 
       ctx.ui.sidebarItem({
         id: 'app-center',
-        label: '应用中心',
+        label: 'App Center',
         icon: 'layout-grid',
         target: `screen:${APPS_PLUGIN_ID}/${APPS_SCREEN_ID}`,
         order: 15,
       })
       ctx.ui.screen({
         id: APPS_SCREEN_ID,
-        label: '应用中心',
+        label: 'App Center',
         icon: 'layout-grid',
         client: { module: 'index.tsx', export: 'AppCenterScreen' },
       })
 
-      // ---- 受管技能 app-builder -------------------------------------------
+      // ---- Managed skill app-builder -------------------------------------------
 
       ctx.service({
         id: 'app-builder-skill',

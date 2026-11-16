@@ -102,7 +102,7 @@ function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentR
 
   if (failed !== null) {
     return (
-      <span className="attachment-chip" title={`图片加载失败：${failed}`}>
+      <span className="attachment-chip" title={`Image failed to load: ${failed}`}>
         <HelmIcon name="alert-triangle" size={11} />
         {att.name}
       </span>
@@ -120,7 +120,7 @@ function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentR
     <button
       type="button"
       className="attachment-image-thumb"
-      title={`点击放大：${att.name}`}
+      title={`Click to enlarge: ${att.name}`}
       onClick={() =>
         store.setActiveModal({ kind: 'artifact-preview', artifactId: att.id, conversationId })
       }
@@ -148,7 +148,7 @@ function AttachmentChips({
             key={att.id}
             type="button"
             className="attachment-chip"
-            title={`预览 ${att.name}`}
+            title={`Preview ${att.name}`}
             onClick={() =>
               store.setActiveModal({ kind: 'artifact-preview', artifactId: att.id, conversationId })
             }
@@ -168,13 +168,13 @@ function AttachmentChips({
 // ---------------------------------------------------------------------------
 
 const ORIGIN_LABEL: Record<string, string> = {
-  agent: '来自智能体汇报',
-  trigger: '来自触发器',
+  agent: 'From agent report',
+  trigger: 'From trigger',
 }
 
 const QUEUED_MODE_LABEL: Record<'steer' | 'followUp', { icon: string; text: string }> = {
-  steer: { icon: 'corner-down-right', text: '插话引导 · 待当前步骤后注入' },
-  followUp: { icon: 'clock', text: '排队中 · 待当前回合结束后发送' },
+  steer: { icon: 'corner-down-right', text: 'Steer · injected at the next step boundary' },
+  followUp: { icon: 'clock', text: 'Queued · sent after the current turn ends' },
 }
 
 function HumanMessage({
@@ -234,8 +234,8 @@ function HumanMessage({
         store.pushNotice({
           type: 'notification',
           level: 'error',
-          title: '无法编辑该消息',
-          body: `消息锚点无效（entryId=${item.entryId}），已取消编辑。`,
+          title: 'Cannot edit this message',
+          body: `Message anchor invalid (entryId=${item.entryId}); edit cancelled.`,
           conversationId: conversation.id,
         })
         return
@@ -291,7 +291,7 @@ function HumanMessage({
             onClick={() => setLongOpen((current) => !current)}
           >
             <HelmIcon name={longOpen ? 'chevron-up' : 'chevron-down'} size={11} />
-            <span>{longOpen ? '收起' : `展开全文（${item.text.length} 字符）`}</span>
+            <span>{longOpen ? 'Collapse' : `Expand full text (${item.text.length} chars)`}</span>
           </button>
         ) : null}
       </div>
@@ -317,8 +317,8 @@ function HumanMessage({
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              title={item.queuedMode !== undefined ? '撤回排队并编辑' : '编辑并重发'}
-              aria-label={item.queuedMode !== undefined ? '撤回排队并编辑' : '编辑并重发'}
+              title={item.queuedMode !== undefined ? 'Withdraw queue and edit' : 'Edit and resend'}
+              aria-label={item.queuedMode !== undefined ? 'Withdraw queue and edit' : 'Edit and resend'}
               disabled={withdrawing}
               onClick={() => void editRequest()}
             >
@@ -329,7 +329,7 @@ function HumanMessage({
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              title="从此消息分叉新会话"
+              title="Fork a new conversation from this message"
               disabled={forking}
               onClick={() => void forkFromHere()}
             >
@@ -338,8 +338,8 @@ function HumanMessage({
           ) : null}
         </span>
         {hasHumanTime ? (
-          <Tooltip content={`发送于 ${humanFullTime}`}>
-            <span className="msg-time-meta" title={`发送于 ${humanFullTime}`}>{humanTime}</span>
+          <Tooltip content={`Sent at ${humanFullTime}`}>
+            <span className="msg-time-meta" title={`Sent at ${humanFullTime}`}>{humanTime}</span>
           </Tooltip>
         ) : null}
       </div>
@@ -365,7 +365,7 @@ function ContextDivider({ item }: { item: DividerItem }) {
   const [open, setOpen] = useState(false)
   // 可展开文本：reset 的交接摘要与 compaction 的精简摘要（同一展开交互）。
   const expandable = item.divider === 'reset' ? item.handoff : item.summary
-  const expandLabel = item.divider === 'reset' ? '交接摘要' : '精简摘要'
+  const expandLabel = item.divider === 'reset' ? 'Handoff summary' : 'Compaction summary'
   return (
     <div className="context-divider-wrap">
       <div className="context-divider">
@@ -373,12 +373,12 @@ function ContextDivider({ item }: { item: DividerItem }) {
           {item.pending === true ? (
             <>
               <HelmIcon name="loader" size={11} className="spin-slow" />
-              正在精简上下文…
+              Compacting context…
             </>
           ) : (
             <>
               <HelmIcon name={item.divider === 'reset' ? 'rotate-ccw' : 'archive'} size={11} />
-              {item.divider === 'reset' ? '上下文已重置' : '上下文已精简'}
+              {item.divider === 'reset' ? 'Context reset' : 'Context compacted'}
             </>
           )}
         </span>
@@ -390,7 +390,7 @@ function ContextDivider({ item }: { item: DividerItem }) {
           onClick={() => setOpen((v) => !v)}
         >
           <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-          {open ? `收起${expandLabel}` : `展开${expandLabel}`}
+          {open ? `Collapse ${expandLabel}` : `Expand ${expandLabel}`}
         </button>
       ) : null}
       {open && expandable !== undefined ? (
@@ -424,7 +424,7 @@ function PluginCard({ item, conversationId }: { item: PluginCardItem; conversati
         pluginId={item.renderer.pluginId}
         spec={item.renderer.spec}
         conversationId={conversationId}
-        label="时间线卡片"
+        label="Timeline cards"
         slotProps={{ entry: item.entry, conversationId }}
       />
       {entryActions.length > 0 ? (
@@ -446,9 +446,9 @@ function PluginCard({ item, conversationId }: { item: PluginCardItem; conversati
 }
 
 const RESOLVED_ASK_LABEL: Record<string, string> = {
-  answered: '已批准',
-  cancelled: '已取消',
-  superseded: '已由终端处理 (superseded)',
+  answered: 'Approved',
+  cancelled: 'Cancelled',
+  superseded: 'Handled by terminal (superseded)',
 }
 
 function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answered' | 'cancelled' | 'superseded' }) {
@@ -458,7 +458,7 @@ function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answered' | 'c
       <div className="trace-row" role="button" tabIndex={0} onClick={() => setOpen((v) => !v)}>
         <span className="trace-row-left">
           <HelmIcon name="check-circle" size={12} />
-          <span className="trace-tool-name">审批</span>
+          <span className="trace-tool-name">Approval</span>
           <span className="trace-tool-summary">{ask.title}</span>
         </span>
         <span className="trace-row-right">{RESOLVED_ASK_LABEL[status] ?? status}</span>
@@ -525,22 +525,22 @@ function TurnErrorNotice({
   // 绝不误编辑旧消息。
   const editTarget = useMemo(() => lastEditableHumanInput(detailEntries), [detailEntries])
   return (
-    <div className="callout callout--error" role="alert" aria-label="本回合失败">
+    <div className="callout callout--error" role="alert" aria-label="This turn failed">
       <HelmIcon name="alert-triangle" size={12} />
       <span className="callout-text">
-        本回合失败：{conversation.lastError?.trim() || '模型或服务请求未成功，未产生回答。'}
+        This turn failed: {conversation.lastError?.trim() || 'The model or service request failed; no reply was produced.'}
         {editTarget !== undefined ? (
           <>
             {' '}
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              title="编辑并重发最近一条消息"
-              aria-label="编辑并重发最近一条消息"
+              title="Edit and resend the latest message"
+              aria-label="Edit and resend the latest message"
               onClick={() => onRequestEdit(editTarget)}
             >
               <HelmIcon name="edit" size={12} />
-              编辑并重发
+              Edit and resend
             </button>
           </>
         ) : null}
@@ -1121,20 +1121,20 @@ export function ConversationTimeline({
         <div className="timeline-center-slot">
           {hasOlderCursor ? (
             <button type="button" className="btn btn-ghost btn-sm timeline-load-older-btn" disabled={loadingOlder} onClick={loadEarlierEntries}>
-              {loadingOlder ? '正在加载历史…' : '加载更早的消息'}
+              {loadingOlder ? 'Loading history…' : 'Load earlier messages'}
             </button>
           ) : null}
           {historyError ? <p className="callout callout--error" role="alert">{historyError}</p> : null}
           {loading ? (
             <div className="timeline-loading-state">
               <HelmIcon name="loader" size={14} className="spin-slow" />
-              正在加载会话…
+              Loading conversation…
             </div>
           ) : null}
           {showEmptyState ? (
             <div className="timeline-empty-state">
               <HelmIcon name="message-square" size={22} />
-              <span>向助理描述目标，或从左侧选择会话开始</span>
+              <span>Describe your goal to the assistant, or pick a conversation on the left to start</span>
             </div>
           ) : null}
           {startersVisible ? (
@@ -1228,14 +1228,14 @@ export function ConversationTimeline({
         })}
         {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
           <div className="msg-ai-block" role="status" aria-live="polite">
-            <span className="msg-origin-tag msg-live-waiting" aria-label="正在生成">
+            <span className="msg-origin-tag msg-live-waiting" aria-label="Generating">
               <HelmIcon name="loader" size={12.5} className="spin-slow" />
               <span className="msg-live-dots" aria-hidden="true">
                 <span />
                 <span />
                 <span />
               </span>
-              <span className="msg-live-label">生成中</span>
+              <span className="msg-live-label">Generating</span>
             </span>
           </div>
         ) : null}
@@ -1252,8 +1252,8 @@ export function ConversationTimeline({
         <button
           type="button"
           className={`timeline-scroll-bottom-btn${hasUnreadScrollUpdates ? ' has-unread' : ''}`}
-          aria-label="回到底部"
-          title="回到底部"
+          aria-label="Back to bottom"
+          title="Back to bottom"
           onClick={scrollToBottomAndFollow}
         >
           <HelmIcon name="arrow-down" size={16} />

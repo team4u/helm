@@ -879,7 +879,7 @@ test('stop 有界等待：在途请求永不收敛时超时放行并如实记录
     t.mock.timers.reset()
     console.error = originalError
   }
-  assert.ok(errors.some((line) => line.includes('未收敛')), '超时必须如实记录未收敛请求数')
+  assert.ok(errors.some((line) => line.includes('unconverged')), '超时必须如实记录未收敛请求数')
   rmSync(h.dataDir, { recursive: true, force: true })
 })
 

@@ -160,7 +160,7 @@ test('节点插槽挂载边界：接入新节点模式与未选节点不渲染�
 
   // 未选节点（node=null）：空态提示，不挂插件插槽
   const emptyHtml = renderDrawer(store, { node: null })
-  assert.match(emptyHtml, /未选择节点/)
+  assert.match(emptyHtml, /No node selected/)
   assert.doesNotMatch(emptyHtml, /data-probe="NodeOpsSection"/, '未选节点不挂载节点插槽')
 })
 
@@ -201,7 +201,7 @@ test('节点插槽插件停用：贡献从 groupedUi 移除后即时消失', { t
   // 插件停用：ui 贡献清空（与宿主 SSE 快照行为一致），贡献即时消失
   const disabled = renderDrawer(storeWith([]), { node: remoteNode() })
   assert.doesNotMatch(disabled, /data-probe="NodeOpsSection"/, '停用后贡献移除')
-  assert.match(disabled, /系统概览/, '抽屉主体不受影响')
+  assert.match(disabled, /System overview/, '抽屉主体不受影响')
 })
 
 // ---------------------------------------------------------------------------
@@ -223,7 +223,7 @@ test('节点插槽切换节点：Props 不残留上一节点数据', { timeout: 
 
   // 切换到本机节点：新渲染只含新节点 ID，不残留 worker-gpu-1
   const second = renderDrawer(store, {
-    node: remoteNode({ id: 'local', kind: 'local', label: '本机内核', online: true }),
+    node: remoteNode({ id: 'local', kind: 'local', label: 'Local kernel', online: true }),
   })
   assert.match(second, /&quot;nodeId&quot;:&quot;local&quot;/, '切换后传递新节点 ID')
   assert.match(second, /&quot;isLocal&quot;:true/, '切换后 isLocal=true')
@@ -245,7 +245,7 @@ test('节点插槽离线节点：如实传递 isOnline=false', { timeout: 60_000
   })
   assert.match(html, /&quot;nodeId&quot;:&quot;worker-offline&quot;/)
   assert.match(html, /&quot;isOnline&quot;:false/, '离线节点如实传 false，不美化状态')
-  assert.match(html, /离线/, '头部徽章同为离线')
+  assert.match(html, /Offline/, '头部徽章同为离线')
 })
 
 // ---------------------------------------------------------------------------

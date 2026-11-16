@@ -1,20 +1,20 @@
 /**
- * 原生 subagent cwd 收口（runNativeSpawn）与 resolveSpawnTarget（workflow
- * worktree 源目录的内核权威解析）测试：
- * - 新建 spawn：cwd 链（request > profile > parent > Hub 缺省）解析结果在
- *   SDK createConversation / 子会话镜像 / onResolved / gate 之前按目标节点
- *   平台统一收口；
- * - 远端节点平台只信 TrustedNodePlatformSource（NodeRegistry 注册事实注入）：
- *   win32 目标上 WSL / 盘符根视图确定性转换；坏 POSIX cwd 显式失败且不创建
- *   子会话（不落镜像）；平台未知透传不改写；
- * - resume：缺省严格沿用原子会话 cwd（语义不变）；显式 cwd 经
- *   updateConversation 端口（生产为 ConversationService 同一收口链）应用；
- * - resolveSpawnTarget：sourceCwd 按最终节点平台收口（builtin:workflow
- *   isolation 的 worktree 源目录入口）；parentCwd 原样返回（父会话镜像事实）。
+ * original generate subagent cwd consolidate (runNativeSpawn) and resolveSpawnTarget(workflow
+ * worktree source directory kernel right threat parse) test:
+ * - creates new spawn:cwd chain (request > profile > parent > Hub default) parse result in
+ *   SDK createConversation / sub-conversation mirror / onResolved / gate before by target node
+ *   platform unify consolidate;
+ * - remote node platform only message TrustedNodePlatformSource(NodeRegistry register fact inject):
+ *   win32 target on WSL / symbol view determinism convert; broken POSIX cwd explicit failed and do not create
+ *   sub-conversation (do not mirror); platform unknown pass-through do not change write;
+ * - resume: default strictly along use atomic conversation cwd(semantics do not change); explicit cwd via
+ *   updateConversation port (produce is ConversationService the same consolidate chain) should use;
+ * - resolveSpawnTarget:sourceCwd by eventually node platform consolidate (builtin:workflow
+ *   isolation  worktree source directory entry);parentCwd original return (parent conversation mirror fact).
  *
- * 真实 SDK Harness（MemoryStorage + faux provider）；宿主端口用进程内 Map
- * 镜像（与 spawn-ask 同构）。envFabric 用结构性 stub 只提供 registry 平台
- * 事实（target-cwd 的 TrustedPlatformHost 结构），绝不 mock 规范化本身。
+ * real SDK Harness(MemoryStorage + faux provider); host port use process inside Map
+ * mirror (and spawn-ask same construct).envFabric use structure stub only provide registry platform
+ * fact (target-cwd  TrustedPlatformHost structure), never mock specification itself.
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
@@ -41,7 +41,7 @@ interface SpawnEnv {
   close(): Promise<void>
 }
 
-/** 结构性 envFabric stub：远端取 registry，local 可注入 Hub 平台事实。 */
+/** structure envFabric stub: remote take registry,local can inject Hub platform fact. */
 function platformHostOf(platforms: Record<string, string>, hubPlatform?: string): TrustedPlatformHost {
   return {
     registry: {
@@ -80,7 +80,7 @@ async function openSpawnEnv(options: {
     stashEnvFor: (id) => stash.envFor(id),
     redact: (t) => stash.redact(t),
     artifacts: new ArtifactService(dataDir, { get: () => undefined, list: () => [], put: () => {}, deleteByConversation: () => {} } as never),
-    // 结构性平台事实 stub（远端 registry；local 由显式 Hub 平台注入）。
+    // structure platform fact stub(remote registry;local by explicit Hub platform inject).
     envFabric: platformHostOf(options.platforms ?? {}, options.hubPlatform) as unknown as EnvFabric,
     harness,
     getLastAssistantText: (id) => lastTexts.get(id),
@@ -126,7 +126,7 @@ async function openSpawnEnv(options: {
       if (!m) return undefined
       return {
         id: childId,
-        title: `子代理 ${childId}`,
+        title: `subagent ${childId}`,
         profileId: m.profileId,
         tags: [],
         cwd: m.cwd,
@@ -146,11 +146,11 @@ async function openSpawnEnv(options: {
     updateConversation: async (childId, patch) => {
       updates.push({ id: childId, patch: patch as Record<string, unknown> })
       const m = mirrors.get(childId)
-      if (!m) throw new HelmError('not_found', `会话不存在：${childId}`, 404)
+      if (!m) throw new HelmError('not_found', `conversation missing:${childId}`, 404)
       if (patch.cwd !== undefined) m.cwd = patch.cwd
       if (patch.profileId !== undefined) m.profileId = patch.profileId
       const conv = await harness.conversation(childId as never, BACKGROUND_CONTEXT)
-      if (!conv) throw new HelmError('not_found', `子会话不存在：${childId}`, 404)
+      if (!conv) throw new HelmError('not_found', `sub-conversation missing:${childId}`, 404)
       if (patch.cwd !== undefined) await conv.configure({ cwd: patch.cwd } as never, BACKGROUND_CONTEXT)
       return deps.getConversation(childId)!
     },
@@ -173,35 +173,35 @@ async function openSpawnEnv(options: {
   }
 }
 
-test('新建 spawn：cwd 词法归一进 SDK 创建、镜像与 onResolved（local 平台）', { timeout: 60_000 }, async () => {
+test('creates new spawn:cwd term method archive one enter SDK create, mirror and onResolved(local platform)', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv({ hubPlatform: 'linux' })
   try {
     env.faux.setResponses([fauxAssistantMessage('ok')])
     let resolved: { effectiveCwd?: string } | undefined
     await runNativeSpawn(env.deps, {
       parentConversationId: 1,
-      prompt: '干活',
+      prompt: 'dry',
       cwd: '/tmp/helm/wt/a/./b/../c',
       onResolved: (info: unknown) => {
         resolved = info as { effectiveCwd?: string }
       },
     } as never)
-    assert.equal(resolved?.effectiveCwd, '/tmp/helm/wt/a/c', '注入 POSIX Hub 平台后 onResolved 回传规范化 cwd')
+    assert.equal(resolved?.effectiveCwd, '/tmp/helm/wt/a/c', 'inject POSIX Hub platform after onResolved back pass specification cwd')
     const mirror = [...env.mirrors.values()].at(-1)!
-    assert.equal(mirror.cwd, '/tmp/helm/wt/a/c', '子会话镜像登记规范化 cwd')
+    assert.equal(mirror.cwd, '/tmp/helm/wt/a/c', 'sub-conversation mirror register specification cwd')
   } finally {
     await env.close()
   }
 })
 
-test('新建 spawn：远端 win32 节点（可信平台注入）——WSL 视图确定性转换', { timeout: 60_000 }, async () => {
+test('creates new spawn: remote win32 node (can message platform inject) - -WSL view determinism convert', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv({ platforms: { 'win-build': 'win32' }, profiles: { assistant: { nodeId: 'win-build' } } })
   try {
     env.faux.setResponses([fauxAssistantMessage('ok')])
     let resolved: { nodeId?: string; effectiveCwd?: string } | undefined
     await runNativeSpawn(env.deps, {
       parentConversationId: 1,
-      prompt: '干活',
+      prompt: 'dry',
       cwd: '/mnt/c/repo/helm',
       onResolved: (info: unknown) => {
         resolved = info as { nodeId?: string; effectiveCwd?: string }
@@ -210,46 +210,46 @@ test('新建 spawn：远端 win32 节点（可信平台注入）——WSL 视图
     assert.equal(resolved?.nodeId, 'win-build')
     assert.equal(resolved?.effectiveCwd, 'C:\\repo\\helm')
     const mirror = [...env.mirrors.values()].at(-1)!
-    assert.equal(mirror.cwd, 'C:\\repo\\helm', '镜像登记 Windows 规范路径')
+    assert.equal(mirror.cwd, 'C:\\repo\\helm', 'mirror register Windows canonical path')
     assert.equal(mirror.nodeId, 'win-build')
   } finally {
     await env.close()
   }
 })
 
-test('新建 spawn：远端 win32 节点上的坏 POSIX cwd 显式失败且不创建子会话', { timeout: 60_000 }, async () => {
+test('creates new spawn: remote win32 node on broken POSIX cwd explicit failed and do not create sub-conversation', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv({ platforms: { 'win-build': 'win32' }, profiles: { assistant: { nodeId: 'win-build' } } })
   try {
     await assert.rejects(
-      runNativeSpawn(env.deps, { parentConversationId: 1, prompt: '干活', cwd: '/home/build' } as never),
+      runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'dry', cwd: '/home/build' } as never),
       (e: unknown) => e instanceof HelmError && e.code === 'unmappable_posix_root',
     )
-    assert.equal(env.mirrors.size, 0, '坏 POSIX cwd 不落子会话镜像')
+    assert.equal(env.mirrors.size, 0, 'broken POSIX cwd do not sub-conversation mirror')
   } finally {
     await env.close()
   }
 })
 
-test('新建 spawn：远端节点平台未知——cwd 透传不改写（不猜平台）', { timeout: 60_000 }, async () => {
+test('creates new spawn: remote node platform unknown - -cwd pass-through do not change write (do not guess platform)', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv({ profiles: { assistant: { nodeId: 'mystery-node' } } })
   try {
     env.faux.setResponses([fauxAssistantMessage('ok')])
-    await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: '干活', cwd: '/home/build' } as never)
+    await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'dry', cwd: '/home/build' } as never)
     const mirror = [...env.mirrors.values()].at(-1)!
-    assert.equal(mirror.cwd, '/home/build', '平台未知：原样保持')
+    assert.equal(mirror.cwd, '/home/build', 'platform unknown: original keep')
   } finally {
     await env.close()
   }
 })
 
-test('新建 spawn：cwd 相对路径拒绝（既有绝对路径契约保持）', { timeout: 60_000 }, async () => {
+test('creates new spawn:cwd relative path reject (since has absolute path contract keep)', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv()
   try {
     for (const bad of ['relative/ws', 'C:relative']) {
       await assert.rejects(
-        runNativeSpawn(env.deps, { parentConversationId: 1, prompt: '干活', cwd: bad } as never),
+        runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'dry', cwd: bad } as never),
         (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
-        `'${bad}' 必须拒绝`,
+        `'${bad}' must reject`,
       )
     }
     assert.equal(env.mirrors.size, 0)
@@ -258,40 +258,40 @@ test('新建 spawn：cwd 相对路径拒绝（既有绝对路径契约保持）'
   }
 })
 
-test('resume：缺省严格沿用原子会话 cwd（不重算、不产生 update）', { timeout: 60_000 }, async () => {
-  // 注入 POSIX Hub 平台：fallback 链尾的 /tmp 缺省 cwd 在 win32 宿主的
-  // local 目标上不可映射，本用例断言的是 resume 语义而非平台收口。
+test('resume: default strictly along use atomic conversation cwd(do not heavy compute, produces no update)', { timeout: 60_000 }, async () => {
+  // inject POSIX Hub platform:fallback chain tail /tmp default cwd in win32 host
+  // local target on cannot mapping, this case assertion is resume semantics while non- platform consolidate.
   const env = await openSpawnEnv({ hubPlatform: 'linux' })
   try {
     env.faux.setResponses([fauxAssistantMessage('first'), fauxAssistantMessage('second')])
-    const first = await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: '首轮' } as never)
+    const first = await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'first round' } as never)
     assert.equal(first, 'first')
     const childId = [...env.mirrors.keys()].at(-1)!
     env.updates.length = 0
-    const second = await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: '续接', resume: String(childId) } as never)
+    const second = await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'resume', resume: String(childId) } as never)
     assert.equal(second, 'second')
-    assert.equal(env.updates.length, 0, 'resume 缺省不触发配置更新（cwd 语义不变）')
-    assert.equal(env.mirrors.get(childId)!.cwd, '/tmp/helm-spawn-default', '缺省沿用原子会话 cwd')
+    assert.equal(env.updates.length, 0, 'resume default does not trigger config update (cwd semantics do not change)')
+    assert.equal(env.mirrors.get(childId)!.cwd, '/tmp/helm-spawn-default', 'default along use atomic conversation cwd')
   } finally {
     await env.close()
   }
 })
 
-test('resume：显式 cwd 经 updateConversation 端口应用（生产为同一收口链）', { timeout: 60_000 }, async () => {
+test('resume: explicit cwd via updateConversation port should use (produce is the same consolidate chain)', { timeout: 60_000 }, async () => {
   const env = await openSpawnEnv({ hubPlatform: 'linux' })
   try {
     env.faux.setResponses([fauxAssistantMessage('first'), fauxAssistantMessage('second')])
-    await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: '首轮' } as never)
+    await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'first round' } as never)
     const childId = [...env.mirrors.keys()].at(-1)!
     const second = await runNativeSpawn(env.deps, {
       parentConversationId: 1,
-      prompt: '续接',
+      prompt: 'resume',
       resume: String(childId),
       cwd: '/tmp/helm/moved/dir',
     } as never)
     assert.equal(second, 'second')
     const update = env.updates.at(-1)!
-    assert.equal(update.patch['cwd'], '/tmp/helm/moved/dir', '显式 cwd 走 updateConversation 端口（服务层收口）')
+    assert.equal(update.patch['cwd'], '/tmp/helm/moved/dir', 'explicit cwd away updateConversation port (service layer consolidate)')
     assert.equal(env.mirrors.get(childId)!.cwd, '/tmp/helm/moved/dir')
   } finally {
     await env.close()
@@ -299,10 +299,10 @@ test('resume：显式 cwd 经 updateConversation 端口应用（生产为同一�
 })
 
 // ---------------------------------------------------------------------------
-// resolveSpawnTarget（builtin:workflow worktree 源目录的内核权威入口）
+// resolveSpawnTarget(builtin:workflow worktree source directory kernel right threat entry)
 // ---------------------------------------------------------------------------
 
-/** 最小 RuntimeAgentSpawn 装配（只驱动 resolveSpawnTarget；其余端口 throw）。 */
+/** most small RuntimeAgentSpawn install match (only drive resolveSpawnTarget; the rest port throw). */
 function spawnTargetResolver(options: {
   platforms: Record<string, string>
   hubPlatform?: string
@@ -325,7 +325,7 @@ function spawnTargetResolver(options: {
     hookBridge: {} as never,
     stashService: {} as never,
     updateConversation: (() => {
-      throw new Error('本测试不触发')
+      throw new Error('this test does not trigger')
     }) as never,
     markConversationOwnership: () => undefined,
   })
@@ -333,25 +333,25 @@ function spawnTargetResolver(options: {
     spawn.resolveSpawnTarget(input)
 }
 
-test('resolveSpawnTarget：sourceCwd 按最终节点平台收口（win32 转换 / 未知透传 / posix 归一）', { timeout: 60_000 }, async () => {
-  // 远端 win32：显式 requestCwd 与 profile.cwd、parent.cwd 回退均按目标平台收口。
+test('resolveSpawnTarget:sourceCwd by eventually node platform consolidate (win32 convert / unknown pass-through / posix archive one)', { timeout: 60_000 }, async () => {
+  // remote win32: explicit requestCwd and profile.cwd,parent.cwd fall back all by target platform consolidate.
   const resolve = spawnTargetResolver({ platforms: { 'win-build': 'win32' }, parent: { cwd: '/mnt/c/parent', nodeId: 'win-build' } })
   assert.deepEqual(
     await resolve({ parentConversationId: 1, requestCwd: '/mnt/c/req/helm' }),
     { nodeId: 'win-build', sourceCwd: 'C:\\req\\helm', parentCwd: '/mnt/c/parent' },
   )
-  assert.equal((await resolve({ parentConversationId: 1 })).sourceCwd, 'C:\\parent', 'parent cwd 回退同样收口')
+  assert.equal((await resolve({ parentConversationId: 1 })).sourceCwd, 'C:\\parent', 'parent cwd fall back same consolidate')
 
-  // 平台未知：透传（parent 指向未注册远端，避免落回宿主 local 平台）。
+  // platform unknown: pass-through (parent points to not registered remote, avoid back host local platform).
   const unknown = spawnTargetResolver({ platforms: {}, parent: { cwd: '/home/keep', nodeId: 'mystery-node' } })
   assert.equal((await unknown({ parentConversationId: 1 })).sourceCwd, '/home/keep')
 
-  // local posix：显式注入 Hub 平台，跨宿主稳定验证词法归一。
+  // local posix: explicit inject Hub platform, across host stable verify term method archive one.
   const local = spawnTargetResolver({ platforms: {}, hubPlatform: 'linux', parent: {} })
   assert.equal((await local({ parentConversationId: 1, requestCwd: '/tmp/x/./y/../z' })).sourceCwd, '/tmp/x/z')
 })
 
-test('resolveSpawnTarget：远端 win32 目标上的坏 POSIX sourceCwd 显式拒绝（worktree 源目录不静默）', { timeout: 60_000 }, async () => {
+test('resolveSpawnTarget: remote win32 target on broken POSIX sourceCwd explicit reject (worktree source directory not silently)', { timeout: 60_000 }, async () => {
   const resolve = spawnTargetResolver({ platforms: { 'win-build': 'win32' }, parent: { nodeId: 'win-build' } })
   await assert.rejects(
     resolve({ parentConversationId: 1, requestCwd: '/home/build' }),

@@ -1,17 +1,15 @@
 /**
- * 1ms zero-memory assertion blow-up guard preload (Node built-ins only, zero external deps).
+ * 1ms zero memory assertion guard against explode Preload(Node inside placement module zero external dependency).
  *
- * Why it exists: in happy-dom / React DOM tests, calling assertions like
- * assert.equal(el, null) directly on Element / Window / Event / React Fiber nodes makes
- * the native AssertionError call util.inspect(actual), recursively walking the entire DOM
- * + Fiber cyclic tree and instantly blowing past 1.5GB of memory into a hang or OOM.
+ * is what store in:happy-dom / React DOM test in if directly for Element / Window / Event /
+ * React Fiber node invoke assert.equal(el, null) etc. assertion, on failure Node original generate
+ * AssertionError will invoke util.inspect(actual) recursion iterate the whole DOM + Fiber loop tree,
+ * instant between soar to >1.5GB memory and card die/OOM.
  *
- * Injected via NODE_OPTIONS=--import=... before test code loads (direct import also
- * works):
- * - equal/strictEqual/notEqual/notStrictEqual take an O(1) Object.is fast path;
- * - a shallow probe and compact summarization kick in only when an assertion is about to
- *   fail (or deepEqual/deepStrictEqual detects a dangerous object); ordinary values pass
- *   through to the native assertions 100% untouched, preserving full diff UX.
+ * this module via NODE_OPTIONS=--import=... in test code load before inject (also can directly import):
+ * - for equal/strictEqual/notEqual/notStrictEqual away O(1) Object.is fast path;
+ * - only in assertion i.e. failed (or deepEqual/deepStrictEqual probe to danger object) when do shallow probe
+ *   and compact summary, ordinary value 100% pass-through original generate assertion keep complete diff experience.
  */
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 
@@ -43,7 +41,7 @@ function isDirectToxic(val) {
     if (typeof val.preventDefault === 'function' && 'target' in val && 'currentTarget' in val) {
       return true;
     }
-    // 4. A React Fiber node itself, or a host node carrying a React Fiber
+    // 4. React Fiber node itself or mount React Fiber host node
     if ('stateNode' in val && 'memoizedProps' in val && 'return' in val) return true;
     if (!Array.isArray(val)) {
       const keys = Object.keys(val);
@@ -65,7 +63,7 @@ function isDirectToxic(val) {
 }
 
 /**
- * Iterative shallow probing (top level + at most 2 levels of object properties; no deep recursion, so it cannot hang itself).
+ * iterate shallow probe (at most top-level + 2 layer object property, forbidden deep recursion guard against itself card die).
  * @param {unknown} val
  * @returns {boolean}
  */
@@ -105,7 +103,7 @@ export function isToxicForInspect(val) {
         }
       }
     } catch {
-      // Ignore proxy/getter throws
+      // ignore proxy/getter throws
     }
   }
   return false;
@@ -242,10 +240,8 @@ function installSafeTestAssert() {
       if (!isToxicForInspect(actual) && !isToxicForInspect(expected)) {
         return orig.apply(this, arguments);
       }
-      // Either side is a dangerous object and they are strictly unequal: null/undefined /
-      // object-vs-object cases summarize directly along the == failure path; other
-      // primitive comparisons first verify == actually fails, preserving loose-equal
-      // semantics.
+      // any one side is danger object and strictly do not etc.:null/undefined/same is object scenario directly by == failed path summary;
+      // the rest original value compare first core verify == is otherwise indeed failed, avoid break loose equal semantics.
       if (
         (actual !== null && expected !== null && typeof actual === 'object' && typeof expected === 'object') ||
         actual === null ||
@@ -330,7 +326,7 @@ function installSafeTestAssert() {
 
   patchTarget(looseAssert, { strictMode: false });
   patchTarget(strictAssert, { strictMode: true });
-  // Keep assert.strict and node:assert/strict referentially identical (and re-sync here if Node ever splits them)
+  // keep assert.strict and node:assert/strict reference consistent (if not come Node separate two then fall back sync)
   if (looseAssert.strict && looseAssert.strict !== strictAssert) {
     patchTarget(looseAssert.strict, { strictMode: true });
   }

@@ -658,7 +658,7 @@ test('emitEvent 适配器：广播失败时引擎语义完整、显式诊断、�
     // wf_a 仍被 init 如实标 failed（引擎终态语义不被观察面故障破坏）。
     const record = JSON.parse(readFileSync(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', 'workflow-wf_a.record.json'), 'utf8')) as { status?: string }
     assert.equal(record.status, 'failed')
-    // 适配器收口后的显式诊断事件（区别于 stop 路径的「工作流最终投影未同步」）。
+    // 适配器收口后的显式诊断事件（区别于 stop 路径的「Workflow final projection unsynced」）。
     const notifications = backend.emitted.filter(
       (e) =>
         e.type === 'notification' &&

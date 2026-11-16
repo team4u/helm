@@ -1,17 +1,17 @@
 /**
- * PluginHostBackend 标准桩（各业务 fixture 组合共享）。
+ * PluginHostBackend standard stub (each business fixture combine sharing).
  *
- * 基于 `createPluginHostBackendFixture()` 派生，仅对纯机制/无业务语义成员
- * 提供安全空默认实现；其余业务面成员继承基线显式 501 拒绝（被测插件误调用
- * 时测试立刻 RED，绝不以成功空响应遮错）。
+ * based on `createPluginHostBackendFixture()` derive, only for pure mechanism/without business semantics member
+ * provide security empty by default implement; the rest business side member inherit baseline explicit 501 reject (by test plugin mistakenly invoke
+ * when test immediately RED, never with succeeded empty response cover wrong).
  *
- * 用法：hostBackendStub() 直接做基线；completeBackend(partial) 把业务
- * 成员合成进去（Object.assign，业务成员显式覆盖桩成员）。
+ * use method:hostBackendStub() directly do baseline;completeBackend(partial) business
+ * member together into into (Object.assign, business member explicit override stub member).
  */
 import type { PluginHostBackend } from '../../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './plugin-host-backend.js'
 
-/** 返回带安全空默认实现（纯机制端口）的 PluginHostBackend 标准桩。 */
+/** return carries security empty by default implement (pure mechanism port) PluginHostBackend standard stub. */
 export function hostBackendStub(): PluginHostBackend {
   const base = createPluginHostBackendFixture()
   return {
@@ -46,7 +46,7 @@ export function hostBackendStub(): PluginHostBackend {
   }
 }
 
-/** 业务 backend（类实例/部分字面量）+ 桩成员合成完整 PluginHostBackend。 */
+/** business backend(class instance/part literal)+ stub member together into complete PluginHostBackend. */
 export function completeBackend<T extends object>(partial: T): T & PluginHostBackend {
   return Object.assign(hostBackendStub(), partial) as T & PluginHostBackend
 }

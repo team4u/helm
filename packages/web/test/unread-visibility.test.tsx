@@ -508,7 +508,7 @@ test('PATCH 失败清理在途记录并 pushNotice 报「标记已读失败」�
     return c
   })
   try {
-    await h.waitFor((s) => s.notices.some((n) => n.title === '标记已读失败'))
+    await h.waitFor((s) => s.notices.some((n) => n.title === 'Failed to mark as read'))
     assert.equal(h.patchCalls.length, 1)
     assert.equal(h.store().loadErrors['conversation:1'], undefined, '不得污染 loadErrors["conversation:1"]')
 

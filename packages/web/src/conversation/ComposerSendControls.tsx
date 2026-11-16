@@ -53,23 +53,23 @@ export function ComposerSendControls({
           onClick={() => void send()}
           title={editingEntryId !== null
             ? working
-              ? '更新并重新生成（将覆盖此条及后续对话并停止当前执行） (Enter)'
-              : '更新并重新生成（将覆盖此条及后续对话） (Enter)'
+              ? 'Update and regenerate (overwrites this message and everything after it and stops the current execution) (Enter)'
+              : 'Update and regenerate (overwrites this message and everything after it) (Enter)'
             : envBlocker.blocked
-              ? envBlocker.reason ?? '请先保存或取消起始环境修改'
-              : '发送 (Enter)；Shift+Enter 换行'}
-          aria-label={editingEntryId !== null ? '更新并重新生成' : uploading > 0 ? `上传中 (${uploading})` : '发送'}
+              ? envBlocker.reason ?? 'Save or cancel the starting environment changes first'
+              : 'Send (Enter); Shift+Enter for a newline'}
+          aria-label={editingEntryId !== null ? 'Update and regenerate' : uploading > 0 ? `Uploading (${uploading})` : 'Send'}
         >
           <HelmIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
         </button>
       ) : text.trim() === '' ? (
-        <Tooltip content="停止当前执行" side="top">
+        <Tooltip content="Stop the current execution" side="top">
           <button
             type="button"
             className="btn btn-sm btn-danger btn-pill btn-send composer-abort-button"
             onClick={() => void abortTurn()}
-            title="停止当前执行"
-            aria-label="停止当前执行"
+            title="Stop the current execution"
+            aria-label="Stop the current execution"
           >
             <HelmIcon name="square" size={14} />
           </button>
@@ -81,26 +81,26 @@ export function ComposerSendControls({
             className="btn btn-sm btn-primary composer-mobile-steer-btn composer-steer-action"
             disabled={busyDisabled}
             onClick={() => void send('steer')}
-            title="下一个步骤边界注入"
-            aria-label={uploading > 0 ? `上传中 (${uploading})` : '插话引导'}
+            title="Inject at the next step boundary"
+            aria-label={uploading > 0 ? `Uploading (${uploading})` : 'Steer'}
           >
             <HelmIcon
               name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
               size={13}
               className={sending || uploading > 0 ? 'spin-slow' : undefined}
             />
-            <span>插话</span>
+            <span>Steer</span>
           </button>
           <button
             type="button"
             className="btn btn-sm btn-secondary composer-mobile-queue-btn"
             disabled={busyDisabled}
             onClick={() => void send('followUp')}
-            title="当前回合结束后处理"
-            aria-label="排队发送"
+            title="Handle after the current turn ends"
+            aria-label="Queue send"
           >
             <HelmIcon name="clock" size={13} />
-            <span>排队</span>
+            <span>Queue</span>
           </button>
         </div>
       ) : (
@@ -111,15 +111,15 @@ export function ComposerSendControls({
               className="composer-split-main composer-steer-action"
               disabled={busyDisabled}
               onClick={() => void send('steer')}
-              title="下一个步骤边界注入（Enter）"
-              aria-label={uploading > 0 ? `上传中 (${uploading})` : editingEntryId !== null ? '更新并重新生成' : '插话引导'}
+              title="Inject at the next step boundary (Enter)"
+              aria-label={uploading > 0 ? `Uploading (${uploading})` : editingEntryId !== null ? 'Update and regenerate' : 'Steer'}
             >
               <HelmIcon
                 name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
                 size={14}
                 className={sending || uploading > 0 ? 'spin-slow' : undefined}
               />
-              <span className="composer-action-label">{editingEntryId !== null ? '更新' : '插话'}</span>
+              <span className="composer-action-label">{editingEntryId !== null ? 'Update' : 'Insert'}</span>
             </button>
             <div className="composer-split-divider" />
             <DropdownMenuTrigger asChild>
@@ -127,8 +127,8 @@ export function ComposerSendControls({
                 type="button"
                 className="composer-split-trigger"
                 disabled={busyDisabled}
-                aria-label="选择发送策略"
-                title="选择发送策略（插话 / 排队）"
+                aria-label="Choose a send strategy"
+                title="Choose a send strategy (steer / queue)"
               >
                 <HelmIcon name="chevron-down" size={12} />
               </button>
@@ -141,21 +141,21 @@ export function ComposerSendControls({
             >
               <HelmIcon name="corner-down-right" size={14} className="composer-busy-menu-icon" />
               <div className="composer-busy-menu-text">
-                <div className="composer-busy-menu-title">插话引导</div>
-                <div className="composer-busy-menu-desc">下一个步骤边界注入</div>
+                <div className="composer-busy-menu-title">Steer</div>
+                <div className="composer-busy-menu-desc">Inject at the next step boundary</div>
               </div>
               <span className="composer-busy-menu-kbd kbd-hint">Enter</span>
             </DropdownMenuItem>
             <DropdownMenuItem
               className="composer-busy-menu-item composer-queue-button"
               onClick={() => void send('followUp')}
-              title="当前回合结束后处理（⌘/Ctrl+Enter）"
-              aria-label="排队发送"
+              title="Handle after the current turn ends (⌘/Ctrl+Enter)"
+              aria-label="Queue send"
             >
               <HelmIcon name="clock" size={14} className="composer-busy-menu-icon" />
               <div className="composer-busy-menu-text">
-                <div className="composer-busy-menu-title">排队发送</div>
-                <div className="composer-busy-menu-desc">当前回合结束后处理</div>
+                <div className="composer-busy-menu-title">Queue send</div>
+                <div className="composer-busy-menu-desc">Handle after the current turn ends</div>
               </div>
               <span className="composer-busy-menu-kbd kbd-hint">⌘/Ctrl+Enter</span>
             </DropdownMenuItem>
@@ -164,13 +164,13 @@ export function ComposerSendControls({
               danger
               className="composer-busy-menu-item"
               onClick={() => void abortTurn()}
-              title="停止当前执行"
-              aria-label="停止当前执行"
+              title="Stop the current execution"
+              aria-label="Stop the current execution"
             >
               <HelmIcon name="square" size={13} className="composer-busy-menu-icon" />
               <div className="composer-busy-menu-text">
-                <div className="composer-busy-menu-title">停止执行</div>
-                <div className="composer-busy-menu-desc">立即中止当前回合</div>
+                <div className="composer-busy-menu-title">Stop execution</div>
+                <div className="composer-busy-menu-desc">Abort the current turn immediately</div>
               </div>
             </DropdownMenuItem>
           </DropdownMenuContent>

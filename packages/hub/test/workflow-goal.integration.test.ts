@@ -1,42 +1,42 @@
 /**
- * 多级工作流与失败自动重试设计验收（T2/T3）集成测试。
+ * many level workflow and failed automatically retry design verify (T2/T3) integration test.
  *
- * 对应 docs/archive/20261115-多级工作流与失败自动重试设计文档.md：
+ * for should docs/archive/20261115-many level workflow and failed automatically retry design document.md:
  *
- * T2（goal 失败自动重试，真实全链路）：
- * - 真 createHelm + 真 KernelRuntime + faux provider + 真 WorkflowService（经
- *   builtin:workflow 的 run 动作，与 HTTP/CLI 同链路）+ 真 WorktreeAllocator
- *   隔离树；gate 由内核 settleGate → runGate → runShell 真实执行，超时杀整
- *   个进程组（不 mock 核心超时）。
+ * T2(goal failed automatically retry, real all link):
+ * - true createHelm + true KernelRuntime + faux provider + true WorkflowService(via
+ *   builtin:workflow  run action, and HTTP/CLI same link)+ true WorktreeAllocator
+ *   isolated tree;gate by kernel settleGate → runGate → runShell real execute, timeout kill whole
+ *   process group (do not mock core timeout).
  * - goal({ label: 'worker-c', isolation: 'worktree', maxAttempts: 3,
- *   gateTimeoutMs: 1000 })：第 1 次门禁挂起 6s（被 1s 进程组超时强杀）、
- *   第 2 次门禁 exitCode=1、第 3 次成功。
- * - 断言：三次尝试共用同一 conversationId 与同一 worktree（path/branch/id
- *   一致，全程只派生一个子会话）；账本逐次记录 gate.timedOut / gate.exitCode
- *   与 execution；最终 ok: true, attempts: 3；被杀门禁进程在逃逸窗口内未
- *   写出存活标记（进程组 kill 真实生效，非只置标志）。
+ *   gateTimeoutMs: 1000 }): 1 time gate suspended 6s(by 1s process group timeout strong kill),
+ *    2 time gate exitCode=1, 3 time succeeded.
+ * - assertion: three time attempt shared use the same conversationId and the same worktree(path/branch/id
+ *   consistent, all process only derive a sub-conversation); ledger one by one time record gate.timedOut / gate.exitCode
+ *   and execution; eventually ok: true, attempts: 3; by kill gate process in escape window inside not
+ *   write out store mark record (process group kill real takes effect, non- only placement flag).
  *
- * T3（三级嵌套同名 label + resumeFromRunId 断点续跑，真实引擎）：
- * - 总控 → 模块子工作流 → 模块内两并发同名 'plan' 节点（agent.withMeta 与
- *   goal(worktree)），另一模块再用同名 'plan'（三个同名 label 会话在同一
- *   run 内共存，按 scopeId 隔离）。
- * - 模块 A：goal + 幂等 git merge（idempotent: true）+ cleanup_worktree
- *   全部成功；模块 B：goal 因 Schema 校验失败耗尽 2 次尝试，脚本 throw
- *   导致 Run failed，恢复后沿同一会话继续第 3 次尝试。
- * - 修复 faux 模型响应后 run({ resumeFromRunId })：模块 A 的全部 agent（含
- *   withMeta 的 execution.worktree）与 action 命中账本缓存（cached: true，
- *   副作用计数零新增），仅模块 B 失败节点 live 重跑并最终 completed；
- *   B 侧 resume('plan') 续接的是 B 自己的子会话（按会话 transcript 证据
- *   核验，同名 label 不得串到 A 侧会话）。
- * - 总控并发启动 A/B，A 内部再并发 goal 与叶子工作流；恢复时缓存节点
- *   即时返回也不得让成功模块重新执行模型、合并或清理。
+ * T3(three level embed set same name label + resumeFromRunId checkpoint continue run, real engine):
+ * - total control → module sub- workflow → module inside two concurrency same name 'plan' node (agent.withMeta and
+ *   goal(worktree)), another module again use same name 'plan'(three same name label conversation in the same
+ *   run inside shared store, by scopeId isolated).
+ * - module A:goal + idempotent git merge(idempotent: true)+ cleanup_worktree
+ *   all succeeded; module B:goal because Schema validation failed exhausted 2 time attempt, script throw
+ *   leads to Run failed, restore after along the same conversation continue 3 time attempt.
+ * - fix faux model response after run({ resumeFromRunId }): module A all agent(contains
+ *   withMeta  execution.worktree) and action hit ledger cache (cached: true,
+ *   side effect counter zero new increase), only module B failed node live heavy run and eventually completed;
+ *   B side resume('plan') resume is B itself sub-conversation (by conversation transcript verify based on
+ *   core verify, same name label must not string to A side conversation).
+ * - total control concurrency start A/B,A internal again concurrency goal and leaf workflow; restore when cache node
+ *   i.e. when return also must not let succeeded module re- execute model, merge or clean up.
  *
- * 诚实性纪律：真 SQLite + 真 pi-durable + 真 Git 仓库 + 真文件账本；faux
- * provider 只按 transcript 标记路由脚本化模型响应，不伪造引擎/内核结果。
- * gate 命令统一 node 单行脚本（跨平台）；自建子进程仅由内核 runShell 按进
- * 程组管理，测试自身不 spawn 额外进程。
+ * honest discipline: true SQLite + true pi-durable + true Git repository + true file ledger;faux
+ * provider only by transcript mark record routing script model response, do not fabricate engine/kernel result.
+ * gate command unify node single row script (across platform); self create child process only by kernel runShell by enter
+ * process group manage, test itself do not spawn extra process.
  *
- * runner: tsx --test；每测试显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each test explicit timeout: 60_000 guard against deadlock.
  */
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AssistantMessage, TranscriptContext } from '@earendil-works/pi-ai'
@@ -56,16 +56,16 @@ import {
   type HubTestApp,
 } from './helpers/hub-test-env.js'
 
-/** 进程占用扫描当前仅 Linux /proc（与 worktree-runtime 集成测试同款平台事实）。 */
+/** process occupy scan when before only Linux /proc(and worktree-runtime integration test same style platform fact). */
 const PROCESS_SCAN_ON = process.platform === 'linux'
 
-/** 模型请求路由器：按 transcript 决定响应；无法路由时抛错（不静默兜底）。 */
+/** model request routing: by transcript decide response; cannot routing when throws (not silently fall back). */
 type ModelRoute = (context: {
   texts: string[]
   afterToolResult: boolean
 }) => AssistantMessage | undefined
 
-/** 提取全部 user 文本（字符串正文与文本块）。 */
+/** extract all user text (string body text and text chunk). */
 function userTextsOf(context: TranscriptContext): string[] {
   const out: string[] = []
   for (const message of context.messages) {
@@ -90,19 +90,19 @@ function userTextsOf(context: TranscriptContext): string[] {
   return out
 }
 
-/** 最近一条消息是否为工具结果（回合内工具执行完毕、模型被再次调用）。 */
+/** most near a message is otherwise is tool result (turn inside tool execute done, model by again invoke). */
 function endsWithToolResult(context: TranscriptContext): boolean {
   const last = context.messages.at(-1)
   if (last === undefined) return false
   return JSON.stringify(last).includes('"toolResult"')
 }
 
-/** 组装 faux 响应步（同一路由函数重复占位，按请求即时路由）。 */
+/** group install faux response step (the same routing function duplicate occupy, by request i.e. when routing). */
 function routedResponses(route: ModelRoute, count: number) {
   const step = (context: TranscriptContext): AssistantMessage => {
     const message = route({ texts: userTextsOf(context), afterToolResult: endsWithToolResult(context) })
     if (message === undefined) {
-      throw new Error(`faux 路由未命中：最近用户文本 ${(userTextsOf(context).at(-1) ?? '(无)').slice(0, 200)}`)
+      throw new Error(`faux routing missed: most near user text ${(userTextsOf(context).at(-1) ?? '(without)').slice(0, 200)}`)
     }
     return message
   }
@@ -110,7 +110,7 @@ function routedResponses(route: ModelRoute, count: number) {
 }
 
 // ---------------------------------------------------------------------------
-// 测试基建
+// test base create
 // ---------------------------------------------------------------------------
 
 let rootDir: string
@@ -131,14 +131,14 @@ interface RuntimeEnv {
   kernel: HubTestApp['kernel']
   faux: FauxProviderHandle
   conversationId: number
-  /** builtin:workflow 公开动作总线（HTTP/CLI/模型工具同链路）。 */
+  /** builtin:workflow public action total line (HTTP/CLI/model tool same link). */
   runWorkflowAction(request: Record<string, unknown>): Promise<{ run: Record<string, any> }>
   inspectRun(runId: string): Promise<Record<string, any>>
   saveWorkflow(script: string): Promise<void>
   close(): Promise<void>
 }
 
-/** 真实 createHelm（builtin:workflow 默认启用）+ faux provider；cwd 指向真实 Git 仓库。 */
+/** real createHelm(builtin:workflow by default enable)+ faux provider;cwd points to real Git repository. */
 async function openRuntime(dataDir: string, repoDir: string): Promise<RuntimeEnv> {
   const { app, kernel, faux } = await createHubTestApp({
     dataDir,
@@ -163,7 +163,7 @@ async function openRuntime(dataDir: string, repoDir: string): Promise<RuntimeEnv
   }
 }
 
-/** 读取 run 的真实账本文件（插件数据目录 plugins/builtin%3Aworkflow/artifacts/<convId>/workflow-<runId>.jsonl）。 */
+/** read run real ledger file (plugin data directory plugins/builtin%3Aworkflow/artifacts/<convId>/workflow-<runId>.jsonl). */
 function readJournal(dataDir: string, conversationId: number, runId: string): Array<Record<string, any>> {
   const path = join(
     dataDir,
@@ -179,7 +179,7 @@ function readJournal(dataDir: string, conversationId: number, runId: string): Ar
     .map((line) => JSON.parse(line) as Record<string, any>)
 }
 
-/** 递归查找同名文件（进程逃逸标记排查）。 */
+/** recursion find same name file (process escape mark record troubleshoot). */
 function findFileRecursive(root: string, name: string): string[] {
   const found: string[] = []
   const walk = (dir: string) => {
@@ -200,21 +200,21 @@ function findFileRecursive(root: string, name: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// T2：goal 失败自动重试（真实 KernelRuntime + worktree 隔离 + 真实门禁超时）
+// T2:goal failed automatically retry (real KernelRuntime + worktree isolated + real gate timeout)
 // ---------------------------------------------------------------------------
 
-describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/worktree）', { timeout: 60_000 }, () => {
-  it('三次尝试同会话同 worktree：gate 超时强杀 / exit 1 / 成功，attempts=3', { timeout: 60_000 }, async () => {
+describe('T2 goal gate failed automatically retry (true kernel/faux/WorkflowService/worktree)', { timeout: 60_000 }, () => {
+  it('three time attempt same conversation same worktree:gate timeout strong kill / exit 1 / succeeded,attempts=3', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't2')
     const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const dataDir = join(dir, 'data')
     const env = await openRuntime(dataDir, repo)
 
-    // 门禁脚本（gate 在 worktree 内执行，按标记文件决定行为）：
-    // - 仅 attempt-1：挂起 6 秒（超过 gateTimeoutMs=1000，应被进程组超时杀掉；
-    //   若 kill 失效，6s 后写出逃逸标记 gate-1-escaped.txt 并以 0 退出）
-    // - attempt-2 存在：exit 1
-    // - attempt-3 存在：exit 0
+    // gate script (gate in worktree inside execute, by mark record file decide behavior):
+    // - only attempt-1: suspended 6 second (exceeds gateTimeoutMs=1000, should by process group timeout kill;
+    //   if kill expires,6s after write out escape mark record gate-1-escaped.txt and with 0 exit)
+    // - attempt-2 store in:exit 1
+    // - attempt-3 store in:exit 0
     const gateCommand =
       'node -e "const fs=require(\'fs\');' +
       "if(fs.existsSync('attempt-3.txt'))process.exit(0);" +
@@ -222,10 +222,10 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
       "setTimeout(function(){fs.writeFileSync('gate-1-escaped.txt','alive')},6000)" +
       '"'
     const script =
-      'export const meta = { name: "t2-goal-retry", description: "goal 门禁三态重试验收" }\n' +
+      'export const meta = { name: "t2-goal-retry", description: "goal gate three state retry verify" }\n' +
       'const result = await goal({\n' +
       '  label: "worker-c",\n' +
-      '  objective: "T2-GOAL-OBJECTIVE：在隔离工作树内完成提交并通过门禁",\n' +
+      '  objective: "T2-GOAL-OBJECTIVE: in isolated worktree inside complete commit and via gate",\n' +
       '  isolation: "worktree",\n' +
       `  gate: ${JSON.stringify(gateCommand)},\n` +
       '  gateTimeoutMs: 1000,\n' +
@@ -233,8 +233,8 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
       '})\n' +
       'return result\n'
 
-    // faux 模型路由：每次尝试先用 bash 写 attempt-N.txt 标记，再回文本；
-    // 当前尝试序号由 transcript 中的 [attempt N failed] 增量块判定。
+    // faux model routing: each time attempt first use bash write attempt-N.txt mark record, again back text;
+    // when before attempt ordinal by transcript in [attempt N failed] incremental chunk decide.
     const t2Route: ModelRoute = ({ texts, afterToolResult }) => {
       if (!texts.some((t) => t.includes('T2-GOAL-OBJECTIVE'))) return undefined
       const attempt = texts.some((t) => t.includes('[attempt 2 failed]'))
@@ -262,31 +262,31 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
         wait: true,
       })
 
-      // ---- 最终结果：第 3 次尝试成功，attempts=3，回传执行元数据。----
+      // ---- eventually result: 3 time attempt succeeded,attempts=3, back pass execute metadata.----
       assert.equal(run.status, 'completed', JSON.stringify(run.error))
       assert.equal(run.result.ok, true)
       assert.equal(run.result.attempts, 3)
       assert.equal(run.result.output, 'T2-A3-DONE')
-      assert.ok(run.result.execution, 'goal 结果应回传 execution 元数据')
-      assert.equal(run.result.execution.conversationId > env.conversationId, true, '应派生子会话')
+      assert.ok(run.result.execution, 'goal result should back pass execution metadata')
+      assert.equal(run.result.execution.conversationId > env.conversationId, true, 'should derive sub-conversation')
       const worktree = run.result.execution.worktree
-      assert.ok(worktree, 'isolation:worktree 应回传 worktree 元数据')
-      assert.ok(worktree.path.includes(join(dir, '.helm-worktrees')), `worktree 应位于同级 .helm-worktrees：${worktree.path}`)
-      assert.ok(worktree.branch.startsWith('helm/spawn-'), `分支应为 helm/spawn-*：${worktree.branch}`)
-      assert.ok(typeof worktree.id === 'string' && worktree.id.length > 0, '应回传受管 worktreeId')
-      assert.equal(run.result.gate.ok, true, '第 3 次门禁应通过')
+      assert.ok(worktree, 'isolation:worktree should back pass worktree metadata')
+      assert.ok(worktree.path.includes(join(dir, '.helm-worktrees')), `worktree should at same level .helm-worktrees:${worktree.path}`)
+      assert.ok(worktree.branch.startsWith('helm/spawn-'), `branch should be helm/spawn-*:${worktree.branch}`)
+      assert.ok(typeof worktree.id === 'string' && worktree.id.length > 0, 'should back pass managed worktreeId')
+      assert.equal(run.result.gate.ok, true, ' 3 time gate should via')
 
-      // ---- 全程只派生一个子会话：三次尝试续接同一会话。----
+      // ---- all process only derive a sub-conversation: three time attempt resume the same conversation.----
       const children = env.kernel
         .listConversations()
         .filter((c) => c.parentConversationId === env.conversationId)
-      assert.equal(children.length, 1, `应只有一个子会话，实得 ${children.length}`)
+      assert.equal(children.length, 1, `should only a sub-conversation, got ${children.length}`)
       assert.equal(children[0]!.id, run.result.execution.conversationId)
-      assert.equal(children[0]!.cwd, worktree.path, '子会话 cwd 应为隔离工作树')
+      assert.equal(children[0]!.cwd, worktree.path, 'sub-conversation cwd should be isolated worktree')
 
-      // ---- 真实账本：三次尝试逐条落账，gate 结果与执行元数据完整。----
+      // ---- real ledger: three time attempt one by one account,gate result and execute metadata complete.----
       const entries = readJournal(dataDir, env.conversationId, run.id).filter((e) => e['type'] === 'agent')
-      assert.equal(entries.length, 3, `账本应有 3 条 agent 尝试记录，实得 ${entries.length}`)
+      assert.equal(entries.length, 3, `ledger should has 3  agent attempt record, got ${entries.length}`)
       const [first, second, third] = entries as [
         Record<string, any>,
         Record<string, any>,
@@ -295,60 +295,60 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
       assert.deepEqual(
         entries.map((e) => [e['index'], e['attempt'], e['ok']]),
         [[0, 1, false], [1, 2, false], [2, 3, true]],
-        `尝试账本应按 index/attempt/ok 落账：${JSON.stringify(entries.map((e) => ({ i: e['index'], a: e['attempt'], ok: e['ok'] })))}`,
+        `attempt ledger should by index/attempt/ok account:${JSON.stringify(entries.map((e) => ({ i: e['index'], a: e['attempt'], ok: e['ok'] })))}`,
       )
-      // 第 1 次：门禁 1s 进程组超时强杀（真实 runShell 超时路径）。
-      assert.equal(first['timedOut'], true, '原生门禁超时也应标记本次尝试 timedOut')
+      //  1 time: gate 1s process group timeout strong kill (real runShell timeout path).
+      assert.equal(first['timedOut'], true, 'original generate gate timeout also should mark record this time attempt timedOut')
       assert.equal(first['gate'].ok, false)
-      assert.equal(first['gate'].timedOut, true, '第 1 次门禁应如实回传 timedOut=true')
-      assert.equal(first['gate'].exitCode, null, '被杀进程无退出码，应为 null')
-      // 第 2 次：门禁退出码 1。
+      assert.equal(first['gate'].timedOut, true, ' 1 time gate should such as back pass timedOut=true')
+      assert.equal(first['gate'].exitCode, null, 'by kill process without exit code, should be null')
+      //  2 time: gate exit code 1.
       assert.equal(second['gate'].ok, false)
-      assert.equal(second['gate'].exitCode, 1, '第 2 次门禁应回传 exitCode=1')
+      assert.equal(second['gate'].exitCode, 1, ' 2 time gate should back pass exitCode=1')
       assert.equal(second['gate'].timedOut, false)
-      assert.equal(second['resumed'], true, '第 2 次尝试应是续接（resumed 标记）')
-      // 第 3 次：成功且仍标记续接。
+      assert.equal(second['resumed'], true, ' 2 time attempt should is resume (resumed mark record)')
+      //  3 time: succeeded and still mark record resume.
       assert.equal(third['ok'], true)
       assert.equal(third['attempt'], 3)
       assert.equal(third['resumed'], true)
 
-      // ---- 同 conversationId / 同 worktree（path、branch、id 三次一致）。----
+      // ---- same conversationId / same worktree(path,branch,id three time consistent).----
       for (const entry of entries) {
         assert.equal(entry['execution'].conversationId, run.result.execution.conversationId)
         assert.equal(entry['execution'].worktree.path, worktree.path)
         assert.equal(entry['execution'].worktree.branch, worktree.branch)
         assert.equal(entry['execution'].worktree.id, worktree.id)
       }
-      // 三次尝试的标记文件都落在同一工作树内（尝试确实在同一树中执行）。
+      // three time attempt mark record file all in the same worktree inside (attempt indeed in the same tree in execute).
       for (const n of [1, 2, 3]) {
-        assert.ok(existsSync(join(worktree.path, `attempt-${n}.txt`)), `attempt-${n}.txt 应存在于同一 worktree`)
+        assert.ok(existsSync(join(worktree.path, `attempt-${n}.txt`)), `attempt-${n}.txt should store in at the same worktree`)
       }
-      assert.ok(existsSync(worktree.path), '重试全程保留同一 worktree（失败不回收）')
+      assert.ok(existsSync(worktree.path), 'retry all process keep the same worktree(failed do not reclaim)')
 
-      // ---- 进程组 kill 真实性：挂起门禁若未被杀，6s 后会写出逃逸标记；
-      // 且整个 run 会被拖到 6s 以上。----
+      // ---- process group kill real: suspended gate if not by kill,6s after will write out escape mark record;
+      // and the whole run will by drag to 6s or more.----
       const goalNode = (run.nodes ?? []).find((n: Record<string, any>) => n['label'] === 'worker-c')
-      assert.ok(goalNode, '应存在 label worker-c 的 agent 节点')
+      assert.ok(goalNode, 'should store in label worker-c  agent node')
       assert.equal(goalNode!['status'], 'done')
       assert.equal(goalNode!['conversationId'], run.result.execution.conversationId)
       assert.ok(
         typeof run['updatedAt'] === 'number' && typeof run['createdAt'] === 'number',
-        'run 摘要应携带 createdAt/updatedAt',
+        'run summary should carry createdAt/updatedAt',
       )
       assert.ok(
         run['updatedAt'] - run['createdAt'] < 5_800,
-        `整个 run 用时 ${run['updatedAt'] - run['createdAt']}ms 应小于 5.8s 挂起下限（门禁被 1s 进程组超时终止）`,
+        `the whole run use when ${run['updatedAt'] - run['createdAt']}ms should less than 5.8s suspended floor (gate by 1s process group timeout terminate)`,
       )
       const escaped = findFileRecursive(dir, 'gate-1-escaped.txt')
       if (escaped.length > 0) {
-        // 已存在即立刻失败（快于逃逸窗口的防御分支）。
-        assert.fail(`门禁进程逃逸（未被进程组杀死）：${escaped.join(', ')}`)
+        // already exists i.e. immediately failed (fast at escape window guard against defend branch).
+        assert.fail(`gate process escape (not by process group kill die):${escaped.join(', ')}`)
       }
       while (Date.now() - startedAt < 6_200) await sleep(100)
       assert.deepEqual(
         findFileRecursive(dir, 'gate-1-escaped.txt'),
         [],
-        '被杀门禁进程在 6s 逃逸窗口后不得写出存活标记（进程组 kill 真实生效）',
+        'by kill gate process in 6s escape window after must not write out store mark record (process group kill real takes effect)',
       )
     } finally {
       await env.close()
@@ -357,37 +357,37 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
 })
 
 // ---------------------------------------------------------------------------
-// T3：三级嵌套同名 label + resumeFromRunId 断点续跑
+// T3: three level embed set same name label + resumeFromRunId checkpoint continue run
 // ---------------------------------------------------------------------------
 
-describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeout: 60_000 }, () => {
-  it('模块 A 全缓存复用、仅模块 B 失败节点 live 重跑，元数据完整还原', { timeout: 60_000 }, async () => {
+describe('T3 three level embed set same name plan and resumeFromRunId checkpoint continue run', { timeout: 60_000 }, () => {
+  it('module A all cache re- use, only module B failed node live heavy run, metadata complete restore', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't3')
     const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const dataDir = join(dir, 'data')
     const env = await openRuntime(dataDir, repo)
     const signalPath = join(repo, 'b-open-gate.txt')
-    // 模块 B 的 plan 可切换失败/成功（修复模拟模型响应后 resume）。
+    // module B  plan can switch failed/succeeded (fix simulated model response after resume).
     const state = { modB: 'fail' as 'fail' | 'ok' }
 
-    // ---- faux 路由：按最近用户文本标记分发；MODB-FIX 先于 MODB-PLAN（其
-    // transcript 同时含两者标记）。----
+    // ---- faux routing: by most near user text mark record dispatch;MODB-FIX first at MODB-PLAN(its
+    // transcript also contains two mark record).----
     const route: ModelRoute = ({ texts, afterToolResult }) => {
       const last = texts.at(-1) ?? ''
       const has = (marker: string) => texts.some((t) => t.includes(marker))
       if (has('MODB-FIX-OBJECTIVE')) {
-        // scopeId 隔离核验：B 的 resume('plan') 必须落在 B 自己的 plan 会话——
-        // transcript 含 B 计划标记且不含 A 侧同名 label 会话内容。
+        // scopeId isolated core verify:B  resume('plan') must in B itself plan conversation - -
+        // transcript contains B plan mark record and excludes A side same name label conversation content.
         if (!has('MODB-PLAN-OBJECTIVE') || has('MODA-GOAL-OBJECTIVE') || has('SUBA-PLAN-OBJECTIVE')) {
           throw new Error(
-            `resume('plan') 续接了错误会话（scope 隔离破坏）：transcript 标记 ${JSON.stringify(texts.map((t) => t.slice(0, 60)))}`,
+            `resume('plan') resume error conversation (scope isolated break):transcript mark record ${JSON.stringify(texts.map((t) => t.slice(0, 60)))}`,
           )
         }
         return fauxAssistantMessage('B-FIX-OK')
       }
       if (has('MODB-PLAN-OBJECTIVE')) {
         return state.modB === 'fail'
-          ? fauxAssistantMessage('这不是合法 JSON')
+          ? fauxAssistantMessage('this is not legal JSON')
           : fauxAssistantMessage('{"answer":"b-plan-ok"}')
       }
       if (has('MODA-GOAL-OBJECTIVE')) {
@@ -407,11 +407,11 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
       return undefined
     }
 
-    // ---- 三级脚本：总控（内联）→ 模块 t3-mod-a / t3-mod-b → 叶子 t3-sub-a。----
-    // 模块 A 内部 parallel 承载同名 'plan' 的真并发（goal 与叶子子工作流）；
-    // 总控也并发启动两个模块，验证恢复时独立 scope 的缓存调用仍可命中。
+    // ---- three level script: total control (inline)→ module t3-mod-a / t3-mod-b → leaf t3-sub-a.----
+    // module A internal parallel bear load same name 'plan' true concurrency (goal and leaf sub- workflow);
+    // total control also concurrency start two module, verify restore when independent scope cache invoke still can hit.
     const goalGate = 'node -e "process.exit(require(\'fs\').existsSync(\'mod-a-done.txt\')?0:1)"'
-    // 信号动作追加写一行，兼作副作用计数器——resume 不得追加第二行。
+    // signal action append write one row, concurrent act side effect counter - -resume must not append second row.
     const signalCommand = [
       'node',
       '-e',
@@ -426,18 +426,18 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
     }
 
     const subAScript =
-      'export const meta = { name: "t3-sub-a", description: "三级嵌套叶子：agent.withMeta 同名 plan" }\n' +
-      'const r = await agent.withMeta("SUBA-PLAN-OBJECTIVE：直接回答任务摘要", { label: "plan" })\n' +
+      'export const meta = { name: "t3-sub-a", description: "three level embed set leaf:agent.withMeta same name plan" }\n' +
+      'const r = await agent.withMeta("SUBA-PLAN-OBJECTIVE: directly answer task summary", { label: "plan" })\n' +
       'if (!r.ok) throw new Error("t3-sub-a failed: " + r.error)\n' +
       'return r\n'
 
     const modAScript =
-      'export const meta = { name: "t3-mod-a", description: "模块A：并发同名 plan（goal+叶子）+ 幂等合入与清理" }\n' +
+      'export const meta = { name: "t3-mod-a", description: "moduleA: concurrency same name plan(goal+leaf)+ idempotent together and clean up" }\n' +
       'const pair = await parallel([\n' +
       '  () => workflow("t3-sub-a", {}),\n' +
       '  () => goal({\n' +
       '    label: "plan",\n' +
-      '    objective: "MODA-GOAL-OBJECTIVE：写入 mod-a-done.txt 并提交到当前分支",\n' +
+      '    objective: "MODA-GOAL-OBJECTIVE: write mod-a-done.txt and commit to when before branch",\n' +
       '    isolation: "worktree",\n' +
       `    gate: ${JSON.stringify(goalGate)},\n` +
       '    gateTimeoutMs: 5000,\n' +
@@ -467,17 +467,17 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
       'return { sub, goal: g, mergeOk: merge.ok, cleaned, branch }\n'
 
     const modBScript =
-      'export const meta = { name: "t3-mod-b", description: "模块B：同名 plan goal 耗尽后恢复" }\n' +
-      'const result = await goal({ objective: "MODB-PLAN-OBJECTIVE：按 Schema 返回答案", label: "plan", maxAttempts: 2, schema: ' +
+      'export const meta = { name: "t3-mod-b", description: "moduleB: same name plan goal exhausted after restore" }\n' +
+      'const result = await goal({ objective: "MODB-PLAN-OBJECTIVE: by Schema return answer proposal", label: "plan", maxAttempts: 2, schema: ' +
       JSON.stringify(planSchema) +
       ' })\n' +
       'if (!result.ok) throw new Error("mod-b plan goal failed (schema)")\n' +
       'const plan = JSON.parse(result.output)\n' +
-      'const fix = await agent("MODB-FIX-OBJECTIVE：确认已续接本模块 plan 会话", { resume: "plan" })\n' +
+      'const fix = await agent("MODB-FIX-OBJECTIVE: confirm already resume this module plan conversation", { resume: "plan" })\n' +
       'return { plan, fix, attempts: result.attempts }\n'
 
     const masterScript =
-      'export const meta = { name: "t3-master", description: "总控：两个同名 plan 模块并发启动" }\n' +
+      'export const meta = { name: "t3-master", description: "total control: two same name plan module concurrency start" }\n' +
       'const pair = await parallel([\n' +
       '  () => workflow("t3-mod-a", args),\n' +
       '  () => workflow("t3-mod-b", args),\n' +
@@ -489,14 +489,14 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
       'return { a, b }\n'
 
     try {
-      // ---- 保存三个子工作流定义（真实 save 动作 + meta.name 命名）。----
+      // ---- save three sub- workflow define (real save action + meta.name naming).----
       for (const script of [subAScript, modAScript, modBScript]) {
         await env.saveWorkflow(script)
       }
 
       const runArgs = { repoDir: repo, linux: PROCESS_SCAN_ON }
 
-      // ---- 第 1 次运行：模块 B 的 plan goal 耗尽尝试 → run failed。----
+      // ----  1 time run: module B  plan goal exhausted attempt → run failed.----
       env.faux.setResponses(routedResponses(route, 24))
       let failedRunId = ''
       await assert.rejects(
@@ -508,58 +508,58 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
             wait: true,
           }),
         (error: unknown) => {
-          assert.ok(error instanceof HelmError, `应为 HelmError，实得 ${String(error)}`)
+          assert.ok(error instanceof HelmError, `should be HelmError, got ${String(error)}`)
           assert.equal(error.code, 'workflow_failed')
           const details = error.details as { runId?: string } | undefined
-          assert.ok(typeof details?.runId === 'string', '失败详情应携带 runId')
+          assert.ok(typeof details?.runId === 'string', 'failed detail situation should carry runId')
           failedRunId = details!.runId!
           return true
         },
       )
       const failed = (await env.inspectRun(failedRunId)).run
       assert.equal(failed.status, 'failed')
-      assert.match(String(failed.error), /module B workflow failed/, `并发模块 B 失败应由总控显式报告：${failed.error}`)
-      assert.doesNotMatch(String(failed.error), /module A workflow failed/, `模块 A 不应先于模块 B 报失败：${failed.error}`)
+      assert.match(String(failed.error), /module B workflow failed/, `concurrency module B failed should by total control explicit report:${failed.error}`)
+      assert.doesNotMatch(String(failed.error), /module A workflow failed/, `module A must not first at module B report failed:${failed.error}`)
 
-      // 第 1 次账本：模块 A 全部成功；模块 B 的 plan 失败但保留执行元数据。
+      //  1 time ledger: module A all succeeded; module B  plan failed but keep execute metadata.
       const journal1 = readJournal(dataDir, env.conversationId, failedRunId)
       const agentEntries = journal1.filter((e) => e['type'] === 'agent')
       const goalEntry = agentEntries.find(
         (e) => e['ok'] === true && e['execution']?.['worktree']?.['branch']?.startsWith('helm/spawn-'),
       )
-      assert.ok(goalEntry, '模块 A 的 goal 应成功并落账 worktree 元数据')
+      assert.ok(goalEntry, 'module A  goal should succeeded and account worktree metadata')
       const failedPlan = agentEntries.find((e) => e['ok'] === false)
-      assert.ok(failedPlan, '模块 B 的 plan 失败应落账')
+      assert.ok(failedPlan, 'module B  plan failed should account')
       assert.equal(failedPlan!['attempt'], 1)
       assert.ok(
         typeof failedPlan!['execution']?.['conversationId'] === 'number',
-        '失败尝试应保留 conversationId（失败不丢弃执行元数据）',
+        'failed attempt should keep conversationId(failed do not discard execute metadata)',
       )
       const actionEntries = journal1.filter((e) => e['type'] === 'action')
-      // 动作账本行不含 label（按 index/key 落账）；数量、成功与幂等标记与
-      // 各动作的真实副作用证据（信号计数/git log/分支删除）共同锁验。
+      // action ledger row excludes label(by index/key account); amount, succeeded and idempotent mark record and
+      // each action real side effect verify based on (signal counter/git log/branch delete) jointly lock verify.
       assert.equal(
         actionEntries.length,
         PROCESS_SCAN_ON ? 3 : 2,
-        `应落账 merge-a${PROCESS_SCAN_ON ? '/cleanup-a' : ''}/signal-b，实得 ${actionEntries.length}`,
+        `should account merge-a${PROCESS_SCAN_ON ? '/cleanup-a' : ''}/signal-b, got ${actionEntries.length}`,
       )
       for (const entry of actionEntries) {
-        assert.equal(entry['ok'], true, `动作应全部成功：${JSON.stringify(entry)}`)
-        assert.equal(entry['idempotent'], true, '全部动作应显式标记幂等')
+        assert.equal(entry['ok'], true, `action should all succeeded:${JSON.stringify(entry)}`)
+        assert.equal(entry['idempotent'], true, 'all action should explicit mark record idempotent')
       }
-      assert.equal(readFileSync(signalPath, 'utf8'), 'x\n', '模块 A 信号动作应恰好执行一次')
+      assert.equal(readFileSync(signalPath, 'utf8'), 'x\n', 'module A signal action should exactly execute once')
 
-      // 真实副作用：合并提交已落在 main；隔离树已清理。
+      // real side effect: merge commit already in main; isolated tree already clean up.
       const logText = execFileSync('git', ['log', '--oneline', 'main'], { cwd: repo, encoding: 'utf8' })
-      assert.match(logText, /feat: mod-a/, '模块分支应真实合入 main')
+      assert.match(logText, /feat: mod-a/, 'module branch should real together main')
       if (PROCESS_SCAN_ON) {
         const goalBranch = goalEntry!['execution']['worktree']['branch'] as string
         const branchList = execFileSync('git', ['branch', '--list', goalBranch], { cwd: repo, encoding: 'utf8' })
-        assert.equal(branchList.trim(), '', 'cleanup(deleteBranch) 后模块分支应被删除')
+        assert.equal(branchList.trim(), '', 'cleanup(deleteBranch) after module branch should by delete')
       }
       const failedPlanConversationId = failedPlan!['execution']['conversationId'] as number
-      // 同名 'plan' 三会话共存互不混淆：goal / 叶子 / 模块 B 各自独立子会话。
-      assert.equal(agentEntries.filter(e => e['ok'] === false).length, 2, '模块 B 应耗尽两次尝试')
+      // same name 'plan' three conversation shared store mutual do not confuse:goal / leaf / module B each independent sub-conversation.
+      assert.equal(agentEntries.filter(e => e['ok'] === false).length, 2, 'module B should exhausted two time attempt')
       const planConversationIds = agentEntries
         .filter(e => (e['attempt'] ?? 1) === 1)
         .map((e) => e['execution']?.['conversationId'])
@@ -567,10 +567,10 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
       assert.equal(
         new Set(planConversationIds).size,
         planConversationIds.length,
-        `同名 plan 的三个会话应互不相同：${JSON.stringify(planConversationIds)}`,
+        `same name plan three conversation should mutual do not identical:${JSON.stringify(planConversationIds)}`,
       )
 
-      // ---- 修复模拟模型响应后断点续跑：仅失败节点 live，其余全缓存。----
+      // ---- fix simulated model response after checkpoint continue run: only failed node live, the rest all cache.----
       state.modB = 'ok'
       env.faux.setResponses(routedResponses(route, 24))
       const { run: resumed } = await env.runWorkflowAction({
@@ -579,50 +579,50 @@ describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeou
         wait: true,
       })
       assert.equal(resumed.status, 'completed', JSON.stringify(resumed.error))
-      assert.equal(resumed.replayedFrom, failedRunId, '续跑 run 应标记 replayedFrom')
+      assert.equal(resumed.replayedFrom, failedRunId, 'continue run run should mark record replayedFrom')
 
-      // 模块 A 值完整还原（withMeta 元数据从账本缓存重建）。
+      // module A value complete restore (withMeta metadata from ledger cache rebuild).
       const a = resumed.result.a
-      assert.ok(a, '模块 A 结果应存在')
+      assert.ok(a, 'module A result should store in')
       assert.equal(a.sub.ok, true)
       assert.equal(a.sub.output, 'SUBA-OK')
       assert.equal(a.goal.ok, true)
       assert.equal(a.goal.attempts, 1)
       assert.equal(a.goal.output, 'A-GOAL-DONE')
-      assert.ok(a.goal.execution.worktree, 'goal 的 execution.worktree 应从缓存还原')
+      assert.ok(a.goal.execution.worktree, 'goal  execution.worktree should from cache restore')
       assert.equal(a.goal.execution.worktree.branch, goalEntry!['execution']['worktree']['branch'])
       assert.equal(a.goal.execution.worktree.id, goalEntry!['execution']['worktree']['id'])
       assert.equal(a.goal.execution.worktree.path, goalEntry!['execution']['worktree']['path'])
       assert.equal(a.mergeOk, true)
       assert.equal(a.cleaned, PROCESS_SCAN_ON ? true : null)
 
-      // 模块 B：沿原失败 goal 会话续接，fix 仍续接 B 自己的 plan。
+      // module B: along original failed goal conversation resume,fix still resume B itself plan.
       const b = resumed.result.b
       assert.deepEqual(b.plan, { answer: 'b-plan-ok' })
       assert.equal(b.fix, 'B-FIX-OK')
-      assert.equal(b.attempts, 3, '恢复轮应在两次历史失败后继续第 3 次尝试')
+      assert.equal(b.attempts, 3, 'restore round should in two time history failed after continue 3 time attempt')
 
-      // 副作用零重复：信号计数保持一行；合入提交不重复。
-      assert.equal(readFileSync(signalPath, 'utf8'), 'x\n', 'resume 不得重复执行模块 A 的幂等动作')
+      // side effect zero duplicate: signal counter keep one row; together commit does not repeat.
+      assert.equal(readFileSync(signalPath, 'utf8'), 'x\n', 'resume must not repeat execution module A idempotent action')
       const logText2 = execFileSync('git', ['log', '--oneline', 'main'], { cwd: repo, encoding: 'utf8' })
-      assert.equal((logText2.match(/feat: mod-a/g) ?? []).length, 1, 'merge 动作不得重复执行')
+      assert.equal((logText2.match(/feat: mod-a/g) ?? []).length, 1, 'merge action must not repeat execution')
 
-      // 节点级核验：模块 A 的节点全部 cached；仅模块 B 的 plan/fix live。
+      // node level core verify: module A node all cached; only module B  plan/fix live.
       const nodes = (resumed.nodes ?? []) as Array<Record<string, any>>
       const agentNodes = nodes.filter((n) => n['kind'] === 'agent' || String(n['id']).startsWith('agent-'))
       const liveAgentNodes = agentNodes.filter((n) => n['cached'] !== true)
-      assert.equal(liveAgentNodes.length, 2, `应恰有 2 个 live agent 节点（B 的 plan 与 fix），实得 ${JSON.stringify(liveAgentNodes.map((n) => ({ id: n['id'], label: n['label'] })))}`)
+      assert.equal(liveAgentNodes.length, 2, `should exactly has 2  live agent node (B  plan and fix), got ${JSON.stringify(liveAgentNodes.map((n) => ({ id: n['id'], label: n['label'] })))}`)
       const livePlan = liveAgentNodes.find((n) => n['label'] === 'plan')
-      assert.ok(livePlan, 'live 重跑的失败节点应保留 label plan')
+      assert.ok(livePlan, 'live heavy run failed node should keep label plan')
       assert.ok(
         livePlan!['conversationId'] === failedPlanConversationId,
-        '失败 goal 应续接原生会话，不与 A 侧同名 plan 混淆',
+        'failed goal should resume original generate conversation, do not and A side same name plan confuse',
       )
       const cachedAgentNodes = agentNodes.filter((n) => n['cached'] === true)
-      assert.equal(cachedAgentNodes.length, 2, '模块 A 的 sub-a plan 与 goal 两个 agent 节点应全部命中缓存')
+      assert.equal(cachedAgentNodes.length, 2, 'module A  sub-a plan and goal two agent node should all hit cache')
       const actionNodes = nodes.filter((n) => String(n['id']).startsWith('action-'))
-      assert.ok(actionNodes.length >= 3, '动作节点应出现在进度树')
-      assert.ok(actionNodes.every((n) => n['cached'] === true), '全部动作节点应命中缓存（零副作用重放）')
+      assert.ok(actionNodes.length >= 3, 'action node should appear in enter tree')
+      assert.ok(actionNodes.every((n) => n['cached'] === true), 'all action node should hit cache (zero side effect replay)')
     } finally {
       await env.close()
     }

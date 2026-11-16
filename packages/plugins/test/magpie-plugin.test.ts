@@ -516,7 +516,7 @@ test('magpie6: 启用经 providers 端口挂载并拉取目录；停用后注销
     await waitFor(() => statusDoc(env).reachable === true)
     const doc = statusDoc(env)
     assert.equal(doc.modelCount, 5)
-    assert.equal(doc.summaryText, 'Magpie · 5 模型')
+    assert.equal(doc.summaryText, 'Magpie · 5 models')
     assert.equal(doc.gatewayUrl, DEFAULT_MAGPIE_ROOT)
     assert.equal(doc.configuredRoot, false)
     assert.equal(JSON.stringify(doc).includes(DEFAULT_MAGPIE_TOKEN), false, 'token 不进 doc')
@@ -717,7 +717,7 @@ test('magpie12: 缓存与网关隔离——切 root 后旧缓存不冒充；挂�
     const doc = statusDoc(env)
     assert.equal(doc.gatewayUrl, 'http://10.255.255.1:3425', 'doc 指向新网关')
     assert.equal(doc.reachable, false)
-    assert.equal(doc.summaryText, 'Magpie · 未连接')
+    assert.equal(doc.summaryText, 'Magpie · not connected')
     await env.host.setConfig(MAGPIE, {})
     // 回切默认网关：正确 root 的缓存经 cache-only 也可恢复
     await env.models.refresh({ providers: ['magpie'], allowNetwork: false })
@@ -774,7 +774,7 @@ test('magpie14: 可达后失败——reachable:false 时 modelCount 不冒充实
     )
     const doc = statusDoc(env)
     assert.equal(doc.reachable, false)
-    assert.equal(doc.summaryText, 'Magpie · 未连接')
+    assert.equal(doc.summaryText, 'Magpie · not connected')
     assert.equal(doc.modelCount, 5, '缓存计数保留（不是 0），但 reachable:false 明示非实时')
     assert.match(doc.lastError!, /exploded/)
   } finally {
@@ -895,7 +895,7 @@ test('magpie18: 配额失败不清空成「没有配额」——diagnostics 明�
     await waitFor(() => statusDoc(env).diagnostics.length > 0)
     const doc = statusDoc(env)
     assert.deepEqual(doc.quotas, [], '配额区清空（旧数据不冒充当前读数）')
-    assert.ok(doc.diagnostics.some((d) => d.includes('配额不可用') && d.includes('exploded')), `诊断含原因：${JSON.stringify(doc.diagnostics)}`)
+    assert.ok(doc.diagnostics.some((d) => d.includes('quotas unavailable') && d.includes('exploded')), `诊断含原因：${JSON.stringify(doc.diagnostics)}`)
 
     // trace 同步不可用：诊断同样记录（不是静默空列表）
     backend.trace = undefined
@@ -903,7 +903,7 @@ test('magpie18: 配额失败不清空成「没有配额」——diagnostics 明�
       conversation: makeConversation(1, 'magpie/group/relay'),
       inputs: [], outcome: 'completed', settledAt: Date.now(),
     })
-    await waitFor(() => statusDoc(env).diagnostics.some((d) => d.includes('路由轨迹不可用')))
+    await waitFor(() => statusDoc(env).diagnostics.some((d) => d.includes('routing trace unavailable')))
   } finally {
     await env.close()
   }
@@ -929,7 +929,7 @@ test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、client 轨道组件导
     const panel = ui.find((u) => u.surface === 'settings.panel')!.spec as {
       label: string; json?: unknown; docs?: unknown; client?: { module: string; export: string }
     }
-    assert.equal(panel.label, 'Magpie 网关')
+    assert.equal(panel.label, 'Magpie Gateway')
     assert.equal(panel.json, undefined, 'settingsPanel 不再声明 JSON Spec（单轨 client）')
     assert.equal(panel.docs, undefined, 'settingsPanel 不再声明 docs（组件 usePluginDoc 自主订阅）')
     assert.equal(panel.client!.module, 'index.tsx')
@@ -947,7 +947,7 @@ test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、client 轨道组件导
     }
 
     const command = ui.find((u) => u.surface === 'commandPalette')!.spec as { title: string; actionId: string }
-    assert.equal(command.title, '刷新 Magpie 模型目录')
+    assert.equal(command.title, 'Refresh the Magpie model catalog')
     assert.equal(command.actionId, 'refresh')
 
     // 无模型目录时非 magpie 会话 settled 不触网（保持原行为回归）

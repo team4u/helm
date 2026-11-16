@@ -1,15 +1,15 @@
 /**
- * 并发缺陷修复回归测试（runtime / model-registry 层）。
+ * concurrency defect fix regression test (runtime / model-registry layer).
  *
- * 覆盖：
- * - turn 结算链毒化：插件 turn_settled transform 产出非法事件载荷时，
- *   dispatchTurnSettled 不得 reject（否则 settledInflight 聚合链被毒化，
- *   close 的 teardown 中断、SQLite 句柄泄漏）；
- * - dispatchInternalEvent 逐监听器隔离（调用方语句调用不 await）；
- * - start() 单飞失败后可重试（startPromise 不残留陈旧拒绝）；
- * - close() 等待在途 start() 收敛（teardown 不与插件启动交错）；
- * - plugin.changed 的 refreshPluginTools 失败不丢事件；
- * - 运行时供应商注销 TOCTOU：rebuild await 窗口内新 stream acquire 显式失败。
+ * override:
+ * - turn compute chain toxic: plugin turn_settled transform produce out illegal event payload when,
+ *   dispatchTurnSettled must not reject(otherwise settledInflight aggregate chain by toxic,
+ *   close  teardown interrupt,SQLite handle leak leak);
+ * - dispatchInternalEvent one by one listener isolated (caller statement invoke do not await);
+ * - start() single fly failed after can retry (startPromise leaves no residue stale reject);
+ * - close() wait for in-flight start() converge (teardown do not and plugin start hand over wrong);
+ * - plugin.changed  refreshPluginTools failed do not lose event;
+ * - runtime provider deregister TOCTOU:rebuild await window inside new stream acquire explicit failed.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -29,7 +29,7 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: Retur
   return Object.assign(runtime, { __faux: faux })
 }
 
-test('turn_settled transform 产出非法事件载荷：结算链吸收错误，close 不被毒化中断', { timeout: 60_000 }, async (t) => {
+test('turn_settled transform produce out illegal event payload: compute chain absorb error,close do not by toxic interrupt', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-settle-poison-')
   const kernel = await openRuntime(dataDir)
   try {
@@ -37,19 +37,19 @@ test('turn_settled transform 产出非法事件载荷：结算链吸收错误，
       id: 'test:poison',
       definePlugin(ctx) {
         ctx.hook.onTurnSettled((payload) => {
-          // 钩子载荷校验只查必要字段：合法载荷 + 额外 BigInt 字段可穿过
-          // transform 管道，到 events.publish 的 JSON 脱敏处才显式抛错
+          // hook payload validate only inspect must want field: legal payload + extra BigInt field can through
+          // transform pipeline, to events.publish  JSON redaction where only then explicit throws
           return { action: 'transform', value: { ...payload, poisoned: 10n } } as never
         })
       },
     })
-    kernel.__faux.setResponses([fauxAssistantMessage('答一'), fauxAssistantMessage('答二')])
-    await kernel.submitInput(1, '第一回合')
+    kernel.__faux.setResponses([fauxAssistantMessage('answer one'), fauxAssistantMessage('answer two')])
+    await kernel.submitInput(1, 'one turn')
     await kernel.waitForIdle(1)
-    await kernel.submitInput(1, '第二回合')
+    await kernel.submitInput(1, 'second turn')
     await kernel.waitForIdle(1)
-    // 两回合都完成且结算链不为 rejected：close 内部三次 await settledInflight，
-    // 修复前首次 reject 即中断 teardown（store/database/events close 被跳过）。
+    // two turn all complete and compute chain do not is rejected:close internal three time await settledInflight,
+    // fix before first time reject i.e. interrupt teardown(store/database/events close by skip).
     await kernel.close()
     assert.equal(kernel.getConversation(1).completionSeq, 2)
   } finally {
@@ -57,7 +57,7 @@ test('turn_settled transform 产出非法事件载荷：结算链吸收错误，
   }
 })
 
-test('dispatchInternalEvent 逐监听器隔离：抛错不阻断后续监听器，也不产生 unhandledRejection', { timeout: 60_000 }, async (t) => {
+test('dispatchInternalEvent one by one listener isolated: throws do not block assert after continue listener, also produces no unhandledRejection', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-internal-event-')
   const kernel = await openRuntime(dataDir)
   const unhandled: unknown[] = []
@@ -65,42 +65,42 @@ test('dispatchInternalEvent 逐监听器隔离：抛错不阻断后续监听器�
   process.on('unhandledRejection', onUnhandled)
   try {
     let secondRan = false
-    kernel.onEvent('test:probe', async () => { throw new Error('第一个监听器失败') })
+    kernel.onEvent('test:probe', async () => { throw new Error('a listener failed') })
     kernel.onEvent('test:probe', async () => { secondRan = true })
-    // 调用方语句调用（不 await 不 catch）——与 plugin-host emitEvent 同姿势
+    // caller statement invoke (do not await do not catch) - - and plugin-host emitEvent same posture momentum
     void kernel.emitHostEvent('test:probe', { a: 1 })
     await new Promise((resolve) => setImmediate(resolve))
     await kernel.emitHostEvent('test:probe', { a: 2 })
-    assert.equal(secondRan, true, '前一个监听器抛错不得阻断后续监听器')
-    assert.equal(unhandled.length, 0, 'dispatchInternalEvent 返回的 promise 不得 reject')
+    assert.equal(secondRan, true, 'before a listener throws must not block assert after continue listener')
+    assert.equal(unhandled.length, 0, 'dispatchInternalEvent return promise must not reject')
   } finally {
     process.off('unhandledRejection', onUnhandled)
     await kernel.close()
   }
 })
 
-test('start() 失败清除单飞句柄：重试发起全新尝试，而非永远收到陈旧拒绝', { timeout: 60_000 }, async (t) => {
+test('start() failed clear single fly handle: retry start all new attempt, while non- forever receives stale reject', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-start-retry-')
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   try {
     let startCalls = 0
-    // 注：pluginHost.start 自身也有单飞残留（不在本次修复白名单内），这里
-    // 替换实例方法以隔离验证 KernelRuntime 层的重试语义。
+    // note:pluginHost.start itself also has single fly leftover (do not in this time fix blank name single inside), this in
+    // replace instance method with isolated verify KernelRuntime layer retry semantics.
     const host = kernel.plugins as unknown as { start: () => Promise<void> }
     host.start = async () => {
       startCalls += 1
-      if (startCalls === 1) throw new Error('第一次启动失败')
+      if (startCalls === 1) throw new Error('first time failed to start')
     }
-    await assert.rejects(kernel.start(), /第一次启动失败/)
+    await assert.rejects(kernel.start(), /first time failed to start/)
     assert.equal(startCalls, 1)
     await kernel.start()
-    assert.equal(startCalls, 2, '重试必须重新调用 pluginHost.start，而不是返回缓存的陈旧拒绝')
+    assert.equal(startCalls, 2, 'retry must re- invoke pluginHost.start, while is not return cache stale reject')
   } finally {
     await kernel.close()
   }
 })
 
-test('close() 等待在途 start() 收敛：服务 stop 在 start 完成之后，teardown 不与启动交错', { timeout: 60_000 }, async (t) => {
+test('close() wait for in-flight start() converge: service stop in start complete after,teardown do not and start hand over wrong', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-close-waits-start-')
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   try {
@@ -118,22 +118,22 @@ test('close() 等待在途 start() 收敛：服务 stop 在 start 完成之后�
     })
     const starting = kernel.start()
     await new Promise((resolve) => setTimeout(resolve, 25))
-    // start 仍在途（服务 start 被门闩挂起）时发起 close
+    // start still in-flight (service start by latch suspended) when start close
     const closing = kernel.close()
     startGate.resolve()
     await Promise.all([starting, closing])
-    assert.deepEqual(order, ['start-begin', 'start-end', 'stop'], 'teardown 必须等 start 完成后再停服务')
+    assert.deepEqual(order, ['start-begin', 'start-end', 'stop'], 'teardown must etc. start after completion again stop service')
   } finally {
     await kernel.close().catch(() => {})
   }
 })
 
-test('plugin.changed：refreshPluginTools 抛错不阻断事件发布', { timeout: 60_000 }, async (t) => {
+test('plugin.changed:refreshPluginTools throws do not block assert event publish', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-plugin-changed-')
   const kernel = await openRuntime(dataDir)
   try {
     ;(kernel as unknown as { refreshPluginTools: () => void }).refreshPluginTools = () => {
-      throw new Error('工具热装失败')
+      throw new Error('tool hot install failed')
     }
     const seen: string[] = []
     kernel.events.subscribe((frame) => {
@@ -141,20 +141,20 @@ test('plugin.changed：refreshPluginTools 抛错不阻断事件发布', { timeou
       if (event.type === 'plugin.changed') seen.push(event.type)
     })
     kernel.emitHostEvent('plugin.changed', { plugin: { id: 'test:hot', version: '1.0.0', enabled: true, locked: false } })
-    assert.equal(seen.length, 1, '热装失败仍必须发布 plugin.changed（客户端不能丢失插件状态变化）')
+    assert.equal(seen.length, 1, 'hot install failed still must publish plugin.changed(client cannot lose plugin state change)')
   } finally {
     await kernel.close()
   }
 })
 
-test('供应商注销 rebuild 窗口内：新 stream acquire 显式失败（runtime_provider_retiring），不再产生不可检测的在途流', { timeout: 60_000 }, async (t) => {
+test('provider deregister rebuild window inside: new stream acquire explicit failed (runtime_provider_retiring), no longer produce cannot detect in-flight stream', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-provider-retiring-')
   await ensureDataDir(dataDir)
   const providersSvc = new ProviderService(dataDir)
   const credentialsSvc = new CredentialService(dataDir)
   const configSvc = new ConfigService(dataDir)
-  // 门闩 providersSvc.list：第 2 次（注销的 rebuild）在窗口内挂起，制造
-  // 「usage 检查已过、rebuild 未完」的 await 窗口
+  // latch providersSvc.list: 2 time (deregister rebuild) in window inside suspended, fabricate
+  // usage check already,rebuild not completely await window
   let listCalls = 0
   const listGate = deferred()
   const gatedProviders = Object.create(providersSvc) as ProviderService
@@ -163,7 +163,7 @@ test('供应商注销 rebuild 窗口内：新 stream acquire 显式失败（runt
     if (listCalls >= 2) await listGate.promise
     return providersSvc.list()
   }
-  // get 显式指向原实例：其内部 this.list() 否则会误计入门控次数
+  // get explicit points to original instance: its internal this.list() otherwise will mistakenly count gate control time count
   ;(gatedProviders as unknown as { get: ProviderService['get'] }).get = (id) => providersSvc.get(id)
 
   let current = createModels()
@@ -189,14 +189,14 @@ test('供应商注销 rebuild 窗口内：新 stream acquire 显式失败（runt
   const unregister = await registry.registerRuntimeProvider(faux.provider, 'test:retire')
   assert.ok(published.includes('models.changed'))
 
-  // 发起注销并在 rebuild 窗口内停留
+  // start deregister and in rebuild window inside stop
   const unregistering = unregister()
   await waitFor(() => listCalls >= 2, { timeoutMs: 10_000, intervalMs: 10 })
-  assert.equal(listCalls, 2, '注销的 rebuild 应进入门闩窗口')
+  assert.equal(listCalls, 2, 'deregister rebuild should enter latch window')
 
-  // 窗口内：旧集合仍含该供应商，但新 stream acquire 必须显式失败
+  // window inside: old set still contains the provider, but new stream acquire must explicit failed
   const wrapped = current.getProvider('retire-p')
-  assert.ok(wrapped, '窗口内旧集合仍可寻址该供应商')
+  assert.ok(wrapped, 'window inside old set still can seek address the provider')
   assert.throws(
     () => (wrapped as unknown as { stream: () => void }).stream(),
     (err: unknown) => err instanceof HelmError && err.code === 'runtime_provider_retiring' && err.status === 409,
@@ -204,5 +204,5 @@ test('供应商注销 rebuild 窗口内：新 stream acquire 显式失败（runt
 
   listGate.resolve()
   await unregistering
-  assert.ok(!registry.listModelProviders().some((p) => p.id === 'retire-p'), '注销完成后目录移除')
+  assert.ok(!registry.listModelProviders().some((p) => p.id === 'retire-p'), 'deregister after completion directory remove')
 })

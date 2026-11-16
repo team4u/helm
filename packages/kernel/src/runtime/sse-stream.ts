@@ -1,23 +1,23 @@
 /**
- * SSE 流搭建共享原语（EventHub.response 与 SessionDocEventHub.response 复用）。
+ * SSE stream pair create sharing original language (EventHub.response and SessionDocEventHub.response re- use).
  *
- * - encodeSseChunk：发布/订阅路径统一编码（同一份字节进 ring 与全部订阅者）；
- * - byteBoundedWrite：字节级有界背压（hwm=0 下 desiredSize 恒为 -排队字节数，
- *   超限即慢客户端判定，返回 false 由调用方关流，绝不静默丢帧）；
- * - sseResponse：统一 ReadableStream（hwm=0 + byteLength 计量）与响应头构造。
+ * - encodeSseChunk: publish/subscribe path unify encode (the same byte enter ring and all subscribe);
+ * - byteBoundedWrite: byte level has boundary back press (hwm=0 under desiredSize constant is -queue up byte count,
+ *   over limit i.e. slow client decide, return false by caller closure stream, never static default lose frame);
+ * - sseResponse: unify ReadableStream(hwm=0 + byteLength count amount) and response head construct.
  */
 
-/** SSE chunk 编码器（单一实例；发布一次，ring、重放与全部订阅者复用同一份字节）。 */
+/** SSE chunk encode (single one instance; publish once,ring, replay and all subscribe re- use the same byte). */
 const SSE_ENCODER = new TextEncoder()
 
 export function encodeSseChunk(name: string, data: unknown): Uint8Array {
   return SSE_ENCODER.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)
 }
 
-/** 空闲心跳注释行（预编码共享；SSE 解析器忽略，不伪造业务事件）。 */
+/** idle heartbeat note release row (pre- encode sharing;SSE parse ignore, do not fabricate business event). */
 export const KEEPALIVE_CHUNK: Uint8Array = SSE_ENCODER.encode(': keepalive\n\n')
 
-/** SSE 响应头（两个事件面同一套）。 */
+/** SSE response head (two event side the same set). */
 const SSE_RESPONSE_HEADERS: Record<string, string> = {
   'content-type': 'text/event-stream',
   'cache-control': 'no-cache',
@@ -26,8 +26,8 @@ const SSE_RESPONSE_HEADERS: Record<string, string> = {
 }
 
 /**
- * 字节级有界背压写入：controller 缺失/已关或排队字节 + 本帧超过预算时返回
- * false（慢客户端，由调用方显式关流）；enqueue 抛错同样返回 false。
+ * byte level has boundary back press write:controller missing/already closure or queue up byte + this frame exceeds pre- compute when return
+ * false(slow client, by caller explicit closure stream);enqueue throws same return false.
  */
 export function byteBoundedWrite(
   controller: ReadableStreamDefaultController<Uint8Array> | undefined,
@@ -36,7 +36,7 @@ export function byteBoundedWrite(
   maxPendingBytes: number,
 ): boolean {
   if (controller === undefined || closed) return false
-  // 字节级有界背压：desiredSize = -排队字节数（hwm=0）；超限即慢客户端。
+  // byte level has boundary back press:desiredSize = -queue up byte count (hwm=0); over limit i.e. slow client.
   const queuedBytes = controller.desiredSize === null ? 0 : -controller.desiredSize
   if (queuedBytes + chunk.byteLength > maxPendingBytes) return false
   try {
@@ -47,17 +47,17 @@ export function byteBoundedWrite(
   }
 }
 
-/** 幂等关闭流控制器（已关的 close 再关不抛）。 */
+/** idempotent close stream control (already closure close again closure do not throw). */
 export function closeControllerQuietly(controller: ReadableStreamDefaultController<Uint8Array> | undefined): void {
   try {
     controller?.close()
   } catch {
-    // 已关：幂等。
+    // already closure: idempotent.
   }
 }
 
-/** 统一 SSE 响应构造：hwm=0（desiredSize 恒为 -排队字节数，供背压判定；
- * pull 仅在队列空且存在 pending read 时触发）+ byteLength 计量 + 标准响应头。 */
+/** unify SSE response construct:hwm=0(desiredSize constant is -queue up byte count, supply back press decide;
+ * pull only in queue empty and store in pending read when trigger)+ byteLength count amount + standard response head. */
 export function sseResponse(source: UnderlyingSource<Uint8Array>): Response {
   const stream = new ReadableStream<Uint8Array>(
     source,

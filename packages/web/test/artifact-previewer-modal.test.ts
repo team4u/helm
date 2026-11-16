@@ -268,7 +268,7 @@ test('client 轨插件预览器：真实 Props（会话上下文 / blobUrl / siz
   assert.equal(props.text, 'a,b\n1,2', '文本解码传入')
 
   // 默认切换：点击「默认预览」回退宿主默认渲染
-  const defaultBtn = [...document.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('默认预览'))
+  const defaultBtn = [...document.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('Default preview'))
   assert.ok(defaultBtn !== undefined, '提供切回默认入口')
   await act(async () => { defaultBtn!.click() })
   await flush()
@@ -409,7 +409,7 @@ test('文本超 1MiB：默认渲染显式超限说明；插件 Props text 为 nu
 
   assert.ok(document.querySelector('[data-testid="json-previewer"]') !== null, '插件命中渲染')
   assert.equal(pluginText, null, '超限 text 为 null（不截断伪装）')
-  assert.match(document.body.textContent ?? '', /预览上限/, '显式超限说明呈现')
+  assert.match(document.body.textContent ?? '', /preview limit/, '显式超限说明呈现')
 
   act(() => { root.unmount() })
   

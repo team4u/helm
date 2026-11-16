@@ -1,18 +1,18 @@
 /**
- * 插件默认停用注册 / 启停状态持久化 专项测试。
+ * plugin by default deactivate register / start stop state persist dedicated items test.
  *
- * 覆盖（builtin:herdr 默认停用场景的宿主机制）：
- * - register(definition, { enabled: false })：声明仍运行（获得 configSchema），
- *   但服务绝不启动、无 UI、manifest enabled:false、旧 ctx 即刻失效；
- * - 停用态可先 setConfig 再 enable（configSchema 保留不丢）；
- * - enable 成功后持久 true；disable 后持久 false；跨「重启」（新 PluginHost
- *   + 同一持久 store）开关保留：曾持久化过的插件不再回落到声明缺省；
- * - locked 插件恒启用（声明 enabled:false 也强行启用）；
- * - stop 失败 / 持久化失败的双失败显式 JSON-safe 诊断；
- * - 服务声明 liveTasks 的保活闸门：无 tracker 任务时仍阻止 disable/unregister，
- *   任务清空后可停用；liveTasks 异常/非法输出显式报错绝不当空。
+ * override (builtin:herdr by default deactivate scenario host mechanism):
+ * - register(definition, { enabled: false }): declaration still run (obtain configSchema),
+ *   but service never start, without UI,manifest enabled:false, old ctx i.e. moment expires;
+ * - deactivate state can first setConfig again enable(configSchema keep do not lose);
+ * - enable after success durable true;disable after durable false; across restart (new PluginHost
+ *   + the same durable store) switch keep: once persist plugin no longer back to declaration default;
+ * - locked plugin constant enable (declaration enabled:false also strong row enable);
+ * - stop failed / persist failed double failed explicit JSON-safe diagnose;
+ * - service declaration liveTasks keep-alive gate: without tracker task when still block stop disable/unregister,
+ *   task empty after can deactivate;liveTasks exception/illegal output explicit errors never when empty.
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -40,7 +40,7 @@ import {
 } from './helpers.js';
 
 // ---------------------------------------------------------------------------
-// 测试基建
+// test base create
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number) {
@@ -73,7 +73,7 @@ function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async () => { throw new HelmError('unsupported', 'this fixture do not execute node command', 501) },
     emitEvent: (type: string, p: unknown) => {
       events.push(`event:${type}`);
       payload.push({ type, payload: p });
@@ -82,14 +82,14 @@ function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{
   return Object.assign(api, { __payload: payload });
 }
 
-/** 事件载荷记录器（plugin.changed 断言用）。 */
+/** event payload record (plugin.changed assertion use). */
 function payloadRecorder(hostApi: PluginHostBackend): Array<{ type: string; payload: unknown }> {
   return (hostApi as PluginHostBackend & { __payload?: Array<{ type: string; payload: unknown }> }).__payload ?? [];
 }
 
 /**
- * 内存启停持久化 store：模拟 KernelRuntime 重启（同一 store 对象跨 host 复用
- * 等价于 config.json 落盘后重读；另有真实文件 store 测试覆盖落盘格式）。
+ * memory start stop persist store: simulated KernelRuntime restart (the same store object across host re- use
+ * etc. price at config.json after heavy read; another has real file store test override format).
  */
 class MemoryToggleStore implements PluginConfigStore {
   enabled = new Map<string, boolean>();
@@ -121,7 +121,7 @@ function makeHost(config?: PluginConfigStore): PluginHost {
   return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: api, docs, config });
 }
 
-/** 声明服务启动/停止均记录的插件定义工厂。 */
+/** declaration service start/stop all record plugin define work vendor. */
 function servicePlugin(
   id: string,
   opts: {
@@ -135,12 +135,12 @@ function servicePlugin(
     id,
     ...(opts.locked ? { locked: true } : {}),
     definePlugin: (ctx) => {
-      ctx.configSchema({ endpoint: { type: 'string', label: '端点' } });
-      ctx.ui.sidebarItem({ id: 'nav', label: '导航' });
+      ctx.configSchema({ endpoint: { type: 'string', label: 'end point' } });
+      ctx.ui.sidebarItem({ id: 'nav', label: 'navigation' });
       ctx.hook.onTrigger(() => ({ action: 'continue' as const }));
       ctx.action({
         id: 'ping',
-        description: '探活',
+        description: 'probe',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         handler: () => ({ ok: true }),
@@ -173,10 +173,10 @@ afterEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// 默认停用注册：不连外部服务、无 UI、schema 可用、ctx 即刻失效
+// by default deactivate register: do not connect external service, without UI,schema available,ctx i.e. moment expires
 // ---------------------------------------------------------------------------
 
-test('enabled:false 注册：声明运行获得 schema，但服务不启动、无 UI、动作拒绝、旧 ctx 失效', { timeout: 60_000 }, async () => {
+test('enabled:false register: declaration run obtain schema, but service do not start, without UI, action reject, old ctx expires', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   const started: string[] = [];
@@ -187,20 +187,20 @@ test('enabled:false 注册：声明运行获得 schema，但服务不启动、�
     { enabled: false },
   );
 
-  // 服务绝不启动（默认停用 = 不连外部 Herdr 服务）
+  // service never start (by default deactivate = do not connect external Herdr service)
   assert.deepEqual(started, []);
-  // manifest：enabled:false 且 hooks/actions/tools 全空
+  // manifest:enabled:false and hooks/actions/tools all empty
   const summary = host.list().find((p) => p.id === 'builtin:herdr')!;
   assert.equal(summary.enabled, false);
   assert.deepEqual(summary.hooks, []);
   assert.deepEqual(summary.actions, []);
   assert.deepEqual(summary.tools, []);
-  // UI 贡献为空（emitPluginChanged 的 ui:[] 与 listUi 一致）
+  // UI contribution is empty (emitPluginChanged  ui:[] and listUi consistent)
   assert.deepEqual(host.listUi(), []);
   assert.deepEqual(host.listRoutes(), []);
-  // 动作/工具在停用态拒绝
+  // action/tool in deactivate state reject
   await assertRejectsCode(() => host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
-  // runHook 无参与者直通
+  // runHook without reference and direct through
   const r = await host.runHook('trigger', {
     id: 'e1',
     source: 'test',
@@ -208,13 +208,13 @@ test('enabled:false 注册：声明运行获得 schema，但服务不启动、�
     createdAt: 1,
   });
   assert.equal(r.action, 'continue');
-  // 注册即发 plugin.changed（enabled:false / ui:[]）
-  // （recorder 与 events 共享，见 makeHostApi 实现）
-  // configSchema 保留（停用态可读）
+  // register i.e. plugin.changed(enabled:false / ui:[])
+  // (recorder and events sharing, see makeHostApi implement)
+  // configSchema keep (deactivate state can read)
   assert.equal(host.getConfigSchema('builtin:herdr').endpoint?.type, 'string');
-  // 宿主生命周期资源（manageConversation）在停用注册路径已释放
+  // host lifecycle asset (manageConversation) in deactivate register path already release
   assert.ok(events.includes('release:builtin:herdr:7'));
-  // 旧 definePlugin 上下文已关闭（epoch 递增废黜）
+  // old definePlugin context already close (epoch pass increase abandon dismiss)
   await host.register(
     {
       id: 'probe:ctx',
@@ -224,7 +224,7 @@ test('enabled:false 注册：声明运行获得 schema，但服务不启动、�
     },
   );
   void stolen;
-  // 直接断言 stolen ctx：重新注册一个真正偷 ctx 的插件
+  // directly assertion stolen ctx: re- register a truly stealthily ctx plugin
   await host.unregister('probe:ctx');
   await host.register(
     {
@@ -241,7 +241,7 @@ test('enabled:false 注册：声明运行获得 schema，但服务不启动、�
   );
 });
 
-test('停用注册路径的 plugin.changed 事件：enabled:false 且 ui:[]', { timeout: 60_000 }, async () => {
+test('deactivate register path plugin.changed event:enabled:false and ui:[]', { timeout: 60_000 }, async () => {
   const host = makeHost(new MemoryToggleStore());
   const rec = recorder;
   await host.register(servicePlugin('builtin:herdr'), { enabled: false });
@@ -253,10 +253,10 @@ test('停用注册路径的 plugin.changed 事件：enabled:false 且 ui:[]', { 
 });
 
 // ---------------------------------------------------------------------------
-// 先配置再启用（configSchema 不因 disable 丢失）
+// first config again enable (configSchema do not because disable lose)
 // ---------------------------------------------------------------------------
 
-test('停用态先 setConfig 再 enable：配置生效、definePlugin getConfig 读到、服务启动', { timeout: 60_000 }, async () => {
+test('deactivate state first setConfig again enable: config takes effect,definePlugin getConfig read to, service start', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   const started: string[] = [];
@@ -266,7 +266,7 @@ test('停用态先 setConfig 再 enable：配置生效、definePlugin getConfig 
     {
       id: 'builtin:herdr',
       definePlugin: (ctx) => {
-        ctx.configSchema({ endpoint: { type: 'string', required: true, label: '端点' } });
+        ctx.configSchema({ endpoint: { type: 'string', required: true, label: 'end point' } });
         configSeenInDefine = ctx.getConfig();
         ctx.service({
           id: 'daemon',
@@ -282,26 +282,26 @@ test('停用态先 setConfig 再 enable：配置生效、definePlugin getConfig 
     { enabled: false },
   );
 
-  // 停用态即可配置（schema 保留是前提）
+  // deactivate state i.e. can config (schema keep is before mention)
   assert.equal(host.getConfigSchema('builtin:herdr').endpoint?.type, 'string');
   await host.setConfig('builtin:herdr', { endpoint: 'unix:///tmp/herdr.sock' });
   assert.equal(store.get('builtin:herdr')['endpoint'], 'unix:///tmp/herdr.sock');
 
-  // enable：服务启动、definePlugin 读到已持久配置、持久 true
+  // enable: service start,definePlugin read to already durable config, durable true
   await host.enable('builtin:herdr');
   assert.deepEqual(started, ['start']);
   assert.equal(configSeenInDefine!['endpoint'], 'unix:///tmp/herdr.sock');
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
   assert.equal(store.enabled.get('builtin:herdr'), true);
 
-  // disable 后 schema 仍保留，可再次改配置（供下次启用）
+  // disable after schema still keep, can again change config (supply under time enable)
   await host.disable('builtin:herdr');
   assert.equal(host.getConfigSchema('builtin:herdr').endpoint?.type, 'string');
   await host.setConfig('builtin:herdr', { endpoint: 'unix:///tmp/other.sock' });
   assert.equal(store.enabled.get('builtin:herdr'), false);
 });
 
-test('disable 清空运行期注册但保留 configSchema：与停用注册落位形态一致', { timeout: 60_000 }, async () => {
+test('disable empty run phase register but keep configSchema: and deactivate register form consistent', { timeout: 60_000 }, async () => {
   const host = makeHost(new MemoryToggleStore());
   await host.register(servicePlugin('builtin:herdr'));
   assert.equal(host.listUi().length, 1);
@@ -309,22 +309,22 @@ test('disable 清空运行期注册但保留 configSchema：与停用注册落�
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
   assert.deepEqual(host.listUi(), []);
   assert.deepEqual(host.listRoutes(), []);
-  // schema 保留
+  // schema keep
   assert.equal(host.getConfigSchema('builtin:herdr').endpoint?.type, 'string');
 });
 
 // ---------------------------------------------------------------------------
-// 跨重启开关保留（内存 store 模拟 + 真实文件 store 落盘）
+// across restarts switch keep (memory store simulated + real file store )
 // ---------------------------------------------------------------------------
 
-test('跨重启开关保留（内存 store）：disable 后新 host register(缺省) 仍停用；enable 后重启仍启用', { timeout: 60_000 }, async () => {
+test('across restarts switch keep (memory store):disable after new host register(default) still deactivate;enable after restart still enable', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const h1 = makeHost(store);
   await h1.register(servicePlugin('builtin:herdr'), { enabled: false });
   await h1.enable('builtin:herdr');
   assert.equal(store.enabled.get('builtin:herdr'), true);
 
-  // 「重启」：新 PluginHost 共享同一持久 store；声明 enabled:false 也不再生效
+  // restart: new PluginHost sharing the same durable store; declaration enabled:false also no longer takes effect
   const h2 = makeHost(store);
   const started2: string[] = [];
   await h2.register(
@@ -332,9 +332,9 @@ test('跨重启开关保留（内存 store）：disable 后新 host register(缺
     { enabled: false },
   );
   assert.equal(h2.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
-  assert.deepEqual(started2, ['start'], '持久 true 时重启必须启动服务');
+  assert.deepEqual(started2, ['start'], 'durable true when restart must start service');
 
-  // disable 后重启：声明缺省（enabled 默认 true）也保持停用
+  // disable after restart: declaration default (enabled by default true) also keep deactivate
   await h2.disable('builtin:herdr');
   const h3 = makeHost(store);
   const started3: string[] = [];
@@ -342,16 +342,16 @@ test('跨重启开关保留（内存 store）：disable 后新 host register(缺
     servicePlugin('builtin:herdr', { onStart: () => started3.push('start') }),
   );
   assert.equal(h3.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
-  assert.deepEqual(started3, [], '持久 false 时重启绝不启动服务');
+  assert.deepEqual(started3, [], 'durable false when restart never start service');
 });
 
-test('从未持久化时不写默认值：register 后 store 无记录，纯内存 host 行为不变', { timeout: 60_000 }, async () => {
+test('from not persisted when do not write default value:register after store without record, in-memory host behavior do not change', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   await host.register(servicePlugin('p:fresh'));
   assert.equal(host.list().find((p) => p.id === 'p:fresh')!.enabled, true);
-  assert.equal(store.enabled.has('p:fresh'), false, 'register 不写默认启停值');
-  // 纯内存 host（无 store）：启停不持久化，语义保持既有
+  assert.equal(store.enabled.has('p:fresh'), false, 'register do not write by default start stop value');
+  // in-memory host(without store): start stop do not persist, semantics keep since has
   const bare = makeHost();
   await bare.register(servicePlugin('p:bare'), { enabled: false });
   assert.equal(bare.list().find((p) => p.id === 'p:bare')!.enabled, false);
@@ -360,7 +360,7 @@ test('从未持久化时不写默认值：register 后 store 无记录，纯内�
   assert.equal(bare.list().find((p) => p.id === 'p:bare')!.enabled, false);
 });
 
-test('HelmPluginConfigStore：pluginEnabled 独立落盘 config.json，与 plugins 配置/credentials 分离，跨实例重启保留', { timeout: 60_000 }, async () => {
+test('HelmPluginConfigStore:pluginEnabled independent config.json, and plugins config/credentials separate, across instance restart keep', { timeout: 60_000 }, async () => {
   const credentialsDir = join(dataDir, 'cred');
   mkdirSync(credentialsDir, { recursive: true });
   const config = new ConfigService(dataDir);
@@ -368,18 +368,18 @@ test('HelmPluginConfigStore：pluginEnabled 独立落盘 config.json，与 plugi
   const store = new HelmPluginConfigStore({ config, credentials });
   await store.load();
 
-  assert.equal(store.getEnabled('builtin:herdr'), undefined, '从未持久化返回 undefined');
+  assert.equal(store.getEnabled('builtin:herdr'), undefined, 'from not persisted return undefined');
 
-  // 与既有 plugins 配置、credentials 共存同一 config.json：互不干扰
+  // and since has plugins config,credentials shared store the same config.json: mutual do not interference
   await store.setEnabled('builtin:herdr', false);
   await store.setEnabled('builtin:profile', true);
   await store.set('builtin:herdr', { endpoint: 'unix:///x' }, { endpoint: { type: 'string' } });
 
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
   assert.deepEqual(raw['pluginEnabled'], { 'builtin:herdr': false, 'builtin:profile': true });
-  assert.deepEqual(raw['plugins'], { 'builtin:herdr': { endpoint: 'unix:///x' } }, 'pluginEnabled 与 plugins 配置分离');
+  assert.deepEqual(raw['plugins'], { 'builtin:herdr': { endpoint: 'unix:///x' } }, 'pluginEnabled and plugins config separate');
 
-  // 新实例（模拟重启）：load 预热后 getEnabled 同步可读
+  // new instance (simulated restart):load warm up after getEnabled sync can read
   const store2 = new HelmPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) });
   await store2.load();
   assert.equal(store2.getEnabled('builtin:herdr'), false);
@@ -388,7 +388,7 @@ test('HelmPluginConfigStore：pluginEnabled 独立落盘 config.json，与 plugi
   assert.equal(store2.get('builtin:herdr')['endpoint'], 'unix:///x');
 });
 
-test('HelmPluginConfigStore load：pluginEnabled 非法结构/非布尔值显式 config_corrupt，绝不静默忽略', { timeout: 60_000 }, async () => {
+test('HelmPluginConfigStore load:pluginEnabled illegal structure/non- boolean value explicit config_corrupt, never static default ignore', { timeout: 60_000 }, async () => {
   const credentialsDir = join(dataDir, 'cred');
   mkdirSync(credentialsDir, { recursive: true });
   const write = (content: unknown) =>
@@ -407,7 +407,7 @@ test('HelmPluginConfigStore load：pluginEnabled 非法结构/非布尔值显式
   );
 });
 
-test('HelmPluginConfigStore setEnabled：非布尔入参 400 validation_error，不触盘', { timeout: 60_000 }, async () => {
+test('HelmPluginConfigStore setEnabled: non- boolean reference 400 validation_error, do not trigger', { timeout: 60_000 }, async () => {
   const credentialsDir = join(dataDir, 'cred');
   mkdirSync(credentialsDir, { recursive: true });
   const store = new HelmPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) });
@@ -420,10 +420,10 @@ test('HelmPluginConfigStore setEnabled：非布尔入参 400 validation_error，
 });
 
 // ---------------------------------------------------------------------------
-// locked 保护
+// locked protect
 // ---------------------------------------------------------------------------
 
-test('locked 插件恒启用：声明 enabled:false 也强行启用，disable 403', { timeout: 60_000 }, async () => {
+test('locked plugin constant enable: declaration enabled:false also strong row enable,disable 403', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   const started: string[] = [];
@@ -434,17 +434,17 @@ test('locked 插件恒启用：声明 enabled:false 也强行启用，disable 40
   assert.equal(host.list().find((p) => p.id === 'builtin:profile')!.enabled, true);
   assert.deepEqual(started, ['start']);
   await assertRejectsCode(() => host.disable('builtin:profile'), 'plugin_locked');
-  // locked 未持久化任何启停值（disable 被拒不产生写副作用）
+  // locked not persisted any start stop value (disable by refuse produces no write side effect)
   assert.equal(store.enabled.has('builtin:profile'), false);
 });
 
 // ---------------------------------------------------------------------------
-// 双失败诊断：stop 失败 / 持久化失败
+// double failed diagnose:stop failed / persist failed
 // ---------------------------------------------------------------------------
 
-test('disable 持久化失败：实际已停用仍发真实 plugin.changed(enabled:false, ui:[])，诊断显式上抛且可 JSON 序列化', { timeout: 60_000 }, async () => {
+test('disable persist failed: actual deactivated still real plugin.changed(enabled:false, ui:[]), diagnose explicit on throw and can JSON serialization', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
-  store.failSetEnabled = new Error('磁盘只读');
+  store.failSetEnabled = new Error('disk only read');
   const host = makeHost(store);
   await host.register(servicePlugin('builtin:herdr'));
   assert.equal(host.listUi().length, 1);
@@ -453,10 +453,10 @@ test('disable 持久化失败：实际已停用仍发真实 plugin.changed(enabl
   const before = pluginChangedPayloads(rec).length;
   const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_enabled_persist_failed')) as HelmError;
   assert.equal(err.status, 500);
-  assert.match(err.message, /磁盘只读/);
+  assert.match(err.message, /disk only read/);
   assert.doesNotThrow(() => JSON.stringify(err.details));
 
-  // 实际状态：已停用、UI 清空、事件已发（真实状态帧）
+  // actual state: deactivated,UI empty, event already (real state frame)
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
   assert.deepEqual(host.listUi(), []);
   const changed = pluginChangedPayloads(rec);
@@ -465,14 +465,14 @@ test('disable 持久化失败：实际已停用仍发真实 plugin.changed(enabl
   assert.deepEqual(changed.at(-1)!.ui, []);
 });
 
-test('disable stop 与持久化双失败：stop 诊断为主链，persistError 聚合进 details', { timeout: 60_000 }, async () => {
+test('disable stop and persist double failed:stop diagnose is main chain,persistError aggregate enter details', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
-  store.failSetEnabled = new Error('盘满了');
+  store.failSetEnabled = new Error('full');
   const host = makeHost(store);
   await host.register(
     servicePlugin('builtin:herdr', {
       onStop: () => {
-        throw new Error('svc 炸了');
+        throw new Error('svc blast');
       },
     }),
   );
@@ -485,35 +485,35 @@ test('disable stop 与持久化双失败：stop 诊断为主链，persistError �
   };
   assert.deepEqual(
     details.stopErrors.map((e) => [e.serviceId, e.error.message]),
-    [['daemon', 'svc 炸了']],
+    [['daemon', 'svc blast']],
   );
   assert.doesNotThrow(() => JSON.stringify(err.details));
-  // 持久化失败原始信息保留（包在 persistError 诊断里）
-  assert.match(JSON.stringify(err.details), /盘满了/);
-  // 状态已停用且事件已发（三重收尾不丢真实状态帧）
+  // persist failed original information keep (package in persistError diagnose in)
+  assert.match(JSON.stringify(err.details), /full/);
+  // state deactivated and event already (three heavy wrap-up do not lose real state frame)
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
   assert.equal(pluginChangedPayloads(rec).length, before + 1);
 });
 
-test('enable 持久化失败：回滚为停用、不发布 enabled 事件、可再 enable，诊断显式', { timeout: 60_000 }, async () => {
+test('enable persist failed: rollback is deactivate, do not publish enabled event, can again enable, diagnose explicit', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   await host.register(servicePlugin('builtin:herdr'), { enabled: false });
 
-  store.failSetEnabled = new Error('网络盘断开');
+  store.failSetEnabled = new Error('network disconnect');
   const rec = recorder;
   const before = pluginChangedPayloads(rec).length;
   const err = (await assertRejectsCode(() => host.enable('builtin:herdr'), 'plugin_enabled_persist_failed')) as HelmError;
-  assert.match(err.message, /网络盘断开/);
+  assert.match(err.message, /network disconnect/);
   assert.doesNotThrow(() => JSON.stringify(err.details));
 
-  // 回滚：停用、服务已 stop、无 enabled:true 事件帧
+  // rollback: deactivate, service already stop, without enabled:true event frame
   const summary = host.list().find((p) => p.id === 'builtin:herdr')!;
   assert.equal(summary.enabled, false);
   const changed = pluginChangedPayloads(rec);
-  assert.equal(changed.length, before, 'enable 失败不发布任何 plugin.changed');
+  assert.equal(changed.length, before, 'enable failed do not publish any plugin.changed');
 
-  // 恢复后可再次 enable 成功
+  // restore after can again enable succeeded
   store.failSetEnabled = undefined;
   await host.enable('builtin:herdr');
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
@@ -521,10 +521,10 @@ test('enable 持久化失败：回滚为停用、不发布 enabled 事件、可�
 });
 
 // ---------------------------------------------------------------------------
-// 服务声明 liveTasks 保活闸门
+// service declaration liveTasks keep-alive gate
 // ---------------------------------------------------------------------------
 
-test('liveTasks 声明保活任务：无 tracker 在途任务时仍拒绝 disable/unregister，任务清空后可停用', { timeout: 60_000 }, async () => {
+test('liveTasks declaration keep-alive task: without tracker in-flight task when still reject disable/unregister, task empty after can deactivate', { timeout: 60_000 }, async () => {
   const store = new MemoryToggleStore();
   const host = makeHost(store);
   const panes = new Set<string>();
@@ -536,25 +536,25 @@ test('liveTasks 声明保活任务：无 tracker 在途任务时仍拒绝 disabl
   const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_has_live_tasks')) as HelmError;
   assert.equal(err.status, 409);
   assert.deepEqual((err.details as { activeTasks: string[] }).activeTasks, ['pane:win-1']);
-  // 拒绝路径不产生任何副作用：未 stop、未持久化、状态未变
+  // reject path produces no side effect: not stop, not persisted, state not change
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
   assert.equal(store.enabled.has('builtin:herdr'), false);
   const errU = (await assertRejectsCode(() => host.unregister('builtin:herdr'), 'plugin_has_live_tasks')) as HelmError;
   assert.deepEqual((errU.details as { activeTasks: string[] }).activeTasks, ['pane:win-1']);
 
-  // 任务清空后可停用
+  // task empty after can deactivate
   panes.clear();
   await host.disable('builtin:herdr');
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
   assert.equal(store.enabled.get('builtin:herdr'), false);
 });
 
-test('liveTasks 异常或非法输出：显式 plugin_live_tasks_check_failed，绝不当空放行', { timeout: 60_000 }, async () => {
+test('liveTasks exception or illegal output: explicit plugin_live_tasks_check_failed, never when empty let through', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(
     servicePlugin('builtin:herdr', {
       liveTasks: () => {
-        throw new Error('对账器崩了');
+        throw new Error('for account crash');
       },
     }),
   );
@@ -562,10 +562,10 @@ test('liveTasks 异常或非法输出：显式 plugin_live_tasks_check_failed，
   assert.equal(err.status, 500);
   const details = err.details as { serviceId: string; error: { message: string } };
   assert.equal(details.serviceId, 'daemon');
-  assert.equal(details.error.message, '对账器崩了');
-  assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true, '检查失败不改变状态');
+  assert.equal(details.error.message, 'for account crash');
+  assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true, 'check failed does not change state');
 
-  // 非法返回类型（非字符串数组）：同样显式报错
+  // illegal return type (non- string array): same explicit errors
   const host2 = makeHost();
   await host2.register(
     servicePlugin('builtin:herdr', {
@@ -575,7 +575,7 @@ test('liveTasks 异常或非法输出：显式 plugin_live_tasks_check_failed，
   await assertRejectsCode(() => host2.disable('builtin:herdr'), 'plugin_live_tasks_check_failed');
 });
 
-test('liveTasks 注册校验：非函数显式 invalid_service_spec；未声明/未启动服务不参与检查', { timeout: 60_000 }, async () => {
+test('liveTasks register validate: non- function explicit invalid_service_spec; not declaration/not start service does not participate check', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await assert.rejects(
     host.register({
@@ -591,9 +591,9 @@ test('liveTasks 注册校验：非函数显式 invalid_service_spec；未声明/
     }),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_service_spec',
   );
-  assert.equal(host.list().find((p) => p.id === 'p:bad'), undefined, '非法声明注册整体失败');
+  assert.equal(host.list().find((p) => p.id === 'p:bad'), undefined, 'illegal declaration register whole failed');
 
-  // 声明了 liveTasks 但服务未 started（停用注册路径）：不参与闸门，可正常停用态落位
+  // declaration liveTasks but service not started(deactivate register path): does not participate gate, can normal deactivate state
   const host2 = makeHost();
   await host2.register(
     servicePlugin('builtin:herdr', { liveTasks: () => ['ghost'] }),
@@ -603,10 +603,10 @@ test('liveTasks 注册校验：非函数显式 invalid_service_spec；未声明/
 });
 
 // ---------------------------------------------------------------------------
-// epoch / 旧 ctx 失效（停用注册与 enable 重建新周期）
+// epoch / old ctx expires (deactivate register and enable rebuild new cycle)
 // ---------------------------------------------------------------------------
 
-test('停用注册的旧 ctx 与 enable 后的旧 ctx 均失效：新周期重建', { timeout: 60_000 }, async () => {
+test('deactivate register old ctx and enable after old ctx all expires: new cycle rebuild', { timeout: 60_000 }, async () => {
   const host = makeHost(new MemoryToggleStore());
   let stolen: Parameters<NonNullable<PluginDefinition['definePlugin']>>[0] | undefined;
   await host.register(
@@ -623,7 +623,7 @@ test('停用注册的旧 ctx 与 enable 后的旧 ctx 均失效：新周期重�
     () => stolen!.configSchema({ a: { type: 'string' } }),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_closed',
   );
-  // enable 进入新周期成功；随后 disable 使新周期 ctx 也失效
+  // enable enter new cycle succeeded; then disable make new cycle ctx also expires
   await host.enable('builtin:herdr');
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
   await host.disable('builtin:herdr');
@@ -633,12 +633,12 @@ test('停用注册的旧 ctx 与 enable 后的旧 ctx 均失效：新周期重�
   );
 });
 
-test('register 定义抛错：无论 options.enabled 与否，注册整体回滚移除', { timeout: 60_000 }, async () => {
+test('register define throws: regardless of options.enabled and otherwise, register whole rollback remove', { timeout: 60_000 }, async () => {
   const host = makeHost(new MemoryToggleStore());
   const bad: PluginDefinition = {
     id: 'p:boom',
     definePlugin: () => {
-      throw new Error('定义崩了');
+      throw new Error('define crash');
     },
   };
   await assertRejectsCode(() => host.register(bad, { enabled: false }), 'plugin_registration_failed');

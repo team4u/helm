@@ -1,10 +1,10 @@
 /**
- * builtin:herdr 的 diagnostics.collect 探针采集（从 herdr.ts 拆出）。
+ * builtin:herdr's diagnostics.collect probe collection (split out of herdr.ts).
  *
- * 巡检发起方（builtin:superagent Watchdog service）采集原生事实后经宿主
- * 内部事件追加本插件自有窗格的真实 probes（含远端轮询）。事件在宿主
- * await，采集失败如实上抛给发起方，绝不静默吞。
- * human 归属红线：非自有 pane 一律不产生 probe；总览重取为只读采集。
+ * The inspection initiator (builtin:superagent Watchdog service) collects native facts, then via the host's
+ * internal event this plugin appends real probes for its own panes (incl. remote polling). The event is
+ * awaited in the host; collection failures propagate to the initiator as-is, never silently swallowed.
+ * human-ownership red line: no probes for non-own panes; the overview refetch is a read-only collection.
  */
 
 import {
@@ -19,76 +19,76 @@ import type { OverviewProjector } from './overview.js'
 import { nodeIdOf, scopeKey, type ManagedPane, type PaneRegistry } from './panes.js'
 import { parseAgentResult } from './rpc.js'
 
-/** 探针采集对插件主干（herdr.ts）的最小依赖面。 */
+/** The probe collector's minimal dependency surface on the plugin main (herdr.ts). */
 export interface HerdrProbeDeps {
   asks: AskCoordinator
-  /** registry 现值（停用后 undefined：采集直接返回，不触达服务器）。 */
+  /** The registry's current value (undefined after disable: collection returns immediately, touching no server). */
   registry(): PaneRegistry | undefined
   overview(): OverviewProjector | undefined
   executor(): HerdrExecutor | undefined
   transport(): HerdrTransport
-  /** 本启用周期冻结的本机连接目标。 */
+  /** The frozen local connection target for this enable cycle. */
   localTarget(): HerdrTarget
-  /** 本启用周期的连接 abort signal。 */
+  /** The connection abort signal for this enable cycle. */
   signal(): AbortSignal
-  /** 权威归属不符/窗格消失时的结算对齐（registry settled + executor 释放 + 缓存回收）。 */
+  /** Settle alignment on authoritative ownership mismatch / pane disappearance (registry settled + executor release + cache reclaim). */
   settleUnmanaged(pane: ManagedPane): void
-  /** Ask 销单（404 静默；其余失败如实通知）。 */
+  /** Ask cancellation (404 silent; other failures notify honestly). */
   cancelAskQuietly(entry: AskEntry, reason: 'cancelled' | 'superseded'): Promise<void>
 }
 
 /**
- * 探针采集器：事件监听 + 单窗格探针构造（停滞水位维护与 facts 口径）。
+ * Probe collector: event listener + single-pane probe construction (stall watermark maintenance and facts semantics).
  *
- * 观察水位（本启用周期；scopeKey(nodeId, paneId) 键）：
- * stalledMs 口径 = 「最近一次观察到 (status, seq) 变化的时点」至今的时长——
- * 首次观测从 0 起，水位或状态变化重置；探测失败（unreachable）不变更
- * 水位（读失败不是进展证据，停滞继续累计）。注意该口径只反映状态变迁，
- * 不含工作活动（长时间无状态翻转的活跃任务会如实表现为停滞递增）。
+ * Observation watermarks (per enable cycle; keyed by scopeKey(nodeId, paneId)):
+ * stalledMs semantics = the time since "the last moment a (status, seq) change was observed" --
+ * first observation starts at 0, and any watermark or status change resets it; a failed probe (unreachable)
+ * does not move the watermark (a failed read is not evidence of progress; stall keeps accumulating). Note this
+ * semantics reflects only state transitions, not work activity (an active task with no state flips for a long
  */
 export class HerdrProbeCollector {
   private readonly observations = new Map<string, { status: string; seq: number | undefined; since: number }>()
-  /** 连续探测失败计数（agent.get 成功即清零；仅诊断事实，不触发自动动作）。 */
+  /** Consecutive probe failure count (cleared on a successful agent.get; a diagnostic fact only, triggering no automatic action). */
   private readonly failures = new Map<string, number>()
 
   constructor(private readonly deps: HerdrProbeDeps) {}
 
-  /** 窗格从 registry 结算移除时同步回收观察水位/失败计数（防长驻泄漏）。 */
+  /** When a pane is settled out of the registry, reclaim its observation watermark/failure count in sync (prevent long-lived leaks). */
   forget(nodeId: string | undefined, paneId: string): void {
     const scope = scopeKey(nodeId, paneId)
     this.observations.delete(scope)
     this.failures.delete(scope)
   }
 
-  /** 停用清空：水位与失败计数随启用周期作废（新周期从首次观测重新起算）。 */
+  /** Disable clears: watermarks and failure counts are invalidated with the enable cycle (new cycle restarts from first observation). */
   reset(): void {
     this.observations.clear()
     this.failures.clear()
   }
 
-  /** 注册 diagnostics.collect 监听（与拆分前同：definePlugin 期一次注册，停用靠 registry 空值守卫）。 */
+  /** Register the diagnostics.collect listener (same as before the split: registered once at definePlugin; disable relies on the registry-undefined guard). */
   register(host: { onEvent(type: string, listener: (payload: unknown) => Promise<void> | void): () => void }): void {
     host.onEvent(DIAGNOSTICS_COLLECT_EVENT, async (raw) => {
       await this.collect(raw)
     })
   }
 
-  /** 单轮采集：入口边界校验 -> 总览重取 -> 并发探针 -> 追加（失败如实上抛给发起方）。 */
+  /** One collection round: entry boundary validation -> overview refetch -> concurrent probes -> append (failures propagate to the initiator honestly). */
   private async collect(raw: unknown): Promise<void> {
-    // 事件入口边界校验：非法载荷显式抛错给发布方（await 语义），不猜不吞。
+    // Event entry boundary validation: an invalid payload throws to the publisher (await semantics); no guessing, no swallowing.
     const collection = parseCollection(raw)
     const registry = this.deps.registry()
     if (!registry) return
     const overview = this.deps.overview()
     if (overview !== undefined) {
-      // cwd/seen 等无事件变化（官方 actions.rs:1780 只改 cwd 不发事件）
-      // 依赖本 tick 重取快照对齐；单飞合并，不新增独立定时器。
+      // cwd/seen etc. have no event changes (official actions.rs:1780 only changes cwd, emits no event);
+      // rely on this tick's snapshot refetch to align; single-flight merge, no new standalone timer.
       await overview.refresh(registry, this.deps.asks, this.deps.localTarget())
     }
     const now = Date.now()
     const activePanes = registry.all().filter((pane) => pane.outcome !== 'settled')
-    // 并发探针：单窗格 agent.get 带 5s 短超时且 Promise.all 并发采集，
-    // 防止单个慢/挂节点串行卡死采集预算。
+    // Concurrent probes: single-pane agent.get with a 5s short timeout and Promise.all concurrency,
+    // preventing a single slow/hung node from serially stalling the collection budget.
     const probes = await Promise.all(
       activePanes.map(async (pane): Promise<ReturnType<HerdrProbeCollector['buildProbe']> | undefined> => {
         const scope = scopeKey(nodeIdOf(pane), pane.paneId)
@@ -122,8 +122,8 @@ export class HerdrProbeCollector {
           this.failures.delete(scope)
         } catch {
           status = 'unreachable'
-          // 权威不可达：绝不猜造 seq；水位不变更（停滞继续累计），
-          // 连续失败计数如实递增。
+          // Authority unreachable: never fabricate a seq; the watermark is unchanged (stall keeps accumulating),
+          // and the consecutive failure count increments honestly.
           this.failures.set(scope, (this.failures.get(scope) ?? 0) + 1)
         }
         return this.buildProbe(pane, status, authoritySeq, now)
@@ -132,7 +132,7 @@ export class HerdrProbeCollector {
     appendProbes(collection, probes.filter((probe) => probe !== undefined))
   }
 
-  /** 单窗格探针构造（停滞水位维护与 facts 口径；采集事件主体）。 */
+  /** Single-pane probe construction (stall watermark maintenance and facts semantics; the collection event body). */
   private buildProbe(
     pane: ManagedPane,
     status: string,
@@ -140,13 +140,13 @@ export class HerdrProbeCollector {
     now: number,
   ) {
     const scope = scopeKey(nodeIdOf(pane), pane.paneId)
-    // 停滞水位：首次观测从 0 起；(status, seq) 任一变化重置；
-    // unreachable 保持旧水位累计（读失败不是进展证据，不用总运行时长
-    // 冒充停滞，也不因探测失败归零重跑）。
+    // Stall watermark: first observation starts at 0; any change of (status, seq) resets;
+    // unreachable keeps the old watermark accumulating (a failed read is not evidence of progress; neither
+    // faking stall with total runtime nor resetting to rerun on probe failure).
     const prev = this.observations.get(scope)
     let stalledMs = 0
     if (status === 'unreachable') {
-      // 读失败：沿用旧观测点继续累计（无旧观测时从当下起算，不伪造进展）。
+      // Read failure: keep accumulating from the old observation point (with no old observation, start from now; never fabricate progress).
       if (prev !== undefined) {
         stalledMs = now - prev.since
       } else {
@@ -181,7 +181,7 @@ export class HerdrProbeCollector {
         effectiveCwd: pane.effectiveCwd,
         parentConversationId: pane.parentConversationId,
         pendingAskCount,
-        // 口径如实：stalledMs 基于状态/水位变化观察时点，不含工作活动。
+        // Honest semantics: stalledMs is based on the observation moment of state/watermark changes, not work activity.
         stalledBasis: 'since-last-state-change',
       },
     }

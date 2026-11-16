@@ -1,17 +1,17 @@
 /**
- * Magpie 网关模型目录（GET /v1/models）→ pi-ai Model 转换。
+ * Magpie gateway model catalog (GET /v1/models) -> pi-ai Model conversion.
  *
- * 映射与 pi-magpie v0.1.6 catalog.ts 一一对应：
- * - native_endpoints 决定请求协议与 baseUrl（/v1/responses → OpenAI Responses
- *   on {root}/v1；/v1/messages → Anthropic Messages on {root}；其余 →
+ * The mapping corresponds one-to-one with pi-magpie v0.1.6 catalog.ts:
+ * - native_endpoints decide the request protocol and baseUrl (/v1/responses -> OpenAI Responses
+ *   on {root}/v1; /v1/messages -> Anthropic Messages on {root}; anything else ->
  *   OpenAI Chat Completions on {root}/v1）；
- * - reasoning levels → thinkingLevelMap（pi 的 off 映射模型自身 none；
- *   Anthropic 无 none 档时保留 off 键交由 SDK 发送禁用 thinking）；
- * - Claude 4.6+ 仅支持 adaptive thinking：compat.forceAdaptiveThinking = true。
+ * - reasoning levels -> thinkingLevelMap (pi's off maps the model's own none;
+ *   when Anthropic lacks a none tier, keep the off key and let the SDK send the disable-thinking request);
+ * - Claude 4.6+ supports adaptive thinking only: compat.forceAdaptiveThinking = true.
  */
 import type { Model, Provider } from '@earendil-works/pi-ai'
 
-/** GET /v1/models 的单条目录项。 */
+/** One catalog entry of GET /v1/models. */
 export interface MagpieModelEntry {
   id: string
   display_name?: string
@@ -22,16 +22,16 @@ export interface MagpieModelEntry {
   modalities?: { input?: string[] }
   reasoning?: boolean
   supported_reasoning_levels?: Array<{ effort?: string }>
-  /** 该模型被原生转发的 API 路径（决定请求协议）。 */
+  /** The API path this model is natively forwarded on (decides the request protocol). */
   native_endpoints?: string[]
-  /** 供应它的 magpie provider（路由组为其首个成员的 provider）。 */
+  /** The magpie provider serving it (the routing group is its first member's provider). */
   owned_by?: string
 }
 
-/** pi 的 thinking 档位（pi-ai MODEL_THINKING_LEVELS），由低到高。 */
+/** pi's thinking levels (pi-ai MODEL_THINKING_LEVELS), low to high. */
 export const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
-/** Magpie 原生转发的两条 API 路径。 */
+/** The two API paths Magpie forwards natively. */
 export const MAGPIE_PATHS = {
   responses: '/v1/responses',
   anthropic: '/v1/messages',
@@ -40,8 +40,8 @@ export const MAGPIE_PATHS = {
 export type MagpieApi = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
 
 /**
- * 按模型被原生转发的 API 决定请求协议与 baseUrl 挂点：
- * - 'root' → baseUrl = {root}（SDK 自行追加 /v1）；
+ * Decide the request protocol and baseUrl mount point by the model's natively forwarded API:
+ * - 'root' -> baseUrl = {root} (the SDK appends /v1 itself);
  * - 'v1'   → baseUrl = {root}/v1。
  */
 export function magpieApi(nativeEndpoints: readonly string[] | undefined): {
@@ -54,15 +54,15 @@ export function magpieApi(nativeEndpoints: readonly string[] | undefined): {
   return { api: 'openai-completions', endpoint: 'v1' }
 }
 
-/** 该形态模型的 baseUrl。 */
+/** This shape's model baseUrl. */
 export function baseUrlFor(root: string, endpoint: 'root' | 'v1'): string {
   return endpoint === 'root' ? root : `${root}/v1`
 }
 
 /**
- * 模型 reasoning levels → pi thinkingLevelMap：pi 的每个档位映射模型自身
- * 档位（off → none），模型没有的档位以 null 隐藏。Anthropic Messages 上
- * off 缺失时保留键（SDK 据此发送禁用 thinking 的请求）。
+ * Model reasoning levels -> pi thinkingLevelMap: each pi level maps to the model's own
+ * level (off -> none); levels the model lacks are hidden as null. On Anthropic Messages,
+ * when off is missing the key is kept (the SDK uses it to send a disable-thinking request).
  */
 export function thinkingLevelMap(
   efforts: readonly string[],
@@ -78,12 +78,12 @@ export function thinkingLevelMap(
   return map
 }
 
-/** claude-opus-5-5 / claude-sonnet-4.6 等（id 可带命名空间前缀）。 */
+/** claude-opus-5-5 / claude-sonnet-4.6 etc. (ids may carry a namespace prefix). */
 const CLAUDE_VERSION = /claude-(?:opus|sonnet|haiku)-(\d+)(?:[-.](\d{1,2}))?(?:[^0-9]|$)/
 
 /**
- * Claude 是否仅支持 adaptive thinking：4.6 起 `thinking.type=enabled` + 预算
- * 会被拒绝（requires adaptive thinking），必须改请求 adaptive thinking。
+ * Whether a Claude supports adaptive thinking only: from 4.6, `thinking.type=enabled` + a budget
+ * gets rejected (requires adaptive thinking); the request must switch to adaptive thinking.
  */
 export function adaptiveThinking(modelId: string): boolean {
   const match = CLAUDE_VERSION.exec(modelId.toLowerCase())
@@ -93,22 +93,22 @@ export function adaptiveThinking(modelId: string): boolean {
   return major > 4 || (major === 4 && minor >= 6)
 }
 
-/** 目录项缺省兜底（pi-ai Model 必填字段的最小保守值，非探测值）。 */
+/** Catalog-entry fallback defaults (minimal conservative values for pi-ai Model's required fields; not probed values). */
 export const DEFAULT_CONTEXT_WINDOW = 128_000
 export const DEFAULT_MAX_TOKENS = 16_384
 
 /**
- * 本插件构建的 pi 模型：携带 magpieOwnedBy（供配额按 provider 归属）与
- * helmContextWindowKnown（上游窗口是否真实已知；见 runtime/models.ts 的
- * HelmModelSourceMeta）。Model<MagpieApi> 的 compat 字段按 api 条件分布；
- * openai-completions 模型无 compat 字段，故以交叉类型精确表达附加字段。
+ * The pi models this plugin builds carry magpieOwnedBy (for per-provider quota attribution) and
+ * helmContextWindowKnown (whether the upstream window is really known; see HelmModelSourceMeta in
+ * runtime/models.ts). Model<MagpieApi>'s compat field distributes conditionally by api;
+ * openai-completions models have no compat field, so the extra fields are expressed precisely via a cross type.
  */
 export type PiMagpieModel = Model<MagpieApi> & {
   magpieOwnedBy?: string
   helmContextWindowKnown?: boolean
 }
 
-/** 单条目录项 → pi 模型。 */
+/** One catalog entry -> a pi model. */
 export function toPiModel(entry: MagpieModelEntry, root: string): PiMagpieModel {
   const { api, endpoint } = magpieApi(entry.native_endpoints)
   const efforts = (entry.supported_reasoning_levels ?? [])
@@ -127,11 +127,11 @@ export function toPiModel(entry: MagpieModelEntry, root: string): PiMagpieModel 
     baseUrl: baseUrlFor(root, endpoint),
     input: input.length > 0 ? input : ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    // magpie 将「会推理」与「有档位」分开记录：reasoning:true + 空档位是
-    // 只有思考开关无努力档的模型，两种都保留 reasoning 标记。
+    // magpie records "can reason" and "has levels" separately: reasoning:true + empty levels is a
+    // model with only a thinking toggle and no effort levels; both keep the reasoning flag.
     reasoning: entry.reasoning === true || efforts.length > 0,
-    // 上游窗口为正数才是已知窗口；缺省兑底值不得冒充真实窗口
-    // （contextUsage 不据此显示百分比）。
+    // Only a positive upstream window counts as known; the fallback value must never pose as a real
+    // window (contextUsage does not show a percentage based on it).
     contextWindow: upstreamWindow ?? DEFAULT_CONTEXT_WINDOW,
     helmContextWindowKnown: upstreamWindow !== undefined,
     maxTokens: positive(entry.max_output_tokens) ?? DEFAULT_MAX_TOKENS,
@@ -145,14 +145,14 @@ export function toPiModel(entry: MagpieModelEntry, root: string): PiMagpieModel 
   return model
 }
 
-/** 整个目录 → pi 模型列表（无 id 条目丢弃）。 */
+/** The whole catalog -> a pi model list (entries without ids dropped). */
 export function toPiModels(entries: readonly MagpieModelEntry[], root: string): PiMagpieModel[] {
   return entries
     .filter((entry) => typeof entry?.id === 'string' && entry.id.length > 0)
     .map((entry) => toPiModel(entry, root))
 }
 
-/** 目录项归属的 magpie provider：owned_by 优先，其次 id 的 provider 前缀。 */
+/** The magpie provider owning a catalog entry: owned_by first, then the id's provider prefix. */
 export function ownedByOf(entry: MagpieModelEntry): string | undefined {
   if (entry.owned_by) return entry.owned_by
   const slash = entry.id.indexOf('/')
@@ -163,10 +163,10 @@ function positive(value: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
 }
 
-/** 持久化模型是否属于指定网关 root（缓存恢复时过滤其它 root 的旧目录）。 */
+/** Whether a persisted model belongs to the given gateway root (filtering old catalogs of other roots at cache recovery). */
 export function servedByRoot(model: PiMagpieModel, root: string): boolean {
   return model.baseUrl === root || model.baseUrl === baseUrlFor(root, 'v1')
 }
 
-/** Provider 类型再导出（provider.ts / magpie.ts 使用）。 */
+/** Provider type re-export (used by provider.ts / magpie.ts). */
 export type { Provider }

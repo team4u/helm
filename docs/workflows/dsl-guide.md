@@ -133,7 +133,7 @@ if (!res.ok) throw new Error(`重试 ${res.attempts} 次后未通过: ${res.erro
 const wt = res.execution?.worktree  // { id, path, branch, ... }，后续可据此合入或清理
 ```
 
-**`maxAttempts` 重试语义**：第 1 次尝试因门禁失败、门禁超时或回合超时而失败，且已取得子会话 ID 时，引擎自动以 `resume: label` 携带失败原因与报错输出续跑，最多执行 `maxAttempts` 次。重试沿用同一子会话与同一 Worktree，不重建隔离树；第 2 次起的提示词为原文追加 `[attempt N failed]` 失败块（失败原因先经宿主脱敏再生成重试提示词与账本 Key）。失败分支同样保留 `execution`（含 Worktree 描述）与 `gate` 结果，脚本可据此决定人工介入或清理；只有带执行句柄（`conversationId` / `executionId`）的失败才能作为续接锚点，无句柄的失败不可续接。
+**`maxAttempts` 重试语义**：任意一次 agent 尝试失败且已取得子会话执行句柄（`conversationId` 或 `executionId`）时，引擎可自动以 `resume: label` 携带失败原因与报错输出续跑，最多执行 `maxAttempts` 次；例如模型回合、结构化输出校验、门禁或超时失败都可能进入重试。重试沿用同一子会话与同一 Worktree，不重建隔离树；第 2 次起的提示词为原文追加 `[attempt N failed]` 失败块（失败原因先经宿主脱敏再生成重试提示词与账本 Key）。失败分支同样保留 `execution`（含 Worktree 描述）与 `gate` 结果，脚本可据此决定人工介入或清理；无执行句柄的失败不可续接。
 
 `maxAttempts` 限制每一轮实际执行次数。恢复失败 Run 时，scope 末尾的失败目标可获新预算，沿原句柄继续；`attempts` 累计包含历史尝试。已经被脚本处理并继续执行后续调用的失败结果保持回放，成功兄弟节点复用缓存。每次尝试独立落账，细节见[状态流水与故障恢复](journaling-recovery.md)。
 

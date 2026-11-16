@@ -89,10 +89,10 @@ function computeReconnectBackoffMs(retry: number): number {
 }
 
 function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
-  if (ctx.streamState.mode !== null) throw new Error('实时连接收到重复的 snapshot 控制帧')
+  if (ctx.streamState.mode !== null) throw new Error('Live connection received a duplicate snapshot control frame')
   const snap = payload as HelmSnapshot
   if (snap === null || typeof snap !== 'object' || typeof snap.bootId !== 'string' || snap.bootId === '') {
-    throw new Error('内核实时快照格式无效（缺少有效 bootId）')
+    throw new Error('Invalid kernel live snapshot format (no valid bootId)')
   }
   ctx.streamState.mode = 'fresh'
   ctx.session.current++
@@ -117,7 +117,7 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
 }
 
 function handleResumedFrame(payload: unknown, ctx: FrameHandlerContext): void {
-  if (ctx.streamState.mode !== null) throw new Error('实时连接收到重复的 resumed 控制帧')
+  if (ctx.streamState.mode !== null) throw new Error('Live connection received a duplicate resumed control frame')
   const resumed = payload as HelmResumedFrame
   const current = ctx.sseCursorRef.current
   if (
@@ -130,7 +130,7 @@ function handleResumedFrame(payload: unknown, ctx: FrameHandlerContext): void {
     !Number.isSafeInteger(resumed.headSeq) ||
     resumed.headSeq < current.seq
   ) {
-    throw new Error('实时连接续传握手不匹配，正在全量重新同步')
+    throw new Error('Live connection resume handshake mismatch; full re-sync in progress')
   }
   ctx.streamState.mode = 'resumed'
   ctx.streamState.resumedHeadSeq = resumed.headSeq
@@ -201,10 +201,10 @@ function dispatchFrameSideEffects(
 }
 
 function handleEventFrame(payload: unknown, ctx: FrameHandlerContext): void {
-  if (ctx.streamState.mode === null) throw new Error('实时连接缺少初始快照')
+  if (ctx.streamState.mode === null) throw new Error('Live connection missing the initial snapshot')
   const frame = payload as HelmEventFrame
   if (frame === null || typeof frame !== 'object' || frame.event === null || typeof frame.event !== 'object' || typeof frame.event.type !== 'string') {
-    throw new Error('实时事件帧格式无效（缺少 event）')
+    throw new Error('Invalid live event frame format (missing event)')
   }
   const oldSeq = ctx.liveRef.current.seq
   // 删除事件先快照被删会话摘要（applyEventFrame 后列表即移除）：待命目标需
@@ -285,9 +285,9 @@ export function useSseEvents(options: UseSseEventsOptions): void {
         if (cursor !== null && response.status === 400) {
           // 续传凭据被判非法：作废凭据（本次即失败重连，下次全量），绝不带坏凭据死循环。
           sseCursorRef.current = null
-          throw new Error('实时续传请求被内核拒绝（HTTP 400），已改为全量重新同步')
+          throw new Error('Live resume request rejected by the kernel (HTTP 400); falling back to full re-sync')
         }
-        if (!response.ok || !response.body) throw new Error(`实时连接失败（HTTP ${response.status}）`)
+        if (!response.ok || !response.body) throw new Error(`Live connection failed (HTTP ${response.status})`)
 
         /** null=待首帧控制帧；fresh=全量已就绪；resumed=补发中（追平 headSeq 才 live）。 */
         const streamState: StreamSessionState = { mode: null, resumedHeadSeq: 0, liveAnnounced: false }
@@ -357,13 +357,13 @@ export function useSseEvents(options: UseSseEventsOptions): void {
             // 连接卡死（如 dev 代理保留的挂起流，reader.read() 永不返回）：
             // 抛错走统一 catch（提示 + abort 解开挂起读取）与 finally 重连；
             // 重连 fetch 拿 401 即登出。正常连接持续收到字节（含心跳注释）不会触发。
-            throw new Error('实时连接空闲超时，正在重新连接')
+            throw new Error('Live connection idle timeout; reconnecting')
           }
           if (read.chunk.done) break
           if (!active) return
           parser.push(decoder.decode(read.chunk.value, { stream: true }))
         }
-        if (active) throw new Error('实时连接已断开，正在重新同步')
+        if (active) throw new Error('Live connection lost; re-syncing')
       } catch (error) {
         if (active && !controller.signal.aborted) setConnectionError(errorText(error))
         // 出错连接一律主动中止：解开空闲超时下可能挂起的 reader.read()

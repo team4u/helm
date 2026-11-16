@@ -27,11 +27,11 @@ function renderTimeline(status: ConversationStatus, sending: boolean, entries: C
     conversations: [conversation], conversationDetails: { 1: { ...conversation, entries } },
     conversationArtifacts: {}, groupedUi: groupUiContributions([]),
     authReady: true, authConfigured: true, authenticated: true, authError: null,
-    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'dark', quietNotifyEnabled: false,
+    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'dark', locale: 'en', quietNotifyEnabled: false,
     profiles: [], assetsLoaded: true, models: [], providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: [],
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
+    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setLocale: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
     onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: async () => undefined,
     loadConversationDetail: async () => undefined, loadEarlierEntries: asyncNoop, loadConversationArtifacts: async () => undefined,
     ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
@@ -51,7 +51,7 @@ function renderTimeline(status: ConversationStatus, sending: boolean, entries: C
 }
 
 function waitingCount(html: string): number {
-  return (html.match(/aria-label="正在生成"/g) ?? []).length
+  return (html.match(/aria-label="Generating"/g) ?? []).length
 }
 
 test('首条输入请求在途时立即显示一次等待，隐藏空会话引导', { timeout: 60_000 }, () => {
@@ -60,7 +60,7 @@ test('首条输入请求在途时立即显示一次等待，隐藏空会话引�
   assert.match(html, /role="status"/)
   assert.match(html, /msg-live-waiting/)
   assert.match(html, /msg-live-dots/)
-  assert.match(html, /msg-live-label[^>]*>生成中</)
+  assert.match(html, /msg-live-label[^>]*>Generating</)
   assert.doesNotMatch(html, /正在等待响应…/)
   assert.doesNotMatch(html, /向助理描述目标/)
   assert.doesNotMatch(html, /timeline-center-slot/)

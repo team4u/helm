@@ -1,9 +1,9 @@
 /**
- * 远端文件操作解析 RPC 的有界等待测试（env/remote-env.ts #rpcBounded）：
- * - withFileMutationQueue 持锁窗口内节点断连且永不重连：等待 rpcWaitTimeoutMs
- *   后抛 node_offline（锁随异常释放），该文件的后续排队者不被冻结；
- * - 节点重连后（wait 可解）后续排队者正常执行——互斥语义不破坏；
- * - 排队者自身在等待前序时不受该超时影响（超时只约束 RPC 解析等待）。
+ * remote file operation parse RPC has boundary wait for test (env/remote-env.ts #rpcBounded):
+ * - withFileMutationQueue hold lock window inside node assert connect and forever do not reconnect: wait for rpcWaitTimeoutMs
+ *   after throw node_offline(lock follow exception release), the file after continue queue up do not by freeze;
+ * - node reconnect after (wait can solve) after continue queue up normal execute - - mutual exclusion semantics do not break;
+ * - queue up itself in wait for before order when do not subject to the timeout affect (timeout only constraint RPC parse wait for).
  */
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
@@ -15,9 +15,9 @@ import { envWithFileMutationQueue, fileMutationQueueSize } from '../src/env/file
 import type { NodeEnvRpcFunctions } from '@helm/protocol'
 
 /**
- * 受控节点：files 为内存文件表；online 翻转为 false 后 getNodeEnvRpc 返回
- * undefined、waitForNodeOnline 永不 resolve（模拟断连后永不重连），直至
- * 翻回 true。
+ * subject to control node:files is memory file table;online translate rotate is false after getNodeEnvRpc return
+ * undefined,waitForNodeOnline forever do not resolve(simulated assert connect after forever do not reconnect), direct until
+ * translate back true.
  */
 function makeControlledNode() {
   const files = new Map<string, string>()
@@ -57,7 +57,7 @@ function makeControlledNode() {
     state,
     resolver,
     rpc,
-    /** 模拟节点重连：唤醒全部等待者。 */
+    /** simulated node reconnect: wake all wait for. */
     reconnect: () => {
       state.online = true
       for (const wake of waiters) wake()
@@ -68,13 +68,13 @@ function makeControlledNode() {
 
 const WAIT_MS = 200
 
-describe('RemoteExecutionEnv 文件操作 RPC 有界等待', { timeout: 60_000 }, () => {
-  test('持锁窗口内断连且永不重连：超时抛 node_offline 释放锁，排队者不被冻结', { timeout: 60_000 }, async () => {
+describe('RemoteExecutionEnv file operation RPC has boundary wait for', { timeout: 60_000 }, () => {
+  test('hold lock window inside assert connect and forever do not reconnect: timeout throw node_offline release lock, queue up do not by freeze', { timeout: 60_000 }, async () => {
     const node = makeControlledNode()
     const env = new RemoteExecutionEnv(node.resolver, { nodeId: 'offline-node', cwd: '/w', rpcWaitTimeoutMs: WAIT_MS })
     const target = '/w/a.txt'
 
-    // 任务 1 持锁后立刻断连，锁内 write 无限等待重连（修复前会冻结整条队列）。
+    // task 1 hold lock after immediately assert connect, lock inside write unbounded wait for reconnect (fix before will freeze whole queue).
     let lockHeld = false
     const task1 = envWithFileMutationQueue(
       env,
@@ -87,7 +87,7 @@ describe('RemoteExecutionEnv 文件操作 RPC 有界等待', { timeout: 60_000 }
       },
       BACKGROUND_CONTEXT,
     )
-    // 任务 2 在任务 1 持锁期间入队（同文件）。
+    // task 2 in task 1 hold lock during queue (same file).
     while (!lockHeld) await delay(5)
     let task2Ran = false
     const task2 = envWithFileMutationQueue(
@@ -102,26 +102,26 @@ describe('RemoteExecutionEnv 文件操作 RPC 有界等待', { timeout: 60_000 }
       BACKGROUND_CONTEXT,
     )
 
-    // 任务 1 必须在有界时间内以 node_offline 失败（而非无限等待）。
+    // task 1 must in has boundary time inside with node_offline failed (while non- unbounded wait for).
     const startedAt = Date.now()
     await assert.rejects(
       task1,
       (error: unknown) => error instanceof HelmError && error.code === 'node_offline',
-      '持锁窗口内的 RPC 等待超时必须抛 node_offline',
+      'hold lock window inside RPC wait timed out must throw node_offline',
     )
     const elapsed = Date.now() - startedAt
-    assert.ok(elapsed < WAIT_MS * 5, `超时应在有界时间内触发（实际 ${elapsed}ms）`)
+    assert.ok(elapsed < WAIT_MS * 5, `timeout should in has boundary time inside trigger (actual ${elapsed}ms)`)
 
-    // 队列解冻：节点重连后任务 2 正常执行（互斥链未破坏）。
+    // queue solve freeze: node reconnect after task 2 normal execute (mutual exclusion chain not break).
     node.reconnect()
     assert.equal(await task2, 'task2')
     assert.ok(task2Ran)
     assert.equal(node.files.get(target), 'v2')
     await delay(10)
-    assert.equal(fileMutationQueueSize(), 0, '链全部结算后队列清空')
+    assert.equal(fileMutationQueueSize(), 0, 'chain all compute after queue empty')
   })
 
-  test('节点在线期间文件操作不受影响（快速路径无超时开销语义）', { timeout: 60_000 }, async () => {
+  test('node online during file operation do not subject to affect (fast path without timeout overhead semantics)', { timeout: 60_000 }, async () => {
     const node = makeControlledNode()
     const env = new RemoteExecutionEnv(node.resolver, { nodeId: 'online-node', cwd: '/w', rpcWaitTimeoutMs: WAIT_MS })
     const result = await env.writeFile('/w/b.txt', 'content', BACKGROUND_CONTEXT)
@@ -129,7 +129,7 @@ describe('RemoteExecutionEnv 文件操作 RPC 有界等待', { timeout: 60_000 }
     assert.equal(node.files.get('/w/b.txt'), 'content')
   })
 
-  test('键解析（absolutePath/canonicalPath）同样有界：离线时快速失败而非挂起', { timeout: 60_000 }, async () => {
+  test('key parse (absolutePath/canonicalPath) same has boundary: offline when fast failed while non- suspended', { timeout: 60_000 }, async () => {
     const node = makeControlledNode()
     node.state.online = false
     const env = new RemoteExecutionEnv(node.resolver, { nodeId: 'dead-node', cwd: '/w', rpcWaitTimeoutMs: WAIT_MS })

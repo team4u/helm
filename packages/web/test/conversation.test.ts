@@ -335,15 +335,15 @@ test('timeline.renderer 命中的 entry 渲染为插件卡片（豁免折叠）'
 test('pi.reset / pi.compaction 转换为分割线；reset 携带 handoff', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
     entry('1', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '旧上下文' }] }] }),
-    entry('2', 'pi.reset', { data: { handoff: '交接摘要文本' } }),
-    entry('3', 'pi.compaction', { model: [{ role: 'user', content: '精简摘要' }] }),
+    entry('2', 'pi.reset', { data: { handoff: 'Handoff summary文本' } }),
+    entry('3', 'pi.compaction', { model: [{ role: 'user', content: 'Compaction summary' }] }),
   ])
   const dividers = items.filter((i) => i.kind === 'divider')
   assert.equal(dividers.length, 2)
   assert.equal(dividers[0]!.divider, 'reset')
-  assert.equal(dividers[0]!.handoff, '交接摘要文本')
+  assert.equal(dividers[0]!.handoff, 'Handoff summary文本')
   assert.equal(dividers[1]!.divider, 'compaction')
-  assert.equal(dividers[1]!.summary, '精简摘要')
+  assert.equal(dividers[1]!.summary, 'Compaction summary')
   // reset 前的 assistant 回合正常结算
   assert.equal(items[0]!.kind, 'assistant')
 })
@@ -1504,8 +1504,8 @@ test('patchConversationsArchived 汇总批量部分失败，archiveBatchNotice �
     assert.deepEqual(archiveBatchNotice(true, outcome), {
       type: 'notification',
       level: 'warning',
-      title: '批量归档部分失败',
-      body: '成功 1 个，失败 1 个：会话正在更新',
+      title: 'Bulk Archive partially failed',
+      body: '1 succeeded, 1 failed: 会话正在更新',
     })
   } finally {
     globalThis.fetch = originalFetch

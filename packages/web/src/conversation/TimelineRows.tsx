@@ -36,13 +36,13 @@ export function TraceRow({
   const rowFailed = Boolean(tool.isError)
   const right =
     tool.status === 'running'
-      ? '运行中'
+      ? 'Running'
       : rowFailed && tool.durationMs === undefined
-        ? '失败'
+        ? 'Failed'
         : tool.durationMs !== undefined
           ? formatDurationMs(tool.durationMs)
           : tool.status === 'done'
-            ? '完成'
+            ? 'Completed'
             : ''
   const rowIcon = toolStatusIcon(tool)
 
@@ -67,7 +67,7 @@ export function TraceRow({
             pluginId={toolView.pluginId}
             spec={toolView.spec}
             conversationId={conversationId}
-            label={`工具视图 ${tool.toolName}`}
+            label={`Tool view ${tool.toolName}`}
             slotProps={buildToolViewProps(tool, conversationId, siblingCalls)}
           />
         </div>
@@ -117,7 +117,7 @@ export function TraceRow({
                 pluginId={toolView.pluginId}
                 spec={toolView.spec}
                 conversationId={conversationId}
-                label={`工具视图 ${tool.toolName}`}
+                label={`Tool view ${tool.toolName}`}
                 slotProps={buildToolViewProps(tool, conversationId, siblingCalls)}
               />
             </div>
@@ -210,11 +210,11 @@ function MultiStepGroup({
   const hasOnlyThinking = steps.every((s) => s.kind === 'thinking')
   const summaryTitle = hasOnlyThinking
     ? active
-      ? `正在思考 (${steps.length} 步)…`
-      : `思考过程 (${steps.length} 步)`
+      ? `Thinking (${steps.length} steps)…`
+      : `Thinking (${steps.length} steps)`
     : active
-      ? `正在思考与执行 (${steps.length} 步)…`
-      : `思考与执行过程 (${steps.length} 步)`
+      ? `Thinking and executing (${steps.length} steps)…`
+      : `Thinking and execution (${steps.length} steps)`
   const showErrorBadge = !open && summary.errorCount > 0
   const showDuration = !active && summary.totalDurationMs !== undefined
 
@@ -229,13 +229,13 @@ function MultiStepGroup({
           shortcutExpandSeqRef.current = null
           setUserOverride(!open)
         }}
-        title={open ? '收起思考与执行过程' : '展开思考与执行过程'}
+        title={open ? 'Collapse thinking and execution' : 'Expand thinking and execution'}
       >
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
         {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
         {summaryTitle}
         {showErrorBadge ? (
-          <span className="trace-group-badge trace-group-badge-error">{`含 ${summary.errorCount} 项失败`}</span>
+          <span className="trace-group-badge trace-group-badge-error">{`${summary.errorCount} failed`}</span>
         ) : null}
         {showDuration ? (
           <span className="trace-group-meta tabular-nums">{formatDurationMs(summary.totalDurationMs)}</span>
@@ -307,15 +307,15 @@ export function ThinkingRow({
         aria-expanded={open}
         {...(isRootProcessToggle ? { 'data-process-toggle': 'root' } : {})}
         onClick={() => setUserOverride(!open)}
-        title={open ? '收起思考过程' : '展开思考过程'}
+        title={open ? 'Collapse thinking' : 'Expand thinking'}
       >
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
         {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
-        {active ? '正在思考…' : '思考过程'}
+        {active ? 'Thinking…' : 'Thinking'}
       </button>
       {open ? (
         <div className="trace-expanded-body selectable thinking-expanded-body">
-          {/* active 思考块是仍在增长的 live 文本；静止思考不启用流式路径 */}
+          {/* Active thinking blocks are live text still growing; static thinking never uses the streaming path */}
           <MarkdownView text={text} conversationId={conversationId} streaming={active} />
         </div>
       ) : null}

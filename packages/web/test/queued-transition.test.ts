@@ -28,11 +28,11 @@ function render(live: ConversationLive): string {
     ...emptyLiveState(), conversationDetails: { 1: { ...conversation, entries: [] } },
     loadErrors: {}, highlightedEntry: null, groupedUi: groupUiContributions([]), conversationArtifacts: {},
     authReady: true, authConfigured: true, authenticated: true, authError: null,
-    connectionError: null, sseConnected: true, theme: 'dark', themePreference: 'dark', quietNotifyEnabled: false,
+    connectionError: null, sseConnected: true, theme: 'dark', themePreference: 'dark', locale: 'en', quietNotifyEnabled: false,
     profiles: [], assetsLoaded: true, models: [], providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, notices: [],
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
+    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setLocale: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
     onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: asyncNoop,
     loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop, loadConversationArtifacts: asyncNoop,
     ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
@@ -49,14 +49,14 @@ function render(live: ConversationLive): string {
 
 test('实时回复后跟排队胶囊时只显示一次响应等待，不给队列制造第二个模型回合', { timeout: 60_000 }, () => {
   const html = render({ conversationId: 1, text: '当前回复', tools: [], queuedInputs: [queued], updatedAt: 1 })
-  assert.equal((html.match(/aria-label="正在生成"/g) ?? []).length, 1)
+  assert.equal((html.match(/aria-label="Generating"/g) ?? []).length, 1)
   assert.doesNotMatch(html, /正在等待响应…/)
-  assert.match(html, /撤回排队并编辑/)
+  assert.match(html, /Withdraw queue and edit/)
 })
 
 test('只有排队项尚无正文时仍显示一次执行等待', { timeout: 60_000 }, () => {
   const html = render({ conversationId: 1, text: '', tools: [], queuedInputs: [queued], updatedAt: 1 })
-  assert.equal((html.match(/aria-label="正在生成"/g) ?? []).length, 1)
+  assert.equal((html.match(/aria-label="Generating"/g) ?? []).length, 1)
   assert.doesNotMatch(html, /正在等待响应…/)
 })
 

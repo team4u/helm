@@ -1,12 +1,12 @@
 /**
- * PluginHost：helm 唯一强类型插件宿主（definePlugin(ctx)）。
+ * PluginHost:helm unique strong type plugin host (definePlugin(ctx)).
  *
- * 职责边界：
- * - 协调注册（register）、启用（enable）、停用（disable）、注销（unregister）生命周期；
- * - 协调服务启动屏障（prepare -> start）与受控停止（controlled stop）；
- * - 协调模型 Provider 挂载与卸载（PluginProviderPort）、HookPipeline 与配置持久化；
- * - 协调子注册表（DocRegistry、CapabilityRegistry、UiRegistry）与任务跟踪（PluginTaskTracker）；
- * - 并发门控、依赖图、服务屏障、生命周期事务、外部 DX 与过渡态回滚分别委托同目录子模块实现。
+ * responsibility boundary:
+ * - coordinate tune register (register), enable (enable), deactivate (disable), deregister (unregister) lifecycle;
+ * - coordinate tune service start screen fault (prepare -> start) and subject to control stop (controlled stop);
+ * - coordinate tune model Provider mount and unload (PluginProviderPort),HookPipeline and config persist;
+ * - coordinate tune sub- register table (DocRegistry,CapabilityRegistry,UiRegistry) and task trace (PluginTaskTracker);
+ * - concurrency gate control, dependency graph, service screen fault, lifecycle transaction, external DX and transition state rollback respectively delegate same directory sub- module implement.
  */
 import {
   HelmError,
@@ -146,7 +146,7 @@ export class PluginHost {
     );
   }
 
-  // --- 注册与生命周期 -------------------------------------------------------
+  // --- register and lifecycle -------------------------------------------------------
 
   async register(
     definition: PluginDefinition,
@@ -156,7 +156,7 @@ export class PluginHost {
     assertDefinition(definition);
     const seq = ++this.registerSeq;
     const pluginId = definition.id;
-    // 内置插件失败一律阻断，仅外部插件显式要求时隔离降级
+    // built-in plugin failed one rule block assert, only external plugin explicit want seek when isolated fall back
     const isolate = options.isolateFailure === true && !pluginId.startsWith('builtin:');
 
     await this.gate.enqueue(pluginId, async () => {
@@ -232,7 +232,7 @@ export class PluginHost {
     });
   }
 
-  // --- 查询与能力清单 -------------------------------------------------------
+  // --- query and capability manifest -------------------------------------------------------
 
   list(): PluginSummary[] {
     this.assertNotDisposed();
@@ -271,7 +271,7 @@ export class PluginHost {
     return this.uiRegistry.listUi(getActiveEnabledPluginIds(this.plugins));
   }
 
-  // --- 外部插件 DX 与受管包 -------------------------------------------------
+  // --- external plugin DX and managed package -------------------------------------------------
 
   async doctorExternalPlugin(target: { dir?: string; id?: string }): Promise<PluginDoctorReport> {
     this.assertNotDisposed();
@@ -308,7 +308,7 @@ export class PluginHost {
     if (this.packageManager === undefined) {
       throw new HelmError(
         'not_supported',
-        '当前内核未接线插件包安装器（受管 install/update/remove 不可用）',
+        'when before kernel not connect line plugin package install (managed install/update/remove unavailable)',
         501,
       );
     }
@@ -330,7 +330,7 @@ export class PluginHost {
     return this.requirePackageManager().remove(pluginId);
   }
 
-  // --- client.tsx 编译产物与公共文档 ----------------------------------------
+  // --- client.tsx compile artifact and public document ----------------------------------------
 
   async getClientModule(
     pluginId: string,
@@ -375,7 +375,7 @@ export class PluginHost {
     return this.docRegistry.listPublicDocs(getIdleActivePluginIds(this.plugins));
   }
 
-  // --- Hook / Action / Tool 执行 --------------------------------------------
+  // --- Hook / Action / Tool execute --------------------------------------------
 
   async runHook<K extends HookName>(name: K, payload: HookPayloadMap[K]): Promise<HookResult<HookPayloadMap[K]>> {
     this.assertNotDisposed();
@@ -461,12 +461,12 @@ export class PluginHost {
     );
   }
 
-  // --- 配置 ----------------------------------------------------------------
+  // --- config ----------------------------------------------------------------
 
   getConfig(pluginId: string): Record<string, unknown> {
     this.assertNotDisposed();
     const state = this.plugins.get(pluginId);
-    // schema.default 填底，磁盘显式值覆盖（未存字段动态反映最新 default）
+    // schema.default fill bottom, disk explicit value override (not store field motion state reverse reflect most new default)
     const stored = this.configStore ? this.configStore.get(pluginId) : {};
     const schema = state?.configSchema ?? {};
     const merged: Record<string, unknown> = {};
@@ -484,7 +484,7 @@ export class PluginHost {
     return state.configSchema ? { ...state.configSchema } : {};
   }
 
-  /** 配置字段来源映射：configured（磁盘显式）/ default（schema 回退）/ unset。 */
+  /** config field source mapping:configured(disk explicit)/ default(schema fall back)/ unset. */
   getConfigSources(pluginId: string): Record<string, PluginConfigFieldSource> {
     this.assertNotDisposed();
     const schema = requirePlugin(this.plugins, pluginId).configSchema ?? {};
@@ -510,7 +510,7 @@ export class PluginHost {
     if (!this.configStore) {
       throw new HelmError(
         'config_store_unavailable',
-        'PluginHost 未提供持久化 PluginConfigStore，修改插件配置不被支持',
+        'PluginHost not provide persist PluginConfigStore, modify plugin config do not by support',
         501,
         { pluginId },
       );
@@ -518,7 +518,7 @@ export class PluginHost {
     await this.configStore.set(pluginId, value, schema);
   }
 
-  // --- 销毁与在途任务跟踪 ---------------------------------------------------
+  // --- destroy and in-flight task trace ---------------------------------------------------
 
   async dispose(): Promise<void> {
     if (this.disposed) return;
@@ -537,7 +537,7 @@ export class PluginHost {
   withTask<T>(pluginId: string, label: string, fn: () => Promise<T>): Promise<T> { return this.tracker.withTask(pluginId, label, fn); }
   activeTaskCount(pluginId: string): number { this.assertNotDisposed(); return this.tracker.activeCount(pluginId); }
 
-  // --- 内部装配与守卫 -------------------------------------------------------
+  // --- internal install match and guard -------------------------------------------------------
 
   private registries(): PluginHostRegistries {
     return {
@@ -623,7 +623,7 @@ export class PluginHost {
 
   private assertNotDisposed(): void {
     if (this.disposed) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost 已 dispose', 409);
+      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
     }
   }
 }

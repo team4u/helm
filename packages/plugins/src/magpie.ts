@@ -1,25 +1,26 @@
 /**
- * builtin:magpie：Magpie 网关接入插件（模型目录 / 配额 / 路由组）。
+ * builtin:magpie: the Magpie gateway integration plugin (model catalog / quotas / routing groups).
  *
- * 职责：
- * - 经 ctx.provider 注册 pi-ai 动态目录 Provider（service.start 前由宿主完成
- *   挂载，service.stop 后注销——不在插件内绕宿主手动挂卸）；
- * - 公开 status doc 驱动 settings.panel / commandPalette 与
- *   `helm magpie status` CLI；动作总线提供 refresh / quota / groups / group；
- * - turn_settled 后台静默刷新配额与路由（?kept=1，不问供应商、不阻塞回合）。
+ * Responsibilities:
+ * - Register the pi-ai dynamic-catalog Provider via ctx.provider (mounted by the host before
+ *   service.start, unregistered after service.stop -- never hand-mounted around the host inside the plugin);
+ * - The public status doc drives the settings.panel / commandPalette and the `helm magpie status`
+ *   CLI; the action bus provides refresh / quota / groups / group;
+ * - After turn_settled, silently refresh quotas and routing in the background (?kept=1; asks no vendor, blocks no turn).
  *
- * 诚实性纪律：
- * - 所有网关读取都以「读取时刻冻结的快照」执行，发布前校验快照仍是当前
- *   生效配置：配置切换后绝不把旧网关数据发布到新网关名下；
- * - provider.refreshModels 网络失败一律 throw（通用目录刷新可见 errors['magpie']）；
- *   本插件 service.start 的后台刷新失败只更新 reachable:false / lastError，
- *   绝不阻断启用与内核启动；手动 refresh 动作显式抛 magpie_gateway_unreachable；
- * - reachable:false 时 modelCount 为缓存计数，绝不冒充实时刷新成功；
- * - 非 loopback 网关不读本机 magpie CLI 数据（那是另一个实例），只用所选
- *   网关 trace 并标注 source；apiKey 绝不进 doc / 动作输出 / 错误文本。
- * - 零参工厂：目录刷新经 ctx.host.refreshModels({ providers: ['magpie'] })，
- *   网络读取用 global fetch，本机 CLI 经 execFile 公开端口
- *   （无注入后门；测试用 PATH fixture / global fetch mock）。
+ * Honesty discipline:
+ * - All gateway reads execute against a snapshot frozen at read time, and verify the snapshot is
+ *   still the effective config before publishing: after a config switch, old gateway data is never
+ *   published under the new gateway's name;
+ * - provider.refreshModels network failures always throw (visible as errors['magpie'] in generic
+ *   catalog refreshes); this plugin's service.start background-refresh failures only update
+ *   reachable:false / lastError, never blocking enablement or kernel startup; the manual refresh action throws magpie_gateway_unreachable explicitly;
+ * - With reachable:false, modelCount is the cached count, never posing as a live refresh success;
+ * - Non-loopback gateways never read the local magpie CLI data (that is another instance); only the
+ *   chosen gateway's trace is used, with the source labeled; apiKey never enters the doc / action outputs / error text.
+ * - Zero-arg factory: catalog refresh goes through ctx.host.refreshModels({ providers: ['magpie'] }),
+ *   network reads use global fetch, and the local CLI goes through the public execFile port
+ *   (no injection backdoors; tests use PATH fixtures / global fetch mocks).
  */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -80,8 +81,8 @@ const REFRESH_OUTPUT_SCHEMA = {
   additionalProperties: false,
 } as const
 
-// 注：refresh 动作失败时显式抛 HelmError（不返回 degraded 结果）；成功时
-// 配额 / 轨迹不可用原因在 status doc diagnostics，经 status 动作可读。
+// Note: on refresh-action failure, throw HelmError explicitly (no degraded result returned); on success,
+// reasons why quotas / traces are unavailable live in the status doc diagnostics, readable via the status action.
 
 const QUOTA_OUTPUT_SCHEMA = {
   type: 'object',
@@ -126,13 +127,13 @@ const emptyStatus = (gatewayUrl: string): MagpieStatusDoc => ({
   reachable: false,
   modelCount: 0,
   groupCount: 0,
-  summaryText: 'Magpie · 未连接',
+  summaryText: 'Magpie · not connected',
   quotas: [],
   routes: [],
   diagnostics: [],
 })
 
-/** 错误文本脱敏：剥离 Bearer 头形态与已知 token 本体（网关错误页可能回显）。 */
+/** Error-text redaction: strip Bearer-header shapes and known token bodies (gateway error pages may echo them). */
 function sanitizeErrorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   return message.replace(/Bearer\s+\S+/g, 'Bearer ***').slice(0, 300)
@@ -140,8 +141,8 @@ function sanitizeErrorText(error: unknown): string {
 
 const execFileAsync = promisify(execFile)
 
-/** 本机 magpie CLI 经 execFile（PATH 解析，无隐藏注入）。
- * 失败返回 { ok:false, error }；超时 10s；错误文本脱敏后限长。
+/** The local magpie CLI goes through execFile (PATH resolution, no hidden injection).
+ * Failures return { ok:false, error }; timeout 10s; error text redacted and length-capped.
  */
 function runMagpieCli(
   args: readonly string[],
@@ -165,31 +166,31 @@ export function createMagpiePlugin(): PluginDefinition {
 
   return {
     id: MAGPIE_PLUGIN_ID,
-    name: 'Magpie 网关',
-    description: 'Magpie 模型网关接入：动态模型目录、配额与路由组，静默刷新与状态面板。',
+    name: 'Magpie Gateway',
+    description: 'Magpie model gateway integration: dynamic model catalog, quotas, and routing groups, with silent refresh and a status panel.',
     icon: 'globe',
     version: '0.1.0',
     clientRoot: resolvePluginClientRoot(MAGPIE_PLUGIN_ID, 'magpie', 'magpie_plugin_client_missing'),
     definePlugin(rawCtx) {
       const ctx = rawCtx
 
-      // ---- 配置与网关快照 -------------------------------------------------
+      // ---- Config and gateway snapshot -------------------------------------------------
       ctx.configSchema({
         gatewayUrl: {
           type: 'string',
-          label: 'Magpie 网关地址',
-          description: '缺省直连本机 http://127.0.0.1:3425（可填 http://host:3425）',
+          label: 'Magpie gateway address',
+          description: 'Defaults to the local http://127.0.0.1:3425 (you may set http://host:3425)',
           default: 'http://127.0.0.1:3425',
         },
         apiKey: {
           type: 'string',
           label: 'Magpie API Key',
-          description: '本机 loopback 缺省为 magpie；远端网关请填写对应密钥',
+          description: 'Defaults to magpie on the local loopback; fill in the matching key for a remote gateway',
           secret: true,
         },
       })
 
-      /** 当前生效配置（config store 视图；未配置字段回落网关解析缺省）。 */
+      /** The currently effective config (a config-store view; unconfigured fields fall back to gateway-resolution defaults). */
       const effectiveConfig = (): MagpiePluginConfig => {
         const raw = ctx.getConfig() as Partial<MagpiePluginConfig>
         return {
@@ -200,12 +201,12 @@ export function createMagpiePlugin(): PluginDefinition {
 
       const gateway = (): MagpieGatewayRef => resolveGateway(effectiveConfig())
 
-      // ---- provider 与公开 status doc --------------------------------------
+      // ---- provider and the public status doc --------------------------------------
       /**
-       * 网络目录刷新结果 → status doc（onCatalogChange 端口）：通用 HTTP
-       * models.refresh 刷新 Provider 时插件状态同步更新，不再脱节；
-       * cache-only 恢复不通知（不是网络成功，绝不伪装）。发布前同样过
-       * sameGateway 守卫：fetch 期间切了网关的旧结论不写新网关名下。
+       * Network catalog-refresh results -> the status doc (the onCatalogChange port): when the generic
+       * HTTP models.refresh refreshes the Provider, plugin state updates in sync, no longer diverging;
+       * cache-only recovery does not notify (not a network success; never disguised). Publishing passes the
+       * sameGateway guard too: conclusions from a fetch during which the gateway switched are never written under the new gateway.
        */
       const handle = createMagpieProvider({
         gateway,
@@ -220,11 +221,11 @@ export function createMagpiePlugin(): PluginDefinition {
         public: true,
       })
 
-      /** 服务停止信号：停用后不得再写 doc。 */
+      /** Service stop signal: no doc writes after disable. */
       let stopping = false
       let stopController: AbortController | undefined
 
-      /** 发布前守卫：快照仍是当前生效配置才写入 doc。 */
+      /** Pre-publish guard: write into the doc only while the snapshot is still the effective config. */
       const writeStatus = (snapshot: MagpieGatewayRef, patch: Partial<MagpieStatusDoc>): void => {
         if (stopping) return
         const currentGateway = gateway()
@@ -234,13 +235,13 @@ export function createMagpiePlugin(): PluginDefinition {
       }
 
       const summaryTextOf = (reachable: boolean, modelCount: number): string =>
-        reachable ? `Magpie · ${modelCount} 模型` : 'Magpie · 未连接'
+        reachable ? `Magpie · ${modelCount} models` : 'Magpie · not connected'
 
       /**
-       * 读配额 + 路由并更新 doc（在快照上执行；kept=true 不问供应商）。
-       * 诚实性：配额 / 轨迹读取失败不吞——原因写入 diagnostics（清空旧配额
-       * 区并记录不可用原因，绝不把「没有配额」伪装成「配额为空」）；
-       * trace 不可用（远端拒绝 / 版本过旧）是合法状态，路由区空 + 诊断。
+       * Read quotas + routing and update the doc (executed on the snapshot; kept=true asks no vendor).
+       * Honesty: quota / trace read failures are not swallowed -- the reason goes into diagnostics (clearing
+       * the old quota section and recording the unavailability, never disguising "no quota read" as "quota empty");
+       * an unavailable trace (remote refusal / version too old) is a legal state: empty routing section + diagnostics.
        */
       const refreshSidecar = async (snapshot: MagpieGatewayRef, kept: boolean): Promise<void> => {
         const controller = new AbortController()
@@ -254,14 +255,14 @@ export function createMagpiePlugin(): PluginDefinition {
             quotas = quotaRows(entries).map((row) => ({ ...row }))
           } catch (error) {
             quotas = []
-            diagnostics.push(`配额不可用：${sanitizeErrorText(error)}`)
+            diagnostics.push(`quotas unavailable: ${sanitizeErrorText(error)}`)
           }
           const trace = await fetchTrace(snapshot.root, snapshot.token, controller.signal, fetchImpl)
           if ('routes' in trace) {
             routes = traceRouteRows(trace.routes)
           } else {
             routes = []
-            diagnostics.push(`路由轨迹不可用：${sanitizeErrorText(trace.unavailable)}`)
+            diagnostics.push(`routing trace unavailable: ${sanitizeErrorText(trace.unavailable)}`)
           }
           writeStatus(snapshot, { quotas, routes, groupCount: routes.length, diagnostics })
         } finally {
@@ -269,12 +270,12 @@ export function createMagpiePlugin(): PluginDefinition {
         }
       }
 
-      /** 目录刷新后的状态发布（快照守卫 + reachable 语义）。 */
+      /** Status publishing after a catalog refresh (snapshot guard + reachable semantics). */
       const publishCatalogStatus = (snapshot: MagpieGatewayRef, reachable: boolean, error?: unknown): void => {
         const modelCount = handle.models().filter((m) => m.baseUrl.startsWith(snapshot.root)).length
         if (reachable) {
-          // 成功清除旧错误：上一轮失败结论不残留成最新状态（jsonClone 拒绝
-          // undefined 值，显式删除键而不是置 undefined）
+          // Success clears old errors: the previous round's failure conclusion must not linger as the
+          // latest state (jsonClone rejects undefined values; delete keys explicitly instead of assigning undefined)
           const current = status.get()
           if (current.gatewayUrl === snapshot.root && current.lastError !== undefined) delete current.lastError
           status.set(current)
@@ -294,14 +295,14 @@ export function createMagpiePlugin(): PluginDefinition {
         }
       }
 
-      // ---- service 生命周期 ------------------------------------------------
+      // ---- service lifecycle ------------------------------------------------
       ctx.service({
         id: 'magpie-gateway',
         async start() {
           stopping = false
           const snapshot = gateway()
-          // 初始化：先如实展示已恢复缓存（refreshModels 首阶段已恢复的目录
-          // 计数），再由后台网络刷新推进 reachable / lastError。
+          // Initialization: first honestly show the recovered cache (the catalog count restored by
+          // refreshModels's first phase), then let the background network refresh advance reachable / lastError.
           const cachedCount = handle.models().length
           status.set({
             ...emptyStatus(snapshot.root),
@@ -310,10 +311,10 @@ export function createMagpiePlugin(): PluginDefinition {
             modelCount: cachedCount,
             summaryText: summaryTextOf(false, cachedCount),
           })
-          // 非阻塞后台刷新：失败只更新 reachable:false / lastError，绝不阻断
-          // 启用与内核启动（provider.refreshModels 本身 throw——那是给通用
-          // 目录刷新的显式信号；这里经 ctx.host.refreshModels 拿 errors 映射，
-          // 不 reject）。
+          // Non-blocking background refresh: failures only update reachable:false / lastError, never
+          // blocking enablement or kernel startup (provider.refreshModels itself throws -- that is the
+          // explicit signal for the generic catalog refresh; here we take the errors map from
+          // ctx.host.refreshModels and do not reject).
           void (async () => {
             try {
               const snapshotInner = gateway()
@@ -326,7 +327,7 @@ export function createMagpiePlugin(): PluginDefinition {
               publishCatalogStatus(snapshotInner, true)
               await refreshSidecar(snapshotInner, true)
             } catch (error) {
-              // 组合层端口异常（非网关诊断）：如实记录，不阻断启动
+              // Composition-layer port exception (not a gateway diagnostic): record honestly, do not block startup
               publishCatalogStatus(gateway(), false, error)
             }
           })()
@@ -338,34 +339,34 @@ export function createMagpiePlugin(): PluginDefinition {
         },
       })
 
-      // ---- turn_settled：后台静默刷新配额/路由（不阻塞回合结算） ------------
-      // 只关心使用 magpie 模型的会话：其它会话（其它 Provider）settled 不
-      // 触发任何网关读（会话当前模型从 payload.conversation 现取，不猜测）。
+      // ---- turn_settled: background silent quota/routing refresh (never blocking turn settlement) ------------
+      // Only conversations using magpie models matter: other conversations (other Providers) settling
+      // trigger no gateway reads (the conversation's current model is taken live from payload.conversation; no guessing).
       ctx.hook.onTurnSettled((payload: TurnSettledPayload) => {
         if (stopping) return
         const model = payload.conversation.model
         if (!model.startsWith(`${MAGPIE_PROVIDER_ID}/`)) return
         const snapshot = gateway()
-        // 不 await：绝不阻塞 turn_settled；失败只进 diagnostics，下一次 settled 重试
+        // No await: never blocks turn_settled; failures only enter diagnostics, retried at the next settled
         void refreshSidecar(snapshot, true).catch((error) => {
           if (stopping) return
           ctx.host.emitEvent('notification', {
-            level: 'warning', title: 'Magpie 状态读取失败', body: sanitizeErrorText(error),
+            level: 'warning', title: 'Magpie status read failed', body: sanitizeErrorText(error),
           })
         })
       })
 
-      // ---- 动作总线（HTTP / helm magpie <action> / run_action / Workflow） ----
+      // ---- Action bus (HTTP / helm magpie <action> / run_action / Workflow) ----
       ctx.action({
         id: 'status',
-        description: 'Magpie 网关状态快照（可达性、模型数、配额、路由轨迹）',
+        description: 'Magpie gateway status snapshot (reachability, model count, quotas, routing traces)',
         idempotent: true,
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: STATUS_OUTPUT_SCHEMA,
         handler: () => {
-          // 读取时投影当前生效网关：配置切换后 doc 的 gatewayUrl 不残留旧 root；
-          // doc 仍指向旧 root 时目录 / 可达性结论对该 root 才成立——新 root
-          // 尚无任何结论，不冒充（reachable 保持 false 待首次刷新）。
+          // Project the currently effective gateway at read time: after a config switch, the doc's gatewayUrl
+          // leaves no stale root; when the doc still points at the old root, catalog / reachability conclusions
+          // hold only for that root -- the new root has no conclusions yet and none are faked (reachable stays false pending the first refresh).
           const snapshot = gateway()
           const doc = status.get()
           if (doc.gatewayUrl !== snapshot.root) {
@@ -382,7 +383,7 @@ export function createMagpiePlugin(): PluginDefinition {
             ...doc,
             configuredRoot: snapshot.configuredRoot,
             local: snapshot.local,
-            // 模型计数只统计当前 root 名下的目录（旧 root 缓存不冒充）
+            // The model count counts only the catalog under the current root (old-root caches do not pose)
             modelCount: handle.models().filter((m) => m.baseUrl.startsWith(snapshot.root)).length,
           }
         },
@@ -390,7 +391,7 @@ export function createMagpiePlugin(): PluginDefinition {
 
       ctx.action({
         id: 'refresh',
-        description: '强制刷新 Magpie 模型目录与配额路由状态（失败显式报错）',
+        description: 'Force-refresh the Magpie model catalog and quota/routing state (failures error explicitly)',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: REFRESH_OUTPUT_SCHEMA,
         handler: async () => {
@@ -401,7 +402,7 @@ export function createMagpiePlugin(): PluginDefinition {
           if (error !== undefined) {
             throw new HelmError(
               'magpie_gateway_unreachable',
-              `Magpie 网关 ${snapshot.root} 刷新失败：${sanitizeErrorText(error)}`,
+              `Magpie gateway ${snapshot.root} refresh failed: ${sanitizeErrorText(error)}`,
               502,
               { gatewayUrl: snapshot.root, configuredRoot: snapshot.configuredRoot },
             )
@@ -414,11 +415,11 @@ export function createMagpiePlugin(): PluginDefinition {
 
       ctx.action({
         id: 'quota',
-        description: '实时查询 Magpie 配额（GET /v1/magpie/quotas）',
+        description: 'Query Magpie quotas live (GET /v1/magpie/quotas)',
         idempotent: true,
         inputSchema: {
           type: 'object',
-          properties: { model: { type: 'string', description: '按模型归属 provider 过滤（可选）' } },
+          properties: { model: { type: 'string', description: 'Filter by the model-owning provider (optional)' } },
           additionalProperties: false,
         },
         outputSchema: QUOTA_OUTPUT_SCHEMA,
@@ -436,12 +437,12 @@ export function createMagpiePlugin(): PluginDefinition {
             return {
               quotas: rows,
               local: snapshot.local,
-              ...(snapshot.local ? {} : { note: '非本机网关：仅该网关自身报告的配额可读' }),
+              ...(snapshot.local ? {} : { note: 'non-local gateway: only quotas reported by that gateway itself are readable' }),
             }
           } catch (error) {
             throw new HelmError(
               'magpie_gateway_unreachable',
-              `Magpie 网关 ${snapshot.root} 配额读取失败：${sanitizeErrorText(error)}`,
+              `Magpie gateway ${snapshot.root} quota read failed: ${sanitizeErrorText(error)}`,
               502,
               { gatewayUrl: snapshot.root },
             )
@@ -453,7 +454,7 @@ export function createMagpiePlugin(): PluginDefinition {
 
       ctx.action({
         id: 'groups',
-        description: '路由组列表与最近命中（本机读 magpie CLI + 网关 trace；远端仅网关 trace）',
+        description: 'Routing group list with recent hits (local reads the magpie CLI + gateway trace; remote uses gateway trace only)',
         idempotent: true,
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: GROUPS_OUTPUT_SCHEMA,
@@ -462,9 +463,9 @@ export function createMagpiePlugin(): PluginDefinition {
           const controller = new AbortController()
           stopController = controller
           try {
-            // 数据源隔离：CLI 只描述本机默认实例；显式配置了其它 loopback
-            // 端口时无法证明 CLI 指向同一实例（MAGPIE_GW_URL/MAGPIE_ADDR 也
-            // 可能指向另一处），只用所选 root 的 trace，不读本机别的实例。
+            // Data-source isolation: the CLI describes only the local default instance; when another
+            // loopback port is explicitly configured, the CLI cannot be proven to point at the same
+            // instance (MAGPIE_GW_URL/MAGPIE_ADDR may point elsewhere) -- use only the chosen root's trace; never read other local instances.
             const cliTrusted = snapshot.root === DEFAULT_MAGPIE_ROOT
             let cliGroups: GroupListRow[] | undefined
             let cliError: string | undefined
@@ -490,7 +491,7 @@ export function createMagpiePlugin(): PluginDefinition {
                   source: 'cli+trace' as const,
                 }
               }),
-              // trace 中出现而 CLI 未列的组（CLI 失败或 auto 组未列出）
+              // Groups present in trace but not listed by the CLI (CLI failure or unlisted auto groups)
               ...traceRows
                 .filter((row) => !cliKeys.has(row.group))
                 .map((row) => ({
@@ -502,8 +503,8 @@ export function createMagpiePlugin(): PluginDefinition {
             ]
             writeStatus(snapshot, { routes: traceRows, groupCount: groups.length })
             const notes: string[] = []
-            if (cliGroups === undefined) notes.push('仅展示所选网关已有请求的路由轨迹；完整组定义当前不可用。')
-            if ('unavailable' in trace) notes.push(`路由轨迹不可用：${sanitizeErrorText(trace.unavailable)}`)
+            if (cliGroups === undefined) notes.push('Only routing traces of requests already seen by the selected gateway are shown; full group definitions are currently unavailable.')
+            if ('unavailable' in trace) notes.push(`routing trace unavailable: ${sanitizeErrorText(trace.unavailable)}`)
             return {
               groups,
               local: snapshot.local,
@@ -518,7 +519,7 @@ export function createMagpiePlugin(): PluginDefinition {
 
       ctx.action({
         id: 'group',
-        description: '单个路由组的定义与最近一次路由决策',
+        description: 'A single routing group\'s definition and most recent routing decision',
         idempotent: true,
         inputSchema: {
           type: 'object',
@@ -533,8 +534,8 @@ export function createMagpiePlugin(): PluginDefinition {
           stopController = controller
           try {
             const short = input.id.replace(/^group\//, '')
-            // 定义：仅本机默认实例 CLI 可给（其它 loopback 端口 / 远端 CLI 是
-            // 另一个实例，无法证明目标一致则不问）。
+            // Definition: only the local default instance's CLI can provide it (another loopback port / a
+            // remote CLI is another instance; without provable identity, do not ask).
             const cliTrusted = snapshot.root === DEFAULT_MAGPIE_ROOT
             let definition: ReturnType<typeof parseGroupShow> = undefined
             let definitionError: string | undefined
@@ -542,26 +543,26 @@ export function createMagpiePlugin(): PluginDefinition {
               const run = await runMagpieCli(['group', short], { signal: controller.signal })
               if (run.ok) {
                 definition = parseGroupShow(run.stdout ?? '')
-                if (definition === undefined) definitionError = 'magpie CLI 输出无法解析为组定义'
+                if (definition === undefined) definitionError = 'magpie CLI output cannot be parsed into a group definition'
               } else {
                 definitionError = run.error
               }
             }
             const trace = await fetchTrace(snapshot.root, snapshot.token, controller.signal, fetchImpl)
             const lastRoute = 'routes' in trace ? latestGroupRouteIn(trace.routes, short) : undefined
-            // 诚实性：远端网关无定义来源时绝不编造——source 如实标注。
+            // Honesty: never fabricate when a remote gateway has no definition source -- the source label says so.
             const source = definition !== undefined ? 'cli+trace' : 'gateway-trace'
             if (definition === undefined && lastRoute === undefined) {
               throw new HelmError(
                 'magpie_group_not_found',
-                `路由组 ${input.id} 无可用信息：${
+                `routing group ${input.id} has no available information: ${
                   cliTrusted
                     ? definitionError !== undefined
-                      ? `CLI 失败（${sanitizeErrorText(definitionError)}）`
-                      : 'CLI 与网关 trace 均无该组'
+                      ? `CLI failed (${sanitizeErrorText(definitionError)})`
+                      : 'neither the CLI nor the gateway trace has this group'
                     : snapshot.local
-                      ? '非默认端口本机网关仅提供 trace，且 trace 无该组记录'
-                      : '非本机网关仅提供 trace，且 trace 无该组记录'
+                      ? 'local gateway on a non-default port provides trace only, and the trace has no record of this group'
+                      : 'non-local gateway provides trace only, and the trace has no record of this group'
                 }`,
                 404,
                 { id: input.id, gatewayUrl: snapshot.root, local: snapshot.local },
@@ -573,10 +574,10 @@ export function createMagpiePlugin(): PluginDefinition {
               ...(lastRoute !== undefined ? { lastRoute } : {}),
               source,
               ...(snapshot.local && !cliTrusted
-                ? { note: '本机网关但非默认端口：定义需本机默认实例 magpie CLI，此处仅所选网关 trace' }
+                ? { note: 'local gateway on a non-default port: definitions need the local default instance\'s magpie CLI; only the selected gateway\'s trace here' }
                 : snapshot.local
                   ? {}
-                  : { note: '非本机网关：定义需本机 magpie CLI，此处仅网关 trace' }),
+                  : { note: 'non-local gateway: definitions need the local magpie CLI; only the gateway trace here' }),
             }
           } finally {
             if (stopController === controller) stopController = undefined
@@ -584,17 +585,17 @@ export function createMagpiePlugin(): PluginDefinition {
         },
       })
 
-      // ---- 声明式 UI（client.tsx React 轨道；无 Emoji，icon 用 lucide 线性名） --------
+      // ---- Declarative UI (client.tsx React track; no Emoji, lucide line icons) --------
       ctx.ui.settingsPanel({
         id: 'magpie-panel',
-        label: 'Magpie 网关',
+        label: 'Magpie Gateway',
         order: 25,
         client: { module: 'index.tsx', export: 'MagpieSettingsPanel' },
       })
 
       ctx.ui.command({
         id: 'magpie-refresh',
-        title: '刷新 Magpie 模型目录',
+        title: 'Refresh the Magpie model catalog',
         actionId: 'refresh',
         input: {},
         keywords: ['magpie', 'models', 'refresh'],

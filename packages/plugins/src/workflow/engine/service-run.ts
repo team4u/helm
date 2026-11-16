@@ -106,7 +106,7 @@ export async function startWorkflowRun(
   if (sources.length > 1) {
     throw new HelmError(
       'validation_error',
-      'name、script、scriptPath 必须恰好提供一个（或 resumeFromRunId 时全部省略沿用旧脚本）',
+      'exactly one of name, script, scriptPath must be provided (or omit all to reuse the old script with resumeFromRunId)',
       400,
       { provided: sources.length },
     )

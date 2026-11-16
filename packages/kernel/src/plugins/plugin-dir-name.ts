@@ -1,22 +1,22 @@
 /**
- * 插件 id → 磁盘目录名（跨平台一致映射）。
+ * plugin id → disk directory name (across platform consistent mapping).
  *
- * 背景：插件 id 允许 `:`（`/^[A-Za-z0-9:_-]+$/`），而 Windows 文件名禁止 `:`——
- * 这类名字会被解释成 NTFS 交替数据流（`mkdir builtin:profile` 必报 ENOENT），
- * 插件注册在首个带冒号的插件处即崩。故把 id 中的 `:` 一律转义为 `%3A`，
- * 其余字符原样保留（不含 `:` 的 id 磁盘布局与旧行为完全一致）。
+ * background: plugin id allows `:`(`/^[A-Za-z0-9:_-]+$/`), while Windows filename forbidden `:`- -
+ * this kind of name will by explain into NTFS hand over replace data stream (`mkdir builtin:profile` must report ENOENT),
+ * plugin register in first carries smoke number plugin where i.e. crash. reason id in `:` one rule escaping is `%3A`,
+ * the rest character original keep (excludes `:`  id disk layout and old behavior fully consistent).
  *
- * 唯一权威点：所有 `<dataDir>/plugins/<...>` 计算与外部插件目录发现都走这里，
- * 绝不在别处各写一份转义规则。
+ * unique right threat point: all `<dataDir>/plugins/<...>` compute and external plugin directory discover all away this in,
+ * never in other where each write a escaping rule.
  */
 const COLON = /:/g
 
-/** 插件 id 对应的数据目录名（`<dataDir>/plugins/<此名>`）。 */
+/** plugin id for should data directory name (`<dataDir>/plugins/<this name>`). */
 export function pluginDataDirName(pluginId: string): string {
   return pluginId.replace(COLON, '%3A');
 }
 
-/** 目录名是否为内置插件的纯数据目录（`builtin:` 前缀的直接或转义形态）。 */
+/** directory name is otherwise is built-in plugin pure data directory (`builtin:` prefix directly or escaping form). */
 export function isBuiltinPluginDataDirName(dirName: string): boolean {
   return dirName.startsWith('builtin:') || dirName.startsWith('builtin%3A');
 }

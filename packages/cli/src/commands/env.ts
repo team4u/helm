@@ -1,4 +1,4 @@
-/** 跨节点命令执行；JSON 与人类输出使用相同的成功判定和取消语义。 */
+/** across node command execute;JSON and person class output use identical succeeded decide and cancel semantics. */
 import type { EnvExecRequest, EnvExecResponse, EnvExecStreamFrame } from '@helm/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
@@ -6,19 +6,19 @@ import type { CommandContext, CommandSpec } from './shared.js'
 import { parsePositiveInt, printResult, resolveConversationTarget } from './shared.js'
 
 const ENV_EXEC_FLAGS = [
-  { name: 'node', type: 'string', help: '目标节点 ID（缺省继承当前会话，否则 local）' },
-  { name: 'cwd', type: 'string', help: '目标节点工作目录（绝对路径）' },
-  { name: 'timeout', type: 'number', help: '命令超时毫秒数（正整数，上限 600000）' },
-  { name: 'stream', type: 'boolean', help: '逐帧回传 stdout/stderr 与终态' },
-  { name: 'current', type: 'boolean', help: '读取 HELM_CONVERSATION_ID 作为会话上下文' },
+  { name: 'node', type: 'string', help: 'target node ID(default inherit when before conversation, otherwise local)' },
+  { name: 'cwd', type: 'string', help: 'target node work directory (absolute path)' },
+  { name: 'timeout', type: 'number', help: 'command timeout milli second count (positive integer, cap 600000)' },
+  { name: 'stream', type: 'boolean', help: 'one by one frame back pass stdout/stderr and terminal state' },
+  { name: 'current', type: 'boolean', help: 'read HELM_CONVERSATION_ID as conversation context' },
 ] as const
 
-/** 与后端 POST /api/env/exec 的校验对齐（timeoutMs <= 600_000），越界在 CLI 侧先行拒绝。 */
+/** and backend POST /api/env/exec validate align (timeoutMs <= 600_000), out of bounds in CLI side first row reject. */
 const ENV_EXEC_TIMEOUT_MAX_MS = 600_000
 
 function commandFromPositionals(positionals: readonly string[]): string | string[] {
   if (positionals.length === 0) {
-    throw new CliError('缺少待执行命令：env exec [--node <id>] -- <command...>', 'missing_command_target')
+    throw new CliError('missing await execute command:env exec [--node <id>] -- <command...>', 'missing_command_target')
   }
   if (positionals.length === 1 && /\s/.test(positionals[0]!)) return positionals[0]!
   return [...positionals]
@@ -32,7 +32,7 @@ function validExit(value: Record<string, unknown>): boolean {
 function executionFailure(result: Pick<EnvExecResponse, 'ok' | 'exitCode' | 'timedOut'>): CliError | undefined {
   if (result.ok && result.exitCode === 0 && !result.timedOut) return undefined
   return new CliError(
-    `命令失败${result.timedOut ? '（超时）' : ''}：exitCode=${String(result.exitCode)}`,
+    `command failed${result.timedOut ? '(timeout)' : ''}:exitCode=${String(result.exitCode)}`,
     'env_exec_failed',
     result.exitCode !== null && result.exitCode > 0 ? Math.min(result.exitCode, 255) : 1,
     result,
@@ -42,7 +42,7 @@ function executionFailure(result: Pick<EnvExecResponse, 'ok' | 'exitCode' | 'tim
 export function envCommands(): CommandSpec[] {
   return [{
     path: ['env', 'exec'],
-    description: '跨节点直接执行命令（POST /api/env/exec）',
+    description: 'across node directly execute command (POST /api/env/exec)',
     flags: [...ENV_EXEC_FLAGS],
     positional: '-- <command...>',
     async run(ctx: CommandContext) {
@@ -52,14 +52,14 @@ export function envCommands(): CommandSpec[] {
       const cwd = flagValue<string>(parsed.flags, 'cwd')
       const timeout = flagValue<number>(parsed.flags, 'timeout')
       if (nodeId !== undefined) {
-        if (nodeId.trim() === '') throw new CliError('--node 需为非空节点 ID', 'invalid_flag_value')
+        if (nodeId.trim() === '') throw new CliError('--node must be non-empty node ID', 'invalid_flag_value')
         body.nodeId = nodeId
       }
       if (cwd !== undefined) body.cwd = cwd
       if (timeout !== undefined) {
         const timeoutMs = parsePositiveInt(String(timeout), '--timeout', 'invalid_flag_value')
         if (timeoutMs > ENV_EXEC_TIMEOUT_MAX_MS) {
-          throw new CliError(`--timeout 不能超过 ${ENV_EXEC_TIMEOUT_MAX_MS} 毫秒`, 'validation_error', 2)
+          throw new CliError(`--timeout cannot exceeds ${ENV_EXEC_TIMEOUT_MAX_MS} milli second`, 'validation_error', 2)
         }
         body.timeoutMs = timeoutMs
       }
@@ -72,10 +72,10 @@ export function envCommands(): CommandSpec[] {
         return
       }
       const hub = await ctx.hub()
-      // Shell 自带命令预算，HTTP 不应用客户端的 30 秒默认值抢先中断长命令。
+      // Shell self carries command pre- compute,HTTP must not use client 30 second default value grab first interrupt long command.
       const result = await hub.request<EnvExecResponse>('POST', '/api/env/exec', { body, timeoutMs: 0 })
       if (!result || typeof result !== 'object' || !validExit(result as unknown as Record<string, unknown>) || typeof result.output !== 'string') {
-        throw new CliError('Hub 响应非 EnvExecResponse 形状', 'invalid_response')
+        throw new CliError('Hub response non- EnvExecResponse shape', 'invalid_response')
       }
       if (ctx.json) printResult(ctx, result)
       else if (result.output !== '') ctx.io.out(result.output.endsWith('\n') ? result.output : `${result.output}\n`)
@@ -99,13 +99,13 @@ async function runStreamed(ctx: CommandContext, body: EnvExecRequest): Promise<v
       signal: controller.signal,
       onLine(value) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) {
-          throw new CliError('Hub NDJSON 帧必须是对象', 'invalid_response')
+          throw new CliError('Hub NDJSON frame must be object', 'invalid_response')
         }
-        if (terminal) throw new CliError('Hub 在终态后继续发送数据', 'invalid_response')
+        if (terminal) throw new CliError('Hub in terminal state after continue send data', 'invalid_response')
         const raw = value as Record<string, unknown>
         if (raw.type === 'output') {
           if (typeof raw.text !== 'string' || (raw.stream !== 'stdout' && raw.stream !== 'stderr')) {
-            throw new CliError('Hub 输出帧字段非法', 'invalid_response')
+            throw new CliError('Hub output frame field illegal', 'invalid_response')
           }
           const frame = raw as Extract<EnvExecStreamFrame, { type: 'output' }>
           if (ctx.json) ctx.io.out(`${JSON.stringify(frame)}\n`)
@@ -113,7 +113,7 @@ async function runStreamed(ctx: CommandContext, body: EnvExecRequest): Promise<v
           return
         }
         if (raw.type === 'exit') {
-          if (!validExit(raw)) throw new CliError('Hub 终态帧字段非法', 'invalid_response')
+          if (!validExit(raw)) throw new CliError('Hub terminal state frame field illegal', 'invalid_response')
           const frame = raw as Extract<EnvExecStreamFrame, { type: 'exit' }>
           terminal = true
           if (ctx.json) ctx.io.out(`${JSON.stringify(frame)}\n`)
@@ -123,23 +123,23 @@ async function runStreamed(ctx: CommandContext, body: EnvExecRequest): Promise<v
         if (raw.type === 'error') {
           const error = raw.error as Record<string, unknown> | null | undefined
           if (!error || typeof error.code !== 'string' || typeof error.message !== 'string') {
-            throw new CliError('Hub 错误帧字段非法', 'invalid_response')
+            throw new CliError('Hub error frame field illegal', 'invalid_response')
           }
           terminal = true
           throw new CliError(error.message, error.code, 1, error.details)
         }
-        throw new CliError(`Hub NDJSON 帧类型未知：${String(raw.type)}`, 'invalid_response')
+        throw new CliError(`Hub NDJSON frame type unknown:${String(raw.type)}`, 'invalid_response')
       },
     })
   } catch (error) {
     if (controller.signal.aborted || (error instanceof CliError && error.code === 'aborted')) {
-      throw new CliError('已取消（env exec）', 'aborted', 130)
+      throw new CliError('cancelled (env exec)', 'aborted', 130)
     }
     throw error
   } finally {
     process.off('SIGINT', onSignal)
     process.off('SIGTERM', onSignal)
   }
-  if (!terminal) throw new CliError('节点输出流在终态前中断，命令结果未知', 'stream_incomplete')
+  if (!terminal) throw new CliError('node output stream in terminal state before interrupt, command result unknown', 'stream_incomplete')
   if (failure) throw failure
 }

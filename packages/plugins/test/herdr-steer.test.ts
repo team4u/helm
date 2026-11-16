@@ -516,21 +516,21 @@ async function taskPromptDelivered(env: Env): Promise<void> {
 
 /** 任务/自愈 prompt 文本引用的交接文件名。 */
 function taskFileNameOf(text: string): string {
-  const name = text.match(/写入[\s\S]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+  const name = text.match(/[Ww]rite[\s\S]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
   assert.ok(name !== undefined, `任务文本应含交接文件名：${text.slice(-400)}`)
   return name
 }
 
 /** 插话文本要求写入的新交接文件名。 */
 function steerNewFileNameOf(text: string): string {
-  const name = text.match(/写入新文件 [^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+  const name = text.match(/the new file [^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
   assert.ok(name !== undefined, `插话文本应含新交接文件名：${text.slice(-400)}`)
   return name
 }
 
 /** 插话文本声明作废的旧交接文件名。 */
 function steerOldFileNameOf(text: string): string {
-  const name = text.match(/原交接文件 (wf-out-[A-Za-z0-9_.-]+\.(?:json|md)) 已作废/)?.[1]
+  const name = text.match(/The original handoff file (wf-out-[A-Za-z0-9_.-]+\.(?:json|md)) is voided/)?.[1]
   assert.ok(name !== undefined, `插话文本应含作废旧文件声明：${text.slice(-400)}`)
   return name
 }
@@ -786,7 +786,7 @@ test('steer: 投递后连接中断（不确定投递）单次不重发；原任�
     }
     assert.ok(caught instanceof HelmError)
     assert.equal(caught.code, 'herdr_steer_uncertain', '不确定投递使原任务显式失败')
-    assert.ok(caught.message.includes('不确定'), '诊断含不确定原因')
+    assert.ok(caught.message.includes('uncertain'), '诊断含不确定原因')
     assert.equal(existsSync(resultFile), true, '失败保留现场：旧结果文件不被删除')
     assert.equal(taskPromptCalls(env).length, 1, '不自动补发 prompt / 自愈冒充')
     const list = (await env.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ outcome: string }> }

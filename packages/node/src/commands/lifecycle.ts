@@ -1,5 +1,5 @@
 /**
- * 生命周期命令：connect（绑定+前台运行）/ start（后台或受控）/ stop / restart / status。
+ * lifecycle command:connect(bind set+foreground run)/ start(background or subject to control)/ stop / restart / status.
  */
 import { UsageError } from '../cli-context.js';
 import { readPidRecord } from '../cli-context.js';
@@ -22,10 +22,10 @@ export async function connectCommand(ctx: CommandContext): Promise<number> {
       ? parsed.positional[0]!
       : await resolveHubUrl(io, parsed, true);
   const token = flagString(parsed, 'token');
-  if (token === undefined) throw new UsageError('connect 需要 --token <token>（JOIN 令牌 nodeId:secret）', 'missing_token');
+  if (token === undefined) throw new UsageError('connect need to --token <token>(JOIN token nodeId:secret)', 'missing_token');
   await bindIdentityFromJoinToken(dataDir, token, hubUrl);
   const identity = await readNodeIdentity(dataDir);
-  if (identity === null) throw new Error('身份写入后读取失败（内部错误）');
+  if (identity === null) throw new Error('identity after write failed to read (internal error)');
   if (parsed.flags.get('once') === true) {
     const handle = await runNodeDaemonHandle({ hubUrl, token }, { dataDir });
     const ok = await handle.waitUntilRegistered(15_000);
@@ -36,27 +36,27 @@ export async function connectCommand(ctx: CommandContext): Promise<number> {
   return await runDaemonProcess({ io, json: parsed.json, dataDir, hubUrl, token, nodeId: identity.nodeId });
 }
 
-/** start -d：绑定（可选）→ 后台拉起 → pid 留档。 */
+/** start -d: bind set (optional)→ background pull start → pid Profile. */
 async function startDetached(ctx: CommandContext, token: string | undefined, hubUrl: string): Promise<number> {
   const { io, parsed, dataDir, emit } = ctx;
   const { bindIdentityFromJoinToken, readNodeIdentity } = await import('../daemon/index.js');
   if (token !== undefined) {
-    // 空地址由 bindIdentityFromJoinToken 显式拒绝（不编造回退 Hub）。
+    // empty address by bindIdentityFromJoinToken explicit reject (do not edit build fall back Hub).
     await bindIdentityFromJoinToken(dataDir, token, hubUrl);
   }
   const identity = await readNodeIdentityStrict(dataDir);
   const effectiveHub = hubUrl !== '' ? hubUrl : identity.hubUrl ?? '';
-  if (effectiveHub === '') throw new UsageError('后台启动需要 Hub 地址（--hub 或既绑定的 hubUrl）', 'missing_hub_url');
+  if (effectiveHub === '') throw new UsageError('background start need to Hub address (--hub or since bind set hubUrl)', 'missing_hub_url');
   const { pid, logPath, readyState } = await startDaemon(io, dataDir, effectiveHub);
   const message =
     readyState === 'registered'
-      ? `守护进程已启动并完成 Hub 注册（pid ${pid}）`
-      : `守护进程已启动（pid ${pid}），尚未完成 Hub 注册：Hub 暂不可达时将持续退避重连，诊断见 ${logPath}`;
+      ? `daemon already start and complete Hub register (pid ${pid})`
+      : `daemon already start (pid ${pid}), not yet complete Hub register:Hub temporary cannot reach when continuous backoff reconnect, diagnose see ${logPath}`;
   emit({ ok: true, pid, dataDir, hubUrl: effectiveHub, nodeId: identity.nodeId, logPath, state: readyState, message });
   return 0;
 }
 
-/** start 受控模式（start -d / 升级交接父进程注入控制 env）：直接运行 daemon 本体。 */
+/** start subject to control pattern (start -d / upgrade handover parent process inject control env): directly run daemon this body. */
 async function startControlled(ctx: CommandContext, control: { instanceId: string; endpoint: string }, token: string | undefined, hubUrl: string): Promise<number> {
   const { io, parsed, dataDir } = ctx;
   const { readNodeIdentity } = await import('../daemon/index.js');
@@ -65,7 +65,7 @@ async function startControlled(ctx: CommandContext, control: { instanceId: strin
   const effectiveHub = hubUrl !== '' ? hubUrl : identity?.hubUrl ?? '';
   if (effectiveToken === undefined || effectiveHub === '') {
     throw new UsageError(
-      'start 受控运行需要既绑定的身份或 --token + --hub；或使用 start -d 后台启动',
+      'start subject to control run need to since bind set identity or --token + --hub; or use start -d background start',
       'missing_identity',
     );
   }
@@ -88,15 +88,15 @@ export async function startCommand(ctx: CommandContext): Promise<number> {
   if (detached) {
     return await startDetached(ctx, token, hubUrl);
   }
-  // 前台 start：受控后台（由 start -d / 升级交接父进程注入
-  // HELM_NODE_INSTANCE_ID / HELM_NODE_CONTROL_ENDPOINT）直接运行 daemon；
-  // 无控制 env 的纯前台（systemd/launchd 主进程）成为稳定 launcher。
+  // foreground start: subject to control background (by start -d / upgrade handover parent process inject
+  // HELM_NODE_INSTANCE_ID / HELM_NODE_CONTROL_ENDPOINT) directly run daemon;
+  // without control env pure foreground (systemd/launchd main process) into is stable launcher.
   const instanceId = io.env?.['HELM_NODE_INSTANCE_ID'];
   const endpoint = io.env?.['HELM_NODE_CONTROL_ENDPOINT'];
   if (instanceId !== undefined && instanceId !== '' && endpoint !== undefined && endpoint !== '') {
     return await startControlled(ctx, { instanceId, endpoint }, token, hubUrl);
   }
-  // 稳定 launcher：拉起受控 daemon 并跟踪当前实例，升级换 pid 自动跟随。
+  // stable launcher: pull start subject to control daemon and trace when before instance, upgrade swap pid automatically with follow.
   const { bindIdentityFromJoinToken } = await import('../daemon/index.js');
   const { runForegroundLauncher } = await import('../launcher.js');
   if (token !== undefined && hubUrl !== '') {
@@ -104,7 +104,7 @@ export async function startCommand(ctx: CommandContext): Promise<number> {
   }
   const launcherIdentity = await readNodeIdentityStrict(dataDir);
   const launcherHub = hubUrl !== '' ? hubUrl : launcherIdentity.hubUrl ?? '';
-  if (launcherHub === '') throw new UsageError('launcher 启动需要 Hub 地址（--hub 或既绑定的 hubUrl）', 'missing_hub_url');
+  if (launcherHub === '') throw new UsageError('launcher start need to Hub address (--hub or since bind set hubUrl)', 'missing_hub_url');
   return await runForegroundLauncher(io, dataDir, launcherHub, parsed.json);
 }
 
@@ -120,12 +120,12 @@ export async function restartCommand(ctx: CommandContext): Promise<number> {
   const hubUrl = await resolveHubUrl(io, parsed, false);
   const identity = await readNodeIdentityStrict(dataDir);
   const effectiveHub = hubUrl !== '' ? hubUrl : identity.hubUrl ?? '';
-  if (effectiveHub === '') throw new UsageError('restart 需要既绑定身份（helm-node connect）；未找到', 'missing_identity');
+  if (effectiveHub === '') throw new UsageError('restart need to since bind set identity (helm-node connect); not found', 'missing_identity');
   const previous = await readPidRecord(dataDir);
   let previousPid: number | null = null;
   if (previous !== null) {
     previousPid = previous.pid;
-    // stopDaemon 停止失败会抛错：绝不带着旧进程继续拉新进程。
+    // stopDaemon stop failed will throws: never carries old process continue pull new process.
     await stopDaemon(io, dataDir);
   }
   const { pid, logPath, readyState } = await startDaemon(io, dataDir, effectiveHub);
@@ -147,8 +147,8 @@ export async function statusCommand(ctx: CommandContext): Promise<number> {
   const { readNodeIdentity } = await import('../daemon/index.js');
   const identity = await readNodeIdentity(dataDir);
   const daemon = await statusDaemon(io, dataDir);
-  // 真实运行版本优先级：daemon 控制通道上报（真实进程 getNodeVersion）
-  // → 本地 current.json（已选择版本）→ 自身包版本（无 live 实例时的兑底）。
+  // real run version priority:daemon control channel on report (real process getNodeVersion)
+  // → local current.json(already choose version)→ itself package version (without live instance when honor bottom).
   const { resolveEffectiveNodeVersion } = await import('../daemon/upgrader.js');
   const version = daemon.version ?? (await resolveEffectiveNodeVersion(dataDir));
   emit({

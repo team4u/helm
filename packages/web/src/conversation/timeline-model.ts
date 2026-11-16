@@ -495,7 +495,7 @@ export function assistantModelShortLabel(identity: AssistantModelIdentity): stri
 /** 完整标签：'provider/model'（+ 思考档位），与 conversation.model 同格式。 */
 export function assistantModelFullLabel(identity: AssistantModelIdentity): string {
   const base = `${identity.provider}/${identity.model}`
-  return identity.thinkingLevel !== undefined ? `${base} · 思考 ${identity.thinkingLevel}` : base
+  return identity.thinkingLevel !== undefined ? `${base} · thinking ${identity.thinkingLevel}` : base
 }
 
 /**

@@ -4,15 +4,15 @@ import type { BlockedSnapshotAnalysis } from './prompt-options.js'
 
 /** One server, selected consistently for commands, files and event subscriptions. */
 export interface HerdrTarget {
-  /** 目标计算节点 ID（缺省本机；'local' 显式表示本机）。 */
+  /** Target compute node ID (defaults to local; 'local' explicitly means local). */
   nodeId?: string
   session?: string
   socketPath?: string
 }
 
 /**
- * 目标节点 ID（'local' 折叠为 undefined = 本机；其余原样返回）。
- * 空串不折叠：入口校验（isValidNodeId）必须显式拒绝，绝不默默当本机。
+ * Target node ID ('local' folds to undefined = local; anything else returned as-is).
+ * Empty strings do not fold: entry validation (isValidNodeId) must reject them explicitly, never silently treat as local.
  */
 export function targetNodeId(target: HerdrTarget | undefined): string | undefined {
   const id = target?.nodeId
@@ -20,42 +20,42 @@ export function targetNodeId(target: HerdrTarget | undefined): string | undefine
 }
 
 /**
- * 跨节点通道：由内核 EnvFabric 公共端口（nodeIpc / executionEnv）或测试
- * fixture 提供，transport 借它在目标节点连接当地 Herdr IPC、读写交接文件
- * 并执行 Gate（彻底取代 ssh + python3 脚本）。
+ * Cross-node channel: provided by the kernel EnvFabric public ports (nodeIpc / executionEnv) or a test
+ * fixture; transport uses it to connect to the local Herdr IPC on the target node, read/write handoff files
+ * and run Gates (thoroughly replacing ssh + python3 scripts).
  *
- * 端点语义（远端节点自解析，绝不携带 Hub 本机的平台/目录）：
- * - `endpoint` 仅在 target 显式给出 socketPath 时传递（可缺省）；
- * - `session` 传递显式会话名（可缺省）；
- * - 目标节点自己解析 HERDR_SOCKET_PATH / 平台配置目录与端点形态（UDS 或
- *   Named Pipe），Hub 侧绝不把本机 resolveSocketPath 或 endpointKind 强加给远端。
+ * Endpoint semantics (the remote node resolves itself; never carry the Hub-local platform/dirs):
+ * - `endpoint` is passed only when the target explicitly gives a socketPath (optional);
+ * - `session` passes an explicit session name (optional);
+ * - the target node itself resolves HERDR_SOCKET_PATH / platform config dirs and the endpoint form (UDS or
+ *   Named Pipe); the Hub never imposes its local resolveSocketPath or endpointKind on the remote.
  *
- * 取消语义：所有方法接受普通 AbortSignal（与宿主公共端口同形），transport
- * 内部文件/命令操作仍用 SDK Context 派生（见 HerdrNodeEnv）。
+ * Cancellation semantics: all methods accept a plain AbortSignal (same shape as the host public ports);
+ * transport-internal file/command operations still derive via the SDK Context (see HerdrNodeEnv).
  */
 export interface HerdrNodeChannel {
-  /** 节点是否在线（'local' 恒为 true）。 */
+  /** Whether the node is online ('local' is always true). */
   isOnline(nodeId: string): boolean
-  /** 获取节点注册的可达 Hub URL（若有，供远端窗格自动注入 HELM_HUB_URL）。 */
+  /** Get the node's registered reachable Hub URL (if any; auto-injected as HELM_HUB_URL for remote panes). */
   getNodeHubUrl?(nodeId: string): string | undefined
   /**
-   * 节点可信平台上报（NodeRegistry 注册事实，如 'linux' / 'win32'；
-   * 未上报 / 不可达返回 undefined）：resolveCwd 按目标节点平台做 cwd
-   * 规范化用。缺席时远端平台视为未知（不猜、不改写）。
+   * The node's trusted platform report (NodeRegistry registration fact, e.g. 'linux' / 'win32';
+   * unreported / unreachable returns undefined): resolveCwd normalizes the cwd by the target
+   * node's platform. When absent the remote platform is unknown (no guessing, no rewriting).
    */
   nodePlatform?(nodeId: string): string | undefined
-  /** 在目标节点执行本机 Herdr 单次行协议 IPC 请求（支持 signal 取消，取消时立即中断底层连接）。 */
+  /** Execute a single local Herdr line-protocol IPC request on the target node (supports signal cancellation; cancels the underlying connection immediately). */
   ipcCall(
     nodeId: string,
     input: { endpoint?: string; session?: string; line: string; timeoutMs?: number },
     signal?: AbortSignal,
   ): Promise<RpcResult<string>>
-  /** 在目标节点获取文件与命令执行环境。 */
+  /** Get the file and command execution environment on the target node. */
   envFor(nodeId: string, cwd: string): HerdrNodeEnv
   /**
-   * 可选：远端节点 IPC 事件流订阅。
-   * Promise 成功 resolve 即代表订阅请求已被目标节点确认（ACK 在通道层消费
-   * 并验证）；此后 onLine 只推送裸事件帧，绝不二次伪造 ACK。
+   * Optional: remote node IPC event stream subscription.
+   * A successful Promise resolve means the subscription request was confirmed by the target node (the ACK is consumed
+   * and validated at the channel layer); afterwards onLine pushes only bare event frames, never a second fabricated ACK.
    */
   ipcSubscribe?(
     nodeId: string,
@@ -67,8 +67,8 @@ export interface HerdrNodeChannel {
 }
 
 /**
- * `HerdrNodeChannel.envFor` 的环境契约：SDK `ExecutionEnv` 核心子集的 Pick。
- * NodeExecutionEnv / 宿主 executionEnv 端口结构可赋值（无 as 掩盖）。
+ * The env contract of `HerdrNodeChannel.envFor`: a Pick of the SDK `ExecutionEnv` core subset.
+ * NodeExecutionEnv / the host executionEnv port structures are assignable (no as-masking).
  */
 export type HerdrNodeEnv = Pick<
   ExecutionEnv,
@@ -95,7 +95,7 @@ export type HerdrEvent =
   | { type: 'tab.closed'; tabId: string; workspaceId: string; paneId?: never }
   | { type: 'workspace.closed'; workspaceId: string; paneId?: never }
 
-/** 订阅选项：paneIds 为每个窗格追加 pane.agent_status_changed 过滤订阅；signal 取消整个订阅。 */
+/** Subscription options: paneIds appends a pane.agent_status_changed filter subscription per pane; signal cancels the whole subscription. */
 export interface HerdrSubscribeOptions {
   paneIds?: string[]
   signal?: AbortSignal
@@ -119,12 +119,12 @@ export interface HerdrTransport {
 export interface HerdrPluginDependencies {
   profiles: { get(id: string): Promise<Profile | undefined> }
   /**
-   * 外部 spawn 环境变量：目标节点受管回连集合（受管 HELM_*；缺省不携带任何
-   * 父会话 stash 机密——外部窗格最小授权）。
-   * nodeId 为实际选定的目标节点（'local' 显式表示本机；绝不传 undefined 让
-   * 内核按父会话继承——父会话绑定远端时会把本机窗格误配到远端）。
-   * 仅显式 secretNames 时逐名注入父会话机密（需现存，缺失显式抛错）；
-   * 绝不携带整个继承的 process 环境。
+   * External spawn environment variables: the target node's managed call-home set (managed HELM_*; by default no
+   * parent-conversation stash secrets are carried -- minimal authorization for external panes).
+   * nodeId is the actually chosen target node ('local' explicitly means local; never pass undefined for
+   * kernel parent-conversation inheritance -- a parent bound to a remote node would mis-configure local panes onto the remote).
+   * Parent-conversation secrets are injected by name only with explicit secretNames (must exist; missing throws explicitly);
+   * never carry the whole inherited process environment.
    */
   buildSpawnEnv(
     conversationId: number,
@@ -134,36 +134,36 @@ export interface HerdrPluginDependencies {
   ): Record<string, string>
   redact(text: string): string
   runLocalGate(command: string, options: { cwd?: string; conversationId?: number; signal?: AbortSignal; env?: Record<string, string> }): Promise<AgentGateResult>
-  /** 附件产物元数据解析（含授权校验；不存在/越权抛 HelmError）。可选注入。 */
+  /** Attachment artifact metadata resolution (incl. authorization checks; nonexistent/unauthorized throws HelmError). Optional injection. */
   getArtifact?: (
     id: string,
     conversationId: number,
   ) => Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }>
-  /** 跨节点通道（EnvFabric 注入；缺省时远端目标显式报错，绝不静默回退本机）。 */
+  /** Cross-node channel (injected by EnvFabric; when absent, remote targets fail explicitly, never silently falling back to local). */
   nodeChannel?: HerdrNodeChannel
   transport?: HerdrTransport
-  /** 同 seq blocked 退避基数与上限（测试可缩短；缺省 500ms / 4000ms）。 */
+  /** Same-seq blocked backoff base and cap (shortened in tests; defaults 500ms / 4000ms). */
   blockedBackoffBaseMs?: number
   blockedBackoffCapMs?: number
-  /** 审批轮询间隔（测试可缩短；缺省 100ms）。 */
+  /** Approval polling interval (shortened in tests; default 100ms). */
   pollIntervalMs?: number
-  /** Ask 存续轮询瞬时故障退避基数与上限（测试可缩短；生产缺省 500ms / 4000ms）。 */
+  /** Ask liveness poll transient-failure backoff base and cap (shortened in tests; production defaults 500ms / 4000ms). */
   askPollTransientBackoffBaseMs?: number
   askPollTransientBackoffCapMs?: number
-  /** abort 后销单退避上限（测试可缩短；生产缺省 3200ms）。 */
+  /** Post-abort cancellation backoff cap (shortened in tests; production default 3200ms). */
   abortCancelBackoffCapMs?: number
-  /** md 交接稳定性复检间隔（测试可缩短；生产缺省 300ms）。 */
+  /** md handoff stability recheck interval (shortened in tests; production default 300ms). */
   mdStableRecheckMs?: number
-  /** 事件订阅断线重连退避基数与上限（测试可缩短；生产缺省 1000ms / 60000ms）。 */
+  /** Event subscription reconnect backoff base and cap (shortened in tests; production defaults 1000ms / 60000ms). */
   subscriptionRetryBaseMs?: number
   subscriptionRetryCapMs?: number
-  /** 插话后等待后续回合起步的预算（测试可缩短；生产缺省复用 startupTimeoutMs()）。 */
+  /** Budget for waiting for the follow-up turn to start after a steer (shortened in tests; production default reuses startupTimeoutMs()). */
   steerWaitBudgetMs?: number
   /**
-   * 可选：当确定性正则未从阻塞快照中识别出标准菜单时，调用会话模型解析
-   * 脱敏终端快照并提取候选按键选项。返回 analysis 为 undefined 时附
-   * diagnostic（脱敏短诊断，仅用于通知/description，不含快照与响应原文）；
-   * 外部 signal 取消时以原始错误 reject（立即传播，不回退）。
+   * Optional: when the deterministic regex has not recognized a standard menu from the blocked snapshot,
+   * invoke the conversation model to parse the redacted terminal snapshot and extract candidate keystroke options.
+   * When analysis is undefined, attach a diagnostic (a redacted short diagnostic for notification/description only,
+   * without snapshot or raw response text); on external signal cancellation, reject with the original error (propagates immediately, no fallback).
    */
   analyzeBlockedSnapshot?: (input: {
     snapshot: string
@@ -175,16 +175,16 @@ export interface HerdrPluginDependencies {
 export type { BlockedSnapshotAiOption, BlockedSnapshotAnalysis } from './prompt-options.js'
 
 /**
- * builtin:herdr 对外发布的 steer 控制引用（execution meta 控制项）：
- * 执行器（executionInfoOf）与插件动作注册共用同一常量，坐标与 plugins 包共享
- * 契约模块（contracts.ts）的 ExternalSteerRequest/Result 契约对应。
+ * builtin:herdr's published steer control reference (execution meta control item):
+ * the executor (executionInfoOf) and the plugin action registration share the same constant; the coordinates
+ * correspond to the ExternalSteerRequest/Result contract in the plugins package's shared contracts module (contracts.ts).
  */
 export const HERDR_STEER_CONTROLS = {
   pluginId: 'builtin:herdr',
   actionId: 'steer',
 } as const
 
-/** ctx.host.createAsk 的最小形状（与 AskCreateSpec/AskResult 对齐）。 */
+/** The minimal shape of ctx.host.createAsk (aligned with AskCreateSpec/AskResult). */
 export interface CreateAskSpecLike {
   id?: string
   conversationId: number

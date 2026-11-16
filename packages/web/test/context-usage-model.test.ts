@@ -68,8 +68,8 @@ test('tokens=0（空会话/刚 reset）与压缩中：0 不渲染；压缩中显
   assert.equal(contextUsageLabel({ tokens: 0 }), null)
   assert.equal(contextUsageLabel({ tokens: 0, contextWindow: 128_000 }), null)
   const compacting = contextUsageLabel({ tokens: 0, contextWindow: 128_000, compacting: true })
-  assert.equal(compacting?.text, '精简中…')
+  assert.equal(compacting?.text, 'Compacting…')
   assert.equal(compacting?.tone, 'default')
   // tokens=null 但压缩进行中：同样显示精简中（压缩未完成时占比未知是常态）。
-  assert.equal(contextUsageLabel({ tokens: null, contextWindow: 128_000, compacting: true })?.text, '精简中…')
+  assert.equal(contextUsageLabel({ tokens: null, contextWindow: 128_000, compacting: true })?.text, 'Compacting…')
 })

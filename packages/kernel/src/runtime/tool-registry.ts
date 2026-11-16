@@ -1,12 +1,12 @@
 /**
- * 运行时工具装配器：负责内核基础工具（helm-core）与插件衍生工具（helm-plugins）的注册与热装。
+ * runtime tool install match: negative duty kernel basis tool (helm-core) and plugin derived tool (helm-plugins) register and hot install.
  *
- * 职责：
- * 1. installKernelTools：构造 bash/read/write/edit/read_artifact/register_artifact
- *    与 run_action 元工具，统一以 wrapToolExecute 包装以支持 tool_call handled 接管返回；
- * 2. installPluginTools：将 PluginHost.listTools() 返回的 DerivedToolSpec 映射为真实 SDK
- *    工具扩展并安装到 registry（原地热替换旧插件工具扩展），出站结果经 pluginToolResult 脱敏与格式化；
- * 3. 消费与 HookBridge 共享的 handledToolCalls Map，实现无反向依赖的工具级拦截短路。
+ * responsibility:
+ * 1. installKernelTools: construct bash/read/write/edit/read_artifact/register_artifact
+ *    and run_action meta tool, unify with wrapToolExecute wrap with support tool_call handled take over return;
+ * 2. installPluginTools: PluginHost.listTools() return DerivedToolSpec mapping is real SDK
+ *    tool extend and install to registry(original ground hot replace old plugin tool extend), out station result via pluginToolResult redaction and format;
+ * 3. consume and HookBridge sharing handledToolCalls Map, implement without reverse dependency tool level intercept short route.
  */
 
 import type { Context } from '@earendil-works/chord/context'
@@ -44,7 +44,7 @@ export interface RuntimeToolRegistryOptions {
   readonly isArtifactAuthorized: (conversationId: number, artifactConversationId: number) => boolean
   readonly redact: (text: string) => string
   readonly handledToolCalls: Map<string, HandledToolCallEntry>
-  /** 会话摘要读取（run_action describe 模式的 scope 判定用）。 */
+  /** conversation summary read (run_action describe pattern scope decide use). */
   readonly getConversation: (conversationId: number) => ConversationSummary
 }
 
@@ -53,7 +53,7 @@ type PluginToolApi = Pick<ToolExecutionApi, 'conversationId'> & {
   output?: (chunk: string) => void
 }
 
-/** 内核/插件工具 execute 包装：tool_call handled 接管结果优先返回（不执行真实工具）。 */
+/** kernel/plugin tool execute wrap:tool_call handled take over result takes precedence return (do not execute real tool). */
 export function wrapToolExecute<
   TArgs,
   TApi extends { callId?: string },
@@ -71,15 +71,15 @@ export function wrapToolExecute<
       return handled.result
     }
     const result = await execute(args, api, context)
-    // 若工具实现吞掉或转换了中止（如返回 { isError: true }），在此统一抛出中止
-    // 异常，确保 pi-durable ToolTask 进入中断 / writeAtClose() 退回 pending 分支。
+    // if tool implement swallow or convert abort (such as return { isError: true }), in this unify throw abort
+    // exception, ensure pi-durable ToolTask enter interrupt / writeAtClose() retreat back pending branch.
     throwIfToolAborted(context?.abortSignal)
     return result
   }
 }
 
 /**
- * 统一包装具体工具注册并擦除逆变参数泛型，集中收口到 `Extension.tools` 的异构数组边界。
+ * unify wrap specific tool register and erase inverse change parameter generic, concentrate consolidate to `Extension.tools` different construct array boundary.
  */
 function wrapToolRegistration<TParameters extends object, TDetails extends JsonValue>(
   handledToolCalls: Map<string, HandledToolCallEntry>,
@@ -96,10 +96,10 @@ export class RuntimeToolRegistry {
   constructor(private readonly options: RuntimeToolRegistryOptions) {}
 
   /**
-   * 内核基础工具（bash/read/write/edit/read_artifact/register_artifact +
-   * run_action 元工具）统一注册（与插件工具同一 registry 机制；execute 统一
-   * 包 handled 接管）。subagent / SubagentWorkflow / cleanup_worktree 由
-   * builtin:workflow 插件提供。
+   * kernel basis tool (bash/read/write/edit/read_artifact/register_artifact +
+   * run_action meta tool) unify register (and plugin tool the same registry mechanism;execute unify
+   * package handled take over).subagent / SubagentWorkflow / cleanup_worktree by
+   * builtin:workflow plugin provide.
    */
   installKernelTools(): void {
     const { registry, toolDeps, getPluginHost, isArtifactAuthorized, redact, handledToolCalls, getConversation } = this.options
@@ -111,7 +111,7 @@ export class RuntimeToolRegistry {
         context: { conversationId: number; signal?: AbortSignal },
       ) => {
         const host = getPluginHost()
-        if (!host) throw new HelmError('runtime_not_initialized', '插件宿主未初始化', 503)
+        if (!host) throw new HelmError('runtime_not_initialized', 'plugin host not initialized', 503)
         return host.invokeAction(pluginId, actionId, input, context)
       },
       describePluginAction: async (
@@ -120,25 +120,25 @@ export class RuntimeToolRegistry {
         context: { conversationId: number },
       ) => {
         const host = getPluginHost()
-        if (!host) throw new HelmError('runtime_not_initialized', '插件宿主未初始化', 503)
-        // 只读清单查询：绝不经 invokeAction（不执行 handler、不做输入校验、
-        // 不创建 liveTask）；启用过滤内建在 listActions（activeEnabledPluginIds）。
+        if (!host) throw new HelmError('runtime_not_initialized', 'plugin host not initialized', 503)
+        // only read manifest query: never via invokeAction(do not execute handler, does not input validate,
+        // do not create liveTask); enable filter inside create in listActions(activeEnabledPluginIds).
         const manifest = host
           .listActions()
           .find((item) => item.pluginId === pluginId && item.id === actionId)
         if (manifest === undefined) {
           throw new HelmError(
             'unknown_action',
-            `插件 ${pluginId} 未声明动作 ${actionId}（或未启用）`,
+            `plugin ${pluginId} not declaration action ${actionId}(or not enabled)`,
             404,
             { pluginId, actionId },
           )
         }
-        // scope 外会话不泄露 Schema：与执行期间同码拒绝（描述面与执行面一致）。
+        // scope outside conversation do not leak Schema: and execute during same code reject (description side and execute side consistent).
         if (!matchesConversationScope(manifest.scope, getConversation(context.conversationId))) {
           throw new HelmError(
             'conversation_scope_violation',
-            `动作 ${pluginId}.${actionId} 不允许在会话 ${context.conversationId} 上查询（scope 未命中）`,
+            `action ${pluginId}.${actionId} disallows in conversation ${context.conversationId} on query (scope missed)`,
             403,
             { pluginId, actionId, conversationId: context.conversationId },
           )
@@ -165,10 +165,10 @@ export class RuntimeToolRegistry {
   }
 
   /**
-   * 根据插件提供的 DerivedToolSpec 清单构造 helm-plugins 扩展并安装。
-   * 同名扩展 install 语义为原地替换；空集也会安装以清空旧插件工具。
-   * onUpdate partial 经 SDK 原生 api.output 机制进入实时视图（conversation.live
-   * 工具卡）；字符串/文本块均过统一脱敏，结算后调用静默忽略（SDK 契约）。
+   * based on plugin provide DerivedToolSpec manifest construct helm-plugins extend and install.
+   * same name extend install semantics is original ground replace; empty collection also will install with empty old plugin tool.
+   * onUpdate partial via SDK original generate api.output mechanism enter real-time view (conversation.live
+   * tool card); string/text chunk all unify redaction, compute after invoke static default ignore (SDK contract).
    */
   installPluginTools(specs: DerivedToolSpec[]): void {
     const { registry, getPluginHost, redact, handledToolCalls } = this.options
@@ -193,11 +193,11 @@ export class RuntimeToolRegistry {
             ...(typeof toolApi.output === 'function'
               ? {
                   onUpdate: (partial) => {
-                    // SDK 契约：结算后 output 抛错（Tool call has settled）——仅
-                    // 此一类迟到 partial 静默丢弃；其他异常（宿主故障等）如实
-                    // 上抛给插件作者，绝不吞掉伪装成功。脱敏按完整 partial 全串
-                    // 执行（secret 可能跨 chunk 拼接，同步全串 redactor 覆盖当次
-                    // 快照；不声称消除一切进程内泄漏）。
+                    // SDK contract: compute after output throws (Tool call has settled) - - only
+                    // this one class late to partial static default discard; other exception (host fault etc.) such as
+                    // on throw to plugin act, never swallow disguise succeeded. redaction by complete partial all string
+                    // execute (secret may across chunk concatenate, sync all string redactor override when time
+                    // snapshot; do not sound call eliminate everything process inside leak leak).
                     const text = typeof partial.output === 'string'
                       ? partial.output
                       : partial.output.map((block) => block.text).join('')
@@ -211,7 +211,7 @@ export class RuntimeToolRegistry {
                 }
               : {}),
           })
-          // 插件工具返回任意值：包成 SDK ToolExecutionResult 契约（content/text）。
+          // plugin tool return any value: package into SDK ToolExecutionResult contract (content/text).
           return pluginToolResult(result, (text) => redact(text), {
             structuredOutputSchema: spec.structuredOutputSchema,
             toolName: spec.name,
@@ -224,7 +224,7 @@ export class RuntimeToolRegistry {
     registry.install(defineExtension({ name: 'helm-plugins', tools }))
   }
 
-  /** 插件启停后热更新工具集（app 组合层与 enable/disable 路径调用）。 */
+  /** plugin start stop after hot update tool collection (app combine layer and enable/disable path invoke). */
   refreshPluginTools(): void {
     const host = this.options.getPluginHost()
     if (!host) return

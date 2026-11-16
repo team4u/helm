@@ -1,25 +1,25 @@
 /**
- * builtin:herdr：agent_spawn 拦截驱动本机/远端 Herdr CLI Agent。
+ * builtin:herdr: intercepts agent_spawn to drive local/remote Herdr CLI agents.
  *
- * 职界（设计文档 §4.2）：
- * - 「终端跑过程，文件交结果」：后台窗格 + .helm/wf-out-* 交接与原地追问自愈；
- * - blocked ↔ AskDoc 单飞审批桥（expectedStateSeq CAS 乐观锁，异步权威
- *   agent.get 现查真实 seq，绝不返回创建时快照）；
- * - $helm 状态 Token 投射（防自激环的去重心跳 + 随服务启停的有界续命）；
- * - 双轨保活清理（workflowRunId -> workflow.settled 事件；单回合 -> 父 turn_settled）；
- * - 启动对账回收 helm-wf-* 孤儿窗格（仅确认自有资源；failed 保留现场；
- *   真正仍 working/blocked 的保留并报告，绝不伪装结束；keepalive 孤儿可回收；
- *   精确 agent.name === 记录归属验证，身份不符放弃所有权）；
- * - ctx.action list/read/focus（HTTP/CLI 同权 --json；read 40 行脱敏；
- *   focus 为用户显式操作；read/focus 支持 nodeId 消歧，歧义显式 409）。
+ * Responsibilities (design doc §4.2):
+ * - "terminal runs the process, files deliver the result": background panes + .helm/wf-out-* handoff with in-place follow-up self-healing;
+ * - blocked <-> AskDoc single-flight approval bridge (expectedStateSeq CAS optimistic lock, async authoritative
+ *   agent.get queries the real seq live; never returns the snapshot taken at creation);
+ * - $helm status token projection (self-excitation-proof heartbeat suppression + bounded renewal tied to service lifecycle);
+ * - dual-track keepalive cleanup (workflowRunId -> workflow.settled event; single turn -> parent turn_settled);
+ * - startup reconciliation reclaims helm-wf-* orphan panes (only confirmed own resources; failed keeps the diagnostic scene;
+ *   panes genuinely still working/blocked are kept and reported, never faked as finished; keepalive orphans are reclaimable;
+ *   exact agent.name === recorded-ownership verification; mismatched identity gives up ownership);
+ * - ctx.action list/read/focus (HTTP/CLI equal footing with --json; read redacts to the last 40 lines;
+ *   focus is an explicit user action; read/focus support nodeId disambiguation, ambiguity returns explicit 409).
  *
- * 连接纪律（一次启用一个冻结连接配置）：
- * - 启用时解析 config.session/socketPath 为冻结 HerdrTarget，所有命令、事件、
- *   文件、清理（含远端 pane）统一走同一目标；停用后不再触达任何服务器；
- * - 不热换连接（防误关另一服务器同 ID 人类窗格）；配置变更在下次启用生效。
+ * Connection discipline (one frozen connection config per enable cycle):
+ * - On enable, config.session/socketPath is resolved into a frozen HerdrTarget; all commands, events,
+ *   files and cleanup (including remote panes) go through the same target; after disable no server is touched again;
+ * - No hot-swapping connections (prevents closing human panes with the same ID on another server); config changes take effect on next enable.
  *
- * 服务生命周期：service.start 才连接（subscribe ack -> snapshot 对账），
- * 半途失败自行清理已获取资源；stop 清理订阅/定时器/Asks 与可回收自有 pane。
+ * Service lifecycle: service.start is the only place that connects (subscribe ack -> snapshot reconciliation),
+ * mid-way failures clean up already-acquired resources themselves; stop cleans subscriptions/timers/Asks and reclaimable own panes.
  */
 
 import { HelmError, type PluginDefinition } from '@helm/protocol'
@@ -45,12 +45,12 @@ import { assembleHerdrDepsFromHost, nodeChannelFromHost } from './herdr/host-por
 import { OverviewProjector, type OverviewDoc } from './herdr/overview.js'
 import { resolvePluginClientRoot } from './asset-paths.js'
 
-/** clientRoot 解析收敛到通用资产路径（src / dist 双运行形态；缺失显式报错不静默降级）。 */
+/** clientRoot resolution converges to the shared asset path (src / dist dual run forms; missing is an explicit error, never silently degraded). */
 function resolveHerdrClientRoot(): string {
   return resolvePluginClientRoot('builtin:herdr', 'herdr', 'herdr_plugin_client_missing')
 }
 
-/** Herdr 23 种 CLI agent.start kind（detect::agent_label 全集）；供 ProfileRuntimeUiSpec 候选。 */
+/** The 23 Herdr CLI agent.start kinds (full detect::agent_label set); candidates for ProfileRuntimeUiSpec. */
 const HERDR_AGENT_SUGGESTIONS: ReadonlyArray<string> = [
   'pi', 'claude', 'codex', 'gemini', 'cursor', 'devin', 'agy', 'cline',
   'omp', 'mastracode', 'opencode', 'copilot', 'kimi', 'kiro', 'droid',
@@ -74,18 +74,18 @@ export function createHerdrPlugin(
 ): PluginDefinition {
   return {
     id: 'builtin:herdr',
-    name: 'Herdr 终端',
-    description: '跨节点 Herdr 协同：驱动远端 CLI 工具执行、终端审批桥（AskDoc CAS）与状态栏投射。',
+    name: 'Herdr Terminals',
+    description: 'Cross-node Herdr coordination: drives remote CLI tool execution, terminal approval bridging (AskDoc CAS), and status-bar projection.',
     icon: 'terminal',
     version: '0.1.0',
     clientRoot: resolveHerdrClientRoot(),
     definePlugin(ctx) {
-      // ---- 宿主公共端口组装（零参工厂：全部依赖来自 ctx.host）----
-      // definePlugin 阶段仅持有宿主引用（停用注册/定义收集不触网）；
-      // 依赖在 service.start 启用时组装（周期内冻结，热重接线不生效）。
+      // ---- Host port assembly (zero-arg factory: all dependencies come from ctx.host) ----
+      // During definePlugin only the host reference is held (disable-time registration/definition collection touches no network);
+      // Dependencies are assembled at service.start on enable (frozen for the cycle; hot rewiring has no effect).
       const hostApi = ctx.host
-      // ---- 状态（每次启用周期重建） ----
-      /** 本周期内部依赖与生产 transport（start 时组装；早期回调先于 start 时组装）。 */
+      // ---- State (rebuilt on every enable cycle) ----
+      /** Cycle-internal dependencies and production transport (assembled at start; early callbacks that precede start trigger assembly). */
       const depsRef: { current?: HerdrPluginDependencies } = {}
       const transportRef: { current?: HerdrTransport } = {}
       function resolveDeps(): HerdrPluginDependencies {
@@ -108,12 +108,12 @@ export function createHerdrPlugin(
       const executorRef: { current?: HerdrExecutor } = {}
       const unsubscribeRef: { current?: () => void } = {}
       const overviewRef: { current?: OverviewProjector } = {}
-      /** 事件回调在途任务：stop 必须等待，防停用后 doc 写入与回调污染新周期。 */
+      /** In-flight event-callback tasks: stop must wait for them, preventing post-disable doc writes and callbacks from polluting the next cycle. */
       const eventTasks = new Set<Promise<void>>()
       let connectionAbort = new AbortController()
       let subscriptionTail: Promise<void> = Promise.resolve()
       let subscribedPaneKey: string | undefined
-      /** 本启用周期冻结的本机连接目标（所有本机调用/事件/清理共用）。 */
+      /** Local connection target frozen for this enable cycle (shared by all local calls/events/cleanup). */
       let frozenLocalTarget: HerdrTarget = {}
       let overviewDoc: ReturnType<typeof ctx.doc<OverviewDoc>>
       let managedDoc: ReturnType<typeof ctx.doc<ManagedDoc>>
@@ -121,9 +121,9 @@ export function createHerdrPlugin(
       let workflowRelease: (() => void) | undefined
       let runtimeStartedRelease: (() => void) | undefined
 
-      /** 最近一次 socket 事件处理的 pane seq 缓存（事件去重，agent.get 为权威）。 */
+      /** Cache of the pane seq from the last processed socket event (event dedup; agent.get is authoritative). */
       const eventSeqCache = new Map<string, number>()
-      /** 探针采集器（观察水位/失败计数归其自管；停用 reset、结算 forget）。 */
+      /** Probe collector (observation watermarks / failure counters self-managed; reset on disable, forget on settle). */
       const probes = new HerdrProbeCollector({
         asks,
         registry: () => registryRef.current,
@@ -143,16 +143,16 @@ export function createHerdrPlugin(
         },
         cancelAskQuietly: cancelQuietly,
       })
-      /** 停用中：doc 句柄已失效，overview 刷新静默跳过（KISS：无写入即无异常）。 */
+      /** While disabling: the doc handle is already invalid, overview refreshes are skipped silently (KISS: no write, no error). */
       let stopping = false
 
       const host = {
         parentCwdOf(id: number): string | undefined {
-          // getConversation 错误如实传播（不存在即显式失败，绝不吞）。
+          // getConversation errors propagate as-is (nonexistent means explicit failure, never swallowed).
           return ctx.host.getConversation(id).cwd
         },
         parentNodeIdOf(id: number): string | undefined {
-          // 父会话绑定节点（Conversation.nodeId；undefined = 本机）。错误同上如实传播。
+          // Node bound to the parent conversation (Conversation.nodeId; undefined = local). Errors propagate as above.
           return ctx.host.getConversation(id).nodeId
         },
         askConversationId(id: number): number {
@@ -178,8 +178,8 @@ export function createHerdrPlugin(
             },
             (paneId, error) => {
               host.notify(
-                'Herdr 状态投射失败',
-                `pane ${paneId} report_metadata 失败：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
+                'Herdr status projection failed',
+                `pane ${paneId} report_metadata failed: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
                 'error',
               )
             },
@@ -200,8 +200,8 @@ export function createHerdrPlugin(
         const task = onPaneEvent(event).catch((error) => {
           if (stopping) return
           host.notify(
-            'Herdr 事件处理失败',
-            `${event.type} ${'workspaceId' in event ? event.workspaceId : event.paneId}：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
+              'Herdr event handling failed',
+            `${event.type} ${'workspaceId' in event ? event.workspaceId : event.paneId}: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
             'error',
           )
         })
@@ -210,9 +210,9 @@ export function createHerdrPlugin(
       }
 
       /**
-       * 订阅断线自愈重连：单例定时器 + 指数退避（封顶 60s），成功重建后复位；
-       * stopResources 清理。去重靠 synchronizeSubscription 自身的队列串行
-       * （重复 schedule 仅保留最新到期时间），不叠加并发重连风暴。
+       * Subscription loss self-healing reconnect: singleton timer + exponential backoff (capped at 60s), reset after a successful rebuild;
+       * Cleaned up by stopResources. Dedup relies on synchronizeSubscription's own queued serialization
+       * (repeated schedules keep only the latest expiry), so no concurrent reconnect storms stack up.
        */
       let subscriptionRetryTimer: NodeJS.Timeout | undefined
       let subscriptionRetryAttempt = 0
@@ -231,7 +231,7 @@ export function createHerdrPlugin(
           void synchronizeSubscription(lastSubscribedPaneIds(), connectionAbort.signal)
             .then((rebuilt) => { if (rebuilt) subscriptionRetryAttempt = 0 })
             .catch(() => {
-              // 重建失败：退避后继续重试（下次 onError 或本轮兜底）。
+              // Rebuild failed: keep retrying after backoff (next onError or this round's fallback).
               scheduleSubscriptionRetry()
             })
         }, delayMs)
@@ -246,7 +246,7 @@ export function createHerdrPlugin(
         subscriptionRetryAttempt = 0
       }
 
-      /** 当前订阅应覆盖的 pane 集合：以 registry 在管未结算窗格为准（重建用）。 */
+      /** Pane set the current subscription should cover: authoritative source is the registry's in-managed unsettled panes (for rebuilds). */
       function lastSubscribedPaneIds(): string[] {
         const registry = registryRef.current
         if (!registry) return []
@@ -278,8 +278,8 @@ export function createHerdrPlugin(
               failure = { error }
               if (unsubscribeRef.current === release) subscribedPaneKey = undefined
               overviewRef.current?.markSubscriptionFailed(error)
-              host.notify('Herdr 事件订阅断开', error instanceof Error ? error.message : String(error), 'error')
-              // 断线自愈：即使 watchdogEnabled=false 也安排退避重连（去重单例）。
+              host.notify('Herdr event subscription lost', error instanceof Error ? error.message : String(error), 'error')
+          // Loss self-healing: schedule backoff reconnect even when watchdogEnabled=false (deduped singleton).
               scheduleSubscriptionRetry()
             },
             { paneIds: ids, signal: connectionAbort.signal },
@@ -292,7 +292,7 @@ export function createHerdrPlugin(
             release()
             throw failure.error
           }
-          // 先确认新流 ACK，再释放旧流，避免切换逐窗格过滤时漏掉状态事件。
+        // Confirm the new stream's ACK first, then release the old stream, to avoid missing status events while switching per-pane filters.
           const previous = unsubscribeRef.current
           unsubscribeRef.current = release
           subscribedPaneKey = key
@@ -301,14 +301,14 @@ export function createHerdrPlugin(
           subscriptionRetryAttempt = 0
           return true
         })
-        // 保持队列可继续；原 task 的错误由启动路径或总览刷新路径诊断。
+        // Keep the queue going; the original task's error is diagnosed by the startup path or the overview refresh path.
         subscriptionTail = task.then(() => {}, () => {})
-        // 启动/重建失败（subscribe 招错，非 onError 路径）同样安排退避重连。
+        // Startup/rebuild failure (subscribe throws, not the onError path) also schedules backoff reconnect.
         task.catch(() => scheduleSubscriptionRetry())
         return task
       }
 
-      // ---- socket 事件路径：总览全量重取；Ask 协调仅限本插件自有 pane ----
+      // ---- socket event path: full overview refetch; Ask coordination limited to this plugin's own panes ----
       async function onPaneEvent(event: HerdrEvent): Promise<void> {
         if (stopping) return
         const overview = overviewRef.current
@@ -330,9 +330,9 @@ export function createHerdrPlugin(
             }
             if (stopping) return
             projector().forget(pane.paneId, nodeIdOf(pane))
-            // 外部结算路径同步释放 executor 侧机密 env/未启动标记：后续
-            // closePane 会因 settled 幂等早退，不在此对齐则每关一个在途窗格
-            // 就驻留一份 HELM_TOKEN 直到停用重建。
+            // External settle path synchronously releases the executor-side secret env / not-started markers: afterwards
+            // closePane early-exits idempotently due to settled; without aligning here, every in-flight pane closed
+            // would retain a copy of HELM_TOKEN until the disable rebuild.
             executorRef.current?.releasePaneState(pane)
             if (pane.outcome !== 'failed' && pane.outcome !== 'settled') {
               registry.update(nodeIdOf(pane), pane.paneId, {
@@ -366,9 +366,9 @@ export function createHerdrPlugin(
           const cacheKey = `local:${pane.paneId}`
           if ((eventSeqCache.get(cacheKey) ?? 0) >= info.stateChangeSeq) return
           eventSeqCache.set(cacheKey, info.stateChangeSeq)
-          // 仅在执行循环在途时预登记 blocked 墓位（供其 beginBlocked 复用去重）：
-          // 执行循环已越过该 seq 或 spawn 已结束时登记会成永不消费的幽灵
-          // creating 条目（overview pendingAsk 虚标）；非 running 窗格绝不登记。
+            // Pre-register the blocked tombstone only while the execution loop is in flight (for its beginBlocked to reuse and dedupe):
+            // registering after the loop passed that seq or after spawn ended creates a ghost
+            // creating entry never consumed (overview pendingAsk false positive); never register for non-running panes.
           if (info.agentStatus === 'blocked' && pane.outcome === 'running') {
             asks.beginBlocked(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
           }
@@ -391,15 +391,15 @@ export function createHerdrPlugin(
             return
           }
           host.notify(
-            'Herdr 审批销单失败',
-            `ask ${entry.askId} cancel 失败：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
+            'Herdr approval cancellation failed',
+            `ask ${entry.askId} cancel failed: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
             'error',
           )
         }
       }
 
-      // ---- 启动对账：subscribe ack -> snapshot 扫描 ----
-      /** 窗格从 registry 结算移除时同步回收探针/事件缓存（防长驻泄漏）。 */
+      // ---- Startup reconciliation: subscribe ack -> snapshot scan ----
+      /** When a pane is settled out of the registry, synchronously reclaim its probe/event caches (prevent long-lived leaks). */
       function forgetPaneCaches(nodeId: string | undefined, paneId: string): void {
         eventSeqCache.delete(`${nodeId ?? 'local'}:${paneId}`)
         probes.forget(nodeId, paneId)
@@ -421,11 +421,10 @@ export function createHerdrPlugin(
           const agent = snapshots.get(key)!.agents.find((a) => a.paneId === pane.paneId)
           if (agent === undefined) {
             if (pane.outcome === 'running' && pane.outputFileName !== undefined) {
-              // 重启窗口内可能已写完交接文件后退出，或需由重挂流程诚实判定丢失：
-              // 保留记录待 reattach 优先核查 .helm/<outputFileName> 与显式报 herdr_pane_lost。
+              // Keep running pane record across restart so reattach can inspect .helm/<outputFileName> or report herdr_pane_lost honestly.
               continue
             }
-            // 窗格已消失：登记 settled（无资源可回收）+ executor 侧对齐。
+            // Pane already gone: register settled (no resources to reclaim) + align the executor side.
             registry.update(nodeIdOf(pane), pane.paneId, {
               outcome: 'settled',
               settledAt: Date.now(),
@@ -435,8 +434,8 @@ export function createHerdrPlugin(
             forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             continue
           }
-          // 精确归属验证：agent.name 必须等于记录的 agentName（不 startsWith——
-          // helm-wf-abc 不能认领 helm-wf-abcde）。身份不符放弃所有权，不误关。
+          // Exact ownership verification: agent.name must equal the recorded agentName (no startsWith --
+          // helm-wf-abc must not claim helm-wf-abcde). Mismatched identity gives up ownership; no wrong closes.
           if (agent.name !== pane.agentName) {
             registry.update(nodeIdOf(pane), pane.paneId, {
               outcome: 'settled',
@@ -447,30 +446,29 @@ export function createHerdrPlugin(
             forgetPaneCaches(nodeIdOf(pane), pane.paneId)
             continue
           }
-          // 真正仍在 working/blocked/unknown：保留并报告（绝不伪装结束自动回收）。
+          // Genuinely still working/blocked/unknown: keep and report (never fake completion to auto-reclaim).
           if (agent.agentStatus === 'working' || agent.agentStatus === 'blocked' || agent.agentStatus === 'unknown') {
             host.notify(
-              'Herdr 启动对账发现在途窗格',
-              `pane ${pane.paneId}（${pane.agentName}）仍处于 ${agent.agentStatus}，保留待 ${pane.workflowRunId !== undefined ? 'workflow' : '父回合'}结算或人工处理`,
+              'Herdr startup reconciliation found in-flight panes',
+              `pane ${pane.paneId} (${pane.agentName}) is still in ${agent.agentStatus}, kept pending ${pane.workflowRunId !== undefined ? 'workflow' : 'parent turn'} settle or manual handling`,
               'info',
             )
             continue
           }
-          // 携带持久化 outputFileName 的在途 running 窗格：在重启期间刚转为 idle/done，
-          // 保留交由重挂流程优先收取交接文件或执行单次自愈，绝不误杀关闭。
+          // Keep running panes carrying persisted outputFileName so reattach can collect the handoff file or run single self-heal.
           if (pane.outcome === 'running' && pane.outputFileName !== undefined) {
             continue
           }
-          // 归属启用中 workflow 的 keepalive 窗格：保留至 workflow.settled（或启动后兜底清理）。
+          // Keep keepalive panes belonging to an active workflow until workflow.settled (or post-startup orphan cleanup).
           if (pane.outcome === 'keepalive' && pane.workflowRunId !== undefined && workflowPluginActive) {
             continue
           }
-          // 已结束（idle/done）且无在途重挂/工作流归属（进程重启孤儿）：安全回收。
+          // Already finished (idle/done) with no in-flight reattach/workflow ownership: orphan, reclaimable.
           if (pane.outcome === 'running' || pane.outcome === 'keepalive') {
             await executorRef.current!.closePane(pane, 'settled').catch((error) => {
               host.notify(
-                'Herdr 孤儿回收失败',
-                `pane ${pane.paneId} 对账回收失败：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
+                'Herdr orphan reclaim failed',
+                `pane ${pane.paneId} reconciliation reclaim failed: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
                 'error',
               )
             })
@@ -479,10 +477,8 @@ export function createHerdrPlugin(
       }
 
       /**
-       * 全局启动完成（runtime.started，所有插件已进入 idle）后的兜底对账：
-       * 若某些带 workflowRunId 的窗格因 autoRecoverOnRestart=false 或重启前已终态
-       * 而未被重挂，且所属 workflow 已达终态/不存在，则安全回收已空闲/已消失窗格
-       * （仍在 working/blocked 的窗格依然严格保留不误杀）。
+       * Post-startup orphan reconciliation (on runtime.started):
+       * reclaim idle/vanished panes whose owning workflow already settled or does not exist.
        */
       async function reconcileWorkflowOrphansAfterStartup(): Promise<void> {
         if (stopping || connectionAbort.signal.aborted) return
@@ -515,8 +511,8 @@ export function createHerdrPlugin(
           if (pane.outcome === 'keepalive') {
             await executor.closePane(pane, 'workflow-settled').catch((error) => {
               host.notify(
-                'Herdr workflow 孤儿清理失败',
-                `pane ${pane.paneId}（workflow ${pane.workflowRunId}）清理失败：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
+                'Herdr workflow orphan cleanup failed',
+                `pane ${pane.paneId} (workflow ${pane.workflowRunId}) cleanup failed: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
                 'error',
               )
             })
@@ -544,8 +540,8 @@ export function createHerdrPlugin(
             if (info.agentStatus === 'idle' || info.agentStatus === 'done') {
               await executor.closePane(pane, 'workflow-settled').catch((error) => {
                 host.notify(
-                  'Herdr workflow 孤儿清理失败',
-                  `pane ${pane.paneId}（workflow ${pane.workflowRunId}）清理失败：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
+                  'Herdr workflow orphan cleanup failed',
+                  `pane ${pane.paneId} (workflow ${pane.workflowRunId}) cleanup failed: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
                   'error',
                 )
               })
@@ -565,10 +561,10 @@ export function createHerdrPlugin(
         registry.prune()
       }
 
-      // ---- 双轨清理 ----
-      // 逐项隔离：单个 closePane 抛错（其内部已如实通知）不得中止同批其余
-      // keepalive 窗格的清理（事件一次性，错过即永久滞留）；executorRef 在
-      // stopResources 置空窗口内可能为 undefined，跳过而非 TypeError。
+      // ---- Dual-track cleanup ----
+      // Per-item isolation: one closePane throwing (already honestly notified inside) must not abort the rest of the batch
+      // of keepalive pane cleanup (events are one-shot; missing one strands it forever); executorRef may be
+      // undefined within the stopResources nulling window - skip instead of TypeError.
       async function settleWorkflow(run: WorkflowRunSummary): Promise<void> {
         const registry = registryRef.current
         const executor = executorRef.current
@@ -578,7 +574,7 @@ export function createHerdrPlugin(
           try {
             await executor.closePane(pane, 'workflow-settled')
           } catch (error) {
-            host.notify('Herdr workflow 清理中断项', `pane ${pane.paneId}（workflow ${run.id}）清理失败已跳过：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`, 'error')
+            host.notify('Herdr workflow cleanup interrupted item', `pane ${pane.paneId} (workflow ${run.id}) cleanup failed, skipped: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`, 'error')
           }
         }
         registry.prune()
@@ -589,19 +585,19 @@ export function createHerdrPlugin(
         const executor = executorRef.current
         if (!registry || !executor) return
         for (const pane of registry.findByParent(conversationId)) {
-          if (pane.workflowRunId !== undefined) continue // workflow 轨道
+          if (pane.workflowRunId !== undefined) continue // workflow track
           if (pane.outcome === 'failed') continue
-          if (pane.outcome === 'running') continue // 同回合仍在途（并发 spawn）
+          if (pane.outcome === 'running') continue // still in flight in the same turn (concurrent spawn)
           try {
             await executor.closePane(pane, 'turn-settled')
           } catch (error) {
-            host.notify('Herdr 回合清理中断项', `pane ${pane.paneId}（父会话 ${conversationId}）清理失败已跳过：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`, 'error')
+            host.notify('Herdr turn cleanup interrupted item', `pane ${pane.paneId} (parent conversation ${conversationId}) cleanup failed, skipped: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`, 'error')
           }
         }
         registry.prune()
       }
 
-      // ---- 文档与 UI ----
+      // ---- Docs and UI ----
       managedDoc = ctx.doc<ManagedDoc>('managed', EMPTY_MANAGED_DOC)
       overviewDoc = ctx.doc<OverviewDoc>(
         'overview',
@@ -611,23 +607,23 @@ export function createHerdrPlugin(
 
       ctx.ui.sidebarItem({
         id: 'herdr',
-        label: 'Herdr 终端',
+        label: 'Herdr Terminals',
         icon: 'terminal',
         target: 'screen:builtin:herdr/overview',
         order: 40,
       })
       ctx.ui.screen({
         id: 'overview',
-        label: 'Herdr 终端总览',
+        label: 'Herdr Terminals Overview',
         icon: 'terminal',
         client: { module: 'index.tsx', export: 'HerdrOverviewScreen' },
       })
       ctx.ui.profileRuntime({
         id: 'herdr',
         kind: 'herdr',
-        label: '外部 Herdr 运行时',
+        label: 'External Herdr Runtime',
         icon: 'terminal',
-        description: '（可选）作为 subagent 时绑定 Herdr CLI',
+        description: '(optional) bind to a Herdr CLI when used as a subagent',
         agentSuggestions: [...HERDR_AGENT_SUGGESTIONS],
       })
 
@@ -650,14 +646,14 @@ export function createHerdrPlugin(
         await settleParentTurn(payload.conversation.id)
       })
 
-      // diagnostics.collect 监听（原 watchdog_tick priority 100 钩子改道）：
-      // 巡检发起方（builtin:superagent Watchdog service）采集原生事实后经宿主
-      // 内部事件追加本插件自有窗格的真实 probes（含远端轮询）。事件在宿主
-      // await，采集失败如实上抛给发起方，绝不静默吞；采集实现与停滞水位
-      // 口径见 herdr/probes.ts。human 归属红线：非自有 pane 一律不产生 probe。
+      // diagnostics.collect listener (rerouted from the old watchdog_tick priority-100 hook):
+      // The inspection initiator (builtin:superagent Watchdog service) collects native facts, then via the host's
+      // internal event this plugin appends real probes for its own panes (incl. remote polling). The host awaits
+      // the event; collection failures propagate to the initiator as-is, never swallowed; collection impl and stall
+      // watermark details in herdr/probes.ts. human-ownership red line: never produce probes for non-own panes.
       probes.register(ctx.host)
 
-      // ---- actions（list/read/focus/steer 注册与 pane 消歧见 herdr/actions.ts） ----
+      // ---- actions (list/read/focus/steer registration and pane disambiguation in herdr/actions.ts) ----
       registerHerdrActions(ctx, {
         registry: () => registryRef.current,
         executor: () => executorRef.current,
@@ -673,19 +669,19 @@ export function createHerdrPlugin(
         },
       })
 
-      // ---- config schema（启用前可配置；变更在下次启用生效） ----
+      // ---- config schema (configurable before enable; changes take effect on next enable) ----
       ctx.configSchema({
-        session: { type: 'string', label: 'Herdr 会话名', description: '本机 herdr sessions/<name> 子目录', default: '' },
-        socketPath: { type: 'string', label: 'Socket 路径覆盖', description: '缺省用 HERDR_SOCKET_PATH 或默认会话路径', default: '' },
+        session: { type: 'string', label: 'Herdr session name', description: 'Local herdr sessions/<name> subdirectory', default: '' },
+        socketPath: { type: 'string', label: 'Socket path override', description: 'Defaults to HERDR_SOCKET_PATH or the default session path', default: '' },
         startupTimeoutMs: {
           type: 'number',
-          label: 'agent 启动超时（毫秒）',
-          description: '3001..300000，默认 30000',
+          label: 'Agent startup timeout (ms)',
+          description: '3001..300000, default 30000',
           default: 30000,
         },
       })
 
-      /** 准备阶段（纯内存 + 持久记录校验，不触网）：使 workflow.start 重挂先于 herdr.start 时执行器已就位。 */
+      /** Prepare phase (in-memory + persisted doc validation, no network): ensures executor is ready before workflow.start reattach. */
       function prepareLocalRuntime(): void {
         stopping = false
         connectionAbort = new AbortController()
@@ -759,7 +755,7 @@ export function createHerdrPlugin(
                 timeoutMs: 5_000,
               }).then(parseSessionSnapshot)
               let current = await snapshot()
-              // 新过滤流 ACK 后重读，覆盖首次快照与逐窗格订阅建立之间的状态变化。
+              // Re-read after the new filtered stream's ACK, covering state changes between the first snapshot and per-pane subscription setup.
               while (await synchronizeSubscription(current.panes.map((pane) => pane.paneId), signal)) {
                 current = await snapshot()
               }
@@ -767,8 +763,8 @@ export function createHerdrPlugin(
             },
             () => !stopping && overviewRef.current !== undefined,
           )
-          // Ask CAS seq 解析器：异步权威 agent.get 现查目标 pane 当前真实 seq
-          //（先于任何 createAsk；归属经 askId 三段校验）。
+          // Ask CAS seq resolver: async authoritative agent.get queries the target pane's current real seq
+          // (before any createAsk; ownership via the askId triple check).
           asksRelease = ctx.host.registerAskSeqResolver((askId) =>
             asks.seqResolver(askId, async (nodeId, paneId) => {
               const pane = registry.get(nodeId, paneId)
@@ -782,8 +778,8 @@ export function createHerdrPlugin(
                 if (info.name !== pane.agentName) return undefined
                 return info.stateChangeSeq
               } catch {
-                // 权威不可达：undefined（AskService 以 ask_state_unavailable 拒答，
-                // 绝不把坏数据当 CAS 权威）。
+                // Authority unreachable: undefined (AskService refuses with ask_state_unavailable,
+                // never treats bad data as the CAS authority).
                 return undefined
               }
             }),
@@ -792,10 +788,10 @@ export function createHerdrPlugin(
           runtimeStartedRelease = ctx.host.onEvent('runtime.started', () => reconcileWorkflowOrphansAfterStartup())
 
           try {
-            // subscribe ack 先行；任一步失败都释放解析器、监听与已获取资源。
+            // subscribe ack first; any step failing releases the resolver, listeners and acquired resources.
             await synchronizeSubscription([], connectionAbort.signal)
             await reconcile()
-            // 对账后回收结算记录（doc 句柄有效；停用路径禁 flush 故不在此后回收）。
+            // Reclaim settled records after reconciliation (doc handle valid; the disable path forbids flush, so no reclaim after this point).
             registry.prune()
             projector().start()
             const registry0 = registryRef.current
@@ -810,24 +806,23 @@ export function createHerdrPlugin(
         },
       })
 
-      /** 启用时解析并固定本机 socket 路径，显式路径优先于继承环境与 session。 */
+      /** Resolve and freeze the local socket path on enable; explicit path takes precedence over inherited env and session. */
       function resolveLocalTarget(config: Partial<HerdrConfig>): HerdrTarget {
         const session = typeof config.session === 'string' && config.session !== '' ? config.session : undefined
         const socketPath = typeof config.socketPath === 'string' && config.socketPath !== '' ? config.socketPath : undefined
         if (session !== undefined && !isValidSessionName(session)) {
-          throw new HelmError('validation_error', `Herdr session 名 '${session}' 非法（字母数字开头，可含 - _，≤64 字符）`, 400, {
+          throw new HelmError('validation_error', `Herdr session name '${session}' is invalid (must start alphanumeric, may contain - _, <= 64 chars)`, 400, {
             session,
           })
         }
-        // 显式 socket 优先；将继承环境和 session 路径在启用时固化。
+        // Explicit socket first; inherited env and session paths are frozen at enable time.
         return { socketPath: resolveSocketPath({ ...(session !== undefined ? { session } : {}), ...(socketPath !== undefined ? { socketPath } : {}) }) }
       }
 
       /**
-       * 服务资源清理：订阅/解析器/监听 + 按宿主是否正在关停分流自有 pane：
-       * - isClosing === true（Hub 进程优雅关停）：保留 running 窗格（以及仍归属
-       *   workflow 的 keepalive 窗格）继续在 Herdr 守护进程运行并写交接文件；
-       * - isClosing === false（手动停用插件/测试 dispose）：关闭全部非 failed/settled 窗格。
+       * Service resource cleanup: subscriptions/resolver/listeners + pane teardown branched by host shutdown:
+       * - isClosing === true (graceful Hub shutdown): keep running panes (and workflow-owned keepalive panes) alive in Herdr daemon;
+       * - isClosing === false (plugin disable / test dispose): close all non-failed/settled own panes.
        */
       async function stopResources(fromStop = false): Promise<void> {
         const errors: unknown[] = []
@@ -872,9 +867,9 @@ export function createHerdrPlugin(
           errors.push(err)
         }
         runtimeStartedRelease = undefined
-        // 销单全部 pending Ask；取消失败如实记录（不空吞）。dispose 路径宿主
-        // 可能已先行销毁（plugin_host_disposed 409 属预期终态，不再计为失败——
-        // AskService 自身的进程级清理负责收尾，协调器条目已全部兜底结算）。
+        // Cancel all pending Asks; cancellation failures are recorded as-is (not silently swallowed). On the dispose path the host
+        // may have disposed first (plugin_host_disposed 409 is an expected terminal state, no longer counted as failure --
+        // AskService's own process-level cleanup finishes the job; coordinator entries are all settled with fallbacks).
         for (const entry of asks.entries()) {
           if (entry.phase === 'pending' || entry.phase === 'creating') {
             try {
@@ -899,8 +894,8 @@ export function createHerdrPlugin(
               if (pane.outcome === 'running') continue
               if (pane.outcome === 'keepalive' && pane.workflowRunId !== undefined) continue
             }
-            // 远端可回收 pane 同样清理（closePane 幂等、仅关自有资源；
-            // 冻结 target 保证触达的是创建它的那台服务器）。
+            // Remote reclaimable panes are cleaned too (closePane is idempotent, closes only own resources;
+            // the frozen target guarantees we reach the server that created it).
             try {
               await executorRef.current?.closePane(pane, 'settled', { volatileMark: true })
             } catch (err) {
@@ -923,11 +918,11 @@ export function createHerdrPlugin(
         projectorRef.current = undefined
         overviewRef.current = undefined
         eventSeqCache.clear()
-        // 探针观察水位/失败计数随启用周期作废（新周期从首次观测重新起算）。
+        // Probe observation watermarks / failure counts are invalidated with the enable cycle (new cycle restarts from first observation).
         probes.reset()
         if (errors.length > 0) {
           const detail = errors.map((e) => (e instanceof Error ? depsOf().redact(e.message) : String(e))).join('; ')
-          throw new HelmError('plugin_service_stop_failed', `herdr 服务清理失败：${detail}`, 500, { errors: detail })
+          throw new HelmError('plugin_service_stop_failed', `herdr service cleanup failed: ${detail}`, 500, { errors: detail })
         }
       }
 

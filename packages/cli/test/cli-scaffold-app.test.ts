@@ -1,16 +1,16 @@
 /**
- * plugins init --template app 脚手架测试（unit 档，不起真实 Hub）。
+ * plugins init --template app foot manually frame test (unit Profile, do not start real Hub).
  *
- * 覆盖：
- * - 模板名校验：app 受支持，非法值拒绝并列出全部合法模板；
- * - 生成内容：plugin.json（clientRoot/应用命名）、后端（public doc + 双 Schema 动作 +
- *   ctx.ui.screen + 侧栏入口）、前端（@helm/plugin-client 宿主原语）、零 Emoji；
- * - 端到端（诚实性：真代码、零 mock doctor）：对生成目录跑真实 doctorPluginDir
- *   四阶段自检，并经真实 PluginHost + createAppsPlugin 的 validate 动作（doctor 端口
- *   直连真实 doctorPluginDir）断言 ok:true；同链路断言 full 模板如实报 missing_app_screen。
+ * override:
+ * - template name validate:app subject to support, illegal value reject and column out all legal template;
+ * - generate content:plugin.json(clientRoot/should use naming), backend (public doc + double Schema action +
+ *   ctx.ui.screen + sidebar entry), frontend (@helm/plugin-client host original language), zero Emoji;
+ * - end-to-end (honest: true code, zero mock doctor): for generate directory run real doctorPluginDir
+ *   four phase self inspect, and via real PluginHost + createAppsPlugin  validate action (doctor port
+ *   direct connect real doctorPluginDir) assertion ok:true; same link assertion full template such as report missing_app_screen.
  *
- * 跨包导入说明：与 web 测试直接 import kernel 源码同机制（tsx 源级解析、仅测试消费），
- * 不引入 @helm/cli 对 @helm/kernel 的运行时依赖。
+ * across package import note: and web test directly import kernel source code same mechanism (tsx source level parse, only test consume),
+ * does not introduce @helm/cli for @helm/kernel runtime dependency.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -29,16 +29,16 @@ import {
   useTempDir,
 } from './helpers/cli-harness.js'
 
-/** Emoji 排查（含常用表情与符号区段；生成文案必须为零 Emoji）。 */
+/** Emoji troubleshoot (contains common use table situation and symbol zone segment; generate text proposal must is zero Emoji). */
 const EMOJI_PATTERN = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/u
 
-/** 生成目录内的全部文本文件相对路径（emoji 扫描用）。 */
+/** generate directory inside all text file relative path (emoji scan use). */
 async function scaffoldFiles(dir: string): Promise<string[]> {
   const entries = await fsp.readdir(path.join(dir, 'client'))
   return ['plugin.json', 'index.ts', 'README.md', ...entries.map((e) => `client/${e}`)]
 }
 
-/** 内存 doc store（与 kernel apps-plugin 测试同契约，仅测试内使用）。 */
+/** memory doc store(and kernel apps-plugin test same contract, only test inside use). */
 class MemoryDocStore implements PluginDocStore {
   private values = new Map<string, unknown>()
   get<T>(key: string, initial: T): T {
@@ -64,8 +64,8 @@ interface ValidateResult {
 }
 
 /**
- * 真实 apps validate 链路：真实 PluginHost 注册 builtin:apps 并启用，其宿主 plugins
- * 端口的 doctor 直连真实 doctorPluginDir（与 Hub 生产路径同一实现，仅免起 HTTP Hub）。
+ * real apps validate link: real PluginHost register builtin:apps and enable, its host plugins
+ * port doctor direct connect real doctorPluginDir(and Hub produce path the same implement, only exempt start HTTP Hub).
  */
 async function validateViaRealAppsPlugin(dir: string): Promise<ValidateResult> {
   const dataDir = await makeTempDir('helm-cli-scaffold-validate-')
@@ -93,7 +93,7 @@ async function validateViaRealAppsPlugin(dir: string): Promise<ValidateResult> {
   }
 }
 
-test('plugins init --template app：模板名校验与产出清单', { timeout: 60_000 }, async (t) => {
+test('plugins init --template app: template name validate and produce out manifest', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-app-')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
   const r = await runCliCaptured(['plugins', 'init', 'desk-app', '--template', 'app', '--json'], env)
@@ -102,19 +102,19 @@ test('plugins init --template app：模板名校验与产出清单', { timeout: 
   assert.equal(body.pluginId, 'desk-app')
   assert.equal(body.template, 'app')
   for (const f of ['plugin.json', 'index.ts', 'tsconfig.json', 'client/index.tsx', 'client/styles.css', 'README.md']) {
-    assert.ok(body.files.includes(f), `产出应含 ${f}：${JSON.stringify(body.files)}`)
+    assert.ok(body.files.includes(f), `produce out should contains ${f}:${JSON.stringify(body.files)}`)
   }
-  // app 模板的后续步骤直接指向 apps 闭环（不依赖发布到宿主即可验证）
+  // app template after continue step directly points to apps closed ring (independent of publish to host i.e. can verify)
   assert.ok(body.nextSteps.some((s) => s.startsWith('helm apps validate ')), JSON.stringify(body.nextSteps))
   assert.ok(body.nextSteps.some((s) => s.startsWith('helm apps publish ')))
 
-  // 非法模板值拒绝，且报错列出全部合法模板
+  // illegal template value reject, and errors column out all legal template
   const bad = await runCliCaptured(['plugins', 'init', 'bad-tpl-app', '--template', 'webapp', '--json'], env)
   assert.notEqual(bad.code, 0)
   assert.ok(bad.err.includes('minimal') && bad.err.includes('full') && bad.err.includes('app'))
 })
 
-test('plugins init --template app：后端与前端内容契约', { timeout: 60_000 }, async (t) => {
+test('plugins init --template app: backend and frontend content contract', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-app-')
   const r = await runCliCaptured(['plugins', 'init', 'desk-app', '--template', 'app', '--json'], makeCliEnv('http://127.0.0.1:1', dataDir))
   assert.equal(r.code, 0, r.err)
@@ -127,66 +127,66 @@ test('plugins init --template app：后端与前端内容契约', { timeout: 60_
     clientRoot: string
   }
   assert.equal(manifest.id, 'desk-app')
-  assert.equal(manifest.name, 'desk-app 应用')
+  assert.equal(manifest.name, 'desk-app should use')
   assert.equal(manifest.main, 'index.ts')
   assert.equal(manifest.clientRoot, './client')
 
   const index = await fsp.readFile(path.join(dir, 'index.ts'), 'utf8')
-  // ctx.doc 公开持久文档（public 供前端订阅）+ 写后 flush
-  assert.ok(index.includes('ctx.doc<'), '应声明类型化 public doc')
-  assert.ok(index.includes('{ public: true }'), 'doc 应为 public')
-  assert.ok(index.includes('.flush()'), '写操作后应 flush')
-  // 双 Schema 动作（input+output 缺一会在 doctor register 阶段被拒）
+  // ctx.doc public durable document (public supply frontend subscribe)+ write after flush
+  assert.ok(index.includes('ctx.doc<'), 'should declaration type public doc')
+  assert.ok(index.includes('{ public: true }'), 'doc should be public')
+  assert.ok(index.includes('.flush()'), 'write operation after should flush')
+  // double Schema action (input+output missing one will in doctor register phase by refuse)
   assert.ok(index.includes("id: 'add_item'") && index.includes("id: 'set_done'"))
   assert.ok(index.includes('inputSchema') && index.includes('outputSchema'))
   assert.ok(index.includes('exposeAsTool: true'))
-  // 全栈应用硬性要求：screen 主视图 + 侧栏直达入口
+  // full-stack should use hard want seek:screen main view + sidebar direct reach entry
   assert.ok(index.includes('ctx.ui.screen('))
   assert.ok(index.includes("client: { module: 'index.tsx', export: 'MainScreen' }"))
   assert.ok(index.includes('ctx.ui.sidebarItem('))
-  assert.ok(index.includes("target: 'screen:desk-app/main'"), '侧栏入口应指向本插件 screen')
+  assert.ok(index.includes("target: 'screen:desk-app/main'"), 'sidebar entry should points to this plugin screen')
 
   const client = await fsp.readFile(path.join(dir, 'client', 'index.tsx'), 'utf8')
   for (const primitive of ['Screen', 'ScreenSection', 'DataTable', 'KvGrid', 'Checkbox', 'usePluginDoc', 'usePluginContext']) {
-    assert.ok(client.includes(primitive), `前端应使用宿主原语/共享 Hook ${primitive}`)
+    assert.ok(client.includes(primitive), `frontend should use host original language/sharing Hook ${primitive}`)
   }
-  assert.ok(client.includes('export function MainScreen'), '前端应导出 MainScreen 与 screen 声明一致')
-  assert.ok(!/\b(font-medium|text-subtle|text-xs)\b/.test(client), '不得残留伪 Tailwind 类名')
-  assert.ok(client.includes("'items'"), '前端订阅同名 public doc')
+  assert.ok(client.includes('export function MainScreen'), 'frontend should export MainScreen and screen declaration consistent')
+  assert.ok(!/\b(font-medium|text-subtle|text-xs)\b/.test(client), 'must not leftover fake Tailwind class name')
+  assert.ok(client.includes("'items'"), 'frontend subscribe same name public doc')
 
   const css = await fsp.readFile(path.join(dir, 'client', 'styles.css'), 'utf8')
-  assert.ok(css.includes('var(--'), '补充样式应走宿主 CSS 变量')
+  assert.ok(css.includes('var(--'), 'patch fill style should away host CSS variable')
 
-  // 零 Emoji 铁律（全部生成文件扫描）
+  // zero Emoji iron rule (all generate file scan)
   for (const f of await scaffoldFiles(dir)) {
     const text = await fsp.readFile(path.join(dir, f), 'utf8')
-    assert.ok(!EMOJI_PATTERN.test(text), `生成文件 ${f} 不得包含 Emoji`)
+    assert.ok(!EMOJI_PATTERN.test(text), `generate file ${f} must not contains Emoji`)
   }
 })
 
-test('plugins init --template app 端到端：真实 doctor 四阶段 + 真实 apps validate 通过', { timeout: 60_000 }, async (t) => {
+test('plugins init --template app end-to-end: real doctor four phase + real apps validate via', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-app-')
   const r = await runCliCaptured(['plugins', 'init', 'eval-app', '--template', 'app', '--json'], makeCliEnv('http://127.0.0.1:1', dataDir))
   assert.equal(r.code, 0, r.err)
   const { dir } = JSON.parse(r.out) as { dir: string }
 
-  // 真实 doctor：manifest/backend/register/client 四阶段 + screen 捕获
+  // real doctor:manifest/backend/register/client four phase + screen catch
   const report = await doctorPluginDir(dir, { buildProvider: createPluginBuildProvider() })
-  assert.ok(report.ok, `doctor 应通过：${JSON.stringify(report.checks)}`)
+  assert.ok(report.ok, `doctor should via:${JSON.stringify(report.checks)}`)
   assert.deepEqual(
     report.checks.map((c) => c.id),
     ['manifest', 'backend', 'register', 'client'],
   )
   assert.deepEqual(report.screens, ['main'])
 
-  // 真实 builtin:apps validate 动作（doctor 端口直连真实实现）
+  // real builtin:apps validate action (doctor port direct connect real implement)
   const validation = await validateViaRealAppsPlugin(dir)
   assert.equal(validation.ok, true, JSON.stringify(validation.checks))
   assert.deepEqual(validation.screenIds, ['main'])
   assert.equal(validation.screenBasis, 'host-doctor')
 })
 
-test('对照：full 模板 doctor 通过但 apps validate 如实报 missing_app_screen', { timeout: 60_000 }, async (t) => {
+test('compare:full template doctor via but apps validate such as report missing_app_screen', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-app-')
   const r = await runCliCaptured(['plugins', 'init', 'panel-only', '--template', 'full', '--json'], makeCliEnv('http://127.0.0.1:1', dataDir))
   assert.equal(r.code, 0, r.err)
@@ -194,11 +194,11 @@ test('对照：full 模板 doctor 通过但 apps validate 如实报 missing_app_
 
   const report = await doctorPluginDir(dir, { buildProvider: createPluginBuildProvider() })
   assert.ok(report.ok)
-  assert.deepEqual(report.screens, [], 'full 模板只注册 workbenchPanel，不声明 screen')
+  assert.deepEqual(report.screens, [], 'full template only register workbenchPanel, do not declaration screen')
 
   const validation = await validateViaRealAppsPlugin(dir)
-  assert.equal(validation.ok, false, 'full 模板不是全栈应用，validate 应失败')
+  assert.equal(validation.ok, false, 'full template is not full-stack should use,validate should failed')
   const missing = validation.checks.find((c) => c.id === 'missing_app_screen')
-  assert.ok(missing?.error, '应包含 missing_app_screen 失败项')
+  assert.ok(missing?.error, 'should contain missing_app_screen failed items')
   assert.equal(missing.error.code, 'missing_app_screen')
 })

@@ -69,28 +69,28 @@ export type ArchiveBatchNotice = {
 
 /** 批量归档/恢复结果 → 通知（成功 / 部分失败 / 全失败三档，附首个错误摘要）。 */
 export function archiveBatchNotice(archived: boolean, outcome: BatchArchiveOutcome): ArchiveBatchNotice {
-  const verb = archived ? '归档' : '恢复'
+  const verb = archived ? 'Archive' : 'Restore'
   if (outcome.rejected === 0) {
     return {
       type: 'notification',
       level: 'info',
-      title: `批量${verb}完成`,
-      body: `成功${verb} ${outcome.fulfilled} 个会话`,
+      title: `Bulk ${verb} completed`,
+      body: `${verb} succeeded for ${outcome.fulfilled} conversations`,
     }
   }
-  const suffix = outcome.firstError !== undefined ? `：${outcome.firstError}` : ''
+  const suffix = outcome.firstError !== undefined ? `: ${outcome.firstError}` : ''
   if (outcome.fulfilled === 0) {
     return {
       type: 'notification',
       level: 'error',
-      title: `批量${verb}失败`,
-      body: `${outcome.rejected} 个会话${verb}失败${suffix}`,
+      title: `Bulk ${verb} failed`,
+      body: `${outcome.rejected} conversations failed to ${verb}${suffix}`,
     }
   }
   return {
     type: 'notification',
     level: 'warning',
-    title: `批量${verb}部分失败`,
-    body: `成功 ${outcome.fulfilled} 个，失败 ${outcome.rejected} 个${suffix}`,
+    title: `Bulk ${verb} partially failed`,
+    body: `${outcome.fulfilled} succeeded, ${outcome.rejected} failed${suffix}`,
   }
 }

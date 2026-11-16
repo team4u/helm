@@ -1,17 +1,17 @@
 /**
- * 插件依赖契约与生命周期测试：
- * - 依赖声明边界（形状/去重/自依赖）与摘要透出（PluginSummary.dependencies）；
- * - enable / 注册即启用 的依赖满足性校验（缺失 plugin_dependency_missing、
- *   未启用 plugin_dependency_not_enabled；仅注册未启用的依赖不满足）；
- * - 依赖图环路显式拒绝（plugin_dependency_cycle），不静默不死锁；
- * - 全局服务启动屏障按依赖拓扑序 prepare/start，stop 按逆拓扑序；
- *   同层保持注册序；
- * - 依赖者保护：非 force 停用/注销被 plugin_in_use 拦截（占用项
- *   kind=plugin_dependency，含传递依赖者）；force 停用后依赖者显式标记
- *   （status=failed + plugin.changed），不留静默错误态；
- * - 注册/启用并发队列无死锁（全部 promise 收敛）。
+ * plugin dependency contract and lifecycle test:
+ * - dependency declaration boundary (shape/dedupe/self dependency) and summary through out (PluginSummary.dependencies);
+ * - enable / register i.e. enable dependency satisfy validate (missing plugin_dependency_missing,
+ *   not enabled plugin_dependency_not_enabled; only register not enabled dependency do not satisfy);
+ * - dependency graph ring route explicit reject (plugin_dependency_cycle), not silently do not deadlock;
+ * - global service start screen fault by dependency topology order prepare/start,stop by inverse topology order;
+ *   same layer keep register order;
+ * - dependency protect: non- force deactivate/deregister by plugin_in_use intercept (occupy items
+ *   kind=plugin_dependency, contains pass dependency);force deactivate after dependency explicit mark record
+ *   (status=failed + plugin.changed), do not static default error state;
+ * - register/enable concurrency queue without deadlock (all promise converge).
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,7 +25,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 import { MemoryDocStore, assertRejectsCode, cleanupDir, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// 测试基建
+// test base create
 // ---------------------------------------------------------------------------
 
 let dataDir: string
@@ -69,10 +69,10 @@ afterEach(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 声明边界与摘要
+// declaration boundary and summary
 // ---------------------------------------------------------------------------
 
-test('依赖声明：非法形状拒绝；重复项去重；摘要透出 dependencies', { timeout: 60_000 }, async () => {
+test('dependency declaration: illegal shape reject; duplicate items dedupe; summary through out dependencies', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await assertRejectsCode(() => host.register(def('bad', ['ok-id', 'bad@^1.0'])), 'invalid_plugin_definition', 400)
   await assertRejectsCode(() => host.register(def('bad2', ['x', 42 as unknown as string])), 'invalid_plugin_definition', 400)
@@ -86,25 +86,25 @@ test('依赖声明：非法形状拒绝；重复项去重；摘要透出 depende
 
   const plain = host.get('dep-base')
   assert.ok(plain)
-  assert.equal(plain.dependencies, undefined, '无依赖声明时摘要不携带空数组字段')
+  assert.equal(plain.dependencies, undefined, 'without dependency declaration when summary does not carry empty array field')
 })
 
-test('自依赖与两插件环路：注册边界显式 plugin_dependency_cycle', { timeout: 60_000 }, async () => {
+test('self dependency and two plugin ring route: register boundary explicit plugin_dependency_cycle', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await assertRejectsCode(() => host.register(def('self', ['self'])), 'plugin_dependency_cycle', 409)
 
-  // 先注册 b（依赖 a，a 未注册——停用态注册允许，启用时才校验满足性）；再注册 a（依赖 b）成环。
+  // first register b(dependency a,a not registered - - deactivate state register allows, enable when only then validate satisfy); again register a(dependency b) into ring.
   await host.register(def('b', ['a']), { enabled: false })
   const err = (await assertRejectsCode(() => host.register(def('a', ['b'])), 'plugin_dependency_cycle', 409)) as HelmError
   assert.deepEqual((err.details as { cycle: string[] }).cycle, ['a', 'b', 'a'])
-  assert.equal(host.list().some((s) => s.id === 'a'), false, '成环插件不进入注册表')
+  assert.equal(host.list().some((s) => s.id === 'a'), false, 'into ring plugin does not enter register table')
 })
 
 // ---------------------------------------------------------------------------
-// 启用满足性
+// enable satisfy
 // ---------------------------------------------------------------------------
 
-test('enable 依赖校验：缺失 / 仅注册未启用 / 启用后成功', { timeout: 60_000 }, async () => {
+test('enable dependency validate: missing / only register not enabled / enable after succeeded', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register(def('user', ['missing-dep']), { enabled: false })
   await host.register(def('user2', ['disabled-dep']), { enabled: false })
@@ -116,7 +116,7 @@ test('enable 依赖校验：缺失 / 仅注册未启用 / 启用后成功', { ti
   await host.register(def('disabled-dep'), { enabled: false })
   const notEnabledErr = (await assertRejectsCode(() => host.enable('user2'), 'plugin_dependency_not_enabled', 409)) as HelmError
   assert.equal((notEnabledErr.details as { dependency: string }).dependency, 'disabled-dep')
-  assert.equal(host.get('user2')?.enabled, false, '启用失败保持停用')
+  assert.equal(host.get('user2')?.enabled, false, 'enable failed keep deactivate')
 
   await host.register(def('enabled-dep'), { enabled: true })
   await host.enable('user3')
@@ -124,7 +124,7 @@ test('enable 依赖校验：缺失 / 仅注册未启用 / 启用后成功', { ti
   assert.equal(host.get('user3')?.status, 'active')
 })
 
-test('注册即启用同样校验依赖；依赖启用后可恢复', { timeout: 60_000 }, async () => {
+test('register i.e. enable same validate dependency; dependency enable after can restore', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await assertRejectsCode(() => host.register(def('eager', ['not-there']), { enabled: true }), 'plugin_dependency_missing', 409)
   assert.equal(host.list().some((s) => s.id === 'eager'), false)
@@ -137,10 +137,10 @@ test('注册即启用同样校验依赖；依赖启用后可恢复', { timeout: 
 })
 
 // ---------------------------------------------------------------------------
-// 拓扑序启动 / 停止
+// topology order start / stop
 // ---------------------------------------------------------------------------
 
-test('全局屏障按依赖拓扑序 prepare/start，stop 逆拓扑序；同层保持注册序', { timeout: 60_000 }, async () => {
+test('global screen fault by dependency topology order prepare/start,stop inverse topology order; same layer keep register order', { timeout: 60_000 }, async () => {
   const order: string[] = []
   const svc = (label: string) => ({
     id: `svc-${label}`,
@@ -155,7 +155,7 @@ test('全局屏障按依赖拓扑序 prepare/start，stop 逆拓扑序；同层�
     },
   })
   const host = makeHost({ deferServices: true })
-  // 注册序：first, mid, last（last -> mid -> first 依赖链）
+  // register order:first, mid, last(last -> mid -> first dependency chain)
   await host.register({
     id: 'first',
     definePlugin: (ctx) => {
@@ -192,22 +192,22 @@ test('全局屏障按依赖拓扑序 prepare/start，stop 逆拓扑序；同层�
 
   const prepareIdx = (label: string) => order.indexOf(`prepare:${label}`)
   const startIdx = (label: string) => order.indexOf(`start:${label}`)
-  // 屏障语义保持：全部 prepare 先于全部 start。
+  // screen fault semantics keep: all prepare first at all start.
   assert.ok(order.slice(0, 5).every((e) => e.startsWith('prepare:')))
-  // 依赖拓扑：被依赖者先 prepare / start。
+  // dependency topology: by dependency first prepare / start.
   assert.ok(prepareIdx('first') < prepareIdx('mid') && prepareIdx('mid') < prepareIdx('last'))
   assert.ok(startIdx('first') < startIdx('mid') && startIdx('mid') < startIdx('last'))
-  // 同层（无依赖关系）保持注册序。
+  // same layer (without dependency closure system) keep register order.
   assert.ok(prepareIdx('ia') < prepareIdx('ib'))
 
   await host.stop()
   const stops = order.filter((e) => e.startsWith('stop:')).map((e) => e.slice(5))
-  // 拓扑序 [first, ia, ib, mid, last] 的逆序：依赖者先停。
+  // topology order [first, ia, ib, mid, last] inverse order: dependency first stop.
   assert.deepEqual(stops, ['last', 'mid', 'ib', 'ia', 'first'])
   await host.dispose()
 })
 
-test('热启用：依赖已运行时直接启用（服务即时 prepare+start）', { timeout: 60_000 }, async () => {
+test('hot enable: dependency already runtime directly enable (service i.e. when prepare+start)', { timeout: 60_000 }, async () => {
   const order: string[] = []
   const host = makeHost()
   await host.register({
@@ -229,10 +229,10 @@ test('热启用：依赖已运行时直接启用（服务即时 prepare+start）
 })
 
 // ---------------------------------------------------------------------------
-// 依赖者保护
+// dependency protect
 // ---------------------------------------------------------------------------
 
-test('非 force 停用被依赖插件：plugin_in_use 拦截（含传递依赖者）', { timeout: 60_000 }, async () => {
+test('non- force deactivate by dependency plugin:plugin_in_use intercept (contains pass dependency)', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register(def('base'), { enabled: true })
   await host.register(def('mid', ['base']), { enabled: true })
@@ -243,14 +243,14 @@ test('非 force 停用被依赖插件：plugin_in_use 拦截（含传递依赖�
   assert.deepEqual(
     usages.map((u) => u.id).sort(),
     ['mid', 'top'],
-    '直接与传递依赖者都进入占用清单',
+    'directly and pass dependency all enter occupy manifest',
   )
   assert.ok(usages.every((u) => u.kind === 'plugin_dependency'))
   assert.equal(host.get('base')?.enabled, true)
   await host.dispose()
 })
 
-test('force 停用：成功且依赖者显式标记（status=failed + plugin.changed），不留静默错误态', { timeout: 60_000 }, async () => {
+test('force deactivate: succeeded and dependency explicit mark record (status=failed + plugin.changed), do not static default error state', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register(def('base'), { enabled: true })
   await host.register(def('user', ['base']), { enabled: true })
@@ -260,8 +260,8 @@ test('force 停用：成功且依赖者显式标记（status=failed + plugin.cha
   assert.equal(host.get('base')?.enabled, false)
   const user = host.get('user')
   assert.ok(user)
-  assert.equal(user.enabled, true, 'force 只作用于目标插件，不自动停用依赖者')
-  assert.equal(user.status, 'failed', '依赖不满足显式可见')
+  assert.equal(user.enabled, true, 'force only effect at target plugin, do not automatically deactivate dependency')
+  assert.equal(user.status, 'failed', 'dependency do not satisfy explicit visible')
   assert.equal(user.error?.code, 'plugin_dependency_not_enabled')
   assert.ok(
     events.some(
@@ -269,10 +269,10 @@ test('force 停用：成功且依赖者显式标记（status=failed + plugin.cha
         e.type === 'plugin.changed' &&
         (e.payload as { plugin?: { id: string } }).plugin?.id === 'user',
     ),
-    '依赖者状态变更被广播',
+    'dependency state change by broadcast',
   )
 
-  // 恢复路径：停用依赖者 -> 启用 base -> 重新启用 user 成功且错误清除。
+  // restore path: deactivate dependency -> enable base -> re- enable user succeeded and error clear.
   await host.disable('user')
   await host.enable('base')
   await host.enable('user')
@@ -281,7 +281,7 @@ test('force 停用：成功且依赖者显式标记（status=failed + plugin.cha
   assert.equal(recovered.status, 'active')
   assert.equal(recovered.error, undefined)
 
-  // force 停用后遗留的故障态依赖者同样保护注销：必须先停用依赖者。
+  // force deactivate after legacy fault state dependency same protect deregister: must first deactivate dependency.
   await host.disable('base', { force: true })
   await assertRejectsCode(() => host.unregister('base'), 'plugin_in_use', 409)
   await host.disable('user')
@@ -289,7 +289,7 @@ test('force 停用：成功且依赖者显式标记（status=failed + plugin.cha
   await host.dispose()
 })
 
-test('注销被依赖插件：依赖者在启用态时拒绝；停用依赖者后放行', { timeout: 60_000 }, async () => {
+test('deregister by dependency plugin: dependency in enable state when reject; deactivate dependency after let through', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register(def('base'), { enabled: true })
   await host.register(def('user', ['base']), { enabled: true })
@@ -298,32 +298,32 @@ test('注销被依赖插件：依赖者在启用态时拒绝；停用依赖者�
   await host.disable('user')
   await host.unregister('base')
   assert.equal(host.get('base'), undefined)
-  // base 移除后 user 的依赖缺失：enable 显式失败。
+  // base remove after user dependency missing:enable explicit failed.
   await assertRejectsCode(() => host.enable('user'), 'plugin_dependency_missing', 409)
   await host.dispose()
 })
 
 // ---------------------------------------------------------------------------
-// 并发无死锁
+// concurrency without deadlock
 // ---------------------------------------------------------------------------
 
-test('并发注册/启用/停用混合操作全部收敛（无死锁）', { timeout: 60_000 }, async () => {
+test('concurrency register/enable/deactivate mixed operation all converge (without deadlock)', { timeout: 60_000 }, async () => {
   const host = makeHost()
   const ops: Array<Promise<unknown>> = []
   for (let i = 0; i < 6; i++) {
     ops.push(host.register(def(`p${i}`, [`p${(i + 1) % 6}`]), { enabled: false }))
   }
-  // 6 个插件首尾相连成环：逐个拒绝，绝不悬挂。
+  // 6 plugin first tail each other connect into ring: one by one reject, never pending.
   const results = await Promise.allSettled(ops)
   const rejected = results.filter((r) => r.status === 'rejected').length
-  assert.ok(rejected >= 1, '环路注册被显式拒绝')
+  assert.ok(rejected >= 1, 'ring route register by explicit reject')
   assert.equal(results.length, 6)
 
   const host2 = makeHost()
   await host2.register(def('a0'), { enabled: false })
   await host2.register(def('b0', ['a0']), { enabled: false })
   await host2.register(def('c0', ['b0']), { enabled: false })
-  // 并发启用链 + 与停用交错：允许部分失败（依赖未就绪 / in-use），但必须全部返回。
+  // concurrency enable chain + and deactivate hand over wrong: allows part failed (dependency not ready / in-use), but must all return.
   const settled = await Promise.allSettled([
     host2.enable('a0'),
     host2.enable('b0'),

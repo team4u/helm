@@ -1,10 +1,10 @@
 /**
- * runtime-agent-replay.ts — `agent()` 调用的入参校验与账本重放命中判定。
+ * runtime-agent-replay.ts -- input validation and ledger replay-hit adjudication for `agent()` calls.
  *
- * 自 runtime-agent-handler.ts 拆出（语义逐行保持）：resolveAgentReplayCall 覆盖
- * handleAgentCall 前半程——载荷边界校验 → resume 解析 → 账本前缀重放（失败链续跑 /
- * 成功缓存 / schema 复检 / 缓存 resume 守卫）；'responded' = 已直接 respond，
- * 'live' = 携带 attempt 环可变状态交 runtime-agent-handler.ts 执行。
+ * Split out of runtime-agent-handler.ts (semantics preserved line by line): resolveAgentReplayCall covers
+ * the first half of handleAgentCall -- payload boundary validation -> resume resolution -> ledger prefix
+ * replay (failed-chain continuation / success cache / schema recheck / cached-resume guard); 'responded' =
+ * already responded directly, 'live' = handed to runtime-agent-handler.ts with the attempt ring's mutable state.
  */
 
 import { agentJournalKey, type AgentJournalKeyInput, type JournalScope, type JournalWriteInput } from './journal.js'
@@ -16,7 +16,7 @@ import type { AgentCallPayload, CompletedChild } from './runtime-types.js'
 import type { AgentCallContext } from './runtime-agent-handler.js'
 import { agentRetryPrompt, applySchema, derivedLabel, isValidAttachments, isValidSecretNames, MAX_AGENT_ATTEMPTS, preview, readCallScope, scopedResumeKey } from './runtime-validation.js'
 
-/** replay 判定完成后交棒 live attempt 环的全部可变状态（base 已吸收 execution/gate，live 环继续原地更新；attempt 系列字段在 live 环内继续演化）。 */
+/** All mutable state handed to the live attempt ring after replay adjudication (base has absorbed execution/gate; the live ring keeps updating in place; the attempt-* fields keep evolving inside the live ring). */
 export interface AgentLiveState {
   base: WorkflowAgentEntry
   index: number
@@ -28,24 +28,24 @@ export interface AgentLiveState {
   isolation: 'worktree' | undefined
   agentId: string
   compiledSchema: CompiledSchema | undefined
-  /** 重算 attemptKey 的指纹输入（prompt/resume 随尝试演化，其余字段不变）。 */
+  /** Fingerprint input for recomputing attemptKey (prompt/resume evolve per attempt; other fields unchanged). */
   keyInput: AgentJournalKeyInput
   attemptKey: string
   attemptPrompt: string
   attempt: number
   attemptIndex: number
-  /** previousAttempts + maxAttempts：自动续接重试的总尝试上限。 */
+  /** previousAttempts + maxAttempts: the total attempt cap for auto-continuation retries. */
   attemptLimit: number
-  /** 续接目标（resume 调用或失败登记句柄）。 */
+  /** The resume target (a resume call or a failure-registered handle). */
   resumeTarget: CompletedChild | undefined
   /** 同文件原位恢复命中的未决 agent_started 坐标（仅首轮 live 尝试用于 reattach）。 */
   reattachEntry?: StartedAgentEntry
   queuedAt: number
-  /** agent 单次尝试的记账函数（scope 与 invocationIndex 由闭包补齐；replay/live 两侧共用）。 */
+  /** The accounting function for a single agent attempt (scope and invocationIndex filled by the closure; shared by both replay and live sides). */
   recordAttempt: (entry: Omit<Extract<JournalWriteInput, { type: 'agent' }>, 'type' | 'seq' | 'scopePath' | 'scopeCallIndex'>) => Promise<void>
 }
 
-/** resolveAgentReplayCall 的结果：'responded' = 已直接 respond（fatal / 缓存 / 终局）。 */
+/** resolveAgentReplayCall's result: 'responded' = already responded directly (fatal / cache / final). */
 export type AgentReplayResolution = { kind: 'responded' } | { kind: 'live'; state: AgentLiveState }
 
 export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: number, payload: AgentCallPayload): Promise<AgentReplayResolution> {
@@ -73,8 +73,8 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     return { kind: 'responded' }
   }
 
-  // scopeId 是 scope 命名空间字段（worker makeScope 分配，根 = 0）。
-  // 非法形状在边界显式拒绝：不信任 worker 消息面，也不静默钳制。
+  // scopeId is the scope namespace field (assigned by the worker's makeScope; root = 0).
+  // Invalid shapes are rejected explicitly at the boundary: the worker message surface is untrusted, and nothing is silently clamped.
   if (payload.scopeId !== undefined && (!Number.isInteger(payload.scopeId) || payload.scopeId < 0)) {
     ctx.respond(callId, false, undefined, 'agent() opts.scopeId must be a non-negative integer.', true)
     return { kind: 'responded' }
@@ -106,7 +106,7 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
       )
       return { kind: 'responded' }
     }
-    // 先匹配账本；只有真正需要执行时，才拒绝无活会话的缓存续接。
+  // Match the ledger first; only when real execution is needed is a cached continuation without a live session rejected.
   }
 
   let compiledSchema: CompiledSchema | undefined
@@ -119,19 +119,19 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     compiledSchema = compilation.compiled
   }
 
-  // host 边界二次校验（不信任 worker 消息面）：非法 attachments 是 fatal，
-  // 绝不带病下发到真实宿主 spawn/resume 端口。
+  // Host-boundary re-validation (the worker message surface is untrusted): invalid attachments are fatal,
+  // never forwarded to the real host spawn/resume ports while sick.
   if (payload.attachments !== undefined && !isValidAttachments(payload.attachments)) {
     ctx.respond(callId, false, undefined, 'agent() opts.attachments must be an array of non-empty string artifact IDs.', true)
     return { kind: 'responded' }
   }
-  // 同上：secretNames 是机密授予字段，非法形状在边界显式拒绝（不静默丢弃）。
+  // Same as above: secretNames is a secret-grant field; invalid shapes are rejected explicitly at the boundary (not silently dropped).
   if (payload.secretNames !== undefined && !isValidSecretNames(payload.secretNames)) {
     ctx.respond(callId, false, undefined, 'agent() opts.secretNames must be an array of non-empty string secret env names.', true)
     return { kind: 'responded' }
   }
-  // 同上：maxSubagentDepth 是策略授予字段，非法值在边界显式拒绝（不钳制、
-  // 不静默丢弃）；仅对新鲜 spawn 下发，resume 续接沿用登记表既有事实。
+  // Same as above: maxSubagentDepth is a policy-grant field; invalid values are rejected explicitly at the
+  // boundary (no clamping, no silent dropping); sent down only for fresh spawns, while resume keeps the registered facts.
   if (
     payload.maxSubagentDepth !== undefined &&
     (!Number.isInteger(payload.maxSubagentDepth) ||
@@ -147,8 +147,8 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     )
     return { kind: 'responded' }
   }
-  // 同上：maxAttempts 是自动重试策略字段，非法值显式拒绝（策略值被静默
-  // 改写会让重试语义失真）。
+  // Same as above: maxAttempts is an auto-retry policy field; invalid values are rejected explicitly
+  // (silently rewriting a policy value would distort retry semantics).
   if (
     payload.maxAttempts !== undefined &&
     (!Number.isInteger(payload.maxAttempts) ||
@@ -169,7 +169,7 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     ctx.respond(callId, false, undefined, `Workflow exceeded its cap of ${ctx.agentCap} agents.`, true)
     return { kind: 'responded' }
   }
-  // 调用位次在发起时分配（agent 与 action 共享全序）；并发完成顺序不参与。
+  // The call position is assigned at initiation (agent and action share the total order); completion order plays no part.
   const index = ctx.allocateIndex()
   const recordAttempt = (entry: Omit<Extract<JournalWriteInput, { type: 'agent' }>, 'type' | 'seq' | 'scopePath' | 'scopeCallIndex'>) =>
     ctx.recordAgent({ ...entry, ...scope, invocationIndex: index })
@@ -181,9 +181,9 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
   const logicalId = scopePath === 'root' ? String(scopeCallIndex) : `${scopePath}:${scopeCallIndex}`
   const agentId = resumed?.agentId ?? `wf-agent-${logicalId}`
   const label = payload.label ?? resumed?.label ?? derivedLabel(payload.prompt)
-  // agentType 缺省 'assistant'：helm 的 agentType 是 Profile ID，宿主
-  // ProfileService.ensureDefault 保证 assistant 存在（root 同源）。绝不沿用
-  // 上游 'general-purpose'——helm 没有该 profile，NativeSpawn 严格校验会硬失败。
+  // agentType defaults to 'assistant': helm's agentType is a Profile ID, and the host's
+  // ProfileService.ensureDefault guarantees assistant exists (same source as root). Never inherit
+  // the upstream 'general-purpose' -- helm has no such profile, and NativeSpawn's strict validation would hard-fail.
   const agentType = resumed?.agentType ?? payload.agentType ?? 'assistant'
   const model = resumed !== undefined ? resumed.model : payload.model
   const isolation = resumed !== undefined ? resumed.isolation : payload.isolation
@@ -358,10 +358,10 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
       execution?.conversationId !== undefined && execution.executionId === undefined
         ? String(execution.conversationId)
         : undefined
-    // 缓存节点登记：原生持久子会话（有 conversationId 且无外部 executionId）
-    // 保留 resumeRef 供后续未落账的 agent({ resume: label }) 真实续接原子会话；
-    // 外部运行时或无 conversationId 的纯缓存记录维持 replayed: true（前缀失配
-    // 后需要实时续接时由下方 replayed 守卫显式失败）。
+    // Cache-node registration: native persistent sub-conversations (with a conversationId and no external executionId)
+    // keep a resumeRef for later not-yet-ledgered agent({ resume: label }) to truly resume the atomic conversation;
+    // external runtimes or pure cache records without a conversationId stay replayed: true (when a live continuation
+    // is needed after a prefix mismatch, the replayed guard below fails explicitly).
     ctx.completedByLabel.set(scopedResumeKey(scopeId, label), {
       agentId,
       label,
@@ -385,7 +385,7 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
       },
     ])
     ctx.openLaunches.delete(callId)
-    // 缓存分支记账保留 resumed 标记：原始调用是 resume 的，新账本必须如实。
+    // The cache branch keeps the resumed marker in accounting: the original call was a resume; the new ledger must be honest.
     if (ctx.inPlaceResume !== true) {
       await recordAttempt({
         index: attemptIndex,
@@ -410,9 +410,9 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     return { kind: 'responded' }
   }
 
-  // 前缀失配（含本调用新增导致账本无此位次）而 resume 目标只存在于缓存子
-  // 结果：无活会话可续接。显式失败，绝不伪造续接、也不重跑之前 action
-  // 重建上下文。
+  // Prefix mismatch (incl. this call being new so the ledger lacks the position) while the resume target exists only
+  // in cached sub-results: no live session to resume. Fail explicitly; never fabricate a continuation, never rerun
+  // earlier actions to rebuild context.
   if (resumed?.replayed === true) {
     ctx.respond(
       callId,

@@ -271,11 +271,11 @@ export function admitStandbyFiles(
   const rejected: Array<{ file: File; reason: string }> = []
   for (const file of files) {
     if (!isReadableFileLike(file)) {
-      rejected.push({ file, reason: '不支持的附件来源（非可读取的文件对象），请通过文件选择/拖拽/粘贴添加' })
+      rejected.push({ file, reason: 'Unsupported attachment source (not a readable file object); add files via picker, drag and drop, or paste' })
       continue
     }
     if (file.size > STANDBY_FILE_MAX_BYTES) {
-      rejected.push({ file, reason: '文件超过 15 MiB 上限' })
+      rejected.push({ file, reason: 'File exceeds the 15 MiB limit' })
       continue
     }
     next.push({
@@ -335,7 +335,7 @@ export async function executeStandbySend(key: string, profileId: string, deps: S
   if (record.sending) return 'busy'
   const envError = standbyEnvError(record)
   if (envError !== null) {
-    deps.notifyError('请先修正起始环境', envError)
+    deps.notifyError('Fix the starting environment first', envError)
     return 'invalid'
   }
   // 同步占用：后续双击/Enter 在任何 await 之前被拒绝。
@@ -380,7 +380,7 @@ export async function executeStandbySend(key: string, profileId: string, deps: S
   } catch (err) {
     if (stale()) return 'stale'
     patchStandbyDraftIfPresent(key, { error: err instanceof Error ? err.message : String(err) })
-    deps.notifyError(conversationId !== undefined ? '发送失败，可重试（会话已创建）' : '创建会话失败，草稿已保留', err, conversationId)
+    deps.notifyError(conversationId !== undefined ? 'Send failed; retry available (conversation created)' : 'Failed to create conversation; draft preserved', err, conversationId)
     return 'failed'
   } finally {
     // 世代已变时绝不复位：新世代可能已在同键写入新草稿，旧任务的收尾不得覆盖其 sending。

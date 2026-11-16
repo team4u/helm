@@ -1,9 +1,9 @@
 /**
- * 插件边界 JSON Schema 校验器（AJV 封装，内核插件宿主专用）。
+ * plugin boundary JSON Schema validate (AJV wrap, kernel plugin host dedicated use).
  *
- * 通用编译缓存与 validateOrThrow 已收口 @helm/protocol（内核与插件
- * 共享唯一实现，含 $async 拒绝与编译错误诊断）；本文件保留内核插件
- * 宿主专用语义：注册期预编译检查与动作入/出参的定制报错文案。
+ * through use compile cache and validateOrThrow already consolidate @helm/protocol(kernel and plugin
+ * sharing unique implement, contains $async reject and compile error diagnose); this file keep kernel plugin
+ * host dedicated use semantics: register phase pre- compile check and action/out reference set system errors text proposal.
  */
 import { Ajv, type ValidateFunction } from 'ajv';
 import { HelmError, type JsonSchema } from '@helm/protocol';
@@ -15,13 +15,13 @@ const compiledCache = new WeakMap<JsonSchema, ValidateFunction>();
 function compile(schema: JsonSchema): ValidateFunction {
   const cached = compiledCache.get(schema);
   if (cached) return cached;
-  // 核心接口全为同步校验：$async Schema 的校验函数返回 Promise，
-  // 同步 boolean 判断会把 Promise 当 truthy 放行非法输入并产生 unhandled
-  // rejection——在编译边界显式拒绝，绝不引入异步路径。
+  // core interface all is sync validate:$async Schema validate function return Promise,
+  // sync boolean decide will Promise when truthy let through invalid input and produce unhandled
+  // rejection- - in compile boundary explicit reject, never introduce async path.
   if ((schema as { $async?: unknown }).$async !== undefined) {
     throw new HelmError(
       'invalid_plugin_schema',
-      `插件声明的 JSON Schema 含 $async：核心同步校验边界不支持异步 Schema`,
+      `plugin declaration JSON Schema contains $async: core sync validate boundary unsupported async Schema`,
       500,
       { schema },
     );
@@ -32,7 +32,7 @@ function compile(schema: JsonSchema): ValidateFunction {
   } catch (err) {
     throw new HelmError(
       'invalid_plugin_schema',
-      `插件声明的 JSON Schema 本身无法编译：${err instanceof Error ? err.message : String(err)}`,
+      `plugin declaration JSON Schema itself cannot compile:${err instanceof Error ? err.message : String(err)}`,
       500,
       { schema },
     );
@@ -41,7 +41,7 @@ function compile(schema: JsonSchema): ValidateFunction {
   return fn;
 }
 
-/** 注册期预编译检查：$async / 非法 Schema 在声明边界即报 invalid_plugin_schema（触发整体回滚），别等首次调用。 */
+/** register phase pre- compile check:$async / illegal Schema in declaration boundary i.e. report invalid_plugin_schema(trigger whole rollback), other etc. first time invoke. */
 export function assertSchemaCompilable(schema: JsonSchema): void {
   compile(schema);
 }
@@ -51,31 +51,31 @@ function formatErrors(errors: Array<{ instancePath?: string; message?: string }>
   return errors.map((e) => `${e.instancePath || '(root)'} ${e.message ?? ''}`.trim()).join('; ');
 }
 
-/** 校验动作入参（HTTP body / CLI flags / Agent Tool / Workflow action() 五端共用）。失败 400 validation_error。 */
+/** validate action reference (HTTP body / CLI flags / Agent Tool / Workflow action() five end shared use). failed 400 validation_error. */
 export function validatePluginInput(pluginId: string, actionId: string, schema: JsonSchema, input: unknown): void {
   const fn = compile(schema);
   if (!fn(input)) {
     throw new HelmError(
       'validation_error',
-      `动作 ${pluginId}.${actionId} 入参校验失败：${formatErrors(fn.errors)}`,
+      `action ${pluginId}.${actionId} reference validation failed:${formatErrors(fn.errors)}`,
       400,
       { pluginId, actionId, errors: fn.errors },
     );
   }
 }
 
-/** 校验插件动作输出。失败 500 invalid_plugin_output（插件产物违约，非调用方错误）。 */
+/** validate plugin action output. failed 500 invalid_plugin_output(plugin artifact violate about, non- caller error). */
 export function validatePluginOutput(pluginId: string, actionId: string, schema: JsonSchema, output: unknown): void {
   const fn = compile(schema);
   if (!fn(output)) {
     throw new HelmError(
       'invalid_plugin_output',
-      `动作 ${pluginId}.${actionId} 输出不符合声明的 outputSchema：${formatErrors(fn.errors)}`,
+      `action ${pluginId}.${actionId} output do not conforms to declaration outputSchema:${formatErrors(fn.errors)}`,
       500,
       { pluginId, actionId, errors: fn.errors },
     );
   }
 }
 
-/** 通用边界校验（交接文件、路由参数等）已收口 protocol，此处再导出供内核既有引用。 */
+/** through use boundary validate (handover file, routing parameter etc.) already consolidate protocol, this where again export supply kernel since has reference. */
 export { validateOrThrow } from '@helm/protocol';

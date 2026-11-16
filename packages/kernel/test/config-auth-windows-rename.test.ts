@@ -1,11 +1,11 @@
 /**
- * Windows config.json rename EPERM 防护与 AuthService 零读盘缓存回归：
- * 1. atomicWriteFile / copyFilePrivate 在 Windows 瞬时 EPERM/EACCES/EBUSY 下有界退避重试；
- *    耗尽时保留原始 errno code、补充重试次数诊断、清理 tmp 且保留旧目标文件；非 Windows 立即失败。
- * 2. ConfigService.get 与 updateBy 共享进程内文件锁且无重入死锁（同进程读写互斥，不撞 rename）。
- * 3. AuthService 按规范路径共享进程内缓存与 singleflight：稳态 verifyToken/status 零 readFile、
- *    跨实例与软链同步失效、外部改盘 invalidateCache 生效、损坏不缓存、并发读不回填旧快照。
- * 4. 并发模拟：Windows 句柄冲突语义下高频 verifyToken/status 与 setEnabled 交错落盘零失败。
+ * Windows config.json rename EPERM protect and AuthService zero read cache regression:
+ * 1. atomicWriteFile / copyFilePrivate in Windows instantaneous EPERM/EACCES/EBUSY under has boundary backoff retry;
+ *    exhausted when keep original errno code, patch fill retry time count diagnose, clean up tmp and keep old target file; non- Windows immediately failed.
+ * 2. ConfigService.get and updateBy sharing process inside file lock and without heavy deadlock (same process read write mutual exclusion, do not collide rename).
+ * 3. AuthService by canonical path sharing process inside cache and singleflight: steady state verifyToken/status zero readFile,
+ *    across instance and symlink sync expires, external change invalidateCache takes effect, corrupt do not cache, concurrency read do not back fill old snapshot.
+ * 4. concurrency simulated:Windows handle conflict semantics under high frequency verifyToken/status and setEnabled hand over wrong zero failed.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,7 +26,7 @@ import {
 import { HelmPluginConfigStore } from '../src/runtime/plugin-config-store.js'
 import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js'
 
-function errnoError(code: string, message = `模拟系统错误 (${code})`): NodeJS.ErrnoException {
+function errnoError(code: string, message = `simulated system error (${code})`): NodeJS.ErrnoException {
   return Object.assign(new Error(message), { code, errno: -4048, syscall: 'rename' })
 }
 
@@ -48,10 +48,10 @@ async function withTempDir(prefix: string, fn: (dir: string) => Promise<void>): 
 async function assertNoTmpLeftovers(dir: string): Promise<void> {
   const entries = await fsp.readdir(dir)
   const tmps = entries.filter((name) => name.includes('.tmp'))
-  assert.deepEqual(tmps, [], `不应残留临时文件: ${tmps.join(', ')}`)
+  assert.deepEqual(tmps, [], `must not leftover temp file: ${tmps.join(', ')}`)
 }
 
-test('Windows atomicWriteJson 遇瞬时 EPERM/EACCES/EBUSY 退避后成功提交，无 tmp 残留', { timeout: 60_000 }, async (t) => {
+test('Windows atomicWriteJson encounter instantaneous EPERM/EACCES/EBUSY backoff after succeeded commit, without tmp leftover', { timeout: 60_000 }, async (t) => {
   const restore = fakePlatform('win32')
   const realRename = fsp.rename.bind(fsp)
   let attempts = 0
@@ -78,7 +78,7 @@ test('Windows atomicWriteJson 遇瞬时 EPERM/EACCES/EBUSY 退避后成功提交
   }
 })
 
-test('Windows atomicWriteFile 与 copyFilePrivate 持续 EPERM 有界耗尽：保留 code、附重试诊断、清 tmp、旧值完好', { timeout: 60_000 }, async (t) => {
+test('Windows atomicWriteFile and copyFilePrivate continuous EPERM has boundary exhausted: keep code, attach retry diagnose, clean tmp, old value completely well', { timeout: 60_000 }, async (t) => {
   const restore = fakePlatform('win32')
   const stub = t.mock.method(fsp, 'rename', async (...args: Parameters<typeof fsp.rename>) => {
     void args
@@ -94,17 +94,17 @@ test('Windows atomicWriteFile 与 copyFilePrivate 持续 EPERM 有界耗尽：�
         (err: unknown) =>
           err instanceof Error &&
           (err as NodeJS.ErrnoException).code === 'EPERM' &&
-          err.message.includes('Windows 目标文件瞬时占用') &&
-          err.message.includes('已重试'),
+          err.message.includes('Windows target file instantaneous occupy') &&
+          err.message.includes('already retry'),
       )
       const waited = Date.now() - startedAt
-      assert.ok(waited >= 1_400, `应有界退避约 1.5s 再失败，实际 ${waited}ms`)
-      assert.ok(waited < 10_000, `退避时间必须有界收敛，实际 ${waited}ms`)
-      assert.ok(stub.mock.callCount() >= 20, `应持续重试直至耗尽，实际 ${stub.mock.callCount()} 次`)
+      assert.ok(waited >= 1_400, `should has boundary backoff about 1.5s again failed, actual ${waited}ms`)
+      assert.ok(waited < 10_000, `backoff time must has boundary converge, actual ${waited}ms`)
+      assert.ok(stub.mock.callCount() >= 20, `should continuous retry direct until exhausted, actual ${stub.mock.callCount()} time`)
       assert.equal(await fsp.readFile(target, 'utf8'), '{"stable":true}\n')
       await assertNoTmpLeftovers(dir)
 
-      // copyFilePrivate 同样走有界重试并清理 tmp
+      // copyFilePrivate same away has boundary retry and clean up tmp
       const callsBeforeCopy = stub.mock.callCount()
       const src = join(dir, 'src.txt')
       const dest = join(dir, 'dest.txt')
@@ -115,7 +115,7 @@ test('Windows atomicWriteFile 与 copyFilePrivate 持续 EPERM 有界耗尽：�
         (err: unknown) =>
           err instanceof Error &&
           (err as NodeJS.ErrnoException).code === 'EPERM' &&
-          err.message.includes('Windows 目标文件瞬时占用'),
+          err.message.includes('Windows target file instantaneous occupy'),
       )
       assert.ok(stub.mock.callCount() - callsBeforeCopy >= 20)
       assert.equal(await fsp.readFile(dest, 'utf8'), 'old-content')
@@ -127,7 +127,7 @@ test('Windows atomicWriteFile 与 copyFilePrivate 持续 EPERM 有界耗尽：�
   }
 })
 
-test('非 Windows 平台遇到 EPERM 立即失败不做退避重试', { timeout: 60_000 }, async (t) => {
+test('non- Windows platform encounters EPERM immediately failed does not backoff retry', { timeout: 60_000 }, async (t) => {
   const restore = fakePlatform('linux')
   const stub = t.mock.method(fsp, 'rename', async (...args: Parameters<typeof fsp.rename>) => {
     void args
@@ -141,7 +141,7 @@ test('非 Windows 平台遇到 EPERM 立即失败不做退避重试', { timeout:
         (err: unknown) =>
           err instanceof Error &&
           (err as NodeJS.ErrnoException).code === 'EPERM' &&
-          !err.message.includes('Windows 目标文件瞬时占用'),
+          !err.message.includes('Windows target file instantaneous occupy'),
       )
       assert.equal(stub.mock.callCount(), 1)
       await assertNoTmpLeftovers(dir)
@@ -152,7 +152,7 @@ test('非 Windows 平台遇到 EPERM 立即失败不做退避重试', { timeout:
   }
 })
 
-test('ConfigService.get 与 updateBy 共享文件锁：无重入死锁，且同进程读写严格互斥不撞 rename', { timeout: 60_000 }, async (t) => {
+test('ConfigService.get and updateBy sharing file lock: without heavy deadlock, and same process read write strictly mutual exclusion do not collide rename', { timeout: 60_000 }, async (t) => {
   const realRename = fsp.rename.bind(fsp)
   const realReadFile = fsp.readFile.bind(fsp)
   let inRename = false
@@ -187,13 +187,13 @@ test('ConfigService.get 与 updateBy 共享文件锁：无重入死锁，且同�
       const cfg = new ConfigService(dir)
       const cfgOther = new ConfigService(dir)
       const writePromise = cfg.update({ step: 1 })
-      // 确定性等到写入进入 rename 窗口后再发起并发读，验证读必须排队到写完成
+      // determinism etc. to write enter rename window after again start concurrency read, verify read must queue up to write complete
       await renameEntered
       const readPromise = cfgOther.get()
       const [written, readAfter] = await Promise.all([writePromise, readPromise])
       assert.equal(written['step'], 1)
-      assert.equal(readAfter['step'], 1, '同进程读应排队到写完成后读到最新值')
-      assert.equal(overlapDetected, false, '同进程内 readFile 与 rename 绝不可并发重叠')
+      assert.equal(readAfter['step'], 1, 'same process read should queue up to write after completion read to most new value')
+      assert.equal(overlapDetected, false, 'same process inside readFile and rename never can concurrency overlap')
     })
   } finally {
     readStub.mock.restore()
@@ -201,7 +201,7 @@ test('ConfigService.get 与 updateBy 共享文件锁：无重入死锁，且同�
   }
 })
 
-test('AuthService 进程内快照：稳态零 readFile、跨实例与软链同步、invalidateCache 生效、损坏不缓存', { timeout: 60_000 }, async (t) => {
+test('AuthService process inside snapshot: steady state zero readFile, across instance and symlink sync,invalidateCache takes effect, corrupt do not cache', { timeout: 60_000 }, async (t) => {
   await withTempDir('helm-auth-cache-', async (root) => {
     const dataDir = join(root, 'data')
     const linkDir = join(root, 'data-link')
@@ -223,11 +223,11 @@ test('AuthService 进程内快照：稳态零 readFile、跨实例与软链同�
     })
 
     try {
-      // 首次冷读：读盘 1 次
+      // first time cold read: read 1 time
       assert.equal(await authA.verifyToken(token), true)
       assert.equal(configReadCount, 1)
 
-      // 稳态多次 verifyToken + status + 跨实例 + 软链实例：全部命中缓存，0 次 readFile
+      // steady state many time verifyToken + status + across instance + symlink instance: all hit cache,0 time readFile
       for (let i = 0; i < 20; i++) {
         assert.equal(await authA.verifyToken(token), true)
         assert.equal(await authB.verifyToken(token), true)
@@ -235,9 +235,9 @@ test('AuthService 进程内快照：稳态零 readFile、跨实例与软链同�
         assert.equal(await authB.verifyToken('invalid-token'), false)
         assert.deepEqual(await authLink.status(), { configured: true })
       }
-      assert.equal(configReadCount, 1, '稳态下任何 AuthService 实例都不应重复读盘')
+      assert.equal(configReadCount, 1, 'steady state under any AuthService instance all must not duplicate read')
 
-      // 其他模块经 ConfigService 修改 config.json 后，自动失效并触发重读一次
+      // other module via ConfigService modify config.json after, automatically expires and trigger heavy read once
       await cfgSvc.update({ pluginEnabled: { magpie: true } })
       const readsBeforePostUpdate = configReadCount
       assert.equal(await authB.verifyToken(token), true)
@@ -245,23 +245,23 @@ test('AuthService 进程内快照：稳态零 readFile、跨实例与软链同�
       assert.equal(await authLink.verifyToken(token), true)
       assert.equal(configReadCount, readsBeforePostUpdate + 1)
 
-      // login 签发新 token 后，跨实例立即识别
+      // login sign new token after, across instance immediately identify
       const { token: token2 } = await authA.login('strong-password-123')
       assert.equal(await authLink.verifyToken(token2), true)
       assert.equal(await authB.verifyToken(token), true)
 
-      // 外部直接改盘删掉 auth 后经 invalidateCache 失效（模拟 AssetReloader 触发）
+      // external directly change delete auth after via invalidateCache expires (simulated AssetReloader trigger)
       await fsp.writeFile(join(dataDir, 'config.json'), '{}\n', 'utf8')
       await cfgSvc.invalidateCache()
       assert.deepEqual(await authA.status(), { configured: false })
       assert.equal(await authB.verifyToken(token), false)
       assert.equal(await authLink.verifyToken(token2), false)
 
-      // 损坏的 auth 字段显式抛错且不被缓存；修复后恢复正常
+      // corrupt auth field explicit throws and do not by cache; fix after restore normal
       await fsp.writeFile(join(dataDir, 'config.json'), JSON.stringify({ auth: 'corrupt' }), 'utf8')
       await cfgSvc.invalidateCache()
-      await assert.rejects(() => authA.verifyToken(token), /结构非法/)
-      await assert.rejects(() => authB.status(), /结构非法/)
+      await assert.rejects(() => authA.verifyToken(token), /structure illegal/)
+      await assert.rejects(() => authB.status(), /structure illegal/)
       await fsp.writeFile(join(dataDir, 'config.json'), '{}\n', 'utf8')
       await cfgSvc.invalidateCache()
       assert.deepEqual(await authA.status(), { configured: false })
@@ -271,7 +271,7 @@ test('AuthService 进程内快照：稳态零 readFile、跨实例与软链同�
   })
 })
 
-test('AuthService 冷读与并发 setup 交错（防 ABA 脏回填）：缓存绝不保留旧未配置态', { timeout: 60_000 }, async (t) => {
+test('AuthService cold read and concurrency setup hand over wrong (guard against ABA dirty back fill): cache never keep old not config state', { timeout: 60_000 }, async (t) => {
   await withTempDir('helm-auth-aba-', async (dir) => {
     const auth = new AuthService(dir)
     const realReadFile = fsp.readFile.bind(fsp)
@@ -281,7 +281,7 @@ test('AuthService 冷读与并发 setup 交错（防 ABA 脏回填）：缓存�
     const readStub = t.mock.method(fsp, 'readFile', async (...args: Parameters<typeof fsp.readFile>) => {
       if (String(args[0]).endsWith('config.json') && !injectedSetup) {
         injectedSetup = true
-        // 在首次冷读窗口期间让 setup 入队等待文件锁，验证锁释放与 generation 校验协同
+        // in first time cold read window during let setup queue wait for file lock, verify lock release and generation validate coordinate same
         setupPromise = auth.setup('aba-race-password-123')
       }
       return realReadFile(...args)
@@ -300,7 +300,7 @@ test('AuthService 冷读与并发 setup 交错（防 ABA 脏回填）：缓存�
   })
 })
 
-test('Windows 句柄冲突模拟下高频 verifyToken/status 与 setEnabled 并发交错零失败', { timeout: 60_000 }, async (t) => {
+test('Windows handle conflict simulated under high frequency verifyToken/status and setEnabled concurrency hand over wrong zero failed', { timeout: 60_000 }, async (t) => {
   const restore = fakePlatform('win32')
   const realReadFile = fsp.readFile.bind(fsp)
   const realRename = fsp.rename.bind(fsp)
@@ -317,7 +317,7 @@ test('Windows 句柄冲突模拟下高频 verifyToken/status 与 setEnabled 并�
     }
   })
   const renameStub = t.mock.method(fsp, 'rename', async (...args: Parameters<typeof fsp.rename>) => {
-    // 若同时存在任意 config.json 读取句柄（模拟外部读取方占用），按 Windows 真实行为抛 EPERM
+    // if also store in any config.json read handle (simulated external read way occupy), by Windows real behavior throw EPERM
     if (String(args[1]).endsWith('config.json') && activeConfigReaders > 0) {
       throw errnoError('EPERM', 'EPERM: operation not permitted (active handle)')
     }
@@ -363,7 +363,7 @@ test('Windows 句柄冲突模拟下高频 verifyToken/status 与 setEnabled 并�
   }
 })
 
-test('HTTP E2E 复现：Windows 冲突模拟下并发 GET /api/plugins + GET /api/auth/status 与插件启停零 500', { timeout: 60_000 }, async (t) => {
+test('HTTP E2E re- now:Windows conflict simulated under concurrency GET /api/plugins + GET /api/auth/status and plugin start stop zero 500', { timeout: 60_000 }, async (t) => {
   const restore = fakePlatform('win32')
   const realReadFile = fsp.readFile.bind(fsp)
   const realRename = fsp.rename.bind(fsp)
@@ -431,7 +431,7 @@ test('HTTP E2E 复现：Windows 冲突模拟下并发 GET /api/plugins + GET /ap
           handler(new Request(`http://127.0.0.1:3202${path}`, { method, headers: authHeaders }))
 
         const readsBeforeBurst = configReadCount
-        // 并发打高密度鉴权读取与顺序启停插件（复现原报告 3/3 500 场景）
+        // concurrency hit high authentication read and order start stop plugin (re- now original report 3/3 500 scenario)
         const readBurst = Promise.all(
           Array.from({ length: 60 }, (_, i) =>
             callHttp('GET', i % 2 === 0 ? '/api/plugins' : '/api/auth/status'),
@@ -446,7 +446,7 @@ test('HTTP E2E 复现：Windows 冲突模拟下并发 GET /api/plugins + GET /ap
             )
             statuses.push(res.status)
           }
-          // 最终留在 enabled=true
+          // eventually in enabled=true
           const finalEnable = await callHttp('POST', '/api/plugins/builtin:magpie/enable')
           statuses.push(finalEnable.status)
           return statuses
@@ -454,19 +454,19 @@ test('HTTP E2E 复现：Windows 冲突模拟下并发 GET /api/plugins + GET /ap
 
         const [readResponses, toggleStatuses] = await Promise.all([readBurst, toggleLoop])
         for (const res of readResponses) {
-          assert.equal(res.status, 200, `并发读应全部 200，实际 ${res.status}`)
+          assert.equal(res.status, 200, `concurrency read should all 200, actual ${res.status}`)
         }
         assert.deepEqual(
           toggleStatuses,
           [200, 200, 200, 200, 200, 200, 200],
-          '全部启停持久化应全部 200 成功',
+          'all start stop persist should all 200 succeeded',
         )
         const persisted = JSON.parse(await realReadFile(join(dir, 'config.json'), 'utf8')) as {
           pluginEnabled?: Record<string, boolean>
         }
         assert.equal(persisted.pluginEnabled?.['builtin:magpie'], true)
-        // 验证 AuthService 缓存显著减少读盘次数（60 次并发读取 + 7 次切换远少于 67+ 次）
-        assert.ok(configReadCount - readsBeforeBurst < 25, `读盘次数应大幅降低，实际 ${configReadCount - readsBeforeBurst}`)
+        // verify AuthService cache notable reduce read time count (60 time concurrency read + 7 time switch far fewer than 67+ time)
+        assert.ok(configReadCount - readsBeforeBurst < 25, `read time count should large width drop low, actual ${configReadCount - readsBeforeBurst}`)
         await assertNoTmpLeftovers(dir)
       } finally {
         await host.dispose().catch(() => {})

@@ -1,45 +1,45 @@
 /**
- * 单会话内存镜像（ConversationMirror）：ConversationTracker 全部按会话
- * 生命周期的运行态聚合。
+ * single conversation memory mirror (ConversationMirror):ConversationTracker all by conversation
+ * lifecycle run state aggregate.
  *
- * Why 聚合：此前 30+ 个 Map<number,…> 字段各自为政，stopObserving 需手工
- * 逐 map 删除约 40 行，漏删即泄漏（反复建删会话的进程随时间无限累积残留）。
- * 聚合后 stopObserving 一次 delete 即整体回收；字段语义与迁移前逐一对应。
+ * Why aggregate: this before 30+  Map<number,...> field each is administration,stopObserving must manually work
+ * one by one map delete about 40 row, leak delete i.e. leak leak (reverse re- create delete conversation process follow time unbounded accumulated leftover).
+ * aggregate after stopObserving once delete i.e. whole reclaim; field semantics and migration before one by one for should.
  *
- * 生命周期：观察建立（observe）或首次写入时创建；observer.end 只清 detach
- * （其余镜像保留，供重观察与摘要派生）；stopObserving 整体删除。
- * 例外（不进镜像，仍归 tracker 顶层）：
- * - settledRuns：跨会话去重集合（`${conversationId}:${taskId}` 前缀键全局唯一）；
- * - notifiedCompactionFailures：不随 stopObserving 清除（同 runtime 内重观察
- *   不得再报同一压缩失败）；
- * - contextUsage 缓存/刷新链：独立生命周期（在途刷新可跨越停观），见
- *   context-usage-refresh.ts。
+ * lifecycle: observe establish (observe) or first time write when create;observer.end only clean detach
+ * (the rest mirror keep, supply heavy observe and summary derive);stopObserving whole delete.
+ * exception (does not enter mirror, still archive tracker top-level):
+ * - settledRuns: across conversation dedupe set (`${conversationId}:${taskId}` prefix key global unique);
+ * - notifiedCompactionFailures: do not follow stopObserving clear (same runtime inside heavy observe
+ *   must not again report the same compress failed);
+ * - contextUsage cache/refresh chain: independent lifecycle (in-flight refresh can across exceeds stop observe), see
+ *   context-usage-refresh.ts.
  */
 
 import type { ConversationInput, ConversationLive, InputOrigin, WhenBusy } from '@helm/protocol'
 import type { LiveCompactionFailureShape, LiveCompactionShape } from './context-usage.js'
 
-/** SDK pi.live 文档的结构子集（tracker 观察形状）。 */
+/** SDK pi.live document structure sub- collection (tracker observe shape). */
 export interface LiveStateShape {
   run?: { taskId: number; inputs: number[]; turns?: number; first?: number }
   generation?: { attempt?: unknown; message?: unknown; retry?: unknown; deferred?: unknown }
   tools?: Array<{ callId: string; name: string; status: string; arguments?: unknown; output?: string }>
   nestedTools?: Array<{ callId: string; name: string; status: string; arguments?: unknown; output?: string }>
   runFailure?: { taskId: number; inputs: number[]; reason: string; detail?: string }
-  /** 进行中的压缩任务（taskId 序；SDK CompactionStatus 的结构子集）。 */
+  /** in progress compress task (taskId order;SDK CompactionStatus structure sub- collection). */
   compactions?: LiveCompactionShape[]
-  /** 最近一次压缩失败（SDK CompactionFailure 的结构子集）。 */
+  /** most near once compress failed (SDK CompactionFailure structure sub- collection). */
   compactionFailure?: LiveCompactionFailureShape
 }
 
-/** pi.inbox 文档的结构子集（queued 提交：submissionId -> entry 载荷）。 */
+/** pi.inbox document structure sub- collection (queued commit:submissionId -> entry payload). */
 export interface InboxItemShape {
   id: number
   mode: 'steer' | 'followUp' | 'write'
   entry?: { kind?: string; data?: unknown }
 }
 
-/** helm.input entry / inbox item 的元数据载荷形状。 */
+/** helm.input entry / inbox item metadata payload shape. */
 export interface HelmInputMeta {
   id?: string
   text?: string
@@ -50,60 +50,60 @@ export interface HelmInputMeta {
   attachments?: unknown
 }
 
-/** 单会话聚合镜像：字段与迁移前的同名 Map 条目一一对应。 */
+/** single conversation aggregate mirror: field and migration before same name Map item one one for should. */
 export interface ConversationMirror {
-  /** SDK 观察者返回的 detach（观察存续期；observer.end / stopObserving 清除）。 */
+  /** SDK observer return detach(observe store continue phase;observer.end / stopObserving clear). */
   detach: (() => void) | undefined
-  /** 当前 pi.live 镜像（最近一次 advance 值；adopt/adoptInitial 归一为对象）。 */
+  /** when before pi.live mirror (most near once advance value;adopt/adoptInitial archive one is object). */
   live: LiveStateShape | undefined
-  /** 当前 pi.inbox 排队项镜像（queuedInputs 派生与实时推送用）。 */
+  /** when before pi.inbox queue up items mirror (queuedInputs derive and real-time push use). */
   inbox: ReadonlyArray<InboxItemShape> | undefined
-  /** requestId（= input.id）-> 输入元数据（唯一追踪身份；提交登记与 entry/inbox
-   * 观察重建按 requestId 幂等合并为唯一记录）。 */
+  /** requestId(= input.id)-> input metadata (unique append trace identity; commit register and entry/inbox
+   * observe rebuild by requestId idempotent merge is unique record). */
   trackedInputs: Map<string, ConversationInput>
-  /** submissionId -> requestId：SDK 接口关联索引（live.run.inputs /
-   * runFailure.inputs / withdraw 均以 submissionId 表达，经此映射回追踪身份）。
+  /** submissionId -> requestId:SDK interface related index (live.run.inputs /
+   * runFailure.inputs / withdraw all with submissionId express, via this mapping back append trace identity).
    *
-   * 写入来源：bindSubmission（submit 返回）、adoptInputsFromInbox（inbox 项
-   * id 即 submissionId）、重启恢复的 submission 精确查询；结算/撤回时清理。 */
+   * write source:bindSubmission(submit return),adoptInputsFromInbox(inbox items
+   * id i.e. submissionId), restart restore submission precise query; compute/withdraw back when clean up. */
   submissionIndex: Map<number, string>
-  /** 输入重建下界 entry id（单调不回退：新 run 取 run.first 向上推，run 结束
-   * 不清除——窗口内已结算的 helm.input 不再被下一快照复活）。 */
+  /** input rebuild under boundary entry id(single tune does not fall back: new run take run.first to on push,run end
+   * do not clear - - window inside already compute helm.input no longer by under one snapshot re-). */
   runFirstEntry: number | undefined
-  /** 本回合已消费 requestId 集（run 存续期间累计，新 taskId 重置）。 */
+  /** this turn already consume requestId collection (run store continue during cumulative, new taskId reset). */
   consumedInputs: Set<string> | undefined
-  /** 当前 run 的 taskId（多 tool round 不变；变化才重置消费集）。 */
+  /** when before run  taskId(many tool round do not change; change only then reset consume collection). */
   runTaskId: number | undefined
-  /** 已结算 runKey 插入序（容量淘汰用，与全局 settledRuns 同步维护）。 */
+  /** already compute runKey insert order (capacity eliminate use, and global settledRuns sync maintain). */
   settledRunOrder: string[]
-  /** 最近一个已结算 run 的 taskId（显式 abort 防重入）。 */
+  /** most near a already compute run  taskId(explicit abort guard against heavy). */
   lastSettledRun: number | undefined
-  /** 在途 turn_settled 回调计数（waitForIdle 按会话等待）。 */
+  /** in-flight turn_settled call back counter (waitForIdle by conversation wait for). */
   settledInflight: number
-  /** 回调链首个错误（计数归零后的新链清除；waitForIdle 重放抛出）。 */
+  /** call back chain first error (counter reset to zero after new chain clear;waitForIdle replay throw). */
   settledError: unknown
-  /** 在途 turn_settled 回调链等待者（计数归零时全部唤醒）。 */
+  /** in-flight turn_settled call back chain wait for (counter reset to zero when all wake). */
   settledWaiters: Array<() => void>
-  /** 已发过 conversation.entry 的最大 entry id（观察窗口内单调）。 */
+  /** already conversation.entry most large entry id(observe window inside single tune). */
   lastEmittedEntry: number
-  /** 最近一次快照扫到的最大 entry id（用于判定 pi.compaction 是否新落库，
-   * 与 onEntryCommitted sink 是否挂接无关）。 */
+  /** most near once snapshot scan to most large entry id(used to decide pi.compaction is otherwise new written to the database,
+   * and onEntryCommitted sink is otherwise hang connect without closure). */
   lastSeenEntryId: number
-  /** 待发 live 快照（节流窗口内的最新值；终态时强制冲刷）。 */
+  /** await live snapshot (node stream window inside most new value; terminal state when force conflict refresh). */
   pendingLive: ConversationLive | undefined
-  /** 节流冲刷 timer（stopObserving/close 必须清理，防删除后幽灵事件）。 */
+  /** node stream conflict refresh timer(stopObserving/close must clean up, guard against after deletion ghost event). */
   liveTimer: ReturnType<typeof setTimeout> | undefined
-  /** 上次 live 内容指纹（相同快照不重复发帧）。 */
+  /** on time live content refer grain (identical snapshot does not resend frame). */
   lastLiveKey: string | undefined
-  /** 上次已发 queuedInputs 指纹（入队/出队 0ms 冲刷判定；未登记视为 '[]'）。 */
+  /** on time already queuedInputs refer grain (queue/out queue 0ms conflict refresh decide; not register treated as '[]'). */
   lastQueuedLiveKey: string | undefined
-  /** 最近一次已推送摘要的语义指纹（status|doing|pendingAsk；相同不重发）。 */
+  /** most near once already push summary semantics refer grain (status|doing|pendingAsk; identical do not heavy). */
   lastSummaryKey: string | undefined
-  /** 每次观察独立令牌；停观即随镜像删除，迟到异步结果不得复活状态。 */
+  /** each time observe independent token; stop observe i.e. follow mirror delete, late to async result must not re- state. */
   observeGeneration: symbol | undefined
-  /** 最新 assistant 文本缓存（getLastAssistantText 数据源）。 */
+  /** most new assistant text cache (getLastAssistantText data source). */
   lastAssistant: { entryId: number; text: string } | undefined
-  /** 待答 Ask 计数（blocked 态派生与 CAS 水位线）。 */
+  /** await answer Ask counter (blocked state derive and CAS watermark line). */
   pendingAskCount: number
 }
 
@@ -135,7 +135,7 @@ export function createConversationMirror(): ConversationMirror {
   }
 }
 
-/** 从 helm.input entry / inbox 载荷重建 ConversationInput（缺省字段不伪造）。 */
+/** from helm.input entry / inbox payload rebuild ConversationInput(default field do not fabricate). */
 export function inputFromMeta(meta: HelmInputMeta): ConversationInput {
   return {
     id: meta.id!,
@@ -143,8 +143,8 @@ export function inputFromMeta(meta: HelmInputMeta): ConversationInput {
     origin: meta.origin ?? 'human',
     ...(typeof meta.whenBusy === 'string' ? { whenBusy: meta.whenBusy } : {}),
     createdAt: meta.createdAt ?? Date.now(),
-    // meta 从 entry.data 重建贯通回 turn_settled payload（边界已校验
-    // 为普通对象；非对象形状不伪造，直接丢弃该字段）。
+    // meta from entry.data rebuild throughout through back turn_settled payload(boundary already validate
+    // is ordinary object; non- object shape do not fabricate, directly discard the field).
     ...(isPlainRecord(meta.meta) ? { meta: meta.meta } : {}),
     ...(Array.isArray(meta.attachments)
       ? { attachments: meta.attachments as ConversationInput['attachments'] }
@@ -152,7 +152,7 @@ export function inputFromMeta(meta: HelmInputMeta): ConversationInput {
   }
 }
 
-/** 合并两份同 input.id 的元数据：重建值优先，内存中更完整的字段不丢失。 */
+/** merge two same input.id metadata: rebuild value takes precedence, memory in more complete field without losing. */
 export function mergeInputMeta(existing: ConversationInput, rebuilt: ConversationInput): ConversationInput {
   return {
     ...rebuilt,
@@ -166,7 +166,7 @@ export function mergeInputMeta(existing: ConversationInput, rebuilt: Conversatio
   }
 }
 
-/** 普通对象判定（null 与非对象不算；类实例不算）。 */
+/** ordinary object decide (null and non- object do not compute; class instance do not compute). */
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object') return false
   const proto = Object.getPrototypeOf(value)

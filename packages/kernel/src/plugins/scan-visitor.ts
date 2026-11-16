@@ -1,17 +1,17 @@
 /**
- * scan-visitor.ts：`<dataDir>/plugins/` 目录扫描公共访问器。
+ * scan-visitor.ts:`<dataDir>/plugins/` directory scan public access.
  *
- * loadExternalPlugins（启动全量扫描）与 rescanExternalPlugins（增量重扫描）
- * 的目录循环约 80% 重复（跳过隐藏/builtin 数据目录、registerPluginTsRoot
- * 引用计数、入口解析、代际导入、register/registerScanFailure、finally 释放），
- * 统一收敛为 visitExternalPluginDirs；两 caller 的差异点经 ScanVisitPolicy
- * 参数化，行为与收敛前逐分支等价：
- * - 目录名同名已注册插件的快速跳过：仅 rescan（load 无此捷径——同名目录
- *   需真实导入定义后在 id 冲突分支处置）；
- * - 导入定义的 id 已注册：load 视为冲突抛 plugin_already_registered（交由
- *   故障登记降级），rescan 静默跳过计 skipped（不重载、不干扰）；
- * - 每个被跳过的目录（纯数据目录 / 已注册目录）回调 onSkipped：仅 rescan
- *   计数，load 无操作。
+ * loadExternalPlugins(start all amount scan) and rescanExternalPlugins(incremental heavy scan)
+ * directory loop about 80% duplicate (skip hide/builtin data directory,registerPluginTsRoot
+ * reference counter, entry parse, proxy boundary import,register/registerScanFailure,finally release),
+ * unify converge is visitExternalPluginDirs; two caller difference point via ScanVisitPolicy
+ * parameter, behavior and converge before one by one branch etc. price:
+ * - directory name same name registered plugin fast skip: only rescan(load without this quick path - - same name directory
+ *   must real import define after in id conflict branch where placement);
+ * - import define id registered:load treated as conflict throw plugin_already_registered(hand over by
+ *   fault register fall back),rescan static default skip count skipped(do not reload, do not interference);
+ * - each by skip directory (pure data directory / registered directory) call back onSkipped: only rescan
+ *   counter,load without operation.
  */
 import { readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -32,9 +32,9 @@ import {
 import { readManifestMeta } from './plugin-manifest.js';
 
 /**
- * 扫描导入：先普通导入（兼容 top-level await；首次加载无缓存开销）；
- * 若返回的 id 已被占用（可能是旧扫描的 ESM 缓存定义），换新一代代际导入
- * 重试拿最新源码（用户可能已修复/换 id 重写目录）。仍冲突才真冲突。
+ * scan import: first ordinary import (compatibility top-level await; first time load without cache overhead);
+ * if return id already by occupy (may is old scan ESM cache define), swap new one proxy proxy boundary import
+ * retry take most new source code (user may already fix/swap id heavy write directory). still conflict only then true conflict.
  */
 async function importScanDefinition(
   dirPath: string,
@@ -48,8 +48,8 @@ async function importScanDefinition(
 }
 
 /**
- * 故障插件占位 ID：优先 manifest 合法 id；否则目录名归一化（非法字符转 _，
- * 不与已注册 id 冲突时直接用，冲突时追加目录名后缀）。
+ * fault plugin occupy ID: takes precedence manifest legal id; otherwise directory name archive one (illegal character rotate _,
+ * do not and registered id conflict when directly use, conflict when append directory name suffix).
  */
 function resolveFailedPluginId(
   dirPath: string,
@@ -58,8 +58,8 @@ function resolveFailedPluginId(
 ): { id: string; meta: Record<string, unknown> } {
   const meta = readManifestMeta(dirPath);
   const manifestId = meta['id'];
-  // 外部插件 id 禁止冒号（冒号仅作 builtin: 命名空间分隔符，与受管插件包
-  // PLUGIN_ID_PATTERN 对齐；否则源目录与 ctx.dataDir 会分叉，见 plugin-dir-name.ts）
+  // external plugin id forbidden smoke number (smoke number only act builtin: naming empty between isolate symbol, and managed plugin package
+  // PLUGIN_ID_PATTERN align; otherwise source directory and ctx.dataDir will fork, see plugin-dir-name.ts)
   if (
     typeof manifestId === 'string' &&
     /^[A-Za-z0-9_-]+$/.test(manifestId) &&
@@ -77,8 +77,8 @@ function resolveFailedPluginId(
 }
 
 /**
- * 单目录故障登记：归一异常为 PluginDiagnosticError 后调用 registerFailed；
- * registerFailed 不可用（测试 stub）时保持旧行为上抛。
+ * single directory fault register: archive one exception is PluginDiagnosticError after invoke registerFailed;
+ * registerFailed unavailable (test stub) when keep old behavior on throw.
  */
 async function registerScanFailure(
   plugins: ExternalPluginHost,
@@ -113,35 +113,35 @@ async function registerScanFailure(
   existingIds.add(id);
 }
 
-/** load 与 rescan 的目录处置差异（见文件头）。 */
+/** load and rescan directory where placement difference (see file head). */
 export interface ScanVisitPolicy {
-  /** 目录名与已注册 id 同名时快速跳过（rescan：不重载；load 无此捷径）。 */
+  /** directory name and registered id same name when fast skip (rescan: do not reload;load without this quick path). */
   fastSkipDirNameEqualsId: boolean;
-  /** 导入定义的 id 已注册：'fail' 抛冲突错误（load，交由故障登记）；'skip' 静默跳过（rescan）。 */
+  /** import define id registered:'fail' throw conflict error (load, hand over by fault register);'skip' static default skip (rescan). */
   alreadyRegistered: 'fail' | 'skip';
-  /** 每个被跳过的目录回调一次（rescan 计 skipped；load 无操作）。 */
+  /** each by skip directory call back once (rescan count skipped;load without operation). */
   onSkipped(): void;
 }
 
-/** visitExternalPluginDirs 入参。 */
+/** visitExternalPluginDirs reference. */
 export interface ScanVisitParams {
   dataDir: string;
   plugins: ExternalPluginHost;
-  /** 已注册 id 集合（调用方预填；访问器随注册成功追加，供后续目录判定）。 */
+  /** registered id set (caller pre- fill; access follow register succeeded append, supply after continue directory decide). */
   existingIds: Set<string>;
-  /** 成功注册的 id 追加目标（调用方收集返回值）。 */
+  /** succeeded register id append target (caller collect return value). */
   registered: string[];
-  /** 后端 TS 转译函数（宿主构建端口注入；未接线时 TS 插件在转译阶段显式拒绝）。 */
+  /** backend TS transpile function (host build port inject; not connect line when TS plugin in transpile phase explicit reject). */
   transform: BackendTsTransformFn | undefined;
   policy: ScanVisitPolicy;
 }
 
 /**
- * 扫描 `<dataDir>/plugins/` 全部外部插件目录并按 policy 处置。单目录故障
- * （scan / load 阶段）经 registerScanFailure 登记为 failed 占位，不阻断其他
- * 目录加载；register 期的 define / enable 故障由 PluginHost 的 isolateFailure
- * 机制降级为 failed 条目，同样不中断循环。plugins 目录不存在（ENOENT）时
- * 静默返回（两 caller 均视为空结果）。
+ * scan `<dataDir>/plugins/` all external plugin directory and by policy where placement. single directory fault
+ * (scan / load phase) via registerScanFailure register is failed occupy, do not block assert other
+ * directory load;register phase define / enable fault by PluginHost  isolateFailure
+ * mechanism fall back is failed item, same without interruption loop.plugins directory missing (ENOENT) when
+ * static default return (two caller all treated as empty result).
  */
 async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
   const { dataDir, plugins, existingIds, registered, transform, policy } = params;
@@ -154,36 +154,36 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
     throw err;
   }
   for (const entry of entries) {
-    // 内置插件数据目录（builtin%3Aprofile 等）与隐藏目录一律不参与外部插件发现
+    // built-in plugin data directory (builtin%3Aprofile etc.) and hide directory one rule does not participate external plugin discover
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith('.') || isBuiltinPluginDataDirName(entry.name)) continue;
     const dirPath = resolve(pluginsDir, entry.name);
     if (policy.fastSkipDirNameEqualsId && existingIds.has(entry.name)) {
-      policy.onSkipped(); // 目录名同名已注册插件：快速跳过（不重载）
+      policy.onSkipped(); // directory name same name registered plugin: fast skip (do not reload)
       continue;
     }
-    // 为插件目录启用后端 TS 转译（含运行期动态 import 的相对 TS 依赖）。
-    // 任一失败路径（导入 / id 冲突 / 宿主注册）都释放计数；成功注册则根常驻
-    // 本进程：插件运行期动态 import 依赖转译可用，已加载模块在 ESM 缓存中保持
-    // identity。因此插件停用/卸载不释放根、不卸载已加载模块（同进程内重新
-    // 注册不重复初始化）；释放仅发生在加载失败回退时。
+    // is plugin directory enable backend TS transpile (contains run phase motion state import each other for TS dependency).
+    // any one failed path (import / id conflict / host register) all release counter; succeeded register then common resident
+    // this process: plugin run phase motion state import dependency transpile available, already load module in ESM cache in keep
+    // identity. therefore plugin deactivate/unload do not release, do not unload already load module (same process inside re-
+    // register does not repeat initialize); release only occur in failed to load fall back when.
     const releaseTsRoot = registerPluginTsRoot(dirPath, { transform });
     let committed = false;
     try {
       const entryPath = await resolvePluginEntry(dirPath);
       if (entryPath === undefined) {
-        policy.onSkipped(); // 纯插件数据目录：静默跳过
+        policy.onSkipped(); // pure plugin data directory: static default skip
         continue;
       }
       const definition = await importScanDefinition(dirPath, entryPath, existingIds);
       if (existingIds.has(definition.id)) {
         if (policy.alreadyRegistered === 'skip') {
-          policy.onSkipped(); // 目录名与 id 不一致但已注册：跳过（不重载）
+          policy.onSkipped(); // directory name and id inconsistent but registered: skip (do not reload)
           continue;
         }
         throw new HelmError(
           'plugin_already_registered',
-          `外部插件 ${dirPath} 的 id 与已注册插件冲突: ${definition.id}`,
+          `external plugin ${dirPath}  id and registered plugin conflict: ${definition.id}`,
           409,
           { dirPath, id: definition.id },
         );
@@ -194,8 +194,8 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
       committed = true;
       registered.push(normalized.id);
     } catch (err) {
-      // 单目录故障降级登记（scan / load 阶段；register 期的 define / enable
-      // 故障已被 isolateFailure 吸收不会到这）：不阻断其他目录。
+      // single directory fault fall back register (scan / load phase;register phase define / enable
+      // fault already by isolateFailure absorb will not to this): do not block assert other directory.
       await registerScanFailure(plugins, dirPath, entry.name, existingIds, 'scan', err);
     } finally {
       if (!committed) releaseTsRoot();
@@ -204,11 +204,11 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
 }
 
 /**
- * 扫描 `<dataDir>/plugins/` 并动态加载全部外部插件（默认停用注册）。
- * 返回本次成功注册的外部插件 id 列表（按目录扫描顺序）。
- * 单目录故障（scan / load 阶段）经 registerFailed 登记为 failed 占位，
- * 不阻断其他目录加载；register 期的 define / enable 故障由 PluginHost 的
- * isolateFailure 机制降级为 failed 条目，同样不中断循环。
+ * scan `<dataDir>/plugins/` and motion state load all external plugin (by default deactivate register).
+ * return this time succeeded register external plugin id list (by directory scan order).
+ * single directory fault (scan / load phase) via registerFailed register is failed occupy,
+ * do not block assert other directory load;register phase define / enable fault by PluginHost 
+ * isolateFailure mechanism fall back is failed item, same without interruption loop.
  */
 export async function loadExternalPlugins(dataDir: string, plugins: ExternalPluginHost): Promise<string[]> {
   const registered: string[] = [];
@@ -230,9 +230,9 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
 }
 
 /**
- * 增量重扫描插件目录：只注册「当前未注册」的外部插件（默认 disabled，
- * enabled 恢复逻辑与启动扫描一致——经持久化 pluginEnabled）；已注册插件不重载、
- * 不去重、不干扰。返回新注册 id 列表与跳过的目录计数（含纯数据目录/已注册目录）。
+ * incremental heavy scan plugin directory: only register when before not registered external plugin (by default disabled,
+ * enabled restore logic and start scan consistent - - via persist pluginEnabled); registered plugin do not reload,
+ * do not dedupe, do not interference. return new register id list and skip directory counter (contains pure data directory/registered directory).
  */
 export async function rescanExternalPlugins(
   dataDir: string,

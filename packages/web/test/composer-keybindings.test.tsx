@@ -303,7 +303,7 @@ test('Ctrl+L：分屏匹配 data-helm-panel 精准开关 ModelPicker，自动聚
 
   const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
   assert.ok(popover, 'ModelPicker 浮层已渲染')
-  const searchInput = popover.querySelector<HTMLInputElement>('input[aria-label="搜索模型"]')
+  const searchInput = popover.querySelector<HTMLInputElement>('input[aria-label="Search models"]')
   assert.ok(searchInput !== null, '搜索输入框存在')
   assert.ok(document.activeElement === searchInput, '打开时自动聚焦搜索输入框（非首项重置按钮）')
 
@@ -350,7 +350,7 @@ test('Ctrl+L：分屏匹配 data-helm-panel 精准开关 ModelPicker，自动聚
   window.addEventListener('keydown', escWindowSpy)
   try {
     await act(async () => {
-      document.body.querySelector('input[aria-label="搜索模型"]')!.dispatchEvent(
+      document.body.querySelector('input[aria-label="Search models"]')!.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
       )
     })
@@ -646,8 +646,8 @@ test('ComposerSendControls：移动端忙时有输入显式渲染 [插话] 与 [
   assert.ok(mobileHost.querySelector('.composer-split-trigger') === null, '移动端不渲染窄缝下拉触发器')
   const steerBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-steer-btn')
   const queueBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-queue-btn')
-  assert.ok(steerBtn && steerBtn.textContent?.includes('插话'), '移动端显示 [插话] 按钮')
-  assert.ok(queueBtn && queueBtn.textContent?.includes('排队'), '移动端显示 [排队] 按钮')
+  assert.ok(steerBtn && steerBtn.textContent?.includes('Steer'), '移动端显示 [插话] 按钮')
+  assert.ok(queueBtn && queueBtn.textContent?.includes('Queue'), '移动端显示 [排队] 按钮')
 
   await act(async () => {
     steerBtn.click()
@@ -760,7 +760,7 @@ test('Standby 待命页：继承全局默认模型 glm-5.3·max，支持 Shift+T
   const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
   assert.ok(popover !== null, 'split Ctrl+L 打开待命模型浮层')
   assert.ok(popover.querySelector('button.composer-model-refresh-btn') !== null, '待命模型浮层补齐动态刷新按钮')
-  assert.ok(document.activeElement === popover.querySelector('input[aria-label="搜索模型"]'), '自动聚焦搜索输入框')
+  assert.ok(document.activeElement === popover.querySelector('input[aria-label="Search models"]'), '自动聚焦搜索输入框')
 
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
@@ -910,8 +910,8 @@ test('ModelPickerControl 运行时过滤不可用与禁用模型，刷新按钮�
           selectedModel={undefined}
           activeThinkingLevel="off"
           resetLabel="跟随默认"
-          resetTitle="恢复默认"
-          buttonTitle="切换模型"
+          resetTitle="Restore defaults"
+          buttonTitle="Switch model"
           onPickModel={() => {}}
           onResetDefault={() => {}}
           onPickThinking={() => {}}
@@ -938,7 +938,7 @@ test('ModelPickerControl 运行时过滤不可用与禁用模型，刷新按钮�
     })
     assert.equal(refreshPostCount, 1, '点击刷新按钮触发 POST /api/models/refresh')
     assert.equal(refreshAssetsCount, 1, '刷新完成后同步 refreshAssets')
-    assert.equal(notices.some((n) => n.title === '已刷新模型目录'), true)
+    assert.equal(notices.some((n) => n.title === 'Model catalog refreshed'), true)
   } finally {
     globalThis.fetch = originalFetch
   }

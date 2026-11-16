@@ -1,20 +1,20 @@
 /**
- * 节点透传隧道的 HTTP/HTTPS 适配层：openTunnel（任意 TCP Duplex）之上的
- * fetch 适配器。
+ * node pass-through tunnel HTTP/HTTPS adapt layer:openTunnel(any TCP Duplex) of on
+ * fetch adapt.
  *
- * - http:  隧道 Duplex 直接作为 node:http.request 的 createConnection；
- * - https: 在同一隧道 Duplex 上叠 node:tls.connect（servername 按目标
- *   hostname 设置，证书校验遵循 Node 默认 CA/verify 链），再把 TLS 流
- *   交给 node:http.request——绝不把裸 Duplex 塞给 https.request 假装 TLS；
- * - 不聚合 request/response body：请求体流式转发，响应体以
- *   Readable.toWeb(res) 交还（SSE/流式响应完整透传）；
- * - 隧道（Duplex）寿命绑定 Response body：EOF/cancel/error/连接关闭 才
- *   销毁，响应头到达绝不提前关隧道；HEAD/204/304 body 为 null 并立即释放；
- *   body 被弃置（不读不取消）时由 res close/error 与 GC 兜底销毁；
- * - AbortSignal 传播：请求期取消销毁 req 与隧道（duplex 的销毁驱动
- *   Response body 端 error/cancel）；
- * - 4xx/5xx 不是传输失败：原样构造 Response（含错误体），只有建隧道
- *   失败、socket 异常中断、超时才抛 HelmError。
+ * - http:  tunnel Duplex directly as node:http.request  createConnection;
+ * - https: in the same tunnel Duplex on stack node:tls.connect(servername by target
+ *   hostname settings, certificate validate follow Node by default CA/verify chain), again TLS stream
+ *   hand over to node:http.request- - never bare Duplex stuff to https.request pretend TLS;
+ * - do not aggregate request/response body: request body streaming forwarding, response body with
+ *   Readable.toWeb(res) hand over also (SSE/streaming response complete pass-through);
+ * - tunnel (Duplex) lifetime bind set Response body:EOF/cancel/error/connect close only then
+ *   destroy, response head reach never mention before closure tunnel;HEAD/204/304 body is null and immediately release;
+ *   body by abandon placement (do not read do not cancel) when by res close/error and GC fall back destroy;
+ * - AbortSignal pass broadcast: request phase cancel destroy req and tunnel (duplex destroy drive
+ *   Response body end error/cancel);
+ * - 4xx/5xx is not transfer failed: original construct Response(contains error body), only create tunnel
+ *   failed,socket exception interrupt, timeout only then throw HelmError.
  */
 
 import http from 'node:http'
@@ -24,29 +24,29 @@ import { Readable } from 'node:stream'
 import type { Duplex } from 'node:stream'
 import { HelmError } from '@helm/protocol'
 
-/** 本地（local 节点）TCP 直连缺省预算：与远端 registry.openTunnel 超时一致。 */
+/** local (local node)TCP direct connect default pre- compute: and remote registry.openTunnel timeout consistent. */
 const LOCAL_TUNNEL_CONNECT_TIMEOUT_MS = 10_000
 
 /**
- * 弃置 body 兜底：调用方拿到 Response 后既不读也不 cancel（如只查
- * status 的健康探测）时，pull/cancel 永不发生，隧道与调用方 signal 上的
- * abort 监听会滞留（local 滞留 localTunnels、remote 滞留 activeTunnels
- * 直到 dispose）。连接关闭路径已由 res close/error 监听确定性销毁；本
- * 注册表只覆盖「上游连接永不断开 + body 被 GC」的残余场景——best-effort，
- * 不保证及时（不引入会误杀 SSE 慢消费的空闲超时；Node 内部引用链若阻止
- * body 流回收则仍滞留至连接终结）。
+ * abandon placement body fall back: caller gets Response after since do not read also do not cancel(such as only inspect
+ * status health probe) when,pull/cancel forever do not occur, tunnel and caller signal on
+ * abort listen will lag (local lag localTunnels,remote lag activeTunnels
+ * until dispose). connect close path already by res close/error listen determinism destroy; this
+ * register table only override upstream connect forever do not disconnect + body by GCleftover remaining scenario - -best-effort,
+ * do not guarantee and when (does not introduce will mistakenly kill SSE slow consume idle timeout;Node internal reference chain if block stop
+ * body stream reclaim then still lag until connect final).
  */
 const abandonedBodies = new FinalizationRegistry<() => void>((settle) => {
   settle()
 })
 
 /**
- * local 节点的隧道实现：Hub 进程内 net.connect 直连（任意 host:port）。
- * abort/超时/错误显式抛 HelmError 并保证 socket 释放（绝不半泄漏）。
+ * local node tunnel implement:Hub process inside net.connect direct connect (any host:port).
+ * abort/timeout/error explicit throw HelmError and guarantee socket release (never half leak leak).
  */
 export function connectLocalTunnel(host: string, port: number, signal?: AbortSignal): Promise<Duplex> {
   if (signal?.aborted) {
-    return Promise.reject(new HelmError('aborted', '隧道建立已取消', 499, { host, port }))
+    return Promise.reject(new HelmError('aborted', 'tunnel establish cancelled', 499, { host, port }))
   }
   return new Promise<Duplex>((resolve, reject) => {
     const socket = net.connect({ host, port })
@@ -54,7 +54,7 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
     const timer = setTimeout(() => {
       finishErr(new HelmError(
         'node_tunnel_timeout',
-        `连接 ${host}:${port} 超时（${LOCAL_TUNNEL_CONNECT_TIMEOUT_MS}ms）`,
+        `connect ${host}:${port} timeout (${LOCAL_TUNNEL_CONNECT_TIMEOUT_MS}ms)`,
         504,
         { host, port },
       ))
@@ -76,12 +76,12 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
       reject(error)
     }
     const onAbort = (): void => {
-      finishErr(new HelmError('aborted', '隧道建立已取消', 499, { host, port }))
+      finishErr(new HelmError('aborted', 'tunnel establish cancelled', 499, { host, port }))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
     socket.once('connect', () => {
       if (signal?.aborted) {
-        finishErr(new HelmError('aborted', '隧道建立已取消', 499, { host, port }))
+        finishErr(new HelmError('aborted', 'tunnel establish cancelled', 499, { host, port }))
         return
       }
       finishOk()
@@ -89,7 +89,7 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
     socket.once('error', (error: Error) => {
       finishErr(new HelmError(
         'node_tunnel_connect_failed',
-        `连接 ${host}:${port} 失败：${error.message}`,
+        `connect ${host}:${port} failed:${error.message}`,
         502,
         { host, port },
       ))
@@ -98,16 +98,16 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
 }
 
 /**
- * https：在已建立的隧道 TCP Duplex 上叠 TLS 握手（servername 按目标
- * hostname 驱动 SNI 与证书校验），返回 TLSSocket。绝不把裸 Duplex 交给
- * https.request 伪装 TLS。
+ * https: in already establish tunnel TCP Duplex on stack TLS grasp manually (servername by target
+ * hostname drive SNI and certificate validate), return TLSSocket. never bare Duplex hand over to
+ * https.request disguise TLS.
  */
 function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Promise<Duplex> {
   if (signal?.aborted) {
-    return Promise.reject(new HelmError('aborted', 'TLS 握手已取消', 499, { host }))
+    return Promise.reject(new HelmError('aborted', 'TLS grasp manually cancelled', 499, { host }))
   }
   return new Promise<Duplex>((resolve, reject) => {
-    // IP 参与证书身份校验，但不能放进仅允许 DNS 名称的 SNI 扩展。
+    // IP reference and certificate identity validate, but cannot put enter only allows DNS name SNI extend.
     const secure = tls.connect({ socket: tunnel, host, ...(net.isIP(host) === 0 ? { servername: host } : {}) })
     let settled = false
     const cleanup = (): void => {
@@ -122,11 +122,11 @@ function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Prom
       reject(error)
     }
     const timer = setTimeout(() => {
-      fail(new HelmError('node_tunnel_timeout', `TLS 握手超时（${host}）`, 504, { host }))
+      fail(new HelmError('node_tunnel_timeout', `TLS grasp manually timeout (${host})`, 504, { host }))
     }, LOCAL_TUNNEL_CONNECT_TIMEOUT_MS)
     timer.unref?.()
     const onAbort = (): void => {
-      fail(new HelmError('aborted', 'TLS 握手已取消', 499, { host }))
+      fail(new HelmError('aborted', 'TLS grasp manually cancelled', 499, { host }))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
     secure.once('secureConnect', () => {
@@ -138,32 +138,32 @@ function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Prom
     secure.once('error', (error: Error) => {
       fail(new HelmError(
         'node_tunnel_connect_failed',
-        `TLS 握手失败（${host}）：${error.message}`,
+        `TLS grasp manually failed (${host}):${error.message}`,
         502,
         { host },
       ))
     })
     secure.once('close', () => {
-      fail(new HelmError('node_tunnel_closed', `TLS 握手期间连接关闭（${host}）`, 502, { host }))
+      fail(new HelmError('node_tunnel_closed', `TLS grasp manually during connect close (${host})`, 502, { host }))
     })
     if (signal?.aborted) onAbort()
   })
 }
 
-/** tunnelRequestBody：body 直接流式转发（不聚合）；GET/HEAD/null 无 body。 */
+/** tunnelRequestBody:body directly streaming forwarding (do not aggregate);GET/HEAD/null without body. */
 function pipeRequestBody(request: Request, req: http.ClientRequest): void {
   if (request.body === null) { req.end(); return }
   const nodeStream = Readable.fromWeb(request.body as Parameters<typeof Readable.fromWeb>[0])
   nodeStream.on('error', (error) => {
     req.destroy(error instanceof Error ? error : new Error(String(error)))
   })
-  // 上游提前响应或请求被取消时，停止读取调用者的上传流。
+  // upstream mention before response or request by cancel when, stop read invoke upload stream.
   req.once('close', () => nodeStream.destroy())
   nodeStream.pipe(req)
 }
 
-/** 经节点透传隧道执行单次 HTTP(S) 请求。openTunnel 是任意 TCP 原语，本函数
- * 只负责在其上适配 HTTP(S) 语义；生命周期：duplex 寿命绑定 Response body。 */
+/** via node pass-through tunnel execute single time HTTP(S) request.openTunnel is any TCP original language, this function
+ * only negative duty in its on adapt HTTP(S) semantics; lifecycle:duplex lifetime bind set Response body. */
 export async function tunnelFetch(
   openTunnel: (target: { host?: string; port: number }, signal?: AbortSignal) => Promise<Duplex>,
   nodeId: string,
@@ -173,7 +173,7 @@ export async function tunnelFetch(
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new HelmError(
       'node_tunnel_connect_failed',
-      `节点 fetch 仅支持 http/https（收到 ${url.protocol}）`,
+      `node fetch only support http/https(receives ${url.protocol})`,
       400,
       { nodeId, url: request.url },
     )
@@ -181,7 +181,7 @@ export async function tunnelFetch(
   const isHttps = url.protocol === 'https:'
   const defaultPort = isHttps ? 443 : 80
   const port = url.port === '' ? defaultPort : Number(url.port)
-  const hostname = url.hostname.replace(/^\[|\]$/g, '') // IPv6 文本去括号（net.connect 接受无括号形式）
+  const hostname = url.hostname.replace(/^\[|\]$/g, '') // IPv6 text remove parentheses (net.connect accept without parentheses form)
   const signal = request.signal ?? undefined
   signal?.throwIfAborted()
   let tcp: Duplex | undefined
@@ -191,7 +191,7 @@ export async function tunnelFetch(
     if (error instanceof HelmError) throw error
     throw new HelmError(
       'node_tunnel_connect_failed',
-      `节点 ${nodeId} 隧道建立失败：${error instanceof Error ? error.message : String(error)}`,
+      `node ${nodeId} tunnel establish failed:${error instanceof Error ? error.message : String(error)}`,
       502,
       { nodeId, url: request.url },
     )
@@ -201,12 +201,12 @@ export async function tunnelFetch(
     try {
       tunnel = await tlsOverTunnel(tcp, hostname, signal)
     } catch (error) {
-      // tls.connect 已销毁 secure；底层 tcp 需显式释放（防半泄漏）。
+      // tls.connect already destroy secure; underlying tcp must explicit release (guard against half leak leak).
       tcp.destroy()
       if (error instanceof HelmError) throw error
       throw new HelmError(
         'node_tunnel_connect_failed',
-        `节点 ${nodeId} TLS 建立失败：${error instanceof Error ? error.message : String(error)}`,
+        `node ${nodeId} TLS establish failed:${error instanceof Error ? error.message : String(error)}`,
         502,
         { nodeId, url: request.url },
       )
@@ -221,20 +221,20 @@ export async function tunnelFetch(
     }
     const headers: Record<string, string> = {}
     request.headers.forEach((value, name) => {
-      // host/connection/content-length 由 node:http 重建；其余单值复制。
+      // host/connection/content-length by node:http rebuild; the rest single value duplicate.
       if (name === 'host' || name === 'connection' || name === 'content-length') return
       headers[name] = value
     })
-    // 隧道是单次短生命周期连接：显式要求响应后关闭（防上游 keep-alive
-    // 让隧道 duplex 悬挂）；同时禁用压缩（node:http 不会自动解压，保留
-    // 透传语义，插件拿到的就是原始字节）。
+    // tunnel is single time short lifecycle connect: explicit want seek response after close (guard against upstream keep-alive
+    // let tunnel duplex pending); also disable compress (node:http will not automatically decompress, keep
+    // pass-through semantics, plugin gets is exactly original byte).
     headers['connection'] = 'close'
     headers['accept-encoding'] = headers['accept-encoding'] ?? 'identity'
     let responseSettled = false
     const req = http.request(
       {
-        // createConnection 与缺省 agent 组合直接使用此流；不能使用
-        // agent:false，它会另外创建 Agent 并要求流实现 net.Socket 方法。
+        // createConnection and default agent combine directly use this stream; cannot use
+        // agent:false, it will additionally create Agent and want seek stream implement net.Socket method.
         createConnection: () => tunnel,
         agent: undefined,
         protocol: 'http:',
@@ -251,25 +251,25 @@ export async function tunnelFetch(
           if (value === undefined) continue
           for (const v of Array.isArray(value) ? value : [value]) outHeaders.append(name, v)
         }
-        // HEAD/204/304 禁止 body（new Response(stream, {status:204}) 会 throw）。
+        // HEAD/204/304 forbidden body(new Response(stream, {status:204}) will throw).
         const nullBody = request.method === 'HEAD' || status === 204 || status === 304
         if (nullBody) {
-          res.resume() // 丢弃（按 RFC 本就不该有 body）
+          res.resume() // discard (by RFC this then do not the has body)
           signal?.removeEventListener('abort', onAbort)
           responseSettled = true
           resolve(new Response(null, { status, headers: outHeaders }))
-          // 无 body 可等：立即释放隧道。
+          // without body can etc.: immediately release tunnel.
           tunnel.destroy()
           return
         }
-        // 用 pull 适配保留 Web Stream 背压，并把隧道寿命绑定到 body：
-        // EOF/cancel/error 才销毁；响应头到达绝不提前 destroy（SSE 必须
-        // 完整透传）。
+        // use pull adapt keep Web Stream back press, and tunnel lifetime bind set to body:
+        // EOF/cancel/error only then destroy; response head reach never mention before destroy(SSE must
+        // complete pass-through).
         const source = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>
         const reader = source.getReader()
-        // 终结状态独立于 bodyStream 声明：FinalizationRegistry 的 held 值
-        //（settle 闭包）绝不能引用 bodyStream，否则注册表会把 target 强持在
-        // 手里，GC 永不发生、兜底永不触发。
+        // final state independent at bodyStream declaration:FinalizationRegistry  held value
+        //(settle closed package) never can reference bodyStream, otherwise register table will target strong hold in
+        // manually in,GC forever do not occur, fall back forever does not trigger.
         const state = { ended: false, tunnel, signal, onAbort }
         const settle = (): void => {
           if (state.ended) return
@@ -306,11 +306,11 @@ export async function tunnelFetch(
           },
         })
         abandonedBodies.register(bodyStream, settle, bodyStream)
-        // 连接关闭即终结：close 时隧道不再有新数据——complete=true 的剩余
-        // 字节已全部进入 res 缓冲（destroy 不影响后续读取），传输中断则 body
-        // 再无干净终态。没人拉取时（如只查 status 的健康探测）这是唯一的
-        // 确定性销毁点，不再等永不发生的 pull/cancel。error 监听同时防未处理
-        // 'error' 崩进程（toWeb 的监听时序不做假设）。
+        // connect close i.e. final:close when tunnel no longer has new data - -complete=true remaining
+        // byte already all enter res buffer (destroy does not affect after continue read), transfer interrupt then body
+        // again without clean terminal state. not person pull when (such as only inspect status health probe) this is unique
+        // determinism destroy point, no longer etc. forever do not occur pull/cancel.error listen also guard against not handle
+        // 'error' crash process (toWeb listen when order does not assume).
         res.once('error', finishBody)
         res.once('close', finishBody)
         responseSettled = true
@@ -321,20 +321,20 @@ export async function tunnelFetch(
       if (responseSettled) return
       failTunnel(
         'node_tunnel_closed',
-        `节点 ${nodeId} 隧道请求失败：${error instanceof Error ? error.message : String(error)}`,
+        `node ${nodeId} tunnel request failed:${error instanceof Error ? error.message : String(error)}`,
         502,
       )
     })
     const onAbort = (): void => {
       req.destroy()
-      // duplex 的销毁驱动 Response body 端的 error/cancel。
-      tunnel.destroy(new HelmError('aborted', '节点 fetch 已取消', 499, { nodeId, url: request.url }))
-      reject(new HelmError('aborted', '节点 fetch 已取消', 499, { nodeId, url: request.url }))
+      // duplex destroy drive Response body end error/cancel.
+      tunnel.destroy(new HelmError('aborted', 'node fetch cancelled', 499, { nodeId, url: request.url }))
+      reject(new HelmError('aborted', 'node fetch cancelled', 499, { nodeId, url: request.url }))
     }
     if (signal?.aborted) { onAbort(); return }
     signal?.addEventListener('abort', onAbort, { once: true })
     req.once('close', () => {
-      // 响应 body 可能仍在消费；其终结由 finishBody 移除 abort 监听。
+      // response body may still in consume; its final by finishBody remove abort listen.
       if (!responseSettled) signal?.removeEventListener('abort', onAbort)
     })
     if (request.method === 'GET' || request.method === 'HEAD' || request.body === null) req.end()

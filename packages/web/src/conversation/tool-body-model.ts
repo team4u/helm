@@ -122,8 +122,8 @@ export function inputKvEntries(input: unknown): KvEntry[] {
 
 /** 服务端截断预览说明：总量仅采用服务端计数（totalLines/totalChars），均缺失时只说明预览性质。 */
 export function truncationPreviewNote(t: ToolResultTruncation): string {
-  const total = t.totalLines !== undefined ? `全文 ${t.totalLines} 行` : t.totalChars !== undefined ? `全文 ${t.totalChars} 字符` : ''
-  return total === '' ? '输出超长，服务端仅传回预览' : `输出超长，服务端仅传回预览（${total}）`
+  const total = t.totalLines !== undefined ? `${t.totalLines} lines in total` : t.totalChars !== undefined ? `${t.totalChars} chars in total` : ''
+  return total === '' ? 'Output too long; the server returned a preview only' : `Output too long; the server returned a preview only (${total})`
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ export function toolRowStats(tool: ToolTrace): ToolRowStats | undefined {
         return {
           addCount: check.value.diff.addedLines,
           removeCount: check.value.diff.removedLines,
-          title: '已应用差异统计',
+          title: 'Applied diff stats',
         }
       }
       return undefined
@@ -236,7 +236,7 @@ export function toolRowStats(tool: ToolTrace): ToolRowStats | undefined {
         return {
           addCount: pending.addedLines,
           removeCount: pending.removedLines,
-          title: '待执行变更片段统计（尚未应用）',
+          title: 'Pending change hunks (not applied yet)',
         }
       }
     }
@@ -245,7 +245,7 @@ export function toolRowStats(tool: ToolTrace): ToolRowStats | undefined {
   if (tool.toolName === 'write') {
     const content = stringField(asRecord(tool.input), 'content')
     if (content === undefined) return undefined
-    return { text: `${countLines(content)} 行`, title: '写入内容行数' }
+    return { text: `${countLines(content)} lines`, title: 'Written lines' }
   }
   return undefined
 }

@@ -1,51 +1,51 @@
 /**
- * spawn 请求与 Profile 边界校验：agentType 解析（herdr:<kind>[@nodeId] 与
- * Profile.runtime.kind=herdr 双入口）、nodeId 优先级链、cwd 解析链、env 与
- * 启动参数的严格验证。
- * 所有非法输入在此显式抛 HelmError（validation_error / not_found / unsupported_runtime），
- * 绝不静默忽略字段或猜测私有 CLI flag。
+ * Spawn request and Profile boundary validation: agentType parsing (herdr:<kind>[@nodeId] and
+ * Profile.runtime.kind=herdr dual entries), the nodeId priority chain, the cwd resolution chain, and strict
+ * validation of env and startup parameters.
+ * All invalid inputs throw HelmError explicitly here (validation_error / not_found / unsupported_runtime),
+ * never silently ignoring fields or guessing private CLI flags.
  *
- * nodeId 优先级链（高 → 低；'local' 显式覆盖为「本机」语义，折叠为
- * explicitLocal 标记而不丢成 undefined——远端父会话的子 spawn 不静默继承）：
- * 1. 显式 agentType 前缀 `herdr:<kind>@<node>`（含 @local）；
- * 2. Profile.runtime.nodeId（含 'local'）；
- * 3. Profile 顶层 nodeId（Profile 常规节点绑定）；
- * 4. 父会话绑定节点（由 Executor 注入 parentNodeId；缺省本机）。
+ * nodeId priority chain (high -> low; an explicit 'local' overrides with "local" semantics and folds into
+ * an explicitLocal marker instead of collapsing to undefined -- child spawns of remote parent conversations do not silently inherit):
+ * 1. explicit agentType prefix `herdr:<kind>@<node>` (incl. @local);
+ * 2. Profile.runtime.nodeId (incl. 'local');
+ * 3. Profile top-level nodeId (the Profile's regular node binding);
+ * 4. the parent conversation's bound node (injected by the Executor as parentNodeId; defaults to local).
  */
 
 import { HelmError, isAbsoluteTargetPath, normalizeTargetPath, type Profile, type TargetPlatform } from '@helm/protocol'
 import { isValidNodeId } from './transport.js'
 import { OUTPUT_FILE_PATTERN } from './transport-output.js'
 
-/** Herdr CLI Agent kind 标识（如 agy/claude/codex/pi；不做枚举硬编码，交由 Herdr 校验）。 */
+/** Herdr CLI Agent kind identifier (e.g. agy/claude/codex/pi; no hardcoded enumeration -- validated by Herdr). */
 const KIND_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/
 
 export interface SpawnRouting {
   kind: string
   /**
-   * 目标计算节点 ID：undefined = 按链回退（runtime/Profile/父节点）；
-   * 'local' = 显式本机（覆盖远端父节点，绝不静默继承）。
+   * Target compute node ID: undefined = fall back along the chain (runtime/Profile/parent node);
+   * 'local' = explicitly local (overrides a remote parent node; never silently inherited).
    */
   nodeId?: string
-  /** CLI 私有参数：仅来自 Profile.runtime.args（原样透传）。 */
+  /** CLI private arguments: only from Profile.runtime.args (passed through as-is). */
   args: string[]
-  /** Profile 配置工作目录（绝对路径语义，含 runtime.workspace 与 Profile.cwd）。 */
+  /** Profile-configured working directory (absolute-path semantics, incl. runtime.workspace and Profile.cwd). */
   workspace?: string
-  /** Profile 声明的环境变量覆盖（非机密显式配置）。 */
+  /** Profile-declared environment variable overrides (explicit non-secret configuration). */
   profileEnv: Record<string, string>
-  /** 命中的 profileId（Profile 入口时存在，用于诊断）。 */
+  /** The matched profileId (present for Profile entry; used for diagnostics). */
   profileId?: string
 }
 
-/** nodeId 校验（统一严格 token；'local' 合法）。 */
+/** nodeId validation (uniform strict token; 'local' is legal). */
 function assertNodeId(nodeId: string, source: { profileId?: string; agentType?: string }): string {
   if (!isValidNodeId(nodeId)) {
     const where = source.agentType !== undefined
-      ? `agentType '${source.agentType}' 的 nodeId '${nodeId}'`
-      : `Profile '${source.profileId}' 的 nodeId '${nodeId}'`
+      ? `the nodeId '${nodeId}' of agentType '${source.agentType}'`
+      : `the nodeId '${nodeId}' of Profile '${source.profileId}'`
     throw new HelmError(
       'validation_error',
-      `${where} 非法（单一安全 token：字母数字开头，可含 . _ -，长度 1..128；空串拒绝）`,
+      `${where} is invalid (single safe token: starts alphanumeric, may contain . _ -, length 1..128; empty string rejected)`,
       400,
       { nodeId },
     )
@@ -54,11 +54,11 @@ function assertNodeId(nodeId: string, source: { profileId?: string; agentType?: 
 }
 
 /**
- * 解析 agentType 双入口：
- * 1. 显式前缀 'herdr:<kind>' 或 'herdr:<kind>@<nodeId>'；
- * 2. agentType 为已存在的 Profile ID 且 profile.runtime.kind === 'herdr'。
- * 非上述两种（普通 Profile / 未知前缀）返回 undefined 交还内核默认执行行；
- * Profile 存在但 runtime 配置非法时显式抛错（不吞）。
+ * Resolve the agentType dual entries:
+ * 1. explicit prefix 'herdr:<kind>' or 'herdr:<kind>@<nodeId>';
+ * 2. agentType is an existing Profile ID with profile.runtime.kind === 'herdr'.
+ * Neither of the above (a plain Profile / unknown prefix) returns undefined to hand back to the kernel's default execution line;
+ * a Profile that exists but has an invalid runtime config throws explicitly (not swallowed).
  */
 export async function resolveSpawnRouting(
   agentType: string | undefined,
@@ -73,14 +73,14 @@ export async function resolveSpawnRouting(
   const runtime = profile.runtime
   if (runtime === undefined) return undefined
   if (runtime.kind !== 'herdr') {
-    // 非 herdr runtime 交还内核（未来其他运行时插件的接管空间）。
+    // Non-herdr runtime goes back to the kernel (room for other runtime plugins to take over in the future).
     return undefined
   }
   const kind = runtime.agent
   if (!KIND_PATTERN.test(kind)) {
     throw new HelmError(
       'validation_error',
-      `Profile '${agentType}' runtime.agent '${kind}' 非法（期望小写字母数字与连字符的 CLI kind）`,
+      `Profile '${agentType}' runtime.agent '${kind}' is invalid (expected a lowercase alphanumeric-plus-hyphen CLI kind)`,
       400,
       { profileId: agentType, agent: kind },
     )
@@ -89,21 +89,21 @@ export async function resolveSpawnRouting(
   if (runtime.nodeId !== undefined) {
     nodeId = assertNodeId(runtime.nodeId, { profileId: agentType })
   } else if (profile.nodeId !== undefined) {
-    // Profile 顶层节点绑定（会话与子执行共用；'local' 同样显式表达本机）。
+    // Profile top-level node binding (shared by sessions and child executions; 'local' likewise explicitly means local).
     nodeId = assertNodeId(profile.nodeId, { profileId: agentType })
   }
   const args = runtime.args ?? []
   if (!args.every((a) => typeof a === 'string')) {
-    throw new HelmError('validation_error', `Profile '${agentType}' runtime.args 必须全为字符串`, 400, {
+    throw new HelmError('validation_error', `Profile '${agentType}' runtime.args must all be strings`, 400, {
       profileId: agentType,
     })
   }
-  // workspace 解析：runtime.workspace > Profile.cwd（后者同时是会话默认 cwd）。
+  // workspace resolution: runtime.workspace > Profile.cwd (the latter is also the session default cwd).
   const workspace = runtime.workspace ?? profile.cwd
   if (workspace !== undefined && !isAbsolutePath(workspace)) {
     throw new HelmError(
       'validation_error',
-      `Profile '${agentType}' 工作目录必须是绝对路径（runtime.workspace / cwd，当前为 '${workspace}'）`,
+      `Profile '${agentType}' working directory must be absolute (runtime.workspace / cwd; got '${workspace}')`,
       400,
       { profileId: agentType, workspace },
     )
@@ -113,7 +113,7 @@ export async function resolveSpawnRouting(
     if (!isValidEnvName(key) || typeof value !== 'string') {
       throw new HelmError(
         'validation_error',
-        `Profile '${agentType}' runtime.env 含非法项 '${key}'（名称须为合法环境变量名且值为字符串）`,
+        `Profile '${agentType}' runtime.env has an invalid entry '${key}' (names must be legal env variable names and values strings)`,
         400,
         { profileId: agentType, key },
       )
@@ -137,7 +137,7 @@ function parseHerdrPrefix(agentType: string): SpawnRouting {
   if (!KIND_PATTERN.test(kind)) {
     throw new HelmError(
       'validation_error',
-      `agentType '${agentType}' 的 kind '${kind}' 非法（期望如 herdr:agy、herdr:claude@node-a）`,
+      `agentType '${agentType}' has invalid kind '${kind}' (expected e.g. herdr:agy, herdr:claude@node-a)`,
       400,
       { agentType, kind },
     )
@@ -150,9 +150,9 @@ function parseHerdrPrefix(agentType: string): SpawnRouting {
 }
 
 /**
- * 路径绝对性（纯规则，不依赖 Hub 平台 resolve）：POSIX `/...`、Windows 盘符
- * `C:\...` / `C:/...` 与 UNC `\\server\share\...` 均为绝对；`C:relative`
- *（无分隔符的盘符相对形态）拒绝。
+ * Path absoluteness (pure rules, independent of the Hub platform's resolve): POSIX `/...`, Windows drive
+ * `C:\...` / `C:/...` and UNC `\\server\\share\\...` are absolute; `C:relative`
+ * (a drive-relative form without a separator) is rejected.
  */
 export function isAbsolutePath(p: string): boolean {
   if (p.startsWith('/')) return true
@@ -161,16 +161,16 @@ export function isAbsolutePath(p: string): boolean {
 }
 
 /**
- * 按目标节点平台收口（protocol 原语组合，零自行正则）：platform 未知
- *（远端无可信上报）透传不改写；win32 目标上不可映射 POSIX 根显式拒绝。
- * 与内核 runtime/target-cwd.ts 同语义（@helm/plugins 不越界导入 @helm/kernel
- * 私有目录，收口原语统一来自 @helm/protocol）。
+ * Converge by the target node's platform (a composition of protocol primitives, zero self-rolled regex):
+ * an unknown platform (no trusted remote report) passes through unchanged; an unmappable POSIX root on a win32
+ * target is rejected explicitly. Same semantics as the kernel's runtime/target-cwd.ts (@helm/plugins must not
+ * import @helm/kernel's private dirs cross-boundary; the convergence primitives all come from @helm/protocol).
  */
 function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | undefined, entry: string): string {
   if (!isAbsoluteTargetPath(cwd)) {
     throw new HelmError(
       'validation_error',
-      `${entry}: cwd 需为绝对路径（POSIX / 开头、Windows 盘符 C:\\ 或 UNC \\\\server\\share；拒绝盘符相对与相对路径）：收到 '${cwd}'`,
+      `${entry}: cwd must be absolute (POSIX leading /, Windows drive C:\\ or UNC \\\\server\\share; drive-relative and relative paths rejected): got '${cwd}'`,
       400,
       { cwd },
     )
@@ -188,13 +188,13 @@ export function isValidEnvName(name: string): boolean {
 }
 
 /**
- * cwd 解析链：request.cwd（必须绝对路径）> Profile.workspace（runtime.workspace
- * > Profile.cwd）> 父会话 cwd（getConversation 现取）。
- * 返回 ''（空串）表示链尾无真实 cwd，由调用方显式拒绝（不猜进程 cwd）。
+ * cwd resolution chain: request.cwd (must be absolute) > Profile.workspace (runtime.workspace
+ * > Profile.cwd) > the parent conversation's cwd (fetched live via getConversation).
+ * Returning '' (empty string) means the chain ended without a real cwd; the caller rejects explicitly (never guess the process cwd).
  *
- * 命中结果在建窗副作用前按目标节点平台统一收口（platform 为 undefined 表示
- * 目标节点平台无可信信息：透传，不猜不改写；local 由调用方以 process.platform
- * 解析）。win32 目标上不可映射的 POSIX cwd 显式拒绝（不落任何窗格）。
+ * The hit result is converged by the target node's platform before any pane-creation side effect (platform undefined means
+ * no trusted info about the target node's platform: pass through, no guessing or rewriting; local is resolved by
+ * the caller with process.platform). An unmappable POSIX cwd on a win32 target is rejected explicitly (no pane is created).
  */
 export function resolveCwd(
   requestCwd: string | undefined,
@@ -205,7 +205,7 @@ export function resolveCwd(
   let cwd: string
   if (requestCwd !== undefined) {
     if (!isAbsolutePath(requestCwd)) {
-      throw new HelmError('validation_error', `spawn cwd 必须是绝对路径：'${requestCwd}'`, 400, { cwd: requestCwd })
+      throw new HelmError('validation_error', `spawn cwd must be an absolute path: '${requestCwd}'`, 400, { cwd: requestCwd })
     }
     cwd = requestCwd
   } else if (routing?.workspace !== undefined) {
@@ -219,14 +219,14 @@ export function resolveCwd(
 }
 
 /**
- * 请求显式 model/effort 时显式拒绝：内核与插件不做 model/effort 到 23 种 CLI
- * 私有 flag 的隐式猜测映射（设计文档明令禁止）；需要定制时用 Profile.runtime.args。
+ * Explicit model/effort on the request is rejected explicitly: neither kernel nor plugin does implicit
+ * guessed mappings from model/effort to the 23 CLI's private flags (explicitly forbidden by the design doc);
  */
 export function assertNoUnsupportedOverrides(model: string | undefined, effort: string | undefined): void {
   if (model !== undefined && model !== '') {
     throw new HelmError(
       'unsupported_runtime',
-      `herdr 终端执行行不支持显式 model='${model}'（CLI 私有参数请经 Profile runtime.args 声明，不做隐式映射）`,
+      `the herdr terminal execution line does not support an explicit model='${model}' (declare CLI private arguments via Profile runtime.args; no implicit mapping)`,
       400,
       { model },
     )
@@ -234,22 +234,22 @@ export function assertNoUnsupportedOverrides(model: string | undefined, effort: 
   if (effort !== undefined) {
     throw new HelmError(
       'unsupported_runtime',
-      `herdr 终端执行行不支持显式 effort='${effort}'（CLI 私有参数请经 Profile runtime.args 声明，不做隐式映射）`,
+      `the herdr terminal execution line does not support an explicit effort='${effort}' (declare CLI private arguments via Profile runtime.args; no implicit mapping)`,
       400,
       { effort },
     )
   }
 }
 
-/** agent 名称：helm-wf-<短hash>，Herdr 侧名称长度上限 32。 */
+/** Agent name: helm-wf-<shorthash>; Herdr caps names at 32 chars. */
 export function buildAgentName(unique: string): string {
   const hash = HashShort.of(unique)
   const name = `helm-wf-${hash}`
-  if (name.length > 32) throw new HelmError('validation_error', `agent 名称超长：${name}`, 400, { name })
+  if (name.length > 32) throw new HelmError('validation_error', `agent name too long: ${name}`, 400, { name })
   return name
 }
 
-/** 无依赖短哈希（FNV-1a 32bit → base36）；仅用于命名去重，不做安全用途。 */
+/** Dependency-free short hash (FNV-1a 32bit -> base36); for naming dedup only, not for security. */
 export const HashShort = {
   of(input: string): string {
     let h = 0x811c9dc5
@@ -261,22 +261,22 @@ export const HashShort = {
   },
 }
 
-/** 交接文件名：wf-out-<safeId>.json|.md（与 transport 的 OUTPUT_FILE_PATTERN 对齐）。 */
+/** Handoff file name: wf-out-<safeId>.json|.md (aligned with transport's OUTPUT_FILE_PATTERN). */
 export function buildOutputFileName(safeId: string, ext: 'json' | 'md'): string {
   const name = `wf-out-${safeId}.${ext}`
   if (!OUTPUT_FILE_PATTERN.test(name)) {
-    throw new HelmError('validation_error', `交接文件名非法：${name}`, 400, { name })
+    throw new HelmError('validation_error', `invalid handoff file name: ${name}`, 400, { name })
   }
   return name
 }
 
-/** startupTimeoutMs 严格 3001..300000（Herdr 服务端约束），默认 30000。 */
+/** startupTimeoutMs strictly 3001..300000 (Herdr server constraint), default 30000. */
 export function normalizeStartupTimeoutMs(value: unknown): number {
   const n = value === undefined ? 30_000 : value
   if (typeof n !== 'number' || !Number.isInteger(n) || n < 3001 || n > 300_000) {
     throw new HelmError(
       'validation_error',
-      `startupTimeoutMs 必须是 3001..300000 的整数（收到 ${String(n)}）`,
+      `startupTimeoutMs must be an integer in 3001..300000 (got ${String(n)})`,
       400,
       { startupTimeoutMs: n },
     )
@@ -285,27 +285,27 @@ export function normalizeStartupTimeoutMs(value: unknown): number {
 }
 
 /**
- * 任务提示词脱敏：先全文 redact 再进入任何截断（先截断可能把秘密拆成两半，
- * 前缀泄漏进模型上下文）；交接文件名与路径段非机密，原样保留。
- * 同样适用于交接契约里的 JSON Schema 文本（Schema 由调用方给定，但中央
- * 工具的持久脱敏不能代替外部 CLI prompt 本身的脱敏）。
+ * Task prompt redaction: redact the full text first, then apply any truncation (truncating first could split a
+ * secret in half and leak the prefix into model context); handoff file names and path segments are non-secret and kept as-is.
+ * The same applies to the JSON Schema text inside the handoff contract (the schema is caller-provided, but the
+ * central tool's persistent redaction cannot substitute for redacting the external CLI prompt itself).
  */
 export function redactPromptText(text: string, redact: (t: string) => string, maxChars = 20_000): string {
   const redacted = redact(text)
-  return redacted.length > maxChars ? `${redacted.slice(0, maxChars)}\n[任务描述起长，已截断]` : redacted
+  return redacted.length > maxChars ? `${redacted.slice(0, maxChars)}\n[task description too long, truncated]` : redacted
 }
 
-/** JSON Schema 序列化后脱敏（同 redactPromptText 语义，供交接契约）。 */
+/** Redact the serialized JSON Schema (same semantics as redactPromptText, for the handoff contract). */
 export function redactSchemaText(schema: Record<string, unknown>, redact: (t: string) => string): string {
   return redact(JSON.stringify(schema))
 }
 
 /**
- * 受管环境变量（HELM_*）：由内核 managed/stash 构造保持权威，Profile 不得覆盖
- * （与 buildToolEnv「受管变量最后固定覆盖」同一内核约定）。HELM_HUB_URL 例外
- * 语义见 buildSpawnPaneEnv：远端窗格只允许显式配置的有效可达地址，或节点通道
- * 报告的该节点真实可达 hubUrl。HELM_EXECUTION_SCOPE 为执行上下文作用域锚点
- * （内核 executionScopeHash 合成，非机密），随其余受管键固定覆盖。
+ * Managed environment variables (HELM_*): authoritatively constructed by the kernel's managed/stash; a Profile
+ * must not override them (the same kernel convention as buildToolEnv's "managed variables pin-override last").
+ * HELM_HUB_URL's exceptional semantics live in buildSpawnPaneEnv: a remote pane only allows an explicitly
+ * configured valid reachable address, or the node channel's reported genuinely reachable hubUrl for that node.
+ * HELM_EXECUTION_SCOPE is the execution-context scope anchor (kernel executionScopeHash synthesis,
  */
 export const MANAGED_ENV_KEYS = Object.freeze([
   'HELM_ENV',
@@ -317,12 +317,12 @@ export const MANAGED_ENV_KEYS = Object.freeze([
 ])
 
 /**
- * 窗格 env 构造（本机与远端共用入口）：
- * - 受管 HELM_* 固定覆盖 Profile 注入（防劫持回连/身份变量）；
- * - managed/stash 的值最后覆盖 Profile，保持任务与本机工具相同优先级；
- * - 远端剥除指向本机的 HELM_HUB_URL/HELM_TOKEN，除非 Profile 显式配置了
- *   有效可达的 http(s) 地址，或节点通道提供了该节点真实可达的 hubUrl
- *   （此时该地址优先级：Profile 显式 > 通道 hubUrl > 剥除）。
+ * Pane env construction (shared entry for local and remote):
+ * - managed HELM_* pin-overrides Profile injections (preventing hijack of call-home/identity variables);
+ * - managed/stash values override Profile last, keeping the task at the same priority as local tools;
+ * - remote strips HELM_HUB_URL/HELM_TOKEN pointing at the local Hub, unless the Profile explicitly
+ *   configures a valid reachable http(s) address, or the node channel provides the node's genuinely
+ *   reachable hubUrl (priority: Profile explicit > channel hubUrl > strip).
  */
 export function buildSpawnPaneEnv(
   managedEnv: Record<string, string>,
@@ -333,18 +333,18 @@ export function buildSpawnPaneEnv(
   const managed = { ...managedEnv }
   const env: Record<string, string> = {}
 
-  // 显式远端可达 HELM_HUB_URL：远端回连合法来源（Profile 显式优先，其次节点通道）。
+  // Explicit remotely reachable HELM_HUB_URL: the legal source of the remote call-home (Profile explicit first, then the node channel).
   const explicitUrl = profileEnv['HELM_HUB_URL']
   const channelUrl = options.nodeHubUrl
   const explicitReachable = explicitUrl !== undefined && isValidRemoteHubUrl(explicitUrl)
-  // 该地址来自节点自身的连接配置；本机 BYOM 或隧道可合法使用 loopback。
-  // 不能把“Hub 的回环地址不可复制”误当成“节点自己的回环地址不可用”。
+  // That address comes from the node's own connection config; local BYOM or tunnels may legally use loopback.
+  // Do not mistake "the Hub's loopback address is not replicable" for "the node's own loopback address is unusable".
   const channelReachable = channelUrl !== undefined && isHttpUrl(channelUrl)
   if (options.remote) {
     if (explicitUrl !== undefined && !isHttpUrl(explicitUrl)) {
       throw new HelmError(
         'validation_error',
-        `Profile runtime.env.HELM_HUB_URL 必须是 http(s) URL（收到 '${explicitUrl}'），远端窗格拒绝注入无效回连地址`,
+        `Profile runtime.env.HELM_HUB_URL must be an http(s) URL (got '${explicitUrl}'); refusing to inject an invalid call-home address into a remote pane`,
         400,
         { hubUrl: explicitUrl },
       )
@@ -362,9 +362,9 @@ export function buildSpawnPaneEnv(
     }
   }
 
-  // 其余受管 HELM_* 最后固定覆盖（内核约定：managed/stash 权威）；受管键
-  // （含 HELM_HUB_URL）按大小写不敏感匹配剥除 Profile 注入——Windows env 名
-  // 大小写不敏感，helm_execution_scope / Helm_Cwd 等别名不得逃逸后劫持。
+  // The remaining managed HELM_* pin-override last (kernel convention: managed/stash are authoritative); managed keys
+  // (incl. HELM_HUB_URL) strip Profile injections matched case-insensitively -- Windows env names are
+  // case-insensitive, aliases like helm_execution_scope / Helm_Cwd must not escape and hijack later.
   const managedUpper = new Set(
     [...MANAGED_ENV_KEYS, 'HELM_HUB_URL'].map((key) => key.toUpperCase()),
   )
@@ -377,7 +377,7 @@ export function buildSpawnPaneEnv(
   return { env, stripped, hubUrlOverridden }
 }
 
-/** http(s) URL 才可能是回连地址（file:/unix: 等一律无效）。 */
+/** Only an http(s) URL can be a call-home address (file:/unix: etc. are invalid). */
 export function isHttpUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
@@ -387,7 +387,7 @@ export function isHttpUrl(url: string): boolean {
   }
 }
 
-/** 远端可达：显式 http(s) 且主机非 loopback。 */
+/** Remotely reachable: explicit http(s) with a non-loopback host. */
 export function isValidRemoteHubUrl(url: string): boolean {
   return isHttpUrl(url) && !isLoopbackUrl(url)
 }

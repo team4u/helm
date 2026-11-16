@@ -1,7 +1,7 @@
 /**
- * AssetWatcher：监听数据目录，150ms 防抖后回调变更的相对路径。
- * 兼容 temp(随机名)+fsync+rename 原子写（rename 表现为 add/change）。
- * watcher 自身错误（如目录被删除）显式抛给 onError，绝不静默吞掉。
+ * AssetWatcher: listen data directory,150ms guard against jitter after call back change relative path.
+ * compatibility temp(random name)+fsync+rename atomic write (rename table now is add/change).
+ * watcher itself error (such as directory by delete) explicit throw to onError, never static default swallow.
  */
 import { EventEmitter } from 'node:events'
 import { watch } from 'node:fs'
@@ -9,9 +9,9 @@ import type { WatchListener } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
 export interface AssetWatcherOptions {
-  /** 防抖窗口，默认 150ms。 */
+  /** guard against jitter window, by default 150ms. */
   debounceMs?: number
-  /** watcher/轮询异常回调；未提供时抛到进程（不静默吞错）。 */
+  /** watcher/polling exception call back; not provide when throw to process (not silently swallow wrong). */
   onError?: (err: Error) => void
 }
 
@@ -34,12 +34,12 @@ export class AssetWatcher {
     this.onError = opts.onError
   }
 
-  /** 开始监听（recursive 尽力开启；不支持的平台上以显式错误暴露）。 */
+  /** start listen (recursive exhaust force open start; unsupported platform on with explicit error expose). */
   start(): void {
     if (this.handle !== undefined) return
     const listener: WatchListener<string> = (event, filename) => {
       if (this.closed || filename === null) return
-      // 忽略自身原子写的临时文件（随机 uuid 命名，rename 前的中间态）。
+      // ignore itself atomic write temp file (random uuid naming,rename before intermediate state).
       if (isTmpName(filename)) return
       const rel = relative(this.rootDir, join(this.rootDir, filename))
       if (rel.startsWith('..')) return
@@ -89,7 +89,7 @@ export class AssetWatcher {
   }
 }
 
-/** 原子写临时文件名形如 `.<uuid>.tmp`。 */
+/** atomic write temp file name shape such as `.<uuid>.tmp`. */
 export function isTmpName(filename: string): boolean {
   const base = filename.split(/[\\/]/).pop() ?? ''
   return base.startsWith('.') && base.endsWith('.tmp')

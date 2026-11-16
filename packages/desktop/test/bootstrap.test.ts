@@ -18,7 +18,7 @@ function updaterFixture(pending: PayloadInfo | null = null) {
     resolvePending: () => pending,
     resolvePrevious: () => null,
     check: async () => { calls.push('check'); return { updateAvailable: false, current: active, latest: null, reason: 'up_to_date' }; },
-    stage: async () => { throw new Error('此测试不下载网络载荷'); },
+    stage: async () => { throw new Error('this test do not download network payload'); },
     activate: async (info) => { calls.push('activate'); active = info; pending = null; },
     reject: async () => { calls.push('reject'); pending = null; },
   };
@@ -32,7 +32,7 @@ async function config() {
   });
 }
 
-test('候选 Hub 启动后须等界面确认才激活', { timeout: 60_000 }, async () => {
+test('choose Hub after startup must etc. UI confirm only then activate', { timeout: 60_000 }, async () => {
   const state = updaterFixture({ name: 'test-payload', version: '1.0.0', releaseDir: tmpdir(), entryPath: MINI_HUB_FIXTURE });
   const boot = new DesktopBoot({ config: await config(), updater: state.updater });
   try {
@@ -43,7 +43,7 @@ test('候选 Hub 启动后须等界面确认才激活', { timeout: 60_000 }, asy
   } finally { await boot.supervisor.stop(); }
 });
 
-test('候选启动失败保留上一版本，恢复 baseline 后不激活坏包', { timeout: 60_000 }, async () => {
+test('choose failed to start keep on one version, restore baseline after do not activate broken package', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'helm-boot-'));
   await mkdir(join(dir, 'kernel'), { recursive: true });
   const bad = join(dir, 'kernel', 'main.mjs');
@@ -55,11 +55,11 @@ test('候选启动失败保留上一版本，恢复 baseline 后不激活坏包'
     assert.equal((await boot.start()).mode, 'owned');
     await boot.confirmReady();
     assert.deepEqual(state.calls, ['reject']);
-    assert.match(logs.join('\n'), /启动失败/);
+    assert.match(logs.join('\n'), /failed to start/);
   } finally { await boot.supervisor.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
-test('端口被非 Hub 占用时显式失败，保留候选且不阻断版本；释放端口后重试成功', { timeout: 60_000 }, async () => {
+test('port by non- Hub occupy when explicit failed, keep choose and do not block assert version; release port after retry succeeded', { timeout: 60_000 }, async () => {
   const cfg = await config();
   const plain = await startPlainServer(cfg.port);
   const candidate = { name: 'test-payload', version: '2.0.0', releaseDir: tmpdir(), entryPath: MINI_HUB_FIXTURE };
@@ -81,10 +81,10 @@ test('端口被非 Hub 占用时显式失败，保留候选且不阻断版本；
   } finally { await retry.supervisor.stop(); }
 });
 
-test('激活时存储故障显式失败但不阻断候选，退出后可重新尝试', { timeout: 60_000 }, async () => {
+test('activate when store fault explicit failed but do not block assert choose, exit after can re- attempt', { timeout: 60_000 }, async () => {
   const candidate = { name: 'test-payload', version: '2.0.0', releaseDir: tmpdir(), entryPath: MINI_HUB_FIXTURE };
   const state = updaterFixture(candidate);
-  const failure = new DesktopError('updater_state_write_failed', '磁盘暂时不可写');
+  const failure = new DesktopError('updater_state_write_failed', 'disk temporarily cannot write');
   state.updater.activate = async () => { throw failure; };
   const boot = new DesktopBoot({ config: await config(), updater: state.updater });
   try {
@@ -96,7 +96,7 @@ test('激活时存储故障显式失败但不阻断候选，退出后可重新�
   } finally { await boot.supervisor.stop(); }
 });
 
-test('npm latest 不高于内置基线时不重复安装或降级', { timeout: 60_000 }, async () => {
+test('npm latest do not high at inside placement baseline when does not repeat install or fall back', { timeout: 60_000 }, async () => {
   const state = updaterFixture();
   state.updater.check = async () => ({ updateAvailable: true, current: null, latest: { name: 'test-payload', version: '1.0.0' } });
   const boot = new DesktopBoot({ config: await config(), updater: state.updater, baselineVersion: '2.0.0' });
@@ -108,7 +108,7 @@ test('npm latest 不高于内置基线时不重复安装或降级', { timeout: 6
   } finally { await boot.supervisor.stop(); }
 });
 
-test('外部 Hub 已运行时附着，不激活候选、不安装更新、不停止外部 Hub', { timeout: 60_000 }, async () => {
+test('external Hub already runtime attach, do not activate choose, do not install update, do not stop external Hub', { timeout: 60_000 }, async () => {
   const cfg = await config();
   const external = await startMiniHubExternal(cfg.port);
   const state = updaterFixture({ name: 'test-payload', version: '2.0.0', entryPath: '/absent' });
@@ -116,7 +116,7 @@ test('外部 Hub 已运行时附着，不激活候选、不安装更新、不停
   try {
     assert.equal((await boot.start()).mode, 'attached');
     await boot.confirmReady();
-    await assert.rejects(boot.checkForUpdate(), /外部进程管理/);
+    await assert.rejects(boot.checkForUpdate(), /external process manage/);
     await boot.supervisor.stop();
     assert.deepEqual(state.calls, []);
     assert.equal((await fetch(`${cfg.hubUrl}/api/auth/status`)).status, 200);

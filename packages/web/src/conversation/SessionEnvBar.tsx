@@ -47,7 +47,7 @@ export function SessionEnvBar({
   const dirty = !unchanged
   const blocked = saving || dirty
   const blocker: SessionEnvBlocker = blocked
-    ? { blocked: true, reason: saving ? '正在保存会话环境…' : '请先保存或取消起始环境修改' }
+    ? { blocked: true, reason: saving ? 'Saving conversation environment…' : 'Save or cancel the starting environment changes first' }
     : ENV_BLOCKER_CLEAR
 
   // 阻塞状态回传 Composer（发送门控）
@@ -85,7 +85,7 @@ export function SessionEnvBar({
       store.pushNotice({
         type: 'notification',
         level: 'info',
-        title: '已保存会话环境',
+        title: 'Conversation environment saved',
         body: `#${conversation.id} -> ${saved.nodeId || 'local'}:${saved.cwd}`,
         conversationId: conversation.id,
       })
@@ -96,7 +96,7 @@ export function SessionEnvBar({
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: '保存会话环境失败',
+        title: 'Failed to save conversation environment',
         body: message,
         conversationId: conversation.id,
       })
@@ -117,12 +117,12 @@ export function SessionEnvBar({
       value: n.id,
       label: nodeOptionLabel(n),
       icon: n.id === 'local' ? 'monitor' : 'network',
-      meta: n.id !== 'local' ? (n.online ? '在线' : '离线') : undefined,
+      meta: n.id !== 'local' ? (n.online ? 'Online' : 'Offline') : undefined,
     }))
     if (!draftNodeKnown) {
       list.push({
         value: draft.nodeId,
-        label: `${draft.nodeId}（未知）`,
+        label: `${draft.nodeId} (unknown)`,
         icon: 'alert-circle',
       })
     }
@@ -134,7 +134,7 @@ export function SessionEnvBar({
       <span className="composer-env-item">
         <Select
           className="composer-env-select"
-          aria-label="会话执行节点"
+          aria-label="Conversation execution node"
           disabled={saving || sendBlocked}
           value={draft.nodeId}
           options={nodeOptions}
@@ -148,11 +148,11 @@ export function SessionEnvBar({
         <HelmIcon name="folder" size={12} className="composer-env-cwd-icon" />
         <input
           className="input mono composer-env-cwd-input"
-          aria-label="会话工作目录"
+          aria-label="Conversation working directory"
           aria-invalid={error !== null}
           value={draft.cwd}
           disabled={saving || sendBlocked}
-          placeholder={draft.nodeId === currentNodeId ? '/绝对路径' : '目标节点上的绝对路径，例如 /home/user/work'}
+          placeholder={draft.nodeId === currentNodeId ? '/absolute/path' : 'Absolute path on the target node, e.g. /home/user/work'}
           onChange={(e) => {
             setError(null)
             setDraft((prev) => ({ ...prev, cwd: e.target.value }))
@@ -177,19 +177,19 @@ export function SessionEnvBar({
             onClick={() => void save()}
           >
             {saving ? <HelmIcon name="loader" size={11} className="spin-slow" /> : <HelmIcon name="check" size={11} />}
-            保存
+            Save
           </button>
           <button type="button" className="btn btn-sm" disabled={saving} onClick={cancel}>
-            取消
+            Cancel
           </button>
         </span>
       ) : null}
       {error !== null ? (
         <span className="composer-env-error" role="alert" title={error}>{error}</span>
       ) : draftNode !== undefined && !draftNode.online && draft.nodeId !== 'local' ? (
-        <span className="composer-env-warn">节点离线，保存后仍需节点上线才能执行</span>
+        <span className="composer-env-warn">Node offline; execution waits until the node comes online after saving</span>
       ) : null}
-      <span className="composer-env-hint">首条消息发送后锁定</span>
+      <span className="composer-env-hint">Locked after the first message is sent</span>
     </div>
   )
 }

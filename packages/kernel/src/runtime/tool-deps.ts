@@ -1,9 +1,9 @@
 /**
- * 工具层共享依赖（避免 tools.ts 与 runtime.ts 循环引用）。
+ * tool layer sharing dependency (avoid tools.ts and runtime.ts loop reference).
  *
- * artifacts 接口与真实 `services/artifacts.ts` 的 `ArtifactService` Promise 签名
- * 一致（get/readContent/readBuffer 均异步）：生产端直接传服务实例，绝不以同步假
- * fixture 掩盖真实服务形态。
+ * artifacts interface and real `services/artifacts.ts`  `ArtifactService` Promise signature
+ * consistent (get/readContent/readBuffer all async): produce end directly pass service instance, never with sync false
+ * fixture mask real service form.
  */
 import type { ArtifactService } from '../services/artifacts.js'
 import type { EnvFabric } from '../env/index.js'
@@ -11,29 +11,29 @@ import type { EnvFabric } from '../env/index.js'
 export interface HelmToolDeps {
   dataDir: string
   defaultCwd: string
-  /** 按 HELM_PORT 生成的 hub URL（如 http://127.0.0.1:3202；测试可注入）。 */
+  /** by HELM_PORT generate hub URL(such as http://127.0.0.1:3202; test can inject). */
   hubUrl: string
-  /** SecretStash 值的会话级环境注入。 */
+  /** SecretStash value conversation level environment inject. */
   stashEnvFor(conversationId: number): Record<string, string>
-  /** 文本脱敏（stash 明文 -> marker；绝不反向还原）。 */
+  /** text redaction (stash plaintext -> marker; never reverse restore). */
   redact(text: string): string
-  /** 受管进程 token（getter 每次读取；缺省或 dispose 后不注入 HELM_TOKEN）。 */
+  /** managed process token(getter each time read; default or dispose after do not inject HELM_TOKEN). */
   processToken?: () => string | undefined
-  /** 产物服务（与 services.ArtifactService 同签名：get/readContent/readBuffer 均异步）。 */
+  /** artifact service (and services.ArtifactService same signature:get/readContent/readBuffer all async). */
   artifacts: Pick<ArtifactService, 'spill' | 'get' | 'readContent' | 'readBuffer'> &
     Partial<Pick<ArtifactService, 'writeUploaded'>>
-  /** 跨平台节点执行底座（远端 (nodeId, cwd) 靶点执行；缺省仅 local）。 */
+  /** across platform node execute bottom seat (remote (nodeId, cwd) target execute; default only local). */
   envFabric?: EnvFabric
-  /** 会话 -> 绑定计算节点 ID（缺省 'local'；store 镜像的真实映射）。 */
+  /** conversation -> bind set compute node ID(default 'local';store mirror real mapping). */
   nodeIdOf?: (conversationId: number) => string
-  /** helm CLI 包装脚本目录（前置注入 PATH，使受管子进程可直接运行 helm）。 */
+  /** helm CLI wrap script directory (pre- inject PATH, make managed child process can directly run helm). */
   cliBinDir?: string
 }
 
 /**
- * 工具中止信号检查：abortSignal 已中止时抛出原生 Abort 异常（优先透传
- * Error 类型 reason，否则构造 AbortError DOMException），确保 pi-durable
- * ToolTask 进入 writeAtClose()/中断分支而不写入错误结果或垃圾 spill。
+ * tool abort signal check:abortSignal already abort when throw original generate Abort exception (takes precedence pass-through
+ * Error type reason, otherwise construct AbortError DOMException), ensure pi-durable
+ * ToolTask enter writeAtClose()/interrupt branch while do not write error result or garbage spill.
  */
 export function throwIfToolAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return

@@ -287,7 +287,7 @@
 }
 
 /* 统一搜索输入框原语（容器式：描边/背景/focus 高亮全部由容器提供，
-   内层 input 透明无边框，遵循搜索框统一规范） */
+   The inner input is transparent and frameless, following the shared search box spec) */
 .search-box {
   display: flex;
   align-items: center;
@@ -528,7 +528,7 @@
 }
 
 /* ScreenHost 已渲染顶栏 .pane-topbar 时抑制内层重复大标题，保留副标题与右侧动作栏；
-   若内层页头仅含标题且无副标题/动作，整栏折叠归零消除双重头部。 */
+   If an inner page header has only a title without subtitle/actions, the whole bar collapses to zero to avoid double headers. */
 .screen-host-stage .screen-header .screen-title,
 .screen-host-stage .screen-header > .screen-section-title,
 .screen-host-stage .apps-center-topbar .apps-center-title {

@@ -1,14 +1,14 @@
 /**
- * builtin:herdr 的宿主公共端口消费（ctx.host 通用机制 → 插件内部依赖）。
+ * builtin:herdr's consumption of host public ports (ctx.host generic mechanisms -> plugin-internal dependencies).
  *
- * 分工纪律（机制与策略分离）：
- * - 宿主在 ctx.host 上暴露通用机制：profiles / buildSpawnEnv / redact /
- *   runGate / getArtifact / completeText / nodeIpc / executionEnv——不含
- *   任何 Herdr 语义；
- * - 本模块只做「依赖装配」：从 ctx.host 真实类型（HelmHostApi，core
- *   db1e447b 起 nodeIpc/executionEnv 等端口已在 protocol 类型化）读取并
- *   组装 HerdrPluginDependencies 与 HerdrNodeChannel（Context 语义收敛为
- *   公开端口的 AbortSignal），可选端口缺席时省略（不降级、不伪造）。
+ * Division discipline (mechanism vs policy separation):
+ * - The host exposes generic mechanisms on ctx.host: profiles / buildSpawnEnv / redact /
+ *   runGate / getArtifact / completeText / nodeIpc / executionEnv -- with no
+ *   Herdr semantics whatsoever;
+ * - this module only does "dependency assembly": reads from ctx.host's real types (HelmHostApi;
+ *   since core db1e447b, ports like nodeIpc/executionEnv are typed in protocol) and assembles
+ *   HerdrPluginDependencies and HerdrNodeChannel (the Context semantics converge into the
+ *   public port's AbortSignal); optional ports are omitted when absent (no degradation, no fabrication).
  */
 
 import type { HelmHostApi } from '@helm/protocol'
@@ -30,10 +30,10 @@ export function nodeChannelFromHost(host: HelmHostApi): HerdrNodeChannel {
 }
 
 /**
- * ctx.host → HerdrPluginDependencies（零参工厂的装配点）。
- * runLocalGate 固定 nodeId:'local'（本机 gate 语义；远端 gate 走 transport.runGate）。
- * analyzeBlockedSnapshot 仅在 completeText 可用时装配（AI 快照增强可选）。
- * transport 可注入（测试 fixture）；生产由插件入口建 createHerdrTransport。
+ * ctx.host -> HerdrPluginDependencies (the assembly point of the zero-arg factory).
+ * runLocalGate pins nodeId:'local' (local gate semantics; remote gates go through transport.runGate).
+ * analyzeBlockedSnapshot is assembled only when completeText is available (AI snapshot enhancement is optional).
+ * transport is injectable (test fixtures); production builds createHerdrTransport in the plugin entry.
  */
 export function assembleHerdrDepsFromHost(
   host: HelmHostApi,

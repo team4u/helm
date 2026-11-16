@@ -125,11 +125,11 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     return (
       <div className={`${isSplit ? 'helm-split-pane' : 'helm-pane'} pane-error`} role="alert">
         <div className="pane-error-row">
-          <p>会话 #{conversationId} 加载失败：{detailError}</p>
+          <p>Conversation #{conversationId} failed to load: {detailError}</p>
           <span className="pane-error-actions">
-            <button className="btn" onClick={() => void store.loadConversationDetail(conversationId, true)}>重试</button>
+            <button className="btn" onClick={() => void store.loadConversationDetail(conversationId, true)}>Retry</button>
             {isDrawer && onCloseDrawer !== undefined ? (
-              <button type="button" className="btn btn-sm btn-ghost conversation-drawer-close-btn" aria-label="关闭抽屉" onClick={onCloseDrawer}>关闭</button>
+              <button type="button" className="btn btn-sm btn-ghost conversation-drawer-close-btn" aria-label="Close drawer" onClick={onCloseDrawer}>Close</button>
             ) : isSplit && onCloseSplit !== undefined ? <CloseSplitButton onCloseSplit={onCloseSplit} /> : null}
           </span>
         </div>
@@ -140,10 +140,10 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   if (conversation === undefined) {
     return (
       <div className={isSplit ? 'helm-split-pane' : 'helm-pane'} style={{ alignItems: 'center', justifyContent: 'center', color: 'var(--fg-muted)', fontSize: 12 }}>
-        正在加载会话 #{conversationId}…
+        Loading conversation #{conversationId}…
         {isDrawer && onCloseDrawer !== undefined ? (
           <span className="pane-loading-split-close">
-            <button type="button" className="btn btn-sm btn-ghost conversation-drawer-close-btn" aria-label="关闭抽屉" onClick={onCloseDrawer}>
+            <button type="button" className="btn btn-sm btn-ghost conversation-drawer-close-btn" aria-label="Close drawer" onClick={onCloseDrawer}>
               <HelmIcon name="x" size={14} />
             </button>
           </span>
@@ -188,7 +188,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: `${successTitle}失败`,
+        title: `${successTitle} failed`,
         body: err instanceof Error ? err.message : String(err),
         conversationId,
       })
@@ -218,7 +218,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     const next = titleDraft.trim()
     setRenaming(false)
     if (next === '' || next === conversation.title) return
-    await runAction('rename', () => conversationsApi.patch(conversationId, { title: next }), '已重命名会话')
+    await runAction('rename', () => conversationsApi.patch(conversationId, { title: next }), 'Conversation renamed')
   }
 
   const requestEdit = (target: EditRequestTarget): void => {
@@ -282,10 +282,10 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
       <header className="pane-topbar conversation-topbar">
         <div className="pane-title-group">
           {ancestors.length > 0 ? (
-            <nav className="pane-breadcrumb" aria-label="祖先会话导航">
+            <nav className="pane-breadcrumb" aria-label="Ancestor conversation navigation">
               {ancestors.map((ancestorId, index) => {
                 const label = `#${ancestorId}`
-                const tooltip = ancestorTitle(ancestorId) !== '' ? `${label} ${ancestorTitle(ancestorId)}` : `会话 ${label}`
+                const tooltip = ancestorTitle(ancestorId) !== '' ? `${label} ${ancestorTitle(ancestorId)}` : `Conversation ${label}`
                 return (
                   <span className="pane-breadcrumb-item" key={ancestorId}>
                     {index > 0 ? (
@@ -297,7 +297,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                       type="button"
                       className="btn btn-sm pane-parent-nav-btn"
                       title={tooltip}
-                      aria-label={`前往祖先会话 #${ancestorId}`}
+                      aria-label={`Go to ancestor conversation #${ancestorId}`}
                       onClick={() => navigateToAncestor(ancestorId)}
                     >
                       {index === 0 ? <HelmIcon name="arrow-left" size={12} /> : null}
@@ -327,33 +327,33 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                 <button
                   type="button"
                   className="pane-title pane-title-btn"
-                  title={conversation.title === '' ? `会话 #${conversationId}` : conversation.title}
+                  title={conversation.title === '' ? `Conversation #${conversationId}` : conversation.title}
                 >
-                  {conversation.title === '' ? `会话 #${conversationId}` : conversation.title}
+                  {conversation.title === '' ? `Conversation #${conversationId}` : conversation.title}
                 </button>
               </PopoverTrigger>
               <PopoverContent align="start" sideOffset={6} portalled className="pane-title-popover">
                 <div className="pane-title-popover-heading">
-                  {conversation.title === '' ? `会话 #${conversationId}` : conversation.title}
+                  {conversation.title === '' ? `Conversation #${conversationId}` : conversation.title}
                 </div>
                 <div className="kv-grid pane-title-popover-meta">
-                  <span className="kv-key">会话 ID</span>
+                  <span className="kv-key">Conversation ID</span>
                   <span className="kv-val mono">#{conversationId}</span>
-                  <span className="kv-key">智能体</span>
+                  <span className="kv-key">Agents</span>
                   <span className="kv-val">{conversation.profileId}</span>
-                  <span className="kv-key">节点</span>
+                  <span className="kv-key">Node</span>
                   <span className="kv-val mono">{currentNodeId}</span>
-                  <span className="kv-key">工作目录</span>
-                  <span className="kv-val mono">{conversation.cwd || '(未设置)'}</span>
+                  <span className="kv-key">Working directory</span>
+                  <span className="kv-val mono">{conversation.cwd || '(not set)'}</span>
                   {conversation.ownedBy !== undefined ? (
                     <>
-                      <span className="kv-key">归属</span>
+                      <span className="kv-key">Ownership</span>
                       <span className="kv-val mono">{conversation.ownedBy}</span>
                     </>
                   ) : null}
                   {conversation.model !== '' ? (
                     <>
-                      <span className="kv-key">模型</span>
+                      <span className="kv-key">Model</span>
                       <span className="kv-val mono">{conversation.model}</span>
                     </>
                   ) : null}
@@ -379,13 +379,13 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             <button
               type="button"
               className="btn btn-sm"
-              aria-label="新话题"
-              title="在当前智能体下开始新话题"
+              aria-label="New topic"
+              title="Start a new topic under the current agent"
               disabled={actionPending !== null}
               onClick={startNewThread}
             >
               <HelmIcon name={actionPending === 'new-thread' ? 'loader' : 'plus'} size={12} />
-              <span className="pane-action-label">新话题</span>
+              <span className="pane-action-label">New topic</span>
             </button>
           ) : null}
           {toolbarActions.map((action) => (
@@ -401,8 +401,8 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             <button
               type="button"
               className={`btn btn-sm${store.workbenchOpen ? ' btn-primary' : ''}`}
-              aria-label={workbenchCount > 0 ? `工作台（${workbenchCount}）` : '工作台'}
-              title="展开右侧工作台（插件面板与产物）"
+              aria-label={workbenchCount > 0 ? `Workbench (${workbenchCount})` : 'Workbench'}
+              title="Expand the right workbench (plugin panels and artifacts)"
               onClick={() => {
                 // 打开首个可用页签；已打开时保持当前有效页签。
                 const target = resolveActiveWorkbenchTab(
@@ -414,7 +414,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               }}
             >
               <HelmIcon name="panel-right" size={12} />
-              <span className="pane-action-label">工作台</span>
+              <span className="pane-action-label">Workbench</span>
               {workbenchCount > 0 && <span className={`badge ${workbenchBadgeClass} tabular-nums`}>{workbenchCount}</span>}
             </button>
           ) : null}
@@ -422,15 +422,15 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             <button
               type="button"
               className="btn btn-sm btn-ghost conversation-drawer-primary-btn"
-              aria-label="全屏打开此会话"
-              title="在主屏中全屏打开此会话"
+              aria-label="Open this conversation fullscreen"
+              title="Open this conversation fullscreen in the main view"
               onClick={() => {
                 onCloseDrawer()
                 store.openTarget({ kind: 'conversation', conversationId })
               }}
             >
               <HelmIcon name="external-link" size={12} />
-              <span className="pane-action-label">全屏</span>
+              <span className="pane-action-label">Fullscreen</span>
             </button>
           ) : isSplit && onCloseSplit !== undefined ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
@@ -448,8 +448,8 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
-                  aria-label="更多会话操作"
-                  title="更多会话操作"
+                  aria-label="More conversation actions"
+                  title="More conversation actions"
                   aria-expanded={moreOpen}
                   ref={moreButtonRef}
                 >
@@ -475,14 +475,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                   >
                     <span className="pane-more-item-label">
                       <HelmIcon name="edit" size={13} />
-                      重命名会话
+                      Rename conversation
                     </span>
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     className="popover-item"
                     disabled={actionPending !== null || isCompacting}
                     onSelect={() => {
-                      void runAction('compact', () => conversationsApi.compact(conversationId), '精简任务已提交')
+                      void runAction('compact', () => conversationsApi.compact(conversationId), 'Compaction submitted')
                     }}
                   >
                     <span className="pane-more-item-label">
@@ -491,7 +491,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                         size={13}
                         className={compactPending ? 'spin-slow' : undefined}
                       />
-                      {isCompacting ? '正在精简上下文…' : '精简上下文 (/compact)'}
+                      {isCompacting ? 'Compacting context…' : 'Compact context (/compact)'}
                     </span>
                   </DropdownMenuItem>
                   {canManageArchive && (
@@ -502,7 +502,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                         void runAction(
                           archived ? 'restore-archive' : 'archive',
                           () => patchConversationArchived(conversation, !archived),
-                          archived ? '已恢复会话' : '已归档会话',
+                          archived ? 'Conversations restored' : 'Conversations archived',
                         )
                       }}
                     >
@@ -514,7 +514,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                           size={13}
                           className={actionPending === 'archive' || actionPending === 'restore-archive' ? 'spin-slow' : undefined}
                         />
-                        {archived ? '恢复会话' : '归档会话'}
+                        {archived ? 'Restore conversation' : 'Archive conversation'}
                       </span>
                     </DropdownMenuItem>
                   )}
@@ -545,7 +545,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                   >
                     <span className="pane-more-item-label">
                       <HelmIcon name={actionPending === 'reset' ? 'loader' : 'rotate-ccw'} size={13} />
-                      重置上下文 (/reset)
+                      Reset context (/reset)
                     </span>
                   </DropdownMenuItem>
                   {isConversationDeletable(conversation) && (
@@ -558,7 +558,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                     >
                       <span className="pane-more-item-label">
                         <HelmIcon name="trash-2" size={13} />
-                        删除会话
+                        Delete conversation
                       </span>
                     </DropdownMenuItem>
                   )}
@@ -567,23 +567,23 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             </DropdownMenu>
           </span>
           {isDrawer && onCloseDrawer !== undefined ? (
-            <Tooltip content="关闭子会话抽屉 (Esc)" side="bottom">
+            <Tooltip content="Close child conversation drawer (Esc)" side="bottom">
               <button
                 type="button"
                 className="btn btn-sm btn-ghost conversation-drawer-close-btn"
-                aria-label="关闭抽屉"
-                title="关闭子会话抽屉 (Esc)"
+                aria-label="Close drawer"
+                title="Close child conversation drawer (Esc)"
                 onClick={onCloseDrawer}
               >
                 <HelmIcon name="x" size={13} />
-                <span className="pane-action-label">关闭</span>
+                <span className="pane-action-label">Close</span>
               </button>
             </Tooltip>
           ) : null}
         </div>
       </header>
       {isDrawer ? (
-        <div className="pane-drawer-env-bar" aria-label="子会话环境上下文">
+        <div className="pane-drawer-env-bar" aria-label="Child conversation environment">
           <span className="pane-drawer-env-item mono">#{conversationId}</span>
           <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
           <span className="pane-drawer-env-item">
@@ -591,14 +591,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             <span>{conversation.profileId}</span>
           </span>
           <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
-          <span className="pane-drawer-env-item mono" title={`${currentNodeId}:${conversation.cwd || '(未设置)'}`}>
+          <span className="pane-drawer-env-item mono" title={`${currentNodeId}:${conversation.cwd || '(not set)'}`}>
             <HelmIcon name={currentNodeId === 'local' ? 'laptop' : 'server'} size={11} />
-            <span>{`${currentNodeId}:${conversation.cwd || '(未设置)'}`}</span>
+            <span>{`${currentNodeId}:${conversation.cwd || '(not set)'}`}</span>
           </span>
           {conversation.ownedBy !== undefined ? (
             <>
               <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
-              <span className="badge badge-neutral">{`归属 ${conversation.ownedBy}`}</span>
+              <span className="badge badge-neutral">{`Owner ${conversation.ownedBy}`}</span>
             </>
           ) : null}
         </div>
@@ -624,13 +624,13 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         onOpenChange={(open) => {
           if (!open) setConfirmAction(null)
         }}
-        title={`重置会话 #${conversationId} 的上下文？`}
-        description="历史消息保留，模型将从全新上下文开始。"
-        confirmText="重置上下文"
+        title={`Reset the context of conversation #${conversationId}?`}
+        description="History is preserved; the model starts from a fresh context."
+        confirmText="Reset context"
         danger
         onConfirm={() => {
           setConfirmAction(null)
-          void runAction('reset', () => conversationsApi.reset(conversationId), '上下文已重置')
+          void runAction('reset', () => conversationsApi.reset(conversationId), 'Context reset')
         }}
         onCancel={() => setConfirmAction(null)}
       />
@@ -640,9 +640,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         onOpenChange={(open) => {
           if (!open) setConfirmAction(null)
         }}
-        title={`确定删除会话 #${conversationId} 吗？`}
-        description="此操作无法撤销。"
-        confirmText="删除会话"
+        title={`Delete conversation #${conversationId}?`}
+        description="This action cannot be undone."
+        confirmText="Delete conversation"
         danger
         onConfirm={() => {
           setConfirmAction(null)
@@ -654,14 +654,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               store.pushNotice({
                 type: 'notification',
                 level: 'info',
-                title: '已删除会话',
-                body: `会话 #${conversationId} 已删除`,
+                title: 'Conversation deleted',
+                body: `Conversation #${conversationId} deleted`,
               })
             } catch (err) {
               store.pushNotice({
                 type: 'notification',
                 level: 'error',
-                title: '删除会话失败',
+                title: 'Failed to delete conversation',
                 body: err instanceof Error ? err.message : String(err),
               })
             }

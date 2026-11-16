@@ -1,13 +1,13 @@
 /**
- * 跨平台环境变量对象（Record<string, string | undefined>）读写原语。
+ * across platform environment variable object (Record<string, string | undefined>) read write original language.
  *
- * Node.js 的 `process.env` 在 Windows 下是大小写不敏感代理，但拷贝进普通 JS
- * 对象后按精确键名区分。`child_process.spawn(..., { env })` 在 Windows 上
- * 传给底层环境块时按大小写不敏感合并，后插入的 `'PATH'` 会整段覆盖先插入的
- * `'Path'`（直接清空宿主机原有 Path）。本模块提供平台感知的统一读写与前置操作。
+ * Node.js  `process.env` in Windows under is large small write do not sensitive proxy, but copy enter ordinary JS
+ * object after by precise key name zone.`child_process.spawn(..., { env })` in Windows on
+ * pass to underlying environment chunk when by large small write do not sensitive merge, after insert `'PATH'` will whole segment override first insert
+ * `'Path'`(directly empty host machine original has Path). this module provide platform aware unify read write and pre- operation.
  */
 
-/** 在环境变量对象中查找键名（win32 大小写不敏感且取后插入者；POSIX 精确匹配）。 */
+/** in environment variable object in find key name (win32 large small write do not sensitive and take after insert;POSIX precise match). */
 export function findEnvKey(
   env: Readonly<Record<string, string | undefined>>,
   key: string,
@@ -27,7 +27,7 @@ export function findEnvKey(
   return undefined
 }
 
-/** 读取环境变量值（win32 先按大小写不敏感扫描自有键，再回退直接属性以兼容 process.env Proxy）。 */
+/** read environment variable value (win32 first by large small write do not sensitive scan self has key, again fall back directly property with compatibility process.env Proxy). */
 export function getEnvEntry(
   env: Readonly<Record<string, string | undefined>>,
   key: string,
@@ -38,7 +38,7 @@ export function getEnvEntry(
   return found !== undefined ? env[found] : env[key]
 }
 
-/** 写入环境变量：win32 清理其他大小写变体键，确保对象中同一变量至多一个键。 */
+/** write environment variable:win32 clean up other large small write change body key, ensure object in the same variable at most a key. */
 export function setEnvEntry(
   env: Record<string, string | undefined>,
   key: string,
@@ -56,7 +56,7 @@ export function setEnvEntry(
   env[key] = value
 }
 
-/** 删除环境变量（win32 删除全部大小写变体键；POSIX 精确删除）。 */
+/** delete environment variable (win32 delete all large small write change body key;POSIX precise delete). */
 export function deleteEnvEntry(
   env: Record<string, string | undefined>,
   key: string,
@@ -75,8 +75,8 @@ export function deleteEnvEntry(
 }
 
 /**
- * 将 `prefixDir` 前置到环境变量的 PATH（win32 保留原有 `'Path'` 等大小写键名并
- * 合并清理其余变体，避免后插入的 `'PATH'` 在 Windows 上覆盖清零宿主 `'Path'`）。
+ *  `prefixDir` pre- to environment variable PATH(win32 keep original has `'Path'` etc. large small write key name and
+ * merge clean up the rest change body, avoid after insert `'PATH'` in Windows on override clean zero host `'Path'`).
  */
 export function prependEnvPath(
   env: Record<string, string | undefined>,

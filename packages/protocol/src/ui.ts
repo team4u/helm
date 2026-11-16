@@ -1,30 +1,32 @@
 /**
- * 前端扩展面：基础界面、微操作、运行时元数据与插件子插槽。
- * 每个扩展点经 client.tsx 具名导出引用渲染（宿主共享 React 运行时，本包不引 React 类型）。
+ * Frontend extension surface: base UI, micro interactions, runtime metadata and plugin sub-slots.
+ * Each extension point is referenced and rendered via named exports from client.tsx
+ * (the host shares the React runtime; this package does not import React types).
  */
 
 import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, ConversationSummary, ToolResultTruncation, WhenBusy } from './conversation.js'
+import type { HelmLocale, LocaleTranslator } from './locale.js'
 import type { PluginSummary } from './plugin-dto.js'
 
-/** 编译器保留的 CSS 文本导出名；加载器确认模块有效后才将其挂入页面。 */
+/** Reserved CSS text export name kept by the compiler; the loader mounts it onto the page only after validating the module. */
 export const PLUGIN_CLIENT_CSS_EXPORT = '__helmClientCss' as const
 
-/** 插件 client.tsx 编译产物中的具名导出引用。 */
+/** Named export reference inside a plugin client.tsx build artifact. */
 export interface ClientComponentRef {
-  /** 相对插件 clientRoot 的源模块路径（如 'client.tsx'、'panels/Status.tsx'；禁止绝对路径/越根 ../）。 */
+  /** Source module path relative to the plugin clientRoot (e.g. 'client.tsx', 'panels/Status.tsx'; absolute paths / escaping the root via ../ are forbidden). */
   module: string
-  /** 具名导出名。 */
+  /** Named export name. */
   export: string
 }
 
-/** 所有 UI 扩展点公共形状（仅 client.tsx 轨道：声明式 JSON Spec 已整体迁出内核，由 builtin:json-render 插件经 markdown 代码块扩展提供）。 */
+/** Common shape of all UI extension points (client.tsx track only: the declarative JSON spec track has moved out of the kernel and is provided by the builtin:json-render plugin via markdown code blocks). */
 export interface UiSpecBase {
-  /** 扩展点内唯一 ID（最终寻址为 <extension>:<pluginId>/<id>）。 */
+  /** Extension-point-unique ID (final addressing is <extension>:<pluginId>/<id>). */
   id: string
   title?: string
-  /** client.tsx 组件引用（需插件定义提供 clientRoot）。 */
+  /** client.tsx component reference (requires the plugin definition to provide clientRoot). */
   client?: ClientComponentRef
-  /** 会话作用域：仅命中会话（或无会话上下文时）渲染本扩展点。 */
+  /** Conversation scope: render this extension point only for matching conversations (or when no conversation context exists). */
   scope?: ConversationScope
 }
 
@@ -32,7 +34,7 @@ export interface UiSpecBase {
 export interface SidebarItemSpec extends UiSpecBase {
   label: string
   icon?: string
-  /** 点击目标，如 'conversation:1'、'conversation:profile:superagent'、'screen:builtin:superagent/recall-graph'。 */
+  /** Click target, e.g. 'conversation:1', 'conversation:profile:superagent', 'screen:builtin:superagent/recall-graph'. */
   target?: string
   order?: number
 }
@@ -40,57 +42,58 @@ export interface SidebarItemSpec extends UiSpecBase {
 export interface SidebarSectionSpec extends UiSpecBase {
   label: string
   icon?: string
-  /** 分组内会话过滤标签（如 'worker'）。 */
+  /** Conversation filter tag inside the group (e.g. 'worker'). */
   filterTag?: string
-  /** 是否支持折叠及默认折叠态（如已归档分组）。 */
+  /** Whether the group is collapsible and its default collapsed state (e.g. the archived group). */
   collapsible?: boolean
   defaultCollapsed?: boolean
   order?: number
 }
 
-// 2. screen（全屏自定义视图，支持左右 Split View 并排）
+// 2. screen (full-screen custom view, supports left/right split view side by side)
 export interface ScreenSpec extends UiSpecBase {
   label: string
   icon?: string
 }
 
-// 3. timeline.renderer（按 entry kind / 元数据接管时间线条目）
+// 3. timeline.renderer (take over timeline entries by entry kind / metadata)
 export interface TimelineRendererSpec extends UiSpecBase {
-  /** 优先级降序；同优先级保持贡献顺序，缺省 0。 */
+  /** Priority descending; same priority keeps contribution order, default 0. */
   priority?: number
-  /** 接管的 entry kind 列表；缺省接管全部。 */
+  /** Entry kinds to take over; omit to take over all. */
   kinds?: string[]
-  /** 接管 entry.data.renderer 等于本值的条目（与 kinds 取 AND）。 */
+  /** Take over entries whose entry.data.renderer equals this value (AND with kinds). */
   matchMeta?: { renderer: string }
 }
 
-// 3.5 markdown.codeBlock（按围栏语言接管 Markdown 代码块渲染）
+// 3.5 markdown.codeBlock (take over markdown code block rendering by fenced language)
 export interface MarkdownCodeBlockSpec extends UiSpecBase {
-  /** 接管的围栏语言列表（如 ['ui', 'json-render']、['mermaid']；不可为空、项不得重复）。 */
+  /** Fenced languages to take over (e.g. ['ui', 'json-render'], ['mermaid']; must be non-empty, no duplicates). */
   languages: string[]
-  /** 优先级降序；同优先级保持贡献顺序，缺省 0。同语言多插件冲突时取最高优先级，平级取贡献顺序在先者。 */
+  /** Priority descending; same priority keeps contribution order, default 0. On same-language multi-plugin conflicts the highest priority wins, ties go to the earlier contribution. */
   priority?: number
-  /** 组件引用（需插件定义提供 clientRoot）；无匹配注册或插件停用时回退普通代码块。 */
+  /** Component reference (requires the plugin definition to provide clientRoot); falls back to a plain code block when no matching registration exists or the plugin is disabled. */
   client: ClientComponentRef
 }
 
-/** markdown.codeBlock 组件收到的标准 Props。 */
+/** Standard props received by markdown.codeBlock components. */
 export interface MarkdownCodeBlockProps {
-  /** 小写化的围栏语言（与声明 languages 精确匹配，不做子串/前缀）。 */
+  /** Lower-cased fenced language (exact match with declared languages; no substring/prefix matching). */
   language: string
-  /** 代码块原始文本（去尾部换行；未经任何解析——JSON 合法性由组件自行判定）。 */
+  /** Raw code block text (trailing newline stripped; not parsed in any way — JSON validity is up to the component). */
   code: string
-  /** 所在会话上下文（无会话渲染场景为 undefined）。 */
+  /** Owning conversation context (undefined when rendered without a conversation). */
   conversationId?: number
 }
 
-// 4. tool.view（按 toolName 接管工具调用内联卡片）
+// 4. tool.view (take over tool-call inline cards by toolName)
 export interface ToolViewSpec extends UiSpecBase {
   priority?: number
   toolNames: string[]
   /**
-   * true 时完全替换外层默认 .trace-row 工具行（由插件组件自行渲染胶囊横条与内嵌详情），
-   * 避免出现上下双横条。
+   * When true, fully replaces the outer default .trace-row tool row (the plugin
+   * component renders the pill bar and inline details itself),
+   * avoiding double bars.
    */
   replaceRow?: boolean
 }
@@ -102,7 +105,7 @@ export interface ComposerPillSpec extends UiSpecBase {
 }
 
 export interface ComposerWidgetSpec extends UiSpecBase {}
-/** 补全仅插入文本，不执行候选携带的命令。 */
+/** Completions only insert text; they never execute commands carried by candidates. */
 export interface ComposerCompletionItem {
   id: string
   label: string
@@ -111,7 +114,7 @@ export interface ComposerCompletionItem {
   icon?: string
 }
 
-/** 查询动作只接收文本与上下文身份（真实会话传 conversationId；待命草稿态支持传 profileId）。 */
+/** Query actions receive only text and context identity (real conversations pass conversationId; the standby draft state may pass profileId). */
 export interface ComposerCompletionQuery {
   query: string
   conversationId?: number
@@ -122,12 +125,12 @@ export interface ComposerCompletionResult {
   items: ComposerCompletionItem[]
 }
 
-/** 文档源只读取贡献插件自己的公开文档；itemsField 为顶层数组字段名。 */
+/** Document sources only read the contributing plugin's own public docs; itemsField is the top-level array field name. */
 export type ComposerCompletionSource =
   | { kind: 'action'; actionId: string; actionPluginId?: string }
   | { kind: 'doc' | 'sessionDoc'; name: string; itemsField: string }
 
-/** 补全由宿主统一渲染，不接受 client 回调或视图。'/' 保留给命令和技能。 */
+/** Completions are rendered uniformly by the host and accept no client callbacks or views. '/' is reserved for commands and skills. */
 export interface ComposerCompleterSpec extends Omit<UiSpecBase, 'client'> {
   label: string
   trigger: '@' | '#' | ':'
@@ -135,7 +138,7 @@ export interface ComposerCompleterSpec extends Omit<UiSpecBase, 'client'> {
   source: ComposerCompletionSource
 }
 
-/** MIME 精确值或 type/*；extensions 为含点号的小写后缀（含多段后缀）。两类匹配取 OR。 */
+/** Exact MIME values or type/*; extensions are dot-prefixed lowercase suffixes (including multi-segment suffixes). The two matchers are OR-combined. */
 export interface ArtifactPreviewerSpec extends UiSpecBase {
   label: string
   icon?: string
@@ -144,31 +147,32 @@ export interface ArtifactPreviewerSpec extends UiSpecBase {
   extensions?: string[]
 }
 
-/** 预览组件在主站运行，是可信插件代码；blob 内容不是可信 HTML。 */
+/** Preview components run on the main site and are trusted plugin code; blob content is not trusted HTML. */
 export interface ArtifactPreviewerProps {
   artifactId: string
   conversationId?: number
-  /** 未加载名称元数据时缺省，不用 artifactId 冒充文件名。 */
+  /** Default when name metadata is not loaded; never passes artifactId off as the file name. */
   name?: string
   mimeType: string
   size: number
-  /** 由宿主管理生命周期，插件不得自行撤销。 */
+  /** Lifecycle is managed by the host; plugins must not revoke it themselves. */
   blobUrl: string
-  /** 仅解码最多 1 MiB 的文本内容；二进制或超限时为 null。 */
+  /** Decodes at most 1 MiB of text content; null for binary or over-limit content. */
   text: string | null
 }
 
-// 6. workbench.panel（会话感知右栏抽屉面板）
+// 6. workbench.panel (conversation-aware right-drawer panel)
 export interface WorkbenchPanelBadgeSpec {
-  /** 订阅的本插件 public doc 名称。 */
+  /** Subscribed public doc name of this plugin. */
   doc: string
-  /** 全局数字计数字段名（读取 docValue[countField]）。 */
+  /** Global numeric counter field name (reads docValue[countField]). */
   countField?: string
-  /** 全局角标色调字段名（读取 docValue[toneField]，值：'warn' | 'accent' | 'neutral'）。 */
+  /** Global badge tone field name (reads docValue[toneField], values: 'warn' | 'accent' | 'neutral'). */
   toneField?: string
   /**
-   * 按会话 ID 索引的统计映射字段名（读取 docValue[byConversationField][String(conversationId)]，
-   * 形状为 { count: number; tone?: 'warn' | 'accent' | 'neutral'; footerText?: string }）。
+   * Field name of the stats map indexed by conversation ID (reads
+   * docValue[byConversationField][String(conversationId)], shaped as
+   * { count: number; tone?: 'warn' | 'accent' | 'neutral'; footerText?: string }).
    */
   byConversationField?: string
 }
@@ -177,7 +181,7 @@ export interface WorkbenchPanelSpec extends UiSpecBase {
   label: string
   icon?: string
   order?: number
-  /** 动态角标与状态栏配置（驱动工作台抽屉页签计数、底部摘要与顶栏「工作台」按钮汇总角标）。 */
+  /** Dynamic badge and status bar config (drives workbench drawer tab counts, footer summaries and the top bar "Workbench" aggregate badge). */
   badge?: WorkbenchPanelBadgeSpec
 }
 
@@ -185,10 +189,10 @@ export interface WorkbenchPanelSpec extends UiSpecBase {
 export interface CommandSpec extends UiSpecBase {
   title: string
   icon?: string
-  /** 不含 / 的触发词；同时派生输入区斜杠菜单。不允许覆盖宿主保留命令。 */
+  /** Trigger word without /; also derives the composer slash menu. Must not override host reserved commands. */
   slash?: string
   description?: string
-  /** 快捷命令复用 ctx.action 端点。 */
+  /** Quick commands reuse the ctx.action endpoint. */
   actionId?: string
   actionPluginId?: string
   input?: Record<string, unknown>
@@ -200,7 +204,7 @@ export interface SettingsPanelSpec extends UiSpecBase {
   order?: number
 }
 
-/** 外部 Profile 运行时元数据；表单结构由宿主通用 ProfileRuntime 契约驱动。 */
+/** External Profile runtime metadata; the form structure is driven by the host's generic ProfileRuntime contract. */
 export interface ProfileRuntimeUiSpec {
   id: string
   kind: string
@@ -211,52 +215,54 @@ export interface ProfileRuntimeUiSpec {
   order?: number
 }
 
-/** UI 动作统一声明：同一形态服务三类微插槽（target 区分），不再维护三个重复方法。 */
+/** Unified UI action declaration: one shape serves three micro slots (distinguished by target), no more duplicated methods. */
 export interface UiActionSpec extends UiSpecBase {
   target: 'conversation:header' | 'conversation:row' | 'timeline:entry'
   label: string
   icon?: string
   order?: number
-  /** 仅 conversation:header：'toolbar' 直出按钮组，'menu'（缺省）收纳下拉菜单。 */
+  /** conversation:header only: 'toolbar' renders direct buttons, 'menu' (default) folds into the dropdown. */
   placement?: 'toolbar' | 'menu'
-  /** 绑定宿主代管执行的插件动作（与 client 二选一；两者皆缺在注册边界拒绝）。 */
+  /** Plugin action delegated to the host for execution (mutually exclusive with client; missing both is rejected at the registration boundary). */
   actionId?: string
   actionPluginId?: string
   input?: Record<string, unknown>
-  /** 仅 timeline:entry：接管条目 kind 列表（缺省匹配全部）。 */
+  /** timeline:entry only: entry kinds to take over (default matches all). */
   kinds?: string[]
-  /** 仅 timeline:entry：接管文本消息角色。 */
+  /** timeline:entry only: text message roles to take over. */
   roles?: Array<'user' | 'assistant'>
 }
 
-/** 向另一个插件的具名子插槽注入内容。 */
+/** Injects content into a named sub-slot of another plugin. */
 export interface PluginSlotContributionSpec extends UiSpecBase {
-  /** <ownerPluginId>/<slotName>，必须恰有一个 /。 */
+  /** <ownerPluginId>/<slotName>, must contain exactly one /. */
   target: string
   order?: number
   priority?: number
 }
 
-/** Profile 详情抽屉的插件扩展子插槽全限定名（builtin:profile 提供，其他插件注入）。 */
+/** Fully qualified name of the Profile detail drawer plugin extension sub-slot (provided by builtin:profile, injected by other plugins). */
 export const PROFILE_DETAIL_SECTION_SLOT = 'builtin:profile/detail-section' as const
 
-/** 宿主节点中心保留的命名空间，不代表存在 builtin:node 插件。 */
+/** Namespace reserved by the host node center; does not imply a builtin:node plugin exists. */
 export const NODE_DETAIL_SECTION_SLOT = 'builtin:node/detail-section' as const
 
-/** 宿主输入区状态行保留的命名空间，不代表存在 builtin:composer 插件。
- * 贡献组件收到与 composer.pill/widget 同形的 ComposerScopeProps
- * （conversation + composer），在上下文用量只读状态旁渲染；速率类只读
- * 指标（如 builtin:token-speed）经此插槽贡献；移动端同样保留在工具栏
- * 状态区（不收入 more 菜单）。 */
+/** Namespace reserved by the host composer status row; does not imply a builtin:composer plugin exists.
+ * Contribution components receive ComposerScopeProps with the same shape as
+ * composer.pill/widget (conversation + composer) and render next to the
+ * read-only context usage state; read-only rate metrics (e.g. builtin:token-speed)
+ * are contributed through this slot; on mobile they also stay in the toolbar
+ * status area (not folded into the more menu). */
 export const COMPOSER_STATUS_SLOT = 'builtin:composer/status' as const
 
-/** 宿主输入区顶部托盘保留的命名空间，不代表存在 builtin:composer 插件。
- * 贡献组件收到 ComposerScopeProps（conversation + composer），在 AskDock
- * 上方直出渲染（桌面与移动端均不折叠进 more 菜单）；无在途内容时应返回
- * null 归零高度。 */
+/** Namespace reserved by the host composer top tray; does not imply a builtin:composer plugin exists.
+ * Contribution components receive ComposerScopeProps (conversation + composer)
+ * and render directly above the AskDock (not folded into a more menu on either
+ * desktop or mobile); with nothing in flight they should return null to zero
+ * the height. */
 export const COMPOSER_DOCK_SLOT = 'builtin:composer/dock' as const
 
-/** 仅已有节点挂载；不包含节点接入令牌或其他凭据。 */
+/** Only mounted for existing nodes; contains no node access tokens or other credentials. */
 export interface NodeDetailSlotProps {
   nodeId: string
   isLocal: boolean
@@ -264,17 +270,17 @@ export interface NodeDetailSlotProps {
   isNew: boolean
 }
 
-/** target: PROFILE_DETAIL_SECTION_SLOT 子插槽传递给插件 client.tsx 组件的通用 Props（不含具体插件业务字段）。 */
+/** Generic props passed to plugin client.tsx components for the target: PROFILE_DETAIL_SECTION_SLOT sub-slot (without concrete plugin business fields). */
 export interface ProfileDetailSlotProps {
-  /** 当前正在查看/编辑的单个 Profile ID（新建模式为空串）。 */
+  /** The single Profile ID currently being viewed/edited (empty string in create mode). */
   profileId: string
-  /** 是否处于新建 Profile 模式（尚未创建落盘）。 */
+  /** Whether the drawer is in new-Profile mode (not yet persisted). */
   isNew: boolean
-  /** 宿主抽屉是否处于保存或删除中的禁用态。 */
+  /** Whether the host drawer is in a saving/deleting disabled state. */
   disabled: boolean
 }
 
-/** ctx.ui：基础扩展面与细粒度组合扩展面。 */
+/** ctx.ui: base extension surface plus fine-grained composition extension surfaces. */
 export interface PluginUiRegistry {
   sidebarItem(spec: SidebarItemSpec): void
   sidebarSection(spec: SidebarSectionSpec): void
@@ -290,32 +296,33 @@ export interface PluginUiRegistry {
   command(spec: CommandSpec): void
   settingsPanel(spec: SettingsPanelSpec): void
   profileRuntime(spec: ProfileRuntimeUiSpec): void
-  /** UI 动作统一注册（conversation:header / conversation:row / timeline:entry 三类微插槽）。 */
+  /** Unified UI action registration (three micro slots: conversation:header / conversation:row / timeline:entry). */
   action(spec: UiActionSpec): void
   slot(spec: PluginSlotContributionSpec): void
 }
 
 // ---------------------------------------------------------------------------
-// 标准组件 Props（纯数据形状，供 client.tsx 实现与宿主传递；不引 React 类型）
+// Standard component props (pure data shapes, consumed by client.tsx
+// implementations and passed by the host; no React types imported)
 // ---------------------------------------------------------------------------
 
-/** screen：全屏自定义视图（支持左右 Split View 并排展示）。 */
+/** screen: full-screen custom view (supports left/right split view side by side). */
 export interface ScreenProps {
   pluginId: string
   screenId: string
   isSplit: boolean
   params: Readonly<Record<string, string>>
-  /** undefined 删除键；默认替换历史记录，显式 push 才新增记录。 */
+  /** undefined deletes the key; default replaces history, explicit push appends a new entry. */
   setParams(patch: Record<string, string | undefined>, options?: { push?: boolean }): void
 }
 
-/** timeline.renderer：接管单条时间线条目的渲染。 */
+/** timeline.renderer: takes over rendering of a single timeline entry. */
 export interface TimelineRendererProps {
   entry: ConversationEntry
   conversationId: number
 }
 
-/** 同会话内全部工具调用的轻量摘要（供插件组件自行去重，如同子会话多次 resume 折叠）。 */
+/** Lightweight summary of all tool calls in the same conversation (for plugins to dedupe themselves, e.g. folding multiple resumes of the same sub-conversation). */
 export interface ToolViewSiblingCall {
   callId: string
   toolName: string
@@ -323,11 +330,11 @@ export interface ToolViewSiblingCall {
   status: 'running' | 'done' | 'error'
   result?: unknown
   structuredOutput?: unknown
-  /** 结果是详情端点的截断预览时携带，插件不得将 result 当完整原文。 */
+  /** Present when the result is a truncated preview from the detail endpoint; plugins must not treat result as the full original text. */
   resultTruncation?: ToolResultTruncation
 }
 
-/** tool.view：工具调用过程与结果的可序列化数据。 */
+/** tool.view: serializable data of a tool call process and result. */
 export interface ToolViewProps {
   callId: string
   toolName: string
@@ -335,14 +342,14 @@ export interface ToolViewProps {
   status: 'running' | 'done' | 'error'
   result?: unknown
   structuredOutput?: unknown
-  /** 结果是详情端点的截断预览时携带，插件不得将 result 当完整原文。 */
+  /** Present when the result is a truncated preview from the detail endpoint; plugins must not treat result as the full original text. */
   resultTruncation?: ToolResultTruncation
   isError?: boolean
   startedAt?: number
   durationMs?: number
   artifactRef?: string
   conversationId: number
-  /** 当前已加载时间线内的全部工具调用（按时间顺序），供插件自行计算折叠/续接关系。 */
+  /** All tool calls in the currently loaded timeline (chronological), for plugins to compute folding/continuation relationships themselves. */
   siblingCalls?: ReadonlyArray<ToolViewSiblingCall>
 }
 
@@ -352,24 +359,24 @@ export interface ComposerController {
   readonly sending: boolean
   setDraft(text: string): void
   insertText(text: string): void
-  /** 省略 text 时提交当前草稿及附件；显式 text 时不消费原草稿。失败必须 reject。 */
+  /** Omits text to submit the current draft with attachments; explicit text does not consume the original draft. Must reject on failure. */
   submit(text?: string, options?: { whenBusy?: WhenBusy }): Promise<void>
 }
 
-/** composer.pill / composer.widget：输入区扩展。 */
+/** composer.pill / composer.widget: composer area extensions. */
 export interface ComposerScopeProps {
   conversation: ConversationSummary
   composer: ComposerController
 }
 
-/** workbench.panel：会话感知右栏抽屉面板。 */
+/** workbench.panel: conversation-aware right-drawer panel. */
 export interface WorkbenchPanelProps {
   conversation: ConversationSummary
 }
 
 /**
- * 序列化后的 UI 贡献（事件快照 ui 数组元素）：
- * surface 为扩展点名（如 'sidebar.item'、'screen'、'timeline.renderer'）。
+ * Serialized UI contribution (element of the ui array in event snapshots):
+ * surface is the extension point name (e.g. 'sidebar.item', 'screen', 'timeline.renderer').
  */
 export interface PluginUiContribution {
   pluginId: string
@@ -378,8 +385,9 @@ export interface PluginUiContribution {
 }
 
 /**
- * 可辨识联合类型的已知 UI 贡献：覆盖全部注册 surface，供消费方（如 groupUiContributions）
- * 在守卫后免去 `as unknown as` 强制转换。
+ * Known UI contributions of the discriminated union: covers all registered
+ * surfaces so consumers (e.g. groupUiContributions) can skip `as unknown as`
+ * casts after the guard.
  */
 export type KnownPluginUiContribution =
   | { pluginId: string; surface: 'sidebar.item'; spec: SidebarItemSpec }
@@ -401,7 +409,7 @@ export type KnownPluginUiContribution =
   | { pluginId: string; surface: 'timeline.entry.action'; spec: UiActionSpec }
   | { pluginId: string; surface: 'plugin.slot'; spec: PluginSlotContributionSpec }
 
-/** 已知 UI 贡献 surface 唯一真源（与 KnownPluginUiContribution 双向锁定）。 */
+/** Single source of truth of known UI contribution surfaces (bi-directionally locked with KnownPluginUiContribution). */
 export const KNOWN_PLUGIN_UI_SURFACES = [
   'sidebar.item',
   'sidebar.section',
@@ -434,8 +442,9 @@ void _assertAllKnownUiSurfacesListed
 const KNOWN_PLUGIN_UI_SURFACE_SET: ReadonlySet<string> = new Set(KNOWN_PLUGIN_UI_SURFACES)
 
 /**
- * 校验并收窄 PluginUiContribution：检查已知 surface 与 spec 非空纯对象后返回判别联合成员；
- * 未知 surface 或非对象 spec 返回 undefined。
+ * Validate and narrow a PluginUiContribution: checks the known surface and a
+ * non-null plain-object spec, then returns the discriminated-union member;
+ * unknown surfaces or non-object specs return undefined.
  */
 export function parsePluginUiContribution(
   item: PluginUiContribution,
@@ -448,14 +457,17 @@ export function parsePluginUiContribution(
 }
 
 // ---------------------------------------------------------------------------
-// client.tsx 轨道：宿主与插件组件的运行时契约（纯类型，不引 React）
+// client.tsx track: runtime contract between host and plugin components
+// (pure types, no React import)
 // ---------------------------------------------------------------------------
 
 /**
- * client.tsx 组件内部的宿主上下文（usePluginContext() 返回值）：
- * 全部能力来自真实宿主（callAction 走 POST /api/actions，openScreen/openSplitScreen
- * 走宿主导航，getPluginDoc 一次性读取），无 mock。
- * 响应式文档订阅请用共享模块里的 usePluginDoc（import '@helm/plugin-client'）。
+ * Host context inside client.tsx components (return value of usePluginContext()):
+ * all capabilities come from the real host (callAction goes through
+ * POST /api/actions, openScreen/openSplitScreen go through host navigation,
+ * getPluginDoc is a one-shot read); no mocks.
+ * For reactive doc subscriptions use usePluginDoc from the shared module
+ * (import from '@helm/plugin-client').
  */
 export interface CallActionOptions {
   pluginId?: string
@@ -464,73 +476,78 @@ export interface CallActionOptions {
 
 export interface PluginClientContext {
   pluginId: string
-  /** 默认寻址本插件与当前槽位会话，可显式跨插件调用。 */
+  /** Defaults to addressing the current plugin and slot conversation; can explicitly cross plugins. */
   callAction(actionId: string, input?: unknown, options?: CallActionOptions): Promise<unknown>
-  /** 向指定或当前会话提交输入；无会话时显式报错。 */
+  /** Submits input to the target or current conversation; explicitly rejects when there is none. */
   submitInput(text: string, options?: { conversationId?: number; whenBusy?: WhenBusy }): Promise<void>
-  /** 在主屏打开目标（conversation:<id> / screen:<pluginId>/<screenId> 等）。 */
+  /** Opens a target on the main screen (conversation:<id> / screen:<pluginId>/<screenId> etc.). */
   openScreen(target: string): void
-  /** 在右侧分屏打开目标。 */
+  /** Opens a target in the right split pane. */
   openSplitScreen(target: string): void
-  /** 打开子会话侧边抽屉模态（统一子会话查看入口；不改变当前工作台开关状态）。 */
+  /** Opens the sub-conversation side drawer modal (unified sub-conversation view entry; does not change workbench open state). */
   openConversationDrawer(conversationId: number): void
-  /** 打开产物预览弹窗。 */
+  /** Opens the artifact preview modal. */
   openArtifact(artifactId: string): void
-  /** 打开工作台抽屉（可指定激活面板 ID）。 */
+  /** Opens the workbench drawer (optionally activating a specific panel ID). */
   openWorkbench(panelId?: string): void
-  /** 关闭工作台抽屉。 */
+  /** Closes the workbench drawer. */
   closeWorkbench(): void
-  /** 发送全局通知提示。 */
+  /** Sends a global notification toast. */
   notify(message: string, tone?: 'info' | 'warning' | 'error'): void
-  /** 读取本插件公共文档当前值（一次性 Promise；订阅式更新用 usePluginDoc 共享 hook）。 */
+  /** Reads the current value of this plugin's public doc (one-shot Promise; for subscription updates use the usePluginDoc shared hook). */
   getPluginDoc(docName: string, pluginId?: string): Promise<unknown>
   getPluginSessionDoc(docName: string, options?: { conversationId?: number; pluginId?: string }): Promise<unknown>
-  /** 仅输入区扩展及其子插槽提供。 */
+  /** Provided only by composer-area extensions and their sub-slots. */
   composer?: ComposerController
-  /** 当前会话 ID（无会话上下文的槽位为 undefined，如部分 settings.panel）。 */
+  /** Current conversation ID (undefined for slots without conversation context, e.g. some settings.panel). */
   conversationId?: number
-  /** 宿主当前主题。 */
+  /** Current host theme. */
   theme: 'light' | 'dark'
+  /** Current host UI locale (normalized via HELM_LOCALES / normalizeLocaleTag). */
+  locale: HelmLocale
+  /** Minimal translator: resolves LocalizedText display copy for the current locale. */
+  translate: LocaleTranslator
 }
 
 /**
- * 插件 client.tsx 可导入的宿主共享模块（编译器虚拟化为 __helm_shared_plugin_client
- * 全局命名空间，与 React 同机制共享，绝不打包第二份 React）。
+ * Host shared module importable by plugin client.tsx (the compiler virtualizes
+ * it into the __helm_shared_plugin_client global namespace, sharing the same
+ * mechanism as React — never bundles a second React copy).
  *
- * 导出符号唯一真源见 PLUGIN_CLIENT_SHARED_EXPORTS：
- * - hooks：usePluginContext / usePluginDoc / usePluginSessionDoc / useToolActivity /
- *   useConversations / useConversation / usePlugins；
- * - 无障碍底座组件：Switch / Select / MultiSelect / Checkbox / Tabs 系列 /
- *   SegmentedControl / HelmIcon / ViewBoundary / Callout；
- * - 轻量布局原语：Screen（页面容器+页头）/ ScreenSection（分节）/
- *   DataTable（组合式表格，统一 loading/empty）/ KvGrid（键值概览）；
- * - 内容展示：MarkdownView（标准 Markdown 渲染）/ CodeBlockView（语法高亮代码块）/
- *   CopyButton（复制按钮）；
- * - 格式化纯函数：formatTime（MM-DD HH:mm 紧凑时间）/ formatCompactTimestamp
- *   （MM-DD HH:mm:ss 日志时间戳）/ formatDurationMs（毫秒时长摘要）/ formatBytes
- *   （字节数人类可读化，1024 进制）；
- * - PluginSlot：插件间子插槽渲染原语。
+ * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
+ * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
+ *   useToolActivity / useConversations / useConversation / usePlugins;
+ * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
+ *   SegmentedControl / HelmIcon / ViewBoundary / Callout;
+ * - lightweight layout primitives: Screen (page container + header) / ScreenSection (sectioning) /
+ *   DataTable (composable table with unified loading/empty) / KvGrid (key-value overview);
+ * - content display: MarkdownView (standard markdown rendering) / CodeBlockView
+ *   (syntax-highlighted code block) / CopyButton (copy button);
+ * - formatting pure functions: formatTime (compact MM-DD HH:mm) / formatCompactTimestamp
+ *   (MM-DD HH:mm:ss log timestamp) / formatDurationMs (millisecond duration summary) /
+ *   formatBytes (human-readable bytes, 1024-based);
+ * - PluginSlot: inter-plugin sub-slot rendering primitive.
  */
 export const HELM_PLUGIN_CLIENT_SHARED_MODULE = '@helm/plugin-client'
 
-/** usePlugins()：宿主插件清单与 Screen 贡献的响应式快照（SSE 实时驱动，无轮询）。 */
+/** usePlugins(): reactive snapshot of host plugin list and Screen contributions (SSE driven, no polling). */
 export interface UsePluginsResult {
-  /** 宿主当前全部插件摘要（随 SSE plugin.changed 实时同步）。 */
+  /** Current plugin summaries of the host (kept in sync with SSE plugin.changed in real time). */
   plugins: PluginSummary[]
-  /** 当前全部已启用插件注册的 Screen 贡献列表（含所属 pluginId）。 */
+  /** Screen contribution list registered by currently enabled plugins (with owning pluginId). */
   screens: Array<{ pluginId: string; spec: ScreenSpec }>
 }
 
-/** GET /api/plugins/:id/client.mjs 响应元信息（错误时 HTTP 错误信封，不出 JS）。 */
+/** GET /api/plugins/:id/client.mjs response metadata (HTTP error envelope on failure, never JS). */
 export interface PluginClientModuleInfo {
   pluginId: string
-  /** 请求的 module 相对路径。 */
+  /** Requested module relative path. */
   module: string
-  /** 编译产物内容 hash（含全部本地依赖；源变更副重新编译）。 */
+  /** Build artifact content hash (including all local dependencies; recompiled when sources change). */
   contentHash: string
 }
 
-/** ctx.ui 全部注册方法名唯一真源（与 PluginUiRegistry 接口双向锁定）。 */
+/** Single source of truth of all ctx.ui registration method names (bi-directionally locked with the PluginUiRegistry interface). */
 export const PLUGIN_UI_METHOD_NAMES = [
   'sidebarItem',
   'sidebarSection',
@@ -557,12 +574,14 @@ type _AssertAllPluginUiMethodsListed =
 const _assertAllPluginUiMethodsListed: _AssertAllPluginUiMethodsListed = true
 void _assertAllPluginUiMethodsListed
 
-/** 宿主保留的会话内斜杠命令触发词（插件 command.slash 禁止占用）。 */
+/** Host reserved in-conversation slash command triggers (plugin command.slash must not occupy them). */
 export const RESERVED_SLASH_COMMANDS = ['new', 'clear', 'compact'] as const
 
-/** @helm/plugin-client 面向插件 client.tsx 导出的运行时符号唯一真源。 */
+/** Single source of truth of runtime symbols exported by @helm/plugin-client for plugin client.tsx. */
 export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'usePluginContext',
+  'usePluginLocale',
+  'usePluginTranslator',
   'usePluginDoc',
   'usePluginSessionDoc',
   'useToolActivity',
@@ -602,4 +621,3 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'formatDurationMs',
   'formatBytes',
 ] as const
-

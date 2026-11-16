@@ -25,7 +25,7 @@ pnpm typecheck        # 含测试 tsconfig
 pnpm test:unit        # web 属 unit 档（happy-dom）
 ```
 
-端口铁律：dev 固定 `3201`（`strictPort: true`，代理 `/api` 与 `/ws` 到 Hub），**永不占用 3000/3001/3002/3101/3102**。Hub 与 Web 默认只监听本机。
+端口铁律：dev 固定 `3201`（`strictPort: true`，代理 `/api` 与 `/ws` 到 Hub），**永不占用 3000/3001/3002/3101/3102**。Vite 默认绑定 `0.0.0.0` 并允许请求 Host；仅在可信网络运行开发服务器，若需限制到本机，可启动时设置 `VITE_HOST=127.0.0.1`。Hub 默认绑定 `127.0.0.1`。
 
 ## 构建产物
 

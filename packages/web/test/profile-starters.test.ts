@@ -37,10 +37,10 @@ const TIMELINE_CSS = STARTERS_CSS
 test('starters 纯函数：校验边界与形态转换', { timeout: 60_000 }, () => {
   assert.equal(validateStarterDraft({ label: '标题', prompt: '内容' }), null)
   assert.equal(validateStarterDraft({ label: '  带空白  ', prompt: '内容' }), null)
-  assert.match(validateStarterDraft({ label: '', prompt: 'x' })!, /标题/)
-  assert.match(validateStarterDraft({ label: '   ', prompt: 'x' })!, /标题/)
-  assert.match(validateStarterDraft({ label: 'x', prompt: '' })!, /纯空白/)
-  assert.match(validateStarterDraft({ label: 'x', prompt: ' \n ' })!, /纯空白/)
+  assert.match(validateStarterDraft({ label: '', prompt: 'x' })!, /Title/)
+  assert.match(validateStarterDraft({ label: '   ', prompt: 'x' })!, /Title/)
+  assert.match(validateStarterDraft({ label: 'x', prompt: '' })!, /whitespace only/)
+  assert.match(validateStarterDraft({ label: 'x', prompt: ' \n ' })!, /whitespace only/)
   assert.equal(validateStarterDraft({ label: '🎉'.repeat(24), prompt: 'x' }), null)
   assert.match(validateStarterDraft({ label: '🎉'.repeat(25), prompt: 'x' })!, /24/)
   assert.match(validateStarterDraft({ label: 'x', prompt: 'y'.repeat(4001) })!, /4000/)
@@ -89,12 +89,12 @@ test('ProfileDetailDrawer：starters 编辑区块渲染既有条目与计数（0
       }),
     ),
   )
-  assert.match(html, /空白会话引导词/)
+  assert.match(html, /Empty-conversation starters/)
   assert.match(html, /写日报/)
   assert.match(html, /请生成今日工作日报/)
   assert.match(html, /清空收件箱/)
   assert.match(html, /2\/6/, '计数渲染 2/6')
-  assert.match(html, /添加引导词/)
+  assert.match(html, /Add starter/)
   assert.doesNotMatch(html, EMOJI_REGEX)
   // CSS 原语齐备
   assert.match(STARTERS_CSS, /\.profile-starter-item/)

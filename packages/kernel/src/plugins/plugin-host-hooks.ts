@@ -1,5 +1,5 @@
 /**
- * Hook 管道调度协调：只对快照时刻「已启用且空闲」的插件派发，并记录在途任务与隔离错误通知。
+ * Hook pipeline scheduling coordinate tune: only for snapshot moment enabled and idle plugin dispatch, and record in-flight task and isolated error notify.
  */
 import {
   HelmError,
@@ -34,7 +34,7 @@ function notifyIsolatedHookErrors(
     host.emitEvent('notification', {
       type: 'notification',
       level: 'warning',
-      title: `插件 ${pluginId} 回合结算钩子异常`,
+      title: `plugin ${pluginId} turn compute hook exception`,
       body: redact(error.message),
     });
   }
@@ -47,7 +47,7 @@ export async function dispatchPluginHook<K extends HookName>(
 ): Promise<HookResult<HookPayloadMap[K]>> {
   const pipeline = deps.pipelines.get(name);
   if (!pipeline) {
-    throw new HelmError('unknown_hook', `未知的钩子挂载点：${name}`, 400, { hook: name });
+    throw new HelmError('unknown_hook', `unknown hook mount point:${name}`, 400, { hook: name });
   }
   const participants = pipeline.entries().filter((h) => isHookActive(deps.plugins, h.pluginId));
   if (participants.length === 0) return { action: 'continue' };
@@ -79,7 +79,7 @@ export async function dispatchPluginHookAround(
 ): Promise<unknown> {
   const pipeline = deps.pipelines.get(name);
   if (!pipeline) {
-    throw new HelmError('unknown_hook', `未知的钩子挂载点：${name}`, 400, { hook: name });
+    throw new HelmError('unknown_hook', `unknown hook mount point:${name}`, 400, { hook: name });
   }
   const participants = pipeline.entries().filter((h) => isHookActive(deps.plugins, h.pluginId));
   const label = `hook:${name}`;

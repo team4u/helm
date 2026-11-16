@@ -90,24 +90,24 @@ test('pi.compaction：摘要可展开/收起；无摘要不渲染展开按钮', 
   ])
   const buttons = expandButtons(host)
   assert.equal(buttons.length, 1, '仅携带摘要的 compaction 渲染展开按钮')
-  assert.match(buttons[0]!.textContent ?? '', /展开精简摘要/)
+  assert.match(buttons[0]!.textContent ?? '', /Expand Compaction summary/)
   // 展开后正文可见；再点收起。
   act(() => { buttons[0]!.click() })
   assert.match(host.textContent ?? '', /本阶段完成了三件事：甲、乙、丙。/)
   const collapse = expandButtons(host)[0]!
-  assert.match(collapse.textContent ?? '', /收起精简摘要/)
+  assert.match(collapse.textContent ?? '', /Collapse Compaction summary/)
   act(() => { collapse.click() })
   assert.ok(!(host.textContent ?? '').includes('本阶段完成了三件事'))
 })
 
 test('pi.reset：交接摘要展开行为保持', { timeout: 60_000 }, async () => {
   const host = await renderTimeline([
-    entry('1', 'pi.reset', { data: { handoff: '交接摘要正文' } }),
+    entry('1', 'pi.reset', { data: { handoff: 'Handoff summary正文' } }),
   ])
   const buttons = expandButtons(host)
   assert.equal(buttons.length, 1)
-  assert.match(buttons[0]!.textContent ?? '', /展开交接摘要/)
+  assert.match(buttons[0]!.textContent ?? '', /Expand Handoff summary/)
   act(() => { buttons[0]!.click() })
-  assert.match(host.textContent ?? '', /交接摘要正文/)
-  assert.match(host.textContent ?? '', /上下文已重置/)
+  assert.match(host.textContent ?? '', /Handoff summary正文/)
+  assert.match(host.textContent ?? '', /Context reset/)
 })

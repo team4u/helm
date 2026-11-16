@@ -1,15 +1,15 @@
 /**
- * 时间线条目与会话实时视图的纯函数表示层。
+ * timeline item and conversation real-time view pure function means layer.
  *
- * 职责（机制，无策略）：
- * - toConversationEntry：SDK EntryRecord -> 协议 ConversationEntry 统一表示
- *   （id 转 string、kind/data/model 原样保留、边界 JSON 可用校验拒绝非 JSON 值）；
- *   HTTP 详情与 conversation.entry 实时事件共用同一函数，保证两端形状一致。
- * - deriveConversationLive：SDK LiveState（pi.live 文档）-> 协议 ConversationLive
- *   （流式助手文本的累计快照 + 工具卡状态）。
+ * responsibility (mechanism, without policy):
+ * - toConversationEntry:SDK EntryRecord -> protocol ConversationEntry unify means
+ *   (id rotate string,kind/data/model original keep, boundary JSON available validate reject non- JSON value);
+ *   HTTP detail situation and conversation.entry real-time event shared use the same function, guarantee two end shape consistent.
+ * - deriveConversationLive:SDK LiveState(pi.live document)-> protocol ConversationLive
+ *   (streaming assist manually text cumulative snapshot + tool card state).
  *
- * 注意：model 消息必须保留（assistant 文本在 model 中，不在 data），
- * 否则 pi.assistant 文本在 HTTP 详情与实时事件中丢失。
+ * note:model message must keep (assistant text in model in, do not in data),
+ * otherwise pi.assistant text in HTTP detail situation and real-time event in lose.
  */
 
 import {
@@ -21,7 +21,7 @@ import {
   type QueuedConversationInput,
 } from '@helm/protocol'
 
-/** SDK EntryRecord 的结构子集（避免依赖 SDK 具体类型，测试可构造 faux 形状）。 */
+/** SDK EntryRecord structure sub- collection (avoid dependency SDK specific type, test can construct faux shape). */
 export interface EntryRecordLike {
   readonly id: number | string
   readonly kind: string
@@ -30,21 +30,21 @@ export interface EntryRecordLike {
   readonly byTaskId?: number
 }
 
-/** 递归拒绝非 JSON 值（循环、Date、Map、undefined 字段等），绝不静默转换。 */
+/** recursion reject non- JSON value (loop,Date,Map,undefined field etc.), never static default convert. */
 function assertJsonUsable(value: unknown, path: string, seen: WeakSet<object>): void {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
-      throw new HelmError('invalid_json_value', `entry.${path} 含非有限数字，无法作为 JSON 事件发布`, 500)
+      throw new HelmError('invalid_json_value', `entry.${path} contains non- finite number, cannot as JSON event publish`, 500)
     }
     return
   }
   if (typeof value !== 'object') {
-    throw new HelmError('invalid_json_value', `entry.${path} 含非 JSON 值（${typeof value}）`, 500)
+    throw new HelmError('invalid_json_value', `entry.${path} contains non- JSON value (${typeof value})`, 500)
   }
   const obj = value as object
   if (seen.has(obj)) {
-    throw new HelmError('invalid_json_value', `entry.${path} 含循环引用`, 500)
+    throw new HelmError('invalid_json_value', `entry.${path} contains loop reference`, 500)
   }
   seen.add(obj)
   try {
@@ -54,11 +54,11 @@ function assertJsonUsable(value: unknown, path: string, seen: WeakSet<object>): 
     }
     const proto = Object.getPrototypeOf(obj)
     if (proto !== Object.prototype && proto !== null) {
-      throw new HelmError('invalid_json_value', `entry.${path} 含非 JSON 对象（${proto.constructor?.name ?? 'unknown'}）`, 500)
+      throw new HelmError('invalid_json_value', `entry.${path} contains non- JSON object (${proto.constructor?.name ?? 'unknown'})`, 500)
     }
     for (const [key, item] of Object.entries(obj)) {
       if (item === undefined) {
-        throw new HelmError('invalid_json_value', `entry.${path}.${key} 含 undefined 值`, 500)
+        throw new HelmError('invalid_json_value', `entry.${path}.${key} contains undefined value`, 500)
       }
       assertJsonUsable(item, `${path}.${key}`, seen)
     }
@@ -68,19 +68,19 @@ function assertJsonUsable(value: unknown, path: string, seen: WeakSet<object>): 
 }
 
 /**
- * SDK EntryRecord -> 协议 ConversationEntry。
- * - id 统一转 string（协议契约）；
- * - kind/data/model 原样保留（model 是模型上下文消息数组，assistant 文本在其中）；
- * - taskId：byTaskId 为正整数时投射（追加该 entry 的生成任务；scheduler
- *   上下文等无归属时缺省，绝不伪造）；
- * - 边界 JSON 可用校验：非 JSON 值显式抛 HelmError，不静默降级、不伪造截断。
+ * SDK EntryRecord -> protocol ConversationEntry.
+ * - id unify rotate string(protocol contract);
+ * - kind/data/model original keep (model is model context message array,assistant text in among them);
+ * - taskId:byTaskId is positive integer when throw shoot (append the entry generate task;scheduler
+ *   context etc. without ownership when default, never fabricate);
+ * - boundary JSON available validate: non- JSON value explicit throw HelmError, not silently fall back, do not fabricate truncate.
  */
 export function toConversationEntry(record: EntryRecordLike): ConversationEntry {
   if (typeof record.id !== 'number' && typeof record.id !== 'string') {
-    throw new HelmError('invalid_json_value', `entry.id 必须是 number|string，实得 ${typeof record.id}`, 500)
+    throw new HelmError('invalid_json_value', `entry.id must be number|string, got ${typeof record.id}`, 500)
   }
   if (typeof record.kind !== 'string') {
-    throw new HelmError('invalid_json_value', `entry.kind 必须是 string，实得 ${typeof record.kind}`, 500)
+    throw new HelmError('invalid_json_value', `entry.kind must be string, got ${typeof record.kind}`, 500)
   }
   const taskId =
     typeof record.byTaskId === 'number' && Number.isInteger(record.byTaskId) && record.byTaskId > 0
@@ -93,19 +93,19 @@ export function toConversationEntry(record: EntryRecordLike): ConversationEntry 
     ...(record.model !== undefined ? { model: [...record.model] } : {}),
     ...(taskId !== undefined ? { taskId } : {}),
   }
-  // 边界校验：kind 之外的载荷必须整体可 JSON 序列化（HTTP/SSE 共用出口）。
+  // boundary validate:kind of outside payload must whole can JSON serialization (HTTP/SSE shared use exit).
   assertJsonUsable(entry, 'payload', new WeakSet())
   return entry
 }
 
-/** 工具卡状态映射：SDK tool slot -> 协议三态。 */
+/** tool card state mapping:SDK tool slot -> protocol three state. */
 type LiveToolState = ConversationLive['tools'][number]
 
 function slotStatusOf(status: unknown): LiveToolState['status'] {
   return status === 'done' ? 'done' : 'running'
 }
 
-/** 流式 assistant 消息 -> 累计可见文本（text 块按序拼接；快照语义，客户端整体替换）。 */
+/** streaming assistant message -> cumulative visible text (text chunk by order concatenate; snapshot semantics, client whole replace). */
 function streamedTextOf(message: unknown): string {
   if (message === null || typeof message !== 'object') return ''
   const content = (message as { content?: unknown }).content
@@ -124,7 +124,7 @@ function streamedTextOf(message: unknown): string {
   return text
 }
 
-/** 流式 assistant 消息 -> 累计思考文本（thinking 块按序拼接；快照语义）。 */
+/** streaming assistant message -> cumulative think text (thinking chunk by order concatenate; snapshot semantics). */
 function streamedThinkingOf(message: unknown): string {
   if (message === null || typeof message !== 'object') return ''
   const content = (message as { content?: unknown }).content
@@ -149,13 +149,13 @@ function toolInputOf(slot: { arguments?: unknown } | { input?: unknown }): unkno
 }
 
 /**
- * SDK generation（pi.live generation 字段）-> 协议受限投影（通用事实，零策略）。
- * - taskId 来自同快照 live.run.taskId（generation 实际所属生成任务）：缺失或
- *   非正整数时整体省略 generation——身份不可伪造，无身份的流式事实不可关联；
- * - attempt 非正整数时同样整体省略；
- * - message 仅保留 content 受限块（text/thinking/toolCall name+arguments）与
- *   供应商累计 usage.output（正有限数）；无有效内容块时 message 省略；
- * - 不透传其他字段（时间戳/模型元数据不外泄，速率策略不依赖它们）。
+ * SDK generation(pi.live generation field)-> protocol subject to limit throw shadow (through use fact, zero policy).
+ * - taskId from same snapshot live.run.taskId(generation actual which belong generate task): missing or
+ *   non- positive integer when whole omit generation- - identity cannot fabricate, without identity streaming fact cannot related;
+ * - attempt non- positive integer when same whole omit;
+ * - message only keep content subject to limit chunk (text/thinking/toolCall name+arguments) and
+ *   provider cumulative usage.output(correct finite count); without valid content chunk when message omit;
+ * - do not pass-through other field (timestamp/model metadata do not outside leak, rate policy independent of they).
  */
 export function liveGenerationOf(
   generation: { attempt?: unknown; message?: unknown } | undefined,
@@ -169,7 +169,7 @@ export function liveGenerationOf(
   return { taskId: runTaskId, attempt, ...(message !== undefined ? { message } : {}) }
 }
 
-/** partial assistant message -> 受限 JSON-safe 投影；无有效内容块返回 undefined。 */
+/** partial assistant message -> subject to limit JSON-safe throw shadow; without valid content chunk return undefined. */
 function liveMessageOf(message: unknown): ConversationLiveMessage | undefined {
   if (message === null || typeof message !== 'object') return undefined
   const content = (message as { content?: unknown }).content
@@ -195,14 +195,14 @@ function liveMessageOf(message: unknown): ConversationLiveMessage | undefined {
   return { content: blocks, ...(usage !== undefined ? { usage } : {}) }
 }
 
-/** pi.inbox queued 项的结构子集（tracker 传入；形状非法项直接跳过，不伪造）。 */
+/** pi.inbox queued items structure sub- collection (tracker pass; shape illegal items directly skip, do not fabricate). */
 export interface InboxItemLike {
   readonly id: number | string
   readonly mode?: string
   readonly entry?: { kind?: string; data?: unknown }
 }
 
-/** inbox queued 项 -> QueuedConversationInput；非 helm.input / 非法载荷返回 undefined。 */
+/** inbox queued items -> QueuedConversationInput; non- helm.input / illegal payload return undefined. */
 function queuedInputOf(item: InboxItemLike, fallbackCreatedAt: number): QueuedConversationInput | undefined {
   if (item.mode !== 'steer' && item.mode !== 'followUp') return undefined
   if (item.entry?.kind !== 'helm.input') return undefined
@@ -225,23 +225,23 @@ function queuedInputOf(item: InboxItemLike, fallbackCreatedAt: number): QueuedCo
   }
 }
 
-/** 排队输入排序：steer 全部排在 followUp 之前（同 mode 保持原序）。 */
+/** queue up input sort:steer all arrange in followUp before (same mode keep original order). */
 function sortQueuedInputs(items: QueuedConversationInput[]): void {
   const rank = (mode: QueuedConversationInput['mode']): number => (mode === 'steer' ? 0 : 1)
   items.sort((a, b) => rank(a.mode) - rank(b.mode))
 }
 
 /**
- * SDK LiveState（pi.live 文档值）-> 协议 ConversationLive。
- * - text：generation.message.content 中 text 块的累计快照（客户端替换式渲染）；
- * - tools：模型发起的工具轮（tools）与嵌套调用（nestedTools）统一映射；
- *   输入取 slot 的运行参数（模型发起调用参数在 assistant entry，slot 的
- *   arguments/output 仅嵌套调用携带），结果文本不进入 live（详情走 entry）；
- * - generation：通用流式事实（taskId + attempt + 受限 message 投影），供速率类
- *   插件策略消费；taskId 取同快照 live.run.taskId（无身份不投影）；
- *   内核零速率计算；
- * - queuedInputs：从 pi.inbox 排队项派生的待生效输入清单（steer 优先），
- *   无排队项时省略。
+ * SDK LiveState(pi.live document value)-> protocol ConversationLive.
+ * - text:generation.message.content in text chunk cumulative snapshot (client replace style render);
+ * - tools: model start tool round (tools) and embed set invoke (nestedTools) unify mapping;
+ *   input take slot run parameter (model start invoke parameter in assistant entry,slot 
+ *   arguments/output only embed set invoke carry), result text does not enter live(detail situation away entry);
+ * - generation: through use streaming fact (taskId + attempt + subject to limit message throw shadow), supply rate class
+ *   plugin policy consume;taskId take same snapshot live.run.taskId(without identity do not throw shadow);
+ *   kernel zero rate compute;
+ * - queuedInputs: from pi.inbox queue up items derive await takes effect input manifest (steer takes precedence),
+ *   without queue up items when omit.
  */
 export function deriveConversationLive(
   conversationId: number,

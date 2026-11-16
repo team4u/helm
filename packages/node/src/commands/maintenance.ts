@@ -1,5 +1,5 @@
 /**
- * 维护命令：upgrade（自升级）/ doctor（只读自检）/ service（开机自启管理）。
+ * maintain command:upgrade(self upgrade)/ doctor(only read self inspect)/ service(open machine self start manage).
  */
 import { UsageError, readPidRecord } from '../cli-context.js';
 import { controlRequest, CONTROL_UPGRADE_TIMEOUT_MS, validateUpgradeResult } from '../control.js';
@@ -12,7 +12,7 @@ export async function upgradeCommand(ctx: CommandContext): Promise<number> {
   const targetVersion = flagString(parsed, 'version');
   const check = parsed.flags.get('check') === true;
   const force = parsed.flags.get('force') === true;
-  // --check 纯查询：直接读引擎，不启动 daemon、不升级。
+  // --check pure query: directly read engine, do not start daemon, do not upgrade.
   if (check) {
     const { checkNodeUpgrade } = await import('../daemon/upgrader.js');
     const result = await checkNodeUpgrade(dataDir, {
@@ -21,11 +21,11 @@ export async function upgradeCommand(ctx: CommandContext): Promise<number> {
     emit({ ok: true, ...result, dataDir });
     return 0;
   }
-  // 执行升级：需要既有受管 daemon（不假称离线已升级）。
+  // execute upgrade: need to since has managed daemon(do not false call offline already upgrade).
   const record = await readPidRecord(dataDir);
   if (record === null) {
     throw new UsageError(
-      '执行升级需要受管守护进程在运行：请先 helm-node start -d（离线状态无法升级，不伪造成功）',
+      'execute upgrade need to managed daemon in run: please first helm-node start -d(offline state cannot upgrade, do not fabricate succeeded)',
       'not_running',
     );
   }
@@ -42,16 +42,16 @@ export async function upgradeCommand(ctx: CommandContext): Promise<number> {
   );
   if (response === null) {
     throw new Error(
-      `升级请求失败：控制通道不可达或响应无效（endpoint ${record.endpoint}，升级中 daemon 可能已让位；请用 helm-node status 确认当前实例后重试）`,
+      `upgrade request failed: control channel cannot reach or response invalid (endpoint ${record.endpoint}, upgrade in daemon may already let; please use helm-node status confirm when before instance after retry)`,
     );
   }
   if (response.ok !== true) {
-    throw new Error(`升级被拒（${response.error ?? 'unknown'}）；若为 upgrade_in_progress 请等待当前升级完成`);
+    throw new Error(`upgrade by refuse (${response.error ?? 'unknown'}); if is upgrade_in_progress please wait for when before upgrade complete`);
   }
-  // 边界校验：upgrade 响应必须是合法的升级结果对象（ok===true、upgraded
-  // 布尔、version 字段完整），不合法不输出伪造成功（诚实性纪律）。
+  // boundary validate:upgrade response must be legal upgrade result object (ok===true,upgraded
+  // boolean,version field complete), illegal do not output fabricate succeeded (honest discipline).
   const result = validateUpgradeResult(response.result);
-  const sourcePid = record.pid; // 旧源 pid（仅展示参考，不覆盖新实例 pid）
+  const sourcePid = record.pid; // old source pid(only render see, does not override new instance pid)
   emit({
     ok: true,
     ...result,
@@ -73,11 +73,11 @@ export async function doctorCommand(ctx: CommandContext): Promise<number> {
     emit(report);
   } else {
     const label: Record<string, string> = { ok: 'OK  ', warn: 'WARN', error: 'FAIL', info: 'INFO' };
-    io.out(`helm-node doctor（dataDir=${report.dataDir}${report.nodeId !== undefined ? `，nodeId=${report.nodeId}` : ''}${report.hubUrl !== undefined ? `，hub=${report.hubUrl}` : ''}）\n`);
+    io.out(`helm-node doctor(dataDir=${report.dataDir}${report.nodeId !== undefined ? `,nodeId=${report.nodeId}` : ''}${report.hubUrl !== undefined ? `,hub=${report.hubUrl}` : ''})\n`);
     for (const check of report.checks) {
       io.out(`  [${label[check.status] ?? check.status}] ${check.id}: ${check.message}\n`);
     }
-    io.out(report.ok ? '自检结果：通过（无 error 项）\n' : '自检结果：存在 error 项，请按提示修复后重试\n');
+    io.out(report.ok ? 'self inspect result: via (without error items)\n' : 'self inspect result: store in error items, please by hint fix after retry\n');
   }
   return report.ok ? 0 : 1;
 }

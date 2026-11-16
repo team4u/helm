@@ -1,27 +1,34 @@
 /**
- * 测试卫生静态分析（TypeScript Compiler API，不引入任何新 lint 依赖）。
+ * Static test-hygiene analysis (TypeScript Compiler API, no new lint dependencies).
  *
- * 覆盖 AGENTS §5 的三条可静态判定的规则：
- *   timeout-missing       每个 test()/it() 调用必须显式声明 options.timeout（自有、
- *                         共享 const 选项对象、或按 node:test 语义继承自外层
- *                         describe/父测试的 timeout，三者任一即算已声明）；
- *   skip-without-reason   skip 必须附理由字符串（{ skip: true }、裸 test.skip、
- *                         无法静态确认带理由的 skip 条件均视为违规）；
- *   suite-timeout-env     禁止给 process.env.HELM_TEST_SUITE_TIMEOUT_MS 赋值
- *                         （kernel env-registry-races 依赖宿主 HELM_* 被剥除，注入即误报）；
- *   unsafe-dom-assert     禁止对 DOM 节点 / Window 调用 assert.equal / strictEqual /
- *                         deepEqual / deepStrictEqual / notDeepEqual / notDeepStrictEqual
- *                         （或双侧均为 DOM 节点的 notEqual / notStrictEqual），避免失败时
- *                         util.inspect 递归遍历整棵 DOM/React Fiber 树引发卡死或 OOM。
+ * Covers the statically decidable rules from AGENTS §5:
+ *   timeout-missing       every test()/it() call must declare options.timeout explicitly
+ *                         (its own options, a shared const options object, or a timeout
+ *                         inherited from an outer describe/parent test per node:test
+ *                         semantics — any of the three counts as declared);
+ *   skip-without-reason   skip must carry a reason string ({ skip: true }, bare test.skip,
+ *                         and skip conditions whose reason cannot be statically confirmed
+ *                         are all violations);
+ *   suite-timeout-env     assigning to process.env.HELM_TEST_SUITE_TIMEOUT_MS is forbidden
+ *                         (kernel env-registry-races relies on host HELM_* being stripped;
+ *                         injecting it causes false positives);
+ *   unsafe-dom-assert     calling assert.equal / strictEqual / deepEqual / deepStrictEqual /
+ *                         notDeepEqual / notDeepStrictEqual on DOM nodes / Window is
+ *                         forbidden (likewise notEqual / notStrictEqual when both sides are
+ *                         DOM nodes), because on failure util.inspect walks the whole
+ *                         DOM/React Fiber tree and can hang or OOM.
  *
- * 识别范围：node:test 的具名导入（test/it/describe，含 as 别名）、默认导入、命名空间导入
- * （import * as nt 后 nt.test/nt.it/nt.describe，含 .skip/.todo 变体）。todo 不执行 →
- * 豁免全部规则；恒定 skip（skip 值为字符串字面量）不执行 → 豁免 timeout；条件 skip
- * 可能执行 → 仍需 timeout。options 可为本文件顶层 const 绑定的共享对象
- * （如 `const timeout = { timeout: 60_000 } as const`，含 as const 解包）。
- * t.test() 子测试暂不纳入规则（继承语义复杂、存量多未声明，单独计数报告，
- * 不静默豁免也不冒进全量改写——是否收紧由人决定）。不做正则解析：嵌套调用、
- * 多行 options、别名一律靠 AST 结构判定。
+ * Recognition scope: named imports of node:test (test/it/describe, including as aliases),
+ * default imports, and namespace imports (import * as nt then nt.test/nt.it/nt.describe,
+ * including .skip/.todo variants). todo never executes → exempt from every rule; constant
+ * skip (a string-literal skip value) never executes → exempt from timeout; conditional skip
+ * may execute → timeout still required. The options object may be a shared object bound to a
+ * top-level const in the same file (e.g. `const timeout = { timeout: 60_000 } as const`,
+ * unwrapping as const). t.test() subtests are not covered by these rules for now
+ * (inheritance semantics are involved and the existing corpus mostly does not declare them;
+ * they are counted and reported separately — neither silently exempted nor aggressively
+ * rewritten; whether to tighten is a human decision). No regex parsing: nested calls,
+ * multiline options, and aliases are all decided by AST structure.
  */
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -81,7 +88,7 @@ const DOM_RETURNING_PROPS = new Set([
   'defaultView',
 ]);
 
-/** 收集 node:assert / node:assert/strict 的导入绑定（默认、具名/别名、命名空间、strict）。 */
+/** Collect import bindings of node:assert / node:assert/strict (default, named/aliased, namespace, strict). */
 function collectAssertBindings(ts, sourceFile) {
   /** @type {Set<string>} */ const assertObjects = new Set();
   /** @type {Map<string, string>} */ const assertFns = new Map();
@@ -128,7 +135,7 @@ function classifyAssertCall(ts, callee, assertBindings) {
   return null;
 }
 
-/** 解包括号、as / 类型断言 / satisfies / 非空断言。 */
+/** Unwrap parentheses, as / type assertions / satisfies / non-null assertions. */
 function unwrapExpr(ts, expr) {
   let cur = expr;
   while (
@@ -184,7 +191,7 @@ function isDomNodeExpr(ts, expr, lookupDomVar, lookupDomListVar) {
   return false;
 }
 
-/** 收集 node:test 的导入绑定：testFn（test/it，含别名）、describe、命名空间。 */
+/** Collect node:test import bindings: testFn (test/it, incl. aliases), describe, namespaces. */
 function collectTestBindings(ts, sourceFile) {
   /** @type {Set<string>} */ const testFn = new Set();
   /** @type {Set<string>} */ const describeFn = new Set();
@@ -195,11 +202,11 @@ function collectTestBindings(ts, sourceFile) {
     if (!ts.isStringLiteral(spec) || spec.text !== 'node:test') continue;
     const clause = st.importClause;
     if (!clause) continue;
-    if (clause.name) testFn.add(clause.name.text); // 默认导出即 test 函数
+    if (clause.name) testFn.add(clause.name.text); // the default export is the test function
     const nb = clause.namedBindings;
     if (nb && ts.isNamedImports(nb)) {
       for (const el of nb.elements) {
-        const imported = (el.propertyName ?? el.name).text; // as 别名时 propertyName 是源名
+        const imported = (el.propertyName ?? el.name).text; // with an as alias, propertyName is the source name
         if (imported === 'test' || imported === 'it') testFn.add(el.name.text);
         else if (imported === 'describe') describeFn.add(el.name.text);
       }
@@ -209,7 +216,7 @@ function collectTestBindings(ts, sourceFile) {
   return { testFn, describeFn, namespaces };
 }
 
-/** 解包 as const / 类型断言 / satisfies，露出真正的初始化表达式。 */
+/** Unwrap as const / type assertions / satisfies to expose the real initializer. */
 function unwrapAssertion(ts, expr) {
   const wrappers = new Set([
     ts.SyntaxKind.AsExpression,
@@ -222,7 +229,7 @@ function unwrapAssertion(ts, expr) {
   return cur;
 }
 
-/** 收集本文件顶层 const 绑定（identifier → 初始化表达式），供共享 options 对象解析。 */
+/** Collect top-level const bindings of the file (identifier → initializer) for shared options object resolution. */
 function collectTopLevelConsts(ts, sourceFile) {
   const map = new Map();
   for (const st of sourceFile.statements) {
@@ -234,7 +241,7 @@ function collectTopLevelConsts(ts, sourceFile) {
   return map;
 }
 
-/** options 对象里的指定属性（仅 PropertyAssignment 形式），供 timeout/skip 判定。 */
+/** The given property of an options object (PropertyAssignment form only), for timeout/skip decisions. */
 function findOptionProp(ts, options, name) {
   for (const p of options?.properties ?? []) {
     if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === name) return p;
@@ -242,7 +249,7 @@ function findOptionProp(ts, options, name) {
   return undefined;
 }
 
-/** 解析调用实参里的 options：对象字面量直接用；标识符查顶层 const；其余记为不可解析。 */
+/** Resolve options from the call arguments: use object literals directly; resolve identifiers against top-level consts; anything else is recorded as unresolvable. */
 function resolveOptionsArg(ts, args, consts) {
   for (const a of args.slice(0, 2)) {
     if (ts.isObjectLiteralExpression(unwrapAssertion(ts, a))) {
@@ -258,7 +265,7 @@ function resolveOptionsArg(ts, args, consts) {
 }
 
 /**
- * 判定 CallExpression 的被调者：test/it 或 describe 家族。
+ * Classify the callee of a CallExpression: the test/it or describe family.
  * @returns {{ family: 'test' | 'describe', mode: 'plain' | 'skip' | 'todo' } | null}
  */
 function classifyCallee(ts, callee, bindings) {
@@ -280,9 +287,9 @@ function classifyCallee(ts, callee, bindings) {
     if (ts.isIdentifier(base)) {
       const r = check(base.text, false);
       if (r) return { family: r.family, mode };
-      return null; // t.skip(...) / t.test(...)（TestContext 运行时参数）不在本规则范围
+      return null; // t.skip(...) / t.test(...) (runtime TestContext parameters) are out of scope for these rules
     }
-    // 命名空间导入：nt.test(...) / nt.it(...) / nt.describe(...) 及其 .skip/.todo 变体
+    // namespace imports: nt.test(...) / nt.it(...) / nt.describe(...) and their .skip/.todo variants
     if (
       ts.isPropertyAccessExpression(base) &&
       ts.isIdentifier(base.expression) &&
@@ -298,10 +305,11 @@ function classifyCallee(ts, callee, bindings) {
 }
 
 /**
- * skip 值静态分析。
+ * Static analysis of a skip value.
  * @returns {{ hasReason: boolean, mayExecute: boolean }}
- *   hasReason：skip 生效时是否带字符串理由（false 字面量不触发 skip，视为无害）；
- *   mayExecute：该测试是否存在被执行的路径（恒定 skip 则为 false）。
+ *   hasReason: whether skip, when in effect, carries a string reason (a false literal does
+ *   not trigger skip and counts as harmless);
+ *   mayExecute: whether the test has any path that executes (false for constant skip).
  */
 function analyzeSkipValue(ts, expr) {
   expr = unwrapAssertion(ts, expr);
@@ -313,7 +321,8 @@ function analyzeSkipValue(ts, expr) {
     const b = analyzeSkipValue(ts, expr.whenFalse);
     return { hasReason: a.hasReason && b.hasReason, mayExecute: a.mayExecute || b.mayExecute };
   }
-  // 标识符 / 其他表达式：可能是布尔条件（无理由）也可能是理由字符串，无法静态确认 → 如实报违规。
+  // Identifier / other expressions: could be a boolean condition (no reason) or a reason
+  // string; statically unconfirmable → report the violation honestly.
   return { hasReason: false, mayExecute: true };
 }
 
@@ -332,10 +341,10 @@ function isAssignmentToSuiteEnv(ts, node) {
 }
 
 /**
- * 分析单个测试源文件。
+ * Analyze a single test source file.
  * @param {typeof import('typescript')} ts
- * @param {string} filePath 展示用路径
- * @param {string} source 源码文本
+ * @param {string} filePath display path
+ * @param {string} source source text
  * @returns {HygieneReport}
  */
 export function analyzeTestSource(ts, filePath, source) {
@@ -377,12 +386,12 @@ export function analyzeTestSource(ts, filePath, source) {
   const namePreview = (call) => {
     const first = call.arguments[0];
     if (first && ts.isStringLiteralLike(first)) return first.text.slice(0, 40);
-    return '<无名>';
+    return '<unnamed>';
   };
 
   /**
    * @param {import('typescript').Node} node
-   * @param {boolean} inheritedTimeout 外层 describe/父测试已声明的 timeout 是否覆盖本调用
+   * @param {boolean} inheritedTimeout whether a timeout declared by an outer describe/parent test covers this call
    */
   const visit = (node, inheritedTimeout) => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
@@ -417,7 +426,7 @@ export function analyzeTestSource(ts, filePath, source) {
             file: filePath,
             line: lineOf(node),
             rule: 'unsafe-dom-assert',
-            message: `禁止对 DOM/Window 节点调用 assert.${assertMethod}(...)（失败时 util.inspect 会遍历 DOM/Fiber 树导致卡死或 OOM）；请改用 assert.ok(el === null, ...) 或 assert.ok(a === b, ...)`,
+            message: `assert.${assertMethod}(...) must not be called on DOM/Window nodes (on failure util.inspect walks the DOM/Fiber tree and can hang or OOM); use assert.ok(el === null, ...) or assert.ok(a === b, ...) instead`,
           });
         }
       }
@@ -436,18 +445,18 @@ export function analyzeTestSource(ts, filePath, source) {
         const hasTimeout = Boolean(timeoutProp) || unresolvedName !== null;
 
         if (isSubtestCall) {
-          stats.subtestCalls += 1; // 仅计数供报告，不套规则
+          stats.subtestCalls += 1; // counted for reporting only; no rules applied
         } else if (cls.family === 'describe') {
           if (cls.mode === 'skip' && !(skipProp && analyzeSkipProp(skipProp).hasReason)) {
             violations.push({
               file: filePath,
               line: lineOf(node),
               rule: 'skip-without-reason',
-              message: `describe.skip("${namePreview(node)}") 未附理由：请在 options 声明 { skip: '理由' }`,
+              message: `describe.skip("${namePreview(node)}") has no reason: declare { skip: 'reason' } in the options`,
             });
           }
         } else if (cls.mode === 'todo') {
-          stats.todoCalls += 1; // todo 永不执行，豁免全部规则
+          stats.todoCalls += 1; // todo never executes; exempt from every rule
         } else if (cls.mode === 'skip') {
           stats.skipCalls += 1;
           const value = skipProp && ts.isPropertyAssignment(skipProp) ? analyzeSkipProp(skipProp) : undefined;
@@ -456,7 +465,7 @@ export function analyzeTestSource(ts, filePath, source) {
               file: filePath,
               line: lineOf(node),
               rule: 'skip-without-reason',
-              message: `test.skip("${namePreview(node)}") 未附理由：请在 options 声明 { skip: '理由' }`,
+              message: `test.skip("${namePreview(node)}") has no reason: declare { skip: 'reason' } in the options`,
             });
           }
         } else {
@@ -470,7 +479,7 @@ export function analyzeTestSource(ts, filePath, source) {
               file: filePath,
               line: lineOf(node),
               rule: 'skip-without-reason',
-              message: `"${namePreview(node)}" 的 skip 无理由：请用 { skip: '理由' } 或条件式 '理由' : false`,
+              message: `"${namePreview(node)}" skips without a reason: use { skip: 'reason' } or the conditional form 'reason' : false`,
             });
           }
           if (skipAnalysis.mayExecute && !hasTimeout && !inheritedTimeout) {
@@ -478,11 +487,11 @@ export function analyzeTestSource(ts, filePath, source) {
               file: filePath,
               line: lineOf(node),
               rule: 'timeout-missing',
-              message: `"${namePreview(node)}" 缺少显式 timeout（自有 options、共享 const 对象或外层 describe 任一均可；runner 默认仅 20s）`,
+              message: `"${namePreview(node)}" lacks an explicit timeout (its own options, a shared const object, or an outer describe all count; the runner default is only 20s)`,
             });
           }
         }
-        // node:test 语义：未声明 timeout 的子测试继承父级 timeout。
+        // node:test semantics: subtests without a declared timeout inherit the parent timeout.
         node.forEachChild((c) => visit(c, inheritedTimeout || Boolean(hasTimeout)));
         return;
       }
@@ -492,7 +501,7 @@ export function analyzeTestSource(ts, filePath, source) {
         file: filePath,
         line: lineOf(node),
         rule: 'suite-timeout-env',
-        message: `禁止给 process.env.${ENV_VAR} 赋值（kernel env-registry-races 依赖宿主 HELM_* 被剥除，注入会误报）`,
+        message: `assigning to process.env.${ENV_VAR} is forbidden (kernel env-registry-races relies on host HELM_* being stripped; injecting it causes false positives)`,
       });
     }
     if (isScopeNode(node)) {
@@ -507,7 +516,7 @@ export function analyzeTestSource(ts, filePath, source) {
     node.forEachChild((c) => visit(c, inheritedTimeout));
   };
 
-  /** skip PropertyAssignment → { hasReason, mayExecute }（闭包内复用 analyzeSkipValue）。 */
+  /** skip PropertyAssignment → { hasReason, mayExecute } (reuses analyzeSkipValue inside the closure). */
   function analyzeSkipProp(prop) {
     return analyzeSkipValue(ts, prop.initializer);
   }
@@ -517,7 +526,7 @@ export function analyzeTestSource(ts, filePath, source) {
   return { violations, stats };
 }
 
-/** 全仓收集受检测试文件（与 scripts/test-suites.mjs 相同的枚举范围：各 packages 的 test 目录下 *.test.ts / *.test.tsx）。 */
+/** Collect all test files across the repo (same enumeration scope as scripts/test-suites.mjs: *.test.ts / *.test.tsx under each package's test dir). */
 export function collectAllTestFiles(repoRoot) {
   const packagesDir = path.join(repoRoot, 'packages');
   let entries;
@@ -544,7 +553,7 @@ export function collectAllTestFiles(repoRoot) {
   return files.sort();
 }
 
-/** 判断相对仓库根的路径是否为本工具认定的测试文件。 */
+/** Whether a repo-root-relative path counts as a test file for this tool. */
 export function isTestFilePath(file) {
   return TEST_SUFFIXES.some((s) => file.endsWith(s));
 }

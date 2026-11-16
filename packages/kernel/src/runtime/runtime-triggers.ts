@@ -1,10 +1,10 @@
 /**
- * RuntimeTriggerDispatcher：入站触发器与信封防逃逸处理编排（从 KernelRuntime 拆出）。
+ * RuntimeTriggerDispatcher: station trigger and message seal guard against escape handle orchestration (from KernelRuntime split out).
  *
- * 职责：
- * - defang 防逃逸信封转义（防止 </external_event> 注入）；
- * - 无显式目标 trigger 的缺省投递靶点解析（resolveDefaultTriggerTarget 并发合并）；
- * - 外部触发管道编排（dispatchTrigger 校验原始显式目标 -> trigger hook -> submitInput）。
+ * responsibility:
+ * - defang guard against escape message seal escaping (guard against </external_event> inject);
+ * - without explicit target trigger default delivery target parse (resolveDefaultTriggerTarget concurrency merge);
+ * - external trigger pipeline orchestration (dispatchTrigger validate original explicit target -> trigger hook -> submitInput).
  */
 
 import { HelmError } from '@helm/protocol'
@@ -27,12 +27,12 @@ export interface RuntimeTriggerDispatcherDeps {
 }
 
 export class RuntimeTriggerDispatcher {
-  /** 触发器默认入口会话的并发按需创建 Promise。 */
+  /** trigger by default entry conversation concurrency on demand create Promise. */
   private defaultTriggerTargetCreation: Promise<number> | undefined
 
   constructor(private readonly deps: RuntimeTriggerDispatcherDeps) {}
 
-  /** defang 防逃逸信封：所有动态字段 XML 转义（防 </external_event> 注入）。 */
+  /** defang guard against escape message seal: all motion state field XML escaping (guard against </external_event> inject). */
   defang(envelope: ExternalTriggerEnvelope): string {
     const id = escapeXml(envelope.id)
     const source = escapeXml(envelope.source)
@@ -41,13 +41,13 @@ export class RuntimeTriggerDispatcher {
   }
 
   /**
-   * 无显式目标 trigger 的缺省投递靶点解析：
-   * - 无 targetConversationId 的信封（transform 可能已改写）进入本方法；
-   * - 选择 assistant Profile 下最新的无父链 human-owned 会话；ownership 只读权威
-   *   conversation-ownership 文档，不从 tags/parent 或摘要投影推断；
-   * - 没有候选时按需新建普通 assistant 会话，并合并同进程并发创建；Promise 完成后
-   *   即清理，不缓存可被删除的会话 ID，失败后可重试。
-   * 显式指定的目标在 trigger hook 运行前已校验存在，不会进入本方法。
+   * without explicit target trigger default delivery target parse:
+   * - without targetConversationId message seal (transform may already change write) enter this method;
+   * - choose assistant Profile under most new without parent chain human-owned conversation;ownership only read right threat
+   *   conversation-ownership document, do not from tags/parent or summary throw shadow push assert;
+   * - no choose when on demand creates new ordinary assistant conversation, and merge same process concurrency create;Promise after completion
+   *   i.e. clean up, do not cache can by delete conversation ID, failed after can retry.
+   * explicit designate target in trigger hook run before already validate store in, will not enter this method.
    */
   async resolveDefaultTriggerTarget(): Promise<number> {
     const candidates = this.deps.store
@@ -63,7 +63,7 @@ export class RuntimeTriggerDispatcher {
     if (this.defaultTriggerTargetCreation !== undefined) return this.defaultTriggerTargetCreation
     const creation = this.deps
       .createConversation({
-        title: '个人助理',
+        title: 'person assist',
         profileId: 'assistant',
         tags: ['assistant'],
       })
@@ -76,10 +76,10 @@ export class RuntimeTriggerDispatcher {
     }
   }
 
-  /** 外部触发：先校验原始显式目标，再运行可改写路由的 trigger hook。 */
+  /** external trigger: first validate original explicit target, again run can change write routing trigger hook. */
   async dispatchTrigger(envelope: ExternalTriggerEnvelope): Promise<void> {
     if (envelope.targetConversationId !== undefined) {
-      // Hook（包括 ThreadKey 直投）不得把无效的显式目标改写成有效目标来掩盖错误。
+      // Hook(including ThreadKey direct throw) must not invalid explicit target change write into valid target come mask error.
       this.deps.getConversation(envelope.targetConversationId)
     }
     const initial: ExternalTriggerEnvelope = { ...envelope, text: this.defang(envelope) }
@@ -88,20 +88,20 @@ export class RuntimeTriggerDispatcher {
     let final = initial
     if (outcome?.action === 'transform') {
       final = outcome.value as ExternalTriggerEnvelope
-      // transform 后的 text 再防一次（插件可能替换了原文）。
+      // transform after text again guard against once (plugin may replace original text).
       final = { ...final, text: this.defang({ ...final, text: stripEnvelope(final.text) }) }
     }
     if (final.targetConversationId !== undefined) {
-      // 显式目标（含 hook 改写）：失效副目标由 submitInput 的 requireConv 兑底
-      // 显式 not_found（诚实拒绝；失效的显式目标不得被重路由掩盖）。
+      // explicit target (contains hook change write): expires deputy target by submitInput  requireConv honor bottom
+      // explicit not_found(honest reject; expires explicit target must not by heavy routing mask).
       await this.deps.submitInput(final.targetConversationId, final.text, { origin: 'trigger', whenBusy: 'followUp' })
       return
     }
-    // 缺省目标：resolve 与 submitInput 之间目标会话可能被删除（TOCTOU 窗口，
-    // 无法原子关闭）。submitInput 首行 requireConv 先于任何副作用，not_found
-    // 拒绝时对缺省路径重解析一次再投递——这是完成路由决策，不是对同一目标
-    // 的投递重试（不破坏 cron「本计划点不重试」语义）；再失败如实上抛
-    // （该次触发载荷丢失，语义与修复前一致）。
+    // default target:resolve and submitInput between target conversation may by delete (TOCTOU window,
+    // cannot atomic close).submitInput first row requireConv first at any side effect,not_found
+    // reject when for default path heavy parse once again delivery - - this is complete routing decide policy, is not for the same target
+    // delivery retry (do not break cronthis plan point do not retry semantics); again failed such as on throw
+    // (the time trigger payload lose, semantics and fix before consistent).
     const target = await this.resolveDefaultTriggerTarget()
     try {
       await this.deps.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'followUp' })

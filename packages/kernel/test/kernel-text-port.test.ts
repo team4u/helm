@@ -1,20 +1,20 @@
 /**
- * KernelRuntime.completeConversationText 通用模型端口契约测试：
- * 真实 KernelRuntime + 真实 SDK（faux provider 包装 streamSimple 捕获实际
- * 请求的 (context, options)；已核实 Models.completeSimple 内部经
- * normalizeContext 折叠 systemPrompt/tools 为 leading system message 后调用
- * provider.streamSimple(model, transcript, options)，maxTokens 在 options）。
+ * KernelRuntime.completeConversationText through use model port contract test:
+ * real KernelRuntime + real SDK(faux provider wrap streamSimple catch actual
+ * request (context, options); already verify Models.completeSimple internal via
+ * normalizeContext collapse systemPrompt/tools is leading system message after invoke
+ * provider.streamSimple(model, transcript, options),maxTokens in options).
  *
- * 覆盖：
- * - maxTokens 位于请求 options（provider 第三参），transcript（Context）
- *   不含 maxTokens / tools 字段（无 tools 单次请求）；
- * - systemPrompt 与用户 text 均已过全局脱敏（stash secret 不进入模型输入）；
- * - 返回输出同样过全局脱敏；
- * - 会话 override 优先于全局模型（真实双 provider 区分请求归属）；
- * - stopReason 非 'stop'（error/length）显式拒绝；
- * - 会话不存在 / 未配置模型如实上抛；signal 预先 aborted 立即拒绝。
+ * override:
+ * - maxTokens at request options(provider third reference),transcript(Context)
+ *   excludes maxTokens / tools field (without tools single time request);
+ * - systemPrompt and user text all already global redaction (stash secret does not enter model input);
+ * - return output same global redaction;
+ * - conversation override takes precedence at global model (real double provider zone request ownership);
+ * - stopReason non- 'stop'(error/length) explicit reject;
+ * - conversation missing / not config model such as on throw;signal pre- first aborted immediately reject.
  *
- * runner: tsx --test；每测试显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each test explicit timeout: 60_000 guard against deadlock.
  */
 
 import { createModels } from '@earendil-works/pi-ai/models'
@@ -39,14 +39,14 @@ after(() => {
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-/** 捕获到的 provider.streamSimple 实参（SDK 真实调用路径）。 */
+/** catch to provider.streamSimple reference (SDK real invoke path). */
 interface Captured {
   context: TranscriptContext
   maxTokens: number | undefined
   signal: AbortSignal | undefined
 }
 
-/** transcript 全文（system + 各消息文本块拼接）。 */
+/** transcript all text (system + each message text chunk concatenate). */
 function transcriptText(context: TranscriptContext): string {
   return context.messages
     .map((m) =>
@@ -58,8 +58,8 @@ function transcriptText(context: TranscriptContext): string {
 }
 
 /**
- * 包装 faux provider：捕获 streamSimple 的 (context, options) 再委托原实现。
- * 类型从原方法参数推断（Parameters<typeof original>），不用 as never。
+ * wrap faux provider: catch streamSimple  (context, options) again delegate original implement.
+ * type from original method parameter push assert (Parameters<typeof original>), do not use as never.
  */
 function captureProvider(base: Provider, sink: Captured[]): Provider {
   const original = base.streamSimple.bind(base)
@@ -76,9 +76,9 @@ function captureProvider(base: Provider, sink: Captured[]): Provider {
 
 interface Env {
   kernel: KernelRuntime
-  /** fauxA（全局模型）请求捕获。 */
+  /** fauxA(global model) request catch. */
   capturedA: Captured[]
-  /** fauxB（override 专用）请求捕获。 */
+  /** fauxB(override dedicated use) request catch. */
   capturedB: Captured[]
   fauxA: ReturnType<typeof fauxProvider>
   fauxB: ReturnType<typeof fauxProvider>
@@ -112,8 +112,8 @@ async function openEnv(options: { model?: string } = {}): Promise<Env> {
   }
 }
 
-describe('completeConversationText（内核通用模型端口）', () => {
-  it('maxTokens 在请求 options；transcript 无 maxTokens/tools；systemPrompt 与 text 进模型输入', { timeout: 60_000 }, async () => {
+describe('completeConversationText(kernel through use model port)', () => {
+  it('maxTokens in request options;transcript without maxTokens/tools;systemPrompt and text enter model input', { timeout: 60_000 }, async () => {
     const env = await openEnv()
     try {
       env.fauxA.setResponses([fauxAssistantMessage('plain output')])
@@ -126,67 +126,67 @@ describe('completeConversationText（内核通用模型端口）', () => {
       assert.equal(text, 'plain output')
       assert.equal(env.capturedA.length, 1)
       const captured = env.capturedA[0]!
-      // maxTokens 传到 provider options（第三参），不是 Context 字段。
+      // maxTokens pass to provider options(third reference), is not Context field.
       assert.equal(captured.maxTokens, 640)
-      // normalizeContext 产物只有 messages；不含 maxTokens 与 tools。
+      // normalizeContext artifact only messages; excludes maxTokens and tools.
       const contextRecord = captured.context as unknown as Record<string, unknown>
-      assert.equal('maxTokens' in contextRecord, false, 'Context 不得含 maxTokens')
-      assert.equal('tools' in contextRecord, false, 'Context 不得含 tools（无 tools 单次请求）')
-      // systemPrompt 折叠为 leading system message；用户 text 在后续消息。
+      assert.equal('maxTokens' in contextRecord, false, 'Context must not contains maxTokens')
+      assert.equal('tools' in contextRecord, false, 'Context must not contains tools(without tools single time request)')
+      // systemPrompt collapse is leading system message; user text in after continue message.
       const full = transcriptText(captured.context)
-      assert.ok(full.includes('SYS-PROMPT-MARKER'), 'systemPrompt 进入模型输入')
-      assert.ok(full.includes('USER-TEXT-MARKER'), '用户文本进入模型输入')
+      assert.ok(full.includes('SYS-PROMPT-MARKER'), 'systemPrompt enter model input')
+      assert.ok(full.includes('USER-TEXT-MARKER'), 'user text enter model input')
     } finally {
       await env.close()
     }
   })
 
-  it('输入输出脱敏：systemPrompt/text 中的 secret 不进模型；输出 secret 被脱敏', { timeout: 60_000 }, async () => {
+  it('input output redaction:systemPrompt/text in secret does not enter model; output secret by redaction', { timeout: 60_000 }, async () => {
     const env = await openEnv()
     try {
       env.kernel.stash.addRedaction('SECRET-INPUT-42')
       env.kernel.stash.addRedaction('SECRET-OUTPUT-99')
-      env.fauxA.setResponses([fauxAssistantMessage('结果包含 SECRET-OUTPUT-99')])
+      env.fauxA.setResponses([fauxAssistantMessage('result contains SECRET-OUTPUT-99')])
       const text = await env.kernel.completeConversationText({
         conversationId: 1,
-        systemPrompt: '系统提示含 SECRET-INPUT-42',
-        text: '快照含 SECRET-INPUT-42',
+        systemPrompt: 'system hint contains SECRET-INPUT-42',
+        text: 'snapshot contains SECRET-INPUT-42',
       })
-      assert.ok(!text.includes('SECRET-OUTPUT-99'), '返回输出已过全局脱敏')
-      assert.ok(text.includes('[REDACTED') || !text.includes('SECRET'), '输出含脱敏标记')
+      assert.ok(!text.includes('SECRET-OUTPUT-99'), 'return output already global redaction')
+      assert.ok(text.includes('[REDACTED') || !text.includes('SECRET'), 'output contains redaction mark record')
       const full = transcriptText(env.capturedA[0]!.context)
-      assert.ok(!full.includes('SECRET-INPUT-42'), 'systemPrompt 与 text 中的 secret 不进入模型输入')
-      assert.ok(full.includes('[REDACTED') || !full.includes('SECRET-INPUT'), '模型输入含脱敏标记')
+      assert.ok(!full.includes('SECRET-INPUT-42'), 'systemPrompt and text in secret does not enter model input')
+      assert.ok(full.includes('[REDACTED') || !full.includes('SECRET-INPUT'), 'model input contains redaction mark record')
     } finally {
       await env.close()
     }
   })
 
-  it('会话 override 优先于全局模型：请求走 override provider', { timeout: 60_000 }, async () => {
+  it('conversation override takes precedence at global model: request away override provider', { timeout: 60_000 }, async () => {
     const env = await openEnv()
     try {
       const conv = await env.kernel.createConversation({ title: 'override' })
       await env.kernel.updateConversation(conv.id, { model: 'faux-b/override-model' })
-      env.fauxB.setResponses([fauxAssistantMessage('来自 override 模型')])
+      env.fauxB.setResponses([fauxAssistantMessage('from override model')])
       const text = await env.kernel.completeConversationText({
         conversationId: conv.id,
         systemPrompt: 's',
         text: 't',
         maxTokens: 512,
       })
-      assert.equal(text, '来自 override 模型')
-      assert.equal(env.capturedB.length, 1, '请求落在 override provider')
+      assert.equal(text, 'from override model')
+      assert.equal(env.capturedB.length, 1, 'request in override provider')
       assert.equal(env.capturedB[0]!.maxTokens, 512)
-      assert.equal(env.capturedA.length, 0, '不回落全局模型')
+      assert.equal(env.capturedA.length, 0, 'do not back global model')
     } finally {
       await env.close()
     }
   })
 
-  it('stopReason=error 显式拒绝，不返回部分文本', { timeout: 60_000 }, async () => {
+  it('stopReason=error explicit reject, do not return part text', { timeout: 60_000 }, async () => {
     const env = await openEnv()
     try {
-      env.fauxA.setResponses([fauxAssistantMessage('部分文本', { stopReason: 'error' })])
+      env.fauxA.setResponses([fauxAssistantMessage('part text', { stopReason: 'error' })])
       await assert.rejects(
         env.kernel.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't' }),
         (e: unknown) => {
@@ -201,10 +201,10 @@ describe('completeConversationText（内核通用模型端口）', () => {
     }
   })
 
-  it('stopReason=length 同样拒绝', { timeout: 60_000 }, async () => {
+  it('stopReason=length same reject', { timeout: 60_000 }, async () => {
     const env = await openEnv()
     try {
-      env.fauxA.setResponses([fauxAssistantMessage('截断文本', { stopReason: 'length' })])
+      env.fauxA.setResponses([fauxAssistantMessage('truncate text', { stopReason: 'length' })])
       await assert.rejects(
         env.kernel.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't' }),
         (e: unknown) => {
@@ -218,7 +218,7 @@ describe('completeConversationText（内核通用模型端口）', () => {
     }
   })
 
-  it('会话不存在如实 404；signal 预先 aborted 立即拒绝且不发请求', { timeout: 60_000 }, async () => {
+  it('conversation missing such as 404;signal pre- first aborted immediately reject and do not request', { timeout: 60_000 }, async () => {
     const env = await openEnv()
     try {
       await assert.rejects(
@@ -235,13 +235,13 @@ describe('completeConversationText（内核通用模型端口）', () => {
         env.kernel.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't', signal: controller.signal }),
         () => true,
       )
-      assert.equal(env.capturedA.length, 0, '预先取消不发起请求')
+      assert.equal(env.capturedA.length, 0, 'pre- first cancel do not start request')
     } finally {
       await env.close()
     }
   })
 
-  it('未配置全局模型时如实上抛，不静默使用其它已注册模型', { timeout: 60_000 }, async () => {
+  it('not config global model when such as on throw, not silently use other registered model', { timeout: 60_000 }, async () => {
     const models = createModels()
     const fauxB = fauxProvider({ provider: 'faux-b', models: [{ id: 'other' }] })
     models.setProvider(fauxB.provider)
@@ -260,7 +260,7 @@ describe('completeConversationText（内核通用模型端口）', () => {
           return true
         },
       )
-      assert.equal(fauxB.state.callCount, 0, '绝不静默改用其它已注册模型')
+      assert.equal(fauxB.state.callCount, 0, 'never static default change use other registered model')
     } finally {
       await kernel.close()
     }

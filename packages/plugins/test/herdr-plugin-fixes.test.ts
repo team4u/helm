@@ -678,7 +678,7 @@ test('启动对账：真正 working/blocked 保留并报告；已结束 keepaliv
   try {
     await host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS))
     assert.equal(transport.tabs.get('w:t1')!.closed, false, '真正 working 保留不伪装结束')
-    assert.ok(backend.notifications.some((n) => n.title === 'Herdr 启动对账发现在途窗格'), '在途窗格如实报告')
+    assert.ok(backend.notifications.some((n) => n.title === 'Herdr startup reconciliation found in-flight panes'), '在途窗格如实报告')
     assert.equal(transport.tabs.get('w:t2')!.closed, true, '已结束 keepalive 孤儿回收')
   } finally {
     await host.dispose().catch(() => {})
@@ -1447,7 +1447,7 @@ test('abort 后销单持续失败时退避有界，不形成取消风暴', { tim
     await delay(60)
     const count = cancelCalls.filter((id) => id === askId).length
     assert.ok(count >= 5 && count <= 7, `销单尝试有界（实际 ${count} 次）`)
-    const stormNotifications = backend.notifications.filter((n) => n.title === 'Herdr 审批销单失败').length
+    const stormNotifications = backend.notifications.filter((n) => n.title === 'Herdr approval cancellation failed').length
     assert.ok(stormNotifications <= 7, `失败通知有界（实际 ${stormNotifications} 条）`)
   } finally { controller.abort(); await observed; await env.close() }
 })
@@ -1511,7 +1511,7 @@ test('workflow 批量清理逐项隔离：首项失败不中断；陈旧快照 f
     const p3row = managed.panes.find((p) => p.paneId === p3.paneId)!
     assert.equal(p3row.outcome, 'failed')
     assert.ok(p3row.failureNote, 'failureNote 不被 settled 覆盖丢失')
-    assert.ok(backend.notifications.some((n) => n.title === 'Herdr 窗格清理失败'))
+    assert.ok(backend.notifications.some((n) => n.title === 'Herdr pane cleanup failed'))
   } finally {
     releaseAsk?.()
     releaseP1Get?.()
@@ -1576,7 +1576,7 @@ test('md 交接稳定性复检：非原子分段写触发自愈追问，不把�
     const result = await spawnDirect(env, { agentType: 'herdr:pi' })
     assert.equal(result, 'final-complete')
     assert.equal(prompts, 2, '首读不稳定触发一次自愈追问')
-    assert.ok(env.backend.notifications.some((n) => n.title === 'Herdr 交接自愈'))
+    assert.ok(env.backend.notifications.some((n) => n.title === 'Herdr handoff self-heal'))
   } finally { await env.close() }
 })
 

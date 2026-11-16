@@ -464,8 +464,8 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'SubagentWorkflow')
       assert.ok(
-        text.includes('workflow_failed') && text.includes('恰好提供一个'),
-        `应显式报错而非伪造运行：${text.slice(0, 300)}`,
+        text.includes('workflow_failed') && text.includes('exactly one of'),
+        `Expected an explicit failure, not a fabricated run: ${text.slice(0, 300)}`,
       )
     } finally {
       await app.close()
@@ -519,7 +519,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       assert.deepEqual(parsedSummary.result?.topics, ['星辰', '大海'])
 
       // 验证持久化层（新契约）：records doc 只存 workflow/runs 轻量索引；完整
-      // run record（含 args）在插件私有记录文件，args 必须为真实 dict 而非 string。
+      // run record（含 args）在插件私有record file，args 必须为真实 dict 而非 string。
       await app.kernel.documentStore.flush?.()
       const recordsDoc = app.kernel.documentStore.get<Record<string, unknown>>('builtin:workflow:records', {})
       const index = (recordsDoc['workflow/runs'] as Array<{ id: string }> | undefined) ?? []
@@ -712,7 +712,7 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
     }
   })
 
-  it('非法入参显式拒绝（conversationId 非正整数 / 空 cwd）', { timeout: 60_000 }, async () => {
+  it('非法入参显式拒绝（conversationId is not a positive integer / 空 cwd）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'env2')
     const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,

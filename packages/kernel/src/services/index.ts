@@ -1,6 +1,6 @@
 /**
- * @helm/kernel 服务层统一出口：文件资产、鉴权、机密、凭据与产物。
- * 消费方（PluginHost / HTTP / CLI）一律从这里导入，不深入子模块路径。
+ * @helm/kernel service layer unify exit: file asset, authentication, secret, credentials and artifact.
+ * consumer (PluginHost / HTTP / CLI) one rule from this in import, do not deep sub- module path.
  */
 export {
   HELM_DATA_DIR_ENV,
@@ -96,5 +96,5 @@ export {
   type RegisterOptions,
   type SpillResult,
 } from './artifacts.js'
-// 二进制产物读取走 ArtifactService.readBuffer（HTTP 层传输原始字节用），
-// 与 readContent 同源同校验（resolveStoredPath 防伪 metadata 任意读）。
+// two enter system artifact read away ArtifactService.readBuffer(HTTP layer transfer original byte use),
+// and readContent same source same validate (resolveStoredPath guard against fake metadata any read).

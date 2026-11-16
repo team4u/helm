@@ -1,25 +1,25 @@
 /**
- * 路径匹配共享模块：段解码 + 插件动态路由完整路径匹配。
+ * path match sharing module: segment decode + plugin motion state routing complete path match.
  *
- * hub.ts（public 豁免判定）与 routes.ts（dispatch）必须共用同一匹配器，
- * 否则两处语义漂移会造成「豁免了却派发不到」或反向「派发了却未豁免」。
+ * hub.ts(public exemption decide) and routes.ts(dispatch) must shared use the same match,
+ * otherwise two where semantics drift will build into exemption yet dispatch fewer than or reverse dispatch yet not exemption.
  *
- * - 每段严格 decodeURIComponent：非法百分号编码直接抛错（400），绝不静默
- *   当作字面量继续匹配；编码后的 '/'（%2F）解码发生在分段之后，不会
- *   重新切分路径段。
- * - 插件路由声明（PluginHost.register(ctx.route)）携带完整挂载路径
- *   /api/plugins/<encodeURIComponent(id)>/routes/...；声明段与请求段都
- *   解码到同一形态后精确比对（段数一致），不臆造相对路径。
+ * - each segment strictly decodeURIComponent: illegal hundred number encode directly throws (400), never static default
+ *   when act literal continue match; encode after '/'(%2F) decode occur in segment after, will not
+ *   re- cut path segment.
+ * - plugin routing declaration (PluginHost.register(ctx.route)) carry complete mount path
+ *   /api/plugins/<encodeURIComponent(id)>/routes/...; declaration segment and request segment all
+ *   decode to the same form after precise than for (segment count consistent), do not conjecture build relative path.
  */
 
 export class PathDecodeError extends Error {
   constructor(segment: string) {
-    super(`路径段包含非法百分号编码: ${segment}`)
+    super(`path segment contains illegal hundred number encode: ${segment}`)
     this.name = 'PathDecodeError'
   }
 }
 
-/** 严格解码单个路径段；非法编码抛 PathDecodeError（由路由层映射 400）。 */
+/** strictly decode single path segment; illegal encode throw PathDecodeError(by routing layer mapping 400). */
 export function decodeSegment(segment: string): string {
   if (!segment.includes('%')) return segment
   try {
@@ -29,7 +29,7 @@ export function decodeSegment(segment: string): string {
   }
 }
 
-/** pathname（已含 /api 前缀与否均可）→ 严格解码后的段数组。 */
+/** pathname(already contains /api prefix and otherwise all can)→ strictly decode after segment array. */
 export function decodeSegments(pathname: string): string[] {
   return pathname
     .split('/')
@@ -38,10 +38,10 @@ export function decodeSegments(pathname: string): string[] {
 }
 
 /**
- * 声明路径 → 段数组。PluginHost 强制声明前缀使用 encodeURIComponent(pluginId)
- * 形态（如 /api/plugins/builtin%3Atriggers/routes/...），此处同样严格解码
- * 每段，与请求段（已解码）在同一形态下比对。声明确保合法编码（注册时
- * PluginHost 已拒非法形态），此处解码失败按原样使用（不放大为请求错误）。
+ * declaration path → segment array.PluginHost force declaration prefix use encodeURIComponent(pluginId)
+ * form (such as /api/plugins/builtin%3Atriggers/routes/...), this where same strictly decode
+ * each segment, and request segment (already decode) in the same form under than for. declaration ensure legal encode (register when
+ * PluginHost already refuse illegal form), this where decode failed by original use (do not put large is request error).
  */
 export function declaredSegments(declared: string): string[] {
   return declared
@@ -51,9 +51,9 @@ export function declaredSegments(declared: string): string[] {
 }
 
 /**
- * 完整路径匹配：已解码请求段 against 声明段（支持 ':param' 占位）。
- * 段数必须完全一致；':param' 捕获任意非空段。请求段此时已是解码后形态
- * （含解码出的 '/' 也只算一段），声明段以插件注册时字符串为准。
+ * complete path match: already decode request segment against declaration segment (support ':param' occupy).
+ * segment count must fully consistent;':param' catch any non-empty segment. request segment now already is decode after form
+ * (contains decode out '/' also only compute one segment), declaration segment with plugin register when string is allow.
  */
 export function matchFullPath(declared: string, requestSegments: string[]): boolean {
   const parts = declaredSegments(declared)
@@ -63,15 +63,15 @@ export function matchFullPath(declared: string, requestSegments: string[]): bool
   )
 }
 
-/** 插件专属路由前缀：/api/plugins/<encodedId>（encodedId 需再解码）。 */
+/** plugin dedicated belong routing prefix:/api/plugins/<encodedId>(encodedId must again decode). */
 export function pluginRoutePrefixSegments(): string[] {
   return ['api', 'plugins']
 }
 
 /**
- * 在插件路由清单中查找唯一匹配（method + 完整路径）。
- * 返回 undefined 表示无匹配。请求段必须形如
- * ['api','plugins',<pluginId>,'routes', ...rest...]；插件 id 以解码值比对。
+ * in plugin routing manifest in find unique match (method + complete path).
+ * return undefined means without match. request segment must shape such as
+ * ['api','plugins',<pluginId>,'routes', ...rest...]; plugin id with decode value than for.
  */
 export interface RouteCandidate {
   pluginId: string
@@ -85,7 +85,7 @@ export function findPluginRoute<T extends RouteCandidate>(
   method: string,
   requestSegments: string[],
 ): { route: T; pluginId: string; restSegments: string[] } | undefined {
-  // 段形：api / plugins / :pluginId / routes / ...rest（rest 至少一段）
+  // segment shape:api / plugins / :pluginId / routes / ...rest(rest at least one segment)
   if (requestSegments.length < 5) return undefined
   if (requestSegments[0] !== 'api' || requestSegments[1] !== 'plugins' || requestSegments[3] !== 'routes') {
     return undefined

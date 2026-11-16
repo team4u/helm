@@ -172,7 +172,7 @@
 }
 
 /* 修复：.input 默认 padding 6px 10px 会把 height:22px 的 select 文字裁切，
-   双类提升特异性并给足行高；移动端配合 16px 字号使用 30px 高。 */
+   Both classes raise specificity and give enough row height; 30px tall on mobile with 16px font. */
 .input.composer-env-select {
   height: 28px;
   padding: 0 6px;

@@ -1,16 +1,16 @@
 /**
- * upgrade-waiters.ts：节点升级等待器集合（自 env/registry.ts 拆出）。
+ * upgrade-waiters.ts: node upgrade wait for set (self env/registry.ts split out).
  *
- * 职责：每节点至多一个在途升级等待器的登记、终态结算与关停清理；
- * 仅由匹配的心跳 commit resolve（升级成功确认只能来自候选自己的 commit
- * 心跳，register/断开不终结等待器——升级过程本身伴随旧连接顶替）。
- * 有界内存承诺：等待器由 cancel / 超时 / registry.close / 匹配 commit
- * 终结，绝不悬挂。行为与拆分前 NodeRegistry 内联实现逐字一致。
+ * responsibility: each node at most a in-flight upgrade wait for register, terminal state compute and closure stop clean up;
+ * only by match heartbeat commit resolve(upgrade succeeded confirm only can from choose itself commit
+ * heartbeat,register/disconnect do not final wait for - - upgrade process itself along with old connect top replace).
+ * has boundary memory promise: wait for by cancel / timeout / registry.close / match commit
+ * final, never pending. behavior and split before NodeRegistry inline implement one by one character consistent.
  */
 import { HelmError } from '@helm/protocol'
 import type { NodeUpgradeResult } from '@helm/protocol'
 
-/** 升级等待器：有界内存承诺，仅由匹配的心跳 commit resolve。 */
+/** upgrade wait for: has boundary memory promise, only by match heartbeat commit resolve. */
 interface UpgradeWaiter {
   nodeId: string
   attemptId: string
@@ -21,38 +21,38 @@ interface UpgradeWaiter {
   timer: NodeJS.Timeout
 }
 
-/** beginUpgrade 返回的受控等待器句柄。 */
+/** beginUpgrade return subject to control wait for handle. */
 export interface UpgradeWaiterHandle {
-  /** 升级终态：仅匹配心跳 commit resolve 成功；超时/取消/断开 reject。 */
+  /** upgrade terminal state: only match heartbeat commit resolve succeeded; timeout/cancel/disconnect reject. */
   result: Promise<NodeUpgradeResult>
-  /** 主动取消（清理等待器；reason 作为 rejection 原因）。 */
+  /** actively cancel (clean up wait for;reason as rejection reason). */
   cancel(reason?: Error): void
 }
 
-/** 同节点并发升级等待拒绝（调用方映射为 409）。 */
+/** same node concurrency upgrade wait for reject (caller mapping is 409). */
 export class HelmUpgradeBusyError extends Error {}
-/** 升级等待超时（未收到匹配 commit）。 */
+/** upgrade wait timed out (not received match commit). */
 export class HelmUpgradeTimeoutError extends Error {}
-/** 升级等待被主动取消。 */
+/** upgrade wait for by actively cancel. */
 export class HelmUpgradeCancelledError extends Error {}
 
 /**
- * 升级等待器集合。registry 层仅做 closed 门禁与转发；本类不感知连接池。
+ * upgrade wait for set.registry layer only do closed gate and forwarding; this class unaware of connection pool.
  */
 export class UpgradeWaiterSet {
   readonly #waiters = new Map<string, UpgradeWaiter>()
 
   /**
-   * 创建升级等待器：返回的 result 仅由匹配的心跳 upgradeCommit resolve；
-   * 超时 / cancel() reject（原 socket 传输断开不终结等待器——升级本身就
-   * 伴随候选顶替旧连接）。同节点并发升级等待显式拒绝（HelmUpgradeBusyError）。
+   * create upgrade wait for: return result only by match heartbeat upgradeCommit resolve;
+   * timeout / cancel() reject(original socket transfer disconnect do not final wait for - - upgrade itself then
+   * along with choose top replace old connect). same node concurrency upgrade wait for explicit reject (HelmUpgradeBusyError).
    */
   begin(
     nodeId: string,
     params: { attemptId: string; targetVersion: string; previousVersion: string; timeoutMs: number },
   ): UpgradeWaiterHandle {
     if (this.#waiters.has(nodeId)) {
-      throw new HelmUpgradeBusyError(`节点 ${nodeId} 已有在途升级等待器`)
+      throw new HelmUpgradeBusyError(`node ${nodeId} already has in-flight upgrade wait for`)
     }
     let waiter: UpgradeWaiter | undefined
     const result = new Promise<NodeUpgradeResult>((resolve, reject) => {
@@ -68,7 +68,7 @@ export class UpgradeWaiterSet {
           if (w !== undefined && w.attemptId === params.attemptId) {
             this.#waiters.delete(nodeId)
             w.reject(new HelmUpgradeTimeoutError(
-              `节点 ${nodeId} 升级到 ${params.targetVersion} 未在 ${params.timeoutMs}ms 内确认`,
+              `node ${nodeId} upgrade to ${params.targetVersion} not in ${params.timeoutMs}ms inside confirm`,
             ))
           }
         }, params.timeoutMs),
@@ -76,7 +76,7 @@ export class UpgradeWaiterSet {
       waiter.timer.unref?.()
       this.#waiters.set(nodeId, waiter)
     })
-    // 防未处理 rejection：调用方始终 await result，但保险起见吞掉观察者缺位。
+    // guard against not handle rejection: caller always await result, but keep risk start see swallow observer missing.
     result.catch(() => undefined)
     return {
       result,
@@ -85,25 +85,25 @@ export class UpgradeWaiterSet {
         if (w === undefined || w.attemptId !== params.attemptId) return
         clearTimeout(w.timer)
         this.#waiters.delete(nodeId)
-        w.reject(reason ?? new HelmUpgradeCancelledError(`节点 ${nodeId} 升级等待已取消`))
+        w.reject(reason ?? new HelmUpgradeCancelledError(`node ${nodeId} upgrade wait for cancelled`))
       },
     }
   }
 
-  /** 测试内省：节点是否存在在途升级等待器。 */
+  /** test inside omit: node is otherwise store in in-flight upgrade wait for. */
   has(nodeId: string): boolean {
     return this.#waiters.has(nodeId)
   }
 
   /**
-   * 升级心跳 commit 处理（noteHeartbeat 内部调用；已验证 conn 是当前连接），
-   * 返回值即心跳 ACK：
-   * - 仅 conn.upgradeAttemptId === commit.attemptId（候选以该 attempt 注册）
-   *   且 conn.version === commit.version（候选确实运行目标版本）才合法；
-   * - 合法且存在等待器时再核实 targetVersion / previousVersion 完全
-   *   一致才 resolve（pid 正整数），不一致不倒灌别的 attempt，且 ACK false
-   *   （节点据此重试/回滚，绝不误以为 Hub 已确认）；
-   * - 合法但无等待器（如本机 CLI 升级后重连）视为已接受（true）。
+   * upgrade heartbeat commit handle (noteHeartbeat internal invoke; already verify conn is when before connect),
+   * return value i.e. heartbeat ACK:
+   * - only conn.upgradeAttemptId === commit.attemptId(choose with the attempt register)
+   *   and conn.version === commit.version(choose indeed run target version) only then legal;
+   * - legal and store in wait for when again verify targetVersion / previousVersion fully
+   *   consistent only then resolve(pid positive integer), inconsistent do not upside down pour other attempt, and ACK false
+   *   (node based on this retry/rollback, never mistakenly with is Hub already confirm);
+   * - legal but without wait for (such as local machine CLI upgrade after reconnect) treated as already accept (true).
    */
   applyCommit(nodeId: string, conn: { upgradeAttemptId?: string; version?: string }, commit: unknown): boolean {
     if (commit === null || typeof commit !== 'object' || Array.isArray(commit)) {
@@ -120,13 +120,13 @@ export class UpgradeWaiterSet {
     if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) {
       return false
     }
-    // 当前连接必须以该 attempt 注册且已运行目标版本（伪造/过期的 commit 拒绝）。
+    // when before connect must with the attempt register and already run target version (fabricate/expired commit reject).
     if (conn.upgradeAttemptId !== attemptId || conn.version !== version) {
       return false
     }
     const waiter = this.#waiters.get(nodeId)
     if (waiter === undefined) return true
-    // 等待器与 commit 必须完全同源：不同 attempt/版本的迟到 commit 不倒灌。
+    // wait for and commit must fully same source: different attempt/version late to commit do not upside down pour.
     if (
       waiter.attemptId !== attemptId ||
       waiter.targetVersion !== version ||
@@ -146,7 +146,7 @@ export class UpgradeWaiterSet {
     return true
   }
 
-  /** 关停：全部等待器清理并以统一原因 reject（registry.close 调用）。 */
+  /** closure stop: all wait for clean up and with unify reason reject(registry.close invoke). */
   rejectAll(reason: Error): void {
     for (const [nodeId, waiter] of [...this.#waiters]) {
       clearTimeout(waiter.timer)

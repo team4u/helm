@@ -1,12 +1,12 @@
 /**
- * progress.ts — 工作流进度模型（append-only 事件日志，按 index 折叠 last-write-wins）。
+ * progress.ts -- the workflow progress model (an append-only event log folded by index, last-write-wins).
  *
- * 自 @tintinweb/pi-subagents v0.23.1 (MIT) 移植，裁掉上游 TUI 渲染辅助
- * （header/footer/gerund 等）；保留 fold/displayState/stats 三件套与 entry 形状，
- * 内核事件桥与 Web 检查器共用。
+ * Ported from @tintinweb/pi-subagents v0.23.1 (MIT), dropping the upstream TUI rendering
+ * helpers (header/footer/gerund etc.); keeps the fold/displayState/stats trio and entry shapes,
+ * shared by the kernel event bridge and the Web inspector.
  *
- * 两套词汇刻意区分：entry `state` 只有 start|progress|done|error；展示态
- * （queued/running/interrupted/...）由 displayState 派生。
+ * Two vocabularies are deliberately distinct: an entry's `state` is only start|progress|done|error;
+ * display states (queued/running/interrupted/...) are derived by displayState.
  */
 
 import type { WorkflowMeta, WorkflowPhaseMeta } from './meta.js'
@@ -37,30 +37,30 @@ export interface WorkflowLogEntry {
 
 export interface WorkflowAgentEntry {
   type: 'workflow_agent'
-  /** 稳定身份：同 index 再发一条即替换前一条。 */
+  /** Stable identity: re-emitting the same index replaces the previous entry. */
   index: number
   label: string
-  /** 未在任何 phase() 之前运行时缺省（信号本身，而非默认 0）。 */
+  /** Absent when not running inside any phase() (the signal itself, not a default of 0). */
   phaseIndex?: number
   phaseTitle?: string
   state: WorkflowEntryState
   agentId?: string
   nodeId?: string
-  /** 宿主侧子会话 id（onResolved 回传），检查器凭它打开会话。 */
+  /** Host-side sub-conversation id (returned by onResolved); the inspector opens the conversation by it. */
   conversationId?: number
-  /** 外部运行时执行标识（如 Herdr 窗格/标签 ID）。 */
+  /** External-runtime execution identifier (e.g. a Herdr pane/tab ID). */
   executionId?: string
-  /** 实际生效工作目录（绝对路径；外部执行环境回传或宿主确认）。 */
+  /** The actually effective working directory (absolute path; returned by the external environment or confirmed by the host). */
   effectiveCwd?: string
-  /** isolation: 'worktree' 分配的隔离工作树（见插件共享契约模块）。 */
+  /** The isolated worktree allocated by isolation: 'worktree' (see the plugin shared contract module). */
   worktree?: WorktreeExecutionDescriptor
-  /** 完整 prompt（审计用；持久面已脱敏）。 */
+  /** The full prompt (for auditing; redacted on the persistent face). */
   prompt?: string
-  /** 结构化输出 JSON Schema（脚本声明原样）。 */
+  /** The structured-output JSON Schema (as declared by the script). */
   schema?: Record<string, unknown>
-  /** gate 执行结果（执行环境内恰好一次执行后的回报）。 */
+  /** The gate execution result (reported after exactly one execution inside the execution environment). */
   gate?: { ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }
-  /** 脚本声明的 gate 命令原文（审计用；持久面已脱敏）。 */
+  /** The gate command text declared by the script (for auditing; redacted on the persistent face). */
   gateCommand?: string
   agentType?: string
   model?: string
@@ -81,14 +81,14 @@ export interface WorkflowAgentEntry {
   durationMs?: number
 }
 
-/** action 节点进度行（helm 新增：action() 原语）。 */
+/** Progress row for action nodes (added by helm: the action() primitive). */
 export interface WorkflowActionEntry {
   type: 'workflow_action'
   index: number
   actionId: string
   label?: string
   state: WorkflowEntryState
-  /** 所属阶段（helm：与 agent 行同源的 ambient phase 透传）。 */
+  /** The owning phase (helm: pass-through of the ambient phase shared with agent rows). */
   phaseIndex?: number
   phaseTitle?: string
   cached?: boolean
@@ -109,7 +109,7 @@ export interface CollapsedProgress {
   phaseTitles: Map<number, string>
 }
 
-/** 把事件日志折叠为最新状态。 */
+/** Fold the event log into the latest state. */
 export function collapse(progress: readonly WorkflowEntry[]): CollapsedProgress {
   const agents = new Map<number, WorkflowAgentEntry>()
   const actions = new Map<number, WorkflowActionEntry>()
@@ -131,7 +131,7 @@ export function collapse(progress: readonly WorkflowEntry[]): CollapsedProgress 
   }
 }
 
-/** 单个 agent 的展示态；workflowActive=false 时 start/progress 读作 interrupted。 */
+/** A single agent's display state; with workflowActive=false, start/progress read as interrupted. */
 export function displayState(entry: WorkflowAgentEntry, workflowActive: boolean): WorkflowDisplayState {
   if (entry.state === 'done') return 'done'
   if (entry.state === 'error') return entry.skipped ? 'skipped' : 'failed'
@@ -153,7 +153,7 @@ export interface WorkflowStats {
   complete: boolean
 }
 
-/** 聚合计数。agentCount 为 runtime 已调度数，可能领先日志已见数。 */
+/** Aggregate counts. agentCount is what the runtime has scheduled, which may lead what the log has seen. */
 export function stats(progress: readonly WorkflowEntry[], agentCount = 0): WorkflowStats {
   let seen = 0
   let done = 0
@@ -291,7 +291,7 @@ function mergePhases(
   return merged
 }
 
-/** 构建渲染器遍历的阶段分组。 */
+/** Build the phase grouping traversed by renderers. */
 export function buildPhaseGroups(
   progress: readonly WorkflowEntry[],
   declared?: readonly WorkflowPhaseMeta[],
@@ -308,5 +308,5 @@ export function buildPhaseGroups(
   return merged
 }
 
-/** elapsed 辅助：meta 声明的类型仅供展示层组装 task 时参考。 */
+/** elapsed helper: the type declared by meta is a reference for the display layer when assembling tasks. */
 export type { WorkflowMeta }

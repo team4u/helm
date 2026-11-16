@@ -1,17 +1,17 @@
 /**
- * 内核工具工厂：run_action 元工具。
+ * kernel tool work vendor:run_action meta tool.
  *
- * subagent / SubagentWorkflow / cleanup_worktree 已迁移至 builtin:workflow
- * 插件（ctx.tool 声明）；内核只保留与插件无关的基础元工具。
+ * subagent / SubagentWorkflow / cleanup_worktree already migration until builtin:workflow
+ * plugin (ctx.tool declaration); kernel only keep and plugin without closure basis meta tool.
  */
 import type { Context } from '@earendil-works/chord/context'
 import { defineTool, type ToolExecutionApi, type ToolRegistration } from '@earendil-works/pi-durable'
 import { bool, obj, opt, str, unsafe } from '@earendil-works/pi-schema'
 import { safeResultText, type ActionManifest } from '@helm/protocol'
 
-/** 工具工厂的宿主能力面。 */
+/** tool work vendor host capability side. */
 export interface KernelToolHost {
-  /** 插件动作调用（run_action 元工具）。 */
+  /** plugin action invoke (run_action meta tool). */
   invokePluginAction(
     pluginId: string,
     actionId: string,
@@ -19,43 +19,43 @@ export interface KernelToolHost {
     context: { conversationId: number; signal?: AbortSignal },
   ): Promise<unknown>
   /**
-   * 动作清单只读查询（run_action describe 模式）：按当前启用插件与调用会话
-   * scope 过滤后返回完整 ActionManifest（input/outputSchema），绝不执行
-   * handler、不做输入校验、不创建 liveTask。
+   * action manifest only read query (run_action describe pattern): by when before enable plugin and invoke conversation
+   * scope filter after return complete ActionManifest(input/outputSchema), never execute
+   * handler, does not input validate, do not create liveTask.
    */
   describePluginAction(
     pluginId: string,
     actionId: string,
     context: { conversationId: number },
   ): Promise<ActionManifest>
-  /** 出站文本脱敏（受管 token / stash 明文）。 */
+  /** out station text redaction (managed token / stash plaintext). */
   redact(text: string): string
 }
 
 const runActionParameters = obj({
-  actionId: str({ description: 'pluginId.actionId 全限定动作 ID' }),
-  input: opt(unsafe<Record<string, unknown>>({ type: 'object', description: '动作输入（按动作 inputSchema）' })),
+  actionId: str({ description: 'pluginId.actionId all limit set action ID' }),
+  input: opt(unsafe<Record<string, unknown>>({ type: 'object', description: 'action input (by action inputSchema)' })),
   describe: opt(
     bool({
-      description: 'true 时只返回该动作的完整清单（input/outputSchema），不执行动作；缺省 false 执行',
+      description: 'true when only return the action complete manifest (input/outputSchema), do not execute action; default false execute',
     }),
   ),
 })
 
-/** run_action 元工具：按需调用插件动作（qualifiedId，输入输出 schema 边界校验）；describe 只查清单不执行。 */
+/** run_action meta tool: on demand invoke plugin action (qualifiedId, input output schema boundary validate);describe only inspect manifest do not execute. */
 export function createRunActionTool(host: KernelToolHost): ToolRegistration<typeof runActionParameters> {
   return defineTool({
     name: 'run_action',
     description:
-      '调用插件声明的动作（pluginId.actionId 全限定 ID）。可用动作目录由系统提示 <available_actions> 注入。' +
-      'describe: true 时仅返回该动作完整清单（input/outputSchema，不执行动作），用于查询嵌套或复杂参数结构。输入校验失败显式报错。',
+      'invoke plugin declaration action (pluginId.actionId all limit set ID). available action directory by system hint <available_actions> inject.' +
+      'describe: true when only return the action complete manifest (input/outputSchema, do not execute action), used to query embed set or complex parameter structure. input validation failed explicit errors.',
     parameters: runActionParameters,
     async execute(args, api: ToolExecutionApi, context: Context) {
       const qualified = args.actionId
       const dot = qualified.indexOf('.')
       if (dot <= 0) {
         return {
-          output: [{ type: 'text', text: `run_action_failed: 非法动作 ID（期望 pluginId.actionId）：${qualified}` }],
+          output: [{ type: 'text', text: `run_action_failed: illegal action ID(expectation pluginId.actionId):${qualified}` }],
           isError: true,
         }
       }

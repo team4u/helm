@@ -1,9 +1,9 @@
 /**
- * 单一 state.sqlite：pi-durable 原生表（pi_ 前缀）+ helm 自有表 + FTS5 派生索引。
- * 所有 SQL 一律经同一 NodeSqliteDatabase adapter 排队执行（事务期间 adapter 会
- * 排队其他操作，绕过 facade 的裸调用可能与 pi 事务互相回滚）——绝不另开连接。
- * 持久化 PRAGMA 经 adapter 在打开时显式设置：journal_mode=WAL、
- * synchronous=NORMAL、busy_timeout=5000ms、wal_autocheckpoint=1000 页。
+ * single one state.sqlite:pi-durable original generate table (pi_ prefix)+ helm self has table + FTS5 derive index.
+ * all SQL one rule via the same NodeSqliteDatabase adapter queue up execute (transaction during adapter will
+ * queue up other operation, bypass facade bare invoke may and pi transaction mutual each other rollback) - - never another open connect.
+ * persist PRAGMA via adapter in open when explicit settings:journal_mode=WAL,
+ * synchronous=NORMAL,busy_timeout=5000ms,wal_autocheckpoint=1000 page.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -16,9 +16,9 @@ import { join } from 'node:path'
 
 export interface HelmDatabase {
   storage: SqliteStorageT
-  /** helm 自有表读写，同样排队在同一连接上。 */
+  /** helm self has table read write, same queue up in the same connect on. */
   db: NodeSqliteDatabase
-  /** 幂等关闭：重复调用（如 harness.close 已关 storage 后）不抛错。 */
+  /** idempotent close: duplicate invoke (such as harness.close already closure storage after) do not throws. */
   close(): Promise<void>
 }
 
@@ -96,8 +96,8 @@ CREATE TABLE IF NOT EXISTS helm_tombstones (
 `
 
 /**
- * FTS5 表单独建：tokenize 配置在 schema 版本化之外，重建入口见 HelmStore.rebuildFts。
- * body 存脱敏后的纯文本（secret 值永不入库）。
+ * FTS5 table separate create:tokenize config in schema version of outside, rebuild entry see HelmStore.rebuildFts.
+ * body store redaction after pure text (secret value forever do not store).
  */
 const FTS_SCHEMA = `
 CREATE VIRTUAL TABLE IF NOT EXISTS helm_conversation_fts USING fts5(
@@ -109,16 +109,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS helm_conversation_fts USING fts5(
 `
 
 /**
- * 打开（或创建）唯一 state.sqlite；pi 表与 helm 表共享同一连接与事务队列。
- * adapter 由 openNodeSqliteDatabase 构建（单连接、WAL、synchronous=NORMAL、
- * busy_timeout=5s；不接触裸 node:sqlite 句柄）。
+ * open (or create) unique state.sqlite;pi table and helm table sharing the same connect and transaction queue.
+ * adapter by openNodeSqliteDatabase build (single connect,WAL,synchronous=NORMAL,
+ * busy_timeout=5s; do not connect trigger bare node:sqlite handle).
  */
 export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
   const statePath = join(dataDir, 'state.sqlite')
   const db = await openNodeSqliteDatabase(statePath)
-  // 代理视图：pi-durable SqliteStorage 与 HelmStore 共享同一物理连接及串行
-  // 事务队列，因此 harness.close() -> storage.close() 时不得提前断开物理 db
-  // （由 teardownKernelRuntime 末尾的 database.close() 唯一关闭）。
+  // proxy view:pi-durable SqliteStorage and HelmStore sharing the same thing connect and serial
+  // transaction queue, therefore harness.close() -> storage.close() when must not mention before disconnect thing db
+  // (by teardownKernelRuntime tail database.close() unique close).
   const storageDb: SqliteDatabase = {
     exec: (sql) => db.exec(sql),
     run: (sql, ...params) => db.run(sql, ...params),
@@ -131,7 +131,7 @@ export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
   let storage: SqliteStorageT
   try {
     storage = await SqliteStorage.open(storageDb, { prefix: 'pi_' })
-    // helm 表 DDL 也走 adapter（排队，避免与 pi 迁移竞争）。开发阶段直接采用新 schema。
+    // helm table DDL also away adapter(queue up, avoid and pi migration competition). development phase directly adopt new schema.
     await db.exec(HELM_SCHEMA)
     await db.exec(FTS_SCHEMA)
   } catch (error) {
@@ -143,9 +143,9 @@ export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
     storage,
     db,
     async close() {
-      // 幂等：harness.close() 可能已关闭 storage（storageDb.close 为 no-op，
-      // 物理 db 由此处唯一关闭）；保留 storage.close() 兜底确保单独打开
-      // HelmDatabase 的测试路径同样封口 storage。
+      // idempotent:harness.close() may already close storage(storageDb.close is no-op,
+      // thing db by this where unique close); keep storage.close() fall back ensure separate open
+      // HelmDatabase test path same seal opening storage.
       if (closed) return
       closed = true
       await storage.close(BACKGROUND_CONTEXT)

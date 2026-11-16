@@ -1,18 +1,18 @@
 /**
- * 插件生命周期竞态回归（确定性，不依赖 sleep 竞速）：
+ * plugin lifecycle race regression (determinism, independent of sleep compete fast):
  *
- * 1. enable 的对外提交点在启停持久化成功之后：服务已启动、落盘挂起期间
- *    保持 defining——action 拒绝 / hook 不执行 / UI 不露出；成功后可用，
- *    持久化失败时无在途任务、干净回滚（经 store setEnabled 注入 deferred 门控）。
- * 2. register 的持久启停读取先于一切资源获取：getEnabled 抛错（原错误保留）
- *    或返回非布尔值（显式拒绝）时注册表/钩子/托管资源/数据目录零残留。
- * 3. HelmPluginConfigStore 读-改-写全程在 ConfigService.update 同一把文件锁内
- *    以回调完成：只更新所属嵌套键，不覆盖其他模块在间隙更新的键（经
- *    InterposingConfigService 在 update 入口确定性插入并发写，锁外无等待、
- *    锁内无第二个 getter，无死锁）；写时 pluginEnabled 损坏显式 config_corrupt，
- *    绝不用 {} 重建。
+ * 1. enable for hoist hand over point in start stop persist succeeded after: service already start, suspended during
+ *    keep defining- -action reject / hook do not execute / UI do not expose out; after success available,
+ *    persist on failure without in-flight task, clean rollback (via store setEnabled inject deferred gate control).
+ * 2. register durable start stop read first at everything asset get:getEnabled throws (original error keep)
+ *    or return non- boolean value (explicit reject) when register table/hook/hosting asset/data directory zero leftover.
+ * 3. HelmPluginConfigStore read-change-write all process in ConfigService.update the same file lock inside
+ *    with call back complete: only update which belong embed set key, does not override other module in between gap update key (via
+ *    InterposingConfigService in update entry determinism insert concurrency write, lock outside without wait for,
+ *    lock inside without second getter, without deadlock); write when pluginEnabled corrupt explicit config_corrupt,
+ *    never use {} rebuild.
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,7 +38,7 @@ import {
 } from './helpers.js';
 
 // ---------------------------------------------------------------------------
-// 测试基建
+// test base create
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number) {
@@ -69,8 +69,8 @@ function makeHostApi(events: string[]): PluginHostBackend {
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
+    execEnv: async () => { throw new HelmError('unsupported', 'this fixture do not execute node command', 501) },
+    withFileMutationQueue(): Promise<never> { throw new Error('this fixture do not bear load file mutual exclusion queue') },
     emitEvent: (type) => {
       events.push(`event:${type}`);
     },
@@ -78,8 +78,8 @@ function makeHostApi(events: string[]): PluginHostBackend {
 }
 
 /**
- * 可门控启停持久化的内存 store：onSetEnabled 在真正落定前被调用，
- * 测试用它构造「持久化挂起」窗口（确定性 deferred，无 sleep）。
+ * can gate control start stop persist memory store:onSetEnabled in truly set before by invoke,
+ * test use it construct persist suspended window (determinism deferred, without sleep).
  */
 class GatedStore implements PluginConfigStore {
   enabled = new Map<string, boolean>();
@@ -100,20 +100,20 @@ class GatedStore implements PluginConfigStore {
   }
 }
 
-/** 全量声明（UI/动作/钩子/服务/托管资源）的插件工厂。 */
+/** all amount declaration (UI/action/hook/service/hosting asset) plugin work vendor. */
 function fullPlugin(id: string, marks: string[]): PluginDefinition {
   return {
     id,
     definePlugin: (ctx) => {
-      ctx.configSchema({ endpoint: { type: 'string', label: '端点' } });
-      ctx.ui.sidebarItem({ id: 'nav', label: '导航' });
+      ctx.configSchema({ endpoint: { type: 'string', label: 'end point' } });
+      ctx.ui.sidebarItem({ id: 'nav', label: 'navigation' });
       ctx.hook.onTrigger(() => {
         marks.push('hook-ran');
         return { action: 'continue' as const };
       });
       ctx.action({
         id: 'ping',
-        description: '探活',
+        description: 'probe',
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         handler: () => ({ ok: true }),
@@ -155,16 +155,16 @@ afterEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// 1. enable 提交点在启停持久化成功之后
+// 1. enable commit point in start stop persist succeeded after
 // ---------------------------------------------------------------------------
 
-test('enable 持久化挂起窗口：服务已启动但 action 拒绝/hook 不执行/UI 不露出；成功后可用', { timeout: 60_000 }, async () => {
+test('enable persist suspended window: service already start but action reject/hook do not execute/UI do not expose out; after success available', { timeout: 60_000 }, async () => {
   const store = new GatedStore();
   const host = makeHost(store);
   const marks: string[] = [];
   await host.register(fullPlugin('builtin:herdr', marks), { enabled: false });
 
-  // 门控：setEnabled 进入后挂起，直到测试显式放行（确定性窗口）
+  // gate control:setEnabled enter after suspended, until test explicit let through (determinism window)
   let signalEntered!: () => void;
   const entered = new Promise<void>((res) => (signalEntered = res));
   let release!: () => void;
@@ -177,21 +177,21 @@ test('enable 持久化挂起窗口：服务已启动但 action 拒绝/hook 不�
   const enabling = host.enable('builtin:herdr');
   await entered;
   try {
-    // 窗口内：服务确已启动，但插件对外完全不可用（未提交）
-    assert.deepEqual(marks, ['svc-start'], '服务已启动（持久化尚未落定）');
+    // window inside: service indeed already start, but plugin for outside fully unavailable (uncommitted)
+    assert.deepEqual(marks, ['svc-start'], 'service already start (persist not yet set)');
     await assertRejectsCode(() => host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
     marks.length = 0;
     const r = await host.runHook('trigger', triggerPayload());
     assert.equal(r.action, 'continue');
-    assert.deepEqual(marks, [], '窗口内钩子处理器绝不执行');
-    assert.deepEqual(host.listUi(), [], '窗口内 UI 不露出');
+    assert.deepEqual(marks, [], 'window inside hook handle never execute');
+    assert.deepEqual(host.listUi(), [], 'window inside UI do not expose out');
     assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
   } finally {
     release();
     await enabling;
   }
 
-  // 提交后：动作可用、钩子执行、UI 露出、持久 true
+  // after commit: action available, hook execute,UI expose out, durable true
   assert.deepEqual(await host.invokeAction('builtin:herdr', 'ping', {}), { ok: true });
   marks.length = 0;
   const r2 = await host.runHook('trigger', triggerPayload());
@@ -202,7 +202,7 @@ test('enable 持久化挂起窗口：服务已启动但 action 拒绝/hook 不�
   assert.equal(store.enabled.get('builtin:herdr'), true);
 });
 
-test('enable 持久化失败：窗口内同样不可用，回滚为停用且无在途任务被拆、schema 保留、可再启用', { timeout: 60_000 }, async () => {
+test('enable persist failed: window inside same unavailable, rollback is deactivate and without in-flight task by split,schema keep, can again enable', { timeout: 60_000 }, async () => {
   const store = new GatedStore();
   const host = makeHost(store);
   const marks: string[] = [];
@@ -230,21 +230,21 @@ test('enable 持久化失败：窗口内同样不可用，回滚为停用且无�
     throw err;
   }
   assert.ok(windowHeld);
-  rejectPersist(new Error('网络盘断开'));
+  rejectPersist(new Error('network disconnect'));
 
   const err = (await assertRejectsCode(() => enabling, 'plugin_enabled_persist_failed')) as HelmError;
-  assert.match(err.message, /网络盘断开/);
+  assert.match(err.message, /network disconnect/);
 
-  // 回滚落位：停用、服务已 stop、托管释放、schema 还原、无在途任务
+  // rollback: deactivate, service already stop, hosting release,schema restore, without in-flight task
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, false);
-  assert.ok(marks.includes('svc-stop'), '已启动服务被逆向 stop');
-  assert.ok(events.includes('release:builtin:herdr:7'), '托管资源释放');
+  assert.ok(marks.includes('svc-stop'), 'already start service by inverse to stop');
+  assert.ok(events.includes('release:builtin:herdr:7'), 'hosting asset release');
   assert.equal(host.getConfigSchema('builtin:herdr').endpoint?.type, 'string');
   assert.deepEqual(host.listUi(), []);
-  assert.equal(host.activeTaskCount('builtin:herdr'), 0, '回滚时零在途任务');
-  assert.equal(store.enabled.has('builtin:herdr'), false, '持久化失败不写值');
+  assert.equal(host.activeTaskCount('builtin:herdr'), 0, 'rollback when zero in-flight task');
+  assert.equal(store.enabled.has('builtin:herdr'), false, 'persist failed do not write value');
 
-  // 恢复后可再次启用成功
+  // restore after can again enable succeeded
   store.onSetEnabled = () => {};
   await host.enable('builtin:herdr');
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
@@ -252,57 +252,57 @@ test('enable 持久化失败：窗口内同样不可用，回滚为停用且无�
 });
 
 // ---------------------------------------------------------------------------
-// 2. register 启停解析先于一切资源获取：getter 失败零残留
+// 2. register start stop parse first at everything asset get:getter failed zero leftover
 // ---------------------------------------------------------------------------
 
-test('getEnabled 抛错：注册零残留（注册表/数据目录/钩子/托管），原错误保留', { timeout: 60_000 }, async () => {
+test('getEnabled throws: register zero leftover (register table/data directory/hook/hosting), original error keep', { timeout: 60_000 }, async () => {
   const host = makeHost({
     get() {
       return {};
     },
     set() {},
     getEnabled() {
-      throw new HelmError('io_broken', '存储读崩了', 500);
+      throw new HelmError('io_broken', 'store read crash', 500);
     },
     setEnabled() {},
   });
   await assertRejectsCode(() => host.register(fullPlugin('p:boom', [])), 'io_broken');
 
-  assert.equal(host.list().length, 0, '注册表零残留');
-  assert.equal(existsSync(join(dataDir, 'plugins', pluginDataDirName('p:boom'))), false, '插件数据目录未创建');
-  assert.deepEqual(events.filter((e) => e.startsWith('manage:')), [], '未获取任何宿主资源');
+  assert.equal(host.list().length, 0, 'register table zero leftover');
+  assert.equal(existsSync(join(dataDir, 'plugins', pluginDataDirName('p:boom'))), false, 'plugin data directory not create');
+  assert.deepEqual(events.filter((e) => e.startsWith('manage:')), [], 'not get any host asset');
   const r = await host.runHook('trigger', triggerPayload());
-  assert.equal(r.action, 'continue', '钩子管道零残留');
+  assert.equal(r.action, 'continue', 'hook pipeline zero leftover');
 
-  // 非 HelmError 原始异常：包装为注册失败但保留原 message
+  // non- HelmError original exception: wrap is register failed but keep original message
   const host2 = makeHost({
     get() {
       return {};
     },
     set() {},
     getEnabled() {
-      throw new Error('底层 IO 超时');
+      throw new Error('underlying IO timeout');
     },
     setEnabled() {},
   });
   const wrapped = (await assertRejectsCode(() => host2.register(fullPlugin('p:boom2', [])), 'plugin_registration_failed')) as HelmError;
-  assert.match(wrapped.message, /底层 IO 超时/);
+  assert.match(wrapped.message, /underlying IO timeout/);
   assert.equal(host2.list().length, 0);
 
-  // 宿主仍健康：后续注册正常
+  // host still health: after continue register normal
   const ok = makeHost();
   await ok.register(fullPlugin('p:healthy', []), { enabled: false });
   assert.equal(ok.list().find((p) => p.id === 'p:healthy')!.enabled, false);
 });
 
-test('getEnabled 返回非布尔值：显式拒绝（绝不 truthy 猜测），注册零残留', { timeout: 60_000 }, async () => {
+test('getEnabled return non- boolean value: explicit reject (never truthy guess), register zero leftover', { timeout: 60_000 }, async () => {
   const host = makeHost({
     get() {
       return {};
     },
     set() {},
     getEnabled() {
-      return 'false' as unknown as boolean; // 字符串 'false' 是 truthy，绝不能被当成启用
+      return 'false' as unknown as boolean; // string 'false' is truthy, never can by when into enable
     },
     setEnabled() {},
   });
@@ -314,14 +314,14 @@ test('getEnabled 返回非布尔值：显式拒绝（绝不 truthy 猜测），�
 });
 
 // ---------------------------------------------------------------------------
-// 3. ConfigService 回调形态 + HelmPluginConfigStore 锁内读改写
+// 3. ConfigService call back form + HelmPluginConfigStore lock inside read change write
 // ---------------------------------------------------------------------------
 
 /**
- * 在 updateBy 入口确定性插入一次并发写（消费掉后自动卸下）。
- * 插入点在真正取锁之前：锁外等待、锁内无第二个 getter，无死锁。
- * 新旧实现都必经此入口（update 对象/函数形态均委托 updateBy）：旧实现的
- * 锁外旧快照会覆盖间隙写入；新实现回调内基于锁内最新状态只改所属键。
+ * in updateBy entry determinism insert once concurrency write (consume after automatically unload under).
+ * insert point in truly take lock before: lock outside wait for, lock inside without second getter, without deadlock.
+ * new old implement all must via this entry (update object/function form all delegate updateBy): old implement
+ * lock outside old snapshot will override between gap write; new implement call back inside based on lock inside most new state only change which belong key.
  */
 class InterposingConfigService extends ConfigService {
   interpose: (() => Promise<void>) | undefined;
@@ -339,17 +339,17 @@ function makeRealStore(config: ConfigService, credentials: CredentialService): H
   return new HelmPluginConfigStore({ config, credentials });
 }
 
-test('ConfigService 回调形态：读到锁内最新值，对象 patch 语义保留', { timeout: 60_000 }, async () => {
+test('ConfigService call back form: read to lock inside most new value, object patch semantics keep', { timeout: 60_000 }, async () => {
   const a = new ConfigService(dataDir);
   const b = new ConfigService(dataDir);
   await Promise.all([a.update({ k1: 'v1' }), b.update({ k2: 'v2' })]);
   const out = await a.update((current) => ({ ...current, k1Upper: String(current['k1']).toUpperCase() }));
-  assert.equal(out['k1Upper'], 'V1', '回调看到锁内最新 k1（非空文件起读）');
+  assert.equal(out['k1Upper'], 'V1', 'call back see to lock inside most new k1(non-empty file start read)');
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
   assert.deepEqual(raw, { k1: 'v1', k2: 'v2', k1Upper: 'V1' });
 });
 
-test('setEnabled 期间其他模块并发更新 auth 等键不被旧值覆盖（确定性插入）', { timeout: 60_000 }, async () => {
+test('setEnabled during other module concurrency update auth etc. key do not by old value override (determinism insert)', { timeout: 60_000 }, async () => {
   const credDir = join(dataDir, 'cred');
   mkdirSync(credDir, { recursive: true });
   const cfg = new InterposingConfigService(dataDir);
@@ -359,7 +359,7 @@ test('setEnabled 期间其他模块并发更新 auth 等键不被旧值覆盖（
   const store = makeRealStore(cfg, new CredentialService(credDir));
   await store.load();
 
-  // 在 store 的 update 入口插入另一模块的写：旧实现会把它覆盖回去
+  // in store  update entry insert another module write: old implement will it override back remove
   cfg.interpose = async () => {
     await other.update({ auth: { passwordHash: 'h1' }, model: 'faux/2' });
   };
@@ -367,12 +367,12 @@ test('setEnabled 期间其他模块并发更新 auth 等键不被旧值覆盖（
 
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
   assert.deepEqual(raw['pluginEnabled'], { 'builtin:herdr': false });
-  assert.deepEqual(raw['auth'], { passwordHash: 'h1' }, '间隙写入的 auth 不被旧快照覆盖');
-  assert.equal(raw['model'], 'faux/2', '间隙写入的 model 不被旧快照覆盖');
+  assert.deepEqual(raw['auth'], { passwordHash: 'h1' }, 'between gap write auth do not by old snapshot override');
+  assert.equal(raw['model'], 'faux/2', 'between gap write model do not by old snapshot override');
   assert.equal(store.getEnabled('builtin:herdr'), false);
 });
 
-test('两个 store 并发更新不同 pluginEnabled 键都保留（确定性插入）', { timeout: 60_000 }, async () => {
+test('two store concurrency update different pluginEnabled key all keep (determinism insert)', { timeout: 60_000 }, async () => {
   const credDir = join(dataDir, 'cred');
   mkdirSync(credDir, { recursive: true });
   const cfgA = new InterposingConfigService(dataDir);
@@ -382,19 +382,19 @@ test('两个 store 并发更新不同 pluginEnabled 键都保留（确定性插�
   await storeA.load();
   await storeB.load();
 
-  // storeB 的完整写插入在 storeA 的 update 入口：两者都必须留下
+  // storeB complete write insert in storeA  update entry: two all must under
   cfgA.interpose = async () => {
     await storeB.setEnabled('p:b', false);
   };
   await storeA.setEnabled('p:a', true);
 
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
-  assert.deepEqual(raw['pluginEnabled'], { 'p:a': true, 'p:b': false }, '两个插件的启停键都保留');
+  assert.deepEqual(raw['pluginEnabled'], { 'p:a': true, 'p:b': false }, 'two plugin start stop key all keep');
   assert.equal(storeA.getEnabled('p:a'), true);
   assert.equal(storeB.getEnabled('p:b'), false);
 });
 
-test('插件 config 写路径同样保住间隙的外部更新，且只动本插件嵌套键', { timeout: 60_000 }, async () => {
+test('plugin config write path same keep between gap external update, and only motion this plugin embed set key', { timeout: 60_000 }, async () => {
   const credDir = join(dataDir, 'cred');
   mkdirSync(credDir, { recursive: true });
   const cfg = new InterposingConfigService(dataDir);
@@ -410,34 +410,34 @@ test('插件 config 写路径同样保住间隙的外部更新，且只动本插
   await store.set('p:mine', { retries: 2 }, { retries: { type: 'number' } });
 
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>;
-  assert.equal(raw['theme'], 'light', '间隙写入的 theme 不被旧快照覆盖');
-  assert.deepEqual(raw['plugins'], { 'p:other': { keep: 1 }, 'p:mine': { retries: 2 } }, '其他插件配置保留，本插件键更新');
+  assert.equal(raw['theme'], 'light', 'between gap write theme do not by old snapshot override');
+  assert.deepEqual(raw['plugins'], { 'p:other': { keep: 1 }, 'p:mine': { retries: 2 } }, 'other plugin config keep, this plugin key update');
   assert.deepEqual(store.get('p:mine'), { retries: 2 });
   assert.deepEqual(store.get('p:other'), { keep: 1 });
 });
 
-test('写时 pluginEnabled 损坏：显式 config_corrupt，绝不用 {} 重建，镜像不变', { timeout: 60_000 }, async () => {
+test('write when pluginEnabled corrupt: explicit config_corrupt, never use {} rebuild, mirror do not change', { timeout: 60_000 }, async () => {
   const credDir = join(dataDir, 'cred');
   mkdirSync(credDir, { recursive: true });
   const configPath = join(dataDir, 'config.json');
   const store = makeRealStore(new ConfigService(dataDir), new CredentialService(credDir));
   await store.load();
 
-  // load 成功后外部把 pluginEnabled 破坏成非布尔值映射
+  // load after success external pluginEnabled break into non- boolean value mapping
   writeFileSync(configPath, JSON.stringify({ pluginEnabled: { ghost: 'yes' } }), 'utf8');
   await assertRejectsCode(() => store.setEnabled('p:x', true), 'config_corrupt');
   let raw = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-  assert.deepEqual(raw['pluginEnabled'], { ghost: 'yes' }, '损坏内容原样保留（未重建）');
-  assert.equal(store.getEnabled('p:x'), undefined, '写失败镜像不变');
+  assert.deepEqual(raw['pluginEnabled'], { ghost: 'yes' }, 'corrupt content original keep (not rebuild)');
+  assert.equal(store.getEnabled('p:x'), undefined, 'write failed mirror do not change');
 
-  // 整体非对象同样显式拒绝
+  // whole non- object same explicit reject
   writeFileSync(configPath, JSON.stringify({ pluginEnabled: 'nope' }), 'utf8');
   await assertRejectsCode(() => store.setEnabled('p:x', true), 'config_corrupt');
   raw = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
   assert.equal(raw['pluginEnabled'], 'nope');
 });
 
-test('写时 plugins 字段损坏：显式 config_corrupt，不静默重建', { timeout: 60_000 }, async () => {
+test('write when plugins field corrupt: explicit config_corrupt, not silently rebuild', { timeout: 60_000 }, async () => {
   const credDir = join(dataDir, 'cred');
   mkdirSync(credDir, { recursive: true });
   const configPath = join(dataDir, 'config.json');
@@ -450,5 +450,5 @@ test('写时 plugins 字段损坏：显式 config_corrupt，不静默重建', { 
     'config_corrupt',
   );
   const raw = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-  assert.equal(raw['plugins'], 'corrupt', '损坏内容原样保留');
+  assert.equal(raw['plugins'], 'corrupt', 'corrupt content original keep');
 });

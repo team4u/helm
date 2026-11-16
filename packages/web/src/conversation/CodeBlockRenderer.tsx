@@ -36,9 +36,9 @@ function CodeBlockError({ language, code, message, onRetry }: { language: string
       <div className="callout callout--error" role="alert">
         <HelmIcon name="alert-triangle" size={13} />
         <div>
-          <strong>代码块扩展渲染失败</strong>
+          <strong>Code block extension render failed</strong>
           <p className="selectable">{message}</p>
-          <button type="button" className="btn btn-sm" onClick={onRetry}>重试加载</button>
+          <button type="button" className="btn btn-sm" onClick={onRetry}>Retry loading</button>
         </div>
       </div>
       <pre className="code-block-pre code-block-pre-flush selectable">
@@ -96,7 +96,7 @@ function PluginCodeBlock(props: {
         if (typeof exported !== 'function') {
           throw new PluginClientError(
             'client_export_not_component',
-            `插件 ${pluginId} 模块 ${clientRef.module} 导出 ${clientRef.export} 不是组件函数`,
+            `Plugin ${pluginId} module ${clientRef.module} export ${clientRef.export} is not a component function`,
             0,
           )
         }
@@ -120,7 +120,7 @@ function PluginCodeBlock(props: {
         </div>
         <div className="callout" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
           <HelmIcon name="loader" size={13} className="spin-slow" />
-          <span>正在加载 {language} 渲染组件...</span>
+          <span>Loading {language} renderer...</span>
         </div>
       </div>
     )
@@ -142,7 +142,7 @@ function PluginCodeBlock(props: {
   const { Component } = client
   const ctx = createPluginClientContext(port, pluginId, conversationId)
   return (
-    <ViewBoundary label={`${language} 渲染`}>
+    <ViewBoundary label={`${language} render`}>
       <PluginClientContext.Provider value={ctx}>
         <Component language={language} code={code} conversationId={conversationId} />
       </PluginClientContext.Provider>

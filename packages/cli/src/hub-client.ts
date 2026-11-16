@@ -1,7 +1,7 @@
 /**
- * Hub HTTP 客户端：CLI 的唯一网络边界。
- * 成功：直接实体/数组；失败：{error:{code,message,details?}}（ApiErrorBody）。
- * 凭据优先级：HELM_TOKEN / HELM_HUB_URL env > cli-token 文件 > 默认 3202。
+ * Hub HTTP client:CLI unique network boundary.
+ * succeeded: directly entity/array; failed:{error:{code,message,details?}}(ApiErrorBody).
+ * credentials priority:HELM_TOKEN / HELM_HUB_URL env > cli-token file > by default 3202.
  */
 import type { ApiErrorBody, ArtifactMetadata } from '@helm/protocol'
 import { CliError } from './errors.js'
@@ -18,16 +18,16 @@ export interface HubEndpoint {
 }
 
 /**
- * 解析 Hub 地址与 Token。
- * Token 信任边界：HELM_TOKEN 显式给出则优先（用户自己保证它属于目标 Hub）；
- * 否则仅当目标 baseUrl 与凭据文件记录的 hubUrl 完全一致时才附带存储的
- * token——HELM_HUB_URL 指向另一个 Hub 时绝不把旧 Hub 的 token 发过去。
+ * parse Hub address and Token.
+ * Token trust boundary:HELM_TOKEN explicit to out then takes precedence (user itself guarantee it belongs to target Hub);
+ * otherwise only when target baseUrl and credentials file record hubUrl fully consistent when only then attach carries store
+ * token- -HELM_HUB_URL points to another Hub when never old Hub  token remove.
  */
 export function resolveEndpoint(env: NodeJS.ProcessEnv, credential: { hubUrl?: string; token?: string }): HubEndpoint {
   const envUrl = env['HELM_HUB_URL']?.trim()
   const baseUrl = normalizeUrl(envUrl || credential.hubUrl || DEFAULT_HUB_URL)
   if (env['HELM_TOKEN']) return { baseUrl, token: env['HELM_TOKEN'] }
-  // 无 env URL 时 baseUrl 必然来自 credential.hubUrl（或默认值），token 同源可用
+  // without env URL when baseUrl must however from credential.hubUrl(or default value),token same source available
   const sameHub = !envUrl || !credential.hubUrl || normalizeUrl(credential.hubUrl) === baseUrl
   return { baseUrl, token: sameHub ? credential.token : undefined }
 }
@@ -44,14 +44,14 @@ export class HubClient {
   }
 
   /**
-   * 需要鉴权的请求构造 headers；无 token 时如实报错（提示来源），不静默裸奔。
-   * auth:'optional' 例外：有 token 附带，无 token 也放行（如 /api/auth/status）。
+   * need to authentication request construct headers; without token when such as errors (hint source), not silently bare run.
+   * auth:'optional' exception: has token attach carries, without token also let through (such as /api/auth/status).
    */
   private authHeaders(extra: Record<string, string> = {}, optional = false): Record<string, string> {
     if (!this.endpoint.token) {
       if (optional) return extra
       throw new CliError(
-        `未配置 Token（${this.endpoint.baseUrl}）。运行 helm login，或设置 HELM_TOKEN。`,
+        `not config Token(${this.endpoint.baseUrl}). run helm login, or settings HELM_TOKEN.`,
         'unauthorized',
       )
     }
@@ -64,7 +64,7 @@ export class HubClient {
 
   private async toCliError(response: Response, where: string, preloadedText?: string): Promise<CliError> {
     const text = preloadedText ?? (await response.text().catch(() => ''))
-    let message = text || `${where} 返回 HTTP ${response.status}`
+    let message = text || `${where} return HTTP ${response.status}`
     let code = `http_${response.status}`
     let details: unknown
     try {
@@ -76,10 +76,10 @@ export class HubClient {
         if ('details' in error) details = error.details
       }
     } catch {
-      /* 非 JSON 错误体：保留原文 */
+      /* non- JSON error body: keep original text */
     }
     if (response.status === 401) {
-      return new CliError(`${message}（未授权：${this.endpoint.baseUrl}）。运行 helm login 或设置 HELM_TOKEN。`, code, 1, details)
+      return new CliError(`${message}(unauthorized:${this.endpoint.baseUrl}). run helm login or settings HELM_TOKEN.`, code, 1, details)
     }
     return new CliError(message, code, 1, details)
   }
@@ -87,17 +87,17 @@ export class HubClient {
   private async parseEntity<T>(response: Response, where: string): Promise<T> {
     const text = await response.text().catch(() => '')
     if (!response.ok) throw await this.toCliError(response, where, text)
-    if (text === '') return undefined as T // 204 No Content 等空体成功
+    if (text === '') return undefined as T // 204 No Content etc. empty body succeeded
     try {
       return JSON.parse(text) as T
     } catch {
-      throw new CliError(`Hub 返回非 JSON 响应（${where}）：${text.slice(0, 200)}`, 'invalid_response')
+      throw new CliError(`Hub return non- JSON response (${where}):${text.slice(0, 200)}`, 'invalid_response')
     }
   }
 
   /**
-   * 本请求超时控制：缺省用实例默认；timeoutMs 显式给出时覆盖，0 表示
-   * 不施加请求超时（--wait 长等待路径），仅保留调用方 signal 取消。
+   * this request timeout control: default use instance by default;timeoutMs explicit to out when override,0 means
+   * do not apply add request timeout (--wait long wait for path), only keep caller signal cancel.
    */
   private signalFor(timeoutMs: number | undefined, external?: AbortSignal): AbortSignal {
     const ms = timeoutMs !== undefined ? timeoutMs : this.timeoutMs
@@ -107,10 +107,10 @@ export class HubClient {
   }
 
   /**
-   * JSON 请求；body 为 undefined 时不发送请求体。timeoutMs=0 表示不施加
-   * 默认请求超时（wait 长等待），其余值覆盖实例默认。
-   * auth：true（默认）必须带 token；false 明确匿名；'optional' 有 token 附带、
-   * 无 token 也放行（用于 status 等公开端点的鉴权状态探测）。
+   * JSON request;body is undefined when do not send request body.timeoutMs=0 means do not apply add
+   * by default request timeout (wait long wait for), the rest value override instance by default.
+   * auth:true(by default) must carries token;false explicit anonymous;'optional' has token attach carries,
+   * without token also let through (used to status etc. public end point authentication state probe).
    */
   async request<T>(method: string, path: string, opts: { body?: unknown; auth?: boolean | 'optional'; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
     const headers: Record<string, string> = {}
@@ -129,13 +129,13 @@ export class HubClient {
     } catch (err) {
       if (err instanceof Error && err.name === 'TimeoutError') {
         const ms = opts.timeoutMs !== undefined ? opts.timeoutMs : this.timeoutMs
-        throw new CliError(`请求超时（${ms}ms）：${method} ${path}`, 'timeout')
+        throw new CliError(`request timeout (${ms}ms):${method} ${path}`, 'timeout')
       }
       if (err instanceof Error && err.name === 'AbortError') {
-        throw new CliError(`请求已取消：${method} ${path}`, 'aborted')
+        throw new CliError(`request cancelled:${method} ${path}`, 'aborted')
       }
       throw new CliError(
-        `无法连接 Hub（${this.endpoint.baseUrl}）：${err instanceof Error ? err.message : String(err)}`,
+        `cannot connect Hub(${this.endpoint.baseUrl}):${err instanceof Error ? err.message : String(err)}`,
         'hub_unreachable',
       )
     }
@@ -162,7 +162,7 @@ export class HubClient {
     return this.request<T>('DELETE', path)
   }
 
-  /** 二进制内容下载：返回原始 Response（已校验 2xx）。 */
+  /** two enter system content download: return original Response(already validate 2xx). */
   async raw(path: string, signal?: AbortSignal): Promise<Response> {
     let response: Response
     try {
@@ -173,13 +173,13 @@ export class HubClient {
       })
     } catch (err) {
       if (err instanceof Error && err.name === 'TimeoutError') {
-        throw new CliError(`请求超时（${this.timeoutMs}ms）：GET ${path}`, 'timeout')
+        throw new CliError(`request timeout (${this.timeoutMs}ms):GET ${path}`, 'timeout')
       }
       if (err instanceof Error && err.name === 'AbortError') {
-        throw new CliError(`请求已取消：GET ${path}`, 'aborted')
+        throw new CliError(`request cancelled:GET ${path}`, 'aborted')
       }
       throw new CliError(
-        `无法连接 Hub（${this.endpoint.baseUrl}）：${err instanceof Error ? err.message : String(err)}`,
+        `cannot connect Hub(${this.endpoint.baseUrl}):${err instanceof Error ? err.message : String(err)}`,
         'hub_unreachable',
       )
     }
@@ -188,8 +188,8 @@ export class HubClient {
   }
 
   /**
-   * 二进制产物上传（POST /api/conversations/:id/artifacts）：
-   * application/octet-stream 流 + x-artifact-filename（URL 编码）+ 可选 mime。
+   * two enter system artifact upload (POST /api/conversations/:id/artifacts):
+   * application/octet-stream stream + x-artifact-filename(URL encode)+ optional mime.
    */
   async uploadArtifact(
     conversationId: number,
@@ -214,13 +214,13 @@ export class HubClient {
       })
     } catch (err) {
       if (err instanceof Error && err.name === 'TimeoutError') {
-        throw new CliError(`请求超时（${this.timeoutMs}ms）：POST ${path}`, 'timeout')
+        throw new CliError(`request timeout (${this.timeoutMs}ms):POST ${path}`, 'timeout')
       }
       if (err instanceof Error && err.name === 'AbortError') {
-        throw new CliError(`请求已取消：POST ${path}`, 'aborted')
+        throw new CliError(`request cancelled:POST ${path}`, 'aborted')
       }
       throw new CliError(
-        `无法连接 Hub（${this.endpoint.baseUrl}）：${err instanceof Error ? err.message : String(err)}`,
+        `cannot connect Hub(${this.endpoint.baseUrl}):${err instanceof Error ? err.message : String(err)}`,
         'hub_unreachable',
       )
     }
@@ -228,10 +228,10 @@ export class HubClient {
   }
 
   /**
-   * NDJSON 流式 POST：逐块消费 response.body（绝不先缓冲全响应再伪流），
-   * 每完整一行解析为一个 JSON 对象回调 onLine；尾行允许省略换行符。
-   * 解析错误与消费方错误分别上抛，取消时关闭 reader 让 Hub 停止命令。
-   * 建连/HTTP 错误复用统一错误信封；signal 支持逐块取消（立即断开）。
+   * NDJSON streaming POST: one by one chunk consume response.body(never first buffer all response again fake stream),
+   * each complete one row parse is a JSON object call back onLine; tail row allows omit newline symbol.
+   * parse error and consumer error respectively on throw, cancel when close reader let Hub stop command.
+   * create connect/HTTP error re- use unify error message seal;signal support one by one chunk cancel (immediately disconnect).
    */
   async streamNdjson(
     method: string,
@@ -251,21 +251,21 @@ export class HubClient {
       })
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        throw new CliError(`请求已取消：${method} ${path}`, 'aborted')
+        throw new CliError(`request cancelled:${method} ${path}`, 'aborted')
       }
       throw new CliError(
-        `无法连接 Hub（${this.endpoint.baseUrl}）：${err instanceof Error ? err.message : String(err)}`,
+        `cannot connect Hub(${this.endpoint.baseUrl}):${err instanceof Error ? err.message : String(err)}`,
         'hub_unreachable',
       )
     }
     if (!response.ok) throw await this.toCliError(response, `${method} ${path}`)
     if (!response.body) {
-      throw new CliError(`Hub 未返回流式响应体（${method} ${path}）`, 'invalid_response')
+      throw new CliError(`Hub not return streaming response body (${method} ${path})`, 'invalid_response')
     }
     const contentType = response.headers.get('content-type')?.split(';')[0]?.trim()
     if (contentType !== 'application/x-ndjson') {
       await response.body.cancel()
-      throw new CliError(`Hub 响应类型不是 application/x-ndjson（${method} ${path}）`, 'invalid_response')
+      throw new CliError(`Hub response type is not application/x-ndjson(${method} ${path})`, 'invalid_response')
     }
     const reader = response.body.getReader()
     const decoder = new TextDecoder('utf-8', { fatal: true })
@@ -274,11 +274,11 @@ export class HubClient {
     const consume = (line: string): void => {
       if (line.trim() === '') return
       if (Buffer.byteLength(line, 'utf8') > maxFrameBytes) {
-        throw new CliError('Hub NDJSON 帧超过大小上限', 'invalid_response')
+        throw new CliError('Hub NDJSON frame exceeds large small cap', 'invalid_response')
       }
       let value: unknown
       try { value = JSON.parse(line) } catch {
-        throw new CliError(`Hub NDJSON 流中出现非 JSON 行（${method} ${path}）`, 'invalid_response')
+        throw new CliError(`Hub NDJSON stream in appear non- JSON row (${method} ${path})`, 'invalid_response')
       }
       opts.onLine(value)
     }
@@ -295,7 +295,7 @@ export class HubClient {
           newline = buffer.indexOf('\n')
         }
         if (Buffer.byteLength(buffer, 'utf8') > maxFrameBytes) {
-          throw new CliError('Hub NDJSON 帧超过大小上限', 'invalid_response')
+          throw new CliError('Hub NDJSON frame exceeds large small cap', 'invalid_response')
         }
       }
       opts.signal?.throwIfAborted()
@@ -303,7 +303,7 @@ export class HubClient {
       consume(buffer)
     } catch (err) {
       if (opts.signal?.aborted || (err instanceof Error && err.name === 'AbortError')) {
-        throw new CliError(`流已取消：${method} ${path}`, 'aborted')
+        throw new CliError(`stream cancelled:${method} ${path}`, 'aborted')
       }
       throw err
     } finally {
@@ -313,9 +313,9 @@ export class HubClient {
   }
 
   /**
-   * SSE 订阅任意 GET 端点（专用事件流复用同一解析器）：帧解析兼容 \n\n 与
-   * \r\n\r\n；event: 名与 data: JSON 均上抛给 onFrame。建连/HTTP 错误统一
-   * 信封（404 等结构化错误原样抛 CliError，调用方据此决定是否停止重试）。
+   * SSE subscribe any GET end point (dedicated use event stream re- use the same parse): frame parse compatibility \n\n and
+   * \r\n\r\n;event: name and data: JSON all on throw to onFrame. create connect/HTTP error unify
+   * message seal (404 etc. structure error original throw CliError, caller based on this decide is otherwise stop retry).
    */
   async streamSse(
     path: string,
@@ -338,16 +338,16 @@ export class HubClient {
     } catch (err) {
       clearTimeout(connectTimer)
       if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-        if (callerAborted()) throw new CliError('已取消', 'aborted')
-        throw new CliError(`建连超时（${this.timeoutMs}ms）：GET ${path}`, 'timeout')
+        if (callerAborted()) throw new CliError('cancelled', 'aborted')
+        throw new CliError(`create connect timeout (${this.timeoutMs}ms):GET ${path}`, 'timeout')
       }
       throw new CliError(
-        `无法连接 Hub（${this.endpoint.baseUrl}）：${err instanceof Error ? err.message : String(err)}`,
+        `cannot connect Hub(${this.endpoint.baseUrl}):${err instanceof Error ? err.message : String(err)}`,
         'hub_unreachable',
       )
     }
     clearTimeout(connectTimer)
-    if (callerAborted()) throw new CliError('已取消', 'aborted')
+    if (callerAborted()) throw new CliError('cancelled', 'aborted')
     if (!response.ok || !response.body) throw await this.toCliError(response, `GET ${path}`)
     const reader = (response.body as ReadableStream<Uint8Array>).getReader()
     const decoder = new TextDecoder()
@@ -368,14 +368,14 @@ export class HubClient {
             if (line.startsWith('event:')) event = line.slice(6).trim()
             else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
           }
-          if (dataLines.length === 0) continue // 注释/keepalive 帧
+          if (dataLines.length === 0) continue // note release/keepalive frame
           listeners.onFrame({ event, data: dataLines.join('\n') })
         }
       }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        if (callerAborted()) throw new CliError('已取消', 'aborted')
-        throw new CliError(`流中断：GET ${path}`, 'aborted')
+        if (callerAborted()) throw new CliError('cancelled', 'aborted')
+        throw new CliError(`stream interrupt:GET ${path}`, 'aborted')
       }
       throw err
     } finally {
@@ -385,8 +385,8 @@ export class HubClient {
   }
 
   /**
-   * SSE 订阅 `GET /api/events`。超时仅约束建连阶段；流建立后由调用方 signal 控制。
-   * 帧解析兼容 \n\n 与 \r\n\r\n；event: 名与 data: JSON 均上抛给 onFrame。
+   * SSE subscribe `GET /api/events`. timeout only constraint create connect phase; stream establish after by caller signal control.
+   * frame parse compatibility \n\n and \r\n\r\n;event: name and data: JSON all on throw to onFrame.
    */
   async streamEvents(
     listeners: {
@@ -409,16 +409,16 @@ export class HubClient {
     } catch (err) {
       clearTimeout(connectTimer)
       if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-        if (callerAborted()) throw new CliError('已取消', 'aborted')
-        throw new CliError(`建连超时（${this.timeoutMs}ms）：GET ${path}`, 'timeout')
+        if (callerAborted()) throw new CliError('cancelled', 'aborted')
+        throw new CliError(`create connect timeout (${this.timeoutMs}ms):GET ${path}`, 'timeout')
       }
       throw new CliError(
-        `无法连接 Hub（${this.endpoint.baseUrl}）：${err instanceof Error ? err.message : String(err)}`,
+        `cannot connect Hub(${this.endpoint.baseUrl}):${err instanceof Error ? err.message : String(err)}`,
         'hub_unreachable',
       )
     }
     clearTimeout(connectTimer)
-    if (callerAborted()) throw new CliError('已取消', 'aborted')
+    if (callerAborted()) throw new CliError('cancelled', 'aborted')
     if (!response.ok || !response.body) throw await this.toCliError(response, `GET ${path}`)
     const reader = (response.body as ReadableStream<Uint8Array>).getReader()
     const decoder = new TextDecoder()
@@ -439,14 +439,14 @@ export class HubClient {
             if (line.startsWith('event:')) event = line.slice(6).trim()
             else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
           }
-          if (dataLines.length === 0) continue // 注释/keepalive 帧
+          if (dataLines.length === 0) continue // note release/keepalive frame
           listeners.onFrame({ event, data: dataLines.join('\n') })
         }
       }
     } catch (err) {
       if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-        if (callerAborted()) throw new CliError('已取消', 'aborted')
-        throw new CliError(`流中断：GET ${path}`, 'aborted')
+        if (callerAborted()) throw new CliError('cancelled', 'aborted')
+        throw new CliError(`stream interrupt:GET ${path}`, 'aborted')
       }
       throw err
     } finally {

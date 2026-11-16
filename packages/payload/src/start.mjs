@@ -1,26 +1,26 @@
 #!/usr/bin/env node
 /**
- * Hub payload 零依赖启动入口（随 payload 目录分发，Node >= 24，无任何 npm 依赖）。
+ * Hub payload zero dependency start entry (follow payload directory dispatch,Node >= 24, without any npm dependency).
  *
- * 命令：
- *   node start.mjs check   校验 manifest/entries/checksums（严格相对路径），并按
- *                          dist 根 package.json dependencies 从 hub/kernel/plugins/
- *                          plugin-build/plugin-client/env-io/protocol/cli 八个运行时入口逐依赖做真实解析（createRequire
- *                          ——与运行时 Node 解析语义一致；import.meta.resolve 的
- *                          parent 参数在当前 Node 默认被忽略，不可用于此），随后实测
- *                          运行时能力：import node:sqlite、加载 esbuild 并真实
- *                          transform 一段 JS（覆盖插件 client 编译链路）。check 绝不
- *                          启动 Hub。
- *   node start.mjs start   依赖验收通过后拉起 hub 入口（hub/dist/main.js），透传
- *                          环境变量与信号；web/dist 存在且未显式配置时导出
- *                          HELM_WEB_DIST_DIR（@helm/kernel 经 npm 安装进
- *                          node_modules 后其源码内默认探测不再命中 payload 根布局，
- *                          由启动器显式声明，不静默降级为无静态托管）。
+ * command:
+ *   node start.mjs check   validate manifest/entries/checksums(strictly relative path), and by
+ *                          dist  package.json dependencies from hub/kernel/plugins/
+ *                          plugin-build/plugin-client/env-io/protocol/cli eight runtime entry one by one dependency do real parse (createRequire
+ *                          - - and runtime Node parse semantics consistent;import.meta.resolve 
+ *                          parent parameter in when before Node by default by ignore, unavailable at this), then measured
+ *                          runtime capability:import node:sqlite, load esbuild and real
+ *                          transform one segment JS(override plugin client compile link).check never
+ *                          start Hub.
+ *   node start.mjs start   dependency verify via after pull start hub entry (hub/dist/main.js), pass-through
+ *                          environment variable and signal;web/dist store in and not explicit config when export
+ *                          HELM_WEB_DIST_DIR(@helm/kernel via npm install enter
+ *                          node_modules after its source code inside by default probe no longer hit payload layout,
+ *                          by start explicit declaration, not silently fall back is without static hosting).
  *
- * 退出码（绝不静默降级）：
- *   0  校验通过且依赖可解析、运行时能力实测成功（或 start 的子进程正常退出）
- *   1  用法错误或 payload 布局/校验和/manifest 契约损坏
- *   3  布局合法但依赖缺失或运行时能力实测失败（如 esbuild 平台二进制不可用）
+ * exit code (never static default fall back):
+ *   0  validate via and dependency can parse, runtime capability measured succeeded (or start child process normal exit)
+ *   1  use method error or payload layout/validate and/manifest contract corrupt
+ *   3  layout legal but dependency missing or runtime capability measured failed (such as esbuild platform two enter system unavailable)
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -34,35 +34,35 @@ const EXIT_ERROR = 1;
 const EXIT_DEPS_MISSING = 3;
 
 const usage = () => {
-  console.error('用法: node start.mjs <check|start>');
+  console.error('use method: node start.mjs <check|start>');
   process.exit(EXIT_ERROR);
 };
 
-/** 单个 entry 路径的严格契约：非空、相对、POSIX 分隔、无 .. 越界。 */
+/** single entry path strictly contract: non-empty, each other for,POSIX isolate, without .. out of bounds. */
 function assertEntryPath(key, rel) {
   const problems = [];
-  if (typeof rel !== 'string' || rel.length === 0) problems.push(`- ${key}: 路径必须是非空字符串`);
+  if (typeof rel !== 'string' || rel.length === 0) problems.push(`- ${key}: path must be non-empty string`);
   else {
-    if (path.isAbsolute(rel) || rel.includes('\\')) problems.push(`- ${key} (${rel}): 必须是相对 POSIX 路径`);
+    if (path.isAbsolute(rel) || rel.includes('\\')) problems.push(`- ${key} (${rel}): must be each other for POSIX path`);
     const segments = rel.split('/');
-    if (segments.includes('..') || segments.includes('')) problems.push(`- ${key} (${rel}): 不允许 .. / 空段`);
+    if (segments.includes('..') || segments.includes('')) problems.push(`- ${key} (${rel}): disallows .. / empty segment`);
     const abs = path.resolve(payloadRoot, rel);
-    if (!abs.startsWith(`${payloadRoot}${path.sep}`)) problems.push(`- ${key} (${rel}): 解析越出 payload 根`);
+    if (!abs.startsWith(`${payloadRoot}${path.sep}`)) problems.push(`- ${key} (${rel}): parse exceeds out payload `);
   }
   return problems;
 }
 
-/** 读取并做严格契约校验（不假设多余字段；异常显式报错退出 1）。 */
+/** read and do strictly contract validate (do not assume redundant field; exception explicit errors exit 1). */
 function loadManifest() {
   let manifest;
   try {
     manifest = JSON.parse(readFileSync(path.join(payloadRoot, 'manifest.json'), 'utf-8'));
   } catch (err) {
-    console.error(`[payload] manifest.json 缺失或非法: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[payload] manifest.json missing or illegal: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(EXIT_ERROR);
   }
   if (manifest.formatVersion !== 1) {
-    console.error(`[payload] manifest.formatVersion 不支持: ${String(manifest.formatVersion)}（期望 1）`);
+    console.error(`[payload] manifest.formatVersion unsupported: ${String(manifest.formatVersion)}(expectation 1)`);
     process.exit(EXIT_ERROR);
   }
   const entries = manifest.entries ?? {};
@@ -70,19 +70,19 @@ function loadManifest() {
   const entryKeys = Object.keys(entries).sort();
   const checksumKeys = Object.keys(checksums).sort();
   if (entryKeys.length === 0 || JSON.stringify(entryKeys) !== JSON.stringify(checksumKeys)) {
-    console.error(`[payload] manifest.entries 与 entryChecksums 键不一致或为空: ${entryKeys} vs ${checksumKeys}`);
+    console.error(`[payload] manifest.entries and entryChecksums key inconsistent or is empty: ${entryKeys} vs ${checksumKeys}`);
     process.exit(EXIT_ERROR);
   }
-  // 路径严格校验：所有问题一次性列全后再退出（绝不带着可疑路径继续做 IO）。
+  // path strictly validate: all issue once column all after again exit (never carries can doubt path continue do IO).
   const pathProblems = Object.entries(entries).flatMap(([key, rel]) => assertEntryPath(key, rel));
   if (pathProblems.length > 0) {
-    console.error(`[payload] manifest.entries 路径契约失败：\n${pathProblems.join('\n')}`);
+    console.error(`[payload] manifest.entries path contract failed:\n${pathProblems.join('\n')}`);
     process.exit(EXIT_ERROR);
   }
   return { manifest, entries, checksums };
 }
 
-/** 逐入口校验存在性与 sha256；失败列全后一次性退出 1。 */
+/** one by one entry validate store in and sha256; failed column all after once exit 1. */
 function checkLayout(entries, checksums, version) {
   const problems = [];
   for (const [key, rel] of Object.entries(entries)) {
@@ -91,30 +91,30 @@ function checkLayout(entries, checksums, version) {
     try {
       actual = createHash('sha256').update(readFileSync(abs)).digest('hex');
     } catch {
-      problems.push(`- ${key} (${rel}): 文件缺失或不可读`);
+      problems.push(`- ${key} (${rel}): file missing or cannot read`);
       continue;
     }
-    if (actual !== checksums[key]) problems.push(`- ${key} (${rel}): checksum 不一致（期望 ${checksums[key]}，实际 ${actual}）`);
+    if (actual !== checksums[key]) problems.push(`- ${key} (${rel}): checksum inconsistent (expectation ${checksums[key]}, actual ${actual})`);
   }
   if (problems.length > 0) {
-    console.error(`[payload] 布局校验失败：\n${problems.join('\n')}`);
+    console.error(`[payload] layout validation failed:\n${problems.join('\n')}`);
     process.exit(EXIT_ERROR);
   }
-  console.log(`[payload] 布局校验通过: ${Object.keys(entries).length} 项入口 checksum 一致 (version ${String(version)})`);
+  console.log(`[payload] layout validate via: ${Object.keys(entries).length} items entry checksum consistent (version ${String(version)})`);
 }
 
 /**
- * 依赖解析：以 dist 根 package.json dependencies 为契约清单，从 hub / kernel /
- * plugins / plugin-build / plugin-client / env-io / protocol / cli 八个运行时入口文件出发用 createRequire(entry).resolve
- * 做真实解析——与 Hub 运行时 Node 的解析语义同源（import.meta.resolve 的第二参数
- * 在 Node 默认被忽略，之前的实现会在任意宿主目录下误判）。
+ * dependency parse: with dist  package.json dependencies is contract manifest, from hub / kernel /
+ * plugins / plugin-build / plugin-client / env-io / protocol / cli eight runtime entry file starting from use createRequire(entry).resolve
+ * do real parse - - and Hub runtime Node parse semantics same source (import.meta.resolve second parameter
+ * in Node by default by ignore, before implement will in any host directory under mistakenly judge).
  */
 function resolveProdDeps(entries) {
   let deps = {};
   try {
     deps = JSON.parse(readFileSync(path.join(payloadRoot, 'package.json'), 'utf-8')).dependencies ?? {};
   } catch (err) {
-    console.error(`[payload] 根 package.json 缺失或非法: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[payload]  package.json missing or illegal: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(EXIT_ERROR);
   }
   const bases = {
@@ -131,20 +131,20 @@ function resolveProdDeps(entries) {
     Object.entries(bases).map(([name, entry]) => [name, createRequire(entry)]),
   );
   /**
-   * 单点解析：require.resolve → <name>/package.json 子路径 → node_modules 逐层上溯。
-   * 后两级回退不是妥协：@earendil-works/* 是 ESM-only（exports 仅 import 条目），
-   * require.resolve 会报 ERR_PACKAGE_PATH_NOT_EXPORTED，但运行时 ESM import 完全可用；
-   * 逐层上溯复刻 Node 解析算法的存在性判定，仅验证包已安装于可解析位置。
+   * single point parse:require.resolve → <name>/package.json sub- path → node_modules one by one layer on trace.
+   * after two level fall back is not proper coordinate:@earendil-works/* is ESM-only(exports only import item),
+   * require.resolve will report ERR_PACKAGE_PATH_NOT_EXPORTED, but runtime ESM import fully available;
+   * one by one layer on trace re- moment Node parse algorithm store in decide, only verify package installed at can parse location.
    */
   const resolvable = (req, entry, name) => {
     try {
       req.resolve(name);
       return true;
-    } catch { /* 继续回退 */ }
+    } catch { /* continue fall back */ }
     try {
       req.resolve(`${name}/package.json`);
       return true;
-    } catch { /* 继续回退 */ }
+    } catch { /* continue fall back */ }
     let cur = path.dirname(entry);
     for (;;) {
       if (existsSync(path.join(cur, 'node_modules', name, 'package.json'))) return true;
@@ -157,44 +157,44 @@ function resolveProdDeps(entries) {
   const names = Object.keys(deps).sort();
   for (const name of names) {
     for (const [base, req] of Object.entries(requires)) {
-      if (!resolvable(req, bases[base], name)) missing.push(`${name}（自 ${base} 入口）`);
+      if (!resolvable(req, bases[base], name)) missing.push(`${name}(self ${base} entry)`);
     }
   }
   return { total: names.length, missing };
 }
 
 /**
- * 运行时能力实测（只测依赖能力，不执行 Hub）：
- * - node:sqlite：kernel 持久层的 Node 内置模块（Node >= 22.5 且 --experimental 转正后可用）；
- * - esbuild：真实加载 + transform 一段 JS——覆盖插件 client 编译链路，同时实测
- *   当前平台的 esbuild 原生二进制（--ignore-scripts 安装下二进制由 optionalDependencies
- *   平台包提供，postinstall 校验脚本不可用，必须实测而非只看可解析）。
+ * runtime capability measured (only test dependency capability, do not execute Hub):
+ * - node:sqlite:kernel durable layer Node inside placement module (Node >= 22.5 and --experimental rotate correct after available);
+ * - esbuild: real load + transform one segment JS- - override plugin client compile link, also measured
+ *   when before platform esbuild original generate two enter system (--ignore-scripts install under two enter system by optionalDependencies
+ *   platform package provide,postinstall validate script unavailable, must measured while non- only see can parse).
  */
 async function probeRuntimeCapabilities(entries) {
   const failures = [];
   try {
     await import('node:sqlite');
   } catch (err) {
-    failures.push(`node:sqlite 不可用（Node 版本过低或构建缺内置模块）: ${err instanceof Error ? err.message : String(err)}`);
+    failures.push(`node:sqlite unavailable (Node version low or build missing inside placement module): ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
     const hubEntry = path.resolve(payloadRoot, entries.hub ?? 'hub/dist/main.js');
     const esbuild = createRequire(hubEntry)('esbuild');
     const out = await esbuild.transform('const answer = 42\n', { loader: 'js' });
-    if (typeof out?.code !== 'string' || !out.code.includes('answer')) throw new Error('transform 输出异常');
+    if (typeof out?.code !== 'string' || !out.code.includes('answer')) throw new Error('transform output exception');
   } catch (err) {
-    failures.push(`esbuild 实测失败（平台二进制缺失或不可用）: ${err instanceof Error ? err.message : String(err)}`);
+    failures.push(`esbuild measured failed (platform two enter system missing or unavailable): ${err instanceof Error ? err.message : String(err)}`);
   }
   return failures;
 }
 
 function reportDeps(result) {
   if (result.missing.length === 0) {
-    console.log(`[payload] 生产依赖全部可解析 (${result.total}/${result.total}，hub/kernel/plugins/plugin-build/plugin-client/env-io/protocol/cli 八入口)`);
+    console.log(`[payload] produce dependency all can parse (${result.total}/${result.total},hub/kernel/plugins/plugin-build/plugin-client/env-io/protocol/cli eight entry)`);
     return;
   }
-  console.error(`[payload] 运行时依赖缺失 (${result.missing.length} 项): ${result.missing.join(', ')}`);
-  console.error('[payload] 本目录未携带 node_modules；请在 payload 根目录执行 npm install --omit=dev --ignore-scripts 后重试。');
+  console.error(`[payload] runtime dependency missing (${result.missing.length} items): ${result.missing.join(', ')}`);
+  console.error('[payload] this directory not carry node_modules; please in payload directory execute npm install --omit=dev --ignore-scripts after retry.');
 }
 
 const command = process.argv[2];
@@ -209,10 +209,10 @@ if (command === 'check') {
   reportDeps(result);
   const failures = await probeRuntimeCapabilities(entries);
   if (failures.length > 0) {
-    console.error(`[payload] 运行时能力实测失败：\n${failures.map((f) => `- ${f}`).join('\n')}`);
+    console.error(`[payload] runtime capability measured failed:\n${failures.map((f) => `- ${f}`).join('\n')}`);
     process.exit(EXIT_DEPS_MISSING);
   }
-  console.log('[payload] 运行时能力实测通过（node:sqlite + esbuild transform）');
+  console.log('[payload] runtime capability measured via (node:sqlite + esbuild transform)');
   process.exit(0);
 } else if (command === 'start') {
   const { manifest, entries, checksums } = loadManifest();
@@ -224,11 +224,11 @@ if (command === 'check') {
   }
   const failures = await probeRuntimeCapabilities(entries);
   if (failures.length > 0) {
-    console.error(`[payload] 运行时能力实测失败：\n${failures.map((f) => `- ${f}`).join('\n')}`);
+    console.error(`[payload] runtime capability measured failed:\n${failures.map((f) => `- ${f}`).join('\n')}`);
     process.exit(EXIT_DEPS_MISSING);
   }
   const hubEntry = path.resolve(payloadRoot, entries.hub);
-  // web/dist 存在且未显式配置时导出静态托管目录（见文件头注释；绝不静默降级）。
+  // web/dist store in and not explicit config when export static hosting directory (see file head note release; never static default fall back).
   const childEnv = { ...process.env };
   if (childEnv.HELM_WEB_DIST_DIR === undefined && existsSync(path.join(payloadRoot, 'web/dist'))) {
     childEnv.HELM_WEB_DIST_DIR = path.resolve(payloadRoot, 'web/dist');

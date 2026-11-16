@@ -507,8 +507,8 @@ test('远端配置可达 HELM_HUB_URL：门禁通过，注入附件拉取指引�
     assert.ok(prompt.includes('[Attached Files]'), '提示词注入附件清单')
     assert.ok(prompt.includes('id=art-id-1'))
     assert.ok(prompt.includes('helm artifacts get art-id-1'), '远端形态给拉取命令')
-    assert.ok(prompt.includes('--- helm 交接契约'), '交接契约仍在（附件块插在正文与契约之间）')
-    assert.ok(prompt.indexOf('[Attached Files]') < prompt.indexOf('--- helm 交接契约'), '顺序：正文→附件→契约')
+    assert.ok(prompt.includes('--- helm handoff contract'), '交接契约仍在（附件块插在正文与契约之间）')
+    assert.ok(prompt.indexOf('[Attached Files]') < prompt.indexOf('--- helm handoff contract'), '顺序：正文→附件→契约')
   } finally {
     await env.close()
   }

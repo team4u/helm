@@ -1,13 +1,13 @@
 /**
- * 会话输入管道模块：钩子调度、输入脱敏、标题派生与新提交执行。
+ * conversation input pipeline module: hook scheduling, input redaction, title derive and new commit execute.
  *
- * 职责：
- * - input 钩子应用（支持 block 拦截、handled 接管、transform 改写）；
- * - 提交元数据与正文全局脱敏（SecretStash）；
- * - 缺省 whenBusy 插话（steer）有效默认固化；
- * - 钩子产物附件二次授权校验；
- * - 会话首条输入自动派生标题；
- * - 全新输入提交到 SDK harness 并与 tracker 登记绑定。
+ * responsibility:
+ * - input hook should use (support block intercept,handled take over,transform change write);
+ * - commit metadata and body text global redaction (SecretStash);
+ * - default whenBusy insert speech (steer) valid by default solid;
+ * - hook artifact attachment second authorization validate;
+ * - conversation first input automatically derive title;
+ * - all new input commit to SDK harness and and tracker register bind set.
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { copyJson, type JsonRepresentation } from '@earendil-works/chord/json'
@@ -39,7 +39,7 @@ export interface ConversationInputPipelineHost {
     conversationId: number,
     attachmentIds: readonly string[],
   ) => Promise<Array<{ ref: ConversationAttachmentRef; metadata: ArtifactMetadata; absPath: string }>>
-  /** guarded mutation 提交点复核（同步、零 await；宿主即 ConversationService.assertMutationGuard）。 */
+  /** guarded mutation commit point re-check (sync, zero await; host i.e. ConversationService.assertMutationGuard). */
   readonly assertMutationGuard: (id: number, guard: GuardedMutationExpectation) => void
 }
 
@@ -57,8 +57,8 @@ export class ConversationInputPipeline {
   constructor(private readonly host: ConversationInputPipelineHost) {}
 
   /**
-   * input 钩子应用 + 最终输入固化：
-   * 返回 handled（接管）或最终 { finalInput, finalWhenBusy, effectiveText, resolvedAttachments }。
+   * input hook should use + eventually input solid:
+   * return handled(take over) or eventually { finalInput, finalWhenBusy, effectiveText, resolvedAttachments }.
    */
   async prepareInput(
     id: number,
@@ -68,7 +68,7 @@ export class ConversationInputPipeline {
   ): Promise<PreparedInputResult> {
     const origin = opts?.origin ?? 'human'
     if (opts?.requestId !== undefined && (typeof opts.requestId !== 'string' || opts.requestId.trim() === '')) {
-      throw new HelmError('validation_error', '内部 requestId 必须为非空字符串', 400)
+      throw new HelmError('validation_error', 'internal requestId must is non-empty string', 400)
     }
     const inputId = opts?.requestId ?? randomUUID()
     const createdAt = Date.now()
@@ -92,7 +92,7 @@ export class ConversationInputPipeline {
     }
     const hookOutcome = await this.host.runInputHook(payload)
     if (hookOutcome?.action === 'block') {
-      throw new HelmError('input_blocked', hookOutcome.reason ?? '输入被 input 钩子拦截')
+      throw new HelmError('input_blocked', hookOutcome.reason ?? 'input by input hook intercept')
     }
     if (hookOutcome?.action === 'handled') {
       return { kind: 'handled', submissionId: `handled:${randomUUID()}` }
@@ -104,7 +104,7 @@ export class ConversationInputPipeline {
       if (value.conversationId !== id) {
         throw new HelmError(
           'input_identity_changed',
-          `input 钩子不得改写 conversationId（${id} -> ${String(value.conversationId)}）`,
+          `input hook must not change write conversationId(${id} -> ${String(value.conversationId)})`,
           400,
         )
       }
@@ -138,14 +138,14 @@ export class ConversationInputPipeline {
     return { kind: 'final', finalInput, finalWhenBusy, effectiveText, resolvedAttachments }
   }
 
-  /** 首输入自动标题（派生自脱敏后文本；stateChangeSeq 同步推进）。 */
+  /** first input automatically title (derive self redaction after text;stateChangeSeq sync push enter). */
   applyFirstInputTitle(meta: ConvMeta, effectiveText: string): void {
     if (meta.title !== '') return
     const title = deriveTitle(effectiveText)
     this.host.store.upsertConv({ ...meta, title, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
   }
 
-  /** 新输入 SDK 提交（非 rewind 路径；tracker 登记与失败撤销）。 */
+  /** new input SDK commit (non- rewind path;tracker register and failed undo). */
   async submitFreshInput(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
     id: number,
@@ -157,7 +157,7 @@ export class ConversationInputPipeline {
       content: string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>
       requestId: string | undefined
       whenIdle?: 'reject'
-      /** guarded mutation：提交点原子复核载荷（普通提交缺省）。 */
+      /** guarded mutation: commit point atomic re-check payload (ordinary commit default). */
       mutationGuard?: GuardedMutationExpectation
     },
   ): Promise<{ submissionId: string }> {
@@ -179,9 +179,9 @@ export class ConversationInputPipeline {
     )
     this.host.tracker.registerInput(id, finalInput)
     try {
-      // 原子核对 pi.live：SDK admitSubmission 只看 live.run 而不看 live.compactions，
-      // 在无活跃 run 但存在进行中压缩任务时，在此事务内把输入排入 pi.inbox（或 reject），
-      // 避免新回合在未精简的旧上下文上抢跑。
+      // atomic core for pi.live:SDK admitSubmission only see live.run while do not see live.compactions,
+      // in without leap run but store in in progress compress task when, in this transaction inside input arrange pi.inbox(or reject),
+      // avoid new turn in not streamline old context on grab run.
       const convId = asConversationId(id)
       const queueResult = await conversation.commit(async (tx) => {
         const live = await tx.doc(LiveDoc, convId)
@@ -197,7 +197,7 @@ export class ConversationInputPipeline {
           if (finalWhenBusy === 'reject') {
             throw new HelmError(
               'conversation_busy',
-              `会话 ${id} 正在精简上下文，拒绝提交（whenBusy=reject）`,
+              `conversation ${id} is now streamline context, reject commit (whenBusy=reject)`,
               409,
               { conversationId: id },
             )
@@ -229,8 +229,8 @@ export class ConversationInputPipeline {
         return { submissionId: String(queueResult.submissionId) }
       }
 
-      // 提交点最终复核：与下方 SDK submit 调用（第一个不可逆动作）之间零
-      // await——上方全部准备工作窗口内的归属翻转在此拦截，绝不产生提交。
+      // commit point eventually re-check: and under way SDK submit invoke (a cannot inverse action) between zero
+      // await- - on way all prepare work window inside ownership translate rotate in this intercept, never produce commit.
       if (mutationGuard !== undefined) {
         this.host.assertMutationGuard(id, mutationGuard)
       }

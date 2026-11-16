@@ -1,19 +1,19 @@
 /**
- * 外部插件目录 <dataDir>/plugins/<dir>/ 自动发现与动态加载器专项测试。
+ * external plugin directory <dataDir>/plugins/<dir>/ automatically discover and motion state load dedicated items test.
  *
- * 组合纪律：真实 createHelm（真 SQLite + 真 PluginHost + 真 assistant）+
- * faux provider + 真实磁盘上的外部插件 .mjs 入口；不 mock app、不 fake host。
+ * combine discipline: real createHelm(true SQLite + true PluginHost + true assistant)+
+ * faux provider + real disk on external plugin .mjs entry; do not mock app, do not fake host.
  *
- * 覆盖：
- * - 约定入口（index.mjs）与 plugin.json（main 指定入口）两种发现形态；
- * - 外部插件默认停用注册，enable 后 action / public doc / client.tsx 编译全链路可用；
- * - config.json.pluginEnabled = true 的外部插件跨重启自动恢复启用；
- * - 普通插件留下的纯数据目录（无 plugin.json / index.js）静默跳过；
- * - 损坏 plugin.json / 冒充 builtin: id / 越界 main（含 symlink 真实路径越界）/
- *   setup 兼容别名 / 非 string clientRoot 显式报错，绝不静默吞错；
- * - EACCES 等真实 IO 故障显式报错（不误判为纯数据目录跳过）；仅 ENOENT/ENOTDIR 视为缺失。
+ * override:
+ * - convention entry (index.mjs) and plugin.json(main designate entry) two kinds of discover form;
+ * - external plugin by default deactivate register,enable after action / public doc / client.tsx compile all link available;
+ * - config.json.pluginEnabled = true external plugin across restarts auto-recovery enable;
+ * - ordinary plugin under pure data directory (without plugin.json / index.js) static default skip;
+ * - corrupt plugin.json / smoke fill builtin: id / out of bounds main(contains symlink real path out of bounds)/
+ *   setup compatibility alias / non- string clientRoot explicit errors, never static default swallow wrong;
+ * - EACCES etc. real IO fault explicit errors (do not mistakenly judge is pure data directory skip); only ENOENT/ENOTDIR treated as missing.
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock; command add total timeout.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -27,20 +27,20 @@ import { pluginDataDirName } from '../../kernel/src/plugins/plugin-dir-name.js'
 import { createHubTestApp, openHubTestEnv, type HubTestApp } from './helpers/hub-test-env.js'
 
 // ---------------------------------------------------------------------------
-// 测试基建
+// test base create
 // ---------------------------------------------------------------------------
 
-/** 约定入口形态的外部插件源（index.mjs + client.tsx + action + public doc）。 */
+/** convention entry form external plugin source (index.mjs + client.tsx + action + public doc). */
 const CONVENTION_PLUGIN_SRC = `
 export default {
   id: 'demo-external',
-  name: '演示外部插件',
+  name: 'demo external plugin',
   version: '1.0.0',
   async definePlugin(ctx) {
     const status = ctx.doc('status', { count: 0 }, { public: true })
     ctx.action({
       id: 'bump',
-      description: '计数加一',
+      description: 'counter add one',
       inputSchema: { type: 'object', properties: { step: { type: 'number' } }, additionalProperties: false },
       outputSchema: { type: 'object', properties: { count: { type: 'number' } }, required: ['count'], additionalProperties: false },
       handler: (input) => {
@@ -50,7 +50,7 @@ export default {
     })
     ctx.ui.screen({
       id: 'demo-panel',
-      label: '演示面板',
+      label: 'demo panel',
       client: { module: 'client.tsx', export: 'Panel' },
     })
   },
@@ -79,12 +79,12 @@ async function makeEnv(): Promise<TestEnv> {
   }
 }
 
-/** 在指定 dataDir 上启动 createHelm（外部插件发现失败的错误断言用）。 */
+/** in designate dataDir on start createHelm(external plugin discover failed error assertion use). */
 async function makeEnvIn(dataDir: string): Promise<HubTestApp> {
   return (await createHubTestApp({ dataDir, cwd: dataDir })).app
 }
 
-/** 写入一个约定入口形态的外部插件目录。 */
+/** write a convention entry form external plugin directory. */
 function writeConventionPlugin(pluginsDir: string, dir = 'demo-external'): string {
   const dirPath = join(pluginsDir, dir)
   mkdirSync(dirPath, { recursive: true })
@@ -93,7 +93,7 @@ function writeConventionPlugin(pluginsDir: string, dir = 'demo-external'): strin
   return dirPath
 }
 
-/** 在 dataDir 的 config.json 中持久化 pluginEnabled.<id> = value。 */
+/** in dataDir  config.json in persist pluginEnabled.<id> = value. */
 async function persistEnabled(dataDir: string, pluginId: string, value: boolean): Promise<void> {
   const configPath = join(dataDir, 'config.json')
   let config: Record<string, unknown> = {}
@@ -107,15 +107,15 @@ async function persistEnabled(dataDir: string, pluginId: string, value: boolean)
 }
 
 // ---------------------------------------------------------------------------
-// 自动发现与注册
+// automatically discover and register
 // ---------------------------------------------------------------------------
 
-test('约定入口 index.mjs 的外部插件在 createHelm 启动时被自动发现并默认停用注册', { timeout: 60_000 }, async () => {
+test('convention entry index.mjs external plugin in createHelm at startup by automatically discover and by default deactivate register', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
-    // 预置外部插件目录（先于 createHelm，模拟用户手工放入）
+    // pre- placement external plugin directory (first at createHelm, simulated user manually work put)
     writeConventionPlugin(join(dataDir, 'plugins'))
-    // 同时预置一个内置插件会留下的纯数据目录形态干扰项：builtin:memory
+    // also pre- placement a built-in plugin will under pure data directory form interference items:builtin:memory
     const memoryDataDir = join(dataDir, 'plugins', pluginDataDirName('builtin:memory'))
     mkdirSync(memoryDataDir, { recursive: true })
     writeFileSync(join(memoryDataDir, 'notes.md'), 'memory plugin data')
@@ -123,10 +123,10 @@ test('约定入口 index.mjs 的外部插件在 createHelm 启动时被自动发
     const app = await makeEnvIn(dataDir)
     try {
       const summary = app.kernel.plugins.list().find((p) => p.id === 'demo-external')
-      assert.ok(summary, '外部插件应被自动注册')
-      assert.equal(summary.enabled, false, '外部插件默认停用（最小权限）')
-      assert.equal(summary.locked, false, '外部插件不可自封 locked')
-      // 内置 memory 数据目录不被误认（仍只有一次 builtin:memory）
+      assert.ok(summary, 'external plugin should by automatically register')
+      assert.equal(summary.enabled, false, 'external plugin by default deactivate (most small permission)')
+      assert.equal(summary.locked, false, 'external plugin cannot self seal locked')
+      // inside placement memory data directory do not by mistakenly recognize (still only once builtin:memory)
       const memoryPlugins = app.kernel.plugins.list().filter((p) => p.id === 'builtin:memory')
       assert.equal(memoryPlugins.length, 1)
     } finally {
@@ -137,20 +137,20 @@ test('约定入口 index.mjs 的外部插件在 createHelm 启动时被自动发
   }
 })
 
-test('外部插件 enable 后 action / public doc / client.tsx 编译全链路可用', { timeout: 60_000 }, async () => {
+test('external plugin enable after action / public doc / client.tsx compile all link available', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     writeConventionPlugin(join(dataDir, 'plugins'))
     const app = await makeEnvIn(dataDir)
     try {
       await app.kernel.plugins.enable('demo-external')
-      // action：入参 schema 校验 + 出参 schema 校验 + doc 副作用
+      // action: reference schema validate + out reference schema validate + doc side effect
       const result = (await app.kernel.plugins.invokeAction('demo-external', 'bump', { step: 5 })) as { count: number }
       assert.equal(result.count, 5)
-      // public doc 快照可见
+      // public doc snapshot visible
       const doc = app.kernel.plugins.getPublicDoc('demo-external', 'status')
       assert.deepEqual(doc.value, { count: 5 })
-      // clientRoot 默认指向插件目录：client.tsx 可编译出 ESM 产物
+      // clientRoot by default points to plugin directory:client.tsx can compile out ESM artifact
       const client = await app.kernel.plugins.getClientModule('demo-external', 'client.tsx')
       assert.ok(client.code.length > 0)
       assert.match(client.code, /__helm_shared_react/)
@@ -162,7 +162,7 @@ test('外部插件 enable 后 action / public doc / client.tsx 编译全链路�
   }
 })
 
-test('plugin.json（main 指定入口）的外部插件被正确发现与注册', { timeout: 60_000 }, async () => {
+test('plugin.json(main designate entry) external plugin by correct discover and register', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'manifest-plugin')
@@ -171,12 +171,12 @@ test('plugin.json（main 指定入口）的外部插件被正确发现与注册'
     mkdirSync(join(dirPath, 'src'), { recursive: true })
     writeFileSync(
       join(dirPath, 'src', 'entry.mjs'),
-      `export default {\n  id: 'manifest-plugin',\n  name: '清单插件',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'ping',\n      description: '回声',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },\n      handler: () => ({ pong: true }),\n    })\n  },\n}\n`,
+      `export default {\n  id: 'manifest-plugin',\n  name: 'manifest plugin',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'ping',\n      description: 'back sound',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },\n      handler: () => ({ pong: true }),\n    })\n  },\n}\n`,
     )
     const app = await makeEnvIn(dataDir)
     try {
       const summary = app.kernel.plugins.list().find((p) => p.id === 'manifest-plugin')
-      assert.ok(summary, 'plugin.json 插件应被自动注册')
+      assert.ok(summary, 'plugin.json plugin should by automatically register')
       assert.equal(summary.enabled, false)
       await app.kernel.plugins.enable('manifest-plugin')
       const result = (await app.kernel.plugins.invokeAction('manifest-plugin', 'ping', {})) as { pong: boolean }
@@ -190,27 +190,27 @@ test('plugin.json（main 指定入口）的外部插件被正确发现与注册'
 })
 
 // ---------------------------------------------------------------------------
-// 跨重启持久化恢复
+// across restarts persist restore
 // ---------------------------------------------------------------------------
 
-test('pluginEnabled 持久化 true 的外部插件跨重启自动恢复启用', { timeout: 60_000 }, async () => {
+test('pluginEnabled persist true external plugin across restarts auto-recovery enable', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     writeConventionPlugin(join(dataDir, 'plugins'))
     const first = await makeEnvIn(dataDir)
-    // 显式 enable 落盘 pluginEnabled["demo-external"] = true
+    // explicit enable  pluginEnabled["demo-external"] = true
     await first.kernel.plugins.enable('demo-external')
     const persisted = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as { pluginEnabled?: Record<string, boolean> }
     assert.equal(persisted.pluginEnabled?.['demo-external'], true)
     await first.close()
 
-    // 二次启动：持久化 true 自动恢复启用，无需手动 enable
+    // second start: persist true auto-recovery enable, no need to manually enable
     const second = await makeEnvIn(dataDir)
     try {
       const summary = second.kernel.plugins.list().find((p) => p.id === 'demo-external')
-      assert.ok(summary, '外部插件重启后仍应被注册')
-      assert.equal(summary.enabled, true, '持久化 true 的外部插件重启后自动启用')
-      // 自动启用后 action 直接可调
+      assert.ok(summary, 'external plugin after restart still should by register')
+      assert.equal(summary.enabled, true, 'persist true external plugin after restart automatically enable')
+      // automatically enable after action directly can tune
       const result = (await second.kernel.plugins.invokeAction('demo-external', 'bump', { step: 2 })) as { count: number }
       assert.equal(result.count, 2)
     } finally {
@@ -221,7 +221,7 @@ test('pluginEnabled 持久化 true 的外部插件跨重启自动恢复启用', 
   }
 })
 
-test('pluginEnabled 持久化 false 的外部插件重启后保持停用', { timeout: 60_000 }, async () => {
+test('pluginEnabled persist false external plugin after restart keep deactivate', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     writeConventionPlugin(join(dataDir, 'plugins'))
@@ -234,7 +234,7 @@ test('pluginEnabled 持久化 false 的外部插件重启后保持停用', { tim
     try {
       const summary = second.kernel.plugins.list().find((p) => p.id === 'demo-external')
       assert.ok(summary)
-      assert.equal(summary.enabled, false, '持久化 false 保持停用，不回落声明缺省')
+      assert.equal(summary.enabled, false, 'persist false keep deactivate, do not back declaration default')
     } finally {
       await second.close()
     }
@@ -244,14 +244,14 @@ test('pluginEnabled 持久化 false 的外部插件重启后保持停用', { tim
 })
 
 // ---------------------------------------------------------------------------
-// 数据目录静默跳过
+// data directory static default skip
 // ---------------------------------------------------------------------------
 
-test('普通插件留下的纯数据目录（无 plugin.json / 约定入口）被静默忽略', { timeout: 60_000 }, async () => {
+test('ordinary plugin under pure data directory (without plugin.json / convention entry) by static default ignore', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const pluginsDir = join(dataDir, 'plugins')
-    // 各种「纯数据目录」形态：随机数据文件、子目录、隐藏目录、空目录
+    // each pure data directory form: random data file, subdirectory, hide directory, empty directory
     const herdrDataDir = join(pluginsDir, pluginDataDirName('builtin:herdr'))
     mkdirSync(join(herdrDataDir, 'state'), { recursive: true })
     writeFileSync(join(herdrDataDir, 'state', 'cache.json'), '{}')
@@ -264,10 +264,10 @@ test('普通插件留下的纯数据目录（无 plugin.json / 约定入口）�
     const app = await makeEnvIn(dataDir)
     try {
       const ids = app.kernel.plugins.list().map((p) => p.id)
-      assert.ok(!ids.includes('some-plugin-data'), '纯数据目录不注册')
-      assert.ok(!ids.includes('.hidden'), '隐藏目录不参与发现')
-      assert.ok(!ids.includes('empty-dir'), '空目录不注册')
-      assert.ok(ids.includes('builtin:profile'), '内置插件不受影响')
+      assert.ok(!ids.includes('some-plugin-data'), 'pure data directory do not register')
+      assert.ok(!ids.includes('.hidden'), 'hide directory does not participate discover')
+      assert.ok(!ids.includes('empty-dir'), 'empty directory do not register')
+      assert.ok(ids.includes('builtin:profile'), 'built-in plugin do not subject to affect')
     } finally {
       await app.close()
     }
@@ -277,12 +277,12 @@ test('普通插件留下的纯数据目录（无 plugin.json / 约定入口）�
 })
 
 // ---------------------------------------------------------------------------
-// 显式报错（诚实性纪律：绝不静默吞错）
+// explicit errors (honest discipline: never static default swallow wrong)
 // ---------------------------------------------------------------------------
 
 /**
- * 断言单目录故障被降级登记：createHelm 正常启动（不 reject），对应插件在
- * plugins.list() 中 status: 'failed'、enabled: false、error.code 精确匹配。
+ * assertion single directory fault by fall back register:createHelm normal start (do not reject), for should plugin in
+ * plugins.list() in status: 'failed',enabled: false,error.code precise match.
  */
 async function assertFailedRegistration(
   dataDir: string,
@@ -292,8 +292,8 @@ async function assertFailedRegistration(
   const app = await makeEnvIn(dataDir)
   try {
     const summary = app.kernel.plugins.list().find((p) => p.error !== undefined)
-    assert.ok(summary, `故障插件应被登记为 failed 条目：${JSON.stringify(app.kernel.plugins.list().map((p) => p.id))}`)
-    assert.equal(summary.enabled, false, '故障插件保持停用')
+    assert.ok(summary, `fault plugin should by register is failed item:${JSON.stringify(app.kernel.plugins.list().map((p) => p.id))}`)
+    assert.equal(summary.enabled, false, 'fault plugin keep deactivate')
     assert.equal(summary.status, 'failed')
     assert.equal(summary.error!.code, expectedCode)
     if (messagePattern !== undefined) assert.match(summary.error!.message, messagePattern)
@@ -302,7 +302,7 @@ async function assertFailedRegistration(
   }
 }
 
-test('损坏的 plugin.json 降级登记为 failed，绝不静默跳过也不阻断启动', { timeout: 60_000 }, async () => {
+test('corrupt plugin.json fall back register is failed, never static default skip also do not block assert start', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'broken-manifest')
@@ -316,7 +316,7 @@ test('损坏的 plugin.json 降级登记为 failed，绝不静默跳过也不阻
   }
 })
 
-test('plugin.json 为 JSON 数组（非对象）降级登记为 failed', { timeout: 60_000 }, async () => {
+test('plugin.json is JSON array (non- object) fall back register is failed', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'array-manifest')
@@ -330,14 +330,14 @@ test('plugin.json 为 JSON 数组（非对象）降级登记为 failed', { timeo
   }
 })
 
-test('冒充 builtin: id 的外部插件降级登记为 failed，绝不静默放行', { timeout: 60_000 }, async () => {
+test('smoke fill builtin: id external plugin fall back register is failed, never static default let through', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'fake-builtin')
     mkdirSync(dirPath, { recursive: true })
     writeFileSync(
       join(dirPath, 'index.mjs'),
-      `export default {\n  id: 'builtin:evil',\n  name: '冒充内置',\n  async definePlugin() {},\n}\n`,
+      `export default {\n  id: 'builtin:evil',\n  name: 'smoke fill inside placement',\n  async definePlugin() {},\n}\n`,
     )
 
     await assertFailedRegistration(dataDir, 'invalid_plugin_definition', /builtin:/)
@@ -346,18 +346,18 @@ test('冒充 builtin: id 的外部插件降级登记为 failed，绝不静默放
   }
 })
 
-test('含冒号 id 的外部插件降级登记为 failed（与受管插件包 id 规则对齐）', { timeout: 60_000 }, async () => {
+test('contains smoke number id external plugin fall back register is failed(and managed plugin package id rule align)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'colon-plugin')
     mkdirSync(dirPath, { recursive: true })
     writeFileSync(
       join(dirPath, 'index.mjs'),
-      `export default {\n  id: 'vendor:plugin',\n  name: '含冒号',\n  async definePlugin() {},\n}\n`,
+      `export default {\n  id: 'vendor:plugin',\n  name: 'contains smoke number',\n  async definePlugin() {},\n}\n`,
     )
 
-    await assertFailedRegistration(dataDir, 'invalid_plugin_definition', /冒号/)
-    // 失败登记不得为含冒号 id 建数据目录（源目录即 ctx.dataDir 的不变量）
+    await assertFailedRegistration(dataDir, 'invalid_plugin_definition', /smoke number/)
+    // failed register must not is contains smoke number id create data directory (source directory i.e. ctx.dataDir invariant)
     assert.equal(existsSync(join(dataDir, 'plugins', 'vendor:plugin')), false)
     assert.equal(existsSync(join(dataDir, 'plugins', 'vendor%3Aplugin')), false)
   } finally {
@@ -365,7 +365,7 @@ test('含冒号 id 的外部插件降级登记为 failed（与受管插件包 id
   }
 })
 
-test('plugin.json main 越出插件目录降级登记为 failed（防路径穿越）', { timeout: 60_000 }, async () => {
+test('plugin.json main exceeds out plugin directory fall back register is failed(guard against path through exceeds)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const outside = mkdtempSync(join(tmpdir(), 'helm-ext-outside-'))
@@ -384,7 +384,7 @@ test('plugin.json main 越出插件目录降级登记为 failed（防路径穿�
   }
 })
 
-test('plugin.json 声明的入口文件缺失降级登记为 failed', { timeout: 60_000 }, async () => {
+test('plugin.json declaration entry file missing fall back register is failed', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'missing-entry')
@@ -397,32 +397,32 @@ test('plugin.json 声明的入口文件缺失降级登记为 failed', { timeout:
   }
 })
 
-test('入口 symlink 指向插件目录外：词法路径不越界但真实路径越界，降级登记为 failed', { timeout: 60_000 }, async () => {
+test('entry symlink points to plugin directory outside: term method path do not out of bounds but real path out of bounds, fall back register is failed', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   const outside = mkdtempSync(join(tmpdir(), 'helm-ext-outside-'))
   try {
     writeFileSync(join(outside, 'evil.mjs'), 'export default { id: "evil", name: "evil", definePlugin() {} }')
     const dirPath = join(dataDir, 'plugins', 'symlink-escape')
     mkdirSync(dirPath, { recursive: true })
-    // 词法在目录内、真实在目录外（symlink 逃逸）
+    // term method in directory inside, real in directory outside (symlink escape)
     symlinkSync(join(outside, 'evil.mjs'), join(dirPath, 'entry.mjs'))
     writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ main: 'entry.mjs' }))
 
-    await assertFailedRegistration(dataDir, 'plugin_manifest_invalid', /符号链接/)
+    await assertFailedRegistration(dataDir, 'plugin_manifest_invalid', /symlink/)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
     rmSync(outside, { recursive: true, force: true })
   }
 })
 
-test('clientRoot 非字符串在边界降级登记为 failed（不引入虚假沙箱承诺）', { timeout: 60_000 }, async () => {
+test('clientRoot non- string in boundary fall back register is failed(does not introduce fake sandbox promise)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'bad-client-root')
     mkdirSync(dirPath, { recursive: true })
     writeFileSync(
       join(dirPath, 'index.mjs'),
-      `export default {\n  id: 'bad-client-root',\n  name: '非法 clientRoot',\n  clientRoot: 123,\n  definePlugin() {},\n}\n`,
+      `export default {\n  id: 'bad-client-root',\n  name: 'illegal clientRoot',\n  clientRoot: 123,\n  definePlugin() {},\n}\n`,
     )
 
     await assertFailedRegistration(dataDir, 'invalid_plugin_definition', /clientRoot/)
@@ -431,7 +431,7 @@ test('clientRoot 非字符串在边界降级登记为 failed（不引入虚假�
   }
 })
 
-test('无清单的约定入口同样拒绝 symlink 越界，降级登记为 failed，不导入外部模块', { timeout: 60_000 }, async () => {
+test('without manifest convention entry same reject symlink out of bounds, fall back register is failed, do not import external module', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-convention-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'convention-escape')
@@ -445,12 +445,12 @@ test('无清单的约定入口同样拒绝 symlink 越界，降级登记为 fail
   }
 })
 
-test('入口探测遇到真实 IO 故障（ELOOP symlink 环）降级登记为 failed，不误判为纯数据目录（root 用户同样生效）', { timeout: 60_000 }, async () => {
+test('entry probe encounters real IO fault (ELOOP symlink ring) fall back register is failed, do not mistakenly judge is pure data directory (root user same takes effect)', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'symlink-loop')
     mkdirSync(dirPath, { recursive: true })
-    // 自指 symlink 环：statSync 抛 ELOOP（真实 IO 故障，非缺失），root/win 均可触发
+    // self refer symlink ring:statSync throw ELOOP(real IO fault, non- missing),root/win all can trigger
     symlinkSync(join(dirPath, 'index.mjs'), join(dirPath, 'index.mjs'))
 
     await assertFailedRegistration(dataDir, 'plugin_scan_failed')
@@ -459,16 +459,16 @@ test('入口探测遇到真实 IO 故障（ELOOP symlink 环）降级登记为 f
   }
 })
 
-test('未声明 clientRoot 的外部插件默认 clientRoot 为插件目录本身', { timeout: 60_000 }, async () => {
+test('not declaration clientRoot external plugin by default clientRoot is plugin directory itself', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     writeConventionPlugin(join(dataDir, 'plugins'))
     const app = await makeEnvIn(dataDir)
     try {
       const summary = app.kernel.plugins.list().find((p) => p.id === 'demo-external')
-      assert.ok(summary, '外部插件应被自动注册')
+      assert.ok(summary, 'external plugin should by automatically register')
       await app.kernel.plugins.enable('demo-external')
-      // clientRoot 默认指向插件目录（client.tsx 编译可解析）
+      // clientRoot by default points to plugin directory (client.tsx compile can parse)
       const client = await app.kernel.plugins.getClientModule('demo-external', 'client.tsx')
       assert.ok(client.code.length > 0)
     } finally {
@@ -479,14 +479,14 @@ test('未声明 clientRoot 的外部插件默认 clientRoot 为插件目录本�
   }
 })
 
-test('仅导出 setup 别名（无 definePlugin）降级登记为 failed：项目明确不做兼容别名', { timeout: 60_000 }, async () => {
+test('only export setup alias (without definePlugin) fall back register is failed: items item explicit does not compatibility alias', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'setup-alias')
     mkdirSync(dirPath, { recursive: true })
     writeFileSync(
       join(dirPath, 'index.mjs'),
-      `export default {\n  id: 'setup-alias',\n  name: '旧形态',\n  setup() {},\n}\n`,
+      `export default {\n  id: 'setup-alias',\n  name: 'old form',\n  setup() {},\n}\n`,
     )
 
     await assertFailedRegistration(dataDir, 'invalid_plugin_definition', /definePlugin/)
@@ -495,20 +495,20 @@ test('仅导出 setup 别名（无 definePlugin）降级登记为 failed：项�
   }
 })
 
-test('模块导出无 name：同内置契约注册成功（展示名回落 id），不另加必填约束', { timeout: 60_000 }, async () => {
+test('module export without name: same inside placement contract register succeeded (render name back id), do not another add required constraint', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'no-name')
     mkdirSync(dirPath, { recursive: true })
     writeFileSync(
       join(dirPath, 'index.mjs'),
-      `export default {\n  id: 'no-name-plugin',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'ping',\n      description: '回声',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
+      `export default {\n  id: 'no-name-plugin',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'ping',\n      description: 'back sound',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
     )
     const app = await makeEnvIn(dataDir)
     try {
       const summary = app.kernel.plugins.list().find((p) => p.id === 'no-name-plugin')
-      assert.ok(summary, '无 name 的外部插件应可注册（同 protocol 契约）')
-      assert.equal(summary.name, 'no-name-plugin', '展示名回落 id（与内置插件同权）')
+      assert.ok(summary, 'without name external plugin should can register (same protocol contract)')
+      assert.equal(summary.name, 'no-name-plugin', 'render name back id(and built-in plugin same right)')
       await app.kernel.plugins.enable('no-name-plugin')
       const result = (await app.kernel.plugins.invokeAction('no-name-plugin', 'ping', {})) as { ok: boolean }
       assert.equal(result.ok, true)
@@ -520,7 +520,7 @@ test('模块导出无 name：同内置契约注册成功（展示名回落 id）
   }
 })
 
-test('name 提供但为空串：降级登记为 failed', { timeout: 60_000 }, async () => {
+test('name provide but is empty string: fall back register is failed', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'empty-name')
@@ -535,12 +535,12 @@ test('name 提供但为空串：降级登记为 failed', { timeout: 60_000 }, as
   }
 })
 
-test('模块导出既无 definePlugin 也无 setup 降级登记为 failed', { timeout: 60_000 }, async () => {
+test('module export since without definePlugin also without setup fall back register is failed', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'no-setup')
     mkdirSync(dirPath, { recursive: true })
-    writeFileSync(join(dirPath, 'index.mjs'), 'export default { id: "no-setup", name: "无入口" }')
+    writeFileSync(join(dirPath, 'index.mjs'), 'export default { id: "no-setup", name: "without entry" }')
 
     await assertFailedRegistration(dataDir, 'invalid_plugin_definition')
   } finally {
@@ -548,7 +548,7 @@ test('模块导出既无 definePlugin 也无 setup 降级登记为 failed', { ti
   }
 })
 
-test('plugin.json 声明 clientRoot: "./client"（模块导出未重复声明时）自动生效，可编译 client/index.tsx', { timeout: 60_000 }, async () => {
+test('plugin.json declaration clientRoot: "./client"(module export not duplicate declaration when) automatically takes effect, can compile client/index.tsx', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-ext-plugin-'))
   try {
     const dirPath = join(dataDir, 'plugins', 'manifest-client-root')
@@ -564,7 +564,7 @@ test('plugin.json 声明 clientRoot: "./client"（模块导出未重复声明时
   definePlugin(ctx) {
     ctx.ui.screen({
       id: 'main',
-      label: '主屏',
+      label: 'main screen',
       client: { module: 'index.tsx', export: 'MainScreen' },
     })
   },
@@ -578,7 +578,7 @@ test('plugin.json 声明 clientRoot: "./client"（模块导出未重复声明时
     const app = await makeEnvIn(dataDir)
     try {
       const summary = app.kernel.plugins.list().find((p) => p.id === 'manifest-client-root')
-      assert.ok(summary, '外部插件应被自动注册')
+      assert.ok(summary, 'external plugin should by automatically register')
       await app.kernel.plugins.enable('manifest-client-root')
       const client = await app.kernel.plugins.getClientModule('manifest-client-root', 'index.tsx')
       assert.ok(client.code.length > 0)
@@ -592,27 +592,27 @@ test('plugin.json 声明 clientRoot: "./client"（模块导出未重复声明时
 })
 
 // ---------------------------------------------------------------------------
-// 独立 loader 直调（不经 createHelm，验证返回值与空目录语义）
+// independent loader direct tune (do not via createHelm, verify return value and empty directory semantics)
 // ---------------------------------------------------------------------------
 
-test('loadExternalPlugins 直调：返回注册 id 列表；plugins 目录缺失返回空数组', { timeout: 60_000 }, async () => {
+test('loadExternalPlugins direct tune: return register id list;plugins directory missing return empty array', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // createHelm 已消费一次；对同一 dataDir 再直调（同 id 已注册 → 显式冲突）
+    // createHelm already consume once; for the same dataDir again direct tune (same id registered → explicit conflict)
     const dirPath = join(env.dataDir, 'plugins', 'direct-loader')
     mkdirSync(dirPath, { recursive: true })
     writeFileSync(
       join(dirPath, 'index.mjs'),
-      `export default {\n  id: 'direct-loader',\n  name: '直调',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'noop',\n      description: '空操作',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
+      `export default {\n  id: 'direct-loader',\n  name: 'direct tune',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'noop',\n      description: 'empty operation',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
     )
     const registered = await loadExternalPlugins(env.dataDir, env.app.kernel.plugins)
-    assert.ok(registered.includes('direct-loader'), `应注册 direct-loader，实际：${JSON.stringify(registered)}`)
+    assert.ok(registered.includes('direct-loader'), `should register direct-loader, actual:${JSON.stringify(registered)}`)
 
     const summary = env.app.kernel.plugins.list().find((p) => p.id === 'direct-loader')
     assert.ok(summary)
     assert.equal(summary.enabled, false)
 
-    // plugins 目录整体缺失 → 空数组（不抛错）
+    // plugins directory whole missing → empty array (do not throws)
     const empty = mkdtempSync(join(tmpdir(), 'helm-ext-empty-'))
     try {
       const result = await loadExternalPlugins(empty, env.app.kernel.plugins)

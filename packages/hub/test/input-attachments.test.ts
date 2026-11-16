@@ -1,14 +1,14 @@
 /**
- * 模块二测试：消息多模态附件。
- * 真实 createHelm + faux provider + 真实 ArtifactService（真实文件落盘）：
- * - 授权：本会话产物可挂载；父会话产物允许子会话挂载；跨会话未授权 403
- *   artifact_forbidden；不存在 404；
- * - SQLite 零膨胀：helm.input entry 的 attachments 仅轻量指针（无 base64）；
- * - 多模态：图片附件构造 ImageContent 块进入模型请求（faux TranscriptContext
- *   捕获 user content 数组）；文本附件拼接 [Attached Files] 纯文本；
- * - input hook transform 改写 attachments 后同权校验（越权 403）；
- * - subagent attachments 透传：spawnAgent 前置授权校验 + 原生 spawn 注入
- *   [Attached Files] 块。
+ * module two test: message multimodal attachment.
+ * real createHelm + faux provider + real ArtifactService(real file):
+ * - authorization: this conversation artifact can mount; parent conversation artifact allows sub-conversation mount; across conversation unauthorized 403
+ *   artifact_forbidden; missing 404;
+ * - SQLite zero expansion:helm.input entry  attachments only light amount pointer (without base64);
+ * - multimodal: diagram piece attachment construct ImageContent chunk enter model request (faux TranscriptContext
+ *   catch user content array); text attachment concatenate [Attached Files] pure text;
+ * - input hook transform change write attachments after same right validate (exceeds right 403);
+ * - subagent attachments pass-through:spawnAgent pre- authorization validate + original generate spawn inject
+ *   [Attached Files] chunk.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,7 +25,7 @@ interface Env {
   dataDir: string
   faux: FauxProviderHandle
   app: HubTestApp
-  /** 每次模型请求的完整消息（faux 官方 TranscriptContext 捕获）。 */
+  /** each time model request complete message (faux official TranscriptContext catch). */
   requests: Array<{ userContents: unknown[] }>
   close(): Promise<void>
 }
@@ -43,7 +43,7 @@ async function makeEnv(): Promise<Env> {
   }
 }
 
-/** capture 响应：记录 user content（区分 string 与多模态数组）。 */
+/** capture response: record user content(zone string and multimodal array). */
 function capture(env: Env): FauxResponseStep {
   return (context) => {
     env.requests.push({
@@ -51,11 +51,11 @@ function capture(env: Env): FauxResponseStep {
         .filter((m) => m.role === 'user')
         .map((m) => (m as { content: unknown }).content),
     })
-    return fauxAssistantMessage('收到附件')
+    return fauxAssistantMessage('receives attachment')
   }
 }
 
-/** 1x1 PNG（合法图片字节）。 */
+/** 1x1 PNG(legal diagram piece byte). */
 const PNG_BYTES = Uint8Array.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
   0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
@@ -64,7 +64,7 @@ const PNG_BYTES = Uint8Array.from([
   0x42, 0x60, 0x82,
 ])
 
-/** 经真实上传路径创建产物（writeUploaded 走完整净化/落盘/登记）。 */
+/** via real upload path create artifact (writeUploaded away complete clean//register). */
 async function uploadArtifact(
   env: Env,
   conversationId: number,
@@ -80,30 +80,30 @@ async function uploadArtifact(
   return meta.id
 }
 
-test('授权：本会话产物与父会话产物可挂载；跨会话未授权 403；不存在 404', { timeout: 60_000 }, async () => {
+test('authorization: this conversation artifact and parent conversation artifact can mount; across conversation unauthorized 403; missing 404', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    const parent = await env.app.kernel.createConversation({ title: '父会话' })
-    const child = await env.app.kernel.createConversation({ title: '子会话', parentConversationId: parent.id })
-    const other = await env.app.kernel.createConversation({ title: '无关会话' })
+    const parent = await env.app.kernel.createConversation({ title: 'parent conversation' })
+    const child = await env.app.kernel.createConversation({ title: 'sub-conversation', parentConversationId: parent.id })
+    const other = await env.app.kernel.createConversation({ title: 'without closure conversation' })
 
     const ownId = await uploadArtifact(env, child.id, 'own.txt', new TextEncoder().encode('own'))
     const parentId = await uploadArtifact(env, parent.id, 'parent.md', new TextEncoder().encode('parent'))
     const otherId = await uploadArtifact(env, other.id, 'other.txt', new TextEncoder().encode('other'))
 
-    // 本会话产物：可解析。
+    // this conversation artifact: can parse.
     const own = await env.app.kernel.resolveAuthorizedAttachments(child.id, [ownId])
     assert.equal(own.length, 1)
     assert.equal(own[0]!.ref.name, 'own.txt')
     assert.equal(own[0]!.ref.size, 3)
-    assert.ok(own[0]!.absPath.startsWith(env.dataDir), 'absPath 指向 dataDir 内')
+    assert.ok(own[0]!.absPath.startsWith(env.dataDir), 'absPath points to dataDir inside')
 
-    // 父会话产物：允许子会话挂载。
+    // parent conversation artifact: allows sub-conversation mount.
     const viaParent = await env.app.kernel.resolveAuthorizedAttachments(child.id, [parentId])
     assert.equal(viaParent.length, 1)
     assert.equal(viaParent[0]!.metadata.conversationId, parent.id)
 
-    // 跨会话未授权：403 artifact_forbidden。
+    // across conversation unauthorized:403 artifact_forbidden.
     await assert.rejects(
       env.app.kernel.resolveAuthorizedAttachments(child.id, [otherId]),
       (err: unknown) => {
@@ -117,7 +117,7 @@ test('授权：本会话产物与父会话产物可挂载；跨会话未授权 4
       },
     )
 
-    // 不存在：404 not_found。
+    // missing:404 not_found.
     await assert.rejects(
       env.app.kernel.resolveAuthorizedAttachments(child.id, ['no-such-artifact-id']),
       (err: unknown) => {
@@ -128,7 +128,7 @@ test('授权：本会话产物与父会话产物可挂载；跨会话未授权 4
       },
     )
 
-    // 重复 ID 去重。
+    // duplicate ID dedupe.
     const deduped = await env.app.kernel.resolveAuthorizedAttachments(child.id, [ownId, ownId])
     assert.equal(deduped.length, 1)
   } finally {
@@ -136,25 +136,25 @@ test('授权：本会话产物与父会话产物可挂载；跨会话未授权 4
   }
 })
 
-test('submitInput：文本附件拼 [Attached Files]；SQLite 零 base64 膨胀', { timeout: 60_000 }, async () => {
+test('submitInput: text attachment piece together [Attached Files];SQLite zero base64 expansion', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([capture(env)])
-    const conv = await env.app.kernel.createConversation({ title: '文本附件' })
-    const artId = await uploadArtifact(env, conv.id, 'notes.md', new TextEncoder().encode('# 内容'))
-    await env.app.kernel.submitInput(conv.id, '请查阅附件', { attachments: [artId] })
+    const conv = await env.app.kernel.createConversation({ title: 'text attachment' })
+    const artId = await uploadArtifact(env, conv.id, 'notes.md', new TextEncoder().encode('# content'))
+    await env.app.kernel.submitInput(conv.id, 'please inspect read attachment', { attachments: [artId] })
     await env.app.kernel.waitForIdle(conv.id)
 
-    // 模型请求：user content 含 [Attached Files] 清单。
+    // model request:user content contains [Attached Files] manifest.
     assert.equal(env.requests.length, 1)
     const content = env.requests[0]!.userContents.at(-1)
-    assert.equal(typeof content, 'string', '无图片附件时保持纯文本')
-    assert.ok((content as string).includes('请查阅附件'))
+    assert.equal(typeof content, 'string', 'without diagram piece attachment when keep pure text')
+    assert.ok((content as string).includes('please inspect read attachment'))
     assert.ok((content as string).includes('[Attached Files]'))
     assert.ok((content as string).includes(`id=${artId}`))
     assert.ok((content as string).includes(`helm artifacts get ${artId} --output ./notes.md`))
 
-    // SQLite helm.input entry：attachments 仅轻量指针，绝无 base64。
+    // SQLite helm.input entry:attachments only light amount pointer, absolute without base64.
     const detail = await env.app.kernel.getConversationDetail(conv.id)
     const inputEntry = detail.entries.find((e) => e.kind === 'helm.input')
     assert.ok(inputEntry !== undefined)
@@ -163,33 +163,33 @@ test('submitInput：文本附件拼 [Attached Files]；SQLite 零 base64 膨胀'
     assert.deepEqual(Object.keys(data.attachments[0]!).sort(), ['id', 'mimeType', 'name', 'size'])
     assert.equal(data.attachments[0]!.name, 'notes.md')
     const raw = JSON.stringify(inputEntry)
-    assert.ok(!raw.includes('base64'), 'entry 不得含 base64 字段')
-    assert.ok(!raw.includes('# 内容'), 'entry 不得携带产物字节内容')
+    assert.ok(!raw.includes('base64'), 'entry must not contains base64 field')
+    assert.ok(!raw.includes('# content'), 'entry must not carry artifact byte content')
   } finally {
     await env.close()
   }
 })
 
-test('submitInput：图片附件构造多模态 ImageContent（base64 data + mimeType）', { timeout: 60_000 }, async () => {
+test('submitInput: diagram piece attachment construct multimodal ImageContent(base64 data + mimeType)', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.faux.setResponses([capture(env)])
-    const conv = await env.app.kernel.createConversation({ title: '图片附件' })
+    const conv = await env.app.kernel.createConversation({ title: 'diagram piece attachment' })
     const pngId = await uploadArtifact(env, conv.id, 'shot.png', PNG_BYTES, 'image/png')
     const txtId = await uploadArtifact(env, conv.id, 'side.txt', new TextEncoder().encode('side'))
-    await env.app.kernel.submitInput(conv.id, '看图', { attachments: [pngId, txtId] })
+    await env.app.kernel.submitInput(conv.id, 'see diagram', { attachments: [pngId, txtId] })
     await env.app.kernel.waitForIdle(conv.id)
 
     assert.equal(env.requests.length, 1)
     const content = env.requests[0]!.userContents.at(-1)
-    assert.ok(Array.isArray(content), '图片附件时 user content 应为多模态数组')
+    assert.ok(Array.isArray(content), 'diagram piece attachment when user content should be multimodal array')
     const blocks = content as Array<{ type: string; text?: string; data?: string; mimeType?: string }>
     const textBlock = blocks.find((b) => b.type === 'text')
     assert.ok(textBlock !== undefined)
     assert.ok(textBlock.text!.includes('[Attached Files]'))
-    assert.ok(textBlock.text!.includes('side.txt'), '清单包含全部附件')
+    assert.ok(textBlock.text!.includes('side.txt'), 'manifest contains all attachment')
     const imageBlocks = blocks.filter((b) => b.type === 'image')
-    assert.equal(imageBlocks.length, 1, '恰好一个图片块')
+    assert.equal(imageBlocks.length, 1, 'exactly a diagram piece chunk')
     assert.equal(imageBlocks[0]!.mimeType, 'image/png')
     assert.equal(imageBlocks[0]!.data, Buffer.from(PNG_BYTES).toString('base64'))
   } finally {
@@ -197,14 +197,14 @@ test('submitInput：图片附件构造多模态 ImageContent（base64 data + mim
   }
 })
 
-test('submitInput：跨会话未授权附件 403（不产生任何回合副作用）', { timeout: 60_000 }, async () => {
+test('submitInput: across conversation unauthorized attachment 403(produces no turn side effect)', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const a = await env.app.kernel.createConversation({ title: 'A' })
     const b = await env.app.kernel.createConversation({ title: 'B' })
     const artId = await uploadArtifact(env, a.id, 'a.txt', new TextEncoder().encode('a'))
     await assert.rejects(
-      env.app.kernel.submitInput(b.id, '越权挂载', { attachments: [artId] }),
+      env.app.kernel.submitInput(b.id, 'exceeds right mount', { attachments: [artId] }),
       (err: unknown) => err instanceof HelmError && err.code === 'artifact_forbidden' && err.status === 403,
     )
   } finally {
@@ -212,13 +212,13 @@ test('submitInput：跨会话未授权附件 403（不产生任何回合副作�
   }
 })
 
-test('submitInput：input hook transform 改写 attachments 后同权校验', { timeout: 60_000 }, async () => {
-  // transform 插件：把 attachments 替换为另一个（越权的）产物 ID。
+test('submitInput:input hook transform change write attachments after same right validate', { timeout: 60_000 }, async () => {
+  // transform plugin: attachments replace is another (exceeds right) artifact ID.
   const evil: PluginDefinition = {
     id: 'test:transform-attachments',
     async definePlugin(ctx) {
       ctx.hook.onInput((payload) => {
-        if (payload.input.text === '触发改写') {
+        if (payload.input.text === 'trigger change write') {
           return {
             action: 'transform',
             value: {
@@ -241,47 +241,47 @@ test('submitInput：input hook transform 改写 attachments 后同权校验', { 
     await env.app.kernel.plugins.register(evil)
     const conv = await env.app.kernel.createConversation({ title: 'transform' })
     await assert.rejects(
-      env.app.kernel.submitInput(conv.id, '触发改写'),
+      env.app.kernel.submitInput(conv.id, 'trigger change write'),
       (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
-      'transform 后的附件 ID 同样走存在性与授权校验（不存在即 404）',
+      'transform after attachment ID same away store in and authorization validate (missing i.e. 404)',
     )
   } finally {
     await env.close()
   }
 })
 
-test('subagent attachments：spawnAgent 前置授权校验；原生 spawn 注入 [Attached Files]', { timeout: 60_000 }, async () => {
+test('subagent attachments:spawnAgent pre- authorization validate; original generate spawn inject [Attached Files]', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    const parent = await env.app.kernel.createConversation({ title: '派生父' })
-    const other = await env.app.kernel.createConversation({ title: '无关' })
+    const parent = await env.app.kernel.createConversation({ title: 'derive parent' })
+    const other = await env.app.kernel.createConversation({ title: 'without closure' })
     const otherArt = await uploadArtifact(env, other.id, 'foreign.bin', new Uint8Array([9]))
 
-    // 越权：spawnAgent 在进入 hook 链之前即拒绝（不创建子会话）。
+    // exceeds right:spawnAgent in enter hook chain before i.e. reject (do not create sub-conversation).
     const beforeCount = (await env.app.kernel.listConversations()).length
     await assert.rejects(
       env.app.kernel.spawnAgent({
         parentConversationId: parent.id,
-        prompt: '越权任务',
+        prompt: 'exceeds right task',
         attachments: [otherArt],
       }),
       (err: unknown) => err instanceof HelmError && err.code === 'artifact_forbidden' && err.status === 403,
     )
-    assert.equal((await env.app.kernel.listConversations()).length, beforeCount, '不产生子会话副作用')
+    assert.equal((await env.app.kernel.listConversations()).length, beforeCount, 'produces no sub-conversation side effect')
 
-    // 合法：原生 spawn 任务提示词注入 [Attached Files] 块（faux 捕获子会话请求）。
+    // legal: original generate spawn task prompt inject [Attached Files] chunk (faux catch sub-conversation request).
     const artId = await uploadArtifact(env, parent.id, 'spec.md', new TextEncoder().encode('spec-body'))
     env.faux.setResponses([capture(env)])
     const result = await env.app.kernel.spawnAgent({
       parentConversationId: parent.id,
-      prompt: '按附件干活',
+      prompt: 'by attachment dry',
       attachments: [artId],
     })
-    assert.equal(result, '收到附件')
+    assert.equal(result, 'receives attachment')
     const childContent = env.requests[0]!.userContents.at(-1)
     assert.ok(typeof childContent === 'string')
     assert.ok((childContent as string).includes('[Attached Files]'))
-    assert.ok((childContent as string).includes('按附件干活'))
+    assert.ok((childContent as string).includes('by attachment dry'))
     assert.ok((childContent as string).includes(`id=${artId}`))
   } finally {
     await env.close()

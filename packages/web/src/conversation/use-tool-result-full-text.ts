@@ -54,12 +54,12 @@ export function useToolResultFullText(tool: ToolTrace, conversationId: number): 
     const backfill = store.backfillConversationEntry
     if (entryId === undefined) {
       setPhase('failed')
-      setError('截断标记缺少条目定位（resultEntryId），无法取回全文')
+      setError('Truncation marker missing entry location (resultEntryId); cannot fetch full text')
       return
     }
     if (backfill === undefined) {
       setPhase('failed')
-      setError('当前宿主不支持条目回填')
+      setError('Current host does not support entry backfill')
       return
     }
     const requestedEntryId = entryId
@@ -74,7 +74,7 @@ export function useToolResultFullText(tool: ToolTrace, conversationId: number): 
         const returned = isConversationEntryShape(entry) ? canonicalEntryId(entry.id) : undefined
         if (requested === undefined || returned === undefined || requested !== returned) {
           setPhase('failed')
-          setError('服务端返回的条目形状或 id 与请求不一致，已拒绝回填')
+          setError('Server returned an entry shape or id mismatching the request; backfill refused')
           return
         }
         backfill(conversationId, entry)

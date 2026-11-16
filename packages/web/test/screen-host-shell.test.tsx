@@ -210,7 +210,7 @@ test('CommandPaletteModal 单键快捷键徽章、聚焦分屏上下文与空查
     )
     await settle()
 
-    const modal = document.querySelector<HTMLElement>('.modal[aria-label="命令面板与全局搜索"]')
+    const modal = document.querySelector<HTMLElement>('.modal[aria-label="Command palette and global search"]')
     assert.ok(modal, '应渲染命令面板对话框')
 
     // 所有快捷键提示均带 .kbd-hint 且绝不含双键别名分隔符 "/"
@@ -233,9 +233,9 @@ test('CommandPaletteModal 单键快捷键徽章、聚焦分屏上下文与空查
     )
 
     // 点击「切换当前模型」应派发指向 focusedPanel ('split') 的 helm:shortcut 并关闭面板
-    const modelIdx = allRows.findIndex((el) => (el.textContent ?? '').includes('切换当前模型'))
+    const modelIdx = allRows.findIndex((el) => (el.textContent ?? '').includes('Switch current model'))
     const firstRecentIdx = allRows.findIndex((el) => (el.textContent ?? '').includes('最近话题'))
-    const navIdx = allRows.findIndex((el) => (el.textContent ?? '').includes('打开智能体角色中心'))
+    const navIdx = allRows.findIndex((el) => (el.textContent ?? '').includes('Open agent profile center'))
     assert.ok(modelIdx >= 0 && firstRecentIdx > modelIdx && navIdx > firstRecentIdx, '空查询排序应为：上下文动作 -> 最近会话 -> 全局导航')
 
     await act(async () => {

@@ -351,7 +351,7 @@
   font-size: 10.5px;
   line-height: 16px;
   height: 16px;
-  font-weight: 400 !important; /* 标签如思考模型、多模态等常规字重不加粗，清晰易读 */
+  font-weight: 400 !important; /* Regular weight for labels like thinking models or multimodal, no bolding */
   letter-spacing: 0.01em;
   border-radius: 4px;
   background: var(--bg-muted);

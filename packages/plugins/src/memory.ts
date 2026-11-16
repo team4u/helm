@@ -1,23 +1,23 @@
 /**
- * builtin:memory：完全自治的长期记忆插件（locked: false，默认启用）。
+ * builtin:memory: the fully autonomous long-term memory plugin (locked: false, enabled by default).
  *
- * 职责（与 builtin:profile 正交，内核/协议零记忆感知）：
- * - MemoryStore 自管 `<dataDir>/profiles/<id>/MEMORY.md`（文件锁 + 64k 上限
- *   唯一权威点，见 memory/store.ts）；磁盘全文是唯一权威，不进公共文档；
- * - 私有 ctx.doc('state') 持久化紧凑状态：disabledProfiles（单 Profile 开关）
- *   与 initializedProfiles（跨重启区分「从未初始化」与「已初始化后被删」）；
- * - before_turn：单 Profile 关闭时不读文件、不注入段落并剥离 update_memory
- *   工具；开启时按内容注入 memory.content / memory.guide / memory.assets-missing；
- * - update_memory 工具：execute 入口复核单 Profile 开关（关闭 403）；
- * - 三个 ctx.action（get / set / configure）自动映射 HTTP / CLI（helm memory
- *   get|set|configure）/ Agent Tool / Web invokeAction 五端。
+ * Responsibilities (orthogonal to builtin:profile; zero memory awareness in kernel/protocol):
+ * - MemoryStore manages `<dataDir>/profiles/<id>/MEMORY.md` itself (file lock + the 64k cap's single
+ *   authoritative point, see memory/store.ts); the on-disk full text is the single authority, never entering public docs;
+ * - the private ctx.doc('state') persists compact state: disabledProfiles (per-Profile switch)
+ *   and initializedProfiles (distinguishing "never initialized" from "initialized then deleted" across restarts);
+ * - before_turn: with a Profile's memory off, read no file, inject no section, and strip the
+ *   update_memory tool; with it on, inject memory.content / memory.guide / memory.assets-missing by content;
+ * - the update_memory tool: the execute entry re-checks the per-Profile switch (off -> 403);
+ * - three ctx.actions (get / set / configure) auto-map to HTTP / CLI (helm memory
+ *   get|set|configure) / Agent Tool / Web invokeAction -- five ends.
  *
- * 诚实性纪律：
- * - 已初始化 Profile 的 MEMORY.md 被外部删除：显式 warning 通知 + 注入
- *   memory.assets-missing，绝不启动时无条件重建掩盖丢失；文件恢复/工具
- *   写入后自愈；
- * - 从未初始化的合法 Profile 首次需要记忆时惰性创建（不误报缺失）；
- * - 空白 MEMORY.md 是合法的 memory.guide 状态（无缺失告警）。
+ * Honesty discipline:
+ * - MEMORY.md of an initialized Profile deleted externally: an explicit warning notification + the
+ *   injected memory.assets-missing; never rebuild unconditionally at startup to mask the loss;
+ *   self-heals after the file is restored or a tool writes;
+ * - a legal Profile never initialized creates lazily on first memory need (no false missing report);
+ * - a blank MEMORY.md is a legal memory.guide state (no missing warning).
  */
 import { HelmError, PROFILE_DETAIL_SECTION_SLOT, type HelmHostProfilesPort, type PluginActionContext, type PluginDefinition } from '@helm/protocol'
 import { resolvePluginClientRoot } from './asset-paths.js'
@@ -25,11 +25,11 @@ import { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MemoryStore } from './memory/store.
 
 export { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MEMORY_DEFAULT, MemoryStore } from './memory/store.js'
 
-/** 单 Profile 记忆开关与初始化标记的紧凑持久状态（私有 doc，不含全文）。 */
+/** Compact persistent state of per-Profile memory switches and initialization markers (private doc, no full text). */
 export interface MemoryPluginDoc {
-  /** 已关闭长期记忆的 Profile ID 列表（不在列表中的 Profile 默认开启）。 */
+  /** Profile IDs with long-term memory disabled (Profiles not listed are enabled by default). */
   disabledProfiles: string[]
-  /** 已初始化过 MEMORY.md 的 Profile ID 列表（跨重启区分从未初始化 vs 被删）。 */
+  /** Profile IDs whose MEMORY.md has been initialized (distinguishing never-initialized vs deleted across restarts). */
   initializedProfiles: string[]
 }
 
@@ -42,21 +42,21 @@ export function isProfileMemoryEnabled(
   return !(doc?.disabledProfiles ?? []).includes(profileId)
 }
 
-/** 截断说明（注入时附在截断内容之后，绝不静默截断）。 */
-const MEMORY_TRUNCATION_NOTE = `\n[ helm 提示：MEMORY.md 超过 ${MAX_MEMORY_CHARS} 字符上限，以上为前 ${MAX_MEMORY_CHARS} 字符；请用 update_memory(mode='replace') 整理精简记忆 ]`
+/** Truncation note (appended after truncated content at injection time; never truncate silently). */
+const MEMORY_TRUNCATION_NOTE = `\n[ helm note: MEMORY.md exceeds the ${MAX_MEMORY_CHARS}-character cap; the above is the first ${MAX_MEMORY_CHARS} characters; use update_memory(mode='replace') to consolidate and trim memory ]`
 
-/** 记忆工具用法提示（动态注入，SYSTEM.md 不再硬编码）。 */
-const MEMORY_USAGE_NOTE = '用 `update_memory` 保存稳定的用户偏好与约定。'
+/** Memory tool usage hint (injected dynamically; SYSTEM.md no longer hardcodes it). */
+const MEMORY_USAGE_NOTE = 'Use `update_memory` to save stable user preferences and conventions.'
 
-/** 公共端口校验 ID 并读取 Profile（不猜测缺失目标）。 */
+/** Public port: validate the ID and read the Profile (no guessing of missing targets). */
 async function requireProfile(profiles: HelmHostProfilesPort, profileId: string): Promise<void> {
   const found = await profiles.get(profileId)
   if (found === undefined) {
-    throw new HelmError('profile_not_found', `Profile '${profileId}' 不存在`, 404, { profileId })
+    throw new HelmError('profile_not_found', `Profile '${profileId}' does not exist`, 404, { profileId })
   }
 }
 
-/** 显式 Profile 优先；否则从调用会话继承，不猜测默认 Profile。 */
+/** Explicit Profile wins; otherwise inherit from the calling conversation; never guess a default Profile. */
 function resolveActionProfileId(
   explicitProfileId: string | undefined,
   context: PluginActionContext,
@@ -66,7 +66,7 @@ function resolveActionProfileId(
   if (context.conversationId !== undefined) return getConversation(context.conversationId).profileId
   throw new HelmError(
     'validation_error',
-    '缺少 Profile 目标：提供 --profile-id 或会话上下文（CLI 使用 --current）',
+    'Missing Profile target: provide --profile-id or a conversation context (CLI uses --current)',
     400,
   )
 }
@@ -74,8 +74,8 @@ function resolveActionProfileId(
 export function createMemoryPlugin(): PluginDefinition {
   return {
     id: MEMORY_PLUGIN_ID,
-    name: '长期记忆',
-    description: '自治长期记忆：按 Profile 管理 MEMORY.md 注入与启停，提供 update_memory 工具。',
+    name: 'Long-term Memory',
+    description: 'Autonomous long-term memory: manages MEMORY.md injection and toggles per Profile, providing the update_memory tool.',
     icon: 'sparkles',
     version: '0.1.0',
     locked: false,
@@ -83,7 +83,7 @@ export function createMemoryPlugin(): PluginDefinition {
     definePlugin(ctx) {
       const { profiles } = ctx.host
       const store = new MemoryStore(ctx.host)
-      // 私有紧凑状态：disabledProfiles + initializedProfiles（磁盘全文是唯一权威）。
+      // Private compact state: disabledProfiles + initializedProfiles (the on-disk full text is the single authority).
       const stateDoc = ctx.doc<MemoryPluginDoc>(DOC_NAME, {
         disabledProfiles: [],
         initializedProfiles: [],
@@ -102,12 +102,12 @@ export function createMemoryPlugin(): PluginDefinition {
       }
 
       // ------------------------------------------------------------------
-      // ctx.action：get / set / configure（自动映射 helm memory … CLI 与 HTTP）
+      // ctx.actions: get / set / configure (auto-mapped to helm memory ... CLI and HTTP)
       // ------------------------------------------------------------------
 
       ctx.action<{ profileId?: string }, { profileId: string; enabled: boolean; content: string; initialized: boolean }>({
         id: 'get',
-        description: '读取 Profile 的长期记忆内容与开关状态（可用 --profile-id 指定，或用 --current 取当前会话）',
+        description: 'Read the Profile long-term memory content and switch state (pass --profile-id, or use --current for the current conversation)',
         inputSchema: {
           type: 'object',
           properties: { profileId: { type: 'string', minLength: 1 } },
@@ -133,7 +133,7 @@ export function createMemoryPlugin(): PluginDefinition {
             content = await store.getMemory(profileId)
           } catch (err) {
             if (!(err instanceof HelmError && err.code === 'not_found')) throw err
-            // 文件不存在：如实返回空串（前端显示真实状态，不伪造内容）。
+            // File absent: return an empty string honestly (the frontend sees the real state; no fabricated content).
           }
           return {
             profileId,
@@ -146,7 +146,7 @@ export function createMemoryPlugin(): PluginDefinition {
 
       ctx.action<{ profileId?: string; text: string; mode?: 'append' | 'replace' }, { profileId: string; updated: boolean; length: number }>({
         id: 'set',
-        description: '写入 Profile 的 MEMORY.md 全文或追加（--profile-id 或 --current 选目标）',
+        description: 'Write the Profile MEMORY.md in full or append (--profile-id or --current picks the target)',
         inputSchema: {
           type: 'object',
           properties: {
@@ -174,7 +174,7 @@ export function createMemoryPlugin(): PluginDefinition {
           if (!isEnabled(profileId)) {
             throw new HelmError(
               'memory_disabled_for_profile',
-              `Profile '${profileId}' 已关闭长期记忆，禁止写入 MEMORY.md`,
+              `Profile '${profileId}' has long-term memory disabled; writing MEMORY.md is forbidden`,
               403,
               { profileId },
             )
@@ -190,7 +190,7 @@ export function createMemoryPlugin(): PluginDefinition {
         { profileId: string; enabled: boolean }
       >({
         id: 'configure',
-        description: '配置 Profile 的长期记忆启停（--profile-id 或 --current 选目标）',
+        description: 'Configure the Profile long-term memory switch (--profile-id or --current picks the target)',
         inputSchema: {
           type: 'object',
           properties: {
@@ -213,12 +213,12 @@ export function createMemoryPlugin(): PluginDefinition {
         async handler(input, context) {
           const profileId = resolveActionProfileId(input.profileId, context, (id) => ctx.host.getConversation(id))
           await requireProfile(profiles, profileId)
-          // 先写入文本（若提供），成功后才提交开关——失败时不留半配置。
+          // Write the text first (if provided) and commit the switch only on success -- no half-config left behind on failure.
           if (input.text !== undefined) {
             if (!isEnabled(profileId) && !input.enabled) {
               throw new HelmError(
                 'memory_disabled_for_profile',
-                `Profile '${profileId}' 已关闭长期记忆，禁止写入 MEMORY.md`,
+                `Profile '${profileId}' has long-term memory disabled; writing MEMORY.md is forbidden`,
                 403,
                 { profileId },
               )
@@ -227,7 +227,7 @@ export function createMemoryPlugin(): PluginDefinition {
             markInitialized(profileId)
           }
           if (input.enabled && !isInitialized(profileId)) {
-            // 开启且尚无初始化标记：惰性创建文件（已有文件时原样保留）。
+            // Enabled and not yet marked initialized: lazily create the file (kept as-is when it exists).
             await store.ensureMemory(profileId)
             markInitialized(profileId)
           }
@@ -244,7 +244,7 @@ export function createMemoryPlugin(): PluginDefinition {
       })
 
       // ------------------------------------------------------------------
-      // before_turn：单 Profile 开关 + 惰性初始化 + 缺失告警
+      // before_turn: per-Profile switch + lazy initialization + missing-asset warning
       // ------------------------------------------------------------------
 
       const missingNotified = new Set<string>()
@@ -252,7 +252,7 @@ export function createMemoryPlugin(): PluginDefinition {
       ctx.hook.onBeforeTurn(async (turn) => {
         const profileId = turn.conversation.profileId
         if (!isEnabled(profileId)) {
-          // 单 Profile 已关闭：不读文件、不注入，并剥离 update_memory 工具。
+          // Per-Profile memory off: read no file, inject nothing, and strip the update_memory tool.
           if (turn.tools.some((t) => t.name === 'update_memory')) {
             return {
               action: 'transform',
@@ -269,22 +269,22 @@ export function createMemoryPlugin(): PluginDefinition {
         let rawMemory: string
         try {
           rawMemory = await store.getMemory(profileId)
-          missingNotified.delete(profileId) // 恢复即停；下次再缺失可重新告警
+          missingNotified.delete(profileId) // stop once restored; can warn again if missing later
           if (!isInitialized(profileId)) markInitialized(profileId)
         } catch (err) {
           if (!(err instanceof HelmError && err.code === 'not_found')) throw err
           if (!isInitialized(profileId)) {
-            // 从未初始化的合法 Profile 首次需要记忆：惰性创建默认文件。
+            // A legal never-initialized Profile needing memory for the first time: lazily create the default file.
             rawMemory = await store.ensureMemory(profileId)
             markInitialized(profileId)
           } else {
-            // 已初始化后被外部删除：显式告警（按 profileId 独立去重），不重建。
+            // Initialized then deleted externally: warn explicitly (deduped per profileId); no rebuild.
             if (!missingNotified.has(profileId)) {
               await ctx.host.emitEvent('notification', {
                 type: 'notification',
                 level: 'warning',
-                title: `长期记忆文件缺失：${profileId}/MEMORY.md`,
-                body: `Profile '${profileId}' 的 MEMORY.md 曾存在但已被外部删除；本回合按无记忆处理，下次 update_memory 写入或恢复文件后自愈`,
+                title: `Long-term memory file missing: ${profileId}/MEMORY.md`,
+                body: `Profile '${profileId}' MEMORY.md once existed but was deleted externally; this turn proceeds without memory and self-heals after the next update_memory write or file restoration`,
               })
               missingNotified.add(profileId)
             }
@@ -292,8 +292,8 @@ export function createMemoryPlugin(): PluginDefinition {
               id: 'memory.assets-missing',
               text: [
                 '<memory_assets_missing>',
-                `[警告] 长期记忆资产缺失（${profileId}/MEMORY.md 曾存在但已被删除）。`,
-                '请提醒用户检查 profiles 目录或通过 update_memory 重建；在此之前你没有长期记忆。',
+                `[Warning] Long-term memory asset missing (${profileId}/MEMORY.md existed but was deleted).`,
+                'Please remind the user to check the profiles directory or rebuild via update_memory; until then you have no long-term memory.',
                 '</memory_assets_missing>',
               ].join('\n'),
             })
@@ -301,9 +301,9 @@ export function createMemoryPlugin(): PluginDefinition {
           }
         }
 
-        // 空白内容是合法状态（memory.guide），无缺失告警。
+        // Blank content is a legal state (memory.guide); no missing warning.
         if (rawMemory.trim()) {
-          // 存量超限（外部手改绕过写入防线）：注入时截断并显式说明。
+          // Pre-existing over-limit content (externally hand-edited past the write defense): truncate at injection with an explicit note.
           const memory =
             rawMemory.length > MAX_MEMORY_CHARS
               ? `${rawMemory.slice(0, MAX_MEMORY_CHARS)}${MEMORY_TRUNCATION_NOTE}`
@@ -319,12 +319,12 @@ export function createMemoryPlugin(): PluginDefinition {
       })
 
       // ------------------------------------------------------------------
-      // update_memory 工具（执行期复核单 Profile 开关）
+      // update_memory tool (execution-time recheck of the per-Profile switch)
       // ------------------------------------------------------------------
 
       ctx.tool<{ text: string; mode: 'append' | 'replace' }>({
         name: 'update_memory',
-        description: '更新当前会话 Profile 的 MEMORY.md。append 追加内容，replace 替换全文（超过 64000 字符需先 replace 精简）。',
+        description: 'Update the current conversation Profile\'s MEMORY.md. append adds content; replace swaps the full text (over 64000 chars requires a replace to trim first).',
         inputSchema: {
           type: 'object',
           properties: { text: { type: 'string' }, mode: { type: 'string', enum: ['append', 'replace'] } },
@@ -337,13 +337,13 @@ export function createMemoryPlugin(): PluginDefinition {
           if (!isEnabled(profileId)) {
             throw new HelmError(
               'memory_disabled_for_profile',
-              `Profile '${profileId}' 已关闭长期记忆，禁止调用 update_memory`,
+              `Profile '${profileId}' has long-term memory disabled; calling update_memory is forbidden`,
               403,
               { profileId },
             )
           }
-          // 大小防线唯一权威点在 MemoryStore.updateMemory 文件锁内（合并后
-          // 检查）：跨会话同 Profile 并发 append 不可能叠加突破上限。
+          // The size defense's single authoritative point is inside MemoryStore.updateMemory's file lock
+          // (checked post-merge): concurrent appends across conversations for the same Profile cannot stack past the cap.
           const content = await store.updateMemory(profileId, input.text, input.mode)
           markInitialized(profileId)
           return { updated: true, profileId, length: content.length }
@@ -351,7 +351,7 @@ export function createMemoryPlugin(): PluginDefinition {
       })
 
       // ------------------------------------------------------------------
-      // Web 插槽：向 Profile 详情抽屉注入单 Profile 记忆开关与编辑器
+      // Web slot: inject the per-Profile memory switch and editor into the Profile detail drawer
       // ------------------------------------------------------------------
 
       ctx.ui.slot({

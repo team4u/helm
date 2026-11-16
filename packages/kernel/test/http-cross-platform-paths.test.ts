@@ -1,16 +1,16 @@
 /**
- * 跨平台绝对路径与通用运行时标识边界回归（HTTP + 服务层）。
+ * across platform absolute path and through use runtime identifier boundary regression (HTTP + service layer).
  *
- * 覆盖：
- * 1. 会话 init/patch 的 cwd：POSIX `/`、Windows 盘符（`C:\\work` / `D:/repo`）与
- *    UNC（`\\\\srv\\share\\dir`）绝对路径放行；盘符相对（`C:relative`）与纯相对
- *    路径拒绝（对齐 runtime/tools.ts isAbsoluteTargetPath 语义，内核不依赖
- *    Hub 宿主平台规则判定远端/Windows 靶点路径形状）；
- * 2. Profile runtime.workspace 同一跨平台绝对路径校验（服务层 validateProfileInput
- *    与 HTTP parseProfileRuntime 双边界同规）；
- * 3. runtime.kind 零插件枚举硬编码：内核只校验外部运行时标识符格式
- *    （^[a-z][a-z0-9_-]{0,31}$），不点名任何插件——'herdr' / 'docker' 等
- *    一切合法标识放行，非法格式（大写、空串、特殊字符、超长）拒绝。
+ * override:
+ * 1. conversation init/patch  cwd:POSIX `/`,Windows symbol (`C:\\work` / `D:/repo`) and
+ *    UNC(`\\\\srv\\share\\dir`) absolute path let through; symbol each other for (`C:relative`) and pure each other for
+ *    path reject (align runtime/tools.ts isAbsoluteTargetPath semantics, kernel independent of
+ *    Hub host platform rule decide remote/Windows target path shape);
+ * 2. Profile runtime.workspace the same across platform absolute path validate (service layer validateProfileInput
+ *    and HTTP parseProfileRuntime double boundary same rule);
+ * 3. runtime.kind zero plugin enumeration hard encode: kernel only validate external runtime identifier symbol format
+ *    (^[a-z][a-z0-9_-]{0,31}$), do not point name any plugin - -'herdr' / 'docker' etc.
+ *    everything legal identifier let through, illegal format (large write, empty string, special character, over long) reject.
  */
 
 import { strict as assert } from 'node:assert'
@@ -40,53 +40,53 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 1. 会话 cwd 跨平台绝对路径（parseConversationInit / parseConversationPatch）
+// 1. conversation cwd across platform absolute path (parseConversationInit / parseConversationPatch)
 // ---------------------------------------------------------------------------
 
-describe('会话 cwd 跨平台绝对路径校验', { timeout: 60_000 }, () => {
+describe('conversation cwd across platform absolute path validate', { timeout: 60_000 }, () => {
   const valid: Array<[string, string]> = [
-    ['POSIX 根', '/'],
-    ['POSIX 绝对', '/srv/work/helm'],
-    ['Windows 盘符反斜杠', 'C:\\work\\helm'],
-    ['Windows 盘符正斜杠', 'D:/repo/project'],
-    ['小写盘符', 'c:\\Users\\dev'],
-    ['UNC 路径', '\\\\srv\\share\\dir'],
+    ['POSIX ', '/'],
+    ['POSIX absolute', '/srv/work/helm'],
+    ['Windows symbol backslash', 'C:\\work\\helm'],
+    ['Windows symbol correct slash', 'D:/repo/project'],
+    ['small write symbol', 'c:\\Users\\dev'],
+    ['UNC path', '\\\\srv\\share\\dir'],
   ]
   const invalid: Array<[string, string]> = [
-    ['盘符相对（无分隔）', 'C:relative'],
-    ['裸盘符', 'C:'],
-    ['纯相对路径', 'work/dir'],
-    ['空串（init 语义为未提供以外的非法值）', ''],
-    ['单点相对', './x'],
-    ['上跳相对', '../x'],
+    ['symbol each other for (without isolate)', 'C:relative'],
+    ['bare symbol', 'C:'],
+    ['pure relative path', 'work/dir'],
+    ['empty string (init semantics is not provide with outside illegal value)', ''],
+    ['single point each other for', './x'],
+    ['on jump each other for', '../x'],
   ]
 
   for (const [why, cwd] of valid) {
-    it(`init cwd 放行：${why} (${JSON.stringify(cwd)})`, timeout, () => {
+    it(`init cwd let through:${why} (${JSON.stringify(cwd)})`, timeout, () => {
       const init = parseConversationInit({ cwd })
       assert.equal(init.cwd, cwd)
     })
-    it(`patch cwd 放行：${why} (${JSON.stringify(cwd)})`, timeout, () => {
+    it(`patch cwd let through:${why} (${JSON.stringify(cwd)})`, timeout, () => {
       const patch = parseConversationPatch({ cwd })
       assert.equal(patch.cwd, cwd)
     })
   }
 
   for (const [why, cwd] of invalid) {
-    it(`init cwd 拒绝：${why} (${JSON.stringify(cwd)})`, timeout, () => {
+    it(`init cwd reject:${why} (${JSON.stringify(cwd)})`, timeout, () => {
       assert.throws(() => parseConversationInit({ cwd }), ValidationError)
     })
-    it(`patch cwd 拒绝：${why} (${JSON.stringify(cwd)})`, timeout, () => {
+    it(`patch cwd reject:${why} (${JSON.stringify(cwd)})`, timeout, () => {
       assert.throws(() => parseConversationPatch({ cwd }), ValidationError)
     })
   }
 })
 
 // ---------------------------------------------------------------------------
-// 2. Profile runtime.workspace 跨平台绝对路径（服务层 + HTTP 双边界）
+// 2. Profile runtime.workspace across platform absolute path (service layer + HTTP double boundary)
 // ---------------------------------------------------------------------------
 
-describe('Profile runtime.workspace 跨平台绝对路径', { timeout: 60_000 }, () => {
+describe('Profile runtime.workspace across platform absolute path', { timeout: 60_000 }, () => {
   const validWorkspaces = [
     '/workspace/proj',
     'C:\\build\\helm',
@@ -96,14 +96,14 @@ describe('Profile runtime.workspace 跨平台绝对路径', { timeout: 60_000 },
   const invalidWorkspaces = ['relative/ws', 'C:relative', '.', './x']
 
   for (const workspace of validWorkspaces) {
-    it(`服务层放行 ${JSON.stringify(workspace)}`, timeout, () => {
+    it(`service layer let through ${JSON.stringify(workspace)}`, timeout, () => {
       const profile = validateProfileInput({
         id: 'ws-ok',
         runtime: { kind: 'herdr', agent: 'agy', workspace },
       })
       assert.equal(profile.runtime?.workspace, workspace)
     })
-    it(`HTTP 边界放行 ${JSON.stringify(workspace)}`, timeout, () => {
+    it(`HTTP boundary let through ${JSON.stringify(workspace)}`, timeout, () => {
       const body = parseProfileBody(
         { id: 'ws-ok', runtime: { kind: 'herdr', agent: 'agy', workspace } },
         { requireId: true },
@@ -113,16 +113,16 @@ describe('Profile runtime.workspace 跨平台绝对路径', { timeout: 60_000 },
   }
 
   for (const workspace of invalidWorkspaces) {
-    it(`服务层拒绝 ${JSON.stringify(workspace)}`, timeout, () => {
+    it(`service layer reject ${JSON.stringify(workspace)}`, timeout, () => {
       assert.throws(() =>
         validateProfileInput({
           id: 'ws-bad',
           runtime: { kind: 'herdr', agent: 'agy', workspace },
         }),
-        /绝对路径/,
+        /absolute path/,
       )
     })
-    it(`HTTP 边界拒绝 ${JSON.stringify(workspace)}`, timeout, () => {
+    it(`HTTP boundary reject ${JSON.stringify(workspace)}`, timeout, () => {
       assert.throws(
         () =>
           parseProfileBody(
@@ -136,13 +136,13 @@ describe('Profile runtime.workspace 跨平台绝对路径', { timeout: 60_000 },
 })
 
 // ---------------------------------------------------------------------------
-// 3. runtime.kind 零插件枚举硬编码（内核只校验标识符格式）
+// 3. runtime.kind zero plugin enumeration hard encode (kernel only validate identifier symbol format)
 // ---------------------------------------------------------------------------
 
-describe('runtime.kind 通用外部运行时标识校验（内核零插件枚举硬编码）', { timeout: 60_000 }, () => {
+describe('runtime.kind through use external runtime identifier validate (kernel zero plugin enumeration hard encode)', { timeout: 60_000 }, () => {
   const validKinds = ['herdr', 'docker', 'a', 'dev-box_runtime2']
   const invalidKinds = [
-    // 内核不硬编码 'herdr'：测试拒绝的是非法格式本身，而非未知插件名。
+    // kernel do not hard encode 'herdr': test reject is illegal format itself, while non- unknown plugin name.
     '',
     'Herdr',
     'HERDR',
@@ -153,14 +153,14 @@ describe('runtime.kind 通用外部运行时标识校验（内核零插件枚举
   ]
 
   for (const kind of validKinds) {
-    it(`服务层放行标识 ${JSON.stringify(kind)}`, timeout, () => {
+    it(`service layer let through identifier ${JSON.stringify(kind)}`, timeout, () => {
       const profile = validateProfileInput({
         id: 'kind-ok',
         runtime: { kind, agent: 'agy' },
       })
       assert.equal(profile.runtime?.kind, kind)
     })
-    it(`HTTP 边界放行标识 ${JSON.stringify(kind)}`, timeout, () => {
+    it(`HTTP boundary let through identifier ${JSON.stringify(kind)}`, timeout, () => {
       const body = parseProfileBody(
         { id: 'kind-ok', runtime: { kind, agent: 'agy' } },
         { requireId: true },
@@ -170,17 +170,17 @@ describe('runtime.kind 通用外部运行时标识校验（内核零插件枚举
   }
 
   for (const kind of invalidKinds) {
-    it(`服务层拒绝非法标识 ${JSON.stringify(kind)}`, timeout, () => {
+    it(`service layer reject illegal identifier ${JSON.stringify(kind)}`, timeout, () => {
       assert.throws(
         () =>
           validateProfileInput({
             id: 'kind-bad',
             runtime: { kind, agent: 'agy' },
           }),
-        /外部运行时标识/,
+        /external runtime identifier/,
       )
     })
-    it(`HTTP 边界拒绝非法标识 ${JSON.stringify(kind)}`, timeout, () => {
+    it(`HTTP boundary reject illegal identifier ${JSON.stringify(kind)}`, timeout, () => {
       assert.throws(
         () =>
           parseProfileBody(
@@ -192,14 +192,14 @@ describe('runtime.kind 通用外部运行时标识校验（内核零插件枚举
     })
   }
 
-  it('kind 非字符串（number/null）服务层拒绝', timeout, () => {
+  it('kind non- string (number/null) service layer reject', timeout, () => {
     assert.throws(() =>
       validateProfileInput({ id: 'kind-bad', runtime: { kind: 42, agent: 'agy' } as never }),
     )
   })
 })
 
-test('validateProfileInput 保留 ProfileRuntime 其余字段（agent/args/nodeId/env）', timeout, () => {
+test('validateProfileInput keep ProfileRuntime the rest field (agent/args/nodeId/env)', timeout, () => {
   const profile = validateProfileInput({
     id: 'full-rt',
     runtime: {

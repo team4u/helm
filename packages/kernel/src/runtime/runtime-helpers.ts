@@ -1,8 +1,8 @@
 /**
- * runtime 共享文件级 helpers（无状态纯函数）。
+ * runtime sharing file level helpers(without state pure function).
  *
- * 从 runtime.ts 拆出：工具结果契约、before_turn sections/messages 手术、
- * rewind 区间解析、404 会话校验等跨模块复用的小函数。
+ * from runtime.ts split out: tool result contract,before_turn sections/messages manually technique,
+ * rewind zone between parse,404 conversation validate etc. across module re- use small function.
  */
 import { join } from 'node:path'
 import type { JsonValue } from '@earendil-works/chord/json'
@@ -18,10 +18,10 @@ import { requireModelRef } from './models.js'
 import { assertProfileId, assertSkillId } from '../services/index.js'
 
 // ---------------------------------------------------------------------------
-// 通用序列化 / 转义
+// through use serialization / escaping
 // ---------------------------------------------------------------------------
 
-/** XML 属性/文本转义（defang 防逃逸与 ownership 标记共用）。 */
+/** XML property/text escaping (defang guard against escape and ownership mark record shared use). */
 export function escapeXml(text: string): string {
   return text
     .replaceAll('&', '&amp;')
@@ -30,7 +30,7 @@ export function escapeXml(text: string): string {
     .replaceAll('"', '&quot;')
 }
 
-/** 剥离已有 external_event 包裹（trigger transform 后再 defang 防双重包裹；保留包裹外追加文本）。 */
+/** strip already has external_event package wrap (trigger transform after again defang guard against double heavy package wrap; keep package wrap outside append text). */
 export function stripEnvelope(text: string): string {
   const match = /[\s\S]*?<external_event[^>]*>\n([\s\S]*?)\n<\/external_event>([\s\S]*)/.exec(text)
   if (match === null) return text
@@ -45,26 +45,26 @@ export function stripEnvelope(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// 会话存在性 404（全文去重的公共 helper）
+// conversation store in 404(all text dedupe public helper)
 // ---------------------------------------------------------------------------
 
-/** store.getConv + 404（全文重复 15+ 处的公共收敛）。 */
+/** store.getConv + 404(all text duplicate 15+ where public converge). */
 export function requireConv(store: HelmStore, id: number): NonNullable<ReturnType<HelmStore['getConv']>> {
   const meta = store.getConv(id)
-  if (!meta) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+  if (!meta) throw new HelmError('not_found', `conversation missing:${id}`, 404)
   return meta
 }
 
 // ---------------------------------------------------------------------------
-// 工具结果契约 helpers（插件/钩子产物 -> SDK ToolExecutionResult）
+// tool result contract helpers(plugin/hook artifact -> SDK ToolExecutionResult)
 // ---------------------------------------------------------------------------
 
 /**
- * 插件工具结构化结果信封的判别条件（防止任意含 output 字段的业务对象被误
- * 识别为信封）：必须至少含 output（字符串或数组）/ structuredOutput /
- * isError 三个信封字段之一，且出现的信封字段全部类型合法；任一信封字段
- * 类型非法则显式报错（不是当普通对象静默走文本通道——工具作者意图不明，
- * 边界拒绝优于猜测）。
+ * plugin tool structure result message seal judge other condition (guard against any contains output field business object by mistakenly
+ * identify is message seal): must at least contains output(string or array)/ structuredOutput /
+ * isError three message seal field of one, and appear message seal field all type legal; any one message seal field
+ * type illegal then explicit errors (is not when ordinary object static default away text channel - - tool act intent do not,
+ * boundary reject optimal at guess).
  */
 function envelopeProblem(raw: Record<string, unknown>): { isEnvelope: boolean; problem?: string } {
   const hasOutput = raw['output'] !== undefined
@@ -72,22 +72,22 @@ function envelopeProblem(raw: Record<string, unknown>): { isEnvelope: boolean; p
   const hasError = raw['isError'] !== undefined
   if (!hasOutput && !hasStructured && !hasError) return { isEnvelope: false }
   if (hasOutput && typeof raw['output'] !== 'string' && !Array.isArray(raw['output'])) {
-    return { isEnvelope: true, problem: 'output 必须是字符串或 { type: \'text\', text } 数组' }
+    return { isEnvelope: true, problem: 'output must be string or { type: \'text\', text } array' }
   }
   if (hasError && typeof raw['isError'] !== 'boolean') {
-    return { isEnvelope: true, problem: 'isError 必须是布尔值' }
+    return { isEnvelope: true, problem: 'isError must be boolean value' }
   }
   return { isEnvelope: true }
 }
 
 /**
- * 插件工具原始返回 -> SDK ToolExecutionResult：
- * - 结构化结果信封 { output, structuredOutput?, isError? }：仅当出现的信封
- *   字段全部类型合法时按信封规整（文本与 structuredOutput 均过脱敏；
- *   structuredOutput 仅在工具声明了 structuredOutputSchema 时保留）；
- * - 工具未声明 structuredOutputSchema 却返回 structuredOutput：显式拒绝
- *   （invalid_tool_result，不再静默丢弃——数据丢失必须让插件作者看见）；
- * - 其余任意值统一包单文本块 content（无 schema 不传 structuredOutput）。
+ * plugin tool original return -> SDK ToolExecutionResult:
+ * - structure result message seal { output, structuredOutput?, isError? }: only when appear message seal
+ *   field all type legal when by message seal rule whole (text and structuredOutput all redaction;
+ *   structuredOutput only in tool declaration structuredOutputSchema when keep);
+ * - tool not declaration structuredOutputSchema yet return structuredOutput: explicit reject
+ *   (invalid_tool_result, no longer static default discard - - data lose must let plugin act see see);
+ * - the rest any value unify package single text chunk content(without schema do not pass structuredOutput).
  */
 export function pluginToolResult(
   raw: unknown,
@@ -99,8 +99,8 @@ export function pluginToolResult(
   isError?: boolean
 } {
   const where = options?.toolName !== undefined
-    ? `工具 ${options.toolName}${options?.callId !== undefined ? `（callId=${options.callId}）` : ''}`
-    : '插件工具'
+    ? `tool ${options.toolName}${options?.callId !== undefined ? `(callId=${options.callId})` : ''}`
+    : 'plugin tool'
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
     const env = raw as { output?: unknown; structuredOutput?: unknown; isError?: unknown }
     const verdict = envelopeProblem(raw as Record<string, unknown>)
@@ -108,11 +108,11 @@ export function pluginToolResult(
       if (verdict.problem !== undefined) {
         throw new HelmError(
           'invalid_tool_result',
-          `${where} 的结果信封字段类型非法：${verdict.problem}`,
+          `${where} result message seal field type illegal:${verdict.problem}`,
           500,
         )
       }
-      // output：字符串包单文本块；数组原样校验后透传。
+      // output: string package single text chunk; array original validate after pass-through.
       let output: Array<{ type: 'text'; text: string }>
       if (typeof env.output === 'string') {
         output = [{ type: 'text', text: redact(env.output) }]
@@ -121,7 +121,7 @@ export function pluginToolResult(
           if (block === null || typeof block !== 'object' || (block as { type?: unknown }).type !== 'text' || typeof (block as { text?: unknown }).text !== 'string') {
             throw new HelmError(
               'invalid_tool_result',
-              `${where} 的结果信封 output 数组仅接受 { type: 'text', text } 块`,
+              `${where} result message seal output array only accept { type: 'text', text } chunk`,
               500,
             )
           }
@@ -132,19 +132,19 @@ export function pluginToolResult(
       } else {
         throw new HelmError(
           'invalid_tool_result',
-          `${where} 的结果信封 output 必须是字符串或 { type: 'text', text } 数组`,
+          `${where} result message seal output must be string or { type: 'text', text } array`,
           500,
         )
       }
       const result: { output: Array<{ type: 'text'; text: string }>; structuredOutput?: unknown; isError?: boolean } = {
         output,
       }
-      // structuredOutput 仅在工具声明 schema 时保留（SDK 契约）；值级脱敏。
-      // 未声明 schema 却返回 structuredOutput：显式拒绝（不静默丢数据）。
+      // structuredOutput only in tool declaration schema when keep (SDK contract); value level redaction.
+      // not declaration schema yet return structuredOutput: explicit reject (not silently lose data).
       if (env.structuredOutput !== undefined && options?.structuredOutputSchema === undefined) {
         throw new HelmError(
           'invalid_tool_result',
-          `${where} 未声明 structuredOutputSchema 却返回了 structuredOutput（SDK 契约禁止；请声明 schema 或改为纯 output 文本）`,
+          `${where} not declaration structuredOutputSchema yet return structuredOutput(SDK contract forbidden; please declaration schema or change is pure output text)`,
           500,
         )
       }
@@ -155,12 +155,12 @@ export function pluginToolResult(
       return result
     }
   }
-  // 未命中信封判别（无任何信封字段，或字段类型全部合法但一个都没出现）：
-  // 普通业务值统一走文本通道（无 schema 不传 structuredOutput）。
+  // missed message seal judge other (without any message seal field, or field type all legal but a all not appear):
+  // ordinary business value unify away text channel (without schema do not pass structuredOutput).
   return { output: [{ type: 'text', text: safeResultText(raw, redact) }] }
 }
 
-/** tool_call handled 的接管产物 -> 合法 ToolExecutionResult（非法形状显式错误结果）。 */
+/** tool_call handled take over artifact -> legal ToolExecutionResult(illegal shape explicit error result). */
 export function toolResultOf(handled: unknown): {
   output: Array<{ type: 'text'; text: string }>
   isError: boolean
@@ -170,19 +170,19 @@ export function toolResultOf(handled: unknown): {
     return normalized as { output: Array<{ type: 'text'; text: string }>; isError: boolean }
   }
   return {
-    output: [{ type: 'text', text: 'tool_call handled 钩子返回了非法结果形状（已按错误落盘）' }],
+    output: [{ type: 'text', text: 'tool_call handled hook return illegal result shape (already by error)' }],
     isError: true,
   }
 }
 
-/** tool_result transform 产物规整：必须形如 ToolExecutionResult，否则 undefined（保持原结果）。 */
+/** tool_result transform artifact rule whole: must shape such as ToolExecutionResult, otherwise undefined(keep original result). */
 export function normalizeToolResult(value: unknown): ToolExecutionResultShape | undefined {
   if (value === null || typeof value !== 'object') return undefined
   const candidate = value as ToolExecutionResultShape
   if (candidate.output === undefined && candidate.structuredOutput === undefined && candidate.isError === undefined) {
     return undefined
   }
-  // output 必须是 content 数组（字符串包成单文本块；SDK 契约只接受数组）。
+  // output must be content array (string package into single text chunk;SDK contract only accept array).
   if (typeof candidate.output === 'string') {
     return { ...candidate, output: [{ type: 'text', text: candidate.output }] }
   }
@@ -198,10 +198,10 @@ export interface ToolExecutionResultShape {
 }
 
 // ---------------------------------------------------------------------------
-// before_turn sections / tools 手术（SDK system 前导消息改写）
+// before_turn sections / tools manually technique (SDK system before lead message change write)
 // ---------------------------------------------------------------------------
 
-/** 从模型消息提取当前生效 system sections（含前导声明与后续 patch 回放）。 */
+/** from model message extract when before takes effect system sections(contains before lead declaration and after continue patch back put). */
 export function systemSectionsOf(messages: ReadonlyArray<{ role?: string; sections?: unknown }>): Array<{ id: string; text: string }> {
   const sections = new Map<string, string>()
   for (const message of messages) {
@@ -216,11 +216,11 @@ export function systemSectionsOf(messages: ReadonlyArray<{ role?: string; sectio
 }
 
 /**
- * 把 before_turn 终局 active tools 的提示词元数据统一投射进 sections：
- * - prompt.tools.<name>：每工具完整段落（promptSnippet）；
- * - prompt.tools.guidelines：全部 promptGuidelines 聚合的共享段；
- * - 旧同名段整体覆盖（停用插件/剥离工具不留幻影文本）；无任何元数据的
- *   工具集产生空投射（清除全部旧段）；sections 未变化时原样返回引用。
+ *  before_turn final scoped active tools prompt metadata unify throw shoot enter sections:
+ * - prompt.tools.<name>: each tool complete segment (promptSnippet);
+ * - prompt.tools.guidelines: all promptGuidelines aggregate sharing segment;
+ * - old same name segment whole override (deactivate plugin/strip tool do not phantom text); without any metadata
+ *   tool collection produce empty throw shoot (clear all old segment);sections not change when original return reference.
  */
 export function projectToolPromptSections(
   sections: ReadonlyArray<{ id: string; text: string }>,
@@ -234,7 +234,7 @@ export function projectToolPromptSections(
   }
   if (guidelines.length > 0) {
     const lines = guidelines.flatMap((tool) => tool.promptGuidelines!.map((item) => `- ${tool.name}: ${item}`))
-    desired.set('prompt.tools.guidelines', `可用工具使用要点：\n${lines.join('\n')}`)
+    desired.set('prompt.tools.guidelines', `available tool use want point:\n${lines.join('\n')}`)
   }
   const projectedIds = new Set([...desired.keys()])
   const isManaged = (id: string) =>
@@ -249,7 +249,7 @@ export function projectToolPromptSections(
         desired.delete(section.id)
         if (next !== section.text) changed = true
       } else {
-        changed = true // 移除幻影段
+        changed = true // remove phantom segment
       }
       continue
     }
@@ -263,34 +263,34 @@ export function projectToolPromptSections(
 }
 
 /**
- * before_turn messages 整体替换的边界校验（防 system 头损坏与历史伪造）：
- * - 必须是非空数组且首条为 system 消息（SDK 回放依赖前导 system）；
- * - 前导 system 的 content 基底必须与原消息一致（sections/toolsRemoved/
- *   toolsAdded 等声明字段可改，人格正文绝不可覆写）；
- * - 原首条非 system 消息起的历史必须原序原样保留（只允许在其后追加，
- *   不允许截断/重写/伪造——需要截断清走 rewrite/reset 通道）。
- * 违规一律 invalid_hook_result 显式拒绝，绝不静默采纳破坏性改写。
+ * before_turn messages whole replace boundary validate (guard against system head corrupt and history fabricate):
+ * - must be non-empty array and first is system message (SDK back put dependency before lead system);
+ * - before lead system  content base bottom must and original message consistent (sections/toolsRemoved/
+ *   toolsAdded etc. declaration field can change, person format body text never can override);
+ * - original first non- system message start history must original order original keep (only allows in its after append,
+ *   disallows truncate/heavy write/fabricate - - need to truncate clean away rewrite/reset channel).
+ * violate rule one rule invalid_hook_result explicit reject, never static default adopt accept break change write.
  */
 export function assertSafeMessageSurgery(
   original: ReadonlyArray<Record<string, unknown>>,
   replacement: unknown,
 ): Array<Record<string, unknown>> {
   const fail = (detail: string): HelmError =>
-    new HelmError('invalid_hook_result', `before_turn messages 改写越界：${detail}`, 500)
+    new HelmError('invalid_hook_result', `before_turn messages change write out of bounds:${detail}`, 500)
   if (!Array.isArray(replacement) || replacement.length === 0) {
-    throw fail('必须是非空消息数组')
+    throw fail('must be non-empty message array')
   }
   const lead = replacement[0]!
   if (lead['role'] !== 'system') {
-    throw fail('首条消息必须保持 system（SDK 回放机制依赖前导 system 消息）')
+    throw fail('first message must keep system(SDK back put mechanism dependency before lead system message)')
   }
   if (original.length === 0 || original[0]!['role'] !== 'system') {
-    throw fail('原始请求缺少前导 system 消息（内核状态异常，拒绝改写）')
+    throw fail('original request missing before lead system message (kernel state exception, reject change write)')
   }
   if (contentTextOf(original[0]!) !== contentTextOf(lead)) {
-    throw fail('前导 system 消息的 content 基底被覆写（人格与历史正文不可改；sections/tools 声明请走声明的字段）')
+    throw fail('before lead system message content base bottom by override (person format and history body text cannot change;sections/tools declaration please away declaration field)')
   }
-  // 历史保留：原首条非 system 消息起的子序列必须原样出现在替换结果中（前缀对齐）。
+  // history keep: original first non- system message start sub- sequence must original appear in replace result in (prefix align).
   let firstNonSystem = 0
   while (firstNonSystem < original.length && original[firstNonSystem]!['role'] === 'system') firstNonSystem += 1
   const historyLen = original.length - firstNonSystem
@@ -298,14 +298,14 @@ export function assertSafeMessageSurgery(
   if (historyLen > 0) {
     for (let i = 0; i < historyLen; i += 1) {
       if (preservedHistory[i] !== original[firstNonSystem + i]!) {
-        throw fail('历史消息只允许在其后追加，不允许截断、重写或伪造（截断请走 rewrite/reset 通道）')
+        throw fail('history message only allows in its after append, disallows truncate, heavy write or fabricate (truncate please away rewrite/reset channel)')
       }
     }
   }
   return replacement as Array<Record<string, unknown>>
 }
 
-/** system 消息 content 基底文本（字符串或文本块拼接；与 SDK 回放口径一致）。 */
+/** system message content base bottom text (string or text chunk concatenate; and SDK back put opening path consistent). */
 function contentTextOf(message: Record<string, unknown>): string {
   const content = message['content']
   if (typeof content === 'string') return content
@@ -325,8 +325,8 @@ export function sectionsEqual(a: Array<{ id: string; text: string }>, b: Array<{
 }
 
 /**
- * 把前导 system 消息的 sections 整体替换为 desired（保留 base content）。
- * 后续 system 消息的 sections patch 已折叠进 desired，移除旧 patch 避免回放覆盖。
+ * before lead system message sections whole replace is desired(keep base content).
+ * after continue system message sections patch already collapse enter desired, remove old patch avoid back put override.
  */
 export function withSections(
   messages: ReadonlyArray<Record<string, unknown>>,
@@ -341,7 +341,7 @@ export function withSections(
     previous !== null && typeof previous === 'object'
       ? Object.keys(previous as Record<string, unknown>)
       : []
-  // 新声明集；旧键不在新集中的以 null 移除（回放语义）。
+  // new declaration collection; old key do not in new concentrate with null remove (back put semantics).
   const next: Record<string, string | null> = {}
   for (const [i, section] of desired.entries()) {
     void i
@@ -361,8 +361,8 @@ export function withSections(
 }
 
 /**
- * 工具集变更：在前导 system 消息追加 toolsRemoved/toolsAdded 声明。
- * 模型侧由 pi-ai 回放机制解析（getCurrentTools），下一轮即生效。
+ * tool collection change: in before lead system message append toolsRemoved/toolsAdded declaration.
+ * model side by pi-ai back put mechanism parse (getCurrentTools), under one round i.e. takes effect.
  */
 export function withToolDeclarations(
   messages: ReadonlyArray<Record<string, unknown>>,
@@ -373,12 +373,12 @@ export function withToolDeclarations(
   const added: Array<Record<string, unknown>> = []
   for (const name of declared) {
     const tool = available.get(name)
-    if (!tool) throw new HelmError('unknown_tool', `before_turn 选择了未注册工具：${name}`, 500)
+    if (!tool) throw new HelmError('unknown_tool', `before_turn choose not registered tool:${name}`, 500)
     added.push({ ...tool })
   }
   if (messages.length === 0 || messages[0]!['role'] !== 'system') return [...messages]
   const lead = messages[0]!
-  // 完整重声明：移除全部旧声明再加新集（等价重放，防顺序漂移）。
+  // complete heavy declaration: remove all old declaration again add new collection (etc. price replay, guard against order drift).
   const next: Record<string, unknown> = { ...lead }
   const sections = lead['sections']
   next['sections'] =
@@ -390,7 +390,7 @@ export function withToolDeclarations(
   return [{ ...next }, ...messages.slice(1)]
 }
 
-/** 回放消息中的当前工具名清单。 */
+/** back put message in when before tool name manifest. */
 export function currentToolNames(messages: ReadonlyArray<Record<string, unknown>>): string[] {
   const names = new Set<string>()
   for (const message of messages) {
@@ -406,7 +406,7 @@ export function currentToolNames(messages: ReadonlyArray<Record<string, unknown>
 }
 
 // ---------------------------------------------------------------------------
-// 会话摘要回退 / 错误归一
+// conversation summary fall back / error archive one
 // ---------------------------------------------------------------------------
 
 export function summaryOfFallback(
@@ -440,10 +440,10 @@ export function summaryOfFallback(
 export function normalizeBusyError(error: unknown): unknown {
   const name = (error as { name?: string })?.name
   if (name === 'ConversationBusy') {
-    return new HelmError('conversation_busy', '会话正忙且 whenBusy=reject', 409)
+    return new HelmError('conversation_busy', 'conversation correct busy and whenBusy=reject', 409)
   }
   if (name === 'ConversationIdle') {
-    return new HelmError('conversation_idle', '会话空闲与 whenIdle=reject 冲突', 409)
+    return new HelmError('conversation_idle', 'conversation idle and whenIdle=reject conflict', 409)
   }
   return error
 }
@@ -458,7 +458,7 @@ export function entryModelText(entry: { model?: ReadonlyArray<{ content?: unknow
     .join('\n')
 }
 
-/** entry.model 消息数组 -> assistant 文本块拼接（waitForInput 提取回答用）。 */
+/** entry.model message array -> assistant text chunk concatenate (waitForInput extract answer use). */
 export function assistantTextOfModel(model: unknown[] | undefined): string {
   if (model === undefined) return ''
   const out: string[] = []
@@ -473,20 +473,20 @@ export function assistantTextOfModel(model: unknown[] | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// rewind 区间（原地覆盖重发契约）
+// rewind zone between (original ground override heavy contract)
 // ---------------------------------------------------------------------------
 
-/** helm.rewind 截断标记声明的覆盖区间（闭区间 [from, through]）。
+/** helm.rewind truncate mark record declaration override zone between (closed zone between [from, through]).
  *
- * throughEntryId 是新契约：覆盖区间内最大的旧条目 ID，新输入条目 ID 必然
- * 更大、绝不会被自家区间误删。 */
+ * throughEntryId is new contract: override zone between inside most large old item ID, new input item ID must however
+ * more large, never will by self household zone between mistakenly delete. */
 export interface RewindInterval {
   from: number
   through: number
   marker: number
 }
 
-/** 解析一条条目的 rewind 区间；非 rewind 标记或载荷非法返回 undefined。 */
+/** parse a purpose rewind zone between; non- rewind mark record or payload illegal return undefined. */
 export function rewindIntervalOf(entry: { id: number | string; kind: string; data?: unknown }): RewindInterval | undefined {
   if (entry.kind !== 'helm.rewind') return undefined
   const data = entry.data as { fromEntryId?: unknown; throughEntryId?: unknown } | undefined
@@ -495,17 +495,17 @@ export function rewindIntervalOf(entry: { id: number | string; kind: string; dat
   const marker = Number(entry.id)
   const through = Number(data?.throughEntryId)
   if (!Number.isSafeInteger(marker) || !Number.isSafeInteger(through) || through < from || through >= marker) {
-    throw new HelmError('invalid_rewind_entry', `历史覆盖标记 ${entry.id} 的区间无效`, 500)
+    throw new HelmError('invalid_rewind_entry', `history override mark record ${entry.id} zone between invalid`, 500)
   }
   return { from, through, marker }
 }
 
-/** 条目是否被任一 rewind 区间覆盖（详情投影 / FTS 重建 / lastAssistant 清理共用）。 */
+/** item is otherwise by any one rewind zone between override (detail situation throw shadow / FTS rebuild / lastAssistant clean up shared use). */
 export function coveredByRewind(entryId: number, intervals: ReadonlyArray<RewindInterval>): boolean {
   return intervals.some((cut) => entryId >= cut.from && entryId <= cut.through)
 }
 
-/** 编辑目标限定：仅允许覆盖人类输入条目（agent/trigger 注入与控制条目拒绝）。 */
+/** edit target limit set: only allows override person class input item (agent/trigger inject and control item reject). */
 export function assertEditableHumanInput(
   entry: { kind: string; data?: unknown },
   conversationId: number,
@@ -515,7 +515,7 @@ export function assertEditableHumanInput(
   if (entry.kind !== 'helm.input') {
     throw new HelmError(
       'entry_not_editable',
-      `仅支持编辑人类输入条目（条目 ${entryId} kind=${entry.kind}）`,
+      `only support edit person class input item (item ${entryId} kind=${entry.kind})`,
       400,
       { conversationId, entryId, kind: entry.kind },
     )
@@ -524,7 +524,7 @@ export function assertEditableHumanInput(
   if (origin !== 'human') {
     throw new HelmError(
       'entry_not_editable',
-      `条目 ${entryId} 来源为 ${String(origin)}，仅人类输入可原地覆盖重发`,
+      `item ${entryId} source is ${String(origin)}, only person class input can original ground override heavy`,
       409,
       { conversationId, entryId, origin: String(origin) },
     )
@@ -533,21 +533,21 @@ export function assertEditableHumanInput(
 
 export type { ToolExecutionResult }
 
-/** models-store.json 启动损坏检测（open 阶段；语义同 ModelRegistry 内同名逻辑）。 */
+/** models-store.json start corrupt detect (open phase; semantics same ModelRegistry inside same name logic). */
 export async function assertModelsStoreHealthyAtBoot(models: Models): Promise<void> {
   const result = await models.refresh({ allowNetwork: false })
   for (const [, err] of result.errors) {
     if (err instanceof HelmError && err.code === 'models_store_corrupted') {
       throw new HelmError(
         'models_store_corrupted',
-        `models-store.json 损坏（读取时发现）：${err.message}`,
+        `models-store.json corrupt (read when discover):${err.message}`,
         500,
       )
     }
   }
 }
 
-/** 文本补全底层实现 helper。 */
+/** text completion underlying implement helper. */
 export async function completeConversationTextHelper(
   deps: {
     store: HelmStore
@@ -566,19 +566,19 @@ export async function completeConversationTextHelper(
   input.signal?.throwIfAborted()
   const meta = deps.store.getConv(input.conversationId)
   if (meta === undefined) {
-    throw new HelmError('not_found', `会话不存在：${input.conversationId}`, 404, { conversationId: input.conversationId })
+    throw new HelmError('not_found', `conversation missing:${input.conversationId}`, 404, { conversationId: input.conversationId })
   }
   const effective = await deps.conversations.resolveEffectiveModel(meta.modelOverride, meta.profileId)
   if (effective === undefined || effective === '') {
-    throw new HelmError('model_not_configured', `会话 ${input.conversationId} 未解析出生效模型，无法执行文本补全`, 409, { conversationId: input.conversationId })
+    throw new HelmError('model_not_configured', `conversation ${input.conversationId} not parse out takes effect model, cannot execute text completion`, 409, { conversationId: input.conversationId })
   }
   const ref = requireModelRef(effective)
   const model = deps.modelsRegistry.models.getModel(ref.provider, ref.modelId)
   if (model === undefined) {
-    throw new HelmError('model_not_found', `生效模型 '${effective}' 不在当前模型集合中（可能已热重载移除）`, 409, { model: effective })
+    throw new HelmError('model_not_found', `takes effect model '${effective}' do not in when before model set in (may already hot reload remove)`, 409, { model: effective })
   }
   if (deps.modelsRegistry.isModelDisabled(ref.provider, ref.modelId)) {
-    throw new HelmError('model_disabled', `模型 ${ref.provider}/${ref.modelId} 已被禁用，无法执行文本补全`, 409, { model: effective })
+    throw new HelmError('model_disabled', `model ${ref.provider}/${ref.modelId} already by disable, cannot execute text completion`, 409, { model: effective })
   }
   input.signal?.throwIfAborted()
   const message = await deps.modelsRegistry.models.completeSimple(
@@ -602,7 +602,7 @@ export async function completeConversationTextHelper(
   if (message.stopReason !== 'stop') {
     throw new HelmError(
       'model_completion_unavailable',
-      `文本补全未成功结束（stopReason=${message.stopReason}${message.errorMessage !== undefined ? `：${deps.stash.redact(String(message.errorMessage)).slice(0, 200)}` : ''}），拒绝返回部分文本`,
+      `text completion not succeeded end (stopReason=${message.stopReason}${message.errorMessage !== undefined ? `:${deps.stash.redact(String(message.errorMessage)).slice(0, 200)}` : ''}), reject return part text`,
       502,
       { stopReason: message.stopReason },
     )
@@ -615,7 +615,7 @@ export async function completeConversationTextHelper(
 }
 
 /**
- * 校验 Profile ID 是否合法（公开接口校验，统一抛 400 validation_error）。
+ * validate Profile ID is otherwise legal (public interface validate, unify throw 400 validation_error).
  */
 export function assertProfileIdPublic(id: string): void {
   try {
@@ -623,7 +623,7 @@ export function assertProfileIdPublic(id: string): void {
   } catch (err) {
     throw new HelmError(
       'validation_error',
-      `Profile id 非法：${err instanceof Error ? err.message : String(err)}`,
+      `Profile id illegal:${err instanceof Error ? err.message : String(err)}`,
       400,
       { profileId: id },
     )
@@ -631,7 +631,7 @@ export function assertProfileIdPublic(id: string): void {
 }
 
 /**
- * 技能物理目录解析 Helper。
+ * skill thing directory parse Helper.
  */
 export function skillDirectoryHelper(dataDir: string, id: string): string {
   try {
@@ -639,7 +639,7 @@ export function skillDirectoryHelper(dataDir: string, id: string): string {
   } catch (err) {
     throw new HelmError(
       'validation_error',
-      `Skill id 非法：${err instanceof Error ? err.message : String(err)}`,
+      `Skill id illegal:${err instanceof Error ? err.message : String(err)}`,
       400,
       { skillId: id },
     )
@@ -648,7 +648,7 @@ export function skillDirectoryHelper(dataDir: string, id: string): string {
 }
 
 /**
- * Profile 物理目录解析 Helper。
+ * Profile thing directory parse Helper.
  */
 export function profileDirectoryHelper(dataDir: string, id: string): string {
   assertProfileIdPublic(id)

@@ -62,7 +62,7 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, co
         if (typeof exported !== 'function') {
           throw new PluginClientError(
             'client_export_not_component',
-            `插件 ${pluginId} 模块 ${clientRef.module} 导出 ${clientRef.export} 不是组件函数`,
+            `Plugin ${pluginId} module ${clientRef.module} export ${clientRef.export} is not a component function`,
             0,
           )
         }
@@ -85,7 +85,7 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, co
     return (
       <div className="callout" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
         <HelmIcon name="loader" size={13} className="spin-slow" />
-        <span>正在加载插件组件 {pluginId}...</span>
+        <span>Loading plugin component {pluginId}...</span>
       </div>
     )
   }
@@ -94,10 +94,10 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, co
       <div className="callout callout--error" role="alert">
         <HelmIcon name="alert-triangle" size={13} />
         <div>
-          <strong>插件组件加载失败（{pluginId}）</strong>
+          <strong>Failed to load plugin component ({pluginId})</strong>
           <p className="selectable">{client.message}</p>
           <button type="button" className="btn btn-sm" onClick={() => { setClient({ phase: 'loading' }); setRetry((value) => value + 1) }}>
-            重试加载
+            Retry loading
           </button>
         </div>
       </div>
@@ -106,7 +106,7 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, co
 
   const ctx = createPluginClientContext(port, pluginId, conversationId, composer)
   return (
-    <ViewBoundary label={label ?? '插件组件'}>
+    <ViewBoundary label={label ?? 'Plugin component'}>
       <PluginClientContext.Provider value={ctx}>
         <client.Component {...(slotProps ?? {})} />
       </PluginClientContext.Provider>
@@ -119,7 +119,7 @@ function MissingTrackError({ pluginId }: { pluginId: string }): ReactNode {
   return (
     <div className="callout callout--warning">
       <HelmIcon name="alert-triangle" size={13} />
-      <span>插件 {pluginId} 的该扩展点未声明 client 组件引用。</span>
+      <span>This extension point of plugin {pluginId} declares no client component reference.</span>
     </div>
   )
 }

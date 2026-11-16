@@ -1,23 +1,23 @@
 /**
- * 跨平台计算节点连接注册表：Hub 侧 /ws/node 的 WS+birpc 连接池。
+ * across platform compute node connect register table:Hub side /ws/node  WS+birpc connection pool.
  *
- * 安全语义（每条均有真实测试）：
- * - **fail-closed 鉴权**：未提供 authenticate 回调时拒绝一切注册（缺省
- *   拒绝，绝不缺省放行）；
- * - **原子发布**：连接对象（含 birpc 代理）完全就绪（鉴权通过 + rpc 绑定）
- *   后才登记并唤醒等待者——等待者绝不会拿到半成品/undefined；
- * - **心跳/输出绑定当前连接**：noteHeartbeat(nodeId, socket) 只刷新「该
- *   连接注册的 nodeId」；onEnvExecOutput 只接受已注册连接的事件——未注册
- *   连接不能保活别人的节点，也不能伪造/注入其他节点的输出；
- * - **输出按节点路由**：dispatch 按 nodeId 找该节点全部 env 实例的 sink
- *   （同节点多会话并发 env 互不串扰，跨节点事件直接丢弃）；
- * - **IPC 订阅按 (nodeId, subscribeId) 精确路由**：节点回调 onIpcEvent /
- *   onIpcClosed 只分发到对应订阅者，订阅者关闭即摘除；
- * - **替换/TTL/关闭都真正断开**：同 nodeId 新连接顶掉旧连接时关闭旧
- *   socket + $close 旧 rpc；心跳超时与 registry.close() 同样关闭 socket，
- *   不只删 Map（防半开连接继续发事件）；
- * - 鉴权期间 socket 已关闭 → 不发布幽灵连接；
- * - disconnect(nodeId)：API 删除身份时立即断开当前 ws+rpc。
+ * security semantics (each all has real test):
+ * - **fail-closed authentication**: not provide authenticate call back when reject everything register (default
+ *   reject, never default let through);
+ * - **atomic publish**: connect object (contains birpc proxy) fully ready (authentication via + rpc bind set)
+ *   after only then register and wake wait for - - wait for never will gets half into product/undefined;
+ * - **heartbeat/output bind set when before connect**:noteHeartbeat(nodeId, socket) only refresh the
+ *   connect register nodeId;onEnvExecOutput only accept registered connect event - - not registered
+ *   connect cannot keep-alive other person node, also cannot fabricate/inject other node output;
+ * - **output by node routing**:dispatch by nodeId find the node all env instance sink
+ *   (same node many conversation concurrency env mutual do not string disturb, across node event directly discard);
+ * - **IPC subscribe by (nodeId, subscribeId) precise routing**: node call back onIpcEvent /
+ *   onIpcClosed only dispatch to for should subscribe, subscribe close i.e. excerpt except;
+ * - **replace/TTL/close all truly disconnect**: same nodeId new connect top old on connect close old
+ *   socket + $close old rpc; heartbeat timeout and registry.close() same close socket,
+ *   do not only delete Map(guard against half open connect continue event);
+ * - authentication during socket already close → do not publish ghost connect;
+ * - disconnect(nodeId):API delete identity when immediately disconnect when before ws+rpc.
  */
 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
@@ -44,8 +44,8 @@ import {
   type UpgradeWaiterHandle,
 } from './upgrade-waiters.js'
 
-/* 升级等待器与错误类型已拆至 upgrade-waiters.ts、隧道登记已拆至 tunnel-table.ts；
- * 经本模块再导出保持 env 包公共出口（env/index.ts、fabric.ts）不变。 */
+/* upgrade wait for and error type already split until upgrade-waiters.ts, tunnel register already split until tunnel-table.ts;
+ * via this module again export keep env package public exports (env/index.ts,fabric.ts) do not change. */
 export {
   HelmUpgradeBusyError,
   HelmUpgradeTimeoutError,
@@ -53,25 +53,25 @@ export {
   type UpgradeWaiterHandle,
 } from './upgrade-waiters.js'
 
-/** 节点侧供 Hub 调用的函数集（env RPC 全集 + 连接控制）。 */
+/** node side supply Hub invoke function collection (env RPC all collection + connect control). */
 export type NodeSideFunctions = NodeEnvRpcFunctions & {
   register(input: NodeRegisterInput): Promise<{ ok: boolean; heartbeatMs: number; reason?: string }>
   heartbeat(nodeId: string, input?: NodeHeartbeatInput): Promise<boolean>
 }
 
-/** 非负有限数值校验（NaN/Infinity/负数/非数值一律非法）。 */
+/** non- negative finite count value validate (NaN/Infinity/negative number/non- count value one rule illegal). */
 const isNonNegativeFinite = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0
 
-/** 有限数值校验（允许负值，loadAvg 理论非负但按「有限数」契约校验）。 */
+/** finite count value validate (allows negative value,loadAvg argument non- negative but by finite count contract validate). */
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value)
 
 /**
- * 边界校验：外部节点上报的健康快照在进入注册表前过滤。
- * 必填字段（collectedAt / uptimeSec / loadAvg / memFreeBytes / memTotalBytes）
- * 任一非法即整体丢弃（返回 undefined，不抛异常、不信任未校验的脏字段）；
- * 可选磁盘字段非法时仅忽略该字段。
+ * boundary validate: external node on report health snapshot in enter register table before filter.
+ * required field (collectedAt / uptimeSec / loadAvg / memFreeBytes / memTotalBytes)
+ * any one illegal i.e. whole discard (return undefined, do not throw exception, do not trust not validate dirty field);
+ * optional disk field illegal when only ignore the field.
  */
 export function sanitizeNodeHealth(raw: unknown): NodeHealthSnapshot | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
@@ -102,24 +102,24 @@ export function sanitizeNodeHealth(raw: unknown): NodeHealthSnapshot | undefined
 
 export interface NodeConnection {
   nodeId: string
-  /** 调用节点侧函数的代理（env RPC + register/heartbeat）。 */
+  /** invoke node side function proxy (env RPC + register/heartbeat). */
   rpc: BirpcReturn<NodeSideFunctions, HubConnectionLocal>
   socket: WsSocket
   connectedAt: number
   lastSeenAt: number
   hostname: string
   platform: string
-  /** 节点上报的软件版本（非法/未提供时不保存）。 */
+  /** node on report software version (illegal/not provide when do not save). */
   version?: string
-  /** 升级候选携带的尝试 ID（心跳 commit 按它对账）。 */
+  /** upgrade choose carry attempt ID(heartbeat commit by it for account). */
   upgradeAttemptId?: string
-  /** 节点端配置的 Hub 地址（远端受管子进程回连用）。 */
+  /** node end config Hub address (remote managed child process back connect use). */
   hubUrl?: string
-  /** 最近一次注册或心跳捎带的健康快照（边界校验后的可信数据）。 */
+  /** most near once register or heartbeat incidentally health snapshot (boundary validate after can message data). */
   health?: NodeHealthSnapshot
 }
 
-/** Hub 侧本地函数（每连接一份，绑定该连接的注册身份）。 */
+/** Hub side local function (each connect a, bind set the connect register identity). */
 export interface HubConnectionLocal {
   onEnvExecOutput(event: EnvExecOutputEvent): void
   onIpcEvent(event: NodeIpcEvent): void
@@ -129,18 +129,18 @@ export interface HubConnectionLocal {
 export interface RegisterOutcome {
   accepted: boolean
   reason?: string
-  /** 期望的心跳间隔（毫秒）。 */
+  /** expectation heartbeat interval (milli second). */
   heartbeatMs?: number
 }
 
 export interface NodeRegistryOptions {
-  /** 心跳超时（毫秒）判离线；缺省 45s。 */
+  /** heartbeat timeout (milli second) judge offline; default 45s. */
   heartbeatTimeoutMs?: number
-  /** register 应答给节点的心跳间隔；缺省 15s。 */
+  /** register reply to node heartbeat interval; default 15s. */
   heartbeatIntervalMs?: number
   /**
-   * 节点 token 校验（sha256(wholeToken) 比对等；由外部签发表提供）。
-   * **缺省拒绝一切注册（fail-closed）**。
+   * node token validate (sha256(wholeToken) than for etc.; by external sign table provide).
+   * **default reject everything register (fail-closed)**.
    */
   authenticate: (nodeId: string, token: string) => boolean | Promise<boolean>
 }
@@ -151,10 +151,10 @@ interface Waiter {
   cancelled: () => void
 }
 
-/* 隧道登记（PendingTunnel/ActiveTunnel）与升级等待器（UpgradeWaiter、
- * UpgradeWaiterHandle）的类型与实现分别拆至 tunnel-table.ts / upgrade-waiters.ts。 */
+/* tunnel register (PendingTunnel/ActiveTunnel) and upgrade wait for (UpgradeWaiter,
+ * UpgradeWaiterHandle) type and implement respectively split until tunnel-table.ts / upgrade-waiters.ts. */
 
-/** IPC 订阅回调集。 */
+/** IPC subscribe call back collection. */
 export interface IpcSink {
   onEvent: (line: string) => void
   onClosed: (error?: string) => void
@@ -166,14 +166,14 @@ const safeEqual = (a: string, b: string): boolean => {
   return ba.length === bb.length && timingSafeEqual(ba, bb)
 }
 
-/** 隧道目标边界校验：port 1..65535 安全整数；host 非空、≤255 字符、无控制字符/首尾空白（非法即 HelmError validation_error，不静默改写）。 */
+/** tunnel target boundary validate:port 1..65535 security integer;host non-empty,≤255 character, without control character/first tail whitespace (illegal i.e. HelmError validation_error, not silently change write). */
 export function normalizeTunnelTarget(target: NodeTunnelTarget): { host: string | undefined; port: number } {
   if (target === null || typeof target !== 'object') {
-    throw new HelmError('validation_error', '隧道目标需为 { host?, port } 对象', 400)
+    throw new HelmError('validation_error', 'tunnel target must be { host?, port } object', 400)
   }
   const { host, port } = target as Partial<NodeTunnelTarget>
   if (typeof port !== 'number' || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
-    throw new HelmError('validation_error', '隧道目标 port 需为 1..65535 的安全整数', 400, { port })
+    throw new HelmError('validation_error', 'tunnel target port must be 1..65535 security integer', 400, { port })
   }
   if (host === undefined) return { host: undefined, port }
   if (
@@ -181,20 +181,20 @@ export function normalizeTunnelTarget(target: NodeTunnelTarget): { host: string 
     host.length === 0 ||
     host.length > 255 ||
     host.trim() !== host ||
-    // 控制字符与任何空白（含内部空格/Tab）一律拒绝：主机名不允许空白。
+    // control character and any whitespace (contains internal space/Tab) one rule reject: host name disallows whitespace.
     /\s/.test(host) ||
-    // 控制字符（含 NUL）一律拒绝。
+    // control character (contains NUL) one rule reject.
     [...host].some((ch) => {
       const code = ch.charCodeAt(0)
       return code < 0x20 || code === 0x7f
     })
   ) {
-    throw new HelmError('validation_error', '隧道目标 host 需为非空、无空白/控制字符的字符串（≤255 字符）', 400, { host })
+    throw new HelmError('validation_error', 'tunnel target host must be non-empty, without whitespace/control character string (≤255 character)', 400, { host })
   }
   return { host, port }
 }
 
-/** timing-safe 令牌校验回调（签发表存 sha256(wholeToken) 十六进制）。 */
+/** timing-safe token validate call back (sign table store sha256(wholeToken) ten six enter system). */
 export function tokenAuthenticator(
   sha256HexOf: (nodeId: string) => string | undefined,
 ): (nodeId: string, token: string) => boolean {
@@ -216,15 +216,15 @@ export class NodeRegistry {
   readonly #heartbeatTimeoutMs: number
   readonly #authenticate: (nodeId: string, token: string) => boolean | Promise<boolean>
   readonly #nodeChangedListeners = new Set<(nodeId: string, online: boolean) => void>()
-  /** 每节点的输出 sink 列表（同节点多 env 实例）。 */
+  /** each node output sink list (same node many env instance). */
   readonly #outputSinks = new Map<string, Set<(event: EnvExecOutputEvent) => void>>()
-  /** IPC 订阅路由：nodeId -> subscribeId -> sink。 */
+  /** IPC subscribe routing:nodeId -> subscribeId -> sink. */
   readonly #ipcSinks = new Map<string, Map<string, IpcSink>>()
-  /** 节点撤销 epoch：每次 evict/disconnect/替换递增；在途注册醒后必须校验。 */
+  /** node undo epoch: each time evict/disconnect/replace pass increase; in-flight register wake after must validate. */
   readonly #nodeEpoch = new Map<string, number>()
-  /** 透传隧道登记表（pending/active 两张表与批量终结；见 tunnel-table.ts）。 */
+  /** pass-through tunnel register table (pending/active two spread table and batch amount final; see tunnel-table.ts). */
   readonly #tunnels = new TunnelTable()
-  /** 升级等待器集合（登记/commit 结算/关停清理；见 upgrade-waiters.ts）。 */
+  /** upgrade wait for set (register/commit compute/closure stop clean up; see upgrade-waiters.ts). */
   readonly #upgrades = new UpgradeWaiterSet()
   #sweeper: NodeJS.Timeout | undefined
   #closed = false
@@ -232,7 +232,7 @@ export class NodeRegistry {
   constructor(options: NodeRegistryOptions) {
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15_000
     this.#heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 45_000
-    // fail-closed：无鉴权回调 → 一律拒绝。
+    // fail-closed: without authentication call back → one rule reject.
     this.#authenticate = options.authenticate ?? (() => false)
   }
 
@@ -249,7 +249,7 @@ export class NodeRegistry {
     return conn === undefined ? undefined : { ...conn }
   }
 
-  /** 节点上下线回调（KernelRuntime 据此发布 node.changed SSE 事件）。 */
+  /** node on take offline call back (KernelRuntime based on this publish node.changed SSE event). */
   onNodeChanged(listener: (nodeId: string, online: boolean) => void): () => void {
     this.#nodeChangedListeners.add(listener)
     return () => {
@@ -257,7 +257,7 @@ export class NodeRegistry {
     }
   }
 
-  /** 注册输出 sink（按节点；fabric 为该节点每个 env 实例登记）。 */
+  /** register output sink(by node;fabric is the node each env instance register). */
   addOutputSink(nodeId: string, sink: (event: EnvExecOutputEvent) => void): void {
     let set = this.#outputSinks.get(nodeId)
     if (set === undefined) {
@@ -271,7 +271,7 @@ export class NodeRegistry {
     this.#outputSinks.get(nodeId)?.delete(sink)
   }
 
-  /** 注册 IPC 订阅回调（nodeId + subscribeId 精确路由）。 */
+  /** register IPC subscribe call back (nodeId + subscribeId precise routing). */
   addIpcSink(nodeId: string, subscribeId: string, sink: IpcSink): void {
     let map = this.#ipcSinks.get(nodeId)
     if (map === undefined) {
@@ -299,9 +299,9 @@ export class NodeRegistry {
   }
 
   /**
-   * 节点 WS 连接的注册入口（ws-gateway 在连接层调用；birpc 代理由网关
-   * 建立，经 attach 参数传入——代理的本地端即 hub 侧函数，输出/心跳/
-   * IPC 事件绑定本连接）。鉴权通过且代理绑定完成后**原子**发布。
+   * node WS connect register entry (ws-gateway in connect layer invoke;birpc proxy by gateway
+   * establish, via attach parameter pass - - proxy local end i.e. hub side function, output/heartbeat/
+   * IPC event bind set this connect). authentication via and proxy bind set after completion**atomic**publish.
    */
   async register(
     socket: WsSocket,
@@ -314,16 +314,16 @@ export class NodeRegistry {
       return { accepted: false, reason: 'invalid nodeId' }
     }
     if (typeof token !== 'string' || token.length === 0) return { accepted: false, reason: 'missing token' }
-    // 边界校验：version / upgradeAttemptId 要么缺省要么非空字符串；
-    // 非法类型/空串显式拒绝注册（不静默丢弃——那会破坏升级对账身份）。
+    // boundary validate:version / upgradeAttemptId want particle default want particle non-empty string;
+    // illegal type/empty string explicit reject register (not silently discard - - that will break upgrade for account identity).
     if (version !== undefined && (typeof version !== 'string' || version === '')) {
       return { accepted: false, reason: 'invalid version' }
     }
     if (upgradeAttemptId !== undefined && (typeof upgradeAttemptId !== 'string' || upgradeAttemptId === '')) {
       return { accepted: false, reason: 'invalid upgradeAttemptId' }
     }
-    // 撤销 epoch 快照：鉴权 await 期间 removeNode/轮换/顶替都会递增，
-    // 迟到的 resolve(true) 不再把被撤销的旧连接发布在线。
+    // undo epoch snapshot: authentication await during removeNode/round swap/top replace all will pass increase,
+    // late to resolve(true) no longer by undo old connect publish online.
     const epochAtStart = this.#epochOf(nodeId)
     let valid = false
     try {
@@ -332,16 +332,16 @@ export class NodeRegistry {
       valid = false
     }
     if (!valid) return { accepted: false, reason: 'invalid token' }
-    // 鉴权期间连接可能已断：不发布幽灵连接。
+    // authentication during connect may already assert: do not publish ghost connect.
     if (socket.readyState !== socket.OPEN) return { accepted: false, reason: 'connection closed during auth' }
     if (this.#closed) return { accepted: false, reason: 'registry closed' }
-    // 撤销红线：鉴权在途期间发生过 evict/disconnect（removeNode、令牌轮换、
-    // 新连接顶替）→ 本注册已失效，拒绝发布（旧连接绝不重上线）。
+    // undo hard rule: authentication in-flight during occur evict/disconnect(removeNode, token round swap,
+    // new connect top replace)→ this register already expires, reject publish (old connect never heavy enable).
     if (this.#epochOf(nodeId) !== epochAtStart) {
       return { accepted: false, reason: 'register superseded by revoke/replace' }
     }
 
-    // 建立代理：本地函数绑定本连接与发布代（未发布前/被撤销后事件全部丢弃）。
+    // establish proxy: local function bind set this connect and publish proxy (not publish before/by undo after event all discard).
     let publishEpoch = epochAtStart
     let published = false
     const isLive = (): boolean =>
@@ -349,7 +349,7 @@ export class NodeRegistry {
     let rpc!: BirpcReturn<NodeSideFunctions, HubConnectionLocal>
     rpc = attach({
       onEnvExecOutput: (event) => {
-        if (!isLive()) return // 撤销/顶替后的迟到输出不污染新代
+        if (!isLive()) return // undo/top replace after late to output do not pollute new proxy
         this.#dispatchOutput(nodeId, event)
       },
       onIpcEvent: (event) => {
@@ -362,8 +362,8 @@ export class NodeRegistry {
       },
     })
 
-    // 顶掉旧连接：真正关闭旧 socket + rpc（不只删 Map），并推进 epoch
-    //（旧代的迟到事件从此一律丢弃）。
+    // top old connect: truly close old socket + rpc(do not only delete Map), and push enter epoch
+    //(old proxy late to event from this one rule discard).
     const prev = this.#connections.get(nodeId)
     if (prev !== undefined) this.#evict(nodeId, prev, 'replaced')
     publishEpoch = this.#epochOf(nodeId)
@@ -389,18 +389,18 @@ export class NodeRegistry {
     socket.once('close', gone)
     socket.once('error', gone)
 
-    this.#wakeWaiters(nodeId) // 完全就绪后才唤醒
+    this.#wakeWaiters(nodeId) // fully ready after only then wake
     this.#notifyNodeChanged(nodeId, true)
     this.#ensureSweeper()
     return { accepted: true, heartbeatMs: this.#heartbeatIntervalMs }
   }
 
   /**
-   * 创建升级等待器：返回的 result 仅由匹配的心跳 upgradeCommit resolve；
-   * 超时 / cancel() / registry.close() reject（原 socket 传输断开不终结
-   * 等待器——升级本身就伴随候选顶替旧连接）。同节点并发升级等待显式拒绝。
-   * register 不 resolve 等待器——候选注册只携带 attemptId，真正的成功
-   * 确认只能来自候选自己的 commit 心跳。
+   * create upgrade wait for: return result only by match heartbeat upgradeCommit resolve;
+   * timeout / cancel() / registry.close() reject(original socket transfer disconnect do not final
+   * wait for - - upgrade itself then along with choose top replace old connect). same node concurrency upgrade wait for explicit reject.
+   * register do not resolve wait for - - choose register only carry attemptId, truly succeeded
+   * confirm only can from choose itself commit heartbeat.
    */
   beginUpgrade(
     nodeId: string,
@@ -410,14 +410,14 @@ export class NodeRegistry {
     return this.#upgrades.begin(nodeId, params)
   }
 
-  /** 测试内省：节点是否存在在途升级等待器。 */
+  /** test inside omit: node is otherwise store in in-flight upgrade wait for. */
   hasUpgradeWaiter(nodeId: string): boolean {
     return this.#upgrades.has(nodeId)
   }
 
-  // --- 节点透传隧道 ---------------------------------------------------------
+  // --- node pass-through tunnel ---------------------------------------------------------
 
-  /** 独立网关鉴权委托：复用注册鉴权（tokenAuthenticator / fail-closed）。 */
+  /** independent gateway authentication delegate: re- use register authentication (tokenAuthenticator / fail-closed). */
   async authenticateToken(nodeId: string, token: string): Promise<boolean> {
     if (this.#closed) return false
     try {
@@ -427,43 +427,43 @@ export class NodeRegistry {
     }
   }
 
-  /** 测试内省：在途/已建立隧道计数。 */
+  /** test inside omit: in-flight/already establish tunnel counter. */
   debugTunnelCounts(): { pending: number; active: number } {
     return this.#tunnels.counts()
   }
 
   /**
-   * 建立到远端节点目标 host:port 的字节管道（任意 TCP；host 缺省
-   * 127.0.0.1，由节点解析连接）：调用当前连接的 nodeTunnelOpen 后
-   * **立即**等待独立网关首帧（acceptTunnel），RPC 结果在后台对账——慢/断
-   * RPC 不会卡住超时与 abort。失败语义（均 HelmError，绝不回退 local）：
-   * - 节点离线 / 注册表关闭：node_offline（409）；
-   * - 节点未实现 nodeTunnelOpen：node_tunnel_not_supported（501）；
-   * - 网关回连超时（缺省 10s）：node_tunnel_timeout（504）；
-   * - 节点升级排空拒新：node_draining（503，节点在线但让位升级，
-   *   不得与 node_offline 混淆，也不得归并为 aborted）；
-   * - RPC 显式失败 / 断连：node_tunnel_connect_failed（502）；abort：499。
-   * 任何失败/取消路径都尽力通知节点 nodeTunnelAbort（catch observe，不等
-   * 网络回包才 reject），pending/active 登记同步清理，不悬挂。
+   * establish to remote node target host:port byte pipeline (any TCP;host default
+   * 127.0.0.1, by node parse connect): invoke when before connect nodeTunnelOpen after
+   * **immediately**wait for independent gateway first frame (acceptTunnel),RPC result in background for account - - slow/assert
+   * RPC will not card timeout and abort. failed semantics (all HelmError, never fall back local):
+   * - node offline / register table close:node_offline(409);
+   * - node not implemented nodeTunnelOpen:node_tunnel_not_supported(501);
+   * - gateway back connect timeout (default 10s):node_tunnel_timeout(504);
+   * - node upgrade arrange empty refuse new:node_draining(503, node online but let upgrade,
+   *   must not and node_offline confuse, also must not archive and is aborted);
+   * - RPC explicit failed / assert connect:node_tunnel_connect_failed(502);abort:499.
+   * any failed/cancel path all exhaust force notify node nodeTunnelAbort(catch observe, do not etc.
+   * network back package only then reject),pending/active register sync clean up, do not pending.
    */
   async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex> {
     const { host, port } = normalizeTunnelTarget(target)
     if (this.#closed) {
-      throw new HelmError('node_offline', `节点 ${nodeId} 离线，无法建立隧道`, 409, { nodeId })
+      throw new HelmError('node_offline', `node ${nodeId} offline, cannot establish tunnel`, 409, { nodeId })
     }
     const conn = this.#connections.get(nodeId)
     if (conn === undefined) {
-      throw new HelmError('node_offline', `节点 ${nodeId} 离线，无法建立隧道`, 409, { nodeId })
+      throw new HelmError('node_offline', `node ${nodeId} offline, cannot establish tunnel`, 409, { nodeId })
     }
     const open = conn.rpc.nodeTunnelOpen
     if (open === undefined) {
-      throw new HelmError('node_tunnel_not_supported', `节点 ${nodeId} 的守护进程不支持透传隧道`, 501, { nodeId })
+      throw new HelmError('node_tunnel_not_supported', `node ${nodeId} daemon unsupported pass-through tunnel`, 501, { nodeId })
     }
     const tunnelId = randomUUID()
     const epoch = this.#epochOf(nodeId)
     const timeoutMs = 10_000
 
-    /** 尽力通知节点取消就绪监听（必容错：断连/不支持时不阻塞本地清理）。 */
+    /** exhaust force notify node cancel ready listen (must fault tolerance: assert connect/unsupported when non-blocking local clean up). */
     const abortNode = (): void => {
       conn.rpc.nodeTunnelAbort?.(tunnelId).catch(() => undefined)
     }
@@ -485,11 +485,11 @@ export class NodeRegistry {
         if (pending.settled || duplex === undefined) return
         pending.settled = true
         clearTimeout(pending.timer)
-        // 摘 pending、登记 active 并挂 close 摘除钩子（见 tunnel-table.ts）。
+        // excerpt pending, register active and hang close excerpt except hook (see tunnel-table.ts).
         this.#tunnels.activate(tunnelId, nodeId, duplex)
         resolve(duplex)
       }
-      // 网关认证通过后交棒 Duplex（见 grantTunnel）：填入即结算。
+      // gateway recognize verify via after hand over fine Duplex(see grantTunnel): fill i.e. compute.
       pending.grant = (duplex) => {
         if (pending.settled) { duplex.destroy(); return }
         granted = duplex
@@ -503,13 +503,13 @@ export class NodeRegistry {
         reject(error)
       }
     })
-    // 防未处理 rejection 观察者缺位（调用方 await 前同步 reject 的路径）。
+    // guard against not handle rejection observer missing (caller await before sync reject path).
     pendingPromise.catch(() => undefined)
     pending.timer = setTimeout(() => {
       abortNode()
       pending.reject(new HelmError(
         'node_tunnel_timeout',
-        `节点 ${nodeId} 隧道 ${tunnelId} 未在 ${timeoutMs}ms 内回连`,
+        `node ${nodeId} tunnel ${tunnelId} not in ${timeoutMs}ms inside back connect`,
         504,
         { nodeId, tunnelId },
       ))
@@ -519,12 +519,12 @@ export class NodeRegistry {
 
     const onAbort = (): void => {
       abortNode()
-      pending.reject(new HelmError('aborted', '隧道建立已取消', 499, { nodeId, tunnelId }))
+      pending.reject(new HelmError('aborted', 'tunnel establish cancelled', 499, { nodeId, tunnelId }))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
 
-    // RPC 结果后台对账：不 await（慢/断 RPC 不卡超时与 abort）；成功只用于
-    // 提前定格失败（节点显式拒绝），rejection 亦 observe（不产生 unhandled）。
+    // RPC result background for account: do not await(slow/assert RPC do not card timeout and abort); succeeded only used to
+    // mention before set format failed (node explicit reject),rejection also observe(produces no unhandled).
     void open({ tunnelId, ...(host === undefined ? {} : { host }), port }).then(
       (result) => {
         if (pending.settled) return
@@ -533,7 +533,7 @@ export class NodeRegistry {
         abortNode()
         pending.reject(new HelmError(
           code,
-          `节点 ${nodeId} 建立隧道失败：${result.error.message}`,
+          `node ${nodeId} establish tunnel failed:${result.error.message}`,
           status,
           { nodeId, tunnelId, port },
         ))
@@ -543,7 +543,7 @@ export class NodeRegistry {
         abortNode()
         pending.reject(new HelmError(
           'node_tunnel_connect_failed',
-          `节点 ${nodeId} 隧道 RPC 失败：${error instanceof Error ? error.message : String(error)}`,
+          `node ${nodeId} tunnel RPC failed:${error instanceof Error ? error.message : String(error)}`,
           502,
           { nodeId, tunnelId, port },
         ))
@@ -558,10 +558,10 @@ export class NodeRegistry {
   }
 
   /**
-   * 独立网关首帧的消费入口（纯认证/匹配，不发任何帧——发帧归网关）：
-   * 认证 + 一次性匹配 + epoch 复查全通过返回 true，网关随后交棒 Duplex
-   *（grantTunnel）并自行发 ok 帧；任一不匹配返回 false（网关回 error 帧
-   * 后关闭并自行销毁 stream，不泄漏）。
+   * independent gateway first frame consume entry (pure recognize verify/match, do not any frame - - frame archive gateway):
+   * recognize verify + once match + epoch re- inspect all via return true, gateway then hand over fine Duplex
+   *(grantTunnel) and self row ok frame; any one does not match return false(gateway back error frame
+   * after close and self row destroy stream, without leaking).
    */
   async acceptTunnel(
     nodeId: string,
@@ -577,17 +577,17 @@ export class NodeRegistry {
     return true
   }
 
-  /** 网关交棒 Duplex：认证已过（acceptTunnel true 后调用）；pending 已定格
-   * 失败则销毁交来的流（不泄漏）。 */
+  /** gateway hand over fine Duplex: recognize verify already (acceptTunnel true after invoke);pending already set format
+   * failed then destroy hand over come stream (without leaking). */
   grantTunnel(tunnelId: string, duplex: Duplex): void {
     this.#tunnels.grant(tunnelId, duplex)
   }
 
-  /** 心跳：仅当 nodeId 与发送连接的注册身份一致才刷新；携带合法健康
-   * 快照时同步覆盖 conn.health（非法快照忽略、不影响 lastSeenAt 刷新；
-   * birpc 缺省尾参会序列化为 null，同样按无载荷处理）。携带 upgradeCommit
-   * 时 ACK 反映 commit 真实接受结果（非法/不匹配 → false）；普通心跳
-   * （无 commit）恒 true。 */
+  /** heartbeat: only when nodeId and send connect register identity consistent only then refresh; carry legal health
+   * snapshot when sync override conn.health(illegal snapshot ignore, does not affect lastSeenAt refresh;
+   * birpc default tail reference will serialization is null, same by without payload handle). carry upgradeCommit
+   * when ACK reverse reflect commit real accept result (illegal/does not match → false); ordinary heartbeat
+   * (without commit) constant true. */
   noteHeartbeat(nodeId: string, fromSocket: WsSocket, input?: NodeHeartbeatInput): boolean {
     const conn = this.#connections.get(nodeId)
     if (conn === undefined || conn.socket !== fromSocket) return false
@@ -602,22 +602,22 @@ export class NodeRegistry {
     return true
   }
 
-  /** 立即断开指定节点（API 删除身份时调用）。幂等。
+  /** immediately disconnect designate node (API delete identity when invoke). idempotent.
    *
-   * 撤销红线：即使当前无已发布连接，也递增撤销 epoch——鉴权在途的注册
-   * （await authenticate 未醒）在醒来后必须被拒，绝不把被撤销的旧连接
-   * 发布在线（removeNode/令牌轮换语义）。 */
+   * undo hard rule: even if when before without already publish connect, also pass increase undo epoch- - authentication in-flight register
+   * (await authenticate not wake) in wake come after must by refuse, never by undo old connect
+   * publish online (removeNode/token round swap semantics). */
   disconnect(nodeId: string): void {
     const conn = this.#connections.get(nodeId)
     if (conn !== undefined) {
       this.#evict(nodeId, conn, 'revoked')
       return
     }
-    // 无已发布连接：仍推进 epoch 使在途注册失效。
+    // without already publish connect: still push enter epoch make in-flight register expires.
     this.#nodeEpoch.set(nodeId, this.#epochOf(nodeId) + 1)
   }
 
-  /** disconnect 的别名（语义化：吊销身份）。 */
+  /** disconnect alias (semantics: hang deregister identity). */
   revoke(nodeId: string): void {
     this.disconnect(nodeId)
   }
@@ -629,12 +629,12 @@ export class NodeRegistry {
       try {
         sink(event)
       } catch {
-        // 单个 sink 故障不影响其他。
+        // single sink fault does not affect other.
       }
     }
   }
 
-  /** 当前撤销 epoch（缺省 0；evict/disconnect/替换递增）。 */
+  /** when before undo epoch(default 0;evict/disconnect/replace pass increase). */
   #epochOf(nodeId: string): number {
     return this.#nodeEpoch.get(nodeId) ?? 0
   }
@@ -644,7 +644,7 @@ export class NodeRegistry {
       try {
         listener(nodeId, online)
       } catch {
-        // 监听器故障不影响注册表自身。
+        // listener fault does not affect register table itself.
       }
     }
   }
@@ -652,24 +652,24 @@ export class NodeRegistry {
   #evict(nodeId: string, conn: NodeConnection, reason: string): void {
     if (this.#connections.get(nodeId) !== conn) return
     this.#connections.delete(nodeId)
-    // 升级等待器不在断开时清理：升级过程本身就伴随旧 socket 关闭、
-    // 候选新连接顶替；成功确认只能来自候选的 commit 心跳。等待器由
-    // cancel / 超时 / registry.close / 匹配 commit 终结，绝不因断开假终态。
-    // 撤销 epoch 递增：在途注册（鉴权 await 中）与本代迟到事件全部失效。
+    // upgrade wait for do not in on disconnect clean up: upgrade process itself then along with old socket close,
+    // choose new connect top replace; succeeded confirm only can from choose commit heartbeat. wait for by
+    // cancel / timeout / registry.close / match commit final, never because disconnect false terminal state.
+    // undo epoch pass increase: in-flight register (authentication await in) and this proxy late to event all expires.
     this.#nodeEpoch.set(nodeId, this.#epochOf(nodeId) + 1)
     try {
       conn.rpc.$close()
     } catch {
-      // 已关闭。
+      // already close.
     }
     if (conn.socket.readyState === conn.socket.OPEN || conn.socket.readyState === conn.socket.CONNECTING) {
       try {
         conn.socket.close(1000, reason)
       } catch {
-        // 忽略。
+        // ignore.
       }
     }
-    // 断开时终结该节点全部 IPC 订阅（连接已失，订阅不再有事件来源）。
+    // on disconnect final the node all IPC subscribe (connect already lose, subscribe no longer has event source).
     const ipcMap = this.#ipcSinks.get(nodeId)
     if (ipcMap !== undefined) {
       const sinks = [...ipcMap.values()]
@@ -678,22 +678,22 @@ export class NodeRegistry {
         try {
           sink.onClosed(`node ${nodeId} disconnected`)
         } catch {
-          // 订阅者回调故障不影响其他订阅者。
+          // subscribe call back fault does not affect other subscribe.
         }
       }
     }
-    // 断开时拒绝该节点全部在途隧道并销毁已建立隧道的 duplex：
-    // 隧道语义绑定当前连接代（epoch），换代即不可用，绝不悬挂。
+    // on disconnect reject the node all in-flight tunnel and destroy already establish tunnel duplex:
+    // tunnel semantics bind set when before connect proxy (epoch), swap proxy i.e. unavailable, never pending.
     this.#tunnels.finalize((owner) => owner === nodeId, {
       pending: (owner, tunnelId) => new HelmError(
         'node_offline',
-        `节点 ${owner} 已断开，隧道 ${tunnelId} 建立中止`,
+        `node ${owner} disconnected, tunnel ${tunnelId} establish abort`,
         409,
         { nodeId: owner, tunnelId },
       ),
       active: (owner, tunnelId) => new HelmError(
         'node_offline',
-        `节点 ${owner} 已断开，隧道 ${tunnelId} 关闭`,
+        `node ${owner} disconnected, tunnel ${tunnelId} close`,
         409,
         { nodeId: owner, tunnelId },
       ),
@@ -711,7 +711,7 @@ export class NodeRegistry {
     }
   }
 
-  /** 等待节点重新在线；context 取消时返回 undefined。 */
+  /** wait for node re- online;context cancel when return undefined. */
   async waitForNodeOnline(nodeId: string, context: Context): Promise<NodeEnvRpcFunctions | undefined> {
     if (this.#closed || context.abortSignal?.aborted) return undefined
     const existing = this.#connections.get(nodeId)
@@ -739,7 +739,7 @@ export class NodeRegistry {
     }
   }
 
-  /** 供 fabric 实现 NodeRpcResolver。 */
+  /** supply fabric implement NodeRpcResolver. */
   getNodeEnvRpc(nodeId: string): NodeEnvRpcFunctions | undefined {
     return this.#connections.get(nodeId)?.rpc
   }
@@ -757,24 +757,24 @@ export class NodeRegistry {
     this.#sweeper.unref()
   }
 
-  /** 关闭注册表：断开全部连接（关 socket + rpc）、唤醒等待者、清空 sink。 */
+  /** close register table: disconnect all connect (closure socket + rpc), wake wait for, empty sink. */
   async close(): Promise<void> {
     this.#closed = true
     if (this.#sweeper !== undefined) {
       clearInterval(this.#sweeper)
       this.#sweeper = undefined
     }
-    // 全部隧道终结（pending 拒绝；active 摘除登记并销毁 duplex，消费方感知断开）。
+    // all tunnel final (pending reject;active excerpt except register and destroy duplex, consumer aware disconnect).
     this.#tunnels.finalize(() => true, {
       pending: (_nodeId, tunnelId) => new HelmError(
         'node_offline',
-        `注册表已关闭，隧道 ${tunnelId} 建立中止`,
+        `register table already close, tunnel ${tunnelId} establish abort`,
         409,
         { tunnelId },
       ),
       active: (_nodeId, tunnelId) => new HelmError(
         'node_offline',
-        `注册表已关闭，隧道 ${tunnelId} 关闭`,
+        `register table already close, tunnel ${tunnelId} close`,
         409,
         { tunnelId },
       ),

@@ -1,10 +1,10 @@
 /**
- * 内核轻量诊断通道（DiagnosticSink）。
+ * kernel light amount diagnose channel (DiagnosticSink).
  *
- * 将内核内部非致命/异步告警与致命故障日志统一收拢到结构化事件，
- * 在分发前强制经过 SecretStash 脱敏（message 与 error 均脱敏），
- * 缺省输出至 console.error（stderr，不污染 CLI stdout）；单测与宿主可注入
- * onDiagnostic 捕获断言，不再四处散落裸 console.error。
+ * kernel internal non- lead to life/async alert and lead to life fault log unify gather to structure event,
+ * in dispatch before force through SecretStash redaction (message and error all redaction),
+ * default output until console.error(stderr, do not pollute CLI stdout); single test and host can inject
+ * onDiagnostic catch assertion, no longer four where scatter bare console.error.
  */
 
 export type KernelDiagnosticLevel = 'error' | 'warn' | 'info'
@@ -29,7 +29,7 @@ export interface KernelDiagnosticInput {
 
 export type KernelDiagnosticEmitter = (input: KernelDiagnosticInput) => void
 
-/** 安全格式化任意抛出值（兼容无原型对象等，绝不因格式化本身再抛异常）。 */
+/** security format any throw value (compatibility without prototype object etc., never because format itself again throw exception). */
 export function formatDiagnosticError(error: unknown): string {
   if (error instanceof Error) {
     const header = `${error.name}: ${error.message}`
@@ -56,8 +56,8 @@ export const defaultDiagnosticSink: KernelDiagnosticSink = (event) => {
 }
 
 /**
- * 组装脱敏后的诊断事件并投递给目标 sink（缺省走 defaultDiagnosticSink）。
- * 上报自身异常被就地隔离，绝不反噬调用方或阻断关停路径。
+ * group install redaction after diagnose event and delivery to target sink(default away defaultDiagnosticSink).
+ * on report itself exception by then ground isolated, never reverse devour caller or block assert closure stop path.
  */
 export function emitDiagnostic(
   sink: KernelDiagnosticSink | undefined,
@@ -75,11 +75,11 @@ export function emitDiagnostic(
   try {
     ;(sink ?? defaultDiagnosticSink)(event)
   } catch {
-    /* 诊断上报自身不得再抛 */
+    /* diagnose on report itself must not again throw */
   }
 }
 
-/** 构造绑定了固定 sink 与脱敏函数的诊断发射器。 */
+/** construct bind set fixed sink and redaction function diagnose shoot. */
 export function createDiagnosticEmitter(
   options: {
     sink?: KernelDiagnosticSink

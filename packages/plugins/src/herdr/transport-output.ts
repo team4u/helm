@@ -5,18 +5,18 @@ import type { HerdrNodeChannel, HerdrNodeEnv, HerdrTarget } from './contracts.js
 import { checkAborted, contextOf, HerdrTransportError } from './transport-shared.js'
 
 /**
- * `.helm/wf-out-*` 交接文件 IO 与跨平台路径安全边界（从 transport.ts 拆出，
- * 行为与拆分前逐行等价）：
- * - 文件名白名单 OUTPUT_FILE_PATTERN（拒绝 herdr_invalid_output_name）；
- * - 本机：cwd realpath + `.helm` 必须真实目录（非软链）且仍在真实 cwd 内；
- *   O_NOFOLLOW 打开收敛 TOCTOU（Windows 无 O_NOFOLLOW，退回读后 realpath 复核）；
- * - 远端：按 cwd 路径形状选 win32/posix 纯规则拼 `<cwd>/.helm`，经节点 env
- *   canonicalPath 校验，读后 canonical 复核仍锚定 realHelm 内；
- * - 目录缺失 = 404 herdr_output_missing（唯一可自愈边界）；remove 语义幂等；
- * - MAX_OUTPUT_BYTES 大小上限，超限显式失败，绝不静默截断。
+ * `.helm/wf-out-*` handoff file IO and cross-platform path safety boundary (split out of transport.ts,
+ * behavior line-for-line equivalent to before the split):
+ * - filename whitelist OUTPUT_FILE_PATTERN (rejects herdr_invalid_output_name);
+ * - local: cwd realpath + `.helm` must be a real directory (not a symlink) and still inside the real cwd;
+ *   O_NOFOLLOW opening converges TOCTOU (Windows has no O_NOFOLLOW; falls back to post-read realpath recheck);
+ * - remote: pick win32/posix pure rules by the cwd path shape to join `<cwd>/.helm`, validate via the node env's
+ *   canonicalPath, and after reading recheck the canonical path still anchors inside realHelm;
+ * - missing directory = 404 herdr_output_missing (the only self-healable boundary); remove semantics are idempotent;
+ * - MAX_OUTPUT_BYTES size cap; over the limit fails explicitly, never silently truncated.
  */
 
-/** 交接文件读取上限；超限显式失败，绝不静默截断充当成功。 */
+/** Handoff file read cap; over the limit fails explicitly, never silently truncated and passed off as success. */
 export const MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 export const OUTPUT_FILE_PATTERN = /^wf-out-[A-Za-z0-9_.-]{1,64}\.(json|md)$/
 
@@ -26,7 +26,7 @@ export function assertSafeOutputName(fileName: string, target: string): void {
   }
 }
 
-/** 本机输出路径：校验 cwd 真实存在、.helm 是真实目录（非软链）且在真实 cwd 内。 */
+/** Local output path: validate the cwd really exists, `.helm` is a real directory (not a symlink) and inside the real cwd. */
 async function resolveLocalOutputPath(cwd: string, fileName: string, target: string): Promise<string> {
   const fs = await import('node:fs/promises')
   const path = await import('node:path')
@@ -43,15 +43,15 @@ async function resolveLocalOutputPath(cwd: string, fileName: string, target: str
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ENOENT' || code === 'ENOTDIR') {
-      // 目录缺失 = 交接文件缺失：read 报 404、remove 幂等（一次自愈边界）。
-      throw new HelmError('herdr_output_missing', `交接目录不存在: ${helmDir}`, 404)
+      // Missing directory = missing handoff file: read reports 404, remove is idempotent (the one self-heal boundary).
+      throw new HelmError('herdr_output_missing', `handoff directory does not exist: ${helmDir}`, 404)
     }
     throw new HerdrTransportError('herdr_io', `failed to inspect ${helmDir}: ${code ?? String(err)}`, target, { cause: err })
   }
   if (helmStat.isSymbolicLink() || !helmStat.isDirectory()) {
     throw new HerdrTransportError('herdr_output_escaping', `.helm must be a real directory inside cwd`, target)
   }
-  // realpath 再验证：目录内不允许任何中间软链把最终路径移出 cwd。
+  // realpath then re-verify: no intermediate symlink inside the directory may move the final path out of the cwd.
   const realHelm = await fs.realpath(helmDir)
   if (realHelm !== helmDir) {
     throw new HerdrTransportError('herdr_output_escaping', `.helm resolves outside cwd`, target)
@@ -64,9 +64,9 @@ export async function readLocalOutput(cwd: string, fileName: string, signal: Abo
   const { dirname } = await import('node:path')
   checkAborted(signal, target)
   const path = await resolveLocalOutputPath(cwd, fileName, target)
-  // 以 O_NOFOLLOW 打开收敛 TOCTOU：lstat 与 readFile 分离时，窗口内文件可被
-  // 替换为符号链接越出 .helm；在打开时点拒绝 symlink 后从同一句柄 fstat+读
-  // （Windows 无 O_NOFOLLOW，退回读后 realpath 复核仍锚定 .helm 内）。
+  // Open with O_NOFOLLOW to converge TOCTOU: when lstat and readFile are separated, the file can be replaced
+  // by a symlink escaping .helm within the window; reject symlinks at open time, then fstat+read from the same
+  // handle (Windows has no O_NOFOLLOW; the post-read realpath recheck still anchors inside .helm).
   const noFollow = fs.constants.O_NOFOLLOW ?? 0
   let fh: Awaited<ReturnType<typeof fs.open>>
   try {
@@ -74,7 +74,7 @@ export async function readLocalOutput(cwd: string, fileName: string, signal: Abo
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ENOENT') {
-      throw new HelmError('herdr_output_missing', `交接文件不存在: ${path}`, 404)
+      throw new HelmError('herdr_output_missing', `handoff file does not exist: ${path}`, 404)
     }
     if (code === 'ELOOP') {
       throw new HerdrTransportError('herdr_output_escaping', `output path is a symlink: ${path}`, target)
@@ -112,7 +112,7 @@ export async function removeLocalOutput(cwd: string, fileName: string, signal: A
   try {
     path = await resolveLocalOutputPath(cwd, fileName, target)
   } catch (err) {
-    // 目录/文件缺失：remove 语义是幂等无操作（与插件一次自愈边界一致）。
+    // Missing directory/file: remove semantics are an idempotent no-op (consistent with the plugin's one self-heal boundary).
     if (err instanceof HelmError && err.code === 'herdr_output_missing') return
     throw err
   }
@@ -130,27 +130,27 @@ export async function removeLocalOutput(cwd: string, fileName: string, signal: A
 }
 
 /**
- * 目标路径形状对应的纯路径规则（不依赖 Hub 进程平台）：
- * Windows 形状（盘符或 UNC `\\server\share`）用 win32 规则，其余 POSIX。
+ * The pure path rules for the target path's shape (independent of the Hub process platform):
+ * Windows shape (drive letter or UNC `\\server\\share`) uses win32 rules; the rest use POSIX.
  */
 function pathRulesFor(path: string): typeof posix | typeof win32 {
   return isWindowsShapedPath(path) ? win32 : posix
 }
 
-/** Windows 路径形状：盘符（C:\ 或 C:/）或 UNC（\\server\share）。纯规则判断。 */
+/** Windows path shape: drive letter (C:\\ or C:/) or UNC (\\server\\share). Pure rule check. */
 export function isWindowsShapedPath(path: string): boolean {
   return /^([A-Za-z]:[\\/]|\\\\[^\\])/.test(path)
 }
 
-/** 路径是否为绝对路径（POSIX `/` 或 Windows 盘符/UNC；拒绝 `C:relative`）。纯规则。 */
+/** Whether a path is absolute (POSIX `/` or Windows drive/UNC; rejects `C:relative`). Pure rule. */
 export function isAbsoluteAnyPath(path: string): boolean {
   return isWindowsShapedPath(path) ? win32.isAbsolute(path) : posix.isAbsolute(path)
 }
 
 /**
- * 跨平台安全 containment：child 必须等于 root 或位于 root 之下（规范化比较，
- * 不多加目录分隔——root 为 `/` 时 `/foo` 合法包含，`//foo` 不额外产生）。
- * root 与 child 均为已 canonical 解析的路径（调用方保证）。
+ * Cross-platform safe containment: child must equal root or live under root (normalized comparison,
+ * no extra directory separators -- when root is `/`, `/foo` is legally contained, `//foo` yields nothing extra).
+ * Both root and child are already canonically resolved paths (guaranteed by the caller).
  */
 export function pathContains(root: string, child: string): boolean {
   if (root === child) return true
@@ -160,13 +160,13 @@ export function pathContains(root: string, child: string): boolean {
 }
 
 /**
- * 远端节点输出目录解析（与本地 resolveLocalOutputPath 同一安全边界）：
- * - cwd 依据自身路径形状选用 win32/posix 纯规则拼 `<cwd>/.helm`（Hub 的
- *   node:path.join 会按 Hub 平台拆 Windows 路径——Linux Hub 会把 `\` 当
- *   普通字符产生错误目录名，Windows Hub 会把 POSIX cwd 拆碎）；
- * - cwd 经 env.canonicalPath 校验真实可解析（不可达 = invalid_cwd）；
- * - `<realCwd>/.helm` 必须是真实目录（缺失 = 404 可自愈边界；symlink/非目录 = 逃逸拒绝）；
- * - canonical 后必须仍落在 realCwd 之内（pathContains，中间软链拦截）。
+ * Remote node output directory resolution (the same safety boundary as local resolveLocalOutputPath):
+ * - the cwd picks win32/posix pure rules by its own path shape to join `<cwd>/.helm` (the Hub's
+ *   node:path.join would split Windows paths per the Hub platform -- a Linux Hub treats `\\` as an
+ *   ordinary character producing a wrong directory name, a Windows Hub shreds a POSIX cwd);
+ * - the cwd is validated really resolvable via env.canonicalPath (unreachable = invalid_cwd);
+ * - `<realCwd>/.helm` must be a real directory (missing = the 404 self-heal boundary; symlink/non-directory = escape rejection);
+ * - after canonicalization it must still fall inside realCwd (pathContains; intermediate symlinks intercepted).
  */
 async function resolveNodeOutputDir(
   env: HerdrNodeEnv,
@@ -190,8 +190,8 @@ async function resolveNodeOutputDir(
   if (!helmInfo.ok) {
     const code = helmInfo.error.code
     if (code === 'not_found' || code === 'not_directory') {
-      // 目录缺失 = 交接文件缺失：read 报 404、remove 幂等（一次自愈边界）。
-      throw new HelmError('herdr_output_missing', `交接目录不存在: ${helmDir}`, 404)
+      // Missing directory = missing handoff file: read reports 404, remove is idempotent (the one self-heal boundary).
+      throw new HelmError('herdr_output_missing', `handoff directory does not exist: ${helmDir}`, 404)
     }
     throw new HerdrTransportError(
       'herdr_io',
@@ -229,7 +229,7 @@ export async function readNodeOutput(
   const info = await env.fileInfo(filePath, context)
   if (!info.ok) {
     if (info.error.code === 'not_found') {
-      throw new HelmError('herdr_output_missing', `交接文件不存在: ${filePath}`, 404)
+      throw new HelmError('herdr_output_missing', `handoff file does not exist: ${filePath}`, 404)
     }
     throw new HerdrTransportError('herdr_io', `failed to inspect output file: ${info.error.code}: ${info.error.message}`, targetLabel)
   }
@@ -243,9 +243,9 @@ export async function readNodeOutput(
   if (!content.ok) {
     throw new HerdrTransportError('herdr_io', `failed to read output file: ${content.error.code}: ${content.error.message}`, targetLabel)
   }
-  // 读后 canonical 复核（TOCTOU 收敛）：fileInfo(lstat) 与 readTextFile（跟随
-  // 软链）之间文件可被替换为符号链接越出 .helm；节点 env 无 O_NOFOLLOW 语义，
-  // 以 realpath 复核实际读到的路径仍锚定 realHelm 内（内容已读入但绝不返回）。
+  // Post-read canonical recheck (TOCTOU convergence): between fileInfo (lstat) and readTextFile (follows
+  // symlinks) the file can be replaced by a symlink escaping .helm; the node env has no O_NOFOLLOW semantics,
+  // so realpath rechecks that the actually read path still anchors inside realHelm (content already read but never returned).
   const canonical = await env.canonicalPath(filePath, context)
   if (!canonical.ok) {
     throw new HerdrTransportError('herdr_io', `failed to resolve ${filePath}: ${canonical.error.message}`, targetLabel)
@@ -273,14 +273,14 @@ export async function removeNodeOutput(
   try {
     realHelm = (await resolveNodeOutputDir(env, cwd, targetLabel, context)).realHelm
   } catch (err) {
-    // 目录缺失：remove 幂等无操作（与本地语义一致）。
+    // Missing directory: remove is an idempotent no-op (consistent with local semantics).
     if (err instanceof HelmError && err.code === 'herdr_output_missing') return
     throw err
   }
   const filePath = pathRulesFor(realHelm).join(realHelm, fileName)
   const info = await env.fileInfo(filePath, context)
   if (!info.ok) {
-    if (info.error.code === 'not_found') return // 文件缺失：幂等
+    if (info.error.code === 'not_found') return // missing file: idempotent
     throw new HerdrTransportError('herdr_io', `failed to inspect output file: ${info.error.code}: ${info.error.message}`, targetLabel)
   }
   if (info.value.kind !== 'file') {

@@ -204,7 +204,7 @@ test('工作流2: action() 经 PluginHost 动作总线共享 Schema 校验——
     const badNode = badSummary.nodes?.find((n) => n.kind === 'action')
     assert.ok(badNode, '应含 action 节点')
     assert.equal(badNode!.status, 'failed', '非法入参动作节点应显式 failed')
-    assert.ok(/校验失败|minLength/.test(badNode!.error ?? ''), `节点错误应指向 Schema 校验：${badNode!.error}`)
+    assert.ok(/reference validation failed|minLength|must NOT have fewer/.test(badNode!.error ?? ''), `action node error should identify Schema validation: ${badNode!.error}`)
     assert.deepEqual(env.echoCalls, ['wf-hello'], '非法输入不执行 handler（计数不增）')
 
     // 未知动作全限定 ID 同样折叠 null + 节点 failed
@@ -364,7 +364,7 @@ test('工作流4: HTTP workflows run/inspect/abort 与 SubagentWorkflow 工具�
     assert.equal(final.status, 'completed', `HTTP run 应完成：${JSON.stringify(final)}`)
     assert.equal(final.result, 42, 'args.x + 1 经真实 worker 计算为 42')
 
-    // abort 已完成 run：幂等成功（不误报）
+    // abort Done run：幂等成功（不误报）
     const abort = await fetch(`${base}/api/actions/builtin:workflow/abort`, {
       method: 'POST',
       headers: { ...auth, 'content-type': 'application/json' },

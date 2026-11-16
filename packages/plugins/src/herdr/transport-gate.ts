@@ -5,18 +5,18 @@ import type { HerdrNodeChannel, HerdrNodeEnv } from './contracts.js'
 import { checkAborted, HerdrTransportError } from './transport-shared.js'
 
 /**
- * Herdr Gate 命令执行，本机与远端同构（从 transport.ts 拆出，行为与拆分前
- * 逐行等价）：
- * - SDK NodeExecutionEnv.exec：跨平台 shell 选择与进程树终止由 SDK 承担；
- * - inheritEnv: false：只注入显式受管 env，宿主环境变量绝不泄漏进 gate 子进程；
- * - 流式累计超限（MAX_GATE_OUTPUT_BYTES）立即 abort 远端命令并显式失败；
- * - 超时 herdr_timeout / 外部 abort herdr_aborted 如实分型，不静默降级。
+ * Herdr Gate command execution, isomorphic for local and remote (split out of transport.ts,
+ * behavior line-for-line equivalent to before the split):
+ * - SDK NodeExecutionEnv.exec: cross-platform shell selection and process-tree termination are the SDK's job;
+ * - inheritEnv: false: only explicit managed env is injected; host environment variables never leak into the gate subprocess;
+ * - streaming accumulation over the limit (MAX_GATE_OUTPUT_BYTES) immediately aborts the remote command and fails explicitly;
+ * - timeout herdr_timeout / external abort herdr_aborted are typed honestly; no silent degradation.
  */
 
-/** Gate 输出保留上限；超限显式失败，绝不静默截断充当成功。 */
+/** Gate output retention cap; over the limit fails explicitly, never silently truncated and passed off as success. */
 export const MAX_GATE_OUTPUT_BYTES = 1024 * 1024
 
-/** Gate 超时（秒；NodeExecutionEnv timeout 单位）：600s 预算 + 收尾余量。 */
+/** Gate timeout (seconds; the NodeExecutionEnv timeout unit): a 600s budget + teardown headroom. */
 const GATE_TIMEOUT_SECONDS = 620
 
 function validEnvEntries(env: Record<string, string> | undefined): [string, string][] {
@@ -24,11 +24,11 @@ function validEnvEntries(env: Record<string, string> | undefined): [string, stri
 }
 
 /**
- * Gate 执行核心（本机与远端同构）：SDK `NodeExecutionEnv.exec`——跨平台 shell
- * 选择（Unix /bin/bash→sh；Windows Git Bash/WSL 探测）与进程树终止
- * （Unix 进程组 SIGKILL；Windows taskkill /F /T）由 SDK 承担。
- * `inheritEnv: false`：只注入显式受管 env（宿主 HELM_TOKEN 等绝不泄漏进
- * gate 子进程；token 只能经显式 env 提供）。流式累计超限即取消并显式失败。
+ * Gate execution core (isomorphic local & remote): SDK `NodeExecutionEnv.exec` -- cross-platform shell
+ * selection (Unix /bin/bash->sh; Windows Git Bash/WSL probing) and process-tree termination
+ * (Unix process-group SIGKILL; Windows taskkill /F /T) are the SDK's job.
+ * `inheritEnv: false`: only the explicit managed env is injected (host HELM_TOKEN etc. never leak into
+ * the gate subprocess; a token can only be provided via explicit env). Streaming over the limit cancels and fails explicitly.
  */
 async function execGate(
   env: HerdrNodeEnv,
@@ -57,7 +57,7 @@ async function execGate(
           total += Buffer.byteLength(text, 'utf8')
           if (total > MAX_GATE_OUTPUT_BYTES) {
             overflow = true
-            controller.abort() // 立即取消远端命令，不先聚合无限输出
+            controller.abort() // cancel the remote command immediately; do not aggregate unbounded output first
             return
           }
           chunks.push(text)
@@ -84,7 +84,7 @@ async function execGate(
   }
 }
 
-/** 本机 Gate：NodeExecutionEnv（真实本机环境）+ 显式受管 env。 */
+/** Local Gate: NodeExecutionEnv (the real local environment) + explicit managed env. */
 export async function runLocalGate(
   command: string,
   cwd: string,
@@ -100,7 +100,7 @@ export async function runLocalGate(
   return execGate(localEnv, command, cwd, signal, target, sanitized, redact)
 }
 
-/** 远端 Gate：经节点 env.exec 在目标节点执行（同一安全边界）。 */
+/** Remote Gate: executed on the target node via the node env.exec (the same safety boundary). */
 export async function runNodeGate(
   nodeChannel: HerdrNodeChannel,
   nodeId: string,

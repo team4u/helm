@@ -1,42 +1,42 @@
 /**
- * 插件数据目录名映射专项测试（Windows 兼容的红线）。
+ * plugin data directory name mapping dedicated items test (Windows compatibility hard rule).
  *
- * 背景：内置插件 id 带 `builtin:` 前缀，直接把 id 当目录名会让 Windows 把
- * `builtin:profile` 解释成 NTFS 交替数据流（mkdir 必 ENOENT），插件注册即崩。
- * 该映射是唯一权威点，务必锁死「目录名不含非法字符」与「外部插件 id 原样」两条不变量。
+ * background: built-in plugin id carries `builtin:` prefix, directly id when directory name will let Windows 
+ * `builtin:profile` explain into NTFS hand over replace data stream (mkdir must ENOENT), plugin register i.e. crash.
+ * the mapping is unique right threat point, must lock die directory name excludes illegal character and external plugin id original two invariant.
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test from 'node:test'
 import { strict as assert } from 'node:assert'
 
 import { isBuiltinPluginDataDirName, pluginDataDirName } from '../src/plugins/plugin-dir-name.js'
 
-test('内置插件 id 的数据目录名不含 Windows 保留字符', { timeout: 60_000 }, () => {
+test('built-in plugin id data directory name excludes Windows keep character', { timeout: 60_000 }, () => {
   assert.equal(pluginDataDirName('builtin:profile'), 'builtin%3Aprofile')
   assert.equal(pluginDataDirName('builtin:workflow'), 'builtin%3Aworkflow')
-  // 目录名不得含 : / \ 等非法字符（Windows 文件名红线）
+  // directory name must not contains : / \ etc. illegal character (Windows filename hard rule)
   for (const id of ['builtin:profile', 'builtin:herdr', 'builtin:json-render']) {
-    assert.doesNotMatch(pluginDataDirName(id), /[:/\\*?"<>|]/, `${id} 的目录名含非法字符`)
+    assert.doesNotMatch(pluginDataDirName(id), /[:/\\*?"<>|]/, `${id} directory name contains illegal character`)
   }
-  // 映射必须单射：不同 id 不得落到同一目录
+  // mapping must single shoot: different id must not to the same directory
   const names = new Set(['builtin:profile', 'builtin:workflow', 'builtin:memory'].map(pluginDataDirName))
   assert.equal(names.size, 3)
 })
 
-test('外部插件 id 无冒号时原样返回（源目录即 ctx.dataDir 的既有约定）', { timeout: 60_000 }, () => {
+test('external plugin id without smoke number when original return (source directory i.e. ctx.dataDir since has convention)', { timeout: 60_000 }, () => {
   for (const id of ['demo-external', 'my.plugin-1', 'Some_Plugin']) {
     assert.equal(pluginDataDirName(id), id)
   }
 })
 
-test('任何含冒号的 id 都不得直接落盘（Windows 红线的普遍情形）', { timeout: 60_000 }, () => {
+test('any contains smoke number id all must not directly (Windows hard rule general iterate case)', { timeout: 60_000 }, () => {
   for (const id of ['test:probe', 'remote:stub-node', 'builtin:herdr']) {
-    assert.doesNotMatch(pluginDataDirName(id), /:/, `${id} 的目录名仍含冒号`)
+    assert.doesNotMatch(pluginDataDirName(id), /:/, `${id} directory name still contains smoke number`)
   }
 })
 
-test('内置数据目录判定覆盖直接与转义两种形态', { timeout: 60_000 }, () => {
+test('inside placement data directory decide override directly and escaping two kinds of form', { timeout: 60_000 }, () => {
   assert.equal(isBuiltinPluginDataDirName('builtin:memory'), true)
   assert.equal(isBuiltinPluginDataDirName('builtin%3Amemory'), true)
   assert.equal(isBuiltinPluginDataDirName('demo-external'), false)

@@ -1,9 +1,9 @@
 /**
- * shell 定位与进程树管理（local-env 子模块）：语义与 pi coding-agent 的
- * shell.ts 保持同步（旧版 WSL bash 启动器经 stdin 传输命令）、与
- * pi-durable NodeExecutionEnv 的进程终止/退出语义对齐——契约测试
- * （test/node-local-env-contract.test.ts）钉住 shell 探测结果、
- * 128+信号编号退出码与超时文案格式。
+ * shell locate and process tree manage (local-env sub- module): semantics and pi coding-agent 
+ * shell.ts keep sync (old edition WSL bash start via stdin transfer command), and
+ * pi-durable NodeExecutionEnv process terminate/exit semantics align - - contract test
+ * (test/node-local-env-contract.test.ts) pin shell probe result,
+ * 128+signal edit number exit code and timeout text proposal format.
  */
 
 import { spawn } from 'node:child_process';
@@ -19,7 +19,7 @@ import {
 import { ExecutionError, err, ok, type Result } from './errors.js';
 
 // ---------------------------------------------------------------------------
-// exec 选项/结果类型
+// exec option/result type
 // ---------------------------------------------------------------------------
 
 export interface ShellSpillOptions {
@@ -42,7 +42,7 @@ export interface ShellExecOptions {
   cwd?: string;
   env?: Record<string, string>;
   inheritEnv?: boolean;
-  /** 超时时间（秒）。 */
+  /** on timeout between (second). */
   timeout?: number;
   onOutput?: (text: string, info: ShellOutputInfo) => void;
   spill?: ShellSpillOptions;
@@ -54,14 +54,14 @@ export interface ShellExecResult {
 }
 
 // ---------------------------------------------------------------------------
-// 内部常量
+// internal constant
 // ---------------------------------------------------------------------------
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
-/** 进程退出后留给 stdio 排空的宽限时间，防孙进程持有 fd 卡死。 */
+/** process exit after to stdio arrange empty wide limit time, guard against descendant process hold has fd card die. */
 const EXIT_STDIO_GRACE_MS = 100;
-/** 溢写文件写流的高水位。 */
+/** overflow write file write stream high watermark. */
 export const SPILL_HIGH_WATER_MARK = 1024 * 1024;
 
 export function resolveTimeoutMs(timeout: number | undefined): Result<undefined | number> {
@@ -79,7 +79,7 @@ export function resolveTimeoutMs(timeout: number | undefined): Result<undefined 
 }
 
 // ---------------------------------------------------------------------------
-// shell 定位（委托 @helm/env-io，含 Windows 宿主机 Git Bash 探测与 WSL 过滤）
+// shell locate (delegate @helm/env-io, contains Windows host machine Git Bash probe and WSL filter)
 // ---------------------------------------------------------------------------
 
 export interface ShellConfig {
@@ -88,7 +88,7 @@ export interface ShellConfig {
   commandTransport: 'stdin' | 'argv';
 }
 
-/** 与 pi coding-agent shell.ts 保持同步：旧版 WSL bash 启动器需经 stdin 传输命令。 */
+/** and pi coding-agent shell.ts keep sync: old edition WSL bash start must via stdin transfer command. */
 export function isLegacyWslBashPath(path: string): boolean {
   return envIsLegacyWslBashPath(path, process.env);
 }
@@ -109,20 +109,20 @@ export async function getShellConfig(
 }
 
 // ---------------------------------------------------------------------------
-// 子进程环境组装（受管身份变量剥除）
+// child process environment group install (managed identity variable strip except)
 // ---------------------------------------------------------------------------
 
 /**
- * 受管身份变量名（大小写不敏感）剥除清单：宿主 daemon 进程自身的这些
- * 环境变量绝不经继承进入子命令——HELM_TOKEN（节点凭据）、
- * HELM_EXECUTION_SCOPE（执行作用域标记，由 Hub 侧按调用注入最新值）。
- * 静默继承旧值会伪造执行身份/作用域，与内核 buildManagedEnv 的受管
- * 固定覆盖同向；shellEnv（daemon 提供的 HELM_HUB_URL/HELM_DATA_DIR）与
- * 调用方显式 env 不在剥除范围。
+ * managed identity variable name (large small write do not sensitive) strip except manifest: host daemon process itself these
+ * environment variable never via inherit enter sub- command - -HELM_TOKEN(node credentials),
+ * HELM_EXECUTION_SCOPE(execute effect domain mark record, by Hub side by invoke inject most new value).
+ * static default inherit old value will fabricate execute identity/effect domain, and kernel buildManagedEnv managed
+ * fixed override same to;shellEnv(daemon provide HELM_HUB_URL/HELM_DATA_DIR) and
+ * caller explicit env do not in strip except scope.
  */
 const MANAGED_INHERIT_STRIP_UPPER = new Set(['HELM_TOKEN', 'HELM_EXECUTION_SCOPE']);
 
-/** 受管身份变量判定（导出供 env-rpc-server 的继承基底复用；大小写不敏感）。 */
+/** managed identity variable decide (export supply env-rpc-server inherit base bottom re- use; large small write do not sensitive). */
 export function isManagedHelmEnvKey(key: string): boolean {
   return MANAGED_INHERIT_STRIP_UPPER.has(key.toUpperCase());
 }
@@ -153,7 +153,7 @@ export function getShellEnv(
 }
 
 // ---------------------------------------------------------------------------
-// 进程树终止与收尾
+// process tree terminate and wrap-up
 // ---------------------------------------------------------------------------
 
 export function killProcessTree(pid: number): void {
@@ -165,10 +165,10 @@ export function killProcessTree(pid: number): void {
         ['/F', '/T', '/PID', String(pid)],
         { stdio: 'ignore', detached: true, windowsHide: true },
       );
-      // spawn 失败会异步发 error：消费掉避免打崩 Node。
+      // spawn failed will async error: consume avoid hit crash Node.
       child.once('error', () => {});
     } catch {
-      // 忽略错误。
+      // ignore error.
     }
     return;
   }
@@ -178,7 +178,7 @@ export function killProcessTree(pid: number): void {
     try {
       process.kill(pid, 'SIGKILL');
     } catch {
-      // 进程已死。
+      // process already die.
     }
   }
 }
@@ -197,8 +197,8 @@ export interface ChildProcessLike {
 }
 
 /**
- * 等待子进程收尾：exit 后留 100ms stdio 排空宽限（孙进程持有 fd 时不卡死），
- * spill 流背压期间重新计时；close 或宽限到点即结算。
+ * wait for child process wrap-up:exit after 100ms stdio arrange empty wide limit (descendant process hold has fd when do not card die),
+ * spill stream back press during re- count when;close or wide limit to point i.e. compute.
  */
 export function waitForChildProcess(
   child: ChildProcessLike,

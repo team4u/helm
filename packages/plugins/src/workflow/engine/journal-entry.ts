@@ -1,21 +1,21 @@
 /**
- * journal-entry.ts — 账本行契约：行类型、行级形状校验与调用 key 指纹。
+ * journal-entry.ts -- ledger row contracts: row types, row-level shape validation and call key fingerprints.
  *
- * 自 journal.ts 拆出（语义逐行保持）：零文件 IO 的纯函数与类型模块——
- * - 行类型（JournalWriteInput / WorkflowJournalEntry 等）是引擎私有账本格式的
- *   唯一权威声明，行级形状校验器供 journal.ts 的 readJournal 逐行判定复用
- *   （hasValidScopeIdentity 同时是 replay / handler 边界的公共校验面）；
- * - agentJournalKey / actionJournalKey 计算 scope 内调用的重放指纹（canonical
- *   固定槽版本化规则见 agentJournalKey 头注释）。
- * 文件读写（readJournal / JournalWriter）与落盘脱敏仍归 journal.ts。
+ * Split out of journal.ts (semantics preserved line by line): a pure-function, zero-file-IO type module --
+ * - row types (JournalWriteInput / WorkflowJournalEntry etc.) are the single authoritative declaration
+ *   of the engine's private ledger format; the row-level shape validators are reused by journal.ts's
+ *   readJournal for row-by-row adjudication (hasValidScopeIdentity is also the shared validation face
+ *   at the replay / handler boundaries);
+ * - agentJournalKey / actionJournalKey compute the replay fingerprint of a call within its scope
+ *   (the canonical fixed-slot versioning rule is in the agentJournalKey header comment).
  */
 
 import { createHash } from 'node:crypto'
 
 /**
- * 追加写入的输入（seq/v 由写入器分配）。
- * 显式按 variant 声明而非 `Omit<Union, 'v'|'seq'>`——Omit 不分布，会把
- * agent/action 各自的合法字段（ok/text/result…）从联合上剥掉。
+ * Input for append writes (seq/v assigned by the writer).
+ * Declared explicitly per variant rather than `Omit<Union, 'v'|'seq'>` -- Omit does not distribute
+ * and would strip agent/action's own legal fields (ok/text/result...) off the union.
  */
 export interface JournalScope {
   scopePath: string
@@ -30,19 +30,19 @@ export type JournalWriteInput = JournalScope & (
       ok: boolean
       text?: string
       resumed?: true
-      /** 执行元数据快照（agent.withMeta 失败保留面）：落盘前经 redactJournalEntry 脱敏。 */
+      /** Execution metadata snapshot (agent.withMeta's preserved failure face): redacted via redactJournalEntry before flushing. */
       execution?: JournalAgentExecution
-      /** 门禁结果（gate 失败/超时回传）：落盘前经 redactJournalEntry 脱敏。 */
+      /** Gate result (returned on gate failure/timeout): redacted via redactJournalEntry before flushing. */
       gate?: JournalGateResult
-      /** 自动重试尝试序号；缺省表示第一次尝试。 */
+      /** Auto-retry attempt number; omitted means the first attempt. */
       attempt?: number
-      /** 本次 run 中所属调用的首个 index，用于审计和进度折叠。 */
+      /** The owning call's first index within this run, for auditing and progress folding. */
       invocationIndex?: number
       prompt?: string
-      /** 当前失败后由人工发起重试。自动重试按 maxAttempts 判断。 */
+      /** The current failure was retried manually. Auto retries follow maxAttempts. */
       retryKind?: 'manual'
       skipped?: boolean
-      /** 失败原因（已脱敏）。 */
+      /** The failure reason (already redacted). */
       error?: string
       timedOut?: boolean
       seq?: number
@@ -77,9 +77,9 @@ export type JournalWriteInput = JournalScope & (
 )
 
 /**
- * agent 行附带的执行元数据（AgentWithMetaResult['execution'] 的持久形状）。
- * worktree 为插件契约对象，账本只做 JSON 对象边界校验不解释业务字段；
- * 重放命中缓存时原样还原给调用方（值已脱敏，秘密不得依赖重放还原）。
+ * Execution metadata carried by agent rows (the persistent shape of AgentWithMetaResult['execution']).
+ * worktree is a plugin contract object; the ledger only does JSON-object boundary validation without
+ * interpreting business fields; on a replay cache hit it is restored to the caller as-is (values already redacted;
  */
 export interface JournalAgentExecution {
   nodeId?: string
@@ -89,7 +89,7 @@ export interface JournalAgentExecution {
   worktree?: Record<string, unknown>
 }
 
-/** agent 行附带的门禁结果（AgentGateResult 持久形状；exitCode/timedOut 为协议扩展预留槽）。 */
+/** Gate result carried by agent rows (AgentGateResult's persistent shape; exitCode/timedOut are protocol-extension reserved slots). */
 export interface JournalGateResult {
   ok: boolean
   output: string
@@ -98,16 +98,16 @@ export interface JournalGateResult {
 }
 
 /**
- * 引擎私有前缀重放账本行（`dataDir/artifacts/<convId>/workflow-<runId>.jsonl`，每行一个 JSON 对象）。
+ * The engine's private prefix-replay ledger row (`dataDir/artifacts/<convId>/workflow-<runId>.jsonl`, one JSON object per line).
  *
- * 这是编排引擎的恢复账本，**不是公开 API 数据形状**（原 protocol 契约迁回引擎）：
- * - `seq` 是落盘顺序号（引擎内单调递增）；`index` 是调用发起位次（agent 与 action 共享同一全序）。
- * - `scopePath` / `scopeCallIndex` 是必需的恢复身份；`key` 校验实际载荷，`attempt` 区分重试。
- * - agent 失败行断链后 live 重试（沿用上游语义）；action 已确认的成败行重放时直接复用，
- *   绝不重执行副作用；`action_started` 无对应终态行 = 进程在动作执行中崩溃，恢复必须
- *   显式报 `workflow_action_uncertain`，由人类确认后再决定，禁止自动重放。
+ * This is the orchestration engine's recovery ledger, **not a public API data shape** (the former
+ * protocol contract moved back into the engine):
+ * - `seq` is the flush-order number (monotonically increasing within the engine); `index` is the
+ *   call-initiation position (agent and action share the same total order).
+ * - `scopePath` / `scopeCallIndex` are required recovery identity; `key` validates the actual payload;
+ *   `attempt` distinguishes retries.
  *
- * HTTP / CLI 客户端不得依赖本类型的字段细节做任何重放决策；如需展示只应只读透传。
+ * - agent failure rows break the chain and live-retry (upstream semantics); confirmed action success/failure
  */
 export type WorkflowJournalEntry = JournalScope & (
   | {
@@ -118,11 +118,11 @@ export type WorkflowJournalEntry = JournalScope & (
       key: string
       ok: boolean
       text?: string
-      /** 该调用续接了既有子会话；恢复时校验实际续接语义。 */
+      /** The call resumed an existing sub-conversation; actual resume semantics are validated at recovery. */
       resumed?: true
-      /** 执行元数据快照（含 worktree；已脱敏）。maxAttempts 每次尝试各占独立 index 行。 */
+      /** Execution metadata snapshot (incl. worktree; redacted). Each maxAttempts attempt takes its own index row. */
       execution?: JournalAgentExecution
-      /** 门禁结果（已脱敏）。 */
+      /** Gate result (redacted). */
       gate?: JournalGateResult
       attempt?: number
       invocationIndex?: number
@@ -135,7 +135,7 @@ export type WorkflowJournalEntry = JournalScope & (
   | {
       v: 1
       seq: number
-      /** agent 派生意图与执行环境已解析（用于同 runId 重启原位 reattach）。 */
+      /** Agent spawn intent and execution coordinates resolved (for in-place reattach under the same runId across restarts). */
       type: 'agent_started'
       index: number
       key: string
@@ -147,29 +147,29 @@ export type WorkflowJournalEntry = JournalScope & (
   | {
       v: 1
       seq: number
-      /** 动作意图先于执行落盘（fsync 成功后才允许执行 handler）。 */
+      /** The action intent is flushed before execution (the handler may run only after fsync succeeds). */
       type: 'action_started'
       index: number
       key: string
-      /** 声明幂等的动作：中断/失败后允许安全重跑，恢复时不计入 uncertain。 */
+      /** Declared-idempotent action: safe to rerun after interruption/failure; not counted as uncertain at recovery. */
       idempotent?: true
     }
   | {
       v: 1
       seq: number
-      /** 动作终态行；ok 为 true 时 result 为动作输出，false 时 error 为失败原因。 */
+      /** Action terminal row; when ok is true, result is the action output; when false, error is the failure reason. */
       type: 'action'
       index: number
       key: string
       ok: boolean
       result?: unknown
       error?: string
-      /** 与 action_started 行的幂等声明一致；恢复判定见 readJournal。 */
+      /** Consistent with the action_started row's idempotency declaration; recovery adjudication in readJournal. */
       idempotent?: true
     }
 )
 
-/** agent 调用的 key 输入（决定该 agent 做什么的所有字段）。 */
+/** Key input of an agent call (all fields that determine what the agent does). */
 export interface AgentJournalKeyInput {
   prompt: string
   label?: string
@@ -177,39 +177,38 @@ export interface AgentJournalKeyInput {
   agentType?: string
   effort?: string
   isolation?: string
-  /** gate 验收命令：命令变化即不同调用，不得命中旧缓存。固定槽不与无标签变长槽互撞。 */
+  /** Gate acceptance command: a changed command is a different call and must not hit an old cache. The fixed slot never collides with unlabeled variable slots. */
   gate?: string
   resume?: string
-  /** agent({ schema }) 的序列化形式。 */
+  /** The serialized form of agent({ schema }). */
   schema?: string
   /**
-   * agent({ attachments }) 的产物 ID 列表（原样序列化，不去重不排序：不同
-   * ID 或次序变化都是不同调用）。未提供与空数组语义不同，不归一化。
-   */
+   * The artifact ID list of agent({ attachments }) (serialized as-is, no dedup or sort: different IDs or
+   * order changes are different calls). Not provided differs from an empty array; no normalization. */
   attachments?: string[]
-  /** 派工上限改变会改变子代理行为，不得重放原授权下的缓存结果。 */
+  /** A changed dispatch cap changes subagent behavior; cached results under the old grant must not replay. */
   maxSubagentDepth?: number
-  /** 机密授予变化会改变外部运行时环境，不得重放旧授权下的缓存结果。 */
+  /** A changed secret grant changes the external runtime environment; cached results under the old grant must not replay. */
   secretNames?: string[]
-  /** 工作目录（agent({ cwd })）：目录变化即不同执行上下文，不得命中旧缓存。 */
+  /** Working directory (agent({ cwd })): a changed directory is a different execution context and must not hit an old cache. */
   cwd?: string
 }
 
 /**
- * agent 调用 key 的 canonical 版本（v2 固定槽）。
+ * The canonical version of agent call keys (v2 fixed slots).
  *
- * v1（旧账本）在 resume 槽后用变长追加（schema 存在时多一个尾槽）。新增
- * attachments 若继续尾追加，会与 v1 的 schema 尾槽直接碰撞：v1 的
- * `[p,l,m,t,e,i,g,r,schema]` 与 v2 假想的 `[p,l,m,t,e,i,g,r,schema?,attachments?]`
- * 在 schema 有/无与 attachments 有/无的四象限里产生同 canonical 异语义的碰撞。
- * 因此 v2 一次性收敛为带版本标记的固定槽：attachments 恒占第 10 槽（null =
- * 未提供），schema 恒占第 11 槽（null = 未提供），任何后续新字段只能追加在
- * 版本号之后。secretNames 追加为第 13 槽（null = 未提供；无条件占位，不与
- * 任何旧尾槽碰撞）。v3 追加 cwd 为第 14 槽（同规则无条件占位）：cwd 改变
- * 执行上下文（可从该目录切子 Worktree），不得重放旧目录下的缓存结果。注意：
- * 无条件占位使每次版本变更后**全部调用 key 与旧账本失配**（含未携带新字段的
- * 调用）——开发阶段无迁移，旧账本安全降级为断链重跑，不存在「未携带新字段
- * 则 key 不变」的兼容承诺。
+ * v1 (old ledgers) appended variable-length slots after the resume slot (an extra trailing slot when schema
+ * was present). If attachments kept being appended at the tail, it would collide directly with v1's
+ * schema tail slot: v1's `[p,l,m,t,e,i,g,r,schema]` and a hypothetical v2
+ * `[p,l,m,t,e,i,g,r,schema?,attachments?]` would produce same-canonical-different-semantics collisions
+ * across the four quadrants of schema present/absent x attachments present/absent.
+ * Hence v2 converges in one step to versioned fixed slots: attachments always occupies slot 10 (null = not
+ * provided), schema always slot 11 (null = not provided); any later new field may only be appended after
+ * the version number. secretNames is appended as slot 13 (null = not provided; unconditionally slotted,
+ * colliding with no old tail slot). v3 appends cwd as slot 14 (same unconditional rule): a changed cwd
+ * changes the execution context (a child worktree can be spawned from that directory); cached results under
+ * the old directory must not replay. Note: unconditional slotting makes **all call keys mismatch old
+ * ledgers** after every version bump (including calls not carrying the new field) -- the dev period has no
  */
 export function agentJournalKey(input: AgentJournalKeyInput): string {
   const canonical = JSON.stringify([
@@ -231,7 +230,7 @@ export function agentJournalKey(input: AgentJournalKeyInput): string {
   return createHash('sha256').update(canonical).digest('hex').slice(0, 32)
 }
 
-/** action 调用的 key：全限定 actionId + 序列化 input。 */
+/** The key of an action call: fully-qualified actionId + serialized input. */
 export function actionJournalKey(actionId: string, serializedInput: string): string {
   return createHash('sha256').update(JSON.stringify(['action', actionId, serializedInput])).digest('hex').slice(0, 32)
 }

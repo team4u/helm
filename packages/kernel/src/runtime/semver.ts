@@ -1,9 +1,9 @@
 /**
- * 节点升级的版本与结果边界校验（独立小模块，零 SDK 依赖）。
+ * node upgrade version and result boundary validate (independent small module, zero SDK dependency).
  *
- * 从 runtime.ts 拆出：升级结果校验只依赖 @helm/protocol 的错误类型；
- * 严格 SemVer 的解析/比较只此一份（@helm/protocol/semver），本文件保留
- * kernel 侧错误信封（HelmError）并对外签名不变，便于 node-upgrade.test 直接引用。
+ * from runtime.ts split out: upgrade result validate only dependency @helm/protocol error type;
+ * strictly SemVer parse/compare only this a (@helm/protocol/semver), this file keep
+ * kernel side error message seal (HelmError) and for outside signature do not change, convenient at node-upgrade.test directly reference.
  */
 import {
   HelmError,
@@ -17,18 +17,18 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-/** 严格 SemVer 判定（不接受 v 前缀/宽松格式）。 */
+/** strictly SemVer decide (do not accept v prefix/loosely format). */
 export function isStrictSemVer(text: string): boolean {
   return isStrictSemverShared(text)
 }
 
-/** 规范化显式目标版本：trim 后允许去掉单个 v/V 前缀（Web 输入容错），再严格校验。 */
+/** specification explicit target version:trim after allows remove single v/V prefix (Web input fault tolerance), again strictly validate. */
 export function normalizeExplicitVersion(raw: string): string {
   const bare = stripSemverVPrefix(raw)
   if (!isStrictSemverShared(bare)) {
     throw new HelmError(
       'validation_error',
-      `targetVersion 需为严格 SemVer（可带单个 v 前缀，如 1.2.3 / v1.2.3），实得 "${raw}"`,
+      `targetVersion must be strictly SemVer(can carries single v prefix, such as 1.2.3 / v1.2.3), got "${raw}"`,
       400,
       { targetVersion: raw },
     )
@@ -36,21 +36,21 @@ export function normalizeExplicitVersion(raw: string): string {
   return bare
 }
 
-/** 比较两个严格 SemVer：-1 / 0 / 1；prerelease 排序按 SemVer 规范，非法输入是 kernel 内部错误（500）。 */
+/** compare two strictly SemVer:-1 / 0 / 1;prerelease sort by SemVer specification, invalid input is kernel internal error (500). */
 export function compareStrictSemVer(a: string, b: string): number {
-  // 进入比较前已过边界校验，非法属内部错误；逐参复核保持报错可定位。
+  // enter compare before already boundary validate, illegal belong internal error; one by one reference re-check keep errors can locate.
   for (const v of [a, b]) {
     if (!isStrictSemverShared(v)) {
-      throw new HelmError('validation_error', `内部错误：非严格 SemVer 进入比较：${v}`, 500)
+      throw new HelmError('validation_error', `internal error: non- strictly SemVer enter compare:${v}`, 500)
     }
   }
   return compareStrictSemverShared(a, b)
 }
 
 /**
- * Hub（kernel 包）自身版本：读当前包 package.json；HELM_VERSION_OVERRIDE 优先（测试用）。
- * 诚实性纪律：读失败或版本非法显式抛 version_unavailable（500，附原错误诊断），
- * 绝不静默返回 0.0.0 伪装成合法版本参与比较/自动升级决策。
+ * Hub(kernel package) itself version: read when before package package.json;HELM_VERSION_OVERRIDE takes precedence (test use).
+ * honest discipline: read failed or version illegal explicit throw version_unavailable(500, attach original error diagnose),
+ * never static default return 0.0.0 disguise into legal version reference and compare/automatically upgrade decide policy.
  */
 let cachedHubVersion: string | undefined
 export function hubVersion(): string {
@@ -62,25 +62,25 @@ export function hubVersion(): string {
       cachedHubVersion = trimmed
       return cachedHubVersion
     }
-    // 非空覆盖值非法时显式报错，不静默忽略回落 package.json
-    //（否则测试注入拼写错误会被无声吞掉，掩盖真实意图）。
+    // non-empty override value illegal when explicit errors, not silently ignore back package.json
+    //(otherwise test inject piece together write error will by without sound swallow, mask real intent).
     throw new HelmError(
       'version_unavailable',
-      `HELM_VERSION_OVERRIDE 显式设置但非法（需严格 SemVer，实得 "${override}"）`,
+      `HELM_VERSION_OVERRIDE explicit settings but illegal (must strictly SemVer, got "${override}")`,
       500,
       { override },
     )
   }
-  // dist/runtime/semver.ts → packages/kernel/<x>；src/runtime/semver.ts 同构。
+  // dist/runtime/semver.ts → packages/kernel/<x>;src/runtime/semver.ts same construct.
   const kernelDir = dirname(fileURLToPath(import.meta.url))
   const pkgPath = join(dirname(dirname(kernelDir)), 'package.json')
   try {
-    // 同步读：版本在启动后不变；仅首次调用读盘一次。
+    // sync read: version in after startup do not change; only first time invoke read once.
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: string }
     if (typeof pkg.version !== 'string' || !isStrictSemVer(pkg.version)) {
       throw new HelmError(
         'version_unavailable',
-        `kernel package.json version 非法（需严格 SemVer，实得 ${JSON.stringify(pkg.version)}）：${pkgPath}`,
+        `kernel package.json version illegal (must strictly SemVer, got ${JSON.stringify(pkg.version)}):${pkgPath}`,
         500,
         { pkgPath, version: pkg.version },
       )
@@ -90,7 +90,7 @@ export function hubVersion(): string {
     if (error instanceof HelmError) throw error
     throw new HelmError(
       'version_unavailable',
-      `读取 kernel package.json 失败：${error instanceof Error ? error.message : String(error)}（${pkgPath}）`,
+      `read kernel package.json failed:${error instanceof Error ? error.message : String(error)}(${pkgPath})`,
       500,
       { pkgPath, cause: error instanceof Error ? error.message : String(error) },
     )
@@ -98,12 +98,12 @@ export function hubVersion(): string {
   return cachedHubVersion
 }
 
-/** 测试注入点：重置 hubVersion 缓存。 */
+/** test inject point: reset hubVersion cache. */
 export function resetHubVersionCacheForTest(): void {
   cachedHubVersion = undefined
 }
 
-/** 诊断用：受限 JSON 序列化（循环/不可序列化对象退化为 String，绝不抛）。 */
+/** diagnose use: subject to limit JSON serialization (loop/cannot serialization object retreat is String, never throw). */
 export function safeJson(value: unknown): string {
   try {
     return JSON.stringify(value) ?? String(value)
@@ -112,7 +112,7 @@ export function safeJson(value: unknown): string {
   }
 }
 
-/** RpcResult 边界形状：必须是对象且 ok 为 boolean；ok:false 需带 error 对象。 */
+/** RpcResult boundary shape: must be object and ok is boolean;ok:false must carries error object. */
 function isRpcResultShape(value: unknown): value is { ok: boolean; value?: unknown; error?: unknown } {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
   const v = value as Record<string, unknown>
@@ -122,9 +122,9 @@ function isRpcResultShape(value: unknown): value is { ok: boolean; value?: unkno
 }
 
 /**
- * 节点 RpcResult 结构化失败 → HelmError（诚实性纪律：非法 error 形状按 502
- * node_upgrade_invalid_result 显式报错，绝不透传脏数据）。'invalid' 映射 400，
- * 'not_supported' 映射 501，其余 502。
+ * node RpcResult structure failed → HelmError(honest discipline: illegal error shape by 502
+ * node_upgrade_invalid_result explicit errors, never pass-through dirty data).'invalid' mapping 400,
+ * 'not_supported' mapping 501, the rest 502.
  */
 export function rpcFailureToHelmError(
   nodeId: string,
@@ -138,59 +138,59 @@ export function rpcFailureToHelmError(
   ) {
     return new HelmError(
       'node_upgrade_invalid_result',
-      `节点 ${nodeId} ${action}返回非法错误信封：${safeJson(error)}`,
+      `node ${nodeId} ${action}return illegal error message seal:${safeJson(error)}`,
       502,
       { nodeId, nodeError: error },
     )
   }
   if (error.code === 'invalid') {
-    return new HelmError('validation_error', `节点 ${nodeId} ${action}失败：${error.message}`, 400, {
+    return new HelmError('validation_error', `node ${nodeId} ${action}failed:${error.message}`, 400, {
       nodeId,
       nodeError: error,
     })
   }
   if (error.code === 'not_supported') {
-    return new HelmError('node_upgrade_not_supported', `节点 ${nodeId} 不支持${action}（${error.message}）`, 501, {
+    return new HelmError('node_upgrade_not_supported', `node ${nodeId} unsupported${action}(${error.message})`, 501, {
       nodeId,
       nodeError: error,
     })
   }
-  return new HelmError('node_upgrade_failed', `节点 ${nodeId} ${action}失败（${error.code}）：${error.message}`, 502, {
+  return new HelmError('node_upgrade_failed', `node ${nodeId} ${action}failed (${error.code}):${error.message}`, 502, {
     nodeId,
     nodeError: error,
   })
 }
 
-/** 升级检查 RPC 结果信封校验（ok 且 value 合法才返回 value）。 */
+/** upgrade check RPC result message seal validate (ok and value legal only then return value). */
 export function unwrapUpgradeCheckRpc(nodeId: string, result: unknown): NodeUpgradeCheckResult {
   if (!isRpcResultShape(result)) {
     throw new HelmError(
       'node_upgrade_invalid_result',
-      `节点 ${nodeId} 升级检查返回非法 RpcResult（非对象或 ok/error 形状错误）：${safeJson(result)}`,
+      `node ${nodeId} upgrade check return illegal RpcResult(non- object or ok/error shape error):${safeJson(result)}`,
       502,
       { nodeId },
     )
   }
   if (!result.ok) {
-    throw rpcFailureToHelmError(nodeId, '检查', (result as { error: { code: string; message: string } }).error)
+    throw rpcFailureToHelmError(nodeId, 'check', (result as { error: { code: string; message: string } }).error)
   }
   return validateUpgradeCheckResult(nodeId, result.value as NodeUpgradeCheckResult)
 }
 
-/** 边界校验：nodeCheckUpgrade 结果字段（诚实性纪律——非法结果不透传）。 */
+/** boundary validate:nodeCheckUpgrade result field (honest discipline - - illegal result do not pass-through). */
 export function validateUpgradeCheckResult(nodeId: string, value: NodeUpgradeCheckResult): NodeUpgradeCheckResult {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级检查结果非法（非对象）`, 502, { nodeId })
+    throw new HelmError('node_upgrade_invalid_result', `node ${nodeId} upgrade check result illegal (non- object)`, 502, { nodeId })
   }
   const v = value as unknown as Record<string, unknown>
   if (typeof v['currentVersion'] !== 'string' || typeof v['latestVersion'] !== 'string' || typeof v['updateAvailable'] !== 'boolean') {
-    throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级检查结果字段非法`, 502, { nodeId })
+    throw new HelmError('node_upgrade_invalid_result', `node ${nodeId} upgrade check result field illegal`, 502, { nodeId })
   }
-  // 版本字段必须是严格 SemVer（latestVersion 会成为升级目标，绝不放行脏值）。
+  // version field must be strictly SemVer(latestVersion will into is upgrade target, never let through dirty value).
   if (!isStrictSemVer(v['currentVersion']) || !isStrictSemVer(v['latestVersion'])) {
     throw new HelmError(
       'node_upgrade_invalid_result',
-      `节点 ${nodeId} 升级检查结果版本非严格 SemVer（currentVersion=${JSON.stringify(v['currentVersion'])}，latestVersion=${JSON.stringify(v['latestVersion'])}）`,
+      `node ${nodeId} upgrade check result version non- strictly SemVer(currentVersion=${JSON.stringify(v['currentVersion'])},latestVersion=${JSON.stringify(v['latestVersion'])})`,
       502,
       { nodeId },
     )
@@ -203,32 +203,32 @@ export function validateUpgradeCheckResult(nodeId: string, value: NodeUpgradeChe
       typeof (blocked as Record<string, unknown>)['reason'] !== 'string' ||
       typeof (blocked as Record<string, unknown>)['at'] !== 'string'
     ) {
-      throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级检查 blocked 字段非法`, 502, { nodeId })
+      throw new HelmError('node_upgrade_invalid_result', `node ${nodeId} upgrade check blocked field illegal`, 502, { nodeId })
     }
   }
   return value
 }
 
-/** 升级 RPC 结果信封校验（ok 且 value 合法才返回 value）。 */
+/** upgrade RPC result message seal validate (ok and value legal only then return value). */
 export function unwrapUpgradeRpc(nodeId: string, result: unknown): NodeUpgradeResult {
   if (!isRpcResultShape(result)) {
     throw new HelmError(
       'node_upgrade_invalid_result',
-      `节点 ${nodeId} 升级返回非法 RpcResult（非对象或 ok/error 形状错误）：${safeJson(result)}`,
+      `node ${nodeId} upgrade return illegal RpcResult(non- object or ok/error shape error):${safeJson(result)}`,
       502,
       { nodeId },
     )
   }
   if (!result.ok) {
-    throw rpcFailureToHelmError(nodeId, '升级', (result as { error: { code: string; message: string } }).error)
+    throw rpcFailureToHelmError(nodeId, 'upgrade', (result as { error: { code: string; message: string } }).error)
   }
   return validateUpgradeResult(nodeId, result.value as NodeUpgradeResult)
 }
 
-/** 边界校验：nodeUpgrade 结果字段。 */
+/** boundary validate:nodeUpgrade result field. */
 export function validateUpgradeResult(nodeId: string, value: NodeUpgradeResult): NodeUpgradeResult {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级结果非法（非对象）`, 502, { nodeId })
+    throw new HelmError('node_upgrade_invalid_result', `node ${nodeId} upgrade result illegal (non- object)`, 502, { nodeId })
   }
   const v = value as unknown as Record<string, unknown>
   if (
@@ -237,15 +237,15 @@ export function validateUpgradeResult(nodeId: string, value: NodeUpgradeResult):
     typeof v['targetVersion'] !== 'string' ||
     typeof v['upgraded'] !== 'boolean'
   ) {
-    throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级结果字段非法`, 502, { nodeId })
+    throw new HelmError('node_upgrade_invalid_result', `node ${nodeId} upgrade result field illegal`, 502, { nodeId })
   }
   if (v['pid'] !== undefined && (typeof v['pid'] !== 'number' || !Number.isInteger(v['pid']) || (v['pid'] as number) <= 0)) {
-    throw new HelmError('node_upgrade_invalid_result', `节点 ${nodeId} 升级结果 pid 非法`, 502, { nodeId })
+    throw new HelmError('node_upgrade_invalid_result', `node ${nodeId} upgrade result pid illegal`, 502, { nodeId })
   }
   if (!isStrictSemVer(v['previousVersion']) || !isStrictSemVer(v['targetVersion'])) {
     throw new HelmError(
       'node_upgrade_invalid_result',
-      `节点 ${nodeId} 升级结果版本非严格 SemVer（previousVersion=${JSON.stringify(v['previousVersion'])}，targetVersion=${JSON.stringify(v['targetVersion'])}）`,
+      `node ${nodeId} upgrade result version non- strictly SemVer(previousVersion=${JSON.stringify(v['previousVersion'])},targetVersion=${JSON.stringify(v['targetVersion'])})`,
       502,
       { nodeId },
     )

@@ -51,6 +51,13 @@ test('@helm/protocol/browser: export declarations aligned with the root entry\'s
     'isArtifactKind',
     'ARTIFACT_KINDS',
     'compareStrictSemver',
+    'HELM_LOCALES',
+    'DEFAULT_HELM_LOCALE',
+    'isHelmLocale',
+    'normalizeLocaleTag',
+    'parseLocalizedText',
+    'resolveLocalizedText',
+    'createLocaleTranslator',
   ] as const
 
   const browserRecord = browserExports as Record<string, unknown>

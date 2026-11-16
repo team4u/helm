@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-系统常驻底座插件：`locked: true`，不可停用、不可卸载（停用返回 `403 locked_plugin_cannot_be_disabled`）。默认 `assistant` Profile 的托管元数据由本插件自举。
+系统常驻底座插件：`locked: true`，不可停用、不可卸载（停用返回 `403 plugin_locked`）。默认 `assistant` Profile 的托管元数据由本插件自举。
 
 ## 能力和入口
 

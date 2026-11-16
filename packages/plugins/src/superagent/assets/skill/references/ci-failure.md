@@ -1,6 +1,6 @@
-# CI 失败处置
+# CI Failure Handling
 
-1. 读取失败阶段日志摘要，区分编译错误、测试失败与环境问题；
-2. 编译/测试失败：记录失败上下文与编程 Profile 建议，由中枢或人类决定派工；
-3. 环境问题（依赖缺失、端口占用）：给出明确诊断，不盲目重试；
-4. 修复后必须重新跑门禁命令确认，不得凭模型输出宣布通过。
+1. Read the failure-stage log summary and distinguish compile errors, test failures, and environment problems;
+2. Compile/test failures: record the failure context and a coding Profile suggestion; the hub or a human decides the dispatch;
+3. Environment problems (missing dependencies, occupied ports): give a clear diagnosis; do not retry blindly;
+4. After a fix, rerun the gate command to confirm; never declare success based on model output alone.

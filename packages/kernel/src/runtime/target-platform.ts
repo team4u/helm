@@ -1,38 +1,38 @@
 /**
- * 目标节点平台感知的路径规范化（kernel 执行链唯一入口）。
+ * target node platform aware path specification (kernel execute chain unique entry).
  *
- * 平台来源纪律（诚实性红线）：
- * - local 默认 Hub 宿主 process.platform（同进程，无需查询），测试可注入
- *   Hub 平台事实；
- * - 远端仅取 NodeRegistry 注册登记的平台（EnvFabric.nodePlatformOf 最小
- *   只读端口）；节点离线或守护进程未上报平台时平台未知——绝不猜测、
- *   绝不 fallback Hub 宿主平台、绝不 access 探测候选路径；
- * - 平台未知时路径保持原样（沿用既有的按形状词法解析语义），Linux/macOS
- *   与远端 POSIX 语义不变（远端 POSIX 节点绝不被误判成 Windows）。
+ * platform source discipline (honest hard rule):
+ * - local by default Hub host process.platform(same process, no need to query), test can inject
+ *   Hub platform fact;
+ * - remote only take NodeRegistry register register platform (EnvFabric.nodePlatformOf most small
+ *   only read port); node offline or daemon not on report platform when platform unknown - - never guess,
+ *   never fallback Hub host platform, never access probe choose path;
+ * - platform unknown when path keep original (along use since has by shape term method parse semantics),Linux/macOS
+ *   and remote POSIX semantics do not change (remote POSIX node never by mistakenly judge into Windows).
  *
- * 本模块不复制路径正则：形状判定、词法规则与 win32 目标上的确定性视图
- * 转换（/mnt/<盘符>、/<盘符>、//server/share）全部复用 @helm/protocol 的
- * normalizeTargetPath / targetPlatformOf 原语；业务入口（runShell /
- * resolveExecTarget / read/write/edit）一律经由本模块，不得各自另写规则。
+ * this module do not duplicate path regex: shape decide, term method rule and win32 target on determinism view
+ * convert (/mnt/<symbol>,/<symbol>,//server/share) all re- use @helm/protocol 
+ * normalizeTargetPath / targetPlatformOf original language; business entry (runShell /
+ * resolveExecTarget / read/write/edit) one rule via this module, must not each another write rule.
  */
 import { normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helm/protocol'
 
-/** 平台读取最小端口（EnvFabric 的 Hub/节点平台事实形状；测试可注入替身）。 */
+/** platform read most small port (EnvFabric  Hub/node platform fact shape; test can inject replace body). */
 export interface NodePlatformSource {
-  /** 远端节点平台事实（NodeRegistry 上报）；local 不从此端口猜测。 */
+  /** remote node platform fact (NodeRegistry on report);local do not from this port guess. */
   nodePlatformOf?(nodeId: string): string | undefined
-  /** Hub 本机平台事实；测试可注入，生产缺省回退 process.platform。 */
+  /** Hub local machine platform fact; test can inject, produce default fall back process.platform. */
   hubPlatform?(): string | undefined
 }
 
-/** 目标平台解析结果：known 携带平台语义与原始上报值；unknown 携带显式原因。 */
+/** target platform parse result:known carry platform semantics and original on report value;unknown carry explicit reason. */
 export type TargetPlatformInfo =
   | { known: true; platform: TargetPlatform; reported: string }
   | { known: false; reason: string }
 
 /**
- * 解析目标节点平台：local 恒 process.platform；远端仅取注册登记值
- * （未上报 / 离线 / 端口缺位 → unknown，绝不猜测、绝不 fallback Hub 宿主）。
+ * parse target node platform:local constant process.platform; remote only take register register value
+ * (not on report / offline / port missing → unknown, never guess, never fallback Hub host).
  */
 export function targetPlatformForNode(
   source: NodePlatformSource | undefined,
@@ -46,23 +46,23 @@ export function targetPlatformForNode(
   if (reported === undefined || reported === '') {
     return {
       known: false,
-      reason: `节点 ${nodeId} 平台信息未知（离线或守护进程未上报），不猜测平台、不回退 Hub 宿主平台`,
+      reason: `node ${nodeId} platform information unknown (offline or daemon not on report), do not guess platform, does not fall back Hub host platform`,
     }
   }
   return { known: true, platform: targetPlatformOf(reported), reported }
 }
 
-/** 平台感知路径规范化结果：成功携带规范路径；失败保留原始路径（original）。 */
+/** platform aware path specification result: succeeded carry canonical path; failed keep original path (original). */
 export type TargetPathNormalization =
   | { ok: true; path: string; platform: TargetPlatform | undefined; view: string }
   | { ok: false; code: 'invalid_path'; original: string; reason: string }
 
 /**
- * 按目标平台规范化路径（cwd / 绝对路径的统一入口）：
- * - 平台未知：路径原样返回（不猜平台，view 'unknown-platform'）；
- * - 平台已知：normalizeTargetPath 确定性规范化——win32 目标上把 WSL /
- *   Git Bash 的 POSIX 视图转换为规范 Windows 路径，无法映射的裸 POSIX
- *   根显式失败并保留原始路径；posix 目标仅词法归一（语义不变）。
+ * by target platform specification path (cwd / absolute path unify entry):
+ * - platform unknown: path original return (do not guess platform,view 'unknown-platform');
+ * - platform known:normalizeTargetPath determinism specification - -win32 target on WSL /
+ *   Git Bash  POSIX view convert is specification Windows path, cannot mapping bare POSIX
+ *   explicit failed and keep original path;posix target only term method archive one (semantics do not change).
  */
 export function normalizePathForTarget(path: string, info: TargetPlatformInfo): TargetPathNormalization {
   if (!info.known) return { ok: true, path, platform: undefined, view: 'unknown-platform' }
@@ -71,7 +71,7 @@ export function normalizePathForTarget(path: string, info: TargetPlatformInfo): 
   return { ok: false, code: 'invalid_path', original: path, reason: result.reason }
 }
 
-/** invalid_path 失败的统一可读信息（protocol reason 已含原始路径；各入口不得另拼）。 */
+/** invalid_path failed unify can read information (protocol reason already contains original path; each entry must not another piece together). */
 export function invalidPathText(failure: Extract<TargetPathNormalization, { ok: false }>): string {
   return `invalid_path: ${failure.reason}`
 }

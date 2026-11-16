@@ -1,51 +1,51 @@
 /**
- * HTTP 详情出口的 ConversationEntry 投影（纯函数，机制层）。
+ * HTTP detail situation exit ConversationEntry throw shadow (pure function, mechanism layer).
  *
- * 消费方：仅详情分页（ConversationDetailService.getConversationDetail）与
- * 单条端点（getConversationEntry 的签名剥离）。SSE conversation.entry 事件、
- * SDK rewind/context/settlement 与 waitForInput 结果一律不经此投影——
- * toConversationEntry 的既有语义保持不变。
+ * consumer: only detail situation page (ConversationDetailService.getConversationDetail) and
+ * single end point (getConversationEntry signature strip).SSE conversation.entry event,
+ * SDK rewind/context/settlement and waitForInput result one rule do not via this throw shadow - -
+ * toConversationEntry since has semantics keep do not change.
  *
- * 策略（详见 @helm/protocol ConversationEntry 的投影约定注释）：
- * - `pi.system`：模型侧簿记（系统提示词/工具声明），详情分页不外发；
- * - 供应商签名载荷 thinkingSignature / textSignature / thoughtSignature
- *   （pi-ai TextContent / ThinkingContent / ToolCall 的不透明加密块）：对
- *   客户端无语义且体积可观，出口统一剥离——仅限 assistant 消息 content
- *   块，toolResult details 等业务对象与 entry.data 不触碰；数据库原文不变；
- * - 超限纯文本 toolResult 显式截断：保留头尾、消息级携带
- *   truncated/totalChars/totalLines（与每条 pi.tool-result 精确配对，无
- *   多消息歧义）；结构化通道 details（subagent/SubagentWorkflow 等）与
- *   可解析 JSON 文本豁免（截断会破坏下游解析）；尾部 `[Artifact] id=`
- *   尾标因保留尾部而天然保留。
+ * policy (detail see @helm/protocol ConversationEntry throw shadow convention note release):
+ * - `pi.system`: model side register record (system prompt/tool declaration), detail situation page do not outside;
+ * - provider signature payload thinkingSignature / textSignature / thoughtSignature
+ *   (pi-ai TextContent / ThinkingContent / ToolCall do not transparent encryption chunk): for
+ *   client without semantics and body accumulate can observe, exit unify strip - - only limit assistant message content
+ *   chunk,toolResult details etc. business object and entry.data do not trigger touch; database original text do not change;
+ * - over limit pure text toolResult explicit truncate: keep head tail, message level carry
+ *   truncated/totalChars/totalLines(and each pi.tool-result precise match for, without
+ *   many message ambiguity); structure channel details(subagent/SubagentWorkflow etc.) and
+ *   can parse JSON text exemption (truncate will break downstream parse); tail part `[Artifact] id=`
+ *   tail mark because keep tail part while day however keep.
  */
 
 import type { ConversationEntry } from '@helm/protocol'
 
-/** 供应商签名载荷键（pi-ai 内容块/工具调用字段）。 */
+/** provider signature payload key (pi-ai content chunk/tool invoke field). */
 const SIGNATURE_KEYS: ReadonlySet<string> = new Set([
   'thinkingSignature',
   'textSignature',
   'thoughtSignature',
 ])
 
-/** tool-result 纯文本截断阈值（字符，投影层；SDK 自身输出限额之外的最后防线）。
- * bash spill 预览（≈4KiB 头 + 256B 尾）与 read_artifact（≤128KiB）是典型
- * 大输出来源：阈值取 1536 字符（头 1024 + 尾 512 + 省略标记），100 条/页
- * 的详情分页因此有确定上界。 */
+/** tool-result pure text truncate threshold (character, throw shadow layer;SDK itself output limit quota of outside finally guard against line).
+ * bash spill preview (≈4KiB head + 256B tail) and read_artifact(≤128KiB) is typical
+ * large output source: threshold take 1536 character (head 1024 + tail 512 + omit mark record),100 /page
+ * detail situation page therefore has determine on boundary. */
 export const TOOL_RESULT_TRUNCATE_THRESHOLD_CHARS = 1536
-/** 截断后保留的头部字符数。 */
+/** truncate after keep header character count. */
 export const TOOL_RESULT_HEAD_CHARS = 1024
-/** 截断后保留的尾部字符数（[Artifact] id= 尾标随尾部保留）。 */
+/** truncate after keep tail part character count ([Artifact] id= tail mark follow tail part keep). */
 export const TOOL_RESULT_TAIL_CHARS = 512
 
 /**
- * 单条 entry 的通用脱敏（详情分页与单条端点共用）：
- * - 仅对 role=assistant 消息的 content 内容块剥离签名键——签名是 pi-ai
- *   供应商对 assistant 思考/文本/工具调用块的不透明载荷；
- * - toolResult 消息（含 details 业务对象）与其他角色一律不触碰（details
- *   是插件结构化 JSON，可能合法携带同名字段）；entry.data 同样不动；
- * - copy-on-write：无命中返回原对象（零拷贝），绝不改写输入（SSE/SDK 与
- *   数据库共享同一记录）。
+ * single entry through use redaction (detail situation page and single end point shared use):
+ * - only for role=assistant message content content chunk strip signature key - - signature is pi-ai
+ *   provider for assistant think/text/tool invoke chunk do not transparent payload;
+ * - toolResult message (contains details business object) and other role one rule do not trigger touch (details
+ *   is plugin structure JSON, may legal carry same name segment);entry.data same do not motion;
+ * - copy-on-write: without hit return original object (zero copy), never change write input (SSE/SDK and
+ *   database sharing the same record).
  */
 export function stripEntrySignatures(entry: ConversationEntry): ConversationEntry {
   if (entry.model === undefined) return entry
@@ -82,11 +82,11 @@ export function stripEntrySignatures(entry: ConversationEntry): ConversationEntr
 }
 
 // ---------------------------------------------------------------------------
-// tool-result 纯文本截断
+// tool-result pure text truncate
 // ---------------------------------------------------------------------------
 
-/** 纯文本内容判定：字符串，或全部为 {type:'text'} 块的数组（与前端
- * contentTextOf 的拼接口径一致）。 */
+/** pure text content decide: string, or all is {type:'text'} chunk array (and frontend
+ * contentTextOf concatenate opening path consistent). */
 function isPlainTextContent(content: unknown): content is string | ReadonlyArray<{ type: 'text'; text: string }> {
   if (typeof content === 'string') return true
   if (!Array.isArray(content)) return false
@@ -99,21 +99,21 @@ function isPlainTextContent(content: unknown): content is string | ReadonlyArray
   )
 }
 
-/** 内容全文本（块文本直接拼接，与前端渲染口径一致）。 */
+/** content all text (chunk text directly concatenate, and frontend render opening path consistent). */
 function combinedTextOf(content: string | ReadonlyArray<{ type: 'text'; text: string }>): string {
   return typeof content === 'string' ? content : content.map((block) => block.text).join('')
 }
 
-/** 结构化结果文本豁免：subagent / SubagentWorkflow 等的文本是完整 JSON
- * 信封（可带 `[subagent ...]` / `[Artifact] ...` 风格的尾部 footer 行），
- * 截断会破坏下游解析。判定：整体可解析 JSON，或剥离尾部单行方括号
- * footer 后可解析 JSON。 */
+/** structure result text exemption:subagent / SubagentWorkflow etc. text is complete JSON
+ * message seal (can carries `[subagent ...]` / `[Artifact] ...` style tail part footer row),
+ * truncate will break downstream parse. decide: whole can parse JSON, or strip tail part single row way parentheses
+ * footer after can parse JSON. */
 function isStructuredJsonText(text: string): boolean {
   const trimmed = text.trim()
   if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return false
   if (parsable(trimmed)) return true
   const lines = trimmed.split('\n')
-  // 自尾行起剥离形如 [ ... ] 的单行 footer（至多 4 行），剩余主体可解析即豁免。
+  // self tail row start strip shape such as [ ... ] single row footer(at most 4 row), remaining body can parse i.e. exemption.
   for (let drop = 1; drop <= Math.min(4, lines.length - 1); drop += 1) {
     const candidate = lines.slice(0, lines.length - drop).join('\n').trim()
     if (candidate === '' || (!candidate.startsWith('{') && !candidate.startsWith('['))) break
@@ -132,12 +132,12 @@ function parsable(text: string): boolean {
   }
 }
 
-/** 已经由 artifacts spill 层截断过的文本（携带 [Artifact] id= 全文入口）：
- * 全文在产物中、条目只存预览——再叠加投影截断会让前端误以为单条端点能
- * 取回完整输出。此层绝不重复截断，保留现有产物入口。 */
+/** already by artifacts spill layer truncate text (carry [Artifact] id= all text entry):
+ * all text in artifact in, item only store preview - - again stack add throw shadow truncate will let frontend mistakenly with is single end point can
+ * take back complete output. this layer never duplicate truncate, keep existing artifact entry. */
 const ARTIFACT_SPILL_MARKER_RE = /\[Artifact\]\s+id=/
 
-/** 截断文本：保留头尾 + 自描述省略标记（含全文规模与取原文指引）。 */
+/** truncate text: keep head tail + self description omit mark record (contains all text rule mode and take original text refer quote). */
 function truncatePlainText(text: string): { text: string; totalChars: number; totalLines: number } {
   const totalChars = text.length
   const totalLines = text === '' ? 0 : text.split('\n').length
@@ -145,14 +145,14 @@ function truncatePlainText(text: string): { text: string; totalChars: number; to
   const tail = text.slice(totalChars - TOOL_RESULT_TAIL_CHARS)
   const omitted = totalChars - TOOL_RESULT_HEAD_CHARS - TOOL_RESULT_TAIL_CHARS
   const marker =
-    `\n\n…[helm 截断：省略 ${omitted} 字符（全文 ${totalChars} 字符 / ${totalLines} 行，` +
-    'GET /api/conversations/<id>/entries/<entryId> 取未截断原文]…\n\n'
+    `\n\n...[helm truncate: omit ${omitted} character (all text ${totalChars} character / ${totalLines} row,` +
+    'GET /api/conversations/<id>/entries/<entryId> take not truncate original text]...\n\n'
   return { text: `${head}${marker}${tail}`, totalChars, totalLines }
 }
 
-/** 单个 model 消息的截断投影；无需截断时原样返回（共享引用）。
- * 截断时在消息对象上追加 truncated/totalChars/totalLines（消息级标记，
- * 与每条 pi.tool-result 精确配对，无顶层歧义）。 */
+/** single model message truncate throw shadow; no need to truncate when original return (sharing reference).
+ * truncate when in message object on append truncated/totalChars/totalLines(message level mark record,
+ * and each pi.tool-result precise match for, without top-level ambiguity). */
 function projectToolResultMessage(message: unknown): unknown {
   if (message === null || typeof message !== 'object' || Array.isArray(message)) return message
   const m = message as Record<string, unknown>
@@ -176,8 +176,8 @@ function projectToolResultMessage(message: unknown): unknown {
 }
 
 /**
- * 详情分页投影：pi.system 过滤 + 签名剥离 + 安全纯文本 tool-result 截断。
- * 返回 undefined 表示该条不外发（pi.system）。输入不被改写。
+ * detail situation page throw shadow:pi.system filter + signature strip + security pure text tool-result truncate.
+ * return undefined means the do not outside (pi.system). input do not by change write.
  */
 export function projectDetailEntry(entry: ConversationEntry): ConversationEntry | undefined {
   if (entry.kind === 'pi.system') return undefined

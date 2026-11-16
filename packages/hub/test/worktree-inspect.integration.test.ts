@@ -1,24 +1,24 @@
 /**
- * builtin:workflow 受管 worktree 只读检视集成测试（list_worktrees /
- * inspect_worktree 动作）。
+ * builtin:workflow managed worktree only read inspect view integration test (list_worktrees /
+ * inspect_worktree action).
  *
- * 覆盖（经真实 createHelm + faux 模型 + 临时真实 Git 仓库 + 插件公开动作）：
- * 1. 真实 spawnAgent isolation:'worktree' 后 list_worktrees 返回登记元数据；
- * 2. inspect_worktree（worktreeId 精确选择器）在目标节点真实执行 git 只读
- *    命令：未提交文件、领先基线提交、diff 统计与预览均为真实值；
- * 3. 边界诚实性：未登记路径 404、选择器互斥 400、已清理记录返回
- *    unavailableReason=removed（仅元数据，不跑 git）、零选择器 400；
- * 4. conversationId 选择器与 worktreeId 等价定位同一记录；
- * 5. porcelain 首列保留：staged/unstaged/untracked 原行不 trim；
- * 6. 只有 untracked 文件时 status 非空而 diff 为空（契约：untracked 见
- *    状态清单、不进 diff）；
- * 7. 大 diff 超 16KiB 上限被截断（diffTruncated=true 且为真实 diff 前缀）；
- *    脏文件超 200 行时 dirtyFileCount 保留真实总数。
+ * override (via real createHelm + faux model + temporary real Git repository + plugin public action):
+ * 1. real spawnAgent isolation:'worktree' after list_worktrees return register metadata;
+ * 2. inspect_worktree(worktreeId precise choose) in target node real execute git only read
+ *    command: uncommitted file, lead first baseline commit,diff count and preview all is real value;
+ * 3. boundary honest: not register path 404, choose mutual exclusion 400, already clean up record return
+ *    unavailableReason=removed(only metadata, do not run git), zero choose 400;
+ * 4. conversationId choose and worktreeId etc. price locate the same record;
+ * 5. porcelain first column keep:staged/unstaged/untracked original row do not trim;
+ * 6. only untracked file when status non-empty while diff is empty (contract:untracked see
+ *    state manifest, does not enter diff);
+ * 7. large diff over 16KiB cap by truncate (diffTruncated=true and is real diff prefix);
+ *    dirty file over 200 row when dirtyFileCount keep real total count.
  *
- * 契约纪律：只读检视绝不产生写副作用（检视前后 worktree 内容不变）；
- * 全部经真实 createHelm + builtin:workflow 公开动作验证，不 mock git。
+ * contract discipline: only read inspect view never produce write side effect (inspect view before after worktree content do not change);
+ * all via real createHelm + builtin:workflow public action verify, do not mock git.
  *
- * runner: tsx --test；每测试显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each test explicit timeout: 60_000 guard against deadlock.
  */
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AgentExecutionInfo, AgentSpawnRequest } from '@helm/protocol'
@@ -38,15 +38,15 @@ import {
   type HubTestApp,
 } from './helpers/hub-test-env.js'
 
-/** 提取受管 worktree 描述（execution meta 的 workflow 命名空间业务值）。 */
+/** extract managed worktree description (execution meta  workflow naming empty between business value). */
 function worktreeOf(info: AgentExecutionInfo | undefined) {
   return info === undefined ? undefined : extractWorkflowExecutionMeta(info).worktree
 }
 
 /**
- * 平台事实：进程占用扫描当前仅 Linux /proc。非 Linux 上 cleanup 在进程检查处
- * 显式拒绝（worktree_process_check_failed）——测试契约按平台如实分叉，
- * 不伪造 complete=true、不静默跳过（跨平台显式拒绝是当前行为限制）。
+ * platform fact: process occupy scan when before only Linux /proc. non- Linux on cleanup in process check where
+ * explicit reject (worktree_process_check_failed) - - test contract by platform such as fork,
+ * do not fabricate complete=true, not silently skip (across platform explicit reject is when before behavior restrict).
  */
 const PROCESS_SCAN_ON = process.platform === 'linux'
 
@@ -102,20 +102,20 @@ async function openRuntime(dataDir: string, cwd: string): Promise<RuntimeEnv> {
   }
 }
 
-/** 派生一个无工具调用的干净隔离 worktree（无残留文件，便于精确构造状态）。 */
+/** derive a without tool invoke clean isolated worktree(no residue file, convenient at precise construct state). */
 async function spawnCleanWorktree(env: RuntimeEnv): Promise<{ worktreeId: string; path: string; branch: string }> {
   let resolved: AgentExecutionInfo | undefined
-  env.faux.setResponses([fauxAssistantMessage('直接完成，无工具调用')])
+  env.faux.setResponses([fauxAssistantMessage('directly complete, without tool invoke')])
   await env.kernel.spawnAgent({
     parentConversationId: 1,
-    prompt: '在隔离工作树执行任务',
+    prompt: 'in isolated worktree execute task',
     isolation: 'worktree',
     onResolved: (info) => {
       resolved = info
     },
   } as AgentSpawnRequest)
   const worktree = worktreeOf(resolved)
-  assert.ok(worktree?.id, '应回传受管 worktree id')
+  assert.ok(worktree?.id, 'should back pass managed worktree id')
   return {
     worktreeId: worktree!.id!,
     path: worktree!.path,
@@ -123,8 +123,8 @@ async function spawnCleanWorktree(env: RuntimeEnv): Promise<{ worktreeId: string
   }
 }
 
-describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_000 }, () => {
-  it('spawn 后 list 登记真实元数据；inspect 返回真实 git 只读探测（脏文件/提交/diff）', { timeout: 60_000 }, async () => {
+describe('builtin:workflow managed worktree only read inspect view action', { timeout: 60_000 }, () => {
+  it('spawn after list register real metadata;inspect return real git only read probe (dirty file/commit/diff)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't1')
     const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
@@ -132,25 +132,25 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
       let resolved: AgentExecutionInfo | undefined
       env.faux.setResponses([
         fauxAssistantMessage([fauxToolCall('bash', { command: 'pwd > .helm-child-pwd.txt' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('任务完成'),
+        fauxAssistantMessage('task complete'),
       ])
       await env.kernel.spawnAgent({
         parentConversationId: 1,
-        prompt: '在隔离工作树执行任务',
+        prompt: 'in isolated worktree execute task',
         isolation: 'worktree',
         onResolved: (info) => {
           resolved = info
         },
       } as AgentSpawnRequest)
-      assert.ok(worktreeOf(resolved)?.id, '应回传受管 worktree id')
+      assert.ok(worktreeOf(resolved)?.id, 'should back pass managed worktree id')
       const worktreeId = worktreeOf(resolved)!.id
       const path = worktreeOf(resolved)!.path
       const branch = worktreeOf(resolved)!.branch
       const childId = resolved!.conversationId!
 
-      // ---- list_worktrees：登记元数据完整且新建在前。----
+      // ---- list_worktrees: register metadata complete and creates new in before.----
       const list = await env.invoke.listWorktrees()
-      assert.ok(Array.isArray(list) && list.length === 1, `应恰好一条登记（实得 ${list.length}）`)
+      assert.ok(Array.isArray(list) && list.length === 1, `should exactly a register (got ${list.length})`)
       const record = list[0]! as Record<string, unknown>
       assert.equal(record['id'], worktreeId)
       assert.equal(record['path'], path)
@@ -159,38 +159,38 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
       assert.equal(record['status'], 'active')
       assert.equal(record['conversationId'], childId)
 
-      // ---- 工作树内真实改动：未提交文件 + 一个新提交。----
+      // ---- worktree inside real change: uncommitted file + a new commit.----
       writeFileSync(join(path, 'draft.txt'), 'uncommitted draft\n')
       const git = (args: string[]) => execFileSync('git', args, { cwd: path, encoding: 'utf-8' })
       writeFileSync(join(path, 'feature.txt'), 'committed change\n')
       git(['add', 'feature.txt'])
       git(['commit', '-qm', 'feat: one commit'])
 
-      // ---- inspect_worktree（worktreeId 精确选择器）。----
+      // ---- inspect_worktree(worktreeId precise choose).----
       const inspect = await env.invoke.inspectWorktree({ worktreeId })
       assert.equal(inspect['exists'], true)
       assert.equal(inspect['unavailableReason'], undefined)
       assert.equal(inspect['currentBranch'], branch)
-      assert.equal(inspect['branchChanged'], undefined, '权威分支与登记一致时不得置 branchChanged')
+      assert.equal(inspect['branchChanged'], undefined, 'right threat branch and register consistent when must not placement branchChanged')
       const dirtyFiles = inspect['dirtyFiles'] as string[]
-      assert.equal(inspect['dirtyFileCount'], 2, 'draft.txt 与 .helm-child-pwd.txt 两个未跟踪文件（feature.txt 已提交不在未提交清单）')
+      assert.equal(inspect['dirtyFileCount'], 2, 'draft.txt and .helm-child-pwd.txt two untracked file (feature.txt committed do not in uncommitted manifest)')
       assert.ok(
         dirtyFiles.some((l) => l.includes('draft.txt')) && dirtyFiles.some((l) => l.includes('.helm-child-pwd.txt')),
-        `未提交清单应含两个未跟踪文件（实得 ${JSON.stringify(dirtyFiles)}）`,
+        `uncommitted manifest should contains two untracked file (got ${JSON.stringify(dirtyFiles)})`,
       )
-      assert.equal(inspect['commitsAhead'], 1, '相对登记 baseCommit 领先 1 个提交')
+      assert.equal(inspect['commitsAhead'], 1, 'each other for register baseCommit lead first 1 commit')
       assert.equal(inspect['diffBase'], 'baseCommit')
       const diffStat = inspect['diffStat'] as string
-      assert.ok(diffStat.includes('feature.txt'), `diff 统计应含已提交改动（实得 ${diffStat}）`)
+      assert.ok(diffStat.includes('feature.txt'), `diff count should contains committed change (got ${diffStat})`)
       const diffPreview = inspect['diffPreview'] as string
-      assert.ok(diffPreview.includes('+committed change'), 'diff 预览应含新增行内容')
+      assert.ok(diffPreview.includes('+committed change'), 'diff preview should contains new increase row content')
       assert.equal(inspect['diffTruncated'], false)
 
-      // ---- conversationId 选择器定位同一记录（等价入口）。----
+      // ---- conversationId choose locate the same record (etc. price entry).----
       const byConversation = await env.invoke.inspectWorktree({ conversationId: childId })
       assert.equal((byConversation['record'] as Record<string, unknown>)['id'], worktreeId)
 
-      // ---- 只读铁律：检视不产生任何写副作用。----
+      // ---- only read iron rule: inspect view produces no write side effect.----
       assert.equal(existsSync(join(path, 'draft.txt')), true)
       assert.equal(existsSync(join(path, 'feature.txt')), true)
     } finally {
@@ -198,16 +198,16 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
     }
   })
 
-  it('边界诚实性：未登记路径 404、选择器互斥/零选择器 400、已清理记录仅返回元数据', { timeout: 60_000 }, async () => {
+  it('boundary honest: not register path 404, choose mutual exclusion/zero choose 400, already clean up record only return metadata', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't2')
     const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       let resolved: AgentExecutionInfo | undefined
-      env.faux.setResponses([fauxAssistantMessage('直接完成，无工具调用')])
+      env.faux.setResponses([fauxAssistantMessage('directly complete, without tool invoke')])
       await env.kernel.spawnAgent({
         parentConversationId: 1,
-        prompt: '在隔离工作树执行任务',
+        prompt: 'in isolated worktree execute task',
         isolation: 'worktree',
         onResolved: (info) => {
           resolved = info
@@ -215,12 +215,12 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
       } as AgentSpawnRequest)
       const worktreeId = worktreeOf(resolved)!.id
 
-      // 未登记路径：404 not_found（不支持任意目录）。
+      // not register path:404 not_found(unsupported any directory).
       await assert.rejects(
         () => env.invoke.inspectWorktree({ path: repo }),
         (err: unknown) => err instanceof Error && /\bnot_found\b|未找到路径/.test(err.message),
       )
-      // 零选择器与选择器互斥：400 validation_error。
+      // zero choose and choose mutual exclusion:400 validation_error.
       await assert.rejects(
         () => env.invoke.inspectWorktree({}),
         (err: unknown) => err instanceof Error && /需提供|validation_error/.test(err.message),
@@ -231,14 +231,14 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
       )
       await assert.rejects(
         () => env.invoke.inspectWorktree({ nodeId: 'local' }),
-        (err: unknown) => err instanceof Error && /需提供|仅可与 path 搭配|validation_error/.test(err.message),
+        (err: unknown) => err instanceof Error && /需提供|仅与 path 搭配|validation_error/.test(err.message),
       )
 
-      // diff:false 省略 diff 正文（统计与元数据仍返回）。
+      // diff:false omit diff body text (count and metadata still return).
       const noDiff = await env.invoke.inspectWorktree({ worktreeId, diff: false })
       assert.equal(noDiff['diffPreview'], undefined)
 
-      // 清理（force：树内可能仍有未提交 gate 产物）后检视：仅元数据 + removed。
+      // clean up (force: tree inside may still has uncommitted gate artifact) after inspect view: only metadata + removed.
       if (PROCESS_SCAN_ON) {
         await env.invoke.cleanupWorktree({ worktreeId, force: true })
       } else {
@@ -246,7 +246,7 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
           () => env.invoke.cleanupWorktree({ worktreeId, force: true }),
           (err: unknown) => {
             assert.ok(err instanceof HelmError)
-            assert.equal(err.code, 'worktree_process_check_failed', '非 Linux 平台：进程占用扫描不支持，cleanup 必须显式拒绝')
+            assert.equal(err.code, 'worktree_process_check_failed', 'non- Linux platform: process occupy scan unsupported,cleanup must explicit reject')
             return true
           },
         )
@@ -263,7 +263,7 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
     }
   })
 
-  it('porcelain 首列保留：先提交 tracked 再 staged/unstaged 改动，状态原行不 trim；diff 覆盖 tracked 改动且不含 untracked', {
+  it('porcelain first column keep: first commit tracked again staged/unstaged change, state original row do not trim;diff override tracked change and excludes untracked', {
     timeout: 60_000,
   }, async () => {
     const dir = join(rootDir, 't3')
@@ -273,42 +273,42 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
       const { worktreeId, path } = await spawnCleanWorktree(env)
       const git = (args: string[]) => execFileSync('git', args, { cwd: path, encoding: 'utf-8' })
 
-      // 先提交 tracked 文件，再构造 staged/unstaged/untracked 三类改动。
+      // first commit tracked file, again construct staged/unstaged/untracked three class change.
       writeFileSync(join(path, 'feature.txt'), 'v1\n')
       git(['add', 'feature.txt'])
       git(['commit', '-qm', 'feat: tracked file'])
-      writeFileSync(join(path, 'feature.txt'), 'v2 unstaged body\n') // 未暂存修改（首列为空格）
+      writeFileSync(join(path, 'feature.txt'), 'v2 unstaged body\n') // unstaged modify (first column is empty format)
       writeFileSync(join(path, 'staged.txt'), 'staged new body\n')
-      git(['add', 'staged.txt']) // 暂存新增（首列 A）
+      git(['add', 'staged.txt']) // staged new increase (first column A)
       writeFileSync(join(path, 'README.md'), '# repo modified\n')
-      git(['add', 'README.md']) // 暂存修改（首列 M）
+      git(['add', 'README.md']) // staged modify (first column M)
       writeFileSync(join(path, 'untracked.txt'), 'only untracked body\n')
 
       const inspect = await env.invoke.inspectWorktree({ worktreeId })
       const dirtyFiles = inspect['dirtyFiles'] as string[]
       assert.equal(inspect['dirtyFileCount'], 4)
-      // 原行保留：XY 首列与列间空格绝无 trim。
-      assert.ok(dirtyFiles.includes(' M feature.txt'), `未暂存首列空格必须保留（实得 ${JSON.stringify(dirtyFiles)}）`)
-      assert.ok(dirtyFiles.includes('A  staged.txt'), `暂存新增首列 A 必须保留（实得 ${JSON.stringify(dirtyFiles)}）`)
-      assert.ok(dirtyFiles.includes('M  README.md'), `暂存修改首列 M 必须保留（实得 ${JSON.stringify(dirtyFiles)}）`)
-      assert.ok(dirtyFiles.includes('?? untracked.txt'), `未跟踪原行 ?? 必须保留（实得 ${JSON.stringify(dirtyFiles)}）`)
+      // original row keep:XY first column and column between space absolute without trim.
+      assert.ok(dirtyFiles.includes(' M feature.txt'), `unstaged first column space must keep (got ${JSON.stringify(dirtyFiles)})`)
+      assert.ok(dirtyFiles.includes('A  staged.txt'), `staged new increase first column A must keep (got ${JSON.stringify(dirtyFiles)})`)
+      assert.ok(dirtyFiles.includes('M  README.md'), `staged modify first column M must keep (got ${JSON.stringify(dirtyFiles)})`)
+      assert.ok(dirtyFiles.includes('?? untracked.txt'), `untracked original row ?? must keep (got ${JSON.stringify(dirtyFiles)})`)
       assert.equal(inspect['dirtyFilesTruncated'], false)
 
-      // diff（相对 baseCommit）覆盖 staged + unstaged 的 tracked 改动，不含 untracked。
+      // diff(each other for baseCommit) override staged + unstaged  tracked change, excludes untracked.
       const diffPreview = inspect['diffPreview'] as string
-      assert.ok(diffPreview.includes('+v2 unstaged body'), 'diff 应含未暂存修改内容')
-      assert.ok(diffPreview.includes('+staged new body'), 'diff 应含暂存新增内容')
-      assert.ok(!diffPreview.includes('untracked.txt'), 'untracked 文件不得进入 diff')
+      assert.ok(diffPreview.includes('+v2 unstaged body'), 'diff should contains unstaged modify content')
+      assert.ok(diffPreview.includes('+staged new body'), 'diff should contains staged new increase content')
+      assert.ok(!diffPreview.includes('untracked.txt'), 'untracked file must not enter diff')
       const diffStat = inspect['diffStat'] as string
       assert.ok(diffStat.includes('feature.txt') && diffStat.includes('staged.txt'))
-      assert.ok(!diffStat.includes('untracked.txt'), 'untracked 文件不得进入 diff 统计')
+      assert.ok(!diffStat.includes('untracked.txt'), 'untracked file must not enter diff count')
       assert.equal(inspect['diffTruncated'], false)
     } finally {
       await env.close()
     }
   })
 
-  it('只有 untracked 文件：status 非空而 diff 为空（untracked 见状态清单、不进 diff 契约）', {
+  it('only untracked file:status non-empty while diff is empty (untracked see state manifest, does not enter diff contract)', {
     timeout: 60_000,
   }, async () => {
     const dir = join(rootDir, 't4')
@@ -321,7 +321,7 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
       const inspect = await env.invoke.inspectWorktree({ worktreeId })
       assert.equal(inspect['dirtyFileCount'], 1)
       assert.deepEqual(inspect['dirtyFiles'], ['?? untracked-only.txt'])
-      // 契约：无 tracked 改动时 diff 与统计均为空（undefined），而非伪造空串。
+      // contract: without tracked change when diff and count all is empty (undefined), while non- fabricate empty string.
       assert.equal(inspect['diffStat'], undefined)
       assert.equal(inspect['diffPreview'], undefined)
       assert.equal(inspect['diffTruncated'], false)
@@ -330,44 +330,44 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
     }
   })
 
-  it('大 diff 超 16KiB 截断为真实前缀；脏文件超 200 行保留真实总数与截断标记', { timeout: 60_000 }, async () => {
+  it('large diff over 16KiB truncate is real prefix; dirty file over 200 row keep real total count and truncate mark record', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't5')
     const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       const { worktreeId, path } = await spawnCleanWorktree(env)
       const git = (args: string[]) => execFileSync('git', args, { cwd: path, encoding: 'utf-8' })
-      // 单文件大改动（约 33KiB > 16KiB 预览上限）提交为 tracked 改动。
+      // single file large change (about 33KiB > 16KiB preview cap) commit is tracked change.
       const bigBody = Array.from({ length: 480 }, (_, i) => `line-${String(i).padStart(3, '0')}-${'x'.repeat(60)}`).join('\n')
       writeFileSync(join(path, 'big-change.txt'), `${bigBody}\n`)
       git(['add', 'big-change.txt'])
       git(['commit', '-qm', 'feat: big change'])
-      // 205 个未跟踪文件（超出 200 行保留上限，真实计数必须保留）。
+      // 205 untracked file (exceeds 200 row keep cap, real counter must keep).
       for (let i = 0; i < 205; i++) {
         writeFileSync(join(path, `u-${String(i).padStart(3, '0')}.txt`), 'x\n')
       }
 
       const inspect = await env.invoke.inspectWorktree({ worktreeId })
-      // diff 预览：采集阶段先到先截，恰好为上限字符数且是真实 diff 的前缀。
+      // diff preview: collect phase first to first truncate, exactly is cap character count and is real diff prefix.
       assert.equal(inspect['diffTruncated'], true)
       const diffPreview = inspect['diffPreview'] as string
-      assert.equal(diffPreview.length, 16_384, '预览应恰好为上限字符数')
+      assert.equal(diffPreview.length, 16_384, 'preview should exactly is cap character count')
       const base = (inspect['record'] as Record<string, unknown>)['baseCommit'] as string
       const realDiff = execFileSync('git', ['diff', '--no-ext-diff', '--no-textconv', base], {
         cwd: path,
         encoding: 'utf-8',
       })
-      assert.ok(realDiff.length > 16_384, '测试前提：真实 diff 超过预览上限')
-      assert.equal(diffPreview, realDiff.slice(0, 16_384), '预览必须是真实 diff 的前缀')
-      // 状态清单：保留前 200 条原行，真实总数 205 不失真。
+      assert.ok(realDiff.length > 16_384, 'test before mention: real diff exceeds preview cap')
+      assert.equal(diffPreview, realDiff.slice(0, 16_384), 'preview must be real diff prefix')
+      // state manifest: keep before 200 original row, real total count 205 do not lose true.
       const dirtyFiles = inspect['dirtyFiles'] as string[]
       assert.equal(dirtyFiles.length, 200)
-      assert.equal(inspect['dirtyFileCount'], 205, '非空状态行真实总数不得因截断失真')
+      assert.equal(inspect['dirtyFileCount'], 205, 'non-empty state row real total count must not because truncate lose true')
       assert.equal(inspect['dirtyFilesTruncated'], true)
-      assert.ok(dirtyFiles[0]!.startsWith('?? u-'), '保留原行（含 ?? 首列）')
-      // 统计未超上限（单文件大改动 --stat 很短）：不得误标截断。
+      assert.ok(dirtyFiles[0]!.startsWith('?? u-'), 'keep original row (contains ?? first column)')
+      // count not over cap (single file large change --stat very short): must not mistakenly mark truncate.
       const diffStat = inspect['diffStat'] as string
-      assert.ok(!diffStat.includes('截断'), `统计未超上限时不得附截断说明（实得 ${diffStat}）`)
+      assert.ok(!diffStat.includes('truncate'), `count not over cap when must not attach truncate note (got ${diffStat})`)
     } finally {
       await env.close()
     }

@@ -7,7 +7,7 @@ import { deferred } from '@helm/test-kit'
 import { useTempDir } from '@helm/test-kit/node'
 import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js'
 
-test('节点不会继承宿主的大小写变体 Helm_Token', { timeout: 60_000 }, async () => {
+test('node will not inherit host large small write change body Helm_Token', { timeout: 60_000 }, async () => {
   const previous = process.env.Helm_Token
   process.env.Helm_Token = 'mixed-case-host-credential'
   let output = ''
@@ -23,14 +23,14 @@ test('节点不会继承宿主的大小写变体 Helm_Token', { timeout: 60_000 
   }
 })
 
-test('Reader 打开与 dispose 并发时不遗留新句柄', { timeout: 60_000 }, async (t) => {
+test('Reader open and dispose concurrency when do not legacy new handle', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-reader-race-')
   await writeFile(join(dir, 'file.txt'), 'content')
   for (let index = 0; index < 20; index++) {
     const server = createNodeEnvRpcServer({ defaultCwd: dir })
     const pending = server.envOpenBinaryReader({ path: 'file.txt' })
     const firstClose = server.dispose()
-    assert.equal(server.dispose(), firstClose, '关闭操作应返回同一排空承诺')
+    assert.equal(server.dispose(), firstClose, 'close operation should return the same arrange empty promise')
     await firstClose
     await pending
     assert.equal(server.getOpenReaderCount(), 0)
@@ -40,7 +40,7 @@ test('Reader 打开与 dispose 并发时不遗留新句柄', { timeout: 60_000 }
   }
 })
 
-test('已确认的 IPC 订阅断开时恰好发送一次关闭通知', { timeout: 60_000 }, async (t) => {
+test('already confirm IPC subscribe on disconnect exactly send once close notify', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-ipc-close-')
   const endpoint = join(dir, 'close.sock')
   let peer: net.Socket | undefined
@@ -66,7 +66,7 @@ test('已确认的 IPC 订阅断开时恰好发送一次关闭通知', { timeout
   }
 })
 
-test('未带 callId 的 IPC 与 ACK 前订阅也归属连接代清理', { timeout: 60_000 }, async (t) => {
+test('not carries callId  IPC and ACK before subscribe also ownership connect proxy clean up', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-ipc-race-')
   const endpoint = join(dir, 'pending.sock')
   const sockets = new Set<net.Socket>()

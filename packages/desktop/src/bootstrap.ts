@@ -13,7 +13,7 @@ export interface BootOptions {
   log?: (message: string) => void;
 }
 
-/** 候选必须启动成功才提交；下载只暂存，下一次启动才切换。 */
+/** choose must start succeeded only then commit; download only staged, under once start only then switch. */
 export class DesktopBoot {
   supervisor: HubSupervisor;
   private candidate: PayloadInfo | null = null;
@@ -30,7 +30,7 @@ export class DesktopBoot {
   private fromPayload(payload: PayloadInfo | null): DesktopConfig {
     if (payload === null || payload.entryPath === undefined || payload.releaseDir === undefined) return this.options.config;
     const cli = join(payload.releaseDir, 'cli', 'dist', 'index.js');
-    // 仅本次 Hub 使用与该载荷同版的资源；显式用户覆盖仍优先。
+    // only this time Hub use and the payload same edition asset; explicit user override still takes precedence.
     return resolveDesktopConfig({}, {
       ...this.options.config,
       payloadEntry: payload.entryPath,
@@ -42,7 +42,7 @@ export class DesktopBoot {
 
   async start(): Promise<StartResult> {
     const { config, updater } = this.options;
-    // 探测外部 Hub 后直接附着，其生命周期与更新均不由桌面端接管。
+    // probe external Hub after directly attach, its lifecycle and update all do not by desktop end take over.
     try {
       const response = await fetch(`${config.hubUrl}/api/auth/status`, { signal: AbortSignal.timeout(config.probeTimeoutMs) });
       if (response.ok) {
@@ -52,7 +52,7 @@ export class DesktopBoot {
           return this.result;
         }
       }
-    } catch { /* 无监听时继续启动受管 Hub；端口冲突由监督器显式报告。 */ }
+    } catch { /* without listen when continue start managed Hub; port conflict by supervise explicit report. */ }
     if (config.hubCommand === undefined && config.payloadEntry === undefined) {
       this.candidate = updater.resolvePending();
       this.supervisor = this.makeSupervisor(this.fromPayload(this.candidate ?? updater.resolveCurrent()));
@@ -66,23 +66,23 @@ export class DesktopBoot {
     }
   }
 
-  /** GUI 在 React 首帧完成后提交；headless 在 Hub HTTP 就绪后提交。 */
+  /** GUI in React first frame after completion commit;headless in Hub HTTP ready after commit. */
   async confirmReady(): Promise<void> {
     if (this.candidate !== null && this.result?.mode === 'owned') {
       await this.options.updater.activate(this.candidate);
-      this.options.log?.(`更新已启用：${this.candidate.version}`);
+      this.options.log?.(`update enabled:${this.candidate.version}`);
       this.candidate = null;
     }
   }
 
   async restore(error: Error): Promise<StartResult> {
-    // 环境/存储故障并不证明载荷有缺陷；显式失败并保留重试机会，不能永久阻断版本。
+    // environment/store fault does not verify payload has defect; explicit failed and keep retry chance, cannot forever long block assert version.
     if (this.candidate === null || (error instanceof DesktopError && [
       'hub_port_conflict', 'hub_runner_probe_failed', 'hub_runner_incapable', 'updater_state_write_failed',
     ].includes(error.code))) throw error;
     await this.supervisor.stop();
     await this.options.updater.reject(this.candidate, error);
-    this.options.log?.(`更新 ${this.candidate.version} 启动失败，已保留上一版本：${error.message}`);
+    this.options.log?.(`update ${this.candidate.version} failed to start, already keep on one version:${error.message}`);
     this.candidate = null;
     this.supervisor = this.makeSupervisor(this.fromPayload(this.options.updater.resolveCurrent()));
     this.result = await this.supervisor.start();
@@ -90,7 +90,7 @@ export class DesktopBoot {
   }
 
   async checkForUpdate(): Promise<PayloadUpdateStatus> {
-    if (this.result?.mode !== 'owned') throw new Error('当前连接的 Hub 由外部进程管理，请通过其安装渠道更新');
+    if (this.result?.mode !== 'owned') throw new Error('when before connect Hub by external process manage, please via its install channel update');
     if (this.checking !== null) return this.checking;
     this.checking = (async () => {
       const status = await this.options.updater.check();
@@ -102,7 +102,7 @@ export class DesktopBoot {
       }
       if (status.updateAvailable && status.latest !== null) {
         await this.options.updater.stage({ name: status.latest.name, version: status.latest.version });
-        this.options.log?.(`更新 ${status.latest.version} 已下载，下次启动时安装`);
+        this.options.log?.(`update ${status.latest.version} already download, under time at startup install`);
       }
       return status;
     })();

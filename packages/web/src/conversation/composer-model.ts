@@ -87,9 +87,9 @@ export function sendingPendingVisible(
 export function getComposerPlaceholder(working: boolean, isMobile: boolean): string {
   if (working) {
     // 移动端占位符保持极短，避免窄屏折行撑高输入区
-    return isMobile ? '补充说明或排队指令…' : '补充说明或输入下一条指令（Enter 插话引导 · ⌘/Ctrl+Enter 排队发送）'
+    return isMobile ? 'Add notes or queued instructions…' : 'Add notes or type the next instruction (Enter steers · ⌘/Ctrl+Enter queues)'
   }
-  return isMobile ? '输入消息…' : '输入消息；/ 命令与技能，⌘V 粘贴附件'
+  return isMobile ? 'Type a message…' : 'Type a message; / for commands and skills, ⌘V to paste attachments'
 }
 
 /** 会话正忙时 Enter 的默认 whenBusy 策略（插话引导）。 */
@@ -209,7 +209,7 @@ export function formatEnvSubtitle(input: EnvSubtitleInput): { text: string; tool
   if (input.compact === true) {
     return {
       text: nodeId === 'local' ? '' : `@${nodeId}`,
-      tooltip: `智能体：${input.profileId} · 节点：${nodeId} · 工作目录：${input.cwd || '(未设置)'}`,
+      tooltip: `Agent: ${input.profileId} · Node: ${nodeId} · Working directory: ${input.cwd || '(not set)'}`,
     }
   }
   const parts = splitPathSegments(input.cwd)
@@ -220,7 +220,7 @@ export function formatEnvSubtitle(input: EnvSubtitleInput): { text: string; tool
       : tail === '' ? `${input.profileId} · @${nodeId}` : `${input.profileId} · @${nodeId}:${tail}`
   return {
     text,
-    tooltip: `智能体：${input.profileId} · 节点：${nodeId} · 工作目录：${input.cwd || '(未设置)'}`,
+    tooltip: `Agent: ${input.profileId} · Node: ${nodeId} · Working directory: ${input.cwd || '(not set)'}`,
   }
 }
 
@@ -245,9 +245,9 @@ export function envDraftOnNodeChange(current: EnvDraft, nextNodeId: string): Env
 
 /** 保存前校验：返回 null 表示可提交，否则返回用户可读错误。 */
 export function envDraftError(draft: EnvDraft): string | null {
-  if (draft.cwd.trim() === '') return '请填写目标节点上的工作目录（绝对路径）'
+  if (draft.cwd.trim() === '') return 'Enter the working directory on the target node (absolute path)'
   if (!draft.cwd.trim().startsWith('/') && !/^[A-Za-z]:[\\/]/.test(draft.cwd.trim())) {
-    return '工作目录必须是绝对路径（POSIX / 或 Windows 盘符开头）'
+    return 'Working directory must be an absolute path (POSIX / or Windows drive letter)'
   }
   return null
 }

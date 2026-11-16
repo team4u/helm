@@ -1,19 +1,19 @@
 /**
- * service.ts — WorkflowService：工作流引擎对内核/HTTP 层的唯一出口（facade）。
+ * service.ts -- WorkflowService: the workflow engine's single facade to the kernel/HTTP layer.
  *
- * 内部职责按模块拆分（均在同目录）：library-store（已保存工作流文件库）、
- * run-store（run 记录/索引持久层）与 run-summary（summary 派生/脱敏/
- * progress 折叠投影）、cancellation-tracker（取消窗口与子树边界取消）、
- * host-adapter + host-action-adapter（引擎 WorkflowHost ↔ WorkflowServiceHost
- * 适配）、active-run（在途运行态与节流常量）、service-context（runner 共享
- * 上下文、caps 与选项装配）、service-run / run-settle / run-progress
- * （run() 启动主体、终态结算、进度事件策略）、background-agent-runner
- * （startBackgroundAgent）、service-recovery（启动恢复与自动续跑候选）。
+ * Internal responsibilities split by module (all in the same directory): library-store (the saved-workflow
+ * file library), run-store (the run record/index persistence layer) and run-summary (summary
+ * derivation/redaction/progress folding), cancellation-tracker (cancellation windows and
+ * subtree-boundary cancellation), host-adapter + host-action-adapter (the engine's WorkflowHost <->
+ * WorkflowServiceHost adaptation), active-run (in-flight runtime state and throttling constants),
+ * service-context (the runner-shared context, caps and option assembly), service-run / run-settle /
+ * run-progress (the run() launch body, terminal settlement, progress event policy),
+ * background-agent-runner (startBackgroundAgent), service-recovery (startup recovery and auto-resume candidates).
  *
- * 本文件只保留门面：构造装配、各 runner 委托、查询面（getRun/listRuns/
- * wait/abort/close）、host 适配接缝与 state store 读写。持久化格式、错误码
- * 与行为契约不变。引擎本体（runtime.ts）零内核依赖；本文件是唯一 import
- * kernel 侧类型的适配层。
+ * This file keeps only the facade: construction and assembly, delegation to the runners, the query
+ * faces (getRun/listRuns/wait/abort/close), the host adaptation seam and state-store reads/writes.
+ * Persistence formats, error codes and behavior contracts are unchanged. The engine proper
+ * (runtime.ts) has zero kernel dependencies; this file is the only adaptation layer importing kernel types.
  */
 
 import {
@@ -84,7 +84,7 @@ export class WorkflowService {
   private readonly library: WorkflowLibrary
   private readonly cancellation: CancellationTracker
   private readonly active = new Map<string, ActiveRun>()
-  /** 进程内接管保留（防并发双接管；完整语义见 service-run 的 resume 接管段）。 */
+  /** In-process takeover reservations (against concurrent double takeovers; full semantics in service-run's resume-takeover section). */
   private readonly takeoverReservations = new Set<string>()
   private readonly ctx: WorkflowServiceContext
   private readonly recovery: StartupRecovery
@@ -144,66 +144,66 @@ export class WorkflowService {
     this.recovery = new StartupRecovery(this.ctx)
   }
 
-  /** 判断当前是否启用重启自动恢复（配置项与 HELM_AUTO_RECOVER=0/false 逃生阀）。 */
+  /** Whether automatic recovery on restart is enabled (config option and HELM_AUTO_RECOVER=0/false escape hatch). */
   isAutoRecoverOnRestart(): boolean {
     if (this.autoRecoverOption === false) return false
     if (typeof this.autoRecoverOption === 'function' && !this.autoRecoverOption()) return false
     return !isAutoRecoverEnvDisabled()
   }
 
-  /** 判断宿主内核是否处于关停窗口。 */
+  /** Whether the host kernel is currently in its shutdown window. */
   isHostClosing(): boolean {
     return this.host.isHostClosing?.() === true
   }
 
-  /** runtime.started 阶段放行被推迟的外部运行时（executionId）与 pre-resolve 重挂。 */
+  /** Release deferred external-runtime (executionId) and pre-resolve reattaches during runtime.started. */
   startDeferredReattaches(): void {
     this.resolveExternalRuntimeReady()
   }
 
-  /** 启动恢复（阶段一屏障；实现位于 service-recovery）。幂等；run() 首次调用前自动执行。 */
+  /** Startup recovery (phase-one barrier; implemented in service-recovery). Idempotent; auto-runs before the first run() call. */
   async prepareRecovery(): Promise<void> {
     return this.recovery.prepareRecovery()
   }
 
-  /** 启动恢复（阶段二：interrupted 标记与通知 outbox 补发；实现位于 service-recovery）。 */
+  /** Startup recovery (phase two: interrupted markers and notification-outbox re-delivery; implemented in service-recovery). */
   async init(): Promise<void> {
     return this.recovery.init()
   }
 
-  /** 启动后收敛（runtime.started 阶段：等待遗留子会话结算至 idle；幂等）。 */
+  /** Post-startup convergence (runtime.started phase: wait for leftover sub-conversations to settle to idle; idempotent). */
   async awaitPreparedChildrenSettled(): Promise<void> {
     return this.recovery.awaitPreparedChildrenSettled()
   }
 
-  // 工作流库：list / get / save / delete（实现位于 library-store）
+  // Workflow library: list / get / save / delete (implemented in library-store)
 
-  /** 列出带 meta 声明的工作流脚本；非法 meta 附 metadataError，文件读取错误显式失败。 */
+  /** List workflow scripts with meta declarations; invalid meta attaches metadataError; file read errors fail explicitly. */
   list(): SavedWorkflowSummary[] {
     return this.library.list()
   }
 
-  /** 读取已保存工作流的完整定义（只读源码 + 元数据 + 真实文件事实）。 */
+  /** Read a saved workflow's full definition (read-only source + metadata + real file facts). */
   get(name: string): SavedWorkflowDetail {
     return this.library.get(name)
   }
 
-  /** 保存工作流定义（script / fromRunId 恰一；边界校验与原子写入见 library-store.save）。 */
+  /** Save a workflow definition (exactly one of script / fromRunId; boundary validation and atomic writes in library-store.save). */
   save(request: WorkflowSaveRequest): WorkflowSaveResult {
     return this.library.save(request)
   }
 
-  /** 删除已保存工作流定义文件（历史 run 记录不受影响；不存在显式 404）。 */
+  /** Delete a saved workflow definition file (historical run records unaffected; explicit 404 when absent). */
   delete(name: string): WorkflowDeleteResult {
     return this.library.delete(name)
   }
 
-  // run（实现位于 service-run / run-settle / run-progress）
+  // run (implemented in service-run / run-settle / run-progress)
 
   /**
-   * 启动一个工作流 run：后台执行，立即返回 summary（不等完成）。
-   * context.foreground=true 标记前台同步 run（record.syncForeground，可被
-   * detach 转后台）。
+   * Start a workflow run: executes in the background, returns the summary immediately (no waiting).
+   * context.foreground=true marks a foreground synchronous run (record.syncForeground, detachable
+   * to the background).
    * @throws HelmError validation_error / not_found / workflow_action_uncertain / journal_read_failed。
    */
   async run(
@@ -213,13 +213,13 @@ export class WorkflowService {
     return startWorkflowRun(this.ctx, request, context)
   }
 
-  // startBackgroundAgent：受信后台单子代理（实现位于 background-agent-runner）
+  // startBackgroundAgent: a trusted background single-subagent (implemented in background-agent-runner)
 
   /**
-   * 启动后台单子代理：复用 run 记录 / 持久化 / abort / wait / getRun /
-   * onRunSettled / 重启恢复，但不经 DSL 引擎（时序纪律见 background-agent-runner）。
-   * options.foreground=true 为前台同步模式（同步 subagent 工具）：record 标记
-   * syncForeground、notifyParentOnSettle 缺省 false、父 signal 绑定至 detach/终态。
+   * Start a background single-subagent: reuses the run record / persistence / abort / wait / getRun /
+   * onRunSettled / restart recovery, but bypasses the DSL engine (timing discipline in background-agent-runner).
+   * options.foreground=true is the foreground synchronous mode (the synchronous subagent tool): the record
+   * marks syncForeground, notifyParentOnSettle defaults to false, and the parent signal binds until detach/terminal.
    */
   async startBackgroundAgent(
     request: AgentSpawnRequest,
@@ -236,13 +236,14 @@ export class WorkflowService {
     return launchBackgroundAgent(this.ctx, request, options)
   }
 
-  // 前台同步 run 的 detach（实现位于 run-detach）
+  // Detach of foreground synchronous runs (implemented in run-detach)
 
   /**
-   * 前台同步等待（同步工具 execute 内使用）：resolve 为 'detached'（detach
-   * 动作已转后台，工具立即返回后台句柄）或 'settled'（run 终态，settleError
-   * 与 wait() 同语义抛出）。hooks.onDetached 在 detach 临界段同步执行
-   * （工具侧解绑父 signal listener，转后台后父回合 signal 不再杀 run）。
+   * Foreground synchronous wait (used inside the synchronous tool's execute): resolves as 'detached' (the
+   * detach action moved it to the background, and the tool immediately returns a background handle) or
+   * 'settled' (the run's terminal state; settleError throws with wait()'s semantics).
+   * hooks.onDetached runs synchronously inside the detach critical section (the tool side unbinds the parent
+   * signal listener; after detaching, the parent turn's signal no longer kills the run).
    */
   async waitForeground(
     runId: string,
@@ -252,11 +253,11 @@ export class WorkflowService {
   }
 
   /**
-   * 把运行中的前台同步 run 原子转为后台（detach 动作入口；同步临界段实现
-   * 见 run-detach）：置位 detachedAt/notifyParentOnSettle、持久化、解绑父
-   * signal（引擎绑定 + 等待者 onDetached）并唤醒等待者，随后 await 状态
-   * 存储 flush（失败如实抛 detach_flush_failed，不回滚已持久记录）。
-   * 状态/前台标记不满足时显式拒绝。
+   * Atomically move a running foreground synchronous run to the background (the detach action entry;
+   * the synchronous critical section lives in run-detach): set detachedAt/notifyParentOnSettle, persist,
+   * unbind the parent signal (engine binding + waiter onDetached) and wake the waiters, then await the
+   * state-store flush (failures throw detach_flush_failed honestly, without rolling back the persisted record).
+   * Explicitly rejected when the state/foreground markers don't qualify.
    */
   async detachForegroundRun(runId: string): Promise<WorkflowRunSummary> {
     this.assertNotClosed()
@@ -265,11 +266,11 @@ export class WorkflowService {
 
   // getRun / wait / abort
 
-  /** 内存优先，回落 state store（跨重启 inspect）。 */
+  /** Memory first, falling back to the state store (cross-restart inspect). */
   getRun(runId: string): WorkflowRunSummary {
     const activeRun = this.active.get(runId)
     if (activeRun !== undefined) {
-      // 后台单子代理不经引擎 progress：直接用 record.nodes（实时维护）。
+      // Background single-subagents skip the engine progress: use record.nodes directly (maintained live).
       const collapsed =
         activeRun.progress.length > 0 ? nodesFromProgress(activeRun.progress) : activeRun.summary.nodes
       return redactSummaryNodes(this.redact, {
@@ -282,19 +283,19 @@ export class WorkflowService {
   }
 
   /**
-   * 全部已持久 run 的 summary（新建在前）：活跃 run 实时折叠 nodes，
-  // 终态 run 读 store；非保存脚本运行的 run 也列出（历史可 inspect）。
+   * Summaries of all persisted runs (newest first): active runs fold nodes live;
+  // terminal runs read the store; runs of unsaved scripts are listed too (history stays inspectable).
    *
-   * 索引损坏（缺记录、ID 不符、形状非法）或 store 抛错是持久层服务故障，
-   * 不是「少几项的正常列表」——静默吞掉会让 HTTP/CLI/snapshot 返回看似成功
-   * 的残缺数据。此处显式抛 workflow_index_corrupt（500）并附 runId 诊断；
-   * 单个 run 不存在的 404 语义仍由 getRun 保留。快照 provider 同走此路径，
-   * 故障不会被 snapshot 再吞掉（throw 直接打断 SSE snapshot 组装）。
+   * Index corruption (missing records, ID mismatches, invalid shapes) or store throws are persistence-layer
+   * service faults, not "a normal list missing a few" -- swallowing them silently would make
+   * HTTP/CLI/snapshot return seemingly successful truncated data. Throw workflow_index_corrupt
+   * (500) here with runId diagnostics; the 404 semantics of a single missing run stay with getRun.
+   * The snapshot provider takes the same path, so faults are not re-swallowed by snapshot (a throw
    */
   listRuns(): WorkflowRunSummary[] {
-    // 索引读取与其他全部入口统一（readRunIndex）：store 抛错/形状损坏显式
-    // workflow_index_corrupt（带 key 与可辨识 runId），绝不强转后拿 entry.id
-    // TypeError 或当有效列表。
+    // Index reading stays uniform with all other entry points (readRunIndex): store throws/shape
+    // corruption explicitly workflow_index_corrupt (with key and an identifiable runId); never coerce
+    // then TypeError on entry.id or treat it as a valid list.
     const index = this.runs.readIndex()
     const out: WorkflowRunSummary[] = []
     const seen = new Set<string>()
@@ -313,20 +314,20 @@ export class WorkflowService {
     for (const entry of [...index].sort((a, b) => b.createdAt - a.createdAt)) {
       if (seen.has(entry.id)) continue
       seen.add(entry.id)
-      // loadRecord 对 not_found（普通不存在）抛 404：在 list 语境里这是索引
-      // 指向缺失记录的服务故障，改报 workflow_index_corrupt；ID 不符同理。
+      // loadRecord throws 404 for not_found (plain absence): in the list context this is a service
+      // fault of the index pointing at a missing record, re-reported as workflow_index_corrupt; likewise ID mismatches.
       try {
         out.push(toSummary(this.runs.load(entry.id)))
       } catch (error) {
         if (error instanceof HelmError && error.code === 'not_found') {
-          throw this.runs.indexCorruptError(entry.id, `记录缺失或 ID 不符：${error.message}`)
+          throw this.runs.indexCorruptError(entry.id, `record missing or ID mismatch: ${error.message}`)
         }
         if (error instanceof HelmError && error.code === 'workflow_record_corrupt') throw error
-        throw this.runs.indexCorruptError(entry.id, `记录损坏：${errorMessage(error)}`)
+        throw this.runs.indexCorruptError(entry.id, `record corrupted: ${errorMessage(error)}`)
       }
     }
-    // 新建在前契约是全局的：active.values() 是旧先新后的插入序，较早创建的
-    // 活跃 run 不能排在较新的终态历史之前——合并去重后统一 createdAt 倒序。
+    // The newest-first contract is global: active.values() is insertion order (old first); an older active
+    // run must not precede a newer terminal history item -- after merge-dedup, sort uniformly by createdAt descending.
     out.sort((a, b) => b.createdAt - a.createdAt)
     return out
   }
@@ -372,17 +373,17 @@ export class WorkflowService {
   }
 
   /**
-   * 返回满足自动断点续跑条件的后台工作流（实现位于 service-recovery）。
+   * Return background workflows eligible for automatic resume (implemented in service-recovery).
    */
   listAutoResumeCandidates(maxAttempts = 3) {
     return this.recovery.listAutoResumeCandidates(maxAttempts)
   }
 
-  /** 等待 run 完成并返回其结果（历史 run 直接返回 result）。 */
+  /** Wait for a run to finish and return its result (historical runs return result directly). */
   async wait(runId: string): Promise<unknown> {
     const activeRun = this.active.get(runId)
     if (activeRun !== undefined) {
-      // done 绝不 reject；终态落盘/flush 失败经 settleError 原样抛出，不假成功。
+      // done never rejects; terminal-state flush failures throw as-is via settleError, never faking success.
       await activeRun.done
       if (activeRun.settleError !== undefined) throw activeRun.settleError
     }
@@ -390,21 +391,22 @@ export class WorkflowService {
   }
 
   /**
-   * 中止 run（级联）：本 run 自身 + 其子会话子树内的全部后代 run 与同步子会话
-   * 一起取消；父会话的兄弟任务不受牵连。取消窗口内拒绝该子树新 run/spawn
-   * （防取消期间又派新任务）；返回时全部涉及 run 已 settle、无未处理 rejection。
+   * Abort a run (cascading): the run itself + all descendant runs inside its sub-conversation subtree and
+   * synchronous sub-conversations are cancelled together; sibling tasks of the parent conversation are
+   * unaffected. New runs/spawns of that subtree are refused inside the cancellation window (preventing new
+   * tasks spawned mid-cancellation); on return, every involved run has settled with no unhandled rejections.
    */
   async abort(runId: string): Promise<void> {
     const activeRun = this.active.get(runId)
     if (activeRun === undefined) {
-      // 历史 run 幂等：不存在的才报错。
+      // Historical runs are idempotent: only nonexistent ones error.
       this.getRun(runId)
       return
     }
     const seeds = [...activeRun.childConversations]
     await this.cancellation.cancelBoundary(`run:${runId}`, seeds, (run, isWithin) => {
       if (run === activeRun) return true
-      // 后代归属：run 的发起会话落在任一子会话子树内（沿真实会话父链）。
+      // Descendant ownership: the run's initiating conversation falls inside any sub-conversation subtree (along real conversation parent chains).
       for (const seed of seeds) {
         if (isWithin(run.conversationId, seed)) return true
       }
@@ -413,15 +415,15 @@ export class WorkflowService {
     if (activeRun.settleError !== undefined) throw activeRun.settleError
   }
 
-  /** 会话是否处于级联取消窗口（插件层据此跳过向被取消父会话的结算汇报投递）。 */
+  /** Whether a conversation is inside a cascade-cancellation window (the plugin layer uses this to skip settle-report delivery to cancelled parent conversations). */
   isConversationCancelling(conversationId: number): boolean {
     return this.cancellation.isCancelling(conversationId)
   }
 
   /**
-   * 取消会话子树（含自身发起）的全部在途 run：父会话被中止（turn aborted）
-   * 后由插件层调用。幂等：同根并发调用共享同一次取消；全部 run settle 后
-   * 才返回（各自子会话的守卫中止在 run 结算链内等待）。
+   * Cancel all in-flight runs of a conversation subtree (incl. self-initiated): called by the plugin layer
+   * after the parent conversation is aborted (turn aborted). Idempotent: concurrent calls with the same
+   * root share one cancellation; returns after every run settles.
    */
   async cancelRunsUnderConversation(conversationId: number): Promise<void> {
     if (this.host.isHostClosing?.() === true && this.isAutoRecoverOnRestart()) return
@@ -431,10 +433,10 @@ export class WorkflowService {
   }
 
   /**
-   * 守卫中止一个 run 的子会话：经宿主守卫入口（human 红线由内核原子复核；
-   * 拒绝/失败诊断不吞 stderr），绝不回退普通中止；完成前计入 pendingAborts
-   * （settle 前必等完——迟到调用在结算后仅诊断，同样不阻断终态）。
-   * 实现位于 host-adapter（引擎 abortAgent / 迟到 onResolved 补杀同款复用）。
+   * Guarded-abort a run's sub-conversations: via the host's guarded entry (the human red line is atomically
+   * re-checked by the kernel; rejection/failure diagnostics keep stderr), never falling back to plain aborts;
+   * counted into pendingAborts until done (settle waits for completion -- late calls after settlement are
+   * diagnostics only, likewise not blocking the terminal state).
    */
   private abortChildConversation(run: ActiveRun, conversationId: number): Promise<void> {
     return abortChildViaHost(this.host, run, conversationId)
@@ -468,7 +470,7 @@ export class WorkflowService {
     await this.state.flush?.()
   }
 
-  // host 适配：引擎 WorkflowHost <-> WorkflowServiceHost（实现位于 host-adapter）
+  // host adaptation: engine WorkflowHost <-> WorkflowServiceHost (implemented in host-adapter)
 
   private engineHostDeps(): EngineHostDeps {
     return {
@@ -489,8 +491,8 @@ export class WorkflowService {
   }
 
   /**
-   * 单次 agent/resume 调用（实现位于 host-adapter；保留私有接缝供建引擎
-   * 适配与直测共用同一入口）。签名与历史版本一致。
+   * A single agent/resume call (implemented in host-adapter; the private seam is kept so engine-adapter
+   * construction and direct tests share the same entry). Signature identical to the historical version.
    */
   private async invokeSpawn(
     run: ActiveRun,
@@ -502,7 +504,7 @@ export class WorkflowService {
     return invokeAgentSpawn(this.engineHostDeps(), run, parent, conversationByAgent, request, isResume)
   }
 
-  /** 嵌套 workflow() 引用解析：仅允许保存目录安全名或显式本地路径。 */
+  /** Nested workflow() reference resolution: only safe names in the saved directory or explicit local paths. */
   private loadWorkflowRef(
     ref: { name?: string; scriptPath?: string },
   ): { ok: true; script: string; path?: string } | { ok: false; message: string } {
@@ -515,19 +517,20 @@ export class WorkflowService {
         const path = this.library.resolveExplicitPath(ref.scriptPath)
         return { ok: true, script: this.library.readScriptFile(path), path }
       }
-      return { ok: false, message: 'workflow() 引用需要 name 或 scriptPath' }
+      return { ok: false, message: 'workflow() reference requires name or scriptPath' }
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) }
     }
   }
 
-  // state store 读写（单库；持久化实现位于 run-store）
+  // state-store reads/writes (single store; persistence implemented in run-store)
 
   /**
-   * 写 run 记录：活跃 run 的在途子会话以内存 Set 为唯一真源，任何写入
-   * （onResolved 即时 / progress 节流 / 终态）统一从 active 合入
-   * childConversationIds，杜绝用旧 record 副本覆盖掉已登记的子会话事实；
-   * 随后交 run store 原子落文件并更新索引（顺序纪律见 RunStore.write）。
+   * Write a run record: for active runs, the in-memory Set of in-flight sub-conversations is the single
+   * source of truth; every write (immediate at onResolved / throttled progress / terminal) merges
+   * childConversationIds uniformly from active, preventing stale record copies from overwriting registered
+   * sub-conversation facts; then the run store atomically flushes the file and updates the index (order
+   * discipline in RunStore.write).
    */
   private writeRecord(record: RunRecord): void {
     const active = this.active.get(record.id)
@@ -538,15 +541,15 @@ export class WorkflowService {
   }
 
   private assertNotClosed(): void {
-    if (this.closed) throw new HelmError('closed', 'WorkflowService 已关闭', 409)
+    if (this.closed) throw new HelmError('closed', 'WorkflowService is closed', 409)
   }
 
   /**
-   * 子会话事实即时持久（onResolved 登记点）：崩溃恢复（prepareRecovery/init
-   * 守卫中止）依赖 running 记录里的 childConversationIds——晚到终态才落盘等于
-   * 重启后子会话脱管。写入失败必须显式诊断（stderr）：静默吞掉会让下次恢复
-   * 假装完备；内存 record 已登记，后续 progress/终态写入自动重试携带（终态
-   * 写失败另有 settleError 如实浮出，不假装可恢复）。
+   * Sub-conversation facts persisted immediately (the onResolved registration point): crash recovery
+   * (prepareRecovery/init guarded aborts) relies on childConversationIds in running records -- persisting
+   * them only at a late terminal state would leave sub-conversations unmanaged after restart. Write failures
+   * must be explicitly diagnosed (stderr): silently swallowing them would make the next recovery pretend to
+   * be complete; the in-memory record already registers them, and later progress/terminal writes retry
    */
   private persistChildConversationFact(run: ActiveRun, conversationId: number): void {
     try {
@@ -567,10 +570,10 @@ export class WorkflowService {
   }
 
   /**
-   * workflow.updated 事件的 fire-and-forget 收口：WorkflowServiceHost 的
-   * emitEvent 签名是 void，但真实适配器（插件层）为 async——投影/广播失败
-   * 只能诊断，不得逃逸为 unhandledRejection 拖垮进程（观察面失败不动摇
-   * run 生命周期；持久终态以 state store 为准）。
+   * fire-and-forget convergence of workflow.updated events: WorkflowServiceHost's emitEvent signature is
+   * void, but the real adapter (plugin layer) is async -- projection/broadcast failures can only be
+   * diagnosed, never escaping as unhandledRejection to take down the process (observation-plane failures
+   * never shake the run lifecycle; persistent terminal states are owned by the state store).
    */
   private emitEventSafe(type: string, payload: unknown): void {
     const diagnose = (error: unknown): void => {

@@ -44,12 +44,12 @@ function AgentNewConversationButton({
 }) {
   if (!agent.canCreateConversation) return null
   return (
-    <Tooltip content={`在 ${agent.label} 下开始新话题`} side="right">
+    <Tooltip content={`Start a new topic under ${agent.label}`} side="right">
       <button
         type="button"
         className="btn btn-ghost btn-icon-xs agent-new-conv-btn"
-        title={`在 ${agent.label} 下开始新话题`}
-        aria-label={`在 ${agent.label} 下开始新话题`}
+        title={`Start a new topic under ${agent.label}`}
+        aria-label={`Start a new topic under ${agent.label}`}
         onClick={(e) => {
           e.stopPropagation()
           onCreate(agent.profileId)
@@ -249,7 +249,7 @@ function AgentConversationsList({
           className="btn btn-ghost btn-sm agent-list-toggle"
           onClick={onToggleShowAll}
         >
-          展开更多 (剩余 {hidden} 条)
+          Show more ({hidden} more)
         </button>
       )}
       {hidden === 0 && !searching && showAll && convs.length > AGENT_SUB_LIST_PREVIEW && (
@@ -258,7 +258,7 @@ function AgentConversationsList({
           className="btn btn-ghost btn-sm agent-list-toggle"
           onClick={onToggleShowAll}
         >
-          收起
+          Collapse
         </button>
       )}
     </div>
@@ -300,7 +300,7 @@ function AgentConversationRow({
             className="sidebar-batch-checkbox"
             checked={Boolean(selected)}
             disabled={!deletable}
-            title={deletable ? undefined : '受保护会话不可删除'}
+            title={deletable ? undefined : 'Protected conversations cannot be deleted'}
             onChange={() => {
               if (deletable) onToggleSelect?.(conv.id)
             }}
@@ -323,7 +323,7 @@ function AgentConversationRow({
         <span className="nav-status-slot">
           <ConversationStatusDot conv={conv} background={background} />
         </span>
-        <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
+        <span className="nav-item-label">{conv.title || `Conversation #${conv.id}`}</span>
       </button>
       <span className="nav-item-meta">
         <span className="tabular-nums">#{conv.id}</span>
@@ -455,22 +455,22 @@ export function AgentStandingsGroup({
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: '批量删除完成',
-          body: `成功删除 ${fulfilled} 个会话`,
+          title: 'Bulk delete completed',
+          body: `Deleted ${fulfilled} conversations`,
         })
       } else if (fulfilled === 0) {
         store.pushNotice({
           type: 'notification',
           level: 'error',
-          title: '批量删除失败',
-          body: `删除失败 ${rejected} 个会话`,
+          title: 'Bulk delete failed',
+          body: `Failed to delete ${rejected} conversations`,
         })
       } else {
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: '批量删除部分失败',
-          body: `成功删除 ${fulfilled} 个，失败 ${rejected} 个`,
+          title: 'Bulk delete partially failed',
+          body: `Deleted ${fulfilled}, failed ${rejected}`,
         })
       }
 
@@ -483,7 +483,7 @@ export function AgentStandingsGroup({
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: '批量删除异常',
+        title: 'Bulk delete error',
         body: err instanceof Error ? err.message : String(err),
       })
     } finally {
@@ -494,17 +494,17 @@ export function AgentStandingsGroup({
   return (
     <div className="sidebar-group agent-standing-group">
       <div className="sidebar-group-header">
-        <span>智能体</span>
+        <span>Agents</span>
         <div className="sidebar-group-header-actions">
-          <Tooltip content={filterOpen ? '收起筛选' : '筛选智能体与话题'} side="top">
+          <Tooltip content={filterOpen ? 'Collapse filters' : 'Filter agents and topics'} side="top">
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs"
               style={{
                 color: filterOpen ? 'var(--accent)' : undefined,
               }}
-              title={filterOpen ? '收起筛选' : '筛选智能体与话题'}
-              aria-label="筛选智能体与话题"
+              title={filterOpen ? 'Collapse filters' : 'Filter agents and topics'}
+              aria-label="Filter agents and topics"
               aria-pressed={filterOpen}
               onClick={() => {
                 if (filterOpen) {
@@ -518,15 +518,15 @@ export function AgentStandingsGroup({
               <HelmIcon name="list-filter" size={12} />
             </button>
           </Tooltip>
-          <Tooltip content={batchMode ? '退出批量管理' : '批量管理会话'} side="top">
+          <Tooltip content={batchMode ? 'Exit bulk management' : 'Manage conversations in bulk'} side="top">
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs"
               style={{
                 color: batchMode ? 'var(--accent)' : undefined,
               }}
-              title={batchMode ? '退出批量管理' : '批量管理会话'}
-              aria-label={batchMode ? '退出批量管理' : '批量管理会话'}
+              title={batchMode ? 'Exit bulk management' : 'Manage conversations in bulk'}
+              aria-label={batchMode ? 'Exit bulk management' : 'Manage conversations in bulk'}
               onClick={() => {
                 setBatchMode((v) => {
                   if (v) {
@@ -549,8 +549,8 @@ export function AgentStandingsGroup({
             type="text"
             className="sidebar-search-input"
             value={search}
-            placeholder="筛选智能体或话题..."
-            aria-label="筛选智能体或话题"
+            placeholder="Filter agents or topics..."
+            aria-label="Filter agents or topics"
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
@@ -564,8 +564,8 @@ export function AgentStandingsGroup({
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs sidebar-search-clear"
-              title="清空筛选"
-              aria-label="清空筛选"
+              title="Clear filter"
+              aria-label="Clear filter"
               onClick={() => {
                 setSearch('')
                 searchInputRef.current?.focus()
@@ -580,7 +580,7 @@ export function AgentStandingsGroup({
         <div className="sidebar-batch-bar">
           <div className="sidebar-batch-bar-header">
             <span style={{ fontWeight: 500, color: 'var(--fg-secondary)' }}>
-              已选择 {selectedIds.size} 项
+              {selectedIds.size} selected
             </span>
             <button
               type="button"
@@ -589,9 +589,9 @@ export function AgentStandingsGroup({
                 setBatchMode(false)
                 setSelectedIds(new Set())
               }}
-              title="退出批量管理"
+              title="Exit bulk management"
             >
-              退出
+              Exit
             </button>
           </div>
           <div className="sidebar-batch-bar-actions">
@@ -607,7 +607,7 @@ export function AgentStandingsGroup({
                 }
               }}
             >
-              {isAllSelected ? '清空' : '全选'}
+              {isAllSelected ? 'Clear' : 'Select all'}
             </button>
             <button
               type="button"
@@ -615,7 +615,7 @@ export function AgentStandingsGroup({
               disabled={selectedIds.size === 0 || deleting || archiving}
               onClick={() => void executeBatchArchive()}
             >
-              {archiving ? '归档中...' : `归档 (${selectedIds.size})`}
+              {archiving ? 'Archiving...' : `Archive (${selectedIds.size})`}
             </button>
             <button
               type="button"
@@ -623,13 +623,13 @@ export function AgentStandingsGroup({
               disabled={selectedIds.size === 0 || deleting || archiving}
               onClick={() => setBatchDeleteConfirmOpen(true)}
             >
-              {deleting ? '删除中...' : `删除 (${selectedIds.size})`}
+              {deleting ? 'Deleting...' : `Delete (${selectedIds.size})`}
             </button>
           </div>
         </div>
       )}
       {visibleStandings.length === 0 ? (
-        <div className="sidebar-search-empty">没有匹配的智能体或话题</div>
+        <div className="sidebar-search-empty">No matching agents or topics</div>
       ) : (
         visibleStandings.map((agent) => (
           <AgentStandingItem
@@ -651,9 +651,9 @@ export function AgentStandingsGroup({
       <ConfirmDialog
         open={batchDeleteConfirmOpen}
         onOpenChange={setBatchDeleteConfirmOpen}
-        title={`确定删除选中的 ${selectedIds.size} 个会话吗？`}
-        description="此操作无法撤销。"
-        confirmText="删除会话"
+        title={`Delete ${selectedIds.size} selected conversations?`}
+        description="This action cannot be undone."
+        confirmText="Delete conversation"
         danger
         onConfirm={() => {
           void executeBatchDelete()

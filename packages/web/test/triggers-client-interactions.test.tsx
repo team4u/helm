@@ -63,6 +63,8 @@ function makeSpyCtx(): SpyCtx {
     getPluginDoc: async () => undefined,
     getPluginSessionDoc: async () => undefined,
     theme: 'dark',
+    locale: 'en' as const,
+    translate: (text) => (typeof text === 'string' ? text : ''),
   }
   return Object.assign(base, { screenCalls, actionCalls })
 }

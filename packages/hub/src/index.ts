@@ -1,8 +1,8 @@
 /**
- * @helm/hub：产品组合根的公开出口。
+ * @helm/hub: produce product composition root public exit.
  *
- * 组合根只做两件事：选择内置插件集合与缺省启停（来自 @helm/plugins）、
- * 装配 KernelRuntime（来自 @helm/kernel）。内核机制包可独立打开
- * （KernelRuntime.open 零内置插件），本包不实现任何机制。
+ * composition root only do two piece matter: choose built-in plugin set and default start stop (from @helm/plugins),
+ * install match KernelRuntime(from @helm/kernel). kernel mechanism package can independent open
+ * (KernelRuntime.open zero built-in plugin), this package do not implement any mechanism.
  */
 export { createHelm, type HelmOptions } from './app.js';

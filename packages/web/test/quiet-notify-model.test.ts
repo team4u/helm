@@ -218,7 +218,7 @@ test('单根树成功完成：标题「Helm 会话已完成」，正文「#id �
   })
   assert.ok(draft)
   assert.equal(draft.title, COMPLETED_NOTIFICATION_TITLE)
-  assert.equal(draft.title, 'Helm 会话已完成')
+  assert.equal(draft.title, 'Helm conversation completed')
   assert.equal(draft.body, '#2 重构侧栏')
   assert.equal(draft.primaryConversationId, 2)
 })
@@ -264,8 +264,8 @@ test('任一累计参与者（根或子会话）处于 error 态：标题改为�
   })
   assert.ok(childFailed)
   assert.equal(childFailed.title, ENDED_NOTIFICATION_TITLE)
-  assert.equal(childFailed.title, 'Helm 会话已结束')
-  assert.equal(childFailed.body, '#1 父会话 · 有失败')
+  assert.equal(childFailed.title, 'Helm conversation finished')
+  assert.equal(childFailed.body, '#1 父会话 · Has failures')
   assert.equal(childFailed.primaryConversationId, 1)
 
   const rootFailed = composeTreeCompletionNotification({
@@ -275,7 +275,7 @@ test('任一累计参与者（根或子会话）处于 error 态：标题改为�
   })
   assert.ok(rootFailed)
   assert.equal(rootFailed.title, ENDED_NOTIFICATION_TITLE)
-  assert.equal(rootFailed.body, '#2 失败主会话 · 有失败')
+  assert.equal(rootFailed.body, '#2 失败主会话 · Has failures')
 })
 
 test('父链中途被删除与父链环：沿存活祖先有限归并；整树均被删除则 primary 为空', { timeout: 60_000 }, () => {
@@ -313,7 +313,7 @@ test('父链中途被删除与父链环：沿存活祖先有限归并；整树�
   })
   assert.ok(deletedDraft)
   assert.equal(deletedDraft.title, COMPLETED_NOTIFICATION_TITLE)
-  assert.equal(deletedDraft.body, '会话已结束')
+  assert.equal(deletedDraft.body, 'Conversation finished')
   assert.equal(deletedDraft.primaryConversationId, null)
 })
 
@@ -339,7 +339,7 @@ test('树内单个 blocked 会话：标题「Helm 等待你的处理」，跳转
   })
   assert.ok(draft)
   assert.equal(draft.title, WAITING_NOTIFICATION_TITLE)
-  assert.equal(draft.body, '待处理输入/审批：#1 部署检查')
+  assert.equal(draft.body, 'Pending input/approvals: #1 部署检查')
   assert.equal(draft.primaryConversationId, 1)
 })
 
@@ -356,7 +356,7 @@ test('blocked 子代理会话：正文列根会话标题，跳转直达子代理
   })
   assert.ok(draft)
   assert.equal(draft.title, WAITING_NOTIFICATION_TITLE)
-  assert.equal(draft.body, '待处理输入/审批：#5 大规模重构')
+  assert.equal(draft.body, 'Pending input/approvals: #5 大规模重构')
   assert.equal(draft.primaryConversationId, 12)
 })
 
@@ -375,7 +375,7 @@ test('同树内多个 blocked 会话按根去重；跳转 updatedAt 最新的 bl
   })
   assert.ok(draft)
   assert.equal(draft.title, WAITING_NOTIFICATION_TITLE)
-  assert.equal(draft.body, '待处理输入/审批：#5 大规模重构 · 有失败')
+  assert.equal(draft.body, 'Pending input/approvals: #5 大规模重构 · Has failures')
   assert.equal(draft.primaryConversationId, 52)
 })
 

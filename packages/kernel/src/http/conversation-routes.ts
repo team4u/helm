@@ -1,7 +1,7 @@
 /**
- * 会话领域路由：/api/conversations（列表/创建/详情/更新/删除/input/
- * withdraw/abort/reset/compact/fork/entries/:entryId/artifacts）、/api/asks
- * （审批队列）、/api/search（全文检索）。
+ * conversation domain routing:/api/conversations(list/create/detail situation/update/delete/input/
+ * withdraw/abort/reset/compact/fork/entries/:entryId/artifacts),/api/asks
+ * (approval queue),/api/search(all text inspect index).
  */
 import type { ConversationListFilter, ConversationStatus } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
@@ -61,7 +61,7 @@ export async function handleConversationsDomain(
   }
   if (third === 'entries' && method === 'GET' && fourth !== undefined && ctx.segments[4] === undefined) {
     if (kernel.getConversationEntry === undefined) {
-      throw new HelmError('not_implemented', '当前 runtime 未提供单条条目读取', 501)
+      throw new HelmError('not_implemented', 'when before runtime not provide single item read', 501)
     }
     return jsonOk(redactor, await kernel.getConversationEntry(id, parseIdParam(fourth, 'entryId')))
   }
@@ -81,7 +81,7 @@ export async function handleConversationsDomain(
   }
   if (third === 'withdraw' && method === 'POST' && fourth === undefined) {
     if (kernel.withdrawQueuedInput === undefined) {
-      throw new HelmError('not_implemented', '当前 runtime 未提供排队输入撤回', 501)
+      throw new HelmError('not_implemented', 'when before runtime not provide queue up input withdraw back', 501)
     }
     const body = await readJsonBody(ctx.request)
     const parsed = parseConversationWithdrawBody(body)
@@ -109,11 +109,11 @@ export async function handleConversationsDomain(
   if (third === 'artifacts' && method === 'POST' && fourth === undefined) {
     return postConversationArtifact(ctx, kernel, id, redactor)
   }
-  return errorResponse(redactor, 404, 'not_found', '路由不存在')
+  return errorResponse(redactor, 404, 'not_found', 'routing missing')
 }
 
 // ---------------------------------------------------------------------------
-// /api/asks（审批队列，与会话同属会话领域）
+// /api/asks(approval queue, and conversation same belong conversation domain)
 // ---------------------------------------------------------------------------
 
 export async function handleAsksDomain(
@@ -139,7 +139,7 @@ export async function handleAsksDomain(
     await kernel.cancelAsk(askId)
     return jsonOk(redactor, { ok: true })
   }
-  return errorResponse(redactor, 404, 'not_found', '路由不存在')
+  return errorResponse(redactor, 404, 'not_found', 'routing missing')
 }
 
 // ---------------------------------------------------------------------------
@@ -152,15 +152,15 @@ export async function handleSearchDomain(
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   if (ctx.method !== 'GET' || ctx.segments[1] !== undefined) {
-    return errorResponse(redactor, 404, 'not_found', '路由不存在')
+    return errorResponse(redactor, 404, 'not_found', 'routing missing')
   }
   const q = ctx.url.searchParams.get('q') ?? ''
-  if (q.trim().length === 0) throw new ValidationError('q 不能为空')
+  if (q.trim().length === 0) throw new ValidationError('q cannot be empty')
   return jsonOk(redactor, await kernel.search(q))
 }
 
 // ---------------------------------------------------------------------------
-// 领域内辅助
+// domain inside auxiliary
 // ---------------------------------------------------------------------------
 
 function parseConversationFilter(url: URL): ConversationListFilter {
@@ -168,19 +168,19 @@ function parseConversationFilter(url: URL): ConversationListFilter {
   const tag = url.searchParams.get('tag') ?? undefined
   const status = url.searchParams.get('status') ?? undefined
   if (status !== undefined && !['working', 'blocked', 'done', 'idle', 'error'].includes(status)) {
-    throw new ValidationError('status 需为 working|blocked|done|idle|error')
+    throw new ValidationError('status must be working|blocked|done|idle|error')
   }
-  // 降噪缺省：未显式指定 parent/all 时仅顶层会话；子会话经 ?parent=<id> 精确查看
-  // 或 ?all=1 全量列出。两者互斥，组合请求直接 400（不猜测优先级）。
+  // drop noise default: not explicit designate parent/all when only top-level conversation; sub-conversation via ?parent=<id> precise view
+  // or ?all=1 all amount column out. two mutual exclusion, combine request directly 400(do not guess priority).
   const parentRaw = url.searchParams.get('parent')
   const all = parseOptionalBooleanFlag(url, 'all')
   if (parentRaw !== null && all === true) {
-    throw new ValidationError('all 与 parent 互斥：全量列出与精确于会话过滤不可同时指定')
+    throw new ValidationError('all and parent mutual exclusion: all amount column out and precise at conversation filter cannot also designate')
   }
   let parentConversationId: number | undefined
   if (parentRaw !== null) {
     if (!/^\d+$/.test(parentRaw) || !Number.isSafeInteger(Number(parentRaw)) || Number(parentRaw) < 1) {
-      throw new ValidationError('parent 需为正整数会话 ID')
+      throw new ValidationError('parent must be a positive integer conversation ID')
     }
     parentConversationId = Number(parentRaw)
   }
@@ -193,10 +193,10 @@ function parseConversationFilter(url: URL): ConversationListFilter {
   }
 }
 
-/** ?wait=1 查询参数：仅接受字面 '1'（true 同义）；其他值 400。 */
+/** ?wait=1 query parameter: only accept literal '1'(true same meaning); other value 400. */
 function parseWaitFlag(url: URL): boolean {
   const raw = url.searchParams.get('wait')
   if (raw === null) return false
   if (raw === '1' || raw === 'true') return true
-  throw new ValidationError('wait 需为 1（如 ?wait=1）')
+  throw new ValidationError('wait must be 1(such as ?wait=1)')
 }

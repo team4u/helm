@@ -1,14 +1,14 @@
 /**
- * helm-hub 生产静态托管（packages/web/dist）专项测试。
+ * helm-hub produce static hosting (packages/web/dist) dedicated items test.
  *
- * 覆盖：根路径 / 与 index.html、/assets/* 带 hash 资源（Content-Type 与
- * immutable 缓存）、SPA 前端路由回退（无扩展名路径回 index.html）、
- * 带扩展名缺失文件 404、.. 路径穿越拦截与符号链接逃逸拒绝、
- * HEAD 在 Response 层面去 body（保留 content-length）、webDistDir: false
- * 禁用、真实 IO 故障（EACCES）不伪装 404、/api/* 未知路由仍 JSON 404、
- * startHub(port:0) 生产集成（显式目录 / 禁用 / 失效目录启动报错）。
+ * override: path / and index.html,/assets/* carries hash asset (Content-Type and
+ * immutable cache),SPA frontend routing fall back (without extension path back index.html),
+ * carries extension missing file 404,.. path through exceeds intercept and symlink escape reject,
+ * HEAD in Response layer side remove body(keep content-length),webDistDir: false
+ * disable, real IO fault (EACCES) does not pretend to be 404,/api/* unknown routing still JSON 404,
+ * startHub(port:0) produce collection into (explicit directory / disable / expires directory start errors).
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock; command add total timeout.
  */
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -24,7 +24,7 @@ import { AuthService } from '../src/services/index.js'
 import { HelmError } from '@helm/protocol'
 
 // ---------------------------------------------------------------------------
-// 测试基座（最小 kernel 形状 + 真实 AuthService）
+// test base seat (most small kernel shape + real AuthService)
 // ---------------------------------------------------------------------------
 
 class TestEventHub implements EventHub {
@@ -113,7 +113,7 @@ before(async () => {
   await writeFile(join(webDist, 'favicon.ico'), Buffer.from([0, 0, 1, 0]))
   await writeFile(join(webDist, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
   handler = createHubHandler({ kernel: makeKernel(dataDir), webDistDir: webDist })
-  // setup 一次性完成（AuthService 状态持久在 dataDir 内，重复 setup 会 409）
+  // setup once complete (AuthService state durable in dataDir inside, duplicate setup will 409)
   token = (await new AuthService(dataDir).setup('static-test-password')).token
 })
 
@@ -122,10 +122,10 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 基础服务
+// basis service
 // ---------------------------------------------------------------------------
 
-test('根路径 / 返回 index.html（text/html + no-cache）', { timeout: 60_000 }, async () => {
+test('path / return index.html(text/html + no-cache)', { timeout: 60_000 }, async () => {
   const res = await call(handler, 'GET', '/')
   assert.equal(res.status, 200)
   assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8')
@@ -133,17 +133,17 @@ test('根路径 / 返回 index.html（text/html + no-cache）', { timeout: 60_00
   assert.ok(res.text.includes('helm web'))
 })
 
-test('HEAD / 在 Response 层面去 body：同状态码与响应头（含 content-length）', { timeout: 60_000 }, async () => {
+test('HEAD / in Response layer side remove body: same status code and response head (contains content-length)', { timeout: 60_000 }, async () => {
   const res = await handler(new Request(`${BASE}/`, { method: 'HEAD' }))
   assert.equal(res.status, 200)
   assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8')
   const len = res.headers.get('content-length')
-  assert.ok(len !== null && Number(len) > 0, `HEAD 应保留 GET 长度（实际 ${len}）`)
-  // body 在 Web Standard handler 层面已移除（不依赖 node 层丢弃）
+  assert.ok(len !== null && Number(len) > 0, `HEAD should keep GET length (actual ${len})`)
+  // body in Web Standard handler layer side already remove (independent of node layer discard)
   assert.ok(res.body === null || (await res.text()) === '')
 })
 
-test('带 hash 静态资源：正确 Content-Type 与 immutable 长缓存', { timeout: 60_000 }, async () => {
+test('carries hash static assets: correct Content-Type and immutable long cache', { timeout: 60_000 }, async () => {
   const js = await call(handler, 'GET', '/assets/app-B1b2C3.js')
   assert.equal(js.status, 200)
   assert.equal(js.headers.get('content-type'), 'text/javascript; charset=utf-8')
@@ -164,34 +164,34 @@ test('带 hash 静态资源：正确 Content-Type 与 immutable 长缓存', { ti
   assert.equal(svg.headers.get('content-type'), 'image/svg+xml')
 })
 
-test('SPA 前端路由回退：无扩展名路径回 index.html（200 text/html）', { timeout: 60_000 }, async () => {
+test('SPA frontend routing fall back: without extension path back index.html(200 text/html)', { timeout: 60_000 }, async () => {
   for (const path of ['/conversations/42', '/settings', '/plugins/builtin:superagent/recall-graph', '/some/deep/route']) {
     const res = await call(handler, 'GET', path)
-    assert.equal(res.status, 200, `路径 ${path} 应回退 index.html`)
+    assert.equal(res.status, 200, `path ${path} should fall back index.html`)
     assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8')
-    assert.ok(res.text.includes('helm web'), `路径 ${path} 应回 index.html 内容`)
+    assert.ok(res.text.includes('helm web'), `path ${path} should back index.html content`)
   }
 })
 
-test('带扩展名但文件不存在：404（HTML 回退会掩盖真缺失）', { timeout: 60_000 }, async () => {
+test('carries extension but file missing:404(HTML fall back will mask true missing)', { timeout: 60_000 }, async () => {
   const res = await call(handler, 'GET', '/missing.js')
   assert.equal(res.status, 404)
   const css = await call(handler, 'GET', '/assets/not-built-aaa.css')
   assert.equal(css.status, 404)
 })
 
-test('.. 路径穿越拦截：resolve 后越出 webDistDir 的请求 404', { timeout: 60_000 }, async () => {
-  // Node fetch Request 会归一 URL 中的 ../；用编码段与显式构造双管齐下
+test('.. path through exceeds intercept:resolve after exceeds out webDistDir request 404', { timeout: 60_000 }, async () => {
+  // Node fetch Request will archive one URL in ../; use encode segment and explicit construct double manage complete under
   const encoded = await call(handler, 'GET', '/%2e%2e/config.json')
   assert.equal(encoded.status, 404)
-  // 直接构造 URL 对象（保留 .. 语义）再发请求
+  // directly construct URL object (keep .. semantics) again request
   const url = new URL(`${BASE}/../config.json`)
   const res = await handler(new Request(url, { method: 'GET' }))
-  assert.ok(res.status === 404 || res.status === 400, `穿越请求必须被拒（实际 ${res.status}）`)
+  assert.ok(res.status === 404 || res.status === 400, `through exceeds request must by refuse (actual ${res.status})`)
   assert.ok(!res.headers.get('content-type')?.includes('json'))
 })
 
-test('符号链接逃逸拒绝：webDistDir 内软链指向根外文件 404', { timeout: 60_000 }, async () => {
+test('symlink escape reject:webDistDir inside symlink points to outside file 404', { timeout: 60_000 }, async () => {
   const secretFile = join(dataDir, 'secret.json')
   await writeFile(secretFile, '{"secret":true}')
   await symlink(secretFile, join(webDist, 'leaked.json'))
@@ -204,20 +204,20 @@ test('符号链接逃逸拒绝：webDistDir 内软链指向根外文件 404', { 
   }
 })
 
-test('无扩展名 symlink 越界不能伪装 SPA 成功：仍 404，不回退 index.html', { timeout: 60_000 }, async () => {
+test('without extension symlink out of bounds cannot disguise SPA succeeded: still 404, does not fall back index.html', { timeout: 60_000 }, async () => {
   const secretFile = join(dataDir, 'secret2.json')
   await writeFile(secretFile, '{"secret":true}')
   await symlink(secretFile, join(webDist, 'leaked-noext'))
   try {
     const res = await call(handler, 'GET', '/leaked-noext')
-    assert.equal(res.status, 404, '越界目标必须 404，绝不以 SPA 回退伪装成功')
+    assert.equal(res.status, 404, 'out of bounds target must 404, never with SPA fall back disguise succeeded')
     assert.ok(!res.text.includes('secret'))
   } finally {
     await rm(join(webDist, 'leaked-noext'), { force: true })
   }
 })
 
-test('root 本身是文件（非目录）：webDistDir 显式指定时报 web_dist_invalid', { timeout: 60_000 }, async () => {
+test('root itself is file (non- directory):webDistDir explicit designate when report web_dist_invalid', { timeout: 60_000 }, async () => {
   const filePath = join(dataDir, 'not-a-dir')
   await writeFile(filePath, 'x')
   const handler2 = createHubHandler({ kernel: makeKernel(dataDir), webDistDir: filePath })
@@ -227,16 +227,16 @@ test('root 本身是文件（非目录）：webDistDir 显式指定时报 web_di
   assert.equal(body.error.code, 'web_dist_invalid')
 })
 
-test('真实 IO 故障（ELOOP）显式 500，绝不伪装 404（root 用户同样生效）', { timeout: 60_000 }, async () => {
+test('real IO fault (ELOOP) explicit 500, never disguise 404(root user same takes effect)', { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'helm-static-eloop-'))
   try {
     await mkdir(join(root, 'assets'), { recursive: true })
     await writeFile(join(root, 'index.html'), 'x')
     const handler2 = createHubHandler({ kernel: makeKernel(dataDir), webDistDir: root })
-    // 自指 symlink 环：realpath 抛 ELOOP（真实 IO 故障，非缺失），root/win 均可触发
+    // self refer symlink ring:realpath throw ELOOP(real IO fault, non- missing),root/win all can trigger
     await symlink(join(root, 'assets', 'loop.js'), join(root, 'assets', 'loop.js'))
     const res = await call(handler2, 'GET', '/assets/loop.js')
-    assert.equal(res.status, 500, 'ELOOP 必须显式 500（缺失才 404）')
+    assert.equal(res.status, 500, 'ELOOP must explicit 500(missing only then 404)')
     const body = JSON.parse(res.text) as { error: { code: string } }
     assert.equal(body.error.code, 'internal_error')
   } finally {
@@ -244,8 +244,8 @@ test('真实 IO 故障（ELOOP）显式 500，绝不伪装 404（root 用户同�
   }
 })
 
-test('/api 未知路由仍返回 JSON 404 not_found（静态托管不吞 API 命名空间）', { timeout: 60_000 }, async () => {
-  assert.ok(token, 'before 阶段应已完成 auth setup')
+test('/api unknown routing still return JSON 404 not_found(static hosting do not swallow API naming empty between)', { timeout: 60_000 }, async () => {
+  assert.ok(token, 'before phase should completed auth setup')
   const res = await handler(
     new Request(`${BASE}/api/unknown-endpoint`, { method: 'GET', headers: { authorization: `Bearer ${token}` } }),
   )
@@ -255,7 +255,7 @@ test('/api 未知路由仍返回 JSON 404 not_found（静态托管不吞 API 命
   assert.equal(body.error.code, 'not_found')
 })
 
-test('精确路径 /api（无尾段）同样走 API 路由逻辑', { timeout: 60_000 }, async () => {
+test('precise path /api(without tail segment) same away API routing logic', { timeout: 60_000 }, async () => {
   assert.ok(token)
   const res = await handler(
     new Request(`${BASE}/api`, { method: 'GET', headers: { authorization: `Bearer ${token}` } }),
@@ -267,10 +267,10 @@ test('精确路径 /api（无尾段）同样走 API 路由逻辑', { timeout: 60
 })
 
 // ---------------------------------------------------------------------------
-// 开关与兼容
+// switch and compatibility
 // ---------------------------------------------------------------------------
 
-test('webDistDir: false 禁用静态托管（非 /api 回落 JSON 404）', { timeout: 60_000 }, async () => {
+test('webDistDir: false disable static hosting (non- /api back JSON 404)', { timeout: 60_000 }, async () => {
   const disabled = createHubHandler({ kernel: makeKernel(dataDir), webDistDir: false })
   const res = await call(disabled, 'GET', '/')
   assert.equal(res.status, 404)
@@ -279,7 +279,7 @@ test('webDistDir: false 禁用静态托管（非 /api 回落 JSON 404）', { tim
   assert.equal(asset.status, 404)
 })
 
-test('指向不存在目录的 webDistDir：显式诊断 web_dist_invalid（不静默禁用）', { timeout: 60_000 }, async () => {
+test('points to missing directory webDistDir: explicit diagnose web_dist_invalid(not silently disable)', { timeout: 60_000 }, async () => {
   const handler2 = createHubHandler({
     kernel: makeKernel(dataDir),
     webDistDir: join(dataDir, 'no-such-dist'),
@@ -289,29 +289,29 @@ test('指向不存在目录的 webDistDir：显式诊断 web_dist_invalid（不�
   assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8')
   const body = JSON.parse(res.text) as { error: { code: string; message: string } }
   assert.equal(body.error.code, 'web_dist_invalid')
-  assert.ok(body.error.message.includes('no-such-dist'), '诊断应包含具体目录路径')
+  assert.ok(body.error.message.includes('no-such-dist'), 'diagnose should contain specific directory path')
 })
 
-test('单参调用形态（kernel）：缺省不启用静态托管（纯 API，不探测任何默认目录）', { timeout: 60_000 }, async () => {
+test('single reference invoke form (kernel): default does not enable static hosting (pure API, do not probe any by default directory)', { timeout: 60_000 }, async () => {
   const legacy = createHandlerLegacy(makeKernel(dataDir))
-  // 内核不做默认目录探测（Web 目录是 hub 产品策略）：无论仓旁是否存在 web dist，
-  // 非 /api 一律 JSON 404；嵌入式 Kernel 的 HTTP 默认行为不随环境改变。
+  // kernel does not by default directory probe (Web directory is hub produce product policy): regardless of warehouse beside is otherwise store in web dist,
+  // non- /api one rule JSON 404; embed style Kernel  HTTP by default behavior do not follow environment change.
   const res = await call(legacy, 'GET', '/not-a-real-dist-check')
   assert.equal(res.status, 404)
   assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8')
 })
 
-test('非 GET/HEAD 方法（POST /）不进静态托管，回落 JSON 404', { timeout: 60_000 }, async () => {
+test('non- GET/HEAD method (POST /) does not enter static hosting, back JSON 404', { timeout: 60_000 }, async () => {
   const res = await call(handler, 'POST', '/')
   assert.equal(res.status, 404)
   assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8')
 })
 
 // ---------------------------------------------------------------------------
-// startHub（生产 node 层）集成：webDistDir 透传
+// startHub(produce node layer) collection into:webDistDir pass-through
 // ---------------------------------------------------------------------------
 
-test('startHub(port:0) 显式 webDistDir：真实 HTTP 静态往返 + HEAD 无 body', { timeout: 60_000 }, async () => {
+test('startHub(port:0) explicit webDistDir: real HTTP static to return + HEAD without body', { timeout: 60_000 }, async () => {
   const hub = await startHub({ kernel: makeKernel(dataDir), port: 0, webDistDir: webDist })
   try {
     const res = await fetch(`${hub.url}/assets/app-B1b2C3.js`)
@@ -322,8 +322,8 @@ test('startHub(port:0) 显式 webDistDir：真实 HTTP 静态往返 + HEAD 无 b
     const head = await fetch(`${hub.url}/`, { method: 'HEAD' })
     assert.equal(head.status, 200)
     const len = head.headers.get('content-length')
-    assert.ok(len !== null && Number(len) > 0, `生产 HEAD 应保留 content-length（实际 ${len}）`)
-    assert.equal(await head.text(), '', '生产 HEAD 不回 body')
+    assert.ok(len !== null && Number(len) > 0, `produce HEAD should keep content-length(actual ${len})`)
+    assert.equal(await head.text(), '', 'produce HEAD do not back body')
 
     const spa = await fetch(`${hub.url}/conversations/42`)
     assert.equal(spa.status, 200)
@@ -333,7 +333,7 @@ test('startHub(port:0) 显式 webDistDir：真实 HTTP 静态往返 + HEAD 无 b
   }
 })
 
-test('startHub(port:0) webDistDir: false：静态托管禁用，非 /api 回 JSON 404', { timeout: 60_000 }, async () => {
+test('startHub(port:0) webDistDir: false: static hosting disable, non- /api back JSON 404', { timeout: 60_000 }, async () => {
   const hub = await startHub({ kernel: makeKernel(dataDir), port: 0, webDistDir: false })
   try {
     const res = await fetch(`${hub.url}/`)
@@ -346,7 +346,7 @@ test('startHub(port:0) webDistDir: false：静态托管禁用，非 /api 回 JSO
   }
 })
 
-test('startHub(port:0) 显式失效目录：启动显式报错（不静默禁用）', { timeout: 60_000 }, async () => {
+test('startHub(port:0) explicit expires directory: start explicit errors (not silently disable)', { timeout: 60_000 }, async () => {
   await assert.rejects(
     startHub({ kernel: makeKernel(dataDir), port: 0, webDistDir: join(dataDir, 'no-such-dist') }),
     (err: unknown) => err instanceof HelmError && err.code === 'web_dist_invalid',
@@ -354,10 +354,10 @@ test('startHub(port:0) 显式失效目录：启动显式报错（不静默禁用
 })
 
 // ---------------------------------------------------------------------------
-// 静态 gzip
+// static gzip
 // ---------------------------------------------------------------------------
 
-test('静态文本资源 gzip：阈值内压缩、Vary/Content-Length 正确、缓存命中、PNG 不压缩', { timeout: 60_000 }, async () => {
+test('static text asset gzip: threshold inside compress,Vary/Content-Length correct, cache hit,PNG do not compress', { timeout: 60_000 }, async () => {
   const bigJs = `console.log(${JSON.stringify('v'.repeat(4096))});\n`
   await writeFile(join(webDist, 'assets', 'big-A1b2.js'), bigJs)
   const smallJs = 'console.log(1)\n'
@@ -369,23 +369,23 @@ test('静态文本资源 gzip：阈值内压缩、Vary/Content-Length 正确、�
       headers: { ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}), ...headers },
     })
 
-  // >1KiB 文本 + Accept-Encoding: gzip → 压缩，解压与原文一致
+  // >1KiB text + Accept-Encoding: gzip → compress, decompress and original text consistent
   const gzReq = authed('/assets/big-A1b2.js', { 'accept-encoding': 'gzip', origin: 'http://x' })
   const gzRes = await handler(gzReq)
   assert.equal(gzRes.headers.get('content-encoding'), 'gzip')
   const vary = (gzRes.headers.get('vary') ?? '').toLowerCase().split(',').map((token) => token.trim())
-  assert.ok(vary.includes('accept-encoding'), `静态压缩必须保留 Accept-Encoding: ${vary}`)
-  assert.ok(vary.includes('origin'), `CORS 不能覆盖压缩协商的 Vary: ${vary}`)
+  assert.ok(vary.includes('accept-encoding'), `static compress must keep Accept-Encoding: ${vary}`)
+  assert.ok(vary.includes('origin'), `CORS cannot override compress negotiate Vary: ${vary}`)
   const gzBytes = new Uint8Array(await gzRes.arrayBuffer())
   assert.equal(Number(gzRes.headers.get('content-length')), gzBytes.byteLength)
-  assert.equal(gunzipSync(gzBytes).toString('utf8'), bigJs, '解压后与原文一致')
+  assert.equal(gunzipSync(gzBytes).toString('utf8'), bigJs, 'decompress after and original text consistent')
 
-  // 二次请求走缓存（结果一致）
+  // second request away cache (result consistent)
   const gzAgain = await handler(authed('/assets/big-A1b2.js', { 'accept-encoding': 'gzip' }))
   assert.equal(gzAgain.headers.get('content-encoding'), 'gzip')
-  assert.equal(gunzipSync(new Uint8Array(await gzAgain.arrayBuffer())).toString('utf8'), bigJs, '缓存命中结果一致')
+  assert.equal(gunzipSync(new Uint8Array(await gzAgain.arrayBuffer())).toString('utf8'), bigJs, 'cache hit result consistent')
 
-  // <1KiB 文本不压缩；不接受 gzip 的客户端拿 identity
+  // <1KiB text do not compress; do not accept gzip client take identity
   const small = await handler(authed('/assets/small-B2c3.js', { 'accept-encoding': 'gzip' }))
   assert.equal(small.headers.get('content-encoding'), null)
   await small.text()
@@ -393,13 +393,13 @@ test('静态文本资源 gzip：阈值内压缩、Vary/Content-Length 正确、�
   assert.equal(identity.headers.get('content-encoding'), null)
   assert.equal(await identity.text(), bigJs)
 
-  // PNG（不可压缩格式）不压缩
+  // PNG(cannot compress format) do not compress
   const png = await handler(authed('/assets/img-C3d4.png', { 'accept-encoding': 'gzip' }))
   assert.equal(png.headers.get('content-encoding'), null)
   assert.equal(Number(png.headers.get('content-length')), 2052)
   await png.arrayBuffer()
 
-  // HEAD 与 GET 同压缩头语义，body 为空
+  // HEAD and GET same compress head semantics,body is empty
   const head = await handler(new Request(`${BASE}/assets/big-A1b2.js`, { method: 'HEAD', headers: { 'accept-encoding': 'gzip' } }))
   assert.equal(head.headers.get('content-encoding'), 'gzip')
   assert.ok(head.body === null || (await head.text()) === '')

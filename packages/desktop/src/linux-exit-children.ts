@@ -1,11 +1,11 @@
 /**
- * Linux AppImage 退出残留子进程收敛（纯模块：fs / 信号 / 时钟可注入，零 Electron 依赖）。
+ * Linux AppImage exit leftover child process converge (pure module:fs / signal / clock can inject, zero Electron dependency).
  *
- * Why：AppImage 运行时在主进程退出后卸载 squashfs，仍存活的子进程（受管 Hub、
- * Chromium zygote 等）再触碰挂载点文件即 SIGBUS。常规退出已由 main.ts quit() await
- * supervisor.stop()；本模块只在进程 'exit' 事件内做同步最后兜底（exit 内无事件循环，
- * 用 Atomics.wait 同步睡眠）。完整安全不变量与诚实边界见 packages/desktop/README.md
- * 「Linux 桌面身份与退出收敛」，行为逐条锁定于 test/linux-exit-children.test.ts。
+ * Why:AppImage runtime in main process exit after unload squashfs, still store child process (managed Hub,
+ * Chromium zygote etc.) again trigger touch mount point file i.e. SIGBUS. common rule exit already by main.ts quit() await
+ * supervisor.stop(); this module only in process 'exit' event inside do sync finally fall back (exit inside without event loop,
+ * use Atomics.wait sync sleep). complete security invariant and honest boundary see packages/desktop/README.md
+ * Linux desktop identity and exit converge, behavior one by one lock at test/linux-exit-children.test.ts.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 
@@ -14,7 +14,7 @@ export type SweepSignal = 'SIGTERM' | 'SIGKILL';
 export interface ExitSweepDeps {
   platform: NodeJS.Platform;
   env: Record<string, string | undefined>;
-  /** Electron 打包态（app.isPackaged）；纯 Node 无从权威判定，默认 false。 */
+  /** Electron bundle state (app.isPackaged); pure Node without from right threat decide, by default false. */
   isPackaged: boolean;
   selfPid: number;
   parentPid: number;
@@ -32,7 +32,7 @@ export interface ExitSweepSummary {
   signaledKill: number;
 }
 
-/** TERM 宽限与 KILL 收尾预算（毫秒），全体子进程共享，不随数量翻倍。 */
+/** TERM wide limit and KILL wrap-up pre- compute (milli second), all body child process sharing, do not follow amount translate multiple. */
 export const SWEEP_TERM_GRACE_MS = 3_000;
 export const SWEEP_KILL_GRACE_MS = 500;
 
@@ -51,14 +51,14 @@ export function defaultExitSweepDeps(): ExitSweepDeps {
     readFileSync: (path) => readFileSync(path, 'utf8'),
     killSync: (pid, signal) => { process.kill(pid, signal); },
     nowMs: () => performance.now(),
-    sleepSync: (ms) => { try { Atomics.wait(sleepCell, 0, 0, ms); } catch { /* 平台不允许同步等待时退化为忙轮询，时钟预算仍有效 */ } },
+    sleepSync: (ms) => { try { Atomics.wait(sleepCell, 0, 0, ms); } catch { /* platform disallows sync while waiting retreat is busy polling, clock pre- compute still valid */ } },
     log: (message) => { process.stderr.write(`[helm-desktop] ${message}\n`); },
   };
 }
 
 /**
- * 是否应安装兜底：Linux + 打包态 + AppImage 运行时注入的非空 APPIMAGE。
- * 只看 APPIMAGE 不够——开发态 Electron 可能继承宿主 AppImage（如 VSCode.AppImage）的环境。
+ * is otherwise should install fall back:Linux + bundle state + AppImage runtime inject non-empty APPIMAGE.
+ * only see APPIMAGE do not enough - - development state Electron may inherit host AppImage(such as VSCode.AppImage) environment.
  */
 export function linuxAppImageExitSweepNeeded(deps: Pick<ExitSweepDeps, 'platform' | 'env' | 'isPackaged'>): boolean {
   if (deps.platform !== 'linux' || deps.isPackaged !== true) return false;
@@ -77,7 +77,7 @@ interface ChildTarget {
   starttime: number;
 }
 
-/** /proc/<pid>/stat；comm 可含空格与括号，字段从最后一个 ')' 之后起算（第 22 字段偏移 19）。 */
+/** /proc/<pid>/stat;comm can contains space and parentheses, field from finally a ')' after start compute ( 22 field offset 19). */
 function readStat(deps: ExitSweepDeps, pid: number): ProcStat | null {
   let text: string;
   try { text = deps.readFileSync(`/proc/${pid}/stat`); } catch { return null; }
@@ -91,12 +91,12 @@ function readStat(deps: ExitSweepDeps, pid: number): ProcStat | null {
   return { state, ppid, starttime };
 }
 
-/** 目标是否仍是捕获时的那个直接子进程；任何偏差都按放弃处理，绝不补刀。 */
+/** target is otherwise still is catch when that directly child process; any bias difference all by abandon handle, never patch blade. */
 function stillOwned(deps: ExitSweepDeps, target: ChildTarget, stat: ProcStat): boolean {
   return stat.ppid === deps.selfPid && stat.starttime === target.starttime;
 }
 
-/** 枚举直接子进程并逐个鉴权；子孙清单目录整体读不到 → null（放弃，绝不盲杀）。 */
+/** enumeration directly child process and one by one authentication; descendant manifest directory whole read fewer than → null(abandon, never blind kill). */
 function captureDirectChildren(deps: ExitSweepDeps): ChildTarget[] | null {
   let tids: string[];
   try { tids = deps.readdirSync(TASK_DIR); } catch { return null; }
@@ -104,7 +104,7 @@ function captureDirectChildren(deps: ExitSweepDeps): ChildTarget[] | null {
   for (const tid of tids) {
     if (!/^\d+$/.test(tid)) continue;
     let text: string;
-    try { text = deps.readFileSync(`${TASK_DIR}/${tid}/children`); } catch { continue; } // 线程并发退出属正常
+    try { text = deps.readFileSync(`${TASK_DIR}/${tid}/children`); } catch { continue; } // thread concurrency exit belong normal
     for (const token of text.split(/\s+/)) {
       if (token === '') continue;
       const pid = Number(token);
@@ -115,17 +115,17 @@ function captureDirectChildren(deps: ExitSweepDeps): ChildTarget[] | null {
   for (const pid of candidates) {
     if (pid === deps.selfPid || pid === deps.parentPid) continue;
     const stat = readStat(deps, pid);
-    if (stat === null) continue; // 读不到 → 跳过
-    if (stat.state === 'Z') continue; // 僵尸已释放
-    if (stat.ppid !== deps.selfPid) continue; // reparent / 枚举竞态
+    if (stat === null) continue; // read fewer than → skip
+    if (stat.state === 'Z') continue; // zombie already release
+    if (stat.ppid !== deps.selfPid) continue; // reparent / enumeration race
     targets.push({ pid, starttime: stat.starttime });
   }
   return targets;
 }
 
 /**
- * 目标是否已了结：消失、僵尸（exit 内无人 waitpid，属正常态）、或 PID 已易主/复用
- * （starttime / ppid 变化）都视作了结，避免对着复用 PID 白等满预算。
+ * target is otherwise already: disappear, zombie (exit inside without person waitpid, belong normal state), or PID already easy main/re- use
+ * (starttime / ppid change) all view act, avoid for re- use PID blank etc. full pre- compute.
  */
 function isSettled(deps: ExitSweepDeps, target: ChildTarget, settled: Set<number>): boolean {
   if (settled.has(target.pid)) return true;
@@ -137,7 +137,7 @@ function isSettled(deps: ExitSweepDeps, target: ChildTarget, settled: Set<number
   return false;
 }
 
-/** 复核归属 + starttime 后定向发信号。 */
+/** re-check ownership + starttime after set to signal. */
 function signalVerified(deps: ExitSweepDeps, targets: readonly ChildTarget[], signal: SweepSignal, settled: Set<number>): number {
   let signaled = 0;
   for (const target of targets) {
@@ -151,7 +151,7 @@ function signalVerified(deps: ExitSweepDeps, targets: readonly ChildTarget[], si
       deps.killSync(target.pid, signal);
       signaled += 1;
     } catch {
-      settled.add(target.pid); // ESRCH=已退出；其余错误也不再重试
+      settled.add(target.pid); // ESRCH=already exit; the rest error also no longer retry
     }
   }
   return signaled;
@@ -166,7 +166,7 @@ function waitUntilSettled(deps: ExitSweepDeps, targets: readonly ChildTarget[], 
   }
 }
 
-/** 同步收敛直接子进程（进程 exit 事件内调用；预算耗尽即返回让进程退出）。 */
+/** sync converge directly child process (process exit event inside invoke; pre- compute exhausted i.e. return let process exit). */
 export function sweepOwnedExitChildren(deps: ExitSweepDeps): ExitSweepSummary {
   const targets = captureDirectChildren(deps);
   if (targets === null || targets.length === 0) {
@@ -179,16 +179,16 @@ export function sweepOwnedExitChildren(deps: ExitSweepDeps): ExitSweepSummary {
   const signaledKill = survivors.length === 0 ? 0 : signalVerified(deps, survivors, 'SIGKILL', settled);
   if (survivors.length > 0) waitUntilSettled(deps, survivors, settled, deps.nowMs() + SWEEP_KILL_GRACE_MS);
   const summary: ExitSweepSummary = { captured: targets.length, signaledTerm, signaledKill };
-  deps.log(`Linux 退出兜底：直接子进程 ${summary.captured} 个，TERM ${summary.signaledTerm}、KILL ${summary.signaledKill}`);
+  deps.log(`Linux exit fall back: directly child process ${summary.captured} ,TERM ${summary.signaledTerm},KILL ${summary.signaledKill}`);
   return summary;
 }
 
-/** 注册进程 'exit' 兜底；条件不满足时返回 false，不读 /proc、不加监听。 */
+/** register process 'exit' fall back; condition do not satisfy when return false, do not read /proc, do not add listen. */
 export function installLinuxExitChildSweep(overrides: Partial<ExitSweepDeps> = {}): boolean {
   const deps: ExitSweepDeps = { ...defaultExitSweepDeps(), ...overrides };
   if (!linuxAppImageExitSweepNeeded(deps)) return false;
   process.on('exit', () => {
-    try { sweepOwnedExitChildren(deps); } catch { /* 兜底自身绝不阻止退出 */ }
+    try { sweepOwnedExitChildren(deps); } catch { /* fall back itself never block stop exit */ }
   });
   return true;
 }

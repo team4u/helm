@@ -179,7 +179,7 @@ test('toolRowStats：edit 完成且元数据合法才报 +N −N（已应用语�
     { add: stats?.addCount, remove: stats?.removeCount },
     { add: 2, remove: 1 },
   )
-  assert.match(stats?.title ?? '', /已应用/)
+  assert.match(stats?.title ?? '', /Applied/)
   // 元数据非法：不给统计（不伪称已应用差异）
   assert.equal(toolRowStats(trace({ toolName: 'edit', structuredOutput: { path: '/a', replaced: true } })), undefined)
 })
@@ -194,7 +194,7 @@ test('toolRowStats：edit 运行中报待执行片段统计，标题明示未应
   )
   assert.equal(stats?.addCount, 1)
   assert.equal(stats?.removeCount, 1)
-  assert.match(stats?.title ?? '', /待执行/)
+  assert.match(stats?.title ?? '', /Pending/)
   // 运行中缺入参不给统计
   assert.equal(toolRowStats(trace({ toolName: 'edit', status: 'running' })), undefined)
   // 失败/未知不给统计
@@ -206,7 +206,7 @@ test('toolRowStats：edit 运行中报待执行片段统计，标题明示未应
 
 test('toolRowStats：write 报内容行数；插件 tool.view 接管不给宿主统计', { timeout: 60_000 }, () => {
   const stats = toolRowStats(trace({ toolName: 'write', input: { path: '/a', content: 'a\nb\nc' } }))
-  assert.equal(stats?.text, '3 行')
+  assert.equal(stats?.text, '3 lines')
   assert.equal(toolRowStats(trace({ toolName: 'write', input: { path: '/a' } })), undefined)
   assert.equal(
     toolRowStats(

@@ -1,10 +1,10 @@
 /**
- * CLI 登录态：<dataDir>/cli-token 的 0600 JSON { hubUrl, token }，本 CLI 专属。
- * credentials.json 仅承载模型/插件密钥（归 @helm/kernel CredentialService），
- * CLI 绝不读写它。写入持独立锁（cli-token.lock，tmp 写满后 fs.link 原子发布、首字段
- * PID、仅 PID 死亡破除 stale；不支持硬链接的文件系统退回 O_EXCL + 读取侧宽限兜底）
- * + tmp 原子写。HELM_TOKEN 环境变量优先时上层短路，不触碰磁盘。
- * origin 绑定：token 仅当目标 baseUrl 与记录 hubUrl 一致时附带（见 hub-client）。
+ * CLI login state:<dataDir>/cli-token  0600 JSON { hubUrl, token }, this CLI dedicated belong.
+ * credentials.json only bear load model/plugin secret key (archive @helm/kernel CredentialService),
+ * CLI never read write it. write hold independent lock (cli-token.lock,tmp write full after fs.link atomic publish, first token segment
+ * PID, only PID death break except stale; unsupported hard link connect file system retreat back O_EXCL + read side wide limit fall back)
+ * + tmp atomic write.HELM_TOKEN environment variable takes precedence when on layer short route, do not trigger touch disk.
+ * origin bind set:token only when target baseUrl and record hubUrl consistent when attach carries (see hub-client).
  */
 import fsp from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
@@ -20,9 +20,9 @@ export interface CliCredential {
 
 const LOCK_WAIT_MS = 10_000
 const LOCK_POLL_MS = 25
-/** 锁内容空/半截的宽限窗口：持有者可能正处「已创建待写入」的瞬态，超过才判定损坏。 */
+/** lock content empty/half truncate wide limit window: holder may correct where already create await write instant state, exceeds only then decide corrupt. */
 const LOCK_SETTLE_GRACE_MS = 2_000
-/** Windows 上 rename 替换目标被读取方（杀毒/索引扫描）短暂占用时的有界退避窗口与轮询间隔。 */
+/** Windows on rename replace target by read way (kill toxic/index scan) short temporary occupy when has boundary backoff window and polling interval. */
 const RENAME_BUSY_TOTAL_MS = 1_500
 const RENAME_BUSY_POLL_MS = 25
 
@@ -32,31 +32,31 @@ export function dataDirFor(env: NodeJS.ProcessEnv): string {
   return path.join(os.homedir(), '.helm')
 }
 
-/** CLI 登录态文件（0600 JSON { hubUrl, token }）。 */
+/** CLI login state file (0600 JSON { hubUrl, token }). */
 export function credentialsPath(dataDir: string): string {
   return path.join(dataDir, 'cli-token')
 }
 
-/** 校验 cli-token JSON 形状；非法/损坏显式报错（不静默当无凭据）。 */
+/** validate cli-token JSON shape; illegal/corrupt explicit errors (not silently when without credentials). */
 function parseCliTokenFile(text: string, file: string): CliCredential {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch (err) {
     throw new CliError(
-      `CLI 凭据文件损坏（${file}）：${err instanceof Error ? err.message : String(err)}`,
+      `CLI credentials file corrupt (${file}):${err instanceof Error ? err.message : String(err)}`,
       'credentials_unreadable',
     )
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new CliError(`CLI 凭据文件形状非法（${file}）：顶层必须是对象`, 'credentials_unreadable')
+    throw new CliError(`CLI credentials file shape illegal (${file}): top-level must be object`, 'credentials_unreadable')
   }
   const record = parsed as Record<string, unknown>
   if (record['hubUrl'] !== undefined && typeof record['hubUrl'] !== 'string') {
-    throw new CliError('CLI 凭据 hubUrl 形状非法：必须是字符串', 'credentials_unreadable')
+    throw new CliError('CLI credentials hubUrl shape illegal: must be string', 'credentials_unreadable')
   }
   if (record['token'] !== undefined && typeof record['token'] !== 'string') {
-    throw new CliError('CLI 凭据 token 形状非法：必须是字符串', 'credentials_unreadable')
+    throw new CliError('CLI credentials token shape illegal: must be string', 'credentials_unreadable')
   }
   return { hubUrl: record['hubUrl'] as string | undefined, token: record['token'] as string | undefined }
 }
@@ -71,16 +71,16 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * 排他锁：临时文件写满内容后 fs.link 原子发布为 cli-token.lock（首字段 PID）。
- * link 与 open('wx') 同具原子排他性，但目标一经可见即含完整内容——并发读取方
- * 绝无窗口读到空文件或半截 JSON。仅持有者 PID 确认死亡时破除 stale；
- * 不按存活时长强拆（合法持锁者可能只是慢）。返回释放函数（只移除自己持有的锁）。
+ * arrange other lock: temp file write full content after fs.link atomic publish is cli-token.lock(first token segment PID).
+ * link and open('wx') same tool atomic arrange other, but target one via visible i.e. contains complete content - - concurrency read way
+ * absolute without window read to empty file or half truncate JSON. only holder PID confirm death when break except stale;
+ * do not by store when long strong split (legal hold lock may only is slow). return release function (only remove itself hold has lock).
  */
 async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void>> {
   const owner = `${process.pid} ${randomUUID()}`
   const deadline = Date.now() + LOCK_WAIT_MS
   const publish = async (): Promise<boolean> => {
-    // tmp 写满 + flush，再 link 原子发布；link 失败（EEXIST=他人持有；EXDEV/ENOSYS 等由外层兜底）
+    // tmp write full + flush, again link atomic publish;link failed (EEXIST=other person hold has;EXDEV/ENOSYS etc. by outside layer fall back)
     const tmp = `${lockFile}.${process.pid}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`
     try {
       const handle = await fsp.open(tmp, 'w', 0o600)
@@ -96,7 +96,7 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
       const code = (err as NodeJS.ErrnoException).code
       if (code === 'EEXIST') return false
       if (code === 'EXDEV' || code === 'ENOSYS' || code === 'EPERM' || code === 'EINVAL') {
-        // 特殊文件系统不支持硬链接：退回 open('wx')（空窗由读取侧宽限兜底，绝不静默误判）
+        // special file system unsupported hard link connect: retreat back open('wx')(empty window by read side wide limit fall back, never static default mistakenly judge)
         try {
           await fsp.writeFile(lockFile, `${owner}\n`, { flag: 'wx', mode: 0o600 })
           return true
@@ -116,7 +116,7 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
       held = await publish()
     } catch (err) {
       throw new CliError(
-        `无法创建 CLI 凭据锁文件（${lockFile}）：${err instanceof Error ? err.message : String(err)}`,
+        `cannot create CLI credentials lock file (${lockFile}):${err instanceof Error ? err.message : String(err)}`,
         'credentials_lock_failed',
       )
     }
@@ -126,7 +126,7 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
           const raw = await fsp.readFile(lockFile, 'utf8')
           if (raw.trim() === owner) await fsp.rm(lockFile, { force: true })
         } catch {
-          /* 释放失败留给持有者死亡后的 stale 破除 */
+          /* release failed to holder death after stale break except */
         }
       }
     }
@@ -136,14 +136,14 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
       const raw = await fsp.readFile(lockFile, 'utf8')
       const head = raw.trim().split(/\s+/)[0] ?? ''
       if (!/^\d+$/.test(head)) {
-        // 空内容/半截：旧平台 fallback 或异常崩溃残留。刚创建不久视为持有者正在写入，
-        // 等待退避后重读；超过宽限窗才如实判损坏（不静默、也不误杀并发者）。
+        // empty content/half truncate: old platform fallback or exception crash leftover. just create do not long treated as holder is now write,
+        // wait for backoff after heavy read; exceeds wide limit window only then such as judge corrupt (not silently, also do not mistakenly kill concurrency).
         const stat = await fsp.stat(lockFile)
         if (Date.now() - stat.mtimeMs < LOCK_SETTLE_GRACE_MS) {
           pending = true
         } else {
           throw new CliError(
-            `CLI 凭据锁文件内容损坏（${lockFile}）：无法判定持有者`,
+            `CLI credentials lock file content corrupt (${lockFile}): cannot decide holder`,
             'credentials_lock_broken',
           )
         }
@@ -153,10 +153,10 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
       }
     } catch (err) {
       if (err instanceof CliError) throw err
-      // 仅 ENOENT 代表锁已释放；权限和 IO 错误不能当作无锁，更不能删掉他人的锁。
+      // only ENOENT proxy table lock already release; permission and IO error cannot when act without lock, more cannot delete other person lock.
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue
       throw new CliError(
-        `无法读取 CLI 凭据锁文件（${lockFile}）：${err instanceof Error ? err.message : String(err)}`,
+        `cannot read CLI credentials lock file (${lockFile}):${err instanceof Error ? err.message : String(err)}`,
         'credentials_lock_failed',
       )
     }
@@ -165,15 +165,15 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
       continue
     }
     if (Date.now() > deadline) {
-      throw new CliError(`CLI 凭据被并发写入，等待锁超时（${lockFile}）`, 'credentials_lock_timeout')
+      throw new CliError(`CLI credentials by concurrency write, wait for lock timeout (${lockFile})`, 'credentials_lock_timeout')
     }
     await new Promise((resolve) => setTimeout(resolve, pending ? LOCK_POLL_MS * 4 : LOCK_POLL_MS))
   }
 }
 
 /**
- * Windows 瞬时占用判定：目标被读取/扫描期间 rename 会短暂 EPERM/EACCES/EBUSY，
- * 退避后重试即可提交。其他平台这些码是真实权限错误，立即失败不做无谓等待。
+ * Windows instantaneous occupy decide: target by read/scan during rename will short temporary EPERM/EACCES/EBUSY,
+ * backoff after retry i.e. can commit. other platform these code is real permission error, immediately failed does not without say wait for.
  */
 function isTransientRenameBusy(err: unknown): boolean {
   if (process.platform !== 'win32') return false
@@ -181,7 +181,7 @@ function isTransientRenameBusy(err: unknown): boolean {
   return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'
 }
 
-/** rename 原子替换；仅 Windows 瞬时占用时有界退避（总等待约 1.5 秒），耗尽仍抛原始错误。 */
+/** rename atomic replace; only Windows instantaneous occupy when has boundary backoff (total wait for about 1.5 second), exhausted still throw original error. */
 async function renameAtomically(tmp: string, file: string): Promise<void> {
   const deadline = Date.now() + RENAME_BUSY_TOTAL_MS
   for (;;) {
@@ -195,7 +195,7 @@ async function renameAtomically(tmp: string, file: string): Promise<void> {
   }
 }
 
-/** tmp（唯一 uuid 名）+ fsync + rename 原子写，恒 0600；Windows 瞬时占用退避后仍原子提交。 */
+/** tmp(unique uuid name)+ fsync + rename atomic write, constant 0600;Windows instantaneous occupy backoff after still atomic commit. */
 async function atomicWrite0600(file: string, text: string): Promise<void> {
   const tmp = `${file}.tmp-${randomUUID()}`
   let handle: fsp.FileHandle | undefined
@@ -210,16 +210,16 @@ async function atomicWrite0600(file: string, text: string): Promise<void> {
     await handle?.close().catch(() => {})
     await fsp.rm(tmp, { force: true }).catch(() => {})
     throw new CliError(
-      `写入 CLI 凭据文件失败（${file}）：${err instanceof Error ? err.message : String(err)}`,
+      `write CLI credentials file failed (${file}):${err instanceof Error ? err.message : String(err)}`,
       'credentials_write_failed',
     )
   }
 }
 
 /**
- * 既有文件可能被外部放宽过权限：收敛回 0600，失败显式报错。
- * Windows 无 POSIX mode（NTFS 走 ACL，stat.mode 不表达 0600），不校验也不
- * chmod（POSIX chmod 在 Windows 上无效）；仅非 Windows 平台严格收敛。
+ * since has file may by external put wide permission: converge back 0600, failed explicit errors.
+ * Windows without POSIX mode(NTFS away ACL,stat.mode do not express 0600), do not validate also do not
+ * chmod(POSIX chmod in Windows on invalid); only non- Windows platform strictly converge.
  */
 async function ensureMode0600(file: string): Promise<void> {
   if (process.platform === 'win32') return
@@ -227,7 +227,7 @@ async function ensureMode0600(file: string): Promise<void> {
   if ((st.mode & 0o777) !== 0o600) {
     await fsp.chmod(file, 0o600).catch((err) => {
       throw new CliError(
-        `CLI 凭据文件权限修复失败（应 0600）：${file}：${err instanceof Error ? err.message : String(err)}`,
+        `CLI credentials file permission fix failed (should 0600):${file}:${err instanceof Error ? err.message : String(err)}`,
         'credentials_write_failed',
       )
     })
@@ -235,8 +235,8 @@ async function ensureMode0600(file: string): Promise<void> {
 }
 
 /**
- * 读取 CLI 登录态；文件不存在返回空凭据（未登录）。调用方应先检查
- * HELM_TOKEN 短路（env 优先时不读磁盘）。
+ * read CLI login state; file missing return empty credentials (not login). caller should first check
+ * HELM_TOKEN short route (env takes precedence when do not read disk).
  */
 export async function loadCliCredential(dataDir: string): Promise<CliCredential> {
   const file = credentialsPath(dataDir)
@@ -248,16 +248,16 @@ export async function loadCliCredential(dataDir: string): Promise<CliCredential>
       return {} as CliCredential
     }
     throw new CliError(
-      `读取 CLI 凭据文件失败（${file}）：${err instanceof Error ? err.message : String(err)}`,
+      `read CLI credentials file failed (${file}):${err instanceof Error ? err.message : String(err)}`,
       'credentials_unreadable',
     )
   }
   return parseCliTokenFile(raw, file)
 }
 
-/** 写入 CLI 登录态：独立锁 + 原子 0600 写。setup/login 共用。 */
+/** write CLI login state: independent lock + atomic 0600 write.setup/login shared use. */
 export async function updateCliCredentials(dataDir: string, cli: CliCredential): Promise<void> {
-  // 先建 dataDir 再争锁：首启目录不存在时锁文件与凭据均无处落盘（ENOENT）
+  // first create dataDir again contend lock: first start directory missing when lock file and credentials all without where (ENOENT)
   await fsp.mkdir(dataDir, { recursive: true })
   const file = credentialsPath(dataDir)
   const unlock = await acquireCliTokenLock(`${file}.lock`)

@@ -1,15 +1,23 @@
 /**
- * 插件 client.tsx 组件的宿主上下文（usePluginContext 返回值）与上下文工厂。
+ * Host context for plugin client.tsx components (return value of
+ * usePluginContext) and the context factory.
  *
- * - PluginClientContext / usePluginContext：插件组件内取当前插件身份与会话能力；
- * - createPluginClientContext：宿主 PluginUiView 从宿主端口构造绑定插件 ID 的
- *   上下文实现（callAction 跨插件寻址、submitInput 无会话显式 reject、导航与
- *   通知转发真实宿主端口，无任何 mock）。
+ * - PluginClientContext / usePluginContext: current plugin identity and
+ *   conversation capabilities inside plugin components;
+ * - createPluginClientContext: the host PluginUiView builds the plugin-ID-bound
+ *   context implementation from the host port (callAction addresses across
+ *   plugins, submitInput explicitly rejects without a conversation, navigation
+ *   and notifications forward to the real host port, no mocks).
  *
- * 本文件无组件导出（Fast Refresh 友好）。
+ * No component exports in this file (Fast Refresh friendly).
  */
 import { createContext, useContext } from 'react'
-import type { ComposerController, PluginClientContext as PluginClientContextType } from '@helm/protocol/browser'
+import {
+  DEFAULT_HELM_LOCALE,
+  createLocaleTranslator,
+  type ComposerController,
+  type PluginClientContext as PluginClientContextType,
+} from '@helm/protocol/browser'
 import type { PluginClientHostPort } from './host-port.js'
 
 export const PluginClientContext = createContext<PluginClientContextType | null>(null)
@@ -17,24 +25,30 @@ export const PluginClientContext = createContext<PluginClientContextType | null>
 export function usePluginContext(): PluginClientContextType {
   const ctx = useContext(PluginClientContext)
   if (ctx === null) {
-    throw new Error('usePluginContext 必须在 <PluginUiView> 内的插件组件中调用')
+    throw new Error('usePluginContext must be called inside a plugin component rendered by <PluginUiView>')
   }
   return ctx
 }
 
-/** 校验会话 ID 为正安全整数（与内核边界一致），非法即抛显式错误。 */
+/** Validates a conversation ID as a positive safe integer (aligned with the kernel boundary); throws an explicit error otherwise. */
 function assertConversationId(id: number, label: string): void {
   if (!Number.isSafeInteger(id) || id <= 0) {
-    throw new Error(`${label} 需为正整数（收到 ${String(id)}）`)
+    throw new Error(`${label} must be a positive integer (received ${String(id)})`)
   }
 }
 
 /**
- * 从宿主端口构造绑定插件 ID 的上下文实现（宿主 PluginUiView 内部使用）。
- * - callAction 第三参支持跨插件寻址（pluginId）与关联会话（conversationId）；
- * - submitInput 经宿主端口向真实会话提交输入，无会话时显式 reject；
- * - getPluginDoc 第二参读取其他插件公开文档；
- * - composer 仅在宿主提供（输入区槽位）时透传。
+ * Build the plugin-ID-bound context implementation from the host port (used
+ * internally by the host PluginUiView).
+ * - callAction's third argument supports cross-plugin addressing (pluginId)
+ *   and conversation association (conversationId);
+ * - submitInput submits input to the real conversation through the host port
+ *   and explicitly rejects when there is no conversation;
+ * - getPluginDoc's second argument reads other plugins' public docs;
+ * - locale/translate bind the host port locale (falling back to
+ *   DEFAULT_HELM_LOCALE / a derived translator when the host has not wired
+ *   them yet) so plugin components can resolve LocalizedText display copy;
+ * - composer is passed through only when the host provides it (composer slots).
  */
 export function createPluginClientContext(
   port: PluginClientHostPort,
@@ -42,6 +56,7 @@ export function createPluginClientContext(
   conversationId: number | undefined,
   composer?: ComposerController,
 ): PluginClientContextType {
+  const locale = port.locale ?? DEFAULT_HELM_LOCALE
   return {
     pluginId,
     callAction: (actionId, input, options) => {
@@ -57,7 +72,7 @@ export function createPluginClientContext(
     submitInput: async (text, options) => {
       const target = options?.conversationId ?? conversationId
       if (target === undefined) {
-        throw new Error('submitInput 无目标会话：当前槽位无会话上下文且未传 options.conversationId')
+        throw new Error('submitInput has no target conversation: the current slot has no conversation context and options.conversationId was not given')
       }
       assertConversationId(target, 'conversationId')
       await port.submitConversationInput(target, {
@@ -81,7 +96,7 @@ export function createPluginClientContext(
       const targetPlugin = options?.pluginId ?? pluginId
       const target = options?.conversationId ?? conversationId
       if (target === undefined) {
-        return Promise.reject(new Error('getPluginSessionDoc 无目标会话：当前槽位无会话上下文且未传 options.conversationId'))
+        return Promise.reject(new Error('getPluginSessionDoc has no target conversation: the current slot has no conversation context and options.conversationId was not given'))
       }
       assertConversationId(target, 'conversationId')
       return port.getPluginSessionDoc(targetPlugin, docName, target)
@@ -89,5 +104,7 @@ export function createPluginClientContext(
     ...(composer !== undefined ? { composer } : {}),
     ...(conversationId !== undefined ? { conversationId } : {}),
     theme: port.theme,
+    locale,
+    translate: port.translate ?? createLocaleTranslator(locale),
   }
 }

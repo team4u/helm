@@ -16,11 +16,11 @@ import {
 
 export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
 
-/** 组合根只选择插件与缺省启用状态，不提供内置插件专属运行时依赖。 */
+/** composition root only choose plugin and default enable state, do not provide built-in plugin dedicated belong runtime dependency. */
 export async function createHelm(options: HelmOptions = {}) {
-  // 默认产品组合注入插件构建实现（client.tsx 编译 + 外部 TS 转译）；调用方显式
-  //传 options.buildProvider 可整体替换。内核自身不携带 esbuild（机制与工具分离），
-  // 未注入时内核对 client UI 与 TS 插件显式拒绝（unsupported_client_build 等）。
+  // by default produce product combine inject plugin build implement (client.tsx compile + external TS transpile); caller explicit
+  //pass options.buildProvider can whole replace. kernel itself does not carry esbuild(mechanism and tool separate),
+  // not inject when kernel for client UI and TS plugin explicit reject (unsupported_client_build etc.).
   const kernel = await KernelRuntime.open({
     ...options,
     buildProvider: options.buildProvider ?? createPluginBuildProvider(),
@@ -39,7 +39,7 @@ export async function createHelm(options: HelmOptions = {}) {
     await kernel.plugins.register(createMagpiePlugin(), { enabled: false });
     await kernel.plugins.register(createTokenSpeedPlugin(), { enabled: false });
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
-    // 全部工具注册后统一 prepare -> start，最后恢复 SDK 调度器。
+    // all tool register after unify prepare -> start, finally restore SDK scheduler.
     await kernel.start();
     return { kernel, close: () => kernel.close() };
   } catch (error) {

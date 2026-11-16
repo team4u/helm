@@ -1,13 +1,13 @@
 /**
- * 会话角色与模型继承链对齐模块。
+ * conversation role and model inherit chain align module.
  *
- * 职责：
- * - Profile 配置读取与格式校验；
- * - 生效模型解析链（会话覆盖 > Profile.model > 全局默认）；
- * - 生效思考档位解析链（会话覆盖 > Profile.thinkingLevel > 全局默认）；
- * - 单会话配置变更串行化（withConversationChange）；
- * - SDK 会话模型/思考档位配置核对与 store 镜像同步（alignConversationModel）；
- * - Profile 保存后的级联批量继承刷新（alignProfileConversations）。
+ * responsibility:
+ * - Profile config read and format validate;
+ * - takes effect model parse chain (conversation override > Profile.model > global by default);
+ * - takes effect think Profile parse chain (conversation override > Profile.thinkingLevel > global by default);
+ * - single conversation config change serial (withConversationChange);
+ * - SDK conversation model/think Profile config core for and store mirror sync (alignConversationModel);
+ * - Profile save after level join batch amount inherit refresh (alignProfileConversations).
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { AgentChange, Harness } from '@earendil-works/pi-durable'
@@ -24,23 +24,23 @@ export interface ConversationProfileHost {
   readonly store: HelmStore
   readonly events: EventHub
   readonly profilesSvc: ProfileService
-  /** 当前 Models 集合（能力收敛用；热重载后读到最新集合）。 */
+  /** when before Models set (capability converge use; hot reload after read to most new set). */
   readonly models: () => Models
   readonly defaultModel: () => string | undefined
   readonly defaultThinkingLevel: () => string | undefined
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
   readonly summaryWithOwnership: (id: number) => ConversationSummary
-  /** 模型/档位对齐后触发上下文用量重算（窗口/阈值可能变化）；缺省不触发。 */
+  /** model/Profile align after trigger context use amount heavy compute (window/threshold may change); default does not trigger. */
   readonly scheduleContextUsageRefresh?: (id: number) => void
 }
 
 export class ConversationProfileService {
-  /** 同一会话的配置变更串行提交，避免继承刷新与显式覆盖互相覆盖。 */
+  /** the same conversation config change serial commit, avoid inherit refresh and explicit override mutual each other override. */
   private readonly conversationChanges = new Map<number, Promise<unknown>>()
 
   constructor(private readonly host: ConversationProfileHost) {}
 
-  /** Profile 读取失败与不存在分开报告，避免损坏文件被当成缺少模型配置。 */
+  /** Profile failed to read and missing open report, avoid corrupt file by when into missing model config. */
   async readProfile(profileId: string): Promise<Profile | undefined> {
     try {
       assertProfileId(profileId)
@@ -52,33 +52,33 @@ export class ConversationProfileService {
     } catch (error) {
       throw new HelmError(
         'profile_read_failed',
-        `读取 Profile ${profileId} 失败：${error instanceof Error ? error.message : String(error)}`,
+        `read Profile ${profileId} failed:${error instanceof Error ? error.message : String(error)}`,
         500,
         { profileId },
       )
     }
   }
 
-  /** 会话覆盖 > Profile.model > 全局；Profile 文件每次实时读取。 */
+  /** conversation override > Profile.model > global;Profile file each time real-time read. */
   async resolveEffectiveModel(
     override: string | undefined,
     profileId: string,
   ): Promise<string | undefined> {
     const profile = await this.readProfile(profileId)
     if (profile === undefined) {
-      throw new HelmError('profile_not_found', `会话引用的 Profile 不存在：${profileId}`, 404, { profileId })
+      throw new HelmError('profile_not_found', `conversation reference Profile missing:${profileId}`, 404, { profileId })
     }
     return override || profile.model || this.host.defaultModel()
   }
 
   /**
-   * 思考档位覆盖 > Profile.thinkingLevel > 全局默认；再按生效模型能力
-   * 收敛到 SDK 可用档位（不支持的档位就近取可用档）。
-   * 未配置（undefined/空串）原样返回，不误变成显式 off。
+   * think Profile override > Profile.thinkingLevel > global by default; again by takes effect model capability
+   * converge to SDK available Profile (unsupported Profile then near take available Profile).
+   * not config (undefined/empty string) original return, do not mistakenly becomes explicit off.
    */
   async resolveEffectiveThinkingLevel(override: string | undefined, profileId: string, modelRef?: { provider: string; modelId: string }): Promise<string | undefined> {
     const profile = await this.readProfile(profileId)
-    if (!profile) throw new HelmError('profile_not_found', `会话引用的 Profile 不存在：${profileId}`, 404, { profileId })
+    if (!profile) throw new HelmError('profile_not_found', `conversation reference Profile missing:${profileId}`, 404, { profileId })
     const inherited = override || profile.thinkingLevel || this.host.defaultThinkingLevel()
     return clampThinkingLevelForModel(this.host.models(), modelRef, inherited)
   }
@@ -94,19 +94,19 @@ export class ConversationProfileService {
     }
   }
 
-  /** 模型与思考档位分别继承；始终核对 SDK，以修复重启或 fork 的历史快照。 */
+  /** model and think Profile respectively inherit; always core for SDK, with fix restart or fork history snapshot. */
   async alignConversationModel(id: number, emitEvent = false): Promise<void> {
     await this.withConversationChange(id, async () => {
       const meta = this.host.store.getConv(id)
       if (!meta) return
       const effective = await this.resolveEffectiveModel(meta.modelOverride, meta.profileId)
       const ref = effective ? this.host.parseModelRefOrThrow(effective) : undefined
-      // 对齐同样要持久化显式覆盖的收敛结果。否则 SDK/摘要虽已收敛，
-      // 镜像仍保留原覆盖值，下一次对齐会再次出现「生效值与覆盖值不一致」。
+      // align same want persist explicit override converge result. otherwise SDK/summary although already converge,
+      // mirror still keep original override value, under once align will again appear takes effect value and override value inconsistent.
       const clampedOverride = clampThinkingLevelForModel(this.host.models(), ref, meta.thinkingLevelOverride)
       const thinking = await this.resolveEffectiveThinkingLevel(clampedOverride, meta.profileId, ref)
       const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-      if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+      if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
       const agent = await conversation.agent(BACKGROUND_CONTEXT)
       const change: AgentChange = {
         ...(agent.model?.provider !== ref?.provider || agent.model?.modelId !== ref?.modelId
@@ -132,14 +132,14 @@ export class ConversationProfileService {
         stateChangeSeq: latest.stateChangeSeq + 1,
         updatedAt: Date.now(),
       })
-      // 生效模型变化后上下文窗口/阈值随之变化：触发用量重算（去重；forks
-      // 与 profile 级联刷新均经此对齐，首次观察路径另有 adoptInitial 兑底）。
+      // takes effect model change after context window/threshold follow of change: trigger use amount heavy compute (dedupe;forks
+      // and profile level join refresh all via this align, first time observe path another has adoptInitial honor bottom).
       this.host.scheduleContextUsageRefresh?.(id)
       if (emitEvent) this.host.events.publish('conversation.upsert', this.host.summaryWithOwnership(id))
     })
   }
 
-  /** Profile 保存后的即时继承刷新（覆盖值由各自的解析链保护）。 */
+  /** Profile save after i.e. when inherit refresh (override value by each parse chain protect). */
   async alignProfileConversations(profileId: string): Promise<void> {
     for (const meta of this.host.store.listConvs()) {
       if (meta.profileId === profileId) await this.alignConversationModel(meta.id, true)

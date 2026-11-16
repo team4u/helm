@@ -1,12 +1,12 @@
 /**
- * library-store.ts — 已保存工作流的文件库（自 WorkflowService 拆出的内部模块）。
+ * library-store.ts -- the file library of saved workflows (an internal module split out of WorkflowService).
  *
- * <dataDir>/workflows/<name>.js 是唯一真源：
- * - 名称安全（SAFE_NAME 防路径穿越）+ symlink 越界拒绝（realpath 必须解析回
- *   workflows 目录内同名位置）；
- * - 覆盖默认拒绝（409 workflow_already_exists），原子写入（同目录临时文件 +
- *   fsync；新建 link 原子占位、覆盖 rename 原子替换）；
- * - save(fromRunId) 的脚本源解析经注入的 loadRunRecord 回调走 run store。
+ * <dataDir>/workflows/<name>.js is the single source of truth:
+ * - name safety (SAFE_NAME guards path traversal) + symlink-escape rejection (realpath must resolve
+ *   back to the same-name position inside the workflows directory);
+ * - overwrite refused by default (409 workflow_already_exists); atomic writes (temp file in the same
+ *   directory + fsync; creation claims the path atomically via link, overwrite swaps atomically via rename);
+ * - save(fromRunId) resolves script sources via the injected loadRunRecord callback into the run store.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -37,24 +37,24 @@ import type {
 import { extractMeta, hasMetaDeclaration, type WorkflowMeta } from './meta.js'
 import { MAX_SCRIPT_LENGTH, precheckScriptSyntax } from './runtime.js'
 
-/** 已保存工作流的安全名称：字母数字开头，限 [A-Za-z0-9._-]，防路径穿越。 */
+/** Safe name for a saved workflow: starts alphanumeric, limited to [A-Za-z0-9._-], guarding path traversal. */
 export const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
-/** 真实文件事实（mtime 毫秒 + 字节数）；读取失败显式抛 io_error。 */
+/** Real file facts (mtime ms + byte size); read failures throw io_error explicitly. */
 export function fileStatsOf(path: string): { updatedAt: number; size: number } {
   try {
     const stats = statSync(path)
     return { updatedAt: Math.trunc(stats.mtimeMs), size: stats.size }
   } catch (error) {
     const err = error as NodeJS.ErrnoException
-    throw new HelmError('io_error', `无法读取文件事实 ${path}：${err.message}`, 500, {
+    throw new HelmError('io_error', `cannot read file facts ${path}: ${err.message}`, 500, {
       path,
       code: err.code,
     })
   }
 }
 
-/** 单个脚本的元数据损坏不阻断整个目录；保留该条目并返回诊断。 */
+/** Metadata corruption of a single script does not block the whole directory; keep the entry and return diagnostics. */
 function summaryFromSource(
   name: string,
   path: string,
@@ -77,7 +77,7 @@ function summaryFromSource(
   }
 }
 
-/** save(fromRunId) 解析脚本源所需的持久记录切面（与 run-store 的 RunRecord 结构兼容）。 */
+/** The persisted-record slice needed by save(fromRunId) to resolve script sources (compatible with the run store's RunRecord). */
 export interface RunScriptSourceRecord {
   kind?: 'workflow' | 'subagent'
   script?: string
@@ -86,7 +86,7 @@ export interface RunScriptSourceRecord {
 
 export interface WorkflowLibraryOptions {
   dataDir: string
-  /** run 记录读取切面（not_found 等由 run store 原样抛出）。 */
+  /** Run-record read slice (not_found etc. thrown as-is by the run store). */
   loadRunRecord(runId: string): RunScriptSourceRecord
 }
 
@@ -103,7 +103,7 @@ export class WorkflowLibrary {
     return join(this.dataDir, 'workflows')
   }
 
-  /** 列出带 meta 声明的工作流脚本；非法 meta 附 metadataError，文件读取错误显式失败。 */
+  /** List workflow scripts with meta declarations; invalid meta attaches metadataError; file read errors fail explicitly. */
   list(): SavedWorkflowSummary[] {
     const dir = this.workflowsDir()
     let entries: string[]
@@ -111,9 +111,9 @@ export class WorkflowLibrary {
       entries = readdirSync(dir)
     } catch (error) {
       const err = error as NodeJS.ErrnoException
-      // 目录尚不存在：空列表是事实，不是降级。
+      // Directory not yet present: an empty list is the fact, not a degradation.
       if (err.code === 'ENOENT') return []
-      throw new HelmError('io_error', `无法读取工作流目录 ${dir}：${err.message}`, 500, {
+      throw new HelmError('io_error', `cannot read the workflows directory ${dir}: ${err.message}`, 500, {
         path: dir,
         code: err.code,
       })
@@ -129,14 +129,14 @@ export class WorkflowLibrary {
         source = readFileSync(path, 'utf-8')
       } catch (error) {
         const err = error as NodeJS.ErrnoException
-        // 列表是尽力而为的目录视图：单个文件不可读跳过但不隐瞒。
+        // The list is a best-effort directory view: a single unreadable file is skipped but not concealed.
         if (err.code === 'ENOENT') continue
-        throw new HelmError('io_error', `无法读取工作流脚本 ${path}：${err.message}`, 500, {
+        throw new HelmError('io_error', `cannot read workflow script ${path}: ${err.message}`, 500, {
           path,
           code: err.code,
         })
       }
-      // 非 workflow 的普通 .js（构建产物、草稿）不应出现在列表里。
+      // Plain non-workflow .js files (build artifacts, drafts) must not appear in the list.
       if (!hasMetaDeclaration(source)) continue
       const stats = fileStatsOf(path)
       out.push(summaryFromSource(name, path, source, stats))
@@ -144,7 +144,7 @@ export class WorkflowLibrary {
     return out
   }
 
-  /** 读取已保存工作流的完整定义（只读源码 + 元数据 + 真实文件事实）。 */
+  /** Read a saved workflow's full definition (read-only source + metadata + real file facts). */
   get(name: string): SavedWorkflowDetail {
     const path = this.resolveSavedName(name)
     const source = this.readScriptFile(path)
@@ -153,21 +153,21 @@ export class WorkflowLibrary {
   }
 
   /**
-   * 保存工作流定义（script / fromRunId 恰一）：
-   * - 严格边界校验 + validateScript 全量检查 + 与 worker 同形状的纯语法预检
-   *   （compile-only，零副作用）；
-   * - 名称安全（SAFE_NAME 防路径穿越）；显式 name 与 meta.name 不一致拒绝；
-   * - 覆盖默认拒绝（409 workflow_already_exists），overwrite: true 才覆盖；
-   * - 原子写入：同目录临时文件 + fsync，新建经 link 原子占位（并发同名
-   *   创建恰好一个成功），覆盖经 rename 原子替换；
-   * - 防符号链接逃逸：目标存在时 realpath 必须仍在 workflows 目录内同名位置。
+   * Save a workflow definition (exactly one of script / fromRunId):
+   * - strict boundary validation + validateScript's full checks + the pure syntax precheck with the
+   *   worker's exact shape (compile-only, zero side effects);
+   * - name safety (SAFE_NAME guards path traversal); an explicit name disagreeing with meta.name is rejected;
+   * - overwrite refused by default (409 workflow_already_exists); only overwrite: true overwrites;
+   * - atomic write: temp file in the same directory + fsync; creation claims the path atomically via
+   *   link (exactly one of concurrent same-name creations succeeds), overwrite swaps atomically via rename;
+   * - symlink-escape defense: when the target exists, its realpath must still be at the same-name position inside the workflows directory.
    */
   save(request: WorkflowSaveRequest): WorkflowSaveResult {
     const sources = [request.script, request.fromRunId].filter((v) => v !== undefined)
     if (sources.length !== 1) {
       throw new HelmError(
         'validation_error',
-        'save 需要 script 或 fromRunId 恰好提供一个',
+        'save requires exactly one of script or fromRunId',
         400,
         { provided: sources.length },
       )
@@ -181,7 +181,7 @@ export class WorkflowLibrary {
       if (record.kind === 'subagent') {
         throw new HelmError(
           'validation_error',
-          `运行 ${request.fromRunId} 是后台子代理（subagent），没有可保存的工作流脚本`,
+          `run ${request.fromRunId} is a background subagent with no workflow script to save`,
           400,
           { runId: request.fromRunId, kind: 'subagent' },
         )
@@ -193,7 +193,7 @@ export class WorkflowLibrary {
       } else {
         throw new HelmError(
           'validation_error',
-          `运行 ${request.fromRunId} 未持久化脚本源（无内联 script 与 scriptPath），无法保存`,
+          `run ${request.fromRunId} persisted no script source (no inline script or scriptPath); cannot save`,
           400,
           { runId: request.fromRunId },
         )
@@ -205,14 +205,14 @@ export class WorkflowLibrary {
       meta = precheckScriptSyntax(script).meta
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      throw new HelmError('workflow_script_invalid', `工作流脚本校验失败：${message}`, 400)
+      throw new HelmError('workflow_script_invalid', `workflow script validation failed: ${message}`, 400)
     }
 
     const name = request.name ?? meta.name
     if (!SAFE_NAME.test(name)) {
       throw new HelmError(
         'validation_error',
-        `工作流名称 "${name}" 非法：需匹配 ${SAFE_NAME.source}（防路径穿越）`,
+        `workflow name "${name}" is invalid: must match ${SAFE_NAME.source} (path-traversal guard)`,
         400,
         { name },
       )
@@ -220,7 +220,7 @@ export class WorkflowLibrary {
     if (request.name !== undefined && request.name !== meta.name) {
       throw new HelmError(
         'validation_error',
-        `保存名称 ${request.name} 与脚本 meta.name "${meta.name}" 不一致；请先统一名称`,
+        `save name ${request.name} disagrees with the script's meta.name "${meta.name}"; unify the names first`,
         400,
         { name: request.name, metaName: meta.name },
       )
@@ -233,14 +233,14 @@ export class WorkflowLibrary {
     if (existing !== undefined && request.overwrite !== true) {
       throw new HelmError(
         'workflow_already_exists',
-        `已存在同名工作流 ${name}（${target}）；需 overwrite: true 才覆盖`,
+        `a workflow named ${name} already exists (${target}); overwrite: true is required to overwrite`,
         409,
         { name, path: target },
       )
     }
 
-    // 原子写入：同目录临时文件 + fsync；新建 link 原子占位（并发创建恰好一个
-    // 成功），覆盖 rename 原子替换。临时文件名不以 .js 结尾，不会泄入 list()。
+    // Atomic write: temp file in the same directory + fsync; creation claims via link (exactly one
+    // concurrent creation succeeds), overwrite swaps via rename. Temp file names don't end in .js, so they never leak into list().
     const tmp = join(dir, `.save-${name}-${randomUUID()}.tmp`)
     try {
       const fd = openSync(tmp, 'wx', 0o644)
@@ -258,7 +258,7 @@ export class WorkflowLibrary {
           if (err.code === 'EEXIST') {
             throw new HelmError(
               'workflow_already_exists',
-              `已存在同名工作流 ${name}（并发写入已抢先创建）；需 overwrite: true 才覆盖`,
+              `a workflow named ${name} already exists (a concurrent write created it first); overwrite: true is required to overwrite`,
               409,
               { name, path: target },
             )
@@ -270,21 +270,21 @@ export class WorkflowLibrary {
         renameSync(tmp, target)
       }
     } catch (error) {
-      // 临时文件清理尽力而为：清理失败不是业务结果的一部分（tmp 不泄入 list）。
+      // Temp-file cleanup is best-effort: cleanup failures are not part of the business result (tmp never leaks into list).
       try {
         unlinkSync(tmp)
       } catch {
-        // 已被 rename/link 消费或本就不存在
+        // already consumed by rename/link, or never existed
       }
       if (error instanceof HelmError) throw error
       const err = error as NodeJS.ErrnoException
-      throw new HelmError('io_error', `写入工作流定义 ${target} 失败：${err.message}`, 500, {
+      throw new HelmError('io_error', `failed to write workflow definition ${target}: ${err.message}`, 500, {
         path: target,
         code: err.code,
       })
     }
 
-    // 真实摘要：保存后从真实 fs 重新读事实（不返回入参拼装的假状态）。
+    // Real summary: re-read facts from the real fs after saving (never return a fake status assembled from inputs).
     const written = fileStatsOf(target)
     return {
       created: existing === undefined,
@@ -292,12 +292,12 @@ export class WorkflowLibrary {
     }
   }
 
-  /** 删除已保存工作流定义文件（历史 run 记录不受影响；不存在显式 404）。 */
+  /** Delete a saved workflow definition file (historical run records unaffected; explicit 404 when absent). */
   delete(name: string): WorkflowDeleteResult {
     if (!SAFE_NAME.test(name)) {
       throw new HelmError(
         'validation_error',
-        `工作流名称 "${name}" 非法：需匹配 ${SAFE_NAME.source}（防路径穿越）`,
+        `workflow name "${name}" is invalid: must match ${SAFE_NAME.source} (path-traversal guard)`,
         400,
         { name },
       )
@@ -310,22 +310,22 @@ export class WorkflowLibrary {
     } catch (error) {
       const err = error as NodeJS.ErrnoException
       if (err.code === 'ENOENT') {
-        throw new HelmError('not_found', `工作流 ${name} 不存在`, 404, { name, path: target })
+        throw new HelmError('not_found', `workflow ${name} does not exist`, 404, { name, path: target })
       }
-      throw new HelmError('io_error', `无法读取工作流定义条目 ${target}：${err.message}`, 500, {
+      throw new HelmError('io_error', `cannot read workflow definition entry ${target}: ${err.message}`, 500, {
         path: target,
         code: err.code,
       })
     }
-    // 符号链接：realpath 必须解析回 workflows 目录内同名位置（目录外一律拒绝，
-    // 既不删目标也不删链接本身——链接存在即目录已被动过手脚，交人类处置）。
+    // Symlink: realpath must resolve back to the same-name position inside the workflows directory
+    // (anything outside is refused -- delete neither the target nor the link itself: an existing link means the
     if (entry.isSymbolicLink()) {
       const real = realpathSync(target)
       const expected = join(realpathSync(dir), `${name}.js`)
       if (real !== expected) {
         throw new HelmError(
           'validation_error',
-          `工作流 "${name}" 是指向目录外的符号链接（${real}），已拒绝删除`,
+          `workflow "${name}" is a symlink pointing outside the directory (${real}); deletion refused`,
           400,
           { name, real },
         )
@@ -333,7 +333,7 @@ export class WorkflowLibrary {
     } else if (!entry.isFile()) {
       throw new HelmError(
         'validation_error',
-        `工作流定义条目 ${target} 不是常规文件，已拒绝删除`,
+        `workflow definition entry ${target} is not a regular file; deletion refused`,
         400,
         { name, path: target },
       )
@@ -342,7 +342,7 @@ export class WorkflowLibrary {
       unlinkSync(target)
     } catch (error) {
       const err = error as NodeJS.ErrnoException
-      throw new HelmError('io_error', `删除工作流定义 ${target} 失败：${err.message}`, 500, {
+      throw new HelmError('io_error', `failed to delete workflow definition ${target}: ${err.message}`, 500, {
         path: target,
         code: err.code,
       })
@@ -351,18 +351,18 @@ export class WorkflowLibrary {
   }
 
   /**
-   * 保存目标的现存条目检查：返回真实文件事实，或 undefined（不存在）。
-   * 符号链接指到目录外（resolveSavedName 同款 realpath 校验）一律拒绝。
+   * Existing-entry check for the save target: return real file facts, or undefined (absent).
+   * Symlinks pointing outside the directory (same realpath check as resolveSavedName) are always refused.
    */
   private savedEntryStats(name: string, target: string): { updatedAt: number; size: number } | undefined {
     try {
-      // resolveSavedName 对不存在目标返回路径本身，对越界 symlink 显式拒绝。
+      // resolveSavedName returns the path itself for absent targets and explicitly rejects out-of-dir symlinks.
       const resolved = this.resolveSavedName(name)
       const stats = statSync(resolved)
       if (!stats.isFile()) {
         throw new HelmError(
           'validation_error',
-          `工作流定义条目 ${target} 不是常规文件，无法覆盖`,
+          `workflow definition entry ${target} is not a regular file; cannot overwrite`,
           400,
           { name, path: target },
         )
@@ -372,7 +372,7 @@ export class WorkflowLibrary {
       if (error instanceof HelmError) throw error
       const err = error as NodeJS.ErrnoException
       if (err.code === 'ENOENT') return undefined
-      throw new HelmError('io_error', `无法检查工作流定义条目 ${target}：${err.message}`, 500, {
+      throw new HelmError('io_error', `cannot stat workflow definition entry ${target}: ${err.message}`, 500, {
         path: target,
         code: err.code,
       })
@@ -383,13 +383,13 @@ export class WorkflowLibrary {
     if (!SAFE_NAME.test(name)) {
       throw new HelmError(
         'validation_error',
-        `工作流名称 "${name}" 非法：需匹配 ${SAFE_NAME.source}（防路径穿越）`,
+        `workflow name "${name}" is invalid: must match ${SAFE_NAME.source} (path-traversal guard)`,
         400,
         { name },
       )
     }
-    // SAFE_NAME 已排除 '/'，但 symlink 可能把名字重新指到目录外：realpath 校验
-    // 解析后的真实路径仍在 workflows 目录内。
+    // SAFE_NAME already excludes '/', but a symlink could re-point the name outside the directory:
+    // realpath validates the resolved real path still stays inside the workflows directory.
     const dir = this.workflowsDir()
     const target = join(dir, `${name}.js`)
     try {
@@ -398,7 +398,7 @@ export class WorkflowLibrary {
       if (real !== join(realDir, `${name}.js`)) {
         throw new HelmError(
           'validation_error',
-          `工作流 "${name}" 是指向目录外的符号链接（${real}），已拒绝`,
+          `workflow "${name}" is a symlink pointing outside the directory (${real}); refused`,
           400,
           { name, real },
         )
@@ -407,8 +407,8 @@ export class WorkflowLibrary {
     } catch (error) {
       if (error instanceof HelmError) throw error
       const err = error as NodeJS.ErrnoException
-      if (err.code === 'ENOENT') return target // 不存在：readScriptFile 报 not_found
-      throw new HelmError('io_error', `无法解析工作流路径 ${target}：${err.message}`, 500, {
+      if (err.code === 'ENOENT') return target // absent: readScriptFile reports not_found
+      throw new HelmError('io_error', `cannot resolve workflow path ${target}: ${err.message}`, 500, {
         path: target,
         code: err.code,
       })
@@ -416,7 +416,7 @@ export class WorkflowLibrary {
   }
 
   resolveExplicitPath(scriptPath: string): string {
-    // 显式用户文件路径：可读即用，不承诺沙箱（与文档一致）。
+    // Explicit user file path: use it if readable; no sandbox promise (consistent with docs).
     return resolve(scriptPath)
   }
 
@@ -425,13 +425,13 @@ export class WorkflowLibrary {
     try {
       const st = statSync(path)
       if (!st.isFile()) {
-        throw new HelmError('not_found', `工作流脚本不是常规文件：${path}`, 404, { path })
+        throw new HelmError('not_found', `workflow script is not a regular file: ${path}`, 404, { path })
       }
       source = readFileSync(path, 'utf-8')
     } catch (error) {
       if (error instanceof HelmError) throw error
       const err = error as NodeJS.ErrnoException
-      throw new HelmError('not_found', `工作流脚本文件不可读（${err.code ?? 'unknown'}）：${path}`, 404, {
+      throw new HelmError('not_found', `workflow script file unreadable (${err.code ?? 'unknown'}): ${path}`, 404, {
         path,
         code: err.code,
       })
@@ -439,7 +439,7 @@ export class WorkflowLibrary {
     if (source.length > MAX_SCRIPT_LENGTH) {
       throw new HelmError(
         'validation_error',
-        `工作流脚本 ${source.length} 字符，超过上限 ${MAX_SCRIPT_LENGTH}`,
+        `workflow script is ${source.length} chars, over the cap of ${MAX_SCRIPT_LENGTH}`,
         400,
         { path },
       )
@@ -447,7 +447,7 @@ export class WorkflowLibrary {
     return source
   }
 
-  /** 提取完整 meta（失败回退 undefined，完整校验在引擎 validateScript）。 */
+  /** Extract the full meta (falls back to undefined; full validation lives in the engine's validateScript). */
   peekMeta(script: string): WorkflowMeta | undefined {
     try {
       return extractMeta(script).meta

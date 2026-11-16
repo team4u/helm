@@ -1,19 +1,19 @@
 /**
- * 节点侧 envPathUsage RPC 与受管环境变量剥除测试（真实 NodeEnvRpcServer）。
+ * node side envPathUsage RPC and managed environment variable strip except test (real NodeEnvRpcServer).
  *
- * 覆盖：
- * - 真实 /proc：本测试进程自身 spawn 的子进程以目标目录为 cwd → 快照命中
- *   （pid/source/cwd 路径）；子进程退出后重扫干净（root 宿主 complete=true）；
- * - 本测试进程持有目标树内文件的打开 fd → fd 命中；
- * - fixture procRoot（symlink 伪造 cwd/fd）→ 命中与边界（/a 不匹配 /ab）；
- * - 平台注入非 Linux → 显式 not_supported（不伪造跨平台结果）；
- * - 入参严格校验：未知字段 / 相对路径 / NUL / 非对象 → invalid；
- * - 受管环境变量剥除：daemon 宿主 env 的 HELM_TOKEN / HELM_EXECUTION_SCOPE
- *   绝不经继承进入子命令（envExec 与 LocalExecutionEnv.exec 直连两口径）；
- *   调用方显式注入的合法值按次生效。
+ * override:
+ * - real /proc: this test process itself spawn child process with target directory is cwd → snapshot hit
+ *   (pid/source/cwd path); child process exit after heavy scan clean (root host complete=true);
+ * - this test process hold has target tree inside file open fd → fd hit;
+ * - fixture procRoot(symlink fabricate cwd/fd)→ hit and boundary (/a does not match /ab);
+ * - platform inject non- Linux → explicit not_supported(do not fabricate across platform result);
+ * - reference strictly validate: unknown field / relative path / NUL / non- object → invalid;
+ * - managed environment variable strip except:daemon host env  HELM_TOKEN / HELM_EXECUTION_SCOPE
+ *   never via inherit enter sub- command (envExec and LocalExecutionEnv.exec direct connect two opening path);
+ *   caller explicit inject legal value by time takes effect.
  *
- * 诚实性：EACCES 分支无法在 root 宿主真实复现，由 env-io 注入 io 单测覆盖
- * （packages/env-io/test/path-usage.test.ts）；此处只测真实可证行为。
+ * honest:EACCES branch cannot in root host real re- now, by env-io inject io single test override
+ * (packages/env-io/test/path-usage.test.ts); this where only test real can verify behavior.
  */
 
 import { describe, it, before, after } from 'node:test'
@@ -38,10 +38,10 @@ after(async () => {
   await cleanupDir(rootDir)
 })
 
-/** 以 target 为 cwd 启动长驻子进程（真实占用；绝不用扫描目标作为 helper 的启动方式以外用途）。 */
+/** with target is cwd start long resident child process (real occupy; never use scan target as helper start way with outside purpose). */
 function holdProcess(target: string): { pid: number; stop: () => Promise<void> } {
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { cwd: target, stdio: 'ignore' })
-  assert.ok(child.pid !== undefined, '子进程应有 pid')
+  assert.ok(child.pid !== undefined, 'child process should has pid')
   const pid = child.pid!
   return {
     pid,
@@ -53,12 +53,12 @@ function holdProcess(target: string): { pid: number; stop: () => Promise<void> }
   }
 }
 
-describe('envPathUsage：真实 /proc', { timeout: 60_000 }, () => {
-  it('子进程 cwd 占用：命中 pid 与路径；退出后重扫干净（完整性不假设 root）', { timeout: 60_000 }, async () => {
+describe('envPathUsage: real /proc', { timeout: 60_000 }, () => {
+  it('child process cwd occupy: hit pid and path; exit after heavy scan clean (complete do not assume root)', { timeout: 60_000 }, async () => {
     const target = join(rootDir, 'wt-a')
     mkdirSync(target, { recursive: true })
     if (process.platform !== 'linux') {
-      // 非 Linux：显式 not_supported（不伪造结果、不静默跳过）。
+      // non- Linux: explicit not_supported(do not fabricate result, not silently skip).
       const unsupported = await server.envPathUsage!({ path: target })
       assert.equal(unsupported.ok, false)
       if (unsupported.ok) return
@@ -68,32 +68,32 @@ describe('envPathUsage：真实 /proc', { timeout: 60_000 }, () => {
     const holder = holdProcess(target)
     try {
       const r = await server.envPathUsage!({ path: target })
-      assert.equal(r.ok, true, `扫描应成功：${r.ok ? '' : r.error.message}`)
+      assert.equal(r.ok, true, `scan should succeeded:${r.ok ? '' : r.error.message}`)
       if (!r.ok) return
       const hit = r.value.processes.find((p) => p.pid === holder.pid)
-      assert.ok(hit, `应命中子进程 ${holder.pid}：${JSON.stringify(r.value.processes)}`)
+      assert.ok(hit, `should hit child process ${holder.pid}:${JSON.stringify(r.value.processes)}`)
       assert.equal(hit!.source, 'cwd')
       assert.equal(hit!.path, target)
-      assert.equal(typeof hit!.name, 'string', '应含进程名（comm）')
-      // 完整性不假设 root：非完整环境必须携带 fail-closed 诊断；权限拒读
-      // （跨 uid 或 non-dumpable，如 systemd --user）计入 unobservable 且不影响 complete。
+      assert.equal(typeof hit!.name, 'string', 'should contains process name (comm)')
+      // complete do not assume root: non- complete environment must carry fail-closed diagnose; permission refuse read
+      // (across uid or non-dumpable, such as systemd --user) count unobservable and does not affect complete.
       assert.equal(typeof r.value.complete, 'boolean')
-      assert.equal(typeof r.value.unobservable, 'number', '快照必须携带盲区计数')
-      assert.ok(r.value.unobservable >= 0, '盲区计数必须是非负整数')
+      assert.equal(typeof r.value.unobservable, 'number', 'snapshot must carry blind spot counter')
+      assert.ok(r.value.unobservable >= 0, 'blind spot counter must be non- negative integer')
       if (r.value.complete !== true) {
-        assert.ok(r.value.diagnostics.length > 0, 'complete=false 必须携带不完整诊断')
+        assert.ok(r.value.diagnostics.length > 0, 'complete=false must carry do not complete diagnose')
       }
     } finally {
       await holder.stop()
     }
-    // 进程退出后：该 pid 不再命中（快照如实反映当前事实）。
+    // process exit after: the pid no longer hit (snapshot such as reverse reflect when before fact).
     const after = await server.envPathUsage!({ path: target })
     assert.equal(after.ok, true)
     if (!after.ok) return
-    assert.equal(after.value.processes.some((p) => p.pid === holder.pid), false, '退出进程不得残留命中')
+    assert.equal(after.value.processes.some((p) => p.pid === holder.pid), false, 'exit process must not leftover hit')
   })
 
-  it('本进程打开 fd 占用：目标树内文件的打开描述符命中（source=fd）', { timeout: 60_000 }, async () => {
+  it('this process open fd occupy: target tree inside file open description symbol hit (source=fd)', { timeout: 60_000 }, async () => {
     const target = join(rootDir, 'wt-b')
     mkdirSync(target, { recursive: true })
     if (process.platform !== 'linux') {
@@ -111,7 +111,7 @@ describe('envPathUsage：真实 /proc', { timeout: 60_000 }, () => {
       assert.equal(r.ok, true)
       if (!r.ok) return
       const hit = r.value.processes.find((p) => p.pid === process.pid && p.source === 'fd')
-      assert.ok(hit, `应命中本进程 fd：${JSON.stringify(r.value.processes.filter((p) => p.pid === process.pid))}`)
+      assert.ok(hit, `should hit this process fd:${JSON.stringify(r.value.processes.filter((p) => p.pid === process.pid))}`)
       assert.equal(hit!.path, held)
     } finally {
       closeSync(fd)
@@ -119,8 +119,8 @@ describe('envPathUsage：真实 /proc', { timeout: 60_000 }, () => {
   })
 })
 
-describe('envPathUsage：fixture procRoot 与边界', { timeout: 60_000 }, () => {
-  it('伪造 /proc 树（symlink cwd/fd）：命中与路径分量边界（/a 不匹配 /ab）', { timeout: 60_000 }, async () => {
+describe('envPathUsage:fixture procRoot and boundary', { timeout: 60_000 }, () => {
+  it('fabricate /proc tree (symlink cwd/fd): hit and path amount boundary (/a does not match /ab)', { timeout: 60_000 }, async () => {
     const target = join(rootDir, 'real-wt')
     mkdirSync(target, { recursive: true })
     const fakeProc = join(rootDir, 'fake-proc')
@@ -129,35 +129,35 @@ describe('envPathUsage：fixture procRoot 与边界', { timeout: 60_000 }, () =>
     symlinkSync(join(target, 'file.txt'), join(fakeProc, '42', 'fd', '3'))
     writeFileSync(join(target, 'file.txt'), 'x')
     mkdirSync(join(target, 'sub'))
-    // 边界：/real-wt 的邻居 /real-wtb 不得命中。
+    // boundary:/real-wt neighbor reside /real-wtb must not hit.
     mkdirSync(join(rootDir, 'real-wtb'), { recursive: true })
     const fixtureServer = createNodeEnvRpcServer({ defaultCwd: rootDir, pathUsage: { procRoot: fakeProc } })
     try {
       const r = await fixtureServer.envPathUsage!({ path: target })
       assert.equal(r.ok, true)
       if (!r.ok) return
-      // 同 PID（42）cwd+fd 去重：一进程一计数，首个引用 cwd 优先。
-      assert.equal(r.value.matchedTotal, 1, '同 PID cwd+fd 去重后单计数')
+      // same PID(42)cwd+fd dedupe: one process one counter, first reference cwd takes precedence.
+      assert.equal(r.value.matchedTotal, 1, 'same PID cwd+fd dedupe after single counter')
       assert.equal(r.value.processes.length, 1)
       assert.equal(r.value.processes[0]!.pid, 42)
       assert.equal(r.value.processes[0]!.source, 'cwd')
-      assert.equal(r.value.complete, true, 'fixture 内无权限拒绝 → 完整')
+      assert.equal(r.value.complete, true, 'fixture inside without permission reject → complete')
 
       const neighbor = await fixtureServer.envPathUsage!({ path: join(rootDir, 'real-wtb') })
       assert.equal(neighbor.ok, true)
       if (!neighbor.ok) return
-      assert.equal(neighbor.value.matchedTotal, 0, '前缀相似但分量边界不同的路径不得误命中')
+      assert.equal(neighbor.value.matchedTotal, 0, 'prefix each other similar but amount boundary different path must not mistakenly hit')
     } finally {
       await fixtureServer.dispose().catch(() => undefined)
     }
   })
 
-  it('平台注入 darwin/win32：显式 not_supported（不伪造跨平台结果）', { timeout: 60_000 }, async () => {
+  it('platform inject darwin/win32: explicit not_supported(do not fabricate across platform result)', { timeout: 60_000 }, async () => {
     for (const platform of ['darwin', 'win32']) {
       const s = createNodeEnvRpcServer({ defaultCwd: rootDir, pathUsage: { platform: () => platform } })
       try {
         const r = await s.envPathUsage!({ path: '/wt' })
-        assert.equal(r.ok, false, `${platform} 应显式拒绝`)
+        assert.equal(r.ok, false, `${platform} should explicit reject`)
         if (r.ok) continue
         assert.equal(r.error.code, 'not_supported')
         assert.ok(r.error.message.includes(platform))
@@ -167,7 +167,7 @@ describe('envPathUsage：fixture procRoot 与边界', { timeout: 60_000 }, () =>
     }
   })
 
-  it('入参严格校验：未知字段 / 非对象 / 相对路径 / NUL → invalid', { timeout: 60_000 }, async () => {
+  it('reference strictly validate: unknown field / non- object / relative path / NUL → invalid', { timeout: 60_000 }, async () => {
     const cases: unknown[] = [
       null,
       'x',
@@ -178,22 +178,22 @@ describe('envPathUsage：fixture procRoot 与边界', { timeout: 60_000 }, () =>
     ]
     for (const input of cases) {
       const r = await server.envPathUsage!(input as never)
-      assert.equal(r.ok, false, `应拒绝 ${JSON.stringify(input)}`)
+      assert.equal(r.ok, false, `should reject ${JSON.stringify(input)}`)
       if (r.ok) continue
-      assert.equal(r.error.code, 'invalid', `${JSON.stringify(input)} → invalid（实得 ${r.error.code}）`)
+      assert.equal(r.error.code, 'invalid', `${JSON.stringify(input)} → invalid(got ${r.error.code})`)
     }
   })
 })
 
-describe('受管环境变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）', { timeout: 60_000 }, () => {
-  /** 用 node 自身探测子进程 env（不依赖 sh，跨平台同构）。 */
+describe('managed environment variable strip except (HELM_TOKEN / HELM_EXECUTION_SCOPE)', { timeout: 60_000 }, () => {
+  /** use node itself probe child process env(independent of sh, across platform same construct). */
   const probeEnvCommand = (): string[] => [
     process.execPath,
     '-e',
     "console.log(JSON.stringify({t: process.env.HELM_TOKEN ?? '', s: process.env.HELM_EXECUTION_SCOPE ?? ''}))",
   ]
 
-  it('envExec：daemon 宿主 env 的受管值不进入子命令；调用方显式注入按次生效', { timeout: 60_000 }, async () => {
+  it('envExec:daemon host env managed value does not enter sub- command; caller explicit inject by time takes effect', { timeout: 60_000 }, async () => {
     const prevToken = process.env.HELM_TOKEN
     const prevScope = process.env.HELM_EXECUTION_SCOPE
     process.env.HELM_TOKEN = 'daemon-own-secret'
@@ -210,10 +210,10 @@ describe('受管环境变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）', { ti
       })
       assert.equal(r.ok, true, r.ok ? '' : r.error.message)
       const parsed = JSON.parse(chunks.join('').trim()) as { t?: string; s?: string }
-      assert.equal(parsed.t, '', `HELM_TOKEN 不得继承（实得 ${parsed.t}）`)
-      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE 不得继承（实得 ${parsed.s}）`)
+      assert.equal(parsed.t, '', `HELM_TOKEN must not inherit (got ${parsed.t})`)
+      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE must not inherit (got ${parsed.s})`)
 
-      // 调用方显式注入（Hub 按次合成）：按次生效。
+      // caller explicit inject (Hub by time together into): by time takes effect.
       const chunks2: string[] = []
       const echoServer2 = createNodeEnvRpcServer({
         defaultCwd: rootDir,
@@ -227,7 +227,7 @@ describe('受管环境变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）', { ti
         })
         assert.equal(r2.ok, true)
         const parsed2 = JSON.parse(chunks2.join('').trim()) as { s?: string }
-        assert.equal(parsed2.s, 'worktree:node-x:/wt', '显式注入值必须按次生效')
+        assert.equal(parsed2.s, 'worktree:node-x:/wt', 'explicit inject value must by time takes effect')
       } finally {
         await echoServer2.dispose().catch(() => undefined)
       }
@@ -240,7 +240,7 @@ describe('受管环境变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）', { ti
     }
   })
 
-  it('LocalExecutionEnv.exec 直连（inheritEnv 默认开启）：继承基底同样剥除受管值', { timeout: 60_000 }, async () => {
+  it('LocalExecutionEnv.exec direct connect (inheritEnv by default open start): inherit base bottom same strip except managed value', { timeout: 60_000 }, async () => {
     const prevToken = process.env.HELM_TOKEN
     const prevScope = process.env.HELM_EXECUTION_SCOPE
     process.env.HELM_TOKEN = 'daemon-own-secret'
@@ -255,8 +255,8 @@ describe('受管环境变量剥除（HELM_TOKEN / HELM_EXECUTION_SCOPE）', { ti
       )
       assert.equal(r.ok, true, r.ok ? '' : r.error.message)
       const parsed = JSON.parse(out.trim()) as { t?: string; s?: string }
-      assert.equal(parsed.t, '', `HELM_TOKEN 不得继承（实得 ${parsed.t}）`)
-      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE 不得继承（实得 ${parsed.s}）`)
+      assert.equal(parsed.t, '', `HELM_TOKEN must not inherit (got ${parsed.t})`)
+      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE must not inherit (got ${parsed.s})`)
     } finally {
       if (prevToken === undefined) delete process.env.HELM_TOKEN
       else process.env.HELM_TOKEN = prevToken

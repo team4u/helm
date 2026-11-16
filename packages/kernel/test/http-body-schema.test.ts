@@ -1,18 +1,18 @@
 /**
- * HTTP body 边界 schema 化后的行为 parity 回归：
- * 机械类型/形状/未知字段校验迁移到 JSON Schema（AJV）后，必须与原手写
- * 校验保持同一拒绝面——特别是：
- * - 未知字段仍一律 400（auth setup/login 例外：历史上即未拒绝，保持宽容）；
- * - 显式 null 与缺省同拒（不当缺省静默忽略）；
- * - trim 语义差异端点各自锁定（install source 拒空白；models refresh
- *   provider 仅拒空串；upgrade targetVersion 允许首尾空白）；
- * - 安全整数上界（fork entryId / withdraw submissionId / input
- *   replaceFromEntryId 拒 2^60）；
- * - 错误可诊断：details.errors 携带 AJV 字段路径。
- * - UTF-16 码元长度边界：AJV maxLength 按码点计数（代理对算 1），
- *   与原手写 string.length（码元）口径不同——含非 BMP 字符的反例
- *   不得因 schema 化而放宽（守卫恢复原拒绝边界，贴界不误拒）。
- * 以及薄分发后的路由 parity（多余段 404 / 方法不匹配 405|404 各归其位）。
+ * HTTP body boundary schema after behavior parity regression:
+ * mechanical type/shape/unknown field validate migration to JSON Schema(AJV) after, must and original manually write
+ * validate keep the same reject side - - especially is:
+ * - unknown field still one rule 400(auth setup/login exception: history on i.e. not reject, keep wide contain);
+ * - explicit null and default same refuse (do not when default static default ignore);
+ * - trim semantics difference end point each lock (install source refuse whitespace;models refresh
+ *   provider only refuse empty string;upgrade targetVersion allows first tail whitespace);
+ * - security integer on boundary (fork entryId / withdraw submissionId / input
+ *   replaceFromEntryId refuse 2^60);
+ * - error can diagnose:details.errors carry AJV field path.
+ * - UTF-16 code meta length boundary:AJV maxLength by code point counter (proxy for compute 1),
+ *   and original manually write string.length(code meta) opening path different - - contains non- BMP character reverse example
+ *   must not because schema while put wide (guard restore original reject boundary, stick boundary do not mistakenly refuse).
+ * and thin dispatch after routing parity(redundant segment 404 / method does not match 405|404 each archive its).
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -103,15 +103,15 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
       listRoutes: () => [],
       getPublicDoc: async () => ({ pluginId: 'p', name: 'n', value: {} }),
       getPublicSessionDoc: () => {
-        throw new HelmError('not_found', 'doc 不存在', 404)
+        throw new HelmError('not_found', 'doc missing', 404)
       },
       getClientModule: async () => {
-        throw new HelmError('not_implemented', '未接线', 501)
+        throw new HelmError('not_implemented', 'not connect line', 501)
       },
     },
     async listConversations() { return [] },
-    async getConversationDetail(id: number) { throw new HelmError('not_found', `会话不存在: ${id}`, 404) },
-    async getConversationEntry(id: number, entryId: number) { throw new HelmError('not_found', `条目 ${entryId} 在会话 ${id} 中不存在`, 404) },
+    async getConversationDetail(id: number) { throw new HelmError('not_found', `conversation missing: ${id}`, 404) },
+    async getConversationEntry(id: number, entryId: number) { throw new HelmError('not_found', `item ${entryId} in conversation ${id} in missing`, 404) },
     async createConversation() { throw new HelmError('not_found', 'x', 404) },
     async updateConversation() { throw new HelmError('not_found', 'x', 404) },
     async deleteConversation() { throw new HelmError('not_found', 'x', 404) },
@@ -152,7 +152,7 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
     async listNodes() { return [] },
     async issueNodeToken(nodeId: string) {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
-        throw new HelmError('validation_error', 'nodeId 需匹配节点 ID 规则', 400, { nodeId })
+        throw new HelmError('validation_error', 'nodeId must match node ID rule', 400, { nodeId })
       }
       calls.issueNodeToken!.push(nodeId)
       return { nodeId, token: 'node-token', createdAt: 0 } as never
@@ -202,7 +202,7 @@ async function call(
     const json = (await response.json().catch(() => undefined)) as any
     return { status: response.status, code: json?.error?.code, json }
   } catch (error) {
-    // ValidationError / HelmError 直接抛出（生产由 hub.ts 统一映射结构化响应）。
+    // ValidationError / HelmError directly throw (produce by hub.ts unify mapping structure response).
     if (error instanceof HelmError) return { status: error.status, code: error.code, json: undefined }
     throw error
   }
@@ -210,15 +210,15 @@ async function call(
 
 async function expect400(kernel: KernelRuntimeLike, method: string, path: string, body?: unknown, why?: string) {
   const res = await call(kernel, method, path, body)
-  assert.equal(res.status, 400, `应 400 拒绝 ${why ?? JSON.stringify(body)}`)
+  assert.equal(res.status, 400, `should 400 reject ${why ?? JSON.stringify(body)}`)
   assert.equal(res.code, 'validation_error')
 }
 
 // ---------------------------------------------------------------------------
-// 会话 body
+// conversation body
 // ---------------------------------------------------------------------------
 
-test('input body：text 空串合法（202）；附件 ID/去重/空数组、枚举与安全整数边界', { timeout: 60_000 }, async () => {
+test('input body:text empty string legal (202); attachment ID/dedupe/empty array, enumeration and security integer boundary', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'POST', '/api/conversations/1/input', { text: '' })
@@ -251,12 +251,12 @@ test('input body：text 空串合法（202）；附件 ID/去重/空数组、枚
   }
 })
 
-test('fork/withdraw：安全正整数上界拒 2^60；未知字段拒；title 空串拒', { timeout: 60_000 }, async () => {
+test('fork/withdraw: security positive integer on boundary refuse 2^60; unknown field refuse;title empty string refuse', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
-  const ok = await call(kernel, 'POST', '/api/conversations/1/fork', { entryId: 5, title: '分叉' })
+  const ok = await call(kernel, 'POST', '/api/conversations/1/fork', { entryId: 5, title: 'fork' })
   assert.equal(ok.status, 201)
-  assert.deepEqual(calls.forkConversation![0], [1, { entryId: 5, title: '分叉' }])
+  assert.deepEqual(calls.forkConversation![0], [1, { entryId: 5, title: 'fork' }])
   for (const bad of [
     {},
     { entryId: 1.5 },
@@ -273,7 +273,7 @@ test('fork/withdraw：安全正整数上界拒 2^60；未知字段拒；title �
   await expect400(kernel, 'POST', '/api/conversations/1/withdraw', {})
 })
 
-test('reset body：handoff 空串合法；未知字段拒', { timeout: 60_000 }, async () => {
+test('reset body:handoff empty string legal; unknown field refuse', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'POST', '/api/conversations/1/reset', { handoff: '' })
@@ -282,7 +282,7 @@ test('reset body：handoff 空串合法；未知字段拒', { timeout: 60_000 },
   await expect400(kernel, 'POST', '/api/conversations/1/reset', { handoff: 'x', extra: 1 })
 })
 
-test('ask answer：answers 逐值字符串、expectedStateSeq 非负整数、未知字段拒', { timeout: 60_000 }, async () => {
+test('ask answer:answers one by one value string,expectedStateSeq non- negative integer, unknown field refuse', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'POST', '/api/asks/ask-1/answer', { answers: { a: 'x', b: '' }, expectedStateSeq: 0 })
@@ -302,10 +302,10 @@ test('ask answer：answers 逐值字符串、expectedStateSeq 非负整数、未
 })
 
 // ---------------------------------------------------------------------------
-// 模型目录 body
+// model directory body
 // ---------------------------------------------------------------------------
 
-test('models/default：空对象/空 body/显式 null/类型错/未知字段均 400；部分更新透传', { timeout: 60_000 }, async () => {
+test('models/default: empty object/empty body/explicit null/type wrong/unknown field all 400; part update pass-through', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'PUT', '/api/models/default', { thinkingLevel: 'high' })
@@ -322,7 +322,7 @@ test('models/default：空对象/空 body/显式 null/类型错/未知字段均 
   assert.equal(calls.setDefaultModel!.length, 2)
 })
 
-test('models/filter：disabledModels 必填字符串数组；未知字段/类型错 400', { timeout: 60_000 }, async () => {
+test('models/filter:disabledModels required string array; unknown field/type wrong 400', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'PUT', '/api/models/filter', { provider: 'p', disabledModels: ['m1'] })
@@ -340,7 +340,7 @@ test('models/filter：disabledModels 必填字符串数组；未知字段/类型
   }
 })
 
-test('models/refresh：=== "" 才拒（空白串历史放行）；provider+providers 合并；force 类型错拒', { timeout: 60_000 }, async () => {
+test('models/refresh:=== "" only then refuse (whitespace string history let through);provider+providers merge;force type wrong refuse', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const refreshCalls: unknown[] = []
   const kernel = makeKernel(calls)
@@ -348,18 +348,18 @@ test('models/refresh：=== "" 才拒（空白串历史放行）；provider+provi
     refreshCalls.push(options)
     return { refreshed: [] } as never
   }
-  // 空 body / {} 全量刷新（两次调用各记一条）。
+  // empty body / {} all amount refresh (two time invoke each record a).
   const emptyBody = await call(kernel, 'POST', '/api/models/refresh', undefined)
   assert.equal(emptyBody.status, 200)
   const emptyObj = await call(kernel, 'POST', '/api/models/refresh', {})
   assert.equal(emptyObj.status, 200)
   assert.deepEqual(refreshCalls[0], {})
   assert.deepEqual(refreshCalls[1], {})
-  // 空白串 provider 历史上放行（仅 === '' 拒），schema 保持同一宽容度。
+  // whitespace string provider history on let through (only === '' refuse),schema keep the same wide contain.
   const space = await call(kernel, 'POST', '/api/models/refresh', { provider: ' ' })
-  assert.equal(space.status, 200, 'provider 空白串应放行（=== "" 语义）')
+  assert.equal(space.status, 200, 'provider whitespace string should let through (=== "" semantics)')
   assert.deepEqual(refreshCalls[2], { providers: [' '] })
-  // provider + providers 合并。
+  // provider + providers merge.
   const merged = await call(kernel, 'POST', '/api/models/refresh', { provider: 'a', providers: ['b', 'c'], force: true })
   assert.equal(merged.status, 200)
   assert.deepEqual(refreshCalls[3], { providers: ['a', 'b', 'c'], force: true })
@@ -375,7 +375,7 @@ test('models/refresh：=== "" 才拒（空白串历史放行）；provider+provi
   }
 })
 
-test('providers PUT：数组与 { providers } 包裹同规；逐项字段错/未知项字段 400', { timeout: 60_000 }, async () => {
+test('providers PUT: array and { providers } package wrap same rule; one by one items field wrong/unknown items field 400', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const good = {
@@ -405,7 +405,7 @@ test('providers PUT：数组与 { providers } 包裹同规；逐项字段错/未
   }
 })
 
-test('credentials PUT：value 1..64k 必填；未知字段拒', { timeout: 60_000 }, async () => {
+test('credentials PUT:value 1..64k required; unknown field refuse', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'PUT', '/api/credentials/faux', { value: 'k' })
@@ -418,10 +418,10 @@ test('credentials PUT：value 1..64k 必填；未知字段拒', { timeout: 60_00
 })
 
 // ---------------------------------------------------------------------------
-// 插件 body
+// plugin body
 // ---------------------------------------------------------------------------
 
-test('actions invoke：input 必填（null 合法）；conversationId 正整数；未知字段拒', { timeout: 60_000 }, async () => {
+test('actions invoke:input required (null legal);conversationId positive integer; unknown field refuse', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const withNull = await call(kernel, 'POST', '/api/actions/builtin:x/echo', { input: null })
@@ -442,7 +442,7 @@ test('actions invoke：input 必填（null 合法）；conversationId 正整数�
   }
 })
 
-test('plugins disable body：仅 force 布尔；body 与 query force 同义', { timeout: 60_000 }, async () => {
+test('plugins disable body: only force boolean;body and query force same meaning', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'POST', '/api/plugins/builtin:x/disable', { force: true })
@@ -455,7 +455,7 @@ test('plugins disable body：仅 force 布尔；body 与 query force 同义', { 
   await expect400(kernel, 'POST', '/api/plugins/builtin:x/disable', { extra: 1 })
 })
 
-test('plugins config PUT：values 标量映射；数组/嵌套对象/未知字段拒', { timeout: 60_000 }, async () => {
+test('plugins config PUT:values mark amount mapping; array/embed set object/unknown field refuse', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'PUT', '/api/plugins/builtin:x/config', { values: { a: 'x', b: 1, c: null, d: true } })
@@ -474,10 +474,10 @@ test('plugins config PUT：values 标量映射；数组/嵌套对象/未知字�
 })
 
 // ---------------------------------------------------------------------------
-// 节点 body（issue / upgrade / forward / env exec）
+// node body(issue / upgrade / forward / env exec)
 // ---------------------------------------------------------------------------
 
-test('nodes issue：nodeId 非空必填；未知字段在 HTTP 边界拒（服务层模式校验兜底）', { timeout: 60_000 }, async () => {
+test('nodes issue:nodeId non-empty required; unknown field in HTTP boundary refuse (service layer pattern validate fall back)', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'POST', '/api/nodes/issue', { nodeId: 'node.a-1' })
@@ -489,14 +489,14 @@ test('nodes issue：nodeId 非空必填；未知字段在 HTTP 边界拒（服�
   await expect400(kernel, 'POST', '/api/nodes/issue', { nodeId: 'x', extra: 1 })
 })
 
-test('nodes upgrade：attemptId 不可控；targetVersion 保留首尾空白原值透传；严格 SemVer 与 URL 边界', { timeout: 60_000 }, async () => {
+test('nodes upgrade:attemptId cannot control;targetVersion keep first tail whitespace original value pass-through; strictly SemVer and URL boundary', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
-  // 空 body 合法（升级到 latest）。
+  // empty body legal (upgrade to latest).
   const empty = await call(kernel, 'POST', '/api/nodes/node-a/upgrade')
   assert.equal(empty.status, 200)
   assert.deepEqual(calls.upgradeNode![0], ['node-a', {}])
-  // trim 后合法的版本保留原始值透传（原实现 trim 后校验、原值传递）。
+  // trim after legal version keep original value pass-through (original implement trim after validate, original value pass).
   const spaced = await call(kernel, 'POST', '/api/nodes/node-a/upgrade', { targetVersion: '  v1.2.3  ' })
   assert.equal(spaced.status, 200)
   assert.deepEqual(calls.upgradeNode![1], ['node-a', { targetVersion: '  v1.2.3  ' }])
@@ -514,14 +514,14 @@ test('nodes upgrade：attemptId 不可控；targetVersion 保留首尾空白原�
   ]) {
     await expect400(kernel, 'POST', '/api/nodes/node-a/upgrade', bad)
   }
-  // upgrade/check?registryUrl 非 http(s) 同拒。
+  // upgrade/check?registryUrl non- http(s) same refuse.
   const badCheck = await call(kernel, 'GET', '/api/nodes/node-a/upgrade/check?registryUrl=ftp://x')
   assert.equal(badCheck.status, 400)
   const okCheck = await call(kernel, 'GET', '/api/nodes/node-a/upgrade/check?registryUrl=https://registry.example.com')
   assert.equal(okCheck.status, 200)
 })
 
-test('nodes forward：主机名禁空白与控制字符、端口 1..65535、未知字段拒', { timeout: 60_000 }, async () => {
+test('nodes forward: host name forbid whitespace and control character, port 1..65535, unknown field refuse', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'POST', '/api/nodes/node-a/forward', { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 80 })
@@ -553,7 +553,7 @@ test('nodes forward：主机名禁空白与控制字符、端口 1..65535、未�
   }
 })
 
-test('env exec：command 形状、env 键值、cwd 绝对性、数值边界与未知字段', { timeout: 60_000 }, async () => {
+test('env exec:command shape,env key value,cwd absolute, count value boundary and unknown field', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const str = await call(kernel, 'POST', '/api/env/exec', { command: 'echo hi' })
@@ -593,10 +593,10 @@ test('env exec：command 形状、env 键值、cwd 绝对性、数值边界与�
 })
 
 // ---------------------------------------------------------------------------
-// auth 宽容度与错误可诊断性
+// auth wide contain and error can diagnose
 // ---------------------------------------------------------------------------
 
-test('auth setup/login：未知字段历史未拒，schema 保持同一宽容度（password 形状仍严格）', { timeout: 60_000 }, async () => {
+test('auth setup/login: unknown field history not refuse,schema keep the same wide contain (password shape still strictly)', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const withExtra = await call(kernel, 'POST', '/api/auth/setup', { password: 'long-enough-password', extra: 1 })
@@ -607,7 +607,7 @@ test('auth setup/login：未知字段历史未拒，schema 保持同一宽容度
   await expect400(kernel, 'POST', '/api/auth/setup', { password: 1 })
 })
 
-test('schema 拒绝携带 AJV 字段路径诊断（details.errors 非空，可定位字段）', { timeout: 60_000 }, async () => {
+test('schema reject carry AJV field path diagnose (details.errors non-empty, can locate field)', { timeout: 60_000 }, async () => {
   await assert.rejects(
     handleApi(
       new Request('http://hub/api/models/filter', {
@@ -618,9 +618,9 @@ test('schema 拒绝携带 AJV 字段路径诊断（details.errors 非空，可�
       makeKernel(),
     ),
     (error: unknown) => {
-      assert.ok(error instanceof ValidationError, '错误类型为 ValidationError（HelmError 400 子类）')
+      assert.ok(error instanceof ValidationError, 'error type is ValidationError(HelmError 400 sub- class)')
       const details = (error as ValidationError).details as { errors?: Array<{ instancePath?: string }> } | undefined
-      assert.ok(Array.isArray(details?.errors) && details!.errors!.length > 0, 'details.errors 携带 AJV 错误清单')
+      assert.ok(Array.isArray(details?.errors) && details!.errors!.length > 0, 'details.errors carry AJV error manifest')
       const paths = details!.errors!.map((e) => e.instancePath).join(' ')
       assert.match(paths, /disabledModels/)
       assert.match(paths, /provider/)
@@ -630,28 +630,28 @@ test('schema 拒绝携带 AJV 字段路径诊断（details.errors 非空，可�
 })
 
 // ---------------------------------------------------------------------------
-// UTF-16 码元长度边界：AJV maxLength 按码点计数，非 BMP 字符（代理对）
-// 会让 schema 边界放宽；守卫以原 string.length（码元）口径恢复。
-// 1 个 emoji = 1 码点 = 2 码元 = 4 UTF-8 字节，反例均在 body 字节限制内。
+// UTF-16 code meta length boundary:AJV maxLength by code point counter, non- BMP character (proxy for)
+// will let schema boundary put wide; guard with original string.length(code meta) opening path restore.
+// 1  emoji = 1 code point = 2 code meta = 4 UTF-8 byte, reverse example all in body byte restrict inside.
 // ---------------------------------------------------------------------------
 
-test('UTF-16 码元长度上限：emoji 反例不因 AJV 码点计数放宽（fork 200 / credential 64k / forward 255）', { timeout: 60_000 }, async () => {
+test('UTF-16 code meta length cap:emoji reverse example do not because AJV code point counter put wide (fork 200 / credential 64k / forward 255)', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const emoji = '\uD83D\uDE00'
-  // fork title ≤200 码元：101 emoji = 101 码点（schema 放行）/ 202 码元（原拒）→ 400。
+  // fork title ≤200 code meta:101 emoji = 101 code point (schema let through)/ 202 code meta (original refuse)→ 400.
   await expect400(kernel, 'POST', '/api/conversations/1/fork', { entryId: 1, title: emoji.repeat(101) })
-  // 贴界不误拒：50 emoji + 100 ASCII = 150 码点 / 200 码元 → 201。
+  // stick boundary do not mistakenly refuse:50 emoji + 100 ASCII = 150 code point / 200 code meta → 201.
   const forkOk = await call(kernel, 'POST', '/api/conversations/1/fork', {
     entryId: 1, title: emoji.repeat(50) + 'a'.repeat(100),
   })
   assert.equal(forkOk.status, 201)
-  // credential value ≤64k 码元：32769 emoji = 65538 码元（131076 字节，body 限内）→ 400；
-  // 32768 emoji = 65536 码元贴界 → 200。
+  // credential value ≤64k code meta:32769 emoji = 65538 code meta (131076 byte,body limit inside)→ 400;
+  // 32768 emoji = 65536 code meta stick boundary → 200.
   await expect400(kernel, 'PUT', '/api/credentials/faux', { value: emoji.repeat(32769) })
   const credOk = await call(kernel, 'PUT', '/api/credentials/faux', { value: emoji.repeat(32768) })
   assert.equal(credOk.status, 200)
-  // forward 主机名 ≤255 码元：'a'+128 emoji = 129 码点 / 257 码元 → 400（listenHost/targetHost 同规）。
+  // forward host name ≤255 code meta:'a'+128 emoji = 129 code point / 257 code meta → 400(listenHost/targetHost same rule).
   await expect400(kernel, 'POST', '/api/nodes/node-a/forward', {
     listenHost: 'a' + emoji.repeat(128), listenPort: 1, targetPort: 2,
   })
@@ -661,10 +661,10 @@ test('UTF-16 码元长度上限：emoji 反例不因 AJV 码点计数放宽（fo
   const fwdOk = await call(kernel, 'POST', '/api/nodes/node-a/forward', {
     listenHost: 'a' + emoji.repeat(127), listenPort: 1, targetPort: 2,
   })
-  assert.equal(fwdOk.status, 201, 'a+127 emoji = 255 码元贴界应放行')
+  assert.equal(fwdOk.status, 201, 'a+127 emoji = 255 code meta stick boundary should let through')
 })
 
-test('input/reset/compact 的 UTF-16 上限同时约束解析器与 HTTP 混合文本', { timeout: 60_000 }, async () => {
+test('input/reset/compact  UTF-16 cap also constraint parse and HTTP mixed text', { timeout: 60_000 }, async () => {
   const emoji = '\uD83D\uDE00'
   const mixed = emoji.repeat(200000) + 'a'.repeat(124289)
   assert.equal(mixed.length, 524289)
@@ -678,12 +678,12 @@ test('input/reset/compact 的 UTF-16 上限同时约束解析器与 HTTP 混合�
     assert.ok(Buffer.byteLength(JSON.stringify(body)) < 1024 * 1024)
     await expect400(kernel, 'POST', path, body)
   }
-  // 262145 emoji = 524290 码元 > 524288（原拒）；其 UTF-8 编码 1048580 字节
-  // 已超 1MiB body 上限，HTTP 层会先 413，故在解析器层直接验证原拒绝边界。
+  // 262145 emoji = 524290 code meta > 524288(original refuse); its UTF-8 encode 1048580 byte
+  // already over 1MiB body cap,HTTP layer will first 413, reason in parse layer directly verify original reject boundary.
   assert.throws(() => parseInputBody({ text: emoji.repeat(262145) }), ValidationError)
   assert.throws(() => parseConversationResetBody({ handoff: emoji.repeat(262145) }), ValidationError)
   assert.throws(() => parseConversationCompactBody({ instructions: emoji.repeat(262145) }), ValidationError)
-  // 贴界不误拒：262144 emoji = 524288 码元 = 原上限。
+  // stick boundary do not mistakenly refuse:262144 emoji = 524288 code meta = original cap.
   assert.equal(parseInputBody({ text: emoji.repeat(262144) }).text.length, 524288)
   assert.deepEqual(parseConversationResetBody({ handoff: emoji.repeat(262144) }), {
     handoff: emoji.repeat(262144),
@@ -694,10 +694,10 @@ test('input/reset/compact 的 UTF-16 上限同时约束解析器与 HTTP 混合�
 })
 
 // ---------------------------------------------------------------------------
-// 薄分发路由 parity（多余段 404 / 方法不匹配 405|404 各归其位）
+// thin dispatch routing parity(redundant segment 404 / method does not match 405|404 each archive its)
 // ---------------------------------------------------------------------------
 
-test('路由分派不把对象原型属性当作领域 handler', { timeout: 60_000 }, async () => {
+test('routing dispatch does not object prototype property when act domain handler', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   for (const name of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
     const response = await call(kernel, 'GET', `/api/${name}`)
@@ -706,7 +706,7 @@ test('路由分派不把对象原型属性当作领域 handler', { timeout: 60_0
   }
 })
 
-test('空 body 经过端点 Schema，必填字段缺失时不调用服务', { timeout: 60_000 }, async () => {
+test('empty body through end point Schema, required field missing when do not invoke service', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   await expect400(kernel, 'POST', '/api/nodes/node-a/forward')
@@ -715,9 +715,9 @@ test('空 body 经过端点 Schema，必填字段缺失时不调用服务', { ti
   assert.equal(reset.status, 200)
 })
 
-test('路由 parity：多余段与未匹配方法不落入操作分支', { timeout: 60_000 }, async () => {
+test('routing parity: redundant segment and not match method do not operation branch', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
-  // 多余段 / 未匹配方法 → 404（原实现各领域语义）。
+  // redundant segment / not match method → 404(original implement each domain semantics).
   for (const [m, p] of [
     ['GET', '/api/auth/status/foo'],
     ['GET', '/api/auth/setup'],
@@ -740,11 +740,11 @@ test('路由 parity：多余段与未匹配方法不落入操作分支', { timeo
     ['GET', '/api/env/exec'],
   ] as const) {
     const res = await call(kernel, m, p)
-    assert.equal(res.status, 404, `${m} ${p} 应 404`)
+    assert.equal(res.status, 404, `${m} ${p} should 404`)
   }
-  // skills 集合非 GET：原实现落入 requireIdParam('') → 400（保持）。
+  // skills set non- GET: original implement requireIdParam('') → 400(keep).
   await expect400(kernel, 'POST', '/api/skills')
-  // 方法不匹配：会话与 profile 集合/个体、providers、插件 config 为 405。
+  // method does not match: conversation and profile set/body,providers, plugin config is 405.
   for (const [m, p] of [
     ['PUT', '/api/conversations'],
     ['POST', '/api/conversations/1'],
@@ -754,30 +754,30 @@ test('路由 parity：多余段与未匹配方法不落入操作分支', { timeo
     ['POST', '/api/plugins/builtin:x/config'],
   ] as const) {
     const res = await call(kernel, m, p)
-    assert.equal(res.status, 405, `${m} ${p} 应 405`)
+    assert.equal(res.status, 405, `${m} ${p} should 405`)
     assert.equal(res.code, 'method_not_allowed')
   }
 })
 
 // ---------------------------------------------------------------------------
-// 会话与 Profile 思考档位 / 模型引用校验
+// conversation and Profile think Profile / model reference validate
 // ---------------------------------------------------------------------------
 
-test('会话 HTTP 接受合法思考档位与清除覆盖，拒绝未知值和类型', { timeout: 60_000 }, () => {
+test('conversation HTTP accept legal think Profile and clear override, reject unknown value and type', { timeout: 60_000 }, () => {
   for (const thinkingLevel of ['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
     assert.deepEqual(parseConversationPatch({ thinkingLevel }), { thinkingLevel })
   }
   for (const thinkingLevel of [null, 1, 'highest']) assert.throws(() => parseConversationPatch({ thinkingLevel }))
 })
 
-test('模型 ID 可含斜杠，HTTP 创建/切换/Profile 保存均保留完整引用', { timeout: 60_000 }, () => {
+test('model ID can contains slash,HTTP create/switch/Profile save all keep complete reference', { timeout: 60_000 }, () => {
   const model = 'gateway/group/smart'
   assert.equal(parseConversationInit({ model }).model, model)
   assert.equal(parseConversationPatch({ model }).model, model)
   assert.equal(parseProfileBody({ id: 'worker', model }, { requireId: true }).model, model)
 })
 
-test('Profile HTTP 保存思考档位；空串删除并回退全局', { timeout: 60_000 }, () => {
+test('Profile HTTP save think Profile; empty string delete and fall back global', { timeout: 60_000 }, () => {
   assert.equal(parseProfileBody({ id: 'worker', thinkingLevel: 'high' }, { requireId: true }).thinkingLevel, 'high')
   assert.equal(parseProfileBody({ id: 'worker', thinkingLevel: '' }, { requireId: true }).thinkingLevel, undefined)
   for (const thinkingLevel of [null, 1, 'highest']) {

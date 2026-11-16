@@ -1,11 +1,11 @@
 /**
  * plugin-subregistries.test.ts
  *
- * 针对解耦后的子模块：
+ * for decouple after sub- module:
  * 1. PluginDocRegistry
  * 2. CapabilityRegistry
  * 3. UiRegistry
- * 进行直接的内聚单元测试，验证其独立行为、边界检查及生命周期语义。
+ * enter row directly inside gather unit test, verify its independent behavior, boundary check and lifecycle semantics.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,7 +30,7 @@ class TrackedDocStore extends MemoryDocStore {
   }
 }
 
-/** 三元组键内存实现：值存 JSON 字符串，与真实持久层语义一致。 */
+/** three meta group key memory implement: value store JSON string, and real durable layer semantics consistent. */
 class MemorySessionDocStore implements PluginSessionDocStore {
   data = new Map<string, string>();
   flushed = false;
@@ -65,7 +65,7 @@ class MemorySessionDocStore implements PluginSessionDocStore {
   }
 }
 
-test('PluginDocRegistry：文档注册、隔离、更新通知与生命周期守卫', { timeout: 60_000 }, async () => {
+test('PluginDocRegistry: document register, isolated, update notify and lifecycle guard', { timeout: 60_000 }, async () => {
   const store = new TrackedDocStore();
   const updates: Array<{ pluginId: string; name: string; value: unknown }> = [];
   const registry = new PluginDocRegistry(store, (pluginId, name, value) => {
@@ -108,13 +108,13 @@ test('PluginDocRegistry：文档注册、隔离、更新通知与生命周期守
   assert.equal(allPub.length, 1);
   assert.deepEqual(allPub[0], pubDoc);
 
-  // 停用态取公共文档抛 404
+  // deactivate state take public document throw 404
   assert.throws(
     () => registry.getPublicDoc('test-plugin', 'myDoc', false),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
   );
 
-  // 守卫失效时抛 409
+  // guard expires when throw 409
   usable = false;
   assert.throws(
     () => handle.get(),
@@ -122,7 +122,7 @@ test('PluginDocRegistry：文档注册、隔离、更新通知与生命周期守
   );
 });
 
-/** 构造带完整会话端口与守卫的 registry 测试环境。 */
+/** construct carries complete conversation port and guard registry test environment. */
 function createSessionFixture() {
   const store = new MemoryDocStore();
   const sessionStore = new MemorySessionDocStore();
@@ -135,7 +135,7 @@ function createSessionFixture() {
       sessionStore,
       assertConversationExists: (conversationId: number) => {
         if (!existing.has(conversationId)) {
-          throw new HelmError('conversation_not_found', `会话 ${conversationId} 不存在`, 404, {
+          throw new HelmError('conversation_not_found', `conversation ${conversationId} missing`, 404, {
             conversationId,
           });
         }
@@ -152,7 +152,7 @@ function createSessionFixture() {
   return { registry, store, sessionStore, sessionEvents, existing, setUsable: (v: boolean) => (usable = v), assertUsable };
 }
 
-test('PluginDocRegistry：sessionDoc 读写、会话隔离与 delete 事件回初值', { timeout: 60_000 }, async () => {
+test('PluginDocRegistry:sessionDoc read write, conversation isolated and delete event back initial value', { timeout: 60_000 }, async () => {
   const f = createSessionFixture();
   const handle = f.registry.registerSessionDoc(
     'test-plugin',
@@ -165,7 +165,7 @@ test('PluginDocRegistry：sessionDoc 读写、会话隔离与 delete 事件回�
   assert.equal(f.registry.hasPublicSessionDoc('test-plugin', 'convState'), true);
   assert.equal(f.registry.hasPublicSessionDoc('test-plugin', 'nonExistent'), false);
 
-  // 未写过时回退初值；两个会话互相隔离
+  // not write when fall back initial value; two conversation mutual each other isolated
   assert.deepEqual(handle.get(101), { text: 'init' });
   handle.set(101, { text: 'updated' });
   handle.set(202, { text: 'other' });
@@ -176,7 +176,7 @@ test('PluginDocRegistry：sessionDoc 读写、会话隔离与 delete 事件回�
   handle.update(101, (prev) => ({ text: `${prev.text}!` }));
   assert.deepEqual(handle.get(101), { text: 'updated!' });
 
-  // public 事件：set/update 均发布
+  // public event:set/update all publish
   assert.equal(f.sessionEvents.length, 3);
   assert.deepEqual(f.sessionEvents[0], {
     pluginId: 'test-plugin',
@@ -185,7 +185,7 @@ test('PluginDocRegistry：sessionDoc 读写、会话隔离与 delete 事件回�
     value: { text: 'updated' },
   });
 
-  // delete：持久层删除，事件 value 恒为初值且带 deleted: true
+  // delete: durable layer delete, event value constant is initial value and carries deleted: true
   handle.delete(101);
   assert.deepEqual(handle.get(101), { text: 'init' });
   assert.deepEqual(f.sessionEvents.at(-1), {
@@ -197,7 +197,7 @@ test('PluginDocRegistry：sessionDoc 读写、会话隔离与 delete 事件回�
   });
   assert.deepEqual(handle.listConversationIds(), [202]);
 
-  // 未写过的会话 delete 同样发布 deleted 事件
+  // not write conversation delete same publish deleted event
   f.existing.add(303);
   handle.delete(303);
   assert.deepEqual(f.sessionEvents.at(-1), {
@@ -212,11 +212,11 @@ test('PluginDocRegistry：sessionDoc 读写、会话隔离与 delete 事件回�
   assert.equal(f.sessionStore.flushed, true);
 });
 
-test('PluginDocRegistry：sessionDoc 会话不存在与非法 ID 拒绝，绝不回退全局键', { timeout: 60_000 }, () => {
+test('PluginDocRegistry:sessionDoc conversation missing and illegal ID reject, never fall back global key', { timeout: 60_000 }, () => {
   const f = createSessionFixture();
   const handle = f.registry.registerSessionDoc('test-plugin', 'convState', { text: 'init' }, undefined, f.assertUsable);
 
-  // 会话不存在：宿主端口原样上抛 conversation_not_found（防删后孤儿回写）
+  // conversation missing: host port original on throw conversation_not_found(guard against delete after orphan child back write)
   assert.throws(
     () => handle.get(999),
     (err: unknown) => err instanceof HelmError && err.code === 'conversation_not_found',
@@ -227,16 +227,16 @@ test('PluginDocRegistry：sessionDoc 会话不存在与非法 ID 拒绝，绝不
   );
   assert.equal(f.sessionStore.listConversationIds('test-plugin', 'convState').length, 0);
 
-  // 非法会话 ID：非正安全整数一律 400
+  // illegal conversation ID: non- correct security integer one rule 400
   for (const bad of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(
       () => handle.get(bad),
       (err: unknown) => err instanceof HelmError && err.code === 'invalid_conversation_id',
-      `conversationId=${String(bad)} 应拒绝`,
+      `conversationId=${String(bad)} should reject`,
     );
   }
 
-  // 句柄守卫失效（停用/周期更替）后一切操作拒绝
+  // handle guard expires (deactivate/cycle more replace) after everything operation reject
   f.setUsable(false);
   assert.throws(
     () => handle.get(101),
@@ -248,7 +248,7 @@ test('PluginDocRegistry：sessionDoc 会话不存在与非法 ID 拒绝，绝不
   );
 });
 
-test('PluginDocRegistry：doc 与 sessionDoc 禁止同名共享命名空间', { timeout: 60_000 }, () => {
+test('PluginDocRegistry:doc and sessionDoc forbidden same name sharing naming empty between', { timeout: 60_000 }, () => {
   const f = createSessionFixture();
   f.registry.registerDoc('test-plugin', 'shared', { a: 1 }, undefined, f.assertUsable);
   assert.throws(
@@ -262,30 +262,30 @@ test('PluginDocRegistry：doc 与 sessionDoc 禁止同名共享命名空间', { 
     () => f2.registry.registerDoc('test-plugin', 'shared', { a: 1 }, undefined, f2.assertUsable),
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_doc',
   );
-  // 同类重复声明同样拒绝
+  // same class duplicate declaration same reject
   assert.throws(
     () => f2.registry.registerSessionDoc('test-plugin', 'shared', {}, undefined, f2.assertUsable),
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_doc',
   );
 
-  // opts 非法形状拒绝
+  // opts illegal shape reject
   assert.throws(
     () => f2.registry.registerSessionDoc('test-plugin', 'ok', {}, { extra: 1 } as never, f2.assertUsable),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_doc_spec',
   );
 });
 
-test('PluginDocRegistry：sessionDoc 端口缺失显式拒绝，不静默降级', { timeout: 60_000 }, () => {
-  // 无任何会话端口：声明即 501
+test('PluginDocRegistry:sessionDoc port missing explicit reject, not silently fall back', { timeout: 60_000 }, () => {
+  // without any conversation port: declaration i.e. 501
   const bare = new PluginDocRegistry(new MemoryDocStore(), () => {});
   assert.throws(
     () => bare.registerSessionDoc('p', 'doc1', {}, undefined, () => {}),
     (err: unknown) => err instanceof HelmError && err.code === 'session_doc_store_unavailable' && err.status === 501,
   );
-  // 仅全局 doc 的旧用法不受影响
+  // only global doc old use method do not subject to affect
   bare.registerDoc('p', 'globalOnly', { ok: true }, undefined, () => {});
 
-  // 有 sessionStore 但缺会话存在性校验端口：显式 501，不假装验证
+  // has sessionStore but missing conversation store in validate port: explicit 501, do not pretend verify
   const noAssert = new PluginDocRegistry(new MemoryDocStore(), () => {}, {
     sessionStore: new MemorySessionDocStore(),
     emitSessionDocUpdated: () => {},
@@ -295,7 +295,7 @@ test('PluginDocRegistry：sessionDoc 端口缺失显式拒绝，不静默降级'
     (err: unknown) => err instanceof HelmError && err.code === 'session_doc_port_unavailable' && err.status === 501,
   );
 
-  // public:true 但缺事件端口：显式 501，不静默丢更新
+  // public:true but missing event port: explicit 501, not silently lose update
   const noEmit = new PluginDocRegistry(new MemoryDocStore(), () => {}, {
     sessionStore: new MemorySessionDocStore(),
     assertConversationExists: () => {},
@@ -304,17 +304,17 @@ test('PluginDocRegistry：sessionDoc 端口缺失显式拒绝，不静默降级'
     () => noEmit.registerSessionDoc('p', 'doc1', {}, { public: true }, () => {}),
     (err: unknown) => err instanceof HelmError && err.code === 'session_doc_port_unavailable' && err.status === 501,
   );
-  // 私有 sessionDoc 无事件端口可正常声明
+  // private sessionDoc without event port can normal declaration
   noEmit.registerSessionDoc('p', 'privateDoc', {}, undefined, () => {});
 });
 
-test('PluginDocRegistry：getPublicSessionDoc 与路由歧义提示', { timeout: 60_000 }, () => {
+test('PluginDocRegistry:getPublicSessionDoc and routing ambiguity hint', { timeout: 60_000 }, () => {
   const f = createSessionFixture();
   f.registry.registerSessionDoc('test-plugin', 'convState', { text: 'init' }, { public: true }, f.assertUsable);
   f.registry.registerSessionDoc('test-plugin', 'privateConv', { secret: 1 }, undefined, f.assertUsable);
   f.registry.registerDoc('test-plugin', 'globalDoc', { g: 1 }, { public: true }, f.assertUsable);
 
-  // 正常读取：未写过回初值，写过读真实值
+  // normal read: not write back initial value, write read real value
   assert.deepEqual(f.registry.getPublicSessionDoc('test-plugin', 'convState', 101, true), {
     pluginId: 'test-plugin',
     name: 'convState',
@@ -327,7 +327,7 @@ test('PluginDocRegistry：getPublicSessionDoc 与路由歧义提示', { timeout:
     { text: 'real' },
   );
 
-  // 停用 / 私有 / 未声明一律 404，不泄漏 private 存在性
+  // deactivate / private / not declaration one rule 404, without leaking private store in
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'convState', 101, false),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
@@ -341,41 +341,41 @@ test('PluginDocRegistry：getPublicSessionDoc 与路由歧义提示', { timeout:
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
   );
 
-  // 会话不存在：原样上抛宿主端口错误（conversation_not_found）
+  // conversation missing: original on throw host port error (conversation_not_found)
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'convState', 999, true),
     (err: unknown) => err instanceof HelmError && err.code === 'conversation_not_found',
   );
 
-  // 非法会话 ID：400
+  // illegal conversation ID:400
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'convState', 0, true),
     (err: unknown) => err instanceof HelmError && err.code === 'invalid_conversation_id',
   );
 
-  // getPublicDoc 命中 public session 名：提示需 conversationId
+  // getPublicDoc hit public session name: hint must conversationId
   assert.throws(
     () => f.registry.getPublicDoc('test-plugin', 'convState', true),
     (err: unknown) => err instanceof HelmError && err.code === 'session_doc_requires_conversation',
   );
-  // getPublicDoc 命中 private session 名：与未声明一致 404（不泄漏存在性）
+  // getPublicDoc hit private session name: and not declaration consistent 404(without leaking store in)
   assert.throws(
     () => f.registry.getPublicDoc('test-plugin', 'privateConv', true),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
   );
-  // getPublicSessionDoc 命中 public 全局名：提示不接 conversationId
+  // getPublicSessionDoc hit public global name: hint do not connect conversationId
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'globalDoc', 101, true),
     (err: unknown) => err instanceof HelmError && err.code === 'global_doc_unexpected_conversation',
   );
-  // getPublicSessionDoc 命中 private 全局名：与未声明一致 404（不泄漏存在性）
+  // getPublicSessionDoc hit private global name: and not declaration consistent 404(without leaking store in)
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'noGlobal', 101, true),
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
   );
 });
 
-test('PluginDocRegistry：深拷贝隔离与 clear/removePlugin 双注册表清理', { timeout: 60_000 }, () => {
+test('PluginDocRegistry: deep copy isolated and clear/removePlugin double register table clean up', { timeout: 60_000 }, () => {
   const f = createSessionFixture();
   const sessionHandle = f.registry.registerSessionDoc(
     'test-plugin',
@@ -392,7 +392,7 @@ test('PluginDocRegistry：深拷贝隔离与 clear/removePlugin 双注册表清�
     f.assertUsable,
   );
 
-  // get 返回深拷贝：原地突变不污染持久层
+  // get return deep copy: original ground sudden change do not pollute durable layer
   const gotSession = sessionHandle.get(101);
   gotSession.nested.count = 99;
   assert.deepEqual(sessionHandle.get(101), { nested: { count: 0 } });
@@ -405,25 +405,25 @@ test('PluginDocRegistry：深拷贝隔离与 clear/removePlugin 双注册表清�
   gotGlobal.nested.count = 99;
   assert.deepEqual(globalHandle.get(), { nested: { count: 0 } });
 
-  // 事件载荷也是深拷贝（消费方突变不回灌）
+  // event payload also is deep copy (consumer sudden change do not back pour)
   sessionHandle.set(101, { nested: { count: 2 } });
   (f.sessionEvents.at(-1)!.value as { nested: { count: number } }).nested.count = 77;
   assert.deepEqual(sessionHandle.get(101).nested, { count: 2 });
 
-  // clear：两个注册表句柄同清，hasPublic*/再声明可行（周期更替语义）
+  // clear: two register table handle same clean,hasPublic*/again declaration can row (cycle more replace semantics)
   f.registry.clear('test-plugin');
   assert.equal(f.registry.hasPublicDoc('test-plugin', 'myDoc'), false);
   assert.equal(f.registry.hasPublicSessionDoc('test-plugin', 'convState'), false);
   f.registry.registerDoc('test-plugin', 'myDoc', { n: 1 }, { public: true }, f.assertUsable);
   f.registry.registerSessionDoc('test-plugin', 'convState', { n: 1 }, { public: true }, f.assertUsable);
 
-  // removePlugin：卸载后同样全清
+  // removePlugin: unload after same all clean
   f.registry.removePlugin('test-plugin');
   assert.equal(f.registry.hasPublicDoc('test-plugin', 'myDoc'), false);
   assert.equal(f.registry.hasPublicSessionDoc('test-plugin', 'convState'), false);
 });
 
-test('CapabilityRegistry：工具与动作声明、列表派生与作用域校验', { timeout: 60_000 }, async () => {
+test('CapabilityRegistry: tool and action declaration, list derive and effect domain validate', { timeout: 60_000 }, async () => {
   const cap = new CapabilityRegistry();
   const tracker = new PluginTaskTracker();
 
@@ -455,7 +455,7 @@ test('CapabilityRegistry：工具与动作声明、列表派生与作用域校�
     isPluginRegistered: () => true,
   };
 
-  // 注册 action
+  // register action
   cap.registerAction('p1', {
     id: 'doSomething',
     description: 'test action',
@@ -466,7 +466,7 @@ test('CapabilityRegistry：工具与动作声明、列表派生与作用域校�
     handler: (input: { val: string }) => ({ res: `handled:${input.val}` }),
   });
 
-  // 注册 tool
+  // register tool
   cap.registerTool('p1', {
     name: 'customTool',
     description: 'test tool',
@@ -480,31 +480,31 @@ test('CapabilityRegistry：工具与动作声明、列表派生与作用域校�
   const actions = cap.listActions(['p1']);
   assert.equal(actions.length, 1);
   assert.equal(actions[0]!.id, 'doSomething');
-  // 未声明提示字段的清单不携带 prompt 键（no-options 行为不变）
+  // not declaration hint field manifest does not carry prompt key (no-options behavior do not change)
   assert.equal('promptSnippet' in actions[0]!, false);
   assert.equal('promptGuidelines' in actions[0]!, false);
 
   const tools = cap.listTools(['p1'], fakeConv);
   assert.equal(tools.length, 2); // 1 direct tool + 1 exposeAsTool action
 
-  // 作用域不匹配时过滤
+  // effect domain does not match when filter
   const mismatchConv = { ...fakeConv, tags: ['other'] };
   const toolsMismatch = cap.listTools(['p1'], mismatchConv);
-  assert.equal(toolsMismatch.length, 1); // exposeAsTool action 被过滤，仅剩无 scope 的 direct tool
+  assert.equal(toolsMismatch.length, 1); // exposeAsTool action by filter, only remain without scope  direct tool
 
-  // invokeAction 正常执行
+  // invokeAction normal execute
   const actionRes = await cap.invokeAction('p1', 'doSomething', { val: 'hello' }, { conversationId: 1 }, options);
   assert.deepEqual(actionRes, { res: 'handled:hello' });
 
-  // executeTool 支持全限定名 pluginId.actionId
+  // executeTool support all limit set name pluginId.actionId
   const toolExecRes = await cap.executeTool('p1.doSomething', { val: 'via-tool' }, { conversationId: 1 }, options);
   assert.deepEqual(toolExecRes, { res: 'handled:via-tool' });
 
-  // executeTool 直接工具调用
+  // executeTool directly tool invoke
   const directRes = await cap.executeTool('customTool', { num: 42 }, { conversationId: 1 }, options);
   assert.equal(directRes, 'tool:42');
 
-  // scope 越权抛 403
+  // scope exceeds right throw 403
   await assert.rejects(
     async () => {
       await cap.invokeAction('p1', 'doSomething', { val: 'hello' }, { conversationId: 2 }, {
@@ -516,7 +516,7 @@ test('CapabilityRegistry：工具与动作声明、列表派生与作用域校�
   );
 });
 
-test('UiRegistry：界面扩展点收集、参数校验与依赖校验', { timeout: 60_000 }, async () => {
+test('UiRegistry: UI extension point collect, parameter validate and dependency validate', { timeout: 60_000 }, async () => {
   const ui = new UiRegistry();
 
   ui.registerUi('p1', 'sidebar.item', {
@@ -525,7 +525,7 @@ test('UiRegistry：界面扩展点收集、参数校验与依赖校验', { timeo
     icon: 'Terminal',
   }, 'sidebarItem');
 
-  // 重复 ID 抛 409
+  // duplicate ID throw 409
   assert.throws(
     () => {
       ui.registerUi('p1', 'sidebar.item', { id: 'p1Sidebar', label: 'Dup' }, 'sidebarItem');
@@ -533,7 +533,7 @@ test('UiRegistry：界面扩展点收集、参数校验与依赖校验', { timeo
     (err: unknown) => err instanceof HelmError && err.code === 'duplicate_ui',
   );
 
-  // docs 声明已随声明式 JSON 轨道移除：assertUiDocsRegistered 为挂点，不再校验引用
+  // docs declaration already follow declaration style JSON track path remove:assertUiDocsRegistered is hang point, no longer validate reference
   ui.assertUiDocsRegistered('p1', () => false);
 
   const list = ui.listUi(['p1']);
@@ -542,15 +542,15 @@ test('UiRegistry：界面扩展点收集、参数校验与依赖校验', { timeo
   assert.equal((list[0]!.spec as { id: string }).id, 'p1Sidebar');
 });
 
-test('UiRegistry：listUi 按 activePluginIds 迭代顺序返回，不传时按内部插入顺序', { timeout: 60_000 }, async () => {
+test('UiRegistry:listUi by activePluginIds iterate order return, do not pass when by internal insert order', { timeout: 60_000 }, async () => {
   const ui = new UiRegistry();
 
-  // B 先声明 UI
+  // B first declaration UI
   ui.registerUi('B', 'sidebar.item', { id: 'bItem', label: 'B Tab' }, 'sidebarItem');
-  // A 后声明 UI
+  // A after declaration UI
   ui.registerUi('A', 'sidebar.item', { id: 'aItem', label: 'A Tab' }, 'sidebarItem');
 
-  // 传 activePluginIds = ['A', 'B'] 时，必须按 ['A', 'B'] 的顺序返回，而非内部 map 插入顺序
+  // pass activePluginIds = ['A', 'B'] when, must by ['A', 'B'] order return, while non- internal map insert order
   const orderedList = ui.listUi(['A', 'B']);
   assert.equal(orderedList.length, 2);
   assert.equal(orderedList[0]!.pluginId, 'A');
@@ -558,13 +558,13 @@ test('UiRegistry：listUi 按 activePluginIds 迭代顺序返回，不传时按�
   assert.equal(orderedList[1]!.pluginId, 'B');
   assert.equal((orderedList[1]!.spec as { id: string }).id, 'bItem');
 
-  // 传 activePluginIds = ['B', 'A'] 时，按 ['B', 'A'] 顺序
+  // pass activePluginIds = ['B', 'A'] when, by ['B', 'A'] order
   const reverseList = ui.listUi(['B', 'A']);
   assert.equal(reverseList.length, 2);
   assert.equal(reverseList[0]!.pluginId, 'B');
   assert.equal(reverseList[1]!.pluginId, 'A');
 
-  // 不传 activePluginIds 时，按内部 map 顺序（B 先，A 后）
+  // do not pass activePluginIds when, by internal map order (B first,A after)
   const defaultList = ui.listUi();
   assert.equal(defaultList.length, 2);
   assert.equal(defaultList[0]!.pluginId, 'B');

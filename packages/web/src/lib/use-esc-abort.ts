@@ -73,8 +73,8 @@ export function useEscAbort({
         id: ESC_ABORT_NOTICE_ID,
         type: 'notification',
         level: 'warning',
-        title: '再按一次 Esc 停止当前执行',
-        body: '1.5 秒内再次按 Esc 将中止当前会话运行',
+        title: 'Press Esc again to stop the current execution',
+        body: 'Press Esc again within 1.5s to abort the current conversation run',
         conversationId,
         createdAt: Date.now(),
       },
@@ -94,7 +94,7 @@ export function useEscAbort({
         pushNotice({
           type: 'notification',
           level: 'error',
-          title: '停止当前执行失败',
+          title: 'Failed to stop the current execution',
           body: errorText(error),
           conversationId,
         })

@@ -1,15 +1,15 @@
 /**
- * subagent context fork 契约与端到端测试：
- * - selectCleanForkAnchorEntryId 纯函数边界（空历史、仅 system、reset 无/有 handoff、
- *   多轮完整、并行部分 toolCall 挂起截断、非法 ID 拒绝）；
- * - KernelRuntime.spawnAgent({ fork: true }) 真实 SDK + faux provider 集成：
- *   1. mid-turn 分叉与并行双分叉继承父已完成上下文，无未闭合 toolCall 或 missing_result；
- *   2. 同 Profile 与跨 Profile 的 model / effort / cwd 继承优先级与显式覆盖；
- *   3. 结构化输出扩展按子代理显式声明隔离（父有 schema 而子无 schema 时剥离）；
- *   4. SecretStash 机密不随分叉泄露到子代理历史或环境变量；
- *   5. 禁用模型（409 model_disabled）、空父历史（409 fork_empty_history）、
- *      fork+resume（400 validation_error）、herdr:* 与 profile.runtime（400 unsupported_runtime）
- *      全部在 agent_spawn 钩子前前置拒绝。
+ * subagent context fork contract and end-to-end test:
+ * - selectCleanForkAnchorEntryId pure function boundary (empty history, only system,reset without/has handoff,
+ *   many round complete, parallel part toolCall suspended truncate, illegal ID reject);
+ * - KernelRuntime.spawnAgent({ fork: true }) real SDK + faux provider collection into:
+ *   1. mid-turn fork and parallel double fork inherit parent completed context, without not closed together toolCall or missing_result;
+ *   2. same Profile and across Profile  model / effort / cwd inherit priority and explicit override;
+ *   3. structure output extend by subagent explicit declaration isolated (parent has schema while sub- without schema when strip);
+ *   4. SecretStash secret do not follow fork leak to subagent history or environment variable;
+ *   5. disable model (409 model_disabled), empty parent history (409 fork_empty_history),
+ *      fork+resume(400 validation_error),herdr:* and profile.runtime(400 unsupported_runtime)
+ *      all in agent_spawn hook before pre- reject.
  */
 
 import assert from 'node:assert/strict'
@@ -62,7 +62,7 @@ function assertNoDanglingToolCalls(
     }
   }
   for (const id of callIds) {
-    assert.ok(resolvedIds.has(id), `fork 上下文中不得存在未闭合 toolCall(${id})`)
+    assert.ok(resolvedIds.has(id), `fork context in must not store in not closed together toolCall(${id})`)
   }
 }
 
@@ -85,8 +85,8 @@ function userMessageTexts(
   return texts
 }
 
-describe('selectCleanForkAnchorEntryId 纯函数边界', { timeout: 60_000 }, () => {
-  it('空历史与仅含 system 消息均返回 undefined', { timeout: 60_000 }, () => {
+describe('selectCleanForkAnchorEntryId pure function boundary', { timeout: 60_000 }, () => {
+  it('empty history and only contains system message all return undefined', { timeout: 60_000 }, () => {
     assert.equal(selectCleanForkAnchorEntryId({ entries: [], contributions: [] }), undefined)
     assert.equal(
       selectCleanForkAnchorEntryId({
@@ -97,7 +97,7 @@ describe('selectCleanForkAnchorEntryId 纯函数边界', { timeout: 60_000 }, ()
     )
   })
 
-  it('reset 无交接返回 undefined；reset 含 user handoff 返回交接 entryId', { timeout: 60_000 }, () => {
+  it('reset without handover return undefined;reset contains user handoff return handover entryId', { timeout: 60_000 }, () => {
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 5 }],
@@ -108,13 +108,13 @@ describe('selectCleanForkAnchorEntryId 纯函数边界', { timeout: 60_000 }, ()
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 5 }, { id: 6 }],
-        contributions: [[], [{ role: 'user', content: '交接摘要' }]],
+        contributions: [[], [{ role: 'user', content: 'handover summary' }]],
       }),
       6,
     )
   })
 
-  it('完整多轮会话返回末尾 entryId；已排除 aborted 后仍按有效锚点返回', { timeout: 60_000 }, () => {
+  it('complete many round conversation return tail entryId; already exclude aborted after still by valid anchor return', { timeout: 60_000 }, () => {
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: '1' }, { id: '2' }, { id: '3' }, { id: '4' }],
@@ -127,21 +127,21 @@ describe('selectCleanForkAnchorEntryId 纯函数边界', { timeout: 60_000 }, ()
       }),
       4,
     )
-    // SDK 排除 aborted 条目后，末尾可安全截断到上一条已完成 user 条目
+    // SDK exclude aborted item after, tail can security truncate to on a completed user item
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 10 }, { id: 11 }],
-        contributions: [[{ role: 'user', content: '已提交' }], []],
+        contributions: [[{ role: 'user', content: 'committed' }], []],
       }),
       11,
     )
   })
 
-  it('并行 toolCall 部分完成且仍有挂起时回退到未闭环 assistant 之前', { timeout: 60_000 }, () => {
+  it('parallel toolCall part complete and still has suspended when fall back to not closed ring assistant before', { timeout: 60_000 }, () => {
     const view = {
       entries: [{ id: 1 }, { id: 2 }, { id: 3 }],
       contributions: [
-        [{ role: 'user', content: '开始' }],
+        [{ role: 'user', content: 'start' }],
         [
           {
             role: 'assistant',
@@ -156,7 +156,7 @@ describe('selectCleanForkAnchorEntryId 纯函数边界', { timeout: 60_000 }, ()
     }
     assert.equal(selectCleanForkAnchorEntryId(view), 1)
 
-    // 全部 toolCall 均有对应 toolResult 时返回最后条目
+    // all toolCall all has for should toolResult when return finally item
     const settled = {
       entries: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }],
       contributions: [
@@ -167,8 +167,8 @@ describe('selectCleanForkAnchorEntryId 纯函数边界', { timeout: 60_000 }, ()
     assert.equal(selectCleanForkAnchorEntryId(settled), 4)
   })
 
-  it('同一 contributions[i] 内含 [assistant(toolCall), toolResult] 时正确识别已闭环与未闭环', { timeout: 60_000 }, () => {
-    // 同一条目内完成闭合：[assistant(tc-1), toolResult(tc-1)] 应保留当前条目
+  it('the same contributions[i] inside contains [assistant(toolCall), toolResult] when correct identify already closed ring and not closed ring', { timeout: 60_000 }, () => {
+    // the same item inside complete closed together:[assistant(tc-1), toolResult(tc-1)] should keep when before item
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 1 }, { id: 2 }],
@@ -183,7 +183,7 @@ describe('selectCleanForkAnchorEntryId 纯函数边界', { timeout: 60_000 }, ()
       2,
     )
 
-    // 同一条目内仅部分闭合：应整条截断并回退到前一条已完成条目
+    // the same item inside only part closed together: should whole truncate and fall back to before a completed item
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 1 }, { id: 2 }],
@@ -204,7 +204,7 @@ describe('selectCleanForkAnchorEntryId 纯函数边界', { timeout: 60_000 }, ()
       1,
     )
 
-    // 前一条目同条目内已闭环、下一条目再次挂起：截断到前一条目
+    // before a item same item inside already closed ring, under a item again suspended: truncate to before a item
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 1 }, { id: 2 }, { id: 3 }],
@@ -221,7 +221,7 @@ describe('selectCleanForkAnchorEntryId 纯函数边界', { timeout: 60_000 }, ()
     )
   })
 
-  it('系统消息后紧接未闭环 assistant 截断后无非 system 消息则返回 undefined；非法 ID 返回 undefined', { timeout: 60_000 }, () => {
+  it('system message after tight connect not closed ring assistant truncate after without non- system message then return undefined; illegal ID return undefined', { timeout: 60_000 }, () => {
     assert.equal(
       selectCleanForkAnchorEntryId({
         entries: [{ id: 1 }, { id: 2 }],
@@ -244,8 +244,8 @@ describe('selectCleanForkAnchorEntryId 纯函数边界', { timeout: 60_000 }, ()
   })
 })
 
-describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_000 }, () => {
-  it('mid-turn 分叉与并行双分叉继承已完成上下文、无未闭合 toolCall 或 missing_result', { timeout: 60_000 }, async () => {
+describe('KernelRuntime.spawnAgent({ fork: true }) collection into contract', { timeout: 60_000 }, () => {
+  it('mid-turn fork and parallel double fork inherit completed context, without not closed together toolCall or missing_result', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'mid-turn-parallel')
     const { models, faux } = makeFauxModels({ models: [{ id: 'faux-1', reasoning: true }] })
 
@@ -254,32 +254,32 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
       const msgs = context.messages as Array<{ role?: string; content?: unknown; toolCallId?: string }>
       const users = userMessageTexts(msgs)
       const lastMsg = msgs.at(-1)
-      if (lastMsg?.role === 'user' && users.at(-1) === '线索一: ALPHA_SEED') {
-        return fauxAssistantMessage('已记录 ALPHA_SEED')
+      if (lastMsg?.role === 'user' && users.at(-1) === 'line index one: ALPHA_SEED') {
+        return fauxAssistantMessage('already record ALPHA_SEED')
       }
-      if (lastMsg?.role === 'user' && users.at(-1) === '线索二: BETA_SEED') {
+      if (lastMsg?.role === 'user' && users.at(-1) === 'line index two: BETA_SEED') {
         return fauxAssistantMessage(
           [
-            fauxToolCall('fork_spawn', { prompt: '子甲核查', fork: true }, { id: 'call-child-a' }),
-            fauxToolCall('fork_spawn', { prompt: '子乙核查', fork: true }, { id: 'call-child-b' }),
+            fauxToolCall('fork_spawn', { prompt: 'sub- A core inspect', fork: true }, { id: 'call-child-a' }),
+            fauxToolCall('fork_spawn', { prompt: 'sub- B core inspect', fork: true }, { id: 'call-child-b' }),
             fauxToolCall('sibling_noop', {}, { id: 'call-sibling' }),
           ],
           { stopReason: 'toolUse' },
         )
       }
-      if (lastMsg?.role === 'user' && (users.at(-1) === '子甲核查' || users.at(-1) === '子乙核查')) {
+      if (lastMsg?.role === 'user' && (users.at(-1) === 'sub- A core inspect' || users.at(-1) === 'sub- B core inspect')) {
         const tag = users.at(-1)!
         childSnapshots.push({ tag, messages: msgs, users })
         assertNoDanglingToolCalls(msgs)
-        assert.ok(!JSON.stringify(msgs).includes('missing_result'), '不得出现 missing_result 合成补丁')
-        assert.ok(users.some((t) => t.includes('ALPHA_SEED')), `${tag} 必须继承第 1 轮线索`)
-        assert.ok(users.some((t) => t.includes('BETA_SEED')), `${tag} 必须继承当前轮用户输入`)
-        return fauxAssistantMessage(`完成:${tag}`)
+        assert.ok(!JSON.stringify(msgs).includes('missing_result'), 'must not appear missing_result together into patch')
+        assert.ok(users.some((t) => t.includes('ALPHA_SEED')), `${tag} must inherit 1 round line index`)
+        assert.ok(users.some((t) => t.includes('BETA_SEED')), `${tag} must inherit when before round user input`)
+        return fauxAssistantMessage(`complete:${tag}`)
       }
       if (lastMsg?.role === 'toolResult') {
-        return fauxAssistantMessage('父会话汇总完毕')
+        return fauxAssistantMessage('parent conversation aggregate done')
       }
-      throw new Error(`未预期的 faux 调用: ${JSON.stringify(msgs)}`)
+      throw new Error(`not pre- phase faux invoke: ${JSON.stringify(msgs)}`)
     }
     faux.setResponses(Array.from({ length: 16 }, () => step))
 
@@ -295,7 +295,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
         definePlugin(ctx) {
           ctx.tool({
             name: 'fork_spawn',
-            description: '触发宿主 spawnAgent',
+            description: 'trigger host spawnAgent',
             inputSchema: {
               type: 'object',
               properties: {
@@ -316,27 +316,27 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
           })
           ctx.tool({
             name: 'sibling_noop',
-            description: '同轮兄弟占位工具',
+            description: 'same round brother occupy tool',
             inputSchema: { type: 'object' },
             execute: () => ({ ok: true }),
           })
         },
       }, { enabled: true })
 
-      await kernel.submitInput(1, '线索一: ALPHA_SEED')
+      await kernel.submitInput(1, 'line index one: ALPHA_SEED')
       await kernel.waitForIdle(1)
-      await kernel.submitInput(1, '线索二: BETA_SEED')
+      await kernel.submitInput(1, 'line index two: BETA_SEED')
       await kernel.waitForIdle(1)
 
       assert.equal(childSnapshots.length, 2)
-      assert.deepEqual(childSnapshots.map((s) => s.tag).sort(), ['子乙核查', '子甲核查'])
-      assert.equal(await kernel.getLastAssistantText(1), '父会话汇总完毕')
+      assert.deepEqual(childSnapshots.map((s) => s.tag).sort(), ['sub- A core inspect', 'sub- B core inspect'])
+      assert.equal(await kernel.getLastAssistantText(1), 'parent conversation aggregate done')
     } finally {
       await kernel.close()
     }
   })
 
-  it('同 Profile 与跨 Profile 的 model / effort / cwd 继承优先级与显式覆盖', { timeout: 60_000 }, async () => {
+  it('same Profile and across Profile  model / effort / cwd inherit priority and explicit override', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'inheritance-priority')
     const profileDir = join(dir, 'profile-cwd')
     const parentDir = join(dir, 'parent-cwd')
@@ -362,21 +362,21 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
     try {
       await kernel.services.profiles.save({
         id: 'custom-same',
-        name: '同角色',
+        name: 'same role',
         model: 'faux/faux-profile',
         thinkingLevel: 'low',
         cwd: profileDir,
       })
       await kernel.services.profiles.save({
         id: 'cross-target',
-        name: '跨角色目标',
+        name: 'across role target',
         model: 'faux/faux-profile',
         thinkingLevel: 'low',
         cwd: crossDir,
       })
       await kernel.services.profiles.save({
         id: 'bare-target',
-        name: '无覆盖目标',
+        name: 'without override target',
       })
 
       const parent = await kernel.createConversation({
@@ -385,7 +385,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
         model: 'faux/faux-parent',
       })
       await kernel.updateConversation(parent.id, { thinkingLevel: 'high' })
-      await kernel.submitInput(parent.id, '建立父会话历史')
+      await kernel.submitInput(parent.id, 'establish parent conversation history')
       await kernel.waitForIdle(parent.id)
 
       const beforeIds = new Set(kernel.listConversations({ parentConversationId: parent.id }).map((c) => c.id))
@@ -396,11 +396,11 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
         return added[0]!
       }
 
-      // 1. 同 Profile 默认继承：省略 agentType/cwd/model/effort，继承父会话覆盖（优于 Profile）
+      // 1. same Profile by default inherit: omit agentType/cwd/model/effort, inherit parent conversation override (optimal at Profile)
       await kernel.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
-        prompt: '同Profile继承',
+        prompt: 'sameProfileinherit',
       })
       const sameDefaultChild = pickNewChild()
       assert.equal(sameDefaultChild.profileId, 'custom-same')
@@ -409,11 +409,11 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
       assert.equal(sameDefaultChild.thinkingLevel, 'high')
       assert.equal(sameDefaultChild.thinkingLevelOverride, 'high')
 
-      // 2. 同 Profile 显式覆盖
+      // 2. same Profile explicit override
       await kernel.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
-        prompt: '同Profile显式覆盖',
+        prompt: 'sameProfileexplicit override',
         model: 'faux/faux-explicit',
         effort: 'medium',
         cwd: explicitDir,
@@ -425,12 +425,12 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
       assert.equal(sameExplicitChild.thinkingLevel, 'medium')
       assert.equal(sameExplicitChild.thinkingLevelOverride, 'medium')
 
-      // 3. 跨 Profile：目标 Profile 字段优先于父会话
+      // 3. across Profile: target Profile field takes precedence at parent conversation
       await kernel.spawnAgent({
         parentConversationId: parent.id,
         agentType: 'cross-target',
         fork: true,
-        prompt: '跨Profile优先目标',
+        prompt: 'acrossProfiletakes precedence target',
       })
       const crossTargetChild = pickNewChild()
       assert.equal(crossTargetChild.profileId, 'cross-target')
@@ -438,12 +438,12 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
       assert.equal(crossTargetChild.model, 'faux/faux-profile')
       assert.equal(crossTargetChild.thinkingLevel, 'low')
 
-      // 4. 跨 Profile 且目标 Profile 未配置时回退到父会话覆盖
+      // 4. across Profile and target Profile not config when fall back to parent conversation override
       await kernel.spawnAgent({
         parentConversationId: parent.id,
         agentType: 'bare-target',
         fork: true,
-        prompt: '跨Profile回退父会话',
+        prompt: 'acrossProfilefall back parent conversation',
       })
       const crossFallbackChild = pickNewChild()
       assert.equal(crossFallbackChild.profileId, 'bare-target')
@@ -455,7 +455,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
     }
   })
 
-  it('结构化输出隔离、SecretStash 不泄露与前置拒绝（无钩子泄漏）', { timeout: 60_000 }, async () => {
+  it('structure output isolated,SecretStash do not leak and pre- reject (without hook leak leak)', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'isolation-and-rejects')
     const { models, faux } = makeFauxModels({
       models: [
@@ -500,35 +500,35 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
       const lastMsg = [...msgs].reverse().find((m) => m.role !== 'system')
       const hasStructuredToolDecl = replayActiveTools(msgs).has('register_structured_output')
 
-      if (lastMsg?.role === 'user' && lastUser.includes('无schema子代理')) {
+      if (lastMsg?.role === 'user' && lastUser.includes('withoutschemasubagent')) {
         plainForkDeclaredStructuredTool = hasStructuredToolDecl
         plainForkMessages = msgs
-        // 主动尝试调用未注册的 register_structured_output，双重验证运行期工具列表也已剥离它。
+        // actively attempt invoke not registered register_structured_output, double heavy verify run phase tool list also already strip it.
         return fauxAssistantMessage(
           [fauxToolCall('register_structured_output', { output: { leak: true } })],
           { stopReason: 'toolUse' },
         )
       }
-      if (lastMsg?.role === 'toolResult' && lastMsg.toolName === 'register_structured_output' && lastUser.includes('无schema子代理')) {
+      if (lastMsg?.role === 'toolResult' && lastMsg.toolName === 'register_structured_output' && lastUser.includes('withoutschemasubagent')) {
         plainForkToolRejected = lastMsg.isError === true
-        return fauxAssistantMessage('无schema回复')
+        return fauxAssistantMessage('withoutschemaback re-')
       }
-      if (lastMsg?.role === 'user' && lastUser.includes('有schema子代理')) {
+      if (lastMsg?.role === 'user' && lastUser.includes('hasschemasubagent')) {
         schemaForkDeclaredStructuredTool = hasStructuredToolDecl
         return fauxAssistantMessage(
           [fauxToolCall('register_structured_output', { output: { tag: 'FORK_OK' } })],
           { stopReason: 'toolUse' },
         )
       }
-      if (lastMsg?.role === 'user' && lastUser.includes('父代理带schema测试')) {
+      if (lastMsg?.role === 'user' && lastUser.includes('parent proxy carriesschematest')) {
         assert.equal(hasStructuredToolDecl, true)
         return fauxAssistantMessage(
           [
-            fauxToolCall('fork_spawn', { prompt: '无schema子代理' }, { id: 'fc-plain' }),
+            fauxToolCall('fork_spawn', { prompt: 'withoutschemasubagent' }, { id: 'fc-plain' }),
             fauxToolCall(
               'fork_spawn',
               {
-                prompt: '有schema子代理',
+                prompt: 'hasschemasubagent',
                 schema: {
                   type: 'object',
                   properties: { tag: { const: 'FORK_OK' } },
@@ -543,7 +543,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
         )
       }
       if (lastMsg?.role === 'toolResult' && lastMsg.toolName === 'register_structured_output') {
-        return fauxAssistantMessage('结构化收尾完成')
+        return fauxAssistantMessage('structure wrap-up complete')
       }
       if (lastMsg?.role === 'toolResult' && lastMsg.toolName === 'fork_spawn') {
         return fauxAssistantMessage(
@@ -551,11 +551,11 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
           { stopReason: 'toolUse' },
         )
       }
-      if (lastMsg?.role === 'user' && lastUser.includes('检查秘密是否泄露')) {
+      if (lastMsg?.role === 'user' && lastUser.includes('check secret is otherwise leak')) {
         secretForkMessages = msgs
-        return fauxAssistantMessage('无秘密')
+        return fauxAssistantMessage('without secret')
       }
-      return fauxAssistantMessage('默认回复')
+      return fauxAssistantMessage('by default back re-')
     }
     faux.setResponses(Array.from({ length: 24 }, () => step))
 
@@ -576,7 +576,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
           })
           ctx.tool({
             name: 'fork_spawn',
-            description: '派生 fork 子会话',
+            description: 'derive fork sub-conversation',
             inputSchema: {
               type: 'object',
               properties: {
@@ -598,10 +598,10 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
         },
       }, { enabled: true })
 
-      // 1. 结构化输出隔离：父带 schema 的运行期 fork 无 schema 子代理不得继承 register_structured_output
+      // 1. structure output isolated: parent carries schema run phase fork without schema subagent must not inherit register_structured_output
       const parentRes = await kernel.spawnAgent({
         parentConversationId: 1,
-        prompt: '父代理带schema测试',
+        prompt: 'parent proxy carriesschematest',
         schema: {
           type: 'object',
           properties: { ok: { const: true } },
@@ -610,75 +610,75 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
         },
       })
       assert.deepEqual(parentRes, { ok: true })
-      assert.equal(plainForkDeclaredStructuredTool, false, '未声明 schema 的 fork 子代理系统消息中不得出现 register_structured_output')
-      assert.equal(plainForkToolRejected, true, '未声明 schema 的 fork 子代理运行时调用 register_structured_output 应被拒绝')
-      assert.equal(schemaForkDeclaredStructuredTool, true, '显式声明 schema 的 fork 子代理应正常拥有 register_structured_output')
-      assert.ok(plainForkMessages && userMessageTexts(plainForkMessages).some((t) => t.includes('父代理带schema测试')))
+      assert.equal(plainForkDeclaredStructuredTool, false, 'not declaration schema  fork subagent system message in must not appear register_structured_output')
+      assert.equal(plainForkToolRejected, true, 'not declaration schema  fork subagent runtime invoke register_structured_output should by reject')
+      assert.equal(schemaForkDeclaredStructuredTool, true, 'explicit declaration schema  fork subagent should normal own register_structured_output')
+      assert.ok(plainForkMessages && userMessageTexts(plainForkMessages).some((t) => t.includes('parent proxy carriesschematest')))
 
-      // 2. SecretStash 机密不穿透到 fork 子代理
+      // 2. SecretStash secret do not penetrate to fork subagent
       const secretParent = await kernel.createConversation({ cwd: dir })
       kernel.stash.put(secretParent.id, 'SECRET_API_KEY', 'sk-fork-secret-998877')
-      await kernel.submitInput(secretParent.id, '记录机密 sk-fork-secret-998877')
+      await kernel.submitInput(secretParent.id, 'record secret sk-fork-secret-998877')
       await kernel.waitForIdle(secretParent.id)
 
       await kernel.spawnAgent({
         parentConversationId: secretParent.id,
         fork: true,
-        prompt: '检查秘密是否泄露',
+        prompt: 'check secret is otherwise leak',
       })
       assert.ok(secretForkMessages)
       const serialized = JSON.stringify(secretForkMessages)
-      assert.ok(!serialized.includes('sk-fork-secret-998877'), 'fork 子代理历史不得包含明文秘密')
-      assert.ok(serialized.includes('[REDACTED:stash:'), 'fork 子代理历史应保留脱敏占位符')
+      assert.ok(!serialized.includes('sk-fork-secret-998877'), 'fork subagent history must not contains plaintext secret')
+      assert.ok(serialized.includes('[REDACTED:stash:'), 'fork subagent history should keep redaction placeholder')
       const secretChildren = kernel.listConversations({ parentConversationId: secretParent.id })
       assert.equal(secretChildren.length, 1)
       assert.deepEqual(kernel.stash.envFor(secretChildren[0]!.id), {})
       assert.equal(kernel.buildSpawnEnv(secretChildren[0]!.id, dir)['SECRET_API_KEY'], undefined)
 
-      // 3. 前置拒绝均必须在 agent_spawn 钩子前触发
+      // 3. pre- reject all must in agent_spawn hook before trigger
       const hitsBeforeRejects = agentSpawnHookHits
       const emptyParent = await kernel.createConversation({ cwd: dir })
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: emptyParent.id, fork: true, prompt: '空历史' }),
+        () => kernel.spawnAgent({ parentConversationId: emptyParent.id, fork: true, prompt: 'empty history' }),
         'fork_empty_history',
         409,
       )
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, fork: 'yes' as never, prompt: '非法fork' }),
+        () => kernel.spawnAgent({ parentConversationId: secretParent.id, fork: 'yes' as never, prompt: 'illegalfork' }),
         'validation_error',
         400,
       )
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, fork: true, resume: 'child-1', prompt: '互斥' }),
+        () => kernel.spawnAgent({ parentConversationId: secretParent.id, fork: true, resume: 'child-1', prompt: 'mutual exclusion' }),
         'validation_error',
         400,
       )
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'herdr:agy', fork: true, prompt: '外部运行时' }),
+        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'herdr:agy', fork: true, prompt: 'external runtime' }),
         'unsupported_runtime',
         400,
       )
       await kernel.services.profiles.save({
         id: 'herdr-profile',
-        name: '外部代理',
+        name: 'external proxy',
         runtime: { kind: 'herdr', agent: 'agy' },
       })
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'herdr-profile', fork: true, prompt: '外部Profile' }),
+        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'herdr-profile', fork: true, prompt: 'externalProfile' }),
         'unsupported_runtime',
         400,
       )
-      assert.equal(agentSpawnHookHits, hitsBeforeRejects, '前置拒绝绝不得进入 agent_spawn 钩子链')
+      assert.equal(agentSpawnHookHits, hitsBeforeRejects, 'pre- reject never obtain enter agent_spawn hook chain')
 
-      // 4. 禁用模型返回 409 model_disabled
+      // 4. disable model return 409 model_disabled
       await kernel.services.profiles.save({
         id: 'disabled-target',
-        name: '禁用模型角色',
+        name: 'disable model role',
         model: 'faux/faux-disabled',
       })
       await kernel.setDisabledModels('faux', ['faux-disabled'])
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'disabled-target', fork: true, prompt: '禁用模型' }),
+        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'disabled-target', fork: true, prompt: 'disable model' }),
         'model_disabled',
         409,
       )
@@ -687,7 +687,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
     }
   })
 
-  it('nodeId 继承优先级与 resolveSpawnTarget({ fork: true })（真实在线远端节点）', { timeout: 60_000 }, async () => {
+  it('nodeId inherit priority and resolveSpawnTarget({ fork: true })(real online remote node)', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'remote-node-priority')
     const parentCwd = join(dir, 'parent-cwd')
     const profileCwd = join(dir, 'profile-cwd')
@@ -699,7 +699,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
     }
 
     const { models, faux } = makeFauxModels({ models: [{ id: 'faux-1', reasoning: true }] })
-    faux.setResponses(Array.from({ length: 6 }, () => fauxAssistantMessage('远端回复')))
+    faux.setResponses(Array.from({ length: 6 }, () => fauxAssistantMessage('remote back re-')))
 
     const kernel = await KernelRuntime.open({
       dataDir: dir,
@@ -731,8 +731,8 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
         reconnectMaxDelayMs: 200,
         log: () => undefined,
       })
-      assert.ok(await daemonParent.waitUntilRegistered(), 'node-parent 应成功上线')
-      assert.ok(await daemonProfile.waitUntilRegistered(), 'node-profile 应成功上线')
+      assert.ok(await daemonParent.waitUntilRegistered(), 'node-parent should succeeded enable')
+      assert.ok(await daemonProfile.waitUntilRegistered(), 'node-profile should succeeded enable')
 
       let hostApi!: HelmHostApi
       await kernel.plugins.register({
@@ -744,13 +744,13 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
 
       await kernel.services.profiles.save({
         id: 'same-remote',
-        name: '同角色远端',
+        name: 'same role remote',
         nodeId: 'node-profile',
         cwd: profileCwd,
       })
       await kernel.services.profiles.save({
         id: 'cross-remote',
-        name: '跨角色远端',
+        name: 'across role remote',
         nodeId: 'node-profile',
         cwd: crossCwd,
       })
@@ -760,10 +760,10 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
         nodeId: 'node-parent',
         cwd: parentCwd,
       })
-      await kernel.submitInput(parent.id, '建立远端父会话上下文')
+      await kernel.submitInput(parent.id, 'establish remote parent conversation context')
       await kernel.waitForIdle(parent.id)
 
-      // 1. 同角色 fork：parentNodeId > profileNodeId，parentCwd > profileCwd
+      // 1. same role fork:parentNodeId > profileNodeId,parentCwd > profileCwd
       const sameTarget = await hostApi.resolveSpawnTarget({
         parentConversationId: parent.id,
         fork: true,
@@ -772,7 +772,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
       assert.equal(sameTarget.sourceCwd, parentCwd)
       assert.equal(sameTarget.parentCwd, parentCwd)
 
-      // 2. 跨角色 fork：profileNodeId > parentNodeId，profileCwd > parentCwd
+      // 2. across role fork:profileNodeId > parentNodeId,profileCwd > parentCwd
       const crossTarget = await hostApi.resolveSpawnTarget({
         parentConversationId: parent.id,
         profileId: 'cross-remote',
@@ -781,7 +781,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
       assert.equal(crossTarget.nodeId, 'node-profile')
       assert.equal(crossTarget.sourceCwd, crossCwd)
 
-      // 3. 非 fork：即使同 Profile，仍优先 profileNodeId
+      // 3. non- fork: even if same Profile, still takes precedence profileNodeId
       const nonForkTarget = await hostApi.resolveSpawnTarget({
         parentConversationId: parent.id,
         profileId: 'same-remote',
@@ -789,12 +789,12 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
       assert.equal(nonForkTarget.nodeId, 'node-profile')
       assert.equal(nonForkTarget.sourceCwd, profileCwd)
 
-      // 4. 真实 spawnAgent({ fork: true }) 落盘的 nodeId 与 cwd 与上述解析一致
+      // 4. real spawnAgent({ fork: true })  nodeId and cwd and on state parse consistent
       const beforeIds = new Set(kernel.listConversations({ parentConversationId: parent.id }).map((c) => c.id))
       await kernel.spawnAgent({
         parentConversationId: parent.id,
         fork: true,
-        prompt: '同角色远端分叉',
+        prompt: 'same role remote fork',
       })
       const sameChild = kernel.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
       assert.equal(sameChild.nodeId, 'node-parent')
@@ -805,7 +805,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
         parentConversationId: parent.id,
         agentType: 'cross-remote',
         fork: true,
-        prompt: '跨角色远端分叉',
+        prompt: 'across role remote fork',
       })
       const crossChild = kernel.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
       assert.equal(crossChild.nodeId, 'node-profile')
@@ -818,7 +818,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
     }
   })
 
-  it('helm.rewind (replaceFromEntryId) 后 fork：仅继承重写后干净历史，不含被抹除回合', { timeout: 60_000 }, async () => {
+  it('helm.rewind (replaceFromEntryId) after fork: only inherit heavy write after clean history, excludes by wipe except turn', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'rewind-then-fork')
     const { models, faux } = makeFauxModels({ models: [{ id: 'faux-1', reasoning: true }] })
 
@@ -826,14 +826,14 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
     const step: FauxResponseFactory = (context) => {
       const msgs = context.messages as Array<{ role?: string; content?: unknown }>
       const lastUser = userMessageTexts(msgs).at(-1) ?? ''
-      if (lastUser.includes('KEEP_ME_111')) return fauxAssistantMessage('已记住 KEEP_ME_111')
-      if (lastUser.includes('ERASE_ME_222')) return fauxAssistantMessage('即将抹除的回答 ERASE_ME_222')
-      if (lastUser.includes('REWRITTEN_333')) return fauxAssistantMessage('重写后的回答 REWRITTEN_333')
-      if (lastUser.includes('核查 rewind 后分叉历史')) {
+      if (lastUser.includes('KEEP_ME_111')) return fauxAssistantMessage('already record KEEP_ME_111')
+      if (lastUser.includes('ERASE_ME_222')) return fauxAssistantMessage('i.e. wipe except answer ERASE_ME_222')
+      if (lastUser.includes('REWRITTEN_333')) return fauxAssistantMessage('heavy write after answer REWRITTEN_333')
+      if (lastUser.includes('core inspect rewind after fork history')) {
         forkedMessages = msgs
-        return fauxAssistantMessage('核查完毕')
+        return fauxAssistantMessage('core inspect done')
       }
-      throw new Error(`未预期的 faux 请求: ${lastUser}`)
+      throw new Error(`not pre- phase faux request: ${lastUser}`)
     }
     faux.setResponses(Array.from({ length: 8 }, () => step))
 
@@ -844,18 +844,18 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
       model: 'faux/faux-1',
     })
     try {
-      await kernel.submitInput(1, '第一轮保留信息 KEEP_ME_111')
+      await kernel.submitInput(1, 'one round keep information KEEP_ME_111')
       await kernel.waitForIdle(1)
-      await kernel.submitInput(1, '第二轮待回退信息 ERASE_ME_222')
+      await kernel.submitInput(1, 'second round await fall back information ERASE_ME_222')
       await kernel.waitForIdle(1)
 
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
       const eraseEntry = detail.entries.find(
         (e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('ERASE_ME_222'),
       )
-      assert.ok(eraseEntry, '必须找到待 rewind 的 helm.input 条目')
+      assert.ok(eraseEntry, 'must found await rewind  helm.input item')
 
-      await kernel.submitInput(1, '第二轮重写后信息 REWRITTEN_333', {
+      await kernel.submitInput(1, 'second round heavy write after information REWRITTEN_333', {
         replaceFromEntryId: Number(eraseEntry!.id),
       })
       await kernel.waitForIdle(1)
@@ -863,22 +863,22 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
       await kernel.spawnAgent({
         parentConversationId: 1,
         fork: true,
-        prompt: '核查 rewind 后分叉历史',
+        prompt: 'core inspect rewind after fork history',
       })
       assert.ok(forkedMessages)
       const serialized = JSON.stringify(forkedMessages)
-      assert.ok(serialized.includes('KEEP_ME_111'), 'rewind 之前保留轮次必须继承')
-      assert.ok(serialized.includes('REWRITTEN_333'), 'rewind 重写后轮次必须继承')
-      assert.ok(!serialized.includes('ERASE_ME_222'), '被 rewind 抹除的问答绝不能出现在 fork 上下文中')
+      assert.ok(serialized.includes('KEEP_ME_111'), 'rewind before keep round must inherit')
+      assert.ok(serialized.includes('REWRITTEN_333'), 'rewind heavy write after round must inherit')
+      assert.ok(!serialized.includes('ERASE_ME_222'), 'by rewind wipe except question answer never can appear in fork context in')
     } finally {
       await kernel.close()
     }
   })
 
-  it('agent_spawn 钩子 transform 兜底：非法 fork 立即 invalid_hook_result，翻转 fork:true 或换目标在终检拦截且无模型调用', { timeout: 60_000 }, async () => {
+  it('agent_spawn hook transform fall back: illegal fork immediately invalid_hook_result, translate rotate fork:true or swap target in final inspect intercept and without model invoke', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'hook-transform-guard')
     const { models, faux } = makeFauxModels({ models: [{ id: 'faux-1', reasoning: true }] })
-    faux.setResponses([fauxAssistantMessage('建立有效父历史')])
+    faux.setResponses([fauxAssistantMessage('establish valid parent history')])
 
     const kernel = await KernelRuntime.open({
       dataDir: dir,
@@ -887,12 +887,12 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
       model: 'faux/faux-1',
     })
     try {
-      await kernel.submitInput(1, '建立父会话有效历史')
+      await kernel.submitInput(1, 'establish parent conversation valid history')
       await kernel.waitForIdle(1)
       const emptyConv = await kernel.createConversation({ cwd: dir })
       await kernel.services.profiles.save({
         id: 'herdr-prof',
-        name: '外部运行时',
+        name: 'external runtime',
         runtime: { kind: 'herdr', agent: 'agy' },
       })
 
@@ -930,33 +930,33 @@ describe('KernelRuntime.spawnAgent({ fork: true }) 集成契约', { timeout: 60_
 
       mode = 'bad-type'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, prompt: '非布尔注入' }),
+        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non- boolean inject' }),
         'invalid_hook_result',
       )
-      assert.equal(downstreamHits, 0, '载荷校验失败应在钩子管道内即刻阻断，不抵达下游钩子')
+      assert.equal(downstreamHits, 0, 'payload validation failed should in hook pipeline inside i.e. moment block assert, do not arrive downstream hook')
 
       mode = 'flip-to-empty'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: emptyConv.id, prompt: '非fork翻转' }),
+        () => kernel.spawnAgent({ parentConversationId: emptyConv.id, prompt: 'non-forktranslate rotate' }),
         'fork_empty_history',
         409,
       )
 
       mode = 'flip-to-herdr-prof'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, prompt: '非fork改写为外部Profile' }),
+        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non-forkchange write is externalProfile' }),
         'unsupported_runtime',
         400,
       )
 
       mode = 'retarget-empty-parent'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, fork: true, prompt: '更换为空父会话' }),
+        () => kernel.spawnAgent({ parentConversationId: 1, fork: true, prompt: 'more swap is empty parent conversation' }),
         'fork_empty_history',
         409,
       )
 
-      assert.equal(faux.state.callCount, callsBefore, '所有被终检拦截的派生均不得发起任何模型调用')
+      assert.equal(faux.state.callCount, callsBefore, 'all by final inspect intercept derive all must not start any model invoke')
     } finally {
       await kernel.close()
     }

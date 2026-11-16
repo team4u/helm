@@ -1,9 +1,9 @@
 /**
- * Profile 领域路由：/api/profiles CRUD。
+ * Profile domain routing:/api/profiles CRUD.
  *
- * 托管元数据（managedByPlugin）只能由可信插件自举经 ProfileService 直写：
- * HTTP 创建不接受该字段，PUT 不得移除/改写，DELETE 拒绝删除托管 Profile。
- * 绑定禁用模型在落盘前预检（409 model_disabled）。
+ * hosting metadata (managedByPlugin) only can by can message plugin self raise via ProfileService direct write:
+ * HTTP create do not accept the field,PUT must not remove/change write,DELETE reject delete hosting Profile.
+ * bind set disable model in before preflight (409 model_disabled).
  */
 import { HelmError, type Profile } from '@helm/protocol'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
@@ -28,22 +28,22 @@ export async function handleProfilesDomain(
     if (method === 'POST') {
       const body = await readJsonBody(ctx.request)
       const profile = parseProfileBody(body, { requireId: true })
-      // 托管元数据仅可信插件自举可声明（ProfileService 直写）；HTTP 创建
-      // 不接受 managedByPlugin，防止伪造托管身份或提前占位锁删除。
+      // hosting metadata only can message plugin self raise can declaration (ProfileService direct write);HTTP create
+      // do not accept managedByPlugin, guard against fabricate hosting identity or mention before occupy lock delete.
       if (profile.managedByPlugin !== undefined) {
         throw new HelmError(
           'profile_managed_by_plugin',
-          'managedByPlugin 由插件自举声明，不可经 HTTP 创建时设置',
+          'managedByPlugin by plugin self raise declaration, cannot via HTTP create when settings',
           403,
           { profileId: profile.id },
         )
       }
       const existing = await kernel.profiles.get(profile.id)
       if (existing?.managedByPlugin !== undefined) {
-        throw new HelmError('profile_managed_by_plugin', `不可覆盖插件托管的 profile ${profile.id}`, 403)
+        throw new HelmError('profile_managed_by_plugin', `cannot override plugin hosting profile ${profile.id}`, 403)
       }
-      // 保存前拒绝绑定禁用模型（409 model_disabled），避免保存成功后所有
-      // 绑定会话在提交时才 409；仅 HTTP 边界，插件可信自举直写 ProfileService 不经此。
+      // save before reject bind set disable model (409 model_disabled), avoid save after success all
+      // bind set conversation in commit when only then 409; only HTTP boundary, plugin can message self raise direct write ProfileService do not via this.
       assertProfileModelEnabled(kernel, profile)
       const saved = await kernel.profiles.save(profile)
       await kernel.alignProfileConversations?.(saved.id)
@@ -55,54 +55,54 @@ export async function handleProfilesDomain(
   if (third === undefined) {
     if (method === 'GET') {
       const found = await kernel.profiles.get(profileId)
-      if (found === undefined) throw new HelmError('not_found', `profile 不存在: ${profileId}`, 404)
+      if (found === undefined) throw new HelmError('not_found', `profile missing: ${profileId}`, 404)
       return jsonOk(redactor, await enrichProfile(found))
     }
     if (method === 'PUT') {
       const body = await readJsonBody(ctx.request)
       const profile = parseProfileBody(body, { requireId: false })
       if (profile.id !== undefined && profile.id !== profileId) {
-        throw new ValidationError('body.id（若提供）需与路径参数一致')
+        throw new ValidationError('body.id(if provide) must and path parameter consistent')
       }
-      // 托管元数据不可篡改：既有 managedByPlugin 的 Profile，PUT 不得移除或
-      // 改写该字段（可信插件自举走 ProfileService 直写不经 HTTP）。缺失字段
-      // 视为移除（PUT 整体替换契约），显式拒绝而非静默接管。
+      // hosting metadata cannot tamper: since has managedByPlugin  Profile,PUT must not remove or
+      // change write the field (can message plugin self raise away ProfileService direct write do not via HTTP). missing field
+      // treated as remove (PUT whole replace contract), explicit reject while non- static default take over.
       const existing = await kernel.profiles.get(profileId)
       if (existing === undefined) {
-        throw new HelmError('not_found', `profile 不存在: ${profileId}`, 404)
+        throw new HelmError('not_found', `profile missing: ${profileId}`, 404)
       }
       if (profile.managedByPlugin !== existing.managedByPlugin) {
         throw new HelmError(
           'profile_managed_by_plugin',
-          `profile ${profileId} 的托管元数据只能由插件声明，不可经 HTTP 设置、修改或移除`,
+          `profile ${profileId} hosting metadata only can by plugin declaration, cannot via HTTP settings, modify or remove`,
           403,
           { profileId, managedByPlugin: existing.managedByPlugin },
         )
       }
-      // 与 POST 同规：绑定禁用模型在落盘前拒绝（PUT 整体替换，缺失 model = 清除，不触发预检）。
+      // and POST same rule: bind set disable model in before reject (PUT whole replace, missing model = clear, does not trigger preflight).
       assertProfileModelEnabled(kernel, profile)
       const saved = await kernel.profiles.save({ ...profile, id: profileId })
       await kernel.alignProfileConversations?.(saved.id)
       return jsonOk(redactor, await enrichProfile(saved))
     }
     if (method === 'DELETE') {
-      // 仍被任何会话绑定的 profile 拒绝删除：否则下一轮 before_turn 找
-      // 不到文件，会话将带病运行。assistant 默认服务同理受锁保护（403）。
-      // 此处为快速路径；服务层 delete 内部落盘前兑底复核（同一检查），
-      // 双向复验闭环：创建/PATCH 绑定侧亦验 profile 存在
-      // （conversation-service resolveProfileForCreate/updateConfiguration），
-      // 残余窗口仅为复核 await 到 rm 之间的微任务级交错，可接受。
+      // still by any conversation bind set profile reject delete: otherwise under one round before_turn find
+      // fewer than file, conversation carries illness run.assistant by default service same subject to lock protect (403).
+      // this where is fast path; service layer delete internal before honor bottom re-check (the same check),
+      // double to re- verify closed ring: create/PATCH bind set side also verify profile store in
+      // (conversation-service resolveProfileForCreate/updateConfiguration),
+      // leftover remaining window only is re-check await to rm between micro task level hand over wrong, can accept.
       const inUse = (await kernel.listConversations()).some((c) => c.profileId === profileId)
       if (inUse) {
-        throw new HelmError('profile_in_use', `profile ${profileId} 仍被会话绑定，先解绑再删除`, 409)
+        throw new HelmError('profile_in_use', `profile ${profileId} still by conversation bind set, first solve bind again delete`, 409)
       }
-      // 插件托管 Profile（managedByPlugin 非空）拒绝删除：防止绕过 UI 直接
-      // 调 HTTP 删除插件自举资产；内核默认 profile 保护由 ProfileService 承担。
+      // plugin hosting Profile(managedByPlugin non-empty) reject delete: guard against bypass UI directly
+      // tune HTTP delete plugin self raise asset; kernel by default profile protect by ProfileService bear bear.
       const target = await kernel.profiles.get(profileId)
       if (target?.managedByPlugin !== undefined) {
         throw new HelmError(
           'profile_managed_by_plugin',
-          `profile ${profileId} 由插件 ${target.managedByPlugin} 托管，不可删除`,
+          `profile ${profileId} by plugin ${target.managedByPlugin} hosting, cannot delete`,
           403,
           { profileId, managedByPlugin: target.managedByPlugin },
         )
@@ -115,10 +115,10 @@ export async function handleProfilesDomain(
     }
     return methodNotAllowed(redactor, method)
   }
-  return errorResponse(redactor, 404, 'not_found', '路由不存在')
+  return errorResponse(redactor, 404, 'not_found', 'routing missing')
 }
 
-/** profile.model 禁用预检：解析出 provider/model 后调用可选端口（409 model_disabled）。 */
+/** profile.model disable preflight: parse out provider/model after invoke optional port (409 model_disabled). */
 function assertProfileModelEnabled(kernel: KernelRuntimeLike, profile: Profile): void {
   if (profile.model === undefined || kernel.assertModelEnabled === undefined) return
   const slash = profile.model.indexOf('/')

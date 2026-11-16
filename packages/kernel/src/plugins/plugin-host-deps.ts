@@ -1,5 +1,5 @@
 /**
- * 插件依赖图约束、依赖者收集与拓扑排序。
+ * plugin dependency graph constraint, dependency collect and topology sort.
  */
 import { HelmError } from '@helm/protocol';
 import {
@@ -8,7 +8,7 @@ import {
 } from './lifecycle-helpers.js';
 import type { PluginState } from './types.js';
 
-/** 注册边界依赖环路校验：含经已注册插件间接回到本插件的环。 */
+/** register boundary dependency ring route validate: contains via registered plugin indirectly back to this plugin ring. */
 export function assertNoDependencyCycle(
   plugins: ReadonlyMap<string, PluginState>,
   pluginId: string,
@@ -22,7 +22,7 @@ export function assertNoDependencyCycle(
   if (cycle !== undefined) {
     throw new HelmError(
       'plugin_dependency_cycle',
-      `插件 ${pluginId} 的依赖声明成环：${cycle.join(' -> ')}，拒绝注册`,
+      `plugin ${pluginId} dependency declaration into ring:${cycle.join(' -> ')}, reject register`,
       409,
       { pluginId, cycle },
     );
@@ -30,8 +30,8 @@ export function assertNoDependencyCycle(
 }
 
 /**
- * 依赖满足性校验（enable / 注册即启用的提交门）：逐项依赖必须已注册且
- * 已启用并处于稳定态（defining / deactivating 过渡态均视为不满足）。
+ * dependency satisfy validate (enable / register i.e. enable commit gate): one by one items dependency must registered and
+ * enabled and where at stable state (defining / deactivating transition state all treated as do not satisfy).
  */
 export function assertDependenciesSatisfied(
   plugins: ReadonlyMap<string, PluginState>,
@@ -43,7 +43,7 @@ export function assertDependenciesSatisfied(
     if (depState === undefined) {
       throw new HelmError(
         'plugin_dependency_missing',
-        `插件 ${pluginId} 依赖的插件 ${dep} 未注册（请先安装/注册并启用它）`,
+        `plugin ${pluginId} dependency plugin ${dep} not registered (please first install/register and enable it)`,
         409,
         { pluginId, dependency: dep },
       );
@@ -51,7 +51,7 @@ export function assertDependenciesSatisfied(
     if (!depState.enabled || depState.phase !== 'idle') {
       throw new HelmError(
         'plugin_dependency_not_enabled',
-        `插件 ${pluginId} 依赖的插件 ${dep} 未启用（依赖必须已注册且已启用，仅注册不满足）`,
+        `plugin ${pluginId} dependency plugin ${dep} not enabled (dependency must registered and enabled, only register do not satisfy)`,
         409,
         { pluginId, dependency: dep, dependencyEnabled: depState.enabled, dependencyPhase: depState.phase },
       );
@@ -60,7 +60,7 @@ export function assertDependenciesSatisfied(
 }
 
 /**
- * 依赖本插件且仍占用它的插件：已启用或正处于 defining 窗口（按注册序BFS）。
+ * dependency this plugin and still occupy it plugin: enabled or correct where at defining window (by register orderBFS).
  */
 export function collectDependents(
   plugins: ReadonlyMap<string, PluginState>,
@@ -82,7 +82,7 @@ export function collectDependents(
   return out;
 }
 
-/** 注销前依赖者硬保护：存在占用依赖者时拒绝（无 force 逃生门）。 */
+/** deregister before dependency hard protect: store in occupy dependency when reject (without force escape generate gate). */
 export function assertNoEnabledDependents(
   plugins: ReadonlyMap<string, PluginState>,
   pluginId: string,
@@ -91,21 +91,21 @@ export function assertNoEnabledDependents(
   if (dependents.length === 0) return;
   throw new HelmError(
     'plugin_in_use',
-    `插件 ${pluginId} 被 ${dependents.length} 个插件依赖（${dependents.map((s) => s.definition.id).join(', ')}），拒绝注销；请先停用或移除依赖它的插件`,
+    `plugin ${pluginId} by ${dependents.length} plugin dependency (${dependents.map((s) => s.definition.id).join(', ')}), reject deregister; please first deactivate or remove dependency it plugin`,
     409,
     {
       pluginId,
       usages: dependents.map((s) => ({
         kind: 'plugin_dependency',
         id: s.definition.id,
-        label: `插件 ${s.definition.id} 依赖 ${pluginId}（${s.enabled ? '当前已启用' : '正在启用'}）`,
+        label: `plugin ${s.definition.id} dependency ${pluginId}(${s.enabled ? 'when before enabled' : 'is now enable'})`,
       })),
     },
   );
 }
 
 /**
- * force 停用后的依赖者显式标记：不自动停用依赖者，而是写入结构化诊断并广播变更。
+ * force deactivate after dependency explicit mark record: do not automatically deactivate dependency, but rather write structure diagnose and broadcast change.
  */
 export function markDependentsBroken(
   plugins: ReadonlyMap<string, PluginState>,
@@ -116,7 +116,7 @@ export function markDependentsBroken(
     if (!dependent.enabled) continue;
     dependent.lastError = {
       code: 'plugin_dependency_not_enabled',
-      message: `其依赖插件 ${pluginId} 已被强制停用，依赖不再满足；请停用本插件后先启用 ${pluginId} 再重新启用`,
+      message: `its dependency plugin ${pluginId} already by force deactivate, dependency no longer satisfy; please deactivate this plugin after first enable ${pluginId} again re- enable`,
       stage: 'enable',
       details: { pluginId: dependent.definition.id, dependency: pluginId, forced: true },
     };
@@ -124,7 +124,7 @@ export function markDependentsBroken(
   }
 }
 
-/** 已启用插件的依赖拓扑序（被依赖者在前；同层保持注册序）。 */
+/** enabled plugin dependency topology order (by dependency in before; same layer keep register order). */
 export function enabledStatesInDependencyOrder(
   plugins: ReadonlyMap<string, PluginState>,
 ): PluginState[] {

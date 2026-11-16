@@ -1,8 +1,8 @@
 /**
- * helm nodes forward 命令契约测试：真实 HTTP server 模拟 Hub
- * （cli-nodes-env.test.ts 同款模式），验证 POST/DELETE 路径、请求体、
- * 参数校验（host:port 解析/IPv6 括号/裸端口）、错误退出码与 --json。
- * 端到端（真实 Hub + daemon + 字节转发）见 kernel 集成测试。
+ * helm nodes forward command contract test: real HTTP server simulated Hub
+ * (cli-nodes-env.test.ts same style pattern), verify POST/DELETE path, request body,
+ * parameter validate (host:port parse/IPv6 parentheses/bare port), error exit code and --json.
+ * end-to-end (real Hub + daemon + byte forwarding) see kernel integration test.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -14,7 +14,7 @@ import {
   type MockRouteHandler,
 } from './helpers/cli-harness.js'
 
-/** 完整转发会话形状（mock 统一用）。 */
+/** complete forwarding conversation shape (mock unify use). */
 const SESSION = {
   forwardId: 'fwd-11111111-2222-3333-4444-555555555555',
   nodeId: 'node-a',
@@ -26,7 +26,7 @@ const SESSION = {
   totalConnections: 0,
 } as const
 
-/** 默认转发事件流（started + stopped 正常终态，可被显式路由覆盖）。 */
+/** by default forwarding event stream (started + stopped normal terminal state, can by explicit routing override). */
 const defaultForwardEventsRoute: Record<string, MockRouteHandler> = {
   [`GET /api/nodes/forward/${SESSION.forwardId}/events`]: () => ({
     headers: { 'content-type': 'application/x-ndjson; charset=utf-8' },
@@ -39,7 +39,7 @@ const defaultForwardEventsRoute: Record<string, MockRouteHandler> = {
   }),
 }
 
-test('nodes forward：POST 创建转发（请求体字段严格映射）后事件流意外断流非零退出', { timeout: 60_000 }, async (t) => {
+test('nodes forward:POST create forwarding (request body field strictly mapping) after event stream unexpected assert stream non-zero exit', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-forward-')
   const hub = await startMockHub(
     {
@@ -47,7 +47,7 @@ test('nodes forward：POST 创建转发（请求体字段严格映射）后事�
         assert.deepEqual(body, { listenHost: '127.0.0.1', listenPort: 18080, targetHost: 'db.internal', targetPort: 5432 })
         return { status: 201, body: { ...SESSION } }
       },
-      // events 覆写：仅 started 帧即断（无 stopped 终态——意外断流）。
+      // events override: only started frame i.e. assert (without stopped terminal state - - unexpected assert stream).
       [`GET /api/nodes/forward/${SESSION.forwardId}/events`]: () => ({
         status: 200,
         headers: { 'content-type': 'application/x-ndjson; charset=utf-8' },
@@ -61,15 +61,15 @@ test('nodes forward：POST 创建转发（请求体字段严格映射）后事�
     ['nodes', 'forward', 'node-a', '127.0.0.1:18080', 'db.internal:5432'],
     makeCliEnv(hub.url, dir),
   )
-  assert.equal(result.code, 1, '意外断流（无 stopped 终态）应非零退出')
-  assert.match(result.err, /转发事件流已结束/)
+  assert.equal(result.code, 1, 'unexpected assert stream (without stopped terminal state) should non-zero exit')
+  assert.match(result.err, /forwarding event stream already end/)
   const post = hub.hits.find((h) => h.method === 'POST')
-  assert.ok(post !== undefined, '应发起创建转发 POST')
+  assert.ok(post !== undefined, 'should start create forwarding POST')
   const del = hub.hits.find((h) => h.method === 'DELETE')
-  assert.ok(del !== undefined, '断流后应显式 DELETE 转发')
+  assert.ok(del !== undefined, 'assert stream after should explicit DELETE forwarding')
 })
 
-test('nodes forward：裸目标端口默认 127.0.0.1；IPv6 监听括号解析', { timeout: 60_000 }, async (t) => {
+test('nodes forward: bare target port by default 127.0.0.1;IPv6 listen parentheses parse', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-forward-')
   const hub = await startMockHub(
     {
@@ -83,40 +83,40 @@ test('nodes forward：裸目标端口默认 127.0.0.1；IPv6 监听括号解析'
     { autoRegisterCleanup: t },
   )
   const result = await runCliCaptured(['nodes', 'forward', 'node-b', '[::1]:19090', '8080'], makeCliEnv(hub.url, dir))
-  assert.equal(result.code, 0, 'IPv6 监听 + 默认 stopped 终态正常退出 0')
+  assert.equal(result.code, 0, 'IPv6 listen + by default stopped terminal state normal exit 0')
   const post = hub.hits.find((h) => h.method === 'POST')
   assert.ok(post !== undefined)
 })
 
-test('nodes forward：参数校验（缺位置参数/坏端口/裸监听端口拒绝）', { timeout: 60_000 }, async (t) => {
+test('nodes forward: parameter validate (missing location parameter/broken port/bare listen port reject)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-forward-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
   for (const [argv, pattern] of [
-    [['nodes', 'forward'], /缺少节点目标|位置参数/],
-    // 无 nodeId 且无 --current（首参即 listen 地址）→ 缺节点目标。
-    [['nodes', 'forward', '127.0.0.1:18080', '8080'], /缺少节点目标|--current/],
-    [['nodes', 'forward', 'node-a'], /缺少.*listenHost/],
-    [['nodes', 'forward', 'node-a', '127.0.0.1:18080'], /缺少.*targetHost/],
-    [['nodes', 'forward', 'node-a', '18080', '8080'], /host:port|监听地址/],
-    [['nodes', 'forward', 'node-a', '127.0.0.1:0', '8080'], /端口需为 1..65535/],
-    [['nodes', 'forward', 'node-a', '127.0.0.1:99999', '8080'], /端口需为 1..65535/],
-    [['nodes', 'forward', 'node-a', '127.0.0.1:18080', 'abc'], /端口数字|host:port/],
+    [['nodes', 'forward'], /missing node target|location parameter/],
+    // without nodeId and without --current(first reference i.e. listen address)→ missing node target.
+    [['nodes', 'forward', '127.0.0.1:18080', '8080'], /missing node target|--current/],
+    [['nodes', 'forward', 'node-a'], /missing.*listenHost/],
+    [['nodes', 'forward', 'node-a', '127.0.0.1:18080'], /missing.*targetHost/],
+    [['nodes', 'forward', 'node-a', '18080', '8080'], /host:port|listen address/],
+    [['nodes', 'forward', 'node-a', '127.0.0.1:0', '8080'], /port must be 1..65535/],
+    [['nodes', 'forward', 'node-a', '127.0.0.1:99999', '8080'], /port must be 1..65535/],
+    [['nodes', 'forward', 'node-a', '127.0.0.1:18080', 'abc'], /port number|host:port/],
   ] as [string[], RegExp][]) {
     const result = await runCliCaptured(argv, env)
-    assert.equal(result.code, 1, `${argv.join(' ')} 应非零退出`)
-    assert.match(result.err, pattern, `${argv.join(' ')} 错误信息`)
+    assert.equal(result.code, 1, `${argv.join(' ')} should non-zero exit`)
+    assert.match(result.err, pattern, `${argv.join(' ')} error information`)
   }
-  assert.equal(hub.hits.length, 0, '全部在 CLI 侧拒绝，不达 Hub')
+  assert.equal(hub.hits.length, 0, 'all in CLI side reject, do not reach Hub')
 })
 
-test('nodes forward：Hub 校验失败（400 validation_error）如实退出非零', { timeout: 60_000 }, async (t) => {
+test('nodes forward:Hub validation failed (400 validation_error) such as exit non-zero', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-forward-')
   const hub = await startMockHub(
     {
       'POST /api/nodes/node-c/forward': () => ({
         status: 400,
-        body: { error: { code: 'validation_error', message: 'listenPort 需为 1..65535 的安全整数' } },
+        body: { error: { code: 'validation_error', message: 'listenPort must be 1..65535 security integer' } },
       }),
     },
     { autoRegisterCleanup: t },
@@ -126,30 +126,30 @@ test('nodes forward：Hub 校验失败（400 validation_error）如实退出非�
   assert.match(result.err, /validation_error|listenPort/)
 })
 
-test('nodes forward：收到 stopped 终态退出 0（人类与 --json 同权识别终态）', { timeout: 60_000 }, async (t) => {
+test('nodes forward: receives stopped terminal state exit 0(person class and --json same right identify terminal state)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-forward-')
   for (const json of [false, true]) {
     const hub = await startMockHub({
       ...defaultForwardEventsRoute,
       'POST /api/nodes/node-a/forward': () => ({ status: 201, body: { ...SESSION } }),
-      // DELETE 返回 404（Hub 已停止转发，幂等）：CLI 必须容忍。
+      // DELETE return 404(Hub already stop forwarding, idempotent):CLI must contain tolerate.
       [`DELETE /api/nodes/forward/${SESSION.forwardId}`]: () => ({
         status: 404,
-        body: { error: { code: 'not_found', message: '转发不存在或已停止' } },
+        body: { error: { code: 'not_found', message: 'forwarding missing or already stop' } },
       }),
     })
     try {
       const argv = ['nodes', 'forward', 'node-a', '127.0.0.1:18080', 'db.internal:5432', ...(json ? ['--json'] : [])]
       const result = await runCliCaptured(argv, makeCliEnv(hub.url, dir))
-      assert.equal(result.code, 0, `stopped 终态应退出 0（json=${json}）`)
-      if (json) assert.match(result.out, /"type":"stopped"/, '--json 仍输出 stopped 帧')
+      assert.equal(result.code, 0, `stopped terminal state should exit 0(json=${json})`)
+      if (json) assert.match(result.out, /"type":"stopped"/, '--json still output stopped frame')
     } finally {
       await hub.close()
     }
   }
 })
 
-test('nodes forward：停止清理失败（非 404）显式非零，不伪报成功', { timeout: 60_000 }, async (t) => {
+test('nodes forward: stop clean up failed (non- 404) explicit non-zero, do not fake report succeeded', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-forward-')
   const hub = await startMockHub(
     {
@@ -157,7 +157,7 @@ test('nodes forward：停止清理失败（非 404）显式非零，不伪报成
       'POST /api/nodes/node-a/forward': () => ({ status: 201, body: { ...SESSION } }),
       [`DELETE /api/nodes/forward/${SESSION.forwardId}`]: () => ({
         status: 502,
-        body: { error: { code: 'node_tunnel_connect_failed', message: '节点失联' } },
+        body: { error: { code: 'node_tunnel_connect_failed', message: 'node lose join' } },
       }),
     },
     { autoRegisterCleanup: t },
@@ -166,11 +166,11 @@ test('nodes forward：停止清理失败（非 404）显式非零，不伪报成
     ['nodes', 'forward', 'node-a', '127.0.0.1:18080', 'db.internal:5432'],
     makeCliEnv(hub.url, dir),
   )
-  assert.equal(result.code, 1, '清理失败须非零退出')
-  assert.match(result.err, /forward_cleanup_failed|停止清理失败/, '显式诊断清理失败')
+  assert.equal(result.code, 1, 'clean up failed must non-zero exit')
+  assert.match(result.err, /forward_cleanup_failed|stop clean up failed/, 'explicit diagnose clean up failed')
 })
 
-test('nodes forward：--current 从 HELM_NODE_ID 解析节点；与显式 nodeId 互斥', { timeout: 60_000 }, async (t) => {
+test('nodes forward:--current from HELM_NODE_ID parse node; and explicit nodeId mutual exclusion', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-forward-')
   const hub = await startMockHub(
     {
@@ -184,19 +184,19 @@ test('nodes forward：--current 从 HELM_NODE_ID 解析节点；与显式 nodeId
   const env = { ...base, HELM_NODE_ID: 'from-env' }
   const result = await runCliCaptured(['nodes', 'forward', '--current', '127.0.0.1:18080', 'db.internal:5432'], env)
   const post = hub.hits.find((h) => h.method === 'POST')
-  assert.ok(post !== undefined && post.path.includes('from-env'), '--current 解析 HELM_NODE_ID')
+  assert.ok(post !== undefined && post.path.includes('from-env'), '--current parse HELM_NODE_ID')
   void result
-  // 互斥：显式 nodeId 与 --current。
+  // mutual exclusion: explicit nodeId and --current.
   const both = await runCliCaptured(['nodes', 'forward', 'node-a', '--current', '127.0.0.1:18080', '5432'], env)
   assert.equal(both.code, 1)
-  assert.match(both.err, /互斥/)
-  // 缺 HELM_NODE_ID。
+  assert.match(both.err, /mutual exclusion/)
+  // missing HELM_NODE_ID.
   const missing = await runCliCaptured(['nodes', 'forward', '--current', '127.0.0.1:18080', '5432'], base)
   assert.equal(missing.code, 1)
   assert.match(missing.err, /HELM_NODE_ID/)
 })
 
-test('nodes forwards / forward-inspect / forward-stop：同权映射与 --json', { timeout: 60_000 }, async (t) => {
+test('nodes forwards / forward-inspect / forward-stop: same right mapping and --json', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-forward-')
   const hub = await startMockHub(
     {
@@ -208,7 +208,7 @@ test('nodes forwards / forward-inspect / forward-stop：同权映射与 --json',
   )
   const env = makeCliEnv(hub.url, dir)
 
-  // forwards 清单。
+  // forwards manifest.
   const listJson = await runCliCaptured(['nodes', 'forwards', '--json'], env)
   assert.equal(listJson.code, 0)
   assert.match(listJson.out, /fwd-11111111/)
@@ -216,7 +216,7 @@ test('nodes forwards / forward-inspect / forward-stop：同权映射与 --json',
   assert.equal(listHuman.code, 0)
   assert.match(listHuman.out, /forwardId/)
 
-  // forward-inspect 详情。
+  // forward-inspect detail situation.
   const inspectJson = await runCliCaptured(['nodes', 'forward-inspect', SESSION.forwardId, '--json'], env)
   assert.equal(inspectJson.code, 0)
   assert.match(inspectJson.out, /"forwardId"/)
@@ -225,13 +225,13 @@ test('nodes forwards / forward-inspect / forward-stop：同权映射与 --json',
   assert.match(inspectHuman.err, /^$/)
   assert.match(inspectHuman.out, /db\.internal:5432/)
 
-  // forward-stop。
+  // forward-stop.
   const stop = await runCliCaptured(['nodes', 'forward-stop', SESSION.forwardId], env)
   assert.equal(stop.code, 0)
   const del = hub.hits.find((h) => h.method === 'DELETE')
   assert.ok(del !== undefined)
 
-  // 非法 forwardId 形式在 CLI 侧拒绝。
+  // illegal forwardId form in CLI side reject.
   const bad = await runCliCaptured(['nodes', 'forward-stop', 'not-a-uuid'], env)
   assert.equal(bad.code, 1)
   assert.match(bad.err, /fwd-<uuid>/)

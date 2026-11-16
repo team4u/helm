@@ -1,13 +1,16 @@
 /**
- * 宿主能力端口（host port）：SDK 与宿主 Web 之间的唯一注入面。
+ * Host capability port: the single injection surface between the SDK and the host web app.
  *
- * SDK 包不反向依赖任何宿主实现（store / API / 导航 / markdown 渲染 / 插件槽
- * 渲染）；全部宿主能力以类型清晰的端口对象经 <PluginClientHostContext.Provider>
- * 注入。宿主（@helm/web）在 HelmStoreProvider 内用真实 store 实现本端口；
- * 插件与宿主共享同一 React / context 实例（编译器把 '@helm/plugin-client'
- * 虚拟化为 __helm_shared_plugin_client 全局命名空间）。
+ * The SDK package never depends on any host implementation (store / API /
+ * navigation / markdown rendering / plugin slot rendering); all host
+ * capabilities are injected as a typed port object via
+ * <PluginClientHostContext.Provider>. The host (@helm/web) implements this
+ * port with the real store inside HelmStoreProvider; plugins and the host
+ * share the same React / context instance (the compiler virtualizes
+ * '@helm/plugin-client' into the __helm_shared_plugin_client global
+ * namespace).
  *
- * 本文件只含类型与 context（无组件导出，Fast Refresh 友好）。
+ * Types and context only in this file (no component exports, Fast Refresh friendly).
  */
 import { createContext, useContext } from 'react'
 import type { ComponentType, ReactNode } from 'react'
@@ -17,20 +20,22 @@ import type {
   ConversationDetail,
   ConversationLive,
   ConversationSummary,
+  HelmLocale,
+  LocaleTranslator,
   PluginSlotContributionSpec,
   PluginSummary,
   ScreenSpec,
   WhenBusy,
 } from '@helm/protocol/browser'
 
-/** 会话级插件文档订阅元组（宿主 ref-count 共享专用 SSE 流的 key）。 */
+/** Conversation-scoped plugin doc subscription tuple (key for the host ref-counted shared SSE stream). */
 export interface PluginSessionDocKey {
   pluginId: string
   docName: string
   conversationId: number
 }
 
-/** 会话级文档订阅快照（与宿主 session-docs 缓存态一致；未订阅返回空态）。 */
+/** Session doc subscription snapshot (consistent with the host session-docs cache; empty state when unsubscribed). */
 export interface PluginSessionDocState {
   value?: unknown
   hasValue: boolean
@@ -39,62 +44,78 @@ export interface PluginSessionDocState {
   connected: boolean
 }
 
-/** 子插槽贡献项（宿主匹配 + 排序后回填；spec 为协议类型，不含宿主私有类型）。 */
+/** Sub-slot contribution item (matched + ordered by the host; spec is a protocol type, no host-private types). */
 export interface PluginSlotPortItem {
   pluginId: string
   contributionId: string
   spec: PluginSlotContributionSpec
 }
 
-/** SDK MarkdownViewProps（宿主 MarkdownView 实现必须满足的 props 契约）。 */
+/** SDK MarkdownViewProps (the props contract the host MarkdownView implementation must satisfy). */
 export interface MarkdownViewProps {
   text: string
   conversationId?: number
-  /** true = 流式正文：已完成前缀块冻结复用解析，仅末尾可变块重解析。 */
+  /** true = streaming body: completed prefix blocks freeze their parsed form for reuse, only the trailing mutable block is re-parsed. */
   streaming?: boolean
 }
 
-/** SDK CodeBlockViewProps（宿主语法高亮代码块 props 契约）。 */
+/** SDK CodeBlockViewProps (host syntax-highlighted code block props contract). */
 export interface CodeBlockViewProps {
   code: string
   language: string
 }
 
 /**
- * 宿主注入的完整能力端口。数据切片为响应式快照（引用变化驱动重渲染，
- * 与宿主 store 同一节奏）；方法均为宿主真实实现，无任何 mock。
+ * The complete capability port injected by the host. Data slices are reactive
+ * snapshots (reference changes drive re-renders, at the same cadence as the
+ * host store); every method is a real host implementation, no mocks.
  */
 export interface PluginClientHostPort {
-  /** 已通过鉴权（决定公开文档是否可发起首次 GET）。 */
+  /** Passed authentication (decides whether public docs may issue the first GET). */
   authenticated: boolean
   theme: 'light' | 'dark'
+  /**
+   * Current host UI locale (normalized via HELM_LOCALES / normalizeLocaleTag).
+   * Optional so hosts can adopt it additively: when absent, the plugin client
+   * context factory falls back to DEFAULT_HELM_LOCALE ('en') — a locale always
+   * has a well-defined default, so no silent degradation of data fidelity is
+   * involved.
+   */
+  locale?: HelmLocale
+  /**
+   * Minimal translator for the current locale (resolves LocalizedText display
+   * copy). Optional for the same additive reason: when absent, the context
+   * factory derives one from locale via createLocaleTranslator. When both are
+   * provided, keep them bound to the same locale.
+   */
+  translate?: LocaleTranslator
 
-  // ---- 会话与插件实时快照（SSE 驱动） ----
+  // ---- Conversations & plugin realtime snapshots (SSE driven) ----
   conversations: ConversationSummary[]
   conversationDetails: Record<number, ConversationDetail>
   conversationLives: Record<number, ConversationLive>
   pendingAsks: AskSpec[]
   loadErrors: Record<string, string>
   plugins: PluginSummary[]
-  /** 已启用插件注册的 Screen 贡献（停用插件贡献即时移除）。 */
+  /** Screen contributions registered by enabled plugins (disabled plugin contributions are removed immediately). */
   screens: Array<{ pluginId: string; spec: ScreenSpec }>
 
-  // ---- 插件文档 ----
-  /** key: `${pluginId}/${docName}`。 */
+  // ---- Plugin docs ----
+  /** key: `${pluginId}/${docName}`. */
   pluginDocs: Record<string, unknown>
   ensurePluginDoc(pluginId: string, docName: string): Promise<unknown>
   getPluginSessionDoc(pluginId: string, docName: string, conversationId: number): Promise<unknown>
   subscribeSessionDoc(key: PluginSessionDocKey, listener: () => void): () => void
   getSessionDocState(key: PluginSessionDocKey): PluginSessionDocState
 
-  // ---- 动作与输入 ----
+  // ---- Actions & input ----
   invokePluginAction(pluginId: string, actionId: string, input: unknown, conversationId?: number): Promise<unknown>
   submitConversationInput(
     conversationId: number,
     input: { text: string; origin: 'human' | 'agent' | 'trigger'; whenBusy?: WhenBusy },
   ): Promise<void>
 
-  // ---- 导航与通知 ----
+  // ---- Navigation & notifications ----
   openTarget(target: string, options?: { split?: boolean }): void
   openConversationDrawer(conversationId: number): void
   openArtifactPreview(artifactId: string, conversationId?: number): void
@@ -102,14 +123,14 @@ export interface PluginClientHostPort {
   setWorkbenchTab(tab: string): void
   notify(message: string, tone: 'info' | 'warning' | 'error', conversationId?: number): void
 
-  // ---- 详情加载 ----
+  // ---- Detail loading ----
   loadConversationDetail(conversationId: number, force?: boolean): Promise<ConversationDetail | undefined> | void
 
-  // ---- 子插槽（匹配/排序由宿主执行；环保护与深度限制由 SDK 组件负责） ----
+  // ---- Sub-slots (matching/ordering done by the host; cycle guard and depth limit by the SDK component) ----
   slots: {
-    /** 命中当前会话 scope 的贡献项（priority 降序、order 升序稳定排序）。 */
+    /** Contribution items matching the current conversation scope (priority descending, order ascending, stable sort). */
     collectItems(qualifiedName: string, conversationId: number | undefined): ReadonlyArray<PluginSlotPortItem>
-    /** 渲染单个贡献项（宿主 PluginUiView：子上下文 pluginId 是贡献者插件）。 */
+    /** Render a single contribution item (host PluginUiView: the sub context's pluginId is the contributing plugin). */
     renderItem(
       item: PluginSlotPortItem,
       options: {
@@ -121,7 +142,7 @@ export interface PluginClientHostPort {
     ): ReactNode
   }
 
-  // ---- Markdown 渲染（宿主标准实现：产物链接、代码块扩展、流式分块） ----
+  // ---- Markdown rendering (host standard implementation: artifact links, code block extensions, streaming chunks) ----
   markdown: {
     view: ComponentType<MarkdownViewProps>
     codeBlock: ComponentType<CodeBlockViewProps>
@@ -130,11 +151,11 @@ export interface PluginClientHostPort {
 
 export const PluginClientHostContext = createContext<PluginClientHostPort | null>(null)
 
-/** 读取宿主端口；不在宿主 Provider 内时显式报错（绝不静默返回降级实现）。 */
+/** Read the host port; explicitly errors outside the host Provider (never silently returns a degraded implementation). */
 export function usePluginClientHost(): PluginClientHostPort {
   const port = useContext(PluginClientHostContext)
   if (port === null) {
-    throw new Error('usePluginClientHost 必须在 <PluginClientHostContext.Provider> 内调用（宿主 HelmStoreProvider 注入）')
+    throw new Error('usePluginClientHost must be called inside <PluginClientHostContext.Provider> (injected by the host HelmStoreProvider)')
   }
   return port
 }

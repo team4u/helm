@@ -63,7 +63,7 @@ async function makeResumeHarness() {
   const conversations = new Map<number, ConversationSummary>()
   conversations.set(200, makeConversationSummary(200, { profileId: 'watchdog', title: '巡检看门狗' }))
   conversations.set(100, makeConversationSummary(100, { profileId: 'superagent', title: 'SuperAgent 中枢' }))
-  conversations.set(1, makeConversationSummary(1, { title: '个人助理' }))
+  conversations.set(1, makeConversationSummary(1, { title: 'Personal Assistant' }))
   conversations.set(55, makeConversationSummary(55, { title: '工作流宿主会话' }))
 
   const eventListeners = new Map<string, Array<(payload: unknown) => MaybePromise<void>>>()

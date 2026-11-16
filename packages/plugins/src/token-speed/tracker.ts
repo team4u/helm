@@ -174,30 +174,30 @@ export interface CompletionFact {
 }
 
 /**
- * 单会话速率状态机：链（用户回合，跨工具轮）为累积单位，段（一次模型请求，
- * (taskId, attempt) 唯一标识）为窗口 / 计时单位。全部时间由调用方注入。
+ * Single-conversation speed state machine: the chain (a user turn, across tool rounds) is the accumulation
+ * unit; the segment (one model request, uniquely identified by (taskId, attempt)) is the window/timing unit. All time is injected by the caller.
  */
 export class ConversationTokenSpeedTracker {
   private segmentSeq = 0
   private readonly segments: Segment[] = []
   private active: Segment | undefined
-  /** taskId -> 最新未消费段（open / closed）；完成事实按此精确关联。 */
+  /** taskId -> latest unconsumed segment (open / closed); completion facts associate exactly by this. */
   private readonly byTask = new Map<number, Segment>()
-  /** 已消费完成事实的 entry id（重复 entry 不重复计量）。 */
+  /** Entry ids of consumed completion facts (duplicate entries not counted twice). */
   private readonly seenEntryIds = new Set<string>()
-  /** 已消费的任务/尝试水位，拒绝完成后的迟到快照；SDK 任务 ID 单调递增。 */
+  /** Consumed task/attempt watermarks, rejecting late snapshots after completion; SDK task IDs increase monotonically. */
   private readonly completedAttempts = new Map<number, number>()
   private highestTaskId = 0
-  /** 已折叠成功段的累计事实，长回合不因记录上限丢失计数。 */
+  /** Accumulated facts of folded successful segments; long turns lose no counts to record caps. */
   private readonly retired = { tokens: 0, decodeMs: 0, rateTokens: 0, rateDecodeMs: 0, provider: false, estimate: false }
   private readonly window: SlidingWindow
   private readonly windowMs: number
   private readonly minSpanMs: number
-  /** 本回合最近一次有效实时速率；工具执行 / 轮间首字等待 / 短停顿期保留展示。 */
+  /** This turn's most recent valid live speed; kept displayed during tool execution / inter-round TTFT waits / short pauses. */
   private lastLiveTps: number | undefined
   private firstContentAt: number | undefined
   private ttftMs: number | undefined
-  /** 链内是否观测过无内容的 generation（干净起点 / 中途接入判定）。 */
+  /** Whether an empty generation was observed within the chain (clean-start / mid-way-join detection). */
   private sawEmptyGeneration = false
   private phase: 'decoding' | 'tools' = 'decoding'
 
@@ -207,16 +207,16 @@ export class ConversationTokenSpeedTracker {
     this.window = new SlidingWindow(options.windowMs, options.minSpanMs)
   }
 
-  /** 新落库 pi.assistant entry 的完成事实：按 taskId 精确关联段，并补算尾帧增量。 */
+  /** Completion facts of a newly persisted pi.assistant entry: associate the segment exactly by taskId and backfill the trailing delta. */
   noteCompletion(fact: CompletionFact, now?: number): void {
-    if (fact.taskId === undefined) return // 身份不明：不关联不猜测
+    if (fact.taskId === undefined) return // unclear identity: neither associate nor guess
     if (fact.entryId !== undefined) {
       if (this.seenEntryIds.has(fact.entryId)) return
       this.seenEntryIds.add(fact.entryId)
       if (this.seenEntryIds.size > MAX_SEEN_ENTRIES) this.seenEntryIds.clear()
     }
     const segment = this.byTask.get(fact.taskId)
-    if (segment === undefined) return // 从未观测该请求的流（中途启用/迟到）：不可关联
+    if (segment === undefined) return // never observed this request's stream (mid-way enable/late): cannot associate
     this.byTask.delete(fact.taskId)
     this.completedAttempts.set(fact.taskId, segment.attempt)
     if (this.completedAttempts.size > MAX_SEEN_ENTRIES) {
@@ -224,7 +224,7 @@ export class ConversationTokenSpeedTracker {
     }
     const failed = fact.stopReason === 'error' || fact.stopReason === 'aborted'
     if (failed) {
-      // 失败尝试：段计数与解码时间全部丢弃，usage 不误配到成功重试。
+      // Failed attempt: the segment's counts and decoding time are discarded; usage is never mis-attributed to the successful retry.
       segment.state = 'discarded'
       if (this.active === segment) {
         this.active = undefined
@@ -278,8 +278,8 @@ export class ConversationTokenSpeedTracker {
           segment.emptySeenAt !== undefined &&
           now >= segment.emptySeenAt
         ) {
-          // 极短 <100ms 零中间 partial 帧：不改 decodeMs / settle() 口径（不混入 TTFT），
-          // 仅按整段跨度（下限 minSpanMs）估算保守速率供随后的工具期展示。
+          // Ultra-short <100ms with zero intermediate partial frames: do not change decodeMs / settle()
+          // semantics (no TTFT mixing); only estimate a conservative speed from the whole-segment span
           const effectiveTokens =
             typeof fact.usageOutput === 'number' && fact.usageOutput > 0 ? fact.usageOutput : estDelta
           if (effectiveTokens > 0) {
@@ -301,7 +301,7 @@ export class ConversationTokenSpeedTracker {
     }
   }
 
-  /** 采纳一帧 conversation.live（generation 缺席 = 工具阶段 / 段间间隙）。 */
+  /** Adopt one conversation.live frame (generation absent = tool phase / inter-segment gap). */
   observeFrame(now: number, frame: { generation?: GenerationFrame; hasTools?: boolean }): void {
     const generation = frame.generation
     if (generation === undefined) {
@@ -309,8 +309,8 @@ export class ConversationTokenSpeedTracker {
       this.closeActive()
       return
     }
-    // 工具轮 taskId 单调递增；同任务的 attempt 也单调递增。定时器中迟到的
-    // 已完成/旧任务快照不能重新打开测量段，更不能污染当前请求的窗口。
+    // Tool-round taskIds increase monotonically; attempts within a task increase too. Late snapshots of
+    // completed/old tasks from timers must not reopen measurement segments, let alone pollute the current request's window.
     if (generation.taskId < this.highestTaskId) return
     if (generation.attempt <= (this.completedAttempts.get(generation.taskId) ?? 0)) return
     const heldRequest = this.byTask.get(generation.taskId)
@@ -329,12 +329,12 @@ export class ConversationTokenSpeedTracker {
     if (this.active === undefined) {
       const held = this.byTask.get(generation.taskId)
       if (held !== undefined && held.attempt === generation.attempt && held.state === 'closed') {
-        // 同请求身份在边界帧（如压缩等待间隙）后回归：重新打开续测。
+        // The same request identity returns after a boundary frame (e.g. a compaction wait gap): reopen and continue measuring.
         held.state = 'open'
         this.active = held
       } else {
-        // 中途接入判定：链首帧即带内容且从未见过空 generation——历史内容时间
-        // 不可归属，只建基线（不记窗口事件、不测 TTFT），绝不制造首帧尖峰。
+        // Mid-way-join detection: the chain's first frame already carries content and no empty generation was
+        // ever seen -- historical content time is unattributable; only establish a baseline (no window events, no TTFT), never fabricate a first-frame spike.
         const baselineOnly = chars > 0 && this.firstContentAt === undefined && !this.sawEmptyGeneration
         const segment: Segment = {
           id: (this.segmentSeq += 1),
@@ -356,7 +356,7 @@ export class ConversationTokenSpeedTracker {
           const seenOutput = generation.message?.usage?.output
           if (seenOutput !== undefined) segment.providerOutput = seenOutput
         }
-        // 实时窗口仅描述本次请求；前一请求与工具执行间隙不进入窗口分母。
+        // The live window describes only this request; the previous request and tool gaps never enter the window denominator.
         this.window.reset()
         this.pushSegment(segment)
         this.active = segment
@@ -365,7 +365,7 @@ export class ConversationTokenSpeedTracker {
 
     const segment = this.active!
     if (chars === 0) {
-      // 段内首次观测到无内容 generation：作为该段 TTFT / 极短请求起点锚。
+      // First observation of an empty generation within the segment: the anchor for this segment's TTFT / ultra-short-request start.
       segment.emptySeenAt ??= now
       this.sawEmptyGeneration = true
     }
@@ -377,7 +377,7 @@ export class ConversationTokenSpeedTracker {
       segment.providerOutput = provider
       segment.usedProvider = true
     } else if (deltaChars > 0) {
-      // 对累计字符量取整后再求差，避免每个小帧分别 ceil 导致持续高估。
+      // Floor the cumulative character count before differencing, avoiding per-tiny-frame ceil inflation.
       deltaTokens = estimateTokensOf(chars) - estimateTokensOf(segment.chars)
       segment.usedEstimate ||= deltaTokens > 0
     }
@@ -386,8 +386,8 @@ export class ConversationTokenSpeedTracker {
 
     if (this.firstContentAt === undefined) {
       this.firstContentAt = now
-      // TTFT 仅在起点可靠（本回合首个非废弃段先观测到空 generation，之后
-      // 同一观测流出现内容）时测量；中途接入或前序轮已开始时省略不伪造。
+      // TTFT is measured only when the start is reliable (this turn's first non-voided segment first observes
+      // an empty generation, then content appears in the same observation stream); omitted -- never fabricated -- for mid-way joins or rounds already started.
       if (
         !this.countedSegments().some((item) => item !== segment) &&
         segment.emptySeenAt !== undefined &&
@@ -406,7 +406,7 @@ export class ConversationTokenSpeedTracker {
     }
   }
 
-  /** 关闭活动段（边界帧 / 完成事实）：等待完成事实精确对账。 */
+  /** Close the active segment (boundary frame / completion fact): wait for the completion fact to reconcile exactly. */
   private closeActive(): void {
     const segment = this.active
     if (segment === undefined) return
@@ -414,7 +414,7 @@ export class ConversationTokenSpeedTracker {
     if (segment.state === 'open') segment.state = 'closed'
   }
 
-  /** 只折叠已完成段，保留累计量；尚待完成事实的段不可静默丢弃。 */
+  /** Fold only completed segments, keeping cumulative amounts; segments still awaiting completion facts must not be silently dropped. */
   private pushSegment(segment: Segment): void {
     this.segments.push(segment)
     this.byTask.set(segment.taskId, segment)
@@ -434,18 +434,18 @@ export class ConversationTokenSpeedTracker {
     }
   }
 
-  /** 段解码跨度（毫秒）；无增长观测为 0。 */
+  /** Segment decoding span (ms); 0 with no growth observations. */
   private spanOf(segment: Segment): number {
     if (segment.firstGrowthAt === undefined || segment.lastGrowthAt === undefined) return 0
     return Math.max(0, segment.lastGrowthAt - segment.firstGrowthAt)
   }
 
-  /** 计入总量的段（失败尝试全部剔除）。 */
+  /** Segments counted into totals (failed attempts all excluded). */
   private countedSegments(): Segment[] {
     return this.segments.filter((segment) => segment.state !== 'discarded')
   }
 
-  /** 速率可配对的段：计数与时间同源（非整条对账的基线段、跨度 > 0）。 */
+  /** Speed-pairable segments: counts and time share a source (non-reconciled baseline segments and spans > 0). */
   private rateableSegments(): Segment[] {
     return this.countedSegments().filter((segment) => !segment.rateExcluded && this.spanOf(segment) > 0)
   }
@@ -462,7 +462,7 @@ export class ConversationTokenSpeedTracker {
     return 'estimate'
   }
 
-  /** 组装当前实时状态；尚无可显示测量返回 undefined。 */
+  /** Assemble the current live state; returns undefined when no measurement is displayable yet. */
   liveStatus(now: number): TokenSpeedStatus | undefined {
     const counted = this.countedSegments()
     const tokens = counted.reduce((acc, segment) => acc + segment.tokens, this.retired.tokens)
@@ -490,8 +490,8 @@ export class ConversationTokenSpeedTracker {
     return status
   }
 
-  /** 回合结算：关闭活动段，产出终态；速率只由可配对段计算（不伪造分母），
- * 无可测累计返回 undefined。 */
+  /** Turn settlement: close the active segment and produce the terminal state; speed is computed only from
+ * pairable segments (no fabricated denominator); returns undefined with nothing measurable. */
   settle(now: number): TokenSpeedStatus | undefined {
     this.closeActive()
     const counted = this.countedSegments()
@@ -507,8 +507,8 @@ export class ConversationTokenSpeedTracker {
       windowMs: this.windowMs,
       updatedAt: now,
     }
-    // 终态速率 = 可配对段（计数与时间同源）的 tokens / decodeMs；整条对账的
-    // 基线段与单帧段（跨度 0）不进分子分母——无可配对测量就不产速率。
+    // Terminal speed = tokens / decodeMs of pairable segments (counts and time share a source);
+    // whole-entry-reconciled baseline segments and single-frame segments (span 0) enter neither numerator nor denominator -- no speed without pairable measurements.
     const rateable = this.rateableSegments()
     const rateTokens = rateable.reduce((acc, segment) => acc + segment.tokens, this.retired.rateTokens)
     const rateDecodeMs = rateable.reduce((acc, segment) => acc + this.spanOf(segment), this.retired.rateDecodeMs)
@@ -519,7 +519,7 @@ export class ConversationTokenSpeedTracker {
     return status
   }
 
-  /** 链结束后彻底重置（下一回合从零开始，绝不跨链累计）。 */
+  /** Full reset after the chain ends (the next turn starts from zero; never accumulate across chains). */
   resetChain(): void {
     this.segments.length = 0
     this.active = undefined

@@ -249,7 +249,7 @@ test('历史完成行按分桶获得渲染隔离类，divider 最小桶；最新
 test('live 流式回合与排队输入不隔离，历史人类行照常隔离；搜索高亮目标行解除隔离', { timeout: 60_000 }, async () => {
   const live: ConversationLive = {
     conversationId: 10,
-    text: '正在生成的流式正文',
+    text: 'Generating的流式正文',
     tools: [],
     updatedAt: 5,
     queuedInputs: [{ id: 'q1', submissionId: 's1', text: '排队消息', mode: 'followUp', origin: 'human', createdAt: 1 }],

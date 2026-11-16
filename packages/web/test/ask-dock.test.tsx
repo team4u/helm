@@ -149,8 +149,8 @@ test('后代 ask 标注来源会话；当前会话自身卡片不标注', { time
   installFetch()
   await renderAskDock(makeStore(), 1)
   const labels = sourceButtons().map((b) => b.textContent ?? '')
-  assert.deepEqual(labels.sort(), ['来自 #11', '来自 #111'], '两张后代卡片均应标注来源会话')
-  const titled = sourceButtons().find((b) => b.textContent === '来自 #11')
+  assert.deepEqual(labels.sort(), ['From #11', 'From #111'], '两张后代卡片均应标注来源会话')
+  const titled = sourceButtons().find((b) => b.textContent === 'From #11')
   assert.ok(titled, '子会话卡片应有来源按钮')
   assert.equal((titled!.getAttribute('title') ?? '').includes('会话 11'), true, '来源按钮 tooltip 含来源会话标题')
 })
@@ -158,7 +158,7 @@ test('后代 ask 标注来源会话；当前会话自身卡片不标注', { time
 test('点击来源标注打开对应子会话抽屉', { timeout: 60_000 }, async () => {
   installFetch()
   await renderAskDock(makeStore(), 1)
-  const btn = sourceButtons().find((b) => b.textContent === '来自 #11')
+  const btn = sourceButtons().find((b) => b.textContent === 'From #11')
   assert.ok(btn)
   await act(async () => { btn!.click() })
   assert.deepEqual(activeModal, { kind: 'conversation-drawer', conversationId: 11 }, '应打开子会话 #11 抽屉')
@@ -175,7 +175,7 @@ test('提交后代 ask 答案走原 asksApi 并携带 CAS 水位线', { timeout:
   const childInput = childCard.querySelector<HTMLInputElement>('input.input')
   assert.ok(childInput, '子会话 ask 应渲染输入框')
   await act(async () => { setInputValue(childInput!, 'yes') })
-  const submit = [...childCard.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('提交'))
+  const submit = [...childCard.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Submit'))
   assert.ok(submit)
   await act(async () => { submit!.click() })
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
@@ -192,7 +192,7 @@ test('取消后代 ask 走原 asksApi cancel', { timeout: 60_000 }, async () => 
   const cards = [...document.querySelectorAll('.ask-dock')]
   const grandCard = cards[2]
   assert.ok(grandCard, '应存在孙会话 ask 卡片')
-  const cancel = [...grandCard.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === '取消')
+  const cancel = [...grandCard.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Cancel')
   assert.ok(cancel)
   await act(async () => { cancel!.click() })
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })

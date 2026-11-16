@@ -1,13 +1,13 @@
 /**
- * HelmStore：helm 自有表的同步读写镜像 + FTS5 派生索引。
+ * HelmStore:helm self has table sync read write mirror + FTS5 derive index.
  *
- * 一切 SQL 经同一 NodeSqliteDatabase adapter（与 pi_ 表共享事务队列），绝不另开连接。
- * 内存镜像保证同步读（listConvs 等）；写路径「先镜像后排队持久化」，排队经
- * promise 尾链严格串行（FIFO，无轮询）。持久化错误的诚实性契约：
- * - 首个错误被记录并上报（不静默吞错，绝不虚称持久化成功）；
- * - flushPublic 在有任何未决错误时显式抛 HelmError（调用方可据此阻断副作用）；
- * - 出错后新写一律拒绝（fail 状态，不再假成功）；
- * - close 等待在途 flush 彻底结束，并把首个错误返回给调用方上报。
+ * everything SQL via the same NodeSqliteDatabase adapter(and pi_ table sharing transaction queue), never another open connect.
+ * memory mirror guarantee sync read (listConvs etc.); write path first mirror after queue up persist, queue up via
+ * promise tail chain strictly serial (FIFO, without polling). persist error honest contract:
+ * - first error by record and on report (not silently swallow wrong, never virtual call persist succeeded);
+ * - flushPublic in has any not decide error when explicit throw HelmError(caller can based on this block assert side effect);
+ * - fails after new write one rule reject (fail state, no longer false succeeded);
+ * - close wait for in-flight flush completely end, and first error return to caller on report.
  */
 
 import type { ArtifactKind, ConversationStatus, ConversationSummary } from '@helm/protocol'
@@ -22,18 +22,18 @@ export interface ConvMeta {
   profileId: string
   tags: string[]
   parentConversationId?: number
-  /** 派生或最近一次续接本子会话的父会话工具调用 ID（运行期实时关联）。 */
+  /** derive or most near once resume this sub-conversation parent conversation tool invoke ID(run phase real-time related). */
   parentToolCallId?: string
-  /** 绑定计算节点 ID（缺省 'local'）。 */
+  /** bind set compute node ID(default 'local'). */
   nodeId: string
   cwd: string
-  /** 生效模型镜像（解析链结果；无配置时为空串，仅展示用）。 */
+  /** takes effect model mirror (parse chain result; without config when is empty string, only render use). */
   model: string
-  /** 显式模型覆盖（'provider/model'）；undefined = 继承 profile/全局。 */
+  /** explicit model override ('provider/model');undefined = inherit profile/global. */
   modelOverride?: string
-  /** 思考档位镜像（off/minimal/low/medium/high/xhigh/max；空串未设置）。 */
+  /** think Profile mirror (off/minimal/low/medium/high/xhigh/max; empty string not settings). */
   thinkingLevel: string
-  /** 显式思考档位覆盖；undefined = 继承 Profile/全局。 */
+  /** explicit think Profile override;undefined = inherit Profile/global. */
   thinkingLevelOverride?: string
   unread: boolean
   pinned: boolean
@@ -82,11 +82,11 @@ export interface PluginSessionDocRow {
 type Deferred = () => Promise<void>
 
 export interface HelmStoreOptions {
-  /** 实例级持久化失败回调（如 KernelRuntime 挂载致命存储故障闭环）；缺省走诊断通道。 */
+  /** instance level persist failed call back (such as KernelRuntime mount lead to life store fault closed ring); default away diagnose channel. */
   readonly onError?: (error: unknown) => void
-  /** 诊断通道 sink（未提供 onError 时兜底输出；缺省走 console.error）。 */
+  /** diagnose channel sink(not provide onError when fall back output; default away console.error). */
   readonly onDiagnostic?: KernelDiagnosticSink
-  /** 诊断脱敏函数（缺省复用 ftsRedact）。 */
+  /** diagnose redaction function (default re- use ftsRedact). */
   readonly redact?: (text: string) => string
 }
 
@@ -99,20 +99,20 @@ export class HelmStore {
   private readonly asks = new Map<string, AskRow>()
   private readonly artifacts = new Map<string, ArtifactRow>()
   private readonly pluginDocs = new Map<string, string>() // pluginId\0name -> json
-  /** 会话文档镜像：pluginId\0name\0conversationId -> json。 */
+  /** conversation document mirror:pluginId\0name\0conversationId -> json. */
   private readonly pluginSessionDocs = new Map<string, string>()
-  /** 逻辑删除墓碑：重启后不重新导入 SDK 保留的内部历史。 */
+  /** logic delete tombstone: after restart do not re- import SDK keep internal history. */
   private readonly tombstones = new Set<number>()
   /**
-   * 持久化尾链：所有排队写严格按入队顺序串行执行。
-   * 链永不出错（错误在链内捕获并记录），flushPublic/close 只需 await 它。
+   * persist tail chain: all queue up write strictly by queue order serial execute.
+   * chain forever do not fails (error in chain inside catch and record),flushPublic/close only needs to await it.
    */
   private tail: Promise<void> = Promise.resolve()
   private closed = false
-  /** 首个持久化错误；一旦置位即进入 fail 状态，拒绝后续新写。 */
+  /** first persist error; once placement i.e. enter fail state, reject after continue new write. */
   private firstError: unknown = undefined
   private eventSeq = 0
-  /** FTS 入队文本的脱敏钩子（运行时注入 stash.redactText）。 */
+  /** FTS queue text redaction hook (runtime inject stash.redactText). */
   ftsRedact: (text: string) => string = (t) => t
 
   constructor(database: HelmDatabase, options: HelmStoreOptions = {}) {
@@ -122,12 +122,12 @@ export class HelmStore {
     this.redactFn = options.redact
   }
 
-  /** 首个持久化失败错误（只读；未出错为 undefined）。 */
+  /** first persist failed error (only read; not fails is undefined). */
   get error(): unknown {
     return this.firstError
   }
 
-  /** 启动时从 sqlite 装载全部镜像；持久 JSON 损坏时显式报错（绝不假空值）。 */
+  /** at startup from sqlite load all mirror; durable JSON corrupt when explicit errors (never false null value). */
   async load(): Promise<void> {
     for (const row of await this.db.all<{
       id: number
@@ -170,8 +170,8 @@ export class HelmStore {
         updatedAt: row.updated_at,
       })
     }
-    // 父工具调用关联独立成表（helm_conversation_tool_links）：二次读合并进
-    // 镜像，现有 helm_conversations 行无需任何变更。
+    // parent tool invoke related independent into table (helm_conversation_tool_links): second read merge enter
+    // mirror, existing helm_conversations row no need to any change.
     for (const row of await this.db.all<{ conversation_id: number; parent_tool_call_id: string }>(
       'SELECT conversation_id, parent_tool_call_id FROM helm_conversation_tool_links',
     )) {
@@ -218,7 +218,7 @@ export class HelmStore {
       if (!isArtifactKind(row.kind)) {
         throw new HelmError(
           'store_data_corrupted',
-          `持久化数据损坏（helm_artifacts#${row.id}.kind）：非法产物类型 ${String(row.kind)}`,
+          `persist data corrupt (helm_artifacts#${row.id}.kind): illegal artifact type ${String(row.kind)}`,
           500,
           { id: row.id, kind: row.kind },
         )
@@ -267,16 +267,16 @@ export class HelmStore {
   }
 
   /**
-   * 持久化事件序号：只接受非负安全整数，且单调不回退（旧值不覆盖更高水位）。
-   * 排队经 FIFO 尾链，落库顺序与入队顺序一致，不会因旧队列写回退序号。
+   * persist event ordinal: only accept non- negative security integer, and single tune does not fall back (old value does not override more high watermark).
+   * queue up via FIFO tail chain, written to the database order and queue order consistent, will not because old queue write fall back ordinal.
    */
   setEventSeq(seq: number): void {
     if (!Number.isSafeInteger(seq) || seq < 0) {
-      throw new HelmError('invalid_event_seq', `事件序号必须是非负安全整数，收到：${seq}`, 500, {
+      throw new HelmError('invalid_event_seq', `event ordinal must be non- negative security integer, receives:${seq}`, 500, {
         seq,
       })
     }
-    if (seq < this.eventSeq) return // 拒绝回退：保留更高水位
+    if (seq < this.eventSeq) return // reject fall back: keep more high watermark
     this.eventSeq = seq
     this.enqueue(() =>
       this.db.run(
@@ -301,7 +301,7 @@ export class HelmStore {
     this.assertWritable()
     const prev = this.convs.get(meta.id)
     const titleChanged = prev?.title !== meta.title
-    // 快照深拷贝：排队 SQL 绑定快照值，调用方后续原地突变不影响已入队写。
+    // snapshot deep copy: queue up SQL bind set snapshot value, caller after continue original ground sudden change does not affect already queue write.
     const snap = cloneConv(meta)
     this.convs.set(snap.id, snap)
     this.enqueue(async () => {
@@ -327,7 +327,7 @@ export class HelmStore {
         snap.createdAt,
         snap.updatedAt,
       )
-      // 父工具调用关联独立表：有值 upsert，空值删除（不留孤儿/陈旧链接）。
+      // parent tool invoke related independent table: has value upsert, null value delete (do not orphan child/stale link).
       if (snap.parentToolCallId !== undefined && snap.parentToolCallId !== '') {
         await this.db.run(
           `INSERT INTO helm_conversation_tool_links (conversation_id, parent_tool_call_id) VALUES (?, ?)
@@ -341,7 +341,7 @@ export class HelmStore {
           snap.id,
         )
       }
-      // 标题变更需更新该会话全部 FTS 行的 title 列（不只第一行）。
+      // title change must update the conversation all FTS row title column (do not only one row).
       if (titleChanged) {
         await this.db.run(
           'UPDATE helm_conversation_fts SET title = ? WHERE conversation_id = ?',
@@ -353,9 +353,9 @@ export class HelmStore {
   }
 
   /**
-   * 删除会话：tombstone + 行清理在**同一事务**内原子落库（崩溃不会出现
-   * 「行已删而墓碑缺失」的半态导致重启复活）。内存侧同步清 asks/artifacts
-   * 镜像；终态 Ask 历史随会话一并清理（镜像与库保持一致，绝不残留 pending）。
+   * delete conversation:tombstone + row clean up in**the same transaction**inside atomic written to the database (crash will not appear
+   * row already delete while tombstone missing half state leads to restart re-). memory side sync clean asks/artifacts
+   * mirror; terminal state Ask history follow conversation one and clean up (mirror and store stay consistent, never leftover pending).
    */
   deleteConv(id: number): void {
     this.assertWritable()
@@ -367,7 +367,7 @@ export class HelmStore {
     for (const [artifactId, row] of this.artifacts) {
       if (row.conversationId === id) this.artifacts.delete(artifactId)
     }
-    // 会话文档镜像同步清理（库行在同一事务内删除，不留孤儿数据）。
+    // conversation document mirror sync clean up (store row in the same transaction inside delete, do not orphan child data).
     for (const key of [...this.pluginSessionDocs.keys()]) {
       const convId = Number(key.split('\0')[2])
       if (convId === id) this.pluginSessionDocs.delete(key)
@@ -404,9 +404,9 @@ export class HelmStore {
   }
 
   /**
-   * UPSERT 全量列（含 spec / expected_state_seq / owner / created_at）：
-   * 结算写回的 specJson（内含终态 status）必须落库，否则重启后
-   * spec 仍是 pending、listAsks 恢复出错。
+   * UPSERT all amount column (contains spec / expected_state_seq / owner / created_at):
+   * compute write back specJson(inside contains terminal state status) must written to the database, otherwise after restart
+   * spec still is pending,listAsks restore fails.
    */
   putAsk(row: AskRow): void {
     this.assertWritable()
@@ -454,7 +454,7 @@ export class HelmStore {
   putArtifact(row: ArtifactRow): void {
     this.assertWritable()
     if (!isArtifactKind(row.kind)) {
-      throw new HelmError('validation_error', `产物类型非法: ${String(row.kind)}`, 400, { id: row.id, kind: row.kind })
+      throw new HelmError('validation_error', `artifact type illegal: ${String(row.kind)}`, 400, { id: row.id, kind: row.kind })
     }
     this.artifacts.set(row.id, { ...row })
     this.enqueue(() =>
@@ -495,7 +495,7 @@ export class HelmStore {
     return this.pluginDocs.get(pluginId + '\0' + name)
   }
 
-  /** valueJson 必须是合法 JSON：显式拒绝（绝不静默落一份读不回来的数据）。 */
+  /** valueJson must be legal JSON: explicit reject (never static default a read do not back come data). */
   putPluginDoc(pluginId: string, name: string, valueJson: string): void {
     this.assertWritable()
     parseStoredJson<unknown>(`helm_plugin_docs#${pluginId}:${name}.value`, valueJson)
@@ -513,12 +513,12 @@ export class HelmStore {
   }
 
   /**
-   * 删除全局文档存储中某插件的全部文档（卸载关联清理）。
+   * delete global document store in a certain plugin all document (unload related clean up).
    *
-   * 全局文档统一挂在 `__global` 行下、name 为 `${pluginId}:${docName}`。
-   * 插件 id 本身允许含冒号（如 `foo:bar`），纯前缀匹配会交叉误删
-   * （删 `foo` 会误中 `foo:bar:doc`），而 doc 名禁冒号（assertValidId），
-   * 故精确判定为：前缀 `${pluginId}:` 命中且剩余部分不含冒号。
+   * global document unify hang in `__global` row under,name is `${pluginId}:${docName}`.
+   * plugin id itself allows contains smoke number (such as `foo:bar`), pure prefix match will cross mistakenly delete
+   * (delete `foo` will mistakenly in `foo:bar:doc`), while doc name forbid smoke number (assertValidId),
+   * reason precise decide is: prefix `${pluginId}:` hit and remaining part excludes smoke number.
    */
   deleteGlobalPluginDocs(pluginId: string): void {
     this.assertWritable()
@@ -542,12 +542,12 @@ export class HelmStore {
 
   // ---------------- plugin session docs ----------------
 
-  /** 会话文档镜像读取（未写过返回 undefined；调用方回退初值）。 */
+  /** conversation document mirror read (not write return undefined; caller fall back initial value). */
   getPluginSessionDoc(pluginId: string, name: string, conversationId: number): string | undefined {
     return this.pluginSessionDocs.get(`${pluginId}\0${name}\0${conversationId}`)
   }
 
-  /** 写入会话文档（valueJson 必须是合法 JSON：显式拒绝非法数据落盘）。 */
+  /** write conversation document (valueJson must be legal JSON: explicit reject illegal data). */
   putPluginSessionDoc(pluginId: string, name: string, conversationId: number, valueJson: string): void {
     this.assertWritable()
     parseStoredJson<unknown>(
@@ -582,7 +582,7 @@ export class HelmStore {
     )
   }
 
-  /** 删除某插件的全部会话文档（卸载关联清理；表有独立 plugin_id 列，精确删除）。 */
+  /** delete a certain plugin all conversation document (unload related clean up; table has independent plugin_id column, precise delete). */
   deletePluginSessionDocs(pluginId: string): void {
     this.assertWritable()
     for (const key of [...this.pluginSessionDocs.keys()]) {
@@ -593,7 +593,7 @@ export class HelmStore {
     )
   }
 
-  /** 列出某插件某文档已持久化的全部会话 ID（升序）。 */
+  /** column out a certain plugin a certain document persisted all conversation ID(rise order). */
   listPluginSessionDocConversations(pluginId: string, name: string): number[] {
     const out: number[] = []
     for (const key of this.pluginSessionDocs.keys()) {
@@ -607,9 +607,9 @@ export class HelmStore {
   // ---------------- FTS ----------------
 
   /**
-   * 索引一条会话文本（输入/回答/工具摘要）；body 脱敏后入库。
-   * (conversation_id, entry_id) 幂等：同一 entry 重复索引（observer 重放等）
-   * 在同一事务内先删后插替换，绝不产生重复行（FTS5 无 unique 约束）。
+   * index a conversation text (input/answer/tool summary);body redaction after store.
+   * (conversation_id, entry_id) idempotent: the same entry duplicate index (observer replay etc.)
+   * in the same transaction inside first delete after insert replace, never produce duplicate row (FTS5 without unique constraint).
    */
   indexFts(conversationId: number, entryId: string, title: string, body: string): void {
     this.assertWritable()
@@ -633,24 +633,24 @@ export class HelmStore {
     )
   }
 
-  /** FTS 全文检索（可重建派生索引，不触碰 pi_ 表语义）。 */
+  /** FTS all text inspect index (can rebuild derive index, do not trigger touch pi_ table semantics). */
   async search(
     query: string,
     limit = 20,
   ): Promise<Array<{ conversationId: number; entryId: string; snippet: string }>> {
-    // 先等待队列真实排空（含错误即抛）：读到的是承诺持久化的最新数据。
+    // first wait for queue real arrange empty (contains error i.e. throw): read to is promise persist most new data.
     await this.flushPublic()
     const rows = await this.db.all<{
       conversation_id: number
       entry_id: string
       snippet: string
     }>(
-      `SELECT conversation_id, entry_id, snippet(helm_conversation_fts, 3, '', '…', ' ', 24) AS snippet
+      `SELECT conversation_id, entry_id, snippet(helm_conversation_fts, 3, '', '...', ' ', 24) AS snippet
        FROM helm_conversation_fts WHERE helm_conversation_fts MATCH ? LIMIT ?`,
       ftsMatchExpr(query),
       limit,
     )
-    // 防御性去重：同一 (conversation_id, entry_id) 只返回一条。
+    // guard against defend dedupe: the same (conversation_id, entry_id) only return a.
     const seen = new Set<string>()
     const out: Array<{ conversationId: number; entryId: string; snippet: string }> = []
     for (const r of rows) {
@@ -663,8 +663,8 @@ export class HelmStore {
   }
 
   /**
-   * 删除指定会话中若干 FTS 键（原地覆盖重发时清理被截断条目的派生索引）。
-   * 只动 helm_conversation_fts 派生表，不触碰 pi_ 表语义；空列表直接返回。
+   * delete designate conversation in if dry FTS key (original ground override heavy when clean up by truncate purpose derive index).
+   * only motion helm_conversation_fts derive table, do not trigger touch pi_ table semantics; empty list directly return.
    */
   removeFtsEntries(conversationId: number, entryIds: ReadonlyArray<string>): void {
     if (entryIds.length === 0) return
@@ -684,8 +684,8 @@ export class HelmStore {
   }
 
   /**
-   * FTS 是可重建的派生索引：清空 + 重放全部会话文本在**同一事务**内完成，
-   * 失败整体回滚（旧索引保留，绝不因重建失败丢掉派生索引后假成功）。
+   * FTS is can rebuild derive index: empty + replay all conversation text in**the same transaction**inside complete,
+   * failed whole rollback (old index keep, never because rebuild failed lose derive index after false succeeded).
    */
   async rebuildFts(
     replay: (
@@ -714,16 +714,16 @@ export class HelmStore {
   // ---------------- flush ----------------
 
   /**
-   * 对外冲刷端口（documentStore.flush 用）：等待尾链彻底排空（真实 drain，
-   * 无轮询、不早返回）；存在任何持久化错误时抛 HelmError——
-   * 调用方（如 Workflow state.flush）据此阻断后续副作用，绝不虚称成功。
+   * for outside conflict refresh port (documentStore.flush use): wait for tail chain completely arrange empty (real drain,
+   * without polling, do not early return); store in any persist error when throw HelmError- -
+   * caller (such as Workflow state.flush) based on this block assert after continue side effect, never virtual call succeeded.
    */
   async flushPublic(): Promise<void> {
     await this.tail
     if (this.firstError !== undefined) {
       throw new HelmError(
         'store_flush_failed',
-        `持久化队列存在失败写，不保证数据完整：${String(this.firstError)}`,
+        `persist queue store in failed write, do not guarantee data complete:${String(this.firstError)}`,
         500,
         { error: String(this.firstError) },
       )
@@ -731,16 +731,16 @@ export class HelmStore {
   }
 
   private enqueue(fn: Deferred): void {
-    if (this.closed) throw new HelmError('store_closed', 'HelmStore 已关闭，拒绝新写', 409)
+    if (this.closed) throw new HelmError('store_closed', 'HelmStore already close, reject new write', 409)
     if (this.firstError !== undefined) {
       throw new HelmError(
         'store_flush_failed',
-        `持久化已失败，拒绝新写（不假成功）：${String(this.firstError)}`,
+        `persist already failed, reject new write (do not false succeeded):${String(this.firstError)}`,
         500,
         { error: String(this.firstError) },
       )
     }
-    // 尾链串行：链内错误被捕获记录（链不死），顺序与入队严格一致。
+    // tail chain serial: chain inside error by catch record (chain do not die), order and queue strictly consistent.
     this.tail = this.tail.then(fn).catch((error: unknown) => {
       const isFirst = this.firstError === undefined
       this.markFailed(error)
@@ -753,7 +753,7 @@ export class HelmStore {
       try {
         this.onError(error)
       } catch {
-        /* 上报自身不得再抛 */
+        /* on report itself must not again throw */
       }
       return
     }
@@ -765,13 +765,13 @@ export class HelmStore {
     })
   }
 
-  /** 写前检查：closed / fail 状态下显式拒绝，绝不假装入队成功。 */
+  /** write before check:closed / fail state under explicit reject, never pretend queue succeeded. */
   private assertWritable(): void {
-    if (this.closed) throw new HelmError('store_closed', 'HelmStore 已关闭，拒绝新写', 409)
+    if (this.closed) throw new HelmError('store_closed', 'HelmStore already close, reject new write', 409)
     if (this.firstError !== undefined) {
       throw new HelmError(
         'store_flush_failed',
-        `持久化已失败，拒绝新写（不假成功）：${String(this.firstError)}`,
+        `persist already failed, reject new write (do not false succeeded):${String(this.firstError)}`,
         500,
         { error: String(this.firstError) },
       )
@@ -782,7 +782,7 @@ export class HelmStore {
     if (this.firstError === undefined) this.firstError = error
   }
 
-  /** 退出前等待在途 flush 彻底结束；返回首个持久化错误（诚实上报，不吞）。 */
+  /** exit before wait for in-flight flush completely end; return first persist error (honest on report, do not swallow). */
   async close(): Promise<unknown> {
     await this.tail
     this.closed = true
@@ -794,14 +794,14 @@ function cloneConv(meta: ConvMeta): ConvMeta {
   return { ...meta, tags: [...meta.tags] }
 }
 
-/** 持久 JSON 校验：损坏即显式错误（带位置上下文），绝不假空值继续。 */
+/** durable JSON validate: corrupt i.e. explicit error (carries location context), never false null value continue. */
 function parseStoredJson<T>(what: string, raw: string): T {
   try {
     return JSON.parse(raw) as T
   } catch (cause) {
     throw new HelmError(
       'store_data_corrupted',
-      `持久化数据损坏（${what}）：JSON 解析失败：${String(cause)}`,
+      `persist data corrupt (${what}):JSON failed to parse:${String(cause)}`,
       500,
       { what, raw: raw.slice(0, 200), cause: String(cause) },
     )
@@ -809,7 +809,7 @@ function parseStoredJson<T>(what: string, raw: string): T {
 }
 
 function ftsMatchExpr(query: string): string {
-  // 用户输入转成 FTS5 前缀 OR 查询，避免语法注入（引号包裹每个 token）。
+  // user input rotate into FTS5 prefix OR query, avoid language method inject (quotes package wrap each token).
   const tokens = query
     .split(/\s+/)
     .map((t) => t.replace(/["*]/g, ''))
@@ -823,8 +823,8 @@ export function convStatusOf(
   sdkLive: { run?: unknown; runFailure?: unknown },
   pendingAskCount: number,
 ): ConversationStatus {
-  // blocked（有待答 AskDoc）优先于 working：AskDoc 是人类决策点，
-  // 即使模型仍在跑也必须把「等待人类」暴露到状态机上。
+  // blocked(has await answer AskDoc) takes precedence at working:AskDoc is person class decide policy point,
+  // even if model still in run also must wait for person class expose to state machine on.
   if (pendingAskCount > 0) return 'blocked'
   if (sdkLive.run) return 'working'
   if (sdkLive.runFailure) return 'error'

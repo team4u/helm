@@ -80,12 +80,12 @@ test('ModelDetailDrawer: 大目录未展开时首帧严格截断为 80 个胶囊
   // 截断线外模型不渲染，即使当前处于启用态；搜索或展开后可定位/查看
   assert.doesNotMatch(html, /Model 81\b/)
   assert.doesNotMatch(html, /Model 95\b/)
-  assert.doesNotMatch(html, /Model 99\b/)
+  assert.doesNotMatch(html, /Model 99(?![0-9])/)
   // 省略数量提示：100 - 80 = 20
-  assert.match(html, /省略 20 个/)
+  assert.match(html, /20 hidden/)
   // 无过滤词时批量按钮保持全量语义文案
-  assert.match(html, /全部启用/)
-  assert.match(html, /全部停用/)
+  assert.match(html, /Enable all/)
+  assert.match(html, /Disable all/)
 })
 
 test('ModelDetailDrawer: 小目录（不足 80）无截断提示，有过滤词时完整渲染匹配结果', { timeout: 60_000 }, () => {
@@ -143,17 +143,17 @@ test('ModelDetailDrawer: 批量启停随过滤词收窄为「匹配项」，不�
   })
 
   // 无过滤词：全量语义按钮
-  assert.ok(findButtonByText(container, '全部停用'), '无过滤词时应显示「全部停用」')
+  assert.ok(findButtonByText(container, 'Disable all'), '无过滤词时应显示「全部停用」')
 
   // 输入过滤词 gpt：按钮切换为匹配项语义并带数量
-  const filterInput = container.querySelector('input[aria-label="过滤模型"]') as HTMLInputElement
+  const filterInput = container.querySelector('input[aria-label="Filter models"]') as HTMLInputElement
   assert.ok(filterInput)
   await act(async () => {
     typeIntoInput(filterInput, 'gpt')
   })
-  const disableBtn = findButtonByText(container, '停用匹配项')
+  const disableBtn = findButtonByText(container, 'Disable matches')
   assert.ok(disableBtn, '有过滤词时应显示「停用匹配项」按钮')
-  assert.match(disableBtn!.textContent ?? '', /停用匹配项（2）/)
+  assert.match(disableBtn!.textContent ?? '', /Disable matches \(2\)/)
 
   // 匹配结果完整渲染（过滤场景不截断）
   let chips = chipCheckedMap(container)
@@ -167,11 +167,11 @@ test('ModelDetailDrawer: 批量启停随过滤词收窄为「匹配项」，不�
   assert.equal(chips.get('gpt-4o'), false)
   assert.equal(chips.get('gpt-4o-mini'), false)
   // 计数徽章：全量 4 个中剩余 2 个启用
-  assert.match(container.textContent ?? '', /已启用 2 \/ 共 4 个模型/)
+  assert.match(container.textContent ?? '', /2 enabled \/ 4 models in total/)
 
   // 保存提交完整清单：搜索外的 o1 / llama 不受影响
   await act(async () => {
-    findButtonByText(container, '保存配置')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    findButtonByText(container, 'Save configuration')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
   const payload = savedPayloads[savedPayloads.length - 1]
   assert.ok(payload)
@@ -187,7 +187,7 @@ test('ModelDetailDrawer: 批量启停随过滤词收窄为「匹配项」，不�
   )
 
   // 启用匹配项恢复匹配结果（同样只动 gpt 系）
-  const enableBtn = findButtonByText(container, '启用匹配项')
+  const enableBtn = findButtonByText(container, 'Enable matches')
   assert.ok(enableBtn)
   await act(async () => {
     enableBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -235,10 +235,10 @@ test('ModelDetailDrawer: 无过滤词时批量停用作用于全量模型', { ti
   })
 
   await act(async () => {
-    findButtonByText(container, '全部停用')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    findButtonByText(container, 'Disable all')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
   await act(async () => {
-    findButtonByText(container, '保存配置')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    findButtonByText(container, 'Save configuration')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
 
   const payload = savedPayloads[savedPayloads.length - 1]
@@ -272,18 +272,18 @@ test('ModelDetailDrawer: 点击展开后渲染全部模型且省略提示消失�
 
   // 展开：全部渲染
   await act(async () => {
-    findButtonByText(container, '展开全部')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    findButtonByText(container, 'Expand all')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
   assert.equal(container.querySelectorAll('button[role="checkbox"]').length, 100)
-  assert.match(container.textContent ?? '', /Model 99\b/)
-  assert.doesNotMatch(container.textContent ?? '', /省略 20 个/)
+  assert.match(container.textContent ?? '', /Model 99(?![0-9])/)
+  assert.doesNotMatch(container.textContent ?? '', /20 hidden/)
 
   // 折叠：恢复截断与省略提示
   await act(async () => {
-    findButtonByText(container, '折叠列表')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    findButtonByText(container, 'Collapse list')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
   assert.equal(container.querySelectorAll('button[role="checkbox"]').length, 80)
-  assert.match(container.textContent ?? '', /省略 20 个/)
+  assert.match(container.textContent ?? '', /20 hidden/)
 
   await act(async () => {
     root.unmount()
@@ -303,7 +303,7 @@ function makeTaggedProvider(): ProviderItem {
     configured: true,
     modelsCount: 2,
     models: [
-      { id: 'glm-4.6', name: 'GLM 4.6', enabled: true, tags: ['思考模型', '200k 上下文'] },
+      { id: 'glm-4.6', name: 'GLM 4.6', enabled: true, tags: ['Thinking models', '200k 上下文'] },
       { id: 'plain-mini', name: 'Plain Mini', enabled: true },
     ],
   }
@@ -322,9 +322,9 @@ test('ModelDetailDrawer SSR: 思考与上下文窗口标签在同一胶囊内相
   // 两枚徽章零间隔相邻（同一 map 展开、同一胶囊内），顺序思考在前、窗口在后
   assert.match(
     html,
-    />思考模型<\/span><span class="badge mi-effort mchip-tag mtell">200k 上下文<\/span>/,
+    />Thinking models<\/span><span class="badge mi-effort mchip-tag mtell">200k 上下文<\/span>/,
   )
-  assert.ok(html.indexOf('思考模型') < html.indexOf('200k 上下文'), '思考标签必须排在窗口标签之前')
+  assert.ok(html.indexOf('Thinking models') < html.indexOf('200k 上下文'), '思考标签必须排在窗口标签之前')
 
   // 未知窗口的模型不渲染任何「上下文」徽章，也不产生空标签容器
   assert.equal((html.match(/上下文/g) ?? []).length, 1, '仅已知窗口模型携带「上下文」标签')
@@ -349,7 +349,7 @@ test('ModelDetailDrawer DOM: 胶囊徽章按 tags 顺序真实挂载，无标签
 
   const glm = chips.find((chip) => (chip.getAttribute('title') ?? '').includes('glm-4.6'))
   assert.ok(glm, '应存在 glm-4.6 胶囊')
-  assert.deepEqual(badgesOf(glm), ['思考模型', '200k 上下文'])
+  assert.deepEqual(badgesOf(glm), ['Thinking models', '200k 上下文'])
 
   const plain = chips.find((chip) => (chip.getAttribute('title') ?? '').includes('plain-mini'))
   assert.ok(plain, '应存在 plain-mini 胶囊')
@@ -388,13 +388,13 @@ test('ModelDetailDrawer: 插件网关服务端点只读展示并指向插件配�
   assert.doesNotMatch(html, /id="model-drawer-base-url"/, '插件网关端点不得渲染可编辑输入框')
   assert.match(html, /http:\/\/127\.0\.0\.1:3425\/v1/)
   // 提示如实指向真正的配置入口（插件配置），不装作已保存
-  assert.match(html, /该端点由插件 builtin:magpie 的配置管理/)
-  assert.match(html, /插件中心/)
+  assert.match(html, /This endpoint is managed by the configuration of plugin builtin:magpie/)
+  assert.match(html, /plugin center/)
   // 插件网关密钥同样归插件配置管理：内核凭据库写入对插件 auth 不生效，
   // 不得再渲染假输入框（magpie 的 auth.resolve 只读插件配置 token）
   assert.doesNotMatch(html, /id="model-drawer-api-key"/, '插件网关密钥不得渲染内核凭据输入框')
-  assert.match(html, /由插件 builtin:magpie 的配置管理/)
-  assert.match(html, /不存入内核凭据库；在此填写不会生效/)
+  assert.match(html, /managed by the configuration of plugin builtin:magpie/)
+  assert.match(html, /not stored in the kernel credential vault/)
 })
 
 test('ModelDetailDrawer: 内置供应商服务端点只读且提示固定不可改', { timeout: 60_000 }, () => {
@@ -414,7 +414,7 @@ test('ModelDetailDrawer: 内置供应商服务端点只读且提示固定不可�
 
   assert.doesNotMatch(html, /id="model-drawer-base-url"/)
   assert.match(html, /http:\/\/127\.0\.0\.1:11434/)
-  assert.match(html, /内置固定值/)
+  assert.match(html, /built in and cannot be changed/)
 })
 
 test('ModelDetailDrawer: 自定义网关端点可编辑，清空后保存显式报错且不提交', { timeout: 60_000 }, async () => {
@@ -457,10 +457,10 @@ test('ModelDetailDrawer: 自定义网关端点可编辑，清空后保存显式�
     typeIntoInput(endpointInput, '')
   })
   await act(async () => {
-    findButtonByText(container, '保存配置')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    findButtonByText(container, 'Save configuration')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
   assert.equal(saved.length, 0, '端点为空时不得触发保存回调')
-  assert.match(container.textContent ?? '', /自定义网关的服务端点不能为空/)
+  assert.match(container.textContent ?? '', /custom gateway endpoint cannot be empty/)
 
   await act(async () => {
     root.unmount()

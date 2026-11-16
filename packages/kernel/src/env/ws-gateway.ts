@@ -1,4 +1,4 @@
-/** 节点网关：每条连接只有一个 birpc 实例，控制面与环境 RPC 共用它。 */
+/** node gateway: each connect only a birpc instance, control side and environment RPC shared use it. */
 import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -19,8 +19,8 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
     registry,
     path = '/ws/node',
     registerTimeoutMs = 10_000,
-    // 单次发送/分发错误不静默（诚实性纪律）：默认 console.error 落服务端
-    // 日志；仅当连接已非 OPEN（发送失败导致断开）时才终止连接。
+    // single time send/dispatch error not silently (honest discipline): by default console.error server side
+    // log; only when connect already non- OPEN(failed to send leads to disconnect) when only then terminate connect.
     log = (message: string) => console.error(`[helm] node gateway: ${message}`),
   } = options
   const wss = new WebSocketServer({ noServer: true })
@@ -73,10 +73,10 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
           void dispatch(data)
         })
       },
-      // 仅在连接已非 OPEN（发送失败导致断开）时终止连接：单次消息发送错误
-      //（如临时背压）不直接掐断健康连接，交由后续发送或 close 事件处理。
+      // only in connect already non- OPEN(failed to send leads to disconnect) when terminate connect: single time message send error
+      //(such as temporary back press) do not directly pinch assert health connect, hand over by after continue send or close event handle.
       onGeneralError: (error, type) => {
-        log(`节点 RPC 传输失败（${type}）：${error instanceof Error ? error.message : String(error)}`)
+        log(`node RPC transfer failed (${type}):${error instanceof Error ? error.message : String(error)}`)
         if (ws.readyState !== ws.OPEN) ws.terminate()
         return true
       },

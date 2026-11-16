@@ -1,45 +1,55 @@
 #!/usr/bin/env node
 /**
- * herdr-smoke.mjs — `builtin:herdr` 真链路手工验收脚本（独立运行，不纳入 pnpm test）。
+ * herdr-smoke.mjs — manual real-chain acceptance script for `builtin:herdr` (standalone, not part of pnpm test).
  *
- * 验收对象（全部真实组件，零 mock）：
- * - 编译产物 @helm/hub：packages/hub/dist/app.js 的 createHelm；
- * - builtin:herdr 插件：setConfig -> enable -> agent_spawn 钩子接管外部运行时；
- * - 本机已安装 Herdr 服务：脚本自建隔离 headless session（独立 XDG_CONFIG_HOME、
- *   显式 socket path、子进程剔除继承的 HERDR_* 定位变量），绝不触碰用户现有
- *   session / pane / 主 Herdr 进程；
- * - 真实 pi CLI + GLM 模型（默认 provider=magpie / model=zhipu/glm-5.3，经
- *   `pi --list-models` 预检确认；可用 --provider/--model 覆盖）。
+ * Acceptance targets (all real components, zero mocks):
+ * - The @helm/hub build artifact: createHelm from packages/hub/dist/app.js;
+ * - The builtin:herdr plugin: setConfig -> enable -> the agent_spawn hook takes over the
+ *   external runtime;
+ * - A locally installed Herdr service: the script creates its own isolated headless session
+ *   (dedicated XDG_CONFIG_HOME, explicit socket path, child processes stripped of inherited
+ *   HERDR_* locator variables) and never touches the user's existing session / panes / the
+ *   main Herdr process;
+ * - The real pi CLI + GLM model (default provider=magpie / model=zhipu/glm-5.3, confirmed by
+ *   the `pi --list-models` preflight; override with --provider/--model).
  *
- * 验收内容：
- * 1. 全新临时 Git 仓库 + seed 提交（git 身份用 -c 局部传参，不写宿主全局配置）；
- * 2. 工作流 run：agent #1（agentType=Profile 'herdr-smoke-pi'，isolation='worktree'，
- *    schema={answer:number}，gate=真实验证 artifact 并向 tempRoot 下 gate-count
- *    文件追加一行——Gate 执行次数的 shell 侧铁证）+ agent #2（resume:'task'
- *    在同一 Herdr pane 续聊并返回确认句）；
- * 3. 原始 run 断言：结构化结果字段、两节点 executionId 一致、Gate 仅第一节点
- *    且 ok=true 且 gate-count 恰好一行、worktree 目录/分支在 run 结算后仍保留、
- *    artifact.txt 内容真实、session.snapshot 确认本 workflow 的 pane 已全部关闭；
- * 4. resumeFromRunId 严格重放断言（引擎修复目标契约）：result 与原始 run 深相等、
- *    两个 agent 节点均 done 且 cached=true、经透明包装生产 transport 计数的
- *    agent.start / agent.prompt RPC 调用零增长、gate-count 仍恰好一行、
- *    snapshot 精确恢复既有 pane/tab/workspace 基线（保留已有窗格）。缓存节点不携带原 executionId/worktree 元数据
- *    （原 run 已验证过），重放只验证无新调用/无新资源。
+ * What is verified:
+ * 1. A fresh temporary Git repo + seed commit (git identity passed locally via -c; the host
+ *    global config is never written);
+ * 2. A workflow run: agent #1 (agentType=Profile 'herdr-smoke-pi', isolation='worktree',
+ *    schema={answer:number}, gate=real artifact validation appending one line to a
+ *    gate-count file under tempRoot — hard shell-side evidence of the Gate execution count)
+ *    + agent #2 (resume:'task' continues in the same Herdr pane and returns a confirmation
+ *    sentence);
+ * 3. Original run assertions: structured result fields, identical executionId across the two
+ *    nodes, Gate only on the first node with ok=true and gate-count at exactly one line,
+ *    worktree dir/branch still present after the run settles, real artifact.txt content, and
+ *    session.snapshot confirming every pane of this workflow is closed;
+ * 4. Strict resumeFromRunId replay assertions (the engine-fix target contract): the result
+ *    deep-equals the original run, both agent nodes are done with cached=true, zero growth of
+ *    agent.start / agent.prompt RPC calls counted through the transparently wrapped
+ *    production transport, gate-count still at exactly one line, and the snapshot exactly
+ *    restores the pre-existing pane/tab/workspace baseline (existing panes preserved).
+ *    Cached nodes carry no original executionId/worktree metadata (the original run already
+ *    verified those); the replay only verifies no new calls / no new resources.
  *
- * 传输层：导入 @helm/plugins 编译产物（packages/plugins/dist/herdr/transport.js）的
- * createHerdrTransport（生产实现），透明包装 call 做方法计数后注入
- * createHelm({ herdrTransport })；绝不 mock 返回。脚本自身的 session.snapshot
- * 也复用该 transport（每次调用带有限 timeoutMs）。
+ * Transport layer: imports createHerdrTransport (the production implementation) from the
+ * @helm/plugins build artifact (packages/plugins/dist/herdr/transport.js), transparently
+ * wraps call for method counting, and injects it into createHelm({ herdrTransport }); never
+ * mocks returns. The script's own session.snapshot also reuses that transport (each call
+ * carries a bounded timeoutMs).
  *
- * 依赖：node>=24、已执行 pnpm build（存在 packages/hub/dist 与 packages/plugins/dist）、herdr / pi / git
- * 在 PATH、~/.pi/agent/auth.json 具备目标模型真实凭据。不监听任何端口。
- * 总超时：--timeout-ms（默认 180000，范围 60000..1800000）；清理阶段另有独立
- * 有界预算，超时后仍确保关闭自己创建的 herdr server。
+ * Requirements: node>=24, pnpm build already run (packages/hub/dist and
+ * packages/plugins/dist exist), herdr / pi / git on PATH, real credentials for the target
+ * model in ~/.pi/agent/auth.json. No port is ever listened on.
+ * Total timeout: --timeout-ms (default 180000, range 60000..1800000); the cleanup phase has
+ * its own bounded budget, and even after a timeout the herdr server created here is still
+ * guaranteed to be closed.
  *
- * 输出：进度与 PASS/FAIL 逐项写 stderr；--json 时 stdout 恰好一个最终 JSON
- * 对象（可机器解析），非 --json 时 stdout 无输出。
+ * Output: progress and PASS/FAIL per item go to stderr; with --json, stdout carries exactly
+ * one final JSON object (machine-parseable); without --json, stdout stays empty.
  *
- * 用法：node scripts/herdr-smoke.mjs [--provider magpie] [--model zhipu/glm-5.3]
+ * Usage: node scripts/herdr-smoke.mjs [--provider magpie] [--model zhipu/glm-5.3]
  *        [--timeout-ms 180000] [--keep-tmp] [--json]
  */
 
@@ -71,7 +81,7 @@ const ARTIFACT_TEXT = 'hello\nfrom\nherdr-smoke\n'
 class SmokeError extends Error {}
 
 // ---------------------------------------------------------------------------
-// CLI 参数
+// CLI arguments
 // ---------------------------------------------------------------------------
 
 function parseArgv(argv) {
@@ -85,7 +95,7 @@ function parseArgv(argv) {
   }
   const value = (i, flag) => {
     const v = argv[i + 1]
-    if (v === undefined || v.startsWith('--')) throw new SmokeError(`参数 ${flag} 缺少取值`)
+    if (v === undefined || v.startsWith('--')) throw new SmokeError(`argument ${flag} is missing a value`)
     return v
   }
   for (let i = 0; i < argv.length; i++) {
@@ -96,19 +106,20 @@ function parseArgv(argv) {
       const raw = value(i++, a)
       const n = Number(raw)
       if (!Number.isInteger(n) || n < 60_000 || n > 1_800_000) {
-        throw new SmokeError(`--timeout-ms 必须是 60000..1800000 的整数（收到 ${raw}）`)
+        throw new SmokeError(`--timeout-ms must be an integer in 60000..1800000 (got ${raw})`)
       }
       out.timeoutMs = n
     } else if (a === '--keep-tmp') out.keepTmp = true
     else if (a === '--json') out.json = true
     else if (a === '--help' || a === '-h') out.help = true
-    else throw new SmokeError(`未知参数: ${a}`)
+    else throw new SmokeError(`unknown argument: ${a}`)
   }
   return out
 }
 
 // ---------------------------------------------------------------------------
-// 小工具：命令执行 / 日志 / 断言（全部输出走 stderr，stdout 只留给最终 JSON）
+// Utilities: command execution / logging / assertions (all output to stderr; stdout is
+// reserved for the final JSON only)
 // ---------------------------------------------------------------------------
 
 function tail(text, lines = 40) {
@@ -125,13 +136,14 @@ function readFileOrEmpty(path) {
   }
 }
 
-/** 单引号安全引用（路径进入 shell 命令前统一走这里）。 */
+/** Safe single-quoting (paths go through this before entering shell commands). */
 function shellQuote(text) {
   return `'${String(text).replaceAll("'", `'\\''`)}'`
 }
 
-/** spawnSync 包装：失败显式抛错并附输出尾部（不打印环境变量，杜绝机密泄漏）。
- *  同步子进程一律带硬超时，杜绝无限挂起破坏总超时纪律。 */
+/** spawnSync wrapper: throws explicitly on failure with output tails attached (env vars are
+ *  never printed, so secrets cannot leak). Every synchronous child process carries a hard
+ *  timeout so nothing can hang forever and break the total-timeout discipline. */
 function runCmd(cmd, argv, options = {}) {
   const r = spawnSync(cmd, argv, {
     encoding: 'utf8',
@@ -140,12 +152,12 @@ function runCmd(cmd, argv, options = {}) {
     ...(options.env ? { env: options.env } : {}),
   })
   if (r.error) {
-    const why = r.error.code === 'ETIMEDOUT' ? `（超时 ${options.timeoutMs ?? 30_000}ms 被终止）` : ''
-    throw new SmokeError(`无法执行 ${cmd}${why}: ${r.error.message}`)
+    const why = r.error.code === 'ETIMEDOUT' ? ` (killed after a ${options.timeoutMs ?? 30_000}ms timeout)` : ''
+    throw new SmokeError(`cannot execute ${cmd}${why}: ${r.error.message}`)
   }
   if (r.status !== 0) {
     throw new SmokeError(
-      `${cmd} ${argv.join(' ')} 退出码 ${r.status}\n--stdout 尾部--\n${tail(r.stdout)}\n--stderr 尾部--\n${tail(r.stderr)}`,
+      `${cmd} ${argv.join(' ')} exit code ${r.status}\n--stdout tail--\n${tail(r.stdout)}\n--stderr tail--\n${tail(r.stderr)}`,
     )
   }
   return r
@@ -155,11 +167,11 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-/** 有界预算：超时 reject（不吞），调用方 catch 计入清理问题。 */
+/** Bounded budget: rejects on timeout (never swallows it); the caller catches and counts it as a cleanup problem. */
 function withBudget(promise, ms, label) {
   let timer
   const timeoutP = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} 超时(${ms}ms)`)), ms)
+    timer = setTimeout(() => reject(new Error(`${label} timed out (${ms}ms)`)), ms)
   })
   return Promise.race([promise, timeoutP]).finally(() => clearTimeout(timer))
 }
@@ -192,14 +204,14 @@ function log(message) {
 function check(name, ok, detail) {
   results.push({ name, ok: Boolean(ok), detail: detail === undefined ? undefined : String(detail) })
   log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail !== undefined ? ` — ${detail}` : ''}`)
-  if (!ok) throw new SmokeError(`验收项失败: ${name}${detail !== undefined ? `（${detail}）` : ''}`)
+  if (!ok) throw new SmokeError(`acceptance item failed: ${name}${detail !== undefined ? ` (${detail})` : ''}`)
 }
 
 // ---------------------------------------------------------------------------
-// Herdr 隔离 headless session
+// Isolated headless Herdr session
 // ---------------------------------------------------------------------------
 
-/** 剔除继承的 HERDR_* 定位变量（防止子进程误连调用者的 pane/socket），再注入隔离配置。 */
+/** Strip inherited HERDR_* locator variables (so children never connect to the caller's pane/socket by accident), then inject the isolated config. */
 function buildHerdrEnv(baseEnv, xdgHome, socketPath) {
   const env = { ...baseEnv }
   for (const key of Object.keys(env)) {
@@ -210,7 +222,7 @@ function buildHerdrEnv(baseEnv, xdgHome, socketPath) {
   return env
 }
 
-/** 透明包装生产 transport：仅按 method 计数，行为完全透传（绝不 mock 返回）。 */
+/** Transparently wrap the production transport: count by method only, pass behavior straight through (never mock returns). */
 function createTracedTransport(base) {
   const counts = { 'agent.start': 0, 'agent.prompt': 0 }
   const traced = {
@@ -226,7 +238,7 @@ function createTracedTransport(base) {
   return { transport: traced, counts }
 }
 
-/** session.snapshot -> {type:'session_snapshot', snapshot:{agents,panes,tabs,workspaces}}（protocol 22）。 */
+/** session.snapshot -> {type:'session_snapshot', snapshot:{agents,panes,tabs,workspaces}} (protocol 22). */
 async function snapshotSession(transport, socketPath, timeoutMs = 5_000) {
   const result = await transport.call({ socketPath }, 'session.snapshot', {}, { timeoutMs })
   const snap = result && typeof result === 'object' ? result.snapshot : undefined
@@ -237,13 +249,13 @@ async function snapshotSession(transport, socketPath, timeoutMs = 5_000) {
     !Array.isArray(snap.workspaces) ||
     !Array.isArray(snap.tabs)
   ) {
-    throw new SmokeError(`session.snapshot 形状异常: ${JSON.stringify(result).slice(0, 300)}`)
+    throw new SmokeError(`malformed session.snapshot shape: ${JSON.stringify(result).slice(0, 300)}`)
   }
   return snap
 }
 
 // ---------------------------------------------------------------------------
-// 工作流脚本构造
+// Workflow script construction
 // ---------------------------------------------------------------------------
 
 function buildWorkflowScript(profileId, gateCommand) {
@@ -267,20 +279,20 @@ function buildWorkflowScript(profileId, gateCommand) {
 }
 
 // ---------------------------------------------------------------------------
-// 主流程
+// Main flow
 // ---------------------------------------------------------------------------
 
 async function main() {
   const args = parseArgv(process.argv.slice(2))
   if (args.help) {
-    log('用法: node scripts/herdr-smoke.mjs [--provider magpie] [--model zhipu/glm-5.3] [--timeout-ms 180000] [--keep-tmp] [--json]')
+    log('Usage: node scripts/herdr-smoke.mjs [--provider magpie] [--model zhipu/glm-5.3] [--timeout-ms 180000] [--keep-tmp] [--json]')
     return
   }
 
   const deadlineAt = Date.now() + args.timeoutMs
-  const withDeadline = (promise, label) => withBudget(promise, deadlineAt - Date.now(), `总超时(${args.timeoutMs}ms)·${label}`)
+  const withDeadline = (promise, label) => withBudget(promise, deadlineAt - Date.now(), `deadline(${args.timeoutMs}ms)·${label}`)
   const assertTimeLeft = (label) => {
-    if (Date.now() >= deadlineAt) throw new SmokeError(`总超时(${args.timeoutMs}ms)耗尽，阶段: ${label}`)
+    if (Date.now() >= deadlineAt) throw new SmokeError(`total timeout (${args.timeoutMs}ms) exhausted at stage: ${label}`)
   }
 
   const state = {
@@ -299,12 +311,12 @@ async function main() {
 
   let runError = null
   try {
-    // ---- 0) 预检：本地依赖与真实模型目录（只读，不触任何 Herdr 控制命令） ----
+    // ---- 0) Preflight: local dependencies and the real model catalog (read-only; no Herdr control commands) ----
     const nodeMajor = Number(process.versions.node.split('.')[0])
-    check('node 主版本 >= 24', nodeMajor >= 24, process.versions.node)
-    check('内核编译产物存在（先 pnpm build）', existsSync(KERNEL_APP_PATH), KERNEL_APP_PATH)
+    check('node major version >= 24', nodeMajor >= 24, process.versions.node)
+    check('kernel build artifact exists (run pnpm build first)', existsSync(KERNEL_APP_PATH), KERNEL_APP_PATH)
     const transportModulePath = resolve(SCRIPT_DIR, '..', 'packages', 'plugins', 'dist', 'herdr', 'transport.js')
-    check('herdr 传输层编译产物存在', existsSync(transportModulePath), transportModulePath)
+    check('herdr transport build artifact exists', existsSync(transportModulePath), transportModulePath)
     runCmd('herdr', ['--version'])
     runCmd('git', ['--version'])
     const listModels = runCmd('pi', ['--list-models', args.model])
@@ -315,9 +327,9 @@ async function main() {
         const cols = l.split(/\s+/)
         return cols[0] === args.provider && cols[1] === args.model
       })
-    check('pi 模型目录含目标模型（真实凭据前置条件）', modelHit !== undefined, `${args.provider}/${args.model}`)
+    check('pi model catalog contains the target model (precondition for real credentials)', modelHit !== undefined, `${args.provider}/${args.model}`)
 
-    // ---- 1) 临时环境布局 ----
+    // ---- 1) Temporary environment layout ----
     state.tmpRoot = mkdtempSync(join(tmpdir(), 'helm-herdr-smoke-'))
     state.repoDir = join(state.tmpRoot, 'repo')
     state.xdgHome = join(state.tmpRoot, 'xdg')
@@ -327,18 +339,18 @@ async function main() {
     mkdirSync(state.repoDir, { recursive: true })
     mkdirSync(state.xdgHome, { recursive: true })
     mkdirSync(logsDir, { recursive: true })
-    log(`临时根: ${state.tmpRoot}`)
+    log(`temp root: ${state.tmpRoot}`)
 
-    // ---- 2) 全新 Git 仓库 + seed 提交（不写宿主全局 git 配置） ----
+    // ---- 2) Fresh Git repo + seed commit (the host global git config is never written) ----
     runCmd('git', ['-C', state.repoDir, 'init', '-b', 'main'])
     writeFileSync(join(state.repoDir, 'README.md'), '# helm herdr smoke seed\n')
     const gitIdentity = ['-c', 'user.name=helm-smoke', '-c', 'user.email=helm-smoke@example.com', '-c', 'commit.gpgsign=false']
     runCmd('git', ['-C', state.repoDir, 'add', 'README.md'])
     runCmd('git', ['-C', state.repoDir, ...gitIdentity, 'commit', '-m', 'seed', '--quiet'])
     const seedHead = runCmd('git', ['-C', state.repoDir, 'rev-parse', 'HEAD']).stdout.trim()
-    check('临时 Git 仓库 seed 提交完成', seedHead.length > 0, seedHead.slice(0, 12))
+    check('temporary Git repo seed commit done', seedHead.length > 0, seedHead.slice(0, 12))
 
-    // ---- 3) 隔离 headless Herdr session（前台 server 子进程 + 完整日志） ----
+    // ---- 3) Isolated headless Herdr session (foreground server child process + full logs) ----
     const sessionName = `helm-smoke-${process.pid}-${Date.now().toString(36)}`
     const socketPath = join(state.xdgHome, 'herdr', 'sessions', sessionName, 'herdr.sock')
     const herdrEnv = buildHerdrEnv(process.env, state.xdgHome, socketPath)
@@ -355,32 +367,34 @@ async function main() {
       spawnErrorHolder.err = err
     })
     state.herdr = { session: sessionName, socketPath, env: herdrEnv, proc: serverProc, logPath: serverLogPath }
-    log(`herdr headless session: ${sessionName}（socket: ${socketPath}）`)
-    log(`herdr server 日志: ${serverLogPath}`)
+    log(`herdr headless session: ${sessionName} (socket: ${socketPath})`)
+    log(`herdr server log: ${serverLogPath}`)
 
-    // 环境净化（须先于内核/传输层加载与任何其调用）：socket 解析优先级为
-    // socketPath > HERDR_SOCKET_PATH > session（session 经 XDG_CONFIG_HOME 推导）。
-    // 本脚本将三者全部指向同一隔离 socket，任何优先级下解析一致；同时剔除继承
-    // 的 HERDR_* 定位变量，防止内核/插件误连调用者所在的主 Herdr。
+    // Environment scrubbing (must happen before the kernel/transport load and any of their
+    // calls): socket resolution priority is socketPath > HERDR_SOCKET_PATH > session (the
+    // session is derived via XDG_CONFIG_HOME). This script points all three at the same
+    // isolated socket so resolution is identical under any priority; inherited HERDR_*
+    // locator variables are also stripped so the kernel/plugins never connect to the main
+    // Herdr the caller sits in.
     for (const key of Object.keys(process.env)) {
       if (key.startsWith('HERDR_')) delete process.env[key]
     }
     process.env.XDG_CONFIG_HOME = state.xdgHome
     process.env.HERDR_SOCKET_PATH = socketPath
 
-    // ---- 4) 生产 transport（脚本自查 + 注入内核的基座） ----
+    // ---- 4) Production transport (the base for both self-checks and the kernel injection) ----
     const { createHerdrTransport } = await import(transportModulePath)
     const baseTransport = createHerdrTransport()
 
     let initialSnap
     for (;;) {
-      assertTimeLeft('等待 herdr socket 就绪')
+      assertTimeLeft('waiting for the herdr socket to become ready')
       if (spawnErrorHolder.err) {
-        throw new SmokeError(`herdr server 启动失败: ${spawnErrorHolder.err.message}`)
+        throw new SmokeError(`herdr server failed to start: ${spawnErrorHolder.err.message}`)
       }
       if (hasExited(serverProc)) {
         throw new SmokeError(
-          `herdr server 提前退出（code=${serverProc.exitCode} signal=${serverProc.signalCode}），日志尾部:\n${tail(readFileOrEmpty(serverLogPath))}`,
+          `herdr server exited early (code=${serverProc.exitCode} signal=${serverProc.signalCode}), log tail:\n${tail(readFileOrEmpty(serverLogPath))}`,
         )
       }
       if (existsSync(socketPath)) {
@@ -388,21 +402,22 @@ async function main() {
           initialSnap = await snapshotSession(baseTransport, socketPath, 3_000)
           break
         } catch {
-          /* socket 尚未就绪，继续轮询（250ms 连接退避，不用 sleep 猜流程完成） */
+          /* socket not ready yet, keep polling (250ms connect backoff; no sleep-based guessing that startup finished) */
         }
       }
       await sleep(250)
     }
-    check('隔离 session 初始 panes 为空', initialSnap.panes.length === 0, `panes=${initialSnap.panes.length}`)
-    check('隔离 session 初始 agents 为空', initialSnap.agents.length === 0, `agents=${initialSnap.agents.length}`)
-    // Herdr 首次 worktree.create 会自动打开原 repo 的普通 workspace。
-    // 显式预建基线，精确验证已有窗格保留且所有新增委派资源均已清理。
+    check('isolated session starts with zero panes', initialSnap.panes.length === 0, `panes=${initialSnap.panes.length}`)
+    check('isolated session starts with zero agents', initialSnap.agents.length === 0, `agents=${initialSnap.agents.length}`)
+    // Herdr opens a plain workspace of the original repo automatically on the first
+    // worktree.create. Establish the baseline explicitly so we can verify precisely that
+    // pre-existing panes stay and all newly delegated resources are cleaned up.
     await withDeadline(baseTransport.call({ socketPath }, 'workspace.create', {
       cwd: state.repoDir,
       label: 'smoke-existing-workspace',
       focus: false,
-    }, { timeoutMs: 5_000 }), '建立既有工作区基线')
-    const baselineSnap = await withDeadline(snapshotSession(baseTransport, socketPath), '读取既有工作区基线')
+    }, { timeoutMs: 5_000 }), 'establishing the pre-existing workspace baseline')
+    const baselineSnap = await withDeadline(snapshotSession(baseTransport, socketPath), 'reading the pre-existing workspace baseline')
     const baselineIds = (snapshot) => ({
       workspaces: snapshot.workspaces.map((w) => w.workspace_id).sort(),
       tabs: snapshot.tabs.map((t) => t.tab_id).sort(),
@@ -410,19 +425,19 @@ async function main() {
       agents: snapshot.agents.map((a) => a.pane_id).sort(),
     })
     const baseline = baselineIds(baselineSnap)
-    check('既有工作区基线含普通窗格且无 Agent', baseline.panes.length > 0 && baseline.agents.length === 0, JSON.stringify(baseline))
+    check('pre-existing workspace baseline has a plain pane and no Agent', baseline.panes.length > 0 && baseline.agents.length === 0, JSON.stringify(baseline))
     const matchesBaseline = (snapshot) => {
       try { deepStrictEqual(baselineIds(snapshot), baseline); return true } catch { return false }
     }
 
-    // ---- 5) createHelm（真实编译产物 + 注入计数 transport）+ 插件启用 + Profile ----
-    // createHelm 的 cwd 成为根会话 cwd 与 herdr 默认 cwd：指向临时 repo，
-    // isolation:'worktree' 的 herdr worktree create --cwd 将在其内建树。
+    // ---- 5) createHelm (real build artifact + injected counting transport) + plugin enable + Profile ----
+    // createHelm's cwd becomes the root conversation cwd and the herdr default cwd: it points
+    // at the temp repo, where the herdr worktree create --cwd of isolation:'worktree' builds trees.
     const { createHelm } = await import(KERNEL_APP_PATH)
     const traced = createTracedTransport(baseTransport)
     const app = await withDeadline(
       createHelm({ dataDir: state.dataDir, cwd: state.repoDir, herdrTransport: traced.transport }),
-      'createHelm 启动',
+      'createHelm startup',
     )
     state.app = app
     state.workflows = app.workflows
@@ -431,7 +446,7 @@ async function main() {
       socketPath,
       startupTimeoutMs: 30_000,
     })
-    await withDeadline(app.kernel.plugins.enable('builtin:herdr'), '启用 builtin:herdr')
+    await withDeadline(app.kernel.plugins.enable('builtin:herdr'), 'enabling builtin:herdr')
     await app.kernel.profiles.save({
       id: PROFILE_ID,
       name: 'Herdr smoke pi',
@@ -449,13 +464,14 @@ async function main() {
     })
     const savedProfile = await app.kernel.profiles.get(PROFILE_ID)
     check(
-      'Profile 已保存且绑定 herdr 运行时',
+      'profile saved and bound to the herdr runtime',
       savedProfile?.runtime?.kind === 'herdr' && savedProfile.runtime.agent === 'pi',
       JSON.stringify(savedProfile?.runtime),
     )
 
-    // Gate 命令：真实验证 artifact 后向 tempRoot 下 gate-count 追加一行——
-    // Gate 执行次数的 shell 侧铁证（不依赖 node.gate 元数据，它能证明没执行两次）。
+    // Gate command: really validate the artifact, then append one line to gate-count under
+    // tempRoot — hard shell-side evidence of the Gate execution count (independent of
+    // node.gate metadata, which could prove it did not run twice).
     const gateCommand =
       `test "$(wc -l < ${ARTIFACT_NAME})" -eq 3 && printf 'x\\n' >> ${shellQuote(state.gateCountPath)}`
     const gateCountLines = () => {
@@ -464,87 +480,87 @@ async function main() {
     }
     const script = buildWorkflowScript(PROFILE_ID, gateCommand)
 
-    // ---- 6) 原始 run：agent(worktree+schema+gate) + resume 续聊 ----
+    // ---- 6) Original run: agent(worktree+schema+gate) + resume continuation ----
     const run1 = await state.workflows.run({ script, conversationId: ROOT_CONVERSATION_ID })
     state.activeRunIds.add(run1.id)
-    log(`原始 run: ${run1.id}`)
-    const result1 = await withDeadline(state.workflows.wait(run1.id), '原始 run 执行（真实 GLM 模型调用）')
+    log(`original run: ${run1.id}`)
+    const result1 = await withDeadline(state.workflows.wait(run1.id), 'original run execution (real GLM model calls)')
     state.activeRunIds.delete(run1.id)
     const summary1 = state.workflows.getRun(run1.id)
     if (summary1.status !== 'completed') {
-      log(`原始 run 节点诊断: ${JSON.stringify(summary1.nodes ?? [])}`)
+      log(`original run node diagnostics: ${JSON.stringify(summary1.nodes ?? [])}`)
       writeFileSync(join(logsDir, 'workflow-failure.json'), JSON.stringify(summary1, null, 2))
     }
 
-    check('原始 run 状态 completed', summary1.status === 'completed', summary1.error ?? summary1.status)
-    check('原始 run 挂在根会话 #1', summary1.conversationId === ROOT_CONVERSATION_ID, String(summary1.conversationId))
+    check('original run status completed', summary1.status === 'completed', summary1.error ?? summary1.status)
+    check('original run attached to root conversation #1', summary1.conversationId === ROOT_CONVERSATION_ID, String(summary1.conversationId))
     const r1 = result1 && typeof result1 === 'object' ? result1 : undefined
     check(
-      '原始 run 结果 first.answer === 3（JSON 交接文件字段）',
+      'original run result first.answer === 3 (JSON handover file field)',
       r1?.first && typeof r1.first.answer === 'number' && r1.first.answer === 3,
       JSON.stringify(r1?.first),
     )
     check(
-      '原始 run 结果 second 为非空确认文本',
+      'original run result second is a non-empty confirmation text',
       typeof r1?.second === 'string' && r1.second.trim() !== '',
       JSON.stringify(String(r1?.second ?? '').slice(0, 80)),
     )
 
     const nodes1 = summary1.nodes ?? []
     check(
-      '原始 run 恰好 2 个 agent 节点且全部 done',
+      'original run has exactly 2 agent nodes, all done',
       nodes1.length === 2 && nodes1.every((n) => n.kind === 'agent' && n.status === 'done'),
       JSON.stringify(nodes1.map((n) => `${n.id}:${n.status}`)),
     )
     const [nodeA1, nodeB1] = nodes1
     check(
-      '原始 run 两节点 executionId 相同（同一 Herdr pane 续聊）',
+      'original run nodes share the same executionId (same Herdr pane continuation)',
       typeof nodeA1?.executionId === 'string' &&
         nodeA1.executionId !== '' &&
         nodeA1.executionId === nodeB1?.executionId,
       `agent-0=${nodeA1?.executionId} agent-1=${nodeB1?.executionId}`,
     )
     check(
-      'Gate 仅第一节点且 ok=true，gate-count 恰好一行（shell 侧恰好执行一次）',
+      'Gate only on the first node with ok=true and gate-count at exactly one line (executed exactly once on the shell side)',
       nodeA1?.gate?.ok === true && nodeB1?.gate === undefined && gateCountLines() === 1,
       JSON.stringify({ nodeGate: nodeA1?.gate, secondNodeGate: nodeB1?.gate, gateCount: gateCountLines() }),
     )
     const wt1 = nodeA1?.worktree
-    check('第一节点带 worktree 元数据', wt1 && isAbsolute(wt1.path) && typeof wt1.branch === 'string' && wt1.branch !== '', JSON.stringify(wt1))
-    check('worktree 目录在 run 结算后仍保留', existsSync(wt1.path), wt1.path)
+    check('first node carries worktree metadata', wt1 && isAbsolute(wt1.path) && typeof wt1.branch === 'string' && wt1.branch !== '', JSON.stringify(wt1))
+    check('worktree directory still present after the run settles', existsSync(wt1.path), wt1.path)
     const branchList1 = runCmd('git', ['-C', state.repoDir, 'branch', '--list', wt1.branch]).stdout.trim()
-    check('worktree 分支在 run 结算后仍保留', branchList1.includes(wt1.branch), branchList1 || `（未找到 ${wt1.branch}）`)
+    check('worktree branch still present after the run settles', branchList1.includes(wt1.branch), branchList1 || `(not found: ${wt1.branch})`)
     const artifact1 = existsSync(join(wt1.path, ARTIFACT_NAME))
       ? readFileSync(join(wt1.path, ARTIFACT_NAME), 'utf8')
       : undefined
-    check(`worktree 内 ${ARTIFACT_NAME} 内容真实（三行）`, artifact1 === ARTIFACT_TEXT, JSON.stringify(artifact1))
+    check(`${ARTIFACT_NAME} inside the worktree has the real content (three lines)`, artifact1 === ARTIFACT_TEXT, JSON.stringify(artifact1))
     state.worktreePaths.push(wt1.path)
 
-    // 真实 Herdr snapshot：本 workflow 的 pane 已关闭，先建的基线窗格保留。
-    // wait 返回时 onRunSettled 已完成。
-    const snap1 = await withDeadline(snapshotSession(baseTransport, socketPath), '原始 run 后 snapshot')
+    // Real Herdr snapshot: every pane of this workflow is closed, the pre-built baseline
+    // pane stays. onRunSettled has completed by the time wait returns.
+    const snap1 = await withDeadline(snapshotSession(baseTransport, socketPath), 'snapshot after the original run')
     const paneStillThere =
       snap1.panes.some((p) => p.pane_id === nodeA1.executionId) ||
       snap1.agents.some((a) => a.pane_id === nodeA1.executionId)
     check(
-      '原始 run 结算后精确恢复既有窗格基线，无新增 pane/tab/workspace',
+      'original run exactly restores the pre-existing pane baseline after settling, with no new pane/tab/workspace',
       !paneStillThere && matchesBaseline(snap1),
       JSON.stringify({ baseline, actual: baselineIds(snap1) }),
     )
 
-    // ---- 7) resumeFromRunId 严格重放（引擎修复目标契约：缓存前缀，零新副作用） ----
+    // ---- 7) Strict resumeFromRunId replay (engine-fix target contract: cached prefix, zero new side effects) ----
     const countsAfterRun1 = { ...traced.counts }
-    log(`原始 run 后 RPC 计数: agent.start=${countsAfterRun1['agent.start']} agent.prompt=${countsAfterRun1['agent.prompt']}（不硬编码具体值，允许一次合法自愈）`)
+    log(`RPC counts after the original run: agent.start=${countsAfterRun1['agent.start']} agent.prompt=${countsAfterRun1['agent.prompt']} (values not hardcoded; one legitimate self-heal allowed)`)
 
     const run2 = await state.workflows.run({ resumeFromRunId: run1.id, conversationId: ROOT_CONVERSATION_ID })
     state.activeRunIds.add(run2.id)
-    log(`重放 run: ${run2.id}（replayedFrom=${run1.id}）`)
-    const result2 = await withDeadline(state.workflows.wait(run2.id), '重放 run 执行')
+    log(`replay run: ${run2.id} (replayedFrom=${run1.id})`)
+    const result2 = await withDeadline(state.workflows.wait(run2.id), 'replay run execution')
     state.activeRunIds.delete(run2.id)
     const summary2 = state.workflows.getRun(run2.id)
 
-    check('重放 run 状态 completed', summary2.status === 'completed', summary2.error ?? summary2.status)
-    check('重放 run 携带 replayedFrom 标记', summary2.replayedFrom === run1.id, String(summary2.replayedFrom))
+    check('replay run status completed', summary2.status === 'completed', summary2.error ?? summary2.status)
+    check('replay run carries the replayedFrom marker', summary2.replayedFrom === run1.id, String(summary2.replayedFrom))
 
     let deepOk = true
     let deepWhy = ''
@@ -554,26 +570,26 @@ async function main() {
       deepOk = false
       deepWhy = e instanceof Error ? e.message.slice(0, 200) : String(e)
     }
-    check('重放结果与原始 run 深相等（缓存前缀重放）', deepOk, deepWhy)
+    check('replay result deep-equals the original run (cached-prefix replay)', deepOk, deepWhy)
 
     const nodes2 = summary2.nodes ?? []
     check(
-      '重放 run 恰好 2 个 agent 节点、全部 done 且 cached=true（缓存命中而非 live 重跑）',
+      'replay run has exactly 2 agent nodes, all done with cached=true (cache hits, not live re-runs)',
       nodes2.length === 2 && nodes2.every((n) => n.kind === 'agent' && n.status === 'done' && n.cached === true),
       JSON.stringify(nodes2.map((n) => `${n.id}:${n.status}:cached=${String(n.cached)}`)),
     )
 
     check(
-      '重放零新增 Herdr 调用（agent.start / agent.prompt 计数不变）',
+      'replay adds zero new Herdr calls (agent.start / agent.prompt counts unchanged)',
       traced.counts['agent.start'] === countsAfterRun1['agent.start'] &&
         traced.counts['agent.prompt'] === countsAfterRun1['agent.prompt'],
-      `agent.start ${countsAfterRun1['agent.start']}->${traced.counts['agent.start']}，agent.prompt ${countsAfterRun1['agent.prompt']}->${traced.counts['agent.prompt']}`,
+      `agent.start ${countsAfterRun1['agent.start']}->${traced.counts['agent.start']}; agent.prompt ${countsAfterRun1['agent.prompt']}->${traced.counts['agent.prompt']}`,
     )
-    check('重放不重跑 Gate（gate-count 仍恰好一行）', gateCountLines() === 1, `gateCount=${gateCountLines()}`)
+    check('replay does not re-run the Gate (gate-count still exactly one line)', gateCountLines() === 1, `gateCount=${gateCountLines()}`)
 
-    const snap2 = await withDeadline(snapshotSession(baseTransport, socketPath), '重放 run 后 snapshot')
+    const snap2 = await withDeadline(snapshotSession(baseTransport, socketPath), 'snapshot after the replay run')
     check(
-      '重放 run 结算后既有窗格保留，零新增 pane/tab/workspace',
+      'replay run keeps pre-existing panes after settling, with zero new pane/tab/workspace',
       matchesBaseline(snap2),
       JSON.stringify({ baseline, actual: baselineIds(snap2) }),
     )
@@ -583,7 +599,7 @@ async function main() {
     runError = err
   }
 
-  // ---- 清理（有界预算；任一失败 => 整体 FAIL 且保留现场） ----
+  // ---- Cleanup (bounded budget; any failure => overall FAIL with the scene preserved) ----
   const problems = await cleanup(state, args)
   const ok = runError === null && state.success && problems.length === 0
   const failed = results.filter((r) => !r.ok).length
@@ -592,7 +608,7 @@ async function main() {
     log(`HERDR-SMOKE: FAIL — ${runError instanceof Error ? runError.message : String(runError)}`)
   }
   for (const p of problems) log(`CLEANUP-FAIL ${p}`)
-  log(`== helm herdr-smoke 汇总 == PASS ${results.length - failed} / FAIL ${failed}${problems.length > 0 ? ` / 清理失败 ${problems.length}` : ''}`)
+  log(`== helm herdr-smoke summary == PASS ${results.length - failed} / FAIL ${failed}${problems.length > 0 ? ` / cleanup failures ${problems.length}` : ''}`)
   log(`HERDR-SMOKE: ${ok ? 'PASS' : 'FAIL'}`)
   if (args.json) {
     process.stdout.write(`${JSON.stringify({ ok, passed: results.length - failed, failed, cleanupFailures: problems, results })}\n`)
@@ -601,7 +617,8 @@ async function main() {
 }
 
 // ---------------------------------------------------------------------------
-// 清理：只动自己创建的资源；任一失败计为整体 FAIL 并保留现场与日志
+// Cleanup: only touch resources we created; any failure counts as overall FAIL and
+// preserves the scene and logs
 // ---------------------------------------------------------------------------
 
 async function cleanup(state, args) {
@@ -611,19 +628,19 @@ async function cleanup(state, args) {
       problems.push(`${label}: ${e instanceof Error ? e.message : String(e)}`)
     })
 
-  // 1) 在途 run 尽力中止（总超时/失败路径下不能留着假 running）
+  // 1) Best-effort abort of in-flight runs (the timeout/failure path must not leave fake running entries)
   if (state.workflows && state.activeRunIds.size > 0) {
     for (const runId of [...state.activeRunIds]) {
       await step(`abort run ${runId}`, 5_000, () => state.workflows.abort(runId))
     }
   }
 
-  // 2) 关闭内核（插件 teardown；已终态 run 不会被阻塞）
+  // 2) Close the kernel (plugin teardown; already-settled runs never block)
   if (state.app) {
     await step('app.close', 10_000, () => state.app.close())
   }
 
-  // 3) 只停自己创建的 headless session（同一隔离 env 经显式 socket 寻址，绝不触碰主 Herdr）
+  // 3) Stop only the headless session we created (explicit socket addressing via the same isolated env; the main Herdr is never touched)
   if (state.herdr && !hasExited(state.herdr.proc)) {
     try {
       runCmd('herdr', ['--session', state.herdr.session, 'server', 'stop'], {
@@ -643,13 +660,14 @@ async function cleanup(state, args) {
       }
     }
     if (!hasExited(state.herdr.proc)) {
-      problems.push(`herdr server pid=${state.herdr.proc.pid} 最终未能终止`)
+      problems.push(`herdr server pid=${state.herdr.proc.pid} could not be terminated in the end`)
     }
   }
 
   if (state.success && problems.length === 0) {
-    // 4) 成功路径：先验证 worktree 目录/分支确实保留（验收断言已过），再清理
-    //    自己创建的 worktree；仅当 git common-dir 属于本次临时仓库才允许移除。
+    // 4) Success path: first verify the worktree dir/branch is really present (the
+    //    acceptance assertions already passed), then clean up the worktrees we created;
+    //    removal is allowed only when the git common-dir belongs to this temp repo.
     for (const wtPath of [...new Set(state.worktreePaths)]) {
       if (!existsSync(wtPath)) continue
       try {
@@ -657,31 +675,31 @@ async function cleanup(state, args) {
         const commonDir = isAbsolute(raw) ? raw : resolve(wtPath, raw)
         const expected = resolve(state.repoDir, '.git')
         if (commonDir !== expected) {
-          throw new SmokeError(`拒绝移除非本次临时仓库的 worktree: ${wtPath}（common-dir=${commonDir}，期望 ${expected}）`)
+          throw new SmokeError(`refusing to remove a worktree outside this temp repo: ${wtPath} (common-dir=${commonDir}, expected ${expected})`)
         }
         runCmd('git', ['-C', state.repoDir, 'worktree', 'remove', '--force', wtPath], { timeoutMs: 15_000 })
-        log(`已清理 worktree: ${wtPath}`)
+        log(`cleaned up worktree: ${wtPath}`)
       } catch (e) {
-        problems.push(`worktree 清理 ${wtPath}: ${e instanceof Error ? e.message : String(e)}`)
+        problems.push(`worktree cleanup ${wtPath}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
     if (problems.length > 0) {
-      log(`清理失败，现场已保留: ${state.tmpRoot}`)
-      if (state.herdr) log(`herdr server 日志: ${state.herdr.logPath}`)
+      log(`cleanup failed, scene preserved: ${state.tmpRoot}`)
+      if (state.herdr) log(`herdr server log: ${state.herdr.logPath}`)
     } else if (!args.keepTmp) {
       try {
         rmSync(state.tmpRoot, { recursive: true, force: true })
-        log(`已清理临时根: ${state.tmpRoot}`)
+        log(`cleaned up temp root: ${state.tmpRoot}`)
       } catch (e) {
-        problems.push(`临时根清理: ${e instanceof Error ? e.message : String(e)}`)
+        problems.push(`temp root cleanup: ${e instanceof Error ? e.message : String(e)}`)
       }
     } else {
-      log(`--keep-tmp：保留临时根 ${state.tmpRoot}（herdr 日志: ${state.herdr?.logPath}）`)
+      log(`--keep-tmp: temp root preserved at ${state.tmpRoot} (herdr log: ${state.herdr?.logPath})`)
     }
   } else if (state.tmpRoot !== '') {
-    // 任一失败：绝不删日志与现场，输出诊断入口
-    log(`失败现场已保留: ${state.tmpRoot}`)
-    if (state.herdr) log(`herdr server 日志: ${state.herdr.logPath}`)
+    // Any failure: never delete logs or the scene; print the diagnostic entry points
+    log(`failure scene preserved: ${state.tmpRoot}`)
+    if (state.herdr) log(`herdr server log: ${state.herdr.logPath}`)
   }
 
   return problems

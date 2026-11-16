@@ -158,15 +158,15 @@ export function getSkillSourceBadge(skill: SkillSummary): {
   variant: 'builtin' | 'workspace' | 'plugin' | 'agents'
 } {
   if (isSkillAgents(skill)) {
-    return { label: '共享', variant: 'agents' }
+    return { label: 'Shared', variant: 'agents' }
   }
   if (isSkillBuiltin(skill)) {
-    return { label: '内置', variant: 'builtin' }
+    return { label: 'Built-in', variant: 'builtin' }
   }
   if (isSkillPlugin(skill)) {
-    return { label: skill.managedByPlugin ?? '插件', variant: 'plugin' }
+    return { label: skill.managedByPlugin ?? 'Plugins', variant: 'plugin' }
   }
-  return { label: '工作区', variant: 'workspace' }
+  return { label: 'Workspace', variant: 'workspace' }
 }
 
 /**

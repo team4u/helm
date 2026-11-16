@@ -1,8 +1,8 @@
 /**
- * CredentialService：管理 credentials.json（恒 0600）中的模型 API Key
- * 与插件 secret。get() 仅限进程内可信调用方使用，绝不经 HTTP 暴露。
- * 读改写按 credentials.json 真实路径双层串行化：进程内共享队列（withFileLock）
- * + 跨进程锁（credentials.json.lock，与 CLI 互认同一协议），跨实例互斥。
+ * CredentialService: manage credentials.json(constant 0600) in model API Key
+ * and plugin secret.get() only limit process inside can message caller use, never via HTTP expose.
+ * read change write by credentials.json real path two-layer serial: process inside sharing queue (withFileLock)
+ * + across process lock (credentials.json.lock, and CLI mutual recognize the same protocol), across instance mutual exclusion.
  */
 import { chmod } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -17,31 +17,31 @@ import {
 import { withFileLock, withProcessFileLock } from './file-lock.js'
 
 export interface StoredCredential {
-  /** 经 SecretStash 脱敏后的值或原始值（模型 API Key 不占位，直接存值）。 */
+  /** via SecretStash redaction after value or original value (model API Key do not occupy, directly store value). */
   value: string
   createdAt: string
   updatedAt: string
 }
 
 /**
- * credentials.json 持久化形态。已知键以外的顶层键（如 CLI 写入的
- * `cli: { hubUrl, token }`）原样保留：本服务只拥有 providers/pluginSecrets
- * 两个命名空间，不得在写回时丢弃他人的键。
+ * credentials.json persist form. known key with outside top-level key (such as CLI write
+ * `cli: { hubUrl, token }`) original keep: this service only own providers/pluginSecrets
+ * two naming empty between, must not in write back when discard other person key.
  */
 export interface CredentialStore {
   providers: Record<string, StoredCredential>
   pluginSecrets: Record<string, Record<string, string>>
-  /** 未知顶层键 → 原始 JSON 值（写回保持不动）。 */
+  /** unknown top-level key → original JSON value (write back keep do not motion). */
   [key: string]: unknown
 }
 
-/** providerId / pluginId 边界校验：防路径与 JSON 键注入。 */
+/** providerId / pluginId boundary validate: guard against path and JSON key inject. */
 function assertId(kind: string, id: string): void {
   if (typeof id !== 'string' || id === '') {
-    throw new Error(`${kind} 不能为空`)
+    throw new Error(`${kind} cannot be empty`)
   }
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id)) {
-    throw new Error(`非法 ${kind}: ${id}`)
+    throw new Error(`illegal ${kind}: ${id}`)
   }
 }
 
@@ -50,31 +50,31 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 校验已知字段的既有结构：providers 下每项必须是含 string value 的对象、
- * pluginSecrets 下每项必须是 string→string 映射。结构非法显式抛
- * FileParseError（含路径与键名），绝不静默丢弃后覆盖——那会吞掉用户凭据。
- * 未知顶层键不做形状假设，原样保留。
+ * validate known field since has structure:providers under each items must be contains string value object,
+ * pluginSecrets under each items must be string→string mapping. structure illegal explicit throw
+ * FileParseError(contains path and key name), never static default discard after override - - that will swallow user credentials.
+ * unknown top-level key does not shape assume, original keep.
  */
 function normalizeStore(raw: unknown, path: string): CredentialStore {
   if (raw === undefined) return { providers: {}, pluginSecrets: {} }
   if (!isPlainObject(raw)) {
-    throw new FileParseError(path, 'credentials.json 结构非法（应为对象）')
+    throw new FileParseError(path, 'credentials.json structure illegal (should be object)')
   }
   const providers: Record<string, StoredCredential> = {}
   const rawProviders = raw['providers']
   if (rawProviders !== undefined) {
     if (!isPlainObject(rawProviders)) {
-      throw new FileParseError(path, 'credentials.json providers 字段结构非法（应为对象）')
+      throw new FileParseError(path, 'credentials.json providers field structure illegal (should be object)')
     }
     for (const [id, value] of Object.entries(rawProviders)) {
       if (!isPlainObject(value)) {
         throw new FileParseError(
           path,
-          `credentials.json providers.${id} 结构非法（应为 { value, createdAt, updatedAt } 对象）`,
+          `credentials.json providers.${id} structure illegal (should be { value, createdAt, updatedAt } object)`,
         )
       }
       if (typeof value['value'] !== 'string') {
-        throw new FileParseError(path, `credentials.json providers.${id}.value 缺失或非字符串`)
+        throw new FileParseError(path, `credentials.json providers.${id}.value missing or non- string`)
       }
       providers[id] = {
         value: value['value'],
@@ -89,14 +89,14 @@ function normalizeStore(raw: unknown, path: string): CredentialStore {
     if (!isPlainObject(rawPlugins)) {
       throw new FileParseError(
         path,
-        'credentials.json pluginSecrets 字段结构非法（应为 pluginId → 键名 → 值 对象）',
+        'credentials.json pluginSecrets field structure illegal (should be pluginId → key name → value object)',
       )
     }
     for (const [pluginId, secrets] of Object.entries(rawPlugins)) {
       if (!isPlainObject(secrets)) {
         throw new FileParseError(
           path,
-          `credentials.json pluginSecrets.${pluginId} 结构非法（应为 键名 → 字符串 对象）`,
+          `credentials.json pluginSecrets.${pluginId} structure illegal (should be key name → string object)`,
         )
       }
       const map: Record<string, string> = {}
@@ -104,7 +104,7 @@ function normalizeStore(raw: unknown, path: string): CredentialStore {
         if (typeof value !== 'string') {
           throw new FileParseError(
             path,
-            `credentials.json pluginSecrets.${pluginId}.${key} 必须是字符串`,
+            `credentials.json pluginSecrets.${pluginId}.${key} must be string`,
           )
         }
         map[key] = value
@@ -126,14 +126,14 @@ export class CredentialService {
     this.path = join(dataDir, 'credentials.json')
   }
 
-  /** 列出已配置的 providerId（只有 ID，绝不包含值）。 */
+  /** column out already config providerId(only ID, never contains value). */
   async list(): Promise<string[]> {
     const store = await this.readStore()
     return Object.keys(store.providers).sort()
   }
 
   /**
-   * 读取 provider API Key（仅进程内可信调用方；HTTP/CLI 不得暴露）。
+   * read provider API Key(only process inside can message caller;HTTP/CLI must not expose).
    */
   async get(providerId: string): Promise<string | undefined> {
     assertId('providerId', providerId)
@@ -141,11 +141,11 @@ export class CredentialService {
     return store.providers[providerId]?.value
   }
 
-  /** 设置 provider API Key（0600 原子写，绝不回显值）。 */
+  /** settings provider API Key(0600 atomic write, never back visible value). */
   async set(providerId: string, value: string): Promise<void> {
     assertId('providerId', providerId)
     if (typeof value !== 'string' || value === '') {
-      throw new Error('credential 值不能为空')
+      throw new Error('credential value cannot be empty')
     }
     await this.enqueue(async () => {
       const store = await this.readStore()
@@ -172,19 +172,19 @@ export class CredentialService {
     })
   }
 
-  /** 读取插件 secret（仅进程内可信调用方）。 */
+  /** read plugin secret(only process inside can message caller). */
   async getPluginSecret(pluginId: string, key: string): Promise<string | undefined> {
     assertId('pluginId', pluginId)
-    if (typeof key !== 'string' || key === '') throw new Error('secret 键名不能为空')
+    if (typeof key !== 'string' || key === '') throw new Error('secret key name cannot be empty')
     const store = await this.readStore()
     return store.pluginSecrets[pluginId]?.[key]
   }
 
-  /** 写入插件 secret（configSchema 中 secret:true 的字段自动落到这里）。 */
+  /** write plugin secret(configSchema in secret:true field automatically to this in). */
   async setPluginSecret(pluginId: string, key: string, value: string): Promise<void> {
     assertId('pluginId', pluginId)
-    if (typeof key !== 'string' || key === '') throw new Error('secret 键名不能为空')
-    if (typeof value !== 'string' || value === '') throw new Error('secret 值不能为空')
+    if (typeof key !== 'string' || key === '') throw new Error('secret key name cannot be empty')
+    if (typeof value !== 'string' || value === '') throw new Error('secret value cannot be empty')
     await this.enqueue(async () => {
       const store = await this.readStore()
       const bucket = store.pluginSecrets[pluginId] ?? {}
@@ -204,12 +204,12 @@ export class CredentialService {
   }
 
   /**
-   * 精确删除单个插件 secret（不存在时静默成功：幂等语义，调用方回滚路径
-   * 允许重复清理）。其余键与同插件其他 secret 不受影响。
+   * precise delete single plugin secret(missing when static default succeeded: idempotent semantics, caller rollback path
+   * allows duplicate clean up). the rest key and same plugin other secret do not subject to affect.
    */
   async deletePluginSecret(pluginId: string, key: string): Promise<void> {
     assertId('pluginId', pluginId)
-    if (typeof key !== 'string' || key === '') throw new Error('secret 键名不能为空')
+    if (typeof key !== 'string' || key === '') throw new Error('secret key name cannot be empty')
     await this.enqueue(async () => {
       const store = await this.readStore()
       const bucket = store.pluginSecrets[pluginId]
@@ -220,38 +220,38 @@ export class CredentialService {
     })
   }
 
-  /** 全量读取（进程内诊断/导出用；含明文，绝不外发）。 */
+  /** all amount read (process inside diagnose/export use; contains plaintext, never outside). */
   async readStore(): Promise<CredentialStore> {
     const raw = await readJsonFileOptional(this.path)
     const store = normalizeStore(raw, this.path)
-    // 读路径同样收敛 0600：已有文件被放宽权限时立即修复，而不是等到下次写。
-    // 修复失败显式抛错，绝不静默带病返回。
+    // read path same converge 0600: already has file by put wide permission when immediately fix, while is not etc. to under time write.
+    // fix failed explicit throws, never static default carries illness return.
     if (raw !== undefined && !(await isPrivateMode(this.path))) {
       await chmod(this.path, 0o600)
       if (!(await isPrivateMode(this.path))) {
-        throw new Error(`credentials.json 权限修复失败（应 0600）: ${this.path}`)
+        throw new Error(`credentials.json permission fix failed (should 0600): ${this.path}`)
       }
     }
     return store
   }
 
   private async persist(store: CredentialStore): Promise<void> {
-    // 恒 0600：机密文件权限红线。
+    // constant 0600: secret file permission hard rule.
     await atomicWriteJson(this.path, store, { mode: 0o600 })
   }
 
-  /** 按真实路径双层串行化读改写：进程内队列 + 跨进程锁（与 CLI 互认）。 */
+  /** by real path two-layer serial read change write: process inside queue + across process lock (and CLI mutual recognize). */
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
     return withFileLock(this.path, () => withProcessFileLock(this.path, fn))
   }
 }
 
-/** 暴露路径常量供权限断言（不读取内容）。 */
+/** expose path constant supply permission assertion (do not read content). */
 export function credentialsPath(dataDir: string): string {
   return join(dataDir, 'credentials.json')
 }
 
-/** 仅读文本（测试断言明文不落其他文件时使用）。 */
+/** only read text (test assertion plaintext do not other file when use). */
 export async function readRawText(path: string): Promise<string> {
   return readTextFile(path)
 }

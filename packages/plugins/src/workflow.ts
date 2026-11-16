@@ -1,57 +1,57 @@
 /**
- * builtin:workflow：subagent / SubagentWorkflow / cleanup_worktree 编排插件。
+ * builtin:workflow: the subagent / SubagentWorkflow / cleanup_worktree orchestration plugin.
  *
- * 职责：
- * - 封装编排引擎（engine/：DSL runtime + journal 重放 + WorkflowService），
- *   引擎为插件自有资产（内核不 import 本目录）；跨 spawn 通用边界在
- *   runtime/spawn（内核侧）；
- * - 私有 state 经 ctx.doc 私有文档 `records`（插件 docs 命名空间，state.sqlite
- *   持久）；公共 `runs` 投影按会话分片（ctx.sessionDoc，每会话分片含自身及
- *   后代发起的 run——沿真实会话父链防环/缺父，run.conversationId 保持原始
- *   归属；不进全局首帧/全局 SSE，会话新增/删除经宿主事件重投影）；全局仅
- *   保留紧凑 `run-badges` 角标文档（每会话聚合 count/tone/footerText，按
- *   run.id 去重，无完整 run 摘要）；
- *   无进程内 Map fallback、无 kernel.documentStore 注入；
- * - 后台 run 结算（kind=subagent 恒后台；kind=workflow 经工具 background 启动
- *   时同样置 notifyParentOnSettle）经 submitInput(requestId) 向父会话投递
- *   汇报（跨重启幂等；父会话已删除时 notification 通知）；级联取消边界内的
- *   下级父会话不投递（防取消后复活），只向边界外拥有者单次结算汇报；
- *   background 缺省以内核权威归属到 ownership=human 判定（不按 profileId/
- *   runtime 角色硬编码）：人类交互会话缺省后台，自动化会话（bot/helm）缺省
- *   同步且显式 background=true 显式拒绝（防子代理/驻留 Worker 早结算）；
- * - 级联取消：turn_settled（outcome=aborted）时取消该会话子树内属于它的
- *   全部在途 run（completed/failed 不取消合法后台任务）；受管子会话中止一律
- *   经 ctx.host.abortConversationGuarded 内核原子复核（human 红线），绝不
- *   回退普通 abortConversation；
- * - 生命周期：service.prepare 执行 prepareRecovery（只落 abort 标记，不唤醒
- *   调度器，必须在任何服务 start 之前——宿主全局 prepare 屏障保证）；
- *   service.start 执行 init（终止遗留任务、标 failed、补发通知）与 close；
- *   liveTasks 声明在途任务（停用硬阻断）；
- * - 3 个模型工具（subagent / SubagentWorkflow / cleanup_worktree）与
- *   13 个动作（list/get/save/delete/run/runs/inspect/abort/steer/detach/
- *   cleanup_worktree/list_worktrees/inspect_worktree）五端复用；
- * - 嵌套深度契约：受管子代理（经本插件派生的原生/外部子会话）默认可嵌套
- *   DEFAULT_MAX_SUBAGENT_DEPTH（2）层——主会话直接派生一层，一层子代理
- *   默认可继续派生二层，达到子树上限的会话即编排叶子。私有登记表持久
- *   depth / parentConversationId / 子树上限等事实，before_turn 剥离派工工具、工具/动作入口
- *   前置拒绝、agent_spawn 最高优先级兜底，三道防线显式报
- *   subagent_depth_exceeded；显式扩展到更深层经插件配置与 spawn meta 的
- *   本插件命名空间 maxSubagentDepth 字段（均校验在
- *   HARD_MAX_SUBAGENT_DEPTH 内，受管子代理不能提高继承的上限）
- *   （fork / SuperAgent worker 不在表内，不受影响）。
+ * Responsibilities:
+ * - Wrap the orchestration engine (engine/: DSL runtime + journal replay + WorkflowService);
+ *   the engine is plugin-owned (the kernel never imports this directory); the generic cross-spawn
+ *   boundary lives in runtime/spawn (kernel side);
+ * - private state goes through the ctx.doc private document `records` (the plugin docs namespace,
+ *   persisted in state.sqlite); the public `runs` projection is sharded per conversation (ctx.sessionDoc,
+ *   each shard holding runs started by itself and its descendants -- following the real conversation
+ *   parent chain against loops/missing parents; run.conversationId keeps the original ownership;
+ *   never enters the global first frame / global SSE; conversation additions/deletions re-project via
+ *   host events); globally only a compact `run-badges` badge document is kept (per-conversation
+ *   aggregated count/tone/footerText, deduped by run.id, no full run summaries);
+ *   no in-process Map fallback, no kernel.documentStore injection;
+ * - background run settlement (kind=subagent is always background; kind=workflow started via the tool's
+ *   background flag likewise sets notifyParentOnSettle) delivers the report to the parent conversation via
+ *   submitInput(requestId) (idempotent across restarts; a notification when the parent conversation is
+ *   deleted); descendant parent conversations inside a cascade-cancel boundary get no delivery (preventing
+ *   revival after cancellation); a single settle report goes only to owners outside the boundary;
+ *   the background default uses the kernel's authoritative ownership=human judgment (no profileId/
+ *   runtime role hardcoding): human interactive sessions default to background; automated sessions
+ *   (bot/helm) default to synchronous with an explicit background=true explicitly rejected (preventing
+ *   early settlement of subagents/resident workers);
+ * - cascade cancellation: on turn_settled (outcome=aborted), cancel all in-flight runs of that
+ *   conversation subtree belonging to it (completed/failed do not cancel legitimate background tasks);
+ *   managed sub-conversation aborts always go through ctx.host.abortConversationGuarded for the kernel's
+ *   atomic recheck (the human red line), never falling back to plain abortConversation;
+ * - lifecycle: service.prepare runs prepareRecovery (only laying abort markers, waking no scheduler;
+ *   must run before any service start -- guaranteed by the host's global prepare barrier);
+ *   service.start runs init (terminate leftover tasks, mark failed, re-deliver notifications) and close;
+ *   liveTasks declares in-flight tasks (disable is hard-blocked);
+ * - nesting depth contract: managed subagents (native/external sub-conversations derived via this plugin)
+ *   may nest DEFAULT_MAX_SUBAGENT_DEPTH (2) levels by default -- the main conversation derives one
+ *   level directly, a level-1 subagent may derive level-2 by default, and a conversation at the subtree
+ *   cap is an orchestration leaf. The private registry persists depth / parentConversationId / subtree-cap
+ *   facts; three lines of defense -- before_turn tool stripping, tool/action entry pre-rejection, and the
+ *   highest-priority agent_spawn backstop -- explicitly report subagent_depth_exceeded; explicit extension
+ *   to deeper levels goes through the plugin config and the spawn meta's maxSubagentDepth field of this
+ *   plugin's namespace (both validated within HARD_MAX_SUBAGENT_DEPTH; managed subagents cannot raise an
+ *   inherited cap) (fork / SuperAgent workers are not in the table and are unaffected).
  *
- * 模块化拆分架构（入口只做组装，注册顺序与依赖注入见 definePlugin）：
- * - ./workflow/config.ts: 插件配置 Schema 与现读校验（启动即校验，不带病运行）
- * - ./workflow/depth.ts: 受管子代理登记表与嵌套深度守卫（三道防线共用事实）
- * - ./workflow/projection.ts: runs 会话分片投影与全局紧凑角标（幂等写入）
- * - ./workflow/background.ts: background 缺省策略与后台结算汇报投递
- * - ./workflow/engine-host.ts: HelmHostApi 端口 -> WorkflowServiceHost 适配
- *   （守卫式中止 / emitEvent 收口两条安全纪律）
- * - ./workflow/hooks.ts: agent_spawn 双钩（深度守卫 300 / worktree 隔离 200）、
- *   before_turn 工具剥离、turn_settled 级联取消与宿主事件订阅
- * - ./workflow/tools.ts: subagent / SubagentWorkflow / cleanup_worktree 工具
- * - ./workflow/actions.ts: 13 个动作（五端复用）
- * - ./workflow/ui.ts: 前端 UI 扩展点声明
+ * Modular split architecture (the entry only assembles; registration order and dependency injection in definePlugin):
+ * - ./workflow/config.ts: plugin config schema and read-time validation (validated at startup, never run sick)
+ * - ./workflow/depth.ts: managed-subagent registry and nesting-depth guard (shared facts of the three defense lines)
+ * - ./workflow/projection.ts: runs conversation-shard projection and the global compact badges (idempotent writes)
+ * - ./workflow/background.ts: background default policy and background settle report delivery
+ * - ./workflow/engine-host.ts: HelmHostApi ports -> WorkflowServiceHost adaptation
+ *   (two safety disciplines: guarded aborts / emitEvent convergence)
+ * - ./workflow/hooks.ts: the dual agent_spawn hooks (depth guard 300 / worktree isolation 200),
+ *   before_turn tool stripping, turn_settled cascade cancellation and host event subscriptions
+ * - ./workflow/tools.ts: the subagent / SubagentWorkflow / cleanup_worktree tools
+ * - ./workflow/actions.ts: the 13 actions (reused across five ends)
+ * - ./workflow/ui.ts: frontend UI extension point declarations
  */
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { resolvePluginClientRoot } from './asset-paths.js'
@@ -85,31 +85,31 @@ export { WORKFLOW_PLUGIN_ID }
 export function createWorkflowPlugin(): PluginDefinition {
   return {
     id: WORKFLOW_PLUGIN_ID,
-    name: '工作流与子代理编排',
-    description: '多智能体确定性编排：subagent / SubagentWorkflow 工具、受管 Git Worktree、运行记录与任务面板。',
+    name: 'Workflows & Subagents',
+    description: 'Deterministic multi-agent orchestration: subagent / SubagentWorkflow tools, managed Git worktrees, run records and the task panel.',
     icon: 'workflow',
     version: '0.1.0',
     clientRoot: resolvePluginClientRoot(WORKFLOW_PLUGIN_ID, 'workflow', 'workflow_plugin_client_missing'),
     definePlugin(ctx) {
-      // ---- 会话分片公共文档：runs（每父会话只写自己的 run 列表） ----
-      // 不进全局首帧/全局 SSE；前端经专用订阅流按会话拉取与增量更新。
+      // ---- Conversation-sharded public doc: runs (each parent conversation writes only its own run list) ----
+      // Not in the global first frame / global SSE; the frontend pulls and incrementally updates per conversation via the dedicated subscription stream.
       const runsDoc = ctx.sessionDoc<WorkflowRunSessionDocState>(WORKFLOW_RUNS_DOC, { runs: [] }, { public: true })
 
-      // ---- 全局紧凑角标文档：run-badges（仅 count/tone/footerText，有意全局） ----
-      // 工作台导航角标需要跨会话可见；完整 run 摘要绝不进入此文档/全局流。
+      // ---- Global compact badge doc: run-badges (only count/tone/footerText, intentionally global) ----
+      // Workbench navigation badges need cross-conversation visibility; full run summaries never enter this doc / the global stream.
       const badgesDoc = ctx.doc<WorkflowRunBadgesDocState>(
         WORKFLOW_RUN_BADGES_DOC,
         { byConversation: {} },
         { public: true },
       )
 
-      // ---- 引擎私有 records 文档（键值 store：run 索引 + 每 run 记录） ----
-      // 私有 doc：不进公共快照/事件；引擎经此持久化，重启恢复读同一命名空间。
+      // ---- Engine-private records doc (key-value store: run index + per-run records) ----
+      // Private doc: not in public snapshots/events; the engine persists through it, and restart recovery reads the same namespace.
       const records = ctx.doc<Record<string, unknown>>('records', {})
 
-      // ---- worktree 隔离资产文档（受管登记 + durable 租约；停用保留可重读） ----
-      // 与 records 同层：allocator 登记表 + 租约表 + agentId 绑定表。插件停用
-      // 期间不清除，重新启用后 cleanup 可继续定位（不丢 metadata）。
+      // ---- Worktree isolation asset doc (managed registry + durable leases; kept on disable for re-reading) ----
+      // Same layer as records: the allocator registry + lease table + agentId binding table. Not cleared
+      // while the plugin is disabled; after re-enable, cleanup can still locate them (no metadata loss).
       const worktreeDocs = ctx.doc<Record<string, unknown>>('worktree-state', {})
       const worktreeDocStore = {
         get<T>(key: string, initial: T): T {
@@ -123,22 +123,22 @@ export function createWorkflowPlugin(): PluginDefinition {
         flush: (): Promise<void> => worktreeDocs.flush(),
       }
 
-      // ---- 受管子代理登记表（私有 doc；跨重启持久的事实来源） ----
+      // ---- Managed-subagent registry (private doc; the persistent source of facts across restarts) ----
       const subagentConvDoc = ctx.doc<Record<string, ManagedSubagentEntry>>('subagent-conversations', {})
 
-      // ---- 插件配置：Schema 注册 + 启动即校验（非法值在定义阶段显式失败） ----
+      // ---- Plugin config: schema registration + validate at startup (invalid values fail explicitly at definition time) ----
       registerWorkflowConfigSchema(ctx)
       readMaxConcurrentAgents(ctx)
       readMaxSubagentDepth(ctx)
       readAutoRecoverOnRestart(ctx)
 
-      // ---- 深度守卫与受管子代理登记（构造即全量校验持久条目） ----
+      // ---- Depth guard and managed-subagent registry (validating all persisted entries at construction) ----
       const registry = createManagedSubagentRegistry({
         doc: subagentConvDoc,
         configuredMaxSubagentDepth: () => readMaxSubagentDepth(ctx),
       })
 
-      // ---- background 缺省策略与后台结算汇报（workflows 延迟注入，无环） ----
+      // ---- Background default policy and background settle reports (workflows injected lazily, acyclic) ----
       const backgroundPolicy = createBackgroundPolicy({
         getConversationOwnership: (id) => ctx.host.getConversationOwnership(id),
       })
@@ -150,7 +150,7 @@ export function createWorkflowPlugin(): PluginDefinition {
         listRuns: () => workflows.listRuns(),
       })
 
-      // ---- runs 会话分片投影与全局角标（stopping 门在投影内部） ----
+      // ---- runs conversation-shard projection and global badges (the stopping gate lives inside the projection) ----
       const projection = createRunsProjection({
         runsDoc,
         badgesDoc,
@@ -158,11 +158,11 @@ export function createWorkflowPlugin(): PluginDefinition {
         listConversations: () => ctx.host.listConversations(),
       })
 
-      // 受控 stop 时序：teardown 先置 deactivating 会废黜 doc 句柄，但 service.stop
-      // 属宿主受控调用链——本插件在 stop 内最后再同步 runs 投影。为使 stop 期间的
-      // 最终落盘可写，引擎持有本周期 doc 句柄的直接引用（句柄在 stop 返回前仍由
-      // 本闭包保证不再被外部触发写）；旧周期（epoch 已递增）句柄被 ctx.doc 边界
-      // 拒绝，防停用残留写。
+      // Controlled stop ordering: teardown first sets deactivating, which deposes doc handles, but service.stop
+      // belongs to the host's controlled call chain -- this plugin synchronously re-projects runs last inside stop.
+      // For the final flush during stop to be writable, the engine holds a direct reference to this cycle's doc
+      // handle (this closure guarantees no further external writes before stop returns); handles of old cycles
+      // (epoch already advanced) are rejected at the ctx.doc boundary, preventing post-disable leftover writes.
       const stateStore = {
         get<T>(key: string, initial: T): T {
           const all = records.get()
@@ -175,11 +175,11 @@ export function createWorkflowPlugin(): PluginDefinition {
         flush: (): Promise<void> => records.flush(),
       }
 
-      // ---- worktree 隔离生命周期（本插件自有 Git 能力） ----
-      // agent_spawn around（continuation）包襄完整派生：分配/续接/占用/租约；
-      // priority 200（先于外部运行时接管器如 herdr 的 100 执行 = 更外层），
-      // 保证外部执行也被租约与登记包襄；Git 命令经 ctx.host.execEnv
-      // （argv 直跑）在真实最终节点执行。
+      // ---- Worktree isolation lifecycle (this plugin's own Git capability) ----
+      // The agent_spawn around (continuation) wrapper wraps the whole derivation: allocation/resume/occupancy/lease;
+      // priority 200 (running before external-runtime takers like herdr's 100 = the outer layer),
+      // ensuring external executions are also wrapped by leases and registration; Git commands run via
+      // ctx.host.execEnv (direct argv) on the real final node.
       const isolation = new WorktreeIsolation({
         host: {
           resolveSpawnTarget: (input) => ctx.host.resolveSpawnTarget(input),
@@ -202,15 +202,15 @@ export function createWorkflowPlugin(): PluginDefinition {
         docStore: worktreeDocStore,
       })
 
-      // ---- WorkflowService 实例（host 能力全部经 ctx.host 受信通道） ----
+      // ---- WorkflowService instance (all host capabilities go through the ctx.host trusted channel) ----
       const workflows = new WorkflowService({
         dataDir: ctx.dataDir,
         state: stateStore,
         concurrency: readMaxConcurrentAgents(ctx),
         autoRecoverOnRestart: () => isEffectiveAutoRecover(ctx),
         deferExternalReattach: true,
-        // 持久面值级脱敏钩子（契约声明主 app 注入；实际唯一来源是宿主统一
-        // redact 端口）：run 记录/账本写入前过 stash 脱敏，防机密落库。
+        // Persistent value-level redaction hook (declared by contract, injected by the main app; the
+        // actual sole source is the host's unified redact port): run records/ledger passes stash redaction before writes, preventing secrets from landing in storage.
         redact: (text) => ctx.host.redact(text),
         host: createWorkflowEngineHost({
           host: {
@@ -235,40 +235,40 @@ export function createWorkflowPlugin(): PluginDefinition {
         }),
       })
 
-      // ---- 生命周期 Hook 与宿主事件订阅（agent_spawn 300/200、before_turn、
-      //      turn_settled 级联取消、conversation 重投影、diagnostics 探针） ----
+      // ---- Lifecycle hooks and host event subscriptions (agent_spawn 300/200, before_turn,
+      //      turn_settled cascade cancellation, conversation re-projection, diagnostics probes) ----
       registerWorkflowHooks(ctx, { registry, isolation, workflows, projection })
 
-      // ---- service：workflow-engine 生命周期 ----
+      // ---- service: the workflow-engine lifecycle ----
       ctx.service({
         id: 'workflow-engine',
         async prepare() {
-          // 恢复阶段一（全局 prepare 屏障，先于任何服务 start、先于 SDK 调度器
-          // resume）：只读遗留记录并经 abortConversationGuarded（paused 相位）
-          // 落持久 abort 标记，不唤醒 SDK 调度器、不提交输入——此时其他插件
-          // （assistant/herdr/外部）与工具尚未注册完成，任何输入提交都会产生
-          // orphan 回合。
+          // Recovery phase one (the global prepare barrier, before any service start and before the SDK
+          // scheduler resume): only read leftover records and, via abortConversationGuarded (paused phase),
+          // lay persistent abort markers; wake no SDK scheduler, submit no input -- other plugins
+          // (assistant/herdr/external) and tools are not fully registered yet, and any input submission now
+          // would produce orphan turns.
           await workflows.prepareRecovery()
         },
         async start() {
-          // 恢复阶段二（全部插件 prepare 完成后）：init 终止遗留子任务、把
-          // running 显式标 failed(interrupted)、补发父会话通知（此刻工具已注册，
-          // 补发输入消费安全）。随后快照已持久分片集合并同步投影。
+          // Recovery phase two (after all plugins finished prepare): init terminates leftover child tasks,
+          // explicitly marks running as failed(interrupted), and re-delivers parent-conversation notifications
+          // (tools are registered by now, so re-delivered input consumption is safe). The persisted shard set is then snapshotted and projected synchronously.
           await workflows.init()
           projection.adoptPersistedConversations(runsDoc.listConversationIds())
           projection.sync()
         },
         async stop() {
-          // 受控停止：先置 stopping 拦截运行期后台回调（引擎事件链的投影刷新与
-          // 父会话投递），再 await 引擎 close（在途 run 终态写入私有 records doc；
-          // 写入经宿主受控停止 doc 写入窗口放行，失败如实上抛）。随后做最终 runs
-          // 分片与角标投影（不受 stopping 拦截）并 await records.flush 真实落盘
-          // （真实 runtime 中全局 doc 与会话 doc 共享同一事务队列：records.flush
-          // 等待 tail 链即含会话分片与角标的排队写；不重复调 runsDoc.flush——
-          // dispose 窗口内 sessionDoc 句柄 flush 守卫拒绝已拆除宿主）。
-          // close/flush 失败直接上抛（真实持久化故障，不吞）；最终投影是派生观察面：
-          // 读取失败（如持久层损坏）发布显式 notification 诊断后不阻断拆毁——
-          // 引擎终态已在 records，损坏也会在任何业务读取路径显式报错，不静默。
+          // Controlled stop: first set stopping to intercept runtime background callbacks (projection refreshes and
+          // parent deliveries on the engine event chain), then await the engine close (in-flight run terminal states
+          // written to the private records doc; writes pass through the host's controlled-stop doc write window,
+          // failures propagate honestly). Then do the final runs shard and badge projection (not intercepted by
+          // stopping) and await records.flush for a real flush (in the real runtime, global docs and conversation
+          // docs share one transaction queue: records.flush waiting on the tail chain already includes the queued
+          // writes of conversation shards and badges; do not call runsDoc.flush again -- within the dispose
+          // window, sessionDoc handle flush guards reject the already-dismantled host).
+          // close/flush failures propagate directly (real persistence failures, not swallowed); the final projection
+          // is a derived observation plane: read failures (e.g. persistent-layer corruption) publish an explicit notification diagnostic without blocking teardown -- engine terminal states are already in records, and corruption will explicitly error on any business read path, never silently.
           projection.beginStopping()
           if (ctx.host.isClosing && isEffectiveAutoRecover(ctx)) {
             await workflows.suspend()
@@ -281,13 +281,13 @@ export function createWorkflowPlugin(): PluginDefinition {
           } catch (error) {
             if (error instanceof HelmError && (error.code === 'workflow_index_corrupt' || error.code === 'workflow_record_corrupt')) {
               const message = error instanceof Error ? error.message : String(error)
-              process.stderr.write(`builtin:workflow stop: 最终 runs 投影失败（终态已持久于 records）: ${message}\n`)
-              // 显式诊断事件（非静默）：前端与日志可见投影未同步及原因。
+              process.stderr.write(`builtin:workflow stop: final runs projection failed (terminal states already persisted in records): ${message}\n`)
+              // Explicit diagnostic event (not silent): the frontend and logs can see the projection is unsynced and why.
               await ctx.host.emitEvent('notification', {
                 type: 'notification',
                 level: 'warning',
-                title: '工作流最终投影未同步',
-                body: `关停时读取 runs 快照失败（运行终态已持久化）：${message}`,
+                title: 'Workflow final projection unsynced',
+                body: `Failed to read the runs snapshot at shutdown (run terminal states already persisted): ${message}`,
               })
               return
             }
@@ -302,7 +302,7 @@ export function createWorkflowPlugin(): PluginDefinition {
         },
       })
 
-      // ---- 模型工具：subagent / SubagentWorkflow / cleanup_worktree ----
+      // ---- Model tools: subagent / SubagentWorkflow / cleanup_worktree ----
       registerWorkflowTools(ctx, {
         workflows,
         isolation,
@@ -311,7 +311,7 @@ export function createWorkflowPlugin(): PluginDefinition {
         syncRunsDoc: () => projection.sync(),
       })
 
-      // ---- 动作（五端复用：HTTP / CLI / run_action / Workflow / Web UI） ----
+      // ---- Actions (reused across five ends: HTTP / CLI / run_action / Workflow / Web UI) ----
       registerWorkflowActions(ctx, {
         workflows,
         isolation,
@@ -319,7 +319,7 @@ export function createWorkflowPlugin(): PluginDefinition {
         syncRunsDoc: () => projection.sync(),
       })
 
-      // ---- UI 扩展点（client.tsx 轨道；组件经 usePluginSessionDoc 自行订阅 runs 分片） ----
+      // ---- UI extension points (client.tsx track; components subscribe to the runs shard themselves via usePluginSessionDoc) ----
       registerWorkflowUi(ctx)
     },
   }

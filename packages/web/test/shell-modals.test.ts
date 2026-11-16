@@ -109,7 +109,7 @@ const sidebarItems: Array<{ pluginId: string; spec: SidebarItemSpec }> = [
   },
 ]
 
-/** superagent 插件声明的分组（后台 Worker + 可折叠已归档）。 */
+/** superagent 插件声明的分组（后台 Worker + 可折叠Archived）。 */
 const sidebarSections: Array<{ pluginId: string; spec: SidebarSectionSpec }> = [
   {
     pluginId: 'builtin:superagent',
@@ -119,7 +119,7 @@ const sidebarSections: Array<{ pluginId: string; spec: SidebarSectionSpec }> = [
     pluginId: 'builtin:superagent',
     spec: {
       id: 'archived-workers',
-      label: '已归档 Worker',
+      label: 'Archived Worker',
       icon: 'archive',
       filterTag: 'worker-archived',
       collapsible: true,
@@ -435,11 +435,11 @@ test('fuzzyMatchConversations 按标题、profileId 与纯数字 id 过滤', { t
 })
 
 test('conversationStatusLabel / BadgeClass 覆盖五态', { timeout: 60_000 }, () => {
-  assert.equal(conversationStatusLabel('working'), '运行中')
-  assert.equal(conversationStatusLabel('blocked'), '待确认')
-  assert.equal(conversationStatusLabel('done'), '已完成')
-  assert.equal(conversationStatusLabel('idle'), '空闲')
-  assert.equal(conversationStatusLabel('error'), '异常')
+  assert.equal(conversationStatusLabel('working'), 'Running')
+  assert.equal(conversationStatusLabel('blocked'), 'Awaiting confirmation')
+  assert.equal(conversationStatusLabel('done'), 'Completed')
+  assert.equal(conversationStatusLabel('idle'), 'Idle')
+  assert.equal(conversationStatusLabel('error'), 'Error')
   assert.equal(conversationStatusBadgeClass('working'), 'badge badge-accent')
   assert.equal(conversationStatusBadgeClass('blocked'), 'badge badge-warn')
   assert.equal(conversationStatusBadgeClass('done'), 'badge badge-ok')
@@ -456,12 +456,12 @@ test('conversationStatusDotClass 仅对非 idle 状态返回圆点类名', { tim
 })
 
 test('conversationStatusTooltip 生成准确悬停提示', { timeout: 60_000 }, () => {
-  assert.equal(conversationStatusTooltip('idle'), '空闲')
-  assert.equal(conversationStatusTooltip('blocked'), '待确认')
-  assert.equal(conversationStatusTooltip('done'), '已完成')
-  assert.equal(conversationStatusTooltip('error'), '异常')
-  assert.equal(conversationStatusTooltip('working'), '运行中')
-  assert.equal(conversationStatusTooltip('working', '正在分析代码'), '运行中: 正在分析代码')
+  assert.equal(conversationStatusTooltip('idle'), 'Idle')
+  assert.equal(conversationStatusTooltip('blocked'), 'Awaiting confirmation')
+  assert.equal(conversationStatusTooltip('done'), 'Completed')
+  assert.equal(conversationStatusTooltip('error'), 'Error')
+  assert.equal(conversationStatusTooltip('working'), 'Running')
+  assert.equal(conversationStatusTooltip('working', '正在分析代码'), 'Running: 正在分析代码')
 })
 
 test('resolveTargetString conversation:profile: 优先无父链常驻会话，不做标签硬编码', { timeout: 60_000 }, () => {
@@ -706,7 +706,7 @@ test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPr
     active: true,
     splitSecondary: false,
     focused: true,
-    paneTag: '主',
+    paneTag: 'Main',
   })
   assert.deepEqual(getConversationPresence(splitPrimaryFocus, 10), {
     inPrimary: false,
@@ -714,7 +714,7 @@ test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPr
     active: false,
     splitSecondary: true,
     focused: false,
-    paneTag: '分',
+    paneTag: 'Split',
   })
   assert.deepEqual(getConversationPresence(splitPrimaryFocus, 99), {
     inPrimary: false,
@@ -737,7 +737,7 @@ test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPr
     active: false,
     splitSecondary: true,
     focused: false,
-    paneTag: '主',
+    paneTag: 'Main',
   })
   assert.deepEqual(getConversationPresence(splitSecondaryFocus, 10), {
     inPrimary: false,
@@ -745,7 +745,7 @@ test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPr
     active: true,
     splitSecondary: false,
     focused: true,
-    paneTag: '分',
+    paneTag: 'Split',
   })
   assert.equal(isConversationActive(splitSecondaryFocus, 1), false)
   assert.equal(isConversationActive(splitSecondaryFocus, 10), true)
@@ -763,7 +763,7 @@ test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPr
       active: true,
       splitSecondary: false,
       focused: true,
-      paneTag: '主·分',
+      paneTag: 'Main·Split',
     })
 
     const sameAgentStore = {
@@ -777,7 +777,7 @@ test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPr
       active: true,
       splitSecondary: false,
       focused: true,
-      paneTag: '主·分',
+      paneTag: 'Main·Split',
     })
   }
 
@@ -793,7 +793,7 @@ test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPr
     active: true,
     splitSecondary: false,
     focused: true,
-    paneTag: '分',
+    paneTag: 'Split',
   })
   assert.equal(isAgentStandbyActive(mixedSplitStore, 'coder'), true)
   assert.deepEqual(
@@ -804,7 +804,7 @@ test('resolveSidebarTargetPresence / getConversationPresence / getAgentStandbyPr
       active: false,
       splitSecondary: true,
       focused: false,
-      paneTag: '主',
+      paneTag: 'Main',
     },
   )
 })
@@ -892,6 +892,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     sseConnected: true,
     theme: 'dark',
     themePreference: 'system',
+    locale: 'en',
     quietNotifyEnabled: false,
     conversations: [
       conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
@@ -933,6 +934,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     setTheme: () => {},
     setThemePreference: () => {},
     toggleTheme: () => {},
+    setLocale: () => {},
     setQuietNotify: async () => {},
     checkAuth: async () => {},
     onAuthenticated: async () => {},
@@ -1093,7 +1095,7 @@ test('SSR 渲染回归：Sidebar 包含批量管理按钮与极简无 Emoji 验�
   const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
   // 智能体分组头部包含 check-square 批量管理按钮
-  assert.ok(html.includes('title="批量管理会话"'), '应渲染批量管理切换按钮')
+  assert.ok(html.includes('title="Manage conversations in bulk"'), '应渲染批量管理切换按钮')
   assert.ok(html.includes('check-square') || html.includes('lucide'), '应包含 check-square 图标')
 
   // 极简无 Emoji 铁律验证
@@ -1102,7 +1104,7 @@ test('SSR 渲染回归：Sidebar 包含批量管理按钮与极简无 Emoji 验�
   assert.ok(!html.includes('✓') && !html.includes('✗') && !html.includes('▸'), '不得使用勾叉箭头类特殊字符')
 })
 
-test('已归档分组默认折叠，展开态才渲染归档会话', { timeout: 60_000 }, async () => {
+test('Archived分组默认折叠，展开态才渲染归档会话', { timeout: 60_000 }, async () => {
   const { ArchivedConversationsGroup } = await import('../src/shell/SidebarArchivedConversations.js')
   const archived = conv({ id: 77, title: '已收尾的话题', tags: [ARCHIVED_TAG] })
   const store = makeTestStore({
@@ -1112,7 +1114,7 @@ test('已归档分组默认折叠，展开态才渲染归档会话', { timeout: 
   const html = renderToString(
     e(HostStoreProviders, { value: store }, e(ArchivedConversationsGroup, { background: new Map() })),
   )
-  assert.match(html, /已归档/)
+  assert.match(html, /Archived/)
   assert.match(html, /aria-expanded="false"/)
   assert.doesNotMatch(html, /已收尾的话题/)
 })
@@ -1179,23 +1181,23 @@ test('Sidebar 状态圆点渲染验证：五态圆点与单会话站位行', { t
 
   // 2) working 圆点带 doing 提示与无障碍属性
   assert.ok(html.includes('class="status-dot status-dot-working"'), '应渲染 working 圆点')
-  assert.ok(html.includes('title="运行中: 正在思考方案"'), 'working 圆点应带 doing 提示')
-  assert.ok(html.includes('aria-label="运行中: 正在思考方案"'), '圆点应带 aria-label')
+  assert.ok(html.includes('title="Running: 正在思考方案"'), 'working 圆点应带 doing 提示')
+  assert.ok(html.includes('aria-label="Running: 正在思考方案"'), '圆点应带 aria-label')
   assert.ok(html.includes('role="status"'), '圆点应带 role=status')
 
   // 3) blocked / error / done 圆点
   assert.ok(html.includes('class="status-dot status-dot-blocked"'), '应渲染 blocked 圆点')
-  assert.ok(html.includes('title="待确认"'), 'blocked 圆点提示')
+  assert.ok(html.includes('title="Awaiting confirmation"'), 'blocked 圆点提示')
   assert.ok(html.includes('class="status-dot status-dot-error"'), '应渲染 error 圆点')
-  assert.ok(html.includes('title="异常"'), 'error 圆点提示')
+  assert.ok(html.includes('title="Error"'), 'error 圆点提示')
   assert.ok(html.includes('class="status-dot status-dot-done"'), '应渲染 done 圆点')
-  assert.ok(html.includes('title="已完成"'), 'done 圆点提示')
+  assert.ok(html.includes('title="Completed"'), 'done 圆点提示')
 
   // 4) 手风琴契约：仅当前会话所属智能体（assistant）展开话题子列表；
   //    多会话智能体展示计数徽标，单会话 coder 站位行渲染主会话 working 圆点。
   assert.ok(html.includes('agent-conversations-list'), '当前智能体展开话题子列表')
   assert.ok(html.includes('>3</span>'), '多会话智能体站位行应展示会话计数徽标')
-  assert.ok(html.includes('title="运行中: 重构中"'), '单会话 Agent 站位行圆点应带 tooltip')
+  assert.ok(html.includes('title="Running: 重构中"'), '单会话 Agent 站位行圆点应带 tooltip')
   assert.ok(!html.includes('badge-accent'), '不应再渲染文字徽章样式 badge-accent')
 })
 
@@ -1209,21 +1211,21 @@ test('Sidebar 双层导航：Activity Rail 空间切换与系统中心直达（S
 
   // Rail 结构：三空间切换 + 主题按钮均带 aria-label；系统中心入口收敛到设置空间列表
   assert.ok(html.includes('activity-rail'), '应渲染 Activity Rail 容器')
-  assert.ok(html.includes('aria-label="对话空间"'), '对话空间按钮')
-  assert.ok(html.includes('aria-label="视图空间"'), '视图空间按钮')
-  assert.ok(html.includes('aria-label="设置空间"'), '设置空间按钮')
+  assert.ok(html.includes('aria-label="Conversations space"'), '对话空间按钮')
+  assert.ok(html.includes('aria-label="Views space"'), 'Views space按钮')
+  assert.ok(html.includes('aria-label="Settings space"'), '设置空间按钮')
   assert.ok(!html.includes('activity-rail-centers'), 'Rail 不再直接渲染系统中心图标')
-  assert.ok(html.includes('aria-label="跟随系统"'), '主题按钮')
+  assert.ok(html.includes('aria-label="System"'), '主题按钮')
 
   // 默认对话空间：智能体分组在 Context Sidebar 内；视图/设置空间内容不渲染
   assert.ok(html.includes('agent-standing-group'), '对话空间渲染智能体分组')
-  assert.ok(!html.includes('>视图</div>'), '默认不渲染视图空间分组')
+  assert.ok(!html.includes('>视图</div>'), '默认不渲染Views space分组')
   assert.ok(!html.includes('settings-nav'), '默认不渲染设置空间分组')
 
   // 默认收起筛选栏：渲染筛选切换按钮与 Cmd-K 按钮，无多余常驻搜索输入
-  assert.ok(html.includes('aria-label="筛选智能体与话题"'), '渲染智能体筛选开关按钮')
+  assert.ok(html.includes('aria-label="Filter agents and topics"'), '渲染智能体筛选开关按钮')
   assert.ok(!html.includes('sidebar-search-input'), '默认收起筛选栏，不常驻渲染搜索输入框')
-  assert.ok(html.includes('title="打开 Cmd K 全局搜索与命令面板"'), 'Cmd-K 按钮保留')
+  assert.ok(html.includes('title="Open Cmd K global search and command palette"'), 'Cmd-K 按钮保留')
 
   // 底栏已移除：系统中心入口收敛到设置空间
   assert.ok(!html.includes('sidebar-footer'), '底栏容器已移除')
@@ -1234,11 +1236,11 @@ test('Sidebar 设置空间：系统中心纵向列表与激活高亮（SSR）', 
   const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
   assert.ok(html.includes('settings-nav'), '设置空间渲染系统中心列表')
-  for (const label of ['角色', '模型与凭据', '技能库', '计算节点', '插件中心']) {
+  for (const label of ['Profile', 'Models &amp; credentials', 'Skills', 'Compute nodes', 'Plugin Center']) {
     assert.ok(html.includes(`>${label}</span>`), `设置列表项 ${label}`)
   }
   // 当前中心为 models：设置列表项激活高亮
-  const idx = html.indexOf('>模型与凭据</span>')
+  const idx = html.indexOf('>Models &amp; credentials</span>')
   assert.ok(idx > 0 && html.lastIndexOf('nav-item-active', idx) > 0, '模型与凭据为激活项')
   // 设置空间不渲染智能体分组
   assert.ok(!html.includes('agent-standing-group'), '设置空间不渲染智能体分组')
@@ -1258,7 +1260,7 @@ test('Sidebar 双层导航：单展开仅当前智能体显示话题子列表，
   assert.ok(convHtml.includes('agent-conversations-list'), '当前智能体渲染话题子列表')
   assert.ok(convHtml.includes('nav-item-sub'), '话题子行使用二级行样式')
   assert.ok(convHtml.includes('>3</span>'), '多会话智能体行展示计数徽标')
-  assert.ok(convHtml.includes('title="在 个人助理 下开始新话题"'), '智能体行新建按钮保留（进入待命态）')
+  assert.ok(convHtml.includes('title="Start a new topic under 个人助理"'), '智能体行新建按钮保留（进入待命态）')
   assert.ok(convHtml.includes('class="nav-item agent-standing-row agent-standing-row-branch"'), '进会话时站位行（父）呈分支弱态')
   assert.ok(!convHtml.includes('class="nav-item agent-standing-row nav-item-active"'), '进会话时站位行（父）不亮激活底')
   assert.ok(convHtml.includes('class="nav-item nav-item-sub nav-item-active"'), '当前会话子行（子）唯一点亮')
@@ -1295,9 +1297,9 @@ test('Sidebar 分屏混开 SSR 回归：主屏会话 + 分屏待命且聚焦分�
   assert.equal((html.match(/class="agent-conversations-list"/g) ?? []).length, 2, '分屏两侧所属智能体均展开')
   assert.ok(html.includes('class="nav-item agent-standing-row agent-standing-row-branch"'), '主屏会话所属智能体父行呈分支弱态')
   assert.ok(html.includes('class="nav-item nav-item-sub nav-item-split"'), '主屏非聚焦会话子行呈分屏在场态')
-  assert.ok(html.includes('<span class="nav-pane-tag" title="主屏打开">主</span>'), '主屏会话子行带「主」微标')
+  assert.ok(html.includes('<span class="nav-pane-tag" title="Open in main view">Main</span>'), '主屏会话子行带「主」微标')
   assert.ok(html.includes('class="nav-item agent-standing-row nav-item-active nav-item-focused"'), '分屏聚焦的待命智能体父行点亮并带焦点刻度')
-  assert.ok(html.includes('<span class="nav-pane-tag" title="分屏打开">分</span>'), '分屏待命父行带「分」微标')
+  assert.ok(html.includes('<span class="nav-pane-tag" title="Open in split view">Split</span>'), '分屏待命父行带「分」微标')
 })
 
 

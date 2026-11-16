@@ -1,6 +1,6 @@
 /**
- * JSON 值脱敏遍历（严格版）已收口 @helm/protocol（内核与插件共享唯一
- * 实现）；本文件仅做内核内相对路径引用的再导出，便于既有 import
- * （../redact.js）保持稳定。
+ * JSON value redaction iterate (strictly edition) already consolidate @helm/protocol(kernel and plugin sharing unique
+ * implement); this file only do kernel inside relative path reference again export, convenient at since has import
+ * (../redact.js) keep stable.
  */
 export { redactJsonValue } from '@helm/protocol';

@@ -1,29 +1,29 @@
 /**
- * ConversationTracker：pi-durable 会话的 helm 视图层。
+ * ConversationTracker:pi-durable conversation helm view layer.
  *
- * 核心机制：observeConversation 同步观察者（advance 内禁止 await，只做记录），
- * 在快照推进时同步维护内存镜像与排队副作用（SSE 推送在微任务中发出）。
+ * core mechanism:observeConversation sync observer (advance inside forbidden await, only do record),
+ * in snapshot push enter when sync maintain memory mirror and queue up side effect (SSE push in micro task in out).
  *
- * 状态布局（见 conversation-mirror.ts / context-usage-refresh.ts）：
- * - 每会话运行态聚合为单个 ConversationMirror（mirrors），stopObserving 一次
- *   delete 整体回收；跨会话索引（settledRuns 去重集合）与停观后仍需保真的
- *   notifiedCompactionFailures 留在 tracker 顶层；
- * - contextUsage 缓存/刷新链独立成 ContextUsageRefresh（在途刷新可跨越停观）。
+ * state layout (see conversation-mirror.ts / context-usage-refresh.ts):
+ * - each conversation run state aggregate is single ConversationMirror(mirrors),stopObserving once
+ *   delete whole reclaim; across conversation index (settledRuns dedupe set) and stop observe after still must fidelity
+ *   notifiedCompactionFailures in tracker top-level;
+ * - contextUsage cache/refresh chain independent into ContextUsageRefresh(in-flight refresh can across exceeds stop observe).
  *
- * turn_settled 精确捕获：
- * - 输入以持久 input.id（即 SDK requestId）为唯一追踪身份：registerInput
- *   提交前登记、bindSubmission 回填 submissionId→requestId 关联索引；
- *   观察路径（helm.input entry / pi.inbox 重建）直接按 requestId 落位并幂等
- *   合并唯一记录；entry 重建仅认当前 run 区间（run.first 及之后）与当前
- *   inbox，已结算 run 的历史 helm.input 不复活；重启恢复活跃 run 时经
- *   live.run.inputs 权威清单 + submission 精确查询补齐元数据与索引；
- * - 每个 run（taskId）多 tool round 累计消费输入（新 taskId 才重置）；
- * - run 消失（完成/失败）精确结算一次（settledRuns 防双报；失败取
- *   runFailure.inputs 精确清单）；
- * - abort 由 runtime.abortConversation 显式结算（观察路径不重复报 aborted）；
- * - run 观察到 failure 后又显式 abort：仅补 aborted（不重复 failed）；
- * - run 活跃期间（启动 / doing 语义变化）推送实时摘要（emitRunSummary，
- *   语义指纹去重、不逐 token；终态仍由 emitSettled 恰一次负责）。
+ * turn_settled precise catch:
+ * - input with durable input.id(i.e. SDK requestId) is unique append trace identity:registerInput
+ *   before commit register,bindSubmission back fill submissionId→requestId related index;
+ *   observe path (helm.input entry / pi.inbox rebuild) directly by requestId and idempotent
+ *   merge unique record;entry rebuild only recognize when before run zone between (run.first and after) and when before
+ *   inbox, already compute run history helm.input does not resurrect; restart restore leap run when via
+ *   live.run.inputs right threat manifest + submission precise query patch complete metadata and index;
+ * - each run(taskId) many tool round cumulative consume input (new taskId only then reset);
+ * - run disappear (complete/failed) precise compute once (settledRuns guard against double report; failed take
+ *   runFailure.inputs precise manifest);
+ * - abort by runtime.abortConversation explicit compute (observe path does not repeat report aborted);
+ * - run observe to failure after again explicit abort: only patch aborted(does not repeat failed);
+ * - run leap during (start / doing semantics change) push real-time summary (emitRunSummary,
+ *   semantics refer grain dedupe, do not one by one token; terminal state still by emitSettled exactly once negative duty).
  */
 
 import type {
@@ -66,52 +66,52 @@ export interface TrackerEvents {
   onInputCommitted(conversationId: number, input: ConversationInput): void
   onAssistantText(conversationId: number, entryId: number, text: string): void
   onTurnSettled: TurnSettledListener
-  /** 新时间线条目落库（仅新条目，每 id 恰一次；初始 observe 历史不重发）。 */
+  /** new timeline item written to the database (only new item, each id exactly once; initial observe history do not heavy). */
   onEntryCommitted?(conversationId: number, entry: ConversationEntry): void
-  /** 会话实时增量（流式文本累计快照 + 工具卡；节流推送，终态冲刷最终状态）。 */
+  /** conversation real-time incremental (streaming text cumulative snapshot + tool card; node stream push, terminal state conflict refresh eventually state). */
   onLiveChanged?(live: ConversationLive): void
-  /** 压缩失败等异步异常的一次性显式上报（EventHub notification 通道）。 */
+  /** compress failed etc. async exception once explicit on report (EventHub notification channel). */
   onNotification?(payload: { level: 'info' | 'warning' | 'error'; title: string; body?: string; conversationId: number }): void
 }
 
-/** live 节流窗口（毫秒）：50-100ms 区间取 75ms，兼顾 SSE 帧率与提交压力。 */
+/** live node stream window (milli second):50-100ms zone between take 75ms, balance SSE frame rate and commit pressure. */
 const LIVE_THROTTLE_MS = 75
 
-/** 单会话 settledRunOrder 保留上限（防 7×24 长跑无界增长；runId 单调，淘汰永不复现）。 */
+/** single conversation settledRunOrder keep cap (guard against 7×24 long run without boundary increase long;runId single tune, eliminate forever do not re- now). */
 const SETTLED_RUNS_PER_CONVERSATION = 64
 
 export class ConversationTracker {
   private readonly harness: Harness
   private readonly store: HelmStore
   private readonly events: TrackerEvents
-  /** 会话 -> 单会话聚合镜像（观察建立或首次写入时创建；stopObserving 整体删除）。 */
+  /** conversation -> single conversation aggregate mirror (observe establish or first time write when create;stopObserving whole delete). */
   private readonly mirrors = new Map<number, ConversationMirror>()
-  /** 已结算的 run（防 done+failure+abort 双报）。跨会话前缀键（`${id}:${taskId}`）
-   * 全局去重，不进镜像（stopObserving 按前缀清理）。 */
+  /** already compute run(guard against done+failure+abort double report). across conversation prefix key (`${id}:${taskId}`)
+   * global dedupe, does not enter mirror (stopObserving by prefix clean up). */
   private readonly settledRuns = new Set<string>()
-  /** 会话 -> 已发过压缩失败通知的 taskId（同一失败重复快照不重复通知；
-   * 不随 stopObserving 清除——同 runtime 内重观察不得再报同一失败）。 */
+  /** conversation -> already compress failed notify taskId(the same failed duplicate snapshot does not repeat notify;
+   * do not follow stopObserving clear - - same runtime inside heavy observe must not again report the same failed). */
   private readonly notifiedCompactionFailures = new Map<number, number>()
-  /** contextUsage 缓存/刷新链（在途刷新可跨越停观，状态不进镜像）。 */
+  /** contextUsage cache/refresh chain (in-flight refresh can across exceeds stop observe, state does not enter mirror). */
   private readonly usage: ContextUsageRefresh
-  /** tracker 关闭守卫（close() 或宿主 isClosed 置位后拒绝迟到异步对账副作用）。 */
+  /** tracker close guard (close() or host isClosed placement after reject late to async for account side effect). */
   private closed = false
 
   constructor(options: {
     harness: Harness
     store: HelmStore
     events: TrackerEvents
-    /** 错误摘要对外脱敏（与运行时 SecretStash 同源）；缺省恒等（仅测试环境）。 */
+    /** error summary for outside redaction (and runtime SecretStash same source); default constant etc. (only test environment). */
     redactError?: (text: string) => string
-    /** 会话归属权现读（Runtime 注入 ownership.getOwnership）；缺省视为 human。
-     * 仅用于回合结算 unread 策略：背景派生子会话不制造人类未读。 */
+    /** conversation ownership right now read (Runtime inject ownership.getOwnership); default treated as human.
+     * only used to turn compute unread policy: background derive sub-conversation do not fabricate person class not read. */
     ownershipOf?: (id: number) => 'helm' | 'bot' | 'human'
-    /** 当前 Models 集合现读（contextUsage 的窗口解析用）；缺省不解析
-     * （contextWindow 省略，绝不伪造）。 */
+    /** when before Models set now read (contextUsage window parse use); default do not parse
+     * (contextWindow omit, never fabricate). */
     models?: () => Models
-    /** 宿主关闭状态回调（与 tracker.close() 双保险）。 */
+    /** host close state call back (and tracker.close() double keep risk). */
     isClosed?: () => boolean
-    /** 诊断通道 sink（缺省走 defaultDiagnosticSink）。 */
+    /** diagnose channel sink(default away defaultDiagnosticSink). */
     onDiagnostic?: KernelDiagnosticSink
   }) {
     this.harness = options.harness
@@ -136,13 +136,13 @@ export class ConversationTracker {
     this.usage = new ContextUsageRefresh(host)
   }
 
-  /** 错误诊断摘要脱敏（Runtime 注入 stashService.redact；防 provider 错误回显已登记秘密）。 */
+  /** error diagnose summary redaction (Runtime inject stashService.redact; guard against provider error back visible already register secret). */
   private readonly redactError: (text: string) => string
 
-  /** 诊断通道 sink（Runtime 构造后可注入；缺省走 defaultDiagnosticSink）。 */
+  /** diagnose channel sink(Runtime construct after can inject; default away defaultDiagnosticSink). */
   private diagnosticSink: KernelDiagnosticSink | undefined
 
-  /** 挂载或替换诊断通道 sink（供 KernelRuntime 构造期接线）。 */
+  /** mount or replace diagnose channel sink(supply KernelRuntime construct phase connect line). */
   setDiagnosticSink(sink: KernelDiagnosticSink | undefined): void {
     this.diagnosticSink = sink
   }
@@ -151,20 +151,20 @@ export class ConversationTracker {
     emitDiagnostic(this.diagnosticSink, this.redactError, input)
   }
 
-  /** 会话归属权现读（缺省恒 human）；仅回合结算 unread 策略消费。 */
+  /** conversation ownership right now read (default constant human); only turn compute unread policy consume. */
   private readonly ownershipOf: ((id: number) => 'helm' | 'bot' | 'human') | undefined
 
-  /** 当前 Models 集合现读（缺省不解析：窗口省略）。 */
+  /** when before Models set now read (default do not parse: window omit). */
   private readonly modelsOf: (() => Models) | undefined
 
-  /** 宿主关闭状态现读（缺省恒 false；与 tracker.closed 双保险）。 */
+  /** host close state now read (default constant false; and tracker.closed double keep risk). */
   private readonly isClosedFn: (() => boolean) | undefined
 
   private get isClosing(): boolean {
     return this.closed || (this.isClosedFn?.() ?? false)
   }
 
-  /** 取（必要时创建）会话镜像：所有写入路径的唯一入口。 */
+  /** take (must want when create) conversation mirror: all write path unique entry. */
   private mirrorOf(id: number): ConversationMirror {
     let mirror = this.mirrors.get(id)
     if (mirror === undefined) {
@@ -174,7 +174,7 @@ export class ConversationTracker {
     return mirror
   }
 
-  /** 挂接指定会话的同步观察者；活跃 run 恢复时先补权威输入元数据再返回。 */
+  /** hang connect designate conversation sync observer; leap run restore when first patch right threat input metadata again return. */
   async observe(id: number): Promise<void> {
     if (this.mirrors.get(id)?.detach !== undefined) return
     const observer: Observer<ConversationView> = {
@@ -195,21 +195,21 @@ export class ConversationTracker {
     )
     const mirror = this.mirrorOf(id)
     mirror.detach = () => observation.detach()
-    // 初始快照：窗口内已有条目不重发（首次 attach 只对齐水位线）。
-    // 代数守护：await 后若已 stopObserving（或重观察换代），不向镜像回写。
+    // initial snapshot: window inside already has item do not heavy (first time attach only align watermark line).
+    // proxy count guard:await after if already stopObserving(or heavy observe swap proxy), do not to mirror back write.
     const generation = Symbol('conversation observation')
     mirror.observeGeneration = generation
     await this.adoptInitial(id, observation.value, generation)
   }
 
-  /** 首次 attach：只登记水位线与内部镜像，不发 entry/live 事件。
+  /** first time attach: only register watermark line and internal mirror, do not entry/live event.
    *
-   * 活跃 run 恢复（重启/重挂观察者）时，本 run 的 helm.input entry 可能已滑出
-   * 观察窗口（长 run 多条目），同步重建会丢输入元数据。此处按 SDK 权威映射补齐：
-   * live.run.inputs 是本 run 已放置 submissionId 的精确序列，逐个经
-   * harness.submission() 取其 entry id，再精确查询（minEntryId=maxEntryId）
-   * helm.input entry 补 origin/meta/attachments；queued 项经 pi.inbox 补。
-   * 绝不以扩大观察窗口或概率排序代替权威映射。 */
+   * leap run restore (restart/heavy hang observer) when, this run  helm.input entry may already slide out
+   * observe window (long run many item), sync rebuild will lose input metadata. this where by SDK right threat mapping patch complete:
+   * live.run.inputs is this run already put placement submissionId precise sequence, one by one via
+   * harness.submission() take its entry id, again precise query (minEntryId=maxEntryId)
+   * helm.input entry patch origin/meta/attachments;queued items via pi.inbox patch.
+   * never with expand large observe window or concept rate sort replace right threat mapping. */
   private async adoptInitial(
     id: number,
     view: ConversationView,
@@ -218,11 +218,11 @@ export class ConversationTracker {
     const mirror = this.mirrorOf(id)
     const live = view.docs['pi.live'] as LiveStateShape | undefined
     mirror.live = live ?? {}
-    // 重启/重挂即看到的遗留失败同样不静默（每个 runtime 生命周期恰报一次）。
+    // restart/heavy hang i.e. see to legacy failed same not silently (each runtime lifecycle exactly report once).
     this.noteCompactionFailure(id, live)
     let watermark = mirror.lastEmittedEntry
-    // 上下文触发水位线与 entry 事件水位线同一初值对齐：初始快照内的历史标记
-    // （pi.compaction 等）不触发后续 adopt 的重复刷新（初始刷新见下方调度）。
+    // context trigger watermark line and entry event watermark line the same initial value align: initial snapshot inside history mark record
+    // (pi.compaction etc.) does not trigger after continue adopt duplicate refresh (initial refresh see under way scheduling).
     let usageWatermark = -1
     let seenEntryId = mirror.lastSeenEntryId
     for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
@@ -234,36 +234,36 @@ export class ConversationTracker {
     mirror.lastEmittedEntry = watermark
     mirror.lastSeenEntryId = seenEntryId
     if (usageWatermark >= 0) this.usage.advanceWatermarkTo(id, usageWatermark)
-    // inbox 镜像登记先于 run 判定：重启/停 run 但 inbox 仍有排队输入时，
-    // queuedInputs 派生与 listLiveViews 快照不丢排队事实（不在 web 伪造队列）。
+    // inbox mirror register first at run decide: restart/stop run but inbox still has queue up input when,
+    // queuedInputs derive and listLiveViews snapshot do not lose queue up fact (do not in web fabricate queue).
     const inbox = view.docs['pi.inbox'] as { items?: InboxItemShape[] } | undefined
     const inboxItems = inbox?.items ?? []
     mirror.inbox = inboxItems
     this.adoptInputsFromInbox(id, inboxItems)
-    // 首次挂接即填充上下文用量缓存（重启/分叉/新建会话的初始读路径）；
-    // idle 会话同样需要（否则仅活跃 run 会话有初始值，历史会话打开后无胶囊）。
+    // first time hang connect i.e. fill context use amount cache (restart/fork/creates new conversation initial read path);
+    // idle conversation same need to (otherwise only leap run conversation has initial value, history conversation open after without pill).
     this.usage.schedule(id)
     if (!live?.run) return
     mirror.runTaskId = live.run.taskId
     mirror.consumedInputs = new Set<string>()
     const first = live.run.first !== undefined ? Number(live.run.first) : undefined
     if (first !== undefined) mirror.runFirstEntry = first
-    // 本 run 已放置输入：SDK 权威 submissionId -> entry 精确回读，登记
-    // requestId 追踪记录与 submissionId->requestId 索引（markConsumed 可命中）。
+    // this run already put placement input:SDK right threat submissionId -> entry precise back read, register
+    // requestId append trace record and submissionId->requestId index (markConsumed can hit).
     const loaded = await this.loadRunInputEntries(id, live.run.inputs as number[])
-    // 停观换代：异步回读结果作废，绝不向已清理的镜像复活条目。
+    // stop observe swap proxy: async back read result act abandon, never to already clean up mirror re- item.
     if (this.mirrors.get(id)?.observeGeneration !== generation) return
     this.adoptInputsFromEntries(id, loaded.entries)
     this.indexRestoredSubmissions(id, loaded.pairs)
-    // queued（未放置）输入：inbox entry 载荷直读（上面已登记镜像，此处仅补输入元数据）。
+    // queued(not put placement) input:inbox entry payload direct read (on side already register mirror, this where only patch input metadata).
     this.adoptInputsFromInbox(id, inboxItems)
     for (const submissionId of live.run.inputs) this.markConsumed(id, submissionId)
-    // 恢复的活跃 run 已体现在快照摘要（listConversations）：登记语义指纹即可，
-    // 后续 advance 仅在真实变化时推送，不补发冗余 working 帧。
+    // restore leap run already body now snapshot summary (listConversations): register semantics refer grain i.e. can,
+    // after continue advance only in real change when push, do not patch redundant working frame.
     if (this.store.getConv(id)) mirror.lastSummaryKey = summaryKeyOf(this.summaryOf(id))
   }
 
-  /** 回读结果：helm.input entry 列表 + (submissionId, requestId) 权威对。 */
+  /** back read result:helm.input entry list + (submissionId, requestId) right threat for. */
   private async loadRunInputEntries(
     id: number,
     submissionIds: number[],
@@ -295,7 +295,7 @@ export class ConversationTracker {
     return { entries: out, pairs }
   }
 
-  /** 把恢复输入的权威 (submissionId, requestId) 对登记进关联索引。 */
+  /** restore input right threat (submissionId, requestId) for register enter related index. */
   private indexRestoredSubmissions(
     id: number,
     pairs: ReadonlyArray<{ submissionId: number; requestId: string }>,
@@ -305,20 +305,20 @@ export class ConversationTracker {
     for (const { submissionId, requestId } of pairs) index.set(submissionId, requestId)
   }
 
-  /** inbox queued 项重建（未放置输入的 origin/meta/attachments 补齐 + 索引登记）。 */
+  /** inbox queued items rebuild (not put placement input origin/meta/attachments patch complete + index register). */
   private adoptInputsFromInbox(id: number, items: ReadonlyArray<InboxItemShape>): void {
     for (const item of items) {
       if (item.mode === 'write') continue
       const data = item.entry?.data as HelmInputMeta | undefined
       if (item.entry?.kind !== 'helm.input' || !data) continue
       if (typeof data.id !== 'string' || typeof data.text !== 'string') continue
-      // inbox 项 id 即 SDK submissionId：登记关联索引（出队放置后 markConsumed 可命中）。
+      // inbox items id i.e. SDK submissionId: register related index (out queue put placement after markConsumed can hit).
       this.mirrorOf(id).submissionIndex.set(item.id, data.id)
       this.upsertTrackedInput(id, data.id, data)
     }
   }
 
-  /** 关闭 tracker：停观全部会话并阻断在途异步精简对账再发副作用。 */
+  /** close tracker: stop observe all conversation and block assert in-flight async streamline for account again side effect. */
   close(): void {
     this.closed = true
     for (const id of [...this.mirrors.keys()]) {
@@ -329,14 +329,14 @@ export class ConversationTracker {
   stopObserving(id: number): void {
     const mirror = this.mirrors.get(id)
     mirror?.detach?.()
-    // 清 timer 且丢弃待发快照：删除/停观后绝不发出幽灵事件。
+    // clean timer and discard await snapshot: delete/stop observe after never out ghost event.
     this.clearLiveTimer(id)
-    // 上下文用量镜像一并清理：停观/删除后的迟到刷新经代数守护丢弃，不复活；
-    // 刷新链等待者先行 resolve（醒来后自查缓存/元数据并退出，不永久挂起）。
+    // context use amount mirror one and clean up: stop observe/after deletion late to refresh via proxy count guard discard, does not resurrect;
+    // refresh chain wait for first row resolve(wake come after self inspect cache/metadata and exit, do not forever long suspended).
     this.usage.clearConversation(id)
-    // 彻底清理该会话的全部内存镜像：在途 turn_settled 等待者先 resolve（防永久
-    // 挂起）后整体删除，随后清全局 settledRuns 前缀键。否则反复建删会话的进程
-    // （CLI/Web 管理面）会随时间无限累积残留条目。
+    // completely clean up the conversation all memory mirror: in-flight turn_settled wait for first resolve(guard against forever long
+    // suspended) after whole delete, then clean global settledRuns prefix key. otherwise reverse re- create delete conversation process
+    // (CLI/Web manage side) will follow time unbounded accumulated leftover item.
     const settledWaiters = mirror?.settledWaiters ?? []
     for (const resolve of settledWaiters) resolve()
     this.mirrors.delete(id)
@@ -345,7 +345,7 @@ export class ConversationTracker {
     }
   }
 
-  /** 清理 live 节流 timer（幂等）。 */
+  /** clean up live node stream timer(idempotent). */
   private clearLiveTimer(id: number): void {
     const mirror = this.mirrors.get(id)
     const timer = mirror?.liveTimer
@@ -355,19 +355,19 @@ export class ConversationTracker {
     }
   }
 
-  /** 提交前登记 input 元数据（以持久 input.id 即 requestId 为追踪身份；
-   * submit 返回后 bindSubmission 登记 submissionId 关联索引）。 */
+  /** before commit register input metadata (with durable input.id i.e. requestId is append trace identity;
+   * submit return after bindSubmission register submissionId related index). */
   registerInput(conversationId: number, input: ConversationInput): void {
     const map = this.mirrorOf(conversationId).trackedInputs
-    // 同 requestId 可能已有 entry/inbox 观察重建的记录（如 rewind 事务提交
-    // 先于登记）：只补缺（内存中更完整的元数据优先），不新建重复记录。
+    // same requestId may already has entry/inbox observe rebuild record (such as rewind transaction commit
+    // first at register): only patch missing (memory in more complete metadata takes precedence), do not creates new duplicate record.
     const existing = map.get(input.id)
     map.set(input.id, existing === undefined ? input : mergeInputMeta(existing, input))
   }
 
-  /** submit 返回后登记 submissionId→requestId 关联索引（SDK run.inputs 等
-   * 均以 submissionId 表达，经索引映射回追踪身份；HelmError 时 dropInput
-   * 移除登记）。 */
+  /** submit return after register submissionId→requestId related index (SDK run.inputs etc.
+   * all with submissionId express, via index mapping back append trace identity;HelmError when dropInput
+   * remove register). */
   bindSubmission(conversationId: number, requestId: string, submissionId: number): void {
     this.mirrorOf(conversationId).submissionIndex.set(submissionId, requestId)
   }
@@ -376,7 +376,7 @@ export class ConversationTracker {
     this.mirrors.get(conversationId)?.trackedInputs.delete(requestId)
   }
 
-  /** 撤回排队提交：清理关联索引项及 requestId 追踪记录（withdraw 用）。 */
+  /** withdraw back queue up commit: clean up related index items and requestId append trace record (withdraw use). */
   dropSubmission(conversationId: number, submissionId: number, requestId?: string): void {
     const mirror = this.mirrors.get(conversationId)
     if (mirror === undefined) return
@@ -385,9 +385,9 @@ export class ConversationTracker {
     if (resolved !== undefined) mirror.trackedInputs.delete(resolved)
   }
 
-  /** 本回合（当前 run）输入清单（before_turn payload 用）：run.inputs 精确
-   * 序列（steer 追加在内）+ 尚未关联 submissionId 的登记（submit 在途），
-   * 按 input.id 去重唯一。 */
+  /** this turn (when before run) input manifest (before_turn payload use):run.inputs precise
+   * sequence (steer append in inside)+ not yet related submissionId register (submit in-flight),
+   * by input.id dedupe unique. */
   currentRunInputs(conversationId: number): ConversationInput[] {
     const mirror = this.mirrors.get(conversationId)
     const run = mirror?.live?.run
@@ -401,13 +401,13 @@ export class ConversationTracker {
       seen.add(input.id)
       out.push(input)
     }
-    // run.inputs 是本 run 已放置 submissionId 的精确序列（含已消费项），
-    // 经关联索引映射回追踪身份。
+    // run.inputs is this run already put placement submissionId precise sequence (contains already consume items),
+    // via related index mapping back append trace identity.
     for (const submissionId of run.inputs) {
       const requestId = index.get(submissionId)
       if (requestId !== undefined) collect(map.get(requestId))
     }
-    // 尚未关联 submissionId 的登记：submit 在途（busy 中 followUp 输入在册未放置）。
+    // not yet related submissionId register:submit in-flight (busy in followUp input in manual not put placement).
     const bound = new Set(index.values())
     for (const [requestId, input] of map) {
       if (!bound.has(requestId)) collect(input)
@@ -415,7 +415,7 @@ export class ConversationTracker {
     return out
   }
 
-  /** 等待本会话全部在途 turn_settled 回调完成（waitForIdle 用，非全局 promise）。 */
+  /** wait for this conversation all in-flight turn_settled call back complete (waitForIdle use, non- global promise). */
   async waitTurnSettled(conversationId: number): Promise<void> {
     const mirror = this.mirrors.get(conversationId)
     if (mirror !== undefined && mirror.settledInflight > 0) {
@@ -447,20 +447,20 @@ export class ConversationTracker {
     for (const resolve of waiters) resolve()
   }
 
-  /** 会话是否有在途工作（close abort 结算判定：空闲不伪造 aborted 结算）。 */
+  /** conversation is otherwise has in-flight work (close abort compute decide: idle do not fabricate aborted compute). */
   hasLiveWork(conversationId: number): boolean {
     return this.mirrors.get(conversationId)?.live?.run !== undefined
   }
 
-  /** 会话是否有进行中的上下文精简任务（不计入 hasLiveWork，避免伪造 turn_settled）。 */
+  /** conversation is otherwise has in progress context streamline task (do not count hasLiveWork, avoid fabricate turn_settled). */
   isCompacting(conversationId: number): boolean {
     return (this.mirrors.get(conversationId)?.live?.compactions?.length ?? 0) > 0
   }
 
-  /** SSE 快照用实时视图清单：仅活跃 run、流式 generation 或非空 queued 的会话。
+  /** SSE snapshot use real-time view manifest: only leap run, streaming generation or non-empty queued conversation.
    *
-   * 从 live/inbox 权威镜像同步派生（不依赖上次推送缓存）：重连首帧即恢复排队
-   * 胶囊与流式文本；空闲会话不复活（无内容可显示）。 */
+   * from live/inbox right threat mirror sync derive (independent of on time push cache): reconnect first frame i.e. restore queue up
+   * pill and streaming text; idle conversation does not resurrect (without content can show). */
   listLiveViews(): ConversationLive[] {
     const out: ConversationLive[] = []
     for (const [id, mirror] of this.mirrors) {
@@ -471,19 +471,19 @@ export class ConversationTracker {
         live?.generation !== undefined || (live?.tools?.length ?? 0) > 0 || (live?.nestedTools?.length ?? 0) > 0
       if (!hasRun && !hasStream && (inboxItems?.length ?? 0) === 0) continue
       const snapshot = deriveConversationLive(id, live, Date.now(), inboxItems)
-      // 空闲会话仅在派生出非空 queued 时保留（queue-only）；不复活 idle 空 live。
+      // idle conversation only in derive out non-empty queued when keep (queue-only); does not resurrect idle empty live.
       if (!hasRun && !hasStream && (snapshot.queuedInputs?.length ?? 0) === 0) continue
       out.push(snapshot)
     }
     return out
   }
 
-  /** abort 结算（runtime.abortConversation 调用；与观察路径防双报）。 */
+  /** abort compute (runtime.abortConversation invoke; and observe path guard against double report). */
   settleAborted(conversationId: number): void {
     const mirror = this.mirrors.get(conversationId)
     const taskId = mirror?.runTaskId
     if (taskId !== undefined && mirror?.lastSettledRun === taskId) {
-      // 观察路径已结算该 run（aborted/failed/completed）：不重复。
+      // observe path already compute the run(aborted/failed/completed): does not repeat.
       this.resetRunState(conversationId)
       return
     }
@@ -495,9 +495,9 @@ export class ConversationTracker {
     this.emitSettled(conversationId, 'aborted', all, undefined)
   }
 
-  /** 非活跃 run 态下显式 abort 后清理残留的排队追踪登记（conversation.abort()
-   * 已撤回 pi.inbox，不会触发 settleAborted；仅在当前无活跃 live.run 时清理，
-   * 绝不触碰并发启动的新 run）。 */
+  /** non- leap run state under explicit abort after clean up leftover queue up append trace register (conversation.abort()
+   * already withdraw back pi.inbox, will not trigger settleAborted; only in when before without leap live.run when clean up,
+   * never trigger touch concurrency start new run). */
   clearQueuedTracking(conversationId: number): void {
     const mirror = this.mirrors.get(conversationId)
     if (mirror === undefined || mirror.live?.run !== undefined) return
@@ -507,9 +507,9 @@ export class ConversationTracker {
     }
   }
 
-  /** 取当前 run 的全部输入（abort 结算）：已放置（run.inputs 经索引）+ 已消费集 +
-   * 尚未关联 submissionId 的登记，按 input.id 去重；绝不遍历历史 run 的
-   * 追踪记录（已结算输入不再复活，origin 与重复输入不被旧历史污染）。 */
+  /** take when before run all input (abort compute): already put placement (run.inputs via index)+ already consume collection +
+   * not yet related submissionId register, by input.id dedupe; never iterate history run 
+   * append trace record (already compute input no longer re-,origin and duplicate input do not by old history pollute). */
   private takeCurrentRunInputs(conversationId: number): ConversationInput[] {
     const mirror = this.mirrors.get(conversationId)
     const out: ConversationInput[] = []
@@ -542,14 +542,14 @@ export class ConversationTracker {
   private resetRunState(conversationId: number): void {
     const mirror = this.mirrors.get(conversationId)
     if (mirror !== undefined) mirror.consumedInputs = undefined
-    // runTaskId 保留：显式 abort 路径需它对照 lastSettledRun 防重入；
-    // 新 run 启动时（live.run.taskId 变化）自然覆盖。
+    // runTaskId keep: explicit abort path must it compare lastSettledRun guard against heavy;
+    // new run at startup (live.run.taskId change) self however override.
   }
 
-  /** 登记已结算 runKey，并按会话限制保留容量（最旧淘汰，防无界增长）。
+  /** register already compute runKey, and by conversation restrict keep capacity (most old eliminate, guard against without boundary increase long).
    *
-   * runId（taskId）全库单调递增：被淘汰的最旧键不可能再出现，新 run 开始时
-   * 的 settledRuns.delete(runKey) 只作用于最近键（必在容量内），语义不变。 */
+   * runId(taskId) all store single tune pass increase: by eliminate most old key cannot can again appear, new run start when
+   *  settledRuns.delete(runKey) only effect at most near key (must in capacity inside), semantics do not change. */
   private noteSettledRun(conversationId: number, runKey: string): void {
     this.settledRuns.add(runKey)
     const order = this.mirrorOf(conversationId).settledRunOrder
@@ -560,7 +560,7 @@ export class ConversationTracker {
     }
   }
 
-  /** 从容量序中移除指定 runKey（新 run 开始时同步清 settledRuns 用）。 */
+  /** from capacity order in remove designate runKey(new run start when sync clean settledRuns use). */
   private dropSettledRunFromOrder(conversationId: number, runKey: string): void {
     const order = this.mirrors.get(conversationId)?.settledRunOrder
     if (order === undefined) return
@@ -574,17 +574,17 @@ export class ConversationTracker {
     const prev = mirror.live
     mirror.live = live ?? {}
 
-    // 压缩失败不得静默：新的 compactionFailure 恰发一次 error notification。
+    // compress failed must not static default: new compactionFailure exactly once error notification.
     this.noteCompactionFailure(id, live)
 
-    // 上下文边界变化（压缩/重置/原地覆盖重发条目落地，或压缩实时状态变化）：
-    // 调度异步刷新（同步去重；observe 回调内禁止 await）。
+    // context boundary change (compress/reset/original ground override heavy item persisted, or compress real-time state change):
+    // scheduling async refresh (sync dedupe;observe call back inside forbidden await).
     this.usage.noteBoundary(id, view, prev, live)
 
-    // assistant 文本：窗口尾部最新 pi.assistant entry。
-    // 遇 helm.rewind / pi.reset 立即停止回扫：原地覆盖重发刚写入截断标记（新
-    // 回答尚未生成）时，标记之前的旧 pi.assistant 已被覆盖，绝不能再触发
-    // onAssistantText 把旧回答重新写入 FTS5（防旧回答复燃）。
+    // assistant text: window tail part most new pi.assistant entry.
+    // encounter helm.rewind / pi.reset immediately stop back scan: original ground override heavy just write truncate mark record (new
+    // answer not yet generate) when, mark record before old pi.assistant already by override, never can again trigger
+    // onAssistantText old answer re- write FTS5(guard against old answer re- burn).
     for (let i = view.entries.length - 1; i >= 0; i -= 1) {
       const entry = view.entries[i] as
         | { kind: string; id: number; model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }> }
@@ -600,8 +600,8 @@ export class ConversationTracker {
       }
     }
 
-    // helm.input entry 观察：仅认当前 run 区间（run.first 及之后）的新条目，
-    // 历史 helm.input 不复活（已结算 run 的输入不再进入 trackedInputs）。
+    // helm.input entry observe: only recognize when before run zone between (run.first and after) new item,
+    // history helm.input does not resurrect (already compute run input no longer enter trackedInputs).
     const first = mirror.runFirstEntry
     const candidates: Array<Record<string, unknown>> = []
     for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
@@ -610,17 +610,17 @@ export class ConversationTracker {
       candidates.push(raw as unknown as Record<string, unknown>)
     }
     this.adoptInputsFromEntries(id, candidates)
-    // inbox queued 项同样重建（busy 中 followUp/steer 输入未放置但需在册）。
+    // inbox queued items same rebuild (busy in followUp/steer input not put placement but must in manual).
     const inbox = view.docs['pi.inbox'] as { items?: InboxItemShape[] } | undefined
     const inboxItems = inbox?.items ?? []
     mirror.inbox = inboxItems
     this.adoptInputsFromInbox(id, inboxItems)
 
-    // 新落库条目：按 id 序对每条恰发一次（提交顺序保持，SDK 同 commit 折叠时
-    // 窗口仍是全序，逐条推进水位线）。
+    // new written to the database item: by id order for each exactly once (commit order keep,SDK same commit collapse when
+    // window still is all order, one by one push enter watermark line).
     this.emitNewEntries(id, view.entries as never as ReadonlyArray<EntryRecordLike>)
 
-    // 检测本快照是否落入新 pi.compaction 条目（独立于 onEntryCommitted sink）。
+    // detect this snapshot is otherwise new pi.compaction item (independent at onEntryCommitted sink).
     const prevSeenEntryId = mirror.lastSeenEntryId
     let nextSeenEntryId = prevSeenEntryId
     let hasNewCompactionEntry = false
@@ -632,8 +632,8 @@ export class ConversationTracker {
     }
     mirror.lastSeenEntryId = nextSeenEntryId
 
-    // 精简任务结束且未落盘 pi.compaction、当前无活跃 run/其余精简任务：
-    // 调度异步对账（adopt 内严禁 await），甄别空跳过 vs 中止/失败。
+    // streamline task end and not pi.compaction, when before without leap run/the rest streamline task:
+    // scheduling async for account (adopt inside strictly forbidden await), screen empty skip vs abort/failed.
     const prevCompactions = prev?.compactions ?? []
     const nextCompactions = live?.compactions ?? []
     const nextTaskIds = new Set(nextCompactions.map((c) => c.taskId))
@@ -647,7 +647,7 @@ export class ConversationTracker {
       void this.reconcileFinishedCompaction(id, mirror.observeGeneration, finishedCompactions)
     }
 
-    // 先结算已结束的 prev run（含同快照折叠：run1 结束 + run2 开始同 commit）。
+    // first compute already end prev run(contains same snapshot collapse:run1 end + run2 start same commit).
     if (prev?.run && (!live?.run || live.run.taskId !== prev.run.taskId)) {
       const prevRun = prev.run
       const runKey = `${id}:${prevRun.taskId}`
@@ -659,7 +659,7 @@ export class ConversationTracker {
           for (const submissionId of failure.inputs) this.markConsumed(id, submissionId)
           const consumed = this.takeConsumed(id)
           if (failure.reason === 'aborted') {
-            // abort 终态（观察路径）：一次 aborted 结算，不再走 failed。
+            // abort terminal state (observe path): once aborted compute, no longer away failed.
             this.emitSettled(id, 'aborted', consumed, undefined)
           } else {
             this.emitSettled(
@@ -675,8 +675,8 @@ export class ConversationTracker {
         }
       }
       this.resetRunState(id)
-      // 输入重建下界单调推进到本快照尾部：已结算 run 的全部条目（含其
-      // helm.input）成为历史，后续快照窗口再扫到也不复活。
+      // input rebuild under boundary single tune push enter to this snapshot tail part: already compute run all item (contains its
+      // helm.input) into is history, after continue snapshot window again scan to also does not resurrect.
       const tail = view.entries.length
         ? Number((view.entries[view.entries.length - 1] as EntryRecordLike).id)
         : undefined
@@ -688,7 +688,7 @@ export class ConversationTracker {
     if (live?.run) {
       const runKey = `${id}:${live.run.taskId}`
       if (mirror.runTaskId !== live.run.taskId) {
-        // 新 run 开始：重置本回合消费集（同 run 多 tool round 不重置）。
+        // new run start: reset this turn consume collection (same run many tool round do not reset).
         mirror.runTaskId = live.run.taskId
         mirror.consumedInputs = new Set<string>()
         this.settledRuns.delete(runKey)
@@ -701,16 +701,16 @@ export class ConversationTracker {
       for (const submissionId of live.run.inputs) {
         this.markConsumed(id, submissionId)
       }
-      // 完成期（answered，inputs 清空）不动 consumedInputs——保留已消费记录。
+      // complete phase (answered,inputs empty) do not motion consumedInputs- - keep already consume record.
     }
 
-    // 实时视图：节流推送（终态在 emitSettled 内强制冲刷）。
+    // real-time view: node stream push (terminal state in emitSettled inside force conflict refresh).
     this.emitLiveThrottled(id, live)
-    // run 活跃期间的实时摘要：run 启动与 doing 语义变化（首字前即有 working）。
+    // run leap during real-time summary:run start and doing semantics change (first token before i.e. has working).
     this.emitRunSummary(id)
   }
 
-  /** 新落库条目：按 id 序推进水位线，每条恰发一次。 */
+  /** new written to the database item: by id order push enter watermark line, each exactly once. */
   private emitNewEntries(id: number, entries: ReadonlyArray<EntryRecordLike>): void {
     const sink = this.events.onEntryCommitted
     if (sink === undefined) return
@@ -720,8 +720,8 @@ export class ConversationTracker {
     for (const raw of entries) {
       const numeric = Number(raw.id)
       if (!Number.isFinite(numeric) || numeric <= watermark) continue
-      // 转换失败（非 JSON 载荷）显式抛出：SDK 会以 listener_error 结束观察，
-      // 绝不静默丢弃或伪造降级（诚实性纪律）。
+      // convert failed (non- JSON payload) explicit throw:SDK will with listener_error end observe,
+      // never static default discard or fabricate fall back (honest discipline).
       sink(id, toConversationEntry(raw))
       watermark = numeric
       advanced = true
@@ -729,10 +729,10 @@ export class ConversationTracker {
     if (advanced && mirror !== undefined) mirror.lastEmittedEntry = watermark
   }
 
-  /** 节流推送实时视图：窗口内只保留最新快照，同内容不重复发帧。
+  /** node stream push real-time view: window inside only keep most new snapshot, same content does not resend frame.
    *
-   * queuedInputs 变化（入队/出队）绕过 75ms 节流立即冲刷：用户提交
-   * steer / followUp 后时间线尾部胶囊尽快可见（受观察提交时序影响）。 */
+   * queuedInputs change (queue/out queue) bypass 75ms node stream immediately conflict refresh: user commit
+   * steer / followUp after timeline tail part pill as soon as possible visible (subject to observe commit when order affect). */
   private emitLiveThrottled(id: number, live: LiveStateShape | undefined): void {
     if (this.events.onLiveChanged === undefined) return
     const mirror = this.mirrors.get(id)
@@ -744,8 +744,8 @@ export class ConversationTracker {
       (live?.nestedTools?.length ?? 0) === 0 &&
       (inboxItems?.length ?? 0) === 0
     if (queuedEmpty) {
-      // 空闲视图不推送（终态冲刷由 emitSettled 负责）；但「之前发过 queued、
-      // 现在权威 inbox 已空」时不能短路丢弃清理帧（否则客户端胶囊残留）。
+      // idle view do not push (terminal state conflict refresh by emitSettled negative duty); but before queued,
+      // now right threat inbox already empty when cannot short route discard clean up frame (otherwise client pill leftover).
       const prevQueued = mirror?.lastQueuedLiveKey
       if (prevQueued === undefined || prevQueued === '[]') return
       const cleanup = deriveConversationLive(id, live, Date.now(), inboxItems)
@@ -754,13 +754,13 @@ export class ConversationTracker {
     }
     const snapshot = deriveConversationLive(id, live, Date.now(), inboxItems)
     const key = this.liveKeyOf(snapshot)
-    // 「上次已发 queued 指纹」统一语义：未登记视为空队列 '[]'（首次空队列
-    // 不因此误入立即冲刷路径）；仅 queue 变化绕过 75ms 节流。
+    // on time already queued refer grain unify semantics: not register treated as empty queue '[]'(first time empty queue
+    // do not therefore mistakenly immediately conflict refresh path); only queue change bypass 75ms node stream.
     const queuedKey = JSON.stringify(snapshot.queuedInputs ?? [])
     const prevQueuedKey = mirror?.lastQueuedLiveKey ?? '[]'
     if (key === mirror?.lastLiveKey && queuedKey === prevQueuedKey) return
     if (queuedKey !== prevQueuedKey) {
-      // 入队/出队实时性优先：清 timer 同步冲刷，不等 75ms 节流。
+      // queue/out queue real-time takes precedence: clean timer sync conflict refresh, do not etc. 75ms node stream.
       this.clearLiveTimer(id)
       this.sendLiveNow(id, snapshot)
       return
@@ -776,9 +776,9 @@ export class ConversationTracker {
     m.liveTimer = timer
   }
 
-  /** live 帧内容指纹：text/thinking/tools/generation/queuedInputs（发送与去重两处共用同一公式）。
-   * generation 参与指纹：纯 tool-call 参数流式期间 text/thinking 恒空，
-   * 不计 generation 则参数增长完全不发帧。 */
+  /** live frame content refer grain:text/thinking/tools/generation/queuedInputs(send and dedupe two where shared use the same public style).
+   * generation reference and refer grain: pure tool-call parameter streaming during text/thinking constant empty,
+   * do not count generation then parameter increase long fully do not frame. */
   private liveKeyOf(snapshot: ConversationLive): string {
     return JSON.stringify([
       snapshot.text,
@@ -789,7 +789,7 @@ export class ConversationTracker {
     ])
   }
 
-  /** 同步发送一帧 live（终态冲刷 / queued 清理共用）：登记两处指纹。 */
+  /** sync send one frame live(terminal state conflict refresh / queued clean up shared use): register two where refer grain. */
   private sendLiveNow(id: number, snapshot: ConversationLive): void {
     this.clearLiveTimer(id)
     const mirror = this.mirrorOf(id)
@@ -799,7 +799,7 @@ export class ConversationTracker {
     this.events.onLiveChanged?.(snapshot)
   }
 
-  /** 冲刷窗口内待发快照（timer 到期或 queuedInputs 变化立即冲刷）。 */
+  /** conflict refresh window inside await snapshot (timer expires or queuedInputs change immediately conflict refresh). */
   private flushPendingLive(id: number): void {
     const mirror = this.mirrors.get(id)
     const snapshot = mirror?.pendingLive
@@ -810,7 +810,7 @@ export class ConversationTracker {
     this.events.onLiveChanged?.(snapshot)
   }
 
-  /** 终态强制冲刷：以当前 live 镜像为准同步发帧（清 timer，丢弃过期窗口快照）。 */
+  /** terminal state force conflict refresh: with when before live mirror is allow sync frame (clean timer, discard expired window snapshot). */
   private flushLiveFinal(conversationId: number): void {
     this.clearLiveTimer(conversationId)
     const mirror = this.mirrors.get(conversationId)
@@ -831,15 +831,15 @@ export class ConversationTracker {
     this.events.onLiveChanged(snapshot)
   }
 
-  /** 从 helm.input entry 数据登记输入（按 input.id 即 requestId 幂等合并唯一记录）。
+  /** from helm.input entry data register input (by input.id i.e. requestId idempotent merge unique record).
    *
-   * 正常路径 register/bind 已有权威记录：entry 观察仅回填元数据缺口（origin/
-   * meta/attachments），不新建重复记录。 */
+   * happy path register/bind already has right threat record:entry observe only back fill metadata missing opening (origin/
+   * meta/attachments), do not creates new duplicate record. */
   private adoptInputsFromEntries(id: number, entries: ReadonlyArray<unknown>): void {
     for (const raw of entries) {
       const entry = raw as { kind?: string; data?: unknown }
-      // 自定义 input entry：SDK pickInputEntry 把 {kind:'helm.input', data} 写入
-      // entry.data，model 只携带 UserMessage（不在 model[0].data）。
+      // self define input entry:SDK pickInputEntry  {kind:'helm.input', data} write
+      // entry.data,model only carry UserMessage(do not in model[0].data).
       if (entry?.kind !== 'helm.input') continue
       const meta = entry.data as HelmInputMeta | undefined
       if (!meta || typeof meta.id !== 'string' || typeof meta.text !== 'string') continue
@@ -847,8 +847,8 @@ export class ConversationTracker {
     }
   }
 
-  /** 单条 helm.input 元数据登记/合并（按 input.id 幂等，唯一记录；调用方已
-   * 校验 meta.id/text 为字符串）。 */
+  /** single helm.input metadata register/merge (by input.id idempotent, unique record; caller already
+   * validate meta.id/text is string). */
   private upsertTrackedInput(id: number, requestId: string, meta: HelmInputMeta): void {
     const map = this.mirrorOf(id).trackedInputs
     const rebuilt = inputFromMeta(meta)
@@ -856,9 +856,9 @@ export class ConversationTracker {
     map.set(requestId, existing === undefined ? rebuilt : mergeInputMeta(existing, rebuilt))
   }
 
-  /** 标记 submissionId 已被当前 run 消费：经关联索引映射回 requestId 后
-   * 恰一次登记（onInputCommitted 恰一次）。索引缺失（bind/回填尚未发生）时
-   * 静默跳过，下一次快照重扫 run.inputs 时补记。 */
+  /** mark record submissionId already by when before run consume: via related index mapping back requestId after
+   * exactly once register (onInputCommitted exactly once). index missing (bind/back fill not yet occur) when
+   * static default skip, under once snapshot heavy scan run.inputs when patch record. */
   private markConsumed(conversationId: number, submissionId: number): void {
     const mirror = this.mirrors.get(conversationId)
     if (mirror === undefined) return
@@ -872,8 +872,8 @@ export class ConversationTracker {
     this.events.onInputCommitted(conversationId, input)
   }
 
-  /** 结算取本 run 已消费输入并清理登记：requestId 集合每项恰一条记录，
-   * 追踪记录与关联索引一并清除，历史不复活。 */
+  /** compute take this run already consume input and clean up register:requestId set each items exactly a record,
+   * append trace record and related index one and clear, history does not resurrect. */
   private takeConsumed(conversationId: number): ConversationInput[] {
     const mirror = this.mirrors.get(conversationId)
     const consumedSet = mirror?.consumedInputs
@@ -883,7 +883,7 @@ export class ConversationTracker {
         const input = mirror.trackedInputs.get(requestId)
         if (input !== undefined) out.push(input)
       }
-      // 已结算输入的追踪记录与索引项一并清除。
+      // already compute input append trace record and index items one and clear.
       for (const [submissionId, requestId] of mirror.submissionIndex) {
         if (consumedSet.has(requestId)) mirror.submissionIndex.delete(submissionId)
       }
@@ -903,13 +903,13 @@ export class ConversationTracker {
     this.beginSettled(conversationId)
     let completion: Promise<void> | void
     try {
-      // 实时视图终态冲刷：先于 turn_settled 发出（空 tools/文本表示流结束）。
+      // real-time view terminal state conflict refresh: first at turn_settled out (empty tools/text means stream end).
       this.flushLiveFinal(conversationId)
-      // 先推进持久水位，再构造结算快照；插件与读取接口观察同一终态。
-      // completionSeq 推进 + unread 置位（human 显式 patch 才清零）。
-      // 背景派生子会话（ownedBy 非 human 且有父链，如受管 subagent / SuperAgent
-      // Worker）完成不制造人类未读；人类 fork（有父链但 human 归属）与顶层
-      // 直连会话保持 unread 语义。失败/中止一律不置 unread（既有契约）。
+      // first push enter durable watermark, again construct compute snapshot; plugin and read interface observe the same terminal state.
+      // completionSeq push enter + unread placement (human explicit patch only then clean zero).
+      // background derive sub-conversation (ownedBy non- human and has parent chain, such as managed subagent / SuperAgent
+      // Worker) complete do not fabricate person class not read; person class fork(has parent chain but human ownership) and top-level
+      // direct connect conversation keep unread semantics. failed/abort one rule do not placement unread(since has contract).
       const meta = this.store.getConv(conversationId)
       if (meta) {
         const unread = outcome === 'completed' && !this.isBackgroundDerived(conversationId, meta)
@@ -922,9 +922,9 @@ export class ConversationTracker {
         }
         this.store.upsertConv(updated)
         const settledStatus = unread ? 'done' : statusNow(updated, outcome)
-        // 失败终态的诊断摘要与 summaryOf 同源：emitSettled 不经 tracker 派生路径，
-        // 必须在此同样携带 lastError（否则首个 conversation.upsert 事件漏掉原因）；
-        // contextUsage 同样从同步缓存附加（结算帧后的异步刷新再发新值帧）。
+        // failed terminal state diagnose summary and summaryOf same source:emitSettled do not via tracker derive path,
+        // must in this same carry lastError(otherwise first conversation.upsert event leak reason);
+        // contextUsage same from sync cache additional (compute frame after async refresh again new value frame).
         const settledRaw = summaryOf(
           updated,
           settledStatus,
@@ -934,10 +934,10 @@ export class ConversationTracker {
         )
         const cachedUsage = this.usage.peek(conversationId)
         const settledSummary = cachedUsage === undefined ? settledRaw : { ...settledRaw, contextUsage: cachedUsage }
-        // 终态摘要登记语义指纹：后续空闲快照不重复推送同一终态。
+        // terminal state summary register semantics refer grain: after continue idle snapshot does not repeat push the same terminal state.
         this.mirrorOf(conversationId).lastSummaryKey = summaryKeyOf(settledSummary)
         this.events.onSummaryChanged(settledSummary)
-        // 回合结算后上下文已定：异步刷新用量（变化才补发 upsert；不推进 seq）。
+        // turn compute after context already set: async refresh use amount (change only then patch upsert; do not push enter seq).
         this.usage.schedule(conversationId)
       }
       const payload: TurnSettledPayload = {
@@ -969,9 +969,9 @@ export class ConversationTracker {
     }
   }
 
-  /** 背景派生子会话判定：有父链且归属非 human（受管 subagent / Worker 等）。
-   * 归属回调缺省或读取失败（含已删除）一律按 human 处理——宁多读不漏报，
-   * 绝不因归属不明而吞掉人类未读通知。 */
+  /** background derive sub-conversation decide: has parent chain and ownership non- human(managed subagent / Worker etc.).
+   * ownership call back default or failed to read (contains deleted) one rule by human handle - - rather many read do not leak report,
+   * never because ownership do not while swallow person class not read notify. */
   private isBackgroundDerived(conversationId: number, meta: ConvMeta): boolean {
     if (meta.parentConversationId === undefined) return false
     if (this.ownershipOf === undefined) return false
@@ -982,9 +982,9 @@ export class ConversationTracker {
     }
   }
 
-  /** 由 store meta + live 镜像派生五态（blocked 优先于 working 派生冲突时）。 */  summaryOf(conversationId: number, pendingAskOverride?: number | TurnOutcome): ConversationSummary {
+  /** by store meta + live mirror derive five state (blocked takes precedence at working derive conflict when). */  summaryOf(conversationId: number, pendingAskOverride?: number | TurnOutcome): ConversationSummary {
     const meta = this.store.getConv(conversationId)
-    if (!meta) throw new HelmError('not_found', `会话不存在：${conversationId}`, 404)
+    if (!meta) throw new HelmError('not_found', `conversation missing:${conversationId}`, 404)
     const mirror = this.mirrors.get(conversationId)
     const live = mirror?.live
     const pendingAsks =
@@ -995,7 +995,7 @@ export class ConversationTracker {
     if (pendingAskOverride === 'aborted') {
       status = 'idle'
     } else if (pendingAsks > 0) {
-      // 待答审批覆盖运行态，直接暴露当前的人类决策点。
+      // await answer approval override run state, directly expose when before person class decide policy point.
       status = 'blocked'
     } else if (live?.run) {
       status = 'working'
@@ -1007,33 +1007,33 @@ export class ConversationTracker {
     const doing = live?.run
       ? live.tools && live.tools.length > 0
         ? `${live.tools[live.tools.length - 1]?.name}: ${live.tools[live.tools.length - 1]?.status ?? 'running'}`
-        : 'thinking…'
+        : 'thinking...'
       : undefined
-    // 失败诊断摘要仅随 error 状态携带（新 run 启动后 live.runFailure 被清除，自然同步消失）。
+    // failed diagnose summary only follow error state carry (new run after startup live.runFailure by clear, self however sync disappear).
     const lastError = status === 'error' ? lastErrorOf(live, this.redactError) : undefined
     const summary = summaryOf(meta, status, pendingAsks, doing, lastError)
     const usage = this.usage.cachedOrSchedule(conversationId)
     return usage === undefined ? summary : { ...summary, contextUsage: usage }
   }
 
-  /** 调度异步上下文用量刷新（委托刷新链模块；对外端口保留给 service/ops 消费方）。 */
+  /** scheduling async context use amount refresh (delegate refresh chain module; for outside port keep to service/ops consumer). */
   scheduleContextUsageRefresh(conversationId: number): void {
     this.usage.schedule(conversationId)
   }
 
-  /** models.changed 后定向迫齐上下文用量缓存。
+  /** models.changed after set to force complete context use amount cache.
    *
-   * 目录刷新/集合重建可能让同一模型的窗口从未知变已知（或反向、数值变化、
-   * 供应商不再供应）：已观察/已缓存会话的旧用量必须追上，否则 idle 会话
-   * 不发新输入就永远停留在旧窗口。只调度既有刷新链（在途置 dirty 迫齐、
-   * 代数守护、指纹去重），不新增异步机制、不触发 LLM 请求；usage-only
-   * 更新不推进 stateChangeSeq（applyContextUsage 的既有纪律）。
+   * directory refresh/set rebuild may let the same model window from unknown change known (or reverse, count value change,
+   * provider no longer supply should): already observe/already cache conversation old use amount must append on, otherwise idle conversation
+   * do not new input then forever stop in old window. only scheduling since has refresh chain (in-flight placement dirty force complete,
+   * proxy count guard, refer grain dedupe), no new async mechanism, does not trigger LLM request;usage-only
+   * update do not push enter stateChangeSeq(applyContextUsage since has discipline).
    *
-   * - providers 非空：只刷新生效模型属于这些供应商的会话（事件定向）；
-   * - providers 空：目录整体可能已换，全部追齐；
-   * - 只看已观察（镜像内有观察代数）或已有用量缓存的会话：不扫全量历史
-   *   会话（启动期/大目录下的昂贵 N 次扫描），未观察且未缓存的会话首次
-   *   波取时自然按新目录计算。
+   * - providers non-empty: only refresh takes effect model belongs to these provider conversation (event set to);
+   * - providers empty: directory whole may already swap, all append complete;
+   * - only see already observe (mirror inside has observe proxy count) or already has use amount cache conversation: do not scan all amount history
+   *   conversation (startup phase/large directory under expensive N time scan), not observe and not cache conversation first time
+   *   wave take when self however by new directory compute.
    */
   onModelsChanged(providers: readonly string[]): void {
     const wanted = providers.length > 0 ? new Set(providers) : undefined
@@ -1048,7 +1048,7 @@ export class ConversationTracker {
     }
   }
 
-  /** 已观察会话清单（镜像内存在观察代数；与迁移前 observeGenerations 键域一致）。 */
+  /** already observe conversation manifest (mirror memory in observe proxy count; and migration before observeGenerations key domain consistent). */
   private observedConversationIds(): number[] {
     const out: number[] = []
     for (const [id, mirror] of this.mirrors) {
@@ -1057,14 +1057,14 @@ export class ConversationTracker {
     return out
   }
 
-  /** 确保该会话 contextUsage 缓存已填充且刷新链归寂（首个详情读等同步可见路径）。 */
+  /** ensure the conversation contextUsage cache already fill and refresh chain archive silent (first detail situation read etc. sync visible path). */
   async ensureContextUsage(conversationId: number): Promise<void> {
     await this.usage.ensure(conversationId)
   }
 
-  /** 压缩失败不得静默：新的 compactionFailure（按 taskId 去重，同一失败
-   * 重复快照不重复通知）发一次脱敏 error notification。SDK 只在下一次成功
-   * 压缩时清除 compactionFailure，成功后新失败是全新 taskId，自然再报。 */
+  /** compress failed must not static default: new compactionFailure(by taskId dedupe, the same failed
+   * duplicate snapshot does not repeat notify) once redaction error notification.SDK only in under once succeeded
+   * compress when clear compactionFailure, after success new failed is all new taskId, self however again report. */
   private noteCompactionFailure(id: number, live: LiveStateShape | undefined): void {
     const failure = live?.compactionFailure
     if (failure === undefined) return
@@ -1072,21 +1072,21 @@ export class ConversationTracker {
     this.notifiedCompactionFailures.set(id, failure.taskId)
     this.events.onNotification?.({
       level: 'error',
-      title: '上下文精简失败',
+      title: 'context streamline failed',
       body: compactionFailureNoticeOf(failure, this.redactError),
       conversationId: id,
     })
   }
 
   /**
-   * 无 pi.compaction 落盘的精简结束异步对账（adopt 同步快照外执行）：
-   * - 逐任务查询权威终态，仅当存在干净完成（status='terminal' 且
-   *   outcome.status='completed'、无摘要写入且非 compactionFailure）时视为
-   *   空跳过（selectCut === undefined 或 beforeCompact decline）；
-   * - aborted / failed 任务一律忽略（绝不误报「当前上下文无需精简」，也绝不在
-   *   未精简上下文上擅自冲刷排队输入）；
-   * - 确认干净空跳过后：若有 manual 触发发 info 通知；若 inbox 仍有 steer/followUp
-   *   排队输入且当前空闲无压缩，通过 continue 自动启动下一回合。
+   * without pi.compaction streamline end async for account (adopt sync snapshot outside execute):
+   * - one by one task query right threat terminal state, only when store in clean complete (status='terminal' and
+   *   outcome.status='completed', without summary write and non- compactionFailure) when treated as
+   *   empty skip (selectCut === undefined or beforeCompact decline);
+   * - aborted / failed task one rule ignore (never mistakenly report when before context no need to streamline, also never in
+   *   not streamline context on without permission conflict refresh queue up input);
+   * - confirm clean empty skip after: if has manual trigger info notify; if inbox still has steer/followUp
+   *   queue up input and when before idle without compress, via continue automatically start under one turn.
    */
   private async reconcileFinishedCompaction(
     id: number,
@@ -1121,8 +1121,8 @@ export class ConversationTracker {
       if (hasManualEmpty) {
         this.events.onNotification?.({
           level: 'info',
-          title: '当前上下文无需精简',
-          body: '历史消息未超过保留窗口，未生成新的摘要。',
+          title: 'when before context no need to streamline',
+          body: 'history message not exceeds keep window, not generate new summary.',
           conversationId: id,
         })
       }
@@ -1156,7 +1156,7 @@ export class ConversationTracker {
       this.reportDiagnostic({
         level: 'error',
         source: 'tracker.compaction',
-        message: '精简结束对账失败',
+        message: 'streamline end for account failed',
         error,
         conversationId: id,
       })
@@ -1168,7 +1168,7 @@ export class ConversationTracker {
     const prev = mirror.pendingAskCount
     if (prev === count) return
     mirror.pendingAskCount = count
-    // seq 持久递增：pendingAsk 变化是状态变化（CAS 水位线依赖）。
+    // seq durable pass increase:pendingAsk change is state change (CAS watermark line dependency).
     const meta = this.store.getConv(conversationId)
     if (meta) {
       const updated: ConvMeta = {
@@ -1183,14 +1183,14 @@ export class ConversationTracker {
     this.events.onSummaryChanged(summary)
   }
 
-  /** run 活跃期间的实时摘要推送：run 启动与 doing 语义变化时各恰一次。
+  /** run leap during real-time summary push:run start and doing semantics change when each exactly once.
    *
-   * - 仅当本快照存在活跃 run 才推送（只可能出现 working/blocked 二态）；
-   *   终态一律由 emitSettled 负责：adopt 不重复结算、不复活已结算回合；
-   * - 以（status, doing, pendingAskCount）语义指纹去重：纯流式 token 推进
-   *   （doing 不变）不推送，不逐 token 发摘要；
-   * - stateChangeSeq 随真实状态变化单调推进（协议契约），与 setPendingAskCount
-   *   同一机制；live 节流窗口（75ms）不受影响。
+   * - only when this snapshot store in leap run only then push (only may appear working/blocked two state);
+   *   terminal state one rule by emitSettled negative duty:adopt does not repeat compute, does not resurrect already compute turn;
+   * - with (status, doing, pendingAskCount) semantics refer grain dedupe: pure streaming token push enter
+   *   (doing do not change) do not push, do not one by one token summary;
+   * - stateChangeSeq follow real state change single tune push enter (protocol contract), and setPendingAskCount
+   *   the same mechanism;live node stream window (75ms) do not subject to affect.
    */
   private emitRunSummary(id: number): void {
     const mirror = this.mirrors.get(id)
@@ -1204,7 +1204,7 @@ export class ConversationTracker {
     this.events.onSummaryChanged(summary)
   }
 
-  /** 观察到的最新 assistant 文本（getLastAssistantText 数据源）。 */
+  /** observe to most new assistant text (getLastAssistantText data source). */
   recordAssistantText(conversationId: number, entryId: number, text: string): void {
     const mirror = this.mirrorOf(conversationId)
     const prev = mirror.lastAssistant
@@ -1216,11 +1216,11 @@ export class ConversationTracker {
     return this.mirrors.get(conversationId)?.lastAssistant?.text
   }
 
-  /** 失效落入 rewind 覆盖区间的 lastAssistant 缓存（原地覆盖重发后）。
+  /** expires rewind override zone between lastAssistant cache (original ground override heavy after).
    *
-   * 仅当缓存指向的 entry 落在 [from, through] 内才清除：新回答失败时
-   * getLastAssistantText 不得返回已被覆盖的旧答案，而区间外（更早回合）
-   * 的缓存仍然有效。*/
+   * only when cache points to entry in [from, through] inside only then clear: new answer on failure
+   * getLastAssistantText must not return already by override old answer proposal, while zone between outside (more early turn)
+   * cache still valid.*/
   invalidateLastAssistantWithin(conversationId: number, from: number, through: number): void {
     const mirror = this.mirrors.get(conversationId)
     const cached = mirror?.lastAssistant
@@ -1237,12 +1237,12 @@ function statusNow(meta: ConvMeta, outcome: TurnOutcome): ConversationStatus {
   return meta.unread ? 'done' : 'idle'
 }
 
-/** 摘要语义指纹：status/doing/pendingAskCount/lastError（其余字段不参与推送去重）。 */
+/** summary semantics refer grain:status/doing/pendingAskCount/lastError(the rest field does not participate push dedupe). */
 function summaryKeyOf(summary: ConversationSummary): string {
   return `${summary.status}|${summary.doing ?? ''}|${summary.pendingAskCount}|${summary.lastError ?? ''}`
 }
 
-/** 从 live.runFailure 构造可读诊断摘要（'reason: detail'；aborted/reset 非失败不携带）。 */
+/** from live.runFailure construct can read diagnose summary ('reason: detail';aborted/reset non- failed does not carry). */
 function lastErrorOf(
   live: LiveStateShape | undefined,
   redact: (text: string) => string,
@@ -1256,9 +1256,9 @@ function lastErrorOf(
   return `${failure.reason}${detail}`
 }
 
-// 输入追踪身份即持久 input.id（requestId），无需临时键分配。
+// input append trace identity i.e. durable input.id(requestId), no need to temporary key allocate.
 
-/** 提取 assistant entry 的文本块内容。 */
+/** extract assistant entry text chunk content. */
 function assistantTextOf(entry: {
   model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }>
 }): string {
@@ -1272,7 +1272,7 @@ function assistantTextOf(entry: {
 
 export { deriveTitle }
 
-/** 首输入标题：剥离代码块与换行，取前 36 个有效字符。 */
+/** first input title: strip code chunk and newline, take before 36 valid character. */
 function deriveTitle(text: string): string {
   const stripped = text
     .replace(/```[\s\S]*?```/g, ' ')
@@ -1280,5 +1280,5 @@ function deriveTitle(text: string): string {
     .replace(/[\r\n\t]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-  return stripped.slice(0, 36) || '新会话'
+  return stripped.slice(0, 36) || 'new conversation'
 }

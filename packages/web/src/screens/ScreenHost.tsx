@@ -68,7 +68,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
           <div className="pane-title-group">
             <HelmIcon name="alert-triangle" size={14} />
             <span className="pane-title">
-              未找到视图 {pluginId}/{screenId}
+              View {pluginId}/{screenId} not found
             </span>
           </div>
           <div className="pane-actions">
@@ -86,7 +86,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
           <div className="callout callout-warn">
             <HelmIcon name="alert-triangle" size={13} />
             <span>
-              该视图不存在或所属插件未启用（{pluginId}/{screenId}）。请确认插件已在设置中启用。
+              This view does not exist or its plugin is disabled ({pluginId}/{screenId}). Make sure the plugin is enabled in Settings.
             </span>
           </div>
         </div>
@@ -126,7 +126,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
             pluginId={pluginId}
             spec={spec}
             slotProps={slotProps}
-            label={`视图 ${screenId}`}
+            label={`View ${screenId}`}
           />
         </div>
       </div>

@@ -1,4 +1,4 @@
-/** 真实 SQLite + pi-durable + faux：镜像、继承覆盖和 SDK 配置必须一致。 */
+/** real SQLite + pi-durable + faux: mirror, inherit override and SDK config must consistent. */
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -50,10 +50,10 @@ async function assertThinking(kernel: KernelRuntime, id: number, effective: stri
   const summary = kernel.getConversation(id) as ThinkingSummary
   assert.equal(summary.thinkingLevel, effective)
   assert.equal(summary.thinkingLevelOverride, override)
-  assert.equal((await sdkAgent(kernel, id)).thinkingLevel, effective || 'off', '真实 SDK 必须与镜像一致')
+  assert.equal((await sdkAgent(kernel, id)).thinkingLevel, effective || 'off', 'real SDK must and mirror consistent')
 }
 
-it('只改全局 thinking 保留模型；模型覆盖不阻断思考继承；刷新发事件且递增会话序号', { timeout: 60_000 }, async (t) => {
+it('only change global thinking keep model; model override do not block assert think inherit; refresh event and pass increase conversation ordinal', { timeout: 60_000 }, async (t) => {
   const { dir, kernel } = await fixture(t)
   await kernel.setDefaultModel('faux/faux-1', 'low')
   const inherited = await kernel.createConversation()
@@ -79,20 +79,20 @@ it('只改全局 thinking 保留模型；模型覆盖不阻断思考继承；刷
   assert.equal((await sdkAgent(kernel, inherited.id)).model?.modelId, 'faux-2')
 })
 
-it('会话覆盖独立保护，清除后回到 Profile/全局；全部清除用 SDK null 回 off', { timeout: 60_000 }, async (t) => {
+it('conversation override independent protect, clear after back to Profile/global; all clear use SDK null back off', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux/faux-1', 'low')
-  await kernel.services.profiles.save({ id: 'expert', name: '专家', thinkingLevel: 'medium' })
+  await kernel.services.profiles.save({ id: 'expert', name: 'dedicated household', thinkingLevel: 'medium' })
   const conv = await kernel.createConversation({ profileId: 'expert' })
   await assertThinking(kernel, conv.id, 'medium')
   await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
   await kernel.setDefaultModel(undefined, 'high')
-  await kernel.services.profiles.save({ id: 'expert', name: '专家', thinkingLevel: 'minimal' })
+  await kernel.services.profiles.save({ id: 'expert', name: 'dedicated household', thinkingLevel: 'minimal' })
   await kernel.alignProfileConversations('expert')
   await assertThinking(kernel, conv.id, 'max', 'max')
   await kernel.updateConversation(conv.id, { thinkingLevel: '' })
   await assertThinking(kernel, conv.id, 'minimal')
-  await kernel.services.profiles.save({ id: 'expert', name: '专家' })
+  await kernel.services.profiles.save({ id: 'expert', name: 'dedicated household' })
   await kernel.alignProfileConversations('expert')
   await assertThinking(kernel, conv.id, 'high')
   await kernel.setDefaultModel(undefined, '')
@@ -100,12 +100,12 @@ it('会话覆盖独立保护，清除后回到 Profile/全局；全部清除用 
   assert.equal((await sdkAgent(kernel, conv.id)).model?.modelId, 'faux-1')
 })
 
-it('Profile 保存刷新模型和思考；换 Profile 重算继承并保留显式覆盖', { timeout: 60_000 }, async (t) => {
+it('Profile save refresh model and think; swap Profile heavy compute inherit and keep explicit override', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux/faux-1', 'low')
-  await kernel.services.profiles.save({ id: 'expert', name: '专家', model: 'faux/faux-1', thinkingLevel: 'medium' })
+  await kernel.services.profiles.save({ id: 'expert', name: 'dedicated household', model: 'faux/faux-1', thinkingLevel: 'medium' })
   const conv = await kernel.createConversation({ profileId: 'expert' })
-  await kernel.services.profiles.save({ id: 'expert', name: '专家', model: 'faux/faux-2', thinkingLevel: 'high' })
+  await kernel.services.profiles.save({ id: 'expert', name: 'dedicated household', model: 'faux/faux-2', thinkingLevel: 'high' })
   await kernel.alignProfileConversations('expert')
   await assertThinking(kernel, conv.id, 'high')
   assert.equal((await sdkAgent(kernel, conv.id)).model?.modelId, 'faux-2')
@@ -119,7 +119,7 @@ it('Profile 保存刷新模型和思考；换 Profile 重算继承并保留显�
   assert.equal((await sdkAgent(kernel, conv.id)).model?.modelId, 'faux-1')
 })
 
-it('没有模型时也同步思考配置，清模型时删除 SDK 旧模型', { timeout: 60_000 }, async (t) => {
+it('no model when also sync think config, clean model when delete SDK old model', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel(undefined, 'high')
   const conv = await kernel.createConversation()
@@ -139,7 +139,7 @@ it('没有模型时也同步思考配置，清模型时删除 SDK 旧模型', { 
   await assertThinking(kernel, conv.id, '')
 })
 
-it('重启重算 root/普通会话继承，保留 root 与普通会话覆盖和已清除覆盖', { timeout: 60_000 }, async (t) => {
+it('restart heavy compute root/ordinary conversation inherit, keep root and ordinary conversation override and already clear override', { timeout: 60_000 }, async (t) => {
   const { dir, kernel } = await fixture(t)
   await kernel.setDefaultModel('faux/faux-1', 'low')
   const inherited = await kernel.createConversation()
@@ -158,7 +158,7 @@ it('重启重算 root/普通会话继承，保留 root 与普通会话覆盖和�
     await assertThinking(restarted, overridden.id, 'off', 'off')
     await assertThinking(restarted, cleared.id, 'medium')
     await restarted.updateConversation(1, { thinkingLevel: '' })
-    await restarted.services.profiles.save({ id: 'assistant', name: '助理', thinkingLevel: 'high' })
+    await restarted.services.profiles.save({ id: 'assistant', name: 'assist', thinkingLevel: 'high' })
   } finally {
     await restarted.close()
   }
@@ -173,18 +173,18 @@ it('重启重算 root/普通会话继承，保留 root 与普通会话覆盖和�
   }
 })
 
-it('fork 保留思考 override，清除分叉覆盖不影响原会话', { timeout: 60_000 }, async (t) => {
+it('fork keep think override, clear fork override does not affect original conversation', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux/faux-1', 'low')
   const conv = await kernel.createConversation()
   await kernel.updateConversation(conv.id, { thinkingLevel: 'high' })
-  kernel.faux.setResponses([fauxAssistantMessage('分叉源回答')])
-  await kernel.submitInput(conv.id, '回答')
+  kernel.faux.setResponses([fauxAssistantMessage('fork source answer')])
+  await kernel.submitInput(conv.id, 'answer')
   await kernel.waitForIdle(conv.id)
   const detail = await kernel.getConversationDetail(conv.id)
   const entry = detail.entries.findLast((entry) => entry.kind === 'pi.assistant')
   assert.ok(entry)
-  // fork 的 SDK 快照来自旧条目，Helm 的当前覆盖仍须重新对齐到 max。
+  // fork  SDK snapshot from old item,Helm when before override still must re- align to max.
   await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
   const forked = await kernel.forkConversation(conv.id, { entryId: Number(entry.id) })
   await kernel.setDefaultModel(undefined, 'medium')
@@ -194,29 +194,29 @@ it('fork 保留思考 override，清除分叉覆盖不影响原会话', { timeou
   await assertThinking(kernel, conv.id, 'max', 'max')
 })
 
-it('并发继承刷新与会话修改串行，覆盖、标题和递增序号均不丢失', { timeout: 60_000 }, async (t) => {
+it('concurrency inherit refresh and conversation modify serial, override, title and pass increase ordinal all without losing', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux/faux-1', 'low')
   const conv = await kernel.createConversation()
   await Promise.all([
     kernel.setDefaultModel(undefined, 'medium'),
-    kernel.updateConversation(conv.id, { thinkingLevel: 'high', title: '保留标题' }),
+    kernel.updateConversation(conv.id, { thinkingLevel: 'high', title: 'keep title' }),
     kernel.alignProfileConversations('assistant'),
   ])
   await assertThinking(kernel, conv.id, 'high', 'high')
-  assert.equal(kernel.getConversation(conv.id).title, '保留标题')
+  assert.equal(kernel.getConversation(conv.id).title, 'keep title')
   assert.ok(kernel.getConversation(conv.id).stateChangeSeq > conv.stateChangeSeq)
 })
 
-it('spawn 新建按 effort > Profile > 全局驱动真实 SDK；resume effort 同步覆盖与镜像', { timeout: 60_000 }, async (t) => {
+it('spawn creates new by effort > Profile > global drive real SDK;resume effort sync override and mirror', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux/faux-1', 'low')
-  await kernel.services.profiles.save({ id: 'expert', name: '专家', thinkingLevel: 'medium' })
-  kernel.faux.setResponses(Array.from({ length: 5 }, (_, i) => fauxAssistantMessage(`回答 ${i}`)))
+  await kernel.services.profiles.save({ id: 'expert', name: 'dedicated household', thinkingLevel: 'medium' })
+  kernel.faux.setResponses(Array.from({ length: 5 }, (_, i) => fauxAssistantMessage(`answer ${i}`)))
   async function spawn(agentType: string, effort?: string): Promise<number> {
     let child: number | undefined
     await kernel.spawnAgent({
-      parentConversationId: 1, agentType, prompt: '回答', effort,
+      parentConversationId: 1, agentType, prompt: 'answer', effort,
       onResolved: (info) => { child = info.conversationId },
     })
     assert.ok(child)
@@ -232,11 +232,11 @@ it('spawn 新建按 effort > Profile > 全局驱动真实 SDK；resume effort �
   await assertThinking(kernel, globalChild, 'max')
   await assertThinking(kernel, profileChild, 'medium')
   await assertThinking(kernel, effortChild, 'high', 'high')
-  await kernel.spawnAgent({ parentConversationId: 1, resume: String(effortChild), prompt: '继续', effort: 'off' })
+  await kernel.spawnAgent({ parentConversationId: 1, resume: String(effortChild), prompt: 'continue', effort: 'off' })
   await assertThinking(kernel, effortChild, 'off', 'off')
-  await kernel.spawnAgent({ parentConversationId: 1, resume: String(effortChild), prompt: '继续' })
+  await kernel.spawnAgent({ parentConversationId: 1, resume: String(effortChild), prompt: 'continue' })
   await assertThinking(kernel, effortChild, 'off', 'off')
-  assert.equal(kernel.faux.state.callCount, 5, '五次 spawn/resume 都必须真正请求 faux')
+  assert.equal(kernel.faux.state.callCount, 5, 'five time spawn/resume all must truly request faux')
   await kernel.updateConversation(effortChild, { thinkingLevel: '' })
   await assertThinking(kernel, effortChild, 'medium')
 })

@@ -242,7 +242,7 @@ test('skill-center-model: getSkillSourceBadge 映射正确', { timeout: 60_000 }
   const sharedSkill = makeSkill({ id: 'git-commit', source: 'agents' })
 
   const badgeBuiltin = getSkillSourceBadge(cliSkill)
-  assert.equal(badgeBuiltin.label, '内置')
+  assert.equal(badgeBuiltin.label, 'Built-in')
   assert.equal(badgeBuiltin.variant, 'builtin')
 
   const badgePlugin = getSkillSourceBadge(mockSkills[4])
@@ -250,12 +250,12 @@ test('skill-center-model: getSkillSourceBadge 映射正确', { timeout: 60_000 }
   assert.equal(badgePlugin.variant, 'plugin')
 
   const badgeWs = getSkillSourceBadge(codeSkill)
-  assert.equal(badgeWs.label, '工作区')
+  assert.equal(badgeWs.label, 'Workspace')
   assert.equal(badgeWs.variant, 'workspace')
 
   // 共享根技能优先归入 agents 徽章（即使无 managedByPlugin，也不冒充工作区）
   const badgeAgents = getSkillSourceBadge(sharedSkill)
-  assert.equal(badgeAgents.label, '共享')
+  assert.equal(badgeAgents.label, 'Shared')
   assert.equal(badgeAgents.variant, 'agents')
 })
 
@@ -267,7 +267,7 @@ test('skill-reader-model: buildSkillFileList 主规程置顶 + 参考文件短�
   assert.deepEqual(files[0], {
     path: '',
     fileName: 'SKILL.md',
-    meta: '主规程',
+    meta: 'Main file',
     displayPath: 'SKILL.md',
   })
 
@@ -287,7 +287,7 @@ test('skill-reader-model: buildSkillFileList 主规程置顶 + 参考文件短�
 
   // 根目录文件目录信息回退 ./；空与非法项被过滤；空清单仅剩主规程
   assert.deepEqual(buildSkillFileList(['notes.md']), [
-    { path: '', fileName: 'SKILL.md', meta: '主规程', displayPath: 'SKILL.md' },
+    { path: '', fileName: 'SKILL.md', meta: 'Main file', displayPath: 'SKILL.md' },
     { path: 'notes.md', fileName: 'notes.md', meta: './', displayPath: 'notes.md' },
   ])
   assert.equal(buildSkillFileList(['', '   ', undefined as unknown as string]).length, 1)
@@ -395,9 +395,9 @@ test('skill-reader-model: renderSkillFrontmatterTable 字段按序转为元数�
       { key: 'managedByPlugin', value: 'builtin:profile' },
     ]),
     [
-      '## 技能元数据',
+      '## Skill metadata',
       '',
-      '| 字段 | 内容 |',
+      '| Field | Value |',
       '| --- | --- |',
       '| name | agent-browser |',
       '| description | Browser automation CLI |',
@@ -426,9 +426,9 @@ test('skill-reader-model: renderSkillDocMarkdown 统一文档视图（表格 + �
   assert.equal(
     renderSkillDocMarkdown('---\nname: helm-cli\ndescription: 手册\n---\n\n# 正文\n\n段落。'),
     [
-      '## 技能元数据',
+      '## Skill metadata',
       '',
-      '| 字段 | 内容 |',
+      '| Field | Value |',
       '| --- | --- |',
       '| name | helm-cli |',
       '| description | 手册 |',
@@ -453,7 +453,7 @@ test('skill-reader-model: renderSkillDocMarkdown 统一文档视图（表格 + �
   // 只有 frontmatter：仅元数据表格
   assert.equal(
     renderSkillDocMarkdown('---\nname: x\n---\n'),
-    '## 技能元数据\n\n| 字段 | 内容 |\n| --- | --- |\n| name | x |',
+    '## Skill metadata\n\n| Field | Value |\n| --- | --- |\n| name | x |',
   )
 
   // 空 frontmatter（无字段）：正文原样，不注入空表
@@ -490,8 +490,8 @@ test('SkillCard: SSR 渲染结构、来源徽章、参考文件胶囊与零 Emoj
   assert.ok(html.includes('Helm 命令行操作手册'), '应展示技能名称')
   assert.ok(html.includes('helm-cli'), '应展示技能 ID')
   assert.ok(html.includes('指导大模型通过 helm 命令行控制 Hub'), '应展示描述')
-  assert.ok(html.includes('内置'), '系统内建技能应展示「内置」来源徽章')
-  assert.ok(html.includes('2 个参考文件'), '应展示 2 个参考文件胶囊')
+  assert.ok(html.includes('Built-in'), '系统内建技能应展示「内置」来源徽章')
+  assert.ok(html.includes('2 reference files'), '应展示 2 个参考文件胶囊')
 
   // 零 Emoji 断言
   assert.doesNotMatch(html, emojiRegex, 'SkillCard 渲染输出严禁包含 Emoji 表情')
@@ -509,8 +509,8 @@ test('SkillCard: 选中状态与工作区来源徽章', { timeout: 60_000 }, () 
 
   assert.ok(html.includes('is-selected'), '选中时应具有 is-selected 类')
   assert.ok(html.includes('aria-selected="true"'), '选中时应具备 aria-selected 属性')
-  assert.ok(html.includes('工作区'), '私有技能应展示「工作区」来源徽章')
-  assert.ok(html.includes('1 个参考文件'), '应展示 1 个参考文件胶囊')
+  assert.ok(html.includes('Workspace'), '私有技能应展示「工作区」来源徽章')
+  assert.ok(html.includes('1 reference files'), '应展示 1 个参考文件胶囊')
   assert.doesNotMatch(html, emojiRegex, 'SkillCard 渲染输出严禁包含 Emoji')
 })
 
@@ -525,8 +525,8 @@ test('SkillCard: 共享根技能展示「共享」徽章与强调色样式', { t
   )
 
   assert.ok(html.includes('badge-accent'), '共享根技能应使用 badge-accent 徽章样式')
-  assert.ok(html.includes('共享'), '共享根技能应展示「共享」来源徽章')
-  assert.ok(!html.includes('工作区'), '共享根技能不得展示「工作区」徽章')
+  assert.ok(html.includes('Shared'), '共享根技能应展示「共享」来源徽章')
+  assert.ok(!html.includes('Workspace'), '共享根技能不得展示「工作区」徽章')
   assert.doesNotMatch(html, /badge-ghost|badge-subtle/, '不得使用未定义的 badge-ghost / badge-subtle 类')
   assert.doesNotMatch(html, emojiRegex, 'SkillCard 渲染输出严禁包含 Emoji')
 })
@@ -577,7 +577,7 @@ test('SkillCard: 无参考文件时省略「0 个参考文件」，提供可复�
       )
     })
 
-    const copyBtn = host.querySelector('button[aria-label="复制斜杠指令 /skill:database-migration"]')
+    const copyBtn = host.querySelector('button[aria-label="Copy slash command /skill:database-migration"]')
     assert.ok(copyBtn, '应渲染可点击复制的 /skill:<id> 按钮')
     await act(async () => {
       copyBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -667,18 +667,18 @@ test('SkillDetailDrawer: SSR 渲染单行文件工具条与富文本阅读区（
   assert.ok(html.includes('primary-drawer-title'), '应包含抽屉标题')
   assert.ok(html.includes('Helm 命令行操作手册'), '应展示技能名称')
   assert.ok(html.includes('helm-cli'), '应展示技能 ID')
-  assert.ok(html.includes('内置'), '应展示内置来源徽章')
+  assert.ok(html.includes('Built-in'), '应展示内置来源徽章')
 
   // 单行文件工具条：公共 Select 触发器 + 阅读模式切换 + 文件序号与行数
   assert.ok(html.includes('skill-reader-toolbar'), '应包含 skill-reader-toolbar 工具条')
   assert.ok(html.includes('helm-select-trigger'), '多文件时应使用公共 Select 下拉选择器')
-  assert.ok(html.includes('aria-label="选择技能文件"'), '文件选择器应具备无障碍标签')
+  assert.ok(html.includes('aria-label="Choose a skill file"'), '文件选择器应具备无障碍标签')
   assert.ok(html.includes('SKILL.md'), '触发器应展示当前文件短名 SKILL.md')
-  assert.ok(html.includes('富文本'), '应提供富文本阅读模式按钮')
-  assert.ok(html.includes('源码'), '应提供源码阅读模式按钮')
+  assert.ok(html.includes('Rich text'), '应提供富文本阅读模式按钮')
+  assert.ok(html.includes('Source'), '应提供源码阅读模式按钮')
   assert.ok(html.includes('1/3'), '应展示文件序号 1/3')
-  assert.ok(html.includes('3 行'), '应展示当前文件行数')
-  assert.ok(html.includes('aria-label="复制"'), '工具条应提供复制按钮')
+  assert.ok(html.includes('3 lines'), '应展示当前文件行数')
+  assert.ok(html.includes('aria-label="Copy"'), '工具条应提供复制按钮')
 
   // 标签墙已移除：不再渲染任何 role=tab 文件按钮与文件清单区块
   assert.ok(!html.includes('role="tab"'), '不得再渲染多文件标签墙（role=tab）')
@@ -725,11 +725,11 @@ test('SkillDetailDrawer: 富文本模式把 frontmatter 转为元数据表格与
   assert.ok(doc, '富文本模式应渲染 MarkdownView 阅读区')
 
   // 元数据表格：标题 + 表头 + 字段行按原 YAML 顺序保留
-  assert.ok(doc.textContent?.includes('技能元数据'), '应渲染「技能元数据」标题')
+  assert.ok(doc.textContent?.includes('Skill metadata'), '应渲染「技能元数据」标题')
   const table = doc.querySelector('table') as HTMLTableElement
   assert.ok(table, 'frontmatter 应转换为 Markdown 表格渲染')
   const headerCells = Array.from(table.querySelectorAll('thead th')).map((c) => c.textContent)
-  assert.deepEqual(headerCells, ['字段', '内容'], '表头应为字段/内容两列')
+  assert.deepEqual(headerCells, ['Field', 'Value'], '表头应为字段/内容两列')
   const rows = Array.from(table.querySelectorAll('tbody tr')).map(
     (tr) => Array.from(tr.querySelectorAll('td')).map((td) => td.textContent),
   )
@@ -748,7 +748,7 @@ test('SkillDetailDrawer: 富文本模式把 frontmatter 转为元数据表格与
 
   // 切换源码模式：完整原文（含 frontmatter 的 --- 围栏）以等宽代码呈现
   const sourceBtn = Array.from(host.querySelectorAll('button')).find(
-    (b) => b.textContent?.includes('源码'),
+    (b) => b.textContent?.includes('Source'),
   ) as HTMLButtonElement
   assert.ok(sourceBtn, '应能找到源码模式按钮')
   await act(async () => {
@@ -764,7 +764,7 @@ test('SkillDetailDrawer: 富文本模式把 frontmatter 转为元数据表格与
 
   // 切回富文本：表格 + 正文恢复，仍无原始 YAML
   const richBtn = Array.from(host.querySelectorAll('button')).find(
-    (b) => b.textContent?.includes('富文本'),
+    (b) => b.textContent?.includes('Rich text'),
   ) as HTMLButtonElement
   await act(async () => {
     richBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -785,7 +785,7 @@ test('SkillDetailDrawer: 文件下拉选择器切换参考文件与序号/行数
 
   const readCalls: Array<{ id: string; path?: string }> = []
   const library: Record<string, string> = {
-    '': '# 主规程\n\n主文件正文。',
+    '': '# Main file\n\n主文件正文。',
     'references/cli-reference.md': '# CLI 参考\n\n命令细节一。\n\n命令细节二。',
     'references/generative-ui.md': '# 生成 UI 参考\n\n卡片细节。',
   }
@@ -812,9 +812,9 @@ test('SkillDetailDrawer: 文件下拉选择器切换参考文件与序号/行数
   assert.equal(readCalls.length, 1)
   assert.equal(readCalls[0]!.id, 'helm-cli')
   assert.equal(readCalls[0]!.path, undefined)
-  assert.ok(host.querySelector('.skill-reader-doc')?.textContent?.includes('主规程'), '应加载根文件正文')
+  assert.ok(host.querySelector('.skill-reader-doc')?.textContent?.includes('Main file'), '应加载根文件正文')
   assert.ok(host.querySelector('.skill-reader-index')?.textContent?.includes('1/3'))
-  assert.ok(host.querySelector('.skill-reader-lines')?.textContent?.includes('3 行'))
+  assert.ok(host.querySelector('.skill-reader-lines')?.textContent?.includes('3 lines'))
 
   // 通过下拉选择器切换到 references/cli-reference.md
   await chooseFileOption(host, 'cli-reference.md')
@@ -825,7 +825,7 @@ test('SkillDetailDrawer: 文件下拉选择器切换参考文件与序号/行数
     '应更新展示参考文件正文',
   )
   assert.ok(host.querySelector('.skill-reader-index')?.textContent?.includes('2/3'))
-  assert.ok(host.querySelector('.skill-reader-lines')?.textContent?.includes('5 行'))
+  assert.ok(host.querySelector('.skill-reader-lines')?.textContent?.includes('5 lines'))
 
   // 切换到末尾参考文件 generative-ui.md，序号推进到 3/3
   await chooseFileOption(host, 'generative-ui.md')
@@ -850,7 +850,7 @@ test('SkillDetailDrawer: 非 Markdown 文件用 CodeBlockView 按后缀推导语
     references: ['scripts/deploy.py'],
   })
   const customReader = async (_id: string, path?: string) => ({
-    text: path === 'scripts/deploy.py' ? 'print("deploy")' : '# 主规程',
+    text: path === 'scripts/deploy.py' ? 'print("deploy")' : '# Main file',
   })
 
   await act(async () => {
@@ -914,7 +914,7 @@ test('SkillDetailDrawer: 非 Markdown 文件用 CodeBlockView 按后缀推导语
   host2.remove()
 })
 
-test('SkillDetailDrawer: 读取失败显式报错与空文件占位，不静默降级', { timeout: 60_000 }, async () => {
+test('SkillDetailDrawer: Failed to read显式报错与空文件占位，不静默降级', { timeout: 60_000 }, async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
@@ -937,8 +937,8 @@ test('SkillDetailDrawer: 读取失败显式报错与空文件占位，不静默�
   })
 
   const callout = host.querySelector('.callout-error') as HTMLElement
-  assert.ok(callout, '读取失败应渲染统一 .callout-error 错误提示')
-  assert.ok(callout.textContent?.includes('读取失败'), '错误提示应包含失败前缀')
+  assert.ok(callout, 'Failed to read应渲染统一 .callout-error 错误提示')
+  assert.ok(callout.textContent?.includes('Failed to read'), '错误提示应包含失败前缀')
   assert.ok(callout.textContent?.includes('节点离线'), '错误提示应包含原始错误信息')
 
   await act(async () => {
@@ -965,7 +965,7 @@ test('SkillDetailDrawer: 读取失败显式报错与空文件占位，不静默�
   })
   const placeholder = host2.querySelector('.skill-reader-placeholder') as HTMLElement
   assert.ok(placeholder, '空文件应渲染占位提示')
-  assert.ok(placeholder.textContent?.includes('文件内容为空'), '占位文案应为文件内容为空')
+  assert.ok(placeholder.textContent?.includes('The file is empty'), '占位文案应为文件内容为空')
 
   await act(async () => {
     root2.unmount()
@@ -987,10 +987,10 @@ test('SkillDetailDrawer: 共享根技能标注来源且不提供编辑入口', {
     ),
   )
 
-  assert.ok(html.includes('共享'), '共享根技能应展示「共享」徽章')
+  assert.ok(html.includes('Shared'), '共享根技能应展示「共享」徽章')
   assert.ok(html.includes('badge-accent'), '共享根技能应使用 badge-accent 徽章样式')
-  assert.ok(html.includes('机器级共享根'), '共享根技能应标注来源')
-  assert.ok(!html.includes('工作区'), '共享根技能不得标注工作区来源')
+  assert.ok(html.includes('Machine-level shared root'), '共享根技能应标注来源')
+  assert.ok(!html.includes('Workspace'), '共享根技能不得标注工作区来源')
   assert.doesNotMatch(html, emojiRegex, 'SkillDetailDrawer 渲染输出严禁包含 Emoji 表情')
 })
 
@@ -1006,7 +1006,7 @@ test('SkillDetailDrawer: 未选中技能时渲染空状态', { timeout: 60_000 }
     ),
   )
 
-  assert.ok(html.includes('未选择技能'), '应渲染未选择技能空状态')
+  assert.ok(html.includes('No skill selected'), '应渲染未选择技能空状态')
   assert.doesNotMatch(html, emojiRegex, '空状态严禁包含 Emoji')
 })
 
@@ -1182,18 +1182,18 @@ test('SkillCenter: SSR 渲染顶栏、检索栏、网格流与零 Emoji 铁律',
 
   // 顶栏断言（副标题与统计摘要已按极简顶栏契约移除）
   assert.ok(html.includes('primary-center-topbar'), '应包含 primary-center-topbar 顶栏')
-  assert.ok(html.includes('技能中心'), '应展示技能中心标题')
+  assert.ok(html.includes('Skills Center'), '应展示技能中心标题')
   assert.ok(!html.includes('primary-center-subtitle'), '不应再渲染副标题')
 
   // 检索栏与分类标签
   assert.ok(html.includes('primary-center-toolbar'), '应包含 primary-center-toolbar 工具栏')
-  assert.ok(html.includes('搜索技能名称、ID、描述或参考文件'), '应包含搜索框占位符')
+  assert.ok(html.includes('Search skill name, ID, description or reference files'), '应包含搜索框占位符')
   assert.ok(html.includes('primary-category-pill'), '应包含分类筛选标签')
-  assert.ok(html.includes('全部'), '应包含全部标签')
-  assert.ok(html.includes('内置'), '应包含内置标签')
-  assert.ok(html.includes('共享'), '应包含共享标签')
-  assert.ok(html.includes('工作区'), '应包含工作区标签')
-  assert.ok(html.includes('插件'), '应包含插件标签')
+  assert.ok(html.includes('All'), '应包含全部标签')
+  assert.ok(html.includes('Built-in'), '应包含内置标签')
+  assert.ok(html.includes('Shared'), '应包含共享标签')
+  assert.ok(html.includes('Workspace'), '应包含工作区标签')
+  assert.ok(html.includes('Plugins'), '应包含插件标签')
 
   // 卡片网格
   assert.ok(html.includes('primary-center-grid'), '应包含 primary-center-grid 卡片网格')
@@ -1219,7 +1219,7 @@ test('SkillCenter: 当无匹配项时渲染空状态且零 Emoji', { timeout: 60
   )
 
   assert.ok(html.includes('primary-center-empty'), '无数据时应渲染 primary-center-empty')
-  assert.ok(html.includes('未找到匹配的技能'), '应提示未找到匹配技能')
+  assert.ok(html.includes('No matching skills'), '应提示未找到匹配技能')
   assert.doesNotMatch(html, emojiRegex, '空状态严禁包含 Emoji')
 })
 
@@ -1270,7 +1270,7 @@ test('SkillCenter: 交互过滤、搜索与抽屉联动 (openTarget)', { timeout
 
   // 3. 点击分类药丸标签过滤
   const pills = Array.from(host.querySelectorAll('.primary-category-pill')) as HTMLButtonElement[]
-  const builtinPill = pills.find((p) => p.textContent?.includes('内置'))
+  const builtinPill = pills.find((p) => p.textContent?.includes('Built-in'))
   assert.ok(builtinPill, '应找到内置分类标签')
 
   await act(async () => {
@@ -1280,7 +1280,7 @@ test('SkillCenter: 交互过滤、搜索与抽屉联动 (openTarget)', { timeout
   assert.equal(cards.length, 2, '内置分类下应仅展示 2 个内置技能')
 
   // 3.5 共享分类药丸：仅展示 source=agents 的技能
-  const agentsPill = pills.find((p) => p.textContent?.includes('共享'))
+  const agentsPill = pills.find((p) => p.textContent?.includes('Shared'))
   assert.ok(agentsPill, '应找到共享分类标签')
   await act(async () => {
     agentsPill.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -1290,7 +1290,7 @@ test('SkillCenter: 交互过滤、搜索与抽屉联动 (openTarget)', { timeout
   assert.ok(cards[0]!.textContent?.includes('git-commit'), '共享分类卡片应为 git-commit')
 
   // 恢复全部后点击卡片触发 openTarget
-  const allPill = pills.find((p) => p.textContent?.includes('全部'))
+  const allPill = pills.find((p) => p.textContent?.includes('All'))
   assert.ok(allPill)
   await act(async () => {
     allPill.dispatchEvent(new MouseEvent('click', { bubbles: true }))

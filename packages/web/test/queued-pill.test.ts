@@ -109,11 +109,11 @@ function renderTimeline(
     conversations: [conversation], conversationDetails: { 1: { ...conversation, entries } },
     conversationArtifacts: {}, groupedUi: groupUiContributions([]),
     authReady: true, authConfigured: true, authenticated: true, authError: null,
-    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'dark', quietNotifyEnabled: false,
+    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'dark', locale: 'en', quietNotifyEnabled: false,
     profiles: [], assetsLoaded: true, models: [], providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: [],
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
+    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setLocale: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
     onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: async () => undefined,
     loadConversationDetail: async () => undefined, loadEarlierEntries: asyncNoop, loadConversationArtifacts: async () => undefined,
     ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
@@ -144,13 +144,13 @@ test('ConversationTimeline: steer 与 followUp 胶囊文案、状态标记与虚
     ],
   }
   const html = renderTimeline('working', live)
-  assert.match(html, /插话引导 · 待当前步骤后注入/)
-  assert.match(html, /排队中 · 待当前回合结束后发送/)
+  assert.match(html, /Steer · injected at the next step boundary/)
+  assert.match(html, /Queued · sent after the current turn ends/)
   assert.match(html, /msg-human-pill-queued/)
   assert.match(html, /先看这个报错/)
   assert.match(html, /顺便再跑一次测试/)
   // 待生效胶囊不渲染分叉按钮（无正式 entryId）。
-  assert.doesNotMatch(html, /从此消息分叉新会话/)
+  assert.doesNotMatch(html, /Fork a new conversation from this message/)
 })
 
 test('ConversationTimeline: 正式消息无 queued 样式，分叉按钮保留', { timeout: 60_000 }, () => {
@@ -161,7 +161,7 @@ test('ConversationTimeline: 正式消息无 queued 样式，分叉按钮保留',
   assert.doesNotMatch(html, /msg-human-pill-queued/)
   assert.doesNotMatch(html, /msg-human-row-external/)
   assert.match(html, /正式消息/)
-  assert.match(html, /从此消息分叉新会话/)
+  assert.match(html, /Fork a new conversation from this message/)
 })
 
 test('ConversationTimeline: 外部来源（agent / trigger）行附加 msg-human-row-external 且保留胶囊与脚部类', { timeout: 60_000 }, () => {
@@ -171,8 +171,8 @@ test('ConversationTimeline: 外部来源（agent / trigger）行附加 msg-human
   ]
   const html = renderTimeline('idle', undefined, entries)
   assert.equal((html.match(/msg-human-row-external/g) ?? []).length, 2)
-  assert.match(html, /来自触发器/)
-  assert.match(html, /来自智能体汇报/)
+  assert.match(html, /From trigger/)
+  assert.match(html, /From agent report/)
   assert.match(html, /msg-human-pill/)
   assert.match(html, /msg-human-footer/)
   assert.match(html, /msg-origin-tag/)

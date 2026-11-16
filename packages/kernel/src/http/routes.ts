@@ -1,16 +1,16 @@
 /**
- * 核心 API 路由分发（薄层）：剥离 /api 前缀、严格解码路径段，按首段
- * 静态分派到领域路由模块（auth / conversations / asks / search /
+ * core API routing dispatch (thin layer): strip /api prefix, strictly decode path segment, by first segment
+ * static dispatch to domain routing module (auth / conversations / asks / search /
  * profiles / models / providers / credentials / skills / artifacts /
- * plugins / actions / nodes / env）。领域 handler 内部才是具体端点。
+ * plugins / actions / nodes / env). domain handler internal only then is specific end point.
  *
- * 路由规则：方法 + 精确路径段匹配（段数必须完全一致，多余段一律 404，
- * 绝不让 /auth/status/foo 之类落入操作分支）；段值经严格百分号解码
- * （非法编码 400，PathDecodeError 由 hub.ts 兜底映射）。鉴权在 hub.ts
- * 统一前置，本模块只处理已认证请求（auth 三端点除外）。
+ * routing rule: method + precise path segment match (segment count must fully consistent, redundant segment one rule 404,
+ * never let /auth/status/foo of class operation branch); segment value via strictly hundred number decode
+ * (illegal encode 400,PathDecodeError by hub.ts fall back mapping). authentication in hub.ts
+ * unify pre-, this module only handle already recognize verify request (auth three end point except outside).
  *
- * 出站 JSON 一律经 redactor 脱敏（kernel.stash 存在时）；插件动作结果
- * 原样返回（null 就是 null，undefined 是 output 边界违约，显式 500）。
+ * out station JSON one rule via redactor redaction (kernel.stash store in when); plugin action result
+ * original return (null is exactly null,undefined is output boundary violate about, explicit 500).
  */
 import { HelmError } from '@helm/protocol'
 import type { KernelRuntimeLike } from './contracts.js'
@@ -47,9 +47,9 @@ export async function handleApi(
 ): Promise<Response> {
   const url = new URL(request.url)
   const segments = url.pathname.split('/').filter((s) => s.length > 0)
-  // 剥离 api 前缀
+  // strip api prefix
   if (segments[0] === 'api') segments.shift()
-  // hub.ts 的路径校验不改写 Request；这里从原始 URL 解析并解码路径段。
+  // hub.ts path validate do not change write Request; this in from original URL parse and decode path segment.
   const ctx: RouteContext = {
     request,
     method: request.method,
@@ -62,11 +62,11 @@ export async function handleApi(
   } catch (error) {
     const mapped = mapServiceError(redactor, error)
     if (mapped !== undefined) return mapped
-    throw error // 顶层 500 处理在 hub.ts
+    throw error // top-level 500 handle in hub.ts
   }
 }
 
-/** 首段 → 领域 handler 的静态分派表（无通配、无优先级规则）。 */
+/** first segment → domain handler static dispatch table (without through match, without priority rule). */
 const DOMAIN_HANDLERS: Readonly<
   Record<string, (ctx: RouteContext, kernel: KernelRuntimeLike, redactor: JsonRedactor | undefined) => Promise<Response>>
 > = {
@@ -92,25 +92,25 @@ async function dispatch(
   redactor: JsonRedactor | undefined,
 ): Promise<Response> {
   const head = ctx.segments[0]
-  if (head === undefined) return errorResponse(redactor, 404, 'not_found', '路由不存在')
+  if (head === undefined) return errorResponse(redactor, 404, 'not_found', 'routing missing')
 
-  // ---- events：全局 SSE（唯一不归领域的顶层端点）--------------------------
+  // ---- events: global SSE(unique do not archive domain top-level end point)--------------------------
   if (head === 'events') {
     if (ctx.method === 'GET' && ctx.segments[1] === undefined) {
       return kernel.events.response(ctx.request)
     }
-    return errorResponse(redactor, 404, 'not_found', '路由不存在')
+    return errorResponse(redactor, 404, 'not_found', 'routing missing')
   }
 
   const handler = Object.hasOwn(DOMAIN_HANDLERS, head) ? DOMAIN_HANDLERS[head] : undefined
-  if (handler === undefined) return errorResponse(redactor, 404, 'not_found', '路由不存在')
+  if (handler === undefined) return errorResponse(redactor, 404, 'not_found', 'routing missing')
   return handler(ctx, kernel, redactor)
 }
 
 /**
- * 服务层自定义 Error → 结构化 HTTP 错误（不能任其变成 500）。
- * - 鉴权：AuthAlreadyConfiguredError 409 / InvalidCredentialsError 401 / WeakPasswordError 400。
- * - 文件资产：FileNotFoundError 404；其他校验错误 400。
+ * service layer self define Error → structure HTTP error (cannot any its becomes 500).
+ * - authentication:AuthAlreadyConfiguredError 409 / InvalidCredentialsError 401 / WeakPasswordError 400.
+ * - file asset:FileNotFoundError 404; other validate error 400.
  */
 function mapServiceError(redactor: JsonRedactor | undefined, error: unknown): Response | undefined {
   if (error instanceof AuthAlreadyConfiguredError) {

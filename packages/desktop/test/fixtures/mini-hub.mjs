@@ -1,14 +1,14 @@
 /**
- * 测试夹具 mini-hub：最小 Hub 身份模拟（纯 Node，无 kernel 依赖）。
+ * test fixture mini-hub: most small Hub identity simulated (pure Node, without kernel dependency).
  *
- * 环境变量：
- * - HELM_PORT：监听端口（与 kernel 约定同键，随 HubSupervisor 子进程环境注入）；
- * - MINI_HUB_MODE：
- *   - stable（缺省）：正常服务，SIGTERM 优雅退出（exit 0）；
- *   - crash-once：MINI_HUB_MARKER 标记文件不存在时，就绪后约 150ms exit(1)（崩溃自愈用）；
- *   - crash-loop：每次就绪后约 150ms exit(1)（重启预算耗尽用）；
- *   - ignore-sigterm：忽略 SIGTERM（强杀路径用）；
- *   - no-listen：常驻但不监听（就绪超时用）。
+ * environment variable:
+ * - HELM_PORT: listen port (and kernel convention same key, follow HubSupervisor child process environment inject);
+ * - MINI_HUB_MODE:
+ *   - stable(default): normal service,SIGTERM graceful exit (exit 0);
+ *   - crash-once:MINI_HUB_MARKER mark record file missing when, ready after about 150ms exit(1)(crash self-heal use);
+ *   - crash-loop: each time ready after about 150ms exit(1)(restart pre- compute exhausted use);
+ *   - ignore-sigterm: ignore SIGTERM(strong kill path use);
+ *   - no-listen: common resident but do not listen (ready timeout use).
  */
 import { createServer } from 'node:http';
 import { existsSync, writeFileSync } from 'node:fs';
@@ -32,11 +32,11 @@ if (mode === 'no-listen') {
       return;
     }
     res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: { code: 'not_found', message: '路由不存在' } }));
+    res.end(JSON.stringify({ error: { code: 'not_found', message: 'routing missing' } }));
   });
   server.on('error', (error) => {
-    // 显式写 stderr：HubSupervisor 依此分类端口冲突。
-    process.stderr.write(`mini-hub 监听失败: ${error.stack ?? String(error)}\n`);
+    // explicit write stderr:HubSupervisor per this classify port conflict.
+    process.stderr.write(`mini-hub listen failed: ${error.stack ?? String(error)}\n`);
     process.exit(1);
   });
   server.listen(port, '127.0.0.1', () => {
@@ -51,8 +51,8 @@ if (mode === 'no-listen') {
     }
   });
   if (mode === 'ignore-sigterm') {
-    // 吞掉 SIGTERM，模拟无响应进程（验证 SIGKILL 兜底）。
-    process.on('SIGTERM', () => process.stderr.write('mini-hub: SIGTERM 已忽略\n'));
+    // swallow SIGTERM, simulated without response process (verify SIGKILL fall back).
+    process.on('SIGTERM', () => process.stderr.write('mini-hub: SIGTERM already ignore\n'));
   } else {
     process.on('SIGTERM', () => {
       server.close(() => process.exit(0));

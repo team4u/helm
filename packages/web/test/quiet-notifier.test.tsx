@@ -272,7 +272,7 @@ test('多根树并行隔离：树 A 仍在 working / 后台跑，树 B 结束后
     await waitForCondition(() => notifications.length === 2)
     assert.equal(notifications.length, 2)
     assert.equal(notifications[1]!.title, ENDED_NOTIFICATION_TITLE)
-    assert.equal(notifications[1]!.options.body, '#1 长任务 A · 有失败')
+    assert.equal(notifications[1]!.options.body, '#1 长任务 A · Has failures')
     assert.equal(notifications[1]!.options.tag, 'helm-conv-1')
 
     // 树 C 后台归零
@@ -388,7 +388,7 @@ test('同树多阶段收尾：子代理唤醒父会话取消防抖并保留早�
     await waitForCondition(() => notifications.length === 1)
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0]!.title, ENDED_NOTIFICATION_TITLE)
-    assert.equal(notifications[0]!.options.body, '#5 主控会话 · 有失败')
+    assert.equal(notifications[0]!.options.body, '#5 主控会话 · Has failures')
     assert.equal(notifications[0]!.options.tag, 'helm-conv-5')
     harness.unmount()
   } finally {
@@ -450,7 +450,7 @@ test('新进入 blocked：经 blockedSettleMs 投递「等待你的处理」（t
     await waitForCondition(() => notifications.length === 1)
     assert.equal(notifications.length, 1, 'blocked 短防抖到期即通知，无需等待完成长防抖')
     assert.equal(notifications[0]!.title, WAITING_NOTIFICATION_TITLE)
-    assert.equal(notifications[0]!.options.body, '待处理输入/审批：#3 部署检查')
+    assert.equal(notifications[0]!.options.body, 'Pending input/approvals: #3 部署检查')
     assert.equal(notifications[0]!.options.tag, 'helm-conv-3')
     notifications[0]!.onclick?.({} as Event)
     assert.deepEqual(harness.openTargetCalls, [{ kind: 'conversation', conversationId: 3 }])
@@ -486,7 +486,7 @@ test('同树仍有并行后台任务且 badge doc 未知时，子会话 blocked 
     await waitForCondition(() => notifications.length === 1)
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0]!.title, WAITING_NOTIFICATION_TITLE)
-    assert.equal(notifications[0]!.options.body, '待处理输入/审批：#5 多代理工作流')
+    assert.equal(notifications[0]!.options.body, 'Pending input/approvals: #5 多代理工作流')
     assert.equal(notifications[0]!.options.tag, 'helm-conv-5')
     notifications[0]!.onclick?.({} as Event)
     assert.deepEqual(harness.openTargetCalls, [{ kind: 'conversation', conversationId: 51 }], '点击跳转具体的 blocked 子会话')
@@ -536,7 +536,7 @@ test('同树完成防抖窗口内新出现 blocked：取消完成计时改发「
     const conv1Notif = notifications.find((n) => n.options.tag === 'helm-conv-1')
     assert.ok(conv5Notif)
     assert.equal(conv5Notif.title, WAITING_NOTIFICATION_TITLE)
-    assert.equal(conv5Notif.options.body, '待处理输入/审批：#5 树五')
+    assert.equal(conv5Notif.options.body, 'Pending input/approvals: #5 树五')
     assert.ok(conv1Notif)
     assert.equal(conv1Notif.title, COMPLETED_NOTIFICATION_TITLE)
     assert.equal(conv1Notif.options.body, '#1 独立任务一')
@@ -869,7 +869,7 @@ test('断流挂起期间同树活动恢复：丢弃待结算、周期继续，�
     await waitForCondition(() => notifications.length === 1)
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0]!.title, ENDED_NOTIFICATION_TITLE)
-    assert.equal(notifications[0]!.options.body, '#1 主任务 · 有失败')
+    assert.equal(notifications[0]!.options.body, '#1 主任务 · Has failures')
     assert.equal(notifications[0]!.options.tag, 'helm-conv-1')
     harness.unmount()
   } finally {

@@ -1,8 +1,8 @@
 /**
- * Standalone real-Herdr overview acceptance; no model calls, not part of the default unit tests.
- * Run: pnpm build && timeout 50s node scripts/herdr-overview-smoke.mjs
- * Runs only inside a Herdr environment; creates its own temp named session, and every control command uses that session's socket.
- * HELM_OVERVIEW_APP can point at another checkout's build entry. Logs are kept in a temp directory.
+ * independent real Herdr total view verify, do not invoke model, do not accept by default single test.
+ * run:pnpm build && timeout 50s node scripts/herdr-overview-smoke.mjs
+ * only in Herdr environment run, self create temporary naming conversation; all control command use the conversation socket.
+ * HELM_OVERVIEW_APP can designate other checkout compile entry. log keep in temp directory.
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';

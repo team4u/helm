@@ -1,10 +1,10 @@
 /**
- * RuntimeServices：KernelRuntime 服务依赖装配工厂（从 KernelRuntime 拆出）。
+ * RuntimeServices:KernelRuntime service dependency install match work vendor (from KernelRuntime split out).
  *
- * 职责：
- * - 集中装配与连接内核内部各项子服务；
- * - 解决服务间的互相依赖与闭包接线（toolDeps, tracker, conversations, hookBridge 等）；
- * - 保证单向依赖与清晰生命周期，避免在 KernelRuntime 构造器中堆砌 300+ 行接线代码。
+ * responsibility:
+ * - concentrate install match and connect kernel internal each items sub- service;
+ * - resolve service between mutual each other dependency and closed package connect line (toolDeps, tracker, conversations, hookBridge etc.);
+ * - guarantee single to dependency and clear lifecycle, avoid in KernelRuntime construct in heap build 300+ row connect line code.
  */
 
 import type {
@@ -53,7 +53,7 @@ import type { KernelRuntime } from './runtime.js'
 import type { BootstrappedKernelContext } from './runtime-bootstrap.js'
 
 export interface RuntimeServicesInit extends BootstrappedKernelContext {
-  /** Hub 平台事实注入（测试用；缺省 process.platform）。 */
+  /** Hub platform fact inject (test use; default process.platform). */
   hubPlatform?: () => string | undefined
   defaultModel?: string
   cwd: string
@@ -61,9 +61,9 @@ export interface RuntimeServicesInit extends BootstrappedKernelContext {
   seedKeyCache: Record<string, string>
   autoResume: boolean
   externalModels?: unknown
-  /** 合入技能扫描的机器级共享来源根（缺省 defaultExternalSkillRoots()）。 */
+  /** together skill scan machine level sharing source (default defaultExternalSkillRoots()). */
   externalSkillRoots?: readonly string[]
-  /** 插件构建端口（KernelBootOptions.buildProvider 透传；hub 注入默认实现）。 */
+  /** plugin build port (KernelBootOptions.buildProvider pass-through;hub inject by default implement). */
   buildProvider?: PluginBuildProvider
   nodeUpgradeTimeoutMs: number
 }
@@ -112,7 +112,7 @@ export function assembleRuntimeServices(
   },
 ): AssembledRuntimeServices {
   const profilesSvc = new ProfileService(init.dataDir)
-  // 生产内核把机器级共享来源加入扫描；显式传空数组可完全隔离（测试）。
+  // produce kernel machine level sharing source add scan; explicit pass empty array can fully isolated (test).
   const skillsSvc = new SkillService(init.dataDir, {
     externalRoots: init.externalSkillRoots ?? defaultExternalSkillRoots(),
   })
@@ -163,15 +163,15 @@ export function assembleRuntimeServices(
     } else if (event.type === 'conversation.deleted' && 'conversationId' in event) {
       sessionDocStreams.closeForConversation(event.conversationId)
     } else if (event.type === 'models.changed' && 'payload' in event) {
-      // 目录刷新/集合重建后模型窗口可能变化（未知→已知/数值变/供应商消失）：
-      // 定向迫齐已观察/已缓存会话的上下文用量。tracker 组装完成前的启动期
-      // 事件无从追齐，静默跳过（启动时缓存本为空，首次波取即按新目录计算）。
+      // directory refresh/set rebuild after model window may change (unknown→known/count value change/provider disappear):
+      // set to force complete already observe/already cache conversation context use amount.tracker group install complete before startup phase
+      // event without from append complete, static default skip (at startup cache this is empty, first time wave take i.e. by new directory compute).
       const providers = (event as ModelsChangedEvent).payload.providers
       tracker?.onModelsChanged(Array.isArray(providers) ? providers : [])
     }
   })
 
-  // ---- 模型集合注册表 ----
+  // ---- model set register table ----
   const modelsRegistry = new ModelRegistry(
     {
       dataDir: init.dataDir,
@@ -195,7 +195,7 @@ export function assembleRuntimeServices(
   )
   Object.assign(modelsRegistry.apiKeyCache, init.seedKeyCache)
 
-  // ---- 跨平台节点底座（EnvFabric）----
+  // ---- across platform node bottom seat (EnvFabric)----
   const envFabric = createEnvFabric({
     hubPlatform: init.hubPlatform,
     authenticate: tokenAuthenticator((nodeId) => nodes?.nodeDigestOf(nodeId)),
@@ -204,7 +204,7 @@ export function assembleRuntimeServices(
       buildManagedEnv(toolDeps, cwd, conversationId, nodeId),
   })
 
-  // ---- 工具依赖面 ----
+  // ---- tool dependency side ----
   const toolDeps: HelmToolDeps = {
     dataDir: init.dataDir,
     defaultCwd: init.cwd,
@@ -235,7 +235,7 @@ export function assembleRuntimeServices(
     events,
   })
 
-  // ---- 会话归属权管理器 ----
+  // ---- conversation ownership right manage ----
   const ownership = new RuntimeOwnershipManager({
     store: options.store,
     documentStore: createGlobalDocumentStore(options.store),
@@ -245,14 +245,14 @@ export function assembleRuntimeServices(
     },
   })
 
-  // ---- 追踪器 ----
+  // ---- append trace ----
   tracker = new ConversationTracker({
     harness: init.harness,
     store: options.store,
     redactError: (text) => options.stashService.redact(text),
-    // 回合结算 unread 策略：背景派生子会话（helm/bot 归属且有父链）不置 unread。
+    // turn compute unread policy: background derive sub-conversation (helm/bot ownership and has parent chain) do not placement unread.
     ownershipOf: (id) => ownership.getOwnership(id),
-    // 上下文用量：窗口按当前 Models 集合解析（未知不伪造）。
+    // context use amount: window by when before Models set parse (unknown do not fabricate).
     models: () => modelsRegistry.models,
     isClosed: () => runtime.isClosing,
     events: {
@@ -284,7 +284,7 @@ export function assembleRuntimeServices(
     },
   })
 
-  // ---- 异步审批服务 ----
+  // ---- async approval service ----
   asks = new AskService({
     store: options.store,
     stash: options.stashService,
@@ -295,7 +295,7 @@ export function assembleRuntimeServices(
     },
   })
 
-  // ---- hook 桥 ----
+  // ---- hook bridge ----
   const hookBridge = new HookBridge({
     registry: init.registry,
     pluginHost: () => runtime.plugins,
@@ -308,7 +308,7 @@ export function assembleRuntimeServices(
     artifacts: artifactsSvc,
   })
 
-  // ---- 会话服务 ----
+  // ---- conversation service ----
   conversations = new ConversationService({
     harness: init.harness,
     storage: init.database.storage,
@@ -347,7 +347,7 @@ export function assembleRuntimeServices(
     trustedPlatformOf: trustedPlatformFromEnvFabric(envFabric),
   })
 
-  // ---- 原生子代理派生 ----
+  // ---- original generate subagent derive ----
   const agentSpawn = new RuntimeAgentSpawn({
     store: options.store,
     toolDeps,
@@ -364,7 +364,7 @@ export function assembleRuntimeServices(
     markConversationOwnership: (id, owner: ConversationOwnership) => ownership.markOwnership(id, owner),
   })
 
-  // ---- 触发器分发器 ----
+  // ---- trigger dispatch ----
   const triggers = new RuntimeTriggerDispatcher({
     store: options.store,
     hookBridge,
@@ -374,7 +374,7 @@ export function assembleRuntimeServices(
     submitInput: (id, text, opts) => options.submitInput(id, text, opts),
   })
 
-  // ---- 工具装配器 ----
+  // ---- tool install match ----
   const toolRegistry = new RuntimeToolRegistry({
     registry: init.registry,
     toolDeps,
@@ -386,13 +386,13 @@ export function assembleRuntimeServices(
     getConversation: (id) => runtime.getConversation(id),
   })
 
-  // ---- 资产热重载协调器 ----
+  // ---- asset hot reload coordinate tune ----
   const assetReloader = new AssetReloader({
     dataDir: init.dataDir,
     externalModels: init.externalModels !== undefined,
     reloadModels: () => runtime.reloadModels(),
     reloadPluginConfig: async () => {
-      // 外部手工改写/清理 config.json 时同步失效 AuthService 等内存快照，再重载插件配置镜像。
+      // external manually work change write/clean up config.json when sync expires AuthService etc. memory snapshot, again reload plugin config mirror.
       await configSvc.invalidateCache()
       await pluginConfig.load()
     },

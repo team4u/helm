@@ -1,14 +1,14 @@
 /**
- * artifacts put/get 本地路径语义回归（纯进程内：零 HTTP listener）：
- * - 相对路径唯一按 CLI 调用方 cwd 解析为绝对路径（HELM_ENV=1 且 HELM_CWD 不同
- *   也不静默切换、不全盘查找——目录差异属合法 cd，仅作诊断附注）；
- * - put 读取失败给出 requestedPath / resolvedPath / cliCwd（+ 会话 cwd）结构化诊断，
- *   且发生在建连之前：零 fetch 调用（不访问 Hub）；
- * - get --output 按调用方 cwd 解析、真实落盘，bytes 用实际字节数（stub Response
- *   无 Content-Length 头仍可靠），written 回显绝对路径；写失败诊断含绝对路径。
- * 隔离手法：runCli cwd 注入（禁止 process.chdir）+ options.fetch 内存 stub
- * （记录请求并返回真实 Response，符合 test:unit「CLI 不起真实服务」约定）；
- * 文件读写为真实磁盘操作，mkdtemp 目录一律 t.after 递归清理。
+ * artifacts put/get local path semantics regression (pure process inside: zero HTTP listener):
+ * - relative path unique by CLI caller cwd parse is absolute path (HELM_ENV=1 and HELM_CWD different
+ *   also not silently switch, do not all find - - directory difference belong legal cd, only act diagnose attach note);
+ * - put failed to read to out requestedPath / resolvedPath / cliCwd(+ conversation cwd) structure diagnose,
+ *   and occur in create connect before: zero fetch invoke (do not access Hub);
+ * - get --output by caller cwd parse, real,bytes use actual byte count (stub Response
+ *   without Content-Length head still can rely),written back visible absolute path; write failed diagnose contains absolute path.
+ * isolated manually method:runCli cwd inject (forbidden process.chdir)+ options.fetch memory stub
+ * (record request and return real Response, conforms to test:unitCLI do not start real service convention);
+ * file read write is real disk operation,mkdtemp directory one rule t.after recursion clean up.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -37,8 +37,8 @@ function errorResponse(status: number, code: string, message: string): Response 
 }
 
 /**
- * 内存 Hub stub：按 `<METHOD> <pathname>` 路由，记录每次 fetch 调用（含返回的
- * Response 本体，供测试断言响应头现场）。未匹配路由一律 404 信封，绝不静默放行。
+ * memory Hub stub: by `<METHOD> <pathname>` routing, record each time fetch invoke (contains return
+ * Response this body, supply test assertion response head live). not match routing one rule 404 message seal, never static default let through.
  */
 function makeHubStub(routes: Record<string, RouteHandler>): { fetchImpl: typeof fetch; calls: RecordedFetch[] } {
   const calls: RecordedFetch[] = []
@@ -46,18 +46,18 @@ function makeHubStub(routes: Record<string, RouteHandler>): { fetchImpl: typeof 
     const url = new URL(String(input))
     const method = init?.method ?? 'GET'
     const handler = routes[`${method} ${url.pathname}`]
-    const response = handler !== undefined ? handler(init) : errorResponse(404, 'not_found', `无路由 ${method} ${url.pathname}`)
+    const response = handler !== undefined ? handler(init) : errorResponse(404, 'not_found', `without routing ${method} ${url.pathname}`)
     calls.push({ method, pathname: url.pathname, headers: { ...(init?.headers ?? {}) }, body: init?.body, response })
     return response
   }) as unknown as typeof fetch
   return { fetchImpl, calls }
 }
 
-/** 上传路由：透传请求 body 字节，回填完整 ArtifactMetadata（含 path）。 */
+/** upload routing: pass-through request body byte, back fill complete ArtifactMetadata(contains path). */
 function uploadRoute(conversationId: number, name: string): RouteHandler {
   return (init) => {
     const body = init?.body as Uint8Array
-    assert.ok(body instanceof Uint8Array, '上传 body 应为二进制 Uint8Array')
+    assert.ok(body instanceof Uint8Array, 'upload body should be two enter system Uint8Array')
     return jsonResponse(
       {
         id: 'art-1',
@@ -74,18 +74,18 @@ function uploadRoute(conversationId: number, name: string): RouteHandler {
   }
 }
 
-/** HELM_HUB_URL 仅作占位基底：fetch 已被 stub，绝不真实拨号。 */
+/** HELM_HUB_URL only act occupy base bottom:fetch already by stub, never real dial. */
 function makeStubEnv(dataDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return makeCliEnv('http://127.0.0.1:9', dataDir, extra)
 }
 
 // ---------------------------------------------------------------------------
-// put：相对路径按调用方 cwd 解析
+// put: relative path by caller cwd parse
 // ---------------------------------------------------------------------------
 
-test('put：相对路径按 CLI cwd 解析；HELM_ENV=1 且 HELM_CWD 不同仍读取调用者目录', { timeout: 60_000 }, async (t) => {
+test('put: relative path by CLI cwd parse;HELM_ENV=1 and HELM_CWD different still read invoke directory', { timeout: 60_000 }, async (t) => {
   const callerDir = useTempDir(t, 'helm-cli-art-caller-')
-  const sessionDir = useTempDir(t, 'helm-cli-art-session-') // 会话 cwd：没有该文件
+  const sessionDir = useTempDir(t, 'helm-cli-art-session-') // conversation cwd: no the file
   const content = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe, 0x89])
   await fsp.writeFile(path.join(callerDir, 'report.bin'), content)
   const hub = makeHubStub({ 'POST /api/conversations/3/artifacts': uploadRoute(3, 'report.bin') })
@@ -102,13 +102,13 @@ test('put：相对路径按 CLI cwd 解析；HELM_ENV=1 且 HELM_CWD 不同仍�
   assert.equal(hit.method, 'POST')
   assert.equal(hit.pathname, '/api/conversations/3/artifacts')
   assert.equal(hit.headers['x-artifact-filename'], 'report.bin')
-  assert.deepEqual([...(hit.body as Uint8Array)], [...content], '上传字节与调用者目录文件一致')
+  assert.deepEqual([...(hit.body as Uint8Array)], [...content], 'upload byte and invoke directory file consistent')
 })
 
-test('put：同一相对路径在会话 cwd 下存在、调用者 cwd 下缺失 → ENOENT（不静默切换、不全盘查找）', { timeout: 60_000 }, async (t) => {
+test('put: the same relative path in conversation cwd under store in, invoke cwd under missing → ENOENT(not silently switch, do not all find)', { timeout: 60_000 }, async (t) => {
   const callerDir = useTempDir(t, 'helm-cli-art-caller-')
   const sessionDir = useTempDir(t, 'helm-cli-art-session-')
-  await fsp.writeFile(path.join(sessionDir, 'only-in-session.bin'), 'x') // 仅会话目录有
+  await fsp.writeFile(path.join(sessionDir, 'only-in-session.bin'), 'x') // only conversation directory has
   const hub = makeHubStub({ 'POST /api/conversations/3/artifacts': uploadRoute(3, 'only-in-session.bin') })
   const r = await runCliCaptured(
     ['artifacts', 'put', 'only-in-session.bin', '3'],
@@ -116,17 +116,17 @@ test('put：同一相对路径在会话 cwd 下存在、调用者 cwd 下缺失 
     { cwd: callerDir, fetch: hub.fetchImpl },
   )
   assert.equal(r.code, 1)
-  assert.ok(r.err.includes('读取上传文件失败'), `stderr 应含读取失败：${r.err}`)
-  assert.ok(r.err.includes('only-in-session.bin') && r.err.includes(callerDir), `stderr 应含请求路径与 CLI cwd：${r.err}`)
-  assert.ok(r.err.includes(sessionDir), `stderr 应附注会话 cwd：${r.err}`)
-  assert.equal(hub.calls.length, 0, '读取失败不得访问 Hub（零 fetch 调用）')
+  assert.ok(r.err.includes('read upload file failed'), `stderr should contains failed to read:${r.err}`)
+  assert.ok(r.err.includes('only-in-session.bin') && r.err.includes(callerDir), `stderr should contains request path and CLI cwd:${r.err}`)
+  assert.ok(r.err.includes(sessionDir), `stderr should attach note conversation cwd:${r.err}`)
+  assert.equal(hub.calls.length, 0, 'failed to read must not access Hub(zero fetch invoke)')
 })
 
 // ---------------------------------------------------------------------------
-// put：ENOENT 结构化诊断
+// put:ENOENT structure diagnose
 // ---------------------------------------------------------------------------
 
-test('put：ENOENT 诊断含 requestedPath/resolvedPath/cliCwd/sessionCwd（--json details）', { timeout: 60_000 }, async (t) => {
+test('put:ENOENT diagnose contains requestedPath/resolvedPath/cliCwd/sessionCwd(--json details)', { timeout: 60_000 }, async (t) => {
   const callerDir = useTempDir(t, 'helm-cli-art-caller-')
   const sessionDir = useTempDir(t, 'helm-cli-art-session-')
   const hub = makeHubStub({ 'POST /api/conversations/3/artifacts': uploadRoute(3, 'missing.bin') })
@@ -143,10 +143,10 @@ test('put：ENOENT 诊断含 requestedPath/resolvedPath/cliCwd/sessionCwd（--js
   assert.equal(d.resolvedPath, path.join(callerDir, 'missing.bin'))
   assert.equal(d.cliCwd, callerDir)
   assert.equal(d.sessionCwd, sessionDir)
-  assert.equal(hub.calls.length, 0, '读取失败不得访问 Hub（零 fetch 调用）')
+  assert.equal(hub.calls.length, 0, 'failed to read must not access Hub(zero fetch invoke)')
 })
 
-test('put：HELM_ENV 未设置时不附注会话 cwd；HELM_CWD 与 cwd 相同亦不附注', { timeout: 60_000 }, async (t) => {
+test('put:HELM_ENV not settings when do not attach note conversation cwd;HELM_CWD and cwd identical also do not attach note', { timeout: 60_000 }, async (t) => {
   const callerDir = useTempDir(t, 'helm-cli-art-caller-')
   const hub = makeHubStub({ 'POST /api/conversations/3/artifacts': uploadRoute(3, 'missing.bin') })
   const noEnv = await runCliCaptured(
@@ -156,7 +156,7 @@ test('put：HELM_ENV 未设置时不附注会话 cwd；HELM_CWD 与 cwd 相同�
   )
   assert.equal(noEnv.code, 1)
   assert.equal(parseCliError<Record<string, string>>(noEnv).details?.sessionCwd, undefined)
-  assert.ok(!noEnv.err.includes('会话 cwd'), `不应附注会话 cwd：${noEnv.err}`)
+  assert.ok(!noEnv.err.includes('conversation cwd'), `must not attach note conversation cwd:${noEnv.err}`)
 
   const sameCwd = await runCliCaptured(
     ['artifacts', 'put', 'missing.bin', '3', '--json'],
@@ -165,10 +165,10 @@ test('put：HELM_ENV 未设置时不附注会话 cwd；HELM_CWD 与 cwd 相同�
   )
   assert.equal(sameCwd.code, 1)
   assert.equal(parseCliError<Record<string, string>>(sameCwd).details?.sessionCwd, undefined)
-  assert.equal(hub.calls.length, 0, '读取失败不得访问 Hub（零 fetch 调用）')
+  assert.equal(hub.calls.length, 0, 'failed to read must not access Hub(zero fetch invoke)')
 })
 
-test('put：读取失败零 fetch 调用（绝对路径缺失同样在建连前失败）', { timeout: 60_000 }, async (t) => {
+test('put: failed to read zero fetch invoke (absolute path missing same in create connect before failed)', { timeout: 60_000 }, async (t) => {
   const callerDir = useTempDir(t, 'helm-cli-art-caller-')
   const otherDir = useTempDir(t, 'helm-cli-art-other-')
   const hub = makeHubStub({ 'POST /api/conversations/3/artifacts': uploadRoute(3, 'abs-missing.bin') })
@@ -178,21 +178,21 @@ test('put：读取失败零 fetch 调用（绝对路径缺失同样在建连前�
     { cwd: otherDir, fetch: hub.fetchImpl },
   )
   assert.equal(r.code, 1)
-  assert.equal(hub.calls.length, 0, `不应有任何 fetch 调用，实得 ${JSON.stringify(hub.calls.map((c) => `${c.method} ${c.pathname}`))}`)
+  assert.equal(hub.calls.length, 0, `must not has any fetch invoke, got ${JSON.stringify(hub.calls.map((c) => `${c.method} ${c.pathname}`))}`)
 })
 
 // ---------------------------------------------------------------------------
-// get --output：绝对路径解析、真实落盘与实际字节数
+// get --output: absolute path parse, real and actual byte count
 // ---------------------------------------------------------------------------
 
-test('get --output：按 CLI cwd 解析相对路径，written 回显绝对路径，bytes 为实际字节数（Response 无 Content-Length）', { timeout: 60_000 }, async (t) => {
+test('get --output: by CLI cwd parse relative path,written back visible absolute path,bytes is actual byte count (Response without Content-Length)', { timeout: 60_000 }, async (t) => {
   const callerDir = useTempDir(t, 'helm-cli-art-get-')
   await fsp.mkdir(path.join(callerDir, 'out'))
-  const content = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]), Buffer.from('产物内容-binary')])
+  const content = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]), Buffer.from('artifact content-binary')])
   const sessionDir = useTempDir(t, 'helm-cli-art-session-')
   const hub = makeHubStub({
     'GET /api/artifacts/art-9/content': () =>
-      // 手工构造的 Response 不携带 Content-Length：bytes 只能来自实际落盘字节。
+      // manually work construct Response does not carry Content-Length:bytes only can from actual byte.
       new Response(content, { headers: { 'content-type': 'application/octet-stream' } }),
   })
   const env = makeStubEnv(callerDir, { HELM_ENV: '1', HELM_CWD: sessionDir })
@@ -206,24 +206,24 @@ test('get --output：按 CLI cwd 解析相对路径，written 回显绝对路径
   const parsed = JSON.parse(r.out) as { written: string; bytes: number }
   assert.equal(parsed.written, abs)
   assert.equal(parsed.bytes, content.length)
-  // 锁定前提：stub Response 确实无 Content-Length 头，bytes 断言不依赖该头。
+  // lock before mention:stub Response indeed without Content-Length head,bytes assertion independent of the head.
   assert.equal(hub.calls.at(-1)!.response.headers.get('content-length'), null)
-  // 真实落盘校验：字节一致。
+  // real validate: byte consistent.
   const onDisk = await fsp.readFile(abs)
   assert.deepEqual([...onDisk], [...content])
 
-  // 文本模式同样回显绝对路径与字节数。
+  // text pattern same back visible absolute path and byte count.
   const text = await runCliCaptured(
     ['artifacts', 'get', 'art-9', '--output', 'out/bin2.dat'],
     env,
     { cwd: callerDir, fetch: hub.fetchImpl },
   )
   assert.equal(text.code, 0, text.err)
-  assert.ok(text.out.includes(`已写入 ${path.join(callerDir, 'out', 'bin2.dat')}`), `应回显绝对路径：${text.out}`)
-  assert.ok(text.out.includes(`（${content.length} 字节）`), `应回显实际字节数：${text.out}`)
+  assert.ok(text.out.includes(`already write ${path.join(callerDir, 'out', 'bin2.dat')}`), `should back visible absolute path:${text.out}`)
+  assert.ok(text.out.includes(`(${content.length} byte)`), `should back visible actual byte count:${text.out}`)
 })
 
-test('get --output：传输中断给出下载诊断且保留已有文件', { timeout: 60_000 }, async (t) => {
+test('get --output: transfer interrupt to out download diagnose and keep already has file', { timeout: 60_000 }, async (t) => {
   const callerDir = useTempDir(t, 'helm-cli-art-get-')
   const output = path.join(callerDir, 'existing.bin')
   await fsp.writeFile(output, 'existing-deliverable')
@@ -248,7 +248,7 @@ test('get --output：传输中断给出下载诊断且保留已有文件', { tim
   assert.equal(await fsp.readFile(output, 'utf8'), 'existing-deliverable')
 })
 
-test('get --output：写入失败诊断含绝对路径与结构化 details', { timeout: 60_000 }, async (t) => {
+test('get --output: failed to write diagnose contains absolute path and structure details', { timeout: 60_000 }, async (t) => {
   const callerDir = useTempDir(t, 'helm-cli-art-get-')
   const hub = makeHubStub({
     'GET /api/artifacts/art-9/content': () =>
@@ -263,9 +263,9 @@ test('get --output：写入失败诊断含绝对路径与结构化 details', { t
   const err = parseCliError<Record<string, string>>(r)
   assert.equal(err.code, 'write_failed')
   const abs = path.join(callerDir, 'no-such-dir', 'bin.dat')
-  assert.ok(err.message.includes(abs), `错误消息应含绝对路径：${err.message}`)
+  assert.ok(err.message.includes(abs), `error message should contains absolute path:${err.message}`)
   assert.equal(err.details?.resolvedPath, abs)
   assert.equal(err.details?.cliCwd, callerDir)
-  // 下载已完成（一次 GET），仅落盘失败——与「读取失败零 fetch」形成对照。
+  // download completed (once GET), only failed - - and failed to read zero fetchshape into compare.
   assert.equal(hub.calls.length, 1)
 })

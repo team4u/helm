@@ -1,12 +1,17 @@
 /**
- * 主题与后台通知偏好的存储读写及系统配色解析（零 React 依赖，可独立单测）。
+ * Storage read/write for theme, background-notification and UI-locale
+ * preferences plus system color-scheme resolution (zero React dependencies,
+ * independently unit-testable).
  */
+import type { HelmLocale } from '@helm/protocol/browser'
+import { normalizeLocaleTag } from '@helm/protocol/browser'
 import type { ThemeMode, ThemePreference } from './types.js'
 
 export const THEME_STORAGE_KEY = 'helm:theme'
 export const QUIET_NOTIFY_STORAGE_KEY = 'helm:quiet-notify'
+export const LOCALE_STORAGE_KEY = 'helm:locale'
 
-/** 读取本地保存的主题偏好；存储不可用或值非法时回退 'system'。 */
+/** Read the persisted theme preference; falls back to 'system' when storage is unavailable or the value is invalid. */
 export function getStoredPreference(storage?: Pick<Storage, 'getItem'>): ThemePreference {
   try {
     const store = storage ?? localStorage
@@ -18,7 +23,7 @@ export function getStoredPreference(storage?: Pick<Storage, 'getItem'>): ThemePr
   }
 }
 
-/** 持久化主题偏好；'system' 移除显式键以跟随系统配色。 */
+/** Persist the theme preference; 'system' removes the explicit key to follow the system color scheme. */
 export function persistThemePreference(
   pref: ThemePreference,
   storage?: Pick<Storage, 'setItem' | 'removeItem'>,
@@ -31,18 +36,18 @@ export function persistThemePreference(
       store.setItem(THEME_STORAGE_KEY, pref)
     }
   } catch {
-    /* 内存主题仍可使用。 */
+    /* The in-memory theme still works. */
   }
 }
 
-/** 按 system -> light -> dark -> system 顺序循环切换主题偏好。 */
+/** Cycles the theme preference in system -> light -> dark -> system order. */
 export function nextThemePreference(prev: ThemePreference): ThemePreference {
   if (prev === 'system') return 'light'
   if (prev === 'light') return 'dark'
   return 'system'
 }
 
-/** 后台浏览器通知偏好（localStorage 'helm:quiet-notify' = '1'）。 */
+/** Background browser notification preference (localStorage 'helm:quiet-notify' = '1'). */
 export function getStoredQuietNotify(storage?: Pick<Storage, 'getItem'>): boolean {
   try {
     const store = storage ?? localStorage
@@ -52,7 +57,7 @@ export function getStoredQuietNotify(storage?: Pick<Storage, 'getItem'>): boolea
   }
 }
 
-/** 持久化后台浏览器通知开关状态。 */
+/** Persist the background browser notification toggle. */
 export function persistQuietNotify(
   enabled: boolean,
   storage?: Pick<Storage, 'setItem' | 'removeItem'>,
@@ -65,11 +70,80 @@ export function persistQuietNotify(
       store.removeItem(QUIET_NOTIFY_STORAGE_KEY)
     }
   } catch {
-    /* 内存偏好仍生效于本次会话。 */
+    /* The in-memory preference still applies to this session. */
   }
 }
 
-/** 解析当前操作系统的深浅色模式（无 window/matchMedia 时默认 'light'）。 */
+// ---------------------------------------------------------------------------
+// UI locale preference (localStorage 'helm:locale'; browser-derived default)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the persisted UI locale preference. Returns undefined when the key is
+ * absent (caller falls back to the browser locale, mirroring the theme
+ * 'system' default); stored values are normalized through normalizeLocaleTag
+ * (zh-* -> zh-CN, anything invalid/unsupported -> 'en').
+ */
+export function getStoredLocale(storage?: Pick<Storage, 'getItem'>): HelmLocale | undefined {
+  try {
+    const store = storage ?? localStorage
+    const raw = store.getItem(LOCALE_STORAGE_KEY)
+    return raw === null ? undefined : normalizeLocaleTag(raw)
+  } catch {
+    return undefined
+  }
+}
+
+/** Persist the UI locale preference; the value is always a supported HelmLocale. */
+export function persistLocale(locale: HelmLocale, storage?: Pick<Storage, 'setItem' | 'removeItem'>): void {
+  try {
+    ;(storage ?? localStorage).setItem(LOCALE_STORAGE_KEY, locale)
+  } catch {
+    /* The in-memory locale still applies to this session. */
+  }
+}
+
+/**
+ * Resolve the browser locale preference: takes the first usable language tag
+ * (navigator.languages, falling back to navigator.language) and normalizes it
+ * — zh-* -> zh-CN, everything else -> 'en'. Defaults to 'en' without a
+ * navigator (SSR/tests).
+ */
+export function resolveBrowserLocale(languages?: readonly string[]): HelmLocale {
+  let candidates: readonly string[]
+  if (languages !== undefined) {
+    candidates = languages
+  } else if (typeof navigator !== 'undefined') {
+    candidates =
+      navigator.languages !== undefined && navigator.languages.length > 0
+        ? navigator.languages
+        : [navigator.language]
+  } else {
+    candidates = []
+  }
+  const first = candidates.find((tag) => typeof tag === 'string' && tag.trim() !== '')
+  return normalizeLocaleTag(first)
+}
+
+/**
+ * Resolve the initial UI locale: the persisted preference wins, otherwise the
+ * browser locale decides (zh-* -> zh-CN, others -> 'en').
+ */
+export function resolveInitialLocale(
+  storage?: Pick<Storage, 'getItem'>,
+  languages?: readonly string[],
+): HelmLocale {
+  return getStoredLocale(storage) ?? resolveBrowserLocale(languages)
+}
+
+/** Sync the effective locale to the root document lang attribute. */
+export function applyDocumentLocale(locale: HelmLocale): void {
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = locale
+  }
+}
+
+/** Resolve the current OS light/dark mode (defaults to 'light' without window/matchMedia). */
 export function getSystemTheme(matchMediaFn?: (query: string) => { matches: boolean }): ThemeMode {
   if (matchMediaFn !== undefined) {
     return matchMediaFn('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -79,12 +153,12 @@ export function getSystemTheme(matchMediaFn?: (query: string) => { matches: bool
     : 'light'
 }
 
-/** 将主题偏好解析为实际生效的亮/暗主题。 */
+/** Resolve the theme preference into the actually effective light/dark theme. */
 export function resolveTheme(pref: ThemePreference, systemTheme?: ThemeMode): ThemeMode {
   return pref === 'system' ? (systemTheme ?? getSystemTheme()) : pref
 }
 
-/** 将实际生效的主题同步到根文档 data-theme 属性。 */
+/** Sync the effective theme to the root document data-theme attribute. */
 export function applyDocumentTheme(theme: ThemeMode): void {
   if (typeof document !== 'undefined') {
     document.documentElement.dataset.theme = theme

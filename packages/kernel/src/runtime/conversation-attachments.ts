@@ -1,11 +1,11 @@
 /**
- * 会话产物授权与附件解析/内容组装模块。
+ * conversation artifact authorization and attachment parse/content group install module.
  *
- * 职责：
- * - 判定会话对产物的访问授权（本会话或父会话链，最多 32 层防环）；
- * - 解析并校验附件产物 ID 列表（存在性、授权、轻量指针、元数据、磁盘绝对路径）；
- * - 拼装模型可见的附件提示词块 [Attached Files]（含拉取指引）；
- * - 拼装带多模态图片的模型可见内容（纯文本 / 文本块 + ImageContent base64）。
+ * responsibility:
+ * - decide conversation for artifact access authorization (this conversation or parent conversation chain, at most 32 layer guard against ring);
+ * - parse and validate attachment artifact ID list (store in, authorization, light amount pointer, metadata, disk absolute path);
+ * - piece together install model visible attachment prompt chunk [Attached Files](contains pull refer quote);
+ * - piece together install carries multimodal diagram piece model visible content (pure text / text chunk + ImageContent base64).
  */
 import { join } from 'node:path'
 import type { ArtifactMetadata, ConversationAttachmentRef } from '@helm/protocol'
@@ -13,7 +13,7 @@ import { HelmError } from '@helm/protocol'
 import { FileNotFoundError, type ArtifactService } from '../services/index.js'
 import type { HelmStore } from './store.js'
 
-/** 图片类 mime：附件拼装多模态 ImageContent 的判定集。 */
+/** diagram piece class mime: attachment piece together install multimodal ImageContent decide collection. */
 export const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 
 export interface ConversationAttachmentsHost {
@@ -25,7 +25,7 @@ export interface ConversationAttachmentsHost {
 export class ConversationAttachments {
   constructor(private readonly host: ConversationAttachmentsHost) {}
 
-  /** 产物授权：当前会话或其父链（子会话可读父会话产物）；最多 32 层防环。 */
+  /** artifact authorization: when before conversation or its parent chain (sub-conversation can read parent conversation artifact); at most 32 layer guard against ring. */
   isArtifactAuthorized(conversationId: number, artifactConversationId: number): boolean {
     if (conversationId === artifactConversationId) return true
     let current: number | undefined = conversationId
@@ -39,10 +39,10 @@ export class ConversationAttachments {
   }
 
   /**
-   * 解析并授权校验附件产物 ID 列表：
-   * - 产物必须存在（FileNotFoundError -> 404 not_found，附 artifactId）；
-   * - 产物会话必须是当前会话或其父链（越权挂载 403 artifact_forbidden）；
-   * - 返回轻量指针（ref）+ 完整元数据 + 绝对路径（供提示词与多模态拼装）。
+   * parse and authorization validate attachment artifact ID list:
+   * - artifact must store in (FileNotFoundError -> 404 not_found, attach artifactId);
+   * - artifact conversation must be when before conversation or its parent chain (exceeds right mount 403 artifact_forbidden);
+   * - return light amount pointer (ref)+ complete metadata + absolute path (supply prompt and multimodal piece together install).
    */
   async resolveAuthorizedAttachments(
     conversationId: number,
@@ -55,14 +55,14 @@ export class ConversationAttachments {
     for (const artifactId of unique) {
       const metadata = await this.host.artifactsSvc.get(artifactId).catch((error: unknown) => {
         if (error instanceof FileNotFoundError) {
-          throw new HelmError('not_found', `附件产物不存在：${artifactId}`, 404, { artifactId })
+          throw new HelmError('not_found', `attachment artifact missing:${artifactId}`, 404, { artifactId })
         }
         throw error
       })
       if (!this.isArtifactAuthorized(conversationId, metadata.conversationId)) {
         throw new HelmError(
           'artifact_forbidden',
-          `产物 ${artifactId} 不属于会话 ${conversationId} 或其父会话链，拒绝越权挂载`,
+          `artifact ${artifactId} do not belongs to conversation ${conversationId} or its parent conversation chain, reject exceeds right mount`,
           403,
           { conversationId, artifactId, artifactConversationId: metadata.conversationId },
         )
@@ -76,19 +76,19 @@ export class ConversationAttachments {
     return out
   }
 
-  /** 单附件授权解析（app 组合层/herdr 插件依赖注入用；错误语义同上）。 */
+  /** single attachment authorization parse (app combine layer/herdr plugin dependency inject use; error semantics same on). */
   async resolveAuthorizedAttachment(
     conversationId: number,
     artifactId: string,
   ): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }> {
     const [resolved] = await this.resolveAuthorizedAttachments(conversationId, [artifactId])
     if (resolved === undefined) {
-      throw new HelmError('not_found', `附件产物不存在：${artifactId}`, 404, { artifactId })
+      throw new HelmError('not_found', `attachment artifact missing:${artifactId}`, 404, { artifactId })
     }
     return { ...resolved.ref, absPath: resolved.absPath }
   }
 
-  /** [Attached Files] 纯文本清单块（spawn 任务提示词用；无正文前缀）。 */
+  /** [Attached Files] pure text manifest chunk (spawn task prompt use; without body text prefix). */
   buildAttachmentBlock(
     resolved: Array<{ ref: ConversationAttachmentRef; absPath: string }>,
   ): string {
@@ -100,10 +100,10 @@ export class ConversationAttachments {
   }
 
   /**
-   * 构造带附件的模型可见内容：
-   * - [Attached Files] 清单（含拉取指引）拼在正文后；
-   * - 存在图片附件时返回多模态块数组（文本块 + 图片 ImageContent base64）；
-   * - 无图片附件时返回拼接后的纯文本。
+   * construct carries attachment model visible content:
+   * - [Attached Files] manifest (contains pull refer quote) piece together in body text after;
+   * - store in diagram piece attachment when return multimodal chunk array (text chunk + diagram piece ImageContent base64);
+   * - without diagram piece attachment when return concatenate after pure text.
    */
   async buildAttachmentContent(
     effectiveText: string,

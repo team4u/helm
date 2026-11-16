@@ -13,7 +13,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import type { AskSpec, ConversationSummary } from '@helm/protocol'
+import type { AskSpec, ConversationSummary, LocalizedText } from '@helm/protocol'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
 import {
@@ -83,6 +83,7 @@ function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
     sseConnected: true,
     theme: 'dark',
     themePreference: 'system',
+    locale: 'en',
     quietNotifyEnabled: false,
     conversations: [],
     conversationDetails: {},
@@ -113,6 +114,7 @@ function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
     setTheme: noop,
     setThemePreference: noop,
     toggleTheme: noop,
+    setLocale: noop,
     setQuietNotify: asyncNoop,
     checkAuth: asyncNoop,
     onAuthenticated: asyncNoop,
@@ -154,6 +156,8 @@ const stubCtx = {
   getPluginSessionDoc: async () => undefined,
   getPluginDoc: async () => undefined,
   theme: 'dark' as const,
+  locale: 'en' as const,
+  translate: (text: LocalizedText) => (typeof text === 'string' ? text : ''),
 }
 
 /** 在 PluginClientContext.Provider 内渲染消费 hooks 的探针组件，回传渲染结果 JSON。 */

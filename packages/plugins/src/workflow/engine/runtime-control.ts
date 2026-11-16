@@ -1,13 +1,13 @@
 /**
- * runtime-control.ts — run 级协调原语：并发信号量与暂停/跳过/重试控制板。
+ * runtime-control.ts -- run-level coordination primitives: the concurrency semaphore and the pause/skip/retry control board.
  *
- * 自 runtime.ts 拆出（语义逐行保持）：
- * - Semaphore：全局 agent 并发许可（release 直接把许可递给下一个等待者，
- *   一波 release 不放行超限并发；drain 用于 run 终止时唤醒全部等待者）。
- * - RuntimeControl：原先散落在 runWorkflow 闭包里的暂停门（pauseGate /
- *   actionPauseGate）、pauseWaiters 与 liveAgents 表的显式类化。宿主
- *   （abortAgent）与「run 已停止」判定（aborted || settled）经构造函数
- *   注入，本模块不持有 worker / 账本 / 进度等 run 其余状态。
+ * Split out of runtime.ts (semantics preserved line by line):
+ * - Semaphore: global agent concurrency permits (release hands the permit directly to the next
+ *   waiter, so a wave of releases never admits over-limit concurrency; drain wakes all waiters
+ *   at run termination).
+ * - RuntimeControl: the explicit class-ization of the pause gates (pauseGate / actionPauseGate),
+ *   pauseWaiters and the liveAgents table formerly scattered in the runWorkflow closure. The host
+ *   (abortAgent) and the "run already stopped" predicate (aborted || settled) are injected via
  */
 
 import type { WorkflowControl, WorkflowHost } from './runtime-types.js'
@@ -30,7 +30,7 @@ export class Semaphore {
 
   release(): void {
     const next = this.waiters.shift()
-    // 直接把许可递给下一个等待者；先减后加会让一波 release 放行超限并发。
+    // Hand the permit directly to the next waiter; decrement-then-increment would let one release wave admit over-limit concurrency.
     if (next) next()
     else this.active--
   }
@@ -42,7 +42,7 @@ export class Semaphore {
   }
 }
 
-/** 一个在途 agent 调用的控制面状态（skip/retry 意图与暂停唤醒句柄）。 */
+/** The control-plane state of one in-flight agent call (skip/retry intent and pause wake handles). */
 export interface LiveAgent {
   agentId: string
   started: boolean
@@ -51,10 +51,10 @@ export interface LiveAgent {
 }
 
 /**
- * 暂停 / 跳过 / 重试控制板。全部操作幂等 best-effort，与原闭包实现逐行对应：
- * - pause 后新的 acquire 循环在 gate 上挂起；resume / run 终止统一唤醒；
- * - skip 对未启动调用只置意图（启动前消费），对已启动调用 abort 宿主 agent；
- * - retry 仅对已启动且尚无意图的调用有效，abort 后由 attempt 环重跑。
+ * The pause / skip / retry control board. All operations are idempotent best-effort, line-for-line
+ * matching the former closure implementation:
+ * - after pause, new acquire loops hang on the gate; resume / run termination wake uniformly;
+ * - skip only sets intent for un-started calls (consumed before start), and aborts the host agent for started calls;
  */
 export class RuntimeControl {
   private paused = false
@@ -63,7 +63,7 @@ export class RuntimeControl {
 
   constructor(
     private readonly host: Pick<WorkflowHost, 'abortAgent'>,
-    /** run 已进入终态（aborted || settled）时暂停门不再挂起新等待者。 */
+    /** Once the run reaches a terminal state (aborted || settled), the pause gate hangs no new waiters. */
     private readonly isStopped: () => boolean,
   ) {}
 
@@ -80,7 +80,7 @@ export class RuntimeControl {
     this.releasePause()
   }
 
-  /** 唤醒全部暂停等待者（run 终止 / resume 共用）。 */
+  /** Wake all paused waiters (shared by run termination / resume). */
   releasePause(): void {
     for (const wake of [...this.pauseWaiters]) wake()
     this.pauseWaiters.clear()
@@ -127,7 +127,7 @@ export class RuntimeControl {
     return true
   }
 
-  /** 暴露给 onControl 的公共控制面（幂等 best-effort）。 */
+  /** The public control plane exposed to onControl (idempotent best-effort). */
   toControl(): WorkflowControl {
     return {
       pause: () => this.pause(),

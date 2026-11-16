@@ -1,5 +1,5 @@
 /**
- * 服务端截断预览组件交互测试（happy-dom）：
+ * 服务端server-truncated preview组件交互测试（happy-dom）：
  * - bash/generic/read 输出：截断识别（说明 + 展开全文取回）、预览折叠保留、
  *   Artifact 尾标共存；
  * - 点击「展开全文」按 resultEntryId 请求 GET /api/conversations/:id/entries/:entryId，
@@ -156,12 +156,12 @@ test('bash 截断：单一全文入口（主展开按钮即取回），预览折
   t.after(() => { m.unmount(); restoreFetch() })
   await m.render(bodyUi(store, truncTrace({ artifactRef: 'art_demo-1' })))
   const text = m.host.textContent ?? ''
-  assert.match(text, /服务端仅传回预览（全文 300 行）/, '截断说明携带服务端计数')
-  assert.match(text, /条目仅存 Spill 预览，完整原文见下方产物入口/, 'spill 场景不声称单条 endpoint 还原原文')
-  assert.ok(findButton(m.host, '展开全文（全文 300 行）'), '展开全文=主展开按钮，直接取回')
-  assert.ok(findButton(m.host, '展开预览') === undefined, '不出现第二个相近的预览展开入口')
-  assert.match(text, /已折叠前 2 行/, '预览折叠事实如实（尾 8 行）')
-  assert.ok(findButton(m.host, '打开完整产物'), 'Artifact 尾标不受截断影响')
+  assert.match(text, /server returned a preview only \(300 lines in total\)/, '截断说明携带服务端计数')
+  assert.match(text, /holds only the Spill preview/, 'spill 场景不声称单条 endpoint 还原原文')
+  assert.ok(findButton(m.host, 'Expand full text (300 lines in total)'), '展开全文=主展开按钮，直接取回')
+  assert.ok(findButton(m.host, 'Expand preview') === undefined, '不出现第二个相近的预览展开入口')
+  assert.match(text, /2 lines collapsed above/, '预览折叠事实如实（尾 8 行）')
+  assert.ok(findButton(m.host, 'Open full artifact'), 'Artifact 尾标不受截断影响')
 })
 
 test('无截断标记：既有展示与复制完全不变', { timeout: 60_000 }, async (t) => {
@@ -172,9 +172,9 @@ test('无截断标记：既有展示与复制完全不变', { timeout: 60_000 },
   delete tool.resultTruncation
   delete tool.resultEntryId
   await m.render(bodyUi(store, tool))
-  assert.doesNotMatch(m.host.textContent ?? '', /服务端仅传回预览/)
-  assert.ok(findButton(m.host, '展开全部（共 10 行）'), '本地折叠标签不变')
-  assert.ok(findButton(m.host, '展开全文') === undefined, '无取回入口')
+  assert.doesNotMatch(m.host.textContent ?? '', /server returned a preview/)
+  assert.ok(findButton(m.host, 'Expand all (10 lines)'), '本地折叠标签不变')
+  assert.ok(findButton(m.host, 'Expand preview') === undefined, '无取回入口')
 })
 
 // ---------------------------------------------------------------------------
@@ -186,25 +186,25 @@ test('RawToolData 原始输出复制在截断未取回前禁用，不静默复�
   const m = createMount()
   t.after(() => { m.unmount(); restoreFetch() })
   await m.render(bodyUi(store, truncTrace()))
-  await act(async () => { findButton(m.host, '原始数据')?.click() })
-  const gate = findButton(m.host, '复制原始输出')
+  await act(async () => { findButton(m.host, 'Raw data')?.click() })
+  const gate = findButton(m.host, 'Copy raw output')
   assert.ok(gate, '原始输出复制入口存在')
   assert.equal(gate!.disabled, true, '截断未取回前禁用')
-  assert.match(gate!.title ?? '', /截断预览/)
-  assert.match(m.host.textContent ?? '', /服务端仅传回预览/, '原始数据区同样呈现截断事实')
+  assert.match(gate!.title ?? '', /server-truncated preview/)
+  assert.match(m.host.textContent ?? '', /server returned a preview/, '原始数据区同样呈现截断事实')
 })
 
-test('Artifact Spill 原始输出是产物预览，禁用复制并保留完整产物入口', { timeout: 60_000 }, async (t) => {
+test('Artifact Spill 原始输出是产物预览，禁用复制并保留full artifact入口', { timeout: 60_000 }, async (t) => {
   const store = makeStore()
   const m = createMount()
   t.after(() => { m.unmount(); restoreFetch() })
   await m.render(bodyUi(store, truncTrace({ resultTruncation: undefined, artifactRef: 'art_demo-1' })))
-  await act(async () => { findButton(m.host, '原始数据')?.click() })
-  const copy = findButton(m.host, '复制原始输出')
+  await act(async () => { findButton(m.host, 'Raw data')?.click() })
+  const copy = findButton(m.host, 'Copy raw output')
   assert.ok(copy)
   assert.equal(copy!.disabled, true, 'spill entry 仅有预览，不能把它当全文复制')
-  assert.match(copy!.title ?? '', /完整产物/)
-  assert.ok(findButton(m.host, '打开完整产物'), '完整原文仍由 Artifact 入口提供')
+  assert.match(copy!.title ?? '', /full artifact/)
+  assert.ok(findButton(m.host, 'Open full artifact'), '完整原文仍由 Artifact 入口提供')
 })
 
 test('read：原始输出通道截断时复制内容被门禁；details 通道完整则不受约束', { timeout: 60_000 }, async (t) => {
@@ -213,13 +213,13 @@ test('read：原始输出通道截断时复制内容被门禁；details 通道�
   t.after(() => { m.unmount(); restoreFetch() })
 
   await m.render(bodyUi(store, truncTrace({ toolName: 'read', structuredOutput: { path: '/a.ts', content: 'details 完整内容' } })))
-  assert.doesNotMatch(m.host.textContent ?? '', /服务端仅传回预览/, 'details 通道内容完整，不提示截断')
-  assert.equal(findButton(m.host, '复制内容')?.disabled, false, 'details 内容可复制')
+  assert.doesNotMatch(m.host.textContent ?? '', /server returned a preview/, 'details 通道内容完整，不提示截断')
+  assert.equal(findButton(m.host, 'Copy content')?.disabled, false, 'details 内容可复制')
 
   await m.render(bodyUi(store, truncTrace({ toolName: 'read' })))
-  const gate = findButton(m.host, '复制内容')
+  const gate = findButton(m.host, 'Copy content')
   assert.ok(gate, '原始输出通道的复制入口存在')
-  assert.equal(gate!.disabled, true, '原始输出为截断预览时禁用复制')
+  assert.equal(gate!.disabled, true, '原始输出为server-truncated preview时禁用复制')
 })
 
 // ---------------------------------------------------------------------------
@@ -240,7 +240,7 @@ test('点击展开全文：按 entry id 请求，成功后回填并在重渲染�
 
   const truncatedTool = traceFromEntries(truncatedEntries())
   await m.render(bodyUi(store, truncatedTool))
-  await act(async () => { findButton(m.host, '展开全文')?.click() })
+  await act(async () => { findButton(m.host, 'Expand full text')?.click() })
   await act(async () => { await Promise.resolve() })
   await act(async () => { await Promise.resolve() })
 
@@ -254,10 +254,10 @@ test('点击展开全文：按 entry id 请求，成功后回填并在重渲染�
   assert.equal(fullTool.resultTruncation, undefined, '全文条目重建后截断标记消失')
   await m.render(bodyUi(store, fullTool))
   assert.match(m.host.textContent ?? '', /full-line-39/, '展示全文')
-  assert.doesNotMatch(m.host.textContent ?? '', /服务端仅传回预览/)
-  assert.ok(findButton(m.host, '展开全部'), '回到本地折叠语义（真实总量）')
-  await act(async () => { findButton(m.host, '原始数据')?.click() })
-  const copy = findButton(m.host, '复制原始输出')
+  assert.doesNotMatch(m.host.textContent ?? '', /server returned a preview/)
+  assert.ok(findButton(m.host, 'Expand all'), '回到本地折叠语义（真实总量）')
+  await act(async () => { findButton(m.host, 'Raw data')?.click() })
+  const copy = findButton(m.host, 'Copy raw output')
   assert.ok(copy)
   assert.equal(copy!.disabled, false, '取回全文后复制启用')
   assert.equal(copy!.title, '复制', '恢复标准复制语义')
@@ -278,21 +278,21 @@ test('取回失败：错误显式可见、可重试、预览保留且复制仍�
   t.after(() => { m.unmount(); restoreFetch() })
 
   await m.render(bodyUi(store, truncTrace()))
-  await act(async () => { findButton(m.host, '展开全文')?.click() })
+  await act(async () => { findButton(m.host, 'Expand full text')?.click() })
   await act(async () => { await Promise.resolve() })
   await act(async () => { await Promise.resolve() })
 
   assert.equal(backfilled.length, 0, '失败绝不回填')
   const text = m.host.textContent ?? ''
-  assert.match(text, /取回全文失败：服务暂不可用/, '错误信息可见')
-  assert.match(text, /仍为服务端预览，不代表完整输出/, '明确预览性质，不伪造全文')
+  assert.match(text, /Failed to fetch full text: 服务暂不可用/, '错误信息可见')
+  assert.match(text, /still the server preview, not the full output/, '明确预览性质，不伪造全文')
   assert.match(text, /预览第 10 行/, '预览内容保留')
-  assert.ok(findButton(m.host, '重试取回'), '可重试')
-  await act(async () => { findButton(m.host, '原始数据')?.click() })
-  assert.equal(findButton(m.host, '复制原始输出')?.disabled, true, '失败后复制依旧禁用')
+  assert.ok(findButton(m.host, 'Retry fetch'), '可重试')
+  await act(async () => { findButton(m.host, 'Raw data')?.click() })
+  assert.equal(findButton(m.host, 'Copy raw output')?.disabled, true, '失败后复制依旧禁用')
 
   fail = false
-  await act(async () => { findButton(m.host, '重试取回')?.click() })
+  await act(async () => { findButton(m.host, 'Retry fetch')?.click() })
   await act(async () => { await Promise.resolve() })
   await act(async () => { await Promise.resolve() })
   assert.equal(backfilled.length, 1, '重试成功后回填')
@@ -311,11 +311,11 @@ test('响应条目 id 与请求不一致：拒绝回填并显式报错', { timeo
   const m = createMount()
   t.after(() => { m.unmount(); restoreFetch() })
   await m.render(bodyUi(store, truncTrace()))
-  await act(async () => { findButton(m.host, '展开全文')?.click() })
+  await act(async () => { findButton(m.host, 'Expand full text')?.click() })
   await act(async () => { await Promise.resolve() })
   await act(async () => { await Promise.resolve() })
   assert.equal(backfilled.length, 0)
-  assert.match(m.host.textContent ?? '', /条目形状或 id 与请求不一致/)
+  assert.match(m.host.textContent ?? '', /shape or id mismatching the request/)
 })
 
 test('宿主 store 缺少回填方法：显式失败，不静默降级', { timeout: 60_000 }, async (t) => {
@@ -324,10 +324,10 @@ test('宿主 store 缺少回填方法：显式失败，不静默降级', { timeo
   const m = createMount()
   t.after(() => { m.unmount(); restoreFetch() })
   await m.render(bodyUi(store, truncTrace()))
-  await act(async () => { findButton(m.host, '展开全文')?.click() })
+  await act(async () => { findButton(m.host, 'Expand full text')?.click() })
   await act(async () => { await Promise.resolve() })
   await act(async () => { await Promise.resolve() })
-  assert.match(m.host.textContent ?? '', /当前宿主不支持条目回填/)
+  assert.match(m.host.textContent ?? '', /Current host does not support entry backfill/)
 })
 
 test('canonical entry id：请求 042 与返回 42 视为同一条目，不误判失败', { timeout: 60_000 }, async (t) => {
@@ -342,7 +342,7 @@ test('canonical entry id：请求 042 与返回 42 视为同一条目，不误�
   const m = createMount()
   t.after(() => { m.unmount(); restoreFetch() })
   await m.render(bodyUi(store, truncTrace({ resultEntryId: '042' })))
-  await act(async () => { findButton(m.host, '展开全文')?.click() })
+  await act(async () => { findButton(m.host, 'Expand full text')?.click() })
   await act(async () => { await Promise.resolve() })
   await act(async () => { await Promise.resolve() })
   assert.equal(backfilled.length, 1, '前导零差异不构成失败')
@@ -354,6 +354,6 @@ test('generic 工具输出：截断同样提供取回入口与失败呈现', { t
   const m = createMount()
   t.after(() => { m.unmount(); restoreFetch() })
   await m.render(bodyUi(store, truncTrace({ toolName: 'some_tool' })))
-  assert.match(m.host.textContent ?? '', /服务端仅传回预览/)
-  assert.ok(findButton(m.host, '展开全文'))
+  assert.match(m.host.textContent ?? '', /server returned a preview/)
+  assert.ok(findButton(m.host, 'Expand full text'))
 })

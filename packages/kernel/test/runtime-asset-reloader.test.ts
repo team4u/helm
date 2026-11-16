@@ -12,8 +12,8 @@ function createDeferred<T = void>() {
   return { promise, resolve, reject }
 }
 
-describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
-  it('config.json 变更刷新插件配置镜像，失败显式上报通知', { timeout: 60_000 }, async () => {
+describe('AssetReloader unit test', { timeout: 60_000 }, () => {
+  it('config.json change refresh plugin config mirror, failed explicit on report notify', { timeout: 60_000 }, async () => {
     const notifications: Array<{ title: string; error: unknown }> = []
     const errorDeferred = createDeferred<void>()
 
@@ -33,13 +33,13 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     await errorDeferred.promise
 
     assert.equal(notifications.length, 1)
-    assert.equal(notifications[0]!.title, '插件配置热重载失败')
+    assert.equal(notifications[0]!.title, 'plugin config hot reload failed')
     assert.ok(String(notifications[0]!.error).includes('config syntax error'))
 
     await reloader.close()
   })
 
-  it('providers/credentials 变更经 200ms 防抖合并触发单次 reloadModels', { timeout: 60_000 }, async (t) => {
+  it('providers/credentials change via 200ms guard against jitter merge trigger single time reloadModels', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -53,27 +53,27 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
       notifyError: () => {},
     })
 
-    // t = 0: 首次变更触发防抖计时
+    // t = 0: first time change trigger guard against jitter count when
     reloader.onAssetsChanged(['providers.json'])
     t.mock.timers.tick(100)
     await Promise.resolve()
-    assert.equal(reloadCount, 0, '100ms 时防抖尚未触发')
+    assert.equal(reloadCount, 0, '100ms when guard against jitter not yet trigger')
 
-    // t = 100: 第二次变更重置 200ms 防抖窗口
+    // t = 100: second time change reset 200ms guard against jitter window
     reloader.onAssetsChanged(['credentials.json'])
     t.mock.timers.tick(150)
     await Promise.resolve()
-    assert.equal(reloadCount, 0, '距离第二次变更仅 150ms，仍不应触发')
+    assert.equal(reloadCount, 0, 'distance second time change only 150ms, still must not trigger')
 
-    // t = 300: 达到第二次变更后的 200ms
+    // t = 300: reach second time change after 200ms
     t.mock.timers.tick(50)
     await reloader.waitForInflight()
-    assert.equal(reloadCount, 1, '防抖窗口满后应且仅应触发 1 次 reload')
+    assert.equal(reloadCount, 1, 'guard against jitter window full after should and only should trigger 1 time reload')
 
     await reloader.close()
   })
 
-  it('串行两次 reloadModels 的最大并发为 1', { timeout: 60_000 }, async (t) => {
+  it('serial two time reloadModels most large concurrency is 1', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -104,7 +104,7 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
       notifyError: () => {},
     })
 
-    // 触发第一次 reload
+    // trigger first time reload
     reloader.onAssetsChanged(['providers.json'])
     t.mock.timers.tick(200)
     await gate1Started.promise
@@ -112,22 +112,22 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     assert.equal(concurrency, 1)
     assert.equal(maxConcurrency, 1)
 
-    // 在第一次 reload 阻塞期间触发第二次 reload
+    // in first time reload block during trigger second time reload
     reloader.onAssetsChanged(['credentials.json'])
     t.mock.timers.tick(200)
-    // 定时器已触发并加入 reloadChain，但由于前置 reload 阻塞，第二次 reload 未开始
+    // timer already trigger and add reloadChain, but because pre- reload block, second time reload not start
     assert.equal(startedCount, 1)
     assert.equal(concurrency, 1)
 
-    // 放行第一次 reload
+    // let through first time reload
     gate1.resolve()
-    // 等待第二次 reload 启动并阻塞在 gate2
+    // wait for second time reload start and block in gate2
     await gate2Started.promise
     assert.equal(startedCount, 2)
     assert.equal(concurrency, 1)
-    assert.equal(maxConcurrency, 1, '两次 reload 串行执行，最大并发度必须为 1')
+    assert.equal(maxConcurrency, 1, 'two time reload serial execute, most large concurrency must is 1')
 
-    // 放行第二次 reload
+    // let through second time reload
     gate2.resolve()
     await reloader.waitForInflight()
     assert.equal(concurrency, 0)
@@ -137,7 +137,7 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     await reloader.close()
   })
 
-  it('externalModels 为 true 时保持外部所有权，不触发 reloadModels', { timeout: 60_000 }, async (t) => {
+  it('externalModels is true when keep external ownership, does not trigger reloadModels', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -156,12 +156,12 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     reloader.onAssetsChanged(['credentials.json'])
     t.mock.timers.tick(500)
 
-    assert.equal(reloadCount, 0, '外部模型注入时绝不自动触发 reloadModels 替换')
+    assert.equal(reloadCount, 0, 'external model inject when never automatically trigger reloadModels replace')
 
     await reloader.close()
   })
 
-  it('profiles 与 skills 等非静态配置路径不触发模型或配置热重载', { timeout: 60_000 }, async (t) => {
+  it('profiles and skills etc. non- static config path does not trigger model or config hot reload', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -193,7 +193,7 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     await reloader.close()
   })
 
-  it('stop 关停第一阶段取消待触发防抖（定时器被取消，不触发 reload）', { timeout: 60_000 }, async (t) => {
+  it('stop closure stop one phase cancel await trigger guard against jitter (timer by cancel, does not trigger reload)', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -210,16 +210,16 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     reloader.onAssetsChanged(['providers.json'])
     t.mock.timers.tick(100)
 
-    // 在 200ms 防抖到期前 stop
+    // in 200ms guard against jitter expires before stop
     reloader.stop()
     t.mock.timers.tick(500)
 
-    assert.equal(reloadCount, 0, 'stop 应取消待触发防抖定时器，不发生 reload')
+    assert.equal(reloadCount, 0, 'stop should cancel await trigger guard against jitter timer, do not occur reload')
     await reloader.waitForInflight()
     assert.equal(reloadCount, 0)
   })
 
-  it('stop 后不接受新事件', { timeout: 60_000 }, async (t) => {
+  it('stop after do not accept new event', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -241,13 +241,13 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     reloader.onAssetsChanged(['providers.json', 'credentials.json', 'config.json'])
     t.mock.timers.tick(500)
 
-    assert.equal(reloadModelsCount, 0, 'stop 后静态模型资产事件应被丢弃')
-    assert.equal(reloadConfigCount, 0, 'stop 后配置事件应被丢弃')
+    assert.equal(reloadModelsCount, 0, 'stop after static model asset event should by discard')
+    assert.equal(reloadConfigCount, 0, 'stop after config event should by discard')
 
     await reloader.waitForInflight()
   })
 
-  it('stop 后等待在途 reload 成功收敛（waitForInflight 等待成功）', { timeout: 60_000 }, async (t) => {
+  it('stop after wait for in-flight reload succeeded converge (waitForInflight wait for succeeded)', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -269,16 +269,16 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     reloader.onAssetsChanged(['providers.json'])
     t.mock.timers.tick(200)
     await gateStarted.promise
-    assert.equal(finished, false, 'reload 正在执行中')
+    assert.equal(finished, false, 'reload is now execute in')
 
     reloader.stop()
     gate.resolve()
     await reloader.waitForInflight()
 
-    assert.equal(finished, true, '在途 reload 必须被 waitForInflight 完全等待成功收敛')
+    assert.equal(finished, true, 'in-flight reload must by waitForInflight fully wait for succeeded converge')
   })
 
-  it('reload 开始并阻塞，stop，放行 reject，await waitForInflight，核对通知有原错误且不留下 unhandled', { timeout: 60_000 }, async (t) => {
+  it('reload start and block,stop, let through reject,await waitForInflight, core for notify has original error and do not under unhandled', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
 
@@ -302,22 +302,22 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     t.mock.timers.tick(200)
     await gateStarted.promise
 
-    // reload 已启动并在途运行，此时执行 stop
+    // reload already start and in-flight run, now execute stop
     reloader.stop()
 
-    // 放行 reject，模拟热重载执行期失败
+    // let through reject, simulated hot reload execute phase failed
     const failure = new Error('simulated reload failure during shutdown')
     gate.reject(failure)
 
-    // waitForInflight 等待在途链路收敛；错误被内部 catch 捕获并通知，不遗留 unhandled rejection
+    // waitForInflight wait for in-flight link converge; error by internal catch catch and notify, do not legacy unhandled rejection
     await reloader.waitForInflight()
 
-    assert.equal(notifications.length, 1, '在途 reload 失败必须显式通知，不得因 stop 静默吞掉')
-    assert.equal(notifications[0]!.title, '模型配置热重载失败')
+    assert.equal(notifications.length, 1, 'in-flight reload failed must explicit notify, must not because stop static default swallow')
+    assert.equal(notifications[0]!.title, 'model config hot reload failed')
     assert.equal(notifications[0]!.error, failure)
   })
 
-  it('stop 后同样等待已开始的配置镜像刷新，避免持久化关闭后继续写入', { timeout: 60_000 }, async () => {
+  it('stop after same wait for already start config mirror refresh, avoid persist close after continue write', { timeout: 60_000 }, async () => {
     const started = createDeferred()
     const gate = createDeferred()
     const reloader = new AssetReloader({
@@ -336,14 +336,14 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     let drained = false
     const waiting = reloader.waitForInflight().then(() => { drained = true })
     await Promise.resolve()
-    assert.equal(drained, false, '配置刷新尚未完成时不可结束关停屏障')
+    assert.equal(drained, false, 'config refresh not yet complete when cannot end closure stop screen fault')
 
     gate.resolve()
     await waiting
     assert.equal(drained, true)
   })
 
-  it('错误通知发布自身失败时，关停屏障显式拒绝，不冒充成功', { timeout: 60_000 }, async (t) => {
+  it('error notify publish itself on failure, closure stop screen fault explicit reject, do not smoke fill succeeded', { timeout: 60_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     t.after(() => t.mock.timers.reset())
     const started = createDeferred()
@@ -358,7 +358,7 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
       },
       reloadPluginConfig: async () => {},
       notifyError: (title, error) => {
-        assert.equal(title, '模型配置热重载失败')
+        assert.equal(title, 'model config hot reload failed')
         assert.equal(error, reloadFailure)
         throw reportFailure
       },
@@ -373,7 +373,7 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     await rejected
   })
 
-  it('watcher 异常显式上报通知（不静默降级）', { timeout: 60_000 }, async () => {
+  it('watcher exception explicit on report notify (not silently fall back)', { timeout: 60_000 }, async () => {
     const notifications: Array<{ title: string; error: unknown }> = []
     let watcherOnError: ((err: Error) => void) | undefined
 
@@ -399,7 +399,7 @@ describe('AssetReloader 单元测试', { timeout: 60_000 }, () => {
     watcherOnError!(watcherErr)
 
     assert.equal(notifications.length, 1)
-    assert.equal(notifications[0]!.title, '资产热重载监听失败')
+    assert.equal(notifications[0]!.title, 'asset hot reload listen failed')
     assert.equal(notifications[0]!.error, watcherErr)
 
     await reloader.close()

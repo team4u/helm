@@ -1,5 +1,5 @@
 /**
- * PluginHost 类型与接口定义。
+ * PluginHost type and interface define.
  */
 import type {
   BackendPluginsLifecyclePort,
@@ -32,35 +32,35 @@ export interface PluginConfigStore {
     schema: Record<string, PluginConfigFieldSchema>,
   ): Promise<void> | void;
   /**
-   * 可选：插件启停状态持久化读取（同步，返回缓存态；undefined 表示未持久化过）。
-   * 未实现时 PluginHost 为纯内存启停机制，重启回到 register 时的初始声明。
+   * optional: plugin start stop state persist read (sync, return cache state;undefined means not persisted).
+   * not implemented when PluginHost is in-memory start stop mechanism, restart back to register when initial declaration.
    */
   getEnabled?(pluginId: string): boolean | undefined;
-  /** 可选：持久化插件启停状态；失败必须显式 reject（由宿主包装 JSON-safe 诊断）。 */
+  /** optional: persist plugin start stop state; failed must explicit reject(by host wrap JSON-safe diagnose). */
   setEnabled?(pluginId: string, enabled: boolean): Promise<void> | void;
 }
 
 export interface PluginProviderPort {
-  /** 挂载 provider；返回卸载函数（幂等性由端口实现保证，拒绝时 reject 不残留）。 */
+  /** mount provider; return unload function (idempotency by port implement guarantee, reject when reject leaves no residue). */
   register(provider: Provider, pluginId: string): Promise<() => Promise<void>>;
-  /** 可选：停用/卸载前预检在途流/刷新，忙时抛错（如 plugin_has_live_tasks）。 */
+  /** optional: deactivate/unload before preflight in-flight stream/refresh, busy when throws (such as plugin_has_live_tasks). */
   assertIdle?(pluginId: string): void;
 }
 
 /**
- * 宿主后端端口：ctx.host 的实现来源（Runtime 提供，见 runtime-host-backend.ts）。
+ * host backend port:ctx.host implement source (Runtime provide, see runtime-host-backend.ts).
  *
- * 形状策略：与 HelmHostApi 逐字同形的成员用正向 Pick 成员索引复用（含
- * onEvent / emitEvent 的 MaybePromise<void> 可 await 契约，绝不手抄签名
- * 漂移成 void；也不用 Omit 巨型反选或动态 Proxy）；差异成员逐个显式：
- * 1. pluginId 命名空间化：secrets / setPluginConfig / skills.ensureSkill /
- *    manageConversation（返回释放函数由 PluginHost 包装幂等）；
- * 2. 归一化形状：isClosing 为零参函数（ctx.host 暴露 getter）；
- * 3. 可选接线（未接线时 ctx.host 调用显式 501，绝不静默降级）：nodeIpc /
+ * shape policy: and HelmHostApi one by one character same shape member use forward Pick member index re- use (contains
+ * onEvent / emitEvent  MaybePromise<void> can await contract, never manually copy signature
+ * drift into void; also do not use Omit huge type reverse choose or motion state Proxy); difference member one by one explicit:
+ * 1. pluginId naming empty between:secrets / setPluginConfig / skills.ensureSkill /
+ *    manageConversation(return release function by PluginHost wrap idempotent);
+ * 2. archive one shape:isClosing is zero reference function (ctx.host expose getter);
+ * 3. optional connect line (not connect line when ctx.host invoke explicit 501, never static default fall back):nodeIpc /
  *    nodeFetch / openTunnel / plugins / abortConversationGuarded /
- *    submitInputGuarded；
- * 4. 不经后端转发（PluginHost 自供，避免二层转发）：listPlugins / listUi /
- *    listActions / invokeAction / prepareAction / setConfig。
+ *    submitInputGuarded;
+ * 4. do not via backend forwarding (PluginHost self supply, avoid two layer forwarding):listPlugins / listUi /
+ *    listActions / invokeAction / prepareAction / setConfig.
  */
 export interface PluginHostBackend
   extends Pick<
@@ -99,43 +99,43 @@ export interface PluginHostBackend
     | 'onEvent'
     | 'emitEvent'
   > {
-  /** 宿主关闭状态（ctx.host.isClosing getter 的来源）。 */
+  /** host close state (ctx.host.isClosing getter source). */
   isClosing(): boolean
-  /** 技能数据端口；ensureSkill 额外携带调用方 pluginId（受管登记归属）。 */
+  /** skill data port;ensureSkill extra carry caller pluginId(managed register ownership). */
   skills: Pick<HelmHostApi['skills'], 'list' | 'readFile' | 'directory'> & {
     ensureSkill(asset: PluginSkillAsset, pluginId: string): Promise<void>
   }
-  /** 插件私有 secrets 后端（PluginHost 在此之上包装 pluginId 命名空间）。 */
+  /** plugin private secrets backend (PluginHost in this of on wrap pluginId naming empty between). */
   secrets: {
     get(pluginId: string, key: string): Promise<string | undefined>
     set(pluginId: string, key: string, value: string): Promise<void>
     delete(pluginId: string, key: string): Promise<void>
     addRedaction(value: string): () => void
   }
-  /** 插件配置写入后端（PluginHost 校验目标 pluginId 后转发；值已按 schema 校验）。 */
+  /** plugin config after write end (PluginHost validate target pluginId after forwarding; value already by schema validate). */
   setPluginConfig(pluginId: string, value: Record<string, unknown>): Promise<void>
-  /** 节点 IPC 机制端口（EnvFabric 通道；未接线时 ctx.host 调用显式 501）。nodePlatform 为 NodeRegistry 注册上报的可信节点平台，缺席即未知。 */
+  /** node IPC mechanism port (EnvFabric channel; not connect line when ctx.host invoke explicit 501).nodePlatform is NodeRegistry register on report can message node platform, missing seat i.e. unknown. */
   nodeIpc?: HelmHostNodeIpcPort
-  /** 节点本机 HTTP fetch 端口（EnvFabric.nodeFetch；未接线时显式 501，不回退 local）。 */
+  /** node local machine HTTP fetch port (EnvFabric.nodeFetch; not connect line when explicit 501, does not fall back local). */
   nodeFetch?: HelmHostNodeFetchPort
-  /** 任意 TCP 透传隧道端口（EnvFabric.openTunnel；未接线时显式 501，不回退 local）。 */
+  /** any TCP pass-through tunnel port (EnvFabric.openTunnel; not connect line when explicit 501, does not fall back local). */
   openTunnel?: HelmHostOpenTunnelPort
   /**
-   * 宿主插件治理后端（ctx.host.plugins 写面；未接线时修改操作显式 501，
-   * 不静默降级）。真实实现由 runtime 直接委托 PluginHost 与
-   * PluginPackageManager 既有公共方法。
+   * host plugin governance backend (ctx.host.plugins write side; not connect line when modify operation explicit 501,
+   * not silently fall back). real implement by runtime directly delegate PluginHost and
+   * PluginPackageManager since has public method.
    */
   plugins?: BackendPluginsLifecyclePort
-  /** 自动化 guarded 提交（内核原子守卫端口）：未接线时 ctx.host 调用显式 501，绝不静默回退普通 submitInput。 */
+  /** automatically guarded commit (kernel atomic guard port): not connect line when ctx.host invoke explicit 501, never static default fall back ordinary submitInput. */
   submitInputGuarded?(
     conversationId: number,
     text: string,
     opts?: Parameters<HelmHostApi['submitInputGuarded']>[2],
     guard?: GuardedMutationExpectation,
   ): Promise<void>
-  /** 自动化 guarded 中止（含调度器 paused 相位的持久标记路径）；未接线时显式 501，绝不静默回退普通 abortConversation。 */
+  /** automatically guarded abort (contains scheduler paused each other durable mark record path); not connect line when explicit 501, never static default fall back ordinary abortConversation. */
   abortConversationGuarded?(id: number, guard: GuardedMutationExpectation): Promise<void>
-  /** 声明 pluginId 对会话的管理权；返回释放函数（受管期间删除保护）。 */
+  /** declaration pluginId for conversation manage right; return release function (managed during delete protect). */
   manageConversation(id: number, pluginId: string): () => void
 }
 
@@ -143,33 +143,33 @@ export interface PluginHostOptions {
   dataDir: string;
   host: PluginHostBackend;
   docs: PluginDocStore;
-  /** 会话分片持久层；缺失时声明 sessionDoc 显式失败，不使用内存或全局文档降级。 */
+  /** conversation shard durable layer; missing when declaration sessionDoc explicit failed, does not use memory or global document fall back. */
   sessionDocs?: PluginSessionDocStore;
   config?: PluginConfigStore;
   /**
-   * 可选的插件 Provider 挂载端口（runtime 提供）：插件经 ctx.provider 声明的
-   * 自带模型 Provider 在启用时挂载、停用/卸载时卸载。
+   * optional plugin Provider mount port (runtime provide): plugin via ctx.provider declaration
+   * self carries model Provider in enable when mount, deactivate/unload when unload.
    */
   providers?: PluginProviderPort;
   /**
-   * 宿主统一文本脱敏器（SecretStash 明文 -> marker）：ctx.host.invokeAction
-   * 返回的动作输出经此值级脱敏（兑现 protocol 契约"宿主统一脱敏"，
-   * 不依赖调用方插件自带 redactor）。未提供时原样返回（宿主模式/测试）。
+   * host unify text redaction (SecretStash plaintext -> marker):ctx.host.invokeAction
+   * return action output via this value level redaction (honor protocol contract"host unify redaction",
+   * independent of caller plugin self carries redactor). not provide when original return (host pattern/test).
    */
   redactText?: (text: string) => string;
   /**
-   * 插件构建端口（client.tsx 编译 + 后端 TS 转译）：机制在内核，构建工具由
-   * 组合根注入（产品在 hub 注入 @helm/plugin-build 默认实现）。缺失时内核
-   * 显式拒绝相关能力（client UI 贡献 unsupported_client_build、外部 TS 源
-   * unsupported_backend_ts_build），绝不静默丢 UI 或降级，也不动态 import
-   * 默认实现。
+   * plugin build port (client.tsx compile + backend TS transpile): mechanism in kernel, build tool by
+   * composition root inject (produce product in hub inject @helm/plugin-build by default implement). missing when kernel
+   * explicit reject related capability (client UI contribution unsupported_client_build, external TS source
+   * unsupported_backend_ts_build), never static default lose UI or fall back, also do not motion state import
+   * by default implement.
    */
   buildProvider?: PluginBuildProvider;
   /**
-   * 延迟服务启动屏障（runtime 自建 host 时使用）：true 时 register/enable 的
-   * 启用插件只完成定义收集、provider 挂载与服务 prepare 登记，不执行服务
-   * start()；由组合层在全部插件注册完成后统一调用 PluginHost.start()，
-   * 先全局执行全部 prepare 再逐插件 start。默认 false：register 即时 prepare+start。
+   * latency service start screen fault (runtime self create host when use):true when register/enable 
+   * enable plugin only complete define collect,provider mount and service prepare register, do not execute service
+   * start(); by combine layer in all plugin register after completion unify invoke PluginHost.start(),
+   * first global execute all prepare again one by one plugin start. by default false:register i.e. when prepare+start.
    */
   deferServices?: boolean;
 }
@@ -177,36 +177,36 @@ export interface PluginHostOptions {
 export interface ServiceEntry extends PluginServiceSpec {
   pluginId: string;
   started: boolean;
-  /** prepare 已执行标记（避免重复执行；幂等由服务自身保证）。 */
+  /** prepare already execute mark record (avoid repeat execution; idempotent by service itself guarantee). */
   prepared: boolean;
 }
 
-/** provider 声明项：definePlugin 阶段收集，启用时挂载（记录挂载顺序供逆序卸载）。 */
+/** provider declaration items:definePlugin phase collect, enable when mount (record mount order supply inverse order unload). */
 export interface ProviderEntry {
   provider: Provider;
-  /** 挂载成功后的卸载函数；null = 尚未挂载（声明态/已卸载）。 */
+  /** mount after success unload function;null = not yet mount (declaration state/uninstalled). */
   unregister: (() => Promise<void>) | null;
 }
 
 /**
- * 插件生命周期相位：
- * - defining：definePlugin 执行中（注册方法仅此相位可用）；
- * - deactivating：停用中（先于任何 await 设置，隔离新任务与旧 doc 写入）；
- * - idle：稳定态（enabled 决定是否对外可用）。
+ * plugin lifecycle each other:
+ * - defining:definePlugin execute in (register method only this each other available);
+ * - deactivating: deactivate in (first at any await settings, isolated new task and old doc write);
+ * - idle: stable state (enabled decide is otherwise for outside available).
  */
 export type PluginPhase = 'idle' | 'defining' | 'deactivating';
 
 /**
- * 受控停止窗口内仍可用的 ctx.host 调用（按 wrapHostApi 的 what 标签）：
- * 停止链必需的只读（listConversations/getConversation/redact/nodeIpc.isOnline）、
- * 取消（abortConversation/cancelAsk）、跨节点清理 IPC（nodeIpc.call）与最终
- * 事件（emitEvent）。集合来自真实 stop 消费者（workflow close 的 runs 投影与
- * 子会话中止、herdr 的销单/pane 清理/通知、superagent 的 Ask 取消）并按能力
- * 通用表达，不按插件 ID 特判。其余调用——含 spawnAgent/submitInput/
+ * subject to control stop window inside still available ctx.host invoke (by wrapHostApi  what tag):
+ * stop chain must must only read (listConversations/getConversation/redact/nodeIpc.isOnline),
+ * cancel (abortConversation/cancelAsk), across node clean up IPC(nodeIpc.call) and eventually
+ * event (emitEvent). set from real stop consumer (workflow close  runs throw shadow and
+ * sub-conversation abort,herdr deregister single/pane clean up/notify,superagent  Ask cancel) and by capability
+ * through use express, do not by plugin ID special judge. the rest invoke - - contains spawnAgent/submitInput/
  * createConversation/dispatchTrigger/createAsk/execEnv/executionEnv/
- * completeText 等一切新工作入口——在窗口内同样拒绝：停用语义是拆毁收尾，
- * 不是继续干活的宽限期。guarded 中止随普通中止一并放行（收尾取消链）；
- * guarded 提交属于新工作入口，窗口内照拒。
+ * completeText etc. everything new work entry - - in window inside same reject: deactivate semantics is split destroy wrap-up,
+ * is not continue dry wide limit phase.guarded abort follow ordinary abort one and let through (wrap-up cancel chain);
+ * guarded commit belongs to new work entry, window inside per refuse.
  */
 export const STOP_WINDOW_HOST_CALLS: ReadonlySet<string> = new Set([
   'host.listConversations',
@@ -220,7 +220,7 @@ export const STOP_WINDOW_HOST_CALLS: ReadonlySet<string> = new Set([
   'host.nodeIpc.call',
 ]);
 
-/** 持久资源占用项（停用预检聚合用；与 protocol PluginInUseItem 同形）。 */
+/** durable asset occupy items (deactivate preflight aggregate use; and protocol PluginInUseItem same shape). */
 export interface PluginInUseItem {
   kind: string;
   id: string;
@@ -229,42 +229,42 @@ export interface PluginInUseItem {
 
 export interface PluginState {
   definition: PluginDefinition;
-  /** 注册边界归一后的依赖插件 ID 列表（去重、保声明序；仅已注册依赖进入图）。 */
+  /** register boundary archive one after dependency plugin ID list (dedupe, keep declaration order; only registered dependency enter diagram). */
   dependencies: string[];
   enabled: boolean;
   phase: PluginPhase;
-  /** 启用周期号：每次 enable 开始与 disable 完成时递增，使旧上下文/句柄失效。 */
+  /** enable cycle number: each time enable start and disable complete when pass increase, make old context/handle expires. */
   epoch: number;
   dataDir: string;
   hooks: Set<HookName>;
   services: ServiceEntry[];
-  /** 本周期 ctx.provider 声明的模型 Provider（启用时挂载、停用/卸载时逆序卸载）。 */
+  /** this cycle ctx.provider declaration model Provider(enable when mount, deactivate/unload when inverse order unload). */
   providers: ProviderEntry[];
   configSchema: Record<string, PluginConfigFieldSchema> | null;
   /**
-   * 本启用周期经 ctx.host 获取的宿主生命周期资源释放句柄
-   * （manageConversation 管理权 / onEvent 监听 / askSeq 解析器）。
+   * this enable cycle via ctx.host get host lifecycle asset release handle
+   * (manageConversation manage right / onEvent listen / askSeq parse).
    */
   hostReleases: Set<() => void>;
   /**
-   * 受控停止窗口：宿主正在 await 本插件服务 stop 链期间为 true。
-   * 此窗口内 STOP_WINDOW_HOST_CALLS 与 doc 写入放行，其余宿主调用与新任务照拒。
+   * subject to control stop window: host is now await this plugin service stop chain during is true.
+   * this window inside STOP_WINDOW_HOST_CALLS and doc write let through, the rest host invoke and new task per refuse.
    */
   stopWindow: boolean;
   /**
-   * 最近一次加载或启用失败的诊断（status: 'failed' 的判定源）。
-   * enable / disable 成功时清空；scan/load 阶段占位条目（loadFailed）恒保留
-   * 直到修复后 reload / 重启重新注册。
+   * most near once load or enable failed diagnose (status: 'failed' decide source).
+   * enable / disable on success empty;scan/load phase occupy item (loadFailed) constant keep
+   * until fix after reload / restart re- register.
    */
   lastError?: PluginDiagnosticError;
   /**
-   * scan / load 阶段失败的占位条目标记：definition 为空壳（definePlugin 为
-   * no-op），无有效能力注册；enable 直接 409 plugin_load_failed。
+   * scan / load phase failed occupy target record:definition is empty shell (definePlugin is
+   * no-op), without valid capability register;enable directly 409 plugin_load_failed.
    */
   loadFailed?: boolean;
   /**
-   * 注册时声明的故障隔离意愿（外部插件加载器传 isolateFailure:true）：
-   * define / enable / 启动屏障阶段失败降级为 failed 条目而不是阻断宿主。
+   * register when declaration fault isolated intent willing (external plugin load pass isolateFailure:true):
+   * define / enable / start screen fault phase failed fall back is failed item while is not block assert host.
    */
   isolateFailure?: boolean;
 }

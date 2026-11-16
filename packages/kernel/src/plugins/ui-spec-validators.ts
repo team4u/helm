@@ -1,18 +1,18 @@
 /**
- * ui-spec-validators.ts：registerUi 各 surface 声明的纯校验器与分发表。
+ * ui-spec-validators.ts:registerUi each surface declaration pure validate and dispatch table.
  *
- * registry（ui-registry.ts）退化为存储 + 派发：通用前置（纯对象 / id /
- * priority|order）、scope 与 client 引用校验留在 registerUi 本体；surface
- * 专属规则按拆分前的逐块顺序拆为两阶段——
- * - 早期块（UI 动作 / commandPalette / profile.runtime / plugin.slot）先于
- *   scope 与 client 引用校验执行；
- * - 晚期块（timeline.renderer / markdown.codeBlock / tool.view /
- *   artifact.previewer / composer.completer / workbench.panel）在 client
- *   引用校验之后执行。
- * 两阶段划分只为保持拆分前的错误优先级逐字节等价（同一 spec 同时踩中
- * surface 规则与 scope/client 规则时，抛错先后不变），无语义差别。
- * 全部校验器均为纯函数（UI 动作的 delete spec.target 是唯一的输入归一
- * 副作用，与拆分前一致），错误码 / 消息 / details 与拆分前逐字保持。
+ * registry(ui-registry.ts) retreat is store + dispatch: through use pre- (pure object / id /
+ * priority|order),scope and client reference validate in registerUi this body;surface
+ * dedicated belong rule by split before one by one chunk order split is two phase - -
+ * - early chunk (UI action / commandPalette / profile.runtime / plugin.slot) first at
+ *   scope and client reference validate execute;
+ * - late phase chunk (timeline.renderer / markdown.codeBlock / tool.view /
+ *   artifact.previewer / composer.completer / workbench.panel) in client
+ *   reference validate after execute.
+ * two phase divide only is keep split before error priority one by one byte etc. price (the same spec also step in
+ * surface rule and scope/client rule when, throws first after do not change), without semantics difference other.
+ * all validate all is pure function (UI action delete spec.target is unique input archive one
+ * side effect, and split before consistent), error code / message / details and split before one by one character keep.
  */
 import {
   HelmError,
@@ -22,61 +22,61 @@ import {
 } from '@helm/protocol';
 import { isPlainObject } from './shared.js';
 
-/** 宿主保留的命令斜杠触发词（skill: 前缀整体保留），插件不得占用。 */
+/** host keep command slash trigger term (skill: prefix whole keep), plugin must not occupy. */
 const RESERVED_COMMAND_SLASH: ReadonlySet<string> = new Set(RESERVED_SLASH_COMMANDS);
 
-/** UI 动作三类 target 到注册 surface 的映射（统一 UiActionSpec.target 语义；plugin-host 与 registry 共用）。 */
+/** UI action three class target to register surface mapping (unify UiActionSpec.target semantics;plugin-host and registry shared use). */
 export const UI_ACTION_SURFACES: Readonly<Record<UiActionSpec['target'], string>> = {
   'conversation:header': 'conversation.header.action',
   'conversation:row': 'conversation.row.action',
   'timeline:entry': 'timeline.entry.action',
 };
 
-/** 反查表：注册 surface -> UI 动作 target（派发键即三个动作 surface）。 */
+/** reverse inspect table: register surface -> UI action target(dispatch key i.e. three action surface). */
 const UI_ACTION_TARGET_BY_SURFACE: Readonly<Record<string, UiActionSpec['target']>> = Object.fromEntries(
   (Object.keys(UI_ACTION_SURFACES) as Array<UiActionSpec['target']>).map((key) => [UI_ACTION_SURFACES[key], key]),
 );
 
 /**
- * artifact.previewer 的规范 MIME：小写 type/subtype 精确值或显式 type/* 通配。
- * 拒绝 '星号斜杠星号'（等于吞掉所有产物且无裁决意义）、参数、前后缀/glob 与大写形态
- * ——匹配规则必须精确可预期，前端裁决与内核校验共用同一事实源。
+ * artifact.previewer specification MIME: small write type/subtype precise value or explicit type/* through match.
+ * reject 'asterisk slash asterisk'(equals swallow all artifact and without trim decide intent meaning), parameter, before suffix/glob and large write form
+ * - - match rule must precise can pre- phase, frontend trim decide and kernel validate shared use the same fact source.
  */
 const CANONICAL_MIME_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/(?:[a-z0-9][a-z0-9!#$&^_.+-]*|\*)$/;
 
-/** artifact.previewer 的文件后缀：小写、前导点、可多段（如 .tar.gz），无路径段与通配符。 */
+/** artifact.previewer file suffix: small write, before lead point, can many segment (such as .tar.gz), without path segment and wildcard. */
 const ARTIFACT_EXTENSION_PATTERN = /^\.[a-z0-9]+(?:\.[a-z0-9]+)*$/;
 
-/** 补全源 doc 形态的文档名（与 docs/sessionDocs 列表同一命名约束）。 */
+/** completion source doc form document name (and docs/sessionDocs list the same naming constraint). */
 const COMPLETER_DOC_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 /**
- * 补全源 itemsField：安全顶层键字符集（拒 __proto__/constructor/prototype）。
- * 仅字符集限制还不够，原型污染键名单在补全源校验中单独拒绝。
+ * completion source itemsField: security top-level key character collection (refuse __proto__/constructor/prototype).
+ * only character collection restrict also do not enough, prototype pollute key name single in completion source validate in separate reject.
  */
 const COMPLETER_ITEMS_FIELD_PATTERN = /^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,127}$/;
 
 const UNSAFE_TOP_LEVEL_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
-/** 校验器上下文：registry 在派发点一次构造，逐校验器只读。 */
+/** validate context:registry in dispatch point once construct, one by one validate only read. */
 export interface UiSpecContext {
   pluginId: string;
-  /** 声明入口名（如 timelineRenderer），错误消息定位用。 */
+  /** declaration entry name (such as timelineRenderer), error message locate use. */
   fnName: string;
-  /** 本次注册的 surface（UI 动作校验器据其反查 target）。 */
+  /** this time register surface(UI action validate based on its reverse inspect target). */
   surface: string;
-  /** 插件定义提供的 clientRoot（client 引用归属检查用；缺省表示未提供）。 */
+  /** plugin define provide clientRoot(client reference ownership check use; default means not provide). */
   clientRoot?: string;
-  /** 宿主是否注入构建端口（client 引用可用性检查用）。 */
+  /** host is otherwise inject build port (client reference availability check use). */
   hasBuildProvider: boolean;
-  /** 本插件已注册的 UI 贡献（commandPalette slash / profile.runtime kind 的插件内去重）。 */
+  /** this plugin registered UI contribution (commandPalette slash / profile.runtime kind plugin inside dedupe). */
   siblings: readonly PluginUiContribution[];
 }
 
 export type UiSpecValidator = (spec: Record<string, unknown>, id: string, ctx: UiSpecContext) => void;
 
 /**
- * artifact.previewer 匹配声明列表的公共校验：非空字符串数组、逐项合法、无重复。
+ * artifact.previewer match declaration list public validate: non-empty string array, one by one items legal, without duplicate.
  */
 function assertArtifactMatchList(
   pluginId: string,
@@ -91,7 +91,7 @@ function assertArtifactMatchList(
   if (!Array.isArray(values) || values.length === 0 || values.some((v) => typeof v !== 'string')) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.${fnName} 的 ${field} 必须是非空字符串数组`,
+      `plugin ${pluginId} ui.${fnName}  ${field} must be non-empty string array`,
       400,
       { pluginId, id, field },
     );
@@ -100,7 +100,7 @@ function assertArtifactMatchList(
     if (!isValid(value)) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.${fnName} 的 ${field} 项 "${value}" 非法（${expect}）`,
+        `plugin ${pluginId} ui.${fnName}  ${field} items "${value}" illegal (${expect})`,
         400,
         { pluginId, id, field, value },
       );
@@ -108,7 +108,7 @@ function assertArtifactMatchList(
   }
   const unique = new Set(values as string[]);
   if (unique.size !== values.length) {
-    throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.${fnName} 的 ${field} 含重复项`, 400, {
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName}  ${field} contains duplicate items`, 400, {
       pluginId,
       id,
       field,
@@ -117,10 +117,10 @@ function assertArtifactMatchList(
 }
 
 /**
- * UI 动作统一校验（conversation:header / conversation:row / timeline:entry）：
- * actionId / client 二者至少提供其一（否则宿主无法渲染也无法执行）。
- * 副作用：target 字段与 surface 重复（surface 已携带语义），注册输入侧剔除
- * 避免存储歧义（与拆分前一致）。
+ * UI action unify validate (conversation:header / conversation:row / timeline:entry):
+ * actionId / client two at least provide its one (otherwise host cannot render also cannot execute).
+ * side effect:target field and surface duplicate (surface already carry semantics), register input side remove
+ * avoid store ambiguity (and split before consistent).
  */
 function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId, fnName } = ctx;
@@ -131,7 +131,7 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
   if (actionId === undefined && !hasClient) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.action（${target}）需至少提供 actionId 或 client 之一`,
+      `plugin ${pluginId} ui.action(${target}) must at least provide actionId or client of one`,
       400,
       { pluginId, id },
     );
@@ -139,7 +139,7 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
   if (actionId !== undefined && (typeof actionId !== 'string' || actionId.length === 0 || actionId.includes('.'))) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.action 的 actionId 必须是非空且不含点号的动作 id（跨插件请用 actionPluginId）`,
+      `plugin ${pluginId} ui.action  actionId must be non-empty and excludes point number action id(across plugin please use actionPluginId)`,
       400,
       { pluginId, id },
     );
@@ -148,18 +148,18 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
   if (actionPluginId !== undefined && (typeof actionPluginId !== 'string' || actionPluginId.length === 0)) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.action 的 actionPluginId 必须是非空插件 id`,
+      `plugin ${pluginId} ui.action  actionPluginId must be non-empty plugin id`,
       400,
       { pluginId, id },
     );
   }
-  // placement 仅 conversation:header 允许；kinds/roles 仅 timeline:entry 允许。
+  // placement only conversation:header allows;kinds/roles only timeline:entry allows.
   if (target !== 'conversation:header') {
     const placement = spec['placement'];
     if (placement !== undefined) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.action（${target}）不允许 placement（仅 conversation:header 支持）`,
+        `plugin ${pluginId} ui.action(${target}) disallows placement(only conversation:header support)`,
         400,
         { pluginId, id },
       );
@@ -169,7 +169,7 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
     if (placement !== undefined && placement !== 'toolbar' && placement !== 'menu') {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.action 的 placement 仅允许 'toolbar' | 'menu'`,
+        `plugin ${pluginId} ui.action  placement only allows 'toolbar' | 'menu'`,
         400,
         { pluginId, id },
       );
@@ -183,7 +183,7 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
     ) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.action（timeline:entry）的 kinds 必须是非空字符串数组`,
+        `plugin ${pluginId} ui.action(timeline:entry) kinds must be non-empty string array`,
         400,
         { pluginId, id },
       );
@@ -193,7 +193,7 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
       if (!Array.isArray(roles) || roles.length === 0 || roles.some((r) => r !== 'user' && r !== 'assistant')) {
         throw new HelmError(
           'invalid_ui_spec',
-          `插件 ${pluginId} ui.action（timeline:entry）的 roles 仅允许 'user' | 'assistant' 非空数组`,
+          `plugin ${pluginId} ui.action(timeline:entry) roles only allows 'user' | 'assistant' non-empty array`,
           400,
           { pluginId, id },
         );
@@ -204,7 +204,7 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
     if (kinds !== undefined) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.action（${target}）不允许 kinds（仅 timeline:entry 支持）`,
+        `plugin ${pluginId} ui.action(${target}) disallows kinds(only timeline:entry support)`,
         400,
         { pluginId, id },
       );
@@ -213,7 +213,7 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
     if (roles !== undefined) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.action（${target}）不允许 roles（仅 timeline:entry 支持）`,
+        `plugin ${pluginId} ui.action(${target}) disallows roles(only timeline:entry support)`,
         400,
         { pluginId, id },
       );
@@ -222,7 +222,7 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
   delete spec['target'];
 }
 
-/** commandPalette：slash 触发词格式、宿主保留词与插件内同名去重；命令可触发性。 */
+/** commandPalette:slash trigger term format, host keep term and plugin inside same name dedupe; command can trigger. */
 function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   const slash = spec['slash'];
@@ -230,7 +230,7 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
     if (typeof slash !== 'string' || !/^[a-z0-9][a-z0-9:_-]{0,63}$/.test(slash)) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.command 的 slash 必须匹配 /^[a-z0-9][a-z0-9:_-]{0,63}$/（不含前导 /）`,
+        `plugin ${pluginId} ui.command  slash must match /^[a-z0-9][a-z0-9:_-]{0,63}$/(excludes before lead /)`,
         400,
         { pluginId, id, slash: String(slash) },
       );
@@ -238,17 +238,17 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
     if (RESERVED_COMMAND_SLASH.has(slash) || slash.startsWith('skill:')) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.command 的 slash "${slash}" 与宿主保留命令冲突（new/clear/compact 与 skill: 前缀）`,
+        `plugin ${pluginId} ui.command  slash "${slash}" and host keep command conflict (new/clear/compact and skill: prefix)`,
         400,
         { pluginId, id, slash },
       );
     }
-    // 插件内同名 slash 直接拒绝（跨插件冲突在提交点终检）。
+    // plugin inside same name slash directly reject (across plugin conflict in commit point final inspect).
     for (const u of ctx.siblings) {
       if (u.surface !== 'commandPalette') continue;
       const other = (u.spec as { slash?: unknown }).slash;
       if (other === slash) {
-        throw new HelmError('duplicate_command_slash', `插件 ${pluginId} 重复声明斜杠触发词 /${slash}`, 409, {
+        throw new HelmError('duplicate_command_slash', `plugin ${pluginId} duplicate declaration slash trigger term /${slash}`, 409, {
           pluginId,
           slash,
         });
@@ -257,16 +257,16 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
   }
   const actionId = spec['actionId'];
   if (actionId !== undefined && (typeof actionId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(actionId))) {
-    throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.command 的 actionId 必须是合法动作标识`, 400);
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.command  actionId must be legal action identifier`, 400);
   }
   if (slash !== undefined && actionId === undefined) {
-    throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.command 声明 slash 时必须绑定 actionId`, 400);
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.command declaration slash when must bind set actionId`, 400);
   }
   const hasClient = spec['client'] !== undefined;
   if (actionId === undefined && !hasClient) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.command 需至少提供 actionId 或 client 之一（命令必须可触发）`,
+      `plugin ${pluginId} ui.command must at least provide actionId or client of one (command must can trigger)`,
       400,
       { pluginId, id },
     );
@@ -275,28 +275,28 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
   if (actionPluginId !== undefined && (typeof actionPluginId !== 'string' || actionPluginId.length === 0)) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.command 的 actionPluginId 必须是非空插件 id`,
+      `plugin ${pluginId} ui.command  actionPluginId must be non-empty plugin id`,
       400,
       { pluginId, id },
     );
   }
 }
 
-/** profile.runtime：kind 必填且格式合法；重复 kind 插件内直接拒绝（跨插件冲突在提交点终检）。 */
+/** profile.runtime:kind required and format legal; duplicate kind plugin inside directly reject (across plugin conflict in commit point final inspect). */
 function validateProfileRuntimeSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   const kind = spec['kind'];
   if (typeof kind !== 'string' || kind.length === 0 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(kind)) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.profileRuntime 的 kind 必须匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/`,
+      `plugin ${pluginId} ui.profileRuntime  kind must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/`,
       400,
       { pluginId, id, kind: String(kind) },
     );
   }
   const label = spec['label'];
   if (typeof label !== 'string' || label.length === 0) {
-    throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.profileRuntime 需要非空 label`, 400, {
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.profileRuntime need to non-empty label`, 400, {
       pluginId,
       id,
     });
@@ -309,19 +309,19 @@ function validateProfileRuntimeSpec(spec: Record<string, unknown>, id: string, c
   ) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.profileRuntime 的 agentSuggestions 必须是非空字符串数组`,
+      `plugin ${pluginId} ui.profileRuntime  agentSuggestions must be non-empty string array`,
       400,
       { pluginId, id },
     );
   }
-  // 插件内重复 kind 直接拒绝（跨插件冲突在提交点终检）。
+  // plugin inside duplicate kind directly reject (across plugin conflict in commit point final inspect).
   for (const u of ctx.siblings) {
     if (u.surface !== 'profile.runtime') continue;
     const other = (u.spec as { kind?: unknown }).kind;
     if (other === kind) {
       throw new HelmError(
         'duplicate_profile_runtime_kind',
-        `插件 ${pluginId} 重复声明 profile.runtime kind "${kind}"`,
+        `plugin ${pluginId} duplicate declaration profile.runtime kind "${kind}"`,
         409,
         { pluginId, kind },
       );
@@ -329,14 +329,14 @@ function validateProfileRuntimeSpec(spec: Record<string, unknown>, id: string, c
   }
 }
 
-/** plugin.slot：target 必须恰有一个 '/'，两段均为合法标识。 */
+/** plugin.slot:target must exactly has a '/', two segment all is legal identifier. */
 function validateSlotSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   const target = spec['target'];
   if (typeof target !== 'string' || target.length === 0 || target.length > 512) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.slot 的 target 必须是非空字符串（<ownerPluginId>/<slotName>）`,
+      `plugin ${pluginId} ui.slot  target must be non-empty string (<ownerPluginId>/<slotName>)`,
       400,
       { pluginId, id },
     );
@@ -345,7 +345,7 @@ function validateSlotSpec(spec: Record<string, unknown>, id: string, ctx: UiSpec
   if (slash <= 0 || slash !== target.lastIndexOf('/')) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.slot 的 target "${target}" 必须恰含一个 '/'（<ownerPluginId>/<slotName>）`,
+      `plugin ${pluginId} ui.slot  target "${target}" must exactly contains a '/'(<ownerPluginId>/<slotName>)`,
       400,
       { pluginId, id, target },
     );
@@ -355,14 +355,14 @@ function validateSlotSpec(spec: Record<string, unknown>, id: string, ctx: UiSpec
   if (!/^[A-Za-z0-9:_-]+$/.test(owner) || !/^[A-Za-z0-9._-]+$/.test(slotName)) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.slot 的 target "${target}" 段标识非法（ownerPluginId 允许 : _ -，slotName 允许 . _ -）`,
+      `plugin ${pluginId} ui.slot  target "${target}" segment identifier illegal (ownerPluginId allows : _ -,slotName allows . _ -)`,
       400,
       { pluginId, id, target },
     );
   }
 }
 
-/** timeline.renderer：matchMeta 仅允许 { renderer: 非空字符串 }。 */
+/** timeline.renderer:matchMeta only allows { renderer: non-empty string }. */
 function validateTimelineRendererSpec(spec: Record<string, unknown>, _id: string, ctx: UiSpecContext): void {
   const { pluginId, fnName } = ctx;
   const matchMeta = spec['matchMeta'];
@@ -375,14 +375,14 @@ function validateTimelineRendererSpec(spec: Record<string, unknown>, _id: string
     ) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.timelineRenderer 的 matchMeta 仅允许 { renderer: 非空字符串 }`,
+        `plugin ${pluginId} ui.timelineRenderer  matchMeta only allows { renderer: non-empty string }`,
         400,
       );
     }
   }
 }
 
-/** markdown.codeBlock：languages 非空小写标识数组、无重复；必须声明 client 组件引用。 */
+/** markdown.codeBlock:languages non-empty small write identifier array, without duplicate; must declaration client component reference. */
 function validateMarkdownCodeBlockSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   const languages = spec['languages'];
@@ -393,14 +393,14 @@ function validateMarkdownCodeBlockSpec(spec: Record<string, unknown>, id: string
   ) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.markdownCodeBlock 的 languages 必须是非空字符串数组（每项为小写语言标识，匹配 /^[a-z0-9][a-z0-9-]{0,31}$/）`,
+      `plugin ${pluginId} ui.markdownCodeBlock  languages must be non-empty string array (each items is small write language identifier, match /^[a-z0-9][a-z0-9-]{0,31}$/)`,
       400,
       { pluginId, id },
     );
   }
   const unique = new Set(languages as string[]);
   if (unique.size !== languages.length) {
-    throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.markdownCodeBlock 的 languages 含重复项`, 400, {
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.markdownCodeBlock  languages contains duplicate items`, 400, {
       pluginId,
       id,
     });
@@ -408,21 +408,21 @@ function validateMarkdownCodeBlockSpec(spec: Record<string, unknown>, id: string
   if (spec['client'] === undefined) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.markdownCodeBlock 必须声明 client 组件引用（无声明式轨道）`,
+      `plugin ${pluginId} ui.markdownCodeBlock must declaration client component reference (without declaration style track path)`,
       400,
       { pluginId, id },
     );
   }
 }
 
-/** tool.view：replaceRow 布尔；toolNames 非空字符串数组。 */
+/** tool.view:replaceRow boolean;toolNames non-empty string array. */
 function validateToolViewSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   const replaceRow = spec['replaceRow'];
   if (replaceRow !== undefined && typeof replaceRow !== 'boolean') {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.toolView 的 replaceRow 必须是布尔值（实际：${typeof replaceRow}）`,
+      `plugin ${pluginId} ui.toolView  replaceRow must be boolean value (actual:${typeof replaceRow})`,
       400,
       { pluginId, id },
     );
@@ -435,19 +435,19 @@ function validateToolViewSpec(spec: Record<string, unknown>, id: string, ctx: Ui
   ) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.toolView 的 toolNames 必须是非空字符串数组`,
+      `plugin ${pluginId} ui.toolView  toolNames must be non-empty string array`,
       400,
       { pluginId, id },
     );
   }
 }
 
-/** artifact.previewer：非空 label 与规范 MIME/后缀匹配声明列表。 */
+/** artifact.previewer: non-empty label and specification MIME/suffix match declaration list. */
 function validateArtifactPreviewerSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId, fnName } = ctx;
   const label = spec['label'];
   if (typeof label !== 'string' || label.length === 0) {
-    throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.artifactPreviewer 需要非空 label`, 400, {
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.artifactPreviewer need to non-empty label`, 400, {
       pluginId,
       id,
     });
@@ -459,7 +459,7 @@ function validateArtifactPreviewerSpec(spec: Record<string, unknown>, id: string
     'mimeTypes',
     spec['mimeTypes'],
     (value) => CANONICAL_MIME_PATTERN.test(value) && value !== '*/*',
-    '仅允许小写 type/subtype 精确值或 type/* 通配，不允许 */*、参数、glob 与大写',
+    'only allows small write type/subtype precise value or type/* through match, disallows */*, parameter,glob and large write',
   );
   assertArtifactMatchList(
     pluginId,
@@ -468,27 +468,27 @@ function validateArtifactPreviewerSpec(spec: Record<string, unknown>, id: string
     'extensions',
     spec['extensions'],
     (value) => ARTIFACT_EXTENSION_PATTERN.test(value),
-    '仅允许小写、前导点、可多段的后缀（如 .md、.tar.gz），不含路径段与通配符',
+    'only allows small write, before lead point, can many segment suffix (such as .md,.tar.gz), excludes path segment and wildcard',
   );
 }
 
-/** composer.completer：label/trigger/补全源形状与互斥（禁 client 视图轨）。 */
+/** composer.completer:label/trigger/completion source shape and mutual exclusion (forbid client view track). */
 function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   const label = spec['label'];
   if (typeof label !== 'string' || label.length === 0) {
-    throw new HelmError('invalid_ui_spec', `插件 ${pluginId} ui.composerCompleter 需要非空 label`, 400, {
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.composerCompleter need to non-empty label`, 400, {
       pluginId,
       id,
     });
   }
-  // '/' 保留给宿主命令与技能补全；宿主统一渲染，不接受 client 视图轨。
+  // '/' keep to host command and skill completion; host unify render, do not accept client view track.
   const forbidden = ['client'] as const;
   for (const field of forbidden) {
     if (spec[field] !== undefined) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.composerCompleter 不允许声明 ${field}（补全由宿主统一渲染，仅接受声明式数据源）`,
+        `plugin ${pluginId} ui.composerCompleter disallows declaration ${field}(completion by host unify render, only accept declaration style data source)`,
         400,
         { pluginId, id, field },
       );
@@ -498,7 +498,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
   if (trigger !== '@' && trigger !== '#' && trigger !== ':') {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.composerCompleter 的 trigger 仅允许 '@' | '#' | ':'（'/' 保留给命令与技能）`,
+      `plugin ${pluginId} ui.composerCompleter  trigger only allows '@' | '#' | ':'('/' keep to command and skill)`,
       400,
       { pluginId, id, trigger: String(trigger) },
     );
@@ -507,7 +507,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
   if (!isPlainObject(source)) {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.composerCompleter 需要 source（{ kind: 'action' | 'doc' | 'sessionDoc', ... }）`,
+      `plugin ${pluginId} ui.composerCompleter need to source({ kind: 'action' | 'doc' | 'sessionDoc', ... })`,
       400,
       { pluginId, id },
     );
@@ -518,7 +518,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
     if (sourceKeys.some((k) => k !== 'kind' && k !== 'actionId' && k !== 'actionPluginId')) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.composerCompleter 的 action 源仅允许 { kind, actionId, actionPluginId? }，不得混入 doc 源字段`,
+        `plugin ${pluginId} ui.composerCompleter  action source only allows { kind, actionId, actionPluginId? }, must not mix doc source field`,
         400,
         { pluginId, id },
       );
@@ -527,7 +527,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
     if (typeof actionId !== 'string' || actionId.length === 0 || actionId.includes('.')) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.composerCompleter 的 actionId 必须是非空且不含点号的动作 id（跨插件请用 actionPluginId）`,
+        `plugin ${pluginId} ui.composerCompleter  actionId must be non-empty and excludes point number action id(across plugin please use actionPluginId)`,
         400,
         { pluginId, id },
       );
@@ -536,7 +536,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
     if (actionPluginId !== undefined && (typeof actionPluginId !== 'string' || actionPluginId.length === 0)) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.composerCompleter 的 actionPluginId 必须是非空插件 id`,
+        `plugin ${pluginId} ui.composerCompleter  actionPluginId must be non-empty plugin id`,
         400,
         { pluginId, id },
       );
@@ -546,7 +546,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
     if (sourceKeys.some((k) => k !== 'kind' && k !== 'name' && k !== 'itemsField')) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.composerCompleter 的 ${kind} 源仅允许 { kind, name, itemsField }，不得混入 action 源字段`,
+        `plugin ${pluginId} ui.composerCompleter  ${kind} source only allows { kind, name, itemsField }, must not mix action source field`,
         400,
         { pluginId, id },
       );
@@ -555,7 +555,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
     if (typeof name !== 'string' || !COMPLETER_DOC_NAME_PATTERN.test(name)) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.composerCompleter 的 ${kind} 源 name 必须是本插件公开文档名（允许字符 A-Za-z0-9._-）`,
+        `plugin ${pluginId} ui.composerCompleter  ${kind} source name must be this plugin public document name (allows character A-Za-z0-9._-)`,
         400,
         { pluginId, id, name: String(name) },
       );
@@ -568,7 +568,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
     ) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.composerCompleter 的 itemsField 必须是安全顶层键（拒 __proto__/constructor/prototype 与非常规字符）`,
+        `plugin ${pluginId} ui.composerCompleter  itemsField must be security top-level key (refuse __proto__/constructor/prototype and very rule character)`,
         400,
         { pluginId, id, itemsField: String(itemsField) },
       );
@@ -576,14 +576,14 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
   } else {
     throw new HelmError(
       'invalid_ui_spec',
-      `插件 ${pluginId} ui.composerCompleter 的 source.kind 仅允许 'action' | 'doc' | 'sessionDoc'`,
+      `plugin ${pluginId} ui.composerCompleter  source.kind only allows 'action' | 'doc' | 'sessionDoc'`,
       400,
       { pluginId, id, kind: String(kind) },
     );
   }
 }
 
-/** workbench.panel：badge 仅允许声明式字段形状（doc 订阅 + 计数/色调字段名）。 */
+/** workbench.panel:badge only allows declaration style field shape (doc subscribe + counter/color tune field name). */
 function validateWorkbenchPanelSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   const badge = spec['badge'];
@@ -596,14 +596,14 @@ function validateWorkbenchPanelSpec(spec: Record<string, unknown>, id: string, c
     ) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.workbenchPanel 的 badge 仅允许 { doc, countField?, toneField?, byConversationField? }`,
+        `plugin ${pluginId} ui.workbenchPanel  badge only allows { doc, countField?, toneField?, byConversationField? }`,
         400,
       );
     }
     if (typeof badge.doc !== 'string' || badge.doc.length === 0) {
       throw new HelmError(
         'invalid_ui_spec',
-        `插件 ${pluginId} ui.workbenchPanel 的 badge.doc 必须是非空字符串（订阅的本插件 public doc 名）`,
+        `plugin ${pluginId} ui.workbenchPanel  badge.doc must be non-empty string (subscribe this plugin public doc name)`,
         400,
         { pluginId, id },
       );
@@ -613,7 +613,7 @@ function validateWorkbenchPanelSpec(spec: Record<string, unknown>, id: string, c
       if (value !== undefined && (typeof value !== 'string' || value.length === 0)) {
         throw new HelmError(
           'invalid_ui_spec',
-          `插件 ${pluginId} ui.workbenchPanel 的 badge.${field} 必须是非空字符串字段名`,
+          `plugin ${pluginId} ui.workbenchPanel  badge.${field} must be non-empty string field name`,
           400,
           { pluginId, id, field },
         );
@@ -623,8 +623,8 @@ function validateWorkbenchPanelSpec(spec: Record<string, unknown>, id: string, c
 }
 
 /**
- * 早期 surface 校验器（scope 与 client 引用通用校验之前派发）：
- * UI 动作三 surface、commandPalette、profile.runtime、plugin.slot。
+ * early surface validate (scope and client reference through use validate before dispatch):
+ * UI action three surface,commandPalette,profile.runtime,plugin.slot.
  */
 const EARLY_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
   [UI_ACTION_SURFACES['conversation:header']]: validateUiActionSpec,
@@ -636,9 +636,9 @@ const EARLY_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
 };
 
 /**
- * 晚期 surface 校验器（client 引用通用校验之后派发）：timeline.renderer、
- * markdown.codeBlock、tool.view、artifact.previewer、composer.completer、
- * workbench.panel。
+ * late phase surface validate (client reference through use validate after dispatch):timeline.renderer,
+ * markdown.codeBlock,tool.view,artifact.previewer,composer.completer,
+ * workbench.panel.
  */
 const LATE_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
   'timeline.renderer': validateTimelineRendererSpec,
@@ -649,7 +649,7 @@ const LATE_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
   'workbench.panel': validateWorkbenchPanelSpec,
 };
 
-/** 早期阶段派发：无对应校验器的 surface（sidebar/screen 等）直接通过。 */
+/** early phase dispatch: without for should validate surface(sidebar/screen etc.) directly via. */
 export function validateUiSpecEarly(
   surface: string,
   spec: Record<string, unknown>,
@@ -659,7 +659,7 @@ export function validateUiSpecEarly(
   EARLY_VALIDATORS[surface]?.(spec, id, ctx);
 }
 
-/** 晚期阶段派发：无对应校验器的 surface 直接通过。 */
+/** late phase phase dispatch: without for should validate surface directly via. */
 export function validateUiSpecLate(
   surface: string,
   spec: Record<string, unknown>,

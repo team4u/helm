@@ -99,7 +99,7 @@
 
 /* 技能详情抽屉：紧凑文件阅读器 */
 /* 抽屉主体外层不滚动，唯一滚动容器为阅读区 .skill-reader-scroll，
-   避免外层 primary-drawer-body 与内层阅读区双滚动条打架 */
+   Avoid double scrollbars between the outer primary-drawer-body and the inner reading area */
 .skill-drawer-content .primary-drawer-body {
   overflow: hidden;
   display: flex;
@@ -220,7 +220,7 @@
 }
 
 /* 富文本阅读区：随阅读区滚动流自然生长，自身不滚动；
-   frontmatter 转换的元数据表格与正文同处此内容流 */
+   The frontmatter metadata table and the body share this content flow */
 .skill-reader-doc {
   padding: 14px 16px 18px;
   border: 1px solid var(--border);

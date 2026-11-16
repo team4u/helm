@@ -6,7 +6,7 @@
  * 覆盖：
  * - readSseChunkWithDeadline 单元语义：Deadline 内 chunk 到达即返回且每次到达
  *   重置下一轮 Deadline（不误杀活跃连接）；持续无字节判 idle（卡死检测）；
- * - Provider 级闭环：挂起流 -> 空闲超时中止 -> 既有重连路径 -> 重连 fetch 拿
+ * - Provider 级闭环：挂起流 -> idle timeout中止 -> 既有重连路径 -> 重连 fetch 拿
  *   401 必须登出（清 token、authenticated=false，不静默降级、不再无限重连）。
  */
 import assert from 'node:assert/strict'
@@ -92,7 +92,7 @@ test('signal 取消立即 reject 并清理长空闲定时器（不挂住事件�
 })
 
 // ---------------------------------------------------------------------------
-// Provider 级闭环：挂起流空闲超时 -> 重连 -> 401 登出
+// Provider 级闭环：挂起流idle timeout -> 重连 -> 401 登出
 // ---------------------------------------------------------------------------
 
 interface Observed {
@@ -114,7 +114,7 @@ function hangingEventStream(): ReadableStream<Uint8Array> {
   })
 }
 
-test('挂起流空闲超时中止并重连，重连 401 必须登出且不再无限重连', { timeout: 60_000 }, async () => {
+test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无限重连', { timeout: 60_000 }, async () => {
   const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
   const { useHelmStore } = await import('../src/lib/store-context.js')
   const originalTimings = { ...sseClientTimings }
@@ -170,8 +170,8 @@ test('挂起流空闲超时中止并重连，重连 401 必须登出且不再无
     })
     // 第一条连接：snapshot 到达、进入挂起态（无任何后续字节）。
     await waitForObs(() => history.some((o) => o.sseConnected === true && o.eventsCalls === 1))
-    // 250ms 空闲超时：判卡死、中止当前连接并显式提示（进入既有重连路径）。
-    await waitForObs(() => history.some((o) => (o.connectionError ?? '').includes('空闲超时')))
+    // 250ms idle timeout：判卡死、中止当前连接并显式提示（进入既有重连路径）。
+    await waitForObs(() => history.some((o) => (o.connectionError ?? '').includes('idle timeout')))
     // 重连 fetch 拿 401：必须登出（authenticated=false、token 清除）。
     await waitForObs((o) => o.authenticated === false && o.eventsCalls >= 2)
     assert.equal(eventsCalls, 2, '恰好两次 /api/events：挂起流一次 + 401 一次')

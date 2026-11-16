@@ -1,8 +1,8 @@
 /**
- * 按 execId 分发节点侧流式输出事件（WS+birpc 回调的另一端）。
+ * by execId dispatch node side streaming output event (WS+birpc call back another end).
  *
- * 每个 RemoteExecutionEnv.exec 在发起 RPC 前注册 handler；节点回调
- * onEnvExecOutput 时按 execId 命中分发，exec 结束后 unsubscribe。
+ * each RemoteExecutionEnv.exec in start RPC before register handler; node call back
+ * onEnvExecOutput when by execId hit dispatch,exec after end unsubscribe.
  */
 
 import type { EnvExecOutputEvent } from '@helm/protocol'
@@ -10,7 +10,7 @@ import type { EnvExecOutputEvent } from '@helm/protocol'
 export class ExecOutputHub {
   #handlers = new Map<string, (event: EnvExecOutputEvent) => void>()
 
-  /** 节点流式回调入口（挂到 birpc 连接的 onEnvExecOutput 上）。 */
+  /** node streaming call back entry (hang to birpc connect onEnvExecOutput on). */
   readonly onEnvExecOutput = (event: EnvExecOutputEvent): void => {
     if (event === null || typeof event !== 'object') return
     const handler = this.#handlers.get(event.execId)
@@ -18,7 +18,7 @@ export class ExecOutputHub {
       try {
         handler(event)
       } catch {
-        // 单个 handler 故障不影响其他分发。
+        // single handler fault does not affect other dispatch.
       }
     }
   }

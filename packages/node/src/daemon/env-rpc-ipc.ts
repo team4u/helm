@@ -1,20 +1,20 @@
 /**
- * 节点本机 Herdr IPC 桥（ipcCall / ipcSubscribe）：以 node:net 直连节点
- * 本机的 Unix Socket / Windows Named Pipe，供 Hub 上可选的 builtin:herdr
- * 等插件跨节点访问当地 Herdr——一条连接一个请求（call）或一条事件流
- * （subscribe）。
- * - call：写一行、读一行完整 UTF-8 JSON 后立即关 socket；带 callId 登记
- *   在途 socket，ipcAbortCall 可立即中断阻塞等待（如 agent.prompt --wait）；
- *   超时由调用方或显式服务器选项决定，取消与连接代关闭立即释放 socket；
- *   draining 时拒新（node_draining），已在途的计入升级排空口径（不被旧宿主
- *   退出硬切断）；取消/断连仍在途天折为 aborted；
- * - subscribe：首行 ACK（15s 超时）须为结构化的 subscription_started，
- *   之后每行经 onIpcEvent 转发；断开经 onIpcClosed 通知；不静默吞错。
- *   长驻语义：draining 时拒新（node_draining），既有的由 dispose 统一优雅
- *   关闭并通知。
+ * node local machine Herdr IPC bridge (ipcCall / ipcSubscribe): with node:net direct connect node
+ * local machine Unix Socket / Windows Named Pipe, supply Hub on optional builtin:herdr
+ * etc. plugin across node access when ground Herdr- - a connect a request (call) or a event stream
+ * (subscribe).
+ * - call: write one row, read one row complete UTF-8 JSON after immediately closure socket; carries callId register
+ *   in-flight socket,ipcAbortCall can immediately interrupt block wait for (such as agent.prompt --wait);
+ *   timeout by caller or explicit server option decide, cancel and connect proxy close immediately release socket;
+ *   draining when refuse new (node_draining), already in-flight count upgrade arrange empty opening path (do not by old host
+ *   exit hard cut assert); cancel/assert connect still in-flight day fold is aborted;
+ * - subscribe: first row ACK(15s timeout) must is structure subscription_started,
+ *   after each row via onIpcEvent forwarding; disconnect via onIpcClosed notify; not silently swallow wrong.
+ *   long resident semantics:draining when refuse new (node_draining), since has by dispose unify graceful
+ *   close and notify.
  *
- * 本模块同时承载 Herdr IPC 端点解析纯函数（resolveHerdrIpcEndpoint）；
- * 受理守卫（draining/disposed 拒新与排空追踪接线）由 env-rpc-server 组装。
+ * this module also bear load Herdr IPC end point parse pure function (resolveHerdrIpcEndpoint);
+ * subject to guard (draining/disposed refuse new and arrange empty append trace connect line) by env-rpc-server group install.
  */
 
 import net from 'node:net';
@@ -29,16 +29,16 @@ import type {
 } from '@helm/protocol';
 import { invalidInput, isRecord, rpcFail, type RpcErrorCode } from './env-rpc-shared.js';
 
-/** 单帧（单行）字节上限：与内核 Herdr 传输层一致，超限显式报错不静默截断。 */
+/** single frame (single row) byte cap: and kernel Herdr transfer layer consistent, over limit explicit errors not silently truncate. */
 export const MAX_IPC_FRAME_BYTES = 32 * 1024 * 1024;
-/** 订阅握手 ACK 超时。 */
+/** subscribe grasp manually ACK timeout. */
 const IPC_SUBSCRIBE_ACK_TIMEOUT_MS = 15_000;
-/** Windows Named Pipe 命名空间前缀（NPFS 本地主机）。 */
+/** Windows Named Pipe naming empty between prefix (NPFS local host). */
 const WIN_PIPE_PREFIX = '\\\\.\\pipe\\';
 
 /**
- * session 名白名单：与 herdr 侧 validate_name 同向——非空、≤64 字节、
- * 非 `.`/`..`、仅 ASCII 字母数字与 `.` `_` `-`（首字符无额外限制）。
+ * session name blank name single: and herdr side validate_name same to - - non-empty,≤64 byte,
+ * non- `.`/`..`, only ASCII character parent number and `.` `_` `-`(first token symbol without extra restrict).
  */
 const isValidHerdrSession = (session: string): boolean => {
   if (session.length === 0 || session.length > 64) return false;
@@ -51,15 +51,15 @@ const isValidHerdrSession = (session: string): boolean => {
   return true;
 };
 
-/** 按字节查找换行符切分完整行；携带跨 chunk 残留缓冲。拒绝 NUL 字节与超限帧。 */
+/** by byte find newline symbol cut complete row; carry across chunk leftover buffer. reject NUL byte and over limit frame. */
 class LineAssembler {
   private buffer: Buffer = Buffer.alloc(0);
 
   constructor(private readonly maxFrameBytes: number = MAX_IPC_FRAME_BYTES) {}
 
-  /** 推入一个 chunk，返回其中完整行（不含换行符）；无完整行返回空数组。
-   * 逐行长度检查：带换行的完整行与无换行残留同样受单帧上限约束，
-   * 否则对端一帧超长行只要带换行即绕过限制整行进内存。 */
+  /** push a chunk, return among them complete row (excludes newline symbol); without complete row return empty array.
+   * one by one row length check: carries newline complete row and without newline leftover same subject to single frame cap constraint,
+   * otherwise for end one frame over long row as long as carries newline i.e. bypass restrict whole row enter memory. */
   push(chunk: Buffer): string[] {
     this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
     const lines: string[] = [];
@@ -68,7 +68,7 @@ class LineAssembler {
       const nl = this.buffer.indexOf(0x0a, searchFrom);
       if (nl === -1) break;
       let end = nl;
-      if (end > searchFrom && this.buffer[end - 1] === 0x0d) end -= 1; // 剥离 CR
+      if (end > searchFrom && this.buffer[end - 1] === 0x0d) end -= 1; // strip CR
       if (end - searchFrom > this.maxFrameBytes) {
         throw new Error(`IPC frame exceeds ${this.maxFrameBytes} bytes`);
       }
@@ -85,56 +85,56 @@ class LineAssembler {
     return lines;
   }
 
-  /** 当前缓冲字节量（诊断用）。 */
+  /** when before buffer byte amount (diagnose use). */
   get pendingBytes(): number {
     return this.buffer.length;
   }
 }
 
-/** 发送行校验：非空字符串且不含任何换行/NUL（防多帧注入与帧污染）。 */
+/** send row validate: non-empty string and excludes any newline/NUL(guard against many frame inject and frame pollute). */
 const assertSingleLine = (line: unknown, what: string): string => {
   if (typeof line !== 'string' || line.length === 0) {
     throw Object.assign(new Error(`${what} must be a non-empty string`), { code: 'invalid' });
   }
   if (line.includes('\n') || line.includes('\r') || line.includes('\u0000')) {
     throw Object.assign(
-      new Error(`${what} must be a single line without CR/LF/NUL (got ${JSON.stringify(line.slice(0, 40))}…)`),
+      new Error(`${what} must be a single line without CR/LF/NUL (got ${JSON.stringify(line.slice(0, 40))}...)`),
       { code: 'invalid' },
     );
   }
   return line;
 };
 
-/** 端点解析的可注入上下文（纯函数化：测试注入 win32 平台，不猜行为）。 */
+/** end point parse can inject context (pure function: test inject win32 platform, do not guess behavior). */
 export interface IpcEndpointContext {
-  /** 目标平台（缺省 process.platform）。 */
+  /** target platform (default process.platform). */
   platform?: string;
-  /** 环境变量读取（缺省读 process.env）。 */
+  /** environment variable read (default read process.env). */
   getEnv?(name: string): string | undefined;
-  /** 主目录（缺省 os.homedir()）。 */
+  /** main directory (default os.homedir()). */
   homeDir?: string;
-  /** 临时目录（缺省 os.tmpdir()）。 */
+  /** temp directory (default os.tmpdir()). */
   tempDir?: string;
 }
 
 /**
- * 解析 Herdr IPC 端点（纯函数）：显式 endpoint > HERDR_SOCKET_PATH >
- * 按配置目录与 session 推导。session 名非法即报错——它将成为路径段。
+ * parse Herdr IPC end point (pure function): explicit endpoint > HERDR_SOCKET_PATH >
+ * by config directory and session push lead.session name illegal i.e. errors - - it into is path segment.
  *
- * Windows 映射依据 interprocess 2.4.2 真实源码（与 herdr 监听端一致）：
+ * Windows mapping based on interprocess 2.4.2 real source code (and herdr listen end consistent):
  * - `src/os/windows/local_socket/name_type.rs`
- *   `map_generic_namespaced_osstr`：GenericNamespaced 名仅经
- *   `convert_and_encode_path(name, None)` 处理；
- * - `src/os/windows/path_conversion.rs` `pathcvt`：拼 `\\` + `.` + `\pipe\`
- *   + 原始名字字符串——**不替换冒号/斜杠**。herdr 传入的名字是其配置
- *   目录下的 `herdr.sock` 完整路径字符串（磁盘上该路径仅是内容为
- *   `pid:timestamp` 的标记文件，不是可连接端点）。
- * 因此本函数在 win32 默认推导时返回 `\\.\pipe\` + 配置目录路径字符串
- * （含 `C:` 盘符冒号原样保留）；显式完整 pipe endpoint 原样返回。
+ *   `map_generic_namespaced_osstr`:GenericNamespaced name only via
+ *   `convert_and_encode_path(name, None)` handle;
+ * - `src/os/windows/path_conversion.rs` `pathcvt`: piece together `\\` + `.` + `\pipe\`
+ *   + original name string - -**do not replace smoke number/slash**.herdr pass name is its config
+ *   directory under `herdr.sock` complete path string (disk on the path only is content is
+ *   `pid:timestamp` mark record file, is not can connect end point).
+ * therefore this function in win32 by default push lead when return `\\.\pipe\` + config directory path string
+ * (contains `C:` symbol smoke number original keep); explicit complete pipe endpoint original return.
  *
- * 配置目录与 herdr `config::io::config_dir` 全平台同向：
- * XDG_CONFIG_HOME 优先；win32 再退 APPDATA > USERPROFILE\AppData\Roaming
- * > HOME/.config > temp；unix 退 HOME/.config > temp。
+ * config directory and herdr `config::io::config_dir` all platform same to:
+ * XDG_CONFIG_HOME takes precedence;win32 again retreat APPDATA > USERPROFILE\AppData\Roaming
+ * > HOME/.config > temp;unix retreat HOME/.config > temp.
  */
 export function resolveHerdrIpcEndpoint(
   input: { endpoint?: string; session?: string },
@@ -162,8 +162,8 @@ export function resolveHerdrIpcEndpoint(
   const xdg = getEnv('XDG_CONFIG_HOME');
 
   if (platform === 'win32') {
-    // 真实 Windows 上路径分隔符为 '\'，与 herdr PathBuf 展示一致；
-    // 用显式 '\\' 连接（不依赖运行平台的 path.sep），纯函数可跨平台断言。
+    // real Windows on path isolate symbol is '\', and herdr PathBuf render consistent;
+    // use explicit '\\' connect (independent of run platform path.sep), pure function can across platform assertion.
     if (xdg !== undefined && xdg !== '') return WIN_PIPE_PREFIX + [xdg, ...relative].join('\\');
     const appdata = getEnv('APPDATA');
     if (appdata !== undefined && appdata !== '') return WIN_PIPE_PREFIX + [appdata, ...relative].join('\\');
@@ -181,41 +181,41 @@ export function resolveHerdrIpcEndpoint(
   return path.join(base, ...relative);
 }
 
-/** IPC 桥依赖（宿主回调与连接生命周期状态查询；机制与策略分离）。 */
+/** IPC bridge dependency (host call back and connect lifecycle state query; separation of mechanism and policy). */
 export interface IpcBridgeOptions {
-  /** IPC 订阅事件回调（转发回 Hub 的 onIpcEvent）。 */
+  /** IPC subscribe event call back (forwarding back Hub  onIpcEvent). */
   onIpcEvent?: (event: NodeIpcEvent) => void;
-  /** IPC 订阅关闭/出错回调（转发回 Hub 的 onIpcClosed）。 */
+  /** IPC subscribe close/fails call back (forwarding back Hub  onIpcClosed). */
   onIpcClosed?: (event: NodeIpcClosedEvent) => void;
   /**
-   * 可选 IPC 等待预算（宿主已归一化）；未配置时由调用方的 timeoutMs、
-   * 取消信号和连接代控制。Herdr 长任务等待不能被守护进程偷偷施加一个
-   * 额外的固定死线。
+   * optional IPC wait for pre- compute (host already archive one); not config when by caller timeoutMs,
+   * cancel signal and connect proxy control.Herdr long task wait for cannot by daemon stealthily stealthily apply add a
+   * extra fixed die line.
    */
   ipcCallIdleTimeoutMs?: number;
-  /** 可选单帧（单行）字节上限（默认 MAX_IPC_FRAME_BYTES = 32 MiB；仅测试注入小阈值）。 */
+  /** optional single frame (single row) byte cap (by default MAX_IPC_FRAME_BYTES = 32 MiB; only test inject small threshold). */
   maxIpcFrameBytes?: number;
-  /** 宿主 disposed 状态查询：dispose 后订阅事件帧转发立即停摆。 */
+  /** host disposed state query:dispose after subscribe event frame forwarding immediately stop swing. */
   isDisposed(): boolean;
 }
 
-/** IPC 桥句柄：RPC 实现面 + 排空追踪与 dispose 销毁钩子。 */
+/** IPC bridge handle:RPC implement side + arrange empty append trace and dispose destroy hook. */
 export interface IpcBridge {
   ipcCall(input: NodeIpcCallInput): Promise<RpcResult<string>>;
   ipcAbortCall(callId: string): Promise<void>;
   ipcSubscribe(input: NodeIpcSubscribeInput): Promise<RpcResult<null>>;
   ipcUnsubscribe(subscribeId: string): Promise<void>;
-  /** 在途一次性 ipcCall 的受理追踪（升级排空口径；guard 受理同步段调用）。 */
+  /** in-flight once ipcCall subject to append trace (upgrade arrange empty opening path;guard subject to sync segment invoke). */
   trackIpc<T>(promise: Promise<T>): Promise<T>;
-  /** dispose 钩子：销毁全部 IPC socket 并清空在途登记（幂等）。 */
+  /** dispose hook: destroy all IPC socket and empty in-flight register (idempotent). */
   destroySockets(): void;
-  /** 在途 ipcCall 数量（排空内省；含无 callId 的在途调用，受理即计数）。 */
+  /** in-flight ipcCall amount (arrange empty inside omit; contains without callId in-flight invoke, subject to i.e. counter). */
   getActiveCallCount(): number;
-  /** 活跃 ipcSubscribe 数量（内省/测试；长驻订阅不计入排空等待）。 */
+  /** leap ipcSubscribe amount (inside omit/test; long resident subscribe do not count arrange empty wait for). */
   getActiveSubscriptionCount(): number;
 }
 
-/** 创建 Herdr IPC 桥：一个连接代一个实例，状态互不共享。 */
+/** create Herdr IPC bridge: a connect proxy a instance, state mutual do not sharing. */
 export function createIpcBridge(options: IpcBridgeOptions): IpcBridge {
   const { onIpcEvent, onIpcClosed, isDisposed } = options;
   const ipcIdleTimeoutMs = options.ipcCallIdleTimeoutMs;
@@ -227,9 +227,9 @@ export function createIpcBridge(options: IpcBridgeOptions): IpcBridge {
   const resolveIpcEndpoint = (input: { endpoint?: string; session?: string }): string =>
     resolveHerdrIpcEndpoint(input);
 
-  // 在途一次性 ipcCall 的 settle promise：升级排空口径必须包含它们——
-  // 否则旧宿主退出时 dispose 硬销毁 socket，Hub 侧长等待（如 herdr --wait）
-  // 被拦腰切断且无重试约定。长驻 ipcSubscribe 不进此集合（见 guard 分支注释）。
+  // in-flight once ipcCall  settle promise: upgrade arrange empty opening path must contains they - -
+  // otherwise old host on exit dispose hard destroy socket,Hub side long wait for (such as herdr --wait)
+  // by midway cut assert and without retry convention. long resident ipcSubscribe does not enter this set (see guard branch note release).
   const ipcWaiters = new Set<Promise<unknown>>();
   const trackIpc = <T>(promise: Promise<T>): Promise<T> => {
     ipcWaiters.add(promise);
@@ -293,7 +293,7 @@ export function createIpcBridge(options: IpcBridgeOptions): IpcBridge {
         }
         const first = lines[0];
         if (first !== undefined) {
-          // 首行含 NUL：非合法 NDJSON 帧，拒绝（不静默截断充当成功）。
+          // first row contains NUL: non- legal NDJSON frame, reject (not silently truncate fill when succeeded).
           if (first.includes('\u0000')) {
             finish({ ok: false, error: { code: 'unknown', message: 'IPC frame contains NUL byte' } });
             return;
@@ -338,7 +338,7 @@ export function createIpcBridge(options: IpcBridgeOptions): IpcBridge {
       allIpcSockets.add(socket);
       activeIpcSubscriptions.set(input.subscribeId, socket);
       socket.once('close', () => allIpcSockets.delete(socket));
-      /** ack 前的失败：销毁 socket 并以错误信封 resolve（不注册订阅）。 */
+      /** ack before failed: destroy socket and with error message seal resolve(do not register subscribe). */
       const fail = (code: RpcErrorCode, message: string): void => {
         if (settled) return;
         settled = true;
@@ -352,14 +352,14 @@ export function createIpcBridge(options: IpcBridgeOptions): IpcBridge {
         activeIpcSubscriptions.delete(input.subscribeId);
         socket.destroy();
         try { onIpcClosed?.({ subscribeId: input.subscribeId, ...(error ? { error } : {}) }); }
-        catch { console.error('[helm-node] IPC 关闭通知回调失败'); }
+        catch { console.error('[helm-node] IPC close notify call back failed'); }
       };
       const timer: NodeJS.Timeout = setTimeout(() => {
         if (acked) return;
         fail('timeout', `IPC subscription ack timed out after ${IPC_SUBSCRIBE_ACK_TIMEOUT_MS}ms`);
       }, IPC_SUBSCRIBE_ACK_TIMEOUT_MS);
 
-      /** ACK 判定：结构化 JSON——result.type === 'subscription_started'。 */
+      /** ACK decide: structure JSON- -result.type === 'subscription_started'. */
       const isSubscriptionStartedAck = (frame: string): boolean => {
         try {
           const envelope = JSON.parse(frame) as unknown;
@@ -418,7 +418,7 @@ export function createIpcBridge(options: IpcBridgeOptions): IpcBridge {
         for (const frame of lines) {
           if (acked) {
             if (isDisposed() || activeIpcSubscriptions.get(input.subscribeId) !== socket) return;
-            // 事件帧含 NUL：拒绝该帧并关闭流（不静默截断）。
+            // event frame contains NUL: reject the frame and close stream (not silently truncate).
             if (frame.includes('\u0000')) { closeSubscription('IPC event frame contains NUL byte'); return; }
             try { onIpcEvent?.({ subscribeId: input.subscribeId, line: frame }); }
             catch { closeSubscription('IPC event callback failed'); return; }
@@ -443,7 +443,7 @@ export function createIpcBridge(options: IpcBridgeOptions): IpcBridge {
     const socket = activeIpcSubscriptions.get(subscribeId);
     if (socket === undefined) return;
     activeIpcSubscriptions.delete(subscribeId);
-    socket.destroy(); // 主动关闭不触发 onIpcClosed 异常通知
+    socket.destroy(); // actively close does not trigger onIpcClosed exception notify
   };
 
   const destroySockets = (): void => {

@@ -164,7 +164,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     // 非法 profileId（目录注入）显式拒绝
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'get', { profileId: '../etc' }),
-      (err: unknown) => err instanceof Error && /非法 profile id/.test(err.message),
+      (err: unknown) => err instanceof Error && /only allows a-z 0-9 and hyphen/.test(err.message),
     )
   })
 
@@ -398,7 +398,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     const sections = (result as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
     const memory = sections.find((s) => s.id === 'memory.content')
     assert.ok(memory !== undefined, '超限仍应注入 memory.content section')
-    assert.ok(memory.text.includes('超过'), '截断应附显式说明')
+    assert.ok(memory.text.includes('helm note: MEMORY.md exceeds'), '截断应附显式说明')
     assert.ok(memory.text.length <= MAX_MEMORY_CHARS + 500, '注入内容应截断到上限附近（含说明）')
   })
 

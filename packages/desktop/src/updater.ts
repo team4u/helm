@@ -1,26 +1,26 @@
 /**
- * npm payload 更新器（真实实现）。
+ * npm payload update (real implement).
  *
- * 生命周期（三段式：安装与激活分离，启动验收归属桌面壳，updater 不感知 Hub）：
- * 1. stage(target)：registry 元数据强校验（严格 SemVer）→ 下载 tgz（sha512 流式校验）→
- *    staging 解包（payload-tar.ts containment 强校验）→ manifest 契约校验（含与 registry
- *    meta 的 name/version 一致性，不仅 format）→ `start.mjs check` 验收（exit 3 依赖缺失时
- *    经可注入 NpmInstaller 安装生产依赖后复检）→ 原子晋升到
- *    releases/<name>/<version>/<uuid> 不可变目录（绝不重命名/删除既有版本目录）→
- *    原子写 pending.json；current.json 不动；
- * 2. 桌面壳以 pending 入口启动新版本：健康则 activate(info)——previous.json 保存旧
- *    baseline、current.json 原子切换、清除同一 pending；启动失败则 reject(info, error)——
- *    记入 blocked.json、current 保持不动、清除同一 pending、不修改任何 release 目录；
- * 3. resolveCurrent / resolvePending / resolvePrevious 读取时严格复验（状态文件与 release
- *    manifest 的 name/version 一致、entryPath 与 manifest entries.hub 一致、containment、
- *    拒绝 Windows 绝对/盘符相对/反斜杠路径形态），损坏显式报错，绝不静默当空态。
+ * lifecycle (three segment style: install and activate separate, start verify ownership desktop shell,updater unaware of Hub):
+ * 1. stage(target):registry metadata strong validate (strictly SemVer)→ download tgz(sha512 streaming validate)→
+ *    staging unwrap (payload-tar.ts containment strong validate)→ manifest contract validate (contains and registry
+ *    meta  name/version consistency, do not only format)→ `start.mjs check` verify (exit 3 dependency missing when
+ *    via can inject NpmInstaller install produce dependency after re- inspect)→ atomic promote rise to
+ *    releases/<name>/<version>/<uuid> cannot change directory (never heavy naming/delete since has version directory)→
+ *    atomic write pending.json;current.json do not motion;
+ * 2. desktop shell with pending entry start new version: health then activate(info)- -previous.json save old
+ *    baseline,current.json atomic switch, clear the same pending; failed to start then reject(info, error)- -
+ *    record blocked.json,current keep do not motion, clear the same pending, do not modify any release directory;
+ * 3. resolveCurrent / resolvePending / resolvePrevious read when strictly re- verify (state file and release
+ *    manifest  name/version consistent,entryPath and manifest entries.hub consistent,containment,
+ *    reject Windows absolute/symbol each other for/backslash path form), corrupt explicit errors, never static default when empty state.
  *
- * check() 更新判定：跟踪 latest 时仅「更大 SemVer」视为可更新（registry latest 回退不误报）；
- * 显式锁定版本（HELM_PAYLOAD_VERSION / pinnedVersion）按用户意图比对相等性。
+ * check() update decide: trace latest when only more large SemVertreated as can update (registry latest fall back do not mistakenly report);
+ * explicit lock version (HELM_PAYLOAD_VERSION / pinnedVersion) by user intent than for each other etc..
  *
- * 生命周期边界：updater 只管理制品——不重启 Hub、不感知会话、不调用 Hub API。并发安装
- * 由 fail-closed 文件锁串行（payload-lock.ts）：锁被占用仅有界等待，绝不自动接管。
- * 安装失败按「制品缺陷」类错误码记录 blocked.json，当前版本绝不破坏。
+ * lifecycle boundary:updater only manage system product - - do not restart Hub, unaware of conversation, do not invoke Hub API. concurrency install
+ * by fail-closed file lock serial (payload-lock.ts): lock by occupy only has boundary wait for, never automatically take over.
+ * failed to install by system product defect class error code record blocked.json, when before version never break.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -35,16 +35,16 @@ import { PayloadFileLock } from './payload-lock.js';
 import { readJsonState, writeJsonAtomic } from './payload-json.js';
 import { HostNpmInstaller, type NpmInstaller } from './npm-installer.js';
 
-// ---- 公共契约 ----
+// ---- public contract ----
 
 export interface PayloadInfo {
   readonly name: string;
   readonly version: string;
-  /** release 目录（绝对路径，releases/<name>/<version>/<uuid> 不可变目录）；stage 后存在。 */
+  /** release directory (absolute path,releases/<name>/<version>/<uuid> cannot change directory);stage after store in. */
   readonly releaseDir?: string;
-  /** Hub 入口（绝对路径，来自 payload manifest entries.hub；非 start.mjs）。 */
+  /** Hub entry (absolute path, from payload manifest entries.hub; non- start.mjs). */
   readonly entryPath?: string;
-  /** spawn 附加参数（契约上恒空：hub 入口直接启动）。 */
+  /** spawn additional parameter (contract on constant empty:hub entry directly start). */
   readonly entryArgs?: readonly string[];
 }
 
@@ -53,40 +53,40 @@ export type PayloadUpdateReason = 'updater_not_configured' | 'up_to_date' | 'lat
 export interface PayloadUpdateStatus {
   updateAvailable: boolean;
   current: PayloadInfo | null;
-  /** registry 侧最新（或锁定）版本；entryPath 安装后才已知。 */
+  /** registry side most new (or lock) version;entryPath install after only then known. */
   latest: PayloadInfo | null;
-  /** updateAvailable=false 时的原因；true 时省略（current 为 null 即首次安装）。 */
+  /** updateAvailable=false when reason;true when omit (current is null i.e. first time install). */
   reason?: PayloadUpdateReason;
-  /** reason=latest_blocked 时的失败摘要。 */
+  /** reason=latest_blocked when failed summary. */
   blocked?: { code: string; message: string; at: string };
 }
 
 export interface PayloadInstallTarget {
   name: string;
-  /** 语义版本号，或 'latest'（跟踪 dist-tags）。 */
+  /** semantics version number, or 'latest'(trace dist-tags). */
   version: string;
 }
 
 export interface PayloadUpdater {
   readonly id: string;
   check(): Promise<PayloadUpdateStatus>;
-  /** 下载并验收目标版本，写入 pending.json 等待激活决议；不影响 current。可重复执行。 */
+  /** download and verify target version, write pending.json wait for activate decide protocol; does not affect current. can repeat execution. */
   stage(target: PayloadInstallTarget): Promise<PayloadInfo>;
-  /** 激活已 stage 的制品：previous.json 保存旧 baseline、current.json 原子切换、清除同一 pending。 */
+  /** activate already stage system product:previous.json save old baseline,current.json atomic switch, clear the same pending. */
   activate(info: PayloadInfo): Promise<void>;
-  /** 拒绝已 stage 的制品：记入 blocked.json、保持 current、清除同一 pending、不动任何 release 目录。 */
+  /** reject already stage system product: record blocked.json, keep current, clear the same pending, do not motion any release directory. */
   reject(info: PayloadInfo, error: Error): Promise<void>;
-  /** 当前生效制品；无则 null；状态不满足契约时显式抛错。 */
+  /** when before takes effect system product; without then null; state do not satisfy contract when explicit throws. */
   resolveCurrent(): PayloadInfo | null;
-  /** 待决议的已 stage 制品（pending.json）；无则 null；损坏显式抛错。 */
+  /** await decide protocol already stage system product (pending.json); without then null; corrupt explicit throws. */
   resolvePending(): PayloadInfo | null;
-  /** 最近一次激活前的 baseline（previous.json）；无则 null；损坏显式抛错。 */
+  /** most near once activate before baseline(previous.json); without then null; corrupt explicit throws. */
   resolvePrevious(): PayloadInfo | null;
 }
 
-// ---- 状态文件形状 ----
+// ---- state file shape ----
 
-/** current.json / pending.json / previous.json 共用形状（at = 写入时刻）。 */
+/** current.json / pending.json / previous.json shared use shape (at = write moment). */
 interface PayloadState {
   formatVersion: 1;
   name: string;
@@ -113,7 +113,7 @@ interface BlockedState {
 
 const BLOCKED_MAX_ENTRIES = 100;
 
-/** 「制品缺陷」类错误码：重试无意义，记入 blocked.json 阻断该版本。 */
+/** system product defect class error code: retry without intent meaning, record blocked.json block assert the version. */
 const ARTIFACT_FAULT_CODES = new Set([
   'payload_manifest_invalid',
   'payload_check_failed',
@@ -130,11 +130,11 @@ const ARTIFACT_FAULT_CODES = new Set([
   'tar_link_escape',
 ]);
 
-// ---- 严格 SemVer：唯一实现在 runners.ts（desktop 不依赖工作区包，与 @helm/protocol/semver 同契约） ----
+// ---- strictly SemVer: unique implement in runners.ts(desktop independent of work zone package, and @helm/protocol/semver same contract) ----
 
 /**
- * 排序或「无法比较」语义（保留既有导出契约：消费方 bootstrap.ts 依赖 null 判断）。
- * 内部需要显式拒绝语义的路径（如 isNewerTarget）直接用 compareStrictSemver（非法抛错）。
+ * sort or cannot compare semantics (keep since has export contract: consumer bootstrap.ts dependency null decide).
+ * internal need to explicit reject semantics path (such as isNewerTarget) directly use compareStrictSemver(illegal throws).
  */
 export function compareSemVer(a: string, b: string): number | null {
   try {
@@ -158,19 +158,19 @@ interface CheckRunResult {
   stderrTail: string[];
 }
 
-// ---- 真实更新器 ----
+// ---- real update ----
 
 export interface NpmPayloadUpdaterOptions {
-  /** npm 包名（必填，可含 scope；不硬编码任何 @helm 名称）。 */
+  /** npm package name (required, can contains scope; do not hard encode any @helm name). */
   packageName: string;
-  /** registry base URL（缺省公开 npm registry）。 */
+  /** registry base URL(default public npm registry). */
   registry?: string;
-  /** 锁定精确版本；缺省跟踪 dist-tags.latest。 */
+  /** lock precise version; default trace dist-tags.latest. */
   pinnedVersion?: string;
-  /** payload 管理根目录（<dataDir>/payload）。 */
+  /** payload manage directory (<dataDir>/payload). */
   payloadRoot: string;
   fetchImpl?: typeof fetch;
-  /** 依赖安装器；不提供则依赖缺失时显式报错（不静默跳过）。 */
+  /** dependency install; do not provide then dependency missing when explicit errors (not silently skip). */
   npmInstaller?: NpmInstaller;
   env?: NodeJS.ProcessEnv;
   execPath?: string;
@@ -179,7 +179,7 @@ export interface NpmPayloadUpdaterOptions {
   metadataTimeoutMs?: number;
   downloadTimeoutMs?: number;
   checkTimeoutMs?: number;
-  /** 安装互斥锁的有界等待时长（fail-closed：占用即等待/超时，绝不接管）。 */
+  /** install mutual exclusion lock has boundary while waiting long (fail-closed: occupy i.e. wait for/timeout, never take over). */
   lockTimeoutMs?: number;
   maxTarballBytes?: number;
   maxExtractedBytes?: number;
@@ -253,23 +253,23 @@ export class NpmPayloadUpdater implements PayloadUpdater {
   }
 
   /**
-   * 目标版本相对 current 是否值得更新：
-   * - 跟踪 latest：仅严格更大 SemVer 才算更新（registry latest 回退/持平不误报）；
-   * - 显式锁定版本（pinnedVersion）：用户明确意图，版本不同即算更新（允许降级换装）。
+   * target version each other for current is otherwise value obtain update:
+   * - trace latest: only strictly more large SemVer only then compute update (registry latest fall back/hold flat do not mistakenly report);
+   * - explicit lock version (pinnedVersion): user explicit intent, version different i.e. compute update (allows fall back swap install).
    */
   private isNewerTarget(currentVersion: string, targetVersion: string): boolean {
     if (this.pinnedVersion !== undefined && this.pinnedVersion !== 'latest') return currentVersion !== targetVersion;
-    // 两侧版本均来自已通过严格校验的 manifest/meta，非法属状态损坏：显式抛错，不静默当作无需更新。
+    // two side version all from already via strictly validate manifest/meta, illegal belong state corrupt: explicit throws, not silently when act no need to update.
     return compareStrictSemver(currentVersion, targetVersion) < 0;
   }
 
-  // ---- stage：下载验收 + pending，不动 current ----
+  // ---- stage: download verify + pending, do not motion current ----
 
   async stage(target: PayloadInstallTarget): Promise<PayloadInfo> {
     if (target.name !== this.packageName) {
       throw new DesktopError(
         'updater_target_mismatch',
-        `安装目标 ${target.name} 与配置的 payload 包 ${this.packageName} 不一致`,
+        `install target ${target.name} and config payload package ${this.packageName} inconsistent`,
       );
     }
     const versionSpec = target.version.length > 0 ? target.version : 'latest';
@@ -278,7 +278,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
 
   private async stageLocked(versionSpec: string): Promise<PayloadInfo> {
     const stagingRoot = path.join(this.payloadRoot, 'staging');
-    // 持锁清理崩溃遗留的 staging：fail-closed 锁保证此刻无其他安装者。
+    // hold lock clean up crash legacy staging:fail-closed lock guarantee right now without other install.
     rmSync(stagingRoot, { recursive: true, force: true });
     mkdirSync(stagingRoot, { recursive: true });
     let meta: RegistryVersion | null = null;
@@ -289,16 +289,16 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       if (blockedEntry !== undefined) {
         throw new DesktopError(
           'updater_version_blocked',
-          `${blockedKey} 此前已被拒绝/安装失败（${blockedEntry.code}: ${blockedEntry.message}）`,
+          `${blockedKey} this before already by reject/failed to install (${blockedEntry.code}: ${blockedEntry.message})`,
           { blocked: blockedEntry },
         );
       }
-      // 幂等快路径 1：同版本 pending 仍待决议且制品完好 → 不重复下载。
+      // idempotent fast path 1: same version pending still await decide protocol and system product completely well → does not repeat download.
       const pending = this.resolvePendingSoft();
       if (pending !== null && pending.name === meta.name && pending.version === meta.version) {
         return pending;
       }
-      // 幂等快路径 2：目标版本即当前生效版本 → 直接以待激活身份复用（不重下载、不毁 current）。
+      // idempotent fast path 2: target version i.e. when before takes effect version → directly with await activate identity re- use (do not heavy download, do not destroy current).
       const current = this.resolveCurrent();
       if (current !== null && current.name === meta.name && current.version === meta.version) {
         writeJsonAtomic(this.pendingFile, this.stateOf(current, new Date().toISOString()));
@@ -330,19 +330,19 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     }
   }
 
-  // ---- activate / reject：pending 决议 ----
+  // ---- activate / reject:pending decide protocol ----
 
   async activate(info: PayloadInfo): Promise<void> {
     await this.lock.run(async () => {
       const state = this.validateInfo(info, 'payload_activate_invalid');
-      // current 损坏时显式抛错（fail-closed）：不能在旧状态不可信时静默换装。
+      // current corrupt when explicit throws (fail-closed): cannot in old state cannot message when static default swap install.
       const current = this.resolveCurrent();
       const at = new Date().toISOString();
       if (current !== null && current.releaseDir !== state.releaseDir) {
         writeJsonAtomic(this.previousFile, this.stateOf(current, at));
       }
       this.clearPendingFor(state.name, state.version);
-      // current 是最后一个可失败的提交步骤，提交后不得再抛错触发反向恢复。
+      // current is finally a can failed commit step, after commit must not again throws trigger reverse restore.
       writeJsonAtomic(this.currentFile, { ...state, at });
     });
   }
@@ -350,14 +350,14 @@ export class NpmPayloadUpdater implements PayloadUpdater {
   async reject(info: PayloadInfo, error: Error): Promise<void> {
     await this.lock.run(async () => {
       const problems: string[] = [];
-      if (info.name !== this.packageName) problems.push(`name 与配置的 payload 包不一致: ${info.name}`);
+      if (info.name !== this.packageName) problems.push(`name and config payload package inconsistent: ${info.name}`);
       if (typeof info.version !== 'string' || !isStrictSemver(info.version)) {
-        problems.push(`version 不是合法 SemVer: ${String(info.version)}`);
+        problems.push(`version is not legal SemVer: ${String(info.version)}`);
       }
       if (problems.length > 0) {
-        throw new DesktopError('payload_reject_invalid', 'reject 入参不满足契约', { problems });
+        throw new DesktopError('payload_reject_invalid', 'reject reference do not satisfy contract', { problems });
       }
-      // reject 是显式决议：无论错误类别一律记 blocked（环境类错误在 stage 内部已分流，不走到这里）。
+      // reject is explicit decide protocol: regardless of error class other one rule record blocked(environment class error in stage internal already stream, do not away to this in).
       const code = error instanceof DesktopError ? error.code : 'payload_rejected';
       const details = error instanceof DesktopError ? (error.details as { stderrTail?: unknown } | undefined) : undefined;
       this.writeBlockedEntry({
@@ -372,7 +372,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     });
   }
 
-  // ---- 状态读取（严格复验） ----
+  // ---- state read (strictly re- verify) ----
 
   resolveCurrent(): PayloadInfo | null {
     return this.readStateInfo(this.currentFile, 'current.json', 'current_payload_invalid');
@@ -386,7 +386,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     return this.readStateInfo(this.previousFile, 'previous.json', 'previous_payload_invalid');
   }
 
-  /** pending 快路径专用：损坏/失效视为无待决议（pending 是派生状态，重 stage 会覆写）。 */
+  /** pending fast path dedicated use: corrupt/expires treated as without await decide protocol (pending is derive state, heavy stage will override). */
   private resolvePendingSoft(): PayloadInfo | null {
     try {
       return this.resolvePending();
@@ -439,7 +439,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     };
   }
 
-  /** activate 入参复用状态文件的整套严格校验（不落盘，仅验证）。 */
+  /** activate reference re- use state file the whole set strictly validate (do not, only verify). */
   private validateInfo(info: PayloadInfo, code: string): PayloadState {
     return this.validateState(
       {
@@ -450,43 +450,43 @@ export class NpmPayloadUpdater implements PayloadUpdater {
         entryPath: info.entryPath,
         entryArgs: info.entryArgs ?? [],
       },
-      'activate 入参',
+      'activate reference',
       code,
     );
   }
 
-  /** 状态文件严格校验：形状 + 路径形态（拒 Windows 形态）+ containment + 存在性 + manifest 一致。 */
+  /** state file strictly validate: shape + path form (refuse Windows form)+ containment + store in + manifest consistent. */
   private validateState(raw: unknown, what: string, code: string): PayloadState {
     const problems: string[] = [];
     const s = (raw ?? {}) as Partial<PayloadState>;
-    if (s.formatVersion !== 1) problems.push(`formatVersion 必须为 1，实际 ${JSON.stringify(s.formatVersion)}`);
+    if (s.formatVersion !== 1) problems.push(`formatVersion must is 1, actual ${JSON.stringify(s.formatVersion)}`);
     if (typeof s.name !== 'string' || s.name.length === 0 || s.name.includes('\\') || s.name.includes('..')) {
-      problems.push(`name 缺失或非法: ${JSON.stringify(s.name)}`);
+      problems.push(`name missing or illegal: ${JSON.stringify(s.name)}`);
     } else if (s.name !== this.packageName) {
-      problems.push(`name 与 updater 配置的 payload 包不一致: ${s.name}`);
+      problems.push(`name and updater config payload package inconsistent: ${s.name}`);
     }
     if (typeof s.version !== 'string' || !isStrictSemver(s.version)) {
-      problems.push(`version 不是合法 SemVer: ${JSON.stringify(s.version)}`);
+      problems.push(`version is not legal SemVer: ${JSON.stringify(s.version)}`);
     }
     const releaseDirOk = this.checkManagedPath(s.releaseDir, problems, 'releaseDir');
     const entryPathOk = this.checkManagedPath(s.entryPath, problems, 'entryPath');
     if (s.entryArgs !== undefined && (!Array.isArray(s.entryArgs) || s.entryArgs.some((a) => typeof a !== 'string'))) {
-      problems.push('entryArgs 必须是字符串数组');
+      problems.push('entryArgs must be string array');
     }
     if (releaseDirOk) {
       const containment = path.relative(this.payloadRoot, s.releaseDir!);
       if (containment.startsWith('..') || path.isAbsolute(containment)) {
-        problems.push('releaseDir 逃逸 payload 管理目录');
+        problems.push('releaseDir escape payload manage directory');
       } else {
         if (!existsSync(s.releaseDir!) || !statSync(s.releaseDir!).isDirectory()) {
-          problems.push(`releaseDir 不存在: ${s.releaseDir}`);
+          problems.push(`releaseDir missing: ${s.releaseDir}`);
         }
         if (entryPathOk) {
           const entryContainment = path.relative(s.releaseDir!, s.entryPath!);
           if (entryContainment.startsWith('..') || path.isAbsolute(entryContainment)) {
-            problems.push('entryPath 逃逸 releaseDir');
+            problems.push('entryPath escape releaseDir');
           } else if (!existsSync(s.entryPath!)) {
-            problems.push(`entryPath 不存在: ${s.entryPath}`);
+            problems.push(`entryPath missing: ${s.entryPath}`);
           }
         }
         if (typeof s.name === 'string' && s.name.length > 0 && typeof s.version === 'string' && s.version.length > 0) {
@@ -495,7 +495,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       }
     }
     if (problems.length > 0) {
-      throw new DesktopError(code, `已安装 payload 状态不满足契约（${what}）`, { what, problems });
+      throw new DesktopError(code, `installed payload state do not satisfy contract (${what})`, { what, problems });
     }
     return {
       formatVersion: 1,
@@ -508,43 +508,43 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     };
   }
 
-  /** 状态文件存本机绝对路径；Windows 本机盘符与 UNC 路径由后续 containment 验证。 */
+  /** state file store local machine absolute path;Windows local machine symbol and UNC path by after continue containment verify. */
   private checkManagedPath(value: unknown, problems: string[], what: string): value is string {
     if (typeof value !== 'string' || value.length === 0) {
-      problems.push(`${what} 缺失或非字符串`);
+      problems.push(`${what} missing or non- string`);
       return false;
     }
     if (!path.isAbsolute(value)) {
-      problems.push(`${what} 必须是本机绝对路径: ${value}`);
+      problems.push(`${what} must be local machine absolute path: ${value}`);
       return false;
     }
     if (process.platform !== 'win32' && (/^[A-Za-z]:/.test(value) || value.includes('\\'))) {
-      problems.push(`${what} 含其他平台的路径形态: ${value}`);
+      problems.push(`${what} contains other platform path form: ${value}`);
       return false;
     }
     return true;
   }
 
-  /** release 目录 manifest 复验：name/version 与状态文件一致，entryPath 与 entries.hub 一致。 */
+  /** release directory manifest re- verify:name/version and state file consistent,entryPath and entries.hub consistent. */
   private validateReleaseManifest(releaseDir: string, name: string, version: string, entryPath: string | null, problems: string[]): void {
     let manifest: unknown;
     try {
       manifest = JSON.parse(readFileSync(path.join(releaseDir, 'manifest.json'), 'utf8'));
     } catch (error) {
-      problems.push(`release manifest.json 缺失或非法 JSON（${error instanceof Error ? error.message : String(error)}）`);
+      problems.push(`release manifest.json missing or illegal JSON(${error instanceof Error ? error.message : String(error)})`);
       return;
     }
     const m = (manifest ?? {}) as Record<string, unknown>;
-    if (m['formatVersion'] !== 1) problems.push('release manifest formatVersion 必须为 1');
-    if (m['name'] !== name) problems.push(`release manifest name 与状态不一致: ${JSON.stringify(m['name'])} ≠ ${JSON.stringify(name)}`);
+    if (m['formatVersion'] !== 1) problems.push('release manifest formatVersion must is 1');
+    if (m['name'] !== name) problems.push(`release manifest name and state inconsistent: ${JSON.stringify(m['name'])} ≠ ${JSON.stringify(name)}`);
     if (m['version'] !== version) {
-      problems.push(`release manifest version 与状态不一致: ${JSON.stringify(m['version'])} ≠ ${JSON.stringify(version)}`);
+      problems.push(`release manifest version and state inconsistent: ${JSON.stringify(m['version'])} ≠ ${JSON.stringify(version)}`);
     }
     const entries = m['entries'];
     const entriesRecord = typeof entries === 'object' && entries !== null ? (entries as Record<string, unknown>) : {};
     const hubRel = entriesRecord['hub'];
     if (typeof hubRel !== 'string' || hubRel.length === 0) {
-      problems.push('release manifest entries.hub 缺失');
+      problems.push('release manifest entries.hub missing');
       return;
     }
     const contained: string[] = [];
@@ -554,11 +554,11 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       return;
     }
     if (entryPath !== null && resolved !== path.resolve(entryPath)) {
-      problems.push(`entryPath 与 manifest entries.hub 不一致: ${entryPath} ≠ ${resolved}`);
+      problems.push(`entryPath and manifest entries.hub inconsistent: ${entryPath} ≠ ${resolved}`);
     }
   }
 
-  /** 清除与 (name, version) 匹配的 pending（其他版本的待决议保留）。 */
+  /** clear and (name, version) match pending(other version await decide protocol keep). */
   private clearPendingFor(name: string, version: string): void {
     const raw = readJsonState(this.pendingFile, 'pending.json');
     if (raw === undefined) return;
@@ -567,11 +567,11 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     rmSync(this.pendingFile, { force: true });
   }
 
-  // ---- registry 元数据 ----
+  // ---- registry metadata ----
 
   private async fetchRegistryVersion(spec: string): Promise<RegistryVersion> {
     if (spec !== 'latest' && !isStrictSemver(spec)) {
-      throw new DesktopError('registry_metadata_invalid', `版本说明符不是合法 SemVer: ${spec}`);
+      throw new DesktopError('registry_metadata_invalid', `version note symbol is not legal SemVer: ${spec}`);
     }
     const url = `${this.registry}/${encodeURIComponent(this.packageName)}`;
     let response: Response;
@@ -583,11 +583,11 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     } catch (error) {
       throw new DesktopError(
         'registry_metadata_failed',
-        `registry 元数据获取失败: ${url}（${error instanceof Error ? error.message : String(error)}）`,
+        `registry metadata failed to get: ${url}(${error instanceof Error ? error.message : String(error)})`,
       );
     }
     if (!response.ok) {
-      throw new DesktopError('registry_metadata_failed', `registry 元数据获取失败: HTTP ${response.status} ${url}`);
+      throw new DesktopError('registry_metadata_failed', `registry metadata failed to get: HTTP ${response.status} ${url}`);
     }
     let text: string;
     try {
@@ -595,11 +595,11 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     } catch (error) {
       throw new DesktopError(
         'registry_metadata_failed',
-        `registry 元数据读取失败: ${url}（${error instanceof Error ? error.message : String(error)}）`,
+        `registry metadata failed to read: ${url}(${error instanceof Error ? error.message : String(error)})`,
       );
     }
     if (text.length > 32 * 1024 * 1024) {
-      throw new DesktopError('registry_metadata_failed', `registry 元数据超限（>32MiB）: ${url}`);
+      throw new DesktopError('registry_metadata_failed', `registry metadata over limit (>32MiB): ${url}`);
     }
     let doc: unknown;
     try {
@@ -607,22 +607,22 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     } catch (error) {
       throw new DesktopError(
         'registry_metadata_failed',
-        `registry 元数据不是合法 JSON: ${url}（${error instanceof Error ? error.message : String(error)}）`,
+        `registry metadata is not legal JSON: ${url}(${error instanceof Error ? error.message : String(error)})`,
       );
     }
     return this.validateRegistryVersion(doc, spec);
   }
 
-  /** 边界强校验：name/严格 SemVer version/dist.integrity(sha512)/dist.tarball 任一不满足显式拒绝。 */
+  /** boundary strong validate:name/strictly SemVer version/dist.integrity(sha512)/dist.tarball any one do not satisfy explicit reject. */
   private validateRegistryVersion(doc: unknown, spec: string): RegistryVersion {
     const problems: string[] = [];
     const d = (doc ?? {}) as Record<string, unknown>;
-    if (d['name'] !== this.packageName) problems.push(`文档 name 与请求包名不一致: ${JSON.stringify(d['name'])}`);
+    if (d['name'] !== this.packageName) problems.push(`document name and request package name inconsistent: ${JSON.stringify(d['name'])}`);
     const distTags = d['dist-tags'];
     const latestTag = typeof distTags === 'object' && distTags !== null ? (distTags as Record<string, unknown>)['latest'] : undefined;
     const version = spec === 'latest' ? latestTag : spec;
     if (typeof version !== 'string' || !isStrictSemver(version)) {
-      problems.push(`无法解析合法 SemVer 目标版本（spec=${spec}，latest tag=${JSON.stringify(latestTag)}）`);
+      problems.push(`cannot parse legal SemVer target version (spec=${spec},latest tag=${JSON.stringify(latestTag)})`);
     }
     const versions = d['versions'];
     const entry =
@@ -630,48 +630,48 @@ export class NpmPayloadUpdater implements PayloadUpdater {
         ? (versions as Record<string, unknown>)[version]
         : undefined;
     if (typeof entry !== 'object' || entry === null) {
-      problems.push(`registry 不存在版本 ${String(version)}`);
+      problems.push(`registry missing version ${String(version)}`);
     }
     let integrity: unknown;
     let tarball: unknown;
     if (typeof entry === 'object' && entry !== null) {
       const e = entry as Record<string, unknown>;
-      if (e['name'] !== this.packageName) problems.push(`版本条目 name 不一致: ${JSON.stringify(e['name'])}`);
-      if (e['version'] !== version) problems.push(`版本条目 version 不一致: ${JSON.stringify(e['version'])}`);
+      if (e['name'] !== this.packageName) problems.push(`version item name inconsistent: ${JSON.stringify(e['name'])}`);
+      if (e['version'] !== version) problems.push(`version item version inconsistent: ${JSON.stringify(e['version'])}`);
       const dist = e['dist'];
       if (typeof dist === 'object' && dist !== null) {
         integrity = (dist as Record<string, unknown>)['integrity'];
         tarball = (dist as Record<string, unknown>)['tarball'];
       } else {
-        problems.push('dist 字段缺失');
+        problems.push('dist field missing');
       }
     }
     if (typeof integrity !== 'string' || !integrity.startsWith('sha512-')) {
-      problems.push(`dist.integrity 必须是 sha512-<base64>，实际: ${JSON.stringify(integrity)}`);
+      problems.push(`dist.integrity must be sha512-<base64>, actual: ${JSON.stringify(integrity)}`);
     } else if (Buffer.from(integrity.slice('sha512-'.length), 'base64').length !== 64) {
-      problems.push('dist.integrity sha512 摘要长度非法（须 64 字节）');
+      problems.push('dist.integrity sha512 summary length illegal (must 64 byte)');
     }
     if (typeof tarball !== 'string' || tarball.length === 0) {
-      problems.push('dist.tarball 缺失');
+      problems.push('dist.tarball missing');
     } else {
       try {
         const parsed = new URL(tarball);
         if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-          problems.push(`dist.tarball 协议非法: ${parsed.protocol}`);
+          problems.push(`dist.tarball protocol illegal: ${parsed.protocol}`);
         }
       } catch {
-        problems.push(`dist.tarball 不是合法 URL: ${tarball}`);
+        problems.push(`dist.tarball is not legal URL: ${tarball}`);
       }
     }
     if (problems.length > 0) {
-      throw new DesktopError('registry_metadata_invalid', `registry 元数据契约不满足（${this.packageName}@${spec}）`, {
+      throw new DesktopError('registry_metadata_invalid', `registry metadata contract do not satisfy (${this.packageName}@${spec})`, {
         problems,
       });
     }
     return { name: this.packageName, version: version as string, integrity: integrity as string, tarball: tarball as string };
   }
 
-  // ---- 下载与完整性 ----
+  // ---- download and complete ----
 
   private async downloadTarball(meta: RegistryVersion, destFile: string): Promise<void> {
     let response: Response;
@@ -683,22 +683,22 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     } catch (error) {
       throw new DesktopError(
         'tarball_download_failed',
-        `payload tarball 下载失败: ${meta.tarball}（${error instanceof Error ? error.message : String(error)}）`,
+        `payload tarball download failed: ${meta.tarball}(${error instanceof Error ? error.message : String(error)})`,
       );
     }
     if (!response.ok || response.body === null) {
-      throw new DesktopError('tarball_download_failed', `payload tarball 下载失败: HTTP ${response.status} ${meta.tarball}`);
+      throw new DesktopError('tarball_download_failed', `payload tarball download failed: HTTP ${response.status} ${meta.tarball}`);
     }
     const declared = Number(response.headers.get('content-length'));
     if (Number.isFinite(declared) && declared > this.maxTarballBytes) {
-      throw new DesktopError('tarball_too_large', `payload tarball 超过上限（${declared} > ${this.maxTarballBytes} 字节）`);
+      throw new DesktopError('tarball_too_large', `payload tarball exceeds cap (${declared} > ${this.maxTarballBytes} byte)`);
     }
     const expected = Buffer.from(meta.integrity.slice('sha512-'.length), 'base64');
     const hash = createHash('sha512');
     const fh = openSync(destFile, 'w');
     let total = 0;
     let tooLarge = false;
-    // Node fetch 的 body 运行时可异步迭代，但 DOM lib 类型未声明；显式断言为 AsyncIterable。
+    // Node fetch  body runtime can async iterate, but DOM lib type not declaration; explicit assertion is AsyncIterable.
     const bodyStream = response.body as unknown as AsyncIterable<Uint8Array | Buffer>;
     try {
       for await (const chunk of bodyStream) {
@@ -714,29 +714,29 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     } catch (error) {
       throw new DesktopError(
         'tarball_download_failed',
-        `payload tarball 下载中断: ${meta.tarball}（${error instanceof Error ? error.message : String(error)}）`,
+        `payload tarball download interrupt: ${meta.tarball}(${error instanceof Error ? error.message : String(error)})`,
       );
     } finally {
       closeSync(fh);
     }
     if (tooLarge) {
       rmSync(destFile, { force: true });
-      throw new DesktopError('tarball_too_large', `payload tarball 下载超过上限（> ${this.maxTarballBytes} 字节）`);
+      throw new DesktopError('tarball_too_large', `payload tarball download exceeds cap (> ${this.maxTarballBytes} byte)`);
     }
     const actual = hash.digest();
     if (!actual.equals(expected)) {
       rmSync(destFile, { force: true });
       throw new DesktopError(
         'tarball_integrity_mismatch',
-        `payload tarball sha512 完整性校验失败（期望 ${expected.toString('base64')}，实际 ${actual.toString('base64')}）`,
+        `payload tarball sha512 complete validation failed (expectation ${expected.toString('base64')}, actual ${actual.toString('base64')})`,
         { tarball: meta.tarball, version: meta.version },
       );
     }
   }
 
-  // ---- payload manifest 契约 ----
+  // ---- payload manifest contract ----
 
-  /** staging manifest 契约校验；meta 非空时同时强校验 name/version 与 registry 元数据一致。 */
+  /** staging manifest contract validate;meta non-empty when also strong validate name/version and registry metadata consistent. */
   private loadPayloadManifest(
     releaseDir: string,
     meta: RegistryVersion | null,
@@ -747,17 +747,17 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     } catch (error) {
       throw new DesktopError(
         'payload_manifest_invalid',
-        `payload manifest.json 缺失或非法 JSON: ${error instanceof Error ? error.message : String(error)}`,
+        `payload manifest.json missing or illegal JSON: ${error instanceof Error ? error.message : String(error)}`,
         { releaseDir },
       );
     }
     const problems: string[] = [];
     const m = (manifest ?? {}) as Record<string, unknown>;
-    if (m['formatVersion'] !== 1) problems.push(`formatVersion 必须为 1，实际 ${JSON.stringify(m['formatVersion'])}`);
+    if (m['formatVersion'] !== 1) problems.push(`formatVersion must is 1, actual ${JSON.stringify(m['formatVersion'])}`);
     if (meta !== null) {
-      if (m['name'] !== meta.name) problems.push(`manifest name 与 registry 元数据不一致: ${JSON.stringify(m['name'])} ≠ ${JSON.stringify(meta.name)}`);
+      if (m['name'] !== meta.name) problems.push(`manifest name and registry metadata inconsistent: ${JSON.stringify(m['name'])} ≠ ${JSON.stringify(meta.name)}`);
       if (m['version'] !== meta.version) {
-        problems.push(`manifest version 与 registry 元数据不一致: ${JSON.stringify(m['version'])} ≠ ${JSON.stringify(meta.version)}`);
+        problems.push(`manifest version and registry metadata inconsistent: ${JSON.stringify(m['version'])} ≠ ${JSON.stringify(meta.version)}`);
       }
     }
     const entries = m['entries'];
@@ -765,24 +765,24 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     const hubRel = entriesRecord['hub'];
     const launcherRel = typeof entriesRecord['launcher'] === 'string' && entriesRecord['launcher'].length > 0 ? entriesRecord['launcher'] : 'start.mjs';
     if (typeof hubRel !== 'string' || hubRel.length === 0) {
-      problems.push('entries.hub 缺失（Hub 入口声明）');
+      problems.push('entries.hub missing (Hub entry declaration)');
     } else if (hubRel === launcherRel || hubRel === 'start.mjs') {
-      problems.push('entries.hub 不得指向 launcher（start.mjs 是带命令参数的启动器，不是 Hub 入口）');
+      problems.push('entries.hub must not points to launcher(start.mjs is carries command parameter start, is not Hub entry)');
     }
     let hubEntryPath: string | null = null;
     if (typeof hubRel === 'string') {
       hubEntryPath = this.containedIn(releaseDir, hubRel, problems, 'entries.hub');
     }
     const launcherPath = this.containedIn(releaseDir, launcherRel, problems, 'entries.launcher');
-    if (hubEntryPath !== null && !existsSync(hubEntryPath)) problems.push(`entries.hub 文件不存在: ${hubRel}`);
-    if (!existsSync(launcherPath)) problems.push(`launcher 文件不存在: ${launcherRel}`);
+    if (hubEntryPath !== null && !existsSync(hubEntryPath)) problems.push(`entries.hub file missing: ${hubRel}`);
+    if (!existsSync(launcherPath)) problems.push(`launcher file missing: ${launcherRel}`);
     if (problems.length > 0) {
-      throw new DesktopError('payload_manifest_invalid', 'payload manifest 契约不满足', { releaseDir, problems });
+      throw new DesktopError('payload_manifest_invalid', 'payload manifest contract do not satisfy', { releaseDir, problems });
     }
     return { hubEntryPath: hubEntryPath!, launcherPath };
   }
 
-  /** 相对路径 containment 解析（manifest 声明同样不可逃逸 releaseDir，且拒绝 Windows 形态：盘符前缀与反斜杠）。 */
+  /** relative path containment parse (manifest declaration same cannot escape releaseDir, and reject Windows form: symbol prefix and backslash). */
   private containedIn(rootDir: string, rel: string, problems: string[], what: string): string {
     const normalized = path.posix.normalize(rel);
     if (
@@ -793,13 +793,13 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       normalized.startsWith('../') ||
       normalized.includes('\\')
     ) {
-      problems.push(`${what} 声明路径非法: ${rel}`);
+      problems.push(`${what} declaration path illegal: ${rel}`);
       return path.join(rootDir, 'invalid');
     }
     return path.resolve(rootDir, normalized);
   }
 
-  // ---- start.mjs check 验收 + 依赖安装 ----
+  // ---- start.mjs check verify + dependency install ----
 
   private async verifyWithInstaller(releaseDir: string, launcherPath: string): Promise<void> {
     const first = await this.runStartCheck(releaseDir, launcherPath);
@@ -808,7 +808,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       if (this.npmInstaller === undefined) {
         throw new DesktopError(
           'payload_deps_missing',
-          'payload 运行时依赖缺失且未配置 NpmInstaller（npm tarball 不含 node_modules；生产环境默认宿主 npm，见 packages/payload/README.md）',
+          'payload runtime dependency missing and not config NpmInstaller(npm tarball excludes node_modules; production by default host npm, see packages/payload/README.md)',
           { releaseDir, stdoutTail: first.stdoutTail, stderrTail: first.stderrTail },
         );
       }
@@ -816,7 +816,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       const second = await this.runStartCheck(releaseDir, launcherPath);
       if (second.code === 0) return;
       if (second.code === 3) {
-        throw new DesktopError('payload_deps_unresolved', `NpmInstaller（${this.npmInstaller.id}）执行后 payload 仍报告依赖缺失`, {
+        throw new DesktopError('payload_deps_unresolved', `NpmInstaller(${this.npmInstaller.id}) execute after payload still report dependency missing`, {
           releaseDir,
           stdoutTail: second.stdoutTail,
           stderrTail: second.stderrTail,
@@ -828,14 +828,14 @@ export class NpmPayloadUpdater implements PayloadUpdater {
   }
 
   private checkFailure(releaseDir: string, run: CheckRunResult): DesktopError {
-    return new DesktopError('payload_check_failed', `payload start check 验收失败（exit ${run.code}）`, {
+    return new DesktopError('payload_check_failed', `payload start check verify failed (exit ${run.code})`, {
       releaseDir,
       stdoutTail: run.stdoutTail,
       stderrTail: run.stderrTail,
     });
   }
 
-  /** 运行 payload 自带 start.mjs check（真实契约：0 通过 / 1 布局损坏 / 3 依赖缺失）。 */
+  /** run payload self carries start.mjs check(real contract:0 via / 1 layout corrupt / 3 dependency missing). */
   private async runStartCheck(releaseDir: string, launcherPath: string): Promise<CheckRunResult> {
     const node = await this.resolveCheckNode();
     return await new Promise<CheckRunResult>((resolve, reject) => {
@@ -851,7 +851,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
         settled = true;
         child.kill('SIGKILL');
         reject(
-          new DesktopError('payload_check_failed', `payload start check 超时（${this.checkTimeoutMs}ms）`, {
+          new DesktopError('payload_check_failed', `payload start check timeout (${this.checkTimeoutMs}ms)`, {
             releaseDir,
             stderrTail,
           }),
@@ -861,7 +861,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        reject(new DesktopError('payload_check_failed', `payload check 无法执行: ${error.message}`, { releaseDir }));
+        reject(new DesktopError('payload_check_failed', `payload check cannot execute: ${error.message}`, { releaseDir }));
       });
       const tail = (sink: string[], chunk: Buffer) => {
         for (const line of chunk.toString('utf8').split('\n')) {
@@ -881,7 +881,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     });
   }
 
-  /** 选择可运行 check 的 Node：与 runners.ts 同一能力探测（>= floor 且 node:sqlite）。 */
+  /** choose can run check  Node: and runners.ts the same capability probe (>= floor and node:sqlite). */
   private async resolveCheckNode(): Promise<{ executable: string; env: NodeJS.ProcessEnv }> {
     if (this.checkNode !== null) return this.checkNode;
     if (this.isElectron) {
@@ -893,7 +893,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
           return this.checkNode;
         }
       } catch {
-        // 落入宿主 Node 候选；全部不可用时下方显式报错
+        // host Node choose; all unavailable when under way explicit errors
       }
     }
     const hostNode = this.isElectron ? 'node' : this.execPath;
@@ -901,7 +901,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     if (!probeMeetsFloor(probe)) {
       throw new DesktopError(
         'payload_check_node_unavailable',
-        `无法找到可运行 payload check 的 Node（需 >= ${KERNEL_NODE_FLOOR} 且 node:sqlite；实际 Node ${probe.node}，sqlite=${probe.sqlite}）`,
+        `cannot found can run payload check  Node(must >= ${KERNEL_NODE_FLOOR} and node:sqlite; actual Node ${probe.node},sqlite=${probe.sqlite})`,
         { hostNode },
       );
     }
@@ -909,25 +909,25 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     return this.checkNode;
   }
 
-  // ---- 晋升为不可变 release ----
+  // ---- promote rise is cannot change release ----
 
   private releaseDirFor(name: string, version: string): string {
     const segments = name.split('/');
     for (const segment of segments) {
       if (segment.length === 0 || segment === '.' || segment === '..' || segment.includes('\\')) {
-        throw new DesktopError('registry_metadata_invalid', `包名不可用作路径: ${name}`);
+        throw new DesktopError('registry_metadata_invalid', `package name unavailable act path: ${name}`);
       }
     }
     if (!isStrictSemver(version)) {
-      throw new DesktopError('registry_metadata_invalid', `版本号不是合法 SemVer: ${version}`);
+      throw new DesktopError('registry_metadata_invalid', `version number is not legal SemVer: ${version}`);
     }
     return path.join(this.payloadRoot, 'releases', ...segments, version);
   }
 
   /**
-   * 原子晋升到 releases/<name>/<version>/<uuid> 不可变目录：每次 stage 生成新 uuid，
-   * 绝不重命名/删除既有版本目录（同版本重装并存，激活由 current.json 指针决定）。
-   * 晋升失败（如目录被占位文件阻挡）显式报错，既有 current 与其他版本目录不受影响。
+   * atomic promote rise to releases/<name>/<version>/<uuid> cannot change directory: each time stage generate new uuid,
+   * never heavy naming/delete since has version directory (same version heavy install and store, activate by current.json pointer decide).
+   * promote rise failed (such as directory by occupy file block) explicit errors, since has current and other version directory do not subject to affect.
    */
   private promoteToImmutable(extractDir: string, meta: RegistryVersion, hubEntryPath: string): PayloadInfo {
     const versionRoot = this.releaseDirFor(meta.name, meta.version);
@@ -936,7 +936,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     } catch (error) {
       throw new DesktopError(
         'payload_promote_failed',
-        `release 版本目录无法创建: ${versionRoot}（${error instanceof Error ? error.message : String(error)}）`,
+        `release version directory cannot create: ${versionRoot}(${error instanceof Error ? error.message : String(error)})`,
         { versionRoot },
       );
     }
@@ -949,25 +949,25 @@ export class NpmPayloadUpdater implements PayloadUpdater {
       } catch (error) {
         throw new DesktopError(
           'payload_promote_failed',
-          `release 目录换名失败: ${releaseDir}（${error instanceof Error ? error.message : String(error)}）`,
+          `release directory swap name failed: ${releaseDir}(${error instanceof Error ? error.message : String(error)})`,
           { releaseDir },
         );
       }
       return { name: meta.name, version: meta.version, releaseDir, entryPath: path.join(releaseDir, entryRel), entryArgs: [] };
     }
-    throw new DesktopError('payload_promote_failed', `无法生成未占用的 release 目录（多次 uuid 冲突）: ${versionRoot}`, {
+    throw new DesktopError('payload_promote_failed', `cannot generate not occupy release directory (many time uuid conflict): ${versionRoot}`, {
       versionRoot,
     });
   }
 
-  // ---- blocked.json 维护 ----
+  // ---- blocked.json maintain ----
 
   private readBlocked(): BlockedState {
     const raw = readJsonState(this.blockedFile, 'blocked.json');
     if (raw === undefined) return { formatVersion: 1, entries: {} };
     const b = raw as Partial<BlockedState>;
     if (b.formatVersion !== 1 || typeof b.entries !== 'object' || b.entries === null) {
-      throw new DesktopError('blocked_state_invalid', 'blocked.json 已损坏（形状不满足契约）', { blockedFile: this.blockedFile });
+      throw new DesktopError('blocked_state_invalid', 'blocked.json already corrupt (shape do not satisfy contract)', { blockedFile: this.blockedFile });
     }
     return { formatVersion: 1, entries: b.entries };
   }
@@ -977,11 +977,11 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     try {
       state = this.readBlocked();
     } catch {
-      // blocked.json 损坏时原错误优先上抛；此处不叠加侧信道失败
+      // blocked.json corrupt when original error takes precedence on throw; this where do not stack add side message path failed
       return;
     }
     state.entries[`${entry.name}@${entry.version}`] = entry;
-    // 超限淘汰最旧（对象键保持插入序）。
+    // over limit eliminate most old (object key keep insert order).
     const keys = Object.keys(state.entries);
     if (keys.length > BLOCKED_MAX_ENTRIES) {
       for (const key of keys.slice(0, keys.length - BLOCKED_MAX_ENTRIES)) delete state.entries[key];
@@ -989,7 +989,7 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     try {
       writeJsonAtomic(this.blockedFile, state);
     } catch {
-      // 记录失败不掩盖安装错误
+      // record failed do not mask install error
     }
   }
 
@@ -1019,12 +1019,12 @@ export class NpmPayloadUpdater implements PayloadUpdater {
     try {
       writeJsonAtomic(this.blockedFile, state);
     } catch {
-      // 同上：安装已成功，侧信道失败不上抛
+      // same on: install already succeeded, side message path failed do not on throw
     }
   }
 }
 
-// ---- 未配置实现（诚实声明，不伪装） ----
+// ---- not config implement (honest declaration, does not pretend to be) ----
 
 export class UnconfiguredPayloadUpdater implements PayloadUpdater {
   readonly id = 'unconfigured';
@@ -1036,16 +1036,16 @@ export class UnconfiguredPayloadUpdater implements PayloadUpdater {
   async stage(_target: PayloadInstallTarget): Promise<never> {
     throw new DesktopError(
       'updater_not_configured',
-      '未配置 payload npm 包名（HELM_PAYLOAD_PACKAGE 或 overrides.payloadPackage），无法自动安装',
+      'not config payload npm package name (HELM_PAYLOAD_PACKAGE or overrides.payloadPackage), cannot automatically install',
     );
   }
 
   async activate(_info: PayloadInfo): Promise<never> {
-    throw new DesktopError('updater_not_configured', '未配置 payload npm 包名，无法激活 payload');
+    throw new DesktopError('updater_not_configured', 'not config payload npm package name, cannot activate payload');
   }
 
   async reject(_info: PayloadInfo, _error: Error): Promise<never> {
-    throw new DesktopError('updater_not_configured', '未配置 payload npm 包名，无法记录 payload 拒绝');
+    throw new DesktopError('updater_not_configured', 'not config payload npm package name, cannot record payload reject');
   }
 
   resolveCurrent(): PayloadInfo | null {
@@ -1061,7 +1061,7 @@ export class UnconfiguredPayloadUpdater implements PayloadUpdater {
   }
 }
 
-// ---- 工厂 ----
+// ---- work vendor ----
 
 export interface PayloadUpdaterDeps {
   fetchImpl?: typeof fetch;
@@ -1071,7 +1071,7 @@ export interface PayloadUpdaterDeps {
   env?: NodeJS.ProcessEnv;
 }
 
-/** 按配置选择 updater：未配置包名 → 诚实返回 UnconfiguredPayloadUpdater。 */
+/** by config choose updater: not config package name → honest return UnconfiguredPayloadUpdater. */
 export function createPayloadUpdater(config: DesktopConfig, deps: PayloadUpdaterDeps = {}): PayloadUpdater {
   const packageName = config.payloadPackage?.trim();
   if (packageName === undefined || packageName.length === 0) {

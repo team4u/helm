@@ -1,10 +1,10 @@
 /**
- * 外部插件 DX 闭环 HTTP 契约测试：POST /api/plugins/doctor、
- * POST /api/plugins/rescan、POST /api/plugins/:id/reload。
- * 真实路由层（createHubHandler + 真实 routes.ts）+ 真实 AuthService +
- * 最小 PluginHost 形状的 fake（路由层消费 KernelRuntimeLike 结构化形状）。
- * 校验：鉴权门禁、路径分发、body 边界校验（dir 形状/未知字段）、
- * 错误信封（404/422/501 透传 HelmError 结构化语义）与成功响应形状。
+ * external plugin DX closed ring HTTP contract test:POST /api/plugins/doctor,
+ * POST /api/plugins/rescan,POST /api/plugins/:id/reload.
+ * real routing layer (createHubHandler + real routes.ts)+ real AuthService +
+ * most small PluginHost shape fake(routing layer consume KernelRuntimeLike structure shape).
+ * validate: authentication gate, path dispatch,body boundary validate (dir shape/unknown field),
+ * error message seal (404/422/501 pass-through HelmError structure semantics) and succeeded response shape.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,7 +25,7 @@ let dataDir: string
 let token: string
 let handler: (request: Request) => Promise<Response>
 
-/** 路由层消费的最小 plugins 端口（按用例覆写行为）。 */
+/** routing layer consume most small plugins port (by case override behavior). */
 let doctorImpl:
   | ((target: { dir?: string; id?: string }) => Promise<PluginDoctorReport>)
   | undefined
@@ -70,15 +70,15 @@ beforeEach(async () => {
       },
       getClientModule: async () => ({ code: '', contentHash: '', exports: [] }),
       doctorExternalPlugin: (target: { dir?: string; id?: string }) => {
-        if (doctorImpl === undefined) throw new HelmError('unsupported', '未配置', 501)
+        if (doctorImpl === undefined) throw new HelmError('unsupported', 'not config', 501)
         return doctorImpl(target)
       },
       reloadExternalPlugin: (pluginId: string) => {
-        if (reloadImpl === undefined) throw new HelmError('unsupported', '未配置', 501)
+        if (reloadImpl === undefined) throw new HelmError('unsupported', 'not config', 501)
         return reloadImpl(pluginId)
       },
       rescanExternalPlugins: () => {
-        if (rescanImpl === undefined) throw new HelmError('unsupported', '未配置', 501)
+        if (rescanImpl === undefined) throw new HelmError('unsupported', 'not config', 501)
         return rescanImpl()
       },
     },
@@ -127,7 +127,7 @@ async function post(path: string, body?: unknown, withToken = true): Promise<Res
   )
 }
 
-test('POST /api/plugins/doctor：成功返回报告；缺 dir / 非法 dir / 未知字段 400', { timeout: 60_000 }, async () => {
+test('POST /api/plugins/doctor: succeeded return report; missing dir / illegal dir / unknown field 400', { timeout: 60_000 }, async () => {
   const report: PluginDoctorReport = {
     dir: '/abs/plugin',
     pluginId: 'p1',
@@ -142,27 +142,27 @@ test('POST /api/plugins/doctor：成功返回报告；缺 dir / 非法 dir / 未
   assert.equal(res.status, 200)
   assert.deepEqual(await res.json(), report)
 
-  // 缺 dir
+  // missing dir
   const missing = await post('/api/plugins/doctor', {})
   assert.equal(missing.status, 400)
   assert.equal(((await missing.json()) as { error: { code: string } }).error.code, 'validation_error')
 
-  // dir 非绝对路径
+  // dir non- absolute path
   const relative = await post('/api/plugins/doctor', { dir: 'relative/path' })
   assert.equal(relative.status, 400)
   assert.equal(((await relative.json()) as { error: { code: string } }).error.code, 'validation_error')
 
-  // 未知字段
+  // unknown field
   const extra = await post('/api/plugins/doctor', { dir: '/abs/plugin', force: true })
   assert.equal(extra.status, 400)
   assert.equal(((await extra.json()) as { error: { code: string } }).error.code, 'validation_error')
 
-  // 鉴权门禁
+  // authentication gate
   const unauth = await post('/api/plugins/doctor', { dir: '/abs/plugin' }, false)
   assert.equal(unauth.status, 401)
 })
 
-test('POST /api/plugins/doctor：非 JSON body 400', { timeout: 60_000 }, async () => {
+test('POST /api/plugins/doctor: non- JSON body 400', { timeout: 60_000 }, async () => {
   const res = await handler(
     new Request('http://hub/api/plugins/doctor', {
       method: 'POST',
@@ -173,7 +173,7 @@ test('POST /api/plugins/doctor：非 JSON body 400', { timeout: 60_000 }, async 
   assert.equal(res.status, 400)
 })
 
-test('POST /api/plugins/rescan：成功返回结构；端口未提供 501', { timeout: 60_000 }, async () => {
+test('POST /api/plugins/rescan: succeeded return structure; port not provide 501', { timeout: 60_000 }, async () => {
   rescanImpl = async () => ({
     registered: ['new-one'],
     skipped: 2,
@@ -187,9 +187,9 @@ test('POST /api/plugins/rescan：成功返回结构；端口未提供 501', { ti
   assert.equal(body.plugins.length, 1)
 })
 
-test('POST /api/plugins/:id/reload：成功返回结构；预检失败 422；未注册 404', { timeout: 60_000 }, async () => {
+test('POST /api/plugins/:id/reload: succeeded return structure; preflight failed 422; not registered 404', { timeout: 60_000 }, async () => {
   reloadImpl = async (pluginId) => {
-    if (pluginId === 'missing') throw new HelmError('unknown_plugin', '未注册', 404, { pluginId })
+    if (pluginId === 'missing') throw new HelmError('unknown_plugin', 'not registered', 404, { pluginId })
     return {
       pluginId,
       wasEnabled: true,
@@ -209,9 +209,9 @@ test('POST /api/plugins/:id/reload：成功返回结构；预检失败 422；未
   assert.equal(notFound.status, 404)
   assert.equal(((await notFound.json()) as { error: { code: string } }).error.code, 'unknown_plugin')
 
-  // 预检失败（422 + doctor 报告透传）
+  // preflight failed (422 + doctor report pass-through)
   reloadImpl = async () => {
-    throw new HelmError('plugin_reload_preflight_failed', '预检失败', 422, {
+    throw new HelmError('plugin_reload_preflight_failed', 'preflight failed', 422, {
       report: { ok: false, checks: [] },
     })
   }

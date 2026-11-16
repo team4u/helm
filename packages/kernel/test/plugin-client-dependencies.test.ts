@@ -1,18 +1,18 @@
 /**
- * 外部插件前端受控 npm 依赖（clientDependencies）契约测试：
- * - 清单解析：plugin.json clientDependencies 与 package.json helm.clientDependencies
- *   合并去重；非法说明符（相对/绝对路径、.. 段、非字符串）显式 plugin_manifest_invalid；
- * - normalizeDefinition：清单说明符映射为 npmDependencies（解析根 = 插件自身目录），
- *   代码内声明的 npmDependencies 一律剥离（不放开任意解析根）；
- * - 插件间依赖清单（plugin.json dependencies / package.json helm.dependencies）
- *   合并进入定义；package.json 顶层 dependencies（npm 语义）绝不误读；
- * - 真实编译链：声明的说明符可从插件目录 node_modules 解析进 bundle；
- *   未声明裸依赖显式拒绝；已声明但未安装给出可诊断错误；
- * - doctor 全链与生产同一编译口径（client 检查带受控 npm roots）；
- * - 受管安装：installRuntimeDeps 补装清单声明的前端依赖（--no-save，不落
- *   package.json），版本优先取 package.json 已声明 range。
+ * external plugin frontend subject to control npm dependency (clientDependencies) contract test:
+ * - manifest parse:plugin.json clientDependencies and package.json helm.clientDependencies
+ *   merge dedupe; illegal note symbol (each other for/absolute path,.. segment, non- string) explicit plugin_manifest_invalid;
+ * - normalizeDefinition: manifest note symbol mapping is npmDependencies(parse = plugin itself directory),
+ *   code inside declaration npmDependencies one rule strip (do not put open any parse);
+ * - plugin between dependency manifest (plugin.json dependencies / package.json helm.dependencies)
+ *   merge enter define;package.json top-level dependencies(npm semantics) never mistakenly read;
+ * - real compile chain: declaration note symbol can from plugin directory node_modules parse enter bundle;
+ *   not declaration bare dependency explicit reject; already declaration but not installed to out can diagnose error;
+ * - doctor all chain and produce the same compile opening path (client check carries subject to control npm roots);
+ * - managed install:installRuntimeDeps patch install manifest declaration frontend dependency (--no-save, do not
+ *   package.json), version takes precedence take package.json already declaration range.
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -46,7 +46,7 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
 }
 
-/** 装配一个带前端依赖的真实外部插件目录（name 控制目录名，便于多目录互不干扰）。 */
+/** install match a carries frontend dependency real external plugin directory (name control directory name, convenient at many directory mutual do not interference). */
 function makePluginDir(options: { name?: string; clientDeps?: string[]; installLib?: boolean } = {}): string {
   const dir = join(workDir, options.name ?? 'chart-plugin')
   mkdirSync(join(dir, 'client'), { recursive: true })
@@ -65,7 +65,7 @@ function makePluginDir(options: { name?: string; clientDeps?: string[]; installL
   definePlugin(ctx) {
     ctx.ui.workbenchPanel({
       id: 'chart-panel',
-      label: '图表',
+      label: 'diagram table',
       client: { module: 'index.tsx', export: 'ChartPanel' },
     })
   },
@@ -86,7 +86,7 @@ export function ChartPanel() {
   return dir
 }
 
-/** 在插件目录内安装假 npm 包 fake-chart-lib（ESM 入口）。 */
+/** in plugin directory inside install false npm package fake-chart-lib(ESM entry). */
 function installFakeLib(dir: string): void {
   const libDir = join(dir, 'node_modules', 'fake-chart-lib')
   mkdirSync(libDir, { recursive: true })
@@ -106,7 +106,7 @@ function installFakeLib(dir: string): void {
 
 async function importNormalized(dir: string) {
   const entry = await resolvePluginEntry(dir)
-  assert.ok(entry, '入口应可解析')
+  assert.ok(entry, 'entry should can parse')
   return normalizeDefinition(await importPluginDefinition(dir, entry), dir)
 }
 
@@ -117,16 +117,16 @@ function throwsCode(fn: () => unknown, code: string): HelmError {
   } catch (err) {
     caught = err
   }
-  assert.ok(caught instanceof HelmError, `期望 HelmError，实际：${String(caught)}`)
+  assert.ok(caught instanceof HelmError, `expectation HelmError, actual:${String(caught)}`)
   assert.equal(caught.code, code)
   return caught
 }
 
 // ---------------------------------------------------------------------------
-// 清单解析与归一化
+// manifest parse and archive one
 // ---------------------------------------------------------------------------
 
-test('plugin.json 与 package.json helm.clientDependencies 合并去重；非法说明符显式拒绝', { timeout: 60_000 }, async () => {
+test('plugin.json and package.json helm.clientDependencies merge dedupe; illegal note symbol explicit reject', { timeout: 60_000 }, async () => {
   const dir = makePluginDir({ clientDeps: ['fake-chart-lib'] })
   writeJson(join(dir, 'package.json'), {
     name: 'chart-plugin-pkg',
@@ -147,12 +147,12 @@ test('plugin.json 与 package.json helm.clientDependencies 合并去重；非法
   throwsCode(() => readHelmClientDependencies(badName), 'plugin_manifest_invalid')
 })
 
-test('normalizeDefinition：清单说明符映射 npmDependencies（解析根 = 插件目录），代码内声明剥离', { timeout: 60_000 }, async () => {
+test('normalizeDefinition: manifest note symbol mapping npmDependencies(parse = plugin directory), code inside declaration strip', { timeout: 60_000 }, async () => {
   const dir = makePluginDir({ clientDeps: ['fake-chart-lib'] })
   const entry = await resolvePluginEntry(dir)
   assert.ok(entry)
   const raw = await importPluginDefinition(dir, entry)
-  // 代码内恶意/自带的 npmDependencies（指向任意根）必须被剥离。
+  // code inside malicious/self carries npmDependencies(points to any) must by strip.
   const withCodeDeps = { ...raw, npmDependencies: { react: '/usr/share/evil' } }
   const normalized = normalizeDefinition(withCodeDeps, dir)
   assert.deepEqual(normalized.npmDependencies, { 'fake-chart-lib': dir })
@@ -164,7 +164,7 @@ test('normalizeDefinition：清单说明符映射 npmDependencies（解析根 = 
   )
 })
 
-test('插件间依赖：清单声明合并进入定义；package.json 顶层 dependencies 不误读', { timeout: 60_000 }, async () => {
+test('plugin between dependency: manifest declaration merge enter define;package.json top-level dependencies do not mistakenly read', { timeout: 60_000 }, async () => {
   const dir = makePluginDir()
   writeJson(join(dir, 'package.json'), {
     name: 'chart-plugin-pkg',
@@ -172,10 +172,10 @@ test('插件间依赖：清单声明合并进入定义；package.json 顶层 dep
     helm: { dependencies: ['builtin:profile', 'another-plugin'] },
   })
   const normalized = await importNormalized(dir)
-  // npm 语义的顶层 dependencies 绝不进入插件依赖；helm.dependencies 进入。
+  // npm semantics top-level dependencies never enter plugin dependency;helm.dependencies enter.
   assert.deepEqual(normalized.dependencies, ['builtin:profile', 'another-plugin'])
 
-  // plugin.json dependencies 同样解析，且与代码声明合并去重。
+  // plugin.json dependencies same parse, and and code declaration merge dedupe.
   writeJson(join(dir, 'plugin.json'), {
     id: 'chart-plugin',
     main: 'index.ts',
@@ -188,7 +188,7 @@ test('插件间依赖：清单声明合并进入定义；package.json 顶层 dep
   const merged = normalizeDefinition({ ...raw2, dependencies: ['dep-a', 'code-dep'] }, dir)
   assert.deepEqual(merged.dependencies, ['dep-a', 'code-dep', 'dep-b', 'builtin:profile', 'another-plugin'])
 
-  // 非法插件 ID（如 npm 版本说明符）在清单读取处显式拒绝，不静默忽略。
+  // illegal plugin ID(such as npm version note symbol) in manifest read where explicit reject, not silently ignore.
   writeJson(join(dir, 'plugin.json'), {
     id: 'chart-plugin',
     main: 'index.ts',
@@ -201,10 +201,10 @@ test('插件间依赖：清单声明合并进入定义；package.json 顶层 dep
 })
 
 // ---------------------------------------------------------------------------
-// 真实编译链
+// real compile chain
 // ---------------------------------------------------------------------------
 
-test('编译链：声明说明符从插件目录 node_modules 解析进 bundle；未声明拒绝；未安装可诊断', { timeout: 60_000 }, async () => {
+test('compile chain: declaration note symbol from plugin directory node_modules parse enter bundle; not declaration reject; not installed can diagnose', { timeout: 60_000 }, async () => {
   const dir = makePluginDir({ clientDeps: ['fake-chart-lib'] })
   const normalized = await importNormalized(dir)
   const npmRoots = clientNpmRootsOf(normalized.npmDependencies)
@@ -221,14 +221,14 @@ test('编译链：声明说明符从插件目录 node_modules 解析进 bundle�
   assert.ok(compiled.code.includes('fake-chart:'))
   assert.ok(compiled.exports.includes('ChartPanel'))
 
-  // 未声明裸依赖（去掉 roots）显式拒绝。
+  // not declaration bare dependency (remove roots) explicit reject.
   await assert.rejects(
     compilePluginClientModule('chart-plugin', normalized.clientRoot!, 'index.tsx', join(workDir, 'cache2')),
     (err: unknown) =>
-      err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('拒绝裸依赖'),
+      err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('reject bare dependency'),
   )
 
-  // 已声明但未安装：错误明确指向「不可解析/未安装」，不误导为未声明。
+  // already declaration but not installed: error explicit points to cannot parse/not installed, do not mistakenly lead is not declaration.
   const noLibDir = makePluginDir({ name: 'chart-plugin-missing-lib', clientDeps: ['fake-chart-lib'], installLib: false })
   const noLibNormalized = await importNormalized(noLibDir)
   await assert.rejects(
@@ -242,12 +242,12 @@ test('编译链：声明说明符从插件目录 node_modules 解析进 bundle�
     (err: unknown) =>
       err instanceof HelmError &&
       err.code === 'client_compile_failed' &&
-      err.message.includes('不可解析') &&
-      err.message.includes('未安装'),
+      err.message.includes('cannot parse') &&
+      err.message.includes('not installed'),
   )
 })
 
-test('磁盘缓存跨内存代际复用，且前端依赖声明变更使旧 bundle 失效', { timeout: 60_000 }, async () => {
+test('disk cache across memory proxy boundary re- use, and frontend dependency declaration change make old bundle expires', { timeout: 60_000 }, async () => {
   const dir = makePluginDir({ clientDeps: ['fake-chart-lib'] })
   const normalized = await importNormalized(dir)
   const roots = clientNpmRootsOf(normalized.npmDependencies)
@@ -282,14 +282,14 @@ test('磁盘缓存跨内存代际复用，且前端依赖声明变更使旧 bund
     (err: unknown) =>
       err instanceof HelmError &&
       err.code === 'client_compile_failed' &&
-      err.message.includes('拒绝裸依赖'),
-    '撤销 clientDependencies 声明不得回放旧磁盘 bundle',
+      err.message.includes('reject bare dependency'),
+    'undo clientDependencies declaration must not back put old disk bundle',
   )
 })
 
-test('doctor 全链与生产同一编译口径：依赖就绪 ok，缺失时 client 检查结构化失败', { timeout: 60_000 }, async () => {
+test('doctor all chain and produce the same compile opening path: dependency ready ok, missing when client check structure failed', { timeout: 60_000 }, async () => {
   const okDir = makePluginDir({ name: 'chart-plugin-ok', clientDeps: ['fake-chart-lib'] })
-  await importNormalized(okDir) // 预热模块缓存（doctor 用新代际导入，互不影响）
+  await importNormalized(okDir) // warm up module cache (doctor use new proxy boundary import, mutual does not affect)
   const report = await doctorPluginDir(okDir, { buildProvider: createPluginBuildProvider() })
   assert.equal(report.ok, true, JSON.stringify(report.checks, null, 2))
   assert.equal(report.pluginId, 'chart-plugin')
@@ -299,11 +299,11 @@ test('doctor 全链与生产同一编译口径：依赖就绪 ok，缺失时 cli
   assert.equal(missingReport.ok, false)
   const clientCheck = missingReport.checks.find((c) => c.id === 'client')
   assert.ok(clientCheck?.error)
-  assert.ok(clientCheck.error.message.includes('不可解析'), clientCheck.error.message)
+  assert.ok(clientCheck.error.message.includes('cannot parse'), clientCheck.error.message)
 })
 
 // ---------------------------------------------------------------------------
-// 受管安装：前端依赖补装
+// managed install: frontend dependency patch install
 // ---------------------------------------------------------------------------
 
 interface NpmCall {
@@ -312,7 +312,7 @@ interface NpmCall {
   cwd: string
 }
 
-test('受管安装补装清单前端依赖：--no-save、版本取已声明 range；无声明时沿用原命令', { timeout: 60_000 }, async (t) => {
+test('managed install patch install manifest frontend dependency:--no-save, version take already declaration range; without declaration when along use original command', { timeout: 60_000 }, async (t) => {
   const calls: NpmCall[] = []
   const runner: PackageRunner = async (cmd, args, opts) => {
     calls.push({ cmd, args, cwd: opts.cwd })
@@ -345,7 +345,7 @@ test('受管安装补装清单前端依赖：--no-save、版本取已声明 rang
         return { summary: makePluginSummary({ id: 'managed-client-dep', name: 'x', enabled: false }), pluginId: 'managed-client-dep' }
       },
       async enableManagedPlugin() {
-        throw new HelmError('unused', '本测试不启用', 500)
+        throw new HelmError('unused', 'this test does not enable', 500)
       },
       assertManagedPluginUpdateSafe() {},
       async updateManagedPlugin() {
@@ -362,13 +362,13 @@ test('受管安装补装清单前端依赖：--no-save、版本取已声明 rang
   const result = await manager.install(srcDir)
   assert.equal(result.record.pluginId, 'managed-client-dep')
   const installCall = calls.find((c) => c.args[0] === 'install')
-  assert.ok(installCall, '应有 npm install 调用')
-  assert.ok(installCall.args.includes('--no-save'), '前端依赖补装不得改写 package.json')
-  assert.ok(installCall.args.includes('client-chart@^4.2.0'), '版本取 package.json 已声明 range')
-  assert.ok(installCall.args.includes('client-extra'), '子路径说明符按包名补装，不把子路径当 npm 包名')
+  assert.ok(installCall, 'should has npm install invoke')
+  assert.ok(installCall.args.includes('--no-save'), 'frontend dependency patch install must not change write package.json')
+  assert.ok(installCall.args.includes('client-chart@^4.2.0'), 'version take package.json already declaration range')
+  assert.ok(installCall.args.includes('client-extra'), 'sub- path note symbol by package name patch install, does not sub- path when npm package name')
 })
 
-test('无前端依赖声明时安装命令保持原样（--omit=dev，无 --no-save/说明符）', { timeout: 60_000 }, async (t) => {
+test('without frontend dependency declaration when install command keep original (--omit=dev, without --no-save/note symbol)', { timeout: 60_000 }, async (t) => {
   const calls: NpmCall[] = []
   const runner: PackageRunner = async (cmd, args, opts) => {
     calls.push({ cmd, args, cwd: opts.cwd })
@@ -390,7 +390,7 @@ test('无前端依赖声明时安装命令保持原样（--omit=dev，无 --no-s
         return { summary: makePluginSummary({ id: 'plain-plugin', name: 'x', enabled: false }), pluginId: 'plain-plugin' }
       },
       async enableManagedPlugin() {
-        throw new HelmError('unused', '本测试不启用', 500)
+        throw new HelmError('unused', 'this test does not enable', 500)
       },
       assertManagedPluginUpdateSafe() {},
       async updateManagedPlugin() {

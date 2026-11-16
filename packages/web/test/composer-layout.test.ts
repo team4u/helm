@@ -44,7 +44,7 @@ test('canConfigureSessionEnv：空会话或无 handoff 的 /reset 后未再发�
   // SDK 也可能把 handoff 写进 model（[UserMessage] 文本，见 pi-durable README/entries.d.ts）。
   assert.equal(
     canConfigureSessionEnv(
-      [{ kind: 'pi.reset', data: null, model: [{ role: 'user', content: '交接摘要：节点 gpu-box' }] }],
+      [{ kind: 'pi.reset', data: null, model: [{ role: 'user', content: 'Handoff summary：节点 gpu-box' }] }],
       'idle',
     ),
     false,
@@ -52,7 +52,7 @@ test('canConfigureSessionEnv：空会话或无 handoff 的 /reset 后未再发�
   // model 内分段文本形态同样算 handoff。
   assert.equal(
     canConfigureSessionEnv(
-      [{ kind: 'pi.reset', model: [{ role: 'user', content: [{ type: 'text', text: '交接摘要' }] }] }],
+      [{ kind: 'pi.reset', model: [{ role: 'user', content: [{ type: 'text', text: 'Handoff summary' }] }] }],
       'idle',
     ),
     false,
@@ -78,9 +78,9 @@ test('起始环境草稿：跨节点切换不沿用旧 cwd，校验拒绝空/相
     { nodeId: 'gpu-box', cwd: '' },
   )
   // 草稿校验：空目录与相对路径拒绝；POSIX 与 Windows 绝对路径故行。
-  assert.match(envDraftError({ nodeId: 'local', cwd: '' }) ?? '', /请填写/)
-  assert.match(envDraftError({ nodeId: 'local', cwd: '  ' }) ?? '', /请填写/)
-  assert.match(envDraftError({ nodeId: 'local', cwd: 'relative/path' }) ?? '', /绝对路径/)
+  assert.match(envDraftError({ nodeId: 'local', cwd: '' }) ?? '', /Enter the working directory/)
+  assert.match(envDraftError({ nodeId: 'local', cwd: '  ' }) ?? '', /Enter the working directory/)
+  assert.match(envDraftError({ nodeId: 'local', cwd: 'relative/path' }) ?? '', /absolute path/)
   assert.equal(envDraftError({ nodeId: 'local', cwd: '/root/code/helm' }), null)
   assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:\\workspace\\helm' }), null)
   assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:/workspace/helm' }), null)
@@ -95,14 +95,14 @@ test('formatEnvSubtitle：本机省略 @local，远端带 @node 前缀，tooltip
   // 本机：省略 @local，显示 profileId · cwd 尾部两段。
   assert.deepEqual(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'local', cwd: '/root/code/helm' }), {
     text: 'assistant · code/helm',
-    tooltip: '智能体：assistant · 节点：local · 工作目录：/root/code/helm',
+    tooltip: 'Agent: assistant · Node: local · Working directory: /root/code/helm',
   })
   // nodeId 缺省视为 local。
   assert.equal(formatEnvSubtitle({ profileId: 'assistant', cwd: '/root/code/helm' }).text, 'assistant · code/helm')
   // 远端节点：@gpu-box:tail。
   assert.deepEqual(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'gpu-box', cwd: '/home/user/code/helm' }), {
     text: 'assistant · @gpu-box:code/helm',
-    tooltip: '智能体：assistant · 节点：gpu-box · 工作目录：/home/user/code/helm',
+    tooltip: 'Agent: assistant · Node: gpu-box · Working directory: /home/user/code/helm',
   })
   // 空 cwd：本机只显示 profileId，远端显示 @node。
   assert.equal(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'local', cwd: '' }).text, 'assistant')
@@ -112,7 +112,7 @@ test('formatEnvSubtitle：本机省略 @local，远端带 @node 前缀，tooltip
   // 空 cwd 的 tooltip 显示 (未设置)。
   assert.equal(
     formatEnvSubtitle({ profileId: 'p', cwd: '' }).tooltip,
-    '智能体：p · 节点：local · 工作目录：(未设置)',
+    'Agent: p · Node: local · Working directory: (not set)',
   )
 })
 
@@ -130,7 +130,7 @@ test('formatEnvSubtitle：Windows 反斜杠与根路径兼容，compact 模式�
   // compact：远端仅 @node，本机空串（调用方不渲染）；tooltip 始终全量。
   assert.deepEqual(formatEnvSubtitle({ profileId: 'p', nodeId: 'gpu-box', cwd: '/x/y', compact: true }), {
     text: '@gpu-box',
-    tooltip: '智能体：p · 节点：gpu-box · 工作目录：/x/y',
+    tooltip: 'Agent: p · Node: gpu-box · Working directory: /x/y',
   })
   assert.equal(formatEnvSubtitle({ profileId: 'p', nodeId: 'local', cwd: '/x/y', compact: true }).text, '')
 })

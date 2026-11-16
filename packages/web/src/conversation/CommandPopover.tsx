@@ -36,9 +36,9 @@ export function CommandPopover({
       return slashItems.filter((i) => i.id.toLowerCase().includes(q) || i.label.toLowerCase().includes(q))
     }
     const builtin: PopoverItem[] = [
-      { id: '/new', label: '/new', hint: '开始新话题', apply: '/new' },
-      { id: '/clear', label: '/clear', hint: '重置上下文', apply: '/clear' },
-      { id: '/compact', label: '/compact', hint: '精简上下文', apply: '/compact' },
+      { id: '/new', label: '/new', hint: 'Start new topic', apply: '/new' },
+      { id: '/clear', label: '/clear', hint: 'Reset context', apply: '/clear' },
+      { id: '/compact', label: '/compact', hint: 'Compact context', apply: '/compact' },
     ]
     return builtin.filter((i) => i.id.toLowerCase().includes(q))
   }, [query, slashItems])
@@ -103,7 +103,7 @@ export function CommandPopover({
     return (
       <div className="composer-popover">
         <div className="popover-item" style={{ color: 'var(--fg-muted)' }}>
-          没有匹配的命令或技能
+          No matching commands or skills
         </div>
       </div>
     )
@@ -112,8 +112,8 @@ export function CommandPopover({
   return (
     <div className="composer-popover">
       <div className="popover-header">
-        命令与技能
-        <span className="kbd-hint popover-kbd-hint">↑↓ 选择 · Enter 确认 · Esc 关闭</span>
+        Commands and skills
+        <span className="kbd-hint popover-kbd-hint">↑↓ select · Enter confirm · Esc close</span>
       </div>
       {visible.map((item, idx) => (
         <button
@@ -136,7 +136,7 @@ export function CommandPopover({
       ))}
       {items.length > visible.length ? (
         <div className="popover-item" style={{ color: 'var(--fg-subtle)', cursor: 'default' }}>
-          候选过多，仅显示前 {SLASH_VISIBLE_LIMIT} 项，可继续输入过滤
+          Too many candidates; showing the first {SLASH_VISIBLE_LIMIT}; keep typing to filter
         </div>
       ) : null}
     </div>

@@ -1,54 +1,54 @@
 /**
- * 后端插件 TypeScript 模块加载器（external-loader 的转译底座）。
+ * backend plugin TypeScript module load (external-loader transpile bottom seat).
  *
- * 机制（Node 24 `module.registerHooks` 主线程同步钩子 + 构建端口注入的转译函数）：
- * - 只转译「已注册插件根目录」（realpath）内的 .ts/.tsx/.mts/.cts 源文件为 ESM；
- *   文件 URL 就是真实源文件 URL（不落到缓存产物文件），因此 `import.meta.url` /
- *   相对资源定位永远指向插件目录内的真实源文件，不受缓存路径影响；
- * - 模块 identity 由 Node ESM 缓存按 URL 保证：同一路径多次 import 只初始化一次，
- *   与宿主自身模块共享同一注册表（绝不 bundle 一份 @helm/protocol / SDK 造成
- *   instanceof / registry 双份）；
- * - resolve 钩子补齐 TypeScript 习惯的相对导入映射（.js -> .ts/.tsx、.mjs -> .mts、
- *   无扩展名 -> .ts/.tsx / index.ts）。重试仅在原生解析抛 ERR_MODULE_NOT_FOUND
- *   （候选确实缺失）时进行；权限等其他解析错误原样上抛。命中的候选先 realpath：
- *   真实路径越出全部已注册根的（symlink 逃逸）不转译、如实失败；realpath URL
- *   同时保证「.js 映射导入」与「显式 .ts 导入」是同一模块实例（Node 原生对
- *   symlink 也返回 realpath URL，两条路径天然同 URL）；
- * - 裸说明符交给 Node 原生解析：Node 内置模块直接可用，npm 包按「插件目录向上」
- *   的 node_modules 规则解析（插件本目录安装即可生效），`@helm/*` 宿主公共包经
- *   宿主自身 import.meta.resolve 落位（同一实例）；
- * - esbuild 会剥离 ESM import attributes（已知未实现），因此插件内相对 .json 导入
- *   由 load 钩子补注 `type: 'json'`，插件源无需（也无法）写 import attributes；
- * - 源码转译错误（语法 / 类型层面的解析错误）显式抛
- *   `HelmError('plugin_load_failed')`，附文件、行列号与 esbuild 诊断文本。
+ * mechanism (Node 24 `module.registerHooks` main thread sync hook + build port inject transpile function):
+ * - only transpile registered plugin directory (realpath) inside .ts/.tsx/.mts/.cts source file is ESM;
+ *   file URL is exactly real source file URL(do not to cache artifact file), therefore `import.meta.url` /
+ *   each other for asset locate forever points to plugin directory inside real source file, do not subject to cache path affect;
+ * - module identity by Node ESM cache by URL guarantee: the same path many time import only initialize once,
+ *   and host itself module sharing the same register table (never bundle a @helm/protocol / SDK build into
+ *   instanceof / registry double);
+ * - resolve hook patch complete TypeScript habit each other for import mapping (.js -> .ts/.tsx,.mjs -> .mts,
+ *   without extension -> .ts/.tsx / index.ts). retry only in original generate parse throw ERR_MODULE_NOT_FOUND
+ *   (choose indeed missing) when enter row; permission etc. other parse error original on throw. hit choose first realpath:
+ *   real path exceeds out all registered (symlink escape) do not transpile, such as failed;realpath URL
+ *   also guarantee.js mapping import and explicit .ts import is the same module instance (Node original generate for
+ *   symlink also return realpath URL, two path day however same URL);
+ * - bare note symbol hand over to Node original generate parse:Node inside placement module directly available,npm package by plugin directory to on
+ *    node_modules rule parse (plugin this directory install i.e. can takes effect),`@helm/*` host public package via
+ *   host itself import.meta.resolve (the same instance);
+ * - esbuild will strip ESM import attributes(known not implemented), therefore plugin inside each other for .json import
+ *   by load hook patch note `type: 'json'`, plugin source no need to (also cannot) write import attributes;
+ * - source code transpile error (language method / type layer side parse error) explicit throw
+ *   `HelmError('plugin_load_failed')`, attach file, row column number and esbuild diagnose text.
  *
- * 生命周期：钩子懒注册——首个根注册时 registerHooks，全部根释放时 deregister
- * （只反注册本加载器的钩子实例，不影响宿主进程内其他 hooks）。成功注册的
- * 插件根常驻进程：插件运行期动态 import 的 TS 依赖需要转译可用，且模块已
- * 加载的 URL 在 ESM 缓存中保持 identity。因此「停用 / 卸载插件」不释放根、
- * 不卸载已加载模块（同进程内重启/重新注册不重复初始化）；释放仅发生在
- * 加载失败回退时，只影响后续解析行为。
+ * lifecycle: hook lazy register - - first register when registerHooks, all release when deregister
+ * (only reverse register this load hook instance, does not affect host process inside other hooks). succeeded register
+ * plugin common resident process: plugin run phase motion state import  TS dependency need to transpile available, and module already
+ * load URL in ESM cache in keep identity. therefore deactivate / unload plugin do not release,
+ * do not unload already load module (same process inside restart/re- register does not repeat initialize); release only occur in
+ * failed to load fall back when, only affect after continue parse behavior.
  *
- * 受控代际加载（热重载底座）：nextPluginGeneration 为插件根预留下一代
- * 代数号；调用方在入口 URL 附加 `?helmgen=<n>` 即可让该插件的相对依赖闭包
- * 在本进程内重新初始化（新模块图、definePlugin 重新执行），而旧代数模块
- * 保持可用（旧实例继续运行）。代际标记只沿插件根内的相对导入传播；
- * 裸说明符（@helm/* 宿主公共包、npm 包、node: 内置）原生解析且不带标记，
- * 与宿主及旧代数共享同一实例，绝不被代际加载污染。
+ * subject to control proxy boundary load (hot reload bottom seat):nextPluginGeneration is plugin reserved under one proxy
+ * proxy count number; caller in entry URL additional `?helmgen=<n>` i.e. can let the plugin each other for dependency closed package
+ * in this process inside re- initialize (new module diagram,definePlugin re- execute), while old proxy count module
+ * keep available (old instance continue run). proxy boundary mark record only along plugin inside each other for import pass broadcast;
+ * bare note symbol (@helm/* host public package,npm package,node: inside placement) original generate parse and do not carries mark record,
+ * and host and old proxy count sharing the same instance, never by proxy boundary load pollute.
  *
- * 边界与诚实性：
- * - 根外代码不经本加载器转译，加载能力与结果由 Node 原生决定；根外
- *   .js/.cjs 等文件同样透传 Node——本加载器负责运行可信插件代码，不是
- *   沙箱：可信插件与宿主同权限，路径边界是转译范围的约定而非安全承诺；
- * - 后端 .tsx 的真实用途是「与前端共享源文件形态的纯逻辑模块」（JSX 语法可写、
- *   转译为 react/jsx-runtime 导入，需插件目录自备 react 或改用纯 .ts）；React
- *   组件仍属前端 client.tsx 轨道（@helm/plugin-build），此处不做 JSX 运行时注入。
+ * boundary and honest:
+ * - outside code do not via this load transpile, load capability and result by Node original generate decide; outside
+ *   .js/.cjs etc. file same pass-through Node- - this load negative duty run can message plugin code, is not
+ *   sandbox: can message plugin and host same permission, path boundary is transpile scope convention while non- security promise;
+ * - backend .tsx real purpose is and frontend sharing source file form pure logic module (JSX language method can write,
+ *   transpile is react/jsx-runtime import, must plugin directory self prepare react or change use pure .ts);React
+ *   component still belong frontend client.tsx track path (@helm/plugin-build), this where does not JSX runtime inject.
  *
- * 构建端口：本模块只保留加载机制（resolve 策略、代际传播、containment、
- * 钩子生命周期）；源码转译由 PluginBuildProvider.transformBackendTs 提供并经
- * registerPluginTsRoot(root, { transform }) 显式注入（产品在 hub 接线默认实现）。
- * 内核不静态依赖 esbuild；未注入 transform 时需要转译的加载显式拒绝
- * （501 unsupported_backend_ts_build），绝不回退内置转译器。
+ * build port: this module only keep load mechanism (resolve policy, proxy boundary pass broadcast,containment,
+ * hook lifecycle); source code transpile by PluginBuildProvider.transformBackendTs provide and via
+ * registerPluginTsRoot(root, { transform }) explicit inject (produce product in hub connect line by default implement).
+ * kernel do not static dependency esbuild; not inject transform when need to transpile load explicit reject
+ * (501 unsupported_backend_ts_build), never fall back inside placement transpile.
  */
 import { registerHooks, type ModuleHooks } from 'node:module';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
@@ -56,16 +56,16 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HelmError, type PluginBuildProvider } from '@helm/protocol';
 
-/** 转译函数形状（PluginBuildProvider.transformBackendTs）。 */
+/** transpile function shape (PluginBuildProvider.transformBackendTs). */
 export type BackendTsTransformFn = PluginBuildProvider['transformBackendTs'];
 
-/** 支持转译的 TypeScript 源扩展名（.cts 转译产物仍按 ESM 加载，保持单一模块形态）。 */
+/** support transpile TypeScript source extension (.cts transpile artifact still by ESM load, keep single one module form). */
 const TS_SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
 
-/** Node 原生可解析的 JS 家族扩展名（TS 习惯映射的源形态）。 */
+/** Node original generate can parse JS family extension (TS habit mapping source form). */
 const JS_FAMILY_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 
-/** 已注册插件根目录（realpath）：引用计数与该根的转译函数（构建端口注入）。 */
+/** registered plugin directory (realpath): reference counter and the transpile function (build port inject). */
 interface TsRootEntry {
   count: number;
   transform?: BackendTsTransformFn;
@@ -74,20 +74,20 @@ interface TsRootEntry {
 const rootRefCounts = new Map<string, TsRootEntry>();
 
 /**
- * 模块代际计数（受控热重载用）：根 realpath -> 下一代代数号。
- * reload 时对入口 URL 追加 `?helmgen=<n>` 使 Node ESM 缓存按新 URL 重新初始化
- * 插件模块图；resolve 钩子会把该标记沿「插件根内的相对导入」逐层传播，
- * 而裸说明符（@helm/*、npm 包、node: 内置）不带标记原生解析，仍与宿主共享
- * 同一实例——代际隔离只作用于插件根内部，绝不污染根外模块。
+ * module proxy boundary counter (subject to control hot reload use): realpath -> under one proxy proxy count number.
+ * reload when for entry URL append `?helmgen=<n>` make Node ESM cache by new URL re- initialize
+ * plugin module diagram;resolve hook will the mark record along plugin inside each other for import one by one layer pass broadcast,
+ * while bare note symbol (@helm/*,npm package,node: inside placement) do not carries mark record original generate parse, still and host sharing
+ * the same instance - - proxy boundary isolated only effect at plugin internal, never pollute outside module.
  */
 const rootGenerations = new Map<string, number>();
 
-/** 预留的代际查询参数前缀（不含 = 与值）。 */
+/** reserved proxy boundary query parameter prefix (excludes = and value). */
 const GENERATION_QUERY_PREFIX = 'helmgen=';
 
 /**
- * 取出 URL 的 helmgen 代数号（无标记返回 undefined）。
- * 仅在插件根内的相对导入传播链上出现；入口由 reload/doctor 显式附加。
+ * extract URL  helmgen proxy count number (without mark record return undefined).
+ * only in plugin inside each other for import pass broadcast chain on appear; entry by reload/doctor explicit additional.
  */
 function generationOfUrl(url: string): number | undefined {
   const queryStart = url.lastIndexOf('?');
@@ -101,17 +101,17 @@ function generationOfUrl(url: string): number | undefined {
   return undefined;
 }
 
-/** 给文件 URL 附加 helmgen 代数标记（已有标记时原样返回）。 */
+/** to file URL additional helmgen proxy count mark record (already has mark record when original return). */
 function withGenerationQuery(url: string, generation: number): string {
   if (generationOfUrl(url) !== undefined) return url;
   return `${url}?${GENERATION_QUERY_PREFIX}${generation}`;
 }
 
 /**
- * 预留并返回插件根的下一代代数号（单调递增）。
- * 调用方（doctor / reload）用它构造带 `?helmgen=<n>` 的入口 URL，实现受控热重载：
- * 同一插件目录的新代数模块图独立初始化，旧代数模块在 ESM 缓存中保持可用
- * （旧插件实例继续运行）；裸说明符依赖不受影响（与宿主同实例）。
+ * reserved and return plugin under one proxy proxy count number (single tune pass increase).
+ * caller (doctor / reload) use it construct carries `?helmgen=<n>` entry URL, implement subject to control hot reload:
+ * the same plugin directory new proxy count module diagram independent initialize, old proxy count module in ESM cache in keep available
+ * (old plugin instance continue run); bare note symbol dependency do not subject to affect (and host same instance).
  */
 export function nextPluginGeneration(rootDir: string): number {
   const root = realpathSync(rootDir);
@@ -120,24 +120,24 @@ export function nextPluginGeneration(rootDir: string): number {
   return next;
 }
 
-/** 懒注册的钩子实例；全部根释放时 deregister（见文件头「生命周期」）。 */
+/** lazy register hook instance; all release when deregister(see file head lifecycle). */
 let hooks: ModuleHooks | undefined;
 
-/** 宿主侧包解析器：捕获本模块自身的 import.meta.resolve（跨任意运行环境稳定指向 kernel 工作区）。 */
+/** host side package parse: catch this module itself import.meta.resolve(across any run environment stable points to kernel work zone). */
 const hostMetaResolve = import.meta.resolve;
 
-/** target（词法或真实路径）是否位于 root 内（跨平台：relative + sep，不硬编码分隔符）。 */
+/** target(term method or real path) is otherwise at root inside (across platform:relative + sep, do not hard encode isolate symbol). */
 function isInsideRoot(root: string, target: string): boolean {
   const rel = relative(root, target);
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
 }
 
-/** url 是否位于任一已注册根目录之下（根以 realpath 注册；symlink URL 由 resolve 层消解）。 */
+/** url is otherwise at any one registered directory of under (with realpath register;symlink URL by resolve layer consume solve). */
 function isInsideAnyRoot(url: string): boolean {
   return rootOfUrl(url) !== undefined;
 }
 
-/** url 所属的已注册根（无则 undefined）；transformOfRoot 与根判定共用同一遍历。 */
+/** url which belong registered (without then undefined);transformOfRoot and decide shared use the same iterate. */
 function rootOfUrl(url: string): string | undefined {
   if (rootRefCounts.size === 0 || !url.startsWith('file:')) return undefined;
   let path: string;
@@ -152,7 +152,7 @@ function rootOfUrl(url: string): string | undefined {
   return undefined;
 }
 
-/** 取 url 所属已注册根的转译函数（未注入时 undefined；load 钩子显式拒绝）。 */
+/** take url which belong registered transpile function (not inject when undefined;load hook explicit reject). */
 function transformOfRoot(url: string): BackendTsTransformFn | undefined {
   const root = rootOfUrl(url);
   return root === undefined ? undefined : rootRefCounts.get(root)?.transform;
@@ -163,15 +163,15 @@ function fileExtension(path: string): string {
   return dot === -1 ? '' : path.slice(dot);
 }
 
-/** 说明符的扩展名（去 query/fragment；裸包名与子路径统一取尾部段）。 */
+/** note symbol extension (remove query/fragment; bare package name and sub- path unify take tail part segment). */
 function specifierExtension(specifier: string): string {
   const clean = specifier.split('?')[0]!.split('#')[0]!;
   return fileExtension(clean);
 }
 
 /**
- * 相对说明符解析失败时的 TypeScript 习惯候选（tsc --module nodenext 的映射子集）。
- * 仅在原生解析确认目标缺失（ERR_MODULE_NOT_FOUND）后逐一探测。
+ * each other for note symbol failed to parse when TypeScript habit choose (tsc --module nodenext mapping sub- collection).
+ * only in original generate parse confirm target missing (ERR_MODULE_NOT_FOUND) after one by one probe.
  */
 function tsResolutionCandidates(resolvedPath: string): string[] {
   const ext = fileExtension(resolvedPath);
@@ -194,17 +194,17 @@ function isFile(path: string): boolean {
   }
 }
 
-/** .js 家族说明符解析出根外 TS 源：统一拒绝（不转译根外代码，绝不因映射来源不同而口径不一）。 */
+/** .js family note symbol parse out outside TS source: unify reject (do not transpile outside code, never because mapping source different while opening path do not one). */
 function rootEscapeError(specifier: string, candidate: string, real: string): HelmError {
   return new HelmError(
     'plugin_load_failed',
-    `外部插件相对依赖 ${specifier} 解析到插件根目录外的 TypeScript 源 ${candidate}（真实路径 ${real}），拒绝转译；如确需引用根外模块，请直接使用其真实扩展名说明符`,
+    `external plugin each other for dependency ${specifier} parse to plugin directory outside TypeScript source ${candidate}(real path ${real}), reject transpile; such as indeed must reference outside module, please directly use its real extension note symbol`,
     500,
     { specifier, candidate, real },
   );
 }
 
-/** 注册进程钩子（幂等：已注册时复用同一实例）。 */
+/** register process hook (idempotent: registered when re- use the same instance). */
 function ensureHooks(): void {
   if (hooks !== undefined) return;
   hooks = registerHooks({
@@ -214,11 +214,11 @@ function ensureHooks(): void {
         return nextResolve(specifier, context);
       }
       if (specifier.startsWith('./') || specifier.startsWith('../')) {
-        // 代际传播：父模块携带 helmgen 标记时，解析结果若位于插件根内则附加
-        // 同一标记——新代数的相对依赖闭包整体重新初始化；裸说明符（@helm/* /
-        // npm / node:）不走此分支，与宿主及旧代数共享同一实例，绝不被污染。
+        // proxy boundary pass broadcast: parent module carry helmgen mark record when, parse result if at plugin inside then additional
+        // the same mark record - - new proxy count each other for dependency closed package whole re- initialize; bare note symbol (@helm/* /
+        // npm / node:) do not away this branch, and host and old proxy count sharing the same instance, never by pollute.
         const parentGeneration = generationOfUrl(parent);
-        /** 根内文件 URL 附加代际标记（根外文件不标记：共享模块不复制实例）。 */
+        /** inside file URL additional proxy boundary mark record (outside file do not mark record: sharing module do not duplicate instance). */
         const settle = (url: string): { url: string; shortCircuit?: boolean } =>
           parentGeneration === undefined || !isInsideAnyRoot(url)
             ? { url }
@@ -227,7 +227,7 @@ function ensureHooks(): void {
         try {
           resolved = nextResolve(specifier, context);
         } catch (err) {
-          // 仅「候选确实缺失」才按 TS 习惯重试；权限等其他解析错误原样上抛
+          // only choose indeed missing only then by TS habit retry; permission etc. other parse error original on throw
           if ((err as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND') throw err;
           let target: string;
           try {
@@ -237,8 +237,8 @@ function ensureHooks(): void {
           }
           for (const candidate of tsResolutionCandidates(target)) {
             if (!isFile(candidate)) continue;
-            // realpath：既保证与显式 .ts 导入同 URL（同一模块实例），又拦截
-            // symlink 指向根外的候选（越根不转译，绝不把根外源码收编进转译范围）
+            // realpath: since guarantee and explicit .ts import same URL(the same module instance), again intercept
+            // symlink points to outside choose (exceeds do not transpile, never outside source code edit enter transpile scope)
             let real: string;
             try {
               real = realpathSync(candidate);
@@ -254,9 +254,9 @@ function ensureHooks(): void {
           }
           throw err;
         }
-        // 后续钩子（如开发期 tsx）可能已在 nextResolve 内完成 .js -> .ts 映射：
-        // .js 家族说明符的 TS 扩展结果一律按本加载器策略复核（realpath + 根内），
-        // 保证与自射回退同一口径（identity 规范化 + 越根拒绝不因映射来源而异）
+        // after continue hook (such as development phase tsx) may already in nextResolve inside complete .js -> .ts mapping:
+        // .js family note symbol TS extend result one rule by this load policy re-check (realpath + inside),
+        // guarantee and self shoot fall back the same opening path (identity specification + exceeds reject do not because mapping source while different)
         const resolvedUrl = resolved.url;
         if (
           typeof resolvedUrl === 'string' &&
@@ -277,8 +277,8 @@ function ensureHooks(): void {
           }
           return settle(pathToFileURL(real).href);
         }
-        // 常规解析结果（含相对 .json / 根外合法目标）：根内文件补齐代际标记
-        //（Node 相对 URL 解析会丢弃父 query，防御性重新附加）。
+        // common rule parse result (contains each other for .json / outside legal target): inside file patch complete proxy boundary mark record
+        //(Node each other for URL parse will discard parent query, guard against defend re- additional).
         if (
           parentGeneration !== undefined &&
           typeof resolvedUrl === 'string' &&
@@ -289,8 +289,8 @@ function ensureHooks(): void {
         }
         return resolved;
       }
-      // 宿主公共包：用宿主自身解析位置，保证与宿主同一模块实例（不做双份 bundle）。
-      // 限定 @helm/*（本仓公共契约包）；其他裸说明符一律按插件目录原生解析。
+      // host public package: use host itself parse location, guarantee and host the same module instance (does not double bundle).
+      // limit set @helm/*(this warehouse public contract package); other bare note symbol one rule by plugin directory original generate parse.
       if (specifier.startsWith('@helm/')) {
         try {
           const url = hostMetaResolve(specifier);
@@ -298,8 +298,8 @@ function ensureHooks(): void {
             return { url, shortCircuit: true };
           }
         } catch {
-          // 宿主侧也未安装（如 @helm/web 仅前端可用）：落到下方按插件目录原生解析，
-          // 仍失败则如实抛 Node 原生 ERR_MODULE_NOT_FOUND
+          // host side also not installed (such as @helm/web only frontend available): to under way by plugin directory original generate parse,
+          // still failed then such as throw Node original generate ERR_MODULE_NOT_FOUND
         }
       }
       return nextResolve(specifier, context);
@@ -308,10 +308,10 @@ function ensureHooks(): void {
       if (!isInsideAnyRoot(url)) {
         return nextLoad(url, context);
       }
-      // 扩展名按去 query 的真实路径计算（代际 URL 携带 ?helmgen=N 标记）。
+      // extension by remove query real path compute (proxy boundary URL carry ?helmgen=N mark record).
       const ext = fileExtension(fileURLToPath(url));
-      // 插件内相对 .json：esbuild 转译会剥离 import attributes（源文件写也会被剥），
-      // 由宿主在加载边界补注 type=json，插件源 `import x from './x.json'` 直接可用。
+      // plugin inside each other for .json:esbuild transpile will strip import attributes(source file write also will by strip),
+      // by host in load boundary patch note type=json, plugin source `import x from './x.json'` directly available.
       if (ext === '.json') {
         return nextLoad(url, {
           ...context,
@@ -326,15 +326,15 @@ function ensureHooks(): void {
       try {
         source = readFileSync(file, 'utf8');
       } catch (err) {
-        // 读源失败（权限 / 竞态删除）：如实抛 Node 原生错误，不静默跳过
+        // read source failed (permission / race delete): such as throw Node original generate error, not silently skip
         throw err;
       }
-      // 转译函数由构建端口注入（按根存储）：缺失时显式拒绝，绝不回退内置转译器。
+      // transpile function by build port inject (by store): missing when explicit reject, never fall back inside placement transpile.
       const transform = transformOfRoot(url);
       if (transform === undefined) {
         throw new HelmError(
           'unsupported_backend_ts_build',
-          `宿主未注入插件构建端口（PluginHostOptions.buildProvider.transformBackendTs）：无法转译外部插件 TS 源 ${file}`,
+          `host not inject plugin build port (PluginHostOptions.buildProvider.transformBackendTs): cannot transpile external plugin TS source ${file}`,
           501,
           { file },
         );
@@ -355,7 +355,7 @@ function ensureHooks(): void {
   });
 }
 
-/** 把 esbuild 转译失败包装成带文件与行列定位的显式 HelmError（绝不静默吞错）。 */
+/**  esbuild transpile failed wrap into carries file and row column locate explicit HelmError(never static default swallow wrong). */
 function transpileError(file: string, err: unknown): HelmError {
   const first = (err as { errors?: Array<{ text?: string; location?: { line: number; column: number } }> }).errors?.[0];
   const location = first?.location;
@@ -363,19 +363,19 @@ function transpileError(file: string, err: unknown): HelmError {
   const detail = first?.text ?? (err instanceof Error ? err.message : String(err));
   return new HelmError(
     'plugin_load_failed',
-    `外部插件源码转译失败: ${file}${position ? `:${position}` : ''}（${detail}）`,
+    `external plugin source code transpile failed: ${file}${position ? `:${position}` : ''}(${detail})`,
     500,
     { file, line: location?.line, column: location?.column, detail },
   );
 }
 
 /**
- * 为插件根目录启用后端 TS 转译（引用计数；同一目录重复注册合并，钩子懒注册）。
- * options.transform 为该根的转译函数（PluginBuildProvider.transformBackendTs，
- * 由外部插件加载链从宿主构建端口透传）；重复注册时显式提供的 transform 覆盖
- * 旧值，未提供时保持既有值（同进程同一纯函数语义）。
- * 返回释放函数：计数归零时目录移出转译范围并 deregister 进程钩子（只反注册
- * 本加载器的钩子实例，不影响宿主进程内其他 hooks）。
+ * is plugin directory enable backend TS transpile (reference counter; the same directory duplicate register merge, hook lazy register).
+ * options.transform is the transpile function (PluginBuildProvider.transformBackendTs,
+ * by external plugin load chain from host build port pass-through); duplicate register when explicit provide transform override
+ * old value, not provide when keep since has value (same process the same pure function semantics).
+ * return release function: counter reset to zero when directory move out transpile scope and deregister process hook (only reverse register
+ * this load hook instance, does not affect host process inside other hooks).
  */
 export function registerPluginTsRoot(
   rootDir: string,

@@ -1,31 +1,31 @@
 /**
- * 外部插件包管理器：install / update / remove 事务。
+ * external plugin package manage:install / update / remove transaction.
  *
- * 仿 Pi package manager 的 source 模型（npm / git / local 一步到位），但 helm
- * 的安装语义是「staging 拷贝 + 现有 doctor 全链 + 原子进入受管目录 + 持久化
- * 记录 + 注册进 PluginHost」，不做市场数据库、不做版本目录池、不做向后迁移。
+ * imitate Pi package manager  source model (npm / git / local one step to), but helm
+ * install semantics isstaging copy + existing doctor all chain + atomic enter managed directory + persist
+ * record + register enter PluginHost, does not market database, does not version directory pool, does not to after migration.
  *
- * 安全与诚实性纪律：
- * - npm 安装永不运行 lifecycle scripts（--ignore-scripts --no-audit --no-fund，
- *   --foreground-scripts 使任何绕过显式可见）；git 使用非交互环境变量
- *   （GIT_TERMINAL_PROMPT=0/GIT_ASKPASS=echo）与 --depth 1 浅克隆；
- * - staging 一律在 <dataDir>/plugins/.staging/<uuid>/ 内；成功后原子 rename
- *   进入 <dataDir>/plugins/<safeName>/；失败（含 doctor 失败、注册失败）清理
- *   staging，绝不留半产物；rename 失败显式报错并清理；
- * - local 来源与 npm/git 同样拷贝进受管目录（不 symlink）：PluginHost.register
- *   会把 <dataDir>/plugins/<pluginId> 同时作为插件源目录与 ctx.dataDir，符号
- *   链接会把插件数据写入用户源码树、remove 会破坏用户文件。代价（编辑源码
- *   需 update 重同步）在 install 结果与错误信息中如实说明；
- * - 拷贝排除 node_modules / .git / 点开头文件/目录（受管安装不含构建产物与
- *   VCS 元数据；npm 来源的运行时依赖声明于 package.json.dependencies，由
- *   受管 install 步骤以 --omit=dev 补齐且同样不运行 lifecycle scripts）；
- * - 受信插件的进程内执行边界如实声明：doctor/注册/启用的插件代码在本 Hub
- *   进程内运行、拥有宿主权限；本管理器的路径校验只是受管目录边界约定，
- *   不是沙箱。本文件头与错误信息按此口径表述，绝不声称沙箱。
+ * security and honest discipline:
+ * - npm install forever do not run lifecycle scripts(--ignore-scripts --no-audit --no-fund,
+ *   --foreground-scripts make any bypass explicit visible);git use non- interaction environment variable
+ *   (GIT_TERMINAL_PROMPT=0/GIT_ASKPASS=echo) and --depth 1 shallow clone;
+ * - staging one rule in <dataDir>/plugins/.staging/<uuid>/ inside; after success atomic rename
+ *   enter <dataDir>/plugins/<safeName>/; failed (contains doctor failed, register failed) clean up
+ *   staging, never half artifact;rename failed explicit errors and clean up;
+ * - local source and npm/git same copy enter managed directory (do not symlink):PluginHost.register
+ *   will <dataDir>/plugins/<pluginId> also as plugin source directory and ctx.dataDir, symbol
+ *   link will plugin data write user source code tree,remove will break user file. proxy price (edit source code
+ *   must update heavy sync) in install result and error information in such as note;
+ * - copy exclude node_modules / .git / point open head file/directory (managed install excludes build artifact and
+ *   VCS metadata;npm source runtime dependency declaration at package.json.dependencies, by
+ *   managed install step with --omit=dev patch complete and same do not run lifecycle scripts);
+ * - subject to message plugin process inside execute boundary such as declaration:doctor/register/enable plugin code in this Hub
+ *   process inside run, own host permission; this manage path validate only is managed directory boundary convention,
+ *   is not sandbox. this file head and error information by this opening path table state, never sound call sandbox.
  *
- * 安装目录名 safeName：优先包内定义 id（plugin.json/package.json helm 字段
- * 解析后的插件 id），回退目录探测名；最终以 doctor 真实导入得到的插件 id
- * 为准（目录名与 id 不一致时以 id 为准，安装记录同样按 id 键控）。
+ * install directory name safeName: takes precedence package inside define id(plugin.json/package.json helm field
+ * parse after plugin id), fall back directory probe name; eventually with doctor real import obtain to plugin id
+ * is allow (directory name and id inconsistent when with id is allow, install record same by id key control).
  */
 import { spawn } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises';
@@ -38,7 +38,7 @@ import { readHelmClientDependencies } from './plugin-manifest.js';
 import type { PluginPackageManagerStore } from './package-store.js';
 
 // ---------------------------------------------------------------------------
-// 进程执行底座（可注入 fake：测试不依赖真实网络）
+// process execute bottom seat (can inject fake: test independent of real network)
 // ---------------------------------------------------------------------------
 
 export interface RunResult {
@@ -47,10 +47,10 @@ export interface RunResult {
   stderr: string
 }
 
-/** 进程运行器：真实实现 spawn npm/git；测试注入 fake。 */
+/** process run: real implement spawn npm/git; test inject fake. */
 export type PackageRunner = (cmd: string, args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<RunResult>;
 
-/** 默认 runner：非交互环境、合并 stdout/stderr、超时 SIGKILL。 */
+/** by default runner: non- interaction environment, merge stdout/stderr, timeout SIGKILL. */
 export const defaultPackageRunner: PackageRunner = (cmd, args, opts) =>
   new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(cmd, args, {
@@ -86,7 +86,7 @@ export const defaultPackageRunner: PackageRunner = (cmd, args, opts) =>
     });
   });
 
-/** 末 40 行快照（诚实性纪律：外部交接失败必须附终端输出）。 */
+/** end 40 row snapshot (honest discipline: external handover failed must attach terminal output). */
 export function tailLines(text: string, lines = 40): string {
   const all = text.split('\n');
   return all.slice(Math.max(0, all.length - lines)).join('\n').trim();
@@ -95,28 +95,28 @@ export function tailLines(text: string, lines = 40): string {
 function commandError(kind: string, cmd: string, args: string[], result: RunResult): HelmError {
   return new HelmError(
     `plugin_package_${kind}_failed`,
-    `插件包${kind === 'install' ? '安装' : kind === 'update' ? '更新' : '移除'}命令失败：${cmd} ${args.join(' ')}（exit ${result.code}）\n${tailLines(result.stderr || result.stdout)}`,
+    `plugin package${kind === 'install' ? 'install' : kind === 'update' ? 'update' : 'remove'}command failed:${cmd} ${args.join(' ')}(exit ${result.code})\n${tailLines(result.stderr || result.stdout)}`,
     500,
     { cmd, args, code: result.code, stdoutTail: tailLines(result.stdout), stderrTail: tailLines(result.stderr) },
   );
 }
 
 // ---------------------------------------------------------------------------
-// 管理器
+// manage
 // ---------------------------------------------------------------------------
 
-/** PluginHost 集成端口（真实 PluginHost 结构兼容，便于测试注入 fake host）。 */
+/** PluginHost collection into port (real PluginHost structure compatibility, convenient at test inject fake host). */
 export interface PackageManagerHost {
   registerManagedPlugin(dir: string, options: { enabled: boolean }): Promise<{ summary: PluginSummary; pluginId: string }>;
-  /** 安装后启用（install enable: true 路径；失败诊断向上透传，不回滚安装）。 */
+  /** install after enable (install enable: true path; failed diagnose to on pass-through, do not rollback install). */
   enableManagedPlugin(pluginId: string): Promise<PluginSummary>;
-  /** 更新切换前安全预检：在途任务 409 / provider 忙则拒绝（旧实例与旧目录不动）。 */
+  /** update switch before security preflight: in-flight task 409 / provider busy then reject (old instance and old directory do not motion). */
   assertManagedPluginUpdateSafe(pluginId: string): Promise<void> | void;
   updateManagedPlugin(pluginId: string, dir: string, options: { keepEnabled: boolean }): Promise<{ summary: PluginSummary }>;
   removeManagedPlugin(pluginId: string): Promise<{ wasEnabled: boolean }>;
   /**
-   * 卸载关联清理：删除该插件持久化文档数据（全局 doc + 会话文档）并等待
-   * DELETE 真实落盘；失败显式 reject，remove 据此保留目录与安装记录以便重试。
+   * unload related clean up: delete the plugin persist document data (global doc + conversation document) and wait for
+   * DELETE real; failed explicit reject,remove based on this keep directory and install record with convenient retry.
    */
   purgePluginPersistentData(pluginId: string): Promise<void>;
   listSummaries(): PluginSummary[];
@@ -124,17 +124,17 @@ export interface PackageManagerHost {
 
 export interface PluginPackageManagerOptions {
   dataDir: string
-  /** Hub cwd（相对 local 路径解析基准）。 */
+  /** Hub cwd(each other for local path parse base allow). */
   cwd: string
   store: PluginPackageManagerStore
   host: PackageManagerHost
   runner?: PackageRunner
-  /** 单命令超时（默认 120s）。 */
+  /** single command timeout (by default 120s). */
   commandTimeoutMs?: number
   /**
-   * 插件构建端口（runtime 注入，与 PluginHostOptions.buildProvider 同一实例）：
-   * install/update 的 doctor 预检与生产同一编译/转译口径。缺失时带 client 引用
-   * 或 TS 源的包在 doctor 处如实失败，不静默降级。
+   * plugin build port (runtime inject, and PluginHostOptions.buildProvider the same instance):
+   * install/update  doctor preflight and produce the same compile/transpile opening path. missing when carries client reference
+   * or TS source package in doctor where such as failed, not silently fall back.
    */
   buildProvider?: PluginBuildProvider
 }
@@ -144,7 +144,7 @@ const PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function safeDirName(pluginId: string): string {
   if (!PLUGIN_ID_PATTERN.test(pluginId) || pluginId.startsWith('builtin:')) {
-    throw new HelmError('invalid_plugin_definition', `插件 id 不允许作为受管安装目录名：${pluginId}`, 400, { pluginId });
+    throw new HelmError('invalid_plugin_definition', `plugin id disallows as managed install directory name:${pluginId}`, 400, { pluginId });
   }
   return pluginId;
 }
@@ -152,11 +152,11 @@ function safeDirName(pluginId: string): string {
 function assertInsideDataDir(dataDir: string, target: string): void {
   const rel = relative(resolve(dataDir), resolve(target));
   if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new HelmError('validation_error', `安装目标越出受管插件目录：${target}`, 400, { target });
+    throw new HelmError('validation_error', `install target exceeds out managed plugin directory:${target}`, 400, { target });
   }
 }
 
-/** 纯数据目录拷贝（不含符号链接目标；忽略 node_modules/.git/点前缀）。 */
+/** pure data directory copy (excludes symlink target; ignore node_modules/.git/point prefix). */
 async function copyTreeFiltered(src: string, dest: string): Promise<void> {
   const entries = await readdir(src, { withFileTypes: true });
   await mkdir(dest, { recursive: true });
@@ -169,13 +169,13 @@ async function copyTreeFiltered(src: string, dest: string): Promise<void> {
     } else if (entry.isFile()) {
       await cp(from, to, { force: true });
     }
-    // symlink / fifo 等特殊文件跳过（受管安装不携带链接与设备文件）
+    // symlink / fifo etc. special file skip (managed install does not carry link and device file)
   }
 }
 
 /**
- * 插件包管理器。所有操作经 manager 级互斥队列串行（install/update/remove
- * 互不并发；PluginHost 内部的 per-plugin 生命周期队列由 host 端口保证）。
+ * plugin package manage. all operation via manager level mutual exclusion queue serial (install/update/remove
+ * mutual do not concurrency;PluginHost internal per-plugin lifecycle queue by host port guarantee).
  */
 export class PluginPackageManager {
   private readonly dataDir: string;
@@ -211,59 +211,59 @@ export class PluginPackageManager {
     return join(this.pluginsDir(), '.staging');
   }
 
-  /** staging 目录创建（幂等；首次安装前保证存在）。 */
+  /** staging directory create (idempotent; first time install before guarantee store in). */
   private async ensureStagingRoot(): Promise<string> {
     const root = this.stagingRoot();
     await mkdir(root, { recursive: true });
     return root;
   }
 
-  // --- 安装 -------------------------------------------------------------
+  // --- install -------------------------------------------------------------
 
   /**
-   * 安装插件包：解析 source -> staging 获取 -> 运行时依赖 -> doctor 全链 ->
-   * 原子进入受管目录 -> 持久化记录 -> 注册（默认 disabled）。
+   * install plugin package: parse source -> staging get -> runtime dependency -> doctor all chain ->
+   * atomic enter managed directory -> persist record -> register (by default disabled).
    *
-   * 事务语义（不留半产物、不破坏运行中实例）：
-   * - 重复安装防护：同 pluginId 已有受管记录或已注册实例时显式 409
-   *   plugin_package_already_installed（不静默覆盖；需更新请走 update）；
-   * - 目标目录占用防护：target 已存在（残留目录或同名其它插件目录）时
-   *   显式 409，不先删后装；
-   * - rename 进位后任何失败（注册 / 持久化）：删除新 target 回滚，staging
-   *   一并清理，绝不留未注册目录与已注册实例的撕裂状态；
-   * - enable: true 启用失败不回滚安装（设计允许，失败诊断经 enableError
-   *   透传），但安装/记录链本身失败时必须完全回滚；启用失败时插件保持
-   *   disabled，记录已持久化，重启后可正常加载与重试 enable。
+   * transaction semantics (do not half artifact, do not break run in instance):
+   * - duplicate install protect: same pluginId already has managed record or registered instance when explicit 409
+   *   plugin_package_already_installed(not silently override; must update please away update);
+   * - target directory occupy protect:target already exists (leftover directory or same name other plugin directory) when
+   *   explicit 409, do not first delete after install;
+   * - rename enter after any failed (register / persist): delete new target rollback,staging
+   *   one and clean up, never not registered directory and registered instance tear state;
+   * - enable: true enable failed do not rollback install (design allows, failed diagnose via enableError
+   *   pass-through), but install/record chain itself on failure must fully rollback; enable on failure plugin keep
+   *   disabled, record persisted, after restart can normal load and retry enable.
    */
   async install(source: string, options: { enable?: boolean } = {}): Promise<PluginInstallResult> {
     const parsed = parsePluginSource(source, this.cwd);
     return this.enqueue(async () => {
       await this.ensureStagingRoot();
       const staging = await mkdtemp(join(this.stagingRoot(), 'pkg-'));
-      let inPlace = false; // payload 已 rename 进受管 target
+      let inPlace = false; // payload already rename enter managed target
       try {
         const payloadDir = await this.fetchIntoStaging(parsed, staging);
-        // 运行时依赖先于 doctor：带 package.json 的包（npm/git/local 同权）在
-        // staging 副本内补装 --omit=dev（不触碰用户 local 源：local 已是过滤拷贝），
-        // 否则依赖 npm 包的入口在 doctor 代际导入时即失败（误报为插件缺陷）。
+        // runtime dependency first at doctor: carries package.json package (npm/git/local same right) in
+        // staging copy inside patch install --omit=dev(do not trigger touch user local source:local already is filter copy),
+        // otherwise dependency npm package entry in doctor proxy boundary import when i.e. failed (mistakenly report is plugin defect).
         await this.installRuntimeDeps(payloadDir);
         const { pluginId, dirName } = await this.identifyPlugin(payloadDir, parsed);
-        // doctor 全链（manifest/backend/register/client）在依赖就绪后执行
+        // doctor all chain (manifest/backend/register/client) in dependency ready after execute
         const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
         if (!report.ok) {
           const first = report.checks.find((c) => c.error !== undefined);
           throw new HelmError(
             'plugin_package_doctor_failed',
-            `插件包安装预检失败（${first ? `${first.label}：${first.error!.message}` : '未知检查失败'}），已放弃安装`,
+            `plugin package install preflight failed (${first ? `${first.label}:${first.error!.message}` : 'unknown check failed'}), already abandon install`,
             422,
             { source: parsed, staging: payloadDir, report },
           );
         }
-        // 重复安装防护（先于任何目录操作）：已有受管记录或已注册实例均拒绝
+        // duplicate install protect (first at any directory operation): already has managed record or registered instance all reject
         if (this.store.getRecord(pluginId) !== undefined) {
           throw new HelmError(
             'plugin_package_already_installed',
-            `插件 ${pluginId} 已受管安装（请用 update 更新，或先 remove 后重装）`,
+            `plugin ${pluginId} already managed install (please use update update, or first remove after heavy install)`,
             409,
             { pluginId },
           );
@@ -271,7 +271,7 @@ export class PluginPackageManager {
         if (this.host.listSummaries().some((s) => s.id === pluginId)) {
           throw new HelmError(
             'plugin_package_already_installed',
-            `插件 ${pluginId} 已注册（可能是手放置入目录的外部插件），拒绝重复安装`,
+            `plugin ${pluginId} registered (may is manually put placement directory external plugin), reject duplicate install`,
             409,
             { pluginId },
           );
@@ -281,7 +281,7 @@ export class PluginPackageManager {
         if (await pathExists(target)) {
           throw new HelmError(
             'plugin_package_target_occupied',
-            `安装目标目录已存在（未知来源残留，请人工检查后处理）：${target}`,
+            `install target directory already exists (unknown source leftover, please human check post-process):${target}`,
             409,
             { pluginId, target },
           );
@@ -289,19 +289,19 @@ export class PluginPackageManager {
         await mkdir(dirname(target), { recursive: true });
         await rename(payloadDir, target);
         inPlace = true;
-        // 注册 -> 持久化：任一失败删除新 target 完全回滚（未注册目录不残留）
+        // register -> persist: any one failed delete new target fully rollback (not registered directory leaves no residue)
         let registered: Awaited<ReturnType<PackageManagerHost['registerManagedPlugin']>>;
         try {
           registered = await this.host.registerManagedPlugin(target, { enabled: false });
         } catch (err) {
-          // 注册失败可能是并发宿主重扫描（rescan/load 链，不经本 manager 互斥）
-          // 已从同目录抢先注册同名插件：此时目录已归属那个活实例，rm 会掏空
-          // 其源目录与 dataDir。仅确认无同名已注册实例时才删目录回滚。
+          // register failed may is concurrency host heavy scan (rescan/load chain, do not via this manager mutual exclusion)
+          // already from same directory grab first register same name plugin: now directory already ownership that instance,rm will hollow out
+          // its source directory and dataDir. only confirm without same name registered instance when only then delete directory rollback.
           if (this.host.listSummaries().some((s) => s.id === pluginId)) {
             inPlace = false;
             throw new HelmError(
               'plugin_package_install_failed',
-              `插件 ${pluginId} 安装后注册失败：检测到同名插件已注册（可能为并发扫描从同目录抢先注册），目录与该实例已保留，请人工确认后用 remove 接管（无受管安装记录）：${err instanceof Error ? err.message : String(err)}`,
+              `plugin ${pluginId} install after register failed: detect to same name plugin registered (may is concurrency scan from same directory grab first register), directory and the instance already keep, please human confirm after use remove take over (without managed install record):${err instanceof Error ? err.message : String(err)}`,
               500,
               {
                 pluginId,
@@ -315,7 +315,7 @@ export class PluginPackageManager {
           inPlace = false;
           throw new HelmError(
             'plugin_package_install_failed',
-            `插件 ${pluginId} 安装后注册失败，已回滚（新目录已删除）：${err instanceof Error ? err.message : String(err)}`,
+            `plugin ${pluginId} install after register failed, already rollback (new directory deleted):${err instanceof Error ? err.message : String(err)}`,
             500,
             {
               pluginId,
@@ -331,8 +331,8 @@ export class PluginPackageManager {
           try {
             summary = await this.host.enableManagedPlugin(registered.pluginId);
           } catch (err) {
-            // 启用失败不回滚安装（设计允许）：插件保持 disabled，诊断透传；
-            // 注册与目录均已在位，记录持久化后重启可加载重试。
+            // enable failed do not rollback install (design allows): plugin keep disabled, diagnose pass-through;
+            // register and directory all already in, record persist after restart can load retry.
             enableError = {
               message: err instanceof Error ? err.message : String(err),
               code: err instanceof HelmError ? err.code : 'plugin_enable_failed',
@@ -356,8 +356,8 @@ export class PluginPackageManager {
             ...(enableError !== undefined ? { enableError } : {}),
           };
         } catch (err) {
-          // 持久化失败：注销实例后删目录整体回滚。注销失败（如在途任务 409）
-          // 时绝不对仍注册运行的实例 rm 掏空源目录——保留现状并如实报错。
+          // persist failed: deregister instance after delete directory whole rollback. deregister failed (such as in-flight task 409)
+          // when never for still register run instance rm hollow out source directory - - keep now state and such as errors.
           let unregisterError: unknown;
           try {
             await this.host.removeManagedPlugin(registered.pluginId);
@@ -369,7 +369,7 @@ export class PluginPackageManager {
             inPlace = false;
             throw new HelmError(
               'plugin_package_install_failed',
-              `插件 ${pluginId} 安装记录持久化失败，已回滚（实例注销、新目录删除）：${err instanceof Error ? err.message : String(err)}`,
+              `plugin ${pluginId} install record persist failed, already rollback (instance deregister, new directory delete):${err instanceof Error ? err.message : String(err)}`,
               500,
               {
                 pluginId,
@@ -381,7 +381,7 @@ export class PluginPackageManager {
           }
           throw new HelmError(
             'plugin_package_install_failed',
-            `插件 ${pluginId} 安装记录持久化失败，且回滚注销实例失败（${unregisterError instanceof Error ? unregisterError.message : String(unregisterError)}）；目录与实例已保留（请清理在途任务后手动 remove）`,
+            `plugin ${pluginId} install record persist failed, and rollback deregister instance failed (${unregisterError instanceof Error ? unregisterError.message : String(unregisterError)}); directory and instance already keep (please clean up in-flight task after manually remove)`,
             500,
             {
               pluginId,
@@ -395,14 +395,14 @@ export class PluginPackageManager {
           );
         }
       } finally {
-        // staging 全量清理；回滚路径下 target 已单独删除，不经过 staging
+        // staging all amount clean up; rollback path under target already separate delete, without going through staging
         void inPlace;
         await rm(staging, { recursive: true, force: true }).catch(() => {});
       }
     });
   }
 
-  /** summary 附加受管包元数据（PluginSummary.managed 映射）。 */
+  /** summary additional managed package metadata (PluginSummary.managed mapping). */
   private attachManaged(summary: PluginSummary, record: PluginPackageRecord): PluginSummary {
     return {
       ...summary,
@@ -415,39 +415,39 @@ export class PluginPackageManager {
     };
   }
 
-  // --- 更新 -------------------------------------------------------------
+  // --- update -------------------------------------------------------------
 
   /**
-   * 原子更新已安装插件包：
-   * 1. 安全预检（在途任务 409 / provider 忙）——旧实例与旧目录保持不动；
-   * 2. staging 重取 source -> 运行时依赖补装 -> doctor 全链（同样不动旧目录）；
-   * 3. 切换：旧目录 rename 到 staging backup -> 新 payload rename 进受管目录
-   *    -> reload 重注册（保持启用状态）；成功后删 backup；
-   * 4. 切换失败（reload/register 抛错）：新目录移回 staging，backup rename
-   *    回受管目录，再次 reload 恢复旧实例；回滚失败如实上报（需人工介入）。
-   * 记录仅在切换成功后推进。local 源码编辑后 update 即重新拷贝同步。
+   * atomic update installed plugin package:
+   * 1. security preflight (in-flight task 409 / provider busy) - - old instance and old directory keep do not motion;
+   * 2. staging heavy take source -> runtime dependency patch install -> doctor all chain (same do not motion old directory);
+   * 3. switch: old directory rename to staging backup -> new payload rename enter managed directory
+   *    -> reload heavy register (keep enable state); after success delete backup;
+   * 4. switch failed (reload/register throws): new directory move back staging,backup rename
+   *    back managed directory, again reload restore old instance; rollback failed such as on report (must human introduce).
+   * record only in switch after success push enter.local source code edit after update i.e. re- copy sync.
    */
   async update(pluginId: string): Promise<PluginUpdateResult> {
     return this.enqueue(async () => {
       const record = this.store.getRecord(pluginId);
       if (record === undefined) {
-        throw new HelmError('unknown_plugin_package', `插件 ${pluginId} 没有受管安装记录（仅受管安装的插件可 update）`, 404, { pluginId });
+        throw new HelmError('unknown_plugin_package', `plugin ${pluginId} no managed install record (only managed install plugin can update)`, 404, { pluginId });
       }
-      // 1. 安全预检：在途任务 / provider 忙时拒绝，旧目录与旧实例不动
+      // 1. security preflight: in-flight task / provider busy when reject, old directory and old instance do not motion
       await this.host.assertManagedPluginUpdateSafe(pluginId);
       await this.ensureStagingRoot();
       const staging = await mkdtemp(join(this.stagingRoot(), 'pkg-'));
       const backup = join(staging, 'backup');
       let switched = false;
       try {
-        // 2. staging 重取 + 依赖 + doctor（全部在 staging 内，旧目录不动）
+        // 2. staging heavy take + dependency + doctor(all in staging inside, old directory do not motion)
         const payloadDir = await this.fetchIntoStaging(record.source, staging);
         await this.installRuntimeDeps(payloadDir);
         const identified = await this.identifyPlugin(payloadDir, record.source);
         if (identified.pluginId !== pluginId) {
           throw new HelmError(
             'plugin_package_id_changed',
-            `更新后插件 id 变更（期望 ${pluginId}，实际 ${identified.pluginId}），拒绝替换`,
+            `update after plugin id change (expectation ${pluginId}, actual ${identified.pluginId}), reject replace`,
             409,
             { pluginId, actualId: identified.pluginId },
           );
@@ -457,7 +457,7 @@ export class PluginPackageManager {
           const first = report.checks.find((c) => c.error !== undefined);
           throw new HelmError(
             'plugin_package_doctor_failed',
-            `插件包更新预检失败（${first ? `${first.label}：${first.error!.message}` : '未知检查失败'}），已保留现安装`,
+            `plugin package update preflight failed (${first ? `${first.label}:${first.error!.message}` : 'unknown check failed'}), already keep now install`,
             422,
             { source: record.source, staging: payloadDir, report },
           );
@@ -465,7 +465,7 @@ export class PluginPackageManager {
         const target = record.installPath;
         assertInsideDataDir(this.pluginsDir(), target);
         const previousVersion = record.version;
-        // 3. 原子切换：旧目录 -> staging backup，新 payload -> 受管目录
+        // 3. atomic switch: old directory -> staging backup, new payload -> managed directory
         if (await pathExists(target)) {
           await rename(target, backup);
         }
@@ -473,11 +473,11 @@ export class PluginPackageManager {
           await rename(payloadDir, target);
           switched = true;
         } catch (err) {
-          // 新目录没进入：backup 立即回原位，旧实例未受任何影响
+          // new directory not enter:backup immediately back original, old instance not subject to any affect
           if (await pathExists(backup)) await rename(backup, target).catch(() => {});
           throw err;
         }
-        // reload 重注册（保持启用状态）；失败则回滚目录与实例
+        // reload heavy register (keep enable state); failed then rollback directory and instance
         let reloadError: unknown;
         try {
           const { summary } = await this.host.updateManagedPlugin(pluginId, target, { keepEnabled: true });
@@ -492,23 +492,23 @@ export class PluginPackageManager {
           return {
             record: updated,
             summary: this.attachManaged(summary, updated),
-            // 版本串未变但内容重同步仍是事实变更（local 源编辑后 update）；如实 true
+            // version string not change but content heavy sync still is fact change (local source edit after update); such as true
             changed: true,
             previousVersion,
           };
         } catch (err) {
           reloadError = err;
         }
-        // 4. reload 失败回滚：新目录移回 staging，backup 回受管目录，旧实例重载。
-        // 目录恢复与实例恢复分开如实上报：恢复性 reload 失败时实例可能已注销
-        //（reloadExternalPlugin 切换失败即注销），绝不吞错谎报「旧版本继续可用」。
+        // 4. reload failed rollback: new directory move back staging,backup back managed directory, old instance reload.
+        // directory restore and instance restore open such as on report: restore reload on failure instance may deregistered
+        //(reloadExternalPlugin switch failed i.e. deregister), never swallow wrong lie report old version continue available.
         let rollbackError: { message: string } | undefined;
         try {
           await rename(target, join(staging, 'failed-new'));
           if (await pathExists(backup)) await rename(backup, target);
         } catch (rollbackErr) {
           rollbackError = {
-            message: `目录恢复失败：${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}，需人工检查受管目录`,
+            message: `directory restore failed:${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}, must human check managed directory`,
           };
         }
         if (rollbackError === undefined) {
@@ -516,13 +516,13 @@ export class PluginPackageManager {
             await this.host.updateManagedPlugin(pluginId, target, { keepEnabled: true });
           } catch (restoreErr) {
             rollbackError = {
-              message: `旧目录已恢复，但旧实例重载失败：${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}，插件当前可能已注销，需人工处理后重试`,
+              message: `old directory already restore, but old instance reload failed:${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}, plugin when before may deregistered, must human handle after retry`,
             };
           }
         }
         throw new HelmError(
           'plugin_package_update_failed',
-          `插件 ${pluginId} 更新后重载失败${rollbackError === undefined ? '（已回滚到更新前目录与实例，旧版本继续可用）' : `（回滚不完整：${rollbackError.message}）`}：${reloadError instanceof Error ? reloadError.message : String(reloadError)}`,
+          `plugin ${pluginId} update after reload failed${rollbackError === undefined ? '(already rollback to update before directory and instance, old version continue available)' : `(rollback do not complete:${rollbackError.message})`}:${reloadError instanceof Error ? reloadError.message : String(reloadError)}`,
           500,
           {
             pluginId,
@@ -533,34 +533,34 @@ export class PluginPackageManager {
           },
         );
       } finally {
-        // staging 清理：switched 成功后 backup（旧版本）随 staging 一并删除
+        // staging clean up:switched after success backup(old version) follow staging one and delete
         void switched;
         await rm(staging, { recursive: true, force: true }).catch(() => {});
       }
     });
   }
 
-  // --- 移除 -------------------------------------------------------------
+  // --- remove -------------------------------------------------------------
 
   /**
-   * 移除受管安装：unregister（builtin/在途任务/providers 由 host 保护）->
-   * 关联清理持久化文档数据（等待 DELETE 真实落盘，失败显式拒绝）-> 删除
-   * 受管目录 -> 删除记录。local 来源只删受管副本与记录，绝不触碰用户源目录
-   * （install 即拷贝，用户源从未进入受管树）。清理在删目录/记录之前且等待
-   * 落盘：任一步失败可重试（记录未删即幂等可续）。
+   * remove managed install:unregister(builtin/in-flight task/providers by host protect)->
+   * related clean up persist document data (wait for DELETE real, failed explicit reject)-> delete
+   * managed directory -> delete record.local source only delete managed copy and record, never trigger touch user source directory
+   * (install i.e. copy, user source from not enter managed tree). clean up in delete directory/record before and wait for
+   * : any one step failed can retry (record not delete i.e. idempotent can continue).
    */
   async remove(pluginId: string): Promise<PluginRemoveResult> {
     return this.enqueue(async () => {
       if (pluginId.startsWith('builtin:')) {
-        throw new HelmError('plugin_locked', `内置插件 ${pluginId} 不可移除`, 403, { pluginId });
+        throw new HelmError('plugin_locked', `built-in plugin ${pluginId} cannot remove`, 403, { pluginId });
       }
       const record = this.store.getRecord(pluginId);
       if (record === undefined) {
-        throw new HelmError('unknown_plugin_package', `插件 ${pluginId} 没有受管安装记录（手放置入目录的插件请直接删除目录）`, 404, { pluginId });
+        throw new HelmError('unknown_plugin_package', `plugin ${pluginId} no managed install record (manually put placement directory plugin please directly delete directory)`, 404, { pluginId });
       }
       const { wasEnabled } = await this.host.removeManagedPlugin(pluginId);
-      // purge 等待 DELETE 真实落盘后才 resolve：失败在此显式拒绝，目录与
-      // 安装记录保持原样（记录未删即幂等可重试）。
+      // purge wait for DELETE real after only then resolve: failed in this explicit reject, directory and
+      // install record keep original (record not delete i.e. idempotent can retry).
       await this.host.purgePluginPersistentData(pluginId);
       const target = record.installPath;
       assertInsideDataDir(this.pluginsDir(), target);
@@ -570,7 +570,7 @@ export class PluginPackageManager {
     });
   }
 
-  // --- staging 获取（按来源分派） ----------------------------------------
+  // --- staging get (by source dispatch) ----------------------------------------
 
   private async fetchIntoStaging(source: PluginPackageSource, staging: string): Promise<string> {
     if (source.kind === 'npm') return this.fetchNpm(source, staging);
@@ -578,7 +578,7 @@ export class PluginPackageManager {
     return this.fetchLocal(source, staging);
   }
 
-  /** npm pack 拉取 tarball + 解包（不做全局 npm install，绝不运行 scripts）。 */
+  /** npm pack pull tarball + unwrap (does not global npm install, never run scripts). */
   private async fetchNpm(source: Extract<PluginPackageSource, { kind: 'npm' }>, staging: string): Promise<string> {
     const packDir = join(staging, 'pack');
     await mkdir(packDir, { recursive: true });
@@ -587,23 +587,23 @@ export class PluginPackageManager {
     if (pack.code !== 0) {
       throw commandError('install', 'npm', packArgs, pack);
     }
-    // 找 tarball 并解包到 payload/
+    // find tarball and unwrap to payload/
     const files = await readdir(packDir);
     const tarball = files.find((f) => f.endsWith('.tgz'));
     if (tarball === undefined) {
-      throw new HelmError('plugin_package_install_failed', `npm pack 未产出 tarball（spec: ${source.spec}）`, 500, { spec: source.spec, stdoutTail: tailLines(pack.stdout) });
+      throw new HelmError('plugin_package_install_failed', `npm pack not produce out tarball(spec: ${source.spec})`, 500, { spec: source.spec, stdoutTail: tailLines(pack.stdout) });
     }
     const payload = join(staging, 'payload');
     await mkdir(payload, { recursive: true });
     const extract = await this.run('tar', ['-xzf', join(packDir, tarball), '-C', payload]);
     if (extract.code !== 0) throw commandError('install', 'tar', ['-xzf'], extract);
-    // npm tarball 内层为 package/ 目录
+    // npm tarball inside layer is package/ directory
     const inner = join(payload, 'package');
     const innerStat = await stat(inner).catch(() => undefined);
     return innerStat?.isDirectory() === true ? inner : payload;
   }
 
-  /** git clone --depth 1（带 ref 时加 --branch）+ 子目录定位。 */
+  /** git clone --depth 1(carries ref when add --branch)+ subdirectory locate. */
   private async fetchGit(source: Extract<PluginPackageSource, { kind: 'git' }>, staging: string): Promise<string> {
     const repoDir = join(staging, 'repo');
     const args = ['clone', '--depth', '1', ...(source.ref !== undefined ? ['--branch', source.ref] : []), '--', source.repo, repoDir];
@@ -614,7 +614,7 @@ export class PluginPackageManager {
       root = join(repoDir, source.subdirectory);
       const st = await stat(root).catch(() => undefined);
       if (st?.isDirectory() !== true) {
-        throw new HelmError('plugin_package_install_failed', `git 仓库内子目录不存在：${source.subdirectory}`, 404, { repo: source.repo, subdirectory: source.subdirectory });
+        throw new HelmError('plugin_package_install_failed', `git repository inside subdirectory missing:${source.subdirectory}`, 404, { repo: source.repo, subdirectory: source.subdirectory });
       }
     }
     const payload = join(staging, 'payload');
@@ -622,18 +622,18 @@ export class PluginPackageManager {
     return payload;
   }
 
-  /** local：校验目录存在且不在受管插件树内部（防自拷贝），过滤拷贝。 */
+  /** local: validate directory store in and do not in managed plugin tree internal (guard against self copy), filter copy. */
   private async fetchLocal(source: Extract<PluginPackageSource, { kind: 'local' }>, staging: string): Promise<string> {
     const st = await stat(source.path).catch(() => undefined);
     if (st?.isDirectory() !== true) {
-      throw new HelmError('plugin_package_install_failed', `本地插件目录不存在或不是目录：${source.path}`, 404, { path: source.path });
+      throw new HelmError('plugin_package_install_failed', `local plugin directory missing or is not directory:${source.path}`, 404, { path: source.path });
     }
     const rel = relative(resolve(this.pluginsDir()), resolve(source.path));
     const inside = !(rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel));
     if (inside) {
       throw new HelmError(
         'validation_error',
-        `本地插件目录位于受管插件树内部（${this.pluginsDir()}），禁止自安装：${source.path}`,
+        `local plugin directory at managed plugin tree internal (${this.pluginsDir()}), forbidden self install:${source.path}`,
         400,
         { path: source.path },
       );
@@ -644,15 +644,15 @@ export class PluginPackageManager {
   }
 
   /**
-   * staging 副本内安装运行时依赖（npm/git/local 同权：凡携带 package.json
-   * 即补装；--omit=dev 且永不运行 lifecycle scripts；local 源已是过滤拷贝，
-   * 用户源目录不受影响）。无 package.json 时为 no-op。
+   * staging copy inside install runtime dependency (npm/git/local same right: ordinary carry package.json
+   * i.e. patch install;--omit=dev and forever do not run lifecycle scripts;local source already is filter copy,
+   * user source directory do not subject to affect). without package.json when is no-op.
    *
-   * 前端受控依赖（清单 clientDependencies）单独补装：它们不是 runtime
-   * dependencies（--no-save 绝不改写 package.json），但必须进 node_modules——
-   * 否则 doctor / client 编译链因依赖缺失显式失败。版本优先取 package.json
-   * 已声明 range（dependencies/devDependencies 均认，保证可复现），未声明
-   * 时按说明符对应的包名安装（子路径说明符只用于编译解析，不能作为 npm 包名）。
+   * frontend subject to control dependency (manifest clientDependencies) separate patch install: they is not runtime
+   * dependencies(--no-save never change write package.json), but must enter node_modules- -
+   * otherwise doctor / client compile chain because dependency missing explicit failed. version takes precedence take package.json
+   * already declaration range(dependencies/devDependencies all recognize, guarantee can re- now), not declaration
+   * when by note symbol for should package name install (sub- path note symbol only used to compile parse, cannot as npm package name).
    */
   private async installRuntimeDeps(dir: string): Promise<void> {
     const pkgJson = join(dir, 'package.json');
@@ -677,7 +677,7 @@ export class PluginPackageManager {
         }
       }
     }
-    // 说明符取包名部分（子路径声明如 pkg/sub.js 的版本由包根 range 决定）。
+    // note symbol take package name part (sub- path declaration such as pkg/sub.js version by package range decide).
     const installSpecs = clientSpecs.map((spec) => {
       const pkgName = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : (spec.split('/')[0] ?? spec);
       const range = ranges.get(pkgName);
@@ -692,20 +692,20 @@ export class PluginPackageManager {
   }
 
   /**
-   * 从 payload 目录识别插件 id：优先 plugin.json/package.json helm 字段推导，
-   * 回退约定入口探测名；最终以 doctor 报告的 pluginId 为准。
+   * from payload directory identify plugin id: takes precedence plugin.json/package.json helm field push lead,
+   * fall back convention entry probe name; eventually with doctor report pluginId is allow.
    */
   private async identifyPlugin(payloadDir: string, source: PluginPackageSource): Promise<{ pluginId: string; dirName: string }> {
     const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
     if (report.ok && report.pluginId !== undefined) {
       return { pluginId: report.pluginId, dirName: report.pluginId };
     }
-    // doctor 未到达定义导出：用清单声明的 id 兜底目录名（doctor 失败会在随后步骤如实报错）
+    // doctor not reach define export: use manifest declaration id fall back directory name (doctor failed will in then step such as errors)
     const declared = await readDeclaredPluginId(payloadDir);
     if (declared !== undefined) return { pluginId: declared, dirName: declared };
     throw new HelmError(
       'plugin_package_doctor_failed',
-      `无法识别插件 id（doctor 未通过且清单未声明 id）：${source.raw}`,
+      `cannot identify plugin id(doctor not via and manifest not declaration id):${source.raw}`,
       422,
       { source, report },
     );
@@ -714,7 +714,7 @@ export class PluginPackageManager {
   private async run(cmd: string, args: string[], cwd?: string): Promise<RunResult> {
     const workDir = cwd ?? (await this.ensureStagingRoot());
     const result = await this.runner(cmd, args, { cwd: workDir, timeoutMs: this.timeoutMs });
-    // npm pack 的非零退出在调用处加工（需要 tarball 探测语义）；其余命令统一报错
+    // npm pack non-zero exit in invoke where add work (need to tarball probe semantics); the rest command unify errors
     const isNpmPack = cmd === 'npm' && args[0] === 'pack';
     if (result.code !== 0 && !isNpmPack) {
       throw commandError('install', cmd, args, result);
@@ -723,7 +723,7 @@ export class PluginPackageManager {
   }
 }
 
-/** 路径存在性探测（目录或文件；IO 错误原样上抛，不肩吞）。 */
+/** path store in probe (directory or file;IO error original on throw, do not shoulder swallow). */
 async function pathExists(target: string): Promise<boolean> {
   try {
     await stat(target);
@@ -734,15 +734,15 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
-/** 读 plugin.json id / package.json name|helm 字段（仅目录名推导用）。 */
+/** read plugin.json id / package.json name|helm field (only directory name push lead use). */
 async function readDeclaredPluginId(dir: string): Promise<string | undefined> {
   const { readFile } = await import('node:fs/promises');
   const pluginJson = join(dir, 'plugin.json');
   try {
     const manifest = JSON.parse(await readFile(pluginJson, 'utf8')) as Record<string, unknown>;
     if (typeof manifest['id'] === 'string' && manifest['id'].length > 0) return manifest['id'];
-    if (typeof manifest['main'] === 'string') return undefined; // main 存在但无 id：交给 doctor
-  } catch { /* 无 plugin.json 或损坏：doctor 链会给结构化报告 */ }
+    if (typeof manifest['main'] === 'string') return undefined; // main store in but without id: hand over to doctor
+  } catch { /* without plugin.json or corrupt:doctor chain will to structure report */ }
   const pkgJson = join(dir, 'package.json');
   try {
     const pkg = JSON.parse(await readFile(pkgJson, 'utf8')) as Record<string, unknown>;
@@ -751,6 +751,6 @@ async function readDeclaredPluginId(dir: string): Promise<string | undefined> {
       return (helm as Record<string, unknown>)['id'] as string;
     }
     if (typeof pkg['name'] === 'string' && PLUGIN_ID_PATTERN.test(pkg['name'])) return pkg['name'];
-  } catch { /* 同上 */ }
+  } catch { /* same on */ }
   return undefined;
 }

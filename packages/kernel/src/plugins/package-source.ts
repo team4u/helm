@@ -1,100 +1,100 @@
 /**
- * 外部插件包安装来源解析（source grammar）。
+ * external plugin package install source parse (source grammar).
  *
- * 最小 grammar（与 protocol PluginPackageSource 判别联合一一对应）：
- * - npm 来源：`npm:<spec>`，spec 为任意合法 npm 依赖说明符（不含空串）；
- * - git 来源：`git:<repo>[@<ref>][#<subdirectory>]`，repo 可为 https URL、
- *   `user@host:path` SCP 形态或 `host/path` 短写（无 scheme 时不允许 local
- *   file path 误入）；支持 `<repo>#<subdirectory>` 单独指定子目录；
- * - HTTPS Git URL：`https://...(.git)?[#<ref>][#<subdirectory>]`——ref 与
- *   subdirectory 均经 URL fragment 传达，`#a#b` 前者为 ref 后者为子目录
- *   （与 Pi 的 `git:repo@ref#subdir` 精神对齐，但 Helm 明确拒绝歧义写法）；
- * - local 来源：绝对路径或相对 Hub cwd 的相对路径（./ ../ 开头）。
+ * most small grammar(and protocol PluginPackageSource judge other join together one one for should):
+ * - npm source:`npm:<spec>`,spec is any legal npm dependency note symbol (excludes empty string);
+ * - git source:`git:<repo>[@<ref>][#<subdirectory>]`,repo can is https URL,
+ *   `user@host:path` SCP form or `host/path` short write (without scheme when disallows local
+ *   file path mistakenly); support `<repo>#<subdirectory>` separate designate subdirectory;
+ * - HTTPS Git URL:`https://...(.git)?[#<ref>][#<subdirectory>]`- -ref and
+ *   subdirectory all via URL fragment pass reach,`#a#b` before is ref after is subdirectory
+ *   (and Pi  `git:repo@ref#subdir` precise spirit align, but Helm explicit reject ambiguity write method);
+ * - local source: absolute path or each other for Hub cwd relative path (./ ../ open head).
  *
- * 拒绝：file://、非 https 的 http URL（明文传输不可信）、以 builtin: 开头的
- * source、npm spec 内嵌 builtin: 前缀名、空串与空白。
+ * reject:file://, non- https  http URL(plaintext transfer cannot message), with builtin: open head
+ * source,npm spec inside embed builtin: prefix name, empty string and whitespace.
  *
- * 诚实性纪律：解析失败显式 HelmError('validation_error')，绝不猜测默认来源。
+ * honest discipline: failed to parse explicit HelmError('validation_error'), never guess by default source.
  */
 import { isAbsolute, resolve } from 'node:path';
 import { HelmError, type PluginPackageSource } from '@helm/protocol';
 
-/** npm 说明符最小合法性：非空、无空白（不在此重造 semver 解析器，交给 npm）。 */
+/** npm note symbol most small legal: non-empty, without whitespace (do not in this heavy build semver parse, hand over to npm). */
 const NPM_SPEC_PATTERN = /^\S+$/;
 
 /**
- * git 仓库地址严格校验（拒绝路径注入）：仅允许三种形态——
- * - https URL（https://host/path）；
- * - SCP 形态（user@host:path，user 可缺省为 git@host:path）；
- * - host/path 短写（github.com/user/repo）。
- * 拒绝：反斜杠、NUL、.. 路段、绝对路径（/ 或盘符开头）、明文 http://、
- * file:// 及其它未知 scheme、含空白的地址。
+ * git repository address strictly validate (reject path inject): only allows three form - -
+ * - https URL(https://host/path);
+ * - SCP form (user@host:path,user can default is git@host:path);
+ * - host/path short write (github.com/user/repo).
+ * reject: backslash,NUL,.. route segment, absolute path (/ or symbol open head), plaintext http://,
+ * file:// and other unknown scheme, contains whitespace address.
  */
 function assertGitRepo(repo: string, raw: string): void {
   const fail = (detail: string): HelmError =>
-    new HelmError('validation_error', `git 来源仓库地址非法（${detail}）：${repo}`, 400, { raw, repo });
-  if (repo.length === 0) throw fail('空地址');
-  if (repo.includes('\\') || repo.includes('\0')) throw fail('含反斜杠或 NUL');
-  if (/\s/.test(repo)) throw fail('含空白');
+    new HelmError('validation_error', `git source repository address illegal (${detail}):${repo}`, 400, { raw, repo });
+  if (repo.length === 0) throw fail('empty address');
+  if (repo.includes('\\') || repo.includes('\0')) throw fail('contains backslash or NUL');
+  if (/\s/.test(repo)) throw fail('contains whitespace');
   if (repo.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(repo) || repo.startsWith('\\\\')) {
-    throw fail('绝对路径（本地插件请直接提供路径，不走 git:）');
+    throw fail('absolute path (local plugin please directly provide path, do not away git:)');
   }
-  if (repo.includes('..')) throw fail('含 .. 路段');
-  if (/^http:\/\//i.test(repo)) throw fail('明文 http://（请使用 https）');
-  if (/^file:/i.test(repo)) throw fail('file: 协议');
-  // scheme:// 形态：仅允许 https（其余 ssh://、git:// 等一律拒绝，避免与 SCP
-  // 形态歧义及未经审计的传输协议）
+  if (repo.includes('..')) throw fail('contains .. route segment');
+  if (/^http:\/\//i.test(repo)) throw fail('plaintext http://(use https)');
+  if (/^file:/i.test(repo)) throw fail('file: protocol');
+  // scheme:// form: only allows https(the rest ssh://,git:// etc. one rule reject, avoid and SCP
+  // form ambiguity and not via audit transfer protocol)
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(repo)) {
-    if (!/^https:\/\//i.test(repo)) throw fail('仅允许 https:// 形态（SCP 请用 user@host:path）');
+    if (!/^https:\/\//i.test(repo)) throw fail('only allows https:// form (SCP please use user@host:path)');
     let parsed: URL;
     try {
       parsed = new URL(repo);
     } catch {
-      throw fail('URL 不可解析');
+      throw fail('URL cannot parse');
     }
-    if (parsed.hostname === '' || /^\s+$/.test(parsed.hostname)) throw fail('缺少主机名');
+    if (parsed.hostname === '' || /^\s+$/.test(parsed.hostname)) throw fail('missing host name');
     return;
   }
   if (/^https:\/\//i.test(repo)) {
-    // 不可达：https:// 已在上方 scheme:// 分支处理；保留防御
+    // cannot reach:https:// already in on way scheme:// branch handle; keep guard against defend
     return;
   }
-  // SCP（user@host:path，含可选 port）：冒号前不是 scheme（scheme 需字母开头且
-  // 直接跟 :，SCP 的冒号前是 host 或 @host），路径段非空
+  // SCP(user@host:path, contains optional port): smoke number before is not scheme(scheme must character parent open head and
+  // directly with :,SCP smoke number before is host or @host), path segment non-empty
   const scpMatch = /^([a-zA-Z0-9._~-]+@)?([a-zA-Z0-9._~-]+(?::\d+)?):(.+)$/.exec(repo);
   if (scpMatch !== null) {
     if (scpMatch[3] === undefined || scpMatch[3].length === 0 || scpMatch[3].startsWith('/')) {
-      throw fail('SCP 路径段非法');
+      throw fail('SCP path segment illegal');
     }
     return;
   }
-  // 其余 scheme 形态（xxx:...）拒绝
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(repo)) throw fail('未知协议');
-  // host/path 短写：host 段字母数字开头（拒绝 ./ ../ 等本地相对形态）
+  // the rest scheme form (xxx:...) reject
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(repo)) throw fail('unknown protocol');
+  // host/path short write:host segment character parent number open head (reject ./ ../ etc. local each other for form)
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._~-]*\/[a-zA-Z0-9._~\/:@!$'()*+,;%=-]+$/.test(repo)) {
-    throw fail('需为 https URL、SCP user@host:path 或 host/path 形态');
+    throw fail('must be https URL,SCP user@host:path or host/path form');
   }
 }
 
-/** 细分 git repo 尾部：<repo>[@<ref>][#<subdirectory>]（ref 不得再含 @ #）。 */
+/** detail git repo tail part:<repo>[@<ref>][#<subdirectory>](ref must not again contains @ #). */
 function splitGitTail(rest: string, raw: string): { repo: string; ref?: string; subdirectory?: string } {
-  // 先切 #subdirectory（fragment 只允许出现一次）
+  // first cut #subdirectory(fragment only allows appear once)
   const hashIndex = rest.indexOf('#');
   const subdirectory = hashIndex >= 0 ? rest.slice(hashIndex + 1) : undefined;
   let head = hashIndex >= 0 ? rest.slice(0, hashIndex) : rest;
   if (subdirectory !== undefined) {
     if (subdirectory.length === 0) {
-      throw new HelmError('validation_error', `git 来源子目录为空（# 后需为路径）：${raw}`, 400, { raw });
+      throw new HelmError('validation_error', `git source subdirectory is empty (# after must be path):${raw}`, 400, { raw });
     }
     if (subdirectory.includes('#')) {
-      throw new HelmError('validation_error', `git 来源含多个 #（仅允许一个子目录片段）：${raw}`, 400, { raw });
+      throw new HelmError('validation_error', `git source contains multiple #(only allows a subdirectory fragment):${raw}`, 400, { raw });
     }
     if (subdirectory.startsWith('/') || subdirectory.includes('..') || subdirectory.includes('\\')) {
-      throw new HelmError('validation_error', `git 来源子目录需为仓库内相对路径：${raw}`, 400, { raw });
+      throw new HelmError('validation_error', `git source subdirectory must be repository inside relative path:${raw}`, 400, { raw });
     }
   }
   let ref: string | undefined;
-  // SCP 形态（user@host:path）的 @ 属于地址；仅当 @ 不在首个冒号之前时才视为 ref 分隔
+  // SCP form (user@host:path) @ belongs to address; only when @ do not in first smoke number before when only then treated as ref isolate
   const firstColon = head.indexOf(':');
   const atIndex = head.lastIndexOf('@');
   const atIsRefSeparator = atIndex > 0 && (firstColon < 0 || atIndex > firstColon);
@@ -102,37 +102,37 @@ function splitGitTail(rest: string, raw: string): { repo: string; ref?: string; 
     ref = head.slice(atIndex + 1);
     head = head.slice(0, atIndex);
     if (ref.length === 0) {
-      throw new HelmError('validation_error', `git 来源 ref 为空（@ 后需为分支/Tag/Commit）：${raw}`, 400, { raw });
+      throw new HelmError('validation_error', `git source ref is empty (@ after must be branch/Tag/Commit):${raw}`, 400, { raw });
     }
     if (ref.includes('#')) {
-      throw new HelmError('validation_error', `git 来源 ref 非法（不得含 #）：${raw}`, 400, { raw });
+      throw new HelmError('validation_error', `git source ref illegal (must not contains #):${raw}`, 400, { raw });
     }
   }
   const repo = head;
   if (repo.length === 0) {
-    throw new HelmError('validation_error', `git 来源缺少仓库地址：${raw}`, 400, { raw });
+    throw new HelmError('validation_error', `git source missing repository address:${raw}`, 400, { raw });
   }
   return { repo, ref, subdirectory };
 }
 
 /**
- * 解析插件包来源字符串为规范化形状。
- * cwd 用于相对 local 路径解析（调用方传 Hub cwd）。
+ * parse plugin package source string is specification shape.
+ * cwd used to each other for local path parse (caller pass Hub cwd).
  */
 export function parsePluginSource(raw: string, cwd: string): PluginPackageSource {
   if (typeof raw !== 'string' || raw.trim().length === 0) {
-    throw new HelmError('validation_error', '插件包来源 source 需为非空字符串', 400);
+    throw new HelmError('validation_error', 'plugin package source source must be a non-empty string', 400);
   }
   if (raw !== raw.trim()) {
-    throw new HelmError('validation_error', `插件包来源不得含首尾空白：${raw}`, 400, { raw });
+    throw new HelmError('validation_error', `plugin package source must not contains first tail whitespace:${raw}`, 400, { raw });
   }
   if (raw.startsWith('builtin:') || raw.startsWith('builtin%3A')) {
-    throw new HelmError('validation_error', `插件包来源不允许 builtin: 前缀（内置插件不参与包安装）：${raw}`, 400, { raw });
+    throw new HelmError('validation_error', `plugin package source disallows builtin: prefix (built-in plugin does not participate package install):${raw}`, 400, { raw });
   }
   if (raw.startsWith('file://')) {
     throw new HelmError(
       'validation_error',
-      `不支持 file:// 协议（本地插件请直接提供绝对路径或 ./ ../ 相对路径）：${raw}`,
+      `unsupported file:// protocol (local plugin please directly provide absolute path or ./ ../ relative path):${raw}`,
       400,
       { raw },
     );
@@ -140,17 +140,17 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
   if (raw.startsWith('npm:')) {
     const spec = raw.slice('npm:'.length);
     if (!NPM_SPEC_PATTERN.test(spec)) {
-      throw new HelmError('validation_error', `npm 来源说明符非法：${spec}（npm:<spec>，spec 为 npm 依赖说明符）`, 400, { raw });
+      throw new HelmError('validation_error', `npm source note symbol illegal:${spec}(npm:<spec>,spec is npm dependency note symbol)`, 400, { raw });
     }
     if (spec.startsWith('builtin:')) {
-      throw new HelmError('validation_error', `npm 说明符不得以 builtin: 开头：${spec}`, 400, { raw });
+      throw new HelmError('validation_error', `npm note symbol must not with builtin: open head:${spec}`, 400, { raw });
     }
     return { kind: 'npm', raw, spec };
   }
   if (raw.startsWith('git+')) {
     throw new HelmError(
       'validation_error',
-      `不支持 git+ URL scheme（请使用 git:<repo>[@<ref>] 或 https Git URL）：${raw}`,
+      `unsupported git+ URL scheme(use git:<repo>[@<ref>] or https Git URL):${raw}`,
       400,
       { raw },
     );
@@ -161,7 +161,7 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
     return { kind: 'git', raw, ...parsed };
   }
   if (/^https:\/\//i.test(raw)) {
-    // HTTPS Git URL：#<ref>[#<subdirectory>] 或直接 #<subdirectory>
+    // HTTPS Git URL:#<ref>[#<subdirectory>] or directly #<subdirectory>
     const hashIndex = raw.indexOf('#');
     const base = hashIndex >= 0 ? raw.slice(0, hashIndex) : raw;
     const fragment = hashIndex >= 0 ? raw.slice(hashIndex + 1) : undefined;
@@ -171,50 +171,50 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
     if (fragment !== undefined) {
       const parts = fragment.split('#');
       if (parts.length > 2) {
-        throw new HelmError('validation_error', `git URL 含过多 # 片段（至多 ref 与子目录两个）：${raw}`, 400, { raw });
+        throw new HelmError('validation_error', `git URL contains many # fragment (at most ref and subdirectory two):${raw}`, 400, { raw });
       }
       if (parts.length === 2) {
         const parsedRef = parts[0]!;
         subdirectory = parts[1];
         if (parsedRef.length === 0) {
-          throw new HelmError('validation_error', `git URL ref 为空：${raw}`, 400, { raw });
+          throw new HelmError('validation_error', `git URL ref is empty:${raw}`, 400, { raw });
         }
         ref = parsedRef;
       } else {
-        // 单 fragment：含 / 视为子目录，否则视为 ref（分支名/tag 常见形态）
+        // single fragment: contains / treated as subdirectory, otherwise treated as ref(branch name/tag common form)
         if (fragment.includes('/')) subdirectory = fragment;
         else ref = fragment;
       }
       if (subdirectory !== undefined) {
         if (subdirectory.length === 0 || subdirectory.startsWith('/') || subdirectory.includes('..') || subdirectory.includes('\\')) {
-          throw new HelmError('validation_error', `git URL 子目录需为仓库内相对路径：${raw}`, 400, { raw });
+          throw new HelmError('validation_error', `git URL subdirectory must be repository inside relative path:${raw}`, 400, { raw });
         }
       }
     }
-    // 尾部 @ref（.git 后缀形式，如 https://...git@v1）：仅当 URL 无 userinfo @ 时
+    // tail part @ref(.git suffix form, such as https://...git@v1): only when URL without userinfo @ when
     const atOutsideUser = findTrailingRefAt(repo);
     if (atOutsideUser >= 0) {
       ref = repo.slice(atOutsideUser + 1);
       repo = repo.slice(0, atOutsideUser);
       if (ref.length === 0 || ref.includes('/')) {
-        throw new HelmError('validation_error', `git URL 尾部 @ref 非法：${raw}`, 400, { raw });
+        throw new HelmError('validation_error', `git URL tail part @ref illegal:${raw}`, 400, { raw });
       }
     }
     let parsedHost: URL;
     try {
       parsedHost = new URL(repo);
     } catch {
-      throw new HelmError('validation_error', `git URL 非法：${raw}`, 400, { raw });
+      throw new HelmError('validation_error', `git URL illegal:${raw}`, 400, { raw });
     }
     if (parsedHost.hostname === '' || /^\s+$/.test(parsedHost.hostname)) {
-      throw new HelmError('validation_error', `git URL 缺少主机名：${raw}`, 400, { raw });
+      throw new HelmError('validation_error', `git URL missing host name:${raw}`, 400, { raw });
     }
     return { kind: 'git', raw, repo, ref, subdirectory };
   }
   if (/^http:\/\//i.test(raw)) {
     throw new HelmError(
       'validation_error',
-      `不支持明文 http:// Git URL（请使用 https 或 git: 形态）：${raw}`,
+      `unsupported plaintext http:// Git URL(use https or git: form):${raw}`,
       400,
       { raw },
     );
@@ -222,38 +222,38 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw) || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) {
     throw new HelmError(
       'validation_error',
-      `不支持的来源协议（仅支持 npm: / git: / https Git URL / 本地路径）：${raw}`,
+      `unsupported source protocol (only support npm: / git: / https Git URL / local path):${raw}`,
       400,
       { raw },
     );
   }
-  // local 路径：绝对路径或 ./ ../ 相对路径（裸目录名拒绝——太易与 npm/git 混淆）
+  // local path: absolute path or ./ ../ relative path (bare directory name reject - - too easy and npm/git confuse)
   if (isAbsolute(raw) || raw.startsWith('./') || raw.startsWith('../') || /^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('\\\\')) {
     const path = resolve(cwd, raw);
     if (path.includes('\0')) {
-      throw new HelmError('validation_error', `本地路径含非法字符：${raw}`, 400, { raw });
+      throw new HelmError('validation_error', `local path contains illegal character:${raw}`, 400, { raw });
     }
     return { kind: 'local', raw, path };
   }
   throw new HelmError(
     'validation_error',
-    `无法识别的插件包来源：${raw}（支持 npm:<spec>、git:<repo>[@<ref>]、HTTPS Git URL、本地绝对/相对路径）`,
+    `cannot identify plugin package source:${raw}(support npm:<spec>,git:<repo>[@<ref>],HTTPS Git URL, local absolute/relative path)`,
     400,
     { raw },
   );
 }
 
-/** 找出 URL path 段中最后一个 @（跳过 userinfo 的 user@host 与 port）。 */
+/** find out URL path segment in finally a @(skip userinfo  user@host and port). */
 function findTrailingRefAt(repo: string): number {
   try {
     const url = new URL(repo);
     const path = url.pathname;
     const at = path.lastIndexOf('@');
     if (at < 0) return -1;
-    // 只认可「.git 后缀或路径末段之后」的 @ref 形态，且 ref 不含 /
+    // only recognize can.git suffix or path end segment after @ref form, and ref excludes /
     const tail = path.slice(at + 1);
     if (tail.includes('/')) return -1;
-    // 重建：返回整个 repo 字符串中的对应位置
+    // rebuild: return the whole repo string in for should location
     const beforePath = repo.lastIndexOf(url.pathname);
     if (beforePath < 0) return -1;
     return beforePath + at;

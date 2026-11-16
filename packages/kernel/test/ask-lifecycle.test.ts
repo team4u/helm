@@ -1,19 +1,19 @@
 /**
- * AskService 生命周期契约测试：AskResult 三态、waiter 注册顺序与预分配 ID。
+ * AskService lifecycle contract test:AskResult three state,waiter register order and pre- allocate ID.
  *
- * 覆盖本轮契约变更与主代理真实复现的违约点：
- * - 同步销单悬挂 bug：ask.upsert 订阅者在事件回调内同步 cancelAsk(id,'superseded')
- *   后，旧实现库已 settled 但 createAsk promise 永不结束（waiter 晚于 publish
- *   注册且 settle 已清空列表）——现在必须 resolve 出 superseded；
- * - 同步 answer：事件回调内同步 answerAsk 必须交付 answers；
- * - 三态均 resolve（cancel/superseded answers 为 {}，取消不冒充批准），
- *   只有验证/IO 异常 reject；
- * - 预分配 spec.id 不被 UUID 覆盖；重复 ID（任何状态，含已结算审批）409 拒绝，
- *   不覆盖旧审批；非法 id（空串/空白/非字符串）校验拒绝；
- * - CAS 语义保持：客户端过期水位 409、无 resolver ask_state_unavailable、
- *   目标 seq 不一致（含回退）superseded；
- * - secret marker 不落明文：结果与持久层只有 [REDACTED:stash:*]，envFor 取回明文；
- * - putAsk 抛错时 waiter 被回收：不留悬挂等待者、createAsk 显式 reject。
+ * override this round contract change and main proxy real re- now violate about point:
+ * - sync deregister single pending bug:ask.upsert subscribe in event call back inside sync cancelAsk(id,'superseded')
+ *   after, old implement store already settled but createAsk promise forever do not end (waiter later than publish
+ *   register and settle already empty list) - - now must resolve out superseded;
+ * - sync answer: event call back inside sync answerAsk must deliver answers;
+ * - three state all resolve(cancel/superseded answers is {}, cancel do not smoke fill batch allow),
+ *   only verify/IO exception reject;
+ * - pre- allocate spec.id do not by UUID override; duplicate ID(any state, contains already compute approval)409 reject,
+ *   does not override old approval; illegal id(empty string/whitespace/non- string) validate reject;
+ * - CAS semantics keep: client expired watermark 409, without resolver ask_state_unavailable,
+ *   target seq inconsistent (contains fall back)superseded;
+ * - secret marker do not plaintext: result and durable layer only [REDACTED:stash:*],envFor take back plaintext;
+ * - putAsk throws when waiter by reclaim: do not pending wait for,createAsk explicit reject.
  */
 
 import { HelmError } from '@helm/protocol'
@@ -33,7 +33,7 @@ interface TestContext {
   stash: SecretStash
   events: Array<{ type: string; payload: unknown }>
   pendingChanged: number[]
-  /** 依次关闭 store 与底层 db（finally 必须调用，否则连接泄漏）。 */
+  /** in order close store and underlying db(finally must invoke, otherwise connect leak leak). */
   close(): Promise<void>
 }
 
@@ -86,7 +86,7 @@ async function openService(
   }
 }
 
-/** 断言 promise 在 ms 内已结算（防悬挂回归：悬挂时超时失败并给出诊断）。 */
+/** assertion promise in ms inside already compute (guard against pending regression: pending when timeout failed and to out diagnose). */
 async function assertSettlesWithin<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   const sentinel = Symbol('pending')
   const raced = await Promise.race([
@@ -98,7 +98,7 @@ async function assertSettlesWithin<T>(promise: Promise<T>, ms: number, label: st
   ])
   const outcome = raced as { value: unknown; error?: unknown }
   if (outcome.value === sentinel && outcome.error === undefined) {
-    assert.fail(`${label}：promise 在 ${ms}ms 内未结算（悬挂回归）`)
+    assert.fail(`${label}:promise in ${ms}ms inside not compute (pending regression)`)
   }
   if ('error' in outcome && outcome.error !== undefined) {
     throw outcome.error
@@ -108,18 +108,18 @@ async function assertSettlesWithin<T>(promise: Promise<T>, ms: number, label: st
 
 const baseSpec = {
   conversationId: 1,
-  title: '审批',
+  title: 'approval',
   fields: [{ name: 'x', label: 'X', type: 'text' as const }],
 }
 
 // ---------------------------------------------------------------------------
 
-describe('Ask 生命周期：同步销单/作答不悬挂', { timeout: 60_000 }, () => {
-  it('主代理复现路径：ask.upsert 订阅内同步 cancelAsk(superseded) 后 promise 必须 resolve superseded', { timeout: 60_000 }, async () => {
+describe('Ask lifecycle: sync deregister single/act answer do not pending', { timeout: 60_000 }, () => {
+  it('main proxy re- now path:ask.upsert subscribe inside sync cancelAsk(superseded) after promise must resolve superseded', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
-      // 订阅者在事件回调内同步销单（真实插件经 events.subscribe 触发的路径）。
-      // 销单必须走同一实例（waiters 是实例内 Map）：hook 自引用模拟插件回调。
+      // subscribe in event call back inside sync deregister single (real plugin via events.subscribe trigger path).
+      // deregister single must away the same instance (waiters is instance inside Map):hook self reference simulated plugin call back.
       let hook: AskService
       hook = new AskService({
         store: ctx.store,
@@ -134,7 +134,7 @@ describe('Ask 生命周期：同步销单/作答不悬挂', { timeout: 60_000 },
       const result = await assertSettlesWithin(
         hook.createAsk(baseSpec),
         2_000,
-        '同步 superseded 销单',
+        'sync superseded deregister single',
       )
       assert.equal(result.status, 'superseded')
       assert.deepEqual(result.answers, {})
@@ -144,7 +144,7 @@ describe('Ask 生命周期：同步销单/作答不悬挂', { timeout: 60_000 },
     }
   })
 
-  it('同步 answer：ask.upsert 订阅内同步 answerAsk 交付 answers', { timeout: 60_000 }, async () => {
+  it('sync answer:ask.upsert subscribe inside sync answerAsk deliver answers', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       let hook: AskService
@@ -153,33 +153,33 @@ describe('Ask 生命周期：同步销单/作答不悬挂', { timeout: 60_000 },
         stash: ctx.stash,
         onEvent: (type, payload) => {
           if (type === 'ask.upsert') {
-            void hook.answerAsk((payload as { id: string }).id, { x: '同步答案' })
+            void hook.answerAsk((payload as { id: string }).id, { x: 'sync answer proposal' })
           }
         },
         onConvPendingChanged: () => {},
       })
-      const result = await assertSettlesWithin(hook.createAsk(baseSpec), 2_000, '同步 answer')
+      const result = await assertSettlesWithin(hook.createAsk(baseSpec), 2_000, 'sync answer')
       assert.equal(result.status, 'answered')
-      assert.deepEqual(result.answers, { x: '同步答案' })
+      assert.deepEqual(result.answers, { x: 'sync answer proposal' })
     } finally {
       await ctx.close()
     }
   })
 
-  it('异步 cancel/answer 路径不受影响（常规 await 结算）', { timeout: 60_000 }, async () => {
+  it('async cancel/answer path do not subject to affect (common rule await compute)', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const p1 = ctx.service.createAsk(baseSpec)
       await new Promise((r) => setTimeout(r, 20))
       await ctx.service.cancelAsk(ctx.service.listAsks('pending')[0]!.id)
-      const r1 = await assertSettlesWithin(p1, 2_000, '异步 cancel')
+      const r1 = await assertSettlesWithin(p1, 2_000, 'async cancel')
       assert.equal(r1.status, 'cancelled')
       assert.deepEqual(r1.answers, {})
 
       const p2 = ctx.service.createAsk(baseSpec)
       await new Promise((r) => setTimeout(r, 20))
       await ctx.service.answerAsk(ctx.service.listAsks('pending')[0]!.id, { x: 'v' })
-      const r2 = await assertSettlesWithin(p2, 2_000, '异步 answer')
+      const r2 = await assertSettlesWithin(p2, 2_000, 'async answer')
       assert.equal(r2.status, 'answered')
       assert.deepEqual(r2.answers, { x: 'v' })
     } finally {
@@ -190,11 +190,11 @@ describe('Ask 生命周期：同步销单/作答不悬挂', { timeout: 60_000 },
 
 // ---------------------------------------------------------------------------
 
-describe('Ask 三态终值与异常边界', { timeout: 60_000 }, () => {
-  it('answered 携带 answers；cancelled/superseded answers 为 {}（不冒充批准）', { timeout: 60_000 }, async () => {
+describe('Ask three state final value and exception boundary', { timeout: 60_000 }, () => {
+  it('answered carry answers;cancelled/superseded answers is {}(do not smoke fill batch allow)', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
-      const pa = ctx.service.createAsk({ ...baseSpec, title: '将作答' })
+      const pa = ctx.service.createAsk({ ...baseSpec, title: 'act answer' })
       await new Promise((r) => setTimeout(r, 20))
       await ctx.service.answerAsk(ctx.service.listAsks('pending')[0]!.id, { x: 'ok' })
       const answered = await pa
@@ -202,14 +202,14 @@ describe('Ask 三态终值与异常边界', { timeout: 60_000 }, () => {
       assert.deepEqual(answered.answers, { x: 'ok' })
       assert.equal(typeof answered.id, 'string')
 
-      const pc = ctx.service.createAsk({ ...baseSpec, title: '将取消' })
+      const pc = ctx.service.createAsk({ ...baseSpec, title: 'cancel' })
       await new Promise((r) => setTimeout(r, 20))
       await ctx.service.cancelAsk(ctx.service.listAsks('pending')[0]!.id, 'cancelled')
       const cancelled = await pc
       assert.equal(cancelled.status, 'cancelled')
       assert.deepEqual(cancelled.answers, {})
 
-      const ps = ctx.service.createAsk({ ...baseSpec, title: '将销单' })
+      const ps = ctx.service.createAsk({ ...baseSpec, title: 'deregister single' })
       await new Promise((r) => setTimeout(r, 20))
       await ctx.service.cancelAsk(ctx.service.listAsks('pending')[0]!.id, 'superseded')
       const superseded = await ps
@@ -220,18 +220,18 @@ describe('Ask 三态终值与异常边界', { timeout: 60_000 }, () => {
     }
   })
 
-  it('验证异常 reject：非法 spec / 会话不存在 / 答案非法不结算 ask', { timeout: 60_000 }, async () => {
+  it('verify exception reject: illegal spec / conversation missing / answer proposal illegal do not compute ask', { timeout: 60_000 }, async () => {
     const ctx = await openService({ validateConversation: (id) => id === 1 })
     try {
       await assert.rejects(
-        () => ctx.service.createAsk({ ...baseSpec, fields: [{ name: '', label: '空名', type: 'text' }] }),
+        () => ctx.service.createAsk({ ...baseSpec, fields: [{ name: '', label: 'empty name', type: 'text' }] }),
         (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
       )
       await assert.rejects(
         () => ctx.service.createAsk({ ...baseSpec, conversationId: 424242 }),
         (err: unknown) => err instanceof HelmError && err.code === 'not_found',
       )
-      // 非法答案 reject（answerAsk 抛出），ask 保持 pending，不产生假结果。
+      // illegal answer proposal reject(answerAsk throw),ask keep pending, produces no false result.
       const pa = ctx.service.createAsk(baseSpec)
       void pa.catch(() => {})
       await new Promise((r) => setTimeout(r, 20))
@@ -248,25 +248,25 @@ describe('Ask 三态终值与异常边界', { timeout: 60_000 }, () => {
     }
   })
 
-  it('putAsk 同步拒绝（镜像前置检查）：createAsk 显式 reject 且不留悬挂 waiter', { timeout: 60_000 }, async () => {
+  it('putAsk sync reject (mirror pre- check):createAsk explicit reject and do not pending waiter', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const raw = ctx.store as unknown as { putAsk: (row: unknown) => void }
       const original = raw.putAsk.bind(ctx.store)
       raw.putAsk = () => {
-        throw new HelmError('store_flush_failed', '模拟持久化失败', 500)
+        throw new HelmError('store_flush_failed', 'simulated persist failed', 500)
       }
       await assert.rejects(
         () => ctx.service.createAsk(baseSpec),
         (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
       )
       raw.putAsk = original
-      // waiter 已回收：后续同 ID 创建与正常流程不受污染。
+      // waiter already reclaim: after continue same ID create and normal stream process do not subject to pollute.
       assert.equal(ctx.service.listAsks('pending').length, 0)
       const ok = ctx.service.createAsk(baseSpec)
       await new Promise((r) => setTimeout(r, 20))
       await ctx.service.answerAsk(ctx.service.listAsks('pending')[0]!.id, { x: 'v' })
-      const result = await assertSettlesWithin(ok, 2_000, '失败回收后重建')
+      const result = await assertSettlesWithin(ok, 2_000, 'failed reclaim after rebuild')
       assert.equal(result.status, 'answered')
     } finally {
       await ctx.close()
@@ -276,9 +276,9 @@ describe('Ask 三态终值与异常边界', { timeout: 60_000 }, () => {
 
 // ---------------------------------------------------------------------------
 
-describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { timeout: 60_000 }, () => {
-  // putAsk 只写镜像 + 入队 SQL：真实落盘边界在尾链，只有 flushPublic 能暴露
-  // 异步 SQL 失败。注入 db.run 失败验证创建/结算均不假成功。
+describe('Ask persist failed (SQL tail chain inject): do not return false succeeded', { timeout: 60_000 }, () => {
+  // putAsk only write mirror + queue SQL: real boundary in tail chain, only flushPublic can expose
+  // async SQL failed. inject db.run failed verify create/compute all do not false succeeded.
   let reported: unknown[] = []
 
   function patchRun(
@@ -290,12 +290,12 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
     }
     const original = internals.db.run.bind(internals.db)
     internals.db.run = (sql: string, ...params: unknown[]) => {
-      if (shouldFail(sql, params)) return Promise.reject(new Error('注入的 SQL 落盘失败'))
+      if (shouldFail(sql, params)) return Promise.reject(new Error('inject SQL failed'))
       return original(sql, ...params)
     }
   }
 
-  it('创建 INSERT 落盘失败：createAsk reject，不发布 ask.upsert，后续写显式拒绝', { timeout: 60_000 }, async () => {
+  it('create INSERT failed:createAsk reject, do not publish ask.upsert, after continue write explicit reject', { timeout: 60_000 }, async () => {
     reported = []
     const ctx = await openService({
       onError: (error) => reported.push(error),
@@ -306,83 +306,83 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
         () => ctx.service.createAsk(baseSpec),
         (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
       )
-      // 未发布任何可见制事件（副作用被阻断，不极假成功）。
+      // not publish any visible system event (side effect by block assert, do not extreme false succeeded).
       assert.equal(ctx.events.find((e) => e.type === 'ask.upsert'), undefined)
-      // store 进入 fail 语义：后续新写显式拒绝，不再假装入队成功。
+      // store enter fail semantics: after continue new write explicit reject, no longer pretend queue succeeded.
       await assert.rejects(
         () => ctx.service.createAsk(baseSpec),
         (err: unknown) => err instanceof HelmError && (err.code === 'store_flush_failed' || err.code === 'store_closed'),
       )
-      // 错误已上报（不静默吞）。
-      assert.ok(reported.length >= 1, '持久化错误必须上报')
+      // error already on report (not silently swallow).
+      assert.ok(reported.length >= 1, 'persist error must on report')
     } finally {
       await ctx.close()
     }
   })
 
-  it('结算 UPDATE 落盘失败：不返回假 answered，createAsk 同错误 reject，无 ask.resolved', { timeout: 60_000 }, async () => {
+  it('compute UPDATE failed: do not return false answered,createAsk same error reject, without ask.resolved', { timeout: 60_000 }, async () => {
     reported = []
     const ctx = await openService({
       onError: (error) => reported.push(error),
     })
     try {
-      // 创建 INSERT 的 settled_at 绑定为 null；结算写回为数值——只拦结算。
+      // create INSERT  settled_at bind set is null; compute write back is count value - - only intercept compute.
       patchRun(ctx.store, (sql, params) => sql.includes('helm_asks') && typeof params[8] === 'number')
       const askPromise = ctx.service.createAsk(baseSpec)
       await new Promise((r) => setTimeout(r, 20))
       const ask = ctx.service.listAsks('pending')[0]!
       await assert.rejects(
-        () => ctx.service.answerAsk(ask.id, { x: '真实答案' }),
+        () => ctx.service.answerAsk(ask.id, { x: 'real answer proposal' }),
         (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
       )
-      // createAsk 不得返回假 answered：同一失败 reject（也不悬挂）。
+      // createAsk must not return false answered: the same failed reject(also do not pending).
       await assert.rejects(
-        () => assertSettlesWithin(askPromise, 2_000, '结算落盘失败'),
+        () => assertSettlesWithin(askPromise, 2_000, 'compute failed'),
         (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
       )
-      // 终态事件未发布。
+      // terminal state event not publish.
       assert.equal(ctx.events.find((e) => e.type === 'ask.resolved'), undefined)
-      assert.ok(reported.length >= 1, '持久化错误必须上报')
+      assert.ok(reported.length >= 1, 'persist error must on report')
     } finally {
       await ctx.close()
     }
   })
 
-  it('终态同步 putAsk 抛错：answer/cancel reject，createAsk waiter 同错误 reject 不悬挂', { timeout: 60_000 }, async () => {
+  it('terminal state sync putAsk throws:answer/cancel reject,createAsk waiter same error reject do not pending', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const askPromise = ctx.service.createAsk(baseSpec)
       await new Promise((r) => setTimeout(r, 20))
       const ask = ctx.service.listAsks('pending')[0]!
-      // 同步镜像写拒绝（store closed/前置检查抛出），发生在 flush 之前。
+      // sync mirror write reject (store closed/pre- check throw), occur in flush before.
       const raw = ctx.store as unknown as { putAsk: (row: unknown) => void }
       const original = raw.putAsk.bind(ctx.store)
       raw.putAsk = () => {
-        throw new HelmError('store_closed', '模拟终态同步写入失败', 409)
+        throw new HelmError('store_closed', 'simulated terminal state sync failed to write', 409)
       }
       await assert.rejects(
         () => ctx.service.answerAsk(ask.id, { x: 'v' }),
         (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
       )
-      // createAsk waiter 不得悬挂、不得假终态：同一错误 reject。
+      // createAsk waiter must not pending, must not false terminal state: the same error reject.
       await assert.rejects(
-        () => assertSettlesWithin(askPromise, 2_000, '终态同步 put 失败'),
+        () => assertSettlesWithin(askPromise, 2_000, 'terminal state sync put failed'),
         (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
       )
       raw.putAsk = original
-      // cancel 路径同样 reject 不悬挂（预分配 id 精确定位，避免选中旧 pending）。
-      const p2 = ctx.service.createAsk({ ...baseSpec, id: 'cancel-put-fail', title: '将取消' })
+      // cancel path same reject do not pending (pre- allocate id precise locate, avoid choose in old pending).
+      const p2 = ctx.service.createAsk({ ...baseSpec, id: 'cancel-put-fail', title: 'cancel' })
       await new Promise((r) => setTimeout(r, 20))
       assert.equal(ctx.service.listAsks('pending').find((a) => a.id === 'cancel-put-fail') !== undefined, true)
       raw.putAsk = () => {
-        throw new HelmError('store_closed', '模拟终态同步写入失败', 409)
+        throw new HelmError('store_closed', 'simulated terminal state sync failed to write', 409)
       }
       await assert.rejects(
         () => ctx.service.cancelAsk('cancel-put-fail'),
         (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
       )
       await assert.rejects(
-        () => assertSettlesWithin(p2, 2_000, 'cancel 同步 put 失败'),
+        () => assertSettlesWithin(p2, 2_000, 'cancel sync put failed'),
         (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
       )
       raw.putAsk = original
@@ -391,8 +391,8 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
     }
   })
 
-  it('ask.resolved 发布器抛错：answer reject，createAsk waiter 同错误 reject 不悬挂', { timeout: 60_000 }, async () => {
-    // 落盘成功但事件回调抛错：也必须如实失败，不能装作已结算。
+  it('ask.resolved publish throws:answer reject,createAsk waiter same error reject do not pending', { timeout: 60_000 }, async () => {
+    // succeeded but event call back throws: also must such as failed, cannot install act already compute.
     const db = await openHelmDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
     const store = new HelmStore(db)
     await store.load()
@@ -403,7 +403,7 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
       stash,
       onEvent: (type, payload) => {
         events.push({ type, payload })
-        if (type === 'ask.resolved') throw new Error('事件发布器故障')
+        if (type === 'ask.resolved') throw new Error('event publish fault')
       },
       onConvPendingChanged: () => {},
     })
@@ -413,12 +413,12 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
       const ask = failing.listAsks('pending')[0]!
       await assert.rejects(
         () => failing.answerAsk(ask.id, { x: 'v' }),
-        (err: unknown) => err instanceof Error && String(err.message).includes('事件发布器故障'),
+        (err: unknown) => err instanceof Error && String(err.message).includes('event publish fault'),
       )
-      // 落盘已成功但事件失败：waiter 以同一错误 reject（不悬挂、不假 answered）。
+      // already succeeded but event failed:waiter with the same error reject(do not pending, do not false answered).
       await assert.rejects(
-        () => assertSettlesWithin(askPromise, 2_000, '事件发布失败'),
-        (err: unknown) => err instanceof Error && String(err.message).includes('事件发布器故障'),
+        () => assertSettlesWithin(askPromise, 2_000, 'event failed to publish'),
+        (err: unknown) => err instanceof Error && String(err.message).includes('event publish fault'),
       )
     } finally {
       await store.close()
@@ -426,24 +426,24 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
     }
   })
 
-  it('cancelByConversation 任一失败：如实 reject，不得静默成功', { timeout: 60_000 }, async () => {
+  it('cancelByConversation any one failed: such as reject, must not static default succeeded', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const p1 = ctx.service.createAsk(baseSpec)
       await new Promise((r) => setTimeout(r, 20))
-      const p2 = ctx.service.createAsk({ ...baseSpec, title: '第二个' })
+      const p2 = ctx.service.createAsk({ ...baseSpec, title: 'second' })
       await new Promise((r) => setTimeout(r, 20))
-      // 注入结算 UPDATE 落盘失败（首条创建的 INSERT settled_at=null 不拦）。
+      // inject compute UPDATE failed (first create INSERT settled_at=null do not intercept).
       patchRun(ctx.store, (sql, params) => sql.includes('helm_asks') && typeof params[8] === 'number')
       await assert.rejects(
         () => ctx.service.cancelByConversation(1),
         (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
       )
-      // 失败条的 waiter 已被 settle 以 failure 结算（不悬挂、不假终态）。
+      // failed waiter already by settle with failure compute (do not pending, do not false terminal state).
       const outcomes = await Promise.allSettled([p1, p2])
       const rejected = outcomes.filter((o) => o.status === 'rejected').length
-      assert.ok(rejected >= 1, '至少一条受影响 ask 的 waiter 必须显式失败')
-      // 不能出现任何一例「级联取消成功 resolve 成 cancelled」的同时整体却报成功。
+      assert.ok(rejected >= 1, 'at least a subject to affect ask  waiter must explicit failed')
+      // cannot appear any one example level join cancel succeeded resolve into cancelledalso whole yet report succeeded.
       patchRun(ctx.store, () => false)
     } finally {
       await ctx.close()
@@ -453,8 +453,8 @@ describe('Ask 持久化失败（SQL 尾链注入）：不返回假成功', { tim
 
 // ---------------------------------------------------------------------------
 
-describe('Ask 预分配 ID', { timeout: 60_000 }, () => {
-  it('spec.id 保留不被 UUID 覆盖；result.id 与库内一致', { timeout: 60_000 }, async () => {
+describe('Ask pre- allocate ID', { timeout: 60_000 }, () => {
+  it('spec.id keep do not by UUID override;result.id and store inside consistent', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const pa = ctx.service.createAsk({ ...baseSpec, id: 'pre-allocated-1' })
@@ -469,22 +469,22 @@ describe('Ask 预分配 ID', { timeout: 60_000 }, () => {
     }
   })
 
-  it('重复 ID 拒绝（含已结算审批）：409 ask_id_conflict，不覆盖旧记录', { timeout: 60_000 }, async () => {
+  it('duplicate ID reject (contains already compute approval):409 ask_id_conflict, does not override old record', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const pa = ctx.service.createAsk({ ...baseSpec, id: 'dup-1' })
       await new Promise((r) => setTimeout(r, 20))
-      await ctx.service.answerAsk('dup-1', { x: '原答案' })
+      await ctx.service.answerAsk('dup-1', { x: 'original answer proposal' })
       await pa
-      // 已结算（answered）的 ID 再用：拒绝，不覆盖旧审批结果。
+      // already compute (answered) ID again use: reject, does not override old approval result.
       await assert.rejects(
         () => ctx.service.createAsk({ ...baseSpec, id: 'dup-1' }),
         (err: unknown) => err instanceof HelmError && err.code === 'ask_id_conflict',
       )
       assert.equal(ctx.store.getAsk('dup-1')!.status, 'answered')
-      assert.equal(JSON.parse(ctx.store.getAsk('dup-1')!.resultJson!).x, '原答案')
+      assert.equal(JSON.parse(ctx.store.getAsk('dup-1')!.resultJson!).x, 'original answer proposal')
 
-      // pending 状态的 ID 同样拒绝。
+      // pending state ID same reject.
       const pb = ctx.service.createAsk({ ...baseSpec, id: 'dup-2' })
       void pb.catch(() => {})
       await new Promise((r) => setTimeout(r, 20))
@@ -494,7 +494,7 @@ describe('Ask 预分配 ID', { timeout: 60_000 }, () => {
       )
       await ctx.service.cancelAsk('dup-2')
       await pb
-      // cancelled 状态同样占用 ID。
+      // cancelled state same occupy ID.
       await assert.rejects(
         () => ctx.service.createAsk({ ...baseSpec, id: 'dup-2' }),
         (err: unknown) => err instanceof HelmError && err.code === 'ask_id_conflict',
@@ -504,7 +504,7 @@ describe('Ask 预分配 ID', { timeout: 60_000 }, () => {
     }
   })
 
-  it('非法 id 形状拒绝：空串 / 纯空白 / 非字符串', { timeout: 60_000 }, async () => {
+  it('illegal id shape reject: empty string / pure whitespace / non- string', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       for (const bad of ['', '   ']) {
@@ -526,8 +526,8 @@ describe('Ask 预分配 ID', { timeout: 60_000 }, () => {
 
 // ---------------------------------------------------------------------------
 
-describe('Ask CAS 语义保持', { timeout: 60_000 }, () => {
-  it('客户端过期水位 409；无 resolver ask_state_unavailable；seq 不一致（含回退）superseded resolve', { timeout: 60_000 }, async () => {
+describe('Ask CAS semantics keep', { timeout: 60_000 }, () => {
+  it('client expired watermark 409; without resolver ask_state_unavailable;seq inconsistent (contains fall back)superseded resolve', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const pa = ctx.service.createAsk({ ...baseSpec, expectedStateSeq: 10, title: 'CAS' })
@@ -542,22 +542,22 @@ describe('Ask CAS 语义保持', { timeout: 60_000 }, () => {
         () => ctx.service.answerAsk(ask.id, { x: 'v' }),
         (err: unknown) => err instanceof HelmError && err.code === 'ask_state_unavailable',
       )
-      // 回退（9 < 10）与推进（11 > 10）都 superseded，且 createAsk resolve。
+      // fall back (9 < 10) and push enter (11 > 10) all superseded, and createAsk resolve.
       let target = 9
       ctx.service.registerSeqResolver(() => target)
       const settledBackward = await ctx.service.answerAsk(ask.id, { x: 'v' })
       assert.equal(settledBackward.status, 'superseded')
-      const r1 = await assertSettlesWithin(pa, 2_000, 'seq 回退 superseded')
+      const r1 = await assertSettlesWithin(pa, 2_000, 'seq fall back superseded')
       assert.equal(r1.status, 'superseded')
       assert.deepEqual(r1.answers, {})
 
-      const pb = ctx.service.createAsk({ ...baseSpec, expectedStateSeq: 5, title: 'CAS 一致' })
+      const pb = ctx.service.createAsk({ ...baseSpec, expectedStateSeq: 5, title: 'CAS consistent' })
       await new Promise((r) => setTimeout(r, 20))
       const ask2 = ctx.service.listAsks('pending')[0]!
       target = 5
       const ok = await ctx.service.answerAsk(ask2.id, { x: 'v' })
       assert.equal(ok.status, 'answered')
-      const r2 = await assertSettlesWithin(pb, 2_000, 'seq 一致 answer')
+      const r2 = await assertSettlesWithin(pb, 2_000, 'seq consistent answer')
       assert.equal(r2.status, 'answered')
     } finally {
       await ctx.close()
@@ -567,42 +567,42 @@ describe('Ask CAS 语义保持', { timeout: 60_000 }, () => {
 
 // ---------------------------------------------------------------------------
 
-describe('Ask secret marker 边界', { timeout: 60_000 }, () => {
-  it('secret 答案只有 stash marker：result/persist/事件均无明文，envFor 可取回', { timeout: 60_000 }, async () => {
+describe('Ask secret marker boundary', { timeout: 60_000 }, () => {
+  it('secret answer proposal only stash marker:result/persist/event all without plaintext,envFor can take back', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const pa = ctx.service.createAsk({
         conversationId: 1,
-        title: '密钥',
+        title: 'secret key',
         fields: [{ name: 'API_KEY', label: 'Key', type: 'text', secret: true, required: true }],
       })
       await new Promise((r) => setTimeout(r, 20))
       await ctx.service.answerAsk(ctx.service.listAsks('pending')[0]!.id, { API_KEY: 'plain-secret-value' })
       const result = await pa
       assert.equal(result.status, 'answered')
-      assert.ok(result.answers['API_KEY']!.startsWith('[REDACTED:stash:'), '结果只含 marker')
-      // 持久层无明文。
+      assert.ok(result.answers['API_KEY']!.startsWith('[REDACTED:stash:'), 'result only contains marker')
+      // durable layer without plaintext.
       const row = ctx.store.getAsk(result.id)!
       assert.ok(!row.specJson.includes('plain-secret-value'))
       assert.ok(!row.resultJson!.includes('plain-secret-value'))
       assert.ok(row.resultJson!.includes('[REDACTED:stash:'))
-      // 事件载荷无明文。
+      // event payload without plaintext.
       for (const frame of ctx.events) {
-        assert.ok(!JSON.stringify(frame).includes('plain-secret-value'), '事件不得泄漏明文')
+        assert.ok(!JSON.stringify(frame).includes('plain-secret-value'), 'event must not leak leak plaintext')
       }
-      // 会话环境可取回明文（进程内可信方）。
+      // conversation environment can take back plaintext (process inside can message way).
       assert.equal(ctx.stash.envFor(1)['API_KEY'], 'plain-secret-value')
     } finally {
       await ctx.close()
     }
   })
 
-  it('空 secret 不入 stash（存储空串），secret 碰撞声明仍拒绝', { timeout: 60_000 }, async () => {
+  it('empty secret do not stash(store empty string),secret collision declaration still reject', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const pa = ctx.service.createAsk({
         conversationId: 1,
-        title: '空秘密',
+        title: 'empty secret',
         fields: [{ name: 'EMPTY_TOKEN', label: 'T', type: 'text', secret: true }],
       })
       await new Promise((r) => setTimeout(r, 20))
@@ -610,10 +610,10 @@ describe('Ask secret marker 边界', { timeout: 60_000 }, () => {
       const result = await pa
       assert.equal(result.status, 'answered')
       assert.equal(result.answers['EMPTY_TOKEN'], '')
-      // 'api_key' 与 'API_KEY' 是两个不同字段名：保留声明原样可共存（不静默合并）。
+      // 'api_key' and 'API_KEY' is two different field name: keep declaration original can shared store (not silently merge).
       const pboth = ctx.service.createAsk({
         conversationId: 1,
-        title: '双秘密共存',
+        title: 'double secret shared store',
         fields: [
           { name: 'api_key', label: 'a', type: 'text', secret: true },
           { name: 'API_KEY', label: 'b', type: 'text', secret: true },
@@ -628,12 +628,12 @@ describe('Ask secret marker 边界', { timeout: 60_000 }, () => {
       assert.equal(both.status, 'answered')
       assert.equal(ctx.stash.envFor(1)['api_key'], 'lower')
       assert.equal(ctx.stash.envFor(1)['API_KEY'], 'upper')
-      // 重复 field.name 仍然拒绝。
+      // duplicate field.name still reject.
       await assert.rejects(
         () =>
           ctx.service.createAsk({
             conversationId: 1,
-            title: '重复名',
+            title: 'duplicate name',
             fields: [
               { name: 'dup', label: '1', type: 'text' },
               { name: 'dup', label: '2', type: 'text' },

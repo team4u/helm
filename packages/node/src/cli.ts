@@ -1,41 +1,41 @@
 #!/usr/bin/env node
 /**
- * helm-node CLI 入口（参数解析 + 命令分发）。
+ * helm-node CLI entry (parameter parse + command dispatch).
  *
- * - runNodeCli(argv, io) 为唯一测试/嵌入入口；直接运行时（argv[1] 实路径
- *   等于本模块实路径，兼容 pnpm bin symlink）才自动执行。
- * - 命令：connect / start / stop / restart / status / upgrade / service install|uninstall|status / --help。
- * - --json 全局生效：成功 stdout JSON，失败 stderr JSON 错误信封 + 非零退出码。
- * - 后台控制（跨平台，不依赖 /proc、不向任意 PID 发信号）：
- *   · 每次后台启动生成随机 instanceId；node.pid = { pid, instanceId, endpoint }
- *     （0600 原子写）。daemon 子进程自持控制 IPC（Unix: /tmp/helm-node-<hash>.sock；
- *     Windows: \\.\pipe\helm-node-<hash>），单行 JSON ≤4KiB、带空闲超时、验证
- *     instanceId，只接受 status/stop——绝不向无关进程发送信号或按键。
- *   · start -d 用 Node 原生 stdio IPC 上报就绪（helm-node.ready），子进程 argv
- *     只有 `start --data-dir <dir> [--hub <url>]`，无 token；token 一律从 0600
- *     node.json 读取。instanceId/endpoint 经 HELM_NODE_INSTANCE_ID /
- *     HELM_NODE_CONTROL_ENDPOINT 环境变量传递（本机实例控制信息，不进日志）。
- *   · stop 仅对通过 instanceId 验证的控制端点发 stop：daemon 先完成执行环境
- *     清理（handle.close）再确认退出，之后才删 pid 文件；控制通道不可达且
- *     pid 存活时显式失败并保留 pid 文件；pid 确已死亡才按 stale 清理。
- * - start -d 以 node.start.lock（O_CREAT|O_EXCL）防并发启动，持锁到 pid 留档
- *   完成；残留锁显式诊断，不静默删除。
- * - 前台 connect/start 注册前只输出「连接中」；state=registered 只来自真实
- *   daemon 注册 ACK，未完成为 starting；控制 server 仅供后台实例启动。
- * - 升级交接：受控 daemon 注入 prepareUpgradeReplacement（stdio IPC 拉起候选
- *   release、activate/activated 本机提交协议）；控制通道 upgrade 请求转发给
- *   handle.upgrade（本机可信源）；升级成功后旧 daemon 延迟退出让位。候选以
- *   HELM_NODE_UPGRADE_ATTEMPT + pendingActivation 启动，真实 registered 后保持
- *   IPC 等 activate，收到后校验 previousVersion/targetVersion 与本次升级上下文
- *   一致才 confirmUpgrade（不一致不提交并回拒）；激活后 handle.close 失败也
- *   如实记录失败退出码，不因已激活而吞错。
- * - 前台 start（无控制 env）成为稳定 launcher：自身保持活着并周期跟踪
- *   node.pid 指向的当前实例（升级换 pid 后自动跟踪新 daemon），SIGTERM/INT
- *   经控制通道停止当前实例并等待 stop 结果落定后才退出——systemd 主 PID 不因
- *   旧 daemon 退出而杀整个 cgroup。stop 与 pid 清理均按 instanceId CAS 校验。
+ * - runNodeCli(argv, io) is unique test/embed entry; directly runtime (argv[1] path
+ *   equals this module path, compatibility pnpm bin symlink) only then automatically execute.
+ * - command:connect / start / stop / restart / status / upgrade / service install|uninstall|status / --help.
+ * - --json global takes effect: succeeded stdout JSON, failed stderr JSON error message seal + non-zero exit code.
+ * - background control (across platform, independent of /proc, do not to any PID signal):
+ *   . each time background start generate random instanceId;node.pid = { pid, instanceId, endpoint }
+ *     (0600 atomic write).daemon child process self hold control IPC(Unix: /tmp/helm-node-<hash>.sock;
+ *     Windows: \\.\pipe\helm-node-<hash>), single row JSON ≤4KiB, carries idle timeout, verify
+ *     instanceId, only accept status/stop- - never to without closure process send signal or keystroke.
+ *   . start -d use Node original generate stdio IPC on report ready (helm-node.ready), child process argv
+ *     only `start --data-dir <dir> [--hub <url>]`, without token;token one rule from 0600
+ *     node.json read.instanceId/endpoint via HELM_NODE_INSTANCE_ID /
+ *     HELM_NODE_CONTROL_ENDPOINT environment variable pass (local machine instance control information, does not enter log).
+ *   . stop only for via instanceId verify control end point stop:daemon first complete execute environment
+ *     clean up (handle.close) again confirm exit, after only then delete pid file; control channel cannot reach and
+ *     pid store when explicit failed and keep pid file;pid indeed already death only then by stale clean up.
+ * - start -d with node.start.lock(O_CREAT|O_EXCL) guard against concurrency start, hold lock to pid Profile
+ *   complete; leftover lock explicit diagnose, not silently delete.
+ * - foreground connect/start register before only output connect in;state=registered only from real
+ *   daemon register ACK, not complete is starting; control server only supply background instance start.
+ * - upgrade handover: subject to control daemon inject prepareUpgradeReplacement(stdio IPC pull start choose
+ *   release,activate/activated local machine commit protocol); control channel upgrade request forwarding to
+ *   handle.upgrade(local machine can message source); upgrade after success old daemon latency exit let. choose with
+ *   HELM_NODE_UPGRADE_ATTEMPT + pendingActivation start, real registered after keep
+ *   IPC etc. activate, receives after validate previousVersion/targetVersion and this time upgrade context
+ *   consistent only then confirmUpgrade(inconsistent do not commit and back refuse); activate after handle.close failed also
+ *   such as record failed exit code, do not because already activate while swallow wrong.
+ * - foreground start(without control env) into is stable launcher: itself keep and cycle trace
+ *   node.pid points to when before instance (upgrade swap pid after automatically trace new daemon),SIGTERM/INT
+ *   via control channel stop when before instance and wait for stop result set after only then exit - -systemd main PID do not because
+ *   old daemon exit while kill the whole cgroup.stop and pid clean up all by instanceId CAS validate.
  *
- * 实现分层：cli-context（io/pid 留档）、control（控制通道）、launcher（后台
- * 启动与跟踪）、daemon-process（守护进程运行主体）、commands/（各命令 handler）。
+ * implement layer:cli-context(io/pid Profile),control(control channel),launcher(background
+ * start and trace),daemon-process(daemon run body),commands/(each command handler).
  */
 
 import path from 'node:path';
@@ -48,44 +48,44 @@ import { defaultSpawnDaemon } from './launcher.js';
 import { COMMANDS } from './commands/index.js';
 import type { ParsedCli } from './commands/shared.js';
 
-// 历史导出（测试与 @helm/node 包出口依赖）：符号已迁移至分层模块，此处保持再导出。
+// history export (test and @helm/node package exit dependency): symbol already migration until layer module, this where keep again export.
 export { defaultSpawnDaemon } from './launcher.js';
 export { resolveServiceEntry } from './service-entry.js';
 export { controlEndpoint, type DaemonReadyState } from './control.js';
 export type { NodeCliIo, PidRecord } from './cli-context.js';
 
-const USAGE = `helm-node — helm 跨平台受控节点守护进程
+const USAGE = `helm-node - helm across platform subject to control node daemon
 
-用法: helm-node <command> [options]
+use method: helm-node <command> [options]
 
-命令:
-  connect <hubUrl> --token <token>   绑定 JOIN 令牌并前台运行（--once 仅尝试注册一次）
-  start [-d|--daemon]                启动守护进程（-d 后台 detached，写 <dataDir>/node.pid）
-  stop                               停止后台守护进程（经控制通道验证身份后优雅停止）
-  restart                               重启后台守护进程（先确认停止成功再拉新进程）
-  status                                输出身份绑定状态、后台进程与运行态摘要
-  upgrade [--check] [--version <ver>]   自升级（--check 仅查询；执行需受管 daemon 在运行）
-  doctor                                零副作用只读自检（身份 0600 / 权限 / Hub 连通 / Herdr IPC）
-  service install|uninstall|status   开机自启服务管理（launchd / systemd --user / schtasks）
+command:
+  connect <hubUrl> --token <token>   bind set JOIN token and foreground run (--once only attempt register once)
+  start [-d|--daemon]                start daemon (-d background detached, write <dataDir>/node.pid)
+  stop                               stop background daemon (via control channel verify identity after graceful stop)
+  restart                               after restart stage daemon (first confirm stop succeeded again pull new process)
+  status                                output identity bind set state, background process and run state summary
+  upgrade [--check] [--version <ver>]   self upgrade (--check only query; execute must managed daemon in run)
+  doctor                                zero side effect only read self inspect (identity 0600 / permission / Hub connect through / Herdr IPC)
+  service install|uninstall|status   open machine self start service manage (launchd / systemd --user / schtasks)
 
-通用选项:
-  --token <token>        JOIN 令牌（nodeId:secret）
-  --hub <url>            Hub 地址
-  --data-dir <dir>       数据目录（默认 $HELM_DATA_DIR 或 ~/.helm）
-  --json                 机器可读 JSON 输出
-  --once                 connect 模式下仅尝试注册一次即退出
-  --version <ver>        upgrade 指定目标版本（严格 SemVer）
-  --registry <url>       upgrade npm registry 源（默认官方或 HELM_NPM_REGISTRY）
-  --check                upgrade 仅检查可用更新（不启动 daemon、不升级）
-  --force                upgrade 强制（越过防降级/冷却期/同版本限制）
-  --help, -h             显示帮助
+through use option:
+  --token <token>        JOIN token (nodeId:secret)
+  --hub <url>            Hub address
+  --data-dir <dir>       data directory (by default $HELM_DATA_DIR or ~/.helm)
+  --json                 machine can read JSON output
+  --once                 connect pattern under only attempt register once i.e. exit
+  --version <ver>        upgrade designate target version (strictly SemVer)
+  --registry <url>       upgrade npm registry source (by default official or HELM_NPM_REGISTRY)
+  --check                upgrade only check available update (do not start daemon, do not upgrade)
+  --force                upgrade force (exceeds guard against fall back/cool down phase/same version restrict)
+  --help, -h             show help
 
-环境变量: HELM_DATA_DIR（默认 ~/.helm）· HELM_HUB_URL · HERDR_SOCKET_PATH
+environment variable: HELM_DATA_DIR(by default ~/.helm). HELM_HUB_URL . HERDR_SOCKET_PATH
 `;
 
 const VALUE_FLAGS = ['token', 'hub', 'data-dir', 'version', 'registry'] as const;
 const BOOL_FLAGS = ['once', 'help', 'daemon', 'd', 'check', 'force'] as const;
-/** 各命令合法的选项集合；未知选项/多余位置参数一律显式报错。 */
+/** each command legal option set; unknown option/redundant location parameter one rule explicit errors. */
 const COMMAND_FLAGS: Record<string, ReadonlySet<string>> = {
   connect: new Set(['token', 'hub', 'data-dir', 'json', 'once']),
   start: new Set(['token', 'hub', 'data-dir', 'json', 'daemon', 'd']),
@@ -96,7 +96,7 @@ const COMMAND_FLAGS: Record<string, ReadonlySet<string>> = {
   doctor: new Set(['hub', 'data-dir', 'json']),
   service: new Set(['hub', 'data-dir', 'json']),
 };
-/** 各命令位置参数个数（connect 可带 hubUrl；service 恰一个子命令；其余 0）。 */
+/** each command location parameter count (connect can carries hubUrl;service exactly a sub- command; the rest 0). */
 const COMMAND_POSITIONALS: Record<string, { min: number; max: number }> = {
   connect: { min: 1, max: 1 },
   start: { min: 0, max: 0 },
@@ -139,7 +139,7 @@ function parseCli(argv: readonly string[]): ParsedCli {
         if (raw === undefined || raw === '') {
           const next = argv[i + 1];
           if (next === undefined || next.startsWith('-')) {
-            throw new UsageError(`--${name} 缺少取值`);
+            throw new UsageError(`--${name} missing value`);
           }
           raw = next;
           i += 1;
@@ -148,13 +148,13 @@ function parseCli(argv: readonly string[]): ParsedCli {
       } else if ((BOOL_FLAGS as readonly string[]).includes(name)) {
         flags.set(name, true);
       } else {
-        throw new UsageError(`未知选项 --${name}（helm-node --help 查看用法）`);
+        throw new UsageError(`unknown option --${name}(helm-node --help view use method)`);
       }
       i += 1;
       continue;
     }
     if (token.startsWith('-') && token !== '-') {
-      throw new UsageError(`未知选项 ${token}（helm-node --help 查看用法）`);
+      throw new UsageError(`unknown option ${token}(helm-node --help view use method)`);
     }
     positional.push(token);
     i += 1;
@@ -162,37 +162,37 @@ function parseCli(argv: readonly string[]): ParsedCli {
   return { command: positional[0] ?? '', positional: positional.slice(1), flags, json, help };
 }
 
-/** 解析后校验：未知命令、多余位置参数、不属于该命令的选项都显式报错。 */
+/** parse after validate: unknown command, redundant location parameter, do not belongs to the command option all explicit errors. */
 function validateCli(parsed: ParsedCli): void {
   if (parsed.help) return;
   if (parsed.command === '') {
-    throw new UsageError('缺少命令（helm-node --help 查看用法）');
+    throw new UsageError('missing command (helm-node --help view use method)');
   }
   const allowed = COMMAND_FLAGS[parsed.command];
   if (allowed === undefined) {
-    throw new UsageError(`未知命令：helm-node ${parsed.command}（helm-node --help 查看用法）`, 'unknown_command');
+    throw new UsageError(`unknown command:helm-node ${parsed.command}(helm-node --help view use method)`, 'unknown_command');
   }
   for (const name of parsed.flags.keys()) {
     if (!allowed.has(name)) {
-      throw new UsageError(`命令 ${parsed.command} 不支持 --${name}（helm-node --help 查看用法）`);
+      throw new UsageError(`command ${parsed.command} unsupported --${name}(helm-node --help view use method)`);
     }
   }
   const range = COMMAND_POSITIONALS[parsed.command]!;
   if (parsed.positional.length < range.min || parsed.positional.length > range.max) {
     throw new UsageError(
-      `命令 ${parsed.command} 需要 ${range.min === range.max ? String(range.min) : `${range.min}-${range.max}`} 个位置参数，实得 ${parsed.positional.length}（helm-node --help 查看用法）`,
+      `command ${parsed.command} need to ${range.min === range.max ? String(range.min) : `${range.min}-${range.max}`} location parameter, got ${parsed.positional.length}(helm-node --help view use method)`,
     );
   }
   if (parsed.command === 'service') {
     const action = parsed.positional[0];
     if (action !== 'install' && action !== 'uninstall' && action !== 'status') {
-      throw new UsageError(`service 需要 install|uninstall|status 子命令，实得 ${JSON.stringify(action ?? '(空)')}`);
+      throw new UsageError(`service need to install|uninstall|status sub- command, got ${JSON.stringify(action ?? '(empty)')}`);
     }
   }
   if (parsed.command === 'upgrade') {
-    // --check 是纯查询：与指定/强制执行互斥，防误解为「检查并升级」。
+    // --check is pure query: and designate/force execute mutual exclusion, guard against mistakenly solve is check and upgrade.
     if (parsed.flags.get('check') === true && (parsed.flags.get('version') !== undefined || parsed.flags.get('force') === true)) {
-      throw new UsageError('upgrade --check 与 --version/--force 互斥（--check 仅查询不执行升级）');
+      throw new UsageError('upgrade --check and --version/--force mutual exclusion (--check only query do not execute upgrade)');
     }
   }
 }
@@ -250,7 +250,7 @@ export async function runNodeCli(argv: readonly string[] = [], ioInput: Partial<
   }
 }
 
-/** 直接运行判定：argv[1] 实路径 === 本模块实路径（兼容 pnpm .bin symlink 调用）。 */
+/** directly run decide:argv[1] path === this module path (compatibility pnpm .bin symlink invoke). */
 export function isDirectRun(entryArgv = process.argv[1]): boolean {
   if (entryArgv === undefined) return false;
   try {

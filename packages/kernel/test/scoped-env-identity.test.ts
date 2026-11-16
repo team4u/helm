@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createEnvFabric } from '../src/env/fabric.js'
 
-test('逐调用环境中的受管身份大小写变体不能覆盖 composer', { timeout: 60_000 }, async () => {
+test('one by one invoke environment in managed identity large small write change body cannot override composer', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({ envOptions: () => ({ HELM_TOKEN: 'managed', HELM_CONVERSATION_ID: '7' }) })
   try {
     const env = fabric.envForTarget({ nodeId: 'local', cwd: process.cwd(), conversationId: 7 })

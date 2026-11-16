@@ -1,20 +1,20 @@
 /**
- * 原子文件写入与带边界错误信息的的安全读取。
- * 写路径：临时文件（随机 uuid 名 + 0600）→ fsync → rename，崩溃不留半截内容；
- * 0600 确保凭据等机密内容不会经临时文件泄漏权限。
+ * atomic file write and carries boundary error information security read.
+ * write path: temp file (random uuid name + 0600)→ fsync → rename, crash do not half truncate content;
+ * 0600 ensure credentials etc. secret content will not via temp file leak leak permission.
  */
 import fsp from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
-/** Windows 上 rename 替换目标被读取方（并发读/杀毒/索引）短暂占用时的有界退避参数。 */
+/** Windows on rename replace target by read way (concurrency read/kill toxic/index) short temporary occupy when has boundary backoff parameter. */
 const RENAME_BUSY_TOTAL_MS = 1_500
 const RENAME_BUSY_INITIAL_POLL_MS = 5
 const RENAME_BUSY_MAX_POLL_MS = 50
 
 export class FileNotFoundError extends Error {
   constructor(path: string) {
-    super(`文件不存在: ${path}`)
+    super(`file missing: ${path}`)
     this.name = 'FileNotFoundError'
   }
 }
@@ -24,14 +24,14 @@ export class FileParseError extends Error {
     path: string,
     public readonly cause: unknown,
   ) {
-    super(`JSON 解析失败: ${path}: ${String(cause)}`)
+    super(`JSON failed to parse: ${path}: ${String(cause)}`)
     this.name = 'FileParseError'
   }
 }
 
 /**
- * Windows 瞬时占用判定：目标被读取/扫描期间 rename 会短暂 EPERM/EACCES/EBUSY，
- * 有界退避重试即可提交。其他平台这些码属于真实权限/挂载错误，立即失败。
+ * Windows instantaneous occupy decide: target by read/scan during rename will short temporary EPERM/EACCES/EBUSY,
+ * has boundary backoff retry i.e. can commit. other platform these code belongs to real permission/mount error, immediately failed.
  */
 function isTransientRenameBusy(err: unknown): boolean {
   if (process.platform !== 'win32') return false
@@ -40,8 +40,8 @@ function isTransientRenameBusy(err: unknown): boolean {
 }
 
 /**
- * rename 原子替换；仅 Windows 瞬时占用时指数退避（5→50ms，总窗口约 1.5s），
- * 耗尽仍保留原始 ErrnoException（含 code），仅追加重试诊断便于区分权限错误。
+ * rename atomic replace; only Windows instantaneous occupy when exponential backoff (5→50ms, total window about 1.5s),
+ * exhausted still keep original ErrnoException(contains code), only append retry diagnose convenient at zone permission error.
  */
 async function renameAtomically(tmp: string, targetPath: string): Promise<void> {
   const startedAt = Date.now()
@@ -56,9 +56,9 @@ async function renameAtomically(tmp: string, targetPath: string): Promise<void> 
         if (retries > 0 && err instanceof Error) {
           const elapsed = Date.now() - startedAt
           try {
-            err.message = `${err.message}（Windows 目标文件瞬时占用，已重试 ${retries} 次 / ${elapsed}ms 仍失败）`
+            err.message = `${err.message}(Windows target file instantaneous occupy, already retry ${retries} time / ${elapsed}ms still failed)`
           } catch {
-            /* message 不可写时保留原错误 */
+            /* message cannot write when keep original error */
           }
         }
         throw err
@@ -70,7 +70,7 @@ async function renameAtomically(tmp: string, targetPath: string): Promise<void> 
   }
 }
 
-/** 原子写文件：temp(随机 uuid, 0600) → fsync → rename。exclusive 防并发重名。 */
+/** atomic write file:temp(random uuid, 0600) → fsync → rename.exclusive guard against concurrency heavy name. */
 export async function atomicWriteFile(
   path: string,
   data: string | Uint8Array,
@@ -97,7 +97,7 @@ export async function atomicWriteFile(
   }
 }
 
-/** 原子写 JSON（UTF-8，2 空格缩进，稳定键序便于人工审查与 diff）。 */
+/** atomic write JSON(UTF-8,2 space shrink enter, stable key order convenient at human review and diff). */
 export async function atomicWriteJson(
   path: string,
   value: unknown,
@@ -107,7 +107,7 @@ export async function atomicWriteJson(
   await atomicWriteFile(path, text, opts)
 }
 
-/** 读取 UTF-8 文本；缺失抛 FileNotFoundError（含路径，不静默返回空）。 */
+/** read UTF-8 text; missing throw FileNotFoundError(contains path, not silently return empty). */
 export async function readTextFile(path: string): Promise<string> {
   try {
     return await fsp.readFile(path, 'utf8')
@@ -117,7 +117,7 @@ export async function readTextFile(path: string): Promise<string> {
   }
 }
 
-/** 读取并解析 JSON；缺失抛 FileNotFoundError，损坏抛 FileParseError（均含路径）。 */
+/** read and parse JSON; missing throw FileNotFoundError, corrupt throw FileParseError(all contains path). */
 export async function readJsonFile(path: string): Promise<unknown> {
   const text = await readTextFile(path)
   try {
@@ -127,7 +127,7 @@ export async function readJsonFile(path: string): Promise<unknown> {
   }
 }
 
-/** 读取可选 JSON：缺失返回 undefined，损坏仍抛 FileParseError（诚实暴露）。 */
+/** read optional JSON: missing return undefined, corrupt still throw FileParseError(honest expose). */
 export async function readJsonFileOptional(path: string): Promise<unknown> {
   try {
     return await readJsonFile(path)
@@ -137,7 +137,7 @@ export async function readJsonFileOptional(path: string): Promise<unknown> {
   }
 }
 
-/** 复制文件（保留目标 0600，用于 artifacts 收纳来源文件）。 */
+/** duplicate file (keep target 0600, used to artifacts accept source file). */
 export async function copyFilePrivate(src: string, dest: string): Promise<void> {
   await fsp.mkdir(dirname(dest), { recursive: true })
   const tmp = join(dirname(dest), `.${randomUUID()}.tmp`)
@@ -148,7 +148,7 @@ export async function copyFilePrivate(src: string, dest: string): Promise<void> 
     await fsp.rm(tmp, { force: true }).catch(() => {})
     throw err
   }
-  // rename 保留源模式位；机密边界统一收敛为 0600（POSIX chmod 对 Windows 无意义，跳过）。
+  // rename keep source pattern; secret boundary unify converge is 0600(POSIX chmod for Windows without intent meaning, skip).
   if (process.platform !== 'win32') {
     const handle = await fsp.open(dest, 'r')
     try {
@@ -160,14 +160,14 @@ export async function copyFilePrivate(src: string, dest: string): Promise<void> 
 }
 
 /**
- * 判定路径当前模式位是否不含 group/other 权限（即私有）。
+ * decide path when before pattern is otherwise excludes group/other permission (i.e. private).
  *
- * Windows 的 NTFS/ACL 不承载 POSIX group/other 位，Node stat.mode 仅反映
- * 只读位；0600 语义不可用，直接视为私有（与 node/doctor.ts 的平台约定一致）。
- * 非 Windows 仍严格校验：模式位含 group/other 即非私有。
+ * Windows  NTFS/ACL do not bear load POSIX group/other ,Node stat.mode only reverse reflect
+ * only read;0600 semantics unavailable, directly treated as private (and node/doctor.ts platform convention consistent).
+ * non- Windows still strictly validate: pattern contains group/other i.e. non- private.
  */
 export async function isPrivateMode(path: string): Promise<boolean> {
-  // 即使 Windows 不检查 POSIX mode，也要先 stat，避免把文件消失或权限错误静默视为私有。
+  // even if Windows do not check POSIX mode, also want first stat, avoid file disappear or permission error static default treated as private.
   const s = await fsp.stat(path)
   if (process.platform === 'win32') return true
   return (s.mode & 0o077) === 0

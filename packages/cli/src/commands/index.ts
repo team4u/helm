@@ -1,7 +1,7 @@
 /**
- * 静态核心命令层汇总：按 REST 资源域聚合 coreCommands()。
- * 分发层（index.ts）用本表精确匹配核心命令——管理面故障隔离的根基。
- * workflows / worktrees 域已剥离为 builtin:workflow 插件动作（动态命令）。
+ * static core command layer aggregate: by REST asset domain aggregate coreCommands().
+ * dispatch layer (index.ts) use this table precise match core command - - manage side fault isolated base.
+ * workflows / worktrees domain already strip is builtin:workflow plugin action (motion state command).
  */
 import { CORE_CLI_COMMAND_PATHS } from '@helm/protocol'
 import type { CommandSpec } from './shared.js'
@@ -23,14 +23,14 @@ import { apiCommands } from './api.js'
 
 export type { CommandContext, CommandSpec } from './shared.js'
 export {
-  // 类型/契约
-  // —— 数值与位置参数 ——
+  // type/contract
+  // - - count value and location parameter - -
   parsePositiveInt,
   requirePositional,
   assertNoExtraPositionals,
-  // —— 会话目标 ——
+  // - - conversation target - -
   resolveConversationTarget,
-  // —— flag 值规整 ——
+  // - - flag value rule whole - -
   coerceTags,
   coerceMetaFlag,
   requireJsonInput,
@@ -38,11 +38,11 @@ export {
   repeatedValues,
   parseKeyValues,
   parseScalarValue,
-  // —— 鉴权 ——
+  // - - authentication - -
   readPasswordFromStdin,
   authAndSave,
   resolvePasswordFlag,
-  // —— 输出/枚举 ——
+  // - - output/enumeration - -
   printResult,
   printPlainText,
   enumFlag,
@@ -51,9 +51,9 @@ export {
 } from './shared.js'
 
 /**
- * 静态命令表完整性校验：路径全等唯一 + 互不为前缀。
- * matchCommand 的 exact[0] 只取首个命中，重复/前缀冲突会被静默吞掉——
- * 必须在汇总处显式暴露为内部错误，防止未来新增命令撞路径后悄悄错路由。
+ * static command table complete validate: path all etc. unique + mutual do not is prefix.
+ * matchCommand  exact[0] only take first hit, duplicate/prefix conflict will by static default swallow - -
+ * must in aggregate where explicit expose is internal error, guard against not come new increase command collide path after silently wrong routing.
  */
 function assertCommandTableValid(commands: readonly CommandSpec[]): void {
   const seen = new Map<string, string>()
@@ -62,7 +62,7 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
     const dup = seen.get(key)
     if (dup !== undefined) {
       throw new CliError(
-        `静态命令表内部错误：路径重复 "${key}"（${dup} 与 ${cmd.description}），会被 matchCommand 静默吞掉`,
+        `static command table internal error: path duplicate "${key}"(${dup} and ${cmd.description}), will by matchCommand static default swallow`,
         'command_table_conflict',
       )
     }
@@ -73,7 +73,7 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
       if (cmd === other || other.path.length >= cmd.path.length) continue
       if (other.path.every((seg, i) => seg === cmd.path[i])) {
         throw new CliError(
-          `静态命令表内部错误：路径前缀冲突 "${cmd.path.join(' ')}" 吞掉 "${other.path.join(' ')}"`,
+          `static command table internal error: path prefix conflict "${cmd.path.join(' ')}" swallow "${other.path.join(' ')}"`,
           'command_table_conflict',
         )
       }
@@ -83,7 +83,7 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
   for (const key of seen.keys()) {
     if (!expected.has(key)) {
       throw new CliError(
-        `静态命令表内部错误：新增命令 "${key}" 未同步登记至 @helm/protocol CORE_CLI_COMMAND_PATHS（及内置 helm-cli 技能）`,
+        `static command table internal error: new increase command "${key}" not sync register until @helm/protocol CORE_CLI_COMMAND_PATHS(and inside placement helm-cli skill)`,
         'command_table_conflict',
       )
     }
@@ -91,7 +91,7 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
   for (const key of expected) {
     if (!seen.has(key)) {
       throw new CliError(
-        `静态命令表内部错误：CORE_CLI_COMMAND_PATHS 中的 "${key}" 在 coreCommands() 中不存在`,
+        `static command table internal error:CORE_CLI_COMMAND_PATHS in "${key}" in coreCommands() in missing`,
         'command_table_conflict',
       )
     }

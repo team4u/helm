@@ -1,12 +1,12 @@
 /**
- * 插件宿主内部通用工具与校验函数。
+ * plugin host internal through use tool and validate function.
  */
 import { HelmError } from '@helm/protocol';
 import { redactJsonValue } from '../redact.js';
 
 /**
- * JSON-safe 深拷贝：复用 redact.ts 的结构检查（拒循环/undefined/非纯对象/
- * NaN/稀疏数组），identity 直通。边界显式拒绝，绝不留给 JSON.stringify 悄悄丢数据。
+ * JSON-safe deep copy: re- use redact.ts structure check (refuse loop/undefined/non- pure object/
+ * NaN/sparse array),identity direct through. boundary explicit reject, never to JSON.stringify silently lose data.
  */
 export function jsonClone<T>(value: T): T {
   return redactJsonValue(value, (s) => s) as T;
@@ -16,36 +16,36 @@ export function isJsonObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** 严格纯对象判定（原型须为 Object.prototype 或 null）：Map/类实例一律拒绝。 */
+/** strictly pure object decide (prototype must is Object.prototype or null):Map/class instance one rule reject. */
 export function isPlainObject(v: unknown): v is Record<string, unknown> {
   if (!isJsonObject(v)) return false;
   const proto = Object.getPrototypeOf(v);
   return proto === Object.prototype || proto === null;
 }
 
-/** 通用 id 字符集校验。 */
+/** through use id character collection validate. */
 export function assertValidId(kind: string, id: string): void {
   if (typeof id !== 'string' || id.length === 0 || !/^[A-Za-z0-9._-]+$/.test(id)) {
-    throw new HelmError('invalid_identifier', `插件声明 ${kind} id 非法：${String(id)}`, 400);
+    throw new HelmError('invalid_identifier', `plugin declaration ${kind} id illegal:${String(id)}`, 400);
   }
 }
 
 /**
- * 注册边界校验 ConversationScope：只允许纯对象，字段只允许
- * conversationIds / tags / profileIds / modelProviders；数组元素为正整数会话 ID 或非空字符串。
- * 非法 scope（Map、未知字段、元素类型不符等）在此显式拒绝——否则
- * matchesConversationScope 会把读不到的字段当「不限」，静默变成全放行。
+ * register boundary validate ConversationScope: only allows pure object, field only allows
+ * conversationIds / tags / profileIds / modelProviders; array element is positive integer conversation ID or non-empty string.
+ * illegal scope(Map, unknown field, element type do not symbol etc.) in this explicit reject - - otherwise
+ * matchesConversationScope will read fewer than field when do not limit, static default becomes all let through.
  */
 export function assertConversationScope(pluginId: string, what: string, scope: unknown): void {
   if (scope === undefined) return;
   if (!isPlainObject(scope)) {
-    throw new HelmError('invalid_plugin_scope', `${what} 的 scope 必须是纯对象（拒绝 null/数组/Map 等）`, 400, {
+    throw new HelmError('invalid_plugin_scope', `${what}  scope must be pure object (reject null/array/Map etc.)`, 400, {
       pluginId,
     });
   }
   for (const key of Object.keys(scope)) {
     if (key !== 'conversationIds' && key !== 'tags' && key !== 'profileIds' && key !== 'modelProviders') {
-      throw new HelmError('invalid_plugin_scope', `${what} 的 scope 仅允许 conversationIds/tags/profileIds/modelProviders，收到未知字段 ${key}`, 400, {
+      throw new HelmError('invalid_plugin_scope', `${what}  scope only allows conversationIds/tags/profileIds/modelProviders, receives unknown field ${key}`, 400, {
         pluginId,
         field: key,
       });
@@ -55,7 +55,7 @@ export function assertConversationScope(pluginId: string, what: string, scope: u
     const value = scope[key];
     if (value === undefined) return;
     if (!Array.isArray(value)) {
-      throw new HelmError('invalid_plugin_scope', `${what} 的 scope.${key} 必须是数组`, 400, {
+      throw new HelmError('invalid_plugin_scope', `${what}  scope.${key} must be array`, 400, {
         pluginId,
         field: key,
       });
@@ -63,14 +63,14 @@ export function assertConversationScope(pluginId: string, what: string, scope: u
     for (const item of value) {
       if (kind === 'id') {
         if (typeof item !== 'number' || !Number.isInteger(item) || item < 1) {
-          throw new HelmError('invalid_plugin_scope', `${what} 的 scope.${key} 元素必须是正整数会话 ID`, 400, {
+          throw new HelmError('invalid_plugin_scope', `${what}  scope.${key} element must be positive integer conversation ID`, 400, {
             pluginId,
             field: key,
             item,
           });
         }
       } else if (typeof item !== 'string' || item.length === 0) {
-        throw new HelmError('invalid_plugin_scope', `${what} 的 scope.${key} 元素必须是非空字符串`, 400, {
+        throw new HelmError('invalid_plugin_scope', `${what}  scope.${key} element must be non-empty string`, 400, {
           pluginId,
           field: key,
           item,
@@ -84,7 +84,7 @@ export function assertConversationScope(pluginId: string, what: string, scope: u
   checkList('modelProviders', 'text');
 }
 
-/** 幂等化一个释放句柄：重复调用只生效一次（插件提前释放 + 停用清理双保险）。 */
+/** idempotent a release handle: duplicate invoke only takes effect once (plugin mention before release + deactivate clean up double keep risk). */
 export function idempotentRelease(release: () => void): () => void {
   let done = false;
   return () => {
@@ -95,8 +95,8 @@ export function idempotentRelease(release: () => void): () => void {
 }
 
 /**
- * 错误诊断的 JSON-safe 归一形态：出站错误信封严格拒绝 Error/类实例，
- * 原始异常必须在产生处规范化，保留 name/message 与 HelmError code/status。
+ * error diagnose JSON-safe archive one form: out station error message seal strictly reject Error/class instance,
+ * original exception must in produce where specification, keep name/message and HelmError code/status.
  */
 export interface JsonSafeErrorInfo {
   name: string;
@@ -116,14 +116,14 @@ export function toJsonSafeError(err: unknown): JsonSafeErrorInfo {
 }
 
 /**
- * 跨平台绝对路径：POSIX `/`、Windows 盘符 `^[a-zA-Z]:[\\/]` 与 UNC `^\\\\[^\\]+\\[^\\]+`。
+ * across platform absolute path:POSIX `/`,Windows symbol `^[a-zA-Z]:[\\/]` and UNC `^\\\\[^\\]+\\[^\\]+`.
  */
 export function isCrossPlatformAbsolutePath(p: string): boolean {
   return p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p) || /^\\\\[^\\]+\\[^\\]+/.test(p);
 }
 
 /**
- * 严格解码单个路径段：非法百分号序列直接抛错（注册边界显式拒绝）。
+ * strictly decode single path segment: illegal hundred number sequence directly throws (register boundary explicit reject).
  */
 export function decodeSegmentStrict(seg: string): string {
   if (!seg.includes('%')) return seg;
@@ -132,7 +132,7 @@ export function decodeSegmentStrict(seg: string): string {
   } catch {
     throw new HelmError(
       'invalid_route_path',
-      `路由路径段包含非法百分号编码：${seg}（如需字面 % 请编码为 %25）`,
+      `routing path segment contains illegal hundred number encode:${seg}(such as must literal % please encode is %25)`,
       400,
       { segment: seg },
     );

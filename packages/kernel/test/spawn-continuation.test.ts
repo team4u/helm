@@ -1,20 +1,20 @@
 /**
- * agent_spawn continuation（runAround）契约测试。
+ * agent_spawn continuation(runAround) contract test.
  *
- * 覆盖：
- * - 基础 around：插件在 next 前后介入，defaultRun 恰好一次、结果回传；
- * - 双插件嵌套（外层先执行 priority 高）：次序与一次执行；
- * - handled 短路（不调 next）：defaultRun 不执行（既有语义不受影响）；
- * - 重复调用 next：显式拒绝（invalid_hook_result）；
- * - 已调 next 再返回 handled/transform：显式拒绝；
- * - 未 await 的 next（异步触发后提前返回）：defaultRun 恰好一次 + 结果
- *   经宿主 join 后回传（不因 handler 提前返回而丢结果或双执行）；
- * - handler 抛错但已触发 next：错误如实上抛，后台链被 join 收敛（无双执行）；
- * - 无插件：defaultRun 直接执行；
- * - transform 与 continuation 混合：transform 后的载荷进入 continuation；
- * - next 传入改写请求：最终 defaultRun 收到改写后的载荷。
+ * override:
+ * - basis around: plugin in next before after introduce,defaultRun exactly once, result back pass;
+ * - double plugin embed set (outside layer first execute priority high): time order and once execute;
+ * - handled short route (do not tune next):defaultRun do not execute (since has semantics do not subject to affect);
+ * - duplicate invoke next: explicit reject (invalid_hook_result);
+ * - already tune next again return handled/transform: explicit reject;
+ * - not await  next(async trigger after mention before return):defaultRun exactly once + result
+ *   via host join after back pass (do not because handler mention before return while lose result or double execute);
+ * - handler throws but already trigger next: error such as on throw, background chain by join converge (without double execute);
+ * - without plugin:defaultRun directly execute;
+ * - transform and continuation mixed:transform after payload enter continuation;
+ * - next pass change write request: eventually defaultRun receives change write after payload.
  *
- * runner: tsx --test；每测试显式 timeout: 60_000 防死锁。
+ * runner: tsx --test; each test explicit timeout: 60_000 guard against deadlock.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -29,7 +29,7 @@ function spawnRequest(overrides: Partial<AgentSpawnRequest> = {}): AgentSpawnReq
   }
 }
 
-test('runAround 基础：插件 before/after 包裹，defaultRun 恰好一次且结果回传', { timeout: 60_000 }, async () => {
+test('runAround basis: plugin before/after package wrap,defaultRun exactly once and result back pass', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   const order: string[] = []
   let defaultRuns = 0
@@ -43,7 +43,7 @@ test('runAround 基础：插件 before/after 包裹，defaultRun 恰好一次且
     spawnRequest(),
     async (final) => {
       defaultRuns += 1
-      assert.equal(final.prompt, 'rewritten', 'defaultRun 应收到改写后的请求')
+      assert.equal(final.prompt, 'rewritten', 'defaultRun should receives change write after request')
       return `native:${final.prompt}`
     },
   )
@@ -52,7 +52,7 @@ test('runAround 基础：插件 before/after 包裹，defaultRun 恰好一次且
   assert.deepEqual(order, ['before', 'after'])
 })
 
-test('runAround 双插件嵌套：priority 高者外层，defaultRun 一次，两层 after 均执行', { timeout: 60_000 }, async () => {
+test('runAround double plugin embed set:priority high outside layer,defaultRun once, two layer after all execute', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   const order: string[] = []
   let defaultRuns = 0
@@ -81,7 +81,7 @@ test('runAround 双插件嵌套：priority 高者外层，defaultRun 一次，�
   assert.deepEqual(order, ['outer-before', 'inner-before', 'inner-after', 'outer-after'])
 })
 
-test('runAround handled 短路（不调 next）：defaultRun 不执行', { timeout: 60_000 }, async () => {
+test('runAround handled short route (do not tune next):defaultRun do not execute', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   let defaultRuns = 0
   pipeline.add('test:taker', async () => ({ action: 'handled' as const, result: 'taken-over' }))
@@ -96,7 +96,7 @@ test('runAround handled 短路（不调 next）：defaultRun 不执行', { timeo
   assert.equal(defaultRuns, 0)
 })
 
-test('runAround 重复调用 next 显式拒绝（invalid_hook_result），首次链已完成不双执行', { timeout: 60_000 }, async () => {
+test('runAround duplicate invoke next explicit reject (invalid_hook_result), first time chain completed do not double execute', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   let defaultRuns = 0
   let secondCallError: unknown
@@ -117,13 +117,13 @@ test('runAround 重复调用 next 显式拒绝（invalid_hook_result），首次
     },
   )
   assert.equal(outcome, 'native-once')
-  assert.equal(defaultRuns, 1, '重复 next 不得造成二次 defaultRun')
+  assert.equal(defaultRuns, 1, 'duplicate next must not build into second defaultRun')
   assert.ok(secondCallError instanceof HelmError)
   assert.equal((secondCallError as HelmError).code, 'invalid_hook_result')
-  assert.ok((secondCallError as HelmError).message.includes('重复调用 next'))
+  assert.ok((secondCallError as HelmError).message.includes('duplicate invoke next'))
 })
 
-test('runAround 已调 next 再返回 handled 显式拒绝', { timeout: 60_000 }, async () => {
+test('runAround already tune next again return handled explicit reject', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   pipeline.add('test:mixed', async (request, next) => {
     void next(request).catch(() => {})
@@ -134,42 +134,42 @@ test('runAround 已调 next 再返回 handled 显式拒绝', { timeout: 60_000 }
     (err: unknown) => {
       assert.ok(err instanceof HelmError)
       assert.equal(err.code, 'invalid_hook_result')
-      assert.ok(err.message.includes('不得再返回'))
+      assert.ok(err.message.includes('must not again return'))
       return true
     },
   )
 })
 
-test('runAround 未 await 的 next（异步触发后提前返回）：defaultRun 恰好一次 + 结果回传', { timeout: 60_000 }, async () => {
+test('runAround not await  next(async trigger after mention before return):defaultRun exactly once + result back pass', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   let defaultRuns = 0
   const events: string[] = []
   let releaseDefault!: () => void
   const defaultGate = new Promise<void>((resolve) => { releaseDefault = resolve })
   pipeline.add('test:fire-forget', async (request, next) => {
-    // 异步触发 continuation 但不 await：微任务后提前返回（模拟绕过 async 的插件）。
+    // async trigger continuation but do not await: micro task after mention before return (simulated bypass async plugin).
     void next({ ...request, prompt: 'fire-forget-rewritten' })
     events.push('handler-returning')
-    // 提前返回（不等待）：宿主必须 join 同一 promise 防双执行、不丢结果。
+    // mention before return (without waiting): host must join the same promise guard against double execute, do not lose result.
     return
   })
-  // gate 在 defaultRun 进入后释放（证实 join 确实等待后台链，而非提前返回）。
+  // gate in defaultRun enter after release (verify join indeed wait for background chain, while non- mention before return).
   setTimeout(() => releaseDefault(), 20)
   const outcome = await pipeline.runAround(
     spawnRequest(),
     async (final) => {
       defaultRuns += 1
-      assert.equal(final.prompt, 'fire-forget-rewritten', 'continuation 的改写应生效')
+      assert.equal(final.prompt, 'fire-forget-rewritten', 'continuation change write should take effect')
       await defaultGate
       return 'native-fire-forget'
     },
   )
-  assert.equal(defaultRuns, 1, 'defaultRun 恰好一次（不因提前返回而双执行）')
-  assert.equal(outcome, 'native-fire-forget', '宿主 join 后结果必须回传（不丢）')
+  assert.equal(defaultRuns, 1, 'defaultRun exactly once (do not because mention before return while double execute)')
+  assert.equal(outcome, 'native-fire-forget', 'host join after result must back pass (do not lose)')
   assert.deepEqual(events, ['handler-returning'])
 })
 
-test('runAround handler 抛错但已触发 next：错误如实上抛，后台链被 join 收敛', { timeout: 60_000 }, async () => {
+test('runAround handler throws but already trigger next: error such as on throw, background chain by join converge', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   let defaultRuns = 0
   let defaultSettled = false
@@ -192,24 +192,24 @@ test('runAround handler 抛错但已触发 next：错误如实上抛，后台链
       return true
     },
   )
-  assert.equal(defaultRuns, 1, '已触发的链恰好执行一次')
-  // join 语义：后台链完成（不悬挂）。
+  assert.equal(defaultRuns, 1, 'already trigger chain exactly execute once')
+  // join semantics: background chain complete (do not pending).
   await new Promise((resolve) => setTimeout(resolve, 20))
-  assert.ok(defaultSettled, '后台链应被 join 收敛完成')
+  assert.ok(defaultSettled, 'background chain should by join converge complete')
 })
 
-test('runAround 无插件：defaultRun 直接执行', { timeout: 60_000 }, async () => {
+test('runAround without plugin:defaultRun directly execute', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   const outcome = await pipeline.runAround(spawnRequest(), async (final) => `native:${final.prompt}`)
   assert.equal(outcome, 'native:test spawn')
 })
 
-test('runAround transform 与 continuation 混合：transform 改写在 continuation 之前生效', { timeout: 60_000 }, async () => {
+test('runAround transform and continuation mixed:transform change write in continuation before takes effect', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'agent_spawn'>('agent_spawn')
   let defaultRuns = 0
   pipeline.add('test:transformer', async (request) => ({ action: 'transform' as const, value: { ...request, cwd: '/transformed' } }), 300)
   pipeline.add('test:wrapper', async (request, next) => {
-    assert.equal(request.cwd, '/transformed', 'transform 改写应先于 continuation 到达')
+    assert.equal(request.cwd, '/transformed', 'transform change write should first at continuation reach')
     return next(request)
   }, 200)
   const outcome = await pipeline.runAround(
@@ -224,7 +224,7 @@ test('runAround transform 与 continuation 混合：transform 改写在 continua
   assert.equal(defaultRuns, 1)
 })
 
-test('runAround 仅 agent_spawn：其他钩子显式拒绝', { timeout: 60_000 }, async () => {
+test('runAround only agent_spawn: other hook explicit reject', { timeout: 60_000 }, async () => {
   const pipeline = new HookPipeline<'trigger'>('trigger')
   await assert.rejects(
     () => pipeline.runAround({ id: 'x', source: 's', text: 't', createdAt: 0 } as never, async () => undefined as never),

@@ -7,7 +7,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 import { MemoryDocStore, deferred, useTempDir } from './helpers.js'
 
 function createHostBackend(): PluginHostBackend {
-  const unused = (): never => { throw new Error('本测试只验证 UI 启用，不应执行宿主业务操作') }
+  const unused = (): never => { throw new Error('this test only verify UI enable, must not execute host business operation') }
   return {
     ...createPluginHostBackendFixture(),
     dispatchTrigger: unused, submitInput: unused, createConversation: unused,
@@ -21,8 +21,8 @@ function createHostBackend(): PluginHostBackend {
   }
 }
 
-// 两次持久化都挂起后再放行，确定性覆盖「预检通过 → await → 最终发布」窗口。
-test('并发启用重复 slash：只发布一个插件，失败方回滚持久开关且不残留贡献', { timeout: 60_000 }, async (t) => {
+// two time persist all suspended after again let through, determinism override preflight via → await → eventually publish window.
+test('concurrency enable duplicate slash: only publish a plugin, failed way rollback durable switch and leaves no residue contribution', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-ui-activation-')
   const enabled = new Map<string, boolean>()
   let arrived = 0

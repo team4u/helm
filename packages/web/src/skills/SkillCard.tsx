@@ -25,7 +25,7 @@ export function SkillCard({
 }: SkillCardProps): React.JSX.Element {
   const sourceBadge = getSkillSourceBadge(skill)
   const refCount = skill.references?.length ?? 0
-  const description = skill.description || '暂无描述'
+  const description = skill.description || 'No description'
   const slashCommand = `/skill:${skill.id}`
   const [copied, setCopied] = useState(false)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -82,14 +82,14 @@ export function SkillCard({
       onKeyDown={handleKeyDown}
       data-skill-id={skill.id}
     >
-      {/* 顶部头部：标题/来源标签/ID 靠左对齐 */}
+      {/* Top header: title/source badge/ID left-aligned */}
       <div className="primary-card-header">
         <div className="primary-card-meta">
           <div className="primary-card-title-row">
             <span className="primary-card-name" title={skill.name || skill.id}>
               {skill.name || skill.id}
             </span>
-            <span className={badgeClass} title={`来源：${sourceBadge.label}`}>
+            <span className={badgeClass} title={`Source: ${sourceBadge.label}`}>
               {sourceBadge.label}
             </span>
           </div>
@@ -99,29 +99,29 @@ export function SkillCard({
         </div>
       </div>
 
-      {/* 中部：描述 */}
+      {/* Middle: description */}
       <div className="primary-card-desc" title={description}>
         {description}
       </div>
 
-      {/* 底部：斜杠指令快捷复制与参考文件数量（为 0 时省略） */}
+      {/* Bottom: slash command quick copy and reference file count (omitted when 0) */}
       <div className="primary-card-footer">
         <div className="primary-card-pills">
           <button
             type="button"
             className="primary-card-pill mono"
-            title={`复制斜杠指令 ${slashCommand}`}
-            aria-label={`复制斜杠指令 ${slashCommand}`}
+            title={`Copy slash command ${slashCommand}`}
+            aria-label={`Copy slash command ${slashCommand}`}
             onClick={(e) => void handleCopyCommand(e)}
             onKeyDown={(e) => e.stopPropagation()}
           >
             <HelmIcon name={copied ? 'check' : 'copy'} size={10} />
-            <span>{copied ? '已复制' : slashCommand}</span>
+            <span>{copied ? 'Copied' : slashCommand}</span>
           </button>
           {refCount > 0 && (
-            <span className="primary-card-pill" title={`${refCount} 个参考文件`}>
+            <span className="primary-card-pill" title={`${refCount} reference files`}>
               <HelmIcon name="file-text" size={11} />
-              <span>{`${refCount} 个参考文件`}</span>
+              <span>{`${refCount} reference files`}</span>
             </span>
           )}
         </div>

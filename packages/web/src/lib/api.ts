@@ -85,7 +85,7 @@ export function setStoredToken(token: string | null): void {
   try {
     if (memoryToken === null) localStorage.removeItem(TOKEN_STORAGE_KEY)
     else localStorage.setItem(TOKEN_STORAGE_KEY, memoryToken)
-  } catch { /* 禁用存储时，本次标签页仍保留内存凭据。 */ }
+  } catch { /* Storage disabled: this tab keeps in-memory credentials. */ }
 }
 
 export class ApiClientError extends Error {
@@ -119,7 +119,7 @@ async function parseErrorResponse(res: Response): Promise<ApiClientError> {
     if (data && typeof data === 'object' && data.error) {
       return new ApiClientError(
         data.error.code ?? `http_${res.status}`,
-        data.error.message ?? `请求失败 (${res.status})`,
+        data.error.message ?? `Request failed (${res.status})`,
         res.status,
         data.error.details,
       )
@@ -127,7 +127,7 @@ async function parseErrorResponse(res: Response): Promise<ApiClientError> {
   } catch {
     // 非 JSON 错误响应
   }
-  return new ApiClientError(`http_${res.status}`, `请求失败 (${res.status} ${res.statusText})`, res.status)
+  return new ApiClientError(`http_${res.status}`, `Request failed (${res.status} ${res.statusText})`, res.status)
 }
 
 export async function apiRequest<T>(
@@ -194,7 +194,7 @@ export const conversationsApi = {
     if (!Number.isInteger(numericEntryId) || !Number.isSafeInteger(numericEntryId) || numericEntryId <= 0) {
       throw new ApiClientError(
         'validation_error',
-        `entryId 需为安全正整数（收到 ${String(entryId)}）`,
+        `entryId must be a safe positive integer (got ${String(entryId)})`,
         400,
         { entryId },
       )
@@ -247,7 +247,7 @@ export const conversationsApi = {
     if (!Number.isInteger(numericEntryId) || !Number.isSafeInteger(numericEntryId) || numericEntryId <= 0) {
       throw new ApiClientError(
         'validation_error',
-        `entryId 需为安全正整数（收到 ${String(entryId)}）`,
+        `entryId must be a safe positive integer (got ${String(entryId)})`,
         400,
         { entryId },
       )
@@ -265,7 +265,7 @@ export const conversationsApi = {
     if (!Number.isInteger(numericId) || !Number.isSafeInteger(numericId) || numericId <= 0) {
       throw new ApiClientError(
         'validation_error',
-        `submissionId 需为安全正整数（收到 ${String(submissionId)}）`,
+        `submissionId must be a safe positive integer (got ${String(submissionId)})`,
         400,
         { submissionId },
       )
@@ -396,21 +396,21 @@ export interface ModelCatalogInfo {
 /** 解析 GET /api/models：新版 { models, thinkingLevels, defaultModel } 形状。 */
 export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw) || !('models' in raw) || !Array.isArray((raw as { models?: unknown }).models)) {
-    throw new Error('模型目录格式无效')
+    throw new Error('Invalid model catalog format')
   }
   const body = raw as { models: unknown[]; thinkingLevels?: unknown; defaultModel?: unknown; defaultThinkingLevel?: unknown }
   const levelsRaw = body.thinkingLevels && typeof body.thinkingLevels === 'object' && !Array.isArray(body.thinkingLevels)
     ? body.thinkingLevels as Record<string, unknown>
     : {}
   const models = body.models.map((item: unknown): ModelDescriptor => {
-    if (item === null || typeof item !== 'object') throw new Error('模型目录条目格式无效')
+    if (item === null || typeof item !== 'object') throw new Error('Invalid model catalog entry format')
     const entry = item as Partial<ModelCatalogEntry>
     if (
       typeof entry.provider !== 'string' ||
       typeof entry.modelId !== 'string' ||
       typeof entry.available !== 'boolean'
     ) {
-      throw new Error('模型目录条目格式无效')
+      throw new Error('Invalid model catalog entry format')
     }
     const id = `${entry.provider}/${entry.modelId}`
     const levels = levelsRaw[id]
@@ -419,7 +419,7 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
       entry.contextWindow !== undefined &&
       (typeof entry.contextWindow !== 'number' || !Number.isFinite(entry.contextWindow) || entry.contextWindow <= 0)
     ) {
-      throw new Error('模型目录条目格式无效')
+      throw new Error('Invalid model catalog entry format')
     }
     return {
       id,

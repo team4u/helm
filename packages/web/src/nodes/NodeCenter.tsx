@@ -20,11 +20,11 @@ export interface NodeCenterProps {
 }
 
 const CATEGORY_TABS: Array<{ key: NodeCategoryTab; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'local', label: '本机' },
-  { key: 'remote', label: '远端' },
-  { key: 'online', label: '在线' },
-  { key: 'offline', label: '离线' },
+  { key: 'all', label: 'All' },
+  { key: 'local', label: 'Local' },
+  { key: 'remote', label: 'Remote' },
+  { key: 'online', label: 'Online' },
+  { key: 'offline', label: 'Offline' },
 ]
 
 /**
@@ -95,12 +95,12 @@ export function NodeCenter({
 
   return (
     <div className={`primary-center node-center${isSplit ? ' is-split' : ''}`} data-view="node-center">
-      {/* 顶栏：标题与操作 */}
+      {/* Top bar: title and actions */}
       <div className="primary-center-topbar pane-topbar">
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
             <HelmIcon name="cpu" size={14} />
-            <span>计算节点中心</span>
+            <span>Compute Nodes Center</span>
           </div>
         </div>
 
@@ -109,10 +109,10 @@ export function NodeCenter({
             type="button"
             className="btn btn-sm"
             onClick={handleOpenAddNew}
-            title="接入新的分布式计算节点"
+            title="Connect new distributed compute nodes"
           >
             <HelmIcon name="plus" size={12} />
-            <span className="pane-action-label">接入节点</span>
+            <span className="pane-action-label">Connect node</span>
           </button>
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
@@ -125,23 +125,23 @@ export function NodeCenter({
         </div>
       </div>
 
-      {/* 工具栏：搜索输入框与分类药丸标签 */}
+      {/* Toolbar: search input and category pills */}
       <div className="primary-center-toolbar">
         <div className="primary-search-box">
           <HelmIcon name="search" size={14} />
           <input
             type="text"
-            placeholder="搜索节点 ID、名称、平台架构、版本或操作系统…"
+            placeholder="Search node ID, name, platform, version or OS…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="搜索计算节点"
+            aria-label="Search compute nodes"
           />
           {query && (
             <button
               type="button"
               className="btn btn-ghost btn-sm primary-search-clear"
-              title="清空搜索"
-              aria-label="清空搜索"
+              title="Clear search"
+              aria-label="Clear search"
               onClick={() => setQuery('')}
             >
               <HelmIcon name="x" size={12} />
@@ -149,7 +149,7 @@ export function NodeCenter({
           )}
         </div>
 
-        <div className="primary-category-pills" role="tablist" aria-label="计算节点分类筛选">
+        <div className="primary-category-pills" role="tablist" aria-label="Filter by compute node category">
           {CATEGORY_TABS.map((tab) => {
             const count = categoryCounts[tab.key] ?? 0
             const isActive = activeTab === tab.key
@@ -170,7 +170,7 @@ export function NodeCenter({
         </div>
       </div>
 
-      {/* 内容区：响应式卡片网格或空状态 */}
+      {/* Content: responsive card grid or empty state */}
       <div className="primary-center-content">
         {filteredNodes.length > 0 ? (
           <div className="primary-center-grid">
@@ -188,9 +188,9 @@ export function NodeCenter({
             <div className="primary-center-empty-icon">
               <HelmIcon name="search" size={28} />
             </div>
-            <div className="primary-center-empty-text">未找到匹配的计算节点</div>
+            <div className="primary-center-empty-text">No matching compute nodes</div>
             <div className="primary-center-empty-hint text-subtle">
-              请尝试调整搜索关键字或切换分类标签。
+              Try adjusting the search keywords or switching category tabs.
             </div>
             {(query || activeTab !== 'all') && (
               <button
@@ -202,14 +202,14 @@ export function NodeCenter({
                 }}
               >
                 <HelmIcon name="rotate-ccw" size={12} />
-                <span>重置筛选条件</span>
+                <span>Reset filters</span>
               </button>
             )}
           </div>
         )}
       </div>
 
-      {/* 右侧滑出式详情与诊断抽屉 */}
+      {/* Right slide-over details and diagnostics drawer */}
       <NodeDetailDrawer
         node={isAddingNew ? null : selectedNode}
         open={isDrawerOpen}

@@ -15,17 +15,17 @@ async function consume(frames: unknown[], options: { raw?: string; mime?: string
   return { code, out, error: err ? JSON.parse(err).error : undefined }
 }
 
-test('核心命令帮助不访问 Hub 或动态插件清单', { timeout: 60_000 }, async () => {
+test('core command help do not access Hub or motion state plugin manifest', { timeout: 60_000 }, async () => {
   let out = ''
   const code = await runCli(['nodes', 'list', '--help'], {
     env: {}, stdout: (text) => { out += text }, stderr: (text) => assert.fail(text),
-    fetch: async () => { assert.fail('静态帮助不得请求 Hub') },
+    fetch: async () => { assert.fail('static help must not request Hub') },
   })
   assert.equal(code, 0)
   assert.match(out, /nodes list/)
 })
 
-test('NDJSON 首个输出到达时即可消费，终态无需先到达', { timeout: 60_000 }, async () => {
+test('NDJSON first output reach when i.e. can consume, terminal state no need to first reach', { timeout: 60_000 }, async () => {
   const encoder = new TextEncoder()
   let streamController: ReadableStreamDefaultController<Uint8Array>
   const stream = new ReadableStream<Uint8Array>({
@@ -50,13 +50,13 @@ test('NDJSON 首个输出到达时即可消费，终态无需先到达', { timeo
   assert.equal(code, 0)
 })
 
-test('NDJSON 提前结束不得把未知结果当成功', { timeout: 60_000 }, async () => {
+test('NDJSON mention before end must not unknown result when succeeded', { timeout: 60_000 }, async () => {
   const result = await consume([{ type: 'output', stream: 'stdout', text: 'started' }])
   assert.equal(result.code, 1)
   assert.equal(result.error.code, 'stream_incomplete')
 })
 
-test('NDJSON 错误帧保留原始错误码、消息与详情', { timeout: 60_000 }, async () => {
+test('NDJSON error frame keep original error code, message and detail situation', { timeout: 60_000 }, async () => {
   const result = await consume([{ type: 'error', error: { code: 'node_offline', message: 'node disconnected', details: { nodeId: 'build-box' } } }])
   assert.equal(result.code, 1)
   assert.equal(result.error.code, 'node_offline')
@@ -64,7 +64,7 @@ test('NDJSON 错误帧保留原始错误码、消息与详情', { timeout: 60_00
   assert.deepEqual(result.error.details, { nodeId: 'build-box' })
 })
 
-test('NDJSON 拒绝损坏帧、旧终态与终态后继续输出', { timeout: 60_000 }, async () => {
+test('NDJSON reject corrupt frame, old terminal state and terminal state after continue output', { timeout: 60_000 }, async () => {
   const cases = [
     [{ type: 'output', text: 'missing stream' }],
     [{ type: 'exit', ok: true, exitCode: '0', timedOut: false }],
@@ -82,7 +82,7 @@ test('NDJSON 拒绝损坏帧、旧终态与终态后继续输出', { timeout: 60
   assert.equal(wrongMime.error.code, 'invalid_response')
 })
 
-test('NDJSON 允许无换行的 UTF-8 尾帧，JSON 输出保留终态类型和失败退出码', { timeout: 60_000 }, async () => {
+test('NDJSON allows without newline UTF-8 tail frame,JSON output keep terminal state type and failed exit code', { timeout: 60_000 }, async () => {
   const success = await consume([], { raw: JSON.stringify({ type: 'exit', ok: true, exitCode: 0, timedOut: false }) })
   assert.equal(success.code, 0)
   assert.equal(JSON.parse(success.out).type, 'exit')

@@ -51,8 +51,8 @@ test('stripInlineMarkdown 与 summarizeOutlineText：清理行内格式、取首
   assert.equal(stripInlineMarkdown('**加粗** 与 `code` 及 [链接](https://example.com)'), '加粗 与 code 及 链接')
   assert.equal(summarizeOutlineText('\n\n# 第一行标题\n第二行正文'), '第一行标题')
   assert.equal(summarizeOutlineText('- 列表首项\n第二行'), '列表首项')
-  assert.equal(summarizeOutlineText('   ', 2), '[附件 ×2]')
-  assert.equal(summarizeOutlineText(''), '（空消息）')
+  assert.equal(summarizeOutlineText('   ', 2), '[attachment ×2]')
+  assert.equal(summarizeOutlineText(''), '(empty message)')
 })
 
 test('buildMarkdownOutline：为 Markdown H1~H3 生成稳定定位节点', { timeout: 60_000 }, () => {
@@ -174,8 +174,8 @@ test('buildConversationOutline：pending=true 的精简分割线标注为「正�
   const nodes = buildConversationOutline(items)
   const dividers = nodes.filter((n) => n.kind === 'divider')
   assert.equal(dividers.length, 2)
-  assert.equal(dividers[0]!.label, '上下文已精简')
-  assert.equal(dividers[1]!.label, '正在精简上下文…')
+  assert.equal(dividers[0]!.label, 'Context compacted')
+  assert.equal(dividers[1]!.label, 'Compacting context…')
   assert.equal(dividers[1]!.entryId, 'compacting:live')
 })
 
@@ -269,7 +269,7 @@ test('ConversationPane 顶栏渲染大纲按钮，打开浮层后支持搜索过
   // 1. 顶栏出现「大纲」触发按钮且角标显示 2 轮提问
   const triggerBtn = document.querySelector<HTMLButtonElement>('.conversation-outline-trigger')
   assert.ok(triggerBtn, '会话非空时顶栏应渲染大纲按钮')
-  assert.match(triggerBtn.textContent ?? '', /大纲/)
+  assert.match(triggerBtn.textContent ?? '', /Outline/)
   assert.match(triggerBtn.textContent ?? '', /2/)
 
   // 2. 点击展开大纲 Popover
@@ -320,12 +320,12 @@ test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚
   globalThis.fetch = async () => new Response('', { headers: { 'x-helm-client-hash': 'seeded' } })
   const conv = makeConv(11)
   const entries: ConversationEntry[] = [
-    { id: '201', kind: 'helm.input', data: { id: 'q1', text: '派子代理调研大纲现状', origin: 'human' }, createdAt: 1000 },
+    { id: '201', kind: 'helm.input', data: { id: 'q1', text: '派子代理调研Outline现状', origin: 'human' }, createdAt: 1000 },
     {
       id: '202',
       kind: 'pi.assistant',
       model: [
-        { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'subagent', arguments: { prompt: '调研大纲现状' } }] },
+        { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'subagent', arguments: { prompt: '调研Outline现状' } }] },
       ],
     },
     {
@@ -382,7 +382,7 @@ test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚
   const modeButtons = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-mode .segmented-control-btn')]
   assert.deepEqual(
     modeButtons.map((btn) => btn.textContent?.trim()),
-    ['对话', '仅提问', '全部'],
+    ['Conversation', 'Questions only', 'All'],
   )
   assert.equal(modeButtons[0]?.getAttribute('aria-pressed'), 'true', '默认激活「对话」模式')
   const dialogueOptions = [...document.querySelectorAll<HTMLButtonElement>('.conversation-outline-item')]
@@ -393,7 +393,7 @@ test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚
   )
 
   // 切换到「全部」模式以查看并跳转业务卡节点
-  const allModeBtn = modeButtons.find((btn) => btn.textContent?.trim() === '全部')
+  const allModeBtn = modeButtons.find((btn) => btn.textContent?.trim() === 'All')
   assert.ok(allModeBtn, '应提供「全部」切换按钮')
   await act(async () => {
     allModeBtn.click()
@@ -412,7 +412,7 @@ test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚
   }
   try {
     // 1. 点击 subagent 业务卡：经 cardId 二级锚精确滚动到卡片 trace 元素，回合容器高亮
-    const subagentOption = options.find((btn) => (btn.textContent ?? '').includes('subagent：调研大纲现状'))
+    const subagentOption = options.find((btn) => (btn.textContent ?? '').includes('subagent：调研Outline现状'))
     assert.ok(subagentOption, '大纲应包含 subagent 业务卡节点（toolName + 入参摘要）')
     await act(async () => {
       subagentOption.click()
@@ -495,7 +495,7 @@ test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人�
     host!.querySelector<HTMLButtonElement>('.conversation-outline-trigger')!.click()
   })
   const toggleBtns = [...host.querySelectorAll<HTMLButtonElement>('.conversation-outline-mode .segmented-control-btn')]
-  assert.deepEqual(toggleBtns.map((b) => b.textContent?.trim()), ['对话', '仅提问', '全部'])
+  assert.deepEqual(toggleBtns.map((b) => b.textContent?.trim()), ['Conversation', 'Questions only', 'All'])
   assert.equal(toggleBtns[0]?.getAttribute('aria-pressed'), 'true')
 
   // 1. 默认「对话」：保留 人类第一问 + 一级结论 + divider（过滤 card 与 origin=agent 输入）
@@ -504,7 +504,7 @@ test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人�
   assert.equal(labels().length, 3)
   assert.match(labels()[0]!, /人类第一问/)
   assert.match(labels()[1]!, /一级结论/)
-  assert.match(labels()[2]!, /上下文已精简/)
+  assert.match(labels()[2]!, /Context compacted/)
 
   // 2. 切换「仅提问」：仅保留 人类第一问 + divider
   await act(async () => {
@@ -513,7 +513,7 @@ test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人�
   assert.equal(toggleBtns[1]?.getAttribute('aria-pressed'), 'true')
   assert.equal(labels().length, 2)
   assert.match(labels()[0]!, /人类第一问/)
-  assert.match(labels()[1]!, /上下文已精简/)
+  assert.match(labels()[1]!, /Context compacted/)
 
   // 3. 切换「全部」：保留 人类第一问 + 一级结论 + subagent card + agent 输入 + divider
   await act(async () => {

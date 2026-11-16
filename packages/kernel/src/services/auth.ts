@@ -1,16 +1,16 @@
 /**
- * AuthService：单用户 scrypt 鉴权。
- * - setup 仅首次成功（已配置即拒绝），login 校验密码并签发随机 token；
- * - token 仅持久化 SHA-256 摘要，明文只在返回值中出现一次；
- * - createProcessToken 签发进程内受管 token：仅存内存摘要（同 dataDir 的
- *   实例共享注册表），verifyToken 识别，dispose 即失效，绝不落盘；
- * - 全部摘要比对使用 timingSafeEqual，密码长度 >= 8。
- * config.json 的并发更新经 ConfigService 串行化，保留其他模块写入的键。
+ * AuthService: single user scrypt authentication.
+ * - setup only first time succeeded (already config i.e. reject),login validate password and sign random token;
+ * - token only persist SHA-256 summary, plaintext only in return value in appear once;
+ * - createProcessToken sign process inside managed token: only store memory summary (same dataDir 
+ *   instance sharing register table),verifyToken identify,dispose i.e. expires, never;
+ * - all summary than for use timingSafeEqual, password length >= 8.
+ * config.json concurrency update via ConfigService serial, keep other module write key.
  *
- * 并发互斥采用两级锁：setup/login 先持有按 dataDir 共享的 auth 操作锁
- * （跨 AuthService 实例互斥，并发 setup 仅一个成功），锁内再经
- * ConfigService.update 获取 config.json 文件锁。锁序恒为 auth → config，
- * 反向不存在，因此不会死锁；若直接复用 config.json 锁则会因同锁重入死锁。
+ * concurrency mutual exclusion adopt two level lock:setup/login first hold has by dataDir sharing auth operation lock
+ * (across AuthService instance mutual exclusion, concurrency setup only a succeeded), lock inside again via
+ * ConfigService.update get config.json file lock. lock order constant is auth → config,
+ * reverse missing, therefore will not deadlock; if directly re- use config.json lock then will because same lock heavy deadlock.
  */
 import {
   randomBytes,
@@ -34,7 +34,7 @@ export const MIN_PASSWORD_LENGTH = 8
 const SCRYPT_KEYLEN = 64
 const TOKEN_BYTES = 32
 
-/** 持久化形态：密码盐+哈希与 token 摘要表，绝无明文。 */
+/** persist form: password salt+hash and token summary table, absolute without plaintext. */
 interface AuthPersistedState {
   passwordSalt: string
   passwordHash: string
@@ -48,21 +48,21 @@ interface TokenRecord {
 
 export class AuthAlreadyConfiguredError extends Error {
   constructor() {
-    super('鉴权已配置，禁止重复 setup（如需重置请手动清理 config.json）')
+    super('authentication already config, forbidden duplicate setup(such as must reset please manually clean up config.json)')
     this.name = 'AuthAlreadyConfiguredError'
   }
 }
 
 export class InvalidCredentialsError extends Error {
   constructor() {
-    super('密码错误')
+    super('password error')
     this.name = 'InvalidCredentialsError'
   }
 }
 
 export class WeakPasswordError extends Error {
   constructor() {
-    super(`密码长度至少 ${MIN_PASSWORD_LENGTH} 位`)
+    super(`password length at least ${MIN_PASSWORD_LENGTH} `)
     this.name = 'WeakPasswordError'
   }
 }
@@ -90,9 +90,9 @@ function safeEqualHex(a: string, b: string): boolean {
 }
 
 /**
- * 进程内受管 token 注册表：dataDir → 摘要集合。仅内存（绝不持久化原文或
- * 摘要）；按 dataDir 共享使同进程内任意实例签发的受管 token 都能被验证方
- * （HTTP hub）识别——与持久化 token 的跨实例语义保持一致。
+ * process inside managed token register table:dataDir → summary set. only memory (never persist original text or
+ * summary); by dataDir sharing make same process inside any instance sign managed token all can by verify way
+ * (HTTP hub) identify - - and persist token across instance semantics stay consistent.
  */
 const processTokenRegistry = new Map<string, Set<string>>()
 
@@ -102,10 +102,10 @@ interface AuthCacheEntry {
 }
 
 /**
- * 进程内鉴权快照缓存与在途去重（key 为 ConfigService 规范 config.json 路径）。
- * 为什么跨实例共享：HTTP 中间件高频调用 verifyToken/status，同时运行期或测试会
- * 构造多个 AuthService(dataDir) 实例；任一实例/模块写盘或触发失效时由
- * onConfigInvalidated 统一清除，并在回填时核对 generation 防并发旧读回填。
+ * process inside authentication snapshot cache and in-flight dedupe (key is ConfigService specification config.json path).
+ * is what across instance sharing:HTTP middle piece high frequency invoke verifyToken/status, also run phase or test will
+ * construct multiple AuthService(dataDir) instance; any one instance/module write or trigger expires when by
+ * onConfigInvalidated unify clear, and in back fill when core for generation guard against concurrency old read back fill.
  */
 const authStateCache = new Map<string, AuthCacheEntry>()
 const inflightAuthReads = new Map<string, Promise<AuthPersistedState | undefined>>()
@@ -119,14 +119,14 @@ function parseAuthState(config: Record<string, unknown>): AuthPersistedState | u
   const raw = config['auth']
   if (raw === undefined) return undefined
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new Error('config.json 中 auth 字段结构非法')
+    throw new Error('config.json in auth field structure illegal')
   }
   const rec = raw as Record<string, unknown>
   const salt = rec['passwordSalt']
   const hash = rec['passwordHash']
   const tokens = rec['tokens']
   if (typeof salt !== 'string' || typeof hash !== 'string') {
-    throw new Error('config.json 中 auth 字段结构非法（缺 salt/hash）')
+    throw new Error('config.json in auth field structure illegal (missing salt/hash)')
   }
   const tokenMap: Record<string, TokenRecord> = {}
   if (tokens !== undefined && typeof tokens === 'object' && tokens !== null) {
@@ -162,9 +162,9 @@ function processTokenDigests(dataDir: string): Set<string> {
 
 export class AuthService {
   private readonly config: ConfigService
-  /** auth 操作锁 key：按 dataDir 共享（同一 dataDir 的全部实例互斥）。 */
+  /** auth operation lock key: by dataDir sharing (the same dataDir all instance mutual exclusion). */
   private readonly lockPath: string
-  /** 进程内受管 token 注册表 key（与构造入参同形）。 */
+  /** process inside managed token register table key(and construct reference same shape). */
   private readonly dataDir: string
 
   constructor(dataDir: string) {
@@ -193,7 +193,7 @@ export class AuthService {
     const loadPromise = (async () => {
       const { config, generation, canonicalPath } = await this.config.getWithGeneration()
       const state = parseAuthState(config)
-      // 仅在读取期间代数未推进时回填，防止并发写后旧读覆盖缓存。
+      // only in read during proxy count not push enter when back fill, guard against concurrency write after old read override cache.
       if (canonicalPath !== undefined && this.config.getGenerationSync(canonicalPath) === generation) {
         authStateCache.set(canonicalPath, { generation, state })
       }
@@ -213,16 +213,16 @@ export class AuthService {
     await this.config.update({ auth: state })
   }
 
-  /** 是否已完成初始 setup。 */
+  /** is otherwise completed initial setup. */
   async status(): Promise<{ configured: boolean }> {
     const state = await this.readStateCached()
     return { configured: state !== undefined }
   }
 
-  /** 首次设置管理员密码并签发 token；已配置时显式拒绝（不静默改写）。 */
+  /** first time settings manage member password and sign token; already config when explicit reject (not silently change write). */
   async setup(password: string): Promise<{ token: string }> {
     assertPassword(password)
-    // 跨实例串行化读改写：并发 setup 仅第一个成功，其余显式拒绝。
+    // across instance serial read change write: concurrency setup only a succeeded, the rest explicit reject.
     return withFileLock(this.lockPath, async () => {
       const existing = await this.readStateFromDisk()
       if (existing !== undefined) throw new AuthAlreadyConfiguredError()
@@ -238,14 +238,14 @@ export class AuthService {
     })
   }
 
-  /** 密码登录：校验通过签发新 token（旧 token 保留，支持多端在线）。 */
+  /** password login: validate via sign new token(old token keep, support many end online). */
   async login(password: string): Promise<{ token: string }> {
     assertPassword(password)
     return withFileLock(this.lockPath, async () => {
       const state = await this.readStateFromDisk()
       if (state === undefined) {
-        // 结构化错误码供 HTTP 层分类（对外仍映射 409 not_setup）。
-        throw new HelmError('auth_not_setup', '尚未完成 setup，请先执行初始化', 409)
+        // structure error code supply HTTP layer classify (for outside still mapping 409 not_setup).
+        throw new HelmError('auth_not_setup', 'not yet complete setup, please first execute initialize', 409)
       }
       const derived = await hashPassword(
         password,
@@ -265,9 +265,9 @@ export class AuthService {
   }
 
   /**
-   * 签发进程内受管 token：仅存内存摘要，verifyToken 识别；dispose 后立即
-   * 失效（幂等）。不写 config.json/SQLite，也不要求先完成 setup——内核受管
-   * 子进程鉴权独立于密码体系。空串/任意匿名值永不被 verifyToken 放行。
+   * sign process inside managed token: only store memory summary,verifyToken identify;dispose after immediately
+   * expires (idempotent). do not write config.json/SQLite, also do not want seek first complete setup- - kernel managed
+   * child process authentication independent at password body system. empty string/any anonymous value forever do not by verifyToken let through.
    */
   createProcessToken(): { token: string; dispose(): void } {
     const token = randomBytes(TOKEN_BYTES).toString('hex')
@@ -287,8 +287,8 @@ export class AuthService {
   }
 
   /**
-   * 校验 token：先查进程内受管 token（仅内存，未 setup 也可用），再比对
-   * 持久化摘要；全部恒时比较，不存在伪成功，匿名/空值永不放行。
+   * validate token: first inspect process inside managed token(only memory, not setup also available), again than for
+   * persist summary; all constant when compare, missing fake succeeded, anonymous/null value forever do not let through.
    */
   async verifyToken(token: string): Promise<boolean> {
     if (typeof token !== 'string' || token === '') return false

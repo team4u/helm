@@ -167,7 +167,7 @@ function fakePackageManager(initial: Partial<FakePackageManagerState> = {}) {
       const appsCenter: PluginUiContribution = {
         pluginId: APPS_PLUGIN_ID,
         surface: 'screen',
-        spec: { id: 'center', label: '应用中心' },
+        spec: { id: 'center', label: 'App Center' },
       }
       return [appsCenter, ...state.ui.filter((c) => state.summaries.get(c.pluginId)?.enabled === true)]
     },

@@ -1,23 +1,23 @@
 /**
- * 单飞 blocked ↔ AskDoc 协调器（inFlightAsks）。
+ * Single-flight blocked <-> AskDoc coordinator (inFlightAsks).
  *
- * 防反馈环与竞态的关键设计（均来自真实事故反馈）：
- * 1. 已结算条目保留至「seq 推进或 pane 关闭」才清除：send_keys 已发但终端
- *    状态短暂仍 blocked 同 seq + socket 重复事件时，不得重建同 ID Ask、不得
- *    重复发键；wait 短暂返回同 blocked seq 同理直接吞掉（等真实进展）。
- * 2. 先登记条目再启动 createAsk：ask.upsert 可能同步回调（终端先处理 →
- *    cancelAsk），登记必须先于任何可见副作用。
- * 3. createAsk 404 竞态（ask 未入库已被事件路径销单）：事件路径销单只清
- *    协调器条目；owner 若随后 createAsk 成功，markPending 重建条目后由
- *    宿主结算通道收尾，绝不留下无人认领的 pending Ask。
- * 4. 去重键 = herdr:<nodeId|local>:<paneId>:<stateChangeSeq>（Ask 预分配 ID
- *    同形）；双路径（socket 事件与 spawn wait）中先到者登记条目成为 owner
- *    负责 createAsk，后到者经 duplicate 复用同一条目，绝不重建同 ID Ask。
- * 5. 取消/事件处理错误经显式通道上抛（通知或传回 spawn），不 catch 空吞。
- * 6. 权威观测带方向：seq 严格推进才作废旧条目；seq 回退仅作废已结算的
- *    墓碑（Herdr 重启 seq 归零后墓碑不得压制重新询问），绝不作废
- *    pending/creating 活条目（并发 agent.get 乱序晚到的旧观测不能伪销毁
- *    人类正在看的 AskDoc）。
+ * Key designs against feedback loops and races (all from real incident feedback):
+ * 1. Settled entries are kept until "seq advances or the pane closes": when send_keys was sent but the terminal
+ *    is briefly still blocked on the same seq plus a duplicate socket event, do not rebuild the same-ID Ask nor
+ *    re-send keys; a wait briefly returning the same blocked seq is likewise swallowed directly (wait for real progress).
+ * 2. Register the entry before starting createAsk: ask.upsert may call back synchronously (terminal handles it first ->
+ *    cancelAsk); registration must precede any visible side effect.
+ * 3. createAsk 404 race (the ask is cancelled by the event path before storage): the event-path cancellation only clears
+ *    the coordinator entry; if the owner's createAsk then succeeds, markPending rebuilds the entry and the
+ *    host settle channel finishes it; never leave an unclaimed pending Ask.
+ * 4. Dedup key = herdr:<nodeId|local>:<paneId>:<stateChangeSeq> (same shape as the Ask's pre-allocated ID);
+ *    across the dual paths (socket event and spawn wait), the first to register the entry becomes the owner
+ *    responsible for createAsk; the later one reuses the same entry via duplicate; never rebuild the same-ID Ask.
+ * 5. Cancellation/event-handling errors surface through explicit channels (notify or propagate to spawn); no empty catches.
+ * 6. Authoritative observations are directional: only a strict seq advance voids old entries; a seq regression only voids
+ *    already-settled tombstones (after a Herdr restart resets seq to zero, tombstones must not suppress re-asking),
+ *    never voiding pending/creating live entries (a stale out-of-order observation from a concurrent agent.get must not
+ *    fake-destroy an AskDoc the human is looking at).
  */
 
 import { HelmError } from '@helm/protocol'
@@ -31,17 +31,17 @@ export interface AskEntry {
   readonly paneId: string
   readonly seq: number
   phase: AskPhase
-  /** 当前 seq 下的第几次审批尝试（从 0 开始；0 时 askId === key，重试 N 时 askId === `${key}:r${N}`）。 */
+  /** Which approval attempt under the current seq (0-based; at 0 askId === key, on retry N askId === `${key}:r${N}`). */
   attempt: number
-  /** 已在当前 attempt 执行过一次 send_keys。 */
+  /** send_keys has been executed once in the current attempt. */
   keysSent: boolean
-  /** 最近一次发送的按键序列（供未解除阻塞重试时在描述中提示人类）。 */
+  /** The most recently sent keystroke sequence (to hint the human when a retry happens due to an uncleared block). */
   lastSentKeys?: string[]
-  /** 当前 attempt 结算完成时间戳。 */
+  /** Timestamp when the current attempt settled. */
   settledAt?: number
 }
 
-/** 终端权威状态变化（agent.get 或事件驱动探测）。 */
+/** Authoritative terminal state change (agent.get or event-driven probing). */
 export interface AuthorityUpdate {
   paneId: string
   nodeId?: string
@@ -50,9 +50,9 @@ export interface AuthorityUpdate {
 }
 
 /**
- * beginBlocked 的结果：
- * - owner：调用方赢得创建权（负责 createAsk 并 settle）；
- * - duplicate：该 (pane,seq) 已处理或正处理（不重建、不重发、不再创建）。
+ * beginBlocked result:
+ * - owner: the caller won creation rights (responsible for createAsk and settle);
+ * - duplicate: this (pane,seq) is already handled or being handled (no rebuild, no re-send, no new creation).
  */
 export type BeginBlockedResult = { owner: AskEntry } | { duplicate: true }
 
@@ -65,12 +65,12 @@ export class AskCoordinator {
   }
 
   /**
-   * 终端权威状态更新（事件路径 / wait 返回 / 远端轮询）：
-   * - seq 严格推进：清除同 pane 全部旧条目（含已结算保留项）；
-   * - seq 回退（Herdr 重启 seq 归零）：仅作废已结算墓碑（防其压制后续同
-   *   seq 重新询问）；pending/creating 活条目不作废——乱序晚到的旧观测
-   *   不得伪销毁人类正在看的 AskDoc（真重启由执行循环的权威复核收尾）。
-   * 返回仍 pending 的被作废条目（调用方对其实施 cancelAsk superseded）。
+   * Authoritative terminal state update (event path / wait return / remote polling):
+   * - seq strictly advanced: clear all old entries of the pane (incl. kept settled ones);
+   * - seq regressed (Herdr restart reset seq to zero): void only settled tombstones (so they don't suppress
+   *   re-asking at the same seq later); pending/creating live entries are not voided -- a stale out-of-order observation
+   *   must not fake-destroy an AskDoc the human is looking at (a real restart is finalized by the execution loop's authoritative recheck).
+   * Returns still-pending voided entries (the caller applies cancelAsk superseded to them).
    */
   observeAuthority(update: AuthorityUpdate): AskEntry[] {
     const superseded: AskEntry[] = []
@@ -85,7 +85,7 @@ export class AskCoordinator {
     return superseded
   }
 
-  /** pane 关闭：清除全部条目（含保留项）。 */
+  /** Pane closed: clear all entries (incl. kept ones). */
   paneClosed(paneId: string, nodeId?: string): AskEntry[] {
     const removed: AskEntry[] = []
     for (const entry of [...this.entries_map.values()]) {
@@ -99,10 +99,10 @@ export class AskCoordinator {
   }
 
   /**
-   * 登记 blocked 状态（任何 await 之前完成）：
-   * - 该 (pane,seq) 无条目 -> owner（负责 createAsk + settle）；
-   * - 已有条目（creating/pending/sent/settled 任一 phase）-> duplicate，
-   *   绝不重建同 ID Ask、绝不重发键。
+   * Register the blocked state (completed before any await):
+   * - no entry for this (pane,seq) -> owner (responsible for createAsk + settle);
+   * - an entry exists (any of creating/pending/sent/settled phases) -> duplicate;
+   *   never rebuild the same-ID Ask, never re-send keys.
    */
   beginBlocked(nodeId: string | undefined, paneId: string, seq: number): BeginBlockedResult {
     const key = askKey(nodeId, paneId, seq)
@@ -123,10 +123,10 @@ export class AskCoordinator {
   }
 
   /**
-   * createAsk 调用已真实发出（首个 await 返回后）。
-   * 创建路径可能已被事件路径销单清除条目（404 竞态）：若宿主 createAsk 实际
-   * 成功（未抛 404），重建条目为 pending——后续宿主终态回调有处认领；
-   * 若调用方随后确认 ask 已被销（cancelAsk 404），用 failCreate 清除。
+   * The createAsk call has really been issued (after the first await returns).
+   * The creation path may have had its entry cleared by the event path's cancellation (404 race): if the host createAsk actually
+   * succeeded (did not throw 404), rebuild the entry as pending -- the later host terminal-state callback has something to claim;
+   * if the caller then confirms the ask was cancelled (cancelAsk 404), clear it with failCreate.
    */
   markPending(entry: AskEntry): void {
     const existing = this.entries_map.get(entry.key)
@@ -138,7 +138,7 @@ export class AskCoordinator {
     }
   }
 
-  /** 终态落位（answered/superseded/cancelled）：条目保留至 seq 推进。 */
+  /** Terminal state landed (answered/superseded/cancelled): the entry is kept until seq advances. */
   settle(entry: AskEntry, outcome: { keysSent: boolean; sentKeys?: string[] }): void {
     if (this.entries_map.get(entry.key) !== entry) return
     entry.phase = 'settled'
@@ -149,12 +149,11 @@ export class AskCoordinator {
   }
 
   /**
-   * 同 seq 未解除阻塞时重开审批：send_keys 已发出但终端仍停留在同一
-   * (nodeId, paneId, seq) 的 blocked 状态（按键未被接受），或条目已结算
-   * （含 superseded/cancelled，keysSent=false）但终端同 seq 卡死——两者都
-   * 需要重开让人类重新选择，否则退避循环永不逃生。attempt 递增生成新
-   * askId（`<key>:r<N>`，避开宿主 ask_id_conflict），条目重回 creating；
-   * 不满足重开条件（无条目/未结算）返回 undefined。
+   * Reopen the approval when the same seq stays blocked: send_keys was sent but the terminal still sits blocked on the same
+   * (nodeId, paneId, seq) (keystrokes not accepted), or the entry already settled (incl. superseded/cancelled,
+   * keysSent=false) while the terminal is stuck on the same seq -- both need a reopen so the human can re-choose,
+   * otherwise the backoff loop never escapes. The attempt increments to a new askId (`<key>:r<N>`, avoiding the host's
+   * ask_id_conflict) and the entry returns to creating; when reopen conditions aren't met (no entry / not settled) returns undefined.
    */
   reopenUnresolved(nodeId: string | undefined, paneId: string, seq: number): AskEntry | undefined {
     const key = askKey(nodeId, paneId, seq)
@@ -170,8 +169,8 @@ export class AskCoordinator {
   }
 
   /**
-   * 宿主 AskDoc ID 冲突（如跨重启同 seq 已有历史 AskDoc）时推进重试后缀（:r<N>），
-   * 重回 creating 相位以便重建带新 ID 的待答 AskDoc（parseAskId 与 seqResolver 同源支持）。
+   * When a host AskDoc ID collides (e.g. an existing AskDoc at the same seq across restarts),
+   * advance the retry suffix (:r<N>) and return to creating phase (supported by parseAskId & seqResolver).
    */
   advanceRetryOnConflict(entry: AskEntry): void {
     if (this.entries_map.get(entry.key) !== entry) return
@@ -181,7 +180,7 @@ export class AskCoordinator {
     this.onChange()
   }
 
-  /** 创建失败（IO/宿主错误/销单确认）：条目移除（允许后续重试），错误由调用方上抛。 */
+  /** Creation failed (IO/host error/cancellation confirmed): entry removed (later retries allowed); the error propagates to the caller. */
   failCreate(entry: AskEntry): void {
     this.removeEntry(entry)
   }
@@ -191,10 +190,10 @@ export class AskCoordinator {
   }
 
   /**
-   * CAS seq 解析器（异步权威版）：askId -> 该 Ask 目标 pane 的**当前真实**
-   * state_change_seq（agent.get 现查，绝不返回创建时的 entry.seq——CAS 的
-   * 意义正是发现「创建后终端已按键推进」）。归属校验：askId 三段必须与
-   * 条目 (nodeId, paneId, seq) 完全一致，防止伪造 id 越权探测他人窗格。
+   * CAS seq resolver (async authoritative version): askId -> the target pane's **current real**
+   * state_change_seq (agent.get live query; never return the creation-time entry.seq -- the whole point of CAS
+   * is discovering "the terminal already advanced by keystrokes after creation"). Ownership check: the askId's
+   * three segments must exactly match the entry's (nodeId, paneId, seq), preventing forged ids from probing others' panes.
    */
   seqResolver(
     askId: string,
@@ -207,7 +206,7 @@ export class AskCoordinator {
     return authority(parsed.nodeId, parsed.paneId)
   }
 
-  /** 该 (pane,seq) 是否已发过键（防重发判断）。 */
+  /** Whether keys were already sent for this (pane,seq) (for the re-send guard). */
   keysSent(nodeId: string | undefined, paneId: string, seq: number): boolean {
     return this.entries_map.get(askKey(nodeId, paneId, seq))?.keysSent === true
   }
@@ -224,7 +223,7 @@ export class AskCoordinator {
     return [...this.entries_map.values()]
   }
 
-  /** 概览（overview doc；nodeId undefined 折叠为 'local' 保证 JSON-safe）。 */
+  /** Overview (overview doc; nodeId undefined folds to 'local' to stay JSON-safe). */
   describe(): Array<{ paneId: string; nodeId: string; seq: number; phase: AskPhase }> {
     return [...this.entries_map.values()].map((e) => ({
       paneId: e.paneId,
@@ -234,8 +233,8 @@ export class AskCoordinator {
     }))
   }
 
-  /** 停用清算：清空全部条目（调用方 stopResources 已先行销单宿主 Ask；
-   *  条目跨启用周期残留会伪装 pendingAsk 幽灵数据并误判 duplicate）。 */
+  /** Disable-time liquidation: clear all entries (the caller's stopResources already cancelled the host Asks;
+   *  entries surviving across enable cycles would fake pendingAsk ghost data and misjudge duplicates). */
   settleAllAsSuperseded(): void {
     this.entries_map.clear()
     this.onChange()
@@ -253,22 +252,22 @@ export function askKey(nodeId: string | undefined, paneId: string, seq: number):
 }
 
 /**
- * askId 即 askKey 字面量（可选 `:r<正整数>` 重试后缀）；nodeId 段原样保留
- * （不折叠 local，防解析歧义）。例：herdr:local:wR:p2:3916 与
- * herdr:local:wR:p2:3916:r1 均解析出 { nodeId: undefined, paneId: 'wR:p2', seq: 3916 }。
+ * The askId is the askKey literal (optional ':r<positive int>' retry suffix); the nodeId segment is preserved as-is
+ * (not folding local, to avoid parse ambiguity). Example: both herdr:local:wR:p2:3916 and
+ * herdr:local:wR:p2:3916:r1 parse to { nodeId: undefined, paneId: 'wR:p2', seq: 3916 }.
  *
- * 解析顺序：先剥离结尾合法的 ':r[1-9][0-9]*' 重试后缀（r0/r01/超大值/伪造
- * 形状一律整体拒绝，不回退成 seq 解析），再按无歧义的「最后一个冒号 = seq」
- * 解析；paneId 自带冒号不受影响。
+ * Parse order: first strip a trailing well-formed ':r[1-9][0-9]*' retry suffix (r0/r01/oversized/forged
+ * shapes are rejected wholesale, never falling back to seq parsing), then parse by the unambiguous "last colon = seq"
+ * rule; a paneId containing colons is unaffected.
  */
 function parseAskId(askId: string): { nodeId: string | undefined; paneId: string; seq: number } | undefined {
   if (!askId.startsWith('herdr:')) return undefined
   let rest = askId.slice('herdr:'.length)
-  // 剥离合规范的 ':r<正整数，无前导零>' 重试后缀；不合法后缀让后续 seq
-  // 解析失败（如 '...:3916:r01' 或 '...:3916:r0' 无法匹配 ^\d+$，整体拒绝）。
+  // Strip the well-formed ':r<positive int, no leading zeros>' retry suffix; an ill-formed suffix makes the later seq
+  // parse fail (e.g. '...:3916:r01' or '...:3916:r0' cannot match ^\d+$; rejected wholesale).
   const retrySuffix = /:r([1-9][0-9]*)$/.exec(rest)
   if (retrySuffix !== null) {
-    // 超大重试整数（超出 safe integer）同样拒绝，与 seq 同一诚实性标准。
+    // Oversized retry integers (beyond safe integer) are likewise rejected, the same honesty standard as seq.
     const retry = Number(retrySuffix[1])
     if (!Number.isSafeInteger(retry)) return undefined
     rest = rest.slice(0, rest.length - retrySuffix[0].length)
@@ -289,15 +288,15 @@ function parseAskId(askId: string): { nodeId: string | undefined; paneId: string
 }
 
 /**
- * 同 seq blocked 的「等待真实进展」：不 busy spin——watchdog 探针周期或
- * socket 事件驱动会推进权威 seq；本函数只提供可取消的退避等待，供 wait
- * 循环在收到重复同 seq blocked 时使用（避免立刻再投 agent.wait 打满通道）。
+ * "Wait for real progress" for the same-seq blocked: no busy spin -- the watchdog probe period or
+ * socket event-driven updates advance the authoritative seq; this function only provides a cancellable backoff wait for the wait
+ * loop to use upon receiving a duplicate same-seq blocked (avoiding immediately re-issuing agent.wait and saturating the channel).
  */
 export async function backoffForDuplicateBlocked(signal: AbortSignal, attempt: number, baseMs = 500, capMs = 4_000): Promise<void> {
   const ms = Math.min(baseMs * 2 ** Math.min(attempt, 4), capMs)
   await new Promise<void>((resolve, reject) => {
     if (signal.aborted) {
-      reject(new HelmError('aborted', '等待终端进展期间被取消', 409))
+      reject(new HelmError('aborted', 'cancelled while waiting for terminal progress', 409))
       return
     }
     const timer = setTimeout(() => {
@@ -306,7 +305,7 @@ export async function backoffForDuplicateBlocked(signal: AbortSignal, attempt: n
     }, ms)
     const onAbort = () => {
       clearTimeout(timer)
-      reject(new HelmError('aborted', '等待终端进展期间被取消', 409))
+      reject(new HelmError('aborted', 'cancelled while waiting for terminal progress', 409))
     }
     signal.addEventListener('abort', onAbort, { once: true })
   })

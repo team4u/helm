@@ -1,21 +1,21 @@
 /**
- * 插件治理与故障隔离增强专项测试（设计文档 20261111）。
+ * plugin governance and fault isolated increase strong dedicated items test (design document 20261111).
  *
- * 覆盖四项能力：
- * 1. 外部插件故障隔离状态机：scan/load/define/enable 阶段失败降级登记为
- *    status:'failed'（含结构化 error 诊断），不阻断 createHelm；loadFailed
- *    占位条目 enable 直接 409 plugin_load_failed；修复源码后 reload 恢复；
- *    define 阶段失败修复后 enable 自愈为 active；
- * 2. 持久资源占用（inUse）与停用预检：服务自声明 + 宿主通用引用探测
- *    （profile_runtime / profile_model / conversation_model）；409 plugin_in_use
- *    + force 强制停用；liveTasks 硬阻断 force 也不跳过；inUse 检查异常显式
- *    plugin_in_use_check_failed 绝不静默当空；
- * 3. turn_settled 单插件异常隔离：单处理器抛错或非法产物不阻断下游、发
- *    warning notification 告警；transform 保留上一合法载荷；
- * 4. 插件配置分层溯源：磁盘只存显式覆写值（不固化 default）、getConfig 合成
- *    default、getConfigSources 区分 configured/default/unset、null 重置。
+ * override four items capability:
+ * 1. external plugin fault isolated state machine:scan/load/define/enable phase failed fall back register is
+ *    status:'failed'(contains structure error diagnose), do not block assert createHelm;loadFailed
+ *    occupy item enable directly 409 plugin_load_failed; fix source code after reload restore;
+ *    define phase failed fix after enable self-heal is active;
+ * 2. durable asset occupy (inUse) and deactivate preflight: service self declaration + host through use reference probe
+ *    (profile_runtime / profile_model / conversation_model);409 plugin_in_use
+ *    + force force deactivate;liveTasks hard block assert force also do not skip;inUse check exception explicit
+ *    plugin_in_use_check_failed never static default when empty;
+ * 3. turn_settled single plugin exception isolated: single handle throws or illegal artifact do not block assert downstream,
+ *    warning notification alert;transform keep on one legal payload;
+ * 4. plugin config layer trace source: disk only store explicit override value (do not solid default),getConfig together into
+ *    default,getConfigSources zone configured/default/unset,null reset.
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock; command add total timeout.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -44,7 +44,7 @@ import {
 } from './helpers/hub-test-env.js'
 
 // ---------------------------------------------------------------------------
-// 测试基建
+// test base create
 // ---------------------------------------------------------------------------
 
 async function createApp(dataDir: string) {
@@ -64,7 +64,7 @@ interface HostFixture {
   close(): Promise<void>
 }
 
-/** 带受控 Profile / 会话存储的后端夹具（宿主引用探测断言用）。 */
+/** carries subject to control Profile / conversation store backend fixture (host reference probe assertion use). */
 function makeBackend(): HostFixture['backend'] {
   const payloads: Array<{ type: string; payload: unknown }> = []
   const events: string[] = []
@@ -82,7 +82,7 @@ function makeBackend(): HostFixture['backend'] {
       payloads.push({ type, payload })
     },
   } as HostFixture['backend']
-  // 把共享收集器挂到 backend 上（fixture 内部通信，不参与契约）
+  // sharing collect hang to backend on (fixture internal communication, does not participate contract)
   Object.assign(backend, { __events: events, __payloads: payloads })
   return backend
 }
@@ -111,7 +111,7 @@ function makeHostFixture(overrides: { config?: PluginConfigStore } = {}): HostFi
   }
 }
 
-/** 在磁盘写入一个外部插件目录（index.mjs 形态）。 */
+/** in disk write a external plugin directory (index.mjs form). */
 function writeExternalPlugin(
   pluginsDir: string,
   dir: string,
@@ -130,7 +130,7 @@ function writeExternalPlugin(
 async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<HelmError> {
   let caught: HelmError | undefined
   await assert.rejects(promise, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`)
+    assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`)
     assert.equal(err.code, code)
     if (status !== undefined) assert.equal(err.status, status)
     caught = err
@@ -141,72 +141,72 @@ async function rejectsCode(promise: Promise<unknown>, code: string, status?: num
 }
 
 // ---------------------------------------------------------------------------
-// 1. 外部插件故障隔离状态机（failed 态与恢复）
+// 1. external plugin fault isolated state machine (failed state and restore)
 // ---------------------------------------------------------------------------
 
-test('外部插件混合故障目录：createHelm 正常启动，好插件可用，坏插件逐个登记为 failed', { timeout: 60_000 }, async () => {
+test('external plugin mixed fault directory:createHelm normal start, well plugin available, broken plugin one by one register is failed', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-gov-mixed-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
     const pluginsDir = join(dataDir, 'plugins')
-    // 好插件
+    // well plugin
     writeExternalPlugin(
       pluginsDir,
       'good-plugin',
-      `export default {\n  id: 'good-plugin',\n  name: '好插件',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'ping',\n      description: '探活',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', required: ['ok'], additionalProperties: false, properties: { ok: { type: 'boolean' } } },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
+      `export default {\n  id: 'good-plugin',\n  name: 'well plugin',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'ping',\n      description: 'probe',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', required: ['ok'], additionalProperties: false, properties: { ok: { type: 'boolean' } } },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
     )
-    // 坏 plugin.json（scan 阶段）
+    // broken plugin.json(scan phase)
     const badJson = join(pluginsDir, 'bad-json')
     mkdirSync(badJson, { recursive: true })
     writeFileSync(join(badJson, 'plugin.json'), '{ broken !!')
-    // 入口缺失（scan 阶段）
+    // entry missing (scan phase)
     const missingEntry = join(pluginsDir, 'missing-entry')
     mkdirSync(missingEntry, { recursive: true })
     writeFileSync(join(missingEntry, 'plugin.json'), JSON.stringify({ main: 'ghost.mjs' }))
-    // definePlugin 抛错（define 阶段，经 isolateFailure 吸收）
+    // definePlugin throws (define phase, via isolateFailure absorb)
     writeExternalPlugin(
       pluginsDir,
       'bad-define',
-      `export default {\n  id: 'bad-define',\n  name: '定义崩溃',\n  definePlugin() { throw new Error('define 阶段崩溃') },\n}\n`,
+      `export default {\n  id: 'bad-define',\n  name: 'define crash',\n  definePlugin() { throw new Error('define phase crash') },\n}\n`,
     )
 
     app = await createApp(dataDir)
     const list = app.kernel.plugins.list()
 
-    // 好插件正常注册且可用
+    // well plugin normal register and available
     const good = list.find((p) => p.id === 'good-plugin')
-    assert.ok(good, '好插件应被注册')
+    assert.ok(good, 'well plugin should by register')
     assert.equal(good.enabled, false)
     await app.kernel.plugins.enable('good-plugin')
     const ping = (await app.kernel.plugins.invokeAction('good-plugin', 'ping', {})) as { ok: boolean }
     assert.equal(ping.ok, true)
 
-    // 坏 plugin.json：failed + plugin_manifest_invalid
+    // broken plugin.json:failed + plugin_manifest_invalid
     const broken = list.find((p) => p.id === 'bad-json')
-    assert.ok(broken, '坏 manifest 插件应登记为 failed 条目')
+    assert.ok(broken, 'broken manifest plugin should register is failed item')
     assert.equal(broken.enabled, false)
     assert.equal(broken.status, 'failed')
     assert.equal(broken.error!.code, 'plugin_manifest_invalid')
 
-    // 入口缺失：failed + plugin_entry_missing
+    // entry missing:failed + plugin_entry_missing
     const missing = list.find((p) => p.id === 'missing-entry')
     assert.ok(missing)
     assert.equal(missing.status, 'failed')
     assert.equal(missing.error!.code, 'plugin_entry_missing')
 
-    // definePlugin 抛错：failed + stage 'define'
+    // definePlugin throws:failed + stage 'define'
     const bad = list.find((p) => p.id === 'bad-define')
-    assert.ok(bad, 'define 崩溃插件应登记为 failed 条目（不整体阻断）')
+    assert.ok(bad, 'define crash plugin should register is failed item (do not whole block assert)')
     assert.equal(bad.status, 'failed')
     assert.equal(bad.enabled, false)
     assert.equal(bad.error!.stage, 'define')
-    assert.match(bad.error!.message, /define 阶段崩溃/)
-    // failed 插件无任何能力注册
+    assert.match(bad.error!.message, /define phase crash/)
+    // failed plugin without any capability register
     assert.deepEqual(bad.hooks, [])
     assert.deepEqual(bad.actions, [])
     assert.deepEqual(bad.tools, [])
 
-    // 内置插件不受影响
+    // built-in plugin do not subject to affect
     assert.ok(list.some((p) => p.id === 'builtin:profile' && p.enabled))
   } finally {
     await app?.close().catch(() => {})
@@ -214,7 +214,7 @@ test('外部插件混合故障目录：createHelm 正常启动，好插件可用
   }
 })
 
-test('loadFailed 占位条目：enable 直接 409 plugin_load_failed；修复源码后 reload 恢复可用', { timeout: 60_000 }, async () => {
+test('loadFailed occupy item:enable directly 409 plugin_load_failed; fix source code after reload restore available', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-gov-reload-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -225,25 +225,25 @@ test('loadFailed 占位条目：enable 直接 409 plugin_load_failed；修复源
 
     app = await createApp(dataDir)
     const failed = app.kernel.plugins.list().find((p) => p.id === 'fix-me')
-    assert.ok(failed, '坏 manifest 登记为目录名占位条目')
+    assert.ok(failed, 'broken manifest register is directory name occupy item')
     assert.equal(failed.status, 'failed')
 
-    // loadFailed 条目 enable 拒绝：无有效 definition，重 enable 无法自愈
+    // loadFailed item enable reject: without valid definition, heavy enable cannot self-heal
     await rejectsCode(app.kernel.plugins.enable('fix-me'), 'plugin_load_failed', 409)
 
-    // 修复源码：写入合法入口
+    // fix source code: write legal entry
     writeFileSync(
       join(dirPath, 'index.mjs'),
-      `export default {\n  id: 'fix-me',\n  name: '修复后插件',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'ping',\n      description: '探活',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', required: ['ok'], additionalProperties: false, properties: { ok: { type: 'boolean' } } },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
+      `export default {\n  id: 'fix-me',\n  name: 'fix after plugin',\n  async definePlugin(ctx) {\n    ctx.action({\n      id: 'ping',\n      description: 'probe',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', required: ['ok'], additionalProperties: false, properties: { ok: { type: 'boolean' } } },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
     )
     rmSync(join(dirPath, 'plugin.json'))
 
     const result = await app.kernel.plugins.reloadExternalPlugin('fix-me')
     assert.equal(result.pluginId, 'fix-me')
-    assert.equal(result.summary.status, 'disabled', '重载后恢复为正常 disabled 条目（error 清空）')
+    assert.equal(result.summary.status, 'disabled', 'reload after restore is normal disabled item (error empty)')
     assert.equal(result.summary.error, undefined)
 
-    // reload 后 enable 成功，动作可用
+    // reload after enable succeeded, action available
     await app.kernel.plugins.enable('fix-me')
     const ping = (await app.kernel.plugins.invokeAction('fix-me', 'ping', {})) as { ok: boolean }
     assert.equal(ping.ok, true)
@@ -253,17 +253,17 @@ test('loadFailed 占位条目：enable 直接 409 plugin_load_failed；修复源
   }
 })
 
-test('define 阶段失败的外部插件（有效 definition）：修复后 enable 自愈为 active，error 清空', { timeout: 60_000 }, async () => {
+test('define phase failed external plugin (valid definition): fix after enable self-heal is active,error empty', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-gov-heal-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
     const pluginsDir = join(dataDir, 'plugins')
     const dirPath = join(pluginsDir, 'self-heal')
     mkdirSync(dirPath, { recursive: true })
-    // 模块加载成功但 definePlugin 抛错（受配置控制：state 文件存在时失败）
+    // module load succeeded but definePlugin throws (subject to config control:state file store in when failed)
     writeFileSync(
       join(dirPath, 'index.mjs'),
-      `import { existsSync } from 'node:fs'\nexport default {\n  id: 'self-heal',\n  name: '自愈插件',\n  async definePlugin(ctx) {\n    if (existsSync(new URL('./broken.flag', import.meta.url))) throw new Error('外部依赖未就绪')\n    ctx.action({\n      id: 'ping',\n      description: '探活',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', required: ['ok'], additionalProperties: false, properties: { ok: { type: 'boolean' } } },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
+      `import { existsSync } from 'node:fs'\nexport default {\n  id: 'self-heal',\n  name: 'self-heal plugin',\n  async definePlugin(ctx) {\n    if (existsSync(new URL('./broken.flag', import.meta.url))) throw new Error('external dependency not ready')\n    ctx.action({\n      id: 'ping',\n      description: 'probe',\n      inputSchema: { type: 'object', additionalProperties: false },\n      outputSchema: { type: 'object', required: ['ok'], additionalProperties: false, properties: { ok: { type: 'boolean' } } },\n      handler: () => ({ ok: true }),\n    })\n  },\n}\n`,
     )
     writeFileSync(join(dirPath, 'broken.flag'), '1')
 
@@ -273,13 +273,13 @@ test('define 阶段失败的外部插件（有效 definition）：修复后 enab
     assert.equal(failed.status, 'failed')
     assert.equal(failed.error!.stage, 'define')
 
-    // 修复外部条件后 enable 自愈（definition 有效，重跑 definePlugin）
+    // fix external condition after enable self-heal (definition valid, heavy run definePlugin)
     rmSync(join(dirPath, 'broken.flag'))
     await app.kernel.plugins.enable('self-heal')
     const healed = app.kernel.plugins.list().find((p) => p.id === 'self-heal')!
     assert.equal(healed.enabled, true)
     assert.equal(healed.status, 'active')
-    assert.equal(healed.error, undefined, 'enable 成功后 lastError 清空')
+    assert.equal(healed.error, undefined, 'enable after success lastError empty')
     const ping = (await app.kernel.plugins.invokeAction('self-heal', 'ping', {})) as { ok: boolean }
     assert.equal(ping.ok, true)
   } finally {
@@ -288,7 +288,7 @@ test('define 阶段失败的外部插件（有效 definition）：修复后 enab
   }
 })
 
-test('持久化 pluginEnabled=true 的外部插件服务启动失败：降级 failed（stage enable）且不覆写磁盘开关', { timeout: 60_000 }, async () => {
+test('persist pluginEnabled=true external plugin service failed to start: fall back failed(stage enable) and do not override disk switch', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-gov-enfail-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -297,27 +297,27 @@ test('持久化 pluginEnabled=true 的外部插件服务启动失败：降级 fa
     mkdirSync(dirPath, { recursive: true })
     writeFileSync(
       join(dirPath, 'index.mjs'),
-      `import { existsSync } from 'node:fs'\nexport default {\n  id: 'svc-fail',\n  name: '服务启动失败',\n  async definePlugin(ctx) {\n    ctx.service({\n      id: 'daemon',\n      start() {\n        if (existsSync(new URL('./fail.flag', import.meta.url))) throw new Error('外部服务未就绪')\n      },\n      stop() {},\n    })\n  },\n}\n`,
+      `import { existsSync } from 'node:fs'\nexport default {\n  id: 'svc-fail',\n  name: 'service failed to start',\n  async definePlugin(ctx) {\n    ctx.service({\n      id: 'daemon',\n      start() {\n        if (existsSync(new URL('./fail.flag', import.meta.url))) throw new Error('external service not ready')\n      },\n      stop() {},\n    })\n  },\n}\n`,
     )
     writeFileSync(join(dirPath, 'fail.flag'), '1')
 
-    // 预持久化 pluginEnabled['svc-fail'] = true（模拟用户曾启用）
+    // pre- persist pluginEnabled['svc-fail'] = true(simulated user once enable)
     const configPath = join(dataDir, 'config.json')
     writeFileSync(configPath, JSON.stringify({ pluginEnabled: { 'svc-fail': true } }))
 
     app = await createApp(dataDir)
     const failed = app.kernel.plugins.list().find((p) => p.id === 'svc-fail')
-    assert.ok(failed, '恢复启用失败的插件应保留为 failed 条目')
+    assert.ok(failed, 'restore enable failed plugin should keep is failed item')
     assert.equal(failed.status, 'failed')
     assert.equal(failed.enabled, false)
     assert.equal(failed.error!.stage, 'enable')
-    assert.match(failed.error!.message, /外部服务未就绪/)
+    assert.match(failed.error!.message, /external service not ready/)
 
-    // 磁盘 pluginEnabled 原值不动（不覆写用户意图）
+    // disk pluginEnabled original value do not motion (do not override user intent)
     const raw = JSON.parse(readFileSync(configPath, 'utf8')) as { pluginEnabled: Record<string, boolean> }
-    assert.equal(raw.pluginEnabled['svc-fail'], true, '恢复失败不得覆写磁盘开关')
+    assert.equal(raw.pluginEnabled['svc-fail'], true, 'restore failed must not override disk switch')
 
-    // 修复后 enable 自愈
+    // fix after enable self-heal
     rmSync(join(dirPath, 'fail.flag'))
     await app.kernel.plugins.enable('svc-fail')
     const healed = app.kernel.plugins.list().find((p) => p.id === 'svc-fail')!
@@ -328,38 +328,38 @@ test('持久化 pluginEnabled=true 的外部插件服务启动失败：降级 fa
   }
 })
 
-test('内置插件注册失败保持严格阻断（不降级 failed）', { timeout: 60_000 }, async () => {
+test('built-in plugin register failed keep strictly block assert (do not fall back failed)', { timeout: 60_000 }, async () => {
   const fixture = await makeHostFixture()
   try {
     await rejectsCode(
       fixture.host.register({
         id: 'builtin:broken',
         definePlugin() {
-          throw new Error('内置插件代码缺陷')
+          throw new Error('built-in plugin code defect')
         },
       }),
       'plugin_registration_failed',
     )
-    // 不出现在清单（无 failed 条目）
+    // do not appear in manifest (without failed item)
     assert.equal(fixture.host.list().some((p) => p.id === 'builtin:broken'), false)
   } finally {
     await fixture.close()
   }
 })
 
-test('手动 enable 外部插件失败：409/500 错误如实上抛，同时列表反映 failed', { timeout: 60_000 }, async () => {
+test('manually enable external plugin failed:409/500 error such as on throw, also list reverse reflect failed', { timeout: 60_000 }, async () => {
   const fixture = await makeHostFixture()
   try {
     let shouldFail = true
     await fixture.host.register(
       {
         id: 'ext:manual',
-        name: '手动启用失败',
+        name: 'manually enable failed',
         definePlugin: (ctx) => {
           ctx.service({
             id: 'svc',
             start() {
-              if (shouldFail) throw new Error('启动失败')
+              if (shouldFail) throw new Error('failed to start')
             },
             stop() {},
           })
@@ -369,16 +369,16 @@ test('手动 enable 外部插件失败：409/500 错误如实上抛，同时列�
     )
     assert.equal(fixture.host.list().find((p) => p.id === 'ext:manual')!.status, 'disabled')
 
-    // 手动 enable 失败：错误上抛（HTTP/CLI 收到明确错误响应）
+    // manually enable failed: error on throw (HTTP/CLI receives explicit error response)
     const err = await rejectsCode(fixture.host.enable('ext:manual'), 'plugin_service_start_failed', 500)
-    assert.match(err.message, /启动失败/)
-    // 列表状态反映 failed
+    assert.match(err.message, /failed to start/)
+    // list state reverse reflect failed
     const failed = fixture.host.list().find((p) => p.id === 'ext:manual')!
     assert.equal(failed.status, 'failed')
     assert.equal(failed.enabled, false)
     assert.equal(failed.error!.stage, 'enable')
 
-    // 修复后 enable 成功
+    // fix after enable succeeded
     shouldFail = false
     await fixture.host.enable('ext:manual')
     const healed = fixture.host.list().find((p) => p.id === 'ext:manual')!
@@ -390,10 +390,10 @@ test('手动 enable 外部插件失败：409/500 错误如实上抛，同时列�
 })
 
 // ---------------------------------------------------------------------------
-// 2. 持久资源占用（inUse）与停用预检
+// 2. durable asset occupy (inUse) and deactivate preflight
 // ---------------------------------------------------------------------------
 
-test('服务声明 inUse：默认 409 plugin_in_use 携带 usages；force 后停用成功', { timeout: 60_000 }, async () => {
+test('service declaration inUse: by default 409 plugin_in_use carry usages;force after deactivate succeeded', { timeout: 60_000 }, async () => {
   const fixture = await makeHostFixture()
   try {
     let jobs: Array<{ id: string; schedule: string }> = [{ id: 'j1', schedule: '0 * * * *' }]
@@ -405,24 +405,24 @@ test('服务声明 inUse：默认 409 plugin_in_use 携带 usages；force 后停
           start() {},
           stop() {},
           inUse() {
-            return jobs.map((j) => ({ kind: 'cron_job', id: j.id, label: `定时任务 "${j.id}" (${j.schedule})` }))
+            return jobs.map((j) => ({ kind: 'cron_job', id: j.id, label: `cron job "${j.id}" (${j.schedule})` }))
           },
         })
       },
     })
 
-    // 有占用：默认 409 拦截
+    // has occupy: by default 409 intercept
     const err = await rejectsCode(fixture.host.disable('ext:scheduler'), 'plugin_in_use', 409)
     const usages = (err.details as { usages: Array<{ kind: string; id: string; label: string }> }).usages
-    assert.deepEqual(usages, [{ kind: 'cron_job', id: 'j1', label: '定时任务 "j1" (0 * * * *)' }])
-    // 拒绝路径无副作用：保持启用
+    assert.deepEqual(usages, [{ kind: 'cron_job', id: 'j1', label: 'cron job "j1" (0 * * * *)' }])
+    // reject path no side effects: keep enable
     assert.equal(fixture.host.list().find((p) => p.id === 'ext:scheduler')!.enabled, true)
 
-    // force：知情停用
+    // force: know situation deactivate
     await fixture.host.disable('ext:scheduler', { force: true })
     assert.equal(fixture.host.list().find((p) => p.id === 'ext:scheduler')!.enabled, false)
 
-    // 占用清空后默认停用也直接成功
+    // occupy empty after by default deactivate also directly succeeded
     await fixture.host.enable('ext:scheduler')
     jobs = []
     await fixture.host.disable('ext:scheduler')
@@ -432,7 +432,7 @@ test('服务声明 inUse：默认 409 plugin_in_use 携带 usages；force 后停
   }
 })
 
-test('inUse 检查抛异常或返回非法形状：显式 plugin_in_use_check_failed，绝不静默当空', { timeout: 60_000 }, async () => {
+test('inUse check throw exception or return illegal shape: explicit plugin_in_use_check_failed, never static default when empty', { timeout: 60_000 }, async () => {
   for (const bad of ['throw', 'not-array', 'missing-label'] as const) {
     const fixture = await makeHostFixture()
     try {
@@ -444,7 +444,7 @@ test('inUse 检查抛异常或返回非法形状：显式 plugin_in_use_check_fa
             start() {},
             stop() {},
             inUse: () => {
-              if (bad === 'throw') throw new Error('对账崩了')
+              if (bad === 'throw') throw new Error('for account crash')
               if (bad === 'not-array') return 'nope' as unknown as never
               return [{ kind: 'x', id: 'y' }] as never
             },
@@ -453,16 +453,16 @@ test('inUse 检查抛异常或返回非法形状：显式 plugin_in_use_check_fa
       })
       const err = await rejectsCode(fixture.host.disable('ext:bad-inuse'), 'plugin_in_use_check_failed', 500)
       assert.equal((err.details as { serviceId: string }).serviceId, 'svc')
-      assert.equal(fixture.host.list().find((p) => p.id === 'ext:bad-inuse')!.enabled, true, '检查失败不改变状态')
+      assert.equal(fixture.host.list().find((p) => p.id === 'ext:bad-inuse')!.enabled, true, 'check failed does not change state')
     } finally {
       await fixture.close()
     }
   }
 })
 
-test('宿主引用探测：profile_runtime / profile_model / conversation_model 三类占用', { timeout: 60_000 }, async () => {
+test('host reference probe:profile_runtime / profile_model / conversation_model three class occupy', { timeout: 60_000 }, async () => {
   const base = await makeHostFixture()
-  // 带 provider 挂载端口的 fixture（引用探测需要 provider 声明真实注册）。
+  // carries provider mount port fixture(reference probe need to provider declaration real register).
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-gov-rt-'))
   const backend = makeBackend()
   const events = (backend as unknown as { __events: string[] }).__events
@@ -490,11 +490,11 @@ test('宿主引用探测：profile_runtime / profile_model / conversation_model 
     },
   }
   try {
-    // 占用型插件：声明 profileRuntime kind + 两个 provider
+    // occupy type plugin: declaration profileRuntime kind + two provider
     await fixture.host.register({
       id: 'ext:runtime',
       definePlugin: (ctx) => {
-        ctx.ui.profileRuntime({ id: 'rt', kind: 'myrt', label: '外部运行时' })
+        ctx.ui.profileRuntime({ id: 'rt', kind: 'myrt', label: 'external runtime' })
         ctx.provider({
           id: 'prov-a',
           name: 'Prov A',
@@ -511,19 +511,19 @@ test('宿主引用探测：profile_runtime / profile_model / conversation_model 
       },
     })
 
-    // 无引用时（fixture profiles.list / listConversations 可用但无命中）：直接停用成功
+    // without reference when (fixture profiles.list / listConversations available but without hit): directly deactivate succeeded
     await fixture.host.disable('ext:runtime')
     await fixture.host.enable('ext:runtime')
 
-    // Profile 绑定 runtime.kind
+    // Profile bind set runtime.kind
     fixture.backend.profileStore.set('coder', {
       id: 'coder',
-      name: '编码角色',
+      name: 'encode role',
       runtime: { kind: 'myrt', agent: 'pi' },
     })
-    // Profile 默认模型指向 prov-a
-    fixture.backend.profileStore.set('writer', { id: 'writer', name: '写作角色', model: 'prov-a/some-model' })
-    // 会话模型指向 prov-a
+    // Profile by default model points to prov-a
+    fixture.backend.profileStore.set('writer', { id: 'writer', name: 'write act role', model: 'prov-a/some-model' })
+    // conversation model points to prov-a
     fixture.backend.conversationStore.push(makeConversation(9, 'prov-a/another'))
 
     const err = await rejectsCode(fixture.host.disable('ext:runtime'), 'plugin_in_use', 409)
@@ -531,20 +531,20 @@ test('宿主引用探测：profile_runtime / profile_model / conversation_model 
     const kinds = usages.map((u) => `${u.kind}:${u.id}`).sort()
     assert.deepEqual(kinds, ['conversation_model:9', 'profile_model:writer', 'profile_runtime:coder'])
     const rt = usages.find((u) => u.kind === 'profile_runtime')!
-    assert.match(rt.label, /编码角色.*myrt/)
+    assert.match(rt.label, /encode role.*myrt/)
     const pm = usages.find((u) => u.kind === 'profile_model')!
-    assert.match(pm.label, /写作角色.*prov-a\/some-model/)
+    assert.match(pm.label, /write act role.*prov-a\/some-model/)
     const cm = usages.find((u) => u.kind === 'conversation_model')!
-    assert.match(cm.label, /会话 #9.*prov-a\/another/)
+    assert.match(cm.label, /conversation #9.*prov-a\/another/)
 
-    // force 后停用成功
+    // force after deactivate succeeded
     await fixture.host.disable('ext:runtime', { force: true })
   } finally {
     await fixture.close()
   }
 })
 
-test('liveTasks 硬阻断：force 也绝不跳过（状态一致性优先）', { timeout: 60_000 }, async () => {
+test('liveTasks hard block assert:force also never skip (state consistency takes precedence)', { timeout: 60_000 }, async () => {
   const fixture = await makeHostFixture()
   try {
     const panes = new Set<string>()
@@ -556,14 +556,14 @@ test('liveTasks 硬阻断：force 也绝不跳过（状态一致性优先）', {
           start() {},
           stop() {},
           liveTasks: () => [...panes].map((p) => `pane:${p}`),
-          inUse: () => [{ kind: 'pane', id: 'p1', label: '终端面板' }],
+          inUse: () => [{ kind: 'pane', id: 'p1', label: 'terminal panel' }],
         })
       },
     })
     panes.add('win-1')
-    // liveTasks 硬阻断：force 也拒绝
+    // liveTasks hard block assert:force also reject
     await rejectsCode(fixture.host.disable('ext:busy', { force: true }), 'plugin_has_live_tasks', 409)
-    // 收敛后 force 停用成功（inUse 知情放行）
+    // converge after force deactivate succeeded (inUse know situation let through)
     panes.clear()
     await fixture.host.disable('ext:busy', { force: true })
     assert.equal(fixture.host.list().find((p) => p.id === 'ext:busy')!.enabled, false)
@@ -572,7 +572,7 @@ test('liveTasks 硬阻断：force 也绝不跳过（状态一致性优先）', {
   }
 })
 
-test('builtin:triggers inUse：启用的 cron 任务与 webhook 端点阻塞停用，force 放行', { timeout: 60_000 }, async () => {
+test('builtin:triggers inUse: enable cron task and webhook end point block deactivate,force let through', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-gov-triggers-'))
   let app: Awaited<ReturnType<typeof createApp>> | undefined
   try {
@@ -580,18 +580,18 @@ test('builtin:triggers inUse：启用的 cron 任务与 webhook 端点阻塞停�
     const TRIGGERS = 'builtin:triggers'
     await app.kernel.plugins.enable(TRIGGERS)
 
-    // 初始无任务：停用成功（随后重新启用）
+    // initial without task: deactivate succeeded (then re- enable)
     await app.kernel.plugins.disable(TRIGGERS)
     await app.kernel.plugins.enable(TRIGGERS)
 
-    // 创建启用的 cron 任务 + webhook 端点
-    await app.kernel.plugins.invokeAction(TRIGGERS, 'cron_create', { id: 'daily', schedule: '0 9 * * *', text: '晨报' })
+    // create enable cron task + webhook end point
+    await app.kernel.plugins.invokeAction(TRIGGERS, 'cron_create', { id: 'daily', schedule: '0 9 * * *', text: 'morning report' })
     await app.kernel.plugins.invokeAction(TRIGGERS, 'cron_create', { id: 'off', schedule: '0 9 * * *', text: 'x', enabled: false })
     await app.kernel.plugins.invokeAction(TRIGGERS, 'webhook_create', { id: 'hook1', secret: 'whsec_gov' })
 
     const err = await rejectsCode(app.kernel.plugins.disable(TRIGGERS), 'plugin_in_use', 409)
     const usages = (err.details as { usages: Array<{ kind: string; id: string }> }).usages
-    // 只含启用的 cron（off 不算）+ webhook 端点
+    // only contains enable cron(off do not compute)+ webhook end point
     const ids = usages.map((u) => `${u.kind}:${u.id}`).sort()
     assert.deepEqual(ids, ['cron_job:daily', 'webhook_endpoint:hook1'])
 
@@ -604,14 +604,14 @@ test('builtin:triggers inUse：启用的 cron 任务与 webhook 端点阻塞停�
 })
 
 // ---------------------------------------------------------------------------
-// 3. turn_settled 单插件异常隔离
+// 3. turn_settled single plugin exception isolated
 // ---------------------------------------------------------------------------
 
-test('turn_settled：高优先级插件抛错被隔离告警，下游 superagent 风格处理器照常执行且收到上一合法载荷', { timeout: 60_000 }, async () => {
+test('turn_settled: high priority plugin throws by isolated alert, downstream superagent style handle per common execute and receives on one legal payload', { timeout: 60_000 }, async () => {
   const fixture = await makeHostFixture()
   try {
     const seen: Array<{ by: string; outcome: string; error?: string }> = []
-    // 高优先级坏插件：抛异常
+    // high priority broken plugin: throw exception
     await fixture.host.register({
       id: 'broken-settler',
       definePlugin: (ctx) => {
@@ -620,14 +620,14 @@ test('turn_settled：高优先级插件抛错被隔离告警，下游 superagent
         }, { priority: 10 })
       },
     })
-    // 中优先级坏插件：非法动作
+    // in priority broken plugin: illegal action
     await fixture.host.register({
       id: 'bad-action-settler',
       definePlugin: (ctx) => {
         ctx.hook.onTurnSettled(() => ({ action: 'block', reason: 'nope' }) as never, { priority: 5 })
       },
     })
-    // 低优先级好插件：读 transform 后的载荷继续结算（superagent 风格）
+    // low priority well plugin: read transform after payload continue compute (superagent style)
     await fixture.host.register({
       id: 'good-settler',
       definePlugin: (ctx) => {
@@ -637,7 +637,7 @@ test('turn_settled：高优先级插件抛错被隔离告警，下游 superagent
         })
       },
     })
-    // 合法 transform 插件（介于好坏之间）：确认隔离后载荷不回退
+    // legal transform plugin (introduce at well broken between): confirm isolated after payload does not fall back
     await fixture.host.register({
       id: 'transform-settler',
       definePlugin: (ctx) => {
@@ -654,22 +654,22 @@ test('turn_settled：高优先级插件抛错被隔离告警，下游 superagent
       outcome: 'failed',
       settledAt: 100,
     })
-    // 管道整体不抛错：正常返回 transform（最终载荷）
+    // pipeline whole do not throws: normal return transform(eventually payload)
     assert.equal(result.action, 'transform')
     if (result.action === 'transform') {
       assert.equal(result.value.error, 'transformed-note')
     }
-    // 下游好插件照常执行，收到 transform 后的载荷
+    // downstream well plugin per common execute, receives transform after payload
     assert.deepEqual(seen, [{ by: 'good', outcome: 'failed', error: 'transformed-note' }])
 
-    // 两个坏插件各收到一条 warning notification
+    // two broken plugin each receives a warning notification
     const notes = fixture.payloads
       .filter((e) => e.type === 'notification')
       .map((e) => e.payload as { level: string; title: string; body: string })
-    assert.equal(notes.length, 2, `应有两条告警，实际 ${notes.length}`)
+    assert.equal(notes.length, 2, `should has two alert, actual ${notes.length}`)
     for (const note of notes) {
       assert.equal(note.level, 'warning')
-      assert.match(note.title, /回合结算钩子异常/)
+      assert.match(note.title, /turn compute hook exception/)
     }
     const titles = notes.map((n) => n.title).sort()
     assert.match(titles[0]!, /bad-action-settler/)
@@ -680,14 +680,14 @@ test('turn_settled：高优先级插件抛错被隔离告警，下游 superagent
   }
 })
 
-test('turn_settled：拦截型钩子（before_turn）仍 fail-closed；turn_settled 隔离 transform 破坏载荷不阻断', { timeout: 60_000 }, async () => {
+test('turn_settled: intercept type hook (before_turn) still fail-closed;turn_settled isolated transform break payload do not block assert', { timeout: 60_000 }, async () => {
   const fixture = await makeHostFixture()
   try {
     await fixture.host.register({
       id: 'strict:before',
       definePlugin: (ctx) => {
         ctx.hook.onBeforeTurn(() => {
-          throw new Error('before_turn 崩溃')
+          throw new Error('before_turn crash')
         })
       },
     })
@@ -703,7 +703,7 @@ test('turn_settled：拦截型钩子（before_turn）仍 fail-closed；turn_sett
       500,
     )
 
-    // turn_settled transform 破坏必要字段：隔离该插件，载荷保持上一合法值
+    // turn_settled transform break must want field: isolated the plugin, payload keep on one legal value
     let downstreamSeen: string | undefined
     await fixture.host.register({
       id: 'break:settle',
@@ -730,13 +730,13 @@ test('turn_settled：拦截型钩子（before_turn）仍 fail-closed；turn_sett
       settledAt: 1,
     })
     assert.equal(result.action, 'transform')
-    assert.equal(downstreamSeen, 'completed', '下游收到上一合法载荷（未被破坏值污染）')
+    assert.equal(downstreamSeen, 'completed', 'downstream receives on one legal payload (not by break value pollute)')
   } finally {
     await fixture.close()
   }
 })
 
-test('turn_settled handled 正常短路；入口载荷非法仍显式抛错（内核 bug 不静默）', { timeout: 60_000 }, async () => {
+test('turn_settled handled normal short route; entry payload illegal still explicit throws (kernel bug not silently)', { timeout: 60_000 }, async () => {
   const fixture = await makeHostFixture()
   try {
     let downstreamRan = false
@@ -764,7 +764,7 @@ test('turn_settled handled 正常短路；入口载荷非法仍显式抛错（�
     assert.deepEqual(result, { action: 'handled', result: { settled: true } })
     assert.equal(downstreamRan, false)
 
-    // 入口初始载荷非法：直接抛错（不进入隔离模式）
+    // entry initial payload illegal: directly throws (does not enter isolated pattern)
     await rejectsCode(
       fixture.host.runHook('turn_settled', {
         conversation: makeConversation(1),
@@ -780,10 +780,10 @@ test('turn_settled handled 正常短路；入口载荷非法仍显式抛错（�
 })
 
 // ---------------------------------------------------------------------------
-// 4. 插件配置分层溯源（sources）、不固化 default 与 null 重置
+// 4. plugin config layer trace source (sources), do not solid default and null reset
 // ---------------------------------------------------------------------------
 
-/** 建立带 configSchema 的插件 host fixture（真实 HelmPluginConfigStore）。 */
+/** establish carries configSchema plugin host fixture(real HelmPluginConfigStore). */
 async function makeConfigFixture(): Promise<{
   host: PluginHost
   store: HelmPluginConfigStore
@@ -804,9 +804,9 @@ async function makeConfigFixture(): Promise<{
     id: 'ext:cfg',
     definePlugin: (ctx) => {
       ctx.configSchema({
-        endpoint: { type: 'string', label: '端点', default: 'http://127.0.0.1:3425' },
-        timeout: { type: 'number', label: '超时', default: 5000 },
-        apiKey: { type: 'string', label: '密钥', secret: true },
+        endpoint: { type: 'string', label: 'end point', default: 'http://127.0.0.1:3425' },
+        timeout: { type: 'number', label: 'timeout', default: 5000 },
+        apiKey: { type: 'string', label: 'secret key', secret: true },
       })
     },
   })
@@ -822,10 +822,10 @@ async function makeConfigFixture(): Promise<{
   }
 }
 
-test('配置不固化 default：磁盘只存显式覆写值；getConfig 合成 default；sources 三态溯源', { timeout: 60_000 }, async () => {
+test('config do not solid default: disk only store explicit override value;getConfig together into default;sources three state trace source', { timeout: 60_000 }, async () => {
   const f = await makeConfigFixture()
   try {
-    // 未配置：全部回退（endpoint/timeout 有 default，apiKey unset）
+    // not config: all fall back (endpoint/timeout has default,apiKey unset)
     let values = f.host.getConfig('ext:cfg')
     assert.equal(values.endpoint, 'http://127.0.0.1:3425')
     assert.equal(values.timeout, 5000)
@@ -833,16 +833,16 @@ test('配置不固化 default：磁盘只存显式覆写值；getConfig 合成 d
     let sources = f.host.getConfigSources('ext:cfg')
     assert.deepEqual(sources, { endpoint: 'default', timeout: 'default', apiKey: 'unset' })
 
-    // 显式配置 timeout + apiKey
+    // explicit config timeout + apiKey
     await f.host.setConfig('ext:cfg', { timeout: 8000, apiKey: 'sk-123' })
     const rawConfig = JSON.parse(readFileSync(join(f.dataDir, 'config.json'), 'utf8')) as {
       plugins?: Record<string, Record<string, unknown>>
     }
-    // 磁盘只含 timeout: 8000（不含 endpoint 固化默认值）
+    // disk only contains timeout: 8000(excludes endpoint solid default value)
     assert.deepEqual(rawConfig.plugins?.['ext:cfg'], { timeout: 8000 })
 
     values = f.host.getConfig('ext:cfg')
-    assert.equal(values.endpoint, 'http://127.0.0.1:3425', '未配置字段动态合成 default')
+    assert.equal(values.endpoint, 'http://127.0.0.1:3425', 'not config field motion state together into default')
     assert.equal(values.timeout, 8000)
     assert.equal(values.apiKey, 'sk-123')
     sources = f.host.getConfigSources('ext:cfg')
@@ -852,31 +852,31 @@ test('配置不固化 default：磁盘只存显式覆写值；getConfig 合成 d
   }
 })
 
-test('null 重置：timeout 回退 default、apiKey 清除 secret；磁盘键删除', { timeout: 60_000 }, async () => {
+test('null reset:timeout fall back default,apiKey clear secret; disk key delete', { timeout: 60_000 }, async () => {
   const f = await makeConfigFixture()
   try {
     await f.host.setConfig('ext:cfg', { timeout: 8000, apiKey: 'sk-123' })
-    // null 重置两个字段
+    // null reset two field
     await f.host.setConfig('ext:cfg', { timeout: null, apiKey: null })
 
-    // 磁盘显式键被删除（桶为空时整体移除 plugins['ext:cfg'] 条目）
+    // disk explicit key by delete (bucket is empty when whole remove plugins['ext:cfg'] item)
     const rawConfig = JSON.parse(readFileSync(join(f.dataDir, 'config.json'), 'utf8')) as {
       plugins?: Record<string, Record<string, unknown>>
     }
     assert.equal(
       rawConfig.plugins?.['ext:cfg'],
       undefined,
-      'null 重置后磁盘插件桶被清理',
+      'null reset after disk plugin bucket by clean up',
     )
-    // credentials.json 对应 secret 键被删除
+    // credentials.json for should secret key by delete
     const credRaw = JSON.parse(readFileSync(join(f.credentialsDir, 'credentials.json'), 'utf8')) as {
       pluginSecrets?: Record<string, Record<string, string>>
     }
-    assert.equal(credRaw.pluginSecrets?.['ext:cfg'], undefined, 'secret 键被删除')
+    assert.equal(credRaw.pluginSecrets?.['ext:cfg'], undefined, 'secret key by delete')
 
-    // 有效值与来源恢复回退态
+    // valid value and source restore fall back state
     const values = f.host.getConfig('ext:cfg')
-    assert.equal(values.timeout, 5000, '重置后回退 schema.default')
+    assert.equal(values.timeout, 5000, 'reset after fall back schema.default')
     assert.equal('apiKey' in values, false)
     const sources = f.host.getConfigSources('ext:cfg')
     assert.deepEqual(sources, { endpoint: 'default', timeout: 'default', apiKey: 'unset' })
@@ -885,7 +885,7 @@ test('null 重置：timeout 回退 default、apiKey 清除 secret；磁盘键删
   }
 })
 
-test('required 校验：必填且无 default 的字段缺失或被 null 清除时 400 validation_error', { timeout: 60_000 }, async () => {
+test('required validate: required and without default field missing or by null clear when 400 validation_error', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-gov-req-'))
   const credentialsDir = join(dataDir, 'cred')
   mkdirSync(credentialsDir, { recursive: true })
@@ -899,63 +899,63 @@ test('required 校验：必填且无 default 的字段缺失或被 null 清除�
     optional: { type: 'string' },
   }
   try {
-    // 完全未配置：required 缺失报错
+    // fully not config:required missing errors
     await rejectsCode(store.set('ext:req', {}, schema), 'validation_error', 400)
-    // 配置后成功
+    // config after succeeded
     await store.set('ext:req', { token: 't1' }, schema)
     assert.equal(store.get('ext:req').token, 't1')
-    // null 清除必填字段：报错（必填且无 default 不可清除）
+    // null clear required field: errors (required and without default cannot clear)
     await rejectsCode(store.set('ext:req', { token: null }, schema), 'validation_error', 400)
-    // 未知字段拒绝
+    // unknown field reject
     await rejectsCode(store.set('ext:req', { nope: 'x' }, schema), 'validation_error', 400)
-    // 非 secret 类型校验
+    // non- secret type validate
     await rejectsCode(store.set('ext:req', { token: 42 }, schema), 'validation_error', 400)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
-test('null 重置未知字段：validation_error；插件 schema 调整 default 后回退值动态跟随', { timeout: 60_000 }, async () => {
+test('null reset unknown field:validation_error; plugin schema adjust default after fall back value motion state with follow', { timeout: 60_000 }, async () => {
   const f = await makeConfigFixture()
   try {
-    // 未知字段（即使 null）也拒绝
+    // unknown field (even if null) also reject
     await rejectsCode(f.host.setConfig('ext:cfg', { unknown: null }), 'validation_error', 400)
 
-    // schema.default 升级后：磁盘无固化值，get 动态反映新默认（通过第二个 host 模拟升级）
+    // schema.default upgrade after: disk without solid value,get motion state reverse reflect new by default (via second host simulated upgrade)
     await f.host.setConfig('ext:cfg', { timeout: 9000 })
     await f.host.setConfig('ext:cfg', { timeout: null })
-    // 未配置时 get 合成的是当前 schema 的 default（5000）
+    // not config when get together into is when before schema  default(5000)
     assert.equal(f.host.getConfig('ext:cfg').timeout, 5000)
 
-    // 未注册插件的 getConfig：无 schema 时只返回存储值（不合成）
+    // not registered plugin getConfig: without schema when only return store value (do not together into)
     assert.deepEqual(f.host.getConfig('ext:unknown'), {})
   } finally {
     await f.close()
   }
 })
 
-test('PluginSummary status 语义：active/disabled/failed 三态与 error 附带', { timeout: 60_000 }, async () => {
+test('PluginSummary status semantics:active/disabled/failed three state and error attach carries', { timeout: 60_000 }, async () => {
   const fixture = await makeHostFixture()
   try {
-    // active：正常启用
+    // active: normal enable
     await fixture.host.register({
       id: 'ext:alive',
       definePlugin: () => {},
     })
     assert.equal(fixture.host.list().find((p) => p.id === 'ext:alive')!.status, 'active')
 
-    // disabled：停用（无故障）
+    // disabled: deactivate (without fault)
     await fixture.host.disable('ext:alive')
     const disabled = fixture.host.list().find((p) => p.id === 'ext:alive')!
     assert.equal(disabled.status, 'disabled')
     assert.equal(disabled.error, undefined)
 
-    // failed：外部插件 define 失败降级
+    // failed: external plugin define failed fall back
     await fixture.host.register(
       {
         id: 'ext:dead',
         definePlugin() {
-          throw new Error('挂了')
+          throw new Error('hang')
         },
       },
       { isolateFailure: true },
@@ -966,7 +966,7 @@ test('PluginSummary status 语义：active/disabled/failed 三态与 error 附�
     assert.equal(failed.error!.code, 'plugin_execution_failed')
     assert.equal(failed.error!.stage, 'define')
 
-    // failed 后 unregister + 重新注册（修复后的同名插件）：落位为正常状态
+    // failed after unregister + re- register (fix after same name plugin): is normal state
     await fixture.host.unregister('ext:dead')
     await fixture.host.register(
       {
@@ -976,7 +976,7 @@ test('PluginSummary status 语义：active/disabled/failed 三态与 error 附�
       { enabled: false, isolateFailure: true },
     )
     assert.equal(fixture.host.list().find((p) => p.id === 'ext:dead')!.status, 'disabled')
-    assert.equal(fixture.host.list().find((p) => p.id === 'ext:dead')!.error, undefined, '重新注册后 error 清空')
+    assert.equal(fixture.host.list().find((p) => p.id === 'ext:dead')!.error, undefined, 're- register after error empty')
   } finally {
     await fixture.close()
   }

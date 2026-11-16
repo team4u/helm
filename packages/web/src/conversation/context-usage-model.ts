@@ -38,7 +38,7 @@ export interface ContextUsageInput {
 /** 组装只读状态文本（纯函数）；返回 null 表示不渲染任何状态文本。 */
 export function contextUsageLabel(usage: ContextUsageInput): ContextUsageLabel | null {
   if (usage.compacting === true) {
-    return { text: '精简中…', tone: 'default', title: '上下文精简进行中' }
+    return { text: 'Compacting…', tone: 'default', title: 'Context compaction in progress' }
   }
   if (usage.tokens === null) {
     // 最近一次精简后尚无新的回答：真实上下文未知，绝不拿摘要估算冒充。
@@ -46,9 +46,9 @@ export function contextUsageLabel(usage: ContextUsageInput): ContextUsageLabel |
       ? {
           text: `?/${formatTokens(usage.contextWindow)}`,
           tone: 'default',
-          title: '最近一次精简后尚无新的回答，上下文用量未知',
+          title: 'No new reply since the last compaction; context usage unknown',
         }
-      : { text: '?', tone: 'default', title: '上下文用量未知（模型窗口未知）' }
+      : { text: '?', tone: 'default', title: 'Context usage unknown (model window unknown)' }
   }
   // 空会话 / 刚 reset：无上下文可占，不渲染状态文本。
   if (usage.tokens === 0) return null
@@ -56,7 +56,7 @@ export function contextUsageLabel(usage: ContextUsageInput): ContextUsageLabel |
     return {
       text: formatTokens(usage.tokens),
       tone: 'default',
-      title: `上下文估算 ${formatTokens(usage.tokens)} tokens（模型窗口未知，不显示百分比）`,
+      title: `Context estimate ${formatTokens(usage.tokens)} tokens (model window unknown; no percentage shown)`,
     }
   }
   const percent = (usage.tokens / usage.contextWindow) * 100
@@ -64,6 +64,6 @@ export function contextUsageLabel(usage: ContextUsageInput): ContextUsageLabel |
   return {
     text: `${percent.toFixed(1)}%/${formatTokens(usage.contextWindow)}`,
     tone,
-    title: `上下文占用 ${percent.toFixed(1)}%（约 ${formatTokens(usage.tokens)} / ${formatTokens(usage.contextWindow)} tokens）`,
+    title: `Context usage ${percent.toFixed(1)}% (about ${formatTokens(usage.tokens)} / ${formatTokens(usage.contextWindow)} tokens)`,
   }
 }

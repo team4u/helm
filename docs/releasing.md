@@ -96,7 +96,7 @@ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
 | 桌面冒烟脚本 | `scripts/desktop-smoke.mjs` |
 | 桌面包契约检查 | `scripts/desktop-ci-contract.mjs` |
 | payload 组装器 | `packages/payload/build.mjs` |
-| 桌面打包配置 | `packages/desktop/electron-builder.yml`、`scripts/assemble-hub.mjs` |
+| 桌面打包配置 | `packages/desktop/electron-builder.yml`、`packages/desktop/scripts/assemble-hub.mjs` |
 | 测试 | `packages/payload/test/payload.test.ts`（含网络验收用例）、`packages/desktop/test/` |
 
 ## 相关文档

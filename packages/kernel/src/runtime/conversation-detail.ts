@@ -1,10 +1,10 @@
 /**
- * 会话详情分页、游标编解码与 FTS 索引维护。
+ * conversation detail situation page, cursor edit decode and FTS index maintain.
  *
- * 职责：
- * - 详情分页读取，按 helm.rewind 闭区间过滤被覆盖旧条目，保留元数据条目；
- * - 分页游标 base64url 校验与编解码；
- * - FTS 索引全量重建（过滤 rewind 覆盖条目）。
+ * responsibility:
+ * - detail situation page read, by helm.rewind closed zone between filter by override old item, keep metadata item;
+ * - page cursor base64url validate and edit decode;
+ * - FTS index all amount rebuild (filter rewind override item).
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
@@ -21,7 +21,7 @@ import {
 } from './runtime-helpers.js'
 import type { HelmStore } from './store.js'
 
-/** cursor 最大编码长度（base64url 后；超长拒绝防滥用）。 */
+/** cursor most large encode length (base64url after; over long reject guard against abuse). */
 export const DETAIL_CURSOR_MAX_LENGTH = 2048
 
 export interface ConversationDetailHost {
@@ -32,7 +32,7 @@ export interface ConversationDetailHost {
   readonly collectRewindIntervals: (
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
   ) => Promise<RewindInterval[]>
-  /** contextUsage 刷新链归寂等待（tracker.ensureContextUsage；并行腿之一）。 */
+  /** contextUsage refresh chain archive silent wait for (tracker.ensureContextUsage; parallel leg of one). */
   readonly ensureContextUsage: (id: number) => Promise<void>
 }
 
@@ -40,25 +40,25 @@ export class ConversationDetailService {
   constructor(private readonly host: ConversationDetailHost) {}
 
   /**
-   * 会话详情（摘要 + 分页时间线）：
-   * - 服务端统一过滤被 helm.rewind 覆盖的旧条目（闭区间 [fromEntryId,
-   *   throughEntryId]），但保留 helm.rewind 元数据条目本身（前端 SSE 与
-   *   分页过滤共用同一区间公式）；
-   * - 每次详情读时扫描汇总全部 rewind 区间（简单实现，不加新持久表/缓存），
-   *   再从 SDK raw cursor 分页读取，过滤覆盖条目直到满足 limit 或无更多；
-   * - cursor 是 base64url(JSON{conversationId,cursor:SDK next})：绑定会话、
-   *   长度/JSON 合法性校验、limit 钳制 1..500；不静默截断；
-   * - entry 保留 model 消息与 data，出界前经事件同源脱敏（发布路径统一）。
+   * conversation detail situation (summary + page timeline):
+   * - server side unify filter by helm.rewind override old item (closed zone between [fromEntryId,
+   *   throughEntryId]), but keep helm.rewind metadata item itself (frontend SSE and
+   *   page filter shared use the same zone between public style);
+   * - each time detail situation read when scan aggregate all rewind zone between (simple implement, do not add new durable table/cache),
+   *   again from SDK raw cursor page read, filter override item until satisfy limit or without more many;
+   * - cursor is base64url(JSON{conversationId,cursor:SDK next}): bind set conversation,
+   *   length/JSON legal validate,limit clamp 1..500; not silently truncate;
+   * - entry keep model message and data, out boundary before via event same source redaction (publish path unify).
    */
   async getConversationDetail(
     id: number,
     options?: { limit?: number; cursor?: string },
   ): Promise<ConversationDetail> {
-    // 并行化：contextUsage 刷新（重启后首开等冷路径）与时间线分页互不依赖。
-    // Promise.all 保证任一腿失败即整体拒绝（绝不返回半真详情、无未处理拒绝）；
-    // 两腿完成后必须重取权威摘要合并——assembleDetail 在并行窗内抢先读取的
-    // 摘要可能缺刚刷出的 contextUsage（缓存命中/刷新失败路径与串行同构：
-    // 失败时 usage 诚实地保持缺省，不伪造）。
+    // parallel:contextUsage refresh (after restart first open etc. cold path) and timeline page mutual independent of.
+    // Promise.all guarantee any one leg failed i.e. whole reject (never return half true detail situation, without not handle reject);
+    // two leg after completion must heavy take right threat summary merge - -assembleDetail in parallel window inside grab first read
+    // summary may missing just refresh out contextUsage(cache hit/refresh failed path and serial same construct:
+    // on failure usage honest ground keep default, do not fabricate).
     const [, detail] = await Promise.all([
       this.host.ensureContextUsage(id),
       this.assembleDetail(id, options),
@@ -66,7 +66,7 @@ export class ConversationDetailService {
     return { ...detail, ...this.host.getConversation(id) }
   }
 
-  /** 详情主体（分页 + 投影 + 摘要初值；摘要随后由并行合并覆盖为权威值）。 */
+  /** detail situation body (page + throw shadow + summary initial value; summary then by parallel merge override is right threat value). */
   private async assembleDetail(
     id: number,
     options?: { limit?: number; cursor?: string },
@@ -74,12 +74,12 @@ export class ConversationDetailService {
     const summary = this.host.getConversation(id)
     const limit = options?.limit ?? 100
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
-      throw new HelmError('validation_error', `limit 必须是 1..500 的整数（收到 ${limit}）`, 400, {
+      throw new HelmError('validation_error', `limit must be 1..500 integer (receives ${limit})`, 400, {
         limit,
       })
     }
     const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
 
     let sdkCursor: unknown = undefined
     if (options?.cursor !== undefined) {
@@ -88,8 +88,8 @@ export class ConversationDetailService {
     const rewindCuts = await this.host.collectRewindIntervals(conversation)
     const { collected, nextCursor } = await this.pageVisibleEntries(conversation, id, limit, sdkCursor, rewindCuts)
 
-    // HTTP 详情出口投影：pi.system 过滤 + 签名剥离 + 安全纯文本 tool-result
-    // 截断（见 entry-projection.ts）。SSE/waitForInput 不经此投影。
+    // HTTP detail situation exit throw shadow:pi.system filter + signature strip + security pure text tool-result
+    // truncate (see entry-projection.ts).SSE/waitForInput do not via this throw shadow.
     const entries: ConversationEntry[] = []
     for (const raw of collected.reverse()) {
       const projected = projectDetailEntry(toConversationEntry(raw as { id: number; kind: string }))
@@ -103,23 +103,23 @@ export class ConversationDetailService {
   }
 
   /**
-   * 单条时间线条目（GET /api/conversations/:id/entries/:entryId）：
-   * - 精确读取（min=max=entryId 取 1 条，不经分页猜测）；conversationId 与
-   *   entryId 均强校验（路由 parseIdParam + 服务层安全整数复核）；
-   * - rewind 可见性与详情分页一致：被 helm.rewind 覆盖的旧条目与 pi.system
-   *   模型侧簿记一律 404（helm.rewind 标记本身保留可见，与分页行为同构）；
-   * - 未截断但已脱敏：仅剥离签名载荷，不截断。数据库原文不变。
+   * single timeline item (GET /api/conversations/:id/entries/:entryId):
+   * - precise read (min=max=entryId take 1 , do not via page guess);conversationId and
+   *   entryId all strong validate (routing parseIdParam + service layer security integer re-check);
+   * - rewind visible and detail situation page consistent: by helm.rewind override old item and pi.system
+   *   model side register record one rule 404(helm.rewind mark record itself keep visible, and page behavior same construct);
+   * - not truncate but already redaction: only strip signature payload, do not truncate. database original text do not change.
    */
   async getConversationEntry(id: number, entryId: number): Promise<ConversationEntry> {
     if (!Number.isSafeInteger(entryId) || entryId <= 0) {
-      throw new HelmError('validation_error', `entryId 需为安全正整数（收到 ${String(entryId)}）`, 400, {
+      throw new HelmError('validation_error', `entryId must be security positive integer (receives ${String(entryId)})`, 400, {
         conversationId: id,
         entryId,
       })
     }
     this.host.getConversation(id)
     const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
     const page = await conversation.entries(
       { minEntryId: entryId as never, maxEntryId: entryId as never, order: 'ascending' },
       1,
@@ -128,22 +128,22 @@ export class ConversationDetailService {
     )
     const raw = page.items[0] as { id: number | string; kind: string } | undefined
     if (raw === undefined || Number(raw.id) !== entryId) {
-      throw new HelmError('not_found', `条目 ${entryId} 在会话 ${id} 中不存在`, 404, {
+      throw new HelmError('not_found', `item ${entryId} in conversation ${id} in missing`, 404, {
         conversationId: id,
         entryId,
       })
     }
-    // 可见性与详情分页完全一致：rewind 覆盖旧条目与 pi.system 模型侧簿记
-    // 均不可见（分页隐藏的内部条目不因显式 id 请求重新暴露）。
+    // visible and detail situation page fully consistent:rewind override old item and pi.system model side register record
+    // all invisible (page hide internal item do not because explicit id request re- expose).
     if (raw.kind === 'pi.system') {
-      throw new HelmError('not_found', `条目 ${entryId} 是模型侧簿记（pi.system），不可见`, 404, {
+      throw new HelmError('not_found', `item ${entryId} is model side register record (pi.system), invisible`, 404, {
         conversationId: id,
         entryId,
       })
     }
     const rewindCuts = await this.host.collectRewindIntervals(conversation)
     if (raw.kind !== 'helm.rewind' && coveredByRewind(entryId, rewindCuts)) {
-      throw new HelmError('not_found', `条目 ${entryId} 已被原地覆盖重发隐藏`, 404, {
+      throw new HelmError('not_found', `item ${entryId} already by original ground override heavy hide`, 404, {
         conversationId: id,
         entryId,
       })
@@ -151,10 +151,10 @@ export class ConversationDetailService {
     return stripEntrySignatures(toConversationEntry(raw as never))
   }
 
-  /** SDK descending 分页读取 + rewind/pi.system 过滤（详情主体循环；每页精确取 remaining）。
-   * pi.system 与 rewind 覆盖条目同属「不可见」：在循环内跳过并继续取更旧
-   * 条目，保证 limit 语义 = 可见条数（收满后才过滤会让某页不足 limit 且
-   * cursor 已越过被过滤条目，用户分页看不到等量旧内容）。 */
+  /** SDK descending page read + rewind/pi.system filter (detail situation body loop; each page precise take remaining).
+   * pi.system and rewind override item same belong invisible: in loop inside skip and continue take more old
+   * item, guarantee limit semantics = visible count (full after only then filter will let a certain page do not enough limit and
+   * cursor already exceeds by filter item, user page see fewer than etc. amount old content). */
   async pageVisibleEntries(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
     id: number,
@@ -182,8 +182,8 @@ export class ConversationDetailService {
         model?: readonly unknown[]
         data?: unknown
       }>) {
-        // rewind 标记自身保留（SSE 一致性与前端区间去重需要），其余落入
-        // 覆盖区间的旧条目全部隐藏；pi.system 是模型侧簿记，详情不可见。
+        // rewind mark record itself keep (SSE consistency and frontend zone between dedupe need to), the rest
+        // override zone between old item all hide;pi.system is model side register record, detail situation invisible.
         const numericId = Number(raw.id)
         if (raw.kind === 'pi.system') continue
         if (raw.kind !== 'helm.rewind' && coveredByRewind(numericId, rewindCuts)) continue
@@ -203,22 +203,22 @@ export class ConversationDetailService {
     return { collected, nextCursor }
   }
 
-  /** 编码分页 cursor：base64url(JSON{conversationId,cursor})。 */
+  /** encode page cursor:base64url(JSON{conversationId,cursor}). */
   encodeDetailCursor(conversationId: number, sdkCursor: Readonly<Record<string, unknown>>): string {
     const json = JSON.stringify({ conversationId, cursor: sdkCursor })
     return Buffer.from(json, 'utf8').toString('base64url')
   }
 
-  /** 解码并校验分页 cursor：绑定会话、长度与 JSON 合法性（非法显式拒绝）。 */
+  /** decode and validate page cursor: bind set conversation, length and JSON legal (illegal explicit reject). */
   decodeDetailCursor(conversationId: number, encoded: string): unknown {
     if (encoded.length > DETAIL_CURSOR_MAX_LENGTH) {
-      throw new HelmError('validation_error', 'cursor 超过最大长度', 400)
+      throw new HelmError('validation_error', 'cursor exceeds most large length', 400)
     }
     let decoded: unknown
     try {
       decoded = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
     } catch {
-      throw new HelmError('validation_error', 'cursor 不是合法的 base64url JSON', 400)
+      throw new HelmError('validation_error', 'cursor is not legal base64url JSON', 400)
     }
     const shape = decoded as { conversationId?: unknown; cursor?: unknown }
     if (
@@ -230,22 +230,22 @@ export class ConversationDetailService {
     ) {
       throw new HelmError(
         'validation_error',
-        `cursor 不属于会话 ${conversationId} 或结构非法`,
+        `cursor do not belongs to conversation ${conversationId} or structure illegal`,
         400,
       )
     }
     return shape.cursor
   }
 
-  /** FTS 重建（宿主 rebuildFts 委托；rewind 覆盖条目绝不重新索引）。 */
+  /** FTS rebuild (host rebuildFts delegate;rewind override item never re- index). */
   async rebuildFts(listConversationIds: () => Array<{ id: number; title: string }>): Promise<void> {
     await this.host.store.rebuildFts(async (index) => {
       for (const conv of listConversationIds()) {
         const conversation = await this.host.harness.conversation(conv.id as never, BACKGROUND_CONTEXT)
         if (!conversation) continue
-        // 全量扫描后按 helm.rewind 闭区间 [from, through] 过滤被覆盖条目：
-        // 它们已不再活跃，重建 FTS 时绝不重新索引；同一区间公式与
-        // collectRewindIntervals / 详情投影共用闭区间。
+        // all amount scan after by helm.rewind closed zone between [from, through] filter by override item:
+        // they already no longer leap, rebuild FTS when never re- index; the same zone between public style and
+        // collectRewindIntervals / detail situation throw shadow shared use closed zone between.
         const rewindCuts: RewindInterval[] = []
         const indexed: Array<{ id: number; text: string }> = []
         let cursor: unknown = undefined

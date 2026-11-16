@@ -1,6 +1,6 @@
 /**
  * 双层导航与话题切换器交互测试（happy-dom + 真实 React 事件）：
- * - Sidebar：对话/视图空间切换、搜索过滤智能体、智能体行导航；
+ * - Sidebar：对话/Views space切换、搜索过滤智能体、智能体行导航；
  * - 双层导航与单展开：仅当前目标所属智能体展开话题子列表（无折叠钮，
  *   点击智能体名称进入待命态并随之展开），切换目标自动收起原智能体。
  */
@@ -139,7 +139,7 @@ function render(store: HelmStoreValue, element: React.ReactElement): void {
   root.render(e(HostStoreProviders, { value: store }, element))
 }
 
-test('Sidebar 空间切换：对话空间默认渲染智能体，视图空间渲染 screen 贡献', { timeout: 60_000 }, async () => {
+test('Sidebar 空间切换：对话空间默认渲染智能体，Views space渲染 screen 贡献', { timeout: 60_000 }, async () => {
   const store = makeStore()
   render(store, e(SpaceAwareSidebar, { base: store }))
   await act(async () => {})
@@ -147,16 +147,16 @@ test('Sidebar 空间切换：对话空间默认渲染智能体，视图空间渲
   const body = document.body
   assert.ok(body.querySelector('.activity-rail'), '应渲染 Activity Rail')
   assert.ok(body.textContent!.includes('个人助理'), '对话空间渲染智能体行')
-  assert.ok(!body.textContent!.includes('Herdr 终端'), '默认不渲染视图空间项')
+  assert.ok(!body.textContent!.includes('Herdr 终端'), '默认不渲染Views space项')
 
-  // 切换到视图空间
-  const viewsBtn = body.querySelector('button[aria-label="视图空间"]') as HTMLButtonElement
-  assert.ok(viewsBtn, '视图空间切换按钮存在')
+  // 切换到Views space
+  const viewsBtn = body.querySelector('button[aria-label="Views space"]') as HTMLButtonElement
+  assert.ok(viewsBtn, 'Views space切换按钮存在')
   await act(async () => {
     viewsBtn.click()
   })
-  assert.ok(body.textContent!.includes('Herdr 终端'), '视图空间渲染 screen 贡献')
-  assert.ok(!body.textContent!.includes('个人助理'), '视图空间不渲染智能体分组')
+  assert.ok(body.textContent!.includes('Herdr 终端'), 'Views space渲染 screen 贡献')
+  assert.ok(!body.textContent!.includes('个人助理'), 'Views space不渲染智能体分组')
 })
 
 test('Sidebar 设置空间：点击设置空间按钮切换列表，点击插件中心调用 openTarget', { timeout: 60_000 }, async () => {
@@ -165,7 +165,7 @@ test('Sidebar 设置空间：点击设置空间按钮切换列表，点击插件
   await act(async () => {})
 
   // 切到设置空间
-  const settingsBtn = document.body.querySelector('button[aria-label="设置空间"]') as HTMLButtonElement
+  const settingsBtn = document.body.querySelector('button[aria-label="Settings space"]') as HTMLButtonElement
   assert.ok(settingsBtn, '设置空间按钮存在')
   await act(async () => {
     settingsBtn.click()
@@ -174,7 +174,7 @@ test('Sidebar 设置空间：点击设置空间按钮切换列表，点击插件
 
   // 点击插件中心列表项（行主体 nav-item-main）
   const items = [...document.body.querySelectorAll('.settings-nav-item .nav-item-main')] as HTMLButtonElement[]
-  const pluginsItem = items.find((el) => el.textContent!.includes('插件中心'))
+  const pluginsItem = items.find((el) => el.textContent!.includes('Plugin Center'))
   assert.ok(pluginsItem, '插件中心设置项存在')
   await act(async () => {
     pluginsItem!.click()
@@ -189,7 +189,7 @@ test('Sidebar 智能体搜索：默认收起筛选栏，点击开启后支持过
 
   // 默认收起筛选栏，不渲染输入框
   assert.ok(document.body.querySelector('.sidebar-search-input') === null, '默认不渲染筛选输入框')
-  const filterBtn = document.body.querySelector('button[aria-label="筛选智能体与话题"]') as HTMLButtonElement
+  const filterBtn = document.body.querySelector('button[aria-label="Filter agents and topics"]') as HTMLButtonElement
   assert.ok(filterBtn, '筛选切换按钮存在')
   assert.equal(filterBtn.getAttribute('aria-pressed'), 'false')
 
@@ -266,7 +266,7 @@ test('Sidebar 智能体搜索：默认收起筛选栏，点击开启后支持过
   await act(async () => {
     setInputValue(input, '毫无匹配的关键词')
   })
-  assert.equal(document.body.querySelector('.sidebar-search-empty')?.textContent, '没有匹配的智能体或话题')
+  assert.equal(document.body.querySelector('.sidebar-search-empty')?.textContent, 'No matching agents or topics')
 
   await act(async () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
@@ -410,12 +410,12 @@ test('Sidebar 分屏协同展开与焦点高亮：双不同智能体均展开，
   assert.ok(conv1Primary.className.includes('nav-item-active'))
   assert.ok(conv1Primary.className.includes('nav-item-focused'))
   assert.equal(conv1Primary.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
-  assert.equal(conv1Primary.querySelector('.nav-pane-tag')?.textContent, '主')
+  assert.equal(conv1Primary.querySelector('.nav-pane-tag')?.textContent, 'Main')
   assert.ok(conv40Primary.className.includes('nav-item-split'))
   assert.ok(!conv40Primary.className.includes('nav-item-active'))
   assert.ok(!conv40Primary.className.includes('nav-item-focused'))
   assert.equal(conv40Primary.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
-  assert.equal(conv40Primary.querySelector('.nav-pane-tag')?.textContent, '分')
+  assert.equal(conv40Primary.querySelector('.nav-pane-tag')?.textContent, 'Split')
 
   // 2) 焦点切到分屏：会话 40 切换为 .nav-item-active.nav-item-focused，会话 1 切换为 .nav-item-split；「主」「分」微标位置不变
   await act(async () => {
@@ -426,10 +426,10 @@ test('Sidebar 分屏协同展开与焦点高亮：双不同智能体均展开，
   assert.ok(conv1Split.className.includes('nav-item-split'))
   assert.ok(!conv1Split.className.includes('nav-item-active'))
   assert.ok(!conv1Split.className.includes('nav-item-focused'))
-  assert.equal(conv1Split.querySelector('.nav-pane-tag')?.textContent, '主')
+  assert.equal(conv1Split.querySelector('.nav-pane-tag')?.textContent, 'Main')
   assert.ok(conv40Split.className.includes('nav-item-active'))
   assert.ok(conv40Split.className.includes('nav-item-focused'))
   assert.equal(conv40Split.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
-  assert.equal(conv40Split.querySelector('.nav-pane-tag')?.textContent, '分')
+  assert.equal(conv40Split.querySelector('.nav-pane-tag')?.textContent, 'Split')
 })
 

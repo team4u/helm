@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 /**
- * Dev-time Hub launcher: runs the packages/hub/src/main.ts sources directly via tsx.
+ * development phase Hub start:tsx direct run packages/hub/src/main.ts source code.
  *
- * Why it exists: hub sources import @helm/kernel / @helm/plugins by package name; at
- * tsx runtime the tsconfig.dev.json paths must resolve both to sources, matching the
- * repo's single-module-identity convention of running sources for dev/test (a dual
- * dist/source identity silently corrupts things like instanceof errors mapping to 500s).
- * Inline env vars in npm scripts are not cross-platform, so this script injects them
- * uniformly and spawns. Build artifacts (hub dist) are unaffected: tsc does not apply
- * dev paths, package-name imports still land in dist.
+ * Why store in:hub source code with package name import @helm/kernel / @helm/plugins;tsx run phase must via
+ * tsconfig.dev.json  paths two parse to source code, and repositorydev/test one rule run source code
+ * single module identity convention consistent (dist and source double identity will let instanceof error mapping into 500 etc.
+ * static default wrong chaotic).npm scripts inline environment variable do not across platform, reason by this script unify inject and spawn.
+ * build artifact (hub dist) do not subject to affect:tsc must not use dev paths, package name import per common dist.
  */
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -24,7 +22,7 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.tsx;
 const tsxCli = path.resolve(path.dirname(pkgPath), bin ?? 'dist/cli.mjs');
 if (!existsSync(tsxCli)) {
-  console.error(`[run-hub] local tsx CLI not found: ${tsxCli} (run pnpm install first)`);
+  console.error(`[run-hub] not found local tsx CLI: ${tsxCli}(please first pnpm install)`);
   process.exit(1);
 }
 

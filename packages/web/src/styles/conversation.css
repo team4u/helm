@@ -759,7 +759,7 @@ pre {
 }
 
 /* 语法高亮：与 pi 同源的语义色相映射（蓝=关键字、黄=函数、紫=类型、
-   青=变量、橙=字符串、绿=数字、灰=注释标点） */
+   blue=variables, orange=strings, green=numbers, gray=comments/punctuation) */
 .hljs-comment, .hljs-quote { color: var(--code-token-comment); font-style: italic; }
 .hljs-keyword, .hljs-selector-tag, .hljs-name { color: var(--code-token-keyword); }
 .hljs-title, .hljs-section { color: var(--code-token-title); font-weight: 600; }

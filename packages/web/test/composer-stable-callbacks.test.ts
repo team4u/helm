@@ -216,7 +216,7 @@ test('上传完成以活草稿同步：await 后旧渲染快照文本不回灌�
         attachments: api.submits[0]!.payload.attachments,
       },
       { text: 'hello world', origin: 'human', attachments: ['art-1'] },
-      '发送携带完整文本与已上传附件',
+      '发送携带完整文本与已Uploaded attachment',
     )
   } finally {
     api.restore()
@@ -299,7 +299,7 @@ test('切 A→B 后 B 草稿全新：prefill 回填正常落地，onlyIfEmpty �
     assert.equal(app.ta().value, 'B 引导词', '非空草稿不被覆盖')
     assert.equal(notices.length, 1)
     assert.equal(notices[0]!.conversationId, 2, '拒绝警告归属当前会话 B')
-    assert.match(String(notices[0]!.title), /请先处理当前草稿/)
+    assert.match(String(notices[0]!.title), /Handle the current draft before picking a starter/)
     // 切回 A：全新草稿，无 A 旧文与 B 残留
     app.show('composer-1', convA)
     assert.equal(app.ta().value, '', '切回 A 同样是全新草稿（按会话 key 重挂）')
@@ -320,7 +320,7 @@ test('起始环境条阻塞态不因无关重渲染循环：blocker 回调出口
     assert.notEqual(envBar, null, '空会话展示起始环境条')
     // 修改 cwd 草稿 → dirty → blocker={blocked:true} 每渲染新对象：
     // 若 onBlockerChange 身份不稳定，SessionEnvBar 的 blocker effect 将每 render 重跑并循环
-    const cwdInput = envBar!.querySelector<HTMLInputElement>('input[aria-label="会话工作目录"]')!
+    const cwdInput = envBar!.querySelector<HTMLInputElement>('input[aria-label="Conversation working directory"]')!
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
       const tracker = (cwdInput as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker

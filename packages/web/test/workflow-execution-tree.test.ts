@@ -608,6 +608,8 @@ function makeSpyCtx(): SpyCtx {
     getPluginDoc: async () => undefined,
     conversationId: 1,
     theme: 'dark',
+    locale: 'en' as const,
+    translate: (text) => (typeof text === 'string' ? text : ''),
     drawerCalls,
   }
 }

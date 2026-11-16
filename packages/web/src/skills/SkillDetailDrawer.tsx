@@ -139,18 +139,18 @@ export function SkillDetailDrawer({
         <DialogContent
           className="primary-drawer-content skill-drawer-content"
           role="dialog"
-          aria-label={skill ? `${skill.name || skill.id} 技能详情` : '技能详情'}
+          aria-label={skill ? `${skill.name || skill.id} skill details` : 'Skill details'}
         >
-          {/* 抽屉顶部头部 */}
+          {/* Drawer top header */}
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
                   <DialogTitle className="primary-drawer-title break-word">
-                    {skill?.name || skill?.id || '技能详情'}
+                    {skill?.name || skill?.id || 'Skill details'}
                   </DialogTitle>
                   {sourceBadge && (
-                    <span className={badgeClass} title={`来源：${sourceBadge.label}`}>
+                    <span className={badgeClass} title={`Source: ${sourceBadge.label}`}>
                       {sourceBadge.label}
                     </span>
                   )}
@@ -161,7 +161,7 @@ export function SkillDetailDrawer({
                   </div>
                 )}
                 {skill?.source === 'agents' && (
-                  <div className="text-subtle">机器级共享根</div>
+                  <div className="text-subtle">Machine-level shared root</div>
                 )}
               </div>
             </div>
@@ -169,23 +169,23 @@ export function SkillDetailDrawer({
               <button
                 type="button"
                 className="btn btn-ghost btn-icon-sm"
-                aria-label="关闭"
-                title="关闭"
+                aria-label="Close"
+                title="Close"
               >
                 <HelmIcon name="x" size={14} />
               </button>
             </DialogClose>
           </div>
 
-          {/* 抽屉主体：外层不滚动，唯一滚动容器为阅读区 */}
+          {/* Drawer body: outer area does not scroll; the reader is the only scroll container */}
           <div className="primary-drawer-body">
             {!skill ? (
-              <div className="empty-state">未选择技能</div>
+              <div className="empty-state">No skill selected</div>
             ) : (
               <>
-                {/* 紧凑文件阅读器：单行工具条 + 单一滚动阅读区 */}
+                {/* Compact file reader: single toolbar row + single scrollable reader */}
                 <div className="skill-reader">
-                  <div className="skill-reader-toolbar" role="group" aria-label="技能文件阅读工具条">
+                  <div className="skill-reader-toolbar" role="group" aria-label="Skill file reader toolbar">
                     <div className="skill-reader-file">
                       {files.length > 1 ? (
                         <Select
@@ -195,7 +195,7 @@ export function SkillDetailDrawer({
                           value={activePath}
                           options={fileOptions}
                           onChange={(ev) => setActivePath(ev.target.value)}
-                          aria-label="选择技能文件"
+                          aria-label="Choose a skill file"
                           prefixIcon="file-text"
                         />
                       ) : (
@@ -210,70 +210,70 @@ export function SkillDetailDrawer({
                       {loading && (
                         <span className="skill-reader-loading text-subtle">
                           <HelmIcon name="loader" size={12} className="spin" />
-                          <span>加载中…</span>
+                          <span>Loading…</span>
                         </span>
                       )}
                       {isMarkdown && (
                         <div
                           className="segmented-control skill-reader-mode"
                           role="group"
-                          aria-label="阅读模式"
+                          aria-label="Reading mode"
                         >
                           <button
                             type="button"
                             className="segmented-control-btn"
                             aria-pressed={richText}
-                            title="Markdown 富文本阅读"
+                            title="Rich Markdown reading"
                             onClick={() => setViewMode('rich')}
                           >
                             <HelmIcon name="eye" size={12} />
-                            <span>富文本</span>
+                            <span>Rich text</span>
                           </button>
                           <button
                             type="button"
                             className="segmented-control-btn"
                             aria-pressed={viewMode === 'source'}
-                            title="查看等宽源码"
+                            title="View monospace source"
                             onClick={() => setViewMode('source')}
                           >
                             <HelmIcon name="code" size={12} />
-                            <span>源码</span>
+                            <span>Source</span>
                           </button>
                         </div>
                       )}
                       <span
                         className="badge badge-neutral tabular-nums skill-reader-index"
-                        title={`第 ${activeIndex + 1} 个文件，共 ${files.length} 个`}
+                        title={`File ${activeIndex + 1} of ${files.length}`}
                       >
                         {`${activeIndex + 1}/${files.length}`}
                       </span>
-                      <span className="skill-reader-lines tabular-nums" title={`${activeDisplayPath} 总行数`}>
-                        {lineCount > 0 ? `${lineCount} 行` : '--'}
+                      <span className="skill-reader-lines tabular-nums" title={`${activeDisplayPath} total lines`}>
+                        {lineCount > 0 ? `${lineCount} lines` : '--'}
                       </span>
                       <CopyButton
                         className="btn btn-ghost btn-sm skill-reader-copy"
                         text={content}
-                        label="复制"
+                        label="Copy"
                       />
                     </div>
                   </div>
 
-                  {/* 单一滚动阅读区：元数据表格与正文同处一个内容流，随滚动同流阅读 */}
+                  {/* Single scrollable reader: metadata table and body share one content flow */}
                   <div className="skill-reader-scroll">
-                    {/* 正文阅读区 */}
+                    {/* Body reading area */}
                     <div className="skill-reader-body" data-mode={richText ? 'rich' : 'source'}>
                       {error ? (
                         <div className="callout callout-error" role="alert">
                           <HelmIcon name="alert-circle" size={13} />
-                          <span className="callout-text">{`读取失败：${error}`}</span>
+                          <span className="callout-text">{`Failed to read: ${error}`}</span>
                         </div>
                       ) : loading && content === '' ? (
                         <div className="skill-reader-placeholder text-subtle">
                           <HelmIcon name="loader" size={13} className="spin" />
-                          <span>正在读取技能内容…</span>
+                          <span>Reading skill content…</span>
                         </div>
                       ) : content === '' ? (
-                        <div className="skill-reader-placeholder text-subtle">文件内容为空</div>
+                        <div className="skill-reader-placeholder text-subtle">The file is empty</div>
                       ) : richText ? (
                         <div className="skill-reader-doc selectable">
                           <MarkdownView text={displayText} />

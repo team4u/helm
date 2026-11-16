@@ -1,20 +1,20 @@
 /**
- * 外部插件包管理器专项测试（parser / 受管目录事务 / PluginHost 集成 / HTTP）。
+ * external plugin package manage dedicated items test (parser / managed directory transaction / PluginHost collection into / HTTP).
  *
- * 组合纪律：不依赖真实网络——npm/git 路径经注入 fake runner 模拟命令成败；
- * local 路径用真实临时目录 + 真实拷贝。doctor 全链与 PluginHost 注册为真实
- * 实现（真实 TS 转译 + 临时 PluginHost 注册 + client 编译）。
+ * combine discipline: independent of real network - -npm/git path via inject fake runner simulated command into failed;
+ * local path use real temp directory + real copy.doctor all chain and PluginHost register is real
+ * implement (real TS transpile + temporary PluginHost register + client compile).
  *
- * 覆盖：
- * - parsePluginSource：npm/git(短写/SCP/https/@ref/#subdir)/local(绝对/相对)
- *   规范化与拒绝（file://、http://、git+、未知协议、builtin:、空白、裸名）；
- * - 路径安全：安装目标越界、local 自安装（受管树内部）、safeName；
- * - staging 失败清理：fake runner 失败后 .staging 无残留、无半产物；
- * - local install：拷贝语义（非 symlink）、remove 不删用户源目录；
- * - install/update/remove 全链（真实 doctor + 真实 PluginHost 注册）；
- * - HTTP 路由：install body 校验、501 兜底、update/remove 端点。
+ * override:
+ * - parsePluginSource:npm/git(short write/SCP/https/@ref/#subdir)/local(absolute/each other for)
+ *   specification and reject (file://,http://,git+, unknown protocol,builtin:, whitespace, bare name);
+ * - path security: install target out of bounds,local self install (managed tree internal),safeName;
+ * - staging failed clean up:fake runner failed after .staging no residue, without half artifact;
+ * - local install: copy semantics (non- symlink),remove do not delete user source directory;
+ * - install/update/remove all chain (real doctor + real PluginHost register);
+ * - HTTP routing:install body validate,501 fall back,update/remove end point.
  *
- * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
+ * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock; command add total timeout.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -32,7 +32,7 @@ import { ConfigService } from '../src/services/config.js'
 // parser
 // ---------------------------------------------------------------------------
 
-test('parsePluginSource：npm 规范化与拒绝', { timeout: 60_000 }, () => {
+test('parsePluginSource:npm specification and reject', { timeout: 60_000 }, () => {
   const npm = parsePluginSource('npm:helm-plugin-foo@^1.2.0', '/wd')
   assert.equal(npm.kind, 'npm')
   assert.ok(npm.kind === 'npm')
@@ -42,11 +42,11 @@ test('parsePluginSource：npm 规范化与拒绝', { timeout: 60_000 }, () => {
   assert.ok(bare.kind === 'npm' && bare.spec === '@scope/pkg')
 
   for (const bad of ['npm:', 'npm: ', 'npm:builtin:evil', 'builtin:profile', 'builtin%3Aprofile', '', '  ', 'file:///tmp/x', 'http://github.com/u/r', 'git+https://x.example/r', 'ftp://x/r', 'my-unknown-proto:foo', 'bare-name']) {
-    assert.throws(() => parsePluginSource(bad, '/wd'), (err: unknown) => err instanceof HelmError && err.status === 400, `应拒绝: ${bad}`)
+    assert.throws(() => parsePluginSource(bad, '/wd'), (err: unknown) => err instanceof HelmError && err.status === 400, `should reject: ${bad}`)
   }
 })
 
-test('parsePluginSource：git 短写 / SCP / https 与 @ref / #subdirectory', { timeout: 60_000 }, () => {
+test('parsePluginSource:git short write / SCP / https and @ref / #subdirectory', { timeout: 60_000 }, () => {
   const short = parsePluginSource('git:github.com/user/repo@v1', '/wd')
   assert.ok(short.kind === 'git')
   if (short.kind !== 'git') return
@@ -87,27 +87,27 @@ test('parsePluginSource：git 短写 / SCP / https 与 @ref / #subdirectory', { 
   assert.equal(gitSub.subdirectory, 'sub/dir')
 
   for (const bad of ['git:', 'git:repo@', 'git:repo#', 'git:repo#sub#more', 'git:repo#../escape', 'https://', 'https://github.com/user/repo#sub#more#extra', 'git:repo@ref#sub#x']) {
-    assert.throws(() => parsePluginSource(bad, '/wd'), (err: unknown) => err instanceof HelmError, `应拒绝: ${bad}`)
+    assert.throws(() => parsePluginSource(bad, '/wd'), (err: unknown) => err instanceof HelmError, `should reject: ${bad}`)
   }
 })
 
-test('parsePluginSource：git repo 严格校验（拒绝路径注入与本地相对路径）', { timeout: 60_000 }, () => {
-  // 合法三种形态（ssh:// 属未知传输协议，不放行；SCP 覆盖 SSH 场景）
+test('parsePluginSource:git repo strictly validate (reject path inject and local relative path)', { timeout: 60_000 }, () => {
+  // legal three form (ssh:// belong unknown transfer protocol, do not let through;SCP override SSH scenario)
   for (const ok of ['git:https://github.com/user/repo.git', 'git:github.com/user/repo', 'git:git@github.com:user/repo.git']) {
     const parsed = parsePluginSource(ok, '/wd')
-    assert.ok(parsed.kind === 'git', `应接受: ${ok}`)
+    assert.ok(parsed.kind === 'git', `should accept: ${ok}`)
   }
-  // 拒绝：../ 越界、反斜杠、NUL、绝对路径、盘符、明文 http、file:、ssh://、未知 scheme、空白、裸本地路径
+  // reject:../ out of bounds, backslash,NUL, absolute path, symbol, plaintext http,file:,ssh://, unknown scheme, whitespace, bare local path
   for (const bad of ['git:../evil', 'git:..\\..\\evil', 'git:repo/../../evil', 'git:/abs/path', 'git:C:\\repo', 'git:\\\\srv\\share', 'git:http://plain.example/r', 'git:file:///tmp/r', 'git:ssh://git@host:22/path', 'git:repo with space', 'git:local-dir', 'git:./relative']) {
     assert.throws(
       () => parsePluginSource(bad, '/wd'),
       (err: unknown) => err instanceof HelmError && err.status === 400,
-      `应拒绝: ${bad}`,
+      `should reject: ${bad}`,
     )
   }
 })
 
-test('parsePluginSource：local 绝对/相对路径解析', { timeout: 60_000 }, () => {
+test('parsePluginSource:local absolute/relative path parse', { timeout: 60_000 }, () => {
   const abs = parsePluginSource('/abs/plugins/foo', '/wd')
   assert.ok(abs.kind === 'local')
   if (abs.kind !== 'local') return
@@ -125,17 +125,17 @@ test('parsePluginSource：local 绝对/相对路径解析', { timeout: 60_000 },
 })
 
 // ---------------------------------------------------------------------------
-// 测试基建：fake runner + 真实 PluginHost（经 host-adapter 面向接口）
+// test base create:fake runner + real PluginHost(via host-adapter for interface)
 // ---------------------------------------------------------------------------
 
-/** 最小合法外部插件源（约定入口形态）。 */
+/** most small legal external plugin source (convention entry form). */
 const PLUGIN_SRC = (id: string, version = '0.1.0') => `export default {
   id: '${id}',
   version: '${version}',
   definePlugin(ctx) {
     ctx.action({
       id: 'ping',
-      description: '探针',
+      description: 'probe needle',
       inputSchema: { type: 'object', additionalProperties: false },
       outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
       handler: () => ({ pong: true }),
@@ -151,13 +151,13 @@ interface TestEnv {
   manager: PluginPackageManager
   hostCalls: string[]
   registered: Map<string, { enabled: boolean }>
-  /** 模拟在途任务：命中 id 的 assertManagedPluginUpdateSafe 抛 409。 */
+  /** simulated in-flight task: hit id  assertManagedPluginUpdateSafe throw 409. */
   updateBlockedIds: Set<string>
-  /** 模拟注册失败：命中 id 的 registerManagedPlugin 抛错。 */
+  /** simulated register failed: hit id  registerManagedPlugin throws. */
   registerFailIds: Set<string>
-  /** 模拟启用失败：命中 id 的 enableManagedPlugin 抛错。 */
+  /** simulated enable failed: hit id  enableManagedPlugin throws. */
   enableFailIds: Set<string>
-  /** 模拟 purge 落盘失败：命中 id 的 purgePluginPersistentData 抛错。 */
+  /** simulated purge failed: hit id  purgePluginPersistentData throws. */
   purgeFailIds: Set<string>
   close(): void
 }
@@ -178,7 +178,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
       hostCalls.push(`register:${dir}`)
       const id = readPluginIdFromDir(dir)
       if (registerFailIds.has(id)) {
-        throw new HelmError('plugin_register_failed_simulated', `模拟注册失败：${id}`, 500, { pluginId: id })
+        throw new HelmError('plugin_register_failed_simulated', `simulated register failed:${id}`, 500, { pluginId: id })
       }
       registered.set(id, { enabled: false })
       summaries.set(id, { id, version: readPluginVersionFromDir(dir), enabled: false })
@@ -187,9 +187,9 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     async enableManagedPlugin(pluginId: string) {
       hostCalls.push(`enable:${pluginId}`)
       const entry = registered.get(pluginId)
-      if (!entry) throw new HelmError('unknown_plugin', `未注册的插件：${pluginId}`, 404, { pluginId })
+      if (!entry) throw new HelmError('unknown_plugin', `not registered plugin:${pluginId}`, 404, { pluginId })
       if (enableFailIds.has(pluginId)) {
-        throw new HelmError('plugin_enable_failed_simulated', `模拟启用失败：${pluginId}`, 500, { pluginId })
+        throw new HelmError('plugin_enable_failed_simulated', `simulated enable failed:${pluginId}`, 500, { pluginId })
       }
       entry.enabled = true
       summaries.set(pluginId, { ...(summaries.get(pluginId) ?? { id: pluginId }), enabled: true })
@@ -198,17 +198,17 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     async updateManagedPlugin(pluginId: string) {
       hostCalls.push(`update:${pluginId}`)
       const entry = registered.get(pluginId)
-      if (!entry) throw new HelmError('unknown_plugin', `未注册的插件：${pluginId}`, 404, { pluginId })
-      // 真实适配器经 reload 重读源目录；这里同步镜像为受管目录当前清单
+      if (!entry) throw new HelmError('unknown_plugin', `not registered plugin:${pluginId}`, 404, { pluginId })
+      // real adapt via reload heavy read source directory; this in sync mirror is managed directory when before manifest
       summaries.set(pluginId, { id: pluginId, version: readPluginVersionFromDir(join(dataDir, 'plugins', pluginId)), enabled: entry.enabled })
       return { summary: toSummary(summaries, pluginId) }
     },
     assertManagedPluginUpdateSafe(pluginId: string) {
       hostCalls.push(`assert-safe:${pluginId}`)
       const entry = registered.get(pluginId)
-      if (!entry) throw new HelmError('unknown_plugin', `未注册的插件：${pluginId}`, 404, { pluginId })
+      if (!entry) throw new HelmError('unknown_plugin', `not registered plugin:${pluginId}`, 404, { pluginId })
       if (updateBlockedIds.has(pluginId)) {
-        throw new HelmError('plugin_has_live_tasks', `插件 ${pluginId} 存在在途任务，拒绝更新切换`, 409, { pluginId })
+        throw new HelmError('plugin_has_live_tasks', `plugin ${pluginId} store in in-flight task, reject update switch`, 409, { pluginId })
       }
     },
     async removeManagedPlugin(pluginId: string) {
@@ -222,7 +222,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     async purgePluginPersistentData(pluginId: string) {
       hostCalls.push(`purge:${pluginId}`)
       if (purgeFailIds.has(pluginId)) {
-        throw new HelmError('store_flush_failed_simulated', `模拟 purge 落盘失败：${pluginId}`, 500, { pluginId })
+        throw new HelmError('store_flush_failed_simulated', `simulated purge failed:${pluginId}`, 500, { pluginId })
       }
     },
     listSummaries: () => [...summaries.values()].map((s) => toSummary(summaries, s.id)),
@@ -258,7 +258,7 @@ function readPluginIdFromDir(dir: string): string {
     const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { id?: string }
     if (parsed.id !== undefined) return parsed.id
   }
-  throw new Error('测试插件目录缺 plugin.json id')
+  throw new Error('test plugin directory missing plugin.json id')
 }
 
 function readPluginVersionFromDir(dir: string): string {
@@ -284,7 +284,7 @@ function toSummary(summaries: Map<string, { id: string; version?: string; enable
   }
 }
 
-/** 构造 local 插件源目录（plugin.json + index.mjs）。 */
+/** construct local plugin source directory (plugin.json + index.mjs). */
 function writeLocalPlugin(parent: string, id: string, version = '0.1.0'): string {
   const dir = join(parent, id)
   mkdirSync(dir, { recursive: true })
@@ -293,13 +293,13 @@ function writeLocalPlugin(parent: string, id: string, version = '0.1.0'): string
   return dir
 }
 
-/** fake runner：git clone 成功产出完整仓库（含 .git 排除项验证）。 */
+/** fake runner:git clone succeeded produce out complete repository (contains .git exclude items verify). */
 function gitCloneRunner(repoLayout: (repoDir: string) => void): PackageRunner {
   return async (cmd, args) => {
     if (cmd === 'git' && args[0] === 'clone') {
       const target = args[args.length - 1]
       if (typeof target !== 'string' || target.length === 0) {
-        return { code: 1, stdout: '', stderr: 'fake runner: clone 目标缺失' }
+        return { code: 1, stdout: '', stderr: 'fake runner: clone target missing' }
       }
       mkdirSync(target, { recursive: true })
       repoLayout(target)
@@ -316,51 +316,51 @@ const FAIL_RUNNER: PackageRunner = async (_cmd, _args) => ({
 })
 
 // ---------------------------------------------------------------------------
-// local install / remove 事务
+// local install / remove transaction
 // ---------------------------------------------------------------------------
 
-test('local install：拷贝进受管目录（非 symlink）、记录持久化、remove 不删用户源', { timeout: 60_000 }, async () => {
+test('local install: copy enter managed directory (non- symlink), record persist,remove do not delete user source', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const userSrcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-usersrc-'))
     const userSrc = writeLocalPlugin(userSrcParent, 'demo-local')
-    writeFileSync(join(userSrc, 'user-notes.md'), '用户自有文件')
+    writeFileSync(join(userSrc, 'user-notes.md'), 'user self has file')
 
     const result = await env.manager.install(userSrc, { enable: true })
     assert.equal(result.record.pluginId, 'demo-local')
     assert.ok(result.record.source.kind === 'local')
     assert.equal(result.summary.enabled, true)
-    assert.ok(result.summary.managed, 'summary 应携带 managed 元数据')
+    assert.ok(result.summary.managed, 'summary should carry managed metadata')
     assert.equal(result.summary.managed?.installId, result.record.id)
 
-    // 受管目录存在且为真实目录（非 symlink）
+    // managed directory store in and is real directory (non- symlink)
     const managed = join(env.dataDir, 'plugins', 'demo-local')
-    assert.ok(existsSync(managed), '受管目录应存在')
+    assert.ok(existsSync(managed), 'managed directory should store in')
     assert.ok(existsSync(join(managed, 'index.mjs')))
-    // 记录持久化于 config.json
+    // record persist at config.json
     const config = JSON.parse(readFileSync(join(env.dataDir, 'config.json'), 'utf8')) as { pluginPackages: Record<string, unknown> }
     assert.ok(config.pluginPackages['demo-local'])
-    // remove：只删受管副本与记录，用户源完好
+    // remove: only delete managed copy and record, user source completely well
     const removed = await env.manager.remove('demo-local')
     assert.equal(removed.pluginId, 'demo-local')
     assert.equal(removed.wasEnabled, true)
-    // 卸载含持久化文档数据关联清理：注销实例之后、删目录之前
+    // unload contains persist document data related clean up: deregister instance after, delete directory before
     const removeAt = env.hostCalls.indexOf('remove:demo-local')
     const purgeAt = env.hostCalls.indexOf('purge:demo-local')
-    assert.ok(removeAt >= 0, '应调用 removeManagedPlugin')
-    assert.ok(purgeAt > removeAt, '应调用 purgePluginPersistentData 且晚于实例注销')
-    assert.ok(!existsSync(managed), '受管目录应被删除')
-    assert.ok(existsSync(join(userSrc, 'index.mjs')), '用户源目录必须完好')
-    assert.ok(existsSync(join(userSrc, 'user-notes.md')), '用户自有文件必须完好')
+    assert.ok(removeAt >= 0, 'should invoke removeManagedPlugin')
+    assert.ok(purgeAt > removeAt, 'should invoke purgePluginPersistentData and later than instance deregister')
+    assert.ok(!existsSync(managed), 'managed directory should by delete')
+    assert.ok(existsSync(join(userSrc, 'index.mjs')), 'user source directory must completely well')
+    assert.ok(existsSync(join(userSrc, 'user-notes.md')), 'user self has file must completely well')
     const after = JSON.parse(readFileSync(join(env.dataDir, 'config.json'), 'utf8')) as { pluginPackages?: Record<string, unknown> }
-    assert.equal(after.pluginPackages?.['demo-local'], undefined, '记录应被删除')
+    assert.equal(after.pluginPackages?.['demo-local'], undefined, 'record should by delete')
     rmSync(userSrcParent, { recursive: true, force: true })
   } finally {
     env.close()
   }
 })
 
-test('staging 失败清理：git clone 失败后不留半产物', { timeout: 60_000 }, async () => {
+test('staging failed clean up:git clone failed after do not half artifact', { timeout: 60_000 }, async () => {
   const env = makeEnv(FAIL_RUNNER)
   try {
     await assert.rejects(
@@ -369,15 +369,15 @@ test('staging 失败清理：git clone 失败后不留半产物', { timeout: 60_
     )
     const staging = join(env.dataDir, 'plugins', '.staging')
     if (existsSync(staging)) {
-      assert.deepEqual(readdirSync(staging), [], 'staging 应无残留')
+      assert.deepEqual(readdirSync(staging), [], 'staging should no residue')
     }
-    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'broken-repo')), '不应有半安装目录')
+    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'broken-repo')), 'must not has half install directory')
   } finally {
     env.close()
   }
 })
 
-test('doctor 失败：损坏插件不进入受管目录、staging 清理', { timeout: 60_000 }, async () => {
+test('doctor failed: corrupt plugin does not enter managed directory,staging clean up', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const badParent = mkdtempSync(join(tmpdir(), 'helm-pkg-bad-'))
@@ -389,7 +389,7 @@ test('doctor 失败：损坏插件不进入受管目录、staging 清理', { tim
       env.manager.install(badDir),
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_doctor_failed',
     )
-    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'bad-plugin')), '坏插件不得进入受管目录')
+    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'bad-plugin')), 'broken plugin must not enter managed directory')
     const staging = join(env.dataDir, 'plugins', '.staging')
     if (existsSync(staging)) assert.deepEqual(readdirSync(staging), [])
     rmSync(badParent, { recursive: true, force: true })
@@ -398,7 +398,7 @@ test('doctor 失败：损坏插件不进入受管目录、staging 清理', { tim
   }
 })
 
-test('git install：ref/subdirectory 布局、node_modules/.git 排除', { timeout: 60_000 }, async () => {
+test('git install:ref/subdirectory layout,node_modules/.git exclude', { timeout: 60_000 }, async () => {
   const env = makeEnv(
     gitCloneRunner((repo) => {
       const sub = join(repo, 'packages', 'inner-plugin')
@@ -421,14 +421,14 @@ test('git install：ref/subdirectory 布局、node_modules/.git 排除', { timeo
     assert.equal(result.record.source.subdirectory, 'packages/inner-plugin')
     const managed = join(env.dataDir, 'plugins', 'git-plugin')
     assert.ok(existsSync(join(managed, 'index.mjs')))
-    assert.ok(!existsSync(join(managed, 'node_modules')), 'node_modules 应被排除')
-    assert.ok(!existsSync(join(managed, '.git')), '.git 应被排除')
+    assert.ok(!existsSync(join(managed, 'node_modules')), 'node_modules should by exclude')
+    assert.ok(!existsSync(join(managed, '.git')), '.git should by exclude')
   } finally {
     env.close()
   }
 })
 
-test('update：无记录 404；local 源编辑后 update 重同步版本推进', { timeout: 60_000 }, async () => {
+test('update: without record 404;local source edit after update heavy sync version push enter', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     await assert.rejects(
@@ -438,7 +438,7 @@ test('update：无记录 404；local 源编辑后 update 重同步版本推进',
     const userSrc = writeLocalPlugin(env.cwd, 'up-plugin', '1.0.0')
     const installed = await env.manager.install(userSrc)
     assert.equal(installed.record.version, '1.0.0')
-    // 用户编辑源码升版
+    // user edit source code rise edition
     writeFileSync(join(userSrc, 'plugin.json'), JSON.stringify({ id: 'up-plugin', version: '2.0.0', main: 'index.mjs' }, null, 2))
     writeFileSync(join(userSrc, 'index.mjs'), PLUGIN_SRC('up-plugin', '2.0.0'))
     const updated = await env.manager.update('up-plugin')
@@ -446,44 +446,44 @@ test('update：无记录 404；local 源编辑后 update 重同步版本推进',
     assert.equal(updated.previousVersion, '1.0.0')
     assert.equal(updated.changed, true)
     const managedManifest = JSON.parse(readFileSync(join(env.dataDir, 'plugins', 'up-plugin', 'plugin.json'), 'utf8')) as { version: string }
-    assert.equal(managedManifest.version, '2.0.0', '受管目录应重同步到新版本')
+    assert.equal(managedManifest.version, '2.0.0', 'managed directory should heavy sync to new version')
   } finally {
     env.close()
   }
 })
 
-test('remove：purge 落盘失败显式拒绝，目录与安装记录保留可重试', { timeout: 60_000 }, async () => {
+test('remove:purge failed explicit reject, directory and install record keep can retry', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const src = writeLocalPlugin(env.cwd, 'purge-fail-plugin')
     await env.manager.install(src)
     const managed = join(env.dataDir, 'plugins', 'purge-fail-plugin')
-    assert.ok(existsSync(managed), '前置：安装目录存在')
+    assert.ok(existsSync(managed), 'pre-: install directory store in')
 
-    // purge 落盘失败：remove 显式拒绝，不得继续删目录与安装记录
+    // purge failed:remove explicit reject, must not continue delete directory and install record
     env.purgeFailIds.add('purge-fail-plugin')
     await assert.rejects(
       env.manager.remove('purge-fail-plugin'),
       (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed_simulated',
     )
-    assert.ok(existsSync(managed), 'purge 落盘失败时受管目录必须保留')
-    assert.ok(env.store.getRecord('purge-fail-plugin'), 'purge 落盘失败时安装记录必须保留')
-    // 实例已注销：重试时 removeManagedPlugin 幂等容忍
-    assert.ok(!env.registered.has('purge-fail-plugin'), '首次失败已注销实例')
+    assert.ok(existsSync(managed), 'purge on failure managed directory must keep')
+    assert.ok(env.store.getRecord('purge-fail-plugin'), 'purge on failure install record must keep')
+    // instance deregistered: retry when removeManagedPlugin idempotent contain tolerate
+    assert.ok(!env.registered.has('purge-fail-plugin'), 'first time failed deregistered instance')
 
-    // 故障恢复后重试：remove 完整成功
+    // fault restore after retry:remove complete succeeded
     env.purgeFailIds.delete('purge-fail-plugin')
     const removed = await env.manager.remove('purge-fail-plugin')
     assert.equal(removed.pluginId, 'purge-fail-plugin')
-    assert.equal(removed.wasEnabled, false, '重试时实例已注销，wasEnabled 如实为 false')
-    assert.ok(!existsSync(managed), '重试成功后受管目录删除')
-    assert.equal(env.store.getRecord('purge-fail-plugin'), undefined, '重试成功后安装记录删除')
+    assert.equal(removed.wasEnabled, false, 'retry when instance deregistered,wasEnabled such as is false')
+    assert.ok(!existsSync(managed), 'retry after success managed directory delete')
+    assert.equal(env.store.getRecord('purge-fail-plugin'), undefined, 'retry after success install record delete')
   } finally {
     env.close()
   }
 })
 
-test('remove：builtin 保护与未受管插件 404', { timeout: 60_000 }, async () => {
+test('remove:builtin protect and not managed plugin 404', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     await assert.rejects(
@@ -499,7 +499,7 @@ test('remove：builtin 保护与未受管插件 404', { timeout: 60_000 }, async
   }
 })
 
-test('路径安全：local 自安装（受管树内部）拒绝、install 后记录 installPath 在受管树内', { timeout: 60_000 }, async () => {
+test('path security:local self install (managed tree internal) reject,install after record installPath in managed tree inside', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const inside = join(env.dataDir, 'plugins', 'inside-plugin')
@@ -515,7 +515,7 @@ test('路径安全：local 自安装（受管树内部）拒绝、install 后记
   }
 })
 
-test('update 安全预检：在途任务 409 拒绝且旧目录内容不变', { timeout: 60_000 }, async () => {
+test('update security preflight: in-flight task 409 reject and old directory content do not change', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const userSrc = writeLocalPlugin(env.cwd, 'busy-plugin', '1.0.0')
@@ -523,17 +523,17 @@ test('update 安全预检：在途任务 409 拒绝且旧目录内容不变', { 
     assert.equal(installed.record.version, '1.0.0')
     const managed = join(env.dataDir, 'plugins', 'busy-plugin')
     const manifestBefore = readFileSync(join(managed, 'plugin.json'), 'utf8')
-    // 源码升级 + 模拟在途任务：update 必须在切换前拒绝，旧目录不动
+    // source code upgrade + simulated in-flight task:update must in switch before reject, old directory do not motion
     writeFileSync(join(userSrc, 'plugin.json'), JSON.stringify({ id: 'busy-plugin', version: '2.0.0', main: 'index.mjs' }, null, 2))
     env.updateBlockedIds.add('busy-plugin')
     await assert.rejects(
       env.manager.update('busy-plugin'),
       (err: unknown) => err instanceof HelmError && err.status === 409,
     )
-    assert.ok(env.hostCalls.includes('assert-safe:busy-plugin'), '应调用安全预检')
-    assert.equal(readFileSync(join(managed, 'plugin.json'), 'utf8'), manifestBefore, '旧目录内容必须完全不变')
-    assert.ok(!env.hostCalls.includes('update:busy-plugin'), '不得进入 reload 切换')
-    // 解除阻塞后 update 正常
+    assert.ok(env.hostCalls.includes('assert-safe:busy-plugin'), 'should invoke security preflight')
+    assert.equal(readFileSync(join(managed, 'plugin.json'), 'utf8'), manifestBefore, 'old directory content must fully do not change')
+    assert.ok(!env.hostCalls.includes('update:busy-plugin'), 'must not enter reload switch')
+    // solve except block after update normal
     env.updateBlockedIds.delete('busy-plugin')
     const updated = await env.manager.update('busy-plugin')
     assert.equal(updated.record.version, '2.0.0')
@@ -542,9 +542,9 @@ test('update 安全预检：在途任务 409 拒绝且旧目录内容不变', { 
   }
 })
 
-test('运行时依赖先于 doctor：带 package.json 的 local 插件依赖在 staging 内补装后 doctor 通过', { timeout: 60_000 }, async () => {
+test('runtime dependency first at doctor: carries package.json  local plugin dependency in staging inside patch install after doctor via', { timeout: 60_000 }, async () => {
   const depsInstalled: string[] = []
-  // runner：npm install 记录 cwd 并产出 node_modules；其余命令放行
+  // runner:npm install record cwd and produce out node_modules; the rest command let through
   const runner: PackageRunner = async (cmd, args, opts) => {
     if (cmd === 'npm' && args[0] === 'install') {
       depsInstalled.push(opts.cwd)
@@ -560,22 +560,22 @@ test('运行时依赖先于 doctor：带 package.json 的 local 插件依赖在 
     mkdirSync(src, { recursive: true })
     writeFileSync(join(src, 'plugin.json'), JSON.stringify({ id: 'deps-plugin', version: '0.1.0', main: 'index.mjs' }))
     writeFileSync(join(src, 'index.mjs'), PLUGIN_SRC('deps-plugin'))
-    // package.json 声明运行时依赖（doctor 导入入口时需要 node_modules 存在的形态）
+    // package.json declaration runtime dependency (doctor import entry when need to node_modules store in form)
     writeFileSync(join(src, 'package.json'), JSON.stringify({ name: 'deps-plugin', version: '0.1.0', main: 'index.mjs', dependencies: { leftpad: '^1.0.0' } }))
     const result = await env.manager.install(src)
     assert.equal(result.record.pluginId, 'deps-plugin')
-    // 依赖安装在 staging 副本内（非用户源目录）
-    assert.equal(depsInstalled.length, 1, 'install 路径应恰好执行一次依赖补装')
-    assert.ok(depsInstalled[0]!.includes('.staging'), '依赖补装必须发生在 staging 内')
-    assert.ok(!existsSync(join(src, 'node_modules')), '用户源目录不得被安装依赖')
-    assert.ok(existsSync(join(env.dataDir, 'plugins', 'deps-plugin', 'node_modules')), '受管目录应携带补装的依赖')
+    // dependency install in staging copy inside (non- user source directory)
+    assert.equal(depsInstalled.length, 1, 'install path should exactly execute once dependency patch install')
+    assert.ok(depsInstalled[0]!.includes('.staging'), 'dependency patch install must occur in staging inside')
+    assert.ok(!existsSync(join(src, 'node_modules')), 'user source directory must not by install dependency')
+    assert.ok(existsSync(join(env.dataDir, 'plugins', 'deps-plugin', 'node_modules')), 'managed directory should carry patch install dependency')
     rmSync(srcParent, { recursive: true, force: true })
   } finally {
     env.close()
   }
 })
 
-test('install 事务：注册失败删除新 target 回滚，不留未注册目录', { timeout: 60_000 }, async () => {
+test('install transaction: register failed delete new target rollback, do not not registered directory', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const src = writeLocalPlugin(env.cwd, 'rollback-plugin')
@@ -585,10 +585,10 @@ test('install 事务：注册失败删除新 target 回滚，不留未注册目�
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_install_failed',
     )
     const target = join(env.dataDir, 'plugins', 'rollback-plugin')
-    assert.ok(!existsSync(target), '注册失败后新 target 必须被删除')
-    assert.ok(!env.registered.has('rollback-plugin'), '不得残留已注册实例')
-    assert.equal(env.store.getRecord('rollback-plugin'), undefined, '不得残留记录')
-    // 解除失败后重装成功（残留已消，不阻挡）
+    assert.ok(!existsSync(target), 'register failed after new target must by delete')
+    assert.ok(!env.registered.has('rollback-plugin'), 'must not leftover registered instance')
+    assert.equal(env.store.getRecord('rollback-plugin'), undefined, 'must not leftover record')
+    // solve except failed after heavy install succeeded (leftover already consume, do not block)
     env.registerFailIds.delete('rollback-plugin')
     const ok = await env.manager.install(src)
     assert.equal(ok.record.pluginId, 'rollback-plugin')
@@ -597,23 +597,23 @@ test('install 事务：注册失败删除新 target 回滚，不留未注册目�
   }
 })
 
-test('install 重复安装防护：已受管记录 / 已注册实例 / 目标目录占用均 409', { timeout: 60_000 }, async () => {
+test('install duplicate install protect: already managed record / registered instance / target directory occupy all 409', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const src = writeLocalPlugin(env.cwd, 'dup-plugin')
     await env.manager.install(src)
-    // 同源重复安装：已有受管记录
+    // same source duplicate install: already has managed record
     await assert.rejects(
       env.manager.install(src),
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_already_installed' && err.status === 409,
     )
-    // 不同源但同 id：同样拒绝
+    // different source but same id: same reject
     const src2 = writeLocalPlugin(join(env.cwd, 'alt'), 'dup-plugin')
     await assert.rejects(
       env.manager.install(src2),
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_already_installed',
     )
-    // 目标目录占用：手工放置同名目录（无记录无注册）
+    // target directory occupy: manually work put placement same name directory (without record without register)
     const occupied = join(env.dataDir, 'plugins', 'occupied-plugin')
     mkdirSync(occupied, { recursive: true })
     writeFileSync(join(occupied, 'stale.txt'), 'residue')
@@ -622,30 +622,30 @@ test('install 重复安装防护：已受管记录 / 已注册实例 / 目标目
       env.manager.install(src3),
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_target_occupied' && err.status === 409,
     )
-    assert.equal(readFileSync(join(occupied, 'stale.txt'), 'utf8'), 'residue', '占用目录不得被删除')
+    assert.equal(readFileSync(join(occupied, 'stale.txt'), 'utf8'), 'residue', 'occupy directory must not by delete')
   } finally {
     env.close()
   }
 })
 
-test('install enable 失败：插件保持 disabled、enableError 事实正确、记录可重启加载', { timeout: 60_000 }, async () => {
+test('install enable failed: plugin keep disabled,enableError fact correct, record can restart load', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const src = writeLocalPlugin(env.cwd, 'enablefail-plugin')
     env.enableFailIds.add('enablefail-plugin')
     const result = await env.manager.install(src, { enable: true })
-    // 安装成功、启用失败：事实如实
+    // install succeeded, enable failed: fact such as
     assert.equal(result.record.pluginId, 'enablefail-plugin')
-    assert.equal(result.summary.enabled, false, '启用失败后插件必须保持 disabled')
-    assert.ok(result.enableError, 'enableError 必须透传')
+    assert.equal(result.summary.enabled, false, 'enable failed after plugin must keep disabled')
+    assert.ok(result.enableError, 'enableError must pass-through')
     assert.equal(result.enableError.code, 'plugin_enable_failed_simulated')
-    // 记录已持久化（重启可加载）：新建 store 实例从磁盘恢复
+    // record persisted (restart can load): creates new store instance from disk restore
     const reloaded = new PluginPackageManagerStore(new ConfigService(env.dataDir))
     await reloaded.load()
     const record = reloaded.getRecord('enablefail-plugin')
-    assert.ok(record, '启用失败不影响记录持久化，重启后仍可加载')
+    assert.ok(record, 'enable failed does not affect record persist, after restart still can load')
     assert.equal(record.source.kind, 'local')
-    // 解除后可单独重试：同一插件重复 install 现在 409（更新走 update）
+    // solve except after can separate retry: the same plugin duplicate install now 409(update away update)
     env.enableFailIds.delete('enablefail-plugin')
     await assert.rejects(
       env.manager.install(src),
@@ -657,10 +657,10 @@ test('install enable 失败：插件保持 disabled、enableError 事实正确�
 })
 
 // ---------------------------------------------------------------------------
-// 记录存储：结构损坏显式报错、重启恢复（managed 映射）
+// record store: structure corrupt explicit errors, restart restore (managed mapping)
 // ---------------------------------------------------------------------------
 
-test('store：损坏 pluginPackages 显式 config_corrupt；save 沿用既有 id', { timeout: 60_000 }, async () => {
+test('store: corrupt pluginPackages explicit config_corrupt;save along use since has id', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-pkg-store-'))
   try {
     writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ pluginPackages: 'not-an-object' }))
@@ -673,7 +673,7 @@ test('store：损坏 pluginPackages 显式 config_corrupt；save 沿用既有 id
     await store2.load()
     assert.equal(store2.getRecord('p-1')?.id, 'plugpkg-p-1')
     const saved = await store2.save({ pluginId: 'p-1', source: { kind: 'local', raw: '/x', path: '/x' }, installPath: '/data/plugins/p-1', version: '1.1.0', installedAt: 1, updatedAt: 2 })
-    assert.equal(saved.id, 'plugpkg-p-1', '重复安装沿用既有 id')
+    assert.equal(saved.id, 'plugpkg-p-1', 'duplicate install along use since has id')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }

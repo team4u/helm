@@ -1,11 +1,11 @@
 /**
- * write/edit 工具与文件互斥队列在新路径契约下的行为测试。
+ * write/edit tool and file mutual exclusion queue in new path contract under behavior test.
  *
- * 路径契约（对齐 pi）：会话 cwd 仅作相对路径基准，绝对路径与 ../ 跨目录访问
- * 一律允许（与 bash 同权，不设 cwd 沙箱）；write/edit 仍经 env/file-mutation-queue
- * 按 canonical 路径串行同文件读-改-写。排队等待窗口内目标被外部进程（如 bash）
- * 替换为软链时，写入跟随软链落到其真实目标——这是与 bash 同权的既定语义，
- * 队列只保证互斥、不做路径复核。
+ * path contract (align pi): conversation cwd only act relative path base allow, absolute path and ../ across directory access
+ * one rule allows (and bash same right, do not set cwd sandbox);write/edit still via env/file-mutation-queue
+ * by canonical path serial same file read-change-write. queue up wait for window inside target by external process (such as bash)
+ * replace is symlink when, write with follow symlink to its real target - - this is and bash same right since set semantics,
+ * queue only guarantee mutual exclusion, does not path re-check.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -38,15 +38,15 @@ function makeApi(cwd: string, conversationId = 1) {
     commit: async (change: () => unknown) => change(),
     memo: async () => undefined,
     createTask: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     getTask: async () => undefined,
     waitForTask: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
     conversation: async () => undefined,
     executeTool: async () => {
-      throw new Error('测试不使用')
+      throw new Error('test does not use')
     },
   } as never
 }
@@ -77,8 +77,8 @@ after(async () => {
 })
 
 /**
- * 确定性排队门控：先等 hold 进入执行窗口，再发起 queuedTask 并等待其真正完成
- * canonical 解析并挂入 queues 阻塞在 previous 上，随后执行窗口动作并释放 hold。
+ * determinism queue up gate control: first etc. hold enter execute window, again start queuedTask and wait for its truly complete
+ * canonical parse and hang queues block in previous on, then execute window action and release hold.
  */
 async function runQueuedBehindHold<T>(
   victimPath: string,
@@ -123,8 +123,8 @@ async function runQueuedBehindHold<T>(
   return await queuedTask
 }
 
-describe('write/edit 互斥队列与软链语义（新路径契约）', { timeout: 60_000 }, () => {
-  it('排队等待：同文件写在前序持锁任务释放后执行成功（队列只互斥、不拒路径）', { timeout: 60_000 }, async () => {
+describe('write/edit mutual exclusion queue and symlink semantics (new path contract)', { timeout: 60_000 }, () => {
+  it('queue up wait for: same file write in before order hold lock task release after execute succeeded (queue only mutual exclusion, do not refuse path)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'q1')
     mkdirSync(dir, { recursive: true })
     const victim = join(dir, 'victim.txt')
@@ -140,7 +140,7 @@ describe('write/edit 互斥队列与软链语义（新路径契约）', { timeou
     assert.equal(readFileSync(victim, 'utf8'), 'QUEUED')
   })
 
-  it('排队等待窗口内目标被替换为指向 cwd 外的软链：写入跟随软链落到真实目标（与 bash 同权）', { timeout: 60_000 }, async () => {
+  it('queue up wait for window inside target by replace is points to cwd outside symlink: write with follow symlink to real target (and bash same right)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'w1')
     mkdirSync(dir, { recursive: true })
     const outer = join(rootDir, 'w1-outer')
@@ -154,18 +154,18 @@ describe('write/edit 互斥队列与软链语义（新路径契约）', { timeou
       victim,
       () => tool.execute({ path: 'victim.txt', content: 'ESCAPED' }, makeApi(dir), BACKGROUND_CONTEXT),
       () => {
-        // 等待窗口内：目标被并发替换为指向 cwd 外的软链（队列不锁外部进程）。
-        // 新契约：写入跟随软链，落到软链指向的真实目标。
+        // wait for window inside: target by concurrency replace is points to cwd outside symlink (queue do not lock external process).
+        // new contract: write with follow symlink, to symlink points to real target.
         rmSync(victim)
         symlinkSync(join(outer, 'stolen.txt'), victim)
       },
     )
-    assert.equal(!!result.isError, false, '新契约下软链目标写入应成功')
-    assert.equal(existsSync(join(outer, 'stolen.txt')), true, '写入应跟随软链落到真实目标')
+    assert.equal(!!result.isError, false, 'new contract under symlink target write should succeeded')
+    assert.equal(existsSync(join(outer, 'stolen.txt')), true, 'write should with follow symlink to real target')
     assert.equal(readFileSync(join(outer, 'stolen.txt'), 'utf8'), 'ESCAPED')
   })
 
-  it('同构场景 edit：等待窗口内被替换为软链后，读改写经软链作用于真实目标', { timeout: 60_000 }, async () => {
+  it('same construct scenario edit: wait for window inside by replace is symlink after, read change write via symlink effect at real target', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'e1')
     mkdirSync(dir, { recursive: true })
     const outer = join(rootDir, 'e1-outer')
@@ -188,11 +188,11 @@ describe('write/edit 互斥队列与软链语义（新路径契约）', { timeou
         symlinkSync(join(outer, 'stolen-edit.txt'), victim)
       },
     )
-    assert.equal(!!result.isError, false, '新契约下 edit 经软链读改写应成功')
+    assert.equal(!!result.isError, false, 'new contract under edit via symlink read change write should succeeded')
     assert.equal(readFileSync(join(outer, 'stolen-edit.txt'), 'utf8'), 'hello ESCAPED world')
   })
 
-  it('悬空软链：write 跟随软链在目标处创建文件（与 bash 重定向同语义）', { timeout: 60_000 }, async () => {
+  it('dangling symlink:write with follow symlink in target where create file (and bash heavy set to same semantics)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'w2')
     mkdirSync(dir, { recursive: true })
     const outer = join(rootDir, 'w2-outer')
@@ -204,28 +204,28 @@ describe('write/edit 互斥队列与软链语义（新路径契约）', { timeou
       makeApi(dir),
       BACKGROUND_CONTEXT,
     )
-    assert.equal(!!result.isError, false, '悬空软链写入应跟随创建目标文件')
+    assert.equal(!!result.isError, false, 'dangling symlink write should with follow create target file')
     assert.equal(readFileSync(join(outer, 'not-yet-created.txt'), 'utf8'), 'CREATED')
   })
 
-  it('cwd 内软链目录下写入新文件仍可用（软链目录正常穿透）', { timeout: 60_000 }, async () => {
+  it('cwd inside symlink directory under write new file still available (symlink directory normal penetrate)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'w3')
     mkdirSync(join(dir, 'real-sub'), { recursive: true })
     symlinkSync(join(dir, 'real-sub'), join(dir, 'link-sub'))
     const deps = await makeRealDeps(dir)
     const tool = createWriteTool(deps)
     const result = await tool.execute(
-      { path: 'link-sub/inside.txt', content: '内指软链目录下的新文件' },
+      { path: 'link-sub/inside.txt', content: 'inside refer symlink directory under new file' },
       makeApi(dir),
       BACKGROUND_CONTEXT,
     )
     assert.equal(!!result.isError, false)
-    assert.equal(existsSync(join(dir, 'real-sub', 'inside.txt')), true, '应经内指软链目录写入真实目录内')
+    assert.equal(existsSync(join(dir, 'real-sub', 'inside.txt')), true, 'should via inside refer symlink directory write real directory inside')
     const readBack = await createReadTool(deps).execute({ path: 'real-sub/inside.txt' }, makeApi(dir), BACKGROUND_CONTEXT)
     assert.equal(!!readBack.isError, false)
   })
 
-  it('常规写/edit 不受影响（存在文件覆盖与唯一匹配替换）', { timeout: 60_000 }, async () => {
+  it('common rule write/edit do not subject to affect (store in file override and unique match replace)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'w4')
     mkdirSync(dir, { recursive: true })
     const deps = await makeRealDeps(dir)
@@ -248,17 +248,17 @@ describe('write/edit 互斥队列与软链语义（新路径契约）', { timeou
   })
 })
 
-describe('read 工具 fd 读取路径', { timeout: 60_000 }, () => {
-  it('fd 读取内容一致；目录与大文件拒绝路径仍如实', { timeout: 60_000 }, async () => {
+describe('read tool fd read path', { timeout: 60_000 }, () => {
+  it('fd read content consistent; directory and large file reject path still such as', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'r1')
     mkdirSync(dir, { recursive: true })
     const deps = await makeRealDeps(dir)
-    writeFileSync(join(dir, 'note.md'), '# 标题\n正文行')
+    writeFileSync(join(dir, 'note.md'), '# title\nbody text row')
     const tool = createReadTool(deps)
     const ok = await tool.execute({ path: 'note.md' }, makeApi(dir), BACKGROUND_CONTEXT)
     assert.equal(!!ok.isError, false)
     const structured = ok.structuredOutput as { content: string }
-    assert.ok(structured.content.includes('# 标题'))
+    assert.ok(structured.content.includes('# title'))
 
     const dirResult = await tool.execute({ path: '.' }, makeApi(dir), BACKGROUND_CONTEXT)
     assert.equal(dirResult.isError, true)

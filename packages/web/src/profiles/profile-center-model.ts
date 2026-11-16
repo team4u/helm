@@ -27,9 +27,9 @@ import type { Profile } from '@helm/protocol/browser'
 export type ProfileCategoryTab = 'all' | 'system' | 'custom' | 'herdr'
 
 export const PROFILE_CATEGORY_TABS: Array<{ key: ProfileCategoryTab; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'system', label: '内置' },
-  { key: 'custom', label: '自定义' },
+  { key: 'all', label: 'All' },
+  { key: 'system', label: 'Built-in' },
+  { key: 'custom', label: 'Custom' },
   { key: 'herdr', label: 'Herdr' },
 ]
 
@@ -80,7 +80,7 @@ export function buildProfileModelOptions(
   models: ModelDescriptor[],
   currentModel?: string,
 ): SelectOption<string>[] {
-  const list: SelectOption<string>[] = [{ value: '', label: '跟随系统默认' }]
+  const list: SelectOption<string>[] = [{ value: '', label: 'Follow system default' }]
   const trimmedCurrent = currentModel?.trim() ?? ''
   for (const m of models) {
     if (!m.available || m.disabled === true) continue
@@ -91,7 +91,7 @@ export function buildProfileModelOptions(
     const disabled = models.some((m) => m.id === trimmedCurrent && m.disabled === true)
     list.push({
       value: trimmedCurrent,
-      label: disabled ? `${trimmedCurrent}（已禁用）` : `${trimmedCurrent}（未配置）`,
+      label: disabled ? `${trimmedCurrent} (disabled)` : `${trimmedCurrent} (not configured)`,
     })
   }
   return list
@@ -205,13 +205,13 @@ function starterCodePoints(text: string): number {
 /** 校验单条编辑草稿；返回首个错误文案，合法返回 null。 */
 export function validateStarterDraft(draft: StarterDraft): string | null {
   const label = draft.label.trim()
-  if (starterCodePoints(label) === 0) return '标题去除首尾空白后不能为空'
+  if (starterCodePoints(label) === 0) return 'Title cannot be empty after trimming whitespace'
   if (starterCodePoints(label) > PROFILE_STARTER_LABEL_MAX_LENGTH) {
-    return `标题最多 ${PROFILE_STARTER_LABEL_MAX_LENGTH} 个 Unicode 码点`
+    return `Title must be at most ${PROFILE_STARTER_LABEL_MAX_LENGTH} Unicode code points`
   }
-  if (draft.prompt.trim() === '') return '提示词不能是纯空白'
+  if (draft.prompt.trim() === '') return 'Prompt cannot be whitespace only'
   if (starterCodePoints(draft.prompt) > PROFILE_STARTER_PROMPT_MAX_LENGTH) {
-    return `提示词最多 ${PROFILE_STARTER_PROMPT_MAX_LENGTH} 个 Unicode 码点`
+    return `Prompt must be at most ${PROFILE_STARTER_PROMPT_MAX_LENGTH} Unicode code points`
   }
   return null
 }
@@ -338,7 +338,7 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'plugin-disabled',
-      stateLabel: '插件已停用',
+      stateLabel: 'Plugin disabled',
     }
   }
   if (workingCount > 0) {
@@ -349,7 +349,7 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'working',
-      stateLabel: workingCount > 1 ? `运行中 (${workingCount})` : '运行中',
+      stateLabel: workingCount > 1 ? `Running (${workingCount})` : 'Running',
     }
   }
   if (blockedCount > 0) {
@@ -360,7 +360,7 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'blocked',
-      stateLabel: blockedCount > 1 ? `待审批 (${blockedCount})` : '待审批',
+      stateLabel: blockedCount > 1 ? `Pending approval (${blockedCount})` : 'Pending approval',
     }
   }
   if (errorCount > 0) {
@@ -371,7 +371,7 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'error',
-      stateLabel: errorCount > 1 ? `异常 (${errorCount})` : '存在异常',
+      stateLabel: errorCount > 1 ? `Errors (${errorCount})` : 'Has errors',
     }
   }
   if (conversationCount > 0) {
@@ -382,7 +382,7 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'active',
-      stateLabel: `${conversationCount} 个会话`,
+      stateLabel: `${conversationCount} conversations`,
     }
   }
   return {
@@ -392,7 +392,7 @@ export function summarizeProfileActivity(
     errorCount,
     managingPluginDisabled,
     stateKind: 'idle',
-    stateLabel: '待命中',
+    stateLabel: 'Standing by',
   }
 }
 

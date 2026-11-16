@@ -1,9 +1,9 @@
 /**
- * HelmStore 持久层测试：真实临时 SQLite + 真实 NodeSqliteDatabase adapter。
- * 错误注入仅通过包装 adapter 的 run/exec（fixture 只注入错误，不 mock 数据）。
- * 覆盖：flush 失败诚实性（不虚称成功、错误后拒绝新写、close 等待在途）、
- * Ask 终态重启一致、FTS 去重/标题更新/search 前置 flush、删除原子性与重启不复活、
- * 序号防回退、JSON 损坏显式报错。
+ * HelmStore durable layer test: real temporary SQLite + real NodeSqliteDatabase adapter.
+ * error inject only via wrap adapter  run/exec(fixture only inject error, do not mock data).
+ * override:flush failed honest (do not virtual call succeeded, error after reject new write,close wait for in-flight),
+ * Ask terminal state restart consistent,FTS dedupe/title update/search pre- flush, delete atomicity and restart does not resurrect,
+ * ordinal guard against fall back,JSON corrupt explicit errors.
  */
 
 import { HelmError } from '@helm/protocol'
@@ -20,7 +20,7 @@ async function openStore(): Promise<{ store: HelmStore; database: HelmDatabase; 
   return { dir, ...await openStoreAt(dir) }
 }
 
-/** 把一次性故障注入钩子挂到已打开的 database.db（只注入错误，不造数据）。 */
+/** once fault inject hook hang to already open database.db(only inject error, do not build data). */
 function attachFaults(database: HelmDatabase): { failNext(substr: string, error?: Error): void } {
   const realDb = database.db as unknown as Record<string, unknown> & { __faultHook?: FaultHook }
   if (!realDb.__faultHook) {
@@ -36,7 +36,7 @@ function attachFaults(database: HelmDatabase): { failNext(substr: string, error?
         return orig.call(realDb, sql, ...params)
       }
     }
-    // transaction 的事务句柄独立于 db：包装后句柄内的 run/exec 同样可注入。
+    // transaction transaction handle independent at db: wrap after handle inside run/exec same can inject.
     const origTx = database.db.transaction.bind(database.db)
     realDb['transaction'] = <T>(cb: (tx: unknown) => Promise<T>): Promise<T> =>
       origTx((tx: unknown) => {
@@ -99,10 +99,10 @@ function conv(id: number, overrides: Partial<ConvMeta> = {}): ConvMeta {
   }
 }
 
-/** 链接表测试用固定父工具调用 ID。 */
+/** link table test use fixed parent tool invoke ID. */
 const parentToolId = 'call-tool-3001'
 
-describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
+describe('HelmStore durable layer (real SQLite)', { timeout: 60_000 }, () => {
   let dir: string
   before(async () => {
     dir = await mkdtemp(join(tmpdir(), 'helm-store-suite-'))
@@ -111,12 +111,12 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  it('flushPublic 等待真实 drain：写入后立即可在重开的库中读到', { timeout: 60_000 }, async () => {
+  it('flushPublic wait for real drain: after write immediately can in heavy open store in read to', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'drain-'))
     const { store, database } = await openStoreAt(base)
     store.upsertConv(conv(7, { title: 'drain-me' }))
     store.putPluginDoc('p', 'k', '{"v":1}')
-    await store.flushPublic() // 不早返回：此刻必须已落库
+    await store.flushPublic() // do not early return: right now must already written to the database
     await database.close()
     const reopened = await openStoreAt(base)
     assert.equal(reopened.store.getConv(7)?.title, 'drain-me')
@@ -125,14 +125,14 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('deleteGlobalPluginDocs：前缀精确删除（含冒号 id 不交叉、元数据键不误删）、重启不复活', { timeout: 60_000 }, async () => {
+  it('deleteGlobalPluginDocs: prefix precise delete (contains smoke number id do not cross, metadata key do not mistakenly delete), restart does not resurrect', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'purge-doc-'))
     const { store, database } = await openStoreAt(base)
-    // 模拟 createGlobalDocumentStore 的写入形态：全局文档挂在 __global 行、name 为 `${pluginId}:${doc}`
+    // simulated createGlobalDocumentStore write form: global document hang in __global row,name is `${pluginId}:${doc}`
     store.putPluginDoc('__global', 'foo:records', '{"n":1}')
     store.putPluginDoc('__global', 'foo:cfg', '{"n":2}')
-    store.putPluginDoc('__global', 'foo:bar:records', '{"n":3}') // 插件 foo:bar 的数据，不得被删 foo 误伤
-    store.putPluginDoc('__global', 'conversation-ownership', '{}') // 内核元数据（无冒号），不属任何插件
+    store.putPluginDoc('__global', 'foo:bar:records', '{"n":3}') // plugin foo:bar data, must not by delete foo mistakenly damage
+    store.putPluginDoc('__global', 'conversation-ownership', '{}') // kernel metadata (without smoke number), do not belong any plugin
     store.putPluginDoc('__global', 'other:records', '{"n":4}')
     await store.flushPublic()
 
@@ -140,11 +140,11 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await store.flushPublic()
     assert.equal(store.getPluginDoc('__global', 'foo:records'), undefined)
     assert.equal(store.getPluginDoc('__global', 'foo:cfg'), undefined)
-    assert.equal(store.getPluginDoc('__global', 'foo:bar:records'), '{"n":3}', '含冒号插件 id 的数据不得交叉误删')
-    assert.equal(store.getPluginDoc('__global', 'conversation-ownership'), '{}', '无冒号的内核元数据键不受影响')
+    assert.equal(store.getPluginDoc('__global', 'foo:bar:records'), '{"n":3}', 'contains smoke number plugin id data must not cross mistakenly delete')
+    assert.equal(store.getPluginDoc('__global', 'conversation-ownership'), '{}', 'without smoke number kernel metadata key do not subject to affect')
     assert.equal(store.getPluginDoc('__global', 'other:records'), '{"n":4}')
 
-    // 再删含冒号 id：foo:bar 的数据被清，其他仍在
+    // again delete contains smoke number id:foo:bar data by clean, other still in
     store.deleteGlobalPluginDocs('foo:bar')
     await store.flushPublic()
     assert.equal(store.getPluginDoc('__global', 'foo:bar:records'), undefined)
@@ -152,20 +152,20 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await database.close()
 
     const reopened = await openStoreAt(base)
-    assert.equal(reopened.store.getPluginDoc('__global', 'foo:records'), undefined, '重启后不得复活')
+    assert.equal(reopened.store.getPluginDoc('__global', 'foo:records'), undefined, 'after restart must not re-')
     assert.equal(reopened.store.getPluginDoc('__global', 'foo:bar:records'), undefined)
     assert.equal(reopened.store.getPluginDoc('__global', 'other:records'), '{"n":4}')
     await reopened.database.close()
     await rm(base, { recursive: true, force: true })
   })
 
-  it('deletePluginSessionDocs：按插件整体删除（其他插件/其他会话保留）、重启不复活', { timeout: 60_000 }, async () => {
+  it('deletePluginSessionDocs: by plugin whole delete (other plugin/other conversation keep), restart does not resurrect', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'purge-session-'))
     const { store, database } = await openStoreAt(base)
     store.putPluginSessionDoc('foo', 'runs', 1, '{"a":1}')
     store.putPluginSessionDoc('foo', 'runs', 2, '{"a":2}')
     store.putPluginSessionDoc('foo', 'notes', 1, '{"b":1}')
-    store.putPluginSessionDoc('foobar', 'runs', 1, '{"c":1}') // 前缀相近插件，不得误删
+    store.putPluginSessionDoc('foobar', 'runs', 1, '{"c":1}') // prefix each other near plugin, must not mistakenly delete
     await store.flushPublic()
 
     store.deletePluginSessionDocs('foo')
@@ -173,18 +173,18 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     assert.equal(store.getPluginSessionDoc('foo', 'runs', 1), undefined)
     assert.equal(store.getPluginSessionDoc('foo', 'runs', 2), undefined)
     assert.equal(store.getPluginSessionDoc('foo', 'notes', 1), undefined)
-    assert.equal(store.getPluginSessionDoc('foobar', 'runs', 1), '{"c":1}', '前缀相近的其他插件不得误删')
+    assert.equal(store.getPluginSessionDoc('foobar', 'runs', 1), '{"c":1}', 'prefix each other near other plugin must not mistakenly delete')
     assert.deepEqual(store.listPluginSessionDocConversations('foo', 'runs'), [])
     await database.close()
 
     const reopened = await openStoreAt(base)
-    assert.equal(reopened.store.getPluginSessionDoc('foo', 'runs', 1), undefined, '重启后不得复活')
+    assert.equal(reopened.store.getPluginSessionDoc('foo', 'runs', 1), undefined, 'after restart must not re-')
     assert.equal(reopened.store.getPluginSessionDoc('foobar', 'runs', 1), '{"c":1}')
     await reopened.database.close()
     await rm(base, { recursive: true, force: true })
   })
 
-  it('SQL 失败：flushPublic 显式抛错（绝不虚称成功），错误后拒绝新写', { timeout: 60_000 }, async () => {
+  it('SQL failed:flushPublic explicit throws (never virtual call succeeded), error after reject new write', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'fail-'))
     const { store, database } = await openStoreAt(base)
     const fixture = attachFaults(database)
@@ -195,7 +195,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
       assert.equal(e.code, 'store_flush_failed')
       return true
     })
-    // 错误后新写必须被拒绝（fail 状态，不能继续假成功）。
+    // error after new write must by reject (fail state, cannot continue false succeeded).
     assert.throws(() => store.upsertConv(conv(9)), (e: unknown) => {
       assert.ok(e instanceof HelmError)
       assert.equal(e.code, 'store_flush_failed')
@@ -205,22 +205,22 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
       assert.ok(e instanceof HelmError)
       return true
     })
-    // close 同样报告错误（runtime 据此抛 HelmError 上报）。
+    // close same report error (runtime based on this throw HelmError on report).
     const closeError = await store.close()
     assert.ok(closeError !== undefined)
     await database.close()
     await rm(base, { recursive: true, force: true })
   })
 
-  it('close 等待在途 flush 彻底结束（尾链不丢在途写）', { timeout: 60_000 }, async () => {
+  it('close wait for in-flight flush completely end (tail chain do not lose in-flight write)', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'close-'))
     const { store, database } = await openStoreAt(base)
     store.upsertConv(conv(10))
     store.indexFts(10, 'entry:1', 't', 'body text')
-    const closing = store.close() // 不 await：close 与在途写并发
+    const closing = store.close() // do not await:close and in-flight write concurrency
     await closing
     await database.close()
-    // close 返回后重开：在途写必须已落库（不能因 close 早退丢写）。
+    // close return after heavy open: in-flight write must already written to the database (cannot because close early retreat lose write).
     const reopened = await openStoreAt(base)
     assert.ok(reopened.store.getConv(10))
     const hits = await reopened.store.search('body')
@@ -229,7 +229,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('Ask 终态重启一致：结算后重启 status/spec/result 不回退为 pending', { timeout: 60_000 }, async () => {
+  it('Ask terminal state restart consistent: compute after restart status/spec/result does not fall back is pending', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'ask-'))
     const { store, database } = await openStoreAt(base)
     store.putAsk({
@@ -240,7 +240,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
       createdAt: 100,
     })
     await store.flushPublic()
-    // 结算：spec 内含终态 status，UPSERT 必须把 spec 一并落库。
+    // compute:spec inside contains terminal state status,UPSERT must spec one and written to the database.
     const settledSpec = JSON.stringify({ id: 'ask-1', title: 't', status: 'answered', fields: [] })
     store.putAsk({
       id: 'ask-1',
@@ -258,7 +258,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     const row = reopened.store.getAsk('ask-1')
     assert.ok(row)
     assert.equal(row.status, 'answered')
-    assert.equal(row.specJson, settledSpec) // 重启后 spec 仍是终态，不是 pending
+    assert.equal(row.specJson, settledSpec) // after restart spec still is terminal state, is not pending
     assert.equal(row.resultJson, JSON.stringify({ name: 'v' }))
     assert.equal(row.settledAt, 200)
     const pending = reopened.store.listAsks('pending')
@@ -268,19 +268,19 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('FTS：同一 entry 重复索引仅一条；标题更新刷新全部行；search 先 flush', { timeout: 60_000 }, async () => {
+  it('FTS: the same entry duplicate index only a; title update refresh all row;search first flush', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'fts-'))
     const { store, database } = await openStoreAt(base)
     store.upsertConv(conv(5, { title: 'old-title' }))
-    // 同一 entry 反复索引（observer 重放场景）。
+    // the same entry reverse re- index (observer replay scenario).
     store.indexFts(5, 'entry:1', 'old-title', 'hello world alpha')
     store.indexFts(5, 'entry:1', 'old-title', 'hello world alpha')
     store.indexFts(5, 'entry:1', 'old-title', 'hello world alpha')
     store.indexFts(5, 'entry:2', 'old-title', 'beta gamma')
-    let hits = await store.search('hello') // search 内部先 await flushPublic
-    assert.equal(hits.length, 1, '同一 entry 只应有且仅有一条索引行')
+    let hits = await store.search('hello') // search internal first await flushPublic
+    assert.equal(hits.length, 1, 'the same entry only should has and only has a index row')
     assert.equal(hits[0]?.entryId, 'entry:1')
-    // 改标题：该会话全部索引行 title 更新（不只第一行）。
+    // change title: the conversation all index row title update (do not only one row).
     store.upsertConv(conv(5, { title: 'new-title', updatedAt: 2000 }))
     await store.flushPublic()
     const titleRows = await database.db.all<{ title: string; entry_id: string }>(
@@ -296,7 +296,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('FTS 重建原子：失败回滚保留旧索引（不假成功）', { timeout: 60_000 }, async () => {
+  it('FTS rebuild atomic: failed rollback keep old index (do not false succeeded)', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'rebuild-'))
     const { store, database } = await openStoreAt(base)
     store.indexFts(6, 'entry:1', 't', 'original content')
@@ -310,7 +310,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
         }),
       /injected/,
     )
-    // 回滚后旧索引仍可查（派生索引未丢）。
+    // rollback after old index still can inspect (derive index not lose).
     const hits = await store.search('original')
     assert.equal(hits.length, 1)
     await store.close()
@@ -318,7 +318,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('删除会话：重启不复活（tombstone + 行清理原子落库），asks/artifacts 不残留', {
+  it('delete conversation: restart does not resurrect (tombstone + row clean up atomic written to the database),asks/artifacts leaves no residue', {
     timeout: 60_000,
   }, async () => {
     const base = await mkdtemp(join(dir, 'del-'))
@@ -351,7 +351,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     assert.ok(store.isDeleted(11))
     await store.close()
     await database.close()
-    // 重启：不复活。
+    // restart: does not resurrect.
     const reopened = await openStoreAt(base)
     assert.equal(reopened.store.getConv(11), undefined)
     assert.ok(reopened.store.isDeleted(11))
@@ -362,11 +362,11 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('事件序号防回退：拒绝负数/非整数，低序号不覆盖高水位', { timeout: 60_000 }, async () => {
+  it('event ordinal guard against fall back: reject negative number/non- integer, low ordinal does not override high watermark', { timeout: 60_000 }, async () => {
     const { store, database, dir: d } = await openStore()
     try {
       store.setEventSeq(10)
-      store.setEventSeq(9) // 回退：内存不回退
+      store.setEventSeq(9) // fall back: memory does not fall back
       assert.equal(store.eventSeqNow, 10)
       assert.throws(() => store.setEventSeq(-1), HelmError)
       assert.throws(() => store.setEventSeq(1.5), HelmError)
@@ -382,16 +382,16 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     }
   })
 
-  it('返回可变对象为克隆：外部突变不污染镜像与排队 SQL', { timeout: 60_000 }, async () => {
+  it('return can change object is clone: external sudden change do not pollute mirror and queue up SQL', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'clone-'))
     const { store, database } = await openStoreAt(base)
     store.upsertConv(conv(12, { tags: ['orig'] }))
-    // 读侧克隆。
+    // read side clone.
     const got = store.getConv(12)
     assert.ok(got)
     got.tags.push('mutated')
     assert.deepEqual(store.getConv(12)?.tags, ['orig'])
-    // 写侧快照：入队后调用方改原对象不影响落库。
+    // write side snapshot: queue after caller change original object does not affect written to the database.
     const mutated = conv(13, { tags: ['before'] })
     store.upsertConv(mutated)
     mutated.tags.push('after-mutation')
@@ -405,14 +405,14 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('putPluginDoc 非法 JSON 显式拒绝；load 遇损坏 JSON 显式报错', { timeout: 60_000 }, async () => {
+  it('putPluginDoc illegal JSON explicit reject;load encounter corrupt JSON explicit errors', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'json-'))
     const { store, database } = await openStoreAt(base)
     assert.throws(() => store.putPluginDoc('p', 'bad', '{not-json'), HelmError)
     await store.flushPublic()
     await store.close()
     await database.close()
-    // 直接写坏数据再 load：必须显式错误，绝不假空值。
+    // directly write broken data again load: must explicit error, never false null value.
     const db2 = await openHelmDatabase(base)
     await db2.db.run("INSERT INTO helm_plugin_docs (plugin_id, name, value, updated_at) VALUES ('x', 'y', '{broken', 0)")
     await db2.close()
@@ -427,7 +427,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await rm(base, { recursive: true, force: true })
   })
 
-  it('convStatusOf：blocked（pending Ask）优先于 working', { timeout: 60_000 }, () => {
+  it('convStatusOf:blocked(pending Ask) takes precedence at working', { timeout: 60_000 }, () => {
     const meta = conv(1)
     assert.equal(convStatusOf(meta, { run: { id: 'r' } }, 1), 'blocked')
     assert.equal(convStatusOf(meta, { run: { id: 'r' } }, 0), 'working')
@@ -436,41 +436,41 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     assert.equal(convStatusOf({ ...meta, unread: true }, {}, 0), 'done')
   })
 
-  it('database.close 幂等：重复关闭不抛错', { timeout: 60_000 }, async () => {
+  it('database.close idempotent: duplicate close do not throws', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'idem-'))
     const { database } = await openStoreAt(base)
     await database.close()
-    await database.close() // 不抛
+    await database.close() // do not throw
     await rm(base, { recursive: true, force: true })
   })
 
-  it('parentToolCallId 独立链接表：现行原表（无该列）的旧库自动建新表，写入重开可读，空值清理，删除不留孤儿', {
+  it('parentToolCallId independent link table: now row original table (without the column) old store automatically create new table, write heavy open can read, null value clean up, delete do not orphan child', {
     timeout: 60_000,
   }, async () => {
     const base = await mkdtemp(join(dir, 'link-'))
-    // 先用现行 schema 的库正常打开一次，再把链接表删掉并手工去掉——模拟只有
-    // 旧 helm_conversations 原表（无 parent_tool_call_id 列）的现有数据库。
+    // first use now row schema store normal open once, again link table delete and manually work remove - - simulated only
+    // old helm_conversations original table (without parent_tool_call_id column) existing database.
     const seed = await openHelmDatabase(base)
     await seed.db.exec('DROP TABLE helm_conversation_tool_links')
     await seed.close()
 
-    // openHelmDatabase 在不修改旧表的前提下自动创建全新链接表：现有记录不用变。
+    // openHelmDatabase in do not modify old table before mention under automatically create all new link table: existing record do not use change.
     const { store, database } = await openStoreAt(base)
-    // 有值：镜像与库同时写入
+    // has value: mirror and store also write
     store.upsertConv(conv(20, { parentToolCallId: parentToolId }))
     await store.flushPublic()
     const linkRow = await database.db.get<{ parent_tool_call_id: string }>(
       'SELECT parent_tool_call_id FROM helm_conversation_tool_links WHERE conversation_id = 20',
     )
     assert.equal(linkRow?.parent_tool_call_id, parentToolId)
-    // 空值清理：置空后链接行删除，不留陈旧关联
+    // null value clean up: placement empty after link row delete, do not stale related
     store.upsertConv(conv(20, { parentToolCallId: undefined }))
     await store.flushPublic()
     const gone = await database.db.get(
       'SELECT 1 AS x FROM helm_conversation_tool_links WHERE conversation_id = 20',
     )
-    assert.equal(gone, undefined, '空值应清理链接行')
-    // 再写回并重开：合并读取成功
+    assert.equal(gone, undefined, 'null value should clean up link row')
+    // again write back and heavy open: merge read succeeded
     store.upsertConv(conv(20, { parentToolCallId: parentToolId }))
     store.upsertConv(conv(21))
     await store.flushPublic()
@@ -480,19 +480,19 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     const reopened = await openStoreAt(base)
     assert.equal(reopened.store.getConv(20)?.parentToolCallId, parentToolId)
     assert.equal(reopened.store.getConv(21)?.parentToolCallId, undefined)
-    // 删除会话同步删 link：不留孤儿
+    // delete conversation sync delete link: do not orphan child
     reopened.store.deleteConv(20)
     await reopened.store.flushPublic()
     const orphan = await reopened.database.db.get(
       'SELECT 1 AS x FROM helm_conversation_tool_links WHERE conversation_id = 20',
     )
-    assert.equal(orphan, undefined, '删除会话必须同步删除链接行')
+    assert.equal(orphan, undefined, 'delete conversation must sync delete link row')
     await reopened.store.close()
     await reopened.database.close()
     await rm(base, { recursive: true, force: true })
   })
 
-  it('helm_artifacts 读写与重启还原 kind；非法 kind 在写/载入边界显式拒绝', { timeout: 60_000 }, async () => {
+  it('helm_artifacts read write and restart restore kind; illegal kind in write/load boundary explicit reject', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'art-kind-'))
     const { store, database } = await openStoreAt(base)
     store.putArtifact({
@@ -554,7 +554,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     await reopened.store.close()
     await reopened.database.close()
 
-    // 库内损坏 kind：load() 必须显式报错 store_data_corrupted
+    // store inside corrupt kind:load() must explicit errors store_data_corrupted
     const dbCorrupt = await openHelmDatabase(base)
     await dbCorrupt.db.run(
       "INSERT INTO helm_artifacts (id, conversation_id, kind, name, path, mime_type, size, created_at) VALUES ('art-corrupt', 1, 'bad_kind', 'x', 'artifacts/1/x', 'text/plain', 1, 50)",
@@ -572,7 +572,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
   })
 })
 
-// ---- 测试基座辅助 ----
+// ---- test base seat auxiliary ----
 
 async function openStoreAt(dir: string): Promise<{ store: HelmStore; database: HelmDatabase }> {
   const database = await openHelmDatabase(dir)

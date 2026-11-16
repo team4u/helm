@@ -55,6 +55,8 @@ function context(callAction: ClientContext['callAction']): ClientContext {
     openArtifact: () => {}, openWorkbench: () => {}, closeWorkbench: () => {}, notify: () => {},
     getPluginDoc: async () => undefined, getPluginSessionDoc: async () => undefined,
     theme: 'dark',
+    locale: 'en',
+    translate: (text) => (typeof text === 'string' ? text : ''),
   }
 }
 

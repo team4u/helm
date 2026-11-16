@@ -1,12 +1,12 @@
 /**
- * 后端 TS 转译实现（PluginBuildProvider.transformBackendTs）。
+ * backend TS transpile implement (PluginBuildProvider.transformBackendTs).
  *
- * 语义与原内核 backend-ts-loader 内联的 esbuild transformSync 完全一致：
- * .ts/.mts/.cts -> loader 'ts'，.tsx -> loader 'tsx'，jsx automatic、
- * format esm、target node20、sourcefile 指向真实源文件（诊断定位）。
+ * semantics and original kernel backend-ts-loader inline esbuild transformSync fully consistent:
+ * .ts/.mts/.cts -> loader 'ts',.tsx -> loader 'tsx',jsx automatic,
+ * format esm,target node20,sourcefile points to real source file (diagnose locate).
  *
- * 转译错误原样上抛（esbuild 错误对象带 errors[].location），由内核加载钩子
- * 包装为 HelmError('plugin_load_failed')——本层不做二次包装，保持诊断完整。
+ * transpile error original on throw (esbuild error object carries errors[].location), by kernel load hook
+ * wrap is HelmError('plugin_load_failed')- - this layer does not second wrap, keep diagnose complete.
  */
 import { transformSync } from 'esbuild';
 import type { PluginBackendTsTransform } from '@helm/protocol';

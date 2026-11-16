@@ -162,7 +162,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: '请先处理当前草稿，再选择引导词',
+          title: 'Handle the current draft before picking a starter',
           conversationId: conversation.id,
         })
         return
@@ -209,7 +209,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       setUploading(uploadingRef.current)
       for (const file of files) {
         try {
-          if (file.size > 15 * 1024 * 1024) throw new Error('文件超过 15 MiB 上限')
+          if (file.size > 15 * 1024 * 1024) throw new Error('File exceeds the 15 MiB limit')
           const meta = await conversationsApi.uploadArtifact(conversation.id, file)
           setAttachments((prev) => {
             const next = [...prev, { artifactId: meta.id, name: meta.name, size: meta.size, mimeType: meta.mimeType }]
@@ -218,7 +218,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
             return next
           })
         } catch (err) {
-          notifyError(`附件上传失败：${file.name}`, err)
+          notifyError(`Attachment upload failed: ${file.name}`, err)
         } finally {
           uploadingRef.current--
           setUploading(uploadingRef.current)
@@ -252,7 +252,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       setText(next)
       syncLiveDraft(next, editingEntryId, attachments)
       if (el !== null) focusWithCaret(el, nextCaret)
-    }).catch(() => { /* 动作调用已发送明确失败通知，保留原草稿。 */ }).finally(() => { commandPendingRef.current = false })
+    }).catch(() => { /* The action call already sent an explicit failure notice; keep the draft. */ }).finally(() => { commandPendingRef.current = false })
   }, [editingEntryId, attachments, syncLiveDraft, runPluginCommandFrom])
   // 斜杠菜单条目跨 render 存续：入口经稳定包装取最新实现（替代渲染期写 latest ref）。
   const runPluginCommand = useStableCallback(runPluginCommandImpl)
@@ -268,7 +268,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: '请从会话顶栏「新话题」开始新话题',
+          title: 'Start new topics from the New topic action in the conversation top bar',
           conversationId: conversation.id,
         })
       }
@@ -278,9 +278,9 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       void conversationsApi
         .reset(conversation.id)
         .then(() => {
-          store.pushNotice({ type: 'notification', level: 'info', title: '上下文已重置', conversationId: conversation.id })
+          store.pushNotice({ type: 'notification', level: 'info', title: 'Context reset', conversationId: conversation.id })
         })
-        .catch((err: unknown) => notifyError('重置上下文失败', err))
+        .catch((err: unknown) => notifyError('Failed to reset context', err))
       return true
     }
     const compactCmd = parseCompactSlashCommand(cmd)
@@ -289,7 +289,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: '上下文精简正在进行中',
+          title: 'Context compaction in progress',
           conversationId: conversation.id,
         })
         return true
@@ -297,9 +297,9 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       void conversationsApi
         .compact(conversation.id, compactCmd.instructions)
         .then(() => {
-          store.pushNotice({ type: 'notification', level: 'info', title: '精简任务已提交', conversationId: conversation.id })
+          store.pushNotice({ type: 'notification', level: 'info', title: 'Compaction submitted', conversationId: conversation.id })
         })
-        .catch((err: unknown) => notifyError('精简上下文失败', err))
+        .catch((err: unknown) => notifyError('Failed to compact context', err))
       return true
     }
     return false
@@ -364,8 +364,8 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
           store.pushNotice({
             type: 'notification',
             level: 'info',
-            title: '已撤回排队消息',
-            body: `当前草稿非空，未覆盖输入：${queued.text}`,
+            title: 'Queued message withdrawn',
+            body: `Current draft not empty; input not overwritten: ${queued.text}`,
             conversationId: conversation.id,
           })
           return
@@ -376,8 +376,8 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
           store.pushNotice({
             type: 'notification',
             level: 'warning',
-            title: '消息已进入执行',
-            body: '当前草稿非空，未进入历史消息编辑',
+            title: 'Message entered execution',
+            body: 'Current draft not empty; not entering history message editing',
             conversationId: conversation.id,
           })
           return
@@ -387,14 +387,14 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: '无法撤回排队消息',
-          body: `提交已进入执行（status=${res.status}）`,
+          title: 'Cannot withdraw queued message',
+          body: `Submission entered execution (status=${res.status})`,
           conversationId: conversation.id,
         })
       }
     } catch (err) {
       if (mountedRef.current) {
-        notifyError('撤回排队消息失败', err)
+        notifyError('Failed to withdraw queued message', err)
       }
     } finally {
       withdrawingRef.current = false
@@ -405,7 +405,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
     const draft = liveDraftRef.current.text
     const payload = draft.trim()
     if (payload === '' || sendingRef.current || uploadingRef.current > 0 || commandPendingRef.current) {
-      if (strict) throw new Error('当前草稿为空或输入区已有在途操作')
+      if (strict) throw new Error('Current draft empty or a composer operation is already in flight')
       return
     }
     // 未保存环境或环境保存中不允许发送（同时覆盖 Enter 与发送按钮）
@@ -413,11 +413,11 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       store.pushNotice({
         type: 'notification',
         level: 'warning',
-        title: '请先保存或取消起始环境修改',
+        title: 'Save or cancel the starting environment changes first',
         body: envBlocker.reason ?? undefined,
         conversationId: conversation.id,
       })
-      if (strict) throw new Error('请先保存或取消起始环境修改')
+      if (strict) throw new Error('Save or cancel the starting environment changes first')
       return
     }
     // 插件斜杠命令：草稿首 token 精确命中满足作用域的插件命令时执行（仅非编辑态）。
@@ -482,7 +482,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
         if (frozenDraft.targetEntryId !== null) setEditingEntryId(frozenDraft.targetEntryId)
         syncLiveDraft(draft, frozenDraft.targetEntryId, attachments)
       }
-      notifyError(targetEntryId !== null ? '更新消息失败' : '发送失败', err)
+      notifyError(targetEntryId !== null ? 'Failed to update message' : 'Send failed', err)
       if (strict) throw err
     } finally {
       sendingRef.current = false
@@ -502,7 +502,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       store.pushNotice({
         type: 'notification',
         level: 'warning',
-        title: '请先保存或取消起始环境修改',
+        title: 'Save or cancel the starting environment changes first',
         body: envBlocker.reason ?? undefined,
         conversationId: conversation.id,
       })
@@ -518,7 +518,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
         ...(working ? { whenBusy: whenBusy ?? 'steer' } : {}),
       })
     } catch (err) {
-      notifyError('发送失败', err)
+      notifyError('Send failed', err)
       throw err
     } finally {
       sendingRef.current = false

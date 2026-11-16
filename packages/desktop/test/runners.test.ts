@@ -1,4 +1,4 @@
-/** 运行器选择与能力探测：floor 判定、真实探测、候选回退链、显式覆写。 */
+/** run choose and capability probe:floor decide, real probe, choose fall back chain, explicit override. */
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -18,28 +18,28 @@ import { DesktopError } from '../src/errors.js';
 const BASE_ENV: NodeJS.ProcessEnv = { PATH: process.env['PATH'] };
 const CHILD_WRAPPER = fileURLToPath(new URL('../dist/hub-child.js', import.meta.url));
 
-test('probeMeetsFloor：版本与 sqlite 双条件', { timeout: 60_000 }, () => {
+test('probeMeetsFloor: version and sqlite double condition', { timeout: 60_000 }, () => {
   const p = (node: string, sqlite: boolean): RunnerProbe => ({ node, electron: null, sqlite });
   assert.equal(probeMeetsFloor(p('24.11.0', true)), false);
   assert.equal(probeMeetsFloor(p('24.12.0', true)), true);
   assert.equal(probeMeetsFloor(p('26.1.0', true)), true);
-  assert.equal(probeMeetsFloor(p('25.0.0', false)), false, '缺 node:sqlite 不达标');
+  assert.equal(probeMeetsFloor(p('25.0.0', false)), false, 'missing node:sqlite do not reach mark');
 });
 
-test('probeMeetsFloor：严格 SemVer 口径（新增）——非法版本与 floor 同号预发布不达标', { timeout: 60_000 }, () => {
+test('probeMeetsFloor: strictly SemVer opening path (new increase) - - illegal version and floor same number pre- publish do not reach mark', { timeout: 60_000 }, () => {
   const p = (node: string, sqlite: boolean): RunnerProbe => ({ node, electron: null, sqlite });
-  // 预发布 < 同号正式版：nightly/beta 形态的 24.12.0 不满足 floor（原宽松比较会放行）。
+  // pre- publish < same number formal edition:nightly/beta form 24.12.0 do not satisfy floor(original loosely compare will let through).
   assert.equal(probeMeetsFloor(p('24.12.0-nightly.20250101', true)), false);
   assert.equal(probeMeetsFloor(p('24.12.0-beta.1', true)), false);
-  // 更高号的预发布仍达标（24.13.0-pre > 24.12.0）。
+  // more high number pre- publish still reach mark (24.13.0-pre > 24.12.0).
   assert.equal(probeMeetsFloor(p('24.13.0-pre.1', true)), true);
-  // 非严格版本号（缺段/前缀/脏字符）不再被 parseInt 宽松比较放行。
+  // non- strictly version number (missing segment/prefix/dirty character) no longer by parseInt loosely compare let through.
   assert.equal(probeMeetsFloor(p('24.12', true)), false);
   assert.equal(probeMeetsFloor(p('v25.0.0', true)), false);
   assert.equal(probeMeetsFloor(p('garbage', true)), false);
 });
 
-test('compareStrictSemver（desktop 本地实现，与 @helm/protocol/semver 同契约）：排序与显式拒绝（新增）', { timeout: 60_000 }, () => {
+test('compareStrictSemver(desktop local implement, and @helm/protocol/semver same contract): sort and explicit reject (new increase)', { timeout: 60_000 }, () => {
   assert.equal(compareStrictSemver('1.0.0', '1.0.0'), 0);
   assert.equal(compareStrictSemver('1.2.0', '1.10.0'), -1);
   assert.equal(compareStrictSemver('1.0.0', '1.0.0-beta.11'), 1);
@@ -52,14 +52,14 @@ test('compareStrictSemver（desktop 本地实现，与 @helm/protocol/semver 同
   assert.equal(isStrictSemver('24.12'), false);
 });
 
-test('probeRunner 真实探测宿主 Node：版本达标且 node:sqlite 可用', { timeout: 60_000 }, async () => {
+test('probeRunner real probe host Node: version reach mark and node:sqlite available', { timeout: 60_000 }, async () => {
   const probe = await probeRunner(process.execPath, { env: BASE_ENV });
   assert.match(probe.node, /^\d+\.\d+\.\d+/);
   assert.equal(probe.sqlite, true);
-  assert.equal(probeMeetsFloor(probe), true, `宿主 Node ${probe.node} 应满足 floor ${KERNEL_NODE_FLOOR}`);
+  assert.equal(probeMeetsFloor(probe), true, `host Node ${probe.node} should satisfy floor ${KERNEL_NODE_FLOOR}`);
 });
 
-test('selectRunner：custom 命令原样采用且不做能力探测', { timeout: 60_000 }, async () => {
+test('selectRunner:custom command original adopt and does not capability probe', { timeout: 60_000 }, async () => {
   const config = resolveDesktopConfig(BASE_ENV, { port: 3210, hubCommand: ['node', '/x/hub.js'] });
   const info = await selectRunner(config, { isElectron: false, execPath: '/unused', env: BASE_ENV });
   assert.equal(info.kind, 'custom');
@@ -68,7 +68,7 @@ test('selectRunner：custom 命令原样采用且不做能力探测', { timeout:
   assert.equal(info.env['ELECTRON_RUN_AS_NODE'], undefined);
 });
 
-test('selectRunner：Electron 内嵌 Node 达标 → electron-node + ELECTRON_RUN_AS_NODE', { timeout: 60_000 }, async () => {
+test('selectRunner:Electron inside embed Node reach mark → electron-node + ELECTRON_RUN_AS_NODE', { timeout: 60_000 }, async () => {
   const config = resolveDesktopConfig(BASE_ENV, { port: 3210, hubCommand: undefined, payloadEntry: undefined });
   const okProbe: RunnerProbe = { node: '24.22.2', electron: '45.3.1', sqlite: true };
   const info = await selectRunner(config, {
@@ -86,7 +86,7 @@ test('selectRunner：Electron 内嵌 Node 达标 → electron-node + ELECTRON_RU
   assert.equal(info.env['HELM_PORT'], '3210');
 });
 
-test('selectRunner：内嵌 Node 不达标 → 如实记录并回退宿主 node', { timeout: 60_000 }, async () => {
+test('selectRunner: inside embed Node do not reach mark → such as record and fall back host node', { timeout: 60_000 }, async () => {
   const config = resolveDesktopConfig(BASE_ENV);
   const skipped: string[] = [];
   const info = await selectRunner(config, {
@@ -105,7 +105,7 @@ test('selectRunner：内嵌 Node 不达标 → 如实记录并回退宿主 node'
   assert.match(skipped[0]!, /electron-node/);
 });
 
-test('selectRunner：显式 hubNode 不达标 → hub_runner_incapable 显式报错', { timeout: 60_000 }, async () => {
+test('selectRunner: explicit hubNode do not reach mark → hub_runner_incapable explicit errors', { timeout: 60_000 }, async () => {
   const config = resolveDesktopConfig(BASE_ENV, { hubNode: '/bad/node' });
   await assert.rejects(
     selectRunner(config, {
@@ -118,7 +118,7 @@ test('selectRunner：显式 hubNode 不达标 → hub_runner_incapable 显式报
   );
 });
 
-test('selectRunner：非 Electron 环境 → 直接采用宿主 execPath', { timeout: 60_000 }, async () => {
+test('selectRunner: non- Electron environment → directly adopt host execPath', { timeout: 60_000 }, async () => {
   const config = resolveDesktopConfig(BASE_ENV);
   const info = await selectRunner(config, {
     isElectron: false,
@@ -131,7 +131,7 @@ test('selectRunner：非 Electron 环境 → 直接采用宿主 execPath', { tim
   assert.equal(info.env['ELECTRON_RUN_AS_NODE'], undefined);
 });
 
-test('selectRunner：payload 入口附加参数拼接入命令行（start.mjs start 契约）', { timeout: 60_000 }, async () => {
+test('selectRunner:payload entry additional parameter concatenate command line (start.mjs start contract)', { timeout: 60_000 }, async () => {
   const config = resolveDesktopConfig(BASE_ENV, {
     payloadEntry: '/payload/start.mjs',
     payloadEntryArgs: ['start'],
@@ -144,7 +144,7 @@ test('selectRunner：payload 入口附加参数拼接入命令行（start.mjs st
     probe: async () => ({ node: '24.12.0', electron: null, sqlite: true }),
   });
   assert.deepEqual(info.command, ['/bin/node-host', CHILD_WRAPPER, '/payload/start.mjs', 'start']);
-  // hub-entry source 恒无参数。
+  // hub-entry source constant without parameter.
   const plain = resolveDesktopConfig(BASE_ENV);
   const plainInfo = await selectRunner(plain, {
     isElectron: false,

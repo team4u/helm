@@ -100,7 +100,7 @@ export function buildWorkbenchTabs(input: {
   const tabs: WorkbenchTab[] = [
     {
       id: WORKBENCH_ARTIFACTS_TAB_ID,
-      label: '产物',
+      label: 'Artifacts',
       order: 20,
       count: input.artifactCount,
       tone: 'neutral',
@@ -187,9 +187,9 @@ export function countDeliverableArtifacts(artifacts: ReadonlyArray<ArtifactMetad
 }
 
 export function artifactKindLabel(kind: ArtifactKind): string {
-  if (kind === 'registered') return '注册产物'
-  if (kind === 'upload') return '上传附件'
-  return '输出快照'
+  if (kind === 'registered') return 'Registered artifact'
+  if (kind === 'upload') return 'Uploaded attachment'
+  return 'Output snapshot'
 }
 
 export function isImageArtifact(mimeType: string): boolean {
@@ -198,20 +198,20 @@ export function isImageArtifact(mimeType: string): boolean {
 
 export function artifactFormatLabel(mimeType: string, filename: string): string {
   const mime = mimeType.toLowerCase()
-  if (mime.startsWith('image/')) return '图片'
+  if (mime.startsWith('image/')) return 'Image'
   if (mime === 'application/pdf') return 'PDF'
   if (mime.includes('markdown') || filename.toLowerCase().endsWith('.md')) return 'Markdown'
   if (mime.includes('json') || filename.toLowerCase().endsWith('.json')) return 'JSON'
   if (mime.includes('csv') || filename.toLowerCase().endsWith('.csv')) return 'CSV'
   if (mime.includes('html') || /\.(html?|xhtml)$/i.test(filename)) return 'HTML'
   if (mime.includes('yaml') || /\.(ya?ml)$/i.test(filename)) return 'YAML'
-  if (mime.startsWith('text/')) return '文本'
+  if (mime.startsWith('text/')) return 'Text'
   const dot = filename.lastIndexOf('.')
   if (dot > 0 && dot < filename.length - 1) {
     const ext = filename.slice(dot + 1).trim()
     if (ext.length > 0 && ext.length <= 6) return ext.toUpperCase()
   }
-  return '文件'
+  return 'File'
 }
 
 export function artifactIconName(mimeType: string, kind: ArtifactKind): 'file-code' | 'file-text' | 'file' {

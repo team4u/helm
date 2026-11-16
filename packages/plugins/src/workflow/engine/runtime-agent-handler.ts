@@ -1,14 +1,15 @@
 /**
- * runtime-agent-handler.ts — `agent()` 调用的宿主侧 handler：live attempt 环。
+ * runtime-agent-handler.ts -- the host-side handler for `agent()` calls: the live attempt ring.
  *
- * 自 runtime.ts 的 handleAgent 闭包提取为显式依赖注入模块（语义逐行保持）：
- * 职责 = 调用载荷边界校验与账本重放命中判定（runtime-agent-replay.ts）→
- * attempt 环 live 执行（暂停门 / 并发许可 / 手动 skip / retry / maxAttempts
- * 自动续接重试 / gate 恰好一次）→ agent 行记账与进度发射。
+ * Extracted from runtime.ts's handleAgent closure into an explicit dependency-injection module
+ * (semantics preserved line by line): responsibility = call payload boundary validation and
+ * ledger replay-hit adjudication (runtime-agent-replay.ts) -> live execution in the attempt ring
+ * (pause gate / concurrency permits / manual skip / retry / maxAttempts auto-continuation retries / gate
+ * exactly once) -> agent-row accounting and progress emission.
  *
- * 依赖经 AgentCallContext 注入（emit/respond/allocateIndex 等由 runtime.ts
- * 的 runWorkflow 构造），本模块不持有 worker 与 run 终态，fatal 一律经
- * respond(…, true) 回流，由编排层统一 finish。
+ * Dependencies are injected via AgentCallContext (emit/respond/allocateIndex etc. constructed by runtime.ts's
+ * Dependencies are injected via AgentCallContext (emit/respond/allocateIndex etc. constructed by
+ * runtime.ts's runWorkflow); this module holds no worker or run terminal state -- fatal always flows
  */
 
 import { extractWorkflowExecutionMeta } from '../../contracts.js'
@@ -22,27 +23,27 @@ import type { AgentRecordInput, AgentStartedRecordInput } from './runtime-record
 import { resolveAgentReplayCall } from './runtime-agent-replay.js'
 import { agentJournalKey } from './journal.js'
 
-/** run 级可变计数（与 action handler / 编排层共享同一对象）。 */
+/** Run-level mutable counters (sharing the same object with the action handler / orchestration layer). */
 export interface AgentRunCounters {
   agentCount: number
   replayedCount: number
   spentOutputTokens: number
 }
 
-/** handleAgentCall 的全部依赖（由 runWorkflow 构造；字段含义见 runWorkflow）。 */
+/** All dependencies of handleAgentCall (constructed by runWorkflow; field meanings in runWorkflow). */
 export interface AgentCallContext {
   runId?: string
   inPlaceResume?: boolean
   host: WorkflowHost
   agentCap: number
-  /** options.journal?.retryFailedCalls === true（失败目标续跑独立重试预算）。 */
+  /** options.journal?.retryFailedCalls === true (failed goals get an independent retry budget on continuation). */
   retryFailedCalls: boolean
-  /** run 终态读取（每次调用读当前值，与原闭包变量读取语义一致）。 */
+  /** Read the run terminal state (reads the current value on each call, matching the former closure-variable reads). */
   runState: { isAborted(): boolean; isSettled(): boolean; isSuspended?(): boolean }
   emit(entries: WorkflowEntry[]): void
   respond(callId: number, ok: boolean, value?: unknown, error?: string, fatal?: boolean): void
   allocateIndex(): number
-  /** agent 行尽力记账（写失败仅诊断计数，不中断 run）。 */
+  /** Best-effort agent-row accounting (write failures only count diagnostics, never interrupt the run). */
   recordAgent(entry: AgentRecordInput): Promise<void>
   /** agent_started 行记账（onResolved 落盘后供重启原位重挂使用）。 */
   recordAgentStarted?(entry: AgentStartedRecordInput): Promise<void>
@@ -91,7 +92,7 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
   ctx.control.liveAgents.set(index, live)
   const intent = (): LiveAgent['intent'] => live.intent
 
-  /** 吸收执行环境元数据到进度行；失败分支同样吸收——conversationId/executionId 是登记续接句柄的依据。 */
+  /** Absorb execution-environment metadata into progress rows; the failure branch absorbs too -- conversationId/executionId are the basis for registering resume handles. */
   const absorbExecutionInfo = (info: AgentExecutionInfo): void => {
     if (info.nodeId !== undefined) base.nodeId = info.nodeId
     if (info.conversationId !== undefined) base.conversationId = info.conversationId
@@ -123,8 +124,8 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
       const attemptMark = { attempt }
       base.prompt = attemptPrompt
       base.promptPreview = preview(attemptPrompt)
-      // 跨尝试不沿用旧 gate 回报：每次尝试的 gate 结论必须来自本次执行，
-      // 旧失败/旧成功冒充新结果都会失真。
+      // Do not reuse an old gate report across attempts: each attempt's gate verdict must come from
+      // this execution; an old failure/success posing as a new result would distort.
       if (attempt > 1) base.gate = undefined
 
       const startedAt = Date.now()
@@ -270,14 +271,14 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
             result = applySchema(result, compiledSchema)
           }
           if (result.ok && payload.gate !== undefined) {
-            // gate 恰好一次：优先 onGateResult/result.gate 已回报结果；
-            // 否则宿主自跑 fallback（仍缺 runGate 则上方前置检查已 fatal）。
+            // Gate exactly once: prefer an already-reported result via onGateResult/result.gate;
+            // otherwise the host runs the fallback itself (if runGate is still missing, the precheck above already went fatal).
             result = await applyGate(result, payload.gate, agentId, runGate, base.gate, payload.gateTimeoutMs, base.effectiveCwd)
             if (result.gate !== undefined) base.gate = result.gate
           }
         } else {
-          // 失败分支同样吸收 executionInfo（§2.3：service 失败时保留元数据
-          // 回传），供失败句柄登记与进度行使用。
+          // The failure branch absorbs executionInfo too (§2.3: keep the metadata return
+          // when the service fails), for failure-handle registration and progress rows.
           if (result.executionInfo !== undefined) absorbExecutionInfo(result.executionInfo)
           if (payload.gate !== undefined && result.gate !== undefined && base.gate === undefined) {
             base.gate = result.gate
@@ -360,9 +361,9 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
         } : text)
         return
       }
-      // 失败但已观察到执行环境（conversationId/executionId，含 service 失败
-      // 分支回传的 executionInfo）：登记续接句柄。同 scope 后续
-      // agent({ resume: label }) 可续接该子会话与其 Worktree（设计 §2.3）。
+      // Failed but the execution environment was observed (conversationId/executionId, incl. the
+      // executionInfo returned by the service-failure branch): register a resume handle. Later
+      // agent({ resume: label }) in the same scope can resume that sub-conversation and its worktree (design §2.3).
       const failureHandle: CompletedChild | undefined =
         base.conversationId !== undefined || base.executionId !== undefined
           ? {
@@ -377,9 +378,9 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
       if (failureHandle !== undefined) {
         ctx.completedByLabel.set(scopedResumeKey(scopeId, label), failureHandle)
       }
-      // maxAttempts 自动重试（与手动 control.retry 共用同一 attempt 环）：
-      // 失败原因以增量块追加进下次尝试 prompt，经 resumeAgent 续接同一
-      // 子会话继续修改，而非另起新会话重跑。
+      // maxAttempts auto retry (sharing the same attempt ring with manual control.retry):
+      // the failure reason is appended as an incremental block into the next attempt's prompt,
+      // continuing edits in the same sub-conversation via resumeAgent, not a fresh conversation rerun.
       if (failureHandle !== undefined && attempt < attemptLimit && resumeAgent !== undefined) {
         const failedError = ctx.redactText(result.error ?? 'Agent failed.')
         const execution = executionInfoForMeta(base)

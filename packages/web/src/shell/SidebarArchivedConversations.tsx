@@ -80,13 +80,13 @@ function ArchivedConversationRow({
         <span className="nav-status-slot">
           <ConversationStatusDot conv={conv} background={background.get(conv.id)} />
         </span>
-        <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
+        <span className="nav-item-label">{conv.title || `Conversation #${conv.id}`}</span>
       </button>
       <span className="nav-item-meta">
         <SidebarPaneTag paneTag={presence.paneTag} />
         <span
           className="badge badge-neutral archived-profile-label"
-          title={`归属智能体：${item.profileLabel}`}
+          title={`Owning agent: ${item.profileLabel}`}
         >
           {item.profileLabel}
         </span>
@@ -167,13 +167,13 @@ export function ArchivedConversationsGroup({
         <button
           type="button"
           className="sidebar-group-header-toggle"
-          title={open ? '收起已归档分组' : '展开已归档分组'}
+          title={open ? 'Collapse archived group' : 'Expand archived group'}
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
         >
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
             <HelmIcon name="archive" size={12} />
-            <span className="nav-item-label">已归档</span>
+            <span className="nav-item-label">Archived</span>
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <span className="badge badge-neutral tabular-nums">{items.length}</span>
@@ -181,13 +181,13 @@ export function ArchivedConversationsGroup({
           </span>
         </button>
         {open && (
-          <Tooltip content={batchMode ? '退出批量恢复' : '批量恢复已归档会话'} side="top">
+          <Tooltip content={batchMode ? 'Exit bulk restore' : 'Bulk restore archived conversations'} side="top">
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs"
               style={{ color: batchMode ? 'var(--accent)' : undefined }}
-              title={batchMode ? '退出批量恢复' : '批量恢复已归档会话'}
-              aria-label={batchMode ? '退出批量恢复' : '批量恢复已归档会话'}
+              title={batchMode ? 'Exit bulk restore' : 'Bulk restore archived conversations'}
+              aria-label={batchMode ? 'Exit bulk restore' : 'Bulk restore archived conversations'}
               onClick={() => {
                 setBatchMode((v) => {
                   if (v) setSelectedIds(new Set())
@@ -204,7 +204,7 @@ export function ArchivedConversationsGroup({
         <div className="sidebar-batch-bar">
           <div className="sidebar-batch-bar-header">
             <span style={{ fontWeight: 500, color: 'var(--fg-secondary)' }}>
-              已选择 {selectedIds.size} 项
+              {selectedIds.size} selected
             </span>
             <button
               type="button"
@@ -213,9 +213,9 @@ export function ArchivedConversationsGroup({
                 setBatchMode(false)
                 setSelectedIds(new Set())
               }}
-              title="退出批量恢复"
+              title="Exit bulk restore"
             >
-              退出
+              Exit
             </button>
           </div>
           <div className="sidebar-batch-bar-actions">
@@ -227,7 +227,7 @@ export function ArchivedConversationsGroup({
                 setSelectedIds(isAllSelected ? new Set() : new Set(items.map((item) => item.conv.id)))
               }}
             >
-              {isAllSelected ? '清空' : '全选'}
+              {isAllSelected ? 'Clear' : 'Select all'}
             </button>
             <button
               type="button"
@@ -235,7 +235,7 @@ export function ArchivedConversationsGroup({
               disabled={selectedIds.size === 0 || restoring}
               onClick={() => void executeBatchRestore()}
             >
-              {restoring ? '恢复中...' : `恢复 (${selectedIds.size})`}
+              {restoring ? 'Restoring...' : `Restore (${selectedIds.size})`}
             </button>
           </div>
         </div>

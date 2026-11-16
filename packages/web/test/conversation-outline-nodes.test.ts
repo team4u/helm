@@ -270,7 +270,7 @@ test('无正文无卡片回合：live 标注生成中、最新失败回合标注
   const liveAssistant = liveNodes.find((n) => n.kind === 'assistant') as OutlineAssistantNode
   assert.ok(liveAssistant !== undefined)
   assert.equal(liveAssistant.status, 'generating')
-  assert.equal(liveAssistant.label, '生成中…')
+  assert.equal(liveAssistant.label, 'Generating…')
   assert.equal(liveAssistant.live, true)
 
   // 已结算历史回合（仅普通工具 step-group，无正文无业务卡）
@@ -283,7 +283,7 @@ test('无正文无卡片回合：live 标注生成中、最新失败回合标注
   const settledAssistant = settledNodes.find((n) => n.kind === 'assistant') as OutlineAssistantNode
   assert.ok(settledAssistant !== undefined)
   assert.equal(settledAssistant.status, 'no-content')
-  assert.equal(settledAssistant.label, '无正文')
+  assert.equal(settledAssistant.label, 'No content')
 
   // 最新回合失败（ConversationSummary.status === 'error' 传入）：仅最新回合标注失败
   const failedItems = buildTimelineItems([
@@ -299,7 +299,7 @@ test('无正文无卡片回合：live 标注生成中、最新失败回合标注
   assert.equal(assistants.length, 2)
   assert.equal(assistants[0]!.status, 'no-content', '失败标注只作用于最新回合')
   assert.equal(assistants[1]!.status, 'failed')
-  assert.equal(assistants[1]!.label, '本回合失败')
+  assert.equal(assistants[1]!.label, 'This turn failed')
 })
 
 // ---------------------------------------------------------------------------

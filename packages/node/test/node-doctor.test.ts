@@ -1,12 +1,12 @@
 /**
- * helm-node doctor / 健康快照 / stdio Drain 硬超时保护测试：
- * - collectNodeHealth：基础指标与磁盘字段合法；目录不存在回退 homedir；
- * - createNodeDaemon：register 与 heartbeat 真实携带 health 快照；
- * - NodeEnvRpcServer：detached 孙进程持续向继承的 stdout 写入时，
- *   envAbortExec / timeout 后 execOnce 在 abortDrainGraceMs 内强制结算，
- *   dispose() 不挂死；
- * - helm-node doctor [--json]：未绑定身份 / 0644 权限 / root 权限 warn /
- *   真实 WS Hub mock 下 rttMs 与机密不泄漏。
+ * helm-node doctor / health snapshot / stdio Drain hard timeout protect test:
+ * - collectNodeHealth: basis metric and disk field legal; directory missing fall back homedir;
+ * - createNodeDaemon:register and heartbeat real carry health snapshot;
+ * - NodeEnvRpcServer:detached descendant process continuous to inherit stdout write when,
+ *   envAbortExec / timeout after execOnce in abortDrainGraceMs inside force compute,
+ *   dispose() do not hang die;
+ * - helm-node doctor [--json]: not bind set identity / 0644 permission / root permission warn /
+ *   real WS Hub mock under rttMs and secret without leaking.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -31,15 +31,15 @@ import { runNodeDoctor } from '../src/daemon/doctor.js';
 import { runNodeCli } from '../src/cli.js';
 import { sanitizedHostEnv } from './helpers/sanitized-env.js';
 
-/** 轮询等待可观察条件成立（替代固定 sleep），超时显式失败。 */
+/** polling wait for can observe condition into establish (alternative fixed sleep), timeout explicit failed. */
 const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
-  kitWaitFor(condition, { timeoutMs, message: `等待超时：${what}` });
+  kitWaitFor(condition, { timeoutMs, message: `wait timed out:${what}` });
 
 // ---------------------------------------------------------------------------
 // 1. collectNodeHealth
 // ---------------------------------------------------------------------------
 
-test('collectNodeHealth：返回合法的基础指标与磁盘空间字段', { timeout: 60_000 }, async () => {
+test('collectNodeHealth: return legal basis metric and disk empty between field', { timeout: 60_000 }, async () => {
   const snapshot = await collectNodeHealth();
   assert.equal(typeof snapshot.collectedAt, 'number');
   assert.ok(snapshot.collectedAt > 0);
@@ -54,13 +54,13 @@ test('collectNodeHealth：返回合法的基础指标与磁盘空间字段', { t
   assert.ok(snapshot.memFreeBytes > 0);
   assert.ok(snapshot.memTotalBytes > 0);
   assert.ok(snapshot.memFreeBytes <= snapshot.memTotalBytes);
-  // statfs 在 Linux/macOS 可用：磁盘字段应采集到且合理
+  // statfs in Linux/macOS available: disk field should collect to and together
   if (snapshot.diskFreeBytes !== undefined && snapshot.diskTotalBytes !== undefined) {
     assert.ok(snapshot.diskFreeBytes > 0);
     assert.ok(snapshot.diskTotalBytes > 0);
     assert.ok(snapshot.diskFreeBytes <= snapshot.diskTotalBytes);
   }
-  // 指定目录存在：按该目录所在挂载点采集
+  // designate directory store in: by the directory which in mount point collect
   const dir = await tempDir('helm-node-health-');
   try {
     const targeted = await collectNodeHealth(dir);
@@ -69,14 +69,14 @@ test('collectNodeHealth：返回合法的基础指标与磁盘空间字段', { t
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
-  // 目录不存在：回退 homedir，绝不抛出
+  // directory missing: fall back homedir, never throw
   const fallback = await collectNodeHealth(path.join(dir, 'no-such-dir'));
   assert.ok(fallback.uptimeSec >= 0);
   if (fallback.diskFreeBytes !== undefined) assert.ok(fallback.diskFreeBytes > 0);
 });
 
 // ---------------------------------------------------------------------------
-// 2. createNodeDaemon：register / heartbeat 携带 health 快照（真实 WS Hub mock）
+// 2. createNodeDaemon:register / heartbeat carry health snapshot (real WS Hub mock)
 // ---------------------------------------------------------------------------
 
 interface DoctorHubFixture {
@@ -86,7 +86,7 @@ interface DoctorHubFixture {
   close(): Promise<void>;
 }
 
-/** 真实 http.Server + WebSocketServer 模拟 Hub /ws/node：记录 register/heartbeat。 */
+/** real http.Server + WebSocketServer simulated Hub /ws/node: record register/heartbeat. */
 async function startDoctorHub(expectedToken: string): Promise<DoctorHubFixture> {
   const registrations: NodeRegisterInput[] = [];
   const heartbeats: { nodeId: string; input?: NodeHeartbeatInput }[] = [];
@@ -126,7 +126,7 @@ async function startDoctorHub(expectedToken: string): Promise<DoctorHubFixture> 
             try {
               callback(JSON.parse(text) as never);
             } catch {
-              // 忽略非法帧。
+              // ignore illegal frame.
             }
           });
         },
@@ -156,7 +156,7 @@ async function startDoctorHub(expectedToken: string): Promise<DoctorHubFixture> 
   };
 }
 
-test('createNodeDaemon：register 与 heartbeat 真实携带 health 快照', { timeout: 60_000 }, async () => {
+test('createNodeDaemon:register and heartbeat real carry health snapshot', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-daemon-health-');
   const token = 'health-node:secret-1';
   const hub = await startDoctorHub(token);
@@ -166,21 +166,21 @@ test('createNodeDaemon：register 与 heartbeat 真实携带 health 快照', { t
     dataDir: dir,
   });
   try {
-    assert.equal(await daemon.waitUntilRegistered(10_000), true, '应完成注册');
+    assert.equal(await daemon.waitUntilRegistered(10_000), true, 'should complete register');
     assert.equal(hub.registrations.length, 1);
     const registerHealth = hub.registrations[0]?.health;
-    assert.ok(registerHealth !== undefined, 'register 应携带 health 快照');
+    assert.ok(registerHealth !== undefined, 'register should carry health snapshot');
     assert.ok(registerHealth!.uptimeSec >= 0);
     assert.ok(Number.isFinite(registerHealth!.memTotalBytes) && registerHealth!.memTotalBytes > 0);
     if (registerHealth!.diskTotalBytes !== undefined) assert.ok(registerHealth!.diskTotalBytes > 0);
     assert.ok(Math.abs(registerHealth!.collectedAt - Date.now()) < 60_000);
 
-    // 等至少一次心跳（heartbeatMs=100ms）
-    await waitFor(() => hub.heartbeats.length >= 1, 10_000, '至少一次心跳');
-    assert.ok(hub.heartbeats.length >= 1, '应收到心跳');
+    // etc. at least once heartbeat (heartbeatMs=100ms)
+    await waitFor(() => hub.heartbeats.length >= 1, 10_000, 'at least once heartbeat');
+    assert.ok(hub.heartbeats.length >= 1, 'should receives heartbeat');
     for (const beat of hub.heartbeats) {
       assert.equal(beat.nodeId, 'health-node');
-      assert.ok(beat.input?.health !== undefined, '心跳应携带 health 快照');
+      assert.ok(beat.input?.health !== undefined, 'heartbeat should carry health snapshot');
       assert.ok(beat.input!.health!.uptimeSec >= 0);
       assert.ok(beat.input!.health!.memFreeBytes > 0);
     }
@@ -192,14 +192,14 @@ test('createNodeDaemon：register 与 heartbeat 真实携带 health 快照', { t
 });
 
 // ---------------------------------------------------------------------------
-// 3. stdio Drain 硬超时保护：detached 孙进程持续写 stdout
+// 3. stdio Drain hard timeout protect:detached descendant process continuous write stdout
 // ---------------------------------------------------------------------------
 
 /**
- * 以 detached: true 派生孙进程：孙进程每 20ms 向继承的 stdout 持续写入，5s 后
- * 自行退出（自限制避免测试遗留孤儿进程；也不可过短——要热过 abort/timeout 的
- * 杀窗，且 runner 需等管道排空才会收尾）；父进程 1s 后退出，孙进程继续拽住
- * 管道 fd——模拟真实的孤儿孙进程挂死场景。
+ * with detached: true derive descendant process: descendant process each 20ms to inherit stdout continuous write,5s after
+ * self row exit (self restrict avoid test legacy orphan child process; also cannot short - - want hot abort/timeout 
+ * kill window, and runner must etc. pipeline arrange empty only then will wrap-up); parent process 1s after exit, descendant process continue drag
+ * pipeline fd- - simulated real orphan child descendant process hang die scenario.
  */
 const ORPHAN_PROGRAM = [
   "const cp = require('node:child_process');",
@@ -208,7 +208,7 @@ const ORPHAN_PROGRAM = [
   "setTimeout(() => {}, 1000);",
 ].join(' ');
 
-test('envAbortExec 后 500ms Drain 保护：孙进程拽住 stdout 不挂死', { timeout: 60_000 }, async () => {
+test('envAbortExec after 500ms Drain protect: descendant process drag stdout do not hang die', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-drain-abort-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir, abortDrainGraceMs: 200 });
   try {
@@ -218,29 +218,29 @@ test('envAbortExec 后 500ms Drain 保护：孙进程拽住 stdout 不挂死', {
       command: [process.execPath, '-e', ORPHAN_PROGRAM],
       timeout: 60,
     });
-    // 等父进程 spawn 完孙进程并退出（孙进程持续向继承管道写入）
+    // etc. parent process spawn completely descendant process and exit (descendant process continuous to inherit pipeline write)
     await delay(300);
-    assert.equal(server.getActiveExecCount(), 1, 'exec 应仍在途（被孙进程管道拽住）');
+    assert.equal(server.getActiveExecCount(), 1, 'exec should still in-flight (by descendant process pipeline drag)');
     await server.envAbortExec('drain-abort');
     const result = await pending;
     const elapsed = Date.now() - start;
-    assert.equal(result.ok, false, '应失败结算');
-    assert.equal(!result.ok && result.error.code, 'aborted', '错误码应为 aborted');
+    assert.equal(result.ok, false, 'should failed compute');
+    assert.equal(!result.ok && result.error.code, 'aborted', 'error code should be aborted');
     if (!result.ok) {
       assert.match(result.error.message, /aborted|drain/i);
     }
-    assert.ok(elapsed < 10_000, `abort 后应在 Drain 宽限期内结算（实际 ${elapsed}ms）`);
-    // dispose 不挂死
+    assert.ok(elapsed < 10_000, `abort after should in Drain wide limit phase inside compute (actual ${elapsed}ms)`);
+    // dispose do not hang die
     const disposeStart = Date.now();
     await server.dispose();
-    assert.ok(Date.now() - disposeStart < 10_000, 'dispose 不应挂死');
+    assert.ok(Date.now() - disposeStart < 10_000, 'dispose must not hang die');
   } finally {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
 
-test('命令 timeout 后 Drain 保护：强制 timeout 结算且 dispose 不挂死', { timeout: 60_000 }, async () => {
+test('command timeout after Drain protect: force timeout compute and dispose do not hang die', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-drain-timeout-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir, abortDrainGraceMs: 200 });
   try {
@@ -248,18 +248,18 @@ test('命令 timeout 后 Drain 保护：强制 timeout 结算且 dispose 不挂�
     const result = await server.envExec({
       execId: 'drain-timeout',
       command: [process.execPath, '-e', ORPHAN_PROGRAM],
-      timeout: 1, // 1s 超时 + 200ms Drain 宽限
+      timeout: 1, // 1s timeout + 200ms Drain wide limit
     });
     const elapsed = Date.now() - start;
-    assert.equal(result.ok, false, '应失败结算');
-    assert.equal(!result.ok && result.error.code, 'timeout', '错误码应为 timeout');
+    assert.equal(result.ok, false, 'should failed compute');
+    assert.equal(!result.ok && result.error.code, 'timeout', 'error code should be timeout');
     if (!result.ok) {
       assert.match(result.error.message, /timed out after 1 seconds/);
     }
-    assert.ok(elapsed < 10_000, `timeout 后应在 Drain 宽限期内结算（实际 ${elapsed}ms）`);
+    assert.ok(elapsed < 10_000, `timeout after should in Drain wide limit phase inside compute (actual ${elapsed}ms)`);
     const disposeStart = Date.now();
     await server.dispose();
-    assert.ok(Date.now() - disposeStart < 10_000, 'dispose 不应挂死');
+    assert.ok(Date.now() - disposeStart < 10_000, 'dispose must not hang die');
   } finally {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
@@ -280,8 +280,8 @@ async function runCli(argv: string[], env: NodeJS.ProcessEnv = {}): Promise<Capt
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    // 剥除宿主受管 HELM_* 变量：doctor 的 Hub 探测目标（HELM_HUB_URL 优先
-    // 级高于身份文件）与 token 语义只由测试 fixture 决定。
+    // strip except host managed HELM_* variable:doctor  Hub probe target (HELM_HUB_URL takes precedence
+    // level high at identity file) and token semantics only by test fixture decide.
     env: { ...sanitizedHostEnv(), ...env },
     out: (t) => (out += t),
     err: (t) => (err += t),
@@ -289,12 +289,12 @@ async function runCli(argv: string[], env: NodeJS.ProcessEnv = {}): Promise<Capt
   return { out, err, code };
 }
 
-test('doctor：未绑定身份时 ok=false 且退出码 1', { timeout: 60_000 }, async () => {
+test('doctor: not bind set identity when ok=false and exit code 1', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-doctor-none-');
   try {
-    // Herdr IPC 检查需避免读到真实 ~/.config/herdr：指向隔离路径
+    // Herdr IPC check must avoid read to real ~/.config/herdr: points to isolated path
     const result = await runCli(['doctor', '--data-dir', dir, '--json'], { HERDR_SOCKET_PATH: path.join(dir, 'no.sock') });
-    assert.equal(result.code, 1, `期望退出码 1，实得 ${result.code}（out=${result.out}）`);
+    assert.equal(result.code, 1, `expectation exit code 1, got ${result.code}(out=${result.out})`);
     const report = JSON.parse(result.out) as { ok: boolean; checks: { id: string; status: string }[] };
     assert.equal(report.ok, false);
     const identity = report.checks.find((c) => c.id === 'identity');
@@ -305,8 +305,8 @@ test('doctor：未绑定身份时 ok=false 且退出码 1', { timeout: 60_000 },
   }
 });
 
-test('doctor：node.json 权限 0644 时 identity 报 error（退出码 1；Windows 无 POSIX mode 跳过）', { timeout: 60_000 }, async () => {
-  if (process.platform === 'win32') return; // NTFS 走 ACL，stat.mode 不表达 0644，生产逻辑已对 win32 豁免
+test('doctor:node.json permission 0644 when identity report error(exit code 1;Windows without POSIX mode skip)', { timeout: 60_000 }, async () => {
+  if (process.platform === 'win32') return; // NTFS away ACL,stat.mode do not express 0644, produce logic already for win32 exemption
   const dir = await tempDir('helm-node-doctor-mode-');
   try {
     await writeNodeIdentity(dir, { nodeId: 'mode-node', token: 'mode-node:secret-1', hubUrl: 'http://127.0.0.1:3202' });
@@ -318,7 +318,7 @@ test('doctor：node.json 权限 0644 时 identity 报 error（退出码 1；Wind
     const identity = report.checks.find((c) => c.id === 'identity');
     assert.equal(identity?.status, 'error');
     assert.match(identity?.message ?? '', /0600|0644/);
-    // 非 json 模式同样可用
+    // non- json pattern same available
     const textResult = await runCli(['doctor', '--data-dir', dir], { HERDR_SOCKET_PATH: path.join(dir, 'no.sock') });
     assert.equal(textResult.code, 1);
     assert.match(textResult.out, /identity/);
@@ -327,7 +327,7 @@ test('doctor：node.json 权限 0644 时 identity 报 error（退出码 1；Wind
   }
 });
 
-test('doctor：root 权限 warn 但身份与 Hub 正常时整体 ok=true（退出码 0）', { timeout: 60_000 }, async () => {
+test('doctor:root permission warn but identity and Hub normal when whole ok=true(exit code 0)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-doctor-root-');
   const token = 'doctor-ok-node:secret-1';
   const hub = await startDoctorHub(token);
@@ -340,17 +340,17 @@ test('doctor：root 权限 warn 但身份与 Hub 正常时整体 ok=true（退�
     });
     const privilege = report.checks.find((c) => c.id === 'privilege');
     assert.equal(privilege?.status, 'warn');
-    assert.match(privilege?.message ?? '', /root 或免密 sudo/);
+    assert.match(privilege?.message ?? '', /root or exempt sudo/);
     assert.equal(report.checks.find((c) => c.id === 'identity')?.status, 'ok');
     assert.equal(report.checks.find((c) => c.id === 'hub')?.status, 'ok');
-    assert.equal(report.ok, true, 'warn 不影响整体 ok');
+    assert.equal(report.ok, true, 'warn does not affect whole ok');
 
     const result = await runCli(
       ['doctor', '--data-dir', dir, '--json'],
       { HERDR_SOCKET_PATH: path.join(dir, 'no.sock'), HELM_DOCTOR_TEST: '1' },
     );
-    // CLI 无法注入 checkPrivilege：hub 检查以真实 WS 探测（身份与 Hub 均正常）。
-    // 该断言仅验证 CLI 退出码与 warn 项在身份/Hub 正常时整体 ok。
+    // CLI cannot inject checkPrivilege:hub check with real WS probe (identity and Hub all normal).
+    // the assertion only verify CLI exit code and warn items in identity/Hub normal when whole ok.
     assert.equal(result.code, report.ok ? 0 : 1);
   } finally {
     await hub.close();
@@ -358,10 +358,10 @@ test('doctor：root 权限 warn 但身份与 Hub 正常时整体 ok=true（退�
   }
 });
 
-test('doctor：真实 WS Hub mock 下 hub 项只读探测（零 register、零顶替）且 token 绝不出现', { timeout: 60_000 }, async (t) => {
+test('doctor: real WS Hub mock under hub items only read probe (zero register, zero top replace) and token never appear', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-node-doctor-hub-');
   const token = 'doctor-hub-node:secret-1';
-  // 同 nodeId 已有在线连接：register 会将其顶替（evict）——只读探测绝不能发送 register。
+  // same nodeId already has online connect:register will its top replace (evict) - - only read probe never can send register.
   const hub = await startDoctorHub(token);
   t.after(async () => {
     await hub.close();
@@ -376,27 +376,27 @@ test('doctor：真实 WS Hub mock 下 hub 项只读探测（零 register、零�
   assert.equal(report.ok, true, JSON.stringify(report.checks));
   const hubCheck = report.checks.find((c) => c.id === 'hub');
   assert.equal(hubCheck?.status, 'ok');
-  assert.match(hubCheck?.message ?? '', /不校验令牌/);
+  assert.match(hubCheck?.message ?? '', /do not validate token/);
   const details = (hubCheck?.details ?? {}) as { rttMs?: number; hubUrl?: string };
   assert.equal(typeof details.rttMs, 'number');
   assert.ok(details.rttMs! >= 0);
   assert.equal(details.hubUrl, hub.url);
-  // 只读红线：Hub 侧绝不收到 register（同 nodeId register 会 evict 在线守护）
-  assert.equal(hub.registrations.length, 0, 'doctor 不得发送 register');
-  // 报告全文绝不出现 token（secret）
+  // only read hard rule:Hub side never receives register(same nodeId register will evict online guard)
+  assert.equal(hub.registrations.length, 0, 'doctor must not send register');
+  // report all text never appear token(secret)
   const serialized = JSON.stringify(report);
-  assert.equal(serialized.includes(token), false, '报告中不得出现 token');
+  assert.equal(serialized.includes(token), false, 'report in must not appear token');
   assert.equal(serialized.includes('secret-1'), false);
-  // CLI --json 输出同样不泄漏
+  // CLI --json output same without leaking
   const cli = await runCli(['doctor', '--data-dir', dir, '--json'], { HERDR_SOCKET_PATH: path.join(dir, 'no.sock') });
   assert.equal(cli.code, 0, cli.out + cli.err);
-  assert.equal(cli.out.includes(token), false, 'CLI 输出不得出现 token');
+  assert.equal(cli.out.includes(token), false, 'CLI output must not appear token');
   const cliReport = JSON.parse(cli.out) as { ok: boolean; hubUrl: string };
   assert.equal(cliReport.ok, true);
   assert.equal(cliReport.hubUrl, hub.url);
 });
 
-test('doctor：在线 daemon 同 nodeId 时探测不干扰其连接（不断连、不重注册）', { timeout: 60_000 }, async (t) => {
+test('doctor: online daemon same nodeId when probe do not interference its connect (do not assert connect, do not heavy register)', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-node-doctor-live-');
   const token = 'doctor-live-node:secret-1';
   const hub = await startDoctorHub(token);
@@ -411,33 +411,33 @@ test('doctor：在线 daemon 同 nodeId 时探测不干扰其连接（不断连�
   });
   try {
     assert.equal(await daemon.waitUntilRegistered(10_000), true);
-    // doctor 从磁盘读取身份：补写 node.json（daemon 创建路径不落盘）。
+    // doctor from disk read identity: patch write node.json(daemon create path do not).
     await writeNodeIdentity(dir, { nodeId: 'doctor-live-node', token, hubUrl: hub.url });
     const registrationsBefore = hub.registrations.length;
 
-    // 在 daemon 在线时执行 doctor：只读探测不得引发断连重连（旧实现会以同
-    // nodeId register 顶掉在线连接，真实 Hub 侧即 evict + 在途命令被杀）。
+    // in daemon online when execute doctor: only read probe must not quote assert connect reconnect (old implement will with same
+    // nodeId register top online connect, real Hub side i.e. evict + in-flight command by kill).
     const report = await runNodeDoctor({
       dataDir: dir,
       env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
       checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
     });
     assert.equal(report.ok, true, JSON.stringify(report.checks));
-    assert.equal(daemon.isConnected(), true, 'doctor 不得干扰在线 daemon 连接');
-    assert.equal(hub.registrations.length, registrationsBefore, '不得触发重新注册');
+    assert.equal(daemon.isConnected(), true, 'doctor must not interference online daemon connect');
+    assert.equal(hub.registrations.length, registrationsBefore, 'must not trigger re- register');
     await delay(300);
-    assert.equal(daemon.isConnected(), true, '探测后连接保持稳定');
+    assert.equal(daemon.isConnected(), true, 'probe after connect keep stable');
   } finally {
-    // fixture 的 hub.close 只关最新连接：daemon 必须先关（否则 server.close
-    // 等待 daemon 连接悬挂）。
+    // fixture  hub.close only closure most new connect:daemon must first closure (otherwise server.close
+    // wait for daemon connect pending).
     await daemon.close().catch(() => undefined);
   }
 });
 
-test('doctor：Hub 不可达时 hub 项报 error（握手失败如实呈现）', { timeout: 60_000 }, async () => {
+test('doctor:Hub cannot reach when hub items report error(grasp manually failed such as present)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-doctor-dead-');
   try {
-    // 端口 1 上无服务：握手立即失败（连接拒绝）
+    // port 1 on without service: grasp manually immediately failed (connect reject)
     await writeNodeIdentity(dir, { nodeId: 'doctor-dead-node', token: 'doctor-dead-node:secret-1', hubUrl: 'http://127.0.0.1:1' });
     const report = await runNodeDoctor({
       dataDir: dir,
@@ -453,7 +453,7 @@ test('doctor：Hub 不可达时 hub 项报 error（握手失败如实呈现）',
   }
 });
 
-test('doctor：herdr_ipc 端点可达时 ok、不可达时 info', { timeout: 60_000 }, async () => {
+test('doctor:herdr_ipc end point can reach when ok, cannot reach when info', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-doctor-ipc-');
   const token = 'doctor-ipc-node:secret-1';
   const hub = await startDoctorHub(token);
@@ -466,7 +466,7 @@ test('doctor：herdr_ipc 端点可达时 ok、不可达时 info', { timeout: 60_
   await new Promise<void>((resolve) => ipcServer.listen(sockPath, resolve));
   try {
     await writeNodeIdentity(dir, { nodeId: 'doctor-ipc-node', token, hubUrl: hub.url });
-    // 可达：ok
+    // can reach:ok
     const reachable = await runNodeDoctor({
       dataDir: dir,
       env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: sockPath },
@@ -476,7 +476,7 @@ test('doctor：herdr_ipc 端点可达时 ok、不可达时 info', { timeout: 60_
     assert.equal(ipcOk?.status, 'ok', JSON.stringify(reachable.checks));
     assert.equal((ipcOk?.details as { endpoint?: string } | undefined)?.endpoint, sockPath);
 
-    // 不可达：info（可选能力不阻断）
+    // cannot reach:info(optional capability do not block assert)
     const missing = await runNodeDoctor({
       dataDir: dir,
       env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: path.join(dir, 'missing.sock') },
@@ -484,8 +484,8 @@ test('doctor：herdr_ipc 端点可达时 ok、不可达时 info', { timeout: 60_
     });
     const ipcInfo = missing.checks.find((c) => c.id === 'herdr_ipc');
     assert.equal(ipcInfo?.status, 'info');
-    assert.match(ipcInfo?.message ?? '', /未检测到运行中的 Herdr IPC/);
-    assert.equal(missing.ok, true, 'info 不影响整体 ok');
+    assert.match(ipcInfo?.message ?? '', /not detect to run in Herdr IPC/);
+    assert.equal(missing.ok, true, 'info does not affect whole ok');
   } finally {
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => ipcServer.close(() => resolve()));

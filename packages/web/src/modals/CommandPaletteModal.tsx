@@ -91,10 +91,10 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       rows.push({
         kind: 'command',
         id: 'builtin:toggle-model-picker',
-        title: '切换当前模型',
+        title: 'Switch current model',
         shortcut: 'Ctrl+L',
         icon: 'sparkles',
-        keywords: ['model', 'picker', '模型', '切换模型'],
+        keywords: ['model', 'picker', 'Model', 'Switch model'],
         run: () => {
           const detail: HelmShortcutDetail = { action: 'toggle-model-picker', panel: activePanel }
           window.dispatchEvent(new CustomEvent<HelmShortcutDetail>('helm:shortcut', { detail }))
@@ -105,10 +105,10 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       rows.push({
         kind: 'command',
         id: 'builtin:toggle-process-groups',
-        title: '展开 / 收起最近过程步骤',
+        title: 'Expand / collapse recent process steps',
         shortcut: 'Ctrl+O',
         icon: 'list-tree',
-        keywords: ['process', 'thinking', 'tools', '过程', '思考', '折叠'],
+        keywords: ['process', 'thinking', 'tools', 'Process', 'Thinking', 'Collapse'],
         run: () => {
           const detail: HelmShortcutDetail = { action: 'toggle-process-groups', panel: activePanel }
           window.dispatchEvent(new CustomEvent<HelmShortcutDetail>('helm:shortcut', { detail }))
@@ -119,18 +119,18 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       rows.push({
         kind: 'command',
         id: 'builtin:toggle-workbench',
-        title: store.workbenchOpen ? '关闭工作台抽屉' : '打开工作台抽屉',
+        title: store.workbenchOpen ? 'Close workbench drawer' : 'Open workbench drawer',
         shortcut: formatModShortcut('J'),
         icon: 'panel-right',
-        keywords: ['workbench', 'drawer', '工作台', '产物'],
+        keywords: ['workbench', 'drawer', 'Workbench', 'Artifacts'],
         run: () => store.setWorkbenchOpen(!store.workbenchOpen),
       })
     }
     rows.push({
       kind: 'command',
       id: 'builtin:new-conversation',
-      title: '新建对话',
-      hint: paletteProfileId !== undefined ? paletteProfileId : '先选择角色',
+      title: 'New conversation',
+      hint: paletteProfileId !== undefined ? paletteProfileId : 'Select a profile first',
       icon: 'plus',
       run: () => {
         // 有当前 Profile 上下文进入待命态（首次发送才创建）；无上下文去角色中心选角色，
@@ -147,7 +147,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       rows.push({
         kind: 'command',
         id: 'builtin:close-split',
-        title: '关闭右侧分屏',
+        title: 'Close right split view',
         icon: 'panel-right',
         run: () => store.closeSplit(),
       })
@@ -159,16 +159,16 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     {
       kind: 'command',
       id: 'builtin:toggle-sidebar',
-      title: store.sidebarCollapsed ? '展开桌面左侧栏' : '收起桌面左侧栏',
+      title: store.sidebarCollapsed ? 'Expand desktop sidebar' : 'Collapse desktop sidebar',
       shortcut: formatModShortcut('B'),
       icon: 'columns',
-      keywords: ['sidebar', 'collapse', '侧栏', '折叠', '导航'],
+      keywords: ['sidebar', 'collapse', 'Sidebar', 'Collapse', 'Navigation'],
       run: () => store.toggleSidebarCollapsed?.(),
     },
     {
       kind: 'command',
       id: 'builtin:goto-assistant',
-      title: '打开个人助理角色',
+      title: 'Open personal assistant profile',
       hint: 'assistant',
       icon: 'sparkles',
       run: () => store.openTarget({ kind: 'agent', profileId: 'assistant' }),
@@ -176,9 +176,9 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     {
       kind: 'command',
       id: 'builtin:open-profile-editor',
-      title: '打开智能体角色中心',
+      title: 'Open agent profile center',
       icon: 'bot',
-      keywords: ['profile', 'profiles', '角色', '智能体'],
+      keywords: ['profile', 'profiles', 'Profile', 'Agents'],
       run: () => {
         close()
         store.openTarget({ kind: 'profiles' })
@@ -187,9 +187,9 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     {
       kind: 'command',
       id: 'builtin:open-provider-auth',
-      title: '打开模型与凭据中心',
+      title: 'Open models and credentials center',
       icon: 'key',
-      keywords: ['model', 'models', 'provider', 'providers', 'key', '模型', '凭据'],
+      keywords: ['model', 'models', 'provider', 'providers', 'key', 'Model', 'Credentials'],
       run: () => {
         close()
         store.openTarget({ kind: 'models' })
@@ -198,9 +198,9 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     {
       kind: 'command',
       id: 'builtin:open-skill-viewer',
-      title: '打开技能中心',
+      title: 'Open skills center',
       icon: 'sparkles',
-      keywords: ['skill', 'skills', '技能'],
+      keywords: ['skill', 'skills', 'Skills'],
       run: () => {
         close()
         store.openTarget({ kind: 'skills' })
@@ -209,9 +209,9 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     {
       kind: 'command',
       id: 'builtin:open-nodes',
-      title: '打开计算节点中心',
+      title: 'Open compute nodes center',
       icon: 'network',
-      keywords: ['node', 'nodes', 'byom', 'helm-node', '节点'],
+      keywords: ['node', 'nodes', 'byom', 'helm-node', 'Nodes'],
       run: () => {
         close()
         store.openTarget({ kind: 'nodes' })
@@ -220,9 +220,9 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     {
       kind: 'command',
       id: 'builtin:open-plugin-center',
-      title: '打开插件中心',
+      title: 'Open plugins center',
       icon: 'boxes',
-      keywords: ['plugin', 'plugins', 'settings', '插件', '设置', '插件中心'],
+      keywords: ['plugin', 'plugins', 'settings', 'Plugins', 'Settings', 'Plugin Center'],
       run: () => {
         close()
         store.openTarget({ kind: 'plugins' })
@@ -233,10 +233,10 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       id: 'builtin:toggle-theme',
       title:
         store.themePreference === 'system'
-          ? '切换为浅色模式'
+          ? 'Switch to light mode'
           : store.themePreference === 'light'
-            ? '切换为暗色模式'
-            : '切换为跟随系统',
+            ? 'Switch to dark mode'
+            : 'Switch to system theme',
       icon:
         store.themePreference === 'system'
           ? 'monitor'
@@ -248,9 +248,9 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     {
       kind: 'command',
       id: 'builtin:toggle-quiet-notify',
-      title: store.quietNotifyEnabled ? '关闭后台浏览器通知' : '开启后台浏览器通知（会话完成或等待处理且页面不在前台时提醒）',
+      title: store.quietNotifyEnabled ? 'Disable background browser notifications' : 'Enable background browser notifications (alert when a conversation completes or awaits input while the page is in the background)',
       icon: store.quietNotifyEnabled ? 'bell' : 'bell-off',
-      keywords: ['notify', 'notification', 'background', 'quiet', 'blocked', '通知', '提醒', '后台', '完成', '审批'],
+      keywords: ['notify', 'notification', 'background', 'quiet', 'blocked', 'Notifications', 'Alerts', 'Background', 'Completed', 'Approvals'],
       run: () => {
         void store.setQuietNotify(!store.quietNotifyEnabled)
       },
@@ -283,7 +283,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
               store.pushNotice({
                 type: 'notification',
                 level: 'info',
-                title: '命令已执行',
+                title: 'Command executed',
                 body: cmd.spec.title,
               }),
             )
@@ -291,7 +291,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
               store.pushNotice({
                 type: 'notification',
                 level: 'error',
-                title: '命令执行失败',
+                title: 'Command execution failed',
                 body: err instanceof Error ? err.message : String(err),
               }),
             )
@@ -309,7 +309,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           conversationId: conv.id,
           title: conv.title,
           entryId: '',
-          snippet: `会话 #${conv.id} / ${conv.profileId}`,
+          snippet: `Conversation #${conv.id} / ${conv.profileId}`,
         },
       })),
     [conversationMatches],
@@ -325,13 +325,13 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       (store.plugins ?? []).map((plugin) => ({
         kind: 'command' as const,
         id: `plugin-item:${plugin.id}`,
-        title: `插件：${plugin.name || plugin.id}`,
-        hint: `在插件中心查看与配置 ${plugin.id}`,
+        title: `Plugin: ${plugin.name || plugin.id}`,
+        hint: `View and configure ${plugin.id} in the plugin center`,
         icon: 'boxes',
         keywords: [
           'plugin',
           'plugins',
-          '插件',
+          'Plugins',
           plugin.id,
           plugin.name ?? '',
           ...(plugin.tools ?? []),
@@ -354,7 +354,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           conversationId: conv.id,
           title: conv.title,
           entryId: '',
-          snippet: `最近会话 #${conv.id} / ${conv.profileId}`,
+          snippet: `Recent conversation #${conv.id} / ${conv.profileId}`,
         },
       })),
     [store.conversations, paletteConversation?.id],
@@ -445,17 +445,17 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           <DialogContent
             className="modal"
             style={{ maxWidth: 620 }}
-            aria-label="命令面板与全局搜索"
+            aria-label="Command palette and global search"
             onKeyDown={onKeyDown}
           >
-            <DialogTitle style={{ display: 'none' }}>命令面板与全局搜索</DialogTitle>
+            <DialogTitle style={{ display: 'none' }}>Command palette and global search</DialogTitle>
             <div className="modal-header" style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
               <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
                 <HelmIcon name="search" size={15} />
                 <input
                   ref={inputRef}
-                  aria-label="搜索消息全文、跳转会话或执行命令"
-                  placeholder="搜索消息全文、跳转会话或执行命令..."
+                  aria-label="Search message text, jump to a conversation, or run a command"
+                  placeholder="Search message text, jump to a conversation, or run a command..."
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
@@ -463,7 +463,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
               {searching && (
                 <span className="badge badge-neutral" style={{ height: 22, padding: '0 6px', flexShrink: 0 }}>
                   <HelmIcon name="loader" size={12} className="spin-slow" />
-                  搜索中
+                  Searching
                 </span>
               )}
               <DialogClose asChild>
@@ -471,13 +471,13 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                   type="button"
                   className="btn btn-ghost btn-sm palette-close-btn"
                   onClick={close}
-                  title="关闭"
-                  aria-label="关闭"
+                  title="Close"
+                  aria-label="Close"
                 >
-                  <span className="palette-close-desktop badge badge-neutral">Esc 关闭</span>
+                  <span className="palette-close-desktop badge badge-neutral">Esc to close</span>
                   <span className="palette-close-mobile" style={{ alignItems: 'center', gap: 4 }}>
                     <HelmIcon name="x" size={13} />
-                    <span style={{ fontSize: 11.5 }}>关闭</span>
+                    <span style={{ fontSize: 11.5 }}>Close</span>
                   </span>
                 </button>
               </DialogClose>
@@ -512,21 +512,21 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                   type="button"
                   className="btn btn-sm"
                   onClick={() => setPreviewCmd(null)}
-                  aria-label="关闭命令内容预览"
+                  aria-label="Close command content preview"
                 >
-                  收起
+                  Collapse
                 </button>
               </div>
               <PluginUiView
                 pluginId={previewCmd.pluginId}
                 spec={previewCmd.spec}
-                label={`命令 ${previewCmd.spec.id} 内容`}
+                label={`Command ${previewCmd.spec.id} content`}
               />
             </div>
           )}
           {rows.length === 0 && (
             <div style={{ padding: '18px 12px', color: 'var(--fg-subtle)', fontSize: 12.5, textAlign: 'center' }}>
-              {query.trim() ? '没有匹配的结果' : '输入关键词搜索，或直接选择下方命令'}
+              {query.trim() ? 'No matching results' : 'Type keywords to search, or pick a command below'}
             </div>
           )}
           {rows.map((row, idx) =>
@@ -563,7 +563,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                   <HelmIcon name="message-square" size={14} />
                   <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                     <span className="nav-item-label">
-                      {row.hit.title || `会话 #${row.hit.conversationId}`}
+                      {row.hit.title || `Conversation #${row.hit.conversationId}`}
                     </span>
                     <span
                       className="mono selectable"

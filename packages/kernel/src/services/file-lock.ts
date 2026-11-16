@@ -1,11 +1,11 @@
 /**
- * 进程内按真实路径共享的文件串行器。
- * 为什么不用实例级队列：AuthService 内部、runtime、插件各自 new 的
- * ConfigService / CredentialService 是不同实例，实例队列挡不住跨实例
- * 「并发读同一旧文件后互相覆盖」。以真实路径为 key 的进程级锁才能让
- * 同一 dataDir 的全部实例串行读改写。
- * 进程内互斥见 withFileLock；跨进程互斥见 withProcessFileLock。
- * 不可重入：fn 内部不得再对同一 path 加锁（会死锁）。
+ * process inside by real path sharing file serial.
+ * is what do not use instance level queue:AuthService internal,runtime, plugin each new 
+ * ConfigService / CredentialService is different instance, instance queue block do not across instance
+ * concurrency read the same old file after mutual each other override. with real path is key process level lock only then can let
+ * the same dataDir all instance serial read change write.
+ * process inside mutual exclusion see withFileLock; across process mutual exclusion see withProcessFileLock.
+ * cannot heavy:fn internal must not again for the same path add lock (will deadlock).
  */
 import { realpath, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
@@ -14,7 +14,7 @@ import process from 'node:process'
 
 const locks = new Map<string, Promise<unknown>>()
 
-/** 锁 key 归一化：优先真实路径（dataDir 为软链时不同写法仍共享同一把锁）。 */
+/** lock key archive one: takes precedence real path (dataDir is symlink when different write method still sharing the same lock). */
 async function lockKey(path: string): Promise<string> {
   const real = await realpath(path).catch(() => undefined)
   if (real !== undefined) return real
@@ -23,14 +23,14 @@ async function lockKey(path: string): Promise<string> {
   return resolve(path)
 }
 
-/** 以 path 为互斥 key 串行执行 fn；同 key 的所有调用（跨实例）严格按序排队。 */
+/** with path is mutual exclusion key serial execute fn; same key all invoke (across instance) strictly by order queue up. */
 export async function withFileLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
   const key = await lockKey(path)
   const prev = locks.get(key) ?? Promise.resolve()
   const run = prev.then(fn, fn)
   const tail = run.catch(() => undefined)
   locks.set(key, tail)
-  // 尾部结算后清理，防止长期运行进程的 Map 无界增长。
+  // tail part compute after clean up, guard against long phase run process Map without boundary increase long.
   void tail.then(() => {
     if (locks.get(key) === tail) locks.delete(key)
   })
@@ -38,19 +38,19 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T>): Promi
 }
 
 // ---------------------------------------------------------------------------
-// 跨进程文件锁：同一文件可能由多个 Hub/管理进程读改写，
-// 仅进程内串行挡不住跨进程「并发读同一旧文件后互相覆盖」。
-// 锁协议：
-//   锁文件为 <目标文件>.lock，O_EXCL 创建，内容首字段为持有者 PID（十进制）。
-//   只在 PID 确认死亡（ESRCH）时视为 stale 破除并重试；不按存活时长强拆
-//   （合法持锁者可能只是慢）。坏锁内容/无法判定时显式报错，绝不猜测。
-//   释放仅删除自己持有的锁文件（防误删他人紧接创建的新锁）。
-//   不可重入：同进程内先经 withFileLock 串行，再进本锁。
+// across process file lock: the same file may by multiple Hub/manage process read change write,
+// only process inside serial block do not across process concurrency read the same old file after mutual each other override.
+// lock protocol:
+//   lock file is <target file>.lock,O_EXCL create, content first token segment is holder PID(ten enter system).
+//   only in PID confirm death (ESRCH) when treated as stale break except and retry; do not by store when long strong split
+//   (legal hold lock may only is slow). broken lock content/cannot decide when explicit errors, never guess.
+//   release only delete itself hold has lock file (guard against mistakenly delete other person tight connect create new lock).
+//   cannot heavy: same process inside first via withFileLock serial, again enter this lock.
 // ---------------------------------------------------------------------------
 
 const PROCESS_LOCK_WAIT_MS = 10_000
 const PROCESS_LOCK_POLL_MS = 25
-/** 锁文件刚创建但内容尚未写完的宽限期：期内空/半截内容视为正在写入。 */
+/** lock file just create but content not yet write completely wide limit phase: phase inside empty/half truncate content treated as is now write. */
 const FRESH_LOCK_GRACE_MS = 1_500
 
 interface LockOwner {
@@ -73,8 +73,8 @@ async function isProcessAlive(pid: number): Promise<boolean> {
 }
 
 /**
- * 跨进程排他锁下执行 fn；锁文件为 `${path}.lock`。
- * 与 CLI 的锁实现协议兼容：双方可互相排队、互斥同一目标文件。
+ * across process arrange other lock under execute fn; lock file is `${path}.lock`.
+ * and CLI lock implement protocol compatibility: both sides can mutual each other queue up, mutual exclusion the same target file.
  */
 export async function withProcessFileLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
   const lockFile = `${path}.lock`
@@ -86,32 +86,32 @@ export async function withProcessFileLock<T>(path: string, fn: () => Promise<T>)
       break
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
-        throw new Error(`无法创建锁文件（${lockFile}）：${err instanceof Error ? err.message : String(err)}`)
+        throw new Error(`cannot create lock file (${lockFile}):${err instanceof Error ? err.message : String(err)}`)
       }
     }
-    // 拿锁失败：仅在持有者 PID 确认死亡时破除 stale 锁（不按存活时长强拆）
+    // take lock failed: only in holder PID confirm death when break except stale lock (do not by store when long strong split)
     try {
       const raw = await readFile(lockFile, 'utf8')
       const holder = parseLockOwner(raw)
       if (holder === undefined) {
-        // 并发进程刚以 open('wx') 创建锁文件但尚未写完持有者记录：mtime 距今
-        // < 1500ms 视为正在写入，等待重试而非误判锁损坏（误判会破除健康锁）；
-        // 过了宽限期仍无法解析才是真的损坏，显式报错（诚实性纪律）。
+        // concurrency process just with open('wx') create lock file but not yet write completely holder record:mtime distance now
+        // < 1500ms treated as is now write, wait for retry while non- mistakenly judge lock corrupt (mistakenly judge will break except health lock);
+        // wide limit phase still cannot parse only then is true corrupt, explicit errors (honest discipline).
         const stats = await stat(lockFile)
         if (Date.now() - stats.mtimeMs >= FRESH_LOCK_GRACE_MS) {
-          throw new Error(`锁文件内容损坏（${lockFile}）：${JSON.stringify(raw.slice(0, 120))}`)
+          throw new Error(`lock file content corrupt (${lockFile}):${JSON.stringify(raw.slice(0, 120))}`)
         }
       } else if (holder.pid !== undefined && !(await isProcessAlive(holder.pid))) {
-        // 持有者已退出：原子抢占（unlink 与后续 wx 创建之间仍有竞态，失败即重试）
+        // holder already exit: atomic preempt (unlink and after continue wx create between still has race, failed i.e. retry)
         await rm(lockFile, { force: true })
         continue
       }
     } catch (err) {
-      // 锁刚被释放时重新争抢；权限、IO 与内容损坏均须显式失败。
+      // lock just by release when re- contend grab; permission,IO and content corrupt all must explicit failed.
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     }
     if (Date.now() > deadline) {
-      throw new Error(`文件被并发写入，等待锁超时（${lockFile}）`)
+      throw new Error(`file by concurrency write, wait for lock timeout (${lockFile})`)
     }
     await new Promise((resolve) => setTimeout(resolve, PROCESS_LOCK_POLL_MS))
   }
@@ -122,7 +122,7 @@ export async function withProcessFileLock<T>(path: string, fn: () => Promise<T>)
       const raw = await readFile(lockFile, 'utf8')
       if (raw.trim() === owner) await rm(lockFile, { force: true })
     } catch {
-      /* 释放失败留给持有者死亡后的 stale 破除，不掩盖业务结果 */
+      /* release failed to holder death after stale break except, do not mask business result */
     }
   }
 }

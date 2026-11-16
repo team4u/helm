@@ -60,8 +60,8 @@ export function ProfileCard({
 
   const skillsLabel =
     profile.skills === undefined
-      ? '全部可用技能'
-      : `${profile.skills.length} 个技能`
+      ? 'All available skills'
+      : `${profile.skills.length} skills`
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -84,17 +84,17 @@ export function ProfileCard({
 
   const modelTitle = effectiveModel.model
     ? effectiveModel.source === 'bound'
-      ? `绑定模型：${effectiveModel.model}${
-          effectiveModel.thinkingLevel ? `（思考档位：${effectiveModel.thinkingLevel}）` : ''
+      ? `Bound model: ${effectiveModel.model}${
+          effectiveModel.thinkingLevel ? ` (thinking level: ${effectiveModel.thinkingLevel})` : ''
         }`
-      : `继承全局默认模型：${effectiveModel.model}${
-          effectiveModel.thinkingLevel ? `（思考档位：${effectiveModel.thinkingLevel}）` : ''
+      : `Inherits global default model: ${effectiveModel.model}${
+          effectiveModel.thinkingLevel ? ` (thinking level: ${effectiveModel.thinkingLevel})` : ''
         }`
-    : '跟随全局默认模型配置'
+    : 'Follow global default model configuration'
 
   const locationText = location.cwd
     ? `${location.nodeId} · ${location.cwd}`
-    : `${location.nodeId} · 默认工作目录`
+    : `${location.nodeId} · default working directory`
 
   return (
     <div
@@ -113,14 +113,14 @@ export function ProfileCard({
               {displayName}
             </span>
             {isSystem && (
-              <span className="primary-card-pill mono" title="系统内置角色">
+              <span className="primary-card-pill mono" title="Built-in system profile">
                 <HelmIcon name="lock" size={10} />
-                <span>系统</span>
+                <span>System</span>
               </span>
             )}
             <span
               className={`${ACTIVITY_BADGE_CLASS[activity.stateKind]} tabular-nums`}
-              title={`激活状态：${activity.stateLabel}`}
+              title={`Activity: ${activity.stateLabel}`}
             >
               {activity.stateLabel}
             </span>
@@ -130,11 +130,11 @@ export function ProfileCard({
       </div>
 
       <div className="primary-card-desc" title={profile.description || undefined}>
-        {profile.description || '暂无描述'}
+        {profile.description || 'No description'}
       </div>
 
       <div className="flex-col-xs">
-        <div className="flex-row primary-card-location text-subtle mono" title={`节点与目录：${locationText}`}>
+        <div className="flex-row primary-card-location text-subtle mono" title={`Node and directory: ${locationText}`}>
           <HelmIcon name={location.isRemoteNode ? 'server' : 'laptop'} size={11} />
           <span className="break-word">{locationText}</span>
         </div>
@@ -151,23 +151,23 @@ export function ProfileCard({
           ) : (
             <span className="primary-card-pill" title={modelTitle}>
               <HelmIcon name="cpu" size={10} />
-              <span className="primary-card-pill-label">跟随全局默认</span>
+              <span className="primary-card-pill-label">Follow global default</span>
             </span>
           )}
           {effectiveModel.source === 'global' && (
             <span
               className="primary-card-pill"
-              title={`继承全局默认模型：${effectiveModel.model}`}
+              title={`Inherits global default model: ${effectiveModel.model}`}
             >
-              <span>全局默认</span>
+              <span>Global default</span>
             </span>
           )}
-          <span className="primary-card-pill" title={`技能配置：${skillsLabel}`}>
+          <span className="primary-card-pill" title={`Skills: ${skillsLabel}`}>
             <HelmIcon name="wrench" size={10} />
             <span className="primary-card-pill-label">{skillsLabel}</span>
           </span>
           {isHerdr && (
-            <span className="primary-card-pill" title="Herdr 外部运行时">
+            <span className="primary-card-pill" title="Herdr external runtime">
               <HelmIcon name="terminal" size={10} />
               <span>Herdr</span>
             </span>
@@ -178,8 +178,8 @@ export function ProfileCard({
       <div className="primary-card-footer">
         <span className="text-subtle tabular-nums">
           {activity.conversationCount > 0
-            ? `关联 ${activity.conversationCount} 个会话`
-            : '暂无关联会话'}
+            ? `Linked to ${activity.conversationCount} conversations`
+            : 'No linked conversations'}
         </span>
         {profile.humanSelectable !== false && (
           <button
@@ -188,14 +188,14 @@ export function ProfileCard({
             disabled={activity.managingPluginDisabled}
             title={
               activity.managingPluginDisabled
-                ? '所属托管插件已停用，无法发起新对话'
-                : `与 ${displayName} 发起新对话`
+                ? 'The owning managed plugin is disabled; cannot start a new conversation'
+                : `Start a new conversation with ${displayName}`
             }
             onClick={handleChatClick}
             onKeyDown={(e) => e.stopPropagation()}
           >
             <HelmIcon name="message-square" size={12} />
-            <span>对话</span>
+            <span>Conversation</span>
           </button>
         )}
       </div>

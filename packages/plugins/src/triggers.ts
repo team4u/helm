@@ -1,21 +1,23 @@
 /**
- * builtin:triggers：cron 与 webhook 入站连接器（设计文档 §4.4）。
+ * builtin:triggers: the cron and webhook inbound connector (design doc §4.4).
  *
- * 职责：
- * - 组装共享 dispatchTrigger helper（delivery.ts：目标解析 + isClosing 门禁，
- *   经 host.dispatchTrigger 统一 defang 防逃逸投递）；
- * - webhook 连接器（webhook.ts：HMAC 验签公开路由 + 生命周期动作 + secret
- *   持久化于 credentials.json pluginSecrets，经 ctx.host.secrets 绑定本
- *   插件命名空间，addRedaction 全局脱敏）；
- * - cron 连接器（cron.ts：持久调度与生命周期动作）；
- * - 声明式管理 UI 改为 client.tsx React 组件（screen 'manager' 订阅 crons/webhooks
- *   公共 doc；动作经 ctx.callAction；无 Emoji，icon 用 lucide 线性名）。
+ * Responsibilities:
+ * - Assemble the shared dispatchTrigger helper (delivery.ts: target resolution + isClosing gate,
+ *   delivered via host.dispatchTrigger with unified defang anti-escape);
+ * - The webhook connector (webhook.ts: HMAC-verified public route + lifecycle actions + the
+ *   secret persisted in credentials.json pluginSecrets, bound to this plugin's namespace via
+ *   ctx.host.secrets, globally redacted via addRedaction);
+ * - The cron connector (cron.ts: persistent scheduling and lifecycle actions);
+ * - The declarative management UI is now client.tsx React components (screen 'manager' subscribing to
+ *   the crons/webhooks public docs; actions via ctx.callAction; no Emoji, lucide line icons).
  *
- * 诚实性边界：
- * - webhook secret 仅允许人工 HTTP/CLI 配置；拒绝会话上下文（run_action）
- *   创建——raw secret 已进模型工具历史，本插件无法清理已入上下文的秘密；
- * - create/delete 无跨存储事务：顺序写入 + 显式回滚/报错，成功前 doc.flush()
- *   真实冲刷，不承诺原子 exactly-once（重启 catch-up 策略由 cron 模块文档声明）。
+ * Honesty boundaries:
+ * - The webhook secret is configurable only via manual HTTP/CLI; conversation contexts (run_action)
+ *   are rejected from creating it -- the raw secret is already in the model tool history, and this
+ *   plugin cannot clean a secret already in context;
+ * - create/delete has no cross-store transaction: sequential writes + explicit rollback/errors;
+ *   doc.flush() really flushes before success; atomic exactly-once is not promised (the restart catch-up policy
+ *   is declared in the cron module docs).
  */
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { resolvePluginClientRoot } from './asset-paths.js'
@@ -30,15 +32,15 @@ export { TRIGGERS_PLUGIN_ID }
 export function createTriggersPlugin(): PluginDefinition {
   return {
     id: TRIGGERS_PLUGIN_ID,
-    name: '触发器（cron + webhook）',
-    description: '入站连接器：cron 定时与 webhook 入站触发，经防逃逸信封投递到目标会话。',
+    name: 'Triggers (cron + webhook)',
+    description: 'Inbound connector: cron timers and webhook inbound triggers, delivered to target conversations via escape-proof envelopes.',
     icon: 'webhook',
     version: '0.1.0',
     clientRoot: resolvePluginClientRoot(TRIGGERS_PLUGIN_ID, 'triggers', 'triggers_plugin_client_missing'),
     definePlugin(ctx) {
-      // 共享投递 helper：cron（targetProfileId 第二参）与 webhook（envelope
-      // 携带已解析 target）同一实现；isClosing 在 helper 内检查（ctx.host
-      // getter 的读取函数包装）。
+      // Shared delivery helper: cron (targetProfileId as the second argument) and webhook (the envelope
+      // carries an already-resolved target) share one implementation; isClosing is checked inside the
+      // helper (a reader-function wrapper over the ctx.host getter).
       const dispatch = createDeliveryDispatch({
         host: ctx.host,
         profiles: ctx.host.profiles,
@@ -49,23 +51,23 @@ export function createTriggersPlugin(): PluginDefinition {
 
       registerCron(ctx, { dispatchTrigger: dispatch })
 
-      // ---- 管理 UI（client.tsx React 轨道；无 Emoji） ----
+      // ---- Management UI (client.tsx React track; no Emoji) ----
       ctx.ui.sidebarItem({
         id: 'triggers-manager',
-        label: '触发器管理',
+        label: 'Trigger Manager',
         icon: 'clock',
         target: `screen:${TRIGGERS_PLUGIN_ID}/${TRIGGERS_SCREEN_ID}`,
         order: 15,
       })
       ctx.ui.screen({
         id: TRIGGERS_SCREEN_ID,
-        label: '触发器管理',
+        label: 'Trigger Manager',
         icon: 'clock',
         client: { module: 'index.tsx', export: 'TriggersManagerScreen' },
       })
       ctx.ui.settingsPanel({
         id: 'triggers-settings',
-        label: '触发器',
+        label: 'Triggers',
         order: 40,
         client: { module: 'index.tsx', export: 'TriggersSettingsPanel' },
       })

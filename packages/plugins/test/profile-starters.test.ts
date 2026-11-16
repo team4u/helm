@@ -66,16 +66,16 @@ test('profiles starters：非法形状显式拒绝（不静默丢弃/截断）',
   await profiles.ensureDefault()
 
   const bad: Array<[unknown, RegExp]> = [
-    [{ id: 'bad', starters: 'not-array' }, /starters 必须是/],
-    [{ id: 'bad', starters: [{ label: 'x', prompt: 'y', extra: 1 }] }, /仅接受 label 与 prompt 字段/],
-    [{ id: 'bad', starters: [['label', 'prompt']] }, /starters\[0\] 必须是 \{ label, prompt \} 对象/],
-    [{ id: 'bad', starters: [{ label: '', prompt: 'y' }] }, /label 去除首尾空白后不能为空/],
-    [{ id: 'bad', starters: [{ label: '   ', prompt: 'y' }] }, /label 去除首尾空白后不能为空/],
-    [{ id: 'bad', starters: [{ label: 'x', prompt: '' }] }, /prompt 不能是纯空白/],
-    [{ id: 'bad', starters: [{ label: 'x', prompt: ' \n\t ' }] }, /prompt 不能是纯空白/],
-    [{ id: 'bad', starters: [{ label: 'x'.repeat(25), prompt: 'y' }] }, /label 最多 24/],
-    [{ id: 'bad', starters: [{ label: 'x', prompt: 'y'.repeat(4001) }] }, /prompt 最多 4000/],
-    [{ id: 'bad', starters: Array.from({ length: PROFILE_STARTERS_MAX_ITEMS + 1 }, (_, i) => ({ label: `s${i}`, prompt: 'p' })) }, /starters 最多 6 项/],
+    [{ id: 'bad', starters: 'not-array' }, /starters must be/],
+    [{ id: 'bad', starters: [{ label: 'x', prompt: 'y', extra: 1 }] }, /only accept label and prompt field/],
+    [{ id: 'bad', starters: [['label', 'prompt']] }, /starters\[0\] must be \{ label, prompt \} object/],
+    [{ id: 'bad', starters: [{ label: '', prompt: 'y' }] }, /label cannot be empty after trimming/],
+    [{ id: 'bad', starters: [{ label: '   ', prompt: 'y' }] }, /label cannot be empty after trimming/],
+    [{ id: 'bad', starters: [{ label: 'x', prompt: '' }] }, /prompt cannot be pure whitespace/],
+    [{ id: 'bad', starters: [{ label: 'x', prompt: ' \n\t ' }] }, /prompt cannot be pure whitespace/],
+    [{ id: 'bad', starters: [{ label: 'x'.repeat(25), prompt: 'y' }] }, /label at most 24/],
+    [{ id: 'bad', starters: [{ label: 'x', prompt: 'y'.repeat(4001) }] }, /prompt at most 4000/],
+    [{ id: 'bad', starters: Array.from({ length: PROFILE_STARTERS_MAX_ITEMS + 1 }, (_, i) => ({ label: `s${i}`, prompt: 'p' })) }, /starters at most 6 items/],
   ]
   for (const [input, pattern] of bad) {
     await assert.rejects(() => profiles.save(input), pattern)
@@ -87,7 +87,7 @@ test('profiles starters：非法形状显式拒绝（不静默丢弃/截断）',
   assert.equal(ok.starters?.[0]?.label, emoji24)
   await assert.rejects(
     () => profiles.save({ id: 'emoji2', starters: [{ label: '🎉'.repeat(25), prompt: 'p' }] }),
-    /label 最多 24/,
+    /label at most 24/,
   )
 })
 
@@ -163,7 +163,7 @@ test('profiles starters HTTP：POST/GET 回读、PUT [] 清空、非法 400 不�
   })
   assert.equal(bad.status, 400)
   assert.equal(bad.json.error.code, 'validation_error')
-  assert.match(bad.json.error.message, /prompt 不能是纯空白/)
+  assert.match(bad.json.error.message, /prompt cannot be pure whitespace/)
   // 拒绝后磁盘仍保留上一步的 []
   const after = await apiCall(handler, token, 'GET', '/api/profiles/api-p1')
   assert.deepEqual(after.json.starters, [])
@@ -174,7 +174,7 @@ test('profiles starters HTTP：POST/GET 回读、PUT [] 清空、非法 400 不�
     starters: Array.from({ length: PROFILE_STARTERS_MAX_ITEMS + 1 }, (_, i) => ({ label: `s${i}`, prompt: 'p' })),
   })
   assert.equal(tooMany.status, 400)
-  assert.match(tooMany.json.error.message, /最多 6 项/)
+  assert.match(tooMany.json.error.message, /starters at most 6 items/)
 })
 
 test('profile：自举补写默认 Profile 的 managedByPlugin（缺失显式补、已有原样保留）', { timeout: 60_000 }, async () => {

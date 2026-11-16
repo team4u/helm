@@ -63,7 +63,7 @@ export function NodeDetailDrawer({
 
   const isLocal = node ? isNodeLocal(node) : false
   const isOnline = node ? isNodeOnline(node) : false
-  const displayName = isNew ? '接入新计算节点' : node ? getNodeDisplayName(node) : '节点详情'
+  const displayName = isNew ? 'Connect a new compute node' : node ? getNodeDisplayName(node) : 'Node details'
   const iconName = isLocal ? 'laptop' : 'server'
   const platformArch = node ? formatNodePlatformArch(node) : '--'
 
@@ -91,7 +91,7 @@ export function NodeDetailDrawer({
     }
 
     if (!targetNodeId) {
-      setTokenError('请指定有效的节点 ID')
+      setTokenError('Enter a valid node ID')
       return
     }
 
@@ -171,7 +171,7 @@ export function NodeDetailDrawer({
           role="dialog"
           aria-label={displayName}
         >
-          {/* 头部元信息 */}
+          {/* Header metadata */}
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">
               <div className="primary-drawer-icon-wrap">
@@ -187,11 +187,11 @@ export function NodeDetailDrawer({
                       className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'}`}
                     >
                       <HelmIcon name={isOnline ? 'check' : 'circle'} size={10} />
-                      <span>{isOnline ? '在线' : '离线'}</span>
+                      <span>{isOnline ? 'Online' : 'Offline'}</span>
                     </span>
                   )}
                   {isLocal && (
-                    <span className="badge badge-neutral">本机</span>
+                    <span className="badge badge-neutral">Local</span>
                   )}
                   {node?.version && (
                     <span className="badge badge-neutral mono">
@@ -208,8 +208,8 @@ export function NodeDetailDrawer({
               <button
                 type="button"
                 className="btn btn-ghost btn-icon-sm"
-                aria-label="关闭"
-                title="关闭"
+                aria-label="Close"
+                title="Close"
                 onClick={onClose}
               >
                 <HelmIcon name="x" size={14} />
@@ -217,58 +217,58 @@ export function NodeDetailDrawer({
             </DialogClose>
           </div>
 
-          {/* 抽屉主体 */}
+          {/* Drawer body */}
           <div className="primary-drawer-body">
             {!node && !isNew ? (
-              <div className="primary-center-empty">未选择节点</div>
+              <div className="primary-center-empty">No node selected</div>
             ) : (
               <>
-                {/* 1. 节点系统概览 */}
+                {/* 1. Node system overview */}
                 {!isNew && node && (
                   <section className="section-flat">
                     <div className="section-flat-header">
                       <HelmIcon name="cpu" size={13} />
-                      <span className="section-flat-title">系统概览</span>
+                      <span className="section-flat-title">System overview</span>
                     </div>
 
                     <div className="form-grid">
-                      <span className="form-grid-label">操作系统</span>
+                      <span className="form-grid-label">Operating system</span>
                       <span className="mono selectable form-grid-value">
                         {node.os || node.platform || '--'}
                       </span>
 
-                      <span className="form-grid-label">CPU 架构</span>
+                      <span className="form-grid-label">CPU architecture</span>
                       <span className="mono selectable form-grid-value">
                         {node.arch || '--'}
                       </span>
 
-                      <span className="form-grid-label">Node 版本</span>
+                      <span className="form-grid-label">Node version</span>
                       <span className="mono selectable form-grid-value">
                         {node.version || '--'}
                       </span>
 
-                      <span className="form-grid-label">主机名</span>
+                      <span className="form-grid-label">Hostname</span>
                       <span className="mono selectable form-grid-value">
                         {node.hostname || '--'}
                       </span>
 
-                      <span className="form-grid-label">工作目录</span>
+                      <span className="form-grid-label">Working directory</span>
                       <span className="mono selectable form-grid-value">
                         {node.cwd || '--'}
                       </span>
 
-                      <span className="form-grid-label">连接通道</span>
+                      <span className="form-grid-label">Connection channel</span>
                       <span className="mono selectable form-grid-value">
-                        {node.hubUrl || (isLocal ? '本地 IPC / Socket' : '--')}
+                        {node.hubUrl || (isLocal ? 'Local IPC / socket' : '--')}
                       </span>
 
-                      <span className="form-grid-label">运行时长</span>
+                      <span className="form-grid-label">Uptime</span>
                       <span className="mono selectable form-grid-value">{uptime}</span>
                     </div>
                   </section>
                 )}
 
-                {/* 1.5 插件扩展子插槽（其他插件向 builtin:node/detail-section 注入节点扩展区块） */}
+                {/* 1.5 Plugin extension slots (other plugins inject node sections into builtin:node/detail-section) */}
                 {!isNew && node && (
                   <PluginSlot
                     ownerPluginId="builtin:node"
@@ -282,13 +282,13 @@ export function NodeDetailDrawer({
                   />
                 )}
 
-                {/* 2. 节点健康体检 */}
+                {/* 2. Node health check */}
                 {!isNew && node && (
                   <section className="section-flat">
                     <div className="section-flat-header flex-row-between">
                       <div className="flex-row">
                         <HelmIcon name="activity" size={13} />
-                        <span className="section-flat-title">健康体检与资源负载</span>
+                        <span className="section-flat-title">Health check and resource load</span>
                       </div>
                       <button
                         type="button"
@@ -297,19 +297,19 @@ export function NodeDetailDrawer({
                         onClick={() => void handleHealthCheck()}
                       >
                         <HelmIcon name="activity" size={12} />
-                        <span>{checkingHealth ? '体检中…' : '健康体检'}</span>
+                        <span>{checkingHealth ? 'Checking…' : 'Health check'}</span>
                       </button>
                     </div>
 
                     <div className="form-grid">
-                      <span className="form-grid-label">CPU 占用</span>
+                      <span className="form-grid-label">CPU usage</span>
                       <span className="mono selectable form-grid-value">
                         {health?.cpuUsagePercent !== undefined
                           ? `${health.cpuUsagePercent}%`
                           : '--'}
                       </span>
 
-                      <span className="form-grid-label">系统负载</span>
+                      <span className="form-grid-label">System load</span>
                       <span className="mono selectable form-grid-value">
                         {health?.loadAvg
                           ? `${health.loadAvg[0]?.toFixed(2) ?? '--'} / ${health.loadAvg[1]?.toFixed(2) ?? '--'} / ${health.loadAvg[2]?.toFixed(2) ?? '--'}`
@@ -318,7 +318,7 @@ export function NodeDetailDrawer({
                             : '--'}
                       </span>
 
-                      <span className="form-grid-label">内存使用</span>
+                      <span className="form-grid-label">Memory usage</span>
                       <span className="mono selectable form-grid-value">
                         {memUsage?.label ??
                           (health?.memTotalBytes !== undefined
@@ -326,7 +326,7 @@ export function NodeDetailDrawer({
                             : '--')}
                       </span>
 
-                      <span className="form-grid-label">磁盘空间</span>
+                      <span className="form-grid-label">Disk space</span>
                       <span className="mono selectable form-grid-value">
                         {diskUsage?.label ??
                           (health?.diskTotalBytes !== undefined
@@ -346,8 +346,8 @@ export function NodeDetailDrawer({
                         />
                         <span className="callout-text">
                           {healthResult.updateAvailable
-                            ? `存在可用更新：v${healthResult.latestVersion}`
-                            : '节点内核运行正常，版本已处于最新状态'}
+                            ? `Update available: v${healthResult.latestVersion}`
+                            : 'Node kernel healthy and up to date'}
                         </span>
                       </div>
                     )}
@@ -361,24 +361,24 @@ export function NodeDetailDrawer({
                   </section>
                 )}
 
-                {/* 3. 远程节点接入令牌与启动命令（当节点是 remote 或用于接入新节点时） */}
+                {/* 3. Remote node access token and start command (when the node is remote or used to enroll a new node) */}
                 {(!isLocal || isNew) && (
                   <section className="section-flat border-accent">
                     <div className="section-flat-header">
                       <HelmIcon name="key" size={13} />
-                      <span className="section-flat-title">受控机接入指令</span>
+                      <span className="section-flat-title">Controlled machine enrollment command</span>
                     </div>
 
                     {isNew && (
                       <div className="form-grid">
                         <label htmlFor="new-node-id-input" className="form-grid-label">
-                          节点 ID
+                          Node ID
                         </label>
                         <input
                           id="new-node-id-input"
                           type="text"
                           className="input mono"
-                          placeholder="例如 gpu-worker-1"
+                          placeholder="e.g. gpu-worker-1"
                           value={newNodeId}
                           onChange={(e) => setNewNodeId(e.target.value)}
                         />
@@ -393,7 +393,7 @@ export function NodeDetailDrawer({
                         onClick={() => void handleIssueToken()}
                       >
                         <HelmIcon name="key" size={12} />
-                        <span>{issuedToken ? '重新签发令牌' : '签发接入令牌'}</span>
+                        <span>{issuedToken ? 'Re-issue token' : 'Issue access token'}</span>
                       </button>
                     </div>
 
@@ -406,7 +406,7 @@ export function NodeDetailDrawer({
 
                     {issuedToken && (
                       <div className="flex-col">
-                        <div className="text-subtle">接入令牌（一次性展示）：</div>
+                        <div className="text-subtle">Access token (shown once):</div>
                         <div className="flex-row flex-row-wrap">
                           <code className="code-box selectable flex-1 mono">
                             {issuedToken}
@@ -415,10 +415,10 @@ export function NodeDetailDrawer({
                             type="button"
                             className="btn btn-ghost btn-sm"
                             onClick={() => void handleCopyToken()}
-                            title="复制令牌"
+                            title="Copy token"
                           >
                             <HelmIcon name={copiedToken ? 'check' : 'copy'} size={12} />
-                            <span>{copiedToken ? '已复制' : '复制令牌'}</span>
+                            <span>{copiedToken ? 'Copied' : 'Copy token'}</span>
                           </button>
                         </div>
                       </div>
@@ -426,7 +426,7 @@ export function NodeDetailDrawer({
 
                     {guide && (
                       <div className="flex-col">
-                        <div className="text-subtle">一键接入命令行（后台守护进程启动）：</div>
+                        <div className="text-subtle">One-line enrollment command (background daemon start):</div>
                         <div className="flex-row flex-row-wrap">
                           <code className="code-box selectable flex-1 mono">
                             {guide.oneLineCommand}
@@ -435,15 +435,15 @@ export function NodeDetailDrawer({
                             type="button"
                             className="btn btn-ghost btn-sm"
                             onClick={() => void handleCopyCmd()}
-                            title="复制命令行"
+                            title="Copy command line"
                           >
                             <HelmIcon name={copiedCmd ? 'check' : 'copy'} size={12} />
-                            <span>{copiedCmd ? '已复制' : '复制命令'}</span>
+                            <span>{copiedCmd ? 'Copied' : 'Copy command'}</span>
                           </button>
                         </div>
 
                         <div className="text-subtle">
-                          常用维护命令：
+                          Common maintenance commands:
                         </div>
                         <div className="flex-row flex-row-wrap">
                           <code className="code-box selectable flex-1 mono">
@@ -462,12 +462,12 @@ export function NodeDetailDrawer({
                   </section>
                 )}
 
-                {/* 4. 注册工具能力列表 */}
+                {/* 4. Registered tool capabilities */}
                 {!isNew && (
                   <section className="section-flat">
                     <div className="section-flat-header">
                       <HelmIcon name="wrench" size={13} />
-                      <span className="section-flat-title">注册工具能力</span>
+                      <span className="section-flat-title">Registered tools</span>
                     </div>
 
                     <div className="primary-card-pills">
@@ -475,7 +475,7 @@ export function NodeDetailDrawer({
                         <span
                           key={tool}
                           className="primary-card-pill mono"
-                          title={`工具: ${tool}`}
+                          title={`Tool: ${tool}`}
                         >
                           <HelmIcon name="terminal" size={11} />
                           <span>{tool}</span>
@@ -488,10 +488,10 @@ export function NodeDetailDrawer({
             )}
           </div>
 
-          {/* 抽屉底部 */}
+          {/* Drawer footer */}
           <div className="primary-drawer-footer">
             <button type="button" className="btn btn-sm" onClick={onClose}>
-              关闭
+              Close
             </button>
           </div>
         </DialogContent>

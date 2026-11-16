@@ -1,6 +1,6 @@
 /**
- * Hub 监督器（纯 Node，零 GUI 依赖）：attach / spawn / 崩溃自愈 / 预算耗尽 /
- * 优雅与强制停止 / 就绪超时 / 端口冲突诚实报错。全部走真实子进程（mini-hub 夹具）。
+ * Hub supervise (pure Node, zero GUI dependency):attach / spawn / crash self-heal / pre- compute exhausted /
+ * graceful and force stop / ready timeout / port conflict honest errors. all away real child process (mini-hub fixture).
  */
 import { strict as assert } from 'node:assert';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -76,7 +76,7 @@ async function pidAlive(pid: number): Promise<boolean> {
   }
 }
 
-test('spawn 路径：mini-hub 子进程就绪 → owned，身份探测通过', { timeout: 60_000 }, async () => {
+test('spawn path:mini-hub child process ready → owned, identity probe via', { timeout: 60_000 }, async () => {
   const { supervisor, port } = await makeHarness();
   const result = await supervisor.start();
   assert.equal(result.mode, 'owned');
@@ -88,7 +88,7 @@ test('spawn 路径：mini-hub 子进程就绪 → owned，身份探测通过', {
   assert.equal(supervisor.state, 'stopped');
 });
 
-test('attach 路径：外部 Hub 已就绪 → attached，stop 不动外部进程', { timeout: 60_000 }, async () => {
+test('attach path: external Hub ready → attached,stop do not motion external process', { timeout: 60_000 }, async () => {
   const port = await pickFreePort();
   const external = await startMiniHubExternal(port);
   cleanups.push(async () => {
@@ -99,51 +99,51 @@ test('attach 路径：外部 Hub 已就绪 → attached，stop 不动外部进�
   assert.equal(result.mode, 'attached');
   assert.equal(supervisor.owned, false);
   await supervisor.stop();
-  assert.equal(external.child.exitCode, null, '外部 Hub 不应被 stop 终止');
+  assert.equal(external.child.exitCode, null, 'external Hub must not by stop terminate');
   assert.equal(await hubReady(port), true);
   await external.stop();
 });
 
-test('崩溃自愈：owned 子进程被 SIGKILL → 退避重启并重新就绪', { timeout: 60_000 }, async () => {
+test('crash self-heal:owned child process by SIGKILL → backoff restart and re- ready', { timeout: 60_000 }, async () => {
   const { supervisor, port, restarts } = await makeHarness();
   await supervisor.start();
   const pidBefore = supervisor.childPid!;
   assert.ok(pidBefore !== undefined);
   process.kill(pidBefore, 'SIGKILL');
-  const recovered = await waitFor('崩溃后重新就绪', async () => {
+  const recovered = await waitFor('crash after re- ready', async () => {
     if (supervisor.state !== 'owned' || supervisor.childPid === pidBefore) return false;
     return await hubReady(port);
   }, 15_000);
   assert.equal(recovered, true);
-  assert.ok(restarts.length >= 1, '应至少调度一次重启');
+  assert.ok(restarts.length >= 1, 'should at least scheduling once restart');
   await supervisor.stop();
 });
 
-test('重启预算耗尽：crash-loop → failed + hub_restart_exhausted 诊断', { timeout: 60_000 }, async () => {
+test('restart pre- compute exhausted:crash-loop → failed + hub_restart_exhausted diagnose', { timeout: 60_000 }, async () => {
   const { supervisor, problems } = await makeHarness(
     { restartMaxRetries: 1, restartBackoffMs: 50 },
     { MINI_HUB_MODE: 'crash-loop' },
   );
   await supervisor.start();
-  const failed = await waitFor('预算耗尽进入 failed', () => supervisor.state === 'failed', 20_000);
+  const failed = await waitFor('pre- compute exhausted enter failed', () => supervisor.state === 'failed', 20_000);
   assert.equal(failed, true);
   const exhausted = problems.find(
     (error): error is DesktopError => error instanceof DesktopError && error.code === 'hub_restart_exhausted',
   );
-  assert.ok(exhausted !== undefined, '应产生 hub_restart_exhausted 诊断');
+  assert.ok(exhausted !== undefined, 'should produce hub_restart_exhausted diagnose');
   await supervisor.stop();
 });
 
-test('优雅停止：SIGTERM 生效，端口释放，子进程退出', { timeout: 60_000 }, async () => {
+test('graceful stop:SIGTERM takes effect, port release, child process exit', { timeout: 60_000 }, async () => {
   const { supervisor, port } = await makeHarness();
   await supervisor.start();
   const pid = supervisor.childPid!;
   await supervisor.stop();
-  assert.equal(await waitFor('端口释放', async () => !(await hubReady(port)), 5_000), true);
-  assert.equal(await pidAlive(pid), false, '子进程应已退出');
+  assert.equal(await waitFor('port release', async () => !(await hubReady(port)), 5_000), true);
+  assert.equal(await pidAlive(pid), false, 'child process should already exit');
 });
 
-test('强制停止：忽略 SIGTERM 的子进程在优雅期后被 SIGKILL', { timeout: 60_000, skip: process.platform === 'win32' ? 'Windows 的原生进程 kill 无法被忽略，IPC 关闭由独立测试验证' : false }, async () => {
+test('force stop: ignore SIGTERM child process in graceful phase after by SIGKILL', { timeout: 60_000, skip: process.platform === 'win32' ? 'Windows original generate process kill cannot by ignore,IPC close by independent test verify' : false }, async () => {
   const { supervisor, port } = await makeHarness(
     { stopGraceMs: 400 },
     { MINI_HUB_MODE: 'ignore-sigterm' },
@@ -151,11 +151,11 @@ test('强制停止：忽略 SIGTERM 的子进程在优雅期后被 SIGKILL', { t
   await supervisor.start();
   const pid = supervisor.childPid!;
   await supervisor.stop();
-  assert.equal(await pidAlive(pid), false, 'SIGKILL 兜底应终止无响应子进程');
-  assert.equal(await waitFor('端口释放(强杀)', async () => !(await hubReady(port)), 5_000), true);
+  assert.equal(await pidAlive(pid), false, 'SIGKILL fall back should terminate without response child process');
+  assert.equal(await waitFor('port release(strong kill)', async () => !(await hubReady(port)), 5_000), true);
 });
 
-test('受管 Node 入口经 IPC 关闭，跨平台释放 Hub 端口', { timeout: 60_000 }, async () => {
+test('managed Node entry via IPC close, across platform release Hub port', { timeout: 60_000 }, async () => {
   const { supervisor, port } = await makeHarness({ hubCommand: undefined, hubEntry: MINI_HUB_FIXTURE });
   const result = await supervisor.start();
   assert.equal(result.runner?.kind, 'host-node');
@@ -165,7 +165,7 @@ test('受管 Node 入口经 IPC 关闭，跨平台释放 Hub 端口', { timeout:
   assert.equal(await hubReady(port), false);
 });
 
-test('就绪超时：no-listen → hub_ready_timeout 且诊断含命令行', { timeout: 60_000 }, async () => {
+test('ready timeout:no-listen → hub_ready_timeout and diagnose contains command line', { timeout: 60_000 }, async () => {
   const { supervisor } = await makeHarness(
     { readyTimeoutMs: 800, probeIntervalMs: 100 },
     { MINI_HUB_MODE: 'no-listen' },
@@ -183,7 +183,7 @@ test('就绪超时：no-listen → hub_ready_timeout 且诊断含命令行', { t
   assert.equal(supervisor.state, 'failed');
 });
 
-test('端口冲突：非 Hub 服务占端口 → probe 不认 → 子进程 EADDRINUSE → hub_port_conflict', { timeout: 60_000 }, async () => {
+test('port conflict: non- Hub service occupy port → probe do not recognize → child process EADDRINUSE → hub_port_conflict', { timeout: 60_000 }, async () => {
   const port = await pickFreePort();
   const plain = await startPlainServer(port);
   cleanups.push(async () => {
@@ -196,7 +196,7 @@ test('端口冲突：非 Hub 服务占端口 → probe 不认 → 子进程 EADD
       assert.ok(error instanceof DesktopError);
       assert.equal(error.code, 'hub_port_conflict');
       const details = error.details as { stderrTail?: string[] };
-      assert.ok(details.stderrTail?.some((line) => line.includes('EADDRINUSE')), '诊断尾部应含 EADDRINUSE');
+      assert.ok(details.stderrTail?.some((line) => line.includes('EADDRINUSE')), 'diagnose tail part should contains EADDRINUSE');
       return true;
     },
   );
@@ -204,7 +204,7 @@ test('端口冲突：非 Hub 服务占端口 → probe 不认 → 子进程 EADD
   await supervisor.stop();
 });
 
-test('入口缺失：hubEntry 不存在 → hub_entry_missing 显式报错', { timeout: 60_000 }, async () => {
+test('entry missing:hubEntry missing → hub_entry_missing explicit errors', { timeout: 60_000 }, async () => {
   const port = await pickFreePort();
   const config = resolveDesktopConfig(BASE_ENV, { port, hubEntry: '/nonexistent/hub-main.js' });
   const supervisor = new HubSupervisor({ config, env: BASE_ENV });
@@ -217,7 +217,7 @@ test('入口缺失：hubEntry 不存在 → hub_entry_missing 显式报错', { t
   );
 });
 
-test('状态机守卫：start 进行中禁止并发 stop，重复 start 显式拒绝', { timeout: 60_000 }, async () => {
+test('state machine guard:start in progress forbidden concurrency stop, duplicate start explicit reject', { timeout: 60_000 }, async () => {
   const { supervisor } = await makeHarness(
     { readyTimeoutMs: 4_000 },
     { MINI_HUB_MODE: 'no-listen' },

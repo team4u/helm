@@ -163,13 +163,13 @@ button, a, input, select, textarea { touch-action: manipulation; }
     padding: 0;
   }
   /* 移动端抽屉内 Activity Rail 触控热区提升，中心导航直达；
-     切空间后抽屉保持展开（二级列表可见），点选条目才关闭（见 Sidebar.tsx） */
+     After switching spaces the drawer stays expanded (secondary list visible); it closes only when an item is selected (see Sidebar.tsx) */
   .rail-btn {
     width: 38px;
     height: 38px;
   }
   /* 移动端抽屉 Rail 重排：品牌标识留顶部，空间切换按钮沉底到拇指易达区；
-     主题按钮维持沉底，以通栏分隔线与空间按钮分组区隔，布局清晰不混排 */
+     Theme buttons stay bottom-anchored, separated from the space button group by a full-width divider for a clear layout */
   .activity-rail-spaces {
     margin-top: auto;
     padding-bottom: 8px;

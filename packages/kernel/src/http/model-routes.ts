@@ -1,8 +1,8 @@
 /**
- * 模型目录领域路由：/api/models（default/filter/refresh/providers/list）、
- * /api/providers（PUT 完整数组或 { providers } 包裹）、/api/credentials
- * （仅 id/configured 键，绝无明文）。providers/credentials 变更后热重载
- * 模型清单（仅持久化不重载等于热配置无效）。
+ * model directory domain routing:/api/models(default/filter/refresh/providers/list),
+ * /api/providers(PUT complete array or { providers } package wrap),/api/credentials
+ * (only id/configured key, absolute without plaintext).providers/credentials change after hot reload
+ * model manifest (only persist do not reload equals hot config invalid).
  */
 import type { JsonSchema, ProviderConfig } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
@@ -15,7 +15,7 @@ import { methodNotAllowed, readOptionalJsonBody, type RouteContext } from './rou
 // /api/models
 // ---------------------------------------------------------------------------
 
-// 至少提供 model 或 thinkingLevel（anyOf required）；空串 model = 清除。
+// at least provide model or thinkingLevel(anyOf required); empty string model = clear.
 const MODELS_DEFAULT_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -36,8 +36,8 @@ const MODELS_FILTER_BODY_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-// 注意：provider/providers 的「非空」是 === '' 语义（空白串历史放行），
-// 不加 \S pattern，避免收紧行为。
+// note:provider/providers non-empty is === '' semantics (whitespace string history let through),
+// do not add \S pattern, avoid tight behavior.
 const MODELS_REFRESH_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -62,7 +62,7 @@ export async function handleModelsDomain(
   }
   if (second === 'default' && third === undefined && method === 'PUT') {
     if (kernel.setDefaultModel === undefined) {
-      throw new HelmError('not_implemented', '当前 runtime 未提供默认模型设置', 501)
+      throw new HelmError('not_implemented', 'when before runtime not provide by default model settings', 501)
     }
     const raw = await readOptionalJsonBody(ctx.request)
     assertBodySchema(MODELS_DEFAULT_BODY_SCHEMA, raw ?? {}, 'models default body')
@@ -76,9 +76,9 @@ export async function handleModelsDomain(
   }
   if (second === 'filter' && third === undefined && method === 'PUT') {
     if (kernel.setDisabledModels === undefined) {
-      throw new HelmError('not_implemented', '当前 runtime 未提供模型禁用集设置', 501)
+      throw new HelmError('not_implemented', 'when before runtime not provide model disable collection settings', 501)
     }
-    // 空 body / {} 均需校验：{ provider?: string; disabledModels: string[] }。
+    // empty body / {} all must validate:{ provider?: string; disabledModels: string[] }.
     const raw = await readOptionalJsonBody(ctx.request)
     assertBodySchema(MODELS_FILTER_BODY_SCHEMA, raw ?? {}, 'models filter body')
     const body = (raw ?? {}) as Record<string, unknown>
@@ -89,11 +89,11 @@ export async function handleModelsDomain(
     return jsonOk(redactor, { ok: true, catalog })
   }
   if (second === 'refresh' && third === undefined && method === 'POST') {
-    // 空 body / {} 均合法（刷新全部）；provider 单选、providers 多选、force 可选。
+    // empty body / {} all legal (refresh all);provider single choose,providers many choose,force optional.
     const raw = await readOptionalJsonBody(ctx.request)
     const options = parseModelsRefreshBody(raw)
     if (kernel.refreshModels === undefined) {
-      throw new HelmError('not_implemented', '当前 runtime 未提供动态模型目录刷新', 501)
+      throw new HelmError('not_implemented', 'when before runtime not provide motion state model directory refresh', 501)
     }
     const result = await kernel.refreshModels(options)
     return jsonOk(redactor, result)
@@ -104,11 +104,11 @@ export async function handleModelsDomain(
   if (second === undefined && method === 'GET') {
     return jsonOk(redactor, await kernel.listModels())
   }
-  return errorResponse(redactor, 404, 'not_found', '路由不存在')
+  return errorResponse(redactor, 404, 'not_found', 'routing missing')
 }
 
-/** POST /api/models/refresh body 形状已由 schema 保证；此处只做跨字段合并
- * （provider 单选 + providers 多选拼接为同一 targets 列表）。 */
+/** POST /api/models/refresh body shape already by schema guarantee; this where only do across field merge
+ * (provider single choose + providers many choose concatenate is the same targets list). */
 function parseModelsRefreshBody(raw: unknown): { providers?: string[]; force?: boolean } {
   assertBodySchema(MODELS_REFRESH_BODY_SCHEMA, raw ?? {}, 'models refresh body')
   const body = (raw ?? {}) as Record<string, unknown>
@@ -133,12 +133,12 @@ export async function handleProvidersDomain(
 ): Promise<Response> {
   const { method, segments } = ctx
   if (segments[1] !== undefined) {
-    return errorResponse(redactor, 404, 'not_found', '路由不存在')
+    return errorResponse(redactor, 404, 'not_found', 'routing missing')
   }
   if (method === 'GET') return jsonOk(redactor, await kernel.providers.list())
   if (method === 'PUT') {
-    // CLI 约定发送完整原始数组；Web 端历史形态 { providers: [...] } 同样
-    // 接受。两种 body 都经同一 schema 逐项严格校验，不因包裹形态放宽任何字段规则。
+    // CLI convention send complete original array;Web end history form { providers: [...] } same
+    // accept. two kinds of body all via the same schema one by one items strictly validate, do not because package wrap form put wide any field rule.
     const value = await readJsonValue(ctx.request)
     const providers = parseProvidersBodyValue(value)
     const saved = await kernel.providers.save(providers)
@@ -148,11 +148,11 @@ export async function handleProvidersDomain(
   return methodNotAllowed(redactor, method)
 }
 
-/** providers PUT body：完整数组（CLI 约定）或 { providers } 包裹（Web 形态）。 */
+/** providers PUT body: complete array (CLI convention) or { providers } package wrap (Web form). */
 function parseProvidersBodyValue(value: unknown): ProviderConfig[] {
   if (Array.isArray(value)) return parseProvidersBody({ providers: value })
   if (value !== null && typeof value === 'object') return parseProvidersBody(value as Record<string, unknown>)
-  throw new ValidationError('body 需为 ProviderConfig 完整数组或 { providers: [...] }')
+  throw new ValidationError('body must be ProviderConfig complete array or { providers: [...] }')
 }
 
 // ---------------------------------------------------------------------------
@@ -183,14 +183,14 @@ export async function handleCredentialsDomain(
     await reloadModels(kernel)
     return jsonOk(redactor, { ok: true })
   }
-  return errorResponse(redactor, 404, 'not_found', '路由不存在')
+  return errorResponse(redactor, 404, 'not_found', 'routing missing')
 }
 
 // ---------------------------------------------------------------------------
-// 辅助
+// auxiliary
 // ---------------------------------------------------------------------------
 
-/** providers/credentials 变更后热重载模型清单；未提供端口的 runtime 跳过。 */
+/** providers/credentials change after hot reload model manifest; not provide port runtime skip. */
 async function reloadModels(kernel: KernelRuntimeLike): Promise<void> {
   await kernel.reloadModels?.()
 }

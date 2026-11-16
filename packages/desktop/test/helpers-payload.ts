@@ -1,7 +1,7 @@
 /**
- * payload updater 测试共享工具：ustar 构造器（故意允许非法条目名以验证 containment）、
- * 契约同构的 fixture payload（start.mjs 模拟真实退出码 0/1/3）、假 npm registry
- * （真实 HTTP）、假依赖安装器。
+ * payload updater test sharing tool:ustar construct (deliberately allows illegal item name with verify containment),
+ * contract same construct fixture payload(start.mjs simulated real exit code 0/1/3), false npm registry
+ * (real HTTP), false dependency install.
  */
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
@@ -13,16 +13,16 @@ import type { NpmInstaller } from '../src/npm-installer.js';
 export const FIXTURE_PACKAGE = 'helm-desktop-fixture-payload';
 export const FIXTURE_DEP = 'fixture-kernel-dep';
 
-// ---- tar 构造器 ----
+// ---- tar construct ----
 
 export interface TarEntry {
   name: string;
-  /** undefined = 目录条目。 */
+  /** undefined = directory item. */
   content?: Buffer | string;
   mode?: number;
 }
 
-/** 构造 ustar tarball（仅文件/目录；checksum/size 字段严格，可触发解包器校验路径）。 */
+/** construct ustar tarball(only file/directory;checksum/size field strictly, can trigger unwrap validate path). */
 export function buildTar(entries: TarEntry[]): Buffer {
   const blocks: Buffer[] = [];
   const headerFor = (name: string, size: number, typeflag: string, mode: number): Buffer => {
@@ -61,7 +61,7 @@ export function buildTar(entries: TarEntry[]): Buffer {
   return Buffer.concat(blocks);
 }
 
-// ---- fixture payload（契约同构 @helm/payload：manifest + start.mjs + kernel） ----
+// ---- fixture payload(contract same construct @helm/payload:manifest + start.mjs + kernel) ----
 
 export const FIXTURE_START_MJS = `#!/usr/bin/env node
 import { createHash } from 'node:crypto';
@@ -69,24 +69,24 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = path.dirname(fileURLToPath(import.meta.url));
-if (process.argv[2] !== 'check') { console.error('用法: node start.mjs <check|start>'); process.exit(1); }
+if (process.argv[2] !== 'check') { console.error('use method: node start.mjs <check|start>'); process.exit(1); }
 let manifest;
 try { manifest = JSON.parse(readFileSync(path.join(root, 'manifest.json'), 'utf8')); }
-catch (error) { console.error('manifest 损坏:', error.message); process.exit(1); }
-if (manifest.formatVersion !== 1) { console.error('formatVersion 非法'); process.exit(1); }
+catch (error) { console.error('manifest corrupt:', error.message); process.exit(1); }
+if (manifest.formatVersion !== 1) { console.error('formatVersion illegal'); process.exit(1); }
 const problems = [];
 for (const [key, rel] of Object.entries(manifest.entries ?? {})) {
   const abs = path.resolve(root, rel);
-  if (!existsSync(abs)) { problems.push(key + ' 缺失'); continue; }
+  if (!existsSync(abs)) { problems.push(key + ' missing'); continue; }
   const actual = createHash('sha256').update(readFileSync(abs)).digest('hex');
-  if (manifest.entryChecksums?.[key] !== actual) problems.push(key + ' checksum 不一致');
+  if (manifest.entryChecksums?.[key] !== actual) problems.push(key + ' checksum inconsistent');
 }
 if (problems.length > 0) { console.error(problems.join('; ')); process.exit(1); }
 let deps = {};
 try { deps = JSON.parse(readFileSync(path.resolve(root, manifest.entries.rootPackageJson), 'utf8')).dependencies ?? {}; }
-catch { console.error('root package.json 损坏'); process.exit(1); }
+catch { console.error('root package.json corrupt'); process.exit(1); }
 const missing = Object.keys(deps).filter((d) => !existsSync(path.join(root, 'node_modules', d)));
-if (missing.length > 0) { console.error('依赖缺失: ' + missing.join(', ')); process.exit(3); }
+if (missing.length > 0) { console.error('dependency missing: ' + missing.join(', ')); process.exit(3); }
 console.log('fixture payload ok');
 process.exit(0);
 `;
@@ -102,12 +102,12 @@ export type FixtureCorruption =
 
 export interface FixturePayloadOptions {
   version: string;
-  /** 根 package.json 声明的依赖名列表（默认 [FIXTURE_DEP]；空数组 = 无依赖）。 */
+  /**  package.json declaration dependency name list (by default [FIXTURE_DEP]; empty array = without dependency). */
   deps?: string[];
-  /** 预置 node_modules（vendored 场景）。 */
+  /** pre- placement node_modules(vendored scenario). */
   vendoredDeps?: string[];
   corrupt?: FixtureCorruption;
-  /** 额外 tar 条目（containment 攻击用，置于 package/ 之外或穿越路径）。 */
+  /** extra tar item (containment attack use, placement at package/ of outside or through exceeds path). */
   extraEntries?: TarEntry[];
 }
 
@@ -170,7 +170,7 @@ export function sha512Integrity(buf: Buffer): string {
   return `sha512-${createHash('sha512').update(buf).digest('base64')}`;
 }
 
-// ---- 假 npm registry（真实 HTTP 服务） ----
+// ---- false npm registry(real HTTP service) ----
 
 interface RegistryEntry {
   tarball: Buffer;
@@ -201,7 +201,7 @@ export class FakeNpmRegistry {
     return registry;
   }
 
-  /** 发布版本；默认同时移动 latest tag。 */
+  /** publish version; by default also move latest tag. */
   publish(version: string, tarball: Buffer, options: { integrity?: string; asLatest?: boolean } = {}): void {
     this.versions.set(version, { tarball, integrity: options.integrity });
     if (options.asLatest !== false) this.latest = version;
@@ -251,7 +251,7 @@ export class FakeNpmRegistry {
   }
 }
 
-// ---- 假依赖安装器 ----
+// ---- false dependency install ----
 
 export class FakeNpmInstaller implements NpmInstaller {
   readonly id = 'fake-npm';
@@ -265,7 +265,7 @@ export class FakeNpmInstaller implements NpmInstaller {
   }
 }
 
-/** 默认行为：安装 FIXTURE_DEP 到 payload 根 node_modules（与真实 npm 语义同构）。 */
+/** by default behavior: install FIXTURE_DEP to payload  node_modules(and real npm semantics same construct). */
 function defaultInstall(payloadRoot: string): void {
   const depDir = `${payloadRoot}/node_modules/${FIXTURE_DEP}`;
   mkdirSync(depDir, { recursive: true });

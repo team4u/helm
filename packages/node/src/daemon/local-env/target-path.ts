@@ -1,6 +1,6 @@
 /**
- * 统一目标路径解析原语（local-env 子模块）：file API 与 exec 共用，
- * 零探测、零猜测；行为契约由 test/node-local-env-win32-path.test.ts 钉住。
+ * unify target path parse original language (local-env sub- module):file API and exec shared use,
+ * zero probe, zero guess; behavior contract by test/node-local-env-win32-path.test.ts pin.
  */
 
 import { homedir } from 'node:os';
@@ -9,29 +9,29 @@ import { fileURLToPath } from 'node:url';
 import { normalizeTargetPath, type TargetPlatform } from '@helm/protocol';
 import { FileError, err, ok, type Result } from './errors.js';
 
-/** 条目拼接按目标平台词法规则（真实宿主上与 node:path 宿主行为一致，注入测试下保持同一视角）。 */
+/** item concatenate by target platform term method rule (real host on and node:path host behavior consistent, inject test under keep the same perspective). */
 export function joinTargetPath(platform: TargetPlatform, ...parts: string[]): string {
   return platform === 'win32' ? win32.join(...parts) : posix.join(...parts);
 }
 
-/** 父目录提取按目标平台词法规则（输入已是本原语解析后的规范路径）。 */
+/** parent directory extract by target platform term method rule (input already is this original language parse after canonical path). */
 export function parentTargetPath(platform: TargetPlatform, p: string): string {
   return platform === 'win32' ? win32.dirname(p) : posix.resolve(p, '..');
 }
 
 /**
- * 统一目标路径解析原语（file API 与 exec 共用，零探测、零猜测）：
+ * unify target path parse original language (file API and exec shared use, zero probe, zero guess):
  *
- * - posix 目标：按 node:path posix 规则解析（/mnt/… 是真实路径绝不反向转换，
- *   且与宿主 OS 无关——Windows 宿主注入测试下同样保持纯 POSIX 语义）；
- * - win32 目标：先做 `~` / `file://` 展开，再经 @helm/protocol 的
- *   normalizeTargetPath 统一规范化——/mnt/<盘符>/…（WSL 挂载视图）与
- *   /<盘符>/…（Git Bash / MSYS 盘符根视图）确定性转换为 <大写盘符>:\…
- *   （而非宿主 resolve 误锚出的 <盘符>:\mnt\<盘符>\…），原生 Windows /
- *   UNC / 相对路径仅做词法归一，无盘符 POSIX 根（/home、/tmp、裸 / 等）
- *   显式结构化失败（code 'invalid'），绝不做 access 候选猜测；
- *   相对路径锚定到按同一规则规范化后的会话 cwd（会话 cwd 也可能是
- *   /mnt/<盘符>/… 视图）。
+ * - posix target: by node:path posix rule parse (/mnt/... is real path never reverse convert,
+ *   and and host OS without closure - -Windows host inject test under same keep pure POSIX semantics);
+ * - win32 target: first do `~` / `file://` expand, again via @helm/protocol 
+ *   normalizeTargetPath unify specification - -/mnt/<symbol>/... (WSL mount view) and
+ *   /<symbol>/... (Git Bash / MSYS symbol view) determinism convert is <large write symbol>:\...
+ *   (while non- host resolve mistakenly anchor out <symbol>:\mnt\<symbol>\...), original generate Windows /
+ *   UNC / relative path only do term method archive one, without symbol POSIX (/home,/tmp, bare / etc.)
+ *   explicit structure failed (code 'invalid'), never do access choose guess;
+ *   relative path anchor set to by the same rule specification after conversation cwd(conversation cwd also may is
+ *   /mnt/<symbol>/... view).
  */
 export function resolveTargetPath(cwd: string, path: string, platform: TargetPlatform): Result<string> {
   let normalized = path;
@@ -46,17 +46,17 @@ export function resolveTargetPath(cwd: string, path: string, platform: TargetPla
     try {
       normalized = fileURLToPath(normalized, { windows: platform === 'win32' });
     } catch {
-      // 畸形 URL 保留原样作为普通路径，文件方法维持不抛异常的契约。
+      // distortion shape URL keep original as ordinary path, file method dimension hold do not throw exception contract.
     }
   }
   if (platform !== 'win32') {
-    // 先用 protocol 的纯 POSIX 规则做词法归一，再只用 posix.resolve 做
-    // 目标 cwd 锚定；这样 Windows 宿主不会把盘符/反斜杠规则带入目标路径。
+    // first use protocol pure POSIX rule do term method archive one, again only use posix.resolve do
+    // target cwd anchor set; this Windows host will not symbol/backslash rule carries target path.
     const normalizedPath = normalizeTargetPath(normalized, 'posix')
     const normalizedCwd = normalizeTargetPath(cwd, 'posix')
     if (!normalizedPath.ok || !normalizedCwd.ok) {
-      // normalizeTargetPath('posix') 当前不会失败；保留显式分支以守住
-      // protocol 契约，避免未来扩展失败类型时静默继续。
+      // normalizeTargetPath('posix') when before will not failed; keep explicit branch with guard
+      // protocol contract, avoid not come extend failed type when static default continue.
       return err(new FileError('invalid', 'Invalid POSIX target path', path))
     }
     return ok(
@@ -74,7 +74,7 @@ export function resolveTargetPath(cwd: string, path: string, platform: TargetPla
   }
   const base = normalizeTargetPath(cwd, 'win32');
   if (!base.ok) {
-    return err(new FileError('invalid', `会话 cwd 无法解析：${base.reason}`, path));
+    return err(new FileError('invalid', `conversation cwd cannot parse:${base.reason}`, path));
   }
   return ok(win32.resolve(base.path, normalizedWin.path));
 }

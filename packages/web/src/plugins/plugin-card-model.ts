@@ -36,25 +36,25 @@ export function getPluginDescription(plugin: PluginSummary): string {
 
   if (toolCount > 0 || actionCount > 0 || hookCount > 0) {
     const parts: string[] = []
-    if (toolCount > 0) parts.push(`${toolCount} 个工具`)
-    if (actionCount > 0) parts.push(`${actionCount} 个动作`)
-    if (hookCount > 0) parts.push(`${hookCount} 个钩子`)
-    return `提供 ${parts.join('、')}能力支持。`
+    if (toolCount > 0) parts.push(`${toolCount} tools`)
+    if (actionCount > 0) parts.push(`${actionCount} actions`)
+    if (hookCount > 0) parts.push(`${hookCount} hooks`)
+    return `Provides ${parts.join(', ')} capabilities.`
   }
 
-  return '系统扩展插件组件。'
+  return 'System extension plugin component.'
 }
 
 /** 故障阶段面向用户的可读文案（PluginDiagnosticError.stage）。 */
 export const PLUGIN_ERROR_STAGE_LABELS: Record<string, string> = {
-  scan: '清单/入口解析（scan）',
-  load: '模块加载（load）',
-  define: '定义注册（define）',
-  enable: '启用激活（enable）',
+  scan: 'Manifest/entry resolution (scan)',
+  load: 'Module loading (load)',
+  define: 'Definition registration (define)',
+  enable: 'Enable activation (enable)',
 }
 
 export function pluginErrorStageLabel(stage?: string): string {
-  return (stage !== undefined && PLUGIN_ERROR_STAGE_LABELS[stage]) || '未知阶段'
+  return (stage !== undefined && PLUGIN_ERROR_STAGE_LABELS[stage]) || 'Unknown stage'
 }
 
 /** 409 plugin_in_use 错误 details.usages 中的占用项形状。 */

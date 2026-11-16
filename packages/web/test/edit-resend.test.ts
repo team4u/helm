@@ -52,11 +52,11 @@ function renderTimelineHtml(entries: ConversationEntry[]): string {
     conversations: [conversation], conversationDetails: { 1: { ...conversation, entries } },
     conversationArtifacts: {}, groupedUi: groupUiContributions([]),
     authReady: true, authConfigured: true, authenticated: true, authError: null,
-    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'dark', quietNotifyEnabled: false,
+    connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'dark', locale: 'en', quietNotifyEnabled: false,
     profiles: [], assetsLoaded: true, models: [], providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: [],
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
+    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setLocale: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
     onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, refreshNodes: async () => undefined,
     loadConversationDetail: async () => undefined, loadEarlierEntries: asyncNoop, loadConversationArtifacts: async () => undefined,
     ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
@@ -176,8 +176,8 @@ test('跨会话隔离：ConversationPane 按会话 key 挂载 Composer，prefill
 
 test('非法历史锚点：显式报错并取消编辑，绝不静默降级为新消息', { timeout: 60_000 }, () => {
   // 非数字 / 非正整数 entryId：推送错误通知并 return，不回填 Composer。
-  assert.match(timelineSource, /消息锚点无效（entryId=/)
-  assert.match(timelineSource, /title: '无法编辑该消息'/)
+  assert.match(timelineSource, /Message anchor invalid \(entryId=/)
+  assert.match(timelineSource, /title: 'Cannot edit this message'/)
   // 不再有「锚点非法则省略 entryId 继续回填」的降级路径。
   assert.doesNotMatch(timelineSource, /Number\.isSafeInteger\(numericId\) && numericId > 0 \? \{ entryId: numericId \} : \{\}/)
 })
@@ -199,10 +199,10 @@ test('SSR 行为：human 消息渲染编辑铅笔，agent/trigger 消息不渲�
   ]
   const html = renderTimelineHtml(entries)
   assert.match(html, /人类提问/)
-  assert.match(html, /来自智能体汇报/)
-  assert.match(html, /来自触发器/)
+  assert.match(html, /From agent report/)
+  assert.match(html, /From trigger/)
   // 编辑入口（title=编辑并重发）只出现一次：仅 human 消息。
-  assert.equal([...html.matchAll(/title="编辑并重发"/g)].length, 1)
+  assert.equal([...html.matchAll(/title="Edit and resend"/g)].length, 1)
   // 三条消息的复制按钮均在。
   assert.equal([...html.matchAll(/复制到剪贴板|复制/g)].length >= 3, true)
 })

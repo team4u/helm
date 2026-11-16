@@ -15,6 +15,7 @@ import type {
   ConversationScope,
   ConversationSummary,
   CredentialSummary,
+  HelmLocale,
   NodeInfo,
   NotificationEvent,
   PluginSummary,
@@ -42,10 +43,10 @@ export type ThemeMode = 'light' | 'dark'
 export type ThemePreference = 'system' | 'light' | 'dark'
 export type FocusedPanel = 'primary' | 'split'
 
-/** Screen 参数键：非空且仅限字母/数字/点/下划线/连字符（URL 查询串命名空间内的稳定子键）。 */
+/** Screen param key: non-empty, limited to letters/digits/dot/underscore/hyphen (a stable sub-key inside the URL query namespace). */
 export const SCREEN_PARAM_KEY_PATTERN = /^[A-Za-z0-9._-]+$/
 
-/** URL 参数键中的保留名：拒绝挂到普通对象上（防原型污染）。 */
+/** Reserved names among URL param keys: refused on plain objects (prototype-pollution guard). */
 const PROTOTYPE_PARAM_KEY_RE = /^(?:__proto__|constructor|prototype)$/
 
 export const isPrototypeParamKey = (key: string): boolean => PROTOTYPE_PARAM_KEY_RE.test(key)
@@ -78,7 +79,7 @@ export interface QualifiedUiSpec<T> {
   spec: T
 }
 
-/** UI 动作贡献（groupUiContributions 按 surface 还原 target 语义）。 */
+/** UI action contribution (groupUiContributions restores target semantics by surface). */
 export type QualifiedUiActionSpec = QualifiedUiSpec<UiActionSpec> & { target: UiActionSpec['target'] }
 
 export interface GroupedUiSpecs {
@@ -105,7 +106,7 @@ export interface ToastNotice extends NotificationEvent {
   createdAt: number
 }
 
-/** 判断会话是否命中插件声明的 ConversationScope。 */
+/** Whether the conversation matches the plugin-declared ConversationScope. */
 export function matchesUiScope(
   conversation: ConversationSummary | undefined,
   scope: ConversationScope | undefined,
@@ -115,7 +116,7 @@ export function matchesUiScope(
   return matchesConversationScope(scope, conversation)
 }
 
-/** 将 UI 贡献列表按扩展面分组并排序。 */
+/** Groups and orders the UI contribution list by extension surface. */
 export function groupUiContributions(contributions: PluginUiContribution[]): GroupedUiSpecs {
   const grouped: GroupedUiSpecs = {
     sidebarItems: [],
@@ -210,15 +211,17 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
 }
 
 /**
- * 解析声明式导航目标字符串：
+ * Parses a declarative navigation target string:
  * - 'conversation:1' / 'conversation:42'
- * - 'conversation:profile:superagent' -> 查找该 profileId 的常驻或最新会话
- * - 'conversation:tag:worker' -> 查找含该 tag 的最新会话
- * - 'agent:assistant' -> 打开该智能体的待命页（首次发送才创建会话）
- * - 'screen:builtin:herdr/overview' -> 打开全屏插件视图
- * - 'screen:<pluginId>/<screenId>?k1=v1&k2=v2' -> 打开携带路由参数的全屏插件视图
+ * - 'conversation:profile:superagent' -> finds the resident or latest conversation of that profileId
+ * - 'conversation:tag:worker' -> finds the latest conversation carrying that tag
+ * - 'agent:assistant' -> opens that agent's standby page (the conversation is created on first send)
+ * - 'screen:builtin:herdr/overview' -> opens a full-screen plugin view
+ * - 'screen:<pluginId>/<screenId>?k1=v1&k2=v2' -> opens a full-screen plugin view with route params
  *
- * screen 查询串采用严格解析：非法百分号编码、空键值、重复键与保留的原型键一律整体判无效。
+ * Screen query strings are parsed strictly: invalid percent-encoding, empty
+ * keys/values, duplicate keys and reserved prototype keys invalidate the whole
+ * target.
  */
 export function resolveTargetString(
   rawTarget: string,
@@ -259,7 +262,7 @@ export function resolveTargetString(
   if (target.startsWith('models:')) {
     const sub = target.slice('models:'.length).trim()
     if (sub === '') return { kind: 'models' }
-    // models:defaults 直达全局默认 Tab（历史虚拟卡片语义升级）
+    // models:defaults deep-links to the global defaults tab (upgraded from the historical virtual card)
     if (sub === 'defaults') return { kind: 'models', tab: 'defaults' }
     return { kind: 'models', providerId: sub }
   }
@@ -269,8 +272,9 @@ export function resolveTargetString(
   }
   if (target.startsWith('conversation:profile:')) {
     const profileId = target.slice('conversation:profile:'.length).trim()
-    // 常驻会话优先：无 parentConversationId 的即插件/用户直接创建的长期会话，
-    // 派生 Worker（有父链）不在此列，不做任何标签名硬编码。
+    // Resident conversations first: those without parentConversationId are the
+    // long-lived conversations created directly by plugins/users; derived
+    // Workers (with a parent chain) are not included — no tag-name hardcoding.
     const resident = conversations.filter((c) => c.profileId === profileId && c.parentConversationId === undefined)
     const matched = resident[0] ?? conversations.find((c) => c.profileId === profileId)
     return matched ? { kind: 'conversation', conversationId: matched.id } : null
@@ -306,11 +310,15 @@ export function resolveTargetString(
 }
 
 /**
- * 严格解析 `k1=v1&k2=v2` 查询串为 Screen 参数：
- * - 键必须匹配 SCREEN_PARAM_KEY_PATTERN（含拒 __proto__ / constructor 等原型键）；
- * - 值可含任意字符但不得为空串；非法百分号编码（decodeURIComponent 抛出）判整体无效；
- * - 重复键判整体无效（不得静默取其一）；返回 undefined 表示无有效参数。
- * 返回 null 表示查询串非法，调用方必须让整个目标判无效。
+ * Strictly parses a `k1=v1&k2=v2` query string into Screen params:
+ * - keys must match SCREEN_PARAM_KEY_PATTERN (rejecting prototype keys such as
+ *   __proto__ / constructor);
+ * - values may contain any character but must not be empty; invalid
+ *   percent-encoding (decodeURIComponent throwing) invalidates the whole string;
+ * - duplicate keys invalidate the whole string (never silently pick one);
+ *   returning undefined means no effective params.
+ * Returning null means the query string is invalid and the caller must treat
+ * the whole target as invalid.
  */
 export function parseScreenTargetQuery(rawQuery: string): Record<string, string> | undefined | null {
   if (rawQuery === '') return undefined
@@ -372,16 +380,19 @@ export function isSameResolvedTarget(a: ResolvedTarget | null, b: ResolvedTarget
   return false
 }
 
-/** 侧栏空间：对话 / 视图 / 设置（Activity Rail 的三档主导航）。
- * 空间由主屏目标唯一推导（spaceForTarget），不是独立 URL/Store 状态；
- * Rail 点击经 store.openSpace 直接导航该空间的主舞台目标。 */
+/** Sidebar space: conversations / views / settings (the three top-level
+ * navigation sections of the Activity Rail). The space is derived uniquely
+ * from the primary target (spaceForTarget), not an independent URL/store
+ * state; Rail clicks navigate straight to the space's main-stage target via
+ * store.openSpace. */
 export type SidebarSpace = 'conversations' | 'views' | 'settings'
 
-/** 系统中心目标键（设置空间纵向列表与侧栏空间推导共用）。 */
+/** System center target keys (shared by the settings-space vertical list and sidebar-space derivation). */
 export const CENTER_TARGETS = ['profiles', 'models', 'skills', 'nodes', 'plugins'] as const
 
-/** 由主屏目标推导所在空间：screen -> 视图，系统中心 -> 设置，其余 -> 对话。
- * 侧栏空间是主屏目标的派生值，URL 只表达主屏目标本身。 */
+/** Derives the space from the primary target: screen -> views, system
+ * centers -> settings, everything else -> conversations. The sidebar space is
+ * a derived value of the primary target; the URL expresses only the target. */
 export function spaceForTarget(target: ResolvedTarget): SidebarSpace {
   if (target.kind === 'screen') return 'views'
   if ((CENTER_TARGETS as readonly string[]).includes(target.kind)) return 'settings'
@@ -389,7 +400,7 @@ export function spaceForTarget(target: ResolvedTarget): SidebarSpace {
 }
 
 export interface HelmStoreValue {
-  // 鉴权与连接状态
+  // Auth & connection state
   authReady: boolean
   authConfigured: boolean
   authenticated: boolean
@@ -399,10 +410,12 @@ export interface HelmStoreValue {
   sseConnected: boolean
   theme: ThemeMode
   themePreference: ThemePreference
-  /** 后台浏览器通知偏好（localStorage 持久化；权限授予才真正投递）。 */
+  /** Current UI locale (localStorage-persisted preference; browser-derived default zh-* -> zh-CN, others -> en). */
+  locale: HelmLocale
+  /** Background browser notification preference (localStorage persisted; delivered only when permission is granted). */
   quietNotifyEnabled: boolean
 
-  // 核心实时数据
+  // Core realtime data
   conversations: ConversationSummary[]
   conversationDetails: Record<number, ConversationDetail>
   conversationLives: Record<number, ConversationLive>
@@ -414,13 +427,15 @@ export interface HelmStoreValue {
   groupedUi: GroupedUiSpecs
   pluginDocs: Record<string, unknown> // key: `${pluginId}/${docName}`
   nodes: NodeInfo[]
-  /** 当前内核启动代（SSE snapshot 的 bootId；null/缺省 = 尚未收到快照）。内核重启后变化，
-   * 供版本感知等只读消费者作为「触发重新探测」信号；不等于 Web 产物一定更新。测试替身可省略。 */
+  /** Current kernel boot generation (bootId of the SSE snapshot; null/absent =
+   * no snapshot received yet). Changes after a kernel restart; read-only
+   * consumers such as version watching use it as a "re-probe" signal — it does
+   * not imply the web assets were updated. Test doubles may omit it. */
   kernelBootId?: string | null
 
-  // 静态配置资产
+  // Static config assets
   profiles: Profile[]
-  /** 静态资产（角色/模型/技能等）本轮会话是否已完成首次加载（待命页区分加载中与不存在）。 */
+  /** Whether static assets (profiles/models/skills/...) finished their first load this session (standby page distinguishes loading from non-existent). */
   assetsLoaded: boolean
   models: ModelDescriptor[]
   defaultModelInfo?: { defaultModel: string; defaultThinkingLevel: string } | null
@@ -429,66 +444,71 @@ export interface HelmStoreValue {
   skills: SkillSummary[]
   actions: ActionManifest[]
 
-  // 视图路由与工作台状态
+  // View routing & workbench state
   primaryTarget: ResolvedTarget
   splitTarget: ResolvedTarget | null
-  /** 当前聚焦面板（仅内存态，不进 URL；关闭分屏时重置为 'primary'）。测试替身可省略。 */
+  /** Currently focused panel (memory only, not in the URL; reset to 'primary' when the split closes). Test doubles may omit it. */
   focusedPanel?: FocusedPanel
-  /** 桌面端左侧二级导航栏折叠状态（localStorage 持久化；不进 URL）。测试替身可省略。 */
+  /** Desktop left secondary navigation collapsed state (localStorage persisted; not in the URL). Test doubles may omit it. */
   sidebarCollapsed?: boolean
-  /** 处于 1.5s 双按 Esc 中断确认窗口内的会话 ID（null 表示未进入确认窗口）。测试替身可省略。 */
+  /** Conversation ID inside the 1.5s double-Esc abort confirmation window (null = not armed). Test doubles may omit it. */
   pendingEscAbortConversationId?: number | null
   workbenchOpen: boolean
-  workbenchTab: string // 'artifacts' | `plugin:${pluginId}/${panelId}`（动态页签，由 WorkbenchDrawer 回退）
+  workbenchTab: string // 'artifacts' | `plugin:${pluginId}/${panelId}` (dynamic tab, falls back in WorkbenchDrawer)
   activeModal: ActiveModal
   highlightedEntry: { conversationId: number; entryId: string } | null
   notices: ToastNotice[]
 
-  // 操作方法
+  // Actions
   setTheme(theme: ThemeMode): void
   setThemePreference(pref: ThemePreference): void
   toggleTheme(): void
-  /** 开启时先请求浏览器通知权限，被拒则不启用并 toast 说明；关闭立即生效。 */
+  /** Sets the UI locale and persists the preference. */
+  setLocale(locale: HelmLocale): void
+  /** When enabling, requests browser notification permission first; on denial stays disabled with a toast notice; disabling takes effect immediately. */
   setQuietNotify(on: boolean): Promise<void>
   checkAuth(): Promise<void>
   onAuthenticated(token: string): Promise<void>
   logout(): void
   refreshAssets(): Promise<void>
-  /** 全量校准插件清单（包安装/更新/卸载后；SSE plugin.changed 仍为增量真相，幂等合并）。测试替身可省略。 */
+  /** Fully recalibrates the plugin list (after package install/update/remove; SSE plugin.changed remains the incremental truth, merged idempotently). Test doubles may omit it. */
   syncPlugins?(plugins: PluginSummary[]): void
   refreshNodes(): Promise<NodeInfo[] | undefined>
   loadConversationDetail(conversationId: number, force?: boolean): Promise<ConversationDetail | undefined>
   loadEarlierEntries(conversationId: number): Promise<void>
-  /** 单条目全文回填（服务端时间线预览截断后按需取回）：与 conversation.entry 事件
-   * 同一 upsert 语义（同 id 原位替换保序），不触发网络、不动分页游标。
-   * 生产 Provider 恒提供；测试替身可省略（截断取回 hook 会显式报错，不静默降级）。 */
+  /** Backfills a single entry's full text (fetched on demand after server-side
+   * timeline preview truncation): same upsert semantics as the
+   * conversation.entry event (same id replaced in place, order preserved), no
+   * network triggered, pagination cursor untouched. The production provider
+   * always provides it; test doubles may omit it (the truncation-fetch hook
+   * then errors explicitly instead of degrading silently). */
   backfillConversationEntry?(conversationId: number, entry: ConversationEntry): void
   loadConversationArtifacts(conversationId: number): Promise<ArtifactMetadata[] | undefined>
   ensurePluginDoc(pluginId: string, docName: string): Promise<unknown>
-  /** 订阅会话级文档元组（ref-count 共享专用 SSE 流；详见 lib/session-docs.ts）。 */
+  /** Subscribes to a conversation-scoped doc tuple (ref-counted dedicated SSE stream; see lib/session-docs.ts). */
   subscribeSessionDoc(key: SessionDocKey, listener: () => void): () => void
-  /** 读取会话级文档当前缓存态（含错误与删除标记；未订阅返回空态）。 */
+  /** Reads the current cached state of a conversation-scoped doc (with error and deleted markers; empty state when unsubscribed). */
   getSessionDocState(key: SessionDocKey): { value?: unknown; hasValue: boolean; deleted: boolean; error?: string; connected: boolean }
-  /** 一次性读取会话级文档（GET /api/plugins/:id/docs/:name?conversationId=）。 */
+  /** One-shot read of a conversation-scoped doc (GET /api/plugins/:id/docs/:name?conversationId=). */
   getPluginSessionDoc(pluginId: string, docName: string, conversationId: number): Promise<unknown>
-  /** 会话级文档显式重连（订阅错误后的 UI 重试入口）。 */
+  /** Explicit reconnect of a conversation-scoped doc (UI retry entry after a subscription error). */
   retrySessionDoc(key: SessionDocKey): void
   openTarget(
     target: string | ResolvedTarget,
     opts?: { split?: boolean; highlightEntryId?: string; history?: 'push' | 'replace' },
   ): void
   closeSplit(): void
-  /** 更新当前聚焦面板；splitTarget 为空时忽略切到 'split'。测试替身可省略。 */
+  /** Updates the currently focused panel; switching to 'split' is ignored while splitTarget is empty. Test doubles may omit it. */
   setFocusedPanel?(panel: FocusedPanel): void
-  /** 设置桌面端侧栏折叠状态并持久化。测试替身可省略。 */
+  /** Sets the desktop sidebar collapsed state and persists it. Test doubles may omit it. */
   setSidebarCollapsed?(collapsed: boolean): void
-  /** 切换桌面端侧栏折叠状态并持久化。测试替身可省略。 */
+  /** Toggles the desktop sidebar collapsed state and persists it. Test doubles may omit it. */
   toggleSidebarCollapsed?(): void
-  /** 更新当前 screen 路由参数（undefined 值删除键）；split 省略时作用于主屏。 */
+  /** Updates the current screen route params (undefined deletes the key); applies to the primary pane when split is omitted. */
   setScreenParams(patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }): void
   setWorkbenchOpen(open: boolean): void
   setWorkbenchTab(tab: string): void
-  /** Activity Rail 空间切换：直接导航主屏到该空间最近目标（无记忆时取空间缺省），push 入栈。 */
+  /** Activity Rail space switch: navigates the primary pane to the space's most recent target (space default when none remembered), pushing history. */
   openSpace(space: SidebarSpace): void
   setActiveModal(modal: ActiveModal): void
   dismissNotice(id: string): void

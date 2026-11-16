@@ -96,7 +96,7 @@
 
 停用一个插件要过三道关卡，顺序固定：
 
-1. **locked 硬拒绝**：`locked: true` 的插件（仅 `builtin:profile`）永久禁止停用或卸载，返回 `403 locked_plugin_cannot_be_disabled`；
+1. **locked 硬拒绝**：`locked: true` 的插件（仅 `builtin:profile`）永久禁止停用或卸载，返回 `403 plugin_locked`；
 2. **在途任务硬阻断**：`liveTasks()` 非空（执行中的动作/工具/子代理派生/服务自声明任务）即 `409 plugin_has_live_tasks`，**不可 force**；`liveTasks()` 执行崩溃按 `500 plugin_live_tasks_check_failed` 拒绝，绝不默认放行；
 3. **持久资源知情确认**：`inUse()` 声明持久生效资源（如已启用的 cron 任务、webhook 端点、Profile 运行时绑定、模型引用），非空默认 `409 plugin_in_use` 并列出占用清单；显式 `--force` 可越过（磁盘配置保留，重新启用后恢复）。
 
@@ -111,7 +111,7 @@
 | 插件宿主（PluginHost / 生命周期 / doctor / 受管包） | `packages/kernel/src/plugins/` |
 | 宿主能力端口与 Hook/UI 契约类型 | `packages/protocol/src/plugin.ts` / `ui.ts` |
 | 产品注册点 | `packages/hub/src/app.ts` |
-| 契约锁定测试 | `packages/plugins/test/plugins-contract.test.ts`、`packages/plugins/test/contracts.test.ts` |
+| 契约锁定测试 | `packages/kernel/test/plugins-contract.test.ts`、`packages/plugins/test/contracts.test.ts` |
 | 宿主测试 | `packages/kernel/test/plugins.test.ts`、`plugin-*.test.ts`（生命周期、依赖、doc 上限、受管包等） |
 | 各插件测试 | `packages/plugins/test/<domain>*.test.ts`（见各插件文档「源码与测试入口」） |
 

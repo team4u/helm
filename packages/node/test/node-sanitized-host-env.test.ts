@@ -1,8 +1,8 @@
 /**
- * sanitizedHostEnv 契约测试：锁定「宿主携带受管 HELM_* 变量时，测试子进程
- * 环境基底必须剥除全部受管变量、保留普通变量、且不改动 process.env」的
- * 语义。这是 packages/node 测试在 Helm 托管宿主环境（bash 等受管工具天然
- * 注入 HELM_* 执行环境）下稳定通过的前提。
+ * sanitizedHostEnv contract test: lock host carry managed HELM_* variable when, test child process
+ * environment base bottom must strip except all managed variable, keep ordinary variable, and do not change process.env
+ * semantics. this is packages/node test in Helm hosting host environment (bash etc. managed tool day however
+ * inject HELM_* execute environment) under stable via before mention.
  */
 
 import { test } from 'node:test';
@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import process from 'node:process';
 import { HOST_MANAGED_HELM_ENV_NAMES, sanitizedHostEnv } from './helpers/sanitized-env.js';
 
-/** 在 process.env 上临时写入变量并在测试结束后精确还原（含原本未设的键）。 */
+/** in process.env on temporary write variable and in test after end precise restore (contains originally not set key). */
 function withEnv(vars: Record<string, string>, run: () => void): void {
   const saved = new Map<string, string | undefined>();
   for (const key of Object.keys(vars)) saved.set(key, process.env[key]);
@@ -25,38 +25,38 @@ function withEnv(vars: Record<string, string>, run: () => void): void {
   }
 }
 
-test('宿主持有全部受管 HELM_* 变量时，sanitizedHostEnv 剥除后不残留任何受管变量', { timeout: 60_000 }, () => {
+test('host hold has all managed HELM_* variable when,sanitizedHostEnv strip except after leaves no residue any managed variable', { timeout: 60_000 }, () => {
   const fixture: Record<string, string> = {};
   for (const name of HOST_MANAGED_HELM_ENV_NAMES) fixture[name] = `host-managed-${name.toLowerCase()}`;
   let result: NodeJS.ProcessEnv | undefined;
   withEnv(fixture, () => {
     result = sanitizedHostEnv();
-    // process.env 本身不被助手改动
+    // process.env itself do not by assist manually change
     for (const name of HOST_MANAGED_HELM_ENV_NAMES) {
-      assert.equal(process.env[name], fixture[name], `助手不得改动 process.env 的 ${name}`);
+      assert.equal(process.env[name], fixture[name], `assist manually must not change process.env  ${name}`);
     }
   });
   assert.ok(result !== undefined);
   for (const name of HOST_MANAGED_HELM_ENV_NAMES) {
-    assert.equal(name in result, false, `受管变量 ${name} 必须被剥除`);
-    assert.equal(result[name], undefined, `受管变量 ${name} 不得残留值`);
+    assert.equal(name in result, false, `managed variable ${name} must by strip except`);
+    assert.equal(result[name], undefined, `managed variable ${name} must not leftover value`);
   }
 });
 
-test('sanitizedHostEnv 保留普通变量（PATH 等本机工具链）且每次返回独立副本', { timeout: 60_000 }, () => {
+test('sanitizedHostEnv keep ordinary variable (PATH etc. local machine tool chain) and each time return independent copy', { timeout: 60_000 }, () => {
   const a = sanitizedHostEnv();
   const b = sanitizedHostEnv();
-  assert.notEqual(a, b, '每次调用返回独立副本，调用方可安全覆盖');
-  assert.equal(a['PATH'] ?? a['Path'], process.env['PATH'] ?? process.env['Path'], 'PATH 必须保留');
-  if (process.env['HOME'] !== undefined) assert.equal(a['HOME'], process.env['HOME'], 'HOME 必须保留');
+  assert.notEqual(a, b, 'each time invoke return independent copy, caller can security override');
+  assert.equal(a['PATH'] ?? a['Path'], process.env['PATH'] ?? process.env['Path'], 'PATH must keep');
+  if (process.env['HOME'] !== undefined) assert.equal(a['HOME'], process.env['HOME'], 'HOME must keep');
   a['TEST_ONLY_MUTATION'] = 'x';
-  assert.equal(b['TEST_ONLY_MUTATION'], undefined, '副本之间互不影响');
+  assert.equal(b['TEST_ONLY_MUTATION'], undefined, 'copy between mutual does not affect');
   delete a['TEST_ONLY_MUTATION'];
 });
 
-test('受管变量大小写变体同样剥除（Windows env 名大小写不敏感语义）', { timeout: 60_000 }, () => {
-  // 仅设变体名，不与 canonical 名并用（Windows 上 process.env 大小写不敏感，
-  // 同名变体本质是同一槽位；Linux 上为独立键，两种平台都必须被剥除）。
+test('managed variable large small write change body same strip except (Windows env name large small write do not sensitive semantics)', { timeout: 60_000 }, () => {
+  // only set change body name, do not and canonical name and use (Windows on process.env large small write do not sensitive,
+  // same name change body essence is the same slot;Linux on is independent key, two kinds of platform all must by strip except).
   const variants = { helm_token: 'lower-host-token', Helm_Hub_Url: 'mixed-host-url', helm_node_instance_id: 'lower-instance' };
   let result: NodeJS.ProcessEnv | undefined;
   withEnv(variants, () => {
@@ -64,18 +64,18 @@ test('受管变量大小写变体同样剥除（Windows env 名大小写不敏�
   });
   assert.ok(result !== undefined);
   for (const key of Object.keys(variants)) {
-    assert.equal(key in result, false, `大小写变体 ${key} 必须被剥除`);
+    assert.equal(key in result, false, `large small write change body ${key} must by strip except`);
   }
 });
 
-test('测试显式覆盖优先：以 sanitizedHostEnv 为基底展开后覆盖受管变量按测试值生效', { timeout: 60_000 }, () => {
+test('test explicit override takes precedence: with sanitizedHostEnv is base bottom expand after override managed variable by test value takes effect', { timeout: 60_000 }, () => {
   const fixture = { HELM_HUB_URL: 'http://host-real-hub:3202', HELM_VERSION_OVERRIDE: 'host-9.9.9' };
   let composed: NodeJS.ProcessEnv | undefined;
   withEnv(fixture, () => {
-    // 与测试内真实用法一致：基底展开之后覆盖 fixture 显式值
+    // and test inside real use method consistent: base bottom expand after override fixture explicit value
     composed = { ...sanitizedHostEnv(), HELM_HUB_URL: 'http://127.0.0.1:fixture', HELM_VERSION_OVERRIDE: '0.1.0' };
   });
   assert.ok(composed !== undefined);
-  assert.equal(composed['HELM_HUB_URL'], 'http://127.0.0.1:fixture', '测试显式 HELM_HUB_URL 必须生效');
-  assert.equal(composed['HELM_VERSION_OVERRIDE'], '0.1.0', '测试显式 HELM_VERSION_OVERRIDE 必须生效');
+  assert.equal(composed['HELM_HUB_URL'], 'http://127.0.0.1:fixture', 'test explicit HELM_HUB_URL must takes effect');
+  assert.equal(composed['HELM_VERSION_OVERRIDE'], '0.1.0', 'test explicit HELM_VERSION_OVERRIDE must takes effect');
 });

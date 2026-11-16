@@ -1,9 +1,9 @@
 /**
- * `@earendil-works/pi-durable` 品牌化数值 ID 边界转换辅助。
+ * `@earendil-works/pi-durable` brand count value ID boundary convert auxiliary.
  *
- * SDK 使用名义品牌类型（`ConversationId`、`EntryId`、`SubmissionId`、`TaskId`）
- * 区分各持久实体主键；内核对外协议与存储层以普通 `number` 传递并在入界前做
- * 整数校验，集中经本模块窄转换进入 SDK，取代零散 `as never`。
+ * SDK use name meaning brand type (`ConversationId`,`EntryId`,`SubmissionId`,`TaskId`)
+ * zone each durable entity main key; kernel for outside protocol and store layer with ordinary `number` pass and in boundary before do
+ * integer validate, concentrate via this module narrow convert enter SDK, take proxy zero scatter `as never`.
  */
 import type { ConversationId, EntryId, Id, SubmissionId, TaskId } from '@earendil-works/pi-durable'
 

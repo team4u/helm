@@ -94,7 +94,7 @@ export function PluginConfigForm({
   }, [config])
 
   if (entries.length === 0) {
-    return <div className="text-subtle">该插件未声明配置项。</div>
+    return <div className="text-subtle">This plugin declares no configuration options.</div>
   }
 
   const save = async () => {
@@ -143,13 +143,13 @@ export function PluginConfigForm({
                 <span className="plugin-config-field-name">{schema.label ?? key}</span>
                 {schema.required && <span className="text-err">*</span>}
                 {source === 'configured' && (
-                  <span className="badge badge-neutral plugin-config-source-tag" title="用户已显式配置">
-                    已配置
+                  <span className="badge badge-neutral plugin-config-source-tag" title="Explicitly configured by user">
+                    Configured
                   </span>
                 )}
                 {source === 'default' && (
-                  <span className="text-subtle plugin-config-source-tag" title="当前使用默认值">
-                    默认
+                  <span className="text-subtle plugin-config-source-tag" title="Using default value">
+                    Default
                   </span>
                 )}
               </label>
@@ -159,7 +159,7 @@ export function PluginConfigForm({
                     id={fieldId}
                     checked={values[key] === true}
                     onChange={(checked) => setValues((prev) => ({ ...prev, [key]: checked }))}
-                    label={values[key] === true ? '开启' : '关闭'}
+                    label={values[key] === true ? 'On' : 'Close'}
                   />
                 ) : schema.type === 'number' ? (
                   <input
@@ -186,8 +186,8 @@ export function PluginConfigForm({
                     placeholder={
                       schema.secret
                         ? secretConfigured(config.values?.[key])
-                          ? '已配置（留空保持不变）'
-                          : (schema.description ?? '未配置')
+                          ? 'Configured (leave empty to keep unchanged)'
+                          : (schema.description ?? 'Not configured')
                         : schema.description
                     }
                     value={String(values[key] ?? '')}
@@ -206,10 +206,10 @@ export function PluginConfigForm({
                     className="btn btn-ghost btn-xs"
                     disabled={saving || resettingKey !== null}
                     onClick={() => void resetField(key)}
-                    title={schema.secret ? '清除已保存密钥' : '重置为默认值'}
+                    title={schema.secret ? 'Clear saved secret' : 'Reset to default'}
                   >
                     <HelmIcon name="rotate-ccw" size={11} />
-                    <span>{schema.secret ? '清除' : '重置'}</span>
+                    <span>{schema.secret ? 'Clear' : 'Reset'}</span>
                   </button>
                 )}
               </div>
@@ -226,7 +226,7 @@ export function PluginConfigForm({
       <div>
         <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => void save()}>
           <HelmIcon name="check" size={12} />
-          <span>{saved ? '已保存' : '保存配置'}</span>
+          <span>{saved ? 'Saved' : 'Save configuration'}</span>
         </button>
       </div>
     </div>
@@ -313,11 +313,11 @@ export function PluginDetailDrawer({
         if (usages.length > 0) {
           setInUseConfirm({ plugin, usages })
         } else {
-          setActionError('停用失败：插件存在关联的持久资源占用（plugin_in_use）。')
+          setActionError('Disable failed: the plugin holds persistent resources (plugin_in_use).')
         }
       } else if (err instanceof ApiClientError && err.status === 409) {
         setActionError(
-          `停用失败：插件存在在途任务（${err.code}）。请等待任务结束或中止后再试。`,
+          `Disable failed: plugin has live tasks (${err.code}). Wait for them to finish or abort them, then retry.`,
         )
       } else {
         setActionError(err instanceof Error ? err.message : String(err))
@@ -332,19 +332,19 @@ export function PluginDetailDrawer({
     setActionError(null)
     try {
       const result = await pluginsApi.update(plugin.id)
-      const versionLabel = result.record.version || '未知版本'
+      const versionLabel = result.record.version || 'Unknown version'
       const noticeBody = result.changed
-        ? `已更新到 ${versionLabel}（此前 ${result.previousVersion || '未知版本'}）`
-        : `源未变化，当前仍为 ${versionLabel}`
+        ? `Updated to ${versionLabel} (was ${result.previousVersion || 'Unknown version'})`
+        : `Source unchanged; still at ${versionLabel}`
       store?.pushNotice({
         type: 'notification',
         level: 'info',
-        title: '插件包已更新',
+        title: 'Plugin package updated',
         body: `${plugin.name || plugin.id}：${noticeBody}`,
       })
       onPackageChanged?.()
     } catch (err) {
-      setActionError(pluginPackageErrorText(err, '更新'))
+      setActionError(pluginPackageErrorText(err, 'Update'))
     } finally {
       setPackageOp('idle')
     }
@@ -360,14 +360,14 @@ export function PluginDetailDrawer({
       store?.pushNotice({
         type: 'notification',
         level: 'info',
-        title: '插件包已卸载',
-        body: `${plugin.name || plugin.id} 已移除（${plugin.id}）`,
+        title: 'Plugin package uninstalled',
+        body: `${plugin.name || plugin.id} removed (${plugin.id})`,
       })
       setConfirmRemoveOpen(false)
       onRemoved?.()
       onPackageChanged?.()
     } catch (err) {
-      setActionError(pluginPackageErrorText(err, '卸载'))
+      setActionError(pluginPackageErrorText(err, 'Uninstall'))
       setConfirmRemoveOpen(false)
     } finally {
       setPackageOp('idle')
@@ -404,34 +404,34 @@ export function PluginDetailDrawer({
         <DialogContent
           className="plugin-drawer-content"
           role="dialog"
-          aria-label={plugin ? `${plugin.name || plugin.id} 详情` : '插件详情'}
+          aria-label={plugin ? `${plugin.name || plugin.id} details` : 'Plugin details'}
         >
-          {/* 头部元信息 */}
+          {/* Header metadata */}
           <div className="plugin-drawer-header">
             <div className="plugin-drawer-header-left">
               <div className="plugin-drawer-title-col">
                 <div className="plugin-drawer-title-row">
                   <DialogTitle className="plugin-drawer-title">
-                    {plugin?.name || plugin?.id || '插件详情'}
+                    {plugin?.name || plugin?.id || 'Plugin details'}
                   </DialogTitle>
                   {versionLabel && (
-                    <span className="badge badge-neutral mono" title={`版本 ${versionLabel}`}>
+                    <span className="badge badge-neutral mono" title={`Version ${versionLabel}`}>
                       {versionLabel}
                     </span>
                   )}
                   {plugin?.locked && (
-                    <span className="badge badge-warn" title="常驻核心插件，不可停用">
+                    <span className="badge badge-warn" title="Resident core plugin; cannot be disabled">
                       <HelmIcon name="lock" size={10} />
-                      <span>常驻</span>
+                      <span>Resident</span>
                     </span>
                   )}
                   {plugin?.dependencies && plugin.dependencies.length > 0 && (
                     <span
                       className="badge badge-neutral"
-                      title={`依赖插件：${plugin.dependencies.join('、')}（启用前必须已启用）`}
+                      title={`Dependencies: ${plugin.dependencies.join(', ')} (must be enabled first)`}
                     >
                       <HelmIcon name="network" size={10} />
-                      <span>{`依赖 ${plugin.dependencies.length}`}</span>
+                      <span>{`Dependencies ${plugin.dependencies.length}`}</span>
                     </span>
                   )}
                 </div>
@@ -441,8 +441,8 @@ export function PluginDetailDrawer({
                 )}
                 {plugin?.status === 'failed' && plugin.error && (
                   <div className="plugin-drawer-failed-note" role="note">
-                    <span className="badge badge-err">加载失败</span>
-                    <span className="mono selectable">{`${plugin.error.code}：${plugin.error.message}（阶段 ${plugin.error.stage}）`}</span>
+                    <span className="badge badge-err">Failed to load</span>
+                    <span className="mono selectable">{`${plugin.error.code}: ${plugin.error.message} (stage ${plugin.error.stage})`}</span>
                   </div>
                 )}
               </div>
@@ -450,36 +450,36 @@ export function PluginDetailDrawer({
             <DialogClose asChild>
               <button
                 className="btn btn-ghost btn-icon-sm plugin-drawer-close-btn"
-                aria-label="关闭"
-                title="关闭"
+                aria-label="Close"
+                title="Close"
               >
                 <HelmIcon name="x" size={14} />
               </button>
             </DialogClose>
           </div>
 
-          {/* 抽屉主体 */}
+          {/* Drawer body */}
           <div className="plugin-drawer-body">
             {!plugin ? (
-              <div className="empty-state">未选择插件</div>
+              <div className="empty-state">No plugin selected</div>
             ) : (
               <>
-                {/* 快速动作与启停栏 */}
+                {/* Quick actions and enable/disable bar */}
                 <div className="plugin-drawer-action-bar">
                   <div className="plugin-drawer-status-wrap">
-                    <span className="text-subtle">当前状态</span>
+                    <span className="text-subtle">Current status</span>
                     {isPluginFailed(plugin) ? (
-                      <span className="badge badge-err" title="插件加载或启用失败，详见下方诊断信息">
+                      <span className="badge badge-err" title="Plugin failed to load or enable; see diagnostics below">
                         <HelmIcon name="alert-circle" size={10} />
-                        <span>异常</span>
+                        <span>Error</span>
                       </span>
                     ) : plugin.enabled ? (
                       <span className="badge badge-ok">
                         <HelmIcon name="check" size={10} />
-                        <span>已启用</span>
+                        <span>Enabled</span>
                       </span>
                     ) : (
-                      <span className="badge badge-neutral">已停用</span>
+                      <span className="badge badge-neutral">Disabled</span>
                     )}
                   </div>
                   <div className="plugin-drawer-screen-actions">
@@ -490,8 +490,8 @@ export function PluginDetailDrawer({
                           className="btn btn-sm"
                           title={
                             pluginScreens.length > 1
-                              ? `打开主视图 ${primaryScreen.screenId}（共 ${pluginScreens.length} 个视图）`
-                              : '打开主视图'
+                              ? `Open main view ${primaryScreen.screenId} (${pluginScreens.length} views in total)`
+                              : 'Open main view'
                           }
                           onClick={() =>
                             store.openTarget({
@@ -502,12 +502,12 @@ export function PluginDetailDrawer({
                           }
                         >
                           <HelmIcon name="play" size={12} />
-                          <span>打开视图</span>
+                          <span>Open view</span>
                         </button>
                         <button
                           type="button"
                           className="btn btn-sm split-toggle-btn plugin-drawer-split-btn"
-                          title="在右侧分屏并排打开"
+                          title="Open side-by-side in the right split"
                           onClick={() =>
                             store.openTarget(
                               {
@@ -520,7 +520,7 @@ export function PluginDetailDrawer({
                           }
                         >
                           <HelmIcon name="columns" size={12} />
-                          <span>右屏打开</span>
+                          <span>Open in split</span>
                         </button>
                       </>
                     )}
@@ -533,12 +533,12 @@ export function PluginDetailDrawer({
                       {plugin.enabled ? (
                         <>
                           <HelmIcon name="square" size={12} />
-                          <span>停用插件</span>
+                          <span>Disable plugin</span>
                         </>
                       ) : (
                         <>
                           <HelmIcon name="play" size={12} />
-                          <span>启用插件</span>
+                          <span>Enable plugin</span>
                         </>
                       )}
                     </button>
@@ -552,16 +552,16 @@ export function PluginDetailDrawer({
                   </div>
                 )}
 
-                {/* 受管插件包：来源元数据 + 更新/卸载（内置或未受管插件不展示） */}
+                {/* Managed plugin package: source metadata + update/uninstall (hidden for built-in or unmanaged plugins) */}
                 {plugin?.managed && (
                   <div className="plugin-drawer-section plugin-package-section">
                     <h4 className="plugin-drawer-section-title">
                       <HelmIcon name="boxes" size={13} />
-                      <span>包管理</span>
+                      <span>Package</span>
                     </h4>
                     <div className="plugin-package-meta">
                       <div className="form-grid">
-                        <span className="form-grid-label"><span>来源</span></span>
+                        <span className="form-grid-label"><span>Source</span></span>
                         <span className="form-grid-value">
                           <span className="badge badge-neutral mono" data-source-kind={plugin.managed.source.kind}>
                             {pluginSourceBadgeLabel(plugin.managed.source)}
@@ -573,13 +573,13 @@ export function PluginDetailDrawer({
                       </div>
                       {plugin.managed.installedVersion !== '' && (
                         <div className="form-grid">
-                          <span className="form-grid-label"><span>已安装版本</span></span>
+                          <span className="form-grid-label"><span>Installed version</span></span>
                           <span className="form-grid-value mono">{plugin.managed.installedVersion}</span>
                         </div>
                       )}
                       {formatInstalledAt(plugin.managed.installedAt) !== '' && (
                         <div className="form-grid">
-                          <span className="form-grid-label"><span>安装时间</span></span>
+                          <span className="form-grid-label"><span>Installed at</span></span>
                           <span className="form-grid-value">{formatInstalledAt(plugin.managed.installedAt)}</span>
                         </div>
                       )}
@@ -587,24 +587,24 @@ export function PluginDetailDrawer({
                     <div className="plugin-package-actions">
                       <button className="btn btn-sm" disabled={packageOp !== 'idle'} onClick={() => void handleUpdatePackage()}>
                         <HelmIcon name="refresh-cw" size={12} />
-                        <span>{packageOp === 'updating' ? '正在更新…' : '检查更新'}</span>
+                        <span>{packageOp === 'updating' ? 'Updating…' : 'Check for updates'}</span>
                       </button>
                       <button className="btn btn-danger btn-sm" disabled={packageOp !== 'idle'} onClick={() => setConfirmRemoveOpen(true)}>
                         <HelmIcon name="trash-2" size={12} />
-                        <span>{packageOp === 'removing' ? '正在卸载…' : '卸载插件'}</span>
+                        <span>{packageOp === 'removing' ? 'Uninstalling…' : 'Uninstall plugin'}</span>
                       </button>
                     </div>
                   </div>
                 )}
 
-                {/* 故障诊断框：结构化展示阶段、错误码与完整消息 */}
+                {/* Failure diagnostics box: structured stage, error code and full message */}
                 {plugin.error && (
                   <div className="callout callout-error" role="alert">
                     <HelmIcon name="alert-circle" size={13} />
                     <div className="plugin-diagnostic-body">
-                      <div className="plugin-diagnostic-title">插件加载或启用失败</div>
+                      <div className="plugin-diagnostic-title">Plugin failed to load or enable</div>
                       <div className="text-subtle">
-                        {`故障阶段：${pluginErrorStageLabel(plugin.error.stage)} · 错误码：`}
+                        {`Failure stage: ${pluginErrorStageLabel(plugin.error.stage)} · Error code: `}
                         <span className="mono">{plugin.error.code}</span>
                       </div>
                       <div className="selectable plugin-diagnostic-message">{plugin.error.message}</div>
@@ -612,13 +612,13 @@ export function PluginDetailDrawer({
                   </div>
                 )}
 
-                {/* 409 plugin_in_use 占用确认：知情后可选强制停用 */}
+                {/* 409 plugin_in_use confirmation: informed forced disable */}
                 {inUseConfirm && (
                   <div className="callout callout-warn" role="alert">
                     <HelmIcon name="alert-triangle" size={13} />
                     <div className="plugin-inuse-body">
-                      <div className="plugin-diagnostic-title">插件资源占用确认（plugin_in_use）</div>
-                      <div className="text-subtle">停用后以下关联资源将暂时失效，配置保留待下次启用恢复：</div>
+                      <div className="plugin-diagnostic-title">Plugin resource confirmation (plugin_in_use)</div>
+                      <div className="text-subtle">The related resources below go offline after disabling; configuration is kept and restored on next enable:</div>
                       <ul className="plugin-inuse-list">
                         {inUseConfirm.usages.map((usage) => (
                           <li key={`${usage.kind}/${usage.id}`} title={`${usage.kind}/${usage.id}`}>
@@ -628,22 +628,22 @@ export function PluginDetailDrawer({
                       </ul>
                       <div className="plugin-inuse-actions">
                         <button type="button" className="btn btn-ghost btn-sm" onClick={() => setInUseConfirm(null)}>
-                          取消
+                          Cancel
                         </button>
                         <button type="button" className="btn btn-danger btn-sm" disabled={toggling} onClick={() => void handleForceDisable()}>
                           <HelmIcon name="square" size={12} />
-                          <span>强制停用</span>
+                          <span>Force disable</span>
                         </button>
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* 能力清单透视 */}
+                {/* Capability inventory */}
                 <div className="plugin-drawer-section">
                   <h4 className="plugin-drawer-section-title">
                     <HelmIcon name="boxes" size={13} />
-                    <span>能力清单</span>
+                    <span>Capabilities</span>
                   </h4>
                   <div className="plugin-drawer-capabilities">
                     {/* Tools */}
@@ -663,7 +663,7 @@ export function PluginDetailDrawer({
                           ))}
                         </div>
                       ) : (
-                        <div className="text-subtle">无声明工具</div>
+                        <div className="text-subtle">No declared tools</div>
                       )}
                     </div>
 
@@ -684,7 +684,7 @@ export function PluginDetailDrawer({
                           ))}
                         </div>
                       ) : (
-                        <div className="text-subtle">无声明动作</div>
+                        <div className="text-subtle">No declared actions</div>
                       )}
                     </div>
 
@@ -705,22 +705,22 @@ export function PluginDetailDrawer({
                           ))}
                         </div>
                       ) : (
-                        <div className="text-subtle">无拦截钩子</div>
+                        <div className="text-subtle">No hooks</div>
                       )}
                     </div>
                   </div>
                 </div>
 
-                {/* 动态配置项 */}
+                {/* Dynamic configuration options */}
                 <div className="plugin-drawer-section">
                   <h4 className="plugin-drawer-section-title">
                     <HelmIcon name="sliders" size={13} />
-                    <span>配置项</span>
+                    <span>Configuration</span>
                   </h4>
                   {loadingConfig ? (
                     <div className="loading-state">
                       <HelmIcon name="loader" size={13} className="spin-slow" />
-                      <span>正在读取配置...</span>
+                      <span>Loading configuration...</span>
                     </div>
                   ) : configError ? (
                     <div className="callout callout-error" role="alert">
@@ -734,19 +734,19 @@ export function PluginDetailDrawer({
                       onSaved={() => void reloadConfig(plugin.id)}
                     />
                   ) : (
-                    <div className="text-subtle">配置读取失败或未声明。</div>
+                    <div className="text-subtle">Configuration load failed or not declared.</div>
                   )}
                 </div>
 
-                {/* 扩展设置面板 */}
+                {/* Extension settings panels */}
                 {settingsPanels.length > 0 && (
                   <div className="plugin-drawer-section">
                     <h4 className="plugin-drawer-section-title">
                       <HelmIcon name="layout" size={13} />
                       <span>
                         {settingsPanels.length > 1
-                          ? `扩展设置面板（${settingsPanels.length}）`
-                          : (settingsPanels[0]!.spec.label || '扩展设置面板')}
+                          ? `Extension settings panels (${settingsPanels.length})`
+                          : (settingsPanels[0]!.spec.label || 'Extension settings panels')}
                       </span>
                     </h4>
                     {settingsPanels.map((panel) => (
@@ -762,7 +762,7 @@ export function PluginDetailDrawer({
                         <PluginUiView
                           pluginId={plugin.id}
                           spec={panel.spec}
-                          label={`设置面板 ${panel.spec.id}`}
+                          label={`Settings panel ${panel.spec.id}`}
                         />
                       </div>
                     ))}
@@ -774,7 +774,7 @@ export function PluginDetailDrawer({
         </DialogContent>
       </DialogPortal>
 
-      {/* 卸载危险二次确认：Radix AlertDialog（内联渲染与抽屉一致，便于测试断言） */}
+      {/* Uninstall danger confirmation: Radix AlertDialog (inline rendering matches the drawer for test assertions) */}
       <AlertDialog
         open={confirmRemoveOpen && Boolean(plugin?.managed)}
         inline={inline}
@@ -787,14 +787,14 @@ export function PluginDetailDrawer({
             <AlertDialogContent
               className="modal plugin-remove-confirm"
               role="alertdialog"
-              aria-label="确认卸载插件"
+              aria-label="Confirm plugin uninstall"
             >
             <div className="modal-header">
-              <AlertDialogTitle className="modal-title">卸载插件</AlertDialogTitle>
+              <AlertDialogTitle className="modal-title">Uninstall plugin</AlertDialogTitle>
             </div>
             <div className="modal-body">
               <AlertDialogDescription className="plugin-remove-confirm-desc">
-                确定卸载 {plugin?.name || plugin?.id}（{plugin?.id}）？将删除安装目录与注册记录，该操作不可恢复。
+                Uninstall {plugin?.name || plugin?.id} ({plugin?.id})? The install directory and registry entry will be deleted; this cannot be undone.
               </AlertDialogDescription>
             </div>
             <div className="modal-footer">
@@ -804,7 +804,7 @@ export function PluginDetailDrawer({
                   disabled={packageOp === 'removing'}
                   onClick={() => setConfirmRemoveOpen(false)}
                 >
-                  取消
+                  Cancel
                 </button>
               </AlertDialogCancel>
               <AlertDialogAction asChild>
@@ -814,7 +814,7 @@ export function PluginDetailDrawer({
                   onClick={() => void handleRemovePackage()}
                 >
                   <HelmIcon name="trash-2" size={12} />
-                  <span>{packageOp === 'removing' ? '正在卸载…' : '确认卸载'}</span>
+                  <span>{packageOp === 'removing' ? 'Uninstalling…' : 'Confirm uninstall'}</span>
                 </button>
               </AlertDialogAction>
             </div>

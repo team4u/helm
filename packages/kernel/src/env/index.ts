@@ -1,7 +1,7 @@
 /**
- * kernel env 域公共出口：跨平台节点连接池与执行环境编排。
- * local 恒为进程内 NodeExecutionEnv；远端经 /ws/node WS+birpc 调用
- * 节点守护进程的 NodeEnvRpcFunctions，绝不静默回退 local。
+ * kernel env domain public exports: across platform node connection pool and execute environment orchestration.
+ * local constant is process inside NodeExecutionEnv; remote via /ws/node WS+birpc invoke
+ * node daemon NodeEnvRpcFunctions, never static default fall back local.
  */
 
 export { createEnvFabric } from './fabric.js'

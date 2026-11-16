@@ -280,10 +280,10 @@ test('profile-center-model：buildProfileModelOptions 仅展示已配置模型�
     },
   ]
 
-  // 1. 无当前已绑定模型：只包含系统默认与已配置可用模型，未配置模型绝对不出现
+  // 1. 无当前已Bound model: 只包含系统默认与已配置可用模型，未配置模型绝对不出现
   const options1 = buildProfileModelOptions(testModels)
   assert.deepEqual(options1, [
-    { value: '', label: '跟随系统默认' },
+    { value: '', label: 'Follow system default' },
     { value: 'openai/gpt-4o', label: 'GPT-4o (openai/gpt-4o)' },
     { value: 'google/gemini-2.5-pro', label: 'google/gemini-2.5-pro' },
   ])
@@ -293,7 +293,7 @@ test('profile-center-model：buildProfileModelOptions 仅展示已配置模型�
   // 2. 当前角色已绑定可用模型：正常高亮可用项，不重复追加
   const options2 = buildProfileModelOptions(testModels, 'openai/gpt-4o')
   assert.deepEqual(options2, [
-    { value: '', label: '跟随系统默认' },
+    { value: '', label: 'Follow system default' },
     { value: 'openai/gpt-4o', label: 'GPT-4o (openai/gpt-4o)' },
     { value: 'google/gemini-2.5-pro', label: 'google/gemini-2.5-pro' },
   ])
@@ -301,10 +301,10 @@ test('profile-center-model：buildProfileModelOptions 仅展示已配置模型�
   // 3. 当前角色已绑定历史失效/未配置模型：保留该项并清晰标注未配置，但不带出其他未配置模型
   const options3 = buildProfileModelOptions(testModels, 'anthropic/claude-3-5-sonnet')
   assert.deepEqual(options3, [
-    { value: '', label: '跟随系统默认' },
+    { value: '', label: 'Follow system default' },
     { value: 'openai/gpt-4o', label: 'GPT-4o (openai/gpt-4o)' },
     { value: 'google/gemini-2.5-pro', label: 'google/gemini-2.5-pro' },
-    { value: 'anthropic/claude-3-5-sonnet', label: 'anthropic/claude-3-5-sonnet（未配置）' },
+    { value: 'anthropic/claude-3-5-sonnet', label: 'anthropic/claude-3-5-sonnet (not configured)' },
   ])
   assert.equal(options3.some((o) => o.value.includes('llama')), false, '其他未配置模型不得因当前项未配置而带出')
 })
@@ -339,7 +339,7 @@ test('profile-center-model：buildProfileModelOptions 跳过已禁用模型，�
   // 1. 禁用模型不作为正常可选项出现（无论凭据可用与否）。
   const options1 = buildProfileModelOptions(testModels)
   assert.deepEqual(options1, [
-    { value: '', label: '跟随系统默认' },
+    { value: '', label: 'Follow system default' },
     { value: 'faux/faux-1', label: 'faux/faux-1' },
   ])
 
@@ -347,7 +347,7 @@ test('profile-center-model：buildProfileModelOptions 跳过已禁用模型，�
   const options2 = buildProfileModelOptions(testModels, 'faux/faux-2')
   const hits = options2.filter((o) => o.value === 'faux/faux-2')
   assert.equal(hits.length, 1, '禁用模型只应保留一项，不得重复添加')
-  assert.equal(hits[0]?.label, 'faux/faux-2（已禁用）')
+  assert.equal(hits[0]?.label, 'faux/faux-2 (disabled)')
 })
 
 // ---------------------------------------------------------------------------
@@ -369,7 +369,7 @@ test('ProfileCard：SSR 渲染结构、徽章、技能胶囊与 0 Emoji', { time
   assert.match(systemHtml, /superagent/)
   assert.match(systemHtml, /系统全局总控与中枢协调路由/)
   assert.match(systemHtml, /claude-3-7-sonnet/)
-  assert.match(systemHtml, /2 个技能/)
+  assert.match(systemHtml, /2 skills/)
   assert.match(systemHtml, /系统/) // 系统锁徽章
   assert.doesNotMatch(systemHtml, EMOJI_REGEX, '系统角色卡片渲染输出严禁含有 Emoji')
 
@@ -384,7 +384,7 @@ test('ProfileCard：SSR 渲染结构、徽章、技能胶囊与 0 Emoji', { time
 
   assert.match(herdrHtml, /Herdr 终端专家/)
   assert.match(herdrHtml, /herdr-worker/)
-  assert.match(herdrHtml, /全部可用技能/)
+  assert.match(herdrHtml, /All available skills/)
   assert.match(herdrHtml, /Herdr/) // Herdr 徽章
   assert.doesNotMatch(herdrHtml, /is-selected/)
   assert.doesNotMatch(herdrHtml, EMOJI_REGEX, 'Herdr 卡片渲染输出严禁含有 Emoji')
@@ -418,12 +418,12 @@ test('ProfileDetailDrawer：编辑已有角色模式渲染与 0 Emoji', { timeou
   assert.match(html, /代码审查助手/)
   assert.match(html, /code-reviewer/)
   assert.match(html, /严格的代码规范与缺陷审查专家/)
-  assert.match(html, /系统提示词 \(SYSTEM\.md\)/)
+  assert.match(html, /System prompt \(SYSTEM\.md\)/)
   // 长期记忆区块由 builtin:memory 插槽注入（无插件贡献时不渲染，宿主不再硬编码）
   assert.doesNotMatch(html, /长期记忆 \(MEMORY\.md\)/)
-  assert.match(html, /可用技能白名单/)
-  assert.match(html, /保存角色/)
-  assert.match(html, /删除角色/, '自定义角色应渲染删除按钮')
+  assert.match(html, /Available skills allowlist/)
+  assert.match(html, /Save profile/)
+  assert.match(html, /Delete profile/, '自定义角色应渲染删除按钮')
   assert.doesNotMatch(html, /unconfigured-provider\/unconfigured-model/, '未配置的模型绝对不得在 Profile 抽屉的模型选项中出现')
   assert.doesNotMatch(html, /Unconfigured Model/, '未配置的模型名称绝对不得在 Profile 抽屉的模型选项中出现')
   assert.doesNotMatch(html, EMOJI_REGEX, '已有角色抽屉渲染输出严禁含有 Emoji')
@@ -448,7 +448,7 @@ test('ProfileDetailDrawer：系统角色受保护禁删渲染断言', { timeout:
 
   assert.match(html, /巡检看门狗/)
   assert.match(html, /系统/) // 系统锁保护徽章
-  assert.doesNotMatch(html, /删除角色/, '系统内置角色严禁展示删除按钮')
+  assert.doesNotMatch(html, /Delete profile/, '系统内置角色严禁展示删除按钮')
   assert.doesNotMatch(html, EMOJI_REGEX, '系统角色抽屉渲染输出严禁含有 Emoji')
 })
 
@@ -469,9 +469,9 @@ test('ProfileDetailDrawer：新建角色模式与可编辑 ID 渲染断言', { t
     ),
   )
 
-  assert.match(html, /新建智能体角色/)
-  assert.match(html, /字母、数字与连字符/)
-  assert.doesNotMatch(html, /删除角色/, '新建角色抽屉严禁展示删除按钮')
+  assert.match(html, /New agent profile/)
+  assert.match(html, /Letters, digits and hyphens/)
+  assert.doesNotMatch(html, /Delete profile/, '新建角色抽屉严禁展示删除按钮')
   assert.doesNotMatch(html, EMOJI_REGEX, '新建角色抽屉渲染输出严禁含有 Emoji')
 })
 
@@ -491,12 +491,12 @@ test('ProfileDetailDrawer：思考档位随所选模型展示共享分段按钮�
       }),
     ),
   )
-  assert.match(html, /思考档位/)
+  assert.match(html, /Thinking level/)
   // 复用会话输入框同款分段按钮组（composer-thinking-row 原语）
   assert.match(html, /composer-thinking-row/)
   assert.match(html, /segmented-control-btn/)
   // 首项恒为「默认」（跟随全局缺省），各档位来自模型目录
-  assert.match(html, /默认/)
+  assert.match(html, /Default/)
   assert.match(html, /medium/)
   assert.doesNotMatch(html, EMOJI_REGEX)
 
@@ -514,7 +514,7 @@ test('ProfileDetailDrawer：思考档位随所选模型展示共享分段按钮�
       }),
     ),
   )
-  assert.match(unbound, /未绑定模型时跟随全局缺省思考档位/)
+  assert.match(unbound, /Follows the global default thinking level when no model is bound/)
   assert.doesNotMatch(unbound, /segmented-control-btn/)
 })
 
@@ -540,7 +540,7 @@ test('ProfileDetailDrawer：默认节点绑定渲染既有值与未知节点回�
       }),
     ),
   )
-  assert.match(bound, /默认节点/)
+  assert.match(bound, /Default node/)
   assert.match(bound, /dev-box/)
 
   // 未知既有值（节点已注销）：补「未知节点」回退项，不丢值不报错
@@ -557,7 +557,7 @@ test('ProfileDetailDrawer：默认节点绑定渲染既有值与未知节点回�
       }),
     ),
   )
-  assert.match(unknown, /ghost-node（未知节点）/)
+  assert.match(unknown, /ghost-node \(unknown node\)/)
 
   // 未绑定：首项为「未绑定（本机 local）」空值选项
   const unboundNode = renderToStaticMarkup(
@@ -573,8 +573,8 @@ test('ProfileDetailDrawer：默认节点绑定渲染既有值与未知节点回�
       }),
     ),
   )
-  assert.match(unboundNode, /未绑定（本机 local）/)
-  assert.doesNotMatch(unboundNode, /未知节点/)
+  assert.match(unboundNode, /Unbound \(local node\)/)
+  assert.doesNotMatch(unboundNode, /Unknown node/)
   assert.doesNotMatch(bound, EMOJI_REGEX, '已绑定节点抽屉渲染输出严禁含有 Emoji')
   assert.doesNotMatch(unknown, EMOJI_REGEX, '未知节点回退渲染输出严禁含有 Emoji')
   assert.doesNotMatch(unboundNode, EMOJI_REGEX, '未绑定节点抽屉渲染输出严禁含有 Emoji')
@@ -605,14 +605,14 @@ test('ProfileCenter：全屏中心顶栏、检索栏、卡片流网格与 0 Emoj
 
   // 1. 顶栏要素
   assert.match(html, /data-view="profile-center"/)
-  assert.match(html, /智能体角色中心/)
-  assert.match(html, /新建角色/)
+  assert.match(html, /Agent Profile Center/)
+  assert.match(html, /New profile/)
 
   // 2. 工具栏搜索与分类标签
-  assert.match(html, /搜索角色名称、ID、模型、标签或技能…/)
-  assert.match(html, /全部/)
-  assert.match(html, /内置/)
-  assert.match(html, /自定义/)
+  assert.match(html, /Search profile name, ID, model, tags or skills…/)
+  assert.match(html, /All/)
+  assert.match(html, /Built-in/)
+  assert.match(html, /Custom/)
   assert.match(html, /Herdr/)
 
   // 3. 卡片网格流
@@ -643,8 +643,8 @@ test('ProfileCenter：空状态渲染断言', { timeout: 60_000 }, () => {
   )
 
   assert.match(html, /primary-center is-split/)
-  assert.match(html, /未找到匹配的角色/)
-  assert.match(html, /请尝试调整搜索关键字或切换分类标签/)
+  assert.match(html, /No matching profiles/)
+  assert.match(html, /Try adjusting the search keywords or switching category tabs/)
   assert.doesNotMatch(html, EMOJI_REGEX, '空状态渲染严禁含有 Emoji')
 })
 
@@ -767,7 +767,7 @@ test('profile-center-model: 有效模型/全局继承解析、节点工作目录
   )
   assert.equal(workingActivity.conversationCount, 1)
   assert.equal(workingActivity.stateKind, 'working')
-  assert.equal(workingActivity.stateLabel, '运行中')
+  assert.equal(workingActivity.stateLabel, 'Running')
 
   const disabledActivity = summarizeProfileActivity(
     { id: 'herdr-worker', managedByPlugin: 'builtin:herdr' },
@@ -786,7 +786,7 @@ test('profile-center-model: 有效模型/全局继承解析、节点工作目录
   )
   assert.equal(disabledActivity.managingPluginDisabled, true)
   assert.equal(disabledActivity.stateKind, 'plugin-disabled')
-  assert.equal(disabledActivity.stateLabel, '插件已停用')
+  assert.equal(disabledActivity.stateLabel, 'Plugin disabled')
 })
 
 test('ProfileCard: 展示继承全局模型、节点与工作目录、会话数及右下角「对话」直达且阻止冒泡', { timeout: 60_000 }, async () => {
@@ -858,17 +858,17 @@ test('ProfileCard: 展示继承全局模型、节点与工作目录、会话数�
     assert.equal(modelSuffix?.textContent, '· high')
     assert.equal(
       modelPill?.getAttribute('title'),
-      '继承全局默认模型：anthropic/claude-3-7-sonnet（思考档位：high）',
+      'Inherits global default model: anthropic/claude-3-7-sonnet (thinking level: high)',
     )
-    assert.match(text, /全局默认/)
+    assert.match(text, /Global default/)
     assert.match(text, /gpu-node-1 · \/data\/workspace\/helm/)
-    assert.match(text, /待审批/)
-    assert.match(text, /关联 1 个会话/)
+    assert.match(text, /Pending approval/)
+    assert.match(text, /Linked to 1 conversations/)
     assert.equal(host.querySelectorAll('[style]').length, 0, 'ProfileCard 严禁残留内联 style')
     assert.doesNotMatch(host.innerHTML, EMOJI_REGEX, 'ProfileCard 严禁包含 Emoji')
 
     const chatBtn = Array.from(host.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('对话'),
+      b.textContent?.includes('Conversation'),
     )
     assert.ok(chatBtn, 'ProfileCard 右下角应渲染对话按钮')
     await act(async () => {
@@ -899,7 +899,7 @@ test('ProfileCard: 超长全路径模型仅展示短名与独立档位后缀，�
   )
   assert.match(html, /class="primary-card-pill-label">Qwen3-235B-A22B-Instruct-2507<\/span>/)
   assert.match(html, /class="primary-card-pill-suffix">· xhigh<\/span>/)
-  assert.match(html, new RegExp(`title="绑定模型：${longPathModel}（思考档位：xhigh）"`))
+  assert.match(html, new RegExp(`title="Bound model: ${longPathModel} \\(thinking level: xhigh\\)"`))
   assert.doesNotMatch(html, />openrouter\/accounts\/fireworks\/models\//)
 
   // 未配置绑定模型且无全局默认时展示「跟随全局默认」
@@ -910,7 +910,7 @@ test('ProfileCard: 超长全路径模型仅展示短名与独立档位后缀，�
       onSelect: () => {},
     }),
   )
-  assert.match(unsetHtml, /class="primary-card-pill-label">跟随全局默认<\/span>/)
+  assert.match(unsetHtml, /class="primary-card-pill-label">Follow global default<\/span>/)
 })
 
 test('ProfileDetailDrawer: 关闭按钮使用 .btn-icon-sm 且源码零 .callout--* 旧类', { timeout: 60_000 }, () => {

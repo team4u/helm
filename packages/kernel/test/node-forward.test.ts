@@ -1,8 +1,8 @@
 /**
- * Hub 侧前台端口转发（NodeForwardService + HTTP 路由）集成测试：
- * 真实 EnvFabric Hub + 真实 @helm/node daemon + 二进制 echo 服务。
- * 覆盖：start/stop 生命周期（stop 后监听器与隧道销毁）、监听冲突显式失败、
- * 事件流（started/connection）、HTTP 端点（POST/GET/DELETE/清单）。
+ * Hub side foreground port forwarding (NodeForwardService + HTTP routing) integration test:
+ * real EnvFabric Hub + real @helm/node daemon + two enter system echo service.
+ * override:start/stop lifecycle (stop after listener and tunnel destroy), listen conflict explicit failed,
+ * event stream (started/connection),HTTP end point (POST/GET/DELETE/manifest).
  */
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -62,7 +62,7 @@ async function startStack(leaseTimeoutMs?: number) {
   }
 }
 
-/** 二进制 echo 服务。 */
+/** two enter system echo service. */
 async function startEcho(): Promise<{ port: number; close(): Promise<void> }> {
   const server = net.createServer((socket) => {
     socket.on('error', () => undefined)
@@ -73,7 +73,7 @@ async function startEcho(): Promise<{ port: number; close(): Promise<void> }> {
   return { port: (server.address() as net.AddressInfo).port, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
 }
 
-/** 本地 TCP 客户端：连接并发送，等待至少 minLength 回显。 */
+/** local TCP client: connect concurrency send, wait for at least minLength back visible. */
 function tcRequest(port: number, payload: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const socket = net.connect({ host: '127.0.0.1', port })
@@ -92,7 +92,7 @@ function tcRequest(port: number, payload: Buffer): Promise<Buffer> {
   })
 }
 
-test('端口转发：start/list/get/事件 + stop 后监听器与隧道销毁', { timeout: 60_000 }, async () => {
+test('port forwarding:start/list/get/event + stop after listener and tunnel destroy', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -107,20 +107,20 @@ test('端口转发：start/list/get/事件 + stop 后监听器与隧道销毁', 
     assert.equal(stack.forward.get(session.forwardId)?.forwardId, session.forwardId)
     assert.deepEqual(stack.forward.list().map((s) => s.forwardId), [session.forwardId])
 
-    // 真实字节往返：本地 listen 端口 → Hub 转发 → 隧道 → daemon → echo。
-    const payload = Buffer.from('forward-payload-您好')
+    // real byte to return: local listen port → Hub forwarding → tunnel → daemon → echo.
+    const payload = Buffer.from('forward-payload-you well')
     const echoed = await tcRequest(session.listenPort, payload)
-    assert.ok(echoed.equals(payload), '经转发的字节往返一致')
+    assert.ok(echoed.equals(payload), 'via forwarding byte to return consistent')
     await delay(100)
-    assert.ok(events.includes('connection'), 'connection 事件已上报')
-    assert.equal(stack.forward.get(session.forwardId)?.activeConnections, 0, '连接关闭后计数归零')
+    assert.ok(events.includes('connection'), 'connection event already on report')
+    assert.equal(stack.forward.get(session.forwardId)?.activeConnections, 0, 'connect close after counter reset to zero')
 
     await stack.forward.stop(session.forwardId)
-    assert.equal(stack.forward.get(session.forwardId), undefined, 'stop 后会话摘除')
+    assert.equal(stack.forward.get(session.forwardId), undefined, 'stop after conversation excerpt except')
     await assert.rejects(
       tcRequest(session.listenPort, payload).then(() => undefined, (e) => { throw e }),
       undefined,
-    ).catch(() => undefined) // 端口已关：连接失败（不校验具体错误类型）。
+    ).catch(() => undefined) // port already closure: failed to connect (do not validate specific error type).
     off()
   } finally {
     await stack.close()
@@ -128,14 +128,14 @@ test('端口转发：start/list/get/事件 + stop 后监听器与隧道销毁', 
   }
 })
 
-test('端口转发：监听冲突显式失败；未知 forwardId stop 404', { timeout: 60_000 }, async () => {
+test('port forwarding: listen conflict explicit failed; unknown forwardId stop 404', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   const port = await freePort()
   try {
     assert.equal(stack.ready, true)
     await stack.forward.start('fwd-node', { listenHost: '127.0.0.1', listenPort: port, targetPort: echo.port })
-    // 同地址二次监听：显式失败（不静默换端口）。
+    // same address second listen: explicit failed (not silently swap port).
     await assert.rejects(
       stack.forward.start('fwd-node', { listenHost: '127.0.0.1', listenPort: port, targetPort: echo.port }),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'node_forward_listen_failed',
@@ -150,7 +150,7 @@ test('端口转发：监听冲突显式失败；未知 forwardId stop 404', { ti
   }
 })
 
-test('端口转发：close 全量销毁（宿主关停语义）', { timeout: 60_000 }, async () => {
+test('port forwarding:close all amount destroy (host closure stop semantics)', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -166,14 +166,14 @@ test('端口转发：close 全量销毁（宿主关停语义）', { timeout: 60_
     await assert.rejects(
       stack.forward.start('fwd-node', { listenHost: '127.0.0.1', listenPort: await freePort(), targetPort: echo.port }),
       undefined,
-    ).catch(() => undefined) // close 后拒绝新转发。
+    ).catch(() => undefined) // close after reject new forwarding.
   } finally {
     await stack.close()
     await echo.close()
   }
 })
 
-test('端口转发：建连期客户端断开——取消在途建立，迟到 tunnel 不登记不遗留', { timeout: 60_000 }, async () => {
+test('port forwarding: create connect phase client disconnect - - cancel in-flight establish, late to tunnel do not register do not legacy', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -183,26 +183,26 @@ test('端口转发：建连期客户端断开——取消在途建立，迟到 t
       listenPort: await freePort(),
       targetPort: echo.port,
     })
-    // 连上后立即断开（建连尚未完成：真实 daemon 链路建连有 RTT）。
+    // connect on after immediately disconnect (create connect not yet complete: real daemon link create connect has RTT).
     const socket = net.connect({ host: '127.0.0.1', port: session.listenPort })
     await new Promise<void>((resolve) => socket.once('connect', resolve))
     socket.destroy()
-    // 等待建连窗口过去：迟到 tunnel 被销毁，不登记 activeConnections。
+    // wait for create connect window remove: late to tunnel by destroy, do not register activeConnections.
     await delay(600)
     const current = stack.forward.get(session.forwardId)
     assert.ok(current !== undefined)
-    assert.equal(current.activeConnections, 0, '建连期断开不得计入活动连接')
-    // 后续连接仍可用（前一次断开不污染状态）。
+    assert.equal(current.activeConnections, 0, 'create connect phase disconnect must not count activity connect')
+    // after continue connect still available (before once disconnect do not pollute state).
     const payload = Buffer.from('after-early-close')
     const echoed = await tcRequest(session.listenPort, payload)
-    assert.ok(echoed.equals(payload), '早断开后转发仍可用')
+    assert.ok(echoed.equals(payload), 'early after disconnect forwarding still available')
   } finally {
     await stack.close()
     await echo.close()
   }
 })
 
-test('端口转发：stop 发终态 stopped 帧，监控事件序列正常终结（不悬挂）', { timeout: 60_000 }, async () => {
+test('port forwarding:stop terminal state stopped frame, monitor event sequence normal final (do not pending)', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -219,18 +219,18 @@ test('端口转发：stop 发终态 stopped 帧，监控事件序列正常终结
     })
     const off = stack.forward.onEvent(session.forwardId, (event) => events.push(event.type))
     const offStopped = stack.forward.onStopped(session.forwardId, () => notifyStopped?.())
-    // 先订阅，再停止：stopped 帧后终止通知到达。
+    // first subscribe, again stop:stopped frame after terminate notify reach.
     await stack.forward.stop(session.forwardId)
-    await Promise.race([stoppedPromise, delay(5_000).then(() => { throw new Error('onStopped 未被调用') })])
-    assert.deepEqual(events.filter((t) => t === 'stopped'), ['stopped'], 'stop 应恰好发出一个终态 stopped 帧')
+    await Promise.race([stoppedPromise, delay(5_000).then(() => { throw new Error('onStopped not by invoke') })])
+    assert.deepEqual(events.filter((t) => t === 'stopped'), ['stopped'], 'stop should exactly out a terminal state stopped frame')
     off()
     offStopped()
-    // 已停止后再订阅 onStopped：立即回调（竞态安全）。
+    // already stop after again subscribe onStopped: immediately call back (race security).
     const immediate = new Promise<void>((resolve) => {
       stack.forward.onStopped(session.forwardId, resolve)
     })
-    await Promise.race([immediate, delay(1_000).then(() => { throw new Error('已停止后 onStopped 应立即回调') })])
-    // 已停止后 onEvent 404（会话已摘除）。
+    await Promise.race([immediate, delay(1_000).then(() => { throw new Error('already stop after onStopped should immediately call back') })])
+    // already stop after onEvent 404(conversation already excerpt except).
     await assert.rejects(
       new Promise(() => stack.forward.onEvent(session.forwardId, () => undefined)),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'not_found',
@@ -241,7 +241,7 @@ test('端口转发：stop 发终态 stopped 帧，监控事件序列正常终结
   }
 })
 
-/** 取一个空闲端口（listen 0 后立即释放；存在微小竞态但测试环境足够）。 */
+/** take a idle port (listen 0 after immediately release; store in tiny race but test environment enough). */
 async function freePort(): Promise<number> {
   return await new Promise((resolve) => {
     const server = net.createServer()
@@ -252,7 +252,7 @@ async function freePort(): Promise<number> {
   })
 }
 
-/** 多并发 echo 客户端：各自写 payload 并等回显完整。 */
+/** many concurrency echo client: each write payload and etc. back visible complete. */
 async function tcConcurrent(port: number, payloads: Buffer[]): Promise<Buffer[]> {
   return await Promise.all(payloads.map(
     (payload) => new Promise<Buffer>((resolve, reject) => {
@@ -273,7 +273,7 @@ async function tcConcurrent(port: number, payloads: Buffer[]): Promise<Buffer[]>
   ))
 }
 
-test('端口转发：多连接各自关闭不重复扣减活动计数（恰好一次清理）', { timeout: 60_000 }, async () => {
+test('port forwarding: many connect each close does not repeat buckle reduce activity counter (exactly once clean up)', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -283,29 +283,29 @@ test('端口转发：多连接各自关闭不重复扣减活动计数（恰好�
       listenPort: await freePort(),
       targetPort: echo.port,
     })
-    // 3 个并发连接：各自回显后关闭；socket/tunnel 任一先关只清理一次。
+    // 3 concurrency connect: each back visible after close;socket/tunnel any one first closure only clean up once.
     const payloads = ['one'.repeat(5000), 'two'.repeat(5000), 'three'.repeat(5000)].map((s) => Buffer.from(s))
     const echoed = await tcConcurrent(session.listenPort, payloads)
     for (let i = 0; i < payloads.length; i++) {
-      assert.ok(echoed[i]!.equals(payloads[i]!), `第 ${i + 1} 条连接回显一致`)
+      assert.ok(echoed[i]!.equals(payloads[i]!), ` ${i + 1} connect back visible consistent`)
     }
     await delay(150)
     const current = stack.forward.get(session.forwardId)
     assert.ok(current !== undefined)
-    assert.equal(current.activeConnections, 0, '全部连接关闭后活动计数精确归零（重复 decrement 会变负/吃掉他人计数——Math.max 只掩码不修正总账）')
-    assert.equal(current.totalConnections, 3, '累计连接数 = 3')
-    // 逐个再开两条：验证计数在前次并发清理后仍然准确。
+    assert.equal(current.activeConnections, 0, 'all connect close after activity counter precise reset to zero (duplicate decrement will change negative/eat other person counter - -Math.max only mask code do not fix correct total account)')
+    assert.equal(current.totalConnections, 3, 'cumulative connect count = 3')
+    // one by one again open two: verify counter in before time concurrency clean up after still accurate.
     const again = await tcConcurrent(session.listenPort, [Buffer.from('a'.repeat(3000)), Buffer.from('b'.repeat(3000))])
     assert.equal(again.length, 2)
     await delay(150)
-    assert.equal(stack.forward.get(session.forwardId)?.activeConnections, 0, '后续连接计数仍准确')
+    assert.equal(stack.forward.get(session.forwardId)?.activeConnections, 0, 'after continue connect counter still accurate')
   } finally {
     await stack.close()
     await echo.close()
   }
 })
 
-test('端口转发：stop 幂等共享同一关闭 Promise（并发调用等同一结果）', { timeout: 60_000 }, async () => {
+test('port forwarding:stop idempotent sharing the same close Promise(concurrency invoke etc. the same result)', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
   const stack = await startStack()
   try {
@@ -315,14 +315,14 @@ test('端口转发：stop 幂等共享同一关闭 Promise（并发调用等同�
       listenPort: await freePort(),
       targetPort: echo.port,
     })
-    // 并发 + 重复 stop：全部 resolve（不 404——共享关闭，不「立即返回」）。
+    // concurrency + duplicate stop: all resolve(do not 404- - sharing close, do not immediately return).
     await Promise.all([
       stack.forward.stop(session.forwardId),
       stack.forward.stop(session.forwardId),
       stack.forward.stop(session.forwardId),
     ])
-    assert.equal(stack.forward.get(session.forwardId), undefined, '关闭完成后摘除一次')
-    // 关闭后的显式 stop：会话已摘除，按 not_found 拒绝（与 HTTP 404 幂等口径一致）。
+    assert.equal(stack.forward.get(session.forwardId), undefined, 'close after completion excerpt except once')
+    // close after explicit stop: conversation already excerpt except, by not_found reject (and HTTP 404 idempotent opening path consistent).
     await assert.rejects(
       stack.forward.stop(session.forwardId),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'not_found',
@@ -333,42 +333,42 @@ test('端口转发：stop 幂等共享同一关闭 Promise（并发调用等同�
   }
 })
 
-test('端口转发：前台租约——未绑定事件流自动停止；最后一持有者释放停止', { timeout: 60_000 }, async () => {
+test('port forwarding: foreground lease - - not bind set event stream automatically stop; finally one holder release stop', { timeout: 60_000 }, async () => {
   const echo = await startEcho()
-  const stack = await startStack(150) // 注入短期限：150ms
+  const stack = await startStack(150) // inject short phase limit:150ms
   try {
     assert.equal(stack.ready, true)
-    // 1) 创建后未绑定持有者：租约到期自动停止（CLI 被杀/DELETE 失败不残留）。
+    // 1) after creation not bind set holder: lease expires automatically stop (CLI by kill/DELETE failed leaves no residue).
     const orphan = await stack.forward.start('fwd-node', {
       listenHost: '127.0.0.1',
       listenPort: await freePort(),
       targetPort: echo.port,
     })
     await delay(400)
-    assert.equal(stack.forward.get(orphan.forwardId), undefined, '未绑定的转发起租约到期自动停止')
+    assert.equal(stack.forward.get(orphan.forwardId), undefined, 'not bind set forwarding start lease expires automatically stop')
     await assert.rejects(
       tcRequest(orphan.listenPort, Buffer.from('x')).then(() => undefined, (e) => { throw e }),
       undefined,
-    ).catch(() => undefined) // 监听器已关。
+    ).catch(() => undefined) // listener already closure.
 
-    // 2) 绑定持有者后不自动停止；两持有者逐一释放，最后一个才停止。
+    // 2) bind set holder after do not automatically stop; two holder one by one release, finally a only then stop.
     const session = await stack.forward.start('fwd-node', {
       listenHost: '127.0.0.1',
       listenPort: await freePort(),
       targetPort: echo.port,
     })
     const release1 = stack.forward.acquireLease(session.forwardId)
-    await delay(400) // 超过租约期限：仍存活（持有者存在）。
-    assert.ok(stack.forward.get(session.forwardId) !== undefined, '持有者存在时不因租约到期停止')
+    await delay(400) // exceeds lease phase limit: still store (holder store in).
+    assert.ok(stack.forward.get(session.forwardId) !== undefined, 'holder store in when do not because lease expires stop')
     const payload = Buffer.from('lease-alive')
-    assert.ok((await tcRequest(session.listenPort, payload)).equals(payload), '持有期间转发可用')
+    assert.ok((await tcRequest(session.listenPort, payload)).equals(payload), 'hold has during forwarding available')
     const release2 = stack.forward.acquireLease(session.forwardId)
     release1()
     await delay(100)
-    assert.ok(stack.forward.get(session.forwardId) !== undefined, '仍有持有者时不停止')
+    assert.ok(stack.forward.get(session.forwardId) !== undefined, 'still has holder when do not stop')
     release2()
     await delay(200)
-    assert.equal(stack.forward.get(session.forwardId), undefined, '最后一持有者释放即停止')
+    assert.equal(stack.forward.get(session.forwardId), undefined, 'finally one holder release i.e. stop')
     await assert.rejects(
       stack.forward.stop(session.forwardId),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'not_found',

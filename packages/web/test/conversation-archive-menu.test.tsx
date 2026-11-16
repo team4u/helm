@@ -133,7 +133,7 @@ async function settle(): Promise<void> {
 }
 
 async function openMenu(): Promise<void> {
-  const menuButton = document.querySelector<HTMLButtonElement>('.pane-more-menu button[aria-label="更多会话操作"]')
+  const menuButton = document.querySelector<HTMLButtonElement>('.pane-more-menu button[aria-label="More conversation actions"]')
   assert.ok(menuButton, '会话窗格应有更多操作按钮')
   await act(async () => {
     menuButton.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
@@ -164,17 +164,17 @@ test('明细菜单归档：PATCH 保留原 tags 并追加 helm:archived，无导
   conversations = [summary(1, { tags: ['important'] })]
   await mount('#/c/1')
   await openMenu()
-  await clickMenuItem('归档会话')
+  await clickMenuItem('Archive conversation')
   assert.deepEqual(patchRequests, [
     { url: '/api/conversations/1', method: 'PATCH', body: { tags: ['important', ARCHIVED_TAG] } },
   ])
   assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '归档不删除会话，主屏目标保持')
-  assert.ok(observed?.notices.some((n) => n.title === '已归档会话'), '归档成功应有通知')
+  assert.ok(observed?.notices.some((n) => n.title === 'Conversations archived'), '归档成功应有通知')
   // SSE upsert 到达后菜单动作切换为恢复
   await openMenu()
-  await clickMenuItem('恢复会话')
+  await clickMenuItem('Restore conversation')
   assert.deepEqual(patchRequests[1], { url: '/api/conversations/1', method: 'PATCH', body: { tags: ['important'] } })
-  assert.ok(observed?.notices.some((n) => n.title === '已恢复会话'), '恢复成功应有通知')
+  assert.ok(observed?.notices.some((n) => n.title === 'Conversations restored'), '恢复成功应有通知')
 })
 
 test('明细菜单归档资格：bot 托管与子代理派生会话不渲染归档项', { timeout: 60_000 }, async () => {
@@ -185,7 +185,7 @@ test('明细菜单归档资格：bot 托管与子代理派生会话不渲染归�
   await mount('#/c/1')
   await openMenu()
   const archiveItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-    .find((el) => el.textContent?.includes('归档会话'))
+    .find((el) => el.textContent?.includes('Archive conversation'))
   assert.ok(archiveItem === undefined, 'bot 托管会话不得提供归档入口')
 
   window.history.replaceState(null, '', '#/c/2')
@@ -195,6 +195,6 @@ test('明细菜单归档资格：bot 托管与子代理派生会话不渲染归�
   await settle()
   await openMenu()
   const derivedItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-    .find((el) => el.textContent?.includes('归档会话'))
+    .find((el) => el.textContent?.includes('Archive conversation'))
   assert.ok(derivedItem === undefined, '子代理派生会话不得提供归档入口')
 })

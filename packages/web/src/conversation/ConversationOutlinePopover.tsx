@@ -57,11 +57,11 @@ export function ConversationOutlinePopover({
   nodes,
   activeEntryId,
   activeNodeKey,
-  triggerLabel = '大纲',
+  triggerLabel = 'Outline',
   triggerTitle,
   badgeCount,
-  searchPlaceholder = '搜索提问、回复与卡片…',
-  accessibilityLabel = '会话大纲',
+  searchPlaceholder = 'Search questions, replies and cards…',
+  accessibilityLabel = 'Conversation outline',
   showModeToggle = true,
   portalled = true,
   forceMount,
@@ -161,8 +161,8 @@ export function ConversationOutlinePopover({
         <button
           type="button"
           className={`btn btn-sm conversation-outline-trigger${open ? ' is-open' : ''}`}
-          aria-label={`${accessibilityLabel}导航`}
-          title={triggerTitle ?? `会话大纲导航（共 ${turnCount} 轮提问）`}
+          aria-label={`${accessibilityLabel} navigation`}
+          title={triggerTitle ?? `Conversation outline navigation (${turnCount} question turns)`}
         >
           <HelmIcon name="list-tree" size={12} />
           <span className="pane-action-label">{triggerLabel}</span>
@@ -190,7 +190,7 @@ export function ConversationOutlinePopover({
               <input
                 ref={searchInputRef}
                 type="text"
-                aria-label={`筛选${accessibilityLabel}`}
+                aria-label={`Filter ${accessibilityLabel}`}
                 placeholder={searchPlaceholder}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -199,8 +199,8 @@ export function ConversationOutlinePopover({
                 <button
                   type="button"
                   className="btn btn-ghost btn-icon-xs"
-                  aria-label="清空大纲搜索"
-                  title="清空搜索"
+                  aria-label="Clear outline search"
+                  title="Clear search"
                   onClick={() => {
                     setQuery('')
                     searchInputRef.current?.focus()
@@ -211,12 +211,12 @@ export function ConversationOutlinePopover({
               ) : null}
             </div>
             {hasFilterableNodes && showModeToggle ? (
-              <div className="segmented-control conversation-outline-mode" role="group" aria-label="大纲层级切换">
+              <div className="segmented-control conversation-outline-mode" role="group" aria-label="Outline level switch">
                 {(
                   [
-                    ['dialogue', '对话'],
-                    ['questions', '仅提问'],
-                    ['all', '全部'],
+                    ['dialogue', 'Conversation'],
+                    ['questions', 'Questions only'],
+                    ['all', 'All'],
                   ] as const
                 ).map(([value, label]) => (
                   <button
@@ -242,15 +242,15 @@ export function ConversationOutlinePopover({
                 onClick={() => onLoadEarlierHistory()}
               >
                 <HelmIcon name={loadingEarlierHistory ? 'loader' : 'arrow-up'} size={11} className={loadingEarlierHistory ? 'spin-slow' : undefined} />
-                {loadingEarlierHistory ? '正在加载更早历史…' : '加载更早的消息以补全大纲'}
+                {loadingEarlierHistory ? 'Loading earlier history…' : 'Load earlier messages to complete the outline'}
               </button>
             </div>
           ) : null}
 
-          <div ref={listRef} className="conversation-outline-list" role="listbox" aria-label="会话大纲条目">
+          <div ref={listRef} className="conversation-outline-list" role="listbox" aria-label="Conversation outline entries">
             {filtered.length === 0 ? (
               <div className="conversation-outline-empty">
-                没有匹配的大纲条目
+                No matching outline entries
               </div>
             ) : (
               filtered.map((node, idx) => {
@@ -317,7 +317,7 @@ export function ConversationOutlinePopover({
                       />
                       <span className="conversation-outline-item-label">{node.label}</span>
                       {node.status === 'failed' ? (
-                        <span className="conversation-outline-status-badge">失败</span>
+                        <span className="conversation-outline-status-badge">Failed</span>
                       ) : null}
                       {timeText !== '' ? (
                         <span className="conversation-outline-time mono tabular-nums">{timeText}</span>

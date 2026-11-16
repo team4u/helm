@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 
-/** 图形会话通常不加载用户 shell 配置；只恢复 PATH，不把 shell 输出当作环境变量执行。 */
+/** diagram shape conversation usually do not load user shell config; only restore PATH, does not shell output when act environment variable execute. */
 export async function restoreShellPath(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   if (process.platform === 'win32') return;
   const shell = env.SHELL ?? (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash');
@@ -12,8 +12,8 @@ export async function restoreShellPath(env: NodeJS.ProcessEnv = process.env): Pr
   });
   const start = output.lastIndexOf(marker);
   const end = output.indexOf('\0', start);
-  if (start < 0 || end < 0) throw new Error('登录 shell 未返回有效 PATH');
+  if (start < 0 || end < 0) throw new Error('login shell not return valid PATH');
   const value = output.slice(start + marker.length, end);
-  if (value.length === 0 || value.includes('\n')) throw new Error('登录 shell 返回的 PATH 无效');
+  if (value.length === 0 || value.includes('\n')) throw new Error('login shell return PATH invalid');
   env.PATH = value;
 }

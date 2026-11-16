@@ -504,7 +504,7 @@ test('键盘激活加载更早消息：主动取消初始校准，历史补偿�
   raf.flush(4)
   mock.setTopSilent(300)
 
-  const button = Array.from(scroller.querySelectorAll('button')).find((el) => el.textContent === '加载更早的消息')!
+  const button = Array.from(scroller.querySelectorAll('button')).find((el) => el.textContent === 'Load earlier messages')!
   assert.ok(button, '历史分页按钮存在')
   await act(async () => {
     button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))

@@ -160,14 +160,14 @@ export function ModelCenter({
       store.pushNotice?.({
         type: 'notification',
         level: 'info',
-        title: '模型目录已刷新',
-        body: '已从所有启用的供应商重新同步可用模型清单。',
+        title: 'Model catalog refreshed',
+        body: 'Available model list re-synced from all enabled providers.',
       })
     } catch (err) {
       store.pushNotice?.({
         type: 'notification',
         level: 'error',
-        title: '刷新模型目录失败',
+        title: 'Failed to refresh model catalog',
         body: err instanceof Error ? err.message : String(err),
       })
     } finally {
@@ -200,7 +200,7 @@ export function ModelCenter({
         const gateways = store.providers ?? []
         const gateway = gateways.find((g) => g.id === providerId)
         if (gateway === undefined) {
-          throw new Error(`自定义网关 ${providerId} 不在 providers.json 中，无法更新服务端点`)
+          throw new Error(`Custom gateway ${providerId} not found in providers.json; cannot update the endpoint`)
         }
         if (data.baseUrl !== gateway.baseUrl) {
           await assetsApi.saveProviders(
@@ -216,8 +216,8 @@ export function ModelCenter({
       store.pushNotice?.({
         type: 'notification',
         level: 'info',
-        title: '供应商配置已更新',
-        body: `${providerId} 配置已成功保存。`,
+        title: 'Provider configuration updated',
+        body: `${providerId} configuration saved successfully.`,
       })
       if (store.refreshAssets) {
         await store.refreshAssets()
@@ -226,7 +226,7 @@ export function ModelCenter({
       store.pushNotice?.({
         type: 'notification',
         level: 'error',
-        title: '保存失败',
+        title: 'Save failed',
         body: err instanceof Error ? err.message : String(err),
       })
       throw err
@@ -250,12 +250,12 @@ export function ModelCenter({
 
   return (
     <div className={`primary-center${isSplit ? ' is-split' : ''}`} data-view="model-center">
-      {/* 顶栏 */}
+      {/* Top bar */}
       <div className="primary-center-topbar pane-topbar">
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
             <HelmIcon name="cpu" size={14} />
-            <span>模型与凭证中心</span>
+            <span>Models & Credentials Center</span>
           </div>
         </div>
 
@@ -265,10 +265,10 @@ export function ModelCenter({
             className="btn btn-sm"
             onClick={handleRefreshAll}
             disabled={refreshingCatalog}
-            title="重新从所有供应商拉取最新模型目录"
+            title="Pull the latest model catalog from all providers again"
           >
             <HelmIcon name="refresh-cw" size={12} className={refreshingCatalog ? 'spin' : undefined} />
-            <span className="pane-action-label">刷新目录</span>
+            <span className="pane-action-label">Refresh catalog</span>
           </button>
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
@@ -281,45 +281,45 @@ export function ModelCenter({
         </div>
       </div>
 
-      {/* 顶部 Tab：供应商 / 全局默认 */}
+      {/* Top tabs: providers / global defaults */}
       <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-tabs">
-        <TabsList aria-label="模型中心视图">
+        <TabsList aria-label="Model center views">
           <TabsTrigger value="providers" className="model-center-tab-btn">
             <HelmIcon name="layers" size={13} />
-            <span>供应商</span>
+            <span>Providers</span>
           </TabsTrigger>
           <TabsTrigger value="defaults" className="model-center-tab-btn">
             <HelmIcon name="sliders" size={13} />
-            <span>全局默认</span>
+            <span>Global default</span>
           </TabsTrigger>
         </TabsList>
       </Tabs>
 
-      {/* 全局默认模型精简状态行 */}
+      {/* Global default model compact status row */}
       <div className="model-defaults-status">
         <HelmIcon name="sliders" size={13} />
         <span
           className={`badge ${defaultModelInfo?.defaultModel ? 'badge-ok' : 'badge-neutral'}`}
         >
-          {defaultModelInfo?.defaultModel ? '已配置' : '未设置'}
+          {defaultModelInfo?.defaultModel ? 'Configured' : 'Not set'}
         </span>
         {defaultModelInfo?.defaultModel ? (
           <span>
-            当前生效：<strong className="mono">{defaultModelInfo.defaultModel}</strong>
+            Current: <strong className="mono">{defaultModelInfo.defaultModel}</strong>
             {defaultModelInfo.defaultThinkingLevel &&
               defaultModelInfo.defaultThinkingLevel !== 'off' &&
-              `（思考档位：${defaultModelInfo.defaultThinkingLevel}）`}
+              `(thinking level: ${defaultModelInfo.defaultThinkingLevel})`}
           </span>
         ) : (
-          <span>未设置全局默认模型，未单独指定模型的会话将无法正常回复。</span>
+          <span>No global default model set; conversations without an explicit model cannot reply properly.</span>
         )}
-        <span className="text-subtle">继承链：临时覆盖 &gt; Profile 模型 &gt; 全局默认</span>
+        <span className="text-subtle">Inheritance chain: session override &gt; Profile model &gt; global default</span>
       </div>
 
       <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-main-tabs">
-        {/* 供应商 Tab */}
+        {/* Providers tab */}
         <TabsContent value="providers" className="primary-center-content">
-          {/* 工具栏：搜索框、分类药丸与刷新目录 */}
+          {/* Toolbar: search box, category pills and catalog refresh */}
           <div className="primary-center-toolbar model-toolbar-inline">
             <div className="primary-search-box">
               <HelmIcon name="search" size={14} />
@@ -327,16 +327,16 @@ export function ModelCenter({
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="搜索供应商名称、ID 或包含的模型..."
-                aria-label="搜索供应商"
+                placeholder="Search provider name, ID or included models..."
+                aria-label="Search providers"
               />
               {query && (
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm primary-search-clear"
                   onClick={() => setQuery('')}
-                  aria-label="清除搜索"
-                  title="清除搜索"
+                  aria-label="Clear search"
+                  title="Clear search"
                 >
                   <HelmIcon name="x" size={12} />
                 </button>
@@ -346,7 +346,7 @@ export function ModelCenter({
             <div
               className="primary-category-pills"
               role="tablist"
-              aria-label="供应商配置状态筛选"
+              aria-label="Filter by provider configuration status"
             >
               {PROVIDER_FILTER_TABS.map((tab) => {
                 const count = statusCounts[tab.key] ?? 0
@@ -368,15 +368,15 @@ export function ModelCenter({
             </div>
           </div>
 
-          {/* 主体卡片网格或空状态 */}
+          {/* Main card grid or empty state */}
           {filteredProviders.length === 0 ? (
             <div className="primary-center-empty">
               <div className="primary-center-empty-icon">
                 <HelmIcon name="search" size={22} />
               </div>
-              <div className="primary-center-empty-text">未找到匹配的供应商</div>
+              <div className="primary-center-empty-text">No matching providers</div>
               <div className="primary-center-empty-hint">
-                没有符合检索条件的大语言模型供应商，请尝试更换关键词或切换筛选状态。
+                No LLM providers match the search; try different keywords or switch the filter.
               </div>
               {(query || statusTab !== 'all') && (
                 <button
@@ -387,7 +387,7 @@ export function ModelCenter({
                     setStatusTab('all')
                   }}
                 >
-                  重置筛选条件
+                  Reset filters
                 </button>
               )}
             </div>
@@ -405,7 +405,7 @@ export function ModelCenter({
           )}
         </TabsContent>
 
-        {/* 全局默认 Tab */}
+        {/* Global defaults tab */}
         <TabsContent value="defaults" className="primary-center-content">
           <GlobalDefaultsPanel
             defaultModelInfo={defaultModelInfo}
@@ -414,7 +414,7 @@ export function ModelCenter({
         </TabsContent>
       </Tabs>
 
-      {/* 供应商详情与凭据配置抽屉 */}
+      {/* Provider details and credentials drawer */}
       <ModelDetailDrawer
         provider={selectedProvider}
         open={isDrawerOpen}

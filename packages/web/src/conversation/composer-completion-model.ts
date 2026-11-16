@@ -109,11 +109,11 @@ export interface ExtractedItems {
 export function extractCompletionItems(docValue: unknown, itemsField: string): ExtractedItems {
   if (docValue === undefined || docValue === null) return { items: null }
   if (typeof docValue !== 'object' || Array.isArray(docValue)) {
-    return { items: null, error: '文档值不是对象' }
+    return { items: null, error: 'Document value is not an object' }
   }
   const raw = (docValue as Record<string, unknown>)[itemsField]
-  if (raw === undefined || raw === null) return { items: null, error: `文档缺少数组字段 ${itemsField}` }
-  if (!Array.isArray(raw)) return { items: null, error: `文档缺少数组字段 ${itemsField}` }
+  if (raw === undefined || raw === null) return { items: null, error: `Document missing array field ${itemsField}` }
+  if (!Array.isArray(raw)) return { items: null, error: `Document missing array field ${itemsField}` }
   const items: ComposerCompletionItem[] = []
   let dropped = 0
   for (const entry of raw) {
@@ -121,16 +121,16 @@ export function extractCompletionItems(docValue: unknown, itemsField: string): E
     if (item !== null) items.push(item)
     else dropped++
   }
-  return { items, error: dropped > 0 ? `已丢弃 ${dropped} 个非法候选` : undefined }
+  return { items, error: dropped > 0 ? `${dropped} invalid candidates dropped` : undefined }
 }
 
 /** action 源返回解析：ComposerCompletionResult { items } 逐项校验。 */
 export function parseCompletionActionResult(result: unknown): ExtractedItems {
   if (result === null || typeof result !== 'object' || Array.isArray(result)) {
-    return { items: null, error: '补全动作返回格式无效' }
+    return { items: null, error: 'Completion action returned an invalid format' }
   }
   const items = (result as Record<string, unknown>)['items']
-  if (!Array.isArray(items)) return { items: null, error: '补全动作返回缺少 items 数组' }
+  if (!Array.isArray(items)) return { items: null, error: 'Completion action response missing the items array' }
   const valid: ComposerCompletionItem[] = []
   let dropped = 0
   for (const entry of items) {
@@ -138,7 +138,7 @@ export function parseCompletionActionResult(result: unknown): ExtractedItems {
     if (item !== null) valid.push(item)
     else dropped++
   }
-  return { items: valid, error: dropped > 0 ? `已丢弃 ${dropped} 个非法候选` : undefined }
+  return { items: valid, error: dropped > 0 ? `${dropped} invalid candidates dropped` : undefined }
 }
 
 /** action 源调用前置核对：真实 manifest 存在且声明 idempotent:true（幂等只读才可作补全源）。 */
@@ -148,8 +148,8 @@ export function verifyCompletionActionManifest(
   actionId: string,
 ): string | null {
   const manifest = (actions ?? []).find((a) => a.pluginId === pluginId && a.id === actionId)
-  if (manifest === undefined) return `动作 ${pluginId}/${actionId} 未注册或插件已停用`
-  if (manifest.idempotent !== true) return `动作 ${pluginId}/${actionId} 未声明 idempotent，禁止作为补全源`
+  if (manifest === undefined) return `Action ${pluginId}/${actionId} not registered or plugin disabled`
+  if (manifest.idempotent !== true) return `Action ${pluginId}/${actionId} does not declare idempotent; forbidden as a completion source`
   return null
 }
 
@@ -185,7 +185,7 @@ export function buildCompletionActionCall(
   if (required.includes('conversationId')) {
     return {
       input: null,
-      error: `动作 ${manifest.pluginId}/${manifest.id} 需要已有会话（发送首条消息创建后可用）`,
+      error: `Action ${manifest.pluginId}/${manifest.id} requires an existing conversation (available after the first message creates one)`,
     }
   }
   const props =

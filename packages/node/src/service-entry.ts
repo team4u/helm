@@ -1,6 +1,6 @@
 /**
- * CLI 自身入口路径解析：后台 spawn 与升级候选的「固定 launcher」入口定位，
- * 以及 service install 必须使用的编译产物（dist/cli.js）入口解析。
+ * CLI itself entry path parse: background spawn and upgrade choose fixed launcherentry locate,
+ * and service install must use compile artifact (dist/cli.js) entry parse.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,9 +9,9 @@ import { realpathSync } from 'node:fs';
 import { UsageError } from './cli-context.js';
 
 /**
- * CLI 自身入口（源码模式为 src/cli.ts；编译后按包结构回退 dist/cli.js）。
- * 注意：不能引用本模块的 import.meta.url（那是 service-entry.ts 自身）——
- * 直接按「本模块位于 src/ 下、与 cli.ts 同目录」的包结构定位。
+ * CLI itself entry (source code pattern is src/cli.ts; compile after by package structure fall back dist/cli.js).
+ * note: cannot reference this module import.meta.url(that is service-entry.ts itself) - -
+ * directly by this module at src/ under, and cli.ts same directory package structure locate.
  */
 export function cliSelfEntry(): string {
   const self = path.resolve(fileURLToPath(import.meta.url));
@@ -21,10 +21,10 @@ export function cliSelfEntry(): string {
 }
 
 /**
- * service install 入口：开机服务无 tsx loader，必须使用编译产物 dist/cli.js。
- * - 以编译产物运行：返回自身；
- * - 以源码入口运行：返回同包 dist/cli.js（须已存在）；
- * - 源码运行且无编译产物：显式报错（不生成无法启动的服务）。
+ * service install entry: open machine service without tsx loader, must use compile artifact dist/cli.js.
+ * - with compile artifact run: return itself;
+ * - with source code entry run: return same package dist/cli.js(must already exists);
+ * - source code run and without compile artifact: explicit errors (do not generate cannot start service).
  */
 export function resolveServiceEntry(selfPath: string = fileURLToPath(import.meta.url)): string {
   const self = path.resolve(selfPath);
@@ -34,7 +34,7 @@ export function resolveServiceEntry(selfPath: string = fileURLToPath(import.meta
     return realpathSync(distEntry);
   } catch {
     throw new UsageError(
-      `服务入口必须使用编译产物（期望 ${distEntry}）：当前以源码入口运行且未找到编译产物；请先在仓库根执行 pnpm build 再安装服务`,
+      `service entry must use compile artifact (expectation ${distEntry}): when before with source code entry run and not found compile artifact; please first in repository execute pnpm build again install service`,
       'missing_build',
     );
   }

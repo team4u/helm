@@ -1,33 +1,33 @@
 /**
- * runtime.ts — 工作流 run 的宿主半边（执行编排）。
+ * runtime.ts -- the host half of a workflow run (execution orchestration).
  *
- * 自 @tintinweb/pi-subagents v0.23.1 (MIT) 移植，helm 适配点：
- * - 新增 `action()` 原语的宿主侧处理：与 agent 共享同一全序前缀账本（index 按
- *   调用发起顺序分配）；`action_started` 追加+fsync 成功后才执行 handler，
- *   终态行落盘后才 resolve 调用 promise；任一写失败即 fatal（不可在无法记账
- *   的状态下继续执行副作用）。恢复时 started 无终态由上层显式报
- *   `workflow_action_uncertain`，绝不自动重跑。
- * - 前缀重放逐项匹配（index+key+kind+ok）：resumed 行不再整体禁用前缀，
- *   已确认成功的 action/agent 一律复用，副作用零重复。缓存子结果可作为同一
- *   脚本后续 resume 调用的前缀来源，但无活会话：前缀失配后需要真正续接时
- *   显式失败，绝不伪造 live 续接。
- * - spawn 接缝面向 helm `WorkflowServiceHost`（agent_spawn 钩子管道的注入式
- *   适配在 service.ts），runtime 本体保持零内核依赖、可独立测试。
- * - worker 线程 + vm 双层边界：terminate 可杀死循环脚本；vm 禁动态代码生成与
- *   非确定 API（见 worker-source.ts）。这是可终止/确定性边界，不是恶意代码
- *   安全沙箱。
- * - label/resume 句柄按 scopeId 命名空间隔离（根 = 0，未传视为根）：嵌套
- *   workflow() 的同名 label 互不干扰；失败调用只要拿到 conversationId /
- *   executionId 即登记续接句柄；maxAttempts > 1 复用同一 attempt 环，经
- *   resumeAgent 续接重试，失败原因以增量块追加进下次尝试 prompt。
+ * Ported from @tintinweb/pi-subagents v0.23.1 (MIT); helm adaptation points:
+ * - Added host-side handling of the `action()` primitive: shares the same totally-ordered prefix
+ *   ledger with agent (index assigned by call-initiation order); the handler only runs after
+ *   `action_started` append+fsync succeeds, and the call promise resolves only after the terminal
+ *   row is persisted; any write failure is fatal (side effects must not continue in an unaccountable
+ *   state). On recovery, started-without-terminal is explicitly reported as `workflow_action_uncertain`; never auto-rerun.
+ * - Prefix replay matches item by item (index+key+kind+ok): resumed rows no longer disable the prefix
+ *   wholesale; confirmed-successful actions/agents are always reused, zero duplicate side effects.
+ *   Cached sub-results can serve as the prefix source for later resume calls of the same script,
+ *   but there is no live session: after a prefix mismatch, fail explicitly; never fabricate live continuation.
+ * - The spawn seam faces helm's `WorkflowServiceHost` (the injectable agent_spawn hook adaptation
+ *   lives in service.ts); the runtime itself keeps zero kernel dependencies and is independently testable.
+ * - worker thread + vm double boundary: terminate can kill looping scripts; the vm bans dynamic code
+ *   generation and non-deterministic APIs (see worker-source.ts). This is a terminability/determinism
+ *   boundary, not a malicious-code security sandbox.
+ * - label/resume handles are namespaced by scopeId (root = 0; omitted counts as root): nested
+ *   workflow() same-named labels never interfere; a failed call registers a resume handle as soon
+ *   as it has a conversationId / executionId; maxAttempts > 1 reuses the same attempt ring, retrying
+ *   via resumeAgent, with the failure reason appended as an incremental block into the next attempt's prompt.
  *
- * 职责拆分（本文件只保留编排，公共导出面不变）：
- * - runtime-types.ts：全部类型契约（宿主接缝 / run 选项 / worker 消息面）；
- * - runtime-validation.ts：边界校验 / args 标准化 / 脚本校验等纯函数与常量；
- * - runtime-control.ts：并发信号量 + 暂停/跳过/重试控制板；
- * - runtime-recorder.ts：agent 行尽力记账器（ioErrors 诊断面）；
- * - runtime-agent-handler.ts / runtime-action-handler.ts：两类调用的大块
- *   handler（显式依赖注入，语义与拆分前逐行一致）。
+ * Responsibility split (this file keeps only orchestration; the public export surface unchanged):
+ * - runtime-types.ts: all type contracts (host seam / run options / worker message surface);
+ * - runtime-validation.ts: boundary validation / args normalization / script validation and other pure
+ *   functions and constants;
+ * - runtime-control.ts: the concurrency semaphore + pause/skip/retry control board;
+ * - runtime-recorder.ts: the best-effort agent-row ledger writer (ioErrors diagnostics);
+ * - runtime-agent-handler.ts / runtime-action-handler.ts: the big handlers of the two call kinds (explicit dependency injection, semantics line-identical to before the split).
  */
 
 import { Worker } from 'node:worker_threads'
@@ -58,7 +58,7 @@ import type {
   WorkerMessage,
 } from './runtime-types.js'
 
-/* 公共面原样 re-export（既有导入路径 runtime.js / index.js 不变）。 */
+/* Public surface re-exported as-is (existing import paths runtime.js / index.js unchanged). */
 export {
   WorkflowRuntimeError,
   workflowConcurrency,
@@ -88,7 +88,7 @@ export type {
   WorkflowRunResult,
 } from './runtime-types.js'
 
-/** 账本追加输入见 journal.ts 的权威定义（此处旧别名仅为兼容本文件内引用）。 */
+/** Ledger append input -- see journal.ts for the authoritative definition (this legacy alias only serves references inside this file). */
 export type { JournalWriteInput } from './journal.js'
 
 export async function runWorkflow(options: RunWorkflowOptions): Promise<WorkflowRunResult> {
@@ -106,7 +106,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
   const inflight = new Set<string>()
   const completedByLabel = new Map<string, CompletedChild>()
   const openLaunches = new Map<number, string>()
-  /** run 级共享计数（agent/action handler 与 respond/finish 读写同一对象）。 */
+  /** Run-level shared counters (agent/action handlers and respond/finish read/write the same object). */
   const counters = { agentCount: 0, replayedCount: 0, spentOutputTokens: 0 }
   let callIndex = 0
   let aborted = false
@@ -174,7 +174,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
     ) => {
       openLaunches.delete(callId)
       if (settled) return
-      // 致命错误属于整个 run，不能让脚本 catch 或后续并发消息绕过副作用保护。
+      // Fatal errors belong to the whole run; the script must not catch them, and later concurrent messages must not bypass side-effect protection.
       if (fatal) {
         finish({ status: 'failed', error: error ?? 'Fatal workflow error.' })
         return
@@ -204,7 +204,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
     function onAbort() {
       aborted = true
-      // terminate() 是 worker 层存在的理由：它能在脚本自旋或卡在 await 中途时停下。
+      // terminate() is why the worker layer exists: it can stop a script even while it spins or is stuck mid-await.
       finish({ status: 'killed', error: isSuspended() ? 'Workflow suspended.' : 'Workflow aborted.' })
     }
 

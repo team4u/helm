@@ -7,6 +7,7 @@ import * as LucideReact from 'lucide-react'
 import * as HelmPluginClient from '@helm/plugin-client'
 import { PluginClientHostContext, usePluginDocValue } from '@helm/plugin-client'
 import type { ActionManifest, ArtifactMetadata, ConversationDetail, ConversationEntry, PluginSummary, Profile, ProviderConfig, SkillSummary } from '@helm/protocol/browser'
+import { createLocaleTranslator } from '@helm/protocol/browser'
 import { assetsApi, authApi, conversationsApi, nodesApi, pluginsApi, setStoredToken, type CredentialSummary, type ModelDescriptor, type NodeInfo } from './api.js'
 import { errorText } from './format.js'
 import { applyConversationEntry, emptyLiveState, mergeConversationDetail, sortNodes, type LiveState } from './live-state.js'
@@ -37,26 +38,31 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const liveRef = useRef(live)
   const [conversationArtifacts, setConversationArtifacts] = useState<Record<number, ArtifactMetadata[]>>({})
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({})
-  // 当前内核启动代（SSE snapshot bootId）：只读事实暴露给版本感知等消费者，
-  // 不参与 SSE 续传状态机本身（续传凭据仍由 sseCursorRef 唯一维护）。
+  // Current kernel boot generation (SSE snapshot bootId): a read-only fact
+  // exposed to consumers such as version watching; not part of the SSE resume
+  // state machine itself (resume credentials stay owned by sseCursorRef).
   const [kernelBootId, setKernelBootId] = useState<string | null>(null)
   const [profiles, setProfiles] = useState<Profile[]>([])
-  /** 静态资产是否已完成本轮会话首次加载（待命页区分「加载中」与「角色不存在」）。 */
+  /** Whether static assets finished their first load this session (the standby page distinguishes "loading" from "profile missing"). */
   const [assetsLoaded, setAssetsLoaded] = useState(false)
   const [models, setModels] = useState<ModelDescriptor[]>([])
   const [providers, setProviders] = useState<ProviderConfig[]>([])
   const [credentials, setCredentials] = useState<CredentialSummary[]>([])
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [actions, setActions] = useState<ActionManifest[]>([])
-  // 初始工作台位置取自地址栏 Hash：刷新、复制链接直达与前进/后退都以它为唯一事实来源。
-  // 首页进入判定与初始解析同源一次完成：无显式主屏目标且无弹窗的入口，等认证与会话
-  // 数据就绪后由首页落地 effect 以 replace 升级到对话空间缺省目标。
+  // The initial workbench position comes from the URL hash: refreshes,
+  // copied deep links and forward/back all treat it as the single source of
+  // truth. Home-entry detection and initial parsing complete in one pass:
+  // entries without an explicit primary target and without a modal are
+  // upgraded by the home-landing effect (replace) to the conversation-space
+  // default target once auth and conversation data are ready.
   const [boot] = useState(() => {
     const rawHash = typeof window !== 'undefined' ? window.location.hash : ''
     const parsed = parseLocationHash(rawHash)
     return {
       location: upgradeLegacyLocationState(parsed),
-      // 无显式主屏目标且无弹窗深链（含旧弹窗参数升级路径）才视为首页进入。
+      // Only entries without an explicit primary target and without a modal
+      // deep link (including the legacy modal-param upgrade path) count as home entry.
       needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null,
     }
   })
@@ -64,9 +70,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [notices, setNotices] = useState<ToastNotice[]>([])
   const noticeSequence = useRef(0)
   const session = useRef(0)
-  // SSE 短断线续传凭据（bootId 事件代 + 已实际应用的水位 seq）：仅在快照成功应用或
-  // 逐帧应用成功后推进；登出/换身份、快照或帧应用失败立即清空，下次连接强制全量
-  // 快照，绝不携带损坏 cursor 重试，也不让新身份沿用旧授权的客户端缓存。
+  // SSE short-disconnect resume credentials (bootId event generation + the
+  // actually applied seq watermark): advanced only after a snapshot or frame
+  // applies successfully; cleared immediately on logout/identity change or
+  // snapshot/frame application failure, forcing a full snapshot on the next
+  // connect — never retrying with a corrupted cursor, never letting a new
+  // identity reuse the old authorization's client cache.
   const sseCursorRef = useRef<SseCursor | null>(null)
   const requests = useRef(new Map<string, Promise<unknown>>())
   const failedDocs = useRef(new Set<string>())
@@ -112,10 +121,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const {
     theme,
     themePreference,
+    locale,
     quietNotifyEnabled,
     setTheme,
     setThemePreference,
     toggleTheme,
+    setLocale,
     setQuietNotify,
   } = useThemePreferences(pushNotice)
 
@@ -129,10 +140,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     if (results[3].status === 'fulfilled') setCredentials(results[3].value)
     if (results[4].status === 'fulfilled') setSkills(results[4].value)
     if (results[5].status === 'fulfilled') setActions(results[5].value)
-    // 角色资产单独记录成败：待命页据此区分「加载失败（可重试）」与「确实不存在」，
-    // 不得用全体 assets 的完成信号假装 Profile 加载成功。
+    // Profile asset success/failure is tracked separately: the standby page
+    // distinguishes "load failed (retryable)" from "really missing"; never use
+    // the all-assets completion signal to fake a successful Profile load.
     reportLoad('assets:profiles', results[0].status === 'rejected' ? results[0].reason : undefined)
-    // 无论单项成败，本轮已返回即可区分「加载中」与「不存在」（单项失败另有通知）。
+    // Regardless of per-item outcomes, a completed round distinguishes
+    // "loading" from "missing" (per-item failures get their own notices).
     setAssetsLoaded(true)
     const labels = ['角色', '模型', '网关', '凭据', '技能', '插件动作']
     results.forEach((result, index) => {
@@ -140,12 +153,13 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     })
   }, [pushNotice, reportLoad])
 
-  // 全量校准插件清单：以服务端列表为基准合并本地 live 状态（SSE 增量优先保留，卸载项剔除）。
+  // Fully recalibrates the plugin list: merges local live state against the
+  // server list as the baseline (SSE increments preferred, removed items dropped).
   const syncPlugins = useCallback((next: PluginSummary[]) => {
     if (!Array.isArray(next)) return
     updateLive((state) => {
       const byId = new Map(state.plugins.map((p) => [p.id, p]))
-      // 同 id 同启用态时保留本地 SSE 版本（可能携带更新的 status/error/managed）
+      // Same id and enabled state: keep the local SSE version (may carry newer status/error/managed)
       const merged = next.map((incoming) => {
         const local = byId.get(incoming.id)
         return local && local.enabled === incoming.enabled ? local : incoming
@@ -155,7 +169,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   }, [updateLive])
   useEffect(() => { if (authenticated) void refreshAssets() }, [authenticated, refreshAssets])
 
-  // 刷新计算节点列表（健康指标实时变化，弹窗打开与手动刷新时拉取）。
+  // Refreshes the compute node list (health metrics change in real time; fetched when the modal opens and on manual refresh).
   const refreshNodes = useCallback(async (): Promise<NodeInfo[] | undefined> => {
     const epoch = session.current
     const nodesBeforeRequest = liveRef.current.nodes
@@ -163,7 +177,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       const list = await nodesApi.list()
       if (epoch !== session.current) return undefined
       const sorted = sortNodes(list)
-      // 节点事件若已到达，保留比本次 HTTP 快照更新的状态。
+      // If node events already arrived, keep the state newer than this HTTP snapshot.
       updateLive((state) => state.nodes === nodesBeforeRequest ? { ...state, nodes: sorted } : state)
       return liveRef.current.nodes
     } catch (error) {
@@ -208,7 +222,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     await task
   }, [reportLoad, updateLive])
 
-  /** 单条目全文回填（服务端预览截断后按需取回；复用 conversation.entry 的原位 upsert 语义）。 */
+  /** Backfills a single entry's full text (fetched on demand after server-side preview truncation; reuses conversation.entry's in-place upsert semantics). */
   const backfillConversationEntry = useCallback((conversationId: number, entry: ConversationEntry): void => {
     updateLive((state) => applyConversationEntry(state, conversationId, entry))
   }, [updateLive])
@@ -351,21 +365,26 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     requests.current.clear()
     failedDocs.current.clear()
     resetUnreadSync()
-    // 续传凭据一并作废：同一 Hub 换身份后不得沿用其他授权会话的客户端水位。
+    // Resume credentials are invalidated too: after switching identity on the
+    // same Hub, another authorization's client watermark must not be reused.
     sseCursorRef.current = null
     assetGeneration.current++
-    // 释放待命草稿并作废在途首发任务：旧 create/upload/submit 回包不得复活正文/附件或继续发送。
+    // Releases standby drafts and voids in-flight first-send tasks: stale
+    // create/upload/submit responses must not revive text/attachments or keep sending.
     resetStandbyDrafts()
     resetPluginClientCache()
     resetSessionDocSubscriptions()
     setStoredToken(null)
     setAuthenticated(false)
     setSseConnected(false)
-    // 清除断线横幅：登出前的空闲超时/断连提示不得残留到重新登录后的新连接窗口。
+    // Clears the disconnect banner: idle-timeout/disconnect notices from
+    // before logout must not linger into the new connection window after re-login.
     clearEscAbortPrompt()
     setConnectionError(null)
     resetNavigationOnLogout()
-    // 地址栏同步复位为默认深链（replaceState 不污染历史栈）；未认证期间禁用写回，避免覆盖用户粘贴的深链。
+    // Resets the address bar to the default deep link (replaceState keeps the
+    // history stack clean); writes stay disabled while unauthenticated to avoid
+    // clobbering a user-pasted deep link.
     lastSyncedLocation.current = parseLocationHash('#/settings/profiles')
     window.history.replaceState(null, '', '#/settings/profiles')
     updateLive(emptyLiveState)
@@ -398,8 +417,9 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
-  // ---- Screen 路由参数更新（唯一导航机制内实现，组件不得直接操作浏览器历史） ----
-  // setParams(..., { push: true }) 与 openTarget({ history }) 共用 pendingHistoryMode。
+  // ---- Screen route param updates (implemented inside the single navigation
+  // mechanism; components must never touch browser history directly) ----
+  // setParams(..., { push: true }) and openTarget({ history }) share pendingHistoryMode.
   const setScreenParams = useCallback((patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }) => {
     const { validEntries, invalidKeys } = partitionScreenParamsPatch(patch)
     for (const key of invalidKeys) {
@@ -418,9 +438,11 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     return doc.value
   }, [])
 
-  // ---- 地址栏 Hash 双向同步 --------------------------------------------------
-  // 外部变更（前进/后退/手动改 Hash）：解析后覆盖本地状态。pushState/replaceState
-  // 不会触发这两个事件，因此自身写回不会形成回环；与最近同步位置相同的事件是回声，忽略。
+  // ---- URL hash two-way sync --------------------------------------------------
+  // External changes (forward/back/manual hash edit): parsed and overlaid onto
+  // local state. pushState/replaceState do not fire these events, so our own
+  // writes never loop; an event equal to the last synced position is an echo
+  // and is ignored.
   useEffect(() => {
     const applyUrlLocation = () => {
       const parsed = upgradeLegacyLocationState(parseLocationHash(window.location.hash))
@@ -435,8 +457,10 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [applyExternalLocation])
 
-  // 状态写回地址栏：仅在已认证后进行（AuthGate 阶段保留用户粘贴的深链 Hash）。
-  // 视图级变化（主屏/分屏/弹窗开关）push 入栈，列表内选子项/切 Tab 用 replace 折叠历史。
+  // State is written back to the address bar only after authentication (the
+  // AuthGate phase preserves the user's pasted deep-link hash). View-level
+  // changes (primary/split/modal toggles) push history; selecting an item
+  // within a list or switching tabs replaces to keep history compact.
   useEffect(() => {
     if (!authenticated) return
     const nextHash = formatLocationHash(locationState)
@@ -501,25 +525,27 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   })
 
   const groupedUi = useMemo(() => groupUiContributions(live.uiContributions), [live.uiContributions])
-  // Context value 需引用稳定：任何一处局部状态变化都不应触发全量消费组件重渲染。
+  // The context value must keep a stable reference: no single piece of local
+  // state should re-render every consuming component.
   const store: HelmStoreValue = useMemo(
     () => ({
-      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
+      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, locale, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, setLocale, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
-      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
+      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, locale, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, getPluginSessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, setLocale, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, getPluginSessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],
   )
   useEffect(() => {
-    // 宿主共享运行时：
-    // - __HELM_SHARED__：具名句柄（调试/未来消费者）；
-    // - __helm_shared_* 命名空间：插件 client.tsx 编译产物把共享依赖（react 等）
-    //   与 '@helm/plugin-client' 虚拟化为这些全局命名空间，运行时取得同一份
-    //   React/lucide/宿主 hooks 实例，绝不打包第二份 React。
+    // Host shared runtime:
+    // - __HELM_SHARED__: named handles (debugging / future consumers);
+    // - __helm_shared_* namespaces: plugin client.tsx build artifacts
+    //   virtualize shared dependencies (react etc.) and '@helm/plugin-client'
+    //   into these global namespaces; at runtime they resolve to the same
+    //   React/lucide/host hooks instances — never a second React bundle.
     const w = window as unknown as Record<string, unknown>
     w.__HELM_SHARED__ = { React, useHelmStore, usePluginDoc: usePluginDocValue }
     w.__helm_shared_react = React
@@ -538,9 +564,15 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       delete w.__helm_shared_plugin_client
     }
   }, [])
-  // 宿主端口：SDK（@helm/plugin-client）钩子与委托组件经此注入真实 store 能力。
-  // 端口对象随 store 快照重建（与 store 同一 SSE 节奏）；钩子内部仅依赖稳定具名函数。
-  const pluginClientPort = useMemo(() => createPluginClientHostPort(store), [store])
+  // Host port: SDK (@helm/plugin-client) hooks and delegate components get the
+  // real store capabilities injected through this port. The port object is
+  // rebuilt with each store snapshot (same SSE cadence as the store); hooks
+  // depend only on stable named functions. Locale/translate are added on top
+  // of the base adapter (which stays locale-agnostic until its own phase).
+  const pluginClientPort = useMemo(
+    () => ({ ...createPluginClientHostPort(store), locale: store.locale, translate: createLocaleTranslator(store.locale) }),
+    [store],
+  )
   return (
     <HelmStoreContext.Provider value={store}>
       <PluginClientHostContext.Provider value={pluginClientPort}>{children}</PluginClientHostContext.Provider>

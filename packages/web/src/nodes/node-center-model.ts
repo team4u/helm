@@ -94,9 +94,9 @@ export function getNodeDisplayName(node: NodeInfo): string {
     return node.label.trim()
   }
   if (node.id === 'local') {
-    return '本机内核'
+    return 'Local kernel'
   }
-  return node.id || '未知节点'
+  return node.id || 'Unknown node'
 }
 
 /**

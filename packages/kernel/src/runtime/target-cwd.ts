@@ -1,48 +1,48 @@
 /**
- * 会话 / spawn cwd 按目标节点平台统一规范化收口（kernel 内唯一实现）。
+ * conversation / spawn cwd by target node platform unify specification consolidate (kernel inside unique implement).
  *
- * 所有进入持久化（会话镜像 / 子会话登记）或执行环境（SDK agent cwd /
- * worktree 源目录 / Herdr 窗格 cwd）的 cwd，都经 normalizeSessionCwd：
- * - 相对路径（含 Windows 盘符相对 C:relative）显式拒绝（既有契约）；
- * - 平台已知：复用 @helm/protocol normalizeTargetPath（win32 目标上把
- *   WSL /mnt/<盘符>、Git Bash /<盘符>、//server/share 视图确定性转换为
- *   规范 Windows 路径；POSIX 目标仅词法归一，绝不反向改写）；
- * - 目标节点平台无可信信息（远端未注册 / 未上报）：不猜、不改写，原样
- *   透传（绝对性校验仍然生效）。
+ * all enter persist (conversation mirror / sub-conversation register) or execute environment (SDK agent cwd /
+ * worktree source directory / Herdr pane cwd) cwd, all via normalizeSessionCwd:
+ * - relative path (contains Windows symbol each other for C:relative) explicit reject (since has contract);
+ * - platform known: re- use @helm/protocol normalizeTargetPath(win32 target on
+ *   WSL /mnt/<symbol>,Git Bash /<symbol>,//server/share view determinism convert is
+ *   specification Windows path;POSIX target only term method archive one, never reverse change write);
+ * - target node platform without can message information (remote not registered / not on report): do not guess, do not change write, original
+ *   pass-through (absolute validate still takes effect).
  *
- * 平台事实来源（诚实性红线）：local 默认用 process.platform，测试可通过
- * trustedPlatformFromEnvFabric 注入 Hub 平台；远端只用 NodeRegistry 注册时
- * 上报的可信 platform，绝不探测、绝不用路径形状倒推目标平台。
+ * platform fact source (honest hard rule):local by default use process.platform, test can via
+ * trustedPlatformFromEnvFabric inject Hub platform; remote only use NodeRegistry register when
+ * on report can message platform, never probe, never use path shape upside down push target platform.
  */
 
 import { HelmError, isAbsoluteTargetPath, normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helm/protocol'
 import type { EnvFabric } from '../env/index.js'
 
 /**
- * 可信节点平台来源：返回节点上报的原始 platform 字符串（如 'linux' /
- * 'win32' / 'darwin'）；unknown / 未上报返回 undefined。
+ * can message node platform source: return node on report original platform string (such as 'linux' /
+ * 'win32' / 'darwin');unknown / not on report return undefined.
  */
 export type TrustedNodePlatformSource = (nodeId: string) => string | undefined
 
 /**
- * EnvFabric 的平台事实最小结构（结构性依赖：测试可注入轻量 stub，
- * 不必构造完整 NodeRegistry）。生产 EnvFabric 提供 nodePlatformOf 只读
- * 端口时优先使用（唯一事实出口，见 env/fabric.ts）；仅有 registry 的
- * 结构性 stub 退回直读注册表，语义与端口一致。
+ * EnvFabric platform fact most small structure (structure dependency: test can inject light amount stub,
+ * no need to construct complete NodeRegistry). produce EnvFabric provide nodePlatformOf only read
+ * port when takes precedence use (unique fact exit, see env/fabric.ts); only has registry 
+ * structure stub retreat back direct read register table, semantics and port consistent.
  */
 export interface TrustedPlatformHost {
   registry: { get(nodeId: string): { platform: string } | undefined }
-  /** 可选 Hub 平台事实端口（测试可注入，生产缺省回退 process.platform）。 */
+  /** optional Hub platform fact port (test can inject, produce default fall back process.platform). */
   hubPlatform?(): string | undefined
-  /** 可选最小只读平台端口（EnvFabric.nodePlatformOf）；远端平台优先使用。 */
+  /** optional most small only read platform port (EnvFabric.nodePlatformOf); remote platform takes precedence use. */
   nodePlatformOf?(nodeId: string): string | undefined
 }
 
 /**
- * 生产可信来源：local 优先 EnvFabric.hubPlatform（测试注入），缺省回退
- * process.platform；远端优先 EnvFabric.nodePlatformOf 只读端口（NodeRegistry
- * 注册上报的 platform，未注册 / 未上报 = undefined）；仅有 registry 的结构性
- * stub 退回直读注册表（同一语义）。
+ * produce can message source:local takes precedence EnvFabric.hubPlatform(test inject), default fall back
+ * process.platform; remote takes precedence EnvFabric.nodePlatformOf only read port (NodeRegistry
+ * register on report platform, not registered / not on report = undefined); only has registry structure
+ * stub retreat back direct read register table (the same semantics).
  */
 export function trustedPlatformFromEnvFabric(
   envFabric: EnvFabric | TrustedPlatformHost | undefined,
@@ -57,9 +57,9 @@ export function trustedPlatformFromEnvFabric(
 }
 
 /**
- * 解析目标节点平台语义：undefined 表示无可信信息（调用方不得猜测）。
- * nodeId 缺省 / 空串视为 'local'；local 默认使用 process.platform，显式
- * trustedPlatform 来源可提供测试用 Hub 平台事实；远端只用来源上报。
+ * parse target node platform semantics:undefined means without can message information (caller must not guess).
+ * nodeId default / empty string treated as 'local';local by default use process.platform, explicit
+ * trustedPlatform source can provide test use Hub platform fact; remote only used to source on report.
  */
 export function resolveTargetPlatform(
   nodeId: string | undefined,
@@ -74,28 +74,28 @@ export function resolveTargetPlatform(
   return raw !== undefined && raw !== '' ? targetPlatformOf(raw) : undefined
 }
 
-/** normalizeSessionCwd 入参。 */
+/** normalizeSessionCwd reference. */
 export interface NormalizeSessionCwdOptions {
-  /** 目标计算节点（缺省 / 空串 = 'local'）。 */
+  /** target compute node (default / empty string = 'local'). */
   nodeId?: string
-  /** 可信平台来源（缺省仅 local 可解析）。 */
+  /** can message platform source (default only local can parse). */
   trustedPlatform?: TrustedNodePlatformSource
-  /** 诊断用入口名（如 'conversation.create'）。 */
+  /** diagnose use entry name (such as 'conversation.create'). */
   entry: string
 }
 
 /**
- * 按已解析平台规范化 cwd（纯词法，零磁盘访问）：
- * - 拒绝相对路径（POSIX 相对、Windows 盘符相对），保持既有绝对路径契约；
- * - platform undefined（目标平台无可信信息）：透传，不猜不改写；
- * - 平台已知：normalizeTargetPath；win32 目标上的不可映射 POSIX 根显式
- *   失败（unmappable_posix_root，绝不静默落库坏 POSIX cwd）。
+ * by already parse platform specification cwd(pure term method, zero disk access):
+ * - reject relative path (POSIX each other for,Windows symbol each other for), keep since has absolute path contract;
+ * - platform undefined(target platform without can message information): pass-through, do not guess do not change write;
+ * - platform known:normalizeTargetPath;win32 target on cannot mapping POSIX explicit
+ *   failed (unmappable_posix_root, never static default written to the database broken POSIX cwd).
  */
 export function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | undefined, entry: string): string {
   if (!isAbsoluteTargetPath(cwd)) {
     throw new HelmError(
       'validation_error',
-      `${entry}: cwd 需为绝对路径（POSIX / 开头、Windows 盘符 C:\\ 或 UNC \\\\server\\share；拒绝盘符相对与相对路径）：收到 '${cwd}'`,
+      `${entry}: cwd must be absolute path (POSIX / open head,Windows symbol C:\\ or UNC \\\\server\\share; reject symbol each other for and relative path): receives '${cwd}'`,
       400,
       { cwd, entry },
     )
@@ -109,8 +109,8 @@ export function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | 
 }
 
 /**
- * cwd 收口（按目标节点平台）：绝对性校验 + resolveTargetPlatform +
- * normalizeCwdForPlatform 的组合（语义见上方各函数）。
+ * cwd consolidate (by target node platform): absolute validate + resolveTargetPlatform +
+ * normalizeCwdForPlatform combine (semantics see on way each function).
  */
 export function normalizeSessionCwd(cwd: string, options: NormalizeSessionCwdOptions): string {
   const platform = resolveTargetPlatform(options.nodeId, options.trustedPlatform)
