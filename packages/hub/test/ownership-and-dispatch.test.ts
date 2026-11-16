@@ -25,12 +25,15 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 
 import { HelmError, type HelmEventFrame } from '@helm/protocol'
-import { createHelm } from '../src/app.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import {
+  openHubTestEnv,
+  waitFor as waitForCondition,
+  type FauxProviderHandle,
+  type HubTestApp,
+} from './helpers/hub-test-env.js'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -41,41 +44,25 @@ const ROOT_CONVERSATION_ID = 1 as const
 
 interface TestEnv {
   dataDir: string
-  faux: ReturnType<typeof fauxProvider>
-  app: Awaited<ReturnType<typeof createHelm>>
+  faux: FauxProviderHandle
+  app: HubTestApp
   close(): Promise<void>
 }
 
 async function makeEnv(): Promise<TestEnv> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ownership-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
-  faux.setResponses([fauxAssistantMessage('收到')])
-  const env: TestEnv = {
-    dataDir,
-    faux,
-    app,
-    async close() {
-      try {
-        await app.close()
-      } finally {
-        rmSync(dataDir, { recursive: true, force: true })
-      }
-    },
+  const env = await openHubTestEnv({ prefix: 'helm-ownership-' })
+  env.faux.setResponses([fauxAssistantMessage('收到')])
+  return {
+    dataDir: env.dataDir,
+    faux: env.faux,
+    app: env.app,
+    close: env.close,
   }
-  return env
 }
 
 /** 等待谓词成立（轮询，默认 5s 超时）。 */
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (await predicate()) return
-    if (Date.now() > deadline) assert.fail('waitFor 超时：条件在限定时间内未成立')
-    await new Promise((r) => setTimeout(r, 25))
-  }
+  await waitForCondition(predicate, { timeoutMs, message: 'waitFor 超时：条件在限定时间内未成立' })
 }
 
 /** 从磁盘 index doc 读常驻会话 ID（doc flush 后直读 SQLite）。 */

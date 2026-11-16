@@ -387,7 +387,10 @@ export function analyzeTestSourcePurity(
         if (host && ts.isIdentifier(host) && host.text === 'GlobalRegistrator' && method === 'register') {
           reasons.add('call:GlobalRegistrator.register');
         } else if (FORBIDDEN_CALLS.has(method)) {
-          reasons.add(`call:${method}`);
+          // 正则字面量 `/.../.exec(str)` 是纯内存调用，非 `child_process.exec`。
+          if (!(method === 'exec' && host && ts.isRegularExpressionLiteral(host))) {
+            reasons.add(`call:${method}`);
+          }
         }
         if (
           host &&

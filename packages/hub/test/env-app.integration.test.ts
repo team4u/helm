@@ -5,21 +5,19 @@ import type { AgentExecutionInfo } from '@helm/protocol'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer, type Socket } from 'node:net'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
 /** 单工具调用 faux 消息（stopReason: toolUse）。 */
 function fauxToolCallMessage(name: string, input: Record<string, unknown>): ReturnType<typeof fauxAssistantMessage> {
   return fauxAssistantMessage([fauxToolCall(name, input as Record<string, never>)], { stopReason: 'toolUse' })
 }
-import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { createHerdrTransport } from '../../plugins/src/herdr/transport.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createNodeDaemon, type NodeDaemon } from '../../node/src/index.js'
 import { runCli } from '../../cli/src/index.js'
 import type { EnvFabric } from '../../kernel/src/env/index.js'
 import type { HerdrNodeChannel } from '../../plugins/src/herdr/contracts.js'
+import { createHubTestApp, waitFor } from './helpers/hub-test-env.js'
 
 /**
  * EnvFabric → HerdrNodeChannel 适配器（旧公共导出 createHerdrNodeChannel 已
@@ -44,10 +42,7 @@ async function openEnvironment() {
   const nodeDir = join(root, 'node')
   const remoteCwd = join(root, 'remote-workspace')
   await Promise.all([mkdir(hubDir), mkdir(nodeDir), mkdir(remoteCwd)])
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: hubDir, cwd: hubDir, model: 'faux/faux-1', models })
+  const { app, faux } = await createHubTestApp({ dataDir: hubDir, cwd: hubDir })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   const auth = app.kernel.auth.createProcessToken()
   let daemon: NodeDaemon | undefined
@@ -109,12 +104,7 @@ async function openEnvironment() {
 }
 
 async function eventually(check: () => Promise<boolean> | boolean, description: string): Promise<void> {
-  const deadline = Date.now() + 5_000
-  while (Date.now() < deadline) {
-    if (await check()) return
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-  assert.fail(description)
+  await waitFor(check, { timeoutMs: 5_000, intervalMs: 20, message: description })
 }
 
 test('跨节点后台原生子代理：真实 WS 节点分配 worktree、执行 gate、CLI 清理原节点工作树', { timeout: 60_000 }, async () => {

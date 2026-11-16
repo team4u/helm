@@ -22,16 +22,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError, type PluginDefinition, type Profile } from '@helm/protocol'
 import {
+  CredentialService,
   MAX_SECRET_TTL_MS,
   SecretStash,
   validateSecretLifetime,
 } from '../../kernel/src/services/index.js'
+import { createHubHandler } from '../../kernel/src/http/hub.js'
 import { agentJournalKey } from '../../plugins/src/workflow/engine/journal.js'
-import { createHelm } from '../src/app.js'
 import { AskService } from '../../kernel/src/runtime/asks.js'
 import { HelmStore } from '../../kernel/src/runtime/store.js'
 import { openHelmDatabase } from '../../kernel/src/runtime/sqlite.js'
@@ -41,7 +41,7 @@ import { PaneRegistry, EMPTY_MANAGED_DOC, type ManagedDoc } from '../../plugins/
 import { AskCoordinator } from '../../plugins/src/herdr/asks.js'
 import { MetadataProjector } from '../../plugins/src/herdr/metadata.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../../plugins/src/herdr/contracts.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createHubTestApp, waitFor } from './helpers/hub-test-env.js'
 
 // ---------------------------------------------------------------------------
 // SecretStash：TTL（fake clock）
@@ -774,21 +774,14 @@ test('agentJournalKey：secretNames 参与指纹（授予变化不复用旧缓�
 // 真实回合结算联动（createHelm + faux：completed/failed/aborted + late hook）
 // ---------------------------------------------------------------------------
 
-async function waitFor(cond: () => boolean, ms = 8_000): Promise<void> {
-  const deadline = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error('waitFor 超时')
-    await delay(15)
-  }
-}
-
 test('真实回合结算：completed/failed/aborted 均停注入 turn 机密；旧值仍脱敏；late hook 登记留下一回合', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-secret-turnsettle-'))
   // 慢速流（1 tok/s、4 字符/token）：aborted 场景需真实在途流可被取消；短回复仍秒级完成。
-  const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 4, max: 4 } })
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const { app, faux } = await createHubTestApp({
+    dataDir,
+    cwd: dataDir,
+    fauxOptions: { tokensPerSecond: 1, tokenSize: { min: 4, max: 4 } },
+  })
   try {
     const kernel = app.kernel
     const stash = kernel.services.stash
@@ -817,7 +810,7 @@ test('真实回合结算：completed/failed/aborted 均停注入 turn 机密；�
     faux.setResponses([fauxAssistantMessage('完成回答')])
     await kernel.submitInput(conv.id, '第一问')
     await kernel.waitForIdle(conv.id)
-    await waitFor(() => outcomes.length >= 1)
+    await waitFor(() => outcomes.length >= 1, { timeoutMs: 8_000, intervalMs: 15 })
     assert.equal(outcomes[0], 'completed')
     assert.equal(stash.has(conv.id, 'TURN_TOKEN'), false, 'completed 结算后 turn 机密停注入（payload.conversation.id 真实联动）')
     assert.equal(stash.has(conv.id, 'SESSION_TOKEN'), true, '会话级不受结算影响')
@@ -828,7 +821,7 @@ test('真实回合结算：completed/failed/aborted 均停注入 turn 机密；�
     faux.setResponses([fauxAssistantMessage('第二答')])
     await kernel.submitInput(conv.id, '第二问')
     await kernel.waitForIdle(conv.id)
-    await waitFor(() => outcomes.length >= 2)
+    await waitFor(() => outcomes.length >= 2, { timeoutMs: 8_000, intervalMs: 15 })
     assert.equal(outcomes[1], 'completed')
     assert.equal(stash.has(conv.id, 'LATE_HOOK_KEY'), false, 'late 登记随下一次回合结算回收')
 
@@ -838,7 +831,7 @@ test('真实回合结算：completed/failed/aborted 均停注入 turn 机密；�
     faux.setResponses([fauxAssistantMessage('boom', { stopReason: 'error' })])
     await kernel.submitInput(failed.id, '会失败的问题')
     await kernel.waitForIdle(failed.id)
-    await waitFor(() => outcomes.includes('failed'))
+    await waitFor(() => outcomes.includes('failed'), { timeoutMs: 8_000, intervalMs: 15 })
     assert.equal(stash.has(failed.id, 'FAIL_TURN'), false, 'failed 结算同样回收 turn 机密')
     assert.equal(stash.redact('fail-secret').includes('fail-secret'), false)
 
@@ -849,7 +842,7 @@ test('真实回合结算：completed/failed/aborted 均停注入 turn 机密；�
     await kernel.submitInput(abortedConv.id, '会被中止的问题')
     await kernel.abortConversation(abortedConv.id)
     await kernel.waitForIdle(abortedConv.id)
-    await waitFor(() => outcomes.includes('aborted'))
+    await waitFor(() => outcomes.includes('aborted'), { timeoutMs: 8_000, intervalMs: 15 })
     assert.equal(stash.has(abortedConv.id, 'ABORT_TURN'), false, 'aborted 结算同样回收 turn 机密')
     assert.equal(stash.redact('abort-secret').includes('abort-secret'), false)
   } finally {
@@ -864,11 +857,8 @@ test('真实回合结算：completed/failed/aborted 均停注入 turn 机密；�
 
 test('原生执行行：非空 secretNames 显式 unsupported_secret_grant（默认插件集无外部运行时不静默忽略）；空数组等同未授予', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-secret-native-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
   // 默认插件集：builtin:herdr 停用 → agent_spawn 无外部运行时接管，原生执行行必须显式拒绝。
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const { app, faux } = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
     const kernel = app.kernel
     kernel.services.stash.put(1, 'NATIVE_KEY', 'native-secret')
@@ -892,6 +882,58 @@ test('原生执行行：非空 secretNames 显式 unsupported_secret_grant（默
     assert.ok(result !== undefined, '空数组等同未授予，原生执行不受影响')
   } finally {
     await app.close()
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 插件配置命名空间与动态凭据隔离（原 plugin-config-namespace.test.ts）
+// ---------------------------------------------------------------------------
+
+// 动态凭据与 configSchema secret 共用 credentials.json，但只有声明的配置可出站。
+test('插件配置 HTTP 在重启和停用时均隐藏动态凭据，并保留已声明配置的脱敏', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-config-namespace-'))
+  const pluginId = 'test:dynamic-credentials'
+  const dynamicSecret = 'dynamic-hook-signing-key-7e4a'
+  const configSecret = 'declared-config-key-94b2'
+  const credentials = new CredentialService(dataDir)
+  await credentials.setPluginSecret(pluginId, 'webhook:demo', dynamicSecret)
+  await credentials.setPluginSecret(pluginId, 'apiKey', configSecret)
+  let app: Awaited<ReturnType<typeof createHubTestApp>>['app'] | undefined
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      ({ app } = await createHubTestApp({ dataDir, cwd: dataDir }))
+      await app.kernel.plugins.register({
+        id: pluginId,
+        definePlugin(ctx) {
+          ctx.configSchema({
+            apiKey: { type: 'string', secret: true },
+            retries: { type: 'number', default: 3 },
+          })
+        },
+      }, { enabled: false })
+      const credential = app.kernel.auth.createProcessToken()
+      try {
+        const handler = createHubHandler(app.kernel)
+        const response = await handler(new Request(`http://localhost/api/plugins/${encodeURIComponent(pluginId)}/config`, {
+          headers: { authorization: `Bearer ${credential.token}` },
+        }))
+        assert.equal(response.status, 200)
+        const body = await response.text()
+        assert.ok(!body.includes(dynamicSecret), '停用插件的动态密钥不得经配置接口泄漏')
+        assert.ok(!body.includes('webhook:demo'), '动态密钥不应成为公开配置字段')
+        assert.ok(!body.includes(configSecret), '声明的 secret 必须掩码')
+        const parsed = JSON.parse(body) as { values: Record<string, unknown> }
+        assert.equal(parsed.values.apiKey, '******')
+        assert.equal(Object.hasOwn(parsed.values, 'webhook:demo'), false)
+      } finally {
+        credential.dispose()
+      }
+      await app.close()
+      app = undefined
+    }
+  } finally {
+    await app?.close()
     rmSync(dataDir, { recursive: true, force: true })
   }
 })

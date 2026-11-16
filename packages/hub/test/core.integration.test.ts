@@ -23,9 +23,7 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
-  fauxProvider,
   fauxAssistantMessage,
   fauxToolCall,
   type FauxResponseStep,
@@ -35,10 +33,14 @@ import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { HELM_CLI_SKILL_ASSET } from '../../plugins/src/profile.js'
 import { MemoryStore } from '../../plugins/src/memory/store.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
-import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { redactJsonValue } from '../../kernel/src/redact.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import {
+  createHubTestApp,
+  waitFor as waitForCondition,
+  type FauxProviderHandle,
+  type HubTestApp,
+} from './helpers/hub-test-env.js'
 
 import assert from 'node:assert/strict'
 
@@ -104,12 +106,7 @@ async function httpCall(
 }
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (await predicate()) return
-    if (Date.now() > deadline) assert.fail('waitFor 超时')
-    await new Promise((r) => setTimeout(r, 25))
-  }
+  await waitForCondition(predicate, { timeoutMs, message: 'waitFor 超时' })
 }
 
 async function collectSse(
@@ -184,8 +181,8 @@ function writeProfile(
 interface CoreEnv {
   dataDir: string
   dbPath: string
-  faux: ReturnType<typeof fauxProvider>
-  app: Awaited<ReturnType<typeof createHelm>>
+  faux: FauxProviderHandle
+  app: HubTestApp
   runWorkflow(request: Record<string, unknown>): Promise<{ run: import('@helm/plugins/contracts').WorkflowRunSummary }>
   inspectRun(runId: string): Promise<{ run: import('@helm/plugins/contracts').WorkflowRunSummary }>
   close(): Promise<void>
@@ -193,10 +190,7 @@ interface CoreEnv {
 
 async function makeCoreEnv(): Promise<CoreEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-align-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const { app, faux } = await createHubTestApp({ dataDir, cwd: dataDir })
   const plugins = app.kernel.plugins
   return {
     dataDir,
@@ -221,9 +215,9 @@ async function makeCoreEnv(): Promise<CoreEnv> {
 interface TestEnv {
   dataDir: string
   dbPath: string
-  faux: ReturnType<typeof fauxProvider>
+  faux: FauxProviderHandle
   /** createHelm 返回的完整 app（真实组合入口产物）。 */
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: HubTestApp
   /** 每次模型请求的完整消息（faux 官方 TranscriptContext 捕获）。 */
   requests: Array<{ roles: string[]; systemSections: string[]; userTexts: string[]; assistantTexts: string[] }>
   /** 首次启动播种的初始 assistant 入口会话 ID（由 SDK root #1 承载，普通会话语义）。 */
@@ -239,16 +233,10 @@ async function makeEnv(): Promise<TestEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-core-e2e-'))
   const dbPath = join(dataDir, 'state.sqlite')
 
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
-
   // 真实组合入口：真 SQLite + 真 PluginHost + profile/memory + WorkflowService。
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
+  const { app, faux } = await createHubTestApp({
     dataDir,
     cwd: dataDir,
-    model: 'faux/faux-1',
-    models,
   })
 
   const requests: TestEnv['requests'] = []
@@ -550,10 +538,7 @@ test('集成2.5: createHelm 启动即同步 helm-cli 技能（受管覆盖），
     writeSkill(env.dataDir, 'user-skill', '---\nname: user-skill\ndescription: 用户自建\n---\n正文\n', { 'notes.md': '# 用户笔记\n' })
     await env.app.close()
 
-    const faux2 = fauxProvider()
-    const models2 = createModels()
-    models2.setProvider(faux2.provider)
-    const app2 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: env.dataDir, cwd: env.dataDir, model: 'faux/faux-1', models: models2 })
+    const { app: app2 } = await createHubTestApp({ dataDir: env.dataDir, cwd: env.dataDir })
     try {
       // 受管技能：篡改文件被覆盖回源码版本，缺失 reference 被补齐
       assert.equal(
@@ -953,13 +938,7 @@ test('集成5: 重启后播种会话与历史经真实 SQLite 保留，faux 续�
   const dir = mkdtempSync(join(tmpdir(), 'helm-core-e2e-'))
   const dbPath = join(dir, 'state.sqlite')
 
-  const build = async () => {
-    const faux = fauxProvider()
-    const models = createModels()
-    models.setProvider(faux.provider)
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
-    return { faux, app }
-  }
+  const build = () => createHubTestApp({ dataDir: dir, cwd: dir })
 
   const MARK = '重启前的关键结论-PERSIST-MARK'
   let seqAfterFirst = 0
@@ -1014,10 +993,7 @@ test('集成5: 重启后播种会话与历史经真实 SQLite 保留，faux 续�
 
 async function makeHttpEnv() {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-core-e2e-http-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const { app, faux } = await createHubTestApp({ dataDir, cwd: dataDir })
 
   // 播种入口会话 ID（首个 assistant 无父链会话；此环境内仍存在）
   const initialConv = app.kernel
@@ -1359,18 +1335,20 @@ test('集成7: CLI↔Hub 真实链路——setup 凭据落盘/status/conversatio
     const cliConvId = (JSON.parse(mkConv.out) as { id: number }).id
 
     // --- 子进程真 CLI 入口（异步 spawn；父进程事件循环保持响应，Hub 可答）：
-    //     setup 已完成，子进程经 cli-token 凭据访问同一真 Hub。
-    const childStatus = await runCliChildInEnv(['status', '--json'])
+    //     setup 已完成，子进程经 cli-token 凭据访问同一真 Hub（三条只读命令并发跑省去串行进程启动等待）。
+    const [childStatus, childGet, childAuth] = await Promise.all([
+      runCliChildInEnv(['status', '--json']),
+      runCliChildInEnv(['conversations', 'get', String(cliConvId), '--json']),
+      runCliChildInEnv(['conversations', 'list', '--json']),
+    ])
     assert.equal(childStatus.timedOut, false, '子进程 CLI 不得挂起')
     assert.equal(childStatus.code, 0, `子进程 status 失败：${childStatus.err}`)
     assert.equal(JSON.parse(childStatus.out).configured, true)
 
-    const childGet = await runCliChildInEnv(['conversations', 'get', String(cliConvId), '--json'])
     assert.equal(childGet.timedOut, false, '子进程 CLI 不得挂起')
     assert.equal(childGet.code, 0, `子进程 conversations get 失败：${childGet.err}`)
     assert.equal(JSON.parse(childGet.out).id, cliConvId)
 
-    const childAuth = await runCliChildInEnv(['conversations', 'list', '--json'])
     assert.equal(childAuth.timedOut, false)
     assert.equal(childAuth.code, 0, `子进程鉴权应经 cli-token 生效：${childAuth.err}`)
     assert.ok((JSON.parse(childAuth.out) as Array<{ id: number }>).some((c) => c.id === cliConvId))
@@ -2184,13 +2162,7 @@ test('对齐6: 双 Profile 独立 SYSTEM/MEMORY/模型，PATCH 切换与清覆�
     memory: 'CODER-MEM: 偏好测试',
   })
 
-  const build = async () => {
-    const faux = fauxProvider()
-    const models = createModels()
-    models.setProvider(faux.provider)
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
-    return { faux, app }
-  }
+  const build = () => createHubTestApp({ dataDir, cwd: dataDir })
 
   const requests: string[] = []
   const first = await build()

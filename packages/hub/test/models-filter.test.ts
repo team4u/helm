@@ -15,15 +15,14 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createHubTestApp, type HubTestApp } from './helpers/hub-test-env.js'
 
 interface Env {
   dataDir: string
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: HubTestApp
   hubUrl: string
   hubToken?: string
   close(): Promise<void>
@@ -32,11 +31,12 @@ interface Env {
 /** 双模型 faux provider：faux-1（默认启用）/ faux-2（禁用目标）；nested/model 验证含斜杠模型 id。 */
 async function makeEnv(): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-'))
-  const faux = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }, { id: 'nested/model' }] })
+  const { app, faux } = await createHubTestApp({
+    dataDir,
+    cwd: dataDir,
+    fauxOptions: { models: [{ id: 'faux-1' }, { id: 'faux-2' }, { id: 'nested/model' }] },
+  })
   faux.setResponses([fauxAssistantMessage('ok')])
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   const env: Env = {
     dataDir,
@@ -145,7 +145,7 @@ test('多 provider 禁用集互不干扰；缺省 provider PUT 清空全部', { 
   const models = createModels()
   models.setProvider(fauxA.provider)
   models.setProvider(fauxB.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, models })
+  const { app } = await createHubTestApp({ dataDir, cwd: dataDir, models })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   try {
     const env: Env = { dataDir, app, hubUrl: hub.url, async close() { await hub.close().catch(() => {}) } }
@@ -257,11 +257,12 @@ test('禁用模型后会话显式选用与提交输入被拒（409 model_disable
 
 test('禁用模型后原生 spawn 三条解析路径均在创建前拒绝（409 model_disabled），重新启用后恢复', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-spawn-'))
-  const faux = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
+  const { app, faux } = await createHubTestApp({
+    dataDir,
+    cwd: dataDir,
+    fauxOptions: { models: [{ id: 'faux-1' }, { id: 'faux-2' }] },
+  })
   faux.setResponses([fauxAssistantMessage('ok')])
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     const parent = app.kernel.listConversations().find((c) => c.profileId === 'assistant')
     assert.ok(parent)
@@ -306,11 +307,12 @@ test('禁用模型后原生 spawn 三条解析路径均在创建前拒绝（409 
 
 test('resume 既有子会话：绑定模型后来被禁用时 409 model_disabled 且不提交输入', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-resume-'))
-  const faux = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
+  const { app, faux } = await createHubTestApp({
+    dataDir,
+    cwd: dataDir,
+    fauxOptions: { models: [{ id: 'faux-1' }, { id: 'faux-2' }] },
+  })
   faux.setResponses([fauxAssistantMessage('ok')])
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     const parent = app.kernel.listConversations().find((c) => c.profileId === 'assistant')
     assert.ok(parent)
@@ -421,10 +423,11 @@ test('重启持久化：同一 dataDir 重新 createHelm 后禁用集仍生效',
   const freshDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-restart-'))
   try {
     writeFileSync(join(freshDir, 'config.json'), raw)
-    const faux = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
-    const models = createModels()
-    models.setProvider(faux.provider)
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: freshDir, cwd: freshDir, models })
+    const { app } = await createHubTestApp({
+      dataDir: freshDir,
+      cwd: freshDir,
+      fauxOptions: { models: [{ id: 'faux-1' }, { id: 'faux-2' }] },
+    })
     try {
       const catalog = await app.kernel.listModels()
       const entry = catalog.models.find((m) => m.provider === 'faux' && m.modelId === 'faux-2')
@@ -450,11 +453,8 @@ test('config.json.disabledModels 非法形状：启动显式 config_corrupt，�
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-corrupt-'))
   try {
     writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ disabledModels: { faux: 'not-an-array' } }))
-    const faux = fauxProvider()
-    const models = createModels()
-    models.setProvider(faux.provider)
     await assert.rejects(
-      () => createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, models }),
+      () => createHubTestApp({ dataDir, cwd: dataDir }),
       (err: unknown) => {
         assert.ok(err instanceof Error)
         assert.equal((err as { code?: string }).code, 'config_corrupt')

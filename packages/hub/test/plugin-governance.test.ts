@@ -23,11 +23,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-
 import { HelmError, type ConversationSummary, type Profile } from '@helm/protocol'
-import { createHelm } from '../src/app.js'
 import { PluginHost } from '../../kernel/src/plugins/plugin-host.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import {
@@ -37,78 +33,26 @@ import {
 import { HelmPluginConfigStore } from '../../kernel/src/runtime/plugin-config-store.js'
 import {
   type PluginConfigStore,
-  type PluginDocStore,
   type PluginHostBackend,
 } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
+import {
+  createHubTestApp,
+  makeConversationSummary,
+  MemoryConfigStore,
+  MemoryDocStore,
+} from './helpers/hub-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
 
-function makeModels() {
-  const models = createModels()
-  models.setProvider(fauxProvider().provider)
-  return models
-}
-
 async function createApp(dataDir: string) {
-  return createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+  return (await createHubTestApp({ dataDir, cwd: dataDir })).app
 }
 
 function makeConversation(id: number, model = ''): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model,
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }
-}
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
-/** 内存配置 store：支持 null 删除语义（与 HelmPluginConfigStore 契约一致）。 */
-class MemoryConfigStore implements PluginConfigStore {
-  store = new Map<string, Record<string, unknown>>()
-  get(pluginId: string): Record<string, unknown> {
-    return { ...(this.store.get(pluginId) ?? {}) }
-  }
-  set(pluginId: string, value: Record<string, unknown>): void {
-    const current = this.store.get(pluginId) ?? {}
-    const next = { ...current }
-    for (const [key, v] of Object.entries(value)) {
-      if (v === null) delete next[key]
-      else next[key] = v
-    }
-    if (Object.keys(next).length === 0) this.store.delete(pluginId)
-    else this.store.set(pluginId, next)
-  }
+  return makeConversationSummary({ id, model })
 }
 
 interface HostFixture {

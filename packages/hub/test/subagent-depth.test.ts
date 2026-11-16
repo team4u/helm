@@ -23,10 +23,8 @@
  * 重启恢复），不 mock 引擎、不伪造拒绝结果。
  */
 
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError } from '@helm/protocol'
@@ -39,19 +37,7 @@ import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHelm } from '../src/app.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-
-interface FauxHandle {
-  setResponses(messages: unknown[]): void
-  getPendingResponseCount(): number
-  provider: { id: string }
-}
-
-function makeFauxModels(): { models: ReturnType<typeof createModels>; faux: FauxHandle } {
-  const models = createModels()
-  const faux = fauxProvider() as unknown as FauxHandle
-  models.setProvider(faux.provider as never)
-  return { models, faux }
-}
+import { makeFauxModels, type FauxProviderHandle } from './helpers/hub-test-env.js'
 
 let rootDir: string
 
@@ -103,7 +89,7 @@ function registryEntry(dataDir: string, conversationId: number): Record<string, 
  */
 async function spawnChain(
   app: Awaited<ReturnType<typeof createHelm>>,
-  faux: FauxHandle,
+  faux: FauxProviderHandle,
   parents: number[],
 ): Promise<number[]> {
   const created: number[] = []

@@ -17,43 +17,33 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { Harness } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { HelmError } from '@helm/protocol'
-import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { openHubTestEnv, type FauxProviderHandle, type HubTestApp } from './helpers/hub-test-env.js'
 
 interface Env {
   dataDir: string
-  faux: ReturnType<typeof fauxProvider>
-  app: Awaited<ReturnType<typeof createHelm>>
+  faux: FauxProviderHandle
+  app: HubTestApp
   hubUrl: string
   hubToken?: string
   close(): Promise<void>
 }
 
 async function makeEnv(): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ctx-ops-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
-  const hub = await startHub({ kernel: app.kernel, port: 0 })
+  const base = await openHubTestEnv({ prefix: 'helm-ctx-ops-', swallowCloseError: true })
+  const hub = await startHub({ kernel: base.kernel, port: 0 })
   return {
-    dataDir,
-    faux,
-    app,
+    dataDir: base.dataDir,
+    faux: base.faux,
+    app: base.app,
     hubUrl: hub.url,
     async close() {
       await hub.close().catch(() => {})
-      await app.close().catch(() => {})
-      rmSync(dataDir, { recursive: true, force: true })
+      await base.close()
     },
   }
 }

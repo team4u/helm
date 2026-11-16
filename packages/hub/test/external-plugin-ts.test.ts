@@ -34,30 +34,21 @@ import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-
 import { HelmError as HostHelmError } from '@helm/protocol'
-import { createHelm } from '../src/app.js'
+import { createPluginBuildProvider } from '@helm/plugin-build'
 import { loadExternalPlugins } from '../../kernel/src/plugins/external-loader.js'
 import { registerPluginTsRoot } from '../../kernel/src/plugins/backend-ts-loader.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createHubTestApp } from './helpers/hub-test-env.js'
 
 /** 测试进程全局侧表（插件模块级初始化计数 / 越根执行哨兵）的类型安全访问。 */
 function globalFlag(name: string): unknown {
   return (globalThis as Record<string, unknown>)[name]
 }
 
-function makeModels() {
-  const models = createModels()
-  models.setProvider(fauxProvider().provider)
-  return models
-}
-
 async function createApp(dataDir: string) {
   // 注：watchdogIntervalMs 选项已随内核定时巡检移交 builtin:superagent 移除；
   // 组合层 createHelm 默认启用 superagent=false，无定时任务需要关闭。
-  return createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+  return (await createHubTestApp({ dataDir, cwd: dataDir })).app
 }
 
 /** 本加载器源码路径（纯 node 子进程直接加载：仅用可擦除语法，原生 strip-types 可读）。 */

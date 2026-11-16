@@ -1,21 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createModels } from '@earendil-works/pi-ai/models';
-import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { getCurrentTools, getCurrentSystemPrompt } from '@earendil-works/pi-ai/utils/transcript';
-import { createHelm } from '../src/app.js';
-import { createPluginBuildProvider } from '@helm/plugin-build';
+import { openHubTestEnv } from './helpers/hub-test-env.js';
 
 async function openFixture() {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-runtime-boundary-'));
-  const models = createModels();
-  const faux = fauxProvider();
-  models.setProvider(faux.provider);
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, models, model: 'faux/faux-1' });
-  return { app, faux, dataDir, async close() { await app.close(); await rm(dataDir, { recursive: true, force: true }); } };
+  return openHubTestEnv({ prefix: 'helm-runtime-boundary-' });
 }
 
 function collectStrings(value: unknown): string[] {
