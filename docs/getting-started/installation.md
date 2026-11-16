@@ -14,7 +14,7 @@
 当前未发布安装制品，以下流程即源代码模式安装：所有命令直接从仓库运行。
 
 ```bash
-git clone <仓库地址> && cd helm
+git clone https://github.com/team4u/helm.git && cd helm
 pnpm install
 pnpm build
 ```

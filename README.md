@@ -114,8 +114,8 @@ Helm 采用微内核设计，所有扩展能力均由插件提供。停用插件
 前置条件：Node.js `>= 24.12.0`、pnpm 12.x、Git；Linux / macOS / WSL2。数据目录固定 `~/.helm`（可用 `HELM_DATA_DIR` 覆盖），与旧系统数据完全隔离。
 
 ```bash
-# 1. 获取源码并安装依赖（替换为你的仓库地址）
-git clone <仓库地址> && cd helm
+# 1. 获取源码并安装依赖
+git clone https://github.com/team4u/helm.git && cd helm
 pnpm install
 pnpm build
 
