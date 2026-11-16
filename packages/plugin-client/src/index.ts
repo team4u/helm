@@ -1,18 +1,22 @@
 /**
- * @helm/plugin-client 公共 SDK 入口。
+ * Public SDK entry of @helm/plugin-client.
  *
- * 两个消费方共享同一模块实例（绝不打包第二份 React）：
- * 1. 宿主（@helm/web）：import 本包使用共享原语 / context / hooks，并在
- *    HelmStoreProvider 挂载 __helm_shared_plugin_client = 本模块命名空间；
- * 2. 插件编译产物：源码里 `import { ... } from '@helm/plugin-client'`，编译器
- *    把该说明符虚拟化为 globalThis.__helm_shared_plugin_client。
+ * Two consumers share the same module instance (never a second React bundle):
+ * 1. the host (@helm/web): imports this package for shared primitives /
+ *    context / hooks, and mounts __helm_shared_plugin_client = this module
+ *    namespace inside HelmStoreProvider;
+ * 2. plugin build artifacts: source code uses
+ *    `import { ... } from '@helm/plugin-client'`; the compiler virtualizes
+ *    that specifier into globalThis.__helm_shared_plugin_client.
  *
- * 插件面向运行时符号唯一真源见 @helm/protocol 的 PLUGIN_CLIENT_SHARED_EXPORTS
- * （services.test / 本包 test 双向锁定）；宿主面向符号（宿主端口、上下文工厂、
- * 显式寻址 hooks）仅供宿主与测试消费，不属于插件契约清单。
+ * The single source of truth of plugin-facing runtime symbols is
+ * PLUGIN_CLIENT_SHARED_EXPORTS in @helm/protocol (bi-directionally locked by
+ * services.test / this package's tests); host-facing symbols (host port,
+ * context factory, explicitly-addressing hooks) are consumed only by the host
+ * and tests, and are not part of the plugin contract list.
  */
 
-// ---- 宿主端口（注入面） ----
+// ---- Host port (injection surface) ----
 export { PluginClientHostContext, usePluginClientHost } from './host-port.js'
 export type {
   PluginClientHostPort,
@@ -21,17 +25,30 @@ export type {
   PluginSlotPortItem,
 } from './host-port.js'
 
-// ---- 插件上下文（usePluginContext）与工厂 ----
+// ---- Plugin context (usePluginContext) and factory ----
 export { PluginClientContext, createPluginClientContext, usePluginContext } from './plugin-context.js'
 
-// ---- hooks：文档订阅 / 会话 / 插件清单 / 工具活动 ----
+// ---- i18n: locale & translation (plugin-consumable hooks + locale essentials) ----
+export { usePluginLocale, usePluginTranslator } from './i18n.js'
+export {
+  HELM_LOCALES,
+  DEFAULT_HELM_LOCALE,
+  isHelmLocale,
+  normalizeLocaleTag,
+  parseLocalizedText,
+  resolveLocalizedText,
+  createLocaleTranslator,
+} from './i18n.js'
+export type { HelmLocale, LocalizedText, ExecutionText, LocaleTranslator } from './i18n.js'
+
+// ---- hooks: doc subscriptions / conversations / plugin list / tool activity ----
 export { usePluginDoc, usePluginDocValue, usePluginSessionDoc, usePluginSessionDocState, usePluginSessionDocValue } from './docs.js'
 export type { ConversationHookResult } from './conversation-hooks.js'
 export { useConversation, useConversations, usePlugins } from './conversation-hooks.js'
 export { ToolActivityContext, useToolActivity } from './tool-activity.js'
 export type { ToolActivityRegistry } from './tool-activity.js'
 
-// ---- 无障碍底座组件（Radix 封装） ----
+// ---- Accessibility base components (Radix wrappers) ----
 export { Switch } from './ui/Switch.js'
 export type { SwitchProps } from './ui/Switch.js'
 export { Checkbox } from './ui/Checkbox.js'
@@ -49,13 +66,13 @@ export { OverlayLayerContext, useOverlayChildStyle, useOverlayLayer } from './ui
 export type { OverlayLayer } from './ui/overlay-stack.js'
 export { ViewBoundary } from './ui/ViewBoundary.js'
 
-// ---- 轻量布局原语与提示 ----
+// ---- Lightweight layout primitives and hints ----
 export { Screen, ScreenSection, DataTable, KvGrid } from './primitives.js'
 export type { ScreenProps, ScreenSectionProps, DataTableProps, KvGridProps } from './primitives.js'
 export { Callout } from './callout.js'
 export type { CalloutProps } from './callout.js'
 
-// ---- 内容展示 ----
+// ---- Content display ----
 export { MarkdownText } from './markdown.js'
 export { MarkdownView, CodeBlockView } from './markdown-host.js'
 export type { MarkdownViewProps, CodeBlockViewProps } from './markdown-host.js'
@@ -63,11 +80,11 @@ export { CopyButton } from './copy-button.js'
 export { parseArtifactUrl, markdownUrlTransform } from './artifact-url.js'
 export { copyToClipboard } from './clipboard.js'
 
-// ---- 插件间子插槽 ----
+// ---- Inter-plugin sub-slots ----
 export { PluginSlot } from './plugin-slot.js'
 export type { PluginSlotProps } from './plugin-slot.js'
 
-// ---- 图标与格式化纯函数 ----
+// ---- Icons and formatting pure functions ----
 export { HelmIcon } from './icons.js'
 export type { HelmIconName, HelmIconProps } from './icons.js'
 export { formatTime, formatCompactTimestamp, formatDurationMs, formatBytes } from './format.js'

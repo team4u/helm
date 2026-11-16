@@ -156,6 +156,8 @@ function makeRecordingCtx(actionResults: Record<string, unknown>): RecordingCtx 
     getPluginDoc: async () => undefined,
     getPluginSessionDoc: async () => undefined,
     theme: 'dark',
+    locale: 'en' as const,
+    translate: (text) => (typeof text === 'string' ? text : ''),
     calls,
     notices,
     screenTargets,

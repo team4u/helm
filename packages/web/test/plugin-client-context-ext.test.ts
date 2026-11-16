@@ -108,7 +108,7 @@ test('callAction 第三参：跨插件寻址与显式会话', { timeout: 60_000 
   await ctx.callAction('ping', {}, { pluginId: 'other:plugin', conversationId: 12 })
   assert.deepEqual(calls[1], { pluginId: 'other:plugin', actionId: 'ping', input: {}, conversationId: 12 }, '显式跨插件 + 会话覆写')
   // 非法会话 ID 显式抛错（同步校验 reject）
-  await assert.rejects(async () => ctx.callAction('ping', {}, { conversationId: -3 }), /正整数/)
+  await assert.rejects(async () => ctx.callAction('ping', {}, { conversationId: -3 }), /must be a positive integer/)
 })
 
 test('submitInput：真实 conversationsApi（origin agent）；无会话显式 reject', { timeout: 60_000 }, async (t) => {
@@ -133,7 +133,7 @@ test('submitInput：真实 conversationsApi（origin agent）；无会话显式 
 
   // 无会话上下文且未显式指定：显式 reject（不静默降级）
   const ctxNone = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', undefined)
-  await assert.rejects(() => ctxNone.submitInput('x'), /无目标会话/)
+  await assert.rejects(() => ctxNone.submitInput('x'), /submitInput has no target conversation/)
 })
 
 test('getPluginDoc/getPluginSessionDoc：第二参与会话路径（真实 pluginsApi fetch）', { timeout: 60_000 }, async (t) => {
@@ -163,7 +163,7 @@ test('getPluginDoc/getPluginSessionDoc：第二参与会话路径（真实 plugi
   assert.deepEqual(sv, { v: 1 })
 
   const ctxNone = createPluginClientContext(createPluginClientHostPort(realStore), 'test:plugin', undefined)
-  await assert.rejects(() => ctxNone.getPluginSessionDoc('runs'), /无目标会话/)
+  await assert.rejects(() => ctxNone.getPluginSessionDoc('runs'), /getPluginSessionDoc has no target conversation/)
 })
 
 test('composer：仅显式提供时存在于 ctx；透传同一实例', { timeout: 60_000 }, () => {
@@ -180,4 +180,13 @@ test('composer：仅显式提供时存在于 ctx；透传同一实例', { timeou
   assert.equal(withComposer.composer, controller, '显式提供时透传同一实例')
   const without = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 1)
   assert.equal(without.composer, undefined, '未提供时省略键（非 undefined 赋值）')
+})
+
+test('locale/translate：基础适配器未注入 locale 时上下文回退默认 en 并可解析显示文案', { timeout: 60_000 }, () => {
+  const store = makeTestStore()
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 1)
+  assert.equal(ctx.locale, 'en', '基础端口未带 locale：回退 DEFAULT_HELM_LOCALE')
+  assert.equal(ctx.translate('plain'), 'plain')
+  assert.equal(ctx.translate({ en: 'Hi', 'zh-CN': '你好' }), 'Hi')
+  assert.equal(ctx.translate({ 'zh-CN': '你好' }), '你好', '仅声明项时按声明序回退')
 })

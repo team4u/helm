@@ -1,16 +1,22 @@
 /**
- * 主题与后台浏览器通知的响应式状态管理 hook。
- * 底层纯存储与系统主题解析由 theme-preferences.ts 提供。
+ * Reactive state hooks for theme, background browser notifications and the UI
+ * locale. Backing storage and system theme resolution live in
+ * theme-preferences.ts; locale normalization lives in @helm/protocol
+ * (normalizeLocaleTag).
  */
 import { useCallback, useEffect, useState } from 'react'
+import type { HelmLocale } from '@helm/protocol/browser'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
 import {
+  applyDocumentLocale,
   applyDocumentTheme,
   getStoredPreference,
   getStoredQuietNotify,
   nextThemePreference,
+  persistLocale,
   persistQuietNotify,
   persistThemePreference,
+  resolveInitialLocale,
   resolveTheme,
 } from './theme-preferences.js'
 import type { ThemeMode, ThemePreference, ToastNotice } from './types.js'
@@ -19,10 +25,13 @@ export interface UseThemePreferencesResult {
   theme: ThemeMode
   themePreference: ThemePreference
   quietNotifyEnabled: boolean
+  /** Current UI locale (persisted preference; browser-derived default zh-* -> zh-CN, others -> en). */
+  locale: HelmLocale
   setTheme: (next: ThemeMode) => void
   setThemePreference: (pref: ThemePreference) => void
   toggleTheme: () => void
   setQuietNotify: (on: boolean) => Promise<void>
+  setLocale: (next: HelmLocale) => void
 }
 
 export function useThemePreferences(
@@ -31,6 +40,9 @@ export function useThemePreferences(
   const [themePreference, setThemePreferenceState] = useState<ThemePreference>(getStoredPreference)
   const [theme, setThemeState] = useState<ThemeMode>(() => resolveTheme(getStoredPreference()))
   const [quietNotifyEnabled, setQuietNotifyEnabledState] = useState<boolean>(getStoredQuietNotify)
+  // Persisted locale preference wins over the browser-derived default; the
+  // state initializer is deliberately lazy so SSR/hydration reads storage once.
+  const [locale, setLocaleState] = useState<HelmLocale>(() => resolveInitialLocale())
 
   const setThemePreference = useCallback((pref: ThemePreference) => {
     setThemePreferenceState(pref)
@@ -53,7 +65,17 @@ export function useThemePreferences(
     })
   }, [])
 
-  /** 开启前先请求浏览器通知权限（用户手势内）：被拒不启用并明确提示，绝不静默装作已开启。 */
+  const setLocale = useCallback((next: HelmLocale) => {
+    setLocaleState(next)
+    persistLocale(next)
+  }, [])
+
+  // Keep <html lang> in sync with the effective locale (covers the initial mount too).
+  useEffect(() => {
+    applyDocumentLocale(locale)
+  }, [locale])
+
+  /** Requests browser notification permission before enabling (inside the user gesture): refused -> not enabled, explicit notice, never silently pretending it is on. */
   const setQuietNotify = useCallback(
     async (on: boolean) => {
       if (!on) {
@@ -104,9 +126,11 @@ export function useThemePreferences(
     theme,
     themePreference,
     quietNotifyEnabled,
+    locale,
     setTheme,
     setThemePreference,
     toggleTheme,
     setQuietNotify,
+    setLocale,
   }
 }

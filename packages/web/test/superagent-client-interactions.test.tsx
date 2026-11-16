@@ -91,6 +91,8 @@ function makeSpyCtx(overrides: Partial<SpyCtx> = {}): SpyCtx {
     getPluginSessionDoc: async () => undefined,
     conversationId: 1,
     theme: 'dark',
+    locale: 'en' as const,
+    translate: (text) => (typeof text === 'string' ? text : ''),
   }
   return Object.assign(base, { screenCalls, splitCalls, actionCalls, artifactCalls, notifyCalls, ...overrides })
 }

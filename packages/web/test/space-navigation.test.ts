@@ -17,13 +17,18 @@ import {
 import {
   getStoredPreference,
   getStoredQuietNotify,
+  getStoredLocale,
   getSystemTheme,
   nextThemePreference,
   persistQuietNotify,
   persistThemePreference,
+  persistLocale,
   QUIET_NOTIFY_STORAGE_KEY,
+  resolveBrowserLocale,
+  resolveInitialLocale,
   resolveTheme,
   THEME_STORAGE_KEY,
+  LOCALE_STORAGE_KEY,
 } from '../src/lib/theme-preferences.js'
 import { groupUiContributions, type ResolvedTarget } from '../src/lib/types.js'
 
@@ -364,4 +369,48 @@ test('theme-preferences：安静通知开关读写与存储异常安全兜底', 
   assert.equal(getStoredQuietNotify(brokenStorage), false)
   assert.doesNotThrow(() => persistThemePreference('dark', brokenStorage))
   assert.doesNotThrow(() => persistQuietNotify(true, brokenStorage))
+})
+
+test('theme-preferences：界面语言偏好读写、浏览器默认解析与初始 locale 解析', { timeout: 60_000 }, () => {
+  const storage = createMemoryStorage()
+  // 未存偏好：undefined（调用方回退浏览器默认）
+  assert.equal(getStoredLocale(storage), undefined)
+
+  persistLocale('zh-CN', storage)
+  assert.equal(storage.getItem(LOCALE_STORAGE_KEY), 'zh-CN')
+  assert.equal(getStoredLocale(storage), 'zh-CN')
+
+  persistLocale('en', storage)
+  assert.equal(getStoredLocale(storage), 'en')
+
+  // 存量值经 normalizeLocaleTag 归一：zh-* -> zh-CN，非法/未支持 -> en
+  storage.setItem(LOCALE_STORAGE_KEY, 'zh-TW')
+  assert.equal(getStoredLocale(storage), 'zh-CN')
+  storage.setItem(LOCALE_STORAGE_KEY, 'fr')
+  assert.equal(getStoredLocale(storage), 'en')
+  storage.setItem(LOCALE_STORAGE_KEY, 'garbage')
+  assert.equal(getStoredLocale(storage), 'en')
+
+  // 浏览器语言列表：首个可用 tag 归一（zh-* -> zh-CN，其余 -> en）
+  assert.equal(resolveBrowserLocale(['zh-TW', 'en-US']), 'zh-CN')
+  assert.equal(resolveBrowserLocale(['zh']), 'zh-CN')
+  assert.equal(resolveBrowserLocale(['en-GB', 'zh-CN']), 'en')
+  assert.equal(resolveBrowserLocale(['fr-FR']), 'en')
+  assert.equal(resolveBrowserLocale([]), 'en')
+
+  // 初始 locale：持久化偏好优先，缺省走浏览器默认
+  assert.equal(resolveInitialLocale(storage, ['en-US']), 'en')
+  persistLocale('zh-CN', storage)
+  assert.equal(resolveInitialLocale(storage, ['en-US']), 'zh-CN')
+  assert.equal(resolveInitialLocale(createMemoryStorage(), ['zh-Hant']), 'zh-CN')
+  assert.equal(resolveInitialLocale(createMemoryStorage(), ['ja-JP']), 'en')
+
+  // 存储异常安全：读取回退 undefined，写入不抛
+  const brokenStorage = {
+    getItem() { throw new Error('quota/security error') },
+    setItem() { throw new Error('quota/security error') },
+    removeItem() { throw new Error('quota/security error') },
+  }
+  assert.equal(getStoredLocale(brokenStorage), undefined)
+  assert.doesNotThrow(() => persistLocale('zh-CN', brokenStorage))
 })

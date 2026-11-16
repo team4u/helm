@@ -441,6 +441,8 @@ const stubCtx: PluginClientContextType = {
   getPluginDoc: async () => undefined,
   conversationId: 1,
   theme: 'dark',
+  locale: 'en' as const,
+  translate: (text) => (typeof text === 'string' ? text : ''),
 }
 
 /** 渲染 WorkflowToolView：docValue 提供 runs 文档（可携带 conversations 桩）。 */

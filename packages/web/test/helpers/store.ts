@@ -20,6 +20,7 @@ export function makeTestStore(overrides: Partial<HelmStoreValue> = {}): HelmStor
   const store: HelmStoreValue = {
     authReady: true, authConfigured: true, authenticated: true, authError: null,
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark', themePreference: 'system',
+    locale: 'en',
     quietNotifyEnabled: false,
     conversations: [], conversationDetails: {}, conversationLives: {}, conversationArtifacts: {},
     pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [],
@@ -27,7 +28,7 @@ export function makeTestStore(overrides: Partial<HelmStoreValue> = {}): HelmStor
     providers: [], credentials: [], skills: [], actions: [],
     primaryTarget: { kind: 'conversation', conversationId: 1 }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: [],
-    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
+    setTheme: noop, setThemePreference: noop, toggleTheme: noop, setLocale: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
     onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, syncPlugins: noop, refreshNodes: asyncNoop,
     loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop, backfillConversationEntry: noop, loadConversationArtifacts: asyncNoop,
     ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,

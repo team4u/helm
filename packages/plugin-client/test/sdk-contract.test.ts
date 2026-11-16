@@ -16,11 +16,9 @@
  * 5. MarkdownView / CodeBlockView port delegation: renders the host-injected
  *    implementations.
  *
- * Note: error-message regexes below that pin `usePluginClientHost …` /
- * `submitInput …` / `getPluginSessionDoc …` intentionally keep the exact
- * Chinese texts thrown by host-port.ts / plugin-context.ts — those files are
- * outside the SDK anglicization scope, so the assertions must keep matching
- * them verbatim.
+ * Note: error-message regexes below pin the exact English messages thrown by
+ * host-port.ts / plugin-context.ts so that explicit failure behavior remains
+ * covered.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -28,7 +26,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helm/protocol'
+import { PLUGIN_CLIENT_SHARED_EXPORTS, resolveLocalizedText } from '@helm/protocol'
 import * as SDK from '../src/index.js'
 
 const e = React.createElement
@@ -89,6 +87,8 @@ function makePort(log: PortLog, overrides: Partial<SDK.PluginClientHostPort> = {
   return {
     authenticated: true,
     theme: 'dark',
+    locale: 'zh-CN',
+    translate: (text) => resolveLocalizedText(text, 'zh-CN'),
     conversations: [{ id: 7, title: 'c7', tags: [], profileId: 'p' } as unknown as SDK.PluginClientHostPort['conversations'][number]],
     conversationDetails: {},
     conversationLives: {},
@@ -267,7 +267,7 @@ test('hooks throw explicitly without a host port (never silently degraded)', { t
   // anglicization scope — the regex must keep matching it verbatim.
   assert.throws(
     () => renderToString(e(Probe)),
-    /usePluginClientHost 必须在 <PluginClientHostContext.Provider> 内调用/,
+    /usePluginClientHost must be called inside <PluginClientHostContext.Provider>/,
     'useConversations throws explicitly when the port is missing',
   )
 })
@@ -283,6 +283,10 @@ test('createPluginClientContext: actions / input / navigation / notifications / 
   assert.equal(ctx.pluginId, 'p1')
   assert.equal(ctx.conversationId, 7)
   assert.equal(ctx.theme, 'dark')
+  assert.equal(ctx.locale, 'zh-CN', 'locale is injected by the port')
+  assert.equal(ctx.translate('plain'), 'plain', 'translator passes plain strings through')
+  assert.equal(ctx.translate({ en: 'Hi', 'zh-CN': '你好' }), '你好', 'translator resolves display text for the current locale')
+  assert.equal(ctx.translate({ en: 'Hi' }), 'Hi', 'translator falls back to the default locale when the current locale is missing')
   assert.ok(ctx.composer !== undefined, 'an explicitly provided composer is passed through')
 
   await ctx.callAction('reload', { x: 1 })
@@ -327,19 +331,61 @@ test('createPluginClientContext: submitInput without conversation context reject
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
   const ctx = SDK.createPluginClientContext(port, 'p1', undefined)
-  // The pinned messages below are thrown by plugin-context.ts, which is
-  // outside the SDK anglicization scope — the regexes must keep matching them
-  // verbatim.
-  await assert.rejects(() => ctx.submitInput('x'), /submitInput 无目标会话/, 'without a conversation, never drop silently')
-  assert.throws(() => { void ctx.callAction('a', 1, { conversationId: 0 }) }, /正整数/, 'invalid conversation ID rejected synchronously')
-  await assert.rejects(() => ctx.getPluginSessionDoc('runs'), /getPluginSessionDoc 无目标会话/)
+  // The host and context implementations reject these cases explicitly.
+  await assert.rejects(() => ctx.submitInput('x'), /submitInput has no target conversation/, 'without a conversation, never drop silently')
+  assert.throws(() => { void ctx.callAction('a', 1, { conversationId: 0 }) }, /must be a positive integer/, 'invalid conversation ID rejected synchronously')
+  await assert.rejects(() => ctx.getPluginSessionDoc('runs'), /getPluginSessionDoc has no target conversation/)
 })
 
 // ---------------------------------------------------------------------------
 // 4. PluginSlot port contract
 // ---------------------------------------------------------------------------
 
-test('PluginSlot: short name qualifies, list renders all matches, single renders the first, fallback when empty, warning without owner', { timeout: 60_000 }, () => {
+test('createPluginClientContext: missing port locale falls back to the default locale and derives a translator', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const port = makePort(log)
+  delete port.locale
+  delete port.translate
+  const ctx = SDK.createPluginClientContext(port, 'p1', 7)
+  assert.equal(ctx.locale, 'en', 'missing port locale falls back to DEFAULT_HELM_LOCALE')
+  assert.equal(ctx.translate({ en: 'Hi', 'zh-CN': '你好' }), 'Hi', 'derived translator resolves using the fallback locale')
+  assert.equal(ctx.translate({ 'zh-CN': '你好' }), '你好', 'derived translator falls back to the only declared locale')
+})
+
+test('usePluginLocale / usePluginTranslator: context takes precedence over port, then default', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const port = makePort(log)
+  const seen: Array<{ locale: string; translated: string }> = []
+
+  function CtxProbe(): React.ReactNode {
+    const translator = SDK.usePluginTranslator()
+    seen.push({ locale: String(SDK.usePluginLocale()), translated: translator({ en: 'Hi', 'zh-CN': '你好' }) })
+    return e('div', null, 'probe')
+  }
+  function PortProbe(): React.ReactNode {
+    const translator = SDK.usePluginTranslator()
+    seen.push({ locale: String(SDK.usePluginLocale()), translated: translator({ en: 'Hi', 'zh-CN': '你好' }) })
+    return e('div', null, 'probe')
+  }
+  function BareProbe(): React.ReactNode {
+    seen.push({ locale: String(SDK.usePluginLocale()), translated: SDK.usePluginTranslator()('plain') })
+    return e('div', null, 'probe')
+  }
+
+  mount(
+    e(SDK.PluginClientHostContext.Provider, { value: port },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, 'p1', 7) }, e(CtxProbe)),
+      e(PortProbe)),
+  )
+  mount(e(BareProbe))
+  assert.deepEqual(seen, [
+    { locale: 'zh-CN', translated: '你好' }, // context wins
+    { locale: 'zh-CN', translated: '你好' }, // host port fallback
+    { locale: 'en', translated: 'plain' },   // neither provider: default locale
+  ])
+})
+
+test('PluginSlot: short names qualify, lists render all matches, singles render the first, fallbacks render when empty, and missing owners warn', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
   const tree = (name: string, extra: Record<string, unknown> = {}, fallback?: React.ReactNode) =>
