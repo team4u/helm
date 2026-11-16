@@ -1,32 +1,32 @@
 /**
- * Herdr 执行行：两步建窗 -> agent.start -> 就绪等待 -> prompt --wait ->
- * blocked 审批桥 -> 文件交接（含一次自愈）-> gate -> 双轨保活清理。
+ * Herdr execution line: two-step pane creation -> agent.start -> readiness wait -> prompt --wait ->
+ * blocked approval bridge -> file handoff (with one self-heal) -> gate -> dual-track keepalive cleanup.
  *
- * 诚实性纪律（不静默降级）：
- * - 文件缺失/坏 JSON/schema 不合格仅在自愈一次后显式 herdr_output_contract_violation
- *   （附 agent.read recent_unwrapped 40 行脱敏快照），绝不截终端脏文本冒充结果；
- * - transport IO/SSH/权限错误如实抛诊断（herdr_output_missing 404 是唯一可自愈
- *   边界码），绝不把其它错误当缺文件重投任务；
- * - 真实启动序列（服务端实测）：agent.start 返回 agent_status=unknown +
- *   launch_pending=true + seq=0；必须 agent.wait(until idle/blocked) 等权威
- *   就绪后再 prompt，不得把 unknown 当终态失败，也不得提前 prompt。
+ * Honesty discipline (no silent degradation):
+ * - Missing file / bad JSON / schema violation: after exactly one self-heal attempt, raise herdr_output_contract_violation
+ *   (with the agent.read recent_unwrapped 40-line redacted snapshot); never pass off dirty terminal text as the result;
+ * - transport IO/SSH/permission errors throw diagnostics as-is (herdr_output_missing 404 is the only self-healable
+ *   boundary code); never re-dispatch the task treating other errors as a missing file;
+ * - Real startup sequence (measured against the server): agent.start returns agent_status=unknown +
+ *   launch_pending=true + seq=0; must agent.wait(until idle/blocked) for authoritative
+ *   readiness before prompting; never treat unknown as terminal failure, never prompt early.
  *
- * 并发纪律（abort 双路径）：
- * - driveTask 的 request.signal 触发 abortCleanup（销单 Ask + 关自有 PTY），
- *   与 workflow settle / turn settle 的 closePane 可能同时到达：closePane 按
- *   pane 单飞（activeCloses promise 复用），settled 幂等（二次清理直接返回），
- *   关闭中不再把 registry 改回 running；
- * - 成功/失败路径必须 removeEventListener 释放 abort 监听器；
- * - 所有长 RPC 携带 request.signal。
+ * Concurrency discipline (dual abort paths):
+ * - driveTask's request.signal triggers abortCleanup (cancel the Ask + close own PTY),
+ *   which can race with closePane from workflow settle / turn settle: closePane is
+ *   single-flight per pane (activeCloses promise reuse), settled is idempotent (a second cleanup just returns),
+ *   and the registry is never flipped back to running while a close is in flight;
+ * - success/failure paths must removeEventListener to release the abort listener;
+ * - all long-running RPCs carry request.signal.
  *
- * 超时安全边界（TimeoutError 中止，区别于普通 AbortError 取消）：
- * - 无安全 stop/CAS 手段停止底层 CLI——超时只保存诊断并保留 pane（标 failed，
- *   不关窗、不发键），绝不把保留 pane 包装成可无条件续接；
- * - 后续 resume 在任何 prompt 发送前经 assertResumeAgentConfirmed 权威确认：
- *   仅 idle/done 可续接；working/blocked/unknown/无法确认一律显式拒绝
- *   （不新建、不按键中止）；启动期超时（agent.start 完成与否不确定）同样
- *   先安全确认，绝不盲目重发 agent.start；
- * - 普通 AbortError 取消仍按现状关闭自有 pane（已授权路径不变）。
+ * Timeout safety boundary (TimeoutError aborts, distinct from plain AbortError cancellation):
+ * - There is no safe stop/CAS means to stop the underlying CLI -- on timeout we only save diagnostics and keep the pane (mark failed,
+ *   no window close, no keystrokes), never dressing a kept pane up as unconditionally resumable;
+ * - a later resume passes assertResumeAgentConfirmed for authoritative confirmation before any prompt is sent:
+ *   only idle/done may resume; working/blocked/unknown/unconfirmable are explicitly rejected
+ *   (no new pane, no keystroke abort); a startup-phase timeout (agent.start completion uncertain) likewise
+ *   confirms safely first, never blindly re-sends agent.start;
+ * - plain AbortError cancellation still closes the own pane as today (the authorized path is unchanged).
  */
 
 import { setTimeout as delay } from 'node:timers/promises'
@@ -64,22 +64,22 @@ import {
 import { HERDR_STEER_CONTROLS } from './contracts.js'
 
 /**
- * 窗格环境里由基线权威固定的受管键（MANAGED_ENV_KEYS + 回连/节点身份）：
- * applyPaneSecrets 授予叠加后重申基线值，授予名不得劫持。
+ * Managed keys pinned authoritatively by the baseline in the pane env (MANAGED_ENV_KEYS + call-home/node identity):
+ * After applyPaneSecrets overlays grants, baseline values are re-asserted; grant names must not hijack them.
  */
 const PANE_MANAGED_LOCK_KEYS: readonly string[] = [...MANAGED_ENV_KEYS, 'HELM_HUB_URL', 'HELM_NODE_ID']
 
-/** 受管键大写集：授予值（secretNames 命中的 stash 键）的大小写变体同样不得劫持。 */
+/** Uppercased managed-key set: case variants of granted values (stash keys hit by secretNames) must not hijack either. */
 const PANE_MANAGED_LOCK_UPPER: ReadonlySet<string> = new Set(
   PANE_MANAGED_LOCK_KEYS.map((key) => key.toUpperCase()),
 )
 
 /**
- * 授予 env 与基线受管锁定合并（纯函数，applyPaneSecrets 唯一实现）：
- * - 授予值叠加到基线之上（同名覆盖）；
- * - 受管键（含大小写变体别名，如 helm_execution_scope / Helm_Cwd）一律剥除
- *   后重申基线 canonical 值——Windows env 名大小写不敏感，别名可在子进程
- *   读取时劫持回连/身份/作用域变量（与内核 buildManagedEnv 固定覆盖同构）。
+ * Merge granted env with the baseline managed lockdown (pure function, the single implementation behind applyPaneSecrets):
+ * - granted values overlay the baseline (same-name overwrites);
+ * - managed keys (including case-variant aliases like helm_execution_scope / Helm_Cwd) are stripped
+ *   then the baseline canonical value is re-asserted -- Windows env names are case-insensitive, aliases could
+ *   hijack call-home/identity/scope variables when read by the child process (isomorphic to the kernel's buildManagedEnv fixed override).
  */
 export function mergeGrantedEnvWithManagedLocks(
   baseline: Record<string, string>,
@@ -98,46 +98,46 @@ export function mergeGrantedEnvWithManagedLocks(
 }
 
 export interface ExecutorHost {
-  /** 父会话 cwd 解析（宿主 getConversation 桥；错误如实上抛）。 */
+  /** Parent-conversation cwd resolution (host getConversation bridge; errors propagate as-is). */
   parentCwdOf(parentConversationId: number): string | undefined
   /**
-   * 父会话绑定节点（宿主 getConversation(id).nodeId；undefined = 本机）。
-   * 子 spawn 未显式/Profile 指定节点时继承它（否则总落本机，远端父会话
-   * 的任务会被误发到 Hub 本机执行）。
+   * Node bound to the parent conversation (host getConversation(id).nodeId; undefined = local).
+   * Child spawns without an explicit/Profile node inherit it (otherwise they would always land locally; tasks of a remote parent
+   * conversation would be mis-dispatched to the Hub's local machine).
    */
   parentNodeIdOf(parentConversationId: number): string | undefined
-  /** AskDoc 目标会话（缺省父会话）。 */
+  /** AskDoc target conversation (defaults to the parent conversation). */
   askConversationId(parentConversationId: number): number
-  /** 非机密通知。 */
+  /** Non-secret notifications. */
   notify(title: string, body: string, level: 'info' | 'error'): void
-  /** agent.start 启动超时（config.startupTimeoutMs；3001..300000）。 */
+  /** agent.start startup timeout (config.startupTimeoutMs; 3001..300000). */
   startupTimeoutMs(): number
-  /** 宿主 createAsk（预分配 id；ask.id 形如 herdr:<nodeId>:<pane>:<seq>）。 */
+  /** Host createAsk (pre-allocated id; ask.id looks like herdr:<nodeId>:<pane>:<seq>). */
   createAsk(spec: CreateAskSpecLike): Promise<CreateAskResultLike>
-  /** 宿主 cancelAsk（404 = 已结算，调用方据此清条目；其余错误如实上抛）。 */
+  /** Host cancelAsk (404 = already settled, callers clear the entry on it; other errors propagate as-is). */
   cancelAsk(askId: string, reason: 'cancelled' | 'superseded'): Promise<void>
 }
 
 interface WindowPane {
   paneId: string
   tabId: string
-  /** 仅 worktree 模式（专属 workspace）；普通 tab 模式缺省（只关 tab）。 */
+  /** Worktree mode only (dedicated workspace); plain tab mode by default (close only the tab). */
   workspaceId?: string
   effectiveCwd: string
   worktree?: { path: string; branch?: string }
 }
 
-/** handle() 返回：handled 表示接管（result 为交接产物）；continue 放行内核默认。 */
+/** handle() return: handled means takeover (result is the handoff artifact); continue lets the kernel default through. */
 export type HandleOutcome = { action: 'handled'; result: unknown } | { action: 'continue' }
 
 /**
- * 受管任务生命周期阶段（显式跟踪）：仅 'task'（首轮提示已投递、等待结算）
- * 允许 steer；startup（建窗/agent 就绪等待）、handoff（交接文件读取与自愈）、
- * gate（验收）与任务结束（keepalive/failed/settled，无条目）一律拒绝。
+ * Managed-task lifecycle phases (explicitly tracked): only 'task' (first prompt delivered, awaiting settlement)
+ * allows steer; startup (pane creation/agent readiness wait), handoff (handoff file read & self-heal),
+ * gate (acceptance) and task end (keepalive/failed/settled, no entry) always reject.
  */
 type PaneTaskPhase = 'startup' | 'task' | 'handoff' | 'gate'
 
-/** steerPane 入参（与 plugins 包 ExternalSteerRequest 对齐；signal 为调用上下文取消）。 */
+/** steerPane input (aligned with the plugins package ExternalSteerRequest; signal is the calling context's cancellation). */
 export interface SteerPaneInput {
   workflowRunId: string
   parentConversationId: number
@@ -146,31 +146,31 @@ export interface SteerPaneInput {
 }
 
 export class HerdrExecutor {
-  /** pane scopeKey -> 进行中的 closePane promise（abort 双路径单飞）。 */
+  /** pane scopeKey -> in-flight closePane promise (single flight across the dual abort paths). */
   private readonly activeCloses = new Map<string, Promise<void>>()
 
   /**
-   * pane scopeKey -> 窗格环境基线（受管 HELM_* + Profile 合并，**不含任何 stash
-   * 机密**）。只留在内存；Gate/续接每次从基线出发，按当次请求 secretNames 从
-   * 当前 stash 重新授权取值——绝不缓存机密明文供后续子进程复用（TTL/回合
-   * 结束后不再注入旧值）。
+   * pane scopeKey -> pane env baseline (managed HELM_* + Profile merge, **contains no stash
+   * secrets**). Memory only; Gate/resume start from the baseline every time and re-authorize values
+   * from the current stash per request secretNames -- secret plaintext is never cached for reuse by later child
+   * processes (stale values are not injected after TTL/turn end).
    */
   private readonly paneEnvs = new Map<string, Record<string, string>>()
   private readonly blockedTasks = new Map<string, Promise<boolean>>()
   private readonly unstartedPanes = new Set<string>()
-  /** 在途受管任务的生命周期阶段与原始 spawn 请求（steer 门禁与尾读复核用）。 */
+  /** Lifecycle phase and original spawn request of in-flight managed tasks (for steer gating and tail-read recheck). */
   private readonly panePhases = new Map<string, PaneTaskPhase>()
   private readonly activeTasks = new Map<string, AgentSpawnRequest>()
-  /** 本机冻结连接目标（启用时注入）。 */
+  /** Frozen local connection target (injected at enable). */
   private readonly localTarget: HerdrTarget
 
-  /** 审批桥（blocked Ask 创建与终态消费；依赖经端口注入，见 approval-bridge.ts）。 */
+  /** Approval bridge (blocked Ask creation and terminal-state consumption; dependencies injected via ports, see approval-bridge.ts). */
   private readonly approvalBridge: ApprovalBridge
-  /** steer 投递与交接文件轮转（在途/不确定/作废登记归其自管，见 executor-steer.ts）。 */
+  /** steer delivery and handoff-file rotation (in-flight/uncertain/voided registries self-managed, see executor-steer.ts). */
   private readonly steerDispatcher: SteerDispatcher
-  /** 文件交接校验、原地追问自愈与 Gate（见 executor-handoff.ts）。 */
+  /** Handoff file validation, in-place follow-up self-heal and Gate (see executor-handoff.ts). */
   private readonly paneHandoff: PaneHandoff
-  /** resume 权威确认与路由恢复（见 executor-resume.ts）。 */
+  /** resume authoritative confirmation and routing recovery (see executor-resume.ts). */
   private readonly resumeCoordinator: ResumeCoordinator
 
   constructor(
@@ -181,7 +181,7 @@ export class HerdrExecutor {
     private readonly host: ExecutorHost,
     private readonly transport: NonNullable<HerdrPluginDependencies['transport']>,
     localTarget: HerdrTarget,
-    /** 轮询间隔（测试可缩短；生产缺省 100ms）。用于 waitInteractiveReady 与 AskDoc 存续复核。 */
+    /** Poll interval (shortened in tests; production default 100ms). Used by waitInteractiveReady and AskDoc liveness recheck. */
     private readonly pollIntervalMs = 100,
   ) {
     this.localTarget = localTarget
@@ -249,37 +249,37 @@ export class HerdrExecutor {
   }
 
   /**
-   * agent_spawn 拦截主流程。
-   * - resume：先按自有记录识别（agentId/paneId 双键），不依赖 request.agentType
-   *   （真实 standalone resume 无 agentId、workflow resume 无 agentType）；
-   * - 新建：resolveSpawnRouting 双入口解析，非 Herdr 目标放行；
-   * - 节点选定：显式 herdr:kind@node（含 @local） > Profile.runtime.nodeId >
-   *   Profile.nodeId > 父会话绑定节点 > 本机。'local' 显式覆盖远端父节点，
-   *   不折叠丢失；显式/Profile 指定与父节点不同时以更高优先级为准（合法切换）。
-   * - 附件：远端机器无可达 HELM_HUB_URL 时在建窗之前显式拒绝
-   *   （remote_hub_unreachable_for_artifacts，零远端副作用）；
-   * - gateTimeoutMs：仅对已识别为 Herdr 处理路径（herdr 运行时新建 / 已登记
-   *   resume）显式拒绝；原生 passthrough 不受影响。
+   * agent_spawn interception main flow.
+   * - resume: identified first via our own records (agentId/paneId dual keys), independent of request.agentType
+   *   (a real standalone resume has no agentId, a workflow resume has no agentType);
+   * - new spawn: resolveSpawnRouting resolves both entries, non-Herdr targets pass through;
+   * - node selection: explicit herdr:kind@node (incl. @local) > Profile.runtime.nodeId >
+   *   Profile.nodeId > parent conversation's bound node > local. An explicit 'local' overrides a remote parent node
+   *   without collapsing it away; when explicit/Profile differs from the parent node, the higher priority wins (a legal switch).
+   * - attachments: when the remote machine has no reachable HELM_HUB_URL, explicitly reject before creating any pane
+   *   (remote_hub_unreachable_for_artifacts, zero remote side effects);
+   * - gateTimeoutMs: explicitly rejected only once the request is identified as a Herdr-handled path (herdr-runtime new spawn / registered
+   *   resume); native passthrough is unaffected.
    */
   async handle(request: AgentSpawnRequest): Promise<HandleOutcome> {
     if (request.resume !== undefined) {
       const candidates = this.registry.findByResumeRef(request.resume)
       if (candidates.length === 0) {
-        // 非本插件记录：原生 resume（conversationId）交还内核——原生
-        // passthrough 不受 Herdr 的 gateTimeoutMs / fork 限制影响；显式 herdr
-        // 运行时的 resume 绝不静默新建续接窗格。
+        // Not recorded by this plugin: a native resume (conversationId) is handed back to the kernel -- native
+        // passthrough is unaffected by Herdr's gateTimeoutMs / fork restrictions; an explicit herdr
+        // runtime resume never silently creates a fresh continuation pane.
         const routing = await resolveSpawnRouting(request.agentType, this.deps.profiles)
         if (routing === undefined) return { action: 'continue' }
         this.assertNoFork(request)
         this.assertNoGateTimeout(request)
         throw new HelmError(
           'not_found',
-          `resume ref '${request.resume}' 不存在（非本插件登记的 herdr agentId/paneId）`,
+          `resume ref '${request.resume}' does not exist (not a herdr agentId/paneId registered by this plugin)`,
           404,
           { resumeRef: request.resume },
         )
       }
-      // 已登记的 Herdr 窗格续接：先识别为受管 resume 再拒绝 fork/gateTimeoutMs。
+      // Continuation of a registered Herdr pane: identify as a managed resume first, then reject fork/gateTimeoutMs.
       this.assertNoFork(request)
       this.assertNoGateTimeout(request)
       const outcome = await this.resumeInto(request, candidates)
@@ -291,7 +291,7 @@ export class HerdrExecutor {
     this.assertNoGateTimeout(request)
     assertNoUnsupportedOverrides(request.model, request.effort)
     if (request.signal?.aborted) {
-      throw new HelmError('aborted', 'herdr spawn 请求在创建前已取消', 409)
+      throw new HelmError('aborted', 'herdr spawn request was cancelled before creation', 409)
     }
     const target = this.resolveSpawnTarget(request, routing)
     this.assertAttachmentsReachable(request, target, routing)
@@ -300,48 +300,48 @@ export class HerdrExecutor {
   }
 
   /**
-   * Herdr 运行时的 fork 显式拒绝（仅在请求已识别为 Herdr 处理路径后调用；
-   * 原生 passthrough 不经此处，不受影响）。外部终端 CLI 窗格无法继承父会话
-   * 上下文进行分叉，忽略 fork 将导致新建空白窗格，违反诚实性红线。
+   * Explicit fork rejection for Herdr runtimes (called only after the request is identified as a Herdr-handled path;
+   * native passthrough never passes here and is unaffected). An external terminal CLI pane cannot inherit the parent
+   * conversation's context for a fork; ignoring fork would create a blank pane, violating the honesty red line.
    */
   private assertNoFork(request: AgentSpawnRequest): void {
     if (request.fork === undefined || request.fork === false) return
     if (typeof request.fork !== 'boolean') {
-      throw new HelmError('validation_error', `fork 必须为 boolean（收到 ${typeof request.fork}）`, 400, {
+      throw new HelmError('validation_error', `fork must be a boolean (got ${typeof request.fork})`, 400, {
         fork: request.fork,
       })
     }
     throw new HelmError(
       'unsupported_runtime',
-      'Herdr 外部运行时不支持 fork（上下文分叉派生仅支持原生 Profile 子会话）；请移除 fork 或改用原生 Profile',
+      'fork is not supported for Herdr external runtimes (context-fork derivation only supports native Profile sub-conversations); remove fork or use a native Profile instead',
       400,
       { ...(request.agentType !== undefined ? { agentType: request.agentType } : {}) },
     )
   }
 
   /**
-   * Herdr 运行时的 gateTimeoutMs 显式拒绝（仅在请求已识别为 Herdr 处理路径
-   * 后调用：herdr 运行时新建 / 已登记 resume；原生 passthrough 不经此处，
-   * 不受影响）。契约事实：本机依赖 runLocalGate 的 options 未暴露门禁超时
-   * 参数、远端 transport.runGate 无超时通道——接受该选项等于静默丢弃外部
-   * 超时语义，因此如实拒绝并给出替代方案（见 docs/workflows/worktree-
-   * and-gate.md 的 Gate 章节）。
+   * Explicit gateTimeoutMs rejection for Herdr runtimes (called only after the request is identified as a Herdr-handled path:
+   * herdr-runtime new spawn / registered resume; native passthrough never passes here,
+   * unaffected). Contract fact: the local dependency runLocalGate's options expose no gate timeout
+   * parameter, and the remote transport.runGate has no timeout channel -- accepting the option would silently drop external
+   * timeout semantics, so we reject honestly and offer alternatives (see the Gate chapter of
+   * docs/workflows/worktree-and-gate.md).
    */
   private assertNoGateTimeout(request: AgentSpawnRequest): void {
     if (request.gateTimeoutMs === undefined) return
     throw new HelmError(
       'unsupported_runtime',
-      'Herdr 运行时不支持 gateTimeoutMs（本机依赖契约 runLocalGate 与远端 transport.runGate 均未暴露门禁超时参数，无法如实兑现超时语义）；请在 gate 命令内自行实现超时（如用 timeout 包装命令），或移除该选项',
+      'gateTimeoutMs is not supported for Herdr runtimes (neither the local dependency contract runLocalGate nor the remote transport.runGate exposes a gate timeout parameter, so timeout semantics cannot be honored honestly); implement the timeout inside the gate command yourself (e.g. wrap the command with timeout) or remove the option',
       400,
       { gateTimeoutMs: request.gateTimeoutMs },
     )
   }
 
   /**
-   * 节点选定：显式/Profile 指定（routing.nodeId，含 'local'）优先；否则继承
-   * 父会话绑定节点（parentNodeIdOf；undefined = 本机）。
-   * 目标 HerdrTarget 的 socketPath/session 继承冻结的本机连接配置仅当目标为
-   * 本机（远端目标只携带 nodeId，端点由目标节点自解析）。
+   * Node selection: explicit/Profile designation (routing.nodeId, incl. 'local') wins; otherwise inherit
+   * the parent conversation's bound node (parentNodeIdOf; undefined = local).
+   * The target HerdrTarget's socketPath/session inherits the frozen local connection config only when the target is
+   * local (remote targets carry only nodeId; the endpoint is resolved by the target node itself).
    */
   private resolveSpawnTarget(request: AgentSpawnRequest, routing: SpawnRouting): HerdrTarget {
     const parentNodeId = this.parentNodeIdOrThrow(request.parentConversationId)
@@ -351,9 +351,9 @@ export class HerdrExecutor {
   }
 
   /**
-   * 附件诚实性门禁（任何建窗副作用之前）：
-   * 远端节点且既无 Profile 配置也无节点通道提供的可达 HELM_HUB_URL 时，远端窗格
-   * 无法拉取产物（本机 artifacts 目录不在远端文件系统上），显式拒绝而非静默截断。
+   * Attachment honesty gate (before any pane-creation side effect):
+   * For a remote node with no reachable HELM_HUB_URL from either Profile config or the node channel, the remote pane
+   * cannot fetch artifacts (the local artifacts directory is not on the remote filesystem); reject explicitly instead of silently truncating.
    */
   private assertAttachmentsReachable(
     request: AgentSpawnRequest,
@@ -362,37 +362,37 @@ export class HerdrExecutor {
   ): void {
     if (request.attachments === undefined || request.attachments.length === 0) return
     const nodeId = targetNodeId(target)
-    if (nodeId === undefined) return // 本机窗格：直接读本机 artifacts。
+    if (nodeId === undefined) return // Local pane: read local artifacts directly.
     const base = this.deps.buildSpawnEnv(request.parentConversationId, '/tmp/helm-attachment-gate', nodeId)
     const { hubUrlOverridden } = buildSpawnPaneEnv(base, routing.profileEnv, {
       remote: true,
       nodeHubUrl: this.deps.nodeChannel?.getNodeHubUrl?.(nodeId),
     })
-    if (hubUrlOverridden) return // 远端已有可达 HELM_HUB_URL（Profile 或节点通道）：可经 CLI 拉取。
+    if (hubUrlOverridden) return // Remote already has a reachable HELM_HUB_URL (Profile or node channel): fetch via CLI.
     throw new HelmError(
       'remote_hub_unreachable_for_artifacts',
-      `远端节点 '${nodeId}' 未配置可达的 HELM_HUB_URL，无法传递附件（${request.attachments.join(', ')}）；请在 Profile runtime.env.HELM_HUB_URL 配置远端可达的 http(s) 地址，或让节点经 helm-node 接入上报 hubUrl`,
+      `remote node '${nodeId}' has no reachable HELM_HUB_URL configured, cannot deliver attachments (${request.attachments.join(', ')}); configure a remotely reachable http(s) address in Profile runtime.env.HELM_HUB_URL, or have the node report its hubUrl by joining via helm-node`,
       400,
       { nodeId, attachments: request.attachments },
     )
   }
 
   // ------------------------------------------------------------------
-  // 建窗与启动
+  // Pane creation and startup
   // ------------------------------------------------------------------
 
   private async spawnNew(request: AgentSpawnRequest, routing: SpawnRouting, target: HerdrTarget, existing?: ManagedPane): Promise<unknown> {
     if (existing === undefined) {
-      // 新窗格：cwd 解析链 request.cwd > profile.workspace > 父 cwd；
-      // 链尾无真实 cwd 时显式拒绝（绝不猜进程 cwd，更不让远端窗格默认落 Hub 目录）。
-      // 解析后按目标节点平台统一收口（local = process.platform；远端仅信
-      // NodeRegistry 注册上报，无可信信息则透传不改写）。
+      // New pane: cwd resolution chain request.cwd > profile.workspace > parent cwd;
+      // reject explicitly when the chain ends without a real cwd (never guess the process cwd, and never let a remote pane default into the Hub directory).
+      // After resolution, normalize against the target node's platform (local = process.platform; remote trusts only
+      // NodeRegistry registration reports; without trusted info, pass through unchanged).
       const parentCwd = this.parentCwdOrThrow(request.parentConversationId)
       const cwd = resolveCwd(request.cwd, routing, parentCwd, this.platformOfTarget(target))
       if (cwd === '') {
         throw new HelmError(
           'validation_error',
-          `无法解析 herdr 窗格工作目录（request.cwd / profile.workspace / 父会话 ${request.parentConversationId} cwd 均未提供绝对路径）；请在 spawn 请求显式指定 cwd 或为父会话/Profile 绑定真实工作目录`,
+          `cannot resolve the herdr pane working directory (none of request.cwd / profile.workspace / parent conversation ${request.parentConversationId} cwd provides an absolute path); specify cwd explicitly in the spawn request or bind a real working directory to the parent conversation/Profile`,
           400,
           { parentConversationId: request.parentConversationId },
         )
@@ -407,13 +407,13 @@ export class HerdrExecutor {
     return this.runManagedTask(request, pane, routing)
   }
 
-  /** 父会话 cwd：宿主 getConversation 错误如实上抛（不存在即 spawn 缺陷输入）。 */
+  /** Parent conversation cwd: host getConversation errors propagate as-is (nonexistent means a defective spawn input). */
   private parentCwdOrThrow(parentConversationId: number): string {
     const cwd = this.host.parentCwdOf(parentConversationId)
     if (cwd === undefined) {
       throw new HelmError(
         'not_found',
-        `父会话 ${parentConversationId} 不存在或无 cwd，无法解析 herdr 窗格工作目录`,
+        `parent conversation ${parentConversationId} does not exist or has no cwd; cannot resolve the herdr pane working directory`,
         404,
         { parentConversationId },
       )
@@ -422,17 +422,17 @@ export class HerdrExecutor {
   }
 
   /**
-   * 父会话绑定节点：getConversation 错误如实上抛（与 parentCwdOf 同源）。
+   * Parent conversation's bound node: getConversation errors propagate as-is (same source as parentCwdOf).
    */
   private parentNodeIdOrThrow(parentConversationId: number): string | undefined {
-    // 宿主可能复用同一 getConversation 调用；错误语义由实现保证如实。
+    // The host may reuse the same getConversation call; error semantics are guaranteed honest by the implementation.
     return this.host.parentNodeIdOf(parentConversationId)
   }
 
   /**
-   * 目标节点平台解析（cwd 规范化用）：本机目标 = process.platform；远端
-   * 仅信节点通道上报的注册事实（NodeRegistry platform），无上报 = undefined
-   * （不猜：透传不改写）。
+   * Target node platform resolution (for cwd normalization): local target = process.platform; remote
+   * trusts only registration facts reported by the node channel (NodeRegistry platform), no report = undefined
+   * (no guessing: pass through unchanged).
    */
   private platformOfTarget(target: HerdrTarget): TargetPlatform | undefined {
     const nodeId = targetNodeId(target)
@@ -441,7 +441,7 @@ export class HerdrExecutor {
     return raw !== undefined && raw !== '' ? targetPlatformOf(raw) : undefined
   }
 
-  /** 建窗并登记（含 worktree 两步 + 中途失败回收已创建资源）。 */
+  /** Create the pane and register it (incl. the worktree two-step + reclaiming created resources on mid-way failure). */
   private async createManagedPane(
     request: AgentSpawnRequest,
     routing: SpawnRouting,
@@ -455,7 +455,7 @@ export class HerdrExecutor {
     const outputFileName = buildOutputFileName(safeId, ext)
     const env = this.buildPaneEnv(request.parentConversationId, cwd, routing, target, request.secretNames)
     const window = await this.createWindow(target, routing, request, cwd, env, agentName)
-    // 编排命名空间业务值在边界校验（内核 envelope 只保证 JSON-safe）。
+    // Orchestration-namespace business values are validated at the boundary (the kernel envelope only guarantees JSON-safe).
     const spawnRunId = parseWorkflowSpawnMeta(request.meta).runId
     const managed: ManagedPane = {
       target: window.target,
@@ -480,7 +480,7 @@ export class HerdrExecutor {
     return managed
   }
 
-  /** 建窗：普通 tab.create({cwd,env,focus:false,label})；worktree 模式两步注入 env。 */
+  /** Pane creation: plain tab.create({cwd,env,focus:false,label}); worktree mode injects env in two steps. */
   private async createWindow(
     target: HerdrTarget,
     routing: SpawnRouting,
@@ -497,7 +497,7 @@ export class HerdrExecutor {
         target,
         paneId: created.rootPane.paneId,
         tabId: created.tab.tabId,
-        // 普通模式：共享 workspace 绝不整体关闭，仅关自有 tab。
+        // Plain mode: the shared workspace is never closed as a whole; close only our own tab.
         workspaceId: undefined,
         effectiveCwd: cwd,
       }
@@ -522,8 +522,8 @@ export class HerdrExecutor {
         worktree: created.worktree,
       }
     }
-    // worktree.create 不接受 env：在该 workspace 下补建带 env 的 tab（env 按实际
-    // worktree cwd 重建），关初始空 tab；任一步失败回收已创建 workspace。
+    // worktree.create takes no env: create a tab with env under that workspace afterwards (env rebuilt for the actual
+    // worktree cwd), close the initial empty tab; if any step fails, reclaim the created workspace.
     const worktreeEnv = this.buildPaneEnv(request.parentConversationId, effectiveCwd, routing, target, request.secretNames)
     try {
       const tabbed = parseTabCreated(
@@ -547,16 +547,16 @@ export class HerdrExecutor {
         worktree: created.worktree,
       }
     } catch (error) {
-      // 两步中途失败：尽力关闭刚创建的 workspace（回收自有资源）；回收失败
-      // 显式报告（附加诊断），不掩盖原始错误也不留无主窗格不报。
+      // Mid-way failure of the two steps: best-effort close of the just-created workspace (reclaim own resources); if the reclaim fails
+      // report explicitly (with diagnostics), neither masking the original error nor leaving an orphan pane unreported.
       try {
         await this.transport.call(target, 'workspace.close', { workspace_id: created.workspaceId }, { timeoutMs: 5_000 })
       } catch (cleanupError) {
         this.host.notify(
-          'Herdr 建窗失败回收未竟',
-          `worktree 建窗失败后回收 workspace ${created.workspaceId} 亦失败：${
+          'Herdr pane-creation failure reclaim incomplete',
+          `reclaiming workspace ${created.workspaceId} after worktree pane-creation failure also failed: ${
             cleanupError instanceof Error ? this.deps.redact(cleanupError.message) : String(cleanupError)
-          }（原始错误：${error instanceof Error ? this.deps.redact(error.message) : String(error)}）`,
+          } (original error: ${error instanceof Error ? this.deps.redact(error.message) : String(error)})`,
           'error',
         )
       }
@@ -565,12 +565,12 @@ export class HerdrExecutor {
   }
 
   /**
-   * agent.start + 就绪等待（真实启动序列）：
-   * - start 成功返回可能仍是 unknown/launch_pending（seq=0）：以 startupTimeout
-   *   预算 agent.wait(until idle/blocked) 等权威就绪（signal 可取消）；
-   * - 新建 PTY 的 shell 可能尚未就绪；仅对服务端明确未启动的
-   *   agent_pane_busy 在启动预算内等待再试，不重试任何不确定投递；
-   * - agent_not_ready 且权威 blocked：桥接已有 agent，不启动第二个。
+   * agent.start + readiness wait (real startup sequence):
+   * - A successful start may still return unknown/launch_pending (seq=0): wait for authoritative readiness with
+   *   the startupTimeout budget via agent.wait(until idle/blocked) (cancellable via signal);
+   * - The new PTY's shell may not be ready yet; only for the server-confirmed not-started
+   *   agent_pane_busy do we wait-and-retry within the startup budget; never retry an uncertain delivery;
+   * - agent_not_ready with authoritative blocked: bridge to the existing agent, do not start a second one.
    */
   private async startAgentAndWaitReady(
     target: HerdrTarget,
@@ -601,7 +601,7 @@ export class HerdrExecutor {
         if (code === 'agent_pane_busy') {
           const remaining = shellDeadline - Date.now()
           if (remaining <= 0) {
-            throw new HelmError('herdr_startup_timeout', `pane ${paneId} 的 shell 未在启动期限内就绪（agent_pane_busy）`, 504)
+            throw new HelmError('herdr_startup_timeout', `pane ${paneId} : shell not ready within the startup deadline (agent_pane_busy)`, 504)
           }
           await delay(Math.min(this.pollIntervalMs, remaining), undefined, { signal })
           continue
@@ -610,8 +610,8 @@ export class HerdrExecutor {
         const probe = await this.agentGet(target, paneId, signal)
         if (probe.agentStatus !== 'blocked') throw error
         this.host.notify(
-          'Herdr 窗格已存在等待中的 Agent',
-          `pane ${paneId} 返回 agent_not_ready 且权威状态 blocked，桥接既有 agent 继续审批流程，不启动第二个 agent`,
+          'Herdr pane already has a waiting Agent',
+          `pane ${paneId} returned agent_not_ready with authoritative status blocked; bridging to the existing agent to continue the approval flow, not starting a second agent`,
           'info',
         )
         return probe
@@ -619,7 +619,7 @@ export class HerdrExecutor {
     }
     if (started.agentStatus === 'blocked') return started
     if (started.interactiveReady && (started.agentStatus === 'idle' || started.agentStatus === 'done')) return started
-    // unknown（launch_pending 真实阶段）或 done（极快完成）：等权威就绪。
+    // unknown (a real launch_pending phase) or done (finished extremely fast): wait for authoritative readiness.
     const ready = await this.transport.call(
       target,
       'agent.wait',
@@ -633,14 +633,14 @@ export class HerdrExecutor {
     const deadline = Date.now() + this.host.startupTimeoutMs()
     let info = initial
     while (info.agentStatus !== 'blocked' && !(info.interactiveReady && (info.agentStatus === 'idle' || info.agentStatus === 'done'))) {
-      if (Date.now() >= deadline) throw new HelmError('herdr_startup_timeout', `pane ${paneId} 未在启动期限内具备 interactive_ready`, 504)
+      if (Date.now() >= deadline) throw new HelmError('herdr_startup_timeout', `pane ${paneId} did not reach interactive_ready within the startup deadline`, 504)
       await delay(this.pollIntervalMs, undefined, { signal })
       info = await this.agentGet(target, paneId, signal)
     }
     return info
   }
 
-  /** 权威 agent.get（seq 唯一可信来源）。 */
+  /** Authoritative agent.get (the single trusted source of seq). */
   private async agentGet(target: HerdrTarget, paneId: string, signal?: AbortSignal): Promise<HerdrAgentInfo> {
     return parseAgentResult(
       await this.transport.call(target, 'agent.get', { target: paneId }, { signal, timeoutMs: 5_000 }),
@@ -650,12 +650,12 @@ export class HerdrExecutor {
   }
 
   /**
-   * 窗格环境基线：buildSpawnEnv（受管 HELM_*，确切目标节点，**零 stash 机密**）
-   * + buildSpawnPaneEnv（Profile 合并、远端回连语义）。建窗、Gate 与续接共用；
-   * 受管 HELM_* 由内核构造权威（Profile 不可覆盖）；远端剥本机回连变量
-   * （Profile 显式有效可达 HELM_HUB_URL 或节点通道 hubUrl 除外）。
-   * buildSpawnEnv 第三参始终传确切 nodeId（'local' 或远端 ID）——绝不让内核
-   * 按父会话继承（父会话绑定远端时会把本机窗格误配到远端）。
+   * Pane env baseline: buildSpawnEnv (managed HELM_*, the exact target node, **zero stash secrets**)
+   * + buildSpawnPaneEnv (Profile merge, remote call-home semantics). Shared by pane creation, Gate and resume;
+   * managed HELM_* is authoritative from the kernel (Profile cannot override); remote strips local call-home variables
+   * (unless the Profile sets an explicitly valid reachable HELM_HUB_URL or the node channel provides hubUrl).
+   * buildSpawnEnv's third argument always gets the exact nodeId ('local' or the remote ID) -- never let the kernel
+   * inherit from the parent conversation (a parent bound to a remote node would mis-configure local panes onto the remote).
    */
   private buildPaneBaselineEnv(
     parentConversationId: number,
@@ -671,8 +671,8 @@ export class HerdrExecutor {
     })
     if (stripped.length > 0) {
       this.host.notify(
-        '远端窗格已剥除本机回连变量',
-        `node ${nodeId} 无可达 HELM_HUB_URL，已剥除：${stripped.join(', ')}`,
+        'Remote pane stripped local call-home variables',
+        `node ${nodeId}  has no reachable HELM_HUB_URL; stripped: ${stripped.join(', ')}`,
         'info',
       )
     }
@@ -680,10 +680,10 @@ export class HerdrExecutor {
   }
 
   /**
-   * 建窗时刻的完整窗格 env：基线 + 按当次 secretNames 授予的机密（从当前
-   * stash 现取；缺失在内核边界显式报错，绝不静默降级为空注入）。已建窗的
-   * 外部 CLI 进程 env 无法撤回（如实边界）；后续 Gate 不复用此刻机密值，
-   * 每次从基线重新授权。
+   * Full pane env at creation time: baseline + secrets granted for this request's secretNames (fetched fresh
+   * from the current stash; missing names error explicitly at the kernel boundary, never silently degrade to empty injection). The
+   * created external CLI process env cannot be revoked (an honest boundary); later Gates do not reuse this moment's secret values,
+   * each re-authorizes from the baseline.
    */
   private buildPaneEnv(
     parentConversationId: number,
@@ -698,9 +698,9 @@ export class HerdrExecutor {
   }
 
   /**
-   * 从当前 stash 重新授权取值叠加到基线：每次实际使用（建窗/Gate/续接）前现取，
-   * 不经任何缓存；缺失/过期/已结算名字在内核边界显式 404。受管 HELM_* 基线
-   * 权威：授予名不得劫持回连/身份变量（与内核 buildManagedEnv 固定覆盖同构）。
+   * Overlay freshly re-authorized values from the current stash onto the baseline: fetched right before each actual use (pane creation/Gate/resume),
+   * through no cache; missing/expired/settled names get an explicit 404 at the kernel boundary. The managed HELM_* baseline is
+   * authoritative: granted names must not hijack call-home/identity variables (isomorphic to the kernel's buildManagedEnv fixed override).
    */
   private applyPaneSecrets(
     baseline: Record<string, string>,
@@ -725,9 +725,9 @@ export class HerdrExecutor {
       nodeId: nodeIdOf(pane) ?? 'local',
       executionId: pane.paneId,
       effectiveCwd: pane.effectiveCwd,
-      // 业务扩展经编排命名空间 meta 携带（内核 envelope 不解释）：控制引用供
-      // 编排层（builtin:workflow.steer）动态委托本插件 steer 动作（零硬编码；
-      // 不携带回调或策略）；worktree 供隔离层登记租约。
+      // Business extensions ride in the orchestration-namespace meta (the kernel envelope does not interpret them): the control reference lets
+      // the orchestration layer (builtin:workflow.steer) dynamically delegate to this plugin's steer action (zero hardcoding;
+      // carries no callbacks or policy); worktree is for the isolation layer's lease registration.
       meta: workflowExecutionMeta({
         controls: { steer: { pluginId: HERDR_STEER_CONTROLS.pluginId, actionId: HERDR_STEER_CONTROLS.actionId } },
         ...(pane.worktree !== undefined
@@ -737,13 +737,13 @@ export class HerdrExecutor {
     }
   }
 
-  /** 本机冻结目标（启用时确定）。 */
+  /** Frozen local target (determined at enable). */
   private localTargetOf(): HerdrTarget {
     return this.localTarget
   }
 
   // ------------------------------------------------------------------
-  // 任务投递、审批桥与文件交接
+  // Task delivery, approval bridge and file handoff
   // ------------------------------------------------------------------
 
   private taskPrompt(request: AgentSpawnRequest, pane: ManagedPane): string {
@@ -754,26 +754,26 @@ export class HerdrExecutor {
       request.schema !== undefined
         ? [
             '',
-            '--- helm 交接契约（必须遵守）---',
-            `任务完成后，把最终结构化结果写入文件 ${pane.effectiveCwd}/.helm/${fileName}，`,
-            '内容为满足下方 JSON Schema 的单个 JSON 值（不得包裹 Markdown 代码块外的任何文本）。',
+            '--- helm handoff contract (must follow) ---',
+            `When the task completes, write the final structured result to the file ${pane.effectiveCwd}/.helm/${fileName},`,
+            'The content must be a single JSON value satisfying the JSON Schema below (no text wrapping it outside a Markdown code block).',
             `JSON Schema: ${redactSchemaText(request.schema, this.deps.redact)}`,
-            '写文件是你交付结果的唯一方式；未写文件视为任务失败。',
+            'Writing the file is the only way to deliver your result; not writing it counts as task failure.',
           ].join('\n')
         : [
             '',
-            '--- helm 交接契约（必须遵守）---',
-            `任务完成后，把最终结果（Markdown 全文）写入文件 ${pane.effectiveCwd}/.helm/${fileName}。`,
-            '写文件是你交付结果的唯一方式；未写文件视为任务失败。',
+            '--- helm handoff contract (must follow) ---',
+            `When the task completes, write the final result (full Markdown) to the file ${pane.effectiveCwd}/.helm/${fileName}.`,
+            'Writing the file is the only way to deliver your result; not writing it counts as task failure.',
           ].join('\n')
     return `${prompt}${attachmentBlock}\n${handoff}`
   }
 
   /**
-   * 附件指引块（任务正文与交接契约之间）：
-   * - 本机窗格：本机绝对路径 + helm artifacts get 拉取命令；
-   * - 远端窗格：仅 id/name 与拉取命令（经远端可达 HELM_HUB_URL 的 CLI 拉取）。
-   * deps.getArtifact 未注入时退化用裸 ID（单测环境；不伪造元数据）。
+   * Attachment guidance block (between the task body and the handoff contract):
+   * - local pane: local absolute path + the helm artifacts get fetch command;
+   * - remote pane: only id/name and the fetch command (fetched via CLI against the remotely reachable HELM_HUB_URL).
+   * When deps.getArtifact is not injected, fall back to bare IDs (unit-test environments; no fabricated metadata).
    */
   private buildAttachmentBlock(request: AgentSpawnRequest, pane: ManagedPane): string {
     if (request.attachments === undefined || request.attachments.length === 0) return ''
@@ -783,32 +783,32 @@ export class HerdrExecutor {
       const meta = this.attachmentMetaCache.get(id)
       if (isRemote || meta === undefined) {
         const nameSuffix = meta !== undefined ? ` name=${meta.name} mime=${meta.mimeType} size=${meta.size} bytes` : ''
-        lines.push(`- id=${id}${nameSuffix}，拉取：helm artifacts get ${id} --output ./<name>`)
+        lines.push(`- id=${id}${nameSuffix}; fetch: helm artifacts get ${id} --output ./<name>`)
       } else {
         lines.push(
-          `- ${meta.name} (id=${id}, mime=${meta.mimeType}, size=${meta.size} bytes, path=${meta.absPath})，拉取：helm artifacts get ${id} --output ./${meta.name}`,
+          `- ${meta.name} (id=${id}, mime=${meta.mimeType}, size=${meta.size} bytes, path=${meta.absPath}); fetch: helm artifacts get ${id} --output ./${meta.name}`,
         )
       }
     }
     return `\n\n[Attached Files]\n${lines.join('\n')}`
   }
 
-  /** 附件元数据缓存（spawn 时经 deps.getArtifact 解析一次）。容量上限防长驻
-   *  泄漏：超限淘汰最旧条目（下个请求命中时会重新解析，不伪造数据）。 */
+  /** Attachment metadata cache (resolved once at spawn via deps.getArtifact). Capacity cap prevents long-lived
+   *  leaks: over-capacity evicts the oldest entries (re-resolved on the next hit; no fabricated data). */
   private static readonly MAX_ATTACHMENT_META_ENTRIES = 128
   private readonly attachmentMetaCache = new Map<
     string,
     { id: string; name: string; mimeType: string; size: number; absPath: string }
   >()
 
-  /** spawn 前解析附件元数据（存在性与授权已由内核 spawnAgent 校验；此处仅取展示字段）。 */
+  /** Resolve attachment metadata before spawn (existence & authorization already validated by the kernel spawnAgent; only display fields are fetched here). */
   private async preloadAttachmentMeta(request: AgentSpawnRequest): Promise<void> {
     if (request.attachments === undefined || this.deps.getArtifact === undefined) return
     for (const id of request.attachments) {
       const meta = await this.deps.getArtifact(id, request.parentConversationId)
       this.attachmentMetaCache.set(id, meta)
     }
-    // 超限淘汰最旧（Map 迭代序即插入序）：缓存仅为展示字段优化，可随时重建。
+    // Over capacity, evict oldest (Map iteration order = insertion order): the cache only optimizes display fields and can be rebuilt at any time.
     while (this.attachmentMetaCache.size > HerdrExecutor.MAX_ATTACHMENT_META_ENTRIES) {
       const oldest = this.attachmentMetaCache.keys().next().value
       if (oldest === undefined) break
@@ -816,13 +816,13 @@ export class HerdrExecutor {
     }
   }
 
-  /** 请求结算后清理本次附件缓存条目（长驻进程不累积历史 spawn 元数据）。 */
+  /** Clear this spawn's attachment cache entries after the request settles (a long-lived process must not accumulate historical spawn metadata). */
   private releaseAttachmentMeta(request: AgentSpawnRequest): void {
     if (request.attachments === undefined) return
     for (const id of request.attachments) this.attachmentMetaCache.delete(id)
   }
 
-  /** 任务启动、首轮、自愈均在同一取消与错误收尾边界内。 */
+  /** Task startup, first round and self-heal all live inside the same cancellation & error finalization boundary. */
   private async runManagedTask(request: AgentSpawnRequest, pane: ManagedPane, start?: SpawnRouting): Promise<unknown> {
     const taskKey = this.paneKey(pane)
     this.activeTasks.set(taskKey, request)
@@ -832,12 +832,12 @@ export class HerdrExecutor {
     const aborted = new Promise<never>((_, reject) => { rejectAbort = reject })
     const onAbort = () => {
       if (isTimeoutSignal(request.signal)) {
-        rejectAbort(new HelmError('agent_timeout', `pane ${pane.paneId} 执行超时，保留窗格与诊断（resume 前将权威确认底层 CLI 状态）`, 408))
+        rejectAbort(new HelmError('agent_timeout', `pane ${pane.paneId} execution timed out; pane and diagnostics kept (the underlying CLI state will be authoritatively confirmed before resume)`, 408))
         return
       }
       cleanup ??= this.closePane(pane, 'cancelled')
       void cleanup.catch(() => {})
-      rejectAbort(new HelmError('aborted', `pane ${pane.paneId} 执行已取消`, 499))
+      rejectAbort(new HelmError('aborted', `pane ${pane.paneId} execution cancelled`, 499))
     }
     request.signal?.addEventListener('abort', onAbort, { once: true })
     if (request.signal?.aborted) onAbort()
@@ -863,7 +863,7 @@ export class HerdrExecutor {
         const snapshot = await this.paneHandoff.readDiagnostic(pane)
         throw new HelmError(
           'agent_timeout',
-          `pane ${pane.paneId} 执行超时，窗格已保留（底层 CLI 可能仍在执行；resume 前将权威确认，仅 idle/done 可续接，绝不代发按键中止）\n终端最后 40 行（脱敏）：\n${snapshot}`,
+          `pane ${pane.paneId} execution timed out; pane kept (the underlying CLI may still be running; authoritatively confirmed before resume, only idle/done may continue, never sending abort keystrokes on your behalf)\nLast 40 terminal lines (redacted):\n${snapshot}`,
           408,
           { paneId: pane.paneId, snapshot },
         )
@@ -874,23 +874,23 @@ export class HerdrExecutor {
         catch (cleanupError) {
           const note = this.deps.redact(cleanupError instanceof Error ? cleanupError.message : String(cleanupError))
           await this.markFailed(pane, note)
-          throw new HelmError('herdr_abort_cleanup_failed', `任务已取消，但自有窗格清理失败：${note}`, 502)
+          throw new HelmError('herdr_abort_cleanup_failed', `task cancelled, but closing our own pane failed: ${note}`, 502)
         }
-        throw new HelmError('aborted', `pane ${pane.paneId} 执行已取消`, 499)
+        throw new HelmError('aborted', `pane ${pane.paneId} execution cancelled`, 499)
       }
       await this.markFailed(pane, error instanceof Error ? error.message : String(error))
       const snapshot = await this.paneHandoff.readDiagnostic(pane)
       const failure = error as { code?: unknown; status?: unknown }
       throw new HelmError(
         typeof failure?.code === 'string' ? failure.code : 'herdr_execution_failed',
-        `${this.deps.redact(error instanceof Error ? error.message : String(error))}\n终端最后 40 行（脱敏）：\n${snapshot}`,
+        `${this.deps.redact(error instanceof Error ? error.message : String(error))}\nLast 40 terminal lines (redacted):\n${snapshot}`,
         error instanceof HelmError ? error.status : 502,
         { paneId: pane.paneId, snapshot },
       )
     } finally {
       request.signal?.removeEventListener('abort', onAbort)
-      // 本次请求结算（成功/失败/取消）：任务阶段/在途登记/插话失败记录与
-      // 附件元数据缓存同步回收，后续 steer 按「无可插话任务」拒绝。
+      // This request settles (success/failure/cancellation): task phase / in-flight registries / steer-failure records and
+      // the attachment metadata cache are reclaimed together; later steers are rejected as "no steerable task".
       this.activeTasks.delete(taskKey)
       this.panePhases.delete(taskKey)
       this.steerDispatcher.forget(taskKey)
@@ -904,11 +904,11 @@ export class HerdrExecutor {
     await this.project(pane, `run:${pane.agentName}`)
     const info = await this.promptAndWait(pane.target, pane, this.taskPrompt(request, pane), request.signal)
     await this.steerDispatcher.settleThroughSteers(request, pane, pane.outputFileName!, info)
-    // 结算以 registry 现值为准：插话可能已把唯一交接文件重定向到新名字
-    //（绝不沿用起始快照误读旧路径）。
+    // Settlement trusts the registry's current value: a steer may have redirected the single handoff file to a new name
+    //(never reuse the initial snapshot and misread the old path).
     const latest = this.registry.get(nodeIdOf(pane), pane.paneId)
     if (latest?.outputFileName === undefined) {
-      throw new HelmError('herdr_context_unavailable', `pane ${pane.paneId} 的交接上下文已失效`, 409)
+      throw new HelmError('herdr_context_unavailable', `pane ${pane.paneId} : handoff context is no longer valid`, 409)
     }
     const output = await this.paneHandoff.readAndValidateOutput(request, latest)
     if (request.gate !== undefined) {
@@ -916,16 +916,16 @@ export class HerdrExecutor {
       await this.paneHandoff.runGateFor(request, pane)
     }
     request.signal?.throwIfAborted()
-    // 成功交接后清理已被插话作废的旧结果文件（失败路径保留现场）。
+    // After a successful handoff, clean up old result files voided by steers (failure paths keep the scene).
     await this.steerDispatcher.clearRetiredOutputs(request, pane)
     this.registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'keepalive', outputFileName: undefined })
     return output
   }
 
-  /** 已结算的 blocked 水位先做短暂退避防抖；若发键后连续退避仍停留在同一 blocked seq，重开审批让人类重选。 */
+  /** A settled blocked watermark first gets a short backoff debounce; if after keystrokes consecutive backoffs still sit on the same blocked seq, reopen the approval for a human re-choice. */
   private static readonly MAX_SETTLED_BLOCKED_BACKOFFS = 2
 
-  /** 已结算的 blocked 水位只退避；新水位交给同一审批桥。 */
+  /** A settled blocked watermark only backs off; new watermarks go through the same approval bridge. */
   private async waitUntilSettled(request: AgentSpawnRequest, pane: ManagedPane, initial: HerdrAgentInfo): Promise<void> {
     let info = initial
     let attempts = 0
@@ -935,26 +935,26 @@ export class HerdrExecutor {
         const entry = this.asks.get(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
         if (entry?.phase === 'settled') {
           if (attempts >= HerdrExecutor.MAX_SETTLED_BLOCKED_BACKOFFS) {
-            // 闭环逃生门：send_keys 已发但终端仍停留在同一 seq 的 blocked（按键
-            // 未被接受），或条目以 keysSent=false 结算（superseded/cancelled）后
-            // 终端同 seq 卡死——两者都依赖 seq 推进解环，若封顶退避后仍无进展，
-            // 重开审批让人类对照快照重新选择，绝不无限退避 livelock。
+            // Loop escape hatch: send_keys was sent but the terminal still sits on the same seq blocked (keystrokes
+            // not accepted), or the entry settled with keysSent=false (superseded/cancelled) and
+            // the terminal is stuck on the same seq -- both need seq progress to unwind; if there is still no progress after capped backoff,
+            // reopen the approval so a human can re-choose against the snapshot; never back off forever into livelock.
             this.asks.reopenUnresolved(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
             attempts = 0
             if (!await this.bridgeBlocked(request, pane, info)) {
-              throw new HelmError('aborted', `人类取消了 pane ${pane.paneId} 的审批`, 409)
+              throw new HelmError('aborted', `human cancelled the approval for pane ${pane.paneId}`, 409)
             }
           } else {
             await backoffForDuplicateBlocked(signalOf(request), ++attempts, this.deps.blockedBackoffBaseMs, this.deps.blockedBackoffCapMs)
           }
         } else {
           if (!await this.bridgeBlocked(request, pane, info)) {
-            throw new HelmError('aborted', `人类取消了 pane ${pane.paneId} 的审批`, 409)
+            throw new HelmError('aborted', `human cancelled the approval for pane ${pane.paneId}`, 409)
           }
           attempts = 0
         }
       } else if (info.agentStatus === 'unknown') {
-        throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} 状态 unknown，无法确认完成`, 502)
+        throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId}  state unknown; completion cannot be confirmed`, 502)
       }
       info = parseAgentResult(await this.transport.call(
         pane.target, 'agent.wait', { target: pane.paneId, until: ['idle', 'done', 'blocked'] }, { signal: request.signal },
@@ -966,12 +966,12 @@ export class HerdrExecutor {
     return paneStateKey(pane)
   }
 
-  /** closePane 单飞键（与 closePane 内部完全同构：steer 门禁复用同一坐标）。 */
+  /** closePane single-flight key (fully isomorphic to the one inside closePane: steer gating reuses the same coordinate). */
   private closeKey(pane: ManagedPane): string {
     return paneCloseKey(pane)
   }
 
-  /** prompt --wait（含自愈追问共用）：blocked 也可能立即返回（审批桥接管）。 */
+  /** prompt --wait (shared with the self-heal follow-up): blocked may also return immediately (the approval bridge takes over). */
   private async promptAndWait(target: HerdrTarget, pane: ManagedPane, text: string, signal?: AbortSignal): Promise<HerdrAgentInfo> {
     return parseAgentResult(
       await this.transport.call(
@@ -986,8 +986,8 @@ export class HerdrExecutor {
   }
 
   /**
-   * blocked 桥接：权威 agent.get 取 seq -> 协调器单飞 -> createAsk（预分配 id）
-   * -> 回答后复核 seq -> 带 expected_state_seq 的 CAS send_keys。返回 false 表示人类取消。
+   * blocked bridging: authoritative agent.get for seq -> coordinator single flight -> createAsk (pre-allocated id)
+   * -> re-check seq after the answer -> CAS send_keys with expected_state_seq. Returns false when the human cancels.
    */
   private async bridgeBlocked(
     request: AgentSpawnRequest,
@@ -1004,7 +1004,7 @@ export class HerdrExecutor {
     })) {
       await this.cancelAskQuietly(superseded.askId, 'superseded')
     }
-    if (authority.agentStatus !== 'blocked') return true // 终端已自行处理（旧快照）。
+    if (authority.agentStatus !== 'blocked') return true // The terminal already handled it (stale snapshot).
 
     const begin = this.asks.beginBlocked(nodeIdOf(pane), pane.paneId, authority.stateChangeSeq)
     const entry: AskEntry =
@@ -1020,9 +1020,9 @@ export class HerdrExecutor {
       const { outcome, plan } = await this.approvalBridge.createAsk(request, pane, entry, this.host.askConversationId(request.parentConversationId))
       return this.approvalBridge.consumeAskOutcome(request, pane, entry, outcome, plan)
     }).catch(async (error: unknown) => {
-      // 任务链失败时条目若仍 pending（宿主 AskDoc 已入库未结算），必须先显式
-      // 销单再清条目——failCreate 只清协调器，否则宿主留下永远 pending 的
-      // 孤儿审批卡。
+      // When the task chain fails while the entry is still pending (the host AskDoc is stored but unsettled), it must first be explicitly
+      // cancelled before clearing -- failCreate only clears the coordinator, otherwise the host keeps a forever-pending
+      // orphan approval card.
       if (entry.phase === 'pending' && this.asks.get(nodeIdOf(pane), pane.paneId, entry.seq) === entry) {
         await this.cancelAskQuietly(entry.askId, 'cancelled')
       }
@@ -1034,17 +1034,17 @@ export class HerdrExecutor {
   }
 
   // ------------------------------------------------------------------
-  // 运行中插话（steer）：仅 task 阶段 + agent.get 预检 + 现有 agent.prompt
-  // （投递、门禁、结算排空与作废文件清理见 executor-steer.ts）
+  // In-flight steer: only the task phase + agent.get precheck + the existing agent.prompt
+  // (delivery, gating, settle draining and voided-file cleanup in executor-steer.ts)
   // ------------------------------------------------------------------
 
-  /** 受管窗格运行中插话（公共入口；门禁与单次投递语义见 SteerDispatcher.steerPane）。 */
+  /** In-flight steer for a managed pane (public entry; gating and single-delivery semantics in SteerDispatcher.steerPane). */
   async steerPane(pane: ManagedPane, input: SteerPaneInput): Promise<{ stateChangeSeq: number }> {
     return this.steerDispatcher.steerPane(pane, input)
   }
 
   // ------------------------------------------------------------------
-  // resume（权威确认与路由恢复实现见 executor-resume.ts）
+  // resume (authoritative confirmation and routing recovery implemented in executor-resume.ts)
   // ------------------------------------------------------------------
 
   private async resumeInto(request: AgentSpawnRequest, candidates: ManagedPane[]): Promise<unknown> {
@@ -1052,24 +1052,24 @@ export class HerdrExecutor {
   }
 
   // ------------------------------------------------------------------
-  // 清理与状态
+  // Cleanup and state
   // ------------------------------------------------------------------
 
   /**
-   * 关闭自有 pane（单飞 + 结算幂等）：
-   * - 正在关闭：直接复用同一 close promise（abort 与 settle 双路径并发安全）；
-   * - 结局判定以 registry 当前值为准（调用方快照可能过时：等待期间任务可能
-   *   已 markFailed 置 failed——失败窗格保留现场，绝不能被批量清理关掉并
-   *   覆盖 failureNote）；已 settled / failed 均直接返回；
-   * - 仅关自有资源：普通 tab.close；worktree workspace.close（close_group 防链组）；
-   * - 失败 pane 保留现场；清理失败如实通知并上抛（不空 catch）。
+   * Close an own pane (single flight + settled idempotence):
+   * - already closing: reuse the same close promise (concurrency-safe across the abort and settle paths);
+   * - the outcome verdict trusts the registry's current value (the caller's snapshot may be stale: while waiting, the task may have
+   *   already been markFailed -- failure panes keep the scene and must never be closed by batch cleanup nor
+   *   have their failureNote overwritten); settled / failed both return directly;
+   * - close only own resources: plain tab.close; worktree workspace.close (close_group prevents chained groups);
+   * - failure panes keep the scene; cleanup failures notify and rethrow honestly (no empty catch).
    */
   async closePane(
     pane: ManagedPane,
     reason: 'settled' | 'cancelled' | 'workflow-settled' | 'turn-settled',
     options: { volatileMark?: boolean } = {},
   ): Promise<void> {
-    // 单飞键与 steer 门禁（assertSteerable.activeCloses 检查）共用同一坐标。
+    // The single-flight key and the steer gate (assertSteerable.activeCloses check) share the same coordinate.
     const key = this.closeKey(pane)
     const existing = this.activeCloses.get(key)
     if (existing !== undefined) return existing
@@ -1092,22 +1092,22 @@ export class HerdrExecutor {
           await this.cancelAskQuietly(entry.askId, 'superseded')
         }
         if (owned) {
-          // Herdr 关闭最后一个 tab 时自行回收空 workspace。只关闭本插件创建的
-          // tab，避免关闭后来被人类加入的 pane 或关联工作区。
+          // Herdr reclaims an empty workspace when its last tab closes. Close only tabs created by this plugin,
+          // avoiding panes later added by humans or associated workspaces.
           await assertOkResult(await this.transport.call(target, 'tab.close', { tab_id: pane.tabId }, { timeoutMs: 5_000 }), 'tab.close')
         } else {
-          this.host.notify('Herdr 窗格归属已变化', `pane ${pane.paneId} 已不属于 ${pane.agentName}，放弃清理`, 'info')
+          this.host.notify('Herdr pane ownership changed', `pane ${pane.paneId} no longer belongs to ${pane.agentName}; giving up cleanup`, 'info')
         }
       } catch (error) {
         this.host.notify(
-          'Herdr 窗格清理失败',
-          `pane ${pane.paneId}（${reason}）关闭失败：${error instanceof Error ? this.deps.redact(error.message) : String(error)}`,
+          'Herdr pane cleanup failed',
+          `pane ${pane.paneId} (${reason}) close failed: ${error instanceof Error ? this.deps.redact(error.message) : String(error)}`,
           'error',
         )
         throw error
       }
       if (options.volatileMark === true) {
-        // 服务 stop 路径：持久 doc 句柄已随停用失效，仅内存标记（对账下周期重建）。
+        // Service stop path: the persistent doc handle died with the disable; memory-only marking (reconciliation rebuilds next cycle).
         this.registry.markSettledVolatile(nodeIdOf(pane), pane.paneId)
       } else {
         this.registry.update(nodeIdOf(pane), pane.paneId, { outcome: 'settled', settledAt: Date.now() })
@@ -1129,11 +1129,11 @@ export class HerdrExecutor {
   }
 
   /**
-   * 外部结算路径（事件 pane.closed / 启动对账 / 探针归属不符）的 executor 侧
-   * 资源对齐：registry 置 settled 后 closePane 会因幂等早退，环境基线 paneEnvs
-   * （含受管 HELM_TOKEN，不含 stash 机密）与未启动标记必须在此显式释放，生命周期
-   * 与 registry outcome 对齐，绝不随人类关窗逐个驻留到停用重建。在途 steer 的
-   * 阶段/任务登记同步作废（其尾读复核将确定性拒绝）。
+   * Executor-side resource alignment for external settle paths (pane.closed event / startup reconciliation / probe ownership mismatch):
+   * once the registry is settled, closePane early-exits idempotently, so the env baseline paneEnvs
+   * (incl. managed HELM_TOKEN, no stash secrets) and the not-started markers must be released here explicitly, keeping the lifecycle
+   * aligned with the registry outcome instead of lingering one by one until the disable rebuild. In-flight steer
+   * phase/task registrations are voided in sync (their tail-read recheck will deterministically reject).
    */
   releasePaneState(pane: ManagedPane): void {
     const key = this.paneKey(pane)
@@ -1150,15 +1150,15 @@ export class HerdrExecutor {
     } catch (error) {
       if (error instanceof HelmError && error.status === 404) return
       this.host.notify(
-        'Herdr 审批销单失败',
-        `ask ${askId} cancel 失败：${error instanceof Error ? this.deps.redact(error.message) : String(error)}`,
+        'Herdr approval cancellation failed',
+        `ask ${askId} cancel failed: ${error instanceof Error ? this.deps.redact(error.message) : String(error)}`,
         'error',
       )
     }
   }
 
   private async markFailed(pane: ManagedPane, note: string): Promise<void> {
-    // 失败窗格保留终端现场供人工排查，但回连机密 env 不再需要（无后续 gate）。
+    // Failure panes keep the terminal scene for manual investigation, but the call-home secret env is no longer needed (no further gate).
     this.paneEnvs.delete(this.paneKey(pane))
     this.registry.update(nodeIdOf(pane), pane.paneId, {
       outcome: 'failed',
