@@ -22,9 +22,11 @@ import {
 } from '../src/plugins/index.js'
 import { projectToolPromptSections } from '../src/runtime/runtime-helpers.js'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { MemoryDocStore, makeConversationSummary, useTempDir } from './helpers.js'
+import { MemoryDocStore, makeConversationSummary, makeFauxModels, useTempDir } from './helpers.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
+import { KernelRuntime } from '../src/runtime/index.js'
 
 // ---------------------------------------------------------------------------
 // 基建
@@ -104,6 +106,11 @@ function makeBackend(over: {
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async (init) => ({ ...makeConversation(42), title: init.title ?? 'new' }),
+    forkConversation: async (id, opts) => ({
+      ...makeConversation(id + 100),
+      parentConversationId: id,
+      title: opts.title ?? `conv-${id} (分叉)`,
+    }),
     listConversations: () => [makeConversation(1)],
     getConversation: (id) => makeConversation(id),
     getConversationDetail: async (id) => ({ ...makeConversation(id), entries: [] }) as never,
@@ -186,6 +193,7 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
       () => captured!.secrets.get('k'),
       () => captured!.nodeIpc.isOnline('local'),
       () => captured!.completeText({ conversationId: 1, systemPrompt: '', text: '' }),
+      () => captured!.forkConversation(1, { entryId: 1 }),
       () => captured!.refreshModels(),
       () => captured!.redact('x'),
       () => captured!.executionEnv('local', '/tmp').canonicalPath('/tmp/x', BACKGROUND_CONTEXT),
@@ -592,5 +600,118 @@ test('host 公共机制专项', { timeout: 60_000 }, async (t) => {
     // 空投射：清除全部 prompt.tools.*（含 guidelines）。
     const cleared = projectToolPromptSections(projected, [])
     assert.ok(!cleared.some((s) => s.id.startsWith('prompt.tools.')))
+  })
+
+  await t.test('ctx.host.forkConversation：真实 Runtime 转发参数、边界报错、liveTasks 与停用阻断', { timeout: 60_000 }, async (sub) => {
+    // 1. liveTasks + epoch 守卫：在途 forkConversation 期间停用返回 409 plugin_has_live_tasks；完成后停用旧句柄 409 plugin_context_expired。
+    let resolveFork!: (summary: ReturnType<typeof makeConversation>) => void
+    const forkGate = new Promise<ReturnType<typeof makeConversation>>((resolve) => {
+      resolveFork = resolve
+    })
+    const liveBackend: PluginHostBackend = {
+      ...makeBackend({}),
+      forkConversation: async () => forkGate,
+    }
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: liveBackend, docs: new MemoryDocStore() })
+    let liveHost: Parameters<NonNullable<Parameters<typeof host.register>[0]['definePlugin']>>[0]['host'] | undefined
+    await host.register({
+      id: 'p:fork-live',
+      definePlugin(ctx) {
+        liveHost = ctx.host
+      },
+    }, { enabled: true })
+    assert.ok(liveHost)
+    const pendingFork = liveHost!.forkConversation(1, { entryId: 1, title: 'in-flight' })
+    await delay(10)
+    await assert.rejects(
+      () => host.disable('p:fork-live'),
+      (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'plugin_has_live_tasks',
+    )
+    resolveFork({ ...makeConversation(101), parentConversationId: 1, title: 'in-flight' })
+    const stubForked = await pendingFork
+    assert.equal(stubForked.parentConversationId, 1)
+    assert.equal(stubForked.title, 'in-flight')
+    await host.disable('p:fork-live')
+    await assert.rejects(
+      async () => liveHost!.forkConversation(1, { entryId: 1 }),
+      (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'plugin_context_expired',
+    )
+
+    // 2. 真实 KernelRuntime 端到端接线：400/404 校验、正常分叉继承与停用失效。
+    const rtDir = useTempDir(sub, 'helm-host-fork-rt-')
+    const { models, faux } = makeFauxModels()
+    faux.setResponses([fauxAssistantMessage('已记录暗号 ALPHA-99')])
+    const runtime = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: rtDir,
+      cwd: rtDir,
+      models,
+      model: 'faux/faux-1',
+    })
+    try {
+      let realHost: HelmHostApi | undefined
+      await runtime.plugins.register({
+        id: 'p:fork-real',
+        definePlugin(ctx) {
+          realHost = ctx.host
+        },
+      }, { enabled: true })
+      assert.ok(realHost)
+
+      await runtime.services.profiles.save({
+        id: 'reviewer',
+        name: '审查者',
+        model: 'faux/faux-1',
+        cwd: rtDir,
+      })
+      const parent = await runtime.createConversation({
+        profileId: 'reviewer',
+        cwd: rtDir,
+        title: '母会话',
+      })
+      await runtime.submitInput(parent.id, '请记住暗号 ALPHA-99')
+      await runtime.waitForIdle(parent.id)
+      const detail = await runtime.getConversationDetail(parent.id)
+      const lastEntry = detail.entries.at(-1)
+      assert.ok(lastEntry)
+      const lastEntryId = Number(lastEntry.id)
+      assert.ok(Number.isSafeInteger(lastEntryId) && lastEntryId > 0)
+
+      for (const badEntryId of [0, -1, 1.5]) {
+        await assert.rejects(
+          () => realHost!.forkConversation(parent.id, { entryId: badEntryId }),
+          (err: unknown) => err instanceof HelmError && err.status === 400 && err.code === 'validation_error',
+        )
+      }
+      await assert.rejects(
+        () => realHost!.forkConversation(999999, { entryId: lastEntryId }),
+        (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+      )
+      await assert.rejects(
+        () => realHost!.forkConversation(parent.id, { entryId: 999999 }),
+        (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+      )
+
+      const forked = await realHost!.forkConversation(parent.id, {
+        entryId: lastEntryId,
+        title: '自定义分叉标题',
+      })
+      assert.equal(forked.parentConversationId, parent.id)
+      assert.equal(forked.title, '自定义分叉标题')
+      assert.equal(forked.profileId, 'reviewer')
+      assert.equal(forked.cwd, rtDir)
+      assert.equal(forked.model, 'faux/faux-1')
+
+      const forkedDetail = await runtime.getConversationDetail(forked.id)
+      assert.ok(JSON.stringify(forkedDetail.entries).includes('ALPHA-99'))
+
+      await runtime.plugins.disable('p:fork-real')
+      await assert.rejects(
+        async () => realHost!.forkConversation(parent.id, { entryId: lastEntryId }),
+        (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'plugin_context_expired',
+      )
+    } finally {
+      await runtime.close()
+    }
   })
 })

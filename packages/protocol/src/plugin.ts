@@ -145,6 +145,11 @@ export interface AgentSpawnRequest {
   gateTimeoutMs?: number
   /** 续接既有子代理的标识。 */
   resume?: string
+  /**
+   * 从父会话当前已完成上下文分叉派生原生子会话（可选，缺省 false；与 resume 互斥）。
+   * 仅原生 Profile 子会话支持；外部运行时显式拒绝（400 unsupported_runtime）。
+   */
+  fork?: boolean
   /** 随本次子代理派生传递的产物 ID 列表。 */
   attachments?: string[]
   /**
@@ -608,6 +613,14 @@ export interface HelmHostApi {
     guard?: GuardedMutationExpectation,
   ): Promise<void>
   createConversation(init: ConversationInit): Promise<ConversationSummary>
+  /**
+   * 从源会话指定可见条目分叉新会话（与 POST /api/conversations/:id/fork 同源）。
+   * 源会话或条目不存在抛 404 not_found；entryId 非安全正整数抛 400 validation_error。
+   */
+  forkConversation(
+    id: number,
+    opts: { entryId: number; title?: string },
+  ): Promise<ConversationSummary>
   listConversations(filter?: ConversationListFilter): ConversationSummary[]
   /** 读取单个会话摘要；不存在时抛 HelmError。 */
   getConversation(id: number): ConversationSummary
@@ -753,10 +766,12 @@ export interface HelmHostApi {
   ): { idempotent: boolean }
   /**
    * 通用 spawn 靶点解析（机制，零业务语义）：按与原生执行行同一权威链
-   * 「request.cwd > profile.cwd > 父会话 cwd」解析源目录，「显式
-   * profile.nodeId > 父会话绑定节点 > 'local'」解析实际执行节点，并返回
-   * 父会话 cwd 供插件层在分配资源前解析源目录。链实现由内核唯一提取函数
-   * 提供（原生子会话派生与本端口同源），插件不得自行复制规则。
+   * 解析源目录与目标节点，并返回父会话 cwd 供插件层在分配资源前解析源目录：
+   * - 普通或跨角色 fork：cwd 链 `request.cwd > profile.cwd > 父会话 cwd`，
+   *   节点链 `显式 profile.nodeId > 父会话绑定节点 > 'local'`；
+   * - 同角色 fork（fork=true 且使用父会话同一 Profile）：cwd 链
+   *   `request.cwd > 父会话 cwd > profile.cwd`，节点链 `父会话绑定节点 > profile.nodeId > 'local'`。
+   * 链实现由内核唯一提取函数提供（原生子会话派生与本端口同源），插件不得自行复制规则。
    * 返回值是内核权威事实；节点离线校验不在本端口（由 execEnv/gate 各自执行）。
    *
    * 为何按需求值而非预归一化进请求字段：agent_spawn around 链上任一前置
@@ -769,10 +784,12 @@ export interface HelmHostApi {
    */
   resolveSpawnTarget(input: {
     parentConversationId: number
-    /** Profile ID（缺省 'assistant'）；Profile 不存在时抛 not_found。 */
+    /** Profile ID（非 fork 缺省 'assistant'；fork=true 缺省继承父会话 profileId）；Profile 不存在时抛 not_found。 */
     profileId?: string
-    /** 显式请求 cwd（优先于 Profile cwd）。 */
+    /** 显式请求 cwd（优先于 Profile/父会话 cwd）。 */
     requestCwd?: string
+    /** 是否按上下文分叉派生规则解析（缺省 false）。 */
+    fork?: boolean
   }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }>
   /**
    * 当前进程内仍在执行的 spawn 执行事实（通用机制面）：包含每次在途

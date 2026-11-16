@@ -261,6 +261,7 @@ class FakeBackend implements PluginHostBackend {
   async atomicWriteFile(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
   async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
   createConversation(): Promise<ConversationSummary> { return Promise.resolve(makeConversation(99)) }
+  forkConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(makeConversation(id + 100)) }
   listConversations(): ConversationSummary[] { return [...this.conversations.values()] }
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id)

@@ -401,6 +401,9 @@ class ProbeBackend implements PluginHostBackend {
   createConversation(): Promise<ConversationSummary> {
     return Promise.resolve(makeSummary(99))
   }
+  forkConversation(id: number): Promise<ConversationSummary> {
+    return Promise.resolve(makeSummary(id + 100))
+  }
   listConversations(): ConversationSummary[] {
     return [...this.conversations.values()]
   }

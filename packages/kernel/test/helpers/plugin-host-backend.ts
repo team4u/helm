@@ -87,6 +87,13 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.createConversation')
   }
 
+  forkConversation(
+    ...args: Parameters<Port<'forkConversation'>>
+  ): ReturnType<Port<'forkConversation'>> {
+    void args
+    unsupported('host.forkConversation')
+  }
+
   listConversations(
     ...args: Parameters<Port<'listConversations'>>
   ): ReturnType<Port<'listConversations'>> {
@@ -314,6 +321,7 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
     submitInput: f(d.submitInput),
     submitInputGuarded: f(d.submitInputGuarded),
     createConversation: f(d.createConversation),
+    forkConversation: f(d.forkConversation),
     listConversations: f(d.listConversations),
     getConversation: f(d.getConversation),
     getConversationDetail: f(d.getConversationDetail),

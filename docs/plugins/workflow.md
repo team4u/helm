@@ -6,7 +6,7 @@
 
 | 工具 | 核心入参 | 语义 |
 | :--- | :--- | :--- |
-| `subagent` | `prompt` 必填；`agentType`（Profile ID 或 `herdr:agy` 等外部运行时标识）、`cwd`、`background`、`isolation: 'worktree'`、`schema`、`gate`、`resume`、`model`、`effort`、`attachments`、`maxSubagentDepth`（显式授予子树派生深度上限，1..5，缺省继承 2）、`secretNames`（外部运行时窗格的父会话机密逐名授予，仅外部运行时消费，原生 Profile 不支持） | 派生单个子代理。生命周期缺省按当前会话归属判定：人类直连会话缺省后台，自动化会话（非 human-owned）缺省同步等待最终结果；自动化会话显式 `background: true` 被拒绝。同步路径统一经受管后台单子代理启动（durable 前台 run，`syncForeground` 标记），阻塞等待期间可被 `detach` 动作按 runId 转后台（调用立即返回后台句柄，终态 followUp 汇报）。`agentType` 只选择目标执行体，不参与生命周期判定 |
+| `subagent` | `prompt` 必填；`agentType`（Profile ID 或 `herdr:agy` 等外部运行时标识；非 `fork` 缺省 `assistant`，`fork: true` 缺省继承父会话 Profile）、`cwd`、`fork`（布尔值，从父会话当前已完成上下文分叉派生原生子会话，与 `resume` 互斥；不支持外部运行时）、`background`、`isolation: 'worktree'`、`schema`、`gate`、`resume`、`model`、`effort`、`attachments`、`maxSubagentDepth`（显式授予子树派生深度上限，1..5，缺省继承 2）、`secretNames`（外部运行时窗格的父会话机密逐名授予，仅外部运行时消费，原生 Profile 不支持） | 派生单个子代理。生命周期缺省按当前会话归属判定：人类直连会话缺省后台，自动化会话（非 human-owned）缺省同步等待最终结果；自动化会话显式 `background: true` 被拒绝。同步路径统一经受管后台单子代理启动（durable 前台 run，`syncForeground` 标记），阻塞等待期间可被 `detach` 动作按 runId 转后台（调用立即返回后台句柄，终态 followUp 汇报）。`agentType` 只选择目标执行体，不参与生命周期判定 |
 | `SubagentWorkflow` | `script / scriptPath / name` 三择一；`args` 任意 JSON（字符串形 JSON 自动解包）；`resumeFromRunId`；`background`（同一归属策略） | 在当前会话执行确定性编排脚本。生命周期缺省同 `subagent` 按会话归属判定（人类直连缺省后台、自动化缺省同步，自动化显式 `background: true` 拒绝）；后台启动即返回 running summary，终态经幂等汇报链投递；同步返回真实执行 summary（runId/status/nodes/result）。同步 run 标记 `syncForeground`，阻塞等待期间可被 `detach` 转后台（返回形状与后台启动兼容） |
 | `cleanup_worktree` | `worktreeId`（`node:path`）/ `conversationId` / `path`（可附 `nodeId` 消歧）三择一；`deleteBranch`、`force` | 清理一个受管隔离 Git Worktree；无任何显式选择器时以当前会话为选择器（`--current` 语义） |
 
@@ -29,10 +29,10 @@
 
 | 执行体 | 派生机制 | 深度登记 | 结果回传 |
 | :--- | :--- | :--- | :--- |
-| 原生 Profile 子会话 | 内核 `spawnAgent` 管道（`agent_spawn` Hook） | 进 `subagent-conversations` 登记表，受嵌套深度契约约束；支持 `resume` 续接 | 同步等待最终结果；后台经下文幂等汇报链投递父会话 |
+| 原生 Profile 子会话 | 内核 `spawnAgent` 管道（`agent_spawn` Hook，含 `fork: true` 上下文分叉） | 进 `subagent-conversations` 登记表，受嵌套深度契约约束；支持 `resume` 续接 | 同步等待最终结果；后台经下文幂等汇报链投递父会话 |
 | 外部 Herdr Profile（`herdr:<kind>` 前缀或 `runtime.kind: 'herdr'` 的 Profile） | `builtin:herdr` 拦截 `agent_spawn`，在终端窗格执行并通过文件交接回传 | 派生入口检查调用方深度；窗格没有原生 `conversationId`，不登记为子会话 | 后台终态同样汇报父会话；`onResolved` 回传 `controls.steer`，`workflow.steer` 据此委托 `builtin:herdr` 的 steer 动作（使用现有 `agent.prompt`，返回 `guardLevel=preflight`，不要求新增服务端能力）；`resume` 仅适用于仍存在且空闲的执行 |
 | SuperAgent Worker | `builtin:superagent` 的 `dispatch_worker`：`createConversation`（不经 spawn 管道） | 不进登记表、不受深度契约约束 | 插件自有非阻塞协议：派工立即返回 `workerConversationId`、绝不同步等待；汇报走独立 `turn_settled` → 中枢路由链。它不是 `subagent` 的 `background` 参数，两者不得混用 |
-| fork / 人工会话 | 人类在 Web/CLI 直接创建或 fork 既有会话 | 不进登记表、不受深度限制 | 就是普通会话；人类直连（human-owned）即适用「缺省后台」策略 |
+| 会话级 fork / 人工会话 | 人类在 Web/CLI 直接创建或经 `conversations fork` 按条目分叉的普通会话 | 不进登记表、不受深度限制 | 就是普通会话；人类直连（human-owned）即适用「缺省后台」策略 |
 
 ### 与 `workflows run` 动作/CLI 的区别
 
@@ -84,7 +84,7 @@
 
 ## 嵌套深度契约
 
-受管子代理（经 `subagent` 工具 / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认可嵌套 `DEFAULT_MAX_SUBAGENT_DEPTH`（2）层：主会话直接派生一层，一层子代理默认可继续派生二层，达到子树上限的会话即编排叶子。fork 会话与 SuperAgent worker（经 `createConversation` 创建，不经 spawn 管道）不进登记表，不受限制。
+受管子代理（经 `subagent` 工具（含 `fork: true`） / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认可嵌套 `DEFAULT_MAX_SUBAGENT_DEPTH`（2）层：主会话直接派生一层，一层子代理默认可继续派生二层，达到子树上限的会话即编排叶子。会话级 `conversations fork` 会话与 SuperAgent worker（经 `createConversation` / `forkConversation` 创建，不经 spawn 管道）不进登记表，不受限制。
 
 三道防线共用登记表事实：`before_turn` 对叶子回合剥离 `subagent` / `SubagentWorkflow`（一层子代理保留派工工具与协作目录）；工具与 `run` 动作入口在创建任何 run 记录前拒绝（`403 subagent_depth_exceeded`，携带 `depth` / `maxSubagentDepth` 事实）；`agent_spawn` 钩子（priority 300，先于 worktree 分配）兜底拒绝并登记新事实。
 

@@ -87,6 +87,11 @@ export interface SpawnHostSource {
    * 缺省不接线时 spawn 回退 SDK conversation.abort（原始取消能力）。
    */
   abortChildConversationGuarded?(childId: number): Promise<void>
+  /**
+   * 可选：fork 派生时解析父会话干净分叉锚点条目 ID（宿主在入钩子链前可预锁定，
+   * 绝不因并发推进或后续工作树分配前窗口漂移；缺席时回退 resolveCleanForkAnchor）。
+   */
+  resolveForkAnchor?(parentId: number): Promise<number>
 }
 
 export interface SpawnHostOptions {
@@ -140,6 +145,9 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
     bindChildToolCall: (childId, parentToolCallId) => source.bindChildToolCall(childId, parentToolCallId),
     ...(source.abortChildConversationGuarded !== undefined
       ? { abortChildConversationGuarded: (childId: number) => source.abortChildConversationGuarded!(childId) }
+      : {}),
+    ...(source.resolveForkAnchor !== undefined
+      ? { resolveForkAnchor: (parentId: number) => source.resolveForkAnchor!(parentId) }
       : {}),
     resolveProfile: async (profileId) => {
       const profile = await source.readProfileForSpawn(profileId)

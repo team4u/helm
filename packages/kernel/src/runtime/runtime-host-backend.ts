@@ -123,6 +123,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
       await runtime.submitInput(id, text, opts)
     },
     createConversation: (init) => runtime.createConversation(init),
+    forkConversation: (id, opts) => runtime.forkConversation(id, opts),
     listConversations: (filter) => runtime.listConversations(filter),
     getConversation: (id) => runtime.getConversation(id),
     getConversationDetail: (id, options) => runtime.getConversationDetail(id, options),

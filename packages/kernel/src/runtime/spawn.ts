@@ -28,12 +28,19 @@ import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '
 import { HelmError, sanitizeAgentNamespacedMeta } from '@helm/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
-import { clampThinkingLevelForModel } from './models.js'
+import { parseModelRef } from './models.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { resolveSpawnTargetChain } from './spawn-target.js'
+import {
+  assertSpawnForkFields,
+  resolveCleanForkAnchor,
+  resolveForkMode,
+  resolveInheritedModelAndThinking,
+} from './spawn-fork.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { runGate, MAX_TIMEOUT_MS } from './tools.js'
 import {
+  STRUCTURED_OUTPUT_EXTENSION_NAME,
   assertSchemaNotAsync,
   buildStructuredOutputExtension,
   parseSchemaCandidate,
@@ -158,6 +165,8 @@ export interface NativeSpawnDeps extends HelmToolDeps {
   resolveAttachmentsForPrompt?(): Promise<string>
   /** 节点可用性预检（离线拒绝）。新建路径靶点链统一由 spawn-target.ts 提供。 */
   assertNodeAvailable?: (nodeId: string) => void
+  /** 可选：fork 派生时解析父会话干净分叉锚点条目 ID（缺省走 resolveCleanForkAnchor）。 */
+  resolveForkAnchor?(parentId: number): Promise<number>
 }
 
 export interface SpawnOutcome {
@@ -216,6 +225,7 @@ export async function runNativeSpawn(deps: NativeSpawnDeps, request: AgentSpawnR
   // envelope 边界（同步段）：meta 必须是 JSON-safe 命名空间对象（钩子链
   // transform 后的最终请求在此复查；业务值由命名空间所有方插件校验）。
   sanitizeAgentNamespacedMeta(request.meta, { agentId: request.agentId ?? 'subagent', field: 'spawn request meta' })
+  assertSpawnRequestShape(request)
   const childId = request.resume === undefined ? undefined : resolveResumeRef(deps, request.resume, request.parentConversationId)
   if (childId !== undefined) {
     // 状态预检是与 claim 互补的第二道防线（覆盖未经本表的历史在途状态）。
@@ -257,19 +267,24 @@ async function runNativeSpawnTurn(
   request: AgentSpawnRequest,
   execution: NativeSpawnExecution,
 ): Promise<unknown> {
-  assertSpawnRequestShape(request)
-
   // ---- resume 解析：纯数字 convId 或 agentId 映射；绝不猜测续接（'12abc' 拒绝）。----
   // resume 配置基线：原子会话镜像（profileId/cwd/model）是唯一事实来源。
   // 缺省沿用；显式 agentType/cwd/model 变更经同一 updateConversation 路径应用
   // （真实 SDK configure + 镜像持久化，不重建身份字段）。
   const resume = resolveSpawnResume(deps, request)
+  const parentSummary = deps.getConversation(request.parentConversationId)
+  if (request.fork === true && parentSummary === undefined) {
+    throw new HelmError('not_found', `父会话 ${request.parentConversationId} 不存在，无法执行 fork 派生`, 404, {
+      parentConversationId: request.parentConversationId,
+    })
+  }
 
   // profile 解析：resume 缺省用原子会话 Profile（不偷偷回默认 assistant）；
-  // 新建路径沿用 agentType || 默认。resume 显式 agentType 为本次 Profile 变更。
-  const profileId = resume.isResume
-    ? (request.agentType ?? resume.existing!.profileId)
-    : (request.agentType ?? '') || DEFAULT_SPAWN_PROFILE
+  // fork 缺省继承父会话 Profile；普通新建路径沿用 agentType || 默认。
+  const forkResolution = resume.isResume
+    ? { profileId: request.agentType ?? resume.existing!.profileId, forkSameProfile: false }
+    : resolveForkMode(request.agentType, request.fork, parentSummary?.profileId, DEFAULT_SPAWN_PROFILE)
+  const { profileId, forkSameProfile } = forkResolution
   const profile = await resolveProfileForSpawn(deps, profileId)
 
   let summary: ConversationSummary | undefined = resume.existing
@@ -277,12 +292,18 @@ async function runNativeSpawnTurn(
     summary = await applyResumeConfiguration(deps, request, resume.childId!, resume.existing!, profileId)
   }
 
-  // 新建路径靶点：request > profile > 父会话镜像（引擎层不再注入 cwd，父
-  // 目录回退在此完成）。与 ctx.host.resolveSpawnTarget 同一权威链
-  // （spawn-target.ts），绝不各自维护；resume 严格沿用原子会话镜像
-  // （nodeId/cwd 不重算），显式 cwd 变更已在上方 updateConversation 收口。
-  const parentSummary = deps.getConversation(request.parentConversationId)
-  const target = resolveSpawnTargetForRequest(deps, request, resume.isResume, profile, summary, parentSummary)
+  // 新建路径靶点：与 ctx.host.resolveSpawnTarget 同一权威链（spawn-target.ts），
+  // 绝不各自维护；resume 严格沿用原子会话镜像（nodeId/cwd 不重算），显式 cwd
+  // 变更已在上方 updateConversation 收口。
+  const target = resolveSpawnTargetForRequest(
+    deps,
+    request,
+    resume.isResume,
+    profile,
+    summary,
+    parentSummary,
+    forkSameProfile,
+  )
   // gate 与子会话同 cwd（resume 用更新后的实际 cwd，不依赖 main cwd）。
   const gateCwd = target.childCwd
 
@@ -305,6 +326,8 @@ async function runNativeSpawnTurn(
       profileId,
       structured,
       target,
+      parentSummary,
+      forkSameProfile,
     )
   } else {
     notifyResumeResolved(deps, request, childId!, target)
@@ -328,6 +351,7 @@ async function runNativeSpawnTurn(
 
 /** 请求形状硬校验（同步段；全部显式拒绝，绝不静默改默认）。 */
 function assertSpawnRequestShape(request: AgentSpawnRequest): void {
+  assertSpawnForkFields(request)
   if (request.isolation !== undefined && request.isolation !== null && request.isolation !== '') {
     // 内核零业务分支：非空 isolation 到达原生执行行 = 没有插件经 agent_spawn
     // continuation 兑现（如 builtin:workflow 停用时的 worktree 隔离）。
@@ -439,7 +463,7 @@ async function applyResumeConfiguration(
   // 模型后来被用户禁用时拒绝 resume（409 model_disabled），绝不绕过禁用策略。
   // 空模型沿用既有未配置语义（submit 阶段 no_model），不在此伪造错误。
   if (summary!.model !== '') {
-    const modelRef = parseSpawnModel(summary!.model)
+    const modelRef = parseModelRef(summary!.model)
     deps.assertModelEnabled?.(modelRef.provider, modelRef.modelId)
   }
   return summary!
@@ -456,6 +480,7 @@ function resolveSpawnTargetForRequest(
   profile: ResolvedProfile,
   summary: ConversationSummary | undefined,
   parentSummary: ConversationSummary | undefined,
+  forkSameProfile: boolean,
 ): SpawnTarget {
   let nodeId: string
   let childCwd: string
@@ -470,6 +495,7 @@ function resolveSpawnTargetForRequest(
       profileCwd: profile.cwd,
       parentCwd: parentSummary?.cwd,
       defaultCwd: deps.defaultCwd,
+      forkSameProfile,
       normalize: (cwd, targetNodeId) =>
         normalizeSessionCwd(cwd, {
           nodeId: targetNodeId,
@@ -491,7 +517,7 @@ function prepareStructuredSession(request: AgentSpawnRequest): StructuredOutputS
   return { schema: request.schema, accepted: undefined }
 }
 
-/** 新建子会话：模型解析链 -> 禁用预检 -> 扩展安装 -> 创建 -> 空窗 claim ->
+/** 新建子会话：模型解析链 -> 禁用预检 -> 扩展安装 -> 创建/分叉 -> 空窗 claim ->
  * 镜像登记 -> onResolved 回传实际元数据。 */
 async function createChildConversation(
   deps: NativeSpawnDeps,
@@ -501,33 +527,63 @@ async function createChildConversation(
   profileId: string,
   structured: StructuredOutputSession | undefined,
   target: SpawnTarget,
+  parentSummary: ConversationSummary | undefined,
+  forkSameProfile: boolean,
 ): Promise<number> {
-  // 模型解析链（与会话策略同构）：请求显式 model > profile.model > 全局默认。
-  const modelRef = request.model ? parseSpawnModel(request.model) : undefined
-  const profileModelRef = profile.model ? parseSpawnModel(profile.model) : undefined
-  const resolvedModel = modelRef ?? profileModelRef ?? deps.resolveModel()
-  // 禁用模型在创建前显式拒绝（409 model_disabled）：三条解析路径
-  //（显式 request / profile / 全局默认）统一在此收口，绝不静默落到禁用模型。
+  const { resolvedModel, createModelRef, thinkingLevel, thinkingLevelOverride } = resolveInheritedModelAndThinking({
+    request,
+    forkSameProfile,
+    profile,
+    parentSummary,
+    defaultModel: deps.resolveModel,
+    defaultThinkingLevel: deps.resolveThinkingLevel,
+    modelsForClamp: deps.modelsForClamp?.(),
+  })
+  // 禁用模型在创建前显式拒绝（409 model_disabled）：全部解析路径
+  // 统一在此收口，绝不静默落到禁用模型。
   deps.assertModelEnabled?.(resolvedModel.provider, resolvedModel.modelId)
-  const createModelRef = `${resolvedModel.provider}/${resolvedModel.modelId}`
   const extension = structured ? buildStructuredOutputExtension(deps.structuredOutputSessions!) : undefined
-  if (extension) deps.installChildExtension(extension)
-  const inheritedLevel = request.effort ?? profile.thinkingLevel ?? deps.resolveThinkingLevel?.()
-  const modelsInstance = deps.modelsForClamp?.()
-  const thinkingLevel = modelsInstance
-    ? clampThinkingLevelForModel(modelsInstance, resolvedModel, inheritedLevel)
-    : inheritedLevel
+  const extensionsChange = extension
+    ? { add: [extension] }
+    : request.fork === true
+      ? { remove: [{ name: STRUCTURED_OUTPUT_EXTENSION_NAME } as Extension] }
+      : undefined
   const agentChange: AgentChange = {
     model: { provider: resolvedModel.provider, modelId: resolvedModel.modelId },
     cwd: target.childCwd,
-    ...(thinkingLevel ? { thinkingLevel: thinkingLevel as ModelThinkingLevel } : {}),
-    // extensions 需传扩展对象：SDK 存名（names()）但快照解析发生在 install 之后。
-    ...(extension ? { extensions: { add: [extension] } } : {}),
+    ...(thinkingLevel
+      ? { thinkingLevel: thinkingLevel as ModelThinkingLevel }
+      : request.fork === true
+        ? { thinkingLevel: null }
+        : {}),
+    // extensions 需传扩展对象：SDK 存名（names()）但快照解析发生在 install 之后；
+    // fork 且无 schema 时显式剥除 helm-structured-output，防止误继承父会话扩展。
+    ...(extensionsChange !== undefined ? { extensions: extensionsChange } : {}),
   }
-  const conv = await deps.harness.createConversation(
-    { ownership: { kind: 'ownerless' }, agent: agentChange },
-    bg,
-  )
+  let conv
+  if (request.fork === true) {
+    const parentConv = await deps.harness.conversation(request.parentConversationId as never, bg)
+    if (!parentConv) {
+      throw new HelmError('not_found', `父会话不存在：${request.parentConversationId}`, 404, {
+        parentConversationId: request.parentConversationId,
+      })
+    }
+    const anchorEntryId = await (deps.resolveForkAnchor
+      ? deps.resolveForkAnchor(request.parentConversationId)
+      : resolveCleanForkAnchor(deps.harness, request.parentConversationId))
+    if (extension) deps.installChildExtension(extension)
+    conv = await parentConv.fork(
+      anchorEntryId as never,
+      { ownership: { kind: 'ownerless' }, agent: agentChange },
+      bg,
+    )
+  } else {
+    if (extension) deps.installChildExtension(extension)
+    conv = await deps.harness.createConversation(
+      { ownership: { kind: 'ownerless' }, agent: agentChange },
+      bg,
+    )
+  }
   const childId = conv.id as number
   if (request.agentId) deps.agentSessions.set(request.agentId, childId)
   // 空窗闭合（见 conversationInTurn 注释）：子会话已存在但 onResolved 尚未
@@ -545,7 +601,7 @@ async function createChildConversation(
     [],
     thinkingLevel,
     target.nodeId,
-    request.effort !== undefined ? thinkingLevel : undefined,
+    thinkingLevelOverride,
   )
   // onResolved 在配置全部落定（创建 + 镜像登记）后回传实际元数据。
   request.onResolved?.({
@@ -798,12 +854,6 @@ function assertGateTimeoutMs(value: number): void {
       { gateTimeoutMs: value },
     )
   }
-}
-
-function parseSpawnModel(ref: string): { provider: string; modelId: string } {
-  const slash = ref.indexOf('/')
-  if (slash <= 0) throw new HelmError('validation_error', `模型引用格式应为 'provider/model'：${ref}`)
-  return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
 }
 
 /**

@@ -250,6 +250,7 @@ class FakeBackend implements PluginHostBackend {
   dispatchTrigger(): Promise<void> { return Promise.resolve() }
   submitInput(): Promise<void> { return Promise.resolve() }
   createConversation(): Promise<ConversationSummary> { return Promise.resolve(makeConversation(99)) }
+  forkConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(makeConversation(id + 100)) }
   listConversations(): ConversationSummary[] { return [...this.conversations.values()] }
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id)

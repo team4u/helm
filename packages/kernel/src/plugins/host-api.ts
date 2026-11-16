@@ -607,6 +607,7 @@ export function wrapHostApi(
 
     // 8. conversations
     createConversation: (init) => tracked('host.createConversation', () => backend.createConversation(init)),
+    forkConversation: (id, opts) => tracked('host.forkConversation', () => backend.forkConversation(id, opts)),
     listConversations: (filter) => {
       guard('host.listConversations');
       return backend.listConversations(filter);

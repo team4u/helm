@@ -262,6 +262,9 @@ class FakeBackend implements PluginHostBackend {
   async createConversation(): Promise<import('@helm/protocol').ConversationSummary> {
     throw new HelmError('not_implemented', '测试基座不创建会话', 500)
   }
+  async forkConversation(): Promise<import('@helm/protocol').ConversationSummary> {
+    throw new HelmError('not_implemented', '测试基座不分叉会话', 500)
+  }
   listConversations() {
     return []
   }

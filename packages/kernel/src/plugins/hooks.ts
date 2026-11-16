@@ -199,6 +199,7 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
       optString(v, 'cwd') ??
       optString(v, 'gate') ??
       optString(v, 'resume') ??
+      (v.fork === undefined || typeof v.fork === 'boolean' ? null : '字段 fork 若存在必须是布尔值') ??
       (v.isolation === undefined || typeof v.isolation === 'string' ? null : '字段 isolation 若存在必须是字符串') ??
       (v.schema === undefined || isObj(v.schema) ? null : '字段 schema 若存在必须是对象') ??
       (v.onCreated === undefined || typeof v.onCreated === 'function' ? null : '字段 onCreated 若存在必须是函数') ??
