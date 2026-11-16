@@ -4,7 +4,8 @@
  * 2. inputKvEntries 键值归一（短值内联、多行/长串/嵌套值块状、字符串入参）；
  * 3. write/read/bash 展示数据提取（字段只做类型收窄，缺失即 undefined；
  *    read spill 不做源码高亮、write 不伪造新建/覆盖判断）；
- * 4. toolRowStats 单行统计：edit 已应用/待执行、write 行数、插件接管不给统计。
+ * 4. toolRowStats 单行统计：edit 已应用/待执行、write 行数、插件接管不给统计；
+ * 5. summarizeStepGroup 折叠步骤组统计：思考/工具计数、错误与运行中计数、正有限耗时聚合。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -15,11 +16,12 @@ import {
   inputKvEntries,
   prettyJson,
   readBodyData,
+  summarizeStepGroup,
   tailLines,
   toolRowStats,
   writeBodyData,
 } from '../src/conversation/tool-body-model.js'
-import type { ToolTrace } from '../src/conversation/timeline-model.js'
+import type { FoldableStep, ToolTrace } from '../src/conversation/timeline-model.js'
 
 function trace(overrides: Partial<ToolTrace> = {}): ToolTrace {
   return { key: 't', toolName: 'bash', status: 'done', isError: false, ...overrides }
@@ -216,4 +218,74 @@ test('toolRowStats：write 报内容行数；插件 tool.view 接管不给宿主
     undefined,
   )
   assert.equal(toolRowStats(trace({ toolName: 'bash', input: { command: 'ls' } })), undefined)
+})
+
+// ---------------------------------------------------------------------------
+// 步骤组聚合摘要
+// ---------------------------------------------------------------------------
+
+function thinkingStep(key: string, text = '思路'): FoldableStep {
+  return { kind: 'thinking', thinking: { key, text } }
+}
+
+function toolStep(overrides: Partial<ToolTrace> = {}): FoldableStep {
+  return { kind: 'tool', tool: trace(overrides) }
+}
+
+test('summarizeStepGroup：混合思考与工具计数、isError/status=error 去重统计与正耗时累加', { timeout: 60_000 }, () => {
+  const summary = summarizeStepGroup([
+    thinkingStep('th1'),
+    toolStep({ key: 't1', toolName: 'read', status: 'done', durationMs: 120 }),
+    // isError 与 status='error' 仅任一为真或同时为真都只计 1 次失败
+    toolStep({ key: 't2', toolName: 'bash', status: 'done', isError: true, durationMs: 380 }),
+    toolStep({ key: 't3', toolName: 'edit', status: 'error', isError: false, durationMs: 500 }),
+    toolStep({ key: 't4', toolName: 'write', status: 'error', isError: true }),
+    toolStep({ key: 't5', toolName: 'bash', status: 'running' }),
+  ])
+
+  assert.deepEqual(summary, {
+    stepCount: 6,
+    thinkingCount: 1,
+    toolCount: 5,
+    errorCount: 3,
+    runningCount: 1,
+    totalDurationMs: 1000,
+  })
+})
+
+test('summarizeStepGroup：0 / 负值 / 非有限 / 缺失 durationMs 不计入，总和为 0 时省略 totalDurationMs', { timeout: 60_000 }, () => {
+  const noValidDuration = summarizeStepGroup([
+    thinkingStep('th1'),
+    toolStep({ key: 't1', status: 'done', durationMs: 0 }),
+    toolStep({ key: 't2', status: 'done', durationMs: -50 }),
+    toolStep({ key: 't3', status: 'done', durationMs: Number.NaN }),
+    toolStep({ key: 't4', status: 'done', durationMs: Number.POSITIVE_INFINITY }),
+    toolStep({ key: 't5', status: 'unknown' }),
+  ])
+  assert.deepEqual(noValidDuration, {
+    stepCount: 6,
+    thinkingCount: 1,
+    toolCount: 5,
+    errorCount: 0,
+    runningCount: 0,
+  })
+  assert.equal('totalDurationMs' in noValidDuration, false)
+
+  // 无效耗时与有效正耗时混排时仅累加有效正数
+  const partialDuration = summarizeStepGroup([
+    toolStep({ key: 't1', status: 'done', durationMs: 0 }),
+    toolStep({ key: 't2', status: 'done', durationMs: Number.NaN }),
+    toolStep({ key: 't3', status: 'done', durationMs: 250 }),
+    toolStep({ key: 't4', status: 'done', durationMs: 150 }),
+  ])
+  assert.equal(partialDuration.totalDurationMs, 400)
+
+  // 空步骤列表返回全 0 且无 totalDurationMs
+  assert.deepEqual(summarizeStepGroup([]), {
+    stepCount: 0,
+    thinkingCount: 0,
+    toolCount: 0,
+    errorCount: 0,
+    runningCount: 0,
+  })
 })

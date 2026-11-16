@@ -12,7 +12,7 @@ import {
   type ProcessShortcutCommand,
   type ToolTrace,
 } from './timeline-model.js'
-import { toolRowStats } from './tool-body-model.js'
+import { summarizeStepGroup, toolRowStats } from './tool-body-model.js'
 import { formatDurationMs } from '../lib/format.js'
 
 // ---------------------------------------------------------------------------
@@ -106,7 +106,10 @@ export function TraceRow({
                 </span>
               ) : null}
             </span>
-            <span className="trace-row-right">{right}</span>
+            <span className="trace-row-right">
+              {right !== '' ? <span>{right}</span> : null}
+              <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} className="trace-row-chevron" />
+            </span>
           </div>
           {toolView !== undefined ? (
             <div className="trace-toolview">
@@ -203,6 +206,7 @@ function MultiStepGroup({
     shortcutToggle.open &&
     shortcutExpandSeqRef.current === shortcutToggle.seq
 
+  const summary = useMemo(() => summarizeStepGroup(steps), [steps])
   const hasOnlyThinking = steps.every((s) => s.kind === 'thinking')
   const summaryTitle = hasOnlyThinking
     ? active
@@ -211,12 +215,14 @@ function MultiStepGroup({
     : active
       ? `正在思考与执行 (${steps.length} 步)…`
       : `思考与执行过程 (${steps.length} 步)`
+  const showErrorBadge = !open && summary.errorCount > 0
+  const showDuration = !active && summary.totalDurationMs !== undefined
 
   return (
     <div className="trace-group">
       <button
         type="button"
-        className="trace-group-summary"
+        className={`trace-group-summary${showErrorBadge ? ' trace-group-summary-error' : ''}`}
         aria-expanded={open}
         data-process-toggle="root"
         onClick={() => {
@@ -228,6 +234,12 @@ function MultiStepGroup({
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
         {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
         {summaryTitle}
+        {showErrorBadge ? (
+          <span className="trace-group-badge trace-group-badge-error">{`含 ${summary.errorCount} 项失败`}</span>
+        ) : null}
+        {showDuration ? (
+          <span className="trace-group-meta tabular-nums">{formatDurationMs(summary.totalDurationMs)}</span>
+        ) : null}
       </button>
       {open ? (
         <div className="trace-group-steps">
