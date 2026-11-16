@@ -2,6 +2,7 @@ import React, { useContext } from 'react'
 import type { Profile } from './profile-center-model.js'
 import {
   formatProfileLocation,
+  formatShortModelName,
   isHerdrProfile,
   isSystemProfile,
   resolveEffectiveProfileModel,
@@ -79,11 +80,7 @@ export function ProfileCard({
     store?.openTarget({ kind: 'agent', profileId: profile.id })
   }
 
-  const modelBadgeText = effectiveModel.model
-    ? `${effectiveModel.model}${effectiveModel.source === 'global' ? '（全局默认）' : ''}${
-        effectiveModel.thinkingLevel ? ` · ${effectiveModel.thinkingLevel}` : ''
-      }`
-    : '跟随全局默认'
+  const shortModelName = formatShortModelName(effectiveModel.model)
 
   const modelTitle = effectiveModel.model
     ? effectiveModel.source === 'bound'
@@ -137,19 +134,37 @@ export function ProfileCard({
       </div>
 
       <div className="flex-col-xs">
-        <div className="flex-row text-subtle mono" title={`节点与目录：${locationText}`}>
+        <div className="flex-row primary-card-location text-subtle mono" title={`节点与目录：${locationText}`}>
           <HelmIcon name={location.isRemoteNode ? 'server' : 'laptop'} size={11} />
           <span className="break-word">{locationText}</span>
         </div>
 
         <div className="primary-card-pills">
-          <span className="primary-card-pill mono" title={modelTitle}>
-            <HelmIcon name="cpu" size={10} />
-            <span>{modelBadgeText}</span>
-          </span>
+          {shortModelName ? (
+            <span className="primary-card-pill mono" title={modelTitle}>
+              <HelmIcon name="cpu" size={10} />
+              <span className="primary-card-pill-label">{shortModelName}</span>
+              {effectiveModel.thinkingLevel && (
+                <span className="primary-card-pill-suffix">· {effectiveModel.thinkingLevel}</span>
+              )}
+            </span>
+          ) : (
+            <span className="primary-card-pill" title={modelTitle}>
+              <HelmIcon name="cpu" size={10} />
+              <span className="primary-card-pill-label">跟随全局默认</span>
+            </span>
+          )}
+          {effectiveModel.source === 'global' && (
+            <span
+              className="primary-card-pill"
+              title={`继承全局默认模型：${effectiveModel.model}`}
+            >
+              <span>全局默认</span>
+            </span>
+          )}
           <span className="primary-card-pill" title={`技能配置：${skillsLabel}`}>
             <HelmIcon name="wrench" size={10} />
-            <span>{skillsLabel}</span>
+            <span className="primary-card-pill-label">{skillsLabel}</span>
           </span>
           {isHerdr && (
             <span className="primary-card-pill" title="Herdr 外部运行时">

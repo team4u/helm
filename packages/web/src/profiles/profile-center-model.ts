@@ -58,6 +58,18 @@ export function resolveProfileModel(p: Profile): string | undefined {
 }
 
 /**
+ * 提取模型展示短名：剥离 provider/ 路径前缀（与 Composer 模型选择器、模型中心卡片同口径）；
+ * 空白或仅分隔符时按空/原值兜底，完整路径保留在悬浮提示与详情抽屉中。
+ */
+export function formatShortModelName(model: string | undefined): string | undefined {
+  if (model === undefined) return undefined
+  const trimmed = model.trim()
+  if (trimmed === '') return undefined
+  const slashIdx = trimmed.lastIndexOf('/')
+  return slashIdx >= 0 && slashIdx < trimmed.length - 1 ? trimmed.slice(slashIdx + 1) : trimmed
+}
+
+/**
  * 构造角色绑定的可选模型下拉列表：
  * - 第一项恒为「跟随系统默认」（value: ''）；
  * - 过滤只展示已配置且未禁用的模型（available 且非 disabled），未配置/已禁用的不能作为正常可选项；

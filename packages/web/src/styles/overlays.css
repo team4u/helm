@@ -555,6 +555,7 @@
   outline: none;
   position: relative;
   min-height: 136px;
+  min-width: 0;
 }
 
 .primary-card:hover {
@@ -609,6 +610,18 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.primary-card-location {
+  min-width: 0;
+  align-items: flex-start;
+}
+
+.primary-card-location > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .primary-card-desc {
@@ -638,6 +651,8 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .primary-card-pill {
@@ -645,6 +660,9 @@
   align-items: center;
   gap: 4px;
   height: 20px;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   padding: 0 6px;
   border-radius: var(--radius-pill);
   font-size: 10.5px;
@@ -652,6 +670,23 @@
   border: 1px solid var(--border);
   background: var(--bg-subtle);
   color: var(--fg-muted);
+}
+
+.primary-card-pill > svg {
+  flex-shrink: 0;
+}
+
+.primary-card-pill-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.primary-card-pill-suffix {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* 520px/540px 右侧滑出抽屉通用规范（模型/Profile/节点/技能四大中心） */

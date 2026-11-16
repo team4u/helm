@@ -12,6 +12,7 @@ import {
   buildProfileModelOptions,
   filterProfiles,
   formatProfileLocation,
+  formatShortModelName,
   isHerdrProfile,
   isSystemProfile,
   profileIdValid,
@@ -150,6 +151,18 @@ test('profile-center-model：resolveProfileModel 优先 defaultModel 降级 mode
   assert.equal(resolveProfileModel({ id: 'a', defaultModel: 'm1', model: 'm2' }), 'm1')
   assert.equal(resolveProfileModel({ id: 'b', model: 'm2' }), 'm2')
   assert.equal(resolveProfileModel({ id: 'c' }), undefined)
+})
+
+test('profile-center-model：formatShortModelName 剥离多段路径前缀并保留末段短名', { timeout: 60_000 }, () => {
+  assert.equal(
+    formatShortModelName('openrouter/accounts/fireworks/models/deepseek-r1-0528'),
+    'deepseek-r1-0528',
+  )
+  assert.equal(formatShortModelName('anthropic/claude-3-7-sonnet'), 'claude-3-7-sonnet')
+  assert.equal(formatShortModelName('glm-5'), 'glm-5')
+  assert.equal(formatShortModelName('provider/'), 'provider/')
+  assert.equal(formatShortModelName('  '), undefined)
+  assert.equal(formatShortModelName(undefined), undefined)
 })
 
 test('profile-center-model：filterProfiles 分类标签筛选', { timeout: 60_000 }, () => {
@@ -864,7 +877,16 @@ test('ProfileCard: 展示继承全局模型、节点与工作目录、会话数�
     })
 
     const text = host.textContent ?? ''
-    assert.match(text, /anthropic\/claude-3-7-sonnet（全局默认） · high/)
+    const modelLabel = host.querySelector('.primary-card-pills .primary-card-pill-label')
+    const modelSuffix = host.querySelector('.primary-card-pills .primary-card-pill-suffix')
+    const modelPill = modelLabel?.closest('.primary-card-pill')
+    assert.equal(modelLabel?.textContent, 'claude-3-7-sonnet')
+    assert.equal(modelSuffix?.textContent, '· high')
+    assert.equal(
+      modelPill?.getAttribute('title'),
+      '继承全局默认模型：anthropic/claude-3-7-sonnet（思考档位：high）',
+    )
+    assert.match(text, /全局默认/)
     assert.match(text, /gpu-node-1 · \/data\/workspace\/helm/)
     assert.match(text, /待审批/)
     assert.match(text, /关联 1 个会话/)
@@ -886,6 +908,35 @@ test('ProfileCard: 展示继承全局模型、节点与工作目录、会话数�
     })
     host.remove()
   }
+})
+
+test('ProfileCard: 超长全路径模型仅展示短名与独立档位后缀，完整路径保留在悬浮 title', { timeout: 60_000 }, () => {
+  const longPathModel = 'openrouter/accounts/fireworks/models/Qwen3-235B-A22B-Instruct-2507'
+  const html = renderToStaticMarkup(
+    e(ProfileCard, {
+      profile: {
+        id: 'architect',
+        name: '架构师',
+        model: longPathModel,
+        thinkingLevel: 'xhigh',
+      },
+      onSelect: () => {},
+    }),
+  )
+  assert.match(html, /class="primary-card-pill-label">Qwen3-235B-A22B-Instruct-2507<\/span>/)
+  assert.match(html, /class="primary-card-pill-suffix">· xhigh<\/span>/)
+  assert.match(html, new RegExp(`title="绑定模型：${longPathModel}（思考档位：xhigh）"`))
+  assert.doesNotMatch(html, />openrouter\/accounts\/fireworks\/models\//)
+
+  // 未配置绑定模型且无全局默认时展示「跟随全局默认」
+  const unsetHtml = renderToStaticMarkup(
+    e(ProfileCard, {
+      profile: { id: 'plain', name: '普通角色' },
+      defaultModelInfo: null,
+      onSelect: () => {},
+    }),
+  )
+  assert.match(unsetHtml, /class="primary-card-pill-label">跟随全局默认<\/span>/)
 })
 
 test('ProfileDetailDrawer: 关闭按钮使用 .btn-icon-sm 且源码零 Emoji 与零 .callout--* 旧类', { timeout: 60_000 }, () => {
