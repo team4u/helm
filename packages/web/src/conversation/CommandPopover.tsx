@@ -81,8 +81,12 @@ export function CommandPopover({
         e.stopImmediatePropagation()
         const item = visible[active]
         if (item !== undefined) {
-          if (item.run !== undefined) item.run()
-          else if (item.apply !== undefined) onPick(item.apply)
+          if (item.run !== undefined) {
+            item.run()
+            onClose()
+          } else if (item.apply !== undefined) {
+            onPick(item.apply)
+          }
         }
       } else if (e.key === 'Escape') {
         e.preventDefault()
@@ -118,8 +122,12 @@ export function CommandPopover({
           className={`popover-item${idx === active ? ' popover-item-active' : ''}`}
           onMouseEnter={() => setActive(idx)}
           onClick={() => {
-            if (item.run !== undefined) item.run()
-            else if (item.apply !== undefined) onPick(item.apply)
+            if (item.run !== undefined) {
+              item.run()
+              onClose()
+            } else if (item.apply !== undefined) {
+              onPick(item.apply)
+            }
           }}
         >
           <span className="mono">{item.label}</span>

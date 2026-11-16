@@ -34,11 +34,13 @@ import {
   commandActionPluginId,
   commandHint,
   commandsForConversation,
+  executePluginSlashAction,
   insertAtCaret,
   isValidPluginSlash,
   matchExactPluginSlash,
   pluginSlashCommandsFor,
   removeTokenBeforeCaret,
+  replaceSlashToken,
 } from '../src/lib/commands-model.js'
 
 /** 真实用户键入路径：原生 setter 赋值 + 重置 value tracker + 派发 input。 */
@@ -123,7 +125,7 @@ test('matchExactPluginSlash：首 token 精确命中，带参数不命中', { ti
   assert.equal(matchExactPluginSlash('/new', commands), undefined, '保留词不命中插件命令')
 })
 
-test('insertAtCaret / removeTokenBeforeCaret：光标插入与触发词清理', { timeout: 60_000 }, () => {
+test('insertAtCaret / removeTokenBeforeCaret / replaceSlashToken：光标插入与触发词替换清理', { timeout: 60_000 }, () => {
   assert.deepEqual(insertAtCaret('hello', 5, '@a1 '), { next: 'hello@a1 ', nextCaret: 9 })
   assert.deepEqual(insertAtCaret('hello', 0, 'x'), { next: 'xhello', nextCaret: 1 })
   assert.deepEqual(insertAtCaret('hello', 99, '!'), { next: 'hello!', nextCaret: 6 }, '越界收敛到末尾')
@@ -132,6 +134,36 @@ test('insertAtCaret / removeTokenBeforeCaret：光标插入与触发词清理', 
   assert.deepEqual(removeTokenBeforeCaret('/ar rest', 3), { next: ' rest', nextCaret: 0 })
   assert.deepEqual(removeTokenBeforeCaret('text /archi', 10), { next: 'text i', nextCaret: 5 })
   assert.deepEqual(removeTokenBeforeCaret('plain', 5), { next: 'plain', nextCaret: 5 }, '无 token 不吞草稿')
+  assert.deepEqual(replaceSlashToken('/rev', 4, '/skill:review '), { next: '/skill:review ', nextCaret: 14 })
+  assert.deepEqual(replaceSlashToken('请用 /rev 检查', 7, '/skill:review '), { next: '请用 /skill:review  检查', nextCaret: 17 })
+  assert.deepEqual(replaceSlashToken('plain', 5, '/new'), { next: 'plain/new', nextCaret: 9 })
+})
+
+test('executePluginSlashAction：成功/失败统一通知与可选 conversationId 传递', { timeout: 60_000 }, async () => {
+  const notices: Array<{ level: string; title: string; conversationId?: number }> = []
+  const invoked: Array<{ pluginId: string; actionId: string; conversationId?: number }> = []
+  await executePluginSlashAction(cmd('p1', { slash: 'ping', title: '诊断', actionId: 'ping' }), {
+    invokePluginAction: async (pluginId, actionId, _input, conversationId) => {
+      invoked.push({ pluginId, actionId, conversationId })
+      return { ok: true }
+    },
+    pushNotice: (n) => { notices.push(n) },
+  })
+  assert.deepEqual(invoked, [{ pluginId: 'p1', actionId: 'ping', conversationId: undefined }])
+  assert.equal(notices[0]!.level, 'info')
+  assert.equal(notices[0]!.conversationId, undefined)
+
+  await assert.rejects(
+    executePluginSlashAction(cmd('p1', { slash: 'ping', title: '诊断', actionId: 'ping' }), {
+      invokePluginAction: async () => { throw new Error('offline') },
+      pushNotice: (n) => { notices.push(n) },
+      conversationId: 7,
+    }),
+    /offline/,
+  )
+  assert.equal(notices[1]!.level, 'error')
+  assert.equal(notices[1]!.conversationId, 7)
+  assert.match(notices[1]!.title, /\/ping/)
 })
 
 test('commandActionPluginId / commandHint：跨插件路由与 hint 派生', { timeout: 60_000 }, () => {
@@ -445,6 +477,8 @@ test('交互：草稿首 token 命中插件命令时执行 action（context 带�
     })
     // 第一次 Enter 被斜杠浮层捕获：插件命令选中即执行（不回填草稿），浮层关闭
     await act(async () => {})
+    // 注意：不要 assert.equal(元素, null)——失败时 node 会序列化整个 DOM+Fiber 循环引用树，曾把单进程堆打到 20GB+。
+    assert.ok(host.querySelector('.composer-popover') === null, '执行插件命令后浮层关闭')
     // 第二次 Enter：草稿已清空，无提交动作（不落 input）
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))

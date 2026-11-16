@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol'
 import { COMPOSER_STATUS_SLOT } from '@helm/protocol'
 import { conversationsApi } from '../lib/api.js'
 import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
 import { HelmIcon, PluginSlot } from '@helm/plugin-client'
 import { matchesUiScope } from '../lib/types.js'
-import { useStableCallback } from '../lib/use-stable-callback.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
 import { slashMenuSkills } from './slash-menu-skills.js'
@@ -17,14 +16,8 @@ import { ModelPicker } from './ModelPicker.js'
 import { SessionEnvBar } from './SessionEnvBar.js'
 import { ComposerSendControls } from './ComposerSendControls.js'
 import { Tooltip } from '../ui/Tooltip.js'
-import { focusWithCaret, useComposerController } from './composer-controller.js'
-import {
-  detectCompletionToken,
-  replaceTriggerToken,
-  type CompletionToken,
-  type MergedCompletionItem,
-} from './composer-completion-model.js'
-import { useComposerCompletionSources } from './use-composer-completion.js'
+import { useComposerController } from './composer-controller.js'
+import { autoGrowTextarea, useComposerPopovers, useElementWidthResize } from './use-composer-popovers.js'
 import {
   canConfigureSessionEnv,
   busyEnterMode,
@@ -45,8 +38,6 @@ export interface ComposerProps {
   /** /new 新话题入口：进入本智能体待命页（首次发送才落库）；宿主传入面板位置明确的导航回调。 */
   onNewThread?: () => void
 }
-
-type PopoverKind = 'slash' | null
 
 // ---------------------------------------------------------------------------
 // 上下文用量只读状态（ModelPicker 右侧；对齐 pi footer 展示，不可交互）。
@@ -69,17 +60,8 @@ function ContextUsageStatus({ conversation }: { conversation: ConversationSummar
   )
 }
 
-// ---------------------------------------------------------------------------
-// Composer 主体：组装 + 渲染。发送管线 / 附件上传 / 编辑回填在 composer-send.ts，
-// 模型选择在 ModelPicker.tsx，环境配置条在 SessionEnvBar.tsx，斜杠浮层在
-// CommandPopover.tsx，发送控件在 ComposerSendControls.tsx。
-// ---------------------------------------------------------------------------
-
 export function Composer({ conversation, prefill, onSendingChange, onNewThread }: ComposerProps) {
   const store = useHelmStore()
-  const [popover, setPopover] = useState<PopoverKind>(null)
-  const [popoverQuery, setPopoverQuery] = useState('')
-  const [completionToken, setCompletionToken] = useState<CompletionToken | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -142,28 +124,10 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const widgets = store.groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))
   const pills = store.groupedUi.composerPills.filter((p) => matchesUiScope(conversation, p.spec.scope))
 
-  // 只读 textareaRef：空依赖维持恒定身份，ResizeObserver 不随重渲染拆建。
-  const autoGrow = useCallback((): void => {
-    const el = textareaRef.current
-    if (el === null) return
-    el.style.height = '0px'
-    el.style.height = `${el.scrollHeight}px`
-  }, [])
   useLayoutEffect(() => {
-    autoGrow()
-  }, [text, isMobile, autoGrow])
-  useEffect(() => {
-    const el = textareaRef.current
-    if (el === null) return
-    let width = el.clientWidth
-    const observer = new ResizeObserver(() => {
-      if (el.clientWidth === width) return
-      width = el.clientWidth
-      autoGrow()
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [autoGrow])
+    autoGrowTextarea(textareaRef.current)
+  }, [text, isMobile])
+  useElementWidthResize(textareaRef, () => autoGrowTextarea(textareaRef.current))
   useEffect(() => {
     const extras = extrasRef.current
     if (extras === null) return
@@ -184,85 +148,29 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     }
   }, [isMobile, pills.length, widgets.length])
 
-  // 切换会话时关闭全部浮层（补全源订阅随 token 置空停订；编辑态复位在发送管线 hook）
-  useEffect(() => {
-    setPopover(null)
-    setCompletionToken(null)
-  }, [conversation.id])
-
-  // 触发检测：'/' 进斜杠命令浮层；'@' '#' ':' 进统一插件补全浮层。
-  const detectPopover = useCallback((value: string, caret: number): void => {
-    const token = detectCompletionToken(value.slice(0, caret))
-    if (token === null) {
-      setPopover(null)
-      setCompletionToken(null)
-      return
-    }
-    if (token.trigger === '/') {
-      setPopover('slash')
-      setPopoverQuery(token.query)
-      setCompletionToken(null)
-      return
-    }
-    setPopover(null)
-    setPopoverQuery('')
-    setCompletionToken(token)
-  }, [])
-
-  const applyPopover = (apply: string): void => {
-    const el = textareaRef.current
-    if (el === null) {
-      setPopover(null)
-      return
-    }
-    const caret = el.selectionStart ?? text.length
-    const before = text.slice(0, caret)
-    const tokenRe = /(?:^|\s)(\/[a-zA-Z0-9:_-]*)$/
-    const m = tokenRe.exec(before)
-    const start = m !== null ? caret - (m[1]?.length ?? 0) : caret
-    const next = `${text.slice(0, start)}${apply}${text.slice(caret)}`
-    setDraftState(next)
-    setPopover(null)
-    requestAnimationFrame(() => {
-      const pos = start + apply.length
-      el.focus()
-      el.setSelectionRange(pos, pos)
-    })
-  }
-  // 浮层 onPick/onClose 进其键盘 effect 依赖：稳定出口，调用时取最新实现。
-  const applyPopoverStable = useStableCallback(applyPopover)
-  const closeSlashPopoverStable = useStableCallback((): void => {
-    setPopover(null)
-  })
-  const closeCompletionStable = useStableCallback((): void => {
-    setCompletionToken(null)
-  })
-
-  // 补全选中：只替换光标前触发 token（含触发符）为 insertText，前后文本/附件/编辑锚点不动。
-  const applyCompletion = (insertText: string): void => {
-    const el = textareaRef.current
-    if (el === null) {
-      setCompletionToken(null)
-      return
-    }
-    const caret = el.selectionStart ?? readLiveDraft().length
-    const { next, nextCaret } = replaceTriggerToken(readLiveDraft(), caret, insertText)
-    setDraftState(next)
-    setCompletionToken(null)
-    focusWithCaret(el, nextCaret)
-  }
-  // 补全浮层 onPick 适配：稳定出口，选中时取最新实现。
-  const pickCompletionStable = useStableCallback((entry: MergedCompletionItem): void => {
-    applyCompletion(entry.item.insertText)
-  })
-
-  const completionSnapshot = useComposerCompletionSources({
-    token: completionToken,
+  const {
+    slashOpen,
+    popoverQuery,
+    completionOpen,
+    completionTrigger,
+    completionSnapshot,
+    detectPopover,
+    handleTextareaKeyUp,
+    handleTextareaClick,
+    shouldDeferKeyToPopover,
+    applySlashPick,
+    closeSlashPopover,
+    applyCompletionPick,
+    closeCompletionPopover,
+  } = useComposerPopovers({
+    textareaRef,
+    draftText: text,
+    readLiveDraft,
+    setDraftState,
     completers: store.groupedUi.composerCompleters,
     conversation,
+    resetKey: conversation.id,
   })
-  // 浮层真正打开 = 触发符激活且该会话作用域内有注册源；无源时不弹窗也不拦截输入。
-  const completionOpen = completionSnapshot.hasSources
 
   // 斜杠菜单三源合并：宿主内置命令 + 当前会话可用技能（profile.skills 白名单 +
   // 插件启用双过滤，缺 Profile 时先不展示技能）+ 满足作用域的插件命令。
@@ -334,14 +242,10 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     if (e.defaultPrevented || e.nativeEvent.defaultPrevented) {
       return
     }
-    if (
-      (popover !== null || completionOpen) &&
-      !e.nativeEvent.isComposing &&
-      (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape')
-    ) {
+    if (shouldDeferKeyToPopover(e)) {
       return // 由浮层全局捕获处理（IME composing 时不拦截，交给输入法）
     }
-    if (e.key === 'Escape' && popover === null && !completionOpen && editingEntryId !== null) {
+    if (e.key === 'Escape' && !slashOpen && !completionOpen && editingEntryId !== null) {
       e.preventDefault()
       cancelEdit()
       return
@@ -454,34 +358,26 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
               setDraftState(e.target.value)
               detectPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
             }}
-            onKeyUp={(e) => {
-              // 光标移动（方向键/Home/End）后重新检测：光标可能移回/移出触发 token。
-              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
-                detectPopover(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)
-              }
-            }}
-            onClick={(e) => {
-              // 点击移动光标同样重新检测（不改文本）。
-              detectPopover(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)
-            }}
+            onKeyUp={handleTextareaKeyUp}
+            onClick={handleTextareaClick}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             spellCheck={false}
           />
-          {popover !== null ? (
+          {slashOpen ? (
             <CommandPopover
               query={popoverQuery}
               slashItems={slashMenuItems}
-              onPick={applyPopoverStable}
-              onClose={closeSlashPopoverStable}
+              onPick={applySlashPick}
+              onClose={closeSlashPopover}
             />
           ) : null}
           <CompletionPopover
             open={completionOpen}
-            trigger={completionToken !== null && completionToken.trigger !== '/' ? completionToken.trigger : '@'}
+            trigger={completionTrigger}
             snapshot={completionSnapshot}
-            onPick={pickCompletionStable}
-            onClose={closeCompletionStable}
+            onPick={applyCompletionPick}
+            onClose={closeCompletionPopover}
             anchorRef={composerBoxRef}
           />
           <div className="composer-toolbar">
