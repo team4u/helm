@@ -419,6 +419,41 @@ test('shared primitives update labels with the host locale without changing sele
   }
 })
 
+test('ViewBoundary translates its retry UI while preserving the original diagnostic across locale changes', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const port = makePort(log)
+  let failing = true
+  function Content(): React.ReactNode {
+    if (failing) throw new Error('stable render diagnostic')
+    return e('span', null, 'restored user content')
+  }
+  const tree = (locale: 'en' | 'zh-CN') => e(SDK.PluginClientHostContext.Provider, { value: { ...port, locale } },
+    e(SDK.ViewBoundary, null, e(Content)))
+  const previousConsoleError = console.error
+  let mounted: ReturnType<typeof mount> | undefined
+  try {
+    console.error = () => {}
+    mounted = mount(tree('en'))
+    const { host, root } = mounted
+    assert.equal(host.querySelector('strong')?.textContent, 'View failed to render')
+    assert.equal(host.querySelector('p')?.textContent, 'stable render diagnostic')
+    act(() => root.render(tree('zh-CN')))
+    assert.equal(host.querySelector('strong')?.textContent, '视图渲染失败')
+    assert.equal(host.querySelector('p')?.textContent, 'stable render diagnostic')
+    const retry = host.querySelector<HTMLButtonElement>('button')
+    assert.ok(retry)
+    assert.equal(retry.textContent, '重新渲染')
+    failing = false
+    act(() => retry.click())
+    assert.ok(host.querySelector('[role="alert"]') === null)
+    assert.equal(host.textContent, 'restored user content')
+  } finally {
+    const root = mounted?.root
+    if (root) act(() => root.unmount())
+    console.error = previousConsoleError
+  }
+})
+
 test('PluginSlot: short names qualify, lists render all matches, singles render the first, fallbacks render when empty, and missing owners warn', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
