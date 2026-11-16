@@ -26,6 +26,8 @@
     "packages/protocol/src/**/*.ts",
     "packages/env-io/src/**/*.ts",
     "packages/env-io/test/**/*.ts",
+    "packages/test-kit/src/**/*.ts",
+    "packages/test-kit/test/**/*.ts",
     "packages/plugin-client/src/**/*.ts",
     "packages/plugin-client/src/**/*.tsx",
     "packages/plugin-client/test/**/*.ts",

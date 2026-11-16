@@ -34,16 +34,17 @@ function sourceFiles(root: string): string[] {
   })
 }
 
-function imports(file: string): string[] {
+function imports(file: string): Array<{ specifier: string; typeOnly: boolean }> {
   const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true)
-  const result: string[] = []
-  const add = (node: ts.Node | undefined) => {
-    if (node && ts.isStringLiteralLike(node)) result.push(node.text)
+  const result: Array<{ specifier: string; typeOnly: boolean }> = []
+  const add = (node: ts.Node | undefined, typeOnly = false) => {
+    if (node && ts.isStringLiteralLike(node)) result.push({ specifier: node.text, typeOnly })
   }
   const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) add(node.moduleSpecifier)
-    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) add(node.argument.literal)
-    if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) add(node.arguments[0])
+    if (ts.isImportDeclaration(node)) add(node.moduleSpecifier, Boolean(node.importClause?.isTypeOnly))
+    if (ts.isExportDeclaration(node)) add(node.moduleSpecifier, Boolean(node.isTypeOnly))
+    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) add(node.argument.literal, true)
+    if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) add(node.arguments[0], false)
     ts.forEachChild(node, visit)
   }
   visit(source)
@@ -60,6 +61,7 @@ const forbidden: Record<string, readonly string[]> = {
   '@helm/node': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/plugin-client', '@helm/plugin-build'],
   '@helm/web': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/node', '@helm/plugin-build'],
   '@helm/cli': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build'],
+  '@helm/test-kit': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build', '@helm/cli', '@helm/env-io'],
 }
 
 function packageName(specifier: string): string {
@@ -89,11 +91,14 @@ test('生产包保持单向依赖，源码只通过已声明的公开包入口�
   const violations: string[] = []
   for (const { root, manifest } of packages) {
     const dependencies = { ...manifest.dependencies, ...manifest.peerDependencies, ...manifest.optionalDependencies }
+    if (manifest.name !== '@helm/test-kit' && '@helm/test-kit' in dependencies) {
+      violations.push(`${manifest.name}: 生产依赖禁止包含测试工具包 @helm/test-kit`)
+    }
     for (const name of forbidden[manifest.name] ?? []) {
       if (name in dependencies) violations.push(`${manifest.name}: 禁止依赖 ${name}`)
     }
     for (const file of sourceFiles(join(root, 'src'))) {
-      for (const specifier of imports(file)) {
+      for (const { specifier, typeOnly } of imports(file)) {
         const label = `${relative(packagesDir, file)}: ${specifier}`
         if (isAbsolute(specifier) || specifier.startsWith('file:')) {
           violations.push(`${label} 绝对路径绕过包入口`)
@@ -106,8 +111,13 @@ test('生产包保持单向依赖，源码只通过已声明的公开包入口�
         }
         const target = packageName(specifier)
         if (!target.startsWith('@helm/')) continue
+        if (target === '@helm/test-kit' && manifest.name !== '@helm/test-kit') violations.push(`${label} 生产源码禁止依赖测试工具包 @helm/test-kit`)
         if ((forbidden[manifest.name] ?? []).includes(target)) violations.push(`${label} 反向依赖`)
-        if (target !== manifest.name && !(target in dependencies)) violations.push(`${label} 未声明生产依赖`)
+        if (manifest.name === '@helm/test-kit') {
+          if (!typeOnly) violations.push(`${label} @helm/test-kit 仅允许 import type 跨包引用`)
+        } else if (target !== manifest.name && !(target in dependencies)) {
+          violations.push(`${label} 未声明生产依赖`)
+        }
         if (/\/src(?:\/|$)/.test(specifier)) violations.push(`${label} 导入私有源码`)
         const targetManifest = packages.find(({ manifest: candidate }) => candidate.name === target)?.manifest
         if (targetManifest && !hasPublicExport(targetManifest, specifier)) violations.push(`${label} 未通过公开 exports 导入`)
@@ -162,7 +172,7 @@ function collectTransitiveLocalSources(entryFile: string): Set<string> {
     const current = queue.pop()!
     if (visited.has(current) || !existsSync(current)) continue
     visited.add(current)
-    for (const specifier of imports(current)) {
+    for (const { specifier } of imports(current)) {
       if (!specifier.startsWith('.')) continue
       const target = resolveRelativeSource(current, specifier)
       if (target && !visited.has(target)) queue.push(target)
@@ -234,14 +244,14 @@ test('浏览器侧源码与 @helm/protocol/browser 传递闭包禁止导入 node
     violations.push('protocol/src/browser.ts 传递闭包不得触达 protocol/src/plugin.ts')
   }
   for (const file of browserClosure) {
-    for (const specifier of imports(file)) {
+    for (const { specifier } of imports(file)) {
       const problem = isForbiddenBrowserRuntimeImport(specifier)
       if (problem) violations.push(`${relative(packagesDir, file)}: ${problem}`)
     }
   }
 
   for (const file of sourceFiles(join(packagesDir, 'plugin-client/src'))) {
-    for (const specifier of imports(file)) {
+    for (const { specifier } of imports(file)) {
       const problem = isForbiddenBrowserRuntimeImport(specifier)
       if (problem) violations.push(`${relative(packagesDir, file)}: ${problem}`)
       if (specifier === '@helm/protocol') {
@@ -252,7 +262,7 @@ test('浏览器侧源码与 @helm/protocol/browser 传递闭包禁止导入 node
 
   const webSrcDir = join(packagesDir, 'web/src')
   for (const file of sourceFiles(webSrcDir)) {
-    for (const specifier of imports(file)) {
+    for (const { specifier } of imports(file)) {
       const problem = isForbiddenBrowserRuntimeImport(specifier)
       if (problem) violations.push(`${relative(packagesDir, file)}: ${problem}`)
       if (specifier === '@helm/protocol') {

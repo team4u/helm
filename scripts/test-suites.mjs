@@ -39,7 +39,7 @@ const packagesDir = path.join(repoRoot, 'packages');
 
 // 套件 → 包名。切分原则见文件头注释；调整分档时必须同步更新 AGENTS.md 的测试分层约定。
 const SUITES = {
-  unit: ['protocol', 'env-io', 'cli', 'web', 'plugin-client'],
+  unit: ['protocol', 'env-io', 'test-kit', 'cli', 'web', 'plugin-client'],
   integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'node', 'payload', 'desktop'],
 };
 const ALL_PACKAGES = [...SUITES.unit, ...SUITES.integration];

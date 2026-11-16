@@ -27,6 +27,7 @@ export const FULL_TIER_TRIGGERS = new Set([
 export const PACKAGE_TIERS = {
   protocol: 'unit',
   'env-io': 'unit',
+  'test-kit': 'unit',
   cli: 'unit',
   web: 'unit',
   'plugin-client': 'unit',
