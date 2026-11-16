@@ -1,15 +1,15 @@
 /**
- * runtime-action-handler.ts — `action(actionId, input)` 调用的宿主侧 handler。
+ * runtime-action-handler.ts -- the host-side handler for `action(actionId, input)` calls.
  *
- * 自 runtime.ts 的 handleAction 闭包提取为显式依赖注入模块（语义逐行保持）。
+ * Extracted from runtime.ts's handleAction closure into an explicit dependency-injection module (semantics preserved line by line).
  *
- * 顺序契约：index 于调用发起时分配；action_started 追加+fsync 成功后才执行
- * handler；终态行（成功 result / 失败 error）落盘后才 respond。任何账本写
- * 失败都以 fatal 错误回给脚本——副作用不可在无法记账的状态下继续。
- * 已完成（ok）的 action 调用重放时直接复用 result，绝不重执行。
+ * Ordering contract: index is assigned at call initiation; the handler only runs after action_started
+ * append+fsync succeeds; respond only after the terminal row (success result / failure error) is persisted.
+ * Any ledger write failure is returned to the script as a fatal error -- side effects must not continue
+ * in an unaccountable state. Completed (ok) action calls are replayed by reusing the result directly, never re-executed.
  *
- * action 行不走 AgentJournalRecorder（agent 行才是尽力而为面）：此处
- * appendJournal 的拒绝 = JournalWriteError 语义，由各写点显式 fatal。
+ * action rows do not go through AgentJournalRecorder (agent rows are the best-effort face): here,
+ * appendJournal rejections = JournalWriteError semantics, explicitly fatal at each write point.
  */
 
 import { actionJournalKey, JournalWriteError, type JournalWriteInput } from './journal.js'
@@ -19,7 +19,7 @@ import type { ActionCallPayload, ActionJournalInput, WorkflowHost } from './runt
 import { assertBoundarySafe, preview, readCallScope, redactPlainValue } from './runtime-validation.js'
 import { RuntimeControl, Semaphore } from './runtime-control.js'
 
-/** handleActionCall 的全部依赖（由 runWorkflow 构造；字段含义见 runWorkflow）。 */
+/** All dependencies of handleActionCall (constructed by runWorkflow; field meanings in runWorkflow). */
 export interface ActionCallContext {
   host: WorkflowHost
   signal: AbortSignal | undefined
@@ -31,9 +31,9 @@ export interface ActionCallContext {
   replay: JournalReplay
   semaphore: Semaphore
   control: RuntimeControl
-  /** 与 agent handler 共享的 run 级计数（action 只动 replayedCount）。 */
+  /** Run-level counters shared with the agent handler (action only touches replayedCount). */
   counters: { replayedCount: number }
-  /** 原样注入的账本 append（写失败抛 JournalWriteError → 此处显式 fatal）。 */
+  /** The ledger append injected as-is (write failures throw JournalWriteError -> explicitly fatal here). */
   appendJournal: ((entry: JournalWriteInput) => Promise<void> | void) | undefined
   redactText: (text: string) => string
 }
@@ -100,9 +100,10 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
         },
       ])
       ctx.openLaunches.delete(callId)
-      // 只补记终态行（无副作用发生，无需 started 守护行）。补记失败即 fatal：
-      // 默默容忍会让新 run 账本缺失该 action 终态——下次 resume 无法复用，
-      // 可能重执行副作用。账本不可写 = 不可安全记账 = 不可继续。
+      // Only backfill the terminal row (no side effect happened; no started guard row needed).
+      // A backfill failure is fatal: silently tolerating it would leave the new run's ledger missing
+      // this action's terminal state -- the next resume could not reuse it and might re-execute side effects.
+      // An unwritable ledger = unsafely accountable = cannot continue.
       const effectiveReplayedIdempotent = payload.idempotent ?? (replayed.entry.idempotent === true)
       try {
         await recordAction({
@@ -132,7 +133,7 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
       return
     }
 
-    // 未命中缓存：必须等待并发许可后 live 执行（缓存命中不占 semaphore）
+    // Cache miss: must wait for a concurrency permit before live execution (cache hits do not occupy the semaphore)
     for (;;) {
       await ctx.control.actionPauseGate()
       await ctx.semaphore.acquire()
@@ -156,7 +157,7 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
         return
       }
 
-      // Pre-flight 预检
+      // Pre-flight checks
       let prepared: { pluginId: string; actionId: string; idempotent?: boolean } | undefined
       if (ctx.host.prepareAction !== undefined) {
         try {
@@ -214,7 +215,7 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
 
       const effectiveIdempotent = payload.idempotent ?? (prepared?.idempotent === true)
 
-      // 许可取得并完成 preflight 后才记 startedAt 与落 started 意图行
+      // Only record startedAt and persist the started intent row after the permit is acquired and preflight completes
       const startedAt = Date.now()
       try {
         await recordAction({
@@ -251,7 +252,7 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
       }
 
       const finishedAt = Date.now()
-      // 终态行落盘（fsync）之后才 respond；写失败 = 已执行但无法记账，显式不确定。
+      // respond only after the terminal row is persisted (fsync); a write failure = executed but unaccountable, explicitly uncertain.
       try {
         await recordAction(
           outcome.ok
@@ -314,7 +315,7 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
           error: outcome.error,
         },
       ])
-      // 失败照 agent 语义折叠为 null（pipeline/parallel 吞错为 null）。
+      // Failures fold into null per agent semantics (pipeline/parallel swallow errors into null).
       ctx.respond(callId, true, null)
     } finally {
       ctx.semaphore.release()

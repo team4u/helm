@@ -13,7 +13,7 @@
  *    - 响应 workbench-focus 请求直开并高亮目标 run.id；
  *    - WorkflowRunCardBody 去除重复 .phase-bar、提供无损 kv-grid（运行 ID/时间/源/定义）与 Radix Popover `···` 菜单；
  *    - SubagentLiveCard / ExternalRunSummary / WorkflowNodeCards 无损展示任务标题（含 entries 回退）、坐标与时间戳。
- * 4. 图标与设计约束：WorkflowIcon 支持 search/play、零 Emoji、零 callout--warn 拼写错、Fast Refresh 只导出组件与类型。
+ * 4. 图标与设计Constraints:WorkflowIcon 支持 search/play、零 Emoji、零 callout--warn 拼写错、Fast Refresh 只导出组件与类型。
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'

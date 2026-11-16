@@ -398,7 +398,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     const sections = (result as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
     const memory = sections.find((s) => s.id === 'memory.content')
     assert.ok(memory !== undefined, '超限仍应注入 memory.content section')
-    assert.ok(memory.text.includes('超过'), '截断应附显式说明')
+    assert.ok(memory.text.includes('helm note: MEMORY.md exceeds'), '截断应附显式说明')
     assert.ok(memory.text.length <= MAX_MEMORY_CHARS + 500, '注入内容应截断到上限附近（含说明）')
   })
 

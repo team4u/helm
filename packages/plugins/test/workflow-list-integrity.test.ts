@@ -172,7 +172,7 @@ async function runTwoSettledRuns(dataDir: string, state: WorkflowStateStore): Pr
 }
 
 /**
- * 在插件 records 文档存储上重建两个终态 run：记录文件直接落在目标引擎
+ * 在插件 records 文档存储上重建两个终态 run：record file直接落在目标引擎
  * dataDir（与 PluginHost 同目录），索引写入 records doc。
  */
 async function seedRecordsDocInto(
@@ -377,7 +377,7 @@ describe('WorkflowService listRuns integrity', () => {
     const service = await runTwoSettledRuns(dataDir, state)
     const index = state.get<Array<{ id: string }>>('workflow/runs', [])
     const victim = index[0]!.id
-    // 记录文件被外部写成非 JSON 文本：损坏，不是 TypeError。
+    // record file被外部写成非 JSON 文本：损坏，不是 TypeError。
     writeFileSync(recordFileOf(dataDir, victim), 'garbage', 'utf8')
     assert.throws(
       () => service.getRun(victim),
@@ -387,7 +387,7 @@ describe('WorkflowService listRuns integrity', () => {
         return true
       },
     )
-    // 记录文件是合法 JSON 但非对象（数组）：损坏。
+    // record file是合法 JSON 但非对象（数组）：损坏。
     writeFileSync(recordFileOf(dataDir, victim), '[]', 'utf8')
     assert.throws(
       () => service.getRun(victim),
@@ -414,7 +414,7 @@ describe('WorkflowService listRuns integrity', () => {
   it('index entry pointing at a missing record file fails explicitly (no silent short list)', timeout, async () => {
     const state = makeStateStore()
     const service = await runTwoSettledRuns(dataDir, state)
-    // 模拟索引指向缺失记录文件（外部删改）。
+    // 模拟索引指向缺失record file（外部删改）。
     const index = state.get<Array<{ id: string }>>('workflow/runs', [])
     assert.equal(index.length, 2)
     const victim = index[0]!.id
@@ -469,7 +469,7 @@ describe('WorkflowService listRuns integrity', () => {
     const victim = index[0]!.id
     const record = readRecordFile(dataDir, victim)
 
-    // syncForeground 非布尔：绝不 TS 强转当有效前台标记。
+    // syncForeground is not a boolean：绝不 TS 强转当有效前台标记。
     writeRecordFile(dataDir, { ...record, syncForeground: 'yes' })
     assert.throws(
       () => service.getRun(victim),
@@ -566,7 +566,7 @@ describe('WorkflowService listRuns integrity', () => {
       },
     )
     // 单 run 语境同样显式（不吞成 not_found），带 runId 诊断；索引级故障
-    // 与全部索引入口统一为 workflow_index_corrupt（记录文件级故障才显
+    // 与全部索引入口统一为 workflow_index_corrupt（record file级故障才显
     // workflow_record_corrupt）。
     assert.throws(
       () => failingService.getRun(victim),
@@ -581,7 +581,7 @@ describe('WorkflowService listRuns integrity', () => {
   })
 
   it('restart (init) over an index entry with missing record file blocks recovery explicitly (no silent skip)', timeout, async () => {
-    // 索引指向缺失记录文件 = 持久层不一致：init 显式阻断（与 prepareRecovery 同
+    // 索引指向缺失record file = 持久层不一致：init 显式阻断（与 prepareRecovery 同
     // 纪律——恢复屏障不被带病启动），不删除索引、不静默跳过；诊断面留给调用方。
     const state = makeStateStore()
     const service = await runTwoSettledRuns(dataDir, state)
@@ -687,7 +687,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
       sessionDocs: memorySessionDocs,
     })
     await host.register(createWorkflowPlugin())
-    // 注册后删除一条记录文件（模拟外部损坏）：索引指向缺失文件 → 500，绝非短列表 200。
+    // 注册后删除一条record file（模拟外部损坏）：索引指向缺失文件 → 500，绝非短列表 200。
     unlinkSync(recordFileOf(pluginEngineDataDir(join(dataDir, 'corrupt-index-plugins')), index[0]!.id))
     const handler = createHubHandler(
       { dataDir, auth, events: new NoopEventHub(), plugins: host } as unknown as KernelRuntimeLike,
@@ -821,8 +821,8 @@ test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码�
     assert.equal(healthy.code, 0, `healthy list should exit 0: ${healthy.err}`)
     assert.equal((JSON.parse(healthy.out) as { runs: unknown[] }).runs.length, 2)
 
-    // 注入记录损坏：删除一条记录文件（模拟外部删改；索引指向缺失文件）。
-    // 引擎记录文件在 <dataDir>/artifacts/<convId>/workflow-<runId>.record.json，
+    // 注入记录损坏：删除一条record file（模拟外部删改；索引指向缺失文件）。
+    // 引擎record file在 <dataDir>/artifacts/<convId>/workflow-<runId>.record.json，
     // records doc 只存轻量索引。
     const runsList = (await plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: Array<{ id: string }> }
     assert.equal(runsList.runs.length, 2)
@@ -842,7 +842,7 @@ test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码�
       }
     }
     locate(dataDir)
-    assert.ok(recordFile !== '', `记录文件必须存在于 dataDir 下（runId=${victim}）`)
+    assert.ok(recordFile !== '', `record file必须存在于 dataDir 下（runId=${victim}）`)
     unlinkSync(recordFile)
 
     const broken = await runCliChild(['workflows', 'runs', '--json'], {

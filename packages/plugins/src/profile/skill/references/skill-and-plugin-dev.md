@@ -1,56 +1,56 @@
-# 技能与插件自举开发参考
+# Skill and Plugin Bootstrap Development Reference
 
-## 自举编写技能（~/.helm/skills/<id>/）
+## Bootstrapping skills (~/.helm/skills/<id>/)
 
-技能是模型按需加载的操作手册，SKILL.md 保持简短，细节放 references/。下列路径均是 Hub 数据目录下的路径；配置 HELM_DATA_DIR 时使用该目录。在远端节点执行的 bash 不能把当地 ~/.helm 当成 Hub 的资产目录。
+Skills are operation manuals the model loads on demand; keep SKILL.md short and put details in references/. All paths below live under the Hub data directory; when HELM_DATA_DIR is configured, use that directory. Bash running on a remote node must not treat the local ~/.helm as the Hub's asset directory.
 
 ```
 ~/.helm/skills/deploy-playbook/
-  SKILL.md              # 必须：frontmatter + 索引级正文
+  SKILL.md              # required: frontmatter + index-level body
   references/
-    rollback.md         # 按需下钻子文件（可嵌套子目录）
+    rollback.md         # on-demand drill-down files (nested subdirs allowed)
     db-migrate.md
 ```
 
-SKILL.md 骨架：
+SKILL.md skeleton:
 
 ```markdown
 ---
 name: deploy-playbook
-description: 发布流程手册（模型靠这句话判断何时加载）
+description: Release process playbook (the model decides when to load by this sentence)
 ---
 
-# 发布流程
+# Release Process
 
-遇对应场景先读参考文件：
+Read the reference files first when a scenario matches:
 
-- references/rollback.md：回滚步骤
-- references/db-migrate.md：数据库迁移
+- references/rollback.md: rollback steps
+- references/db-migrate.md: database migration
 ```
 
-要点：
-- id 目录名限 [a-zA-Z0-9][a-zA-Z0-9._-]{0,63}；references 内路径禁止绝对路径/`..`/反斜杠/符号链接（严格校验）。
-- description 决定触发时机，写具体、写场景；正文不堆细节，索引指路。
-- 写完 `helm skills list` 验证被识别，`helm skills read <id>` 验证可读。
+Key points:
+- The id directory name must match [a-zA-Z0-9][a-zA-Z0-9._-]{0,63}; paths inside references forbid absolute paths/`..`/backslashes/symlinks (strictly validated).
+- The description decides triggering -- write it concretely and scenario-specific; keep details out of the body, let the index point the way.
+- After writing, verify recognition with `helm skills list` and readability with `helm skills read <id>`.
 
-## 开发外置插件（~/.helm/plugins/<dir>/）
+## Developing external plugins (~/.helm/plugins/<dir>/)
 
-优先使用 `helm plugins init <name>` 生成完整骨架（含 `plugin.json`、`index.ts`、`client/index.tsx`）；也可手工放置 `plugin.json` 声明 `{ "id": "my-plugin", "main": "index.ts", "clientRoot": "./client" }` 或约定入口（`index.ts` / `index.mjs` / `index.js`）。
+Prefer `helm plugins init <name>` to generate the full skeleton (incl. `plugin.json`, `index.ts`, `client/index.tsx`); you can also hand-place a `plugin.json` declaring `{ "id": "my-plugin", "main": "index.ts", "clientRoot": "./client" }` or a conventional entry (`index.ts` / `index.mjs` / `index.js`).
 
-服务端入口直接导出符合 PluginDefinition 的对象，其中 definePlugin(ctx) 注册能力；支持直接用 TypeScript（宿主按依赖闭包转译加载）：
+The server entry directly exports an object satisfying PluginDefinition, where definePlugin(ctx) registers capabilities; TypeScript works directly (the host transpiles and loads along the dependency closure):
 
 ```ts
 // ~/.helm/plugins/my-plugin/index.ts
 export default {
   id: "my-plugin",
-  name: "我的插件",
+  name: "My Plugin",
   version: "0.1.0",
-  clientRoot: "./client", // 前端组件放在 client/ 子目录时必须显式声明（缺省根为插件目录本身）
+  clientRoot: "./client", // required when frontend components live in client/ (default root is the plugin directory itself)
   definePlugin(ctx) {
     const state = ctx.doc("state", { count: 0 }, { public: true })
     ctx.action({
       id: "increment",
-      description: "计数加一",
+      description: "Increment the counter by one",
       inputSchema: { type: "object", additionalProperties: false },
       outputSchema: { type: "object", properties: { count: { type: "number" } }, required: ["count"], additionalProperties: false },
       handler() {
@@ -58,17 +58,17 @@ export default {
         return state.get()
       },
     })
-    ctx.ui.sidebarItem({ id: "my", label: "我的插件", icon: "terminal", target: "screen:my-plugin/main" })
-    // client.module 相对 clientRoot 解析（此处对应 <插件目录>/client/index.tsx）
+    ctx.ui.sidebarItem({ id: "my", label: "My Plugin", icon: "terminal", target: "screen:my-plugin/main" })
+    // client.module resolves relative to clientRoot (here: <plugin dir>/client/index.tsx)
     ctx.ui.screen({
-      id: "main", label: "计数器",
+      id: "main", label: "Counter",
       client: { module: "index.tsx", export: "CounterScreen" },
     })
   },
 }
 ```
 
-client/index.tsx（共享宿主 React 与 SDK，不打包第二份 React）：
+client/index.tsx (shares the host React and SDK; never bundles a second React):
 
 ```tsx
 import { usePluginContext, usePluginDoc } from '@helm/plugin-client'
@@ -78,17 +78,17 @@ export function CounterScreen() {
   const state = usePluginDoc<{ count: number }>('state')
   return (
     <div className="card">
-      <div>计数：{state?.count ?? 0}</div>
-      <button type="button" className="btn btn-primary" onClick={() => void callAction('increment', {})}>加一</button>
+      <div>Count: {state?.count ?? 0}</div>
+      <button type="button" className="btn btn-primary" onClick={() => void callAction('increment', {})}>+1</button>
     </div>
   )
 }
 ```
 
-受控前端 npm 依赖与插件依赖：
+Controlled frontend npm dependencies and plugin dependencies:
 
-- client.tsx 默认只允许 `react`、`react-dom`、`lucide-react`、`@helm/plugin-client` 与插件目录内相对导入；第三方裸 npm 包必须显式声明。
-- 前端依赖可写在 `plugin.json`：
+- client.tsx allows only `react`, `react-dom`, `lucide-react`, `@helm/plugin-client`, and relative imports inside the plugin directory by default; third-party bare npm packages must be declared explicitly.
+- Frontend dependencies can live in `plugin.json`:
 
 ```json
 {
@@ -97,7 +97,7 @@ export function CounterScreen() {
 }
 ```
 
-  也可写在 `package.json` 的 `helm.clientDependencies`：
+  or in `package.json` under `helm.clientDependencies`:
 
 ```json
 {
@@ -106,14 +106,14 @@ export function CounterScreen() {
 }
 ```
 
-- `clientDependencies` 是前端 bundle 的精确裸说明符白名单；子路径（如 `lodash/map`）也必须逐项声明。解析根固定为插件自身目录，不能在外部插件代码中自定义 `npmDependencies` 解析根。
-- 对受管安装，`helm plugins install` / `helm plugins update` 会补装声明的前端依赖且使用 `--no-save`；建议同时把包及版本范围写入 `package.json.dependencies`，保证安装可复现。未声明版本范围的裸包名按包管理器当前解析结果安装。
-- `helm plugins doctor <dir>`、`helm apps validate <dir>` 与运行期 client 编译使用同一依赖边界；缺失依赖、未声明裸导入、相对路径越根都会显式失败，不能用普通 Markdown 或空组件假装通过。
-- 插件间依赖可写在 `plugin.json.dependencies` 或 `package.json.helm.dependencies`，例如 `["base-plugin"]`；也可写在入口导出对象的 `dependencies` 字段（三处合并去重）。它只接受插件 ID，不接受 npm 版本范围。启用前依赖插件必须已注册且已启用；依赖环路会被拒绝；别人停用/卸载被你依赖的插件会被 `plugin_in_use` 拦下。
-- 依赖声明本身不是调用机制，它只提供保障（依赖一定在、一定先启动、不会被抽走）。真正调用另一个插件的功能用 `ctx.host.invokeAction`：
+- `clientDependencies` is an exact bare-specifier whitelist for the frontend bundle; subpaths (e.g. `lodash/map`) must also be declared individually. The resolution root is pinned to the plugin's own directory; external plugin code cannot customize `npmDependencies` resolution roots.
+- For managed installs, `helm plugins install` / `helm plugins update` install declared frontend dependencies with `--no-save`; also writing the package and version range into `package.json.dependencies` is recommended so installs stay reproducible. Bare package names without version ranges install per the package manager's current resolution.
+- `helm plugins doctor <dir>`, `helm apps validate <dir>`, and runtime client compilation share the same dependency boundary; missing dependencies, undeclared bare imports, and out-of-root relative paths fail explicitly -- never fake a pass with plain Markdown or empty components.
+- Inter-plugin dependencies can be declared in `plugin.json.dependencies` or `package.json.helm.dependencies`, e.g. `["base-plugin"]`; or in the entry export object's `dependencies` field (the three merge and dedup). It accepts plugin IDs only, not npm version ranges. Before enabling, depended-on plugins must be registered and enabled; dependency cycles are rejected; others disabling/uninstalling a plugin you depend on is blocked by `plugin_in_use`.
+- A dependency declaration is not a calling mechanism; it only provides guarantees (the dependency exists, starts first, and cannot be pulled away). To actually invoke another plugin's features, use `ctx.host.invokeAction`:
 
 ```ts
-// 依赖方：声明 dependencies 后，service start 时可安全调用对方动作
+// Depender: after declaring dependencies, safely call the other's actions at service start
 export default {
   id: 'my-plugin',
   dependencies: ['base-plugin'],
@@ -124,8 +124,9 @@ export default {
         const result = await ctx.host.invokeAction(
           'base-plugin', 'analyze', { text: 'hello' },
         ) as { score: number }
-        // 调用经过防线：目标必须处于启用态（停用即显式报错，绝不静默空返回），
-        // 输入经对方 inputSchema 校验，输出经 outputSchema 校验并统一脱敏。
+        // The call passes the defense line: the target must be enabled (disabled errors
+        // explicitly, never a silent empty return); input is validated by the target's
+        // inputSchema, output by its outputSchema, uniformly redacted.
       },
       async stop() {},
     })
@@ -133,39 +134,39 @@ export default {
 }
 ```
 
-- 动态发现：`ctx.host.listActions()` 返回全部已启用插件的动作清单（pluginId / id / inputSchema / outputSchema / idempotent），可按需调用；调用前可用 `ctx.host.prepareAction(pluginId, actionId, input)` 做无副作用预检。
-- 异步通信用事件总线：`await ctx.host.emitEvent('my-plugin:done', payload)` 发布（其他插件 `ctx.host.onEvent` 订阅）；`onEvent` 返回退订函数，插件停用时宿主自动解除。
-- UI 组合用 `ctx.ui.slot` 向其他插件的命名插槽注入组件；前端跨插件读公开文档用 `usePluginDoc(name, pluginId)`，跨插件调动作用 `callAction(actionId, input, { pluginId })`。
-- 不要直接 import 另一个插件的代码：插件是独立模块图（支持代际热重载），直接 import 会焊死两个插件的生命周期；跨插件一律走 invokeAction / 事件 / 插槽这些接口导向通道。
+- Dynamic discovery: `ctx.host.listActions()` returns all enabled plugins' action catalogs (pluginId / id / inputSchema / outputSchema / idempotent) for on-demand invocation; before calling, `ctx.host.prepareAction(pluginId, actionId, input)` does a side-effect-free precheck.
+- Async communication goes through the event bus: publish with `await ctx.host.emitEvent('my-plugin:done', payload)` (others subscribe via `ctx.host.onEvent`); `onEvent` returns an unsubscribe function, and the host auto-unsubscribes on plugin disable.
+- UI composition uses `ctx.ui.slot` to inject components into other plugins' named slots; on the frontend, read other plugins' public docs with `usePluginDoc(name, pluginId)` and invoke cross-plugin actions with `callAction(actionId, input, { pluginId })`.
+- Never import another plugin's code directly: plugins are independent module graphs (supporting generational hot reload), and direct imports would weld two plugins' lifecycles together; cross-plugin interaction always goes through the interface-oriented channels invokeAction / events / slots.
 
-扩展入口：
-- 后端 Hook（{{HOOK_COUNT}} 个）：{{HOOK_NAMES}}；各 Hook 允许的 continue/transform/handled/block 结果以 protocol 契约为准。
-- 前端 {{UI_METHOD_COUNT}} 个 ctx.ui 注册方法：基础 10 个（sidebarItem/sidebarSection、screen、timelineRenderer、markdownCodeBlock、toolView、composerPill/composerWidget、workbenchPanel、command、settingsPanel）+ 统一 UI 动作 action（target 三选一：conversation:header / conversation:row / timeline:entry；绑 actionId 后宿主代管按钮/pending/失败提示，scope 按标签过滤会话，timeline:entry 的 kinds/roles 过滤消息条目；宿主注入的真实 conversationId/entryId 强制覆盖 input 同名字段）+ profileRuntime（Profile 外部运行时元数据）+ slot（插件子插槽）+ artifactPreviewer（按 MIME/后缀预览产物）+ composerCompleter（输入引用候选源）。
-- timelineRenderer/markdownCodeBlock/toolView/artifactPreviewer/composerCompleter 支持 priority（降序裁决，缺省 0；同优先级保持贡献顺序）；同一插件可声明多块 settings.panel（order 排序）。markdownCodeBlock 按围栏语言（languages）接管 Markdown 代码块渲染，无注册命中时回退普通代码块。
-- `Profile.starters` 是静态配置的空白会话提示，不是 UI 扩展点；每 Profile 最多六项，label 最多 24 个 Unicode 码点，prompt 最多 4000 个码点。只在历史完整加载的真实空会话展示，点击回填草稿而不发送；已有草稿、附件、编辑或在途操作不覆盖。CLI 使用 `helm profiles update <id> --starters '<json数组>' --json`，传 `[]` 清空。
-- command 的 slash（不含 / 的触发词）同时派生输入框 `/` 补全：保留词 {{RESERVED_SLASH_COMMANDS}} 与 skill: 前缀禁占，跨启用插件不得重名，声明 slash 必须绑定本插件 actionId（跨插件动作用 actionPluginId）。
-- screen 组件收到 params/setParams：URL Hash 中主屏 `sp.<key>`、分屏 `ssp.<key>` 命名空间隔离，同屏双开互不串扰；setParams 默认 replace，`{push:true}` 入栈；组件不得自建路由或直接操作 history。
-- composer.pill/widget 收到受控句柄 composer（draft/attachments/sending、setDraft/insertText/submit；submit() 失败 reject 且保留草稿）。
-- `composerCompleter` 为 `@ / # / :` 声明纯数据补全源（`/` 留给命令/技能）：`source` 必须显式选择 `{kind:'action', actionId, actionPluginId?}` 或 `{kind:'doc'|'sessionDoc', name, itemsField}`。Action 输入 `{query, conversationId?, profileId?}`（真实会话传 `conversationId`，待命草稿态视 schema 是否声明传 `profileId` 或仅 `{query}`）、输出 `{items:[{id,label,insertText,hint?,icon?}]}`，且必须 `idempotent: true`；文档源必须是本插件 public doc/sessionDoc 的顶层数组字段，不猜 `docs[0]`。补全只替换触发 token、只插入文本，不提交/执行。Web 防抖查询，CLI/Agent/Workflow 经同一 Action。
-- `artifactPreviewer` 按 MIME（精确值或 `type/*`）和/或小写扩展名（如 `.csv`、`.topo.json`）匹配；至少声明一类，MIME 与后缀取 OR，按 scope 和 priority 裁决。组件接收宿主管理的 `blobUrl`、可选元数据名和最多 1 MiB 的文本；用户仍可切回默认预览与下载。client 仍是可信代码不是沙箱；展示不可信 HTML 时放入默认无权限的 `<iframe sandbox="">`，不注入宿主 DOM，不要声称 `allow-scripts` 无风险。
-- `NODE_DETAIL_SECTION_SLOT` (`builtin:node/detail-section`) 是节点中心宿主保留插槽，不是 `builtin:node` 插件。用 `ctx.ui.slot` 注入已有节点的扩展区，Props 为 `{nodeId,isLocal,isOnline,isNew:false}`；不传令牌/连接命令，不在新节点接入表单挂载。
-- `ctx.action({ id, description, inputSchema, outputSchema, cli?, exposeAsTool?, idempotent?, scope?, promptSnippet?, promptGuidelines?, handler })` 将 Schema 动作统一映射到 HTTP、CLI、Workflow action()、Web 与会话动作目录：启用且匹配会话 scope、未直接暴露为工具的动作自动出现在系统提示 `<available_actions>` 目录（全限定 ID/描述/CLI 命令/紧凑签名；内置与外部插件同权，新插件无需改 SYSTEM.md 或内置技能），模型经 `run_action({ actionId, input })` 直接调用，`run_action({ actionId, describe: true })` 可只读返回完整 manifest（含嵌套 schema，不执行 handler，同样按启用与 scope 过滤）。`exposeAsTool: true` 派生独立模型工具，不重复列入目录；`ctx.tool` 则是不进五端映射、仅模型可见的专用工具，两者都支持 `promptSnippet`（完整段落）/`promptGuidelines`（要点列表）：指引仅实际激活时注入、与目录不重复；停用或 scope 不可达时目录、工具与提示词自动清理，不留幻影。`idempotent: true` 标记只读/幂等动作，失败或中断时允许工作流断链重跑。
-- `ctx.host.execEnv(req, opts?)` 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helm/node 通道、SecretStash 注入与脱敏），纳入在途任务追踪（withTask）。
-- `ctx.host.forkConversation(id, { entryId, title? })` 从源会话指定可见条目 ID 热分叉新会话（与 `POST /api/conversations/:id/fork` 同源，纳入在途任务追踪；源会话或条目不存在抛 404，entryId 非法抛 400）。若需经 `agent_spawn` 管道从父会话当前已完成历史派生原生子会话，传 `ctx.host.spawnAgent({ ..., fork: true })`（自动避开未闭合 toolCall；仅原生 Profile 支持，外部运行时显式拒绝）。
-- `ctx.host.nodeFetch(nodeId): typeof fetch` / `ctx.host.openTunnel(nodeId, { host?, port }, signal?)` 经 EnvFabric 节点隧道跨节点访问目标节点视角的 HTTP(S)/SSE 服务，或获取任意 TCP 双工流（host 由节点解析，缺省 `127.0.0.1`；活动隧道计入在途任务追踪）。节点端无需部署配套插件代码。
-- `ctx.doc(name, initial, { public: true })` 公开持久全局状态（进全局 SSE 首帧，更新广播全量）；前端组件经 `usePluginDoc(name)` 订阅。`ctx.configSchema` 的 secret 字段进入凭据存储，避免公开到 doc。
-- `ctx.sessionDoc(name, initial, { public: true })` 按会话分片持久状态：句柄 `get/set/update/delete(conversationId, ...)`（如 `metrics.update(input.conversationId, cur => ({ count: cur.count + 1 }))`），前端组件用 `usePluginSessionDoc("metrics")` 按当前会话订阅；不进全局首帧与全局广播，公开时经专用 SSE（`GET /api/plugins/:id/docs/:name/events?conversationId=N`）只推给订阅该会话的客户端；会话删除级联清理，删除后写入被拒。会话级 UI 状态（如每会话任务列表、运行详情）一律用 sessionDoc 而非 doc，避免全局写放大；doc 与 sessionDoc 禁止同名。
-- `ctx.service({ id, start, stop })` 管理后台服务；声明 liveTasks 可在停用前报告在途任务。service.start 内可经 `ctx.host.skills.ensureSkill({ id, skillMd, references })` 自举受管技能（长手册的标准去向，不要塞进 promptGuidelines）：
+Extension entries:
+- Backend hooks ({{HOOK_COUNT}}): {{HOOK_NAMES}}; each hook's allowed continue/transform/handled/block results follow the protocol contract.
+- Frontend {{UI_METHOD_COUNT}} ctx.ui registration methods: the base 10 (sidebarItem/sidebarSection, screen, timelineRenderer, markdownCodeBlock, toolView, composerPill/composerWidget, workbenchPanel, command, settingsPanel) + the unified UI action `action` (target one of conversation:header / conversation:row / timeline:entry; once bound to an actionId the host manages the button/pending/failure hints, scope filters conversations by tag, timeline:entry filters message entries by kinds/roles; the host-injected real conversationId/entryId forcibly override same-named input fields) + profileRuntime (Profile external-runtime metadata) + slot (plugin child slots) + artifactPreviewer (preview artifacts by MIME/suffix) + composerCompleter (input reference completion sources).
+- timelineRenderer/markdownCodeBlock/toolView/artifactPreviewer/composerCompleter support priority (adjudicated in descending order, default 0; ties keep contribution order); one plugin may declare multiple settings.panel blocks (ordered by `order`). markdownCodeBlock takes over Markdown code-block rendering by fence language (`languages`); without a registration hit it falls back to a plain code block.
+- `Profile.starters` are statically configured blank-conversation prompts, not a UI extension point; at most six per Profile, label at most 24 Unicode code points, prompt at most 4000 code points. They show only in a genuinely empty conversation with history fully loaded; clicking backfills the draft without sending; existing drafts, attachments, edits, or in-flight operations are never overwritten. CLI: `helm profiles update <id> --starters '<json array>' --json`, pass `[]` to clear.
+- A command's slash (trigger word without /) also derives an input-box `/` completion: reserved words {{RESERVED_SLASH_COMMANDS}} and the skill: prefix are unclaimable, names must not collide across enabled plugins, and declaring slash requires binding to this plugin's actionId (use actionPluginId for cross-plugin actions).
+- screen components receive params/setParams: in the URL hash, main-screen `sp.<key>` and split-screen `ssp.<key>` namespaces stay isolated, so two instances of the same screen never interfere; setParams replaces by default, `{push:true}` pushes onto the stack; components must not build their own routing or touch history directly.
+- composer.pill/widget receive the controlled handle composer (draft/attachments/sending, setDraft/insertText/submit; a failing submit() rejects and keeps the draft).
+- `composerCompleter` declares pure-data completion sources for `@ / # :` (`/` is reserved for commands/skills): `source` must explicitly pick `{kind:'action', actionId, actionPluginId?}` or `{kind:'doc'|'sessionDoc', name, itemsField}`. Action input `{query, conversationId?, profileId?}` (real conversations pass `conversationId`; standby-draft mode passes `profileId` or just `{query}` per the schema), output `{items:[{id,label,insertText,hint?,icon?}]}`, and must be `idempotent: true`; doc sources must be a top-level array field of this plugin's own public doc/sessionDoc -- never guess `docs[0]`. Completion replaces only the trigger token and inserts text only; it never submits/executes. The Web debounces queries; CLI/Agent/Workflow go through the same Action.
+- `artifactPreviewer` matches by MIME (exact value or `type/*`) and/or lowercase extension (e.g. `.csv`, `.topo.json`); declare at least one kind; MIME and extension OR together, adjudicated by scope and priority. The component receives the host-managed `blobUrl`, optional metadata name, and at most 1 MiB of text; users can still switch back to the default preview and download. The client remains trusted code, not a sandbox; when displaying untrusted HTML, put it in a default permission-less `<iframe sandbox="">`, never inject it into the host DOM, and never claim `allow-scripts` is risk-free.
+- `NODE_DETAIL_SECTION_SLOT` (`builtin:node/detail-section`) is a host-reserved slot in the node center, not a `builtin:node` plugin. Use `ctx.ui.slot` to inject into the existing-node extension area, Props being `{nodeId,isLocal,isOnline,isNew:false}`; pass no tokens/join commands, and do not mount on the new-node join form.
+- `ctx.action({ id, description, inputSchema, outputSchema, cli?, exposeAsTool?, idempotent?, scope?, promptSnippet?, promptGuidelines?, handler })` uniformly maps a Schema action onto HTTP, CLI, Workflow action(), the Web, and the conversation action catalog: enabled actions matching the conversation's scope that are not directly exposed as tools automatically appear in the system prompt's `<available_actions>` catalog (fully-qualified ID/description/CLI command/compact signature; built-in and external plugins are equal; new plugins need no SYSTEM.md or built-in-skill changes); the model calls them directly via `run_action({ actionId, input })`, and `run_action({ actionId, describe: true })` read-only returns the full manifest (incl. nested schemas, without executing the handler, likewise filtered by enablement and scope). `exposeAsTool: true` derives a standalone model tool not duplicated in the catalog; `ctx.tool` is a dedicated tool visible only to the model and outside the five-end mapping; both support `promptSnippet` (a full paragraph) / `promptGuidelines` (a bullet list): guidance injects only when actually activated, without duplicating the catalog; on disable or unreachable scope, the catalog, tools, and prompt fragments are cleaned automatically, leaving no phantoms. `idempotent: true` marks read-only/idempotent actions, allowing workflows to rerun them across broken chains after failure or interruption.
+- `ctx.host.execEnv(req, opts?)` executes commands across nodes via the kernel EnvFabric (reusing local / remote @helm/node channels, SecretStash injection, and redaction), tracked as in-flight tasks (withTask).
+- `ctx.host.forkConversation(id, { entryId, title? })` hot-forks a new conversation from a specified visible entry of the source conversation (same source as `POST /api/conversations/:id/fork`, tracked as in-flight; a missing source conversation or entry throws 404, an invalid entryId 400). To derive a native sub-conversation from the parent conversation's currently completed history through the `agent_spawn` pipeline, pass `ctx.host.spawnAgent({ ..., fork: true })` (automatically avoiding unclosed toolCalls; native Profiles only -- external runtimes reject explicitly).
+- `ctx.host.nodeFetch(nodeId): typeof fetch` / `ctx.host.openTunnel(nodeId, { host?, port }, signal?)` access HTTP(S)/SSE services from the target node's perspective, or obtain an arbitrary TCP duplex stream, via EnvFabric node tunnels (the node resolves host, defaulting to `127.0.0.1`; active tunnels are tracked as in-flight). No companion plugin code is needed on the node side.
+- `ctx.doc(name, initial, { public: true })` exposes persistent global state (enters the global SSE first frame; updates broadcast in full); frontend components subscribe via `usePluginDoc(name)`. Secret fields of `ctx.configSchema` go into credential storage, keeping them out of the public doc.
+- `ctx.sessionDoc(name, initial, { public: true })` persists state sharded per conversation: handles `get/set/update/delete(conversationId, ...)` (e.g. `metrics.update(input.conversationId, cur => ({ count: cur.count + 1 }))`); frontend components subscribe per current conversation with `usePluginSessionDoc("metrics")`; never enters the global first frame or global broadcast -- when public, a dedicated SSE (`GET /api/plugins/:id/docs/:name/events?conversationId=N`) pushes only to clients subscribed to that conversation; conversation deletion cascades cleanup, and writes after deletion are rejected. Session-scoped UI state (per-conversation task lists, run details) always uses sessionDoc instead of doc to avoid global write amplification; doc and sessionDoc must not share a name.
+- `ctx.service({ id, start, stop })` manages background services; declaring liveTasks lets in-flight tasks be reported before disabling. Inside service.start you can bootstrap managed skills via `ctx.host.skills.ensureSkill({ id, skillMd, references })` (the standard home for long manuals -- do not stuff them into promptGuidelines):
 
 ```ts
 const SKILL_MD = `---
 name: deploy-guide
-description: 部署手册（模型靠这句话判断何时加载）
+description: Deployment playbook (the model decides when to load by this sentence)
 managedByPlugin: my-plugin
 ---
 
-# 部署
-遇回滚场景先读 references/rollback.md。
+# Deployment
+Read references/rollback.md first for rollback scenarios.
 `
 
 ctx.service({
@@ -174,23 +175,23 @@ ctx.service({
     await ctx.host.skills.ensureSkill({
       id: 'deploy-guide',
       skillMd: SKILL_MD,
-      references: { 'rollback.md': '# 回滚\n…' },
+      references: { 'rollback.md': '# Rollback\n...' },
     })
   },
   async stop() {},
 })
 ```
 
-  `managedByPlugin` 必须是本插件 ID（宿主校验绑定）；技能随插件停用自动退出可用目录、启用后恢复，同时仍受 Profile.skills 白名单过滤（限定目录的 Profile 需显式勾选才可见）——helm-cli 也遵守同一规则，不是始终可用。
+  `managedByPlugin` must be this plugin's ID (the host validates the binding); the skill automatically leaves the available catalog when the plugin disables and returns on enable, while still being filtered by Profile.skills whitelists (catalog-limited Profiles must opt in explicitly) -- helm-cli follows the same rule and is not always available.
 
-要点：
-- 外部插件 id 禁止 `builtin:` 前缀、禁止与已注册插件重名、不可自封 locked；放入目录后 `helm plugins rescan` 增量发现（或重启 Hub 自动发现），默认停用注册。
-- 受管安装：`helm plugins install <source>` 支持 `npm:<spec>`、`git:<repo>@<ref>`、HTTPS Git URL 与本地路径四种 source（由 Hub 服务端解析获取；本地路径指 Hub 主机上的路径）；`helm plugins update <id>` 更新、`helm plugins remove <id> [--yes]` 移除（破坏性操作需确认，非交互用 --yes）；安装记录（PluginPackageRecord）由安装器持久化，PluginSummary 附可选 managed 元数据。安装启用即在 Hub 进程内执行可信插件代码，无沙箱，仅装可信来源。手管目录（init + rescan）方式继续可用。
-- 启用：`helm plugins enable my-plugin`；修改入口代码后用 `helm plugins reload my-plugin` 受控热重载（先静态自检预检，失败时旧实例保持不动，无需重启 Hub）。停用/启用仅重建已有定义的生命周期。停用或卸载遇在途任务会显式拒绝（409 plugin_has_live_tasks）。
-- 不要在自己的回合内重启 Hub；先完成结果交付，再安排进程重启。
-- 前端 React 组件（client.tsx）经 esbuild 动态编译，可 import react / react-dom / lucide-react / @helm/plugin-client（宿主共享实例，不打包第二份 React）。@helm/plugin-client 另共享无障碍底座组件：Switch、Select、MultiSelect、Checkbox、Tabs/TabsList/TabsTrigger/TabsContent、SegmentedControl、HelmIcon、ViewBoundary、Callout、Dialog/DialogPortal/DialogOverlay/DialogContent/DialogTitle/DialogDescription/DialogClose/DialogTrigger、MarkdownView、MarkdownText、CodeBlockView、CopyButton、PluginSlot，以及轻量布局原语 Screen（页面容器+页头）、ScreenSection（分节）、DataTable（组合式表格外壳，统一 loading/empty，表头/数据行由 children JSX 表达）、KvGrid（items: Array<{key,value}> 键值概览），及通用格式化纯函数 formatTime（MM-DD HH:mm）、formatCompactTimestamp（MM-DD HH:mm:ss）、formatDurationMs（毫秒时长摘要）、formatBytes（字节数人类可读化，1024 进制）——通用结构优先复用这些原语与 formatter，不要另造原生控件、重复 formatter 或新 CSS 主题。
-- 共享 Hook：useToolActivity(callId, active) 报告所在时间线回合的工具后台活动；usePluginDoc(name, pluginId?) 响应式订阅公开全局文档（可跨插件寻址）；usePluginSessionDoc(name, {conversationId?, pluginId?}?) 按当前会话订阅公开会话文档（多组件共享订阅，引用归零退订，重连首帧恢复）；useConversations() 全部会话摘要；useConversation(id) 单会话实时视图（summary/detail/live/pendingAsks）；usePlugins() 宿主插件清单与 Screen 贡献响应式快照（plugins + screens，SSE 实时同步，应用中心类视图据此感知已安装应用及其主视图启停）；<PluginSlot name> 声明子插槽；usePluginContext() 提供 callAction(actionId, input, {pluginId?, conversationId?})（可跨插件）、submitInput(text, {conversationId?, whenBusy?})、openScreen/openSplitScreen/openConversationDrawer/openArtifact/openWorkbench、notify 等。
-- 插件视图样式写在 clientRoot 内本地 .css（import 引入，esbuild 合并为保留导出 __helmClientCss，宿主托管注入与回收），不得写宿主 styles.css。
-- UI 文案严禁 Emoji；图标用 lucide 图标名。
-- 完整扩展点与 client.tsx 单轨机制见仓库内 docs/architecture/extension-points.md 与 docs/plugins/plugin-development.md。
-- client.tsx 涉及重型依赖、动态 import、首屏性能或异步 chunk 时，先读取 `references/plugin-client-code-splitting.md`；该手册规定 AI 应写的源码形态、禁止触碰的宿主桥接内部、验证命令与失败处理。
+Key points:
+- External plugin ids forbid the `builtin:` prefix, forbid name collisions with registered plugins, and cannot self-declare locked; after placing into the directory, `helm plugins rescan` discovers them incrementally (or a Hub restart auto-discovers), registered disabled by default.
+- Managed installs: `helm plugins install <source>` supports four sources -- `npm:<spec>`, `git:<repo>@<ref>`, HTTPS Git URLs, and local paths (resolved and fetched by the Hub server; a local path means a path on the Hub host); `helm plugins update <id>` updates, `helm plugins remove <id> [--yes]` removes (a destructive operation requiring confirmation; use --yes non-interactively); install records (PluginPackageRecord) are persisted by the installer, and PluginSummary carries optional managed metadata. Installing and enabling executes trusted plugin code inside the Hub process, with no sandbox -- install only trusted sources. The hand-managed directory route (init + rescan) remains available.
+- Enable: `helm plugins enable my-plugin`; after editing entry code use `helm plugins reload my-plugin` for a controlled hot reload (static self-check precheck first; on failure the old instance stays untouched; no Hub restart needed). Disable/enable only rebuilds the lifecycle of existing definitions. Disabling or uninstalling with in-flight tasks is explicitly refused (409 plugin_has_live_tasks).
+- Do not restart the Hub inside your own turn; finish delivering results first, then schedule the process restart.
+- Frontend React components (client.tsx) compile dynamically via esbuild and may import react / react-dom / lucide-react / @helm/plugin-client (host-shared instances; never bundle a second React). @helm/plugin-client additionally shares the accessible foundation components: Switch, Select, MultiSelect, Checkbox, Tabs/TabsList/TabsTrigger/TabsContent, SegmentedControl, HelmIcon, ViewBoundary, Callout, Dialog/DialogPortal/DialogOverlay/DialogContent/DialogTitle/DialogDescription/DialogClose/DialogTrigger, MarkdownView, MarkdownText, CodeBlockView, CopyButton, PluginSlot, plus the lightweight layout primitives Screen (page container + header), ScreenSection (sectioning), DataTable (composable table shell with unified loading/empty; thead/rows expressed as children JSX), KvGrid (items: Array<{key,value}> key-value overview), and the generic formatting pure functions formatTime (MM-DD HH:mm), formatCompactTimestamp (MM-DD HH:mm:ss), formatDurationMs (millisecond duration summary), formatBytes (human-readable bytes, base 1024) -- prefer reusing these primitives and formatters for common structures instead of building native controls, duplicate formatters, or new CSS themes.
+- Shared hooks: useToolActivity(callId, active) reports background tool activity of the owning timeline turn; usePluginDoc(name, pluginId?) reactively subscribes to public global docs (cross-plugin addressing supported); usePluginSessionDoc(name, {conversationId?, pluginId?}?) subscribes to public session docs per current conversation (multi-component shared subscription; unsubscribes at zero references; first-frame restore on reconnect); useConversations() for all conversation summaries; useConversation(id) for a single conversation's live view (summary/detail/live/pendingAsks); usePlugins() for a reactive snapshot of the host plugin list and Screen contributions (plugins + screens, live-synced via SSE -- app-center-style views use it to sense installed apps and their main views' enablement); <PluginSlot name> declares child slots; usePluginContext() provides callAction(actionId, input, {pluginId?, conversationId?}) (cross-plugin capable), submitInput(text, {conversationId?, whenBusy?}), openScreen/openSplitScreen/openConversationDrawer/openArtifact/openWorkbench, notify, and more.
+- Plugin view styles live in a local .css inside clientRoot (imported; esbuild merges it into the preserved export __helmClientCss, with the host managing injection and reclamation); never write the host's styles.css.
+- UI copy strictly forbids Emoji; icons use lucide icon names.
+- For the complete extension points and the client.tsx single-track mechanism, see the in-repo docs/architecture/extension-points.md and docs/plugins/plugin-development.md.
+- When client.tsx involves heavy dependencies, dynamic imports, first-screen performance, or async chunks, read `references/plugin-client-code-splitting.md` first; that manual specifies the source shape the AI should write, the host bridging internals that must never be touched, verification commands, and failure handling.

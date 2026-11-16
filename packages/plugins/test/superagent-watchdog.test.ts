@@ -166,7 +166,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
   // 预置常驻会话：watchdog/router/#1（scope 校验与自激排除都依赖真实摘要）。
   conversations.set(watchdogId, makeConversationSummary(watchdogId, { profileId: 'watchdog', title: '巡检看门狗' }))
   conversations.set(routerId, makeConversationSummary(routerId, { profileId: 'superagent', title: 'SuperAgent 中枢' }))
-  conversations.set(1, makeConversationSummary(1, { title: '个人助理' }))
+  conversations.set(1, makeConversationSummary(1, { title: 'Personal Assistant' }))
   const ownership = new Map<number, 'helm' | 'bot' | 'human'>()
   /** 会话活动统计驱动（与生产同源：经 ctx.host.onEvent 真实事件注入，
    * 不再经已删除的 getConversationActivity 端口）。 */

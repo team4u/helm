@@ -1,61 +1,61 @@
 ---
 name: generative-ui
-description: 在回复正文中输出交互式卡片/表单/表格（ui 代码块）时使用；涵盖原语 Props 契约、表达式求值与三大动作指令。
+description: Use when emitting interactive cards/forms/tables (ui code blocks) in reply bodies; covers primitive Props contracts, expression evaluation, and the three action directives.
 managedByPlugin: builtin:json-render
 ---
 
-# 生成式 UI 参考
+# Generative UI Reference
 
-在回复正文中输出 ```ui 代码块，内容为单个 JSON 对象，Web 端会内联渲染为交互式卡片。
+Emit a ```ui code block in the reply body whose content is a single JSON object; the Web renders it inline as an interactive card.
 
-## 适用边界（不滥用）
+## Applicability (do not overuse)
 
-- 适用：多维指标总览、对比表格、多步流程跟踪、需要用户交互（选择/输入/开关/按钮）的动作卡片。
-- 不适用：普通问答、代码展示、简单列表——直接用标准 Markdown，不套 UI 块。
-- 无 Emoji 规范：文案中严禁任何 Emoji；图标用 lucide 图标名（如 terminal、cpu、activity、check-circle、alert-triangle、git-branch；注意没有 server 图标，磁盘/机器用 hard-drive）。
+- Applicable: multi-dimensional metric overviews, comparison tables, multi-step progress tracking, and action cards needing user interaction (choose/input/toggle/button).
+- Not applicable: plain Q&A, code display, simple lists -- use standard Markdown directly, without UI blocks.
+- No-Emoji rule: any Emoji in copy is strictly forbidden; icons use lucide icon names (e.g. terminal, cpu, activity, check-circle, alert-triangle, git-branch; note there is no server icon -- use hard-drive for disks/machines).
 
-## 双形态
+## Two shapes
 
-树状简写（推荐）：`{ "component": "Card", "title": "...", "children": [...] }`，children 数组可包含节点或字符串（字符串转 Text body）。
-扁平形态：`{ "root": "id", "elements": { "id": { "type": "Card", "props": {}, "children": ["childId"] } } }`，子节点须在 elements 中定义。
+Tree shorthand (recommended): `{ "component": "Card", "title": "...", "children": [...] }`; the children array may contain nodes or strings (strings become Text body).
+Flat shape: `{ "root": "id", "elements": { "id": { "type": "Card", "props": {}, "children": ["childId"] } } }`; child nodes must be defined in elements.
 
-聊天 UI 块使用独立 Spec，没有所属插件，不能订阅插件文档，也不注入 composer/screen 控制函数；当前协议没有通用 `$state` 表单 store，输入组件通过各自 action 的 `{$value}` 提交；表格行内 `{$row}` 同理。
+Chat UI blocks use a standalone spec with no owning plugin: they cannot subscribe to plugin docs and get no composer/screen control functions injected; the current protocol has no generic `$state` form store -- input components submit via their own action's `{$value}`; in-table `{$row}` works the same way.
 
-## 表达式求值（$docs / $sessionDocs / $data / $row / $value）
+## Expression evaluation ($docs / $sessionDocs / $data / $row / $value)
 
-- `{$docs.<docName>.<path>}` / `{$sessionDocs.<name>.<path>}` / `{$data.<path>}`：公开全局文档、当前会话公开文档与调用时传入的 data。
-- 整个属性值恰好为单个 `{...}` 表达式时保持原始 JS 类型（number/boolean/array/object）；嵌在长文本中则为字符串插值。
-- `{$row.<field>}` 仅在 Table 的 rowActions 内可用；`{$value}` 在表单组件的 action 内可用（提交值）。
+- `{$docs.<docName>.<path>}` / `{$sessionDocs.<name>.<path>}` / `{$data.<path>}`: public global docs, the current conversation's public docs, and the data passed at call time.
+- When an entire attribute value is exactly one `{...}` expression, the raw JS type is preserved (number/boolean/array/object); embedded in longer text it becomes string interpolation.
+- `{$row.<field>}` is available only inside a Table's rowActions; `{$value}` is available inside a form component's action (the submitted value).
 
-## 按需下钻
+## Drill-down on demand
 
-- 全部原语真实 Props 契约（21 个）：`load_skill({ skillId: "generative-ui", path: "references/primitives.md" })`
-- 三大声明式动作指令：`load_skill({ skillId: "generative-ui", path: "references/actions.md" })`
+- Full real Props contracts of all primitives (21): `load_skill({ skillId: "generative-ui", path: "references/primitives.md" })`
+- The three declarative action directives: `load_skill({ skillId: "generative-ui", path: "references/actions.md" })`
 
-## 完整示例（树状、合法）
+## Full example (tree shape, valid)
 
 ```ui
 {
   "component": "Card",
-  "title": "节点巡检示例",
-  "subtitle": "以下为格式示例；实际回复需换成本轮查询结果",
+  "title": "Node inspection example",
+  "subtitle": "Format sample only; replace with this round's real query results",
   "children": [
     { "component": "MetricGrid", "cols": 3, "children": [
-      { "component": "MetricCard", "label": "在线", "value": "1", "tone": "ok" },
-      { "component": "MetricCard", "label": "离线", "value": "1", "tone": "err" },
-      { "component": "MetricCard", "label": "平均负载", "value": "0.42", "hint": "1 分钟" }
+      { "component": "MetricCard", "label": "Online", "value": "1", "tone": "ok" },
+      { "component": "MetricCard", "label": "Offline", "value": "1", "tone": "err" },
+      { "component": "MetricCard", "label": "Avg load", "value": "0.42", "hint": "1 min" }
     ] },
     { "component": "Table", "columns": [
-      { "key": "nodeId", "label": "节点" },
-      { "key": "status", "label": "状态" },
-      { "key": "diskFreeGb", "label": "剩余磁盘" }
+      { "key": "nodeId", "label": "Node" },
+      { "key": "status", "label": "Status" },
+      { "key": "diskFreeGb", "label": "Disk free" }
     ], "rows": [
       { "nodeId": "local", "status": "online", "diskFreeGb": 128 },
       { "nodeId": "build-01", "status": "offline", "diskFreeGb": null }
     ] },
     { "component": "ActionBar", "actions": [
-      { "label": "重新巡检", "icon": "refresh-cw", "variant": "primary", "action": { "type": "helm:send", "target": "current", "text": "请重新巡检全部节点" } },
-      { "label": "打开助理", "icon": "terminal", "action": { "type": "helm:open", "target": "conversation:1", "split": true } }
+      { "label": "Re-inspect", "icon": "refresh-cw", "variant": "primary", "action": { "type": "helm:send", "target": "current", "text": "Please re-inspect all nodes" } },
+      { "label": "Open assistant", "icon": "terminal", "action": { "type": "helm:open", "target": "conversation:1", "split": true } }
     ] }
   ]
 }

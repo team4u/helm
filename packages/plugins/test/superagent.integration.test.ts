@@ -418,7 +418,7 @@ test('SA1: 默认停用不建业务会话/Profile/Doc；HTTP 启用后动态 ID 
     const afterEnable = JSON.parse(enableRes.body) as Array<{ id: string; enabled: boolean }>
     assert.equal(afterEnable.find((p) => p.id === SUPERAGENT_ID)?.enabled, true)
 
-    // #1 不变（仍是 assistant 个人助理主入口）
+    // #1 不变（仍是 assistant Personal Assistant主入口）
     const root = first.app.kernel.getConversation(ROOT_CONVERSATION_ID)
     assert.equal(root.profileId, 'assistant', '根会话 #1 的 profileId 不得被 superagent 改写')
 
@@ -583,7 +583,7 @@ test('SA2: 中枢模型请求剥离 bash/subagent 等并保留派工短名；#1 
     const inspect = await host.invokeAction(SUPERAGENT_ID, 'watchdog_inspect', { conversationId: humanConv.id })
     assert.ok(inspect !== undefined, 'watchdog_inspect 只读应可用')
 
-    // 非法 target：conversationId 非正整数被 Schema 拒绝（validation_error / 400）
+    // 非法 target：conversationId is not a positive integer被 Schema 拒绝（validation_error / 400）
     for (const bad of [0, -1, 1.5, 'three', null]) {
       await assert.rejects(
         () => host.invokeAction(SUPERAGENT_ID, 'watchdog_abort', { conversationId: bad }),

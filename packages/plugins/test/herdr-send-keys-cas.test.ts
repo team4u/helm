@@ -427,7 +427,7 @@ test('审批桥 CAS: 能力通告时 send_keys 携带 expected_state_seq=条目 
     const pane = [...env.transport.panes.values()][0]!
     env.transport.advancePane(pane.paneId, 'done')
     assert.equal(await resultPromise, 'approved')
-    assert.ok(env.notifications.some((n) => n.title === 'Herdr 审批已发送'))
+    assert.ok(env.notifications.some((n) => n.title === 'Herdr approval sent'))
   } finally {
     await env.close()
   }
@@ -446,8 +446,8 @@ test('审批桥 CAS: stale_state 拒绝时不重试、不记发送成功、Ask �
     // 恰好一次尝试；键从未写入终端（stale = 未发送按键）。
     assert.equal(env.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 1, 'stale 后绝不重试同一批 keys')
     assert.deepEqual(env.transport.sendKeysLog, [], 'stale 拒绝意味着键未发送')
-    await waitFor(() => env.notifications.some((n) => n.title === 'Herdr 审批已过时'))
-    assert.ok(!env.notifications.some((n) => n.title === 'Herdr 审批已发送'), '不得记发送成功')
+    await waitFor(() => env.notifications.some((n) => n.title === 'Herdr approval superseded'))
+    assert.ok(!env.notifications.some((n) => n.title === 'Herdr approval sent'), '不得记发送成功')
     // Ask 状态安全收敛：竞态推进后（working 新 seq）不重建 Ask；重复事件不触发重发。
     const pane = [...env.transport.panes.values()][0]!
     env.transport.emit({ type: 'pane.updated', paneId: pane.paneId })
@@ -486,7 +486,7 @@ test('审批桥 CAS: 服务端未通告能力时显式 herdr_cas_unsupported，�
     // 能力门禁在 send_keys 之前拦截：零盲发。
     assert.equal(env.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 0, '绝不发出无 CAS 的 send_keys')
     assert.deepEqual(env.transport.sendKeysLog, [])
-    assert.ok(!env.notifications.some((n) => n.title === 'Herdr 审批已发送'))
+    assert.ok(!env.notifications.some((n) => n.title === 'Herdr approval sent'))
     // 失败窗格保留现场（outcome=failed）。
     const list = (await env.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ outcome: string }> }
     assert.equal(list.panes[0]!.outcome, 'failed')

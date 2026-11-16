@@ -1,45 +1,45 @@
 /**
- * builtin:triggers 共享契约：依赖端口、公共 doc 形状与边界验证。
+ * builtin:triggers shared contracts: dependency ports, public doc shapes, and boundary validation.
  *
- * 设计（§4.4）：
- * - cron 与 webhook 共用同一 dispatchTrigger helper（目标解析见 delivery.ts）；
- * - public doc 只存元数据（绝不存 secret）；HMAC secret 落 credentials.json
- *   pluginSecrets['builtin:triggers']['webhook:<id>']（0600，经 ctx.host.secrets
- *   已绑定本插件 ID），并经 secrets.addRedaction 全局脱敏；
- * - 组合层零依赖注入：secrets / profiles / isClosing 全部直接消费
- *   ctx.host 公共端口（HelmHostApi），不接受注入式工厂参数。
+ * Design (§4.4):
+ * - cron and webhook share one dispatchTrigger helper (target resolution in delivery.ts);
+ * - The public doc stores metadata only (never the secret); the HMAC secret lands in credentials.json
+ *   pluginSecrets['builtin:triggers']['webhook:<id>'] (0600, bound to this plugin's ID via
+ *   ctx.host.secrets) and is globally redacted via secrets.addRedaction;
+ * - Zero dependency injection at the composition layer: secrets / profiles / isClosing all consume
+ *   the ctx.host public ports (HelmHostApi) directly; no injected factory parameters.
  */
 import { HelmError } from '@helm/protocol'
 import type { ConversationSummary, ExternalTriggerEnvelope } from '@helm/protocol'
 
 export const TRIGGERS_PLUGIN_ID = 'builtin:triggers'
 
-/** webhook secret 在 credentials.json 的键名（pluginSecrets 命名空间内）。 */
+/** The webhook secret's key name in credentials.json (inside the pluginSecrets namespace). */
 export function webhookSecretKey(id: string): string {
   return `webhook:${id}`
 }
 
-/** secret 边界校验：非空、限长、无控制字符（HMAC 共享秘密不必含控制字符）。 */
+/** Secret boundary validation: non-empty, length-capped, no control characters (an HMAC shared secret needs none). */
 export function assertWebhookSecret(secret: string): string {
   if (typeof secret !== 'string' || secret.length === 0) {
-    throw new HelmError('validation_error', 'webhook secret 不能为空', 400, {})
+    throw new HelmError('validation_error', 'the webhook secret must not be empty', 400, {})
   }
   if (secret.length > 512) {
-    throw new HelmError('validation_error', `webhook secret 过长（≤512 字符，实际 ${secret.length}）`, 400, {})
+    throw new HelmError('validation_error', `webhook secret too long (<=512 chars, got ${secret.length})`, 400, {})
   }
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(secret)) {
-    throw new HelmError('validation_error', 'webhook secret 不允许包含控制字符', 400, {})
+    throw new HelmError('validation_error', 'the webhook secret must not contain control characters', 400, {})
   }
   return secret
 }
 
-/** 触发器 id：非空、限长、url-safe（cron/webhook 共用，允许 a-z A-Z 0-9 _ -）。 */
+/** Trigger id: non-empty, length-capped, url-safe (shared by cron/webhook; allows a-z A-Z 0-9 _ -). */
 export function assertTriggerId(kind: 'cron' | 'webhook', id: string): string {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
     throw new HelmError(
       'validation_error',
-      `${kind} id 非法（1..64 字符，仅允许字母数字 _ -，收到：${JSON.stringify(id)}）`,
+      `invalid ${kind} id (1..64 chars; only alphanumeric _ - allowed; got: ${JSON.stringify(id)})`,
       400,
       { kind, id: String(id) },
     )
@@ -47,36 +47,36 @@ export function assertTriggerId(kind: 'cron' | 'webhook', id: string): string {
   return id
 }
 
-/** threadKey：1..200 字符（与 superagent 订阅约束一致）。 */
+/** threadKey: 1..200 chars (consistent with the superagent subscription constraint). */
 export function assertThreadKey(key: string): string {
   if (key.length === 0 || key.length > 200) {
-    throw new HelmError('validation_error', `threadKey 非法（1..200 字符，收到 ${key.length}）`, 400, {})
+    throw new HelmError('validation_error', `invalid threadKey (1..200 chars, got ${key.length})`, 400, {})
   }
   return key
 }
 
-/** 描述文本上限（doc 可读性边界）。 */
+/** Description text cap (a doc readability boundary). */
 export const MAX_DESCRIPTION = 500
 
 export function assertDescription(description: string): string {
   if (description.length > MAX_DESCRIPTION) {
-    throw new HelmError('validation_error', `description 过长（≤${MAX_DESCRIPTION} 字符）`, 400, {})
+    throw new HelmError('validation_error', `description too long (<=${MAX_DESCRIPTION} chars)`, 400, {})
   }
   return description
 }
 
-/** 目标 Profile 存在性端口（ctx.host.profiles 的最小面）。 */
+/** Target-Profile existence port (the minimal face of ctx.host.profiles). */
 export interface ProfileLookup {
   get(id: string): Promise<{ id: string } | undefined>
 }
 
 // ---------------------------------------------------------------------------
-// webhook 公共 doc 形状与边界验证（无 secret，仅元数据）
+// Webhook public doc shape and boundary validation (no secret, metadata only)
 // ---------------------------------------------------------------------------
 
 export interface WebhookMeta {
   id: string
-  /** 协作契约：以布尔表达 secret 已配置（true），绝不含 secret 原文。 */
+  /** Collaboration contract: a boolean expressing that the secret is configured (true); never the secret itself. */
   hasSecret: boolean
   description?: string
   targetConversationId?: number
@@ -104,57 +104,57 @@ function isFiniteTime(v: unknown): v is number {
 }
 
 const docCorrupt = (detail: string): HelmError =>
-  new HelmError('triggers_doc_corrupt', `插件 doc webhooks ${detail}`, 500, { pluginId: TRIGGERS_PLUGIN_ID })
+  new HelmError('triggers_doc_corrupt', `plugin doc webhooks ${detail}`, 500, { pluginId: TRIGGERS_PLUGIN_ID })
 
 function assertWebhookMeta(raw: unknown): void {
-  if (!isPlainObject(raw)) throw docCorrupt('含非对象条目')
+  if (!isPlainObject(raw)) throw docCorrupt('contains a non-object entry')
   if (typeof raw.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(raw.id)) {
-    throw docCorrupt(`条目 id 非法：${JSON.stringify(raw.id)}`)
+    throw docCorrupt(`invalid entry id: ${JSON.stringify(raw.id)}`)
   }
-  // hasSecret 契约：create 只写 true；缺省/false 均属旧开发 doc 或污染——
-  // 开发阶段不兼容旧 doc、无迁移，显式报错（绝不静默补字段修复）。
+  // hasSecret contract: create writes true only; missing/false means an old dev doc or pollution --
+  // the dev period has no old-doc compatibility, no migration; error explicitly (never silently backfill).
   if (raw.hasSecret !== true) {
-    throw docCorrupt(`条目 ${raw.id} 缺少 hasSecret: true（doc 以布尔表达 secret 已配置；不兼容旧开发 doc，无迁移）`)
+    throw docCorrupt(`entry ${raw.id} is missing hasSecret: true (the doc expresses secret-configured as a boolean; old dev docs are incompatible, no migration)`)
   }
   if (raw.description !== undefined && (typeof raw.description !== 'string' || raw.description.length > MAX_DESCRIPTION)) {
-    throw docCorrupt(`条目 ${raw.id} description 非字符串或超过 ${MAX_DESCRIPTION} 字符`)
+    throw docCorrupt(`entry ${raw.id} description is not a string or exceeds ${MAX_DESCRIPTION} chars`)
   }
   if (raw.targetConversationId !== undefined && !isPosInt(raw.targetConversationId)) {
-    throw docCorrupt(`条目 ${raw.id} targetConversationId 非正整数`)
+    throw docCorrupt(`entry ${raw.id} targetConversationId is not a positive integer`)
   }
   if (raw.targetProfileId !== undefined && (typeof raw.targetProfileId !== 'string' || raw.targetProfileId.length === 0 || raw.targetProfileId.length > 64)) {
-    throw docCorrupt(`条目 ${raw.id} targetProfileId 非法（1..64 字符）`)
+    throw docCorrupt(`entry ${raw.id} targetProfileId is invalid (1..64 chars)`)
   }
-  // 目标互斥与创建输入同契约（delivery 层同样拒绝双目标）。
+  // Target mutual exclusion matches the creation-input contract (the delivery layer likewise rejects dual targets).
   if (raw.targetConversationId !== undefined && raw.targetProfileId !== undefined) {
-    throw docCorrupt(`条目 ${raw.id} targetConversationId 与 targetProfileId 不允许同时存在`)
+    throw docCorrupt(`entry ${raw.id} must not carry both targetConversationId and targetProfileId`)
   }
   if (raw.threadKey !== undefined && (typeof raw.threadKey !== 'string' || raw.threadKey.length === 0 || raw.threadKey.length > 200)) {
-    throw docCorrupt(`条目 ${raw.id} threadKey 非法（1..200 字符）`)
+    throw docCorrupt(`entry ${raw.id} threadKey is invalid (1..200 chars)`)
   }
-  if (!isFiniteTime(raw.createdAt)) throw docCorrupt(`条目 ${raw.id} createdAt 非法`)
-  // 秘密红线：doc 绝不含 secret 字段（读入即验证，历史污染显式报错）
+  if (!isFiniteTime(raw.createdAt)) throw docCorrupt(`entry ${raw.id} createdAt is invalid`)
+  // Secret red line: the doc never contains a secret field (validated on read; historical pollution errors explicitly)
   if ('secret' in raw) {
-    throw docCorrupt(`条目 ${raw.id} 含 secret 字段（doc 只存元数据；secret 在 credentials.json）`)
+    throw docCorrupt(`entry ${raw.id} contains a secret field (the doc stores metadata only; secrets live in credentials.json)`)
   }
 }
 
-/** webhooks doc 读入边界验证：损坏显式 error，绝不静默重建。 */
+/** webhooks doc read-in boundary validation: corruption errors explicitly; never silently rebuilds. */
 export function assertWebhooksDoc(value: unknown): WebhooksDoc {
   if (!isPlainObject(value) || !Array.isArray(value.webhooks)) {
-    throw docCorrupt('结构非法（期望 { webhooks: [] }）')
+    throw docCorrupt('invalid structure (expected { webhooks: [] })')
   }
   const seen = new Set<string>()
   for (const item of value.webhooks) {
     assertWebhookMeta(item)
     const id = (item as WebhookMeta).id
-    if (seen.has(id)) throw docCorrupt(`重复条目 id '${id}'`)
+    if (seen.has(id)) throw docCorrupt(`duplicate entry id '${id}'`)
     seen.add(id)
   }
   return value as unknown as WebhooksDoc
 }
 
-/** 元数据脱视图：action/doc 输出统一经此剥离（当前形状即全量，收口备将来扩字段）。 */
+/** Metadata redaction view: action/doc outputs strip through this uniformly (the current shape is the full set; the funnel anticipates future fields). */
 export function webhookPublicMeta(meta: WebhookMeta): WebhookMeta {
   const { id, hasSecret, description, targetConversationId, targetProfileId, threadKey, createdAt } = meta
   return {
@@ -169,17 +169,17 @@ export function webhookPublicMeta(meta: WebhookMeta): WebhookMeta {
 }
 
 // ---------------------------------------------------------------------------
-// dispatch helper 共享目标类型
+// Shared target types of the dispatch helper
 // ---------------------------------------------------------------------------
 
-/** delivery.ts 的目标解析输入（cron job / webhook meta 共用）。 */
+/** delivery.ts's target-resolution input (shared by cron jobs / webhook metadata). */
 export interface TriggerTarget {
   targetConversationId?: number
   targetProfileId?: string
   threadKey?: string
 }
 
-/** 会话查询端口（ctx.host 的最小面，便于测试）。 */
+/** Conversation query port (the minimal face of ctx.host, for tests). */
 export interface ConversationLookup {
   listConversations(filter?: { profileId?: string }): ConversationSummary[]
   getConversation(id: number): ConversationSummary
@@ -187,14 +187,14 @@ export interface ConversationLookup {
 }
 
 /**
- * delivery 纯 helper 消费的宿主端口面（明确 Pick 语义，非 cast 桥）：
- * 由调用处（definePlugin 内传 ctx.host）与测试 fixture 双向类型检查。
+ * The host port face consumed by the delivery pure helper (explicit Pick semantics, not a cast bridge):
+ * type-checked both by the call site (ctx.host passed inside definePlugin) and by test fixtures.
  */
 export interface DeliveryHost extends ConversationLookup {
   dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>
 }
 
-/** 投递 helper 构造入参：isClosing 为宿主 getter 的读取函数包装。 */
+/** Delivery-helper construction input: isClosing is a reader-function wrapper over the host getter. */
 export interface DeliveryOptions {
   host: DeliveryHost
   profiles: ProfileLookup

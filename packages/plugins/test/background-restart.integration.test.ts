@@ -17,7 +17,7 @@
  * 未完成的真实模型生成任务，checkpoint 持久在 request 阶段）；恢复侧全部走
  * 真实 SDK 路径，绝不 mock 恢复，不用 callCount 假证明。
  *
- * 环境约束：子进程与主进程 cwd/HELM_DATA_DIR 全部在 mkdtemp 临时目录；
+ * 环境Constraints:子进程与主进程 cwd/HELM_DATA_DIR 全部在 mkdtemp 临时目录；
  * 全程无 Hub、无端口监听；finally 杀干净子进程并删除临时目录。
  * 每用例 timeout: 60_000；运行命令带总超时（timeout 50s tsx --test 本文件）。
  */
@@ -169,7 +169,7 @@ for (let i = 0; i < 400; i++) {
 }
 if (!childId || faux.state.callCount < 1) { process.stderr.write('seed: no child\\n'); process.exit(3) }
 // 植入 startBackgroundAgent 的持久 run 记录（新契约：插件私有 records 文档
-// 只存 workflow/runs 轻量索引；完整 RunRecord 落插件数据目录记录文件
+// 只存 workflow/runs 轻量索引；完整 RunRecord 落插件数据目录record file
 // <dataDir>/plugins/builtin%3Aworkflow/artifacts/<convId>/workflow-<runId>.record.json）
 const now = Date.now()
 const recordDir = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1')
@@ -229,7 +229,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
   const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
   // t.after 按注册顺序执行：先杀子进程/清理 seeder 目录；dataDir 必须等内核
-  // close（stop 链最终投影要读记录文件）之后再删，注册在后半部分。
+  // close（stop 链最终投影要读record file）之后再删，注册在后半部分。
   t.after(() => {
     if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
     rmSync(seedDir, { recursive: true, force: true })

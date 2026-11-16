@@ -1,21 +1,22 @@
 /**
- * meta.ts — 提取并校验工作流脚本的 `meta` 块。
+ * meta.ts -- extract and validate a workflow script's `meta` block.
  *
- * 自 @tintinweb/pi-subagents v0.23.1 (MIT) 移植。
+ * Ported from @tintinweb/pi-subagents v0.23.1 (MIT).
  *
- * 脚本体运行在 `node:vm`（无模块加载器，`export` 是语法错误），而 meta 需要
- * 在执行前可读（阶段声明用于首帧分组）。方案：字符串扫描到匹配大括号
- * （注释/模板/正则感知），仅在空 vm context 中求值该片段——纯字面量无可调用物，
- * 非纯字面量要么抛错（未绑定标识符）要么被下方校验拒绝。
+ * The script body runs in `node:vm` (no module loader; `export` is a syntax error), but meta must be
+ * readable before execution (phase declarations drive first-frame grouping). Approach: string-scan to
+ * the matching braces (comment/template/regex aware), then evaluate just that fragment in an empty vm
+ * context -- pure literals have nothing callable; non-literals either throw (unbound identifiers) or get
+ * rejected by the validation below.
  */
 
 import { createContext, Script } from 'node:vm'
 
-/** 声明在前的阶段，供 UI 在首个 agent 运行前展示。 */
+/** Phases declared up front, for the UI to show before the first agent runs. */
 export interface WorkflowPhaseMeta {
   title: string
   detail?: string
-  /** 阶段钉住模型时展示；仅显示用，runtime 不读。 */
+  /** Shown when a phase pins a model; display-only, never read by the runtime. */
   model?: string
 }
 
@@ -29,14 +30,14 @@ export interface WorkflowMeta {
 export interface MetaExtraction {
   meta: WorkflowMeta
   /**
-   * 剥离头部 `export ` 的脚本（用空格替换保偏移，栈帧行号与作者源码对齐）。
+   * The script with the leading `export ` stripped (replaced by spaces to preserve offsets, so stack line numbers match the author's source).
    */
   body: string
 }
 
 export class WorkflowMetaError extends Error {}
 
-/** 空 context 求值 meta 片段的墙钟上限：只为阻断病态字面量挂死宿主线程。 */
+/** Wall-clock cap for evaluating the meta fragment in an empty context: only to block pathological literals from hanging the host thread. */
 const META_EVAL_TIMEOUT_MS = 100
 
 const PURE_LITERAL_HINT =
@@ -49,9 +50,9 @@ export function hasMetaDeclaration(source: string): boolean {
 }
 
 interface ScanResult {
-  /** 字面量闭括号之后的位置；大括号永不平衡时为 -1。 */
+  /** The position after the literal's closing brace; -1 when braces never balance. */
   end: number
-  /** 模板字面量内出现过 `${` 插值。 */
+  /** A `${` interpolation appeared inside the template literal. */
   sawInterpolation: boolean
 }
 

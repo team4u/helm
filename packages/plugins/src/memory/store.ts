@@ -1,12 +1,12 @@
 /**
- * MemoryStore：builtin:memory 插件自治的 MEMORY.md 文件存储。
+ * MemoryStore: the MEMORY.md file storage owned by the builtin:memory plugin.
  *
- * - 管理 `<dataDir>/profiles/<profileId>/MEMORY.md` 的读写与初始化；
- * - 经公开宿主端口取得 Profile 目录、文件锁与原子写入能力，
- *   同 Hub 进程内按真实路径串行化，原子落盘；
- * - 所有写入路径在文件锁内对**合并后**的最终内容统一强制 64_000 字符上限：
- *   并发调用不可能各自「预读旧值 + 检查通过」后叠加突破上限；超限显式抛
- *   HelmError('memory_limit_exceeded', 400)，不写半截文件。
+ * - Manages reads/writes and initialization of `<dataDir>/profiles/<profileId>/MEMORY.md`;
+ * - Obtains the Profile directory, file lock, and atomic-write capability through public host ports,
+ *   serialized by real path within the same Hub process, atomically flushed;
+ * - Every write path enforces a uniform 64_000-character cap on the **merged** final content inside the file lock:
+ *   concurrent calls cannot each "pre-read the old value + pass the check" and stack past the cap;
+ *   over the limit it throws HelmError('memory_limit_exceeded', 400) explicitly, never writing half a file.
  */
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -19,25 +19,25 @@ async function readMemoryFile(path: string): Promise<string> {
     return await readFile(path, 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new HelmError('not_found', `记忆文件不存在: ${path}`, 404, { path })
+      throw new HelmError('not_found', `memory file does not exist: ${path}`, 404, { path })
     }
     throw error
   }
 }
 
-/** builtin:memory 插件 ID。 */
+/** The builtin:memory plugin ID. */
 export const MEMORY_PLUGIN_ID = 'builtin:memory' as const
 
 /**
- * MEMORY.md 长期记忆字符上限（防线单一事实来源）：
- * 长期记忆逐回合全量注入系统提示，无上限会让每次调用成本无界增长。
+ * The MEMORY.md long-term-memory character cap (the single source of truth of this line of defense):
+ * long-term memory is injected wholesale into the system prompt every turn; without a cap, per-call cost would grow unboundedly.
  */
 export const MAX_MEMORY_CHARS = 64_000
 
-/** 初始化默认内容（首条记忆前的合法占位骨架）。 */
+/** Initial default content (a legal placeholder skeleton before the first memory). */
 export const MEMORY_DEFAULT = ['# Memory', '', ''].join('\n')
 
-/** 上限拒绝统一错误。 */
+/** The uniform over-limit rejection error. */
 export function memoryLimitError(
   profileId: string,
   wouldBe: number,
@@ -46,7 +46,7 @@ export function memoryLimitError(
 ): HelmError {
   return new HelmError(
     'memory_limit_exceeded',
-    `MEMORY.md 写入后达 ${wouldBe} 字符，超过上限 ${MAX_MEMORY_CHARS}；请精简后再写入（长期记忆请整体 replace 整理）`,
+    `MEMORY.md would reach ${wouldBe} chars after the write, over the cap of ${MAX_MEMORY_CHARS}; please trim before writing (use a full replace to consolidate long-term memory)`,
     400,
     { profileId, wouldBe, limit: MAX_MEMORY_CHARS, mode, inputLength },
   )
@@ -60,8 +60,8 @@ export class MemoryStore {
   }
 
   /**
-   * 文件锁内检查并初始化 MEMORY.md：不存在则写入 MEMORY_DEFAULT。
-   * 返回当前全文（已存在时原样返回，不覆盖用户内容）。
+   * Check and initialize MEMORY.md inside the file lock: write MEMORY_DEFAULT when absent.
+   * Returns the current full text (returned as-is when it exists, never overwriting user content).
    */
   async ensureMemory(profileId: string): Promise<string> {
     const path = await this.memoryPath(profileId)
@@ -76,22 +76,22 @@ export class MemoryStore {
     })
   }
 
-  /** 读取全文；文件不存在抛 not_found（调用方区分惰性初始化与误删）。 */
+  /** Read the full text; a missing file throws not_found (callers distinguish lazy init from accidental deletion). */
   async getMemory(profileId: string): Promise<string> {
     return readMemoryFile(await this.memoryPath(profileId))
   }
 
   /**
-   * 原子更新 MEMORY.md：replace 整体替换；append 追加（保尾部换行）。
-   * append 的读改写按该文件真实路径加进程内共享锁串行化。
-   * 上限在锁内对合并后的最终内容统一强制（唯一权威点）。
+   * Atomically update MEMORY.md: replace swaps the whole content; append appends (keeping the trailing newline).
+   * The append read-modify-write is serialized by an in-process shared lock on the file's real path.
+   * The cap is enforced uniformly on the merged final content inside the lock (the single authoritative point).
    */
   async updateMemory(
     profileId: string,
     text: string,
     mode: 'append' | 'replace',
   ): Promise<string> {
-    if (typeof text !== 'string') throw new Error('memory 文本必须是字符串')
+    if (typeof text !== 'string') throw new Error('memory text must be a string')
     const path = await this.memoryPath(profileId)
     return this.host.withFileLock(path, async () => {
       let next: string
@@ -103,7 +103,7 @@ export class MemoryStore {
           current = await readMemoryFile(path)
         } catch (err) {
           if (!(err instanceof HelmError && err.code === 'not_found')) throw err
-          // MEMORY.md 缺失时 append 视为从空开始（下次写入自愈重建）。
+          // When MEMORY.md is missing, append starts from empty (the next write self-heals it).
         }
         next = current.endsWith('\n') || current === '' ? current + text : current + '\n' + text
       }

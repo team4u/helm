@@ -221,7 +221,7 @@ class ProtocolServerTransport implements HerdrTransport {
     if (status === 'idle' || status === 'done') {
       const delivered = this.steerDelivered.filter((entry) => entry.paneId === paneId).at(-1)?.text
       if (delivered !== undefined) {
-        const file = delivered.match(/写入新文件 [^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+        const file = delivered.match(/the new file [^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
         assert.ok(file !== undefined, '插话文本应含新交接文件名')
         this.outputFiles.set(`${pane.cwd}/.helm/${file}`, 'steered-done')
       }
@@ -355,7 +355,7 @@ test('双插件联调: 真实形状服务端上 herdr 后台 run 经 workflow.st
     await waitFor(() => pane.agentStatus === 'working')
     const taskFileName = (() => {
       const text = env.transport.calls.find((c) => c.method === 'agent.prompt' && c.params['wait'] !== undefined)!.params['text'] as string
-      const name = text.match(/写入[^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+      const name = text.match(/[Ww]rite[^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
       assert.ok(name !== undefined)
       return name
     })()
@@ -394,10 +394,10 @@ test('双插件联调: 真实形状服务端上 herdr 后台 run 经 workflow.st
     assert.deepEqual(Object.keys(steerCall.params).sort(), ['target', 'text'], '现有 agent.prompt 形状（无 wait/无附加字段）')
     assert.equal(steerCall.params['target'], pane.name, '以受管 agentName 寻址')
     const steerText = env.transport.steerDelivered[0]!.text
-    const newFile = steerText.match(/写入新文件 [^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+    const newFile = steerText.match(/the new file [^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
     assert.ok(newFile !== undefined, '投递文本指向全新唯一交接文件')
     assert.notEqual(newFile, taskFileName)
-    assert.ok(steerText.includes(`原交接文件 ${taskFileName} 已作废`), '投递文本明确旧路径作废')
+    assert.ok(steerText.includes(`The original handoff file ${taskFileName} is voided`), '投递文本明确旧路径作废')
     // 5) 任务终态：CLI 按最新指导写新文件 -> 原 run 交接 / Gate 恰一次 / 父通知正常。
     env.transport.advancePane(pane.paneId, 'done')
     await waitFor(async () => {

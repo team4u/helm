@@ -364,7 +364,7 @@ test('工作流4: HTTP workflows run/inspect/abort 与 SubagentWorkflow 工具�
     assert.equal(final.status, 'completed', `HTTP run 应完成：${JSON.stringify(final)}`)
     assert.equal(final.result, 42, 'args.x + 1 经真实 worker 计算为 42')
 
-    // abort 已完成 run：幂等成功（不误报）
+    // abort Done run：幂等成功（不误报）
     const abort = await fetch(`${base}/api/actions/builtin:workflow/abort`, {
       method: 'POST',
       headers: { ...auth, 'content-type': 'application/json' },

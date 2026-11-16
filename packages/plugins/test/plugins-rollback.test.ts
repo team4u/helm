@@ -272,7 +272,7 @@ test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 asset
     assert.ok(memMissing.text.includes('不要假装') || sysMissing.text.includes('不要假装'), '明确指示模型不得假装拥有记忆/人格')
     // 人类侧告警也发出（双通道：模型可见 + 人类通知）。
     assert.ok(
-      backend.notifications.some((n) => n.title.includes('MEMORY.md') || n.title.includes('长期记忆')),
+      backend.notifications.some((n) => n.title.includes('MEMORY.md') || n.title.includes('Long-term Memory')),
       'MEMORY.md 缺失应有人类侧告警',
     )
     assert.ok(
@@ -303,7 +303,7 @@ test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 asset
     unlinkSync(memoryPath)
     await host.runHook('before_turn', { ...turn, sections: [] } as never)
     assert.ok(
-      backend.notifications.some((n) => n.title.includes('MEMORY.md') || n.title.includes('长期记忆')),
+      backend.notifications.some((n) => n.title.includes('MEMORY.md') || n.title.includes('Long-term Memory')),
       '恢复后再次缺失应重新告警（去重状态已复位）',
     )
   } finally {
@@ -490,7 +490,7 @@ async function makeWatchdogHarness(opts: {
   const eventListeners = new Map<string, Array<(payload: unknown) => unknown>>()
   conversations.set(watchdogId, makeConversation(watchdogId, { profileId: 'watchdog', title: '巡检看门狗' }))
   conversations.set(routerId, makeConversation(routerId, { profileId: 'superagent', title: 'SuperAgent 中枢' }))
-  conversations.set(1, makeConversation(1, { title: '个人助理' }))
+  conversations.set(1, makeConversation(1, { title: 'Personal Assistant' }))
   const docs = new MemoryDocStore()
   const backend: PluginHostBackend = {
     ...createPluginHostBackendFixture(),

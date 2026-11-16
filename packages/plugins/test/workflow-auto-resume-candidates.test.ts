@@ -1,7 +1,7 @@
 /**
  * WorkflowService.listAutoResumeCandidates 专属单测（§3.2 断点续跑候选筛选）。
  *
- * 只读验证安全筛选契约，不起真实 run：记录文件与轻量索引均按现行契约手工构造
+ * 只读验证安全筛选契约，不起真实 run：record file与轻量索引均按现行契约手工构造
  * （writeRecord / RunRecord / RunIndexEntry / WorkflowJournalEntry），覆盖：
  * 1. 命中全部条件的失败后台 run 成为候选（failedAt=updatedAt，autoResumeCount
  *    缺省报 0，候选形状恰为四字段）；
@@ -17,7 +17,7 @@
  * 5. 按 failedAt 升序（最旧失败优先），与索引写入顺序无关；
  * 6. maxAttempts 边界：非正整数显式 validation_error；1 时 count 1 排除、
  *    0 保留；
- * 7. 单条损坏记录（记录文件缺失/損坏）诊断后跳过，不影响其他候选；
+ * 7. 单条损坏记录（record file缺失/損坏）诊断后跳过，不影响其他候选；
  * 8. 索引損坏（非数组/项形状非法）显式 workflow_index_corrupt 上抛，绝不
  *    静默当空索引返回空候选；
  * 9. 幽灵接管标记同规则甄别：接管 run 四面无痕（索引/磁盘均无记录与账本）
@@ -80,7 +80,7 @@ function makeEnv(t: TestContext) {
 }
 
 // ---------------------------------------------------------------------------
-// 按现行契约构造持久事实：记录文件 + 轻量索引 + JSONL 账本
+// 按现行契约构造持久事实：record file + 轻量索引 + JSONL 账本
 // ---------------------------------------------------------------------------
 
 /** 账本行构造（与 WorkflowJournalEntry 同形；同文件内 seq 必须唯一——读端按 seq 去重）。
@@ -370,16 +370,16 @@ test('maxAttempts 非正整数显式 validation_error；1 时 count 1 排除、0
 })
 
 // ---------------------------------------------------------------------------
-// 7. 记录文件缺失：诊断后跳过该条，不影响其他候选
+// 7. record file缺失：诊断后跳过该条，不影响其他候选
 // ---------------------------------------------------------------------------
 
-test('单条损坏记录（记录文件缺失/損坏）诊断后跳过，保留其他健康候选', timeout, (t) => {
+test('单条损坏记录（record file缺失/損坏）诊断后跳过，保留其他健康候选', timeout, (t) => {
   const env = makeEnv(t)
   const journal = { journal: [agentOk(0)] }
   seedCandidateRun(env, 'wf_ok000000001', 601, 1_700_004_000_000, journal)
   seedCandidateRun(env, 'wf_miss0000002', 602, 1_700_004_001_000, journal)
   seedCandidateRun(env, 'wf_crpt000003', 603, 1_700_004_002_000, journal)
-  // 模拟持久层不一致：索引保留，记录文件被外部删除 / 被写成非法 JSON。
+  // 模拟持久层不一致：索引保留，record file被外部删除 / 被写成非法 JSON。
   const recordFile = join(
     env.dataDir,
     'artifacts',
@@ -434,7 +434,7 @@ test('幽灵接管标记：真幽灵（索引与磁盘均无痕迹）放行；�
     `${agentOk(0)}\n`,
     'utf8',
   )
-  // 索引缺失但记录文件仍在磁盘：不放行。
+  // 索引缺失但record file仍在磁盘：不放行。
   seedCandidateRun(env, 'wf_ghostrec03', 903, at(3), { ...journal, resumedByRunId: 'wf_goner9033' })
   writeFileSync(
     join(env.dataDir, 'artifacts', '903', 'workflow-wf_goner9033.record.json'),

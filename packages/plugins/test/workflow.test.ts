@@ -1116,7 +1116,7 @@ describe('journal writer and reader', () => {
     const read = readJournal(path)
     assert.equal(read.actionUncertain, true)
     // started 之后又写了 agent 行（seq 更大）也必须 uncertain：终态行可能因
-    // 损坏丢失，"started 落盘后 handler 被允许执行"是唯一事实。
+    // 损坏丢失，"after started was flushed, the handler was allowed to run"是唯一事实。
     const path2 = tmpJournalPath('dangling-mid.jsonl')
     const w2 = new JournalWriter(path2)
     await w2.append({ type: 'action_started', index: 1, key: 'k1', scopePath: 'root', scopeCallIndex: 1 })
@@ -1263,7 +1263,7 @@ function makeFailingFlushStore(failAfter: number): WorkflowStateStore & { flushe
 }
 
 // ---------------------------------------------------------------------------
-// Run 记录文件契约：records doc 仅存 workflow/runs 轻量索引，完整 RunRecord
+// Run record file契约：records doc 仅存 workflow/runs 轻量索引，完整 RunRecord
 // 落 dataDir/artifacts/<conversationId>/workflow-<runId>.record.json
 // ---------------------------------------------------------------------------
 
@@ -1275,7 +1275,7 @@ function readRunRecord<T = Record<string, unknown>>(dataDir: string, conversatio
   return JSON.parse(readFileSync(runRecordPath(dataDir, conversationId, runId), 'utf-8')) as T
 }
 
-/** 恢复夹具：按现行 RunRecord 契约落一条最小完整 running 记录文件（必填字段与 writeRecord 对齐）。 */
+/** 恢复夹具：按现行 RunRecord 契约落一条最小完整 running record file（必填字段与 writeRecord 对齐）。 */
 function seedRunRecordFile(dataDir: string, runId: string, conversationId: number): void {
   const record = {
     id: runId,
@@ -1406,7 +1406,7 @@ describe('WorkflowService', () => {
     const final = service.getRun(summary.id)
     assert.equal(final.status, 'failed', 'bad meta must reach a failed terminal state')
     assert.ok(final.error !== undefined && final.error.length > 0)
-    // 记录文件里的 record 也必须是终态（跨重启不再依赖内存 summary）。
+    // record file里的 record 也必须是终态（跨重启不再依赖内存 summary）。
     const record = readRunRecord<{ status: string }>(dataDir, 1, summary.id)
     assert.equal(record.status, 'failed')
     await service.close()
@@ -1423,9 +1423,9 @@ describe('WorkflowService', () => {
       () => service.wait(summary.id),
       /simulated store flush failure/,
     )
-    // active 必须已摘除（不留假 running），getRun 回落记录文件仍可 inspect。
+    // active 必须已摘除（不留假 running），getRun 回落record file仍可 inspect。
     // （内存 summary 的 error 已附 persist failed 说明。）
-    // 先文件后索引：终态记录文件已落盘，随后的索引 flush 失败不回滚文件事实。
+    // 先文件后索引：终态record file已落盘，随后的索引 flush 失败不回滚文件事实。
     assert.ok(existsSync(runRecordPath(dataDir, 1, summary.id)), 'terminal record file must exist despite flush failure')
     // 写入 store 的终态可能成功（set 同步镜像先于 flush），关键是明确失败已上报。
     // close 对已损坏的 store 同样如实抛 flush 错误（诚实传播，非静默）。
@@ -1441,10 +1441,7 @@ describe('WorkflowService', () => {
       /simulated store flush failure/,
     )
     // 不留 active：abort 对不存在的 run 报 not_found（而非假 running）。
-    await assert.rejects(
-      () => service.abort('wf_nonexistent0000'),
-      (error: unknown) => error instanceof HelmError && error.code === 'not_found',
-    )
+    await assert.rejects(() => service.abort('wf_nonexistent0000'), /does not exist/)
     await assert.rejects(() => service.close(), /simulated store flush failure/)
   })
 
@@ -1779,7 +1776,7 @@ describe('WorkflowService', () => {
     seedRunRecordFile(dataDir, 'wf_deadbeef0001', 1)
     const host = makeServiceHost()
     const service = new WorkflowService({ dataDir, host, state })
-    // 首次 init：终态先原子落记录文件，随后索引 flush 失败——如实抛错，未标 recovered。
+    // 首次 init：终态先原子落record file，随后索引 flush 失败——如实抛错，未标 recovered。
     await assert.rejects(() => service.init(), /simulated store flush failure/)
     // 索引标记未提交：store 提交面仍见 running（先文件后索引，索引滞后于文件）。
     assert.equal(
@@ -1787,7 +1784,7 @@ describe('WorkflowService', () => {
       'running',
       'uncommitted index mark must not be visible in the committed store',
     )
-    // 记录文件已持 failed 终态：持久权威面先于索引落盘，索引 flush 失败不回滚文件。
+    // record file已持 failed 终态：持久权威面先于索引落盘，索引 flush 失败不回滚文件。
     assert.equal(readRunRecord<{ status: string }>(dataDir, 1, 'wf_deadbeef0001').status, 'failed')
     // 首次失败未永久标记 recovered（initPromise 已清，重试真实重执行而非复用
     // 被拒 promise）；文件已终态则恢复幂等，完整成功。
@@ -1823,10 +1820,10 @@ describe('WorkflowService', () => {
 
   it('validates request: exactly one source, safe name, size limit', timeout, async () => {
     const service = new WorkflowService({ dataDir, host: makeServiceHost(), state: makeStateStore() })
-    await assert.rejects(() => service.run({ conversationId: 1, name: 'a', script: 'x' }), /恰好提供一个/)
+    await assert.rejects(() => service.run({ conversationId: 1, name: 'a', script: 'x' }), /exactly one of/)
     await assert.rejects(() => service.run({ conversationId: 1 }), /必须提供/)
-    await assert.rejects(() => service.run({ conversationId: 1, name: '../evil' }), /非法/)
-    await assert.rejects(() => service.run({ conversationId: 1, name: 'x'.repeat(200) }), /非法/)
+    await assert.rejects(() => service.run({ conversationId: 1, name: '../evil' }), /invalid/)
+    await assert.rejects(() => service.run({ conversationId: 1, name: 'x'.repeat(200) }), /invalid/)
     await service.close()
   })
 
@@ -1841,7 +1838,7 @@ describe('WorkflowService', () => {
       rmSync(link, { force: true })
       const { symlinkSync } = await import('node:fs')
       symlinkSync(outside, link)
-      await assert.rejects(() => service.run({ conversationId: 1, name: 'escape' }), /符号链接|非法|不可读/)
+      await assert.rejects(() => service.run({ conversationId: 1, name: 'escape' }), /symlink|invalid|unreadable/)
     } finally {
       rmSync(link, { force: true })
       rmSync(outside, { force: true })

@@ -1,98 +1,98 @@
 ---
 name: {{SKILL_ID}}
-description: 操作 Helm 或查询宿主能力时使用；涵盖会话、模型、节点、插件动作、触发器与产物，按需查阅工作流和插件开发专题。
+description: Use when operating Helm or querying host capabilities; covers conversations, models, nodes, plugin actions, triggers, and artifacts, with workflow and plugin-development topics on demand.
 managedByPlugin: {{MANAGED_BY}}
 ---
 
-# Helm CLI 速查
+# Helm CLI Quick Reference
 
-## 环境与 CLI 铁律
+## Environment and CLI ground rules
 
-1. Helm 受管 `bash` 提供 `helm` CLI（PATH 前置）与会话环境；通常可直接调用，无需手工登录：
-   - `HELM_ENV`（固定为 `1`，标识处于 Helm 受管执行环境）。
-   - `HELM_HUB_URL`：Hub 地址；`HELM_TOKEN`：受管进程令牌（不要打印或写进提示词）。调用失败时按实际错误排查。
-   - `HELM_CONVERSATION_ID`：当前会话 ID；`HELM_CWD`：会话工作目录；`HELM_NODE_ID`：绑定节点（本机时另有 `HELM_DATA_DIR`）。
-   - `HELM_EXECUTION_SCOPE`：当前 Helm 实例、会话、节点和工作目录的稳定资源命名空间。同一执行坐标的多次命令沿用它；更换会话、节点或工作目录后变化。外部工具支持命名会话或资源隔离时，可显式用它命名。该变量不会自动配置外部工具，也不提供进程或文件沙箱。
-2. 解析输出必加 `--json`（人类可读输出仅供展示，不做程序消费）。
-3. 支持 `--current` 的命令用它选择当前会话（读取 `HELM_CONVERSATION_ID`）；其他命令按帮助传目标 ID。
-4. 自省优先（不背诵易变细节）：用 `helm --help`、`helm <cmd> --help` 实时查询子命令精确参数；动态插件动作与入参 JSON Schema 以会话内 `<available_actions>` 目录、`run_action({ actionId, describe: true })` 只读自省或 `helm actions list --json` 为准，插件配置以 `helm plugins config <id> --json` 为准。
-5. 会话正忙时 `helm send` 可用 `--when-busy steer|followUp|reject`（省略时默认 steer 插话引导）；等待本次回答加 `--wait`。
+1. The Helm-managed `bash` provides the `helm` CLI (PATH-first) and the session environment; usually you can call it directly without manual login:
+   - `HELM_ENV` (fixed to `1`, marking a Helm-managed execution environment).
+   - `HELM_HUB_URL`: the Hub address; `HELM_TOKEN`: the managed process token (never print it or write it into prompts). Troubleshoot by the actual error when a call fails.
+   - `HELM_CONVERSATION_ID`: the current conversation ID; `HELM_CWD`: the session working directory; `HELM_NODE_ID`: the bound node (with an extra `HELM_DATA_DIR` when local).
+   - `HELM_EXECUTION_SCOPE`: a stable resource namespace for the current Helm instance, conversation, node, and working directory. Repeated commands under the same execution coordinate reuse it; it changes after switching conversation, node, or working directory. When external tools support named sessions or resource isolation, you may name them explicitly with it. The variable does not configure external tools automatically, nor does it provide a process or file sandbox.
+2. Always add `--json` when consuming output programmatically (human-readable output is for display only, not programmatic consumption).
+3. Commands that support `--current` use it to select the current conversation (reads `HELM_CONVERSATION_ID`); other commands take the target ID per their help.
+4. Self-introspection first (do not memorize volatile details): query subcommand arguments live with `helm --help`, `helm <cmd> --help`; for dynamic plugin actions and their input JSON Schemas, trust the in-session `<available_actions>` catalog, read-only introspection via `run_action({ actionId, describe: true })`, or `helm actions list --json`; for plugin config, use `helm plugins config <id> --json`.
+5. When the conversation is busy, `helm send` supports `--when-busy steer|followUp|reject` (default steer when omitted); add `--wait` to wait for the reply.
 
-## 核心 CLI 命令全景（API 与 CLI 同权，全部支持 --json）
+## Core CLI command landscape (API and CLI on equal footing, all support --json)
 
-### 鉴权与状态
-- `helm status`：鉴权状态（未配置可探测）。
-- `helm setup --password <pwd>`：初始化管理员密码并登录（仅首次）。
-- `helm login --password <pwd>`：登录并保存凭据至 cli-token。
+### Auth and status
+- `helm status`: auth status (probing works even when unconfigured).
+- `helm setup --password <pwd>`: initialize the admin password and log in (first time only).
+- `helm login --password <pwd>`: log in and save credentials to cli-token.
 
-### 会话
-- `helm conversations list [--profile <id>] [--status <s>] [--tag <t>]`：默认仅顶层会话（降噪）；`--all` 含子代理等全部派生子会话，`--parent <id>` 精确列出某会话的直接子会话（与 --all 互斥）。
-- `helm conversations get [id] [--current] [--limit N] [--cursor <c>]`（含分页时间线）
-- `helm conversations entry [id] <entryId> [--current]`（单条时间线全文；详情分页对超长纯文本 tool-result 做了头尾截断，此命令返回未截断原文）
+### Conversations
+- `helm conversations list [--profile <id>] [--status <s>] [--tag <t>]`: top-level conversations only by default (noise reduction); `--all` includes all derived sub-conversations such as subagents; `--parent <id>` lists exactly one conversation's direct children (mutually exclusive with --all).
+- `helm conversations get [id] [--current] [--limit N] [--cursor <c>]` (with a paginated timeline)
+- `helm conversations entry [id] <entryId> [--current]` (full text of a single timeline entry; detail pagination truncates head/tail of very long plain-text tool-results, and this command returns the untruncated original)
 - `helm conversations create [--title <t>] [--profile-id <id>] [--node <nodeId>] [--cwd <dir>] [--model <m>] [--tags <t>]`
 - `helm conversations update <id> --title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread`
-- `helm conversations reset [id] [--current] [--handoff <text>]`（重置上下文，handoff 作为首条消息）
+- `helm conversations reset [id] [--current] [--handoff <text>]` (reset context; handoff becomes the first message)
 - `helm conversations compact [id] [--current]` / `helm conversations fork <id> --entry-id <n> [--title <t>]` / `helm conversations delete <id>`
-- `helm send <id> "<text>"` 或 `helm send --current "<text>"`：提交输入；支持 `--wait`、`--when-busy steer|followUp|reject`（省略默认 steer）、`--meta <json>`、`--attach <artifactIds>`、`--replace-from <entryId>`（从指定历史条目起覆盖重发，截断该条及后续上下文）；代理代发时用 `--origin agent`。
-- `helm ask "<text>"`：一次性问答（内部创建会话并等待回答，stdout 默认只输出回答文本，`--json` 输出 `{conversationId,submissionId,entryId,answer,deleted}`）；stdin 管道内容（非 TTY）自动并入 prompt；`--profile/--title/--cwd/--model/--tags/--timeout <ms>/--delete-on-success`；失败时会话保留并在错误信封给出可查 conversationId。
-- `helm conversations withdraw [id] [--current] --submission-id <n>`：撤回排队中的输入（已进入执行或已结算时如实返回 already_placed/settled）。
-- `helm abort [id] [--current]`：中止当前回合；不要中止自己正在执行的回合。
-- `helm events watch`：订阅全局 SSE 事件（持续运行，用 Ctrl+C 结束）。
-- `helm search <query>`：全库全文检索（FTS5）。
+- `helm send <id> "<text>"` or `helm send --current "<text>"`: submit input; supports `--wait`, `--when-busy steer|followUp|reject` (default steer when omitted), `--meta <json>`, `--attach <artifactIds>`, `--replace-from <entryId>` (resend overwriting from the given history entry, truncating that entry and everything after); use `--origin agent` when sending on an agent's behalf.
+- `helm ask "<text>"`: one-shot Q&A (internally creates a conversation and waits for the answer; stdout prints only the answer text by default, `--json` outputs `{conversationId,submissionId,entryId,answer,deleted}`); piped stdin content (non-TTY) merges into the prompt automatically; `--profile/--title/--cwd/--model/--tags/--timeout <ms>/--delete-on-success`; on failure the conversation is kept and the error envelope carries a queryable conversationId.
+- `helm conversations withdraw [id] [--current] --submission-id <n>`: withdraw a queued input (returns already_placed/settled honestly when execution started or it already settled).
+- `helm abort [id] [--current]`: abort the current turn; never abort the turn you are currently executing.
+- `helm events watch`: subscribe to global SSE events (runs continuously; end with Ctrl+C).
+- `helm search <query>`: full-text search across the whole store (FTS5).
 
-### Profile 与技能
+### Profiles and skills
 - `helm profiles list` / `helm profiles get <id>`
-- `helm profiles create [id] --name/--model/--thinking/--node/--cwd/--system[-file]/--skills/--all-skills/--starters/--input <json>`（扩展能力以当回合的插件动作与技能目录为准）
-- `helm profiles update <id> ...`：语义化 flag 先 GET 再合并 PUT（不丢绑定字段）；`--input` 单独使用为全量替换。
-- `helm profiles delete <id>`（默认 assistant 不可删）。
-- `helm skills list` / `helm skills read <id> [--path references/xxx.md]`。内置 helm-cli 为系统受管只读技能，启动时按内置源码覆盖；需要扩展时创建自己的技能，不修改内置文件。
+- `helm profiles create [id] --name/--model/--thinking/--node/--cwd/--system[-file]/--skills/--all-skills/--starters/--input <json>` (extension capabilities follow the current turn's plugin actions and skill catalog)
+- `helm profiles update <id> ...`: semantic flags GET-then-merge-PUT (bound fields are not lost); `--input` alone is a full replacement.
+- `helm profiles delete <id>` (the default assistant cannot be deleted).
+- `helm skills list` / `helm skills read <id> [--path references/xxx.md]`. The built-in helm-cli is a system-managed read-only skill, overwritten from built-in sources at startup; to extend it, create your own skill instead of modifying built-in files.
 
-### 模型与网关
-- `helm models list` / `helm models default [--set <provider/model>] [--thinking <level>]` / `helm models providers` / `helm models refresh [--provider <id>]` / `helm models filter [--provider <id> [--disable <modelId>... | --clear]]`（模型禁用集：无参数查看，全量替换语义）。
-- `helm providers list` / `helm providers set --input <json>`（整体替换网关数组，严禁含密钥）。
-- `helm credentials list` / `helm credentials set <id> --value <value>` / `helm credentials delete <id>`：服务端凭据管理。
+### Models and gateways
+- `helm models list` / `helm models default [--set <provider/model>] [--thinking <level>]` / `helm models providers` / `helm models refresh [--provider <id>]` / `helm models filter [--provider <id> [--disable <modelId>... | --clear]]` (model disable set: view without arguments; full-replacement semantics).
+- `helm providers list` / `helm providers set --input <json>` (replaces the gateway array wholesale; secrets strictly forbidden).
+- `helm credentials list` / `helm credentials set <id> --value <value>` / `helm credentials delete <id>`: server-side credential management.
 
-### 节点与跨机执行
-- `helm nodes list`：节点与在线状态；`helm nodes issue <nodeId>`：签发接入令牌（明文仅返回一次）；`helm nodes remove <nodeId>`；`helm nodes upgrade <nodeId> [--check]`：检查或执行节点升级；`helm nodes forward [<nodeId> | --current] <listenHost:listenPort> [<targetHost>:]<targetPort>`：前台本地 TCP 端口转发（事件流即持有者，Ctrl-C 退出并关闭）；`helm nodes forwards` / `helm nodes forward-inspect <forwardId>` / `helm nodes forward-stop <forwardId>`：活动转发清单/详情/停止。
-- `helm env exec [--node <id>] [--cwd <dir>] [--timeout <ms>] [--stream] [--current] -- <command...>`：跨节点直接执行命令，超时单位毫秒。
-- `helm worktrees list`：列出受管工作树登记（含已清理记录的元数据）；`helm worktrees inspect <worktreeId>`：只读检视（登记元数据 + 目标节点真实 git 状态/统计/有上限 diff 预览，可用 `--conversation-id <id>` / `--path <path> [--node-id <nodeId>]` 替代选择器，`--diff=false` 省略 diff 正文）；`helm worktrees cleanup [--worktree-id <id> | --conversation-id <id> | --current | --path <path> [--node-id <nodeId>]] [--delete-branch] [--merged-into <ref>] [--force]`：清理受管工作树；默认拒绝脏工作区、未合入提交和在用/未确认停止的执行。未合入检查的基准：显式 `--merged-into` 指定已合入的目标分支或提交（不存在时 400 报错，不回退）；缺省用登记的父分支 `baseBranch`；再回退主工作树 HEAD。子分支已合入父模块分支、父分支尚未合入主干时，传 `--merged-into <父分支>` 即可正常清理，无需 `--force`。
+### Nodes and cross-machine execution
+- `helm nodes list`: nodes and online status; `helm nodes issue <nodeId>`: issue a join token (the plaintext is returned exactly once); `helm nodes remove <nodeId>`; `helm nodes upgrade <nodeId> [--check]`: check or perform a node upgrade; `helm nodes forward [<nodeId> | --current] <listenHost:listenPort> [<targetHost>:]<targetPort>`: foreground local TCP port forwarding (the event stream is the holder; Ctrl-C exits and closes); `helm nodes forwards` / `helm nodes forward-inspect <forwardId>` / `helm nodes forward-stop <forwardId>`: active forward list/detail/stop.
+- `helm env exec [--node <id>] [--cwd <dir>] [--timeout <ms>] [--stream] [--current] -- <command...>`: execute a command directly across nodes; the timeout unit is milliseconds.
+- `helm worktrees list`: list managed worktree registrations (incl. metadata of cleaned records); `helm worktrees inspect <worktreeId>`: read-only inspection (registration metadata + the target node's real git status/stats/capped diff preview; `--conversation-id <id>` / `--path <path> [--node-id <nodeId>]` can replace the selector, `--diff=false` omits the diff body); `helm worktrees cleanup [--worktree-id <id> | --conversation-id <id> | --current | --path <path> [--node-id <nodeId>]] [--delete-branch] [--merged-into <ref>] [--force]`: clean up a managed worktree; by default it refuses dirty workspaces, unmerged commits, and in-use/unconfirmed-stopped executions. Unmerged-check baseline: an explicit `--merged-into` names the merged target branch or commit (a 400 error when absent, no fallback); the default is the registered parent branch `baseBranch`; then it falls back to the main worktree HEAD. When a child branch is merged into the parent module branch but the parent is not yet merged into main, pass `--merged-into <parent-branch>` to clean up normally without `--force`.
 
-### 工作流
-- `helm workflows list` / `helm workflows get <name>` / `helm workflows save [nameOrFile] [--from-run-id <id>] [--name <n>] [--overwrite]` / `helm workflows delete <name>` / `helm workflows run <nameOrFile> [--args <json>] [--resume-from-run-id <id>] [--current] [--wait]` / `helm workflows runs` / `helm workflows inspect <runId>` / `helm workflows abort <runId>` / `helm workflows detach <runId>`（前台同步运行转后台：阻塞中的调用立即收到后台句柄，终态 followUp 汇报）/ `helm workflows steer <runId> --text <指导>`。工作流定义是跨会话资产（唯一真源为数据目录 `workflows/<name>.js`）：`save` 位置参数为本地脚本文件或目标名称，保存前自动语法预检、重复默认拒绝、`--overwrite` 才覆盖；`delete` 只删定义文件，不影响历史运行记录。`steer` 向运行中的后台子代理插话纠偏：原生节点按归属与 CAS 水位守卫提交，外部执行（如带原子守卫能力的 Herdr）按节点控制引用委托目标插件；DSL 工作流、human 归属或事实已推进时拒绝；插话发送成功不代表指导已执行完成。`workflows run --resume-from-run-id <runId>` 断点重放：账本已完成的 agent/action 直接复用结果（零 Token），从断点起实时续跑；沿用原 run 的会话与 args（可显式覆盖），原 run 仍在运行或账本含不确定副作用时拒绝。失败的后台 run 由 Watchdog 按冷却策略自动续跑（最多 3 次）；人工续跑前先用 `helm workflows inspect <runId>` 核对状态，不要与自动续跑重复触发。
+### Workflows
+- `helm workflows list` / `helm workflows get <name>` / `helm workflows save [nameOrFile] [--from-run-id <id>] [--name <n>] [--overwrite]` / `helm workflows delete <name>` / `helm workflows run <nameOrFile> [--args <json>] [--resume-from-run-id <id>] [--current] [--wait]` / `helm workflows runs` / `helm workflows inspect <runId>` / `helm workflows abort <runId>` / `helm workflows detach <runId>` (move a foreground synchronous run to the background: the blocked call immediately receives a background handle, with a follow-up report at the terminal state) / `helm workflows steer <runId> --text <guidance>`. Workflow definitions are cross-conversation assets (the single source of truth is the data directory's `workflows/<name>.js`): `save` takes a local script file or target name as its positional argument, runs an automatic syntax precheck before saving, refuses duplicates by default, and only overwrites with `--overwrite`; `delete` removes only the definition file, leaving historical run records untouched. `steer` interjects guidance into a running background subagent: native nodes submit under ownership and CAS-watermark guards; external executions (e.g. Herdr with atomic guard capability) delegate to the target plugin via the node control reference; DSL workflows, human ownership, or already-advanced facts are rejected; a successful steer send does not mean the guidance has been executed. `workflows run --resume-from-run-id <runId>` replays from the checkpoint: completed agent/action ledger entries reuse their results directly (zero tokens), and the run continues live from the breakpoint; it reuses the original run's conversation and args (explicitly overridable), and refuses when the original run is still running or the ledger contains uncertain side effects. Failed background runs are auto-resumed by the Watchdog per its cooldown policy (at most 3 times); before a manual resume, check the state with `helm workflows inspect <runId>` and do not double-trigger with the automatic resume.
 
-### 插件与动作
-- `helm plugins list`（含 status: active|disabled|failed 与失败诊断）/ `helm plugins enable <id>` / `helm plugins disable <id> [--force]`（占用预检 409 plugin_in_use 时可 --force 强制；在途运行任务仍不可跳过）/ `helm plugins config <id> [--input <json>] [--set k=v] [--unset <key>]`（--unset 发送 null 删除显式覆写，可重复，与 --set 同 key 冲突时报错）/ `helm plugins client <id>`。
-- `helm plugins doctor <id|dir>`：外部插件源码静态自检（真实代际导入+真实注册断言+client 真实编译与悬空 export 校验）；目标择一：目录绝对路径或已注册插件 id；预检失败项逐条列出，不静默。
-- `helm plugins reload <id>`：外部插件受控热重载（先 doctor 预检，失败时旧实例保持不动；在途任务拒绝 409；启用状态保持）。
-- `helm plugins rescan`：增量重扫描插件目录（只注册新外部插件，默认停用）。
-- `helm plugins init [name] [--dir <父目录>] [--template minimal|full] [--force]`：本地脚手架生成外部插件骨架（默认 full：plugin.json + index.ts + tsconfig.json + client/index.tsx；minimal 仅后端），不访问 Hub。
-- `helm plugins install <source> [--enable]`：从 `npm:<spec>`、`git:<repo>@<ref>`、HTTPS Git URL 或本地路径安装外部插件包并注册（默认停用，`--enable` 装后即启用）。source 由 Hub 服务端解析与获取（本地路径是 Hub 主机上的路径，不是客户端上传）；安装启用即在 Hub 进程内执行可信插件代码，无沙箱。
-- `helm plugins update <id>`：更新受管安装的外部插件包并重载（源未变化时如实返回 changed:false）。
-- `helm plugins remove <id> [--yes]`：移除受管安装的外部插件包（破坏性：停用并清理 Hub 主机上的安装目录与记录）。人类模式 TTY 需输入 yes 确认；非交互环境用 `--yes`；`--json` 不交互。
-- `helm plugins doc <id> <name>`：读全局公共文档；会话文档加 `--conversation <n>`（或 `--current`），持续订阅加 `--watch`（专用 SSE，首帧即当前值，Ctrl-C 退出）。
-- 动作发现以当回合目录与工具列表为准：系统提示的 `<available_actions>` 段列出当前启用且匹配本会话作用域、经 `run_action` 调用的插件动作；直接暴露的动作在模型工具列表展示。内置与外部插件同权，新插件无需改 SYSTEM.md 或内置技能即自动出现。目录每项含全限定 ID（`pluginId.actionId`）、描述、可用 CLI 命令与紧凑参数签名，也可附作者声明的指引；插件停用或动作不可达时条目自动消失。
-- 目录是摘要不是完整契约：调用前优先 `run_action({ actionId: "<pluginId>.<actionId>", describe: true })` 只读获取该动作完整 manifest（含嵌套入参/出参 JSON Schema），不执行 handler、无副作用；describe 同样按启用状态与 scope 过滤，无 bash 的会话也能自省。有 bash 时也可用 `helm actions list --json`（全量清单）或 `helm <plugin> <action> --help`（单动作参数）。
-- `run_action({ actionId, input })` 无需先读本技能即可直接调用目录中的动作；`exposeAsTool: true` 的动作另以独立工具形态出现在工具列表，调用语义等价。
-- `helm <plugin> <action>`：动作自动映射为 CLI 顶层命令（剥离 `builtin:` 前缀，`cli.command` 可覆写；如 `helm my-plugin send_notice`），支持 `--input <json>` 传参。
+### Plugins and actions
+- `helm plugins list` (incl. status: active|disabled|failed with failure diagnostics) / `helm plugins enable <id>` / `helm plugins disable <id> [--force]` (when the occupancy precheck returns 409 plugin_in_use, `--force` can force it; in-flight running tasks still cannot be skipped) / `helm plugins config <id> [--input <json>] [--set k=v] [--unset <key>]` (`--unset` sends null to remove an explicit override; repeatable; conflicts with `--set` on the same key error out) / `helm plugins client <id>`.
+- `helm plugins doctor <id|dir>`: static self-check of external plugin source (real-generation imports + real registration assertions + real client compilation and dangling-export validation); pick one target: an absolute directory path or a registered plugin id; failed precheck items are listed one by one, never silently.
+- `helm plugins reload <id>`: controlled hot-reload of an external plugin (doctor precheck first; on failure the old instance stays untouched; in-flight tasks reject with 409; enablement state is kept).
+- `helm plugins rescan`: incrementally rescan the plugins directory (registers only new external plugins, disabled by default).
+- `helm plugins init [name] [--dir <parent-dir>] [--template minimal|full] [--force]`: scaffold an external plugin skeleton locally (full by default: plugin.json + index.ts + tsconfig.json + client/index.tsx; minimal is backend-only); touches no Hub.
+- `helm plugins install <source> [--enable]`: install an external plugin package from `npm:<spec>`, `git:<repo>@<ref>`, an HTTPS Git URL, or a local path and register it (disabled by default; `--enable` enables right after install). The source is resolved and fetched by the Hub server (a local path is a path on the Hub host, not a client upload); installing and enabling executes trusted plugin code inside the Hub process, with no sandbox.
+- `helm plugins update <id>`: update a managed installed external plugin package and reload it (returns changed:false honestly when the source is unchanged).
+- `helm plugins remove <id> [--yes]`: remove a managed installed external plugin package (destructive: disables and cleans the installation directory and records on the Hub host). Human-mode TTY requires typing yes; use `--yes` in non-interactive environments; `--json` is non-interactive.
+- `helm plugins doc <id> <name>`: read a global public doc; add `--conversation <n>` (or `--current`) for session docs, and `--watch` for continuous subscription (a dedicated SSE whose first frame is the current value; Ctrl-C exits).
+- Action discovery defers to the current turn's catalog and tool list: the system prompt's `<available_actions>` section lists plugin actions that are currently enabled, match this conversation's scope, and are invoked via `run_action`; directly exposed actions appear in the model tool list. Built-in and external plugins are equal; new plugins appear automatically without touching SYSTEM.md or built-in skills. Each catalog entry carries the fully-qualified ID (`pluginId.actionId`), description, available CLI command, and a compact parameter signature, plus optional author-declared guidance; entries disappear automatically when a plugin is disabled or an action is unreachable.
+- The catalog is a summary, not the full contract: before calling, prefer `run_action({ actionId: "<pluginId>.<actionId>", describe: true })` to read the action's complete manifest (incl. nested input/output JSON Schemas) without executing the handler or side effects; describe is also filtered by enablement and scope, so sessions without bash can still introspect. With bash you can also use `helm actions list --json` (full catalog) or `helm <plugin> <action> --help` (single-action arguments).
+- `run_action({ actionId, input })` can call catalog actions directly without reading this skill first; actions with `exposeAsTool: true` additionally appear in the tool list as standalone tools with equivalent calling semantics.
+- `helm <plugin> <action>`: actions map automatically to top-level CLI commands (stripping the `builtin:` prefix; `cli.command` can override; e.g. `helm my-plugin send_notice`), with `--input <json>` for parameters.
 
-### 审批、产物与逃生舱
-- `helm asks list` / `helm asks answer <id> --answers <json> [--expected-state-seq <n>]`（CAS 乐观锁）/ `helm asks cancel <id>`。
-- `helm artifacts list [id] [--current]` / `helm artifacts put <filePath> [id] [--name <n>] [--mime-type <m>]` / `helm artifacts get <id> [--output <path>]`。
-- 生成文本文件供用户在 Web 查看时，用 `write(..., artifact: true)`。登记已有文件（含图片、视频、PDF）可用 `register_artifact({ path: "<path>" })`：路径相对当前会话 cwd 解析，在会话绑定节点读取并复制到 Hub 的产物目录；返回产物 ID 后才能视为交付成功。单个产物上限 15 MiB。
-- 终端内用 `helm artifacts put <path> --current` 上传调用机器上的本地文件；相对路径以该次 CLI 进程的实际 cwd 为准，`--current` 只选择会话，不改读文件的目录。`helm artifacts get <id> --output <path>` 同样写到调用机器；成功回显实际绝对路径。不要把 Hub 或另一节点的路径当成本地路径。
-- 外部命令生成待交付文件时，使用本次任务独有的文件名或目录，并传基于实际执行目录的绝对输出路径；POSIX shell 可先 `output="$PWD/report-<本次任务标识>.png"`。显式指定其他目录时，先确认该目录在实际执行节点上。`HELM_CWD` 是受管会话目录，shell 内 `cd` 后 `$PWD` 可以与它不同。
-- 生成后确认预期文件存在，再用同一绝对路径登记；命令退出码为 0 或输出“保存成功”不能代替产物登记。读取失败时按报错中的绝对路径和节点排查，不自动搜索其他会话的工作树或把同名旧文件当成本次产物。
-- 产物登记会保存独立副本；需要交付的文件应在清理源 worktree 前登记。成功后在回复中用 `[文件名](artifact:<id>)` 或 `![图片](artifact:<id>)` 内联渲染。清理 worktree 不删除这些副本；删除所属会话会级联删除产物。
-- `helm api <METHOD> <path> [--input <json>] [--field k=v]`：原始 HTTP 逃生舱（如 `helm api GET /api/nodes`）。
+### Approvals, artifacts, and the escape hatch
+- `helm asks list` / `helm asks answer <id> --answers <json> [--expected-state-seq <n>]` (CAS optimistic lock) / `helm asks cancel <id>`.
+- `helm artifacts list [id] [--current]` / `helm artifacts put <filePath> [id] [--name <n>] [--mime-type <m>]` / `helm artifacts get <id> [--output <path>]`.
+- When generating text files for the user to view in the Web, use `write(..., artifact: true)`. To register an existing file (incl. images, videos, PDFs), use `register_artifact({ path: "<path>" })`: the path resolves relative to the current conversation's cwd, is read on the conversation's bound node, and is copied into the Hub's artifact directory; delivery counts as successful only after the artifact ID returns. Single artifacts are capped at 15 MiB.
+- In a terminal, use `helm artifacts put <path> --current` to upload a local file on the calling machine; relative paths resolve against that CLI process's actual cwd -- `--current` only selects the conversation and never changes where files are read from. `helm artifacts get <id> --output <path>` likewise writes on the calling machine and echoes the actual absolute path on success. Never treat a Hub or another node's path as a local path.
+- When an external command generates a file to deliver, use a filename or directory unique to this task and pass an absolute output path based on the actual execution directory; in a POSIX shell you can do `output="$PWD/report-<task-identifier>.png"` first. When explicitly choosing another directory, confirm it exists on the actual execution node. `HELM_CWD` is the managed session directory; after `cd` in a shell, `$PWD` may differ from it.
+- After generation, confirm the expected file exists, then register it with the same absolute path; a zero exit code or "saved successfully" output is no substitute for artifact registration. On read failure, investigate by the absolute path and node in the error; never auto-search other sessions' worktrees or mistake an old same-name file for this task's artifact.
+- Artifact registration stores an independent copy; files to deliver must be registered before cleaning the source worktree. After success, inline-render them in the reply with `[filename](artifact:<id>)` or `![image](artifact:<id>)`. Cleaning the worktree does not delete these copies; deleting the owning conversation cascades to its artifacts.
+- `helm api <METHOD> <path> [--input <json>] [--field k=v]`: raw HTTP escape hatch (e.g. `helm api GET /api/nodes`).
 
-## 按需读取专题手册
+## Topic manuals on demand
 
-遇到对应专题时先读对应参考文件，再动手：
+When a matching topic comes up, read the reference file before acting:
 
-- 编排多代理/多阶段任务（subagent、SubagentWorkflow 确定性脚本）或与 Herdr 终端 Agent、SuperAgent Worker 协作前：
-  `load_skill({ skillId: "helm-cli", path: "references/workflows-and-agents.md" })`。
-- 自举编写新技能（~/.helm/skills/<id>/SKILL.md）或开发外置插件（~/.helm/plugins/<id>/）前：
-  `load_skill({ skillId: "helm-cli", path: "references/skill-and-plugin-dev.md" })`。
-- 开发或优化插件 client.tsx，尤其涉及重型依赖、动态 import、首次加载性能或异步 chunk 前：
-  `load_skill({ skillId: "helm-cli", path: "references/plugin-client-code-splitting.md" })`。
-- 交互式展示、微应用构建等扩展能力按当回合可用技能描述选择：先加载适用技能，再按其指引调用工具或 `<available_actions>` 中的动作；没有适用技能时用普通 Markdown，不引用目录外的手册。
+- Before orchestrating multi-agent/multi-stage tasks (subagent, SubagentWorkflow deterministic scripts) or collaborating with Herdr terminal agents or SuperAgent Workers:
+  `load_skill({ skillId: "helm-cli", path: "references/workflows-and-agents.md" })`.
+- Before bootstrapping a new skill (~/.helm/skills/<id>/SKILL.md) or developing an external plugin (~/.helm/plugins/<id>/):
+  `load_skill({ skillId: "helm-cli", path: "references/skill-and-plugin-dev.md" })`.
+- Before developing or optimizing a plugin's client.tsx, especially involving heavy dependencies, dynamic imports, first-load performance, or async chunks:
+  `load_skill({ skillId: "helm-cli", path: "references/plugin-client-code-splitting.md" })`.
+- Interactive displays, micro-app building, and other extension capabilities: choose per the current turn's available skill descriptions -- load the applicable skill first, then follow its guidance to call tools or actions from `<available_actions>`; with no applicable skill, use plain Markdown and never reference manuals outside the catalog.

@@ -476,7 +476,7 @@ describe('前台同步 workflow detach（service.run foreground 上下文）', (
     )
     const waitPromise = service.waitForeground(run.id)
     // 武装下一次 flush 失败（即 detach 临界段之后的落盘等待），再 detach：
-    // 临界段完成（记录文件已 fsync、等待者已唤醒）后 flush 失败——如实抛
+    // 临界段完成（record file已 fsync、等待者已唤醒）后 flush 失败——如实抛
     // detach_flush_failed，绝不回滚已落盘事实。
     state.failNext()
     const failure = await service.detachForegroundRun(run.id).then(
@@ -487,11 +487,11 @@ describe('前台同步 workflow detach（service.run foreground 上下文）', (
     assert.equal((failure as HelmError).code, 'detach_flush_failed')
     assert.equal((failure as HelmError).status, 500)
     assert.ok(/已转入后台/.test((failure as HelmError).message), '错误须如实说明 detach 已生效')
-    // 语义锁定：记录文件已持久 detachedAt/notifyParentOnSettle；等待者已被
+    // 语义锁定：record file已持久 detachedAt/notifyParentOnSettle；等待者已被
     // 唤醒为 detached（工具返回后台句柄，不悬挂）；run 不被取消。
     assert.equal(await waitPromise, 'detached', 'flush 失败不得误取消/悬挂等待中的工具调用')
     const record = readRecord(dataDir, run.id)
-    assert.ok(typeof record['detachedAt'] === 'number', '记录文件已持久 detachedAt（不回滚）')
+    assert.ok(typeof record['detachedAt'] === 'number', 'record file已持久 detachedAt（不回滚）')
     assert.equal(record['notifyParentOnSettle'], true)
     assert.equal(service.getRun(run.id).status, 'running')
     // 重复 detach：已是后台（幂等拒绝），不得因 flush 失败重放转后台。

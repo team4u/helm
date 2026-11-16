@@ -1179,7 +1179,7 @@ test('superagent 记忆归属: 已初始化文件被删后重启/superagent 重�
       await app2.kernel.submitInput(routerId2, '重启后的自检')
       await app2.kernel.waitForIdle(routerId2)
       assert.ok(
-        notifications2.some((n) => n.title.includes('长期记忆文件缺失')),
+        notifications2.some((n) => n.title.includes('Long-term Memory文件缺失')),
         'memory 插件应检测到已初始化文件的缺失并显式告警',
       )
       assert.ok(missingSystemSections.some((section) => section.includes('<memory_assets_missing>')), '缺失段落真实进入重启后的模型请求')

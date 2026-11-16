@@ -1,21 +1,21 @@
 /**
- * builtin:triggers —— cron 调度模块。
+ * builtin:triggers -- the cron scheduling module.
  *
- * 职责：标准五字段 cron 表达式（cron-parser）驱动的定时投递。
- * - 运行态持久化于公共 doc `crons`（纯 JSON；lastRunAt/nextRunAt 随 claim 推进）；
- * - 持久 claim：调度点触发时先推进 nextRunAt 并 await doc.flush() 真实落盘，
- *   再投递。同一计划点最多一次投递尝试；claim 落盘后、投递完成前崩溃则该次
- *   丢失（诚实语义：持久 claim 与异步输入提交不构成原子事务，不承诺 exactly-once）；
- * - catchUp:true 重启后将错过的时段合并补跑一次；
- *   false 跳至未来时点（跳过同样 claim+flush，防重启后回跳重算）；
- * - single-flight：同一 job 并发 tick 只允许一个在途；
- * - dispatch 失败如实写 lastError 并发 notification 事件，绝不假成功；
- *   本计划点不重试（最多一次尝试语义），下个时点正常调度；
- * - 错误路径不变式：timer 触发即被消费，tick 内任何异常（求值/落盘）都
- *   必须经 finally 重排，job 不因瞬时故障在重启前永久停摆；
- * - 大间隔 timer 先以 <=2^31-1 安全窗口触发再续排（规避 32 位溢出），unref。
+ * Responsibilities: scheduled delivery driven by standard five-field cron expressions (cron-parser).
+ * - Runtime state persists in the public doc `crons` (pure JSON; lastRunAt/nextRunAt advance with claims);
+ * - Persistent claim: at a schedule point, first advance nextRunAt and await doc.flush() for a real
+ *   flush, then deliver. At most one delivery attempt per schedule point; a crash after the claim is
+ *   flushed but before delivery completes loses that attempt (honest semantics: persistent claim and
+ *   async input submission do not form an atomic transaction; exactly-once is not promised);
+ * - catchUp:true merges missed intervals into one catch-up run after restart;
+ *   false jumps to a future point (the jump also claims+flushes, preventing recompute-back after restart);
+ * - single-flight: only one in-flight tick per concurrent job;
+ * - dispatch failures write lastError honestly and emit a notification event, never faking success;
+ *   no retry within the schedule point (at-mostast-once semantics); the next point schedules normally;
+ * - Error-path invariant: a timer is consumed the moment it fires; any tick exception (evaluation/flush)
+ *   must reschedule via finally -- a job never permanently stalls on a transient fault before restart;
  *
- * 定时器只经 ctx.service 生命周期管理，不触碰内核。
+ * Timers are managed solely through the ctx.service lifecycle; the kernel is untouched.
  */
 
 import { CronExpressionParser } from 'cron-parser'
@@ -23,46 +23,46 @@ import { randomUUID } from 'node:crypto'
 import { HelmError, type ExternalTriggerEnvelope, type HelmPluginContext } from '@helm/protocol'
 
 // ---------------------------------------------------------------------------
-// 常量与类型
+// Constants and types
 // ---------------------------------------------------------------------------
 
 export const CRON_DOC_NAME = 'crons'
 
-/** 五字段 cron；ID 字符集收紧（禁点号，防与全限定动作名歧义）。 */
+/** Five-field cron; the ID charset is tightened (dots forbidden, avoiding ambiguity with fully-qualified action names). */
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 
-/** setTimeout 上限（2^31-1 ms ≈ 24.8 天）；更大延迟先触发再续排。 */
+/** setTimeout cap (2^31-1 ms ~= 24.8 days); larger delays fire in the window first, then reschedule. */
 const MAX_TIMEOUT_MS = 2_147_483_647
 
-/** 调度决策失败后的重试退避下限：表达式被外部写坏等持续失败时，按已过期的
- * nextRunAt 重排会退化为热循环刷通知；隔一个下限再试，修复后自动恢复。 */
+/** Retry backoff floor after a scheduling-decision failure: with a persistently broken expression etc.,
+ * rescheduling by an expired nextRunAt degrades into a hot loop spamming notifications; retry after one floor interval, auto-recovering once fixed. */
 const DECISION_RETRY_FLOOR_MS = 60_000
 
 export interface CronJob {
   id: string
   /**
-   * 创建代次（randomUUID）：claim/lastError 写回按 (id, rev) 校验，
-   * 防止在途 tick 污染 delete 后重建的同 id 新 job。重建即换代。
+   * Creation generation (randomUUID): claim/lastError write-backs are checked against (id, rev),
+   * preventing an in-flight tick from polluting a same-id job rebuilt after delete. A rebuild changes the generation.
    */
   rev: string
   description?: string
-  /** 标准五字段 cron 表达式（分 时 日 月 周）。 */
+  /** Standard five-field cron expression (min hour day month weekday). */
   schedule: string
-  /** IANA 时区，默认 'UTC'。 */
+  /** IANA timezone, default 'UTC'. */
   timezone: string
-  /** 触发时投递的文本载荷。 */
+  /** Text payload delivered at trigger time. */
   text: string
   enabled: boolean
-  /** true：重启后对错过时段补跑一次；false：跳至未来时点。 */
+  /** true: catch up missed intervals once after restart; false: jump to a future point. */
   catchUp: boolean
   targetConversationId?: number
   targetProfileId?: string
   threadKey?: string
-  /** 最近一次 claim 的计划时点（调度点，非投递完成时刻）。 */
+  /** The planned time of the most recent claim (the schedule point, not delivery completion). */
   lastRunAt?: number
-  /** 下一个待触发计划时点（epoch ms）。 */
+  /** The next planned trigger time (epoch ms). */
   nextRunAt?: number
-  /** 最近一次投递失败的显式诊断。 */
+  /** Explicit diagnostics of the most recent delivery failure. */
   lastError?: string
 }
 
@@ -72,11 +72,11 @@ export interface CronDoc {
 }
 
 export interface CronDeps {
-  /** 投递入口（共享 dispatch helper：校验 Profile、解析/创建会话后进 trigger 管道）。 */
+  /** Delivery entry (shared dispatch helper: validates the Profile, resolves/creates the conversation, then enters the trigger pipeline). */
   dispatchTrigger(event: ExternalTriggerEnvelope, targetProfileId?: string): Promise<void>
 }
 
-/** 定时原语抽象（测试注入可控时钟；缺省 Date.now/setTimeout+unref）。 */
+/** Timer primitive abstraction (tests inject a controllable clock; defaults to Date.now/setTimeout+unref). */
 export interface CronClock {
   now(): number
   setTimeout(fn: () => void, ms: number): CronTimerHandle
@@ -86,22 +86,22 @@ export interface CronTimerHandle {
   clear(): void
 }
 
-/** 注册返回的内部句柄（测试用；业务不应依赖）。 */
+/** Internal handle returned by register (for tests; business code must not rely on it). */
 export interface CronRuntime {
-  /** 立即对全部启用 job 执行一次调度扫描（不等待 timer）。 */
+  /** Run one scheduling scan of all enabled jobs immediately (without waiting for timers). */
   tickNow(): Promise<void>
-  /** 等待全部在途 tick 完成（测试驱动 timer 后收尾）。 */
+  /** Wait for all in-flight ticks to finish (test teardown after driving timers). */
   settle(): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
-// 纯函数：校验 / 时点计算 / 文档解析（导出供测试）
+// Pure functions: validation / time computation / doc parsing (exported for tests)
 // ---------------------------------------------------------------------------
 
-/** 校验五字段 cron 表达式与 IANA 时区；非法抛 HelmError（cron-parser 消息透传）。 */
+/** Validate a five-field cron expression and IANA timezone; invalid throws HelmError (cron-parser messages pass through). */
 export function assertValidSchedule(schedule: string, timezone: string): void {
   if (typeof schedule !== 'string' || schedule.trim().length === 0) {
-    throw new HelmError('validation_error', 'cron schedule 不能为空（标准五字段：分 时 日 月 周）', 400, {
+    throw new HelmError('validation_error', 'cron schedule must not be empty (standard five fields: min hour day month weekday)', 400, {
       field: 'schedule',
     })
   }
@@ -109,31 +109,31 @@ export function assertValidSchedule(schedule: string, timezone: string): void {
   if (fields.length !== 5) {
     throw new HelmError(
       'validation_error',
-      `cron schedule 必须是标准五字段（分 时 日 月 周），实际 ${fields.length} 字段：${schedule}`,
+      `cron schedule must be standard five fields (min hour day month weekday); got ${fields.length}: ${schedule}`,
       400,
       { field: 'schedule', schedule },
     )
   }
   if (typeof timezone !== 'string' || timezone.length === 0) {
-    throw new HelmError('validation_error', 'cron timezone 不能为空（IANA 区域名，默认 UTC）', 400, {
+    throw new HelmError('validation_error', 'cron timezone must not be empty (an IANA zone name; defaults to UTC)', 400, {
       field: 'timezone',
     })
   }
   try {
-    // cron-parser 对非法时区延迟到求值时才抛（CronDate Invalid Date），且
-    // hasNext() 对坏时区静默返回 false——校验边界必须直接求值一次时点
+    // cron-parser defers invalid-timezone errors to evaluation (CronDate Invalid Date), and
+    // hasNext() silently returns false for a bad timezone -- the validation boundary must evaluate one point directly
     CronExpressionParser.parse(schedule, { tz: timezone }).next()
   } catch (err) {
     throw new HelmError(
       'validation_error',
-      `cron schedule 非法：${err instanceof Error ? err.message : String(err)}`,
+      `invalid cron schedule: ${err instanceof Error ? err.message : String(err)}`,
       400,
       { field: 'schedule', schedule, timezone },
     )
   }
 }
 
-/** 计算严格晚于 afterMs 的下一个计划时点；无未来时点返回 undefined。 */
+/** Compute the next planned time strictly after afterMs; undefined when there is no future point. */
 export function nextFireTime(schedule: string, timezone: string, afterMs: number): number | undefined {
   try {
     const iter = CronExpressionParser.parse(schedule, { currentDate: new Date(afterMs), tz: timezone })
@@ -142,14 +142,14 @@ export function nextFireTime(schedule: string, timezone: string, afterMs: number
   } catch (err) {
     throw new HelmError(
       'cron_next_time_unavailable',
-      `计算 cron 下次时点失败（schedule=${schedule} tz=${timezone}）：${err instanceof Error ? err.message : String(err)}`,
+      `failed to compute the next cron time (schedule=${schedule} tz=${timezone}): ${err instanceof Error ? err.message : String(err)}`,
       500,
       { schedule, timezone, afterMs },
     )
   }
 }
 
-/** 归一化创建输入为 CronJob（纯函数；不含 doc 写入与时点计算）。 */
+/** Normalize creation input into a CronJob (pure; no doc writes or time computation). */
 export function normalizeCronInput(input: {
   id: string
   schedule: string
@@ -165,16 +165,16 @@ export function normalizeCronInput(input: {
   if (typeof input.id !== 'string' || !ID_PATTERN.test(input.id)) {
     throw new HelmError(
       'validation_error',
-      `cron id 非法（1..64 位，允许字母数字 _ -，禁点号）：${String(input.id)}`,
+      `invalid cron id (1..64 chars, alphanumeric _ - allowed, dots forbidden): ${String(input.id)}`,
       400,
       { field: 'id' },
     )
   }
   if (typeof input.text !== 'string' || input.text.trim().length === 0) {
-    throw new HelmError('validation_error', 'cron text 不能为空（触发时投递的载荷文本）', 400, { field: 'text' })
+    throw new HelmError('validation_error', 'cron text must not be empty (the payload text delivered at trigger time)', 400, { field: 'text' })
   }
   if (input.description !== undefined && (typeof input.description !== 'string' || input.description.length > 500)) {
-    throw new HelmError('validation_error', 'cron description 必须是不超过 500 字的字符串', 400, {
+    throw new HelmError('validation_error', 'cron description must be a string of at most 500 chars', 400, {
       field: 'description',
     })
   }
@@ -186,27 +186,27 @@ export function normalizeCronInput(input: {
   if (hasConv && hasProfile) {
     throw new HelmError(
       'validation_error',
-      'targetConversationId 与 targetProfileId 互斥：会话直投与按 Profile 解析不可同时指定',
+      'targetConversationId and targetProfileId are mutually exclusive: direct conversation delivery and per-Profile resolution cannot both be set',
       400,
       { field: 'targetConversationId/targetProfileId' },
     )
   }
   if (hasConv && (!Number.isInteger(input.targetConversationId) || (input.targetConversationId as number) <= 0)) {
-    throw new HelmError('validation_error', 'targetConversationId 必须是正整数会话 ID', 400, {
+    throw new HelmError('validation_error', 'targetConversationId must be a positive integer conversation ID', 400, {
       field: 'targetConversationId',
     })
   }
   if (hasProfile && (typeof input.targetProfileId !== 'string' || input.targetProfileId.length === 0)) {
-    throw new HelmError('validation_error', 'targetProfileId 必须是非空字符串', 400, { field: 'targetProfileId' })
+    throw new HelmError('validation_error', 'targetProfileId must be a non-empty string', 400, { field: 'targetProfileId' })
   }
   if (input.threadKey !== undefined && (typeof input.threadKey !== 'string' || input.threadKey.length === 0)) {
-    throw new HelmError('validation_error', 'threadKey 必须是非空字符串', 400, { field: 'threadKey' })
+    throw new HelmError('validation_error', 'threadKey must be a non-empty string', 400, { field: 'threadKey' })
   }
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
-    throw new HelmError('validation_error', 'enabled 必须是布尔值', 400, { field: 'enabled' })
+    throw new HelmError('validation_error', 'enabled must be a boolean', 400, { field: 'enabled' })
   }
   if (input.catchUp !== undefined && typeof input.catchUp !== 'boolean') {
-    throw new HelmError('validation_error', 'catchUp 必须是布尔值', 400, { field: 'catchUp' })
+    throw new HelmError('validation_error', 'catchUp must be a boolean', 400, { field: 'catchUp' })
   }
 
   return {
@@ -225,21 +225,21 @@ export function normalizeCronInput(input: {
 }
 
 /**
- * 严格校验持久文档：坏数据显式抛 HelmError（cron_doc_corrupt），绝不静默重置。
- * 未知字段忽略（向前演进），已知字段类型/约束错误必须拒绝。
+ * Strictly validate the persisted doc: bad data throws HelmError explicitly (cron_doc_corrupt); never silently resets.
+ * Unknown fields are ignored (forward evolution); known-field type/constraint errors must be rejected.
  */
 export function parseCronDoc(raw: unknown): CronDoc {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmError('cron_doc_corrupt', 'crons 文档损坏：根必须是对象', 500, { actual: String(raw) })
+    throw new HelmError('cron_doc_corrupt', 'crons doc corrupted: the root must be an object', 500, { actual: String(raw) })
   }
   const doc = raw as Record<string, unknown>
   if (doc.version !== 1) {
-    throw new HelmError('cron_doc_corrupt', `crons 文档 version 非法：${String(doc.version)}（期望 1）`, 500, {
+    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: invalid version: ${String(doc.version)} (expected 1)`, 500, {
       version: doc.version,
     })
   }
   if (!Array.isArray(doc.jobs)) {
-    throw new HelmError('cron_doc_corrupt', 'crons 文档损坏：jobs 必须是数组', 500, { actual: typeof doc.jobs })
+    throw new HelmError('cron_doc_corrupt', 'crons doc corrupted: jobs must be an array', 500, { actual: typeof doc.jobs })
   }
   const seen = new Set<string>()
   const jobs = doc.jobs.map((rawJob, index) => parseCronJob(rawJob, index, seen))
@@ -249,43 +249,43 @@ export function parseCronDoc(raw: unknown): CronDoc {
 function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJob {
   const where = `jobs[${index}]`
   if (rawJob === null || typeof rawJob !== 'object' || Array.isArray(rawJob)) {
-    throw new HelmError('cron_doc_corrupt', `crons 文档损坏：${where} 必须是对象`, 500, { index })
+    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} must be an object`, 500, { index })
   }
   const job = rawJob as Record<string, unknown>
   if (typeof job.id !== 'string' || !ID_PATTERN.test(job.id)) {
-    throw new HelmError('cron_doc_corrupt', `crons 文档损坏：${where}.id 非法：${String(job.id)}`, 500, { index })
+    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: invalid ${where}.id: ${String(job.id)}`, 500, { index })
   }
   if (typeof job.rev !== 'string' || job.rev.length === 0) {
-    throw new HelmError('cron_doc_corrupt', `crons 文档损坏：${where}（${job.id}）缺少创建代次 rev`, 500, {
+    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) is missing the creation generation rev`, 500, {
       index,
       id: job.id,
     })
   }
   if (seen.has(job.id)) {
-    throw new HelmError('cron_doc_corrupt', `crons 文档损坏：${where}.id 重复：${job.id}`, 500, { index })
+    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: duplicate ${where}.id: ${job.id}`, 500, { index })
   }
   seen.add(job.id)
   if (typeof job.schedule !== 'string' || typeof job.text !== 'string') {
-    throw new HelmError('cron_doc_corrupt', `crons 文档损坏：${where}（${job.id}）缺少 schedule/text`, 500, {
+    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) is missing schedule/text`, 500, {
       index,
       id: job.id,
     })
   }
   if (typeof job.timezone !== 'string' || job.timezone.length === 0) {
-    throw new HelmError('cron_doc_corrupt', `crons 文档损坏：${where}（${job.id}）timezone 非法`, 500, {
+    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid timezone`, 500, {
       index,
       id: job.id,
     })
   }
   if (typeof job.enabled !== 'boolean' || typeof job.catchUp !== 'boolean') {
-    throw new HelmError('cron_doc_corrupt', `crons 文档损坏：${where}（${job.id}）enabled/catchUp 必须是布尔值`, 500, {
+    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) enabled/catchUp must be booleans`, 500, {
       index,
       id: job.id,
     })
   }
   for (const field of ['description', 'targetProfileId', 'threadKey', 'lastError'] as const) {
     if (job[field] !== undefined && typeof job[field] !== 'string') {
-      throw new HelmError('cron_doc_corrupt', `crons 文档损坏：${where}（${job.id}）${field} 类型非法`, 500, {
+      throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid ${field} type`, 500, {
         index,
         id: job.id,
         field,
@@ -296,7 +296,7 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
     job.targetConversationId !== undefined &&
     (!Number.isInteger(job.targetConversationId) || (job.targetConversationId as number) <= 0)
   ) {
-    throw new HelmError('cron_doc_corrupt', `crons 文档损坏：${where}（${job.id}）targetConversationId 非法`, 500, {
+    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid targetConversationId`, 500, {
       index,
       id: job.id,
     })
@@ -304,14 +304,14 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
   if (job.targetConversationId !== undefined && job.targetProfileId !== undefined) {
     throw new HelmError(
       'cron_doc_corrupt',
-      `crons 文档损坏：${where}（${job.id}）targetConversationId 与 targetProfileId 互斥`,
+      `crons doc corrupted: ${where} (${job.id}) targetConversationId and targetProfileId are mutually exclusive`,
       500,
       { index, id: job.id },
     )
   }
   for (const field of ['lastRunAt', 'nextRunAt'] as const) {
     if (job[field] !== undefined && (typeof job[field] !== 'number' || !Number.isFinite(job[field]))) {
-      throw new HelmError('cron_doc_corrupt', `crons 文档损坏：${where}（${job.id}）${field} 必须是有限数值`, 500, {
+      throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) ${field} must be finite numbers`, 500, {
         index,
         id: job.id,
         field,
@@ -337,24 +337,24 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
 }
 
 // ---------------------------------------------------------------------------
-// 纯函数：调度决策与信封构造（导出供测试）
+// Pure functions: scheduling decisions and envelope construction (exported for tests)
 // ---------------------------------------------------------------------------
 
-/** 单个 job 在一次 tick 中的决策。 */
+/** One job's decision within a tick. */
 export type TickDecision =
   | { action: 'fire'; at: number }
   | { action: 'skip-to-future'; from: number; to: number }
   | { action: 'noop' }
 
 /**
- * 判定 job 在 now 的动作：
- * - 未启用 / nextRunAt 缺失或在未来：noop；
- * - 到期（nextRunAt <= now）：
- *   - 仅错过单个时段（nextRunAt 之后下一个时点仍在未来，含准点触发）→ fire
- *     该计划点（catchUp 语义下同样 fire）；
- *   - 错过多个时段（停机）且 catchUp=false → 跳至 now 之后首个时点；
- *   - 错过多个时段且 catchUp=true → 仍只补跑最近一个（at=nextRunAt），
- *     补跑后由 advanceAfterFire 跳至未来，不逐段重放。
+ * Decide a job's action at now:
+ * - disabled / nextRunAt missing or in the future: noop;
+ * - due (nextRunAt <= now):
+ *   - only one interval missed (the next point after nextRunAt is still in the future, incl. on-time firing) -> fire
+ *     that planned point (catchUp semantics likewise fire);
+ *   - multiple intervals missed (downtime) and catchUp=false -> jump to the first point after now;
+ *   - multiple intervals missed and catchUp=true -> still catch up only the most recent one (at=nextRunAt),
+ *     then advanceAfterFire jumps to the future; history is not replayed interval by interval.
  */
 export function decideTick(job: CronJob, now: number): TickDecision {
   if (!job.enabled) return { action: 'noop' }
@@ -365,10 +365,10 @@ export function decideTick(job: CronJob, now: number): TickDecision {
   if (!missedMultiple || job.catchUp) return { action: 'fire', at: next }
   const future = nextFireTime(job.schedule, job.timezone, now)
   if (future === undefined || future <= now) {
-    // nextFireTime 严格递增，理论上不可达；防御性显式报错而非静默
+    // nextFireTime strictly increases, so this is theoretically unreachable; defensively error explicitly instead of silence
     throw new HelmError(
       'cron_schedule_stalled',
-      `cron job ${job.id} 无法跳至未来时点（schedule=${job.schedule} tz=${job.timezone}）`,
+      `cron job ${job.id} cannot jump to a future point (schedule=${job.schedule} tz=${job.timezone})`,
       500,
       { id: job.id, schedule: job.schedule, timezone: job.timezone },
     )
@@ -377,9 +377,9 @@ export function decideTick(job: CronJob, now: number): TickDecision {
 }
 
 /**
- * fire 之后的下一个计划时点：候选 = fireAt 之后首个时点；若仍落在 now 之前
- * （停机错过多个时段），则跳到 now 之后首个时点——catchUp 只补跑一次，
- * 不逐段重放历史。
+ * The next planned point after a fire: candidate = the first point after fireAt; if it still falls before now
+ * (multiple intervals missed during downtime), jump to the first point after now -- catchUp runs once only,
+ * never replaying history interval by interval.
  */
 export function advanceAfterFire(schedule: string, timezone: string, fireAt: number, now: number): number | undefined {
   const candidate = nextFireTime(schedule, timezone, fireAt)
@@ -388,7 +388,7 @@ export function advanceAfterFire(schedule: string, timezone: string, fireAt: num
   return nextFireTime(schedule, timezone, now)
 }
 
-/** 信封构造（纯函数）：source 固定 'cron:<id>'，id 含计划点（同点稳定）。 */
+/** Envelope construction (pure): source is fixed 'cron:<id>'; the id embeds the planned point (stable per point). */
 export function buildCronEnvelope(job: CronJob, fireAt: number): ExternalTriggerEnvelope {
   return {
     id: `cron:${job.id}:${fireAt}`,
@@ -400,7 +400,7 @@ export function buildCronEnvelope(job: CronJob, fireAt: number): ExternalTrigger
   }
 }
 
-/** 清除 lastError 字段（不能赋 undefined：doc 存储层拒绝未定义值键）。 */
+/** Clear the lastError field (cannot assign undefined: the doc storage rejects undefined-valued keys). */
 function clearLastError(job: CronJob): CronJob {
   const { lastError: _ignored, ...rest } = job
   void _ignored
@@ -408,25 +408,25 @@ function clearLastError(job: CronJob): CronJob {
 }
 
 // ---------------------------------------------------------------------------
-// 注册入口
+// Registration entry
 // ---------------------------------------------------------------------------
 
 /**
- * 注册 cron 调度：公共 doc + 4 个 action（cron_list/create/delete/trigger）+
- * 定时 service。主插件在 definePlugin 内调用；deps.dispatchTrigger 为共享
- * delivery helper（校验 Profile、解析/创建会话后进 ctx.host.dispatchTrigger，
- * 内核已 defang）。
+ * Register cron scheduling: the public doc + 4 actions (cron_list/create/delete/trigger) +
+ * the timer service. The main plugin calls it inside definePlugin; deps.dispatchTrigger is the shared
+ * delivery helper (validates the Profile, resolves/creates the conversation, then enters
+ * ctx.host.dispatchTrigger -- already defanged by the kernel).
  */
 export function registerCron(ctx: HelmPluginContext, deps: CronDeps): CronRuntime {
   return createCronScheduler(ctx, deps, defaultClock())
 }
 
-/** 内部测试入口：可控时钟注入（运行时无注入需求，缺省真实时钟）。 */
+/** Internal test entry: controllable clock injection (runtime has no injection need; defaults to the real clock). */
 export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, clock: CronClock): CronRuntime {
   const doc = ctx.doc<CronDoc>(CRON_DOC_NAME, { version: 1, jobs: [] }, { public: true })
 
   let stopping = false
-  /** single-flight：job id -> 在途调度 Promise。 */
+  /** single-flight: job id -> in-flight scheduling Promise. */
   const inflight = new Map<string, Promise<void>>()
   const timers = new Map<string, CronTimerHandle>()
 
@@ -434,31 +434,31 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     console.error(`[cron] ${message}`)
   }
 
-  /** 显式错误上报：notification 事件 + stderr（各尽力，失败不递归）。 */
+  /** Explicit error reporting: a notification event + stderr (each best-effort; failures do not recurse). */
   const emitError = (title: string, detail: unknown): void => {
     const message = detail instanceof Error ? detail.message : String(detail)
     try {
       ctx.host.emitEvent('notification', { type: 'notification', level: 'error', title, body: `[cron] ${message}` })
     } catch (eventErr) {
-      logDiagnostic(`notification 事件发布失败：${eventErr instanceof Error ? eventErr.message : String(eventErr)}`)
+      logDiagnostic(`notification event publish failed: ${eventErr instanceof Error ? eventErr.message : String(eventErr)}`)
     }
     logDiagnostic(`${title}：${message}`)
   }
 
-  /** 读取并严格校验 doc；坏数据显式抛错，绝不静默重置。 */
+  /** Read and strictly validate the doc; bad data throws explicitly, never silently resetting. */
   const readDoc = (): CronDoc => parseCronDoc(doc.get())
 
-  /** 写回 + 真实落盘（doc.flush 冲刷本 store 排队写）；持久化失败显式抛错。 */
+  /** Write back + really flush (doc.flush drains this store's queued writes); persistence failures throw explicitly. */
   const writeDoc = async (next: CronDoc): Promise<void> => {
     doc.set(next)
     await doc.flush()
   }
 
   /**
-   * 按 (id, rev) 写回单个 job 并落盘：id 不存在或 rev 不匹配（被 delete 后
-   * 重建换代）均拒绝写入，返回 false——旧 tick 的 claim/lastError 绝不
-   * 污染或复活新 job。读-改-写在同步段内完成（doc.set 前 await），
-   * 事件循环内天然串行。
+   * Write a single job back by (id, rev) and flush: a missing id or rev mismatch (rebuilt after delete with a new
+   * generation) refuses the write and returns false -- an old tick's claim/lastError never pollutes or revives a
+   * new job. The read-modify-write completes within the synchronous segment (no await before doc.set),
+   * naturally serialized within the event loop.
    */
   const tryUpdateJob = async (
     id: string,
@@ -475,18 +475,18 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
   }
 
   /**
-   * 单个 job 的一次调度处理（single-flight 由 tickJob 保证）。
-   * 顺序：持久 claim（推进 lastRunAt/nextRunAt + flush）→ dispatch；
-   * claim 落盘失败绝不投递（否则崩溃窗口产生重复投递）。
-   * 不变式：timer 在触发回调开头已被 timers.delete 消费，本方法任何出口
-   * （含异常逃逸）都必须重排——由 finally 统一保证（决策失败走退避下限，
-   * 防按过期 nextRunAt 热循环）；否则一次瞬时求值/落盘
-   * 异常就让该 job 永久停摆（仅一条通知，重启前无恢复）。已删除/禁用/
-   * 停机中的 job 由 scheduleJob 现读 doc 自然不排，删除/禁用语义不受影响。
+   * One scheduling pass for one job (single-flight guaranteed by tickJob).
+   * Order: persistent claim (advance lastRunAt/nextRunAt + flush) -> dispatch;
+   * a failed claim flush never delivers (otherwise the crash window duplicates deliveries).
+   * Invariant: the timer is consumed by timers.delete at the start of the fire callback; every exit of this
+   * method (incl. escaping exceptions) must reschedule -- guaranteed uniformly by finally (decision failures take
+   * the backoff floor, preventing a hot loop on an expired nextRunAt); otherwise one transient evaluation/flush
+   * exception permanently stalls the job (a single notification, no recovery before restart). Deleted/disabled/
+   * shutting-down jobs naturally do not schedule as scheduleJob re-reads the doc; delete/disable semantics are unaffected.
    */
   const runJobTick = async (id: string): Promise<void> => {
     if (stopping) return
-    // 决策失败路径已自带退避重排时，finally 不再按 nextRunAt 重复重排。
+    // When the decision-failure path already reschedules with backoff, finally does not reschedule again by nextRunAt.
     let rescheduledByBackoff = false
     try {
       let job: CronJob | undefined
@@ -496,21 +496,21 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
         if (!job) return
         decision = decideTick(job, clock.now())
       } catch (err) {
-        emitError(`cron job ${id} 调度决策失败`, err)
+        emitError(`cron job ${id} scheduling decision failed`, err)
         rescheduledByBackoff = true
         scheduleJob(id, clock.now() + DECISION_RETRY_FLOOR_MS)
         return
       }
       if (decision.action === 'noop') return
       if (decision.action === 'skip-to-future') {
-        // catchUp=false：错过时段直接跳至未来；同样 claim+flush 防重启回跳。
-        // lastRunAt 不动（没有真实投递发生，不伪造运行记录）。
-        // tryUpdateJob 抛错（落盘失败）时异常上抛由 timer 回调兜底通知；
-        // doc.set 镜像已推进，finally 重排按下一时点进行，job 不停摆。
+        // catchUp=false: missed intervals jump straight to the future; also claim+flush against restart-jump-back.
+        // lastRunAt stays (no real delivery happened; no fabricated run record).
+        // When tryUpdateJob throws (flush failure), the exception propagates and the timer callback notifies as a
+        // backstop; the doc.set mirror has advanced, and finally reschedules by the next point -- the job does not stall.
         await tryUpdateJob(id, job.rev, (j) => ({ ...j, nextRunAt: decision.to }))
         return
       }
-      // fire：claim（清 lastError、记 lastRunAt、推进 nextRunAt）→ flush → dispatch
+      // fire: claim (clear lastError, record lastRunAt, advance nextRunAt) -> flush -> dispatch
       const fireAt = decision.at
       let claimed: boolean
       try {
@@ -525,41 +525,41 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
             }),
         )
       } catch (err) {
-        // claim 未落盘：绝不能投递（否则崩溃窗口产生重复投递）
-        emitError(`cron job ${id} claim 持久化失败，本次不投递`, err)
+        // Claim not flushed: never deliver (otherwise the crash window duplicates deliveries)
+        emitError(`cron job ${id} claim persistence failed; not delivering this time`, err)
         return
       }
       if (!claimed || stopping) return
-      // flush 让出执行权期间任务可能被删除或重建，投递前复核创建代次。
+      // The task may be deleted or rebuilt while flush yields; re-check the creation generation before delivering.
       if (!readDoc().jobs.some((current) => current.id === id && current.rev === job.rev && current.enabled)) return
       try {
         await deps.dispatchTrigger(buildCronEnvelope(job, fireAt), job.targetProfileId)
       } catch (err) {
-        // 投递失败：如实写 lastError + notification；本计划点不重试，下个时点照常。
-        // (id, rev) 校验：dispatch 期间 job 若被删除重建，不把旧失败写到新 job 上。
+        // Delivery failure: write lastError + notification honestly; no retry within this point; the next point proceeds normally.
+        // (id, rev) check: if the job was deleted and rebuilt during dispatch, never write the old failure onto the new job.
         const message = err instanceof Error ? err.message : String(err)
         try {
           const written = await tryUpdateJob(id, job.rev, (j) => ({
             ...j,
-            lastError: `投递失败 @${new Date(fireAt).toISOString()}：${message}`,
+            lastError: `delivery failed @${new Date(fireAt).toISOString()}: ${message}`,
           }))
           if (!written) {
-            logDiagnostic(`cron job ${id} 投递失败，但 job 已被删除/重建，lastError 不写回（rev 换代）`)
+            logDiagnostic(`cron job ${id} delivery failed, but the job was deleted/rebuilt; lastError not written back (generation changed)`)
           }
         } catch (writeErr) {
-          // lastError 落盘失败不掩盖原始投递失败（重排由 finally 保证，不逃逸）。
+          // A lastError flush failure does not mask the original delivery failure (rescheduling is guaranteed by finally; nothing escapes).
           logDiagnostic(
-            `cron job ${id} 投递失败且 lastError 落盘失败：${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
+            `cron job ${id} delivery failed and the lastError flush also failed: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
           )
         }
-        emitError(`cron job ${id} 投递失败`, err)
+        emitError(`cron job ${id} delivery failed`, err)
       }
     } finally {
       if (!rescheduledByBackoff) scheduleJob(id)
     }
   }
 
-  /** single-flight：同 job 并发 tick 只跑一个，后到者直接复用在途 Promise。 */
+  /** single-flight: concurrent ticks of one job run only one; later arrivals reuse the in-flight Promise. */
   const tickJob = (id: string): Promise<void> => {
     const existing = inflight.get(id)
     if (existing) return existing
@@ -568,8 +568,8 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     return task
   }
 
-  /** 重排单个 job 的 timer；未启用/已删除不排；notBefore 为触发时间下限
-   * （决策失败退避用，防按过期 nextRunAt 热循环）。 */
+  /** Reschedule one job's timer; disabled/deleted jobs do not schedule; notBefore is the lower bound of the trigger time
+   * (for decision-failure backoff, preventing a hot loop on an expired nextRunAt). */
   const scheduleJob = (id: string, notBefore?: number): void => {
     if (stopping) return
     timers.get(id)?.clear()
@@ -578,14 +578,14 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     try {
       job = readDoc().jobs.find((j) => j.id === id)
     } catch (err) {
-      emitError(`cron job ${id} 读取调度状态失败`, err)
+      emitError(`cron job ${id} failed to read scheduling state`, err)
       return
     }
     if (!job || !job.enabled) return
     if (job.nextRunAt === undefined) {
       emitError(
-        `cron job ${id} 无下次时点`,
-        new HelmError('cron_no_next_time', `schedule=${job.schedule} 在 ${job.timezone} 无未来匹配时点`, 500, {
+        `cron job ${id} has no next time`,
+        new HelmError('cron_no_next_time', `schedule=${job.schedule} has no future matching point in ${job.timezone}`, 500, {
           id,
           schedule: job.schedule,
         }),
@@ -594,19 +594,19 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     }
     const at = notBefore === undefined ? job.nextRunAt : Math.max(job.nextRunAt, notBefore)
     const delayMs = Math.max(0, at - clock.now())
-    // 超长延迟先以安全窗口唤醒再续排（决策时未到点即 noop 重排），unref 不阻退出
+    // Ultra-long delays wake within the safe window first, then reschedule (an undued decision is a noop reschedule); unref'd so it never blocks exit
     const handle = clock.setTimeout(() => {
       timers.delete(id)
-      void tickJob(id).catch((err) => emitError(`cron job ${id} tick 异常`, err))
+      void tickJob(id).catch((err) => emitError(`cron job ${id} tick exception`, err))
     }, Math.min(delayMs, MAX_TIMEOUT_MS))
     timers.set(id, handle)
   }
 
-  // ---- actions：HTTP / CLI / Agent Tool / Workflow 五端同权 ----
+  // ---- actions: HTTP / CLI / Agent Tool / Workflow -- equal on five ends ----
 
   ctx.action({
     id: 'cron_list',
-    description: '列出全部 cron 定时任务（含 lastRunAt/nextRunAt/lastError 调度状态）',
+    description: 'List all cron jobs (incl. lastRunAt/nextRunAt/lastError scheduling state)',
     idempotent: true,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
@@ -621,11 +621,11 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
 
   ctx.action({
     id: 'cron_create',
-    description: '创建 cron 定时任务（标准五字段：分 时 日 月 周；id/schedule/text 必填，timezone 默认 UTC）',
+    description: 'Create a cron job (standard five fields: min hour day month weekday; id/schedule/text required; timezone defaults to UTC)',
     promptGuidelines: [
-      'schedule 是标准五字段周期 cron（分 时 日 月 周，如 "*/30 * * * *"），不是任意 shell 定时器：触发只把 text 文本投递到目标会话',
-      'timezone 使用 IANA 时区名（如 Asia/Shanghai，缺省 UTC）；根据用户意图指定 targetConversationId 或 targetProfileId（互斥），未指定时由 trigger 路由解析目标',
-      'text 会在未来投递到目标会话，应写清任务内容与必要条件，避免依赖当前时刻的隐含信息',
+      'schedule is a standard five-field periodic cron (min hour day month weekday, e.g. "*/30 * * * *"), not an arbitrary shell timer: triggering only delivers the text to the target conversation',
+      'timezone uses an IANA zone name (e.g. Asia/Shanghai; defaults to UTC); set targetConversationId or targetProfileId per the user intent (mutually exclusive); when unspecified, trigger routing resolves the target',
+      'text will be delivered to the target conversation in the future; spell out the task content and necessary conditions, avoiding reliance on implicit here-and-now information',
     ],
     inputSchema: {
       type: 'object',
@@ -658,14 +658,14 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
       if (nextRunAt === undefined) {
         throw new HelmError(
           'cron_no_next_time',
-          `cron schedule 在 ${job.timezone} 无未来匹配时点，拒绝创建：${job.schedule}`,
+          `cron schedule has no future matching point in ${job.timezone}; creation refused: ${job.schedule}`,
           400,
           { id: job.id, schedule: job.schedule, timezone: job.timezone },
         )
       }
       const current = readDoc()
       if (current.jobs.some((j) => j.id === job.id)) {
-        throw new HelmError('cron_duplicate_id', `cron job 已存在：${job.id}`, 409, { id: job.id })
+        throw new HelmError('cron_duplicate_id', `cron job already exists: ${job.id}`, 409, { id: job.id })
       }
       const created: CronJob = { ...job, nextRunAt }
       await writeDoc({ version: 1, jobs: [...current.jobs, created] })
@@ -676,7 +676,7 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
 
   ctx.action({
     id: 'cron_delete',
-    description: '删除 cron 定时任务（在途投递自然终止，不复活）',
+    description: 'Delete a cron job (in-flight deliveries end naturally; nothing revives)',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' } },
@@ -693,10 +693,10 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     handler: async (input: { id: string }) => {
       const current = readDoc()
       if (!current.jobs.some((j) => j.id === input.id)) {
-        throw new HelmError('not_found', `cron job 不存在：${input.id}`, 404, { id: input.id })
+        throw new HelmError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
       }
-      // 先停 timer 再落盘删除；并发 tick 的 (id, rev) 校验发现换代即静默终止，
-      // 被 删 job 不可能复活
+      // Stop the timer first, then persist the deletion; a concurrent tick's (id, rev) check silently ends on a
+      // generation change -- a deleted job can never revive
       timers.get(input.id)?.clear()
       timers.delete(input.id)
       await writeDoc({ version: 1, jobs: current.jobs.filter((j) => j.id !== input.id) })
@@ -706,7 +706,7 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
 
   ctx.action({
     id: 'cron_trigger',
-    description: '手动立即触发一次 cron 任务（真实投递；失败抛错，不影响后续计划调度）',
+    description: 'Manually trigger a cron job once now (a real delivery; failures throw without affecting later scheduled runs)',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' } },
@@ -721,57 +721,57 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     },
     cli: { command: ['cron', 'trigger'] },
     handler: async (input: { id: string }) => {
-      // 手动触发只读快照 + 真实投递，不写 doc：不存在 claim/lastError 写回，
-      // 天然无 delete+create 同 id 污染面；删除竞态由读时存在性兜底。
+      // Manual triggering only reads a snapshot + delivers for real, writing no doc: no claim/lastError write-back,
+      // hence no delete+create same-id pollution surface; the deletion race is backstopped by the read-time existence check.
       const job = readDoc().jobs.find((j) => j.id === input.id)
-      if (!job) throw new HelmError('not_found', `cron job 不存在：${input.id}`, 404, { id: input.id })
+      if (!job) throw new HelmError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
       const envelope = { ...buildCronEnvelope(job, clock.now()), id: `cron:${job.id}:manual:${randomUUID()}` }
       await deps.dispatchTrigger(envelope, job.targetProfileId)
       return { triggered: true }
     },
   })
 
-  // ---- service：定时器生命周期（stop 取消 timer 并等待在途投递） ----
+  // ---- service: timer lifecycle (stop cancels timers and waits for in-flight deliveries) ----
 
   ctx.service({
     id: 'cron-scheduler',
     liveTasks() {
       return [...inflight.keys()].map((id) => `cron-dispatch:${id}`)
     },
-    /** 持久占用声明：已启用的 cron 任务是停用预检（plugin_in_use）的占用项。 */
+    /** Persistent occupancy declaration: enabled cron jobs are occupancy items of the disable precheck (plugin_in_use). */
     inUse() {
       const jobs = parseCronDoc(doc.get()).jobs.filter((j) => j.enabled)
       return jobs.map((j) => ({
         kind: 'cron_job',
         id: j.id,
-        label: `定时任务 "${j.id}" (${j.schedule})`,
+        label: `cron job "${j.id}" (${j.schedule})`,
       }))
     },
     async start() {
       stopping = false
       try {
         const current = readDoc()
-        // 启动边界校验全部计划，失败时不发布任何 timer，也不伪装启用成功。
+        // Validate all plans at the startup boundary; on failure publish no timer and never pretend enablement succeeded.
         for (const job of current.jobs) {
           assertValidSchedule(job.schedule, job.timezone)
           if (job.enabled && job.nextRunAt === undefined) {
-            throw new HelmError('cron_doc_corrupt', `启用的 cron job ${job.id} 缺少 nextRunAt`, 500, { id: job.id })
+            throw new HelmError('cron_doc_corrupt', `enabled cron job ${job.id} is missing nextRunAt`, 500, { id: job.id })
           }
         }
         const now = clock.now()
         for (const job of current.jobs) {
-          // 重启与普通 timer 抖动分开处理：catchUp=false 不补跑任何已错过的计划点。
+          // Restart and ordinary timer jitter handled separately: catchUp=false catches up none of the missed points.
           if (job.enabled && !job.catchUp && job.nextRunAt !== undefined && job.nextRunAt < now) {
             const nextRunAt = nextFireTime(job.schedule, job.timezone, now)
             if (nextRunAt === undefined) {
-              throw new HelmError('cron_no_next_time', `cron job ${job.id} 无未来匹配时点`, 500, { id: job.id })
+              throw new HelmError('cron_no_next_time', `cron job ${job.id} has no future matching point`, 500, { id: job.id })
             }
             await tryUpdateJob(job.id, job.rev, (value) => ({ ...value, nextRunAt }))
           }
         }
         for (const job of current.jobs) scheduleJob(job.id)
       } catch (err) {
-        emitError('cron 调度启动失败', err)
+        emitError('cron scheduling failed to start', err)
         throw err
       }
     },
@@ -779,8 +779,8 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
       stopping = true
       for (const handle of timers.values()) handle.clear()
       timers.clear()
-      // 等待在途 dispatch 有限完成（liveTasks 已让宿主在停用前 409 拦截，
-      // 此处兜底等待，杜绝 stop 后新投递）
+      // Wait for in-flight dispatches to finish within bounds (liveTasks already made the host 409-block before disable;
+      // this is a backstop wait, eliminating post-stop deliveries)
       const pending = [...inflight.values()]
       if (pending.length > 0) await Promise.allSettled(pending)
     },
@@ -792,8 +792,8 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
       await Promise.all(current.jobs.filter((j) => j.enabled).map((j) => tickJob(j.id)))
     },
     async settle() {
-      // 循环等待直至无在途（每轮后让出一轮宏任务，覆盖失败路径里
-      // dispatch→lastError 写回→重排的链式异步段）
+      // Loop-wait until nothing is in flight (yielding one macrotask per round, covering the chained async segments
+      // dispatch -> lastError write-back -> reschedule in failure paths)
       for (let i = 0; i < 100 && inflight.size > 0; i++) {
         await Promise.allSettled([...inflight.values()])
         await new Promise((resolve) => setImmediate(resolve))
@@ -803,7 +803,7 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
 }
 
 // ---------------------------------------------------------------------------
-// 工具
+// Utilities
 // ---------------------------------------------------------------------------
 
 function jsonClone<T>(value: T): T {

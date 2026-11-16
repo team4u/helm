@@ -1,40 +1,40 @@
 /**
- * journal.ts — 工作流运行的私有前缀重放账本。
+ * journal.ts -- the private prefix-replay ledger of workflow runs.
  *
- * 基于 @tintinweb/pi-subagents v0.23.1 (MIT) journal.ts 移植并按 helm 语义加固：
+ * Ported from @tintinweb/pi-subagents v0.23.1 (MIT) journal.ts and hardened per helm semantics:
  *
- * ## 前缀重放，不是查表
- * 每行按稳定 scope 路径、scope 内调用位次、尝试序号与载荷哈希（key）匹配。
- * 一个 scope 失配后，其后续调用及子 scope 转 live；兄弟 scope 独立恢复。
- * 全局 index 只用于本次 run 的审计与进度，不受历史并发完成顺序约束。
+ * ## Prefix replay, not table lookup
+ * Each row matches by stable scope path, in-scope call position, attempt number and payload hash (key).
+ * After one scope mismatches, its subsequent calls and child scopes go live; sibling scopes recover independently.
+ * The global index is only for this run's auditing and progress, unconstrained by historical completion order.
  *
- * ## agent 与 action 的不同失败语义
- * - agent 失败行照记（断链后下次 live 重试）；I/O 写失败不阻断运行（账本只是
- *   未来 resume 的优化），但计数暴露 `ioErrors` 供宿主诊断，绝不隐瞒。
- * - action 有副作用：`action_started` 意图行必须 append+fsync 成功后才允许执行
- *   handler；`action` 终态行落盘后才 resolve 调用 promise。二者任一写失败都是
- *   fatal——继续跑等于在无法记账的状态下执行副作用，账本将失去意义。
+ * ## Different failure semantics for agent vs action
+ * - agent failure rows are still recorded (the broken chain live-retries next time); I/O write failures do not
+ *   halt the run (the ledger is only an optimization for future resume), but counts surface via `ioErrors`
+ *   for host diagnostics, never concealed.
+ * - actions have side effects: the `action_started` intent row must append+fsync successfully before the handler may run;
+ *   the call promise resolves only after the `action` terminal row is persisted. A write failure of either is
+ *   fatal -- continuing would mean executing side effects in an unaccountable state, and the ledger would
+ *   lose its meaning.
+ * ## Uncertainty at recovery (conservative first)
+ * None of the following can prove "the side effect did not happen or happened completely"; readJournal uniformly
+ * sets `actionUncertain`, and callers must explicitly refuse automatic recovery, deferring to humans:
+ * - `action_started` without a matching terminal row (regardless of its seq position -- if the terminal row
+ *   was lost for any reason, that action's outcome is undecidable; do not clear it on a "written-last" heuristic);
+ * - corrupted rows whose type cannot be determined: rows written by this engine always have type as the first
+ *   key; only when the **complete** `"type":"agent"` prefix can be read from the residual text may the row be
+ *   classified as an agent row (ioError); everything else (incl. parseable rows with unknown shapes) is
+ *   conservatively uncertain; never clear anything by guessing from string contains like "action";
+ * - the presence of an ok:false action terminal row (a handler throw != zero side effects; auto-retry
+ *   could double-charge/send; counted via `failedActions`);
  *
- * ## 恢复时的不确定性（保守优先）
- * 以下任一情况都无法证明"副作用未发生或已完整发生"，readJournal 一律置
- * `actionUncertain`，由调用方显式拒绝自动恢复、交人类决策：
- * - `action_started` 无对应终态行（不论其 seq 位置——终态行因任何原因丢失，
- *   该动作的执行结果即不可判定，不能按"写在最后"启发放行）；
- * - 损坏行无法判定类型：本引擎写出的行 type 恒为首键，只有能从残余文本中
- *   读出**完整** `"type":"agent"` 前缀才敢归为 agent 行（ioError）；其余
- *   （含可解析但形状未知的行）一律保守 uncertain，绝不靠字符串包含 "action"
- *   之类的猜测放行；
- * - 存在 ok:false 的 action 终态行（handler 抛错≠零副作用，自动重试可能重复
- *   扣款/发送，计数经 `failedActions` 上报）；
- * - 文件本身不可读（权限/I-O 错误，`readFailed` 上报；ENOENT 视为空账本）。
+ * - the file itself unreadable (permission/I-O error, reported via `readFailed`; ENOENT counts as an empty ledger).
+ * ## Ordering
+ * A row's seq is the engine's monotonically increasing flush-order number (under concurrency, index is assigned
  *
- * ## 排序
- * 行内 seq 为引擎内单调递增的落盘顺序号（并发下按调用发起顺序分配 index，
- * 落盘顺序可能与 index 顺序交错，恢复时按 scope 内前缀校验、按 seq 去重）。
- *
- * 拆分说明：行类型 / key 指纹 / 行级形状校验移至 journal-entry.ts（本文件
- * 再导出，导出面不变）；本文件保留账本文件 IO（readJournal / JournalWriter）
- * 与落盘前脱敏（redactJournalEntry）。
+ * by call-initiation order; flush order may interleave with index order; recovery validates the in-scope
+ * prefix and dedups by seq).
+ * Split note: row types / key fingerprints / row-level shape validation moved to journal-entry.ts (re-exported
  */
 
 import { appendFile, open, type FileHandle } from 'node:fs/promises'
@@ -60,31 +60,31 @@ export {
   type WorkflowJournalEntry,
 } from './journal-entry.js'
 
-/** readJournal 的结构化结果：绝不静默吞掉影响 action 完成判定的损坏。 */
+/** readJournal's structured result: corruption affecting action-outcome decisions is never silently swallowed. */
 export interface JournalReadResult {
   entries: WorkflowJournalEntry[]
   /**
-   * true = 账本无法证明安全重放（悬挂 started / 不可判定损坏行 / 失败 action /
-   * 文件不可读），调用方必须显式失败（workflow_action_uncertain /
-   * journal_read_failed），禁止自动重跑副作用。
+   * true = the ledger cannot prove safe replay (dangling started / undecidable corrupted rows / failed actions /
+   * unreadable file); the caller must explicitly fail (workflow_action_uncertain / journal_read_failed);
+   * auto-rerunning side effects is forbidden.
    */
   actionUncertain: boolean
-  /** 非 action 行的解析/读取问题计数（截断尾行、手改文件等）；不影响重放但如实上报。 */
+  /** Count of parse/read problems in non-action rows (truncated tail rows, hand-edited files etc.); does not affect replay but is reported honestly. */
   ioErrors: number
-  /** ok:false 的 action 终态行数（副作用可能已发生，恢复必须拒绝自动重试）。 */
+  /** Count of ok:false action terminal rows (side effects may have happened; recovery must refuse auto-retry). */
   failedActions: number
-  /** 文件存在但不可读（权限/I-O）。ENOENT 不在此列（正常空账本）。 */
+  /** The file exists but is unreadable (permission/I-O). ENOENT is not included here (a normal empty ledger). */
   readFailed?: { code: string; message: string }
 }
 
 type LineVerdict =
   | { kind: 'entry'; entry: WorkflowJournalEntry }
-  /** 损坏但可判定为 agent 行：计 ioError，不阻断重放。 */
+  /** Corrupted but decidable as an agent row: counted as ioError, does not block replay. */
   | { kind: 'agentCorrupt' }
-  /** 无法判定类型：保守视为可能涉及 action。 */
+  /** Type undecidable: conservatively treated as possibly action-related. */
   | { kind: 'uncertain' }
 
-/** 本引擎写出的行 type 恒为首键；只有完整的 "type":"agent" 前缀才判为 agent 损坏行。 */
+/** Rows written by this engine always have type as the first key; only a complete "type":"agent" prefix counts as a corrupted agent row. */
 const AGENT_LINE_PREFIX = /^\s*\{\s*"type"\s*:\s*"agent"/
 
 function classifyLine(line: string): LineVerdict {
@@ -96,8 +96,8 @@ function classifyLine(line: string): LineVerdict {
   }
   if (isAgentEntry(parsed)) return { kind: 'entry', entry: parsed }
   if (isActionStartedEntry(parsed) || isActionEntry(parsed)) return { kind: 'entry', entry: parsed }
-  // 可解析但形状未知：能读出 type 字段且为 agent 时按 agent 损坏行处理，
-  // 其余（未知 type / 缺 type / 字段残缺）一律保守 uncertain。
+  // Parseable but shape-unknown: when the type field reads as agent, treat it as a corrupted agent row;
+  // everything else (unknown type / missing type / mangled fields) is conservatively uncertain.
   if (typeof parsed === 'object' && parsed !== null && (parsed as { type?: unknown }).type === 'agent') {
     return { kind: 'agentCorrupt' }
   }
@@ -105,11 +105,11 @@ function classifyLine(line: string): LineVerdict {
 }
 
 /**
- * 读入账本文件。
+ * Read the ledger file.
  *
- * - 文件不存在（ENOENT）：空账本（全新 run 的正常路径）。
- * - 文件不可读（权限/I-O）：readFailed + actionUncertain，绝不假扮空账本。
- * - 行损坏：见文件头"恢复时的不确定性"；空行（尾部换行）跳过。
+ * - File absent (ENOENT): an empty ledger (the normal path of a brand-new run).
+ * - File unreadable (permission/I-O): readFailed + actionUncertain; never pretend to be an empty ledger.
+ * - Row corruption: see "Uncertainty at recovery" in the file header; blank lines (trailing newline) are skipped.
  */
 export function readJournal(path: string): JournalReadResult {
   let raw: string
@@ -143,9 +143,9 @@ export function readJournal(path: string): JournalReadResult {
     if (verdict.kind === 'uncertain') corruptUncertain = true
   }
 
-  // scope、调用位次、全局 index 与 key 都须一致，才能配对意图与终态。
-  // 不能让另一个 scope 的终态掩盖悬挂意图。任何悬挂 started 都不确定：
-  // 终态行可能因损坏丢失，"started 落盘后 handler 被允许执行"是唯一事实。
+  // scope, call position, global index and key must all match to pair an intent with its terminal row.
+  // Another scope's terminal row must not mask a dangling intent. Any dangling started is uncertain:
+  // the terminal row may have been lost to corruption; "after started was flushed, the handler was allowed to run" is the only fact.
   const startedByKey = new Map<string, Extract<WorkflowJournalEntry, { type: 'action_started' }>>()
   for (const entry of entries) {
     if (entry.type === 'action_started') startedByKey.set(JSON.stringify([entry.scopePath, entry.scopeCallIndex, entry.index, entry.key]), entry)
@@ -163,8 +163,8 @@ export function readJournal(path: string): JournalReadResult {
 
   const failedActions = entries.filter((e) => e.type === 'action' && !e.ok && e.idempotent !== true).length
 
-  // 重复序号只有整行一致才可去重。冲突可能丢失已执行的 action，不能把
-  // 去重后的残缺账本当安全前缀再执行副作用。
+  // Duplicate seqs are dedupable only when the whole row is identical. A conflict may have lost an
+  // executed action; a post-dedup mangled ledger must not be treated as a safe prefix to execute side effects on.
   const bySeq = new Map<number, string>()
   for (const entry of entries) {
     const serialized = JSON.stringify(entry)
@@ -175,8 +175,8 @@ export function readJournal(path: string): JournalReadResult {
     }
     bySeq.set(entry.seq, serialized)
   }
-  // 落盘顺序稳定化：seq 严格升序，完全相同的重复行只保留一次。
-  // index 顺序由前缀匹配逻辑按需检查。
+  // Flush-order stabilization: seq strictly increasing; fully identical duplicate rows kept once.
+  // index order is checked on demand by the prefix-matching logic.
   entries.sort((a, b) => a.seq - b.seq)
   const deduped: WorkflowJournalEntry[] = []
   let lastSeq = -1
@@ -195,15 +195,15 @@ export function readJournal(path: string): JournalReadResult {
 }
 
 /**
- * 追加写入器：持有打开的 FileHandle，action 路径 append 后 fsync。
+ * Append writer: holds an open FileHandle; the action path fsyncs after append.
  *
- * agent 行写失败仅计数（resume 优化损失，不阻断运行）；action started/终态
- * 行写失败抛 JournalWriteError（fatal）。
+ * agent-row write failures only count (a resume-optimization loss, not halting the run); action
+ * started/terminal row write failures throw JournalWriteError (fatal).
  */
 export class JournalWriter {
   private seq = 0
   private handle?: FileHandle
-  /** 置位后所有 append（含 agent 行）都抛错：run 已因 action 账本失效而终止。 */
+  /** Once set, all appends (incl. agent rows) throw: the run already terminated due to a broken action ledger. */
   private poisoned = false
   agentIoErrors = 0
 
@@ -211,8 +211,8 @@ export class JournalWriter {
     private readonly path: string,
     private readonly fsyncActions: boolean = true,
   ) {
-    // 打开是异步的但构造需同步；推迟到首次 append（见 ensure()）。open 失败
-    // 时 agent 行退化为计数、action 行显式抛错，语义与同步版本一致。
+    // Opening is async but the constructor must be synchronous; deferred to the first append (see ensure()).
+    // On open failure, agent rows degrade to counting and action rows throw explicitly, matching the synchronous version.
   }
 
   private opening?: Promise<FileHandle | undefined>
@@ -234,15 +234,15 @@ export class JournalWriter {
   }
 
   /**
-   * 追加一行。action 相关行（started/终态）fsync 成功后才返回；
-   * agent 行尽力而为，失败计入 agentIoErrors。
-   * @throws JournalWriteError action 行写失败或 writer 已 poisoned。
+   * Append one row. Action-related rows (started/terminal) return only after fsync succeeds;
+   * agent rows are best-effort, with failures counted into agentIoErrors.
+   * @throws JournalWriteError on action-row write failure or when the writer is already poisoned.
    */
   async append(entry: JournalWriteInput): Promise<number> {
     const full = { ...entry, v: 1, seq: entry.seq ?? this.seq++ } as WorkflowJournalEntry
     const isActionLine = full.type === 'action_started' || full.type === 'action'
     if (!isActionLine && this.poisoned) {
-      // run 已因账本失效终止；后续行无意义。
+      // The run already terminated due to a broken ledger; later rows are meaningless.
       return full.seq
     }
     const handle = await this.ensure()
@@ -257,7 +257,7 @@ export class JournalWriter {
     try {
       await appendFile(handle, `${JSON.stringify(full)}\n`, 'utf-8')
       if (isActionLine && this.fsyncActions) {
-        // started 落盘（fsync）之前不得执行 handler；终态落盘之前不得 resolve。
+        // The handler must not run before started is flushed (fsync); the call must not resolve before the terminal row is.
         await handle.sync()
       }
     } catch (error) {
@@ -272,7 +272,7 @@ export class JournalWriter {
     return full.seq
   }
 
-  /** 账本是否已因 action 写失败失效。 */
+  /** Whether the ledger already broke due to an action write failure. */
   get isPoisoned(): boolean {
     return this.poisoned
   }
@@ -281,7 +281,7 @@ export class JournalWriter {
     try {
       await this.handle?.close()
     } catch {
-      // 关闭失败不影响正确性；下一次 open 以追加模式继续。
+      // A close failure does not affect correctness; the next open continues in append mode.
     }
   }
 }
@@ -293,12 +293,12 @@ export class JournalWriteError extends Error {
   }
 }
 
-/** 便捷：文件是否存在（resume 探测用）。 */
+/** Convenience: whether the file exists (for resume probing). */
 export function journalExists(path: string): boolean {
   return existsSync(path)
 }
 
-/** 值级递归脱敏（字符串逐值替换；数组/对象逐层递归，原始值原样）。 */
+/** Value-level recursive redaction (per-value string replacement; arrays/objects recursed per layer; other values as-is). */
 function redactValue(value: unknown, redact: (text: string) => string): unknown {
   if (typeof value === 'string') return redact(value)
   if (Array.isArray(value)) return value.map((item) => redactValue(item, redact))
@@ -311,9 +311,9 @@ function redactValue(value: unknown, redact: (text: string) => string): unknown 
 }
 
 /**
- * agent 行落盘前的统一脱敏：text / execution（effectiveCwd、worktree 路径可含
- * token）/ gate.output 逐值替换后再交 JournalWriter。action 行由引擎层自行
- * 处理（result/error 已是安全 JSON），此处原样透传。幂等：重复替换无害。
+ * Unified redaction before agent rows are flushed: text / execution (effectiveCwd, worktree paths may
+ * contain tokens) / gate.output are per-value replaced before reaching JournalWriter. action rows are
+ * handled by the engine layer itself (result/error are already safe JSON) and pass through here as-is.
  */
 export function redactJournalEntry(
   entry: JournalWriteInput,

@@ -140,7 +140,7 @@ test('错误诊断: 固定安全中文映射，不携带 Error.message/响应/�
   assert.ok(!outcome1.diagnostic.includes('SECRET-RESPONSE'), '诊断不含模型响应')
   assert.ok(!outcome1.diagnostic.includes('未解析出生效模型\\n'), '不回显上游 message 原文')
   assert.ok(!outcome1.diagnostic.includes('SECRET-SNAPSHOT-CONTENT'), '诊断不含快照原文')
-  // 未知错误：只输出「请求失败」，绝不回显 message。
+  // 未知错误：只输出「request failed」，绝不回显 message。
   const unknownPort: ConversationTextPort = {
     async completeConversationText() {
       throw new Error(`上游 SDK 崩溃：raw=${secretSnapshot} token=SECRET-TOKEN`)
@@ -149,7 +149,7 @@ test('错误诊断: 固定安全中文映射，不携带 Error.message/响应/�
   const analyzer2 = createBlockedSnapshotAnalyzer(unknownPort, { timeoutMs: 200 })
   const outcome2 = await analyzer2.analyze({ snapshot: secretSnapshot, conversationId: 1 })
   assert.equal(outcome2.analysis, undefined)
-  assert.equal(outcome2.diagnostic!.includes('请求失败'), true, '未知错误固定文案')
+  assert.equal(outcome2.diagnostic!.includes('request failed'), true, '未知错误固定文案')
   assert.ok(!outcome2.diagnostic!.includes('SECRET-SNAPSHOT-CONTENT'), '未知错误不回显 message 中的敏感内容')
   assert.ok(!outcome2.diagnostic!.includes('SECRET-TOKEN'), '未知错误不回显 token')
 })
@@ -220,7 +220,7 @@ test('正常路径: 传回尾部截断 + maxTokens 并解析 JSON', { timeout: 6
   assert.equal(seen[0]!.maxTokens !== undefined && seen[0]!.maxTokens >= 512 && seen[0]!.maxTokens <= 768, true, '输出预算 512~768')
   assert.ok(seen[0]!.text.endsWith(tail), '快照按尾部截断')
   assert.ok(seen[0]!.text.length <= 1_500, `尾部截断至 ≤1500 字符（实得 ${seen[0]!.text.length}）`)
-  assert.ok(seen[0]!.systemPrompt.includes('不可信数据'), '插件专用提示词注入')
+  assert.ok(seen[0]!.systemPrompt.includes('untrusted data'), '插件专用提示词注入')
 })
 
 test('模型返回非 JSON: 回退并附脱敏诊断', { timeout: 60_000 }, async () => {
@@ -232,5 +232,5 @@ test('模型返回非 JSON: 回退并附脱敏诊断', { timeout: 60_000 }, asyn
   const analyzer = createBlockedSnapshotAnalyzer(port, { timeoutMs: 200 })
   const outcome = await analyzer.analyze({ snapshot: 's', conversationId: 1 })
   assert.equal(outcome.analysis, undefined)
-  assert.ok(outcome.diagnostic?.includes('无法解析'))
+  assert.ok(outcome.diagnostic?.includes('cannot be parsed'))
 })

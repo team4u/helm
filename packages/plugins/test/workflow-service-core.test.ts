@@ -190,7 +190,7 @@ const readRecordFile = (dataDir: string, conversationId: number, runId: string) 
 // §4.3 records 瘦身：文件存完整体，records doc 仅轻量索引
 // ---------------------------------------------------------------------------
 
-test('run 完成后：记录文件存完整体，records doc 仅存轻量索引（无 nodes/result/script）', timeout, async (t) => {
+test('run 完成后：record file存完整体，records doc 仅存轻量索引（无 nodes/result/script）', timeout, async (t) => {
   const env = makeEnv(t, async () => '结果')
   const started = await env.service.run({
     conversationId: 1,
@@ -518,7 +518,7 @@ test('invokeSpawn timeoutMs 非法值在边界显式拒绝（1_000..3_600_000）
 // 跨重启 resume：手工 seed 失败 attempt 行，resumeRef 直传 conversationId
 // ---------------------------------------------------------------------------
 
-/** 手工构造持久事实（记录文件 + 轻量索引 + 账本），与 writeRecord 现行契约同形。 */
+/** 手工构造持久事实（record file + 轻量索引 + 账本），与 writeRecord 现行契约同形。 */
 function seedPersistedRun(
   dataDir: string,
   docs: Map<string, unknown>,
@@ -739,7 +739,7 @@ test('resume 幽灵接管标记：索引与磁盘均无痕迹才清标记重接�
       (error.details as { resumedByRunId?: string }).resumedByRunId === 'wf_keptj9998',
   )
 
-  // 索引缺失但磁盘仍有记录文件：同样保持 409。
+  // 索引缺失但磁盘仍有record file：同样保持 409。
   seedPersistedRun(env.dataDir, env.docs, {
     runId: 'wf_orphanC0003',
     conversationId: 23,

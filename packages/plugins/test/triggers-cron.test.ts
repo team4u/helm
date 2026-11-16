@@ -245,10 +245,10 @@ const waitFor = (cond: () => boolean, timeoutMs = 5_000): Promise<void> =>
 test('assertValidSchedule：合法五字段通过；六字段/越界/非法时区显式拒绝', { timeout: 60_000 }, () => {
   assertValidSchedule('*/5 * * * *', 'UTC')
   assertValidSchedule('0 3 * * 1-5', 'Asia/Shanghai')
-  assert.throws(() => assertValidSchedule('* * * * * *', 'UTC'), /五字段/)
-  assert.throws(() => assertValidSchedule('61 * * * *', 'UTC'), /cron schedule 非法/)
-  assert.throws(() => assertValidSchedule('* * * * *', 'Not/AZone'), /cron schedule 非法|时区/)
-  assert.throws(() => assertValidSchedule('', 'UTC'), /不能为空/)
+  assert.throws(() => assertValidSchedule('* * * * * *', 'UTC'), /five fields/)
+  assert.throws(() => assertValidSchedule('61 * * * *', 'UTC'), /invalid cron schedule/)
+  assert.throws(() => assertValidSchedule('* * * * *', 'Not/AZone'), /invalid cron schedule|timezone/)
+  assert.throws(() => assertValidSchedule('', 'UTC'), /must not be empty/)
 })
 
 test('nextFireTime：严格晚于 after；时区真实生效；DST 跳变正确', { timeout: 60_000 }, () => {
@@ -296,11 +296,11 @@ test('normalizeCronInput：默认值/互斥/非法输入', { timeout: 60_000 }, 
         targetConversationId: 1,
         targetProfileId: 'p',
       }),
-    /互斥/,
+    /mutually exclusive/,
   )
-  assert.throws(() => normalizeCronInput({ id: 'bad.id', schedule: '* * * * *', text: 'x' }), /id 非法/)
+  assert.throws(() => normalizeCronInput({ id: 'bad.id', schedule: '* * * * *', text: 'x' }), /invalid cron id/)
   assert.throws(() => normalizeCronInput({ id: 'a', schedule: '* * * * *', text: '' }), /text/)
-  assert.throws(() => normalizeCronInput({ id: 'a', schedule: 'nope', text: 'x' }), /五字段|非法/)
+  assert.throws(() => normalizeCronInput({ id: 'a', schedule: 'nope', text: 'x' }), /five fields|invalid cron/)
 })
 
 test('parseCronDoc：好文档通过；坏数据显式拒绝不静默重置', { timeout: 60_000 }, () => {
@@ -313,7 +313,7 @@ test('parseCronDoc：好文档通过；坏数据显式拒绝不静默重置', { 
     () => parseCronDoc({ version: 1, jobs: [seedJob({ nextRunAt: 'soon' as unknown as number })] }),
     /nextRunAt/,
   )
-  assert.throws(() => parseCronDoc({ version: 1, jobs: [seedJob(), seedJob()] }), /重复/)
+  assert.throws(() => parseCronDoc({ version: 1, jobs: [seedJob(), seedJob()] }), /duplicate/)
 })
 
 test('decideTick：未启用/未来 noop；准点与单时段错过均 fire；多时段错过按 catchUp 分流', { timeout: 60_000 }, async () => {
@@ -640,7 +640,7 @@ test('投递失败且 lastError 落盘失败：仍通知原始失败并重排，
     '内存镜像如实记录失败',
   )
   assert.ok(
-    stderr.some((line) => line.includes('lastError 落盘失败')),
+    stderr.some((line) => line.includes('lastError flush also failed')),
     '持久化失败必须显式记录',
   )
   assert.equal(job.nextRunAt, T10, 'claim 已推进（下时点照常）')

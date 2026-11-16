@@ -750,7 +750,7 @@ test('list_mentionable：待命草稿态支持显式 profileId（无会话时校
     assert.deepEqual(
       standby.items.map((i) => i.id).sort(),
       ['assistant', 'reviewer'],
-      '待命草稿态按 profileId 排除自身并返回可用点名角色',
+      '待命草稿态按 profileId 排除自身并返回可用Mention roles',
     )
     assert.ok(!standby.items.some((i) => i.id === 'coder'), '排除自身 Profile')
 

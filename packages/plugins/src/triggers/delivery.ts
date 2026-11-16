@@ -1,15 +1,15 @@
 /**
- * triggers/delivery.ts：cron 与 webhook 共用的投递 helper。
+ * triggers/delivery.ts: the delivery helper shared by cron and webhook.
  *
- * 目标解析（§4.4，与 superagent trigger hook 的路由互补）：
- * - envelope.targetConversationId 优先（与第二参 targetProfileId 互斥）；
- * - 仅 targetProfileId：取该 Profile 现有会话中最低 ID；无会话则校验 Profile
- *   存在后创建新会话（绝不发给错误角色；并发创建按 profileId 单飞合流）；
- * - 均无：保持缺省（不带 targetConversationId，由内核解析 assistant 入口，
- *   superagent trigger hook 可决定是否路由中枢）；
- * - text 传原始文本（runtime.dispatchTrigger 统一 defang 防逃逸包裹，
- *   连接器绝不双层包裹）；source 约定 cron:<id> / webhook:<id>；
- * - 宿主关闭中（ctx.host.isClosing）显式拒绝，防 close 期触发新回合。
+ * Target resolution (§4.4, complementary to the superagent trigger hook's routing):
+ * - envelope.targetConversationId wins (mutually exclusive with the second parameter targetProfileId);
+ * - targetProfileId only: take the lowest existing conversation ID of that Profile; with no
+ *   conversation, validate the Profile exists and then create one (never deliver to the wrong role;
+ *   concurrent creations single-flight and merge per profileId);
+ * - neither: keep the default (no targetConversationId; the kernel resolves the assistant entry,
+ *   and the superagent trigger hook may decide whether to route to the hub);
+ * - text passes through raw (runtime.dispatchTrigger applies the unified defang anti-escape
+ *   wrapping; connectors never double-wrap); the source convention is cron:<id> / webhook:<id>;
  */
 import { HelmError } from '@helm/protocol'
 import type { ExternalTriggerEnvelope } from '@helm/protocol'
@@ -25,15 +25,15 @@ export function createDeliveryDispatch(options: {
     dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>
   } & ConversationLookup
   profiles: ProfileLookup
-  /** 宿主关闭状态（ctx.host.isClosing getter）。 */
+  /** Host closing state (the ctx.host.isClosing getter). */
   isClosing(): boolean
 }): DispatchTriggerHelper {
   const { host, profiles, isClosing } = options
-  /** per-profile 会话创建单飞（见 resolveProfileConversation 注释）。 */
+  /** Per-profile single-flight conversation creation (see the resolveProfileConversation comment). */
   const creationInflight = new Map<string, Promise<number>>()
   return async (event, targetProfileId) => {
     if (isClosing()) {
-      throw new HelmError('runtime_closing', 'runtime 正在关闭，拒绝新的触发投递', 409, {
+      throw new HelmError('runtime_closing', 'the runtime is closing; new trigger deliveries are rejected', 409, {
         source: event.source,
       })
     }
@@ -41,7 +41,7 @@ export function createDeliveryDispatch(options: {
     if (target !== undefined && targetProfileId !== undefined) {
       throw new HelmError(
         'validation_error',
-        'targetConversationId 与 targetProfileId 不允许同时提供',
+        'targetConversationId and targetProfileId must not both be provided',
         400,
         {},
       )
@@ -53,7 +53,7 @@ export function createDeliveryDispatch(options: {
       assertConversationExists(host, target)
     }
     if (isClosing()) {
-      throw new HelmError('runtime_closing', 'runtime 正在关闭，拒绝新的触发投递', 409, { source: event.source })
+      throw new HelmError('runtime_closing', 'the runtime is closing; new trigger deliveries are rejected', 409, { source: event.source })
     }
     const final: ExternalTriggerEnvelope =
       target === undefined ? event : { ...event, targetConversationId: target }
@@ -63,7 +63,7 @@ export function createDeliveryDispatch(options: {
 
 function assertConversationExists(host: ConversationLookup, id: number): void {
   if (!Number.isInteger(id) || id <= 0) {
-    throw new HelmError('validation_error', `targetConversationId 非正整数（${String(id)}）`, 400, {})
+    throw new HelmError('validation_error', `targetConversationId is not a positive integer (${String(id)})`, 400, {})
   }
   try {
     host.getConversation(id)
@@ -71,7 +71,7 @@ function assertConversationExists(host: ConversationLookup, id: number): void {
     if (err instanceof HelmError && err.code === 'not_found') {
       throw new HelmError(
         'not_found',
-        `触发目标会话 #${id} 不存在（可能已被删除；请更新触发器目标）`,
+        `the trigger target conversation #${id} does not exist (possibly deleted; please update the trigger target)`,
         404,
         { targetConversationId: id },
       )
@@ -81,13 +81,13 @@ function assertConversationExists(host: ConversationLookup, id: number): void {
 }
 
 /**
- * targetProfileId → 会话 ID：最低 ID 复用；无会话则校验存在后创建。
- * 创建段有 per-profileId 单飞（与内核缺省路径 resolveDefaultTriggerTarget 同
- * 等待遇）：并发触发（多 cron job 同点指向同一新 Profile / webhook 突发）
- * 只建一个会话，不产生后续投递永远取不到的孤儿会话。成功即清（不缓存
- * 可被删除的会话 ID）；失败同样清缓存，允许下一次触发重试。list 为空与
- * map 查询在同一同步段内，创建先行者必然可见（先入 store 后 resolve），
- * 后来者要么看到新会话、要么加入在途 Promise，不会双建。
+ * targetProfileId -> conversation ID: reuse the lowest ID; with no conversation, validate existence then create.
+ * The creation section has a per-profileId single-flight (matching the kernel default path's
+ * resolveDefaultTriggerTarget waiting semantics): concurrent triggers (multiple cron jobs at the same
+ * point targeting the same new Profile / webhook bursts) create exactly one conversation, leaving no
+ * orphan conversation forever unreachable by later deliveries. Clear on success (never caching a
+ * deletable conversation ID); clear the cache on failure too, allowing the next trigger to retry. The
+ * empty list and the map query happen in the same synchronous segment, so the creation winner is
  */
 async function resolveProfileConversation(
   host: ConversationLookup,
@@ -96,13 +96,13 @@ async function resolveProfileConversation(
   creationInflight: Map<string, Promise<number>>,
 ): Promise<number> {
   if (typeof profileId !== 'string' || /\s|[/\\]/.test(profileId) || profileId.length === 0 || profileId.length > 64) {
-    throw new HelmError('validation_error', `targetProfileId 非法（收到：${String(profileId)}）`, 400, {})
+    throw new HelmError('validation_error', `invalid targetProfileId (got: ${String(profileId)})`, 400, {})
   }
   const profile = await profiles.get(profileId)
   if (profile === undefined) {
     throw new HelmError(
       'validation_error',
-      `targetProfileId 不存在：${profileId}（拒绝发给错误角色）`,
+      `targetProfileId does not exist: ${profileId} (refusing to deliver to the wrong role)`,
       400,
       { targetProfileId: profileId },
     )
@@ -112,7 +112,7 @@ async function resolveProfileConversation(
   const inflight = creationInflight.get(profileId)
   if (inflight !== undefined) return inflight
   const creation = host.createConversation({
-    title: `触发器目标（${profileId}）`,
+    title: `Trigger target (${profileId})`,
     profileId,
   }).then((created) => created.id)
   creationInflight.set(profileId, creation)

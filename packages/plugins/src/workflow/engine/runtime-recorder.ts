@@ -1,16 +1,17 @@
 /**
- * runtime-recorder.ts — agent 行尽力记账器。
+ * runtime-recorder.ts -- the best-effort ledger writer for agent rows.
  *
- * 自 runtime.ts 的 recordAgent 闭包类化（语义逐行保持）：
- * agent 行记账尽力而为：写失败不中断 run（resume 优化损失），错误记入
- * ioErrors 随 WorkflowRunResult.journalIoErrors 暴露，绝不隐瞒。
- * action 行不走本器——副作用行写失败是 fatal，由 action handler 直写
- * appendJournal 并显式报 workflow_action_uncertain。
+ * Class-ized from runtime.ts's recordAgent closure (semantics preserved line by line):
+ * agent-row accounting is best-effort: a write failure does not interrupt the run (a resume
+ * optimization loss); errors are recorded into ioErrors, exposed via
+ * WorkflowRunResult.journalIoErrors, never concealed.
+ * action rows do not go through this writer -- a side-effect row write failure is fatal; the action handler
+ * writes appendJournal directly and reports workflow_action_uncertain explicitly.
  */
 
 import { redactJournalEntry, type JournalWriteInput } from './journal.js'
 
-/** agent 行输入：不带 type/seq（type 由本层补齐，seq 由写入器分配）。 */
+/** agent-row input: without type/seq (type is added by this layer, seq assigned by the writer). */
 export type AgentRecordInput = Omit<Extract<JournalWriteInput, { type: 'agent' }>, 'type' | 'seq'>
 
 export class AgentJournalRecorder {

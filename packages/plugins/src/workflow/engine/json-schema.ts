@@ -1,26 +1,26 @@
 /**
- * json-schema.ts — 校验脚本提供的裸 JSON Schema。
+ * json-schema.ts -- validate bare JSON Schemas provided by scripts.
  *
- * 自 @tintinweb/pi-subagents v0.23.1 (MIT) 移植：typebox v1（标准 JSON Schema
- * 校验器）作为唯一裸 JSON Schema 依赖；`@sinclair/typebox` 0.x 依赖 Kind 符号分发，
- * 对线上裸 Schema 抛 Unknown type，不可替换使用。
+ * Ported from @tintinweb/pi-subagents v0.23.1 (MIT): typebox v1 (the standard JSON Schema
+ * validator) is the only bare-JSON-Schema dependency; `@sinclair/typebox` 0.x relies on Kind-symbol
+ * dispatch and throws Unknown type on bare online schemas, so it cannot be substituted in.
  *
- * Schema 在编译期（调用时）即冒烟校验，而不是等到第一次工具调用才失败——
- * 作者应在为模型付费之前知道 schema 不可用。
+ * Schemas are smoke-validated at compile time (call time) instead of failing at the first tool
+ * call -- the author should learn the schema is unusable before paying for a model.
  */
 
 import { Check, Errors } from 'typebox/value'
 
-/** 可接受的最大 schema 序列化长度。 */
+/** The maximum accepted serialized schema length. */
 const MAX_SCHEMA_BYTES = 64 * 1024
 
-/** 回报给调用方的校验错误条数上限。 */
+/** Cap on validation errors reported back to the caller. */
 const MAX_REPORTED_ERRORS = 5
 
 export interface CompiledSchema {
-  /** 原样保留的 schema（用于 journal key 与透传给宿主）。 */
+  /** The schema kept as-is (for journal keys and pass-through to the host). */
   readonly schema: Record<string, unknown>
-  /** `true`，或人类可读的问题描述。 */
+  /** Either `true`, or a human-readable problem description. */
   check(value: unknown): true | string
 }
 
@@ -87,7 +87,7 @@ function checkAgainst(schema: Record<string, unknown>, value: unknown): true | s
       if (reported.length >= MAX_REPORTED_ERRORS) break
     }
   } catch {
-    // Errors() 可能在校验器可 walk 但枚举失败时抛错；模糊信息仍指向正确问题。
+    // Errors() may throw when the validator can walk but fails to enumerate; the vague message still points at the right problem.
   }
   return reported.length > 0 ? reported.join('; ') : 'the value does not match the required schema'
 }

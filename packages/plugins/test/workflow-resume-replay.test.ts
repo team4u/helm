@@ -114,7 +114,7 @@ function makeJournalSink() {
 describe('workflow resume replay side-effect safety', () => {
   it('replays a successful prefix containing a resumed agent call without re-running any external handler', timeout, async () => {
     // 首次 run：action → agent(label a) → agent({ resume: 'a' })。
-    // resume 调用在账本中落 resumed:true 行——这是缺陷触发器。
+    // resume 调用在账本中落 resumed:true 行——这是缺陷Triggers。
     const script =
       META('replay-resumed') +
       `
@@ -133,7 +133,7 @@ describe('workflow resume replay side-effect safety', () => {
     assert.equal(afterFirst.spawns, 1)
     assert.equal(afterFirst.resumes, 1)
 
-    // 真实账本必须含 resumed 标记行（触发器确实存在，不是人为构造）。
+    // 真实账本必须含 resumed 标记行（Triggers确实存在，不是人为构造）。
     const entries = sink1.toEntries()
     const resumedLines = entries.filter((e) => e.type === 'agent' && e.resumed === true)
     assert.equal(resumedLines.length, 1, 'journal must record the resumed agent call')

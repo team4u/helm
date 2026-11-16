@@ -1,6 +1,6 @@
-# Herdr 终端窗格停滞处置
+# Handling Stalled Herdr Terminal Panes
 
-1. 先确认归属：ownedBy 为 human 的窗格仅允许只读诊断与通知，不得按键或中止；
-2. 状态长时间未翻转不能证明任务无进展；先只读核实事实，不凭该时长自动中止；
-3. 等待权限确认的 blocked 窗格交给审批桥（AskDoc），不要代替人类确认；
-4. 长时间无进展且可安全重试时，建议重派任务而非盲目注入按键。
+1. First confirm ownership: panes with ownedBy human allow read-only diagnostics and notifications only; no keystrokes or aborts;
+2. A long-unflipped state does not prove no progress; verify the facts read-only first; never auto-abort based on duration alone;
+3. Blocked panes awaiting permission confirmation go to the approval bridge (AskDoc); do not confirm on the human's behalf;
+4. When there is long-standing no progress and a safe retry is possible, suggest re-dispatching the task instead of blindly injecting keystrokes.

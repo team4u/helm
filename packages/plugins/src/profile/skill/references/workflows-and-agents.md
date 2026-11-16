@@ -1,98 +1,97 @@
-# 工作流与多智能体参考
+# Workflows and Multi-Agent Reference
 
-## 跨 Profile 点名协同
+## Cross-Profile mention collaboration
 
-- 用户写 `@<profileId>` 时，由当前会话理解任务并主持协作；它不是强制转发指令。`@` 点名只是认知约定：实际执行仍由当前会话调用 `subagent`（`agentType` 不带 `@`）落地，点名不构成授权、也不改变生命周期缺省。引用、代码或示例里的 `@` 不表示授权执行任务。
-- 若本回合提供 `<available_profiles>`，按其中的真实 ID 与摘要选择角色；调用 `agentType` 时不带 `@`。目录不存在时，不猜测角色 ID 或假装工具可用。
-- 只传必要任务、结论与当前会话有权使用的附件，不默认复制主会话全部历史或读取其他角色的完整 SYSTEM.md / MEMORY.md。子会话各有对话上下文，但同一 Profile 的长期记忆由该 Profile 共享。
-- 节点、目录和 Worktree 可能不同；没有自动同步文件。不要把一个节点的本地路径当作另一节点可访问的文件。附件授权只覆盖调用会话及其父链，不能凭子会话或兄弟会话的产物 ID 任意转交。
-- 由主会话汇总各角色结论并处理冲突；多轮复核设置明确终止条件与轮数上限，不无限派生或争论。
+- When the user writes `@<profileId>`, the current conversation understands the task and chairs the collaboration; it is not a forced forwarding directive. `@` mentions are a cognitive convention only: actual execution still lands via the current conversation calling `subagent` (with `agentType` sans `@`); a mention grants no authorization and changes no lifecycle defaults. An `@` inside references, code, or examples does not authorize task execution.
+- When this turn provides `<available_profiles>`, pick roles by their real IDs and summaries; when calling agentType, drop the `@`. When the catalog is absent, do not guess role IDs or pretend tools exist.
+- Pass only the necessary task, conclusions, and attachments the current conversation is entitled to; do not copy the whole main-session history by default, and do not read other roles' full SYSTEM.md / MEMORY.md. Sub-conversations each have their own context, but long-term memory of the same Profile is shared by that Profile.
+- Nodes, directories, and worktrees may differ; there is no automatic file sync. Do not treat one node's local path as a file accessible from another node. Attachment authorization covers only the calling conversation and its parent chain; artifact IDs cannot be freely handed over just because a sub-conversation or sibling conversation holds them.
+- The main conversation summarizes each role's conclusions and resolves conflicts; multi-round reviews set explicit termination conditions and round caps -- no endless derivation or arguing.
 
-## subagent 工具（模型内派生）
+## The subagent tool (in-model derivation)
 
-当前会话可调用 `subagent` 派生子代理。生命周期缺省按当前会话归属判定：人类直连会话缺省后台（环境就绪即返回运行句柄，父回合继续，完成后自动汇报）；自动化会话（`ownedBy: helm/bot`，如受管子代理、SuperAgent Worker）缺省同步等待最终结果，且显式 `background: true` 会被拒绝。人类会话可显式 `background: false` 退回同步。`agentType` / `profileId` 只选择目标执行体，不参与生命周期判定：
-- 必选：`prompt`（任务指令）。
-- 可选：`agentType`（Profile ID 或外部运行时标识如 `herdr:agy`、`herdr:claude@node-a`；非 `fork` 缺省 `assistant`，`fork: true` 缺省继承父会话 Profile）、`fork`（布尔值，缺省 `false`，与 `resume` 互斥；从父会话当前已完成上下文分叉派生原生子会话——自动避开未闭合工具调用以免出现 `missing_result`；同角色分叉时父会话的 `cwd`/`nodeId`/`model`/`thinkingLevel` 优先于 Profile 默认，跨角色分叉时目标 Profile 优先；仅原生 Profile 支持，外部运行时显式拒绝 `400 unsupported_runtime`；独立盲审或需要全新上下文时勿开启）、`schema`（JSON Schema 结构化输出）、`gate`（shell 验收命令，exit 非 0 即失败）、`cwd`、`isolation`（worktree）、`model`（provider/model）、`effort`、`attachments`（产物 ID 列表）、`resume`（上次 execution.conversationId / executionId，续接同一执行上下文）、`background`（见上述归属策略）、`secretNames`（机密环境变量名列表，显式授予外部运行时窗格注入本会话 SecretStash 机密；缺省不携带任何父会话机密，原生 Profile 子会话不支持非空授予——显式报错，按次授予、resume 不自动沿用）。
-- 默认可派两级子代理：主会话是第 0 层，一级可继续派二级，二级为叶子。小任务直接执行；需要自主拆解的大方案交给一级负责人，无须额外授权参数。主会话可显式传 `maxSubagentDepth: 3`（整数 1..5）为大型任务提高上限，受管子代理只能继承或降低上限，不能自行提高。该值为相对任务树根的绝对层级，不是剩余层数。全局默认可通过插件中心或 `helm plugins config` 修改。
-- 返回业务 result 与执行元数据（nodeId/conversationId/executionId/effectiveCwd/worktree）独立；后续可凭 resume 续接。
-- 后台返回 `runId` 和实际 execution；父回合结束后继续执行，Schema 与 gate 都完成后自动汇报。汇报幂等：同一 run 恰好投递一次，跨重启不重复。因此不要用 sleep 或轮询等待后台结果——汇报会自动到达本会话；需要核对时用 `helm workflows inspect <runId>` 只读查询，`helm workflows abort <runId>` 中止。
-- 同步（`background: false` 或自动化会话缺省）同样有 durable run（`syncForeground` 标记）。长任务阻塞等待期间，人类可经 `helm workflows detach <runId>`（或运行卡「转入后台」按钮、`run_action({ actionId: "builtin:workflow.detach", input: { runId } })`）把前台同步 run 转入后台：阻塞中的工具调用立即收到后台句柄（形状与后台启动兼容），run 继续执行并在终态自动 followUp 汇报。仅前台同步且 running 的 run 可转；automation 归属会话与已后台的 run 拒绝。模型侧无需主动 detach——如不必阻塞，直接用缺省后台启动即可。
-- 四类执行体区别：原生 Profile 子会话（spawn 管道、含 `fork: true` 上下文分叉、进深度登记表、可 resume）；外部 Herdr Profile（终端窗格执行，没有原生子会话 ID，不登记为子会话）；SuperAgent Worker（`dispatch_worker` 派生、不进登记表，插件自有非阻塞协议，见下文）；会话级 `conversations fork`/人工会话（Web/CLI 直接创建或按条目分叉的普通会话，不经 spawn 管道、不受深度限制，人类直连即适用缺省后台）。
-- 发现后台子代理跑偏时，主会话可调用 `run_action({ actionId: "builtin:workflow.steer", input: { runId, text } })` 插话纠偏，也可使用动作派生的模型工具；终端用 `helm workflows steer <runId> --text "<指导>"`。仅 kind=subagent 且 running 的 run 可 steer：原生节点（已解析原生子会话、归属 bot/helm）经内核 guarded 提交按归属与 CAS 水位原子复核；外部执行按节点 `controls.steer` 动态委托插件，并如实返回 guardLevel：Herdr 使用现有 `agent.prompt`，`preflight` 表示发送前检查，`cas` 才表示提交点原子复核。事实过期时返回 409；human 归属永不触碰；混合候选歧义拒绝。会话内调用仅允许 run 发起会话自身或其祖先，不可跨树控制他人运行。steered=true 仅代表投递成功，不代表该指导已执行完成；不确定失败（超时/断线）不自动重试。
-- `isolation: "worktree"` 在目标节点分配独立 Git 工作树（原生及支持该能力的运行时）；基于源 HEAD，不包含源工作区未提交修改。任务结束、失败或取消后保留工作树与分支。
-- 检视或合入后调用 `cleanup_worktree({ worktreeId: execution.worktree.id })`；也可按子会话 ID，或实际 `nodeId` + `path` 清理。先把需要交付的文件用 `register_artifact({ path })` 或目标节点上的 `helm artifacts put <绝对路径> --current` 保存为产物，登记成功后副本不依赖源工作树。未提交修改、未跟踪/被忽略文件、未合入提交及在用工作树默认拒绝清理。`force: true` 仅显式允许丢弃修改，不绕过归属或占用检查。
-- 清理前会探测目标节点上的进程是否仍以工作树或其子目录为 cwd，或持有其中的文件句柄；命中 `worktree_process_in_use` 时，依据返回的 PID 和进程名核对占用。只对已确认属于自己的任务做收尾，不终止其他会话或人类进程。进程探测不支持或不完整时显式拒绝清理，`force: true` 也不能跳过。
-- 只读检视（不执行任何写操作）：`helm worktrees list` 列出全部登记（含已清理记录元数据）；`helm worktrees inspect <worktreeId>` 返回登记元数据 + 目标节点真实 git 只读探测（当前分支/HEAD、未提交文件清单、领先基线提交数、diff 统计与有上限预览；`--conversation-id <id>` / `--path <path> [--node-id <nodeId>]` 可替代选择器）。仅登记记录可检视，不支持任意目录；目录缺失/已清理时如实返回 unavailableReason，git 失败显式报错。
-- CLI：`helm worktrees cleanup --worktree-id <worktreeId> --json`；`--current` 使用当前子会话；`--path <path> --node-id <nodeId>` 精确选择节点目录。`--delete-branch` 同时删除分支（默认保留）；`--merged-into <ref>` 显式指定已合入的目标分支或提交，未传时优先用登记的 `baseBranch`（父模块分支，已删或未登记则回退主工作树 HEAD）；`--force` 显式允许丢弃未提交修改与未合入提交（不绕过占用、归属、locked 与进程探测检查）。
-- Hub 重启会将中断的后台运行明确标为失败并汇报；需要时凭原 execution 的 resume 标识续接，不自动重新派工或重跑 gate。
-- 中断运行或外部执行失败后，若无法确认底层已停止，持久租约会阻止自动清理（worktree_execution_unknown）；先检查目标节点并续接收尾，或确认停止后通过 helm env exec 在原节点手动执行 Git 清理。force 不绕过此检查。
+The current conversation may call `subagent` to derive subagents. Lifecycle defaults follow the calling conversation's ownership: human direct conversations default to background (returning a run handle as soon as the environment is ready, the parent turn continues, and completion auto-reports); automated conversations (`ownedBy: helm/bot`, e.g. managed subagents, SuperAgent Workers) default to synchronously waiting for the final result, and an explicit `background: true` is rejected. Human conversations may pass `background: false` explicitly to go synchronous. `agentType` / `profileId` only select the target executor and play no part in lifecycle decisions:
+- Required: `prompt` (the task instruction).
+- Optional: `agentType` (a Profile ID or an external runtime identifier such as `herdr:agy`, `herdr:claude@node-a`; defaults to `assistant` unless `fork`, and `fork: true` defaults to inheriting the parent conversation's Profile; mutually exclusive with `resume`), `fork` (boolean, default false; derives a native sub-conversation by forking the parent conversation's currently completed context -- automatically avoiding unclosed tool calls to prevent `missing_result`; when forking the same role, the parent conversation's `cwd`/`nodeId`/`model`/`thinkingLevel` take precedence over Profile defaults, while a cross-role fork defers to the target Profile; native Profiles only -- external runtimes reject explicitly with `400 unsupported_runtime`; do not enable for independent blind reviews or when a fresh context is needed), `schema` (JSON Schema structured output), `gate` (shell acceptance command; a non-zero exit fails), `cwd`, `isolation` (worktree), `model` (provider/model), `effort`, `attachments` (artifact IDs), `resume` (the previous execution.conversationId / executionId, continuing the same execution context), `background` (see the ownership policy above), `secretNames` (secret environment variable names, explicitly granted for injection into this conversation's SecretStash secrets for an external runtime pane; by default no parent-conversation secrets are carried -- native Profile sub-conversations reject non-empty grants with an explicit error; granted per call, not inherited by resume).
+- Two levels of subagents may be derived by default: the main conversation is level 0, level 1 may continue deriving level 2, and level 2 are leaves. Small tasks execute directly; large efforts needing autonomous decomposition go to a level-1 lead with no extra authorization parameters. The main conversation may explicitly pass `maxSubagentDepth: 3` (integer 1..5) to raise the cap for large tasks; managed subagents can only inherit or lower the cap, never raise it. This value is an absolute level relative to the task-tree root, not remaining depth. The global default can be changed via the plugin center or `helm plugins config`.
+- Returns the business result and execution metadata (nodeId/conversationId/executionId/effectiveCwd/worktree) independently; later calls can continue via resume.
+- Background returns a `runId` and the actual execution; the parent turn continues after it ends, with schema and gate both completed before auto-reporting. Reporting is idempotent: each run reports exactly once, never duplicated across restarts. So do not sleep or poll for background results -- reports arrive automatically in this conversation; to verify, use the read-only `helm workflows inspect <runId>`, and `helm workflows abort <runId>` to abort.
+- Synchronous (`background: false`, or the default for automated conversations) also has a durable run (`syncForeground` marker). While a long task blocks, a human can move the foreground synchronous run to the background via `helm workflows detach <runId>` (or the run card's "move to background" button, or `run_action({ actionId: "builtin:workflow.detach", input: { runId } })`): the blocked tool call immediately receives a background handle (shape-compatible with background starts), the run continues, and a followUp report arrives at the terminal state. Only a foreground synchronous and still-running run can be moved; automation-owned sessions and already-backgrounded runs are rejected. The model side never needs to detach proactively -- if blocking is unnecessary, just start in the default background mode.
+- Four executor kinds: native Profile sub-conversations (spawn pipeline, incl. `fork: true` context forks, entered into the depth registry, resumable); external Herdr Profiles (terminal-pane execution, no native sub-conversation ID, not registered as sub-conversations); SuperAgent Workers (derived via `dispatch_worker`, not in the registry, the plugin's own non-blocking protocol, see below); conversation-level `conversations fork` / human conversations (ordinary conversations created directly via Web/CLI or forked per entry, not via the spawn pipeline, not subject to depth limits, and human-owned direct connections get the default background).
+- When a background subagent drifts, the main conversation may call `run_action({ actionId: "builtin:workflow.steer", input: { runId, text } })` to interject corrections, or use the model tool derived from that action; in a terminal, `helm workflows steer <runId> --text "<guidance>"`. Only runs with kind=subagent and status running can be steered: native nodes (resolved native sub-conversations, owned bot/helm) submit via the kernel guarded port with atomic rechecks of ownership and CAS watermark; external executions delegate dynamically per the node's `controls.steer` to the target plugin, honestly returning guardLevel: Herdr uses the existing `agent.prompt`, where `preflight` means a pre-send check and only `cas` means a commit-point atomic recheck. Stale facts return 409; human ownership is never touched; ambiguous mixed candidates are rejected. Within a conversation, only the run's initiating conversation itself or its ancestors may steer; you cannot control other trees' runs. steered=true only means delivery succeeded, not that the guidance has been executed; uncertain failures (timeouts/disconnects) are not auto-retried.
+- `isolation: "worktree"` allocates an independent Git worktree on the target node (native runtimes and those supporting the capability); based on the source HEAD, excluding uncommitted changes in the source workspace. The worktree and branch are kept after the task ends, fails, or is cancelled.
+- After inspecting or merging, call `cleanup_worktree({ worktreeId: execution.worktree.id })`; also by sub-conversation ID, or by actual `nodeId` + `path`. Save files that need delivering as artifacts first via `register_artifact({ path })` or `helm artifacts put <absolute path> --current` on the target node; once registered, the copies no longer depend on the source worktree. Cleanup is refused by default when there are uncommitted changes, untracked/ignored files, unmerged commits, or the worktree is in use.
+- Before cleanup, the host probes whether processes on the target node still use the worktree or a child directory as cwd, or hold file handles into it; on `worktree_process_in_use`, verify the occupying PID and process name from the response. Only finish tasks confirmed to be your own; never terminate other sessions' or human processes. When process probing is unsupported or incomplete, cleanup is explicitly refused, and `force: true` cannot skip it.
+- Read-only inspection (no writes of any kind): `helm worktrees list` lists all registrations (incl. cleaned records' metadata); `helm worktrees inspect <worktreeId>` returns registration metadata + the target node's real read-only git probe (current branch/HEAD, uncommitted file list, commits ahead of baseline, diff stats with a capped preview; `--conversation-id <id>` / `--path <path> [--node-id <nodeId>]` can replace the selector). Only registered records can be inspected; arbitrary directories are unsupported; a missing/cleaned directory honestly returns unavailableReason, and git failures error explicitly.
+- CLI: `helm worktrees cleanup --worktree-id <worktreeId> --json`; `--current` uses the current sub-conversation; `--path <path> --node-id <nodeId>` pins a node directory. `--delete-branch` also deletes the branch (kept by default); `--merged-into <ref>` explicitly names the merged target branch or commit -- when omitted, the registration's parent `baseBranch` is preferred (parent-module branch; if deleted or unregistered, fall back to the main worktree HEAD); `--force` explicitly permits discarding uncommitted changes and unmerged commits (without bypassing occupancy, ownership, locked, or process-probe checks).
+- A Hub restart explicitly marks interrupted background runs failed and reports them; when needed, continue via the original execution's resume identifier -- no automatic re-dispatch or gate rerun.
+- After an interrupted run or external execution failure, when the underlying stop cannot be confirmed, the persistent lease blocks automatic cleanup (worktree_execution_unknown); first inspect the target node and finish via resume, or after confirming the stop, manually run Git cleanup via helm env exec on the original node. force does not bypass this check.
 
-## SubagentWorkflow 确定性编排脚本
+## SubagentWorkflow deterministic orchestration scripts
 
-会话内编排**优先直接调用原生 `SubagentWorkflow` 工具**（无需先落临时文件再走 `bash`）：
-- 入参：`script`（内联 JS 源码）、`scriptPath`（脚本文件路径）或 `name`（已保存工作流名）三者择一；可选 `args`（JSON 对象/数组或标量，原样传给脚本内 `args`；若以 JSON 字符串传入，内核会自动解析为对象）、`resumeFromRunId`（断点重放）与 `background`（同一归属策略）。
-- 原生 `SubagentWorkflow` 工具自动绑定当前会话与工具调用行，在聊天时间线与右侧工作台实时展示多阶段进度、节点状态与子代理流。生命周期缺省同 `subagent` 按会话归属判定（人类直连缺省后台、自动化缺省同步、自动化显式 `background: true` 拒绝）：后台启动即返回 running summary，终态自动幂等汇报；同步则直接返回完整 `summary`（含 `id`、`status`、`phases`、`nodes`、`result`）。注意 CLI `helm workflows run` 是另一入口：缺省启动即返回，`--wait` 才同步等终态，与工具的 `background` 策略不是同一参数。脚本内 `agent()` 节点没有 background 选项，始终等待真实结果。
-- 仅在终端或外部脚本调度时使用 CLI：`helm workflows run <nameOrFile> [--args <json>] [--resume-from-run-id <id>] [--current] [--wait]`（受管 `bash` 内默认读取 `HELM_CONVERSATION_ID` 归属当前会话，也可显式传 `--current`）：
+For in-conversation orchestration, **prefer calling the native `SubagentWorkflow` tool directly** (no need to write a temp file first and go through `bash`):
+- Inputs: one of `script` (inline JS source), `scriptPath` (a script file path), or `name` (a saved workflow name); optional `args` (a JSON object/array or scalar passed through to the script's `args`; a JSON string is auto-parsed into an object), `resumeFromRunId` (checkpoint replay), and `background` (same ownership policy).
+- The native `SubagentWorkflow` tool auto-binds the current conversation and tool-call line, showing multi-phase progress, node states, and subagent streams live in the chat timeline and the right-hand workbench. Lifecycle defaults follow `subagent` by conversation ownership (human direct defaults to background, automation to synchronous, automation's explicit `background: true` rejected): background starts return a running summary immediately with an idempotent report at the terminal state; synchronous returns the full `summary` directly (incl. `id`, `status`, `phases`, `nodes`, `result`). Note the CLI `helm workflows run` is another entry point: it returns on start by default and only waits with `--wait` -- not the same parameter as the tool's `background` policy. `agent()` nodes inside scripts have no background option and always wait for real results.
+- Use the CLI only in terminals or external script scheduling: `helm workflows run <nameOrFile> [--args <json>] [--resume-from-run-id <id>] [--current] [--wait]` (managed `bash` reads `HELM_CONVERSATION_ID` by default to attribute the current conversation; you can also pass `--current` explicitly):
 
 ```js
 export const meta = {
   name: "audit-report",
-  description: "对仓库跑安全审计并汇总报告",
-  phases: [{ title: "审计" }, { title: "复核" }],
+  description: "Run a security audit over the repo and summarize the report",
+  phases: [{ title: "Audit" }, { title: "Review" }],
 }
 
 const reports = await pipeline(
   args.files,
-  file => agent(`只读审查 ${file}，返回问题与依据。`, { phase: "审计" }),
-  (report, file) => agent(`复核 ${file} 的报告：${report}`, { phase: "复核" }),
+  file => agent(`Review ${file} read-only; return findings and evidence.`, { phase: "Audit" }),
+  (report, file) => agent(`Re-review ${file}'s report: ${report}`, { phase: "Review" }),
 )
 return { reports: reports.filter(report => report !== null) }
 ```
 
-### 脚本内可用 API（由宿主注入；无模块加载器，不能 import/require）
+### APIs available inside scripts (injected by the host; no module loader, no import/require)
 
-- `meta`：必须是纯字面量对象（`export const meta = { name, description, phases? }`，phases 为 `[{ title, detail?, model? }]`）；禁止模板串/变量/函数调用。
-- `args`：运行时经 `--args` 或工具入参传入的 JSON（对象/数组/标量，经反序列化注入；缺省 undefined，可自由约定形状）。
-- `agent(prompt, opts?)`：调用同一子代理执行接口并等待真实结果；opts 为 `{ label?, phase?, model?, agentType?, isolation?("worktree"), gate?, resume?, effort?, schema?, attachments?, maxSubagentDepth?, cwd?, timeoutMs?, gateTimeoutMs?, maxAttempts? }`（机密授予 `secretNames` 是独立 `subagent` 工具的参数，不是 DSL 选项）。脚本用 pipeline/parallel 表达并发，节点不提前返回后台句柄。
-- `pipeline(items, ...stages)`：对每个 item 依序过全部 stage（同一 item 串行、不同 item 并行），单条失败该项置 null 不炸全局；优先于 parallel 组织批量任务。
-- `parallel(thunks)`：全量并发，单项失败置 null。
-- `action(actionId, input?, opts?)`：零 Token 确定性调用宿主动作总线（`pluginId.actionId` 全限定或无冲突短名；输入输出经 schema 校验；opts 支持 `{ idempotent?, label?, phase? }`）。
-  - 内建跨节点命令动作：`action("env.exec", { command, cwd?, nodeId?, env?, timeoutMs?, allowFailure? }, { idempotent?, label?, phase? })`（无冲突时可用短名 `"exec"`），底层复用内核 EnvFabric 跨节点通道、SecretStash 机密注入与脱敏，返回 `{ ok, exitCode, output, timedOut }`。
-- `agent.withMeta(prompt, opts?)` / `goal(spec)`：与 `agent()` 同参数面，但返回 `{ ok, output, attempts, error?, timedOut?, execution?, gate? }`；`goal` 以 `objective` 为提示词、`maxAttempts` 缺省 3，配合 `gate` / `timeoutMs` 做门禁与超时自动重试（同一子会话原地续接，成功时 `output` 为字符串、失败时为 null，`schema` 只负责校验不代为解析）。失败 Run 续跑时，scope 末尾失败目标获得新一轮 `maxAttempts` 预算，沿原句柄继续；`attempts` 累计包含历史尝试，成功兄弟节点保持缓存。
-- `phase(title)` / `log(message)`：进度标注与日志。
-- `workflow(ref, args?)`：按名或 `{ scriptPath }` 嵌套子工作流（最深 4 层，根为第 0 层；整棵树共用同一账本，按稳定 scope 路径与局部调用序号恢复，可对根 runId 一次断点续跑）。
-- `budget.spent()`：已消耗输出字节；`budget.total` 为 null、`budget.remaining()` 为 Infinity，不能据此承诺成本预算。
-- `schema` 用于验证子代理结果，`gate` 在子代理实际工作目录中运行 shell 命令；非零退出表示失败。批量结果需检查 null，不能把部分失败汇报成全部完成。
+- `meta`: must be a pure literal object (`export const meta = { name, description, phases? }`, phases being `[{ title, detail?, model? }]`); template strings/variables/function calls forbidden.
+- `args`: the JSON passed at runtime via `--args` or the tool input (deserialized and injected; undefined by default; shape is up to you).
+- `agent(prompt, opts?)`: calls the same subagent execution interface and waits for the real result; opts is `{ label?, phase?, model?, agentType?, isolation?("worktree"), gate?, resume?, effort?, schema?, attachments?, maxSubagentDepth?, cwd?, timeoutMs?, gateTimeoutMs?, maxAttempts? }` (secret grants `secretNames` are a separate parameter of the `subagent` tool, not a DSL option). Use pipeline/parallel for concurrency; nodes never return background handles early.
+- `pipeline(items, ...stages)`: every item goes through all stages in order (same item serial, different items parallel); a single failure nulls that item without exploding globally; prefer over parallel for batch organization.
+- `parallel(thunks)`: full concurrency; a single failure nulls.
+- `action(actionId, input?, opts?)`: zero-token deterministic call of the host action bus (`pluginId.actionId` fully-qualified or an unambiguous short name; input/output schema-validated; opts supports `{ idempotent?, label?, phase? }`).
+  - Built-in cross-node command action: `action("env.exec", { command, cwd?, nodeId?, env?, timeoutMs?, allowFailure? }, { idempotent?, label?, phase? })` (short name `"exec"` when unambiguous), reusing the kernel EnvFabric cross-node channel, SecretStash secret injection, and redaction; returns `{ ok, exitCode, output, timedOut }`.
+- `agent.withMeta(prompt, opts?)` / `goal(spec)`: same parameter surface as `agent()`, but returning `{ ok, output, attempts, error?, timedOut?, execution?, gate? }`; `goal` takes `objective` as the prompt with `maxAttempts` defaulting to 3, combining `gate` / `timeoutMs` for gated retries with automatic retry (in-place continuation of the same sub-conversation; on success `output` is a string, on failure null; `schema` only validates without parsing). When a failed run continues, failed goals at the scope tail get a fresh `maxAttempts` budget and continue along the original handle; `attempts` accumulates including history, and successful siblings stay cached.
+- `phase(title)` / `log(message)`: progress annotations and logs.
+- `workflow(ref, args?)`: nested sub-workflow by name or `{ scriptPath }` (up to 4 levels deep, root being level 0; the whole tree shares one ledger, recoverable by stable scope path and local call ordinal, resumable from the root runId in one shot).
+- `budget.spent()`: output bytes consumed; `budget.total` is null and `budget.remaining()` is Infinity -- no cost budget may be promised on this basis.
+- `schema` validates subagent results; `gate` runs a shell command in the subagent's actual working directory; a non-zero exit fails. Batch results must check for null; partial failures must not be reported as complete.
 
-### 确定性铁律（违反即失败，断点重放的根基）
+### Determinism iron rules (violations fail; the foundation of checkpoint replay)
 
-- 禁用 `Date.now()` / `Math.random()` / 无参 `new Date()` / `eval` / `Function` 构造器；需要时间戳请在脚本返回后补，或经 args 传入。
-- 脚本结果与全部 agent/action 入参出参都必须可 JSON 序列化（不可序列化直接拒绝）。
+- `Date.now()` / `Math.random()` / argument-less `new Date()` / `eval` / `Function` constructors are banned; add timestamps after the script returns, or pass them in via args.
+- Script results and all agent/action inputs and outputs must be JSON-serializable (non-serializable values are rejected outright).
 
-## 工作流库（跨会话可复用资产）
+## Workflow library (cross-conversation reusable assets)
 
-已保存工作流定义的唯一存储真源是数据目录 `workflows/<name>.js`（带 `export const meta` 声明的 JS 脚本）；创建与修改全部由 AI / CLI 调用动作完成，无第二份 catalog 副本：
+The single source of truth for saved workflow definitions is the data directory `workflows/<name>.js` (JS scripts with an `export const meta` declaration); creation and modification are all done by AI / CLI via actions, with no second catalog copy:
+- Read: `helm workflows get <name> --json` (full read-only source + metadata + `updatedAt`/`size` file facts); `helm workflows list --json` lists all definitions.
+- Save: `helm workflows save <file.js>` (local scripts are read in automatically) or `helm workflows save --from-run-id <runId>` (freezes an existing run's inline script source as a definition; background subagent runs cannot be saved). The default name comes from the script's `meta.name`; an explicit `--name` disagreeing with `meta.name` is rejected. Saving runs automatic meta validation and a syntax precheck (without executing the script); same names refuse by default (409), `--overwrite` overwrites; writes are atomic and success returns the real summary.
+- Delete: `helm workflows delete <name>` (removes only the definition file; historical run records and the ledger are kept).
+- In-conversation changes: first `get` the current source, then `save --overwrite` after editing; the Web workflow library is read-only browse/run/delete with no editor.
 
-- 读取：`helm workflows get <name> --json`（完整只读源码 + 元数据 + `updatedAt`/`size` 文件事实）；`helm workflows list --json` 列出全部定义。
-- 保存：`helm workflows save <file.js>`（本地脚本自动读入）或 `helm workflows save --from-run-id <runId>`（把既有运行的内联脚本源固化为定义；后台子代理 run 不可保存）。缺省名取脚本 `meta.name`；显式 `--name` 与 `meta.name` 不一致会拒绝。保存前自动做 meta 校验与语法预检（不执行脚本）；同名默认拒绝（409），`--overwrite` 才覆盖；写入原子完成，成功返回真实摘要。
-- 删除：`helm workflows delete <name>`（只删定义文件，历史运行记录与账本保留）。
-- 会话内修改：先用 `get` 读取当前源码，改完经 `save --overwrite` 写回；Web 工作流库只读浏览/运行/删除，不提供编辑器。
+### Checkpoint replay (resumeFromRunId)
 
-### 断点重放（resumeFromRunId）
+Call `SubagentWorkflow({ resumeFromRunId: "<runId>", ... })` (or `helm workflows run <name> --resume-from-run-id <runId> --current --wait`) to read the old ledger; matching completed nodes replay their results directly, and agent/action calls and passed gates never re-execute. Parameter changes (including gate commands) break the current scope's chain; successful prefixes of sibling workflows are reused independently. When non-idempotent follow-up actions remain unreused, recovery is explicitly refused to avoid duplicating side effects.
+`agent(..., { resume: "<label>" })` instead continues an agent's context -- different from ledger replay; do not also specify agentType/model/isolation/effort; schema, gate, this round's attachments, and maxSubagentDepth can be submitted with the continuation; a level-authorization change invalidates old ledger caches. Continuations do not inherit the previous round's attachments automatically; changed attachment IDs or ordering also affect ledger matching. The native sub-conversation must still exist, belong to the current parent conversation, and be idle; external runtimes are further subject to their cleanup lifecycle -- when invalid, error honestly instead of pretending the continuation succeeded.
 
-调用 `SubagentWorkflow({ resumeFromRunId: "<runId>", ... })`（或 CLI `helm workflows run <name> --resume-from-run-id <runId> --current --wait`）读取旧账本；匹配的已完成节点直接重放结果，agent/action 与已通过的 gate 不重复执行。参数变化（包括 gate 命令）会使当前 scope 断链；兄弟工作流的成功前缀独立复用。存在未复用的非幂等后续动作时，恢复显式拒绝，避免重复副作用。
-`agent(..., { resume: "<label>" })` 则是续接代理上下文，与账本重放不同；不要同时指定 agentType/model/isolation/effort，schema、gate、本轮 attachments 与 maxSubagentDepth 可以随续接提交；层级授权变化会使旧账本缓存失配。续接不自动继承上轮附件；附件 ID 或顺序变化也会影响账本匹配。原生子会话须仍存在、归属当前父会话且空闲；外部运行时还受其清理生命周期限制，失效时如实报错，不假装续接成功。
+## Routing with the builtin:herdr terminal agents
 
-## 与 builtin:herdr 终端 Agent 路由
+- With builtin:herdr enabled, agentTypes like `herdr:<kind>` or `herdr:<kind>@<nodeId>` (kinds such as agy/claude/codex/pi, validated by Herdr) are intercepted by the herdr plugin: a pane opens in a Herdr background tab on the target node and executes.
+- You can also create a Profile: `runtime: { kind: "herdr", agent: "<kind>", nodeId?, workspace?, env? }`, then use that Profile ID directly as agentType.
+- Results return via `.helm/wf-out-<safeId>.json|.md` handoff files in the working directory (the subagent's in-place follow-up self-heals); the terminal blocked state is bridged live into an AskDoc approval card with expectedStateSeq CAS optimistic locking (when the human has pressed keys in the terminal, the Web side auto-supersedes).
+- External runtimes do not change lifecycle defaults: the spawning conversation's ownership decides background/sync, and external pane tasks' background reports likewise go through the parent conversation's idempotent reporting chain.
+- Herdr's `workflow.steer` uses the existing `agent.prompt` to supplement guidance to a managed background agent, requiring no new server capability. The precheck must be `working`; a submission that just turned `idle` at send time may continue for one round, and `blocked` goes to the original approval bridge. It returns `guardLevel=preflight`, promising no commit-point CAS; whether the interjection is immediate or queued is decided by the target CLI. Each guidance carries a new business result path; the CLI only needs to write the result in the original format at the latest path, with no extra confirmation file. Old files cannot substitute for the latest result; on uncertain delivery failure, keep the scene and do not auto-resend. You cannot use `resume` to interject into a running pane; `resume` applies only to executions that still exist, are idle, and pass ownership verification -- handle invalid handles by their actual errors.
 
-- 启用 builtin:herdr 后，agentType 形如 `herdr:<kind>` 或 `herdr:<kind>@<nodeId>`（kind 如 agy/claude/codex/pi 等，由 Herdr 校验）会被 herdr 插件拦截：在目标节点 Herdr 后台标签页开窗格执行。
-- 也可建 Profile：`runtime: { kind: "herdr", agent: "<kind>", nodeId?, workspace?, env? }`，之后 `agentType` 直接用该 Profile ID。
-- 结果经工作目录下 `.helm/wf-out-<safeId>.json|.md` 交接文件回传（subagent 原地追问自愈）；终端 blocked 状态实时桥接为带 expectedStateSeq CAS 乐观锁的 AskDoc 审批卡（人类已在终端按键则 Web 端自动 superseded）。
-- 外部运行时不改变生命周期缺省：派生方会话的归属决定后台/同步，外部窗格任务的后台汇报同样走父会话幂等汇报链。
-- Herdr 的 `workflow.steer` 使用现有 `agent.prompt` 向受管后台 Agent 补充指导，不要求新服务端能力。预检必须为 `working`；发送时刚变为 `idle` 可接续一轮，`blocked` 交原审批桥。返回 `guardLevel=preflight`，不承诺提交点 CAS；具体插话还是排队由目标 CLI 决定。每次指导附一个新的业务结果路径，CLI 只需在最新路径写原格式的结果，无额外确认文件。旧文件不能代替最新结果；不确定投递失败时保留现场且不自动重发。不能用 `resume` 给运行中的窗格插话；`resume` 仅适用于仍存在且空闲、归属验证通过的执行，失效标识按实际错误处理。
+## Working with builtin:superagent background Workers
 
-## 与 builtin:superagent 后台 Worker 协作
-
-启用 builtin:superagent 后，通过 `helm actions list --json` 查询 dispatch_worker、inspect_worker、archive_worker 等动作及 Schema，再用 `helm superagent <action> --input <json> --json` 调用。它们负责非阻塞派工、跟踪和归档；专属中枢会话还提供 recall_context、subscribe_thread 等工具，看门狗会话提供 watchdog_inspect / watchdog_recover / watchdog_abort。
-边界：`dispatch_worker` 是 builtin:superagent 插件专属的非阻塞 Worker 协议——立即返回 `workerConversationId`、绝不同步等待模型回合，结果经独立 turn_settled → 中枢汇报链（superagent:worker-report 卡片）回传。它不是 `subagent` 的 `background` 参数、也不是通用后台派生入口，两者不得混用；不要给 `subagent` 传 dispatch_worker 语义，也不要期望 dispatch_worker 同步返回结果。
-Watchdog 对 ownedBy: human 的会话或终端窗格只允许只读诊断和通知，不得发送按键或中止。
+With builtin:superagent enabled, query dispatch_worker, inspect_worker, archive_worker and other actions plus their Schemas via `helm actions list --json`, then invoke via `helm superagent <action> --input <json> --json`. They handle non-blocking dispatch, tracking, and archiving; the dedicated hub conversation additionally provides recall_context, subscribe_thread and other tools, and the watchdog conversation provides watchdog_inspect / watchdog_recover / watchdog_abort.
+Boundaries: `dispatch_worker` is builtin:superagent's own non-blocking Worker protocol -- it returns a `workerConversationId` immediately and never synchronously waits for a model turn; results return via the independent turn_settled -> hub reporting chain (superagent:worker-report card). It is neither the `subagent` tool's `background` parameter nor a generic background spawn entry -- do not conflate the two; do not pass dispatch_worker semantics to `subagent`, and do not expect dispatch_worker to return synchronously.
+The Watchdog allows read-only diagnostics and notifications only for conversations or terminal panes with ownedBy: human -- never sending keystrokes or aborts.

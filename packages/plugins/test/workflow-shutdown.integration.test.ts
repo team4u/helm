@@ -28,7 +28,7 @@ test('真实 SQLite：关闭在途工作流后，未启动插件也能从重开�
     reopened = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, autoResume: false })
     assert.equal(reopened.plugins.list().some((plugin) => plugin.id === 'builtin:workflow'), false)
     // 新契约：records doc 只存 workflow/runs 轻量索引（从 SQLite 读回）；完整
-    // RunRecord 在插件私有记录文件 dataDir/plugins/builtin%3Aworkflow/
+    // RunRecord 在插件私有record file dataDir/plugins/builtin%3Aworkflow/
     // artifacts/<convId>/workflow-<runId>.record.json。
     const records = reopened.documentStore.get<Record<string, unknown>>('builtin:workflow:records', {})
     const index = (records['workflow/runs'] as Array<Partial<WorkflowRunSummary>> | undefined) ?? []

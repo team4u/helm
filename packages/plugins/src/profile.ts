@@ -1,21 +1,21 @@
 /**
- * builtin:profile：常驻角色与技能底座（locked: true）。
+ * builtin:profile: the resident roles-and-skills foundation (locked: true).
  *
- * 职责（记忆已拆分至 builtin:memory，本插件零记忆逻辑）：
- * - 启动自举系统级内置技能 skills/helm-cli（受管覆盖）与默认 assistant
- *   Profile 的托管元数据；
- * - before_turn 注入 profile.system（SYSTEM.md）、profile.skills（可用技能
- *   目录）、profile.assets-missing（SYSTEM.md 缺失告警）与 profile.agents /
- *   profile.agents-unavailable（工作区 AGENTS.md 项目约定，读取失败或远端
- *   节点离线时显式说明，绝不静默降级）；
- * - 低优先级 before_turn（在默认优先级的工具剥离钩子之后运行）按当回合
- *   实际 turn.tools 注入 profile.catalog（跨 Profile 协作目录；派工工具被
- *   剥离的叶子子代理不注入、builtin:workflow 停用时无派工工具则不注入）；
- * - 注册 load_skill 工具（Profile 白名单 + 插件启停实时判定）与
- *   list_mentionable 幂等动作（@ 补全源，自动映射 HTTP / helm profile
+ * Responsibilities (memory split to builtin:memory; this plugin has zero memory logic):
+ * - Bootstrap the system-level built-in skill skills/helm-cli (managed overwrite) and the default
+ *   assistant Profile's managed metadata at startup;
+ * - before_turn injects profile.system (SYSTEM.md), profile.skills (the available skill
+ *   catalog), profile.assets-missing (a missing-SYSTEM.md warning), and profile.agents /
+ *   profile.agents-unavailable (the workspace AGENTS.md project conventions; read failures or a
+ *   remote node going offline are stated explicitly, never silently degraded);
+ * - a low-priority before_turn (running after the default-priority tool-stripping hooks) injects
+ *   profile.catalog per the turn's actual turn.tools (the cross-Profile collaboration catalog;
+ *   leaf subagents whose dispatch tools were stripped get no injection, and neither do turns without dispatch tools when builtin:workflow is disabled);
+ * - registers the load_skill tool (Profile whitelist + live plugin enablement) and the
+ *   idempotent list_mentionable action (the @ completion source, auto-mapped to HTTP / helm
  *   list_mentionable CLI）；
- * - 左栏 assistant Profile 站位导航（conversation:profile:assistant，不依赖
- *   某一具体会话存在）。
+ * - the left-sidebar assistant Profile standing navigation (conversation:profile:assistant, not
+ *   dependent on any particular conversation existing).
  */
 import { HelmError, isSkillAvailable, type HelmHostProfilesPort, type PluginDefinition, type Profile, type SkillSummary } from '@helm/protocol';
 import { HELM_CLI_SKILL_ASSET, PROFILE_MANAGED_BY } from './profile/assets.js';
@@ -59,16 +59,16 @@ export {
 } from './profile/catalog.js'
 
 /**
- * 自举默认 assistant Profile 的托管元数据：缺失时显式补写
- * managedByPlugin: 'builtin:profile'（已是其他值或已存在时原样保留，
- * 不做旧数据归一化）；默认 Profile 不存在属内核未初始化异常，如实上抛。
- * 写入经公共 profiles.save 整体保存（其余字段原样透传）。
+ * Bootstrap the default assistant Profile's managed metadata: explicitly write
+ * managedByPlugin: 'builtin:profile' when missing (kept as-is when it holds another value
+ * or already exists -- no old-data normalization); a missing default Profile is a kernel
+ * not-initialized anomaly and propagates honestly.
  */
 async function ensureDefaultProfileManaged(profiles: HelmHostProfilesPort): Promise<void> {
   const existing = await profiles.get(DEFAULT_PROFILE_ID);
   if (existing === undefined) {
     throw new Error(
-      `默认 profile '${DEFAULT_PROFILE_ID}' 不存在（内核 ensureDefault 应先于插件启动执行）`,
+      `default profile '${DEFAULT_PROFILE_ID}' does not exist (the kernel's ensureDefault should run before plugin startup)`,
     );
   }
   if (existing.managedByPlugin !== undefined) return;
@@ -80,24 +80,24 @@ function escapeXml(text: string): string {
   return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
-/** 目录注入钩子优先级：低于默认 0，确保在默认优先级的工具剥离钩子（如路由
- * 模式收敛）之后运行，按届时的实际 turn.tools 决定注入与否。 */
+/** Catalog injection hook priority: below the default 0, ensuring it runs after the default-priority
+ * tool-stripping hooks (e.g. routing-mode convergence) and decides injection by the then-actual turn.tools. */
 const CATALOG_HOOK_PRIORITY = -100;
 
 export function createProfilePlugin(): PluginDefinition {
   return {
     id: 'builtin:profile',
-    name: '角色与技能底座',
-    description: '常驻底座：按会话绑定的 Profile 注入 SYSTEM.md 与可用技能目录，提供 load_skill 工具与默认助理角色。',
+    name: 'Roles & Skills Foundation',
+    description: 'Resident foundation: injects SYSTEM.md and the available skill catalog per the conversation Profile, providing the load_skill tool and the default assistant role.',
     icon: 'bot',
     version: '0.1.0',
     locked: true,
     definePlugin(ctx) {
       const { profiles, skills } = ctx.host;
-      // 启动时同步系统级内置技能 skills/helm-cli/（Layer 1 + Layer 2）：
-      // 受管系统资产以源码版本为准逐文件覆盖，缺失补齐；常规接口写入被拒。
-      // 同时自举默认 assistant Profile 的托管元数据：缺失时显式补写
-      // managedByPlugin（ensureDefault 不做归一化，由本插件自举声明）。
+      // Sync the system-level built-in skill skills/helm-cli/ (Layer 1 + Layer 2) at startup:
+      // managed system assets are overwritten file-by-file per the source version, and missing files are
+      // backfilled; writes through the regular interface are rejected.
+      // managedByPlugin (ensureDefault does not normalize; this plugin bootstraps the declaration).
       ctx.service({
         id: 'profile-skills',
         async start() {
@@ -108,11 +108,11 @@ export function createProfilePlugin(): PluginDefinition {
       });
 
       /**
-       * 读取 SYSTEM.md：文件被外部误删（not_found）时按空处理，
-       * 但绝不沉默改变人格——① 向人类发一次性告警（按 profileId 独立去重，
-       * 文件恢复即停、再次缺失可重新告警）；② 向模型注入显式的
-       * <profile_assets_missing> 说明节，告知本轮人格资产缺失及其后果。
-       * 其余错误（权限/IO 故障）如实上抛，绝不吞。
+       * Read SYSTEM.md: when externally deleted by mistake (not_found), treat it as empty,
+       * but never silently change the persona -- (1) send a one-time warning to the human
+       * (deduped per profileId; stops once restored, can warn again if missing later);
+       * (2) inject an explicit <profile_assets_missing> section for the model stating that this
+       * turn's persona assets are missing and the consequence. Other errors (permission/IO faults) propagate honestly, never swallowed.
        */
       const missingNotified = new Set<string>()
       const readSystemOrEmpty = async (
@@ -120,7 +120,7 @@ export function createProfilePlugin(): PluginDefinition {
       ): Promise<string> => {
         try {
           const text = await profiles.getSystem(profileId)
-          missingNotified.delete(profileId) // 恢复即停；下次再缺失可重新告警
+          missingNotified.delete(profileId) // stop once restored; can warn again if missing later
           return text
         } catch (err) {
           if (err instanceof HelmError && err.code === 'not_found') {
@@ -128,8 +128,8 @@ export function createProfilePlugin(): PluginDefinition {
               await ctx.host.emitEvent('notification', {
                 type: 'notification',
                 level: 'warning',
-                title: `角色资产文件缺失：${profileId}/SYSTEM.md`,
-                body: `Profile 资产 ${profileId}/SYSTEM.md 不存在（可能被外部误删），本回合按空内容处理；再次写入系统提示词可自愈重建`,
+                title: `Profile asset file missing: ${profileId}/SYSTEM.md`,
+                body: `Profile asset ${profileId}/SYSTEM.md does not exist (possibly deleted externally); this turn proceeds with empty content; writing the system prompt again self-heals it`,
               })
               missingNotified.add(profileId)
             }
@@ -140,15 +140,15 @@ export function createProfilePlugin(): PluginDefinition {
       }
 
       /**
-       * 读取当前 Profile 真实配置 + 插件启用状态，按共享 isSkillAvailable 规则
-       * 过滤技能目录（Profile.skills 缺省全部、[] 禁用全部、非空白名单；
-       * 插件停用则其托管技能不可用）。每回合重读——运行时修改 Profile 或
-       * 插件启停在下一回合即时生效。Profile 不存在属配置异常，显式报错。
+       * Read the current Profile's real config + plugin enablement, and filter the skill catalog
+       * by the shared isSkillAvailable rule (Profile.skills defaults to all, [] disables all, a
+       * non-empty whitelist filters; a disabled plugin's managed skills are unavailable). Re-read
+       * every turn -- runtime Profile edits or plugin toggles take effect on the next turn. A missing Profile is a config anomaly and errors explicitly.
        */
       const listAvailableSkills = async (profileId: string): Promise<SkillSummary[]> => {
         const profile = await profiles.get(profileId)
         if (profile === undefined) {
-          throw new HelmError('profile_not_found', `会话绑定 profile '${profileId}' 不存在（技能目录无法按 Profile 过滤）`, 500, { profileId })
+          throw new HelmError('profile_not_found', `conversation-bound profile '${profileId}' does not exist (the skill catalog cannot be filtered by Profile)`, 500, { profileId })
         }
         const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id))
         const all = await skills.list()
@@ -157,9 +157,9 @@ export function createProfilePlugin(): PluginDefinition {
 
       ctx.hook.onBeforeTurn(async (turn) => {
         const profileId = turn.conversation.profileId;
-        // 工作区 AGENTS.md（项目级约定）与人格/技能并行读取：每回合实时重读，
-        // 文件修改下一回合即时生效；读取失败或远端节点离线的显式说明策略
-        // 见 profile/agents-md.ts（诚实性：缺失属常态静默跳过，故障不吞）。
+        // The workspace AGENTS.md (project-level conventions) reads in parallel with persona/skills:
+        // re-read live every turn; file edits take effect on the next turn; the explicit-explanation
+        // policy for read failures or a remote node going offline lives in profile/agents-md.ts
         const [rawSystem, available, agentsMd] = await Promise.all([
           readSystemOrEmpty(profileId),
           listAvailableSkills(profileId),
@@ -167,19 +167,19 @@ export function createProfilePlugin(): PluginDefinition {
         ]);
         const sections = [...turn.sections];
         if (rawSystem.trim()) sections.push({ id: 'profile.system', text: rawSystem });
-        // 资产缺失必须向模型显式告知（不能沉默换人格）：SYSTEM.md 缺失/为空。
+        // Asset absence must be told to the model explicitly (never a silent persona swap): SYSTEM.md missing/empty.
         if (!rawSystem.trim()) {
           sections.push({
             id: 'profile.assets-missing',
             text: [
               '<profile_assets_missing>',
-              `本回合缺少 Profile '${profileId}' 的 SYSTEM.md（文件不存在或为空）。`,
-              '你当前没有该 Profile 的人格设定：请告知用户资产缺失，谨慎回答，不要假装拥有特定人格；资产写入后自动恢复。',
+              `This turn lacks the SYSTEM.md of Profile '${profileId}' (file missing or empty).`,
+              'You currently have no persona for this Profile: tell the user the asset is missing, answer carefully, and do not pretend to have a specific persona; it recovers automatically once the asset is written.',
               '</profile_assets_missing>',
             ].join('\n'),
           });
         }
-        // 工作区项目约定紧随人格资产、先于技能目录注入。
+        // The workspace project conventions are injected right after persona assets, before the skill catalog.
         if (agentsMd.kind === 'section') sections.push({ id: agentsMd.id, text: agentsMd.text });
         if (available.length) {
           const catalog = available.map((skill) =>
@@ -194,11 +194,11 @@ export function createProfilePlugin(): PluginDefinition {
       });
 
       /**
-       * 读取候选 Profile 的 SYSTEM.md 提取单行摘要：缺失（not_found）
-       * 只影响该候选的 summary 字段（undefined，不伪造简介），不告警——
-       * 认知缺失告警纪律只针对「当前会话绑定 Profile」的人格资产（见
-       * readSystemOrEmpty）；候选缺 SYSTEM 属配置态，不放大告警面。
-       * 其余 IO / 权限错误如实上抛（不吞、不降级）。
+       * Read candidate Profiles' SYSTEM.md to extract one-line summaries: a missing file
+       * (not_found) only affects that candidate's summary field (undefined, no fabricated bio),
+       * without warning -- the cognitive-absence warning discipline applies only to the current
+       * conversation's bound-Profile persona assets (see readSystemOrEmpty); a candidate missing
+       * SYSTEM.md is a configuration state and does not widen the warning surface. Other IO /
        */
       const readCandidateSummary = async (profileId: string): Promise<string | undefined> => {
         try {
@@ -211,16 +211,16 @@ export function createProfilePlugin(): PluginDefinition {
       }
 
       /**
-       * 协作目录统一计算（补全动作与 before_turn 注入共用同一事实源）：
-       * - 排除自身 / humanSelectable:false / 托管插件未启用 / runtime.kind
-       *   无已启用 profile.runtime UI 贡献对应（详见 catalog.ts 规则）；
-       * - 仅依据回合是否还有派工工具：builtin:workflow 对达到深度上限的受管
-       *   子代理（编排叶子）在更高优先级钩子剥离 subagent/SubagentWorkflow
-       *   后，此处自然返回空——不按 parentConversationId 一刀切（fork /
-       *   SuperAgent worker 同样有父链，但应保留完整协作能力；一层子代理
-       *   默认保留派工工具，同样注入目录）；
-       * - 每次调用实时重读 Profile 目录与插件状态（增删改 / 启停下次生效）。
-       * 任一候选摘要读取的非 not_found 错误如实上抛（显式失败）。
+       * Unified computation of the collaboration catalog (the completion action and the
+       * before_turn injection share the same fact source):
+       * - exclude self / humanSelectable:false / managed plugins disabled / runtime.kind
+       *   without an enabled profile.runtime UI contribution (see catalog.ts rules);
+       * - decide purely by whether the turn still has dispatch tools: builtin:workflow strips
+       *   subagent/SubagentWorkflow for managed subagents at the depth cap (orchestration leaves)
+       *   at a higher-priority hook, so this naturally returns empty -- no blanket exclusion by
+       * parentConversationId (fork / SuperAgent workers also have parent chains yet should keep
+       *   full collaboration ability; level-1 subagents keep dispatch tools by default and also get the catalog);
+       * - re-read the Profile catalog and plugin state live on every call (edits/toggles take effect next turn).
        */
       const computeCatalog = async (currentProfileId: string): Promise<ProfileCatalogEntry[]> => {
         const [allProfiles, pluginSummaries, uiContributions] = await Promise.all([
@@ -244,21 +244,21 @@ export function createProfilePlugin(): PluginDefinition {
       }
 
       /**
-       * 本回合实际可用的派工工具名（只认 turn.tools 现存声明，避免幻影工具）。
-       * 目录注入钩子以低于默认值的 priority 运行（见 CATALOG_HOOK_PRIORITY），
-       * 因此此处看到的是默认优先级钩子（如路由模式剥离 subagent）收敛后的
-       * 最终工具清单——补全动作拿不到回合工具时另行降级判定（见动作实现）。
+       * The dispatch tool names actually available this turn (only counting existing declarations in turn.tools, avoiding phantom tools).
+       * The catalog injection hook runs at a below-default priority (see CATALOG_HOOK_PRIORITY),
+       * so what it sees is the final tool list converged by the default-priority hooks (e.g.
+       * routing mode stripping subagent) -- the completion action falls back to a separate judgment when it cannot see the turn's tools (see the action implementation).
        */
       const dispatchToolNames = (tools: readonly { name: string }[]): string[] =>
         ['subagent', 'SubagentWorkflow'].filter((name) => tools.some((t) => t.name === name))
 
       ctx.hook.onBeforeTurn(
         async (turn) => {
-          // 无可用派工工具的回合不注入目录（避免教唆调用不存在的工具；深度
-          // 上限的叶子子代理派工工具已被 builtin:workflow 钩子剥离，在此自然
-          // 收敛）。工具收敛后的 tools 只读，不改动；不按 parentConversationId
-          // 排除（fork / SuperAgent worker 同样有父链，应保留协作能力；
-          // 一层子代理默认保留派工工具，同样注入目录）。
+          // Turns without available dispatch tools get no catalog (avoiding teaching calls to
+          // nonexistent tools; depth-capped leaf subagents had their dispatch tools stripped by the
+          // builtin:workflow hook, converging naturally here). The post-convergence tools are
+          // read-only here; no exclusion by parentConversationId (fork / SuperAgent workers also
+          // have parent chains and should keep collaboration ability; level-1 subagents keep dispatch tools by default and also get the catalog).
           const tools = dispatchToolNames(turn.tools)
           if (tools.length === 0) return { action: 'continue' }
           const entries = await computeCatalog(turn.conversation.profileId)
@@ -269,19 +269,19 @@ export function createProfilePlugin(): PluginDefinition {
         { priority: CATALOG_HOOK_PRIORITY },
       )
 
-      // ---- @ 补全动作：list_mentionable（幂等只读；自动映射 HTTP / CLI） ----
+      // ---- @ completion action: list_mentionable (idempotent read-only; auto-mapped to HTTP / CLI) ----
       ctx.action<
         { query?: string; conversationId?: number; profileId?: string },
         { items: Array<{ id: string; label: string; insertText: string; hint: string; icon: string }> }
       >({
         id: 'list_mentionable',
-        description: '列出当前会话或待命角色可 @ 点名协作的 Profile 候选（@ 补全源；--current / --conversation-id / --profile-id 选上下文）',
+        description: 'List Profile candidates that the current conversation or a standby role can @ mention for collaboration (the @ completion source; --current / --conversation-id / --profile-id pick the context)',
         inputSchema: {
           type: 'object',
           properties: {
-            query: { type: 'string', description: '过滤前缀（缺省空）' },
-            conversationId: { type: 'number', description: '显式目标会话（CLI 无调用上下文时使用；Web 会话补全不传，以服务端上下文为准）' },
-            profileId: { type: 'string', minLength: 1, description: '显式目标角色（无会话上下文如待命草稿态时使用；有会话上下文时以服务端会话所属角色为准）' },
+            query: { type: 'string', description: 'Filter prefix (empty by default)' },
+            conversationId: { type: 'number', description: 'Explicit target conversation (used when the CLI has no calling context; Web conversation completion omits it and defers to the server context)' },
+            profileId: { type: 'string', minLength: 1, description: 'Explicit target role (used with no conversation context, e.g. standby draft mode; with conversation context, the server conversation\'s role wins)' },
           },
           additionalProperties: false,
         },
@@ -309,10 +309,10 @@ export function createProfilePlugin(): PluginDefinition {
         },
         idempotent: true,
         async handler(input, context) {
-          // 身份裁决：调用上下文会话（Web / --current 注入的外层 conversationId）
-          // 是唯一可信来源；无上下文时依次接受显式 input.conversationId 或
-          // input.profileId（待命草稿态），且必须经真实校验存在。三者都缺 →
-          // 显式 validation_error，绝不猜测默认会话或角色。
+          // Identity adjudication: the calling-context conversation (the outer conversationId
+          // injected by Web / --current) is the only trusted source; without it, accept an explicit
+          // input.conversationId or input.profileId in that order (standby draft mode), and it must
+          // really exist. All three missing -> explicit validation_error; never guess a default conversation or role.
           let targetProfileId: string
           if (context.conversationId !== undefined) {
             targetProfileId = ctx.host.getConversation(context.conversationId).profileId
@@ -321,20 +321,20 @@ export function createProfilePlugin(): PluginDefinition {
           } else if (input.profileId !== undefined) {
             const profile = await profiles.get(input.profileId)
             if (profile === undefined) {
-              throw new HelmError('not_found', `角色不存在: ${input.profileId}`, 404, { profileId: input.profileId })
+              throw new HelmError('not_found', `profile does not exist: ${input.profileId}`, 404, { profileId: input.profileId })
             }
             targetProfileId = profile.id
           } else {
             throw new HelmError(
               'validation_error',
-              '缺少会话或角色上下文：Web 补全自动携带；CLI 请用 --current 或 --conversation-id / --profile-id 显式指定',
+              'Missing conversation or role context: Web completion carries it automatically; in the CLI, use --current or specify --conversation-id / --profile-id explicitly',
               400,
             )
           }
           const query = (input.query ?? '').trim().toLowerCase()
-          // 补全无回合工具清单：按插件可用性判定候选（不伪称能确定最终工具
-          // 清单——注入目录时另有回合级收敛，两者规则同源；嵌套子代理的
-          // 回合级剥离由 builtin:workflow 钩子完成，补全面不再按父链排除）。
+          // Completion has no turn tool list: judge candidates by plugin availability (never
+          // claiming to know the final tool list -- turn-level convergence happens separately at
+          // catalog injection, both sharing the same rules; turn-level stripping of nested subagents
           const entries = await computeCatalog(targetProfileId)
           const items = entries
             .filter((entry) => {
@@ -353,10 +353,10 @@ export function createProfilePlugin(): PluginDefinition {
         },
       })
 
-      // ---- @ 补全源声明（复用宿主通用补全渲染；label 仅用于插件源间排序） ----
+      // ---- @ completion source declaration (reusing the host's generic completion rendering; label only orders plugin sources) ----
       ctx.ui.composerCompleter({
         id: 'profile-mentions',
-        label: '点名角色',
+        label: 'Mention roles',
         trigger: '@',
         priority: 100,
         source: { kind: 'action', actionId: 'list_mentionable' },
@@ -364,7 +364,7 @@ export function createProfilePlugin(): PluginDefinition {
 
       ctx.tool<{ skillId: string; path?: string }>({
         name: 'load_skill',
-        description: '读取技能 SKILL.md，或按需读取技能目录内的参考文件。path 示例：references/guide.md。',
+        description: 'Read a skill\'s SKILL.md, or reference files inside the skill directory on demand. Example path: references/guide.md.',
         inputSchema: {
           type: 'object',
           properties: { skillId: { type: 'string', minLength: 1 }, path: { type: 'string', minLength: 1 } },
@@ -372,26 +372,26 @@ export function createProfilePlugin(): PluginDefinition {
           additionalProperties: false,
         },
         async execute(input, context) {
-          // 会话当前 Profile 的白名单与插件启停状态实时判定（与目录注入同规则）：
-          // Profile 白名单外或托管插件停用 → 403 skill_not_available；
-          // 技能不存在 → 404 not_found（不泄漏内容）。路径安全校验在
-          // SkillService.readFile 原样保留（穿越/绝对路径/软链均拒绝）。
-          // 注意：这只是认知目录边界，不是权限沙箱——bash/API 仍可读文件。
+          // Judge live by the conversation's current Profile whitelist and plugin enablement (same
+          // rule as catalog injection): outside the Profile whitelist or managed plugin disabled ->
+          // 403 skill_not_available; skill nonexistent -> 404 not_found (no content leakage). Path
+          // safety checks are preserved as-is in SkillService.readFile (traversal/absolute
+          // paths/symlinks all rejected).
           const conversation = ctx.host.getConversation(context.conversationId);
           const profileId = conversation.profileId;
           const profile = await profiles.get(profileId);
           if (profile === undefined) {
-            throw new HelmError('profile_not_found', `会话绑定 profile '${profileId}' 不存在，无法判定技能可用性`, 500, { profileId });
+            throw new HelmError('profile_not_found', `conversation-bound profile '${profileId}' does not exist; cannot determine skill availability`, 500, { profileId });
           }
           const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id));
           const skill = (await skills.list()).find((s) => s.id === input.skillId);
           if (skill === undefined) {
-            throw new HelmError('not_found', `技能不存在: ${input.skillId}`, 404, { skillId: input.skillId });
+            throw new HelmError('not_found', `skill does not exist: ${input.skillId}`, 404, { skillId: input.skillId });
           }
           if (!isSkillAvailable(skill, profile, enabledPluginIds)) {
             throw new HelmError(
               'skill_not_available',
-              `技能 '${input.skillId}' 对 profile '${profileId}' 不可用（不在白名单内，或托管插件已停用）；如需使用请调整 profile skills 配置`,
+              `skill '${input.skillId}' is unavailable for profile '${profileId}' (not whitelisted, or its managing plugin is disabled); adjust the profile skills config to use it`,
               403,
               { skillId: input.skillId, profileId, managedByPlugin: skill.managedByPlugin },
             );
@@ -400,11 +400,11 @@ export function createProfilePlugin(): PluginDefinition {
         },
       });
 
-      // assistant Profile 站位：指向 Profile 而非某一具体会话（会话全部删除后
-      // 站位仍在，点击可新建会话；不依赖根会话存在）。
+      // assistant Profile standing entry: points at the Profile rather than any particular
+      // conversation (the entry survives even with all conversations deleted; clicking creates a
       ctx.ui.sidebarItem({
         id: 'assistant',
-        label: '个人助理',
+        label: 'Personal Assistant',
         target: `conversation:profile:${DEFAULT_PROFILE_ID}`,
         order: 0,
       });

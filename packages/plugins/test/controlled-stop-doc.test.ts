@@ -7,7 +7,7 @@
  *    从序列化测试存储读回（真实 SQLite 验证见 workflow-shutdown.integration.test.ts）；
  * 2. stop 之外（窗口外）同句柄写入被拒；stop 返回后拒绝；reenable 旧 epoch 拒绝；
  *    停止窗口允许当前周期已有回调收尾，窗口结束后残留回调一律被拒；
- * 3. 真实 builtin:workflow 带运行中任务受控 dispose/close：run 终态落私有记录文件
+ * 3. 真实 builtin:workflow 带运行中任务受控 dispose/close：run 终态落私有record file
  *    （records doc 只存轻量索引）与公共 runs，重启读取一致，无 unhandled rejection；
  * 4. start 屏障后某插件 start 失败 + 先前插件 stop 失败：错误同时含原始 start
  *    失败与 rollback stop 失败诊断（pluginId + JSON-safe stop 错误）。
@@ -427,7 +427,7 @@ test('真实 workflow 插件：运行中 run 受控 dispose，终态落私有 re
   assert.equal(started.run.status, 'running', 'run 应在运行中（spawn 挂起）')
 
   // 受控 dispose：stop 链内 close() abort 运行中 run → 引擎 settle 链写终态到
-  // 私有记录文件并同步 records 索引（此时 phase=deactivating，doc 写入必须经
+  // 私有record file并同步 records 索引（此时 phase=deactivating，doc 写入必须经
   // 受控停止窗口放行）→ 最终 runs 投影同步。
   releaseSpawn()
   await host.dispose()
@@ -439,7 +439,7 @@ test('真实 workflow 插件：运行中 run 受控 dispose，终态落私有 re
   assert.equal(runIds.length, 1, `应有恰好一条 run 索引（实际 ${JSON.stringify(runIds)}）`)
   assert.equal(runIds[0]!.id, started.run.id, '索引指向该 run')
   assert.equal(runIds[0]!.status, 'aborted', '索引状态同步终态')
-  // 完整 RunRecord（新契约）：插件私有 artifacts 记录文件，终态已持久（不是 running 残留）。
+  // 完整 RunRecord（新契约）：插件私有 artifacts record file，终态已持久（不是 running 残留）。
   const record = JSON.parse(
     readFileSync(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${started.run.id}.record.json`), 'utf-8'),
   ) as { status?: string }

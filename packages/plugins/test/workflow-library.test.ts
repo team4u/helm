@@ -204,10 +204,10 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
     const dataDir = join(root, 'save-safe')
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     try {
-      assertHelmError(() => service.save({ script: GOOD_SCRIPT, name: '../escape' }), 'validation_error', /非法/)
+      assertHelmError(() => service.save({ script: GOOD_SCRIPT, name: '../escape' }), 'validation_error', /invalid/)
       assertHelmError(() => service.save({ script: GOOD_SCRIPT, name: 'a/b' }), 'validation_error')
-      assertHelmError(() => service.save({ script: GOOD_SCRIPT, fromRunId: 'wf_x' }), 'validation_error', /恰好提供一个/)
-      assertHelmError(() => service.save({}), 'validation_error', /恰好提供一个/)
+      assertHelmError(() => service.save({ script: GOOD_SCRIPT, fromRunId: 'wf_x' }), 'validation_error', /exactly one of/)
+      assertHelmError(() => service.save({}), 'validation_error', /exactly one of/)
     } finally {
       await service.close()
     }
@@ -224,10 +224,10 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
     try {
       // 既有越界 symlink：名称与 meta 一致时仍被 realpath 校验拒绝（不读不写）。
       const hijackScript = 'export const meta = { name: "hijack", description: "d" }\nreturn 1'
-      assertHelmError(() => service.save({ script: hijackScript, name: 'hijack', overwrite: true }), 'validation_error', /符号链接/)
+      assertHelmError(() => service.save({ script: hijackScript, name: 'hijack', overwrite: true }), 'validation_error', /symlink/)
       // list 层：越界 symlink 因 meta 可读仍会出现（list 只拒绝名称非法）；此处验证不崩溃且事实如实。
       // get 层同样拒绝。
-      assertHelmError(() => service.get('hijack'), 'validation_error', /符号链接/)
+      assertHelmError(() => service.get('hijack'), 'validation_error', /symlink/)
     } finally {
       await service.close()
     }
@@ -278,13 +278,13 @@ describe('WorkflowService.save：fromRunId 源', { timeout: 60_000 }, () => {
   it('subagent run 拒绝；无脚本源拒绝；不存在 run 404', timeout, async () => {
     const service = seededService('fromrun-subagent', { kind: 'subagent' })
     try {
-      assertHelmError(() => service.save({ fromRunId: 'wf_seed1' }), 'validation_error', /子代理/)
+      assertHelmError(() => service.save({ fromRunId: 'wf_seed1' }), 'validation_error', /subagent/)
     } finally {
       await service.close()
     }
     const noSource = seededService('fromrun-nosource', {})
     try {
-      assertHelmError(() => noSource.save({ fromRunId: 'wf_seed1' }), 'validation_error', /脚本源/)
+      assertHelmError(() => noSource.save({ fromRunId: 'wf_seed1' }), 'validation_error', /script source/)
     } finally {
       await noSource.close()
     }
@@ -335,9 +335,9 @@ describe('WorkflowService.get / delete / list', { timeout: 60_000 }, () => {
       // 再删 404。
       assertHelmError(() => service.delete('release'), 'not_found')
       // 目录条目拒绝。
-      assertHelmError(() => service.delete('dir'), 'validation_error', /常规文件/)
+      assertHelmError(() => service.delete('dir'), 'validation_error', /regular file/)
       // 越界符号链接拒绝（不删目标也不删链接）。
-      assertHelmError(() => service.delete('linked'), 'validation_error', /符号链接/)
+      assertHelmError(() => service.delete('linked'), 'validation_error', /symlink/)
       assert.ok(readFileSync(outside, 'utf-8') === GOOD_SCRIPT, '符号链接目标不得被删除')
     } finally {
       await service.close()
