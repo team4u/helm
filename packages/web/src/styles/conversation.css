@@ -1066,7 +1066,7 @@ pre {
 .trace-group-meta {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--fg-subtle);
+  color: color-mix(in srgb, var(--fg-muted) 88%, transparent);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1229,6 +1229,14 @@ pre {
   font-size: 13.5px;
   color: var(--fg);
   max-width: 100%;
+}
+
+.thinking-expanded-body .msg-ai-body > :is(h1, h2, h3, h4, p):first-child {
+  margin-top: 0;
+}
+
+.thinking-expanded-body .msg-ai-body > :is(p, ul, ol, pre, blockquote, .code-block-wrap):last-child {
+  margin-bottom: 0;
 }
 
 /* 思考过程整体弱化：加粗/行内代码/链接继承弱化色，仅靠字重与底色区分 */
