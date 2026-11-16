@@ -508,7 +508,7 @@ export class RunStore {
     if (live.active) return { ghost: false, reason: 'the takeover run is still running' }
     try {
       this.load(takeoverRunId)
-      return { ghost: false, reason: 'the takeover run's record still exists' }
+      return { ghost: false, reason: "the takeover run's record still exists" }
     } catch (error) {
       if (!(error instanceof HelmError && error.code === 'not_found')) throw error
     }
