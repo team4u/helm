@@ -196,10 +196,11 @@ export interface EnvFabric {
    *   启动任何子进程）；只读 cwd/fd/comm 定位信息，绝不读 cmdline/environ；
    * - 远端：经 envPathUsage RPC 在目标节点扫描，**绝不回退本机**；节点
    *   离线抛 409 node_offline，旧版守护进程无本方法抛 501
-   *   path_usage_not_supported，可观测集合内异常或上限触发时返回
-   *   complete=false（调用方必须 fail-closed，绝不当 0 占用）；跨 uid
-   *   结构性盲区计入 unobservable 并在 diagnostics 如实呈现（不影响
-   *   complete，同 uid 进程永远可观测）；
+   *   path_usage_not_supported，可观测集合内非权限类异常或上限触发时返回
+   *   complete=false（调用方必须 fail-closed，绝不当 0 占用）；权限
+   *   不可观测的进程（跨 uid 或 non-dumpable，如 systemd --user）计入
+   *   unobservable 并在 diagnostics 如实呈现（不影响 complete，与 Hub
+   *   同 uid 的普通可转储进程永远可观测）；
    * - 非 Linux 平台显式 not_supported（HelmError path_usage_not_supported）。
    */
   inspectPathUsage(nodeId: string, path: string, signal?: AbortSignal): Promise<NodePathUsage>
@@ -268,9 +269,9 @@ function validatePathUsageSnapshot(nodeId: string, expectedPath: string, value: 
     throw fail(`未截断但 matchedTotal(${matchedTotal}) 与清单数(${processes.length})不一致`)
   }
   if (typeof v['complete'] !== 'boolean') throw fail('complete 非布尔')
-  // 跨 uid 盲区计数：存在时必须是非负安全整数；缺省按 0 采信（旧节点
-  // 任何持久拒绝都报 complete=false，缺省 0 语义安全——不会把盲区伪装成
-  // 完整且零盲区的干净快照）。
+  // 权限不可观测（跨 uid 或 non-dumpable）盲区计数：存在时必须是非负
+  // 安全整数；缺省按 0 采信（旧节点任何持久拒绝都报 complete=false，
+  // 缺省 0 语义安全——不会把盲区伪装成完整且零盲区的干净快照）。
   if (v['unobservable'] !== undefined && (!Number.isSafeInteger(v['unobservable']) || (v['unobservable'] as number) < 0)) {
     throw fail('unobservable 非非负整数')
   }
@@ -554,13 +555,11 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       if (nodeId === 'local') {
         // Hub 进程内真实扫描（platform 经 hubPlatform 端口，测试可注入；
         // 生产为 process.platform，绝不伪造）。fs 适配与远端 daemon 共用
-        // @helm/env-io 同一实现，绝不各复制一套 fs 语义。scannerUid 传自身
-        // uid：跨 uid 拒读属结构性盲区（unobservable 呈现，不影响完整性）。
+        // @helm/env-io 同一实现，绝不各复制一套 fs 语义。
         const io = createNodePathUsageIo()
         const result = await scanPathUsage(expectedPath, {
           io,
           platform: hubPlatform(),
-          ...(typeof process.getuid === 'function' ? { scannerUid: process.getuid() } : {}),
           signal,
         })
         if (result.ok) return result.value

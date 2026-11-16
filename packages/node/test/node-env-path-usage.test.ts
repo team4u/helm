@@ -75,8 +75,8 @@ describe('envPathUsage：真实 /proc', { timeout: 60_000 }, () => {
       assert.equal(hit!.source, 'cwd')
       assert.equal(hit!.path, target)
       assert.equal(typeof hit!.name, 'string', '应含进程名（comm）')
-      // 完整性不假设 root：非完整环境必须携带 fail-closed 诊断；跨 uid
-      // 盲区（非 root 宿主上的其他 uid 进程）计入 unobservable 且不影响 complete。
+      // 完整性不假设 root：非完整环境必须携带 fail-closed 诊断；权限拒读
+      // （跨 uid 或 non-dumpable，如 systemd --user）计入 unobservable 且不影响 complete。
       assert.equal(typeof r.value.complete, 'boolean')
       assert.equal(typeof r.value.unobservable, 'number', '快照必须携带盲区计数')
       assert.ok(r.value.unobservable >= 0, '盲区计数必须是非负整数')

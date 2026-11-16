@@ -16,9 +16,9 @@
  *
  * 平台契约：真实 /proc 链路仅 Linux；非 Linux 平台本文件不整体失败也不静默
  * skip——显式断言 path_usage_not_supported（当前跨平台行为限制的如实契约）。
- * 非 root 环境下其他 uid 属主进程不可读：计入 unobservable（结构性盲区，
- * 不影响 complete）；占用命中（同 uid 子进程）断言不受影响，完整性只断言
- * 布尔与 fail-closed 诊断。
+ * 非 root 环境下权限拒读（跨 uid 或 non-dumpable，如 systemd --user）：
+ * 计入 unobservable（结构性盲区，不影响 complete）；占用命中（同 uid
+ * 子进程）断言不受影响，完整性只断言布尔与 fail-closed 诊断。
  */
 
 import { test, describe, it, before, after } from 'node:test'
