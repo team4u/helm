@@ -36,14 +36,14 @@ function toolResultEntry(text: string, extra: Record<string, unknown> = {}): Con
   }
 }
 
-test('pi.system 过滤；其余 kind 原样透出', () => {
+test('pi.system 过滤；其余 kind 原样透出', { timeout: 60_000 }, () => {
   const system: ConversationEntry = { id: '1', kind: 'pi.system', data: { pos: 1 } }
   assert.equal(projectDetailEntry(system), undefined)
   const input: ConversationEntry = { id: '2', kind: 'helm.input', data: { id: 'i', text: 'hi' } }
   assert.deepEqual(projectDetailEntry(input), input)
 })
 
-test('签名剥离：thinkingSignature/textSignature/thoughtSignature 深度移除，其余保留', () => {
+test('签名剥离：thinkingSignature/textSignature/thoughtSignature 深度移除，其余保留', { timeout: 60_000 }, () => {
   const entry: ConversationEntry = {
     id: '3',
     kind: 'pi.assistant',
@@ -74,12 +74,12 @@ test('签名剥离：thinkingSignature/textSignature/thoughtSignature 深度移�
   assert.equal((content[2] as { name?: string }).name, 'bash')
 })
 
-test('stripEntrySignatures 无签名时零拷贝返回原对象', () => {
+test('stripEntrySignatures 无签名时零拷贝返回原对象', { timeout: 60_000 }, () => {
   const entry: ConversationEntry = { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant' }] }
   assert.equal(stripEntrySignatures(entry), entry)
 })
 
-test('纯文本超限截断：头尾保留 + 消息级标记 + 尾部内容保留', () => {
+test('纯文本超限截断：头尾保留 + 消息级标记 + 尾部内容保留', { timeout: 60_000 }, () => {
   const head = 'H'.repeat(TOOL_RESULT_HEAD_CHARS)
   const mid = 'M'.repeat(3000)
   const tail = 'T'.repeat(200)
@@ -100,7 +100,7 @@ test('纯文本超限截断：头尾保留 + 消息级标记 + 尾部内容保�
   assert.equal((small!.model![0] as Record<string, unknown>)['truncated'], undefined)
 })
 
-test('spill 预览文本（含 [Artifact] id= 全文入口）豁免：绝不叠加二次截断', () => {
+test('spill 预览文本（含 [Artifact] id= 全文入口）豁免：绝不叠加二次截断', { timeout: 60_000 }, () => {
   const spillText =
     `${'S'.repeat(4200)}\n\n…[输出超长，已截断。完整结果 50000 字节已写入产物]…\n\n` +
     `--- 尾部摘要 ---\n${'E'.repeat(200)}\n\n` +
@@ -111,7 +111,7 @@ test('spill 预览文本（含 [Artifact] id= 全文入口）豁免：绝不叠�
   assert.equal(((msg['content'] as Array<{ text: string }>)[0]!.text), spillText, '原文原样透出')
 })
 
-test('details 存在仍截断纯文本 content（details 原样透传）', () => {
+test('details 存在仍截断纯文本 content（details 原样透传）', { timeout: 60_000 }, () => {
   const text = `${'H'.repeat(TOOL_RESULT_HEAD_CHARS)}${'M'.repeat(2000)}${'T'.repeat(TOOL_RESULT_TAIL_CHARS)}`
   const entry = toolResultEntry(text, { details: { ui: 'meta', thinkingSignature: 'business-value' }, durationMs: 12 })
   const projected = projectDetailEntry(entry)!
@@ -122,7 +122,7 @@ test('details 存在仍截断纯文本 content（details 原样透传）', () =>
   assert.equal(msg['durationMs'], 12)
 })
 
-test('可解析 JSON 信封豁免（subagent/SubagentWorkflow 结构化结果）', () => {
+test('可解析 JSON 信封豁免（subagent/SubagentWorkflow 结构化结果）', { timeout: 60_000 }, () => {
   const json = JSON.stringify({ ok: true, runId: 'r1', result: 'x'.repeat(4000) })
   const projected = projectDetailEntry(toolResultEntry(json))!
   const msg = projected.model![0] as Record<string, unknown>
@@ -138,7 +138,7 @@ test('可解析 JSON 信封豁免（subagent/SubagentWorkflow 结构化结果）
   assert.equal((truncated.model![0] as Record<string, unknown>)['truncated'], true)
 })
 
-test('字符串 content 与非纯文本 content：前者截断、后者原样', () => {
+test('字符串 content 与非纯文本 content：前者截断、后者原样', { timeout: 60_000 }, () => {
   const entry: ConversationEntry = {
     id: '6',
     kind: 'pi.tool-result',
