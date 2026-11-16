@@ -4,11 +4,18 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry, ConversationLive } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
 // 类型引用（test-only）：workflow/herdr 共享契约已自 @helm/protocol 迁至 kernel 插件层；
 // 与既有 web 测试引用 kernel 私有源码的约定一致（如 mermaid-theme.test.ts），纯类型零运行时耦合，不放宽生产包边界。
 import type { WorkflowRunSummary } from '@helm/plugins/contracts'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
+import { buildAncestorChain, collectSubtreeIds, MAX_ANCESTRY_DEPTH } from '../src/conversation/ancestry-model.js'
+import {
+  archiveBatchNotice,
+  patchConversationArchived,
+  patchConversationsArchived,
+} from '../src/shell/archive-ops.js'
+import { ARCHIVED_TAG } from '../src/shell/sidebar-model.js'
 // subagent/workflow 纯逻辑已迁入 builtin:workflow 插件 client 模块（kernel 真实
 // esbuild 编译后动态 import；react 等 shim 在编译前挂载，类型经 helpers 断言）。
 import { importWorkflowModels, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
@@ -1380,4 +1387,127 @@ test('buildTimelineItems：compacting 未开启时不插入 pending compaction �
     { compacting: false },
   )
   assert.equal(falseFlag.some((item) => item.kind === 'divider' && item.pending === true), false)
+})
+
+// ---------------------------------------------------------------------------
+// 祖先链与后代收集（原 ancestry-model.test.ts 合并）
+// ---------------------------------------------------------------------------
+
+function ancestrySummary(id: number, parentConversationId?: number): ConversationSummary {
+  return {
+    id,
+    title: `会话 ${id}`,
+    profileId: 'assistant',
+    tags: [],
+    cwd: '/tmp',
+    model: 'faux/model',
+    thinkingLevel: '',
+    status: 'idle',
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: id,
+    updatedAt: id,
+    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
+  }
+}
+
+test('buildAncestorChain 返回根在前的任意深度祖先链', { timeout: 60_000 }, () => {
+  const conversations = [ancestrySummary(1), ancestrySummary(11, 1), ancestrySummary(111, 11), ancestrySummary(1111, 111)]
+  assert.deepEqual(buildAncestorChain(conversations, 1111), [1, 11, 111])
+  assert.deepEqual(buildAncestorChain(conversations, 11), [1])
+  assert.deepEqual(buildAncestorChain(conversations, 1), [], '根会话无祖先链')
+})
+
+test('buildAncestorChain 对环与缺失摘要安全截断', { timeout: 60_000 }, () => {
+  const cyclic = [ancestrySummary(1, 2), ancestrySummary(2, 1), ancestrySummary(3, 2)]
+  assert.deepEqual(buildAncestorChain(cyclic, 3), [1, 2])
+  const missing = [ancestrySummary(5, 99)]
+  assert.deepEqual(buildAncestorChain(missing, 5), [99])
+  const deep: ConversationSummary[] = [ancestrySummary(0)]
+  for (let i = 1; i <= MAX_ANCESTRY_DEPTH + 10; i++) deep.push(ancestrySummary(i, i - 1))
+  const chain = buildAncestorChain(deep, MAX_ANCESTRY_DEPTH + 10)
+  assert.equal(chain.length, MAX_ANCESTRY_DEPTH)
+  assert.equal(chain[0], 10, '超深截断时保留最靠近根的 MAX_ANCESTRY_DEPTH 级（根在前）')
+  assert.equal(chain[chain.length - 1], MAX_ANCESTRY_DEPTH + 9, '链尾是最近祖先')
+})
+
+test('collectSubtreeIds 收集含自身的全部后代且防环', { timeout: 60_000 }, () => {
+  const conversations = [ancestrySummary(1), ancestrySummary(11, 1), ancestrySummary(12, 1), ancestrySummary(111, 11), ancestrySummary(9)]
+  assert.deepEqual([...collectSubtreeIds(conversations, 1)].sort((a, b) => a - b), [1, 11, 12, 111])
+  assert.deepEqual([...collectSubtreeIds(conversations, 11)], [11, 111])
+  assert.deepEqual([...collectSubtreeIds(conversations, 9)], [9])
+  const cyclic = [ancestrySummary(1, 11), ancestrySummary(11, 1), ancestrySummary(111, 11)]
+  assert.deepEqual([...collectSubtreeIds(cyclic, 1)].sort((a, b) => a - b), [1, 11, 111])
+})
+
+// ---------------------------------------------------------------------------
+// 归档操作与批量错误汇总（原 archive-ops.test.ts 合并）
+// ---------------------------------------------------------------------------
+
+function archiveConv(id: number, tags: string[] = []): Pick<ConversationSummary, 'id' | 'tags'> {
+  return { id, tags }
+}
+
+test('patchConversationArchived 保留其他 tags 并发送归档/恢复 PATCH', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  const requests: Array<{ url: string; method: string; body: unknown }> = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({
+      url: String(input),
+      method: init?.method ?? 'GET',
+      body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+    })
+    return new Response(JSON.stringify({ id: 7, tags: ['keep', ARCHIVED_TAG] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as typeof fetch
+
+  try {
+    await patchConversationArchived(archiveConv(7, ['keep']), true)
+    await patchConversationArchived(archiveConv(7, ['keep', ARCHIVED_TAG]), false)
+    assert.deepEqual(requests, [
+      { url: '/api/conversations/7', method: 'PATCH', body: { tags: ['keep', ARCHIVED_TAG] } },
+      { url: '/api/conversations/7', method: 'PATCH', body: { tags: ['keep'] } },
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('patchConversationsArchived 汇总批量部分失败，archiveBatchNotice 如实报告', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).endsWith('/2')) {
+      return new Response(JSON.stringify({ error: { code: 'conflict', message: '会话正在更新' } }), {
+        status: 409,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as typeof fetch
+
+  try {
+    const outcome = await patchConversationsArchived([archiveConv(1), archiveConv(2)], true)
+    assert.deepEqual(outcome, {
+      attempted: 2,
+      fulfilled: 1,
+      rejected: 1,
+      firstError: '会话正在更新',
+    })
+    assert.deepEqual(archiveBatchNotice(true, outcome), {
+      type: 'notification',
+      level: 'warning',
+      title: '批量归档部分失败',
+      body: '成功 1 个，失败 1 个：会话正在更新',
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })

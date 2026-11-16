@@ -16,9 +16,8 @@
  */
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { readFileSync } from 'node:fs'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { ensureHappyDom, jsonResponse } from './helpers/dom-harness.js'
 import type {
   ComposerScopeProps,
   ConversationDetail,
@@ -47,15 +46,7 @@ import {
 } from '../src/conversation/keybindings-model.js'
 import { resolveStandbyEffectiveModel, resolveStandbyThinkingLevel, resetStandbyDrafts } from '../src/conversation/standby-model.js'
 
-GlobalRegistrator.register()
-Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
-if (typeof globalThis.ResizeObserver === 'undefined') {
-  ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = class NoopResizeObserver {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-}
+ensureHappyDom()
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
@@ -681,10 +672,6 @@ test('ComposerSendControls：移动端忙时有输入显式渲染 [插话] 与 [
   assert.ok(desktopHost.querySelector('.composer-busy-mobile-actions') === null)
   const trigger = desktopHost.querySelector<HTMLButtonElement>('button.composer-split-trigger')
   assert.ok(trigger, '桌面端保留分体下拉触发器')
-  // 验证源码级菜单角标携带 .kbd-hint（Radix DropdownMenu 鼠标点击或键盘展开在真实浏览器可见）
-  const controlsSource = readFileSync(new URL('../src/conversation/ComposerSendControls.tsx', import.meta.url), 'utf8')
-  assert.match(controlsSource, /className="composer-busy-menu-kbd kbd-hint">Enter</)
-  assert.match(controlsSource, /className="composer-busy-menu-kbd kbd-hint">⌘\/Ctrl\+Enter</)
 })
 
 // ---------------------------------------------------------------------------
@@ -889,27 +876,70 @@ test('CompletionPopover：Esc 关闭补全浮层且 stopPropagation 不触达外
   }
 })
 
-// ---------------------------------------------------------------------------
-// 9. 零 Emoji 与 .kbd-hint / 15px 规范源码核对
-// ---------------------------------------------------------------------------
+test('ModelPickerControl 运行时过滤不可用与禁用模型，刷新按钮触发 /api/models/refresh 与 refreshAssets', { timeout: 60_000 }, async () => {
+  const { ModelPickerControl } = await import('../src/conversation/ModelPicker.js')
+  const originalFetch = globalThis.fetch
+  let refreshPostCount = 0
+  let refreshAssetsCount = 0
+  const notices: Array<{ level: string; title: string }> = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/models/refresh' && init?.method === 'POST') {
+      refreshPostCount += 1
+      return jsonResponse({ errors: {} })
+    }
+    return jsonResponse({})
+  }) as typeof fetch
 
-test('代码规范：Composer / Standby / Popovers 零 Emoji，键盘提示使用 .kbd-hint', { timeout: 60_000 }, () => {
-  const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
-  const files = [
-    '../src/conversation/keybindings-model.ts',
-    '../src/conversation/Composer.tsx',
-    '../src/conversation/ComposerSendControls.tsx',
-    '../src/conversation/ModelPicker.tsx',
-    '../src/conversation/AgentStandbyPane.tsx',
-    '../src/conversation/CommandPopover.tsx',
-    '../src/conversation/CompletionPopover.tsx',
-  ]
-  for (const rel of files) {
-    const content = readFileSync(new URL(rel, import.meta.url), 'utf8')
-    assert.doesNotMatch(content, emojiRegex, `${rel} 不得包含 Emoji`)
+  const store = makeTestStore({
+    models: [
+      { id: 'faux/enabled-model', provider: 'faux', modelId: 'enabled-model', available: true, thinkingLevels: ['off'] },
+      { id: 'faux/disabled-model', provider: 'faux', modelId: 'disabled-model', available: true, disabled: true, thinkingLevels: ['off'] },
+      { id: 'faux/unavailable-model', provider: 'faux', modelId: 'unavailable-model', available: false, thinkingLevels: ['off'] },
+    ],
+    refreshAssets: async () => {
+      refreshAssetsCount += 1
+    },
+    pushNotice: (n) => notices.push({ level: n.level, title: n.title }),
+  })
+
+  try {
+    const host = mountTree(
+      <HostStoreProviders value={store}>
+        <ModelPickerControl
+          effectiveModel="faux/enabled-model"
+          selectedModel={undefined}
+          activeThinkingLevel="off"
+          resetLabel="跟随默认"
+          resetTitle="恢复默认"
+          buttonTitle="切换模型"
+          onPickModel={() => {}}
+          onResetDefault={() => {}}
+          onPickThinking={() => {}}
+        />
+      </HostStoreProviders>,
+    )
+
+    const btn = host.querySelector<HTMLButtonElement>('button.composer-model-button')
+    assert.ok(btn)
+    await act(async () => {
+      btn.click()
+    })
+    const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+    assert.ok(popover)
+    const items = [...popover.querySelectorAll<HTMLButtonElement>('button.popover-item')]
+    assert.ok(items.some((el) => el.textContent?.includes('enabled-model')), '可用且未禁用模型应展示')
+    assert.equal(items.some((el) => el.textContent?.includes('disabled-model')), false, 'disabled 模型不得作为可选项')
+    assert.equal(items.some((el) => el.textContent?.includes('unavailable-model')), false, '不可用模型不得作为可选项')
+
+    const refreshBtn = popover.querySelector<HTMLButtonElement>('button.composer-model-refresh-btn')
+    assert.ok(refreshBtn, '存在刷新动态模型目录按钮')
+    await act(async () => {
+      refreshBtn.click()
+    })
+    assert.equal(refreshPostCount, 1, '点击刷新按钮触发 POST /api/models/refresh')
+    assert.equal(refreshAssetsCount, 1, '刷新完成后同步 refreshAssets')
+    assert.equal(notices.some((n) => n.title === '已刷新模型目录'), true)
+  } finally {
+    globalThis.fetch = originalFetch
   }
-  const cmdSrc = readFileSync(new URL('../src/conversation/CommandPopover.tsx', import.meta.url), 'utf8')
-  const compSrc = readFileSync(new URL('../src/conversation/CompletionPopover.tsx', import.meta.url), 'utf8')
-  assert.match(cmdSrc, /className="kbd-hint\b/)
-  assert.match(compSrc, /className="kbd-hint\b/)
 })

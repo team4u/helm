@@ -11,15 +11,20 @@ import { afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary } from '@helm/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
+import {
+  ensureHappyDom,
+  flushMacrotask,
+  jsonResponse,
+  typeIntoControl,
+  waitForCondition,
+} from './helpers/dom-harness.js'
 
-GlobalRegistrator.register()
-Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
+ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
 const { App } = await import('../src/App.js')
-const { getStandbyDraft, resetStandbyDrafts, standbyDraftKey } = await import("../src/conversation/standby-model.js")
+const { getStandbyDraft, resetStandbyDrafts, standbyDraftKey } = await import('../src/conversation/standby-model.js')
 
 const e = React.createElement
 const originalFetch = globalThis.fetch
@@ -71,6 +76,7 @@ const state = {
   submitCalls: [] as Array<{ id: number; body: Record<string, unknown> }>,
   patchCalls: [] as Array<{ id: number; body: Record<string, unknown> }>,
   uploadCalls: [] as Array<{ id: number; name: string }>,
+  uploadStarted: false,
   createGate: undefined as Gate | undefined,
   submitGate: undefined as Gate | undefined,
   uploadGate: undefined as Gate | undefined,
@@ -98,6 +104,7 @@ function resetState(): void {
   state.submitCalls = []
   state.patchCalls = []
   state.uploadCalls = []
+  state.uploadStarted = false
   state.resetCalls = []
   state.createGate = undefined
   state.submitGate = undefined
@@ -232,6 +239,7 @@ function installFetch(): void {
     if (uploadMatch && method === 'POST') {
       const id = Number(uploadMatch[1])
       const name = decodeURIComponent(new Headers(init?.headers as HeadersInit | undefined).get('X-Artifact-Filename') ?? 'attachment.bin')
+      state.uploadStarted = true
       if (state.uploadGate !== undefined) await state.uploadGate.promise
       state.uploadCalls.push({ id, name })
       if (state.uploadFailures > 0) {
@@ -263,10 +271,6 @@ function installFetch(): void {
   }) as typeof fetch
 }
 
-function jsonResponse(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })
-}
-
 async function mount(hash: string): Promise<void> {
   window.history.replaceState(null, '', hash)
   host = document.createElement('div')
@@ -276,11 +280,17 @@ async function mount(hash: string): Promise<void> {
     root = createRoot(host!)
     root.render(e(App))
   })
-  await settle()
+  await waitForCondition(
+    () =>
+      document.querySelector('.helm-shell') !== null &&
+      document.querySelector('.connection-banner') === null &&
+      (state.profilesFail || !document.body.textContent?.includes('正在加载角色信息')),
+  )
+  await flushMacrotask(0)
 }
 
 async function settle(): Promise<void> {
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+  await flushMacrotask(0)
 }
 
 function reset(): void {
@@ -306,14 +316,7 @@ function textarea(label: string): HTMLTextAreaElement {
 
 const MAIN_LABEL = '向 个人助理 输入首条消息'
 
-function typeInto(el: HTMLTextAreaElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
-  const tracker = (el as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
-  const prev = tracker?.getValue() ?? ''
-  setter.call(el, value)
-  tracker?.setValue(prev)
-  el.dispatchEvent(new Event('input', { bubbles: true }))
-}
+const typeInto = typeIntoControl
 
 function pressEnter(el: HTMLTextAreaElement): void {
   el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
@@ -351,8 +354,8 @@ test('Sidebar 新建入口：智能体行加号进入待命态，零会话待命
   assert.equal(state.createCalls.length, 0, '加号不得预创建会话')
 
   // 零会话智能体被选中（深链/导航）时：平铺可见、保持激活，不埋进折叠闲置组
-  reset()
-  await mount('#/a/coder')
+  await act(async () => { navigateHash('#/a/coder') })
+  await waitForCondition(() => window.location.hash === '#/a/coder')
   const coderRow = [...document.querySelectorAll<HTMLButtonElement>('.nav-item-main')]
     .find((btn) => btn.textContent?.includes('编码专员'))
   assert.ok(coderRow, '零会话待命智能体在侧栏平铺可见')
@@ -383,8 +386,8 @@ test('首发链路：Enter 创建会话并提交，双击去重，成功后 repl
     await act(async () => { pressEnter(input); pressEnter(input) })
     assert.equal(state.createCalls.length, 1, '双击 Enter 只触发一次 create（同步去重）')
     assert.deepEqual(state.createCalls[0], { profileId: 'assistant' }, '未定制环境与模型时不携带额外字段')
-    await act(async () => { state.createGate!.resolve(); await new Promise((r) => setTimeout(r, 30)) })
-    await settle()
+    await act(async () => { state.createGate!.resolve() })
+    await waitForCondition(() => window.location.hash === '#/c/9' && document.body.textContent?.includes('会话 9') === true)
     assert.equal(state.submitCalls.length, 1, 'submitInput 恰好一次')
     assert.equal(state.submitCalls[0]!.id, 9)
     assert.equal((state.submitCalls[0]!.body as { text?: string }).text, '你好，开始新话题')
@@ -405,7 +408,7 @@ test('create 失败：保留草稿与附件，显式错误，重试成功', { ti
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '第一条') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => document.querySelector('.agent-standby-error') !== null)
   assert.equal(state.createCalls.length, 1)
   const alert = document.querySelector('.agent-standby-error')
   assert.ok(alert, '显示显式错误横幅')
@@ -413,7 +416,7 @@ test('create 失败：保留草稿与附件，显式错误，重试成功', { ti
   assert.equal(input.value, '第一条', '草稿保留')
   // 重试：第二次 create 成功
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => window.location.hash === '#/c/9')
   assert.equal(state.createCalls.length, 2, '重试重新 create（上次未成功）')
   assert.equal(state.submitCalls.length, 1, '重试后提交成功')
   assert.equal(window.location.hash, '#/c/9')
@@ -425,14 +428,14 @@ test('create 成功后 submit 失败：保留真实会话 ID，重试不重复 c
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '会创建但发送失败') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => document.querySelector('.agent-standby-error') !== null)
   assert.equal(state.createCalls.length, 1)
   assert.equal(state.submitCalls.length, 1)
   assert.ok(document.querySelector('.agent-standby-error'), '显示失败横幅')
   assert.equal(input.value, '会创建但发送失败', '草稿保留')
   assert.equal(window.location.hash, '#/a/assistant', '未全链路成功不导航')
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => window.location.hash === '#/c/9')
   assert.equal(state.createCalls.length, 1, '重试复用已创建会话，不重复 create')
   assert.equal(state.submitCalls.length, 2, '重试重新提交')
   assert.equal(state.submitCalls[1]!.id, 9)
@@ -453,7 +456,7 @@ test('附件：发送前仅本地暂存不上传，首发时按 create -> 上传
   assert.equal(state.createCalls.length, 0)
   act(() => { typeInto(input, '带附件') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => window.location.hash === '#/c/9')
   assert.equal(state.createCalls.length, 1)
   assert.deepEqual(state.uploadCalls, [{ id: 9, name: 'note.txt' }], 'create 后上传到真实会话')
   assert.deepEqual((state.submitCalls[0]!.body as { attachments?: string[] }).attachments, ['art-1'])
@@ -483,7 +486,7 @@ test('URL 环境继承：待命目标携带远端节点与目录，create 如实
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '继续远端工作') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => state.createCalls.length === 1)
   assert.deepEqual(state.createCalls[0], {
     profileId: 'assistant',
     nodeId: 'remote-1',
@@ -515,8 +518,10 @@ test('等待期切走目标：成功后不抢导航，改为通知告知新会�
   await act(async () => { convRow!.click() })
   await settle()
   assert.equal(window.location.hash, '#/c/1')
-  await act(async () => { state.createGate!.resolve(); await new Promise((r) => setTimeout(r, 30)) })
-  await settle()
+  await act(async () => { state.createGate!.resolve() })
+  await waitForCondition(
+    () => state.submitCalls.length === 1 && document.body.textContent?.includes('已发送并创建会话') === true,
+  )
   assert.equal(state.submitCalls.length, 1, '发送链路完成')
   assert.equal(window.location.hash, '#/c/1', '迟到的成功不覆盖新导航')
   assert.ok(document.body.textContent?.includes('已发送并创建会话'), '给出可点击通知')
@@ -536,7 +541,8 @@ test('不可用状态如实展示：人类不可选与插件停用角色', { tim
   await mount('#/a/singleton')
   assert.ok(document.body.textContent?.includes('该角色不支持手动新建对话'), '常驻单例给出显式不可用')
   assert.equal(document.querySelectorAll('textarea').length, 0, '不渲染草稿输入区')
-  await mount('#/a/managed')
+  await act(async () => { navigateHash('#/a/managed') })
+  await waitForCondition(() => window.location.hash === '#/a/managed')
   assert.ok(document.body.textContent?.includes('该角色不支持手动新建对话'), '插件停用托管的角色同样不可用')
   assert.equal(state.createCalls.length, 0)
 })
@@ -551,11 +557,11 @@ test('资产未加载不误判不存在：显式加载中状态', { timeout: 60_
     root = createRoot(host!)
     root.render(e(App))
   })
-  await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+  await waitForCondition(() => document.body.textContent?.includes('正在加载角色信息') === true)
   assert.ok(document.body.textContent?.includes('正在加载角色信息'), '加载中显式可见')
   assert.ok(!document.body.textContent?.includes('不存在或已删除'), '不得误判不存在')
-  await act(async () => { state.assetsGate!.resolve(); await new Promise((r) => setTimeout(r, 30)) })
-  await settle()
+  await act(async () => { state.assetsGate!.resolve() })
+  await waitForCondition(() => document.querySelector(`textarea[aria-label="${MAIN_LABEL}"]`) !== null)
   assert.ok(textarea(MAIN_LABEL), '资产就绪后渲染输入区')
 })
 
@@ -581,7 +587,7 @@ test('模型与思考档位：模型随 create 提交，思考档位创建后 pa
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '带模型偏好') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => state.submitCalls.length === 1 && state.patchCalls.length === 1)
   assert.equal((state.createCalls[0] as { model?: string }).model, 'faux/glm-4.6', '模型随 create 提交')
   assert.deepEqual(state.patchCalls, [{ id: 9, body: { thinkingLevel: 'high' } }], '思考档位创建后 patch')
   assert.equal(state.submitCalls.length, 1)
@@ -593,7 +599,7 @@ test('右屏待命首发：主屏会话保持不变，新会话只落在右屏',
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '右屏首发') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => window.location.hash === '#/c/1?split=c%2F9')
   assert.equal(state.createCalls.length, 1)
   assert.equal(state.submitCalls.length, 1)
   assert.equal(window.location.hash, '#/c/1?split=c%2F9', '新会话 replace 到右屏，不劫持主屏')
@@ -623,7 +629,7 @@ test('模型选择可恢复默认：显式选择后仍可点回跟随角色默�
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '默认模型发送') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => state.createCalls.length === 1)
   assert.deepEqual(state.createCalls[0], { profileId: 'assistant' }, '恢复默认后 create 不携带 model')
 })
 
@@ -694,9 +700,10 @@ test('真实会话 Composer /new：进入待命态并继承环境，不 reset �
   assert.ok(composerInput, '会话输入区存在')
   act(() => { typeInto(composerInput!, '/new') })
   // 第一次 Enter 被斜杠浮层捕获回填 '/new'，第二次 Enter 提交管理命令
-  await act(async () => { pressEnter(composerInput!); await new Promise((r) => setTimeout(r, 10)) })
-  await act(async () => { pressEnter(composerInput!); await new Promise((r) => setTimeout(r, 10)) })
-  await settle()
+  await act(async () => { pressEnter(composerInput!) })
+  await flushMacrotask(0)
+  await act(async () => { pressEnter(composerInput!) })
+  await waitForCondition(() => window.location.hash.startsWith('#/a/assistant'))
   assert.equal(window.location.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`, '/new 进入待命态并继承当前目录')
   assert.equal(state.resetCalls.length, 0, '/new 不再 reset 原会话')
   assert.equal(state.createCalls.length, 0, '/new 不预建会话')
@@ -735,7 +742,7 @@ test('Profile 资产加载失败：显式错误与重试，不用完成信号伪
   assert.ok(retry, '提供重试按钮')
   state.profilesFail = false
   await act(async () => { retry!.click() })
-  await settle()
+  await waitForCondition(() => document.querySelector(`textarea[aria-label="${MAIN_LABEL}"]`) !== null)
   assert.ok(textarea(MAIN_LABEL), '重试成功后渲染输入区')
 })
 
@@ -779,8 +786,10 @@ test('在途首发切换同 Profile 其他环境：不抢导航不串草稿，�
   await settle()
   const r2 = textarea(MAIN_LABEL)
   assert.equal(r2.value, '', 'r2 草稿不受 r1 在途任务影响')
-  await act(async () => { state.createGate!.resolve(); await new Promise((r) => setTimeout(r, 30)) })
-  await settle()
+  await act(async () => { state.createGate!.resolve() })
+  await waitForCondition(
+    () => state.submitCalls.length === 1 && document.body.textContent?.includes('已发送并创建会话') === true,
+  )
   assert.equal(state.submitCalls.length, 1, 'r1 任务完成提交（用 r1 配置）')
   assert.deepEqual((state.createCalls[0] as { nodeId?: string }).nodeId, 'remote-1')
   assert.equal(window.location.hash, '#/a/assistant?node=remote-2&cwd=%2Fremote%2Fwork2', '不抢新导航')
@@ -825,7 +834,7 @@ test('锚定后锁定创建配置：模型/环境不可改，横幅提示绑定�
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '首发锚定') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => document.body.textContent?.includes('已创建会话 #9') === true)
   assert.ok(document.body.textContent?.includes('已创建会话 #9'), '锁定横幅可见')
   assert.equal(document.querySelector<HTMLButtonElement>('button.composer-model-button')?.disabled, true, '模型选择锁定')
   const customizeBtn = [...document.querySelectorAll<HTMLButtonElement>('button')]
@@ -833,7 +842,7 @@ test('锚定后锁定创建配置：模型/环境不可改，横幅提示绑定�
   assert.equal(customizeBtn?.disabled, true, '起始环境锁定')
   act(() => { typeInto(input, '（已修正）') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => window.location.hash === '#/c/9')
   assert.equal(state.createCalls.length, 1, '重试复用会话')
   assert.equal(state.submitCalls.length, 2)
   assert.equal(window.location.hash, '#/c/9')
@@ -848,8 +857,9 @@ test('logout 于 create 等待期：释放草稿并作废在途回包，不复�
   await settle()
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   assert.equal(getStandbyDraft(key).text, '', 'logout 同步释放草稿')
-  await act(async () => { state.createGate!.resolve(); await new Promise((r) => setTimeout(r, 30)) })
-  await settle()
+  await act(async () => { state.createGate!.resolve() })
+  await flushMacrotask(0)
+  await flushMacrotask(0)
   assert.equal(state.createCalls.length, 1, '已发出的请求不假称能撤回')
   assert.equal(state.submitCalls.length, 0, '世代作废后不继续 submit')
   assert.equal(getStandbyDraft(key).conversationId, undefined, '回包不得写入锚点')
@@ -865,11 +875,12 @@ test('logout 于 upload 等待期：不继续 submit、不复活附件；重登�
   await settle()
   act(() => { typeInto(textarea(MAIN_LABEL), '上传中释放') })
   await act(async () => { pressEnter(textarea(MAIN_LABEL)) })
-  await new Promise((r) => setTimeout(r, 10))
+  await waitForCondition(() => state.uploadStarted)
   await act(async () => { window.dispatchEvent(new Event('helm:unauthorized')) })
   await settle()
-  await act(async () => { state.uploadGate!.resolve(); await new Promise((r) => setTimeout(r, 30)) })
-  await settle()
+  await act(async () => { state.uploadGate!.resolve() })
+  await flushMacrotask(0)
+  await flushMacrotask(0)
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   assert.equal(state.submitCalls.length, 0, '上传回包作废后不继续 submit')
   assert.equal(getStandbyDraft(key).uploaded.length, 0, '回包不得复活附件')
@@ -895,7 +906,7 @@ test('伪 File 注入边界拒绝：普通对象不进草稿不渲染 chip，发
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '伪附件被拒后的正常首发') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => window.location.hash === '#/c/9')
   assert.equal(state.createCalls.length, 1)
   assert.equal(state.uploadCalls.length, 0)
   assert.equal(state.submitCalls.length, 1, '全链路照常完成')
@@ -917,7 +928,7 @@ test('真实 File 经 input change 事件路径首发全链路（create -> uploa
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '真实文件首发') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => window.location.hash === '#/c/9')
   assert.deepEqual(state.uploadCalls, [{ id: 9, name: 'real-input.txt' }], 'create 后上传到真实会话')
   assert.deepEqual((state.submitCalls[0]!.body as { attachments?: string[] }).attachments, ['art-1'])
   assert.equal(window.location.hash, '#/c/9')
@@ -1027,7 +1038,7 @@ test('草稿状态输入 / 过滤与回填技能：仅替换触发 token，随�
   // 补充指令后 Enter 才真正 create -> submit
   act(() => { typeInto(input, '请执行 /skill:review 检查变更') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => state.submitCalls.length === 1)
   assert.equal(state.createCalls.length, 1)
   assert.equal(state.submitCalls.length, 1)
   assert.equal(state.submitCalls[0]!.body.text, '请执行 /skill:review 检查变更')
@@ -1052,7 +1063,7 @@ test('草稿状态插件斜杠命令：浮层选中即执行且关闭浮层，�
   assert.ok(document.querySelector('.agent-standby-pane .composer-popover'), '弹出插件命令浮层')
 
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => state.actionCalls.length === 1)
   assert.equal(state.actionCalls.length, 1, '触发插件动作')
   assert.equal(state.actionCalls[0]!.pluginId, 'p1')
   assert.equal(state.actionCalls[0]!.actionId, 'ping')
@@ -1070,7 +1081,7 @@ test('草稿状态插件斜杠命令：浮层选中即执行且关闭浮层，�
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
   })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => state.actionCalls.length === 2)
   assert.equal(state.actionCalls.length, 2)
   assert.equal(input.value, '/ping', '插件命令失败保留原草稿')
   assert.ok(document.body.textContent?.includes('命令执行失败：/ping'), '显式错误通知')
@@ -1131,12 +1142,14 @@ test('草稿状态输入 @：弹出点名角色候选（携带 profileId）、�
 
   // 邮箱中间 @ 不误触发
   act(() => { typeInto(input, 'user@example.com') })
-  await act(async () => { await new Promise((r) => setTimeout(r, 200)) })
+  await flushMacrotask(170)
   assert.ok(document.querySelector('.composer-completion-popover') === null, '邮箱中间 @ 不误弹出')
 
   // 行中空白后输入 @co：防抖触发 action 查询（携带 profileId: assistant，不伪造 conversationId）
   act(() => { typeInto(input, '请帮我找 @co') })
-  await act(async () => { await new Promise((r) => setTimeout(r, 220)) })
+  await waitForCondition(
+    () => state.actionCalls.length === 1 && document.querySelector('.composer-completion-popover') !== null,
+  )
   assert.equal(state.actionCalls.length, 1, '发起一次防抖补全查询')
   assert.deepEqual(state.actionCalls[0]!.body, { input: { query: 'co', profileId: 'assistant' } }, '携带待命角色 profileId 且不伪造 conversationId')
 
@@ -1156,7 +1169,7 @@ test('草稿状态输入 @：弹出点名角色候选（携带 profileId）、�
   // 补充文本后再次 Enter 才真正 create -> submit
   act(() => { typeInto(input, '请帮我找 @coder 看下代码') })
   await act(async () => { pressEnter(input) })
-  await settle()
+  await waitForCondition(() => state.submitCalls.length === 1)
   assert.equal(state.createCalls.length, 1)
   assert.equal(state.submitCalls.length, 1)
   assert.equal(state.submitCalls[0]!.body.text, '请帮我找 @coder 看下代码')

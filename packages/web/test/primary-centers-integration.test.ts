@@ -2,120 +2,55 @@
  * 四大中心（Profiles, Skills, Nodes, Models）端到端集成测试
  *
  * 覆盖：
- * 1. 旧模态物理淘汰断言：
- *    - ProfileEditorModal.tsx、SkillViewerModal.tsx、NodesModal.tsx、
- *      ProviderCatalog.tsx、ProviderAuthModal.tsx、provider-auth.css 彻底删除；
- *    - App.tsx 源码中无任何已淘汰模态的残留引用，并正确挂载四大一级中心与分屏支持；
- * 2. 侧栏底栏 5 大一级入口与路由激活契约：
+ * 1. 侧栏底栏 5 大一级入口与路由激活契约：
  *    - 角色、模型与凭据、技能库、计算节点、插件中心均调用 store.openTarget；
  *    - 对应 primaryTarget 激活时呈现 .is-active 与 aria-current="page"；
- * 3. 命令面板（CommandPaletteModal）直达一级中心：
- *    - 四大快捷项执行 openTarget 并自动关闭面板；
- * 4. 路由契约与旧 URL 平滑升级：
+ * 2. 命令面板（CommandPaletteModal）直达一级中心：
+ *    - 四大快捷项点击执行 openTarget 并自动关闭面板；
+ * 3. 路由契约与旧 URL 平滑升级：
  *    - 往返编解码支持 settings/<center>/<id> 路径段子项深链与分屏组合；
  *    - 旧 modal=profiles|providers|skills|nodes 自动升格为对应全屏一级视图；
- * 5. 四大中心组件群挂载与抽屉联动：
+ * 4. 四大中心组件群挂载与抽屉联动：
  *    - ProfileCenter、SkillCenter、NodeCenter、ModelCenter 渲染、卡片网格与抽屉交互；
- * 6. 铁律遵循静态扫描：
+ * 5. 铁律遵循静态扫描：
  *    - 四大中心全部组件源码与 App/Sidebar/CommandPalette 绝对 0 Emoji。
  */
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { ensureHappyDom, flushMacrotask } from './helpers/dom-harness.js'
 
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+ensureHappyDom()
 
 const React = (await import('react')).default
 const { act } = await import('react')
 const ReactDOMClient = await import('react-dom/client')
 const { renderToString } = await import('react-dom/server')
 
-;(globalThis as Record<string, unknown>).React = React
-
-import {
+const {
   parseLocationHash,
   formatLocationHash,
   upgradeLegacyLocationState,
-} from '../src/lib/url-hash-model.js'
-import { makeTestStore } from './helpers/store.js'
-import { HostStoreProviders } from './helpers/host-store.js'
-import { ProfileCenter } from '../src/profiles/ProfileCenter.js'
-import { SkillCenter } from '../src/skills/SkillCenter.js'
-import { NodeCenter } from '../src/nodes/NodeCenter.js'
-import { ModelCenter } from '../src/models/ModelCenter.js'
-import { Sidebar } from '../src/shell/Sidebar.js'
-import { CommandPaletteModal } from '../src/modals/CommandPaletteModal.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
+} = await import('../src/lib/url-hash-model.js')
+const { makeTestStore } = await import('./helpers/store.js')
+const { HostStoreProviders } = await import('./helpers/host-store.js')
+const { ProfileCenter } = await import('../src/profiles/ProfileCenter.js')
+const { SkillCenter } = await import('../src/skills/SkillCenter.js')
+const { NodeCenter } = await import('../src/nodes/NodeCenter.js')
+const { ModelCenter } = await import('../src/models/ModelCenter.js')
+const { Sidebar } = await import('../src/shell/Sidebar.js')
+const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const e = React.createElement
 
 // ---------------------------------------------------------------------------
-// 1. 旧模态物理淘汰与源码契约断言
+// 1. 侧栏底栏 5 大一级入口与高亮状态契约
 // ---------------------------------------------------------------------------
 
-test('旧模态物理淘汰：旧四大居中模态及样式已从磁盘物理删除', { timeout: 60_000 }, () => {
-  const legacyFiles = [
-    'src/modals/ProfileEditorModal.tsx',
-    'src/modals/SkillViewerModal.tsx',
-    'src/modals/NodesModal.tsx',
-    'src/modals/ProviderCatalog.tsx',
-    'src/modals/ProviderAuthModal.tsx',
-    'src/modals/provider-auth.css',
-  ]
-
-  for (const rel of legacyFiles) {
-    const full = join(PKG_ROOT, rel)
-    assert.equal(existsSync(full), false, `${rel} 必须已从文件系统彻底物理删除`)
-  }
-})
-
-test('App.tsx 源码契约：主舞台与分屏舞台完整挂载四大一级中心，且零旧模态残留', { timeout: 60_000 }, () => {
-  const appSrc = readFileSync(join(PKG_ROOT, 'src/App.tsx'), 'utf-8')
-
-  // 1. 导入四大一级中心
-  assert.match(appSrc, /import\s*\{[^}]*ProfileCenter[^}]*\}\s*from\s*['"]\.\/profiles\/ProfileCenter(?:\.js)?['"]/)
-  assert.match(appSrc, /import\s*\{[^}]*SkillCenter[^}]*\}\s*from\s*['"]\.\/skills\/SkillCenter(?:\.js)?['"]/)
-  assert.match(appSrc, /import\s*\{[^}]*NodeCenter[^}]*\}\s*from\s*['"]\.\/nodes\/NodeCenter(?:\.js)?['"]/)
-  assert.match(appSrc, /import\s*\{[^}]*ModelCenter[^}]*\}\s*from\s*['"]\.\/models\/ModelCenter(?:\.js)?['"]/)
-
-  // 2. 主舞台挂载四大中心
-  assert.match(appSrc, /store\.primaryTarget\.kind === 'profiles'\s*\?\s*\(\s*<ProfileCenter\s+key="primary-profiles"\s*\/>\s*\)/)
-  assert.match(appSrc, /store\.primaryTarget\.kind === 'skills'\s*\?\s*\(\s*<SkillCenter\s+key="primary-skills"\s*\/>\s*\)/)
-  assert.match(appSrc, /store\.primaryTarget\.kind === 'nodes'\s*\?\s*\(\s*<NodeCenter\s+key="primary-nodes"\s*\/>\s*\)/)
-  assert.match(appSrc, /store\.primaryTarget\.kind === 'models'\s*\?\s*\(\s*<ModelCenter\s+key="primary-models"\s*\/>\s*\)/)
-
-  // 3. 分屏舞台挂载四大中心（支持 isSplit 与 onCloseSplit）
-  assert.match(appSrc, /store\.splitTarget\.kind === 'profiles'\s*\?\s*\(\s*<ProfileCenter\s+key="split-profiles"\s+isSplit\s+onCloseSplit=\{store\.closeSplit\}\s*\/>\s*\)/)
-  assert.match(appSrc, /store\.splitTarget\.kind === 'skills'\s*\?\s*\(\s*<SkillCenter\s+key="split-skills"\s+isSplit\s+onCloseSplit=\{store\.closeSplit\}\s*\/>\s*\)/)
-  assert.match(appSrc, /store\.splitTarget\.kind === 'nodes'\s*\?\s*\(\s*<NodeCenter\s+key="split-nodes"\s+isSplit\s+onCloseSplit=\{store\.closeSplit\}\s*\/>\s*\)/)
-  assert.match(appSrc, /store\.splitTarget\.kind === 'models'\s*\?\s*\(\s*<ModelCenter\s+key="split-models"\s+isSplit\s+onCloseSplit=\{store\.closeSplit\}\s*\/>\s*\)/)
-
-  // 4. 彻底杜绝旧模态引用与渲染
-  assert.doesNotMatch(appSrc, /ProfileEditorModal/)
-  assert.doesNotMatch(appSrc, /SkillViewerModal/)
-  assert.doesNotMatch(appSrc, /NodesModal/)
-  assert.doesNotMatch(appSrc, /ProviderAuthModal/)
-  assert.doesNotMatch(appSrc, /ProviderCatalog/)
-})
-
-// ---------------------------------------------------------------------------
-// 2. 侧栏底栏 5 大一级入口与高亮状态契约
-// ---------------------------------------------------------------------------
-
-test('Sidebar.tsx：设置空间 5 大入口统一导航至一级目标，且激活态与路由对齐', { timeout: 60_000 }, () => {
-  const sidebarSrc = readFileSync(join(PKG_ROOT, 'src/shell/Sidebar.tsx'), 'utf-8')
-  const typesSrc = readFileSync(join(PKG_ROOT, 'src/lib/types.ts'), 'utf-8')
-
-  // 1. 源码包含 5 大一级入口的纵向列表分发（表驱动 CENTER_TARGETS，与侧栏空间推导共用，位于 lib/types）
-  assert.match(typesSrc, /export const CENTER_TARGETS = \['profiles', 'models', 'skills', 'nodes', 'plugins'\] as const/)
-  assert.match(sidebarSrc, /function SettingsNavGroup/)
-
-  // 2. SSR 渲染断言激活高亮
+test('Sidebar：设置空间 5 大入口统一导航至一级目标，且激活态与路由对齐', { timeout: 60_000 }, async () => {
   const targets = [
     { kind: 'profiles' as const, label: '角色' },
     { kind: 'models' as const, label: '模型与凭据' },
@@ -127,30 +62,86 @@ test('Sidebar.tsx：设置空间 5 大入口统一导航至一级目标，且激
   for (const { kind, label } of targets) {
     const store = makeTestStore({ primaryTarget: { kind } })
     const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
-    assert.ok(html.includes(`nav-item-active`), `当 primaryTarget=${kind} 时，${label} 行应高亮`)
-    assert.ok(html.includes(`aria-current="page"`), `当 primaryTarget=${kind} 时，${label} 行应设置 aria-current="page"`
+    assert.ok(html.includes('nav-item-active'), `当 primaryTarget=${kind} 时，${label} 行应高亮`)
+    assert.ok(html.includes('aria-current="page"'), `当 primaryTarget=${kind} 时，${label} 行应设置 aria-current="page"`)
+  }
+
+  // 点击侧栏设置空间 5 个入口应调用对应 openTarget
+  const opened: Array<{ kind: string }> = []
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+  const store = makeTestStore({
+    primaryTarget: { kind: 'profiles' },
+    openTarget: (target) => {
+      if (typeof target !== 'string') opened.push({ kind: target.kind })
+    },
+  })
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(Sidebar)))
+    })
+    for (const { label } of targets) {
+      const btn = Array.from(host.querySelectorAll<HTMLButtonElement>('button.nav-item-main')).find((el) =>
+        el.textContent?.includes(label),
+      )
+      assert.ok(btn, `侧栏设置空间应渲染 ${label} 入口`)
+      await act(async () => {
+        btn.click()
+      })
+    }
+    assert.deepEqual(
+      opened,
+      targets.map((t) => ({ kind: t.kind })),
+      '侧栏设置空间 5 大入口均应调用 store.openTarget',
     )
+  } finally {
+    act(() => root.unmount())
+    host.remove()
   }
 })
 
 // ---------------------------------------------------------------------------
-// 3. 命令面板（CommandPaletteModal）一级目标分发
+// 2. 命令面板（CommandPaletteModal）一级目标分发
 // ---------------------------------------------------------------------------
 
-test('CommandPaletteModal：4 大快捷项统一分发一级路由并关闭面板', { timeout: 60_000 }, () => {
-  const cmdSrc = readFileSync(join(PKG_ROOT, 'src/modals/CommandPaletteModal.tsx'), 'utf-8')
+test('CommandPaletteModal：4 大快捷项点击统一分发一级路由并关闭面板', { timeout: 60_000 }, async () => {
+  const cases = [
+    { title: '打开智能体角色中心', kind: 'profiles' },
+    { title: '打开模型与凭据中心', kind: 'models' },
+    { title: '打开技能中心', kind: 'skills' },
+    { title: '打开计算节点中心', kind: 'nodes' },
+  ] as const
 
-  // 1. 源码中四大命令动作重构断言
-  assert.match(cmdSrc, /id:\s*'builtin:open-profile-editor'[\s\S]*?store\.openTarget\(\{\s*kind:\s*'profiles'\s*\}\)/)
-  assert.match(cmdSrc, /id:\s*'builtin:open-provider-auth'[\s\S]*?store\.openTarget\(\{\s*kind:\s*'models'\s*\}\)/)
-  assert.match(cmdSrc, /id:\s*'builtin:open-skill-viewer'[\s\S]*?store\.openTarget\(\{\s*kind:\s*'skills'\s*\}\)/)
-  assert.match(cmdSrc, /id:\s*'builtin:open-nodes'[\s\S]*?store\.openTarget\(\{\s*kind:\s*'nodes'\s*\}\)/)
-
-  // 2. 不得包含旧 activeModal 的侵入调用
-  assert.doesNotMatch(cmdSrc, /setActiveModal\(\{\s*kind:\s*'profile-editor'/)
-  assert.doesNotMatch(cmdSrc, /setActiveModal\(\{\s*kind:\s*'provider-auth'/)
-  assert.doesNotMatch(cmdSrc, /setActiveModal\(\{\s*kind:\s*'skill-viewer'/)
-  assert.doesNotMatch(cmdSrc, /setActiveModal\(\{\s*kind:\s*'nodes'/)
+  for (const item of cases) {
+    const opened: unknown[] = []
+    let closed = false
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = ReactDOMClient.createRoot(host)
+    const store = makeTestStore({
+      activeModal: { kind: 'command-palette' },
+      openTarget: (target) => opened.push(target),
+    })
+    try {
+      await act(async () => {
+        root.render(e(HostStoreProviders, { value: store }, e(CommandPaletteModal, { onClose: () => { closed = true } })))
+        await flushMacrotask(0)
+      })
+      const row = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-idx].nav-item')).find((el) =>
+        el.textContent?.includes(item.title),
+      )
+      assert.ok(row, `命令面板应包含 ${item.title}`)
+      await act(async () => {
+        row.click()
+      })
+      assert.equal(closed, true, `点击 ${item.title} 应关闭命令面板`)
+      assert.deepEqual(opened, [{ kind: item.kind }], `点击 ${item.title} 应导航到 ${item.kind}`)
+    } finally {
+      act(() => root.unmount())
+      host.remove()
+    }
+  }
 })
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,5 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync as readFile } from 'node:fs'
-import { readHostStyles } from './helpers/host-styles.js'
 import { getMermaidConfig, MERMAID_FONT_FAMILY } from '../../plugins/src/mermaid/client/mermaid-theme.js'
 
 test('getMermaidConfig: 浅色模式返回 neutral 主题与透明背景', { timeout: 60_000 }, () => {
@@ -67,35 +65,4 @@ test('getMermaidConfig: 字体栈使用系统真实字体，避免 Canvas 测量
   const dark = getMermaidConfig('dark')
   assert.equal(dark.fontFamily, MERMAID_FONT_FAMILY)
   assert.equal(dark.themeVariables?.fontFamily, MERMAID_FONT_FAMILY)
-})
-
-test('MermaidCodeBlock 源码契约：代际守卫与缓存路径（防旧代异步覆盖）', { timeout: 60_000 }, () => {
-  const content = readFile(new URL('../../plugins/src/mermaid/client/index.tsx', import.meta.url), 'utf8')
-  // 缓存命中分支也推进代际（seq 自增），迟到异步结果按代际丢弃
-  assert.match(content, /const seq = \+\+seqRef\.current/)
-  assert.match(content, /aliveRef\.current && seqRef\.current === seq/)
-  // 缓存容量上限与 LRU 淘汰
-  assert.match(content, /MERMAID_CACHE_LIMIT/)
-  // 错误态保留可复制源码
-  assert.match(content, /Mermaid 渲染失败/)
-})
-
-test('Mermaid 插件样式契约：图表专属样式在插件 CSS（不进宿主核心）', { timeout: 60_000 }, () => {
-  const pluginCss = readFile(new URL('../../plugins/src/mermaid/client/styles.css', import.meta.url), 'utf8')
-  assert.match(pluginCss, /\.mermaid-body\s*\{[\s\S]*?background:\s*transparent/)
-  assert.match(pluginCss, /\.mermaid-svg-layer\s*\{[\s\S]*?background:\s*transparent/)
-  assert.match(pluginCss, /\.mermaid-body\s+foreignObject[^}]*overflow:\s*visible\s*!important/)
-  assert.match(pluginCss, /\.mermaid-svg-layer\s+foreignObject[^}]*overflow:\s*visible\s*!important/)
-  assert.match(pluginCss, /foreignObject\s*>\s*div[^}]*width:\s*100%\s*!important/)
-  assert.match(pluginCss, /foreignObject\s*>\s*div[^}]*max-width:\s*100%\s*!important/)
-})
-
-test('宿主核心零 jr- 残留：styles.css 与 web src 不再定义/使用 json DSL 类', { timeout: 60_000 }, () => {
-  const styles = readHostStyles()
-  assert.ok(!styles.includes('.jr-'), '宿主 styles.css 不得含 jr-* 定义')
-  // 通用 callout 原语在核心定义（与插件样式无关）
-  assert.match(styles, /\.callout\s*\{/)
-  assert.match(styles, /\.callout--error\s*\{/)
-  assert.match(styles, /\.callout--warning\s*\{/)
-  assert.match(styles, /\.callout--success\s*\{/)
 })

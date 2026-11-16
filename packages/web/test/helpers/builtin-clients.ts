@@ -1,17 +1,11 @@
 /**
- * 测试当前 worktree 三个内置插件（superagent / triggers / magpie）的真实 client
+ * 测试当前 worktree 三个内置插件（superagent / triggers / magpie / apps）的真实 client
  * 编译产物（tsx 执行 kernel 编译器源码；浏览器 ESM 经 data: URL 导入，共享宿主
  * React/SDK）。默认只替换数据 hooks 以构造状态；上下文始终读取真实 Provider。
  */
-import * as React from 'react'
-import * as ReactJsxRuntime from 'react/jsx-runtime'
-import * as ReactDom from 'react-dom'
-import * as ReactDomClient from 'react-dom/client'
-import * as LucideReact from 'lucide-react'
-import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as HelmPluginClient from '@helm/plugin-client'
-import { compilePluginClientModule } from '@helm/plugin-build'
+import { importCompiledPluginClient, mountPluginNamespaceGlobals } from './plugin-namespace.js'
 
 export interface BuiltinClientStubOptions {
   /** docName → doc 值（usePluginDoc 按 docName 路由返回）。 */
@@ -34,18 +28,8 @@ const sharedPluginClientNamespace = {
 
 export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {}): void {
   realHooks = options.realHooks === true
-  Object.assign(globalThis, {
-    __helm_shared_react: React,
-    __helm_shared_react_dom: ReactDom,
-    __helm_shared_react_dom_client: ReactDomClient,
-    __helm_shared_react_jsx_runtime: ReactJsxRuntime,
-    __helm_shared_lucide_react: LucideReact,
-    __helm_shared_plugin_client: sharedPluginClientNamespace,
-  })
+  mountPluginNamespaceGlobals(sharedPluginClientNamespace)
 }
-
-const CACHE_DIR = fileURLToPath(new URL('../../../../node_modules/.cache/helm-test-plugin-clients', import.meta.url))
-mkdirSync(CACHE_DIR, { recursive: true })
 
 const CLIENT_ROOTS: Record<string, string> = {
   'builtin:superagent': fileURLToPath(new URL('../../../plugins/src/superagent/client', import.meta.url)),
@@ -60,9 +44,5 @@ export async function importBuiltinClientModule(
 ): Promise<Record<string, unknown>> {
   const root = CLIENT_ROOTS[pluginId]
   if (root === undefined) throw new Error(`未知内置插件 clientRoot：${pluginId}`)
-  const { code } = await compilePluginClientModule(pluginId, root, moduleRef, CACHE_DIR)
-  return (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`)) as Record<
-    string,
-    unknown
-  >
+  return importCompiledPluginClient(pluginId, root, moduleRef)
 }

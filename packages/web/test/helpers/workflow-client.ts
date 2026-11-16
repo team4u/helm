@@ -3,19 +3,15 @@
  * tsx 执行 kernel 编译器源码；浏览器 ESM 经 data: URL 导入，共享宿主 React/SDK。
  * 默认只替换数据 hooks 以构造状态；上下文始终读取真实 Provider，绝不吞掉事件。
  */
-import * as React from 'react'
-import * as ReactJsxRuntime from 'react/jsx-runtime'
-import * as ReactDom from 'react-dom'
-import * as ReactDomClient from 'react-dom/client'
-import * as LucideReact from 'lucide-react'
-import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as HelmPluginClient from '@helm/plugin-client'
-import { compilePluginClientModule } from '@helm/plugin-build'
+import {
+  importCompiledPluginClient,
+  mountPluginNamespaceGlobals,
+  PLUGIN_CLIENT_CACHE_DIR,
+} from './plugin-namespace.js'
 
 const WORKFLOW_CLIENT_ROOT = fileURLToPath(new URL('../../../plugins/src/workflow/client', import.meta.url))
-const CACHE_DIR = fileURLToPath(new URL('../../../../node_modules/.cache/helm-test-plugin-clients', import.meta.url))
-mkdirSync(CACHE_DIR, { recursive: true })
 
 export interface WorkflowClientStubOptions {
   docValue?: unknown
@@ -46,22 +42,19 @@ const sharedPluginClientNamespace = {
 
 export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {}): void {
   realHooks = options.realHooks === true
-  Object.assign(globalThis, {
-    __helm_shared_react: React,
-    __helm_shared_react_dom: ReactDom,
-    __helm_shared_react_dom_client: ReactDomClient,
-    __helm_shared_react_jsx_runtime: ReactJsxRuntime,
-    __helm_shared_lucide_react: LucideReact,
-    __helm_shared_plugin_client: sharedPluginClientNamespace,
-  })
+  mountPluginNamespaceGlobals(sharedPluginClientNamespace)
 }
 
-export async function importWorkflowClientModule(moduleRef = 'index.tsx', cacheDir = CACHE_DIR): Promise<Record<string, unknown>> {
-  const { code } = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_ROOT, moduleRef, cacheDir)
-  return await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`) as Record<string, unknown>
+export async function importWorkflowClientModule(
+  moduleRef = 'index.tsx',
+  cacheDir = PLUGIN_CLIENT_CACHE_DIR,
+): Promise<Record<string, unknown>> {
+  return importCompiledPluginClient('builtin:workflow', WORKFLOW_CLIENT_ROOT, moduleRef, cacheDir)
 }
 
 /** 类型引用不执行源码：运行时始终使用上方真实编译与动态 import。 */
-export async function importWorkflowModels(cacheDir = CACHE_DIR): Promise<typeof import('../../../plugins/src/workflow/client/models.ts')> {
+export async function importWorkflowModels(
+  cacheDir = PLUGIN_CLIENT_CACHE_DIR,
+): Promise<typeof import('../../../plugins/src/workflow/client/models.ts')> {
   return await importWorkflowClientModule('models.ts', cacheDir) as unknown as typeof import('../../../plugins/src/workflow/client/models.ts')
 }

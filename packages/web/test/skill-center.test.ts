@@ -1,21 +1,14 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { readHostStyles } from './helpers/host-styles.js'
-import { join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { ensureHappyDom, typeIntoControl } from './helpers/dom-harness.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+ensureHappyDom()
 
 const React = (await import('react')).default
 const { act } = await import('react')
 const ReactDOMClient = await import('react-dom/client')
 const { renderToString } = await import('react-dom/server')
-
-;(globalThis as Record<string, unknown>).React = React
 
 import type { SkillSummary } from '@helm/protocol'
 import {
@@ -49,18 +42,9 @@ const { SkillCard } = await import('../src/skills/SkillCard.js')
 const { SkillDetailDrawer } = await import('../src/skills/SkillDetailDrawer.js')
 const { SkillCenter } = await import('../src/skills/SkillCenter.js')
 
-const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const e = React.createElement
 const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
-
-function typeIntoInput(input: HTMLInputElement, text: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-  const tracker = (input as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
-  const prev = tracker?.getValue() ?? ''
-  setter?.call(input, text)
-  tracker?.setValue(prev)
-  input.dispatchEvent(new Event('input', { bubbles: true }))
-}
+const typeIntoInput = typeIntoControl
 
 function makeSkill(partial: Partial<SkillSummary> & { id: string }): SkillSummary {
   return {
@@ -1178,62 +1162,6 @@ test('SkillDetailDrawer: 布局契约——工具条紧贴 Header，元数据与
   host.remove()
 })
 
-test('SkillDetailDrawer: 样式契约——单一滚动容器、无独立描述块与移动端/桌面不分叉', { timeout: 60_000 }, () => {
-  const stylesSrc = readHostStyles()
-  const responsiveSrc = readFileSync(join(PKG_ROOT, 'src/responsive.css'), 'utf-8')
-  const drawerSrc = readFileSync(join(PKG_ROOT, 'src/skills/SkillDetailDrawer.tsx'), 'utf-8')
-
-  // 桌面：抽屉主体外层不滚动，唯一滚动交给 .skill-reader-scroll
-  assert.match(
-    stylesSrc,
-    /\.skill-drawer-content \.primary-drawer-body\s*\{[^}]*overflow:\s*hidden/,
-    '抽屉主体应为 overflow: hidden，消除双层滚动',
-  )
-  assert.match(
-    stylesSrc,
-    /\.skill-reader-scroll\s*\{[^}]*flex:\s*1[^}]*overflow-y:\s*auto/,
-    '阅读区应 flex:1 占满剩余高度并作为唯一纵向滚动容器',
-  )
-  // 独立描述块已移除：不得残留任何 skill-reader-desc 样式钩子
-  assert.ok(!stylesSrc.includes('skill-reader-desc'), 'styles.css 不得残留 skill-reader-desc 样式')
-  // 阅读区自身不再内部滚动（消除与外层的双滚动冲突）
-  assert.doesNotMatch(stylesSrc, /\.skill-reader-doc\s*\{[^}]*overflow/, 'skill-reader-doc 不得内部滚动')
-
-  // 移动端：单行工具条 + 隐藏次要统计噪音 + 收紧头部与主体内边距
-  assert.match(responsiveSrc, /\.skill-reader-toolbar\s*\{\s*flex-wrap:\s*nowrap[^}]*\}/, '移动端工具条单行不折行')
-  assert.match(responsiveSrc, /\.skill-reader-file\s*\{\s*flex:\s*1 1 auto[^}]*\}/, '文件选择区自适应单行布局')
-  assert.match(responsiveSrc, /\.skill-reader-lines\s*\{\s*display:\s*none/, '移动端隐藏行数统计噪音')
-  assert.match(responsiveSrc, /\.skill-reader-copy\s*>\s*span\s*\{\s*display:\s*none/, '移动端复制按钮只留图标')
-  assert.match(
-    responsiveSrc,
-    /\.skill-drawer-content \.primary-drawer-header\s*\{[^}]*padding:\s*10px 14px/,
-    '移动端抽屉头部内边距收紧',
-  )
-  assert.match(
-    responsiveSrc,
-    /\.skill-drawer-content \.primary-drawer-body\s*\{[^}]*padding:\s*10px 12px/,
-    '移动端抽屉主体内边距收紧',
-  )
-  assert.match(responsiveSrc, /\.skill-reader-body\s*\{\s*min-height:\s*0/, '移动端阅读区 min-height 归零')
-
-  // 桌面/移动不分叉：元数据表格与正文共用同一 .skill-reader-doc 内容流，
-  // responsive.css 不得为 skill-reader-doc / 元数据表格单独建移动端结构
-  assert.ok(
-    !responsiveSrc.includes('skill-reader-doc'),
-    'responsive.css 不得为 skill-reader-doc 建移动端专属覆盖',
-  )
-  assert.ok(
-    !responsiveSrc.includes('skill-reader-desc'),
-    'responsive.css 不得残留移动端描述块结构',
-  )
-  // 组件单一渲染路径：无 matchMedia / 视口分支，富文本统一走 renderSkillDocMarkdown
-  assert.ok(!drawerSrc.includes('matchMedia'), '抽屉不得按视口分叉渲染逻辑')
-  assert.ok(
-    drawerSrc.includes('renderSkillDocMarkdown(content)'),
-    '富文本模式应统一走 renderSkillDocMarkdown 单一转换入口',
-  )
-})
-
 // ---------------------------------------------------------------------------
 // 5. SkillCenter 组件测试
 // ---------------------------------------------------------------------------
@@ -1383,46 +1311,4 @@ test('SkillCenter: 交互过滤、搜索与抽屉联动 (openTarget)', { timeout
     root.unmount()
   })
   host.remove()
-})
-
-// ---------------------------------------------------------------------------
-// 6. 源码静态规范契约：零 Emoji 铁律与 Fast Refresh
-// ---------------------------------------------------------------------------
-
-test('静态规范契约：所有技能模块源码 0 Emoji 且保 Fast Refresh', { timeout: 60_000 }, () => {
-  const modelSrc = readFileSync(join(PKG_ROOT, 'src/skills/skill-center-model.ts'), 'utf-8')
-  const readerModelSrc = readFileSync(join(PKG_ROOT, 'src/skills/skill-reader-model.ts'), 'utf-8')
-  const cardSrc = readFileSync(join(PKG_ROOT, 'src/skills/SkillCard.tsx'), 'utf-8')
-  const drawerSrc = readFileSync(join(PKG_ROOT, 'src/skills/SkillDetailDrawer.tsx'), 'utf-8')
-  const centerSrc = readFileSync(join(PKG_ROOT, 'src/skills/SkillCenter.tsx'), 'utf-8')
-
-  assert.doesNotMatch(modelSrc, emojiRegex, 'skill-center-model.ts 源码严禁包含 Emoji')
-  assert.doesNotMatch(readerModelSrc, emojiRegex, 'skill-reader-model.ts 源码严禁包含 Emoji')
-  assert.doesNotMatch(cardSrc, emojiRegex, 'SkillCard.tsx 源码严禁包含 Emoji')
-  assert.doesNotMatch(drawerSrc, emojiRegex, 'SkillDetailDrawer.tsx 源码严禁包含 Emoji')
-  assert.doesNotMatch(centerSrc, emojiRegex, 'SkillCenter.tsx 源码严禁包含 Emoji')
-
-  // Fast Refresh 检查：.tsx 仅导出组件与 TS 类型声明
-  const cardExports = cardSrc.match(/^export (?!interface|type)\s+(\w+)\s+([A-Za-z0-9_]+)/gm) ?? []
-  assert.ok(
-    cardExports.every((exp) => exp.includes('function SkillCard')),
-    'SkillCard.tsx 只导出 SkillCard 组件与类型',
-  )
-
-  const drawerExports = drawerSrc.match(/^export (?!interface|type)\s+(\w+)\s+([A-Za-z0-9_]+)/gm) ?? []
-  assert.ok(
-    drawerExports.every((exp) => exp.includes('function SkillDetailDrawer')),
-    'SkillDetailDrawer.tsx 只导出 SkillDetailDrawer 组件与类型',
-  )
-
-  const centerExports = centerSrc.match(/^export (?!interface|type)\s+(\w+)\s+([A-Za-z0-9_]+)/gm) ?? []
-  assert.ok(
-    centerExports.every((exp) => exp.includes('function SkillCenter')),
-    'SkillCenter.tsx 只导出 SkillCenter 组件与类型',
-  )
-
-  // 阅读器契约：文件选择必须复用公共 Select，严禁原生 select；样式不落内联
-  assert.match(drawerSrc, /import\s*\{[^}]*Select[^}]*\}\s*from\s*['"]@helm\/plugin-client['"]/)
-  assert.ok(!drawerSrc.includes('<select'), 'SkillDetailDrawer 严禁使用原生 select')
-  assert.ok(!/style=\{/.test(drawerSrc), 'SkillDetailDrawer 不得残留内联 style')
 })

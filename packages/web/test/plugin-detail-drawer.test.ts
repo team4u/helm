@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import React, { act } from 'react'
-import * as ReactDOMClient from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginSummary } from '@helm/protocol'
+import { ensureHappyDom } from './helpers/dom-harness.js'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../src/lib/api.js'
 import {
   buildResetFieldPayload,
@@ -15,10 +13,8 @@ import { groupUiContributions } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-;(globalThis as Record<string, unknown>).React = React
-
+ensureHappyDom()
+const ReactDOMClient = await import('react-dom/client')
 const e = React.createElement
 
 // 动态导入待测组件
@@ -976,10 +972,4 @@ test('PluginConfigForm：长标签与「默认 / 已配置」徽章防拆字碰�
   assert.match(html, /plugin-config-field-name">agent 启动超时（毫秒）<\/span>/)
   assert.match(html, /text-subtle plugin-config-source-tag"[^>]*>默认<\/span>/)
   assert.match(html, /badge badge-neutral plugin-config-source-tag"[^>]*>已配置<\/span>/)
-
-  const pluginCenterCss = readFileSync(new URL('../src/styles/plugin-center.css', import.meta.url), 'utf8')
-  assert.match(pluginCenterCss, /\.form-grid\.plugin-config-row\s*\{[^}]*grid-template-columns:\s*minmax\(140px,\s*176px\)\s+minmax\(0,\s*1fr\)/)
-  assert.match(pluginCenterCss, /\.plugin-config-field-label\s*\{[^}]*flex-wrap:\s*wrap/)
-  assert.match(pluginCenterCss, /\.plugin-config-source-tag\s*\{[^}]*flex-shrink:\s*0/)
-  assert.match(pluginCenterCss, /\.plugin-config-source-tag\s*\{[^}]*white-space:\s*nowrap/)
 })

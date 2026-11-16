@@ -10,13 +10,19 @@ import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import type { Root } from 'react-dom/client'
+import {
+  ensureHappyDom,
+  flushMacrotask,
+  jsonResponse,
+  waitForCondition,
+} from './helpers/dom-harness.js'
 
-GlobalRegistrator.register()
-Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
+ensureHappyDom()
+const { createRoot } = await import('react-dom/client')
 
 import { makeTestStore, HelmStoreContext } from './helpers/store.js'
+import { hangingEventStream } from './helpers/sse-stream.js'
 import { sseClientTimings } from '../src/lib/live-state.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
 import {
@@ -169,10 +175,8 @@ function mountWatcher(initialHtml = builtIndexHtml(CURRENT_ENTRY), nav: { locati
 }
 
 /** 等待探测 Promise 落定并让 React 提交期间的状态更新进入 act 环境。 */
-const flush = async (ms = 10): Promise<void> => {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms))
-  })
+const flush = async (ms = 0): Promise<void> => {
+  await flushMacrotask(ms)
 }
 
 function withTimings<T>(patch: Partial<typeof versionWatchTimings>, fn: () => Promise<T>): Promise<T> {
@@ -582,7 +586,7 @@ test('visibilitychange 变 visible 与 focus 立即探测，5s 节流窗口内�
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
   harness = mountWatcher()
   const h = harness
-  await withTimings({ visibilityThrottleMs: 80, pollIntervalMs: 60_000 }, async () => {
+  await withTimings({ visibilityThrottleMs: 30, pollIntervalMs: 60_000 }, async () => {
     act(() => {
       dispatchVisibility(false)
     })
@@ -602,9 +606,7 @@ test('visibilitychange 变 visible 与 focus 立即探测，5s 节流窗口内�
     await flush()
     assert.equal(h.fetchCalls.length, 1, '节流窗口内 visibility/focus 不重复探测')
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 100))
-    })
+    await flush(45)
     act(() => {
       window.dispatchEvent(new Event('focus'))
     })
@@ -615,23 +617,22 @@ test('visibilitychange 变 visible 与 focus 立即探测，5s 节流窗口内�
 
 test('visible 期间按周期轮询；hidden 暂停；恢复 visible 后继续', { timeout: 60_000 }, async () => {
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  await withTimings({ pollIntervalMs: 40, visibilityThrottleMs: 0 }, async () => {
+  await withTimings({ pollIntervalMs: 15, visibilityThrottleMs: 0 }, async () => {
     harness = mountWatcher()
     const h = harness
-    await flush(280)
-    assert.ok(h.fetchCalls.length >= 2, 'visible 期间周期探测')
+    await waitForCondition(() => h.fetchCalls.length >= 2)
 
     const beforeHidden = h.fetchCalls.length
     act(() => {
       dispatchVisibility(false)
     })
-    await flush(240)
+    await flush(45)
     assert.equal(h.fetchCalls.length, beforeHidden, 'hidden 期间不轮询')
 
     act(() => {
       dispatchVisibility(true)
     })
-    await flush(200)
+    await waitForCondition(() => h.fetchCalls.length > beforeHidden)
     assert.ok(h.fetchCalls.length > beforeHidden, '恢复 visible 后继续轮询')
   })
 })
@@ -825,25 +826,21 @@ test('WebView 吞掉同址导航时自动升级 cache-buster：URL 保留 pathna
   h.renderStore('boot-1')
   await flush()
   h.respond(() => htmlOf(NEW_ENTRY))
-  await withTimings({ reloadEscalateMs: 60 }, async () => {
+  await withTimings({ reloadEscalateMs: 20 }, async () => {
     h.renderStore('boot-2')
     await flush()
     assert.equal(h.reloads(), 1, 'clean 自动刷新第一次尝试')
     assert.deepEqual(h.replaceUrls(), ['/?x=1#/c/7'], '首次是干净同址导航：保留 query/hash、不加任何参数')
 
     // 替身 replace 不卸载页面 = 导航被容器吞掉：升级重试自动发生
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 200))
-    })
+    await waitForCondition(() => h.reloads() === 2)
     assert.equal(h.reloads(), 2, '页面仍存活 → 升级为 cache-buster 导航重试一次')
     const escalated = h.replaceUrls()[1]!
     assert.match(escalated, new RegExp(`[?]x=1&${RELOAD_CACHE_BUSTER_PARAM}=`), '既有 query 参数保留，buster 追加其后')
     assert.ok(escalated.endsWith('#/c/7'), 'hash 路由原样保留')
 
     // 升级重试后不再自动升级（防循环）；手动动作仍可用且直接进入带 buster 的尝试
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 120))
-    })
+    await flush(45)
     assert.equal(h.reloads(), 2, '自动升级至多一次，不循环')
     act(() => {
       h.view().reloadNow()
@@ -864,7 +861,7 @@ test('升级 timer 被后续手动导航取代：待决窗口内手动点击只�
   h.renderStore('boot-1')
   await flush()
   h.respond(() => htmlOf(NEW_ENTRY))
-  await withTimings({ reloadEscalateMs: 150 }, async () => {
+  await withTimings({ reloadEscalateMs: 40 }, async () => {
     h.renderStore('boot-2')
     await flush()
     assert.equal(h.reloads(), 1, '自动刷新第一次尝试（升级 timer 待决）')
@@ -878,9 +875,7 @@ test('升级 timer 被后续手动导航取代：待决窗口内手动点击只�
     assert.match(h.replaceUrls()[1]!, new RegExp(`${RELOAD_CACHE_BUSTER_PARAM}=`), '手动点击直接进入带 buster 的尝试')
 
     // 越过原升级期限后不再有追加的自动导航（旧行为会在这里多发一条）
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 400))
-    })
+    await flush(70)
     assert.equal(h.reloads(), 2, '一次用户操作只对应一次导航，不追加自动升级')
     assert.equal(h.view().updateAvailable, true, '页面未卸载（替身不导航）：提示保留')
   })
@@ -894,7 +889,7 @@ test('升级窗口内出现本地输入现场：放弃自动升级；转清后�
   h.renderStore('boot-1')
   await flush()
   h.respond(() => htmlOf(NEW_ENTRY))
-  await withTimings({ reloadEscalateMs: 60 }, async () => {
+  await withTimings({ reloadEscalateMs: 25 }, async () => {
     h.renderStore('boot-2')
     await flush()
     assert.equal(h.reloads(), 1, '自动刷新第一次尝试')
@@ -903,9 +898,7 @@ test('升级窗口内出现本地输入现场：放弃自动升级；转清后�
     act(() => {
       setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true })
     })
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 200))
-    })
+    await flush(50)
     assert.equal(h.reloads(), 1, '升级窗口内出现草稿：不自动升级')
 
     act(() => {
@@ -993,23 +986,21 @@ test('storage 不可用：指纹驱动的自动刷新同样拒绝（fail-closed 
 
 test('卸载后清理 listener 与轮询 timer：事件不再探测，周期不再触发', { timeout: 60_000 }, async () => {
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  await withTimings({ pollIntervalMs: 40, visibilityThrottleMs: 0 }, async () => {
+  await withTimings({ pollIntervalMs: 15, visibilityThrottleMs: 0 }, async () => {
     harness = mountWatcher()
     const h = harness
-    await flush(220)
+    await waitForCondition(() => h.fetchCalls.length >= 1)
     assert.ok(h.fetchCalls.length >= 1, '卸载前轮询已产生探测')
     h.unmount()
 
     const frozen = h.fetchCalls.length
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 140))
-    })
+    await flush(45)
     act(() => {
       dispatchVisibility(true)
       window.dispatchEvent(new Event('focus'))
       window.dispatchEvent(new Event('vite:preloadError'))
     })
-    await flush(60)
+    await flush(25)
     assert.equal(h.fetchCalls.length, frozen, '卸载后不再探测')
     assert.equal(h.reloads(), 0, '卸载后 preloadError 不刷新')
   })
@@ -1131,14 +1122,8 @@ test('HelmStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
-  const waitFor = async (expected: string, ms = 15_000): Promise<void> => {
-    const deadline = Date.now() + ms
-    while (observedBootId !== expected) {
-      if (Date.now() > deadline) throw new Error(`waitFor kernelBootId=${expected} 超时，当前 ${observedBootId}`)
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20))
-      })
-    }
+  const waitFor = async (expected: string): Promise<void> => {
+    await waitForCondition(() => observedBootId === expected, 15_000, 2)
   }
   try {
     // 第一条连接（先注册工厂再挂载，避免连接先到挂起）：boot-1 快照
@@ -1166,7 +1151,6 @@ test('HelmStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重
     })
     await act(async () => {
       first.end()
-      await new Promise((resolve) => setTimeout(resolve, 10))
     })
     await waitFor('boot-2')
   } finally {
@@ -1177,5 +1161,70 @@ test('HelmStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重
     Object.assign(sseClientTimings, originalTimings)
     globalThis.fetch = originalFetch
     host.remove()
+  }
+})
+
+test('App 版本横幅集成：渲染显式 type=button 立即刷新按钮并直连 reloadNow 触发导航', { timeout: 60_000 }, async () => {
+  const { App } = await import('../src/App.js')
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  const originalFetch = globalThis.fetch
+  const originalReplace = window.location.replace.bind(window.location)
+  const replacedUrls: string[] = []
+  Object.defineProperty(window.location, 'replace', {
+    configurable: true,
+    value: (url: string) => {
+      replacedUrls.push(String(url))
+    },
+  })
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url === '/api/auth/status') return jsonResponse({ configured: true, authenticated: true })
+    if (url === '/api/events' || url.startsWith('/api/events?')) {
+      return new Response(
+        hangingEventStream((send) => {
+          send(new TextEncoder().encode(
+            `event: snapshot\ndata: ${JSON.stringify({ bootId: 'boot-1', seq: 1, conversations: [], pendingAsks: [], plugins: [], ui: [] })}\n\n`,
+          ))
+        }, { signal: init?.signal }),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      )
+    }
+    return jsonResponse([])
+  }) as typeof fetch
+
+  const appHost = document.createElement('div')
+  document.body.appendChild(appHost)
+  const appRoot = createRoot(appHost)
+  try {
+    act(() => {
+      setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true })
+    })
+    await act(async () => {
+      appRoot.render(<App />)
+    })
+    await waitForCondition(() => appHost.querySelector('.helm-shell') !== null)
+    act(() => {
+      window.dispatchEvent(new Event('vite:preloadError'))
+    })
+    await waitForCondition(() => appHost.querySelector('.version-banner[role="status"]') !== null)
+    const banner = appHost.querySelector<HTMLElement>('.version-banner[role="status"]')
+    assert.ok(banner, '挂起更新时渲染 version-banner')
+    const btn = banner!.querySelector<HTMLButtonElement>('button[type="button"]')
+    assert.ok(btn && btn.textContent?.includes('立即刷新'), '「立即刷新」是真实 type=button')
+    act(() => {
+      btn!.click()
+    })
+    await flush()
+    assert.equal(replacedUrls.length, 1, '点击「立即刷新」直连 reloadNow 发起顶层导航')
+  } finally {
+    await act(async () => {
+      appRoot.unmount()
+    })
+    Object.defineProperty(window.location, 'replace', {
+      configurable: true,
+      value: originalReplace,
+    })
+    globalThis.fetch = originalFetch
+    appHost.remove()
   }
 })

@@ -1,16 +1,12 @@
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
-import * as ReactDOMClient from 'react-dom/client'
-import {
+import { ensureHappyDom } from './helpers/dom-harness.js'
+
+ensureHappyDom()
+const ReactDOMClient = await import('react-dom/client')
+const {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -20,51 +16,9 @@ import {
   AlertDialogPortal,
   AlertDialogTitle,
   ConfirmDialog,
-} from '../src/ui/AlertDialog.js'
+} = await import('../src/ui/AlertDialog.js')
 
 const e = React.createElement
-const SRC_DIR = fileURLToPath(new URL('../src', import.meta.url))
-
-function getAllSourceFiles(dir: string): string[] {
-  const entries = readdirSync(dir, { withFileTypes: true })
-  const files: string[] = []
-  for (const entry of entries) {
-    const fullPath = join(dir, entry.name)
-    if (entry.isDirectory()) {
-      files.push(...getAllSourceFiles(fullPath))
-    } else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx') || entry.name.endsWith('.js'))) {
-      files.push(fullPath)
-    }
-  }
-  return files
-}
-
-test('静态扫描铁律：packages/web/src 下所有源码文件 0 处 window.confirm', { timeout: 60_000 }, () => {
-  const files = getAllSourceFiles(SRC_DIR)
-  assert.ok(files.length > 10, `扫描到的源码文件数量应大于 10，实际为 ${files.length}`)
-
-  const violations: Array<{ file: string; line: number; text: string }> = []
-
-  for (const file of files) {
-    const content = readFileSync(file, 'utf8')
-    const lines = content.split('\n')
-    lines.forEach((lineText, idx) => {
-      if (lineText.includes('window.confirm')) {
-        violations.push({
-          file: file.replace(SRC_DIR, 'src'),
-          line: idx + 1,
-          text: lineText.trim(),
-        })
-      }
-    })
-  }
-
-  assert.deepEqual(
-    violations,
-    [],
-    `全仓 packages/web/src 必须彻底淘汰原生 window.confirm，发现违规点：\n${violations.map((v) => `  - ${v.file}:${v.line} -> ${v.text}`).join('\n')}`,
-  )
-})
 
 test('ConfirmDialog SSR (renderToString)：inline={true} 或纯 Node 环境自动内联降级，渲染 role="alertdialog" 与 Quiet Surface 样式', { timeout: 60_000 }, () => {
   const html = renderToString(

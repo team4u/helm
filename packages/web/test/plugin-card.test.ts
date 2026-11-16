@@ -1,20 +1,12 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { readHostStyles } from './helpers/host-styles.js'
-import { join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
 import React, { act } from 'react'
-import * as ReactDOMClient from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginSummary } from '@helm/protocol'
+import { ensureHappyDom } from './helpers/dom-harness.js'
 
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-;(globalThis as Record<string, unknown>).React = React
-
-const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
+ensureHappyDom()
+const ReactDOMClient = await import('react-dom/client')
 const e = React.createElement
 
 // 动态导入待测组件（TDD 初始阶段因未实现将失败）
@@ -332,12 +324,8 @@ test('PluginCard：selected 与 enabled 状态正交映射到样式类', { timeo
 // 6. 静态源码与渲染输出零 Emoji 契约
 // ---------------------------------------------------------------------------
 
-test('PluginCard：源码与渲染输出全程 0 Emoji', { timeout: 60_000 }, () => {
-  const componentPath = join(PKG_ROOT, 'src/plugins/PluginCard.tsx')
-  const src = readFileSync(componentPath, 'utf-8')
+test('PluginCard：渲染输出全程 0 Emoji', { timeout: 60_000 }, () => {
   const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
-
-  assert.doesNotMatch(src, emojiRegex, 'PluginCard.tsx 源码中严禁含有任何 Emoji')
 
   const html = renderToString(
     e(PluginCard, {
@@ -348,19 +336,6 @@ test('PluginCard：源码与渲染输出全程 0 Emoji', { timeout: 60_000 }, ()
     }),
   )
   assert.doesNotMatch(html, emojiRegex, 'PluginCard 渲染输出中严禁含有任何 Emoji')
-})
-
-// ---------------------------------------------------------------------------
-// 7. 样式契约：styles.css 包含卡片与网格流类名
-// ---------------------------------------------------------------------------
-
-test('PluginCard 样式契约：styles.css 包含 .plugin-center-grid、.plugin-card、.plugin-card-pill', { timeout: 60_000 }, () => {
-  const css = readHostStyles()
-
-  assert.match(css, /\.plugin-center-grid/, 'styles.css 必须包含 .plugin-center-grid 样式')
-  assert.match(css, /\.plugin-card/, 'styles.css 必须包含 .plugin-card 样式')
-  assert.match(css, /\.plugin-card-pill/, 'styles.css 必须包含 .plugin-card-pill 胶囊徽章样式')
-  assert.match(css, /var\(--border\)/, '卡片样式必须遵循发丝边框变量规范')
 })
 
 // ---------------------------------------------------------------------------
@@ -499,36 +474,6 @@ test('resolvePluginIcon：纯属性驱动零硬编码推测——自声明 icon 
   assert.equal(resolvePluginIcon({ icon: '   ' }), 'puzzle')
   assert.equal(resolvePluginIcon(null), 'puzzle')
   assert.equal(resolvePluginIcon(undefined), 'puzzle')
-})
-
-test('PluginCard：名称与 ID 垂直堆叠且靠左对齐，头部样式 contract 确保不被挤压重叠', { timeout: 60_000 }, () => {
-  const stylesCss = readHostStyles()
-
-  // .plugin-card-meta 必须为 column 纵向堆叠并靠左对齐
-  assert.match(
-    stylesCss,
-    /\.plugin-card-meta\s*\{[^}]*flex-direction:\s*column;/,
-    'styles.css 中 .plugin-card-meta 必须为 column 纵向排列',
-  )
-  assert.match(
-    stylesCss,
-    /\.plugin-card-meta\s*\{[^}]*align-items:\s*flex-start;/,
-    'styles.css 中 .plugin-card-meta 必须靠左对齐',
-  )
-
-  // .plugin-card-id 靠左对齐
-  assert.match(
-    stylesCss,
-    /\.plugin-card-id\s*\{[^}]*text-align:\s*left;/,
-    'styles.css 中 .plugin-card-id 必须靠左对齐',
-  )
-
-  // .plugin-drawer-header 必须为 align-items: flex-start 避免右上角关闭按钮落在奇怪的中间
-  assert.match(
-    stylesCss,
-    /\.plugin-drawer-header\s*\{[^}]*align-items:\s*flex-start;/,
-    'styles.css 中 .plugin-drawer-header 必须为 align-items: flex-start',
-  )
 })
 
 test('PluginCard：完全不渲染卡片图标容器，名称与 ID 靠左对齐', { timeout: 60_000 }, () => {

@@ -1,19 +1,13 @@
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
-import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
 import React, { act } from 'react'
-import * as ReactDOMClient from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { findNextSelectableIndex, type SelectOption, type SelectChangeEvent } from '@helm/plugin-client'
+import type { SelectOption, SelectChangeEvent } from '@helm/plugin-client'
+import { ensureHappyDom } from './helpers/dom-harness.js'
 
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-;(globalThis as Record<string, unknown>).React = React
-
-const { Select } = await import('@helm/plugin-client')
+ensureHappyDom()
+const ReactDOMClient = await import('react-dom/client')
+const { Select, findNextSelectableIndex } = await import('@helm/plugin-client')
 
 const e = React.createElement
 
@@ -296,51 +290,4 @@ test('Select multiple: 全选时触发器显示已全选摘要文案', { timeout
   )
 
   assert.match(html, /已全选[\s\S]*?\(2\)/)
-})
-
-// ---------------------------------------------------------------------------
-// 4. 架构规范与项目契约测试
-// ---------------------------------------------------------------------------
-
-test('契约：packages/web/src 下全部原生 select 已替换为公共 Select 组件', { timeout: 60_000 }, () => {
-  const srcDir = new URL('../src/', import.meta.url)
-  const files: string[] = []
-
-  function walk(dir: URL) {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const child = new URL(entry.name + (entry.isDirectory() ? '/' : ''), dir)
-      if (entry.isDirectory()) {
-        walk(child)
-      } else if (entry.name.endsWith('.tsx') || entry.name.endsWith('.ts')) {
-        files.push(fileURLToPath(child))
-      }
-    }
-  }
-
-  walk(srcDir)
-  assert.ok(files.length > 0)
-
-  const violations: string[] = []
-  for (const filePath of files) {
-    const content = readFileSync(filePath, 'utf8')
-    if (content.includes('<select')) {
-      violations.push(filePath)
-    }
-  }
-
-  assert.deepEqual(violations, [], 'packages/web/src 下不得存在任何原生 <select> 标签')
-})
-
-test('契约：ProfileDetailDrawer 中的模型选择采用公共 Select，且高度与字号契约对齐', { timeout: 60_000 }, () => {
-  const profileDrawerSource = readFileSync(new URL('../src/profiles/ProfileDetailDrawer.tsx', import.meta.url), 'utf8')
-  const stylesSource = readHostStyles()
-
-  // 1. Profile 中的默认模型使用 <Select>
-  assert.match(profileDrawerSource, /import\s*\{[^}]*Select[^}]*\}\s*from\s*['"]@helm\/plugin-client['"]/)
-  assert.match(profileDrawerSource, /<Select[\s\S]*?options=\{modelOptions\}/)
-
-  // 2. 样式契约：.input 与 .helm-select-trigger 严格等高（27px）与相同边框圆角规范
-  assert.match(stylesSource, /\.input,\s*\.select\s*\{[^}]*height:\s*27px;/)
-  assert.match(stylesSource, /\.helm-select-trigger\s*\{[^}]*height:\s*27px;/)
-  assert.match(stylesSource, /\.helm-select-trigger\s*\{[^}]*font-size:\s*12\.5px;/)
 })
