@@ -3,12 +3,12 @@
  *
  * 职责：
  * - background 缺省与显式拒绝（subagent / SubagentWorkflow 工具共用）：
- *   人类交互会话缺省后台（父回合不阻塞，完成后 followUp 汇报）；自动化
+ *   人类交互会话缺省后台（父回合不阻塞，完成后 steer 插话汇报）；自动化
  *   会话（bot/helm：受管子代理、驻留 Worker、触发会话）缺省同步等待——
  *   后台完成汇报会驱动自动化会话早结算（把「后台已启动」当终态消费），
  *   显式 background=true 一律显式拒绝，绝不静默改写；
- * - 后台 run 结算汇报：经 submitInput(requestId) 向父会话投递（跨重启
- *   幂等；父会话已删除时 notification 通知）；级联取消边界内的下级父会话
+ * - 后台 run 结算汇报：经 submitInput(requestId) 向父会话投递（忙时 steer
+ *   插话；跨重启幂等；父会话已删除时 notification 通知）；级联取消边界内的下级父会话
  *   不投递（防取消后复活），只向边界外拥有者单次结算汇报。
  */
 import { HelmError, safeResultText, type AgentExecutionInfo } from '@helm/protocol'
@@ -73,7 +73,7 @@ export interface BackgroundReporterDeps {
     text: string,
     opts: {
       origin: 'agent'
-      whenBusy: 'followUp'
+      whenBusy: 'steer'
       requestId: string
       meta: Record<string, unknown>
     },
@@ -149,7 +149,7 @@ export function createBackgroundReporter(deps: BackgroundReporterDeps): Backgrou
         `${isSubagent ? '后台子代理任务' : '后台工作流任务'}已结算。以下为运行 ${run.id} 的结果数据（仅代表本次任务；otherRunningTasks 是投递时其余在途运行的快照）：\n${safeResultText(report)}`,
         {
           origin: 'agent',
-          whenBusy: 'followUp',
+          whenBusy: 'steer',
           requestId,
           meta: {
             backgroundRunId: run.id,

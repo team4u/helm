@@ -70,7 +70,7 @@ export function registerSubagentTool(
       '只有紧接着的下一步必须依赖子代理结果、期间没有其他工作时，才显式指定 background:false 同步等待。',
     ],
     description:
-      '派生一个子代理。人类交互会话缺省后台执行：执行环境就绪后立即返回 runId，后台完成后向本会话 followUp 汇报；自动化会话（受管子代理/驻留 Worker/触发会话，归属 bot/helm）缺省同步等待最终结果，显式 background=true 会被拒绝——后台汇报会驱动自动化调用方早结算。显式 background:false 可强制同步等待：同步运行同样有 durable WorkflowRun（可经 workflows detach 动作或界面「转入后台」按 runId 转后台，调用立即返回后台句柄）。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、fork（从父会话当前已完成上下文分叉派生原生子会话，缺省 agentType 继承父会话角色与上下文/目录/模型配置，与 resume 互斥，不支持外部运行时）、isolation:worktree、model、effort、maxSubagentDepth（显式授予子树派生深度上限，1..5，缺省继承当前上限 2）；凭 execution.conversationId/executionId 作为 resume 续接。外部运行时窗格缺省不携带任何父会话机密，需注入时用 secretNames 逐名授予。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
+      '派生一个子代理。人类交互会话缺省后台执行：执行环境就绪后立即返回 runId，后台完成后向本会话 steer 插话汇报；自动化会话（受管子代理/驻留 Worker/触发会话，归属 bot/helm）缺省同步等待最终结果，显式 background=true 会被拒绝——后台汇报会驱动自动化调用方早结算。显式 background:false 可强制同步等待：同步运行同样有 durable WorkflowRun（可经 workflows detach 动作或界面「转入后台」按 runId 转后台，调用立即返回后台句柄）。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、fork（从父会话当前已完成上下文分叉派生原生子会话，缺省 agentType 继承父会话角色与上下文/目录/模型配置，与 resume 互斥，不支持外部运行时）、isolation:worktree、model、effort、maxSubagentDepth（显式授予子树派生深度上限，1..5，缺省继承当前上限 2）；凭 execution.conversationId/executionId 作为 resume 续接。外部运行时窗格缺省不携带任何父会话机密，需注入时用 secretNames 逐名授予。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -228,7 +228,7 @@ export function registerSubagentTool(
         const outcome = await workflows.waitForeground(started.run.id)
         if (outcome === 'detached') {
           // detach 转后台：立即返回后台句柄（与 background:true 返回形状兼容），
-          // 终态经 BackgroundReporter followUp 汇报；父 signal 已由 detach
+          // 终态经 BackgroundReporter steer 汇报；父 signal 已由 detach
           // 临界段解绑，不再中止本 run。status 现读真实值（detach 后 run 可能
           // 已快速终态，不伪造 running）。
           syncRunsDoc()

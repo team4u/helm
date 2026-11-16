@@ -732,8 +732,9 @@ Schema: ${JSON.stringify(structured.schema)}
 </structured_output_contract>`
     : basePrompt
 
+  // Busy mode: steer (unified default); the child is idle here, so this just starts the turn.
   const submission = await conversation.submit(
-    { type: 'input', content: promptText, whenBusy: 'followUp' },
+    { type: 'input', content: promptText, whenBusy: 'steer' },
     bg,
   )
   const settled = await submission.wait(bg)
@@ -759,7 +760,7 @@ Schema: ${JSON.stringify(structured.schema)}
           `register_structured_output tool,output parameter is satisfy Schema legal JSON.` +
           `
 Schema: ${JSON.stringify(structured.schema)}`,
-        whenBusy: 'followUp',
+        whenBusy: 'steer',
       },
       bg,
     )

@@ -31,6 +31,7 @@ import {
   type WorkflowServiceHost,
   type WorkflowStateStore,
 } from '../src/workflow/engine/service.js'
+import { createBackgroundReporter, type BackgroundReporterDeps } from '../src/workflow/background.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -406,4 +407,68 @@ it('prepareRecovery 容忍边界：ownership_conflict（human 接管）与 not_f
   const service = new WorkflowService({ dataDir: barrierDir, state, host })
   await service.prepareRecovery()
   assert.deepEqual(host.guardedAborts, [31, 32], '两个子会话都尝试过守卫中止（human 由内核拒绝、已删会话 404），屏障不放行前先尝试')
+})
+
+// ---------------------------------------------------------------------------
+// Background reports interject for every run kind and terminal status.
+// ---------------------------------------------------------------------------
+
+it('createBackgroundReporter 契约矩阵：kind × 终态（completed/failed/aborted）投递均 whenBusy=steer，requestId/meta 不变', timeout, async () => {
+  interface RecordedSubmit {
+    conversationId: number
+    text: string
+    opts: { origin: string; whenBusy: string; requestId: string; meta: Record<string, unknown> }
+  }
+  const submits: RecordedSubmit[] = []
+  const deps: BackgroundReporterDeps = {
+    getConversation: () => ({ id: 1 }),
+    emitEvent: () => {},
+    submitInput: async (conversationId, text, opts) => {
+      submits.push({ conversationId, text, opts })
+    },
+    isConversationCancelling: () => false,
+    listRuns: () => [],
+  }
+  const reporter = createBackgroundReporter(deps)
+
+  const kinds = ['subagent', 'workflow'] as const
+  const statuses = ['completed', 'failed', 'aborted'] as const
+  for (const kind of kinds) {
+    for (const status of statuses) {
+      const runId = `wf_matrix_${kind}_${status}`
+      const run: WorkflowRunSummary = {
+        id: runId,
+        name: 'matrix',
+        conversationId: 1,
+        kind,
+        status,
+        createdAt: 1,
+        updatedAt: 2,
+        ...(status === 'completed' ? { result: { done: true } } : {}),
+        ...(status === 'failed' ? { error: 'boom' } : {}),
+        ...(status === 'aborted' ? { error: 'aborted by operator' } : {}),
+      }
+      await reporter.deliver(run, { parentConversationId: 1, ...(kind === 'subagent' ? { agentType: 'worker' } : {}) })
+      const call = submits.at(-1)!
+      assert.equal(call.opts.meta['backgroundRunId'], runId)
+      assert.equal(call.opts.meta['kind'], `${kind}_report`)
+      const report = JSON.parse(call.text.slice(call.text.indexOf('\n') + 1)) as { runId: string; status: string }
+      assert.equal(report.runId, runId)
+      assert.equal(report.status, status)
+    }
+  }
+
+  assert.equal(submits.length, kinds.length * statuses.length, '每个 kind × 终态恰投递一次')
+  for (const call of submits) {
+    assert.equal(call.conversationId, 1)
+    assert.equal(call.opts.origin, 'agent')
+    assert.equal(call.opts.whenBusy, 'steer', `忙时策略必须 steer：${JSON.stringify(call.opts)}`)
+    const kind = call.opts.meta['kind'] as string
+    const expectedKindLabel = kind === 'subagent_report' ? 'subagent' : 'workflow'
+    assert.equal(call.opts.requestId, `helm:${expectedKindLabel}-report:${String(call.opts.meta['backgroundRunId'])}`)
+    assert.equal(call.opts.meta['renderer'], 'workflow:background-report')
+    assert.ok(call.text.includes(`"${String(call.opts.meta['backgroundRunId'])}"`), '汇报正文应携带 run 结果数据')
+  }
+  assert.equal(submits.filter((s) => s.opts.meta['kind'] === 'subagent_report').length, statuses.length)
+  assert.equal(submits.filter((s) => s.opts.meta['kind'] === 'workflow_report').length, statuses.length)
 })

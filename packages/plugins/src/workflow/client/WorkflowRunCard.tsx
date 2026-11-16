@@ -270,7 +270,7 @@ export function WorkflowRunCardBody(props: {
     guarded(() => ctx.callAction('abort', { runId: run.id }), '中止工作流失败')
   }
   // 转入后台：仅运行中的前台同步 run（父回合工具调用阻塞等待处可放行）；
-  // detach 后阻塞中的调用立即返回后台句柄，终态 followUp 汇报。
+  // Detach releases the current call; settlement reports use steer.
   const detach = (): void => {
     guarded(
       () =>
@@ -389,7 +389,7 @@ export function WorkflowRunCardBody(props: {
             className="btn btn-sm"
             disabled={busy}
             onClick={detach}
-            title="把该前台同步运行转入后台：阻塞中的工具调用立即返回后台句柄，运行完成后自动 followUp 汇报"
+            title={ctx.translate({ en: 'Move this workflow to the background; the current call returns a handle and the result arrives as an interjection.', 'zh-CN': '将工作流转入后台，当前调用立即返回句柄，完成后自动插话汇报' })}
           >
             <Icon name="arrow-down-to-line" size={11} />
             转入后台

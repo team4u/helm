@@ -213,7 +213,7 @@ export function registerSuperAgentActions(
             subscriptions: [...doc.subscriptions, { threadKey, workerConversationId: worker.id, createdAt: Date.now() }],
           }))
         }
-        await ctx.host.submitInput(worker.id, input.prompt, { origin: 'agent', whenBusy: 'followUp' })
+        await ctx.host.submitInput(worker.id, input.prompt, { origin: 'agent', whenBusy: 'steer' })
       } catch (err) {
         reportError(`Worker #${worker.id} 派工提交失败（登记/提交阶段，回滚中）`, err)
         await rollbackFailedDispatch(worker.id, workerEntry, threadKey, err)

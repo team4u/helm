@@ -6,7 +6,7 @@
  * runtime 角色枚举）：
  * - 人类交互会话（未标记归属 = human）缺省 background=true：工具在执行环境
  *   就绪 / durable running 快照落盘后立即返回（runId + running），后台完成后
- *   向父会话幂等 followUp 汇报（origin=agent、meta.backgroundRunId、
+ *   向父会话幂等 steer 汇报（origin=agent、meta.backgroundRunId、
  *   requestId helm:<kind>-report:<runId>）；父回合结束不误杀后台任务；
  * - 自动化会话（归属 helm/bot，如受管子代理、驻留 Worker）缺省同步等待最终
  *   结果；显式 background=true 被显式拒绝（subagent_failed / workflow_failed
@@ -464,7 +464,7 @@ describe('同步运行 detach 转后台（subagent / SubagentWorkflow 工具链�
     }
   })
 
-  it('同步 SubagentWorkflow 阻塞等待中 detach：返回后台句柄形状，终态 followUp 汇报', { timeout: 60_000 }, async () => {
+  it('同步 SubagentWorkflow 阻塞等待中 detach：返回后台句柄形状，终态 steer 汇报', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'fgdetach3')
     const { models, faux } = makeFauxModels()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })

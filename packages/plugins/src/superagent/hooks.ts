@@ -154,7 +154,7 @@ export function registerSuperAgentHooks(
       try {
         await ctx.host.submitInput(target, node.summary, {
           origin: 'agent',
-          whenBusy: 'followUp',
+          whenBusy: 'steer',
           meta: {
             renderer: WORKER_REPORT_RENDERER,
             workerId: conversation.id,

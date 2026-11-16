@@ -384,7 +384,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
     }
   })
 
-  it('人类会话默认后台（省略 background）subagent({ fork: true })：立即返回后台句柄，结算后 followUp 汇报并可 resume', { timeout: 60_000 }, async () => {
+  it('人类会话默认后台（省略 background）subagent({ fork: true })：立即返回后台句柄，结算后 steer 汇报并可 resume', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bg-default-fork')
     const dataDir = join(dir, 'data')
     mkdirSync(dataDir, { recursive: true })
@@ -436,7 +436,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
         assert.ok(users.some((t) => t.includes('后台分叉子任务')), 'resume 后应保留原后台分叉上下文')
         return fauxAssistantMessage('后台续接成功')
       }
-      // followUp 后台结算汇报到达父会话触发的新回合
+      // steer 后台结算汇报到达父会话触发的新回合
       return fauxAssistantMessage('收到后台分叉汇报')
     }
     faux.setResponses(Array.from({ length: 20 }, () => step))
@@ -496,7 +496,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
           }
           return false
         },
-        { timeoutMs: 20_000, intervalMs: 20, message: '等待超时: 后台 fork followUp 汇报到达父会话' },
+        { timeoutMs: 20_000, intervalMs: 20, message: '等待超时: 后台 fork steer 汇报到达父会话' },
       )
       assert.equal(reportInput?.id, `helm:subagent-report:${runId}`)
       assert.equal(reportInput?.origin, 'agent')

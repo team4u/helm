@@ -405,10 +405,14 @@
   justify-content: flex-start;
 }
 
-/* 排队待生效（steer / followUp）胶囊：虚线边框与轻微降透明度区分正式消息 */
-.msg-human-pill-queued {
-  border-style: dashed;
-  opacity: 0.86;
+/* Pending inputs share one muted surface regardless of origin or delivery mode. */
+.msg-human-pill.msg-human-pill-queued {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  color: var(--fg-muted);
+  font-size: 15px;
 }
 
 /* 排队中的非人类长文本（如后台汇报原文）：折叠预览 + 展开收起按钮 */
@@ -424,8 +428,6 @@
   -webkit-line-clamp: 6;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  font-size: 13px;
-  color: var(--fg-muted);
   word-break: break-word;
   min-width: 0;
 }

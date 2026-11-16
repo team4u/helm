@@ -79,7 +79,7 @@ export async function waitForegroundRun(
 /**
  * 把运行中的前台同步 run 原子转为后台（detach 动作入口）。同步临界段
  * （无 await）：状态判定 → 置位 detachedAt + notifyParentOnSettle（结算后经
- * outbox 向父会话 followUp 汇报）→ 持久写入记录文件（失败回滚内存标记，
+ * outbox 向父会话 steer 汇报）→ 持久写入记录文件（失败回滚内存标记，
  * 状态不被半修改）→ 解除父 signal 中止绑定（引擎绑定 + waiter.onDetached
  * 工具侧绑定）→ 唤醒等待者。临界段完成（detach 已生效且记录文件已 fsync）
  * 后 await 状态存储 flush：失败如实抛 detach_flush_failed，绝不回滚已持久

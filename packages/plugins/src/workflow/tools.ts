@@ -89,7 +89,7 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
       '工作流返回运行句柄时表示已启动；必须等终态汇报后才能交付最终结果。',
     ],
     description:
-      '在当前会话执行 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本（字符串形 JSON 自动解包）。人类交互会话缺省后台执行（background 缺省 true）：启动后立即返回运行中 summary，完成后向本会话 followUp 汇报；自动化会话（归属 bot/helm：受管子代理/驻留 Worker/触发会话）缺省同步等待终态（runId/status/nodes/result），显式 background=true 会被拒绝。同步运行阻塞期间可经 workflows detach 动作或界面「转入后台」按 runId 转后台：调用立即返回后台句柄（ok/background/summary），终态 followUp 汇报。',
+      '在当前会话执行 SubagentWorkflow 确定性编排脚本。script 为内联 DSL 源码，scriptPath 指向脚本文件，name 引用已保存工作流（三者择一）；仅提供 resumeFromRunId 时可复用原脚本。args 为任意 JSON 原样传给脚本（字符串形 JSON 自动解包）。人类交互会话缺省后台执行（background 缺省 true）：启动后立即返回运行中 summary，完成后向本会话 steer 插话汇报；自动化会话（归属 bot/helm：受管子代理/驻留 Worker/触发会话）缺省同步等待终态（runId/status/nodes/result），显式 background=true 会被拒绝。同步运行阻塞期间可经 workflows detach 动作或界面「转入后台」按 runId 转后台：调用立即返回后台句柄（ok/background/summary），终态 steer 插话汇报。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -100,7 +100,7 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
         resumeFromRunId: { type: 'string', description: '断点恢复的既有 runId（可选）' },
         background: {
           type: 'boolean',
-          description: '后台执行：启动后立即返回运行句柄，完成后向本会话 followUp 汇报。人类交互会话缺省 true；自动化会话缺省 false 且显式 true 被拒绝（防早结算）',
+          description: '后台执行：启动后立即返回运行句柄，完成后向本会话 steer 插话汇报。人类交互会话缺省 true；自动化会话缺省 false 且显式 true 被拒绝（防早结算）',
         },
       },
       additionalProperties: false,
@@ -150,7 +150,7 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
         if (backgroundChoice.background) {
           // 后台模式：durable running 快照落盘即返回，不绑定父回合 signal
           //（父回合结束不误杀；中止仅经 abort(runId)/级联取消）；完成后经
-          // notifyParentOnSettle outbox 向父会话幂等 followUp 汇报。
+          // notifyParentOnSettle outbox 向父会话幂等 steer 汇报。
           syncRunsDoc()
           const payload = { ok: true, background: true, summary: started }
           return {

@@ -4,7 +4,7 @@
  * 定位：把同步工具（subagent / SubagentWorkflow 的 background:false 路径，
  * 或自动化会话缺省同步）启动、仍在运行中的前台同步 run 原子转入后台：
  * 阻塞中的父回合工具调用立即收到后台句柄，run 继续执行，终态经
- * notifyParentOnSettle outbox 向父会话 followUp 汇报（BackgroundReporter）。
+ * notifyParentOnSettle outbox 向父会话 steer 插话汇报（BackgroundReporter）。
  *
  * 授权与状态纪律：
  * 1. run 侧：必须存在（getRun 404 透传）且为前台同步标记（record

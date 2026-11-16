@@ -579,7 +579,7 @@ export interface HelmHostApi {
   submitInput(
     conversationId: number,
     text: string,
-    /** whenBusy 省略时内核默认 steer（插话引导）；批处理投递请显式 followUp。 */
+    /** Defaults to steer when omitted; followUp is reserved for explicitly requested queueing. */
     opts?: {
       origin?: InputOrigin
       whenBusy?: WhenBusy

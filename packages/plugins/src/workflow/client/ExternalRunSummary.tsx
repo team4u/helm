@@ -58,7 +58,7 @@ export function ExternalRunSummary(props: {
           <button
             type="button"
             className="btn btn-xs"
-            title="把该前台同步外部执行转入后台：阻塞中的调用立即返回后台句柄，完成后自动 followUp 汇报"
+            title={ctx.translate({ en: 'Move this external run to the background; the current call returns a handle and the result arrives as an interjection.', 'zh-CN': '将外部执行转入后台，当前调用立即返回句柄，完成后自动插话汇报' })}
             aria-label="把该前台同步外部执行转入后台"
             onClick={() => {
               void ctx

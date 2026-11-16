@@ -185,7 +185,7 @@ export function registerWorkflowRunActions(
   ctx.action({
     id: 'detach',
     description:
-      '把运行中的前台同步 run（subagent / SubagentWorkflow 同步等待路径）转入后台：阻塞中的工具调用立即返回后台句柄，run 继续执行并在终态后 followUp 汇报。仅前台同步标记且 running 的 run 可转（后台启动与已转后台的 run 拒绝）；run 发起会话必须 human-owned，自动化会话（bot/helm）同步等待是既定策略，拒绝 detach；会话内调用仅允许发起会话自身或其祖先。',
+      '把运行中的前台同步 run（subagent / SubagentWorkflow 同步等待路径）转入后台：阻塞中的工具调用立即返回后台句柄，run 继续执行并在终态后 steer 插话汇报。仅前台同步标记且 running 的 run 可转（后台启动与已转后台的 run 拒绝）；run 发起会话必须 human-owned，自动化会话（bot/helm）同步等待是既定策略，拒绝 detach；会话内调用仅允许发起会话自身或其祖先。',
     inputSchema: {
       type: 'object',
       properties: {

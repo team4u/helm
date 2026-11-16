@@ -132,7 +132,7 @@ function renderTimeline(
   ))
 }
 
-test('ConversationTimeline: steer 与 followUp 胶囊文案、状态标记与虚线样式类', { timeout: 60_000 }, () => {
+test('ConversationTimeline: steer 与 followUp 胶囊文案、状态标记与统一待处理样式类', { timeout: 60_000 }, () => {
   const live: ConversationLive = {
     conversationId: 1,
     text: '流式中',

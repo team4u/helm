@@ -194,7 +194,7 @@ export class WatchdogOpsExecutor {
         if (valid.length === 0) return
         await ctx.host.submitInput(watchdogConvId, this.buildWakePrompt(valid.map((op) => op.finding)), {
           origin: 'agent',
-          whenBusy: 'followUp',
+          whenBusy: 'steer',
           meta: { renderer: 'superagent:watchdog-alert', tickAt },
         })
         // 提交被接受后才写去重标记（提交失败不消耗水位，下一 tick 重试）。

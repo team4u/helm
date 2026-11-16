@@ -143,7 +143,7 @@ export function createSuperAgentPlugin(): PluginDefinition {
         if (target === undefined || shutdown || ctx.host.isClosing) return
         void track('report-error', async () => {
           try {
-            await ctx.host.submitInput(target, body, { origin: 'agent', whenBusy: 'followUp' })
+            await ctx.host.submitInput(target, body, { origin: 'agent', whenBusy: 'steer' })
           } catch (err) {
             logDiagnostic(`superagent 错误报告投递失败：${err instanceof Error ? err.message : String(err)}`)
           }

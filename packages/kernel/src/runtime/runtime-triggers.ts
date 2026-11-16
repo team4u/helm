@@ -3,6 +3,7 @@
  *
  * responsibility:
  * - defang guard against escape message seal escaping (guard against </external_event> inject);
+ * - busy policy: trigger deliveries submit with whenBusy=steer (followUp stays available to explicit callers);
  * - without explicit target trigger default delivery target parse (resolveDefaultTriggerTarget concurrency merge);
  * - external trigger pipeline orchestration (dispatchTrigger validate original explicit target -> trigger hook -> submitInput).
  */
@@ -94,7 +95,7 @@ export class RuntimeTriggerDispatcher {
     if (final.targetConversationId !== undefined) {
       // explicit target (contains hook change write): expires deputy target by submitInput  requireConv honor bottom
       // explicit not_found(honest reject; expires explicit target must not by heavy routing mask).
-      await this.deps.submitInput(final.targetConversationId, final.text, { origin: 'trigger', whenBusy: 'followUp' })
+      await this.deps.submitInput(final.targetConversationId, final.text, { origin: 'trigger', whenBusy: 'steer' })
       return
     }
     // default target:resolve and submitInput between target conversation may by delete (TOCTOU window,
@@ -104,11 +105,11 @@ export class RuntimeTriggerDispatcher {
     // (the time trigger payload lose, semantics and fix before consistent).
     const target = await this.resolveDefaultTriggerTarget()
     try {
-      await this.deps.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'followUp' })
+      await this.deps.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'steer' })
     } catch (err) {
       if (!(err instanceof HelmError && err.code === 'not_found')) throw err
       const resolved = await this.resolveDefaultTriggerTarget()
-      await this.deps.submitInput(resolved, final.text, { origin: 'trigger', whenBusy: 'followUp' })
+      await this.deps.submitInput(resolved, final.text, { origin: 'trigger', whenBusy: 'steer' })
     }
   }
 }

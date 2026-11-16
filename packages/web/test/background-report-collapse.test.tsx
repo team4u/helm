@@ -37,6 +37,7 @@ import type {
   BackgroundReportParse,
 } from '../../plugins/src/workflow/client/model-background-report.ts'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { readHostStyles } from './helpers/host-styles.js'
 
 const e = React.createElement
 
@@ -291,7 +292,7 @@ test('card: 默认收起（与宿主 .trace-row 同构单行），完整结果�
   // 收起态不挂载完整正文；复制为图标动作（aria-label 明确，不常驻文字）。
   assert.equal(host.textContent?.includes('详细正文第二段'), false)
   assert.ok(host.querySelector('.workflow-report-expanded') === null)
-  const copyBtn = row.querySelector('button[aria-label="复制"]')
+  const copyBtn = row.querySelector('button[aria-label="Copy"]')
   assert.ok(copyBtn !== null, '复制原文图标动作在右侧动作区')
   assert.equal(copyBtn!.textContent?.includes('复制原文'), false, '不得常驻文字按钮')
 
@@ -316,7 +317,7 @@ test('card: 复制原文实写入完整正文到剪贴板，不触发折叠开�
   const entry = makeReportEntry({ report: { result: '首行结论\n\n详细正文第二段' } })
   const { host, unmount } = await mountCard(entry, ctx)
   await withCapturedClipboard(async (captured) => {
-    const btn = host.querySelector<HTMLButtonElement>('button[aria-label="复制"]')
+    const btn = host.querySelector<HTMLButtonElement>('button[aria-label="Copy"]')
     assert.ok(btn)
     await act(async () => { btn!.click() })
     assert.equal(captured.length, 1, '实际写入剪贴板一次')
@@ -396,7 +397,7 @@ test('card: 损坏数据显式“汇报数据格式异常”并默认展开，�
   assert.ok(host.querySelector('.trace-row.trace-row-error'), '损坏数据行带错误高亮')
   assert.match(host.textContent ?? '', /汇报数据格式异常/)
   assert.equal(host.textContent?.includes('已完成'), false, '损坏数据不得显示成功徽章')
-  assert.ok(host.querySelector('button[aria-label="复制"]'), '复制原文入口保留')
+  assert.ok(host.querySelector('button[aria-label="Copy"]'), '复制原文入口保留')
   assert.equal(host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'true', '损坏报文默认自动展开')
   const expanded = host.querySelector('.workflow-report-expanded')
   assert.ok(expanded, '展开后可见原文')
@@ -556,4 +557,72 @@ test('HumanMessage: 排队 agent 长文折叠可展开收起，复制入口保�
   assert.equal(humanPills[0]!.classList.contains('msg-human-pill-collapsible'), false, 'human 输入不折叠')
   assert.ok(humanPills[0]!.textContent?.includes('人人人'), 'human 长文直接全文展示')
   unmount()
+})
+
+test('HumanMessage: 所有来源和模式的待处理卡片在折叠、展开时使用统一灰色样式', { timeout: 60_000 }, async () => {
+  const style = document.createElement('style')
+  style.textContent = readHostStyles()
+  document.head.appendChild(style)
+  const originalTheme = document.documentElement.getAttribute('data-theme')
+  const queuedInputs: NonNullable<ConversationLive['queuedInputs']> = []
+  for (const origin of ['human', 'agent', 'trigger'] as const) {
+    for (const mode of ['steer', 'followUp'] as const) {
+      for (const long of [false, true]) {
+        const id = `${origin}-${mode}-${long ? 'long' : 'short'}`
+        queuedInputs.push({
+          id, submissionId: String(queuedInputs.length + 1), origin, mode, createdAt: 5,
+          text: `${id}: ${long ? '完整消息'.repeat(200) : '简短消息'}`,
+        })
+      }
+    }
+  }
+  try {
+    for (const theme of ['light', 'dark'] as const) {
+      document.documentElement.setAttribute('data-theme', theme)
+      const { host, unmount } = await mountTimeline({ conversationId: 1, text: '', tools: [], queuedInputs, updatedAt: 9 }, [])
+      try {
+        const palette = getComputedStyle(document.documentElement)
+        const expectedBackground = palette.getPropertyValue('--bg-subtle').trim()
+        const expectedColor = palette.getPropertyValue('--fg-muted').trim()
+        assert.ok(expectedBackground && expectedColor)
+        const pills = Array.from(host.querySelectorAll<HTMLElement>('.msg-human-pill'))
+        assert.equal(pills.length, queuedInputs.length)
+        assert.equal(host.querySelectorAll('.msg-human-collapse-btn').length, 4)
+        const assertMuted = (pill: HTMLElement): void => {
+          const computed = getComputedStyle(pill)
+          assert.equal(computed.backgroundColor, expectedBackground)
+          assert.equal(computed.color, expectedColor)
+          assert.equal(computed.borderTopStyle, 'solid')
+          assert.equal(computed.borderLeftStyle, 'solid')
+          assert.equal(computed.borderTopWidth, '1px')
+          assert.equal(computed.borderLeftWidth, '1px')
+          assert.equal(computed.boxShadow, 'none')
+          assert.equal(Number(computed.opacity || '1'), 1)
+          assert.equal(computed.fontSize, '15px')
+          const body = pill.querySelector('span')
+          assert.ok(body)
+          assert.equal(getComputedStyle(body).color, expectedColor)
+          assert.equal(getComputedStyle(body).fontSize, '15px')
+        }
+        for (const pill of pills) {
+          assertMuted(pill)
+          const toggle = pill.querySelector<HTMLButtonElement>('.msg-human-collapse-btn')
+          if (toggle === null) continue
+          assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+          act(() => toggle.click())
+          assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+          assertMuted(pill)
+          act(() => toggle.click())
+          assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+          assertMuted(pill)
+        }
+      } finally {
+        unmount()
+      }
+    }
+  } finally {
+    style.remove()
+    if (originalTheme === null) document.documentElement.removeAttribute('data-theme')
+    else document.documentElement.setAttribute('data-theme', originalTheme)
+  }
 })

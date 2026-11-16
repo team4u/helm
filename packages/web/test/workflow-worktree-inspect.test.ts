@@ -525,13 +525,13 @@ test('节点卡改动概览：检视渲染与审阅；completed run 提供「重
     assert.match(host.textContent!, /\+committed change/, 'diff 预览必须渲染真实检视内容')
     assert.match(host.textContent!, /Diff 仅包含已跟踪文件；未跟踪文件见状态列表/, '必须明确 diff 不含未跟踪文件')
 
-    // 审阅请求：走官方 submitInput（目标父会话 1，followUp 不打断在途回合）。
+    // Review requests join the parent turn through the default steer policy.
     await act(async () => {
       buttonByText(host, '让主会话审阅并合入').click()
     })
     assert.equal(ctx.submissions.length, 1)
     assert.equal(ctx.submissions[0]!.options?.conversationId, 1)
-    assert.equal(ctx.submissions[0]!.options?.whenBusy, 'followUp')
+    assert.equal(ctx.submissions[0]!.options?.whenBusy, 'steer')
     assert.match(ctx.submissions[0]!.text, /\/repo\/\.helm-worktrees\/app-ab12cd34/)
     assert.match(ctx.submissions[0]!.text, /只读复核/)
   } finally {

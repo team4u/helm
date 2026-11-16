@@ -1150,7 +1150,7 @@ test('tool_call：watchdog 会话内 bash/run_action/未知工具被 block；白
 // 8. L2 语义
 // ---------------------------------------------------------------------------
 
-test('L2：同 tick 多异常合并一次投递（origin agent / followUp）；纯 human 异常零投递；模型异常不递归', { timeout: 60_000 }, async () => {
+test('L2：同 tick 多异常合并一次投递（origin agent / steer）；纯 human 异常零投递；模型异常不递归', { timeout: 60_000 }, async () => {
   const h = await makeHarness()
   await h.tick([
     nativeProbe(55, { status: 'error' }),
@@ -1160,7 +1160,7 @@ test('L2：同 tick 多异常合并一次投递（origin agent / followUp）；�
   const wakes = h.recorded.submits.filter((s) => s.conversationId === h.watchdogId)
   assert.equal(wakes.length, 1)
   assert.equal(wakes[0]!.origin, 'agent')
-  assert.equal(wakes[0]!.whenBusy, 'followUp')
+  assert.equal(wakes[0]!.whenBusy, 'steer')
   assert.ok(wakes[0]!.text.includes('watchdog-playbooks'))
   assert.ok(wakes[0]!.text.includes('<findings>'), '事实须包裹防逃逸')
 

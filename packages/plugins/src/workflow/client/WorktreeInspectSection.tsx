@@ -78,7 +78,7 @@ export function WorktreeInspectSection(props: {
   const sendReview = (): void => {
     setSending(true)
     ctx
-      .submitInput(reviewText, { conversationId: props.parentConversationId, whenBusy: 'followUp' })
+      .submitInput(reviewText, { conversationId: props.parentConversationId, whenBusy: 'steer' })
       .then(() => ctx.notify('已向主会话提交工作树审阅请求'))
       .catch((err: unknown) => ctx.notify(`提交审阅请求失败：${err instanceof Error ? err.message : String(err)}`, 'error'))
       .finally(() => setSending(false))
