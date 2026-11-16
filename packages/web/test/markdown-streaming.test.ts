@@ -537,7 +537,7 @@ describe('MarkdownView 流式分块渲染', { timeout: 60_000 }, () => {
     const f1 = [paraWithRef, '```cnt\nCODE-B\n```', longPara('第二段'), longPara('第三段')].join('\n\n')
     const view = await mountView({ text: f1, streaming: true })
     assert.ok(view.host.textContent!.includes('[资料]'), '无定义时 [资料] 按字面渲染')
-    assert.equal(view.host.querySelector('a[href="https://example.com/x"]'), null)
+    assert.ok(view.host.querySelector('a[href="https://example.com/x"]') === null)
     const mountsAfterF1 = pluginStats.mounts
 
     const f2 = `${f1}\n\n[资料]: https://example.com/x\n\n${longPara('定义后段落')}`

@@ -270,7 +270,7 @@ test('card: 默认收起（共用紧凑头部+单行副栏），完整结果未�
 
   // 共用框架：与子代理实时卡同一套容器/头部/副栏结构与字号样式。
   assert.ok(host.querySelector('.subagent-live-card'), '复用 subagent-live-card 容器')
-  assert.equal(host.querySelector('.subagent-card-clickable'), null, '汇报卡不做整卡点击导航')
+  assert.ok(host.querySelector('.subagent-card-clickable') === null, '汇报卡不做整卡点击导航')
   const bar = host.querySelector('.subagent-live-header')
   assert.ok(bar, '紧凑头部存在')
   assert.match(bar!.textContent ?? '', /子代理汇报/)
@@ -291,7 +291,7 @@ test('card: 默认收起（共用紧凑头部+单行副栏），完整结果未�
 
   // 收起态不挂载完整正文；复制为图标动作（aria-label 明确，不常驻文字）。
   assert.equal(host.textContent?.includes('详细正文第二段'), false)
-  assert.equal(host.querySelector('.subagent-live-stream'), null)
+  assert.ok(host.querySelector('.subagent-live-stream') === null)
   const copyBtn = bar!.querySelector('button[aria-label="复制"]')
   assert.ok(copyBtn, '复制原文图标动作在头部')
   assert.equal(copyBtn!.textContent?.includes('复制原文'), false, '不得常驻文字按钮')
@@ -302,11 +302,11 @@ test('card: 默认收起（共用紧凑头部+单行副栏），完整结果未�
   assert.ok(host.querySelector('.subagent-live-stream'), '展开后挂载正文')
   assert.equal(host.textContent?.includes('详细正文第二段'), true)
   assert.match(host.textContent ?? '', /结果/)
-  assert.equal(document.activeElement, toggle, '展开时折叠控件保留焦点与同一节点')
+  assert.ok(document.activeElement === toggle, '展开时折叠控件保留焦点与同一节点')
 
   act(() => toggle!.click())
   assert.equal(host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'false')
-  assert.equal(host.querySelector('.subagent-live-stream'), null)
+  assert.ok(host.querySelector('.subagent-live-stream') === null)
   unmount()
 })
 
@@ -369,7 +369,7 @@ test('card: execution.conversationId 才给子会话入口（图标动作打开�
   const spy = drawerSpy()
   // 无 execution：不渲染导航按钮。
   const plain = await mountCard(makeReportEntry({ report: { result: 'ok' } }), spy.ctx)
-  assert.equal(plain.host.querySelector('button[aria-label^="打开子会话 #"]'), null)
+  assert.ok(plain.host.querySelector('button[aria-label^="打开子会话 #"]') === null)
   assert.equal(plain.host.textContent?.includes('打开子会话'), false)
   plain.unmount()
 
@@ -518,7 +518,7 @@ test('HumanMessage: 排队 agent 长文折叠可展开收起，复制入口保�
 
   act(() => expand!.click())
   assert.equal(expand!.isConnected, true, '展开时保留同一个按钮')
-  assert.equal(document.activeElement, expand, '展开时保留键盘焦点')
+  assert.ok(document.activeElement === expand, '展开时保留键盘焦点')
   const openPill = host.querySelector('.msg-human-pill-collapsible')
   assert.ok(openPill!.textContent?.includes('otherRunningTasks'), '展开后可见全文')
   assert.equal(openPill!.textContent?.includes('展开全文'), false)
@@ -526,7 +526,7 @@ test('HumanMessage: 排队 agent 长文折叠可展开收起，复制入口保�
   assert.ok(collapse, '收起按钮存在')
   assert.equal(collapse!.getAttribute('aria-expanded'), 'true')
   act(() => collapse!.click())
-  assert.equal(document.activeElement, expand, '收起时保留键盘焦点')
+  assert.ok(document.activeElement === expand, '收起时保留键盘焦点')
   assert.equal(host.querySelector('.msg-human-pill-collapsible')?.textContent?.includes('otherRunningTasks'), false)
 
   // 人类排队长文与正式消息不折叠。

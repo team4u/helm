@@ -126,7 +126,7 @@ test('A 保存的 set 未完成时切 B：旧成功不会再 get A，也不会�
     await typeText(ui.host, 'B 修改')
     await act(async () => { setA.resolve({ updated: true }) })
     assert.equal(editor(ui.host).value, 'B 修改')
-    assert.equal(ui.host.querySelector('[role="alert"]'), null)
+    assert.ok(ui.host.querySelector('[role="alert"]') === null)
     assert.equal(calls.filter((call) => call.action === 'get' && call.profileId === 'a').length, 1)
     await save(ui.host)
     const bSet = calls.find((call) => call.action === 'set' && call.profileId === 'b')
@@ -152,7 +152,7 @@ test('A 保存后 get A 在途时切 B：旧内容与 finally 不覆盖 B 的加
     assert.match(ui.host.textContent!, /加载记忆中/)
     await act(async () => { refreshA.resolve(memory('a', 'A 保存结果')) })
     assert.match(ui.host.textContent!, /加载记忆中/, 'A finally 不得清掉 B busy')
-    assert.equal(ui.host.querySelector('textarea'), null)
+    assert.ok(ui.host.querySelector('textarea') === null)
     await act(async () => { loadB.resolve(memory('b', 'B 结果')) })
     assert.equal(editor(ui.host).value, 'B 结果')
   } finally { ui.unmount() }
@@ -196,7 +196,7 @@ test('configure 已开启但后续 get 失败时显示未知状态，不沿用�
     await act(async () => { ui.host.querySelector<HTMLButtonElement>('[role="switch"]')!.click() })
     assert.match(ui.host.textContent!, /开启后读取失败|无法读取记忆状态/)
     assert.doesNotMatch(ui.host.textContent!, /已为此角色关闭/)
-    assert.equal(ui.host.querySelector('[role="switch"]'), null)
+    assert.ok(ui.host.querySelector('[role="switch"]') === null)
   } finally { ui.unmount() }
 })
 
@@ -212,7 +212,7 @@ test('A toggle 晚失败与保存后卸载不污染当前视图，也不发起�
     await ui.render('b')
     await act(async () => { configureA.reject(new Error('A toggle 晚失败')) })
     assert.equal(editor(ui.host).value, 'b 原文')
-    assert.equal(ui.host.querySelector('[role="alert"]'), null)
+    assert.ok(ui.host.querySelector('[role="alert"]') === null)
     assert.equal(ui.host.querySelector<HTMLButtonElement>('[role="switch"]')!.disabled, false)
   } finally { ui.unmount() }
 
@@ -291,7 +291,7 @@ test('晚失败与卸载均使旧请求失效，get 失败不显示为已关闭'
     await act(async () => { loadB.reject(new Error('B 加载失败')) })
     assert.match(ui.host.textContent!, /B 加载失败|无法读取记忆状态/)
     assert.doesNotMatch(ui.host.textContent!, /已为此角色关闭/)
-    assert.equal(ui.host.querySelector('[role="switch"]'), null, '未知状态不可伪装为关闭开关')
+    assert.ok(ui.host.querySelector('[role="switch"]') === null, '未知状态不可伪装为关闭开关')
   } finally { ui.unmount() }
 
   const pending = deferred<MemoryResult>()

@@ -17,6 +17,7 @@ GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
 import { makeTestStore, HelmStoreContext } from './helpers/store.js'
+import { sseClientTimings } from '../src/lib/live-state.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
 import {
   useVersionWatcher,
@@ -1048,21 +1049,24 @@ test('HelmStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重
     send: (text: string) => void
     end: () => void
   }
-  const makeHandle = (): StreamHandle => {
+  const makeHandle = (signal?: AbortSignal | null): StreamHandle => {
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined
     let ended = false
     const finish = (): void => {
       if (ended) return
       ended = true
+      signal?.removeEventListener('abort', finish)
       try {
         controller?.close()
       } catch {
         /* 已关/已取消：幂等 */
       }
     }
+    signal?.addEventListener('abort', finish, { once: true })
     const stream = new ReadableStream<Uint8Array>({
       start(c) {
         controller = c
+        if (signal?.aborted) finish()
       },
       cancel() {
         finish()
@@ -1078,34 +1082,40 @@ test('HelmStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重
   }
 
   // 连接请求先到而工厂未注册时挂起（与 sse-resume.test.tsx 同约定的确定性队列）。
-  type StreamFactory = () => StreamHandle
+  type StreamFactory = (signal: AbortSignal | null) => StreamHandle
   const factories: StreamFactory[] = []
-  const waiting: Array<{ resolve: (handle: StreamHandle) => void }> = []
+  const waiting: Array<{ signal: AbortSignal | null; resolve: (handle: StreamHandle) => void }> = []
   const liveHandles: StreamHandle[] = []
-  const takeHandle = (): Promise<StreamHandle> => {
+  const takeHandle = (signal: AbortSignal | null): Promise<StreamHandle> => {
     const factory = factories.shift()
-    if (factory !== undefined) return Promise.resolve(factory())
+    if (factory !== undefined) return Promise.resolve(factory(signal))
     return new Promise((resolve) => {
-      waiting.push({ resolve })
+      waiting.push({ signal, resolve })
     })
   }
   const nextEvents = (factory: StreamFactory): void => {
     const pending = waiting.shift()
     if (pending !== undefined) {
-      pending.resolve(factory())
+      pending.resolve(factory(pending.signal))
       return
     }
     factories.push(factory)
   }
 
+  const originalTimings = { ...sseClientTimings }
+  Object.assign(sseClientTimings, {
+    reconnectBaseMs: 15,
+    reconnectCapMs: 60,
+    reconnectJitterMs: 5,
+  })
   const originalFetch = globalThis.fetch
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path === '/api/auth/status') {
       return new Response(JSON.stringify({ configured: true, authenticated: true }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (path === '/api/events' || path.startsWith('/api/events?')) {
-      const handle = await takeHandle()
+      const handle = await takeHandle(init?.signal ?? null)
       liveHandles.push(handle)
       return new Response(handle.stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
     }
@@ -1132,8 +1142,8 @@ test('HelmStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重
   }
   try {
     // 第一条连接（先注册工厂再挂载，避免连接先到挂起）：boot-1 快照
-    nextEvents(() => {
-      const handle = makeHandle()
+    nextEvents((signal) => {
+      const handle = makeHandle(signal)
       handle.send(snapshotOf('boot-1'))
       return handle
     })
@@ -1149,8 +1159,8 @@ test('HelmStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重
     // 断开第一条连接，重连（指数退避）后 boot-2 快照 → kernelBootId 推进
     const first = liveHandles[0]
     assert.ok(first !== undefined)
-    nextEvents(() => {
-      const handle = makeHandle()
+    nextEvents((signal) => {
+      const handle = makeHandle(signal)
       handle.send(snapshotOf('boot-2'))
       return handle
     })
@@ -1164,6 +1174,7 @@ test('HelmStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重
       root.unmount()
     })
     for (const handle of liveHandles) handle.end()
+    Object.assign(sseClientTimings, originalTimings)
     globalThis.fetch = originalFetch
     host.remove()
   }

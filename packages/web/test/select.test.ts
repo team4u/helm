@@ -174,7 +174,7 @@ test('Select：无障碍角色（role="combobox" / role="listbox"）与状态机
 
   const unselectedOptionEl = optionElements[1]
   assert.equal(unselectedOptionEl?.getAttribute('data-state'), 'unchecked')
-  assert.equal(unselectedOptionEl?.querySelector('.helm-select-check'), null, '未选中项不应渲染勾选')
+  assert.ok(unselectedOptionEl?.querySelector('.helm-select-check') === null, '未选中项不应渲染勾选')
 
   // 4. 禁用态选项
   const disabledOptionEl = optionElements[2]

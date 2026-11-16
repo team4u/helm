@@ -461,7 +461,7 @@ test('PluginMicroAction 声明 client：内联 PluginUiView 渲染组件内容�
     root = createRoot(host)
     await act(async () => { root.render(element) })
     assert.match(host.textContent!, /面板内容 XYZ/)
-    assert.equal(host.querySelector('button'), null, '声明 client 轨时不渲染标准按钮')
+    assert.ok(host.querySelector('button') === null, '声明 client 轨时不渲染标准按钮')
   } finally {
     act(() => root.unmount())
     host.remove()

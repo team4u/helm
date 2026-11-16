@@ -14,7 +14,7 @@
  * 用受控假 fetch（真实 Response/ReadableStream）驱动，不 mock 模块内部。
  */
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { after, before, test } from 'node:test'
 import {
   bindSessionDocRuntime,
   evictSessionDocSubscriptions,
@@ -22,9 +22,20 @@ import {
   getSessionDocState,
   resetSessionDocSubscriptions,
   retrySessionDoc,
+  sessionDocTimings,
   subscribeSessionDoc,
   type SessionDocKey,
 } from '../src/lib/session-docs.js'
+
+const originalSessionDocTimings = { ...sessionDocTimings }
+
+before(() => {
+  Object.assign(sessionDocTimings, { reconnectBaseMs: 25, reconnectCapMs: 120 })
+})
+
+after(() => {
+  Object.assign(sessionDocTimings, originalSessionDocTimings)
+})
 
 interface RecordedRequest {
   path: string
@@ -207,7 +218,7 @@ test('404 显式终态报错且不无穷重连', { timeout: 60_000 }, async () =
   const state = getSessionDocState(key)
   assert.ok(state.error!.includes('会话文档订阅不可用'), `显式错误：${state.error}`)
   assert.equal(getSessionDocState(key).hasValue, false)
-  await new Promise((resolve) => setTimeout(resolve, 1200))
+  await new Promise((resolve) => setTimeout(resolve, 120))
   assert.equal(eventsCalls, 1, '404 后不再重连')
   off()
   restore()
@@ -223,7 +234,7 @@ test('403 同样终态报错不重连；401 发 helm:unauthorized 且不再重�
   const off = subscribeSessionDoc(key, () => {})
   await until(() => getSessionDocState(key).error !== undefined)
   assert.ok(getSessionDocState(key).error!.includes('无权访问'))
-  await new Promise((resolve) => setTimeout(resolve, 1200))
+  await new Promise((resolve) => setTimeout(resolve, 120))
   assert.equal(calls, 1, '403 后不再重连')
   off()
   restore()
@@ -248,7 +259,7 @@ test('403 同样终态报错不重连；401 发 helm:unauthorized 且不再重�
     unauthorized = events.filter((t) => t === 'helm:unauthorized').length
     assert.equal(unauthorized, 1, '401 派发 helm:unauthorized 一次')
     assert.equal(getSessionDocState(key).error, undefined, '401 不置订阅错误（由宿主统一登出处理）')
-    await new Promise((resolve) => setTimeout(resolve, 1200))
+    await new Promise((resolve) => setTimeout(resolve, 120))
     assert.equal(calls, 1, '401 后不再重连')
     off2()
   } finally {
@@ -266,7 +277,7 @@ test('5xx 有界退避重连且重连 snapshot 以服务端为准', { timeout: 6
     return sseResponse([snapshotFrame(1, { pluginId: key.pluginId, name: key.docName, conversationId: 42, value: { authoritative: true } })])
   })
   const off = subscribeSessionDoc(key, () => {})
-  await new Promise((resolve) => setTimeout(resolve, 1600))
+  await new Promise((resolve) => setTimeout(resolve, 140))
   await until(() => getSessionDocState(key).hasValue)
   assert.deepEqual(getSessionDocState(key).value, { authoritative: true }, '重连 snapshot 服务端对齐')
   assert.equal(attempt, 2, '恰好重连一次')
@@ -400,7 +411,7 @@ test('错误不无限重试：退避有上限且退订后停止', { timeout: 60_
   assert.ok(getSessionDocState(key).error!.includes('订阅中断'), `网络错误显式暴露：${getSessionDocState(key).error}`)
   off()
   const callsAfterOff = calls
-  await new Promise((resolve) => setTimeout(resolve, 1200))
+  await new Promise((resolve) => setTimeout(resolve, 120))
   assert.equal(calls, callsAfterOff, '归零退订后不再重试')
   restore()
 })

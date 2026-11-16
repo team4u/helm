@@ -1195,13 +1195,39 @@ function buildDepsList(
 // 落盘与路径工具
 // ---------------------------------------------------------------------------
 
+const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const MAX_RENAME_RETRIES = 5;
+
+function sleepSyncMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function renameWithRetry(tmp: string, targetPath: string): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(tmp, targetPath);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (attempt >= MAX_RENAME_RETRIES || !code || !RETRYABLE_RENAME_CODES.has(code)) {
+        throw err;
+      }
+      sleepSyncMs(10 * 2 ** attempt);
+    }
+  }
+}
+
 /** 临时文件（randomUUID）+ rename 原子落盘；失败清理临时文件（可重试）。 */
-function atomicWrite(targetPath: string, content: string): void {
+function atomicWriteRaw(targetPath: string, content: string | Buffer | Uint8Array): void {
   mkdirSync(dirname(targetPath), { recursive: true });
   const tmp = `${targetPath}.tmp-${randomUUID()}`;
   try {
-    writeFileSync(tmp, content, 'utf8');
-    renameSync(tmp, targetPath);
+    if (typeof content === 'string') {
+      writeFileSync(tmp, content, 'utf8');
+    } else {
+      writeFileSync(tmp, content);
+    }
+    renameWithRetry(tmp, targetPath);
   } catch (err) {
     try {
       rmSync(tmp, { force: true });
@@ -1212,20 +1238,12 @@ function atomicWrite(targetPath: string, content: string): void {
   }
 }
 
+function atomicWrite(targetPath: string, content: string): void {
+  atomicWriteRaw(targetPath, content);
+}
+
 function atomicWriteBuffer(targetPath: string, content: Buffer | Uint8Array): void {
-  mkdirSync(dirname(targetPath), { recursive: true });
-  const tmp = `${targetPath}.tmp-${randomUUID()}`;
-  try {
-    writeFileSync(tmp, content);
-    renameSync(tmp, targetPath);
-  } catch (err) {
-    try {
-      rmSync(tmp, { force: true });
-    } catch {
-      /* 清理失败不掩盖原始错误 */
-    }
-    throw err;
-  }
+  atomicWriteRaw(targetPath, content);
 }
 
 function sha256(text: string): string {

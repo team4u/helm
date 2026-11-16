@@ -136,7 +136,7 @@ test('PluginCard：停用或无 Screen 时不渲染打开按钮（无 Provider �
           e(PluginCard, { plugin, selected: false, onSelect: () => {}, onToggle: () => {} })),
       )
     })
-    assert.equal(host.querySelector('.plugin-card-open-btn'), null)
+    assert.ok(host.querySelector('.plugin-card-open-btn') === null)
     act(() => root.unmount())
     host.remove()
   }
@@ -148,7 +148,7 @@ test('PluginCard：停用或无 Screen 时不渲染打开按钮（无 Provider �
   await act(async () => {
     root.render(e(PluginCard, { plugin: APP_PLUGIN, selected: false, onSelect: () => {}, onToggle: () => {} }))
   })
-  assert.equal(host.querySelector('.plugin-card-open-btn'), null)
+  assert.ok(host.querySelector('.plugin-card-open-btn') === null)
   act(() => root.unmount())
   host.remove()
 })

@@ -22,7 +22,7 @@ test('captureTimelineScrollAnchor selects the first row intersecting the viewpor
 
   try {
     const anchor = captureTimelineScrollAnchor(scroller)
-    assert.equal(anchor?.element, visible)
+    assert.ok(anchor?.element === visible)
     assert.equal(anchor?.top, 120)
   } finally {
     document.elementFromPoint = originalElementFromPoint

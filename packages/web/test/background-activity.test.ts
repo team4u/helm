@@ -867,7 +867,7 @@ test('Sidebar DOM 更新：conversations 的 compacting 从 false 变为 true �
     root = createRoot(container)
     root.render(e(HelmStoreContext.Provider, { value: initialStore }, e(Sidebar)))
   })
-  assert.equal(container.querySelector('.status-dot-background'), null, '初始无 compacting 不渲染空心环')
+  assert.ok(container.querySelector('.status-dot-background') === null, '初始无 compacting 不渲染空心环')
 
   await act(async () => {
     root?.render(e(HelmStoreContext.Provider, { value: nextStore }, e(Sidebar)))

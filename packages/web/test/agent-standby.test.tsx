@@ -349,7 +349,7 @@ test('首发链路：Enter 创建会话并提交，双击去重，成功后 repl
     assert.equal(window.location.hash, '#/c/9', '成功后导航到真实会话')
     assert.equal(replaces[replaces.length - 1], '#/c/9', 'draft->真实会话用 replace 不污染后退栈')
     assert.ok(document.body.textContent?.includes('会话 9'), '真实会话窗格渲染（HTTP 详情兜底，不依赖 SSE）')
-    assert.equal(document.querySelector(`textarea[aria-label="${MAIN_LABEL}"]`), null, '待命输入区卸载')
+    assert.ok(document.querySelector(`textarea[aria-label="${MAIN_LABEL}"]`) === null, '待命输入区卸载')
   } finally {
     history.pushState = originalPush
     history.replaceState = originalReplace
