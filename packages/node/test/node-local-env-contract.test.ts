@@ -23,8 +23,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import type { ShellProbeIo } from '@helm/env-io';
 import { LineScanner, LocalExecutionEnv, StreamDecoder } from '../src/daemon/local-env.js';
-import { getBashShellConfig, getShellConfig, isLegacyWslBashPath } from '../src/daemon/local-env/shell.js';
+import { getBashShellConfig, getShellConfig, getShellEnv, isLegacyWslBashPath } from '../src/daemon/local-env/shell.js';
 
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
@@ -303,5 +304,90 @@ test('spill：超时被杀的命令同样携带溢写文件且内容完整', { t
     }
   } finally {
     await fs.rm(workdir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Windows 宿主机防 WSL 劫持与大小写安全 getShellEnv
+// ---------------------------------------------------------------------------
+
+test('LocalExecutionEnv：模拟 win32 仅存在 System32\\bash.exe 返回 shell_unavailable；跳过 WSL 后可执行次行 shell', { timeout: 60_000 }, async () => {
+  const wslOnlyIo: ShellProbeIo = {
+    platform: 'win32',
+    env: {
+      SystemRoot: 'C:\\Windows',
+      ProgramFiles: 'C:\\Program Files',
+      'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+      LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local',
+      USERPROFILE: 'C:\\Users\\me',
+    },
+    homedir: () => 'C:\\Users\\me',
+    pathExists: async (p) => p.toLowerCase() === 'c:\\windows\\system32\\bash.exe',
+    realpath: async () => null,
+    execProbe: async (_cmd, args) =>
+      args[0] === 'bash.exe'
+        ? { stdout: 'C:\\Windows\\System32\\bash.exe\r\n', status: 0 }
+        : { stdout: '', status: 1 },
+  };
+  const blockedEnv = new LocalExecutionEnv({ cwd: os.tmpdir(), shellProbeIo: wslOnlyIo });
+  const blocked = await blockedEnv.exec('echo hi', undefined);
+  assert.equal(blocked.ok, false);
+  if (!blocked.ok) {
+    assert.equal(blocked.error.code, 'shell_unavailable');
+    assert.match(blocked.error.message, /Skipped WSL launcher\(s\)/);
+  }
+
+  const realShell = existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh';
+  const fallbackIo: ShellProbeIo = {
+    ...wslOnlyIo,
+    pathExists: async (p) => p === realShell || p.toLowerCase() === 'c:\\windows\\system32\\bash.exe',
+    execProbe: async (_cmd, args) =>
+      args[0] === 'bash.exe'
+        ? { stdout: `C:\\Windows\\System32\\bash.exe\r\n${realShell}\r\n`, status: 0 }
+        : { stdout: '', status: 1 },
+  };
+  const okEnv = new LocalExecutionEnv({ cwd: os.tmpdir(), shellProbeIo: fallbackIo });
+  let output = '';
+  const res = await okEnv.exec('printf ok', { onOutput: (t) => { output += t; } });
+  assert.deepEqual(res, { ok: true, value: { exitCode: 0 } });
+  assert.equal(output, 'ok');
+});
+
+test('getShellEnv(win32)：baseEnv/extraEnv 覆盖时不产生 Path/PATH 双键并存', { timeout: 60_000 }, () => {
+  const hasUpper = Object.hasOwn(process.env, 'PATH');
+  const savedUpper = process.env['PATH'];
+  const hasMixed = Object.hasOwn(process.env, 'Path');
+  const savedMixed = process.env['Path'];
+  try {
+    delete process.env['PATH'];
+    process.env['Path'] = 'C:\\Windows\\System32';
+    const fromBase = getShellEnv(
+      { PATH: 'C:\\helm\\bin;C:\\Windows\\System32' },
+      undefined,
+      true,
+      'win32',
+    );
+    assert.deepEqual(
+      Object.keys(fromBase).filter((k) => k.toUpperCase() === 'PATH'),
+      ['PATH'],
+    );
+    assert.equal(fromBase['PATH'], 'C:\\helm\\bin;C:\\Windows\\System32');
+
+    const merged = getShellEnv(
+      { PATH: 'C:\\helm\\bin;C:\\Windows\\System32' },
+      { Path: 'C:\\custom;C:\\helm\\bin;C:\\Windows\\System32' },
+      true,
+      'win32',
+    );
+    assert.deepEqual(
+      Object.keys(merged).filter((k) => k.toUpperCase() === 'PATH'),
+      ['Path'],
+    );
+    assert.equal(merged['Path'], 'C:\\custom;C:\\helm\\bin;C:\\Windows\\System32');
+  } finally {
+    if (hasUpper && savedUpper !== undefined) process.env['PATH'] = savedUpper;
+    else delete process.env['PATH'];
+    if (hasMixed && savedMixed !== undefined) process.env['Path'] = savedMixed;
+    else delete process.env['Path'];
   }
 });

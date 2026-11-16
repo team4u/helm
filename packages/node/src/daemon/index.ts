@@ -51,6 +51,7 @@ import type {
   RpcResult,
 } from '@helm/protocol';
 import { DEFAULT_NODE_ID } from '@helm/protocol';
+import { findEnvKey, getEnvEntry, prependEnvPath, setEnvEntry } from '@helm/env-io';
 import { createNodeEnvRpcServer, type NodeEnvRpcServer, type NodeEnvRpcServerOptions } from './env-rpc-server.js';
 import { createSocketBirpcEvents } from './birpc-events.js';
 import {
@@ -434,7 +435,7 @@ export async function resolveManagedHelmBinDir(explicit?: string): Promise<Resol
   if (explicit !== undefined && explicit !== '') return await describe(explicit);
   const fromEnv = process.env['HELM_CLI_BIN_DIR'];
   if (fromEnv !== undefined && fromEnv !== '') return await describe(fromEnv);
-  const inheritedPath = process.env['PATH'] ?? '';
+  const inheritedPath = getEnvEntry(process.env, 'PATH') ?? '';
   for (const entry of inheritedPath.split(path.delimiter)) {
     if (!entry) continue;
     const result = await describe(entry);
@@ -454,13 +455,21 @@ export async function resolveManagedHelmBinDir(explicit?: string): Promise<Resol
   };
 }
 
-const PATH_SEP = process.platform === 'win32' ? ';' : ':';
-
-/** 前置受管 bin 目录到 PATH（构建 daemon shellEnv 用）。 */
+/** 前置受管 bin 目录到 PATH（构建 daemon shellEnv 用；win32 大小写安全保留宿主机 Path）。 */
 const prependPath = (binDir: string, shellEnv: Record<string, string | undefined>): Record<string, string | undefined> => {
-  const current = shellEnv['PATH'] ?? process.env['PATH'] ?? '';
-  const merged = current === '' ? binDir : `${binDir}${PATH_SEP}${current}`;
-  return { ...shellEnv, PATH: merged };
+  const next: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(shellEnv)) {
+    if (value !== undefined) setEnvEntry(next, key, value);
+  }
+  if (findEnvKey(next, 'PATH') === undefined) {
+    const inherited = getEnvEntry(process.env, 'PATH');
+    if (inherited !== undefined) {
+      const hostKey = findEnvKey(process.env, 'PATH') ?? 'PATH';
+      setEnvEntry(next, hostKey, inherited);
+    }
+  }
+  prependEnvPath(next, binDir);
+  return next;
 };
 
 async function withinBudget<T>(operation: Promise<T>, timeoutMs: number, expired: T): Promise<T> {
