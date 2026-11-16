@@ -1,10 +1,11 @@
 /**
- * @helm/plugin-build 端口测试：
- * - createPluginBuildProvider 两轨道（compileClientModule / transformBackendTs）
- *   的最小真实行为验证（编译大链路见 plugin-client-css.test.ts 与内核集成测试）；
- * - transformBackendTs：ts / tsx 转译为 ESM、JSX automatic 运行时导入、
- *   语法错误带定位原样上抛（不吞诊断、不静默降级）；
- * - compileClientModule：经端口请求编译真实模块（缓存命中同 hash）。
+ * @helm/plugin-build port tests:
+ * - minimal real-behavior verification of both tracks of createPluginBuildProvider
+ *   (compileClientModule / transformBackendTs) (the full compilation chain is covered by
+ *   plugin-client-css.test.ts and the kernel integration tests);
+ * - transformBackendTs: ts / tsx transform to ESM, JSX automatic runtime imports, syntax errors re-thrown
+ *   verbatim with locations (diagnostics are never swallowed, no silent degradation);
+ * - compileClientModule: compiles a real module through the port (a cache hit yields the same hash).
  */
 import assert from 'node:assert/strict'
 import { test, beforeEach, afterEach } from 'node:test'
@@ -32,7 +33,7 @@ afterEach(() => {
   rmSync(workDir, { recursive: true, force: true })
 })
 
-test('transformBackendTs：ts 源转译为 ESM，保留 import/export 语义', { timeout: 60_000 }, () => {
+test('transformBackendTs: transforms ts source to ESM, preserving import/export semantics', { timeout: 60_000 }, () => {
   const code = transformBackendTs({
     source: 'export const x: number = 1;\nimport { join } from "node:path";\nexport { join };',
     file: join(workDir, 'a.ts'),
@@ -42,7 +43,7 @@ test('transformBackendTs：ts 源转译为 ESM，保留 import/export 语义', {
   assert.match(code, /node:path/)
 })
 
-test('transformBackendTs：tsx 走 JSX automatic（产物 import react/jsx-runtime，不内联 React）', { timeout: 60_000 }, () => {
+test('transformBackendTs: tsx uses JSX automatic (the output imports react/jsx-runtime, no inlined React)', { timeout: 60_000 }, () => {
   const code = transformBackendTs({
     source: 'export const El = () => <div>hi</div>;',
     file: join(workDir, 'b.tsx'),
@@ -52,7 +53,7 @@ test('transformBackendTs：tsx 走 JSX automatic（产物 import react/jsx-runti
   assert.match(code, /jsx/)
 })
 
-test('transformBackendTs：语法错误原样上抛且带定位（不静默吞诊断）', { timeout: 60_000 }, () => {
+test('transformBackendTs: syntax errors are re-thrown verbatim with locations (diagnostics never silently swallowed)', { timeout: 60_000 }, () => {
   const file = join(workDir, 'bad.ts')
   assert.throws(
     () =>
@@ -63,14 +64,14 @@ test('transformBackendTs：语法错误原样上抛且带定位（不静默吞�
       }),
     (err: unknown) => {
       const errors = (err as { errors?: Array<{ location?: { line: number; column: number } }> }).errors
-      assert.ok(Array.isArray(errors) && errors.length > 0, 'esbuild 诊断必须保留')
-      assert.ok(errors[0]!.location, '诊断需带行列定位')
+      assert.ok(Array.isArray(errors) && errors.length > 0, 'esbuild diagnostics must be preserved')
+      assert.ok(errors[0]!.location, 'diagnostics must carry a line/column location')
       return true
     },
   )
 })
 
-test('端口：compileClientModule 编译真实模块并命中磁盘缓存（同 hash）', { timeout: 60_000 }, async () => {
+test('port: compileClientModule compiles a real module and hits the disk cache (same hash)', { timeout: 60_000 }, async () => {
   const clientRoot = join(workDir, 'client')
   mkdirSync(clientRoot, { recursive: true })
   writeFileSync(join(clientRoot, 'index.tsx'), 'export const v = 41;\n')
@@ -86,9 +87,10 @@ test('端口：compileClientModule 编译真实模块并命中磁盘缓存（同
   assert.ok(first.code.length > 0)
   assert.ok(first.contentHash.length > 0)
   assert.ok(first.exports.includes('v'))
-  assert.ok(first.gzipped && first.gzipped.byteLength > 0, '产物需带 gzip 预压缩字节')
+  assert.ok(first.gzipped && first.gzipped.byteLength > 0, 'the artifact must carry gzip pre-compressed bytes')
 
-  // 同源重复请求（新 provider 实例，走磁盘清单复查路径）hash 一致
+  // a repeated request from the same source (new provider instance, exercising the disk-manifest
+  // re-validation path) yields the same hash
   const second = await createPluginBuildProvider().compileClientModule({
     pluginId: 'test:port',
     clientRoot,
@@ -100,7 +102,7 @@ test('端口：compileClientModule 编译真实模块并命中磁盘缓存（同
   assert.equal(second.code, first.code)
 })
 
-test('端口：compileClientModule 拒绝非法 moduleRef（与内核注册边界同一校验）', { timeout: 60_000 }, async () => {
+test('port: compileClientModule rejects an illegal moduleRef (the same validation as the kernel registration boundary)', { timeout: 60_000 }, async () => {
   const clientRoot = join(workDir, 'client2')
   mkdirSync(clientRoot, { recursive: true })
   writeFileSync(join(clientRoot, 'index.tsx'), 'export const v = 1;\n')
@@ -117,7 +119,7 @@ test('端口：compileClientModule 拒绝非法 moduleRef（与内核注册边�
   )
 })
 
-test('契约纯函数：assertModuleRefShape 与 clientNpmRootsOf 形状（protocol 单一事实源）', { timeout: 60_000 }, () => {
+test('contract pure functions: assertModuleRefShape and clientNpmRootsOf shapes (protocol as the single source of truth)', { timeout: 60_000 }, () => {
   assert.throws(() => assertModuleRefShape('p', 'a/../b.tsx'), (err: unknown) => {
     assert.ok(err instanceof HelmError)
     assert.equal((err as HelmError).code, 'invalid_client_module')
@@ -135,7 +137,7 @@ test('契约纯函数：assertModuleRefShape 与 clientNpmRootsOf 形状（proto
   )
 })
 
-test('并发调用 compilePluginClientModule 共享缓存目录安全复用且无残留临时文件', { timeout: 60_000 }, async () => {
+test('concurrent compilePluginClientModule calls safely share the cache directory with no leftover temp files', { timeout: 60_000 }, async () => {
   clearClientCompilerMemoryCache()
   const clientRoot = join(workDir, 'concurrent-client')
   const sharedCacheDir = join(workDir, 'shared-cache')
@@ -162,8 +164,8 @@ test('并发调用 compilePluginClientModule 共享缓存目录安全复用且�
   for (const pluginId of ['test:concurrent-a', 'test:concurrent-b']) {
     const stagingDir = join(sharedCacheDir, 'plugin-staging', safeDirName(pluginId))
     const files = readdirSync(stagingDir)
-    assert.ok(!files.some((f) => f.includes('.tmp-')), `不得残留临时文件：${files.join(', ')}`)
-    assert.ok(existsSync(join(stagingDir, `${baseName}.deps.json`)), `${pluginId} 应存在 deps.json`)
+    assert.ok(!files.some((f) => f.includes('.tmp-')), `no temp files may be left behind: ${files.join(', ')}`)
+    assert.ok(existsSync(join(stagingDir, `${baseName}.deps.json`)), `${pluginId} should have a deps.json`)
     const manifest = JSON.parse(readFileSync(join(stagingDir, `${baseName}.deps.json`), 'utf8')) as {
       contentHash: string
     }
@@ -171,7 +173,8 @@ test('并发调用 compilePluginClientModule 共享缓存目录安全复用且�
     assert.ok(existsSync(join(stagingDir, `${baseName}.${manifest.contentHash}.mjs`)))
   }
 
-  // 清空内存缓存后再次并发调用，验证磁盘缓存跨实例/并发复用的安全性
+  // clear the in-memory cache and call concurrently again, verifying safe disk-cache reuse across
+  // instances and under concurrency
   clearClientCompilerMemoryCache()
   const secondWave = await Promise.all([
     compilePluginClientModule('test:concurrent-a', clientRoot, 'index.tsx', sharedCacheDir),

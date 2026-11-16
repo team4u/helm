@@ -1,7 +1,8 @@
 /**
- * client-chunk-graph 纯函数单测：入口静态闭包、可达动态目标、
- * 异步单元划分（引用计数 / 共享 chunk 传递闭包）与前置依赖拓扑序。
- * 用合成 metafile 图固定每一步的期望输出（无 esbuild、无 IO）。
+ * Pure-function unit tests for client-chunk-graph: the entry static closure, reachable dynamic targets,
+ * async unit partitioning (reference counting / shared-chunk transitive closure), and the prerequisite
+ * dependency topological order. Synthetic metafile graphs pin the expected output of every step
+ * (no esbuild, no IO).
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -12,9 +13,9 @@ import {
 } from '../src/client-chunk-graph.js'
 
 interface NodeSpec {
-  /** 静态 import 目标路径（原样进 imports[].path，由函数内 basename 归一）。 */
+  /** Static import target paths (fed verbatim into imports[].path, normalized by basename inside the function). */
   static?: string[]
-  /** 动态 import 目标路径。 */
+  /** Dynamic import target paths. */
   dynamic?: string[]
 }
 
@@ -33,7 +34,7 @@ function buildGraph(spec: Record<string, NodeSpec>): MutableChunkGraph {
   return graph
 }
 
-test('入口静态闭包：深度优先展开静态 import，仅纳入图中产物（外部/未知路径不入闭包）', { timeout: 60_000 }, () => {
+test('entry static closure: expands static imports depth-first, including only graph outputs (external/unknown paths stay out of the closure)', { timeout: 60_000 }, () => {
   const graph = buildGraph({
     'entry.js': { static: ['./a.js', './b.js'], dynamic: [] },
     'a.js': { static: ['./nested/x.js'] },
@@ -45,7 +46,7 @@ test('入口静态闭包：深度优先展开静态 import，仅纳入图中产�
   assert.deepEqual([...closure], ['entry.js', 'a.js', 'x.js', 'b.js'])
 })
 
-test('可达动态目标：baseClosure 与各动态目标静态闭包内的动态 import 全部纳入；external 动态导入不算', { timeout: 60_000 }, () => {
+test('reachable dynamic targets: dynamic imports inside the baseClosure and inside each dynamic target\'s static closure are all included; external dynamic imports do not count', { timeout: 60_000 }, () => {
   const graph = buildGraph({
     'entry.js': { static: ['./b.js'], dynamic: ['./dyn1.js'] },
     'b.js': { dynamic: ['./dyn2.js'] },
@@ -55,14 +56,14 @@ test('可达动态目标：baseClosure 与各动态目标静态闭包内的动�
     'only2.js': {},
     'dyn3.js': {},
   })
-  // external 动态导入（如已标记外部的 URL）不得计入
+  // external dynamic imports (e.g. URLs already marked external) must not count
   graph.get('only2.js')!.imports!.push({ path: 'https://example.com/x.js', kind: 'dynamic-import', external: true })
   const baseClosure = collectStaticImportClosure(graph, 'entry.js')
   const targets = collectDynamicImportTargets(graph, baseClosure)
   assert.deepEqual([...targets], ['dyn1.js', 'dyn2.js', 'dyn3.js'])
 })
 
-test('无动态导入：目标集合为空（快路径判定输入）', { timeout: 60_000 }, () => {
+test('no dynamic imports: the target set is empty (the fast-path decision input)', { timeout: 60_000 }, () => {
   const graph = buildGraph({
     'entry.js': { static: ['./a.js'] },
     'a.js': {},
@@ -71,7 +72,7 @@ test('无动态导入：目标集合为空（快路径判定输入）', { timeou
   assert.equal(collectDynamicImportTargets(graph, baseClosure).size, 0)
 })
 
-test('异步单元划分：引用计数 >=2 提为共享 chunk，传递依赖一并共享；单引用模块留在各自单元', { timeout: 60_000 }, () => {
+test('async unit partitioning: reference count >=2 promotes to a shared chunk, transitive dependencies are shared along; single-reference modules stay in their own units', { timeout: 60_000 }, () => {
   const graph = buildGraph({
     'entry.js': { static: ['./a.js', './b.js'], dynamic: ['./dyn1.js'] },
     'a.js': { static: ['./x.js'] },
@@ -89,15 +90,16 @@ test('异步单元划分：引用计数 >=2 提为共享 chunk，传递依赖一
   const dynamicTargets = collectDynamicImportTargets(graph, baseClosure)
   assert.deepEqual([...dynamicTargets], ['dyn1.js', 'dyn2.js'])
   const plan = computeAsyncChunkPlan(graph, baseClosure, dynamicTargets)
-  // sharedA 被两个单元引用提为共享；其依赖 sharedB 虽单引用也随传递闭包提为共享
+  // sharedA is referenced by two units and promoted to shared; its dependency sharedB joins via the
+  // transitive closure even though it has a single referencing unit
   assert.deepEqual([...plan.sharedAsyncChunks].sort(), ['sharedA.js', 'sharedB.js'])
-  // 单引用模块不进共享集合
+  // single-reference modules never join the shared set
   assert.equal(plan.sharedAsyncChunks.has('only1.js'), false)
   assert.equal(plan.sharedAsyncChunks.has('lone.js'), false)
   assert.equal(plan.sharedAsyncChunks.has('only2.js'), false)
 })
 
-test('chunkDeps 拓扑序：共享 chunk 依赖在前、使用者在后，且含传递需要的共享 chunk', { timeout: 60_000 }, () => {
+test('chunkDeps topological order: shared chunks come before their consumers, including transitively required shared chunks', { timeout: 60_000 }, () => {
   const graph = buildGraph({
     'entry.js': { static: [], dynamic: ['./dyn1.js', './dyn2.js'] },
     'dyn1.js': { static: ['./sharedA.js'] },
@@ -108,12 +110,12 @@ test('chunkDeps 拓扑序：共享 chunk 依赖在前、使用者在后，且含
   const baseClosure = collectStaticImportClosure(graph, 'entry.js')
   const dynamicTargets = collectDynamicImportTargets(graph, baseClosure)
   const plan = computeAsyncChunkPlan(graph, baseClosure, dynamicTargets)
-  // 两单元都需前置 [sharedB, sharedA]（sharedB 是 sharedA 的依赖，先求值）
+  // both units require the prerequisites [sharedB, sharedA] (sharedB is sharedA's dependency and evaluates first)
   assert.deepEqual(plan.chunkDeps['dyn1.js'], ['sharedB.js', 'sharedA.js'])
   assert.deepEqual(plan.chunkDeps['dyn2.js'], ['sharedB.js', 'sharedA.js'])
 })
 
-test('baseClosure 成员不参与异步划分：入口静态依赖即使被动态单元引用也不提为共享', { timeout: 60_000 }, () => {
+test('baseClosure members opt out of async partitioning: entry static dependencies are never promoted to shared even when referenced by dynamic units', { timeout: 60_000 }, () => {
   const graph = buildGraph({
     'entry.js': { static: ['./base.js'], dynamic: ['./dyn1.js', './dyn2.js'] },
     'base.js': {},
@@ -123,7 +125,7 @@ test('baseClosure 成员不参与异步划分：入口静态依赖即使被动�
   const baseClosure = collectStaticImportClosure(graph, 'entry.js')
   const dynamicTargets = collectDynamicImportTargets(graph, baseClosure)
   const plan = computeAsyncChunkPlan(graph, baseClosure, dynamicTargets)
-  assert.equal(plan.sharedAsyncChunks.size, 0, 'baseClosure 成员由主包承载，不提共享')
+  assert.equal(plan.sharedAsyncChunks.size, 0, 'baseClosure members are carried by the main package and never promoted to shared')
   assert.deepEqual(plan.chunkDeps['dyn1.js'], [])
   assert.deepEqual(plan.chunkDeps['dyn2.js'], [])
 })

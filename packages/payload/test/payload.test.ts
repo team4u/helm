@@ -1,20 +1,23 @@
 /**
- * @helm/payload 集成测试：真实执行组装脚本、npm pack、隔离 npm install 与启动入口。
+ * @helm/payload integration tests: really executes the assembly script, npm pack, an isolated npm
+ * install, and the launch entry.
  *
- * 覆盖：
- * 1. 组装：缺产物自动补构建（显式超时），assemble 后目录/manifest/checksum 契约成立；
- * 2. 发布包契约：dist 根 package.json（@team4u/helm-hub 默认名，HELM_PAYLOAD_PACKAGE
- *    可覆盖）为可 npm pack/publish 的独立包：files 显式白名单 + 外部依赖精确版本 +
- *    @helm/protocol file:./protocol.tgz；manifest.name 与其同源；
- * 3. 布局：kernel/protocol/cli/web dist 镜像、内置插件资产落位、web 同级探测命中、
- *    不携带 node_modules；
- * 4. 负路径：依赖缺失退出码 3；checksum 篡改退出码 1；manifest 路径越界退出码 1；
- *    start 依赖缺失时拒绝拉起 hub；
- * 5. 正路径（真实端到端，仓库外隔离目录）：npm pack dist → 安全解包（校验全部成员
- *    位于 package/ 前缀、manifest 在包根而非 dist/ 子目录）→ npm install
- *    --omit=dev --ignore-scripts → start.mjs check（依赖解析 + node:sqlite +
- *    esbuild 实测）→ start.mjs start 真实拉起 Hub 并 HTTP 探活 /api/auth/status →
- *    SIGTERM 干净退出。绝不只验 fixture。
+ * Coverage:
+ * 1. assembly: missing build artifacts are rebuilt on demand (with explicit timeouts); after assemble
+ *    the directory/manifest/checksum contract holds;
+ * 2. publish package contract: the dist root package.json (@team4u/helm-hub default name, overridable
+ *    via HELM_PAYLOAD_PACKAGE) is a standalone package fit for npm pack/publish: an explicit files
+ *    whitelist + exact external dependency versions + @helm/protocol file:./protocol.tgz;
+ *    manifest.name shares its source;
+ * 3. layout: kernel/protocol/cli/web dist mirrors, built-in plugin assets in place, the web sibling
+ *    probe hits, no node_modules carried;
+ * 4. negative paths: missing dependencies exit with code 3; a tampered checksum exits with 1; a
+ *    manifest path escape exits with 1; start refuses to launch the hub when dependencies are missing;
+ * 5. positive path (real end-to-end, in an isolated directory outside the repository): npm pack dist →
+ *    safe unpack (verify every member sits under the package/ prefix and the manifest is at the package
+ *    root, not a dist/ subdirectory) → npm install --omit=dev --ignore-scripts → start.mjs check
+ *    (dependency resolution + node:sqlite + a real esbuild exercise) → start.mjs start really launches
+ *    the Hub and HTTP-probes /api/auth/status → clean SIGTERM exit. Never fixture-only.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,7 +31,7 @@ const payloadPkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(payloadPkgRoot, '../..');
 const stagingDir = path.join(payloadPkgRoot, 'dist');
 
-/** manifest 契约的最小类型形状（start.mjs 侧同构校验）。 */
+/** Minimal type shape of the manifest contract (validated isomorphically on the start.mjs side). */
 interface PayloadManifest {
   formatVersion: number
   name: string
@@ -44,14 +47,14 @@ function runCommand(command: string, args: string[], cwd: string, timeoutMs: num
   assert.equal(
     res.status,
     0,
-    `命令失败: ${command} ${args.join(' ')} (cwd=${cwd})\nstdout: ${res.stdout ?? ''}\nstderr: ${res.stderr ?? ''}`,
+    `command failed: ${command} ${args.join(' ')} (cwd=${cwd})\nstdout: ${res.stdout ?? ''}\nstderr: ${res.stderr ?? ''}`,
   );
   return res;
 }
 
 const sha256Of = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
-/** 递归收集目录内全部文件相对路径（POSIX 分隔）。 */
+/** Recursively collects the relative paths of every file in a directory (POSIX separators). */
 function walkFiles(rootDir: string): string[] {
   const out: string[] = [];
   const visit = (cur: string, prefix: string) => {
@@ -65,14 +68,14 @@ function walkFiles(rootDir: string): string[] {
   return out.sort();
 }
 
-/** 源 dist 内每个文件都必须原样出现在组装目录（子集校验，不做字节数巧合断言）。 */
+/** Every file in the source dist must appear verbatim in the assembly directory (subset check, no byte-count coincidence assertions). */
 function assertMirrored(srcDir: string, stagedDir: string) {
   for (const rel of walkFiles(srcDir)) {
-    assert.ok(existsSync(path.join(stagedDir, rel)), `组装目录缺文件: ${rel}`);
+    assert.ok(existsSync(path.join(stagedDir, rel)), `assembly directory is missing file: ${rel}`);
   }
 }
 
-/** 内置插件运行时资产期望落位：src 侧存在的 client/skill/assets 子目录全部出现在 dist 侧。 */
+/** Expected built-in plugin runtime asset placement: every client/skill/assets subdirectory present on the src side also appears on the dist side. */
 function expectedAssetDirs() {
   const builtinSrc = path.join(repoRoot, 'packages/plugins/src');
   const expected = [];
@@ -85,8 +88,9 @@ function expectedAssetDirs() {
   return expected.sort();
 }
 
-test('payload 组装：补齐缺失构建产物后执行 build.mjs 成功', { timeout: 600_000 }, () => {
-  // 缺啥补啥（已构建的 CI 流程零额外耗时）；构建命令显式超时，失败即带输出终止。
+test('payload assembly: missing build artifacts are rebuilt on demand, then build.mjs succeeds', { timeout: 600_000 }, () => {
+  // rebuild only what is missing (zero extra cost on an already-built CI flow); build commands carry
+  // explicit timeouts and terminate with output on failure.
   if (!existsSync(path.join(repoRoot, 'packages/protocol/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/protocol', 'run', 'build'], repoRoot, 180_000);
   }
@@ -113,22 +117,23 @@ test('payload 组装：补齐缺失构建产物后执行 build.mjs 成功', { ti
   }
 
   runCommand(process.execPath, [path.join(payloadPkgRoot, 'build.mjs')], repoRoot, 120_000);
-  assert.ok(existsSync(path.join(stagingDir, 'manifest.json')), 'manifest.json 未生成');
+  assert.ok(existsSync(path.join(stagingDir, 'manifest.json')), 'manifest.json was not generated');
 });
 
-test('payload 发布包契约：dist 根 package.json 可独立 npm pack/publish', { timeout: 60_000 }, () => {
+test('payload publish package contract: the dist root package.json is a standalone npm pack/publish package', { timeout: 60_000 }, () => {
   const distPkg = JSON.parse(readFileSync(path.join(stagingDir, 'package.json'), 'utf-8'));
-  assert.equal(distPkg.name, '@team4u/helm-hub', '默认发布包名必须是 @team4u/helm-hub');
+  assert.equal(distPkg.name, '@team4u/helm-hub', 'the default publish package name must be @team4u/helm-hub');
   assert.equal(distPkg.type, 'module');
-  assert.equal(distPkg.private, undefined, '发布包不得标记 private');
+  assert.equal(distPkg.private, undefined, 'the publish package must not be marked private');
   assert.equal(distPkg.repository.url, 'git+https://github.com/team4u/helm.git');
   assert.equal(distPkg.license, 'MIT');
-  // files 显式白名单：根 gitignore 的 dist/ 规则不得让 npm pack 剔除 kernel/dist 等。
+  // files explicit whitelist: the root gitignore dist/ rule must not let npm pack strip kernel/dist etc.
   assert.deepEqual(
     (distPkg.files as string[]).slice().sort(),
     ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'env-io', 'env-io.tgz', 'hub', 'kernel', 'kernel.tgz', 'manifest.json', 'plugin-build', 'plugin-build.tgz', 'plugin-client', 'plugin-client.tgz', 'plugins', 'plugins.tgz', 'protocol', 'protocol.tgz', 'start.mjs', 'web'].sort(),
   );
-  // @helm 运行时包以归档安装；外部直接依赖使用精确版本（无 ^/~/>= 浮动）。
+  // @helm runtime packages install from archives; direct external dependencies use exact versions
+  // (no ^/~/>= floating).
   assert.equal(distPkg.dependencies['@helm/protocol'], 'file:./protocol.tgz');
   assert.equal(distPkg.dependencies['@helm/kernel'], 'file:./kernel.tgz');
   assert.equal(distPkg.dependencies['@helm/plugins'], 'file:./plugins.tgz');
@@ -145,34 +150,35 @@ test('payload 发布包契约：dist 根 package.json 可独立 npm pack/publish
   for (const [name, spec] of Object.entries<string>(distPkg.dependencies)) {
     if (name.startsWith('@helm/')) continue;
     const owner = Object.keys(runtimeDeps).find((dir) => runtimeDeps[dir]![name] !== undefined);
-    assert.ok(owner !== undefined, `根依赖 ${name} 不在运行时包生产/peer 依赖闭包内`);
-    assert.match(spec, /^\d/, `外部依赖 ${name} 必须是精确版本，实际 ${spec}`);
-    // 与仓库已安装版本一致（可复现安装；经 pnpm 符号链接取真实包，兼容 peer 后缀目录）。
+    assert.ok(owner !== undefined, `root dependency ${name} is not inside the runtime packages' production/peer dependency closure`);
+    assert.match(spec, /^\d/, `external dependency ${name} must be an exact version, got ${spec}`);
+    // must match the repository's installed version (reproducible installs; resolved through the pnpm
+    // symlink to the real package, tolerant of peer-suffixed directories).
     const fromDir = path.join(repoRoot, 'packages', owner);
     const realPkgJson = JSON.parse(
       readFileSync(path.join(realpathSync(path.join(fromDir, 'node_modules', name)), 'package.json'), 'utf-8'),
     );
-    assert.equal(realPkgJson.version, spec, `${name} 仓库安装版本与 dist 契约不一致`);
+    assert.equal(realPkgJson.version, spec, `${name} repository-installed version disagrees with the dist contract`);
   }
-  // workspace 构建器仍是 private，发布名只在 dist 生效。
+  // the workspace builder stays private; the publish name only takes effect in dist.
   const payloadPkg = JSON.parse(readFileSync(path.join(payloadPkgRoot, 'package.json'), 'utf-8'));
   assert.equal(payloadPkg.private, true);
 });
 
-test('payload manifest 契约：formatVersion/version/entries/checksum 全部成立', { timeout: 60_000 }, () => {
+test('payload manifest contract: formatVersion/version/entries/checksums all hold', { timeout: 60_000 }, () => {
   const manifest: PayloadManifest = JSON.parse(readFileSync(path.join(stagingDir, 'manifest.json'), 'utf-8'));
   assert.equal(manifest.formatVersion, 1);
   const distPkg = JSON.parse(readFileSync(path.join(stagingDir, 'package.json'), 'utf-8'));
-  assert.equal(manifest.version, distPkg.version, 'manifest.version 必须与 dist 根 package.json 一致');
-  assert.equal(manifest.name, distPkg.name, 'manifest.name 必须与 dist 根 package.json 同源');
-  assert.match(manifest.nodeEngines, /^>=/, 'nodeEngines 必须声明 engines 下限');
+  assert.equal(manifest.version, distPkg.version, 'manifest.version must match the dist root package.json');
+  assert.equal(manifest.name, distPkg.name, 'manifest.name must share the source of the dist root package.json');
+  assert.match(manifest.nodeEngines, /^>=/, 'nodeEngines must declare an engines floor');
 
   const keys = Object.keys(manifest.entries).sort();
-  assert.deepEqual(Object.keys(manifest.entryChecksums).sort(), keys, 'entryChecksums 与 entries 键一致');
+  assert.deepEqual(Object.keys(manifest.entryChecksums).sort(), keys, 'entryChecksums keys must match entries keys');
   for (const [key, rel] of Object.entries(manifest.entries)) {
     const abs = path.join(stagingDir, rel);
-    assert.ok(existsSync(abs), `entries.${key} 指向的文件不存在: ${rel}`);
-    assert.equal(sha256Of(abs), manifest.entryChecksums[key], `entries.${key} checksum 不一致`);
+    assert.ok(existsSync(abs), `the file pointed to by entries.${key} does not exist: ${rel}`);
+    assert.equal(sha256Of(abs), manifest.entryChecksums[key], `entries.${key} checksum mismatch`);
   }
   assert.deepEqual(
     keys,
@@ -186,7 +192,7 @@ test('payload manifest 契约：formatVersion/version/entries/checksum 全部成
   );
 });
 
-test('payload 布局：hub/kernel/plugins/protocol/cli/web dist 镜像、资产落位、无陈旧产物、无 node_modules', { timeout: 60_000 }, () => {
+test('payload layout: hub/kernel/plugins/protocol/cli/web dist mirrors, assets in place, no stale artifacts, no node_modules', { timeout: 60_000 }, () => {
   assertMirrored(path.join(repoRoot, 'packages/hub/dist'), path.join(stagingDir, 'hub/dist'));
   assertMirrored(path.join(repoRoot, 'packages/kernel/dist'), path.join(stagingDir, 'kernel/dist'));
   assertMirrored(path.join(repoRoot, 'packages/plugins/dist'), path.join(stagingDir, 'plugins/dist'));
@@ -195,37 +201,40 @@ test('payload 布局：hub/kernel/plugins/protocol/cli/web dist 镜像、资产�
   assertMirrored(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'));
   assertMirrored(path.join(repoRoot, 'packages/plugin-build/dist'), path.join(stagingDir, 'plugin-build/dist'));
   assertMirrored(path.join(repoRoot, 'packages/env-io/dist'), path.join(stagingDir, 'env-io/dist'));
-  // SDK 公开 exports 指向 src/index.ts（无 dist）：镜像交付源码本体。
+  // the SDK's public exports point at src/index.ts (no dist): mirror-deliver the source body.
   assertMirrored(path.join(repoRoot, 'packages/plugin-client/src'), path.join(stagingDir, 'plugin-client/src'));
 
   for (const rel of expectedAssetDirs()) {
     assert.ok(
       existsSync(path.join(stagingDir, 'plugins/dist', rel)),
-      `内置插件资产未落位: ${rel}`,
+      `built-in plugin assets not in place: ${rel}`,
     );
   }
   const clients = expectedAssetDirs().filter((rel) => rel.endsWith('/client'));
-  assert.ok(clients.length >= 9, `内置插件 client 目录数量异常: ${clients.length}`);
+  assert.ok(clients.length >= 9, `unexpected built-in plugin client directory count: ${clients.length}`);
 
-  assert.ok(existsSync(path.join(stagingDir, 'hub/dist/main.js')), 'hub dist 缺 main.js 入口');
-  assert.ok(existsSync(path.join(stagingDir, 'kernel/dist/http/hub.js')), 'kernel dist 缺 http/hub.js');
-  assert.ok(existsSync(path.join(stagingDir, 'web/dist/index.html')), 'web dist 缺 index.html');
-  // 陈旧布局守护：拆包迁移后 kernel dist 绝不允许再携带产品组合根或内置插件残留。
+  assert.ok(existsSync(path.join(stagingDir, 'hub/dist/main.js')), 'hub dist is missing the main.js entry');
+  assert.ok(existsSync(path.join(stagingDir, 'kernel/dist/http/hub.js')), 'kernel dist is missing http/hub.js');
+  assert.ok(existsSync(path.join(stagingDir, 'web/dist/index.html')), 'web dist is missing index.html');
+  // stale-layout guard: after the package split, kernel dist must never again carry product
+  // composition-root or built-in-plugin remnants.
   for (const stale of ['kernel/dist/main.js', 'kernel/dist/app.js', 'kernel/dist/builtin-plugins']) {
-    assert.ok(!existsSync(path.join(stagingDir, stale)), `检出陈旧产物: ${stale}（kernel 构建未 clean）`);
+    assert.ok(!existsSync(path.join(stagingDir, stale)), `stale artifact detected: ${stale} (kernel build was not cleaned)`);
   }
 
-  // 诚实性：组装目录绝不携带 node_modules（依赖补齐契约是消费侧 npm install）。
+  // honesty: the assembly directory never carries node_modules (the dependency-completion contract is
+  // consumer-side npm install).
   const stagedFiles = walkFiles(stagingDir);
   assert.ok(
     stagedFiles.every((rel) => !rel.split('/').includes('node_modules')),
-    'payload 组装目录不应包含 node_modules',
+    'the payload assembly directory must not contain node_modules',
   );
 });
 
-test('start.mjs check：依赖缺失时显式退出码 3 并列出缺失清单', { timeout: 60_000 }, () => {
-  // 仓库工作区内 payload dist 旁无 kernel 依赖（pnpm 不提升到根 node_modules），
-  // check 必须诚实退出 3；剥离 NODE_PATH 保证判定不受宿主环境污染。
+test('start.mjs check: missing dependencies exit explicitly with code 3 and list what is missing', { timeout: 60_000 }, () => {
+  // beside the payload dist inside the repository workspace there are no kernel dependencies (pnpm
+  // doesn't hoist into the root node_modules), so check must honestly exit 3; strip NODE_PATH so the
+  // verdict is immune to the host environment.
   const env = { ...process.env };
   delete env.NODE_PATH;
   const res = spawnSync(process.execPath, [path.join(stagingDir, 'start.mjs'), 'check'], {
@@ -234,13 +243,13 @@ test('start.mjs check：依赖缺失时显式退出码 3 并列出缺失清单',
     encoding: 'utf8',
     timeout: 50_000,
   });
-  assert.equal(res.status, 3, `期望退出码 3（依赖缺失），实际 ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
-  assert.match(res.stderr, /运行时依赖缺失/, '必须显式报告缺失依赖');
-  assert.match(res.stderr, /npm install/, '必须指引 npm install 补依赖');
-  assert.match(res.stdout, /布局校验通过/, '布局校验本身应先通过');
+  assert.equal(res.status, 3, `expected exit code 3 (missing dependencies), got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
+  assert.match(res.stderr, /runtime dependency missing/, 'must explicitly report the missing dependencies');
+  assert.match(res.stderr, /npm install/, 'must point at npm install to complete the dependencies');
+  assert.match(res.stdout, /layout validate via/, 'the layout check itself should pass first');
 });
 
-test('start.mjs check：checksum 篡改 / manifest 路径越界时显式退出码 1', { timeout: 60_000 }, () => {
+test('start.mjs check: a tampered checksum / a manifest path escape exits explicitly with code 1', { timeout: 60_000 }, () => {
   const broken = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-payload-broken-'));
   cpSync(stagingDir, broken, { recursive: true });
   try {
@@ -253,10 +262,11 @@ test('start.mjs check：checksum 篡改 / manifest 路径越界时显式退出�
     const res = spawnSync(process.execPath, [path.join(broken, 'start.mjs'), 'check'], {
       cwd: broken, env, encoding: 'utf8', timeout: 50_000,
     });
-    assert.equal(res.status, 1, `期望退出码 1（布局损坏），实际 ${res.status}\nstderr: ${res.stderr}`);
-    assert.match(res.stderr, /checksum 不一致/);
+    assert.equal(res.status, 1, `expected exit code 1 (broken layout), got ${res.status}\nstderr: ${res.stderr}`);
+    assert.match(res.stderr, /checksum inconsistent/);
 
-    // 路径契约：绝对路径 / .. 越界必须被拒（严校验含路径，防 manifest 注入）。
+    // path contract: absolute paths / .. escapes must be rejected (strict validation includes paths,
+    // guarding against manifest injection).
     const evil = JSON.parse(readFileSync(manifestPath, 'utf-8'));
     evil.entryChecksums.kernel = manifest.entryChecksums.kernel;
     evil.entries.kernel = '../../../etc/passwd';
@@ -264,14 +274,14 @@ test('start.mjs check：checksum 篡改 / manifest 路径越界时显式退出�
     const res2 = spawnSync(process.execPath, [path.join(broken, 'start.mjs'), 'check'], {
       cwd: broken, env, encoding: 'utf8', timeout: 50_000,
     });
-    assert.equal(res2.status, 1, `期望退出码 1（路径越界），实际 ${res2.status}\nstderr: ${res2.stderr}`);
-    assert.match(res2.stderr, /路径契约失败|越出 payload 根/);
+    assert.equal(res2.status, 1, `expected exit code 1 (path escape), got ${res2.status}\nstderr: ${res2.stderr}`);
+    assert.match(res2.stderr, /path contract failed/);
   } finally {
     rmSync(broken, { recursive: true, force: true });
   }
 });
 
-test('start.mjs start：依赖缺失时拒绝拉起 hub（无 Helm Hub 输出）', { timeout: 60_000 }, () => {
+test('start.mjs start: refuses to launch the hub when dependencies are missing (no Helm Hub output)', { timeout: 60_000 }, () => {
   const env = { ...process.env };
   delete env.NODE_PATH;
   const res = spawnSync(process.execPath, [path.join(stagingDir, 'start.mjs'), 'start'], {
@@ -280,29 +290,29 @@ test('start.mjs start：依赖缺失时拒绝拉起 hub（无 Helm Hub 输出）
     encoding: 'utf8',
     timeout: 50_000,
   });
-  assert.equal(res.status, 3, `期望退出码 3（拒绝启动），实际 ${res.status}\nstderr: ${res.stderr}`);
-  assert.doesNotMatch(res.stdout, /Helm Hub:/, '依赖缺失时不得出现 kernel 启动输出');
+  assert.equal(res.status, 3, `expected exit code 3 (refusing to start), got ${res.status}\nstderr: ${res.stderr}`);
+  assert.doesNotMatch(res.stdout, /Helm Hub:/, 'kernel startup output must not appear while dependencies are missing');
 });
 
-test('start.mjs 无参数：用法错误退出码 1', { timeout: 60_000 }, () => {
+test('start.mjs without arguments: usage error exits with code 1', { timeout: 60_000 }, () => {
   const res = spawnSync(process.execPath, [path.join(stagingDir, 'start.mjs')], {
     cwd: repoRoot,
     encoding: 'utf8',
     timeout: 20_000,
   });
   assert.equal(res.status, 1);
-  assert.match(res.stderr, /用法/);
+  assert.match(res.stderr, /use method/);
 });
 
 /**
- * 正路径端到端（真实安装与启动，不做 fixture 级替代）：
- * npm pack dist → 安全解包到仓库外 → npm install --omit=dev --ignore-scripts →
- * check 通过（依赖解析 + node:sqlite + esbuild transform 实测）→ start 真实拉起
- * Hub，HTTP 探活 /api/auth/status，SIGTERM 干净退出。
+ * Positive-path end-to-end (real install and launch, no fixture-grade substitutes):
+ * npm pack dist → safe unpack outside the repository → npm install --omit=dev --ignore-scripts →
+ * check passes (dependency resolution + node:sqlite + a real esbuild transform) → start really launches
+ * the Hub, HTTP-probes /api/auth/status, and exits cleanly on SIGTERM.
  */
-test('端到端：npm pack → 隔离 npm install → check → start 真实启动 Hub（仓库外）', {
+test('end-to-end: npm pack → isolated npm install → check → start really launches the Hub (outside the repository)', {
   timeout: 240_000,
-  skip: process.env.PAYLOAD_NPM_SMOKE !== '1' ? '真实 npm 网络验收由 CI 的 PAYLOAD_NPM_SMOKE=1 专门步骤执行' : false,
+  skip: process.env.PAYLOAD_NPM_SMOKE !== '1' ? 'the real npm network acceptance runs as a dedicated CI step with PAYLOAD_NPM_SMOKE=1' : false,
 }, async () => {
   const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-payload-e2e-'));
   const packDir = path.join(outsideRoot, 'pack');
@@ -311,51 +321,54 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
     mkdirSyncRecursive(packDir);
     mkdirSyncRecursive(extractDir);
 
-    // 1. npm pack（在 dist 内执行；--pack-destination 避免污染 dist 目录）。
+    // 1. npm pack (executed inside dist; --pack-destination keeps the dist directory clean).
     const packRes = runCommand('npm', ['pack', '--json', '--pack-destination', packDir], stagingDir, 120_000);
     const packInfo = JSON.parse(packRes.stdout) as Array<{ filename: string }>;
-    assert.equal(packInfo.length, 1, `期望单个 tarball: ${packRes.stdout}`);
+    assert.equal(packInfo.length, 1, `expected a single tarball: ${packRes.stdout}`);
     const tgz = path.join(packDir, packInfo[0]!.filename);
     assert.ok(existsSync(tgz));
 
-    // 2. 安全解包：全部成员必须位于 package/ 前缀且无 .. 段，manifest 在包根。
+    // 2. safe unpack: every member must sit under the package/ prefix with no .. segments, and the
+    // manifest at the package root.
     const list = runCommand('tar', ['-tzf', tgz], outsideRoot, 30_000).stdout.split('\n').filter(Boolean);
-    assert.ok(list.length > 10, `tarball 成员过少: ${list.length}`);
+    assert.ok(list.length > 10, `too few tarball members: ${list.length}`);
     for (const member of list) {
-      assert.ok(member.startsWith('package/'), `tarball 成员逃逸 package/ 前缀: ${member}`);
-      assert.ok(!member.split('/').includes('..'), `tarball 成员含 ..: ${member}`);
+      assert.ok(member.startsWith('package/'), `tarball member escapes the package/ prefix: ${member}`);
+      assert.ok(!member.split('/').includes('..'), `tarball member contains ..: ${member}`);
     }
     for (const must of ['package/manifest.json', 'package/start.mjs', 'package/package.json', 'package/hub/dist/main.js', 'package/kernel/dist/index.js', 'package/plugins/dist/index.js', 'package/plugin-build/dist/index.js', 'package/plugin-client/src/index.ts', 'package/env-io/dist/index.js', 'package/protocol/dist/index.js', 'package/cli/dist/index.js', 'package/web/dist/index.html']) {
-      assert.ok(list.includes(must), `tarball 缺 ${must}（manifest/start 必须在包根而非 dist/ 子目录）`);
+      assert.ok(list.includes(must), `tarball is missing ${must} (manifest/start must sit at the package root, not a dist/ subdirectory)`);
     }
     runCommand('tar', ['-xzf', tgz, '-C', extractDir, '--strip-components=1'], outsideRoot, 60_000);
 
-    // 3. 本地 file: 依赖复制安装，晋升改名后仍须可以启动。
+    // 3. local file: dependencies are copy-installed; after the promotion rename it must still launch.
     runCommand('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], extractDir, 300_000);
     for (const helmPkg of ['protocol', 'kernel', 'plugins', 'plugin-build', 'plugin-client', 'env-io']) {
-      assert.equal(lstatSync(path.join(extractDir, 'node_modules', '@helm', helmPkg)).isSymbolicLink(), false, `@helm/${helmPkg} 必须是归档安装的真实目录`);
+      assert.equal(lstatSync(path.join(extractDir, 'node_modules', '@helm', helmPkg)).isSymbolicLink(), false, `@helm/${helmPkg} must be a real archive-installed directory`);
     }
     const promoted = path.join(outsideRoot, 'release');
     renameSync(extractDir, promoted);
     extractDir = promoted;
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'protocol', 'dist', 'index.js')), '晋升后协议依赖失效');
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'kernel', 'dist', 'index.js')), '晋升后 kernel 依赖失效');
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugins', 'dist', 'index.js')), '晋升后 plugins 依赖失效');
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugin-build', 'dist', 'index.js')), '晋升后 plugin-build 依赖失效');
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugin-client', 'src', 'index.ts')), '晋升后 plugin-client SDK 依赖失效');
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'env-io', 'dist', 'index.js')), '晋升后 env-io 依赖失效');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'protocol', 'dist', 'index.js')), 'protocol dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'kernel', 'dist', 'index.js')), 'kernel dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugins', 'dist', 'index.js')), 'plugins dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugin-build', 'dist', 'index.js')), 'plugin-build dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugin-client', 'src', 'index.ts')), 'plugin-client SDK dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'env-io', 'dist', 'index.js')), 'env-io dependency broke after promotion');
 
-    // 4. check：八入口依赖解析 + node:sqlite + esbuild 实测，退出码 0。
+    // 4. check: the eight entry-point dependencies resolve + node:sqlite + a real esbuild exercise,
+    // exit code 0.
     const env = { ...process.env };
     delete env.NODE_PATH;
     const check = spawnSync(process.execPath, [path.join(extractDir, 'start.mjs'), 'check'], {
       cwd: extractDir, env, encoding: 'utf8', timeout: 120_000,
     });
-    assert.equal(check.status, 0, `check 期望 0，实际 ${check.status}\nstdout: ${check.stdout}\nstderr: ${check.stderr}`);
-    assert.match(check.stdout, /八入口/);
+    assert.equal(check.status, 0, `check expected 0, got ${check.status}\nstdout: ${check.stdout}\nstderr: ${check.stderr}`);
+    assert.match(check.stdout, /eight entry/);
     assert.match(check.stdout, /node:sqlite \+ esbuild transform/);
 
-    // 5. start：真实拉起 Hub，探活公开端点 /api/auth/status，SIGTERM 干净退出。
+    // 5. start: really launches the Hub, probes the public /api/auth/status endpoint, and exits cleanly
+    // on SIGTERM.
     const dataDir = path.join(outsideRoot, 'data');
     mkdirSyncRecursive(dataDir);
     const port = 33500 + (process.pid % 1500);
@@ -369,7 +382,8 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
     let stderr = '';
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
-    // close 同时保证 stdout/stderr 已收完；exit 先于管道 flush，不能据此断言日志。
+    // close also guarantees stdout/stderr are fully drained; exit fires before the pipes flush, so logs
+    // can't be asserted from it.
     const exitPromise = new Promise<{ code: number | null, signal: NodeJS.Signals | null }>((resolve, reject) => {
       child.once('error', reject);
       child.once('close', (code, signal) => resolve({ code, signal }));
@@ -397,31 +411,34 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
             probed = true;
             break;
           }
-        } catch { /* Hub 尚在启动，下次探活重试。 */ }
+        } catch { /* the Hub is still starting up; retry the probe. */ }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      assert.ok(probed, `Hub 未在 20s 内探活成功\nstdout: ${stdout}\nstderr: ${stderr}`);
-      // 静态托管真实验收：GET / 必须回 200 HTML（npm 安装布局下 kernel 默认探测
-      // 指向 node_modules/web/dist，依赖 start.mjs / hub 产品层显式注入；只探 API
-      // 会漏掉「API 活着但桌面空白」的回归），并取 index.html 内真实 /assets/* 资源。
+      assert.ok(probed, `Hub did not pass the probe within 20s\nstdout: ${stdout}\nstderr: ${stderr}`);
+      // real acceptance of static hosting: GET / must return 200 HTML (under the npm install layout the
+      // kernel's default probe points at node_modules/web/dist, relying on start.mjs / the hub product
+      // layer to inject it explicitly; probing only the API would miss the "API alive but blank desktop"
+      // regression), and fetch a real /assets/* resource from index.html.
       const indexRes = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(3_000) });
-      assert.equal(indexRes.status, 200, `GET / 期望 200，实际 ${indexRes.status}（静态托管未生效）`);
+      assert.equal(indexRes.status, 200, `GET / expected 200, got ${indexRes.status} (static hosting not in effect)`);
       const indexHtml = await indexRes.text();
-      assert.match(indexRes.headers.get('content-type') ?? '', /text\/html/, 'GET / 必须回 HTML');
-      assert.match(indexHtml, /<div[^>]*id="root"/, 'index.html 必须包含前端挂载点');
+      assert.match(indexRes.headers.get('content-type') ?? '', /text\/html/, 'GET / must return HTML');
+      assert.match(indexHtml, /<div[^>]*id="root"/, 'index.html must contain the frontend mount point');
       const assetMatch = /(?:src|href)="(\/?assets\/[^"]+\.(?:js|css))"/.exec(indexHtml);
-      assert.ok(assetMatch !== null, `index.html 未引用真实静态资源: ${indexHtml.slice(0, 300)}`);
+      assert.ok(assetMatch !== null, `index.html references no real static asset: ${indexHtml.slice(0, 300)}`);
       const assetPath = assetMatch[1]!.startsWith('/') ? assetMatch[1]! : `/${assetMatch[1]!}`;
       const assetRes = await fetch(`http://127.0.0.1:${port}${assetPath}`, { signal: AbortSignal.timeout(3_000) });
-      assert.equal(assetRes.status, 200, `静态资源 ${assetPath} 期望 200，实际 ${assetRes.status}`);
+      assert.equal(assetRes.status, 200, `static asset ${assetPath} expected 200, got ${assetRes.status}`);
       const assetBody = await assetRes.text();
-      assert.ok(assetBody.length > 0, `静态资源 ${assetPath} 不得为空体`);
+      assert.ok(assetBody.length > 0, `static asset ${assetPath} must not be an empty body`);
 
-      // 动态插件构建链路真实验收（光首页/探活覆盖不到的发布包闭包）：
-      // 临时 setup 鉴权（smoke 自有全新 dataDir，不触碰任何真实用户/凭据）后，
-      // 拉取两个真实内置插件的 client 模块编译产物。200 JavaScript 同时证明：
-      // clientRoot 运行时资产已随 plugins 归档落位、@helm/plugin-build 已随
-      // file: tgz 安装且 npm 解析根正确、宿主共享 shim 生效（token 不落日志）。
+      // real acceptance of the dynamic plugin build chain (a publish-package closure the home
+      // page/probe alone can't cover): after a temporary setup auth (the smoke test owns a brand-new
+      // dataDir and touches no real users/credentials), fetch the compiled client module artifacts of
+      // two real built-in plugins. A 200 JavaScript response simultaneously proves: the clientRoot
+      // runtime assets landed with the plugins archive, @helm/plugin-build installed via the file: tgz
+      // with a correct npm resolution root, and the host shared shim works (the token never lands in
+      // logs).
       const setupPassword = `helm-smoke-${process.pid}-${Date.now()}`;
       const setupRes = await fetch(`http://127.0.0.1:${port}/api/auth/setup`, {
         method: 'POST',
@@ -429,39 +446,39 @@ test('端到端：npm pack → 隔离 npm install → check → start 真实启�
         body: JSON.stringify({ password: setupPassword }),
         signal: AbortSignal.timeout(5_000),
       });
-      assert.equal(setupRes.status, 200, `auth/setup 期望 200，实际 ${setupRes.status}`);
+      assert.equal(setupRes.status, 200, `auth/setup expected 200, got ${setupRes.status}`);
       const { token } = (await setupRes.json()) as { token: string };
-      assert.ok(typeof token === 'string' && token.length > 0, 'auth/setup 必须签发 token');
+      assert.ok(typeof token === 'string' && token.length > 0, 'auth/setup must issue a token');
       try {
         for (const pluginId of ['builtin%3Amermaid', 'builtin%3Aworkflow']) {
           const moduleRes = await fetch(`http://127.0.0.1:${port}/api/plugins/${pluginId}/client.mjs?module=index.tsx`, {
             headers: { authorization: `Bearer ${token}` },
             signal: AbortSignal.timeout(30_000),
           });
-          const detail = `插件 ${decodeURIComponent(pluginId)} client.mjs`;
+          const detail = `plugin ${decodeURIComponent(pluginId)} client.mjs`;
           const moduleBody = await moduleRes.text();
-          assert.equal(moduleRes.status, 200, `${detail} 期望 200，实际 ${moduleRes.status}（body 头 200 字符: ${moduleBody.slice(0, 200)}）`);
-          assert.match(moduleRes.headers.get('content-type') ?? '', /text\/javascript/, `${detail} 必须回 JavaScript`);
+          assert.equal(moduleRes.status, 200, `${detail} expected 200, got ${moduleRes.status} (body head 200 chars: ${moduleBody.slice(0, 200)})`);
+          assert.match(moduleRes.headers.get('content-type') ?? '', /text\/javascript/, `${detail} must return JavaScript`);
           const moduleHash = moduleRes.headers.get('x-helm-client-hash');
-          assert.ok(moduleHash !== null && moduleHash.length > 0, `${detail} 缺 x-helm-client-hash`);
-          assert.ok(moduleBody.length > 0, `${detail} 不得为空体`);
+          assert.ok(moduleHash !== null && moduleHash.length > 0, `${detail} is missing x-helm-client-hash`);
+          assert.ok(moduleBody.length > 0, `${detail} must not be an empty body`);
         }
       } finally {
-        // token 仅存本测试局部变量；绝不写入日志或断言消息。
+        // the token lives only in this test's local variables; never written to logs or assertion messages.
       }
     } finally {
       child.kill('SIGTERM');
       exitInfo = await waitForExit(5_000);
       if (exitInfo === null && child.pid !== undefined) {
-        // start.mjs 会派生 hub；断言失败时也必须清理完整进程树。
+        // start.mjs spawns the hub; the whole process tree must be cleaned up even on assertion failure.
         if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { timeout: 5_000 });
-        else { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* 已退出 */ } }
+        else { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already exited */ } }
         await waitForExit(5_000);
       }
     }
-    assert.ok(exitInfo, `Hub SIGTERM 关闭超时\nstdout: ${stdout}\nstderr: ${stderr}`);
-    assert.equal(exitInfo.code, 0, `Hub SIGTERM 后期望干净退出 0，实际 ${exitInfo.code} ${exitInfo.signal ?? ''}\nstdout: ${stdout}\nstderr: ${stderr}`);
-    assert.match(stdout, /Helm Hub:/, 'Hub 启动横幅缺失');
+    assert.ok(exitInfo, `Hub SIGTERM shutdown timed out\nstdout: ${stdout}\nstderr: ${stderr}`);
+    assert.equal(exitInfo.code, 0, `Hub expected a clean exit 0 after SIGTERM, got ${exitInfo.code} ${exitInfo.signal ?? ''}\nstdout: ${stdout}\nstderr: ${stderr}`);
+    assert.match(stdout, /Helm Hub:/, 'Hub startup banner missing');
   } finally {
     rmSync(outsideRoot, { recursive: true, force: true });
   }

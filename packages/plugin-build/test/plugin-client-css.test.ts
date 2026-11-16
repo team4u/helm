@@ -1,16 +1,16 @@
 /**
- * 插件 CSS 编译器测试（v3：esbuild 原生 CSS bundling + 保留具名导出 __helmClientCss）。
+ * Plugin CSS compiler tests (v3: esbuild native CSS bundling + the reserved named export __helmClientCss).
  *
- * 覆盖（真实执行编译产物，不只字符串 includes）：
- * - 两份 CSS 依赖顺序合并且经 import 产物可执行读取；
- * - 本地 @import 合并进依赖 hash（变更触发重编译）；
- * - CSS 注释中的 @import / url() 不再被正则误杀；
- * - data: / https:// / 协议相对资源 URL 原样保留；
- * - 本地相对 / 根相对 / 片段资源 URL 显式拒绝并给出 data: 建议；
- * - CSS 符号链接逃逸与 @import 越根拒绝；
- * - 无 CSS 时不误产出保留导出；
- * - 插件自身占用保留导出名明确报错；
- * - 缓存版本失效（旧 v3 清单不复用，强制重编译）。
+ * Coverage (really executes the compiled artifact, not just string includes):
+ * - two CSS dependencies merge in dependency order and the artifact is executable and readable via import;
+ * - local @import joins the dependency hash (a change triggers recompilation);
+ * - @import / url() inside CSS comments are no longer falsely killed by regex;
+ * - data: / https: / protocol-relative asset URLs are preserved verbatim;
+ * - local relative / root-relative / fragment asset URLs are explicitly rejected with a data: suggestion;
+ * - CSS symlink escape and @import out-of-root are rejected;
+ * - no reserved export is wrongly produced when there is no CSS;
+ * - a plugin occupying the reserved export name itself fails loudly;
+ * - cache version invalidation (an old v3 manifest is not reused, forcing recompilation).
  */
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
@@ -35,7 +35,7 @@ after(async () => {
   await rm(dataDir, { recursive: true, force: true })
 })
 
-/** 写入最小插件源：index.tsx 依次 import 指定 CSS 与本地组件依赖。 */
+/** Writes a minimal plugin source: index.tsx imports the given CSS and local component dependencies in order. */
 async function writePluginSource(
   root: string,
   files: Record<string, string>,
@@ -50,13 +50,13 @@ async function writePluginSource(
   await writeFile(join(root, 'index.tsx'), `${importLines}\nexport function Widget() { return 'w' }\n`)
 }
 
-/** 真实执行编译产物（data: URL 动态 import），返回模块命名空间。 */
+/** Really executes the compiled artifact (data: URL dynamic import) and returns the module namespace. */
 async function evalModule(code: string): Promise<Record<string, unknown>> {
   const url = `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`
   return (await import(url)) as Record<string, unknown>
 }
 
-test('两份 CSS 依赖顺序合并：第一个 import 的规则先出现，且产物可执行读取', { timeout: 60_000 }, async () => {
+test('two CSS dependencies merge in order: the first import\'s rules appear first, and the artifact is executable and readable', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'order-src')
   await writePluginSource(
     root,
@@ -70,17 +70,17 @@ test('两份 CSS 依赖顺序合并：第一个 import 的规则先出现，且�
   const result = await compilePluginClientModule('test:css-order', root, 'index.tsx', dataDir)
   const mod = await evalModule(result.code)
   const css = mod[PLUGIN_CLIENT_CSS_EXPORT]
-  assert.equal(typeof css, 'string', '必须导出合并后的 CSS 字符串')
+  assert.equal(typeof css, 'string', 'must export the merged CSS string')
   const text = css as string
   assert.match(text, /first-rule/)
   assert.match(text, /second-rule/)
   const firstIdx = text.indexOf('.first-rule')
   const secondIdx = text.indexOf('.second-rule')
-  assert.ok(firstIdx >= 0 && secondIdx > firstIdx, '依赖顺序必须保留（first 先于 second）')
-  assert.equal(typeof mod.Widget, 'function', '组件导出不受 CSS 影响')
+  assert.ok(firstIdx >= 0 && secondIdx > firstIdx, 'dependency order must be preserved (first before second)')
+  assert.equal(typeof mod.Widget, 'function', 'component exports are unaffected by CSS')
 })
 
-test('本地 @import 合并进依赖 hash：被引样式变更后 hash 变化（重新编译）', { timeout: 60_000 }, async () => {
+test('local @import joins the dependency hash: the hash changes after an imported style changes (recompile)', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'import-hash-src')
   await writePluginSource(
     root,
@@ -96,12 +96,12 @@ test('本地 @import 合并进依赖 hash：被引样式变更后 hash 变化（
 
   await writeFile(join(root, 'base.css'), '.base { color: green }')
   const after = await compilePluginClientModule('test:css-import-hash', root, 'index.tsx', dataDir)
-  assert.notEqual(before.contentHash, after.contentHash, '本地 @import 依赖必须进 hash')
+  assert.notEqual(before.contentHash, after.contentHash, 'local @import dependencies must join the hash')
   const modAfter = await evalModule(after.code)
   assert.match(modAfter[PLUGIN_CLIENT_CSS_EXPORT] as string, /green/)
 })
 
-test('CSS 注释中的 @import / url() 不再被正则误杀', { timeout: 60_000 }, async () => {
+test('@import / url() inside CSS comments are no longer falsely killed by regex', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'comment-src')
   await writePluginSource(
     root,
@@ -117,10 +117,10 @@ test('CSS 注释中的 @import / url() 不再被正则误杀', { timeout: 60_000
   const result = await compilePluginClientModule('test:css-comment', root, 'index.tsx', dataDir)
   const mod = await evalModule(result.code)
   const css = mod[PLUGIN_CLIENT_CSS_EXPORT] as string
-  assert.match(css, /\.commented/, '注释不构成语法引用，样式本体必须保留')
+  assert.match(css, /\.commented/, 'comments are not syntactic references; the style body must be preserved')
 })
 
-test('data: / https: / 协议相对资源 URL 原样保留', { timeout: 60_000 }, async () => {
+test('data: / https: / protocol-relative asset URLs are preserved verbatim', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'asset-url-src')
   await writePluginSource(
     root,
@@ -141,7 +141,7 @@ test('data: / https: / 协议相对资源 URL 原样保留', { timeout: 60_000 }
   assert.match(css, /url\(\/\/cdn\.example\.com\/i\.png\)/)
 })
 
-test('本地相对 / 根相对 / 片段资源 URL 显式拒绝并建议 data:', { timeout: 60_000 }, async () => {
+test('local relative / root-relative / fragment asset URLs are explicitly rejected with a data: suggestion', { timeout: 60_000 }, async () => {
   for (const [label, decl] of [
     ['relative', '.x { background: url(./icon.png) }'],
     ['root-relative', '.x { background: url(/assets/icon.png) }'],
@@ -154,24 +154,25 @@ test('本地相对 / 根相对 / 片段资源 URL 显式拒绝并建议 data:', 
       (err: unknown) =>
         err instanceof HelmError &&
         err.code === 'client_compile_failed' &&
-        /url-token|被拒绝/.test(err.message) &&
+        /reference asset/.test(err.message) &&
+        /by reject/.test(err.message) &&
         /data:/.test(err.message),
-      `资源形态 ${label} 必须显式拒绝`,
+      `asset form ${label} must be explicitly rejected`,
     )
   }
 })
 
-test('内联 CSS 的嵌套 @import 同样经过资源边界，不能绕过远程引用拒绝', { timeout: 60_000 }, async () => {
+test('nested @import in inline CSS also passes through the asset boundary and cannot bypass the remote-reference rejection', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'inline-import-src')
   const nested = `data:text/css,${encodeURIComponent('@import "https://example.com/remote.css"; .nested { color: red }')}`
   await writePluginSource(root, { 'styles.css': `@import "${nested}";\n.local { color: blue }` }, ["'./styles.css'"])
   await assert.rejects(
     () => compilePluginClientModule('test:css-inline-import', root, 'index.tsx', dataDir),
-    (error: unknown) => error instanceof HelmError && error.code === 'client_compile_failed' && /远程 @import/.test(error.message),
+    (error: unknown) => error instanceof HelmError && error.code === 'client_compile_failed' && /far process @import/.test(error.message),
   )
 })
 
-test('CSS 符号链接逃逸拒绝：根内 symlink 指向根外样式', { timeout: 60_000 }, async () => {
+test('CSS symlink escape rejected: an in-root symlink pointing at an out-of-root stylesheet', { timeout: 60_000 }, async () => {
   const outsideDir = await mkdtemp(join(tmpdir(), 'helm-plugin-css-outside-'))
   try {
     await writeFile(join(outsideDir, 'evil.css'), '.evil { color: red }')
@@ -182,14 +183,14 @@ test('CSS 符号链接逃逸拒绝：根内 symlink 指向根外样式', { timeo
     await assert.rejects(
       () => compilePluginClientModule('test:css-symlink', root, 'index.tsx', dataDir),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'client_compile_failed' && /越界/.test(err.message),
+        err instanceof HelmError && err.code === 'client_compile_failed' && /out of bounds/.test(err.message),
     )
   } finally {
     await rm(outsideDir, { recursive: true, force: true })
   }
 })
 
-test('CSS @import 越根拒绝：../ 引用根外样式', { timeout: 60_000 }, async () => {
+test('CSS @import out-of-root rejected: ../ referencing a stylesheet outside the root', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'import-escape-src', 'inner')
   await mkdir(root, { recursive: true })
   await writeFile(join(dataDir, 'import-escape-src', 'outside.css'), '.outside { color: red }')
@@ -201,20 +202,20 @@ test('CSS @import 越根拒绝：../ 引用根外样式', { timeout: 60_000 }, a
   await assert.rejects(
     () => compilePluginClientModule('test:css-import-escape', root, 'index.tsx', dataDir),
     (err: unknown) =>
-      err instanceof HelmError && err.code === 'client_compile_failed' && /越界/.test(err.message),
+      err instanceof HelmError && err.code === 'client_compile_failed' && /out of bounds/.test(err.message),
   )
 })
 
-test('无 CSS 时不误产出保留导出', { timeout: 60_000 }, async () => {
+test('no reserved export is wrongly produced when there is no CSS', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'no-css-src')
   await writePluginSource(root, { 'dep.ts': 'export const v = 1' }, ["'./dep'"])
   const result = await compilePluginClientModule('test:css-none', root, 'index.tsx', dataDir)
   const mod = await evalModule(result.code)
-  assert.equal(mod[PLUGIN_CLIENT_CSS_EXPORT], undefined, '无 CSS 时不得导出保留名（加载器按空处理）')
+  assert.equal(mod[PLUGIN_CLIENT_CSS_EXPORT], undefined, 'the reserved name must not be exported without CSS (the loader treats it as empty)')
   assert.equal(typeof mod.Widget, 'function')
 })
 
-test('保留导出冲突：插件自身占用 __helmClientCss 明确报错', { timeout: 60_000 }, async () => {
+test('reserved export conflict: a plugin occupying __helmClientCss itself fails loudly', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'conflict-src')
   await writePluginSource(root, { 'styles.css': '.c { color: red }' }, ["'./styles.css'"])
   await writeFile(
@@ -226,12 +227,12 @@ test('保留导出冲突：插件自身占用 __helmClientCss 明确报错', { t
     (err: unknown) =>
       err instanceof HelmError &&
       err.code === 'client_compile_failed' &&
-      /保留导出名|冲突/.test(err.message) &&
+      /occupy compiler keep export name/.test(err.message) &&
       err.message.includes(PLUGIN_CLIENT_CSS_EXPORT),
   )
 })
 
-test('保留导出校验使用模块元数据：无 CSS 或尾随许可证注释也不能占用', { timeout: 60_000 }, async () => {
+test('reserved-export validation uses module metadata: neither no-CSS nor a trailing license comment allows occupying it', { timeout: 60_000 }, async () => {
   for (const withCss of [false, true]) {
     const root = join(dataDir, `metadata-conflict-${withCss}`)
     await writePluginSource(root, { 'styles.css': '.reserved { color: red }' }, [])
@@ -244,20 +245,20 @@ test('保留导出校验使用模块元数据：无 CSS 或尾随许可证注释
     await assert.rejects(
       () => compilePluginClientModule(`test:css-reserved-${withCss}`, root, 'index.tsx', dataDir),
       (error: unknown) => error instanceof HelmError && error.code === 'client_compile_failed' && error.message.includes(PLUGIN_CLIENT_CSS_EXPORT),
-      `withCss=${withCss} 都必须在编译边界拒绝保留导出名`,
+      `withCss=${withCss} must both reject the reserved export name at the compile boundary`,
     )
   }
 })
 
-test('未导出的同名局部变量不撞名：entry 内 const __helmClientCss 被组件引用仍可编译求值', { timeout: 60_000 }, async () => {
+test('an unexported same-named local variable does not collide: const __helmClientCss inside the entry still compiles and evaluates while referenced by the component', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'shadow-src')
   await writePluginSource(root, { 'styles.css': '.shadow { color: red }' }, ["'./styles.css'"])
   await writeFile(
     join(root, 'index.tsx'),
     [
       "import './styles.css'",
-      // 未导出的局部同名变量会留存于 bundle（metafile exports 检测不到）：
-      // 编译器附贴的 CSS 绑定必须避让它，绝不形成重复声明
+      // an unexported local same-named variable survives in the bundle (metafile exports can't detect it):
+      // the compiler-attached CSS binding must avoid it and never form a duplicate declaration
       "const __helmClientCss = 'plugin-local-value'",
       "export function Widget() { return typeof __helmClientCss + ':' + __helmClientCss }",
       "export const __helmCssText = 'also-local'",
@@ -265,25 +266,26 @@ test('未导出的同名局部变量不撞名：entry 内 const __helmClientCss 
     ].join('\n'),
   )
   const result = await compilePluginClientModule('test:css-shadow', root, 'index.tsx', dataDir)
-  // 产物必须可执行（撞名会直接 SyntaxError）
+  // the artifact must stay executable (a name collision would be an immediate SyntaxError)
   const mod = await evalModule(result.code)
   assert.equal(typeof mod.Widget, 'function')
-  assert.equal((mod.Widget as () => string)(), 'string:plugin-local-value', '局部变量语义不受影响')
+  assert.equal((mod.Widget as () => string)(), 'string:plugin-local-value', 'local variable semantics are unaffected')
   assert.equal((mod.__helmCssText as unknown), 'also-local')
   assert.equal((mod.ShadowWidget as () => string)(), 'also-local')
-  // 保留导出返回编译器合并的样式而非局部变量
+  // the reserved export returns the compiler-merged styles, not the local variable
   const css = mod[PLUGIN_CLIENT_CSS_EXPORT] as string
   assert.match(css, /\.shadow/)
   assert.ok(!css.includes('plugin-local-value'))
 })
 
-test('缓存版本失效：旧 v5 清单不复用，强制重编译', { timeout: 60_000 }, async () => {
+test('cache version invalidation: an old v5 manifest is not reused, forcing recompilation', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'cache-version-src')
   await writePluginSource(root, { 'styles.css': '.v3 { color: red }' }, ["'./styles.css'"])
   const fresh = await compilePluginClientModule('test:css-cache-version', root, 'index.tsx', dataDir)
 
-  // 篡改磁盘上的依赖清单为 v5 旧格式（模拟历史缓存）：必须被识别为失效并重编译。
-  // staging 目录名含 safeDirName 哈希后缀，直接扫描定位 deps.json 与产物。
+  // Tamper the on-disk dependency manifest into the old v5 format (simulating a historical cache): it
+  // must be recognized as invalid and recompiled. The staging directory name carries a safeDirName hash
+  // suffix, so scan directly to locate deps.json and the artifact.
   const { createHash } = await import('node:crypto')
   const safe = 'test_css-cache-version'.replace(/[^A-Za-z0-9_-]/g, '_')
   const suffix = createHash('sha1').update('test:css-cache-version').digest('hex').slice(0, 6)
@@ -291,20 +293,21 @@ test('缓存版本失效：旧 v5 清单不复用，强制重编译', { timeout:
   const { readdirSync } = await import('node:fs')
   const files = readdirSync(stagingDir)
   const depsFile = files.find((f) => f.endsWith('.deps.json'))
-  assert.ok(depsFile, '依赖清单必须已落盘')
+  assert.ok(depsFile, 'the dependency manifest must already be on disk')
   const realListPath = join(stagingDir, depsFile as string)
   const list = JSON.parse(await readFileP(realListPath, 'utf8')) as { version: number; contentHash: string }
-  assert.equal(list.version, 8, '新缓存清单版本为 v8（受控 npm 依赖声明参与缓存凭据）')
+  assert.equal(list.version, 8, 'the new cache manifest version is v8 (controlled npm dependency declarations join the cache credentials)')
   await writeFileP(realListPath, `${JSON.stringify({ ...list, version: 5 })}\n`)
 
-  // 再把产物改成“旧格式毒丸”：若 v4 清单被复用会原样返回毒丸；v5 校验必须重编译
+  // then poison the artifact into an "old-format pill": reusing the v5 manifest would return the pill
+  // verbatim; the version check must force a recompile
   const codeFile = files.find((f) => f.endsWith('.mjs'))
   assert.ok(codeFile)
   await writeFileP(join(stagingDir, codeFile as string), 'export const POISON = 1\n')
 
   const after = await compilePluginClientModule('test:css-cache-version', root, 'index.tsx', dataDir)
   assert.equal(after.contentHash, fresh.contentHash)
-  assert.equal(after.code, fresh.code, '旧版清单必须失效，绝不复用旧毒丸产物')
+  assert.equal(after.code, fresh.code, 'an old-version manifest must be invalidated; never reuse the old poisoned artifact')
   const mod = await evalModule(after.code)
   assert.match(mod[PLUGIN_CLIENT_CSS_EXPORT] as string, /\.v3/)
 })

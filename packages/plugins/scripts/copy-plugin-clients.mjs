@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
- * 构建资产补齐：把 src/<name>/client 目录复制到 dist 同位置。
+ * Build asset completion: copies each src/<name>/client directory to the same location in dist.
  *
- * Why：tsc 只编译 TS 且排除 client 目录（纯资产：client.tsx 入口 + 随附文件），
- * 运行期各插件的 resolveClientRoot 只认 <plugin>/client 与包内 src 回退两处；
- * dist 单独部署（helm-hub bin / payload / 桌面壳子进程）时缺该目录会在
- * createHelm 即刻抛 <plugin>_client_missing。幂等，重复执行无副作用。
+ * Why: tsc only compiles TS and excludes the client directories (pure assets: the client.tsx entry plus
+ * accompanying files); at runtime every plugin's resolveClientRoot only recognizes <plugin>/client and the
+ * in-package src fallback; when dist is deployed standalone (helm-hub bin / payload / the desktop shell
+ * subprocess), a missing directory makes createHelm throw <plugin>_client_missing immediately.
+ * Idempotent — repeated runs have no side effects.
  */
 import { cpSync, existsSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -16,7 +17,7 @@ const srcPlugins = join(pkgRoot, 'src');
 const distPlugins = join(pkgRoot, 'dist');
 
 if (!existsSync(distPlugins)) {
-  console.error(`[plugins] 缺少 ${distPlugins}，请先执行 tsc 编译`);
+  console.error(`[plugins] ${distPlugins} is missing; run the tsc build first`);
   process.exit(1);
 }
 
@@ -28,4 +29,4 @@ for (const entry of readdirSync(srcPlugins, { withFileTypes: true })) {
   cpSync(clientSrc, join(distPlugins, entry.name, 'client'), { recursive: true });
   copied += 1;
 }
-console.log(`[plugins] 已复制 ${copied} 个插件 client 目录到 dist`);
+console.log(`[plugins] copied ${copied} plugin client directories to dist`);

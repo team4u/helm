@@ -1,27 +1,32 @@
 #!/usr/bin/env node
 /**
- * 桌面安装包 Hub 生产 baseline 组装：复用 @helm/payload dist，物化完整生产依赖闭包，
- * 复制 npm CLI，并在仓库外隔离目录真实启动验收。
+ * Assembles the production Hub baseline for desktop installers: reuses the @helm/payload dist,
+ * materializes the complete production dependency closure, copies the npm CLI, and really launches it
+ * for acceptance in an isolated directory outside the repository.
  *
- * 产物布局（packages/desktop/hub/，electron-builder extraResources → <resources>/hub）：
- *   hub/{package.json, manifest.json, start.mjs}   复用 payload dist（同源契约）
+ * Output layout (packages/desktop/hub/, electron-builder extraResources → <resources>/hub):
+ *   hub/{package.json, manifest.json, start.mjs}   reused payload dist (same-source contract)
  *   hub/hub/ hub/kernel/ hub/plugins/ hub/plugin-build/ hub/plugin-client/ hub/protocol/ hub/cli/ hub/web/
- *                                                  hub/kernel/plugins/plugin-build/plugin-client/
- *                                                  protocol/cli/web 产物
- *   hub/node_modules/...                            生产依赖闭包（见下）
- *   hub/tools/npm/                                  npm CLI 完整文件闭包（bin/npm-cli.js，
- *                                                   供主代理 Electron run-as-node 运行）
+ *                                                  the hub/kernel/plugins/plugin-build/plugin-client/
+ *                                                  protocol/cli/web artifacts
+ *   hub/node_modules/...                            the production dependency closure (see below)
+ *   hub/tools/npm/                                  the npm CLI's complete file closure (bin/npm-cli.js,
+ *                                                   run by the main agent via Electron run-as-node)
  *
- * 依赖物化机制（诚实边界：只物化本 runner 架构——发布业务 payload 由客户端按平台
- * npm install，baseline 安装包按当前打包架构内嵌）：
- * - 源：仓库已安装的 pnpm 解析结果。每个包从其真实目录（.pnpm 虚拟店或 workspace
- *   包目录）复制文件本体；包内 node_modules 的符号链接条目一律排除（禁止仓库外/
- *   dangling symlink），真实目录条目（如 npm 自带的 bundled 依赖）原样保留；
- * - 重建：按真实 dependency graph（dependencies + peerDependencies + 已安装的
- *   optionalDependencies）以 npm 嵌套布局重放——优先提升到 hub/node_modules 根，
- *   版本冲突时嵌套到依赖方的 node_modules（绝不只单层复制，绝不共用错误版本）；
- * - 验收：默认在仓库外隔离目录真实启动 Hub（HTTP 探活 /api/auth/status）——不在
- *   仓库内验收，避免 node 解析偷渡到仓库 node_modules 造成假阳性。--no-verify 跳过。
+ * Dependency materialization mechanism (honesty boundary: only this runner's architecture is materialized —
+ * published business payloads are npm-installed per platform by the client; the baseline installer embeds
+ * the current packaging architecture):
+ * - source: the repository's installed pnpm resolution. Every package is copied from its real directory
+ *   (.pnpm virtual store or workspace package directory) as real files; symlink entries inside a
+ *   package's node_modules are always excluded (no out-of-repository / dangling symlinks), while real
+ *   directory entries (e.g. npm's bundled dependencies) are kept as-is;
+ * - rebuild: replayed from the real dependency graph (dependencies + peerDependencies + installed
+ *   optionalDependencies) in npm's nested layout — hoisted to the hub/node_modules root when possible,
+ *   nested under the dependent's node_modules on version conflicts (never just one flat layer, never
+ *   sharing a wrong version);
+ * - acceptance: by default the Hub is really launched in an isolated directory outside the repository
+ *   (HTTP probe against /api/auth/status) — not verified inside the repository, to rule out node
+ *   resolution sneaking into the repository node_modules and faking a pass. --no-verify skips it.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -43,15 +48,15 @@ const fail = (msg) => {
   process.exit(1);
 };
 
-// --- 前置：payload dist 必须就绪（缺失时自动补组装一次） ------------------------------
+// --- Precondition: the payload dist must be ready (assembled once automatically when missing) -------------------------
 if (!existsSync(path.join(payloadDist, 'manifest.json'))) {
-  console.log('[assemble-hub] payload dist 缺失，先执行 @helm/payload build ...');
+  console.log('[assemble-hub] payload dist missing, running @helm/payload build first ...');
   const res = spawnSync('pnpm', ['--filter', '@helm/payload', 'run', 'build'], { cwd: repoRoot, stdio: 'inherit' });
-  if (res.status !== 0) fail('payload dist 组装失败（上方位输出）');
+  if (res.status !== 0) fail('payload dist assembly failed (see the output above)');
 }
-if (!existsSync(path.join(payloadDist, 'hub/dist/main.js'))) fail(`payload dist 布局异常: ${payloadDist}`);
+if (!existsSync(path.join(payloadDist, 'hub/dist/main.js'))) fail(`payload dist layout unexpected: ${payloadDist}`);
 
-// --- 复用 payload dist（同源契约，不重复实现） ---------------------------------------
+// --- Reuse the payload dist (same-source contract, no duplicate implementation) --------------------------------------
 rmSync(hubDir, { recursive: true, force: true });
 mkdirSync(hubDir, { recursive: true });
 for (const ent of readdirSync(payloadDist)) {
@@ -59,14 +64,13 @@ for (const ent of readdirSync(payloadDist)) {
 }
 const hubPkg = JSON.parse(readFileSync(path.join(hubDir, 'package.json'), 'utf-8'));
 
-// --- 生产依赖闭包物化 ---------------------------------------------------------------
-/** 复制一个包目录：排除其 node_modules 内的符号链接条目（pnpm 注入），保留真实目录（如 npm 自带 bundled 依赖）。 */
+// --- Production dependency closure materialization -------------------------------------------------------------------
+/** Copies a package directory: excludes symlink entries inside its node_modules (pnpm-injected) while keeping real directories (e.g. npm's bundled dependencies). */
 function copyPackageRealDir(srcDir, destDir) {
   cpSync(srcDir, destDir, { recursive: true, dereference: true, filter: packageCopyFilter(srcDir) });
 }
 
-const rootDeps = hubPkg.dependencies ?? {};
-/** hub 内某消费者目录向上的解析链（跳过 node_modules 容器与 @scope 容器目录）。 */
+/** The upward resolution chain of a consumer directory inside hub (skipping node_modules containers and @scope container directories). */
 function resolutionChain(consumerDir) {
   const chain = [];
   let cur = consumerDir;
@@ -80,7 +84,7 @@ function resolutionChain(consumerDir) {
     if (next === cur || cur.length < hubDir.length) break;
     cur = next;
   }
-  // chain[0] = 消费者自身（最近）→ 末尾 = hub 根：与 Node 就近优先解析语义一致。
+  // chain[0] = the consumer itself (nearest) → last = hub root: matching Node's nearest-wins resolution semantics.
   return chain;
 }
 
@@ -89,31 +93,32 @@ const copyQueue = [];
 const problems = [];
 
 /**
- * 放置一个依赖：若从 consumerDir 已可解析到同版本则跳过；否则提升到 hub/node_modules
- * 根（无冲突时）或嵌套到 consumerDir/node_modules（版本冲突时）。
+ * Places a dependency: skipped when the same version already resolves from consumerDir; otherwise hoisted
+ * to the hub/node_modules root (when no conflict) or nested under consumerDir/node_modules (on conflict).
  */
 function placeDep(name, realDir, pkgJson, consumerDir) {
   for (const level of resolutionChain(consumerDir)) {
     const existing = placed.get(path.join(level, 'node_modules', name));
     if (existing) {
-      if (existing.version === pkgJson.version) return; // 已可正确解析
-      break; // 冲突：落到下方嵌套放置
+      if (existing.version === pkgJson.version) return; // already resolvable correctly
+      break; // conflict: fall through to nested placement below
     }
   }
   const hoisted = path.join(hubDir, 'node_modules', name);
   const hoistedExisting = placed.get(hoisted);
   const dest = !hoistedExisting ? hoisted : path.join(consumerDir, 'node_modules', name);
   if (placed.has(dest)) {
-    problems.push(`${name}@${pkgJson.version}: 嵌套位置 ${dest} 已被 ${placed.get(dest).version} 占用（需更深嵌套，当前 baseline 未覆盖该形态）`);
+    problems.push(`${name}@${pkgJson.version}: nested slot ${dest} is already occupied by ${placed.get(dest).version} (deeper nesting needed; the current baseline doesn't cover this shape)`);
     return;
   }
   mkdirSync(path.dirname(dest), { recursive: true });
   copyQueue.push([realDir, dest]);
   placed.set(dest, { name, version: pkgJson.version });
-  // 递归物化该包的生产依赖（真实目录侧解析——.pnpm 内其依赖已按 peer 闭包就位）。
+  // Recursively materialize the package's production dependencies (resolved from the real directory side —
+  // inside .pnpm its dependencies are already in place per the peer closure).
   for (const { name: depName, optional } of prodDepEntries(pkgJson)) {
     const resolved = resolveDepRealDir(realDir, depName, optional);
-    if (resolved === null) continue; // 平台/能力不匹配的 optional 依赖：如实跳过
+    if (resolved === null) continue; // an optional dependency not matching the platform/capabilities: skip it honestly
     if (resolved.error) {
       problems.push(`${name} → ${resolved.error}`);
       continue;
@@ -122,10 +127,11 @@ function placeDep(name, realDir, pkgJson, consumerDir) {
   }
 }
 
-// 根依赖：外部依赖自声明它的运行时包目录解析；
-// @helm/protocol / @helm/kernel / @helm/plugins / @helm/plugin-build 以 payload
-// 携带的同名目录为本体物化进 node_modules（其外部依赖自仓库对应包目录解析，
-// 保证与发布 file: 语义一致的闭包）。
+// Root dependencies: external dependencies resolve from the runtime package directory that declares them;
+// @helm/protocol / @helm/kernel / @helm/plugins / @helm/plugin-build are materialized into node_modules
+// using the same-named directories carried by the payload (their external dependencies resolve from the
+// repository's corresponding package directories, guaranteeing a closure consistent with the published
+// file: semantics).
 const RUNTIME_PKG_DIRS = {
   '@helm/protocol': 'protocol',
   '@helm/kernel': 'kernel',
@@ -149,8 +155,8 @@ for (const [name, spec] of Object.entries(rootDeps)) {
     }
     continue;
   }
-  // 归属查找先 dependencies 再 peerDependencies（如 react 仅为 SDK 的 peer），
-  // 都未命中时回退 kernel（随后 resolveDepRealDir 会如实报缺失）。
+  // Ownership lookup checks dependencies before peerDependencies (e.g. react is only an SDK peer);
+  // when neither hits, fall back to kernel (resolveDepRealDir then reports the missing dependency honestly).
   const pkgOf = (dir) => JSON.parse(readFileSync(path.join(repoRoot, 'packages', dir, 'package.json'), 'utf-8'));
   const RUNTIME_OWNER_DIRS = ['kernel', 'plugins', 'plugin-build', 'plugin-client', 'env-io', 'hub'];
   const ownerDir =
@@ -163,20 +169,20 @@ for (const [name, spec] of Object.entries(rootDeps)) {
     continue;
   }
   if (!spec.includes(resolved.pkgJson.version)) {
-    problems.push(`${name}: payload 契约版本 ${spec} 与仓库安装 ${resolved.pkgJson.version} 不一致`);
+    problems.push(`${name}: payload contract version ${spec} disagrees with the repository install ${resolved.pkgJson.version}`);
   }
   placeDep(name, resolved.realDir, resolved.pkgJson, hubDir);
 }
-if (problems.length > 0) fail(`依赖闭包解析失败：\n${problems.map((p) => `- ${p}`).join('\n')}`);
+if (problems.length > 0) fail(`dependency closure resolution failed:\n${problems.map((p) => `- ${p}`).join('\n')}`);
 for (const [src, dest] of copyQueue) copyPackageRealDir(src, dest);
 
-// --- npm CLI 完整文件闭包（asar 外，主代理经 Electron run-as-node 运行） -------------
+// --- npm CLI complete file closure (outside asar; run by the main agent via Electron run-as-node) --------------------
 const npmRealDir = resolveDepRealDir(desktopRoot, 'npm', false).realDir;
 const npmPkg = JSON.parse(readFileSync(path.join(npmRealDir, 'package.json'), 'utf-8'));
-if (!existsSync(path.join(npmRealDir, 'bin', 'npm-cli.js'))) fail(`npm CLI 入口缺失: ${npmRealDir}/bin/npm-cli.js`);
+if (!existsSync(path.join(npmRealDir, 'bin', 'npm-cli.js'))) fail(`npm CLI entry missing: ${npmRealDir}/bin/npm-cli.js`);
 copyPackageRealDir(npmRealDir, path.join(hubDir, 'tools', 'npm'));
 
-// --- 诚实性检查：hub 内不得残留指向仓库内/外的符号链接（必须全部真实文件） -----------
+// --- Honesty check: no symlinks pointing inside or outside the repository may remain in hub (everything must be real files) -----------
 function findSymlinks(dir) {
   const out = [];
   const visit = (cur) => {
@@ -191,7 +197,7 @@ function findSymlinks(dir) {
   return out;
 }
 const symlinks = findSymlinks(hubDir);
-if (symlinks.length > 0) fail(`hub 内残留符号链接（物化必须为真实文件）:\n${symlinks.slice(0, 10).join('\n')}`);
+if (symlinks.length > 0) fail(`symlinks left inside hub (materialization must be real files):\n${symlinks.slice(0, 10).join('\n')}`);
 
 function walkStats(dir) {
   let files = 0;
@@ -210,17 +216,18 @@ function walkStats(dir) {
   return { files, bytes };
 }
 const stats = walkStats(hubDir);
-console.log(`[assemble-hub] 组装完成: ${hubDir}`);
-console.log(`[assemble-hub] 包名 ${hubPkg.name}@${hubPkg.version}，依赖闭包 ${placed.size} 包，npm CLI ${npmPkg.version}（tools/npm/bin/npm-cli.js）`);
-console.log(`[assemble-hub] 文件 ${stats.files} 个，共 ${(stats.bytes / 1024 / 1024).toFixed(1)} MiB（本 runner 架构 baseline）`);
+console.log(`[assemble-hub] assembly complete: ${hubDir}`);
+console.log(`[assemble-hub] package ${hubPkg.name}@${hubPkg.version}, dependency closure ${placed.size} packages, npm CLI ${npmPkg.version} (tools/npm/bin/npm-cli.js)`);
+console.log(`[assemble-hub] ${stats.files} files, ${(stats.bytes / 1024 / 1024).toFixed(1)} MiB total (this runner architecture's baseline)`);
 
-// --- 外部隔离目录真实启动验收 -------------------------------------------------------
+// --- Real launch acceptance in an isolated external directory -------------------------------------------------------
 if (!verify) {
-  console.log('[assemble-hub] --no-verify：跳过启动验收（仅调试用，发布前必须验收）');
+  console.log('[assemble-hub] --no-verify: skipping launch acceptance (debug only; acceptance is mandatory before release)');
   process.exit(0);
 }
 
-// 仓库之外（且不在任何含 node_modules 的祖先链上），杜绝解析偷渡造成假阳性。
+// Outside the repository (and not on any ancestor chain containing node_modules), ruling out resolution
+// sneak-through faking a pass.
 const verifyRoot = mkdtempSync(path.join(path.dirname(repoRoot) === '/root/code' ? '/root' : path.dirname(repoRoot), 'helm-hub-verify-'));
 const verifyHub = path.join(verifyRoot, 'hub');
 try {
@@ -229,7 +236,7 @@ try {
   const check = spawnSync(process.execPath, [path.join(verifyHub, 'start.mjs'), 'check'], {
     cwd: verifyHub, encoding: 'utf8', timeout: 30_000, env: { ...process.env, NODE_PATH: '' },
   });
-  if (check.status !== 0) throw new Error(`隔离依赖验收失败：${check.stdout}\n${check.stderr}`);
+  if (check.status !== 0) throw new Error(`isolated dependency acceptance failed: ${check.stdout}\n${check.stderr}`);
   const port = await new Promise((resolve, reject) => {
     const server = createServer();
     server.once('error', reject);
@@ -238,7 +245,7 @@ try {
       server.close((error) => error ? reject(error) : resolve(port));
     });
   });
-  console.log(`[assemble-hub] 隔离验收（${verifyRoot}）：启动 Hub @ ${port}`);
+  console.log(`[assemble-hub] isolated acceptance (${verifyRoot}): launching Hub @ ${port}`);
   const wrapper = path.join(verifyRoot, 'hub-child.mjs');
   cpSync(path.join(desktopRoot, 'dist', 'hub-child.js'), wrapper);
   const child = spawn(process.execPath, [wrapper, path.join(verifyHub, 'hub', 'dist', 'main.js')], {
@@ -262,7 +269,7 @@ try {
       const response = await fetch(`http://127.0.0.1:${port}/api/auth/status`, { signal: AbortSignal.timeout(1000) });
       const body = await response.json();
       if (response.ok && typeof body?.configured === 'boolean') { ok = true; break; }
-    } catch { /* 服务尚未就绪，继续等待。 */ }
+    } catch { /* service not ready yet, keep waiting. */ }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   let timeout;
@@ -273,9 +280,9 @@ try {
   clearTimeout(timeout);
   if (exitInfo.timeout) { child.kill('SIGKILL'); await closed; }
   if (!ok || spawnError !== undefined || exitInfo.timeout || exitInfo.code !== 0) {
-    throw new Error(`隔离验收失败（ready=${ok}, exit=${exitInfo.code}, timeout=${Boolean(exitInfo.timeout)}）：${spawnError ?? ''}\n${stdout}\n${stderr}`);
+    throw new Error(`isolated acceptance failed (ready=${ok}, exit=${exitInfo.code}, timeout=${Boolean(exitInfo.timeout)}): ${spawnError ?? ''}\n${stdout}\n${stderr}`);
   }
-  console.log('[assemble-hub] 隔离依赖检查、Hub HTTP 与跨平台 IPC 优雅退出全部通过');
+  console.log('[assemble-hub] isolated dependency check, Hub HTTP, and cross-platform IPC graceful shutdown all passed');
 } finally {
   rmSync(verifyRoot, { recursive: true, force: true });
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * 构建前置清理：增量裁剪本包 dist 中已无对应源码的陈旧产物，并保留仍存在的 <plugin>/client/** 资产。
- * 支持 --force / HELM_CLEAN_DIST=1 全量清空。
+ * Pre-build cleanup: incrementally prunes stale artifacts in this package's dist that no longer have
+ * matching source files, while preserving <plugin>/client/** assets that still exist.
+ * Supports --force / HELM_CLEAN_DIST=1 for a full wipe.
  */
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
