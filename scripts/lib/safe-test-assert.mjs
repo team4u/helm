@@ -1,15 +1,17 @@
 /**
- * 1ms 零内存断言防爆 Preload（Node 内置模块零外部依赖）。
+ * 1ms zero-memory assertion blow-up guard preload (Node built-ins only, zero external deps).
  *
- * 为什么存在：happy-dom / React DOM 测试中若直接对 Element / Window / Event /
- * React Fiber 节点调用 assert.equal(el, null) 等断言，失败时 Node 原生
- * AssertionError 会调用 util.inspect(actual) 递归遍历整棵 DOM + Fiber 循环树，
- * 瞬间飙到 >1.5GB 内存并卡死/OOM。
+ * Why it exists: in happy-dom / React DOM tests, calling assertions like
+ * assert.equal(el, null) directly on Element / Window / Event / React Fiber nodes makes
+ * the native AssertionError call util.inspect(actual), recursively walking the entire DOM
+ * + Fiber cyclic tree and instantly blowing past 1.5GB of memory into a hang or OOM.
  *
- * 本模块通过 NODE_OPTIONS=--import=... 在测试代码加载前注入（也可直接 import）：
- * - 对 equal/strictEqual/notEqual/notStrictEqual 走 O(1) Object.is 快路径；
- * - 仅在断言即将失败（或 deepEqual/deepStrictEqual 探测到危险对象）时做浅探测
- *   与紧凑摘要化，普通值 100% 透传原生断言保持完整 diff 体验。
+ * Injected via NODE_OPTIONS=--import=... before test code loads (direct import also
+ * works):
+ * - equal/strictEqual/notEqual/notStrictEqual take an O(1) Object.is fast path;
+ * - a shallow probe and compact summarization kick in only when an assertion is about to
+ *   fail (or deepEqual/deepStrictEqual detects a dangerous object); ordinary values pass
+ *   through to the native assertions 100% untouched, preserving full diff UX.
  */
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 
@@ -41,7 +43,7 @@ function isDirectToxic(val) {
     if (typeof val.preventDefault === 'function' && 'target' in val && 'currentTarget' in val) {
       return true;
     }
-    // 4. React Fiber 节点自身或挂载了 React Fiber 的宿主节点
+    // 4. A React Fiber node itself, or a host node carrying a React Fiber
     if ('stateNode' in val && 'memoizedProps' in val && 'return' in val) return true;
     if (!Array.isArray(val)) {
       const keys = Object.keys(val);
@@ -63,7 +65,7 @@ function isDirectToxic(val) {
 }
 
 /**
- * 迭代浅探测（最多顶层 + 2 层对象属性，禁止深递归防自身卡死）。
+ * Iterative shallow probing (top level + at most 2 levels of object properties; no deep recursion, so it cannot hang itself).
  * @param {unknown} val
  * @returns {boolean}
  */
@@ -103,7 +105,7 @@ export function isToxicForInspect(val) {
         }
       }
     } catch {
-      // 忽略代理/getter 抛错
+      // Ignore proxy/getter throws
     }
   }
   return false;
@@ -240,8 +242,10 @@ function installSafeTestAssert() {
       if (!isToxicForInspect(actual) && !isToxicForInspect(expected)) {
         return orig.apply(this, arguments);
       }
-      // 任一侧为危险对象且严格不等：null/undefined/同为对象场景直接按 == 失败路径摘要化；
-      // 其余原始值比较先核验 == 是否确实失败，避免破坏 loose equal 语义。
+      // Either side is a dangerous object and they are strictly unequal: null/undefined /
+      // object-vs-object cases summarize directly along the == failure path; other
+      // primitive comparisons first verify == actually fails, preserving loose-equal
+      // semantics.
       if (
         (actual !== null && expected !== null && typeof actual === 'object' && typeof expected === 'object') ||
         actual === null ||
@@ -326,7 +330,7 @@ function installSafeTestAssert() {
 
   patchTarget(looseAssert, { strictMode: false });
   patchTarget(strictAssert, { strictMode: true });
-  // 保持 assert.strict 与 node:assert/strict 引用一致（若未来 Node 分离二者则兜底同步）
+  // Keep assert.strict and node:assert/strict referentially identical (and re-sync here if Node ever splits them)
   if (looseAssert.strict && looseAssert.strict !== strictAssert) {
     patchTarget(looseAssert.strict, { strictMode: true });
   }

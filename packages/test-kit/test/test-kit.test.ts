@@ -1,6 +1,7 @@
 /**
- * `@helm/test-kit` 单元测试：覆盖同构 DTO 工厂、异步控制工具、Node 目录与环境隔离、
- * HTTP Mock Hub 与 Git 模板夹具全部公开契约。
+ * `@helm/test-kit` unit tests: cover the full public contract of the isomorphic DTO factories,
+ * async control utilities, Node directory and env isolation, HTTP Mock Hub, and Git template
+ * fixtures.
  */
 
 import assert from 'node:assert/strict'
@@ -36,7 +37,7 @@ import { createGitTemplate, initGitRepo } from '../src/git.js'
 
 const SRC_INDEX_PATH = fileURLToPath(new URL('../src/index.ts', import.meta.url))
 
-test('src/index.ts 保持纯同构：零 node:* 运行时或类型导入', { timeout: 60_000 }, () => {
+test('src/index.ts stays purely isomorphic: zero node:* runtime or type imports', { timeout: 60_000 }, () => {
   const sourceText = readFileSync(SRC_INDEX_PATH, 'utf8')
   const sf = ts.createSourceFile(SRC_INDEX_PATH, sourceText, ts.ScriptTarget.Latest, true)
   const specifiers: string[] = []
@@ -49,14 +50,14 @@ test('src/index.ts 保持纯同构：零 node:* 运行时或类型导入', { tim
     ts.forEachChild(node, visit)
   }
   visit(sf)
-  assert.ok(specifiers.length > 0, '应至少包含 @helm/protocol/browser 类型导入')
+  assert.ok(specifiers.length > 0, 'should contain at least the @helm/protocol/browser type import')
   for (const spec of specifiers) {
-    assert.ok(!spec.startsWith('node:'), `src/index.ts 不得导入 node:* 模块: ${spec}`)
-    assert.equal(spec, '@helm/protocol/browser', `src/index.ts 仅应从 @helm/protocol/browser 导入契约: ${spec}`)
+    assert.ok(!spec.startsWith('node:'), `src/index.ts must not import node:* modules: ${spec}`)
+    assert.equal(spec, '@helm/protocol/browser', `src/index.ts must only import contracts from @helm/protocol/browser: ${spec}`)
   }
 })
 
-test('DTO 工厂：makeConversationSummary / makeProfile / makePluginSummary 默认值与覆写语义', { timeout: 60_000 }, () => {
+test('DTO factories: makeConversationSummary / makeProfile / makePluginSummary defaults and override semantics', { timeout: 60_000 }, () => {
   const convDefault = makeConversationSummary()
   assert.equal(convDefault.id, 1)
   assert.equal(convDefault.title, 'conv-1')
@@ -76,14 +77,14 @@ test('DTO 工厂：makeConversationSummary / makeProfile / makePluginSummary 默
   assert.equal(convCustom.ownedBy, 'helm')
   assert.deepEqual(convCustom.tags, ['worker'])
 
-  const convTitled = makeConversationSummary({ id: 7, title: '主屏会话' })
-  assert.equal(convTitled.title, '主屏会话')
+  const convTitled = makeConversationSummary({ id: 7, title: 'main-screen conversation' })
+  assert.equal(convTitled.title, 'main-screen conversation')
 
   const profileDefault = makeProfile()
   assert.deepEqual(profileDefault, { id: 'assistant', name: 'assistant' })
-  const profileCustom = makeProfile({ id: 'coder', name: '代码助手', model: 'openai/gpt-5' })
+  const profileCustom = makeProfile({ id: 'coder', name: 'code assistant', model: 'openai/gpt-5' })
   assert.equal(profileCustom.id, 'coder')
-  assert.equal(profileCustom.name, '代码助手')
+  assert.equal(profileCustom.name, 'code assistant')
   assert.equal(profileCustom.model, 'openai/gpt-5')
 
   const pluginDefault = makePluginSummary()
@@ -97,20 +98,20 @@ test('DTO 工厂：makeConversationSummary / makeProfile / makePluginSummary 默
 
   const pluginCustom = makePluginSummary({
     id: 'builtin:workflow',
-    name: '工作流引擎',
+    name: 'workflow engine',
     locked: false,
     enabled: false,
     status: 'disabled',
     tools: ['subagent'],
   })
   assert.equal(pluginCustom.id, 'builtin:workflow')
-  assert.equal(pluginCustom.name, '工作流引擎')
+  assert.equal(pluginCustom.name, 'workflow engine')
   assert.equal(pluginCustom.enabled, false)
   assert.equal(pluginCustom.status, 'disabled')
   assert.deepEqual(pluginCustom.tools, ['subagent'])
 })
 
-test('deferred / sleep / waitFor / jsonResponse 同构异步与响应工具', { timeout: 60_000 }, async () => {
+test('deferred / sleep / waitFor / jsonResponse isomorphic async and response utilities', { timeout: 60_000 }, async () => {
   const okGate = deferred<string>()
   let settled = false
   void okGate.promise.then((value) => {
@@ -127,7 +128,7 @@ test('deferred / sleep / waitFor / jsonResponse 同构异步与响应工具', { 
 
   const t0 = Date.now()
   await sleep(15)
-  assert.ok(Date.now() - t0 >= 5, 'sleep 应至少等待约指定毫秒数')
+  assert.ok(Date.now() - t0 >= 5, 'sleep should wait at least roughly the requested milliseconds')
 
   let polls = 0
   await waitForCondition(async () => {
@@ -137,12 +138,12 @@ test('deferred / sleep / waitFor / jsonResponse 同构异步与响应工具', { 
   assert.ok(polls >= 3)
 
   await assert.rejects(
-    waitFor(() => false, { timeoutMs: 30, intervalMs: 5, message: '自定义超时说明' }),
-    /自定义超时说明/,
+    waitFor(() => false, { timeoutMs: 30, intervalMs: 5, message: 'custom timeout note' }),
+    /custom timeout note/,
   )
   await assert.rejects(
-    waitFor(() => false, { timeoutMs: 0, message: '零超时立即失败' }),
-    /零超时立即失败/,
+    waitFor(() => false, { timeoutMs: 0, message: 'zero timeout fails immediately' }),
+    /zero timeout fails immediately/,
   )
 
   const res = jsonResponse({ ok: true, n: 1 }, 201, { 'x-trace': 'abc' })
@@ -156,7 +157,7 @@ test('deferred / sleep / waitFor / jsonResponse 同构异步与响应工具', { 
   assert.equal(await emptyRes.text(), '')
 })
 
-test('assertRejectsCode（同构版与 node:assert 版）严格校验错误码与状态码', { timeout: 60_000 }, async () => {
+test('assertRejectsCode (isomorphic and node:assert variants) strictly validates error code and status', { timeout: 60_000 }, async () => {
   class CodedError extends Error {
     readonly code: string
     readonly status?: number
@@ -179,19 +180,19 @@ test('assertRejectsCode（同构版与 node:assert 版）严格校验错误码�
 
     await assert.rejects(
       checkFn(async () => 'ok', 'not_found'),
-      /预期抛出错误码 not_found/,
+      /expected rejection with error code not_found/,
     )
     await assert.rejects(
       checkFn(async () => {
         throw new CodedError('other_code', 'mismatch')
       }, 'not_found'),
-      /预期错误码 not_found，实际为 other_code/,
+      /expected error code not_found, got other_code/,
     )
     await assert.rejects(
       checkFn(async () => {
         throw new CodedError('not_found', 'no status')
       }, 'not_found', 404),
-      /预期错误状态码 404，实际为 undefined/,
+      /expected error status 404, got undefined/,
     )
   }
 
@@ -201,7 +202,7 @@ test('assertRejectsCode（同构版与 node:assert 版）严格校验错误码�
   )
 })
 
-test('useTempDir / makeTempDir / cleanupDir 生命周期自动清理与显式清理', { timeout: 60_000 }, async () => {
+test('useTempDir / makeTempDir / cleanupDir lifecycle auto-cleanup and explicit cleanup', { timeout: 60_000 }, async () => {
   const callbacks: Array<() => void | Promise<void>> = []
   const fakeContext = {
     after(fn: () => void | Promise<void>) {
@@ -220,11 +221,11 @@ test('useTempDir / makeTempDir / cleanupDir 生命周期自动清理与显式清
   writeFileSync(join(manualDir, 'a.txt'), '1', 'utf8')
   await cleanupDir(manualDir)
   assert.equal(existsSync(manualDir), false)
-  // 重复清理不存在目录应保持幂等
+  // Cleaning up an already-removed dir again should stay idempotent
   await cleanupDir(manualDir)
 })
 
-test('sanitizedHostEnv 大小写不敏感剥除受管变量并支持安全覆写', { timeout: 60_000 }, () => {
+test('sanitizedHostEnv strips host-managed vars case-insensitively and supports safe overrides', { timeout: 60_000 }, () => {
   const saved: Record<string, string | undefined> = {}
   const keysToTouch = [
     ...HOST_MANAGED_HELM_ENV_NAMES,
@@ -245,12 +246,12 @@ test('sanitizedHostEnv 大小写不敏感剥除受管变量并支持安全覆写
 
     const clean = sanitizedHostEnv()
     for (const name of HOST_MANAGED_HELM_ENV_NAMES) {
-      assert.equal(clean[name], undefined, `应剥除 ${name}`)
+      assert.equal(clean[name], undefined, `should strip ${name}`)
     }
     assert.equal(clean['helm_token'], undefined)
     assert.equal(clean['Helm_Cwd'], undefined)
     assert.equal(clean['HELM_TEST_KIT_KEEP'], 'preserve-me')
-    assert.equal(process.env['HELM_TOKEN'], 'host-HELM_TOKEN', '不得修改全局 process.env')
+    assert.equal(process.env['HELM_TOKEN'], 'host-HELM_TOKEN', 'must not mutate global process.env')
 
     const overridden = sanitizedHostEnv({
       HELM_HUB_URL: 'http://127.0.0.1:4444',
@@ -267,7 +268,7 @@ test('sanitizedHostEnv 大小写不敏感剥除受管变量并支持安全覆写
   }
 })
 
-test('startMockHub：默认 actions、多种响应形式、命中记录与 autoRegisterCleanup', { timeout: 60_000 }, async (t) => {
+test('startMockHub: default actions, multiple response shapes, hit recording, and autoRegisterCleanup', { timeout: 60_000 }, async (t) => {
   const hub = await startMockHub(
     {
       'POST /api/echo': async (body) => ({ status: 201, body: { echoed: body } }),
@@ -337,11 +338,11 @@ test('startMockHub：默认 actions、多种响应形式、命中记录与 autoR
   assert.equal(echoHit.authorization, 'Bearer tok-1')
   assert.equal(echoHit.headers['x-meta'], 'v')
 
-  // 手动 close 后 autoRegisterCleanup 再次调用 close 应幂等成功
+  // After a manual close, the autoRegisterCleanup close callback must succeed idempotently
   await hub.close()
   await hub.close()
 
-  // 覆写 GET /api/actions、Buffer 响应与纯文本/二进制请求体记录
+  // Override GET /api/actions, plus Buffer responses and plain-text/binary request body recording
   const customHub = await startMockHub(
     {
       'GET /api/actions': () => ({ body: [{ pluginId: 'custom', id: 'override' }] }),
@@ -375,7 +376,7 @@ test('startMockHub：默认 actions、多种响应形式、命中记录与 autoR
   assert.deepEqual(await plainPostRes.json(), { got: 'raw-text-body' })
 })
 
-test('initGitRepo 与 createGitTemplate：初始化仓库与 cpSync 隔离克隆', { timeout: 60_000 }, (t) => {
+test('initGitRepo and createGitTemplate: repository bootstrap and isolated cpSync clones', { timeout: 60_000 }, (t) => {
   const scratch = useTempDir(t, 'helm-test-kit-git-')
   const standalone = join(scratch, 'standalone')
   initGitRepo(standalone, { 'nested/hello.txt': 'hello\n' })
@@ -405,7 +406,7 @@ test('initGitRepo 与 createGitTemplate：初始化仓库与 cpSync 隔离克隆
     assert.equal(readFileSync(join(copyA, 'base.txt'), 'utf8'), 'base-v1\n')
     assert.equal(readFileSync(join(copyB, 'base.txt'), 'utf8'), 'base-v1\n')
 
-    // copyA 新增提交不影响 copyB 与模板
+    // A new commit in copyA must not affect copyB or the template
     writeFileSync(join(copyA, 'base.txt'), 'modified-in-a\n', 'utf8')
     execFileSync('git', ['add', '.'], { cwd: copyA })
     execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'commit in a'], { cwd: copyA })
@@ -419,7 +420,7 @@ test('initGitRepo 与 createGitTemplate：初始化仓库与 cpSync 隔离克隆
   }
   assert.equal(existsSync(template.templateDir), false)
 
-  // setup 异常时应自动清理临时模板目录
+  // When setup throws, the temp template dir should be cleaned up automatically
   const uniquePrefix = `helm-test-kit-fail-${Date.now()}-${Math.random().toString(36).slice(2)}-`
   assert.throws(
     () =>
@@ -432,6 +433,6 @@ test('initGitRepo 与 createGitTemplate：初始化仓库与 cpSync 隔离克隆
   assert.deepEqual(
     readdirSync(tmpdir()).filter((name) => name.startsWith(uniquePrefix)),
     [],
-    'setup 抛错后不应遗留临时模板目录',
+    'setup throwing must not leave temp template dirs behind',
   )
 })

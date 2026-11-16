@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 /**
- * pnpm check:hygiene —— 测试卫生静态检查（TypeScript Compiler API，零新依赖）。
+ * pnpm check:hygiene — static test hygiene checks (TypeScript Compiler API, zero new deps).
  *
- * 规则见 scripts/lib/test-hygiene.mjs 头注释：
+ * Rules are documented in the scripts/lib/test-hygiene.mjs header comment:
  *   timeout-missing / skip-without-reason / suite-timeout-env（AGENTS §5）。
- * 存量违规不做基线豁免——如实逐条报告并以退出码 1 失败；修一个少一个。
+ * Existing violations get no baseline exemption — every one is reported faithfully and the
+ * run fails with exit code 1; each fixed is one fewer.
  *
- * 用法（pnpm 传参需 -- 分隔符，脚本接受并跳过开头的字面 --，pnpm 会原样透传）：
- *   pnpm check:hygiene                       # 全仓所有包 test 目录下的 *.test.ts / *.test.tsx
- *   pnpm check:hygiene -- --changed          # 仅检查变更集内的测试文件（基线同 check-changed）
+ * Usage (pnpm needs the -- separator; this script accepts and skips a leading literal --
+ * that pnpm passes through verbatim):
+ *   pnpm check:hygiene                       # every *.test.ts / *.test.tsx under all packages' test dirs
+ *   pnpm check:hygiene -- --changed          # only test files inside the change set (baseline rules as check-changed)
  *   pnpm check:hygiene -- --changed --base main
- *   pnpm check:hygiene -- --files <path...>  # 显式指定文件（必须位于本仓库内，拒绝仓库外路径）
+ *   pnpm check:hygiene -- --files <path...>  # explicit file list (must live inside this repo; outside paths rejected)
  *
- * 退出码：0 干净；1 存在违规；2 用法/基线错误。不注入任何 HELM_* 环境变量。
+ * Exit codes: 0 clean; 1 violations found; 2 usage/baseline error. No HELM_* env vars are
+ * injected.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -24,13 +27,13 @@ import { analyzeTestSource, collectAllTestFiles, isTestFilePath } from './lib/te
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function usage() {
-  console.error(`用法: node scripts/check-test-hygiene.mjs [--changed [--base <ref>]] [--files <path...>]
-  （缺省）        检查全仓测试文件
-  --changed      只检查变更集（提交 ∪ 工作区 ∪ 未跟踪）内的测试文件
-  --base <ref>   仅配合 --changed 指定基线，语义同 check-changed
-  --files p...   显式指定要检查的文件（必须位于本仓库内，相对或绝对路径均可；拒绝仓库外路径）
-注意: 通过 pnpm 调用时必须用 -- 分隔参数（如 pnpm check:hygiene -- --files x.test.ts），
-      开头的字面 -- 会被本脚本忽略；直接 node scripts/check-test-hygiene.mjs 调用则无需 --。`);
+  console.error(`Usage: node scripts/check-test-hygiene.mjs [--changed [--base <ref>]] [--files <path...>]
+  (default)      check every test file in the repo
+  --changed      check only test files inside the change set (committed ∪ worktree ∪ untracked)
+  --base <ref>   only with --changed; baseline semantics identical to check-changed
+  --files p...   explicit file list to check (must live inside this repo, relative or absolute; outside paths rejected)
+Note: when invoked through pnpm, arguments must be separated with -- (e.g. pnpm check:hygiene -- --files x.test.ts);
+      a leading literal -- is ignored by this script; a direct node scripts/check-test-hygiene.mjs call needs no --.`);
 }
 
 const argv = process.argv.slice(2);
@@ -38,7 +41,8 @@ const opts = { changed: false, base: null, files: [] };
 let filesRequested = false;
 for (let i = 0; i < argv.length; i += 1) {
   const a = argv[i];
-  // pnpm 透传的开头 -- 分隔符：仅跳过首参位置，其余位置 -- 按未知参数报错。
+  // The leading -- separator passed through by pnpm: only skipped in the first position;
+  // a -- anywhere else is reported as an unknown argument.
   if (a === '--' && i === 0) continue;
   if (a === '--changed') opts.changed = true;
   else if (a === '--base' && argv[i + 1]) {
@@ -63,12 +67,13 @@ if (filesRequested && opts.files.length === 0) {
   process.exit(2);
 }
 if (opts.base && !opts.changed) {
-  console.error('[check-hygiene] --base 仅可与 --changed 搭配使用');
+  console.error('[check-hygiene] --base may only be combined with --changed');
   usage();
   process.exit(2);
 }
 
-// 范围解析：全仓 / 变更集 / 显式文件列表（拒绝仓库外路径，绝不静默检查其他仓库）。
+// Scope resolution: whole repo / change set / explicit file list (out-of-repo paths are
+// rejected; never silently check some other repository).
 let scopeLabel;
 let files;
 if (opts.files.length > 0) {
@@ -83,7 +88,7 @@ if (opts.files.length > 0) {
     }
     return rel;
   });
-  scopeLabel = `显式 ${files.length} 个文件`;
+  scopeLabel = `explicit ${files.length} file(s)`;
 } else if (opts.changed) {
   let changes;
   try {
@@ -96,15 +101,15 @@ if (opts.files.length > 0) {
     throw err;
   }
   files = changes.files.map((f) => f.path).filter((p) => isTestFilePath(p) && existsSync(path.join(repoRoot, p)));
-  scopeLabel = `变更集 ${files.length} 个测试文件（基线 ${changes.baseline.ref}）`;
+  scopeLabel = `change set, ${files.length} test file(s) (baseline ${changes.baseline.ref})`;
 } else {
   files = collectAllTestFiles(repoRoot);
-  scopeLabel = `全仓 ${files.length} 个测试文件`;
+  scopeLabel = `whole repo, ${files.length} test file(s)`;
 }
 
-console.error(`[check-hygiene] 范围: ${scopeLabel}`);
+console.error(`[check-hygiene] scope: ${scopeLabel}`);
 
-// typescript 由仓库根 devDependency 提供，createRequire 锚定仓库根解析。
+// typescript comes from the repo root devDependency; createRequire anchors resolution there.
 const requireFromRoot = createRequire(path.join(repoRoot, 'package.json'));
 const ts = requireFromRoot('typescript');
 
@@ -116,7 +121,7 @@ for (const rel of files) {
   try {
     source = readFileSync(abs, 'utf8');
   } catch (err) {
-    console.error(`[check-hygiene] 无法读取 ${rel}: ${err.message}`);
+    console.error(`[check-hygiene] cannot read ${rel}: ${err.message}`);
     process.exit(2);
   }
   const report = analyzeTestSource(ts, rel, source);
@@ -138,12 +143,12 @@ const ruleSummary = Object.entries(byRule)
   .map(([r, n]) => `${r} ${n}`)
   .join(' / ');
 console.error(
-  `[check-hygiene] 统计: test/it ${totals.testCalls}（skip ${totals.skipCalls}、todo ${totals.todoCalls}）；` +
-    `t.test 子测试 ${totals.subtestCalls} 处不在本规则覆盖内（继承 runner 20s 默认超时，需人工评估是否收紧）`,
+  `[check-hygiene] stats: test/it ${totals.testCalls} (skip ${totals.skipCalls}, todo ${totals.todoCalls});` +
+    ` t.test subtests: ${totals.subtestCalls} not covered by these rules (they inherit the runner's 20s default timeout; tighten manually as needed)`,
 );
 if (allViolations.length > 0) {
-  console.error(`[check-hygiene] 违规 ${allViolations.length} 处（${ruleSummary}），退出 1`);
+  console.error(`[check-hygiene] ${allViolations.length} violation(s) (${ruleSummary}), exiting 1`);
   process.exit(1);
 }
-console.error('[check-hygiene] 干净，退出 0');
+console.error('[check-hygiene] clean, exiting 0');
 process.exit(0);

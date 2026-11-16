@@ -1,8 +1,8 @@
 /**
- * 独立的真实 Herdr 总览验收，不调用模型，不纳入默认单测。
- * 运行：pnpm build && timeout 50s node scripts/herdr-overview-smoke.mjs
- * 仅在 Herdr 环境运行，自建临时命名会话；所有控制命令使用该会话的 socket。
- * HELM_OVERVIEW_APP 可指定其他 checkout 的编译入口。日志保留在临时目录。
+ * Standalone real-Herdr overview acceptance; no model calls, not part of the default unit tests.
+ * Run: pnpm build && timeout 50s node scripts/herdr-overview-smoke.mjs
+ * Runs only inside a Herdr environment; creates its own temp named session, and every control command uses that session's socket.
+ * HELM_OVERVIEW_APP can point at another checkout's build entry. Logs are kept in a temp directory.
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';

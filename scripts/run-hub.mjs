@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /**
- * 开发期 Hub 启动器：tsx 直跑 packages/hub/src/main.ts 源码。
+ * Dev-time Hub launcher: runs the packages/hub/src/main.ts sources directly via tsx.
  *
- * Why 存在：hub 源码以包名导入 @helm/kernel / @helm/plugins；tsx 运行期必须经
- * tsconfig.dev.json 的 paths 把两者解析到源码，与仓库「dev/test 一律跑源码」的
- * 单模块身份约定一致（dist 与 source 双身份会让 instanceof 错误映射成 500 等
- * 静默错乱）。npm scripts 内联环境变量不跨平台，故由本脚本统一注入并 spawn。
- * 构建产物（hub dist）不受影响：tsc 不应用 dev paths，包名导入照常落 dist。
+ * Why it exists: hub sources import @helm/kernel / @helm/plugins by package name; at
+ * tsx runtime the tsconfig.dev.json paths must resolve both to sources, matching the
+ * repo's single-module-identity convention of running sources for dev/test (a dual
+ * dist/source identity silently corrupts things like instanceof errors mapping to 500s).
+ * Inline env vars in npm scripts are not cross-platform, so this script injects them
+ * uniformly and spawns. Build artifacts (hub dist) are unaffected: tsc does not apply
+ * dev paths, package-name imports still land in dist.
  */
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -22,7 +24,7 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.tsx;
 const tsxCli = path.resolve(path.dirname(pkgPath), bin ?? 'dist/cli.mjs');
 if (!existsSync(tsxCli)) {
-  console.error(`[run-hub] 未找到本地 tsx CLI: ${tsxCli}（请先 pnpm install）`);
+  console.error(`[run-hub] local tsx CLI not found: ${tsxCli} (run pnpm install first)`);
   process.exit(1);
 }
 
@@ -43,7 +45,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   });
 }
 child.on('error', (err) => {
-  console.error(`[run-hub] 启动失败: ${err.message}`);
+  console.error(`[run-hub] failed to start: ${err.message}`);
   process.exitCode = 1;
 });
 child.on('exit', (code, signal) => {

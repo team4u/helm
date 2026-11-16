@@ -1,14 +1,17 @@
 /**
- * 纯测试文件静态判定与并发分片调度器（TypeScript Compiler API，零新依赖）。
+ * Static purity detection and concurrent sharding scheduler for test files (TypeScript Compiler API, zero new deps).
  *
- * 为什么不能全量开 `--test-isolation=none`：含 happy-dom / GlobalRegistrator、
- * 修改 globalThis/window/document/process.env/console/timers、子进程/网络/SQLite/文件写入
- * 或异步重型集成的测试在同一进程共享全局环境时会串态或竞争。
+ * Why not enable `--test-isolation=none` everywhere: tests using happy-dom /
+ * GlobalRegistrator, mutating globalThis/window/document/process.env/console/timers,
+ * spawning subprocesses / network / SQLite / file writes, or heavy async integration leak
+ * state or race when they share one process's global environment.
  *
- * 本模块仅筛选【严格纯内存】测试文件（含递归检查其引用的同包 test 辅助模块）
- * 分到 K 个 `--test-isolation=none` 分片并行执行，剩余测试保留原有进程隔离。
- * 当透传参数显式指定了 `--test-isolation` / `--test-reporter` / `--test-name-pattern`
- * 等语义敏感开关时，整体退回单路常规隔离执行，绝不改变测试语义或打乱输出格式。
+ * This module filters only [strictly pure in-memory] test files (recursively checking the
+ * same-package test helper modules they import) into K parallel `--test-isolation=none`
+ * shards; the remaining tests keep their original process isolation. When pass-through
+ * args explicitly set semantics-sensitive switches like `--test-isolation` /
+ * `--test-reporter` / `--test-name-pattern`, everything falls back to a single regular
+ * isolated run — never changing test semantics or scrambling output formats.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -116,7 +119,7 @@ const MUTATED_GLOBAL_IDENTIFIERS = new Set([
   'console',
 ]);
 
-/** 解包括号、类型断言、satisfies 与非空断言。 */
+/** Unwrap parentheses, type assertions, satisfies, and non-null assertions. */
 function unwrapExpr(ts, node) {
   let cur = node;
   while (
@@ -178,7 +181,7 @@ function isProcessArgvExpr(ts, node) {
   return Boolean(host && ts.isIdentifier(host) && host.text === 'process');
 }
 
-/** 收集文件中所有运行时导入标识符（排除纯 type import）。 */
+/** Collect all runtime import identifiers in a file (pure type imports excluded). */
 function collectRuntimeImportBindings(ts, sourceFile) {
   const bindings = new Set();
   for (const st of sourceFile.statements) {
@@ -196,7 +199,7 @@ function collectRuntimeImportBindings(ts, sourceFile) {
   return bindings;
 }
 
-/** 从 test 文件路径解析同仓 test 目录内的相对辅助模块路径。 */
+/** Resolve a same-repo test-directory relative helper module path from a test file path. */
 export function resolveRelativeTestHelper(fromFile, specifier) {
   if (!specifier.startsWith('.')) return null;
   const raw = path.resolve(path.dirname(fromFile), specifier);
@@ -222,19 +225,19 @@ export function resolveRelativeTestHelper(fromFile, specifier) {
   for (const candidate of candidates) {
     try {
       if (existsSync(candidate) && statSync(candidate).isFile()) {
-        // 只递归跟进位于 test 目录内的辅助模块/夹具；不跨入被测 src 目录。
+        // Only recurse into helper modules/fixtures inside the test directory; never cross into the src under test.
         const parts = candidate.split(path.sep);
         if (parts.includes('test')) return candidate;
       }
     } catch {
-      // 忽略无效路径
+      // Ignore invalid paths
     }
   }
   return null;
 }
 
 /**
- * 静态分析单个测试源码（及可选的相对辅助模块解析器）的进程隔离安全性。
+ * Statically analyze whether one test source (plus optional relative helper resolution) is process-isolation safe.
  * @param {typeof import('typescript')} ts
  * @param {string} filePath
  * @param {string} source
@@ -282,7 +285,7 @@ export function analyzeTestSourcePurity(
   };
 
   const visit = (node) => {
-    // 类型节点不产生运行时行为。
+    // Type nodes have no runtime behavior.
     if (ts.isTypeNode(node)) return;
 
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
@@ -387,7 +390,7 @@ export function analyzeTestSourcePurity(
         if (host && ts.isIdentifier(host) && host.text === 'GlobalRegistrator' && method === 'register') {
           reasons.add('call:GlobalRegistrator.register');
         } else if (FORBIDDEN_CALLS.has(method)) {
-          // 正则字面量 `/.../.exec(str)` 是纯内存调用，非 `child_process.exec`。
+          // A regex literal `/.../.exec(str)` is a pure in-memory call, not `child_process.exec`.
           if (!(method === 'exec' && host && ts.isRegularExpressionLiteral(host))) {
             reasons.add(`call:${method}`);
           }
@@ -423,7 +426,7 @@ export function analyzeTestSourcePurity(
 }
 
 /**
- * 分析磁盘上单个测试文件（自动解析并递归检查相对辅助模块）。
+ * Analyze a single test file on disk (relative helper modules are resolved and checked recursively).
  * @param {typeof import('typescript')} ts
  * @param {string} absFilePath
  * @returns {{ pure: boolean, reasons: string[] }}
@@ -447,7 +450,7 @@ export function analyzeTestFilePurity(ts, absFilePath) {
   return analyzeTestSourcePurity(ts, absFilePath, source, resolveHelper, new Set());
 }
 
-/** 判断透传参数是否会改变 runner 隔离、并发或输出报告格式。 */
+/** Decide whether pass-through args alter runner isolation, concurrency, or the output report format. */
 export function shouldDisableSharding(extraArgs) {
   return extraArgs.some((arg) => {
     if (arg === '-t' || arg === '--watch' || arg === '--test-only' || arg === '--test-force-exit') {
@@ -465,7 +468,7 @@ export function shouldDisableSharding(extraArgs) {
 }
 
 /**
- * 将测试文件集拆分为可共享隔离的分片（LPT 负载均衡）与必须进程隔离的文件列表。
+ * Split the test file set into shards that may share isolation (LPT load balancing) and files that must stay process-isolated.
  * @param {{ ts: typeof import('typescript'), repoRoot: string, files: string[], cpus: number, filesPerShard?: number, weightFn: (relPath: string) => number }} input
  * @returns {{ pureFiles: string[], isolatedFiles: string[], shards: string[][] }}
  */

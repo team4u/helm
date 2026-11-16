@@ -1,24 +1,33 @@
 #!/usr/bin/env node
 /**
- * 跨平台测试入口（Windows 为主目标环境）。
+ * Cross-platform test entry point (Windows is the primary target environment).
  *
- * 为什么存在：真实运行环境是 Windows，Unix `timeout 180s` 在 Windows 上不可用也不可靠；
- * 本脚本用纯 Node spawn 在用户态提供同等保护：
- * - 直接 spawn 本仓库本地安装的 tsx CLI（node <tsx/cli.mjs>），不依赖 shell alias / npx / PATH 碰运气；
- * - 单测超时沿用 Node 原生 `--test-timeout=20000`，由各测试文件自身声明 `{ timeout: 60_000 }` 覆盖；
- * - 整个套件设置总超时（默认 10 分钟，覆盖 Windows 实测约 217s 的全量耗时），超时后杀完整进程树：
- *   Windows 用 `taskkill /PID <pid> /T /F`，POSIX 用独立进程组 + SIGTERM，宽限后 SIGKILL；
- * - 正常退出原样透传退出码；子进程被信号终止时按 128+signal 退出；总超时以 124 退出（GNU timeout 惯例）；
- * - 主动终止（forced 路径）时 leader 退出不立即结算：tsx 独立进程组内可能仍有忽略 SIGTERM
- *   的孙进程，保留 KILL_GRACE_MS 的 SIGKILL 升级与 LAST_RESORT 封顶，轮询 owned 进程组
- *   排空后才退（Windows 无组信号，taskkill /T /F 已杀树，维持即退），不留孤儿也不挂无限 timer。
+ * Why it exists: the real runtime is Windows, where Unix `timeout 180s` is unavailable and
+ * unreliable; this script provides the same protection in userspace via plain Node spawn:
+ * - Spawn this repo's locally installed tsx CLI directly (node <tsx/cli.mjs>); no gambling
+ *   on shell aliases / npx / PATH;
+ * - Per-test timeouts keep Node's native `--test-timeout=20000`, overridden per file by the
+ *   tests' own `{ timeout: 60_000 }` declarations;
+ * - The whole suite gets a total timeout (default 10 minutes, covering the measured ~217s
+ *   full run on Windows); on timeout the full process tree is killed:
+ *   Windows uses `taskkill /PID <pid> /T /F`, POSIX uses a detached process group + SIGTERM
+ *   then SIGKILL after a grace period;
+ * - Normal exits pass the exit code through as-is; a signal-killed child exits 128+signal;
+ *   the total timeout exits 124 (GNU timeout convention);
+ * - On forced termination the leader's exit does not settle immediately: grandchildren
+ *   inside tsx's detached process group may ignore SIGTERM, so the KILL_GRACE_MS SIGKILL
+ *   escalation and the LAST_RESORT cap stay armed, and we exit only after polling the owned
+ *   process group drains (Windows has no group signals; taskkill /T /F already killed the
+ *   tree, so it exits immediately) — no orphans, no infinite timers.
  *
- * 环境变量：HELM_TEST_SUITE_TIMEOUT_MS 覆盖总超时（毫秒，正整数）。
- * 参数透传：本脚本收到的所有 CLI 参数原样追加给 tsx / node test runner（含 glob）。
+ * Environment: HELM_TEST_SUITE_TIMEOUT_MS overrides the total timeout (milliseconds,
+ * positive integer).
+ * Argument passthrough: every CLI argument this script receives is appended verbatim to the
+ * tsx / node test runner (globs included).
  *
- * 注意：pnpm test:force-exit 在此基础上追加 `--test-force-exit`，仅用于诊断挂起测试；
- * 已知副作用是会取消 packages/web/test/composer-slash-skills.test.ts 中 5 个合法 act() 测试，
- * 因此绝不作为默认 test 方案。
+ * Note: pnpm test:force-exit additionally appends `--test-force-exit`, strictly for
+ * diagnosing hung tests; a known side effect cancels 5 legitimate act() tests in
+ * packages/web/test/composer-slash-skills.test.ts, so it is never the default test path.
  */
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -28,29 +37,33 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const DEFAULT_SUITE_TIMEOUT_MS = 10 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
-// 决定杀树后仍未收到 exit 事件的最后兜底，保证本包装进程一定以非 0 退出而不是挂住或退 0。
+// The last-resort backstop when no exit event arrives even after the kill: this wrapper
+// always exits non-zero instead of hanging or exiting 0.
 const LAST_RESORT_MS = 15000;
 
-// 本脚本位于 <仓库根>/scripts/，锚定仓库根保证从任意 cwd 调用都能解析到本仓库的依赖。
+// This script lives at <repo root>/scripts/; anchoring to the repo root keeps dependency
+// resolution working no matter the cwd it is invoked from.
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function resolveTsxCLI() {
-  // 锚定仓库根（脚本位于 <root>/scripts/），保证从任意 cwd 调用（如 IDE）都能解析到本仓库的 tsx。
+  // Anchor to the repo root (the script sits at <root>/scripts/) so any cwd (e.g. an IDE)
+  // resolves this repo's tsx.
   const require = createRequire(path.join(repoRoot, 'package.json'));
   const pkgPath = require.resolve('tsx/package.json');
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
   const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.tsx;
   const cli = path.resolve(path.dirname(pkgPath), bin ?? 'dist/cli.mjs');
   if (!existsSync(cli)) {
-    console.error(`[run-tests] 未找到本地 tsx CLI: ${cli}（请先 pnpm install）`);
+    console.error(`[run-tests] local tsx CLI not found: ${cli} (run pnpm install first)`);
     process.exit(1);
   }
   return cli;
 }
 
-// pnpm 的 .bin shim 会把 node_modules/.pnpm/node_modules 塞进 NODE_PATH，
-// 测试中从 tmpdir 动态加载的外部插件依赖它解析 @helm/protocol；
-// 绕过 shim 直接调 cli.mjs 时重建等价环境即可，免去枚举全部 .pnpm 条目。
+// pnpm's .bin shim stuffs node_modules/.pnpm/node_modules into NODE_PATH, which external
+// plugins dynamically loaded from a tmpdir in tests rely on to resolve @helm/protocol;
+// when bypassing the shim and calling cli.mjs directly, rebuilding the equivalent is enough
+// — no need to enumerate every .pnpm entry.
 function pnpmFallbackNodePath() {
   const pnpmDir = path.join(repoRoot, 'node_modules', '.pnpm');
   const fallback = path.join(pnpmDir, 'node_modules');
@@ -62,7 +75,7 @@ function suiteTimeoutMs() {
   if (raw === undefined || raw === '') return DEFAULT_SUITE_TIMEOUT_MS;
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0 || Math.floor(n) !== n) {
-    console.error(`[run-tests] 无效的 HELM_TEST_SUITE_TIMEOUT_MS（需正整数毫秒）: ${raw}`);
+    console.error(`[run-tests] invalid HELM_TEST_SUITE_TIMEOUT_MS (positive integer ms required): ${raw}`);
     process.exit(2);
   }
   return n;
@@ -80,14 +93,15 @@ if (fallback) {
     ? fallback + path.delimiter + process.env.NODE_PATH
     : fallback;
 }
-// tsx 运行期把 @helm/kernel / @helm/plugins 工作区包解析到源码：与测试直接相对
-// 导入 kernel/plugins 源码保持单模块身份（否则 dist 与 source 双身份会让
-// instanceof 错误映射成 500 等静默错乱）；构建产物不受影响。
+// At tsx runtime the @helm/kernel / @helm/plugins workspace packages resolve to sources:
+// this keeps a single module identity with tests importing kernel/plugin sources via
+// relative paths (otherwise the dual dist/source identity silently corrupts things like
+// instanceof errors mapping to 500s); build artifacts are unaffected.
 if (childEnv.TSX_TSCONFIG_PATH === undefined) {
   childEnv.TSX_TSCONFIG_PATH = path.join(repoRoot, 'tsconfig.dev.json');
 }
 
-// 注入 V8 堆上限与 safe-test-assert preload（禁止注入任何 HELM_* 变量）。
+// Inject the V8 heap cap and the safe-test-assert preload (never inject any HELM_* vars).
 {
   const preloadUrl = pathToFileURL(path.join(repoRoot, 'scripts', 'lib', 'safe-test-assert.mjs')).href;
   const existing = childEnv.NODE_OPTIONS?.trim() ?? '';
@@ -109,15 +123,17 @@ const runnerArgs = [
   ...forwardArgs,
 ];
 
-// 无 shell 参与：参数逐个透传，天然免疫字符串拼接注入；glob 交给 tsx / node test runner 展开。
+// No shell involved: arguments pass through one by one, immune to string-concatenation
+// injection; globs are expanded by tsx / the node test runner.
 const child = spawn(process.execPath, runnerArgs, {
   stdio: 'inherit',
   env: childEnv,
   cwd: repoRoot,
-  detached: process.platform !== 'win32', // POSIX 独立进程组，才能用 kill(-pid) 杀整棵树
+  detached: process.platform !== 'win32', // POSIX detached process group, so kill(-pid) can take down the whole tree
 });
 
-// POSIX 父进程暴毙看门狗：防 run-tests.mjs 被 SIGKILL 后留下 PPID=1 孤儿测试进程组。
+// POSIX parent-death watchdog: prevents orphaned test process groups (PPID=1) if
+// run-tests.mjs itself is SIGKILLed.
 let watchdog = null;
 if (process.platform !== 'win32' && child.pid != null) {
   const watchdogEnv = { ...process.env };
@@ -145,7 +161,7 @@ if (process.platform !== 'win32' && child.pid != null) {
         try {
           process.kill(-pid, 'SIGKILL');
         } catch {
-          // 进程组已排空
+          // Process group has drained
         }
         process.exit(0);
       }, 1000);
@@ -166,7 +182,7 @@ function disarmWatchdog() {
   try {
     watchdog.stdin.end('ok');
   } catch {
-    // 忽略已关闭管道
+    // Ignore closed pipes
   }
 }
 
@@ -174,15 +190,17 @@ let suiteTimer = null;
 let graceTimer = null;
 let lastResortTimer = null;
 let groupWatchTimer = null;
-// 由本脚本主动终止（总超时 / 转发信号）时锁定退出码，防止后续 exit 事件覆盖。
+// Lock the exit code when this script itself terminates the run (total timeout / forwarded
+// signal), so later exit events cannot overwrite it.
 let forcedExitCode = null;
 
 const GROUP_POLL_MS = 100;
 
-// owned 测试进程组（tsx 独立 PGID）是否仍有成员：leader 退出不代表整组停止，
-// 孙进程可能忽略 SIGTERM；仅 ESRCH 视为排空（EPERM 等保守按存活）。
+// Whether the owned test process group (tsx's own PGID) still has members: the leader's
+// exit does not mean the group stopped — grandchildren may ignore SIGTERM; only ESRCH
+// counts as drained (EPERM etc. conservatively count as alive).
 function groupAlive() {
-  if (process.platform === 'win32') return false; // Windows 无组信号，树杀由 taskkill /T /F 负责
+  if (process.platform === 'win32') return false; // Windows has no group signals; tree kill is taskkill /T /F's job
   if (child.pid == null) return false;
   try {
     process.kill(-child.pid, 0);
@@ -203,19 +221,19 @@ function killTree(signal) {
   if (child.pid == null) return;
   if (process.platform === 'win32') {
     const tk = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-    tk.on('error', (err) => console.error('[run-tests] taskkill 启动失败:', err.message));
-    // taskkill 失败也无妨：LAST_RESORT 兜底保证本进程按非 0 退出。
+    tk.on('error', (err) => console.error('[run-tests] taskkill failed to start:', err.message));
+    // Even if taskkill fails: the LAST_RESORT backstop still exits this process non-zero.
   } else {
     try {
       process.kill(-child.pid, signal);
     } catch {
-      // 进程组已消失则无事可做。
+      // Nothing to do if the process group is already gone.
     }
     graceTimer = setTimeout(() => {
       try {
         process.kill(-child.pid, 'SIGKILL');
       } catch {
-        // 同上。
+        // Same as above.
       }
     }, KILL_GRACE_MS);
   }
@@ -225,10 +243,10 @@ function terminate(reason, exitCode, signal = 'SIGTERM') {
   if (forcedExitCode !== null) return;
   forcedExitCode = exitCode;
   if (suiteTimer) clearTimeout(suiteTimer);
-  console.error(`[run-tests] ${reason}，终止测试进程树（pid ${child.pid}）`);
+  console.error(`[run-tests] ${reason}; terminating the test process tree (pid ${child.pid})`);
   killTree(signal);
   lastResortTimer = setTimeout(() => {
-    console.error('[run-tests] 终止后迟迟未收到退出事件，强制退出。');
+    console.error('[run-tests] no exit event long after termination; forcing exit.');
     disarmWatchdog();
     process.exit(forcedExitCode);
   }, LAST_RESORT_MS);
@@ -236,7 +254,7 @@ function terminate(reason, exitCode, signal = 'SIGTERM') {
 
 child.on('error', (err) => {
   clearTimers();
-  console.error('[run-tests] 启动测试进程失败:', err);
+  console.error('[run-tests] failed to start the test process:', err);
   disarmWatchdog();
   process.exit(1);
 });
@@ -244,11 +262,13 @@ child.on('error', (err) => {
 child.on('exit', (code, signal) => {
   const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
   if (forcedExitCode !== null) {
-    // 强制终止路径：leader（tsx）退出不代表 owned 组排空——孙进程可能忽略 SIGTERM。
-    // 不 clearTimers：保留 KILL_GRACE_MS 的 SIGKILL 升级与 LAST_RESORT 封顶，
-    // 轮询组排空后才退。Windows 无组信号，taskkill /T /F 已杀树，维持即退。
+    // Forced-termination path: the leader's (tsx) exit does not mean the owned group has
+    // drained — grandchildren may ignore SIGTERM. Do not clearTimers: keep the
+    // KILL_GRACE_MS SIGKILL escalation and the LAST_RESORT cap, and exit only after polling
+    // shows the group drained. Windows has no group signals; taskkill /T /F already killed
+    // the tree, so exit immediately.
     if (process.platform === 'win32') {
-      console.error(`[run-tests] 已强制终止，耗时 ${elapsed}s，退出 ${forcedExitCode}`);
+      console.error(`[run-tests] force-terminated after ${elapsed}s, exiting ${forcedExitCode}`);
       disarmWatchdog();
       process.exit(forcedExitCode);
     }
@@ -256,8 +276,10 @@ child.on('exit', (code, signal) => {
     groupWatchTimer = setInterval(() => {
       if (!groupAlive()) {
         console.error(
-          `[run-tests] 已强制终止，耗时 ${((Date.now() - startMs) / 1000).toFixed(1)}s，` +
-            `owned 测试进程组已排空，退出 ${forcedExitCode}`,
+          // NOTE: the 'owned 测试进程组已排空' substring is a functional output contract
+          // asserted by packages/cli/test/check-changed.test.ts — do not reword.
+          `[run-tests] force-terminated after ${((Date.now() - startMs) / 1000).toFixed(1)}s, ` +
+            `owned 测试进程组已排空, exiting ${forcedExitCode}`,
         );
         disarmWatchdog();
         process.exit(forcedExitCode);
@@ -268,20 +290,22 @@ child.on('exit', (code, signal) => {
   clearTimers();
   disarmWatchdog();
   if (code !== null) {
-    console.error(`[run-tests] 套件 ${elapsed}s 结束，退出码 ${code}`);
+    console.error(`[run-tests] suite finished in ${elapsed}s, exit code ${code}`);
     process.exit(code);
   }
   const signalExit = { SIGHUP: 129, SIGINT: 130, SIGQUIT: 131, SIGTERM: 143 }[signal] ?? 1;
-  console.error(`[run-tests] 套件 ${elapsed}s 被信号 ${signal} 终止，退出 ${signalExit}`);
+  console.error(`[run-tests] suite killed by signal ${signal} after ${elapsed}s, exiting ${signalExit}`);
   process.exit(signalExit);
 });
 
-// POSIX 下子进程在独立进程组，终端/会话信号不会自动送达，必须显式转发；Windows 控制台会广播 Ctrl+C，转发是幂等兜底。
-process.on('SIGHUP', () => terminate('收到 SIGHUP', 129, 'SIGHUP'));
-process.on('SIGINT', () => terminate('收到 SIGINT', 130, 'SIGINT'));
-process.on('SIGQUIT', () => terminate('收到 SIGQUIT', 131, 'SIGQUIT'));
-process.on('SIGTERM', () => terminate('收到 SIGTERM', 143, 'SIGTERM'));
+// On POSIX the child lives in its own process group, so terminal/session signals are not
+// delivered automatically and must be forwarded explicitly; the Windows console broadcasts
+// Ctrl+C, and forwarding stays as an idempotent backstop.
+process.on('SIGHUP', () => terminate('received SIGHUP', 129, 'SIGHUP'));
+process.on('SIGINT', () => terminate('received SIGINT', 130, 'SIGINT'));
+process.on('SIGQUIT', () => terminate('received SIGQUIT', 131, 'SIGQUIT'));
+process.on('SIGTERM', () => terminate('received SIGTERM', 143, 'SIGTERM'));
 
 suiteTimer = setTimeout(() => {
-  terminate(`套件总超时（${timeoutMs}ms，可用 HELM_TEST_SUITE_TIMEOUT_MS 调整）`, 124);
+  terminate(`suite total timeout (${timeoutMs}ms; tunable via HELM_TEST_SUITE_TIMEOUT_MS)`, 124);
 }, timeoutMs);

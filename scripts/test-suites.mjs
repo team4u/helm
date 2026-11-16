@@ -1,30 +1,38 @@
 #!/usr/bin/env node
 /**
- * 测试分层入口：unit / integration / all 三档套件，供 package.json 脚本调用。
+ * Test tier entry point: unit / integration / all suites, invoked by package.json scripts.
  *
- * 为什么存在：`pnpm test` 是一把梭全量，本地迭代需要一档更快的纯单元反馈；
- * 而 kernel / node 包的测试大量起真实子进程、开 SQLite、建 Git worktree、跑 WebSocket
- * 与 @helm/node daemon，不是纯单元。为避免误分类，本脚本只做【保守包级切分】：
+ * Why it exists: `pnpm test` runs everything in one go, while local iteration needs a
+ * faster pure-unit tier; tests in kernel / node heavily spawn real subprocesses, open
+ * SQLite, create Git worktrees, and run WebSocket plus the @helm/node daemon — not pure
+ * units. To avoid misclassification, this script only does a [conservative package-level
+ * split]:
  *
- *   unit        = protocol + env-io + cli + web + plugin-client（env-io 为进程内纯扫描
- *                 编排器注入测试；web 含 happy-dom/React 交互与 SDK 自测，均不起真实服务）；
- *   integration = plugin-build + kernel + plugins + hub + node + payload + desktop（包含真实
- *                 esbuild 编译/子进程、SQLite/Git/daemon、payload 组装与桌面壳 Hub 子进程监督）；
- *   all         = unit ∪ integration = 全部测试文件，等价于旧 `pnpm test`。
+ *   unit        = protocol + env-io + cli + web + plugin-client (env-io is in-process pure
+ *                 scan orchestrator injection tests; web covers happy-dom/React interaction
+ *                 and SDK self-tests — none start real services);
+ *   integration = plugin-build + kernel + plugins + hub + node + payload + desktop (real
+ *                 esbuild builds/subprocesses, SQLite/Git/daemon, payload assembly, and the
+ *                 desktop-shell Hub subprocess supervision);
+ *   all         = unit ∪ integration = every test file, equivalent to the old `pnpm test`.
  *
- * 实现：Node fs 按 <root>/packages/<pkg>/test/ 目录枚举 *.test.ts(x)，结合 test-sharding.mjs
- * 静态分析将严格纯内存测试拆分到 K 个 `--test-isolation=none` 分片并行执行，其余测试保留
- * 进程隔离并通过 LPT（长耗时优先）顺序交给 scripts/run-tests.mjs 并发调度。
+ * Implementation: Node fs enumerates *.test.ts(x) under <root>/packages/<pkg>/test/, and the
+ * test-sharding.mjs static analysis splits strictly pure in-memory tests into K parallel
+ * `--test-isolation=none` shards; the rest keep process isolation and are handed to
+ * scripts/run-tests.mjs for concurrent scheduling in LPT (longest-processing-time-first) order.
  *
- * 不变量（防御性断言，失败即脚本退出 2，绝不静默跑错集）：
- *   - all 的文件数必须等于 unit 与 integration 文件数之和（不重不漏）；
- *   - unit ∪ integration 的相对路径集合必须与全仓所有包 test 目录下的 *.test.ts(x)
- *     实际文件集完全一致（防止新增包/文件后这里悄悄漏掉）。
+ * Invariants (defensive assertions; any failure exits 2 rather than silently running the
+ * wrong set):
+ *   - all's file count must equal unit + integration file counts (no overlap, no gap);
+ *   - the unit ∪ integration relative-path set must exactly match the actual *.test.ts(x)
+ *     file set across every package's test directory (so new packages/files cannot be
+ *     silently missed here).
  *
- * 注意：不要用 HELM_TEST_SUITE_TIMEOUT_MS 环境变量调大总超时——packages/kernel/test/
- * env-registry-races.test.ts 断言宿主 HELM_* 变量被全部剥除，注入该变量会让它误报失败。
+ * Note: do not raise the total timeout via the HELM_TEST_SUITE_TIMEOUT_MS env var —
+ * packages/kernel/test/env-registry-races.test.ts asserts every host HELM_* variable is
+ * stripped, and injecting it would make that test fail spuriously.
  *
- * 用法：node scripts/test-suites.mjs <unit|integration|all> [透传给 node test runner 的额外参数]
+ * Usage: node scripts/test-suites.mjs <unit|integration|all> [extra args passed through to the node test runner]
  */
 import { readdirSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -37,7 +45,8 @@ import { partitionFilesForSharding, shouldDisableSharding } from './lib/test-sha
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packagesDir = path.join(repoRoot, 'packages');
 
-// 套件 → 包名。切分原则见文件头注释；调整分档时必须同步更新 AGENTS.md 的测试分层约定。
+// Suite -> package names. Split principles live in the header comment; tier changes must be
+// mirrored in AGENTS.md's test tiering conventions.
 const SUITES = {
   unit: ['protocol', 'env-io', 'test-kit', 'cli', 'web', 'plugin-client'],
   integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'node', 'payload', 'desktop'],
@@ -53,7 +62,7 @@ function testFilesOf(pkg) {
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch (err) {
-    console.error(`[test-suites] 无法读取 ${dir}: ${err.message}（包不存在或未安装？）`);
+    console.error(`[test-suites] cannot read ${dir}: ${err.message} (package missing or not installed?)`);
     process.exit(2);
   }
   return entries
@@ -64,7 +73,7 @@ function testFilesOf(pkg) {
 
 const suiteName = process.argv[2];
 if (!SUITES[suiteName] && suiteName !== 'all') {
-  console.error(`[test-suites] 用法: node scripts/test-suites.mjs <unit|integration|all> [extra args...]`);
+  console.error(`[test-suites] usage: node scripts/test-suites.mjs <unit|integration|all> [extra args...]`);
   process.exit(2);
 }
 const rawExtraArgs = process.argv.slice(3);
@@ -78,25 +87,26 @@ if (suiteName === 'all') {
 }
 
 if (files.length === 0) {
-  console.error(`[test-suites] 套件 ${suiteName} 枚举到 0 个测试文件，拒绝执行（疑似目录结构变更）`);
+  console.error(`[test-suites] suite ${suiteName} enumerated 0 test files; refusing to run (directory layout change suspected)`);
   process.exit(2);
 }
 
-// 不变量 1：all = unit + integration（不重不漏）。
+// Invariant 1: all = unit + integration (no overlap, no gap).
 if (suiteName === 'all') {
   const unitCount = SUITES.unit.reduce((n, p) => n + testFilesOf(p).length, 0);
   const integrationCount = SUITES.integration.reduce((n, p) => n + testFilesOf(p).length, 0);
   const uniqueCount = new Set(files).size;
   if (files.length !== unitCount + integrationCount || uniqueCount !== files.length) {
     console.error(
-      `[test-suites] all(${files.length}) ≠ unit(${unitCount}) + integration(${integrationCount}) 或存在重复文件，切分不变量被破坏`,
+      `[test-suites] all(${files.length}) != unit(${unitCount}) + integration(${integrationCount}) or duplicate files exist; the split invariant is broken`,
     );
     process.exit(2);
   }
 }
 
-// 不变量 2：unit ∪ integration 的相对路径集合 == 全仓 test 目录实际文件集。
-// 直接扫描 packages 下所有含 test 子目录的包（不局限于已知五包），捕获未来新增包。
+// Invariant 2: the unit ∪ integration relative-path set == the actual file set across all
+// repo test directories. Scan every package under packages/ with a test subdirectory (not
+// just the known ones) to catch future additions.
 {
   const managed = new Set(ALL_PACKAGES.flatMap(testFilesOf));
   const actual = new Set();
@@ -110,22 +120,23 @@ if (suiteName === 'all') {
         }
       }
     } catch {
-      // 无 test 目录的包跳过。
+      // Skip packages without a test directory.
     }
   }
   const missing = [...actual].filter((f) => !managed.has(f));
   if (missing.length > 0) {
-    console.error(`[test-suites] 发现未纳入任何套件的测试文件（请更新 SUITES 分档）: ${missing.join(', ')}`);
+    console.error(`[test-suites] found test files not covered by any suite (update the SUITES tiers): ${missing.join(', ')}`);
     process.exit(2);
   }
 }
 
 const label = suiteName === 'all' ? 'all(unit+integration)' : suiteName;
 const breakdown = ALL_PACKAGES.map((p) => `${p}=${testFilesOf(p).length}`).join(' ');
-console.error(`[test-suites] 套件 ${label}: ${files.length} 个文件（${breakdown}）`);
+console.error(`[test-suites] suite ${label}: ${files.length} file(s) (${breakdown})`);
 
-// 确定性 LPT（长耗时优先）排序：极慢测试最优先（20M），其次已知慢测试（10M），
-// 再次按文件字节大小降序，同权按路径字典序兜底，消除多核并发尾部空等。
+// Deterministic LPT (longest first) ordering: extremely slow tests first (20M), then known
+// slow tests (10M), then descending file size, with lexicographic path order as the final
+// tiebreaker — eliminating multicore tail idle time.
 const ULTRA_SLOW_TEST_PREFIXES = [
   'payload',
   'node-path-usage-rpc',
@@ -232,8 +243,10 @@ if (!shardingDisabled) {
     repoRoot,
     files,
     cpus,
-    // 合并纯内存测试为单进程分片（实测 unit 43 文件仅 1.3s，integration 38 文件含 5s timer 共 6.9s），
-    // 与隔离进程池按 1 + (cpus - 1) 并发起跑：零阶段栅栏、零双池超发争抢、零百余协调器冷启动税。
+    // Merge pure in-memory tests into single-process shards (measured: unit's 43 files in
+    // just 1.3s; integration's 38 files including a 5s timer in 6.9s), and start them
+    // alongside the isolated pool at 1 + (cpus - 1) concurrency: no phase barrier, no
+    // dual-pool oversubscription contention, no cold-start tax from a hundred coordinators.
     filesPerShard: Math.max(8, files.length),
     weightFn: lptWeight,
   });
@@ -242,8 +255,8 @@ if (!shardingDisabled) {
     const pureShardCount = shards.length;
     const isoConc = Math.max(1, cpus - pureShardCount);
     console.error(
-      `[test-suites] 调度: pure=${pureFiles.length}（${pureShardCount} 分片，--test-isolation=none）‖ ` +
-        `isolated=${isolatedFiles.length}（--test-concurrency=${isoConc}，总上限 ${cpus}）`,
+      `[test-suites] schedule: pure=${pureFiles.length} (${pureShardCount} shards, --test-isolation=none) || ` +
+        `isolated=${isolatedFiles.length} (--test-concurrency=${isoConc}, total cap ${cpus})`,
     );
     shards.forEach((shard, idx) => {
       plans.push({
@@ -274,8 +287,10 @@ if (!shardingDisabled) {
   });
 }
 
-// 复用 run-tests.mjs：跨平台 tsx spawn、单测/总超时与进程树清理都在那边，绝不重复实现。
-// 基于许可上限 cpus 的单工作池统一调度 pure-shards、重型单文件与并发批，避免双池超发争抢、阶段栅栏与尾部串联。
+// Reuse run-tests.mjs: cross-platform tsx spawn, per-test/total timeouts, and process-tree
+// cleanup all live there — never re-implemented. A single permit-capped (cpus) worker pool
+// schedules pure-shards, heavy single files, and concurrent batches together, avoiding
+// dual-pool oversubscription, phase barriers, and tail serialization.
 const runTestsPath = path.join(repoRoot, 'scripts', 'run-tests.mjs');
 const suiteStartMs = Date.now();
 /** @type {Set<import('node:child_process').ChildProcess>} */
@@ -294,7 +309,8 @@ for (const signal of ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGTERM']) {
 }
 
 /**
- * 按并发许可上限调度队列中的测试计划，保证任意时刻活跃测试进程数 ≤ maxPermits。
+ * Schedule queued test plans under the concurrency permit cap, keeping active test
+ * processes <= maxPermits at any moment.
  * @param {Array<{ label: string, args: string[], permits: number }>} queue
  * @param {number} maxPermits
  * @returns {Promise<number[]>}
@@ -322,7 +338,7 @@ function runPlanPool(queue, maxPermits) {
         activeChildren.add(child);
         child.on('error', (err) => {
           activeChildren.delete(child);
-          console.error(`[test-suites] 启动 ${item.plan.label} 失败: ${err.message}`);
+          console.error(`[test-suites] failed to start ${item.plan.label}: ${err.message}`);
           done(1);
         });
         child.on('exit', (code, signal) => {
@@ -369,5 +385,5 @@ if (receivedSignal) {
   const firstFailure = exitCodes.find((c) => c !== 0);
   if (firstFailure !== undefined) finalCode = firstFailure;
 }
-console.error(`[test-suites] 套件 ${label} ${elapsed}s 结束，退出码 ${finalCode}`);
+console.error(`[test-suites] suite ${label} finished in ${elapsed}s, exit code ${finalCode}`);
 process.exitCode = finalCode;

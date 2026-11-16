@@ -1,18 +1,22 @@
 /**
- * Workspace 包图与「变更文件 → 受影响测试包」保守映射。
+ * Workspace package graph and the conservative "changed file -> affected test packages"
+ * mapping.
  *
- * 原则：宁可多跑不可漏跑。包内非测试文件变更 → 该包 + 全部（传递）依赖它的包的测试
- * （基于各 packages/<pkg>/package.json 的 dependencies/devDependencies 里 @helm/* workspace
- * 边做反向闭包）；纯测试文件变更 → 仅该包（其他包代码未变）。锁文件、根 tsconfig、
- * 测试基础设施（run-tests / test-suites）变更影响全局 → 全档。
+ * Principle: better to over-run than to miss. A non-test change inside a package -> that
+ * package + the tests of every (transitively) depending package (reverse closure over the
+ * @helm/* workspace edges in each packages/<pkg>/package.json's
+ * dependencies/devDependencies); a test-only change -> that package alone (no other
+ * package's code changed). Lockfile, root tsconfig, or test infrastructure (run-tests /
+ * test-suites) changes affect everything -> all tiers.
  *
- * PACKAGE_TIERS 只用于展示包属于哪一档，与 scripts/test-suites.mjs 的 SUITES 镜像同步
- * （由 packages/cli/test/check-changed.test.ts 锁定，改 SUITES 分档必须同步这里）。
+ * PACKAGE_TIERS is display-only (which tier a package belongs to) and mirrors the SUITES in
+ * scripts/test-suites.mjs (locked by packages/cli/test/check-changed.test.ts; changing
+ * SUITES tiers must update this too).
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-/** 根级「影响全局」触发文件（相对仓库根的精确路径）。 */
+/** Root-level "affects everything" trigger files (exact paths relative to the repo root). */
 export const FULL_TIER_TRIGGERS = new Set([
   'package.json',
   'pnpm-lock.yaml',
@@ -23,7 +27,7 @@ export const FULL_TIER_TRIGGERS = new Set([
   'scripts/run-tests.mjs',
   'scripts/test-suites.mjs',
 ]);
-/** 与 scripts/test-suites.mjs 的 SUITES 镜像：包目录 → 档位（仅用于报告展示）。 */
+/** Mirror of scripts/test-suites.mjs SUITES: package dir -> tier (display-only). */
 export const PACKAGE_TIERS = {
   protocol: 'unit',
   'env-io': 'unit',
@@ -46,7 +50,7 @@ export const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];
  * @typedef {{ name: string, dir: string, workspaceDeps: string[] }} WorkspacePackage
  */
 
-/** 读取 packages/ 下全部包及其 @helm/* workspace 依赖边。 */
+/** Read every package under packages/ and its @helm/* workspace dependency edges. */
 export function loadWorkspacePackages(repoRoot) {
   const packagesDir = path.join(repoRoot, 'packages');
   let entries;
@@ -76,14 +80,16 @@ export function loadWorkspacePackages(repoRoot) {
 }
 
 /**
- * 反向闭包：seed 包自身 + 全部（传递）依赖 seed 的包。依赖边按包名解析到目录。
+ * Reverse closure: the seed package itself + every package that (transitively) depends on
+ * the seed. Dependency edges resolve package names to directories.
  * @param {string[]} seedDirs
  * @param {WorkspacePackage[]} pkgs
- * @returns {Set<string>} 包目录集合
+ * @returns {Set<string>} set of package directories
  */
 export function reverseClosure(seedDirs, pkgs) {
   const byName = new Map(pkgs.map((p) => [p.name, p.dir]));
-  // dependents: dir -> 依赖它的 dir 列表（依赖方向 pkg -> dep，反向即 dep 被谁用）。
+  // dependents: dir -> list of dirs depending on it (edges point pkg -> dep, so reversing
+  // answers who uses dep).
   const dependents = new Map(pkgs.map((p) => [p.dir, []]));
   for (const p of pkgs) {
     for (const depName of p.workspaceDeps) {
@@ -105,10 +111,11 @@ export function reverseClosure(seedDirs, pkgs) {
 }
 
 /**
- * 单个文件分类。
- * scripts/ 下可执行源码（.mjs，含 lib/）直接构成构建/测试/验证基础设施，
- * 变更即触发全档（单改快速门自身实现不能「无检查通过」）；纯文档（.md 等）不触发。
- * @param {string} file 相对仓库根路径（正斜杠）
+ * Classify a single file.
+ * Executable sources under scripts/ (.mjs, lib/ included) are build/test/verification
+ * infrastructure themselves: any change triggers all tiers (a change to the fast gate's own
+ * implementation must not "pass with no checks"); pure docs (.md etc.) trigger nothing.
+ * @param {string} file repo-root-relative path (forward slashes)
  * @returns {{ pkg: string | null, kind: 'test' | 'source' | 'root-trigger' | 'outside' }}
  */
 export function classifyChange(file) {
@@ -124,8 +131,8 @@ export function classifyChange(file) {
 }
 
 /**
- * 计算受影响测试包。
- * @param {string[]} files 相对仓库根的变更文件列表
+ * Compute the affected test packages.
+ * @param {string[]} files repo-root-relative changed file list
  * @param {WorkspacePackage[]} pkgs
  * @returns {{ affected: Set<string>, fullTier: boolean, outside: string[] }}
  */
@@ -145,8 +152,9 @@ export function computeAffectedPackages(files, pkgs) {
       if (c.kind === 'test') testOnly.add(c.pkg);
       else source.add(c.pkg);
     } else if (c.pkg) {
-      // packages/ 下未登记的目录：保守并入 source 会在闭包里被 allDirs 过滤掉，
-      // 这里按未知包直接升级为全档，绝不静默丢弃。
+      // An unregistered directory under packages/: conservatively folding it into source
+      // would get filtered out by allDirs in the closure; escalate straight to all tiers as
+      // an unknown package — never silently drop it.
       fullTier = true;
     }
   }
@@ -156,7 +164,7 @@ export function computeAffectedPackages(files, pkgs) {
   return { affected, fullTier: false, outside: outside.sort() };
 }
 
-/** 枚举某包 test/ 目录下全部测试文件（与 test-suites.mjs 相同的枚举规则）。 */
+/** Enumerate every test file under a package's test/ directory (same rules as test-suites.mjs). */
 export function testFilesOfPackage(repoRoot, pkgDir) {
   const dir = path.join(repoRoot, 'packages', pkgDir, 'test');
   let entries;
@@ -172,13 +180,17 @@ export function testFilesOfPackage(repoRoot, pkgDir) {
 }
 
 /**
- * 快速门命令计划（纯函数，供 CLI 执行与 --list 复核共用）：
- *   0. 有测试文件 → node scripts/check-test-hygiene.mjs --files <files...>（静态卫生检查，早于 typecheck）；
- *   1. 任一受影响包 → pnpm typecheck（会先 build protocol/node/kernel/plugins/hub，是测试的类型/运行前置）；
- *   2. 选中 desktop 测试 → 先 pnpm --filter @helm/desktop run build（typecheck 不产
- *      packages/desktop/dist/hub-child.js，冷工作树不补建则 desktop 测试必败，且改
- *      hub-child 源码可能测到旧 dist）；
- *   3. 有测试文件 → node scripts/run-tests.mjs <files...>（复用跨平台超时与进程树清理）。
+ * Fast-gate command plan (a pure function shared by CLI execution and --list review):
+ *   0. any test files -> node scripts/check-test-hygiene.mjs --files <files...> (static
+ *      hygiene check, before typecheck);
+ *   1. any affected package -> pnpm typecheck (builds protocol/node/kernel/plugins/hub
+ *      first; a type/runtime prerequisite of the tests);
+ *   2. desktop tests selected -> pnpm --filter @helm/desktop run build first (typecheck
+ *      does not produce packages/desktop/dist/hub-child.js; on a cold worktree the desktop
+ *      tests would fail without it, and a changed hub-child source could be tested against
+ *      a stale dist);
+ *   3. any test files -> node scripts/run-tests.mjs <files...> (reusing the cross-platform
+ *      timeouts and process-tree cleanup).
  * @param {{ affectedDirs: string[], testFiles: string[], pm: { cmd: string, args: string[] }, execPath: string, repoRoot: string }} input
  * @returns {Array<{ cmd: string, args: string[], label: string }>}
  */
@@ -188,28 +200,28 @@ export function planCheckCommands({ affectedDirs, testFiles, pm, execPath, repoR
     commands.push({
       cmd: execPath,
       args: [path.join(repoRoot, 'scripts', 'check-test-hygiene.mjs'), '--files', ...testFiles],
-      label: `check-hygiene（${testFiles.length} 个受影响测试文件）`,
+      label: `check-hygiene (${testFiles.length} affected test file(s))`,
     });
   }
   if (affectedDirs.length > 0) {
     commands.push({
       cmd: pm.cmd,
       args: [...pm.args, 'typecheck'],
-      label: 'pnpm typecheck（含 protocol/node/kernel/plugins/hub build）',
+      label: 'pnpm typecheck (includes protocol/node/kernel/plugins/hub build)',
     });
   }
   if (testFiles.some((f) => f.startsWith('packages/desktop/test/'))) {
     commands.push({
       cmd: pm.cmd,
       args: [...pm.args, '--filter', '@helm/desktop', 'run', 'build'],
-      label: 'pnpm --filter @helm/desktop run build（desktop 测试前置：typecheck 不产 dist）',
+      label: 'pnpm --filter @helm/desktop run build (desktop test prerequisite: typecheck emits no dist)',
     });
   }
   if (testFiles.length > 0) {
     commands.push({
       cmd: execPath,
       args: [path.join(repoRoot, 'scripts', 'run-tests.mjs'), ...testFiles],
-      label: `run-tests（${testFiles.length} 个测试文件）`,
+      label: `run-tests (${testFiles.length} test file(s))`,
     });
   }
   return commands;

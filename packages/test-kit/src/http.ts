@@ -1,14 +1,15 @@
 /**
- * HTTP Mock Hub 测试辅助（`@helm/test-kit/http`）。
- * 启动绑定 `127.0.0.1` 临时端口的真实 HTTP server，记录请求命中历史并支持结构化响应、
- * Web `Response` 透传、流式端点与自动生命周期清理。
+ * HTTP Mock Hub test helper (`@helm/test-kit/http`).
+ * Starts a real HTTP server bound to an ephemeral `127.0.0.1` port, records request hit history,
+ * and supports structured responses, Web `Response` passthrough, streaming endpoints, and
+ * automatic lifecycle cleanup.
  */
 
 import http from 'node:http'
 import type { MaybePromise } from '@helm/protocol/browser'
 import type { CleanupRegistrar } from './node.js'
 
-/** 模拟 Hub 记录的单次请求命中快照。 */
+/** Snapshot of a single recorded request hit on the mock Hub. */
 export interface MockHttpHit {
   method: string
   path: string
@@ -18,29 +19,29 @@ export interface MockHttpHit {
   headers: http.IncomingHttpHeaders
 }
 
-/** 模拟路由返回的结构化响应描述。 */
+/** Structured response description returned by a mock route. */
 export interface MockRouteResult {
   status?: number
   body?: unknown
   headers?: Record<string, string>
 }
 
-/** 路由处理函数；可返回结构化结果、Web `Response`，或手工写 `res` 后返回 `null` / `void`。 */
+/** Route handler; may return a structured result or a Web `Response`, or write `res` manually and return `null` / `void`. */
 export type MockRouteHandler = (
   body: unknown,
   req: http.IncomingMessage,
   res: http.ServerResponse,
 ) => MaybePromise<MockRouteResult | Response | null | void>
 
-/** `startMockHub` 配置项。 */
+/** `startMockHub` options. */
 export interface StartMockHubOptions {
-  /** `GET /api/actions` 默认返回的动作清单（当 `routes` 未显式覆盖该路由时生效）。 */
+  /** Action list returned by default from `GET /api/actions` (effective when `routes` does not explicitly override that route). */
   defaultActions?: readonly unknown[]
-  /** 传入 `TestContext` 等注册器后，测试结束时自动关闭 server。 */
+  /** Pass a registrar such as `TestContext` to close the server automatically when the test ends. */
   autoRegisterCleanup?: CleanupRegistrar
 }
 
-/** 模拟 Hub 运行句柄。 */
+/** Running mock Hub handle. */
 export interface MockHubHandle {
   url: string
   hits: MockHttpHit[]
@@ -120,8 +121,8 @@ function writeRouteResult(res: http.ServerResponse, result: MockRouteResult | nu
 }
 
 /**
- * 启动模拟 Hub HTTP server，按 `"METHOD /path?query"` 路由请求并记录全部命中。
- * 除非 `routes` 显式覆盖，否则自动 stub `GET /api/actions`。
+ * Start a mock Hub HTTP server that routes requests by `"METHOD /path?query"` and records every hit.
+ * Automatically stubs `GET /api/actions` unless `routes` explicitly overrides it.
  */
 export async function startMockHub(
   routes: Record<string, MockRouteHandler>,
@@ -154,7 +155,7 @@ export async function startMockHub(
       const handler = allRoutes[key]
       if (!handler) {
         res.writeHead(404, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: { code: 'not_found', message: `无路由 ${key}` } }))
+        res.end(JSON.stringify({ error: { code: 'not_found', message: `no route for ${key}` } }))
         return
       }
 
@@ -187,7 +188,7 @@ export async function startMockHub(
   const address = server.address()
   if (!address || typeof address !== 'object') {
     server.close()
-    throw new Error('MockHub 未能绑定有效的本机端口')
+    throw new Error('MockHub failed to bind a valid local port')
   }
 
   let closing: Promise<void> | undefined
@@ -195,7 +196,7 @@ export async function startMockHub(
     if (!closing) {
       closing = new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()))
-        // 主动释放 keep-alive 空闲连接（如 undici fetch 连接池），避免 close 拖延或挂起。
+        // Proactively release keep-alive idle connections (e.g. undici fetch pools) so close() does not drag or hang.
         server.closeIdleConnections?.()
       })
     }

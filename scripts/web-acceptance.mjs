@@ -1,4 +1,4 @@
-// 仅供浏览器验收：真实内核/SQLite/HTTP，模型输出由 SDK faux provider 提供。
+// Browser acceptance only: real kernel/SQLite/HTTP; model output comes from the SDK faux provider.
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -52,7 +52,7 @@ await app.kernel.plugins.register({
     ] } })
   },
 })
-// client.tsx 第二轨道验收夹具：真实 clientRoot + 动态编译加载（浏览器验收用）
+// client.tsx second-track acceptance fixture: real clientRoot + dynamic compile-load (for browser acceptance)
 const clientSrcDir = join(dataDir, 'client-src')
 await mkdir(join(clientSrcDir, 'parts'), { recursive: true })
 await writeFile(
@@ -94,6 +94,6 @@ void app.kernel.createAsk({ conversationId: chat.id, title: '浏览器验收：�
 const hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 3202 })
 const infoPath = process.env.HELM_WEB_ACCEPTANCE_INFO ?? join(dataDir, 'browser.json')
 await writeFile(infoPath, JSON.stringify({ dataDir, chatId: chat.id, historyId: history.id, url: hub.url, token: issued.token }), { mode: 0o600 })
-console.log(`独立验收服务已就绪：${hub.url}；会话 ${chat.id}，历史 ${history.id}；数据目录 ${dataDir}`)
-console.log(`测试登录密码：${testPassword}（仅用于本次临时数据目录）`)
+console.log(`Standalone acceptance service ready: ${hub.url}; conversation ${chat.id}, history ${history.id}; data dir ${dataDir}`)
+console.log(`Test login password: ${testPassword} (scoped to this throwaway data dir only)`)
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, async () => { await hub.close(); await app.close(); process.exit(0) })

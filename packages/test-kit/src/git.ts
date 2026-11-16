@@ -1,7 +1,7 @@
 /**
- * Git 仓库夹具加速辅助（`@helm/test-kit/git`）。
- * 支持一次性初始化模板仓库后用 `cpSync` 快速复制多份独立 Git 仓库，
- * 避免每个用例重复 spawn `git init / add / commit` 带来的进程开销。
+ * Git repository fixture acceleration helper (`@helm/test-kit/git`).
+ * Initialize a template repository once, then use `cpSync` to quickly replicate independent Git
+ * repositories, avoiding the process overhead of spawning `git init / add / commit` per test case.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -29,8 +29,9 @@ function runGit(dir: string, args: string[]): void {
 }
 
 /**
- * 在指定目录初始化一个真实 Git 仓库（`main` 分支、隔离配置与初始提交）。
- * 默认写入 `README.md`，可通过 `files` 自定义初始工作区文件集合。
+ * Initialize a real Git repository at the given directory (`main` branch, isolated config, and an
+ * initial commit). Writes `README.md` by default; customize the initial working tree file set via
+ * `files`.
  */
 export function initGitRepo(
   dir: string,
@@ -55,18 +56,19 @@ export function initGitRepo(
   return dir
 }
 
-/** 预初始化 Git 模板句柄。 */
+/** Handle to a pre-initialized Git template. */
 export interface GitTemplate {
   templateDir: string
-  /** 通过文件系统整树拷贝将模板实例化到独立目录。 */
+  /** Instantiate the template into an independent directory via a full filesystem tree copy. */
   cloneTo: (targetDir: string) => string
-  /** 清理模板临时目录。 */
+  /** Remove the template temp directory. */
   cleanup: () => void
 }
 
 /**
- * 创建可复用的已初始化 Git 模板仓库；可选 `setup` 在初始提交之后追加自定义提交或文件。
- * 适合在套件级别初始化一次，再用 `cloneTo` 毫秒级实例化各用例仓库。
+ * Create a reusable initialized Git template repository; the optional `setup` appends custom
+ * commits or files after the initial commit. Initialize once at suite level, then materialize
+ * per-case repositories in milliseconds with `cloneTo`.
  */
 export function createGitTemplate(
   prefix = 'helm-git-template-',

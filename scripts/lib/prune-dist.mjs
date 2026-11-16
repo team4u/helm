@@ -1,17 +1,21 @@
 /**
- * 增量构建前清理 dist/ 孤立陈旧产物（取代整目录 rmSync 破坏 tsc 增量缓存）。
+ * Prune orphaned stale artifacts from dist/ before incremental builds (replacing whole-directory
+ * rmSync that destroys the tsc incremental cache).
  *
- * Why：启用 tsc incremental 后若每次 build 前整目录删除 dist，会丢失已有编译产出与
- * 触发全量重编（甚至在保留 .tsbuildinfo 时导致 tsc 误判无变更而不重新落盘产物）；
- * 但直接不清理又会遗留拆包迁移或删改文件后的旧产物（如 kernel/dist/main.js、
- * kernel/dist/builtin-plugins/*），被 payload / desktop 整目录打包悄悄带走。
- * 本模块只精确删除源码中已不存在对应文件的产物与空目录；传入 --force 或设置
- * HELM_CLEAN_DIST=1 时回退全量清空并同步移除对应 .tsbuildinfo。
+ * Why: with tsc incremental enabled, deleting the whole dist directory before every build
+ * discards prior compiler output and forces a full rebuild (and when .tsbuildinfo is kept,
+ * tsc can even misjudge nothing changed and skip re-emitting artifacts); but never cleaning
+ * leaves stale outputs behind after package splits or file removals (e.g.
+ * kernel/dist/main.js, kernel/dist/builtin-plugins/*), which payload / desktop then sweep
+ * up in whole-directory packaging. This module surgically deletes only artifacts whose
+ * source files no longer exist, plus empty directories; passing --force or setting
+ * HELM_CLEAN_DIST=1 falls back to a full wipe that also removes the matching
+ * .tsbuildinfo.
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
-/** TS 编译产物后缀表（长后缀优先匹配，确保 .d.ts.map 先于 .js.map / .d.ts）。 */
+/** TS build artifact suffix table (longest suffix first, so .d.ts.map matches before .js.map / .d.ts). */
 const TS_OUTPUT_SPECS = [
   { ext: '.d.ts.map', sources: ['.ts', '.tsx'] },
   { ext: '.d.mts.map', sources: ['.mts'] },
@@ -39,7 +43,7 @@ function isExistingFile(filePath) {
   }
 }
 
-/** 从包的 tsconfig.json 解析 tsBuildInfoFile 绝对路径（若配置了的话）。 */
+/** Resolve the absolute tsBuildInfoFile path from a package's tsconfig.json (if configured). */
 export function resolveTsBuildInfoFile(pkgRoot) {
   const tsconfigPath = path.join(pkgRoot, 'tsconfig.json');
   if (!existsSync(tsconfigPath)) return null;
@@ -53,10 +57,10 @@ export function resolveTsBuildInfoFile(pkgRoot) {
   }
 }
 
-/** 判断 dist 相对路径是否匹配 src 中仍存在的源码。 */
+/** Decide whether a dist-relative path still matches a source file present in src. */
 function hasMatchingSource(srcDir, posixRel, preserveClients) {
   const parts = posixRel.split('/');
-  // packages/plugins: dist/<pluginName>/client/** 与 src/<pluginName>/client/** 保持精确镜像。
+  // packages/plugins: dist/<pluginName>/client/** mirrors src/<pluginName>/client/** exactly.
   if (preserveClients && parts.length >= 3 && parts[1] === 'client') {
     return isExistingFile(path.join(srcDir, ...parts));
   }
@@ -64,14 +68,14 @@ function hasMatchingSource(srcDir, posixRel, preserveClients) {
     if (!posixRel.endsWith(spec.ext)) continue;
     const stem = posixRel.slice(0, -spec.ext.length);
     if (!stem) return false;
-    // preserveClients 开启时 tsconfig 排除了 src/*/client，不得把 client 里的 .ts 当成 dist JS 依据。
+    // With preserveClients on, tsconfig excludes src/*/client; client .ts files must not count as dist JS evidence.
     if (preserveClients && parts.length >= 3 && parts[1] === 'client') return false;
     return spec.sources.some((srcExt) => isExistingFile(path.join(srcDir, `${stem}${srcExt}`)));
   }
   return false;
 }
 
-/** 自底向上清理 dist 内的空目录（不删除 dist 根目录自身，由调用方按需处理）。 */
+/** Remove empty directories inside dist bottom-up (the dist root itself is left for the caller). */
 function pruneEmptySubdirs(dir, removedDirs) {
   let entries;
   try {
@@ -89,14 +93,14 @@ function pruneEmptySubdirs(dir, removedDirs) {
           removedDirs.push(sub);
         }
       } catch {
-        // 忽略并发清理导致的 ENOENT
+        // Ignore ENOENT from concurrent cleanup
       }
     }
   }
 }
 
 /**
- * 按源码树增量清理 dist/ 中陈旧孤立文件与空目录。
+ * Incrementally prune stale orphaned files and empty directories from dist/ based on the source tree.
  * @param {{ pkgRoot: string, force?: boolean, preserveClients?: boolean, tsBuildInfoFile?: string | null, env?: NodeJS.ProcessEnv }} options
  * @returns {{ mode: 'wiped' | 'pruned' | 'noop', removedFiles: string[], removedDirs: string[] }}
  */
@@ -117,7 +121,7 @@ export function pruneDist(options) {
   }
 
   if (!existsSync(distDir)) {
-    // 若 dist 已被外部删空但 .tsbuildinfo 仍在，tsc 增量模式会跳过重新输出产物；必须同步清缓存。
+    // If dist was emptied externally while .tsbuildinfo remains, tsc incremental mode skips re-emitting; the cache must go too.
     if (buildInfo) rmSync(buildInfo, { force: true });
     return { mode: 'noop', removedFiles: [], removedDirs: [] };
   }
@@ -148,7 +152,7 @@ export function pruneDist(options) {
   visit(distDir, '');
   pruneEmptySubdirs(distDir, removedDirs);
 
-  // dist 内无任何有效 JS 产物时视为冷态，清掉 .tsbuildinfo 防 tsc 跳过输出。
+  // With no valid JS artifacts left in dist, treat it as cold: drop .tsbuildinfo so tsc cannot skip output.
   if (keptJsCount === 0 && buildInfo) {
     rmSync(buildInfo, { force: true });
   }
@@ -161,7 +165,7 @@ export function pruneDist(options) {
 }
 
 /**
- * 各包 scripts/clean-dist.mjs 共用 CLI 入口。
+ * Shared CLI entry for each package's scripts/clean-dist.mjs.
  * @param {string} pkgRoot
  * @param {string[]} argv
  * @param {{ preserveClients?: boolean }} [options]
