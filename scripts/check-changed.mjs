@@ -1,25 +1,32 @@
 #!/usr/bin/env node
 /**
- * pnpm check:changed - - change drive fast feedback gate (patch fill while non- alternative AGENTS §5 Profile must run and merge test:all).
+ * pnpm check:changed — change-driven fast feedback gate (a supplement to, never a replacement
+ * for, the AGENTS §5 tiered mandatory runs and the pre-merge test:all).
  *
- * mechanism (keep guard can rely, without cache, without smart related guess):
- *   1. changeset = merge-base(base, HEAD)..HEAD commit difference ∪ work zone(staged+unstaged) ∪ untracked file,
- *      git -z parse (space path / rename new old double side / delete all such as accept);
- *      baseline priority --base <ref> > branch upstream > origin/HEAD, all no then explicit errors want seek --base,
- *      never static default retreat to HEAD~1(will leak many commit).
- *   2. subject to affect package = change file by packages/<dir> mapping; package inside non- test file change → the package + all pass
- *      dependency it package (workspace dependency graph reverse closed package); pure test file change → only the package;
- *      lock file / config / test basis set apply (contains scripts directory under all .mjs source code) change → all Profile.
- *   3. command plan see lib/workspace-meta.mjs planCheckCommands:pnpm typecheck(contains
- *      protocol/node build)→(choose in desktop test when)desktop dist build → subject to affect package test
- *      (explicit file list hand over to scripts/run-tests.mjs, re- use its timeout and process tree clean up).
+ * Mechanism (conservative and reliable — no cache, no smart-association guessing):
+ *   1. Change set = merge-base(base, HEAD)..HEAD commit diff ∪ working tree (staged +
+ *      unstaged) ∪ untracked files, parsed via git -z (space-containing paths, both sides
+ *      of renames, and deletions are all included faithfully);
+ *      baseline priority is --base <ref> > branch upstream > origin/HEAD; when none exists,
+ *      error out demanding --base — never silently degrade to HEAD~1 (it misses commits).
+ *   2. Affected packages = changed files mapped through packages/<dir>; a non-test change
+ *      inside a package -> that package + every package transitively depending on it
+ *      (reverse closure of the workspace dependency graph); test-only changes -> that
+ *      package alone; lockfile / root config / test infrastructure (including every .mjs
+ *      source under scripts/) changes -> all tiers.
+ *   3. Command planning lives in lib/workspace-meta.mjs planCheckCommands: pnpm typecheck
+ *      (including protocol/node build) -> (when desktop tests are selected) desktop dist
+ *      build -> affected package tests (explicit file list handed to scripts/run-tests.mjs
+ *      to reuse its timeouts and process-tree cleanup).
  *
- * use method (pnpm argument passing must -- isolate symbol, script accept open head literal --,pnpm will original pass-through):
- *   pnpm check:changed --                      # automatically baseline (upstream / origin/HEAD)
- *   pnpm check:changed -- --base main          # explicit baseline (recommend in without upstream  worktree branch use)
- *   pnpm check:changed -- --list               # only print accept file/subject to affect package/execute command, do not run (--dry-run same meaning)
+ * Usage (pnpm needs the -- separator; this script accepts a leading literal -- that pnpm
+ * passes through verbatim):
+ *   pnpm check:changed --                      # auto baseline (upstream / origin/HEAD)
+ *   pnpm check:changed -- --base main          # explicit baseline (recommended on worktree branches without upstream)
+ *   pnpm check:changed -- --list               # only print included files / affected packages / commands to run, execute nothing (--dry-run is a synonym)
  *
- * exit code:0 via (or without can run items); command failed original pass-through; use method/baseline error 2.
+ * Exit codes: 0 pass (or nothing to run); command failures pass through as-is;
+ * usage/baseline errors 2.
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,19 +43,20 @@ import { resolvePackageManagerInvoke, runSequentially } from './lib/spawn-checke
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function usage() {
-  console.error(`use method: pnpm check:changed -- [--base <ref>] [--list|--dry-run]
-  --base <ref>    explicit baseline (commit/branch/tag), take its and HEAD  merge-base
-  --list          only print choose collection (accept file / subject to affect package / execute command), do not execute
-  --dry-run       --list same meaning alias
-note: via pnpm invoke when must use -- isolate parameter (such as pnpm check:changed -- --base main --list),
-      open head literal -- will by this script ignore; directly node scripts/check-changed.mjs invoke then no need to --.`);
+  console.error(`Usage: pnpm check:changed -- [--base <ref>] [--list|--dry-run]
+  --base <ref>    explicit baseline (commit/branch/tag); its merge-base with HEAD is used
+  --list          only print the selection (included files / affected packages / commands to run); execute nothing
+  --dry-run       synonym for --list
+Note: when invoked through pnpm, arguments must be separated with -- (e.g. pnpm check:changed -- --base main --list);
+      a leading literal -- is ignored by this script; a direct node scripts/check-changed.mjs call needs no --.`);
 }
 
 function parseArgs(argv) {
   const opts = { base: null, list: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    // pnpm pass-through open head -- isolate symbol: only skip first reference location, the rest location -- by unknown parameter errors.
+    // The leading -- separator passed through by pnpm: only skipped in the first position;
+    // a -- anywhere else is reported as an unknown argument.
     if (a === '--' && i === 0) continue;
     if (a === '--base' && argv[i + 1]) {
       opts.base = argv[i + 1];
@@ -58,7 +66,7 @@ function parseArgs(argv) {
     } else if (a === '--list' || a === '--dry-run') {
       opts.list = true;
     } else {
-      console.error(`[check-changed] unknown parameter: ${a}`);
+      console.error(`[check-changed] unknown argument: ${a}`);
       usage();
       process.exit(2);
     }
@@ -87,34 +95,35 @@ const { affected, fullTier, outside } = computeAffectedPackages(
 const affectedDirs = [...affected].sort();
 const testFiles = affectedDirs.flatMap((p) => testFilesOfPackage(repoRoot, p));
 
-// ---- report (--list and real execute shared use the same choose collection note, supply re-check)----
+// ---- Reporting (--list and real runs share the same selection description for review) ----
 const kindLabel = { explicit: 'explicit --base', upstream: 'branch upstream', 'origin-head': 'origin/HEAD' };
 const ahead = commitsAhead(repoRoot, changes.baseline.mergeBase);
 console.error(
+  // Keep the baseline label stable for CLI diagnostics.
   `[check-changed] baseline: ${kindLabel[changes.baseline.kind]} ${changes.baseline.ref}` +
-    `(merge-base ${shortRev(repoRoot, changes.baseline.mergeBase)},HEAD lead first ${ahead} commit)`,
+    ` (merge-base ${shortRev(repoRoot, changes.baseline.mergeBase)}, HEAD is ${ahead} commits ahead)`,
 );
 console.error(
-  `[check-changed] change file ${changes.files.length} ` +
-    `(committed ${changes.files.filter((f) => f.origin.includes('committed')).length}` +
-    ` / work zone ${changes.files.filter((f) => f.origin.includes('worktree')).length}` +
+  `[check-changed] changed files: ${changes.files.length}` +
+    ` (committed ${changes.files.filter((f) => f.origin.includes('committed')).length}` +
+    ` / worktree ${changes.files.filter((f) => f.origin.includes('worktree')).length}` +
     ` / untracked ${changes.files.filter((f) => f.origin === 'untracked').length}):`,
 );
 for (const f of changes.files.slice(0, 60)) {
   console.error(`  ${f.status.padEnd(5)} ${f.path}  (${f.origin})`);
 }
-if (changes.files.length > 60) console.error(`  ... (the rest ${changes.files.length - 60} omit)`);
+if (changes.files.length > 60) console.error(`  ... (${changes.files.length - 60} more omitted)`);
 if (outside.length > 0) {
-  console.error(`[check-changed] non- package inside change ${outside.length} (docs etc., does not trigger test choose collection)`);
+  console.error(`[check-changed] non-package changes: ${outside.length} (docs etc.; no test selection triggered)`);
 }
 
-const tierOf = (dir) => PACKAGE_TIERS[dir] ?? 'not Profile';
+const tierOf = (dir) => PACKAGE_TIERS[dir] ?? 'un-tiered';
 console.error(
-  `[check-changed] subject to affect package${fullTier ? '(level trigger → all Profile)' : ''}: ` +
+  `[check-changed] affected packages${fullTier ? ' (root-level trigger -> all tiers)' : ''}: ` +
     (affectedDirs.length > 0
       ? affectedDirs.map((d) => `${d}(${tierOf(d)})`).join(', ')
-      : 'without') +
-    (fullTier ? '' : `; test file ${testFiles.length} `),
+      : 'none') +
+    (fullTier ? '' : `; test files: ${testFiles.length}`),
 );
 
 const commands = planCheckCommands({
@@ -125,26 +134,26 @@ const commands = planCheckCommands({
   repoRoot,
 });
 
-console.error('[check-changed] execute:');
+console.error('[check-changed] Commands to run:');
 if (commands.length === 0) {
-  console.error('  (without - - change does not involve any package inside file,typecheck and test all skip)');
+  console.error('  (nothing — no package files changed; typecheck and tests both skipped)');
 } else {
   for (const c of commands) console.error(`  ${c.cmd} ${c.args.join(' ')}`);
 }
 
 if (args.list) {
-  console.error('[check-changed] --list pattern: only print choose collection, not execute any command');
+  console.error('[check-changed] --list mode: printed the selection only; no commands executed');
   process.exit(0);
 }
 if (commands.length === 0) {
-  console.error('[check-changed] without can execute check, via (note: this only is fast gate,AGENTS §5 Profile must run rule do not subject to affect)');
+  console.error('[check-changed] no checks to run, passing (note: this is only the fast gate; the AGENTS §5 tiered mandatory runs are unaffected)');
   process.exit(0);
 }
 
 const code = await runSequentially(commands, { cwd: repoRoot });
 console.error(
   code === 0
-    ? '[check-changed] fast gate via (patch fill feedback: merge before still must by AGENTS §5 run for should Profile and test:all)'
+    ? '[check-changed] fast gate passed (supplementary feedback: before merging you must still run the AGENTS §5 tiers and test:all)'
     : `[check-changed] fast gate failed, exit code ${code}`,
 );
 process.exit(code);

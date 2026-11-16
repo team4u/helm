@@ -1,14 +1,17 @@
 /**
- * pure test file static decide and concurrency shard scheduler (TypeScript Compiler API, zero new dependency).
+ * Static purity detection and concurrent sharding scheduler for test files (TypeScript Compiler API, zero new deps).
  *
- * is what cannot all amount open `--test-isolation=none`: contains happy-dom / GlobalRegistrator,
- * modify globalThis/window/document/process.env/console/timers, child process/network/SQLite/file write
- * or async heavy type collection into test in the same process sharing global environment when will string state or competition.
+ * Why not enable `--test-isolation=none` everywhere: tests using happy-dom /
+ * GlobalRegistrator, mutating globalThis/window/document/process.env/console/timers,
+ * spawning subprocesses / network / SQLite / file writes, or heavy async integration leak
+ * state or race when they share one process's global environment.
  *
- * this module only filter choose [strictly in-memory] test file (contains recursion check its reference same package test auxiliary module)
- * to K  `--test-isolation=none` shard parallel execute, remaining test keep original has process isolated.
- * when pass-through parameter explicit designate `--test-isolation` / `--test-reporter` / `--test-name-pattern`
- * etc. semantics sensitive switch when, whole retreat back single route common rule isolated execute, never change test semantics or hit chaotic output format.
+ * This module filters only [strictly pure in-memory] test files (recursively checking the
+ * same-package test helper modules they import) into K parallel `--test-isolation=none`
+ * shards; the remaining tests keep their original process isolation. When pass-through
+ * args explicitly set semantics-sensitive switches like `--test-isolation` /
+ * `--test-reporter` / `--test-name-pattern`, everything falls back to a single regular
+ * isolated run — never changing test semantics or scrambling output formats.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -116,7 +119,7 @@ const MUTATED_GLOBAL_IDENTIFIERS = new Set([
   'console',
 ]);
 
-/** unwrap parentheses, type assertion,satisfies and non-empty assertion. */
+/** Unwrap parentheses, type assertions, satisfies, and non-null assertions. */
 function unwrapExpr(ts, node) {
   let cur = node;
   while (
@@ -178,7 +181,7 @@ function isProcessArgvExpr(ts, node) {
   return Boolean(host && ts.isIdentifier(host) && host.text === 'process');
 }
 
-/** collect file in all runtime import identifier symbol (exclude pure type import). */
+/** Collect all runtime import identifiers in a file (pure type imports excluded). */
 function collectRuntimeImportBindings(ts, sourceFile) {
   const bindings = new Set();
   for (const st of sourceFile.statements) {
@@ -196,7 +199,7 @@ function collectRuntimeImportBindings(ts, sourceFile) {
   return bindings;
 }
 
-/** from test file path parse same warehouse test directory inside each other for auxiliary module path. */
+/** Resolve a same-repo test-directory relative helper module path from a test file path. */
 export function resolveRelativeTestHelper(fromFile, specifier) {
   if (!specifier.startsWith('.')) return null;
   const raw = path.resolve(path.dirname(fromFile), specifier);
@@ -222,19 +225,19 @@ export function resolveRelativeTestHelper(fromFile, specifier) {
   for (const candidate of candidates) {
     try {
       if (existsSync(candidate) && statSync(candidate).isFile()) {
-        // only recursion with enter at test directory inside auxiliary module/fixture; do not across by test src directory.
+        // Only recurse into helper modules/fixtures inside the test directory; never cross into the src under test.
         const parts = candidate.split(path.sep);
         if (parts.includes('test')) return candidate;
       }
     } catch {
-      // ignore invalid path
+      // Ignore invalid paths
     }
   }
   return null;
 }
 
 /**
- * static analyze single test source code (and optional each other for auxiliary module parse) process isolated security.
+ * Statically analyze whether one test source (plus optional relative helper resolution) is process-isolation safe.
  * @param {typeof import('typescript')} ts
  * @param {string} filePath
  * @param {string} source
@@ -282,7 +285,7 @@ export function analyzeTestSourcePurity(
   };
 
   const visit = (node) => {
-    // type node produces no runtime behavior.
+    // Type nodes have no runtime behavior.
     if (ts.isTypeNode(node)) return;
 
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
@@ -387,7 +390,7 @@ export function analyzeTestSourcePurity(
         if (host && ts.isIdentifier(host) && host.text === 'GlobalRegistrator' && method === 'register') {
           reasons.add('call:GlobalRegistrator.register');
         } else if (FORBIDDEN_CALLS.has(method)) {
-          // regex literal `/.../.exec(str)` is in-memory invoke, non- `child_process.exec`.
+          // A regex literal `/.../.exec(str)` is a pure in-memory call, not `child_process.exec`.
           if (!(method === 'exec' && host && ts.isRegularExpressionLiteral(host))) {
             reasons.add(`call:${method}`);
           }
@@ -423,7 +426,7 @@ export function analyzeTestSourcePurity(
 }
 
 /**
- * analyze disk on single test file (automatically parse and recursion check each other for auxiliary module).
+ * Analyze a single test file on disk (relative helper modules are resolved and checked recursively).
  * @param {typeof import('typescript')} ts
  * @param {string} absFilePath
  * @returns {{ pure: boolean, reasons: string[] }}
@@ -447,7 +450,7 @@ export function analyzeTestFilePurity(ts, absFilePath) {
   return analyzeTestSourcePurity(ts, absFilePath, source, resolveHelper, new Set());
 }
 
-/** decide pass-through parameter is otherwise will change runner isolated, concurrency or output report format. */
+/** Decide whether pass-through args alter runner isolation, concurrency, or the output report format. */
 export function shouldDisableSharding(extraArgs) {
   return extraArgs.some((arg) => {
     if (arg === '-t' || arg === '--watch' || arg === '--test-only' || arg === '--test-force-exit') {
@@ -465,7 +468,7 @@ export function shouldDisableSharding(extraArgs) {
 }
 
 /**
- * test file collection split is can sharing isolated shard (LPT load all balance) and must process isolated file list.
+ * Split the test file set into shards that may share isolation (LPT load balancing) and files that must stay process-isolated.
  * @param {{ ts: typeof import('typescript'), repoRoot: string, files: string[], cpus: number, filesPerShard?: number, weightFn: (relPath: string) => number }} input
  * @returns {{ pureFiles: string[], isolatedFiles: string[], shards: string[][] }}
  */

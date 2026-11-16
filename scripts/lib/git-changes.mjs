@@ -1,17 +1,23 @@
 /**
- * Git changeset collect:check-changed / check-hygiene shared use baseline parse + change file and collection mechanism.
+ * Git change-set collector: the shared baseline-resolution + changed-file-union mechanism
+ * for check-changed / check-hygiene.
  *
- * is what do not use `git diff HEAD~1`: many commit branch, staged zone, untracked file and rename all will by leak,
- * fast feedback gate establish in leak file choose collection on equals false security. this module changeset define is three meta and collection:
- *   committed  = merge-base(base, HEAD) .. HEAD commit difference (contains rename new old two side path)
- *   worktree   = HEAD and work zone difference (staged + unstaged one body,git diff HEAD day however such as this)
+ * Why not `git diff HEAD~1`: multi-commit branches, the staging area, untracked files, and
+ * renames would all be missed, and a fast feedback gate built on a lossy selection is
+ * false safety. This module defines the change set as a union of three sources:
+ *   committed  = commit diff merge-base(base, HEAD) .. HEAD (both sides of renames)
+ *   worktree   = diff between HEAD and the working tree (staged + unstaged as one; git
+ *                 diff HEAD does this natively)
  *   untracked  = git ls-files --others --exclude-standard
  *
- * baseline (base) parse priority: explicit --base <ref> > branch upstream > origin/HEAD(symbolic-ref).
- * three all without when return kind:'none', by caller explicit errors want seek --base- - never static default retreat to HEAD~1.
+ * Baseline (base) resolution priority: explicit --base <ref> > branch upstream >
+ * origin/HEAD (symbolic-ref).
+ * When none exists, kind:'none' is returned and the caller must error out demanding --base
+ * — never silently degrade to HEAD~1.
  *
- * all git output use -z(NUL isolate) parse, path contains space, Chinese, quotes all security;rename/copy record
- * in -z pattern under is <status>\0<newPath>\0<oldPath>\0 three segment, two side path all accept changeset.
+ * All git output is parsed with -z (NUL-delimited), safe for paths with spaces, CJK
+ * characters, or quotes; in -z mode a rename/copy record is the three segments
+ * <status>\0<newPath>\0<oldPath>\0 and both paths join the change set.
  */
 import { spawnSync } from 'node:child_process';
 
@@ -25,7 +31,7 @@ export class GitChangeError extends Error {}
  * @returns {{ ref: string, via: 'upstream' | 'origin-head' } | { kind: 'none' }}
  */
 function detectDefaultRef(cwd) {
-  // branch upstream:git rev-parse --symbolic-full-name @{upstream}, without upstream when exit code non- 0.
+  // Branch upstream: git rev-parse --symbolic-full-name @{upstream}; non-zero exit when absent.
   const up = spawnSync('git', ['rev-parse', '--verify', '--symbolic-full-name', '@{upstream}'], {
     cwd,
     encoding: 'utf8',
@@ -34,7 +40,7 @@ function detectDefaultRef(cwd) {
     const ref = (up.stdout ?? '').trim();
     if (ref) return { ref, via: 'upstream' };
   }
-  // origin/HEAD(symbolic-ref points to by default branch, such as origin/main).
+  // origin/HEAD (symbolic-ref pointing at the default branch, e.g. origin/main).
   const head = spawnSync('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
     cwd,
     encoding: 'utf8',
@@ -47,7 +53,7 @@ function detectDefaultRef(cwd) {
 }
 
 /**
- * parse baseline and compute merge-base.
+ * Resolve the baseline and compute the merge-base.
  * @param {{ base?: string, cwd: string }} opts
  * @returns {BaselineInfo}
  */
@@ -58,11 +64,11 @@ export function resolveBaseline({ base, cwd }) {
       encoding: 'utf8',
     });
     if (verify.status !== 0) {
-      throw new GitChangeError(`--base reference missing or is not commit: ${base}`);
+      throw new GitChangeError(`--base ref does not exist or is not a commit: ${base}`);
     }
     const mb = spawnSync('git', ['merge-base', base, 'HEAD'], { cwd, encoding: 'utf8' });
     if (mb.status !== 0 || !(mb.stdout ?? '').trim()) {
-      throw new GitChangeError(`--base ${base} and HEAD without jointly ancestor, cannot compute merge-base`);
+      throw new GitChangeError(`--base ${base} and HEAD share no common ancestor; cannot compute merge-base`);
     }
     return { kind: 'explicit', ref: base, mergeBase: mb.stdout.trim() };
   }
@@ -70,7 +76,7 @@ export function resolveBaseline({ base, cwd }) {
   if (detected.kind === 'none') return { kind: 'none', ref: null, mergeBase: null };
   const mb = spawnSync('git', ['merge-base', detected.ref, 'HEAD'], { cwd, encoding: 'utf8' });
   if (mb.status !== 0 || !(mb.stdout ?? '').trim()) {
-    throw new GitChangeError(`baseline ${detected.ref} and HEAD without jointly ancestor, cannot compute merge-base`);
+    throw new GitChangeError(`baseline ${detected.ref} and HEAD share no common ancestor; cannot compute merge-base`);
   }
   return {
     kind: detected.via,
@@ -80,7 +86,7 @@ export function resolveBaseline({ base, cwd }) {
 }
 
 /**
- * parse `git diff --name-status -z` output (contains rename/copy double path expand).
+ * Parse `git diff --name-status -z` output (rename/copy dual-path expansion included).
  * @param {string} raw
  * @returns {{ path: string, status: string }[]}
  */
@@ -114,7 +120,7 @@ export function parseNameStatusZ(raw) {
 }
 
 /**
- * collect complete changeset (committed ∪ worktree ∪ untracked).
+ * Collect the full change set (committed ∪ worktree ∪ untracked).
  * @param {{ base?: string, cwd: string }} opts
  * @returns {{ baseline: BaselineInfo, files: ChangedFile[] }}
  */
@@ -122,8 +128,8 @@ export function collectChangedFiles({ base, cwd }) {
   const baseline = resolveBaseline({ base, cwd });
   if (baseline.kind === 'none') {
     throw new GitChangeError(
-      'not found available by default baseline (branch without upstream and without origin/HEAD), please use --base <ref> explicit designate baseline,' +
-        'e.g. --base origin/main or --base main; do not want dependency HEAD~1 this kind of will leak many commit guess',
+      'No usable default baseline found (branch has no upstream and no origin/HEAD); specify one explicitly ' +
+        'with --base <ref>, e.g. --base origin/main or --base main; do not rely on HEAD~1 guesses that miss commits',
     );
   }
   const mb = /** @type {string} */ (baseline.mergeBase);
@@ -142,7 +148,7 @@ export function collectChangedFiles({ base, cwd }) {
     .filter((p) => p.length > 0)
     .map((p) => ({ path: p, status: 'U', origin: /** @type {const} */ ('untracked') }));
 
-  // the same file may also appear in multiple source (such as committed after again change), keep all source and state supply re-check.
+  // The same file may appear in multiple sources (e.g. committed then modified again); keep all sources and statuses for review.
   const merged = new Map();
   for (const f of [...committed, ...worktree, ...untracked]) {
     const prev = merged.get(f.path) ?? { path: f.path, statuses: new Set(), origins: new Set() };
@@ -164,7 +170,7 @@ export function collectChangedFiles({ base, cwd }) {
 function runNameStatus(args, cwd, label) {
   const res = spawnSync('git', ['diff', ...args], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (res.status !== 0) {
-    throw new GitChangeError(`git diff(${label}) failed: ${(res.stderr ?? '').trim()}`);
+    throw new GitChangeError(`git diff (${label}) failed: ${(res.stderr ?? '').trim()}`);
   }
   return parseNameStatusZ(res.stdout ?? '').map((f) => ({
     path: f.path,
@@ -173,7 +179,7 @@ function runNameStatus(args, cwd, label) {
   }));
 }
 
-/** merge-base to HEAD between commit count (only used to report baseline after degree). */
+/** Commit count between merge-base and HEAD (only to report how far behind the baseline is). */
 export function commitsAhead(cwd, mergeBase) {
   const res = spawnSync('git', ['rev-list', '--count', `${mergeBase}..HEAD`], {
     cwd,
@@ -183,7 +189,7 @@ export function commitsAhead(cwd, mergeBase) {
   return Number((res.stdout ?? '').trim());
 }
 
-/** short hash(only report use). */
+/** Short hash (reporting only). */
 export function shortRev(cwd, rev) {
   const res = spawnSync('git', ['rev-parse', '--short', rev], { cwd, encoding: 'utf8' });
   return res.status === 0 ? (res.stdout ?? '').trim() : rev;

@@ -8,7 +8,7 @@ import { createHelm } from '../packages/hub/dist/index.js'
 import { startHub } from '../packages/kernel/dist/http/index.js'
 import { writeNodeIdentity } from '../packages/node/dist/index.js'
 
-// compile artifact black box verify; all data and background process all belongs to this script, do not invoke external model.
+// Black-box acceptance against build artifacts; all data and background processes belong to this script, no external model calls.
 const repository = dirname(dirname(fileURLToPath(import.meta.url)))
 const root = await mkdtemp(join(tmpdir(), 'helm-env-compiled-'))
 const nodeDir = join(root, 'node')
@@ -22,7 +22,7 @@ async function command(entry, args, env = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [entry, ...args], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''; let err = ''
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('compile command execute timeout')) }, 30_000)
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('build command timed out')) }, 30_000)
     child.stdout.on('data', (chunk) => { out += chunk.toString() })
     child.stderr.on('data', (chunk) => { err += chunk.toString() })
     child.once('error', (error) => { clearTimeout(timer); reject(error) })
