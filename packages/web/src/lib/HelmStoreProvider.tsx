@@ -21,7 +21,7 @@ import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.
 import { resetStandbyDrafts } from '../conversation/standby-model.js'
 import * as HelmPluginClient from '@helm/plugin-client'
 import { createPluginClientHostPort } from './plugin-client-host.js'
-import { formatLocationHash, isSameLocationState, parseLocationHash, shouldPushLocationHistory, upgradeLegacyLocationState, type WorkspaceLocationState } from './url-hash-model.js'
+import { formatLocationHash, hashHasPrimaryTarget, isSameLocationState, parseLocationHash, shouldPushLocationHistory, upgradeLegacyLocationState, type WorkspaceLocationState } from './url-hash-model.js'
 import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, spaceForTarget, type ActiveModal, type GroupedUiSpecs, type HelmStoreValue, type ResolvedTarget, type SidebarSpace, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 import { errorText } from './format.js'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
@@ -140,16 +140,24 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [actions, setActions] = useState<ActionManifest[]>([])
   // 初始工作台位置取自地址栏 Hash：刷新、复制链接直达与前进/后退都以它为唯一事实来源。
-  const [initialLocation] = useState<WorkspaceLocationState>(() => upgradeLegacyLocationState(
-    parseLocationHash(typeof window !== 'undefined' ? window.location.hash : ''),
-  ))
-  const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>(initialLocation.primaryTarget)
-  const [splitTarget, setSplitTarget] = useState<ResolvedTarget | null>(initialLocation.splitTarget)
-  const [workbenchOpen, setWorkbenchOpen] = useState(initialLocation.workbenchOpen)
-  const [workbenchTab, setWorkbenchTab] = useState(initialLocation.workbenchTab)
-  const [activeModal, setActiveModal] = useState<ActiveModal>(initialLocation.activeModal)
+  // 首页进入判定与初始解析同源一次完成：无显式主屏目标且无弹窗的入口，等认证与会话
+  // 数据就绪后由首页落地 effect 以 replace 升级到对话空间缺省目标（见下方 effect）。
+  const [boot] = useState(() => {
+    const rawHash = typeof window !== 'undefined' ? window.location.hash : ''
+    const parsed = parseLocationHash(rawHash)
+    return {
+      location: upgradeLegacyLocationState(parsed),
+      // 无显式主屏目标且无弹窗深链（含旧弹窗参数升级路径）才视为首页进入。
+      needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null,
+    }
+  })
+  const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>(boot.location.primaryTarget)
+  const [splitTarget, setSplitTarget] = useState<ResolvedTarget | null>(boot.location.splitTarget)
+  const [workbenchOpen, setWorkbenchOpen] = useState(boot.location.workbenchOpen)
+  const [workbenchTab, setWorkbenchTab] = useState(boot.location.workbenchTab)
+  const [activeModal, setActiveModal] = useState<ActiveModal>(boot.location.activeModal)
   // 最近一次与地址栏达成一致的位置：既是外部 Hash 变更的判重基准，也是 push/replace 决策的 prev。
-  const lastSyncedLocation = useRef<WorkspaceLocationState>(initialLocation)
+  const lastSyncedLocation = useRef<WorkspaceLocationState>(boot.location)
   const [highlightedEntry, setHighlightedEntry] = useState<{ conversationId: number; entryId: string } | null>(null)
   const [notices, setNotices] = useState<ToastNotice[]>([])
   const noticeSequence = useRef(0)
@@ -167,7 +175,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   // 空间记忆：每个侧栏空间最近的主屏目标（会话内内存态，不进 URL）。Rail 切换回跳用；
   // 主屏 openTarget / 外部 Hash 恢复 / 删除回退统一在此更新，初始由深链目标播种。
   const spaceMemory = useRef<Partial<Record<SidebarSpace, ResolvedTarget>>>({
-    [spaceForTarget(initialLocation.primaryTarget)]: initialLocation.primaryTarget,
+    [spaceForTarget(boot.location.primaryTarget)]: boot.location.primaryTarget,
   })
   const profilesRef = useRef(profiles)
   profilesRef.current = profiles
@@ -609,6 +617,29 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     pendingHistoryMode.current = null
     lastSyncedLocation.current = locationState
   }, [authenticated, locationState])
+
+  // 首页落地：空 Hash（无显式主屏目标且无弹窗）进入不是导航意图——认证、会话快照与
+  // 静态资产全部就绪后，主屏以 replace 落到对话空间缺省目标（最新根会话所属角色的
+  // 待命页，无会话时首个可用角色）；期间位置被移动（用户点击 / 外部前进后退 / 程序
+  // 导航）则既有意图优先取消落地；无任何可用角色时保持解析缺省（角色中心）。
+  const homeLandingPending = useRef(boot.needsHomeLanding)
+  useEffect(() => {
+    if (!homeLandingPending.current) return
+    if (!authenticated || !assetsLoaded || !sseConnected) return
+    homeLandingPending.current = false
+    // 数据就绪前位置已被移动（用户点击 / 外部前进后退 / 程序导航）：既有意图优先，取消落地。
+    if (!isSameLocationState(locationState, boot.location)) return
+    const home = defaultSpaceTarget('conversations', {
+      conversations: liveRef.current.conversations,
+      profiles: profilesRef.current,
+      plugins: liveRef.current.plugins,
+      assetsLoaded: assetsLoadedRef.current,
+      grouped: groupUiContributions(liveRef.current.uiContributions),
+    })
+    if (home === null) return // 无任何可用角色：保持解析缺省（角色中心），绝不伪造目标
+    // 落地是初始位置解析的延续而非用户导航：replace 不产生历史项，后退不回到角色中心。
+    openTarget(home, { history: 'replace' })
+  }, [authenticated, assetsLoaded, sseConnected, locationState, boot, openTarget])
 
   useEffect(() => {
     if (!authenticated) return

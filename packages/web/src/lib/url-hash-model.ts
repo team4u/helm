@@ -3,6 +3,8 @@ import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, ty
 /**
  * 地址栏 Hash 所表达的工作台位置：主屏目标、右分屏、工作台抽屉与顶层弹窗。
  * 本模块零 React / DOM 依赖，仅做纯函数编解码与对比，语法契约见 test/url-hash.test.ts。
+ * 解析缺省（空 Hash / 非法路径 → 角色中心）保持不变；「无显式主屏目标的入口」
+ * 由产品层（HelmStoreProvider 首页落地）升级为对话空间目标，本模块不掺杂该策略。
  *
  * 路径树（层级化路由：子项一律是路径段，不再是查询参数）：
  * - `c/<id>`                                                     会话
@@ -29,6 +31,8 @@ type PersistedModal = Exclude<ActiveModal, null | { kind: 'command-palette' }>
 /**
  * 缺省主屏：智能体角色中心（无会话依赖，零会话/全部删除后仍可用；
  * 序列化为 `#/settings/profiles`；历史缺省 conversation:1 已随根会话特殊设计移除）。
+ * 解析层缺省不变；「无显式主屏目标且无弹窗」的首页进入由 HelmStoreProvider
+ * 在数据就绪后以 replace 升级到对话空间缺省目标（见首页落地 effect）。
  */
 const DEFAULT_PRIMARY: ResolvedTarget = { kind: 'profiles' }
 const DEFAULT_WORKBENCH_TAB = 'artifacts'
@@ -333,15 +337,33 @@ function parseActiveModal(params: URLSearchParams): ActiveModal {
   }
 }
 
-/**
- * 解析 `#/path?searchParams` 形式的 Hash。所有非法段（含全部旧路径形态）均回退默认
- * （角色中心 `#/settings/profiles` / 无分屏 / 工作台关闭 / 无弹窗），绝不抛出或产生 NaN。
- */
-export function parseLocationHash(rawHash: string): WorkspaceLocationState {
+/** 切分原始 Hash：剥 `#`、按首个 `?` 分离路径与查询串，路径去首尾斜杠。 */
+function splitHash(rawHash: string): { path: string; params: URLSearchParams } {
   const raw = rawHash.startsWith('#') ? rawHash.slice(1) : rawHash
   const queryIdx = raw.indexOf('?')
-  const path = (queryIdx === -1 ? raw : raw.slice(0, queryIdx)).replace(/^\/+/, '').replace(/\/+$/, '')
-  const params = new URLSearchParams(queryIdx === -1 ? '' : raw.slice(queryIdx + 1))
+  return {
+    path: (queryIdx === -1 ? raw : raw.slice(0, queryIdx)).replace(/^\/+/, '').replace(/\/+$/, ''),
+    params: new URLSearchParams(queryIdx === -1 ? '' : raw.slice(queryIdx + 1)),
+  }
+}
+
+/**
+ * 入口 Hash 是否显式表达了主屏目标：空 Hash、纯查询串与非法路径均为 false
+ * （解析缺省回退的角色中心不算显式目标）。首页落地判定只看本函数与弹窗深链，
+ * 落地策略本身由产品层（HelmStoreProvider）完成。
+ */
+export function hashHasPrimaryTarget(rawHash: string): boolean {
+  return parseTargetValue(splitHash(rawHash).path) !== null
+}
+
+/**
+ * 解析 `#/path?searchParams` 形式的 Hash。所有非法段（含全部旧路径形态）均回退默认
+ * （角色中心 `#/settings/profiles` / 无分屏 / 工作台关闭 / 无弹窗），绝不抛出或产生 NaN；
+ * 「无显式主屏目标的入口」的首页落地升级（认证与数据就绪后 replace 到对话空间）
+ * 由产品层 HelmStoreProvider 负责，本函数行为保持纯解析。
+ */
+export function parseLocationHash(rawHash: string): WorkspaceLocationState {
+  const { path, params } = splitHash(rawHash)
   const splitRaw = params.get('split')
   const workbenchTab = params.get('wb')
   let primaryTarget = parseTargetValue(path) ?? DEFAULT_PRIMARY

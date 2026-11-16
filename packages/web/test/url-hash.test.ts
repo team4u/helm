@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import { parseScreenTargetQuery } from '../src/lib/types.js'
 import {
   formatLocationHash,
+  hashHasPrimaryTarget,
   isSameLocationState,
   parseLocationHash,
   serializeHash,
@@ -602,8 +603,10 @@ const readSource = (relative: string): Promise<string> =>
 
 test('契约: HelmStoreProvider 初始状态取自 Hash、监听外部变更、认证后才写回', { timeout: 60_000 }, async () => {
   const source = await readSource('../src/lib/HelmStoreProvider.tsx')
-  // 初始状态从 window.location.hash 解析（含 SSR 安全守卫）
-  assert.match(source, /parseLocationHash\(typeof window !== 'undefined' \? window\.location\.hash : ''\)/)
+  // 初始状态从 window.location.hash 解析（含 SSR 安全守卫；boot 初始化器内
+  // 先取 rawHash 再 parseLocationHash，同源产出初始位置与首页落地判定）
+  assert.match(source, /const rawHash = typeof window !== 'undefined' \? window\.location\.hash : ''/)
+  assert.match(source, /parseLocationHash\(rawHash\)/)
   // 监听外部 URL 变更（前进/后退/手动改 Hash）
   assert.match(source, /addEventListener\('hashchange'/)
   assert.match(source, /addEventListener\('popstate'/)
@@ -863,4 +866,20 @@ test('isSameResolvedTarget: agent 目标按 profileId/nodeId/cwd 比较', { time
     true,
   )
   assert.equal(isSameResolvedTarget(a, { kind: 'profiles', profileId: 'p' }), false)
+})
+
+// ---------------------------------------------------------------------------
+// hashHasPrimaryTarget：首页落地判定（无显式主屏目标的入口才触发产品层落地）
+// ---------------------------------------------------------------------------
+
+test('hashHasPrimaryTarget: 空/纯查询/非法路径为 false，显式主屏目标为 true', { timeout: 60_000 }, () => {
+  // 无显式主屏目标：空 Hash、裸 #、裸 #/、纯查询串、非法路径——解析虽回退角色中心，
+  // 但那是缺省而非显式意图，入口应被视为「首页进入」交由产品层落地。
+  for (const raw of ['', '#', '#/', '#/?wb=artifacts', '#/xyz']) {
+    assert.equal(hashHasPrimaryTarget(raw), false, `${JSON.stringify(raw)} 不含显式主屏目标`)
+  }
+  // 显式主屏目标：会话（携带分屏参数仍是显式主屏）、各中心与 agent / views 目标。
+  for (const raw of ['#/c/1?split=a/x', '#/settings/profiles', '#/a/assistant', '#/views/p/q']) {
+    assert.equal(hashHasPrimaryTarget(raw), true, `${JSON.stringify(raw)} 含显式主屏目标`)
+  }
 })
