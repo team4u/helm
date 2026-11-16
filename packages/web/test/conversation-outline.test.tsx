@@ -157,6 +157,20 @@ test('buildConversationOutline 与 filterOutlineNodes：构建完整树、支持
   assert.equal(byTurnTag[0]?.entryId, '4')
 })
 
+test('buildConversationOutline：pending=true 的精简分割线标注为「正在精简上下文…」，已落库精简仍为「上下文已精简」', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    { id: '1', kind: 'helm.input', data: { id: 'in-1', text: '旧问题', origin: 'human' }, createdAt: 1000 },
+    { id: '2', kind: 'pi.compaction', model: [{ role: 'user', content: '摘要' }] },
+  ]
+  const items = buildTimelineItems(entries, { compacting: true })
+  const nodes = buildConversationOutline(items)
+  const dividers = nodes.filter((n) => n.kind === 'divider')
+  assert.equal(dividers.length, 2)
+  assert.equal(dividers[0]!.label, '上下文已精简')
+  assert.equal(dividers[1]!.label, '正在精简上下文…')
+  assert.equal(dividers[1]!.entryId, 'compacting:live')
+})
+
 test('resolveActiveOutlineEntryId：按滚动基准线推导当前激活条目', { timeout: 60_000 }, () => {
   assert.equal(resolveActiveOutlineEntryId([]), undefined)
   // 全部在基准线下方（刚在顶部）时取首项

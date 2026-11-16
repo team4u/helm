@@ -342,6 +342,7 @@ export class ConversationService {
       const wasBusy = this.tracker.hasLiveWork(id)
       await conversation.abort(BACKGROUND_CONTEXT)
       if (wasBusy) this.tracker.settleAborted(id)
+      else this.tracker.clearQueuedTracking(id)
       this.o.evictHandledToolCalls(id)
     })
   }
@@ -944,6 +945,7 @@ export class ConversationService {
     const wasBusy = this.tracker.hasLiveWork(id)
     await conversation.abort(BACKGROUND_CONTEXT)
     if (wasBusy) this.tracker.settleAborted(id)
+    else this.tracker.clearQueuedTracking(id)
     this.o.evictHandledToolCalls(id)
   }
 

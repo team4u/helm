@@ -161,11 +161,14 @@ export class ConversationRewind {
     replaceFromEntryId: number,
     newInput: RewindNewInput,
   ): Promise<{ submissionId: string }> {
-    // 异步准备阶段（事务外）：用户已授权历史编辑中止当前回合。
-    if (this.host.tracker.hasLiveWork(id)) {
+    // 异步准备阶段（事务外）：用户已授权历史编辑中止当前回合或进行中的精简任务。
+    const hadLiveRun = this.host.tracker.hasLiveWork(id)
+    if (hadLiveRun || this.host.tracker.isCompacting(id)) {
       await this.host.abortConversation(id)
       await conversation.waitForIdle(BACKGROUND_CONTEXT)
-      await this.host.tracker.waitTurnSettled(id)
+      if (hadLiveRun) {
+        await this.host.tracker.waitTurnSettled(id)
+      }
     }
     // 挂起 Ask 销单为 superseded：被覆盖回合的审批卡不再有效；
     // 取消失败如实上抛（诚实纪律：绝不 .catch 吞错）。

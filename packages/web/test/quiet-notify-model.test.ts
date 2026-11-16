@@ -18,7 +18,10 @@ import {
   shouldDeliverQuietNotification,
   WAITING_NOTIFICATION_TITLE,
 } from '../src/shell/quiet-notify-model.js'
-import type { ConversationBackgroundIndex } from '../src/shell/background-activity-model.js'
+import {
+  summarizeConversationBackgroundActivity,
+  type ConversationBackgroundIndex,
+} from '../src/shell/background-activity-model.js'
 
 function conv(partial: Partial<ConversationSummary> & { id: number }): ConversationSummary {
   return {
@@ -123,6 +126,64 @@ test('badge doc 未知与会话 working 并存时机器确实在途（正向事�
   })
   assert.equal(snap.quiet, false)
   assert.deepEqual([...snap.activeConversationIds], [1])
+})
+
+test('contextUsage.compacting=true 计入机器活动（quiet=false），精简完成后才转安静并允许结算通知', { timeout: 60_000 }, () => {
+  const compactingConvs = [
+    conv({ id: 7, title: '长会话', status: 'idle', contextUsage: { tokens: 4000, compacting: true }, updatedAt: 1000 }),
+  ]
+  const compactingBg = summarizeConversationBackgroundActivity({
+    panels: [],
+    conversations: compactingConvs,
+    pluginDocs: {},
+  })
+  const busySnap = resolveActivitySnapshot({
+    conversations: compactingConvs,
+    background: compactingBg,
+  })
+  assert.equal(busySnap.quiet, false, '上下文精简进行中不得误报机器安静')
+  assert.deepEqual([...busySnap.activeConversationIds], [7])
+
+  // blocked + compacting=true：精简是机器活动，仍然阻止安静
+  const blockedCompacting = [
+    conv({ id: 8, title: '待审批且精简', status: 'blocked', contextUsage: { tokens: 4000, compacting: true } }),
+  ]
+  const blockedSnap = resolveActivitySnapshot({
+    conversations: blockedCompacting,
+    background: summarizeConversationBackgroundActivity({
+      panels: [],
+      conversations: blockedCompacting,
+      pluginDocs: {},
+    }),
+  })
+  assert.equal(blockedSnap.quiet, false)
+  assert.deepEqual([...blockedSnap.activeConversationIds], [8])
+  assert.deepEqual([...blockedSnap.blockedConversationIds], [8])
+
+  // 精简完成（compacting 清除）后转安静，周期累计会话 7 可正常组装通知
+  const finishedConvs = [
+    conv({ id: 7, title: '长会话', status: 'idle', contextUsage: { tokens: 1200, compacting: false }, updatedAt: 2000 }),
+  ]
+  const quietSnap = resolveActivitySnapshot({
+    conversations: finishedConvs,
+    background: summarizeConversationBackgroundActivity({
+      panels: [],
+      conversations: finishedConvs,
+      pluginDocs: {},
+    }),
+  })
+  assert.equal(quietSnap.quiet, true)
+  assert.equal(quietSnap.activeConversationIds.size, 0)
+
+  const draft = composeQuietNotification({
+    accumulatedConversationIds: busySnap.activeConversationIds,
+    blockedConversationIds: quietSnap.blockedConversationIds,
+    conversations: finishedConvs,
+  })
+  assert.ok(draft)
+  assert.equal(draft.title, QUIET_NOTIFICATION_TITLE)
+  assert.equal(draft.body, '#7 长会话')
+  assert.equal(draft.primaryConversationId, 7)
 })
 
 // ---------------------------------------------------------------------------

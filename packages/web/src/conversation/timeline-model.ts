@@ -161,6 +161,8 @@ export interface DividerItem {
   key: string
   entryId: string
   divider: 'reset' | 'compaction'
+  /** true = 正在进行中的上下文精简（尚未落库 pi.compaction）。 */
+  pending?: boolean
   /** pi.reset 携带的交接摘要（可展开查看）。 */
   handoff?: string
   /** pi.compaction 的精简摘要（仅模型层保留，UI 默认不展开）。 */
@@ -280,6 +282,8 @@ export interface BuildTimelineOptions {
   live?: ConversationLive
   /** 会话是否处于 working 执行态（首 token 前与工具轮间隙保持当前回合活跃）。 */
   working?: boolean
+  /** 会话是否正在执行上下文精简（在回合之后、排队输入之前插入 pending 分割线）。 */
+  compacting?: boolean
   timelineRenderers?: ReadonlyArray<QualifiedRenderer>
   toolViews?: ReadonlyArray<QualifiedToolView>
 }
@@ -1073,6 +1077,16 @@ export function buildTimelineItems(
     mergeLiveIntoTurn(turn, options.live, options)
   }
   flushTurn(turn, items, isLive)
+
+  if (options.compacting === true) {
+    items.push({
+      kind: 'divider',
+      key: 'divider:compacting',
+      entryId: 'compacting:live',
+      divider: 'compaction',
+      pending: true,
+    })
+  }
 
   // 正式 entry 优先于队列快照，避免交接期间同一 input 展示两次。
   for (const q of options.live?.queuedInputs ?? []) {

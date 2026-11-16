@@ -57,16 +57,19 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
 
   const live = store.conversationLives[conversationId]
   const isWorking = conversation?.status === 'working'
+  const isCompacting = conversation?.contextUsage?.compacting === true
+  const compactPending = actionPending === 'compact' || isCompacting
   const detailEntries = detail?.entries ?? []
   const timelineItems = useMemo(
     () =>
       buildTimelineItems(detailEntries, {
         ...(live !== undefined ? { live } : {}),
         working: isWorking,
+        compacting: isCompacting,
         timelineRenderers: store.groupedUi.timelineRenderers,
         toolViews: store.groupedUi.toolViews,
       }),
-    [detailEntries, live, isWorking, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
+    [detailEntries, live, isWorking, isCompacting, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
   )
   const outlineNodes = useMemo(
     () => buildConversationOutline(timelineItems, { latestAssistantTurnFailed: conversation?.status === 'error' }),
@@ -447,14 +450,18 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     className="popover-item"
-                    disabled={actionPending !== null}
+                    disabled={actionPending !== null || isCompacting}
                     onSelect={() => {
                       void runAction('compact', () => conversationsApi.compact(conversationId), '精简任务已提交')
                     }}
                   >
                     <span className="pane-more-item-label">
-                      <HelmIcon name={actionPending === 'compact' ? 'loader' : 'archive'} size={13} />
-                      精简上下文 (/compact)
+                      <HelmIcon
+                        name={compactPending ? 'loader' : 'archive'}
+                        size={13}
+                        className={compactPending ? 'spin-slow' : undefined}
+                      />
+                      {isCompacting ? '正在精简上下文…' : '精简上下文 (/compact)'}
                     </span>
                   </DropdownMenuItem>
                   {canManageArchive && (

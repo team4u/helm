@@ -27,6 +27,7 @@ import {
   attachmentsOfEditTarget,
   draftVersionOf,
   isHistoricalEdit,
+  parseCompactSlashCommand,
   shouldRestoreEditOnFailure,
   type ComposerDraftVersion,
   type PendingAttachment,
@@ -282,9 +283,19 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
         .catch((err: unknown) => notifyError('重置上下文失败', err))
       return true
     }
-    if (cmd === '/compact') {
+    const compactCmd = parseCompactSlashCommand(cmd)
+    if (compactCmd !== null) {
+      if (conversation.contextUsage?.compacting === true) {
+        store.pushNotice({
+          type: 'notification',
+          level: 'info',
+          title: '上下文精简正在进行中',
+          conversationId: conversation.id,
+        })
+        return true
+      }
       void conversationsApi
-        .compact(conversation.id)
+        .compact(conversation.id, compactCmd.instructions)
         .then(() => {
           store.pushNotice({ type: 'notification', level: 'info', title: '精简任务已提交', conversationId: conversation.id })
         })

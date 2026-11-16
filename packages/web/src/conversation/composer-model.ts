@@ -46,9 +46,20 @@ export function sameDraftVersion(a: ComposerDraftVersion, b: ComposerDraftVersio
     && a.attachments.every((id, i) => id === b.attachments[i])
 }
 
+/** 解析 `/compact` 与可选压缩指令（`/compact <instructions>`）；非 `/compact` 命令返回 null。 */
+export function parseCompactSlashCommand(payload: string): { instructions?: string } | null {
+  const trimmed = payload.trim()
+  if (trimmed === '/compact') return {}
+  if (trimmed.startsWith('/compact ') || trimmed.startsWith('/compact\t') || trimmed.startsWith('/compact\n')) {
+    const rest = trimmed.slice('/compact'.length).trim()
+    return rest !== '' ? { instructions: rest } : {}
+  }
+  return null
+}
+
 /** 会话内管理命令：非编辑输入时立即执行；编辑态正文中只是被编辑消息的文本。 */
 export function isSessionManageCommand(payload: string): boolean {
-  return payload === '/new' || payload === '/clear' || payload === '/compact'
+  return payload === '/new' || payload === '/clear' || parseCompactSlashCommand(payload) !== null
 }
 
 /** 发送失败后是否恢复编辑态：仅当 Composer 仍处于乐观清空后的期望状态
