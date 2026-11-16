@@ -155,7 +155,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       // 声明：全部新字段进入 inputSchema（模型可见）。
       assert.ok(declared, 'before_turn 应捕获 subagent 声明')
       const props = declared!.inputSchema['properties'] as Record<string, unknown>
-      for (const field of ['agentType', 'cwd', 'isolation', 'resume', 'model', 'effort']) {
+      for (const field of ['agentType', 'cwd', 'isolation', 'resume', 'model', 'effort', 'fork']) {
         assert.ok(props[field], `subagent 声明应含 ${field}`)
       }
       const isolationSchema = props['isolation'] as { enum?: unknown[] }

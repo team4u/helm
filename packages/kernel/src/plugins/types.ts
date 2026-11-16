@@ -69,6 +69,7 @@ export interface PluginHostBackend
     | 'dispatchTrigger'
     | 'submitInput'
     | 'createConversation'
+    | 'forkConversation'
     | 'listConversations'
     | 'getConversation'
     | 'getConversationDetail'

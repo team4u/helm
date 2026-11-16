@@ -12,6 +12,9 @@ import { defineExtension, defineTool, type Extension, type ToolRegistration } fr
 import { HelmError } from '@helm/protocol'
 import { validateOrThrow } from '../plugins/schema.js'
 
+/** 原生 subagent 结构化输出扩展名称（供安装与 fork 剥离共用）。 */
+export const STRUCTURED_OUTPUT_EXTENSION_NAME = 'helm-structured-output'
+
 /** 单会话结构化输出任务槽：schema + 已接受结果（undefined = 尚未接受）。 */
 export interface StructuredOutputSession {
   schema: Record<string, unknown>
@@ -84,7 +87,7 @@ export function buildStructuredOutputExtension(sessions: Map<number, StructuredO
       }
     },
   }) as ToolRegistration
-  return defineExtension({ name: 'helm-structured-output', tools: [tool] }) as Extension
+  return defineExtension({ name: STRUCTURED_OUTPUT_EXTENSION_NAME, tools: [tool] }) as Extension
 }
 
 /** 声明边界即拒绝 $async：AJV 异步校验返回 Promise，同步 boolean 判断会

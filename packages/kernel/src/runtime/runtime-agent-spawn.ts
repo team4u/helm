@@ -29,7 +29,13 @@ import type { HookBridge } from './hook-bridge.js'
 import type { ModelRegistry } from './model-registry.js'
 import { buildSpawnHost } from './spawn-host.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
-import { resolveSpawnTargetChain } from './spawn-target.js'
+import {
+  assertSpawnForkFields,
+  resolveCleanForkAnchor,
+  resolveForkMode,
+  resolveInheritedModelOverride,
+} from './spawn-fork.js'
+import { resolveSpawnTargetChain, resolveSpawnTargetNodeId } from './spawn-target.js'
 import {
   agentGateResultMissingError,
   sanitizeAgentExecutionInfo,
@@ -158,6 +164,7 @@ export class RuntimeAgentSpawn {
       agentId: request.agentId ?? 'subagent',
       field: 'spawn request meta',
     })
+    const preResolvedForkAnchor = await this.preflightForkRequest(request)
     const token = randomUUID()
     if (request.resume !== undefined) {
       const resumeId = /^\d+$/.test(request.resume) ? Number(request.resume) : this.agentSessions.get(request.resume)
@@ -194,7 +201,7 @@ export class RuntimeAgentSpawn {
       },
     }
     try {
-      const result = await this.spawnAgentObserved(observed)
+      const result = await this.spawnAgentObserved(observed, preResolvedForkAnchor)
       if (request.schema !== undefined) {
         // 跨插件边界终校验：原生行内部的自息/工具校验不因接管（handled）或
         // 钩子改写而存在，最终产物必须在此重新过一遍 Schema（不可删）。
@@ -215,7 +222,49 @@ export class RuntimeAgentSpawn {
     }
   }
 
-  async spawnAgentObserved(request: AgentSpawnRequest): Promise<unknown> {
+  /** fork 请求前置校验与锚点锁定（入口预检与钩子 transform 终检共用）。 */
+  private async preflightForkRequest(request: AgentSpawnRequest): Promise<number | undefined> {
+    assertSpawnForkFields(request)
+    if (request.fork !== true) return undefined
+    if ((request.agentType ?? '').includes(':')) {
+      throw new HelmError(
+        'unsupported_runtime',
+        `fork 仅支持原生 Profile 子会话，不支持外部运行时 '${request.agentType}'`,
+        400,
+        { agentType: request.agentType },
+      )
+    }
+    const parentMeta = this.deps.store.getConv(request.parentConversationId)
+    if (parentMeta === undefined) {
+      throw new HelmError(
+        'not_found',
+        `父会话 ${request.parentConversationId} 不存在，无法执行 fork 派生`,
+        404,
+        { parentConversationId: request.parentConversationId },
+      )
+    }
+    const { profileId: effectiveProfileId } = resolveForkMode(request.agentType, true, parentMeta.profileId)
+    const profile = await this.deps.conversations.readProfile(effectiveProfileId)
+    if (profile === undefined) {
+      throw new HelmError(
+        'not_found',
+        `agentType '${effectiveProfileId}' 不是已注册的 Profile（profiles/${effectiveProfileId} 不存在）`,
+        404,
+        { agentType: effectiveProfileId },
+      )
+    }
+    if (profile.runtime !== undefined) {
+      throw new HelmError(
+        'unsupported_runtime',
+        `Profile '${effectiveProfileId}' 声明外部运行时 runtime.kind='${profile.runtime.kind}'（agent '${profile.runtime.agent}'），fork 仅支持原生 Profile 子会话`,
+        400,
+        { agentType: effectiveProfileId, runtimeKind: profile.runtime.kind },
+      )
+    }
+    return resolveCleanForkAnchor(this.deps.harness, request.parentConversationId)
+  }
+
+  async spawnAgentObserved(request: AgentSpawnRequest, preResolvedForkAnchor?: number): Promise<unknown> {
     // 附件门禁在进入 hook 链之前：agent_spawn 钩子与原生执行行均受统一授权
     // 保护（产物存在 + 父会话链归属）；插件 next 改写后再校验一次。
     if (request.attachments !== undefined && request.attachments.length > 0) {
@@ -225,12 +274,25 @@ export class RuntimeAgentSpawn {
     // next 后收敛）；handled 仍可完全接管；无插件时直接默认原生执行。
     return this.deps.hookBridge.runHookAround('agent_spawn', request, async (finalRequest) => {
       // envelope 边界（around 最终请求）：钩子链 transform/continuation 改写
-      // 后的 meta 在进入执行（原生行或接管插件）之前统一复验——入口校验不
-      // 覆盖中间窗口，这里与原生执行行入口的复查互为冗余防线。
+      // 后的 meta 与 fork 关键参数在进入原生执行之前统一复验，防止钩子
+      // 翻开 fork / 替换目标或绕过前置校验。
       sanitizeAgentNamespacedMeta(finalRequest.meta, {
         agentId: finalRequest.agentId ?? request.agentId ?? 'subagent',
         field: 'spawn request meta',
       })
+      assertSpawnForkFields(finalRequest)
+      const forkChanged =
+        request.fork !== true ||
+        finalRequest.agentType !== request.agentType ||
+        finalRequest.parentConversationId !== request.parentConversationId ||
+        finalRequest.resume !== undefined
+      let resolvedAnchor =
+        !forkChanged && preResolvedForkAnchor !== undefined
+          ? preResolvedForkAnchor
+          : undefined
+      if (finalRequest.fork === true && (forkChanged || preResolvedForkAnchor === undefined)) {
+        resolvedAnchor = await this.preflightForkRequest(finalRequest)
+      }
       if (
         finalRequest.attachments !== undefined &&
         finalRequest.attachments.length > 0 &&
@@ -283,6 +345,13 @@ export class RuntimeAgentSpawn {
             },
             registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, parentToolCallId, thinkingLevelOverride) => {
               const profile = await this.deps.conversations.readProfile(profileId)
+              const parentMeta = this.deps.store.getConv(parentId)
+              const { forkSameProfile } = resolveForkMode(profileId, finalRequest.fork, parentMeta?.profileId)
+              const inheritedModelOverride = resolveInheritedModelOverride(
+                finalRequest.model,
+                forkSameProfile,
+                parentMeta?.modelOverride,
+              )
               const now = Date.now()
               this.deps.store.upsertConv({
                 id: childId,
@@ -291,14 +360,16 @@ export class RuntimeAgentSpawn {
                 tags,
                 parentConversationId: parentId,
                 ...(parentToolCallId !== undefined && parentToolCallId !== '' ? { parentToolCallId } : {}),
-                nodeId: nodeId ?? profile?.nodeId ?? this.deps.store.getConv(parentId)?.nodeId ?? 'local',
+                nodeId: nodeId ?? resolveSpawnTargetNodeId(profile?.nodeId, parentMeta?.nodeId, forkSameProfile),
                 cwd: childCwd,
                 model: modelMirror,
                 thinkingLevel: thinkingLevel ?? '',
-                // 收敛后的显式覆盖（原生执行行已按目标模型能力 clamp）；
+                // 收敛后的显式覆盖（原生执行行已按目标模型能力 clamp，或同角色 fork 继承）；
                 // 未显式指定时保持继承链语义（不存 override）。
                 ...(thinkingLevelOverride !== undefined ? { thinkingLevelOverride } : {}),
-                ...(finalRequest.model !== undefined && finalRequest.model !== '' ? { modelOverride: finalRequest.model } : {}),
+                ...(inheritedModelOverride !== undefined && inheritedModelOverride !== ''
+                  ? { modelOverride: inheritedModelOverride }
+                  : {}),
                 unread: false,
                 pinned: false,
                 stateChangeSeq: 1,
@@ -312,6 +383,10 @@ export class RuntimeAgentSpawn {
                 this.deps.events.publish('conversation.upsert', this.deps.conversations.withOwnership(this.deps.tracker.summaryOf(childId)))
               }
             },
+            resolveForkAnchor: (parentId: number) =>
+              resolvedAnchor !== undefined && parentId === finalRequest.parentConversationId
+                ? Promise.resolve(resolvedAnchor)
+                : resolveCleanForkAnchor(this.deps.harness, parentId),
             bindChildToolCall: (childId, parentToolCallId) => {
               const meta = this.deps.store.getConv(childId)
               if (meta === undefined || meta.parentToolCallId === parentToolCallId) return
@@ -375,6 +450,7 @@ export class RuntimeAgentSpawn {
     parentConversationId: number
     profileId?: string
     requestCwd?: string
+    fork?: boolean
   }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }> {
     const parent = this.deps.store.getConv(input.parentConversationId)
     if (parent === undefined) {
@@ -382,13 +458,13 @@ export class RuntimeAgentSpawn {
         parentConversationId: input.parentConversationId,
       })
     }
-    const profileId = input.profileId ?? 'assistant'
+    const { profileId, forkSameProfile } = resolveForkMode(input.profileId, input.fork, parent.profileId)
     const profile = await this.deps.conversations.readProfile(profileId)
     if (profile === undefined) {
       throw new HelmError('not_found', `agentType '${profileId}' 不是已注册的 Profile（profiles/${profileId} 不存在）`, 404)
     }
-    // 源 cwd（request > profile > parent > Hub 缺省）按目标节点平台统一收口：
-    // worktree 源目录解析（builtin:workflow 等 continuation 消费方）拿到的
+    // 源 cwd 按目标节点平台统一收口（同角色 fork 为 request > parent > profile > Hub 缺省，
+    // 其余为 request > profile > parent > Hub 缺省）：worktree 源目录解析拿到的
     // 是规范化后的路径；win32 目标上不可映射的 POSIX cwd 显式拒绝；远端
     // 平台无可信信息时透传。parentCwd 是父会话镜像事实，原样返回。
     const { nodeId, sourceCwd } = resolveSpawnTargetChain({
@@ -398,6 +474,7 @@ export class RuntimeAgentSpawn {
       profileCwd: profile.cwd,
       parentCwd: parent.cwd,
       defaultCwd: this.deps.toolDeps.defaultCwd,
+      forkSameProfile,
       normalize: (cwd, targetNodeId) =>
         normalizeSessionCwd(cwd, {
           nodeId: targetNodeId,

@@ -266,10 +266,11 @@ export class HerdrExecutor {
       const candidates = this.registry.findByResumeRef(request.resume)
       if (candidates.length === 0) {
         // 非本插件记录：原生 resume（conversationId）交还内核——原生
-        // passthrough 不受 Herdr 的 gateTimeoutMs 限制影响；显式 herdr
+        // passthrough 不受 Herdr 的 gateTimeoutMs / fork 限制影响；显式 herdr
         // 运行时的 resume 绝不静默新建续接窗格。
         const routing = await resolveSpawnRouting(request.agentType, this.deps.profiles)
         if (routing === undefined) return { action: 'continue' }
+        this.assertNoFork(request)
         this.assertNoGateTimeout(request)
         throw new HelmError(
           'not_found',
@@ -278,13 +279,15 @@ export class HerdrExecutor {
           { resumeRef: request.resume },
         )
       }
-      // 已登记的 Herdr 窗格续接：先识别为受管 resume 再拒绝 gateTimeoutMs。
+      // 已登记的 Herdr 窗格续接：先识别为受管 resume 再拒绝 fork/gateTimeoutMs。
+      this.assertNoFork(request)
       this.assertNoGateTimeout(request)
       const outcome = await this.resumeInto(request, candidates)
       return { action: 'handled', result: outcome }
     }
     const routing = await resolveSpawnRouting(request.agentType, this.deps.profiles)
     if (routing === undefined) return { action: 'continue' }
+    this.assertNoFork(request)
     this.assertNoGateTimeout(request)
     assertNoUnsupportedOverrides(request.model, request.effort)
     if (request.signal?.aborted) {
@@ -294,6 +297,26 @@ export class HerdrExecutor {
     this.assertAttachmentsReachable(request, target, routing)
     const result = await this.spawnNew(request, routing, target)
     return { action: 'handled', result }
+  }
+
+  /**
+   * Herdr 运行时的 fork 显式拒绝（仅在请求已识别为 Herdr 处理路径后调用；
+   * 原生 passthrough 不经此处，不受影响）。外部终端 CLI 窗格无法继承父会话
+   * 上下文进行分叉，忽略 fork 将导致新建空白窗格，违反诚实性红线。
+   */
+  private assertNoFork(request: AgentSpawnRequest): void {
+    if (request.fork === undefined || request.fork === false) return
+    if (typeof request.fork !== 'boolean') {
+      throw new HelmError('validation_error', `fork 必须为 boolean（收到 ${typeof request.fork}）`, 400, {
+        fork: request.fork,
+      })
+    }
+    throw new HelmError(
+      'unsupported_runtime',
+      'Herdr 外部运行时不支持 fork（上下文分叉派生仅支持原生 Profile 子会话）；请移除 fork 或改用原生 Profile',
+      400,
+      { ...(request.agentType !== undefined ? { agentType: request.agentType } : {}) },
+    )
   }
 
   /**

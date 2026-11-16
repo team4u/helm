@@ -132,16 +132,16 @@ Helm 内核只保留四块通用机制——`pi-durable` 持久会话状态机�
 | :--- | :--- | :--- |
 | 外部事件 | `dispatchTrigger(envelope)` | 投递防逃逸信封进 `trigger` 管道 |
 | 输入与会话 | `submitInput(id, text, opts)` / `submitInputGuarded(id, text, opts, guard)` | `requestId` 支持跨重启幂等提交；`origin: human/agent/trigger`；`whenBusy: steer/followUp/reject`；`submitInputGuarded` 在提交点原子复核归属（严禁 human）与 CAS 水位 |
-| 会话管理 | `createConversation / listConversations / getConversation / getConversationDetail / updateConversation / abortConversation / abortConversationGuarded` | 全套会话生命周期；`abortConversationGuarded` 在首个不可逆动作前原子复核归属与水位；`manageConversation` 声明删除保护（`409 conversation_managed_by_plugin`）；`markConversationOwnership` 标记归属权 |
+| 会话管理 | `createConversation / forkConversation / listConversations / getConversation / getConversationDetail / updateConversation / abortConversation / abortConversationGuarded` | 全套会话生命周期；`forkConversation` 从指定可见条目热分叉新会话（与 HTTP fork 同源）；`abortConversationGuarded` 在首个不可逆动作前原子复核归属与水位；`manageConversation` 声明删除保护（`409 conversation_managed_by_plugin`）；`markConversationOwnership` 标记归属权 |
 | 人机审批 | `createAsk / cancelAsk / registerAskSeqResolver` | AskDoc 创建与 CAS 水位解析器注册 |
-| 子代理与执行 | `spawnAgent / runGate / execEnv / resolveSpawnTarget / listActiveSpawnExecutions / withFileMutationQueue` | `agent_spawn` 管道派生、门禁命令、跨节点执行（复用 EnvFabric 与脱敏） |
+| 子代理与执行 | `spawnAgent / runGate / execEnv / resolveSpawnTarget / listActiveSpawnExecutions / withFileMutationQueue` | `agent_spawn` 管道派生（支持 `fork: true` 上下文分叉）、门禁命令、跨节点执行（复用 EnvFabric 与脱敏） |
 | 动作互调与插件治理 | `prepareAction / invokeAction / listActions / plugins` | 跨插件动作 preflight 与执行；`ctx.host.plugins` 提供受管包生命周期（`list / listUi / doctor / install / update / remove / enable / disable`，拦截自指修改） |
 | 资产端口 | `profiles / skills / secrets` | Profile 读写与 SYSTEM.md、技能受管自举、插件私有机密（credentials.json `pluginSecrets.<pluginId>`，恒 0600） |
 | 节点与文件 | `nodeIpc / nodeFetch / openTunnel / executionEnv / withFileLock / atomicWriteFile / buildSpawnEnv` | 跨节点 IPC 桥（Herdr 用）、节点 HTTP(S) 透传 `fetch`（任意 host，跨节点访问节点视角的 HTTP/HTTPS/SSE 服务）、任意 TCP 透传隧道（原始 Duplex）、目标节点执行环境、文件锁与原子写 |
 | 通用机制 | `redact / completeText / refreshModels / listPlugins / listUi / setConfig / isClosing` | 脱敏、无工具单次文本补全、目录刷新、清单读取、自身配置更新 |
 | 事件 | `onEvent(type, listener) / emitEvent(type, payload, opts)` | 订阅 `workflow.settled`、`conversation.entry` 等事件；`broadcast: false` 仅进程内分发；插件停用自动解除订阅 |
 
-`executionEnv` 提供真实节点文件系统探测，不另设文件存在性包装 API。`resolveSpawnTarget` 与原生派生使用同一个权威解析函数，避免隔离插件与执行行对目标节点、目录的继承规则产生分歧。
+`executionEnv` 提供真实节点文件系统探测，不另设文件存在性包装 API。`resolveSpawnTarget` 与原生派生使用同一个权威解析函数（含同角色/跨角色 `fork` 继承链），避免隔离插件与执行行对目标节点、目录的继承规则产生分歧。
 
 `nodeFetch` 返回的响应体属于调用方的在途资源：消费至 EOF、显式取消或传输失败后才结束跟踪。弃置而不关闭的响应仍然占用任务，插件停用与重载返回 `409 plugin_has_live_tasks`；宿主关闭时拆除底层传输。框架不依赖 GC 终结器判断资源是否结束。
 

@@ -81,10 +81,17 @@ export async function spawnWithWorktree(
   next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
 ): Promise<unknown> {
   // 最终节点与源目录解析（内核权威：与原生执行行同构链；IO/不存在错误如实上抛）。
-  const profileId = request.agentType || 'assistant'
+  const explicitProfileId = request.agentType !== undefined && request.agentType !== '' ? request.agentType : undefined
   const target = await ctx.deps.host.resolveSpawnTarget({
     parentConversationId: request.parentConversationId,
-    profileId,
+    ...(request.fork === true
+      ? {
+          fork: true,
+          ...(explicitProfileId !== undefined ? { profileId: explicitProfileId } : {}),
+        }
+      : {
+          profileId: explicitProfileId ?? 'assistant',
+        }),
     ...(request.cwd !== undefined ? { requestCwd: request.cwd } : {}),
   })
   const sourceCwd = target.sourceCwd

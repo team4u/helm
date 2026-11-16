@@ -70,13 +70,18 @@ export function registerSubagentTool(
       '只有紧接着的下一步必须依赖子代理结果、期间没有其他工作时，才显式指定 background:false 同步等待。',
     ],
     description:
-      '派生一个子代理。人类交互会话缺省后台执行：执行环境就绪后立即返回 runId，后台完成后向本会话 followUp 汇报；自动化会话（受管子代理/驻留 Worker/触发会话，归属 bot/helm）缺省同步等待最终结果，显式 background=true 会被拒绝——后台汇报会驱动自动化调用方早结算。显式 background:false 可强制同步等待：同步运行同样有 durable WorkflowRun（可经 workflows detach 动作或界面「转入后台」按 runId 转后台，调用立即返回后台句柄）。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、isolation:worktree、model、effort、maxSubagentDepth（显式授予子树派生深度上限，1..5，缺省继承当前上限 2）；凭 execution.conversationId/executionId 作为 resume 续接。外部运行时窗格缺省不携带任何父会话机密，需注入时用 secretNames 逐名授予。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
+      '派生一个子代理。人类交互会话缺省后台执行：执行环境就绪后立即返回 runId，后台完成后向本会话 followUp 汇报；自动化会话（受管子代理/驻留 Worker/触发会话，归属 bot/helm）缺省同步等待最终结果，显式 background=true 会被拒绝——后台汇报会驱动自动化调用方早结算。显式 background:false 可强制同步等待：同步运行同样有 durable WorkflowRun（可经 workflows detach 动作或界面「转入后台」按 runId 转后台，调用立即返回后台句柄）。agentType 为 Profile ID 或外部运行时标识（如 herdr:agy）；schema 校验输出，gate 在实际节点和工作目录中验收。支持 cwd、fork（从父会话当前已完成上下文分叉派生原生子会话，缺省 agentType 继承父会话角色与上下文/目录/模型配置，与 resume 互斥，不支持外部运行时）、isolation:worktree、model、effort、maxSubagentDepth（显式授予子树派生深度上限，1..5，缺省继承当前上限 2）；凭 execution.conversationId/executionId 作为 resume 续接。外部运行时窗格缺省不携带任何父会话机密，需注入时用 secretNames 逐名授予。result 与执行元数据独立；检视或合入后可用 cleanup_worktree 清理受管工作树。',
     inputSchema: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: '子代理任务指令' },
-        agentType: { type: 'string', description: 'Profile ID 或外部运行时标识（缺省 assistant）' },
+        agentType: { type: 'string', description: 'Profile ID 或外部运行时标识（非 fork 缺省 assistant；fork=true 缺省继承父会话 Profile）' },
         cwd: { type: 'string', description: '子代理工作目录（绝对路径；缺省用 Profile/会话缺省）' },
+        fork: {
+          type: 'boolean',
+          description:
+            '从父会话当前已完成上下文分叉派生原生子会话（可选，缺省 false；与 resume 互斥）。仅原生 Profile 子会话支持，外部运行时（如 herdr:）显式拒绝。缺省 agentType 时继承父会话角色与工作目录/模型配置；需要独立盲审或全新视角时勿开启',
+        },
         background: {
           type: 'boolean',
           description: '后台执行（执行环境就绪后返回运行句柄，完成后向本会话汇报）。人类交互会话缺省 true；自动化会话缺省 false 且显式 true 被拒绝',
@@ -146,6 +151,15 @@ export function registerSubagentTool(
       if (a['background'] !== undefined && typeof a['background'] !== 'boolean') {
         return envelopeError('subagent_failed: background 必须为 boolean', 'invalid background: 必须为 boolean')
       }
+      if (a['fork'] !== undefined && typeof a['fork'] !== 'boolean') {
+        return envelopeError('subagent_failed: fork 必须为 boolean', 'invalid fork: 必须为 boolean')
+      }
+      if (a['fork'] === true && a['resume'] !== undefined) {
+        return envelopeError(
+          'subagent_failed: fork 与 resume 互斥，不能同时从父会话分叉并续接既有子会话',
+          'fork 与 resume 互斥',
+        )
+      }
       // background 缺省与显式拒绝（权威 ownership 判定，非角色枚举）。
       const backgroundChoice = resolveBackground(
         context.conversationId,
@@ -161,6 +175,7 @@ export function registerSubagentTool(
         prompt: String(a['prompt']),
         ...(a['agentType'] !== undefined ? { agentType: String(a['agentType']) } : {}),
         ...(a['cwd'] !== undefined ? { cwd: String(a['cwd']) } : {}),
+        ...(a['fork'] === true ? { fork: true } : {}),
         ...(a['isolation'] !== undefined ? { isolation: 'worktree' } : {}),
         ...(a['schema'] !== undefined ? { schema: a['schema'] as Record<string, unknown> } : {}),
         ...(a['gate'] !== undefined ? { gate: String(a['gate']) } : {}),

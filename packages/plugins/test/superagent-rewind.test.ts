@@ -139,6 +139,19 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
       conversations.set(id, summary)
       return summary
     },
+    async forkConversation(id, opts) {
+      const source = conversations.get(id)
+      if (!source) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+      const nextId = Math.max(0, ...conversations.keys()) + 1
+      const forked = makeConversation(nextId, {
+        title: opts.title ?? `${source.title} (分叉)`,
+        profileId: source.profileId,
+        tags: [...source.tags],
+        parentConversationId: id,
+      })
+      conversations.set(nextId, forked)
+      return forked
+    },
     listConversations() { return [...conversations.values()] },
     getConversation(id) {
       const found = conversations.get(id)

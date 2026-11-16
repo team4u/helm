@@ -113,6 +113,10 @@ class StopWindowBackend implements PluginHostBackend {
     this.record('createConversation')
     return makeConversation(99)
   }
+  async forkConversation(id: number): Promise<ConversationSummary> {
+    this.record('forkConversation')
+    return makeConversation(id + 100)
+  }
   listConversations(): ConversationSummary[] {
     this.record('listConversations')
     return [...this.conversations.values()]

@@ -88,6 +88,7 @@ function doctorBackend(): PluginHostBackend {
     submitInput: () => unavailable('host.submitInput'),
     submitInputGuarded: () => unavailable('host.submitInputGuarded') as never as Promise<void>,
     createConversation: () => unavailable('host.createConversation'),
+    forkConversation: () => unavailable('host.forkConversation'),
     listConversations: () => unavailable('host.listConversations'),
     getConversation: () => unavailable('host.getConversation'),
     getConversationDetail: () => unavailable('host.getConversationDetail'),

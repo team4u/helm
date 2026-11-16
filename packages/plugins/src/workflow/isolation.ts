@@ -48,6 +48,7 @@ export interface WorktreeIsolationDeps {
       parentConversationId: number
       profileId?: string
       requestCwd?: string
+      fork?: boolean
     }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }>
     execEnv(
       req: { command: string | string[]; nodeId?: string; cwd?: string; timeoutMs?: number },
@@ -64,7 +65,10 @@ export interface WorktreeIsolationDeps {
     listActiveSpawnExecutions(): AgentExecutionInfo[]
     /** 宿主统一文本脱敏（SecretStash：明文机密 -> 标记）。 */
     redact(text: string): string
-    getConversation(id: number): { cwd: string; nodeId?: string; status: string }
+    getConversation(id: number): { cwd: string; nodeId?: string; status: string; profileId?: string }
+    profiles?: {
+      get(id: string): Promise<{ runtime?: unknown } | undefined>
+    }
   }
   /** 插件私有 doc（records 同层持久层；停用保留，重启可读）。 */
   docStore: { get<T>(key: string, initial: T): T; set<T>(key: string, value: T): void; flush(): Promise<void> }
@@ -184,6 +188,19 @@ export class WorktreeIsolation {
     request: AgentSpawnRequest,
     next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
   ): Promise<unknown> {
+    if (request.fork !== undefined && typeof request.fork !== 'boolean') {
+      throw new HelmError('validation_error', `fork 必须为 boolean（收到 ${typeof request.fork}）`, 400, {
+        fork: request.fork,
+      })
+    }
+    if (request.fork === true && request.resume !== undefined) {
+      throw new HelmError(
+        'validation_error',
+        'fork 与 resume 互斥：不能同时从父会话分叉并续接既有子会话',
+        400,
+        { resume: request.resume },
+      )
+    }
     const resumeChildId = request.resume !== undefined ? this.leases.resolveResumeChildId(request) : undefined
     // resume + 已绑定隔离树：严格沿用（无显式 isolation 也不忽略旧绑定）。
     if (resumeChildId !== undefined) {
@@ -201,10 +218,37 @@ export class WorktreeIsolation {
         )
       }
     }
-    // 新建 + isolation：解析最终节点后预分配（外部运行时不预分配）。
+    // 新建 + isolation：在任何 worktree 分配与租约副作用之前拦截外部运行时或非法 fork。
     if (request.isolation === 'worktree') {
       if (isExternalRuntimeAgentType(request.agentType)) {
+        if (request.fork === true) {
+          throw new HelmError(
+            'unsupported_runtime',
+            `fork 仅支持原生 Profile 子会话，不支持外部运行时 '${request.agentType}'`,
+            400,
+            { agentType: request.agentType },
+          )
+        }
         return trackWithoutPreallocation(this.spawnCtx(), request, next)
+      }
+      if (this.deps.host.profiles !== undefined) {
+        const targetProfileId =
+          request.agentType ||
+          (request.fork === true
+            ? (this.deps.host.getConversation(request.parentConversationId).profileId ?? 'assistant')
+            : 'assistant')
+        const profile = await this.deps.host.profiles.get(targetProfileId)
+        if (profile?.runtime !== undefined) {
+          if (request.fork === true) {
+            throw new HelmError(
+              'unsupported_runtime',
+              `Profile '${targetProfileId}' 声明外部运行时，fork 仅支持原生 Profile 子会话`,
+              400,
+              { agentType: targetProfileId },
+            )
+          }
+          return trackWithoutPreallocation(this.spawnCtx(), request, next)
+        }
       }
       return spawnWithWorktree(this.spawnCtx(), request, next)
     }

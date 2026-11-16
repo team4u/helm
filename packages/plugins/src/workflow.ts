@@ -183,7 +183,10 @@ export function createWorkflowPlugin(): PluginDefinition {
           redact: (text) => ctx.host.redact(text),
           getConversation: (id) => {
             const conv = ctx.host.getConversation(id)
-            return { cwd: conv.cwd, nodeId: conv.nodeId, status: conv.status }
+            return { cwd: conv.cwd, nodeId: conv.nodeId, status: conv.status, profileId: conv.profileId }
+          },
+          profiles: {
+            get: (id) => ctx.host.profiles.get(id),
           },
         },
         docStore: worktreeDocStore,
