@@ -1,6 +1,8 @@
 # 原生 JavaScript 编排 DSL 手册
 
-本手册是 Helm 工作流编排 DSL 的权威参考。工作流就是一段普通 JavaScript：脚本在独立的 Worker 线程与 `node:vm` 上下文中执行，所有副作用（派生智能体、调用动作）都以 RPC 消息出走宿主统一记账——这层边界换来两个核心性质：脚本是确定性的（同输入同执行轨迹，可安全前缀重放），且任意时刻可终止（`worker.terminate()` 能停掉自旋或卡死的脚本）。
+本手册面向编写 Helm 工作流的编排开发者，是 DSL 的权威参考：执行模型、全部原语（`agent` / `agent.withMeta` / `goal` / `parallel` / `pipeline` / `action` / `workflow` / `phase` / `log`）、失败语义、确定性约束与资源配额。工作流由 `builtin:workflow` 插件（默认启用）的编排引擎执行；插件的能力全貌见[工作流编排插件](../plugins/workflow.md)，Worktree 隔离与门禁见[Git Worktree 与代码门禁](worktree-and-gate.md)，恢复语义见[状态流水与故障恢复](journaling-recovery.md)。
+
+工作流就是一段普通 JavaScript：脚本在独立的 Worker 线程与 `node:vm` 上下文中执行，所有副作用（派生智能体、调用动作）都以 RPC 消息出走宿主统一记账——这层边界换来两个核心性质：脚本是确定性的（同输入同执行轨迹，可安全前缀重放），且任意时刻可终止（`worker.terminate()` 能停掉自旋或卡死的脚本）。
 
 ## 执行模型与脚本结构
 
@@ -23,8 +25,10 @@ export const meta = {
 变量、函数调用、扩展运算符、模板插值（`${...}`）都是非法的，违规声明会在求值时抛错并拒绝执行。动态输入经全局 `args` 访问，CLI 传入的 JSON 字符串会被自动解包（最多两层，防模型双重序列化）：
 
 ```bash
-helm workflows run ./review.js --args '{"pr": 1024, "strict": true}'
+pnpm helm workflows run ./review.js --args '{"pr": 1024, "strict": true}'
 ```
+
+最小可运行示例见仓库 [`demo/hello-orchestra.workflow.js`](../../demo/hello-orchestra.workflow.js)（并行两路翻译 + 汇总）；进阶示例见 [`docs/workflows/examples/`](examples/)（`cross-review.js` 多视角交叉审查、`module-dev.js` 单模块开发、`arch-master.js` 多模块总控）。
 
 ## 全局注入原语
 
@@ -43,7 +47,7 @@ helm workflows run ./review.js --args '{"pr": 1024, "strict": true}'
 | `label` | `string` | 展示名；同时是本 run 内 `resume` 的引用句柄 |
 | `phase` | `string` | 所属阶段名（覆盖当前 ambient 阶段） |
 | `model` | `string` | 模型覆盖，如 `'provider/model'` |
-| `agentType` | `string` | Profile ID（专家 Bot 标识）或外部运行时标识（如 `herdr:agy`） |
+| `agentType` | `string` | Profile ID（专家角色标识）或外部运行时标识（如 `herdr:agy`） |
 | `isolation` | `'worktree'` | 启用独立 Git Worktree 隔离（唯一合法值） |
 | `gate` | `string` | 验收 shell 命令，退出码非 0 或超时判定失败；完整结果（`exitCode`、`timedOut`）经 `agent.withMeta` 回传 |
 | `resume` | `string` | 续接本 run 内既有智能体的 label |
@@ -56,7 +60,7 @@ helm workflows run ./review.js --args '{"pr": 1024, "strict": true}'
 | `gateTimeoutMs` | `number` | 单次门禁命令超时毫秒数（1_000 .. 600_000 整数，默认 120_000）。仅在设置 `gate` 时有效 |
 | `maxAttempts` | `number` | 失败自动重试次数上限（1 .. 10 整数，默认 1）。配合 `gate` 或 `timeoutMs` 使用；需要 `label`，未传时自动生成 |
 
-选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort`、`cwd` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置；`resume` 沿用原会话的工作目录，不能用 `cwd` 改指他处，需要换目录就新建节点），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, maxSubagentDepth, cwd, timeoutMs, gateTimeoutMs, maxAttempts`。机密授予（`secretNames`）不是 DSL 选项；需要显式授予父会话机密时，使用独立 `subagent` 模型工具的 `secretNames` 参数。
+选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort`、`cwd` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置；需要换目录就新建调用），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, maxSubagentDepth, cwd, timeoutMs, gateTimeoutMs, maxAttempts`。机密授予（`secretNames`）不是 DSL 选项；需要显式授予父会话机密时，使用独立 `subagent` 模型工具的 `secretNames` 参数。
 
 **结构化输出**：配置 `schema` 时宿主为子智能体挂载结构化契约，引擎解析其 JSON 回复并按 Schema 校验，通过则返回原生对象，不通过（非 JSON 或不合契约）返回 `null`：
 
@@ -75,9 +79,9 @@ const result = await agent("提取提交的修改范围与风险点", {
 if (result === null) throw new Error("结构化输出校验失败")
 ```
 
-**跨 Profile 点名**：`agentType` 填真实 Profile ID（如 `reviewer`），不带 `@` 前缀，也不是显示名。用户在会话里写 `@reviewer` 是向当前智能体点名——那只是认知约定，实际执行仍由当前会话经 `subagent` 的 `agentType`（或脚本内 `agent()`）落地，点名本身不构成授权、也不改变派生方会话的生命周期缺省。目标 Profile 的类型（原生或外部运行时）同样不改变生命周期缺省（见 workflow 插件文档「默认后台协同」）。外部运行时标识采用 `namespace:kind` 形式（含冒号），如 `herdr:agy`。
+**跨 Profile 点名**：`agentType` 填真实 Profile ID（如 `reviewer`），不带 `@` 前缀，也不是显示名。用户在会话里写 `@reviewer` 是向当前智能体点名——那只是认知约定，实际执行仍由当前会话经 `subagent` 的 `agentType`（或脚本内 `agent()`）落地，点名本身不构成授权。外部运行时标识采用 `namespace:kind` 形式（含冒号），如 `herdr:agy`。
 
-**同步节点语义**：`agent()` 没有也不接受 `background` 选项——run 内的 DSL 节点始终等待真实结果（可用键固定列表不含 `background`，传未知选项名直接报错）。后台策略发生在工具层：`subagent` / `SubagentWorkflow` 模型工具按当前会话归属缺省（人类直连会话缺省后台、自动化会话缺省同步且显式 `background: true` 被拒绝）；CLI/动作 `helm workflows run` 则是缺省启动即返回、`--wait` 才同步。三个入口互不混同，不要在脚本里期待后台句柄。
+**同步节点语义**：`agent()` 没有也不接受 `background` 选项——run 内的 DSL 节点始终等待真实结果（可用键固定列表不含 `background`，传未知选项名直接报错）。后台策略发生在工具层：`subagent` / `SubagentWorkflow` 模型工具按当前会话归属缺省（人类直连会话缺省后台、自动化会话缺省同步且显式 `background: true` 被拒绝）；CLI/动作 `pnpm helm workflows run` 则是缺省启动即返回、`--wait` 才同步。三个入口互不混同，不要在脚本里期待后台句柄。
 
 **attachments 授权边界**：只允许当前编排会话及其父链有权使用的产物；数组不能包含空 ID、纯空白 ID 或非字符串项（空数组合法，且与未提供在重放指纹上是不同调用）。宿主会校验产物存在性与授权。当前授权不覆盖子会话或兄弟会话——不能把上一个子代理产出的产物 ID 直接转交给下一个子代理，需要交接时先由有权读取的会话显式导出内容，再按接收方有权使用的方式登记。不同节点、目录与 Worktree 之间没有自动文件同步。
 
@@ -135,7 +139,7 @@ const wt = res.execution?.worktree  // { id, path, branch, ... }，后续可据�
 
 ### `parallel(thunks)` 与 `pipeline(items, ...stages)`
 
-`parallel` 接收无参异步函数数组，并发执行全部任务并按原顺序返回结算结果；`pipeline` 接收数据项数组与若干顺序处理函数，对每个 item 依次流过全部 stage（stage 签名为 `(value, item, index)`）。两者容错语义一致：普通失败折叠为 `null`（`parallel` 不影响其余任务；`pipeline` 跳过该 item 的后续 stage），只有致命错误（配额突破、账本失效）才向外抛出。每个分支或 item 有独立恢复路径，`pipeline` 的同一 item 跨 stage 保持该身份；缓存返回速度变化不会把不同 item 的 action 账本混在一起。
+`parallel` 接收无参异步函数数组，并发执行全部任务并按原顺序返回结算结果；`pipeline` 接收数据项数组与若干顺序处理函数，对每个 item 依次流过全部 stage（stage 签名为 `(value, item, index)`）。两者容错语义一致：普通失败折叠为 `null`（`parallel` 不影响其余任务；`pipeline` 跳过该 item 的后续 stage），只有致命错误（配额突破、账本失效）才向外抛出。每个分支或 item 有独立恢复路径，`pipeline` 的同一 item 跨 stage 保持该身份。
 
 ```javascript
 // pipeline：item 在 stage 间流水推进，无需等全部 item 完成第一个 stage
@@ -183,9 +187,9 @@ if (diff.ok) log(diff.output)
 
 ### `workflow(ref, args)`
 
-嵌套调用其他工作流。`ref` 是已保存工作流名字符串，或 `{ scriptPath }` 对象（不提供则抛错）；`args` 原样传给子工作流。子工作流的名字用于进度前缀与错误定位（进度条目会带子工作流派生前缀）。
+嵌套调用其他工作流。`ref` 是已保存工作流名字符串，或 `{ scriptPath }` / `{ name }` 对象（均未提供则抛错）；`args` 原样传给子工作流。子工作流的名字用于进度前缀与错误定位。
 
-嵌套深度上限为 4 层（根工作流为第 0 层），总调用数仍受 `WORKFLOW_NESTED_CAP = 256` 约束。整棵工作流树在同一 Worker 进程内执行，所有 `agent` 与 `action` 节点共用一个 `workflow-<runId>.jsonl` 账本。全局 `index` 记录本次 Run 的审计顺序；恢复按稳定 scope 路径、局部调用序号和尝试序号匹配。中途中断后对根 `runId` 调一次 `resumeFromRunId`，可复用各 scope 的成功前缀；并发模块中一个失败，不会让另一个模块的成功节点和动作重跑。同一 scope 内的调用发起顺序须保持确定。
+嵌套深度上限为 4 层（根工作流为第 0 层），总调用数仍受 `WORKFLOW_NESTED_CAP = 256` 约束。整棵工作流树在同一 Worker 进程内执行，所有 `agent` 与 `action` 节点共用一个 `workflow-<runId>.jsonl` 账本。全局 `index` 记录本次 run 的审计顺序；恢复按稳定 scope 路径、局部调用序号和尝试序号匹配。中途中断后对根 `runId` 调一次 `resumeFromRunId`，可复用各 scope 的成功前缀；并发模块中一个失败，不会让另一个模块的成功节点和动作重跑。同一 scope 内的调用发起顺序须保持确定。
 
 每次 `workflow()` 调用分配递增的 `scopeId`（根工作流为 `0`）。`label` 与 `resume` 以 `${scopeId}:${label}` 为键登记：并发运行的多个子工作流可以各自使用同名 `label`（如 `"plan"`），互不覆盖对方的续接目标。
 
@@ -216,11 +220,9 @@ if (diff.ok) log(diff.output)
 | 单次 `parallel` / `pipeline` 列表项 | `WORKFLOW_ITEM_CAP` | 4096 |
 | 嵌套 `workflow()` 调用总数 | `WORKFLOW_NESTED_CAP` | 256 |
 
-脚本含控制字符（制表符、回车、换行除外）会在编译前被拒绝。单个 Run 的并发子代理数由插件配置 `maxConcurrentAgents` 控制（`1 .. 128`，缺省 `max(2, min(32, CPU 核数 × 2))`），超出并发的调用在信号量上排队。经 `workflow()` 调用的子工作流共用当前 Run 的信号量；子代理在回合内经工具同步派发的子任务使用独立信号量。这样父节点不会占着槽位等子节点完成，子节点也不会在队列外等父节点释放槽位。
+脚本含控制字符（制表符、回车、换行除外）会在编译前被拒绝。单个 run 的并发子代理数由插件配置 `maxConcurrentAgents` 控制（`1 .. 128`，缺省 `max(2, min(32, CPU 核数 × 2))`），超出并发的调用在信号量上排队。经 `workflow()` 调用的子工作流共用当前 run 的信号量；子代理在回合内经工具同步派发的子任务使用独立信号量——父节点不会占着槽位等子节点完成，子节点也不会在队列外等父节点释放槽位。
 
 ## 完整示例
-
-可运行的端到端脚本位于 `docs/workflows/examples/`（`cross-review.js` 多视角交叉审查、`module-dev.js` 单模块开发、`arch-master.js` 多模块总控），覆盖本节的 `goal` 重试、幂等 Git 合并、`workflow()` 多级嵌套与 null 显式处理等策略分支，配套回归见 `packages/plugins/test/workflow-examples.test.ts`。
 
 ```javascript
 export const meta = {
@@ -280,3 +282,18 @@ return { security, style, fix, verdict }
 ```
 
 `isolation: 'worktree'` 分配独立 Git Worktree、`gate` 执行恰好一次验收命令，两者的完整生命周期（租约、清理安全链）见[Git Worktree 与代码门禁](worktree-and-gate.md)；失败语义与恢复策略见[状态流水与故障恢复](journaling-recovery.md)。
+
+## 运行与观察
+
+常用命令（仓库内开发形态；`pnpm link:bins` 后可直接用 `helm`）：
+
+```bash
+pnpm helm workflows list                                   # 已保存工作流
+pnpm helm workflows run ./review.js --current --wait       # 在当前会话启动并等待终态
+pnpm helm workflows runs --current --json                  # 当前会话的运行记录
+pnpm helm workflows inspect wf_1a2b3c4d5e6f                # 单个运行详情
+pnpm helm workflows abort wf_1a2b3c4d5e6f                  # 中止运行
+pnpm helm workflows run ./pipeline.js --resume-from-run-id wf_1a2b3c4d5e6f   # 断点续跑
+```
+
+新 run 必须显式指定会话（`--conversation-id` 或 `--current`）；`resumeFromRunId` 沿用原 run 的目标会话。Web 界面的运行面板、执行树与工作流库由 `builtin:workflow` 的 UI 扩展提供。
