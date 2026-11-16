@@ -1,59 +1,59 @@
-# herdr-smoke.mjs - `builtin:herdr` true link manually work verify script
+# herdr-smoke.mjs — `builtin:herdr` 真链路手工验收脚本
 
-independent manually work verify script,**do not accept `pnpm test`**(dependency real Herdr service, real pi CLI and real model credentials, will produce real model invoke). by human in merge eventually code after execute:
+独立手工验收脚本，**不纳入 `pnpm test`**（依赖真实 Herdr 服务、真实 pi CLI 与真实模型凭据，会产生真实模型调用）。由人工在合并最终代码后执行：
 
 ```bash
-pnpm build                                  # first produce out packages/hub/dist and packages/plugins/dist
-node scripts/herdr-smoke.mjs                # by default provider=magpie model=zhipu/glm-5.3
-node scripts/herdr-smoke.mjs --json         # stdout exactly a eventually JSON(enter in stderr)
-node scripts/herdr-smoke.mjs --keep-tmp     # after success keep temporary (contains complete herdr server log)
-node scripts/herdr-smoke.mjs --timeout-ms 600000   # put wide total timeout (60000..1800000)
+pnpm build                                  # 先产出 packages/hub/dist 与 packages/plugins/dist
+node scripts/herdr-smoke.mjs                # 默认 provider=magpie model=zhipu/glm-5.3
+node scripts/herdr-smoke.mjs --json         # stdout 恰好一个最终 JSON（进度在 stderr）
+node scripts/herdr-smoke.mjs --keep-tmp     # 成功后保留临时根（含完整 herdr server 日志）
+node scripts/herdr-smoke.mjs --timeout-ms 600000   # 放宽总超时（60000..1800000）
 ```
 
-by default load script same warehouse `packages/hub/dist/app.js`; available `HERDR_SMOKE_KERNEL_APP=/path/to/app.js` points to other compile artifact (such as another worktree  build).
+默认加载脚本同仓的 `packages/hub/dist/app.js`；可用 `HERDR_SMOKE_KERNEL_APP=/path/to/app.js` 指向其他编译产物（如另一 worktree 的 build）。
 
-exit code 0 = all verify items PASS and clean up without failed; non- 0 = store in FAIL(verify items failed or clean up failed). enter and `PASS/FAIL` one by one items write stderr; failed live and log keep in temporary. main dry `createHelm` registered by default deactivate `builtin:herdr`, script negative duty config and enable; compile artifact must and when before source code sync.
+退出码 0 = 全部验收项 PASS 且清理无失败；非 0 = 存在 FAIL（验收项失败或清理失败）。进度与 `PASS/FAIL` 逐项写 stderr；失败现场与日志保留在临时根。主干 `createHelm` 已注册默认停用的 `builtin:herdr`，脚本负责配置并启用；编译产物须与当前源码同步。
 
-## verify content (all real component, zero mock / zero skip)
+## 验证内容（全部真实组件，零 mock / 零 skip）
 
-1. **real compile artifact**:`packages/hub/dist/app.js`  `createHelm`(not build i.e. explicit failed).
-2. **real plugin lifecycle**:`plugins.setConfig('builtin:herdr', { session, socketPath, startupTimeoutMs: 30000 })` → `plugins.enable`.
-3. **real Profile API**:`kernel.profiles.save({ id: 'herdr-smoke-pi', runtime: { kind: 'herdr', agent: 'pi', args: [...] } })`.
-4. **real GLM model**: preflight `pi --list-models` confirm target model in column (credentials unavailable then explicit failed, never swap by default model),Profile args pass `--provider magpie --model zhipu/glm-5.3 --thinking off -a --no-session`.
-5. **real workflow**:`workflows.run(script)` → `wait`:
-   - node one:`agent(prompt, { label:'task', agentType:'herdr-smoke-pi', isolation:'worktree', schema:{answer:number}, gate })`- - plugin via `herdr worktree create --trust-repository` create isolated worktree,pi in among them create `artifact.txt`(three row),gate real verify;
-   - node two:`agent(prompt, { resume:'task' })` in**the same Herdr pane** continue chat.
-6. **original run assertion**: result field (`first.answer === 3`,`second` non-empty), two node `executionId` identical,Gate only one node `ok=true` and shell side `gate-count` exactly one row,worktree directory/branch in run compute after keep,`artifact.txt` content one by one byte core for. create entrust dispatch before, script explicit open original repository work zone as already has pane baseline; compute after, real `session.snapshot` in pane/tab/workspace/agent ID set must precise restore baseline, since leaves no residue new increase entrust dispatch asset, also does not close already has pane.
-7. **`resumeFromRunId` strictly replay (engine fix target contract)**:
-   - `result2` and `result1` **deep each other etc.**(`assert.deepStrictEqual`);
-   - replay run two agent node all `done` and `cached=true`(cache hit while non- live heavy run);
-   - via transparent wrap**produce transport**(`createHerdrTransport`, same dist directory import, only counter do not change behavior) counter `agent.start` / `agent.prompt` RPC invoke**zero increase long**(original run counter do not hard encode, allows once legal self-heal, only compare replay before after);
-   - Gate do not heavy run (`gate-count` still exactly one row);
-   - snapshot precise restore already has pane baseline (zero new increase asset).
+1. **真实编译产物**：`packages/hub/dist/app.js` 的 `createHelm`（未 build 即显式失败）。
+2. **真实插件生命周期**：`plugins.setConfig('builtin:herdr', { session, socketPath, startupTimeoutMs: 30000 })` → `plugins.enable`。
+3. **真实 Profile API**：`kernel.profiles.save({ id: 'herdr-smoke-pi', runtime: { kind: 'herdr', agent: 'pi', args: [...] } })`。
+4. **真实 GLM 模型**：预检 `pi --list-models` 确认目标模型在列（凭据不可用则显式失败，绝不换默认模型），Profile args 传 `--provider magpie --model zhipu/glm-5.3 --thinking off -a --no-session`。
+5. **真实工作流**：`workflows.run(script)` → `wait`：
+   - 节点一：`agent(prompt, { label:'task', agentType:'herdr-smoke-pi', isolation:'worktree', schema:{answer:number}, gate })`——插件经 `herdr worktree create --trust-repository` 建隔离工作树，pi 在其中创建 `artifact.txt`（三行），gate 真实验证；
+   - 节点二：`agent(prompt, { resume:'task' })` 在**同一 Herdr pane** 续聊。
+6. **原始 run 断言**：结果字段（`first.answer === 3`、`second` 非空）、两节点 `executionId` 相同、Gate 仅第一节点 `ok=true` 且 shell 侧 `gate-count` 恰好一行、worktree 目录/分支在 run 结算后保留、`artifact.txt` 内容逐字节核对。创建委派前，脚本显式打开原仓库工作区作为已有窗格基线；结算后，真实 `session.snapshot` 中 pane/tab/workspace/agent ID 集合必须精确恢复基线，既不残留新增委派资源，也不关闭已有窗格。
+7. **`resumeFromRunId` 严格重放（引擎修复目标契约）**：
+   - `result2` 与 `result1` **深相等**（`assert.deepStrictEqual`）；
+   - 重放 run 的两个 agent 节点均 `done` 且 `cached=true`（缓存命中而非 live 重跑）；
+   - 经透明包装**生产 transport**（`createHerdrTransport`，同 dist 目录导入，只计数不改行为）计数的 `agent.start` / `agent.prompt` RPC 调用**零增长**（原始 run 的计数不硬编码，允许一次合法自愈，只比较重放前后）；
+   - Gate 不重跑（`gate-count` 仍恰好一行）；
+   - snapshot 精确恢复已有窗格基线（零新增资源）。
 
-cache node do not want seek carry original run  `executionId`/`worktree` metadata (original run already verify these), replay only verify**without new invoke, without new asset, result consistent**.
+缓存节点不要求携带原 run 的 `executionId`/`worktree` 元数据（原 run 已验证过这些），重放只验证**无新调用、无新资源、结果一致**。
 
-### engine fix target (background)
+### 引擎修复目标（背景）
 
-old engine implement in `journalResumes`(ledger contains `agent({resume})` row) will global close prefix replay (`prefixIntact=false`), leads to `resumeFromRunId` for contains resume script repeat execution succeeded node. main dry already fix is one by one items match:**identical script all succeeded agent/resume/action prefix directly re- use result; prefix lose match after, attempt resume only store in at cache in sub- context when explicit failed**. the fix has independent side effect counter regression. this script enter one step verify real model original run after cache replay.
+旧引擎实现中 `journalResumes`（账本含 `agent({resume})` 行）会全局关闭前缀重放（`prefixIntact=false`），导致 `resumeFromRunId` 对含 resume 的脚本重复执行成功节点。主干已修复为逐项匹配：**相同脚本的全部成功 agent/resume/action 前缀直接复用结果；前缀失配后，试图续接只存在于缓存中的子上下文时显式失败**。该修复有独立的副作用计数回归。本脚本进一步验证真实模型原始运行后的缓存重放。
 
-## transfer layer and counter
+## 传输层与计数
 
-- import `packages/plugins/dist/herdr/transport.js`  `createHerdrTransport`(produce implement);
-- `createTracedTransport` transparent wrap: only by `method` counter `agent.start` / `agent.prompt`,`call` and the rest method fully pass-through,**never mock return**;
-- wrap after transport inject `createHelm({ herdrTransport })`, script itself `session.snapshot` each time invoke carries finite `timeoutMs`(re- use produce implement, without self system raw socket read).
+- 导入 `packages/plugins/dist/herdr/transport.js` 的 `createHerdrTransport`（生产实现）；
+- `createTracedTransport` 透明包装：仅按 `method` 计数 `agent.start` / `agent.prompt`，`call` 与其余方法完全透传，**绝不 mock 返回**；
+- 包装后的 transport 注入 `createHelm({ herdrTransport })`，脚本自身的 `session.snapshot` 每次调用带有限 `timeoutMs`（复用生产实现，无自制 raw socket 读取）。
 
-## isolated and security boundary
+## 隔离与安全边界
 
-- **independent headless session**:`spawn('herdr', ['--session', <unique name>, 'server'])` foreground child process (listen `error` event,ENOENT etc. failed to start explicit errors),stdout/stderr all amount `<tmp>/logs/herdr-server.log`; wait for**itself socket**(`<tmp>/xdg/herdr/sessions/<name>/herdr.sock`) can connect and `session.snapshot` reply after only then continue.
-- **environment clean and socket parse**: produce transport priority is `socketPath > HERDR_SOCKET_PATH > session`(session via `XDG_CONFIG_HOME` push lead path). script kernel config `socketPath`, process `HERDR_SOCKET_PATH` and `XDG_CONFIG_HOME` three all points to the same isolated socket- - any priority under parse result consistent; also remove inherit all `HERDR_*` locate variable (`PANE_ID/TAB_ID/WORKSPACE_ID/...`), never trigger touch user existing session / pane / main Herdr process.
-- **clean up discipline**: only `herdr --session <name> server stop` itself create session(15s timeout, after SIGTERM→SIGKILL fall back); succeeded and clean up without on failure, first verify worktree directory/branch indeed keep, again only when `git rev-parse --git-common-dir` belongs to this time temporary repository when remove itself create worktree;**any one clean up failed => whole FAIL,exit 1, keep all live and log**. clean up phase has independent has boundary pre- compute, total timeout after still ensure close itself server.
-- **secret**: do not print any token / env / auth file content; error information only contains command output tail part.
-- **port**: do not listen any port (kernel with store form process inside run, do not start Hub server).
-- **total timeout**:`--timeout-ms`(by default 180000, scope 60000..1800000) override main stream process; wait for socket only do 250ms connect backoff, do not use sleep guess stream process complete.
+- **独立 headless session**：`spawn('herdr', ['--session', <唯一名>, 'server'])` 前台子进程（监听 `error` 事件，ENOENT 等启动失败显式报错），stdout/stderr 全量落 `<tmp>/logs/herdr-server.log`；等待**自己的 socket**（`<tmp>/xdg/herdr/sessions/<name>/herdr.sock`）可连接且 `session.snapshot` 应答后才继续。
+- **环境净化与 socket 解析**：生产 transport 的优先级是 `socketPath > HERDR_SOCKET_PATH > session`（session 经 `XDG_CONFIG_HOME` 推导路径）。脚本将内核配置的 `socketPath`、进程 `HERDR_SOCKET_PATH` 与 `XDG_CONFIG_HOME` 三者全部指向同一隔离 socket——任何优先级下解析结果一致；同时剔除继承的全部 `HERDR_*` 定位变量（`PANE_ID/TAB_ID/WORKSPACE_ID/...`），绝不触碰用户现有 session / pane / 主 Herdr 进程。
+- **清理纪律**：只 `herdr --session <name> server stop` 自己创建的 session（15s 超时，之后 SIGTERM→SIGKILL 兜底）；成功且清理无失败时，先验证 worktree 目录/分支确实保留，再仅当 `git rev-parse --git-common-dir` 属于本次临时仓库时移除自己创建的 worktree；**任一清理失败 => 整体 FAIL、exit 1、保留全部现场与日志**。清理阶段有独立有界预算，总超时后仍确保关闭自己的 server。
+- **机密**：不打印任何 token / env / auth 文件内容；错误信息只含命令输出尾部。
+- **端口**：不监听任何端口（内核以库形态进程内运行，不起 Hub server）。
+- **总超时**：`--timeout-ms`（默认 180000，范围 60000..1800000）覆盖主流程；等待 socket 只做 250ms 连接退避，不用 sleep 猜流程完成。
 
-## dependency
+## 依赖
 
-- node >= 24(`node:sqlite`), already `pnpm build` artifact (contains `packages/plugins/dist/herdr/transport.js`);
-- PATH on `herdr`(>= 0.9.5 / protocol 22),`pi`,`git`;
-- `~/.pi/agent/auth.json` inside target model real credentials (local machine is magpie gateway).
+- node >= 24（`node:sqlite`）、已 `pnpm build` 的产物（含 `packages/plugins/dist/herdr/transport.js`）；
+- PATH 上的 `herdr`（>= 0.9.5 / protocol 22）、`pi`、`git`；
+- `~/.pi/agent/auth.json` 内目标模型的真实凭据（本机为 magpie 网关）。

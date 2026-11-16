@@ -32,8 +32,8 @@ import { PluginClientContext } from './plugin-context.js'
 /** Resolve the active UI locale: plugin context first, host port fallback, default locale last. */
 export function usePluginLocale(): HelmLocale {
   const ctx = useContext(PluginClientContext)
-  if (ctx !== null) return ctx.locale
-  return useContext(PluginClientHostContext)?.locale ?? DEFAULT_HELM_LOCALE
+  const host = useContext(PluginClientHostContext)
+  return ctx?.locale ?? host?.locale ?? DEFAULT_HELM_LOCALE
 }
 
 /** Minimal translator bound to the active locale; referentially stable across renders while the locale is unchanged. */
