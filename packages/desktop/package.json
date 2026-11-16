@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": "https://github.com/team4u/helm.git",
   "type": "module",
-  "description": "helm 全平台 Electron 桌面壳：attach-or-spawn 127.0.0.1 Hub 监督器 + BrowserWindow/托盘。不直接 import kernel/web，Hub 一律子进程启动。",
+  "description": "Helm cross-platform Electron desktop shell: attach-or-spawn supervisor for the 127.0.0.1 Hub + BrowserWindow/tray. Never imports kernel/web directly; the Hub always runs as a child process.",
   "main": "./dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",

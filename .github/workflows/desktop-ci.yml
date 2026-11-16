@@ -1,18 +1,23 @@
-# Desktop CI：packages/desktop（Electron 桌面壳）三平台构建、测试、打包与冒烟。
+# Desktop CI: three-platform build, test, packaging and smoke for packages/desktop
+# (the Electron desktop shell).
 #
-# 职责边界（与 ci.yml 互补、不重复）：
-#   - ci.yml 负责仓库全量测试（Linux 全量 / Windows unit）；本工作流不在三个平台
-#     重复跑 pnpm test:all / test:unit，专注 desktop 包自身的验证与产物。
-#   - 三平台 matrix（Linux/Windows/macOS）：install frozen → typecheck/build
-#     （assemble-hub 依赖 workspace dist 产物）→ desktop 包测试 → dist:dir 解包应用
-#     → scripts/desktop-smoke.mjs --packaged 对打包 App 冒烟 → dist --publish never
-#     产出安装包（exe/dmg/zip/AppImage/deb）作为 CI artifact 上传，绝不自动发布。
-#   - 冒烟报告目录（smoke.json / 截图 / stdout.log / stderr.log）if: always() 上传，
-#     失败时保留现场供诊断。
-#   - Linux：Electron 无头运行需要 Xvfb 与 GPU/音频库；ubuntu-24.04 的 ALSA 运行时
-#     包为 libasound2t64（旧 libasound2 包名在 24.04 已不存在，装错会直接 apt 失败）。
-#   - desktop 包契约由 scripts/desktop-ci-contract.mjs 元数据驱动检查（缺失/缺 build
-#     脚本显式失败，不静默跳过）。
+# Responsibility boundary (complementary to ci.yml, no duplication):
+#   - ci.yml runs the repository's full test suite (full suite on Linux / unit on
+#     Windows); this workflow does not repeat pnpm test:all / test:unit on the three
+#     platforms, it focuses on the desktop package's own validation and artifacts.
+#   - Three-platform matrix (Linux/Windows/macOS): install frozen -> typecheck/build
+#     (assemble-hub depends on workspace dist artifacts) -> desktop package tests ->
+#     dist:dir unpacked app -> scripts/desktop-smoke.mjs --packaged smoke against the
+#     packaged app -> dist --publish never producing installers (exe/dmg/zip/AppImage/deb)
+#     uploaded as CI artifacts, never auto-published.
+#   - The smoke report directory (smoke.json / screenshots / stdout.log / stderr.log) is
+#     uploaded if: always(), preserving the failure scene for diagnosis.
+#   - Linux: headless Electron needs Xvfb plus GPU/audio libs; on ubuntu-24.04 the ALSA
+#     runtime package is libasound2t64 (the old libasound2 package name no longer exists
+#     on 24.04; installing the wrong one fails apt outright).
+#   - The desktop package contract is checked metadata-driven by
+#     scripts/desktop-ci-contract.mjs (a missing package or missing build script fails
+#     explicitly, never silently skipped).
 
 name: Desktop CI
 
@@ -59,16 +64,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Electron 无头运行需要 X server 与 GPU/音频库；xvfb-run 为下方测试/冒烟步骤
-      # 按需启动隔离的虚拟显示（-a 自动分配显示号）。
+      # Headless Electron needs an X server plus GPU/audio libs; xvfb-run starts an
+      # isolated virtual display on demand for the test/smoke steps below
+      # (-a auto-picks a display number).
       - name: Install Xvfb and Electron runtime libs (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends xvfb xauth libgbm1 libasound2t64
 
-      # 契约检查：desktop 必须有 name 与 build 脚本（pnpm -r build 会静默跳过无 build
-      # 的包），并输出 desktop_name / desktop_has_test 供后续步骤引用。
+      # Contract check: the desktop package must have a name and a build script
+      # (pnpm -r build silently skips packages without build), and it emits desktop_name /
+      # desktop_has_test for later steps to reference.
       - name: Desktop package contract check
         id: contract
         shell: bash
@@ -77,7 +84,7 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # assemble-hub 组装依赖 kernel/web dist 产物，必须先全仓构建。
+      # assemble-hub assembly depends on kernel/web dist artifacts; build the whole repo first.
       - name: Build packages
         run: pnpm build
 
@@ -87,7 +94,8 @@ jobs:
           PAYLOAD_NPM_SMOKE: '1'
         run: node scripts/run-tests.mjs packages/payload/test/payload.test.ts
 
-      # desktop 自有测试（Electron 相关执行在 Linux 上必须 xvfb-run 包裹）。
+      # The desktop package's own tests (Electron-related execution on Linux must be
+      # wrapped in xvfb-run).
       - name: Desktop package tests under Xvfb (Linux)
         if: runner.os == 'Linux' && steps.contract.outputs.desktop_has_test == 'true'
         run: xvfb-run -a pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run test
@@ -96,7 +104,8 @@ jobs:
         if: runner.os != 'Linux' && steps.contract.outputs.desktop_has_test == 'true'
         run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run test
 
-      # 解包应用（release/<platform>-unpacked）：供打包形态冒烟，最快验证 App 可拉起。
+      # Unpacked app (release/<platform>-unpacked): for packaged-form smoke, the fastest
+      # check that the app can launch.
       - name: Build unpacked desktop app (dist:dir)
         run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist:dir
 
@@ -106,8 +115,9 @@ jobs:
           sudo chown root:root packages/desktop/release/linux-unpacked/chrome-sandbox
           sudo chmod 4755 packages/desktop/release/linux-unpacked/chrome-sandbox
 
-      # 打包 App 冒烟：wrapper 定位解包可执行文件，隔离 HELM_DATA_DIR、固定 3202 端口，
-      # 60s 超时杀树，依据 smoke.json 判定；报告落在 packages/desktop/release/smoke/。
+      # Packaged-app smoke: the wrapper locates the unpacked executable, isolates
+      # HELM_DATA_DIR, pins port 3202, kills the process tree after a 60s timeout, and
+      # judges by smoke.json; the report lands in packages/desktop/release/smoke/.
       - name: Smoke test packaged app under Xvfb (Linux)
         if: runner.os == 'Linux'
         run: xvfb-run -a node scripts/desktop-smoke.mjs --packaged
@@ -116,7 +126,8 @@ jobs:
         if: runner.os != 'Linux'
         run: node scripts/desktop-smoke.mjs --packaged
 
-      # 截图 / smoke.json / 日志永远上传（失败现场比成功存档更重要）。
+      # Screenshots / smoke.json / logs are always uploaded (a failure scene matters
+      # more than a success archive).
       - name: Upload smoke report
         if: always()
         uses: actions/upload-artifact@v4
@@ -126,8 +137,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # 安装包产物（NSIS exe / dmg / zip / AppImage / deb）：--publish never，
-      # 永不在此发布；任何平台一个安装包都没产出视为真实失败。
+      # Installer artifacts (NSIS exe / dmg / zip / AppImage / deb): --publish never,
+      # never published here; a platform producing zero installers is treated as a real
+      # failure.
       - name: Build desktop installers (publish never)
         run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist
 
