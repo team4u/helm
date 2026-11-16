@@ -216,6 +216,11 @@ export class WorktreeIsolation {
   // cleanup（插件动作/工具入口）
   // ------------------------------------------------------------------
 
+  /** 启动后回收已确认停止的原生 Worktree 崩溃租约（转发 isolation-lease-store.ts）。 */
+  reconcileStoppedNativeLeases(): Promise<number> {
+    return this.leases.reconcileStoppedNativeLeases()
+  }
+
   /**
    * cleanup 前置租约检查（转发 isolation-lease-store.ts）：存在「重启中断
    * 或未确认停止」的执行租约时显式 worktree_execution_unknown（不能证明

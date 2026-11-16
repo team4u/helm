@@ -27,7 +27,7 @@ import {
 } from '../../contracts.js'
 import { JournalWriter } from './journal.js'
 import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
-import { newRunId, type RunRecord } from './run-store.js'
+import { backgroundChildIds, newRunId, type RunRecord } from './run-store.js'
 import { redactNodes, redactSummaryNodes, toSummary } from './run-summary.js'
 import type { WorkflowServiceContext } from './service-context.js'
 
@@ -200,13 +200,15 @@ export async function startBackgroundAgent(
     // no-op（迟到结果只经 active 删除后的 records 事实可见，不翻终态）。
     if (settled) return
     settled = true
+    const hostClosing = svc.host.isHostClosing?.() === true
     try {
       const settledAt = Date.now()
       const aborted =
         !outcome.ok &&
-        (abort.signal.aborted ||
+        (hostClosing ||
+          abort.signal.aborted ||
           (outcome.error instanceof HelmError && outcome.error.code === 'aborted'))
-      if (outcome.ok) {
+      if (outcome.ok && !abort.signal.aborted) {
         node.status = 'done'
         node.settledAt = settledAt
         node.durationMs = settledAt - createdAt
@@ -217,8 +219,9 @@ export async function startBackgroundAgent(
         node.status = aborted ? 'skipped' : 'failed'
         node.settledAt = settledAt
         node.durationMs = settledAt - createdAt
-        const message =
-          outcome.error instanceof HelmError
+        const message = outcome.ok
+          ? '宿主正在关停，后台子代理执行已中止'
+          : outcome.error instanceof HelmError
             ? `[${outcome.error.code}] ${outcome.error.message}`
             : outcome.error instanceof Error
               ? outcome.error.message
@@ -226,6 +229,13 @@ export async function startBackgroundAgent(
         node.error = svc.redact(message)
         record.status = aborted ? 'aborted' : 'failed'
         record.error = svc.redact(message)
+      }
+      if (
+        hostClosing &&
+        record.status !== 'completed' &&
+        (run.childConversations.size > 0 || backgroundChildIds(record).length > 0)
+      ) {
+        record.pendingChildCleanup = true
       }
       record.updatedAt = settledAt
       record.nodes = redactNodes(svc.redact, [node])
@@ -266,6 +276,7 @@ export async function startBackgroundAgent(
       }
       if (
         !svc.isClosed() &&
+        svc.host.isHostClosing?.() !== true &&
         record.notifyParentOnSettle === true &&
         record.notifiedAt === undefined &&
         svc.host.onBackgroundAgentSettled !== undefined
@@ -381,7 +392,7 @@ export async function startBackgroundAgent(
     ...request,
     ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
     agentId: agentIdForProto,
-    meta: withWorkflowSpawnMeta(undefined, { runId }),
+    meta: withWorkflowSpawnMeta(request.meta, { runId }),
     onResolved: (raw: unknown) => {
       const info = sanitizeExecutionInfo(raw, { agentId: agentIdForProto })
       executionInfo = info
@@ -462,7 +473,7 @@ export async function startBackgroundAgent(
 
   // svc.isClosed() 是启动屏障（关停窗口内启动一律取消，语义不变）；父 signal
   // 已中止的立即取消仅对未 detach 的 run 生效（已转后台的忽略父 signal）。
-  if (svc.isClosed()) abort.abort()
+  if (svc.isClosed() || svc.host.isHostClosing?.() === true) abort.abort()
   else if (!detachedBeforeBind && parentSignal?.aborted) abort.abort()
   const spawnPromise = (async () => {
     if (abort.signal.aborted) throw new HelmError('aborted', '后台子代理启动期间已取消', 409)

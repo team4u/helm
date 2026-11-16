@@ -129,6 +129,11 @@ export interface WorkflowServiceHost {
     command: string,
     options: { cwd?: string; conversationId?: number; signal?: AbortSignal; gateTimeoutMs?: number },
   ): Promise<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }>
+  /**
+   * 宿主是否正在关停（如 KernelRuntime.close）：harness.close() 先于插件宿主
+   * 拆毁时为 true，供引擎跳过对已关闭 Harness 的守卫中止并标记待清理子会话。
+   */
+  isHostClosing?(): boolean
 }
 
 /** createEngineHost 的服务侧依赖（生命周期事实回调，现查现用）。 */
@@ -228,6 +233,9 @@ export function abortChildConversation(
   run: ActiveRun,
   conversationId: number,
 ): Promise<void> {
+  // 宿主关停窗口（harness.close() 先于 pluginHost.dispose()）：不再调用已关闭
+  // Harness，转由 run 结算时的 pendingChildCleanup 在下次启动补落持久取消标记。
+  if (host.isHostClosing?.() === true) return Promise.resolve()
   const pending = host
     .abortConversationGuarded(conversationId)
     .catch((error: unknown) => {
@@ -255,6 +263,10 @@ export async function invokeAgentSpawn(
   request: WorkflowSpawnRequest,
   isResume: boolean,
 ): Promise<WorkflowSpawnResult> {
+  if (deps.host.isHostClosing?.() === true) {
+    run.abort.abort()
+    return { ok: false, error: 'Workflow aborted.' }
+  }
   if (deps.isClosed() || run.abort.signal.aborted) {
     return { ok: false, error: 'Workflow aborted.' }
   }
@@ -422,6 +434,9 @@ export async function invokeAgentSpawn(
     const retained: Pick<WorkflowSpawnResult, 'executionInfo' | 'gate'> = {
       ...(executionInfo !== undefined ? { executionInfo } : {}),
       ...(gateResult !== undefined ? { gate: gateResult } : {}),
+    }
+    if (deps.host.isHostClosing?.() === true) {
+      run.abort.abort()
     }
     if (timedOut) {
       await awaitTimeoutAborts()

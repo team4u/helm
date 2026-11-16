@@ -126,6 +126,7 @@ export class ConversationTracker {
       generationOf: (id) => this.mirrors.get(id)?.observeGeneration,
       liveOf: (id) => this.mirrors.get(id)?.live,
       summaryOf: (id) => this.summaryOf(id),
+      isClosing: () => this.isClosing,
     }
     this.usage = new ContextUsageRefresh(host)
   }

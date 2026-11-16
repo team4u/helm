@@ -737,6 +737,83 @@ describe('SDK 真实链路（faux 模型驱动工具调用）', { timeout: 60_00
   })
 })
 
+describe('关停中止态：spill 防护与 replay 标记', { timeout: 60_000 }, () => {
+  it('createBashTool 在运行中被 abort 时抛出中止异常且不写入 spill 产物', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'abort-bash')
+    const baseDeps = await makeRealDeps(dir)
+    let spillCalled = 0
+    const deps: HelmToolDeps = {
+      ...baseDeps,
+      artifacts: {
+        ...baseDeps.artifacts,
+        spill: async (...args) => {
+          spillCalled += 1
+          return baseDeps.artifacts.spill(...args)
+        },
+      },
+    }
+    const tool = createBashTool(deps)
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(new Error('kernel closing')), 150)
+    try {
+      await assert.rejects(
+        () =>
+          (tool.execute as unknown as (a: unknown, api: unknown, ctx: unknown) => Promise<unknown>)(
+            { command: 'sleep 30' },
+            makeApi(dir),
+            { abortSignal: ac.signal },
+          ),
+        (err: unknown) => err instanceof Error && err.message === 'kernel closing',
+      )
+      assert.equal(spillCalled, 0, 'abort 后不得写入无意义 spill 文件')
+    } finally {
+      clearTimeout(timer)
+    }
+  })
+
+  it('createReadTool 在读取过程中或已中止时抛出中止异常且不调用 spill；只读工具显式声明 replay: safe', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'abort-read')
+    const baseDeps = await makeRealDeps(dir)
+    writeFileSync(join(dir, 'sample.txt'), 'hello abort world\n', 'utf8')
+    let spillCalled = 0
+    const deps: HelmToolDeps = {
+      ...baseDeps,
+      artifacts: {
+        ...baseDeps.artifacts,
+        spill: async (...args) => {
+          spillCalled += 1
+          return baseDeps.artifacts.spill(...args)
+        },
+      },
+    }
+    const readTool = createReadTool(deps)
+    const readArtifactTool = createReadArtifactTool(deps, () => true)
+    assert.equal(readTool.replay, 'safe')
+    assert.equal(readArtifactTool.replay, 'safe')
+
+    const ac = new AbortController()
+    const abortReason = new Error('close during read')
+    const baseApi = makeApi(dir) as unknown as Record<string, unknown>
+    const api = {
+      ...baseApi,
+      agent: async () => {
+        ac.abort(abortReason)
+        return { cwd: dir }
+      },
+    }
+    await assert.rejects(
+      () =>
+        (readTool.execute as unknown as (a: unknown, api: unknown, ctx: unknown) => Promise<unknown>)(
+          { path: 'sample.txt' },
+          api,
+          { abortSignal: ac.signal },
+        ),
+      (err: unknown) => err === abortReason,
+    )
+    assert.equal(spillCalled, 0, 'read 在 abort 态不得写入 spill 文件')
+  })
+})
+
 /** 最小真实 ToolExecutionApi：conversationId / callId / agent(cwd) 均按 SDK 契约提供。 */
 function makeApi(cwd: string, conversationId = 1) {
   return {

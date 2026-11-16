@@ -15,7 +15,8 @@
  *   挂起宿主在 onResolved 回报 conversationId 后永不返回——崩溃前 running 记录
  *   已即时持久 childConversationIds（nodes 尚未落盘），第二服务读同一 state 做
  *   prepareRecovery/init 按权威 IDs 标记、守卫中止并补发通知恰一次；
- * - 同步 workflow running 记录恢复语义不变：不守卫中止子会话、不通知。
+ * - 同步 workflow running 记录恢复语义：同样在 prepareRecovery 与 init 阶段
+ *   守卫中止遗留原生子会话以防孤儿任务空跑，但依然绝不通知父会话。
  */
 
 import { strict as assert } from 'node:assert'
@@ -306,7 +307,7 @@ describe('后台 workflow run 通知与恢复', () => {
     await service.close()
   })
 
-  it('重启恢复（同步 workflow running）：不守卫中止子会话、不通知（原有语义不回归）', timeout, async () => {
+  it('重启恢复（同步 workflow running）：同样守卫中止遗留子会话以防孤儿，但绝不通知父会话', timeout, async () => {
     const host = makeHost()
     const state = makeStateStore()
     const journalPath = join(dataDir, 'artifacts', '1', 'workflow-wf_syncdead0001.jsonl')
@@ -325,12 +326,14 @@ describe('后台 workflow run 通知与恢复', () => {
     })
     const service = new WorkflowService({ dataDir, host, state })
     await service.prepareRecovery()
-    assert.deepEqual(host.guardedAborts, [], '同步 workflow 不参与子会话 abort 预标记')
+    assert.deepEqual(host.guardedAborts, [88], '同步 workflow 必须在 prepareRecovery 收集并标记子会话，防孤儿原生子会话继续运行')
     await service.init()
-    assert.equal(service.getRun('wf_syncdead0001').status, 'failed')
-    assert.ok(service.getRun('wf_syncdead0001').error?.includes('resumeFromRunId'))
-    assert.deepEqual(host.guardedAborts, [], '同步 workflow 中断不守卫中止子会话（账本恢复语义）')
-    assert.equal(host.settledCalls.length, 0, '同步 workflow 中断不通知父会话')
+    const summary = service.getRun('wf_syncdead0001')
+    assert.equal(summary.status, 'failed')
+    assert.ok(summary.error?.includes('resumeFromRunId'))
+    assert.deepEqual(host.guardedAborts, [88, 88], 'init 同样守卫中止同步 workflow 子会话')
+    assert.ok(summary.nodes?.every((n) => n.status === 'failed'), '中断节点须如实标 failed')
+    assert.equal(host.settledCalls.length, 0, '同步 workflow 中断依然绝不通知父会话')
     await service.close()
   })
 })

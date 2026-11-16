@@ -34,7 +34,7 @@
 
 为什么不做「输入相同就复用」的无序查表？因为在编排流程里，上游环境变化意味着后续调用处于不同业务状态——另一场 run 第 12 位恰好相同的 prompt 不是同一份工作。乱序复用后续匹配，等同于在不同上下文中冒用历史结果。每个 scope 的前缀单调匹配保证：只有当前 scope 的前序调用仍匹配时，历史结果才可复用。父 scope 断链后，后续子 scope 也不能冒用旧结果。同一 scope 的调用发起顺序须确定；各 scope 之间的并发结算顺序可以改变。
 
-两类特殊失配的守卫：伪造或不一致的缓存行拒绝——`resumed` 标记必须与本次调用是否 resume 严格对应；重放命中的行若带 `schema`，还会用当前契约复检一次。前缀失配后命中「仅存在于账本缓存」的 resume 目标时显式失败（无活会话可续接，绝不伪造 live 续接）。
+两类特殊失配的守卫：伪造或不一致的缓存行拒绝——`resumed` 标记必须与本次调用是否 resume 严格对应；重放命中的行若带 `schema`，还会用当前契约复检一次。前缀失配后命中「仅存在于账本缓存」（无原生 `conversationId` 持久会话句柄或属于外部运行时 `executionId`）的 resume 目标时显式失败，绝不伪造 live 续接；若重放命中的原生 `agent({ label })` 行携带持久子会话句柄（`execution.conversationId` 且无外部 `executionId`），引擎会保留其 `resumeRef`，后续未落账的 `agent({ resume: label })` 可跨 `resumeFromRunId` 直接续接该原生子会话。
 
 重放命中 `agent` 行时，`agent.withMeta` 与 `goal` 从账本还原该行的 `execution`（含 Worktree 描述）与 `gate` 字段，脚本可继续对该 Worktree 执行合入或清理。多级工作流的 `label` 以 `${scopeId}:${label}` 登记（见 DSL 手册的 `workflow()` 一节）：同名 `label` 在不同子工作流内是不同节点，前缀匹配按各自的 Key 逐项比对，整棵树对根 `runId` 一次续跑。
 
@@ -84,11 +84,13 @@ flowchart TD
 
 ## Hub 重启两阶段恢复
 
-插件服务生命周期分两个阶段，由宿主的统一启动屏障保证顺序（全部插件 `prepare` 完成后才开始 `start`）：
+插件服务生命周期由宿主的统一启动屏障保证顺序（全部插件 `prepare` 完成后才开始 `start`，随后恢复 SDK 调度器并触发进程内 `runtime.started`）：
 
-**阶段一 `prepareRecovery`（全局 prepare 屏障内）**：读取遗留记录，为仍在 `running` 状态的后台 workflow / subagent run 关联的子会话落持久 abort 标记——不唤醒 SDK 调度器、不提交任何输入。此刻其他插件的工具尚未注册完成，任何输入提交都会产生孤儿回合。
+**阶段一 `prepareRecovery`（全局 prepare 屏障内）**：扫描全部遗留 `running` 以及优雅关停带 `pendingChildCleanup` 标记的记录（覆盖后台、同步 `SubagentWorkflow`、CLI `workflows run` 与 `subagent`），为所有关联原生子会话经 `abortConversationGuarded` 落持久 abort 标记——不唤醒 SDK 调度器、不提交任何输入，防止遗留 `ownerless` 原生子会话在恢复后成为孤儿任务继续执行。此刻其他插件的工具尚未注册完成，任何输入提交都会产生孤儿回合。
 
-**阶段二 `init`（服务 start）**：终止遗留任务、把跨重启的 `running` run 显式标 `failed` 并附原因（workflow 记 `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）`，subagent 记 `subagent run interrupted by process restart（可凭 conversationId/executionId 通过 resume 续接）`），经 outbox 补发父会话通知（`notifiedAt` 标记保证 at-least-once，不重复打扰）。此刻工具已注册，补发输入消费安全。
+**阶段二 `init`（服务 start）**：清理 `pendingChildCleanup` 标记、对跨重启 `running` 记录的遗留子会话执行守卫中止并显式标 `failed`（workflow 记 `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）`，subagent 记 `subagent run interrupted by process restart（可凭 conversationId/executionId 通过 resume 续接）`），并**仅对 `notifyParentOnSettle === true` 的后台任务**经 outbox 补发父会话通知（`notifiedAt` 标记保证 at-least-once，同步与 CLI 工作流绝不通知父会话）。此刻工具已注册，补发输入消费安全。
+
+**阶段三 `runtime.started`（`harness.resume()` 后启动收尾）**：调度器恢复运行后，插件等待恢复收集的遗留子会话真实收敛至 `idle`（`awaitPreparedChildrenSettled`），随后调用 `reconcileStoppedNativeLeases` 回收可证明已停止的原生 Worktree 崩溃租约（外部 `executionId` 租约仍保持 fail-closed 保留），使残留工作树可恢复正常 `resume` 或 `cleanup_worktree`。
 
 此后开发者可凭该 runId 安全续接：
 

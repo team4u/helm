@@ -211,6 +211,9 @@ export function createWorkflowPlugin(): PluginDefinition {
             abortConversationGuarded: (id, guard) => ctx.host.abortConversationGuarded(id, guard),
             emitEvent: (type, payload, options) => ctx.host.emitEvent(type, payload, options),
             runGate: (command, options) => ctx.host.runGate(command, options),
+            get isClosing() {
+              return ctx.host.isClosing
+            },
           },
           projection,
           deliverBackgroundReport: (run, info) => backgroundReporter.deliver(run, info),

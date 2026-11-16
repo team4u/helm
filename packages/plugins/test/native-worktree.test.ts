@@ -2229,4 +2229,99 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       await th.close()
     }
   })
+
+  it('reconcileStoppedNativeLeases：仅回收无 executionId 的 pending 与已停止/不存在原生会话 running 租约；working 与外部 executionId 仍 fail-closed', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't21d')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const th = await openSpawnHarness(repo, join(dir, 'data'))
+    try {
+      // 1) 创建 pending 原生租约（无 executionId）与 stopped(idle) / deleted(not_found) / working / external 租约
+      th.faux.setResponses([
+        fauxAssistantMessage('idle-conv'),
+        fauxAssistantMessage('notfound-conv'),
+        fauxAssistantMessage('working-conv'),
+        fauxAssistantMessage('ext-conv'),
+      ])
+      let idleId = 0
+      let notFoundId = 0
+      let workingId = 0
+      let extId = 0
+      await th.spawnIsolated({
+        parentConversationId: 1,
+        prompt: 'idle',
+        isolation: 'worktree',
+        agentId: 'agent-idle',
+        onResolved: (i: AgentExecutionInfo) => { idleId = i.conversationId ?? 0 },
+      } as never)
+      await th.spawnIsolated({
+        parentConversationId: 1,
+        prompt: 'notfound',
+        isolation: 'worktree',
+        onResolved: (i: AgentExecutionInfo) => { notFoundId = i.conversationId ?? 0 },
+      } as never)
+      await th.spawnIsolated({
+        parentConversationId: 1,
+        prompt: 'working',
+        isolation: 'worktree',
+        onResolved: (i: AgentExecutionInfo) => { workingId = i.conversationId ?? 0 },
+      } as never)
+      await th.spawnIsolated({
+        parentConversationId: 1,
+        prompt: 'ext',
+        isolation: 'worktree',
+        onResolved: (i: AgentExecutionInfo) => { extId = i.conversationId ?? 0 },
+      } as never)
+
+      const idleRec = th.allocator.getForConversation(idleId)!
+      const notFoundRec = th.allocator.getForConversation(notFoundId)!
+      const workingRec = th.allocator.getForConversation(workingId)!
+      const extRec = th.allocator.getForConversation(extId)!
+
+      th.markIdle(idleId)
+      th.mirrors.delete(notFoundId)
+      th.markWorking(workingId)
+
+      const state = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      state['worktree-leases'] = {
+        'tok-pending-native': { phase: 'pending', info: { nodeId: 'local' }, worktreeId: idleRec.id, createdAt: 1 },
+        'tok-idle-native': { phase: 'running', info: { nodeId: 'local', conversationId: idleId }, worktreeId: idleRec.id, createdAt: 2 },
+        'tok-notfound-native': { phase: 'running', info: { nodeId: 'local', conversationId: notFoundId }, worktreeId: notFoundRec.id, createdAt: 3 },
+        'tok-working-native': { phase: 'running', info: { nodeId: 'local', conversationId: workingId }, worktreeId: workingRec.id, createdAt: 4 },
+        'tok-ext-pending': { phase: 'pending', info: { nodeId: 'local', executionId: 'herdr-pane-9' }, worktreeId: extRec.id, createdAt: 5 },
+        'tok-ext-running': { phase: 'running', info: { nodeId: 'local', conversationId: extId, executionId: 'herdr-pane-10' }, worktreeId: extRec.id, createdAt: 6 },
+      }
+      th.docs.set('builtin:workflow:worktree-state', state)
+
+      await th.isolation.reconcileStoppedNativeLeases()
+
+      const remaining = leasesOf(th.docs)
+      assert.deepEqual(
+        Object.keys(remaining).sort(),
+        ['tok-ext-pending', 'tok-ext-running', 'tok-working-native'],
+        '仅保留 working 原生租约与带 executionId 的外部租约',
+      )
+      assert.ok(th.allocator.getForConversation(idleId), '租约收敛不得删除 Worktree 记录本身')
+      assert.ok(th.allocator.getForConversation(notFoundId), 'not_found 租约收敛不得删除 Worktree 记录')
+
+      // 确认 ext 仍阻塞 cleanup
+      await assert.rejects(
+        () => th.isolation.cleanup({ conversationId: extId }),
+        (err: unknown) => err instanceof HelmError && err.code === 'worktree_execution_unknown',
+      )
+      // 确认 idleId 租约已解除（允许 cleanup）
+      try {
+        const done = await th.isolation.cleanup({ conversationId: idleId, deleteBranch: true })
+        assert.equal(done.removed, true)
+      } catch (error) {
+        assert.ok(
+          error instanceof HelmError && error.code === 'worktree_process_check_failed',
+          `租约释放后只允许环境 /proc 限制，实得：${error instanceof HelmError ? error.code : String(error)}`,
+        )
+      }
+    } finally {
+      await th.close()
+    }
+  })
 })

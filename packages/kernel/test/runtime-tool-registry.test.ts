@@ -304,4 +304,97 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     assert.equal(installed[1]!.name, 'helm-plugins')
     assert.equal(installed[1]!.tools?.length, 0)
   })
+
+  it('wrapToolExecute：底层返回后若 abortSignal 已中止则统一抛出中止异常（保留 Error reason；handled 短路例外）', { timeout: 60_000 }, async () => {
+    const handledToolCalls = new Map<string, HandledToolCallEntry>()
+    const ac1 = new AbortController()
+    const wrappedNormal = wrapToolExecute(handledToolCalls, async () => {
+      ac1.abort()
+      return { output: [{ type: 'text', text: 'late-ok' }] }
+    })
+    await assert.rejects(
+      () => wrappedNormal({} as never, { callId: 'call-abort-1' } as never, { abortSignal: ac1.signal }),
+      (error: unknown) => error instanceof DOMException && error.name === 'AbortError',
+    )
+
+    const ac2 = new AbortController()
+    const customReason = new Error('kernel closing')
+    const wrappedErrResult = wrapToolExecute(handledToolCalls, async () => {
+      ac2.abort(customReason)
+      return { output: [{ type: 'text', text: 'late-error-result' }], isError: true }
+    })
+    await assert.rejects(
+      () => wrappedErrResult({} as never, { callId: 'call-abort-2' } as never, { abortSignal: ac2.signal }),
+      (error: unknown) => error === customReason,
+    )
+
+    // handledToolCalls 短路分支命中时不执行原工具也不因 abortSignal 抛错
+    const acHandled = new AbortController()
+    acHandled.abort(new Error('late abort'))
+    handledToolCalls.set('call-handled-abort', {
+      conversationId: 1,
+      result: { output: [{ type: 'text', text: 'pre-handled' }], isError: false },
+    })
+    const handledRes = (await wrappedNormal(
+      {} as never,
+      { callId: 'call-handled-abort' } as never,
+      { abortSignal: acHandled.signal },
+    )) as { output: Array<{ text: string }> }
+    assert.equal(handledRes.output[0]!.text, 'pre-handled')
+  })
+
+  it('installKernelTools：仅只读工具 read 与 read_artifact 声明 replay: "safe"，其余保持缺省非 safe', { timeout: 60_000 }, () => {
+    const installed: Extension[] = []
+    const fakeToolDeps: HelmToolDeps = {
+      dataDir: '/tmp/test',
+      defaultCwd: '/tmp/test',
+      hubUrl: 'http://127.0.0.1:3202',
+      stashEnvFor: () => ({}),
+      redact: (t) => t,
+      artifacts: {
+        spill: async () => ({ text: 'spill' }),
+        get: async () => ({} as never),
+        readContent: async () => '',
+        readBuffer: async () => new Uint8Array(),
+      },
+    }
+    const registryModule = new RuntimeToolRegistry({
+      registry: {
+        install(ext: Extension) {
+          installed.push(ext)
+        },
+      },
+      toolDeps: fakeToolDeps,
+      getPluginHost: () => undefined,
+      isArtifactAuthorized: () => true,
+      redact: (t) => t,
+      handledToolCalls: new Map(),
+      getConversation: (id) => ({
+        id,
+        title: 'test',
+        profileId: 'assistant',
+        tags: [],
+        cwd: '/tmp/test',
+        model: 'faux/faux-1',
+        thinkingLevel: '',
+        status: 'idle',
+        stateChangeSeq: 1,
+        completionSeq: 0,
+        unread: false,
+        pinned: false,
+        pendingAskCount: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      }),
+    })
+
+    registryModule.installKernelTools()
+    const tools = installed[0]!.tools!
+    const byName = new Map(tools.map((t) => [t.name, t]))
+    assert.equal(byName.get('read')?.replay, 'safe')
+    assert.equal(byName.get('read_artifact')?.replay, 'safe')
+    for (const unsafeName of ['bash', 'write', 'edit', 'register_artifact', 'run_action']) {
+      assert.notEqual(byName.get(unsafeName)?.replay, 'safe', `${unsafeName} 不得声明 replay: safe`)
+    }
+  })
 })

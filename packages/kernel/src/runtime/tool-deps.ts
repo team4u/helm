@@ -29,3 +29,15 @@ export interface HelmToolDeps {
   /** helm CLI 包装脚本目录（前置注入 PATH，使受管子进程可直接运行 helm）。 */
   cliBinDir?: string
 }
+
+/**
+ * 工具中止信号检查：abortSignal 已中止时抛出原生 Abort 异常（优先透传
+ * Error 类型 reason，否则构造 AbortError DOMException），确保 pi-durable
+ * ToolTask 进入 writeAtClose()/中断分支而不写入错误结果或垃圾 spill。
+ */
+export function throwIfToolAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException('The operation was aborted', 'AbortError')
+}

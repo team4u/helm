@@ -369,3 +369,135 @@ describe('journal key stability', () => {
     assert.notEqual(actionJournalKey('a', '{"x":1}'), actionJournalKey('a', '{"x":2}'))
   })
 })
+
+describe('跨步原生子会话断点续接（replayed label + execution.conversationId）', timeout, () => {
+  it('replayed label 含原生 conversationId（无 executionId）时，后续新增 agent({ resume: label }) 自动透传 resumeRef 续接原子会话', timeout, async () => {
+    const journal: WorkflowJournalEntry[] = []
+    let capturedResumeRef: string | undefined
+    const pass1Host: WorkflowHost = {
+      async spawnAgent(req) {
+        req.onResolved?.({ conversationId: 42 })
+        return { ok: true, text: 'pass1-ok' }
+      },
+      abortAgent() {},
+      async resumeAgent() {
+        throw new Error('pass1 不应调用 resumeAgent')
+      },
+      async runGate() {
+        return { ok: true, output: '' }
+      },
+      async invokeAction() {
+        return { pluginId: 'test', actionId: 'noop', result: undefined }
+      },
+    }
+    const script1 =
+      META('native-cross-step') +
+      `
+      const a = await agent("first", { label: "worker" })
+      const b = await agent("next", { resume: "worker" })
+      return [a, b]
+    `
+    // pass1 在 second step 中断前，first step 已落账本且带原生 execution.conversationId=42
+    const ac = new AbortController()
+    let firstSawResume = false
+    const crashingHost: WorkflowHost = {
+      ...pass1Host,
+      async resumeAgent() {
+        firstSawResume = true
+        ac.abort()
+        throw new Error('simulated crash before second step')
+      },
+    }
+    const r1 = await runWorkflow({
+      script: script1,
+      host: crashingHost,
+      signal: ac.signal,
+      journal: {
+        entries: [],
+        append: (e) => {
+          journal.push({ v: 1, seq: journal.length, ...e } as WorkflowJournalEntry)
+        },
+      },
+    })
+    assert.equal(firstSawResume, true)
+    assert.equal(r1.status, 'killed')
+    const cachedFirst = journal.find((e) => e.type === 'agent' && e.ok && e.index === 0)
+    assert.ok(cachedFirst && cachedFirst.type === 'agent')
+    assert.equal(cachedFirst.execution?.conversationId, 42)
+    assert.equal(cachedFirst.execution?.executionId, undefined)
+
+    // pass2：全新的 host，没有任何内存态；重放 first step 后继续执行第二步 resume("worker")
+    let pass2Spawns = 0
+    let pass2Resumes = 0
+    const pass2Host: WorkflowHost = {
+      async spawnAgent() {
+        pass2Spawns++
+        throw new Error('已重放步骤不得再次 spawnAgent')
+      },
+      abortAgent() {},
+      async resumeAgent(_agentId, prompt, options) {
+        pass2Resumes++
+        capturedResumeRef = options?.resumeRef
+        return { ok: true, text: `resumed:${prompt}` }
+      },
+      async runGate() {
+        return { ok: true, output: '' }
+      },
+      async invokeAction() {
+        return { pluginId: 'test', actionId: 'noop', result: undefined }
+      },
+    }
+    const replayEntries = journal.filter((e) => e.index === 0)
+    const r2 = await runWorkflow({
+      script: script1,
+      host: pass2Host,
+      journal: {
+        entries: replayEntries,
+        append: (e) => {
+          journal.push({ v: 1, seq: journal.length, ...e } as WorkflowJournalEntry)
+        },
+      },
+    })
+    assert.equal(r2.status, 'completed', r2.error)
+    assert.deepEqual(r2.value, ['pass1-ok', 'resumed:next'])
+    assert.equal(r2.replayedCount, 1)
+    assert.equal(pass2Spawns, 0, '重放的 label step 不得重新 spawn')
+    assert.equal(pass2Resumes, 1, '第二步 resume 必须实时经 resumeAgent 续接')
+    assert.equal(capturedResumeRef, '42', '必须将账本中的原生 conversationId 作为 resumeRef 透传')
+  })
+
+  it('replayed label 含外部 executionId 时，仍维持 replayed context 不可续接拒绝（绝不伪造续接）', timeout, async () => {
+    const key = agentJournalKey({ prompt: 'first', label: 'ext' })
+    const entries: WorkflowJournalEntry[] = [
+      {
+        v: 1,
+        seq: 0,
+        type: 'agent',
+        index: 0,
+        key,
+        scopePath: 'root',
+        scopeCallIndex: 0,
+        ok: true,
+        text: 'ok:ext',
+        execution: { nodeId: 'local', conversationId: 42, executionId: 'herdr-pane-1' },
+      },
+    ]
+    const host = makeAuditedHost()
+    const script =
+      META('ext-cross-step') +
+      `
+      const a = await agent("first", { label: "ext" })
+      const b = await agent("next", { resume: "ext" })
+      return [a, b]
+    `
+    const res = await runWorkflow({
+      script,
+      host,
+      journal: { entries, append: () => {} },
+    })
+    assert.equal(res.status, 'failed')
+    assert.match(res.error ?? '', /replayed \(cached\) context .* cannot be resumed/)
+    assert.equal(host.audit().spawns, 0)
+    assert.equal(host.audit().resumes, 0)
+  })
+})

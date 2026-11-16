@@ -141,6 +141,15 @@ export function registerWorkflowHooks(ctx: HelmPluginContext, deps: WorkflowHook
     projection.reprojectOnConversationDeleted()
   })
 
+  // ---- 启动后收敛遗留原生子会话与已停止原生 Worktree 崩溃租约 ----
+  // KernelRuntime.start() 在 pluginHost.start() -> harness.resume() -> started=true
+  // 之后发送进程内 runtime.started；先等恢复收集的遗留子会话收敛 idle，
+  // 再回收可证明已无执行的原生 Worktree 崩溃租约。
+  ctx.host.onEvent('runtime.started', async () => {
+    await workflows.awaitPreparedChildrenSettled()
+    await isolation.reconcileStoppedNativeLeases()
+  })
+
   // 只把账本已证明可安全续跑的后台失败 Run 交给 Watchdog。
   ctx.host.onEvent(DIAGNOSTICS_COLLECT_EVENT, (raw) => {
     if (projection.isStopping()) return

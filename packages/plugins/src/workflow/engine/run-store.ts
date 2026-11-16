@@ -127,6 +127,12 @@ export interface RunRecord {
    * 坐标——真实 run 运行期 nodes 要到 settleRun 才落盘，不能作为恢复依据。
    */
   childConversationIds?: number[]
+  /**
+   * 关停期子会话待清理标记：宿主关停（harness.close 先于 pluginHost.dispose）时，
+   * 已终态结算为 aborted 的 run 其子会话可能经 writeAtClose() 退回 pending；
+   * 置 true 指示下次启动的 prepareRecovery()/init() 补落持久取消标记并收敛 idle。
+   */
+  pendingChildCleanup?: boolean
   /** 当前累计自动续跑次数（resume 接管时 +1；与索引同步）。 */
   autoResumeCount?: number
   /** 已接替本失败 run 的新 run ID（防重复续跑；与索引同步）。 */
@@ -250,6 +256,9 @@ function runRecordProblem(record: unknown): string | undefined {
     (typeof r['detachedAt'] !== 'number' || !Number.isFinite(r['detachedAt'] as number))
   ) {
     return 'detachedAt 非有限数值'
+  }
+  if (r['pendingChildCleanup'] !== undefined && typeof r['pendingChildCleanup'] !== 'boolean') {
+    return 'pendingChildCleanup 非布尔'
   }
   return undefined
 }

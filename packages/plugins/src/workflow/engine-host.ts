@@ -28,6 +28,7 @@ export type EngineHostPorts = Pick<
   | 'abortConversationGuarded'
   | 'emitEvent'
   | 'runGate'
+  | 'isClosing'
 >
 
 export interface WorkflowEngineHostDeps {
@@ -131,5 +132,6 @@ export function createWorkflowEngineHost(deps: WorkflowEngineHostDeps): Workflow
         ...(gateOptions.signal !== undefined ? { signal: gateOptions.signal } : {}),
         ...(gateOptions.gateTimeoutMs !== undefined ? { gateTimeoutMs: gateOptions.gateTimeoutMs } : {}),
       }),
+    isHostClosing: () => host.isClosing,
   }
 }

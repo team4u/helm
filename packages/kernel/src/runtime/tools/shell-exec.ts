@@ -26,7 +26,7 @@ import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import { redactJsonValue } from '../../redact.js'
 import { invalidPathText, normalizePathForTarget, targetPlatformForNode } from '../target-platform.js'
-import type { HelmToolDeps } from '../tool-deps.js'
+import { throwIfToolAborted, type HelmToolDeps } from '../tool-deps.js'
 import { remoteShellGuardText, shellEnvFabricMissingText } from './guards.js'
 import { buildToolEnv } from './managed-env.js'
 
@@ -333,12 +333,15 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
           signal: context.abortSignal,
         })
       } catch (error) {
-        // invalid_timeout 等参数级错误：显式失败，绝不静默改默认。
+        // invalid_timeout 等参数级错误：显式失败，绝不静默改默认（已中止则上抛）。
+        throwIfToolAborted(context.abortSignal)
         return {
           output: [{ type: 'text', text: deps.redact(String(error)) }],
           isError: true,
         }
       }
+      // 关停/取消窗口禁止在磁盘写入无意义的 spill 产物文件。
+      throwIfToolAborted(context.abortSignal)
       const spill = await deps.artifacts.spill(
         api.conversationId as number,
         api.callId,

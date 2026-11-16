@@ -203,6 +203,85 @@ export class WorktreeLeaseStore {
     await this.docStore.flush()
   }
 
+  /**
+   * 判断租约是否命中宿主当前仍在执行的 spawn（executionId/conversationId 键
+   * 或活动路径重叠，防止误删同进程并发重建中的 pending 占位租约）。
+   */
+  private isLeaseActiveInHost(
+    lease: WorktreeLeaseRecord,
+    activeInfos: readonly AgentExecutionInfo[],
+    activeKeys: ReadonlySet<string>,
+  ): boolean {
+    if (lease.info.executionId !== undefined || lease.info.conversationId !== undefined) {
+      const key = `${lease.info.executionId ?? ''}\u0000${lease.info.conversationId ?? ''}`
+      if (activeKeys.has(key)) return true
+    }
+    for (const info of activeInfos) {
+      if (info.nodeId === undefined) continue
+      const leasePath = this.leasePathOf(lease, info.nodeId)
+      if (leasePath === undefined) continue
+      if (info.effectiveCwd !== undefined && this.contains(leasePath, info.effectiveCwd)) return true
+      const wt = extractWorkflowExecutionMeta(info).worktree
+      if (wt !== undefined && this.contains(leasePath, wt.path)) return true
+    }
+    return false
+  }
+
+  /**
+   * 启动后回收已确认停止的原生 Worktree 崩溃租约（由 runtime.started 在
+   * awaitPreparedChildrenSettled 之后调用）：
+   * - 外部运行时租约（executionId !== undefined）与活跃执行保持 fail-closed；
+   * - 仅清理两类可证明已无执行的原生租约：
+   *   1) phase === 'pending' && executionId === undefined；
+   *   2) phase === 'running' && executionId === undefined && conversationId !== undefined，
+   *      且底层会话确认非工作态（status !== 'working' && status !== 'blocked'，
+   *      或 getConversation 抛 HelmError('not_found')）。
+   * 保留 WorktreeAllocator 记录与 agentId 绑定供后续 resume / cleanup_worktree。
+   */
+  async reconcileStoppedNativeLeases(): Promise<number> {
+    const map = this.listLeases()
+    if (map.size === 0) return 0
+    const activeInfos = this.host.listActiveSpawnExecutions()
+    const activeKeys = new Set(
+      activeInfos.map((info) => `${info.executionId ?? ''}\u0000${info.conversationId ?? ''}`),
+    )
+    let removed = 0
+    for (const [token, lease] of map) {
+      if (this.isLeaseActiveInHost(lease, activeInfos, activeKeys)) continue
+      if (lease.info.executionId !== undefined) continue
+      if (lease.phase === 'pending') {
+        map.delete(token)
+        removed += 1
+        continue
+      }
+      if (lease.phase === 'running' && lease.info.conversationId !== undefined) {
+        let stopped = false
+        try {
+          stopped = !this.isConversationWorking(lease.info.conversationId)
+        } catch (error) {
+          if (error instanceof HelmError && error.code === 'not_found') {
+            stopped = true
+          } else {
+            // 其余存储读取异常 fail-closed 保留租约，不误清理。
+            process.stderr.write(
+              `builtin:workflow reconcileStoppedNativeLeases: skip lease ${lease.worktreeId} (conv ${lease.info.conversationId} lookup failed): ${
+                error instanceof Error ? error.message : String(error)
+              }\n`,
+            )
+          }
+        }
+        if (stopped) {
+          map.delete(token)
+          removed += 1
+        }
+      }
+    }
+    if (removed === 0) return 0
+    this.saveLeases(map)
+    await this.docStore.flush()
+    return removed
+  }
+
   // ------------------------------------------------------------------
   // agentId 绑定（resume ref 解析）
   // ------------------------------------------------------------------

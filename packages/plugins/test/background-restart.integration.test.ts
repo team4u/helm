@@ -27,7 +27,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { setTimeout as delay } from 'node:timers/promises'
 import assert from 'node:assert/strict'
@@ -464,6 +464,379 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
     await kernel.waitForIdle(childId).catch(() => {})
     assert.equal(faux.state.callCount, 0, 'running 相位中止已标记的遗留任务仍零新增模型调用')
     assert.equal(kernel.getConversation(childId).status, 'idle', '遗留子会话终态 idle')
+  } finally {
+    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 用例 4：同步/CLI 工作流（notifyParentOnSettle 未设）在 SIGKILL 与 close() 后全覆盖收敛
+// ---------------------------------------------------------------------------
+
+test('同步工作流全覆盖收敛：SIGKILL 与 graceful close() 均回收遗留原生子会话、清 pendingChildCleanup 且绝不通知父会话', { timeout: 60_000 }, async (t) => {
+  // ---- A) SIGKILL 中断同步工作流 ----
+  const sigkillDir = mkdtempSync(join(tmpdir(), 'helm-sync-sigkill-'))
+  const seedDir = mkdtempSync(join(tmpdir(), 'helm-sync-seed-'))
+  const seederPath = join(seedDir, 'sync-seed.mts')
+  const workflowSrc = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
+  writeFileSync(
+    seederPath,
+    `import { setTimeout as delay } from 'node:timers/promises'
+import { createModels } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href)}
+import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href)}
+import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
+import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helm/plugin-build'))}
+import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
+
+const dataDir = process.env.HELM_SEED_DIR!
+const models = createModels()
+const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
+models.setProvider(faux.provider)
+faux.setResponses([fauxAssistantMessage('这是一段慢速同步工作流输出确保在进程被强杀前子会话仍处于工作状态')])
+const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
+await kernel.plugins.register(createWorkflowPlugin())
+await kernel.start()
+const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
+  conversationId: 1,
+  script: 'export const meta = { name: "sync-sigkill", description: "test" }\\nreturn await agent("slow-sync-step")',
+}) as { run: { id: string } }
+let childId = 0
+for (let i = 0; i < 200; i++) {
+  await delay(50)
+  const working = kernel.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
+  if (working) {
+    childId = working.id
+    break
+  }
+}
+if (!childId) process.exit(4)
+await delay(1100)
+await kernel.documentStore.flush()
+process.stdout.write('CHILD=' + childId + ',RUN=' + run.id + '\\n')
+await delay(100)
+process.kill(process.pid, 'SIGKILL')
+`,
+    'utf8',
+  )
+  const tsxCli = require.resolve('tsx/cli')
+  let child: ReturnType<typeof spawn> | undefined
+  let kernelAfterKill: KernelRuntime | undefined
+  t.after(async () => {
+    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
+    await kernelAfterKill?.close().catch(() => {})
+    rmSync(seedDir, { recursive: true, force: true })
+    rmSync(sigkillDir, { recursive: true, force: true })
+  })
+
+  try {
+    child = spawn(process.execPath, [tsxCli, seederPath], {
+      cwd: KERNEL_DIR,
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: seedDir,
+        HELM_SEED_DIR: sigkillDir,
+        HELM_DATA_DIR: sigkillDir,
+        HELM_WATCHDOG_INTERVAL_MS: '0',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let childId = 0
+    let runId = ''
+    await Promise.race([
+      new Promise<void>((resolve, reject) => {
+        let out = ''
+        let err = ''
+        child!.stdout!.on('data', (d: Buffer) => {
+          out += d.toString()
+          const m = /CHILD=(\d+),RUN=([^\s]+)/.exec(out)
+          if (m) {
+            childId = Number(m[1])
+            runId = m[2]!
+          }
+        })
+        child!.stderr!.on('data', (d: Buffer) => { err += d.toString() })
+        child!.on('exit', (code, signal) => {
+          if (signal === 'SIGKILL' || code === 137) resolve()
+          else reject(new Error(`sync seeder exit code=${code} signal=${signal}: ${out}${err}`.slice(0, 2000)))
+        })
+        child!.on('error', reject)
+      }),
+      delay(30_000, undefined, { ref: false }).then(() => {
+        throw new Error('sync seeder 30s 未退出')
+      }),
+    ])
+    assert.ok(childId > 1 && runId !== '')
+
+    const faux = fauxProvider()
+    const models = createModels()
+    models.setProvider(faux.provider)
+    const kernel = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: sigkillDir,
+      cwd: sigkillDir,
+      model: 'faux/faux-1',
+      models,
+      autoResume: false,
+    })
+    kernelAfterKill = kernel
+    const rootInputs: unknown[] = []
+    kernel.events.subscribe((frame: HelmEventFrame) => {
+      const e = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string } }
+      if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helm.input') {
+        rootInputs.push(e.entry)
+      }
+    })
+    await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.start()
+
+    assert.equal(faux.state.callCount, 0, '同步工作流重启恢复不得新增模型调用（子会话与父会话均零调用）')
+    assert.equal(kernel.getConversation(childId).status, 'idle', '同步工作流遗留子会话必须收敛为 idle')
+    assert.equal(rootInputs.length, 0, '同步工作流恢复不得向父会话投递通知')
+    const runs = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as {
+      runs: Array<{ id: string; status: string; error?: string }>
+    }
+    const settled = runs.runs.find((r) => r.id === runId)
+    assert.equal(settled?.status, 'failed')
+    assert.match(settled?.error ?? '', /interrupted/)
+  } finally {
+    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
+  }
+
+  // ---- B) graceful kernel.close() 中断同步工作流 ----
+  const closeDir = mkdtempSync(join(tmpdir(), 'helm-sync-close-'))
+  const fauxC1 = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
+  const modelsC1 = createModels()
+  modelsC1.setProvider(fauxC1.provider)
+  fauxC1.setResponses([fauxAssistantMessage('优雅关停期缓慢输出的同步子会话长回复内容确保仍在执行中')])
+  const k1 = await KernelRuntime.open({
+    buildProvider: createPluginBuildProvider(),
+    dataDir: closeDir,
+    cwd: closeDir,
+    model: 'faux/faux-1',
+    models: modelsC1,
+    autoResume: false,
+  })
+  let k2: KernelRuntime | undefined
+  t.after(async () => {
+    await k1.close().catch(() => {})
+    await k2?.close().catch(() => {})
+    rmSync(closeDir, { recursive: true, force: true })
+  })
+  await k1.plugins.register(createWorkflowPlugin())
+  await k1.start()
+
+  const { run: closeRun } = (await k1.plugins.invokeAction('builtin:workflow', 'run', {
+    conversationId: ROOT,
+    script: 'export const meta = { name: "sync-graceful", description: "test" }\nreturn await agent("slow-sync-close")',
+  })) as { run: { id: string } }
+  let closeChildId = 0
+  for (let i = 0; i < 200; i++) {
+    await delay(30)
+    const working = k1.listConversations().find((c) => c.parentConversationId === ROOT && c.status === 'working')
+    if (working) {
+      closeChildId = working.id
+      break
+    }
+  }
+  assert.ok(closeChildId > 1, '同步子会话必须进入 working')
+  await k1.close()
+
+  const recordPath = join(closeDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${closeRun.id}.record.json`)
+  const recordAfterClose = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>
+  assert.equal(recordAfterClose['status'], 'aborted')
+  assert.equal(recordAfterClose['pendingChildCleanup'], true, 'host closing 时存在子会话必须写入 pendingChildCleanup')
+
+  const fauxC2 = fauxProvider()
+  const modelsC2 = createModels()
+  modelsC2.setProvider(fauxC2.provider)
+  k2 = await KernelRuntime.open({
+    buildProvider: createPluginBuildProvider(),
+    dataDir: closeDir,
+    cwd: closeDir,
+    model: 'faux/faux-1',
+    models: modelsC2,
+    autoResume: false,
+  })
+  const rootInputs2: unknown[] = []
+  k2.events.subscribe((frame: HelmEventFrame) => {
+    const e = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string } }
+    if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helm.input') {
+      rootInputs2.push(e.entry)
+    }
+  })
+  await k2.plugins.register(createWorkflowPlugin())
+  await k2.start()
+
+  assert.equal(fauxC2.state.callCount, 0, '关停残留子会话重启不得继续执行或发父通知')
+  assert.equal(k2.getConversation(closeChildId).status, 'idle')
+  assert.equal(rootInputs2.length, 0)
+  const recordAfterRestart = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>
+  assert.equal(recordAfterRestart['pendingChildCleanup'], undefined, 'init() 恢复后必须清除 pendingChildCleanup')
+})
+
+// ---------------------------------------------------------------------------
+// 用例 5：原生 isolation:'worktree' SIGKILL 崩溃租约在 runtime.started 后自动收敛
+// ---------------------------------------------------------------------------
+
+test('原生 isolation:worktree SIGKILL 崩溃租约在重启 runtime.started 后自动回收并放行 cleanup_worktree；外部 executionId 租约保持 fail-closed', { timeout: 60_000 }, async (t) => {
+  const baseDir = mkdtempSync(join(tmpdir(), 'helm-wt-sigkill-'))
+  const repoDir = join(baseDir, 'repo')
+  const dataDir = join(baseDir, 'data')
+  const seedDir = join(baseDir, 'seed')
+  mkdirSync(repoDir, { recursive: true })
+  mkdirSync(dataDir, { recursive: true })
+  mkdirSync(seedDir, { recursive: true })
+
+  execFileSync('git', ['init'], { cwd: repoDir })
+  execFileSync('git', ['config', 'user.email', 'test@helm.local'], { cwd: repoDir })
+  execFileSync('git', ['config', 'user.name', 'Helm Test'], { cwd: repoDir })
+  writeFileSync(join(repoDir, 'README.md'), 'init\n', 'utf8')
+  execFileSync('git', ['add', '.'], { cwd: repoDir })
+  execFileSync('git', ['commit', '-m', 'init'], { cwd: repoDir })
+
+  const workflowSrc = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
+  const seederPath = join(seedDir, 'wt-seed.mts')
+  writeFileSync(
+    seederPath,
+    `import { setTimeout as delay } from 'node:timers/promises'
+import { createModels } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href)}
+import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href)}
+import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
+import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helm/plugin-build'))}
+import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
+
+const dataDir = process.env.HELM_SEED_DIR!
+const repoDir = process.env.HELM_REPO_DIR!
+const models = createModels()
+const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
+models.setProvider(faux.provider)
+faux.setResponses([fauxAssistantMessage('这是一段慢速工作树隔离子代理流式文本确保进程崩溃时原生租约仍在运行中')])
+const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: repoDir, model: 'faux/faux-1', models, autoResume: false })
+await kernel.plugins.register(createWorkflowPlugin())
+await kernel.start()
+const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
+  conversationId: 1,
+  script: 'export const meta = { name: "wt-sigkill", description: "test" }\\nreturn await agent("wt-slow", { isolation: "worktree" })',
+}) as { run: { id: string } }
+let childId = 0
+for (let i = 0; i < 200; i++) {
+  await delay(50)
+  const working = kernel.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
+  if (working) {
+    childId = working.id
+    break
+  }
+}
+if (!childId) process.exit(5)
+await delay(1100)
+await kernel.documentStore.flush()
+process.stdout.write('CHILD=' + childId + ',RUN=' + run.id + '\\n')
+await delay(100)
+process.kill(process.pid, 'SIGKILL')
+`,
+    'utf8',
+  )
+
+  const tsxCli = require.resolve('tsx/cli')
+  let child: ReturnType<typeof spawn> | undefined
+  let recoveredKernel: KernelRuntime | undefined
+  t.after(async () => {
+    if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
+    await recoveredKernel?.close().catch(() => {})
+    rmSync(baseDir, { recursive: true, force: true })
+  })
+
+  try {
+    child = spawn(process.execPath, [tsxCli, seederPath], {
+      cwd: KERNEL_DIR,
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: seedDir,
+        HELM_SEED_DIR: dataDir,
+        HELM_REPO_DIR: repoDir,
+        HELM_DATA_DIR: dataDir,
+        HELM_WATCHDOG_INTERVAL_MS: '0',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let childId = 0
+    await Promise.race([
+      new Promise<void>((resolve, reject) => {
+        let out = ''
+        let err = ''
+        child!.stdout!.on('data', (d: Buffer) => {
+          out += d.toString()
+          const m = /CHILD=(\d+),RUN=([^\s]+)/.exec(out)
+          if (m) childId = Number(m[1])
+        })
+        child!.stderr!.on('data', (d: Buffer) => { err += d.toString() })
+        child!.on('exit', (code, signal) => {
+          if (signal === 'SIGKILL' || code === 137) resolve()
+          else reject(new Error(`wt seeder exit code=${code} signal=${signal}: ${out}${err}`.slice(0, 2000)))
+        })
+        child!.on('error', reject)
+      }),
+      delay(30_000, undefined, { ref: false }).then(() => {
+        throw new Error('wt seeder 30s 未退出')
+      }),
+    ])
+    assert.ok(childId > 1)
+
+    const faux = fauxProvider()
+    const models = createModels()
+    models.setProvider(faux.provider)
+    const kernel = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      cwd: repoDir,
+      model: 'faux/faux-1',
+      models,
+      autoResume: false,
+    })
+    recoveredKernel = kernel
+
+    // 在插件启动前校验真实崩溃现场已落原生 running 租约，并同时种入 1 条外部 executionId 租约做对比。
+    const preState = kernel.documentStore.get<Record<string, unknown>>('builtin:workflow:worktree-state', {})
+    const preLeases = (preState['worktree-leases'] as Record<string, { phase: string; info: { conversationId?: number; executionId?: string } }> | undefined) ?? {}
+    const nativeLeaseKeys = Object.entries(preLeases)
+      .filter(([, l]) => l.info.conversationId === childId && l.info.executionId === undefined)
+      .map(([k]) => k)
+    assert.equal(nativeLeaseKeys.length, 1, `SIGKILL 现场应有 1 条原生租约（实际：${JSON.stringify(preLeases)}）`)
+
+    preLeases['ext-lease-seed'] = {
+      phase: 'running',
+      info: { conversationId: 9999, executionId: 'herdr:pane-keep' },
+      worktreeId: 'wt-ext-keep',
+      createdAt: 1,
+    } as never
+    preState['worktree-leases'] = preLeases
+    kernel.documentStore.set('builtin:workflow:worktree-state', preState)
+    await kernel.documentStore.flush()
+
+    await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.start()
+
+    assert.equal(faux.state.callCount, 0, '工作树遗留子会话重启期零新增模型调用')
+    assert.equal(kernel.getConversation(childId).status, 'idle', '子会话先于租约回收收敛 idle')
+
+    const postState = kernel.documentStore.get<Record<string, unknown>>('builtin:workflow:worktree-state', {})
+    const postLeases = (postState['worktree-leases'] as Record<string, unknown> | undefined) ?? {}
+    assert.equal(postLeases[nativeLeaseKeys[0]!], undefined, '已停止原生租约必须被 runtime.started 自动回收')
+    assert.ok(postLeases['ext-lease-seed'], '外部 executionId 租约必须继续保留 fail-closed')
+
+    // 确认 cleanup_worktree 不再被 worktree_execution_unknown 阻塞
+    try {
+      const cleaned = (await kernel.plugins.invokeAction('builtin:workflow', 'cleanup_worktree', {
+        conversationId: childId,
+        deleteBranch: true,
+      })) as { removed: boolean }
+      assert.equal(cleaned.removed, true)
+    } catch (error) {
+      assert.ok(
+        error instanceof Error && 'code' in error && (error as { code?: string }).code === 'worktree_process_check_failed',
+        `原生租约回收后 cleanup_worktree 只允许环境 /proc 限制，实得：${String(error)}`,
+      )
+    }
   } finally {
     if (child && child.exitCode === null && !child.killed) child.kill('SIGKILL')
   }

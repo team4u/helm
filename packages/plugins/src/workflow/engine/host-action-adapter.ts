@@ -188,6 +188,11 @@ export async function enginePrepareAction(
   actionId: string,
   input: unknown,
 ): Promise<{ pluginId: string; actionId: string; idempotent?: boolean }> {
+  // 在落盘 action_started 前拦截宿主关停：既阻止新动作启动，又避免写悬空 action_started。
+  if (deps.host.isHostClosing?.() === true) {
+    run.abort.abort()
+    throw new HelmError('aborted', '宿主正在关停，中止动作调用', 409)
+  }
   const resolved = resolveActionId(deps.host, actionId)
   if (resolved.builtin === 'env.exec') {
     validateEnvExecInput(deps.host, input)

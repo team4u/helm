@@ -165,6 +165,11 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
             ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
           })
         } catch (error) {
+          if (ctx.runState.isAborted() || ctx.runState.isSettled()) {
+            ctx.openLaunches.delete(callId)
+            ctx.respond(callId, false, undefined, 'Workflow aborted.', true)
+            return
+          }
           const errMsg = error instanceof Error ? error.message : String(error)
           try {
             await recordAction({
