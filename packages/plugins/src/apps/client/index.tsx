@@ -527,11 +527,10 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
       </div>
 
       <div className="apps-center-toolbar">
-        <div className="apps-search-box">
-          <HelmIcon name="search" size={13} />
+        <div className="primary-search-box">
+          <HelmIcon name="search" size={14} />
           <input
             type="text"
-            className="input"
             placeholder="搜索应用名称、ID 或描述…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -540,21 +539,21 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
           {query !== '' && (
             <button
               type="button"
-              className="btn btn-ghost btn-icon-xs"
+              className="btn btn-ghost btn-sm primary-search-clear"
               title="清空搜索"
               aria-label="清空搜索"
               onClick={() => setQuery('')}
             >
-              <HelmIcon name="x" size={11} />
+              <HelmIcon name="x" size={12} />
             </button>
           )}
         </div>
-        <div className="apps-category-pills" role="tablist" aria-label="应用筛选">
+        <div className="primary-category-pills" role="tablist" aria-label="应用筛选">
           <button
             type="button"
             role="tab"
             aria-selected={tab === 'all'}
-            className={`apps-category-pill${tab === 'all' ? ' is-active' : ''}`}
+            className={`primary-category-pill${tab === 'all' ? ' is-active' : ''}`}
             onClick={() => setTab('all')}
           >
             <span>全部</span>
@@ -564,7 +563,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
             type="button"
             role="tab"
             aria-selected={tab === 'pinned'}
-            className={`apps-category-pill${tab === 'pinned' ? ' is-active' : ''}`}
+            className={`primary-category-pill${tab === 'pinned' ? ' is-active' : ''}`}
             onClick={() => setTab('pinned')}
           >
             <span>已置顶</span>

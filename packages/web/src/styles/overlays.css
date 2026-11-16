@@ -423,16 +423,22 @@
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg-elevated);
-  min-width: 260px;
+  min-width: min(260px, 100%);
   flex: 1;
   max-width: 420px;
   color: var(--fg-muted);
   transition: border-color 0.15s ease;
+  box-sizing: border-box;
 }
 
 .primary-search-box:focus-within {
   border-color: var(--accent);
   color: var(--fg);
+}
+
+.primary-search-box > svg {
+  pointer-events: none;
+  flex-shrink: 0;
 }
 
 .primary-search-box input {
@@ -447,6 +453,7 @@
 }
 
 .primary-search-clear {
+  flex-shrink: 0;
   padding: 2px;
   height: auto;
   color: var(--fg-subtle);
@@ -454,6 +461,15 @@
 
 .primary-search-clear:hover {
   color: var(--fg);
+}
+
+@media (max-width: 680px) {
+  .primary-search-box {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+    flex: 1 1 100%;
+  }
 }
 
 .primary-category-pills {

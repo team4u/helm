@@ -238,7 +238,7 @@ test('分类 Tab 与搜索过滤：点击药丸切换 Tab 并经 setParams 回�
   assert.equal(host.querySelectorAll('.app-card').length, 2, '初始全部 Tab 展示两个应用')
 
   // 置顶 Tab：仅 catalog 登记 pinned 的应用（setParams 后模拟宿主重渲染）
-  const pills = Array.from(host.querySelectorAll('.apps-category-pill'))
+  const pills = Array.from(host.querySelectorAll('.primary-category-pill'))
   const pinnedPill = pills.find((p) => p.textContent?.includes('已置顶'))
   assert.ok(pinnedPill)
   await act(async () => {
@@ -269,13 +269,23 @@ test('深链参数恢复：params.tab / params.q 初始即生效（sp.* 命名�
     [screen('todo-app', 'main', '待办台'), screen('tracker-app', 'main', '看板')],
     { apps: { 'todo-app': { pluginId: 'todo-app', pinned: true, category: 'productivity' } } },
   )
+  setParamsCalls = []
   const { host, unmount } = await mount(makeSpyCtx(), screenProps({ tab: 'pinned', q: '待办' }))
-  const active = host.querySelector('.apps-category-pill.is-active')
+  const active = host.querySelector('.primary-category-pill.is-active')
   assert.ok(active?.textContent?.includes('已置顶'), 'params.tab 恢复激活 Tab')
   assert.equal(host.querySelectorAll('.app-card').length, 1)
   assert.equal(host.querySelector('.app-card')?.getAttribute('data-app-id'), 'todo-app')
-  const search = host.querySelector<HTMLInputElement>('.apps-search-box input')
-  assert.equal(search?.value, '待办', 'params.q 恢复搜索词')
+  const search = host.querySelector<HTMLInputElement>('.primary-search-box input')
+  assert.ok(search, '搜索框应复用宿主 .primary-search-box 原语')
+  assert.equal(search.classList.contains('input'), false, '搜索框内层 input 不得携带 .input 类名避免双层描边')
+  assert.equal(search.value, '待办', 'params.q 恢复搜索词')
+  const clearBtn = host.querySelector<HTMLButtonElement>('.primary-search-clear')
+  assert.ok(clearBtn, '存在搜索词时应展示宿主统一样式的清空按钮')
+  await act(async () => {
+    clearBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  assert.equal(search.value, '', '点击清空按钮应清除本地搜索词')
+  assert.ok(setParamsCalls.some((c) => 'q' in c.patch && c.patch['q'] === undefined), '点击清空按钮应删除 URL q 参数')
   unmount()
 })
 
@@ -294,7 +304,7 @@ test('筛选药丸：仅保留「全部」与「已置顶」，移除多余业�
     },
   )
   const { host, unmount } = await mount(makeSpyCtx(), screenProps())
-  const pills = Array.from(host.querySelectorAll('.apps-category-pill'))
+  const pills = Array.from(host.querySelectorAll('.primary-category-pill'))
   assert.equal(pills.length, 2, '工具栏药丸应严格只保留「全部」和「已置顶」两项')
   const first = pills[0]
   const second = pills[1]

@@ -12,6 +12,7 @@
 .search-box > input,
 .search-box > .input,
 .primary-search-box input,
+.primary-search-box .input,
 .plugin-search-box input,
 .plugin-search-box .input,
 .sidebar-search-input {
@@ -27,6 +28,7 @@
 .search-box > input:focus,
 .search-box > .input:focus,
 .primary-search-box input:focus,
+.primary-search-box .input:focus,
 .plugin-search-box input:focus,
 .plugin-search-box .input:focus,
 .sidebar-search-input:focus {
