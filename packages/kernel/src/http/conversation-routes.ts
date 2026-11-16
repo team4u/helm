@@ -77,7 +77,7 @@ export async function handleConversationsDomain(
       ...(replaceFromEntryId !== undefined ? { replaceFromEntryId } : {}),
     })
     if (!wait) return jsonOk(redactor, { submissionId }, { status: 202 })
-    return jsonOk(redactor, await kernel.waitForInput(id, submissionId))
+    return jsonOk(redactor, await kernel.waitForInput(id, submissionId, ctx.request.signal))
   }
   if (third === 'withdraw' && method === 'POST' && fourth === undefined) {
     if (kernel.withdrawQueuedInput === undefined) {

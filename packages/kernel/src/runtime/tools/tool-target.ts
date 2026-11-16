@@ -31,8 +31,9 @@ export interface ToolTarget {
 export async function resolveToolTarget(
   deps: HelmToolDeps,
   api: ToolTargetApi,
+  context: Context = BACKGROUND_CONTEXT,
 ): Promise<ToolTarget | { error: string }> {
-  const agent = await api.agent(BACKGROUND_CONTEXT)
+  const agent = await api.agent(context)
   const base = agent.cwd ?? deps.defaultCwd
   if (!isAbsoluteTargetPath(base)) {
     return { error: `会话 cwd 非绝对路径（${base}），拒绝文件操作` }

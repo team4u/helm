@@ -11,10 +11,15 @@
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Models, ModelsStore } from '@earendil-works/pi-ai'
-import { Harness, createRegistry, type Registry } from '@earendil-works/pi-durable'
+import { Harness, createRegistry, type Registry, type SessionEnd } from '@earendil-works/pi-durable'
 import { HelmError } from '@helm/protocol'
 import { CredentialService, ProviderService, ensureDataDir, resolveDataDir } from '../services/index.js'
 import type { PluginBuildProvider } from '@helm/protocol'
+import {
+  createDiagnosticEmitter,
+  type KernelDiagnosticEmitter,
+  type KernelDiagnosticSink,
+} from './diagnostics.js'
 import { buildModels } from './models.js'
 import { createFileModelsStore } from './models-store.js'
 import { assertModelsStoreHealthyAtBoot } from './runtime-helpers.js'
@@ -41,6 +46,8 @@ export interface KernelBootOptions {
    * 显式拒绝（unsupported_client_build / unsupported_backend_ts_build）。
    */
   buildProvider?: PluginBuildProvider
+  /** 可选诊断通道 sink（接收内核脱敏后的内部错误/告警；缺省输出到 console.error）。 */
+  onDiagnostic?: KernelDiagnosticSink
 }
 
 export interface BootstrappedKernelContext {
@@ -54,8 +61,14 @@ export interface BootstrappedKernelContext {
   modelsInstance: Models
   modelsStore: ModelsStore
   apiKeyCache: Record<string, string>
+  onDiagnostic?: KernelDiagnosticSink
+  emitDiagnostic: KernelDiagnosticEmitter
   setModels(m: Models): void
   redactReport(fn: (text: string) => string): void
+  setFatalStorageHandler(
+    fn: (source: 'harness' | 'store', error: unknown) => void,
+    isClosing: () => boolean,
+  ): void
 }
 
 /**
@@ -67,7 +80,38 @@ export async function bootstrapKernelRuntime(
   const dataDir = resolveDataDir(options.dataDir)
   await ensureDataDir(dataDir)
   const database = await openHelmDatabase(dataDir)
-  const store = new HelmStore(database)
+
+  const redactSlot: { current: (text: string) => string } = { current: (t) => t }
+  const emitDiagnostic = createDiagnosticEmitter({
+    sink: options.onDiagnostic,
+    redact: (text) => redactSlot.current(text),
+  })
+  const fatalHandlerSlot: { current: ((source: 'harness' | 'store', error: unknown) => void) | undefined } = {
+    current: undefined,
+  }
+  const isClosingSlot: { current: () => boolean } = { current: () => false }
+  const pendingBootFailures: Array<{ source: 'harness' | 'store'; error: unknown }> = []
+
+  const dispatchFatalStorage = (source: 'harness' | 'store', error: unknown): void => {
+    if (isClosingSlot.current()) return
+    if (fatalHandlerSlot.current !== undefined) {
+      fatalHandlerSlot.current(source, error)
+      return
+    }
+    pendingBootFailures.push({ source, error })
+    emitDiagnostic({
+      level: 'error',
+      source,
+      message: source === 'store' ? 'HelmStore 持久化失败' : 'Harness 因致命存储故障关闭',
+      error,
+    })
+  }
+
+  const store = new HelmStore(database, {
+    onError: (error) => dispatchFatalStorage('store', error),
+    onDiagnostic: options.onDiagnostic,
+    redact: (text) => redactSlot.current(text),
+  })
   await store.load()
 
   const providersSvc = new ProviderService(dataDir)
@@ -96,7 +140,6 @@ export async function bootstrapKernelRuntime(
 
   const registry = createRegistry()
   const modelsSlot = { current: modelsInstance }
-  const redactSlot: { current: (text: string) => string } = { current: (t) => t }
 
   const harness = await Harness.open(
     database.storage,
@@ -114,11 +157,33 @@ export async function bootstrapKernelRuntime(
             : report.kind === 'task_faulted' || report.kind === 'task_interrupted'
               ? `${report.kind}(${report.task.kind})`
               : report.kind
-        const errorText = String((report as { error?: unknown }).error ?? '')
-        console.error('[helm] durable report:', description, redactSlot.current(errorText))
+        const convId =
+          'conversationId' in report && typeof report.conversationId === 'number'
+            ? (report.conversationId as number)
+            : 'task' in report && report.task !== undefined && typeof report.task.conversationId === 'number'
+              ? (report.task.conversationId as number)
+              : undefined
+        emitDiagnostic({
+          level: 'error',
+          source: 'durable',
+          message: `durable report: ${description}`,
+          error: (report as { error?: unknown }).error,
+          ...(convId !== undefined ? { conversationId: convId } : {}),
+        })
       },
     },
     BACKGROUND_CONTEXT,
+  )
+
+  void harness.closed.then(
+    (end: SessionEnd) => {
+      if (end.kind === 'closed' || isClosingSlot.current()) return
+      dispatchFatalStorage('harness', end.error)
+    },
+    (error: unknown) => {
+      if (isClosingSlot.current()) return
+      dispatchFatalStorage('harness', error)
+    },
   )
 
   return {
@@ -132,11 +197,21 @@ export async function bootstrapKernelRuntime(
     modelsInstance,
     modelsStore,
     apiKeyCache,
+    onDiagnostic: options.onDiagnostic,
+    emitDiagnostic,
     setModels: (m: Models) => {
       modelsSlot.current = m
     },
     redactReport: (fn: (text: string) => string) => {
       redactSlot.current = fn
+    },
+    setFatalStorageHandler: (fn, isClosing) => {
+      fatalHandlerSlot.current = fn
+      isClosingSlot.current = isClosing
+      while (pendingBootFailures.length > 0) {
+        const next = pendingBootFailures.shift()!
+        if (!isClosing()) fn(next.source, next.error)
+      }
     },
   }
 }
@@ -269,17 +344,24 @@ export async function teardownKernelRuntime(deps: {
   stashService: {
     clear(): void
   }
+  emitDiagnostic?: KernelDiagnosticEmitter
 }): Promise<void> {
   // 每步独立隔离：任一步失败只记录并继续关停其余资源（否则 harness/store/
   // database/events 的 close 被跳过，SQLite 句柄泄漏）；全部执行完后统一上抛，
   // 绝不流报成功关停。
+  const emitDiagnostic = deps.emitDiagnostic ?? createDiagnosticEmitter()
   const failures: string[] = []
   const step = async (name: string, run: () => Promise<void>): Promise<void> => {
     try {
       await run()
     } catch (error) {
       failures.push(`${name}: ${String(error)}`)
-      console.error(`[helm] teardown 步骤 ${name} 失败（继续关停其余资源）:`, error)
+      emitDiagnostic({
+        level: 'error',
+        source: 'teardown',
+        message: `teardown 步骤 ${name} 失败（继续关停其余资源）`,
+        error,
+      })
     }
   }
 
@@ -306,7 +388,12 @@ export async function teardownKernelRuntime(deps: {
   } catch (error) {
     storeError = error
     failures.push(`store.close: ${String(error)}`)
-    console.error('[helm] teardown 步骤 store.close 失败（继续关停其余资源）:', error)
+    emitDiagnostic({
+      level: 'error',
+      source: 'teardown',
+      message: 'teardown 步骤 store.close 失败（继续关停其余资源）',
+      error,
+    })
   }
   await step('database.close', () => deps.database.close())
   deps.events.close()

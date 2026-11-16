@@ -320,9 +320,9 @@ export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bash
         cwd: { type: 'string', description: '实际启动工作目录（目标平台规范化后，非原始入参）' },
       },
       required: ['ok', 'output'],
-    } as never,
+    },
     async execute(args, api, context) {
-      const agent = await api.agent(BACKGROUND_CONTEXT)
+      const agent = await api.agent(context)
       const cwd = agent.cwd ?? deps.defaultCwd
       let result: ShellRunResult
       try {

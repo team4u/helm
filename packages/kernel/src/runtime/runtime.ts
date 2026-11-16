@@ -77,6 +77,7 @@ import {
   createPluginHostBackend,
   createPluginSessionDocStore,
 } from './runtime-host-backend.js'
+import { formatDiagnosticError, type KernelDiagnosticInput } from './diagnostics.js'
 import {
   bootstrapKernelRuntime,
   ensureInitialConversation,
@@ -113,6 +114,8 @@ export class KernelRuntime {
   #started = false
   private startPromise: Promise<void> | undefined
   private closed = false
+  #fatalError: HelmError | undefined
+  private fatalStorageNotified = false
   private readonly handledToolCalls = new Map<
     string,
     {
@@ -182,7 +185,12 @@ export class KernelRuntime {
         const absorbed = run.then(
           () => undefined,
           (error) => {
-            console.error('[helm] turn 结算链失败（已吸收，不阻断关停）:', error)
+            this.emitDiagnostic({
+              level: 'error',
+              source: 'runtime.settle',
+              message: 'turn 结算链失败（已吸收，不阻断关停）',
+              error,
+            })
             return undefined
           },
         )
@@ -224,6 +232,12 @@ export class KernelRuntime {
       this.stashService.addRedaction(process.env['HELM_TOKEN'])
     }
     this.init.redactReport((t) => this.stashService.redact(t))
+    this.svc.tracker.setDiagnosticSink(this.init.onDiagnostic)
+    this.svc.conversations.setFatalErrorProvider(() => this.#fatalError)
+    this.init.setFatalStorageHandler(
+      (source, error) => this.handleFatalStorageError(source, error),
+      () => this.closed,
+    )
   }
 
   private async initialize(): Promise<void> {
@@ -313,7 +327,12 @@ export class KernelRuntime {
       } catch (error) {
         // 工具热装失败不得阻断事件发布（客户端仍需拿到插件状态变化），
         // 也不让异常穿透调用方；错误如实记录。
-        console.error('[helm] plugin.changed 后刷新插件工具失败:', error)
+        this.emitDiagnostic({
+          level: 'error',
+          source: 'runtime.plugins',
+          message: 'plugin.changed 后刷新插件工具失败',
+          error,
+        })
       }
       const envelope = payload as { type?: string; plugin?: unknown; ui?: unknown } | undefined
       return this.events.publish('plugin.changed', {
@@ -354,11 +373,72 @@ export class KernelRuntime {
         try {
           await listener(payload)
         } catch (error) {
-          console.error(`[helm] 内部事件监听器失败（${type}）:`, error)
+          this.emitDiagnostic({
+            level: 'error',
+            source: 'runtime.events',
+            message: `内部事件监听器失败（${type}）`,
+            error,
+          })
         }
       }
     })()
     return run
+  }
+
+  /** 致命存储故障状态（只读）：Harness Storage 故障或 HelmStore 持久化失败后置位。 */
+  get fatalError(): HelmError | undefined {
+    return this.#fatalError
+  }
+
+  private emitDiagnostic(input: KernelDiagnosticInput): void {
+    this.init.emitDiagnostic(input)
+  }
+
+  private assertWritable(): void {
+    if (this.#fatalError !== undefined) {
+      throw this.#fatalError
+    }
+  }
+
+  private handleFatalStorageError(source: 'harness' | 'store', error: unknown): void {
+    if (this.closed) return
+    const safeDetail = this.stashService.redact(formatDiagnosticError(error))
+    const recorded =
+      error instanceof HelmError
+        ? new HelmError(error.code, this.stashService.redact(error.message), error.status, {
+            source,
+            cause: safeDetail,
+          })
+        : new HelmError(
+            source === 'store' ? 'store_flush_failed' : 'storage_failed',
+            `致命存储故障（${source}）：${safeDetail}`,
+            500,
+            { source },
+          )
+    if (this.#fatalError === undefined) {
+      this.#fatalError = recorded
+    }
+    this.emitDiagnostic({
+      level: 'error',
+      source,
+      message: source === 'store' ? 'HelmStore 持久化失败，内核进入致命故障状态' : 'Harness 因致命存储故障关闭',
+      error,
+    })
+    if (!this.fatalStorageNotified) {
+      this.fatalStorageNotified = true
+      const notification = {
+        level: 'error' as const,
+        title: source === 'store' ? '内核持久化故障' : '内核存储引擎异常关闭',
+        body: recorded.message,
+      }
+      try {
+        this.events.publish('notification', notification)
+      } catch {
+        // store 进入 fail 状态时 persistSeq 会抛出 store_flush_failed；
+        // 至少仍向内部宿主监听器投递一次通知，绝不二次抛错。
+        void this.dispatchInternalEvent('notification', { type: 'notification', ...notification })
+      }
+    }
   }
 
   /** 启动生命周期事实（只读）：start() 完成（harness.resume 后同一同步段）为 true。 */
@@ -367,6 +447,7 @@ export class KernelRuntime {
   }
 
   async start(): Promise<void> {
+    this.assertWritable()
     if (this.#started) return
     if (this.startPromise) return this.startPromise
     const attempt = (async () => {
@@ -526,7 +607,13 @@ export class KernelRuntime {
     } catch (error) {
       // 本 run 会被聚入 settledInflight（teardown 在等它收敛）：插件钩子或
       // 事件发布抛错绝不 reject（会中断关停并毒化聚合链），如实记录后结束。
-      console.error(`[helm] turn_settled 分发失败（会话 ${String(convId)}）:`, error)
+      this.emitDiagnostic({
+        level: 'error',
+        source: 'runtime.turn_settled',
+        message: 'turn_settled 分发失败',
+        error,
+        conversationId: convId,
+      })
     }
   }
 
@@ -552,14 +639,17 @@ export class KernelRuntime {
   }
 
   async createConversation(init: ConversationInit = {}): Promise<ConversationSummary> {
+    this.assertWritable()
     return this.conversations.createConversation(init)
   }
 
   async updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary> {
+    this.assertWritable()
     return this.conversations.updateConversation(id, patch)
   }
 
   async deleteConversation(id: number): Promise<void> {
+    this.assertWritable()
     return this.conversations.deleteConversation(id)
   }
 
@@ -568,14 +658,20 @@ export class KernelRuntime {
     text: string,
     opts?: Parameters<ConversationService['submitInput']>[2],
   ): Promise<{ submissionId: string }> {
+    this.assertWritable()
     return this.conversations.submitInput(id, text, opts)
   }
 
-  async waitForInput(id: number, submissionId: string): Promise<ConversationInputResult> {
-    return this.conversations.waitForInput(id, submissionId)
+  async waitForInput(
+    id: number,
+    submissionId: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationInputResult> {
+    return this.conversations.waitForInput(id, submissionId, signal)
   }
 
   async abortConversation(id: number): Promise<void> {
+    this.assertWritable()
     return this.conversations.abortConversation(id)
   }
 
@@ -584,6 +680,7 @@ export class KernelRuntime {
     id: number,
     guard: Parameters<ConversationService['abortConversationGuarded']>[1],
   ): Promise<void> {
+    this.assertWritable()
     return this.conversations.abortConversationGuarded(id, guard)
   }
 
@@ -594,14 +691,17 @@ export class KernelRuntime {
     opts?: Parameters<ConversationService['submitInput']>[2],
     guard: Parameters<ConversationService['submitInputGuarded']>[3] = {},
   ): Promise<{ submissionId: string }> {
+    this.assertWritable()
     return this.conversations.submitInputGuarded(id, text, opts, guard)
   }
 
   async withdrawQueuedInput(id: number, opts: { submissionId: number }): Promise<ConversationWithdrawResponse> {
+    this.assertWritable()
     return this.conversations.withdrawQueuedInput(id, opts)
   }
 
   async resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> {
+    this.assertWritable()
     return this.conversations.resetConversation(id, opts)
   }
 
@@ -609,10 +709,12 @@ export class KernelRuntime {
     id: number,
     opts?: { instructions?: string },
   ): Promise<{ taskId: number; conversation: ConversationSummary }> {
+    this.assertWritable()
     return this.conversations.compactConversation(id, opts)
   }
 
   async forkConversation(id: number, opts: { entryId: number; title?: string }): Promise<ConversationSummary> {
+    this.assertWritable()
     return this.conversations.forkConversation(id, opts)
   }
 
@@ -629,10 +731,12 @@ export class KernelRuntime {
   }
 
   async rebuildFts(): Promise<void> {
+    this.assertWritable()
     await this.conversations.rebuildFts(() => this.listConversations().map((c) => ({ id: c.id, title: c.title })))
   }
 
   async alignProfileConversations(profileId: string): Promise<void> {
+    this.assertWritable()
     return this.conversations.alignProfileConversations(profileId)
   }
 
@@ -659,6 +763,7 @@ export class KernelRuntime {
   // ------------------------------------------------------------------
 
   async dispatchTrigger(envelope: ExternalTriggerEnvelope): Promise<void> {
+    this.assertWritable()
     return this.svc.triggers.dispatchTrigger(envelope)
   }
 
@@ -668,6 +773,7 @@ export class KernelRuntime {
   // ------------------------------------------------------------------
 
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
+    this.assertWritable()
     return this.agentSpawn.spawnAgent(request)
   }
 
@@ -715,14 +821,17 @@ export class KernelRuntime {
   }
 
   async createAsk(spec: AskCreateSpec): Promise<AskResult> {
+    this.assertWritable()
     return this.svc.asks.createAsk(spec)
   }
 
   async answerAsk(id: string, answers: Record<string, string>, expectedStateSeq?: number): Promise<AskSpec> {
+    this.assertWritable()
     return this.svc.asks.answerAsk(id, answers, expectedStateSeq)
   }
 
   async cancelAsk(id: string, reason?: 'cancelled' | 'superseded'): Promise<void> {
+    this.assertWritable()
     await this.svc.asks.cancelAsk(id, reason ?? 'cancelled')
   }
 
@@ -789,6 +898,7 @@ export class KernelRuntime {
   }
 
   markConversationOwnership(conversationId: number, owner: ConversationOwnership): void {
+    this.assertWritable()
     this.svc.ownership.markOwnership(conversationId, owner)
   }
 
@@ -872,6 +982,7 @@ export class KernelRuntime {
       sessionDocStreams: this.svc.sessionDocStreams,
       sessionDocLifecycleRelease: this.svc.sessionDocLifecycleRelease,
       stashService: this.stashService,
+      emitDiagnostic: (input) => this.emitDiagnostic(input),
     })
     this.processTokenHandle = undefined
   }

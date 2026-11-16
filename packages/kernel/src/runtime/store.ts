@@ -13,6 +13,7 @@
 import type { ArtifactKind, ConversationStatus, ConversationSummary } from '@helm/protocol'
 import { HelmError, isArtifactKind } from '@helm/protocol'
 import type { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node'
+import { emitDiagnostic, type KernelDiagnosticSink } from './diagnostics.js'
 import type { HelmDatabase } from './sqlite.js'
 
 export interface ConvMeta {
@@ -80,8 +81,20 @@ export interface PluginSessionDocRow {
 
 type Deferred = () => Promise<void>
 
+export interface HelmStoreOptions {
+  /** 实例级持久化失败回调（如 KernelRuntime 挂载致命存储故障闭环）；缺省走诊断通道。 */
+  readonly onError?: (error: unknown) => void
+  /** 诊断通道 sink（未提供 onError 时兜底输出；缺省走 console.error）。 */
+  readonly onDiagnostic?: KernelDiagnosticSink
+  /** 诊断脱敏函数（缺省复用 ftsRedact）。 */
+  readonly redact?: (text: string) => string
+}
+
 export class HelmStore {
   private readonly db: NodeSqliteDatabase
+  private readonly onError: ((error: unknown) => void) | undefined
+  private readonly onDiagnostic: KernelDiagnosticSink | undefined
+  private readonly redactFn: ((text: string) => string) | undefined
   private readonly convs = new Map<number, ConvMeta>()
   private readonly asks = new Map<string, AskRow>()
   private readonly artifacts = new Map<string, ArtifactRow>()
@@ -102,8 +115,16 @@ export class HelmStore {
   /** FTS 入队文本的脱敏钩子（运行时注入 stash.redactText）。 */
   ftsRedact: (text: string) => string = (t) => t
 
-  constructor(database: HelmDatabase) {
+  constructor(database: HelmDatabase, options: HelmStoreOptions = {}) {
     this.db = database.db
+    this.onError = options.onError
+    this.onDiagnostic = options.onDiagnostic
+    this.redactFn = options.redact
+  }
+
+  /** 首个持久化失败错误（只读；未出错为 undefined）。 */
+  get error(): unknown {
+    return this.firstError
   }
 
   /** 启动时从 sqlite 装载全部镜像；持久 JSON 损坏时显式报错（绝不假空值）。 */
@@ -721,8 +742,26 @@ export class HelmStore {
     }
     // 尾链串行：链内错误被捕获记录（链不死），顺序与入队严格一致。
     this.tail = this.tail.then(fn).catch((error: unknown) => {
+      const isFirst = this.firstError === undefined
       this.markFailed(error)
-      reportStoreError(error)
+      if (isFirst) this.reportError(error)
+    })
+  }
+
+  private reportError(error: unknown): void {
+    if (this.onError !== undefined) {
+      try {
+        this.onError(error)
+      } catch {
+        /* 上报自身不得再抛 */
+      }
+      return
+    }
+    emitDiagnostic(this.onDiagnostic, (text) => (this.redactFn ?? this.ftsRedact)(text), {
+      level: 'error',
+      source: 'store',
+      message: 'store persistence error',
+      error,
     })
   }
 
@@ -766,22 +805,6 @@ function parseStoredJson<T>(what: string, raw: string): T {
       500,
       { what, raw: raw.slice(0, 200), cause: String(cause) },
     )
-  }
-}
-
-let errorReporter: (error: unknown) => void = (error) => {
-  console.error('[helm] store persistence error:', error)
-}
-
-export function setStoreErrorReporter(fn: (error: unknown) => void): void {
-  errorReporter = fn
-}
-
-function reportStoreError(error: unknown): void {
-  try {
-    errorReporter(error)
-  } catch {
-    /* 上报自身不得再抛 */
   }
 }
 
