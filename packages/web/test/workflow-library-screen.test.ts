@@ -252,7 +252,7 @@ test('工作流库 Screen：卡片网格渲染文件事实与元数据诊断；�
     assert.match(host.textContent!, /发布流程/)
     assert.match(host.textContent!, /元数据校验失败/, 'metadataError 条目必须如实展示诊断')
     // 无选中项时不渲染抽屉。
-    assert.equal(document.body.querySelector('.workflow-lib-drawer'), null)
+    assert.ok(document.body.querySelector('.workflow-lib-drawer') === null)
 
     await act(async () => {
       ;([...host.querySelectorAll('.workflow-lib-card')] as HTMLElement[])[0]!.click()

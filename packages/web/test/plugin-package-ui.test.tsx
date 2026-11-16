@@ -595,7 +595,7 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
 
     // 模态已关闭
     modal = host.querySelector('.plugin-install-modal')
-    assert.equal(modal, null, '安装成功后模态必须关闭')
+    assert.ok(modal === null, '安装成功后模态必须关闭')
   } finally {
     pluginsApi.install = originalInstall
     pluginsApi.list = originalList

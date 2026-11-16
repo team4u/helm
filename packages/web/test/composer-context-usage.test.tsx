@@ -66,24 +66,24 @@ function statusSpan(host: HTMLElement): HTMLElement | null {
 function assertReadOnly(host: HTMLElement): void {
   const span = statusSpan(host)
   assert.ok(span, '状态文本必须渲染')
-  assert.equal(span.querySelector('button'), null, '不得内嵌按钮')
-  assert.equal(span.querySelector('svg'), null, '不得显示 gauge 等图标')
-  assert.equal(host.querySelector('button.composer-context-status'), null, '状态文本不得是按钮')
+  assert.ok(span.querySelector('button') === null, '不得内嵌按钮')
+  assert.ok(span.querySelector('svg') === null, '不得显示 gauge 等图标')
+  assert.ok(host.querySelector('button.composer-context-status') === null, '状态文本不得是按钮')
   act(() => { span.click() })
-  assert.equal(document.body.querySelector('.composer-context-popover'), null, '点击不得弹出任何浮层')
-  assert.equal(document.body.querySelector('[data-radix-popper-content-wrapper]'), null)
+  assert.ok(document.body.querySelector('.composer-context-popover') === null, '点击不得弹出任何浮层')
+  assert.ok(document.body.querySelector('[data-radix-popper-content-wrapper]') === null)
 }
 
 test('无 contextUsage 或 tokens=0 时不渲染状态文本', { timeout: 60_000 }, async () => {
   const none = await mountComposer(conv(undefined))
   try {
-    assert.equal(statusSpan(none.host), null)
+    assert.ok(statusSpan(none.host) === null)
   } finally {
     none.unmount()
   }
   const zero = await mountComposer(conv({ tokens: 0 }))
   try {
-    assert.equal(statusSpan(zero.host), null, '空会话/刚 reset（tokens=0）不显示状态文本')
+    assert.ok(statusSpan(zero.host) === null, '空会话/刚 reset（tokens=0）不显示状态文本')
   } finally {
     zero.unmount()
   }
@@ -208,7 +208,7 @@ test('速率类指标不在宿主内置渲染：contextUsage 无 response 字段
   try {
     // @ts-expect-error response 已删除：速率展示完全交给 builtin:token-speed 插件经 COMPOSER_STATUS_SLOT 贡献
     conv({ tokens: 1, response: { responseTps: 52.4 } })
-    assert.equal(host.querySelector('.composer-context-tps'), null, '宿主不渲染任何内置速率文本')
+    assert.ok(host.querySelector('.composer-context-tps') === null, '宿主不渲染任何内置速率文本')
     assert.equal(statusSpan(host)?.textContent, '37.5%/200k', '上下文状态不受影响')
   } finally {
     unmount()
@@ -266,8 +266,8 @@ test('composer/status 宿主保留插槽：PluginSlot 挂载在状态区，贡�
 test('composer/status 插槽无贡献时不渲染任何容器（宿主状态区零噪声）', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ tokens: 75_000, contextWindow: 200_000 }))
   try {
-    assert.equal(host.querySelector('.composer-status-slot'), null, '无贡献时 PluginSlot 渲染 null')
-    assert.equal(host.querySelector('[data-probe]'), null)
+    assert.ok(host.querySelector('.composer-status-slot') === null, '无贡献时 PluginSlot 渲染 null')
+    assert.ok(host.querySelector('[data-probe]') === null)
   } finally {
     unmount()
   }

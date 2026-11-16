@@ -761,8 +761,8 @@ test('无深层后代时紧凑子项与子树徽章不渲染（不造空占位�
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
   try {
-    assert.equal(host.querySelector('.execution-children'), null)
-    assert.equal(host.querySelector('.execution-frontline'), null)
+    assert.ok(host.querySelector('.execution-children') === null)
+    assert.ok(host.querySelector('.execution-frontline') === null)
     assert.ok(!/子树 \d/.test(host.textContent!), '无后代不得渲染子树徽章')
   } finally {
     unmount()
@@ -856,7 +856,7 @@ test('紧凑子项：深层 workflow / external run 行原位展开直系子项�
     const extRow = Array.from(rows).find((r) => (r.textContent ?? '').includes('外部任务')) as HTMLElement
     assert.ok(dslRow !== undefined && extRow !== undefined)
     for (const row of [dslRow, extRow]) {
-      assert.equal(row.querySelector('.execution-child-id'), null, '无会话 run 行不得伪造 #id 前缀')
+      assert.ok(row.querySelector('.execution-child-id') === null, '无会话 run 行不得伪造 #id 前缀')
       assert.match(row.getAttribute('aria-label') ?? '', /^展开 /, '应提供展开直系子项入口')
       assert.match(row.textContent ?? '', /执行中/, 'run 真实状态保留')
     }

@@ -289,7 +289,7 @@ test('目标尚未加载时不消费 tick：请求保留，目标加载 commit �
   const partial = [humanEntry('1', '问')]
   await renderTimeline({ entries: partial, outlineScrollRequest: REQUEST })
   assert.equal(calls(), 0, '目标不存在时不滚动')
-  assert.equal(host!.querySelector('.entry-highlighted'), null, '目标不存在时不高亮')
+  assert.ok(host!.querySelector('.entry-highlighted') === null, '目标不存在时不高亮')
 
   // 同一 tick 请求保留：历史分页加载出目标条目后处理
   await rerenderWith({ entries: HEADING_ENTRIES, outlineScrollRequest: REQUEST })

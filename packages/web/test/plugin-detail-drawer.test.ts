@@ -664,7 +664,7 @@ test('PluginDetailDrawer：停用遇 409 plugin_in_use 时展示占用清单并�
     await act(async () => {
       cancelBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
-    assert.equal(container.querySelector('.callout--warning'), null, '点击取消应关闭占用确认条')
+    assert.ok(container.querySelector('.callout--warning') === null, '点击取消应关闭占用确认条')
 
     // 重新触发停用，这次点击「强制停用」
     await act(async () => {
@@ -682,7 +682,7 @@ test('PluginDetailDrawer：停用遇 409 plugin_in_use 时展示占用清单并�
 
     assert.equal(toggleCalls.length, 3, '首次停用 + 重触停用 + 强制停用共三次调用')
     assert.deepEqual(toggleCalls[2], { force: true }, '强制停用应以 force: true 重试')
-    assert.equal(container.querySelector('.callout--warning'), null, '强制停用成功后确认条消失')
+    assert.ok(container.querySelector('.callout--warning') === null, '强制停用成功后确认条消失')
   } finally {
     pluginsApi.getConfig = originalGetConfig
     await act(async () => {
@@ -731,7 +731,7 @@ test('PluginDetailDrawer：409 plugin_has_live_tasks 仍保持硬阻断提示且
     assert.ok(callout, '在途任务冲突应展示错误提示条')
     assert.match(callout.textContent || '', /plugin_has_live_tasks/)
     assert.match(callout.textContent || '', /请等待任务结束或中止后再试/)
-    assert.equal(container.querySelector('.callout--warning'), null, '在途任务不得提供强制停用入口')
+    assert.ok(container.querySelector('.callout--warning') === null, '在途任务不得提供强制停用入口')
     assert.equal(container.textContent?.includes('强制停用'), false)
   } finally {
     pluginsApi.getConfig = originalGetConfig

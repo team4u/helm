@@ -178,10 +178,10 @@ test('会话子代理与工作台使用相同紧凑卡；有实时内容也不�
     input: { prompt: '本次任务' }, result: '原始工具输出', artifactRef: 'art_original',
   }))
   const assertCompact = () => {
-    assert.equal(host.querySelector('.subagent-live-stream'), null, '不能显示内联实时流')
-    assert.equal(host.querySelector('.subagent-live-card-expanded'), null, '不能使用展开态样式')
-    assert.equal(host.querySelector('details'), null, '不能提供原始调用详情的展开入口')
-    assert.equal(host.querySelector('[aria-expanded]'), null, '不能有展开控件')
+    assert.ok(host.querySelector('.subagent-live-stream') === null, '不能显示内联实时流')
+    assert.ok(host.querySelector('.subagent-live-card-expanded') === null, '不能使用展开态样式')
+    assert.ok(host.querySelector('details') === null, '不能提供原始调用详情的展开入口')
+    assert.ok(host.querySelector('[aria-expanded]') === null, '不能有展开控件')
   }
   try {
     assertCompact()
@@ -221,7 +221,7 @@ test('历史续接行不展开详情，点击和键盘统一打开子会话抽�
     assert.ok(row)
     assert.match(row.textContent!, /已在下文续接/)
     assert.match(row.textContent!, /失败/)
-    assert.equal(host.querySelector('details'), null)
+    assert.ok(host.querySelector('details') === null)
     await act(async () => { row.click() })
     for (const key of ['Enter', ' ']) {
       act(() => { row.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
@@ -229,8 +229,8 @@ test('历史续接行不展开详情，点击和键盘统一打开子会话抽�
     assert.deepEqual(spy.drawerCalls, [11, 11, 11])
     assert.deepEqual(spy.screenCalls, [])
     assert.deepEqual(spy.splitCalls, [])
-    assert.equal(host.querySelector('details'), null, '打开后不能产生内联展开详情')
-    assert.equal(host.querySelector('.subagent-live-stream'), null)
+    assert.ok(host.querySelector('details') === null, '打开后不能产生内联展开详情')
+    assert.ok(host.querySelector('.subagent-live-stream') === null)
   } finally { unmount() }
 })
 
@@ -245,8 +245,8 @@ test('外部子代理仅渲染工作台同款摘要，不附带可展开的原�
   }))
   try {
     assert.ok(host.querySelector('.subagent-external-card'))
-    assert.equal(host.querySelector('details'), null)
-    assert.equal(host.querySelector('.subagent-live-card-expanded'), null)
+    assert.ok(host.querySelector('details') === null)
+    assert.ok(host.querySelector('.subagent-live-card-expanded') === null)
     assert.deepEqual(spy.drawerCalls, [], '外部任务不能虚构原生子会话')
   } finally { unmount() }
 })

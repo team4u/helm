@@ -127,7 +127,7 @@ test('同 hash 并发与缓存命中：单次 import 去重、同一节点复用
   const third = await loadPluginClientModule('p', 'index.tsx')
   assert.equal(objectUrlCalls, 1, '缓存命中不得重新 import')
   assert.equal(third.module, first.module)
-  assert.equal(pluginStyle('p', 'index.tsx'), nodeBefore, '缓存命中不得拆除重建样式节点（不闪烁）')
+  assert.ok(pluginStyle('p', 'index.tsx') === nodeBefore, '缓存命中不得拆除重建样式节点（不闪烁）')
   assert.equal(allPluginStyles().length, 1)
 })
 
@@ -142,13 +142,14 @@ test('同入口换 hash 原位更新；无样式导出与空字符串均移除�
   await loadPluginClientModule('p', 'index.tsx')
   assert.equal(allPluginStyles().length, 1, '换 hash 必须原位替换，不得累积标签')
   const v2 = pluginStyle('p', 'index.tsx')
-  assert.equal(v2, v1, '同入口更新复用同一节点')
+  assert.ok(v2 === v1, '同入口更新复用同一节点')
+  assert.ok(v2 !== null)
   assert.equal(v2.textContent, '.v2 { color: blue }')
   assert.equal(v2.getAttribute('data-helm-plugin-css-hash'), 'h2')
 
   serveModule(PANEL_EXPORT, 'h3')
   await loadPluginClientModule('p', 'index.tsx')
-  assert.equal(pluginStyle('p', 'index.tsx'), null, '新版无样式导出必须移除旧样式')
+  assert.ok(pluginStyle('p', 'index.tsx') === null, '新版无样式导出必须移除旧样式')
 
   serveModule(`${cssExport('.v4 { color: green }')}${PANEL_EXPORT}`, 'h4')
   await loadPluginClientModule('p', 'index.tsx')
@@ -156,7 +157,7 @@ test('同入口换 hash 原位更新；无样式导出与空字符串均移除�
 
   serveModule(`${cssExport('')}${PANEL_EXPORT}`, 'h5')
   await loadPluginClientModule('p', 'index.tsx')
-  assert.equal(pluginStyle('p', 'index.tsx'), null, '空字符串样式等同无样式，必须移除旧标签')
+  assert.ok(pluginStyle('p', 'index.tsx') === null, '空字符串样式等同无样式，必须移除旧标签')
   assert.equal(allPluginStyles().length, 0)
 })
 
@@ -169,7 +170,7 @@ test('停用仅回收目标插件样式；重新启用后同 hash 重新装载',
   assert.equal(allPluginStyles().length, 2)
 
   evictPluginClientCache('p')
-  assert.equal(pluginStyle('p', 'index.tsx'), null, '停用必须回收该插件样式')
+  assert.ok(pluginStyle('p', 'index.tsx') === null, '停用必须回收该插件样式')
   assert.ok(pluginStyle('p2', 'index.tsx'), '不得误删其他插件样式')
   assert.equal(getCachedClientComponent('p', 'index.tsx', 'Panel'), undefined)
 
@@ -213,7 +214,7 @@ test('旧 epoch 在途 import 完成不得改写或重建新 epoch 已装载的�
 
   resumeStale()
   await assertInvalidated(stale)
-  assert.equal(pluginStyle('p', 'index.tsx'), fresh, '旧 epoch 完成不得拆除新 epoch 的样式节点')
+  assert.ok(pluginStyle('p', 'index.tsx') === fresh, '旧 epoch 完成不得拆除新 epoch 的样式节点')
   assert.equal(fresh?.textContent, '.new { color: blue }', '旧 epoch 完成不得改写新 epoch 的样式文本')
   assert.equal(fresh?.getAttribute('data-helm-plugin-css-hash'), 'h2')
   assert.equal(allPluginStyles().length, 1)
@@ -278,12 +279,12 @@ test('seedPluginClientModule 遵循同一样式契约：装载、按新种子更
   assert.equal(pluginStyle('p', 'index.tsx')?.getAttribute('data-helm-plugin-css-hash'), 'seeded')
   const node = pluginStyle('p', 'index.tsx')
   seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmClientCss: '.reseeded { color: green }' })
-  assert.equal(pluginStyle('p', 'index.tsx'), node, '默认 seeded hash 相同也应按新命名空间原位更新')
+  assert.ok(pluginStyle('p', 'index.tsx') === node, '默认 seeded hash 相同也应按新命名空间原位更新')
   assert.equal(node?.textContent, '.reseeded { color: green }')
 
   // 无样式导出的新种子移除旧样式
   seedPluginClientModule('p', 'index.tsx', { Panel: panel }, 'seed2')
-  assert.equal(pluginStyle('p', 'index.tsx'), null)
+  assert.ok(pluginStyle('p', 'index.tsx') === null)
 
   seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmClientCss: '.seed3 { color: blue }' }, 'seed3')
   assert.equal(pluginStyle('p', 'index.tsx')?.textContent, '.seed3 { color: blue }')
