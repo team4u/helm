@@ -21,7 +21,7 @@ import {
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { HelmError } from '@helm/protocol'
-import { ConfigService } from './config.js'
+import { ConfigService, onConfigInvalidated } from './config.js'
 import { withFileLock } from './file-lock.js'
 
 const scrypt = promisify(scryptCallback) as (
@@ -96,6 +96,61 @@ function safeEqualHex(a: string, b: string): boolean {
  */
 const processTokenRegistry = new Map<string, Set<string>>()
 
+interface AuthCacheEntry {
+  generation: number
+  state: AuthPersistedState | undefined
+}
+
+/**
+ * 进程内鉴权快照缓存与在途去重（key 为 ConfigService 规范 config.json 路径）。
+ * 为什么跨实例共享：HTTP 中间件高频调用 verifyToken/status，同时运行期或测试会
+ * 构造多个 AuthService(dataDir) 实例；任一实例/模块写盘或触发失效时由
+ * onConfigInvalidated 统一清除，并在回填时核对 generation 防并发旧读回填。
+ */
+const authStateCache = new Map<string, AuthCacheEntry>()
+const inflightAuthReads = new Map<string, Promise<AuthPersistedState | undefined>>()
+
+onConfigInvalidated((canonicalPath) => {
+  authStateCache.delete(canonicalPath)
+  inflightAuthReads.delete(canonicalPath)
+})
+
+function parseAuthState(config: Record<string, unknown>): AuthPersistedState | undefined {
+  const raw = config['auth']
+  if (raw === undefined) return undefined
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('config.json 中 auth 字段结构非法')
+  }
+  const rec = raw as Record<string, unknown>
+  const salt = rec['passwordSalt']
+  const hash = rec['passwordHash']
+  const tokens = rec['tokens']
+  if (typeof salt !== 'string' || typeof hash !== 'string') {
+    throw new Error('config.json 中 auth 字段结构非法（缺 salt/hash）')
+  }
+  const tokenMap: Record<string, TokenRecord> = {}
+  if (tokens !== undefined && typeof tokens === 'object' && tokens !== null) {
+    for (const [key, value] of Object.entries(
+      tokens as Record<string, unknown>,
+    )) {
+      if (
+        typeof value === 'object' &&
+        value !== null &&
+        typeof (value as Record<string, unknown>)['digest'] === 'string'
+      ) {
+        tokenMap[key] = {
+          digest: (value as Record<string, unknown>)['digest'] as string,
+          createdAt:
+            typeof (value as Record<string, unknown>)['createdAt'] === 'string'
+              ? ((value as Record<string, unknown>)['createdAt'] as string)
+              : new Date().toISOString(),
+        }
+      }
+    }
+  }
+  return { passwordSalt: salt, passwordHash: hash, tokens: tokenMap }
+}
+
 function processTokenDigests(dataDir: string): Set<string> {
   let digests = processTokenRegistry.get(dataDir)
   if (digests === undefined) {
@@ -118,41 +173,40 @@ export class AuthService {
     this.dataDir = dataDir
   }
 
-  private async readState(): Promise<AuthPersistedState | undefined> {
+  private async readStateFromDisk(): Promise<AuthPersistedState | undefined> {
     const config = await this.config.get()
-    const raw = config['auth']
-    if (raw === undefined) return undefined
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-      throw new Error('config.json 中 auth 字段结构非法')
+    return parseAuthState(config)
+  }
+
+  private async readStateCached(): Promise<AuthPersistedState | undefined> {
+    const key = await this.config.getCanonicalPath()
+    if (key === undefined) return this.readStateFromDisk()
+    const currentGen = this.config.getGenerationSync(key)
+    const cached = authStateCache.get(key)
+    if (cached !== undefined && cached.generation === currentGen) {
+      return cached.state
     }
-    const rec = raw as Record<string, unknown>
-    const salt = rec['passwordSalt']
-    const hash = rec['passwordHash']
-    const tokens = rec['tokens']
-    if (typeof salt !== 'string' || typeof hash !== 'string') {
-      throw new Error('config.json 中 auth 字段结构非法（缺 salt/hash）')
+    const existingInflight = inflightAuthReads.get(key)
+    if (existingInflight !== undefined) {
+      return existingInflight
     }
-    const tokenMap: Record<string, TokenRecord> = {}
-    if (tokens !== undefined && typeof tokens === 'object' && tokens !== null) {
-      for (const [key, value] of Object.entries(
-        tokens as Record<string, unknown>,
-      )) {
-        if (
-          typeof value === 'object' &&
-          value !== null &&
-          typeof (value as Record<string, unknown>)['digest'] === 'string'
-        ) {
-          tokenMap[key] = {
-            digest: (value as Record<string, unknown>)['digest'] as string,
-            createdAt:
-              typeof (value as Record<string, unknown>)['createdAt'] === 'string'
-                ? ((value as Record<string, unknown>)['createdAt'] as string)
-                : new Date().toISOString(),
-          }
-        }
+    const loadPromise = (async () => {
+      const { config, generation, canonicalPath } = await this.config.getWithGeneration()
+      const state = parseAuthState(config)
+      // 仅在读取期间代数未推进时回填，防止并发写后旧读覆盖缓存。
+      if (canonicalPath !== undefined && this.config.getGenerationSync(canonicalPath) === generation) {
+        authStateCache.set(canonicalPath, { generation, state })
+      }
+      return state
+    })()
+    inflightAuthReads.set(key, loadPromise)
+    try {
+      return await loadPromise
+    } finally {
+      if (inflightAuthReads.get(key) === loadPromise) {
+        inflightAuthReads.delete(key)
       }
     }
-    return { passwordSalt: salt, passwordHash: hash, tokens: tokenMap }
   }
 
   private async writeState(state: AuthPersistedState): Promise<void> {
@@ -161,7 +215,7 @@ export class AuthService {
 
   /** 是否已完成初始 setup。 */
   async status(): Promise<{ configured: boolean }> {
-    const state = await this.readState()
+    const state = await this.readStateCached()
     return { configured: state !== undefined }
   }
 
@@ -170,7 +224,7 @@ export class AuthService {
     assertPassword(password)
     // 跨实例串行化读改写：并发 setup 仅第一个成功，其余显式拒绝。
     return withFileLock(this.lockPath, async () => {
-      const existing = await this.readState()
+      const existing = await this.readStateFromDisk()
       if (existing !== undefined) throw new AuthAlreadyConfiguredError()
       const salt = randomBytes(16)
       const passwordHash = await hashPassword(password, salt)
@@ -188,7 +242,7 @@ export class AuthService {
   async login(password: string): Promise<{ token: string }> {
     assertPassword(password)
     return withFileLock(this.lockPath, async () => {
-      const state = await this.readState()
+      const state = await this.readStateFromDisk()
       if (state === undefined) {
         // 结构化错误码供 HTTP 层分类（对外仍映射 409 not_setup）。
         throw new HelmError('auth_not_setup', '尚未完成 setup，请先执行初始化', 409)
@@ -242,7 +296,7 @@ export class AuthService {
     for (const stored of processTokenRegistry.get(this.dataDir) ?? []) {
       if (safeEqualHex(digest, stored)) return true
     }
-    const state = await this.readState()
+    const state = await this.readStateCached()
     if (state === undefined) return false
     for (const record of Object.values(state.tokens)) {
       if (safeEqualHex(digest, record.digest)) return true

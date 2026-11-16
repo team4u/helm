@@ -391,7 +391,11 @@ export function assembleRuntimeServices(
     dataDir: init.dataDir,
     externalModels: init.externalModels !== undefined,
     reloadModels: () => runtime.reloadModels(),
-    reloadPluginConfig: () => pluginConfig.load(),
+    reloadPluginConfig: async () => {
+      // 外部手工改写/清理 config.json 时同步失效 AuthService 等内存快照，再重载插件配置镜像。
+      await configSvc.invalidateCache()
+      await pluginConfig.load()
+    },
     notifyError: (title, error) => {
       events.publish('notification', {
         level: 'error',
