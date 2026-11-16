@@ -34,6 +34,7 @@ import {
 } from '../src/daemon/index.js';
 import { renderServiceSpec, defaultServiceExec } from '../src/daemon/service.js';
 import { runNodeCli } from '../src/cli.js';
+import { sanitizedHostEnv } from './helpers/sanitized-env.js';
 
 import { fileURLToPath } from 'node:url';
 
@@ -894,7 +895,9 @@ async function runCli(argv: string[], env: NodeJS.ProcessEnv = {}): Promise<Capt
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    env: { ...process.env, ...env },
+    // 剥除宿主受管 HELM_* 变量（Hub 地址/凭据/数据目录/控制身份），被测
+    // CLI 启动语义只由测试显式 argv/env 决定。
+    env: { ...sanitizedHostEnv(), ...env },
     out: (t) => (out += t),
     err: (t) => (err += t),
   });

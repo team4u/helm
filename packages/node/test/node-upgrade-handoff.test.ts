@@ -33,6 +33,7 @@ import { bindIdentityFromJoinToken } from '../src/daemon/index.js';
 import { UpgradeCommitUnconfirmedError, type StagedNodeRelease } from '../src/daemon/upgrader.js';
 import { prepareNodeReplacement, type HandoffPidRecord } from '../src/daemon/upgrade-handoff.js';
 import { runNodeCli, type NodeCliIo } from '../src/cli.js';
+import { sanitizedHostEnv } from './helpers/sanitized-env.js';
 
 async function tempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -51,7 +52,9 @@ async function runCli(argv: string[], io: Partial<NodeCliIo> = {}): Promise<Capt
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    env: { ...process.env },
+    // 剥除宿主受管 HELM_* 变量：宿主控制身份（INSTANCE_ID/CONTROL_ENDPOINT）
+    // 存在时前台 start 不再成为 launcher，Hub/数据目录/凭据同理不得劫持。
+    env: sanitizedHostEnv(),
     out: (t) => (out += t),
     err: (t) => (err += t),
     ...io,
@@ -300,7 +303,10 @@ async function prepareWithFixture(options: {
         writePidRecord: store.writePidRecord,
         removePidFile: store.removePidFile,
         env: {
-          ...process.env,
+          // 基底剥除宿主受管 HELM_* 变量（候选拥有独立控制身份；产品侧
+          // prepareNodeReplacement 亦会剥除，这里保证测试注入基底同样干净），
+          // 测试 fixture 变量在其后显式覆盖。
+          ...sanitizedHostEnv(),
           HELM_FIXTURE_MODE: options.mode,
           HELM_HUB_URL_FIXTURE: options.hubUrl,
           HELM_FIXTURE_NODE_ID: 'cand-node',
@@ -677,7 +683,7 @@ test('前台 start（无控制 env）成为 launcher：拉起受控 daemon 并�
   let child: ChildProcess | undefined;
   child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), cliEntry, 'start', '--data-dir', dir], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, HELM_HUB_URL: hub.url, HELM_NODE_LAUNCHER_POLL_MS: '100' },
+    env: { ...sanitizedHostEnv(), HELM_HUB_URL: hub.url, HELM_NODE_LAUNCHER_POLL_MS: '100' },
   });
   let stdout = '';
   child.stdout?.on('data', (c: Buffer) => (stdout += c.toString('utf8')));
@@ -843,7 +849,9 @@ test('launcher shutdown：stop 慢应答（>200ms）时必须 await 落定后才
 
   let stdout = '';
   const launcherPromise = runNodeCli(['start', '--data-dir', dir], {
-    env: { ...process.env },
+    // 剥除宿主控制/身份 env：本用例的前提是「无控制 env 的前台 start 成为
+    // launcher」，宿主受管变量不得伪造受控身份。
+    env: sanitizedHostEnv(),
     launcherPollMs: 100,
     out: (text) => (stdout += text),
     // 本测试进程即「daemon」：pid=自身，存活直到 fixture 应答 stop 后置停。
