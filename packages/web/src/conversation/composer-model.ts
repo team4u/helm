@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ConversationStatus } from '@helm/protocol'
+import type { ConversationStatus } from '@helm/protocol/browser'
 import type { EditRequestTarget } from '../conversation/timeline-model.js'
 
 // ---------------------------------------------------------------------------

@@ -5,8 +5,23 @@
  * 的 runHook；turn_settled 的兑底清理（handled 接管残留）由宿主经回调注入。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { GenerationTask, ToolTask, defineExtension, hook, type Extension, type ToolExecutionResult } from '@earendil-works/pi-durable'
-import type { ConversationSummary, ToolResultHookPayload } from '@helm/protocol'
+import type { Message } from '@earendil-works/pi-ai'
+import {
+  GenerationTask,
+  ToolTask,
+  defineExtension,
+  hook,
+  type Extension,
+  type JsonObject,
+  type ToolExecutionResult,
+} from '@earendil-works/pi-durable'
+import type {
+  BeforeTurnHookPayload,
+  ConversationSummary,
+  HookName,
+  HookPayloadMap,
+  HookResult,
+} from '@helm/protocol'
 import { HelmError, matchesConversationScope } from '@helm/protocol'
 import { randomUUID } from 'node:crypto'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
@@ -51,7 +66,7 @@ export interface HookBridgeOptions {
   /** 会话摘要安全读取（不存在/损坏返回 undefined -> 跳过 before_turn）。 */
   readonly safeSummary: (conversationId: number) => ConversationSummary | undefined
   /** 当前回合输入清单（before_turn payload 用）。 */
-  readonly currentRunInputs: (conversationId: number) => unknown
+  readonly currentRunInputs: (conversationId: number) => BeforeTurnHookPayload['inputs']
   readonly redact: (text: string) => string
   /** 工具产物落盘端口（prepareToolResult 的宿主实现用）。 */
   readonly artifacts: {
@@ -77,10 +92,10 @@ export class HookBridge {
             /** tool_call：transform 改写参数 / block 拦截。 */
             beforeTool: async (call, api) => {
               const outcome = await self.runHookChain('tool_call', {
-                conversationId: api.conversationId as number,
+                conversationId: api.conversationId,
                 callId: call.id,
                 toolName: call.name,
-                input: call.arguments as Record<string, unknown>,
+                input: call.arguments,
               })
               if (outcome?.action === 'block') {
                 return { block: self.options.redact(outcome.reason ?? 'blocked') }
@@ -89,14 +104,15 @@ export class HookBridge {
                 // 接管：结果登记到 execute 层缓存（wrapToolCalls 包装器消费）；
                 // 同时记录归属会话，回合终态/abort/删除时兑底清理未消费残留。
                 self.options.handledToolCalls.set(call.id, {
-                  conversationId: api.conversationId as number,
+                  conversationId: api.conversationId,
                   result: toolResultOf(outcome.result),
                 })
                 return undefined
               }
               if (outcome?.action === 'transform') {
-                const value = outcome.value as { input?: Record<string, unknown> }
-                return { arguments: (value.input ?? call.arguments) as never }
+                return outcome.value.input !== undefined
+                  ? { arguments: outcome.value.input as JsonObject }
+                  : undefined
               }
               return undefined
             },
@@ -105,16 +121,15 @@ export class HookBridge {
               self.options.handledToolCalls.delete(call.id)
               try {
                 const outcome = await self.runHookChain('tool_result', {
-                  conversationId: api.conversationId as number,
+                  conversationId: api.conversationId,
                   callId: call.id,
                   toolName: call.name,
-                  input: call.arguments as Record<string, unknown>,
+                  input: call.arguments,
                   result,
                 })
                 let effective = result
                 if (outcome?.action === 'transform') {
-                  const payload = outcome.value as ToolResultHookPayload
-                  const transformed = normalizeToolResult(payload.result)
+                  const transformed = normalizeToolResult(outcome.value.result)
                   if (!transformed) throw new HelmError('invalid_hook_result', 'tool_result 必须返回合法工具结果', 500)
                   effective = transformed as ToolExecutionResult
                 } else if (outcome?.action === 'handled') {
@@ -122,7 +137,7 @@ export class HookBridge {
                   if (!handled) throw new HelmError('invalid_hook_result', 'tool_result 接管产物不是合法工具结果', 500)
                   effective = handled as ToolExecutionResult
                 }
-                return await self.options.prepareToolResult(api.conversationId as number, effective)
+                return await self.options.prepareToolResult(api.conversationId, effective)
               } catch (error) {
                 return {
                   isError: true,
@@ -141,10 +156,10 @@ export class HookBridge {
              * 钩子链收敛后宿主统一投射 prompt.tools.* 段（见 transformBeforeTurn）。
              */
             beforeRequest: async (request, api) => {
-              const conversationId = api.conversationId as number
+              const conversationId = api.conversationId
               const summary = self.options.safeSummary(conversationId)
               if (!summary) return undefined
-              return self.transformBeforeTurn(request, summary, conversationId) as never
+              return self.transformBeforeTurn(request, summary, conversationId)
             },
           }),
         ],
@@ -154,25 +169,26 @@ export class HookBridge {
 
   /** before_turn transform 应用（sections / messages / tools 三路手术）。 */
   private async transformBeforeTurn(
-    request: { messages: unknown },
+    request: { readonly messages: readonly Message[] },
     summary: ConversationSummary,
     conversationId: number,
-  ): Promise<{ messages: unknown } | undefined> {
+  ): Promise<{ readonly messages: readonly Message[] } | undefined> {
     const host = this.options.pluginHost()
-    const runtimeTools = getCurrentTools(request.messages as never)
-    // scope 裁剪：插件工具全局安装（helm-plugins 扩展），但 scope 外会话不得
+    const runtimeTools = getCurrentTools(request.messages)
+    // scope 裁剪：插件工具全局安装（helm-plugins）扩展，但 scope 外会话不得
     // 看到 declaration——进入钩子链前按本会话可用 spec 过滤，内核工具保留。
     const effectiveTools = host !== undefined ? this.scopeLocalTools(host, summary, runtimeTools) : runtimeTools
-    const payload = {
+    const original = request.messages as unknown as Array<Record<string, unknown>>
+    const payload: BeforeTurnHookPayload = {
       conversation: summary,
       inputs: this.options.currentRunInputs(conversationId),
       tools: effectiveTools.map((spec) => ({
         name: spec.name,
         description: spec.description,
         inputSchema: spec.parameters as Record<string, unknown>,
-      })),
-      sections: systemSectionsOf(request.messages as unknown as Array<Record<string, unknown>>),
-      messages: request.messages as unknown as Array<Record<string, unknown>>,
+      })) as unknown as BeforeTurnHookPayload['tools'],
+      sections: systemSectionsOf(request.messages),
+      messages: original,
     }
     const outcome = await this.runHookChain('before_turn', payload)
     // 宿主终局投射：无论钩子是否 transform，按最终 active tools 统一重写
@@ -180,14 +196,14 @@ export class HookBridge {
     // 不留幻影文本）。投射基于 PluginHost 当前声明（含 prompt 元数据）。
     const activeTools = this.activeToolPrompts(summary, effectiveTools, outcome)
     const outcomeSections = outcome?.action === 'transform'
-      ? (outcome.value as typeof payload).sections
+      ? outcome.value.sections
       : payload.sections
     const projected = projectActionPromptSection(
       projectToolPromptSections(outcomeSections, activeTools),
       this.renderActionDirectory(host, summary, effectiveTools, outcome),
     )
-    const value: typeof payload = outcome?.action === 'transform'
-      ? { ...(outcome.value as typeof payload), sections: projected }
+    const value: BeforeTurnHookPayload = outcome?.action === 'transform'
+      ? { ...outcome.value, sections: projected }
       : { ...payload, sections: projected }
 
     // sections 变更 -> 改写前导 system 消息的 sections（SDK 原生机制）。
@@ -197,7 +213,6 @@ export class HookBridge {
     //    历史正文绝不可被插件覆写——防原地 mutation diff 不可靠与 system 头损坏）；
     // 3. 原第一条非 system 消息之后的历史一律保留原序（只允许截断头部，
     //    不允许重写/伪造历史）。
-    const original = request.messages as unknown as Array<Record<string, unknown>>
     let messages = original
     const sectionsChanged = !sectionsEqual(value.sections, payload.sections)
     const messagesChanged = value.messages !== payload.messages
@@ -212,7 +227,7 @@ export class HookBridge {
       messages = withToolDeclarations(messages, declared, runtimeTools)
     }
     if (messages === original) return undefined
-    return { messages: messages as unknown as typeof request.messages }
+    return { messages: messages as unknown as readonly Message[] }
   }
 
   /**
@@ -300,12 +315,20 @@ export class HookBridge {
   }
 
   /** 统一 hook 管道执行；返回最终决定（continue 归一为 undefined 由调用方走默认）。 */
-  async runHookChain(name: string, payload: unknown): Promise<HookDecision | undefined> {
+  async runHookChain<K extends HookName>(
+    name: K,
+    payload: HookPayloadMap[K],
+  ): Promise<HookResult<HookPayloadMap[K]> | undefined>
+  async runHookChain(name: HookName, payload: unknown): Promise<HookDecision | undefined>
+  async runHookChain<K extends HookName>(
+    name: K,
+    payload: HookPayloadMap[K] | unknown,
+  ): Promise<HookResult<HookPayloadMap[K]> | HookDecision | undefined> {
     const host = this.options.pluginHost()
     if (!host) return undefined
-    const result = await host.runHook(name as never, payload as never)
+    const result = await host.runHook(name, payload as HookPayloadMap[K])
     if (result.action === 'continue') return undefined
-    return result as HookDecision
+    return result
   }
 
   /**

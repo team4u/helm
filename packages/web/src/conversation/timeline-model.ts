@@ -22,7 +22,7 @@ import type {
   ToolViewSiblingCall,
   ToolViewSpec,
   WhenBusy,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 
 // ---------------------------------------------------------------------------
 // 渲染项类型
@@ -51,7 +51,7 @@ export interface HelmInputData {
 export type ToolTraceStatus = 'running' | 'done' | 'error' | 'unknown'
 
 /** 服务端时间线预览截断标记使用 protocol 中的跨包契约。 */
-export type { ToolResultTruncation } from '@helm/protocol'
+export type { ToolResultTruncation } from '@helm/protocol/browser'
 
 export interface ToolTrace {
   key: string

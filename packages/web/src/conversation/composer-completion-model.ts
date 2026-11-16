@@ -12,7 +12,7 @@ import type {
   ComposerCompleterSpec,
   ComposerCompletionItem,
   ConversationSummary,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'
 

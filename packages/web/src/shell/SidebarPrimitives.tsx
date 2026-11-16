@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { AskSpec, ConversationSummary } from '@helm/protocol'
+import type { AskSpec, ConversationSummary } from '@helm/protocol/browser'
 import { asksApi } from '../lib/api.js'
 import { HelmIcon } from '@helm/plugin-client'
 import { Tooltip } from '../ui/Tooltip.js'

@@ -12,7 +12,7 @@
  * 本模块仅导出纯常量、纯函数与宿主事件 hook（无组件），保持 .tsx Fast Refresh 规范。
  */
 import { useEffect, useRef } from 'react'
-import type { QueuedConversationInput } from '@helm/protocol'
+import type { QueuedConversationInput } from '@helm/protocol/browser'
 
 export type HelmPanel = 'primary' | 'split'
 

@@ -21,7 +21,7 @@
  * - footerText 与「上下文精简中」原样进入 tooltip 摘要（去重后「 · 」拼接），绝不解析字符串含义。
  */
 
-import type { ConversationSummary, WorkbenchPanelSpec } from '@helm/protocol'
+import type { ConversationSummary, WorkbenchPanelSpec } from '@helm/protocol/browser'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'
 import { resolveWorkbenchPanelBadge } from '../conversation/workbench-model.js'

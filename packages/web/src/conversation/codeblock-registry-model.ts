@@ -6,7 +6,7 @@
  * - 未匹配（无插件注册 / 语言不在声明内 / 插件停用后贡献消失）返回 null，
  *   宿主回退普通代码块；不按插件 ID 或语言硬编码任何特判。
  */
-import type { MarkdownCodeBlockSpec, PluginUiContribution } from '@helm/protocol'
+import type { MarkdownCodeBlockSpec, PluginUiContribution } from '@helm/protocol/browser'
 import type { QualifiedUiSpec } from '../lib/types.js'
 
 export function matchMarkdownCodeBlock(

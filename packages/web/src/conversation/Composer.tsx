@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol'
-import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT } from '@helm/protocol'
+import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol/browser'
+import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT } from '@helm/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
 import { HelmIcon, PluginSlot } from '@helm/plugin-client'

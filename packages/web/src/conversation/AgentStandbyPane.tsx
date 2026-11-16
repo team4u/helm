@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ConversationSummary, Profile } from '@helm/protocol'
+import type { ConversationSummary, Profile } from '@helm/protocol/browser'
 import { assetsApi, conversationsApi } from '../lib/api.js'
 import {
   buildSlashMenuItems,

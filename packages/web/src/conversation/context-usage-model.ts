@@ -15,7 +15,7 @@
  * 类只读指标不随用量携带（可选插件 builtin:token-speed 的策略职责）。
  * formatTokens 已收敛至 lib/format.ts（与会话用量展示同源的仓内唯一实现）。
  */
-import type { ConversationContextUsage } from '@helm/protocol'
+import type { ConversationContextUsage } from '@helm/protocol/browser'
 import { formatTokens } from '../lib/format.js'
 
 export type ContextUsageTone = 'default' | 'warn' | 'high'

@@ -9,7 +9,7 @@
  * - 归档/恢复不删除会话——当前打开目标始终有效，故不做任何导航回退（与删除的
  *   SSE 回退管道不同），仅依赖 conversation.upsert 事件更新侧栏列表。
  */
-import type { ConversationPatch, ConversationSummary } from '@helm/protocol'
+import type { ConversationPatch, ConversationSummary } from '@helm/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { archiveConversationTags, restoreConversationTags } from '../conversation/archive-model.js'
 

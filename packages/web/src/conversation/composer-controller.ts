@@ -11,7 +11,7 @@
  * - 本模块只导出 hook 与纯类型（无组件），保持 .tsx Fast Refresh 约定。
  */
 import { useCallback, useMemo, useRef } from 'react'
-import type { ComposerController, WhenBusy } from '@helm/protocol'
+import type { ComposerController, WhenBusy } from '@helm/protocol/browser'
 
 export interface ComposerControllerBindings {
   /** 当前草稿文本（React state，渲染期读取）。 */

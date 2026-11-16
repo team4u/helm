@@ -138,7 +138,7 @@ export function createRegisterArtifactTool(
         mimeType: { type: 'string', description: '产物 MIME 类型' },
       },
       required: ['artifactId', 'path', 'nodeId', 'name', 'size', 'mimeType'],
-    } as never,
+    },
     async execute(args, api, context) {
       if (deps.artifacts.writeUploaded === undefined) {
         return {
@@ -415,7 +415,7 @@ export function createReadArtifactTool(
         chunk: { type: 'string' },
       },
       required: ['id', 'offset', 'chunk'],
-    } as never,
+    },
     async execute(args, api, _context) {
       const id = args.id
       const offset = args.offset ?? 0

@@ -9,7 +9,7 @@
  * 本模块不导出组件；React 绑定仅 useSyncExternalStore 一个 hook。
  */
 import { useSyncExternalStore } from 'react'
-import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helm/protocol'
+import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helm/protocol/browser'
 import { envDraftError, parseCompactSlashCommand, type EnvDraft } from './composer-model.js'
 import { resolveEffectiveThinkingLevel } from './keybindings-model.js'
 

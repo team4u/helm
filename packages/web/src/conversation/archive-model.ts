@@ -1,5 +1,5 @@
 /** Web 宿主会话归档标记与纯 tags 变换。 */
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol/browser'
 
 /** 人工归档 tag（Web 宿主命名空间标记，不参与插件 sidebar.section 规则）。 */
 export const ARCHIVED_TAG = 'helm:archived'

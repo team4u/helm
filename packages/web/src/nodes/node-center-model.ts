@@ -9,7 +9,7 @@
 import type {
   NodeHealthSnapshot as ProtocolNodeHealthSnapshot,
   NodeInfo as ProtocolNodeInfo,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 
 /** 节点分类药丸标签类型 */
 export type NodeCategoryTab = 'all' | 'local' | 'remote' | 'online' | 'offline'

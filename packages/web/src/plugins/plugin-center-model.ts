@@ -4,7 +4,7 @@
  * 提供多维检索（名称/ID/工具/动作）、状态筛选及指标统计。
  * 遵循前端规范：纯属性驱动，零 ID 硬编码猜测。
  */
-import type { PluginSummary } from '@helm/protocol'
+import type { PluginSummary } from '@helm/protocol/browser'
 
 export type PluginStatusFilter = 'all' | 'enabled' | 'disabled'
 

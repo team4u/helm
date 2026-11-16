@@ -27,7 +27,7 @@
  * 本模块纯逻辑 + 模块级共享状态（不依赖 React），供 store hook 与
  * HelmStoreProvider 集成消费；Node 单测经 bindSessionDocRuntime 注入 fetch。
  */
-import type { HelmEventFrame, PluginSessionDocSnapshot, PublicPluginSessionDoc } from '@helm/protocol'
+import type { HelmEventFrame, PluginSessionDocSnapshot, PublicPluginSessionDoc } from '@helm/protocol/browser'
 import { getStoredToken } from './api.js'
 import { SseParser } from './live-state.js'
 

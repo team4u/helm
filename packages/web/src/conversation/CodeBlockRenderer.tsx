@@ -7,7 +7,7 @@
  */
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { ComponentType } from 'react'
-import type { MarkdownCodeBlockProps } from '@helm/protocol'
+import type { MarkdownCodeBlockProps } from '@helm/protocol/browser'
 import { CopyButton, createPluginClientContext, HelmIcon, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import {

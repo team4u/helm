@@ -1,5 +1,5 @@
 import React, { useContext } from 'react'
-import type { PluginSummary } from '@helm/protocol'
+import type { PluginSummary } from '@helm/protocol/browser'
 import { HelmIcon, Switch } from '@helm/plugin-client'
 import { HelmStoreContext } from '../lib/store-context.js'
 import {

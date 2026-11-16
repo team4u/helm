@@ -6,8 +6,8 @@
  * 等资产到达后自然出现。
  */
 
-import type { Profile, SkillSummary } from '@helm/protocol'
-import { isSkillAvailable } from '@helm/protocol'
+import type { Profile, SkillSummary } from '@helm/protocol/browser'
+import { isSkillAvailable } from '@helm/protocol/browser'
 
 /**
  * 当前会话可出现在 / 斜杠菜单的技能：

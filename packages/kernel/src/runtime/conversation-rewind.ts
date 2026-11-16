@@ -8,8 +8,16 @@
  * - 全量 rewind 覆盖区间扫描汇总（提供给详情投影与 FTS 重建）。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { JsonValue } from '@earendil-works/chord/json'
-import { InboxDoc, LiveDoc, type Harness } from '@earendil-works/pi-durable'
+import { copyJson } from '@earendil-works/chord/json'
+import {
+  InboxDoc,
+  LiveDoc,
+  type Cursor,
+  type EntryRecord,
+  type Harness,
+  type SubmissionId,
+  type Tx,
+} from '@earendil-works/pi-durable'
 import type { ConversationAttachmentRef, ConversationInput } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import type { ConversationTracker } from './conversations.js'
@@ -18,6 +26,7 @@ import {
   rewindIntervalOf,
   type RewindInterval,
 } from './runtime-helpers.js'
+import { asConversationId, asEntryId } from './sdk-ids.js'
 import type { HelmStore } from './store.js'
 
 export interface ConversationRewindHost {
@@ -68,20 +77,21 @@ export class ConversationRewind {
       )
     }
     // 条目存在性精确校验（min=max=entryId 取 1 条；不存在 404）。
+    const entryId = asEntryId(raw)
     const page = await conversation.entries(
-      { minEntryId: raw as never, maxEntryId: raw as never, order: 'ascending' },
+      { minEntryId: entryId, maxEntryId: entryId, order: 'ascending' },
       1,
       undefined,
       BACKGROUND_CONTEXT,
     )
-    if (page.items.length === 0 || Number((page.items[0] as { id: number }).id) !== raw) {
+    if (page.items.length === 0 || Number(page.items[0]!.id) !== raw) {
       throw new HelmError('not_found', `条目 ${raw} 在会话 ${id} 中不存在`, 404, {
         conversationId: id,
         entryId: raw,
       })
     }
     // 编辑目标限定人类输入：agent/trigger 注入、assistant/控制条目不可编辑。
-    assertEditableHumanInput(page.items[0] as { kind: string; data?: unknown }, id, raw)
+    assertEditableHumanInput(page.items[0]!, id, raw)
     const preCtx = await conversation.context(BACKGROUND_CONTEXT)
     if (!preCtx.entries.some((e) => Number(e.id) === raw)) {
       throw new HelmError(
@@ -92,7 +102,7 @@ export class ConversationRewind {
       )
     }
     const rewound = preCtx.entries.some((e) => {
-      const interval = rewindIntervalOf(e as unknown as { id: number | string; kind: string; data?: unknown })
+      const interval = rewindIntervalOf(e)
       return interval !== undefined && raw >= interval.from && raw <= interval.through
     })
     if (rewound) {
@@ -115,7 +125,7 @@ export class ConversationRewind {
       throw new HelmError('entry_before_context_head', '编辑目标已离开当前上下文，请重新选择消息', 409)
     }
     if (current.entries.some((entry) => {
-      const cut = rewindIntervalOf(entry as unknown as { id: number | string; kind: string; data?: unknown })
+      const cut = rewindIntervalOf(entry)
       return cut !== undefined && targetId >= cut.from && targetId <= cut.through
     })) {
       throw new HelmError('entry_already_rewound', `条目 ${targetId} 已被此前的重发覆盖`, 409)
@@ -127,10 +137,10 @@ export class ConversationRewind {
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
   ): Promise<RewindInterval[]> {
     const intervals: RewindInterval[] = []
-    let cursor: unknown = undefined
+    let cursor: Cursor | undefined = undefined
     for (;;) {
-      const page = await conversation.entries({ order: 'ascending' }, 100, cursor as never, BACKGROUND_CONTEXT)
-      for (const raw of page.items as never as Array<{ id: number | string; kind: string; data?: unknown }>) {
+      const page = await conversation.entries({ order: 'ascending' }, 100, cursor, BACKGROUND_CONTEXT)
+      for (const raw of page.items) {
         if (raw.kind !== 'helm.rewind') continue
         const interval = rewindIntervalOf(raw)
         if (interval !== undefined) intervals.push(interval)
@@ -193,12 +203,12 @@ export class ConversationRewind {
    */
   private async rewriteTransaction(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
-    tx: Parameters<Parameters<NonNullable<Awaited<ReturnType<Harness['conversation']>>>['commit']>[0]>[0],
+    tx: Tx,
     id: number,
     replaceFromEntryId: number,
     createdAt: number,
     newInput: RewindNewInput,
-  ): Promise<{ submissionId: string; covered: { from: number; through: number }; ftsKeys: string[] }> {
+  ): Promise<{ submissionId: SubmissionId; covered: { from: number; through: number }; ftsKeys: string[] }> {
     // —— 事务内重新核实（全部 tx reads，先于任何 table write）——
     const { tailId, headLowerBound } = await this.assertRewriteIdle(tx, id, replaceFromEntryId)
     const tailEntries = await this.scanTailEntries(tx, id, replaceFromEntryId)
@@ -228,16 +238,19 @@ export class ConversationRewind {
     const submissionId = await this.submitRewoundInput(conversation, tx, newInput)
     // rewind 截断标记：闭区间 [replaceFromEntryId, tailId]，新输入条目 ID
     // 已由上方 submit 分配（必然 > tailId），不会被自家 edits 误删。
-    const edits = omittedEntryIds.map((target2) => ({ target: target2 as never, action: 'omit' as const }))
-    await tx.appendEntry(id as never, {
+    const edits = omittedEntryIds.map((target2) => ({ target: asEntryId(target2), action: 'omit' as const }))
+    await tx.appendEntry(asConversationId(id), {
       kind: 'helm.rewind',
-      data: {
-        fromEntryId: replaceFromEntryId,
-        throughEntryId: tailId,
-        omittedEntryIds,
-        omittedInputIds,
-        createdAt,
-      } as unknown as JsonValue,
+      data: copyJson(
+        {
+          fromEntryId: replaceFromEntryId,
+          throughEntryId: tailId,
+          omittedEntryIds,
+          omittedInputIds,
+          createdAt,
+        },
+        { omitUndefinedProperties: true },
+      ),
       ...(edits.length > 0 ? { edits } : {}),
     })
     return {
@@ -249,11 +262,12 @@ export class ConversationRewind {
 
   /** 事务内空闲核实：活跃 run / 压缩 / 排队 / 目标越界（含上下文头）。 */
   private async assertRewriteIdle(
-    tx: Parameters<Parameters<NonNullable<Awaited<ReturnType<Harness['conversation']>>>['commit']>[0]>[0],
+    tx: Tx,
     id: number,
     replaceFromEntryId: number,
   ): Promise<{ tailId: number; headLowerBound: number }> {
-    const live = await tx.doc(LiveDoc, id as never)
+    const convId = asConversationId(id)
+    const live = await tx.doc(LiveDoc, convId)
     if (live.run !== undefined) {
       throw new HelmError(
         'conversation_busy',
@@ -270,7 +284,7 @@ export class ConversationRewind {
         { conversationId: id, replaceFromEntryId },
       )
     }
-    const inbox = await tx.doc(InboxDoc, id as never)
+    const inbox = await tx.doc(InboxDoc, convId)
     if (inbox.items.length > 0) {
       throw new HelmError(
         'conversation_busy',
@@ -279,8 +293,8 @@ export class ConversationRewind {
         { conversationId: id, replaceFromEntryId },
       )
     }
-    const headMarker = await tx.latestHeadMarker(id as never)
-    const latestIdRaw = await tx.latestEntryId(id as never)
+    const headMarker = await tx.latestHeadMarker(convId)
+    const latestIdRaw = await tx.latestEntryId(convId)
     if (latestIdRaw === undefined) {
       throw new HelmError('not_found', `条目 ${replaceFromEntryId} 在会话 ${id} 中不存在`, 404, {
         conversationId: id,
@@ -308,25 +322,25 @@ export class ConversationRewind {
 
   /** 采集目标及之后的 raw entries（fork 可见范围；分页 scan，无深嵌套）。 */
   private async scanTailEntries(
-    tx: Parameters<Parameters<NonNullable<Awaited<ReturnType<Harness['conversation']>>>['commit']>[0]>[0],
+    tx: Tx,
     id: number,
     replaceFromEntryId: number,
-  ): Promise<Array<{ id: number | string; kind: string; data?: unknown }>> {
-    const tailEntries: Array<{ id: number | string; kind: string; data?: unknown }> = []
-    let scanCursor: unknown = undefined
+  ): Promise<EntryRecord[]> {
+    const convId = asConversationId(id)
+    const minEntryId = asEntryId(replaceFromEntryId)
+    const tailEntries: EntryRecord[] = []
+    let scanCursor: Cursor | undefined = undefined
     for (;;) {
       const page = await tx.scanEntries(
         {
-          conversationId: id as never,
-          minEntryId: replaceFromEntryId as never,
+          conversationId: convId,
+          minEntryId,
           order: 'ascending',
         },
         200,
-        scanCursor as never,
+        scanCursor,
       )
-      for (const raw of page.items as never as Array<{ id: number | string; kind: string; data?: unknown }>) {
-        tailEntries.push(raw)
-      }
+      tailEntries.push(...page.items)
       if (page.next === undefined) break
       scanCursor = page.next
     }
@@ -335,17 +349,19 @@ export class ConversationRewind {
 
   /** baseline pi.system 定位：head 标记之后首条（保持 messages[0] 系统提示词）。 */
   private async findBaselineSystemId(
-    tx: Parameters<Parameters<NonNullable<Awaited<ReturnType<Harness['conversation']>>>['commit']>[0]>[0],
+    tx: Tx,
     id: number,
     headMarkerId: number,
   ): Promise<number | undefined> {
+    const convId = asConversationId(id)
+    const minEntryId = asEntryId(headMarkerId + 1)
     let baselineSystemNumericId: number | undefined
-    let baselineCursor: unknown = undefined
+    let baselineCursor: Cursor | undefined = undefined
     for (;;) {
       const page = await tx.scanEntries(
-        { conversationId: id as never, minEntryId: (headMarkerId + 1) as never, order: 'ascending' },
+        { conversationId: convId, minEntryId, order: 'ascending' },
         200,
-        baselineCursor as never,
+        baselineCursor,
       )
       const baseline = page.items.find((entry) => entry.kind === 'pi.system')
       if (baseline !== undefined) {
@@ -360,7 +376,7 @@ export class ConversationRewind {
 
   /** omit 清单与精确 FTS 键采集（覆盖区间；baseline system 与 rewind 标记保留）。 */
   private collectRewindOmissions(
-    tailEntries: ReadonlyArray<{ id: number | string; kind: string; data?: unknown }>,
+    tailEntries: ReadonlyArray<EntryRecord>,
     baselineSystemNumericId: number | undefined,
   ): { omittedEntryIds: number[]; omittedInputIds: string[]; ftsKeys: string[] } {
     const omittedEntryIds: number[] = []
@@ -391,39 +407,42 @@ export class ConversationRewind {
   /** rewind 新输入提交（whenBusy 'reject'；helm.input entry 全量脱敏后落库）。 */
   private async submitRewoundInput(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
-    tx: Parameters<Parameters<NonNullable<Awaited<ReturnType<Harness['conversation']>>>['commit']>[0]>[0],
+    tx: Tx,
     newInput: RewindNewInput,
-  ): Promise<string> {
+  ): Promise<SubmissionId> {
     const inputDraft = {
       type: 'input' as const,
       content: newInput.content,
       whenBusy: 'reject' as const,
       entry: {
         kind: 'helm.input',
-        data: {
-          id: newInput.finalInput.id,
-          text: newInput.effectiveText,
-          origin: newInput.finalInput.origin,
-          createdAt: newInput.finalInput.createdAt,
-          whenBusy: 'reject',
-          ...(newInput.finalInput.meta !== undefined ? { meta: newInput.finalInput.meta } : {}),
-          ...(newInput.resolvedAttachments !== undefined
-            ? { attachments: newInput.resolvedAttachments.map((r) => r.ref) }
-            : {}),
-        } as unknown as JsonValue,
+        data: copyJson(
+          {
+            id: newInput.finalInput.id,
+            text: newInput.effectiveText,
+            origin: newInput.finalInput.origin,
+            createdAt: newInput.finalInput.createdAt,
+            whenBusy: 'reject',
+            ...(newInput.finalInput.meta !== undefined ? { meta: newInput.finalInput.meta } : {}),
+            ...(newInput.resolvedAttachments !== undefined
+              ? { attachments: newInput.resolvedAttachments.map((r) => r.ref) }
+              : {}),
+          },
+          { omitUndefinedProperties: true },
+        ),
       },
       requestId: newInput.finalInput.id,
     }
-    return conversation.submit(tx, inputDraft) as unknown as Promise<string>
+    return conversation.submit(tx, inputDraft)
   }
 
   /** 事务后 tracker 登记（bindSubmission 登记关联索引，观察路径已按 requestId 先行登记）。 */
-  private registerRewoundInput(id: number, finalInput: ConversationInput, submissionId: unknown): void {
+  private registerRewoundInput(id: number, finalInput: ConversationInput, submissionId: SubmissionId): void {
     // 事务已落库：登记 tracker（commit 观察路径可能已按 requestId 先行登记，
     // registerInput 幂等合并为唯一记录，失败则 drop 撤销，绝不留下孤儿登记）。
     this.host.tracker.registerInput(id, finalInput)
     try {
-      this.host.tracker.bindSubmission(id, finalInput.id, Number(submissionId))
+      this.host.tracker.bindSubmission(id, finalInput.id, submissionId)
     } catch (error) {
       this.host.tracker.dropInput(id, finalInput.id)
       throw error

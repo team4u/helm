@@ -22,7 +22,7 @@
  * - 权限、连接与页面非前台活跃（!isPageActive()）在触发当刻逐项现场复核。
  */
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol/browser'
 import {
   isPageActive,
   readBrowserNotificationPermission,

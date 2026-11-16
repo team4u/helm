@@ -5,7 +5,7 @@ import {
   validateOrThrow,
   type EditToolResult,
   type ToolDiffRow,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 
 export const PENDING_DIFF_MAX_INPUT_CHARS = 65_536
 export const PENDING_DIFF_MAX_EDIT_LENGTH = 2_048

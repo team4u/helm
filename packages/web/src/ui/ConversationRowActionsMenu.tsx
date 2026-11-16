@@ -15,7 +15,7 @@
  */
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol/browser'
 import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginMicroAction } from './PluginMicroAction.js'

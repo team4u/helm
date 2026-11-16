@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol/browser'
 import { useHelmStore } from '../lib/store-context.js'
 import { matchesUiScope } from '../lib/types.js'
 import { buildWorkbenchTabs, countDeliverableArtifacts } from './workbench-model.js'

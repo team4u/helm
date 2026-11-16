@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ArtifactMetadata, ArtifactPreviewerProps } from '@helm/protocol'
+import type { ArtifactMetadata, ArtifactPreviewerProps } from '@helm/protocol/browser'
 import { artifactsApi } from '../lib/api.js'
 import { HelmIcon, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Select, SegmentedControl } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'

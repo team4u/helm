@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol/browser'
 import { assetsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon, Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'

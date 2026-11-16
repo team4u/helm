@@ -28,6 +28,7 @@ function workspacePackages() {
 function sourceFiles(root: string): string[] {
   if (!existsSync(root)) return []
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === 'plugin-staging') return []
     const path = join(root, entry.name)
     return entry.isDirectory() ? sourceFiles(path) : /\.(ts|tsx|mts|mjs)$/.test(entry.name) ? [path] : []
   })
@@ -137,4 +138,174 @@ test('workspace 生产依赖图无环', { timeout: 60_000 }, () => {
     visited.add(name)
   }
   for (const name of graph.keys()) visit(name, [])
+})
+
+function resolveRelativeSource(fromFile: string, specifier: string): string | undefined {
+  const base = resolve(dirname(fromFile), specifier)
+  const stripped = base.replace(/\.(js|jsx|mjs|cjs)$/, '')
+  const candidates = [
+    base,
+    `${stripped}.ts`,
+    `${stripped}.tsx`,
+    `${stripped}.mts`,
+    `${stripped}.mjs`,
+    join(base, 'index.ts'),
+    join(base, 'index.tsx'),
+  ]
+  return candidates.find((candidate) => existsSync(candidate))
+}
+
+function collectTransitiveLocalSources(entryFile: string): Set<string> {
+  const visited = new Set<string>()
+  const queue = [resolve(entryFile)]
+  while (queue.length > 0) {
+    const current = queue.pop()!
+    if (visited.has(current) || !existsSync(current)) continue
+    visited.add(current)
+    for (const specifier of imports(current)) {
+      if (!specifier.startsWith('.')) continue
+      const target = resolveRelativeSource(current, specifier)
+      if (target && !visited.has(target)) queue.push(target)
+    }
+  }
+  return visited
+}
+
+const NODE_BUILTINS = new Set([
+  'assert',
+  'async_hooks',
+  'buffer',
+  'child_process',
+  'cluster',
+  'console',
+  'constants',
+  'crypto',
+  'dgram',
+  'diagnostics_channel',
+  'dns',
+  'domain',
+  'events',
+  'fs',
+  'http',
+  'http2',
+  'https',
+  'inspector',
+  'module',
+  'net',
+  'os',
+  'path',
+  'perf_hooks',
+  'process',
+  'punycode',
+  'querystring',
+  'readline',
+  'repl',
+  'stream',
+  'string_decoder',
+  'timers',
+  'tls',
+  'trace_events',
+  'tty',
+  'url',
+  'util',
+  'v8',
+  'vm',
+  'wasi',
+  'worker_threads',
+  'zlib',
+])
+
+function isForbiddenBrowserRuntimeImport(specifier: string): string | undefined {
+  if (specifier.startsWith('node:')) return `禁止导入 Node 内置模块 ${specifier}`
+  const bare = specifier.split('/')[0]!
+  if (NODE_BUILTINS.has(bare)) return `禁止导入 Node 内置模块 ${specifier}`
+  if (specifier.startsWith('@earendil-works/pi-')) return `禁止导入后端 SDK 模块 ${specifier}`
+  return undefined
+}
+
+test('浏览器侧源码与 @helm/protocol/browser 传递闭包禁止导入 node:* / pi-* 或回流根入口', { timeout: 60_000 }, () => {
+  const violations: string[] = []
+  const browserEntry = join(packagesDir, 'protocol/src/browser.ts')
+  assert.ok(existsSync(browserEntry), '缺少 @helm/protocol/browser 入口文件')
+
+  const protocolPluginFile = resolve(packagesDir, 'protocol/src/plugin.ts')
+  const browserClosure = collectTransitiveLocalSources(browserEntry)
+  if (browserClosure.has(protocolPluginFile)) {
+    violations.push('protocol/src/browser.ts 传递闭包不得触达 protocol/src/plugin.ts')
+  }
+  for (const file of browserClosure) {
+    for (const specifier of imports(file)) {
+      const problem = isForbiddenBrowserRuntimeImport(specifier)
+      if (problem) violations.push(`${relative(packagesDir, file)}: ${problem}`)
+    }
+  }
+
+  for (const file of sourceFiles(join(packagesDir, 'plugin-client/src'))) {
+    for (const specifier of imports(file)) {
+      const problem = isForbiddenBrowserRuntimeImport(specifier)
+      if (problem) violations.push(`${relative(packagesDir, file)}: ${problem}`)
+      if (specifier === '@helm/protocol') {
+        violations.push(`${relative(packagesDir, file)}: 必须从 @helm/protocol/browser 导入，禁止导入 @helm/protocol 根入口`)
+      }
+    }
+  }
+
+  // HelmStoreProvider.tsx 正处于并行重构过渡期，其余 @helm/web/src 文件必须全部从 @helm/protocol/browser 导入。
+  const transitionalProtocolRootAllowlist = new Set(['lib/HelmStoreProvider.tsx'])
+  const webSrcDir = join(packagesDir, 'web/src')
+  for (const file of sourceFiles(webSrcDir)) {
+    const relFromWebSrc = relative(webSrcDir, file).replace(/\\/g, '/')
+    for (const specifier of imports(file)) {
+      const problem = isForbiddenBrowserRuntimeImport(specifier)
+      if (problem) violations.push(`${relative(packagesDir, file)}: ${problem}`)
+      if (specifier === '@helm/protocol' && !transitionalProtocolRootAllowlist.has(relFromWebSrc)) {
+        violations.push(`${relative(packagesDir, file)}: 必须从 @helm/protocol/browser 导入，禁止导入 @helm/protocol 根入口`)
+      }
+    }
+  }
+
+  assert.deepEqual(violations, [], violations.join('\n'))
+})
+
+test('全仓 packages/*/src 零 any 与零 TS 类型抑制指令', { timeout: 60_000 }, () => {
+  const violations: string[] = []
+  const suppressionPattern = /@(?:ts-ignore|ts-expect-error|ts-nocheck)\b/
+
+  for (const { root } of workspacePackages()) {
+    for (const file of sourceFiles(join(root, 'src'))) {
+      const text = readFileSync(file, 'utf8')
+      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
+      const seenComments = new Set<string>()
+
+      const checkCommentRanges = (ranges: readonly ts.CommentRange[] | undefined) => {
+        if (!ranges) return
+        for (const range of ranges) {
+          const key = `${range.pos}:${range.end}`
+          if (seenComments.has(key)) continue
+          seenComments.add(key)
+          const snippet = text.slice(range.pos, range.end)
+          const match = suppressionPattern.exec(snippet)
+          if (match) {
+            const { line } = source.getLineAndCharacterOfPosition(range.pos)
+            violations.push(`${relative(packagesDir, file)}:${line + 1}: 禁止使用 ${match[0]}`)
+          }
+        }
+      }
+
+      const visit = (node: ts.Node): void => {
+        checkCommentRanges(ts.getLeadingCommentRanges(text, node.getFullStart()))
+        checkCommentRanges(ts.getTrailingCommentRanges(text, node.getEnd()))
+        if (node.kind === ts.SyntaxKind.AnyKeyword) {
+          const { line } = source.getLineAndCharacterOfPosition(node.getStart(source))
+          violations.push(`${relative(packagesDir, file)}:${line + 1}: 禁止使用 any 类型（as any / : any / <any>）`)
+        }
+        ts.forEachChild(node, visit)
+      }
+
+      visit(source)
+      checkCommentRanges(ts.getLeadingCommentRanges(text, source.endOfFileToken.getFullStart()))
+    }
+  }
+
+  assert.deepEqual(violations, [], violations.join('\n'))
 })

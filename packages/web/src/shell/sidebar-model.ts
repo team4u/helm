@@ -11,7 +11,7 @@ import type {
   SidebarItemSpec,
   SidebarSectionSpec,
   SkillSummary,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 import type { HelmStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
 import { ARCHIVED_TAG, isConversationArchived } from '../conversation/archive-model.js'

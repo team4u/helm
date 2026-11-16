@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import type { SkillSummary } from '@helm/protocol'
+import type { SkillSummary } from '@helm/protocol/browser'
 import { copyToClipboard, HelmIcon } from '@helm/plugin-client'
 import { getSkillSourceBadge } from './skill-center-model.js'
 

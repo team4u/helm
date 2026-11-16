@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
-import type { ConversationAttachmentRef } from '@helm/protocol'
+import type { ConversationAttachmentRef } from '@helm/protocol/browser'
 import { HelmIcon, Popover, PopoverContent, PopoverTrigger } from '@helm/plugin-client'
 import {
   isConversationArchivable,

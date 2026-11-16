@@ -10,7 +10,7 @@
  *   提交全文。MEMORY.md 由 builtin:memory 插件自治管理，不经本模型。
  */
 
-import type { Profile, ProfileRuntime } from '@helm/protocol'
+import type { Profile, ProfileRuntime } from '@helm/protocol/browser'
 
 export interface EnvPair {
   key: string

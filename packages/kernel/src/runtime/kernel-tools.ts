@@ -4,7 +4,9 @@
  * subagent / SubagentWorkflow / cleanup_worktree 已迁移至 builtin:workflow
  * 插件（ctx.tool 声明）；内核只保留与插件无关的基础元工具。
  */
-import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
+import type { Context } from '@earendil-works/chord/context'
+import { defineTool, type ToolExecutionApi, type ToolRegistration } from '@earendil-works/pi-durable'
+import { bool, obj, opt, str, unsafe } from '@earendil-works/pi-schema'
 import { safeResultText, type ActionManifest } from '@helm/protocol'
 
 /** 工具工厂的宿主能力面。 */
@@ -30,28 +32,26 @@ export interface KernelToolHost {
   redact(text: string): string
 }
 
+const runActionParameters = obj({
+  actionId: str({ description: 'pluginId.actionId 全限定动作 ID' }),
+  input: opt(unsafe<Record<string, unknown>>({ type: 'object', description: '动作输入（按动作 inputSchema）' })),
+  describe: opt(
+    bool({
+      description: 'true 时只返回该动作的完整清单（input/outputSchema），不执行动作；缺省 false 执行',
+    }),
+  ),
+})
+
 /** run_action 元工具：按需调用插件动作（qualifiedId，输入输出 schema 边界校验）；describe 只查清单不执行。 */
-export function createRunActionTool(host: KernelToolHost): ToolRegistration {
+export function createRunActionTool(host: KernelToolHost): ToolRegistration<typeof runActionParameters> {
   return defineTool({
     name: 'run_action',
     description:
       '调用插件声明的动作（pluginId.actionId 全限定 ID）。可用动作目录由系统提示 <available_actions> 注入。' +
       'describe: true 时仅返回该动作完整清单（input/outputSchema，不执行动作），用于查询嵌套或复杂参数结构。输入校验失败显式报错。',
-    parameters: {
-      type: 'object',
-      properties: {
-        actionId: { type: 'string', description: 'pluginId.actionId 全限定动作 ID' },
-        input: { type: 'object', description: '动作输入（按动作 inputSchema）' },
-        describe: {
-          type: 'boolean',
-          description: 'true 时只返回该动作的完整清单（input/outputSchema），不执行动作；缺省 false 执行',
-        },
-      },
-      required: ['actionId'],
-      additionalProperties: false,
-    } as Record<string, unknown>,
-    async execute(args: Record<string, unknown>, api: { conversationId: number }, context: { abortSignal?: AbortSignal }) {
-      const qualified = String(args['actionId'])
+    parameters: runActionParameters,
+    async execute(args, api: ToolExecutionApi, context: Context) {
+      const qualified = args.actionId
       const dot = qualified.indexOf('.')
       if (dot <= 0) {
         return {
@@ -62,7 +62,7 @@ export function createRunActionTool(host: KernelToolHost): ToolRegistration {
       const pluginId = qualified.slice(0, dot)
       const actionId = qualified.slice(dot + 1)
       try {
-        if (args['describe'] === true) {
+        if (args.describe === true) {
           const manifest = await host.describePluginAction(pluginId, actionId, {
             conversationId: api.conversationId,
           })
@@ -70,7 +70,7 @@ export function createRunActionTool(host: KernelToolHost): ToolRegistration {
             output: [{ type: 'text', text: host.redact(JSON.stringify(manifest, null, 2)) }],
           }
         }
-        const result = await host.invokePluginAction(pluginId, actionId, args['input'] ?? {}, {
+        const result = await host.invokePluginAction(pluginId, actionId, args.input ?? {}, {
           conversationId: api.conversationId,
           signal: context.abortSignal,
         })
@@ -85,5 +85,5 @@ export function createRunActionTool(host: KernelToolHost): ToolRegistration {
         }
       }
     },
-  } as never)
+  })
 }

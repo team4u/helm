@@ -6,7 +6,7 @@
  * 本模块只导出 hooks / 纯函数 / TS 类型（无组件），保持 .ts Fast Refresh 约定。
  */
 import { useCallback, useEffect, useState } from 'react'
-import type { ComposerCompleterSpec, ConversationSummary } from '@helm/protocol'
+import type { ComposerCompleterSpec, ConversationSummary } from '@helm/protocol/browser'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { replaceSlashToken } from '../lib/commands-model.js'

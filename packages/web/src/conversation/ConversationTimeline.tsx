@@ -6,7 +6,7 @@ import type {
   ConversationLive,
   ConversationSummary,
   ProfileStarterPrompt,
-} from '@helm/protocol'
+} from '@helm/protocol/browser'
 import { artifactsApi } from '../lib/api.js'
 import { HelmIcon, CopyButton } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'

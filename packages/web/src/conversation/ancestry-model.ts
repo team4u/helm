@@ -1,4 +1,4 @@
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol/browser'
 
 /**
  * 会话祖谱纯函数模型：仅依赖 HelmStore 的 conversations 摘要列表推导

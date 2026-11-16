@@ -8,7 +8,7 @@
 import type { AskSpec } from './ask.js'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from './conversation.js'
 import type { NodeInfo } from './env-rpc.js'
-import type { PluginSummary, PublicPluginDoc, PublicPluginSessionDoc } from './plugin.js'
+import type { PluginSummary, PublicPluginDoc, PublicPluginSessionDoc } from './plugin-dto.js'
 import type { PluginUiContribution } from './ui.js'
 
 /** SSE 全局事件序号（水位线）。 */

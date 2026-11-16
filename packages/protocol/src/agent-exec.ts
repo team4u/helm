@@ -12,7 +12,7 @@
  */
 import { HelmError } from './error.js'
 import { sanitizeAgentNamespacedMeta } from './meta.js'
-import type { AgentExecutionInfo, AgentGateResult } from './plugin.js'
+import type { AgentExecutionInfo, AgentGateResult } from './plugin-dto.js'
 
 /** 目标路径是否绝对（POSIX / 开头、Windows 盘符绝对或 UNC / 根反斜杠）。 */
 export function isAbsoluteAgentPath(p: string): boolean {

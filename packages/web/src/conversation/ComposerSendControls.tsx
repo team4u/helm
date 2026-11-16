@@ -1,4 +1,4 @@
-import type { WhenBusy } from '@helm/protocol'
+import type { WhenBusy } from '@helm/protocol/browser'
 import { HelmIcon } from '@helm/plugin-client'
 import {
   DropdownMenuContent,
