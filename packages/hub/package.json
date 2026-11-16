@@ -31,6 +31,7 @@
     "@earendil-works/pi-ai": "1.5.2",
     "@earendil-works/pi-durable": "1.5.2",
     "@helm/node": "workspace:*",
+    "@helm/test-kit": "workspace:*",
     "@types/ws": "^8.18.0",
     "birpc": "^2.9.0",
     "ws": "^8.18.0"

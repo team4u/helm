@@ -9,7 +9,7 @@
  *   隔离树；gate 由内核 settleGate → runGate → runShell 真实执行，超时杀整
  *   个进程组（不 mock 核心超时）。
  * - goal({ label: 'worker-c', isolation: 'worktree', maxAttempts: 3,
- *   gateTimeoutMs: 1000 })：第 1 次门禁挂起 3s（被 1s 进程组超时强杀）、
+ *   gateTimeoutMs: 1000 })：第 1 次门禁挂起 6s（被 1s 进程组超时强杀）、
  *   第 2 次门禁 exitCode=1、第 3 次成功。
  * - 断言：三次尝试共用同一 conversationId 与同一 worktree（path/branch/id
  *   一致，全程只派生一个子会话）；账本逐次记录 gate.timedOut / gate.exitCode
@@ -38,17 +38,23 @@
  *
  * runner: tsx --test；每测试显式 timeout: 60_000 防死锁。
  */
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AssistantMessage, TranscriptContext } from '@earendil-works/pi-ai'
 import { HelmError } from '@helm/protocol'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHelm } from '../src/app.js'
+import {
+  createGitTemplate,
+  createHubTestApp,
+  sleep,
+  type FauxProviderHandle,
+  type GitTemplate,
+  type HubTestApp,
+} from './helpers/hub-test-env.js'
 
 /** 进程占用扫描当前仅 Linux /proc（与 worktree-runtime 集成测试同款平台事实）。 */
 const PROCESS_SCAN_ON = process.platform === 'linux'
@@ -58,8 +64,6 @@ type ModelRoute = (context: {
   texts: string[]
   afterToolResult: boolean
 }) => AssistantMessage | undefined
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 /** 提取全部 user 文本（字符串正文与文本块）。 */
 function userTextsOf(context: TranscriptContext): string[] {
@@ -110,33 +114,22 @@ function routedResponses(route: ModelRoute, count: number) {
 // ---------------------------------------------------------------------------
 
 let rootDir: string
+let gitTemplate: GitTemplate
 
 before(() => {
   rootDir = mkdtempSync(join(tmpdir(), 'helm-workflow-goal-'))
+  gitTemplate = createGitTemplate('helm-workflow-goal-tpl-')
 })
 
 after(() => {
+  gitTemplate?.cleanup()
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-/** 真实临时 Git 仓库（main 分支 + 初始提交；用户级配置隔离）。 */
-function makeGitRepo(dir: string): string {
-  mkdirSync(dir, { recursive: true })
-  const git = (args: string[]) =>
-    execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-  git(['init', '-q', '-b', 'main'])
-  git(['config', 'user.email', 'test@helm.local'])
-  git(['config', 'user.name', 'helm-test'])
-  writeFileSync(join(dir, 'README.md'), '# repo\n')
-  git(['add', '.'])
-  git(['commit', '-qm', 'init'])
-  return dir
-}
-
 interface RuntimeEnv {
-  app: Awaited<ReturnType<typeof createHelm>>
-  kernel: Awaited<ReturnType<typeof createHelm>>['kernel']
-  faux: ReturnType<typeof fauxProvider>
+  app: HubTestApp
+  kernel: HubTestApp['kernel']
+  faux: FauxProviderHandle
   conversationId: number
   /** builtin:workflow 公开动作总线（HTTP/CLI/模型工具同链路）。 */
   runWorkflowAction(request: Record<string, unknown>): Promise<{ run: Record<string, any> }>
@@ -147,16 +140,10 @@ interface RuntimeEnv {
 
 /** 真实 createHelm（builtin:workflow 默认启用）+ faux provider；cwd 指向真实 Git 仓库。 */
 async function openRuntime(dataDir: string, repoDir: string): Promise<RuntimeEnv> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
-  const app = await createHelm({
+  const { app, kernel, faux } = await createHubTestApp({
     dataDir,
     cwd: repoDir,
-    model: 'faux/faux-1',
-    models: models as never,
-  } as never)
-  const kernel = app.kernel
+  })
   const conversationId = kernel.listConversations()[0]!.id
   return {
     app,
@@ -219,20 +206,20 @@ function findFileRecursive(root: string, name: string): string[] {
 describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/worktree）', { timeout: 60_000 }, () => {
   it('三次尝试同会话同 worktree：gate 超时强杀 / exit 1 / 成功，attempts=3', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't2')
-    const repo = makeGitRepo(join(dir, 'repo'))
+    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const dataDir = join(dir, 'data')
     const env = await openRuntime(dataDir, repo)
 
     // 门禁脚本（gate 在 worktree 内执行，按标记文件决定行为）：
-    // - 仅 attempt-1：挂起 3 秒（超过 gateTimeoutMs=1000，应被进程组超时杀掉；
-    //   若 kill 失效，3s 后写出逃逸标记 gate-1-escaped.txt 并以 0 退出）
+    // - 仅 attempt-1：挂起 6 秒（超过 gateTimeoutMs=1000，应被进程组超时杀掉；
+    //   若 kill 失效，6s 后写出逃逸标记 gate-1-escaped.txt 并以 0 退出）
     // - attempt-2 存在：exit 1
     // - attempt-3 存在：exit 0
     const gateCommand =
       'node -e "const fs=require(\'fs\');' +
       "if(fs.existsSync('attempt-3.txt'))process.exit(0);" +
       "if(fs.existsSync('attempt-2.txt'))process.exit(1);" +
-      "setTimeout(function(){fs.writeFileSync('gate-1-escaped.txt','alive')},3000)" +
+      "setTimeout(function(){fs.writeFileSync('gate-1-escaped.txt','alive')},6000)" +
       '"'
     const script =
       'export const meta = { name: "t2-goal-retry", description: "goal 门禁三态重试验收" }\n' +
@@ -338,8 +325,8 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
       }
       assert.ok(existsSync(worktree.path), '重试全程保留同一 worktree（失败不回收）')
 
-      // ---- 进程组 kill 真实性：挂起门禁若未被杀，3s 后会写出逃逸标记；
-      // 且整个 run 会被拖到 3s 以上。----
+      // ---- 进程组 kill 真实性：挂起门禁若未被杀，6s 后会写出逃逸标记；
+      // 且整个 run 会被拖到 6s 以上。----
       const goalNode = (run.nodes ?? []).find((n: Record<string, any>) => n['label'] === 'worker-c')
       assert.ok(goalNode, '应存在 label worker-c 的 agent 节点')
       assert.equal(goalNode!['status'], 'done')
@@ -349,19 +336,19 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
         'run 摘要应携带 createdAt/updatedAt',
       )
       assert.ok(
-        run['updatedAt'] - run['createdAt'] < 3_000,
-        `整个 run 用时 ${run['updatedAt'] - run['createdAt']}ms 应远小于 3s 挂起下限（门禁被 1s 进程组超时终止）`,
+        run['updatedAt'] - run['createdAt'] < 5_800,
+        `整个 run 用时 ${run['updatedAt'] - run['createdAt']}ms 应小于 5.8s 挂起下限（门禁被 1s 进程组超时终止）`,
       )
       const escaped = findFileRecursive(dir, 'gate-1-escaped.txt')
       if (escaped.length > 0) {
         // 已存在即立刻失败（快于逃逸窗口的防御分支）。
         assert.fail(`门禁进程逃逸（未被进程组杀死）：${escaped.join(', ')}`)
       }
-      while (Date.now() - startedAt < 3_500) await sleep(100)
+      while (Date.now() - startedAt < 6_200) await sleep(100)
       assert.deepEqual(
         findFileRecursive(dir, 'gate-1-escaped.txt'),
         [],
-        '被杀门禁进程在 3s 逃逸窗口后不得写出存活标记（进程组 kill 真实生效）',
+        '被杀门禁进程在 6s 逃逸窗口后不得写出存活标记（进程组 kill 真实生效）',
       )
     } finally {
       await env.close()
@@ -376,7 +363,7 @@ describe('T2 goal 门禁失败自动重试（真内核/faux/WorkflowService/work
 describe('T3 三级嵌套同名 plan 与 resumeFromRunId 断点续跑', { timeout: 60_000 }, () => {
   it('模块 A 全缓存复用、仅模块 B 失败节点 live 重跑，元数据完整还原', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't3')
-    const repo = makeGitRepo(join(dir, 'repo'))
+    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const dataDir = join(dir, 'data')
     const env = await openRuntime(dataDir, repo)
     const signalPath = join(repo, 'b-open-gate.txt')

@@ -14,47 +14,34 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import WebSocket from 'ws'
 import { createBirpc } from 'birpc'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError, type NodeRegisterInput, type NodeRegisterResult } from '@helm/protocol'
-import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import type { NodeConnection, HubConnectionLocal } from '../../kernel/src/env/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { openHubTestEnv, type HubTestApp } from './helpers/hub-test-env.js'
 
 interface Env {
   dataDir: string
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: HubTestApp
   hubUrl: string
   close(): Promise<void>
 }
 
 async function makeEnv(options: { hubPlatform?: string } = { hubPlatform: 'linux' }): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-conv-cwd-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
-    dataDir,
-    cwd: dataDir,
-    model: 'faux/faux-1',
-    models,
+  const base = await openHubTestEnv({
+    prefix: 'helm-conv-cwd-',
+    swallowCloseError: true,
     hubPlatform: () => options.hubPlatform,
   })
-  const hub = await startHub({ kernel: app.kernel, port: 0 })
+  const hub = await startHub({ kernel: base.kernel, port: 0 })
   return {
-    dataDir,
-    app,
+    dataDir: base.dataDir,
+    app: base.app,
     hubUrl: hub.url,
     async close() {
       await hub.close().catch(() => {})
-      await app.close().catch(() => {})
-      rmSync(dataDir, { recursive: true, force: true })
+      await base.close()
     },
   }
 }

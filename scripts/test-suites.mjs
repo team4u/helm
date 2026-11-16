@@ -129,9 +129,13 @@ console.error(`[test-suites] 套件 ${label}: ${files.length} 个文件（${brea
 const ULTRA_SLOW_TEST_PREFIXES = [
   'payload',
   'node-path-usage-rpc',
+  'workflow.test',
   'workflow-goal',
+  'workflow-metadata',
   'core.integration',
   'worktree-runtime',
+  'runtime.test.ts',
+  'plugins-contract.test.ts',
   'herdr',
   'superagent',
   'background-restart',
@@ -141,13 +145,33 @@ const ULTRA_SLOW_TEST_PREFIXES = [
   'check-changed',
   'quiet-notifier',
   'use-version-watcher',
+  'cli.test.ts',
+  'build-runner',
+  'conversation-outline',
+  'skill-center',
 ];
 
 const SLOW_TEST_PREFIXES = [
-  'cli.test.ts',
   'cli-nodes-env',
+  'cli-credentials',
+  'cli-dynamic-actions',
+  'cli-plugin-dx',
+  'node-cli-review',
   'node-rpc-review',
+  'node-forward-http',
+  'node-daemon.test.ts',
+  'ownership-events.test.ts',
   'plugin-client.test.ts',
+  'plugin-client-runtime',
+  'icons.test.ts',
+  'sidebar-spaces',
+  'composer-thinking-badge',
+  'conversation-archive-menu',
+  'helm-store',
+  'tool-activity',
+  'ask-dock',
+  'select.test.ts',
+  'thinking-',
   'workflow',
   'updater',
   'supervisor',
@@ -158,6 +182,8 @@ const SLOW_TEST_PREFIXES = [
   'tracker-cleanup',
   'secret-lifecycle',
   'sse-',
+  'unread-visibility',
+  'timeline-outline-calibration',
   'markdown-codeblock-plugins',
   'node-tunnel',
   'tools.test.ts',
@@ -167,16 +193,19 @@ const SLOW_TEST_PREFIXES = [
   'plugin-dx-loop',
   'token-speed.integration',
   'profile-collaboration',
+  'test-kit.test.ts',
 ];
 
 function matchesPrefix(base, list) {
   return list.some((p) => base.startsWith(p) || base === p);
 }
 
+const ULTRA_SLOW_TIER_WEIGHT = 20_000_000;
+
 function lptWeight(relPath) {
   const base = path.basename(relPath);
   let tier = 0;
-  if (matchesPrefix(base, ULTRA_SLOW_TEST_PREFIXES)) tier = 20_000_000;
+  if (matchesPrefix(base, ULTRA_SLOW_TEST_PREFIXES)) tier = ULTRA_SLOW_TIER_WEIGHT;
   else if (matchesPrefix(base, SLOW_TEST_PREFIXES)) tier = 10_000_000;
   let size = 0;
   try {
@@ -194,8 +223,8 @@ const cpus = Math.max(1, os.availableParallelism());
 const sortedAllFiles = [...files].sort((a, b) => lptWeight(b) - lptWeight(a) || a.localeCompare(b));
 const shardingDisabled = shouldDisableSharding(extraArgs);
 
-/** @type {Array<{ label: string, args: string[] }>} */
-const runPlans = [];
+/** @type {Array<{ label: string, args: string[], permits: number }>} */
+const plans = [];
 
 if (!shardingDisabled) {
   const { pureFiles, isolatedFiles, shards } = partitionFilesForSharding({
@@ -203,52 +232,60 @@ if (!shardingDisabled) {
     repoRoot,
     files,
     cpus,
-    filesPerShard: 8,
+    // 合并纯内存测试为单进程分片（实测 unit 43 文件仅 1.3s，integration 38 文件含 5s timer 共 6.9s），
+    // 与隔离进程池按 1 + (cpus - 1) 并发起跑：零阶段栅栏、零双池超发争抢、零百余协调器冷启动税。
+    filesPerShard: Math.max(8, files.length),
     weightFn: lptWeight,
   });
-  if (pureFiles.length >= 4 && shards.length > 0) {
+  const usePureShards = pureFiles.length >= 4 && shards.length > 0;
+  if (usePureShards) {
+    const pureShardCount = shards.length;
+    const isoConc = Math.max(1, cpus - pureShardCount);
     console.error(
-      `[test-suites] 调度: pure=${pureFiles.length}（${shards.length} 个 --test-isolation=none 分片） isolated=${isolatedFiles.length}`,
+      `[test-suites] 调度: pure=${pureFiles.length}（${pureShardCount} 分片，--test-isolation=none）‖ ` +
+        `isolated=${isolatedFiles.length}（--test-concurrency=${isoConc}，总上限 ${cpus}）`,
     );
     shards.forEach((shard, idx) => {
-      runPlans.push({
-        label: `pure-shard-${idx + 1}/${shards.length}`,
+      plans.push({
+        label: `pure-shard-${idx + 1}/${pureShardCount}`,
         args: ['--test-isolation=none', ...extraArgs, ...shard],
+        permits: 1,
       });
     });
     if (isolatedFiles.length > 0) {
-      runPlans.push({
+      plans.push({
         label: 'isolated',
-        args: [...extraArgs, ...isolatedFiles],
+        args: [`--test-concurrency=${isoConc}`, ...extraArgs, ...isolatedFiles],
+        permits: isoConc,
       });
     }
+  } else {
+    plans.push({
+      label: 'isolated',
+      args: [...extraArgs, ...sortedAllFiles],
+      permits: cpus,
+    });
   }
-}
-
-if (runPlans.length === 0) {
-  runPlans.push({
-    label: 'isolated',
+} else {
+  plans.push({
+    label: 'single',
     args: [...extraArgs, ...sortedAllFiles],
+    permits: cpus,
   });
 }
 
 // 复用 run-tests.mjs：跨平台 tsx spawn、单测/总超时与进程树清理都在那边，绝不重复实现。
+// 基于许可上限 cpus 的单工作池统一调度 pure-shards、重型单文件与并发批，避免双池超发争抢、阶段栅栏与尾部串联。
 const runTestsPath = path.join(repoRoot, 'scripts', 'run-tests.mjs');
 const suiteStartMs = Date.now();
-const children = runPlans.map((plan) =>
-  spawn(process.execPath, [runTestsPath, ...plan.args], {
-    stdio: 'inherit',
-    env: process.env,
-    cwd: repoRoot,
-  }),
-);
-
-// 及时将信号广播转发到所有分片与隔离测试组。
+/** @type {Set<import('node:child_process').ChildProcess>} */
+const activeChildren = new Set();
 let receivedSignal = null;
+
 for (const signal of ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGTERM']) {
   process.on(signal, () => {
     if (!receivedSignal) receivedSignal = signal;
-    for (const child of children) {
+    for (const child of activeChildren) {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill(signal);
       }
@@ -256,21 +293,73 @@ for (const signal of ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGTERM']) {
   });
 }
 
-const exitCodes = await Promise.all(
-  children.map(
-    (child, idx) =>
-      new Promise((resolve) => {
+/**
+ * 按并发许可上限调度队列中的测试计划，保证任意时刻活跃测试进程数 ≤ maxPermits。
+ * @param {Array<{ label: string, args: string[], permits: number }>} queue
+ * @param {number} maxPermits
+ * @returns {Promise<number[]>}
+ */
+function runPlanPool(queue, maxPermits) {
+  if (queue.length === 0) return Promise.resolve([]);
+  const cap = Math.max(1, maxPermits);
+  const results = new Array(queue.length).fill(0);
+  const pending = queue.map((plan, index) => ({
+    plan,
+    index,
+    cost: Math.max(1, Math.min(cap, plan.permits)),
+  }));
+  let available = cap;
+  let running = 0;
+
+  return new Promise((resolve) => {
+    const spawnOne = (item) =>
+      new Promise((done) => {
+        const child = spawn(process.execPath, [runTestsPath, ...item.plan.args], {
+          stdio: 'inherit',
+          env: process.env,
+          cwd: repoRoot,
+        });
+        activeChildren.add(child);
         child.on('error', (err) => {
-          console.error(`[test-suites] 启动 ${runPlans[idx].label} 失败: ${err.message}`);
-          resolve(1);
+          activeChildren.delete(child);
+          console.error(`[test-suites] 启动 ${item.plan.label} 失败: ${err.message}`);
+          done(1);
         });
         child.on('exit', (code, signal) => {
-          if (code !== null) resolve(code);
-          else resolve(SIGNAL_EXIT_CODES[signal] ?? 1);
+          activeChildren.delete(child);
+          if (code !== null) done(code);
+          else done(SIGNAL_EXIT_CODES[signal] ?? 1);
         });
-      }),
-  ),
-);
+      });
+
+    const pump = () => {
+      if (!receivedSignal) {
+        for (let i = 0; i < pending.length; ) {
+          if (pending[i].cost <= available) {
+            const [item] = pending.splice(i, 1);
+            available -= item.cost;
+            running += 1;
+            void spawnOne(item).then((code) => {
+              results[item.index] = code;
+              available += item.cost;
+              running -= 1;
+              pump();
+            });
+          } else {
+            i += 1;
+          }
+        }
+      }
+      if (running === 0 && (receivedSignal || pending.length === 0)) {
+        resolve(results);
+      }
+    };
+
+    pump();
+  });
+}
+
+const exitCodes = await runPlanPool(plans, cpus);
 
 const elapsed = ((Date.now() - suiteStartMs) / 1000).toFixed(1);
 let finalCode = 0;

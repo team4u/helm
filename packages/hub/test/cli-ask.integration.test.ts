@@ -4,19 +4,14 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { runCli } from '../../cli/src/index.js'
-import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createHubTestApp } from './helpers/hub-test-env.js'
 
 async function fixture() {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-cli-ask-'))
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const { app, faux } = await createHubTestApp({ dataDir, cwd: dataDir })
   const auth = app.kernel.auth.createProcessToken()
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   return {

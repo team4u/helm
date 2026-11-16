@@ -14,21 +14,17 @@
  * runner: tsx --test；每项显式 timeout: 60_000 防死锁。
  */
 import { test } from 'node:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
-  fauxProvider,
   fauxAssistantMessage,
   fauxToolCall,
   type FauxResponseStep,
 } from '@earendil-works/pi-ai/providers/faux'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { ConversationEntry, ConversationSummary, PluginDefinition } from '@helm/protocol'
-import { createHelm } from '../src/app.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { openHubTestEnv, type FauxProviderHandle, type HubTestApp } from './helpers/hub-test-env.js'
 import assert from 'node:assert/strict'
 
 /** 捕获的单次最终模型请求（回放语义折叠后的视图）。 */
@@ -40,8 +36,8 @@ interface CapturedRequest {
 
 interface TestEnv {
   dataDir: string
-  faux: ReturnType<typeof fauxProvider>
-  app: Awaited<ReturnType<typeof createHelm>>
+  faux: FauxProviderHandle
+  app: HubTestApp
   requests: CapturedRequest[]
   initialConvId: number
   capture(): FauxResponseStep
@@ -54,11 +50,7 @@ interface TestEnv {
 }
 
 async function makeEnv(): Promise<TestEnv> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-action-discovery-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const { dataDir, faux, app, close } = await openHubTestEnv({ prefix: 'helm-action-discovery-' })
   const initialConv = app.kernel
     .listConversations()
     .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
@@ -107,13 +99,7 @@ async function makeEnv(): Promise<TestEnv> {
         .map((message) => JSON.stringify(message))
         .join('\n')
     },
-    async close() {
-      try {
-        await app.close()
-      } finally {
-        rmSync(dataDir, { recursive: true, force: true })
-      }
-    },
+    close,
   }
   return env
 }

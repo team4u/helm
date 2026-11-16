@@ -17,23 +17,18 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError } from '@helm/protocol'
 
-import { createHelm } from '../src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createHubTestApp, type HubTestApp } from './helpers/hub-test-env.js'
 
 async function buildApp(dataDir: string, model = 'faux/faux-1') {
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model, models })
+  const { app, faux } = await createHubTestApp({ dataDir, cwd: dataDir, model })
   return { faux, app }
 }
 
-function initialConvOf(app: Awaited<ReturnType<typeof createHelm>>) {
+function initialConvOf(app: HubTestApp) {
   const conv = app.kernel
     .listConversations()
     .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)

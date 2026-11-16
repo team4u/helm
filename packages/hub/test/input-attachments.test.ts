@@ -12,45 +12,34 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
-  fauxProvider,
   fauxAssistantMessage,
   type FauxResponseStep,
 } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
-import { createHelm } from '../src/app.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { openHubTestEnv, type FauxProviderHandle, type HubTestApp } from './helpers/hub-test-env.js'
 
 interface Env {
   dataDir: string
-  faux: ReturnType<typeof fauxProvider>
-  app: Awaited<ReturnType<typeof createHelm>>
+  faux: FauxProviderHandle
+  app: HubTestApp
   /** 每次模型请求的完整消息（faux 官方 TranscriptContext 捕获）。 */
   requests: Array<{ userContents: unknown[] }>
   close(): Promise<void>
 }
 
 async function makeEnv(): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-attach-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const env = await openHubTestEnv({ prefix: 'helm-attach-', swallowCloseError: true })
   const requests: Env['requests'] = []
-  faux.setResponses([])
+  env.faux.setResponses([])
   return {
-    dataDir,
-    faux,
-    app,
+    dataDir: env.dataDir,
+    faux: env.faux,
+    app: env.app,
     requests,
-    async close() {
-      await app.close().catch(() => {})
-      rmSync(dataDir, { recursive: true, force: true })
-    },
+    close: env.close,
   }
 }
 

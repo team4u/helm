@@ -20,19 +20,23 @@
  *
  * runner: tsx --test；每测试显式 timeout: 60_000 防死锁。
  */
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AgentExecutionInfo, AgentSpawnRequest } from '@helm/protocol'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHelm } from '../src/app.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
 import { HelmError } from '@helm/protocol'
 import { extractWorkflowExecutionMeta } from '@helm/plugins/contracts'
+import {
+  createGitTemplate,
+  createHubTestApp,
+  type FauxProviderHandle,
+  type GitTemplate,
+  type HubTestApp,
+} from './helpers/hub-test-env.js'
 
 /** 提取受管 worktree 描述（execution meta 的 workflow 命名空间业务值）。 */
 function worktreeOf(info: AgentExecutionInfo | undefined) {
@@ -47,33 +51,22 @@ function worktreeOf(info: AgentExecutionInfo | undefined) {
 const PROCESS_SCAN_ON = process.platform === 'linux'
 
 let rootDir: string
+let gitTemplate: GitTemplate
 
 before(() => {
   rootDir = mkdtempSync(join(tmpdir(), 'helm-worktree-inspect-'))
+  gitTemplate = createGitTemplate('helm-worktree-inspect-tpl-')
 })
 
 after(() => {
+  gitTemplate?.cleanup()
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-/** 真实临时 Git 仓库（git init + 初始 commit；用户级配置隔离）。 */
-function makeGitRepo(dir: string): string {
-  mkdirSync(dir, { recursive: true })
-  const git = (args: string[]) =>
-    execFileSync('git', args, { cwd: dir, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
-  git(['init', '-q', '-b', 'main'])
-  git(['config', 'user.email', 'test@helm.local'])
-  git(['config', 'user.name', 'helm-test'])
-  writeFileSync(join(dir, 'README.md'), '# repo\n')
-  git(['add', '.'])
-  git(['commit', '-qm', 'init'])
-  return dir
-}
-
 interface RuntimeEnv {
-  app: Awaited<ReturnType<typeof createHelm>>
-  kernel: Awaited<ReturnType<typeof createHelm>>['kernel']
-  faux: ReturnType<typeof fauxProvider>
+  app: HubTestApp
+  kernel: HubTestApp['kernel']
+  faux: FauxProviderHandle
   invoke: {
     listWorktrees(): Promise<Array<Record<string, unknown>>>
     inspectWorktree(input: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -83,16 +76,10 @@ interface RuntimeEnv {
 }
 
 async function openRuntime(dataDir: string, cwd: string): Promise<RuntimeEnv> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
+  const { app, kernel, faux } = await createHubTestApp({
     dataDir,
     cwd,
-    model: 'faux/faux-1',
-    models: models as never,
-  } as never)
-  const kernel = app.kernel
+  })
   return {
     app,
     kernel,
@@ -139,7 +126,7 @@ async function spawnCleanWorktree(env: RuntimeEnv): Promise<{ worktreeId: string
 describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_000 }, () => {
   it('spawn 后 list 登记真实元数据；inspect 返回真实 git 只读探测（脏文件/提交/diff）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't1')
-    const repo = makeGitRepo(join(dir, 'repo'))
+    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       let resolved: AgentExecutionInfo | undefined
@@ -213,7 +200,7 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
 
   it('边界诚实性：未登记路径 404、选择器互斥/零选择器 400、已清理记录仅返回元数据', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't2')
-    const repo = makeGitRepo(join(dir, 'repo'))
+    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       let resolved: AgentExecutionInfo | undefined
@@ -280,7 +267,7 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
     timeout: 60_000,
   }, async () => {
     const dir = join(rootDir, 't3')
-    const repo = makeGitRepo(join(dir, 'repo'))
+    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       const { worktreeId, path } = await spawnCleanWorktree(env)
@@ -325,7 +312,7 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
     timeout: 60_000,
   }, async () => {
     const dir = join(rootDir, 't4')
-    const repo = makeGitRepo(join(dir, 'repo'))
+    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       const { worktreeId, path } = await spawnCleanWorktree(env)
@@ -345,7 +332,7 @@ describe('builtin:workflow 受管 worktree 只读检视动作', { timeout: 60_00
 
   it('大 diff 超 16KiB 截断为真实前缀；脏文件超 200 行保留真实总数与截断标记', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't5')
-    const repo = makeGitRepo(join(dir, 'repo'))
+    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       const { worktreeId, path } = await spawnCleanWorktree(env)

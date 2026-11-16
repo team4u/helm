@@ -24,22 +24,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-
 import { HelmError as HostHelmError } from '@helm/protocol'
-import { createHelm } from '../src/app.js'
-import { doctorPluginDir } from '../../kernel/src/plugins/plugin-doctor.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-
-function makeModels() {
-  const models = createModels()
-  models.setProvider(fauxProvider().provider)
-  return models
-}
+import { doctorPluginDir } from '../../kernel/src/plugins/plugin-doctor.js'
+import { createHubTestApp } from './helpers/hub-test-env.js'
 
 async function createApp(dataDir: string) {
-  return createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: makeModels() })
+  return (await createHubTestApp({ dataDir, cwd: dataDir })).app
 }
 
 // ---------------------------------------------------------------------------
