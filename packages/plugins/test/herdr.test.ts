@@ -573,7 +573,7 @@ test('文件交接B: 首次缺文件自愈一次后成功', { timeout: 60_000 },
     const result = await spawnDirect(env, { agentType: 'herdr:agy' })
     assert.equal(result, '# 结果\n完成。')
     assert.equal(promptCount, 2, '自愈恰好一次')
-    assert.ok(env.backend.notifications.some((n) => n.title === 'Herdr 交接自愈'))
+    assert.ok(env.backend.notifications.some((n) => n.title === 'Herdr handoff self-heal'))
   } finally {
     await env.close()
   }
@@ -1294,7 +1294,7 @@ test('agent_not_ready 桥接: 权威 blocked 时复用既有 agent，不启动�
     const p = spawnDirect(env, { agentType: 'herdr:agy' })
     await waitFor(() => env.backend.createdAsks.length === 1, 8000)
     assert.equal(env.transport.calls.filter((c) => c.method === 'agent.start').length, 1, '只尝试一次 start')
-    assert.ok(env.backend.notifications.some((n) => n.title.includes('已存在等待中的 Agent')), '桥接通知')
+    assert.ok(env.backend.notifications.some((n) => n.title.includes('Herdr pane already has a waiting Agent')), 'bridge notification')
     // 收尾：取消 Ask。
     env.backend.answerAsk(env.backend.createdAsks[0]!['id'] as string, { id: 'x', status: 'cancelled', answers: {} })
     await assert.rejects(p, () => true)
@@ -1418,7 +1418,7 @@ test('单测B: 按键未生效时闭环复核——自动重开 AskDoc 且带未
     const second = env.backend.createdAsks[1]!
     const secondId = second['id'] as string
     assert.equal(secondId, `${firstId}:r1`, '重开 AskDoc id 为 <key>:r1')
-    assert.ok((second['description'] as string).includes('上次发送的按键 [y] 未解除阻塞'), '重开描述含未生效提示')
+    assert.ok((second['description'] as string).includes('The last keystrokes sent [y] did not clear the block'), 'retry description includes the ineffective-send hint')
 
     // 第 2 次回答 allow-enter -> 发送 ['enter'] -> 终端推进 done -> spawn 成功。
     env.backend.answerAsk(secondId, { id: secondId, status: 'answered', answers: { decision: 'allow-enter' } })
@@ -1532,13 +1532,13 @@ test('单测D-2: 非标快照时调 AI 生成选项并正确发键', { timeout: 
     await waitFor(() => env.backend.createdAsks.length === 1)
     const ask = env.backend.createdAsks[0]!
     const description = ask['description'] as string
-    assert.ok(description.includes('阻塞摘要：终端等待 bash 工具执行确认'), 'description 含阻塞摘要')
+    assert.ok(description.includes('Block summary: 终端等待 bash 工具执行确认'), 'description includes the block summary')
     const options = ((ask['fields'] as Array<{ name: string; options?: Array<{ label: string; value: string }> }>)[0]!.options)!
     assert.equal(options[0]!.value, 'allow-enter', '首项补允许 enter')
     const ai0 = options.find((o) => o.value === 'ai-0')!
     const ai1 = options.find((o) => o.value === 'ai-1')!
     const ai2 = options.find((o) => o.value === 'ai-2')!
-    assert.ok(ai0 && ai0.label.includes('仅本次允许') && ai0.label.includes('发送 o'), 'ai-0 标注按键')
+    assert.ok(ai0 && ai0.label.includes('仅本次允许') && ai0.label.includes('AI detected: send o'), 'ai-0 label includes the key')
     assert.ok(ai1 && ai1.label.includes('总是允许'))
     assert.ok(ai2 && ai2.label.includes('拒绝'))
     // 人类选择 ai-1（总是允许）-> 发送 ['a']。
@@ -1743,12 +1743,12 @@ test('单测E-6: AI 解析失败通知与 description 尾部快照', { timeout: 
     const ask = env.backend.createdAsks[0]!
     const description = ask['description'] as string
     // 诊断写入 description（人类可见的回退说明）。
-    assert.ok(description.includes('已回退通用按键选项'), 'description 含回退诊断')
+    assert.ok(description.includes('blocked-snapshot enhancement returned content that cannot be parsed into valid options; fell back to generic keystroke options'), 'description includes the fallback diagnostic')
     // 快照展示尾部：人类能看到 AI 所据的当前菜单。
     assert.ok(description.includes('TAIL-MARKER'), 'description 快照取尾部')
     assert.ok(!description.slice(0, description.indexOf('```')).includes('xxxx'), '不展示快照头部')
     // 通知通道也如实说明（不静默）。
-    await waitFor(() => env.backend.notifications.some((n) => n.title.includes('AI 解析未完成')), 5_000)
+    await waitFor(() => env.backend.notifications.some((n) => n.title.includes('Blocked-snapshot AI parse incomplete')), 5_000)
     const askId = ask['id'] as string
     const pane = [...env.transport.panes.values()][0]!
     env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'deny-n' } })
@@ -1802,12 +1802,12 @@ test('单测E-8: 无 AI 选项（端口未注入）时自动补 allow-enter 并�
     const options = ((ask['fields'] as Array<{ name: string; options?: Array<{ label: string; value: string }> }>)[0]!.options)!
     const values = options.map((o) => o.value)
     assert.deepEqual(values, ['allow-enter', 'allow-y', 'deny-n', 'send-esc', 'custom'])
-    assert.ok(options[0]!.label.startsWith('发送 enter'), '首项语义只描述发送键，不含授权承诺')
+    assert.ok(options[0]!.label.startsWith('Send enter'), 'the first option only describes sending a key, without an authorization promise')
     const askId = ask['id'] as string
     const pane = [...env.transport.panes.values()][0]!
     env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-enter' } })
     await waitFor(() => env.transport.sendKeysLog.length === 1)
-    assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['enter'], '人类选择 allow-enter 后自动发送 enter')
+    assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['enter'], 'human choosing allow-enter automatically sends enter')
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
     env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'auto-enter')
     env.transport.consumeKeys(pane.paneId, 'done')
@@ -2029,10 +2029,10 @@ test('herdr 订阅断线：onError 后自动退避重连（watchdogEnabled 无�
   try {
     const before = env.transport.subscribeCount
     env.transport.failLatestSubscription(new Error('socket reset by peer'))
-    await waitFor(() => env.backend.notifications.some((n) => n.title === 'Herdr 事件订阅断开'), 2_000, 15)
+    await waitFor(() => env.backend.notifications.some((n) => n.title === 'Herdr event subscription lost'), 2_000, 15)
     assert.ok(
-      env.backend.notifications.some((n) => n.title === 'Herdr 事件订阅断开'),
-      '断线应发出通知',
+      env.backend.notifications.some((n) => n.title === 'Herdr event subscription lost'),
+      'disconnect should emit a notification',
     )
     await waitFor(() => env.transport.subscribeCount > before, 2_000, 15)
     assert.ok(

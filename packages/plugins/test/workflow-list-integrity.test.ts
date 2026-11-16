@@ -263,39 +263,39 @@ describe('WorkflowService listRuns integrity', () => {
       ...over,
     })
     const cases: Array<{ name: string; value: unknown; wantRunId: string; wantProblem: string }> = [
-      { name: 'null 索引', value: null, wantRunId: '#root', wantProblem: '索引非数组' },
-      { name: '对象伪装索引', value: { 0: {} }, wantRunId: '#root', wantProblem: '索引非数组' },
-      { name: 'null 项', value: [entry({}), null], wantRunId: '#1', wantProblem: '第 1 项非对象' },
-      { name: 'id 非字符串', value: [entry({ id: 42 })], wantRunId: '#0', wantProblem: 'id 非字符串' },
+      { name: 'null index', value: null, wantRunId: '#root', wantProblem: 'index is not an array' },
+      { name: 'object masquerading as index', value: { 0: {} }, wantRunId: '#root', wantProblem: 'index is not an array' },
+      { name: 'null item', value: [entry({}), null], wantRunId: '#1', wantProblem: 'entry 1 is not an object' },
+      { name: 'non-string id', value: [entry({ id: 42 })], wantRunId: '#0', wantProblem: 'entry 0 id is not a string' },
       {
-        name: 'conversationId 非法',
+        name: 'invalid conversationId',
         value: [entry({ id: 'wf_bbbbbbbbbbbb', conversationId: 0 })],
         wantRunId: 'wf_bbbbbbbbbbbb',
-        wantProblem: 'conversationId 非正整数',
+        wantProblem: 'entry 0 conversationId is not a positive integer',
       },
       {
-        name: 'status 非法',
+        name: 'invalid status',
         value: [entry({ id: 'wf_b0b0b0b0b0b0', status: 'weird' })],
         wantRunId: 'wf_b0b0b0b0b0b0',
-        wantProblem: 'status 非法',
+        wantProblem: 'entry 0 status is invalid',
       },
       {
-        name: 'createdAt 非法',
+        name: 'invalid createdAt',
         value: [entry({ id: 'wf_cccccccccccc', createdAt: 'soon' })],
         wantRunId: 'wf_cccccccccccc',
-        wantProblem: 'createdAt 非有限数值',
+        wantProblem: 'entry 0 createdAt is not a finite number',
       },
       {
-        name: 'updatedAt 非法',
+        name: 'invalid updatedAt',
         value: [entry({ id: 'wf_d0d0d0d0d0d0', updatedAt: null })],
         wantRunId: 'wf_d0d0d0d0d0d0',
-        wantProblem: 'updatedAt 非有限数值',
+        wantProblem: 'entry 0 updatedAt is not a finite number',
       },
       {
-        name: 'autoResumeCount 非法',
+        name: 'invalid autoResumeCount',
         value: [entry({ id: 'wf_e0e0e0e0e0e0', autoResumeCount: -1 })],
         wantRunId: 'wf_e0e0e0e0e0e0',
-        wantProblem: 'autoResumeCount 非负整数',
+        wantProblem: 'entry 0 autoResumeCount is not a non-negative integer',
       },
     ]
     for (const c of cases) {
@@ -394,7 +394,7 @@ describe('WorkflowService listRuns integrity', () => {
       (error: unknown) => {
         assert.ok(error instanceof HelmError)
         assert.equal(error.code, 'workflow_record_corrupt')
-        assert.ok(error.message.includes('非对象结构'), error.message)
+        assert.ok(error.message.includes('not an object structure'), error.message)
         return true
       },
     )

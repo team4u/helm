@@ -1441,7 +1441,10 @@ describe('WorkflowService', () => {
       /simulated store flush failure/,
     )
     // 不留 active：abort 对不存在的 run 报 not_found（而非假 running）。
-    await assert.rejects(() => service.abort('wf_nonexistent0000'), /不存在/)
+    await assert.rejects(
+      () => service.abort('wf_nonexistent0000'),
+      (error: unknown) => error instanceof HelmError && error.code === 'not_found',
+    )
     await assert.rejects(() => service.close(), /simulated store flush failure/)
   })
 
