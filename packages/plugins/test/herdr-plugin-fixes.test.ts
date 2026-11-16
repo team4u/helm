@@ -597,7 +597,17 @@ async function makeEnv(options: EnvOptions = {}): Promise<Env> {
     config: new MemoryConfigStore({ ...(options.config ?? {}), socketPath }),
   })
   try {
-    await host.register(createHerdrPlugin(), { enabled: true })
+    await host.register(
+      createHerdrPlugin({
+        pollIntervalMs: 10,
+        blockedBackoffBaseMs: 15,
+        blockedBackoffCapMs: 60,
+        askPollTransientBackoffBaseMs: 15,
+        askPollTransientBackoffCapMs: 60,
+        abortCancelBackoffCapMs: 80,
+      }),
+      { enabled: true },
+    )
   } catch (error) {
     await served.close().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
@@ -1579,7 +1589,7 @@ test('Ask 存续轮询瞬时故障（herdr_timeout）退避容忍，不击穿任
     // 仅注入两次瞬时故障：轮询退避后恢复，绝不因一次抖动销单/击穿任务。
     agentGetFailuresLeft = 2
     await waitFor(() => injected === 2, 5000)
-    await delay(300)
+    await delay(60)
     const pane = [...env.transport.panes.values()][0]!
     const askId = String(env.backend.createdAsks[0]!['id'])
     env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
@@ -1644,8 +1654,8 @@ test('abort 后销单持续失败时退避有界，不形成取消风暴', { tim
     controller.abort()
     const error = await observed as HelmError
     assert.equal(error.code, 'aborted')
-    // 轮询销单 5 次（退避 200/400/800/1600ms）+ closePane 兑底 1 次：有界。
-    await delay(4_500)
+    // 轮询销单 5 次（短退避 20/40/80/80ms）+ closePane 兑底 1 次：有界。
+    await delay(450)
     const count = cancelCalls.filter((id) => id === askId).length
     assert.ok(count >= 5 && count <= 7, `销单尝试有界（实际 ${count} 次）`)
     const stormNotifications = backend.notifications.filter((n) => n.title === 'Herdr 审批销单失败').length

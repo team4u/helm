@@ -221,9 +221,29 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     }
     // 暂停 TCP：openTunnelStream 握手期间缓冲对端首批数据，pipe 后不丢首包。
     tcp.pause();
+    // 挂无操作 readable 保持底层 uv_read 探测对端 EOF/RST（绝不调用 tcp.read()，
+    // 确保握手期收到的首包字节继续留在 readableBuffer 中供 pipe 消费）。
+    const keepPollingForEof = (): void => {};
+    tcp.on('readable', keepPollingForEof);
     // 双工流握手（共用总预算，传 signal：abort 立即失败不等预算；迟到
     // resolve 的流立即销毁防泄漏）。
     let handshakeDone = false;
+    const onHandshakePeerClosed = (): void => {
+      if (handshakeDone || activeTunnels.get(tunnelId) !== tunnel) return;
+      cleanupHandshakeListeners();
+      settleOnce({ ok: false, error: connectFailed('peer closed connection during tunnel handshake') });
+      teardownTunnel(tunnel);
+    };
+    const cleanupHandshakeListeners = (): void => {
+      tcp.off('readable', keepPollingForEof);
+      tcp.off('end', onHandshakePeerClosed);
+      tcp.off('close', onHandshakePeerClosed);
+    };
+    tcp.once('end', onHandshakePeerClosed);
+    tcp.once('close', onHandshakePeerClosed);
+    if (tcp.destroyed || tcp.readableEnded) {
+      onHandshakePeerClosed();
+    }
     const streamPromise = Promise.resolve(openTunnelStream(tunnelId, tunnel.controller.signal));
     void streamPromise.then(
       (late) => { if (handshakeDone || activeTunnels.get(tunnelId) !== tunnel) late.destroy(); },
@@ -244,6 +264,7 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
       });
     } catch (error) {
       handshakeDone = true;
+      cleanupHandshakeListeners();
       settleOnce(rpcFail(error));
       teardownTunnel(tunnel);
       return await rpcResult;
@@ -251,10 +272,12 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     if (settled || activeTunnels.get(tunnelId) !== tunnel) {
       // 建连期间已超时/abort：迟到到达的流立即销毁，绝不 pipe 到已销毁 TCP。
       handshakeDone = true;
+      cleanupHandshakeListeners();
       duplex.destroy();
       return await rpcResult;
     }
     handshakeDone = true;
+    cleanupHandshakeListeners();
     tunnel.duplex = duplex;
     settleOnce({ ok: true, value: null });
     // 正常结束走 pipe 的 end 语义：对端 end → duplex readable end →

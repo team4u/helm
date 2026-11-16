@@ -486,24 +486,46 @@ describe('read_artifact 真实 ArtifactService 行为', { timeout: 60_000 }, () 
         `offset=${offset} limit=1 也必须前进`,
       )
     }
-    // limit=1 从字符中间 offset 开始完整读完全文
+    // ① limit=1 从字符中间 offset=1 开始连续读取 15 步，跳过残缺首字符后逐字还原
     const midCharOffset = 1 // 「漢」的第 2 字节
-    let offset = midCharOffset
-    let total = ''
-    let guard = 0
-    for (;;) {
+    let headOffset = midCharOffset
+    let headTotal = ''
+    for (let step = 0; step < 15; step += 1) {
       const result = await tool.execute(
-        { id: artifact!.id, offset, limit: 1 },
+        { id: artifact!.id, offset: headOffset, limit: 1 },
         makeApi(dir, 1),
         BACKGROUND_CONTEXT,
       )
       const structured = result.structuredOutput as { chunk: string; nextOffset?: number }
-      total += structured.chunk
-      if (structured.nextOffset === undefined) break
-      offset = structured.nextOffset
-      assert.ok(++guard < 16000, '逐字节分页必须终止')
+      assert.ok(!structured.chunk.includes('\uFFFD'), `head step=${step} 不得撕裂出替换符`)
+      assert.ok(
+        structured.nextOffset !== undefined && structured.nextOffset > headOffset,
+        `head step=${step} nextOffset 必须严格递增（${headOffset} -> ${structured.nextOffset}）`,
+      )
+      headTotal += structured.chunk
+      headOffset = structured.nextOffset
     }
-    assert.equal(total, fullText.slice(1), '从字符中间起读应跳过残缺首字符还原其余全文')
+    assert.equal(headTotal, fullText.slice(1, 16), '从字符中间起读应跳过残缺首字符逐字还原前 15 字符')
+
+    // ② 从末尾附近字节（落在多字节字符中间）起用 limit=1 读至结尾，精确还原尾部文本并终止
+    let tailOffset = buffer.length - 17
+    let tailTotal = ''
+    let tailGuard = 0
+    for (;;) {
+      const result = await tool.execute(
+        { id: artifact!.id, offset: tailOffset, limit: 1 },
+        makeApi(dir, 1),
+        BACKGROUND_CONTEXT,
+      )
+      const structured = result.structuredOutput as { chunk: string; nextOffset?: number }
+      assert.ok(!structured.chunk.includes('\uFFFD'), `tail offset=${tailOffset} 不得撕裂出替换符`)
+      tailTotal += structured.chunk
+      if (structured.nextOffset === undefined) break
+      assert.ok(structured.nextOffset > tailOffset, `tail nextOffset 必须严格前进（${tailOffset} -> ${structured.nextOffset}）`)
+      tailOffset = structured.nextOffset
+      assert.ok(++tailGuard < 20, '尾部逐字分页必须正常终止')
+    }
+    assert.equal(tailTotal, fullText.slice(-5), '从末尾多字节字符中间起读应跳过残缺首字符并精确还原尾部')
   })
 
   it('越界会话拒绝（授权仅当前会话/父链）', { timeout: 60_000 }, async () => {

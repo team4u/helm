@@ -13,16 +13,32 @@
  *   模块缓存失效（不残留旧 UI 代码）。
  */
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { after, before, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { sseClientTimings } from '../src/lib/live-state.js'
 import { getPluginClientCacheRevision } from '../src/lib/plugin-client.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
+
+const originalSseTimings = { ...sseClientTimings }
+
+before(() => {
+  Object.assign(sseClientTimings, {
+    idleTimeoutMs: 500,
+    reconnectBaseMs: 15,
+    reconnectCapMs: 60,
+    reconnectJitterMs: 5,
+  })
+})
+
+after(() => {
+  Object.assign(sseClientTimings, originalSseTimings)
+})
 
 // ---------------------------------------------------------------------------
 // 桩：受控 SSE 流 + fetch 路由
@@ -216,8 +232,8 @@ async function mountProvider(): Promise<Harness> {
 /** 注册一条「建立即发 snapshot」的连接工厂。 */
 function snapshotConnection(h: Harness, payload: object): { send: (text: string) => void; end: () => void } {
   let handle: ControlledStream | undefined
-  h.nextEvents(() => {
-    const c = controlledStream()
+  h.nextEvents((_url, signal) => {
+    const c = controlledStream(signal)
     handle = c
     c.send(snapshotFrame(payload))
     return c
@@ -469,8 +485,8 @@ const scenarios: ProtocolFailureScenario[] = [
   {
     name: 'null 载荷 snapshot 首帧',
     async poison(h) {
-      h.nextEvents(() => {
-        const c = controlledStream()
+      h.nextEvents((_url, signal) => {
+        const c = controlledStream(signal)
         c.send('event: snapshot\ndata: null\n\n')
         return c
       })

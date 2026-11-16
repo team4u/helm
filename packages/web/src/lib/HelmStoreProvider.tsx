@@ -855,7 +855,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
         reader = response.body.getReader()
         const decoder = new TextDecoder()
         while (active) {
-          const read = await readSseChunkWithDeadline(reader, sseClientTimings.idleTimeoutMs)
+          const read = await readSseChunkWithDeadline(reader, sseClientTimings.idleTimeoutMs, controller.signal)
           if (read.kind === 'idle') {
             // 连接卡死（如 dev 代理保留的挂起流，reader.read() 永不返回）：
             // 抛错走统一 catch（提示 + abort 解开挂起读取）与 finally 重连；
@@ -877,7 +877,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
         if (active) {
           setSseConnected(false)
           // 指数退避 + 随机抖动：内核重启等同时断线场景避免同步重连风暴。
-          const backoff = Math.min(1000 * 2 ** retry, 10000) + Math.random() * 250
+          const backoff = Math.min(sseClientTimings.reconnectBaseMs * 2 ** retry, sseClientTimings.reconnectCapMs) + Math.random() * sseClientTimings.reconnectJitterMs
           retry += 1
           timer = setTimeout(() => { void connect() }, backoff)
         }

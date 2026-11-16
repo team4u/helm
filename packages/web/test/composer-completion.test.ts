@@ -318,7 +318,7 @@ test('交互：@ 仅展示插件 doc 源候选，不注入会话产物；选中�
     await act(async () => {})
     assert.equal(app.ta().value, '请看 @记忆库 ')
     assert.equal(app.ta().selectionStart, '请看 @记忆库 '.length, '光标落在插入文本后')
-    assert.equal(app.completionPopover(), null, '选中后浮层关闭')
+    assert.ok(app.completionPopover() === null, '选中后浮层关闭')
   } finally {
     app.unmount()
   }
@@ -355,12 +355,12 @@ test('交互：@ 弹窗后按回车仅选中角色并保留在文本框内，不
     assert.equal(submitCalls, 0, '选中角色时绝不调用 submitInput 直接发送')
     assert.equal(app.ta().value, '@coder ', '角色保留在文本框内')
     assert.equal(app.ta().selectionStart, '@coder '.length, '光标落在角色文本后')
-    assert.equal(app.completionPopover(), null, '浮层已关闭')
+    assert.ok(app.completionPopover() === null, '浮层已关闭')
 
     // 随后继续输入消息并按回车，才真正触发发送
     await app.type('@coder 帮我看下代码')
     await act(async () => {})
-    assert.equal(app.completionPopover(), null, '浮层不再处于激活态')
+    assert.ok(app.completionPopover() === null, '浮层不再处于激活态')
     await act(async () => {
       const sendEv = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
       app.ta().dispatchEvent(sendEv)
@@ -379,7 +379,7 @@ test('回归：有会话产物但未注册 @ 源时，不弹浮层、不吞 Ente
   })
   try {
     await app.type('@')
-    assert.equal(app.completionPopover(), null, '无注册源时浮层不弹出')
+    assert.ok(app.completionPopover() === null, '无注册源时浮层不弹出')
     assert.equal(app.completionItems().length, 0, '产物不构成内置补全源')
     await app.type('@报告')
     assert.equal(app.completionItems().length, 0, '搜索也不会注入产物候选')
@@ -415,7 +415,7 @@ test('交互：# 与 : 仅注册源激活；scope 不命中的源不参与', { t
     await app.key('Escape')
     await app.type(':')
     await act(async () => {})
-    assert.equal(app.completionPopover(), null, 'scope 不命中的 : 无注册源，浮层不弹出')
+    assert.ok(app.completionPopover() === null, 'scope 不命中的 : 无注册源，浮层不弹出')
   } finally {
     app.unmount()
   }
@@ -464,7 +464,7 @@ test('交互：请求竞态——切会话后晚到响应不恢复浮层', { tim
     release?.({ items: [{ id: 'late', label: '@晚到', insertText: '@晚到 ' }] })
     await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
     const popover = app.completionPopover()
-    assert.equal(popover, null, '晚到响应不恢复浮层')
+    assert.ok(popover === null, '晚到响应不恢复浮层')
     assert.equal(app.ta().value, '@', '草稿不受晚到响应影响')
   } finally {
     app.unmount()
@@ -571,7 +571,7 @@ test('回归：斜杠三源命令与技能浮层不受影响', { timeout: 60_000
     assert.match(slash!.textContent!, /\/new/)
     assert.match(slash!.textContent!, /\/compact/)
     await app.key('Escape')
-    assert.equal(app.host.querySelector('.composer-popover'), null)
+    assert.ok(app.host.querySelector('.composer-popover') === null)
   } finally {
     app.unmount()
   }

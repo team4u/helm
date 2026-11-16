@@ -13,14 +13,13 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginUiContribution } from '@helm/protocol'
 import * as HelmPluginClient from '@helm/plugin-client'
-import { compilePluginClientModule } from '@helm/plugin-build'
+import { compilePluginClientModule, safeDirName, safeFileName } from '@helm/plugin-build'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -46,7 +45,8 @@ const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const JSON_RENDER_ROOT = resolve(here, '../../plugins/src/json-render/client')
 const MERMAID_ROOT = resolve(here, '../../plugins/src/mermaid/client')
 const PLUGINS_ROOT = resolve(here, '../../plugins')
-const CACHE = mkdtempSync(join(tmpdir(), 'helm-codeblock-test-'))
+const CACHE = fileURLToPath(new URL('../../../node_modules/.cache/helm-test-plugin-clients', import.meta.url))
+mkdirSync(CACHE, { recursive: true })
 
 // ---------------------------------------------------------------------------
 // 1. 纯函数裁决
@@ -110,10 +110,7 @@ test('CodeBlockRenderer：无命中回退宿主普通代码块（语言标签 + 
 
 async function importCompiled(root: string, pluginId: string, npmRoots?: Array<{ specifiers: string[]; packageRoot: string }>): Promise<Record<string, unknown>> {
   const { code } = await compilePluginClientModule(pluginId, root, 'index.tsx', CACHE, npmRoots ? { npmRoots } : undefined)
-  const f = join(CACHE, `${pluginId.replace(/[^A-Za-z0-9]/g, '_')}.mjs`)
-  writeFileSync(f, code, 'utf8')
-  // Windows 上裸绝对路径不是合法 ESM 说明符，统一经 file:// URL 动态导入
-  return import(pathToFileURL(f).href) as Promise<Record<string, unknown>>
+  return await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`) as Record<string, unknown>
 }
 
 test('json-render client 真实编译：模块可导入且导出 JsonRenderCodeBlock 组件与插件样式', { timeout: 60_000 }, async () => {
@@ -227,9 +224,16 @@ test('CodeBlockRenderer：加载失败显式诊断 + 源码可复制（诚实性
 })
 
 // ---------------------------------------------------------------------------
-// 5. 清理
+// 5. 缓存清单验证
 // ---------------------------------------------------------------------------
 
-test('清理编译缓存目录', { timeout: 60_000 }, () => {
-  rmSync(CACHE, { recursive: true, force: true })
+test('共享编译缓存写出 deps.json 清单（不删除共享缓存目录）', { timeout: 60_000 }, () => {
+  const baseName = safeFileName('index.tsx')
+  for (const pluginId of ['builtin:json-render', 'builtin:mermaid']) {
+    const depsPath = join(CACHE, 'plugin-staging', safeDirName(pluginId), `${baseName}.deps.json`)
+    assert.ok(existsSync(depsPath), `${pluginId} 应写出共享缓存清单：${depsPath}`)
+    const manifest = JSON.parse(readFileSync(depsPath, 'utf8')) as { module?: string; contentHash?: string }
+    assert.equal(manifest.module, 'index.tsx')
+    assert.ok(typeof manifest.contentHash === 'string' && manifest.contentHash.length > 0)
+  }
 })

@@ -26,7 +26,7 @@
  *
  * 用法：node scripts/test-suites.mjs <unit|integration|all> [透传给 node test runner 的额外参数]
  */
-import { readdirSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -119,15 +119,38 @@ const label = suiteName === 'all' ? 'all(unit+integration)' : suiteName;
 const breakdown = ALL_PACKAGES.map((p) => `${p}=${testFilesOf(p).length}`).join(' ');
 console.error(`[test-suites] 套件 ${label}: ${files.length} 个文件（${breakdown}）`);
 
+// 确定性 LPT（长耗时优先）排序：已知慢测试文件优先，其次按文件字节大小降序，同权按路径字典序兜底，
+// 消除多核并发尾部空等（不改变文件集合，保持上述两条不变量完全不变）。
+const SLOW_TEST_PREFIXES = [
+  'herdr',
+  'workflow',
+  'sse-',
+  'markdown-codeblock-plugins',
+  'node-tunnel',
+  'tools.test.ts',
+];
+function lptWeight(relPath) {
+  const base = path.basename(relPath);
+  const isKnownSlow = SLOW_TEST_PREFIXES.some((p) => base.startsWith(p) || base === p);
+  let size = 0;
+  try {
+    size = statSync(path.join(repoRoot, relPath)).size;
+  } catch {
+    size = 0;
+  }
+  return (isKnownSlow ? 10_000_000 : 0) + size;
+}
+const sortedFiles = [...files].sort((a, b) => lptWeight(b) - lptWeight(a) || a.localeCompare(b));
+
 // 复用 run-tests.mjs：跨平台 tsx spawn、单测/总超时与进程树清理都在那边，绝不重复实现。
 const child = spawn(
   process.execPath,
-  [path.join(repoRoot, 'scripts', 'run-tests.mjs'), ...files, ...extraArgs],
+  [path.join(repoRoot, 'scripts', 'run-tests.mjs'), ...extraArgs, ...sortedFiles],
   { stdio: 'inherit', env: process.env, cwd: repoRoot },
 );
 
-// 异步等待子进程，保留 Ctrl+C / SIGTERM 的及时转发能力。
-for (const signal of ['SIGINT', 'SIGTERM']) {
+// 异步等待子进程，保留 SIGHUP / SIGINT / SIGQUIT / SIGTERM 的及时转发能力。
+for (const signal of ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGTERM']) {
   process.on(signal, () => {
     if (child.exitCode === null && child.signalCode === null) child.kill(signal);
   });
@@ -137,5 +160,6 @@ child.on('error', (err) => {
   process.exitCode = 1;
 });
 child.on('exit', (code, signal) => {
-  process.exitCode = code ?? (signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 1);
+  const signalExit = { SIGHUP: 129, SIGINT: 130, SIGQUIT: 131, SIGTERM: 143 }[signal] ?? 1;
+  process.exitCode = code ?? signalExit;
 });

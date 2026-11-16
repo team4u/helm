@@ -827,7 +827,7 @@ test('SkillDetailDrawer: 非 Markdown 文件用 CodeBlockView 按后缀推导语
   assert.ok(codeWrap.querySelector('.code-block-header')?.textContent?.includes('python'), '语言应推导为 python')
   assert.ok(codeWrap.textContent?.includes('print("deploy")'), '应展示代码正文')
   const modeToggle = host.querySelector('.skill-reader-mode')
-  assert.equal(modeToggle, null, '非 Markdown 文件不提供阅读模式切换')
+  assert.ok(modeToggle === null, '非 Markdown 文件不提供阅读模式切换')
 
   await act(async () => {
     root.unmount()
@@ -852,8 +852,8 @@ test('SkillDetailDrawer: 非 Markdown 文件用 CodeBlockView 按后缀推导语
     )
   })
 
-  assert.equal(host2.querySelector('.skill-file-select'), null, '单文件时不渲染下拉选择器')
-  assert.equal(host2.querySelector('.helm-select-trigger'), null, '单文件时无 Select 触发器')
+  assert.ok(host2.querySelector('.skill-file-select') === null, '单文件时不渲染下拉选择器')
+  assert.ok(host2.querySelector('.helm-select-trigger') === null, '单文件时无 Select 触发器')
   const fileLabel = host2.querySelector('.skill-reader-file-label') as HTMLElement
   assert.ok(fileLabel.textContent?.includes('SKILL.md'), '单文件时直接展示文件名')
   assert.ok(host2.querySelector('.skill-reader-index')?.textContent?.includes('1/1'), '序号应为 1/1')
@@ -1048,9 +1048,9 @@ test('SkillDetailDrawer: skill.description 不再作为独立区块渲染，描�
   })
 
   // 模型级 skill.description 不再进入阅读区：无独立描述块、无展开/收起按钮
-  assert.equal(host.querySelector('.skill-reader-desc'), null, '不得渲染独立描述区块')
-  assert.equal(host.querySelector('.skill-reader-desc-text'), null, '不得渲染独立描述文本节点')
-  assert.equal(host.querySelector('.skill-reader-desc-toggle'), null, '不得渲染展开/收起按钮')
+  assert.ok(host.querySelector('.skill-reader-desc') === null, '不得渲染独立描述区块')
+  assert.ok(host.querySelector('.skill-reader-desc-text') === null, '不得渲染独立描述文本节点')
+  assert.ok(host.querySelector('.skill-reader-desc-toggle') === null, '不得渲染展开/收起按钮')
   const readerEl = host.querySelector('.skill-reader') as HTMLElement
   assert.ok(readerEl, '应渲染 skill-reader 阅读器')
   assert.ok(!readerEl.textContent?.includes(longDesc), '模型字段 description 不得直接进入阅读区')
@@ -1103,7 +1103,7 @@ test('SkillDetailDrawer: 布局契约——工具条紧贴 Header，元数据与
   assert.equal(scrollChildren.length, 1, '滚动区仅含正文阅读区一个子节点')
   assert.ok(scrollChildren[0]?.classList.contains('skill-reader-body'), '正文阅读区应为唯一子节点')
   assert.ok(scroll.querySelector('.skill-reader-body'), '正文阅读区应位于滚动区内部')
-  assert.equal(host.querySelector('.skill-reader-desc'), null, '不得存在工具条与正文之间的独立描述块')
+  assert.ok(host.querySelector('.skill-reader-desc') === null, '不得存在工具条与正文之间的独立描述块')
   // 复制按钮携带 skill-reader-copy 类（移动端隐藏文字只留图标的新增样式钩子）
   assert.ok(host.querySelector('.skill-reader-copy'), '复制按钮应携带 skill-reader-copy 类')
 

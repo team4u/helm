@@ -292,7 +292,7 @@ test('Composer：status=idle 且 compacting=true 时切换为 busy/stop/queue �
   const statusEl = host.querySelector<HTMLElement>('.composer-context-status')
   assert.ok(statusEl !== null)
   assert.equal(statusEl.textContent, '精简中…')
-  assert.equal(statusEl.querySelector('svg'), null)
+  assert.ok(statusEl.querySelector('svg') === null)
 
   // 占位符切到 busy 态
   const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!

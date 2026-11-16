@@ -430,7 +430,7 @@ test('工作流库：渲染已保存定义与元数据；每行独立 args 草�
       buttonByText(libraryRow(host, 'release'), '运行').click()
     })
     assert.match(libraryRow(host, 'release').textContent!, /合法 JSON/)
-    assert.equal(libraryRow(host, 'audit').querySelector('.callout'), null, '解析错误不得串到其他行')
+    assert.ok(libraryRow(host, 'audit').querySelector('.callout') === null, '解析错误不得串到其他行')
     assert.equal(
       ctx.calls.filter((c) => c.action === 'run').length,
       3,

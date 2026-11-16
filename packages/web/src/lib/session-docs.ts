@@ -280,10 +280,16 @@ function connectStream(entry: EntryState, gen: number): void {
   void run()
 }
 
+/** 会话文档 SSE 重连退避时序（集中定义；对象引用共享，测试可临时改写后复原）。 */
+export const sessionDocTimings = {
+  reconnectBaseMs: 1_000,
+  reconnectCapMs: 15_000,
+}
+
 function scheduleReconnect(entry: EntryState, gen: number): void {
   if (entry.retryTimer !== undefined || entry.terminated !== undefined) return
   // 有界指数退避：1s 起步、上限 15s。
-  const delay = Math.min(1000 * 2 ** Math.min(entry.retry++, 4), 15_000)
+  const delay = Math.min(sessionDocTimings.reconnectBaseMs * 2 ** Math.min(entry.retry++, 4), sessionDocTimings.reconnectCapMs)
   entry.retryTimer = setTimeout(() => {
     entry.retryTimer = undefined
     if (!entry.alive || entry.refs <= 0 || gen !== generation || entry.terminated !== undefined) return
