@@ -21,17 +21,20 @@ win.happyDOM?.setViewport({ width: 480, height: 900 })
 const {
   SWIPE_TRIGGER_PX,
   SWIPE_AXIS_RATIO,
+  SWIPE_AXIS_LOCK_PX,
   isSidebarSwipeEnvironment,
   isSidebarSwipeBlockedTarget,
   sidebarSwipeIntentFor,
   qualifiesSidebarSwipe,
   beginSidebarSwipeTrack,
+  lockSidebarSwipeAxis,
   finishSidebarSwipeTrack,
 } = await import('../src/shell/sidebar-swipe-model.js')
 
 test('手势常量契约：阈值约 56px，水平位移须明显大于垂直位移', { timeout: 60_000 }, () => {
   assert.equal(SWIPE_TRIGGER_PX, 56)
   assert.ok(SWIPE_AXIS_RATIO >= 2, '水平位移至少 2 倍于垂直位移才算明显主导')
+  assert.equal(SWIPE_AXIS_LOCK_PX, 8, '轴锁阈值约 8px：高于落点抖动、远低于终态阈值')
 })
 
 test('qualifiesSidebarSwipe 关键触发条件（阈值边界 + 轴主导 + 方向）', { timeout: 60_000 }, () => {
@@ -197,6 +200,7 @@ test('begin/finishSidebarSwipeTrack：轨迹状态步骤（多指、跟踪指、
     environmentEnabled: true,
   })
   assert.equal(openTrack?.intent, 'open')
+  assert.equal(openTrack?.axis, null, 'touchstart 建立轨迹时轴未锁定（绝不立即接管）')
   assert.equal(finishSidebarSwipeTrack(openTrack, [touch(7, 80, 306)]), 'open', 'dx=70 dy=6 达标开')
   assert.equal(finishSidebarSwipeTrack(openTrack, [touch(7, 16, 300)]), null, 'dx=6 未达阈值')
   assert.equal(finishSidebarSwipeTrack(openTrack, [touch(8, 80, 300)]), null, '非跟踪指抬不起手势')
@@ -209,6 +213,30 @@ test('begin/finishSidebarSwipeTrack：轨迹状态步骤（多指、跟踪指、
   assert.equal(closeTrack?.intent, 'close')
   assert.equal(finishSidebarSwipeTrack(closeTrack, [touch(3, 120, 54)]), 'close', 'dx=-80 dy=4 达标关')
   assert.equal(finishSidebarSwipeTrack(closeTrack, [touch(3, 155, 50)]), null, 'dx=-45 未达阈值不动作')
+})
+
+test('lockSidebarSwipeAxis：方向锁判定（水平先动锁横、垂直先动放弃、锁定后不改判、8px 阈值边界）', { timeout: 60_000 }, () => {
+  const track = (axis: 'horizontal' | null) => ({ id: 1, startX: 100, startY: 400, intent: 'open' as const, axis })
+  const touch = (x: number, y: number) => ({ identifier: 1, clientX: x, clientY: y })
+  // 水平先动：达阈值且水平严格大于垂直 → 锁横
+  assert.equal(lockSidebarSwipeAxis(track(null), touch(112, 402)), 'locked', 'dx=12 dy=2 水平先动锁横')
+  assert.equal(lockSidebarSwipeAxis(track(null), touch(88, 399)), 'locked', '左滑 dx=-12 dy=-1 同样锁横（取绝对值）')
+  // 垂直先动：垂直 ≥ 水平 → 放弃轨迹（交还浏览器滚动）
+  assert.equal(lockSidebarSwipeAxis(track(null), touch(103, 424)), 'abandon', 'dx=3 dy=21 垂直先动放弃')
+  assert.equal(lockSidebarSwipeAxis(track(null), touch(100, 408)), 'abandon', 'dx=0 dy=8 纯纵向放弃')
+  // 锁定后不再改判：垂直大幅回摆仍按已锁横轴处理
+  assert.equal(lockSidebarSwipeAxis(track('horizontal'), touch(104, 460)), 'locked', '已锁横轴后垂直位移不改判')
+  assert.equal(lockSidebarSwipeAxis(track('horizontal'), touch(200, 380)), 'locked', '已锁横轴后继续接管')
+  // 位移未达阈值：维持现状（不锁轴、不弃权、不接管）
+  assert.equal(lockSidebarSwipeAxis(track(null), touch(107, 403)), 'pending', 'dx=7 dy=3 未达阈值维持')
+  // 8px 阈值边界：恰达阈值即判定；水平须严格大于垂直
+  assert.equal(lockSidebarSwipeAxis(track(null), touch(108, 400)), 'locked', 'dx=8 恰达阈值且 > dy=0')
+  assert.equal(lockSidebarSwipeAxis(track(null), touch(108, 408)), 'abandon', 'dx=8 = dy=8 不满足严格大于 → 放弃')
+  assert.equal(lockSidebarSwipeAxis(track(null), touch(109, 408)), 'locked', 'dx=9 > dy=8 锁横')
+  assert.equal(lockSidebarSwipeAxis(track(null), touch(107, 407)), 'pending', 'dx=7 = dy=7 均未达阈值维持')
+  assert.equal(lockSidebarSwipeAxis(track(null), touch(100, 420)), 'abandon', 'dy=12 先达阈值且垂直主导 → 放弃')
+  // 非跟踪指的位移由 hook 层过滤，纯函数本身只看触点坐标
+  assert.equal(lockSidebarSwipeAxis(track(null), touch(130, 405)), 'locked', 'dx=30 dy=5 判定与 identifier 无关')
 })
 
 // ---------------------------------------------------------------------------
@@ -295,6 +323,93 @@ test('useSidebarSwipeGesture：composer-shell 右滑开、侧栏左滑关、取�
   await act(() => {
     root.unmount()
   })
+})
+
+// ---------------------------------------------------------------------------
+// hook 级：原生 window touchmove 监听（passive: false 轴锁接管）——真机上
+// 浏览器会接管水平滑动（overscroll 历史导航/边缘橡皮筋）把触摸流掐断为
+// touchcancel，必须在原生非被动监听里 preventDefault 才能保住 touchend。
+// ---------------------------------------------------------------------------
+test('useSidebarSwipeGesture 原生 touchmove：passive:false 注册 + 横轴锁定接管与纵向弃权', { timeout: 60_000 }, async () => {
+  const fixture = buildGestureFixture()
+  // happy-dom 不模拟浏览器接管，也不保证 options 透传行为；以可注入方式
+  // 记录注册参数、直接驱动捕获的监听函数，验证注册契约与轴锁状态机本身。
+  const originalAdd = window.addEventListener.bind(window)
+  const originalRemove = window.removeEventListener.bind(window)
+  const registrations: Array<{ type: string; listener: EventListenerOrEventListenerObject; options: unknown }> = []
+  const removals: Array<{ type: string; listener: EventListenerOrEventListenerObject }> = []
+  window.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: unknown) => {
+    registrations.push({ type, listener, options })
+    return originalAdd(type, listener, options as AddEventListenerOptions | boolean | undefined)
+  }) as typeof window.addEventListener
+  window.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: unknown) => {
+    removals.push({ type, listener })
+    return originalRemove(type, listener, options as EventListenerOptions | boolean | undefined)
+  }) as typeof window.removeEventListener
+  try {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const openChanges: boolean[] = []
+    await act(() => {
+      root.render(e(GestureHarness, { sidebarOpen: false, onOpenChange: (open) => openChanges.push(open) }))
+    })
+
+    // 注册契约：恰好一个原生 touchmove 监听，且必须 { passive: false }
+    const touchmoveRegistrations = registrations.filter((entry) => entry.type === 'touchmove')
+    assert.equal(touchmoveRegistrations.length, 1, '恰好注册一个原生 touchmove 监听')
+    const registration = touchmoveRegistrations[0]!
+    const options = registration.options as AddEventListenerOptions | undefined
+    assert.ok(
+      options !== null && typeof options === 'object' && options.passive === false,
+      '必须以 { passive: false } 注册（React 合成 onTouchMove 是被动监听，preventDefault 无效）',
+    )
+    const onTouchMove = registration.listener as (event: TouchEvent) => void
+    const move = (id: number, x: number, y: number): boolean => {
+      let prevented = false
+      onTouchMove({
+        changedTouches: [{ identifier: id, clientX: x, clientY: y }],
+        preventDefault: () => {
+          prevented = true
+        },
+      } as unknown as TouchEvent)
+      return prevented
+    }
+
+    // 无轨迹：监听直返不抛错、不 preventDefault（桌面/非手势面零开销）
+    assert.equal(move(9, 500, 500), false, '无轨迹直返')
+
+    // 亚阈值移动：不锁轴不接管，轨迹保留
+    fakeStart(fixture.composerBox, [{ identifier: 9, clientX: 100, clientY: 400 }])
+    assert.equal(move(9, 105, 401), false, 'dx=5 未达 8px 轴锁阈值不接管')
+    // 非跟踪指移动：不影响轨迹、不接管
+    assert.equal(move(11, 300, 420), false, '非跟踪指位移被过滤')
+    // 水平主导达阈值：锁横轴并对本次 touchmove preventDefault
+    assert.equal(move(9, 120, 403), true, 'dx=20 dy=3 锁横轴并接管')
+    // 锁定后：后续 touchmove 持续 preventDefault（阻断 overscroll/历史导航）
+    assert.equal(move(9, 160, 404), true, '锁定后持续接管')
+    fakeEnd([{ identifier: 9, clientX: 180, clientY: 404 }])
+    assert.deepEqual(openChanges, [true], '被接管保住的触摸流在 touchend 完成终态判定（阈值与主导比不变）')
+
+    // 垂直主导：不 preventDefault 且轨迹清空；此后本次触摸不再接管、终态不动作
+    fakeStart(fixture.composerBox, [{ identifier: 9, clientX: 100, clientY: 400 }])
+    assert.equal(move(9, 103, 424), false, 'dx=3 dy=21 垂直主导不接管')
+    assert.equal(move(9, 160, 470), false, '轨迹已清空，随后水平移动也不接管（让浏览器正常滚动）')
+    fakeEnd([{ identifier: 9, clientX: 180, clientY: 470 }])
+    assert.deepEqual(openChanges, [true], '纵向弃权后的 touchend 不触发开侧栏')
+
+    // 卸载：移除原生监听
+    await act(() => {
+      root.unmount()
+    })
+    assert.ok(
+      removals.some((entry) => entry.type === 'touchmove' && entry.listener === registration.listener),
+      '卸载时移除 touchmove 监听',
+    )
+  } finally {
+    window.addEventListener = originalAdd
+    window.removeEventListener = originalRemove
+  }
 })
 
 // ---------------------------------------------------------------------------

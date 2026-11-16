@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import type { TouchEvent as ReactTouchEvent } from 'react'
 
 /**
@@ -8,10 +8,14 @@ import type { TouchEvent as ReactTouchEvent } from 'react'
  * - 左上角汉堡按钮（App.tsx .mobile-nav-toggle）保留为显式兜底入口。
  *
  * 手势以事件委托挂在应用壳根节点（App.tsx 展开返回的 handlers），避免把
- * 开关回调经 ConversationPane/AgentStandbyPane 逐层下钻；只在 touchend 做终态
- * 判定、从不 preventDefault，纵向滚动、输入与原生控件交互全程不被阻断；桌面
- * 鼠标不产生 touch 事件，天然不受影响。侧栏开合仍归 App.tsx 的 sidebarOpen
- * 唯一状态（不进 URL、不建平行导航状态），本模块只提供手势触发通道。
+ * 开关回调经 ConversationPane/AgentStandbyPane 逐层下钻；终态判定仍在 touchend，
+ * 但真机上水平滑动会被浏览器接管（Android Chrome overscroll 历史导航、iOS 边缘
+ * 橡皮筋），触摸流被掐断为 touchcancel、touchend 永不派发——因此另在原生
+ * window touchmove（passive: false）里先做轴锁，横轴锁定后 preventDefault 接管，
+ * 保住触摸流直到 touchend；锁定前与纵向滚动全程不 preventDefault，点击、聚焦、
+ * 文本选择与纵向滚动不被阻断。桌面鼠标不产生 touch 事件，天然不受影响。侧栏
+ * 开合仍归 App.tsx 的 sidebarOpen 唯一状态（不进 URL、不建平行导航状态），本
+ * 模块只提供手势触发通道。
  */
 
 /** 触发阈值：约 56px 水平位移（明显低于常见系统边缘手势距离，高于误触抖动）。 */
@@ -19,6 +23,11 @@ export const SWIPE_TRIGGER_PX = 56
 
 /** 轴主导比：水平位移需至少 2 倍于垂直位移，与纵向滚动明确区分。 */
 export const SWIPE_AXIS_RATIO = 2
+
+/** 轴锁阈值：主轴位移达到约 8px 才判定方向——高于手指落点的常见抖动（避免点击
+ *  误锁），又远低于 56px 终态阈值，让「是否横滑」尽早定案，抢在浏览器接管
+ *  overscroll/历史导航之前 preventDefault。 */
+export const SWIPE_AXIS_LOCK_PX = 8
 
 /** 手势禁入目标：交互控件与可选中文本（.selectable 为全站 user-select: text 标记）。
  *  触摸起点落在其上时手势让位，不抢输入框光标、按钮点击与文本选择。 */
@@ -105,12 +114,34 @@ export function qualifiesSidebarSwipe(dx: number, dy: number, intent: SidebarSwi
   return forward >= SWIPE_TRIGGER_PX && Math.abs(dy) * SWIPE_AXIS_RATIO <= forward
 }
 
-/** 进行中的手势轨迹（ref 持有，不进 React 状态避免重渲染）。 */
+/** 进行中的手势轨迹（ref 持有，不进 React 状态避免重渲染）。
+ *  axis 为轴锁状态：null 尚未判定（未达阈值，绝不 preventDefault）；
+ *  'horizontal' 已锁横轴（此后原生 touchmove 持续接管）。垂直主导时轨迹
+ *  直接清空弃权（等价于第三态 'vertical'，本次触摸不再 preventDefault），
+ *  无需把弃权态存进轨迹。 */
 export interface SidebarSwipeTrack {
   id: number
   startX: number
   startY: number
   intent: SidebarSwipeIntent
+  axis: 'horizontal' | null
+}
+
+/** 轴锁判定结果：
+ *  - pending：位移未达轴锁阈值，维持现状（不锁轴、不弃权，绝不 preventDefault）；
+ *  - locked：水平位移严格大于垂直位移，锁横轴（本次 touchmove 起接管）；
+ *  - abandon：垂直位移 ≥ 水平位移，本次触摸是纵向滚动，放弃轨迹交还浏览器。 */
+export type SidebarSwipeAxisDecision = 'pending' | 'locked' | 'abandon'
+
+/** touchmove 轴锁步骤（纯函数，不改动轨迹）：以起点为基准比较位移绝对值，
+ *  主轴达到 SWIPE_AXIS_LOCK_PX 才判定方向；已锁横轴后不再改判——半途放行会让
+ *  浏览器在滑行中接管并掐断触摸流，手势前功尽弃。 */
+export function lockSidebarSwipeAxis(track: SidebarSwipeTrack, touch: TouchLike): SidebarSwipeAxisDecision {
+  if (track.axis === 'horizontal') return 'locked'
+  const dx = Math.abs(touch.clientX - track.startX)
+  const dy = Math.abs(touch.clientY - track.startY)
+  if (Math.max(dx, dy) < SWIPE_AXIS_LOCK_PX) return 'pending'
+  return dx > dy ? 'locked' : 'abandon'
 }
 
 /** touchstart 步骤：仅单指建立轨迹（多指捏合等不构成侧栏手势）。 */
@@ -123,7 +154,7 @@ export function beginSidebarSwipeTrack(
   const intent = sidebarSwipeIntentFor(target, options)
   if (intent === null) return null
   const touch = touches[0]!
-  return { id: touch.identifier, startX: touch.clientX, startY: touch.clientY, intent }
+  return { id: touch.identifier, startX: touch.clientX, startY: touch.clientY, intent, axis: null }
 }
 
 /** touchend 步骤：跟踪指位移达标时返回应执行的意图，否则 null。
@@ -150,12 +181,45 @@ export interface SidebarSwipeGestureHandlers {
   onTouchCancel: (event: ReactTouchEvent<HTMLElement>) => void
 }
 
-/** 侧栏滑动手势 hook：事件委托 + 终态判定，不阻断任何原生触摸行为。 */
+/** 侧栏滑动手势 hook：事件委托 + 横轴锁定接管 + 终态判定。
+ *  真机上水平滑动会被浏览器接管（Android Chrome overscroll 历史导航、iOS 边缘
+ *  橡皮筋），触摸流被掐断为 touchcancel、touchend 永不派发，只在 touchend 判
+ *  终态的方案在真机必然失效——因此横轴锁定后必须 preventDefault 接管；锁定前
+ *  与纵向滚动全程不 preventDefault，点击、聚焦、文本选择不受影响。 */
 export function useSidebarSwipeGesture(options: {
   sidebarOpen: boolean
   onOpenChange: (open: boolean) => void
 }): SidebarSwipeGestureHandlers {
   const trackRef = useRef<SidebarSwipeTrack | null>(null)
+  // React 合成 onTouchMove 注册的是被动监听、无法带 { passive: false }，其中
+  // preventDefault 不生效；接管必须用原生 window 监听（桌面无触摸流时监听
+  // 存在但无轨迹直返，开销可忽略）。
+  useEffect(() => {
+    const onTouchMove = (event: TouchEvent): void => {
+      const track = trackRef.current
+      if (track === null) return
+      for (let i = 0; i < event.changedTouches.length; i += 1) {
+        const touch = event.changedTouches[i]!
+        if (touch.identifier !== track.id) continue
+        const decision = lockSidebarSwipeAxis(track, touch)
+        if (decision === 'abandon') {
+          // 纵向滚动让位：清空轨迹，本次触摸此后不再 preventDefault。
+          trackRef.current = null
+          return
+        }
+        if (decision === 'locked') {
+          track.axis = 'horizontal'
+          // 锁横轴即接管：阻断历史导航/overscroll，保证后续 touchend 能派发。
+          event.preventDefault()
+        }
+        return
+      }
+    }
+    window.addEventListener('touchmove', onTouchMove, { passive: false })
+    return () => {
+      window.removeEventListener('touchmove', onTouchMove)
+    }
+  }, [])
   const onTouchStart = (event: ReactTouchEvent<HTMLElement>): void => {
     trackRef.current = beginSidebarSwipeTrack(event.touches, event.target, {
       sidebarOpen: options.sidebarOpen,
