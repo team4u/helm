@@ -32,7 +32,10 @@ function HelmShellInner() {
   // 版本感知与自动刷新：全局装配一次（生产入口识别不到时内部休眠）。
   const versionWatch = useVersionWatcher()
   const setActiveModal = store.setActiveModal
+  const setFocusedPanel = store.setFocusedPanel
   const closeModal = useCallback(() => setActiveModal(null), [setActiveModal])
+  const focusPrimary = useCallback(() => setFocusedPanel?.('primary'), [setFocusedPanel])
+  const focusSplit = useCallback(() => setFocusedPanel?.('split'), [setFocusedPanel])
 
   useEffect(() => {
     if (store.activeModal !== null) {
@@ -50,17 +53,7 @@ function HelmShellInner() {
 
   if (!store.authReady) {
     return (
-      <div
-        style={{
-          width: '100vw',
-          height: '100dvh',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'var(--fg-muted)',
-          fontSize: 13,
-        }}
-      >
+      <div className="app-loading-screen" style={{ height: '100dvh' }}>
         正在连接 Helm 内核...
       </div>
     )
@@ -78,16 +71,22 @@ function HelmShellInner() {
 
   if (!store.authenticated) return <AuthGate />
 
+  const activeTarget =
+    store.focusedPanel === 'split' && store.splitTarget !== null
+      ? store.splitTarget
+      : store.primaryTarget
+  const fallbackTarget =
+    store.focusedPanel === 'split' ? store.primaryTarget : store.splitTarget
   const activeConversationId =
-    store.primaryTarget.kind === 'conversation'
-      ? store.primaryTarget.conversationId
-      : store.splitTarget?.kind === 'conversation'
-        ? store.splitTarget.conversationId
+    activeTarget.kind === 'conversation'
+      ? activeTarget.conversationId
+      : fallbackTarget?.kind === 'conversation'
+        ? fallbackTarget.conversationId
         : undefined
 
   return (
     <div
-      className={`helm-shell${sidebarOpen ? ' sidebar-open' : ''}`}
+      className={`helm-shell${sidebarOpen ? ' sidebar-open' : ''}${store.sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
       onClick={(event) => {
         const target = event.target as HTMLElement
         if (target.closest('.nav-item')) {
@@ -132,6 +131,13 @@ function HelmShellInner() {
           </div>
         )}
         <div className="helm-panes">
+          <div
+            className="helm-primary-pane"
+            data-helm-panel="primary"
+            data-helm-panel-focused={store.splitTarget !== null && (store.focusedPanel ?? 'primary') === 'primary' ? 'true' : undefined}
+            onPointerDownCapture={focusPrimary}
+            onFocusCapture={focusPrimary}
+          >
         {store.primaryTarget.kind === 'conversation' ? (
           <ConversationPane
             key={`primary-conv-${store.primaryTarget.conversationId}`}
@@ -161,9 +167,16 @@ function HelmShellInner() {
         ) : store.primaryTarget.kind === 'models' ? (
           <ModelCenter key="primary-models" />
         ) : null}
+          </div>
 
         {store.splitTarget && (
-          <div className="helm-split-pane">
+          <div
+            className="helm-split-pane"
+            data-helm-panel="split"
+            data-helm-panel-focused={store.focusedPanel === 'split' ? 'true' : undefined}
+            onPointerDownCapture={focusSplit}
+            onFocusCapture={focusSplit}
+          >
             {store.splitTarget.kind === 'conversation' ? (
               <ConversationPane
                 key={`split-conv-${store.splitTarget.conversationId}`}

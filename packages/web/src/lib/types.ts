@@ -40,6 +40,7 @@ export type { SessionDocKey }
 
 export type ThemeMode = 'light' | 'dark'
 export type ThemePreference = 'system' | 'light' | 'dark'
+export type FocusedPanel = 'primary' | 'split'
 
 /** Screen 参数键：非空且仅限字母/数字/点/下划线/连字符（URL 查询串命名空间内的稳定子键）。 */
 export const SCREEN_PARAM_KEY_PATTERN = /^[A-Za-z0-9._-]+$/
@@ -431,6 +432,12 @@ export interface HelmStoreValue {
   // 视图路由与工作台状态
   primaryTarget: ResolvedTarget
   splitTarget: ResolvedTarget | null
+  /** 当前聚焦面板（仅内存态，不进 URL；关闭分屏时重置为 'primary'）。测试替身可省略。 */
+  focusedPanel?: FocusedPanel
+  /** 桌面端左侧二级导航栏折叠状态（localStorage 持久化；不进 URL）。测试替身可省略。 */
+  sidebarCollapsed?: boolean
+  /** 处于 1.5s 双按 Esc 中断确认窗口内的会话 ID（null 表示未进入确认窗口）。测试替身可省略。 */
+  pendingEscAbortConversationId?: number | null
   workbenchOpen: boolean
   workbenchTab: string // 'artifacts' | `plugin:${pluginId}/${panelId}`（动态页签，由 WorkbenchDrawer 回退）
   activeModal: ActiveModal
@@ -471,6 +478,12 @@ export interface HelmStoreValue {
     opts?: { split?: boolean; highlightEntryId?: string; history?: 'push' | 'replace' },
   ): void
   closeSplit(): void
+  /** 更新当前聚焦面板；splitTarget 为空时忽略切到 'split'。测试替身可省略。 */
+  setFocusedPanel?(panel: FocusedPanel): void
+  /** 设置桌面端侧栏折叠状态并持久化。测试替身可省略。 */
+  setSidebarCollapsed?(collapsed: boolean): void
+  /** 切换桌面端侧栏折叠状态并持久化。测试替身可省略。 */
+  toggleSidebarCollapsed?(): void
   /** 更新当前 screen 路由参数（undefined 值删除键）；split 省略时作用于主屏。 */
   setScreenParams(patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }): void
   setWorkbenchOpen(open: boolean): void

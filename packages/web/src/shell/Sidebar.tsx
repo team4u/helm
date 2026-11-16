@@ -7,6 +7,7 @@ import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type HelmStoreValue, type SidebarSpace } from '../lib/types.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
+import { formatModShortcut } from './shortcuts-model.js'
 import { extractSidebarViews, filterConversationsByTag, isConversationActive, isConversationArchived } from './sidebar-model.js'
 import {
   collectBackgroundBadgeDocs,
@@ -260,6 +261,17 @@ function ActivityRail({
         <HelmIcon name="layers" size={17} />
         <StatusDot connected={store.sseConnected} />
       </div>
+      <Tooltip content={`展开导航栏 (${formatModShortcut('B')})`} side="right">
+        <button
+          type="button"
+          className="rail-btn desktop-sidebar-expand-btn"
+          title={`展开导航栏 (${formatModShortcut('B')})`}
+          aria-label="展开导航栏"
+          onClick={() => store.toggleSidebarCollapsed?.()}
+        >
+          <HelmIcon name="chevron-right" size={16} />
+        </button>
+      </Tooltip>
       <div className="activity-rail-spaces">
         {(Object.keys(SPACE_LABELS) as SidebarSpace[]).map((key) => (
           <Tooltip content={SPACE_LABELS[key]} side="right" key={key}>
@@ -433,6 +445,17 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 onClick={() => store.setActiveModal({ kind: 'command-palette' })}
               >
                 <HelmIcon name="search" size={13} />
+              </button>
+            </Tooltip>
+            <Tooltip content={`收起导航栏 (${formatModShortcut('B')})`} side="bottom">
+              <button
+                type="button"
+                className="btn btn-sm btn-icon desktop-sidebar-collapse-btn"
+                title={`收起导航栏 (${formatModShortcut('B')})`}
+                aria-label="收起导航栏"
+                onClick={() => store.toggleSidebarCollapsed?.()}
+              >
+                <HelmIcon name="chevron-left" size={13} />
               </button>
             </Tooltip>
             {onClose && (

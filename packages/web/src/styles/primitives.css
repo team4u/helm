@@ -508,7 +508,39 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px 12px;
+}
+
+.screen-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.screen-header > .screen-subtitle {
+  margin-right: auto;
+}
+
+.screen-header > .stack-row {
+  margin-left: auto;
+}
+
+/* ScreenHost 已渲染顶栏 .pane-topbar 时抑制内层重复大标题，保留副标题与右侧动作栏；
+   若内层页头仅含标题且无副标题/动作，整栏折叠归零消除双重头部。 */
+.screen-host-stage .screen-header .screen-title,
+.screen-host-stage .screen-header > .screen-section-title,
+.screen-host-stage .apps-center-topbar .apps-center-title {
+  display: none;
+}
+
+.screen-host-stage .screen-header:not(:has(.screen-subtitle, .stack-row, button, a, input, select)) {
+  display: none;
+}
+
+.screen-host-stage .screen-header > button:last-child:not(:first-child) {
+  margin-left: auto;
 }
 
 .screen-title {
@@ -538,6 +570,72 @@
   font-size: 13.5px;
   font-weight: 600;
   color: var(--fg);
+}
+
+/* ==========================================================================
+ * 统一信息提示横幅与快捷键提示原语 (Callout & Kbd Hint Primitives)
+ * 供全仓宿主与全部插件统一复用（web-frontend.md：.callout-error / .callout-warn / .callout-ok）
+ * ========================================================================== */
+
+.callout {
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  font-size: 12.5px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.callout-flush,
+.callout--flush {
+  border-radius: 0 !important;
+  border-width: 0 !important;
+}
+
+.callout span,
+.callout-text {
+  word-break: break-all;
+}
+
+.callout-warn {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
+.callout-error {
+  background: var(--err-bg);
+  border-color: var(--err-border);
+  color: var(--err);
+}
+
+.callout-ok {
+  background: var(--ok-bg);
+  border-color: var(--ok-border);
+  color: var(--ok);
+}
+
+.kbd-hint {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: var(--bg-muted);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.nav-item-active .kbd-hint {
+  color: var(--nav-active-muted);
 }
 
 /* ==========================================================================

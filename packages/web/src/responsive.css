@@ -2,6 +2,7 @@
 .helm-main-stage { flex-direction: column; position: relative; }
 .helm-panes { flex: 1; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
 .helm-pane { container-type: inline-size; }
+.helm-primary-pane { width: 0; }
 .helm-split-pane { width: 0; }
 .pane-title-group { overflow: hidden; }
 .pane-title { min-width: 70px; }
@@ -50,7 +51,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 移动端顶栏左侧让位汉堡菜单后标题在更窄的剩余空间里垂直居中 */
   .conversation-topbar .pane-title { line-height: normal; align-self: center; }
   .conversation-topbar .pane-action-label,
-  .primary-center-topbar .pane-action-label { display: none; }
+  .primary-center-topbar .pane-action-label,
+  .pane-topbar .pane-action-label,
+  .pane-action-label { display: none; }
   /* 手机仍保留远端身份：副标题切紧凑模式（仅 @node，本机不渲染），title 保留完整坐标 */
   .conversation-topbar .pane-cwd-subtitle { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .conversation-topbar .pane-cwd-subtitle .env-subtitle-full { display: none; }
@@ -125,7 +128,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 窄屏只隐藏「开启分屏」入口；分屏已开启时保留激活态按钮与关闭按钮可点 */
   .split-toggle-btn:not(.split-active),
   .sidebar-split-action,
-  .sidebar-split-btn {
+  .sidebar-split-btn,
+  .pane-split-btn {
+    display: none !important;
+  }
+  .desktop-sidebar-collapse-btn,
+  .desktop-sidebar-expand-btn {
     display: none !important;
   }
   .helm-sidebar {
@@ -190,10 +198,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
     border-top: 1px solid var(--border);
     padding-top: 8px;
   }
-  .helm-panes > .helm-pane > .pane-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
+  .helm-panes > .helm-pane > .pane-topbar,
+  .helm-primary-pane > .helm-pane > .pane-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
   /* 一级中心（角色/模型/技能/节点/插件）顶栏同样为左上角悬浮汉堡让位 */
   .primary-center-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
   .helm-panes { flex-direction: column; }
+  .helm-primary-pane { width: 100%; height: 0; min-height: 0; }
   .helm-split-pane { width: 100%; height: 0; min-height: 0; border-left: 0; border-top: 1px solid var(--border-strong); }
   .modal-backdrop { padding: 10px; }
   .modal { max-height: 94dvh; }
@@ -221,6 +231,16 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .skill-drawer-content .primary-drawer-header { padding: 10px 14px; gap: 10px; }
   .skill-drawer-content .primary-drawer-body { padding: 10px 12px; gap: 8px; }
   .skill-reader-body { min-height: 0; }
+  .pane-action-label { display: none; }
+  .kbd-hint { display: none !important; }
+  .primary-drawer-content,
+  .plugin-drawer-content { width: 100vw; max-width: 100vw; left: 0; right: 0; border-left: none; }
+  .drawer-header,
+  .primary-drawer-header,
+  .plugin-drawer-header { flex-wrap: nowrap; align-items: flex-start; justify-content: space-between; }
+  .drawer-header > button:last-child,
+  .primary-drawer-header > button:last-child,
+  .plugin-drawer-close-btn { margin-left: auto; flex-shrink: 0; }
 }
 
 /* 命令面板关闭按钮响应式 */
@@ -231,9 +251,14 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 680px), (pointer: coarse) {
   .palette-close-desktop { display: none !important; }
   .palette-close-mobile { display: inline-flex !important; }
-  .conversation-drawer { width: 100vw; }
-  .helm-workbench { width: 100vw; border-left: none; }
-  .conversation-drawer-close-btn { min-height: 44px; min-width: 44px; }
+  .conversation-drawer { width: 100vw; max-width: 100vw; left: 0; right: 0; border-left: none; }
+  .helm-workbench { width: 100vw; max-width: 100vw; left: 0; right: 0; border-left: none; }
+  .conversation-drawer-close-btn { min-height: 44px; min-width: 44px; margin-left: auto; flex-shrink: 0; }
+  .workbench-close-btn { min-height: 44px; min-width: 44px; margin-left: auto; flex-shrink: 0; }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .kbd-hint { display: none !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {

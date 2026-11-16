@@ -306,7 +306,9 @@
   align-items: center;
   gap: 4px;
   border-bottom: 1px solid var(--border);
-  padding: 0 4px;
+  padding: 0 8px 0 4px;
+  flex-shrink: 0;
+  min-width: 0;
 }
 .tab-btn {
   padding: 7px 12px;
@@ -317,6 +319,8 @@
   border: none;
   border-bottom: 2px solid transparent;
   cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .tab-btn:hover {
   color: var(--fg);
