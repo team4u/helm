@@ -399,7 +399,7 @@ test('check-test-hygiene CLI: violate rule file exit 1, clean file exit 0, unkno
 
     const r3 = runScript('check-test-hygiene.mjs', ['--wat'])
     assert.equal(r3.status, 2)
-    assert.ok(r3.stderr.includes('unknown parameter'))
+    assert.ok(r3.stderr.includes('Unknown argument'))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -412,9 +412,9 @@ test('check-changed CLI:--base reference missing exit 2;--list print choose coll
 
   const r2 = runScript('check-changed.mjs', ['--list', '--base', 'HEAD'])
   assert.equal(r2.status, 0, `stderr: ${r2.stderr}`)
-  assert.ok(r2.stderr.includes('baseline'), 'must explicit report which choose baseline')
-  assert.ok(r2.stderr.includes('execute'), 'must print execute command supply re-check')
-  assert.ok(r2.stderr.includes('not execute any command'), '--list pattern never execute command')
+  assert.ok(r2.stderr.includes('[check-changed] baseline:'), 'must explicitly report the chosen baseline')
+  assert.ok(r2.stderr.includes('Commands to run'), 'must print the commands to run for re-checking')
+  assert.ok(r2.stderr.includes('[check-changed] --list mode: printed the selection only; no commands executed'), '--list mode must never execute commands')
 
   const r3 = runScript('check-changed.mjs', ['--bogus'])
   assert.equal(r3.status, 2)
@@ -424,11 +424,11 @@ test('check-test-hygiene CLI: repository outside path and empty --files all reje
   const outside = path.join(tmpdir(), 'helm-outside-' + Date.now(), 'x.test.ts')
   const r1 = runScript('check-test-hygiene.mjs', ['--files', outside])
   assert.equal(r1.status, 2, `stderr: ${r1.stderr}`)
-  assert.ok(r1.stderr.includes('reject repository outside path'), 'must explicit reject while non- static default check other repository')
+  assert.ok(r1.stderr.includes('[check-hygiene] Rejected path outside repository:'), 'must explicitly reject instead of silently inspecting another repository')
 
   const r2 = runScript('check-test-hygiene.mjs', ['--files'])
   assert.equal(r2.status, 2, `stderr: ${r2.stderr}`)
-  assert.ok(r2.stderr.includes('--files need to at least a'), 'empty --files must report use method error while non- retreat back all warehouse')
+  assert.ok(r2.stderr.includes('[check-hygiene] --files requires at least one in-repository test path (refusing to scan the whole repository)'), 'empty --files must report a usage error instead of falling back to a whole-repo scan')
 
   // open head -- isolate symbol (pnpm pass-through form): and explicit repository inside file etc. price.
   const r3 = runScript('check-test-hygiene.mjs', ['--', '--files', 'packages/cli/test/cli.test.ts'])
@@ -443,8 +443,8 @@ test('pnpm true invoke:pnpm check:changed -- --base HEAD --list pass-through ope
     { cwd: repoRoot, encoding: 'utf8', timeout: 120_000 },
   )
   assert.equal(res.status, 0, `stderr: ${res.stderr}`)
-  assert.ok(res.stderr.includes('baseline'), `must report baseline:${res.stderr.slice(0, 400)}`)
-  assert.ok(res.stderr.includes('not execute any command'), '--list never execute command')
+  assert.ok(res.stderr.includes('[check-changed] baseline:'), `must report the baseline:${res.stderr.slice(0, 400)}`)
+  assert.ok(res.stderr.includes('[check-changed] --list mode: printed the selection only; no commands executed'), '--list never executes commands')
 })
 
 test('resolvePackageManagerInvoke:npm_execpath validate suffix after use when before Node run; exception value fall back PATH pnpm', { timeout: 60_000 }, () => {
@@ -558,7 +558,7 @@ process.exit(code)
     wrapper.on('exit', (c, s) => resolve(c ?? (s === signal ? expectedCode : -1)))
   })
   assert.equal(wrapperExit, expectedCode, `by ${signal} terminate must by 128+signal exit;stderr: ${stderr}`)
-  const signalLogs = stderr.split(`receives ${signal}`).length - 1
+  const signalLogs = stderr.split(`received ${signal}, terminating the child process tree`).length - 1
   assert.equal(signalLogs, 1, `duplicate signal only allows a terminate log;stderr: ${stderr}`)
 
   // ignore signal descendant process eventually must by SIGKILL upgrade cut: do not any store orphan child.
@@ -653,7 +653,7 @@ process.exit(code)
         143,
         `outside layer should etc. G1(contains run-tests arrange empty G2) after only then by 143 exit;stderr: ${stderr}`,
       )
-      assert.ok(stderr.includes('owned test process group already arrange empty'), `run-tests should wait for its G2 arrange empty;stderr: ${stderr}`)
+      assert.ok(stderr.includes('owned test process group drained'), `run-tests must wait for its G2 to drain;stderr: ${stderr}`)
 
       // ignore TERM descendant process eventually must by run-tests  SIGKILL upgrade cut (Linux Z state treated as already terminate).
       const gone = await new Promise<boolean>((resolve) => {
