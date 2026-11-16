@@ -147,6 +147,11 @@ export interface HerdrPluginDependencies {
   blockedBackoffCapMs?: number
   /** 审批轮询间隔（测试可缩短；缺省 100ms）。 */
   pollIntervalMs?: number
+  /** Ask 存续轮询瞬时故障退避基数与上限（测试可缩短；生产缺省 500ms / 4000ms）。 */
+  askPollTransientBackoffBaseMs?: number
+  askPollTransientBackoffCapMs?: number
+  /** abort 后销单退避上限（测试可缩短；生产缺省 3200ms）。 */
+  abortCancelBackoffCapMs?: number
   /**
    * 可选：当确定性正则未从阻塞快照中识别出标准菜单时，调用会话模型解析
    * 脱敏终端快照并提取候选按键选项。返回 analysis 为 undefined 时附

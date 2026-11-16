@@ -195,6 +195,9 @@ export class HerdrExecutor {
       readDiagnostic: (pane) => this.paneHandoff.readDiagnostic(pane),
       cancelAskQuietly: (askId, reason) => this.cancelAskQuietly(askId, reason),
       pollIntervalMs: this.pollIntervalMs,
+      askPollTransientBackoffBaseMs: deps.askPollTransientBackoffBaseMs,
+      askPollTransientBackoffCapMs: deps.askPollTransientBackoffCapMs,
+      abortCancelBackoffCapMs: deps.abortCancelBackoffCapMs,
     })
     this.steerDispatcher = new SteerDispatcher({
       registry: this.registry,

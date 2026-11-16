@@ -629,7 +629,17 @@ async function makeEnv(options: {
     docs,
     config: new MemoryConfigStore({ socketPath }),
   })
-  await host.register(createHerdrPlugin(), { enabled: options.enabled ?? true })
+  await host.register(
+    createHerdrPlugin({
+      pollIntervalMs: 25,
+      blockedBackoffBaseMs: 30,
+      blockedBackoffCapMs: 100,
+      askPollTransientBackoffBaseMs: 30,
+      askPollTransientBackoffCapMs: 100,
+      abortCancelBackoffCapMs: 100,
+    }),
+    { enabled: options.enabled ?? true },
+  )
 
   return {
     host,

@@ -362,7 +362,7 @@ test('action-only entry action 点击：载荷 entryId 为真实 entry.id，kind
     })
     const btn = host.querySelector<HTMLButtonElement>('button[aria-label="置顶该消息"]')
     assert.ok(btn !== null, 'action-only 渲染标准图标按钮')
-    assert.equal(host.querySelector('button[aria-label="错误kind动作"]'), null, 'kind 不匹配不渲染')
+    assert.ok(host.querySelector('button[aria-label="错误kind动作"]') === null, 'kind 不匹配不渲染')
     await act(async () => { btn.click() })
     assert.equal(calls.length, 1)
     assert.equal(calls[0]!.pluginId, 'p')

@@ -253,7 +253,7 @@ test('工作流库 Screen：卡片网格渲染文件事实与元数据诊断；�
     assert.match(host.textContent!, /发布流程/)
     assert.match(host.textContent!, /元数据校验失败/, 'metadataError 条目必须如实展示诊断')
     // 无选中项时不渲染抽屉。
-    assert.equal(document.body.querySelector('.workflow-lib-drawer'), null)
+    assert.ok(document.body.querySelector('.workflow-lib-drawer') === null)
 
     await act(async () => {
       ;([...host.querySelectorAll('.workflow-lib-card')] as HTMLElement[])[0]!.click()
@@ -381,7 +381,7 @@ test('运行卡「保存为工作流」：内联 run 显示并调用 save fromRu
     assert.ok(inlineWrap && savedWrap && subagentWrap, '三个 run 均应在工作台渲染')
 
     // subagent running run 只有中止，无更多操作与保存入口；completed savedRun 有更多操作（重放）但无保存入口。
-    assert.equal(subagentWrap.querySelector('button[aria-label="更多操作"]'), null)
+    assert.ok(subagentWrap.querySelector('button[aria-label="更多操作"]') === null)
     const savedMore = savedWrap.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]')
     assert.ok(savedMore)
     act(() => {

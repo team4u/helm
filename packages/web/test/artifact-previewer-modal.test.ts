@@ -272,7 +272,7 @@ test('client 轨插件预览器：真实 Props（会话上下文 / blobUrl / siz
   assert.ok(defaultBtn !== undefined, '提供切回默认入口')
   await act(async () => { defaultBtn!.click() })
   await flush()
-  assert.equal(previewPanel(), null, '切回默认后插件视图消失')
+  assert.ok(previewPanel() === null, '切回默认后插件视图消失')
 
   // 选择器存在且包含默认项与插件项
   const trigger = document.querySelector('.helm-select-trigger') as HTMLElement | null
@@ -300,7 +300,7 @@ test('scope 贡献：无会话上下文不可泛命中；会话元数据命中�
   document.body.appendChild(host)
   const root = mount(host, storeNoCtx, 'art-7', undefined)
   await flush()
-  assert.equal(previewPanel(), null, '无会话上下文：scope 贡献不命中（不渲染插件视图）')
+  assert.ok(previewPanel() === null, '无会话上下文：scope 贡献不命中（不渲染插件视图）')
 
   // 有会话上下文且 tag 命中 → 插件 JSON 轨命中
   const storeHit = buildStore({
@@ -345,7 +345,7 @@ test('插件停用（贡献移除）：选择状态有效回退默认渲染', { 
   const stopped = { ...store, groupedUi: groupUiContributions([]), uiContributions: [] }
   await rerender(root, stopped, 'art-mv', 7)
   await flush()
-  assert.equal(previewPanel(), null, '贡献移除后插件视图即时消失')
+  assert.ok(previewPanel() === null, '贡献移除后插件视图即时消失')
   assert.ok(document.querySelector('.modal-body') !== null, '宿主默认渲染仍在')
 
   act(() => { root.unmount() })
@@ -431,7 +431,7 @@ test('深链元数据异步到达：加载完成后按扩展名命中（名称�
   const root = mount(host, store, 'art-svg', 7)
   await flush()
   // 元数据未到：名称未知，扩展名不猜 → 不命中
-  assert.equal(previewPanel(), null, '元数据未到不按扩展名命中')
+  assert.ok(previewPanel() === null, '元数据未到不按扩展名命中')
 
   // 元数据异步到达（name 仍未知：该产物无名称）→ 依旧不命中（不伪造名称）
   ;(store as { conversationArtifacts: Record<number, ArtifactMetadata[]> }).conversationArtifacts = {
@@ -439,7 +439,7 @@ test('深链元数据异步到达：加载完成后按扩展名命中（名称�
   }
   await rerender(root, { ...store }, 'art-svg', 7)
   await flush()
-  assert.equal(previewPanel(), null, '名称未知不以 artifactId 猜后缀')
+  assert.ok(previewPanel() === null, '名称未知不以 artifactId 猜后缀')
 
   act(() => { root.unmount() })
   
@@ -459,7 +459,7 @@ test('深链元数据异步到达：命名元数据后到 → 扩展名命中插
   document.body.appendChild(host)
   const root = mount(host, store, 'art-svg2', 7)
   await flush()
-  assert.equal(previewPanel(), null, '元数据未到不命中')
+  assert.ok(previewPanel() === null, '元数据未到不命中')
 
   ;(store as { conversationArtifacts: Record<number, ArtifactMetadata[]> }).conversationArtifacts = {
     7: [artifactMeta(svg, 7)],

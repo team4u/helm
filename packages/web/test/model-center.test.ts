@@ -880,7 +880,7 @@ test('ModelCenter: 插件网关端点保存不触发任何 providers 写入（�
 
     // 插件网关端点只读：没有可编辑输入框，保存不产生 providers 写入
     // （模型清单的 filter 写入合法存在，与端点无关）
-    assert.equal(container.querySelector('input#model-drawer-base-url'), null)
+    assert.ok(container.querySelector('input#model-drawer-base-url') === null)
     assert.match(container.textContent ?? '', /该端点由插件 builtin:magpie 的配置管理/)
     const saveBtn = Array.from(container.querySelectorAll('button')).find(
       (btn) => (btn.textContent ?? '').includes('保存配置'),

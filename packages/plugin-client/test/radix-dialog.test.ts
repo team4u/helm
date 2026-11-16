@@ -163,7 +163,7 @@ test('Dialog DOM 交互契约：role="dialog"、无障碍关联与 onOpenChange 
   await act(async () => {
     root.unmount()
   })
-  assert.equal(document.getElementById('test-content'), null, '卸载后 DialogContent 已从 DOM 中销毁')
+  assert.ok(document.getElementById('test-content') === null, '卸载后 DialogContent 已从 DOM 中销毁')
   container.remove()
 })
 
@@ -243,7 +243,7 @@ test('Dialog open=false 初始状态不渲染内容', { timeout: 60_000 }, async
     )
   })
 
-  assert.equal(document.getElementById('should-not-exist'), null, '初始 open=false 时 DOM 中不得存在 DialogContent')
+  assert.ok(document.getElementById('should-not-exist') === null, '初始 open=false 时 DOM 中不得存在 DialogContent')
 
   await act(async () => {
     root.unmount()

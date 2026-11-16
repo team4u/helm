@@ -536,6 +536,6 @@ test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人�
       }),
     )
   })
-  assert.equal(host.querySelector('.conversation-outline-mode'), null)
+  assert.ok(host.querySelector('.conversation-outline-mode') === null)
   assert.equal(labels().length, 5)
 })

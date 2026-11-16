@@ -401,8 +401,8 @@ test('工作台去重工作流库仅留跳转入口；独立工作流库切换�
   // 1. 工作台已去重：不内嵌定义列表、不重复请求 list，仅保留右上角「工作流库」跳转按钮。
   const wb = await mountClient(ctx, e(Panel, { conversation: workbenchConversation() }))
   try {
-    assert.equal(wb.host.querySelector('.workflow-library-item'), null, '工作台不得再内嵌重复工作流库行')
-    assert.equal(wb.host.querySelector('.workflow-library-args'), null)
+    assert.ok(wb.host.querySelector('.workflow-library-item') === null, '工作台不得再内嵌重复工作流库行')
+    assert.ok(wb.host.querySelector('.workflow-library-args') === null)
     assert.equal(ctx.calls.filter((c) => c.action === 'list').length, 0, '工作台挂载不发起多余 list 请求')
     await act(async () => {
       buttonByText(wb.host, '工作流库').click()

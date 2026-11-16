@@ -47,6 +47,9 @@ import { basename, dirname, join } from 'node:path'
 /** 每文件链尾（Promise<void>：链上前序任务全部结算即 resolve，绝不 reject）。 */
 const queues = new Map<string, Promise<void>>()
 
+/** 内部/测试入队通知监听器（绝不进 env/index 公共出口）。 */
+const enqueueListeners = new Set<(event: { key: string; waiting: boolean }) => void>()
+
 /** 当前异步链持有的锁 key 集（嵌套重入检测）。 */
 const activeKeys = new AsyncLocalStorage<Set<string>>()
 
@@ -139,8 +142,12 @@ async function runQueued<T>(
   const done = new Promise<void>((resolve) => {
     release = resolve
   })
+  const waiting = queues.has(key)
   const tail = previous.then(() => done)
   queues.set(key, tail)
+  for (const listener of [...enqueueListeners]) {
+    listener({ key, waiting })
+  }
   // 链尾结算（前序完成 + 本位释放）后才允许删除 Map 条目。
   void tail.then(() => {
     if (queues.get(key) === tail) queues.delete(key)
@@ -200,4 +207,12 @@ export async function localWithFileMutationQueue<T>(
 /** 队列内现存条目数（诊断/测试内省；不进 env/index 公共出口）。 */
 export function fileMutationQueueSize(): number {
   return queues.size
+}
+
+/** 订阅队列入队事件（诊断/测试内省；不进 env/index 公共出口）：任务完成 canonical 解析并挂入 queues 后同步触发。 */
+export function onFileMutationEnqueue(listener: (event: { key: string; waiting: boolean }) => void): () => void {
+  enqueueListeners.add(listener)
+  return () => {
+    enqueueListeners.delete(listener)
+  }
 }

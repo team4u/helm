@@ -8,17 +8,14 @@ import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
 import * as LucideReact from 'lucide-react'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { after } from 'node:test'
+import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as HelmPluginClient from '@helm/plugin-client'
 import { compilePluginClientModule } from '@helm/plugin-build'
 
 const WORKFLOW_CLIENT_ROOT = fileURLToPath(new URL('../../../plugins/src/workflow/client', import.meta.url))
-const CACHE_DIR = mkdtempSync(join(tmpdir(), 'helm-web-workflow-client-'))
-after(() => rmSync(CACHE_DIR, { recursive: true, force: true }))
+const CACHE_DIR = fileURLToPath(new URL('../../../../node_modules/.cache/helm-test-plugin-clients', import.meta.url))
+mkdirSync(CACHE_DIR, { recursive: true })
 
 export interface WorkflowClientStubOptions {
   docValue?: unknown

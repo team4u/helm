@@ -482,7 +482,7 @@ test('回到底部按钮：距底 <=240px 隐藏、>240px 浮现，带生成/未
   }
 
   await exhaustInitialWindow(raf)
-  assert.equal(host!.querySelector('button[aria-label="回到底部"]'), null, '贴底时隐藏回到底部按钮')
+  assert.ok(host!.querySelector('button[aria-label="回到底部"]') === null, '贴底时隐藏回到底部按钮')
 
   // 上滚正好 240px（scrollTop = 1200 - 240 = 960）：严格 >240 才显示，240px 不显示
   scroller.dispatchEvent(wheelUpEvent())
@@ -490,7 +490,7 @@ test('回到底部按钮：距底 <=240px 隐藏、>240px 浮现，带生成/未
   await act(async () => {
     scroller.dispatchEvent(new Event('scroll'))
   })
-  assert.equal(host!.querySelector('button[aria-label="回到底部"]'), null, '距底 240px 阈值边界不显示')
+  assert.ok(host!.querySelector('button[aria-label="回到底部"]') === null, '距底 240px 阈值边界不显示')
 
   // 再上滚 1px 至 241px（scrollTop = 959）：按钮出现，渲染箭头矢量图标，静止无未读时无活动点
   mock.setTopSilent(959)
@@ -501,7 +501,7 @@ test('回到底部按钮：距底 <=240px 隐藏、>240px 浮现，带生成/未
   assert.ok(btn !== null, '距底 >240px 应显示回到底部浮动按钮')
   assert.ok(btn.closest('.timeline-container') !== null && btn.closest('.timeline-scroll') === null, '应挂载在 .timeline-container 上而非滚走')
   assert.ok(btn.querySelector('svg.lucide-arrow-down') !== null, '应渲染 HelmIcon arrow-down 矢量图标')
-  assert.equal(btn.querySelector('.timeline-scroll-bottom-dot'), null, 'idle 且无新增内容时不显示活动点')
+  assert.ok(btn.querySelector('.timeline-scroll-bottom-dot') === null, 'idle 且无新增内容时不显示活动点')
 
   // 脱离贴底期间收到新内容推送（并即使随后恢复 idle）：持续保留未读活动点
   await rerenderTimeline({
@@ -529,7 +529,7 @@ test('回到底部按钮：距底 <=240px 隐藏、>240px 浮现，带生成/未
   assert.equal(smoothCalls[0]?.behavior, 'smooth')
   assert.equal(smoothCalls[0]?.top, 2000)
   assert.equal(mock.top(), 1200, '点击回到底部应置底到最大可滚位置')
-  assert.equal(host!.querySelector('button[aria-label="回到底部"]'), null, '点击回到底部后按钮隐藏')
+  assert.ok(host!.querySelector('button[aria-label="回到底部"]') === null, '点击回到底部后按钮隐藏')
 
   // 验证贴底吸附已恢复：重新进入 working 并增长高度时 ResizeObserver 自动跟随到底端
   await rerenderTimeline({

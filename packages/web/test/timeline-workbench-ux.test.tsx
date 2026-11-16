@@ -369,7 +369,7 @@ test('ConversationPane 顶栏类名、分屏隐藏容器、标题 Popover 与抽
     { ...baseStore, splitTarget: { kind: 'conversation', conversationId: 99 } },
     e(ConversationPane, { conversationId: 42 }),
   )
-  assert.equal(ui.host.querySelector('.pane-split-btn'), null, '已激活分屏时关闭分屏按钮不受 .pane-split-btn 隐藏')
+  assert.ok(ui.host.querySelector('.pane-split-btn') === null, '已激活分屏时关闭分屏按钮不受 .pane-split-btn 隐藏')
 
   // 3) 抽屉模式：展示环境条，且 [×] 关闭按钮严格位于 .pane-actions 最右侧（在全屏和更多菜单之后）
   await ui.render(
@@ -481,7 +481,7 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
     tabsBar.lastElementChild?.classList.contains('workbench-close-btn') ? tabsBar.lastElementChild : null
   )
   assert.ok(closeBtn, '关闭按钮 [×] 应位于工作台 tabs-bar 最右侧')
-  assert.equal(ui.host.querySelector('.workbench-tabs-scroll .workbench-close-btn'), null)
+  assert.ok(ui.host.querySelector('.workbench-tabs-scroll .workbench-close-btn') === null)
 
   // 正式产物区可见注册产物与上传附件，不含 spill 文件名
   const deliverablesSection = ui.host.querySelector('[aria-label="正式产物"]')!

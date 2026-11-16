@@ -187,7 +187,7 @@ test('抽屉内点击不在屏祖先：抽屉原位切换到祖先，不顶掉�
   assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 999 }, '主屏不被顶掉')
   assert.deepEqual(observed?.modal, { kind: 'conversation-drawer', conversationId: 1 }, '抽屉应原位切换到祖先 #1')
   // 抽屉内容确实切到根会话 #1：无祖先面包屑可再点
-  assert.deepEqual(ancestorButtons('.conversation-drawer'), [], '根会话抽屉不再渲染祖先链')
+  assert.equal(ancestorButtons('.conversation-drawer').length, 0, '根会话抽屉不再渲染祖先链')
 })
 
 test('抽屉内点击直接父级（不在屏）：同样原位切换抽屉', { timeout: 60_000 }, async () => {

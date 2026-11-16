@@ -138,7 +138,7 @@ test('真实共享 hooks 消费会话文档 snapshot/增量：父工具已返回
 
     state = applyEventFrame(state, { seq: 4, event: { type: 'plugin.changed', plugin: { ...plugin, enabled: false }, ui: [] } })
     await ui.render(store(), timeline)
-    assert.equal(ui.host.querySelector('button.workflow-trace-row-btn'), null, '停用必须卸载插件 UI')
+    assert.ok(ui.host.querySelector('button.workflow-trace-row-btn') === null, '停用必须卸载插件 UI')
     assert.deepEqual(state.pluginDocs, {}, '停用必须清文档')
     state = applyEventFrame(state, { seq: 5, event: { type: 'plugin.changed', plugin, ui: workflowUi } })
     // 重启用后经会话分片到达 completed 终态。
@@ -146,7 +146,7 @@ test('真实共享 hooks 消费会话文档 snapshot/增量：父工具已返回
     await act(async () => { publishSessionRuns() })
     await ui.render(store(), timeline)
     assert.equal(ui.host.querySelectorAll('button.workflow-trace-row-btn').length, 1)
-    assert.equal(ui.host.querySelector('button.workflow-trace-row-btn.trace-row-error'), null)
+    assert.ok(ui.host.querySelector('button.workflow-trace-row-btn.trace-row-error') === null)
     assert.match(ui.host.textContent!, /已完成/)
   } finally { await ui.close() }
 })

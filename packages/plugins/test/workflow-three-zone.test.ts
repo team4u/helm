@@ -315,7 +315,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       // 2. 全部 idle / settled 时归零返回 null（0px）
       harness.port.conversations[1]!.status = 'idle'
       harness.setRuns(1, [])
-      assert.equal(mounted.container.querySelector('.workflow-active-tray'), null, '无在途任务时应返回 null（0px）')
+      assert.ok(mounted.container.querySelector('.workflow-active-tray') === null, '无在途任务时应返回 null（0px）')
       assert.equal(mounted.container.innerHTML, '', '归零时不得残留空包装节点')
 
       // 3. 注入运行中前台同步工作流 -> 渲染 32px 单行 HUD，支持展开并触发转后台 / 中止 / 工作台定位
@@ -411,7 +411,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       }),
     )
     try {
-      assert.equal(nativeMount.container.querySelector('.subagent-live-card'), null, '时间线严禁挂载大卡片')
+      assert.ok(nativeMount.container.querySelector('.subagent-live-card') === null, '时间线严禁挂载大卡片')
       const btn = nativeMount.container.querySelector('button.trace-row') as HTMLButtonElement | null
       assert.ok(btn !== null, '应渲染单行 .trace-row 按钮')
       assert.ok(btn.textContent?.includes('子代理 #21'))
@@ -565,7 +565,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       }),
     )
     try {
-      assert.equal(tlMount.container.querySelector('.workflow-run-card'), null, '时间线严禁渲染运行大卡片')
+      assert.ok(tlMount.container.querySelector('.workflow-run-card') === null, '时间线严禁渲染运行大卡片')
       const traceBtn = tlMount.container.querySelector('button.trace-row') as HTMLButtonElement
       assert.ok(traceBtn !== null)
       assert.ok(traceBtn.textContent?.includes('目标多阶段工作流'))
@@ -581,7 +581,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
     // 2. 挂载右侧工作台：自动展开并高亮 wf_target，移除重复 WorkflowLibrarySection
     const wbMount = harness.mountNode(e(mod.WorkflowWorkbenchPanel, {}))
     try {
-      assert.equal(wbMount.container.querySelector('.workflow-lib-section'), null, '工作台必须去除重复工作流库列表')
+      assert.ok(wbMount.container.querySelector('.workflow-lib-section') === null, '工作台必须去除重复工作流库列表')
       const libBtn = [...wbMount.container.querySelectorAll('button')].find((b) => b.textContent?.includes('工作流库'))
       assert.ok(libBtn !== undefined, '工作台应提供轻量「工作流库」跳转按钮')
       act(() => {
@@ -592,7 +592,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       // 目标 run 应处于聚焦并展开状态
       const focusedWrap = wbMount.container.querySelector('[data-run-id="wf_target"]')
       assert.ok(focusedWrap !== null && focusedWrap.classList.contains('workflow-workbench-run-focused'), '应定位并高亮目标 run.id')
-      assert.equal(focusedWrap.querySelector('.phase-bar'), null, '应去除重复 .phase-bar')
+      assert.ok(focusedWrap.querySelector('.phase-bar') === null, '应去除重复 .phase-bar')
       assert.ok(focusedWrap.textContent?.includes('wf_target'), '工作台无损显示 runId')
       assert.ok(focusedWrap.textContent?.includes('wf_seed'), '工作台无损显示 replayedFrom 源 run')
       assert.ok(focusedWrap.textContent?.includes('pane-42'), '工作台无损显示外部 executionId')
@@ -895,8 +895,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
       const bgWrap = wbMount.container.querySelector('[data-run-id="wf_bg_native_35"]')
       assert.ok(bgWrap !== null)
       assert.equal(bgWrap.querySelectorAll('.subagent-live-card').length, 1, '后台原生子代理仅渲染 1 张子代理卡')
-      assert.equal(bgWrap.querySelector('.workflow-run-card'), null, '不得重复渲染 WorkflowRunCardBody')
-      assert.equal(bgWrap.querySelector('details'), null, '无 callDetails 时不得渲染空 <details> 调用详情')
+      assert.ok(bgWrap.querySelector('.workflow-run-card') === null, '不得重复渲染 WorkflowRunCardBody')
+      assert.ok(bgWrap.querySelector('details') === null, '无 callDetails 时不得渲染空 <details> 调用详情')
       assert.ok(bgWrap.querySelector('.worktree-inspect') !== null, '工作台子代理卡必须保留 WorktreeInspectSection')
       assert.ok(bgWrap.textContent?.includes('feat/wt-35'))
       assert.ok(bgWrap.textContent?.includes('自身已完成'), '父 idle + 子 running 时必须显示「自身已完成」而非「自身执行中」')
@@ -905,13 +905,13 @@ describe('Workflow 三区零重复与无损呈现', () => {
       const extWrap = wbMount.container.querySelector('[data-run-id="wf_ext_nodes"]')
       assert.ok(extWrap !== null)
       assert.ok(extWrap.querySelector('.subagent-external-card') !== null, '有节点的外部 run 必须走 ExternalRunSummary')
-      assert.equal(extWrap.querySelector('.workflow-run-card'), null)
+      assert.ok(extWrap.querySelector('.workflow-run-card') === null)
       assert.ok(extWrap.textContent?.includes('pane-42'))
       assert.ok(extWrap.textContent?.includes('remote-x:/srv/ext'))
       assert.ok(extWrap.querySelector('.worktree-inspect') !== null, '外部 run 也应保留 WorktreeInspectSection')
 
       // 3. 深层后代 wf_grandchild 不得在根工作台平铺出现
-      assert.equal(wbMount.container.querySelector('[data-run-id="wf_grandchild"]'), null, '深层后代 run 严禁越层平铺')
+      assert.ok(wbMount.container.querySelector('[data-run-id="wf_grandchild"]') === null, '深层后代 run 严禁越层平铺')
 
       // 4. 仅含 startedAt 的节点明细不被 rows.length > 0 吞掉
       const tsWrap = wbMount.container.querySelector('[data-run-id="wf_started_only"]')

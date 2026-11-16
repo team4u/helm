@@ -73,6 +73,24 @@ test('持续无任何字节：在 Deadline 处判 idle，且超时后取消不�
   await new Promise((resolve) => setTimeout(resolve, 30))
 })
 
+test('signal 取消立即 reject 并清理长空闲定时器（不挂住事件循环）', { timeout: 60_000 }, async () => {
+  const reader = hangingReader()
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), 15)
+  const start = Date.now()
+  await assert.rejects(
+    () => readSseChunkWithDeadline(reader, 60_000, controller.signal),
+    (err: unknown) => err instanceof Error && err.name === 'AbortError',
+  )
+  const elapsed = Date.now() - start
+  assert.ok(elapsed < 1000, `abort 应立即解除挂起，实际 ${elapsed}ms`)
+  await assert.rejects(
+    () => readSseChunkWithDeadline(reader, 60_000, controller.signal),
+    (err: unknown) => err instanceof Error && err.name === 'AbortError',
+  )
+  await reader.cancel().catch(() => {})
+})
+
 // ---------------------------------------------------------------------------
 // Provider 级闭环：挂起流空闲超时 -> 重连 -> 401 登出
 // ---------------------------------------------------------------------------
@@ -99,9 +117,14 @@ function hangingEventStream(): ReadableStream<Uint8Array> {
 test('挂起流空闲超时中止并重连，重连 401 必须登出且不再无限重连', { timeout: 60_000 }, async () => {
   const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
   const { useHelmStore } = await import('../src/lib/store-context.js')
-  const originalIdleTimeoutMs = sseClientTimings.idleTimeoutMs
+  const originalTimings = { ...sseClientTimings }
   const originalFetch = globalThis.fetch
-  sseClientTimings.idleTimeoutMs = 250
+  Object.assign(sseClientTimings, {
+    idleTimeoutMs: 250,
+    reconnectBaseMs: 20,
+    reconnectCapMs: 80,
+    reconnectJitterMs: 5,
+  })
   localStorage.setItem('helm:token', 'stale-token')
   let eventsCalls = 0
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -155,11 +178,11 @@ test('挂起流空闲超时中止并重连，重连 401 必须登出且不再无
     assert.equal(localStorage.getItem('helm:token'), null, '登出必须清除存储 token')
     assert.equal(observed.sseConnected, false)
     // 401 登出后连接效应卸载：等待超过一次退避周期，不再有第三次重连。
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1300)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)) })
     assert.equal(eventsCalls, 2, '401 登出后不得继续重连')
     assert.equal(observed.authenticated, false)
   } finally {
-    sseClientTimings.idleTimeoutMs = originalIdleTimeoutMs
+    Object.assign(sseClientTimings, originalTimings)
     globalThis.fetch = originalFetch
     localStorage.removeItem('helm:token')
     const r = root

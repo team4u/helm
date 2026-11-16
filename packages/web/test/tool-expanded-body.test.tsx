@@ -158,7 +158,7 @@ test('edit pending → success：完成且元数据合法后切换为内核真�
     assert.ok(m.host.querySelector('.trace-diff-row-remove'))
     assert.ok(m.host.querySelector('.trace-diff-row-add'))
     assert.ok(m.host.querySelector('.trace-diff-row-context'))
-    assert.equal(m.host.querySelector('.trace-diff-pending'), null, '不再显示片段形态')
+    assert.ok(m.host.querySelector('.trace-diff-pending') === null, '不再显示片段形态')
   } finally {
     m.unmount()
   }
@@ -182,7 +182,7 @@ test('edit failure：错误与请求的变更片段（执行失败不判定文�
     assert.match(m.host.textContent ?? '', /edit_failed: oldText 在 \/a\.ts 中出现 2 次/)
     assert.match(m.host.textContent ?? '', /请求的变更片段（执行失败，不判定文件是否已变）/)
     assert.doesNotMatch(m.host.textContent ?? '', /已应用的差异/)
-    assert.equal(m.host.querySelector('.trace-diff-num'), null, '失败态无文件行号')
+    assert.ok(m.host.querySelector('.trace-diff-num') === null, '失败态无文件行号')
     assert.ok(m.host.textContent?.includes('/a.ts'), '失败保留目标路径')
   } finally {
     m.unmount()
@@ -203,7 +203,7 @@ test('edit 成功但元数据缺失/非法：显式诊断并默认展开原始�
       ),
     )
     assert.match(m.host.textContent ?? '', /元数据缺失或非法/)
-    assert.equal(m.host.querySelector('.trace-diff'), null, '不渲染任何差异表')
+    assert.ok(m.host.querySelector('.trace-diff') === null, '不渲染任何差异表')
     const rawBtn = m.host.querySelector('.trace-raw .trace-inline-btn') as HTMLElement
     assert.ok(rawBtn)
     assert.equal(rawBtn.getAttribute('aria-expanded'), 'true', '原始数据默认展开')
@@ -296,7 +296,7 @@ test('edit 大输入超预算：明确提示跳过差异计算，保留原始参
       bodyUi(trace({ toolName: 'edit', status: 'running', input: { path: '/big.txt', oldText: huge, newText: 'y' } })),
     )
     assert.match(m.host.textContent ?? '', /片段差异未计算/)
-    assert.equal(m.host.querySelector('.trace-diff'), null)
+    assert.ok(m.host.querySelector('.trace-diff') === null)
     const rawBtn = m.host.querySelector('.trace-raw .trace-inline-btn') as HTMLElement
     assert.ok(rawBtn)
     await act(async () => {
@@ -401,7 +401,7 @@ test('read：spill 输出不做源码高亮并保留产物入口；普通结果�
       ),
     )
     assert.match(m.host.textContent ?? '', /含产物引用/)
-    assert.equal(m.host.querySelector('.trace-code-sec'), null, 'spill 不走语法高亮形态')
+    assert.ok(m.host.querySelector('.trace-code-sec') === null, 'spill 不走语法高亮形态')
     const artifactBtn = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('打开完整产物')) as HTMLButtonElement
     assert.ok(artifactBtn, '保留打开完整产物入口')
     modalCalls.length = 0
@@ -529,7 +529,7 @@ test('TraceRow：无插件接管时点击展开内置展开体，再点击收起
     await act(async () => {
       row.click()
     })
-    assert.equal(m.host.querySelector('.trace-expanded-body'), null, '再次点击收起')
+    assert.ok(m.host.querySelector('.trace-expanded-body') === null, '再次点击收起')
   } finally {
     m.unmount()
   }
@@ -556,7 +556,7 @@ test('TraceRow：tool.view inline 保留原始数据入口，不提供宿主专�
       row.click()
     })
     assert.ok(m.host.querySelector('.trace-expanded-body'), '可查看原始数据')
-    assert.equal(m.host.querySelector('.trace-tool-body'), null, '插件不被宿主专属展开体接管')
+    assert.ok(m.host.querySelector('.trace-tool-body') === null, '插件不被宿主专属展开体接管')
     assert.match(m.host.textContent ?? '', /保留插件的原始输入/)
     assert.match(m.host.textContent ?? '', /原始派工结果/)
   } finally {
@@ -589,7 +589,7 @@ test('TraceRow：单行统计 write 行数与 edit +N −N；无统计不渲染�
     assert.match(editStats?.getAttribute('title') ?? '', /已应用/)
 
     await m.render(rowUi(trace({ toolName: 'bash', input: { command: 'ls' } })))
-    assert.equal(m.host.querySelector('.trace-row-stats'), null, '无统计不渲染徽标')
+    assert.ok(m.host.querySelector('.trace-row-stats') === null, '无统计不渲染徽标')
   } finally {
     m.unmount()
   }

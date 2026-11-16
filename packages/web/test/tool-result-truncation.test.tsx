@@ -159,7 +159,7 @@ test('bash 截断：单一全文入口（主展开按钮即取回），预览折
   assert.match(text, /服务端仅传回预览（全文 300 行）/, '截断说明携带服务端计数')
   assert.match(text, /条目仅存 Spill 预览，完整原文见下方产物入口/, 'spill 场景不声称单条 endpoint 还原原文')
   assert.ok(findButton(m.host, '展开全文（全文 300 行）'), '展开全文=主展开按钮，直接取回')
-  assert.equal(findButton(m.host, '展开预览'), undefined, '不出现第二个相近的预览展开入口')
+  assert.ok(findButton(m.host, '展开预览') === undefined, '不出现第二个相近的预览展开入口')
   assert.match(text, /已折叠前 2 行/, '预览折叠事实如实（尾 8 行）')
   assert.ok(findButton(m.host, '打开完整产物'), 'Artifact 尾标不受截断影响')
 })
@@ -174,7 +174,7 @@ test('无截断标记：既有展示与复制完全不变', { timeout: 60_000 },
   await m.render(bodyUi(store, tool))
   assert.doesNotMatch(m.host.textContent ?? '', /服务端仅传回预览/)
   assert.ok(findButton(m.host, '展开全部（共 10 行）'), '本地折叠标签不变')
-  assert.equal(findButton(m.host, '展开全文'), undefined, '无取回入口')
+  assert.ok(findButton(m.host, '展开全文') === undefined, '无取回入口')
 })
 
 // ---------------------------------------------------------------------------

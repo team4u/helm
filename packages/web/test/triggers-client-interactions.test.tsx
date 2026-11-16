@@ -284,7 +284,7 @@ test('manager screen：Screen .screen-heading 排版，点击 Cron / Webhook 行
       closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     await act(async () => {})
-    assert.equal(host.querySelector('[role="dialog"].primary-drawer-content'), null, '关闭按钮应收起抽屉')
+    assert.ok(host.querySelector('[role="dialog"].primary-drawer-content') === null, '关闭按钮应收起抽屉')
 
     const webhookRow = Array.from(host.querySelectorAll('tbody tr')).find((tr) =>
       tr.textContent?.includes('ci/main'),

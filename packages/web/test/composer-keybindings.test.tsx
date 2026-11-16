@@ -313,8 +313,8 @@ test('Ctrl+L：分屏匹配 data-helm-panel 精准开关 ModelPicker，自动聚
   const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
   assert.ok(popover, 'ModelPicker 浮层已渲染')
   const searchInput = popover.querySelector<HTMLInputElement>('input[aria-label="搜索模型"]')
-  assert.ok(searchInput, '搜索输入框存在')
-  assert.equal(document.activeElement, searchInput, '打开时自动聚焦搜索输入框（非首项重置按钮）')
+  assert.ok(searchInput !== null, '搜索输入框存在')
+  assert.ok(document.activeElement === searchInput, '打开时自动聚焦搜索输入框（非首项重置按钮）')
 
   // 初始高亮指向当前模型 faux/m2（索引 1）
   const modelBtns = Array.from(popover.querySelectorAll<HTMLButtonElement>('button.popover-item[title^="faux/"]'))
@@ -332,19 +332,19 @@ test('Ctrl+L：分屏匹配 data-helm-panel 精准开关 ModelPicker，自动聚
   })
   assert.equal(patched.length, 1)
   assert.deepEqual(patched[0], { id: 2, body: { model: 'faux/m3' } })
-  assert.equal(document.body.querySelector('.composer-model-popover'), null, 'Enter 选中后关闭浮层')
-  assert.equal(document.activeElement, splitTa, '关闭后焦点归还当前面板 Composer textarea')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'Enter 选中后关闭浮层')
+  assert.ok(document.activeElement === splitTa, '关闭后焦点归还当前面板 Composer textarea')
 
   // 再次 Ctrl+L 打开，再按一次 Ctrl+L 关闭并归还焦点
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
-  assert.ok(document.body.querySelector('.composer-model-popover'))
+  assert.ok(document.body.querySelector('.composer-model-popover') !== null)
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
-  assert.equal(document.body.querySelector('.composer-model-popover'), null, '再次 Ctrl+L 关闭浮层')
-  assert.equal(document.activeElement, splitTa, 'Ctrl+L 关闭后焦点回到分屏 textarea')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, '再次 Ctrl+L 关闭浮层')
+  assert.ok(document.activeElement === splitTa, 'Ctrl+L 关闭后焦点回到分屏 textarea')
 
   // 再次 Ctrl+L 打开并通过 Esc 关闭：必须 stopPropagation 防止触发外层双 Esc 中断，且归还焦点
   await act(async () => {
@@ -363,10 +363,10 @@ test('Ctrl+L：分屏匹配 data-helm-panel 精准开关 ModelPicker，自动聚
         new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
       )
     })
-    assert.equal(document.body.querySelector('.composer-model-popover'), null, 'Esc 关闭 ModelPicker')
+    assert.ok(document.body.querySelector('.composer-model-popover') === null, 'Esc 关闭 ModelPicker')
     assert.equal(escLeakedToWindow, false, 'ModelPicker Esc 必须 stopPropagation 防触发外层双 Esc')
-    assert.equal(document.activeElement, splitTa, 'Esc 关闭后焦点回到分屏 textarea')
-    assert.notEqual(document.activeElement, primaryTa)
+    assert.ok(document.activeElement === splitTa, 'Esc 关闭后焦点回到分屏 textarea')
+    assert.ok(document.activeElement !== primaryTa)
   } finally {
     window.removeEventListener('keydown', escWindowSpy)
   }
@@ -481,7 +481,7 @@ test('↑（空草稿首行）：优先撤回 queuedInputs 最新人类排队项
   assert.deepEqual(withdrawCalls, [{ id: 7, subId: '22' }])
   assert.equal(ta.value, '最新人类插话', '回填排队消息正文')
   assert.ok(host.textContent?.includes('spec.md'), '同时回填排队附件')
-  assert.equal(host.querySelector('.composer-edit-banner'), null, '撤回排队不触发历史回滚横幅')
+  assert.ok(host.querySelector('.composer-edit-banner') === null, '撤回排队不触发历史回滚横幅')
 })
 
 test('↑（无人类排队项时）：回退编辑上一条历史人类消息', { timeout: 60_000 }, async () => {
@@ -513,7 +513,7 @@ test('↑（无人类排队项时）：回退编辑上一条历史人类消息',
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
   })
   assert.equal(ta.value, '历史提问五')
-  assert.notEqual(host.querySelector('.composer-edit-banner'), null, '无人类排队项时回退历史编辑并显示横幅')
+  assert.ok(host.querySelector('.composer-edit-banner') !== null, '无人类排队项时回退历史编辑并显示横幅')
 })
 
 // ---------------------------------------------------------------------------
@@ -540,11 +540,11 @@ test('Esc 层级：关闭斜杠浮层与取消历史编辑均 stopPropagation，
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
     })
-    assert.notEqual(host.querySelector('.composer-edit-banner'), null)
+    assert.ok(host.querySelector('.composer-edit-banner') !== null)
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
-    assert.equal(host.querySelector('.composer-edit-banner'), null, 'Esc 退出历史编辑态')
+    assert.ok(host.querySelector('.composer-edit-banner') === null, 'Esc 退出历史编辑态')
     assert.equal(ta.value, '')
     assert.equal(windowEscCount, 0, '取消编辑时 stopPropagation，不触发外层双 Esc 计数')
 
@@ -552,11 +552,11 @@ test('Esc 层级：关闭斜杠浮层与取消历史编辑均 stopPropagation，
     await act(async () => {
       typeInto(ta, '/')
     })
-    assert.notEqual(host.querySelector('.composer-popover'), null)
+    assert.ok(host.querySelector('.composer-popover') !== null)
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
-    assert.equal(host.querySelector('.composer-popover'), null)
+    assert.ok(host.querySelector('.composer-popover') === null)
     assert.equal(windowEscCount, 0, '关闭斜杠浮层时 stopPropagation')
 
     // 3) 无浮层且非编辑态按 Esc：正常冒泡到 window 供外层双 Esc 中断处理
@@ -652,7 +652,7 @@ test('ComposerSendControls：移动端忙时有输入显式渲染 [插话] 与 [
       abortTurn,
     }),
   )
-  assert.equal(mobileHost.querySelector('.composer-split-trigger'), null, '移动端不渲染窄缝下拉触发器')
+  assert.ok(mobileHost.querySelector('.composer-split-trigger') === null, '移动端不渲染窄缝下拉触发器')
   const steerBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-steer-btn')
   const queueBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-queue-btn')
   assert.ok(steerBtn && steerBtn.textContent?.includes('插话'), '移动端显示 [插话] 按钮')
@@ -678,7 +678,7 @@ test('ComposerSendControls：移动端忙时有输入显式渲染 [插话] 与 [
       abortTurn,
     }),
   )
-  assert.equal(desktopHost.querySelector('.composer-busy-mobile-actions'), null)
+  assert.ok(desktopHost.querySelector('.composer-busy-mobile-actions') === null)
   const trigger = desktopHost.querySelector<HTMLButtonElement>('button.composer-split-trigger')
   assert.ok(trigger, '桌面端保留分体下拉触发器')
   // 验证源码级菜单角标携带 .kbd-hint（Radix DropdownMenu 鼠标点击或键盘展开在真实浏览器可见）
@@ -755,7 +755,7 @@ test('Standby 待命页：继承全局默认模型 glm-5.3·max，支持 Shift+T
     ta.dispatchEvent(ev)
     assert.equal(ev.defaultPrevented, true)
   })
-  assert.equal(host.querySelector('.composer-model-level'), null, 'max 下一档为 off，角标隐藏')
+  assert.ok(host.querySelector('.composer-model-level') === null, 'max 下一档为 off，角标隐藏')
   await act(async () => {
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }))
   })
@@ -765,20 +765,20 @@ test('Standby 待命页：继承全局默认模型 glm-5.3·max，支持 Shift+T
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'primary' } }))
   })
-  assert.equal(document.body.querySelector('.composer-model-popover'), null, 'primary 事件不打开 split 待命选择器')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'primary 事件不打开 split 待命选择器')
 
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
   const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  assert.ok(popover, 'split Ctrl+L 打开待命模型浮层')
-  assert.ok(popover.querySelector('button.composer-model-refresh-btn'), '待命模型浮层补齐动态刷新按钮')
-  assert.equal(document.activeElement, popover.querySelector('input[aria-label="搜索模型"]'), '自动聚焦搜索输入框')
+  assert.ok(popover !== null, 'split Ctrl+L 打开待命模型浮层')
+  assert.ok(popover.querySelector('button.composer-model-refresh-btn') !== null, '待命模型浮层补齐动态刷新按钮')
+  assert.ok(document.activeElement === popover.querySelector('input[aria-label="搜索模型"]'), '自动聚焦搜索输入框')
 
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
-  assert.equal(document.body.querySelector('.composer-model-popover'), null)
+  assert.ok(document.body.querySelector('.composer-model-popover') === null)
 
   // 静态 '/' 技能补全：过滤停用插件托管技能，选中 /skill:review 插入文本
   await act(async () => {
@@ -882,7 +882,7 @@ test('CompletionPopover：Esc 关闭补全浮层且 stopPropagation 不触达外
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
-    assert.equal(host.querySelector('.composer-completion-popover'), null, 'Esc 关闭补全浮层')
+    assert.ok(host.querySelector('.composer-completion-popover') === null, 'Esc 关闭补全浮层')
     assert.equal(leakedEsc, 0, 'Esc 已 stopPropagation 防外层双 Esc 误触发')
   } finally {
     window.removeEventListener('keydown', spy)

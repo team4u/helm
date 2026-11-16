@@ -172,6 +172,7 @@ export function testFilesOfPackage(repoRoot, pkgDir) {
 
 /**
  * 快速门命令计划（纯函数，供 CLI 执行与 --list 复核共用）：
+ *   0. 有测试文件 → node scripts/check-test-hygiene.mjs --files <files...>（静态卫生检查，早于 typecheck）；
  *   1. 任一受影响包 → pnpm typecheck（会先 build protocol/node/kernel/plugins/hub，是测试的类型/运行前置）；
  *   2. 选中 desktop 测试 → 先 pnpm --filter @helm/desktop run build（typecheck 不产
  *      packages/desktop/dist/hub-child.js，冷工作树不补建则 desktop 测试必败，且改
@@ -182,6 +183,13 @@ export function testFilesOfPackage(repoRoot, pkgDir) {
  */
 export function planCheckCommands({ affectedDirs, testFiles, pm, execPath, repoRoot }) {
   const commands = [];
+  if (testFiles.length > 0) {
+    commands.push({
+      cmd: execPath,
+      args: [path.join(repoRoot, 'scripts', 'check-test-hygiene.mjs'), '--files', ...testFiles],
+      label: `check-hygiene（${testFiles.length} 个受影响测试文件）`,
+    });
+  }
   if (affectedDirs.length > 0) {
     commands.push({
       cmd: pm.cmd,

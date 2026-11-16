@@ -219,7 +219,7 @@ test('停用应用：卡片标记 is-disabled，分屏按钮不出现（无虚�
   const card = host.querySelector('[data-app-id="tracker-app"]')
   assert.ok(card?.classList.contains('is-disabled'))
   const splitBtn = card?.querySelector('button[aria-label="分屏打开应用"]')
-  assert.equal(splitBtn, null, '停用应用不得提供分屏打开入口（提供插件中心启用）')
+  assert.ok(splitBtn === null, '停用应用不得提供分屏打开入口（提供插件中心启用）')
   unmount()
 })
 

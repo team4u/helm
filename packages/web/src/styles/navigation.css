@@ -127,10 +127,11 @@
 }
 
 /* 行首状态槽：固定宽度灯位，idle 空槽保持续行标题对齐（灯不渲染槽仍在）。
- * 紧凑左缘：槽压至 8px 并以 -4px 左负边距伸入行内边距，灯芯贴近行左缘，
- * 标题不再被推远；跨行对齐依赖槽宽固定，不随灯是否渲染变化。 */
+ * 紧凑左缘：槽以 -4px 左负边距伸入行内边距，灯芯贴近行左缘，标题不被推远；
+ * 槽宽必须显著大于 7px 灯芯（留足取整余量）：8px 曾在移动端非整数缩放下
+ * 把圆点挤成椭圆，10px 起稳定；跨行对齐依赖槽宽固定，不随灯是否渲染变化。 */
 .nav-status-slot {
-  width: 8px;
+  width: 10px;
   margin-left: -4px;
   display: inline-flex;
   align-items: center;
@@ -162,7 +163,7 @@
 }
 
 .agent-standing-group .agent-conversations-list {
-  margin: 4px 0 2px 12px;
+  margin: 4px 0 2px 8px;
   padding-left: 4px;
   border-left: 1px solid var(--border);
   display: flex;

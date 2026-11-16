@@ -64,7 +64,7 @@ test('Screen：header 组合渲染 screen-container / screen-header / screen-hea
   assert.equal(children[1]!.className, 'stack-row')
   assert.equal(children[0]!.querySelector('.screen-title')?.textContent, '任务中心')
   assert.equal(children[0]!.querySelector('.screen-subtitle')?.textContent, '共 3 条')
-  assert.equal(children[0]!.querySelector('.stack-row'), null, 'actions 不得被裹入 .screen-heading')
+  assert.ok(children[0]!.querySelector('.stack-row') === null, 'actions 不得被裹入 .screen-heading')
   assert.equal(children[1]!.querySelector('button')?.textContent, '刷新')
 
   // 仅传 subtitle + actions（缺省 title）：.screen-heading 仍包裹 subtitle，不渲染空 .screen-title
@@ -74,7 +74,7 @@ test('Screen：header 组合渲染 screen-container / screen-header / screen-hea
   win.document.body.innerHTML = subOnly
   const subHeader = win.document.body.querySelector('.screen-header')!
   assert.equal(subHeader.children[0]!.className, 'screen-heading')
-  assert.equal(subHeader.children[0]!.querySelector('.screen-title'), null)
+  assert.ok(subHeader.children[0]!.querySelector('.screen-title') === null)
   assert.equal(subHeader.children[0]!.querySelector('.screen-subtitle')?.textContent, '仅副标题')
   assert.equal(subHeader.children[1]!.className, 'stack-row')
 

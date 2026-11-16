@@ -9,14 +9,14 @@
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { rm } from 'node:fs/promises'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createEditTool, createReadTool, createWriteTool } from '../src/runtime/tools.js'
-import { localWithFileMutationQueue } from '../src/env/file-mutation-queue.js'
+import { localWithFileMutationQueue, onFileMutationEnqueue } from '../src/env/file-mutation-queue.js'
 import { ArtifactService, InMemoryArtifactRepository, SecretStash, ensureDataDir } from '../src/services/index.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
 
@@ -76,6 +76,53 @@ after(async () => {
   await rm(rootDir, { recursive: true, force: true }).catch(() => {})
 })
 
+/**
+ * 确定性排队门控：先等 hold 进入执行窗口，再发起 queuedTask 并等待其真正完成
+ * canonical 解析并挂入 queues 阻塞在 previous 上，随后执行窗口动作并释放 hold。
+ */
+async function runQueuedBehindHold<T>(
+  victimPath: string,
+  startQueued: () => Promise<T>,
+  onQueuedDuringWindow?: () => void,
+): Promise<T> {
+  let enteredHold!: () => void
+  const holdEntered = new Promise<void>((resolve) => { enteredHold = resolve })
+  let releaseHold!: () => void
+  const holdGate = new Promise<void>((resolve) => { releaseHold = resolve })
+  const hold = localWithFileMutationQueue(victimPath, async () => {
+    enteredHold()
+    await holdGate
+  })
+  await holdEntered
+
+  const expectedKey = `node:local\u0000${realpathSync(victimPath)}`
+  let off: (() => void) | undefined
+  const queued = new Promise<void>((resolve) => {
+    off = onFileMutationEnqueue((event) => {
+      if (event.waiting && event.key === expectedKey) {
+        off?.()
+        resolve()
+      }
+    })
+  })
+  const queuedTask = startQueued()
+  try {
+    await Promise.race([
+      queued,
+      queuedTask.then(
+        () => { throw new Error('queuedTask unexpectedly settled before queuing') },
+        (error) => { throw error },
+      ),
+    ])
+  } finally {
+    off?.()
+  }
+  onQueuedDuringWindow?.()
+  releaseHold()
+  await hold
+  return await queuedTask
+}
+
 describe('write/edit 互斥队列与软链语义（新路径契约）', { timeout: 60_000 }, () => {
   it('排队等待：同文件写在前序持锁任务释放后执行成功（队列只互斥、不拒路径）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'q1')
@@ -85,15 +132,10 @@ describe('write/edit 互斥队列与软链语义（新路径契约）', { timeou
     const deps = await makeRealDeps(dir)
     const tool = createWriteTool(deps)
 
-    let releaseHold!: () => void
-    const holdGate = new Promise<void>((resolve) => { releaseHold = resolve })
-    const hold = localWithFileMutationQueue(victim, () => holdGate)
-    const writePromise = tool.execute({ path: 'victim.txt', content: 'QUEUED' }, makeApi(dir), BACKGROUND_CONTEXT)
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    releaseHold()
-    await hold
-
-    const result = await writePromise
+    const result = await runQueuedBehindHold(
+      victim,
+      () => tool.execute({ path: 'victim.txt', content: 'QUEUED' }, makeApi(dir), BACKGROUND_CONTEXT),
+    )
     assert.equal(!!result.isError, false)
     assert.equal(readFileSync(victim, 'utf8'), 'QUEUED')
   })
@@ -108,19 +150,16 @@ describe('write/edit 互斥队列与软链语义（新路径契约）', { timeou
     const deps = await makeRealDeps(dir)
     const tool = createWriteTool(deps)
 
-    let releaseHold!: () => void
-    const holdGate = new Promise<void>((resolve) => { releaseHold = resolve })
-    const hold = localWithFileMutationQueue(victim, () => holdGate)
-    const writePromise = tool.execute({ path: 'victim.txt', content: 'ESCAPED' }, makeApi(dir), BACKGROUND_CONTEXT)
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    // 等待窗口内：目标被并发替换为指向 cwd 外的软链（队列不锁外部进程）。
-    // 新契约：写入跟随软链，落到软链指向的真实目标。
-    rmSync(victim)
-    symlinkSync(join(outer, 'stolen.txt'), victim)
-    releaseHold()
-    await hold
-
-    const result = await writePromise
+    const result = await runQueuedBehindHold(
+      victim,
+      () => tool.execute({ path: 'victim.txt', content: 'ESCAPED' }, makeApi(dir), BACKGROUND_CONTEXT),
+      () => {
+        // 等待窗口内：目标被并发替换为指向 cwd 外的软链（队列不锁外部进程）。
+        // 新契约：写入跟随软链，落到软链指向的真实目标。
+        rmSync(victim)
+        symlinkSync(join(outer, 'stolen.txt'), victim)
+      },
+    )
     assert.equal(!!result.isError, false, '新契约下软链目标写入应成功')
     assert.equal(existsSync(join(outer, 'stolen.txt')), true, '写入应跟随软链落到真实目标')
     assert.equal(readFileSync(join(outer, 'stolen.txt'), 'utf8'), 'ESCAPED')
@@ -137,21 +176,18 @@ describe('write/edit 互斥队列与软链语义（新路径契约）', { timeou
     const deps = await makeRealDeps(dir)
     const tool = createEditTool(deps)
 
-    let releaseHold!: () => void
-    const holdGate = new Promise<void>((resolve) => { releaseHold = resolve })
-    const hold = localWithFileMutationQueue(victim, () => holdGate)
-    const editPromise = tool.execute(
-      { path: 'victim.txt', oldText: 'old', newText: 'ESCAPED' },
-      makeApi(dir),
-      BACKGROUND_CONTEXT,
+    const result = await runQueuedBehindHold(
+      victim,
+      () => tool.execute(
+        { path: 'victim.txt', oldText: 'old', newText: 'ESCAPED' },
+        makeApi(dir),
+        BACKGROUND_CONTEXT,
+      ),
+      () => {
+        rmSync(victim)
+        symlinkSync(join(outer, 'stolen-edit.txt'), victim)
+      },
     )
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    rmSync(victim)
-    symlinkSync(join(outer, 'stolen-edit.txt'), victim)
-    releaseHold()
-    await hold
-
-    const result = await editPromise
     assert.equal(!!result.isError, false, '新契约下 edit 经软链读改写应成功')
     assert.equal(readFileSync(join(outer, 'stolen-edit.txt'), 'utf8'), 'hello ESCAPED world')
   })

@@ -196,10 +196,10 @@ test('时间线单行与工作台紧凑卡均有实时内容也不内联展开�
     input: { prompt: '本次任务' }, result: '原始工具输出', artifactRef: 'art_original',
   }))
   const assertCompact = () => {
-    assert.equal(host.querySelector('.subagent-live-stream'), null, '不能显示内联实时流')
-    assert.equal(host.querySelector('.subagent-live-card-expanded'), null, '不能使用展开态样式')
-    assert.equal(host.querySelector('details'), null, '不能提供原始调用详情的展开入口')
-    assert.equal(host.querySelector('[aria-expanded]'), null, '不能有展开控件')
+    assert.ok(host.querySelector('.subagent-live-stream') === null, '不能显示内联实时流')
+    assert.ok(host.querySelector('.subagent-live-card-expanded') === null, '不能使用展开态样式')
+    assert.ok(host.querySelector('details') === null, '不能提供原始调用详情的展开入口')
+    assert.ok(host.querySelector('[aria-expanded]') === null, '不能有展开控件')
   }
   try {
     assertCompact()
@@ -240,14 +240,14 @@ test('历史续接行不展开详情，点击统一打开子会话抽屉', { tim
     assert.equal(row.classList.contains('trace-row-error'), true)
     assert.match(row.textContent!, /已在下文续接/)
     assert.match(row.textContent!, /异常/)
-    assert.equal(host.querySelector('details'), null)
+    assert.ok(host.querySelector('details') === null)
     assert.equal(row.getAttribute('aria-expanded'), null, '直连抽屉的行不设展开态')
     await act(async () => { row.click() })
     assert.deepEqual(spy.drawerCalls, [11])
     assert.deepEqual(spy.screenCalls, [])
     assert.deepEqual(spy.splitCalls, [])
-    assert.equal(host.querySelector('details'), null, '打开后不能产生内联展开详情')
-    assert.equal(host.querySelector('.subagent-live-stream'), null)
+    assert.ok(host.querySelector('details') === null, '打开后不能产生内联展开详情')
+    assert.ok(host.querySelector('.subagent-live-stream') === null)
   } finally { unmount() }
 })
 
@@ -274,16 +274,16 @@ test('外部子代理在工作台渲染摘要（无原生子会话且不虚构�
   }))
   try {
     const row = host.querySelector('button.workflow-trace-row-btn') as HTMLElement | null
-    assert.ok(row, '时间线渲染单行轨迹')
-    assert.match(row!.textContent ?? '', /外部代理/)
-    await act(async () => { row!.click() })
+    assert.ok(row !== null, '时间线渲染单行轨迹')
+    assert.match(row.textContent ?? '', /外部代理/)
+    await act(async () => { row.click() })
     assert.deepEqual(spy.drawerCalls, [], '外部任务不能虚构原生子会话')
     assert.deepEqual(spy.workbenchCalls, ['plugin:builtin:workflow/tasks'], '有关联 run 时点击打开工作台查看详情')
 
     await rerender(e(Panel, { conversation: summary(1, 'idle') }))
-    assert.ok(host.querySelector('.subagent-external-card'), '工作台渲染 ExternalRunSummary')
-    assert.equal(host.querySelector('details'), null)
-    assert.equal(host.querySelector('.subagent-live-card-expanded'), null)
+    assert.ok(host.querySelector('.subagent-external-card') !== null, '工作台渲染 ExternalRunSummary')
+    assert.ok(host.querySelector('details') === null)
+    assert.ok(host.querySelector('.subagent-live-card-expanded') === null)
     assert.deepEqual(spy.drawerCalls, [], '外部任务不能虚构原生子会话')
   } finally { unmount() }
 })

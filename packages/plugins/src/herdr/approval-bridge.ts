@@ -72,14 +72,21 @@ export interface ApprovalBridgePort {
   cancelAskQuietly(askId: string, reason: 'cancelled' | 'superseded'): Promise<void>
   /** 轮询间隔（测试可缩短；生产缺省 100ms）。用于 AskDoc 存续复核。 */
   pollIntervalMs: number
+  /** Ask 存续轮询瞬时故障退避基数与上限（测试可缩短；生产缺省 500ms / 4000ms）。 */
+  askPollTransientBackoffBaseMs?: number
+  askPollTransientBackoffCapMs?: number
+  /** abort 后销单退避上限（测试可缩短；生产缺省 3200ms）。 */
+  abortCancelBackoffCapMs?: number
 }
 
 export class ApprovalBridge {
   /** abort 后循环销单的最大尝试次数（防 cancel 持续失败时重试+通知风暴；剩余兑底交给 closePane）。 */
   private static readonly MAX_ABORT_CANCEL_ATTEMPTS = 5
-  private static readonly ABORT_CANCEL_BACKOFF_CAP_MS = 3_200
+  private static readonly DEFAULT_ABORT_CANCEL_BACKOFF_CAP_MS = 3_200
   /** Ask 存续复核对瞬时故障（herdr_timeout/节点闪断）的最大连续容忍次数（退避重试）；超过才销单并显式失败。 */
   private static readonly MAX_ASK_POLL_TRANSIENT_FAILURES = 6
+  private static readonly DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_BASE_MS = 500
+  private static readonly DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_CAP_MS = 4_000
 
   /** send_keys CAS 能力探测结果（同一启用周期内按 target 冻结）。 */
   private readonly sendKeysCasSupport = new Map<string, boolean>()
@@ -205,8 +212,10 @@ export class ApprovalBridge {
           if (abortCancelAttempts >= ApprovalBridge.MAX_ABORT_CANCEL_ATTEMPTS) return
           if (abortCancelAttempts > 0) {
             try {
+              const abortCancelBackoffCapMs =
+                this.port.abortCancelBackoffCapMs ?? ApprovalBridge.DEFAULT_ABORT_CANCEL_BACKOFF_CAP_MS
               await delay(
-                Math.min(this.port.pollIntervalMs * 2 ** abortCancelAttempts, ApprovalBridge.ABORT_CANCEL_BACKOFF_CAP_MS),
+                Math.min(this.port.pollIntervalMs * 2 ** abortCancelAttempts, abortCancelBackoffCapMs),
                 undefined,
                 { signal: monitor.signal },
               )
@@ -233,8 +242,12 @@ export class ApprovalBridge {
             throw error
           }
           try {
+            const backoffBaseMs =
+              this.port.askPollTransientBackoffBaseMs ?? ApprovalBridge.DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_BASE_MS
+            const backoffCapMs =
+              this.port.askPollTransientBackoffCapMs ?? ApprovalBridge.DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_CAP_MS
             await delay(
-              Math.min(500 * 2 ** (transientFailures - 1), 4_000),
+              Math.min(backoffBaseMs * 2 ** (transientFailures - 1), backoffCapMs),
               undefined,
               { signal: monitor.signal },
             )

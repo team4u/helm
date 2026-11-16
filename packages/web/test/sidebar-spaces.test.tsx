@@ -283,7 +283,7 @@ test('Sidebar 智能体平铺：0 会话智能体直接平铺可见，不收进�
   render(store, e(Sidebar))
   await act(async () => {})
 
-  assert.equal(document.body.querySelector('.sidebar-idle-group'), null, '不渲染闲置智能体折叠区')
+  assert.ok(document.body.querySelector('.sidebar-idle-group') === null, '不渲染闲置智能体折叠区')
   const labels = [...document.body.querySelectorAll('.agent-standing-row .nav-item-label')].map((el) => el.textContent)
   assert.deepEqual(labels, ['个人助理', '编码专员', '写作助手'], '0 会话智能体与活跃智能体稳定平铺在同一列表')
 })

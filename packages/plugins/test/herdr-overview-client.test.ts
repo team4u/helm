@@ -190,8 +190,8 @@ describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
     const mounted = mountHerdrOverview(doc)
     try {
       // 1. 禁止 .pane-actions 不可折行陷阱与原生 <select>
-      assert.equal(mounted.container.querySelector('.pane-actions'), null, '工具栏与筛选栏不得复用不可折行的 .pane-actions')
-      assert.equal(mounted.container.querySelector('select'), null, '严禁使用原生 <select>')
+      assert.ok(mounted.container.querySelector('.pane-actions') === null, '工具栏与筛选栏不得复用不可折行的 .pane-actions')
+      assert.ok(mounted.container.querySelector('select') === null, '严禁使用原生 <select>')
       assert.ok(mounted.container.querySelector('.herdr-toolbar-stats') !== null)
       assert.ok(mounted.container.querySelector('.herdr-toolbar-actions') !== null)
 

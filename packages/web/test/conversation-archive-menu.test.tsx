@@ -186,7 +186,7 @@ test('明细菜单归档资格：bot 托管与子代理派生会话不渲染归�
   await openMenu()
   const archiveItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
     .find((el) => el.textContent?.includes('归档会话'))
-  assert.equal(archiveItem, undefined, 'bot 托管会话不得提供归档入口')
+  assert.ok(archiveItem === undefined, 'bot 托管会话不得提供归档入口')
 
   window.history.replaceState(null, '', '#/c/2')
   await act(async () => {
@@ -196,5 +196,5 @@ test('明细菜单归档资格：bot 托管与子代理派生会话不渲染归�
   await openMenu()
   const derivedItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
     .find((el) => el.textContent?.includes('归档会话'))
-  assert.equal(derivedItem, undefined, '子代理派生会话不得提供归档入口')
+  assert.ok(derivedItem === undefined, '子代理派生会话不得提供归档入口')
 })

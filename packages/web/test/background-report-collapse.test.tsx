@@ -268,14 +268,14 @@ test('card: 默认收起（与宿主 .trace-row 同构单行），完整结果�
   const { host, unmount } = await mountCard(entry, ctx)
 
   const traceEntry = host.querySelector('.trace-entry')
-  assert.ok(traceEntry, '渲染宿主同构 .trace-entry 容器')
+  assert.ok(traceEntry !== null, '渲染宿主同构 .trace-entry 容器')
   const row = host.querySelector('.trace-row')
-  assert.ok(row, '渲染 .trace-row 单行回执')
-  assert.equal(row!.classList.contains('trace-row-error'), false, '正常完成态不带错误高亮')
-  assert.match(row!.querySelector('.trace-tool-name')?.textContent ?? '', /^子代理汇报$/)
-  assert.match(row!.querySelector('.trace-row-right')?.textContent ?? '', /已完成/)
-  assert.equal(row!.textContent?.includes('wf_abc123'), false, '收起态不常驻 runId')
-  assert.equal(row!.querySelector('.trace-tool-summary')?.textContent, '首行结论')
+  assert.ok(row !== null, '渲染 .trace-row 单行回执')
+  assert.equal(row.classList.contains('trace-row-error'), false, '正常完成态不带错误高亮')
+  assert.match(row.querySelector('.trace-tool-name')?.textContent ?? '', /^子代理汇报$/)
+  assert.match(row.querySelector('.trace-row-right')?.textContent ?? '', /已完成/)
+  assert.equal(row.textContent?.includes('wf_abc123'), false, '收起态不常驻 runId')
+  assert.equal(row.querySelector('.trace-tool-summary')?.textContent, '首行结论')
 
   const toggle = host.querySelector<HTMLButtonElement>('button.workflow-trace-toggle')
   assert.ok(toggle, '折叠开关存在（左侧内容触发区兼任）')
@@ -290,24 +290,24 @@ test('card: 默认收起（与宿主 .trace-row 同构单行），完整结果�
 
   // 收起态不挂载完整正文；复制为图标动作（aria-label 明确，不常驻文字）。
   assert.equal(host.textContent?.includes('详细正文第二段'), false)
-  assert.equal(host.querySelector('.workflow-report-expanded'), null)
-  const copyBtn = row!.querySelector('button[aria-label="复制"]')
-  assert.ok(copyBtn, '复制原文图标动作在右侧动作区')
+  assert.ok(host.querySelector('.workflow-report-expanded') === null)
+  const copyBtn = row.querySelector('button[aria-label="复制"]')
+  assert.ok(copyBtn !== null, '复制原文图标动作在右侧动作区')
   assert.equal(copyBtn!.textContent?.includes('复制原文'), false, '不得常驻文字按钮')
 
   await act(async () => { toggle!.focus() })
   act(() => toggle!.click())
   assert.equal(toggle!.getAttribute('aria-expanded'), 'true')
   const expanded = host.querySelector('.workflow-report-expanded')
-  assert.ok(expanded, '展开后挂载详情面板')
-  assert.equal(expanded!.textContent?.includes('wf_abc123'), true, '展开后展示完整 runId')
-  assert.equal(expanded!.textContent?.includes('详细正文第二段'), true)
-  assert.match(expanded!.textContent ?? '', /结果正文/)
-  assert.equal(document.activeElement, toggle, '展开时折叠控件保留焦点与同一节点')
+  assert.ok(expanded !== null, '展开后挂载详情面板')
+  assert.equal(expanded.textContent?.includes('wf_abc123'), true, '展开后展示完整 runId')
+  assert.equal(expanded.textContent?.includes('详细正文第二段'), true)
+  assert.match(expanded.textContent ?? '', /结果正文/)
+  assert.ok(document.activeElement === toggle, '展开时折叠控件保留焦点与同一节点')
 
   act(() => toggle!.click())
   assert.equal(toggle!.getAttribute('aria-expanded'), 'false')
-  assert.equal(host.querySelector('.workflow-report-expanded'), null)
+  assert.ok(host.querySelector('.workflow-report-expanded') === null)
   unmount()
 })
 
@@ -374,7 +374,7 @@ test('card: execution.conversationId 才给子会话入口（图标动作打开�
   const spy = drawerSpy()
   // 无 execution：不渲染导航按钮。
   const plain = await mountCard(makeReportEntry({ report: { result: 'ok' } }), spy.ctx)
-  assert.equal(plain.host.querySelector('button[aria-label^="打开子会话 #"]'), null)
+  assert.ok(plain.host.querySelector('button[aria-label^="打开子会话 #"]') === null)
   assert.equal(plain.host.textContent?.includes('打开子会话'), false)
   plain.unmount()
 
@@ -529,7 +529,7 @@ test('HumanMessage: 排队 agent 长文折叠可展开收起，复制入口保�
 
   act(() => expand!.click())
   assert.equal(expand!.isConnected, true, '展开时保留同一个按钮')
-  assert.equal(document.activeElement, expand, '展开时保留键盘焦点')
+  assert.ok(document.activeElement === expand, '展开时保留键盘焦点')
   const openPill = host.querySelector('.msg-human-pill-collapsible')
   assert.ok(openPill!.textContent?.includes('otherRunningTasks'), '展开后可见全文')
   assert.equal(openPill!.textContent?.includes('展开全文'), false)
@@ -537,7 +537,7 @@ test('HumanMessage: 排队 agent 长文折叠可展开收起，复制入口保�
   assert.ok(collapse, '收起按钮存在')
   assert.equal(collapse!.getAttribute('aria-expanded'), 'true')
   act(() => collapse!.click())
-  assert.equal(document.activeElement, expand, '收起时保留键盘焦点')
+  assert.ok(document.activeElement === expand, '收起时保留键盘焦点')
   assert.equal(host.querySelector('.msg-human-pill-collapsible')?.textContent?.includes('otherRunningTasks'), false)
 
   // 人类排队长文与正式消息不折叠。

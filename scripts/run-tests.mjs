@@ -24,7 +24,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const DEFAULT_SUITE_TIMEOUT_MS = 10 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
@@ -87,13 +87,88 @@ if (childEnv.TSX_TSCONFIG_PATH === undefined) {
   childEnv.TSX_TSCONFIG_PATH = path.join(repoRoot, 'tsconfig.dev.json');
 }
 
+// 注入 V8 堆上限与 safe-test-assert preload（禁止注入任何 HELM_* 变量）。
+{
+  const preloadUrl = pathToFileURL(path.join(repoRoot, 'scripts', 'lib', 'safe-test-assert.mjs')).href;
+  const existing = childEnv.NODE_OPTIONS?.trim() ?? '';
+  const parts = existing ? [existing] : [];
+  if (!/(?:^|\s)--max-old-space-size(?:=|\s|$)/.test(existing)) {
+    parts.push('--max-old-space-size=1536');
+  }
+  const importFlag = `--import=${preloadUrl}`;
+  if (!existing.includes(importFlag)) {
+    parts.push(importFlag);
+  }
+  childEnv.NODE_OPTIONS = parts.join(' ');
+}
+
+const runnerArgs = [
+  tsxCli,
+  '--test',
+  '--test-timeout=20000',
+  ...forwardArgs,
+];
+
 // 无 shell 参与：参数逐个透传，天然免疫字符串拼接注入；glob 交给 tsx / node test runner 展开。
-const child = spawn(process.execPath, [tsxCli, '--test', '--test-timeout=20000', ...forwardArgs], {
+const child = spawn(process.execPath, runnerArgs, {
   stdio: 'inherit',
   env: childEnv,
   cwd: repoRoot,
   detached: process.platform !== 'win32', // POSIX 独立进程组，才能用 kill(-pid) 杀整棵树
 });
+
+// POSIX 父进程暴毙看门狗：防 run-tests.mjs 被 SIGKILL 后留下 PPID=1 孤儿测试进程组。
+let watchdog = null;
+if (process.platform !== 'win32' && child.pid != null) {
+  const watchdogEnv = { ...process.env };
+  delete watchdogEnv.NODE_OPTIONS;
+  const watchdogScript = `
+    const pid = ${child.pid};
+    let ok = false;
+    let buf = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+      buf += chunk;
+      if (buf.includes('ok')) {
+        ok = true;
+        process.exit(0);
+      }
+    });
+    process.stdin.on('end', () => {
+      if (ok) process.exit(0);
+      try {
+        process.kill(-pid, 'SIGTERM');
+      } catch (err) {
+        if (err && err.code === 'ESRCH') process.exit(0);
+      }
+      setTimeout(() => {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          // 进程组已排空
+        }
+        process.exit(0);
+      }, 1000);
+    });
+  `;
+  watchdog = spawn(process.execPath, ['-e', watchdogScript], {
+    stdio: ['pipe', 'ignore', 'ignore'],
+    env: watchdogEnv,
+    detached: true,
+  });
+  watchdog.on('error', () => {});
+  watchdog.stdin?.on('error', () => {});
+  watchdog.unref();
+}
+
+function disarmWatchdog() {
+  if (!watchdog?.stdin || watchdog.stdin.destroyed) return;
+  try {
+    watchdog.stdin.end('ok');
+  } catch {
+    // 忽略已关闭管道
+  }
+}
 
 let suiteTimer = null;
 let graceTimer = null;
@@ -154,6 +229,7 @@ function terminate(reason, exitCode, signal = 'SIGTERM') {
   killTree(signal);
   lastResortTimer = setTimeout(() => {
     console.error('[run-tests] 终止后迟迟未收到退出事件，强制退出。');
+    disarmWatchdog();
     process.exit(forcedExitCode);
   }, LAST_RESORT_MS);
 }
@@ -161,6 +237,7 @@ function terminate(reason, exitCode, signal = 'SIGTERM') {
 child.on('error', (err) => {
   clearTimers();
   console.error('[run-tests] 启动测试进程失败:', err);
+  disarmWatchdog();
   process.exit(1);
 });
 
@@ -172,6 +249,7 @@ child.on('exit', (code, signal) => {
     // 轮询组排空后才退。Windows 无组信号，taskkill /T /F 已杀树，维持即退。
     if (process.platform === 'win32') {
       console.error(`[run-tests] 已强制终止，耗时 ${elapsed}s，退出 ${forcedExitCode}`);
+      disarmWatchdog();
       process.exit(forcedExitCode);
     }
     if (groupWatchTimer !== null) return;
@@ -181,12 +259,14 @@ child.on('exit', (code, signal) => {
           `[run-tests] 已强制终止，耗时 ${((Date.now() - startMs) / 1000).toFixed(1)}s，` +
             `owned 测试进程组已排空，退出 ${forcedExitCode}`,
         );
+        disarmWatchdog();
         process.exit(forcedExitCode);
       }
     }, GROUP_POLL_MS);
     return;
   }
   clearTimers();
+  disarmWatchdog();
   if (code !== null) {
     console.error(`[run-tests] 套件 ${elapsed}s 结束，退出码 ${code}`);
     process.exit(code);
@@ -196,8 +276,10 @@ child.on('exit', (code, signal) => {
   process.exit(signalExit);
 });
 
-// POSIX 下子进程在独立进程组，Ctrl+C 不会自动送达，必须显式转发；Windows 控制台会广播 Ctrl+C，转发是幂等兜底。
+// POSIX 下子进程在独立进程组，终端/会话信号不会自动送达，必须显式转发；Windows 控制台会广播 Ctrl+C，转发是幂等兜底。
+process.on('SIGHUP', () => terminate('收到 SIGHUP', 129, 'SIGHUP'));
 process.on('SIGINT', () => terminate('收到 SIGINT', 130, 'SIGINT'));
+process.on('SIGQUIT', () => terminate('收到 SIGQUIT', 131, 'SIGQUIT'));
 process.on('SIGTERM', () => terminate('收到 SIGTERM', 143, 'SIGTERM'));
 
 suiteTimer = setTimeout(() => {
