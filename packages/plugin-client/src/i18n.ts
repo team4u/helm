@@ -13,11 +13,9 @@
  *   time (the shared module is virtualized into
  *   __helm_shared_plugin_client, exactly like React).
  *
- * Note: these hooks are exported from the SDK index and consumable by plugin
- * client code, but they are intentionally NOT yet added to
- * PLUGIN_CLIENT_SHARED_EXPORTS — that list is bi-directionally locked against
- * the built-in plugin-dev skill docs (kernel services.test), which are updated
- * by the dedicated docs phase.
+ * These hooks are exported from the SDK index and included in
+ * PLUGIN_CLIENT_SHARED_EXPORTS so compiled plugin clients can consume the
+ * host locale through the shared runtime namespace.
  *
  * No component exports in this file (Fast Refresh friendly).
  */

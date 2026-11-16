@@ -515,8 +515,8 @@ export interface PluginClientContext {
  * mechanism as React — never bundles a second React copy).
  *
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
- * - hooks: usePluginContext / usePluginDoc / usePluginSessionDoc / useToolActivity /
- *   useConversations / useConversation / usePlugins;
+ * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
+ *   useToolActivity / useConversations / useConversation / usePlugins;
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
  *   SegmentedControl / HelmIcon / ViewBoundary / Callout;
  * - lightweight layout primitives: Screen (page container + header) / ScreenSection (sectioning) /
@@ -580,6 +580,8 @@ export const RESERVED_SLASH_COMMANDS = ['new', 'clear', 'compact'] as const
 /** Single source of truth of runtime symbols exported by @helm/plugin-client for plugin client.tsx. */
 export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'usePluginContext',
+  'usePluginLocale',
+  'usePluginTranslator',
   'usePluginDoc',
   'usePluginSessionDoc',
   'useToolActivity',

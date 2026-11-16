@@ -314,7 +314,7 @@ test('helm-cli skill asset sync UI extend and conversation throw shadow capabili
   // generative-ui manual already migrate builtin:json-render plugin skill (follow start stop filter):
   // helm-cli SKILL.md must not leftover points to deleted references under drill index.
   assert.ok(!HELM_CLI_SKILL_MD.includes('references/generative-ui.md'), 'must not reference already migrate out generative-ui.md')
-  assert.ok(HELM_CLI_SKILL_MD.includes('当回合可用技能描述'), 'should by motion state skill directory choose extend output capability')
+  assert.ok(HELM_CLI_SKILL_MD.includes("the current turn's available skill descriptions"), 'the skill directory should drive extension capability output')
   for (const optionalSkill of ['generative-ui', 'app-builder']) {
     assert.ok(!HELM_CLI_SKILL_MD.includes(optionalSkill), `through use CLI skill must not point name optional skill ${optionalSkill}`)
   }
@@ -325,7 +325,7 @@ test('helm-cli skill asset sync UI extend and conversation throw shadow capabili
 
   // plugin development:ctx.ui register method contract align
   assert.ok(
-    HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(`${PLUGIN_UI_METHOD_NAMES.length} 个 ctx.ui 注册方法`),
+    HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(`Frontend ${PLUGIN_UI_METHOD_NAMES.length} ctx.ui registration methods`),
     `should document ${PLUGIN_UI_METHOD_NAMES.length} ctx.ui registration methods`,
   )
   for (const method of PLUGIN_UI_METHOD_NAMES) {
