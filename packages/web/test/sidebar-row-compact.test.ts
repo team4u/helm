@@ -6,7 +6,7 @@
  *    idle 空槽续行标题对齐不变）；
  * 2. 仅渲染 nav-status-slot 的行把 nav-item-main gap 收至 4px（标题紧贴灯槽），
  *    设置导航/视图行的图标位保持基础 8px gap；
- * 3. Agent 二级会话子列表外层缩进适度减小（margin-left 12px / padding-left 4px）。
+ * 3. Agent 二级会话子列表外层缩进适度减小（margin-left 8px / padding-left 4px）。
  * 结构契约（灯在 nav-item-label 之前、idle 空槽保留、槽位数量）由
  * background-activity.test.ts 的 SSR 断言锁定，此处只锁尺寸来源不重复断结构。
  */
@@ -58,10 +58,10 @@ test('不粗暴减全体 nav-item 内边距：紧凑只来自灯槽与 gap，行
   assert.match(item, /padding:\s*5px 10px/, '全体 nav-item 内边距保持 5px 10px 基线（防止回归成粗暴减 padding）')
 })
 
-test('Agent 二级会话子列表缩进适度减小：margin-left 12px / padding-left 4px', { timeout: 60_000 }, () => {
+test('Agent 二级会话子列表缩进适度减小：margin-left 8px / padding-left 4px', { timeout: 60_000 }, () => {
   const list = cssBlock(navigationSource, '.agent-standing-group .agent-conversations-list')
   assert.ok(list)
-  assert.match(list, /margin:\s*4px 0 2px 12px/, '外层左缩进 16px → 12px（相对一级站位行仍保留层级差）')
+  assert.match(list, /margin:\s*4px 0 2px 8px/, '外层左缩进 12px → 8px（相对一级站位行仍保留层级差）')
   assert.match(list, /padding-left:\s*4px/, '竖线导轨内缩进 6px → 4px')
 })
 
