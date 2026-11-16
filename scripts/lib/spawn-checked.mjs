@@ -1,32 +1,42 @@
 /**
- * 受管子进程执行器：check-changed 顺序执行 typecheck / 测试命令的唯一进程通道。
+ * Managed child-process executor: the single process channel through which check-changed runs
+ * typecheck / test commands sequentially.
  *
- * 为什么不用裸 spawn + child.kill：本仓库测试纪律要求「全部脚本进程不留孤儿」。
- * 与 scripts/run-tests.mjs 同机制保证整棵进程树可终止，但语义更严格：
- *   - leader 退出 ≠ 整组停止：POSIX 下持续轮询 owned 进程组（detached PGID）存活性，
- *     组内仍有成员（如忽略 SIGTERM 的孙进程）时绝不提前结算；
- *   - 子进程自身也是 supervisor（如 run-tests.mjs 会再建自己的 detached 子组 G2 并在
- *     收到信号后先排空 G2 才退出）：外层只监督自己的 owned 组 G1，G1 在子进程完成其
- *     G2 排空前不会空（leader 退出不结算）；外层给足自清理窗口（默认 25s，覆盖子进程
- *     内部 5s 宽限 + 15s last-resort）后对 G1 升级 SIGKILL；仍不空则有限 last-resort：
- *     最终 SIGKILL + unref 后按信号码结算（绝不仅 resolve 而保留活 child 句柄挂住进程）；
- *   - Windows：无进程组信号，用 taskkill /PID <pid> /T /F 杀 owned ChildProcess 的
- *     整棵树，等待 taskkill 完成并如实报告其退出码与输出（失败诊断不吞）；
- *   - 重复 SIGINT/SIGTERM 幂等：只建一轮定时器。
- * 退出码如实透传：子进程按码退出原样返回；被信号终止按 128+signal（GNU timeout 惯例）。
+ * Why not bare spawn + child.kill: this repo's test discipline requires "no script process
+ * ever leaves orphans". It shares the mechanism of scripts/run-tests.mjs to guarantee the
+ * whole process tree can be terminated, but with stricter semantics:
+ *   - leader exit ≠ whole group stopped: on POSIX the liveness of the owned process group
+ *     (detached PGID) is polled continuously; while any member remains (e.g. a grandchild
+ *     ignoring SIGTERM) it never settles early;
+ *   - the child may itself be a supervisor (e.g. run-tests.mjs creates its own detached child
+ *     group G2 and drains G2 before exiting after a signal): the outer layer only supervises
+ *     its own owned group G1, which stays non-empty until the child finishes draining G2
+ *     (leader exit does not settle); the outer layer grants a generous self-cleanup window
+ *     (default 25s, covering the child's internal 5s grace + 15s last-resort) before
+ *     escalating to SIGKILL on G1; if it is still non-empty, a bounded last-resort applies:
+ *     final SIGKILL + unref, then settle by signal code (never just resolve while keeping a
+ *     live child handle pinning the process);
+ *   - Windows: no process-group signals; taskkill /PID <pid> /T /F kills the whole tree of
+ *     the owned ChildProcess, waits for taskkill to finish and honestly reports its exit code
+ *     and output (failure diagnostics are never swallowed);
+ *   - repeated SIGINT/SIGTERM are idempotent: only one round of timers is ever created.
+ * Exit codes pass through honestly: a child exiting by code returns it verbatim; termination
+ * by signal settles as 128+signal (the GNU timeout convention).
  *
- * 包管理器调用解析（resolvePackageManagerInvoke）：Windows 下 spawn('pnpm') 因 .cmd
- * 解析问题在 shell:false 时不可用（EINVAL）；优先用 pnpm 注入的 npm_execpath 构造
- * argv，绝不拼 shell 字符串：.js/.cjs/.mjs 入口校验后缀后用当前 Node 运行；pnpm.exe
- * （官方 standalone 安装注入的可执行启动器）是真实可执行文件，直接 spawn；其余回退。
+ * Package-manager invoke resolution (resolvePackageManagerInvoke): on Windows spawn('pnpm')
+ * is unusable with shell:false due to .cmd resolution (EINVAL); prefer constructing argv from
+ * the npm_execpath injected by pnpm and never concatenate shell strings: .js/.cjs/.mjs entries
+ * run under the current Node after suffix validation; pnpm.exe (the executable launcher
+ * injected by the official standalone install) is a real executable and is spawned directly;
+ * everything else falls back.
  */
 import { spawn } from 'node:child_process';
 
-/** 默认终止时间线（毫秒）；测试可通过 timings 参数注入更短值。 */
+/** Default termination timeline (milliseconds); tests may inject shorter values via the timings parameter. */
 export const DEFAULT_KILL_TIMINGS = {
-  pollMs: 100, // owned 组存活性轮询间隔
-  cleanupGraceMs: 25_000, // 留给子进程 supervisor 自清理（run-tests: 5s 宽限 + 15s last-resort）后升级 SIGKILL
-  lastResortMs: 45_000, // 总兜底：到点强制结算，绝不无限等待
+  pollMs: 100, // poll interval for owned-group liveness
+  cleanupGraceMs: 25_000, // window for the child supervisor to self-clean (run-tests: 5s grace + 15s last-resort) before SIGKILL escalation
+  lastResortMs: 45_000, // overall fallback: settle forcibly when due; never wait forever
 };
 
 /**
@@ -35,22 +45,26 @@ export const DEFAULT_KILL_TIMINGS = {
  */
 
 /**
- * 解析本项目可用的包管理器调用 argv（跨平台，不经过 shell）。
+ * Resolve the package-manager invoke argv usable in this repo (cross-platform, no shell involved).
  * @param {NodeJS.ProcessEnv} env
  * @returns {{ cmd: string, args: string[] }}
  */
 export function resolvePackageManagerInvoke(env = process.env) {
   const execPath = env.npm_execpath;
-  // pnpm run 子进程必带 npm_execpath 指向包管理器 JS 入口；校验后缀后用当前 Node 运行，
-  // 避免 Windows .cmd 解析问题与 shell 字符串注入面。异常值一律回退 PATH 上的 pnpm
-  // （POSIX shebang 可直接 spawn；直接 node 调用脚本的 Windows 场景请通过 pnpm script 进入）。
+  // A pnpm run child process always carries npm_execpath pointing at the package-manager JS
+  // entry; run it under the current Node after suffix validation, avoiding the Windows .cmd
+  // resolution problem and the shell-string injection surface. Abnormal values fall back to
+  // pnpm on PATH (POSIX shebangs spawn directly; for direct node invocations of scripts on
+  // Windows, enter through a pnpm script).
   if (typeof execPath === 'string' && /\.(cjs|mjs|js)$/.test(execPath)) {
     return { cmd: process.execPath, args: [execPath] };
   }
-  // pnpm 官方 standalone 安装（Windows 常见）注入的 npm_execpath 指向 pnpm.exe 可执行
-  // 启动器：.exe 是真实可执行文件而非 .cmd 脚本，无需 shell、无注入面，与 .cjs 分支
-  // 同等信任级别，直接 spawn；若回退裸 'pnpm'，Windows 上会解析为 pnpm.cmd 导致 EINVAL。
-  // basename 按两种分隔符切分：POSIX 的 path.basename 不认反斜杠，无法解析 Windows 路径。
+  // The npm_execpath injected by the official pnpm standalone install (common on Windows)
+  // points at the pnpm.exe executable launcher: an .exe is a real executable, not a .cmd
+  // script — no shell, no injection surface, the same trust level as the .cjs branch, so
+  // spawn it directly; falling back to bare 'pnpm' would resolve to pnpm.cmd on Windows and
+  // hit EINVAL. basename splits on both separators: POSIX path.basename does not recognize
+  // backslashes and cannot parse Windows paths.
   if (typeof execPath === 'string' && execPath.split(/[\\/]/).pop()?.toLowerCase() === 'pnpm.exe') {
     return { cmd: execPath, args: [] };
   }
@@ -58,7 +72,7 @@ export function resolvePackageManagerInvoke(env = process.env) {
 }
 
 /**
- * 执行单条命令，返回其真实退出码（0 为成功）。
+ * Run a single command and return its real exit code (0 means success).
  * @param {ManagedCommand} command
  * @param {{ cwd: string, env?: NodeJS.ProcessEnv, timings?: KillTimings }} opts
  * @returns {Promise<number>}
@@ -70,11 +84,11 @@ export function runManagedCommand(command, { cwd, env, timings }) {
       cwd,
       env: env ?? process.env,
       stdio: 'inherit',
-      detached: process.platform !== 'win32', // POSIX 独立进程组，才能 kill(-pid) 杀整组
+      detached: process.platform !== 'win32', // POSIX standalone process group so kill(-pid) takes down the whole group
     });
     const label = command.label;
 
-    let terminating = false; // 已收到外部信号，进入终止流程
+    let terminating = false; // an external signal arrived; termination in progress
     let forcedExitCode = null;
     let finished = false;
     /** @type {Set<ReturnType<typeof setTimeout>>} */
@@ -95,7 +109,7 @@ export function runManagedCommand(command, { cwd, env, timings }) {
       }
     };
 
-    /** owned 组是否仍有存活成员：leader 退出不代表整组停止（孙进程可能忽略信号）。 */
+    /** Whether the owned group still has live members: leader exit does not mean the whole group stopped (grandchildren may ignore signals). */
     const groupAlive = () => {
       if (process.platform === 'win32') {
         return child.exitCode === null && child.signalCode === null;
@@ -105,7 +119,7 @@ export function runManagedCommand(command, { cwd, env, timings }) {
         process.kill(-child.pid, 0);
         return true;
       } catch (err) {
-        return err?.code !== 'ESRCH'; // EPERM 等异常仍按「存在」保守处理
+        return err?.code !== 'ESRCH'; // EPERM and similar are still conservatively treated as "alive"
       }
     };
 
@@ -114,11 +128,11 @@ export function runManagedCommand(command, { cwd, env, timings }) {
       try {
         process.kill(-child.pid, signal);
       } catch {
-        // 组已消失则无事可做。
+        // The group is already gone; nothing to do.
       }
     };
 
-    /** Windows：taskkill 杀整棵树，等待完成并如实报告失败诊断。 */
+    /** Windows: taskkill the whole tree, await completion, and honestly report failure diagnostics. */
     const windowsKillTree = () =>
       new Promise((res) => {
         if (child.pid == null) {
@@ -136,12 +150,12 @@ export function runManagedCommand(command, { cwd, env, timings }) {
           out += String(d);
         });
         tk.on('error', (err) => {
-          console.error(`[${label}] taskkill 启动失败: ${err.message}`);
+          console.error(`[${label}] taskkill failed to start: ${err.message}`);
           res();
         });
         tk.on('exit', (code) => {
           if (code !== 0) {
-            console.error(`[${label}] taskkill 退出码 ${code}: ${out.trim() || '(无输出)'}`);
+            console.error(`[${label}] taskkill exit code ${code}: ${out.trim() || '(no output)'}`);
           }
           res();
         });
@@ -153,18 +167,19 @@ export function runManagedCommand(command, { cwd, env, timings }) {
       clearAllTimers();
       process.removeListener('SIGINT', onSigint);
       process.removeListener('SIGTERM', onSigterm);
-      // last-resort 兜底时 child 可能仍存活：unref 避免活句柄把宿主进程挂住
-      //（owned 组已吃 SIGKILL，残余由 OS 收尾）。
+      // In the last-resort fallback the child may still be alive: unref so a live handle
+      // cannot pin the host process (the owned group already took SIGKILL; leftovers are
+      // reaped by the OS).
       if (child.exitCode === null && child.signalCode === null) child.unref();
       resolve(code);
     };
 
-    /** 外部信号（Ctrl+C / SIGTERM）：转发 owned 组，等子进程自清理与组排空，重复信号幂等。 */
+    /** External signal (Ctrl+C / SIGTERM): forward to the owned group, wait for the child's self-cleanup and group drain; repeated signals are idempotent. */
     const onSignal = (signal) => {
       if (finished || terminating) return;
       terminating = true;
       forcedExitCode = signal === 'SIGINT' ? 130 : 143;
-      console.error(`[${label}] 收到 ${signal}，终止子进程树（pid ${child.pid}）并等待其完成自身清理`);
+      console.error(`[${label}] received ${signal}, terminating the child process tree (pid ${child.pid}) and waiting for its own cleanup to finish`);
       if (child.pid == null) {
         finish(forcedExitCode);
         return;
@@ -175,18 +190,19 @@ export function runManagedCommand(command, { cwd, env, timings }) {
         });
       } else {
         killGroup(signal);
-        // 先给足 supervisor 子进程自清理窗口（其可能还需杀它自己的 detached 子组），
-        // 超窗仍存活才升级 SIGKILL——绝不 leader 一退出就当作整组停止。
+        // Grant the supervisor child a generous self-cleanup window first (it may still need
+        // to kill its own detached child group); escalate to SIGKILL only if it is still
+        // alive past the window — never treat leader exit as the whole group stopping.
         later(() => killGroup('SIGKILL'), t.cleanupGraceMs);
         startGroupWatch();
       }
       later(() => {
-        console.error(`[${label}] 终止后 owned 组 ${t.lastResortMs}ms 内未排空，last-resort 强制结算。`);
+        console.error(`[${label}] owned group not drained within ${t.lastResortMs}ms after termination; forcing last-resort settlement.`);
         killGroup('SIGKILL');
         finish(forcedExitCode);
       }, t.lastResortMs);
     };
-    /** 轮询 owned 组直到排空；仅组完全消失才结算（POSIX），Windows 以 child 退出为准。 */
+    /** Poll the owned group until drained; settle only when the group fully disappears (POSIX); Windows settles on child exit. */
     const startGroupWatch = () => {
       if (pollTimer || finished) return;
       pollTimer = setInterval(() => {
@@ -201,13 +217,13 @@ export function runManagedCommand(command, { cwd, env, timings }) {
 
     child.on('error', (err) => {
       if (finished) return;
-      console.error(`[${label}] 启动失败: ${err.message}`);
+      console.error(`[${label}] failed to start: ${err.message}`);
       finish(127);
     });
 
     child.on('exit', (code, signal) => {
       if (finished) return;
-      if (terminating) return; // 终止路径由组存活性轮询收尾，leader 退出不结算、不清定时器
+      if (terminating) return; // the termination path is settled by the group-liveness poll; leader exit settles nothing and clears no timers
       if (code !== null) {
         finish(code);
         return;
@@ -219,7 +235,7 @@ export function runManagedCommand(command, { cwd, env, timings }) {
 }
 
 /**
- * 顺序执行命令列表，首个失败即停并原样返回其退出码；全部通过返回 0。
+ * Run the command list sequentially: stop at the first failure and return its exit code verbatim; return 0 when all pass.
  * @param {ManagedCommand[]} commands
  * @param {{ cwd: string, env?: NodeJS.ProcessEnv, timings?: KillTimings }} opts
  * @returns {Promise<number>}
@@ -229,10 +245,10 @@ export async function runSequentially(commands, opts) {
     console.error(`\n[check-changed] ▶ ${cmd.label}`);
     const code = await runManagedCommand(cmd, opts);
     if (code !== 0) {
-      console.error(`[check-changed] ✗ ${cmd.label} 失败，退出码 ${code}（后续命令跳过）`);
+      console.error(`[check-changed] ✗ ${cmd.label} failed with exit code ${code} (remaining commands skipped)`);
       return code;
     }
-    console.error(`[check-changed] ✓ ${cmd.label} 通过`);
+    console.error(`[check-changed] ✓ ${cmd.label} passed`);
   }
   return 0;
 }

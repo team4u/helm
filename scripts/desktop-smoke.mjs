@@ -1,33 +1,38 @@
 #!/usr/bin/env node
 /**
- * 打包桌面 App 冒烟 wrapper（跨平台、纯 Node 内置模块、无第三方依赖）。
+ * Packaged desktop App smoke wrapper (cross-platform, pure Node built-ins, zero third-party deps).
  *
- * 职责边界：本脚本只负责「定位解包可执行文件 → 隔离环境拉起 → 超时杀树 → 依据
- * smoke.json 产物判定」，Electron 内部自检（renderer 加载 DOM、截图、写出
- * smoke.json）由 App 自身对 --smoke-test / --smoke-output 参数的实现承担。
+ * Responsibility boundary: this script only handles "locate the unpacked executable -> launch in
+ * an isolated environment -> kill the process tree on timeout -> judge by the smoke.json
+ * artifact"; the Electron-internal self-check (renderer DOM load, screenshot, writing
+ * smoke.json) is owned by the App's own implementation of the --smoke-test / --smoke-output
+ * arguments.
  *
- * 判定诚实性：不轻信退出码也不轻信 json 单独存在——要求 App 退出码为 0 且
- * smoke.json 中 ok === true 才算通过；超时或异常退出保留 stdout/stderr 日志与
- * 已产出的报告文件供上传诊断。
+ * Honest verdicts: trust neither the exit code alone nor the mere existence of the json —
+ * passing requires the App to exit 0 AND ok === true in smoke.json; on timeout or abnormal
+ * exit the stdout/stderr logs and any produced report files are kept for upload diagnostics.
  *
- * 用法：
+ * Usage:
  *   node scripts/desktop-smoke.mjs --packaged [--port <n>] [--release-dir <dir>] [--out <dir>] [--timeout <ms>]
- *     --packaged      对 electron-builder 解包产物冒烟（dist:dir / dist 均会生成 *-unpacked）。
- *     --port          Hub 端口，缺省 3202；仅测试隔离用（如本机 3202 有真实用户 Hub 时
- *                     显式传 --port=32020）。不做任何静默换端口：preflight 探测到端口
- *                     已被占用立即拒绝（绝不 attach 到既有服务——那会误伤真实 Hub），
- *                     换端口只能由人显式传参。
- *     --release-dir   解包产物根目录，缺省 packages/desktop/release（electron-builder.yml output）。
- *     --out           报告目录（smoke.json / 截图 / stdout.log / stderr.log / data/），缺省 <release-dir>/smoke；
- *                     每次运行先清空重建，CI 直接整目录上传。
- *     --timeout       毫秒，缺省 60_000；超时杀整棵进程树后判定失败。
+ *     --packaged      Smoke-test the electron-builder unpacked output (both dist:dir / dist produce *-unpacked).
+ *     --port          Hub port, default 3202; isolated testing only (e.g. pass --port=32020
+ *                     explicitly when a real user Hub already listens on local 3202). No silent
+ *                     port switching: if the preflight probe finds the port occupied it fails
+ *                     immediately (never attach to an existing service — that could hit a real
+ *                     Hub); switching ports only happens via an explicit human-provided flag.
+ *     --release-dir   Root dir of the unpacked output, default packages/desktop/release (electron-builder.yml output).
+ *     --out           Report dir (smoke.json / screenshot / stdout.log / stderr.log / data/), default <release-dir>/smoke;
+ *                     cleared and rebuilt on every run so CI can upload the whole directory.
+ *     --timeout       Milliseconds, default 60_000; on timeout the whole process tree is killed and the run fails.
  *
- * 环境约束（与仓库端口铁律一致）：
- *   - HELM_DATA_DIR 固定指向 <out>/data 临时目录，绝不触碰 ~/.helm；
- *   - HELM_PORT 显式固定为 --port 值（缺省 3202，本仓端口），绝不动态挑端口、
- *     绝不触碰 3000/3001/3002/3101/3102；spawn 前 preflight 确认端口空闲，占用即失败；
- *   - Linux 以 root 运行且非 CI 环境时附加 --no-sandbox（本机 root 起 Electron 的唯一合法路径）；
- *     CI runner 非 root，不传该参数，保持与真实用户环境一致。
+ * Environment constraints (aligned with the repo port rules):
+ *   - HELM_DATA_DIR is pinned to the <out>/data temp dir and never touches ~/.helm;
+ *   - HELM_PORT is pinned to the --port value (default 3202, this repo's port); no dynamic port
+ *     picking, never touching 3000/3001/3002/3101/3102; a preflight check before spawn confirms
+ *     the port is free, otherwise the run fails;
+ *   - On Linux running as root outside CI, append --no-sandbox (the only legal way to start
+ *     Electron as local root); CI runners are non-root and do not pass it, staying close to the
+ *     real user environment.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
@@ -42,12 +47,12 @@ const LOG_TAIL_LINES = 40;
 
 function usage(code) {
   const text = [
-    '用法: node scripts/desktop-smoke.mjs --packaged [--port <n>] [--release-dir <dir>] [--out <dir>] [--timeout <ms>]',
-    '  --packaged     对 electron-builder 解包 App 冒烟（linux-unpacked / mac/*.app / win-unpacked）',
-    '  --port         Hub 端口（缺省 3202；本机 3202 被占时显式传测试端口如 --port=32020，绝不静默换端口）',
-    '  --release-dir  解包产物根目录（缺省 packages/desktop/release）',
-    '  --out          报告输出目录（缺省 <release-dir>/smoke，运行前清空重建）',
-    '  --timeout      超时毫秒数（缺省 60000），超时杀进程树并判定失败',
+    'Usage: node scripts/desktop-smoke.mjs --packaged [--port <n>] [--release-dir <dir>] [--out <dir>] [--timeout <ms>]',
+    '  --packaged     Smoke-test the electron-builder unpacked App (linux-unpacked / mac/*.app / win-unpacked)',
+    '  --port         Hub port (default 3202; when local 3202 is occupied pass a test port explicitly, e.g. --port=32020; never switched silently)',
+    '  --release-dir  Root dir of the unpacked output (default packages/desktop/release)',
+    '  --out          Report output dir (default <release-dir>/smoke; cleared and rebuilt before the run)',
+    '  --timeout      Timeout in milliseconds (default 60000); on timeout the process tree is killed and the run fails',
   ].join('\n');
   (code === 0 ? console.log : console.error)(text);
   process.exit(code);
@@ -65,33 +70,35 @@ function parseArgs(argv) {
     else if (arg === '--timeout') opts.timeoutMs = Number(argv[++i]);
     else if (arg === '--help' || arg === '-h') usage(0);
     else {
-      console.error(`[desktop-smoke] 未知参数: ${arg}`);
+      console.error(`[desktop-smoke] unknown argument: ${arg}`);
       usage(2);
     }
   }
   if (!opts.packaged) {
-    console.error('[desktop-smoke] 缺少 --packaged：当前仅支持对打包解包产物冒烟（dev 模式用 pnpm --filter @helm/desktop run smoke）。');
+    console.error('[desktop-smoke] missing --packaged: only smoke-testing packaged unpacked builds is supported today (for dev mode use pnpm --filter @helm/desktop run smoke).');
     usage(2);
   }
   if (!Number.isInteger(opts.port) || opts.port < 1 || opts.port > 65535 || [3000, 3001, 3002, 3101, 3102].includes(opts.port)) {
-    console.error(`[desktop-smoke] 非法 --port 值: ${opts.port}`);
+    console.error(`[desktop-smoke] invalid --port value: ${opts.port}`);
     usage(2);
   }
   if (!Number.isFinite(opts.timeoutMs) || opts.timeoutMs <= 0) {
-    console.error(`[desktop-smoke] 非法 --timeout 值: ${argv.join(' ')}`);
+    console.error(`[desktop-smoke] invalid --timeout value: ${argv.join(' ')}`);
     usage(2);
   }
   return opts;
 }
 
-/** 按平台返回解包可执行文件的候选相对路径（electron-builder productName: Helm）。 */
+/** Return platform-specific candidate relative paths of the unpacked executable (electron-builder productName: Helm). */
 function executableCandidates() {
   switch (process.platform) {
     case 'linux':
-      // productName 首选，兜底包名小写形态，二者都探测避免对 electron-builder 命名细节撒谎。
+      // Prefer productName, fall back to the lowercase package-name form; probe both so we
+      // never lie about electron-builder naming details.
       return ['linux-unpacked/helm-desktop', 'linux-unpacked/Helm', 'linux-unpacked/helm'];
     case 'darwin':
-      // 常规单架构构建输出 mac/；同时兼容多架构并行的历史目录形态。
+      // Regular single-arch builds output mac/; also cover legacy directory shapes from
+      // parallel multi-arch builds.
       return [
         'mac/Helm.app/Contents/MacOS/Helm',
         'mac-arm64/Helm.app/Contents/MacOS/Helm',
@@ -112,20 +119,20 @@ function locateExecutable(releaseDir) {
     tried.push(full);
     if (existsSync(full)) return full;
   }
-  console.error(`[desktop-smoke] 未找到解包可执行文件（平台 ${process.platform}）。已探测：`);
+  console.error(`[desktop-smoke] unpacked executable not found (platform ${process.platform}). Probed:`);
   for (const p of tried) console.error(`  - ${p}`);
-  console.error('请先执行 pnpm --filter @helm/desktop run dist:dir（或 dist）生成解包产物。');
+  console.error('Run pnpm --filter @helm/desktop run dist:dir (or dist) first to produce the unpacked output.');
   process.exit(2);
 }
 
-/** Linux root 且非 CI 才允许 --no-sandbox；CI runner 非 root，不传以贴近真实环境。 */
+/** --no-sandbox is allowed only for Linux root outside CI; CI runners are non-root and do not pass it to stay close to the real environment. */
 function needsNoSandbox() {
   if (process.platform !== 'linux') return false;
   if (typeof process.getuid !== 'function' || process.getuid() !== 0) return false;
   return !process.env['CI'];
 }
 
-/** 杀整棵进程树：POSIX 用会话组信号（spawn detached），Windows 用 taskkill /T。 */
+/** Kill the whole process tree: POSIX uses session-group signals (spawn detached), Windows uses taskkill /T. */
 function killTree(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === 'win32') {
@@ -142,20 +149,20 @@ function killTree(child) {
 function tail(file, lines = LOG_TAIL_LINES) {
   try {
     const content = readFileSync(file, 'utf8').trimEnd();
-    if (content.length === 0) return '（空）';
+    if (content.length === 0) return '(empty)';
     return content.split('\n').slice(-lines).join('\n');
   } catch {
-    return '（不可读）';
+    return '(unreadable)';
   }
 }
 
 function fail(outDir, message) {
-  console.error(`[desktop-smoke] 失败: ${message}`);
-  console.error(`--- stdout.log 尾部 ${LOG_TAIL_LINES} 行（${path.join(outDir, 'stdout.log')}）---`);
+  console.error(`[desktop-smoke] FAILED: ${message}`);
+  console.error(`--- stdout.log last ${LOG_TAIL_LINES} lines (${path.join(outDir, 'stdout.log')}) ---`);
   console.error(tail(path.join(outDir, 'stdout.log')));
-  console.error(`--- stderr.log 尾部 ${LOG_TAIL_LINES} 行（${path.join(outDir, 'stderr.log')}）---`);
+  console.error(`--- stderr.log last ${LOG_TAIL_LINES} lines (${path.join(outDir, 'stderr.log')}) ---`);
   console.error(tail(path.join(outDir, 'stderr.log')));
-  console.error(`完整报告目录: ${outDir}`);
+  console.error(`Full report directory: ${outDir}`);
   process.exit(1);
 }
 
@@ -171,7 +178,8 @@ function runChild(child, timeoutMs) {
     };
     let graceTimer;
     let timedOut = false;
-    // 超时先杀树；杀后 5 秒仍无 exit 事件则强制收尾（僵尸/不可杀时如实报告而非悬挂）。
+    // On timeout kill the tree first; if no exit event arrives within 5s after the kill,
+    // settle forcibly (report honestly on zombies/unkillable processes instead of hanging).
     const killTimer = setTimeout(() => {
       timedOut = true;
       killTree(child);
@@ -185,32 +193,33 @@ function runChild(child, timeoutMs) {
 function validateSmokeJson(outDir) {
   const smokePath = path.join(outDir, 'smoke.json');
   if (!existsSync(smokePath)) {
-    fail(outDir, `App 未生成 ${smokePath}（--smoke-test 自检未执行或未写出报告）`);
+    fail(outDir, `App did not produce ${smokePath} (the --smoke-test self-check did not run or wrote no report)`);
   }
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(smokePath, 'utf8'));
   } catch (error) {
-    fail(outDir, `smoke.json 不是合法 JSON: ${error.message}`);
+    fail(outDir, `smoke.json is not valid JSON: ${error.message}`);
   }
-  // 判定依据全部来自报告产物，不轻信退出码：ok = 自检总判，nativeCompiler =
-  // workflow/mermaid 原生编译器真实可用（缺 false 都算未通过，不降级）。
+  // The verdict comes entirely from the report artifact, never trusting the exit code alone:
+  // ok = the overall self-check verdict, nativeCompiler = the workflow/mermaid native
+  // compilers are genuinely usable (a missing or false value counts as failure, no downgrade).
   if (parsed === null || typeof parsed !== 'object' || parsed.ok !== true) {
-    fail(outDir, `smoke.json 判定未通过（期望 ok:true）: ${JSON.stringify(parsed)}`);
+    fail(outDir, `smoke.json verdict failed (expected ok:true): ${JSON.stringify(parsed)}`);
   }
   for (const field of ['nativeCompiler', 'rendererIsolated', 'portReleased']) {
-    if (parsed[field] !== true) fail(outDir, `smoke.json 缺少通过的 ${field} 检查：${JSON.stringify(parsed)}`);
+    if (parsed[field] !== true) fail(outDir, `smoke.json lacks a passing ${field} check: ${JSON.stringify(parsed)}`);
   }
   const screenshot = path.join(outDir, 'window.png');
-  if (!existsSync(screenshot) || statSync(screenshot).size === 0) fail(outDir, '未生成窗口截图 window.png');
+  if (!existsSync(screenshot) || statSync(screenshot).size === 0) fail(outDir, 'window screenshot window.png was not produced');
   return parsed;
 }
 
-/** preflight 通过后拉起 App、等待退出、写日志并依 smoke.json 判定。 */
+/** After preflight passes: launch the App, wait for exit, write logs, and judge by smoke.json. */
 function runSmoke(exe, appArgs, env, outDir, opts) {
   const stdoutLog = createWriteStream(path.join(outDir, 'stdout.log'), { flags: 'a' });
   const stderrLog = createWriteStream(path.join(outDir, 'stderr.log'), { flags: 'a' });
-  // detached（POSIX）建新会话组：超时杀树可连带 Hub 子进程一起终止。
+  // detached (POSIX) creates a new session group so a timeout kill also takes down Hub child processes.
   const child = spawn(exe, appArgs, {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -231,19 +240,19 @@ function runSmoke(exe, appArgs, env, outDir, opts) {
       new Promise((resolve) => stderrLog.end(resolve)),
     ]);
     if (result.error) {
-      fail(outDir, `无法启动 ${exe}: ${result.error.message}`);
+      fail(outDir, `failed to start ${exe}: ${result.error.message}`);
     }
     if (result.timedOut) {
-      fail(outDir, `超时（>${opts.timeoutMs}ms），已杀进程树；App 未在期限内完成自检`);
+      fail(outDir, `timed out (>${opts.timeoutMs}ms), process tree killed; the App did not finish its self-check within the deadline`);
     }
     if (result.code !== 0) {
-      fail(outDir, `App 退出码非 0（code=${result.code} signal=${result.signal ?? 'null'}）`);
+      fail(outDir, `App exited with a non-zero code (code=${result.code} signal=${result.signal ?? 'null'})`);
     }
     const report = validateSmokeJson(outDir);
     const artifacts = readdirSync(outDir).filter((name) => !name.startsWith('data-'));
     console.log(`[desktop-smoke] smoke.json: ${JSON.stringify(report)}`);
-    console.log(`[desktop-smoke] 报告文件: ${artifacts.join(', ')}`);
-    console.log('[desktop-smoke] SMOKE PASS（打包 App 自检通过）');
+    console.log(`[desktop-smoke] report files: ${artifacts.join(', ')}`);
+    console.log('[desktop-smoke] SMOKE PASS (packaged App self-check passed)');
     process.exit(0);
   });
 }
@@ -255,38 +264,40 @@ function main() {
 
   const exe = locateExecutable(releaseDir);
 
-  // 仅清理本脚本创建的报告文件；数据目录逐次新建，避免删除用户指定目录中的其他文件。
+  // Only remove report files created by this script; the data dir is newly created each run so
+  // other files in a user-specified directory are never deleted.
   mkdirSync(outDir, { recursive: true });
   for (const file of ['smoke.json', 'window.png', 'stdout.log', 'stderr.log']) rmSync(path.join(outDir, file), { force: true });
   const dataDir = mkdtempSync(path.join(outDir, 'data-'));
 
   const appArgs = ['--smoke-test', `--smoke-output=${outDir}`];
-  // Xvfb 不提供真实 GPU；显式使用软件合成，避免 capturePage 的 UnknownVizError。
+  // Xvfb provides no real GPU; force software compositing to avoid UnknownVizError from capturePage.
   if (process.platform === 'linux') appArgs.push('--disable-gpu');
   if (needsNoSandbox()) appArgs.unshift('--no-sandbox');
 
-  // 显式固定端口与数据目录：不继承宿主环境里的 HELM_PORT/HELM_DATA_DIR 漂移。
+  // Pin the port and data dir explicitly: never inherit HELM_PORT/HELM_DATA_DIR drift from the host environment.
   const port = String(opts.port);
   const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^HELM_/i.test(key) && key !== 'ELECTRON_RUN_AS_NODE' && key !== 'NODE_PATH'));
   const env = { ...baseEnv, HELM_DATA_DIR: dataDir, HELM_DESKTOP_DATA_DIR: dataDir, HELM_CWD: dataDir, HELM_PORT: port, HELM_DESKTOP_PORT: port };
 
-  console.log(`[desktop-smoke] 可执行文件: ${exe}`);
-  console.log(`[desktop-smoke] 参数: ${appArgs.join(' ')}`);
+  console.log(`[desktop-smoke] executable: ${exe}`);
+  console.log(`[desktop-smoke] args: ${appArgs.join(' ')}`);
   console.log(`[desktop-smoke] HELM_PORT=${port} HELM_DATA_DIR=${dataDir}`);
-  console.log(`[desktop-smoke] 超时: ${opts.timeoutMs}ms，报告目录: ${outDir}`);
+  console.log(`[desktop-smoke] timeout: ${opts.timeoutMs}ms, report dir: ${outDir}`);
 
-  // 端口 preflight：已被占用立即拒绝——App 的 attach-or-spawn 语义遇到占用端口会
-  // attach 到既有服务（可能是本机真实用户 Hub），既测不到打包 App 也可能误伤对方；
-  // 绝不静默挑别的端口，换端口必须由人显式传 --port。
+  // Port preflight: refuse immediately when occupied — the App's attach-or-spawn semantics
+  // would attach to whatever already listens on the port (possibly a real local user Hub),
+  // testing neither the packaged App and possibly hurting the other side; never silently pick
+  // another port; switching ports must come from an explicit human-provided --port.
   preflightPortFree(opts.port).then(
     () => runSmoke(exe, appArgs, env, outDir, opts),
     (error) => {
-      fail(outDir, `端口 ${opts.port} 已被占用（${error.message}）：拒绝 attach 既有服务。本机 3202 有真实 Hub 时请显式传 --port=<测试端口>（如 --port=32020）。`);
+      fail(outDir, `Port ${opts.port} is already in use (${error.message}): refusing to attach to an existing service. When a real Hub listens on local 3202, pass an explicit test --port (e.g. --port=32020).`);
     },
   );
 }
 
-/** 探测端口空闲：能以监听态绑定即视为空闲后立即释放；绑定失败说明被占用。 */
+/** Probe that the port is free: binding in listen state counts as free (released immediately); a bind failure means it is occupied. */
 function preflightPortFree(port) {
   return new Promise((resolve, reject) => {
     const server = createServer();
