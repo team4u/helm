@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { copyToClipboard } from './clipboard.js'
 import { HelmIcon } from './icons.js'
 
-/** 复制按钮：复制成功切换 check 图标 1.5s；失败显示警告提示防静默吞没。 */
+/**
+ * Copy button: switches to a check icon for 1.5s on success; shows a warning
+ * hint on failure so errors are never silently swallowed. The fixed texts
+ * below are SDK defaults in English; pass the label prop to override them for
+ * host-side localization.
+ */
 export function CopyButton({ text, label, className = 'btn btn-ghost btn-sm' }: { text: string; label?: string; className?: string }) {
   const [copied, setCopied] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -35,11 +40,11 @@ export function CopyButton({ text, label, className = 'btn btn-ghost btn-sm' }: 
         e.stopPropagation()
         void onCopy()
       }}
-      title={copied ? '已复制' : failed ? '复制失败（环境限制，请手动选择复制）' : '复制'}
-      aria-label={copied ? '已复制' : failed ? '复制失败' : (label ?? '复制')}
+      title={copied ? 'Copied' : failed ? 'Copy failed (environment restriction; select and copy manually)' : 'Copy'}
+      aria-label={copied ? 'Copied' : failed ? 'Copy failed' : (label ?? 'Copy')}
     >
       <HelmIcon name={copied ? 'check' : failed ? 'alert-circle' : 'copy'} size={12} />
-      {label !== undefined ? <span>{copied ? '已复制' : failed ? '复制失败' : label}</span> : null}
+      {label !== undefined ? <span>{copied ? 'Copied' : failed ? 'Copy failed' : label}</span> : null}
     </button>
   )
 }

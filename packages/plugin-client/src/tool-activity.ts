@@ -2,16 +2,19 @@ import { createContext, useContext, useEffect } from 'react'
 
 export interface ToolActivityRegistry {
   activeToolCallIds: ReadonlySet<string>
-  /** 每个挂载来源获得独立登记；返回值只释放本次来源，不清除同 callId 的其他来源。 */
+  /** Each mounted source gets an independent registration; the returned value only releases this source, not other sources of the same callId. */
   registerActivity(callId: string): () => void
 }
 
 export const ToolActivityContext = createContext<ToolActivityRegistry | undefined>(undefined)
 
 /**
- * 向所在时间线回合报告工具的真实后台活动，控制该回合的复制/分叉展示。
- * callId 缺失或不在时间线 Provider 内时不登记，也不创建全局状态。
- * 状态变化、callId 变化和组件卸载时自动释放本来源；工作台中的组件不影响时间线。
+ * Reports real background tool activity to the containing timeline turn,
+ * controlling the copy/fork affordances of that turn. When callId is missing,
+ * or the component is not inside the timeline Provider, nothing is registered
+ * and no global state is created. Changes of state or callId and unmounting
+ * release this source automatically; components inside the workbench do not
+ * affect the timeline.
  */
 export function useToolActivity(callId: string | undefined, active: boolean): void {
   const register = useContext(ToolActivityContext)?.registerActivity

@@ -1,6 +1,6 @@
 /**
- * 产物 URL 识别与 Markdown URL 安全转换。
- * 纯函数模块，遵守 Fast Refresh 约束（不含 React 组件）。
+ * Artifact URL recognition and safe Markdown URL transformation.
+ * Pure-function module, obeys the Fast Refresh constraint (no React components).
  */
 import { defaultUrlTransform } from 'react-markdown'
 
@@ -8,8 +8,8 @@ const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const CONTENT_URL_RE = /^\/api\/artifacts\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/content(?:\?.*)?$/
 
 /**
- * 识别 artifact:<id> 与 /api/artifacts/<id>/content(?...)?。
- * id 需满足 /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/，非法或不匹配返回 null。
+ * Recognizes artifact:<id> and /api/artifacts/<id>/content(?...)?.
+ * The id must satisfy /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/; invalid or non-matching input returns null.
  */
 export function parseArtifactUrl(raw: string | undefined): string | null {
   if (typeof raw !== 'string') return null
@@ -26,7 +26,9 @@ export function parseArtifactUrl(raw: string | undefined): string | null {
 }
 
 /**
- * Markdown URL 转换：命中产物链接时放行（保留协议头），其余走 react-markdown 默认安全拦截（过滤 javascript: 等）。
+ * Markdown URL transform: artifact links are allowed through (protocol prefix
+ * preserved); everything else goes through react-markdown's default safe
+ * interception (filters javascript: etc.).
  */
 export function markdownUrlTransform(url: string): string {
   if (parseArtifactUrl(url) !== null) {

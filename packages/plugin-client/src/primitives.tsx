@@ -1,10 +1,13 @@
 /**
- * 插件共享的轻量布局原语（组合式、无状态、SSR 安全）：
- * - 全部复用宿主 styles.css 通用设计系统类（.screen-container / .screen-header /
- *   .helm-table-wrap / .helm-table / .table-empty / .loading-state / .kv-grid 等），
- *   不引入新 CSS 主题，不做黑盒 columns/data 表格——结构与单元格仍由 JSX 表达；
- * - 不使用 Portal、不触碰 document / window，renderToString 可直接渲染；
- * - 文件只导出组件与 TS 类型（宿主 Fast Refresh 契约同源）。
+ * Lightweight layout primitives shared by plugins (composable, stateless, SSR safe):
+ * - All of them reuse the generic design-system classes from the host styles.css
+ *   (.screen-container / .screen-header / .helm-table-wrap / .helm-table /
+ *   .table-empty / .loading-state / .kv-grid, etc.). No new CSS theme is
+ *   introduced and there is no opaque columns/data table — structure and cells
+ *   are still expressed as JSX;
+ * - No Portal, no document / window access, renderToString works directly;
+ * - This file only exports components and TS types (same contract as the host
+ *   Fast Refresh rule).
  */
 import { Children, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { HelmIcon } from './icons.js'
@@ -14,27 +17,27 @@ function joinClass(...parts: Array<string | undefined>): string {
 }
 
 // ---------------------------------------------------------------------------
-// Screen：页面容器 / header / title / subtitle
+// Screen: page container / header / title / subtitle
 // ---------------------------------------------------------------------------
 
 export interface ScreenProps {
-  /** 容器附加类名（业务特异结构扩展点）。 */
+  /** Extra container class name (extension point for custom layouts). */
   className?: string
-  /** 页头内容：缺省由 title/subtitle/actions 组合生成。 */
+  /** Page header content: defaults to the title/subtitle/actions composition. */
   header?: ReactNode
-  /** 主标题文本；需要图标时用自定义 header。 */
+  /** Main title text; use a custom header when an icon is needed. */
   title?: ReactNode
-  /** 副标题文本（右侧或标题下方，随换行自然排布）。 */
+  /** Subtitle text (right of the title or below it, wrapping naturally). */
   subtitle?: ReactNode
-  /** 页头右侧动作区（按钮等）。 */
+  /** Action area on the right of the header (buttons etc.). */
   actions?: ReactNode
   children?: ReactNode
 }
 
 /**
- * 全屏页面容器：统一纵向滚动、间距与页头排版。
- * header/title/subtitle/actions 可组合——传 header 时忽略后三者，
- * 两者都不传则不渲染页头。
+ * Full-screen page container: unified vertical scrolling, spacing and header
+ * layout. header/title/subtitle/actions are composable — passing header ignores
+ * the other three; when none is passed, no header is rendered.
  */
 export function Screen(props: ScreenProps): ReactNode {
   const { className, header, title, subtitle, actions, children } = props
@@ -59,19 +62,19 @@ export function Screen(props: ScreenProps): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// ScreenSection：页面分节
+// ScreenSection: page section
 // ---------------------------------------------------------------------------
 
 export interface ScreenSectionProps {
-  /** 分节标题文本（推荐字符串；复杂标题可用 titleExtra 组合）。 */
+  /** Section title text (plain strings recommended; compose with titleExtra for complex titles). */
   title?: ReactNode
-  /** 标题行右侧补充内容（如计数徽标、入口按钮）。 */
+  /** Extra content on the right of the title row (e.g. count badge, entry button). */
   titleExtra?: ReactNode
   className?: string
   children?: ReactNode
 }
 
-/** 页面分节：可选标题 + 内容纵向排列。 */
+/** Page section: optional title + vertically stacked content. */
 export function ScreenSection(props: ScreenSectionProps): ReactNode {
   const { title, titleExtra, className, children } = props
   return (
@@ -88,31 +91,32 @@ export function ScreenSection(props: ScreenSectionProps): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// DataTable：宿主表格原语 + 统一 loading / empty
+// DataTable: host table primitive + unified loading / empty states
 // ---------------------------------------------------------------------------
 
 export interface DataTableProps {
-  /** 列数：loading / empty 占位行的 colSpan（缺省按 thead 推断，推断不出用 1）。 */
+  /** Column count: colSpan for the loading / empty placeholder row (defaults to inference from thead, or 1). */
   columns?: number
-  /** 数据加载中：渲染统一加载行（不渲染 children）。 */
+  /** Data is loading: renders the unified loading row (children not rendered). */
   loading?: boolean
-  /** 加载提示文案。 */
+  /** Loading label text. */
   loadingLabel?: string
-  /** 数据为空：渲染统一空态行（不渲染 children）。 */
+  /** Data is empty: renders the unified empty row (children not rendered). */
   empty?: boolean
-  /** 空态文案（缺省「暂无数据」）。 */
+  /** Empty-state label text (defaults to "No data"). */
   emptyLabel?: string
-  /** 表格语义描述（无障碍：aria-label）。 */
+  /** Table semantic description (accessibility: aria-label). */
   label?: string
   className?: string
   /**
-   * 表格内容：thead（自定义表头）与 tbody（数据行）由调用方以 JSX 组合，
-   * 本原语不接管列定义——保持组合式，不做黑盒 columns/data 表格。
+   * Table content: thead (custom header) and tbody (data rows) are composed by
+   * the caller as JSX. This primitive does not take over column definitions —
+   * stay composable, no opaque columns/data table.
    */
   children: ReactNode
 }
 
-/** 展开 JSX Fragment，保留有效 React 元素。 */
+/** Flattens JSX Fragments, keeping valid React elements. */
 function flattenElements(node: ReactNode): ReactElement[] {
   return Children.toArray(node).flatMap((child) => {
     if (!isValidElement(child)) return []
@@ -124,7 +128,7 @@ function flattenElements(node: ReactNode): ReactElement[] {
   })
 }
 
-/** 计算占位行 colSpan：显式声明优先，否则统计 thead 第一行单元格的 colSpan。 */
+/** Computes the placeholder-row colSpan: explicit declaration wins, otherwise sum the colSpans of the first thead row cells. */
 function inferColSpan(columns: number | undefined, children: ReactNode): number {
   if (columns !== undefined && Number.isInteger(columns) && columns > 0) return columns
   const thead = flattenElements(children).find((child) => child.type === 'thead')
@@ -145,27 +149,32 @@ function inferColSpan(columns: number | undefined, children: ReactNode): number 
 }
 
 /**
- * 组合式表格：外壳复用宿主 .helm-table-wrap / .helm-table 原语并统一
- * loading / empty 占位行；表头与数据单元格完全由 children JSX 表达：
+ * Composable table: the shell reuses the host .helm-table-wrap / .helm-table
+ * primitives and unifies the loading / empty placeholder rows; the header and
+ * data cells are fully expressed by children JSX:
  *
  * ```tsx
  * <DataTable loading={rows === undefined} empty={rows?.length === 0} columns={4}>
  *   <thead>
- *     <tr><th>ID</th><th>名称</th><th>状态</th><th>操作</th></tr>
+ *     <tr><th>ID</th><th>Name</th><th>Status</th><th>Actions</th></tr>
  *   </thead>
  *   <tbody>
  *     {rows?.map((r) => <tr key={r.id}><td>{r.id}</td>…</tr>)}
  *   </tbody>
  * </DataTable>
  * ```
+ *
+ * The default loading / empty labels below are fixed English texts of the SDK.
+ * If they ever need to be translated by the host, expose localized strings via
+ * props (loadingLabel / emptyLabel) — do not extend the protocol for this.
  */
 export function DataTable(props: DataTableProps): ReactNode {
   const {
     columns,
     loading = false,
-    loadingLabel = '数据读取中…',
+    loadingLabel = 'Loading…',
     empty = false,
-    emptyLabel = '暂无数据',
+    emptyLabel = 'No data',
     label,
     className,
     children,
@@ -202,16 +211,16 @@ export function DataTable(props: DataTableProps): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// KvGrid：键值概览
+// KvGrid: key-value overview
 // ---------------------------------------------------------------------------
 
 export interface KvGridProps {
-  /** 键值对：按声明顺序渲染（key 为标签，value 为内容）。 */
+  /** Key-value pairs rendered in declaration order (key is the label, value is the content). */
   items: ReadonlyArray<{ key: ReactNode; value: ReactNode }>
   className?: string
 }
 
-/** 键值概览网格：复用宿主 .kv-grid 两列自适应原语（key/value 为网格直接子项）。 */
+/** Key-value overview grid: reuses the host .kv-grid two-column adaptive primitive (key/value are direct grid children). */
 export function KvGrid(props: KvGridProps): ReactNode {
   const { items, className } = props
   return (

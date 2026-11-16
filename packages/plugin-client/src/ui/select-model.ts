@@ -24,7 +24,8 @@ export interface MultiSelectChangeEvent<T extends string = string> {
 }
 
 /**
- * 在可用选项中按步长寻找下一个未禁用的索引（支持上下环绕/边界截断）。
+ * Find the next non-disabled index by stepping through the available options
+ * (wrap-around up/down and boundary clamping supported).
  */
 export function findNextSelectableIndex<T extends string>(
   options: ReadonlyArray<SelectOption<T>>,

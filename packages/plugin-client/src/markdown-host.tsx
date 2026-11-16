@@ -1,11 +1,14 @@
 /**
- * MarkdownView / CodeBlockView：宿主标准 Markdown 能力的 SDK 委托组件。
+ * MarkdownView / CodeBlockView: SDK delegation components for the host's
+ * standard Markdown capabilities.
  *
- * 宿主（@helm/web）经 PluginClientHostContext.markdown 注入真实实现
- * （产物链接、markdown.codeBlock 扩展、流式分块、语法高亮）；本组件只做
- * 端口转发，保证插件源码 `import { MarkdownView } from '@helm/plugin-client'`
- * 与宿主同一渲染能力。端口缺失（未在宿主 Provider 内）显式抛错，绝不静默
- * 降级为无样式纯文本。
+ * The host (@helm/web) injects the real implementation via
+ * PluginClientHostContext.markdown (artifact links, markdown.codeBlock
+ * extensions, streaming chunking, syntax highlighting); these components only
+ * forward through the port, so plugin source `import { MarkdownView } from
+ * '@helm/plugin-client'` gets the same rendering power as the host. A missing
+ * port (outside the host Provider) throws explicitly — never silently
+ * degrading to unstyled plain text.
  */
 import type { ReactNode } from 'react'
 import { usePluginClientHost } from './host-port.js'

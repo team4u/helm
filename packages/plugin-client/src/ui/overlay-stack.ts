@@ -21,9 +21,10 @@ function notifyOverlayStack(): void {
 }
 
 /**
- * 所有 Dialog / AlertDialog 共用的全局浮层栈。
- * 每个打开的浮层占用 100 个 z-index，内部内容与自身遮罩再分 1 层，
- * 因此嵌套深度不依赖手写的固定层级。
+ * Global overlay stack shared by all Dialog / AlertDialog components.
+ * Each open overlay occupies 100 z-index levels, splitting one more level
+ * between its inner content and its own backdrop, so nesting depth never
+ * depends on hand-written fixed layers.
  */
 export function useOverlayLayer(open: boolean): OverlayLayer | null {
   const [id] = React.useState(() => Symbol('overlay-layer'))
@@ -42,12 +43,13 @@ export function useOverlayLayer(open: boolean): OverlayLayer | null {
     }
   }, [id, open])
 
-  // 首次提交尚未完成注册时先给基础层；浏览器绘制前会换成真实栈位。
+  // Before the first commit finishes registration, hand out the base layer;
+  // it is swapped for the real stack position before the browser paints.
   const base = 1000 + Math.max(index, 0) * 100
   return open ? { overlayZIndex: base, contentZIndex: base + 1 } : null
 }
 
-/** 让浮层内部通过 Portal 渲染的菜单、下拉框和气泡位于当前浮层之上。 */
+/** Keeps menus, dropdowns and bubbles rendered through Portals inside an overlay above the current overlay layer. */
 export function useOverlayChildStyle(style?: React.CSSProperties): React.CSSProperties | undefined {
   const layer = React.useContext(OverlayLayerContext)
   if (layer === null) return style

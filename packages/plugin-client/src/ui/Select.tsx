@@ -27,7 +27,7 @@ export interface BaseSelectProps<T extends string = string> {
   open?: boolean
   onOpenChange?: (open: boolean) => void
   inline?: boolean
-  /** 下拉浮层附加类名（如 helm-select-popover-wide 加宽长模型 ID 面板）。 */
+  /** Extra class name for the dropdown overlay (e.g. helm-select-popover-wide widens long model-ID panels). */
   popoverClassName?: string
 }
 
@@ -53,8 +53,10 @@ export interface MultiSelectProps<T extends string = string> extends BaseSelectP
 export type SelectProps<T extends string = string> = SingleSelectProps<T> | MultiSelectProps<T>
 
 /**
- * SSR 容错 Portal：在服务端渲染 (typeof window === 'undefined') 或显式 inline 模式下，
- * 直接内联直出 children，避免 createPortal 依赖 document.body 导致测试渲染降级或返回空内容。
+ * SSR-tolerant Portal: on server rendering (typeof window === 'undefined') or in
+ * explicit inline mode, children are rendered inline directly — this avoids
+ * createPortal depending on document.body, which would degrade test rendering
+ * or return empty content.
  */
 export function SelectPortal({
   inline = false,
@@ -72,7 +74,9 @@ export function SelectPortal({
 }
 
 /**
- * 通用单选下拉组件实现（保持原有 Radix UI Select 契约）
+ * Generic single-select dropdown implementation (keeps the original Radix UI Select contract).
+ * Fixed texts below (placeholder) are SDK defaults in English; pass the
+ * placeholder prop to override them for host-side localization.
  */
 function SingleSelectInner<T extends string = string>({
   value,
@@ -80,7 +84,7 @@ function SingleSelectInner<T extends string = string>({
   onChange,
   disabled = false,
   prefixIcon,
-  placeholder = '请选择',
+  placeholder = 'Select…',
   className = '',
   style,
   size,
@@ -203,7 +207,11 @@ function SingleSelectInner<T extends string = string>({
 }
 
 /**
- * 通用多选下拉选择器实现（基于 Radix UI Popover + Checkbox 原语）
+ * Generic multi-select dropdown implementation (built on the Radix UI Popover + Checkbox primitives).
+ * Fixed texts below (placeholder, select-all / clear actions, search box,
+ * summary labels) are SDK defaults in English; if they ever need to be
+ * translated by the host, override them via props rather than extending the
+ * protocol.
  */
 function MultiSelectInner<T extends string = string>({
   value,
@@ -212,7 +220,7 @@ function MultiSelectInner<T extends string = string>({
   onValuesChange,
   disabled = false,
   prefixIcon,
-  placeholder = '请选择...',
+  placeholder = 'Select…',
   className = '',
   style,
   size,
@@ -252,13 +260,13 @@ function MultiSelectInner<T extends string = string>({
   const popperSide = direction === 'up' ? 'top' : direction === 'down' ? 'bottom' : undefined
   const layeredPopoverStyle = useOverlayChildStyle()
 
-  // 触发值变更
+  // Commit a value change
   const commitChange = (nextValues: T[]) => {
     onChange?.({ target: { value: nextValues, name } })
     onValuesChange?.(nextValues)
   }
 
-  // 切换单个选项
+  // Toggle a single option
   const toggleValue = (val: T) => {
     if (disabled) return
     const next = selectedSet.has(val)
@@ -267,7 +275,7 @@ function MultiSelectInner<T extends string = string>({
     commitChange(next)
   }
 
-  // 全选
+  // Select all
   const handleSelectAll = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -275,14 +283,14 @@ function MultiSelectInner<T extends string = string>({
     commitChange(selectable)
   }
 
-  // 清空
+  // Clear all
   const handleClearAll = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
     commitChange([])
   }
 
-  // 选项过滤
+  // Option filtering
   const filteredOptions = useMemo(() => {
     if (!searchTerm.trim()) return options
     const term = searchTerm.toLowerCase().trim()
@@ -296,7 +304,7 @@ function MultiSelectInner<T extends string = string>({
     })
   }, [options, searchTerm])
 
-  // 触发器展示文本
+  // Trigger display text
   const triggerLabel = useMemo(() => {
     if (renderTriggerLabel) {
       return renderTriggerLabel(selectedValues, options)
@@ -312,29 +320,29 @@ function MultiSelectInner<T extends string = string>({
     }
     const allCount = options.filter((opt) => !opt.disabled).length
     if (selectedValues.length === allCount && allCount > 0) {
-      return <span className="helm-select-label">{`已全选 (${selectedValues.length})`}</span>
+      return <span className="helm-select-label">{`All selected (${selectedValues.length})`}</span>
     }
     return (
-      <span className="helm-select-label">{`已选择 ${selectedValues.length} 项`}</span>
+      <span className="helm-select-label">{`${selectedValues.length} selected`}</span>
     )
   }, [renderTriggerLabel, selectedValues, options, placeholder])
 
   const contentNode = (
     <div className="helm-select-viewport" style={{ maxHeight: 280, overflowY: 'auto' }}>
-      {/* 搜索框 */}
+      {/* Search box */}
       {searchable && options.length > 4 && (
         <div className="helm-select-search" onClick={(e) => e.stopPropagation()}>
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="搜索选项..."
-            aria-label="搜索选项"
+            placeholder="Search options…"
+            aria-label="Search options"
           />
         </div>
       )}
 
-      {/* 快捷全选/清空操作条 */}
+      {/* Quick select-all / clear action bar */}
       {showActions && (
         <div className="helm-select-actions" onClick={(e) => e.stopPropagation()}>
           <button
@@ -343,7 +351,7 @@ function MultiSelectInner<T extends string = string>({
             onClick={handleSelectAll}
             disabled={disabled}
           >
-            全选
+            Select all
           </button>
           <button
             type="button"
@@ -351,15 +359,15 @@ function MultiSelectInner<T extends string = string>({
             onClick={handleClearAll}
             disabled={disabled || selectedValues.length === 0}
           >
-            清空
+            Clear
           </button>
         </div>
       )}
 
-      {/* 选项清单 */}
+      {/* Option list */}
       {filteredOptions.length === 0 ? (
         <div className="text-xs text-subtle" style={{ padding: '8px 10px', textAlign: 'center' }}>
-          未找到匹配选项
+          No matching options
         </div>
       ) : (
         filteredOptions.map((opt) => {
@@ -445,10 +453,13 @@ function MultiSelectInner<T extends string = string>({
 }
 
 /**
- * 通用下拉选择器（支持单选与多选，符合 Helm 极简克制气质）：
- * - 默认单选模式：基于 @radix-ui/react-select 封装，提供完整键盘导航与 Typeahead Search；
- * - multiple={true} 多选模式：基于 Popover + Checkbox，提供快捷全选/清空、多选勾选与标签汇总；
- * - 兼容 SSR / 测试环境内联渲染，绝对零 Emoji。
+ * Generic dropdown selector (single and multiple selection, in the restrained
+ * Helm style):
+ * - Default single mode: wraps @radix-ui/react-select with full keyboard
+ *   navigation and Typeahead Search;
+ * - multiple={true} mode: built on Popover + Checkbox with quick select-all /
+ *   clear, multi-check selection and a summary trigger label;
+ * - SSR / test-environment inline rendering supported, absolutely zero Emoji.
  */
 export function Select<T extends string = string>(props: SelectProps<T>) {
   if (props.multiple === true) {
@@ -458,7 +469,7 @@ export function Select<T extends string = string>(props: SelectProps<T>) {
 }
 
 /**
- * 强类型显式多选下拉选择器组件
+ * Strongly typed explicit multi-select dropdown component.
  */
 export function MultiSelect<T extends string = string>(
   props: Omit<MultiSelectProps<T>, 'multiple'>,

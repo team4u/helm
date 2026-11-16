@@ -1,14 +1,26 @@
 /**
- * @helm/plugin-client 独立包契约测试（不依赖任何 web/kernel 实现）：
- * 1. 导出符号与 protocol PLUGIN_CLIENT_SHARED_EXPORTS 双向锁定
- *    （清单内全部符号运行时真实存在；插件面向符号不为 undefined）；
- * 2. 宿主端口 Provider 契约：usePluginDoc / usePluginSessionDoc / useConversations /
- *    useConversation / usePlugins / usePluginContext 全部经 PluginClientHostContext
- *    注入的端口取数，无端口时显式报错（绝不静默降级）；
- * 3. createPluginClientContext 端口转发契约：callAction 跨插件寻址、submitInput
- *    origin=agent 载荷、导航/通知/文档方法逐项转发真实端口实现；
- * 4. PluginSlot 端口契约：短名拼全限定、single 首项、fallback、环检测显式告警；
- * 5. MarkdownView / CodeBlockView 端口委托：渲染宿主注入实现。
+ * @helm/plugin-client standalone package contract tests (no web/kernel
+ * implementation dependency):
+ * 1. Export symbols are bidirectionally locked against the protocol
+ *    PLUGIN_CLIENT_SHARED_EXPORTS list (every listed symbol actually exists at
+ *    runtime; plugin-facing symbols are never undefined);
+ * 2. Host port Provider contract: usePluginDoc / usePluginSessionDoc /
+ *    useConversations / useConversation / usePlugins / usePluginContext all
+ *    fetch data through the port injected via PluginClientHostContext; a
+ *    missing port throws explicitly (never silently degraded);
+ * 3. createPluginClientContext port-forwarding contract: callAction
+ *    cross-plugin addressing, submitInput origin=agent payload, and
+ *    navigation / notification / doc methods each forwarding to the real port;
+ * 4. PluginSlot port contract: short-name qualification, single first item,
+ *    fallback, and explicit cycle warning;
+ * 5. MarkdownView / CodeBlockView port delegation: renders the host-injected
+ *    implementations.
+ *
+ * Note: error-message regexes below that pin `usePluginClientHost …` /
+ * `submitInput …` / `getPluginSessionDoc …` intentionally keep the exact
+ * Chinese texts thrown by host-port.ts / plugin-context.ts — those files are
+ * outside the SDK anglicization scope, so the assertions must keep matching
+ * them verbatim.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -27,18 +39,18 @@ GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 // ---------------------------------------------------------------------------
-// 1. 导出清单双向锁定
+// 1. Bidirectional export-list locking
 // ---------------------------------------------------------------------------
 
-test('PLUGIN_CLIENT_SHARED_EXPORTS 清单内全部符号在本包运行时命名空间真实存在', { timeout: 60_000 }, () => {
+test('every symbol in PLUGIN_CLIENT_SHARED_EXPORTS actually exists in this package runtime namespace', { timeout: 60_000 }, () => {
   const exportedNames = new Set(Object.keys(SDK))
   for (const name of PLUGIN_CLIENT_SHARED_EXPORTS) {
-    assert.ok(exportedNames.has(name), `@helm/plugin-client 缺少清单符号 ${name}（PLUGIN_CLIENT_SHARED_EXPORTS 与实现漂移）`)
-    assert.ok((SDK as Record<string, unknown>)[name] !== undefined, `符号 ${name} 不得为 undefined`)
+    assert.ok(exportedNames.has(name), `@helm/plugin-client is missing manifest symbol ${name} (PLUGIN_CLIENT_SHARED_EXPORTS drifted from the implementation)`)
+    assert.ok((SDK as Record<string, unknown>)[name] !== undefined, `symbol ${name} must not be undefined`)
   }
 })
 
-test('宿主面向符号（端口 / 上下文 / 工厂 / 显式寻址 hooks）真实导出', { timeout: 60_000 }, () => {
+test('host-facing symbols (port / context / factory / explicit-addressing hooks) are really exported', { timeout: 60_000 }, () => {
   for (const name of [
     'PluginClientHostContext',
     'usePluginClientHost',
@@ -51,13 +63,13 @@ test('宿主面向符号（端口 / 上下文 / 工厂 / 显式寻址 hooks）�
     'ToolActivityContext',
     'useToolActivity',
   ] as const) {
-    assert.ok(name in SDK, `宿主面向符号 ${name} 必须导出`)
-    assert.ok((SDK as Record<string, unknown>)[name] !== undefined, `宿主面向符号 ${name} 不得为 undefined`)
+    assert.ok(name in SDK, `host-facing symbol ${name} must be exported`)
+    assert.ok((SDK as Record<string, unknown>)[name] !== undefined, `host-facing symbol ${name} must not be undefined`)
   }
 })
 
 // ---------------------------------------------------------------------------
-// 测试端口（行为真实的最小替身：记录调用并返回确定数据）
+// Test port (a behavioral minimal double: records calls and returns deterministic data)
 // ---------------------------------------------------------------------------
 
 interface PortLog {
@@ -153,10 +165,10 @@ function mount(tree: React.ReactNode): { host: HTMLElement; root: Root } {
 }
 
 // ---------------------------------------------------------------------------
-// 2. hooks 端口取数与无端口显式报错
+// 2. Hooks fetch through the port; missing port throws explicitly
 // ---------------------------------------------------------------------------
 
-test('usePluginDoc / useConversations / usePlugins 经端口取数；首次自动 ensurePluginDoc', { timeout: 60_000 }, () => {
+test('usePluginDoc / useConversations / usePlugins fetch through the port; first access auto-triggers ensurePluginDoc', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
   let docValue: unknown = 'unset'
@@ -173,14 +185,14 @@ test('usePluginDoc / useConversations / usePlugins 经端口取数；首次自�
       e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, 'p1', 7) },
         e(Probe))),
   )
-  assert.deepEqual(docValue, { ok: 1 }, '公开文档取自端口 pluginDocs')
-  assert.equal(conversations?.length, 1, '会话摘要取自端口 conversations')
-  assert.deepEqual(screens, [], 'screens 取自端口')
+  assert.deepEqual(docValue, { ok: 1 }, 'public doc comes from port pluginDocs')
+  assert.equal(conversations?.length, 1, 'conversation summaries come from port conversations')
+  assert.deepEqual(screens, [], 'screens come from the port')
   act(() => { void root.unmount() })
   void host
 })
 
-test('usePluginDoc 缺失键时自动发起 ensurePluginDoc（端口转发）', { timeout: 60_000 }, () => {
+test('usePluginDoc auto-triggers ensurePluginDoc for a missing key (port forwarding)', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
   function Probe(): React.ReactNode {
@@ -192,12 +204,12 @@ test('usePluginDoc 缺失键时自动发起 ensurePluginDoc（端口转发）', 
       e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, 'p1', 7) },
         e(Probe))),
   )
-  assert.equal(log.docs.length, 1, '缺失文档经端口发起一次 ensurePluginDoc')
+  assert.equal(log.docs.length, 1, 'a missing doc triggers exactly one ensurePluginDoc through the port')
   assert.deepEqual(log.docs[0], { pluginId: 'p1', docName: 'missing' })
   act(() => { void root.unmount() })
 })
 
-test('usePluginSessionDoc：继承 ctx 会话；显式覆写优先；无会话返回 undefined', { timeout: 60_000 }, () => {
+test('usePluginSessionDoc: inherits the ctx conversation; explicit override wins; no conversation returns undefined', { timeout: 60_000 }, () => {
   const seen: string[] = []
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
@@ -205,7 +217,8 @@ test('usePluginSessionDoc：继承 ctx 会话；显式覆写优先；无会话�
   port.getSessionDocState = (key) => {
     seen.push(`${key.pluginId}/${key.docName}/${key.conversationId}`)
     const cacheKey = `${key.pluginId}/${key.docName}/${key.conversationId}`
-    // 快照引用稳定（与真实宿主缓存一致）：useSyncExternalStore 以 Object.is 判等
+    // Snapshot references stay stable (consistent with the real host cache):
+    // useSyncExternalStore compares with Object.is
     let snapshot = states.get(cacheKey)
     if (snapshot === undefined) {
       snapshot = { hasValue: true, deleted: false, connected: true, value: 42 }
@@ -216,7 +229,8 @@ test('usePluginSessionDoc：继承 ctx 会话；显式覆写优先；无会话�
   let inherited: unknown = 'unset'
   let overridden: unknown = 'unset'
   let none: unknown = 'unset'
-  // 三个探测分别在不同上下文 Provider 下渲染（同一组件内不条件调用 hooks）
+  // Three probes render under different context Providers (no conditional hook
+  // calls within one component)
   function InheritedProbe(): React.ReactNode {
     inherited = SDK.usePluginSessionDoc('runs')
     return e('div', null, 'probe')
@@ -238,60 +252,62 @@ test('usePluginSessionDoc：继承 ctx 会话；显式覆写优先；无会话�
       e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, 'p1', undefined) },
         e(NoneProbe))),
   )
-  assert.equal(inherited, 42, '继承 ctx.conversationId=7 的订阅值')
-  assert.equal(overridden, 42, '显式覆写 conversationId=9 / pluginId=other')
-  assert.equal(none, undefined, '无会话上下文不开流返回 undefined')
-  assert.deepEqual([...new Set(seen)], ['p1/runs/7', 'other/runs/9'], '订阅元组按继承与覆写解析（无会话上下文不产生元组）')
+  assert.equal(inherited, 42, 'subscribed value inheriting ctx.conversationId=7')
+  assert.equal(overridden, 42, 'explicit override conversationId=9 / pluginId=other')
+  assert.equal(none, undefined, 'no conversation context opens no stream and returns undefined')
+  assert.deepEqual([...new Set(seen)], ['p1/runs/7', 'other/runs/9'], 'subscription tuples resolve by inheritance and override (no tuple without conversation context)')
 })
 
-test('无宿主端口时 hooks 显式报错（绝不静默降级）', { timeout: 60_000 }, () => {
+test('hooks throw explicitly without a host port (never silently degraded)', { timeout: 60_000 }, () => {
   function Probe(): React.ReactNode {
     SDK.useConversations()
     return e('div', null, 'probe')
   }
+  // The pinned message is thrown by host-port.ts, which is outside the SDK
+  // anglicization scope — the regex must keep matching it verbatim.
   assert.throws(
     () => renderToString(e(Probe)),
     /usePluginClientHost 必须在 <PluginClientHostContext.Provider> 内调用/,
-    'useConversations 在端口缺失时显式抛错',
+    'useConversations throws explicitly when the port is missing',
   )
 })
 
 // ---------------------------------------------------------------------------
-// 3. createPluginClientContext 端口转发
+// 3. createPluginClientContext port forwarding
 // ---------------------------------------------------------------------------
 
-test('createPluginClientContext：动作 / 输入 / 导航 / 通知 / 文档逐项转发端口', { timeout: 60_000 }, async () => {
+test('createPluginClientContext: actions / input / navigation / notifications / docs each forward to the port', { timeout: 60_000 }, async () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
   const ctx = SDK.createPluginClientContext(port, 'p1', 7, { draft: '', attachments: [], sending: false, setDraft() {}, insertText() {}, submit: () => Promise.resolve() })
   assert.equal(ctx.pluginId, 'p1')
   assert.equal(ctx.conversationId, 7)
   assert.equal(ctx.theme, 'dark')
-  assert.ok(ctx.composer !== undefined, '显式提供的 composer 透传')
+  assert.ok(ctx.composer !== undefined, 'an explicitly provided composer is passed through')
 
   await ctx.callAction('reload', { x: 1 })
   await ctx.callAction('reload', { x: 2 }, { pluginId: 'p2', conversationId: 9 })
   assert.deepEqual(log.actions, [
     { pluginId: 'p1', actionId: 'reload', input: { x: 1 }, conversationId: 7 },
     { pluginId: 'p2', actionId: 'reload', input: { x: 2 }, conversationId: 9 },
-  ], 'callAction 缺省继承当前插件与会话，显式参数优先')
+  ], 'callAction defaults to the current plugin and conversation; explicit parameters win')
 
   await ctx.submitInput('hello', { whenBusy: 'followUp' })
-  assert.deepEqual(log.inputs, [{ conversationId: 7, text: 'hello', origin: 'agent', whenBusy: 'followUp' }], 'submitInput 以 origin=agent 经端口提交')
+  assert.deepEqual(log.inputs, [{ conversationId: 7, text: 'hello', origin: 'agent', whenBusy: 'followUp' }], 'submitInput goes through the port with origin=agent')
 
   ctx.openScreen('conversation:1')
   ctx.openSplitScreen('screen:builtin:herdr/overview')
   assert.deepEqual(log.targets, [
     { target: 'conversation:1', split: undefined },
     { target: 'screen:builtin:herdr/overview', split: true },
-  ], 'openScreen / openSplitScreen 经端口 openTarget')
+  ], 'openScreen / openSplitScreen go through port openTarget')
 
   ctx.openConversationDrawer(3)
   ctx.openArtifact('art-1')
   ctx.openWorkbench('plugin:builtin:memory/main')
   ctx.closeWorkbench()
   assert.deepEqual(log.drawers, [3])
-  assert.deepEqual(log.artifacts, [{ artifactId: 'art-1', conversationId: 7 }], '产物预览继承当前会话')
+  assert.deepEqual(log.artifacts, [{ artifactId: 'art-1', conversationId: 7 }], 'artifact preview inherits the current conversation')
   assert.deepEqual(log.workbench, [true, 'plugin:builtin:memory/main', false])
 
   ctx.notify('boom', 'error')
@@ -304,23 +320,26 @@ test('createPluginClientContext：动作 / 输入 / 导航 / 通知 / 文档逐�
     { pluginId: 'p1', docName: 'state' },
     { pluginId: 'p2', docName: 'state' },
     { pluginId: 'p1', docName: 'runs', conversationId: 8 },
-  ], '文档读取经端口（跨插件与显式会话优先）')
+  ], 'doc reads go through the port (cross-plugin and explicit conversation win)')
 })
 
-test('createPluginClientContext：submitInput 无会话上下文显式 reject；非法会话 ID 显式报错', { timeout: 60_000 }, async () => {
+test('createPluginClientContext: submitInput without conversation context rejects explicitly; invalid conversation IDs throw', { timeout: 60_000 }, async () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
   const ctx = SDK.createPluginClientContext(port, 'p1', undefined)
-  await assert.rejects(() => ctx.submitInput('x'), /submitInput 无目标会话/, '无会话时不静默丢弃')
-  assert.throws(() => { void ctx.callAction('a', 1, { conversationId: 0 }) }, /正整数/, '非法会话 ID 同步拒绝')
+  // The pinned messages below are thrown by plugin-context.ts, which is
+  // outside the SDK anglicization scope — the regexes must keep matching them
+  // verbatim.
+  await assert.rejects(() => ctx.submitInput('x'), /submitInput 无目标会话/, 'without a conversation, never drop silently')
+  assert.throws(() => { void ctx.callAction('a', 1, { conversationId: 0 }) }, /正整数/, 'invalid conversation ID rejected synchronously')
   await assert.rejects(() => ctx.getPluginSessionDoc('runs'), /getPluginSessionDoc 无目标会话/)
 })
 
 // ---------------------------------------------------------------------------
-// 4. PluginSlot 端口契约
+// 4. PluginSlot port contract
 // ---------------------------------------------------------------------------
 
-test('PluginSlot：短名拼全限定、list 全量渲染、single 首项、无命中 fallback、无 owner 告警', { timeout: 60_000 }, () => {
+test('PluginSlot: short name qualifies, list renders all matches, single renders the first, fallback when empty, warning without owner', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
   const tree = (name: string, extra: Record<string, unknown> = {}, fallback?: React.ReactNode) =>
@@ -329,29 +348,30 @@ test('PluginSlot：短名拼全限定、list 全量渲染、single 首项、无�
         e(SDK.PluginSlot, { name, ...extra, ...(fallback !== undefined ? { fallback } : {}) })))
 
   const all = mount(tree('zone', { slotProps: { z: 1 } }))
-  assert.equal(all.host.querySelectorAll('[data-slot]').length, 2, 'list 模式渲染全部命中项')
-  assert.equal(all.host.querySelector('[data-slot="p2/badge"]')?.getAttribute('data-label'), '插槽 owner/zone/badge', '渲染标签携带全限定名')
-  assert.equal(all.host.querySelector('[data-slot="p2/badge"]')?.textContent, '{"z":1}', 'slotProps 透传给宿主渲染')
+  assert.equal(all.host.querySelectorAll('[data-slot]').length, 2, 'list mode renders every matched item')
+  assert.equal(all.host.querySelector('[data-slot="p2/badge"]')?.getAttribute('data-label'), 'Slot owner/zone/badge', 'the render label carries the fully qualified name')
+  assert.equal(all.host.querySelector('[data-slot="p2/badge"]')?.textContent, '{"z":1}', 'slotProps pass through to the host renderer')
   act(() => { void all.root.unmount() })
 
   const single = mount(tree('zone', { mode: 'single' }))
-  assert.equal(single.host.querySelectorAll('[data-slot]').length, 1, 'single 模式仅渲染首项')
+  assert.equal(single.host.querySelectorAll('[data-slot]').length, 1, 'single mode renders only the first item')
   act(() => { void single.root.unmount() })
 
   const empty = mount(tree('nope', {}, e('div', null, 'fallback-here')))
-  assert.equal(empty.host.textContent, 'fallback-here', '无命中渲染 fallback')
+  assert.equal(empty.host.textContent, 'fallback-here', 'no matches render the fallback')
   act(() => { void empty.root.unmount() })
 
   const noOwner = mount(
     e(SDK.PluginClientHostContext.Provider, { value: port }, e(SDK.PluginSlot, { name: 'zone' })))
-  assert.match(noOwner.host.textContent ?? '', /无宿主插件上下文/, '无 owner 显式告警')
+  assert.match(noOwner.host.textContent ?? '', /no host plugin context/, 'missing owner warns explicitly')
   act(() => { void noOwner.root.unmount() })
 })
 
-test('PluginSlot：渲染链同一贡献项再次出现时显式环告警且不死循环', { timeout: 60_000 }, () => {
+test('PluginSlot: reappearing contribution on the render chain warns of a cycle explicitly without infinite recursion', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
-  // 宿主渲染实现里再次渲染同插槽（等价贡献项组件内嵌套同名插槽的真实环）
+  // The host render implementation renders the same slot again (equivalent to
+  // a real cycle where the contribution component nests a same-named slot)
   port.slots = {
     collectItems: (qualifiedName) =>
       qualifiedName === 'owner/loop'
@@ -366,15 +386,15 @@ test('PluginSlot：渲染链同一贡献项再次出现时显式环告警且不�
     e(SDK.PluginClientHostContext.Provider, { value: port },
       e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, 'owner', undefined) },
         e(SDK.PluginSlot, { name: 'loop' }))))
-  assert.match(host.textContent ?? '', /循环嵌套/, '环链显式告警而非栈溢出')
+  assert.match(host.textContent ?? '', /cycle detected/, 'a cycle warns explicitly instead of a stack overflow')
   act(() => { void root.unmount() })
 })
 
 // ---------------------------------------------------------------------------
-// 5. MarkdownView / CodeBlockView 端口委托
+// 5. MarkdownView / CodeBlockView port delegation
 // ---------------------------------------------------------------------------
 
-test('MarkdownView / CodeBlockView 渲染宿主端口注入的实现（SSR 安全）', { timeout: 60_000 }, () => {
+test('MarkdownView / CodeBlockView render the host-port injected implementations (SSR safe)', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
   const html = renderToString(
@@ -382,8 +402,8 @@ test('MarkdownView / CodeBlockView 渲染宿主端口注入的实现（SSR 安�
       e('div', null,
         e(SDK.MarkdownView, { text: '# hi' }),
         e(SDK.CodeBlockView, { code: 'let x = 1', language: 'ts' }))))
-  assert.match(html, /data-md="host"/, 'MarkdownView 委托宿主 view')
+  assert.match(html, /data-md="host"/, 'MarkdownView delegates to the host view')
   assert.match(html, /# hi/)
-  assert.match(html, /data-code="host"/, 'CodeBlockView 委托宿主 codeBlock')
+  assert.match(html, /data-code="host"/, 'CodeBlockView delegates to the host codeBlock')
   assert.match(html, /data-lang="ts"/)
 })

@@ -1,15 +1,18 @@
 /**
- * <PluginSlot />：插件间子插槽（plugin.slot 贡献）的渲染原语。
+ * <PluginSlot />: rendering primitive for inter-plugin child slots (plugin.slot contributions).
  *
- * - name 为本插件内部短名时自动拼接 `<ctx.pluginId>/<name>`；含 '/' 视为显式
- *   全限定名（'<ownerPluginId>/<slotName>'）；
- * - 贡献项匹配与排序、单个贡献项渲染（宿主 PluginUiView）经宿主端口注入；
- *   子项上下文的 pluginId 是贡献者插件而非 owner；
- * - 环保护在本组件内执行：SlotAncestryContext 记录渲染链上的
- *   (贡献者插件, 贡献项 id)，同一项再次出现时显式渲染环告警并终止递归；
- *   同时限制最大嵌套深度。
+ * - A name that is a short internal slot name of this plugin is automatically
+ *   prefixed as `<ctx.pluginId>/<name>`; a name containing '/' is treated as an
+ *   explicit fully qualified name ('<ownerPluginId>/<slotName>');
+ * - Contribution matching/sorting and rendering of a single contribution (host
+ *   PluginUiView) are injected via the host port; the pluginId of the child
+ *   context is the contributing plugin, not the owner;
+ * - Cycle protection runs inside this component: SlotAncestryContext records
+ *   the (contributing plugin, contribution id) pairs along the render chain;
+ *   when the same item reappears, an explicit cycle warning is rendered and
+ *   recursion stops; a maximum nesting depth is also enforced.
  *
- * 本文件只导出组件与 TS 类型（Fast Refresh 契约同源）。
+ * This file only exports components and TS types (same Fast Refresh contract).
  */
 import { createContext, useContext } from 'react'
 import type { ReactNode } from 'react'
@@ -19,24 +22,24 @@ import { usePluginClientHost } from './host-port.js'
 import { PluginClientContext } from './plugin-context.js'
 
 export interface PluginSlotProps {
-  /** 本插件内部子插槽短名（自动拼接 ctx.pluginId 前缀）；含 '/' 为显式全限定名。 */
+  /** Short internal slot name of this plugin (auto-prefixed with ctx.pluginId); containing '/' means an explicit fully qualified name. */
   name: string
-  /** 传递给子插槽贡献项的上下文数据（注入子组件 props 与声明式 $data）。 */
+  /** Context data passed to slot contributions (injected into child props and declarative $data). */
   slotProps?: Record<string, unknown>
-  /** 'list' 渲染全部命中项（默认）；'single' 仅渲染排序后首项。 */
+  /** 'list' renders all matches (default);'single' renders only the first item after sorting. */
   mode?: 'list' | 'single'
-  /** 无任何插件注入时的回退内容。 */
+  /** Fallback content when no plugin contributes anything. */
   fallback?: ReactNode
   className?: string
-  /** 声明式轨道等无 PluginClientContext 的场景：显式提供 owner 插件与会话。 */
+  /** For scenarios without a PluginClientContext such as the declarative track: explicitly provide the owner plugin and conversation. */
   ownerPluginId?: string
   conversationId?: number
-  /** 宿主在输入区挂载插槽时显式提供输入控制器（注入子项 usePluginContext().composer）；
-   * 插件组件内缺省沿用自身上下文的 composer。 */
+  /** Explicitly provided by the host when mounting the slot in the composer area (injected into child
+   * usePluginContext().composer); inside plugin components, the composer of the surrounding context is used by default. */
   composer?: ComposerController
 }
 
-/** 渲染链祖先记录：环检测用（同一贡献项再次出现即环）。 */
+/** Ancestry record along the render chain: for cycle detection (the same contribution reappearing means a cycle). */
 interface SlotAncestry {
   chain: ReadonlyArray<readonly [contributorPluginId: string, contributionId: string]>
   depth: number
@@ -44,7 +47,7 @@ interface SlotAncestry {
 
 const SlotAncestryContext = createContext<SlotAncestry>({ chain: [], depth: 0 })
 
-/** 防御性最大嵌套深度（即使贡献链不构成环，也限制无限嵌套炸栈）。 */
+/** Defensive maximum nesting depth (limits stack-blowing infinite nesting even when the contribution chain is not a cycle). */
 const MAX_SLOT_DEPTH = 16
 
 export function PluginSlot(props: PluginSlotProps): ReactNode {
@@ -60,7 +63,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
     return (
       <div className="callout callout--warning">
         <HelmIcon name="alert-triangle" size={13} />
-        <span>PluginSlot 无宿主插件上下文（需在 PluginUiView 内使用或显式传 ownerPluginId）</span>
+        <span>PluginSlot has no host plugin context (use it inside PluginUiView or pass ownerPluginId explicitly)</span>
       </div>
     )
   }
@@ -75,7 +78,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
     return (
       <div className="callout callout--warning" role="alert">
         <HelmIcon name="alert-triangle" size={13} />
-        <span>插件子插槽嵌套超过最大深度 {MAX_SLOT_DEPTH}，已终止渲染</span>
+        <span>Plugin slot nesting exceeded the maximum depth of {MAX_SLOT_DEPTH}; rendering aborted</span>
       </div>
     )
   }
@@ -88,7 +91,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
           return (
             <div className="callout callout--warning" role="alert" key={key}>
               <HelmIcon name="alert-triangle" size={13} />
-              <span>插件子插槽循环嵌套（{key}），已终止递归</span>
+              <span>Plugin slot cycle detected ({key}); recursion aborted</span>
             </div>
           )
         }
@@ -101,7 +104,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
               slotProps,
               conversationId,
               composer,
-              label: `插槽 ${qualified}/${item.contributionId}`,
+              label: `Slot ${qualified}/${item.contributionId}`,
             })}
           </SlotAncestryContext.Provider>
         )

@@ -1,9 +1,9 @@
 /**
- * 时间线剪贴板工具（纯 .ts，Fast Refresh 友好）。
+ * Timeline clipboard utility (plain .ts, Fast Refresh friendly).
  */
 
 export async function copyToClipboard(text: string): Promise<boolean> {
-  // 1. 优先尝试现代 Clipboard API（仅在 HTTPS 或 localhost 等安全上下文生效）
+  // 1. Prefer the modern Clipboard API (only effective in secure contexts such as HTTPS or localhost)
   if (
     typeof navigator !== 'undefined' &&
     navigator.clipboard !== undefined &&
@@ -13,17 +13,19 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       await navigator.clipboard.writeText(text)
       return true
     } catch {
-      // 现代 API 可能因焦点缺失、文档非可见或用户权限拒绝而抛错，继续尝试 execCommand 降级
+      // The modern API may throw on missing focus, hidden documents or denied
+      // permission — fall through to the execCommand fallback
     }
   }
 
-  // 2. 通用降级方案：动态创建不可见 textarea + document.execCommand('copy')
-  // 兼容 HTTP（局域网 IP / 远程开发机直连）、旧版浏览器与非 Secure Context
+  // 2. Generic fallback: dynamically create an invisible textarea + document.execCommand('copy')
+  // Compatible with HTTP (LAN IP / remote dev machine direct access), legacy
+  // browsers and non-secure contexts
   if (typeof document !== 'undefined') {
     try {
       const textarea = document.createElement('textarea')
       textarea.value = text
-      // 避免引起页面滚动或触发布局回流
+      // Avoid page scrolling or layout reflow
       textarea.style.position = 'fixed'
       textarea.style.top = '0'
       textarea.style.left = '0'
@@ -44,7 +46,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       document.body.removeChild(textarea)
       if (success) return true
     } catch {
-      // execCommand 降级失败
+      // execCommand fallback failed
     }
   }
 

@@ -1,7 +1,9 @@
 /**
- * 插件共享的纯 Markdown 文本渲染原语（react-markdown + GFM 宿主同一实例）。
- * 供 @helm/plugin-client 导出（如 builtin:json-render 的 Markdown 原语），
- * 不含 artifact 链接等宿主会话特化逻辑——那些在宿主 MarkdownView 中。
+ * Plain Markdown text rendering primitive shared by plugins (react-markdown +
+ * GFM from the same instance as the host).
+ * Exported by @helm/plugin-client (e.g. the Markdown primitive of
+ * builtin:json-render); it contains no host conversation-specific logic such
+ * as artifact links — those live in the host MarkdownView.
  */
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'

@@ -1,6 +1,7 @@
 /**
- * 插件共享的信息提示原语（复用宿主通用 .callout 样式，与任何插件 DSL 样式无关）。
- * 供 @helm/plugin-client 导出；tone 缺省 info。
+ * Shared plugin info-callout primitive (reuses the host's generic .callout
+ * style, unrelated to any plugin DSL styling).
+ * Exported by @helm/plugin-client; tone defaults to info.
  */
 import type { ReactNode } from 'react'
 import { HelmIcon } from './icons.js'

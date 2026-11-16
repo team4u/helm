@@ -1,21 +1,25 @@
 /**
- * 会话与插件清单的响应式 hooks（宿主端口驱动，SSE 实时同步，无轮询无 mock）。
- * 本文件无组件导出（Fast Refresh 友好）。
+ * Reactive hooks for conversations and the plugin registry (host-port driven,
+ * live-synced over SSE, no polling and no mocks).
+ * No component exports in this file (Fast Refresh friendly).
  */
 import { useCallback, useEffect } from 'react'
 import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, UsePluginsResult } from '@helm/protocol/browser'
 import { usePluginClientHost } from './host-port.js'
 
-/** 全部会话摘要（SSE 实时同步；与宿主左栏同一数据源）。 */
+/** All conversation summaries (live-synced over SSE; same data source as the host left sidebar). */
 export function useConversations(): ConversationSummary[] {
   return usePluginClientHost().conversations
 }
 
 /**
- * 宿主插件清单与 Screen 贡献响应式快照（与插件中心/左栏同一 SSE 数据源，无轮询）：
- * - plugins：全部插件摘要，随 plugin.changed / 快照帧实时更新；
- * - screens：已启用插件注册的 Screen 贡献（含 pluginId），停用插件贡献即时移除。
- * 可在 <PluginUiView> 外使用（应用中心类全屏视图无会话上下文也可调用）。
+ * Reactive snapshot of the host plugin registry and Screen contributions (same
+ * SSE data source as the plugin center / left sidebar, no polling):
+ * - plugins: all plugin summaries, updated live via plugin.changed / snapshot frames;
+ * - screens: Screen contributions registered by enabled plugins (including
+ *   pluginId); contributions of disabled plugins are removed immediately.
+ * Usable outside <PluginUiView> (fullscreen views like the app center have no
+ * conversation context and can still call it).
  */
 export function usePlugins(): UsePluginsResult {
   const port = usePluginClientHost()
@@ -25,25 +29,27 @@ export function usePlugins(): UsePluginsResult {
   }
 }
 
-/** useConversation 返回的单个会话实时视图。 */
+/** Live per-conversation view returned by useConversation. */
 export interface ConversationHookResult {
-  /** 会话摘要（SSE 未推送时 undefined，绝不虚构占位对象）。 */
+  /** Conversation summary (undefined until SSE pushes it; never a fabricated placeholder object). */
   summary: ConversationSummary | undefined
-  /** 已加载的会话详情（entries 等）；未加载时 undefined。 */
+  /** Loaded conversation detail (entries etc.); undefined when not loaded. */
   detail: ConversationDetail | undefined
-  /** 流式实时视图（working/blocked 期间）。 */
+  /** Streaming live view (during working/blocked). */
   live: ConversationLive | undefined
-  /** 本会话当前待答审批。 */
+  /** Pending approvals of this conversation. */
   pendingAsks: AskSpec[]
-  /** 详情加载失败文本（宿主 loadErrors[`conversation:<id>`]）。 */
+  /** Detail load failure text (host loadErrors[`conversation:<id>`]). */
   loadError: string | undefined
-  /** 强制重新拉取会话详情。 */
+  /** Force-refetch the conversation detail. */
   reload: () => void
 }
 
 /**
- * 订阅单个会话：详情缺失且无失败记录时自动加载，随后随 SSE 实时更新。
- * conversationId 为 undefined 时（无会话上下文）返回空视图且不发请求。
+ * Subscribe to a single conversation: the detail is auto-loaded when missing
+ * and no failure is recorded, then updated live via SSE.
+ * When conversationId is undefined (no conversation context), an empty view is
+ * returned and no request is made.
  */
 export function useConversation(conversationId: number | undefined): ConversationHookResult {
   const port = usePluginClientHost()

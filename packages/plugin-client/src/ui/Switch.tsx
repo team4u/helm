@@ -14,10 +14,10 @@ export interface SwitchProps {
 }
 
 /**
- * 极简滑动开关组件（符合 Helm 气质的公共原语）：
- * - 紧凑尺寸（28px x 16px），微动效平滑位移；
- * - 完整的 WAI-ARIA switch 规范语义与键盘无障碍交互（Space / Enter 切换）；
- * - 统一极简设计，无 Emoji。
+ * Minimal slide switch component (a common primitive in the restrained Helm style):
+ * - Compact size (28px x 16px), smooth micro-animation movement;
+ * - Full WAI-ARIA switch semantics and keyboard accessibility (Space / Enter toggles);
+ * - Unified minimal design, no Emoji.
  */
 export function Switch({
   checked,

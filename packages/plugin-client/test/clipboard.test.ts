@@ -2,7 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { copyToClipboard } from '../src/clipboard.js'
 
-test('copyToClipboard: 当 navigator.clipboard.writeText 可用时优先调用并返回 true', { timeout: 60_000 }, async () => {
+// The copied payloads below intentionally keep non-ASCII (CJK) text: they
+// double as Unicode transport coverage through the clipboard pipeline, so the
+// exact byte-for-byte passthrough can be asserted.
+test('copyToClipboard: prefers navigator.clipboard.writeText when available and returns true', { timeout: 60_000 }, async () => {
   let copiedText = ''
   const originalNavigator = globalThis.navigator
   const originalDocument = globalThis.document
@@ -37,7 +40,7 @@ test('copyToClipboard: 当 navigator.clipboard.writeText 可用时优先调用�
   }
 })
 
-test('copyToClipboard: 在非安全上下文（navigator.clipboard 为 undefined，如 HTTP 访问）降级到 execCommand', { timeout: 60_000 }, async () => {
+test('copyToClipboard: falls back to execCommand in a non-secure context (navigator.clipboard undefined, e.g. HTTP access)', { timeout: 60_000 }, async () => {
   const originalNavigator = globalThis.navigator
   const originalDocument = globalThis.document
 
@@ -45,7 +48,7 @@ test('copyToClipboard: 在非安全上下文（navigator.clipboard 为 undefined
   let execCommandCalled = false
 
   try {
-    // 模拟 HTTP 非安全环境：navigator.clipboard 为 undefined
+    // Simulate an insecure HTTP environment: navigator.clipboard is undefined
     Object.defineProperty(globalThis, 'navigator', {
       value: {},
       configurable: true,
@@ -105,7 +108,7 @@ test('copyToClipboard: 在非安全上下文（navigator.clipboard 为 undefined
   }
 })
 
-test('copyToClipboard: 当现代 API 与降级均失败时安全返回 false 不抛异常', { timeout: 60_000 }, async () => {
+test('copyToClipboard: safely returns false without throwing when both the modern API and the fallback fail', { timeout: 60_000 }, async () => {
   const originalNavigator = globalThis.navigator
   const originalDocument = globalThis.document
 
@@ -121,7 +124,7 @@ test('copyToClipboard: 当现代 API 与降级均失败时安全返回 false 不
       writable: true,
     })
 
-    const ok = await copyToClipboard('无环境')
+    const ok = await copyToClipboard('no environment')
     assert.equal(ok, false)
   } finally {
     Object.defineProperty(globalThis, 'navigator', {

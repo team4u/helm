@@ -5,8 +5,9 @@ import { useOverlayChildStyle } from './overlay-stack.js'
 export interface PopoverPortalProps extends PopoverPrimitive.PopoverPortalProps {}
 
 /**
- * SSR 容错 Portal：在服务端渲染 (typeof window === 'undefined') 阶段直接渲染 children，
- * 避免 createPortal 依赖 document.body 导致渲染降级或抛错。
+ * SSR-tolerant Portal: during server rendering (typeof window === 'undefined')
+ * children are rendered directly, avoiding createPortal depending on
+ * document.body which would degrade rendering or throw.
  */
 export function PopoverPortal({ children, container, forceMount }: PopoverPortalProps) {
   if (typeof window === 'undefined') {
@@ -74,7 +75,7 @@ export const PopoverArrow = React.forwardRef<
 PopoverArrow.displayName = 'PopoverArrow'
 
 /**
- * 通用 Radix Popover 封装组件
+ * Generic Radix Popover wrapper component.
  */
 export function Popover(props: PopoverPrimitive.PopoverProps) {
   return <PopoverPrimitive.Root {...props} />

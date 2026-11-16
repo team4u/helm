@@ -14,8 +14,8 @@ import {
 
 const e = React.createElement
 
-test('Dialog SSR (renderToString)：纯 Node 环境下 DialogPortal 自动降级内联，不返回空字符串', { timeout: 60_000 }, () => {
-  assert.equal(typeof window, 'undefined', '测试初始运行于纯 Node / SSR 环境')
+test('Dialog SSR (renderToString): in a pure Node environment DialogPortal degrades to inline automatically and never returns an empty string', { timeout: 60_000 }, () => {
+  assert.equal(typeof window, 'undefined', 'the test initially runs in a pure Node / SSR environment')
 
   const html = renderToString(
     e(
@@ -29,38 +29,38 @@ test('Dialog SSR (renderToString)：纯 Node 环境下 DialogPortal 自动降级
           { className: 'modal-backdrop' },
           e(
             DialogContent,
-            { className: 'modal', 'aria-label': 'SSR 对话框' },
+            { className: 'modal', 'aria-label': 'SSR dialog' },
             e(
               'div',
               { className: 'modal-header' },
-              e(DialogTitle, { className: 'modal-title' }, '标题文案'),
+              e(DialogTitle, { className: 'modal-title' }, 'Title text'),
               e(
                 DialogClose,
                 { asChild: true },
-                e('button', { type: 'button', className: 'btn btn-ghost btn-sm', 'aria-label': '关闭' }, '关闭'),
+                e('button', { type: 'button', className: 'btn btn-ghost btn-sm', 'aria-label': 'Close' }, 'Close'),
               ),
             ),
-            e(DialogDescription, { className: 'modal-desc' }, '这是一段对话框详细描述文案'),
-            e('div', { className: 'modal-body' }, e('p', null, '主体内容')),
+            e(DialogDescription, { className: 'modal-desc' }, 'This is a detailed dialog description text'),
+            e('div', { className: 'modal-body' }, e('p', null, 'Body content')),
           ),
         ),
       ),
     ),
   )
 
-  // 验证不为空字符串
-  assert.ok(html.length > 0, 'SSR 渲染结果不得为空串')
-  // 验证基础类名与属性
-  assert.ok(html.includes('class="modal-backdrop"'), '必须包含 .modal-backdrop 遮罩类名')
-  assert.ok(html.includes('class="modal"'), '必须包含 .modal 弹窗类名')
-  assert.ok(html.includes('role="dialog"'), '必须包含 role="dialog" 无障碍语义')
-  assert.ok(html.includes('data-state="open"'), '必须包含 data-state="open" 状态标记')
-  assert.ok(html.includes('标题文案'), '必须正确直出标题文本')
-  assert.ok(html.includes('这是一段对话框详细描述文案'), '必须正确直出描述文本')
-  assert.ok(html.includes('主体内容'), '必须正确直出主体内容')
+  // Must not be an empty string
+  assert.ok(html.length > 0, 'the SSR rendering result must not be an empty string')
+  // Basic class names and attributes
+  assert.ok(html.includes('class="modal-backdrop"'), 'must include the .modal-backdrop overlay class')
+  assert.ok(html.includes('class="modal"'), 'must include the .modal dialog class')
+  assert.ok(html.includes('role="dialog"'), 'must include the role="dialog" accessibility semantic')
+  assert.ok(html.includes('data-state="open"'), 'must include the data-state="open" state marker')
+  assert.ok(html.includes('Title text'), 'must emit the title text verbatim')
+  assert.ok(html.includes('This is a detailed dialog description text'), 'must emit the description text verbatim')
+  assert.ok(html.includes('Body content'), 'must emit the body content verbatim')
 })
 
-test('Dialog 复合属性（Dialog.Portal, Dialog.Content 等）风格在 SSR 下行为一致', { timeout: 60_000 }, () => {
+test('Dialog compound properties (Dialog.Portal, Dialog.Content, etc.) behave identically under SSR', { timeout: 60_000 }, () => {
   const html = renderToString(
     e(
       Dialog,
@@ -74,16 +74,16 @@ test('Dialog 复合属性（Dialog.Portal, Dialog.Content 等）风格在 SSR �
           e(
             Dialog.Content,
             { className: 'modal modal-lg' },
-            e(Dialog.Title, { className: 'modal-title' }, '复合标题'),
-            e(Dialog.Description, null, '复合描述'),
+            e(Dialog.Title, { className: 'modal-title' }, 'Compound title'),
+            e(Dialog.Description, null, 'Compound description'),
           ),
         ),
       ),
     ),
   )
 
-  assert.ok(html.includes('class="modal modal-lg"'), '必须支持复合类名')
+  assert.ok(html.includes('class="modal modal-lg"'), 'compound class names must be supported')
   assert.ok(html.includes('role="dialog"'))
-  assert.ok(html.includes('复合标题'))
-  assert.ok(html.includes('复合描述'))
+  assert.ok(html.includes('Compound title'))
+  assert.ok(html.includes('Compound description'))
 })

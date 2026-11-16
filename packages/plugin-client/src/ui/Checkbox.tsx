@@ -16,11 +16,11 @@ export interface CheckboxProps {
 }
 
 /**
- * 极简复选框组件（符合 Helm 气质的公共原语）：
- * - 紧凑尺寸（15px x 15px），发丝边框与微圆角（3px）；
- * - 支持勾选（check）与半选（indeterminate / minus）精细矢量图标；
- * - 完整的 WAI-ARIA checkbox 规范语义与键盘交互（Space / Enter 切换）；
- * - 统一极简设计，无 Emoji。
+ * Minimal checkbox component (a common primitive in the restrained Helm style):
+ * - Compact size (15px x 15px), hairline border and slight rounding (3px);
+ * - Precise vector icons for checked (check) and indeterminate (minus) states;
+ * - Full WAI-ARIA checkbox semantics and keyboard interaction (Space / Enter toggles);
+ * - Unified minimal design, no Emoji.
  */
 export function Checkbox({
   checked,
