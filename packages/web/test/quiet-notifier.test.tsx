@@ -24,6 +24,10 @@ import { ensureHappyDom, waitForCondition } from './helpers/dom-harness.js'
 import { HelmStoreContext } from '../src/lib/store-context.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
+import {
+  registerBrowserNotificationServiceWorker,
+  resetBrowserNotificationServiceWorkerForTest,
+} from '../src/lib/browser-notification.js'
 import { useQuietNotifier, quietNotifyTimings } from '../src/shell/use-quiet-notifier.js'
 import {
   COMPLETED_NOTIFICATION_TITLE,
@@ -963,6 +967,94 @@ test('插件热重载清空已加载 badge doc 时重新保持未知，直到新
     assert.equal(notifications[0]!.options.tag, 'helm-conv-7')
     harness.unmount()
   } finally {
+    restoreTimings()
+    restore()
+    focus.restore()
+  }
+})
+
+test('SW 激活时 completion 与 blocked 通知透传目标会话 url（/#/c/<id>）并可经点击消息跳转', { timeout: 60_000 }, async () => {
+  const focus = setPageFocus(false)
+  const { restore } = installGrantedNotification()
+  const restoreTimings = shrinkTimings(15, 10)
+  const originalSwDesc = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker')
+  const shown: Array<{ title: string; options: NotificationOptions & { badge?: string; data?: { url?: string; clickId?: string } } }> = []
+  const listeners = new Set<(event: MessageEvent) => void>()
+  const fakeReg = {
+    active: { state: 'activated' } as ServiceWorker,
+    showNotification: async (title: string, options: NotificationOptions = {}) => {
+      shown.push({
+        title,
+        options: options as NotificationOptions & { badge?: string; data?: { url?: string; clickId?: string } },
+      })
+    },
+  } as unknown as ServiceWorkerRegistration
+  Object.defineProperty(navigator, 'serviceWorker', {
+    configurable: true,
+    writable: true,
+    value: {
+      register: async () => fakeReg,
+      addEventListener: (type: string, fn: (event: MessageEvent) => void) => {
+        if (type === 'message') listeners.add(fn)
+      },
+      removeEventListener: (type: string, fn: (event: MessageEvent) => void) => {
+        if (type === 'message') listeners.delete(fn)
+      },
+    },
+  })
+
+  try {
+    await registerBrowserNotificationServiceWorker()
+    const harness = mountHarness({
+      conversations: [
+        conv({ id: 5, title: '主任务', status: 'working', stateChangeSeq: 1 }),
+        conv({ id: 51, parentConversationId: 5, title: '子会话', status: 'working', stateChangeSeq: 1 }),
+      ],
+      pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
+    })
+
+    // 1) 子会话 blocked：通知 url 应指向具体 blocked 子会话 #/c/51
+    harness.rerender({
+      conversations: [
+        conv({ id: 5, title: '主任务', status: 'working', stateChangeSeq: 1 }),
+        conv({ id: 51, parentConversationId: 5, title: '子会话', status: 'blocked', pendingAskCount: 1, stateChangeSeq: 2, updatedAt: 2_000 }),
+      ],
+      pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
+    })
+    await waitForCondition(() => shown.length === 1)
+    assert.equal(shown[0]!.options.icon, '/icon-192.png')
+    assert.equal(shown[0]!.options.badge, '/notification-badge-96.png')
+    assert.equal(shown[0]!.options.data?.url, '/#/c/51')
+    for (const fn of listeners) {
+      fn({ data: { type: 'helm:notification-click', url: '/#/c/51', clickId: shown[0]!.options.data?.clickId } } as MessageEvent)
+    }
+    assert.deepEqual(harness.openTargetCalls, [{ kind: 'conversation', conversationId: 51 }])
+
+    // 2) 全部完成：通知 url 应指向根会话 #/c/5
+    harness.rerender({
+      conversations: [
+        conv({ id: 5, title: '主任务', status: 'done', stateChangeSeq: 3, updatedAt: 4_000 }),
+        conv({ id: 51, parentConversationId: 5, title: '子会话', status: 'done', pendingAskCount: 0, stateChangeSeq: 3, updatedAt: 3_000 }),
+      ],
+      pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
+    })
+    await waitForCondition(() => shown.length === 2)
+    assert.equal(shown[1]!.options.data?.url, '/#/c/5')
+    for (const fn of listeners) {
+      fn({ data: { type: 'helm:notification-click', url: '/#/c/5', clickId: shown[1]!.options.data?.clickId } } as MessageEvent)
+    }
+    assert.deepEqual(harness.openTargetCalls, [
+      { kind: 'conversation', conversationId: 51 },
+      { kind: 'conversation', conversationId: 5 },
+    ])
+    harness.unmount()
+  } finally {
+    resetBrowserNotificationServiceWorkerForTest()
+    if (originalSwDesc !== undefined) {
+      Object.defineProperty(navigator, 'serviceWorker', originalSwDesc)
+    } else {
+      delete (navigator as unknown as Record<string, unknown>).serviceWorker
+    }
     restoreTimings()
     restore()
     focus.restore()

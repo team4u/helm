@@ -267,6 +267,7 @@ export function useQuietNotifier(): void {
         title: draft.title,
         body: draft.body,
         tag: treeNotificationTag(rootId),
+        url: primaryConversationId === null ? undefined : `/#/c/${primaryConversationId}`,
         onClick:
           primaryConversationId === null
             ? undefined
@@ -331,6 +332,7 @@ export function useQuietNotifier(): void {
         title: draft.title,
         body: draft.body,
         tag: treeNotificationTag(rootId),
+        url: primaryConversationId === null ? undefined : `/#/c/${primaryConversationId}`,
         onClick:
           primaryConversationId === null
             ? undefined
