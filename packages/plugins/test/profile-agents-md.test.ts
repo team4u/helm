@@ -41,6 +41,7 @@ import {
   type BinaryReader,
   type ExecutionEnv,
   type FileInfo,
+  type FileErrorCode,
   type Result,
 } from '@earendil-works/pi-durable/env'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
@@ -1027,7 +1028,7 @@ test('computeAgentsMdSection：executionEnv 未接线（unsupported）→ 显式
 })
 
 test('computeAgentsMdSection：打开阶段 not_found / is_directory（含 EISDIR 消息）→ 按常态不注入', { timeout: 60_000 }, async () => {
-  const hostOfOpenError = (code: string, message: string): AgentsMdHostPort =>
+  const hostOfOpenError = (code: FileErrorCode, message: string): AgentsMdHostPort =>
     hostOf(
       fakeEnv({
         openBinaryReader: (path) => ({ ok: false, error: new FileError(code, message, path) }),
