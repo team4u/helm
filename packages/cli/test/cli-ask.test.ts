@@ -6,87 +6,15 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import http from 'node:http'
-import fsp from 'node:fs/promises'
-import os from 'node:os'
-import path from 'node:path'
 import type { ConversationInputResult } from '@helm/protocol'
-import { runCli } from '../src/index.js'
 import type { StdinSource } from '../src/options.js'
-
-interface Hit {
-  method: string
-  path: string
-  body?: unknown
-}
-
-type RouteHandler = (body: unknown, req: http.IncomingMessage) => Promise<{ status?: number; body?: unknown }> | { status?: number; body?: unknown }
-
-async function startHub(routes: Record<string, RouteHandler>): Promise<{ url: string; hits: Hit[]; close: () => Promise<void> }> {
-  const allRoutes: Record<string, RouteHandler> = { 'GET /api/actions': () => ({ body: [] }), ...routes }
-  const hits: Hit[] = []
-  const server = http.createServer((req, res) => {
-    const chunks: Buffer[] = []
-    req.on('data', (chunk: Buffer) => chunks.push(chunk))
-    req.on('end', () => {
-      const rawBody = Buffer.concat(chunks).toString('utf8')
-      let body: unknown
-      if (rawBody) {
-        try {
-          body = JSON.parse(rawBody)
-        } catch {
-          body = rawBody
-        }
-      }
-      hits.push({ method: req.method!, path: req.url!, body })
-      const handler = allRoutes[`${req.method} ${req.url}`]
-      if (!handler) {
-        res.writeHead(404, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: { code: 'not_found', message: `无路由 ${req.method} ${req.url}` } }))
-        return
-      }
-      void Promise.resolve(handler(body, req)).then((result) => {
-        const status = result.status ?? 200
-        if (result.body === undefined) {
-          res.writeHead(status)
-          res.end()
-          return
-        }
-        res.writeHead(status, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(result.body))
-      })
-    })
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const address = server.address()
-  assert(address !== null && typeof address === 'object')
-  return {
-    url: `http://127.0.0.1:${address.port}`,
-    hits,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
-  }
-}
-
-function makeEnv(hubUrl: string, dataDir: string): NodeJS.ProcessEnv {
-  return { HELM_HUB_URL: hubUrl, HELM_DATA_DIR: dataDir, HELM_TOKEN: 't-test' }
-}
-
-interface Captured {
-  out: string
-  err: string
-  code: number
-}
-
-async function run(argv: string[], env: NodeJS.ProcessEnv, stdin?: StdinSource): Promise<Captured> {
-  let out = ''
-  let err = ''
-  const code = await runCli(argv, { env, stdout: (t) => (out += t), stderr: (t) => (err += t), stdin })
-  return { out, err, code }
-}
-
-async function tempDir(): Promise<string> {
-  return fsp.mkdtemp(path.join(os.tmpdir(), 'helm-ask-test-'))
-}
+import {
+  makeCliEnv,
+  parseCliError,
+  runCliCaptured,
+  startMockHub,
+  useTempDir,
+} from './helpers/cli-harness.js'
 
 /** TTY 替身：readAll 被调用即失败（TTY 下绝不读取管道）。 */
 function ttyStdin(): StdinSource {
@@ -114,184 +42,169 @@ const waitResult = (answer: string, conversationId = 9): ConversationInputResult
 
 const createdSummary = (id = 9) => ({ id, title: 't', profileId: 'default', tags: [] })
 
-test('ask 基本链路：创建会话 + ?wait=1 等待；--json 结构化、人类模式只出回答文本', { timeout: 60_000 }, async () => {
-  const dir = await tempDir()
-  const hub = await startHub({
-    'POST /api/conversations': (body) => ({ status: 201, body: createdSummary(9) }),
-    'POST /api/conversations/9/input?wait=1': (body) => ({ body: waitResult('回答正文', 9) }),
+test('ask 基本链路：创建会话 + ?wait=1 等待；--json 结构化、人类模式只出回答文本', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-ask-test-')
+  const hub = await startMockHub(
+    {
+      'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
+      'POST /api/conversations/9/input?wait=1': () => ({ body: waitResult('回答正文', 9) }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+  const json = await runCliCaptured(
+    ['ask', '你好', '--profile', 'dev', '--cwd', '/tmp/x', '--model', 'openai/gpt', '--title', 'T', '--tags', 'a,b', '--json'],
+    env,
+    { stdin: ttyStdin() },
+  )
+  assert.equal(json.code, 0, json.err)
+  assert.deepEqual(JSON.parse(json.out), {
+    conversationId: 9,
+    submissionId: 'sub-1',
+    entryId: 'e1',
+    answer: '回答正文',
+    deleted: false,
   })
-  try {
-    const env = makeEnv(hub.url, dir)
-    const json = await run(
-      ['ask', '你好', '--profile', 'dev', '--cwd', '/tmp/x', '--model', 'openai/gpt', '--title', 'T', '--tags', 'a,b', '--json'],
-      env,
-      ttyStdin(),
-    )
-    assert.equal(json.code, 0, json.err)
-    assert.deepEqual(JSON.parse(json.out), {
-      conversationId: 9,
-      submissionId: 'sub-1',
-      entryId: 'e1',
-      answer: '回答正文',
-      deleted: false,
-    })
-    const createHit = hub.hits.find((h) => h.path === '/api/conversations')!
-    assert.deepEqual(createHit.body, { title: 'T', profileId: 'dev', cwd: '/tmp/x', model: 'openai/gpt', tags: ['a', 'b'] })
-    const waitHit = hub.hits.find((h) => h.path === '/api/conversations/9/input?wait=1')!
-    assert.deepEqual(waitHit.body, { text: '你好', whenBusy: 'reject' })
+  const createHit = hub.hits.find((h) => h.path === '/api/conversations')!
+  assert.deepEqual(createHit.body, { title: 'T', profileId: 'dev', cwd: '/tmp/x', model: 'openai/gpt', tags: ['a', 'b'] })
+  const waitHit = hub.hits.find((h) => h.path === '/api/conversations/9/input?wait=1')!
+  assert.deepEqual(waitHit.body, { text: '你好', whenBusy: 'reject' })
 
-    const human = await run(['ask', '你好'], env, ttyStdin())
-    assert.equal(human.code, 0, human.err)
-    assert.equal(human.out, '回答正文\n')
+  const human = await runCliCaptured(['ask', '你好'], env, { stdin: ttyStdin() })
+  assert.equal(human.code, 0, human.err)
+  assert.equal(human.out, '回答正文\n')
 
-    // --help 不触碰 Hub
-    const help = await run(['ask', '--help'], env, ttyStdin())
-    assert.equal(help.code, 0, help.err)
-    assert.ok(help.out.includes('一次性问答'), help.out)
-    assert.equal(hub.hits.length, 4)
-  } finally {
-    await hub.close()
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+  // --help 不触碰 Hub
+  const help = await runCliCaptured(['ask', '--help'], env, { stdin: ttyStdin() })
+  assert.equal(help.code, 0, help.err)
+  assert.ok(help.out.includes('一次性问答'), help.out)
+  assert.equal(hub.hits.length, 4)
 })
 
-test('ask stdin 管道：与位置参数空行拼接、可独立成 prompt；TTY 不读取', { timeout: 60_000 }, async () => {
-  const dir = await tempDir()
-  const hub = await startHub({
-    'POST /api/conversations': () => ({ status: 201, body: createdSummary() }),
-    'POST /api/conversations/9/input?wait=1': () => ({ body: waitResult('ok') }),
-  })
-  try {
-    const env = makeEnv(hub.url, dir)
-    await run(['ask', '解释以下内容'], env, pipedStdin('文件内容'))
-    const combined = hub.hits.find((h) => h.path === '/api/conversations/9/input?wait=1')!
-    assert.deepEqual(combined.body, { text: '解释以下内容\n\n文件内容', whenBusy: 'reject' })
+test('ask stdin 管道：与位置参数空行拼接、可独立成 prompt；TTY 不读取', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-ask-test-')
+  const hub = await startMockHub(
+    {
+      'POST /api/conversations': () => ({ status: 201, body: createdSummary() }),
+      'POST /api/conversations/9/input?wait=1': () => ({ body: waitResult('ok') }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+  await runCliCaptured(['ask', '解释以下内容'], env, { stdin: pipedStdin('文件内容') })
+  const combined = hub.hits.find((h) => h.path === '/api/conversations/9/input?wait=1')!
+  assert.deepEqual(combined.body, { text: '解释以下内容\n\n文件内容', whenBusy: 'reject' })
 
-    await run(['ask'], env, pipedStdin('仅 stdin'))
-    const stdinOnly = hub.hits.filter((h) => h.path === '/api/conversations/9/input?wait=1').at(-1)!
-    assert.deepEqual(stdinOnly.body, { text: '仅 stdin', whenBusy: 'reject' })
-  } finally {
-    await hub.close()
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+  await runCliCaptured(['ask'], env, { stdin: pipedStdin('仅 stdin') })
+  const stdinOnly = hub.hits.filter((h) => h.path === '/api/conversations/9/input?wait=1').at(-1)!
+  assert.deepEqual(stdinOnly.body, { text: '仅 stdin', whenBusy: 'reject' })
 })
 
-test('ask 空输入与多余位置参数显式拒绝（不触碰 Hub）', { timeout: 60_000 }, async () => {
-  const dir = await tempDir()
-  const hub = await startHub({})
-  try {
-    const env = makeEnv(hub.url, dir)
-    const noText = await run(['ask', '--json'], env, ttyStdin())
-    assert.equal(noText.code, 1)
-    assert.equal((JSON.parse(noText.err) as { error: { code: string } }).error.code, 'empty_input')
+test('ask 空输入与多余位置参数显式拒绝（不触碰 Hub）', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-ask-test-')
+  const hub = await startMockHub({}, { autoRegisterCleanup: t })
+  const env = makeCliEnv(hub.url, dir)
 
-    const emptyPipe = await run(['ask', '--json'], env, pipedStdin(''))
-    assert.equal(emptyPipe.code, 1)
-    assert.equal((JSON.parse(emptyPipe.err) as { error: { code: string } }).error.code, 'empty_input')
+  const noText = await runCliCaptured(['ask', '--json'], env, { stdin: ttyStdin() })
+  assert.equal(noText.code, 1)
+  assert.equal(parseCliError(noText).code, 'empty_input')
 
-    const blankBoth = await run(['ask', '   ', '--json'], env, pipedStdin(' \n '))
-    assert.equal(blankBoth.code, 1)
-    assert.equal((JSON.parse(blankBoth.err) as { error: { code: string } }).error.code, 'empty_input')
+  const emptyPipe = await runCliCaptured(['ask', '--json'], env, { stdin: pipedStdin('') })
+  assert.equal(emptyPipe.code, 1)
+  assert.equal(parseCliError(emptyPipe).code, 'empty_input')
 
-    const extra = await run(['ask', 'a', 'b', '--json'], env, ttyStdin())
-    assert.equal(extra.code, 1)
-    assert.equal((JSON.parse(extra.err) as { error: { code: string } }).error.code, 'unexpected_positional')
-    assert.equal(hub.hits.length, 0)
-  } finally {
-    await hub.close()
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+  const blankBoth = await runCliCaptured(['ask', '   ', '--json'], env, { stdin: pipedStdin(' \n ') })
+  assert.equal(blankBoth.code, 1)
+  assert.equal(parseCliError(blankBoth).code, 'empty_input')
+
+  const extra = await runCliCaptured(['ask', 'a', 'b', '--json'], env, { stdin: ttyStdin() })
+  assert.equal(extra.code, 1)
+  assert.equal(parseCliError(extra).code, 'unexpected_positional')
+  assert.equal(hub.hits.length, 0)
 })
 
-test('ask 创建失败：原样上抛错误信封（无会话可指）', { timeout: 60_000 }, async () => {
-  const dir = await tempDir()
-  const hub = await startHub({
-    'POST /api/conversations': () => ({
-      status: 400,
-      body: { error: { code: 'validation_error', message: 'cwd 需为绝对路径' } },
-    }),
-  })
-  try {
-    const res = await run(['ask', 'hi', '--cwd', 'relative/path', '--json'], makeEnv(hub.url, dir), ttyStdin())
-    assert.equal(res.code, 1)
-    const envelope = JSON.parse(res.err) as { error: { code: string; message: string } }
-    assert.equal(envelope.error.code, 'validation_error')
-    assert.equal(envelope.error.message, 'cwd 需为绝对路径')
-    assert.equal(res.out, '')
-  } finally {
-    await hub.close()
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+test('ask 创建失败：原样上抛错误信封（无会话可指）', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-ask-test-')
+  const hub = await startMockHub(
+    {
+      'POST /api/conversations': () => ({
+        status: 400,
+        body: { error: { code: 'validation_error', message: 'cwd 需为绝对路径' } },
+      }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const res = await runCliCaptured(['ask', 'hi', '--cwd', 'relative/path', '--json'], makeCliEnv(hub.url, dir), { stdin: ttyStdin() })
+  assert.equal(res.code, 1)
+  const err = parseCliError(res)
+  assert.equal(err.code, 'validation_error')
+  assert.equal(err.message, 'cwd 需为绝对路径')
+  assert.equal(res.out, '')
 })
 
-test('ask 生成失败：保留会话，错误含可查 ID 与 details.conversationId', { timeout: 60_000 }, async () => {
-  const dir = await tempDir()
-  const hub = await startHub({
-    'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
-    'POST /api/conversations/9/input?wait=1': () => ({
-      status: 502,
-      body: { error: { code: 'turn_failed', message: '会话 9 本轮未获回答（provider_error：余额不足）', details: { conversationId: 9, reason: 'provider_error' } } },
-    }),
-  })
-  try {
-    const res = await run(['ask', 'hi', '--json'], makeEnv(hub.url, dir), ttyStdin())
-    assert.equal(res.code, 1)
-    const envelope = JSON.parse(res.err) as { error: { code: string; message: string; details: { conversationId: number; reason: string } } }
-    assert.equal(envelope.error.code, 'turn_failed')
-    assert.ok(envelope.error.message.includes('provider_error'), envelope.error.message)
-    assert.ok(envelope.error.message.includes('#9'), envelope.error.message)
-    assert.ok(envelope.error.message.includes('helm conversations get 9'), envelope.error.message)
-    assert.equal(envelope.error.details.conversationId, 9)
-    assert.equal(envelope.error.details.reason, 'provider_error')
-    assert.equal(res.out, '')
-  } finally {
-    await hub.close()
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+test('ask 生成失败：保留会话，错误含可查 ID 与 details.conversationId', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-ask-test-')
+  const hub = await startMockHub(
+    {
+      'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
+      'POST /api/conversations/9/input?wait=1': () => ({
+        status: 502,
+        body: { error: { code: 'turn_failed', message: '会话 9 本轮未获回答（provider_error：余额不足）', details: { conversationId: 9, reason: 'provider_error' } } },
+      }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const res = await runCliCaptured(['ask', 'hi', '--json'], makeCliEnv(hub.url, dir), { stdin: ttyStdin() })
+  assert.equal(res.code, 1)
+  const err = parseCliError<{ conversationId: number; reason: string }>(res)
+  assert.equal(err.code, 'turn_failed')
+  assert.ok(err.message.includes('provider_error'), err.message)
+  assert.ok(err.message.includes('#9'), err.message)
+  assert.ok(err.message.includes('helm conversations get 9'), err.message)
+  assert.equal(err.details?.conversationId, 9)
+  assert.equal(err.details?.reason, 'provider_error')
+  assert.equal(res.out, '')
 })
 
-test('ask --delete-on-success：成功后删除；删除失败保留会话并显式报错', { timeout: 60_000 }, async () => {
-  const dir = await tempDir()
-  const okHub = await startHub({
-    'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
-    'POST /api/conversations/9/input?wait=1': () => ({ body: waitResult('答') }),
-    'DELETE /api/conversations/9': () => ({ status: 204 }),
-  })
-  try {
-    const env = makeEnv(okHub.url, dir)
-    const res = await run(['ask', 'hi', '--delete-on-success', '--json'], env, ttyStdin())
-    assert.equal(res.code, 0, res.err)
-    assert.equal(JSON.parse(res.out).deleted, true)
-    assert.ok(okHub.hits.some((h) => h.method === 'DELETE' && h.path === '/api/conversations/9'))
-  } finally {
-    await okHub.close()
-  }
+test('ask --delete-on-success：成功后删除；删除失败保留会话并显式报错', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-ask-test-')
+  const okHub = await startMockHub(
+    {
+      'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
+      'POST /api/conversations/9/input?wait=1': () => ({ body: waitResult('答') }),
+      'DELETE /api/conversations/9': () => ({ status: 204 }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const res = await runCliCaptured(['ask', 'hi', '--delete-on-success', '--json'], makeCliEnv(okHub.url, dir), { stdin: ttyStdin() })
+  assert.equal(res.code, 0, res.err)
+  assert.equal(JSON.parse(res.out).deleted, true)
+  assert.ok(okHub.hits.some((h) => h.method === 'DELETE' && h.path === '/api/conversations/9'))
+  await okHub.close()
 
-  const failHub = await startHub({
-    'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
-    'POST /api/conversations/9/input?wait=1': () => ({ body: waitResult('答') }),
-    'DELETE /api/conversations/9': () => ({
-      status: 409,
-      body: { error: { code: 'conversation_managed_by_plugin', message: '会话由已启用插件托管，禁止删除' } },
-    }),
-  })
-  try {
-    const res = await run(['ask', 'hi', '--delete-on-success', '--json'], makeEnv(failHub.url, dir), ttyStdin())
-    assert.equal(res.code, 1)
-    const envelope = JSON.parse(res.err) as { error: { code: string; message: string; details: { conversationId: number } } }
-    assert.equal(envelope.error.code, 'conversation_managed_by_plugin')
-    assert.ok(envelope.error.message.includes('回答已取得'), envelope.error.message)
-    assert.ok(envelope.error.message.includes('#9'), envelope.error.message)
-    assert.equal(envelope.error.details.conversationId, 9)
-    assert.equal(res.out, '')
-  } finally {
-    await failHub.close()
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+  const failHub = await startMockHub(
+    {
+      'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
+      'POST /api/conversations/9/input?wait=1': () => ({ body: waitResult('答') }),
+      'DELETE /api/conversations/9': () => ({
+        status: 409,
+        body: { error: { code: 'conversation_managed_by_plugin', message: '会话由已启用插件托管，禁止删除' } },
+      }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const failRes = await runCliCaptured(['ask', 'hi', '--delete-on-success', '--json'], makeCliEnv(failHub.url, dir), { stdin: ttyStdin() })
+  assert.equal(failRes.code, 1)
+  const err = parseCliError<{ conversationId: number }>(failRes)
+  assert.equal(err.code, 'conversation_managed_by_plugin')
+  assert.ok(err.message.includes('回答已取得'), err.message)
+  assert.ok(err.message.includes('#9'), err.message)
+  assert.equal(err.details?.conversationId, 9)
+  assert.equal(failRes.out, '')
 })
 
-test('ask wait 响应强校验：malformed/null/会话不符显式 invalid_response 且绝不删除；text 空串合法', { timeout: 60_000 }, async () => {
-  const dir = await tempDir()
+test('ask wait 响应强校验：malformed/null/会话不符显式 invalid_response 且绝不删除；text 空串合法', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-ask-test-')
   const badCases: Array<{ name: string; body: unknown }> = [
     { name: '空对象', body: {} },
     { name: 'null', body: null },
@@ -302,90 +215,88 @@ test('ask wait 响应强校验：malformed/null/会话不符显式 invalid_respo
     { name: 'entry.id 空串', body: { ...waitResult('回答'), entry: { id: '', kind: 'pi.assistant' } } },
     { name: 'entry.kind 缺失', body: { ...waitResult('回答'), entry: { id: 'e1' } } },
   ]
-  try {
-    for (const { name, body } of badCases) {
-      const hub = await startHub({
-        'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
-        'POST /api/conversations/9/input?wait=1': () => ({ body }),
-        'DELETE /api/conversations/9': () => ({ status: 204 }),
-      })
-      try {
-        const res = await run(['ask', 'hi', '--delete-on-success', '--json'], makeEnv(hub.url, dir), ttyStdin())
-        assert.equal(res.code, 1, `${name} 应失败，实得 stdout：${res.out}`)
-        const envelope = JSON.parse(res.err) as { error: { code: string; message: string; details: { conversationId: number } } }
-        assert.equal(envelope.error.code, 'invalid_response', `${name}：${envelope.error.message}`)
-        assert.ok(envelope.error.message.includes('#9'), `${name}：${envelope.error.message}`)
-        assert.ok(envelope.error.message.includes('helm conversations get 9'), `${name}：${envelope.error.message}`)
-        assert.equal(envelope.error.details.conversationId, 9, name)
-        assert.equal(res.out, '', name)
-        // 校验失败绝不删除会话（含 --delete-on-success）
-        assert.ok(!hub.hits.some((h) => h.method === 'DELETE'), `${name}：不应发 DELETE`)
-      } finally {
-        await hub.close()
-      }
+  for (const { name, body } of badCases) {
+    const hub = await startMockHub({
+      'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
+      'POST /api/conversations/9/input?wait=1': () => ({ body }),
+      'DELETE /api/conversations/9': () => ({ status: 204 }),
+    })
+    try {
+      const res = await runCliCaptured(['ask', 'hi', '--delete-on-success', '--json'], makeCliEnv(hub.url, dir), { stdin: ttyStdin() })
+      assert.equal(res.code, 1, `${name} 应失败，实得 stdout：${res.out}`)
+      const err = parseCliError<{ conversationId: number }>(res)
+      assert.equal(err.code, 'invalid_response', `${name}：${err.message}`)
+      assert.ok(err.message.includes('#9'), `${name}：${err.message}`)
+      assert.ok(err.message.includes('helm conversations get 9'), `${name}：${err.message}`)
+      assert.equal(err.details?.conversationId, 9, name)
+      assert.equal(res.out, '', name)
+      // 校验失败绝不删除会话（含 --delete-on-success）
+      assert.ok(!hub.hits.some((h) => h.method === 'DELETE'), `${name}：不应发 DELETE`)
+    } finally {
+      await hub.close()
     }
-  } finally {
-    await fsp.rm(dir, { recursive: true, force: true })
   }
 
   // text 空串是合法回答：成功删除、stdout 无伪造内容
-  const emptyHub = await startHub({
-    'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
-    'POST /api/conversations/9/input?wait=1': () => ({ body: waitResult('') }),
-    'DELETE /api/conversations/9': () => ({ status: 204 }),
+  const emptyHub = await startMockHub(
+    {
+      'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
+      'POST /api/conversations/9/input?wait=1': () => ({ body: waitResult('') }),
+      'DELETE /api/conversations/9': () => ({ status: 204 }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(emptyHub.url, dir)
+  const json = await runCliCaptured(['ask', 'hi', '--delete-on-success', '--json'], env, { stdin: ttyStdin() })
+  assert.equal(json.code, 0, json.err)
+  assert.deepEqual(JSON.parse(json.out), {
+    conversationId: 9,
+    submissionId: 'sub-1',
+    entryId: 'e1',
+    answer: '',
+    deleted: true,
   })
-  try {
-    const env = makeEnv(emptyHub.url, dir)
-    const json = await run(['ask', 'hi', '--delete-on-success', '--json'], env, ttyStdin())
-    assert.equal(json.code, 0, json.err)
-    assert.deepEqual(JSON.parse(json.out), {
-      conversationId: 9,
-      submissionId: 'sub-1',
-      entryId: 'e1',
-      answer: '',
-      deleted: true,
-    })
-    assert.ok(emptyHub.hits.some((h) => h.method === 'DELETE' && h.path === '/api/conversations/9'))
+  assert.ok(emptyHub.hits.some((h) => h.method === 'DELETE' && h.path === '/api/conversations/9'))
 
-    const human = await run(['ask', 'hi'], env, ttyStdin())
-    assert.equal(human.code, 0, human.err)
-    assert.equal(human.out, '')
-  } finally {
-    await emptyHub.close()
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+  const human = await runCliCaptured(['ask', 'hi'], env, { stdin: ttyStdin() })
+  assert.equal(human.code, 0, human.err)
+  assert.equal(human.out, '')
 })
 
-test('ask --timeout：非法值拒绝；等待超时后会话保留并给出 ID', { timeout: 60_000 }, async () => {
-  const dir = await tempDir()
-  const hub = await startHub({
-    'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
-    'POST /api/conversations/9/input?wait=1': async () => {
-      await new Promise((resolve) => setTimeout(resolve, 400))
-      return { body: waitResult('迟到的回答') }
+test('ask --timeout：非法值拒绝；等待超时后会话保留并给出 ID', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-ask-test-')
+  const hub = await startMockHub(
+    {
+      'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
+      'POST /api/conversations/9/input?wait=1': async (_body, _req, res) => {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 400)
+          res.on('close', () => {
+            clearTimeout(timer)
+            resolve()
+          })
+        })
+        return { body: waitResult('迟到的回答') }
+      },
     },
-  })
-  try {
-    const env = makeEnv(hub.url, dir)
-    const zero = await run(['ask', 'hi', '--timeout', '0', '--json'], env, ttyStdin())
-    assert.equal(zero.code, 1)
-    assert.equal((JSON.parse(zero.err) as { error: { code: string } }).error.code, 'invalid_flag_value')
-    assert.equal(hub.hits.length, 0)
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+  const zero = await runCliCaptured(['ask', 'hi', '--timeout', '0', '--json'], env, { stdin: ttyStdin() })
+  assert.equal(zero.code, 1)
+  assert.equal(parseCliError(zero).code, 'invalid_flag_value')
+  assert.equal(hub.hits.length, 0)
 
-    const negative = await run(['ask', 'hi', '--timeout', '-5', '--json'], env, ttyStdin())
-    assert.equal(negative.code, 1)
-    assert.equal((JSON.parse(negative.err) as { error: { code: string } }).error.code, 'invalid_flag_value')
+  const negative = await runCliCaptured(['ask', 'hi', '--timeout', '-5', '--json'], env, { stdin: ttyStdin() })
+  assert.equal(negative.code, 1)
+  assert.equal(parseCliError(negative).code, 'invalid_flag_value')
 
-    const timed = await run(['ask', 'hi', '--timeout', '80', '--json'], env, ttyStdin())
-    assert.equal(timed.code, 1)
-    const envelope = JSON.parse(timed.err) as { error: { code: string; message: string; details: { conversationId: number } } }
-    assert.equal(envelope.error.code, 'timeout')
-    assert.ok(envelope.error.message.includes('#9'), envelope.error.message)
-    assert.ok(envelope.error.message.includes('helm conversations get 9'), envelope.error.message)
-    assert.equal(envelope.error.details.conversationId, 9)
-    assert.equal(timed.out, '')
-  } finally {
-    await hub.close()
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+  const timed = await runCliCaptured(['ask', 'hi', '--timeout', '80', '--json'], env, { stdin: ttyStdin() })
+  assert.equal(timed.code, 1)
+  const err = parseCliError<{ conversationId: number }>(timed)
+  assert.equal(err.code, 'timeout')
+  assert.ok(err.message.includes('#9'), err.message)
+  assert.ok(err.message.includes('helm conversations get 9'), err.message)
+  assert.equal(err.details?.conversationId, 9)
+  assert.equal(timed.out, '')
 })
