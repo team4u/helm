@@ -29,14 +29,12 @@ import {
   HelmError,
   type AgentExecutionInfo,
   type AgentGateResult,
-  type AskResult,
   type PluginDefinition,
-  type Profile,
 } from '@helm/protocol'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { createHerdrPlugin } from '../src/herdr.js'
-import { LocalNodeChannel } from '../src/herdr/local-node-channel.js'
 import { EMPTY_MANAGED_DOC, PaneRegistry, type ManagedDoc } from '../src/herdr/panes.js'
 import type { HerdrTarget } from '../src/herdr/contracts.js'
 import {
@@ -564,7 +562,7 @@ test('T4 场景 ②b：重启前 blocked 的窗格重挂后重建 AskDoc（解�
   let kernel = await openKernelWithHerdr(defer, dataDir, workDir, socketPath, { configureFirst: true })
   const pendingAsks: Array<{ id: string }> = []
   kernel.events.subscribe((frame) => {
-    if (frame.event.type === 'ask.upsert' && frame.event.ask.status === 'pending') {
+    if (frame.event.type === 'ask.upsert' && 'ask' in frame.event && frame.event.ask.status === 'pending') {
       pendingAsks.push({ id: frame.event.ask.id })
     }
   })
@@ -587,7 +585,7 @@ test('T4 场景 ②b：重启前 blocked 的窗格重挂后重建 AskDoc（解�
   kernel = await openKernelWithHerdr(defer, dataDir, workDir, socketPath)
   const reattachedAsks: Array<{ id: string }> = []
   kernel.events.subscribe((frame) => {
-    if (frame.event.type === 'ask.upsert' && frame.event.ask.status === 'pending') {
+    if (frame.event.type === 'ask.upsert' && 'ask' in frame.event && frame.event.ask.status === 'pending') {
       reattachedAsks.push({ id: frame.event.ask.id })
     }
   })
@@ -917,61 +915,14 @@ test('reattach 冲突/缺失边界与 isClosing === false 停用仍正常关闭�
     docs,
     config: new MemoryConfigStore({ socketPath }),
     host: {
-      profiles: {
-        list: async () => [],
-        get: async () => undefined,
-        getSystem: async () => { throw new HelmError('not_found', 'none', 404) },
-        save: async (p: Profile) => p,
-        directory: async (id: string) => join(dataDir, id),
-      },
-      skills: {
-        list: async () => [],
-        readFile: async () => { throw new HelmError('not_found', 'none', 404) },
-        directory: async (id: string) => join(dataDir, id),
-        ensureSkill: async () => {},
-      },
-      secrets: { get: async () => undefined, set: async () => {}, delete: async () => {}, addRedaction: () => () => {} },
-      setPluginConfig: async () => {},
-      nodeIpc: {
-        isOnline: (id) => id === 'local',
-        nodePlatform: () => process.platform,
-        call: (nodeId, input, signal) => new LocalNodeChannel().ipcCall(nodeId, input, signal),
-        subscribe: async () => () => {},
-      },
-      dispatchTrigger: async () => {},
-      submitInput: async () => {},
-      createConversation: async () => makeConversationSummary({ id: 99, cwd: workDir }),
-      forkConversation: async () => makeConversationSummary({ id: 100, cwd: workDir }),
+      ...hostBackendStub(),
+      isClosing: (): boolean => false,
       listConversations: () => [makeConversationSummary({ id: 1, cwd: workDir })],
       getConversation: (id) => makeConversationSummary({ id, cwd: workDir }),
-      updateConversation: async (id) => makeConversationSummary({ id, cwd: workDir }),
-      manageConversation: () => () => {},
-      markConversationOwnership: () => {},
-      createAsk: async () => ({ id: 'x', status: 'cancelled', answers: {} }) as AskResult,
-      cancelAsk: async () => {},
-      registerAskSeqResolver: () => () => {},
-      abortConversation: async () => {},
-      getConversationOwnership: () => 'human',
-      isClosing: (): boolean => false,
-      spawnAgent: async () => ({}),
+      createAsk: async () => ({ id: 'x', status: 'cancelled', answers: {} }),
       runGate: async () => ({ ok: true, output: 'ok' }),
-      invokeAction: async () => ({}),
-      prepareAction: () => ({ idempotent: false }),
-      execEnv: async () => { throw new HelmError('unsupported', 'stub', 501) },
-      withFileMutationQueue: async () => { throw new Error('stub') },
-      resolveSpawnTarget: async () => { throw new HelmError('unsupported', 'stub', 501) },
-      listActiveSpawnExecutions: () => [],
-      inspectNodePathUsage: async () => { throw new HelmError('unsupported', 'stub', 501) },
-      listActions: () => [],
-      onEvent: () => () => {},
-      emitEvent: () => {},
-      getArtifact: async () => { throw new HelmError('not_found', 'none', 404) },
       redact: (s) => s,
       completeText: async () => '',
-      executionEnv: (nodeId, cwd) => new LocalNodeChannel().envFor(nodeId, cwd),
-      withFileLock: async (_p, fn) => fn(),
-      atomicWriteFile: async () => {},
-      refreshModels: async () => ({ providers: [], models: [], errors: [] }),
       buildSpawnEnv: (_c, cwd) => ({ HELM_CWD: cwd }),
     } satisfies PluginHostBackend,
   })
