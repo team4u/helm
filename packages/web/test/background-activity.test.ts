@@ -4,7 +4,7 @@
  *   resolveStandingStatusIndicator / resolveStatusLight / backgroundAwareStatusTooltip
  *   的契约（tone=accent 才在途、neutral 历史计数与 warn 失败不误报、全局角标
  *   不参与、scope 过滤、插件贡献/doc 缺失归零、非 primary 会话后台活跃透出到
- *   一级站位行、error > blocked > working 优先级）；
+ *   一级站位行、error > blocked > working > done > idle 优先级）；
  * - 单灯优先级：working/blocked/error 主会话状态灯独占（不渲染后台空心环、
  *   tooltip 不叠加后台摘要）；idle/done + 后台在途仅渲染空心环（done 绿点让位）；
  *   无后台在途保持五态原样；
@@ -274,21 +274,68 @@ test('Agent 子列表折叠预览始终保留当前会话与在途会话', { tim
   assert.equal(compactingPreview.hiddenCount, 2)
 })
 
-test('站位聚合优先级 error > blocked > working；并列取列表首个（primary 置顶序）', { timeout: 60_000 }, () => {
+test('resolveAgentSubListPreview：activeIds 中任一会话超出预览条数时整组展开（分屏保护）', { timeout: 60_000 }, () => {
+  const conversations = Array.from({ length: 8 }, (_, index) => conv({ id: index + 1 }))
+
+  // 主屏活跃在前 5 条内（id=1），分屏活跃在深度位置（id=7，index=6）：整组展开不隐藏分屏会话
+  const splitDeep = resolveAgentSubListPreview({
+    conversations,
+    showAll: false,
+    activeId: 1,
+    activeIds: new Set([1, 7]),
+    background: new Map(),
+  })
+  assert.deepEqual(splitDeep.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.equal(splitDeep.hiddenCount, 0)
+
+  // 仅传 activeIds（activeId=null）命中深度会话（id=8）同样整组展开
+  const onlySetDeep = resolveAgentSubListPreview({
+    conversations,
+    showAll: false,
+    activeId: null,
+    activeIds: new Set([8]),
+    background: new Map(),
+  })
+  assert.deepEqual(onlySetDeep.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.equal(onlySetDeep.hiddenCount, 0)
+
+  // activeIds 全部位于前 5 条内时正常折叠
+  const bothShallow = resolveAgentSubListPreview({
+    conversations,
+    showAll: false,
+    activeId: 1,
+    activeIds: new Set([1, 3]),
+    background: new Map(),
+  })
+  assert.deepEqual(bothShallow.visible.map((item) => item.id), [1, 2, 3, 4, 5])
+  assert.equal(bothShallow.hiddenCount, 3)
+})
+
+test('站位聚合优先级 error > blocked > working > done > idle；并列取列表首个（primary 置顶序）', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 1, status: 'working', updatedAt: 9000 }),
     conv({ id: 2, status: 'blocked' }),
     conv({ id: 3, status: 'error' }),
+    conv({ id: 4, status: 'done' }),
   ]
   const indicator = resolveStandingStatusIndicator(conversations, new Map())
   assert.equal(indicator?.representative.id, 3)
 
+  const workingBeatsDone = [conv({ id: 1, status: 'done', updatedAt: 9000 }), conv({ id: 2, status: 'working' })]
+  assert.equal(resolveStandingStatusIndicator(workingBeatsDone, new Map())?.representative.id, 2)
+
   const tie = [conv({ id: 1, status: 'working', updatedAt: 9000 }), conv({ id: 2, status: 'working' })]
   assert.equal(resolveStandingStatusIndicator(tie, new Map())?.representative.id, 1)
 
-  // 无高优先级状态：代表会话保持列表首个（与旧「看 primary」行为兼容）
-  const idle = [conv({ id: 1, updatedAt: 9000 }), conv({ id: 2, status: 'done' })]
-  assert.equal(resolveStandingStatusIndicator(idle, new Map())?.representative.id, 1)
+  // 非首条会话未读已完成（done）优先于 idle，确保折叠态能透出绿点；若存在后台在途则单灯语义仍让位空心环
+  const idleWithDone = [conv({ id: 1, updatedAt: 9000 }), conv({ id: 2, status: 'done' })]
+  const doneIndicator = resolveStandingStatusIndicator(idleWithDone, new Map())
+  assert.equal(doneIndicator?.representative.id, 2)
+  assert.equal(doneIndicator?.representative.status, 'done')
+
+  // 纯 idle 时保持列表首个（与旧「看 primary」行为兼容）
+  const pureIdle = [conv({ id: 1, status: 'idle', updatedAt: 9000 }), conv({ id: 2, status: 'idle' })]
+  assert.equal(resolveStandingStatusIndicator(pureIdle, new Map())?.representative.id, 1)
 
   assert.equal(resolveStandingStatusIndicator([], new Map()), null)
 })

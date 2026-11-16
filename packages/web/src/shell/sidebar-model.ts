@@ -15,6 +15,7 @@ import type {
 import type { HelmStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
 import { ARCHIVED_TAG, isConversationArchived } from '../conversation/archive-model.js'
+import { resolveFocusedPanel } from './shortcuts-model.js'
 export { ARCHIVED_TAG, archiveConversationTags, isConversationArchived, restoreConversationTags } from '../conversation/archive-model.js'
 
 export interface SidebarPartition {
@@ -451,12 +452,14 @@ export function filterDeletableConversations(conversations: ConversationSummary[
 }
 
 // ---------------------------------------------------------------------------
-// 双层导航：智能体行过滤 + 当前 Profile 话题列表
+// 智能体站位深度搜索过滤
 // ---------------------------------------------------------------------------
 
 /**
- * 过滤智能体站位行：label / profileId 命中，或其名下任一会话标题 / #id 命中均保留
- * （命中会话标题时整行保留，用户在 Popover 中再精确定位话题）。
+ * 深度过滤智能体站位：
+ * - 搜索智能体 label / profileId 命中时保留该智能体及其完整 conversations；
+ * - 仅命中名下部分会话标题 / #id 时，只保留命中的 conversations 供 UI 自动展开精确定位；
+ * - 均未命中则过滤掉该智能体。
  */
 export function filterAgentStandings(
   standings: AgentStanding[],
@@ -464,96 +467,164 @@ export function filterAgentStandings(
 ): AgentStanding[] {
   const q = query.trim().toLowerCase()
   if (!q) return standings
-  const numeric = /^\d+$/.test(q) ? Number(q) : null
-  return standings.filter(
-    (agent) =>
+  const idMatch = /^#?(\d+)$/.exec(q)
+  const numericId = idMatch ? Number(idMatch[1]) : null
+  const result: AgentStanding[] = []
+  for (const agent of standings) {
+    const agentSelfMatches =
       agent.label.toLowerCase().includes(q) ||
-      agent.profileId.toLowerCase().includes(q) ||
-      agent.conversations.some(
-        (c) =>
-          c.title.toLowerCase().includes(q) ||
-          (numeric !== null && c.id === numeric),
-      ),
+      agent.profileId.toLowerCase().includes(q)
+    if (agentSelfMatches) {
+      result.push(agent)
+      continue
+    }
+    const matchingConvs = agent.conversations.filter(
+      (c) =>
+        c.title.toLowerCase().includes(q) ||
+        (numericId !== null && c.id === numericId),
+    )
+    if (matchingConvs.length > 0) {
+      result.push({ ...agent, conversations: matchingConvs })
+    }
+  }
+  return result
+}
+
+// ---------------------------------------------------------------------------
+// 侧栏交互辅助：分屏在场/焦点推导、激活态与待命入口（无 React 依赖，Sidebar 各子组件共用）
+// ---------------------------------------------------------------------------
+
+export interface SidebarTargetPresence {
+  inPrimary: boolean
+  inSplit: boolean
+  /** 主高亮：单屏时为 inPrimary；分屏时为当前聚焦面板命中的项 */
+  active: boolean
+  /** 分屏非聚焦在场高亮：分屏开启时命中的非聚焦面板项 */
+  splitSecondary: boolean
+  /** 分屏开启且当前命中聚焦面板（驱动左侧 2px accent 焦点指示） */
+  focused: boolean
+  /** 分屏开启时在行尾显示的面板微标：'主' | '分' | '主·分' | null */
+  paneTag: '主' | '分' | '主·分' | null
+}
+
+/** 解析侧栏目标在主屏/分屏的在场、焦点与面板微标状态。 */
+export function resolveSidebarTargetPresence(
+  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
+  matches: (target: ResolvedTarget) => boolean,
+): SidebarTargetPresence {
+  const inPrimary = matches(store.primaryTarget)
+  const inSplit = store.splitTarget !== null && matches(store.splitTarget)
+  if (store.splitTarget === null) {
+    return {
+      inPrimary,
+      inSplit: false,
+      active: inPrimary,
+      splitSecondary: false,
+      focused: false,
+      paneTag: null,
+    }
+  }
+  const focusedPanel = resolveFocusedPanel(store.focusedPanel ?? 'primary', store.splitTarget)
+  const focused = (focusedPanel === 'primary' && inPrimary) || (focusedPanel === 'split' && inSplit)
+  const active = focused
+  const splitSecondary = !focused && (inPrimary || inSplit)
+  const paneTag = inPrimary && inSplit ? '主·分' : inPrimary ? '主' : inSplit ? '分' : null
+  return {
+    inPrimary,
+    inSplit,
+    active,
+    splitSecondary,
+    focused,
+    paneTag,
+  }
+}
+
+/** 推导指定会话行在主屏/分屏中的在场与焦点状态。 */
+export function getConversationPresence(
+  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
+  convId: number,
+): SidebarTargetPresence {
+  return resolveSidebarTargetPresence(
+    store,
+    (t) => t.kind === 'conversation' && t.conversationId === convId,
   )
 }
 
-// ---------------------------------------------------------------------------
-// 侧栏交互辅助：激活态推导与待命入口（无 React 依赖，Sidebar 各子组件共用）
-// ---------------------------------------------------------------------------
+/** 推导指定 Agent 待命入口在主屏/分屏中的在场与焦点状态。 */
+export function getAgentStandbyPresence(
+  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
+  profileId: string,
+): SidebarTargetPresence {
+  return resolveSidebarTargetPresence(
+    store,
+    (t) => t.kind === 'agent' && t.profileId === profileId,
+  )
+}
 
-/** 会话行是否属于当前激活目标。 */
-export function isConversationActive(store: HelmStoreValue, convId: number): boolean {
-  return store.primaryTarget.kind === 'conversation' && store.primaryTarget.conversationId === convId
+/** 会话行是否属于当前激活目标（单屏为主屏，分屏为当前聚焦面板）。 */
+export function isConversationActive(
+  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
+  convId: number,
+): boolean {
+  return getConversationPresence(store, convId).active
 }
 
 /** 该 Agent 的待命页是否正被主屏或分屏查看。 */
-export function isAgentStandbyActive(store: HelmStoreValue, profileId: string): boolean {
+export function isAgentStandbyActive(
+  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget'>,
+  profileId: string,
+): boolean {
   return (
     (store.primaryTarget.kind === 'agent' && store.primaryTarget.profileId === profileId) ||
     (store.splitTarget?.kind === 'agent' && store.splitTarget.profileId === profileId)
   )
 }
 
-/** 话题列表展开推导：当前主屏/分屏会话或待命页所属的 profileId（无则 null）。 */
-export function activeProfileIdOf(store: HelmStoreValue): string | null {
-  if (store.primaryTarget.kind === 'agent') return store.primaryTarget.profileId
-  if (store.splitTarget?.kind === 'agent') return store.splitTarget.profileId
-  const ids: number[] = []
-  if (store.primaryTarget.kind === 'conversation') ids.push(store.primaryTarget.conversationId)
-  if (store.splitTarget?.kind === 'conversation') ids.push(store.splitTarget.conversationId)
-  for (const id of ids) {
-    const conv = store.conversations.find((c) => c.id === id)
-    if (conv) return conv.profileId
+/** 解析单个目标对应的 profileId（待命页直接读取；会话从会话列表查找；其余返回 null）。 */
+function profileIdForTarget(
+  target: ResolvedTarget | null,
+  conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'profileId'>>,
+): string | null {
+  if (target === null) return null
+  if (target.kind === 'agent') return target.profileId
+  if (target.kind === 'conversation') {
+    return conversations.find((c) => c.id === target.conversationId)?.profileId ?? null
   }
   return null
+}
+
+/** 收集主屏与分屏正在查看目标各自对应的 profileId（按主屏优先顺序插入 Set）。 */
+export function activeProfileIdsOf(
+  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'conversations'>,
+): Set<string> {
+  const ids = new Set<string>()
+  const primaryPid = profileIdForTarget(store.primaryTarget, store.conversations)
+  if (primaryPid !== null) ids.add(primaryPid)
+  const splitPid = profileIdForTarget(store.splitTarget, store.conversations)
+  if (splitPid !== null) ids.add(splitPid)
+  return ids
+}
+
+/** 话题列表展开推导：当前主屏/分屏会话或待命页所属的首个 profileId（无则 null）。 */
+export function activeProfileIdOf(
+  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'conversations'>,
+): string | null {
+  return activeProfileIdsOf(store).values().next().value ?? null
+}
+
+/** 收集主屏与分屏中正在查看的会话 ID 集合。 */
+export function activeConversationIdsOf(
+  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget'>,
+): Set<number> {
+  const ids = new Set<number>()
+  if (store.primaryTarget.kind === 'conversation') ids.add(store.primaryTarget.conversationId)
+  if (store.splitTarget?.kind === 'conversation') ids.add(store.splitTarget.conversationId)
+  return ids
 }
 
 /** 在指定 Agent 下进入待命页（所有用户新建入口的统一路径；首次发送才创建会话）。 */
 export function openAgentStandby(store: HelmStoreValue, profileId: string, onNavigate?: () => void): void {
   store.openTarget({ kind: 'agent', profileId })
   onNavigate?.()
-}
-
-/** 当前 Profile 的话题（根会话）行：供主舞台顶栏话题切换 Popover 消费。 */
-export interface TopicListItem {
-  conv: ConversationSummary
-  active: boolean
-}
-
-/**
- * 构建当前 profileId 的话题列表：仅取无父链的根会话，稳定按
- * pinned 置顶 -> createdAt 倒序 -> id 倒序排序（createdAt 固定不变，
- * AI 输出推进 updatedAt 不会让话题跳位）；markActiveId 为当前激活会话。
- */
-export function buildProfileTopics(
-  conversations: ConversationSummary[],
-  profileId: string,
-  markActiveId: number | null,
-): TopicListItem[] {
-  const roots = conversations.filter(
-    (c) =>
-      c.profileId === profileId &&
-      c.parentConversationId === undefined &&
-      !isConversationArchived(c),
-  )
-  const sorted = [...roots].sort((a, b) => {
-    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
-    if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt
-    return b.id - a.id
-  })
-  return sorted.map((conv) => ({ conv, active: conv.id === markActiveId }))
-}
-
-/** 过滤话题列表：标题、#id（#10 或 10 形式）模糊匹配。 */
-export function filterTopicList(items: TopicListItem[], query: string): TopicListItem[] {
-  const raw = query.trim().toLowerCase()
-  if (!raw) return items
-  const numeric = /^#?(\d+)$/.exec(raw)
-  const q = numeric ? numeric[1]! : raw
-  return items.filter(
-    (item) =>
-      item.conv.title.toLowerCase().includes(q) ||
-      (numeric !== null && String(item.conv.id).includes(q)),
-  )
 }
 

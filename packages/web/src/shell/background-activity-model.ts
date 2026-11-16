@@ -122,9 +122,9 @@ export function collectBackgroundBadgeDocs(
 
 /**
  * 智能体站位行折叠态聚合指示器：
- * - representative：名下基础状态优先级最高的会话（error > blocked > working，
- *   并列取列表首个即常驻/最新置顶序；无更高优先级时保持列表首个，与既有
- *   「看 primaryConversation」行为兼容）——支持后台在途来自非 primary 会话；
+ * - representative：名下基础状态优先级最高的会话（error > blocked > working > done > idle，
+ *   并列取列表首个即常驻/最新置顶序；纯 idle 时保持列表首个，与既有
+ *   「看 primaryConversation」行为兼容）——支持非 primary 会话的未读 done 绿点与后台在途透出；
  * - backgroundActive / backgroundSummary：名下任一会话的后台在途聚合
  *   （footerText 去重拼接）。灯位渲染由 resolveStatusLight 单灯裁决：代表会话
  *   working/blocked/error 时状态灯独占（隐藏整个站位的后台环），代表 idle/done
@@ -136,11 +136,12 @@ export interface StandingStatusIndicator {
   backgroundSummary: string
 }
 
-/** 基础状态聚合优先级：error 最需人介入，blocked 次之，working 再次；done/idle 不参与竞争。 */
+/** 基础状态聚合优先级：error > blocked > working > done > idle（idle 不参与竞争）。 */
 const STANDING_STATUS_RANK: Record<string, number> = {
-  error: 3,
-  blocked: 2,
-  working: 1,
+  error: 4,
+  blocked: 3,
+  working: 2,
+  done: 1,
 }
 
 export function resolveStandingStatusIndicator(
@@ -197,30 +198,34 @@ export interface AgentSubListPreview {
 
 /**
  * Agent 子列表折叠预览切片：默认仅展示前 AGENT_SUB_LIST_PREVIEW 条，但三类行
- * 绝不因折叠丢失——当前激活会话、working/blocked 会话、后台在途会话
- * （在途需要被看见，埋在「展开更多」后面会误导用户以为空闲）。
+ * 绝不因折叠丢失——当前活跃会话（activeId 与 activeIds 并集，含分屏双开）、
+ * working/blocked 会话、后台在途会话（在途需要被看见，埋在「展开更多」后面会误导用户以为空闲）。
  * showAll 时全量展示。纯函数无副作用，组件与单测共用。
  */
 export function resolveAgentSubListPreview(input: {
   conversations: ReadonlyArray<ConversationSummary>
   showAll: boolean
-  /** 当前激活会话 ID（主屏目标；无则 null）。 */
+  /** 当前激活会话 ID（单屏或聚焦面板目标；无则 null）。 */
   activeId: number | null
+  /** 分屏多活跃会话 ID 集合（主屏与分屏所有会话均受保护，避免分屏会话被折叠隐藏）。 */
+  activeIds?: ReadonlySet<number>
   background: ConversationBackgroundIndex
 }): AgentSubListPreview {
-  const { conversations, showAll, activeId, background } = input
+  const { conversations, showAll, activeId, activeIds, background } = input
+  const activeSet = new Set<number>(activeIds)
+  if (activeId !== null) activeSet.add(activeId)
   const list = [...conversations]
   if (
     showAll ||
     list.length <= AGENT_SUB_LIST_PREVIEW ||
-    (activeId !== null && list.findIndex((conv) => conv.id === activeId) >= AGENT_SUB_LIST_PREVIEW)
+    list.some((conv, index) => index >= AGENT_SUB_LIST_PREVIEW && activeSet.has(conv.id))
   ) {
     return { visible: list, hiddenCount: 0 }
   }
   const visible = list.filter(
     (conv, index) =>
       index < AGENT_SUB_LIST_PREVIEW ||
-      conv.id === activeId ||
+      activeSet.has(conv.id) ||
       isConversationInFlight(conv, background),
   )
   return { visible, hiddenCount: list.length - visible.length }
