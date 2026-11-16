@@ -331,7 +331,7 @@ test('工作流时间线点击定位工作台，工作台节点内嵌子代理�
     const cards = host.querySelectorAll('.subagent-card-clickable')
     assert.ok(cards.length >= 1, '工作台节点内子代理卡必须直出（一体化整卡）')
     assert.ok(host.innerHTML.includes('workflow-action-card'), '动作节点应渲染扁平双层卡')
-    assert.ok(!host.innerHTML.includes('展开节点详情'), '不得有手风琴折叠按钮')
+    assert.ok(!host.innerHTML.includes('展开Node details'), '不得有手风琴折叠按钮')
     act(() => {
       ;(cards[0] as HTMLElement).click()
     })

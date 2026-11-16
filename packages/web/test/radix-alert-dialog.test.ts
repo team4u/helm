@@ -27,7 +27,7 @@ test('ConfirmDialog SSR (renderToString)：inline={true} 或纯 Node 环境自�
       inline: true,
       onOpenChange: () => {},
       title: '删除已存密钥？',
-      description: '环境变量中的凭据不会被删除。',
+      description: '环境变量中的Credentials不会被删除。',
       confirmText: '删除密钥',
       cancelText: '取消',
       danger: true,
@@ -41,7 +41,7 @@ test('ConfirmDialog SSR (renderToString)：inline={true} 或纯 Node 环境自�
   assert.ok(html.includes('class="modal"'), '必须包含 .modal 弹窗容器')
   assert.ok(html.includes('max-width:440px') || html.includes('max-width: 440px'), '必须包含 max-width: 440px 约束')
   assert.ok(html.includes('删除已存密钥？'), '必须直出标题文案')
-  assert.ok(html.includes('环境变量中的凭据不会被删除。'), '必须直出描述文案')
+  assert.ok(html.includes('环境变量中的Credentials不会被删除。'), '必须直出描述文案')
   assert.ok(html.includes('btn-danger'), 'danger=true 时确认按钮具备 .btn-danger 样式')
   assert.ok(html.includes('btn-ghost'), '取消按钮具备 .btn-ghost 样式')
   assert.ok(html.includes('删除密钥'), '确认按钮文案正确')
@@ -60,8 +60,8 @@ test('ConfirmDialog DOM 结构与无障碍契约：role="alertdialog"、标题�
         inline: true,
         onOpenChange: () => {},
         title: '重置会话上下文？',
-        description: '历史消息保留，模型将从全新上下文开始。',
-        confirmText: '重置上下文',
+        description: 'History is preserved; the model starts from a fresh context.',
+        confirmText: 'Reset context',
         cancelText: '放弃操作',
         danger: false,
         onConfirm: () => {},
@@ -80,7 +80,7 @@ test('ConfirmDialog DOM 结构与无障碍契约：role="alertdialog"、标题�
 
   const descEl = alertContent.querySelector('.modal-body')
   assert.ok(descEl, '必须包含描述容器')
-  assert.equal(descEl.textContent, '历史消息保留，模型将从全新上下文开始。')
+  assert.equal(descEl.textContent, 'History is preserved; the model starts from a fresh context.')
 
   // 按钮与文案
   const buttons = Array.from(alertContent.querySelectorAll('button'))
@@ -90,7 +90,7 @@ test('ConfirmDialog DOM 结构与无障碍契约：role="alertdialog"、标题�
   assert.ok(cancelBtn, '取消按钮文案为放弃操作')
   assert.ok(cancelBtn.classList.contains('btn-ghost'), '取消按钮具备 btn-ghost')
 
-  const confirmBtn = buttons.find((b) => b.textContent === '重置上下文')
+  const confirmBtn = buttons.find((b) => b.textContent === 'Reset context')
   assert.ok(confirmBtn, '确认按钮文案为重置上下文')
   assert.ok(confirmBtn.classList.contains('btn-primary'), 'danger=false 时确认按钮具备 btn-primary')
 
@@ -118,7 +118,7 @@ test('ConfirmDialog 交互：点击确认按钮触发 onConfirm 回调与 onOpen
           openState = open
         },
         title: '确认删除？',
-        description: '此操作无法撤销。',
+        description: 'This action cannot be undone.',
         confirmText: '确认删除',
         danger: true,
         onConfirm: () => {

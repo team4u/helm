@@ -115,7 +115,7 @@ export function useUnreadSync({
             pushNotice({
               type: 'notification',
               level: 'error',
-              title: '标记已读失败',
+              title: 'Failed to mark as read',
               body: errorText(error),
             })
           }

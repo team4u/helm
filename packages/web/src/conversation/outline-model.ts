@@ -184,9 +184,9 @@ export function summarizeOutlineText(text: string, attachmentCount = 0): string 
     }
   }
   if (attachmentCount > 0) {
-    return `[附件 ×${attachmentCount}]`
+    return `[attachment ×${attachmentCount}]`
   }
-  return '（空消息）'
+  return '(empty message)'
 }
 
 /**
@@ -257,10 +257,10 @@ function buildDividerNode(item: DividerItem): OutlineDividerNode {
     divider: item.divider,
     label:
       item.divider === 'reset'
-        ? '上下文已重置'
+        ? 'Context reset'
         : item.pending === true
-          ? '正在精简上下文…'
-          : '上下文已精简',
+          ? 'Compacting context…'
+          : 'Context compacted',
   }
 }
 
@@ -270,9 +270,9 @@ function buildDividerNode(item: DividerItem): OutlineDividerNode {
 
 /** 状态节点固定文案（按现有数据能力诚实标注，不伪造详情）。 */
 const ASSISTANT_STATUS_LABEL: Record<OutlineAssistantStatus, string> = {
-  generating: '生成中…',
-  failed: '本回合失败',
-  'no-content': '无正文',
+  generating: 'Generating…',
+  failed: 'This turn failed',
+  'no-content': 'No content',
 }
 
 /** AssistantTurn 顶层 tool.view 业务卡节点：通用 toolName + 入参摘要（零插件/工具名特判）。 */

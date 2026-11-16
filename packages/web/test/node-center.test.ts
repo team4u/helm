@@ -128,7 +128,7 @@ test('node-center-model: isNodeLocal 识别本机', { timeout: 60_000 }, () => {
 
 test('node-center-model: getNodeDisplayName 名称格式化', { timeout: 60_000 }, () => {
   assert.equal(getNodeDisplayName({ id: 'local', label: '工作区核心' }), '工作区核心')
-  assert.equal(getNodeDisplayName({ id: 'local' }), '本机内核')
+  assert.equal(getNodeDisplayName({ id: 'local' }), 'Local kernel')
   assert.equal(getNodeDisplayName({ id: 'node-x' }), 'node-x')
 })
 
@@ -231,7 +231,7 @@ test('NodeCard: SSR 渲染包含节点名、架构徽章、在线指示器与 0 
   assert.match(localHtml, /local/)
   assert.match(localHtml, /linux \/ x64/)
   assert.match(localHtml, /status-dot-done status-dot-working/)
-  assert.match(localHtml, /在线/)
+  assert.match(localHtml, /Online/)
   assert.match(localHtml, /bash/)
   assert.match(localHtml, /read/)
   assert.doesNotMatch(localHtml, EMOJI_REGEX)
@@ -334,32 +334,32 @@ test('NodeDetailDrawer: SSR 渲染系统概览、体检信息、接入命令行�
   assert.match(html, /primary-drawer-content/)
   assert.match(html, /GPU 推理集群节点 A/)
   assert.match(html, /worker-gpu-1/)
-  assert.match(html, /在线/)
+  assert.match(html, /Online/)
 
   // 2. 系统概览
-  assert.match(html, /系统概览/)
-  assert.match(html, /操作系统/)
-  assert.match(html, /CPU 架构/)
+  assert.match(html, /System overview/)
+  assert.match(html, /Operating system/)
+  assert.match(html, /CPU architecture/)
   assert.match(html, /arm64/)
   assert.match(html, /gpu-server-01/)
   assert.match(html, /\/opt\/helm-worker/)
 
   // 3. 健康体检与资源负载
-  assert.match(html, /健康体检与资源负载/)
-  assert.match(html, /健康体检/)
-  assert.match(html, /CPU 占用/)
+  assert.match(html, /Health check and resource load/)
+  assert.match(html, /Health check/)
+  assert.match(html, /CPU usage/)
   assert.match(html, /68%/)
-  assert.match(html, /系统负载/)
+  assert.match(html, /System load/)
 
   // 4. 受控机接入指令与一键接入命令
-  assert.match(html, /受控机接入指令/)
+  assert.match(html, /Controlled machine enrollment command/)
   assert.match(html, /helm-node start -d/)
   assert.match(html, /--token/)
-  assert.match(html, /签发接入令牌/)
+  assert.match(html, /Issue access token/)
   assert.match(html, /helm-node doctor/)
 
   // 5. 注册工具能力
-  assert.match(html, /注册工具能力/)
+  assert.match(html, /Registered tools/)
   assert.match(html, /env_exec/)
 
   // 6. 零 Emoji
@@ -381,9 +381,9 @@ test('NodeDetailDrawer: 接入新节点模式 (isNew={true}) 正确渲染', { ti
     ),
   )
 
-  assert.match(html, /接入新计算节点/)
-  assert.match(html, /节点 ID/)
-  assert.match(html, /签发接入令牌/)
+  assert.match(html, /Connect a new compute node/)
+  assert.match(html, /Node ID/)
+  assert.match(html, /Issue access token/)
   assert.doesNotMatch(html, EMOJI_REGEX)
 })
 
@@ -410,17 +410,17 @@ test('NodeCenter: SSR 渲染顶栏、检索工具栏、分类药丸、网格流�
   // 1. 顶栏
   assert.match(html, /primary-center/)
   assert.match(html, /node-center/)
-  assert.match(html, /计算节点中心/)
-  assert.match(html, /接入节点/)
+  assert.match(html, /Compute Nodes Center/)
+  assert.match(html, /Connect node/)
 
   // 2. 检索栏与分类药丸
   assert.match(html, /primary-search-box/)
-  assert.match(html, /搜索节点 ID、名称、平台架构、版本或操作系统/)
+  assert.match(html, /Search node ID, name, platform, version or OS/)
   assert.match(html, /primary-category-pill/)
-  assert.match(html, /全部/)
+  assert.match(html, /All/)
   assert.match(html, /本机/)
-  assert.match(html, /远端/)
-  assert.match(html, /在线/)
+  assert.match(html, /Remote/)
+  assert.match(html, /Online/)
   assert.match(html, /离线/)
 
   // 3. 卡片网格
@@ -455,7 +455,7 @@ test('NodeCenter: 分屏模式支持 isSplit 与 onCloseSplit', { timeout: 60_00
   )
 
   assert.match(html, /is-split/)
-  assert.match(html, /关闭分屏/)
+  assert.match(html, /Close split view/)
 })
 
 test('NodeCenter: 选中节点时通过 primaryTarget 唤起抽屉详情', { timeout: 60_000 }, () => {
@@ -477,7 +477,7 @@ test('NodeCenter: 选中节点时通过 primaryTarget 唤起抽屉详情', { tim
   // 抽屉被展开
   assert.match(html, /role="dialog"/)
   assert.match(html, /GPU 推理集群节点 A/)
-  assert.match(html, /系统概览/)
+  assert.match(html, /System overview/)
 })
 
 test('NodeCenter: 空节点列表渲染友好空状态与重置按钮', { timeout: 60_000 }, () => {
@@ -497,7 +497,7 @@ test('NodeCenter: 空节点列表渲染友好空状态与重置按钮', { timeou
   )
 
   assert.match(html, /primary-center-empty/)
-  assert.match(html, /未找到匹配的计算节点/)
+  assert.match(html, /No matching compute nodes/)
   assert.doesNotMatch(html, EMOJI_REGEX)
 })
 
@@ -553,7 +553,7 @@ test('NodeCard & NodeDetailDrawer: 使用固定右上角 .btn-icon-sm 与统一 
 
     assert.ok(container.querySelector('.btn-icon-sm'), 'NodeDetailDrawer 关闭按钮应使用 .btn-icon-sm')
     const healthBtn = Array.from(container.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('健康体检'),
+      b.textContent?.includes('Health check'),
     )
     assert.ok(healthBtn)
     await act(async () => {

@@ -26,7 +26,7 @@ export function ThinkingLevelControl({
   onPick,
   disabled = false,
   className = 'composer-thinking-row',
-  'aria-label': ariaLabel = '思考档位',
+  'aria-label': ariaLabel = 'Thinking level',
 }: ThinkingLevelControlProps): React.JSX.Element | null {
   if (levels.length === 0) return null
   const safeValue = levels.includes(value) ? value : (levels[0] ?? '')

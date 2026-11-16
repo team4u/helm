@@ -449,7 +449,7 @@ test('PluginMicroAction：pending 期间禁用防重复提交，失败显式通�
     assert.equal(calls.length, 1)
     assert.equal(notices.length, 1)
     assert.equal(notices[0]!.level, 'error')
-    assert.match(notices[0]!.title, /执行失败：中止/)
+    assert.match(notices[0]!.title, /Execution failed: 中止/)
     assert.match(notices[0]!.body!, /后端拒绝/)
     assert.equal(btn.disabled, false)
   } finally {
@@ -540,7 +540,7 @@ test('ConversationTimeline：timeline.entry.action 仅在匹配 kind/role 的消
   assert.match(html, /引用用户消息/)
   assert.match(html, /引用回复/)
   assert.doesNotMatch(html, /仅Worker/)
-  assert.match(html, /从此处分叉新会话/)
+  assert.match(html, /Fork a new conversation from here/)
 })
 
 test('ConversationRowActionsMenu：仅在该会话 scope 命中或人类自有根会话时渲染菜单入口', { timeout: 60_000 }, () => {
@@ -551,13 +551,13 @@ test('ConversationRowActionsMenu：仅在该会话 scope 命中或人类自有�
   const html = renderToString(
     e(HostStoreProviders, { value: scopedStore }, e(ConversationRowActionsMenu, { conversation: workerConv })),
   )
-  assert.match(html, /插件会话操作/)
+  assert.match(html, /Plugin conversation actions/)
 
   const humanStore = makeTestStore({ conversations: [humanConv], groupedUi: groupUiContributions(contributions) })
   const humanHtml = renderToString(
     e(HostStoreProviders, { value: humanStore }, e(ConversationRowActionsMenu, { conversation: humanConv })),
   )
-  assert.match(humanHtml, /会话操作/)
+  assert.match(humanHtml, /Conversation actions/)
 
   const botStore = makeTestStore({ conversations: [botConv], groupedUi: groupUiContributions(contributions) })
   const emptyHtml = renderToString(
@@ -583,7 +583,7 @@ test('ConversationPane SSR：placement=toolbar 直出顶栏，menu 动作不占�
   assert.match(html, /巡查/)
   assert.doesNotMatch(html, /归档汇报/)
   assert.doesNotMatch(html, /别处会话/)
-  assert.match(html, /更多会话操作/)
+  assert.match(html, /More conversation actions/)
 })
 
 test('groupedUi 微插槽分组：surface 正确归组并按 order 排序', { timeout: 60_000 }, () => {
@@ -648,7 +648,7 @@ test('queued 人类消息（无持久锚点）不渲染 entry action', { timeout
   assert.doesNotMatch(queuedHover, /引用/)
   assert.doesNotMatch(queuedHover, /:helm\.input:/)
   assert.doesNotMatch(queuedHover, /:queued:/)
-  assert.match(html, /排队中 · 待当前回合结束后发送/)
+  assert.match(html, /Queued · sent after the current turn ends/)
 })
 
 test('assistant 回合 entry action：锚点是带 assistant 正文的真实条目，非 tool-result', { timeout: 60_000 }, () => {
@@ -708,7 +708,7 @@ test('live 回合无持久锚点：不渲染 entry action，宿主分叉按钮�
   )
   assert.match(html, /1:helm\.input:/)
   assert.doesNotMatch(html, /引用回复/)
-  assert.doesNotMatch(html, /从此处分叉新会话/)
+  assert.doesNotMatch(html, /Fork a new conversation from here/)
 })
 
 test('live 快照合并进已有持久 pi.assistant 回合：busy 期间不渲染，也不伪造锚点', { timeout: 60_000 }, () => {

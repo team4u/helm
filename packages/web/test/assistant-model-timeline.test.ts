@@ -145,7 +145,7 @@ test('parseAssistantModelIdentity：身份不完整/非法返回 undefined，绝
 test('模型标签：短标签取 model 末段，完整标签 provider/model（+ 思考档位）', { timeout: 60_000 }, () => {
   const id: AssistantModelIdentity = { provider: 'faux', model: 'glm-4.7', thinkingLevel: 'high' }
   assert.equal(assistantModelShortLabel(id), 'glm-4.7')
-  assert.equal(assistantModelFullLabel(id), 'faux/glm-4.7 · 思考 high')
+  assert.equal(assistantModelFullLabel(id), 'faux/glm-4.7 · thinking high')
   assert.equal(assistantModelFullLabel({ provider: 'faux', model: 'glm-4.7' }), 'faux/glm-4.7')
   // 与 Composer 模型按钮同口径：含 '/' 的 model id 取末段
   assert.equal(assistantModelShortLabel({ provider: 'p', model: 'vendor/glm-4.7' }), 'glm-4.7')
@@ -317,7 +317,7 @@ test('reset / compaction 上下文边界停止回看：边界后的首个新模�
   const items = buildTimelineItems([
     humanInputEntry('1', '问'),
     modelAssistantEntry('2', 'faux', 'glm-4.6', [{ type: 'text', text: '旧上下文回答' }]),
-    { id: '3', kind: 'pi.reset', data: { handoff: '交接摘要' } },
+    { id: '3', kind: 'pi.reset', data: { handoff: 'Handoff summary' } },
     humanInputEntry('4', '新问'),
     modelAssistantEntry('5', 'faux', 'glm-4.7', [{ type: 'text', text: '新上下文回答' }]),
   ])
@@ -464,13 +464,13 @@ test('ConversationTimeline：assistant-human-assistant 的 A→B 渲染边界与
 
   // 边界锚定 B 回合之前，短标签 + 完整值 title（不使用 conversation.model）
   assert.match(html, /class="model-boundary"/)
-  assert.match(html, /aria-label="实际生成模型切换为 faux\/glm-4\.7 · 思考 high"/)
-  assert.match(html, /title="实际生成模型已切换：faux\/glm-4\.7 · 思考 high"/)
+  assert.match(html, /aria-label="Effective model switched to faux\/glm-4\.7 · thinking high"/)
+  assert.match(html, /title="Effective model switched: faux\/glm-4\.7 · thinking high"/)
   assert.ok(!html.includes('other/current-config'), '绝不读取当前会话配置冒充历史')
 
   // 各块 footer 实际模型短标签与完整值
-  assert.match(html, /title="实际生成模型：faux\/glm-4\.6"/)
-  assert.match(html, /title="实际生成模型：faux\/glm-4\.7 · 思考 high"/)
+  assert.match(html, /title="Effective model: faux\/glm-4\.6"/)
+  assert.match(html, /title="Effective model: faux\/glm-4\.7 · thinking high"/)
   assert.match(html, /class="mono">glm-4\.6</)
   assert.match(html, /class="mono">glm-4\.7</)
 
@@ -490,8 +490,8 @@ test('ConversationTimeline：同模型不同 thinkingLevel 不渲染边界；回
     makeSummary(1, 'idle'),
   )
   assert.ok(!twoTurns.includes('model-boundary'), '同模型（仅档位不同）不渲染模型切换边界')
-  assert.match(twoTurns, /title="实际生成模型：faux\/glm-4\.7 · 思考 high"/)
-  assert.match(twoTurns, /title="实际生成模型：faux\/glm-4\.7 · 思考 low"/)
+  assert.match(twoTurns, /title="Effective model: faux\/glm-4\.7 · thinking high"/)
+  assert.match(twoTurns, /title="Effective model: faux\/glm-4\.7 · thinking low"/)
 
   // 同一回合内档位混合：不拆分、无边界，title 不伪造单一档位（只给 provider/model）
   const mixedTurn = renderTimeline(
@@ -503,7 +503,7 @@ test('ConversationTimeline：同模型不同 thinkingLevel 不渲染边界；回
     makeSummary(1, 'idle'),
   )
   assert.ok(!mixedTurn.includes('model-boundary'))
-  assert.match(mixedTurn, /title="实际生成模型：faux\/glm-4\.7"/)
+  assert.match(mixedTurn, /title="Effective model: faux\/glm-4\.7"/)
   assert.ok(!mixedTurn.includes('思考'), '回合内档位不一致时完整标签不出现任何单一档位')
 })
 

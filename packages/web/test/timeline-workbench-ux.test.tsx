@@ -343,14 +343,14 @@ test('ConversationPane 顶栏类名、分屏隐藏容器、标题 Popover 与抽
   // 1) 主屏无分屏态：有 .pane-action-label、.pane-split-btn、标题点击打开详情 Popover，工作台在仅有 spill 时仍可点击
   await ui.render(baseStore, e(ConversationPane, { conversationId: 42 }))
 
-  const workbenchBtn = ui.host.querySelector('button[aria-label="工作台"]') as HTMLButtonElement | null
+  const workbenchBtn = ui.host.querySelector('button[aria-label="Workbench"]') as HTMLButtonElement | null
   assert.ok(workbenchBtn)
   assert.ok(workbenchBtn.querySelector('.pane-action-label'), '工作台文字须包裹 .pane-action-label')
-  assert.equal(workbenchBtn.querySelector('.pane-action-label')?.textContent, '工作台')
+  assert.equal(workbenchBtn.querySelector('.pane-action-label')?.textContent, 'Workbench')
 
   const splitWrapper = ui.host.querySelector('.pane-split-btn')
   assert.ok(splitWrapper, '非分屏态应由 .pane-split-btn 包裹分屏触发按钮')
-  assert.ok(splitWrapper.querySelector('button[aria-label*="分屏"]'))
+  assert.ok(splitWrapper.querySelector('button[aria-label*="split"]'))
 
   const titleBtn = ui.host.querySelector('.pane-title-btn') as HTMLButtonElement | null
   assert.ok(titleBtn, '顶栏标题应可点击展开元信息 Popover')
@@ -381,12 +381,12 @@ test('ConversationPane 顶栏类名、分屏隐藏容器、标题 Popover 与抽
   assert.match(envBar.textContent ?? '', /#42/)
   assert.match(envBar.textContent ?? '', /coder/)
   assert.match(envBar.textContent ?? '', /gpu-box-1:\/srv\/app\/repo/)
-  assert.match(envBar.textContent ?? '', /归属 helm/)
+  assert.match(envBar.textContent ?? '', /Owner helm/)
 
   const actionsContainer = ui.host.querySelector('.pane-actions')
   assert.ok(actionsContainer)
   const children = [...actionsContainer.children]
-  const fullscreenIdx = children.findIndex((el) => el.getAttribute('aria-label') === '全屏打开此会话')
+  const fullscreenIdx = children.findIndex((el) => el.getAttribute('aria-label') === 'Open this conversation fullscreen')
   const moreIdx = children.findIndex((el) => el.classList.contains('pane-more-menu'))
   const closeIdx = children.findIndex((el) => el.classList.contains('conversation-drawer-close-btn'))
   assert.ok(fullscreenIdx >= 0 && moreIdx > fullscreenIdx && closeIdx === children.length - 1, '抽屉 [×] 必须严格固定在最右侧')
@@ -410,7 +410,7 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
     artifactCount: countDeliverableArtifacts([registered, uploaded, spill1]),
     conversationId: 1,
   })
-  assert.equal(tabs[0]?.label, '产物')
+  assert.equal(tabs[0]?.label, 'Artifacts')
   assert.equal(tabs[0]?.count, 2)
   assert.deepEqual(buildWorkbenchFooter(tabs), [])
 
@@ -471,7 +471,7 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
 
   // 页签标题绝不出现 `产物 (2) 2`
   const tabTexts = [...ui.host.querySelectorAll('.tab-btn')].map((el) => el.textContent?.trim())
-  assert.ok(tabTexts.includes('产物2'), `预期单次计数徽章，实际: ${JSON.stringify(tabTexts)}`)
+  assert.ok(tabTexts.includes('Artifacts2'), `预期单次计数徽章，实际: ${JSON.stringify(tabTexts)}`)
   assert.ok(!tabTexts.some((t) => t?.includes('(2)')))
   assert.ok(!tabTexts.some((t) => /MEMORY/i.test(t ?? '')), '不添加 MEMORY.md 标签页')
 
@@ -484,18 +484,18 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
   assert.ok(ui.host.querySelector('.workbench-tabs-scroll .workbench-close-btn') === null)
 
   // 正式产物区可见注册产物与上传附件，不含 spill 文件名
-  const deliverablesSection = ui.host.querySelector('[aria-label="正式产物"]')!
+  const deliverablesSection = ui.host.querySelector('[aria-label="Registered artifacts"]')!
   assert.match(deliverablesSection.textContent ?? '', /summary-report\.md/)
-  assert.match(deliverablesSection.textContent ?? '', /注册产物/)
+  assert.match(deliverablesSection.textContent ?? '', /Registered artifact/)
   assert.match(deliverablesSection.textContent ?? '', /diagram\.png/)
-  assert.match(deliverablesSection.textContent ?? '', /上传附件/)
+  assert.match(deliverablesSection.textContent ?? '', /Uploaded attachment/)
   assert.doesNotMatch(deliverablesSection.textContent ?? '', /bash-stdout-001\.log/)
 
   // spill 区默认折叠且显示计数 2
   const spillToggle = ui.host.querySelector('.artifact-spill-toggle') as HTMLButtonElement
   assert.ok(spillToggle)
   assert.equal(spillToggle.getAttribute('aria-expanded'), 'false')
-  assert.match(spillToggle.textContent ?? '', /超长工具输出快照/)
+  assert.match(spillToggle.textContent ?? '', /Oversized tool output snapshot/)
   assert.match(spillToggle.textContent ?? '', /2/)
   assert.doesNotMatch(ui.host.textContent ?? '', /bash-stdout-001\.log/)
 
@@ -508,7 +508,7 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
   assert.match(spillList.textContent ?? '', /bash-stdout-001\.log/)
   assert.match(spillList.textContent ?? '', /bash-stdout-002\.log/)
 
-  const previewSpillBtn = spillList.querySelector('button[aria-label="预览 bash-stdout-001.log"]') as HTMLButtonElement
+  const previewSpillBtn = spillList.querySelector('button[aria-label="Preview bash-stdout-001.log"]') as HTMLButtonElement
   await act(async () => {
     previewSpillBtn.click()
   })
@@ -516,7 +516,7 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
 
   // 触发下载报错时推送错误通知而不崩溃，恢复正常后可触发下载请求
   failDownload = true
-  const downloadRegBtn = ui.host.querySelector('button[aria-label="下载 summary-report.md"]') as HTMLButtonElement
+  const downloadRegBtn = ui.host.querySelector('button[aria-label="Download summary-report.md"]') as HTMLButtonElement
   await act(async () => {
     downloadRegBtn.click()
     await new Promise((r) => setTimeout(r, 20))
@@ -543,8 +543,8 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
   })
   await ui.render(spillOnlyStore, e(WorkbenchDrawer, { conversationId: 2, inline: true }))
   const spillOnlyTabBtn = ui.host.querySelector('.tab-btn')!
-  assert.equal(spillOnlyTabBtn.textContent?.trim(), '产物')
-  assert.match(ui.host.textContent ?? '', /暂无注册产物或上传附件/)
+  assert.equal(spillOnlyTabBtn.textContent?.trim(), 'Artifacts')
+  assert.match(ui.host.textContent ?? '', /No registered artifacts or uploaded attachments yet/)
   assert.equal(ui.host.querySelector('.artifact-spill-toggle')?.getAttribute('aria-expanded'), 'false')
 
   // 验证指定插件工作台页签（workflow tasks 等）可正常渲染，且在非 artifacts 页签下“产物”页签计数仍唯一清晰
@@ -555,8 +555,8 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
   })
   await ui.render(wfTabStore, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
   assert.match(ui.host.textContent ?? '', /工作流任务树面板 #1/)
-  const inactiveArtifactsTab = [...ui.host.querySelectorAll('.tab-btn')].find((el) => el.textContent?.includes('产物'))
-  assert.equal(inactiveArtifactsTab?.textContent?.trim(), '产物2', '切换至其他页签时产物计数亦不可重复')
+  const inactiveArtifactsTab = [...ui.host.querySelectorAll('.tab-btn')].find((el) => el.textContent?.includes('Artifacts'))
+  assert.equal(inactiveArtifactsTab?.textContent?.trim(), 'Artifacts2', '切换至其他页签时产物计数亦不可重复')
 
   // buildTimelineItems 保持向后导出完整性
   assert.deepEqual(buildTimelineItems([]), [])

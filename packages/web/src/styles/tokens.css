@@ -20,8 +20,8 @@
   --bg-backdrop: rgba(0, 0, 0, 0.28);
 
   /* 代码高亮：借鉴 pi 的 OKHSL 语义色相映射（蓝=关键字、黄=函数、紫=类型、
-     青=变量、橙=字符串、绿=数字、灰=注释标点）；浅色饱和度收一档（S×0.85）
-     呈纸面油墨感，并保证底色 ≥4.5:1 */
+     blue=variables, orange=strings, green=numbers, gray=comments/punctuation); light theme desaturates one notch (S×0.85)
+     for a paper-ink feel while keeping backgrounds ≥4.5:1 */
   --code-bg: #f6f8fa;
   --code-header-bg: #eef1f4;
   --code-border: #d0d7de;
@@ -54,7 +54,7 @@
   --fg-on-solid: #ffffff;
 
   /* Markdown 正文阅读色阶（Soft Ink）：正文墨阶去眩光，标题/加粗压实锚点，
-     列表符号与引用退灰；行内代码用带靛紫倾向的冷墨，仅靠胶囊底与等宽体区分 */
+     List markers and quotes fade to gray; inline code uses a cool indigo ink distinguished only by pill background and monospace font */
   --prose-fg: #2c2d35;
   --prose-strong: #18181d;
   --prose-muted: #5a5b66;
@@ -162,7 +162,7 @@
   --fg-on-solid: #14142a;
 
   /* 正文保持墨阶去光晕（Halation）：标题/加粗才提亮，列表符号去噪；
-     行内代码用带靛紫倾向的冷墨，仅靠胶囊底与等宽体区分 */
+     Inline code uses a cool indigo ink distinguished only by pill background and monospace font */
   --prose-fg: #d9d9e0;
   --prose-strong: #f2f2f7;
   --prose-muted: #a0a0ab;

@@ -216,7 +216,7 @@ test('CodeBlockRenderer：加载失败显式诊断 + 源码可复制（诚实性
   await new Promise((r) => setTimeout(r, 50))
   act(() => { root!.render(e(HostStoreProviders, { value: store }, e(CBR, { language: 'ui', code }))) })
   const text = host.textContent ?? ''
-  assert.match(text, /渲染失败|加载失败/)
+  assert.match(text, /render failed|Failed to load/)
   assert.match(text, /not found|404/)
   assert.ok(text.includes('"component"'), '源码原文保留（可复制）')
   globalThis.fetch = origFetch

@@ -120,7 +120,7 @@ function applyPluginClientCss(
   if (typeof css !== 'string') {
     throw new PluginClientError(
       'client_module_css_invalid',
-      `插件 ${pluginId} 模块 ${moduleRef} 的保留导出 ${PLUGIN_CLIENT_CSS_EXPORT} 必须为 string（实际为 ${typeof css}），已拒绝装载其样式`,
+      `Plugin ${pluginId} reserved export ${PLUGIN_CLIENT_CSS_EXPORT} of module ${moduleRef} must be a string (got ${typeof css}); refusing to load its styles`,
       0,
     )
   }
@@ -275,7 +275,7 @@ async function fetchChunkText(
     }
     throw new PluginClientError(
       'client_chunk_fetch_failed',
-      `加载插件 ${pluginId} chunk ${chunkName} 失败：${err instanceof Error ? err.message : String(err)}`,
+      `Failed to load plugin ${pluginId} chunk ${chunkName}: ${err instanceof Error ? err.message : String(err)}`,
       0,
     )
   }
@@ -287,7 +287,7 @@ async function fetchChunkText(
     } catch {
       /* ignore */
     }
-    throw new PluginClientError('client_chunk_http_error', `插件 ${pluginId} chunk ${chunkName}：${message}`, res.status)
+    throw new PluginClientError('client_chunk_http_error', `Plugin ${pluginId} chunk ${chunkName}: ${message}`, res.status)
   }
   return await res.text()
 }
@@ -336,7 +336,7 @@ async function loadSingleChunk(
     if (generation !== pluginCacheGeneration(pluginId)) {
       throw new PluginClientError(
         'client_module_invalidated',
-        `插件 ${pluginId} 的 chunk ${chunkName} 加载已失效，请重新加载`,
+        `Plugin ${pluginId} chunk ${chunkName} has been invalidated; reload required`,
         0,
       )
     }
@@ -395,7 +395,7 @@ async function fetchModuleText(pluginId: string, moduleRef: string): Promise<{ c
   } catch (err) {
     throw new PluginClientError(
       'client_module_fetch_failed',
-      `加载插件 ${pluginId} client 模块 ${moduleRef} 失败：${err instanceof Error ? err.message : String(err)}`,
+      `Failed to load plugin ${pluginId} client module ${moduleRef}: ${err instanceof Error ? err.message : String(err)}`,
       0,
     )
   }
@@ -407,7 +407,7 @@ async function fetchModuleText(pluginId: string, moduleRef: string): Promise<{ c
     } catch {
       /* 非 JSON 错误体：保留 HTTP 状态描述 */
     }
-    throw new PluginClientError('client_module_http_error', `插件 ${pluginId} client 模块 ${moduleRef}：${message}`, res.status)
+    throw new PluginClientError('client_module_http_error', `Plugin ${pluginId} client module ${moduleRef}: ${message}`, res.status)
   }
   const contentHash = res.headers.get('x-helm-client-hash') ?? ''
   return { code: await res.text(), contentHash }
@@ -423,7 +423,7 @@ export async function loadPluginClientModule(pluginId: string, moduleRef: string
   const pluginEpoch = pluginEpochs.get(pluginId)
   const assertCurrent = () => {
     if (epoch !== cacheEpoch || pluginEpoch !== pluginEpochs.get(pluginId)) {
-      throw new PluginClientError('client_module_invalidated', `插件 ${pluginId} 的 client 模块加载已失效，请重新加载`, 0)
+      throw new PluginClientError('client_module_invalidated', `Plugin ${pluginId} client module has been invalidated; reload required`, 0)
     }
   }
 
@@ -451,7 +451,7 @@ export async function loadPluginClientModule(pluginId: string, moduleRef: string
       const imported = evaluateModuleCode(code).catch((err) => {
         throw new PluginClientError(
           'client_module_import_failed',
-          `插件 ${pluginId} client 模块 ${moduleRef} 导入失败：${err instanceof Error ? err.message : String(err)}`,
+          `Failed to import plugin ${pluginId} client module ${moduleRef}: ${err instanceof Error ? err.message : String(err)}`,
           0,
         )
       })
@@ -465,7 +465,7 @@ export async function loadPluginClientModule(pluginId: string, moduleRef: string
           if (epoch !== cacheEpoch || pluginEpoch !== pluginEpochs.get(pluginId) || cache.get(key) !== entry) {
             throw new PluginClientError(
               'client_module_invalidated',
-              `插件 ${pluginId} 的 client 模块加载已失效，请重新加载`,
+              `Plugin ${pluginId} client module has been invalidated; reload required`,
               0,
             )
           }
@@ -542,7 +542,7 @@ export function requireClientExport(
     const available = Object.keys(module).filter((k) => k !== 'default' && k !== '__esModule' && k !== PLUGIN_CLIENT_CSS_EXPORT)
     throw new PluginClientError(
       'client_export_missing',
-      `插件 ${pluginId} 模块 ${moduleRef} 不存在导出 ${exportName}${available.length > 0 ? `（可用导出：${available.join(', ')}）` : '（模块无任何导出）'}`,
+      `Plugin ${pluginId} module ${moduleRef} has no export ${exportName}${available.length > 0 ? ` (available: ${available.join(', ')})` : ' (module has no exports)'}`,
       0,
     )
   }

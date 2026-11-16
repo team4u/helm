@@ -161,7 +161,7 @@ const multiLineLabelFixture = `开头 [foo bar] 引用。\n\n${'普通文本。'
 /** 真实浏览器复现 fixture 2：短文跨 600 阈值增长（代码块身份必须跨阈值保持）。 */
 const thresholdFixtureInitial =
   '# 流式标题\n\n' +
-  '这是一段固定的浏览器测试文本，用于验证长时间线的屏幕外渲染隔离、滚动和大纲定位。'.repeat(8) +
+  '这是一段固定的浏览器测试文本，用于验证长时间线的屏幕外渲染隔离、滚动和Outline定位。'.repeat(8) +
   '\n\n```typescript\nconst fixed = 42\n```\n\n## 第二个标题\n\n正在增长'
 const thresholdFixtureAppend = '，继续输出直到最后一个段落完成。'.repeat(20)
 

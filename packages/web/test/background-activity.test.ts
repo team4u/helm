@@ -106,12 +106,12 @@ test('tone=accent 的按会话角标判定在途并汇入 footerText；缺 foote
     conversations,
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({
-        '1': { count: 2, tone: 'accent', footerText: '2 运行中' },
+        '1': { count: 2, tone: 'accent', footerText: '2 Running' },
         '2': { count: 1, tone: 'accent' },
       }),
     },
   })
-  assert.deepEqual(index.get(1), { active: true, summary: '2 运行中' })
+  assert.deepEqual(index.get(1), { active: true, summary: '2 Running' })
   assert.deepEqual(index.get(2), { active: true, summary: '' })
 })
 
@@ -183,13 +183,13 @@ test('多面板聚合：footerText 去重后拼接，在途取并集', { timeout
     contributions: [panelContribution(), panelContribution({ pluginId: 'builtin:other', spec: { id: 'jobs' } })],
     conversations,
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '1': { count: 2, tone: 'accent', footerText: '2 运行中' } }),
+      'builtin:workflow/run-badges': badgesDoc({ '1': { count: 2, tone: 'accent', footerText: '2 Running' } }),
       'builtin:other/run-badges': badgesDoc({
-        '1': { count: 3, tone: 'accent', footerText: '2 运行中' },
+        '1': { count: 3, tone: 'accent', footerText: '2 Running' },
       }),
     },
   })
-  assert.deepEqual(index.get(1), { active: true, summary: '2 运行中' })
+  assert.deepEqual(index.get(1), { active: true, summary: '2 Running' })
 })
 
 test('contextUsage.compacting=true 判定会话后台在途并合并「上下文精简中」（支持与面板角标去重拼接）', { timeout: 60_000 }, () => {
@@ -203,8 +203,8 @@ test('contextUsage.compacting=true 判定会话后台在途并合并「上下文
     contributions: [],
     conversations,
   })
-  assert.deepEqual(index.get(1), { active: true, summary: '上下文精简中' })
-  assert.deepEqual(index.get(2), { active: true, summary: '上下文精简中' })
+  assert.deepEqual(index.get(1), { active: true, summary: 'Compacting context' })
+  assert.deepEqual(index.get(2), { active: true, summary: 'Compacting context' })
   assert.equal(index.get(3), undefined, 'compacting=false 不得标为在途')
   assert.equal(index.get(4), undefined, '无 compacting 字段不得标为在途')
 
@@ -215,13 +215,13 @@ test('contextUsage.compacting=true 判定会话后台在途并合并「上下文
     ],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({
-        '1': { count: 2, tone: 'accent', footerText: '2 运行中' },
-        '2': { count: 1, tone: 'accent', footerText: '上下文精简中' },
+        '1': { count: 2, tone: 'accent', footerText: '2 Running' },
+        '2': { count: 1, tone: 'accent', footerText: 'Compacting context' },
       }),
     },
   })
-  assert.deepEqual(combined.get(1), { active: true, summary: '2 运行中 · 上下文精简中' })
-  assert.deepEqual(combined.get(2), { active: true, summary: '上下文精简中' })
+  assert.deepEqual(combined.get(1), { active: true, summary: '2 Running · Compacting context' })
+  assert.deepEqual(combined.get(2), { active: true, summary: 'Compacting context' })
 })
 
 // ---------------------------------------------------------------------------
@@ -347,13 +347,13 @@ test('后台在途来自非 primary 会话也能透出，摘要跨会话去重',
     conv({ id: 3, status: 'idle' }),
   ]
   const background: ConversationBackgroundIndex = new Map([
-    [2, { active: true, summary: '1 运行中' }],
-    [3, { active: true, summary: '1 运行中' }],
+    [2, { active: true, summary: '1 Running' }],
+    [3, { active: true, summary: '1 Running' }],
   ])
   const indicator = resolveStandingStatusIndicator(conversations, background)
   assert.equal(indicator?.representative.id, 1, '代表会话仍为 primary')
   assert.equal(indicator?.backgroundActive, true, '非 primary 会话的后台在途必须透出')
-  assert.equal(indicator?.backgroundSummary, '1 运行中', '相同 footerText 跨会话去重')
+  assert.equal(indicator?.backgroundSummary, '1 Running', '相同 footerText 跨会话去重')
 })
 
 test('resolveStatusLight 单灯优先级：主状态独占灯位，idle/done 让位后台空心环', { timeout: 60_000 }, () => {
@@ -380,29 +380,29 @@ test('tooltip 组合：状态灯独占时只陈述主回合；空心环灯位叠
     conversationStatusTooltip('idle'),
   )
   assert.equal(
-    backgroundAwareStatusTooltip({ status: 'idle', backgroundActive: true, backgroundSummary: '2 运行中' }),
-    '空闲 · 后台任务: 2 运行中',
+    backgroundAwareStatusTooltip({ status: 'idle', backgroundActive: true, backgroundSummary: '2 Running' }),
+    'Idle · background task: 2 Running',
   )
   assert.equal(
     backgroundAwareStatusTooltip({ status: 'done', backgroundActive: true, backgroundSummary: '' }),
-    '已完成 · 后台任务运行中',
+    'Completed · background task running',
   )
   // working/blocked/error：即使后台在途，tooltip 也只显示主会话状态/doing/lastError
   assert.equal(
-    backgroundAwareStatusTooltip({ status: 'working', doing: '正在思考方案', backgroundActive: true, backgroundSummary: '2 运行中' }),
-    '运行中: 正在思考方案',
+    backgroundAwareStatusTooltip({ status: 'working', doing: '正在思考方案', backgroundActive: true, backgroundSummary: '2 Running' }),
+    'Running: 正在思考方案',
   )
   assert.equal(
-    backgroundAwareStatusTooltip({ status: 'blocked', backgroundActive: true, backgroundSummary: '2 运行中' }),
-    '待确认',
+    backgroundAwareStatusTooltip({ status: 'blocked', backgroundActive: true, backgroundSummary: '2 Running' }),
+    'Awaiting confirmation',
   )
   assert.equal(
     backgroundAwareStatusTooltip({ status: 'error', lastError: 'model_error: x', backgroundActive: true }),
-    '异常: model_error: x',
+    'Error: model_error: x',
   )
   assert.equal(
     backgroundAwareStatusTooltip({ status: 'error', lastError: 'model_error: x', backgroundActive: false }),
-    '异常: model_error: x',
+    'Error: model_error: x',
   )
 })
 
@@ -456,7 +456,7 @@ test('working/blocked/error 会话 + 后台在途：只渲染主会话状态灯�
       primaryTarget: { kind: 'conversation', conversationId: 50 },
       groupedUi: groupUiContributions([panelContribution()]),
       pluginDocs: {
-        'builtin:workflow/run-badges': badgesDoc({ '1': { count: 3, tone: 'accent', footerText: '3 运行中' } }),
+        'builtin:workflow/run-badges': badgesDoc({ '1': { count: 3, tone: 'accent', footerText: '3 Running' } }),
       },
     })
     const html = renderSidebar(store)
@@ -476,12 +476,12 @@ test('idle 会话 + 后台在途：仅渲染后台空心环，tooltip 陈述空�
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     groupedUi: groupUiContributions([panelContribution()]),
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '1': { count: 2, tone: 'accent', footerText: '2 运行中' } }),
+      'builtin:workflow/run-badges': badgesDoc({ '1': { count: 2, tone: 'accent', footerText: '2 Running' } }),
     },
   })
   const html = renderSidebar(store)
   assert.ok(html.includes('class="status-dot status-dot-background"'), '应渲染后台在途空心环')
-  assert.ok(html.includes('title="空闲 · 后台任务: 2 运行中"'), 'tooltip 同时陈述基础状态与后台摘要')
+  assert.ok(html.includes('title="Idle · background task: 2 Running"'), 'tooltip 同时陈述基础状态与后台摘要')
   assert.ok(!html.includes('status-dot-working'), 'idle + 后台在途不得冒充会话自身 working')
   assert.equal(countStatusLights(html), 1, '折叠站位行只有一个灯')
 })
@@ -495,13 +495,13 @@ test('done 会话 + 后台在途：绿点让位，仅渲染后台空心环', { t
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     groupedUi: groupUiContributions([panelContribution()]),
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '1': { count: 1, tone: 'accent', footerText: '1 运行中' } }),
+      'builtin:workflow/run-badges': badgesDoc({ '1': { count: 1, tone: 'accent', footerText: '1 Running' } }),
     },
   })
   const html = renderSidebar(store)
   assert.ok(html.includes('class="status-dot status-dot-background"'), '后台在途空心环为唯一灯位')
   assert.ok(!html.includes('class="status-dot status-dot-done"'), 'done 绿点必须让位，不得与空心环并列')
-  assert.ok(html.includes('title="已完成 · 后台任务: 1 运行中"'), 'tooltip 陈述已完成 + 后台摘要')
+  assert.ok(html.includes('title="Completed · background task: 1 Running"'), 'tooltip 陈述已完成 + 后台摘要')
   assert.equal(countStatusLights(html), 1, '折叠站位行只有一个灯')
 })
 
@@ -534,12 +534,12 @@ test('展开态：站位行不重复显示指示，每个子会话行各自一�
     primaryTarget: { kind: 'conversation', conversationId: 1 },
     groupedUi: groupUiContributions([panelContribution()]),
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 1, tone: 'accent', footerText: '1 运行中' } }),
+      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 1, tone: 'accent', footerText: '1 Running' } }),
     },
   })
   const html = renderSidebar(store)
   assert.ok(html.includes('agent-conversations-list'), '当前智能体展开话题子列表')
-  assert.ok(html.includes('title="空闲 · 后台任务: 1 运行中"'), 'idle 子会话行展示后台空心环')
+  assert.ok(html.includes('title="Idle · background task: 1 Running"'), 'idle 子会话行展示后台空心环')
   assert.ok(html.includes('class="status-dot status-dot-error"'), 'error 子会话行展示自身状态灯')
   assert.ok(html.includes('class="status-dot status-dot-done"'), 'done 子会话行保持绿点')
   // 三个子会话行各一个灯（done 绿点 / 后台空心环 / error 状态灯），站位行不重复
@@ -563,7 +563,7 @@ test('折叠站位行：非 primary 后台在途 + 代表会话 working/blocked/
   })
   const errorHtml = renderSidebar(errorStore)
   assert.ok(errorHtml.includes('class="status-dot status-dot-error"'), '次要会话 error 必须透出')
-  assert.ok(errorHtml.includes('title="异常: model_error: boom"'))
+  assert.ok(errorHtml.includes('title="Error: model_error: boom"'))
   assert.ok(!errorHtml.includes('status-dot-background'), '无在途徽章时不渲染空心环')
 
   // primary idle + 次会话后台在途 + 另一次会话 blocked：状态灯独占，隐藏整个站位的后台环
@@ -577,7 +577,7 @@ test('折叠站位行：非 primary 后台在途 + 代表会话 working/blocked/
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     groupedUi: groupUiContributions([panelContribution()]),
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 运行中' } }),
+      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 Running' } }),
     },
   })
   const blockedHtml = renderSidebar(blockedStore)
@@ -597,12 +597,12 @@ test('折叠站位行：代表会话 idle/done 时仅渲染一个后台空心环
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     groupedUi: groupUiContributions([panelContribution()]),
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 运行中' } }),
+      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 Running' } }),
     },
   })
   const idleHtml = renderSidebar(idleStore)
   assert.ok(idleHtml.includes('class="status-dot status-dot-background"'), '非 primary 会话的后台在途透出到站位行')
-  assert.ok(idleHtml.includes('title="空闲 · 后台任务: 4 运行中"'))
+  assert.ok(idleHtml.includes('title="Idle · background task: 4 Running"'))
   assert.equal(countStatusLights(idleHtml), 1, '站位行只有一个后台空心环，无并列基础圆点')
 
   // primary done + 次会话后台在途：done 绿点让位，同样仅一个空心环
@@ -615,13 +615,13 @@ test('折叠站位行：代表会话 idle/done 时仅渲染一个后台空心环
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     groupedUi: groupUiContributions([panelContribution()]),
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 2, tone: 'accent', footerText: '2 运行中' } }),
+      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 2, tone: 'accent', footerText: '2 Running' } }),
     },
   })
   const doneHtml = renderSidebar(doneStore)
   assert.ok(!doneHtml.includes('class="status-dot status-dot-done"'), '代表 done 绿点让位')
   assert.ok(doneHtml.includes('class="status-dot status-dot-background"'), '仅渲染后台空心环')
-  assert.ok(doneHtml.includes('title="已完成 · 后台任务: 2 运行中"'))
+  assert.ok(doneHtml.includes('title="Completed · background task: 2 Running"'))
   assert.equal(countStatusLights(doneHtml), 1, '站位行只有一个后台空心环')
 })
 
@@ -638,12 +638,12 @@ test('sidebar.section 分组会话行同样遵守单灯语义', { timeout: 60_00
       { pluginId: 'builtin:superagent', surface: 'sidebar.section', spec: { id: 'workers', label: '后台 Worker', filterTag: 'worker' } },
     ]),
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '20': { count: 1, tone: 'accent', footerText: '1 运行中' } }),
+      'builtin:workflow/run-badges': badgesDoc({ '20': { count: 1, tone: 'accent', footerText: '1 Running' } }),
     },
   })
   const idleHtml = renderSidebar(idleStore)
   assert.ok(idleHtml.includes('后台 Worker'), '分组渲染')
-  assert.ok(idleHtml.includes('title="空闲 · 后台任务: 1 运行中"'), '分组会话行空心环 + 摘要')
+  assert.ok(idleHtml.includes('title="Idle · background task: 1 Running"'), '分组会话行空心环 + 摘要')
 
   // working + 后台在途：仅主状态灯，无 background class
   const workingStore = sidebarStore({
@@ -657,7 +657,7 @@ test('sidebar.section 分组会话行同样遵守单灯语义', { timeout: 60_00
       { pluginId: 'builtin:superagent', surface: 'sidebar.section', spec: { id: 'workers', label: '后台 Worker', filterTag: 'worker' } },
     ]),
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '20': { count: 1, tone: 'accent', footerText: '1 运行中' } }),
+      'builtin:workflow/run-badges': badgesDoc({ '20': { count: 1, tone: 'accent', footerText: '1 Running' } }),
     },
   })
   const workingHtml = renderSidebar(workingStore)
@@ -700,19 +700,19 @@ test('状态灯前置行首：working/done/idle+后台在途的灯均在标题�
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '当前在跑', profileId: 'assistant', status: 'working', doing: '正在思考方案' }),
-      conv({ id: 2, title: '已完成', profileId: 'assistant', status: 'done' }),
+      conv({ id: 2, title: 'Completed', profileId: 'assistant', status: 'done' }),
       conv({ id: 3, title: '纯空闲', profileId: 'assistant' }),
       conv({ id: 4, title: '后台在跑', profileId: 'assistant' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 1 },
     groupedUi: groupUiContributions([panelContribution()]),
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '4': { count: 2, tone: 'accent', footerText: '2 运行中' } }),
+      'builtin:workflow/run-badges': badgesDoc({ '4': { count: 2, tone: 'accent', footerText: '2 Running' } }),
     },
   })
   const html = renderSidebar(store)
   assert.ok(dotBeforeLabel(html, '当前在跑'), 'working 状态灯在标题之前')
-  assert.ok(dotBeforeLabel(html, '已完成'), 'done 状态灯在标题之前')
+  assert.ok(dotBeforeLabel(html, 'Completed'), 'done 状态灯在标题之前')
   assert.ok(dotBeforeLabel(html, '后台在跑'), '后台空心环灯在标题之前')
   // idle 空槽：灯不渲染但槽保留，续行标题保持对齐
   assert.ok(
@@ -801,7 +801,7 @@ test('Sidebar 渲染：idle/done 会话 compacting=true 渲染后台空心环，
     }),
   )
   assert.ok(idleHtml.includes('class="status-dot status-dot-background"'), 'idle + compacting 应渲染后台空心环')
-  assert.ok(idleHtml.includes('title="空闲 · 后台任务: 上下文精简中"'), 'tooltip 应包含 上下文精简中')
+  assert.ok(idleHtml.includes('title="Idle · background task: Compacting context"'), 'tooltip 应包含 上下文精简中')
   assert.equal(countStatusLights(idleHtml), 1)
 
   // done + compacting=true -> 绿点让位空心环
@@ -824,7 +824,7 @@ test('Sidebar 渲染：idle/done 会话 compacting=true 渲染后台空心环，
   )
   assert.ok(doneHtml.includes('class="status-dot status-dot-background"'), 'done + compacting 应渲染后台空心环')
   assert.ok(!doneHtml.includes('class="status-dot status-dot-done"'), 'done 绿点必须让位')
-  assert.ok(doneHtml.includes('title="已完成 · 后台任务: 上下文精简中"'))
+  assert.ok(doneHtml.includes('title="Completed · background task: Compacting context"'))
   assert.equal(countStatusLights(doneHtml), 1)
 
   // working + compacting=true -> 实心 working 灯独占（单灯不变式）
@@ -848,7 +848,7 @@ test('Sidebar 渲染：idle/done 会话 compacting=true 渲染后台空心环，
   )
   assert.ok(workingHtml.includes('class="status-dot status-dot-working"'), 'working 主状态灯必须独占')
   assert.ok(!workingHtml.includes('status-dot-background'), 'working 时不得渲染后台空心环')
-  assert.ok(!workingHtml.includes('上下文精简中'), 'working 时 tooltip 不叠加后台摘要')
+  assert.ok(!workingHtml.includes('Compacting context'), 'working 时 tooltip 不叠加后台摘要')
   assert.equal(countStatusLights(workingHtml), 1)
 
   // idle + compacting=true + workflow accent badge -> 组合摘要「2 运行中 · 上下文精简中」
@@ -869,12 +869,12 @@ test('Sidebar 渲染：idle/done 会话 compacting=true 渲染后台空心环，
       primaryTarget: { kind: 'conversation', conversationId: 50 },
       groupedUi: groupUiContributions([panelContribution()]),
       pluginDocs: {
-        'builtin:workflow/run-badges': badgesDoc({ '1': { count: 2, tone: 'accent', footerText: '2 运行中' } }),
+        'builtin:workflow/run-badges': badgesDoc({ '1': { count: 2, tone: 'accent', footerText: '2 Running' } }),
       },
     }),
   )
   assert.ok(combinedHtml.includes('class="status-dot status-dot-background"'))
-  assert.ok(combinedHtml.includes('title="空闲 · 后台任务: 2 运行中 · 上下文精简中"'))
+  assert.ok(combinedHtml.includes('title="Idle · background task: 2 Running · Compacting context"'))
   assert.equal(countStatusLights(combinedHtml), 1)
 })
 
@@ -921,7 +921,7 @@ test('Sidebar DOM 更新：conversations 的 compacting 从 false 变为 true �
   })
   const ring = container.querySelector('.status-dot-background')
   assert.ok(ring !== null, 'conversations 更新 compacting=true 后应即时点亮空心环')
-  assert.equal(ring.getAttribute('title'), '空闲 · 后台任务: 上下文精简中')
+  assert.equal(ring.getAttribute('title'), 'Idle · background task: Compacting context')
 
   await act(async () => {
     root?.unmount()
@@ -974,8 +974,8 @@ test('sidebar.section 会话行分屏在场：splitTarget 命中渲染 .nav-item
   assert.ok(secondaryMeta, 'Worker A 应渲染 .nav-item-meta')
   const secondaryTag = secondaryMeta.children[0]
   assert.equal(secondaryTag?.className, 'nav-pane-tag', 'paneTag 应前置在 .nav-item-meta 首位')
-  assert.equal(secondaryTag?.textContent, '分')
-  assert.equal(secondaryTag?.getAttribute('title'), '分屏打开')
+  assert.equal(secondaryTag?.textContent, 'Split')
+  assert.equal(secondaryTag?.getAttribute('title'), 'Open in split view')
   assert.equal(secondaryMeta.children[1]?.textContent, '#20')
 
   const workerOther = findNavRow(splitSecondaryHtml, 'Worker B')
@@ -997,8 +997,8 @@ test('sidebar.section 会话行分屏在场：splitTarget 命中渲染 .nav-item
   assert.equal(workerFocused.classList.contains('nav-item-focused'), true)
   assert.equal(workerFocused.classList.contains('nav-item-split'), false)
   assert.equal(workerFocused.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
-  assert.equal(workerFocused.querySelector('.nav-pane-tag')?.textContent, '分')
-  assert.equal(workerFocused.querySelector('.nav-pane-tag')?.getAttribute('title'), '分屏打开')
+  assert.equal(workerFocused.querySelector('.nav-pane-tag')?.textContent, 'Split')
+  assert.equal(workerFocused.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in split view')
 })
 
 test('ViewNavGroup 与 SettingsNavGroup 分屏双开：主/分高亮、焦点刻度与 .nav-pane-tag（单屏不增设 Settings meta）', { timeout: 60_000 }, () => {
@@ -1027,16 +1027,16 @@ test('ViewNavGroup 与 SettingsNavGroup 分屏双开：主/分高亮、焦点刻
   assert.equal(herdrRow.classList.contains('nav-item-active'), false)
   assert.equal(herdrRow.classList.contains('nav-item-focused'), false)
   assert.equal(herdrRow.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
-  assert.equal(herdrRow.querySelector('.nav-pane-tag')?.textContent, '主')
-  assert.equal(herdrRow.querySelector('.nav-pane-tag')?.getAttribute('title'), '主屏打开')
+  assert.equal(herdrRow.querySelector('.nav-pane-tag')?.textContent, 'Main')
+  assert.equal(herdrRow.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in main view')
 
   const runsRow = findNavRow(viewSplitHtml, '工作流总览')
   assert.equal(runsRow.classList.contains('nav-item-active'), true)
   assert.equal(runsRow.classList.contains('nav-item-focused'), true)
   assert.equal(runsRow.classList.contains('nav-item-split'), false)
   assert.equal(runsRow.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
-  assert.equal(runsRow.querySelector('.nav-pane-tag')?.textContent, '分')
-  assert.equal(runsRow.querySelector('.nav-pane-tag')?.getAttribute('title'), '分屏打开')
+  assert.equal(runsRow.querySelector('.nav-pane-tag')?.textContent, 'Split')
+  assert.equal(runsRow.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in split view')
 
   const viewSameHtml = renderSidebar(
     sidebarStore({
@@ -1048,8 +1048,8 @@ test('ViewNavGroup 与 SettingsNavGroup 分屏双开：主/分高亮、焦点刻
   const herdrBothRow = findNavRow(viewSameHtml, 'Herdr 终端')
   assert.equal(herdrBothRow.classList.contains('nav-item-active'), true)
   assert.equal(herdrBothRow.classList.contains('nav-item-focused'), true)
-  assert.equal(herdrBothRow.querySelector('.nav-pane-tag')?.textContent, '主·分')
-  assert.equal(herdrBothRow.querySelector('.nav-pane-tag')?.getAttribute('title'), '主屏与分屏均打开')
+  assert.equal(herdrBothRow.querySelector('.nav-pane-tag')?.textContent, 'Main·Split')
+  assert.equal(herdrBothRow.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in both main and split views')
 
   const singleSettingsHtml = renderSidebar(
     sidebarStore({
@@ -1057,7 +1057,7 @@ test('ViewNavGroup 与 SettingsNavGroup 分屏双开：主/分高亮、焦点刻
       splitTarget: null,
     }),
   )
-  const singleProfiles = findNavRow(singleSettingsHtml, '角色')
+  const singleProfiles = findNavRow(singleSettingsHtml, 'Profile')
   assert.equal(singleProfiles.classList.contains('settings-nav-item'), true)
   assert.equal(singleProfiles.classList.contains('nav-item-active'), true)
   assert.equal(singleProfiles.classList.contains('nav-item-focused'), false)
@@ -1070,25 +1070,25 @@ test('ViewNavGroup 与 SettingsNavGroup 分屏双开：主/分高亮、焦点刻
       focusedPanel: 'split',
     }),
   )
-  const profilesRow = findNavRow(splitSettingsHtml, '角色')
+  const profilesRow = findNavRow(splitSettingsHtml, 'Profile')
   assert.equal(profilesRow.classList.contains('settings-nav-item'), true)
   assert.equal(profilesRow.classList.contains('nav-item-split'), true)
   assert.equal(profilesRow.classList.contains('nav-item-active'), false)
   assert.equal(profilesRow.classList.contains('nav-item-focused'), false)
   assert.equal(profilesRow.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
-  assert.equal(profilesRow.querySelector('.nav-item-meta .nav-pane-tag')?.textContent, '主')
-  assert.equal(profilesRow.querySelector('.nav-item-meta .nav-pane-tag')?.getAttribute('title'), '主屏打开')
+  assert.equal(profilesRow.querySelector('.nav-item-meta .nav-pane-tag')?.textContent, 'Main')
+  assert.equal(profilesRow.querySelector('.nav-item-meta .nav-pane-tag')?.getAttribute('title'), 'Open in main view')
 
-  const modelsRow = findNavRow(splitSettingsHtml, '模型与凭据')
+  const modelsRow = findNavRow(splitSettingsHtml, 'Models & credentials')
   assert.equal(modelsRow.classList.contains('settings-nav-item'), true)
   assert.equal(modelsRow.classList.contains('nav-item-active'), true)
   assert.equal(modelsRow.classList.contains('nav-item-focused'), true)
   assert.equal(modelsRow.classList.contains('nav-item-split'), false)
   assert.equal(modelsRow.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
-  assert.equal(modelsRow.querySelector('.nav-item-meta .nav-pane-tag')?.textContent, '分')
-  assert.equal(modelsRow.querySelector('.nav-item-meta .nav-pane-tag')?.getAttribute('title'), '分屏打开')
+  assert.equal(modelsRow.querySelector('.nav-item-meta .nav-pane-tag')?.textContent, 'Split')
+  assert.equal(modelsRow.querySelector('.nav-item-meta .nav-pane-tag')?.getAttribute('title'), 'Open in split view')
 
-  const skillsRow = findNavRow(splitSettingsHtml, '技能库')
+  const skillsRow = findNavRow(splitSettingsHtml, 'Skills')
   assert.ok(skillsRow.querySelector('.nav-item-meta') === null, '未命中的设置项不渲染 .nav-item-meta')
 
   const sameSettingsHtml = renderSidebar(
@@ -1098,11 +1098,11 @@ test('ViewNavGroup 与 SettingsNavGroup 分屏双开：主/分高亮、焦点刻
       focusedPanel: 'primary',
     }),
   )
-  const profilesBothRow = findNavRow(sameSettingsHtml, '角色')
+  const profilesBothRow = findNavRow(sameSettingsHtml, 'Profile')
   assert.equal(profilesBothRow.classList.contains('nav-item-active'), true)
   assert.equal(profilesBothRow.classList.contains('nav-item-focused'), true)
-  assert.equal(profilesBothRow.querySelector('.nav-pane-tag')?.textContent, '主·分')
-  assert.equal(profilesBothRow.querySelector('.nav-pane-tag')?.getAttribute('title'), '主屏与分屏均打开')
+  assert.equal(profilesBothRow.querySelector('.nav-pane-tag')?.textContent, 'Main·Split')
+  assert.equal(profilesBothRow.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in both main and split views')
 })
 
 test('ArchivedConversationsGroup 分屏命中归档会话：自动展开并渲染 .nav-item-split / .nav-item-active.nav-item-focused 与 .nav-pane-tag', { timeout: 60_000 }, () => {
@@ -1123,7 +1123,7 @@ test('ArchivedConversationsGroup 分屏命中归档会话：自动展开并渲�
   assert.equal(
     secondaryHost.querySelector('.archived-conversations-group .sidebar-group-header-toggle')?.getAttribute('aria-expanded'),
     'true',
-    'splitTarget 指向归档会话时分组应自动展开',
+    'splitTarget 指向Archive conversation时分组应自动展开',
   )
   const archivedSecondary = findNavRow(splitSecondaryHtml, '已归档历史')
   assert.equal(archivedSecondary.classList.contains('nav-item-sub'), true)
@@ -1133,8 +1133,8 @@ test('ArchivedConversationsGroup 分屏命中归档会话：自动展开并渲�
   assert.equal(archivedSecondary.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
   const metaChildren = [...(archivedSecondary.querySelector('.nav-item-meta')?.children ?? [])]
   assert.equal(metaChildren[0]?.className, 'nav-pane-tag', 'paneTag 应前置在 archived-profile-label 之前')
-  assert.equal(metaChildren[0]?.textContent, '分')
-  assert.equal(metaChildren[0]?.getAttribute('title'), '分屏打开')
+  assert.equal(metaChildren[0]?.textContent, 'Split')
+  assert.equal(metaChildren[0]?.getAttribute('title'), 'Open in split view')
   assert.equal(metaChildren[1]?.classList.contains('archived-profile-label'), true)
 
   const splitFocusedHtml = renderSidebar(
@@ -1151,7 +1151,7 @@ test('ArchivedConversationsGroup 分屏命中归档会话：自动展开并渲�
   assert.equal(archivedFocused.classList.contains('nav-item-focused'), true)
   assert.equal(archivedFocused.classList.contains('nav-item-split'), false)
   assert.equal(archivedFocused.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
-  assert.equal(archivedFocused.querySelector('.nav-pane-tag')?.textContent, '分')
+  assert.equal(archivedFocused.querySelector('.nav-pane-tag')?.textContent, 'Split')
 
   const sameArchivedHtml = renderSidebar(
     sidebarStore({
@@ -1163,6 +1163,6 @@ test('ArchivedConversationsGroup 分屏命中归档会话：自动展开并渲�
   const archivedBoth = findNavRow(sameArchivedHtml, '已归档历史')
   assert.equal(archivedBoth.classList.contains('nav-item-active'), true)
   assert.equal(archivedBoth.classList.contains('nav-item-focused'), true)
-  assert.equal(archivedBoth.querySelector('.nav-pane-tag')?.textContent, '主·分')
-  assert.equal(archivedBoth.querySelector('.nav-pane-tag')?.getAttribute('title'), '主屏与分屏均打开')
+  assert.equal(archivedBoth.querySelector('.nav-pane-tag')?.textContent, 'Main·Split')
+  assert.equal(archivedBoth.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in both main and split views')
 })

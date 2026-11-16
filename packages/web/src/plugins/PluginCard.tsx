@@ -44,12 +44,12 @@ export function PluginCard({
   const isSwitchDisabled = isLocked || toggling || isLoadBroken
 
   const switchTitle = isLocked
-    ? '常驻插件不可停用'
+    ? 'Resident plugins cannot be disabled'
     : isLoadBroken
-      ? '插件加载失败，请点击查看错误详情'
+      ? 'Plugin failed to load; click to see error details'
       : plugin.enabled
-        ? '点击停用'
-        : '点击启用'
+        ? 'Click to disable'
+        : 'Click to enable'
 
   const handleCardClick = () => {
     onSelect()
@@ -83,7 +83,7 @@ export function PluginCard({
       onKeyDown={handleCardKeyDown}
       data-plugin-id={plugin.id}
     >
-      {/* 顶部头部：标题/版本/锁定标签 + ID 靠左对齐 */}
+      {/* Top header: title/version/locked badge + ID left-aligned */}
       <div className="plugin-card-header">
         <div className="plugin-card-meta">
           <div className="plugin-card-title-row">
@@ -91,23 +91,23 @@ export function PluginCard({
               {plugin.name || plugin.id}
             </span>
             {versionLabel && (
-              <span className="plugin-card-version" title={`版本 ${versionLabel}`}>
+              <span className="plugin-card-version" title={`Version ${versionLabel}`}>
                 {versionLabel}
               </span>
             )}
             {isLocked && (
-              <span className="plugin-card-locked-badge" title="常驻核心插件，不可停用">
+              <span className="plugin-card-locked-badge" title="Resident core plugin; cannot be disabled">
                 <HelmIcon name="lock" size={10} />
-                <span>常驻</span>
+                <span>Resident</span>
               </span>
             )}
             {isPluginFailed(plugin) && (
               <span
                 className="badge badge-err"
-                title={plugin.error?.message || '插件加载或启用失败'}
+                title={plugin.error?.message || 'Plugin failed to load or enable'}
               >
                 <HelmIcon name="alert-circle" size={10} />
-                <span>异常</span>
+                <span>Error</span>
               </span>
             )}
           </div>
@@ -117,7 +117,7 @@ export function PluginCard({
         </div>
       </div>
 
-      {/* 中部：简短描述（故障时附带错误摘要，供不解开抽屉也能快速定位） */}
+      {/* Middle: short description (with an error summary on failure for quick triage without opening the drawer) */}
       <div
         className="plugin-card-desc"
         title={
@@ -136,23 +136,23 @@ export function PluginCard({
         )}
       </div>
 
-      {/* 底栏：能力胶囊徽章 + 启停 Switch 开关 */}
+      {/* Bottom bar: capability pills + enable/disable switch */}
       <div className="plugin-card-footer">
         <div className="plugin-card-pills">
           {(plugin.tools?.length ?? 0) > 0 && (
-            <span className="plugin-card-pill" title={`${plugin.tools.length} 个 Agent Tools`}>
+            <span className="plugin-card-pill" title={`${plugin.tools.length} Agent Tools`}>
               <HelmIcon name="wrench" size={11} />
               <span>{`${plugin.tools.length} Tools`}</span>
             </span>
           )}
           {(plugin.actions?.length ?? 0) > 0 && (
-            <span className="plugin-card-pill" title={`${plugin.actions.length} 个 CLI/HTTP Actions`}>
+            <span className="plugin-card-pill" title={`${plugin.actions.length} CLI/HTTP Actions`}>
               <HelmIcon name="zap" size={11} />
               <span>{`${plugin.actions.length} Actions`}</span>
             </span>
           )}
           {(plugin.hooks?.length ?? 0) > 0 && (
-            <span className="plugin-card-pill" title={`${plugin.hooks.length} 个内核生命周期钩子`}>
+            <span className="plugin-card-pill" title={`${plugin.hooks.length} kernel lifecycle hooks`}>
               <HelmIcon name="layers" size={11} />
               <span>{`${plugin.hooks.length} Hooks`}</span>
             </span>
@@ -164,8 +164,8 @@ export function PluginCard({
             <button
               type="button"
               className="btn btn-xs plugin-card-open-btn"
-              title="打开插件视图"
-              aria-label={`打开 ${plugin.name || plugin.id} 视图`}
+              title="Open plugin view"
+              aria-label={`Open ${plugin.name || plugin.id} view`}
               onClick={(e) => {
                 e.stopPropagation()
                 store?.openTarget({
@@ -176,7 +176,7 @@ export function PluginCard({
               }}
             >
               <HelmIcon name="play" size={10} />
-              <span>打开视图</span>
+              <span>Open view</span>
             </button>
           )}
           <div
@@ -194,7 +194,7 @@ export function PluginCard({
               onChange={(checked) => {
                 void onToggle(checked)
               }}
-              aria-label={`${plugin.name || plugin.id} 开关`}
+              aria-label={`${plugin.name || plugin.id} switch`}
               title={switchTitle}
             />
           </div>

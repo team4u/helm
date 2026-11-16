@@ -84,7 +84,7 @@ test('PluginDetailDrawer：SSR 渲染包含抽屉主体、详细元信息、常�
   assert.match(html, /工作流引擎/)
   assert.match(html, /builtin:workflow/)
   assert.match(html, /v1\.2\.0/)
-  assert.match(html, /常驻/)
+  assert.match(html, /Resident/)
 
   // 3. 能力清单透视：Tools 清单、Actions 清单、Hooks 清单
   assert.match(html, /subagent/)
@@ -95,8 +95,8 @@ test('PluginDetailDrawer：SSR 渲染包含抽屉主体、详细元信息、常�
   assert.match(html, /turn_settled/)
 
   // 4. 启停控制与状态
-  assert.match(html, /已启用/)
-  assert.match(html, /停用插件/)
+  assert.match(html, /Enabled/)
+  assert.match(html, /Disable plugin/)
 
   // 5. 铁律：全界面 0 Emoji 表情
   assert.doesNotMatch(html, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u)
@@ -148,7 +148,7 @@ test('PluginDetailDrawer：点击关闭按钮与按下 Escape 键触发 onClose 
   })
 
   // 查找关闭按钮（带有 aria-label="关闭"）
-  const closeBtn = container.querySelector('button[aria-label="关闭"]') as HTMLButtonElement | null
+  const closeBtn = container.querySelector('button[aria-label="Close"]') as HTMLButtonElement | null
   assert.ok(closeBtn, '必须存在关闭按钮')
 
   await act(async () => {
@@ -201,9 +201,9 @@ test('PluginDetailDrawer：启停按钮响应用户操作并调用 onToggleEnabl
 
     // 启用按钮
     const toggleBtn = Array.from(container.querySelectorAll('button')).find((btn) =>
-      btn.textContent?.includes('启用插件'),
+      btn.textContent?.includes('Enable plugin'),
     ) as HTMLButtonElement | undefined
-    assert.ok(toggleBtn, '已停用插件应展示“启用插件”按钮')
+    assert.ok(toggleBtn, 'Disabled plugin should show an Enable plugin button')
     assert.equal(toggleBtn.disabled, false, '未锁定且未 toggling 时按钮不应处于禁用态')
 
     await act(async () => {
@@ -227,7 +227,7 @@ test('PluginDetailDrawer：启停按钮响应用户操作并调用 onToggleEnabl
     })
 
     const lockedToggleBtn = Array.from(container.querySelectorAll('button')).find((btn) =>
-      btn.textContent?.includes('停用插件'),
+      btn.textContent?.includes('Disable plugin'),
     ) as HTMLButtonElement | undefined
     assert.ok(lockedToggleBtn, '已启用插件展示“停用插件”按钮')
     assert.equal(lockedToggleBtn.disabled, true, '常驻锁定插件启停按钮必须处于禁用态')
@@ -251,7 +251,7 @@ test('PluginDetailDrawer：启停按钮响应用户操作并调用 onToggleEnabl
     })
 
     const activeToggleBtn = Array.from(container.querySelectorAll('button')).find((btn) =>
-      btn.textContent?.includes('停用插件'),
+      btn.textContent?.includes('Disable plugin'),
     ) as HTMLButtonElement | undefined
     assert.ok(activeToggleBtn)
 
@@ -349,7 +349,7 @@ test('PluginDetailDrawer：根据 Schema 动态加载与渲染 PluginConfigForm�
 
     // 查找保存按钮
     const saveBtn = Array.from(container.querySelectorAll('button')).find((btn) =>
-      btn.textContent?.includes('保存配置'),
+      btn.textContent?.includes('Save configuration'),
     ) as HTMLButtonElement | undefined
     assert.ok(saveBtn, '必须存在保存配置按钮')
 
@@ -558,11 +558,11 @@ test('PluginDetailDrawer：status === failed 时状态栏显示异常徽章与�
 
   // 1. 当前状态栏不再仅显示「已停用」，而是异常徽章
   assert.match(html, /badge badge-err/)
-  assert.match(html, /<span>异常<\/span>/)
+  assert.match(html, /<span>Error<\/span>/)
 
   // 2. 显式错误诊断框：阶段 + 错误码 + 完整消息
   assert.match(html, /callout callout-error/)
-  assert.match(html, /故障阶段：模块加载（load） · 错误码：/)
+  assert.match(html, /Failure stage: Module loading \(load\) · Error code:/)
   assert.match(html, /plugin_load_failed/)
   assert.match(html, /入口文件 index\.ts 转译失败/)
 
@@ -582,9 +582,9 @@ test('PluginDetailDrawer：正常插件不渲染诊断框与异常徽章', { tim
     }),
   )
 
-  assert.match(html, /已启用/)
+  assert.match(html, /Enabled/)
   assert.doesNotMatch(html, /故障阶段：/)
-  assert.doesNotMatch(html, /<span>异常<\/span>/)
+  assert.doesNotMatch(html, /<span>Error<\/span>/)
 })
 
 // ---------------------------------------------------------------------------
@@ -636,7 +636,7 @@ test('PluginDetailDrawer：停用遇 409 plugin_in_use 时展示占用清单并�
 
     // 点击停用插件
     const disableBtn = Array.from(container.querySelectorAll('button')).find((btn) =>
-      btn.textContent?.includes('停用插件'),
+      btn.textContent?.includes('Disable plugin'),
     ) as HTMLButtonElement | undefined
     assert.ok(disableBtn)
 
@@ -647,7 +647,7 @@ test('PluginDetailDrawer：停用遇 409 plugin_in_use 时展示占用清单并�
     // 占用确认条出现并列出所有占用项
     const callout = container.querySelector('.callout-warn')
     assert.ok(callout, '409 plugin_in_use 应展示统一 .callout-warn 占用确认提示条')
-    assert.match(callout.textContent || '', /插件资源占用确认/)
+    assert.match(callout.textContent || '', /Plugin resource confirmation/)
     assert.match(callout.textContent || '', /角色 "coder" 绑定了运行时 herdr/)
     assert.match(callout.textContent || '', /Cron 定时任务 "nightly"/)
     assert.equal(toggleCalls.length, 1)
@@ -655,7 +655,7 @@ test('PluginDetailDrawer：停用遇 409 plugin_in_use 时展示占用清单并�
 
     // 取消按钮：关闭确认条且不触发强制停用
     const cancelBtn = Array.from(callout.querySelectorAll('button')).find((btn) =>
-      btn.textContent?.includes('取消'),
+      btn.textContent?.includes('Cancel'),
     ) as HTMLButtonElement | undefined
     assert.ok(cancelBtn)
     await act(async () => {
@@ -668,7 +668,7 @@ test('PluginDetailDrawer：停用遇 409 plugin_in_use 时展示占用清单并�
       disableBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     const forceBtn = Array.from(container.querySelectorAll('button')).find((btn) =>
-      btn.textContent?.includes('强制停用'),
+      btn.textContent?.includes('Force disable'),
     ) as HTMLButtonElement | undefined
     assert.ok(forceBtn, '占用确认条必须提供强制停用按钮')
 
@@ -716,7 +716,7 @@ test('PluginDetailDrawer：409 plugin_has_live_tasks 仍保持硬阻断提示且
     })
 
     const disableBtn = Array.from(container.querySelectorAll('button')).find((btn) =>
-      btn.textContent?.includes('停用插件'),
+      btn.textContent?.includes('Disable plugin'),
     ) as HTMLButtonElement | undefined
     assert.ok(disableBtn)
 
@@ -727,9 +727,9 @@ test('PluginDetailDrawer：409 plugin_has_live_tasks 仍保持硬阻断提示且
     const callout = container.querySelector('.callout-error')
     assert.ok(callout, '在途任务冲突应展示统一 .callout-error 错误提示条')
     assert.match(callout.textContent || '', /plugin_has_live_tasks/)
-    assert.match(callout.textContent || '', /请等待任务结束或中止后再试/)
+    assert.match(callout.textContent || '', /Wait for them to finish or abort them, then retry/)
     assert.ok(container.querySelector('.callout-warn') === null, '在途任务不得提供强制停用入口')
-    assert.equal(container.textContent?.includes('强制停用'), false)
+    assert.equal(container.textContent?.includes('Force disable'), false)
   } finally {
     pluginsApi.getConfig = originalGetConfig
     await act(async () => {
@@ -781,7 +781,7 @@ test('PluginConfigForm：按 sources 渲染已配置/默认标识与单字段重
       apiKey: '******',
     },
     schema: {
-      endpoint: { type: 'string', label: '服务端点', default: 'http://127.0.0.1:3425' },
+      endpoint: { type: 'string', label: 'Endpoint', default: 'http://127.0.0.1:3425' },
       timeout: { type: 'number', label: '超时', default: 5000 },
       apiKey: { type: 'string', label: '访问令牌', secret: true },
     },
@@ -811,19 +811,19 @@ test('PluginConfigForm：按 sources 渲染已配置/默认标识与单字段重
     })
 
     // 1. 来源标识：endpoint 已配置徽章 / timeout 默认文案
-    assert.match(container.textContent || '', /已配置/)
-    assert.match(container.textContent || "", /默认/)
+    assert.match(container.textContent || '', /Configured/)
+    assert.match(container.textContent || "", /Default/)
 
     // 2. 重置按钮仅出现在可重置字段旁：endpoint（configured）与 apiKey（secret 已配置）
     const resetBtns = Array.from(container.querySelectorAll('button')).filter((btn) =>
-      btn.textContent?.includes('重置') || btn.textContent?.includes('清除'),
+      btn.textContent?.includes('Reset') || btn.textContent?.includes('Clear'),
     )
     assert.equal(resetBtns.length, 2, 'endpoint 重置 + apiKey 清除共两个按钮')
-    assert.match(resetBtns.map((b) => b.textContent || '').join('|'), /重置/)
-    assert.match(resetBtns.map((b) => b.textContent || '').join('|'), /清除/)
+    assert.match(resetBtns.map((b) => b.textContent || '').join('|'), /Reset/)
+    assert.match(resetBtns.map((b) => b.textContent || '').join('|'), /Clear/)
 
     // 3. 点击 endpoint 的重置按钮：发送 { endpoint: null } 并触发 onSaved 重载
-    const endpointResetBtn = resetBtns.find((btn) => btn.textContent?.includes('重置'))
+    const endpointResetBtn = resetBtns.find((btn) => btn.textContent?.includes('Reset'))
     assert.ok(endpointResetBtn)
     await act(async () => {
       endpointResetBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -863,9 +863,9 @@ test('PluginConfigForm：必填且无 default 的字段不渲染重置按钮', {
       )
     })
 
-    assert.match(container.textContent || '', /已配置/)
+    assert.match(container.textContent || '', /Configured/)
     const resetBtns = Array.from(container.querySelectorAll('button')).filter((btn) =>
-      btn.textContent?.includes('重置') || btn.textContent?.includes('清除'),
+      btn.textContent?.includes('Reset') || btn.textContent?.includes('Clear'),
     )
     assert.equal(resetBtns.length, 0, '必填且无默认值的字段不允许清除')
   } finally {
@@ -943,7 +943,7 @@ test('PluginDetailDrawer：「右屏打开」按钮具备窄屏隐藏类且不�
     ),
   )
   assert.match(html, /split-toggle-btn plugin-drawer-split-btn/)
-  assert.match(html, /右屏打开/)
+  assert.match(html, /Open in split/)
 })
 
 test('PluginConfigForm：长标签与「默认 / 已配置」徽章防拆字碰撞结构与 CSS 契约', { timeout: 60_000 }, () => {
@@ -970,6 +970,6 @@ test('PluginConfigForm：长标签与「默认 / 已配置」徽章防拆字碰�
   assert.match(html, /form-grid plugin-config-row/)
   assert.match(html, /form-grid-label plugin-config-field-label/)
   assert.match(html, /plugin-config-field-name">agent 启动超时（毫秒）<\/span>/)
-  assert.match(html, /text-subtle plugin-config-source-tag"[^>]*>默认<\/span>/)
-  assert.match(html, /badge badge-neutral plugin-config-source-tag"[^>]*>已配置<\/span>/)
+  assert.match(html, /text-subtle plugin-config-source-tag"[^>]*>Default<\/span>/)
+  assert.match(html, /badge badge-neutral plugin-config-source-tag"[^>]*>Configured<\/span>/)
 })

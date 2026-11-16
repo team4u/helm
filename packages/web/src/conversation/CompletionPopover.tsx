@@ -26,9 +26,9 @@ export interface CompletionPopoverProps {
 }
 
 const TRIGGER_TITLES: Record<'@' | '#' | ':', string> = {
-  '@': '引用与补全',
-  '#': '补全',
-  ':': '补全',
+  '@': 'Mentions and completion',
+  '#': 'Completion',
+  ':': 'Completion',
 }
 
 export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, anchorRef }: CompletionPopoverProps) {
@@ -100,16 +100,16 @@ export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, an
         className="composer-popover composer-completion-popover"
         onOpenAutoFocus={(event) => event.preventDefault()}
         onEscapeKeyDown={(event) => event.stopPropagation()}
-        aria-label={`${TRIGGER_TITLES[trigger]}候选`}
+        aria-label={`${TRIGGER_TITLES[trigger]} candidates`}
       >
         <div className="popover-header">
           {TRIGGER_TITLES[trigger]}
-          <span className="kbd-hint popover-kbd-hint">↑↓ 选择 · Enter 确认 · Esc 关闭</span>
+          <span className="kbd-hint popover-kbd-hint">↑↓ select · Enter confirm · Esc close</span>
         </div>
         <div
           ref={listRef}
           role="listbox"
-          aria-label={`${TRIGGER_TITLES[trigger]}候选列表`}
+          aria-label={`${TRIGGER_TITLES[trigger]} candidate list`}
           className="composer-completion-list"
         >
           {visible.map((entry, index) => (
@@ -129,21 +129,21 @@ export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, an
           ))}
           {visible.length === 0 ? (
             snapshot.loading ? (
-              <div className="popover-item composer-completion-state" role="status">正在查询候选…</div>
+              <div className="popover-item composer-completion-state" role="status">Querying candidates…</div>
             ) : snapshot.errors.length > 0 ? (
               <div className="popover-item composer-completion-state composer-completion-error" role="alert">
                 {snapshot.errors.map((err) => (
-                  <span key={`${err.source}:${err.message}`} title={`${err.source}: ${err.message}`}>源 {err.source}：{err.message}</span>
+                  <span key={`${err.source}:${err.message}`} title={`${err.source}: ${err.message}`}>Source {err.source}: {err.message}</span>
                 ))}
               </div>
             ) : (
-              <div className="popover-item composer-completion-state">没有匹配的候选</div>
+              <div className="popover-item composer-completion-state">No matching candidates</div>
             )
           ) : null}
         </div>
         {snapshot.total > visible.length ? (
-          <div className="popover-item composer-completion-state" role="status" title={`候选过多，仅显示前 ${COMPLETION_VISIBLE_LIMIT} 项，可继续输入过滤`}>
-            候选超过上限，仅显示前 {COMPLETION_VISIBLE_LIMIT} 项{snapshot.truncated ? `（共 ${snapshot.total} 项）` : ''}
+          <div className="popover-item composer-completion-state" role="status" title={`Too many candidates; showing the first ${COMPLETION_VISIBLE_LIMIT}; keep typing to filter`}>
+            Too many candidates; showing the first {COMPLETION_VISIBLE_LIMIT}{snapshot.truncated ? ` (${snapshot.total} in total)` : ''}
           </div>
         ) : null}
       </PopoverContent>

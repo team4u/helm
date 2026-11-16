@@ -45,7 +45,7 @@
 }
 
 /* 可折叠分组头部主按钮：头部行内还需容纳次要操作按钮（如已归档分组的批量
-   恢复入口），头部本身不再是按钮，主切换按钮占据左侧弹性区。 */
+   restore entry); the header itself is no longer a button and the main toggle takes the flexible left area. */
 .sidebar-group-header-toggle {
   flex: 1;
   min-width: 0;
@@ -448,8 +448,8 @@
 }
 
 /* 后台在途空心环（单灯位）：父会话自身空闲/已完成但后台任务（子代理/工作流）
-   仍在运行时，替换 idle 的无灯/done 的绿点成为该行唯一状态灯；
-   空心 + 慢速呼吸，与主回合 working 实心脉冲点明确区分，不冒充会话自身运行。 */
+   While running, it replaces the idle no-light/done green dot as the only status light of the row;
+   hollow with a slow breathing animation, clearly distinct from the solid working pulse of the main turn, never impersonating conversation activity. */
 .status-dot-background {
   background: transparent;
   border: 1.5px solid var(--accent);

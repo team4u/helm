@@ -55,21 +55,21 @@ function queueOnlyLive(live: ConversationLive): ConversationLive {
 /** 新连接必须重新加载详情和未随快照提供的 public docs：快照只含 pluginDocs 直投部分。 */
 export function applySnapshot(previous: LiveState, snapshot: HelmSnapshot): LiveState {
   if (typeof snapshot.bootId !== 'string' || snapshot.bootId === '' || !Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0 || !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.pendingAsks) || !Array.isArray(snapshot.plugins) || !Array.isArray(snapshot.ui)) {
-    throw new Error('内核实时快照格式无效')
+    throw new Error('Invalid kernel live snapshot format')
   }
-  if (snapshot.conversationLives !== undefined && !Array.isArray(snapshot.conversationLives)) throw new Error('内核实时快照格式无效')
-  if (snapshot.pluginDocs !== undefined && !Array.isArray(snapshot.pluginDocs)) throw new Error('内核实时快照格式无效')
+  if (snapshot.conversationLives !== undefined && !Array.isArray(snapshot.conversationLives)) throw new Error('Invalid kernel live snapshot format')
+  if (snapshot.pluginDocs !== undefined && !Array.isArray(snapshot.pluginDocs)) throw new Error('Invalid kernel live snapshot format')
   const conversationLives: Record<number, ConversationLive> = {}
   for (const live of snapshot.conversationLives ?? []) {
-    if (!isLiveShape(live)) throw new Error('内核实时快照格式无效')
+    if (!isLiveShape(live)) throw new Error('Invalid kernel live snapshot format')
     conversationLives[live.conversationId] = live
   }
   // 快照 pluginDocs 直投：免额外拉取，键与 ensurePluginDoc 一致（`${pluginId}/${docName}`）。
   const pluginDocs: Record<string, unknown> = {}
   if (Array.isArray(snapshot.pluginDocs)) {
     for (const doc of snapshot.pluginDocs) {
-      if (doc === null || typeof doc !== 'object') throw new Error('内核实时快照格式无效')
-      if (typeof doc.pluginId !== 'string' || typeof doc.name !== 'string') throw new Error('内核实时快照格式无效')
+      if (doc === null || typeof doc !== 'object') throw new Error('Invalid kernel live snapshot format')
+      if (typeof doc.pluginId !== 'string' || typeof doc.name !== 'string') throw new Error('Invalid kernel live snapshot format')
       pluginDocs[`${doc.pluginId}/${doc.name}`] = doc.value
     }
   }
@@ -148,9 +148,9 @@ export function applyConversationEntry(state: LiveState, conversationId: number,
 
 /** 任何序号缺口都重连取快照，不能继续显示缺帧的“最新状态”。 */
 export function applyEventFrame(state: LiveState, frame: HelmEventFrame): LiveState {
-  if (!Number.isSafeInteger(frame.seq) || !frame.event || typeof frame.event.type !== 'string') throw new Error('实时事件格式无效')
+  if (!Number.isSafeInteger(frame.seq) || !frame.event || typeof frame.event.type !== 'string') throw new Error('Invalid live event format')
   if (frame.seq <= state.seq) return state
-  if (state.seq < 0 || frame.seq !== state.seq + 1) throw new Error('实时事件序号不连续，正在重新同步')
+  if (state.seq < 0 || frame.seq !== state.seq + 1) throw new Error('Live event sequence gap; re-syncing')
   const next = { ...state, seq: frame.seq }
   const event = frame.event
   // 自定义事件有任意字符串 type；用字段存在性进一步缩窄公共联合类型。
@@ -228,7 +228,7 @@ export class SseParser {
   constructor(private readonly onMessage: (message: SseMessage) => void) {}
   push(chunk: string): void {
     this.buffer += chunk
-    if (this.buffer.length + this.data.join('').length > 4 * 1024 * 1024) throw new Error('实时事件超过客户端接收上限')
+    if (this.buffer.length + this.data.join('').length > 4 * 1024 * 1024) throw new Error('Live events exceeded the client receive limit')
     let index: number
     while ((index = this.buffer.indexOf('\n')) >= 0) {
       const line = this.buffer.slice(0, index).replace(/\r$/, '')

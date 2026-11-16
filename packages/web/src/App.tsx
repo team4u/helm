@@ -54,7 +54,7 @@ function HelmShellInner() {
   if (!store.authReady) {
     return (
       <div className="app-loading-screen" style={{ height: '100dvh' }}>
-        正在连接 Helm 内核...
+        Connecting to Helm kernel...
       </div>
     )
   }
@@ -62,9 +62,9 @@ function HelmShellInner() {
   if (store.authError) {
     return (
       <div className="connection-screen" role="alert">
-        <strong>暂时无法连接 Helm</strong>
+        <strong>Cannot connect to Helm right now</strong>
         <p>{store.authError}</p>
-        <button className="btn btn-primary" onClick={() => void store.checkAuth()}>重新连接</button>
+        <button className="btn btn-primary" onClick={() => void store.checkAuth()}>Reconnect</button>
       </div>
     )
   }
@@ -97,7 +97,7 @@ function HelmShellInner() {
       <button
         type="button"
         className="btn btn-ghost mobile-nav-toggle"
-        aria-label="切换导航栏"
+        aria-label="Toggle navigation bar"
         onClick={() => setSidebarOpen((open) => !open)}
       >
         <HelmIcon name="menu" />
@@ -106,7 +106,7 @@ function HelmShellInner() {
         <button
           type="button"
           className="sidebar-backdrop"
-          aria-label="关闭导航栏"
+          aria-label="Close navigation bar"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -115,18 +115,18 @@ function HelmShellInner() {
       <main className="helm-main-stage">
         {!store.sseConnected && (
           <div className="connection-banner" role="status">
-            {store.connectionError ?? '正在同步会话…'}
-            <span>连接恢复后会自动刷新。</span>
+            {store.connectionError ?? 'Syncing conversations…'}
+            <span>The page refreshes automatically once the connection recovers.</span>
           </div>
         )}
         {versionWatch.updateAvailable && (
           <div className="version-banner" role="status">
             <HelmIcon name="refresh-cw" size={13} />
             <span className="version-banner-text">
-              {`Helm 已发布新版本${versionWatch.deferReason !== null ? `，${versionDeferHint(versionWatch.deferReason)}` : ''}`}
+              {`A new Helm version is available${versionWatch.deferReason !== null ? ` — ${versionDeferHint(versionWatch.deferReason)}` : ''}`}
             </span>
             <button type="button" className="btn btn-sm" onClick={versionWatch.reloadNow}>
-              立即刷新
+              Refresh now
             </button>
           </div>
         )}

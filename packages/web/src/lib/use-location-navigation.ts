@@ -140,7 +140,7 @@ export function useLocationNavigation({
   ) => {
     const resolved = typeof target === 'string' ? resolveTargetString(target, liveRef.current.conversations) : target
     if (!resolved) {
-      pushNotice({ type: 'notification', level: 'warning', title: '目标未就绪', body: typeof target === 'string' ? target : '导航目标无效' })
+      pushNotice({ type: 'notification', level: 'warning', title: 'Target not ready', body: typeof target === 'string' ? target : 'Invalid navigation target' })
       return
     }
     // 显式历史策略只标记下一拍；实际 pushState/replaceState 仍由唯一写回 effect 执行。
@@ -167,17 +167,17 @@ export function useLocationNavigation({
     const resolution = resolveSpaceSwitch(space, targets.current.primaryTarget, spaceMemory.current, input)
     if (resolution.kind === 'already-in-space') return
     if (resolution.clearStaleMemory) {
-      delete spaceMemory.current[space] // 记忆指向已失效目标：安全清理后走空间缺省
+      delete spaceMemory.current[space] // Memory points to a stale target; safely cleared and falling back to the space default
     }
     if (resolution.kind === 'unavailable') {
       pushNotice({
         type: 'notification',
         level: 'warning',
-        title: '暂无可打开的入口',
+        title: 'No openable entry yet',
         body:
           space === 'views'
-            ? '暂无可用视图，请先在插件中心启用提供视图的插件'
-            : '尚无可用会话或角色，请稍后重试',
+            ? 'No views available; enable a plugin providing views in the plugin center first'
+            : 'No conversations or profiles available yet; retry later',
       })
       return
     }
@@ -231,7 +231,7 @@ export function useLocationNavigation({
       assetsLoaded: assetsLoadedRef.current,
       grouped: groupUiContributions(liveRef.current.uiContributions),
     })
-    if (home === null) return // 无任何可用角色：保持解析缺省（角色中心），绝不伪造目标
+    if (home === null) return // No profiles available: keep the resolution default (profile center); never fabricate a target
     // 落地是初始位置解析的延续而非用户导航：replace 不产生历史项，后退不回到角色中心。
     openTarget(home, { history: 'replace' })
   }, [authenticated, assetsLoaded, sseConnected, locationState, initialLocation, openTarget, liveRef, profilesRef, assetsLoadedRef])
@@ -251,7 +251,7 @@ export function useLocationNavigation({
     } else if (detail.nextCursor && !loadErrors[`history:${detail.id}`]) {
       void loadEarlierEntries(detail.id)
     } else if (!detail.nextCursor) {
-      pushNotice({ type: 'notification', level: 'warning', title: '搜索条目已不在会话历史中', conversationId: detail.id })
+      pushNotice({ type: 'notification', level: 'warning', title: 'Search entry no longer in conversation history', conversationId: detail.id })
       setHighlightedEntry(null)
     }
   }, [highlightedEntry, conversationDetails, loadEarlierEntries, loadErrors, delay, pushNotice])

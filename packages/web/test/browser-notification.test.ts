@@ -211,7 +211,7 @@ test('请求抛出（旧回调形态返回 undefined / 宿主异常）：回退�
 
 test('权限未授予时投递返回 false 且不构造通知', { timeout: 60_000 }, () => {
   const instances = installFakeNotification({ permission: 'denied' })
-  assert.equal(showBrowserNotification({ title: 'Helm 会话已完成' }), false)
+  assert.equal(showBrowserNotification({ title: 'Helm conversation completed' }), false)
   assert.equal(instances.length, 0)
   uninstallNotification()
 })
@@ -227,7 +227,7 @@ test('权限授予后无 SW 时回退 new Notification：透传 title/body/tag/i
   }
   try {
     const delivered = showBrowserNotification({
-      title: 'Helm 会话已完成',
+      title: 'Helm conversation completed',
       body: '#2 重构侧栏',
       tag: 'helm-conv-2',
       onClick: () => clicked.push('navigate'),
@@ -235,7 +235,7 @@ test('权限授予后无 SW 时回退 new Notification：透传 title/body/tag/i
     assert.equal(delivered, true)
     assert.equal(instances.length, 1)
     const notification = instances[0]!
-    assert.equal(notification.title, 'Helm 会话已完成')
+    assert.equal(notification.title, 'Helm conversation completed')
     assert.equal(notification.options.body, '#2 重构侧栏')
     assert.equal(notification.options.tag, 'helm-conv-2')
     assert.equal(notification.options.icon, '/icon-192.png')
@@ -314,7 +314,7 @@ test('SW 激活态通过 registration.showNotification 投递（兼容 Android C
 
     let clickCount = 0
     const delivered = showBrowserNotification({
-      title: 'Helm 会话已完成',
+      title: 'Helm conversation completed',
       body: '#42 PWA 通知链路',
       tag: 'helm-conv-42',
       url: '/#/c/42',
@@ -325,7 +325,7 @@ test('SW 激活态通过 registration.showNotification 投递（兼容 Android C
     assert.equal(delivered, true)
     assert.equal(sw.shownNotifications.length, 1)
     const sent = sw.shownNotifications[0]!
-    assert.equal(sent.title, 'Helm 会话已完成')
+    assert.equal(sent.title, 'Helm conversation completed')
     assert.equal(sent.options.body, '#42 PWA 通知链路')
     assert.equal(sent.options.tag, 'helm-conv-42')
     assert.equal(sent.options.icon, '/icon-192.png')
@@ -473,7 +473,7 @@ test('Android Chrome 首载未缓存 SW 时 new Notification 抛 TypeError：诚
 
     // 探测已缓存 registration，后续投递直接同步走 SW 并返回 true
     const nextDelivered = showBrowserNotification({
-      title: 'Helm 会话已完成',
+      title: 'Helm conversation completed',
       body: '#7 测试',
       tag: 'helm-conv-7',
       url: '/#/c/7',

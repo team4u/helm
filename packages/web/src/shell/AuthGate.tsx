@@ -16,11 +16,11 @@ export function AuthGate() {
     e.preventDefault()
     setError(null)
     if (isSetup && password.length < 8) {
-      setError('主控密码至少需要 8 位字符')
+      setError('Master password needs at least 8 characters')
       return
     }
     if (isSetup && password !== confirm) {
-      setError('两次输入的密码不一致')
+      setError('The two passwords do not match')
       return
     }
     setSubmitting(true)
@@ -30,7 +30,7 @@ export function AuthGate() {
         : await authApi.login(password)
       await store.onAuthenticated(res.token)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '认证失败')
+      setError(err instanceof Error ? err.message : 'Authentication failed')
     } finally {
       setSubmitting(false)
     }
@@ -45,7 +45,7 @@ export function AuthGate() {
         <div className="auth-gate-header">
           <div className="auth-gate-brand">
             <HelmIcon name="sparkles" size={18} />
-            <span className="auth-gate-title">Helm 主控台</span>
+            <span className="auth-gate-title">Helm Console</span>
           </div>
           <button
             type="button"
@@ -53,10 +53,10 @@ export function AuthGate() {
             onClick={store.toggleTheme}
             title={
               store.themePreference === 'system'
-                ? `跟随系统（当前${store.theme === 'dark' ? '暗色' : '浅色'}，点击切换为浅色模式）`
+                ? `System theme (currently ${store.theme === 'dark' ? 'Dark' : 'Light'}; click to switch to light mode)`
                 : store.themePreference === 'light'
-                  ? '浅色模式（点击切换为暗色模式）'
-                  : '暗色模式（点击切换为跟随系统）'
+                  ? 'Light mode (click to switch to dark mode)'
+                  : 'Dark mode (click to switch to system theme)'
             }
           >
             <HelmIcon
@@ -74,8 +74,8 @@ export function AuthGate() {
 
         <div className="auth-gate-desc">
           {isSetup
-            ? '首次启动：请设置本机 Helm 主控密码（至少 8 位），用于保护会话、模型凭据与节点连接。'
-            : '请输入本机 Helm 主控密码以解锁工作台。'}
+            ? 'First start: set the local Helm master password (at least 8 characters) to protect conversations, model credentials and node connections.'
+            : 'Enter the local Helm master password to unlock the console.'}
         </div>
 
         {error && (
@@ -87,14 +87,14 @@ export function AuthGate() {
 
         <div className="auth-gate-field">
           <label className="auth-gate-label">
-            {isSetup ? '设置主控密码' : '主控密码'}
+            {isSetup ? 'Set master password' : 'Master password'}
           </label>
           <input
             type="password"
             className="input"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder={isSetup ? '至少 8 位字符' : '输入主控密码'}
+            placeholder={isSetup ? 'At least 8 characters' : 'Enter master password'}
             autoFocus
             required
           />
@@ -103,14 +103,14 @@ export function AuthGate() {
         {isSetup && (
           <div className="auth-gate-field">
             <label className="auth-gate-label">
-              确认主控密码
+              Confirm master password
             </label>
             <input
               type="password"
               className="input"
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              placeholder="再次输入密码"
+              placeholder="Re-enter the password"
               required
             />
           </div>
@@ -118,7 +118,7 @@ export function AuthGate() {
 
         <button type="submit" className="btn btn-primary" disabled={submitting}>
           <HelmIcon name="lock" size={13} />
-          <span>{submitting ? '正在验证...' : isSetup ? '初始化并进入 Helm' : '解锁主控台'}</span>
+          <span>{submitting ? 'Verifying...' : isSetup ? 'Initialize and enter Helm' : 'Unlock console'}</span>
         </button>
       </form>
     </div>

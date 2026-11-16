@@ -31,7 +31,7 @@ import { AGENT_SUB_LIST_PREVIEW, conversationStatusDotClass, conversationStatusT
 const SUMMARY_SEPARATOR = ' · '
 
 /** 上下文精简进行中的后台在途摘要文案。 */
-const COMPACTING_SUMMARY = '上下文精简中'
+const COMPACTING_SUMMARY = 'Compacting context'
 
 /** 单个会话的后台在途摘要（由命中面板的按会话角标与上下文精简态聚合）。 */
 export interface ConversationBackgroundActivity {
@@ -278,5 +278,5 @@ export function backgroundAwareStatusTooltip(input: {
   const light = resolveStatusLight(input.status, input.backgroundActive)
   if (!light.background) return base
   const summary = input.backgroundSummary?.trim() ?? ''
-  return summary === '' ? `${base} · 后台任务运行中` : `${base} · 后台任务: ${summary}`
+  return summary === '' ? `${base} · background task running` : `${base} · background task: ${summary}`
 }

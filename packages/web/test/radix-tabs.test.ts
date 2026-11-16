@@ -19,7 +19,7 @@ test('SSR：Tabs 默认渲染下划线选项卡（tabs-bar 与 tab-btn），包�
       { value: 'tab1' },
       React.createElement(
         TabsList,
-        { 'aria-label': '主导航' },
+        { 'aria-label': 'Main navigation' },
         React.createElement(TabsTrigger, { value: 'tab1' }, '选项卡一'),
         React.createElement(TabsTrigger, { value: 'tab2' }, '选项卡二'),
       ),
@@ -52,8 +52,8 @@ test('SSR：Tabs variant="segmented" 渲染分段控制器（segmented-control �
       { value: 'rich', variant: 'segmented' },
       React.createElement(
         TabsList,
-        { 'aria-label': '视图模式' },
-        React.createElement(TabsTrigger, { value: 'rich' }, '富文本'),
+        { 'aria-label': 'View mode' },
+        React.createElement(TabsTrigger, { value: 'rich' }, 'Rich text'),
         React.createElement(TabsTrigger, { value: 'source' }, '源码'),
       ),
     ),
@@ -106,7 +106,7 @@ test('DOM：SegmentedControl 受控模式点击项触发 onValueChange 回调', 
           currentValue = val
         },
         items: [
-          { value: 'rich', label: '富文本' },
+          { value: 'rich', label: 'Rich text' },
           { value: 'source', label: '源码' },
         ],
       }),

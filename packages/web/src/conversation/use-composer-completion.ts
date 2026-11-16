@@ -175,7 +175,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
       const manifest = actions.find((a) => a.pluginId === target && a.id === src.spec.source.actionId)!
       const plan = buildCompletionActionCall(manifest, query, { conversationId, profileId })
       if (plan.input === null) {
-        manifestErrors[key] = plan.error ?? '当前上下文不支持该补全动作'
+        manifestErrors[key] = plan.error ?? 'The current context does not support this completion action'
         continue
       }
       runnable.push({
@@ -212,7 +212,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
             return
           }
           const parsed = parseCompletionActionResult(entry.value)
-          if (parsed.items === null) errors[item.key] = parsed.error ?? '补全动作返回无效'
+          if (parsed.items === null) errors[item.key] = parsed.error ?? 'Completion action returned an invalid result'
           else results[item.key] = parsed.items
         })
         setActionState({ loading: false, contextKey, results, errors })
@@ -242,7 +242,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
         if (extracted.items !== null) groups.push({ pluginId: src.pluginId, items: filterByQuery(extracted.items, query) })
       } else {
         const loadError = loadErrors[`doc:${key}`]
-        if (loadError !== undefined) errors.push({ source: label, message: `文档读取失败：${loadError}` })
+        if (loadError !== undefined) errors.push({ source: label, message: `Failed to load document: ${loadError}` })
         else loading = true
       }
     }
@@ -251,7 +251,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
       for (const src of sessionDocSources) {
         errors.push({
           source: `${src.pluginId}/${src.spec.id}`,
-          message: '会话文档补全源需要已有会话（发送首条消息创建后可用）',
+          message: 'Conversation document completion requires an existing conversation (available after the first message creates one)',
         })
       }
     } else {

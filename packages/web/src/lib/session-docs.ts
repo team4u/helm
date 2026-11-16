@@ -98,7 +98,7 @@ function ensureEntry(key: SessionDocKey): EntryState {
 
 /** 边界校验文档帧/快照：形状或目标不匹配抛显式错误（诚实性纪律，不静默吞帧）。 */
 function assertSessionDocShape(doc: unknown, expected: SessionDocKey): PublicPluginSessionDoc {
-  if (doc === null || typeof doc !== 'object') throw new Error('会话文档帧格式无效')
+  if (doc === null || typeof doc !== 'object') throw new Error('Invalid conversation document frame format')
   const d = doc as Record<string, unknown>
   if (
     typeof d['pluginId'] !== 'string' ||
@@ -106,14 +106,14 @@ function assertSessionDocShape(doc: unknown, expected: SessionDocKey): PublicPlu
     !Number.isSafeInteger(d['conversationId']) ||
     d['conversationId'] !== expected.conversationId
   ) {
-    throw new Error('会话文档帧格式无效')
+    throw new Error('Invalid conversation document frame format')
   }
   if (d['pluginId'] !== expected.pluginId || d['name'] !== expected.docName) {
-    throw new Error(`会话文档帧目标不匹配：${String(d['pluginId'])}/${String(d['name'])}`)
+    throw new Error(`Conversation document frame target mismatch: ${String(d['pluginId'])}/${String(d['name'])}`)
   }
-  if (!('value' in d)) throw new Error('会话文档帧缺少 value 字段')
+  if (!('value' in d)) throw new Error('Conversation document frame missing the value field')
   if ('deleted' in d && d['deleted'] !== undefined && typeof d['deleted'] !== 'boolean') {
-    throw new Error('会话文档帧格式无效')
+    throw new Error('Invalid conversation document frame format')
   }
   return d as unknown as PublicPluginSessionDoc
 }
@@ -131,7 +131,7 @@ async function responseErrorMessage(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as { error?: { message?: string } }
     if (body?.error?.message) message = body.error.message
-  } catch { /* 非 JSON 错误体保留状态码描述 */ }
+  } catch { /* Non-JSON error body keeps the status code description */ }
   return message
 }
 
@@ -175,7 +175,7 @@ function connectStream(entry: EntryState, gen: number): void {
       if (res.status >= 400 && res.status < 500 && res.status !== 429) {
         // 非重试 4xx（404 文档/插件不存在、403 未授权、400 畸形请求）：
         // 显式终态报错，绝不无穷重连隐藏故障。
-        entry.error = `会话文档订阅不可用（${label}）：${await responseErrorMessage(res)}`
+        entry.error = `Conversation document subscription unavailable (${label}): ${await responseErrorMessage(res)}`
         entry.connected = false
         notify(entry)
         return
@@ -191,19 +191,19 @@ function connectStream(entry: EntryState, gen: number): void {
         try {
           payload = JSON.parse(message.data)
         } catch {
-          entry.error = `会话文档订阅流数据非法（${label}）`
+          entry.error = `Conversation document subscription stream invalid (${label})`
           notify(entry)
           return
         }
         if (message.event === 'snapshot') {
           if (payload === null || typeof payload !== 'object' || !('doc' in payload)) {
-            entry.error = `会话文档订阅首帧格式无效（${label}）`
+            entry.error = `Conversation document subscription first frame invalid (${label})`
             notify(entry)
             return
           }
           const snap = payload as PluginSessionDocSnapshot
           if (!Number.isSafeInteger(snap.seq) || snap.seq < 0) {
-            entry.error = `会话文档订阅首帧 seq 非法（${label}）`
+            entry.error = `Conversation document subscription first frame seq invalid (${label})`
             notify(entry)
             return
           }
@@ -211,7 +211,7 @@ function connectStream(entry: EntryState, gen: number): void {
           try {
             doc = assertSessionDocShape(snap.doc, entry.key)
           } catch (err) {
-            entry.error = `会话文档订阅首帧无效（${label}）：${err instanceof Error ? err.message : String(err)}`
+            entry.error = `Conversation document subscription first frame invalid (${label}): ${err instanceof Error ? err.message : String(err)}`
             notify(entry)
             return
           }
@@ -230,12 +230,12 @@ function connectStream(entry: EntryState, gen: number): void {
           !frame.event ||
           typeof frame.event.type !== 'string'
         ) {
-          entry.error = `会话文档更新帧格式无效（${label}）`
+          entry.error = `Conversation document update frame invalid (${label})`
           notify(entry)
           return
         }
         if (frame.event.type !== 'plugin.session_doc.updated' || !('doc' in frame.event)) {
-          entry.error = `会话文档订阅流收到未预期事件 ${String(frame.event.type)}`
+          entry.error = `Conversation document subscription stream received unexpected event ${String(frame.event.type)}`
           notify(entry)
           return
         }
@@ -243,7 +243,7 @@ function connectStream(entry: EntryState, gen: number): void {
         try {
           doc = assertSessionDocShape(frame.event.doc, entry.key)
         } catch (err) {
-          entry.error = `会话文档更新帧无效（${label}）：${err instanceof Error ? err.message : String(err)}`
+          entry.error = `Conversation document update frame invalid (${label}): ${err instanceof Error ? err.message : String(err)}`
           notify(entry)
           return
         }
@@ -262,10 +262,10 @@ function connectStream(entry: EntryState, gen: number): void {
         parser.push(decoder.decode(chunk.value, { stream: true }))
         if (!isActive()) return
       }
-      throw new Error('订阅流已断开')
+      throw new Error('Subscription stream closed')
     } catch (error) {
       if (controller.signal.aborted || !isActive()) return
-      entry.error = `会话文档订阅中断（${label}）：${error instanceof Error ? error.message : String(error)}`
+      entry.error = `Conversation document subscription interrupted (${label}): ${error instanceof Error ? error.message : String(error)}`
       entry.connected = false
       notify(entry)
       scheduleReconnect(entry, gen)
@@ -379,7 +379,7 @@ export function resetSessionDocSubscriptions(): void {
 export function evictSessionDocSubscriptions(pluginId: string): void {
   for (const entry of [...entries.values()]) {
     if (entry.key.pluginId !== pluginId) continue
-    terminateEntry(entry, `插件 ${pluginId} 已停用，会话文档订阅已中止`)
+    terminateEntry(entry, `Plugin ${pluginId} disabled; conversation document subscription aborted`)
   }
 }
 
@@ -387,7 +387,7 @@ export function evictSessionDocSubscriptions(pluginId: string): void {
 export function evictSessionDocsOfConversation(conversationId: number): void {
   for (const entry of [...entries.values()]) {
     if (entry.key.conversationId === conversationId) {
-      terminateEntry(entry, `会话 ${conversationId} 已删除，会话文档订阅已中止`)
+      terminateEntry(entry, `Conversation ${conversationId} deleted; conversation document subscription aborted`)
     }
   }
 }
@@ -469,6 +469,6 @@ export function bindSessionDocRuntime(fetch?: FetchLike, token?: () => string | 
 
 const resolvedFetch: FetchLike = (input, init) => {
   const impl = fetchImpl ?? (globalThis as { fetch?: FetchLike }).fetch
-  if (impl === undefined) throw new Error('当前环境无 fetch 实现')
+  if (impl === undefined) throw new Error('No fetch implementation in this environment')
   return impl(input, init)
 }

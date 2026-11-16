@@ -179,8 +179,8 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: '已发送并创建会话',
-          body: `首条消息已发送到会话 #${conversationId}`,
+          title: 'Sent and conversation created',
+          body: `First message sent to conversation #${conversationId}`,
           conversationId,
         })
       },
@@ -199,7 +199,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     const { draft: patch, rejected } = admitStandbyFiles(getStandbyDraft(draftKey), files)
     updateStandbyDraft(draftKey, patch)
     for (const item of rejected) {
-      store.pushNotice({ type: 'notification', level: 'error', title: `附件无法暂存：${item.file.name || '未命名文件'}`, body: item.reason })
+      store.pushNotice({ type: 'notification', level: 'error', title: `Attachment cannot be staged: ${item.file.name || 'Unnamed file'}`, body: item.reason })
     }
   }, [draftKey, store])
 
@@ -207,7 +207,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     const record = getStandbyDraft(draftKey)
     if (record.sending) return
     if (record.text.trim() !== '' || record.localFiles.length > 0 || record.uploaded.length > 0) {
-      store.pushNotice({ type: 'notification', level: 'warning', title: '请先处理当前草稿，再选择引导词' })
+      store.pushNotice({ type: 'notification', level: 'warning', title: 'Handle the current draft before picking a starter' })
       return
     }
     updateStandbyDraft(draftKey, { text: prompt })
@@ -258,13 +258,13 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     if (action !== null) {
       if (action.kind === 'clear-draft') {
         updateStandbyDraft(draftKey, { text: '', localFiles: [], uploaded: [], error: null })
-        store.pushNotice({ type: 'notification', level: 'info', title: '已开始新草稿', body: '继续输入新的首条消息即可' })
+        store.pushNotice({ type: 'notification', level: 'info', title: 'New draft started', body: 'Just keep typing the new first message' })
       } else {
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: `${action.command} 需要已有会话`,
-          body: '请先发送首条消息创建会话后再使用该命令',
+          title: `${action.command} requires an existing conversation`,
+          body: 'Send the first message to create a conversation before using this command',
         })
       }
       return
@@ -286,8 +286,8 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       store.pushNotice({
         type: 'notification',
         level: 'warning',
-        title: '默认环境已有其他草稿',
-        body: '未覆盖该草稿；当前草稿仍保留在原环境坐标',
+        title: 'The default environment already has another draft',
+        body: 'Draft not overwritten; it stays at its original environment coordinates',
       })
     }
     store.openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined)
@@ -315,7 +315,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         <div className="pane-title-group">
           <span className="pane-title">{label}</span>
           <span className="pane-cwd-subtitle">
-            <span className="env-subtitle-full">开始新话题</span>
+            <span className="env-subtitle-full">Start new topic</span>
           </span>
         </div>
         <div className="pane-actions">
@@ -331,34 +331,34 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         {profilesLoadError !== undefined ? (
           <div className="timeline-empty-state" role="alert">
             <HelmIcon name="alert-triangle" size={20} />
-            <span>角色信息加载失败：{profilesLoadError}</span>
+            <span>Profile info failed to load: {profilesLoadError}</span>
             <button type="button" className="btn btn-sm" onClick={() => void store.refreshAssets()}>
-              重试
+              Retry
             </button>
           </div>
         ) : !store.assetsLoaded ? (
           <div className="timeline-empty-state" role="status">
             <HelmIcon name="loader" size={20} className="spin-slow" />
-            <span>正在加载角色信息…</span>
+            <span>Loading profile info…</span>
           </div>
         ) : profile === undefined ? (
           <div className="timeline-empty-state" role="alert">
             <HelmIcon name="circle-slash" size={20} />
-            <span>角色 {profileId} 不存在或已删除</span>
+            <span>Profile {profileId} does not exist or was deleted</span>
             <button type="button" className="btn btn-sm" onClick={() => store.openTarget({ kind: 'profiles' })}>
-              前往角色中心
+              Go to profile center
             </button>
           </div>
         ) : !humanSelectable ? (
           <div className="timeline-empty-state" role="alert">
             <HelmIcon name="lock" size={20} />
-            <span>该角色不支持手动新建对话（常驻角色由其托管插件管理）</span>
+            <span>This profile does not support manual new conversations (resident profiles are managed by their owning plugin)</span>
           </div>
         ) : (
           <>
             <div className="agent-standby-intro">
               <span className="agent-standby-intro-name">{label}</span>
-              <span className="agent-standby-intro-hint">发送第一条消息开始新话题；会话将在首次发送时创建</span>
+              <span className="agent-standby-intro-hint">Send the first message to start a new topic; the conversation is created on first send</span>
             </div>
             {profile.starters !== undefined && profile.starters.length > 0 ? (
               <div className="timeline-starters">
@@ -574,9 +574,9 @@ function StandbyComposer({
           <div className="agent-standby-anchored callout" role="status">
             <HelmIcon name="lock" size={12} />
             <span className="agent-standby-anchored-text">
-              已创建会话 #{draft.conversationId}：模型与起始环境已随会话锁定，可修改正文与附件后重试
+              Conversation #{draft.conversationId} created: model and starting environment are locked with it; edit the text or attachments and retry
             </span>
-            <Tooltip content="在当前面板查看已创建的会话" side="top">
+            <Tooltip content="Open the created conversation in this panel" side="top">
               <button
                 type="button"
                 className="btn btn-sm"
@@ -588,7 +588,7 @@ function StandbyComposer({
                   )
                 }}
               >
-                查看会话
+                View conversation
               </button>
             </Tooltip>
           </div>
@@ -597,7 +597,7 @@ function StandbyComposer({
           <div className="agent-standby-error callout callout--error" role="alert">
             <span className="agent-standby-error-text">{draft.error}</span>
             <button type="button" className="btn btn-sm" disabled={busy} onClick={onSend}>
-              重试
+              Retry
             </button>
           </div>
         ) : null}
@@ -625,13 +625,13 @@ function StandbyComposer({
                   <HelmIcon name="file" size={11} />
                   <span>{att.name}</span>
                   <span className="mono tabular-nums">{formatBytes(att.size)}</span>
-                  <span className="badge badge-neutral agent-standby-attachment-state">待发送</span>
-                  <Tooltip content={`移除附件 ${att.name}`} side="top">
+                  <span className="badge badge-neutral agent-standby-attachment-state">Pending</span>
+                  <Tooltip content={`Remove attachment ${att.name}`} side="top">
                     <button
                       type="button"
                       className="btn btn-ghost btn-icon-xs"
-                      title="移除附件"
-                      aria-label={`移除附件 ${att.name}`}
+                      title="Remove attachment"
+                      aria-label={`Remove attachment ${att.name}`}
                       disabled={busy}
                       onClick={() => removeLocalFile(att.key)}
                     >
@@ -645,13 +645,13 @@ function StandbyComposer({
                   <HelmIcon name="paperclip" size={11} />
                   <span>{att.name}</span>
                   <span className="mono tabular-nums">{formatBytes(att.size)}</span>
-                  <span className="badge badge-ok agent-standby-attachment-state">已上传</span>
-                  <Tooltip content={`移除附件 ${att.name}`} side="top">
+                  <span className="badge badge-ok agent-standby-attachment-state">Uploaded</span>
+                  <Tooltip content={`Remove attachment ${att.name}`} side="top">
                     <button
                       type="button"
                       className="btn btn-ghost btn-icon-xs"
-                      title="移除附件"
-                      aria-label={`移除附件 ${att.name}`}
+                      title="Remove attachment"
+                      aria-label={`Remove attachment ${att.name}`}
                       disabled={busy}
                       onClick={() => removeUploaded(att.artifactId)}
                     >
@@ -663,13 +663,13 @@ function StandbyComposer({
             </div>
           ) : null}
           <textarea
-            aria-label={`向 ${profile.name || profile.id} 输入首条消息`}
+            aria-label={`Type the first message to ${profile.name || profile.id}`}
             ref={textareaRef}
             className="composer-textarea selectable"
             value={draft.text}
             rows={1}
             readOnly={busy}
-            placeholder={isMobile ? '输入消息开始新话题…' : '输入消息开始新话题；/ 命令与技能 · @ 点名，⌘V 粘贴附件'}
+            placeholder={isMobile ? 'Type a message to start a new topic…' : 'Type a message to start a new topic; / commands and skills · @ mentions, ⌘V to paste attachments'}
             onChange={(e) => {
               updateStandbyDraft(draftKey, { text: e.target.value })
               detectPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
@@ -698,12 +698,12 @@ function StandbyComposer({
           />
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
-              <Tooltip content="选择附件（发送时才上传）" side="top">
+              <Tooltip content="Choose attachments (uploaded on send)" side="top">
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm composer-icon-button"
-                  title="选择附件（发送时才上传）"
-                  aria-label="选择附件（发送时才上传）"
+                  title="Choose attachments (uploaded on send)"
+                  aria-label="Choose attachments (uploaded on send)"
                   disabled={busy}
                   onClick={() => fileInputRef.current?.click()}
                 >
@@ -738,8 +738,8 @@ function StandbyComposer({
                 className="btn btn-sm btn-primary btn-pill btn-send"
                 disabled={sendDisabled}
                 onClick={onSend}
-                title={envError !== null ? envError : '发送 (Enter)；会话将在首次发送时创建'}
-                aria-label={busy ? '发送中' : '发送'}
+                title={envError !== null ? envError : 'Send (Enter); the conversation is created on first send'}
+                aria-label={busy ? 'Sending' : 'Send'}
               >
                 <HelmIcon name={busy ? 'loader' : 'arrow-up'} size={18} className={busy ? 'spin-slow' : undefined} />
               </button>
@@ -773,7 +773,7 @@ function StandbyModelPicker({
   onCatalogRefreshed: () => Promise<void>
 }) {
   const store = useHelmStore()
-  const lockedNote = '已随会话锁定（或发送中），重试复用当前配置'
+  const lockedNote = 'Locked with the conversation (or sending); retry reuses this configuration'
 
   const effectiveModel = resolveStandbyEffectiveModel(
     draft.model,
@@ -810,14 +810,14 @@ function StandbyModelPicker({
       selectedModel={draft.model}
       activeThinkingLevel={effectiveThinkingLevel}
       fallbackPanel={isSplit ? 'split' : 'primary'}
-      resetLabel={`跟随角色默认${profile.model !== undefined && profile.model !== '' ? `（${profile.model}）` : ''}`}
-      resetTitle="创建会话时不指定模型，由服务器按角色/全局默认解析"
+      resetLabel={`Follow profile default${profile.model !== undefined && profile.model !== '' ? ` (${profile.model})` : ''}`}
+      resetTitle="No model specified on creation; the server resolves it from the profile/global default"
       buttonTitle={
         disabled
           ? lockedNote
           : effectiveModel !== undefined && effectiveModel !== ''
-            ? `当前模型：${effectiveModel}${showThinkingBadge ? ` · 思考 ${effectiveThinkingLevel}` : ''} (${COMPOSER_SHORTCUTS.toggleModelPicker})`
-            : `跟随角色/全局默认模型${showThinkingBadge ? ` · 思考 ${effectiveThinkingLevel}` : ''} (${COMPOSER_SHORTCUTS.toggleModelPicker})`
+            ? `Current model: ${effectiveModel}${showThinkingBadge ? ` · thinking ${effectiveThinkingLevel}` : ''} (${COMPOSER_SHORTCUTS.toggleModelPicker})`
+            : `Follows profile/global default model${showThinkingBadge ? ` · thinking ${effectiveThinkingLevel}` : ''} (${COMPOSER_SHORTCUTS.toggleModelPicker})`
       }
       disabled={disabled}
       onPickModel={pickModel}
@@ -856,10 +856,10 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
       value: n.id,
       label: nodeOptionLabel(n),
       icon: n.id === 'local' ? 'monitor' : 'network',
-      meta: n.id !== 'local' ? (n.online ? '在线' : '离线') : undefined,
+      meta: n.id !== 'local' ? (n.online ? 'Online' : 'Offline') : undefined,
     }))
     if (!store.nodes.some((n) => n.id === nodeId)) {
-      list.push({ value: nodeId, label: `${nodeId}（未知）`, icon: 'alert-circle' })
+      list.push({ value: nodeId, label: `${nodeId} (unknown)`, icon: 'alert-circle' })
     }
     return list
   }, [store.nodes, draft.envNodeId])
@@ -869,12 +869,12 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
       <div className="composer-env-bar agent-standby-env-bar">
         <HelmIcon name="monitor" size={12} />
         <span className="agent-standby-env-hint">
-          执行环境跟随角色默认
+          Execution environment follows the profile default
           {profile.nodeId !== undefined && profile.nodeId !== '' ? ` · ${profile.nodeId}` : ''}
           {profile.cwd ? ` · ${profile.cwd}` : ''}
         </span>
         <button type="button" className="btn btn-sm" disabled={disabled} onClick={startCustomize}>
-          自定义
+          Custom
         </button>
       </div>
     )
@@ -886,7 +886,7 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
       <span className="composer-env-item">
         <Select
           className="composer-env-select"
-          aria-label="新会话执行节点"
+          aria-label="New conversation execution node"
           disabled={disabled}
           value={draft.envNodeId || 'local'}
           options={nodeOptions}
@@ -900,19 +900,19 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
         <HelmIcon name="folder" size={12} className="composer-env-cwd-icon" />
         <input
           className="input mono composer-env-cwd-input"
-          aria-label="新会话工作目录"
+          aria-label="New conversation working directory"
           value={draft.envCwd ?? ''}
           disabled={disabled}
-          placeholder="目标节点上的绝对路径，例如 /home/user/work"
+          placeholder="Absolute path on the target node, e.g. /home/user/work"
           onChange={(e) => updateStandbyDraft(draftKey, { envCwd: e.target.value })}
         />
       </span>
-      <button type="button" className="btn btn-sm" disabled={disabled} onClick={onResetToDefault} title={disabled ? '发送中或已随会话锁定' : '清除继承/自定义环境，跟随角色默认'}>
-        恢复默认
+      <button type="button" className="btn btn-sm" disabled={disabled} onClick={onResetToDefault} title={disabled ? 'Sending or locked with the conversation' : 'Clear inherited/custom environment and follow the profile default'}>
+        Restore defaults
       </button>
-      <span className="composer-env-hint">首次发送时生效</span>
+      <span className="composer-env-hint">Takes effect on first send</span>
       {draftNode !== undefined && !draftNode.online && draft.envNodeId !== 'local' ? (
-        <span className="composer-env-warn">节点离线，发送后仍需节点上线才能执行</span>
+        <span className="composer-env-warn">Node offline; execution waits until the node comes online</span>
       ) : null}
     </div>
   )

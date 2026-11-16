@@ -176,11 +176,11 @@ export type VersionDeferReason = 'draft' | 'modal' | 'draft-and-modal' | null
 export function versionDeferHint(reason: VersionDeferReason): string {
   switch (reason) {
     case 'draft':
-      return '当前有未提交的输入内容，已暂缓自动刷新'
+      return 'Unsubmitted input in progress; auto refresh deferred'
     case 'modal':
-      return '当前有打开的窗口，已暂缓自动刷新'
+      return 'A window is open; auto refresh deferred'
     case 'draft-and-modal':
-      return '当前有未提交的输入内容和打开的窗口，已暂缓自动刷新'
+      return 'Unsubmitted input and an open window; auto refresh deferred'
     default:
       return ''
   }

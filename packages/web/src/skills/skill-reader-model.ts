@@ -11,7 +11,7 @@ import { detectLanguage } from '../conversation/code-language.js'
 export const SKILL_MAIN_FILENAME = 'SKILL.md'
 
 /** 技能元数据表格的 Markdown 标题文案（置于 frontmatter 转换表格之前）。 */
-export const SKILL_FRONTMATTER_TABLE_HEADING = '技能元数据'
+export const SKILL_FRONTMATTER_TABLE_HEADING = 'Skill metadata'
 
 /** 阅读器中的单个技能文件条目。 */
 export interface SkillFileEntry {
@@ -43,7 +43,7 @@ export function buildSkillFileList(references?: readonly string[] | null): Skill
   const main: SkillFileEntry = {
     path: '',
     fileName: SKILL_MAIN_FILENAME,
-    meta: '主规程',
+    meta: 'Main file',
     displayPath: SKILL_MAIN_FILENAME,
   }
   const rest = refs.map((ref) => {
@@ -156,7 +156,7 @@ export function renderSkillFrontmatterTable(fields: readonly SkillFrontmatterFie
   return [
     `## ${SKILL_FRONTMATTER_TABLE_HEADING}`,
     '',
-    '| 字段 | 内容 |',
+    '| Field | Value |',
     '| --- | --- |',
     ...rows,
   ].join('\n')

@@ -152,7 +152,7 @@ test('压缩中：只读文本「精简中…」', { timeout: 60_000 }, async ()
   const { host, unmount } = await mountComposer(conv({ tokens: null, contextWindow: 100_000, compacting: true }))
   try {
     const span = statusSpan(host)
-    assert.equal(span?.textContent, '精简中…')
+    assert.equal(span?.textContent, 'Compacting…')
     assertReadOnly(host)
   } finally {
     unmount()

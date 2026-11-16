@@ -161,7 +161,7 @@ test('buildPendingEditDiff：输入超字符预算显式 skipped，不硬算', {
   const big = 'x'.repeat(PENDING_DIFF_MAX_INPUT_CHARS + 1)
   const pending = buildPendingEditDiff({ oldText: big, newText: 'y' })
   assert.ok(pending !== undefined && pending.kind === 'skipped')
-  if (pending.kind === 'skipped') assert.match(pending.reason, /预算/)
+  if (pending.kind === 'skipped') assert.match(pending.reason, /budget/)
 })
 
 test('buildPendingEditDiff：变更行数超编辑距离预算显式 skipped（大输入防卡死）', { timeout: 60_000 }, () => {
@@ -169,7 +169,7 @@ test('buildPendingEditDiff：变更行数超编辑距离预算显式 skipped（�
   const newText = Array.from({ length: PENDING_DIFF_MAX_EDIT_LENGTH + 500 }, (_, i) => `new-${i}`).join('\n')
   const pending = buildPendingEditDiff({ oldText, newText })
   assert.ok(pending !== undefined && pending.kind === 'skipped')
-  if (pending.kind === 'skipped') assert.match(pending.reason, /预算/)
+  if (pending.kind === 'skipped') assert.match(pending.reason, /budget/)
 })
 
 test('buildPendingEditDiff：行数超上限截断且统计覆盖全部变更行', { timeout: 60_000 }, () => {
@@ -278,5 +278,5 @@ test('共享 Schema 校验后仍拒绝超过总文本预算的差异', { timeout
     },
   })
   assert.equal(result.ok, false)
-  if (!result.ok) assert.match(result.reason, /预算/)
+  if (!result.ok) assert.match(result.reason, /budget/)
 })

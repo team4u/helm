@@ -86,10 +86,10 @@ function installResult(pluginId: string): PluginInstallResult {
 test('PluginInstallModal：SSR 渲染安全提示、来源输入与安装后启用开关', { timeout: 60_000 }, async () => {
   const { PluginInstallModal } = await import('../src/plugins/PluginInstallModal.js')
   const html = renderToString(e(PluginInstallModal, { open: true, onClose: () => {}, onInstalled: () => {}, inline: true }))
-  assert.match(html, /安装插件/)
-  assert.match(html, /Hub 进程内运行/)
-  assert.match(html, /不是沙箱/)
-  assert.match(html, /安装后启用/)
+  assert.match(html, /Install plugin/)
+  assert.match(html, /run inside the Hub process/)
+  assert.match(html, /not sandboxed/)
+  assert.match(html, /Enable after install/)
   assert.match(html, /modal-backdrop/, 'SSR 输出必须包含遮罩层容器')
   assert.match(html, /plugin-install-modal/, 'SSR 输出必须包含安装模态容器')
   assert.doesNotMatch(html, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u)
@@ -115,7 +115,7 @@ test('PluginInstallModal：输入旁来源识别提示随输入实时变化', { 
     await act(async () => { typeIntoInput(input, 'npm:pkg@1.0.0') })
     let hint = host.querySelector('.plugin-source-hint')
     assert.equal(hint?.getAttribute('data-source-kind'), 'npm')
-    assert.match(hint?.textContent ?? '', /npm 包/)
+    assert.match(hint?.textContent ?? '', /npm package/)
 
     await act(async () => { typeIntoInput(input, '/abs/path') })
     hint = host.querySelector('.plugin-source-hint')
@@ -127,7 +127,7 @@ test('PluginInstallModal：输入旁来源识别提示随输入实时变化', { 
     assert.match(hint?.className, /is-unknown/)
 
     // 未识别来源时安装按钮禁用
-    const submitBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('安装') && !b.textContent?.includes('安装后') && !b.textContent?.includes('安装插件包') && b.className.includes('btn-primary'))
+    const submitBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Install' && b.className.includes('btn-primary'))
     assert.ok(submitBtn)
     assert.equal(submitBtn.disabled, true)
   } finally {
@@ -181,7 +181,7 @@ test('PluginInstallModal：安装请求携带 source 与 enable，成功后回�
       switchBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
 
-    const submitBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('安装') && b.className.includes('btn-primary'))
+    const submitBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Install') && b.className.includes('btn-primary'))
     assert.ok(submitBtn)
     await act(async () => {
       submitBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -224,7 +224,7 @@ test('PluginInstallModal：默认不启用（enable 不上送），失败展示�
     assert.ok(input, '模态内必须存在来源输入框')
     await act(async () => { typeIntoInput(input, 'git:https://github.com/u/r.git@main') })
 
-    const submitBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('安装') && b.className.includes('btn-primary'))
+    const submitBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Install') && b.className.includes('btn-primary'))
     assert.ok(submitBtn, '必须存在提交安装按钮')
     await act(async () => {
       submitBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -284,7 +284,7 @@ test('PluginInstallModal：真实 Hub 422 失败时从 details.report 结构化�
     assert.ok(input, '模态内必须存在来源输入框')
     await act(async () => { typeIntoInput(input, '/plugins/foo') })
 
-    const submitBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('安装') && b.className.includes('btn-primary'))
+    const submitBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Install') && b.className.includes('btn-primary'))
     assert.ok(submitBtn, '必须存在提交安装按钮')
     await act(async () => {
       submitBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -325,11 +325,11 @@ test('PluginDetailDrawer：managed 受管插件展示来源徽章、来源原文
     }),
   )
 
-  assert.match(html, /包管理/)
+  assert.match(html, /Package/)
   assert.match(html, /npm:my-plugin@1\.0\.0/)
   assert.match(html, /data-source-kind="npm"/)
-  assert.match(html, /检查更新/)
-  assert.match(html, /卸载插件/)
+  assert.match(html, /Check for updates/)
+  assert.match(html, /Uninstall plugin/)
 })
 
 test('PluginDetailDrawer：内置或未受管插件不展示包管理区块', { timeout: 60_000 }, async () => {
@@ -345,8 +345,8 @@ test('PluginDetailDrawer：内置或未受管插件不展示包管理区块', { 
       onClose: () => {}, onToggleEnabled: async () => {}, toggling: false,
     }),
   )
-  assert.doesNotMatch(html, /包管理/)
-  assert.doesNotMatch(html, /卸载插件/)
+  assert.doesNotMatch(html, /Package/)
+  assert.doesNotMatch(html, /Uninstall plugin/)
 })
 
 test('PluginDetailDrawer：更新操作调用 update 并回调刷新，changed=false 如实回显', { timeout: 60_000 }, async () => {
@@ -391,7 +391,7 @@ test('PluginDetailDrawer：更新操作调用 update 并回调刷新，changed=f
       )
     })
 
-    const updateBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('检查更新'))
+    const updateBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Check for updates'))
     assert.ok(updateBtn, '受管插件必须提供更新按钮')
 
     await act(async () => {
@@ -401,7 +401,7 @@ test('PluginDetailDrawer：更新操作调用 update 并回调刷新，changed=f
     assert.equal(updatedId, 'my-plugin')
     assert.equal(packageChangedCount, 1, '更新成功后必须请求列表刷新')
     assert.equal(notices.length, 1)
-    assert.match(notices[0]?.body ?? '', /源未变化/, 'changed=false 时如实回显未变更')
+    assert.match(notices[0]?.body ?? '', /Source unchanged/, 'changed=false 时如实回显未变更')
   } finally {
     pluginsApi.getConfig = originalGetConfig
     pluginsApi.update = originalUpdate
@@ -442,7 +442,7 @@ test('PluginDetailDrawer：卸载需 AlertDialog 确认，成功后关闭抽屉�
     })
 
     // 1. 卸载按钮打开 AlertDialog 确认
-    const removeBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('卸载插件'))
+    const removeBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Uninstall plugin'))
     assert.ok(removeBtn, '受管插件必须提供卸载按钮')
     await act(async () => {
       removeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -452,11 +452,11 @@ test('PluginDetailDrawer：卸载需 AlertDialog 确认，成功后关闭抽屉�
     assert.ok(confirmBox, '必须弹出卸载确认 AlertDialog')
     const confirmModal = host.querySelector('.modal-backdrop .plugin-remove-confirm')
     assert.ok(confirmModal, '卸载确认框必须置于 .modal-backdrop 内部以支持居中对齐与全屏遮罩')
-    assert.match(confirmBox.textContent ?? '', /不可恢复/)
+    assert.match(confirmBox.textContent ?? '', /cannot be undone/)
     assert.equal(removedId, '', '未确认前不得发起移除请求')
 
     // 2. 确认卸载
-    const confirmBtn = Array.from(confirmBox.querySelectorAll('button')).find((b) => b.textContent?.includes('确认卸载'))
+    const confirmBtn = Array.from(confirmBox.querySelectorAll('button')).find((b) => b.textContent?.includes('Confirm uninstall'))
     assert.ok(confirmBtn, '确认框必须包含确认卸载按钮')
     await act(async () => {
       confirmBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -501,7 +501,7 @@ test('PluginDetailDrawer：卸载 409 在途任务展示清晰诊断，不关闭
       )
     })
 
-    const removeBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('卸载插件'))
+    const removeBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Uninstall plugin'))
     assert.ok(removeBtn, '受管插件必须提供卸载按钮')
     await act(async () => {
       removeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -509,7 +509,7 @@ test('PluginDetailDrawer：卸载 409 在途任务展示清晰诊断，不关闭
 
     const confirmBox = host.querySelector('[role="alertdialog"]')
     assert.ok(confirmBox, '必须弹出卸载确认 AlertDialog')
-    const confirmBtn = Array.from(confirmBox.querySelectorAll('button')).find((b) => b.textContent?.includes('确认卸载'))
+    const confirmBtn = Array.from(confirmBox.querySelectorAll('button')).find((b) => b.textContent?.includes('Confirm uninstall'))
     assert.ok(confirmBtn, '确认框必须包含确认卸载按钮')
     await act(async () => {
       confirmBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -518,7 +518,7 @@ test('PluginDetailDrawer：卸载 409 在途任务展示清晰诊断，不关闭
     const callout = host.querySelector('.callout-error')
     assert.ok(callout, '409 时必须展示统一 .callout-error 诊断提示')
     assert.match(callout.textContent ?? '', /plugin_has_live_tasks/)
-    assert.match(callout.textContent ?? '', /在途任务/)
+    assert.match(callout.textContent ?? '', /live tasks/)
     assert.equal(removedCallbackCount, 0, '失败时不得触发关闭抽屉回调')
     assert.ok(host.querySelector('.plugin-drawer-content'), '失败后抽屉保持展开')
   } finally {
@@ -566,7 +566,7 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
     })
 
     // 打开安装模态
-    const installBtn = host.querySelector<HTMLButtonElement>('button[aria-label="安装插件"]')
+    const installBtn = host.querySelector<HTMLButtonElement>('button[aria-label="Install plugin"]')
     assert.ok(installBtn, '顶栏必须存在安装插件按钮')
     await act(async () => {
       installBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -582,7 +582,7 @@ test('PluginCenter 集成：安装成功后 syncPlugins 刷新列表并导航至
     assert.ok(input, '模态内必须存在来源输入框')
     await act(async () => { typeIntoInput(input, 'npm:my-plugin@1.0.0') })
 
-    const submitBtn = Array.from(modal.querySelectorAll('button')).find((b) => b.textContent?.includes('安装') && b.className.includes('btn-primary'))
+    const submitBtn = Array.from(modal.querySelectorAll('button')).find((b) => b.textContent?.includes('Install') && b.className.includes('btn-primary'))
     assert.ok(submitBtn, '必须存在提交安装按钮')
     await act(async () => {
       submitBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))

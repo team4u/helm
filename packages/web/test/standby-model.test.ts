@@ -247,8 +247,8 @@ test('buildStandbyCreateInit：环境/模型仅在显式设置时携带', { time
 
 test('standbyEnvError：未定制恒通过；定制后沿用绝对路径校验', { timeout: 60_000 }, () => {
   assert.equal(standbyEnvError({ envCustomized: false, envNodeId: undefined, envCwd: undefined }), null)
-  assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: '' }), '请填写目标节点上的工作目录（绝对路径）')
-  assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: 'relative/path' }), '工作目录必须是绝对路径（POSIX / 或 Windows 盘符开头）')
+  assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: '' }), 'Enter the working directory on the target node (absolute path)')
+  assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: 'relative/path' }), 'Working directory must be an absolute path (POSIX / or Windows drive letter)')
   assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: '/abs' }), null)
 })
 
@@ -384,6 +384,6 @@ test('admitStandbyFiles：伪 File 普通对象在录入边界拒绝，真实 Fi
   assert.equal(rejected.length, 2)
   assert.equal(rejected[0]!.file, fake)
   assert.equal(rejected[1]!.file, readableButNotBlob, '仅伪造 arrayBuffer 方法仍不是 Blob')
-  assert.ok(rejected[0]!.reason.includes('不支持的附件来源'), '显式给出用户可读原因')
+  assert.ok(rejected[0]!.reason.includes('Unsupported attachment source'), '显式给出用户可读原因')
   assert.equal(draft.localFiles.length, 2, '伪对象绝不进入 localFiles')
 })

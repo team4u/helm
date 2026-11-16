@@ -71,7 +71,7 @@ test('同步缓存按 plugin/module/export 隔离，组件复用时不在新上�
     renders.length = 0
     await act(async () => root.render(e(HostStoreProviders, { value: store },
       e(PluginUiView, { pluginId: 'beta', spec: { client: { module: 'index.tsx', export: 'Missing' } } }))))
-    assert.match(host.textContent!, /不存在导出 Missing/)
+    assert.match(host.textContent!, /has no export Missing/)
     assert.deepEqual(renders, [], '缺失导出不能误用同模块的上一个缓存组件')
     globalThis.fetch = async () => new Response('服务不可用', { status: 503 })
     await act(async () => root.render(e(HostStoreProviders, { value: store },

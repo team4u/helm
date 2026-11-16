@@ -23,10 +23,10 @@ export function MarkdownOutlinePopover({
     <ConversationOutlinePopover
       nodes={nodes}
       activeNodeKey={activeNodeKey}
-      triggerTitle={`Markdown 大纲（共 ${nodes.length} 个章节）`}
+      triggerTitle={`Markdown outline (${nodes.length} sections)`}
       badgeCount={nodes.length}
-      searchPlaceholder="搜索章节标题…"
-      accessibilityLabel="Markdown 大纲"
+      searchPlaceholder="Search section titles…"
+      accessibilityLabel="Markdown outline"
       showModeToggle={false}
       portalled={false}
       forceMount

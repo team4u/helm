@@ -622,8 +622,8 @@ test('SSR：工作流节点无折叠手风琴壳，最外层直接直出一体�
   assert.ok(html.includes('subagent-live-card'), '工作台应直接在最外层直出子代理一体化整卡')
   assert.ok(html.includes('subagent-card-clickable'), '子代理卡必须携带整卡统一 hover 类')
   assert.ok(html.includes('workflow-action-card'), '动作节点应渲染扁平双层卡')
-  assert.ok(!html.includes('展开节点详情'), '不得包含节点展开/收起按钮文案')
-  assert.ok(!html.includes('收起节点详情'), '不得包含节点收起按钮文案')
+  assert.ok(!html.includes('展开Node details'), '不得包含节点展开/收起按钮文案')
+  assert.ok(!html.includes('收起Node details'), '不得包含节点收起按钮文案')
 })
 
 test('SSR：多阶段工作流渲染阶段胶囊、日志、产出预览与徽章', { timeout: 60_000 }, async () => {

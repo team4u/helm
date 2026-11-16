@@ -29,9 +29,9 @@ test('后台完成结果与耗时来自 run，不来自父工具返回启动句�
 
 test('当前正文生成优先于保留的旧思考快照', { timeout: 60_000 }, () => {
   const snippet = m.resolveSubagentHeaderSnippet({ badgeStatus: 'working', live: {
-    conversationId: 12, text: '正在生成结论', thinking: '先检查测试结果', tools: [], updatedAt: 1,
+    conversationId: 12, text: 'Generating结论', thinking: '先检查测试结果', tools: [], updatedAt: 1,
   } })
-  assert.deepEqual(snippet, { kind: 'text', tag: '输出', text: '正在生成结论' })
+  assert.deepEqual(snippet, { kind: 'text', tag: '输出', text: 'Generating结论' })
 })
 
 test('新一轮输入尚无回答时，不把上一轮 assistant 结论作为本轮结果', { timeout: 60_000 }, () => {

@@ -595,6 +595,6 @@ test('插件 slash 失败保留原草稿与显式诊断', { timeout: 60_000 }, a
       textareaOf(app.host).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
     assert.equal(textareaOf(app.host).value, '/archive')
-    assert.ok(app.store.notices.some((notice) => String(notice.title).includes('命令执行失败')))
+    assert.ok(app.store.notices.some((notice) => String(notice.title).includes('Command failed')))
   } finally { app.unmount(); restore() }
 })

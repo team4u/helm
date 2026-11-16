@@ -19,11 +19,11 @@ export interface SkillCenterProps {
 }
 
 const CATEGORY_TABS: Array<{ key: SkillCategoryTab; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'builtin', label: '内置' },
-  { key: 'plugins', label: '插件' },
-  { key: 'agents', label: '共享' },
-  { key: 'workspace', label: '工作区' },
+  { key: 'all', label: 'All' },
+  { key: 'builtin', label: 'Built-in' },
+  { key: 'plugins', label: 'Plugins' },
+  { key: 'agents', label: 'Shared' },
+  { key: 'workspace', label: 'Workspace' },
 ]
 
 /**
@@ -88,12 +88,12 @@ export function SkillCenter({
 
   return (
     <div className={`primary-center skill-center${isSplit ? ' is-split' : ''}`} data-view="skill-center">
-      {/* 顶栏：标题与操作 */}
+      {/* Top bar: title and actions */}
       <div className="primary-center-topbar pane-topbar">
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
             <HelmIcon name="sparkles" size={14} />
-            <span>技能中心</span>
+            <span>Skills Center</span>
           </div>
         </div>
 
@@ -102,10 +102,10 @@ export function SkillCenter({
             type="button"
             className="btn btn-sm"
             onClick={() => void store.refreshAssets?.()}
-            title="刷新技能清单"
+            title="Refresh skill list"
           >
             <HelmIcon name="refresh-cw" size={12} />
-            <span className="pane-action-label">刷新</span>
+            <span className="pane-action-label">Refresh</span>
           </button>
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
@@ -118,23 +118,23 @@ export function SkillCenter({
         </div>
       </div>
 
-      {/* 检索栏与分类筛选药丸标签 */}
+      {/* Search bar and category filter pills */}
       <div className="primary-center-toolbar">
         <div className="primary-search-box">
           <HelmIcon name="search" size={14} />
           <input
             type="text"
-            placeholder="搜索技能名称、ID、描述或参考文件…"
+            placeholder="Search skill name, ID, description or reference files…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="搜索技能"
+            aria-label="Search skills"
           />
           {query && (
             <button
               type="button"
               className="btn btn-ghost btn-sm primary-search-clear"
-              title="清空搜索"
-              aria-label="清空搜索"
+              title="Clear search"
+              aria-label="Clear search"
               onClick={() => setQuery('')}
             >
               <HelmIcon name="x" size={12} />
@@ -142,7 +142,7 @@ export function SkillCenter({
           )}
         </div>
 
-        <div className="primary-category-pills" role="tablist" aria-label="技能分类筛选">
+        <div className="primary-category-pills" role="tablist" aria-label="Filter by skill category">
           {CATEGORY_TABS.map((tab) => {
             const count = categoryCounts[tab.key] ?? 0
             const isActive = activeTab === tab.key
@@ -163,7 +163,7 @@ export function SkillCenter({
         </div>
       </div>
 
-      {/* 主视口：响应式卡片网格或空状态 */}
+      {/* Main viewport: responsive card grid or empty state */}
       <div className="primary-center-content">
         {filteredSkills.length > 0 ? (
           <div className="primary-center-grid">
@@ -181,9 +181,9 @@ export function SkillCenter({
             <div className="primary-center-empty-icon">
               <HelmIcon name="search" size={28} />
             </div>
-            <div className="primary-center-empty-text">未找到匹配的技能</div>
+            <div className="primary-center-empty-text">No matching skills</div>
             <div className="primary-center-empty-hint">
-              请尝试调整搜索关键字或切换分类标签。
+              Try adjusting the search keywords or switching category tabs.
             </div>
             {(query || activeTab !== 'all') && (
               <button
@@ -195,14 +195,14 @@ export function SkillCenter({
                 }}
               >
                 <HelmIcon name="rotate-ccw" size={12} />
-                <span>重置筛选条件</span>
+                <span>Reset filters</span>
               </button>
             )}
           </div>
         )}
       </div>
 
-      {/* 右侧滑出式详情与文档阅读抽屉 */}
+      {/* Right slide-over details and documentation reader drawer */}
       <SkillDetailDrawer
         skill={selectedSkill}
         open={isDrawerOpen}

@@ -20,14 +20,14 @@ export function ConversationDrawer({ conversationId, onClose }: ConversationDraw
       <DialogPortal>
         <DialogOverlay
           className="conversation-drawer-backdrop"
-          aria-label="关闭子会话抽屉"
+          aria-label="Close child conversation drawer"
         />
         <DialogContent
           className="conversation-drawer"
-          aria-label={`子会话 #${conversationId} 抽屉`}
+          aria-label={`Child conversation #${conversationId} drawer`}
         >
           <DialogTitle style={{ display: 'none' }}>
-            {`子会话 #${conversationId} 抽屉`}
+            {`Child conversation #${conversationId} drawer`}
           </DialogTitle>
           <ConversationPane
             conversationId={conversationId}

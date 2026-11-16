@@ -22,8 +22,8 @@ export function AssistantModelBoundary({ model }: { model: AssistantModelIdentit
     <div
       className="model-boundary"
       role="separator"
-      aria-label={`实际生成模型切换为 ${full}`}
-      title={`实际生成模型已切换：${full}`}
+      aria-label={`Effective model switched to ${full}`}
+      title={`Effective model switched: ${full}`}
     >
       <span className="model-boundary-label">
         <HelmIcon name="cpu" size={11} />
@@ -102,11 +102,11 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
   const fullTimestamp = formatFullTimestamp(timeMs)
   let tooltipText = ''
   if (fullTimestamp !== '' && durationText !== '') {
-    tooltipText = `完成于 ${fullTimestamp} · 耗时 ${durationText}`
+    tooltipText = `Completed at ${fullTimestamp} · took ${durationText}`
   } else if (fullTimestamp !== '') {
-    tooltipText = `完成于 ${fullTimestamp}`
+    tooltipText = `Completed at ${fullTimestamp}`
   } else if (durationText !== '') {
-    tooltipText = `耗时 ${durationText}`
+    tooltipText = `Took ${durationText}`
   }
 
   const showHoverBar = !isBusy && (lastText !== '' || turn.entryIds.length > 0)
@@ -152,7 +152,7 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
         )
       })}
       {turn.live ? (
-        <span className="msg-origin-tag msg-live-indicator" aria-label="正在生成" role="status">
+        <span className="msg-origin-tag msg-live-indicator" aria-label="Generating" role="status">
           <HelmIcon name="loader" size={12.5} className="spin-slow" />
           <span className="msg-live-dots" aria-hidden="true">
             <span />
@@ -164,8 +164,8 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
       {hasTimeInfo || showHoverBar || showModelTag ? (
         <div className="msg-ai-footer">
           {showModelTag ? (
-            <Tooltip content={`实际生成模型：${modelFull}`}>
-              <span className="msg-time-meta" title={`实际生成模型：${modelFull}`}>
+            <Tooltip content={`Effective model: ${modelFull}`}>
+              <span className="msg-time-meta" title={`Effective model: ${modelFull}`}>
                 <HelmIcon name="cpu" size={11} />
                 <span className="mono">{modelShort}</span>
               </span>
@@ -176,7 +176,7 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
               <span className="msg-time-meta" title={tooltipText}>
                 {displayTime !== '' ? <span>{displayTime}</span> : null}
                 {displayTime !== '' && durationText !== '' ? <span className="msg-time-sep">·</span> : null}
-                {durationText !== '' ? <span>耗时 {durationText}</span> : null}
+                {durationText !== '' ? <span>Took {durationText}</span> : null}
               </span>
             </Tooltip>
           ) : null}
@@ -198,7 +198,7 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
-                title="从此处分叉新会话"
+                title="Fork a new conversation from here"
                 disabled={forking || turn.entryIds.length === 0}
                 onClick={() => void forkFromHere()}
               >

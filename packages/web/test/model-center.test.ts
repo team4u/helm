@@ -266,11 +266,11 @@ test('buildMergedProviders: 真实已知窗口生成「N 上下文」标签且�
   const byId = new Map((merged.find((p) => p.id === 'magpie')?.models ?? []).map((m) => [m.id, m]))
 
   // 思考 + 已知 200k 窗口：两个标签，思考在前、紧凑窗口在后
-  assert.deepEqual(byId.get('glm-4.6')?.tags, ['思考模型', '200k 上下文'])
+  assert.deepEqual(byId.get('glm-4.6')?.tags, ['Thinking models', '200k context'])
   // 思考 + 窗口未知：只有思考标签，绝不推测窗口
-  assert.deepEqual(byId.get('kimi-k2')?.tags, ['思考模型'])
+  assert.deepEqual(byId.get('kimi-k2')?.tags, ['Thinking models'])
   // 非思考模型 + 已知 1M 窗口：仍有窗口标签（与是否思考无关）
-  assert.deepEqual(byId.get('qwen3-coder')?.tags, ['1.0M 上下文'])
+  assert.deepEqual(byId.get('qwen3-coder')?.tags, ['1.0M context'])
   // 两者皆无：保持 undefined（空 tags 不产生空数组语义）
   assert.equal(byId.get('plain-mini')?.tags, undefined)
 })
@@ -309,7 +309,7 @@ test('buildDefaultModelOptions: 哨兵空值项、可用模型过滤与目录外
   const last = stale[stale.length - 1]
   assert.ok(last)
   assert.equal(last.value, 'zhipu/glm-4.6')
-  assert.equal(last.meta, '目录外')
+  assert.equal(last.meta, 'Not in catalog')
 
   // 哨兵值本身不触发目录外保留
   const sentinel = buildDefaultModelOptions(models, UNSET_MODEL_VALUE)
@@ -351,8 +351,8 @@ test('buildDefaultModelOptions: 已禁用模型不作为正常可选项；当前
   const withDisabled = buildDefaultModelOptions(models, 'faux/faux-2')
   const hits = withDisabled.filter((o) => o.value === 'faux/faux-2')
   assert.equal(hits.length, 1, '禁用模型只应保留一项（不得既在可选项又在标注项重复出现）')
-  assert.equal(hits[0]?.label, 'faux/faux-2（已禁用）')
-  assert.equal(hits[0]?.meta, '已禁用')
+  assert.equal(hits[0]?.label, 'faux/faux-2 (disabled)')
+  assert.equal(hits[0]?.meta, 'Disabled')
 })
 
 // ---------------------------------------------------------------------------
@@ -390,13 +390,13 @@ test('ModelCard SSR: 正确渲染供应商卡片头部、徽章、描述与模�
   assert.match(html, /class="[^"]*mono[^"]*"[^>]*>deepseek<\/span>/)
 
   // 3. 配置状态徽章（已配置高亮）
-  assert.match(html, /class="badge badge-ok"[^>]*>已配置<\/span>/)
+  assert.match(html, /class="badge badge-ok"[^>]*>Configured<\/span>/)
 
   // 4. 描述
   assert.match(html, /深度求索 R1 与通用基座。/)
 
   // 5. 底部模型数量
-  assert.match(html, /2 个模型可用/)
+  assert.match(html, /2 models available/)
 
   // 6. 零 Emoji
   assert.equal(EMOJI_REGEX.test(html), false, '卡片渲染不得包含任何 Emoji')
@@ -425,8 +425,8 @@ test('ModelCard SSR: 未配置与选中态渲染断言', { timeout: 60_000 }, ()
   assert.match(html, /aria-selected="true"/)
 
   // 未配置徽章
-  assert.match(html, /class="badge badge-neutral"[^>]*>未配置<\/span>/)
-  assert.match(html, /3 个模型可用/)
+  assert.match(html, /class="badge badge-neutral"[^>]*>Not configured<\/span>/)
+  assert.match(html, /3 models available/)
 
   // 零 Emoji
   assert.equal(EMOJI_REGEX.test(html), false)
@@ -445,8 +445,8 @@ test('ModelDetailDrawer SSR: inline={true} 渲染凭据表单、连通性按钮�
     modelsCount: 2,
     baseUrl: 'https://api.openai.com/v1',
     models: [
-      { id: 'gpt-4o', name: 'GPT-4o', tags: ['多模态', '128K'], enabled: true },
-      { id: 'o1', name: 'o1 Reasoning', tags: ['深度推理'], enabled: false },
+      { id: 'gpt-4o', name: 'GPT-4o', tags: ['Multimodal', '128K'], enabled: true },
+      { id: 'o1', name: 'o1 Reasoning', tags: ['Deep reasoning'], enabled: false },
     ],
   }
 
@@ -464,31 +464,31 @@ test('ModelDetailDrawer SSR: inline={true} 渲染凭据表单、连通性按钮�
   assert.match(html, /class="[^"]*mono[^"]*"[^>]*>openai<\/div>/)
 
   // 2. 表单字段（API Key 输入框；内置供应商服务端点只读展示，不可假编辑）
-  assert.match(html, /API 密钥/)
+  assert.match(html, /API key/)
   assert.match(html, /type="password"/)
-  assert.match(html, /placeholder="已配置（留空保持不变）"/)
-  assert.match(html, /服务端点/)
+  assert.match(html, /placeholder="Configured \(leave empty to keep unchanged\)"/)
+  assert.match(html, /Endpoint/)
   assert.doesNotMatch(html, /id="model-drawer-base-url"/, '内置供应商端点不得渲染可编辑输入框')
   assert.match(html, /https:\/\/api\.openai\.com\/v1/)
-  assert.match(html, /内置固定值/)
+  assert.match(html, /built in and cannot be changed/)
 
   // 3. 测试连接按钮
-  assert.match(html, /测试连接/)
+  assert.match(html, /Test connection/)
 
   // 4. 模型清单与平铺模型药丸胶囊群
-  assert.match(html, /模型清单与路由控制/)
-  assert.match(html, /aria-label="选择启用的模型"/)
+  assert.match(html, /Models and routing control/)
+  assert.match(html, /aria-label="Select enabled models"/)
   assert.match(html, /mchips/)
   assert.match(html, /mchip/)
   assert.match(html, /role="checkbox"/)
   assert.match(html, /GPT-4o/)
-  assert.match(html, /多模态/)
+  assert.match(html, /Multimodal/)
   assert.match(html, /model-drawer-tags-wrap/)
-  assert.match(html, /全部启用/)
-  assert.match(html, /全部停用/)
+  assert.match(html, /Enable all/)
+  assert.match(html, /Disable all/)
 
   // 5. 保存配置按钮
-  assert.match(html, /保存配置/)
+  assert.match(html, /Save configuration/)
 
   // 6. 零 Emoji
   assert.equal(EMOJI_REGEX.test(html), false, '抽屉渲染不得包含任何 Emoji')
@@ -513,8 +513,8 @@ test('ModelDetailDrawer SSR: 未配置凭证供应商 placeholder 正确显示',
     }),
   )
 
-  assert.match(html, /placeholder="请输入 API 密钥"/)
-  assert.match(html, /未配置/)
+  assert.match(html, /placeholder="Enter API key"/)
+  assert.match(html, /Not configured/)
   assert.equal(EMOJI_REGEX.test(html), false)
 })
 
@@ -537,15 +537,15 @@ test('ModelCenter SSR: 完整渲染顶栏、Tab 栏、检索框、分类药丸�
 
   // 1. 顶栏标题与副标题
   assert.match(html, /class="[^"]*primary-center-title[^"]*"/)
-  assert.match(html, /模型与凭证中心/)
+  assert.match(html, /Models &amp; Credentials Center/)
 
   // 2. 统计摘要、顶部 Tab 与全局默认状态行
-  assert.match(html, /供应商<\/span>/)
-  assert.match(html, /全局默认/)
+  assert.match(html, /Providers<\/span>/)
+  assert.match(html, /Global default/)
 
   // 3. 搜索框与占位符
   assert.match(html, /class="[^"]*primary-search-box[^"]*"/)
-  assert.match(html, /placeholder="搜索供应商名称、ID 或包含的模型\.\.\."/)
+  assert.match(html, /placeholder="Search provider name, ID or included models\.\.\."/)
 
   // 4. 卡片网格流
   assert.match(html, /class="[^"]*primary-center-grid[^"]*"/)
@@ -571,9 +571,9 @@ test('ModelCenter SSR: 目标携带 providerId 时自动唤出对应详情抽屉
   // 抽屉展开且含有 Anthropic 详情
   assert.match(html, /class="[^"]*primary-drawer-content[^"]*"/)
   assert.match(html, /Claude 3\.7 Sonnet/)
-  assert.match(html, /混合推理/)
-  assert.match(html, /API 密钥/)
-  assert.match(html, /测试连接/)
+  assert.match(html, /Hybrid reasoning/)
+  assert.match(html, /API key/)
+  assert.match(html, /Test connection/)
 
   // 零 Emoji
   assert.equal(EMOJI_REGEX.test(html), false)
@@ -598,8 +598,8 @@ test('ModelCenter SSR: 空状态与分屏模式渲染', { timeout: 60_000 }, () 
     ),
   )
 
-  assert.match(htmlEmpty, /未找到匹配的供应商/)
-  assert.match(htmlEmpty, /aria-label="关闭分屏"/)
+  assert.match(htmlEmpty, /No matching providers/)
+  assert.match(htmlEmpty, /aria-label="Close split view"/)
   assert.equal(EMOJI_REGEX.test(htmlEmpty), false)
 })
 
@@ -617,10 +617,10 @@ test('ModelCenter SSR: 目标携带 tab=defaults 时内联全局默认配置表�
   )
 
   // Tab 表单内联呈现，不再唤出 defaults 抽屉
-  assert.match(html, /全局模型规则/)
-  assert.match(html, /新会话的继承链/)
-  assert.match(html, /保存全局默认/)
-  assert.match(html, /aria-label="全局默认模型"/)
+  assert.match(html, /Global model rules/)
+  assert.match(html, /The inheritance chain for new conversations/)
+  assert.match(html, /Save global defaults/)
+  assert.match(html, /aria-label="Global default model"/)
   assert.doesNotMatch(html, /class="[^"]*primary-drawer-content[^"]*"/)
   assert.equal(EMOJI_REGEX.test(html), false)
 })
@@ -665,8 +665,8 @@ test('ModelCenter SSR: 后端目录返回插件网关时呈现动态供应商卡
     ),
   )
   assert.match(html, /Magpie/)
-  assert.match(html, /动态同步/)
-  assert.match(html, /刷新目录/)
+  assert.match(html, /Dynamic sync/)
+  assert.match(html, /Refresh catalog/)
   assert.equal(EMOJI_REGEX.test(html), false)
 })
 
@@ -732,7 +732,7 @@ test('ModelCenter: 自定义网关端点保存经 PUT /api/providers 只改该�
     setter?.call(endpointInput, 'http://192.168.1.5:9000/v1')
     endpointInput.dispatchEvent(new Event('input', { bubbles: true }))
     const saveBtn = Array.from(container.querySelectorAll('button')).find(
-      (btn) => (btn.textContent ?? '').includes('保存配置'),
+      (btn) => (btn.textContent ?? '').includes('Save configuration'),
     )!
     await act(async () => {
       saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -804,9 +804,9 @@ test('ModelCenter: 插件网关端点保存不触发任何 providers 写入（�
     // 插件网关端点只读：没有可编辑输入框，保存不产生 providers 写入
     // （模型清单的 filter 写入合法存在，与端点无关）
     assert.ok(container.querySelector('input#model-drawer-base-url') === null)
-    assert.match(container.textContent ?? '', /该端点由插件 builtin:magpie 的配置管理/)
+    assert.match(container.textContent ?? '', /This endpoint is managed by the configuration of plugin builtin:magpie/)
     const saveBtn = Array.from(container.querySelectorAll('button')).find(
-      (btn) => (btn.textContent ?? '').includes('保存配置'),
+      (btn) => (btn.textContent ?? '').includes('Save configuration'),
     )!
     await act(async () => {
       saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -893,7 +893,7 @@ test('ModelCenter: 「全部 / 已配置」筛选药丸、已配置卡片前 3 �
     assert.match(cardsBefore[0]?.textContent ?? '', /Anthropic/, '已配置卡片应优先渲染在最前')
 
     const configuredTab = Array.from(container.querySelectorAll('[role="tab"]')).find((el) =>
-      el.textContent?.includes('已配置'),
+      el.textContent?.includes('Configured'),
     ) as HTMLElement | undefined
     assert.ok(configuredTab, 'ModelCenter 应渲染「已配置」筛选药丸')
 

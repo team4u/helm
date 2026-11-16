@@ -68,26 +68,26 @@ export function ConversationRowActionsMenu({
       store.pushNotice({
         type: 'notification',
         level: 'info',
-        title: hostArchiveAction === 'archive' ? '已归档会话' : '已恢复会话',
+        title: hostArchiveAction === 'archive' ? 'Conversations archived' : 'Conversations restored',
         body:
           hostArchiveAction === 'archive'
-            ? `会话 #${conversation.id} 已移入侧栏「已归档」分组`
-            : `会话 #${conversation.id} 已恢复至智能体列表`,
+            ? `Conversation #${conversation.id} moved to the Archived group in the sidebar`
+            : `Conversation #${conversation.id} restored to the agent list`,
       })
       setOpen(false)
     } catch (err) {
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: hostArchiveAction === 'archive' ? '归档会话失败' : '恢复会话失败',
-        body: `会话 #${conversation.id}：${err instanceof Error ? err.message : String(err)}`,
+        title: hostArchiveAction === 'archive' ? 'Failed to archive conversation' : 'Failed to restore conversation',
+        body: `Conversation #${conversation.id}: ${err instanceof Error ? err.message : String(err)}`,
       })
     } finally {
       setArchiving(false)
     }
   }
 
-  const menuLabel = hostArchiveAction === null ? '插件会话操作' : '会话操作'
+  const menuLabel = hostArchiveAction === null ? 'Plugin conversation actions' : 'Conversation actions'
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -96,7 +96,7 @@ export function ConversationRowActionsMenu({
           type="button"
           className="btn btn-ghost btn-icon-xs"
           title={menuLabel}
-          aria-label={`会话 #${conversation.id} ${menuLabel}`}
+          aria-label={`Conversation #${conversation.id} ${menuLabel}`}
           onClick={(e) => e.stopPropagation()}
         >
           <HelmIcon name="more" size={13} />
@@ -109,8 +109,8 @@ export function ConversationRowActionsMenu({
               disabled={archiving}
               title={
                 hostArchiveAction === 'archive'
-                  ? '归档后从智能体列表移入侧栏「已归档」分组'
-                  : '恢复到原智能体的会话列表'
+                  ? 'Archive moves it from the agent list to the Archived group in the sidebar'
+                  : 'Restore to the original agent conversation list'
               }
               onSelect={() => {
                 void runHostArchiveAction()
@@ -122,7 +122,7 @@ export function ConversationRowActionsMenu({
                   size={13}
                   className={archiving ? 'spin-slow' : undefined}
                 />
-                {hostArchiveAction === 'archive' ? '归档会话' : '恢复会话'}
+                {hostArchiveAction === 'archive' ? 'Archive conversation' : 'Restore conversation'}
               </span>
             </DropdownMenuItem>
           )}

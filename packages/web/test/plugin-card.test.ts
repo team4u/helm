@@ -55,7 +55,7 @@ test('PluginCard：优先展示插件定义自带的 description，不做 ID 特
     }),
   )
   assert.match(html, /JSON Spec 渲染为交互卡片/)
-  assert.doesNotMatch(html, /系统扩展插件组件/)
+  assert.doesNotMatch(html, /系统扩展Plugin component/)
 })
 
 test('PluginCard：未声明 description 时回退能力透视而非 ID 特判', { timeout: 60_000 }, () => {
@@ -75,7 +75,7 @@ test('PluginCard：未声明 description 时回退能力透视而非 ID 特判',
     }),
   )
   // 无后端描述时也不再返回硬编码的 profile 文案，而是能力透视
-  assert.match(html, /1 个工具/)
+  assert.match(html, /1 Agent Tools/)
   assert.doesNotMatch(html, /常驻角色与技能底座/)
 })
 
@@ -112,7 +112,7 @@ test('PluginCard：SSR 渲染包含图标、名称、版本、常驻标签与能
   assert.match(html, /v1\.2\.0/)
 
   // 4. 常驻锁定标签（locked: true）
-  assert.match(html, /常驻/)
+  assert.match(html, /Resident/)
   assert.match(html, /plugin-card-locked-badge/)
 
   // 5. 能力胶囊徽章（Tools / Actions / Hooks）
@@ -370,7 +370,7 @@ test('PluginCard：status === failed 时渲染异常徽章与错误摘要并标�
   // 2. 标题行渲染异常徽章（含 title 错误摘要）
   assert.match(html, /class="[^"]*badge badge-err[^"]*"/)
   assert.match(html, /title="入口文件 index\.ts 缺失"/)
-  assert.match(html, /<span>异常<\/span>/)
+  assert.match(html, /<span>Error<\/span>/)
 
   // 3. 描述区域附带错误摘要
   assert.match(html, /plugin-card-error-summary/)
@@ -406,7 +406,7 @@ test('PluginCard：scan/load 阶段失败禁用快捷开关并提示查看错误
   const switchBtn = container.querySelector('[role="switch"]') as HTMLButtonElement
   assert.ok(switchBtn, '必须渲染 Switch 开关')
   assert.equal(switchBtn.disabled, true, 'scan/load 阶段失败的插件快捷开关必须禁用')
-  assert.match(switchBtn.title || '', /插件加载失败/)
+  assert.match(switchBtn.title || '', /Plugin failed to load/)
 
   act(() => {
     root.unmount()

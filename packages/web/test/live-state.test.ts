@@ -24,7 +24,7 @@ test('重连快照撤下过时插件文档和详情，重复帧忽略而缺帧�
   assert.deepEqual(next.pluginDocs, {})
   assert.deepEqual(next.conversationDetails, {})
   assert.equal(applyEventFrame(next, { seq: 10, event: { type: 'conversation.deleted', conversationId: 1 } }), next)
-  assert.throws(() => applyEventFrame(next, { seq: 12, event: { type: 'notification', level: 'info', title: 'lost' } }), /不连续/)
+  assert.throws(() => applyEventFrame(next, { seq: 12, event: { type: 'notification', level: 'info', title: 'lost' } }), /sequence gap/)
   assert.equal(applyEventFrame(next, { seq: 11, event: { type: 'custom', payload: 1 } }).seq, 11)
 })
 
@@ -40,10 +40,10 @@ test('快照 pluginDocs 直投写入 pluginDocs 映射，非法形状显式拒�
     'builtin:workflow/runs': { runs: [] },
     'p2/index': 42,
   })
-  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: 'bad' as unknown as HelmSnapshot['pluginDocs'] }), /无效/)
+  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: 'bad' as unknown as HelmSnapshot['pluginDocs'] }), /[Ii]nvalid/)
   assert.throws(
     () => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: [{ pluginId: 1, name: 'x', value: null } as unknown as NonNullable<HelmSnapshot['pluginDocs']>[number]] }),
-    /无效/,
+    /[Ii]nvalid/,
   )
 })
 
@@ -116,8 +116,8 @@ test('模型菜单按真实 /api/models 契约组成 provider/model，思考档�
     { id: 'anthropic/claude', provider: 'anthropic', modelId: 'claude', available: false, thinkingLevels: ['off'] },
   ])
   assert.equal(catalog.defaultModel, undefined)
-  assert.throws(() => normalizeModelCatalogInfo({ models: [{ id: 'fake' }] }), /无效/)
-  assert.throws(() => normalizeModelCatalogInfo([1, 2]), /无效/)
+  assert.throws(() => normalizeModelCatalogInfo({ models: [{ id: 'fake' }] }), /[Ii]nvalid/)
+  assert.throws(() => normalizeModelCatalogInfo([1, 2]), /[Ii]nvalid/)
   assert.equal(normalizeModelCatalogInfo({ models: [] }).models.length, 0)
 })
 
@@ -145,7 +145,7 @@ test('模型目录窗口字段：真实已知正数透传，未知省略，非�
       () => normalizeModelCatalogInfo({ models: [
         { provider: 'magpie', modelId: 'bad-window', available: true, contextWindow: bad as number },
       ] }),
-      /无效/,
+      /[Ii]nvalid/,
       `contextWindow=${String(bad)} 必须显式拒绝`,
     )
   }
@@ -212,7 +212,7 @@ const queuedLive: ConversationLive = {
   text: '',
   tools: [],
   queuedInputs: [
-    { id: 'req-1', submissionId: '12', text: '插话引导的', mode: 'steer', origin: 'human', createdAt: 3 },
+    { id: 'req-1', submissionId: '12', text: 'Steer的', mode: 'steer', origin: 'human', createdAt: 3 },
   ],
   updatedAt: 50,
 }
@@ -237,8 +237,8 @@ test('快照 conversationLives 重建 live/queue，旧项清理不残留，后�
 test('快照 conversationLives 缺省时回退为空，非法形状显式拒绝', { timeout: 60_000 }, () => {
   const state = applySnapshot(emptyLiveState(), snapshot)
   assert.deepEqual(state.conversationLives, {})
-  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, conversationLives: [{ bad: true } as unknown as ConversationLive] }), /无效/)
-  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, conversationLives: 'x' as unknown as ConversationLive[] }), /无效/)
+  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, conversationLives: [{ bad: true } as unknown as ConversationLive] }), /[Ii]nvalid/)
+  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, conversationLives: 'x' as unknown as ConversationLive[] }), /[Ii]nvalid/)
 })
 
 test('终态交接：live 含 queue -> upsert done 保留 queue-only live，等真实出队帧清理', { timeout: 60_000 }, () => {

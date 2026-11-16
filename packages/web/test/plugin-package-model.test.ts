@@ -31,35 +31,35 @@ import { ApiClientError } from '../src/lib/api.js'
 // ---------------------------------------------------------------------------
 
 test('detectPluginSourceKind：npm 说明符识别（scoped / 范围 / 精确版本）', { timeout: 60_000 }, () => {
-  assert.deepEqual(detectPluginSourceKind('npm:@scope/pkg@1.0.0'), { kind: 'npm', label: 'npm 包' })
-  assert.deepEqual(detectPluginSourceKind('npm:helm-plugin-foo@^1.2.0'), { kind: 'npm', label: 'npm 包' })
-  assert.deepEqual(detectPluginSourceKind('  npm:plain-pkg  '), { kind: 'npm', label: 'npm 包' })
+  assert.deepEqual(detectPluginSourceKind('npm:@scope/pkg@1.0.0'), { kind: 'npm', label: 'npm package' })
+  assert.deepEqual(detectPluginSourceKind('npm:helm-plugin-foo@^1.2.0'), { kind: 'npm', label: 'npm package' })
+  assert.deepEqual(detectPluginSourceKind('  npm:plain-pkg  '), { kind: 'npm', label: 'npm package' })
   assert.equal(isNpmSource('npm:pkg'), true)
   assert.equal(isNpmSource('npm:'), false, 'npm: 后无内容不识别')
   assert.equal(isNpmSource('npmx:pkg'), false, '前缀必须精确为 npm:')
 })
 
 test('detectPluginSourceKind：git 来源识别（git repo/ref 与 HTTPS Git URL）', { timeout: 60_000 }, () => {
-  assert.deepEqual(detectPluginSourceKind('git:https://github.com/user/repo.git@dev'), { kind: 'git', label: 'Git 仓库' })
-  assert.deepEqual(detectPluginSourceKind('https://github.com/user/helm-plugin-foo.git'), { kind: 'git', label: 'Git 仓库' })
-  assert.deepEqual(detectPluginSourceKind('https://github.com/user/repo'), { kind: 'git', label: 'Git 仓库' })
-  assert.deepEqual(detectPluginSourceKind('https://github.com/user/repo.git#v2.1.0'), { kind: 'git', label: 'Git 仓库' })
+  assert.deepEqual(detectPluginSourceKind('git:https://github.com/user/repo.git@dev'), { kind: 'git', label: 'Git repository' })
+  assert.deepEqual(detectPluginSourceKind('https://github.com/user/helm-plugin-foo.git'), { kind: 'git', label: 'Git repository' })
+  assert.deepEqual(detectPluginSourceKind('https://github.com/user/repo'), { kind: 'git', label: 'Git repository' })
+  assert.deepEqual(detectPluginSourceKind('https://github.com/user/repo.git#v2.1.0'), { kind: 'git', label: 'Git repository' })
   assert.equal(isGitSource('git:user/repo@main'), true)
   assert.equal(isGitSource('git:user/repo'), true, 'git: 可省略 ref，使用远端默认分支')
   assert.equal(isGitSource('https://example.com/just-a-page'), true, 'HTTPS Git URL 可省略 .git 与 ref，由服务端校验仓库')
 })
 
 test('detectPluginSourceKind：本地路径识别（POSIX 绝对 / Windows / UNC / 相对）', { timeout: 60_000 }, () => {
-  assert.deepEqual(detectPluginSourceKind('/root/plugins/foo'), { kind: 'local', label: '本地路径' })
-  assert.deepEqual(detectPluginSourceKind('C:\\plugins\\foo'), { kind: 'local', label: '本地路径' })
-  assert.deepEqual(detectPluginSourceKind('./relative/plugin'), { kind: 'local', label: '本地路径' })
-  assert.deepEqual(detectPluginSourceKind('../sibling/plugin'), { kind: 'local', label: '本地路径' })
+  assert.deepEqual(detectPluginSourceKind('/root/plugins/foo'), { kind: 'local', label: 'Local path' })
+  assert.deepEqual(detectPluginSourceKind('C:\\plugins\\foo'), { kind: 'local', label: 'Local path' })
+  assert.deepEqual(detectPluginSourceKind('./relative/plugin'), { kind: 'local', label: 'Local path' })
+  assert.deepEqual(detectPluginSourceKind('../sibling/plugin'), { kind: 'local', label: 'Local path' })
   assert.equal(isLocalSource('plugins/foo'), false, '裸相对名不识别（避免误判普通 npm 包名）')
 })
 
 test('detectPluginSourceKind：空串与未识别输入', { timeout: 60_000 }, () => {
   assert.deepEqual(detectPluginSourceKind(''), { kind: 'unknown', label: '' })
-  assert.deepEqual(detectPluginSourceKind('not-a-source'), { kind: 'unknown', label: '无法识别' })
+  assert.deepEqual(detectPluginSourceKind('not-a-source'), { kind: 'unknown', label: 'Unrecognized' })
 })
 
 test('isInstallSourceSubmittable：仅三类已识别来源可提交', { timeout: 60_000 }, () => {
@@ -86,7 +86,7 @@ const localSource: PluginPackageSource = { kind: 'local', raw: '/abs/path', path
 test('pluginSourceBadgeLabel / pluginSourceDisplayText：徽章短标签与原文回显', { timeout: 60_000 }, () => {
   assert.equal(pluginSourceBadgeLabel(npmSource), 'npm')
   assert.equal(pluginSourceBadgeLabel(gitSource), 'git')
-  assert.equal(pluginSourceBadgeLabel(localSource), '本地')
+  assert.equal(pluginSourceBadgeLabel(localSource), 'Local')
   assert.equal(pluginSourceDisplayText(npmSource), 'npm:pkg@1.0.0')
   assert.equal(pluginSourceDisplayText(gitSource), 'git:https://github.com/u/r.git@dev')
 })
@@ -130,7 +130,7 @@ test('buildDoctorCheckItems：逐项条目化并保持服务端顺序', { timeou
 
 test('buildDoctorConclusion：失败项汇总与全部通过文案', { timeout: 60_000 }, () => {
   const conclusion = buildDoctorConclusion(doctorReport)
-  assert.match(conclusion, /2 项失败/)
+  assert.match(conclusion, /2 failures/)
   assert.match(conclusion, /entry_missing/)
   assert.match(conclusion, /define_invalid/)
 
@@ -139,7 +139,7 @@ test('buildDoctorConclusion：失败项汇总与全部通过文案', { timeout: 
     ok: true,
     checks: [{ id: 'manifest', label: '清单检查' }],
   }
-  assert.equal(buildDoctorConclusion(okReport), '安装前自检通过')
+  assert.equal(buildDoctorConclusion(okReport), 'Pre-install doctor passed')
 })
 
 // ---------------------------------------------------------------------------
@@ -148,15 +148,15 @@ test('buildDoctorConclusion：失败项汇总与全部通过文案', { timeout: 
 
 test('pluginPackageErrorText：409 在途任务给出明确指引', { timeout: 60_000 }, () => {
   const err = new ApiClientError('plugin_has_live_tasks', 'Plugin has live tasks', 409)
-  const text = pluginPackageErrorText(err, '卸载')
-  assert.match(text, /卸载失败/)
+  const text = pluginPackageErrorText(err, 'Uninstall')
+  assert.match(text, /Uninstall failed/)
   assert.match(text, /plugin_has_live_tasks/)
-  assert.match(text, /在途任务/)
+  assert.match(text, /live tasks/)
 })
 
 test('pluginPackageErrorText：普通错误与非 Error 值如实回显', { timeout: 60_000 }, () => {
-  assert.match(pluginPackageErrorText(new Error('boom'), '更新'), /更新失败：boom/)
-  assert.match(pluginPackageErrorText('strange', '安装'), /安装失败/)
+  assert.match(pluginPackageErrorText(new Error('boom'), 'Update'), /Update failed: boom/)
+  assert.match(pluginPackageErrorText('strange', 'Install'), /Install failed/)
 })
 
 // ---------------------------------------------------------------------------

@@ -115,7 +115,7 @@ function preLineCount(host: HTMLElement, selector: string): number {
 // edit
 // ---------------------------------------------------------------------------
 
-test('edit running：显示待执行的变更片段，不带文件行号', { timeout: 60_000 }, async () => {
+test('edit running：显示Pending change hunks，不带文件行号', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
     await m.render(
@@ -127,7 +127,7 @@ test('edit running：显示待执行的变更片段，不带文件行号', { tim
         }),
       ),
     )
-    assert.match(m.host.textContent ?? '', /待执行的变更片段/)
+    assert.match(m.host.textContent ?? '', /Pending change hunks/)
     assert.equal(m.host.querySelectorAll('.trace-diff-num').length, 0, '待执行片段不得伪造文件行号')
     assert.ok(m.host.querySelector('.trace-diff-pending'), '使用片段差异形态')
     assert.ok(m.host.textContent?.includes('−'), '存在删除行符号')
@@ -142,7 +142,7 @@ test('edit pending → success：完成且元数据合法后切换为内核真�
   try {
     const input = { path: '/a.ts', oldText: 'const a = 1', newText: 'const a = 2' }
     await m.render(bodyUi(trace({ toolName: 'edit', status: 'running', input })))
-    assert.match(m.host.textContent ?? '', /待执行的变更片段/)
+    assert.match(m.host.textContent ?? '', /Pending change hunks/)
 
     await m.render(
       bodyUi(
@@ -159,7 +159,7 @@ test('edit pending → success：完成且元数据合法后切换为内核真�
         }),
       ),
     )
-    assert.match(m.host.textContent ?? '', /已应用的差异/)
+    assert.match(m.host.textContent ?? '', /Applied diff/)
     assert.match(m.host.textContent ?? '', /\/abs\/x\.ts/)
     const nums = [...m.host.querySelectorAll('.trace-diff-num')].map((n) => n.textContent)
     assert.ok(nums.includes('10'), '显示真实文件行号 10')
@@ -188,8 +188,8 @@ test('edit failure：错误与请求的变更片段（执行失败不判定文�
       ),
     )
     assert.match(m.host.textContent ?? '', /edit_failed: oldText 在 \/a\.ts 中出现 2 次/)
-    assert.match(m.host.textContent ?? '', /请求的变更片段（执行失败，不判定文件是否已变）/)
-    assert.doesNotMatch(m.host.textContent ?? '', /已应用的差异/)
+    assert.match(m.host.textContent ?? '', /Requested change hunks \(execution failed; file state undetermined\)/)
+    assert.doesNotMatch(m.host.textContent ?? '', /Applied diff/)
     assert.ok(m.host.querySelector('.trace-diff-num') === null, '失败态无文件行号')
     assert.ok(m.host.textContent?.includes('/a.ts'), '失败保留目标路径')
   } finally {
@@ -210,7 +210,7 @@ test('edit 成功但元数据缺失/非法：显式诊断并默认展开原始�
         }),
       ),
     )
-    assert.match(m.host.textContent ?? '', /元数据缺失或非法/)
+    assert.match(m.host.textContent ?? '', /missing or invalid/)
     assert.ok(m.host.querySelector('.trace-diff') === null, '不渲染任何差异表')
     const rawBtn = m.host.querySelector('.trace-raw .trace-inline-btn') as HTMLElement
     assert.ok(rawBtn)
@@ -228,9 +228,9 @@ test('edit unknown：与 running/done/error 区分，不虚构执行状态', { t
     await m.render(
       bodyUi(trace({ toolName: 'edit', status: 'unknown', input: { path: '/a.ts', oldText: 'x', newText: 'y' } })),
     )
-    assert.match(m.host.textContent ?? '', /结果未知/)
-    assert.doesNotMatch(m.host.textContent ?? '', /待执行的变更片段/)
-    assert.doesNotMatch(m.host.textContent ?? '', /已应用的差异/)
+    assert.match(m.host.textContent ?? '', /Result unknown/)
+    assert.doesNotMatch(m.host.textContent ?? '', /Pending change hunks/)
+    assert.doesNotMatch(m.host.textContent ?? '', /Applied diff/)
   } finally {
     m.unmount()
   }
@@ -279,16 +279,16 @@ test('edit 服务端截断：如实提示不可取回；长差异折叠后可展
         }),
       ),
     )
-    assert.match(m.host.textContent ?? '', /无法取回未传输内容/, '服务端截断如实提示')
+    assert.match(m.host.textContent ?? '', /cannot be recovered by expanding/, '服务端截断如实提示')
     assert.equal(m.host.querySelectorAll('.trace-diff-row').length, 32, '默认折叠到 32 行')
-    const foldBtn = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('展开剩余')) as HTMLButtonElement
+    const foldBtn = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('Expand remaining')) as HTMLButtonElement
     assert.ok(foldBtn)
     await act(async () => {
       foldBtn.click()
     })
     assert.equal(m.host.querySelectorAll('.trace-diff-row').length, 40, '展开后显示全部已传输行')
     const collapse = m.host.querySelector('.trace-diff-more') as HTMLButtonElement
-    assert.match(collapse.textContent ?? '', /收起/)
+    assert.match(collapse.textContent ?? '', /Collapse/)
     await act(async () => { collapse.click() })
     assert.equal(m.host.querySelectorAll('.trace-diff-row').length, 32, '展开后仍可收起')
   } finally {
@@ -303,7 +303,7 @@ test('edit 大输入超预算：明确提示跳过差异计算，保留原始参
     await m.render(
       bodyUi(trace({ toolName: 'edit', status: 'running', input: { path: '/big.txt', oldText: huge, newText: 'y' } })),
     )
-    assert.match(m.host.textContent ?? '', /片段差异未计算/)
+    assert.match(m.host.textContent ?? '', /Hunk diff not computed/)
     assert.ok(m.host.querySelector('.trace-diff') === null)
     const rawBtn = m.host.querySelector('.trace-raw .trace-inline-btn') as HTMLElement
     assert.ok(rawBtn)
@@ -335,16 +335,16 @@ test('write：默认前 12 行 + 共 N 行 + 展开全部 + 复制完整源码',
     await m.render(
       bodyUi(trace({ toolName: 'write', status: 'running', input: { path: '/s/a.ts', content } })),
     )
-    assert.match(m.host.textContent ?? '', /待写入/)
+    assert.match(m.host.textContent ?? '', /Pending write/)
     assert.equal(preLineCount(m.host, '.trace-code-sec pre'), 12, '默认前 12 行')
-    const expand = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('展开全部')) as HTMLButtonElement
+    const expand = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('Expand all')) as HTMLButtonElement
     assert.ok(expand)
-    assert.match(expand.textContent ?? '', /共 20 行/)
+    assert.match(expand.textContent ?? '', /Expand all \(20 lines\)/)
     await act(async () => {
       expand.click()
     })
     assert.equal(preLineCount(m.host, '.trace-code-sec pre'), 20, '展开后完整 20 行')
-    const copy = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('复制源码')) as HTMLButtonElement
+    const copy = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('Copy source')) as HTMLButtonElement
     assert.ok(copy)
     await act(async () => {
       copy.click()
@@ -369,7 +369,7 @@ test('write：失败显示执行失败与错误详情（不断言未写入）；
         }),
       ),
     )
-    assert.match(m.host.textContent ?? '', /写入内容（执行失败）/, '失败不标“未写入”（artifact 登记失败时文件可能已写成功）')
+    assert.match(m.host.textContent ?? '', /Write content \(execution failed\)/, '失败不标“未写入”（artifact 登记失败时文件可能已写成功）')
     assert.match(m.host.textContent ?? '', /write_failed/)
     assert.match(m.host.textContent ?? '', /\/s\/a\.ts/, '失败保留目标路径')
   } finally {
@@ -386,8 +386,8 @@ test('write：失败显示执行失败与错误详情（不断言未写入）；
         }),
       ),
     )
-    assert.match(m2.host.textContent ?? '', /写入内容/)
-    assert.match(m2.host.textContent ?? '', /已写入 1\.0 KiB|已写入 1 KiB/)
+    assert.match(m2.host.textContent ?? '', /Write content/)
+    assert.match(m2.host.textContent ?? '', /wrote 1\.0 KiB/)
   } finally {
     m2.unmount()
   }
@@ -408,9 +408,9 @@ test('read：spill 输出不做源码高亮并保留产物入口；普通结果�
         }),
       ),
     )
-    assert.match(m.host.textContent ?? '', /含产物引用/)
+    assert.match(m.host.textContent ?? '', /with artifact references/)
     assert.ok(m.host.querySelector('.trace-code-sec') === null, 'spill 不走语法高亮形态')
-    const artifactBtn = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('打开完整产物')) as HTMLButtonElement
+    const artifactBtn = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('Open full artifact')) as HTMLButtonElement
     assert.ok(artifactBtn, '保留打开完整产物入口')
     modalCalls.length = 0
     await act(async () => {
@@ -431,7 +431,7 @@ test('read：spill 输出不做源码高亮并保留产物入口；普通结果�
         }),
       ),
     )
-    assert.match(m2.host.textContent ?? '', /读取结果/)
+    assert.match(m2.host.textContent ?? '', /Read result/)
     assert.ok(m2.host.querySelector('.trace-code-sec pre'), '普通结果走源码预览')
     assert.equal(preLineCount(m2.host, '.trace-code-sec pre'), 1)
   } finally {
@@ -454,14 +454,14 @@ test('bash：命令可复制；输出默认尾 8 行、标注折叠前 N 行、�
       ),
     )
     assert.match(m.host.querySelector('.trace-cmd-head code')?.textContent ?? '', /pnpm test --filter @helm\/web/)
-    assert.match(m.host.textContent ?? '', /退出码 2（非 0）/, '非零退出码如实展示')
+    assert.match(m.host.textContent ?? '', /Exit code 2\(non-zero\)/, '非零退出码如实展示')
     const pres = [...m.host.querySelectorAll('pre')].filter((p) => p.closest('.trace-cmd-head') === null)
     const outPre = pres.find((p) => p.textContent?.includes('out 20'))
     assert.ok(outPre)
     assert.equal(outPre?.textContent?.split('\n').length, 8, '默认输出尾 8 行')
-    assert.match(m.host.textContent ?? '', /已折叠前 12 行/)
+    assert.match(m.host.textContent ?? '', /12 lines collapsed above/)
     assert.ok(m.host.textContent?.includes('out 20') && !m.host.textContent?.includes('out 5'), '仅显示尾部行')
-    const expand = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('展开全部')) as HTMLButtonElement
+    const expand = [...m.host.querySelectorAll('button')].find((b) => b.textContent?.includes('Expand all')) as HTMLButtonElement
     await act(async () => {
       expand.click()
     })
@@ -480,7 +480,7 @@ test('bash：运行中无输出如实提示，不伪造输出', { timeout: 60_00
   const m = createMount()
   try {
     await m.render(bodyUi(trace({ toolName: 'bash', status: 'running', input: { command: 'sleep 1' } })))
-    assert.match(m.host.textContent ?? '', /执行中，暂无输出/)
+    assert.match(m.host.textContent ?? '', /Executing; no output yet/)
   } finally {
     m.unmount()
   }
@@ -533,7 +533,7 @@ test('TraceRow：无插件接管时点击展开内置展开体，再点击收起
       row.click()
     })
     assert.ok(m.host.querySelector('.trace-expanded-body'), '展开内置体')
-    assert.match(m.host.textContent ?? '', /原始数据/)
+    assert.match(m.host.textContent ?? '', /Raw data/)
     await act(async () => {
       row.click()
     })
@@ -577,7 +577,7 @@ test('TraceRow：单行统计 write 行数与 edit +N −N；无统计不渲染�
   try {
     await m.render(rowUi(trace({ toolName: 'write', input: { path: '/a', content: 'a\nb\nc' } })))
     const stats = m.host.querySelector('.trace-row-stats')
-    assert.match(stats?.textContent ?? '', /3 行/)
+    assert.match(stats?.textContent ?? '', /3 lines/)
 
     await m.render(
       rowUi(
@@ -594,7 +594,7 @@ test('TraceRow：单行统计 write 行数与 edit +N −N；无统计不渲染�
     const editStats = m.host.querySelector('.trace-row-stats')
     assert.match(editStats?.textContent ?? '', /\+2/)
     assert.match(editStats?.textContent ?? '', /−1/)
-    assert.match(editStats?.getAttribute('title') ?? '', /已应用/)
+    assert.match(editStats?.getAttribute('title') ?? '', /Applied diff/)
 
     await m.render(rowUi(trace({ toolName: 'bash', input: { command: 'ls' } })))
     assert.ok(m.host.querySelector('.trace-row-stats') === null, '无统计不渲染徽标')
@@ -679,10 +679,10 @@ test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；�
     assert.ok(summaryBtn !== null)
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
     assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), true, '收起且含失败时加错误修饰类')
-    assert.match(summaryBtn.textContent ?? '', /思考与执行过程 \(3 步\)/)
+    assert.match(summaryBtn.textContent ?? '', /Thinking and execution \(3 steps\)/)
 
     const errorBadge = summaryBtn.querySelector('.trace-group-badge.trace-group-badge-error')
-    assert.equal(errorBadge?.textContent, '含 1 项失败')
+    assert.equal(errorBadge?.textContent, '1 failed')
     const meta = summaryBtn.querySelector('.trace-group-meta.tabular-nums')
     assert.equal(meta?.textContent, '1.5s')
 
@@ -702,7 +702,7 @@ test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；�
     })
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
     assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), true)
-    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '含 1 项失败')
+    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
   } finally {
     m.unmount()
   }
@@ -724,7 +724,7 @@ test('StepGroup：进行中（active=true）不显示总耗时，单思考步委
     await m.render(stepGroupUi(steps, true))
     const summaryBtn = m.host.querySelector('button.trace-group-summary') as HTMLButtonElement
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
-    assert.match(summaryBtn.textContent ?? '', /正在思考与执行 \(2 步\)…/)
+    assert.match(summaryBtn.textContent ?? '', /Thinking and executing \(2 steps\)…/)
     assert.ok(summaryBtn.querySelector('.trace-group-meta') === null, '进行中不显示总耗时')
     assert.ok(summaryBtn.querySelector('.trace-group-badge-error') === null, '展开态不显示失败徽标')
 
@@ -733,7 +733,7 @@ test('StepGroup：进行中（active=true）不显示总耗时，单思考步委
       summaryBtn.click()
     })
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
-    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '含 1 项失败')
+    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
     assert.ok(summaryBtn.querySelector('.trace-group-meta') === null, 'active=true 时收起仍不显示总耗时')
 
     // 结束为非活跃态（active=false）：现在展示总耗时
@@ -752,7 +752,7 @@ test('StepGroup：进行中（active=true）不显示总耗时，单思考步委
     // 单步 thinking 保持早退 ThinkingRow，不出现 "(1 步)" 或组徽标
     await m.render(stepGroupUi([{ kind: 'thinking', thinking: { key: 'only', text: '单步思路' } }], false))
     const singleBtn = m.host.querySelector('button.trace-group-summary') as HTMLButtonElement
-    assert.equal(singleBtn.textContent, '思考过程')
+    assert.equal(singleBtn.textContent, 'Thinking')
     assert.ok(singleBtn.querySelector('.trace-group-badge') === null)
     assert.ok(singleBtn.querySelector('.trace-group-meta') === null)
   } finally {

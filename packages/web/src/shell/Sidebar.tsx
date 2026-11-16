@@ -45,7 +45,7 @@ function SidebarSectionGroups({ store, background }: { store: HelmStoreValue; ba
     <>
       {contentSections.map((section) => (
         <div key={`content:${section.pluginId}/${section.spec.id}`} style={{ padding: '0 10px 6px' }}>
-          <PluginUiView pluginId={section.pluginId} spec={section.spec} label={`侧栏分组 ${section.spec.id}`} />
+          <PluginUiView pluginId={section.pluginId} spec={section.spec} label={`Sidebar section ${section.spec.id}`} />
         </div>
       ))}
       {sections.map((section) => (
@@ -87,7 +87,7 @@ function ConversationRow({
         <span className="nav-status-slot">
           <ConversationStatusDot conv={conv} background={background} />
         </span>
-        <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
+        <span className="nav-item-label">{conv.title || `Conversation #${conv.id}`}</span>
       </button>
       <span className="nav-item-meta">
         <SidebarPaneTag paneTag={presence.paneTag} />
@@ -130,7 +130,7 @@ function SidebarSectionGroup({
           type="button"
           className="sidebar-group-header"
           style={{ width: '100%', background: 'transparent', border: 'none', cursor: 'pointer' }}
-          title={open ? '收起分组' : '展开分组'}
+          title={open ? 'Collapse section' : 'Expand section'}
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
         >
@@ -179,10 +179,10 @@ function ViewNavGroup({ store }: { store: HelmStoreValue }) {
 
   return (
     <div className="sidebar-group">
-      <div className="sidebar-group-header">视图</div>
+      <div className="sidebar-group-header">Views</div>
       {clientItems.map((item) => (
         <div key={`client:${item.pluginId}/${item.spec.id}`} style={{ padding: '0 10px 6px' }}>
-          <PluginUiView pluginId={item.pluginId} spec={item.spec} label={`侧栏项 ${item.spec.id}`} />
+          <PluginUiView pluginId={item.pluginId} spec={item.spec} label={`Sidebar item ${item.spec.id}`} />
         </div>
       ))}
       {viewItems.map((view) => {
@@ -207,7 +207,7 @@ function ViewNavGroup({ store }: { store: HelmStoreValue }) {
               <span className="sidebar-split-action">
                 <HoverIconButton
                   className="split-toggle-btn sidebar-split-btn"
-                  title="在右屏分屏打开"
+                  title="Open in right split"
                   icon="columns"
                   onClick={(e) => {
                     e.stopPropagation()
@@ -235,11 +235,11 @@ const CENTER_ICONS: Record<CenterKey, string> = {
 }
 
 const CENTER_LABELS: Record<CenterKey, string> = {
-  profiles: '角色',
-  models: '模型与凭据',
-  skills: '技能库',
-  nodes: '计算节点',
-  plugins: '插件中心',
+  profiles: 'Profile',
+  models: 'Models & credentials',
+  skills: 'Skills',
+  nodes: 'Compute nodes',
+  plugins: 'Plugin Center',
 }
 
 /** 侧栏空间由主屏目标唯一推导（spaceForTarget，lib/types.ts），不进 URL；
@@ -252,9 +252,9 @@ const SPACE_ICONS: Record<SidebarSpace, string> = {
 }
 
 const SPACE_LABELS: Record<SidebarSpace, string> = {
-  conversations: '对话空间',
-  views: '视图空间',
-  settings: '设置空间',
+  conversations: 'Conversations space',
+  views: 'Views space',
+  settings: 'Settings space',
 }
 
 /**
@@ -272,17 +272,17 @@ function ActivityRail({
   onOpenSpace: (space: SidebarSpace) => void
 }) {
   return (
-    <nav className="activity-rail" aria-label="主导航">
+    <nav className="activity-rail" aria-label="Main navigation">
       <div className="activity-rail-brand" title="Helm">
         <HelmIcon name="layers" size={17} />
         <StatusDot connected={store.sseConnected} />
       </div>
-      <Tooltip content={`展开导航栏 (${formatModShortcut('B')})`} side="right">
+      <Tooltip content={`Expand navigation bar (${formatModShortcut('B')})`} side="right">
         <button
           type="button"
           className="rail-btn desktop-sidebar-expand-btn"
-          title={`展开导航栏 (${formatModShortcut('B')})`}
-          aria-label="展开导航栏"
+          title={`Expand navigation bar (${formatModShortcut('B')})`}
+          aria-label="Expand navigation bar"
           onClick={() => store.toggleSidebarCollapsed?.()}
         >
           <HelmIcon name="chevron-right" size={16} />
@@ -308,10 +308,10 @@ function ActivityRail({
         <Tooltip
           content={
             store.themePreference === 'system'
-              ? `跟随系统（当前${store.theme === 'dark' ? '暗色' : '浅色'}，点击切换为浅色模式）`
+              ? `System theme (currently ${store.theme === 'dark' ? 'Dark' : 'Light'}; click to switch to light mode)`
               : store.themePreference === 'light'
-                ? '浅色模式（点击切换为暗色模式）'
-                : '暗色模式（点击切换为跟随系统）'
+                ? 'Light mode (click to switch to dark mode)'
+                : 'Dark mode (click to switch to system theme)'
           }
           side="right"
         >
@@ -320,17 +320,17 @@ function ActivityRail({
             className="btn btn-ghost btn-sm sidebar-theme-toggle"
             title={
               store.themePreference === 'system'
-                ? `跟随系统（当前${store.theme === 'dark' ? '暗色' : '浅色'}，点击切换为浅色模式）`
+                ? `System theme (currently ${store.theme === 'dark' ? 'Dark' : 'Light'}; click to switch to light mode)`
                 : store.themePreference === 'light'
-                  ? '浅色模式（点击切换为暗色模式）'
-                  : '暗色模式（点击切换为跟随系统）'
+                  ? 'Light mode (click to switch to dark mode)'
+                  : 'Dark mode (click to switch to system theme)'
             }
             aria-label={
               store.themePreference === 'system'
-                ? '跟随系统'
+                ? 'System'
                 : store.themePreference === 'light'
-                  ? '浅色模式'
-                  : '暗色模式'
+                  ? 'Light mode'
+                  : 'Dark mode'
             }
             onClick={store.toggleTheme}
           >
@@ -415,17 +415,18 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   // 后台浏览器通知开关：权限现场读取（浏览器设置可随时收回），
   // 偏好开而权限未授予时如实提示，绝不静默装作已开启。
   const quietNotifyTooltip = !store.quietNotifyEnabled
-    ? '后台通知：已关闭（会话完成或等待处理且页面不在前台时提醒）'
+    ? 'Background notifications: off (alert when a conversation completes or awaits input while the page is in the background)'
     : readBrowserNotificationPermission() !== 'granted'
-      ? '后台通知：浏览器权限未授予，请在浏览器站点设置中允许通知后重开'
-      : '后台通知：已开启（会话完成或等待处理且页面不在前台时提醒；需保持本页打开）'
+      ? 'Background notifications: browser permission not granted; allow notifications in browser site settings and re-enable'
+      : 'Background notifications: on (alert when a conversation completes or awaits input while the page is in the background; this page must stay open)'
 
   return (
     <aside className="helm-sidebar">
-      {/* 移动端抽屉：切换空间后保持抽屉展开——该空间的二级列表（设置中心清单/
-          视图清单/智能体列表）在抽屉内自然呈现，用户点选具体条目才关闭抽屉
-          （条目自带 onNavigate / App 的 nav-item 点击关闭通道）；若在此关抽屉，
-          用户没机会看清二级菜单就被带到空间的第一个目标。桌面侧栏常驻，行为不变。 */}
+      {/* Mobile drawer: stays expanded after switching spaces — the secondary list of the space
+          (settings list / views list / agent list) renders naturally inside the drawer and closes it
+          only when the user picks a concrete item (items carry onNavigate / the App nav-item close
+          channel); closing here would whisk the user to the first target before they see the menu.
+      The desktop sidebar is persistent; behavior unchanged. */}
       <ActivityRail
         store={store}
         space={space}
@@ -440,10 +441,10 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
               name={space === 'conversations' ? 'message-square' : space === 'views' ? 'layout-grid' : 'settings'}
               size={14}
             />
-            <span>{space === 'conversations' ? '对话' : space === 'views' ? '视图' : '设置'}</span>
+            <span>{space === 'conversations' ? 'Conversation' : space === 'views' ? 'Views' : 'Settings'}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Tooltip content="后台通知：点击开启或关闭" side="bottom">
+            <Tooltip content="Background notifications: click to toggle" side="bottom">
               <button
                 type="button"
                 className="btn btn-sm btn-icon"
@@ -457,35 +458,35 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 <HelmIcon name={store.quietNotifyEnabled && readBrowserNotificationPermission() === 'granted' ? 'bell' : 'bell-off'} size={13} />
               </button>
             </Tooltip>
-            <Tooltip content="打开 Cmd K 全局搜索与命令面板" side="bottom">
+            <Tooltip content="Open Cmd K global search and command palette" side="bottom">
               <button
                 type="button"
                 className="btn btn-sm btn-icon"
-                title="打开 Cmd K 全局搜索与命令面板"
-                aria-label="打开 Cmd K 全局搜索与命令面板"
+                title="Open Cmd K global search and command palette"
+                aria-label="Open Cmd K global search and command palette"
                 onClick={() => store.setActiveModal({ kind: 'command-palette' })}
               >
                 <HelmIcon name="search" size={13} />
               </button>
             </Tooltip>
-            <Tooltip content={`收起导航栏 (${formatModShortcut('B')})`} side="bottom">
+            <Tooltip content={`Collapse navigation bar (${formatModShortcut('B')})`} side="bottom">
               <button
                 type="button"
                 className="btn btn-sm btn-icon desktop-sidebar-collapse-btn"
-                title={`收起导航栏 (${formatModShortcut('B')})`}
-                aria-label="收起导航栏"
+                title={`Collapse navigation bar (${formatModShortcut('B')})`}
+                aria-label="Collapse navigation bar"
                 onClick={() => store.toggleSidebarCollapsed?.()}
               >
                 <HelmIcon name="chevron-left" size={13} />
               </button>
             </Tooltip>
             {onClose && (
-              <Tooltip content="关闭导航栏" side="bottom">
+              <Tooltip content="Close navigation bar" side="bottom">
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm mobile-sidebar-close"
-                  aria-label="关闭导航栏"
-                  title="关闭导航栏"
+                  aria-label="Close navigation bar"
+                  title="Close navigation bar"
                   onClick={onClose}
                 >
                   <HelmIcon name="x" size={14} />

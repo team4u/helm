@@ -33,7 +33,7 @@ export function useTimelineEntryActions(
       store.pushNotice({
         type: 'notification',
         level: 'info',
-        title: '已创建分叉会话',
+        title: 'Forked conversation created',
         body: `#${forked.id} ${forked.title}`,
         conversationId: forked.id,
       })
@@ -41,7 +41,7 @@ export function useTimelineEntryActions(
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: '分叉失败',
+        title: 'Fork failed',
         body: err instanceof Error ? err.message : String(err),
         conversationId: conversation.id,
       })
@@ -59,8 +59,8 @@ export function useTimelineEntryActions(
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: '无法撤回排队消息',
-          body: `提交已进入执行（status=${res.status}）`,
+          title: 'Cannot withdraw queued message',
+          body: `Submission entered execution (status=${res.status})`,
           conversationId: conversation.id,
         })
       }
@@ -68,7 +68,7 @@ export function useTimelineEntryActions(
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: '撤回排队消息失败',
+        title: 'Failed to withdraw queued message',
         body: err instanceof Error ? err.message : String(err),
         conversationId: conversation.id,
       })

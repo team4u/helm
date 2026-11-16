@@ -241,7 +241,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
   }
 
   const download = (): void => {
-    void artifactsApi.downloadToBrowser(artifactId, name).catch((error: unknown) => store.pushNotice({ type: 'notification', level: 'error', title: '下载失败', body: error instanceof Error ? error.message : String(error) }))
+    void artifactsApi.downloadToBrowser(artifactId, name).catch((error: unknown) => store.pushNotice({ type: 'notification', level: 'error', title: 'Download failed', body: error instanceof Error ? error.message : String(error) }))
   }
 
   return (
@@ -250,7 +250,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
         <DialogOverlay className={`modal-backdrop${isFullscreen ? ' modal-fullscreen-backdrop' : ''}`}>
           <DialogContent
             className={`modal${isFullscreen ? ' modal-fullscreen' : ''}`}
-            aria-label={`产物预览：${name}`}
+            aria-label={`Artifact preview: ${name}`}
             style={isFullscreen ? undefined : { maxWidth: 'min(1100px, 94vw)', maxHeight: '90vh' }}
           >
             <div className="modal-header artifact-preview-header">
@@ -271,10 +271,10 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                 size="sm"
                 value={effectivePreviewer}
                 onChange={(e) => setPreviewer(e.target.value)}
-                aria-label="预览方式"
+                aria-label="Preview mode"
                 className="artifact-previewer-select"
                 options={[
-                  { value: 'default', label: '默认预览' },
+                  { value: 'default', label: 'Default preview' },
                   ...matchedPreviewers.map((p) => ({
                     value: `${p.pluginId}/${p.spec.id}`,
                     label: p.spec.label,
@@ -294,10 +294,10 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
               <SegmentedControl<'rich' | 'source'>
                 value={view}
                 onValueChange={(v) => setView(v)}
-                aria-label="视图模式"
+                aria-label="View mode"
                 items={[
-                  { value: 'rich', label: '富文本' },
-                  { value: 'source', label: '源码' },
+                  { value: 'rich', label: 'Rich text' },
+                  { value: 'source', label: 'Source' },
                 ]}
               />
             ) : null}
@@ -306,25 +306,25 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                 type="button"
                 className="btn btn-sm"
                 onClick={() => setDesktopFullscreen((v) => !v)}
-                title={desktopFullscreen ? '切换为窗口模式' : '全屏预览'}
+                title={desktopFullscreen ? 'Switch to window mode' : 'Fullscreen preview'}
               >
                 <HelmIcon name={desktopFullscreen ? 'minimize-2' : 'maximize-2'} size={12} />
-                {desktopFullscreen ? '窗口' : '全屏'}
+                {desktopFullscreen ? 'Window' : 'Fullscreen'}
               </button>
             ) : null}
             {markdown && text !== null ? (
-              <CopyButton text={text} label={isMobile ? undefined : '复制'} className="btn btn-sm" />
+              <CopyButton text={text} label={isMobile ? undefined : 'Copy'} className="btn btn-sm" />
             ) : null}
-            <button type="button" className="btn btn-sm" onClick={download} title="下载">
+            <button type="button" className="btn btn-sm" onClick={download} title="Download">
               <HelmIcon name="download" size={12} />
-              {!isMobile ? '下载' : null}
+              {!isMobile ? 'Download' : null}
             </button>
             <DialogClose asChild>
               <button
                 type="button"
                 className="btn btn-ghost btn-icon-sm"
-                title="关闭 (Esc)"
-                aria-label="关闭预览"
+                title="Close (Esc)"
+                aria-label="Close preview"
               >
                 <HelmIcon name="x" size={14} />
               </button>
@@ -335,13 +335,13 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
           {state.phase === 'loading' ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--fg-muted)', fontSize: 12, padding: 24, justifyContent: 'center' }}>
               <HelmIcon name="loader" size={14} className="spin-slow" />
-              正在加载产物…
+              Loading artifact…
             </div>
           ) : null}
           {state.phase === 'error' ? (
             <div className="callout callout--error">
               <HelmIcon name="alert-circle" size={13} />
-              <span style={{ wordBreak: 'break-all' }}>产物加载失败：{state.message}</span>
+              <span style={{ wordBreak: 'break-all' }}>Artifact failed to load: {state.message}</span>
             </div>
           ) : null}
           {state.phase === 'loaded' && selected !== undefined ? (
@@ -362,21 +362,21 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                       text,
                     ),
                   }}
-                  label={`预览 ${selected.spec.label}`}
+                  label={`Preview ${selected.spec.label}`}
                 />
               </div>
               {textState === 'exceeded' ? (
-                <div className="callout">文本内容超过 {formatBytes(MAX_PREVIEW_TEXT_BYTES)} 预览上限，已停止解码，text 为 null。请下载文件查看完整内容。</div>
+                <div className="callout">Text exceeds the {formatBytes(MAX_PREVIEW_TEXT_BYTES)} preview limit; decoding stopped and text is null. Download the file for the full content.</div>
               ) : null}
               <div>
                 <button
                   type="button"
                   className="btn btn-sm"
                   onClick={() => setPreviewer('default')}
-                  title="切回宿主默认预览"
+                  title="Switch back to the host default preview"
                 >
                   <HelmIcon name="rotate-ccw" size={12} />
-                  默认预览
+                  Default preview
                 </button>
               </div>
             </>
@@ -396,10 +396,10 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
             ) : isPdf ? (
               <iframe src={state.blobUrl} title={name} style={{ width: '100%', height: '64vh', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} />
             ) : !isTextLike ? (
-              <div className="callout">此文件类型暂不支持在线预览，请下载后查看。</div>
+              <div className="callout">This file type has no inline preview; download it to view.</div>
             ) : textState === 'exceeded' ? (
               <div className="callout">
-                文本内容超过 {formatBytes(MAX_PREVIEW_TEXT_BYTES)} 预览上限，已停止解码。请下载文件查看完整内容。
+                Text exceeds the {formatBytes(MAX_PREVIEW_TEXT_BYTES)} preview limit; decoding stopped. Download the file for the full content.
               </div>
             ) : markdown && view === 'rich' && text !== null ? (
               <div ref={markdownPreviewRef} className="artifact-markdown-preview">
@@ -407,7 +407,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
               </div>
             ) : (
               <div style={{ overflow: 'auto', minHeight: 200 }}>
-                <CodeBlockView code={text ?? '正在读取文本…'} language={language} />
+                <CodeBlockView code={text ?? 'Reading text…'} language={language} />
               </div>
             )
           ) : null}

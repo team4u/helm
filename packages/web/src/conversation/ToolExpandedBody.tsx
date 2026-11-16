@@ -96,7 +96,7 @@ function DiffFoldButton({ hidden, expanded, onToggle }: { hidden: number; expand
   return (
     <button type="button" className="trace-inline-btn trace-diff-more" onClick={onToggle}>
       <HelmIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
-      {expanded ? '收起' : `展开剩余 ${hidden} 行`}
+      {expanded ? 'Collapse' : `Expand remaining ${hidden} lines`}
     </button>
   )
 }
@@ -104,12 +104,12 @@ function DiffFoldButton({ hidden, expanded, onToggle }: { hidden: number; expand
 function PendingDiffView({ pending }: { pending: PendingEditDiff | undefined }): ReactNode {
   const [expanded, setExpanded] = useState(false)
   if (pending === undefined) {
-    return <span className="trace-tool-note">缺少 oldText/newText 入参，无法计算变更片段（见下方原始数据）。</span>
+    return <span className="trace-tool-note">Missing oldText/newText arguments; cannot compute change hunks (see raw data below).</span>
   }
   if (pending.kind === 'skipped') {
     return (
       <span className="trace-tool-note">
-        片段差异未计算：{pending.reason}。为避免阻塞界面已跳过差异计算，可展开原始数据查看完整 oldText/newText。
+        Hunk diff not computed: {pending.reason}. Diff computation was skipped to keep the UI responsive; expand the raw data for the full oldText/newText.
       </span>
     )
   }
@@ -123,8 +123,8 @@ function PendingDiffView({ pending }: { pending: PendingEditDiff | undefined }):
       {pending.rows.length > DIFF_FOLD_ROWS ? <DiffFoldButton hidden={hidden} expanded={expanded} onToggle={() => setExpanded((v) => !v)} /> : null}
       {pending.truncated ? (
         <div className="trace-diff-note">
-          片段差异过长，仅保留前 {pending.rows.length} 行；+{pending.addedLines} −{pending.removedLines}
-          统计覆盖全部变更行，完整内容见下方原始数据。
+          Hunk diff too long; only the first {pending.rows.length} lines kept; +{pending.addedLines} −{pending.removedLines}
+          Stats cover all changed lines; see raw data below for the full content.
         </div>
       ) : null}
     </div>
@@ -142,7 +142,7 @@ function AppliedDiffView({ diff }: { diff: ToolEditDiff }): ReactNode {
         <Fragment key={index}>
           {row.kind === 'context' && visible[index - 1]?.kind === 'context' &&
             row.oldLine > (visible[index - 1] as Extract<AppliedDiffRowView, { kind: 'context' }>).oldLine + 1
-            ? <div className="trace-diff-note">… 已省略未改动的行 …</div>
+            ? <div className="trace-diff-note">… unchanged lines omitted …</div>
             : null}
           <DiffRowView row={row} numbered />
         </Fragment>
@@ -150,8 +150,8 @@ function AppliedDiffView({ diff }: { diff: ToolEditDiff }): ReactNode {
       {rows.length > DIFF_FOLD_ROWS ? <DiffFoldButton hidden={hidden} expanded={expanded} onToggle={() => setExpanded((v) => !v)} /> : null}
       {diff.truncated ? (
         <div className="trace-diff-note">
-          部分差异因长度限制或脱敏省略，展开也无法取回未传输内容；+
-          {diff.addedLines} −{diff.removedLines} 统计覆盖整个替换。
+          Some diff content was omitted due to length limits or redaction and cannot be recovered by expanding; +
+          {diff.addedLines} −{diff.removedLines} stats cover the whole replacement.
         </div>
       ) : null}
     </div>
@@ -180,26 +180,26 @@ function TruncatedOutputFooter({
       <div className="callout callout--error" role="alert">
         <HelmIcon name="alert-triangle" size={12} />
         <span className="callout-text">
-          取回全文失败：{resultFetch.error ?? '未知错误'}。以上仍为服务端预览，不代表完整输出。
+          Failed to fetch full text: {resultFetch.error ?? 'Unknown error'}. The content above is still the server preview, not the full output.
         </span>
         <button type="button" className="trace-inline-btn" onClick={resultFetch.load}>
           <HelmIcon name="rotate-ccw" size={11} />
-          重试取回
+          Retry fetch
         </button>
       </div>
     )
   }
   if (resultFetch.phase === 'complete') {
     // 回填后标记仍未消失：服务端契约异常，如实说明，不谎称已取得更多内容。
-    return <div className="trace-tool-note">已取回服务端条目，但服务端仍标记截断，未能获得更多内容。</div>
+    return <div className="trace-tool-note">The server entry was fetched but is still marked truncated; no extra content was obtained.</div>
   }
-  const total = truncation.totalLines !== undefined ? `（全文 ${truncation.totalLines} 行）` : ''
+  const total = truncation.totalLines !== undefined ? ` (${truncation.totalLines} lines in total)` : ''
   const note = truncationPreviewNote(truncation)
   return (
     <div className="trace-out-foot">
       <span className="trace-tool-note">
         {hiddenNote !== undefined ? `${hiddenNote} · ${note}` : note}
-        {tool.artifactRef !== undefined ? '；条目仅存 Spill 预览，完整原文见下方产物入口' : ''}
+        {tool.artifactRef !== undefined ? '; the entry holds only the Spill preview — see the artifact entry below for the full text' : ''}
       </span>
       <button
         type="button"
@@ -212,7 +212,7 @@ function TruncatedOutputFooter({
           size={11}
           className={resultFetch.phase === 'loading' ? 'spin-slow' : undefined}
         />
-        {resultFetch.phase === 'loading' ? '正在取回全文…' : `展开全文${total}`}
+        {resultFetch.phase === 'loading' ? 'Fetching full text…' : `Expand full text${total}`}
       </button>
     </div>
   )
@@ -233,12 +233,12 @@ function ResultCopyGate({
   const isArtifactPreview = tool.artifactRef !== undefined
   if (tool.resultTruncation === undefined && !isArtifactPreview) return <CopyButton text={text} label={label} />
   const title = isArtifactPreview
-    ? '这是 Spill 产物预览；请打开完整产物查看或复制全文'
+    ? 'This is a Spill artifact preview; open the full artifact to view or copy the whole text'
     : resultFetch.phase === 'loading'
-      ? '正在从服务端取回全文，完成后可复制'
-      : '输出为服务端截断预览，展开全文取回原文后才可复制'
+      ? 'Fetching full text from the server; copy becomes available once done'
+      : 'Output is a server-truncated preview; the full text must be fetched before copying'
   return (
-    <button type="button" className="btn btn-ghost btn-sm" disabled title={title} aria-label={`${label}（已禁用：内容为预览）`}>
+    <button type="button" className="btn btn-ghost btn-sm" disabled title={title} aria-label={`${label} (disabled: preview content)`}>
       <HelmIcon name="copy" size={12} />
       <span>{label}</span>
     </button>
@@ -261,21 +261,21 @@ function RawToolData({ tool, resultFetch, defaultOpen = false }: { tool: ToolTra
     <div className="trace-raw">
       <button type="button" className="trace-inline-btn" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
-        原始数据
+        Raw data
       </button>
       {open ? (
         <div className="trace-raw-body">
           {inputJson !== undefined ? (
             <div>
-              <div className="trace-code-head"><span className="trace-section-label">入参（JSON）</span><CopyButton text={inputJson} label="复制入参 JSON" /></div>
+              <div className="trace-code-head"><span className="trace-section-label">Input (JSON)</span><CopyButton text={inputJson} label="Copy input JSON" /></div>
               <pre className="code-block-pre code-block-pre-flush">{inputJson}</pre>
             </div>
           ) : null}
           {tool.resultText !== undefined ? (
             <div>
               <div className="trace-code-head">
-                <span className="trace-section-label">原始输出</span>
-                <ResultCopyGate text={tool.resultText} label="复制原始输出" tool={tool} resultFetch={resultFetch} />
+                <span className="trace-section-label">Raw output</span>
+                <ResultCopyGate text={tool.resultText} label="Copy raw output" tool={tool} resultFetch={resultFetch} />
               </div>
               <pre className="code-block-pre code-block-pre-flush">{tool.resultText}</pre>
               {tool.resultTruncation !== undefined ? <TruncatedOutputFooter tool={tool} resultFetch={resultFetch} /> : null}
@@ -283,7 +283,7 @@ function RawToolData({ tool, resultFetch, defaultOpen = false }: { tool: ToolTra
           ) : null}
           {structuredJson !== undefined ? (
             <div>
-              <div className="trace-code-head"><span className="trace-section-label">结构化结果（JSON）</span><CopyButton text={structuredJson} label="复制结构化结果" /></div>
+              <div className="trace-code-head"><span className="trace-section-label">Structured result (JSON)</span><CopyButton text={structuredJson} label="Copy structured result" /></div>
               <pre className="code-block-pre code-block-pre-flush">{structuredJson}</pre>
             </div>
           ) : null}
@@ -311,7 +311,7 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
   if (tool.status === 'running') {
     return (
       <>
-        <div className="trace-section-label">待执行的变更片段{inputPath !== undefined ? ` · ${inputPath}` : ''}</div>
+        <div className="trace-section-label">Pending change hunks{inputPath !== undefined ? ` · ${inputPath}` : ''}</div>
         <PendingDiffView pending={pending} />
         <RawToolData tool={tool} resultFetch={resultFetch} />
       </>
@@ -320,12 +320,12 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
   if (tool.status === 'error' || tool.isError) {
     return (
       <>
-        <div className="trace-section-label">错误{inputPath !== undefined ? ` · ${inputPath}` : ''}</div>
+        <div className="trace-section-label">Error{inputPath !== undefined ? ` · ${inputPath}` : ''}</div>
         <pre className="code-block-pre code-block-pre-flush trace-error-pre">
-          {tool.resultText !== undefined && tool.resultText !== '' ? tool.resultText : '（无错误详情）'}
+          {tool.resultText !== undefined && tool.resultText !== '' ? tool.resultText : '(no error details)'}
         </pre>
         {tool.resultTruncation !== undefined ? <TruncatedOutputFooter tool={tool} resultFetch={resultFetch} /> : null}
-        <div className="trace-section-label">请求的变更片段（执行失败，不判定文件是否已变）</div>
+        <div className="trace-section-label">Requested change hunks (execution failed; file state undetermined)</div>
         <PendingDiffView pending={pending} />
         <RawToolData tool={tool} resultFetch={resultFetch} />
       </>
@@ -336,7 +336,7 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       return (
         <>
           <div className="trace-section-label">
-            已应用的差异 · {resultCheck.value.path} · +{resultCheck.value.diff.addedLines} −
+            Applied diff · {resultCheck.value.path} · +{resultCheck.value.diff.addedLines} −
             {resultCheck.value.diff.removedLines}
           </div>
           <AppliedDiffView diff={resultCheck.value.diff} />
@@ -346,13 +346,13 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
     }
     return (
       <>
-        <div className="trace-section-label">执行成功 · 差异数据不可用</div>
+        <div className="trace-section-label">Execution succeeded · diff data unavailable</div>
         <div className="callout callout--error" role="alert">
           <HelmIcon name="alert-triangle" size={12} />
           <span className="callout-text">
-            edit 成功但差异元数据缺失或非法（
-            {resultCheck === undefined ? '缺少 structuredOutput' : resultCheck.reason}
-            ），无法展示真实文件差异；以下保留原始入参与输出，不伪造文件上下文。
+            edit succeeded but diff metadata is missing or invalid (
+            {resultCheck === undefined ? 'missing structuredOutput' : resultCheck.reason}
+            ), so the real file diff cannot be shown; the raw input and output are kept below without fabricating file context.
           </span>
         </div>
         <RawToolData tool={tool} resultFetch={resultFetch} defaultOpen />
@@ -362,8 +362,8 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
   // unknown：与 running/done/error 明确区分，不虚构执行状态
   return (
     <>
-      <div className="trace-section-label">结果未知{inputPath !== undefined ? ` · ${inputPath}` : ''}</div>
-      <span className="trace-tool-note">工具未返回结果（可能未执行或已中断），不判定变更是否已应用；原始入参如下。</span>
+      <div className="trace-section-label">Result unknown{inputPath !== undefined ? ` · ${inputPath}` : ''}</div>
+      <span className="trace-tool-note">The tool returned no result (possibly not executed or interrupted); whether the change applied is undetermined; raw input below.</span>
       <RawToolData tool={tool} resultFetch={resultFetch} defaultOpen />
     </>
   )
@@ -381,12 +381,12 @@ function WriteToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
   const failed = tool.status === 'error' || tool.isError
   const label =
     tool.status === 'running'
-      ? '待写入'
+      ? 'Pending write'
       : failed
-        ? '写入内容（执行失败）'
+        ? 'Write content (execution failed)'
         : tool.status === 'done'
-          ? '写入内容'
-          : '写入内容（结果未知）'
+          ? 'Write content'
+          : 'Write content (result unknown)'
   const slice = data.content !== undefined ? headLines(data.content, WRITE_PREVIEW_LINES) : undefined
   const foldable = slice !== undefined && slice.hiddenLines > 0
   return (
@@ -394,31 +394,31 @@ function WriteToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       <div className="trace-section-label">
         {label}
         {data.path !== undefined ? ` · ${data.path}` : ''}
-        {data.bytesWritten !== undefined ? ` · 已写入 ${formatBytes(data.bytesWritten)}` : ''}
+        {data.bytesWritten !== undefined ? ` · wrote ${formatBytes(data.bytesWritten)}` : ''}
       </div>
       {failed ? (
         <>
           <pre className="code-block-pre code-block-pre-flush trace-error-pre">
-            {tool.resultText !== undefined && tool.resultText !== '' ? tool.resultText : '（无错误详情）'}
+            {tool.resultText !== undefined && tool.resultText !== '' ? tool.resultText : '(no error details)'}
           </pre>
           {tool.resultTruncation !== undefined ? <TruncatedOutputFooter tool={tool} resultFetch={resultFetch} /> : null}
         </>
       ) : null}
       {data.content === undefined ? (
-        <span className="trace-tool-note">缺少 content 入参（见下方原始数据）。</span>
+        <span className="trace-tool-note">Missing content argument (see raw data below).</span>
       ) : (
         <div className="trace-code-sec">
           <div className="trace-code-head">
             <span className="trace-tool-note">
-              {expanded || !foldable ? `共 ${data.lineCount} 行` : `前 ${slice!.totalLines - slice!.hiddenLines} / ${slice!.totalLines} 行`}
+              {expanded || !foldable ? `${data.lineCount} lines in total` : `first ${slice!.totalLines - slice!.hiddenLines} / ${slice!.totalLines} lines`}
             </span>
-            <CopyButton text={data.content} label="复制源码" />
+            <CopyButton text={data.content} label="Copy source" />
           </div>
           <SyntaxCode code={expanded ? data.content : slice!.visible} language={data.language} />
           {foldable ? (
             <button type="button" className="trace-inline-btn" onClick={() => setExpanded((v) => !v)}>
               <HelmIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
-              {expanded ? '收起' : `展开全部（共 ${data.lineCount} 行）`}
+              {expanded ? 'Collapse' : `Expand all (${data.lineCount} lines)`}
             </button>
           ) : null}
         </div>
@@ -439,9 +439,9 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
   if (failed) {
     return (
       <>
-        <div className="trace-section-label">读取失败</div>
+        <div className="trace-section-label">Read failed</div>
         <pre className="code-block-pre code-block-pre-flush trace-error-pre">
-          {tool.resultText !== undefined && tool.resultText !== '' ? tool.resultText : '（无错误详情）'}
+          {tool.resultText !== undefined && tool.resultText !== '' ? tool.resultText : '(no error details)'}
         </pre>
         {tool.resultTruncation !== undefined ? <TruncatedOutputFooter tool={tool} resultFetch={resultFetch} /> : null}
         <RawToolData tool={tool} resultFetch={resultFetch} defaultOpen />
@@ -451,8 +451,8 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
   if (data.content === undefined) {
     return (
       <>
-        <div className="trace-section-label">{tool.status === 'running' ? '读取中' : '读取结果'}</div>
-        <span className="trace-tool-note">{tool.status === 'running' ? '尚无读取内容。' : '无内容输出。'}</span>
+        <div className="trace-section-label">{tool.status === 'running' ? 'Reading' : 'Read result'}</div>
+        <span className="trace-tool-note">{tool.status === 'running' ? 'Nothing read yet.' : 'No content output.'}</span>
         <RawToolData tool={tool} resultFetch={resultFetch} defaultOpen={tool.status !== 'running'} />
       </>
     )
@@ -464,39 +464,39 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
     <>
       {data.isSpill ? (
         <>
-          <div className="trace-section-label">读取结果（含产物引用）</div>
+          <div className="trace-section-label">Read result (with artifact references)</div>
           <pre className="code-block-pre code-block-pre-flush">{shown}</pre>
           {truncated ? (
             <TruncatedOutputFooter
               tool={tool}
               resultFetch={resultFetch}
-              hiddenNote={foldable && !expanded ? `已折叠后 ${slice.hiddenLines} 行` : undefined}
+              hiddenNote={foldable && !expanded ? `${slice.hiddenLines} lines collapsed below` : undefined}
             />
           ) : foldable ? (
             <button type="button" className="trace-inline-btn" onClick={() => setExpanded((v) => !v)}>
               <HelmIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
-              {expanded ? '收起' : `展开全部（共 ${slice.totalLines} 行）`}
+              {expanded ? 'Collapse' : `Expand all (${slice.totalLines} lines)`}
             </button>
           ) : null}
-          <span className="trace-tool-note">以上为输出头部预览，完整内容见下方产物入口。</span>
+          <span className="trace-tool-note">This is the head preview of the output; see the artifact entry below for the full content.</span>
         </>
       ) : (
         <div className="trace-code-sec">
-          <div className="trace-section-label">读取结果</div>
+          <div className="trace-section-label">Read result</div>
           <div className="trace-code-head">
             <span className="trace-tool-note">
               {expanded || !foldable
                 ? truncated
-                  ? `预览 ${slice.totalLines} 行`
-                  : `共 ${slice.totalLines} 行`
+                  ? `${slice.totalLines} lines previewed`
+                  : `${slice.totalLines} lines in total`
                 : truncated
-                  ? `预览前 ${slice.totalLines - slice.hiddenLines} / ${slice.totalLines} 行`
-                  : `前 ${slice.totalLines - slice.hiddenLines} / ${slice.totalLines} 行`}
+                  ? `first ${slice.totalLines - slice.hiddenLines} / ${slice.totalLines} lines previewed`
+                  : `first ${slice.totalLines - slice.hiddenLines} / ${slice.totalLines} lines`}
             </span>
             {truncated ? (
-              <ResultCopyGate text={data.content} label="复制内容" tool={tool} resultFetch={resultFetch} />
+              <ResultCopyGate text={data.content} label="Copy content" tool={tool} resultFetch={resultFetch} />
             ) : (
-              <CopyButton text={data.content} label="复制内容" />
+              <CopyButton text={data.content} label="Copy content" />
             )}
           </div>
           <SyntaxCode code={shown} language={data.language} />
@@ -504,12 +504,12 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
             <TruncatedOutputFooter
               tool={tool}
               resultFetch={resultFetch}
-              hiddenNote={foldable && !expanded ? `已折叠后 ${slice.hiddenLines} 行` : undefined}
+              hiddenNote={foldable && !expanded ? `${slice.hiddenLines} lines collapsed below` : undefined}
             />
           ) : foldable ? (
             <button type="button" className="trace-inline-btn" onClick={() => setExpanded((v) => !v)}>
               <HelmIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
-              {expanded ? '收起' : `展开全部（共 ${slice.totalLines} 行）`}
+              {expanded ? 'Collapse' : `Expand all (${slice.totalLines} lines)`}
             </button>
           ) : null}
         </div>
@@ -530,7 +530,7 @@ function BashToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
     <>
       {data.command !== undefined ? (
         <>
-          <div className="trace-section-label">命令</div>
+          <div className="trace-section-label">Command</div>
           <div className="trace-cmd-head">
             <code>{data.command}</code>
             <CopyButton text={data.command} />
@@ -540,35 +540,35 @@ function BashToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       {data.timedOut || data.exitCode !== undefined ? (
         <div className="trace-tool-note">
           {data.exitCode === null
-            ? '无退出码'
+            ? 'No exit code'
             : data.exitCode !== undefined
-              ? `退出码 ${data.exitCode}${data.exitCode !== 0 ? '（非 0）' : ''}`
+              ? `Exit code ${data.exitCode}${data.exitCode !== 0 ? '(non-zero)' : ''}`
               : null}
-          {data.timedOut ? ' · 已超时' : ''}
+          {data.timedOut ? ' · timed out' : ''}
         </div>
       ) : null}
       {slice === undefined ? (
         tool.status === 'running' ? (
-          <span className="trace-tool-note">执行中，暂无输出。</span>
+          <span className="trace-tool-note">Executing; no output yet.</span>
         ) : tool.status === 'done' && !tool.isError ? (
-          <span className="trace-tool-note">（无输出）</span>
+          <span className="trace-tool-note">(no output)</span>
         ) : null
       ) : (
         <>
-          <div className="trace-section-label">输出{tool.status === 'running' ? '（执行中）' : ''}</div>
+          <div className="trace-section-label">Output{tool.status === 'running' ? '(executing)' : ''}</div>
           <pre className="code-block-pre code-block-pre-flush">{expanded ? data.output : slice.visible}</pre>
           {tool.resultTruncation !== undefined ? (
             <TruncatedOutputFooter
               tool={tool}
               resultFetch={resultFetch}
-              hiddenNote={slice.hiddenLines > 0 && !expanded ? `已折叠前 ${slice.hiddenLines} 行` : undefined}
+              hiddenNote={slice.hiddenLines > 0 && !expanded ? `${slice.hiddenLines} lines collapsed above` : undefined}
             />
           ) : slice.hiddenLines > 0 ? (
             <div className="trace-out-foot">
-              {!expanded ? <span className="trace-tool-note">已折叠前 {slice.hiddenLines} 行</span> : null}
+              {!expanded ? <span className="trace-tool-note">{slice.hiddenLines} lines collapsed above</span> : null}
               <button type="button" className="trace-inline-btn" onClick={() => setExpanded((value) => !value)}>
                 <HelmIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
-                {expanded ? '收起' : `展开全部（共 ${slice.totalLines} 行）`}
+                {expanded ? 'Collapse' : `Expand all (${slice.totalLines} lines)`}
               </button>
             </div>
           ) : null}
@@ -593,7 +593,7 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
     <>
       {kv.length > 0 ? (
         <>
-          <div className="trace-section-label">入参</div>
+          <div className="trace-section-label">Input</div>
           <div className="kv-list trace-kv">
             {kv.map((entry) => (
               <Fragment key={entry.key}>
@@ -610,7 +610,7 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       ) : null}
       {slice !== undefined ? (
         <>
-          <div className="trace-section-label">输出</div>
+          <div className="trace-section-label">Output</div>
           <pre className="code-block-pre code-block-pre-flush">
             {resultExpanded ? tool.resultText : slice.visible}
           </pre>
@@ -618,12 +618,12 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
             <TruncatedOutputFooter
               tool={tool}
               resultFetch={resultFetch}
-              hiddenNote={slice.hiddenLines > 0 && !resultExpanded ? `已折叠后 ${slice.hiddenLines} 行` : undefined}
+              hiddenNote={slice.hiddenLines > 0 && !resultExpanded ? `${slice.hiddenLines} lines collapsed below` : undefined}
             />
           ) : slice.hiddenLines > 0 ? (
             <button type="button" className="trace-inline-btn" onClick={() => setResultExpanded((value) => !value)}>
               <HelmIcon name={resultExpanded ? 'chevron-up' : 'chevron-down'} size={11} />
-              {resultExpanded ? '收起' : `展开全部（共 ${slice.totalLines} 行）`}
+              {resultExpanded ? 'Collapse' : `Expand all (${slice.totalLines} lines)`}
             </button>
           ) : null}
         </>
@@ -648,7 +648,7 @@ function ArtifactEntry({ tool, conversationId }: { tool: ToolTrace; conversation
       onClick={() => store.setActiveModal({ kind: 'artifact-preview', artifactId: artifactRef, conversationId })}
     >
       <HelmIcon name="external-link" size={12} />
-      打开完整产物 #{artifactRef}
+      Open full artifact #{artifactRef}
     </button>
   )
 }

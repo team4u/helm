@@ -314,12 +314,12 @@ test('ConversationTimeline：完成回合渲染时间与耗时，以及 Tooltip 
   // 1. 用户消息渲染发送时间
   assert.match(html, /class="msg-human-footer"/)
   assert.match(html, /class="msg-time-meta"/)
-  assert.match(html, /发送于\s+2026-11-10\s+14:28:27/)
+  assert.match(html, /Sent at\s+2026-11-10\s+14:28:27/)
 
   // 2. 助手消息渲染时间与耗时
   assert.match(html, /class="msg-ai-footer"/)
-  assert.match(html, /耗时 3\.2s/)
-  assert.match(html, /完成于\s+2026-11-10\s+14:28:35\s+·\s+耗时 3\.2s/)
+  assert.match(html, /Took <!-- -->3\.2s/)
+  assert.match(html, /Completed at\s+2026-11-10\s+14:28:35\s+·\s+took 3\.2s/)
 
   // 3. 极简无 Emoji：不包含任何 Emoji 表情图标
   assert.doesNotMatch(html, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u)
@@ -369,7 +369,7 @@ test('ConversationTimeline：回合处于 busy（working/live）时不提前渲�
 
   // 响应中时不展示 AI 底部操作条与耗时信息
   assert.doesNotMatch(html, /class="msg-ai-footer"/)
-  assert.doesNotMatch(html, /耗时 3\.2s/)
+  assert.doesNotMatch(html, /Took <!-- -->3\.2s/)
 })
 
 test('样式契约：msg-time-meta 与 msg-ai-footer / msg-human-footer 样式规范', { timeout: 60_000 }, () => {

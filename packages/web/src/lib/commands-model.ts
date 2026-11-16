@@ -103,9 +103,9 @@ export function buildSlashMenuItems(
   runPluginCommand: (cmd: QualifiedCommand) => void,
 ): SlashMenuItem[] {
   const builtin: SlashMenuItem[] = [
-    { id: '/new', label: '/new', hint: '开始新话题', apply: '/new' },
-    { id: '/clear', label: '/clear', hint: '重置上下文', apply: '/clear' },
-    { id: '/compact', label: '/compact', hint: '精简上下文', apply: '/compact' },
+    { id: '/new', label: '/new', hint: 'Start new topic', apply: '/new' },
+    { id: '/clear', label: '/clear', hint: 'Reset context', apply: '/clear' },
+    { id: '/compact', label: '/compact', hint: 'Compact context', apply: '/compact' },
   ]
   const skills: SlashMenuItem[] = visibleSkills.map((s) => ({
     id: `/${SKILL_SLASH_PREFIX}${s.id}`,
@@ -155,13 +155,13 @@ export interface PluginSlashExecDeps {
 /** 执行插件斜杠命令绑定的动作并推送统一成功/失败通知；失败原样抛出供调用方保留草稿。 */
 export async function executePluginSlashAction(cmd: QualifiedCommand, deps: PluginSlashExecDeps): Promise<void> {
   const actionId = cmd.spec.actionId
-  if (actionId === undefined) throw new Error('插件命令未绑定动作')
+  if (actionId === undefined) throw new Error('Plugin command has no bound action')
   try {
     await deps.invokePluginAction(commandActionPluginId(cmd), actionId, cmd.spec.input, deps.conversationId)
     deps.pushNotice({
       type: 'notification',
       level: 'info',
-      title: '命令已执行',
+      title: 'Command executed',
       body: `${cmd.spec.slash !== undefined ? `/${cmd.spec.slash} · ` : ''}${cmd.spec.title}`,
       ...(deps.conversationId !== undefined ? { conversationId: deps.conversationId } : {}),
     })
@@ -169,7 +169,7 @@ export async function executePluginSlashAction(cmd: QualifiedCommand, deps: Plug
     deps.pushNotice({
       type: 'notification',
       level: 'error',
-      title: `命令执行失败：/${cmd.spec.slash ?? cmd.spec.id}`,
+      title: `Command failed: /${cmd.spec.slash ?? cmd.spec.id}`,
       body: err instanceof Error ? err.message : String(err),
       ...(deps.conversationId !== undefined ? { conversationId: deps.conversationId } : {}),
     })

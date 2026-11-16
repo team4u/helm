@@ -311,11 +311,11 @@ test('ConversationPane 加载失败分屏分支：错误 + 重试 + 关闭分屏
   const html = renderToString(
     e(TestStoreProvider, { value: store }, e(ConversationPane, { conversationId: 42, isSplit: true, onCloseSplit: () => {} })),
   )
-  assert.ok(html.includes('加载失败'), '分屏加载失败应显示错误')
+  assert.ok(html.includes('failed to load'), '分屏加载失败应显示错误')
   assert.ok(html.includes('500 内部错误'))
-  assert.ok(html.includes('重试'))
+  assert.ok(html.includes('Retry'))
   assert.ok(html.includes('split-close-btn'), '加载失败分屏分支必须有显式关闭入口')
-  assert.ok(html.includes('关闭分屏'))
+  assert.ok(html.includes('Close split view'))
 })
 
 test('ConversationPane 加载中分屏分支：仍有显式关闭分屏入口', { timeout: 60_000 }, () => {
@@ -323,7 +323,7 @@ test('ConversationPane 加载中分屏分支：仍有显式关闭分屏入口', 
   const html = renderToString(
     e(TestStoreProvider, { value: store }, e(ConversationPane, { conversationId: 42, isSplit: true, onCloseSplit: () => {} })),
   )
-  assert.ok(html.includes('正在加载会话'), '应显示加载中态')
+  assert.ok(html.includes('Loading conversation'), '应显示加载中态')
   assert.ok(html.includes('split-close-btn'), '加载中分屏分支必须有显式关闭入口')
 })
 

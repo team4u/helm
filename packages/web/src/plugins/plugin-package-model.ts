@@ -43,10 +43,10 @@ export function isLocalSource(input: string): boolean {
 export function detectPluginSourceKind(input: string): PluginSourceHint {
   const value = input.trim()
   if (value === '') return { kind: 'unknown', label: '' }
-  if (isNpmSource(value)) return { kind: 'npm', label: 'npm 包' }
-  if (isGitSource(value)) return { kind: 'git', label: 'Git 仓库' }
-  if (isLocalSource(value)) return { kind: 'local', label: '本地路径' }
-  return { kind: 'unknown', label: '无法识别' }
+  if (isNpmSource(value)) return { kind: 'npm', label: 'npm package' }
+  if (isGitSource(value)) return { kind: 'git', label: 'Git repository' }
+  if (isLocalSource(value)) return { kind: 'local', label: 'Local path' }
+  return { kind: 'unknown', label: 'Unrecognized' }
 }
 
 /** 来源是否可作为安装请求提交（unknown 时不允许提交，避免盲发）。 */
@@ -59,7 +59,7 @@ export function isInstallSourceSubmittable(input: string): boolean {
 export function pluginSourceBadgeLabel(source: PluginPackageSource): string {
   if (source.kind === 'npm') return 'npm'
   if (source.kind === 'git') return 'git'
-  return '本地'
+  return 'Local'
 }
 
 /** 推导受管来源的完整展示文本（如 `npm:helm-plugin-foo@^1.2.0`、`https://…#dev`）。 */
@@ -100,20 +100,20 @@ export function buildDoctorCheckItems(report: PluginDoctorReport): PluginDoctorC
 /** 从 doctor 报告中提取整体结论文案（存在失败项时逐项列出）。 */
 export function buildDoctorConclusion(report: PluginDoctorReport): string {
   const failed = (report.checks ?? []).filter((check) => check.error !== undefined)
-  if (report.ok && failed.length === 0) return '安装前自检通过'
+  if (report.ok && failed.length === 0) return 'Pre-install doctor passed'
   const parts = failed.map(
     (check) => `${check.id}（${check.error?.code ?? 'unknown'}）：${check.error?.message ?? ''}`,
   )
-  return `安装前自检未通过，共 ${failed.length} 项失败：${parts.join('；')}`
+  return `Pre-install doctor failed with ${failed.length} failures: ${parts.join('; ')}`
 }
 
 /** 提取插件包操作（安装/更新/移除）失败时的诊断文案；409 在途任务给出明确指引。 */
 export function pluginPackageErrorText(err: unknown, action: string): string {
   if (err instanceof Error && 'status' in err && (err as { status?: number }).status === 409) {
     const code = (err as { code?: string }).code ?? 'plugin_has_live_tasks'
-    return `${action}失败：插件存在在途任务（${code}）。请等待任务结束或中止后再试。`
+    return `${action} failed: plugin has live tasks (${code}). Wait for them to finish or abort, then retry.`
   }
-  return err instanceof Error ? `${action}失败：${err.message}` : `${action}失败`
+  return err instanceof Error ? `${action} failed: ${err.message}` : `${action} failed`
 }
 
 /**

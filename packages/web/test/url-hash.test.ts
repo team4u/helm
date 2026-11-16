@@ -576,7 +576,7 @@ test('仿真: 技能清单确实清空（全部停用）时清选中；从未到
   // 首拍列表到达（hadList=true），之后清单清空：不得保留旧选中。
   const r = simulateListModal('skill-viewer', 'web-search', [
     { step: '列表到达', listIds: ['web-search'] },
-    { step: '技能全部停用，清单清空', listIds: [] },
+    { step: '技能Disable all，清单清空', listIds: [] },
   ])
   assert.equal(r.selectedId, null)
   // 反之：从未到达（刷新中）清单为空：保留深链选中。

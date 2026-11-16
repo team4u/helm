@@ -223,7 +223,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     try {
       await conversationsApi.abort(conversation.id)
     } catch (err) {
-      notifyError('中止回合失败', err)
+      notifyError('Failed to abort turn', err)
     }
   }
 
@@ -278,7 +278,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       await conversationsApi.patch(conversation.id, { thinkingLevel: next })
     } catch (err) {
       optimisticThinkingRef.current = null
-      notifyError('切换思考等级失败', err)
+      notifyError('Failed to switch thinking level', err)
     } finally {
       thinkingPendingRef.current = false
     }
@@ -290,7 +290,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       return
     }
     if (shouldDeferKeyToPopover(e)) {
-      return // 由浮层全局捕获处理（IME composing 时不拦截，交给输入法）
+      return // Handled by the global overlay capture (not intercepted during IME composing; left to the input method)
     }
     if (isShiftTabEvent(e) && !e.nativeEvent.isComposing) {
       e.preventDefault()
@@ -344,7 +344,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                   pluginId={w.pluginId}
                   spec={w.spec}
                   conversationId={conversation.id}
-                  label={`挂件 ${w.spec.id}`}
+                  label={`Widget ${w.spec.id}`}
                   slotProps={{ conversation, composer }}
                   composer={composer}
                 />
@@ -352,7 +352,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             ))}
           </div>
         ) : null}
-        {/* 宿主输入区顶部保留插槽：在途编排活动条直出在 AskDock 上方（桌面与移动端均不收入 more 菜单）；无在途内容时归零高度。 */}
+        {/* Reserved slot at the top of the host composer: in-flight orchestration activity renders directly above the AskDock (never tucked into the more menu on desktop or mobile); collapses to zero height when idle. */}
         <PluginSlot
           ownerPluginId="builtin:composer"
           name={COMPOSER_DOCK_SLOT}
@@ -384,17 +384,17 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
               <span className="composer-edit-banner-text">
                 <HelmIcon name="edit" size={12} />
                 <span>{working
-                  ? '正在编辑历史消息 · 重新发送将覆盖此条及后续对话，并停止当前执行'
-                  : '正在编辑历史消息 · 重新发送将覆盖此条及后续对话（含之后的人类消息）'}</span>
+                  ? 'Editing a history message · resending overwrites this message and everything after it, and stops the current execution'
+                  : 'Editing a history message · resending overwrites this message and everything after it (including later human messages)'}</span>
               </span>
               <button
                 type="button"
                 className="btn btn-ghost btn-sm composer-edit-cancel"
                 onClick={cancelEdit}
-                title="取消编辑 (Esc)"
+                title="Cancel editing (Esc)"
               >
                 <HelmIcon name="x" size={12} />
-                <span>取消</span>
+                <span>Cancel</span>
                 <span className="kbd-hint composer-inline-kbd">Esc</span>
               </button>
             </div>
@@ -406,12 +406,12 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                   <HelmIcon name="paperclip" size={11} />
                   <span>{att.name}</span>
                   <span className="mono tabular-nums">{formatBytes(att.size)}</span>
-                  <Tooltip content={`移除附件 ${att.name}`} side="top">
+                  <Tooltip content={`Remove attachment ${att.name}`} side="top">
                     <button
                       type="button"
                       className="btn btn-ghost btn-icon-xs"
-                      title="移除附件"
-                      aria-label={`移除附件 ${att.name}`}
+                      title="Remove attachment"
+                      aria-label={`Remove attachment ${att.name}`}
                       onClick={() => removeAttachment(att.artifactId)}
                     >
                       <HelmIcon name="x" size={10} />
@@ -422,7 +422,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             </div>
           ) : null}
           <textarea
-            aria-label="输入消息"
+            aria-label="Type a message"
             ref={textareaRef}
             className="composer-textarea selectable"
             value={text}
@@ -456,12 +456,12 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
           />
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
-              <Tooltip content="上传附件" side="top">
+              <Tooltip content="Uploaded attachment" side="top">
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm composer-icon-button"
-                  title="上传附件"
-                  aria-label="上传附件"
+                  title="Uploaded attachment"
+                  aria-label="Uploaded attachment"
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <HelmIcon name="plus" size={19} />
@@ -469,9 +469,9 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
               </Tooltip>
               <ModelPicker conversation={conversation} />
               <ContextUsageStatus conversation={conversation} />
-              {/* 宿主状态行保留插槽：插件向上下文用量同一状态区贡献只读内容
-                  （如 builtin:token-speed 的实时/终态解码速率）；移动端同样
-                  保留在工具栏（不收入 more 菜单）。 */}
+              {/* Reserved host status row slot: plugins contribute read-only content to the context usage status area
+                  (e.g. builtin:token-speed live/final decode rates); on mobile it also stays
+                  in the toolbar (never tucked into the more menu). */}
               <PluginSlot
                 ownerPluginId="builtin:composer"
                 name={COMPOSER_STATUS_SLOT}
@@ -499,7 +499,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                         pluginId={p.pluginId}
                         spec={p.spec}
                         conversationId={conversation.id}
-                        label={`胶囊 ${p.spec.id}`}
+                        label={`Pill ${p.spec.id}`}
                         slotProps={{ conversation, composer }}
                         composer={composer}
                       />
@@ -508,7 +508,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                 </span>
               ) : pills.length > 0 || widgets.length > 0 ? (
                 <details className="composer-extras" ref={extrasRef}>
-                  <summary className="btn btn-ghost btn-sm composer-icon-button" aria-label="会话工具" title="会话工具">
+                  <summary className="btn btn-ghost btn-sm composer-icon-button" aria-label="Conversation tools" title="Conversation tools">
                     <HelmIcon name="more" size={18} />
                   </summary>
                   <div className="composer-popover composer-extras-popover">
@@ -518,7 +518,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                           pluginId={p.pluginId}
                           spec={p.spec}
                           conversationId={conversation.id}
-                          label={`胶囊 ${p.spec.id}`}
+                          label={`Pill ${p.spec.id}`}
                           slotProps={{ conversation, composer }}
                           composer={composer}
                         />
@@ -535,7 +535,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                         }}
                       >
                         <HelmIcon name="layers" size={15} />
-                        {widgetsExpanded ? '收起' : '查看'}{widgets.length === 1 ? widgets[0]?.spec.title ?? '会话面板' : `会话面板 (${widgets.length})`}
+                        {widgetsExpanded ? 'Collapse' : 'View'}{widgets.length === 1 ? widgets[0]?.spec.title ?? 'Conversation panels' : `Conversation panels (${widgets.length})`}
                       </button>
                     ) : null}
                   </div>

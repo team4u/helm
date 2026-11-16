@@ -51,7 +51,7 @@ function renderTimeline(status: ConversationStatus, sending: boolean, entries: C
 }
 
 function waitingCount(html: string): number {
-  return (html.match(/aria-label="正在生成"/g) ?? []).length
+  return (html.match(/aria-label="Generating"/g) ?? []).length
 }
 
 test('首条输入请求在途时立即显示一次等待，隐藏空会话引导', { timeout: 60_000 }, () => {
@@ -60,7 +60,7 @@ test('首条输入请求在途时立即显示一次等待，隐藏空会话引�
   assert.match(html, /role="status"/)
   assert.match(html, /msg-live-waiting/)
   assert.match(html, /msg-live-dots/)
-  assert.match(html, /msg-live-label[^>]*>生成中</)
+  assert.match(html, /msg-live-label[^>]*>Generating</)
   assert.doesNotMatch(html, /正在等待响应…/)
   assert.doesNotMatch(html, /向助理描述目标/)
   assert.doesNotMatch(html, /timeline-center-slot/)

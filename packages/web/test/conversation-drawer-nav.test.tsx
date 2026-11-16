@@ -143,11 +143,11 @@ async function mount(hash: string): Promise<void> {
 
 function ancestorButtons(scope: string): HTMLButtonElement[] {
   return [...document.querySelectorAll<HTMLButtonElement>(`${scope} .pane-parent-nav-btn`)]
-    .filter((b) => (b.getAttribute('aria-label') ?? '').includes('前往祖先会话'))
+    .filter((b) => (b.getAttribute('aria-label') ?? '').includes('Go to ancestor conversation'))
 }
 
 async function clickAncestor(scope: string, ancestorId: number): Promise<void> {
-  const btn = ancestorButtons(scope).find((b) => b.getAttribute('aria-label') === `前往祖先会话 #${ancestorId}`)
+  const btn = ancestorButtons(scope).find((b) => b.getAttribute('aria-label') === `Go to ancestor conversation #${ancestorId}`)
   assert.ok(btn, `${scope} 应渲染祖先 #${ancestorId} 面包屑按钮`)
   await act(async () => { btn!.click() })
   await settle()
@@ -172,7 +172,7 @@ test('抽屉内点击在主屏的祖先：仅收起抽屉，主屏与工作台�
   assert.ok(observed?.workbenchOpen)
   // 任意深度面包屑：#111 的祖先链应为 [#1, #11]（根在前）
   const labels = ancestorButtons('.conversation-drawer').map((b) => b.getAttribute('aria-label'))
-  assert.deepEqual(labels, ['前往祖先会话 #1', '前往祖先会话 #11'], '抽屉应渲染完整祖先链（根在前）')
+  assert.deepEqual(labels, ['Go to ancestor conversation #1', 'Go to ancestor conversation #11'], '抽屉应渲染完整祖先链（根在前）')
   await clickAncestor('.conversation-drawer', 1)
   assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '主屏保持原会话 #1')
   assert.equal(observed?.modal, null, '祖先已在主屏：只收起抽屉')
@@ -196,14 +196,14 @@ test('抽屉内点击直接父级（不在屏）：同样原位切换抽屉', { 
   assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 999 }, '主屏不动')
   assert.deepEqual(observed?.modal, { kind: 'conversation-drawer', conversationId: 11 }, '抽屉原位切换到父会话 #11')
   const labels = ancestorButtons('.conversation-drawer').map((b) => b.getAttribute('aria-label'))
-  assert.deepEqual(labels, ['前往祖先会话 #1'], '切换后面包屑随新会话更新')
+  assert.deepEqual(labels, ['Go to ancestor conversation #1'], '切换后面包屑随新会话更新')
 })
 
 test('主屏会话点击祖先面包屑：主屏切换到祖先', { timeout: 60_000 }, async () => {
   await mount('#/c/111')
   assert.equal(observed?.modal, null)
   const labels = ancestorButtons('.helm-panes > .helm-pane').map((b) => b.getAttribute('aria-label'))
-  assert.deepEqual(labels, ['前往祖先会话 #1', '前往祖先会话 #11'])
+  assert.deepEqual(labels, ['Go to ancestor conversation #1', 'Go to ancestor conversation #11'])
   await clickAncestor('.helm-panes > .helm-pane', 11)
   assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 11 }, '主屏应导航到祖先 #11')
 })

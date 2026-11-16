@@ -55,7 +55,7 @@ export function PluginMicroAction({
         pluginId={action.pluginId}
         spec={spec}
         conversationId={conversationId}
-        label={`微操作 ${spec.id}`}
+        label={`Micro action ${spec.id}`}
         slotProps={slotProps}
       />
     )
@@ -76,14 +76,14 @@ export function PluginMicroAction({
       store.pushNotice({
         type: 'notification',
         level: 'info',
-        title: `已执行：${label}`,
+        title: `Executed: ${label}`,
         conversationId,
       })
     } catch (err) {
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: `执行失败：${label}`,
+        title: `Execution failed: ${label}`,
         body: err instanceof Error ? err.message : String(err),
         conversationId,
       })

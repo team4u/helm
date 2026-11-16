@@ -117,7 +117,7 @@ test('Checkbox：未选、勾选、半选（indeterminate）、无障碍与零 E
       checked: false,
       indeterminate: true,
       onChange: () => {},
-      label: '全选（部分选中）',
+      label: 'Select all（部分选中）',
     }),
   )
 

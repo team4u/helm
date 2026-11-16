@@ -86,7 +86,7 @@ function ArtifactCard({
         <button
           type="button"
           className="artifact-card-title-btn"
-          title={`预览 ${artifact.name}`}
+          title={`Preview ${artifact.name}`}
           onClick={() => onPreview(artifact)}
         >
           <span className="artifact-card-name">{artifact.name}</span>
@@ -109,23 +109,23 @@ function ArtifactCard({
         <button
           type="button"
           className="btn btn-ghost btn-xs artifact-action-btn"
-          aria-label={`预览 ${artifact.name}`}
-          title="预览"
+          aria-label={`Preview ${artifact.name}`}
+          title="Preview"
           onClick={() => onPreview(artifact)}
         >
           <HelmIcon name="eye" size={12} />
-          <span>预览</span>
+          <span>Preview</span>
         </button>
         <button
           type="button"
           className="btn btn-ghost btn-xs artifact-action-btn"
-          aria-label={`下载 ${artifact.name}`}
-          title="下载"
+          aria-label={`Download ${artifact.name}`}
+          title="Download"
           disabled={isDownloading}
           onClick={() => onDownload(artifact)}
         >
           <HelmIcon name={isDownloading ? 'loader' : 'download'} size={12} />
-          <span>{isDownloading ? '下载中' : '下载'}</span>
+          <span>{isDownloading ? 'Downloading' : 'Download'}</span>
         </button>
       </div>
     </div>
@@ -152,7 +152,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
         store.pushNotice({
           type: 'notification',
           level: 'error',
-          title: '下载产物失败',
+          title: 'Failed to download artifact',
           body: err instanceof Error ? err.message : String(err),
         })
       })
@@ -164,20 +164,20 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
   if (artifacts.length === 0) {
     return (
       <div className="empty-state empty-state-compact">
-        <p className="empty-state-title">当前会话暂无产物</p>
+        <p className="empty-state-title">No artifacts in this conversation yet</p>
       </div>
     )
   }
 
   return (
     <div className="workbench-artifacts-body">
-      <section className="artifact-section" aria-label="正式产物">
+      <section className="artifact-section" aria-label="Registered artifacts">
         <div className="artifact-section-head">
-          <span className="artifact-section-title">交付产物</span>
+          <span className="artifact-section-title">Uploaded attachments</span>
           <span className="badge badge-neutral tabular-nums">{deliverables.length}</span>
         </div>
         {deliverables.length === 0 ? (
-          <div className="artifact-empty-hint">暂无注册产物或上传附件</div>
+          <div className="artifact-empty-hint">No registered artifacts or uploaded attachments yet</div>
         ) : (
           <div className="artifact-card-list">
             {deliverables.map((artifact) => (
@@ -194,7 +194,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
       </section>
 
       {spills.length > 0 ? (
-        <section className="artifact-spill-section" aria-label="超长工具输出快照">
+        <section className="artifact-spill-section" aria-label="Oversized tool output snapshot">
           <button
             type="button"
             className="artifact-spill-toggle"
@@ -203,9 +203,9 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
             onClick={() => setSpillExpanded((v) => !v)}
           >
             <HelmIcon name={spillExpanded ? 'chevron-down' : 'chevron-right'} size={13} />
-            <span className="artifact-spill-title">超长工具输出快照</span>
+            <span className="artifact-spill-title">Oversized tool output snapshot</span>
             <span className="badge badge-neutral tabular-nums">{spills.length}</span>
-            <span className="artifact-spill-hint">{spillExpanded ? '收起' : '点击展开'}</span>
+            <span className="artifact-spill-hint">{spillExpanded ? 'Collapse' : 'Click to expand'}</span>
           </button>
           {spillExpanded ? (
             <div id={spillPanelId} className="artifact-spill-list">
@@ -267,9 +267,9 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
   return (
     <Dialog open inline={inline} onOpenChange={(open) => { if (!open) setWorkbenchOpen(false) }}>
       <DialogPortal inline={inline}>
-        <DialogOverlay className="workbench-backdrop" aria-label="关闭工作台">
-          <DialogContent className="helm-workbench" aria-label="工作台抽屉">
-            <DialogTitle style={{ display: 'none' }}>工作台</DialogTitle>
+        <DialogOverlay className="workbench-backdrop" aria-label="Close workbench">
+          <DialogContent className="helm-workbench" aria-label="Workbench drawer">
+            <DialogTitle style={{ display: 'none' }}>Workbench</DialogTitle>
             <Tabs
         value={activeTab}
         onValueChange={(val) => store.setWorkbenchTab(val)}
@@ -294,12 +294,12 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
                 </TabsTrigger>
               ))}
             </div>
-            <Tooltip content="关闭工作台" side="left">
+            <Tooltip content="Close workbench" side="left">
               <button
                 type="button"
                 className="btn btn-ghost btn-icon-sm workbench-close-btn"
-                aria-label="关闭工作台"
-                title="关闭工作台"
+                aria-label="Close workbench"
+                title="Close workbench"
                 onClick={() => store.setWorkbenchOpen(false)}
               >
                 <HelmIcon name="x" size={14} />
@@ -310,7 +310,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
         <div className="workbench-body">
           {conversationId === undefined ? (
             <div className="empty-state empty-state-compact">
-              <p className="empty-state-title">无活跃会话上下文</p>
+              <p className="empty-state-title">No active conversation context</p>
             </div>
           ) : activeTab === 'artifacts' ? (
             <ArtifactsTab key={conversationId} conversationId={conversationId} />
@@ -320,13 +320,13 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
                 pluginId={activePanel.pluginId}
                 spec={activePanel.spec}
                 conversationId={conversationId}
-                label={`工作台 ${activePanel.spec.label ?? activePanel.spec.id}`}
+                label={`Workbench ${activePanel.spec.label ?? activePanel.spec.id}`}
                 slotProps={{ conversation: conversation ?? { id: conversationId } }}
               />
             </div>
           ) : (
             <div className="empty-state empty-state-compact">
-              <p className="empty-state-title">工作台页签不存在或对当前会话不可用</p>
+              <p className="empty-state-title">Workbench tab missing or unavailable for this conversation</p>
             </div>
           )}
         </div>

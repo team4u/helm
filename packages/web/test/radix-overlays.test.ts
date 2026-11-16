@@ -103,17 +103,17 @@ test('DropdownMenu 原语挂载、数据属性与角色属性（SSR）', { timeo
         React.createElement(
           DropdownMenuContent,
           { className: 'pane-more-popover' },
-          React.createElement(DropdownMenuLabel, null, '会话操作'),
+          React.createElement(DropdownMenuLabel, null, 'Conversation actions'),
           React.createElement(
             DropdownMenuItem,
             { onSelect: () => {} },
-            '重命名会话',
+            'Rename conversation',
           ),
           React.createElement(DropdownMenuSeparator, null),
           React.createElement(
             DropdownMenuItem,
             { danger: true, onSelect: () => {} },
-            '重置上下文',
+            'Reset context',
           ),
         ),
       ),
@@ -133,7 +133,7 @@ test('DropdownMenu 原语挂载、数据属性与角色属性（SSR）', { timeo
 
   // 菜单项 role="menuitem"
   assert.match(menuHtml, /role="menuitem"/)
-  assert.match(menuHtml, /重命名会话/)
+  assert.match(menuHtml, /Rename conversation/)
 
   // 分隔线 role="separator"
   assert.match(menuHtml, /role="separator"/)

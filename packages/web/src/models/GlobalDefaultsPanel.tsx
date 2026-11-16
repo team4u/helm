@@ -63,7 +63,7 @@ export function GlobalDefaultsPanel({
 
   const levelOptions = useMemo(() => {
     const list: Array<{ value: string; label: string }> = [
-      { value: UNSET_MODEL_VALUE, label: '跟随 SDK 缺省' },
+      { value: UNSET_MODEL_VALUE, label: 'Follow SDK default' },
     ]
     for (const lvl of availableThinkingLevels) {
       list.push({ value: lvl, label: lvl })
@@ -73,7 +73,7 @@ export function GlobalDefaultsPanel({
       formLevel !== UNSET_MODEL_VALUE &&
       !availableThinkingLevels.includes(formLevel)
     ) {
-      list.push({ value: formLevel, label: `${formLevel}（当前值）` })
+      list.push({ value: formLevel, label: `${formLevel} (current)` })
     }
     return list
   }, [availableThinkingLevels, formLevel])
@@ -106,8 +106,8 @@ export function GlobalDefaultsPanel({
       store?.pushNotice?.({
         type: 'notification',
         level: 'info',
-        title: '全局默认模型已更新',
-        body: res.defaultModel ? `已设置为 ${res.defaultModel}` : '已清除全局默认模型',
+        title: 'Global default model updated',
+        body: res.defaultModel ? `Set to ${res.defaultModel}` : 'Global default model cleared',
       })
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 2400)
@@ -135,15 +135,15 @@ export function GlobalDefaultsPanel({
       <div className="section-flat">
         <div className="section-flat-header">
           <HelmIcon name="sliders" size={14} />
-          <span className="section-flat-title">全局模型规则</span>
+          <span className="section-flat-title">Global model rules</span>
         </div>
         <p className="text-muted">
-          新会话的继承链：会话临时覆盖 &gt; Profile 模型 &gt; 此处全局默认。切换后对所有未显式覆盖模型的会话即时生效。
+          The inheritance chain for new conversations: session override &gt; Profile model &gt; this global default. Switching applies immediately to every conversation without an explicit model override.
         </p>
 
         <div className="form-grid form-grid-align-start">
           <label htmlFor="model-defaults-model" className="form-grid-label">
-            默认模型
+            Default model
           </label>
           <div className="flex-col-xs">
             <Select
@@ -152,27 +152,27 @@ export function GlobalDefaultsPanel({
               disabled={saving}
               popoverClassName="helm-select-popover-wide"
               className="w-full mono"
-              aria-label="全局默认模型"
+              aria-label="Global default model"
               options={modelOptions}
               onChange={(e) => handleModelChange(e.target.value)}
             />
-            <span className="text-subtle">可供选择的模型来自所有已配置且可用的供应商目录。</span>
+            <span className="text-subtle">Selectable models come from the catalogs of all configured and available providers.</span>
           </div>
 
           <label htmlFor="model-defaults-thinking-level" className="form-grid-label">
-            默认思考档位
+            Default thinking level
           </label>
           <div className="flex-col-xs">
             <Select
               id="model-defaults-thinking-level"
               value={formLevel === '' ? UNSET_MODEL_VALUE : formLevel}
               disabled={saving || formModel === UNSET_MODEL_VALUE}
-              aria-label="全局默认思考档位"
+              aria-label="Global default thinking level"
               options={levelOptions}
               onChange={(e) => setFormLevel(e.target.value)}
             />
             {formModel !== UNSET_MODEL_VALUE && availableThinkingLevels.length === 0 && (
-              <span className="text-subtle">所选模型不支持思考档位。</span>
+              <span className="text-subtle">The selected model does not support thinking levels.</span>
             )}
           </div>
         </div>
@@ -185,12 +185,12 @@ export function GlobalDefaultsPanel({
             disabled={saving}
           >
             <HelmIcon name="check" size={14} />
-            <span>{saving ? '保存中...' : '保存全局默认'}</span>
+            <span>{saving ? 'Saving...' : 'Save global defaults'}</span>
           </button>
           <button type="button" className="btn btn-ghost" onClick={handleReset} disabled={saving}>
-            <span>重置</span>
+            <span>Reset</span>
           </button>
-          {saveSuccess && <span className="text-subtle" role="status">配置已成功保存</span>}
+          {saveSuccess && <span className="text-subtle" role="status">Configuration saved</span>}
         </div>
         {saveError && (
           <div className="callout callout-error" role="alert">

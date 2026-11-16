@@ -56,7 +56,7 @@ function AskFieldInput({
 }) {
   if (field.type === 'select') {
     const options = [
-      { value: '', label: '请选择…' },
+      { value: '', label: 'Select…' },
       ...(field.options ?? []).map((opt) => ({
         value: opt.value,
         label: opt.label,
@@ -82,7 +82,7 @@ function AskFieldInput({
           onClick={() => onChange('true')}
         >
           <HelmIcon name="check" size={12} />
-          确认
+          Approve
         </button>
         <button
           type="button"
@@ -91,7 +91,7 @@ function AskFieldInput({
           onClick={() => onChange('false')}
         >
           <HelmIcon name="x" size={12} />
-          拒绝
+          Reject
         </button>
       </span>
     )
@@ -105,14 +105,14 @@ function AskFieldInput({
         type={secret ? 'password' : 'text'}
         value={value}
         disabled={disabled}
-        placeholder={secret ? '机密值仅入内存 SecretStash' : field.label}
+        placeholder={secret ? 'Secret values go to the in-memory SecretStash only' : field.label}
         onChange={(e) => onChange(e.target.value)}
         autoComplete="off"
       />
       {secret ? (
         <span className="ask-dock-secret-hint">
           <HelmIcon name="lock" size={11} />
-          机密直入内存 SecretStash，不落数据库
+          Secrets stay in the in-memory SecretStash, never stored in the database
         </span>
       ) : null}
     </span>
@@ -166,7 +166,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
           <span className="badge badge-warn">{ask.ownerPluginId}</span>
         ) : null}
         {ask.expectedStateSeq !== undefined ? (
-          <span className="badge badge-neutral mono" title="CAS 水位线：终端已处理时自动销单">
+          <span className="badge badge-neutral mono" title="CAS watermark: auto-cancelled once the terminal handles it">
             seq {ask.expectedStateSeq}
           </span>
         ) : null}
@@ -174,12 +174,12 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
           <button
             type="button"
             className="btn btn-ghost btn-sm ask-dock-source-btn"
-            title={source.title !== '' ? `打开子会话 #${source.conversationId}（${source.title}）` : `打开子会话 #${source.conversationId}抽屉`}
-            aria-label={`打开子会话 #${source.conversationId}抽屉`}
+            title={source.title !== '' ? `Open child conversation #${source.conversationId} (${source.title})` : `Open child conversation #${source.conversationId} drawer`}
+            aria-label={`Open child conversation #${source.conversationId} drawer`}
             onClick={() => store.setActiveModal({ kind: 'conversation-drawer', conversationId: source.conversationId })}
           >
             <HelmIcon name="corner-down-right" size={11} />
-            来自 #{source.conversationId}
+            From #{source.conversationId}
           </button>
         ) : null}
       </div>
@@ -201,7 +201,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
             onClick={() => setSnapshotOpen((v) => !v)}
           >
             <HelmIcon name={snapshotOpen ? 'chevron-down' : 'chevron-right'} size={12} />
-            终端快照（最后 40 行）
+            Terminal snapshot (last 40 lines)
           </button>
           {snapshotOpen ? (
             <pre className="code-block-pre selectable ask-dock-snapshot-pre">
@@ -237,7 +237,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
       ) : null}
       <div className="ask-dock-actions">
         <button type="button" className="btn" disabled={submitting !== null} onClick={() => void cancel()}>
-          取消
+          Cancel
         </button>
         <button
           type="button"
@@ -246,7 +246,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
           onClick={() => void submit()}
         >
           <HelmIcon name={submitting === 'answer' ? 'loader' : 'check'} size={12} />
-          提交
+          Submit
         </button>
       </div>
     </div>

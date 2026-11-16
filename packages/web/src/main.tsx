@@ -11,7 +11,7 @@ if (container) {
   void registerBrowserNotificationServiceWorker()
   createRoot(container).render(
     <StrictMode>
-      <ViewBoundary label="Helm 主控台"><App /></ViewBoundary>
+      <ViewBoundary label="Helm Console"><App /></ViewBoundary>
     </StrictMode>,
   )
 }

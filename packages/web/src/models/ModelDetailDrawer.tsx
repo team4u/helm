@@ -76,10 +76,10 @@ export function ModelDetailDrawer({
   const endpointEditable = provider?.custom === true
   const endpointHint =
     endpointEditable === true
-      ? '用于反向代理、内网转发端点或本地推理服务接口。'
+      ? 'For reverse proxies, intranet forwarding endpoints or local inference services.'
       : provider?.pluginId
-        ? `该端点由插件 ${provider.pluginId} 的配置管理，请前往插件中心对应插件的配置项修改。`
-        : '该供应商端点为内置固定值，不支持在此修改。'
+        ? `This endpoint is managed by the configuration of plugin ${provider.pluginId}; change it in that plugin configuration in the plugin center.`
+        : 'This provider endpoint is built in and cannot be changed here.'
 
   // 当选中的供应商变化时同步本地表单状态
   useEffect(() => {
@@ -179,13 +179,13 @@ export function ModelDetailDrawer({
           setTestResult({
             success: false,
             latencyMs,
-            message: `连接失败: ${res.errors[provider.id]}`,
+            message: `Connection failed: ${res.errors[provider.id]}`,
           })
         } else {
           setTestResult({
             success: true,
             latencyMs,
-            message: '供应商端点连通正常，模型目录同步成功。',
+            message: 'Provider endpoint reachable and model catalog synced.',
           })
         }
       } else {
@@ -193,12 +193,12 @@ export function ModelDetailDrawer({
         if (!isKeyPresent && provider.type === 'commercial') {
           setTestResult({
             success: false,
-            message: '未配置 API 密钥，请先输入密钥后再测试连接。',
+            message: 'No API key configured; enter the key before testing the connection.',
           })
         } else {
           setTestResult({
             success: true,
-            message: '端点与凭证格式校验正常。',
+            message: 'Endpoint and credential format validated.',
           })
         }
       }
@@ -226,15 +226,15 @@ export function ModelDetailDrawer({
       if (refreshError) {
         setSaveError(refreshError)
       } else if (res.aborted) {
-        setSaveError('模型目录刷新已取消，请重试。')
+        setSaveError('Model catalog refresh was cancelled; retry.')
       } else {
         setSaveSuccess(true)
         setTimeout(() => setSaveSuccess(false), 2400)
         store?.pushNotice?.({
           type: 'notification',
           level: 'info',
-          title: '模型目录已刷新',
-          body: `${provider.name} 已重新同步最新模型目录。`,
+          title: 'Model catalog refreshed',
+          body: `${provider.name} re-synced the latest model catalog.`,
         })
       }
     } catch (err) {
@@ -258,8 +258,8 @@ export function ModelDetailDrawer({
       store?.pushNotice?.({
         type: 'notification',
         level: 'info',
-        title: '密钥已删除',
-        body: `${provider.name} 的本地凭证已成功移除。`,
+        title: 'Secret deleted',
+        body: `Local credentials of ${provider.name} removed successfully.`,
       })
       setDeleteConfirmOpen(false)
       setSaveSuccess(true)
@@ -278,7 +278,7 @@ export function ModelDetailDrawer({
     // 绝不静默保留旧值冒充保存成功。
     if (provider.custom === true && !baseUrl.trim()) {
       setSaveSuccess(false)
-      setSaveError('自定义网关的服务端点不能为空。')
+      setSaveError('The custom gateway endpoint cannot be empty.')
       return
     }
     setSaving(true)
@@ -319,22 +319,22 @@ export function ModelDetailDrawer({
           <DialogContent
             className="primary-drawer-content"
             role="dialog"
-            aria-label={provider ? `${provider.name} 详情与凭证设置` : '供应商详情与凭证设置'}
+            aria-label={provider ? `${provider.name} details and credentials` : 'Provider details and credentials'}
           >
-            {/* 头部元信息 */}
+            {/* Header metadata */}
             <div className="primary-drawer-header">
               <div className="primary-drawer-header-left">
                 <div className="primary-drawer-title-col">
                   <div className="primary-drawer-title-row">
                     <DialogTitle className="primary-drawer-title break-word">
-                      {provider?.name || '供应商详情'}
+                      {provider?.name || 'Provider details'}
                     </DialogTitle>
                     {provider?.configured ? (
-                      <span className="badge badge-ok">已配置</span>
+                      <span className="badge badge-ok">Configured</span>
                     ) : (
-                      <span className="badge badge-neutral">未配置</span>
+                      <span className="badge badge-neutral">Not configured</span>
                     )}
-                    {provider?.dynamic && <span className="badge badge-neutral">动态同步</span>}
+                    {provider?.dynamic && <span className="badge badge-neutral">Dynamic sync</span>}
                   </div>
                   <div className="text-subtle mono break-word">{provider?.id}</div>
                 </div>
@@ -343,28 +343,28 @@ export function ModelDetailDrawer({
                 <button
                   type="button"
                   className="btn btn-ghost btn-icon-sm"
-                  aria-label="关闭"
-                  title="关闭"
+                  aria-label="Close"
+                  title="Close"
                 >
                   <HelmIcon name="x" size={14} />
                 </button>
               </DialogClose>
             </div>
 
-            {/* 抽屉主体 */}
+            {/* Drawer body */}
             <div className="primary-drawer-body">
               {!provider ? (
                 <div className="primary-center-empty">
-                  <div className="primary-center-empty-text">未选择供应商</div>
+                  <div className="primary-center-empty-text">No provider selected</div>
                 </div>
               ) : (
                 <>
-                  {/* 凭证与连接设置 */}
+                  {/* Credentials and connection settings */}
                   <div className="section-flat">
                     <div className="section-flat-header flex-row-between">
                       <div className="flex-row">
                         <HelmIcon name="key" size={14} />
-                        <span className="section-flat-title">凭证与连接设置</span>
+                        <span className="section-flat-title">Credentials and connection settings</span>
                       </div>
                       {provider.dynamic && (
                         <button
@@ -372,29 +372,29 @@ export function ModelDetailDrawer({
                           className="btn btn-xs btn-ghost"
                           onClick={handleRefreshCatalog}
                           disabled={refreshingCatalog}
-                          title="重新同步该供应商的动态模型目录"
+                          title="Re-sync the dynamic model catalog of this provider"
                         >
                           <HelmIcon
                             name="refresh-cw"
                             size={12}
                             className={refreshingCatalog ? 'spin' : ''}
                           />
-                          <span>{refreshingCatalog ? '刷新中...' : '刷新目录'}</span>
+                          <span>{refreshingCatalog ? 'Refreshing...' : 'Refresh catalog'}</span>
                         </button>
                       )}
                     </div>
                     <div className="form-grid">
                       <label htmlFor="model-drawer-api-key" className="form-grid-label">
-                        API 密钥
+                        API key
                       </label>
                       <div className="flex-col-xs">
                         {provider.pluginId ? (
                           <>
-                            <div className="form-grid-value" title="插件网关密钥">
-                              由插件 {provider.pluginId} 的配置管理
+                            <div className="form-grid-value" title="Plugin gateway key">
+                              Managed by the configuration of plugin {provider.pluginId}
                             </div>
                             <span className="text-subtle">
-                              该密钥经插件中心对应插件的配置项设置，不存入内核凭据库；在此填写不会生效。
+                              This key is set in the plugin configuration in the plugin center, not stored in the kernel credential vault; filling it in here has no effect.
                             </span>
                           </>
                         ) : (
@@ -407,20 +407,20 @@ export function ModelDetailDrawer({
                               onChange={(e) => setApiKey(e.target.value)}
                               placeholder={
                                 provider.configured
-                                  ? '已配置（留空保持不变）'
-                                  : '请输入 API 密钥'
+                                  ? 'Configured (leave empty to keep unchanged)'
+                                  : 'Enter API key'
                               }
                               autoComplete="off"
                             />
                             <span className="text-subtle">
-                              密钥密文将安全存储于系统保密箱中，调用时由内核自动注入，不向模型泄露。
+                              The secret is stored encrypted in the system secret stash and injected automatically by the kernel on calls; never exposed to the model.
                             </span>
                           </>
                         )}
                       </div>
 
                       <label htmlFor="model-drawer-base-url" className="form-grid-label">
-                        服务端点
+                        Endpoint
                       </label>
                       <div className="flex-col-xs">
                         {endpointEditable ? (
@@ -434,11 +434,11 @@ export function ModelDetailDrawer({
                               provider.baseUrl ||
                               (provider.type === 'local'
                                 ? 'http://127.0.0.1:11434'
-                                : 'https://api.example.com/v1（留空使用默认地址）')
+                                : 'https://api.example.com/v1 (empty for default URL)')
                             }
                           />
                         ) : (
-                          <div className="form-grid-value mono break-word" title="只读端点">
+                          <div className="form-grid-value mono break-word" title="Read-only endpoint">
                             {provider.baseUrl || '—'}
                           </div>
                         )}
@@ -446,7 +446,7 @@ export function ModelDetailDrawer({
                       </div>
                     </div>
 
-                    {/* 连通性测试与删除密钥 */}
+                    {/* Connectivity test and secret deletion */}
                     <div className="flex-row-between flex-row-wrap">
                       <button
                         type="button"
@@ -455,7 +455,7 @@ export function ModelDetailDrawer({
                         disabled={testing}
                       >
                         <HelmIcon name="activity" size={12} />
-                        <span>{testing ? '正在测试连接...' : '测试连接'}</span>
+                        <span>{testing ? 'Testing connection...' : 'Test connection'}</span>
                       </button>
 
                       {provider.configured && (
@@ -466,7 +466,7 @@ export function ModelDetailDrawer({
                           disabled={deleting}
                         >
                           <HelmIcon name="trash" size={12} />
-                          <span>删除凭证</span>
+                          <span>Delete credentials</span>
                         </button>
                       )}
                     </div>
@@ -483,46 +483,46 @@ export function ModelDetailDrawer({
                         <span className="callout-text selectable">
                           {testResult.message}
                           {testResult.latencyMs !== undefined &&
-                            `（延迟 ${testResult.latencyMs}ms）`}
+                            `(latency ${testResult.latencyMs}ms)`}
                         </span>
                       </div>
                     )}
                   </div>
 
-                  {/* 模型列表管理 (Model Chips 交互) */}
+                  {/* Model list management (model chips interactions) */}
                   <div className="section-flat">
                     <div className="section-flat-header flex-row-between">
                       <div className="flex-row">
                         <HelmIcon name="cpu" size={14} />
-                        <span className="section-flat-title">模型清单与路由控制</span>
+                        <span className="section-flat-title">Models and routing control</span>
                       </div>
                       <span className="badge badge-neutral mono tabular-nums">
-                        {`已启用 ${enabledModelIds.length} / 共 ${models.length} 个模型`}
+                        {`${enabledModelIds.length} enabled / ${models.length} models in total`}
                       </span>
                     </div>
 
                     <p className="text-subtle">
-                      点击胶囊药丸切换模型启用状态，未启用的模型将在目录中标记停用，且会话无法选用。
+                      Click a pill to toggle a model; disabled models are marked in the catalog and cannot be picked in conversations.
                     </p>
 
                     {models.length === 0 ? (
                       <div className="text-subtle">
                         {provider.dynamic
-                          ? '该动态供应商可通过上方「刷新目录」拉取可用模型。'
-                          : '该供应商暂未登记预置模型，保存端点配置后将自动同步目录。'}
+                          ? 'This dynamic provider can fetch available models via Refresh catalog above.'
+                          : 'This provider has no preset models; the catalog syncs automatically after saving the endpoint.'}
                       </div>
                     ) : (
                       <div className="models model-chips-container">
-                        {/* 操作工具栏：过滤搜索与批量控制 */}
+                        {/* Action toolbar: filter search and bulk controls */}
                         <div className="mbulk model-chips-toolbar">
                           <div className="search-box flex-1">
                             <HelmIcon name="search" size={13} />
                             <input
                               type="text"
-                              placeholder="过滤模型..."
+                              placeholder="Filter models..."
                               value={modelFilter}
                               onChange={(e) => setModelFilter(e.target.value)}
-                              aria-label="过滤模型"
+                              aria-label="Filter models"
                             />
                           </div>
                           <div className="model-chips-actions">
@@ -530,34 +530,34 @@ export function ModelDetailDrawer({
                               type="button"
                               className="text action"
                               onClick={handleSelectAll}
-                              title={hasModelFilter ? '启用当前过滤匹配的模型' : '全部启用'}
+                              title={hasModelFilter ? 'Enable models matching the current filter' : 'Enable all'}
                             >
                               {hasModelFilter
-                                ? `启用匹配项（${filteredModels.length}）`
-                                : '全部启用'}
+                                ? `Enable matches (${filteredModels.length})`
+                                : 'Enable all'}
                             </button>
                             <button
                               type="button"
                               className="text action"
                               onClick={handleClearAll}
-                              title={hasModelFilter ? '停用当前过滤匹配的模型' : '全部停用'}
+                              title={hasModelFilter ? 'Disable models matching the current filter' : 'Disable all'}
                             >
                               {hasModelFilter
-                                ? `停用匹配项（${filteredModels.length}）`
-                                : '全部停用'}
+                                ? `Disable matches (${filteredModels.length})`
+                                : 'Disable all'}
                             </button>
                           </div>
                         </div>
 
-                        {/* 平铺药丸胶囊群（零外框、呼吸感白底平铺） */}
+                        {/* Flat pill cluster (frameless, airy white tiles) */}
                         <div
                           className={`mchips model-drawer-tags-wrap ${isExpanded ? 'open is-expanded' : ''}`}
                           role="group"
-                          aria-label="选择启用的模型"
+                          aria-label="Select enabled models"
                         >
                           {visibleModels.length === 0 ? (
                             <span className="text-subtle">
-                              未找到匹配的模型
+                              No matching models
                             </span>
                           ) : (
                             visibleModels.map((model) => {
@@ -570,7 +570,7 @@ export function ModelDetailDrawer({
                                   aria-checked={isChecked}
                                   className={`mchip pick model-drawer-tag ${isChecked ? 'on active' : ''}`}
                                   onClick={() => handleToggleModel(model.id)}
-                                  title={`${model.name} (${model.id}) - 点击${isChecked ? '停用' : '启用'}`}
+                                  title={`${model.name} (${model.id}) - click to ${isChecked ? 'Disable' : 'Enable'}`}
                                 >
                                   <span className="mchip-check" aria-hidden="true">
                                     <HelmIcon name="check" size={10} />
@@ -587,21 +587,21 @@ export function ModelDetailDrawer({
                           )}
                         </div>
 
-                        {/* 展开/折叠通栏按钮 */}
+                        {/* Expand/collapse full-width button */}
                         {models.length > 12 && (
                           <button
                             type="button"
                             className="mchips-fold"
                             onClick={() => setIsExpanded((prev) => !prev)}
                             aria-expanded={isExpanded}
-                            title={isExpanded ? '折叠列表' : '展开全部'}
+                            title={isExpanded ? 'Collapse list' : 'Expand all'}
                           >
                             <span>
                               {isExpanded
-                                ? '折叠列表'
+                                ? 'Collapse list'
                                 : hiddenModelCount > 0
-                                  ? `展开全部（省略 ${hiddenModelCount} 个）`
-                                  : '展开全部'}
+                                  ? `Expand all (${hiddenModelCount} hidden)`
+                                  : 'Expand all'}
                             </span>
                             <HelmIcon name={isExpanded ? 'chevron-up' : 'chevron-down'} size={12} />
                           </button>
@@ -613,12 +613,12 @@ export function ModelDetailDrawer({
               )}
             </div>
 
-            {/* 抽屉底部动作栏 */}
+            {/* Drawer footer actions */}
             <div className="primary-drawer-footer flex-row-between">
               <div className="flex-1">
                 {saveSuccess && (
                   <span className="text-subtle" role="status">
-                    配置已成功保存
+                    Configuration saved
                   </span>
                 )}
                 {saveError && (
@@ -635,21 +635,21 @@ export function ModelDetailDrawer({
                 disabled={saving || !provider}
               >
                 <HelmIcon name="check" size={14} />
-                <span>{saving ? '保存中...' : '保存配置'}</span>
+                <span>{saving ? 'Saving...' : 'Save configuration'}</span>
               </button>
             </div>
           </DialogContent>
         </DialogPortal>
       </Dialog>
 
-      {/* 删除凭据二次确认对话框 */}
+      {/* Delete credentials confirmation dialog */}
       <ConfirmDialog
         open={deleteConfirmOpen}
         onOpenChange={setDeleteConfirmOpen}
-        title="确认删除凭证"
-        description={`确定要删除 ${provider?.name ?? '该供应商'} 的本地密钥凭据吗？删除后未单独配置其他密钥的会话将无法访问此供应商。`}
-        confirmText="确认删除"
-        cancelText="取消"
+        title="Confirm credential deletion"
+        description={`Delete the local credentials of ${provider?.name ?? 'This provider'}? Conversations without another configured key will lose access to this provider.`}
+        confirmText="Confirm deletion"
+        cancelText="Cancel"
         danger
         inline={inline}
         onConfirm={handleDeleteCredential}

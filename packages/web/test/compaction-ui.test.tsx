@@ -207,12 +207,12 @@ test('ConversationTimeline：compacting=true 时渲染「正在精简上下文�
 
   const dividerLabel = host.querySelector('.context-divider-label')
   assert.ok(dividerLabel !== null, '必须渲染上下文分割线标签')
-  assert.match(dividerLabel.textContent ?? '', /正在精简上下文…/)
+  assert.match(dividerLabel.textContent ?? '', /Compacting context…/)
   assert.ok(dividerLabel.querySelector('svg.spin-slow') !== null, 'pending 分割线须渲染 spin-slow loader 图标')
 
   // DOM 顺序：分割线必须在排队中的人类消息之前
   const innerHtml = host.querySelector('.timeline-inner')?.innerHTML ?? ''
-  const dividerPos = innerHtml.indexOf('正在精简上下文…')
+  const dividerPos = innerHtml.indexOf('Compacting context…')
   const queuedPos = innerHtml.indexOf('精简完继续修改')
   assert.ok(dividerPos >= 0 && queuedPos > dividerPos, 'pending 分割线应在排队消息之前渲染')
 })
@@ -291,7 +291,7 @@ test('Composer：status=idle 且 compacting=true 时切换为 busy/stop/queue �
   // .composer-context-status 保持无 <svg> 与精确文案
   const statusEl = host.querySelector<HTMLElement>('.composer-context-status')
   assert.ok(statusEl !== null)
-  assert.equal(statusEl.textContent, '精简中…')
+  assert.equal(statusEl.textContent, 'Compacting…')
   assert.ok(statusEl.querySelector('svg') === null)
 
   // 占位符切到 busy 态
@@ -299,7 +299,7 @@ test('Composer：status=idle 且 compacting=true 时切换为 busy/stop/queue �
   assert.equal(ta.placeholder, getComposerPlaceholder(true, false))
 
   // 空草稿显示停止按钮
-  const abortBtn = host.querySelector<HTMLButtonElement>('button.composer-abort-button[aria-label="停止当前执行"]')
+  const abortBtn = host.querySelector<HTMLButtonElement>('button.composer-abort-button[aria-label="Stop the current execution"]')
   assert.ok(abortBtn !== null, 'compacting 时空草稿应显示停止当前执行按钮')
 
   // 输入文本后出现插话/排队分流控件，Enter 发送 steer，⌘+Enter 发送 followUp
@@ -361,7 +361,7 @@ test('Composer：/compact <instructions> 转发 instructions，/compact 重复�
   assert.equal(captured[0]!.path, '/api/conversations/1/compact')
   assert.deepEqual(captured[0]!.body, { instructions: '保留测试与错误日志' })
   assert.equal(ta.value, '')
-  assert.ok(store.notices.some((n) => n.title === '精简任务已提交'))
+  assert.ok(store.notices.some((n) => n.title === 'Compaction submitted'))
 
   // 2) /compact + 仅空白：不带 instructions
   await act(async () => {
@@ -391,8 +391,8 @@ test('Composer：/compact <instructions> 转发 instructions，/compact 重复�
   assert.equal(captured.length, 2, 'compacting=true 时不得发送重复 /compact 或 /input 请求')
   assert.equal(ta.value, '', '草稿应被清空')
   assert.ok(
-    store.notices.some((n) => n.level === 'info' && n.title === '上下文精简正在进行中' && n.conversationId === 1),
-    '应推送「上下文精简正在进行中」info 通知',
+    store.notices.some((n) => n.level === 'info' && n.title === 'Context compaction in progress' && n.conversationId === 1),
+    '应推送「Context compaction in progress」info 通知',
   )
 })
 
@@ -458,17 +458,17 @@ test('ConversationPane：compacting=true 时菜单项禁用显示「正在精简
   })
 
   // 时间线也应渲染 pending compaction divider
-  assert.match(host.querySelector('.context-divider-label')?.textContent ?? '', /正在精简上下文…/)
+  assert.match(host.querySelector('.context-divider-label')?.textContent ?? '', /Compacting context…/)
 
   // 打开「更多会话操作」菜单
-  const menuBtn = document.querySelector<HTMLButtonElement>('.pane-more-menu button[aria-label="更多会话操作"]')
+  const menuBtn = document.querySelector<HTMLButtonElement>('.pane-more-menu button[aria-label="More conversation actions"]')
   assert.ok(menuBtn !== null)
   await act(async () => {
     menuBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
   })
 
   const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-  const compactItem = items.find((el) => el.textContent?.includes('正在精简上下文…'))
+  const compactItem = items.find((el) => el.textContent?.includes('Compacting context…'))
   assert.ok(compactItem !== undefined, '菜单项在 compacting=true 时应显示「正在精简上下文…」')
   assert.equal(compactItem.getAttribute('aria-disabled'), 'true', '菜单项在 compacting=true 时应禁用')
   assert.ok(compactItem.querySelector('svg.spin-slow') !== null, '菜单项应包含旋转 loader 图标')

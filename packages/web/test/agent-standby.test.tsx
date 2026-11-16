@@ -284,7 +284,7 @@ async function mount(hash: string): Promise<void> {
     () =>
       document.querySelector('.helm-shell') !== null &&
       document.querySelector('.connection-banner') === null &&
-      (state.profilesFail || !document.body.textContent?.includes('正在加载角色信息')),
+      (state.profilesFail || !document.body.textContent?.includes('Loading profile info')),
   )
   await flushMacrotask(0)
 }
@@ -314,7 +314,7 @@ function textarea(label: string): HTMLTextAreaElement {
   return el
 }
 
-const MAIN_LABEL = '向 个人助理 输入首条消息'
+const MAIN_LABEL = 'Type the first message to 个人助理'
 
 const typeInto = typeIntoControl
 
@@ -339,7 +339,7 @@ function clickButton(selector: string, container: ParentNode = document): void {
 test('深链待命页：渲染引导与输入区，全程无 POST create', { timeout: 60_000 }, async () => {
   await mount('#/a/assistant')
   assert.ok(document.querySelector('.agent-standby-pane'), '主舞台渲染待命页')
-  assert.ok(document.body.textContent?.includes('发送第一条消息开始新话题'), '展示开始新话题引导')
+  assert.ok(document.body.textContent?.includes('Send the first message to start a new topic'), '展示开始新话题引导')
   assert.ok(document.body.textContent?.includes('打个招呼'), '展示 starter')
   assert.ok(textarea(MAIN_LABEL), '渲染草稿输入区')
   assert.equal(state.createCalls.length, 0, '访问待命页不得预创建会话')
@@ -347,7 +347,7 @@ test('深链待命页：渲染引导与输入区，全程无 POST create', { tim
 
 test('Sidebar 新建入口：智能体行加号进入待命态，零会话待命智能体平铺且激活', { timeout: 60_000 }, async () => {
   await mount('#/c/1')
-  clickButton('button[title="在 个人助理 下开始新话题"]')
+  clickButton('button[title="Start a new topic under 个人助理"]')
   await settle()
   assert.equal(window.location.hash, '#/a/assistant', '加号进入待命态')
   assert.ok(document.querySelector('.agent-standby-pane'), '渲染待命页')
@@ -382,7 +382,7 @@ test('首发链路：Enter 创建会话并提交，双击去重，成功后 repl
     state.createGate = makeGate()
     await mount('#/a/assistant')
     const input = textarea(MAIN_LABEL)
-    act(() => { typeInto(input, '你好，开始新话题') })
+    act(() => { typeInto(input, '你好，Start new topic') })
     await act(async () => { pressEnter(input); pressEnter(input) })
     assert.equal(state.createCalls.length, 1, '双击 Enter 只触发一次 create（同步去重）')
     assert.deepEqual(state.createCalls[0], { profileId: 'assistant' }, '未定制环境与模型时不携带额外字段')
@@ -390,7 +390,7 @@ test('首发链路：Enter 创建会话并提交，双击去重，成功后 repl
     await waitForCondition(() => window.location.hash === '#/c/9' && document.body.textContent?.includes('会话 9') === true)
     assert.equal(state.submitCalls.length, 1, 'submitInput 恰好一次')
     assert.equal(state.submitCalls[0]!.id, 9)
-    assert.equal((state.submitCalls[0]!.body as { text?: string }).text, '你好，开始新话题')
+    assert.equal((state.submitCalls[0]!.body as { text?: string }).text, '你好，Start new topic')
     assert.equal((state.submitCalls[0]!.body as { origin?: string }).origin, 'human')
     assert.equal(window.location.hash, '#/c/9', '成功后导航到真实会话')
     assert.equal(replaces[replaces.length - 1], '#/c/9', 'draft->真实会话用 replace 不污染后退栈')
@@ -451,7 +451,7 @@ test('附件：发送前仅本地暂存不上传，首发时按 create -> 上传
   await act(async () => { dropFiles(box!, [file]) })
   await settle()
   assert.ok(document.body.textContent?.includes('note.txt'), '附件芯片展示')
-  assert.ok(document.body.textContent?.includes('待发送'), '本地暂存标记')
+  assert.ok(document.body.textContent?.includes('Pending'), '本地暂存标记')
   assert.equal(state.uploadCalls.length, 0, '发送前绝不上传（无真实会话）')
   assert.equal(state.createCalls.length, 0)
   act(() => { typeInto(input, '带附件') })
@@ -475,12 +475,12 @@ test('starter：空草稿回填，非空草稿不覆盖并提示', { timeout: 60
   await act(async () => { starterBtn!.click() })
   await settle()
   assert.equal(textarea(MAIN_LABEL).value, '我自己写的', '非空草稿不被 starter 覆盖')
-  assert.ok(document.body.textContent?.includes('请先处理当前草稿'), '给出显式提示')
+  assert.ok(document.body.textContent?.includes('Handle the current draft'), '给出显式提示')
 })
 
 test('URL 环境继承：待命目标携带远端节点与目录，create 如实携带', { timeout: 60_000 }, async () => {
   await mount(`#/a/assistant?node=remote-1&cwd=${encodeURIComponent('/remote/work')}`)
-  const cwdInput = document.querySelector<HTMLInputElement>('input[aria-label="新会话工作目录"]')
+  const cwdInput = document.querySelector<HTMLInputElement>('input[aria-label="New conversation working directory"]')
   assert.ok(cwdInput, '环境条进入定制模式')
   assert.equal(cwdInput!.value, '/remote/work')
   const input = textarea(MAIN_LABEL)
@@ -497,12 +497,12 @@ test('URL 环境继承：待命目标携带远端节点与目录，create 如实
 test('主/分屏草稿隔离：同一浏览器内两份待命草稿互不串扰', { timeout: 60_000 }, async () => {
   await mount('#/a/assistant?split=a/coder')
   const main = textarea(MAIN_LABEL)
-  const split = textarea('向 编码专员 输入首条消息')
+  const split = textarea('Type the first message to 编码专员')
   assert.ok(split, '分屏待命输入区存在')
   act(() => { typeInto(main, '主屏草稿') })
   await settle()
   assert.equal(textarea(MAIN_LABEL).value, '主屏草稿')
-  assert.equal(textarea('向 编码专员 输入首条消息').value, '', '分屏草稿不受主屏影响')
+  assert.equal(textarea('Type the first message to 编码专员').value, '', '分屏草稿不受主屏影响')
 })
 
 test('等待期切走目标：成功后不抢导航，改为通知告知新会话', { timeout: 60_000 }, async () => {
@@ -520,30 +520,30 @@ test('等待期切走目标：成功后不抢导航，改为通知告知新会�
   assert.equal(window.location.hash, '#/c/1')
   await act(async () => { state.createGate!.resolve() })
   await waitForCondition(
-    () => state.submitCalls.length === 1 && document.body.textContent?.includes('已发送并创建会话') === true,
+    () => state.submitCalls.length === 1 && document.body.textContent?.includes('Sent and conversation created') === true,
   )
   assert.equal(state.submitCalls.length, 1, '发送链路完成')
   assert.equal(window.location.hash, '#/c/1', '迟到的成功不覆盖新导航')
-  assert.ok(document.body.textContent?.includes('已发送并创建会话'), '给出可点击通知')
+  assert.ok(document.body.textContent?.includes('Sent and conversation created'), '给出可点击通知')
 })
 
 test('新话题按钮：进入待命态并继承远端环境，不预建会话', { timeout: 60_000 }, async () => {
   await mount('#/c/3')
-  clickButton('button[title="在当前智能体下开始新话题"]')
+  clickButton('button[title="Start a new topic under the current agent"]')
   await settle()
   assert.equal(window.location.hash, `#/a/assistant?node=remote-1&cwd=${encodeURIComponent('/remote/work')}`)
   assert.equal(state.createCalls.length, 0, '新话题不预建空会话')
-  const cwdInput = document.querySelector<HTMLInputElement>('input[aria-label="新会话工作目录"]')
+  const cwdInput = document.querySelector<HTMLInputElement>('input[aria-label="New conversation working directory"]')
   assert.equal(cwdInput?.value, '/remote/work', '待命环境条已继承远端目录')
 })
 
 test('不可用状态如实展示：人类不可选与插件停用角色', { timeout: 60_000 }, async () => {
   await mount('#/a/singleton')
-  assert.ok(document.body.textContent?.includes('该角色不支持手动新建对话'), '常驻单例给出显式不可用')
+  assert.ok(document.body.textContent?.includes('This profile does not support manual new conversations'), '常驻单例给出显式不可用')
   assert.equal(document.querySelectorAll('textarea').length, 0, '不渲染草稿输入区')
   await act(async () => { navigateHash('#/a/managed') })
   await waitForCondition(() => window.location.hash === '#/a/managed')
-  assert.ok(document.body.textContent?.includes('该角色不支持手动新建对话'), '插件停用托管的角色同样不可用')
+  assert.ok(document.body.textContent?.includes('This profile does not support manual new conversations'), '插件停用托管的角色同样不可用')
   assert.equal(state.createCalls.length, 0)
 })
 
@@ -557,9 +557,9 @@ test('资产未加载不误判不存在：显式加载中状态', { timeout: 60_
     root = createRoot(host!)
     root.render(e(App))
   })
-  await waitForCondition(() => document.body.textContent?.includes('正在加载角色信息') === true)
-  assert.ok(document.body.textContent?.includes('正在加载角色信息'), '加载中显式可见')
-  assert.ok(!document.body.textContent?.includes('不存在或已删除'), '不得误判不存在')
+  await waitForCondition(() => document.body.textContent?.includes('Loading profile info') === true)
+  assert.ok(document.body.textContent?.includes('Loading profile info'), '加载中显式可见')
+  assert.ok(!document.body.textContent?.includes('does not exist or was deleted'), '不得误判不存在')
   await act(async () => { state.assetsGate!.resolve() })
   await waitForCondition(() => document.querySelector(`textarea[aria-label="${MAIN_LABEL}"]`) !== null)
   assert.ok(textarea(MAIN_LABEL), '资产就绪后渲染输入区')
@@ -620,14 +620,14 @@ test('模型选择可恢复默认：显式选择后仍可点回跟随角色默�
   await act(async () => { clickButton('button.composer-model-button') })
   const popover2 = document.body.querySelector<HTMLElement>('.composer-model-popover')
   const resetBtn = [...popover2!.querySelectorAll<HTMLButtonElement>('button.popover-item')]
-    .find((btn) => btn.textContent?.includes('跟随角色默认'))
+    .find((btn) => btn.textContent?.includes('Follow profile default'))
   assert.ok(resetBtn, '恢复默认项存在')
   assert.equal(resetBtn!.disabled, false, '显式选择后仍可点回跟随默认')
   await act(async () => { resetBtn!.click() })
   await settle()
-  assert.ok(document.querySelector('button.composer-model-button')?.textContent?.includes('默认模型'))
+  assert.ok(document.querySelector('button.composer-model-button')?.textContent?.includes('Default model'))
   const input = textarea(MAIN_LABEL)
-  act(() => { typeInto(input, '默认模型发送') })
+  act(() => { typeInto(input, 'Default model发送') })
   await act(async () => { pressEnter(input) })
   await waitForCondition(() => state.createCalls.length === 1)
   assert.deepEqual(state.createCalls[0], { profileId: 'assistant' }, '恢复默认后 create 不携带 model')
@@ -703,7 +703,7 @@ test('侧栏无折叠钮且待命亮父行/进会话亮子行：点击智能体�
 
 test('真实会话 Composer /new：进入待命态并继承环境，不 reset 不 create', { timeout: 60_000 }, async () => {
   await mount('#/c/1')
-  const composerInput = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="输入消息"]')
+  const composerInput = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Type a message"]')
   assert.ok(composerInput, '会话输入区存在')
   act(() => { typeInto(composerInput!, '/new') })
   // 第一次 Enter 被斜杠浮层捕获回填 '/new'，第二次 Enter 提交管理命令
@@ -734,18 +734,18 @@ test('待命页管理命令：/new 清理草稿，/clear 提示需先创建会�
   assert.equal(state.createCalls.length, 0, '/clear 不创建会话')
   assert.equal(state.submitCalls.length, 0, '/clear 不作为普通输入发送')
   assert.equal(input.value, '/clear', '/clear 保留草稿待用户处理')
-  assert.ok(document.body.textContent?.includes('需要已有会话'), '显式提示需先创建会话')
+  assert.ok(document.body.textContent?.includes('requires an existing conversation'), '显式提示需先创建会话')
 })
 
 test('Profile 资产加载失败：显式错误与重试，不用完成信号伪装成功', { timeout: 60_000 }, async () => {
   state.profilesFail = true
   await mount('#/a/assistant')
-  assert.ok(document.body.textContent?.includes('角色信息加载失败'), '显示真实错误')
+  assert.ok(document.body.textContent?.includes('Profile info failed to load'), '显示真实错误')
   assert.ok(document.body.textContent?.includes('profiles down'), '携带错误详情')
-  assert.ok(!document.body.textContent?.includes('不存在或已删除'), '不得误判不存在')
+  assert.ok(!document.body.textContent?.includes('does not exist or was deleted'), '不得误判不存在')
   assert.equal(document.querySelectorAll('textarea').length, 0, '错误态不渲染输入区')
   const retry = [...document.querySelectorAll<HTMLButtonElement>('button')]
-    .find((btn) => btn.textContent?.trim() === '重试')
+    .find((btn) => btn.textContent?.trim() === 'Retry')
   assert.ok(retry, '提供重试按钮')
   state.profilesFail = false
   await act(async () => { retry!.click() })
@@ -795,25 +795,25 @@ test('在途首发切换同 Profile 其他环境：不抢导航不串草稿，�
   assert.equal(r2.value, '', 'r2 草稿不受 r1 在途任务影响')
   await act(async () => { state.createGate!.resolve() })
   await waitForCondition(
-    () => state.submitCalls.length === 1 && document.body.textContent?.includes('已发送并创建会话') === true,
+    () => state.submitCalls.length === 1 && document.body.textContent?.includes('Sent and conversation created') === true,
   )
   assert.equal(state.submitCalls.length, 1, 'r1 任务完成提交（用 r1 配置）')
   assert.deepEqual((state.createCalls[0] as { nodeId?: string }).nodeId, 'remote-1')
   assert.equal(window.location.hash, '#/a/assistant?node=remote-2&cwd=%2Fremote%2Fwork2', '不抢新导航')
-  assert.ok(document.body.textContent?.includes('已发送并创建会话'), '转后台通知')
+  assert.ok(document.body.textContent?.includes('Sent and conversation created'), '转后台通知')
 })
 
 test('恢复默认（无冲突）：正文随坐标转移到默认环境并移除 URL 继承参数', { timeout: 60_000 }, async () => {
   await mount(`#/a/assistant?node=remote-1&cwd=${encodeURIComponent('/remote/work')}`)
   act(() => { typeInto(textarea(MAIN_LABEL), '跟随正文') })
   const resetBtn = [...document.querySelectorAll<HTMLButtonElement>('button')]
-    .find((btn) => btn.textContent?.trim() === '恢复默认')
+    .find((btn) => btn.textContent?.trim() === 'Restore defaults')
   assert.ok(resetBtn, '恢复默认按钮存在（URL 坐标定制模式）')
   await act(async () => { resetBtn!.click() })
   await settle()
   assert.equal(window.location.hash, '#/a/assistant', '唯一导航移除继承环境参数，刷新不复活')
   assert.equal(textarea(MAIN_LABEL).value, '跟随正文', '正文随坐标转移')
-  assert.ok(document.body.textContent?.includes('执行环境跟随角色默认'), '环境回到默认态')
+  assert.ok(document.body.textContent?.includes('Execution environment follows the profile default'), '环境回到默认态')
 })
 
 test('恢复默认（目标已有草稿）：不覆盖已有草稿并显式告知，源草稿保留', { timeout: 60_000 }, async () => {
@@ -824,11 +824,11 @@ test('恢复默认（目标已有草稿）：不覆盖已有草稿并显式告�
   assert.equal(textarea(MAIN_LABEL).value, '', 'r1 坐标草稿独立')
   act(() => { typeInto(textarea(MAIN_LABEL), 'r1 正文') })
   const resetBtn = [...document.querySelectorAll<HTMLButtonElement>('button')]
-    .find((btn) => btn.textContent?.trim() === '恢复默认')
+    .find((btn) => btn.textContent?.trim() === 'Restore defaults')
   await act(async () => { resetBtn!.click() })
   await settle()
   assert.equal(window.location.hash, '#/a/assistant')
-  assert.ok(document.body.textContent?.includes('默认环境已有其他草稿'), '显式告知未覆盖')
+  assert.ok(document.body.textContent?.includes('The default environment already has another draft'), '显式告知未覆盖')
   assert.equal(textarea(MAIN_LABEL).value, '默认坐标已有草稿', '已有草稿不被无声覆盖')
   await act(async () => { navigateHash(`#/a/assistant?node=remote-1&cwd=${encodeURIComponent('/remote/work')}`) })
   await settle()
@@ -841,11 +841,11 @@ test('锚定后锁定创建配置：模型/环境不可改，横幅提示绑定�
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '首发锚定') })
   await act(async () => { pressEnter(input) })
-  await waitForCondition(() => document.body.textContent?.includes('已创建会话 #9') === true)
-  assert.ok(document.body.textContent?.includes('已创建会话 #9'), '锁定横幅可见')
+  await waitForCondition(() => document.body.textContent?.includes('Conversation #9 created') === true)
+  assert.ok(document.body.textContent?.includes('Conversation #9 created'), '锁定横幅可见')
   assert.equal(document.querySelector<HTMLButtonElement>('button.composer-model-button')?.disabled, true, '模型选择锁定')
   const customizeBtn = [...document.querySelectorAll<HTMLButtonElement>('button')]
-    .find((btn) => btn.textContent?.trim() === '自定义')
+    .find((btn) => btn.textContent?.trim() === 'Custom')
   assert.equal(customizeBtn?.disabled, true, '起始环境锁定')
   act(() => { typeInto(input, '（已修正）') })
   await act(async () => { pressEnter(input) })
@@ -871,7 +871,7 @@ test('logout 于 create 等待期：释放草稿并作废在途回包，不复�
   assert.equal(state.submitCalls.length, 0, '世代作废后不继续 submit')
   assert.equal(getStandbyDraft(key).conversationId, undefined, '回包不得写入锚点')
   assert.equal(getStandbyDraft(key).text, '', '回包不得复活正文')
-  assert.ok(!document.body.textContent?.includes('已发送并创建会话'), '不发通知')
+  assert.ok(!document.body.textContent?.includes('Sent and conversation created'), '不发通知')
 })
 
 test('logout 于 upload 等待期：不继续 submit、不复活附件；重登同坐标草稿为空', { timeout: 60_000 }, async () => {
@@ -907,7 +907,7 @@ test('伪 File 注入边界拒绝：普通对象不进草稿不渲染 chip，发
     fileInput!.dispatchEvent(new Event('change', { bubbles: true }))
   })
   await settle()
-  assert.ok(document.body.textContent?.includes('不支持的附件来源'), '录入边界显式拒绝并提示')
+  assert.ok(document.body.textContent?.includes('Unsupported attachment source'), '录入边界显式拒绝并提示')
   assert.equal(document.querySelectorAll('.attachment-chip').length, 0, '伪对象不渲染附件 chip')
   // 正常正文发送不受影响：不因伪附件中断
   const input = textarea(MAIN_LABEL)
@@ -1000,7 +1000,7 @@ test('草稿状态输入 /：弹出内置命令、按 Profile 过滤的技能与
   // 切换到 skills: [] 的 coder 待命页：浮层关闭且不展示任何技能
   await act(async () => { navigateHash('#/a/coder') })
   await settle()
-  const coderInput = textarea('向 编码专员 输入首条消息')
+  const coderInput = textarea('Type the first message to 编码专员')
   act(() => { typeInto(coderInput, '/') })
   await settle()
   const coderPopover = document.querySelector<HTMLElement>('.agent-standby-pane .composer-popover')
@@ -1091,7 +1091,7 @@ test('草稿状态插件斜杠命令：浮层选中即执行且关闭浮层，�
   await waitForCondition(() => state.actionCalls.length === 2)
   assert.equal(state.actionCalls.length, 2)
   assert.equal(input.value, '/ping', '插件命令失败保留原草稿')
-  assert.ok(document.body.textContent?.includes('命令执行失败：/ping'), '显式错误通知')
+  assert.ok(document.body.textContent?.includes('Command failed: /ping'), '显式错误通知')
   assert.equal(state.createCalls.length, 0)
 })
 
@@ -1220,7 +1220,7 @@ test('草稿状态输入 # / :：支持全局 doc 补全源并正常替换；ses
   await settle()
   const colonPopover = document.querySelector<HTMLElement>('.composer-completion-popover')
   assert.ok(colonPopover, 'sessionDoc 源弹出明确诊断浮层')
-  assert.match(colonPopover!.textContent ?? '', /需要已有会话/)
+  assert.match(colonPopover!.textContent ?? '', /requires an existing conversation/)
   await act(async () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
   })

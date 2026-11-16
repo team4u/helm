@@ -49,14 +49,14 @@ function render(live: ConversationLive): string {
 
 test('实时回复后跟排队胶囊时只显示一次响应等待，不给队列制造第二个模型回合', { timeout: 60_000 }, () => {
   const html = render({ conversationId: 1, text: '当前回复', tools: [], queuedInputs: [queued], updatedAt: 1 })
-  assert.equal((html.match(/aria-label="正在生成"/g) ?? []).length, 1)
+  assert.equal((html.match(/aria-label="Generating"/g) ?? []).length, 1)
   assert.doesNotMatch(html, /正在等待响应…/)
-  assert.match(html, /撤回排队并编辑/)
+  assert.match(html, /Withdraw queue and edit/)
 })
 
 test('只有排队项尚无正文时仍显示一次执行等待', { timeout: 60_000 }, () => {
   const html = render({ conversationId: 1, text: '', tools: [], queuedInputs: [queued], updatedAt: 1 })
-  assert.equal((html.match(/aria-label="正在生成"/g) ?? []).length, 1)
+  assert.equal((html.match(/aria-label="Generating"/g) ?? []).length, 1)
   assert.doesNotMatch(html, /正在等待响应…/)
 })
 

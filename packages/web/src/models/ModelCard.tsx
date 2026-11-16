@@ -52,9 +52,9 @@ export function ModelCard({
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
       aria-selected={selected}
-      aria-label={`${provider.name} 供应商卡片`}
+      aria-label={`${provider.name} provider card`}
     >
-      {/* 头部：名称、状态徽章、ID 靠左对齐 */}
+      {/* Header: name, status badge, ID left-aligned */}
       <div className="primary-card-header">
         <div className="primary-card-meta">
           <div className="primary-card-title-row">
@@ -62,23 +62,23 @@ export function ModelCard({
               {provider.name}
             </span>
             {provider.configured ? (
-              <span className="badge badge-ok">已配置</span>
+              <span className="badge badge-ok">Configured</span>
             ) : (
-              <span className="badge badge-neutral">未配置</span>
+              <span className="badge badge-neutral">Not configured</span>
             )}
-            {provider.dynamic && <span className="badge badge-neutral">动态</span>}
-            {provider.custom && <span className="badge badge-neutral">自定义</span>}
+            {provider.dynamic && <span className="badge badge-neutral">Dynamic</span>}
+            {provider.custom && <span className="badge badge-neutral">Custom</span>}
           </div>
           <span className="text-subtle mono break-word">{provider.id}</span>
         </div>
       </div>
 
-      {/* 中部：描述 */}
+      {/* Middle: description */}
       <div className="primary-card-desc">
-        {provider.description || '支持标准接口调用的大语言模型供应商。'}
+        {provider.description || 'LLM provider with standard API access.'}
       </div>
 
-      {/* 已配置供应商展示前 3 个可用模型短名预览 + 剩余数 */}
+      {/* Configured providers show the first 3 available model names plus the remaining count */}
       {previewNames.length > 0 && (
         <div className="primary-card-pills">
           {previewNames.map((name) => (
@@ -89,7 +89,7 @@ export function ModelCard({
           {remainingCount > 0 && (
             <span
               className="primary-card-pill tabular-nums"
-              title={`另有 ${remainingCount} 个可用模型`}
+              title={`${remainingCount} more models available`}
             >
               +{remainingCount}
             </span>
@@ -97,10 +97,10 @@ export function ModelCard({
         </div>
       )}
 
-      {/* 底部：可用模型数量 */}
+      {/* Bottom: available model count */}
       <div className="primary-card-footer">
         <span className="badge badge-neutral mono tabular-nums">
-          {provider.modelsCount} 个模型可用
+          {provider.modelsCount} models available
         </span>
       </div>
     </div>

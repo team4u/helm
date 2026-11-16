@@ -18,10 +18,10 @@ export type NodeIdValidation = { ok: true; nodeId: string } | { ok: false; error
 /** 校验接入节点 ID 输入：trim、保留字与字符集规则。 */
 export function validateNodeIdInput(raw: string): NodeIdValidation {
   const nodeId = raw.trim()
-  if (nodeId === '') return { ok: false, error: '请输入节点 ID' }
-  if (nodeId === 'local') return { ok: false, error: 'local 是内建本机节点，无需签发接入令牌' }
+  if (nodeId === '') return { ok: false, error: 'Enter a node ID' }
+  if (nodeId === 'local') return { ok: false, error: 'local is the built-in local node; no access token needed' }
   if (!NODE_ID_PATTERN.test(nodeId)) {
-    return { ok: false, error: '节点 ID 需以字母或数字开头，仅含字母、数字、. _ -，最长 128 字符' }
+    return { ok: false, error: 'Node ID must start with a letter or digit and contain only letters, digits and . _ - (max 128 characters)' }
   }
   return { ok: true, nodeId }
 }
@@ -62,9 +62,9 @@ export function formatUptime(uptimeSec: number | undefined): string {
   const hours = Math.floor((totalMin % 1440) / 60)
   const minutes = totalMin % 60
   const parts: string[] = []
-  if (days > 0) parts.push(`${days} 天`)
-  if (hours > 0) parts.push(`${hours} 小时`)
-  if (parts.length < 2) parts.push(`${minutes} 分钟`)
+  if (days > 0) parts.push(`${days}d`)
+  if (hours > 0) parts.push(`${hours}h`)
+  if (parts.length < 2) parts.push(`${minutes}m`)
   return parts.join(' ')
 }
 
@@ -77,8 +77,8 @@ export interface NodeUsageInfo {
 
 /** 会话/选择器展示用的节点选项文案：id + 本机/离线标注。 */
 export function nodeOptionLabel(node: NodeInfo): string {
-  if (node.kind === 'local') return `${node.id} (本机)`
-  return node.online ? node.id : `${node.id} (离线)`
+  if (node.kind === 'local') return `${node.id} (local)`
+  return node.online ? node.id : `${node.id} (offline)`
 }
 
 /** 节点版本展示：确保带 v 前缀（'0.1.0' -> 'v0.1.0'）；空或空白返回 null。 */
@@ -180,19 +180,19 @@ export function canConfirmNodeUpgrade(input: {
   targetVersion: string
   force: boolean
 }): NodeUpgradeConfirmability {
-  if (!input.online) return { ok: false, hint: '节点已离线，无法升级' }
+  if (!input.online) return { ok: false, hint: 'Node is offline; cannot upgrade' }
   const explicit = input.targetVersion.trim()
   if (explicit !== '' && parseNodeSemver(explicit) === null) {
-    return { ok: false, hint: '目标版本不是合法 SemVer（示例 0.2.0）' }
+    return { ok: false, hint: 'Target version is not valid SemVer (e.g. 0.2.0)' }
   }
   if (input.check === null) {
     return explicit === ''
-      ? { ok: false, hint: '请先检查更新，或填写明确的目标版本' }
+      ? { ok: false, hint: 'Check for updates first, or enter an explicit target version' }
       : { ok: true, hint: null }
   }
   if (input.check.updateAvailable) return { ok: true, hint: null }
   if (explicit === '' && !input.force) {
-    return { ok: false, hint: '当前已是最新版本；可勾选强制重装/重试，或填写目标版本' }
+    return { ok: false, hint: 'Already up to date; tick force reinstall/retry or enter a target version' }
   }
   return { ok: true, hint: null }
 }

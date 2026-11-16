@@ -14,15 +14,15 @@ export interface CloseSplitButtonProps {
  */
 export function CloseSplitButton({
   onCloseSplit,
-  label = '关闭分屏',
+  label = 'Close split view',
 }: CloseSplitButtonProps): React.JSX.Element {
   return (
-    <Tooltip content="关闭本分屏" side="bottom">
+    <Tooltip content="Close this split view" side="bottom">
       <button
         type="button"
         className="btn btn-sm btn-ghost split-close-btn"
         aria-label={label}
-        title="关闭本分屏"
+        title="Close this split view"
         onClick={onCloseSplit}
       >
         <HelmIcon name="x" size={13} />
@@ -47,12 +47,12 @@ export function SplitToggleButton({
   onToggleSplit,
 }: SplitToggleButtonProps): React.JSX.Element {
   return (
-    <Tooltip content={isSplitActive ? '关闭分屏' : '并排分屏'} side="bottom">
+    <Tooltip content={isSplitActive ? 'Close split view' : 'Side-by-side split'} side="bottom">
       <button
         type="button"
         className={`btn btn-sm split-toggle-btn${isSplitActive ? ' btn-primary split-active' : ''}`}
-        aria-label={isSplitActive ? '关闭分屏' : '并排分屏'}
-        title="在右屏并排打开 / 关闭分屏"
+        aria-label={isSplitActive ? 'Close split view' : 'Side-by-side split'}
+        title="Open / close the split view on the right"
         onClick={onToggleSplit}
       >
         <HelmIcon name="columns" size={12} />

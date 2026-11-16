@@ -20,13 +20,13 @@ export type EditToolResultCheck =
 /** 与内核复用同一校验器，避免展示层悄悄接受不同的 Schema 语义。 */
 export function checkEditToolResult(structuredOutput: unknown): EditToolResultCheck {
   if (structuredOutput === undefined || structuredOutput === null) {
-    return { ok: false, reason: 'toolResult 消息缺少 details（工具未声明 schema 或旧数据未落库）' }
+    return { ok: false, reason: 'toolResult message missing details (tool declares no schema or legacy data never stored it)' }
   }
   try {
-    validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, structuredOutput, 'edit 差异结果无效')
+    validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, structuredOutput, 'Invalid edit diff result')
     const value = structuredOutput as EditToolResult
     if (value.diff.rows.reduce((sum, row) => sum + row.text.length, 0) > TOOL_DIFF_MAX_TEXT_CHARS) {
-      return { ok: false, reason: '差异文本超过展示预算' }
+      return { ok: false, reason: 'Diff text exceeds the display budget' }
     }
     return { ok: true, value }
   } catch (error) {
@@ -110,11 +110,11 @@ export function buildPendingEditDiff(input: unknown): PendingEditDiff | undefine
   const { oldText, newText } = editInputTexts(input)
   if (oldText === undefined || newText === undefined) return undefined
   if (oldText.length > PENDING_DIFF_MAX_INPUT_CHARS || newText.length > PENDING_DIFF_MAX_INPUT_CHARS) {
-    return { kind: 'skipped', reason: `oldText/newText 超过 ${PENDING_DIFF_MAX_INPUT_CHARS} 字符预算` }
+    return { kind: 'skipped', reason: `oldText/newText exceeds the ${PENDING_DIFF_MAX_INPUT_CHARS} character budget` }
   }
   try {
     const changes = diffLines(oldText, newText, { maxEditLength: PENDING_DIFF_MAX_EDIT_LENGTH, timeout: 100 })
-    if (changes === undefined) return { kind: 'skipped', reason: '差异计算超出时间或编辑距离预算' }
+    if (changes === undefined) return { kind: 'skipped', reason: 'Diff computation exceeded the time or edit distance budget' }
     const rows: PendingDiffRow[] = []
     let addedLines = 0
     let removedLines = 0
@@ -133,7 +133,7 @@ export function buildPendingEditDiff(input: unknown): PendingEditDiff | undefine
     })
     return { kind: 'computed', rows, addedLines, removedLines, truncated: totalRows > rows.length }
   } catch {
-    return { kind: 'skipped', reason: '差异计算异常' }
+    return { kind: 'skipped', reason: 'Diff computation failed' }
   }
 }
 

@@ -69,7 +69,7 @@ export function NodeCard({
       onKeyDown={handleKeyDown}
       data-node-id={node.id}
     >
-      {/* 头部：指示灯、节点图标、节点名称、ID */}
+      {/* Header: status light, node icon, node name, ID */}
       <div className="primary-card-header">
         <div className="primary-card-icon-wrap">
           <HelmIcon name={iconName} size={18} />
@@ -78,19 +78,19 @@ export function NodeCard({
           <div className="primary-card-title-row">
             <span
               className={`status-dot ${isOnline ? 'status-dot-done status-dot-working' : ''}`}
-              title={isOnline ? '节点在线运行中' : '节点离线'}
-              aria-label={isOnline ? '在线' : '离线'}
+              title={isOnline ? 'Node online and running' : 'Node offline'}
+              aria-label={isOnline ? 'Online' : 'Offline'}
             />
             <span className="primary-card-name" title={displayName}>
               {displayName}
             </span>
             {isLocal && (
-              <span className="badge badge-neutral" title="微内核本机节点">
-                本机
+              <span className="badge badge-neutral" title="Microkernel local node">
+                Local
               </span>
             )}
             {version && (
-              <span className="badge badge-neutral mono" title={`版本 ${version}`}>
+              <span className="badge badge-neutral mono" title={`Version ${version}`}>
                 {version}
               </span>
             )}
@@ -101,30 +101,30 @@ export function NodeCard({
         </div>
       </div>
 
-      {/* 中部：平台架构、版本与运行概览 */}
+      {/* Middle: platform, architecture and runtime overview */}
       <div className="flex-row-wrap">
         {platformArch !== '--' && (
-          <span className="badge badge-neutral mono" title="平台与架构">
+          <span className="badge badge-neutral mono" title="Platform and architecture">
             {platformArch}
           </span>
         )}
         {node.hostname && (
-          <span className="mono text-subtle break-word" title={`主机名: ${node.hostname}`}>
+          <span className="mono text-subtle break-word" title={`Hostname: ${node.hostname}`}>
             {node.hostname}
           </span>
         )}
         {uptime !== '--' && (
-          <span className="text-subtle" title={`运行时长: ${uptime}`}>
+          <span className="text-subtle" title={`Uptime: ${uptime}`}>
             {uptime}
           </span>
         )}
       </div>
 
-      {/* 底部：心跳/连接状态 + 支持能力胶囊标签 */}
+      {/* Bottom: heartbeat/connection status + capability pills */}
       <div className="primary-card-footer">
         <div className="primary-card-pills">
           {tools.slice(0, 4).map((tool) => (
-            <span key={tool} className="primary-card-pill mono" title={`工具能力: ${tool}`}>
+            <span key={tool} className="primary-card-pill mono" title={`Tool: ${tool}`}>
               <HelmIcon name="terminal" size={10} />
               <span>{tool}</span>
             </span>
@@ -132,7 +132,7 @@ export function NodeCard({
           {tools.length > 4 && (
             <span
               className="primary-card-pill text-subtle tabular-nums"
-              title={`另有 ${tools.length - 4} 项工具能力`}
+              title={`${tools.length - 4} more tools`}
             >
               +{tools.length - 4}
             </span>
@@ -141,7 +141,7 @@ export function NodeCard({
 
         <div className="flex-row">
           <span className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'}`}>
-            {isOnline ? '在线' : '离线'}
+            {isOnline ? 'Online' : 'Offline'}
           </span>
         </div>
       </div>

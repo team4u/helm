@@ -120,8 +120,8 @@ export function ProfileCenter({
     store.pushNotice({
       type: 'notification',
       level: 'info',
-      title: '角色已保存',
-      body: `${saved.name || saved.id} 配置已更新`,
+      title: 'Profile saved',
+      body: `${saved.name || saved.id} configuration updated`,
     })
     openCenterTarget(saved.id)
   }
@@ -132,8 +132,8 @@ export function ProfileCenter({
     store.pushNotice({
       type: 'notification',
       level: 'info',
-      title: '角色已删除',
-      body: `角色 ${deletedId} 已彻底删除`,
+      title: 'Profile deleted',
+      body: `Profile ${deletedId} permanently deleted`,
     })
     openCenterTarget(undefined)
   }
@@ -160,12 +160,12 @@ export function ProfileCenter({
       className={`primary-center${isSplit ? ' is-split' : ''}`}
       data-view="profile-center"
     >
-      {/* 顶栏：标题与操作 */}
+      {/* Top bar: title and actions */}
       <div className="primary-center-topbar pane-topbar">
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
             <HelmIcon name="bot" size={14} />
-            <span>智能体角色中心</span>
+            <span>Agent Profile Center</span>
           </div>
         </div>
 
@@ -176,7 +176,7 @@ export function ProfileCenter({
             onClick={handleCreateNew}
           >
             <HelmIcon name="plus" size={12} />
-            <span className="pane-action-label">新建角色</span>
+            <span className="pane-action-label">New profile</span>
           </button>
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
@@ -189,23 +189,23 @@ export function ProfileCenter({
         </div>
       </div>
 
-      {/* 工具栏：检索与分类标签 */}
+      {/* Toolbar: search and category tabs */}
       <div className="primary-center-toolbar">
         <div className="primary-search-box">
           <HelmIcon name="search" size={14} />
           <input
             type="text"
-            placeholder="搜索角色名称、ID、模型、标签或技能…"
+            placeholder="Search profile name, ID, model, tags or skills…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="搜索角色"
+            aria-label="Search profiles"
           />
           {query && (
             <button
               type="button"
               className="btn btn-ghost btn-sm primary-search-clear"
-              title="清空搜索"
-              aria-label="清空搜索"
+              title="Clear search"
+              aria-label="Clear search"
               onClick={() => setQuery('')}
             >
               <HelmIcon name="x" size={12} />
@@ -216,7 +216,7 @@ export function ProfileCenter({
         <div
           className="primary-category-pills"
           role="tablist"
-          aria-label="角色分类筛选"
+          aria-label="Filter by profile category"
         >
           {PROFILE_CATEGORY_TABS.map((tab) => {
             const count = categoryCounts[tab.key] ?? 0
@@ -238,7 +238,7 @@ export function ProfileCenter({
         </div>
       </div>
 
-      {/* 主视口：自适应响应式卡片网格或空状态 */}
+      {/* Main viewport: responsive card grid or empty state */}
       <div className="primary-center-content">
         {filteredProfiles.length > 0 ? (
           <div className="primary-center-grid">
@@ -257,9 +257,9 @@ export function ProfileCenter({
             <div className="primary-center-empty-icon">
               <HelmIcon name="search" size={28} />
             </div>
-            <div className="primary-center-empty-text">未找到匹配的角色</div>
+            <div className="primary-center-empty-text">No matching profiles</div>
             <div className="primary-center-empty-hint">
-              请尝试调整搜索关键字或切换分类标签。
+              Try adjusting the search keywords or switching category tabs.
             </div>
             {(query || activeTab !== 'all') && (
               <button
@@ -268,14 +268,14 @@ export function ProfileCenter({
                 onClick={handleResetFilters}
               >
                 <HelmIcon name="rotate-ccw" size={12} />
-                <span>重置筛选条件</span>
+                <span>Reset filters</span>
               </button>
             )}
           </div>
         )}
       </div>
 
-      {/* 540px 右侧滑出式详情与编辑抽屉 */}
+      {/* 540px right slide-over detail and edit drawer */}
       <ProfileDetailDrawer
         profile={selectedProfile}
         isNew={isCreatingNew || selectedProfileId === 'new'}

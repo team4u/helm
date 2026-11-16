@@ -66,7 +66,7 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
   const store = useHelmStore()
   const [media, setMedia] = useState<{ url: string; mime: string } | null>(null)
   const [loading, setLoading] = useState(true)
-  const label = alt || title || '产物'
+  const label = alt || title || 'Artifacts'
 
   const openPreview = () => {
     store.setActiveModal({
@@ -117,7 +117,7 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
         <button
           type="button"
           className="attachment-image-thumb"
-          title={`点击放大：${label}`}
+          title={`Click to enlarge: ${label}`}
           onClick={openPreview}
         >
           <img src={media.url} alt={label} loading="lazy" />
@@ -142,7 +142,7 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
     <button
       type="button"
       className="attachment-chip"
-      title={`点击预览：${label}`}
+      title={`Click to preview: ${label}`}
       onClick={openPreview}
     >
       <HelmIcon name="file-text" size={11} />
@@ -199,7 +199,7 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId, s
           <button
             type="button"
             className="attachment-chip"
-            title="点击预览产物"
+            title="Click to preview artifact"
             onClick={() =>
               setActiveModal({
                 kind: 'artifact-preview',

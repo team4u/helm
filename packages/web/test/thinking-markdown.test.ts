@@ -29,7 +29,7 @@ test('消息正文与气泡宽度样式契约：AI 正文段落与列表解除 7
 })
 
 test('ThinkingRow 组件渲染：展开时使用 MarkdownView 渲染标题与列表并具备 thinking-expanded-body 类', { timeout: 60_000 }, () => {
-  const markdownText = '# 深度思考\n\n- 步骤一\n- 步骤二'
+  const markdownText = '# Deep thinking\n\n- 步骤一\n- 步骤二'
   const html = renderToString(
     e(
       HostStoreProviders,
@@ -42,7 +42,7 @@ test('ThinkingRow 组件渲染：展开时使用 MarkdownView 渲染标题与列
   assert.match(html, /trace-expanded-body[^"]*thinking-expanded-body/)
 
   // 2. 验证 Markdown 格式被解析渲染（包含 h1 和 li 标签，而不是裸 pre/code）
-  assert.match(html, /<h1[^>]*>深度思考<\/h1>/)
+  assert.match(html, /<h1[^>]*>Deep thinking<\/h1>/)
   assert.match(html, /<li>步骤一<\/li>/)
   assert.match(html, /<li>步骤二<\/li>/)
   assert.doesNotMatch(html, /code-block-pre-flush/)
@@ -59,9 +59,9 @@ test('思考过程折叠契约：非进行中（思考结束或历史会话）�
   )
 
   // 1. 验证默认展示收起摘要按钮「思考过程」与右箭头
-  assert.match(html, /思考过程/)
-  assert.match(html, /title="展开思考过程"/)
-  assert.doesNotMatch(html, /正在思考…/)
+  assert.match(html, /Thinking/)
+  assert.match(html, /title="Expand thinking"/)
+  assert.doesNotMatch(html, /Thinking…/)
 
   // 2. 验证思考正文未展开（自动折叠）
   assert.doesNotMatch(html, /thinking-expanded-body/)
@@ -78,10 +78,10 @@ test('思考进行中契约：active=true 时默认展开并展示转圈 loader 
     ),
   )
 
-  assert.match(html, /正在思考…/)
+  assert.match(html, /Thinking…/)
   assert.match(html, /spin-slow/)
   assert.match(html, /thinking-expanded-body/)
-  assert.match(html, /title="收起思考过程"/)
+  assert.match(html, /title="Collapse thinking"/)
 })
 
 test('响应与等待态：使用 spinner 转圈指示器，不带「正在等待响应…」文本', { timeout: 60_000 }, () => {
@@ -115,7 +115,7 @@ test('响应与等待态：使用 spinner 转圈指示器，不带「正在等�
     ),
   )
 
-  assert.match(html, /aria-label="正在生成"/)
+  assert.match(html, /aria-label="Generating"/)
   assert.match(html, /spin-slow/)
   assert.doesNotMatch(html, /正在等待响应…/)
 })
@@ -147,14 +147,14 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
       e(ConversationTimeline, {
         conversation: convWorking,
         detailEntries: [],
-        live: { conversationId: 1, text: '', thinking: '正在深度思考方案…', tools: [], updatedAt: 1 },
+        live: { conversationId: 1, text: '', thinking: '正在Deep thinking方案…', tools: [], updatedAt: 1 },
         onRequestEdit: () => {},
       }),
     ),
   )
-  assert.match(htmlThinking, /正在思考…/)
+  assert.match(htmlThinking, /Thinking…/)
   assert.match(htmlThinking, /thinking-expanded-body/)
-  assert.match(htmlThinking, /正在深度思考方案…/)
+  assert.match(htmlThinking, /正在Deep thinking方案…/)
   // 仅单思考步骤时不显示多余嵌套的「思考与执行过程 (1 步)」
   assert.doesNotMatch(htmlThinking, /思考与执行过程/)
 
@@ -166,16 +166,16 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
       e(ConversationTimeline, {
         conversation: convWorking,
         detailEntries: [],
-        live: { conversationId: 1, text: '这是最终生成的回复内容', thinking: '正在深度思考方案…', tools: [], updatedAt: 2 },
+        live: { conversationId: 1, text: '这是最终生成的回复内容', thinking: '正在Deep thinking方案…', tools: [], updatedAt: 2 },
         onRequestEdit: () => {},
       }),
     ),
   )
-  assert.match(htmlTextStreaming, /思考过程/)
+  assert.match(htmlTextStreaming, /Thinking/)
   assert.match(htmlTextStreaming, /这是最终生成的回复内容/)
   // 思考已完，自动折叠正文
   assert.doesNotMatch(htmlTextStreaming, /thinking-expanded-body/)
-  assert.doesNotMatch(htmlTextStreaming, /正在思考…/)
+  assert.doesNotMatch(htmlTextStreaming, /Thinking…/)
 
   // 3. 回合结算落库后（历史会话）：思考过程默认保持折叠
   const convSettled: ConversationSummary = { ...convWorking, status: 'idle' }
@@ -206,7 +206,7 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
       }),
     ),
   )
-  assert.match(htmlSettled, /思考过程/)
+  assert.match(htmlSettled, /Thinking/)
   assert.match(htmlSettled, /历史正文/)
   // 历史思考默认折叠
   assert.doesNotMatch(htmlSettled, /thinking-expanded-body/)

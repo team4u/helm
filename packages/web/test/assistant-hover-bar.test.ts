@@ -223,7 +223,7 @@ test('ConversationTimeline：agent 回合响应中不显示复制与分叉按钮
   )
 
   // 人类输入有自己的操作按钮，但 AI 回复块中绝对不得出现分叉与复制按钮
-  assert.doesNotMatch(htmlDuring, /从此处分叉新会话/)
+  assert.doesNotMatch(htmlDuring, /Fork a new conversation from here/)
 
   // 2. 响应彻底完成（idle，live 消除）：展示「从此处分叉新会话」与复制按钮
   const convIdle: ConversationSummary = { ...convWorking, status: 'idle' }
@@ -239,5 +239,5 @@ test('ConversationTimeline：agent 回合响应中不显示复制与分叉按钮
     ),
   )
 
-  assert.match(htmlSettled, /从此处分叉新会话/)
+  assert.match(htmlSettled, /Fork a new conversation from here/)
 })

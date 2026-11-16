@@ -45,7 +45,7 @@ export function SyntaxCode({ code, language }: { code: string; language: string 
     }
   }, [highlighter, language, code])
   return <>
-    {error && <span className="code-highlight-error">语法高亮加载失败，以下显示完整源码。</span>}
+    {error && <span className="code-highlight-error">Syntax highlighting failed to load; full source shown below.</span>}
     <pre className="code-block-pre selectable">
       {html !== null
         ? <code dangerouslySetInnerHTML={{ __html: html }} />

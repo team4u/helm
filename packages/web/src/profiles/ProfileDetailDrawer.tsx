@@ -213,17 +213,17 @@ export function ProfileDetailDrawer({
   // 默认节点下拉选项：未绑定项 + store.nodes 全量；既有值不在节点列表时补「未知节点」回退项
   const nodeOptions = useMemo<SelectOption<string>[]>(() => {
     const list: SelectOption<string>[] = [
-      { value: '', label: '未绑定（本机 local）', icon: 'monitor' },
+      { value: '', label: 'Unbound (local node)', icon: 'monitor' },
       ...store.nodes.map((n) => ({
         value: n.id,
         label: nodeOptionLabel(n),
         icon: n.id === 'local' || n.kind === 'local' ? 'monitor' : 'network',
-        meta: n.kind === 'local' ? undefined : n.online ? '在线' : '离线',
+        meta: n.kind === 'local' ? undefined : n.online ? 'Online' : 'Offline',
       })),
     ]
     const current = form.nodeId.trim()
     if (current !== '' && !list.some((o) => o.value === current)) {
-      list.push({ value: current, label: `${current}（未知节点）`, icon: 'alert-circle' })
+      list.push({ value: current, label: `${current} (unknown node)`, icon: 'alert-circle' })
     }
     return list
   }, [store.nodes, form.nodeId])
@@ -259,18 +259,18 @@ export function ProfileDetailDrawer({
     setError(null)
     const normalizedId = form.id.trim()
     if (!normalizedId) {
-      setError('请输入角色 ID')
+      setError('Enter a profile ID')
       return
     }
 
     if (isNew && !profileIdValid(normalizedId)) {
-      setError('角色 ID 必须由小写字母、数字和连字符组成（例如 code-reviewer）')
+      setError('Profile ID must contain only lowercase letters, digits and hyphens (e.g. code-reviewer)')
       return
     }
 
     const starterError = validateStarterDrafts(form.starters)
     if (starterError !== null) {
-      setError(`引导词 ${starterError.index + 1}：${starterError.error}`)
+      setError(`Starter ${starterError.index + 1}: ${starterError.error}`)
       return
     }
 
@@ -339,8 +339,8 @@ export function ProfileDetailDrawer({
   }
 
   const titleText = isNew
-    ? '新建智能体角色'
-    : form.name || form.id || profile?.name || profile?.id || '角色详情'
+    ? 'New agent profile'
+    : form.name || form.id || profile?.name || profile?.id || 'Profile details'
 
   return (
     <Dialog
@@ -357,7 +357,7 @@ export function ProfileDetailDrawer({
           role="dialog"
           aria-label={titleText}
         >
-          {/* 抽屉头部 */}
+          {/* Drawer header */}
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">
               <div className="primary-drawer-title-col">
@@ -366,9 +366,9 @@ export function ProfileDetailDrawer({
                     {titleText}
                   </DialogTitle>
                   {isSystem && (
-                    <span className="badge badge-warn" title="系统内置角色，受保护">
+                    <span className="badge badge-warn" title="Built-in system profile; protected">
                       <HelmIcon name="lock" size={10} />
-                      <span>系统</span>
+                      <span>System</span>
                     </span>
                   )}
                 </div>
@@ -381,8 +381,8 @@ export function ProfileDetailDrawer({
               <button
                 type="button"
                 className="btn btn-ghost btn-icon-sm"
-                aria-label="关闭抽屉"
-                title="关闭"
+                aria-label="Close drawer"
+                title="Close"
                 onClick={handleRequestClose}
               >
                 <HelmIcon name="x" size={14} />
@@ -390,7 +390,7 @@ export function ProfileDetailDrawer({
             </DialogClose>
           </div>
 
-          {/* 抽屉主体：表单各区块 */}
+          {/* Drawer body: form sections */}
           <div className="primary-drawer-body">
             {error && (
               <div className="callout callout-error" role="alert">
@@ -399,11 +399,11 @@ export function ProfileDetailDrawer({
               </div>
             )}
 
-            {/* 基本字段区块 */}
+            {/* Basic fields */}
             <section className="section-flat">
               <div className="form-grid">
                 <label htmlFor="profile-form-id" className="form-grid-label">
-                  角色 ID
+                  Profile ID
                 </label>
                 <div className="form-grid-value">
                   {isNew ? (
@@ -411,7 +411,7 @@ export function ProfileDetailDrawer({
                       id="profile-form-id"
                       type="text"
                       className="input mono"
-                      placeholder="字母、数字与连字符，如 code-reviewer"
+                      placeholder="Letters, digits and hyphens, e.g. code-reviewer"
                       value={form.id}
                       onChange={(e) =>
                         setForm((prev) => ({
@@ -433,14 +433,14 @@ export function ProfileDetailDrawer({
                 </div>
 
                 <label htmlFor="profile-form-name" className="form-grid-label">
-                  角色名称
+                  Profile name
                 </label>
                 <div className="form-grid-value">
                   <input
                     id="profile-form-name"
                     type="text"
                     className="input"
-                    placeholder="例如：代码评审员、技术架构师"
+                    placeholder="e.g. Code Reviewer, Software Architect"
                     value={form.name}
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, name: e.target.value }))
@@ -452,14 +452,14 @@ export function ProfileDetailDrawer({
                   htmlFor="profile-form-desc"
                   className="form-grid-label form-grid-align-start"
                 >
-                  角色描述
+                  Profile description
                 </label>
                 <div className="form-grid-value">
                   <textarea
                     id="profile-form-desc"
                     className="input profile-desc-textarea"
                     rows={3}
-                    placeholder="简要描述该角色的职责、背景与能力专长..."
+                    placeholder="Briefly describe the duties, background and strengths of this profile..."
                     value={form.description}
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, description: e.target.value }))
@@ -468,7 +468,7 @@ export function ProfileDetailDrawer({
                 </div>
 
                 <label htmlFor="profile-form-model" className="form-grid-label">
-                  默认模型
+                  Default model
                 </label>
                 <div className="form-grid-value">
                   <Select
@@ -491,17 +491,17 @@ export function ProfileDetailDrawer({
                       })
                     }
                     inline={inline}
-                    placeholder="跟随系统默认"
+                    placeholder="Follow system default"
                   />
                 </div>
 
                 <label className="form-grid-label form-grid-align-start" htmlFor="profile-form-thinking">
-                  思考档位
+                  Thinking level
                 </label>
                 <div className="form-grid-value">
                   {form.model.trim() === '' ? (
                     <span className="text-subtle" id="profile-form-thinking">
-                      未绑定模型时跟随全局缺省思考档位。
+                      Follows the global default thinking level when no model is bound.
                     </span>
                   ) : profileThinkingSupported ? (
                     <ThinkingLevelControl
@@ -515,21 +515,21 @@ export function ProfileDetailDrawer({
                     />
                   ) : (
                     <span className="text-subtle" id="profile-form-thinking">
-                      所选模型不支持思考档位。
+                      The selected model does not support thinking levels.
                     </span>
                   )}
                   {profileThinkingLevelUnsupported && (
                     <div className="callout callout-warn" role="status">
                       <HelmIcon name="alert-triangle" size={13} />
                       <span className="callout-text">
-                        当前档位 {form.thinkingLevel} 不在所选模型支持列表，保存前请调整。
+                        Current level {form.thinkingLevel} is not supported by the selected model; adjust before saving.
                       </span>
                     </div>
                   )}
                 </div>
 
                 <label htmlFor="profile-form-node" className="form-grid-label">
-                  默认节点
+                  Default node
                 </label>
                 <div className="form-grid-value">
                   <Select
@@ -539,7 +539,7 @@ export function ProfileDetailDrawer({
                     popoverClassName="helm-select-popover-wide"
                     className="w-full mono"
                     inline={inline}
-                    placeholder="未绑定（本机 local）"
+                    placeholder="Unbound (local node)"
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, nodeId: e.target.value }))
                     }
@@ -547,14 +547,14 @@ export function ProfileDetailDrawer({
                 </div>
 
                 <label htmlFor="profile-form-cwd" className="form-grid-label">
-                  工作目录
+                  Working directory
                 </label>
                 <div className="form-grid-value">
                   <input
                     id="profile-form-cwd"
                     type="text"
                     className="input mono"
-                    placeholder="可选，例如 /root/code/my-project"
+                    placeholder="Optional, e.g. /root/code/my-project"
                     value={form.cwd}
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, cwd: e.target.value }))
@@ -564,31 +564,31 @@ export function ProfileDetailDrawer({
               </div>
             </section>
 
-            {/* 系统提示词区块 */}
+            {/* System prompt section */}
             <section className="section-flat">
               <div className="section-flat-header flex-row-between">
-                <span className="section-flat-title">系统提示词 (SYSTEM.md)</span>
+                <span className="section-flat-title">System prompt (SYSTEM.md)</span>
                 <span className="mono profile-editor-meta">
-                  {form.system.length} 字符{form.system ? ` · ${form.system.split('\n').length} 行` : ''}
+                  {form.system.length} characters{form.system ? ` · ${form.system.split('\n').length} lines` : ''}
                 </span>
               </div>
               <textarea
                 id="profile-form-system"
                 className="input mono profile-editor-textarea"
                 rows={10}
-                placeholder="输入该角色的系统提示词指令（支持 Markdown）..."
+                placeholder="Enter the system prompt instructions for this profile (Markdown supported)..."
                 value={form.system}
                 onChange={(e) =>
                   setForm((prev) => ({ ...prev, system: e.target.value }))
                 }
-                aria-label="系统提示词"
+                aria-label="System prompt"
               />
               <div className="profile-editor-hint">
-                提示：系统指令定义角色的核心职责与行动准则，保存后对后续会话即时生效。
+                Tip: the system prompt defines the core duties and ground rules of the profile; saving applies to future conversations immediately.
               </div>
             </section>
 
-            {/* 插件扩展子插槽（builtin:memory 注入长期记忆区块等） */}
+            {/* Plugin extension slots (e.g. builtin:memory long-term memory section) */}
             <PluginSlot
               ownerPluginId="builtin:profile"
               name={PROFILE_DETAIL_SECTION_SLOT}
@@ -599,10 +599,10 @@ export function ProfileDetailDrawer({
               }}
             />
 
-            {/* 空白会话引导词（最多 6 项） */}
+            {/* Empty-conversation starters (max 6) */}
             <section className="section-flat">
               <div className="section-flat-header profile-starters-header">
-                <span className="section-flat-title">空白会话引导词</span>
+                <span className="section-flat-title">Empty-conversation starters</span>
                 <span className="mono profile-editor-meta">
                   {form.starters.length}/{PROFILE_STARTERS_MAX_ITEMS}
                 </span>
@@ -610,7 +610,7 @@ export function ProfileDetailDrawer({
               <div className="profile-starters-list">
                 {form.starters.length === 0 ? (
                   <div className="text-subtle text-xs profile-starters-empty">
-                    未配置时使用系统默认引导提示。
+                    Falls back to the system default starter prompts when unset.
                   </div>
                 ) : (
                   form.starters.map((starter, index) => {
@@ -621,9 +621,9 @@ export function ProfileDetailDrawer({
                           <input
                             type="text"
                             className="input profile-starter-label"
-                            placeholder="标题（≤24 码点）"
+                            placeholder="Title (max 24 code points)"
                             value={starter.label}
-                            aria-label={`引导词 ${index + 1} 标题`}
+                            aria-label={`Starter ${index + 1} title`}
                             onChange={(e) =>
                               setForm((prev) => {
                                 const starters = [...prev.starters]
@@ -635,9 +635,9 @@ export function ProfileDetailDrawer({
                           <textarea
                             className="input profile-starter-prompt"
                             rows={2}
-                            placeholder="点击后回填到输入框的提示词（≤4000 码点，不自动发送）"
+                            placeholder="Prompt filled into the composer on click (max 4000 code points; not sent automatically)"
                             value={starter.prompt}
-                            aria-label={`引导词 ${index + 1} 提示词`}
+                            aria-label={`Starter ${index + 1} prompt`}
                             onChange={(e) =>
                               setForm((prev) => {
                                 const starters = [...prev.starters]
@@ -655,8 +655,8 @@ export function ProfileDetailDrawer({
                         <button
                           type="button"
                           className="btn btn-ghost btn-sm profile-starter-remove"
-                          aria-label={`删除引导词 ${index + 1}`}
-                          title="删除此条引导词"
+                          aria-label={`Delete starter ${index + 1}`}
+                          title="Delete this starter"
                           disabled={isSaving || isDeleting}
                           onClick={() =>
                             setForm((prev) => ({
@@ -684,27 +684,27 @@ export function ProfileDetailDrawer({
                 }
               >
                 <HelmIcon name="plus" size={12} />
-                <span>添加引导词</span>
+                <span>Add starter</span>
               </button>
             </section>
 
-            {/* 技能白名单配置 */}
+            {/* Skill allowlist */}
             <section className="section-flat">
               <div className="section-flat-header flex-row-between">
-                <span className="section-flat-title">可用技能白名单</span>
+                <span className="section-flat-title">Available skills allowlist</span>
                 <Switch
                   id="profile-form-skills-switch"
                   checked={form.useAllSkills}
                   onChange={(val) =>
                     setForm((prev) => ({ ...prev, useAllSkills: val }))
                   }
-                  label="全部可用技能"
+                  label="All available skills"
                 />
               </div>
 
               {form.useAllSkills ? (
                 <div className="text-subtle">
-                  已允许此角色无限制使用系统内所有可用技能。
+                  This profile may use every available skill without restriction.
                 </div>
               ) : (
                 <div
@@ -715,7 +715,7 @@ export function ProfileDetailDrawer({
                   }}
                 >
                   {availableSkills.length === 0 ? (
-                    <div className="text-subtle">暂无已加载的技能</div>
+                    <div className="text-subtle">No skills loaded</div>
                   ) : (
                     availableSkills.map((s) => (
                       <Checkbox
@@ -736,7 +736,7 @@ export function ProfileDetailDrawer({
             </section>
           </div>
 
-          {/* 抽屉底部操作栏 */}
+          {/* Drawer footer actions */}
           <div className="primary-drawer-footer flex-row-between">
             <div>
               {canDelete && (
@@ -747,7 +747,7 @@ export function ProfileDetailDrawer({
                   onClick={() => setShowDeleteConfirm(true)}
                 >
                   <HelmIcon name="trash" size={13} />
-                  <span>删除角色</span>
+                  <span>Delete profile</span>
                 </button>
               )}
             </div>
@@ -759,7 +759,7 @@ export function ProfileDetailDrawer({
                 disabled={isSaving || isDeleting}
                 onClick={handleRequestClose}
               >
-                取消
+                Cancel
               </button>
 
               <button
@@ -773,34 +773,34 @@ export function ProfileDetailDrawer({
                 onClick={() => void handleSave()}
               >
                 <HelmIcon name={isSaving ? 'loader' : 'check'} size={13} />
-                <span>{isSaving ? '保存中…' : '保存角色'}</span>
+                <span>{isSaving ? 'Saving…' : 'Save profile'}</span>
               </button>
             </div>
           </div>
         </DialogContent>
       </DialogPortal>
 
-      {/* 删除二次确认弹窗 */}
+      {/* Delete confirmation dialog */}
       <ConfirmDialog
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}
-        title="删除角色"
-        description={`确定删除角色「${form.name || form.id}」？此操作不可撤销。`}
-        confirmText={isDeleting ? '删除中…' : '确认删除'}
-        cancelText="取消"
+        title="Delete profile"
+        description={`Delete profile "${form.name || form.id}"? This action cannot be undone.`}
+        confirmText={isDeleting ? 'Deleting…' : 'Confirm deletion'}
+        cancelText="Cancel"
         danger
         inline={inline}
         onConfirm={() => void handleConfirmDelete()}
       />
 
-      {/* 脏表单防丢弹窗 */}
+      {/* Dirty form guard dialog */}
       <ConfirmDialog
         open={showDiscardConfirm}
         onOpenChange={setShowDiscardConfirm}
-        title="放弃未保存的修改"
-        description="当前表单有尚未保存的修改，关闭后将丢失这些改动。确定要放弃修改并关闭吗？"
-        confirmText="放弃修改"
-        cancelText="继续编辑"
+        title="Discard unsaved changes"
+        description="The form has unsaved changes that will be lost on close. Discard them and close?"
+        confirmText="Discard changes"
+        cancelText="Keep editing"
         danger
         inline={inline}
         onConfirm={() => {

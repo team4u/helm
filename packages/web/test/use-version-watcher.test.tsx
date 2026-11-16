@@ -1210,7 +1210,7 @@ test('App 版本横幅集成：渲染显式 type=button 立即刷新按钮并直
     const banner = appHost.querySelector<HTMLElement>('.version-banner[role="status"]')
     assert.ok(banner, '挂起更新时渲染 version-banner')
     const btn = banner!.querySelector<HTMLButtonElement>('button[type="button"]')
-    assert.ok(btn && btn.textContent?.includes('立即刷新'), '「立即刷新」是真实 type=button')
+    assert.ok(btn && btn.textContent?.includes('Refresh now'), '「立即刷新」是真实 type=button')
     act(() => {
       btn!.click()
     })

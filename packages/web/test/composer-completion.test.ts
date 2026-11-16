@@ -98,13 +98,13 @@ test('extract/parse：逐项边界校验，非法项丢弃并诊断', { timeout:
   const doc = extractCompletionItems({ items: [good, { id: '', label: 'B', insertText: 'y' }, null, { id: 'c', label: 'C', insertText: 'z', hint: 1 }] }, 'items')
   assert.equal(doc.items!.length, 1)
   assert.equal(doc.items![0]!.id, 'a')
-  assert.match(doc.error!, /丢弃 3 个非法候选/)
+  assert.match(doc.error!, /3 invalid candidates dropped/)
   assert.equal(extractCompletionItems({ nope: [] }, 'items').error !== undefined, true, '缺数组字段显式诊断')
   assert.equal(extractCompletionItems(undefined, 'items').items, null, '未加载不是错误')
   const action = parseCompletionActionResult({ items: [good, 'bad'] })
   assert.equal(action.items!.length, 1)
-  assert.match(action.error!, /丢弃 1 个非法候选/)
-  assert.match(parseCompletionActionResult({ nope: 1 }).error!, /缺少 items/)
+  assert.match(action.error!, /1 invalid candidates dropped/)
+  assert.match(parseCompletionActionResult({ nope: 1 }).error!, /missing the items array/)
 })
 
 test('verifyCompletionActionManifest：需真实 manifest 且 idempotent:true', { timeout: 60_000 }, () => {
@@ -114,7 +114,7 @@ test('verifyCompletionActionManifest：需真实 manifest 且 idempotent:true', 
   ]
   assert.equal(verifyCompletionActionManifest(actions, 'p1', 'search'), null)
   assert.match(verifyCompletionActionManifest(actions, 'p1', 'mutate')!, /idempotent/)
-  assert.match(verifyCompletionActionManifest(actions, 'p1', 'ghost')!, /未注册/)
+  assert.match(verifyCompletionActionManifest(actions, 'p1', 'ghost')!, /not registered/)
 })
 
 test('buildCompletionActionCall：真实会话传 conversationId；草稿态按 schema 决定 profileId 或显式拒绝', { timeout: 60_000 }, () => {
@@ -159,7 +159,7 @@ test('buildCompletionActionCall：真实会话传 conversationId；草稿态按 
   })
   const rejected = buildCompletionActionCall(convRequired, 'hi', { profileId: 'assistant' })
   assert.equal(rejected.input, null)
-  assert.match(rejected.error!, /需要已有会话/)
+  assert.match(rejected.error!, /requires an existing conversation/)
 })
 
 test('merge/filter：插件+源命名空间去重、上限截断、空格 AND 过滤', { timeout: 60_000 }, () => {
@@ -482,7 +482,7 @@ test('交互：>12 候选键盘循环只在可见集内；截断提示可见', {
     await act(async () => {})
     const visible = app.completionItems()
     assert.equal(visible.length, COMPLETION_VISIBLE_LIMIT, '只显示 12 项')
-    assert.match(app.completionPopover()!.textContent!, /仅显示前 12 项/, '截断提示可见')
+    assert.match(app.completionPopover()!.textContent!, /showing the first 12/, '截断提示可见')
     // 连续 ArrowDown 13 次应回到索引 1（12 项循环），Enter 选中的是可见项
     for (let i = 0; i < 13; i++) await app.key('ArrowDown')
     await app.key('Enter')
@@ -546,16 +546,16 @@ test('交互：prefill.onlyIfEmpty 草稿非空拒绝回填并警告；空闲时
     app.rerenderPrefill({ text: '引导词', tick: 1, onlyIfEmpty: true })
     await act(async () => {})
     assert.equal(app.ta().value, '正在编辑的草稿', '草稿保持不变')
-    assert.ok(app.notices.some((n) => String(n.title).includes('请先处理当前草稿')), '警告通知可见')
+    assert.ok(app.notices.some((n) => String(n.title).includes('Handle the current draft before picking a starter')), '警告通知可见')
     // 清空草稿后允许回填
     await app.type('')
     app.rerenderPrefill({ text: '引导词', tick: 2, onlyIfEmpty: true })
     await act(async () => {})
     assert.equal(app.ta().value, '引导词', '空闲草稿回填成功')
     // 默认（未传 onlyIfEmpty）既有编辑行为不变：直接覆盖
-    app.rerenderPrefill({ text: '编辑并重发', tick: 3 })
+    app.rerenderPrefill({ text: 'Edit and resend', tick: 3 })
     await act(async () => {})
-    assert.equal(app.ta().value, '编辑并重发')
+    assert.equal(app.ta().value, 'Edit and resend')
   } finally {
     app.unmount()
   }

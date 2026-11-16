@@ -114,7 +114,7 @@ export function ModelPickerControl({
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: '部分供应商目录刷新失败',
+          title: 'Some provider catalog refreshes failed',
           body: errors.map(([p, err]) => `${p}: ${err}`).join('; '),
           ...(conversationId !== undefined ? { conversationId } : {}),
         })
@@ -122,8 +122,8 @@ export function ModelPickerControl({
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: '已刷新模型目录',
-          body: `共 ${store.models.length} 个可用模型`,
+          title: 'Model catalog refreshed',
+          body: `${store.models.length} models available`,
           ...(conversationId !== undefined ? { conversationId } : {}),
         })
       }
@@ -131,7 +131,7 @@ export function ModelPickerControl({
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: '刷新模型目录失败',
+        title: 'Failed to refresh model catalog',
         body: err instanceof Error ? err.message : String(err),
         ...(conversationId !== undefined ? { conversationId } : {}),
       })
@@ -156,7 +156,7 @@ export function ModelPickerControl({
     effectiveModel !== undefined && effectiveModel !== ''
       ? effectiveModel.split('/').pop() ?? effectiveModel
       : ''
-  const shortName = rawShortName.trim() !== '' ? rawShortName : '默认模型'
+  const shortName = rawShortName.trim() !== '' ? rawShortName : 'Default model'
   const currentModel = effectiveModel !== undefined && effectiveModel !== ''
     ? store.models.find((model) => model.id === effectiveModel)
     : undefined
@@ -176,7 +176,7 @@ export function ModelPickerControl({
             className="btn btn-ghost btn-sm composer-model-button"
             disabled={disabled || pending}
             aria-expanded={open}
-            aria-label={`模型与思考档位：${shortName}${showLevel ? ` · ${effectiveLevel}` : ''}`}
+            aria-label={`Model and thinking level: ${shortName}${showLevel ? ` · ${effectiveLevel}` : ''}`}
             title={buttonTitle}
           >
             {pending ? <HelmIcon name="loader" size={12} className="spin-slow" /> : null}
@@ -230,8 +230,8 @@ export function ModelPickerControl({
                 <HelmIcon name="search" size={13} />
                 <input
                   ref={searchInputRef}
-                  aria-label="搜索模型"
-                  placeholder="搜索模型…"
+                  aria-label="Search models"
+                  placeholder="Search models…"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => {
@@ -253,13 +253,13 @@ export function ModelPickerControl({
                   }}
                 />
               </div>
-              <Tooltip content="刷新动态模型目录" side="top">
+              <Tooltip content="Refresh dynamic model catalog" side="top">
                 <button
                   type="button"
                   className="btn btn-ghost btn-icon-sm composer-model-refresh-btn"
                   disabled={refreshing}
-                  title="刷新动态模型目录"
-                  aria-label="刷新动态模型目录"
+                  title="Refresh dynamic model catalog"
+                  aria-label="Refresh dynamic model catalog"
                   onClick={(e) => {
                     e.stopPropagation()
                     void refreshCatalog()
@@ -270,8 +270,8 @@ export function ModelPickerControl({
               </Tooltip>
             </div>
             <div className="popover-header">
-              <span>模型列表</span>
-              <span className="kbd-hint popover-kbd-hint">↑↓ 选择 · Enter 确认</span>
+              <span>Model list</span>
+              <span className="kbd-hint popover-kbd-hint">↑↓ select · Enter confirm</span>
             </div>
             {filteredModels.map((m, idx) => (
               <button
@@ -292,15 +292,15 @@ export function ModelPickerControl({
               </button>
             ))}
             {allUnavailable ? (
-              <div className="popover-item composer-model-empty">暂无可用模型；请先在「模型与凭据」配置供应商密钥</div>
+              <div className="popover-item composer-model-empty">No models available; configure a provider key in Models & credentials first</div>
             ) : filteredModels.length === 0 ? (
-              <div className="popover-item composer-model-empty">没有匹配的模型</div>
+              <div className="popover-item composer-model-empty">No matching models</div>
             ) : null}
             {supportsThinking ? (
               <>
                 <div className="popover-header">
                   <span>
-                    思考档位
+                    Thinking level
                     <span className="composer-model-thinking-name"> · {shortName}</span>
                   </span>
                   <span className="kbd-hint popover-kbd-hint">{COMPOSER_SHORTCUTS.cycleThinkingLevel}</span>
@@ -333,7 +333,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: '切换模型失败',
+        title: 'Failed to switch model',
         body: err instanceof Error ? err.message : String(err),
         conversationId: conversation.id,
       })
@@ -350,7 +350,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: '切换思考等级失败',
+        title: 'Failed to switch thinking level',
         body: err instanceof Error ? err.message : String(err),
         conversationId: conversation.id,
       })
@@ -367,7 +367,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: '恢复默认配置失败',
+        title: 'Failed to restore default configuration',
         body: err instanceof Error ? err.message : String(err),
         conversationId: conversation.id,
       })
@@ -387,9 +387,9 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
       effectiveModel={conversation.model}
       selectedModel={conversation.model}
       activeThinkingLevel={conversation.thinkingLevel}
-      resetLabel="跟随 Profile 默认（清除覆盖）"
-      resetTitle="清除显式覆盖，重算 Profile/全局继承链"
-      buttonTitle={`当前模型：${conversation.model}${showLevel ? ` · 思考 ${effectiveLevel}` : ''} (${COMPOSER_SHORTCUTS.toggleModelPicker})`}
+      resetLabel="Clear the explicit override and recompute the Profile/global inheritance chain"
+      resetTitle="Clear the explicit override and recompute the Profile/global inheritance chain"
+      buttonTitle={`Current model: ${conversation.model}${showLevel ? ` · thinking ${effectiveLevel}` : ''} (${COMPOSER_SHORTCUTS.toggleModelPicker})`}
       pending={pending}
       conversationId={conversation.id}
       onPickModel={pick}

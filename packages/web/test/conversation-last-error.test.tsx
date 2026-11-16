@@ -75,7 +75,7 @@ test('timeline SSR：error 状态渲染 role=alert 错误块并展示具体 last
   // role=alert 可访问错误块存在。
   assert.match(html, /role="alert"/)
   // 内容包含权威 lastError 的具体原因。
-  assert.match(html, /本回合失败/)
+  assert.match(html, /This turn failed/)
   assert.match(html, /model_error: provider 503 quota exceeded/)
 })
 
@@ -85,8 +85,8 @@ test('timeline SSR：lastError 空缺时仅显示明确通用文案，不编造�
     [{ id: '1', kind: 'helm.input', data: { text: '人类提问', origin: 'human' } }],
   )
   assert.match(html, /role="alert"/)
-  assert.match(html, /本回合失败/)
-  assert.match(html, /模型或服务请求未成功/)
+  assert.match(html, /This turn failed/)
+  assert.match(html, /The model or service request failed/)
 })
 
 test('timeline SSR：非 error 状态不渲染失败诊断块', { timeout: 60_000 }, () => {
@@ -94,7 +94,7 @@ test('timeline SSR：非 error 状态不渲染失败诊断块', { timeout: 60_00
     baseConversation({ status: 'done' }),
     [{ id: '1', kind: 'helm.input', data: { text: '人类提问', origin: 'human' } }],
   )
-  assert.doesNotMatch(html, /本回合失败/)
+  assert.doesNotMatch(html, /This turn failed/)
   assert.doesNotMatch(html, /role="alert"/)
 })
 
@@ -104,26 +104,26 @@ test('timeline SSR：失败卡为最近可编辑 human 输入提供编辑并重�
     baseConversation({ status: 'error', lastError: 'model_error: boom' }),
     [{ id: '5', kind: 'helm.input', data: { text: '想重发的问题', origin: 'human' } }],
   )
-  assert.match(withHuman, /编辑并重发最近一条消息/)
+  assert.match(withHuman, /Edit and resend the latest message/)
 
   // 无任何可编辑 human 输入（仅 agent 汇报）：不提供快捷操作，不误编辑旧消息。
   const withoutHuman = renderTimelineHtml(
     baseConversation({ status: 'error', lastError: 'model_error: boom' }),
     [{ id: '5', kind: 'helm.input', data: { text: 'Worker 已完成', origin: 'agent' } }],
   )
-  assert.doesNotMatch(withoutHuman, /编辑并重发最近一条消息/)
+  assert.doesNotMatch(withoutHuman, /Edit and resend the latest message/)
   assert.match(withoutHuman, /role="alert"/)
 })
 
 test('conversationStatusTooltip：error 附带 lastError 诊断摘要', { timeout: 60_000 }, () => {
-  assert.equal(conversationStatusTooltip('error'), '异常')
+  assert.equal(conversationStatusTooltip('error'), 'Error')
   assert.equal(
     conversationStatusTooltip('error', undefined, 'model_error: provider 503'),
-    '异常: model_error: provider 503',
+    'Error: model_error: provider 503',
   )
   // 非 error 状态不消费 lastError；working 仍以 doing 为准。
-  assert.equal(conversationStatusTooltip('idle', undefined, 'model_error: x'), '空闲')
-  assert.equal(conversationStatusTooltip('working', 'bash: running', 'model_error: x'), '运行中: bash: running')
+  assert.equal(conversationStatusTooltip('idle', undefined, 'model_error: x'), 'Idle')
+  assert.equal(conversationStatusTooltip('working', 'bash: running', 'model_error: x'), 'Running: bash: running')
   // lastError 仅空白时不拼接空 detail。
-  assert.equal(conversationStatusTooltip('error', undefined, '   '), '异常')
+  assert.equal(conversationStatusTooltip('error', undefined, '   '), 'Error')
 })

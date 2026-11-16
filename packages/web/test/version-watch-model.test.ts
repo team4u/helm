@@ -252,15 +252,15 @@ test('焦点保护判定：仅 input/textarea 视为文本输入', { timeout: 60
 })
 
 test('挂起原因文案：draft/modal/组合各有准确描述，null 无文案', { timeout: 60_000 }, () => {
-  assert.ok(versionDeferHint('draft').includes('未提交的输入内容'))
+  assert.ok(versionDeferHint('draft').includes('Unsubmitted input'))
   assert.ok(!versionDeferHint('draft').includes('窗口'), '纯草稿不提窗口')
-  assert.ok(versionDeferHint('modal').includes('打开的窗口'))
+  assert.ok(versionDeferHint('modal').includes('window is open'))
   assert.ok(!versionDeferHint('modal').includes('输入内容'), '纯弹窗不提输入内容')
-  assert.ok(versionDeferHint('draft-and-modal').includes('未提交的输入内容'))
-  assert.ok(versionDeferHint('draft-and-modal').includes('打开的窗口'))
+  assert.ok(versionDeferHint('draft-and-modal').includes('Unsubmitted input'))
+  assert.ok(versionDeferHint('draft-and-modal').includes('an open window'))
   assert.equal(versionDeferHint(null), '')
   for (const reason of ['draft', 'modal', 'draft-and-modal'] as const) {
-    assert.ok(versionDeferHint(reason).endsWith('已暂缓自动刷新'))
+    assert.ok(versionDeferHint(reason).endsWith('auto refresh deferred'))
   }
 })
 

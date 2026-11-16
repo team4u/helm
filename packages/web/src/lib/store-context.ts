@@ -8,7 +8,7 @@ export const HelmStoreContext = createContext<HelmStoreValue | null>(null)
 export function useHelmStore(): HelmStoreValue {
   const ctx = useContext(HelmStoreContext)
   if (ctx === null) {
-    throw new Error('useHelmStore 必须在 <HelmStoreProvider> 内调用')
+    throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
   }
   return ctx
 }

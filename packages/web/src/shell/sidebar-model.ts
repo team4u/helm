@@ -370,15 +370,15 @@ export function fuzzyMatchConversations(
 export function conversationStatusLabel(status: ConversationSummary['status']): string {
   switch (status) {
     case 'working':
-      return '运行中'
+      return 'Running'
     case 'blocked':
-      return '待确认'
+      return 'Awaiting confirmation'
     case 'done':
-      return '已完成'
+      return 'Completed'
     case 'idle':
-      return '空闲'
+      return 'Idle'
     case 'error':
-      return '异常'
+      return 'Error'
     default:
       return status
   }
@@ -504,7 +504,7 @@ export interface SidebarTargetPresence {
   /** 分屏开启且当前命中聚焦面板（驱动左侧 2px accent 焦点指示） */
   focused: boolean
   /** 分屏开启时在行尾显示的面板微标：'主' | '分' | '主·分' | null */
-  paneTag: '主' | '分' | '主·分' | null
+  paneTag: 'Main' | 'Split' | 'Main·Split' | null
 }
 
 /** 按在场/焦点推导侧栏行级状态修饰类名后缀（供各侧栏行组件共用）。 */
@@ -538,7 +538,7 @@ export function resolveSidebarTargetPresence(
   const focused = (focusedPanel === 'primary' && inPrimary) || (focusedPanel === 'split' && inSplit)
   const active = focused
   const splitSecondary = !focused && (inPrimary || inSplit)
-  const paneTag = inPrimary && inSplit ? '主·分' : inPrimary ? '主' : inSplit ? '分' : null
+  const paneTag = inPrimary && inSplit ? 'Main·Split' : inPrimary ? 'Main' : inSplit ? 'Split' : null
   return {
     inPrimary,
     inSplit,

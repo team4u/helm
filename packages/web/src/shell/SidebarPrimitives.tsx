@@ -16,7 +16,7 @@ export function StatusDot({ connected }: { connected: boolean }) {
   return (
     <span
       className={`status-dot ${connected ? 'status-dot-done status-dot-connected' : 'status-dot-disconnected'}`}
-      title={connected ? '实时连接正常' : '实时连接断开，正在重连'}
+      title={connected ? 'Live connection healthy' : 'Live connection lost, reconnecting'}
     />
   )
 }
@@ -121,7 +121,7 @@ export function RemoteNodeTag({ nodeId }: { nodeId: string }) {
     <span
       className="mono"
       style={{ fontSize: 10.5, color: 'var(--fg-muted)', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-      title={`运行节点：${nodeId}`}
+      title={`Node: ${nodeId}`}
     >
       @{nodeId}
     </span>
@@ -129,9 +129,9 @@ export function RemoteNodeTag({ nodeId }: { nodeId: string }) {
 }
 
 const PANE_TAG_TITLES: Record<NonNullable<SidebarTargetPresence['paneTag']>, string> = {
-  主: '主屏打开',
-  分: '分屏打开',
-  '主·分': '主屏与分屏均打开',
+  Main: 'Open in main view',
+  Split: 'Open in split view',
+  'Main·Split': 'Open in both main and split views',
 }
 
 /** 分屏开启时在侧栏行尾展示的面板归属微标（主 / 分 / 主·分）。 */
@@ -164,14 +164,14 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
       store.pushNotice({
         type: 'notification',
         level: 'info',
-        title: '审批已提交',
+        title: 'Approval submitted',
         body: `${ask.title} #${ask.conversationId}`,
       })
     } catch (err) {
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: '审批提交失败',
+        title: 'Approval submission failed',
         body: err instanceof Error ? err.message : String(err),
       })
     } finally {
@@ -183,12 +183,12 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
     <div className="sidebar-group pending-asks-group">
       <button
         className={`badge badge-warn pending-asks-toggle${expanded ? ' badge-err' : ''}`}
-        title="展开待审批列表"
+        title="Expand pending approval list"
         onClick={() => setExpanded((v) => !v)}
       >
         <span className="pending-asks-toggle-label">
           <HelmIcon name="alert-triangle" size={12} />
-          待确认 ({asks.length})
+          Pending ({asks.length})
         </span>
         <HelmIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} />
       </button>
@@ -215,7 +215,7 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
                     store.openTarget({ kind: 'conversation', conversationId: ask.conversationId })
                   }}
                 >
-                  主屏处理
+                  Handle in main view
                 </button>
                 <button
                   className="btn btn-sm"
@@ -227,7 +227,7 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
                     )
                   }}
                 >
-                  右屏并排
+                  Side by side in right split
                 </button>
                 {isSimpleConfirm(ask) && (
                   <>
@@ -237,7 +237,7 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
                       onClick={() => void answerConfirm(ask, true)}
                     >
                       <HelmIcon name="check" size={12} />
-                      批准
+                      Approve
                     </button>
                     <button
                       className="btn btn-sm btn-danger"
@@ -245,7 +245,7 @@ export function PendingAsksPanel({ store }: { store: HelmStoreValue }) {
                       onClick={() => void answerConfirm(ask, false)}
                     >
                       <HelmIcon name="x" size={12} />
-                      取消
+                      Cancel
                     </button>
                   </>
                 )}

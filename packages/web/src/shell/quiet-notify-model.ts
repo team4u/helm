@@ -122,13 +122,13 @@ export function resolveActivitySnapshot(input: {
 }
 
 /** 根会话树无参与者处于 error 态时的完成通知标题。 */
-export const COMPLETED_NOTIFICATION_TITLE = 'Helm 会话已完成'
+export const COMPLETED_NOTIFICATION_TITLE = 'Helm conversation completed'
 
 /** 根会话树任一参与者处于 error 态时的结束通知标题（绝不谎称已完成）。 */
-export const ENDED_NOTIFICATION_TITLE = 'Helm 会话已结束'
+export const ENDED_NOTIFICATION_TITLE = 'Helm conversation finished'
 
 /** 等待人类输入/审批（blocked）通知标题。 */
-export const WAITING_NOTIFICATION_TITLE = 'Helm 等待你的处理'
+export const WAITING_NOTIFICATION_TITLE = 'Helm is waiting for you'
 
 /** 正文最多列出的根条目数，超出折叠为「等 N 个 …」。 */
 const MAX_LISTED_CONVERSATIONS = 3
@@ -197,12 +197,12 @@ export function composeTreeCompletionNotification(input: {
   if (rootConv === undefined) {
     return {
       title,
-      body: hasFailure ? '会话已结束 · 有失败' : '会话已结束',
+      body: hasFailure ? 'Conversation finished · with failures' : 'Conversation finished',
       primaryConversationId: null,
     }
   }
   const parts = [conversationLabel(rootConv)]
-  if (hasFailure) parts.push('有失败')
+  if (hasFailure) parts.push('Has failures')
   return {
     title,
     body: parts.join(' · '),
@@ -240,11 +240,11 @@ export function composeTreeBlockedNotification(input: {
 
   const rootIds = mergeToRootIds(byId, blocked)
   const parts = rootIds.slice(0, MAX_LISTED_CONVERSATIONS).map((id) => conversationLabel(byId.get(id)!))
-  if (rootIds.length > parts.length) parts.push(`等 ${rootIds.length} 个待处理`)
-  if (hasFailure) parts.push('有失败')
+  if (rootIds.length > parts.length) parts.push(`${rootIds.length} pending in total`)
+  if (hasFailure) parts.push('Has failures')
   return {
     title: WAITING_NOTIFICATION_TITLE,
-    body: `待处理输入/审批：${parts.join(' · ')}`,
+    body: `Pending input/approvals: ${parts.join(' · ')}`,
     primaryConversationId: blocked[0]!.id,
   }
 }

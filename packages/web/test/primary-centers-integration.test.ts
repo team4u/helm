@@ -52,11 +52,11 @@ const e = React.createElement
 
 test('Sidebar：设置空间 5 大入口统一导航至一级目标，且激活态与路由对齐', { timeout: 60_000 }, async () => {
   const targets = [
-    { kind: 'profiles' as const, label: '角色' },
-    { kind: 'models' as const, label: '模型与凭据' },
-    { kind: 'skills' as const, label: '技能库' },
-    { kind: 'nodes' as const, label: '计算节点' },
-    { kind: 'plugins' as const, label: '插件中心' },
+    { kind: 'profiles' as const, label: 'Profile' },
+    { kind: 'models' as const, label: 'Models & credentials' },
+    { kind: 'skills' as const, label: 'Skills' },
+    { kind: 'nodes' as const, label: 'Compute nodes' },
+    { kind: 'plugins' as const, label: 'Plugin Center' },
   ]
 
   for (const { kind, label } of targets) {
@@ -93,7 +93,7 @@ test('Sidebar：设置空间 5 大入口统一导航至一级目标，且激活�
     assert.deepEqual(
       opened,
       targets.map((t) => ({ kind: t.kind })),
-      '侧栏设置空间 5 大入口均应调用 store.openTarget',
+      '侧栏Settings space 5 大入口均应调用 store.openTarget',
     )
   } finally {
     act(() => root.unmount())
@@ -107,10 +107,10 @@ test('Sidebar：设置空间 5 大入口统一导航至一级目标，且激活�
 
 test('CommandPaletteModal：4 大快捷项点击统一分发一级路由并关闭面板', { timeout: 60_000 }, async () => {
   const cases = [
-    { title: '打开智能体角色中心', kind: 'profiles' },
-    { title: '打开模型与凭据中心', kind: 'models' },
-    { title: '打开技能中心', kind: 'skills' },
-    { title: '打开计算节点中心', kind: 'nodes' },
+    { title: 'Open agent profile center', kind: 'profiles' },
+    { title: 'Open models and credentials center', kind: 'models' },
+    { title: 'Open skills center', kind: 'skills' },
+    { title: 'Open compute nodes center', kind: 'nodes' },
   ] as const
 
   for (const item of cases) {
@@ -205,15 +205,15 @@ test('四大中心主舞台组件：SSR 渲染结构与基础容器契约', { ti
     e(HostStoreProviders, { value: store }, e(ProfileCenter)),
   )
   assert.ok(profileHtml.includes('primary-center-topbar'))
-  assert.ok(profileHtml.includes('智能体角色中心'))
-  assert.ok(profileHtml.includes('新建角色'))
+  assert.ok(profileHtml.includes('Agent Profile Center'))
+  assert.ok(profileHtml.includes('New profile'))
 
   // 2. SkillCenter
   const skillHtml = renderToString(
     e(HostStoreProviders, { value: store }, e(SkillCenter)),
   )
   assert.ok(skillHtml.includes('primary-center-topbar'))
-  assert.ok(skillHtml.includes('技能中心'))
+  assert.ok(skillHtml.includes('Skills Center'))
   assert.ok(skillHtml.includes('primary-center-toolbar'))
 
   // 3. NodeCenter
@@ -221,15 +221,15 @@ test('四大中心主舞台组件：SSR 渲染结构与基础容器契约', { ti
     e(HostStoreProviders, { value: store }, e(NodeCenter)),
   )
   assert.ok(nodeHtml.includes('primary-center-topbar'))
-  assert.ok(nodeHtml.includes('计算节点中心'))
-  assert.ok(nodeHtml.includes('接入节点'))
+  assert.ok(nodeHtml.includes('Compute Nodes Center'))
+  assert.ok(nodeHtml.includes('Connect node'))
 
   // 4. ModelCenter
   const modelHtml = renderToString(
     e(HostStoreProviders, { value: store }, e(ModelCenter)),
   )
   assert.ok(modelHtml.includes('primary-center-topbar'))
-  assert.ok(modelHtml.includes('模型与凭证中心'))
+  assert.ok(modelHtml.includes('Models &amp; Credentials Center'))
 })
 
 test('四大中心抽屉联动：携带子项 ID 时自动呼出对应 540px 右侧滑出抽屉', { timeout: 60_000 }, () => {
@@ -269,7 +269,7 @@ test('四大中心抽屉联动：携带子项 ID 时自动呼出对应 540px 右
     e(HostStoreProviders, { value: nodeStore }, e(NodeCenter, { inlineDrawer: true })),
   )
   assert.ok(nodeHtml.includes('primary-drawer-content'), 'Nodes 应呼出抽屉')
-  assert.ok(nodeHtml.includes('系统概览'))
+  assert.ok(nodeHtml.includes('System overview'))
 
   // 4. Models 携带 providerId 呼出抽屉
   const modelStore = makeTestStore({
@@ -279,7 +279,7 @@ test('四大中心抽屉联动：携带子项 ID 时自动呼出对应 540px 右
     e(HostStoreProviders, { value: modelStore }, e(ModelCenter, { inlineDrawer: true })),
   )
   assert.ok(modelHtml.includes('primary-drawer-content'), 'Models 应呼出抽屉')
-  assert.ok(modelHtml.includes('凭证与连接设置'))
+  assert.ok(modelHtml.includes('Credentials and connection settings'))
 })
 
 // ---------------------------------------------------------------------------

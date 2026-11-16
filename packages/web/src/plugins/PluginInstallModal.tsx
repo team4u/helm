@@ -65,7 +65,7 @@ export function PluginInstallModal({
       onClose()
     } catch (err) {
       // 安装失败时如实展示错误；doctor 报告（真实 Hub 在 details.report，经形状校验）逐项渲染。
-      setErrorText(pluginPackageErrorText(err, '安装'))
+      setErrorText(pluginPackageErrorText(err, 'Install'))
       const report = extractDoctorReport(err)
       if (report) setDoctorReport(report)
     } finally {
@@ -86,15 +86,15 @@ export function PluginInstallModal({
           <DialogContent
             className="modal plugin-install-modal"
             role="dialog"
-            aria-label="安装插件"
+            aria-label="Install plugin"
           >
           <div className="modal-header">
-            <DialogTitle className="modal-title">安装插件</DialogTitle>
+            <DialogTitle className="modal-title">Install plugin</DialogTitle>
             <DialogClose asChild>
               <button
                 className="btn btn-ghost btn-sm"
-                aria-label="关闭"
-                title="关闭"
+                aria-label="Close"
+                title="Close"
                 disabled={installing}
               >
                 <HelmIcon name="x" size={14} />
@@ -104,12 +104,12 @@ export function PluginInstallModal({
 
           <div className="modal-body plugin-install-form">
             <DialogDescription className="visually-hidden">
-              从 npm 包、Git 仓库或本地路径安装外部插件
+              Install external plugins from an npm package, Git repository or local path
             </DialogDescription>
 
             <div className="form-grid form-grid-align-start">
               <label htmlFor="plugin-install-source" className="form-grid-label">
-                <span>安装来源</span>
+                <span>Install source</span>
               </label>
               <div className="plugin-install-input-wrap">
                 <input
@@ -142,20 +142,20 @@ export function PluginInstallModal({
 
             <div className="form-grid">
               <span className="form-grid-label">
-                <span>安装后启用</span>
+                <span>Enable after install</span>
               </span>
               <Switch
                 checked={enableAfterInstall}
                 onChange={setEnableAfterInstall}
                 disabled={installing}
-                label={enableAfterInstall ? '安装完成后立即启用' : '安装后保持停用'}
+                label={enableAfterInstall ? 'Enable immediately after install' : 'Keep disabled after install'}
               />
             </div>
 
             <div className="callout callout-warn plugin-install-security" role="note">
               <HelmIcon name="shield-alert" size={13} />
               <span className="callout-text">
-                插件在 Hub 进程内运行，拥有宿主权限，不是沙箱。仅安装可信来源的插件包。
+                Plugins run inside the Hub process with host privileges and are not sandboxed. Only install plugin packages from trusted sources.
               </span>
             </div>
 
@@ -200,7 +200,7 @@ export function PluginInstallModal({
           <div className="modal-footer">
             <DialogClose asChild>
               <button className="btn btn-ghost btn-sm" disabled={installing}>
-                取消
+                Cancel
               </button>
             </DialogClose>
             <button
@@ -211,12 +211,12 @@ export function PluginInstallModal({
               {installing ? (
                 <>
                   <HelmIcon name="loader" size={12} />
-                  <span>正在安装…</span>
+                  <span>Installing…</span>
                 </>
               ) : (
                 <>
                   <HelmIcon name="download" size={12} />
-                  <span>安装</span>
+                  <span>Install</span>
                 </>
               )}
             </button>

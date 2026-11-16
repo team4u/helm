@@ -119,7 +119,7 @@ test('PluginCenter SSR：渲染搜索框、统计徽章与卡片网格', { timeo
 
   // 2. 搜索框与搜索图标
   assert.match(html, /class="[^"]*plugin-search-box[^"]*"/)
-  assert.match(html, /placeholder="[^"]*搜索/)
+  assert.match(html, /placeholder="[^"]*Search/)
 
   // 3. 统计指标显示（无故障态时不展示异常计数）
   assert.doesNotMatch(html, /个异常/)
@@ -149,7 +149,7 @@ test('PluginCenter SSR：存在 failed 故障态插件时顶栏统计追加异�
   // 2. 故障卡片标记 is-failed 并渲染异常徽章
   assert.match(html, /data-plugin-id="external:broken"/)
   assert.match(html, /is-failed/)
-  assert.match(html, /<span>异常<\/span>/)
+  assert.match(html, /<span>Error<\/span>/)
 })
 
 // ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ test('PluginCenter DOM 交互：渲染「全部 / 已启用 / 已停用」筛选
     const disabledCount = mockPlugins.filter((p) => !p.enabled).length
     const tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
     assert.equal(tabs.length, 3, '应渲染 全部 / 已启用 / 已停用 三个状态药丸')
-    const disabledTab = tabs.find((t) => t.textContent?.includes('已停用'))
+    const disabledTab = tabs.find((t) => t.textContent?.includes('Disabled'))
     assert.ok(disabledTab)
     assert.match(disabledTab.textContent ?? '', new RegExp(String(disabledCount)))
 
@@ -231,7 +231,7 @@ test('PluginCenter DOM 交互：渲染「全部 / 已启用 / 已停用」筛选
     })
     assert.equal(host.querySelectorAll('.plugin-card').length, disabledCount)
 
-    const enabledTab = tabs.find((t) => t.textContent?.includes('已启用'))!
+    const enabledTab = tabs.find((t) => t.textContent?.includes('Enabled'))!
     await act(async () => {
       enabledTab.click()
     })
@@ -311,7 +311,7 @@ test('全局入口收敛：CommandPaletteModal 点击「打开插件中心」导
       await flushMacrotask(0)
     })
     const row = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-idx].nav-item')).find((el) =>
-      el.textContent?.includes('打开插件中心'),
+      el.textContent?.includes('Open plugins center'),
     )
     assert.ok(row, '命令面板应提供「打开插件中心」入口')
     await act(async () => {

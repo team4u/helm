@@ -38,8 +38,8 @@ export interface ProviderItem {
 export type ProviderFilterTab = 'all' | 'configured'
 
 export const PROVIDER_FILTER_TABS: Array<{ key: ProviderFilterTab; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'configured', label: '已配置' },
+  { key: 'all', label: 'All' },
+  { key: 'configured', label: 'Configured' },
 ]
 
 export interface FilterProvidersOptions {
@@ -61,11 +61,11 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
     name: 'Anthropic',
     configured: false,
     modelsCount: 3,
-    description: 'Claude 系列前沿模型，支持超长上下文窗口与深度逻辑推理。',
+    description: 'Frontier Claude models with very long context windows and deep reasoning.',
     models: [
-      { id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet', tags: ['混合推理', '代码', '200K'], enabled: true },
-      { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet', tags: ['全能基座', '代码', '200K'], enabled: true },
-      { id: 'claude-3-5-haiku', name: 'Claude 3.5 Haiku', tags: ['极速响应', '轻量'], enabled: true },
+      { id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet', tags: ['Hybrid reasoning', 'Code', '200K'], enabled: true },
+      { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet', tags: ['General-purpose foundation', 'Code', '200K'], enabled: true },
+      { id: 'claude-3-5-haiku', name: 'Claude 3.5 Haiku', tags: ['Fast response', 'Lightweight'], enabled: true },
     ],
   },
   {
@@ -73,12 +73,12 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
     name: 'OpenAI',
     configured: false,
     modelsCount: 4,
-    description: 'GPT-4o 与 o1/o3 深度推理大模型，行业顶级通用基座能力。',
+    description: 'GPT-4o and o1/o3 deep reasoning models with top-tier general-purpose capabilities.',
     models: [
-      { id: 'gpt-4o', name: 'GPT-4o', tags: ['多模态', '高智能', '128K'], enabled: true },
-      { id: 'gpt-4o-mini', name: 'GPT-4o Mini', tags: ['高性价比', '极速'], enabled: true },
-      { id: 'o1', name: 'o1', tags: ['深度推理', '数学逻辑'], enabled: true },
-      { id: 'o3-mini', name: 'o3-mini', tags: ['轻量推理', 'STEM'], enabled: true },
+      { id: 'gpt-4o', name: 'GPT-4o', tags: ['Multimodal', 'High intelligence', '128K'], enabled: true },
+      { id: 'gpt-4o-mini', name: 'GPT-4o Mini', tags: ['Great value', 'Fast'], enabled: true },
+      { id: 'o1', name: 'o1', tags: ['Deep reasoning', 'Math and logic'], enabled: true },
+      { id: 'o3-mini', name: 'o3-mini', tags: ['Lightweight reasoning', 'STEM'], enabled: true },
     ],
   },
   {
@@ -86,10 +86,10 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
     name: 'DeepSeek',
     configured: false,
     modelsCount: 2,
-    description: '深度求索通用基座与 R1 满血强化学习推理大模型，极致高性价比。',
+    description: 'DeepSeek foundation models and the full-strength R1 reinforcement learning reasoner at extreme value.',
     models: [
-      { id: 'deepseek-reasoner', name: 'DeepSeek R1', tags: ['深度思考', '强化学习', '64K'], enabled: true },
-      { id: 'deepseek-chat', name: 'DeepSeek V3', tags: ['通用对话', '高性价比', '64K'], enabled: true },
+      { id: 'deepseek-reasoner', name: 'DeepSeek R1', tags: ['Deep thinking', 'Reinforcement learning', '64K'], enabled: true },
+      { id: 'deepseek-chat', name: 'DeepSeek V3', tags: ['General conversation', 'Great value', '64K'], enabled: true },
     ],
   },
   {
@@ -97,11 +97,11 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
     name: 'Google Gemini',
     configured: false,
     modelsCount: 3,
-    description: '原生多模态大模型，支持百万级超长上下文与原生工具调用。',
+    description: 'Native multimodal models with million-token context and native tool calling.',
     models: [
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tags: ['超长上下文', '2M'], enabled: true },
-      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', tags: ['低延迟', '多模态'], enabled: true },
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', tags: ['极速响应'], enabled: true },
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tags: ['Very long context', '2M'], enabled: true },
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', tags: ['Low latency', 'Multimodal'], enabled: true },
+      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', tags: ['Fast response'], enabled: true },
     ],
   },
   {
@@ -111,7 +111,7 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
     modelsCount: 0,
     baseUrl: 'http://127.0.0.1:11434',
     dynamic: true,
-    description: '本地私有化大模型运行平台，通过本地守护进程提供零外部依赖推理服务。',
+    description: 'Self-hosted local model platform providing zero-dependency inference through a local daemon.',
     models: [],
   },
   {
@@ -121,7 +121,7 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
     modelsCount: 0,
     baseUrl: 'https://openrouter.ai/api/v1',
     dynamic: true,
-    description: '聚合全球数百家模型供应商的统一网关，支持智能路由与模型弹性调度。',
+    description: 'Unified gateway aggregating hundreds of global model providers with smart routing and elastic scheduling.',
     models: [],
   },
   {
@@ -129,11 +129,11 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
     name: 'Mistral AI',
     configured: false,
     modelsCount: 3,
-    description: '欧洲顶级开源与商业大模型系列，兼具优秀的多语言与逻辑推理能力。',
+    description: 'Top European open-source and commercial model series with strong multilingual and reasoning skills.',
     models: [
-      { id: 'mistral-large-latest', name: 'Mistral Large', tags: ['旗舰基座', '128K'], enabled: true },
-      { id: 'codestral-latest', name: 'Codestral', tags: ['代码生成', '32K'], enabled: true },
-      { id: 'ministral-8b-latest', name: 'Ministral 8B', tags: ['端侧极速'], enabled: true },
+      { id: 'mistral-large-latest', name: 'Mistral Large', tags: ['Flagship foundation', '128K'], enabled: true },
+      { id: 'codestral-latest', name: 'Codestral', tags: ['Code generation', '32K'], enabled: true },
+      { id: 'ministral-8b-latest', name: 'Ministral 8B', tags: ['Edge-fast'], enabled: true },
     ],
   },
   {
@@ -141,21 +141,21 @@ export const DEFAULT_PROVIDERS: ProviderItem[] = [
     name: 'Groq',
     configured: false,
     modelsCount: 2,
-    description: '基于自研 LPU 芯片的超高吞吐推理加速平台，数百 Token/s 极低延迟响应。',
+    description: 'Ultra-high-throughput inference on proprietary LPU chips, hundreds of tokens per second at very low latency.',
     models: [
-      { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile', tags: ['超低延迟', 'LPU'], enabled: true },
-      { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 Distill 70B', tags: ['极速推理'], enabled: true },
+      { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile', tags: ['Ultra-low latency', 'LPU'], enabled: true },
+      { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 Distill 70B', tags: ['Fast inference'], enabled: true },
     ],
   },
   {
     id: 'custom',
-    name: '自定义 OpenAI 兼容接口',
+    name: 'Custom OpenAI-compatible endpoint',
     configured: false,
     modelsCount: 1,
     baseUrl: 'http://127.0.0.1:8000/v1',
-    description: '连接自建 vLLM、SGLang、OneAPI 或第三方兼容 OpenAI 协议的自定义端点。',
+    description: 'Connect to self-hosted vLLM, SGLang, OneAPI or any third-party OpenAI-compatible endpoint.',
     models: [
-      { id: 'custom-model', name: 'Custom Model', tags: ['自定义兼容'], enabled: true },
+      { id: 'custom-model', name: 'Custom Model', tags: ['Custom compatible'], enabled: true },
     ],
   },
 ]
@@ -264,7 +264,7 @@ export function buildDefaultModelOptions(
   currentValue?: string,
 ): Array<{ value: string; label: string; meta?: string }> {
   const options: Array<{ value: string; label: string; meta?: string }> = [
-    { value: UNSET_MODEL_VALUE, label: '未设置（继承系统基线）' },
+    { value: UNSET_MODEL_VALUE, label: 'Not set (inherits system baseline)' },
   ]
 
   for (const m of models) {
@@ -287,8 +287,8 @@ export function buildDefaultModelOptions(
     const disabled = models.some((m) => m.id === trimmed && m.disabled === true)
     options.push({
       value: trimmed,
-      label: disabled ? `${trimmed}（已禁用）` : `${trimmed}（当前配置）`,
-      meta: disabled ? '已禁用' : '目录外',
+      label: disabled ? `${trimmed} (disabled)` : `${trimmed} (current)`,
+      meta: disabled ? 'Disabled' : 'Not in catalog',
     })
   }
 
@@ -360,8 +360,8 @@ export function buildMergedProviders(
         pluginId: cat.pluginId,
         authMethods: cat.authMethods,
         description: cat.dynamic
-          ? '支持动态模型目录刷新的大语言模型供应商。'
-          : `${cat.name || cat.id} 模型供应商。`,
+          ? 'LLM provider with dynamic model catalog refresh.'
+          : `${cat.name || cat.id} model provider.`,
       })
     }
   }
@@ -382,7 +382,7 @@ export function buildMergedProviders(
         modelsCount: 0,
         baseUrl: gw.baseUrl,
         custom: true,
-        description: '运行时动态注册的模型网关。',
+        description: 'Model gateway registered dynamically at runtime.',
       })
     }
   }
@@ -403,9 +403,9 @@ export function buildMergedProviders(
         // 标签顺序：思考模型在前，真实已知窗口（正数 tokens，紧凑格式）在后；
         // 窗口未知绝不推测或补缺省；两者皆无保持 undefined（空语义不触发徽章渲染）。
         const tags: string[] = []
-        if (m.thinkingLevels && m.thinkingLevels.length > 1) tags.push('思考模型')
+        if (m.thinkingLevels && m.thinkingLevels.length > 1) tags.push('Thinking models')
         if (typeof m.contextWindow === 'number' && m.contextWindow > 0) {
-          tags.push(`${formatTokens(m.contextWindow)} 上下文`)
+          tags.push(`${formatTokens(m.contextWindow)} context`)
         }
         return {
           id: m.modelId,

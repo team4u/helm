@@ -76,7 +76,7 @@ describe('MarkdownView 产物内联渲染', { timeout: 60_000 }, () => {
         }),
       ),
     )
-    assert.match(html, /<button[^>]*class="attachment-chip"[^>]*title="点击预览产物"/)
+    assert.match(html, /<button[^>]*class="attachment-chip"[^>]*title="Click to preview artifact"/)
     assert.match(html, /数据报告\.csv/)
     assert.doesNotMatch(html, /<a href="artifact:/)
   })

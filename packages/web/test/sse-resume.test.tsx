@@ -532,7 +532,7 @@ const scenarios: ProtocolFailureScenario[] = [
 ]
 
 for (const scenario of scenarios) {
-  test(`协议边界异常作废凭据下次全量：${scenario.name}`, { timeout: 60_000 }, async () => {
+  test(`协议边界异常作废Credentials下次全量：${scenario.name}`, { timeout: 60_000 }, async () => {
     localStorage.setItem('helm:token', 't1')
     const h = await mountProvider()
     try {

@@ -145,17 +145,17 @@ async function settle(): Promise<void> {
 }
 
 async function clickDelete(paneIndex: number): Promise<void> {
-  const menuButtons = [...document.querySelectorAll<HTMLButtonElement>('.pane-more-menu button[aria-label="更多会话操作"]')]
+  const menuButtons = [...document.querySelectorAll<HTMLButtonElement>('.pane-more-menu button[aria-label="More conversation actions"]')]
   assert.ok(menuButtons[paneIndex], `第 ${paneIndex} 个会话窗格应有更多操作按钮`)
   await act(async () => {
     menuButtons[paneIndex]!.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
   })
   const deleteItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-    .find((item) => item.textContent?.includes('删除会话'))
+    .find((item) => item.textContent?.includes('Delete conversation'))
   assert.ok(deleteItem, '菜单中应显示删除会话操作')
   await act(async () => { deleteItem!.click() })
   const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
-    .find((button) => button.textContent?.trim() === '删除会话')
+    .find((button) => button.textContent?.trim() === 'Delete conversation')
   assert.ok(confirm, '确认对话框应显示删除会话按钮')
   await act(async () => { confirm!.click() })
   await settle()
