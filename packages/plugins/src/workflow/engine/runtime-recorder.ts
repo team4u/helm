@@ -12,6 +12,8 @@ import { redactJournalEntry, type JournalWriteInput } from './journal.js'
 
 /** agent 行输入：不带 type/seq（type 由本层补齐，seq 由写入器分配）。 */
 export type AgentRecordInput = Omit<Extract<JournalWriteInput, { type: 'agent' }>, 'type' | 'seq'>
+/** agent_started 行输入：不带 type/seq。 */
+export type AgentStartedRecordInput = Omit<Extract<JournalWriteInput, { type: 'agent_started' }>, 'type' | 'seq'>
 
 export class AgentJournalRecorder {
   readonly ioErrors: string[] = []
@@ -25,6 +27,15 @@ export class AgentJournalRecorder {
     if (this.append === undefined) return
     try {
       await this.append(redactJournalEntry({ ...entry, type: 'agent' }, this.redactText))
+    } catch (error) {
+      this.ioErrors.push(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async recordStarted(entry: AgentStartedRecordInput): Promise<void> {
+    if (this.append === undefined) return
+    try {
+      await this.append(redactJournalEntry({ ...entry, type: 'agent_started' }, this.redactText))
     } catch (error) {
       this.ioErrors.push(error instanceof Error ? error.message : String(error))
     }

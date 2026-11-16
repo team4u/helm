@@ -27,6 +27,7 @@ import { ExecutionError, FileError, type Result, type ShellExecResult } from '@e
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { WorktreeLeaseStore } from './isolation-lease-store.js'
 import {
+  reattachWithWorktree,
   resumeWithWorktree,
   spawnWithWorktree,
   trackWithoutPreallocation,
@@ -69,6 +70,8 @@ export interface WorktreeIsolationDeps {
     profiles?: {
       get(id: string): Promise<{ runtime?: unknown } | undefined>
     }
+    /** 宿主正在关停时置 true：租约保持 fail-closed 保留，不在关停路径误释放。 */
+    readonly isClosing?: boolean
   }
   /** 插件私有 doc（records 同层持久层；停用保留，重启可读）。 */
   docStore: { get<T>(key: string, initial: T): T; set<T>(key: string, value: T): void; flush(): Promise<void> }
@@ -201,6 +204,16 @@ export class WorktreeIsolation {
         { resume: request.resume },
       )
     }
+    if (request.reattach !== undefined) {
+      if (request.reattach.conversationId !== undefined && request.reattach.executionId === undefined) {
+        const existing = this.allocator.getForConversation(request.reattach.conversationId)
+        if (existing !== undefined) {
+          return reattachWithWorktree(this.spawnCtx(), request, existing, next)
+        }
+        return trackWithoutPreallocation(this.spawnCtx(), { ...request, isolation: undefined }, next)
+      }
+      return trackWithoutPreallocation(this.spawnCtx(), request, next)
+    }
     const resumeChildId = request.resume !== undefined ? this.leases.resolveResumeChildId(request) : undefined
     // resume + 已绑定隔离树：严格沿用（无显式 isolation 也不忽略旧绑定）。
     if (resumeChildId !== undefined) {
@@ -218,7 +231,7 @@ export class WorktreeIsolation {
         )
       }
     }
-    // 新建 + isolation：在任何 worktree 分配与租约副作用之前拦截外部运行时或非法 fork。
+    // 新建（或外部 executionId resume）+ isolation：在任何 worktree 分配与租约副作用之前拦截外部运行时或非法 fork。
     if (request.isolation === 'worktree') {
       if (isExternalRuntimeAgentType(request.agentType)) {
         if (request.fork === true) {
@@ -249,6 +262,9 @@ export class WorktreeIsolation {
           }
           return trackWithoutPreallocation(this.spawnCtx(), request, next)
         }
+      }
+      if (request.resume !== undefined && resumeChildId === undefined) {
+        return trackWithoutPreallocation(this.spawnCtx(), request, next)
       }
       return spawnWithWorktree(this.spawnCtx(), request, next)
     }

@@ -113,7 +113,7 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
       settled.push(`${summary.id}:${summary.status}`)
     },
   }
-  const svc = new WorkflowService({ dataDir, state, host })
+  const svc = new WorkflowService({ dataDir, state, host, autoRecoverOnRestart: false })
 
   await svc.prepareRecovery()
   assert.deepEqual(calls, [`abort:${CHILD}`], 'prepareRecovery 必须先逐个守卫中止（paused 相位落持久 abort 标记）遗留子会话')
@@ -298,6 +298,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     const prepareGate = new Promise<void>((resolve) => { releasePrepare = resolve })
     const probeOrder: string[] = []
     await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
     await kernel.plugins.register({
       id: 'test:restart-probe',
       name: '重启恢复探针',
@@ -579,6 +580,7 @@ process.kill(process.pid, 'SIGKILL')
       }
     })
     await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
     await kernel.start()
 
     assert.equal(faux.state.callCount, 0, '同步工作流重启恢复不得新增模型调用（子会话与父会话均零调用）')
@@ -613,6 +615,7 @@ process.kill(process.pid, 'SIGKILL')
     rmSync(closeDir, { recursive: true, force: true })
   })
   await k1.plugins.register(createWorkflowPlugin())
+  await k1.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
   await k1.start()
 
   const { run: closeRun } = (await k1.plugins.invokeAction('builtin:workflow', 'run', {
@@ -801,6 +804,7 @@ process.kill(process.pid, 'SIGKILL')
     await kernel.documentStore.flush()
 
     await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
     await kernel.start()
 
     assert.equal(faux.state.callCount, 0, '工作树遗留子会话重启期零新增模型调用')

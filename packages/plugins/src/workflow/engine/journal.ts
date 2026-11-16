@@ -43,6 +43,7 @@ import {
   isActionEntry,
   isActionStartedEntry,
   isAgentEntry,
+  isAgentStartedEntry,
   type JournalAgentExecution,
   type JournalWriteInput,
   type WorkflowJournalEntry,
@@ -52,6 +53,7 @@ export {
   actionJournalKey,
   agentJournalKey,
   hasValidScopeIdentity,
+  isAgentStartedEntry,
   type AgentJournalKeyInput,
   type JournalAgentExecution,
   type JournalGateResult,
@@ -84,8 +86,8 @@ type LineVerdict =
   /** 无法判定类型：保守视为可能涉及 action。 */
   | { kind: 'uncertain' }
 
-/** 本引擎写出的行 type 恒为首键；只有完整的 "type":"agent" 前缀才判为 agent 损坏行。 */
-const AGENT_LINE_PREFIX = /^\s*\{\s*"type"\s*:\s*"agent"/
+/** 本引擎写出的行 type 恒为首键；只有完整的 "type":"agent" 或 "type":"agent_started" 前缀才判为 agent 损坏行。 */
+const AGENT_LINE_PREFIX = /^\s*\{\s*"type"\s*:\s*"agent(?:_started)?"/
 
 function classifyLine(line: string): LineVerdict {
   let parsed: unknown
@@ -94,12 +96,15 @@ function classifyLine(line: string): LineVerdict {
   } catch {
     return AGENT_LINE_PREFIX.test(line) ? { kind: 'agentCorrupt' } : { kind: 'uncertain' }
   }
-  if (isAgentEntry(parsed)) return { kind: 'entry', entry: parsed }
+  if (isAgentEntry(parsed) || isAgentStartedEntry(parsed)) return { kind: 'entry', entry: parsed }
   if (isActionStartedEntry(parsed) || isActionEntry(parsed)) return { kind: 'entry', entry: parsed }
-  // 可解析但形状未知：能读出 type 字段且为 agent 时按 agent 损坏行处理，
+  // 可解析但形状未知：能读出 type 字段且为 agent/agent_started 时按 agent 损坏行处理，
   // 其余（未知 type / 缺 type / 字段残缺）一律保守 uncertain。
-  if (typeof parsed === 'object' && parsed !== null && (parsed as { type?: unknown }).type === 'agent') {
-    return { kind: 'agentCorrupt' }
+  if (typeof parsed === 'object' && parsed !== null) {
+    const type = (parsed as { type?: unknown }).type
+    if (type === 'agent' || type === 'agent_started') {
+      return { kind: 'agentCorrupt' }
+    }
   }
   return { kind: 'uncertain' }
 }
@@ -205,14 +210,18 @@ export class JournalWriter {
   private handle?: FileHandle
   /** 置位后所有 append（含 agent 行）都抛错：run 已因 action 账本失效而终止。 */
   private poisoned = false
+  private needsTailNewlineCheck: boolean
   agentIoErrors = 0
 
   constructor(
     private readonly path: string,
     private readonly fsyncActions: boolean = true,
+    initialSeq: number = 0,
   ) {
     // 打开是异步的但构造需同步；推迟到首次 append（见 ensure()）。open 失败
     // 时 agent 行退化为计数、action 行显式抛错，语义与同步版本一致。
+    if (Number.isInteger(initialSeq) && initialSeq > 0) this.seq = initialSeq
+    this.needsTailNewlineCheck = this.seq > 0
   }
 
   private opening?: Promise<FileHandle | undefined>
@@ -221,7 +230,18 @@ export class JournalWriter {
     if (this.handle !== undefined) return this.handle
     if (this.opening === undefined) {
       this.opening = open(this.path, 'a')
-        .then((h) => {
+        .then(async (h) => {
+          if (this.needsTailNewlineCheck) {
+            this.needsTailNewlineCheck = false
+            try {
+              const existing = readFileSync(this.path)
+              if (existing.length > 0 && existing[existing.length - 1] !== 0x0a) {
+                await appendFile(h, '\n', 'utf-8')
+              }
+            } catch {
+              // 忽略探测异常，保持原有写路径语义。
+            }
+          }
           this.handle = h
           return h
         })
@@ -319,6 +339,12 @@ export function redactJournalEntry(
   entry: JournalWriteInput,
   redact: (text: string) => string,
 ): JournalWriteInput {
+  if (entry.type === 'agent_started') {
+    return {
+      ...entry,
+      execution: redactValue(entry.execution, redact) as JournalAgentExecution,
+    }
+  }
   if (entry.type !== 'agent') return entry
   const out: JournalWriteInput = { ...entry }
   if (out.text !== undefined) out.text = redact(out.text)

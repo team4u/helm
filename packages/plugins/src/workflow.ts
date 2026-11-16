@@ -64,7 +64,13 @@ import {
 } from './contracts.js'
 import { WorkflowService } from './workflow/engine/index.js'
 import { WorktreeIsolation } from './workflow/isolation.js'
-import { registerWorkflowConfigSchema, readMaxConcurrentAgents, readMaxSubagentDepth } from './workflow/config.js'
+import {
+  isEffectiveAutoRecover,
+  readAutoRecoverOnRestart,
+  readMaxConcurrentAgents,
+  readMaxSubagentDepth,
+  registerWorkflowConfigSchema,
+} from './workflow/config.js'
 import { createManagedSubagentRegistry, type ManagedSubagentEntry } from './workflow/depth.js'
 import { createRunsProjection } from './workflow/projection.js'
 import { createBackgroundPolicy, createBackgroundReporter } from './workflow/background.js'
@@ -124,6 +130,7 @@ export function createWorkflowPlugin(): PluginDefinition {
       registerWorkflowConfigSchema(ctx)
       readMaxConcurrentAgents(ctx)
       readMaxSubagentDepth(ctx)
+      readAutoRecoverOnRestart(ctx)
 
       // ---- 深度守卫与受管子代理登记（构造即全量校验持久条目） ----
       const registry = createManagedSubagentRegistry({
@@ -188,6 +195,9 @@ export function createWorkflowPlugin(): PluginDefinition {
           profiles: {
             get: (id) => ctx.host.profiles.get(id),
           },
+          get isClosing() {
+            return ctx.host.isClosing
+          },
         },
         docStore: worktreeDocStore,
       })
@@ -197,6 +207,8 @@ export function createWorkflowPlugin(): PluginDefinition {
         dataDir: ctx.dataDir,
         state: stateStore,
         concurrency: readMaxConcurrentAgents(ctx),
+        autoRecoverOnRestart: () => isEffectiveAutoRecover(ctx),
+        deferExternalReattach: true,
         // 持久面值级脱敏钩子（契约声明主 app 注入；实际唯一来源是宿主统一
         // redact 端口）：run 记录/账本写入前过 stash 脱敏，防机密落库。
         redact: (text) => ctx.host.redact(text),
@@ -258,7 +270,11 @@ export function createWorkflowPlugin(): PluginDefinition {
           // 读取失败（如持久层损坏）发布显式 notification 诊断后不阻断拆毁——
           // 引擎终态已在 records，损坏也会在任何业务读取路径显式报错，不静默。
           projection.beginStopping()
-          await workflows.close()
+          if (ctx.host.isClosing && isEffectiveAutoRecover(ctx)) {
+            await workflows.suspend()
+          } else {
+            await workflows.close()
+          }
           try {
             projection.syncFinal()
             await records.flush()

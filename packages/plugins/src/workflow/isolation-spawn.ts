@@ -138,6 +138,13 @@ export async function spawnWithWorktree(
           ctx.leases.recordAgentBinding(request.agentId, info.conversationId)
         }
         ctx.leases.updateLease(leaseToken, enriched)
+        void ctx.deps.docStore.flush().catch((flushError: unknown) => {
+          process.stderr.write(
+            `builtin:workflow: worktree ${record.id} 绑定落盘失败: ${
+              flushError instanceof Error ? flushError.message : String(flushError)
+            }\n`,
+          )
+        })
         execution = enriched
         request.onResolved?.(enriched)
       },
@@ -148,12 +155,16 @@ export async function spawnWithWorktree(
     return result
   } catch (error) {
     // next 前失败（分配失败/目标解析失败）：占位租约可证明无执行，安全释放。
-    // next 后失败：原生子会话且已确认停止时同样释放（保留 Worktree 记录与
-    // agentId 绑定供 resume/cleanup）；其余不确定状态保留租约 fail-closed。
-    await (enteredNext
-      ? ctx.leases.settleLeaseAfterNextFailure(leaseToken, execution)
-      : ctx.leases.settleLease(leaseToken, false, true)
-    ).catch(() => {})
+    // next 后失败：关停挂起期间（isClosing）保持 running 租约 fail-closed 保留；
+    // 正常报错且原生子会话确认停止时释放（保留 Worktree 记录与 agentId 绑定）。
+    if (enteredNext && ctx.deps.host.isClosing === true) {
+      // 关停挂起期间不释放 running 租约。
+    } else {
+      await (enteredNext
+        ? ctx.leases.settleLeaseAfterNextFailure(leaseToken, execution)
+        : ctx.leases.settleLease(leaseToken, false, true)
+      ).catch(() => {})
+    }
     throw error
   }
 }
@@ -230,12 +241,86 @@ export async function resumeWithWorktree(
     })
     return result
   } catch (error) {
-    // 与新建同构：next 前失败释放占位；next 后原生子会话确认停止即释放，
-    // 其余不确定状态保留租约 fail-closed。
-    await (enteredNext
-      ? ctx.leases.settleLeaseAfterNextFailure(leaseToken, execution)
-      : ctx.leases.settleLease(leaseToken, false, true)
-    ).catch(() => {})
+    // 与新建同构：关停挂起保持 running 租约；否则 next 前失败释放占位，next 后原生子会话确认停止即释放。
+    if (enteredNext && ctx.deps.host.isClosing === true) {
+      // 关停挂起期间不释放 running 租约。
+    } else {
+      await (enteredNext
+        ? ctx.leases.settleLeaseAfterNextFailure(leaseToken, execution)
+        : ctx.leases.settleLease(leaseToken, false, true)
+      ).catch(() => {})
+    }
+    throw error
+  }
+}
+
+/**
+ * 跨重启原位 reattach 原生隔离 Worktree（不重复分配目录，也不重复拼接 worktreeContextPrompt）：
+ * 复用既有 ManagedWorktreeRecord 与持久 running 租约，恢复完成后收敛租约。
+ */
+export async function reattachWithWorktree(
+  ctx: IsolationSpawnContext,
+  request: AgentSpawnRequest,
+  record: ManagedWorktreeRecord,
+  next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
+): Promise<unknown> {
+  if (record.status === 'removed') {
+    throw new HelmError('worktree_missing', `子会话绑定的隔离 worktree '${record.path}' 已被清理（branch: ${record.branch}）`, 409)
+  }
+  const convId = request.reattach?.conversationId
+  const leaseToken = await ctx.leases.acquireReattachLease(
+    record.id,
+    { ...(convId !== undefined ? { conversationId: convId } : {}) },
+    {
+      nodeId: record.nodeId,
+      ...(convId !== undefined ? { conversationId: convId } : {}),
+      effectiveCwd: record.path,
+    },
+  )
+  let enteredNext = false
+  let execution: AgentExecutionInfo | undefined
+  try {
+    await ctx.allocator.verifyForResume(record, undefined, request.signal)
+    const worktreeDesc: WorktreeExecutionDescriptor = {
+      path: record.path,
+      branch: record.branch,
+      id: record.id,
+      ...(record.repoRoot !== '' ? { repoRoot: record.repoRoot } : {}),
+      ...(record.baseCommit !== '' ? { baseCommit: record.baseCommit, dirtySource: record.dirtySource } : {}),
+      ...(record.baseBranch !== undefined && record.baseBranch !== '' ? { baseBranch: record.baseBranch } : {}),
+      ...(record.parentWorktreeId !== undefined && record.parentWorktreeId !== ''
+        ? { parentWorktreeId: record.parentWorktreeId }
+        : {}),
+    }
+    const finalRequest: AgentSpawnRequest = {
+      ...request,
+      isolation: undefined,
+      onResolved: (raw) => {
+        const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
+        const enriched = withWorktreeExecutionMeta({ ...info, nodeId: info.nodeId ?? record.nodeId }, worktreeDesc)
+        ctx.leases.updateLease(leaseToken, enriched)
+        void ctx.deps.docStore.flush().catch(() => {})
+        execution = enriched
+        request.onResolved?.(enriched)
+      },
+    }
+    enteredNext = true
+    const result = await next(finalRequest)
+    await ctx.leases.settleLease(leaseToken, true, false)
+    await ctx.leases.clearStaleLeases(record.id).catch((error: unknown) => {
+      process.stderr.write(
+        `builtin:workflow: worktree ${record.id} 残留租约清理失败: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    })
+    return result
+  } catch (error) {
+    if (enteredNext && ctx.deps.host.isClosing === true) {
+      // 关停挂起期间保持 running 租约 fail-closed 保留。
+    } else if (enteredNext) {
+      await ctx.leases.settleLeaseAfterNextFailure(leaseToken, execution).catch(() => {})
+    }
     throw error
   }
 }
@@ -251,7 +336,13 @@ export async function trackWithoutPreallocation(
   next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
 ): Promise<unknown> {
   if (request.onResolved === undefined) return next(request)
-  let leaseToken: string | undefined
+  let leaseToken: string | undefined =
+    request.reattach !== undefined
+      ? ctx.leases.findLeaseTokenByExecution({
+          ...(request.reattach.executionId !== undefined ? { executionId: request.reattach.executionId } : {}),
+          ...(request.reattach.conversationId !== undefined ? { conversationId: request.reattach.conversationId } : {}),
+        })
+      : undefined
   let execution: AgentExecutionInfo | undefined
   const finalRequest: AgentSpawnRequest = {
     ...request,

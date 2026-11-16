@@ -152,6 +152,46 @@ export class WorktreeLeaseStore {
   }
 
   /**
+   * 跨重启原位 reattach 复用或登记 running 租约：
+   * 优先命中匹配 worktreeId 与 executionId/conversationId 的既有租约（防止重复累积），
+   * 未命中（例如崩溃前 flush 未及落盘或此前释放过）则即时登记 running 租约保护目录。
+   */
+  async acquireReattachLease(
+    worktreeId: string,
+    match: { conversationId?: number; executionId?: string },
+    info: AgentExecutionInfo,
+  ): Promise<string> {
+    const map = this.listLeases()
+    for (const [token, lease] of map) {
+      if (lease.worktreeId !== worktreeId) continue
+      const matchExec = match.executionId !== undefined && lease.info.executionId === match.executionId
+      const matchConv = match.conversationId !== undefined && lease.info.conversationId === match.conversationId
+      if (matchExec || matchConv) {
+        map.set(token, { ...lease, phase: 'running', info: { ...lease.info, ...info } })
+        this.saveLeases(map)
+        await this.docStore.flush()
+        return token
+      }
+    }
+    const token = randomUUID()
+    map.set(token, { phase: 'running', info, worktreeId, createdAt: Date.now() })
+    this.saveLeases(map)
+    await this.docStore.flush()
+    return token
+  }
+
+  /** 查找匹配 executionId/conversationId 的既有租约 token（外部运行时 reattach 去重用）。 */
+  findLeaseTokenByExecution(match: { executionId?: string; conversationId?: number }): string | undefined {
+    for (const [token, lease] of this.listLeases()) {
+      if (match.executionId !== undefined && lease.info.executionId === match.executionId) return token
+      if (match.conversationId !== undefined && lease.info.executionId === undefined && lease.info.conversationId === match.conversationId) {
+        return token
+      }
+    }
+    return undefined
+  }
+
+  /**
    * 终态收敛。释放仅限两种确认状态（安全红线）：
    * 1) succeeded = true（执行确认成功，或原生子会话回合确认停止）；
    * 2) neverStarted = true（next 从未被调用/尚未进入执行链就抛错——此时

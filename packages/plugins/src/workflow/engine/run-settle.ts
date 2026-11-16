@@ -27,6 +27,7 @@ export async function settleWorkflowRun(
 ): Promise<void> {
   const record = run.record
   const runId = run.runId
+  const suspending = svc.isRunSuspending(run) && result?.status !== 'completed'
   let settleFailure: unknown
   try {
     // 收尾前必须摘除 trailing timer：终态事件即将发布，窗口内补发会造成乱序。
@@ -35,7 +36,11 @@ export async function settleWorkflowRun(
       run.pendingEventTimer = undefined
     }
     const hostClosing = svc.host.isHostClosing?.() === true
-    if (result !== undefined) {
+    if (suspending) {
+      // 宿主关停优雅挂起：保持 running，置位 suspendedCleanly 供下次启动无感原位续跑。
+      record.status = 'running'
+      record.suspendedCleanly = true
+    } else if (result !== undefined) {
       record.status =
         result.status === 'killed'
           ? 'aborted'
@@ -51,6 +56,7 @@ export async function settleWorkflowRun(
       record.error = svc.redact(message)
     }
     if (
+      !suspending &&
       hostClosing &&
       record.status !== 'completed' &&
       (run.childConversations.size > 0 || backgroundChildIds(record).length > 0)
@@ -79,8 +85,12 @@ export async function settleWorkflowRun(
     // 只跟踪内建执行通道，不等待任意插件；取消后必须确认命令已退出，不能超时后假装完成清理。
     run.abort.abort()
     await Promise.allSettled([...run.pendingExecs])
-    record.nodes = redactNodes(svc.redact, nodesFromProgress(run.progress))
-    record.progress = run.timeline
+    if (!suspending || run.progress.length > 0) {
+      record.nodes = redactNodes(svc.redact, nodesFromProgress(run.progress))
+    }
+    if (!suspending || run.timeline.length > 0) {
+      record.progress = run.timeline
+    }
     run.summary = toSummary(record)
     try {
       svc.writeRecord(record)
@@ -113,8 +123,8 @@ export async function settleWorkflowRun(
     if (run.pendingAborts.size > 0) {
       await Promise.allSettled([...run.pendingAborts])
     }
-    // 宿主结算通知：每 run 恰一次；wait/close 经 done 等待它结束。
-    if (svc.host.onRunSettled !== undefined) {
+    // 宿主结算通知：每 run 恰一次；挂起时严禁触发（防止 Herdr 关窗格或误报终态）。
+    if (!suspending && svc.host.onRunSettled !== undefined) {
       try {
         await svc.host.onRunSettled({ ...run.summary })
       } catch (settledError) {
@@ -138,8 +148,9 @@ export async function settleWorkflowRun(
     }
     // 后台启动的 workflow run（notifyParentOnSettle）：终态落盘后向父会话
     // 投递结算通知——与 startBackgroundAgent 同款 outbox 语义（恰一次，
-    // notifiedAt 防重复；失败/关停窗口不置位，init() 下次启动补发）。
+    // notifiedAt 防重复；失败/关停/挂起窗口不置位，init() 下次启动补发）。
     if (
+      !suspending &&
       !svc.isClosed() &&
       svc.host.isHostClosing?.() !== true &&
       record.notifyParentOnSettle === true &&

@@ -133,6 +133,7 @@ export class CancellationTracker {
           for (const run of next) {
             mark(run.conversationId)
             aborted.add(run)
+            run.userAborted = true
             run.abort.abort()
           }
         }
@@ -147,6 +148,7 @@ export class CancellationTracker {
         const stragglers = [...this.active.values()].filter((r) => !aborted.has(r) && match(r, isWithin))
         for (const run of stragglers) {
           mark(run.conversationId)
+          run.userAborted = true
           run.abort.abort()
           await run.done
         }

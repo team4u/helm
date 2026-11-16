@@ -7,10 +7,11 @@
  * 'live' = 携带 attempt 环可变状态交 runtime-agent-handler.ts 执行。
  */
 
-import { agentJournalKey, type AgentJournalKeyInput, type JournalWriteInput } from './journal.js'
+import { agentJournalKey, type AgentJournalKeyInput, type JournalScope, type JournalWriteInput } from './journal.js'
 import { compileJsonSchema, type CompiledSchema } from './json-schema.js'
 import { HARD_MAX_SUBAGENT_DEPTH } from '../../contracts.js'
 import type { WorkflowAgentEntry } from './progress.js'
+import type { ReplayResult, StartedAgentEntry } from './replay.js'
 import type { AgentCallPayload, CompletedChild } from './runtime-types.js'
 import type { AgentCallContext } from './runtime-agent-handler.js'
 import { agentRetryPrompt, applySchema, derivedLabel, isValidAttachments, isValidSecretNames, MAX_AGENT_ATTEMPTS, preview, readCallScope, scopedResumeKey } from './runtime-validation.js'
@@ -19,6 +20,7 @@ import { agentRetryPrompt, applySchema, derivedLabel, isValidAttachments, isVali
 export interface AgentLiveState {
   base: WorkflowAgentEntry
   index: number
+  scope: JournalScope
   scopeId: number
   label: string
   agentType: string
@@ -36,6 +38,8 @@ export interface AgentLiveState {
   attemptLimit: number
   /** 续接目标（resume 调用或失败登记句柄）。 */
   resumeTarget: CompletedChild | undefined
+  /** 同文件原位恢复命中的未决 agent_started 坐标（仅首轮 live 尝试用于 reattach）。 */
+  reattachEntry?: StartedAgentEntry
   queuedAt: number
   /** agent 单次尝试的记账函数（scope 与 invocationIndex 由闭包补齐；replay/live 两侧共用）。 */
   recordAttempt: (entry: Omit<Extract<JournalWriteInput, { type: 'agent' }>, 'type' | 'seq' | 'scopePath' | 'scopeCallIndex'>) => Promise<void>
@@ -222,11 +226,22 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
   }
   const firstAttemptKey = agentJournalKey(keyInput)
   const firstHistory = ctx.replay.history(scope)
-  const replayed = ctx.replay.match(scope, firstAttemptKey, 'agent', {
-    attempt: 1,
-    allowFailure: maxAttempts > 1 || (firstHistory?.type === 'agent' && (firstHistory.retryKind === 'manual' || firstHistory.skipped === true)),
-    resumed: payload.resume !== undefined,
-  })
+  let reattachEntry: StartedAgentEntry | undefined
+  const firstStarted =
+    ctx.inPlaceResume === true && firstHistory === undefined
+      ? ctx.replay.startedAgent(scope, 1, firstAttemptKey)
+      : undefined
+  let replayed: ReplayResult
+  if (firstStarted !== undefined) {
+    replayed = { hit: false }
+    reattachEntry = firstStarted
+  } else {
+    replayed = ctx.replay.match(scope, firstAttemptKey, 'agent', {
+      attempt: 1,
+      allowFailure: maxAttempts > 1 || (firstHistory?.type === 'agent' && (firstHistory.retryKind === 'manual' || firstHistory.skipped === true)),
+      resumed: payload.resume !== undefined,
+    })
+  }
   if (replayed.conflictError !== undefined) {
     ctx.respond(callId, false, undefined, replayed.conflictError, true)
     return { kind: 'responded' }
@@ -250,7 +265,9 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     base.gate = failed.gate
     const { v: _version, seq: _seq, type: _type, ...recorded } = failed
     ctx.counters.replayedCount++
-    await recordAttempt({ ...recorded, index: attemptIndex })
+    if (ctx.inPlaceResume !== true) {
+      await recordAttempt({ ...recorded, index: attemptIndex })
+    }
     ctx.emit([{
       ...base, queuedAt, state: 'error', cached: true,
       attempt, error: failed.error ?? 'Agent failed.',
@@ -293,6 +310,15 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     attemptIndex = ctx.allocateIndex()
     attemptKey = agentJournalKey({ ...keyInput, prompt: attemptPrompt,
       resume: resumeTarget === undefined ? payload.resume : agentId })
+    const nextStarted =
+      ctx.inPlaceResume === true && ctx.replay.history(scope, attempt) === undefined
+        ? ctx.replay.startedAgent(scope, attempt, attemptKey)
+        : undefined
+    if (nextStarted !== undefined) {
+      reattachEntry = nextStarted
+      replayedEntry = undefined
+      break
+    }
     const next = ctx.replay.match(scope, attemptKey, 'agent', {
       attempt, allowFailure: true, resumed: resumeTarget !== undefined,
     })
@@ -360,18 +386,20 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     ])
     ctx.openLaunches.delete(callId)
     // 缓存分支记账保留 resumed 标记：原始调用是 resume 的，新账本必须如实。
-    await recordAttempt({
-      index: attemptIndex,
-      key: replayedEntry.key,
-      ok: true,
-      text: replayedText,
-      ...(replayedEntry.type === 'agent' && replayedEntry.resumed === true ? { resumed: true } : {}),
-      ...(replayedEntry.execution !== undefined ? { execution: replayedEntry.execution } : {}),
-      ...(replayedEntry.gate !== undefined ? { gate: replayedEntry.gate } : {}),
-      ...(replayedEntry.attempt !== undefined ? { attempt: replayedEntry.attempt } : {}),
-      ...(replayedEntry.invocationIndex !== undefined ? { invocationIndex: replayedEntry.invocationIndex } : {}),
-      ...(replayedEntry.prompt !== undefined ? { prompt: replayedEntry.prompt } : {}),
-    })
+    if (ctx.inPlaceResume !== true) {
+      await recordAttempt({
+        index: attemptIndex,
+        key: replayedEntry.key,
+        ok: true,
+        text: replayedText,
+        ...(replayedEntry.type === 'agent' && replayedEntry.resumed === true ? { resumed: true } : {}),
+        ...(replayedEntry.execution !== undefined ? { execution: replayedEntry.execution } : {}),
+        ...(replayedEntry.gate !== undefined ? { gate: replayedEntry.gate } : {}),
+        ...(replayedEntry.attempt !== undefined ? { attempt: replayedEntry.attempt } : {}),
+        ...(replayedEntry.invocationIndex !== undefined ? { invocationIndex: replayedEntry.invocationIndex } : {}),
+        ...(replayedEntry.prompt !== undefined ? { prompt: replayedEntry.prompt } : {}),
+      })
+    }
     ctx.respond(callId, true, payload.withMeta === true ? {
       ok: true,
       output: replayedText,
@@ -399,6 +427,11 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
   }
   return {
     kind: 'live',
-    state: { base, index, scopeId, label, agentType, model, isolation, agentId, compiledSchema, keyInput, attemptKey, attemptPrompt, attempt, attemptIndex, attemptLimit, resumeTarget, queuedAt, recordAttempt },
+    state: {
+      base, index, scope, scopeId, label, agentType, model, isolation, agentId, compiledSchema,
+      keyInput, attemptKey, attemptPrompt, attempt, attemptIndex, attemptLimit, resumeTarget,
+      ...(reattachEntry !== undefined ? { reattachEntry } : {}),
+      queuedAt, recordAttempt,
+    },
   }
 }

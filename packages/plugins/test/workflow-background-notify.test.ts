@@ -222,7 +222,7 @@ describe('后台 workflow run 通知与恢复', () => {
         { id: 'agent-0', kind: 'agent', label: '后台任务', status: 'running', startedAt: 1, conversationId: 77 },
       ],
     })
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     await service.prepareRecovery()
     assert.deepEqual(
       host.guardedAborts,
@@ -285,8 +285,8 @@ describe('后台 workflow run 通知与恢复', () => {
     assert.deepEqual(crashed.childConversationIds, [42], 'onResolved 子会话必须在 running 记录中即时持久')
     assert.equal(crashed.nodes, undefined, '真实运行中 nodes 尚未落盘，恢复不得依赖它')
 
-    // 模拟重启：第二个 WorkflowService 读同一 state 做恢复（首服务视为已死）。
-    const revived = new WorkflowService({ dataDir, host, state })
+    // 模拟重启（autoRecoverOnRestart=false 回退路径）：第二个 WorkflowService 读同一 state 做恢复。
+    const revived = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     await revived.prepareRecovery()
     assert.deepEqual(host.guardedAborts, [42], 'prepareRecovery 必须按持久 IDs 逐个守卫中止（落持久 abort 标记）')
     await revived.init()
@@ -324,7 +324,7 @@ describe('后台 workflow run 通知与恢复', () => {
         { id: 'agent-0', kind: 'agent', label: '同步任务', status: 'running', startedAt: 1, conversationId: 88 },
       ],
     })
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     await service.prepareRecovery()
     assert.deepEqual(host.guardedAborts, [88], '同步 workflow 必须在 prepareRecovery 收集并标记子会话，防孤儿原生子会话继续运行')
     await service.init()

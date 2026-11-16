@@ -24,7 +24,7 @@
 - 清理前会探测目标节点上的进程是否仍以工作树或其子目录为 cwd，或持有其中的文件句柄；命中 `worktree_process_in_use` 时，依据返回的 PID 和进程名核对占用。只对已确认属于自己的任务做收尾，不终止其他会话或人类进程。进程探测不支持或不完整时显式拒绝清理，`force: true` 也不能跳过。
 - 只读检视（不执行任何写操作）：`helm worktrees list` 列出全部登记（含已清理记录元数据）；`helm worktrees inspect <worktreeId>` 返回登记元数据 + 目标节点真实 git 只读探测（当前分支/HEAD、未提交文件清单、领先基线提交数、diff 统计与有上限预览；`--conversation-id <id>` / `--path <path> [--node-id <nodeId>]` 可替代选择器）。仅登记记录可检视，不支持任意目录；目录缺失/已清理时如实返回 unavailableReason，git 失败显式报错。
 - CLI：`helm worktrees cleanup --worktree-id <worktreeId> --json`；`--current` 使用当前子会话；`--path <path> --node-id <nodeId>` 精确选择节点目录。`--delete-branch` 同时删除分支（默认保留）；`--merged-into <ref>` 显式指定已合入的目标分支或提交，未传时优先用登记的 `baseBranch`（父模块分支，已删或未登记则回退主工作树 HEAD）；`--force` 显式允许丢弃未提交修改与未合入提交（不绕过占用、归属、locked 与进程探测检查）。
-- Hub 重启会将中断的后台运行明确标为失败并汇报；需要时凭原 execution 的 resume 标识续接，不自动重新派工或重跑 gate。
+- 默认开启 Hub 重启无感原位恢复（`autoRecoverOnRestart`，可用 `HELM_AUTO_RECOVER=0` 逃生关闭）：优雅关停挂起（`suspendedCleanly`）或崩溃重启后，引擎按原 `runId` 原位重挂原生子会话与 Herdr 外部窗格、或重放账本继续未完工作流（连续异常崩溃超过 3 次触发 `[crash_recovery_limit]` 熔断；`secretNames` 授予且尚未创建执行环境则明确失败）；恢复开关关闭时回退旧版标记失败汇报语义。需要手动对已失败任务批量恢复时，用 `helm workflows resume-failed [--current | --conversation-id <id> | --all]`（或 `run_action({ actionId: "builtin:workflow.resume_failed", ... })`）。
 - 中断运行或外部执行失败后，若无法确认底层已停止，持久租约会阻止自动清理（worktree_execution_unknown）；先检查目标节点并续接收尾，或确认停止后通过 helm env exec 在原节点手动执行 Git 清理。force 不绕过此检查。
 
 ## SubagentWorkflow 确定性编排脚本
@@ -80,7 +80,7 @@ return { reports: reports.filter(report => report !== null) }
 
 ### 断点重放（resumeFromRunId）
 
-调用 `SubagentWorkflow({ resumeFromRunId: "<runId>", ... })`（或 CLI `helm workflows run <name> --resume-from-run-id <runId> --current --wait`）读取旧账本；匹配的已完成节点直接重放结果，agent/action 与已通过的 gate 不重复执行。参数变化（包括 gate 命令）会使当前 scope 断链；兄弟工作流的成功前缀独立复用。存在未复用的非幂等后续动作时，恢复显式拒绝，避免重复副作用。
+调用 `SubagentWorkflow({ resumeFromRunId: "<runId>", ... })`（或 CLI `helm workflows run <name> --resume-from-run-id <runId> --current --wait`）读取旧账本；匹配的已完成节点直接重放结果，agent/action 与已通过的 gate 不重复执行。参数变化（包括 gate 命令）会使当前 scope 断链；兄弟工作流的成功前缀独立复用。存在未复用的非幂等后续动作时，恢复显式拒绝，避免重复副作用。对具可续接句柄（`subagentSpec` + `execution.conversationId`/`executionId`）的失败或中止后台单子代理同样支持 `resumeFromRunId`，也可用 `helm workflows resume-failed` 按会话或全局批量续接可恢复的失败任务。
 `agent(..., { resume: "<label>" })` 则是续接代理上下文，与账本重放不同；不要同时指定 agentType/model/isolation/effort，schema、gate、本轮 attachments 与 maxSubagentDepth 可以随续接提交；层级授权变化会使旧账本缓存失配。续接不自动继承上轮附件；附件 ID 或顺序变化也会影响账本匹配。原生子会话须仍存在、归属当前父会话且空闲；外部运行时还受其清理生命周期限制，失效时如实报错，不假装续接成功。
 
 ## 与 builtin:herdr 终端 Agent 路由

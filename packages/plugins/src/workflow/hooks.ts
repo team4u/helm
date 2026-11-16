@@ -113,6 +113,7 @@ export function registerWorkflowHooks(ctx: HelmPluginContext, deps: WorkflowHook
   // 被守卫中止触发的 turn_settled 递归进入时命中同一批 run，不再扩散）。
   ctx.hook.onTurnSettled((payload) => {
     if (payload.outcome !== 'aborted') return
+    if (ctx.host.isClosing && workflows.isAutoRecoverOnRestart()) return
     const conversationId = payload.conversation.id
     void workflows
       .cancelRunsUnderConversation(conversationId)
@@ -146,6 +147,7 @@ export function registerWorkflowHooks(ctx: HelmPluginContext, deps: WorkflowHook
   // 之后发送进程内 runtime.started；先等恢复收集的遗留子会话收敛 idle，
   // 再回收可证明已无执行的原生 Worktree 崩溃租约。
   ctx.host.onEvent('runtime.started', async () => {
+    workflows.startDeferredReattaches()
     await workflows.awaitPreparedChildrenSettled()
     await isolation.reconcileStoppedNativeLeases()
   })

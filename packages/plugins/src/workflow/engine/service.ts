@@ -59,6 +59,7 @@ import {
   type WorkflowServiceContext,
   type WorkflowServiceOptions,
 } from './service-context.js'
+import { isAutoRecoverEnvDisabled } from '../config.js'
 import { StartupRecovery } from './service-recovery.js'
 import { startWorkflowRun } from './service-run.js'
 import { startBackgroundAgent as launchBackgroundAgent } from './background-agent-runner.js'
@@ -87,6 +88,10 @@ export class WorkflowService {
   private readonly takeoverReservations = new Set<string>()
   private readonly ctx: WorkflowServiceContext
   private readonly recovery: StartupRecovery
+  private readonly autoRecoverOption: boolean | (() => boolean) | undefined
+  private readonly deferExternalReattach: boolean
+  private readonly externalRuntimeReadyGate: Promise<void>
+  private resolveExternalRuntimeReady: () => void = () => {}
   private closed = false
 
   constructor(options: WorkflowServiceOptions) {
@@ -94,6 +99,15 @@ export class WorkflowService {
     this.state = options.state
     this.caps = resolveCaps(options)
     this.redact = options.redact ?? ((text: string) => text)
+    this.autoRecoverOption = options.autoRecoverOnRestart
+    this.deferExternalReattach = options.deferExternalReattach === true
+    if (this.deferExternalReattach) {
+      this.externalRuntimeReadyGate = new Promise<void>((resolve) => {
+        this.resolveExternalRuntimeReady = resolve
+      })
+    } else {
+      this.externalRuntimeReadyGate = Promise.resolve()
+    }
     this.runs = new RunStore({ dataDir: options.dataDir, state: options.state })
     this.library = new WorkflowLibrary({
       dataDir: options.dataDir,
@@ -120,8 +134,31 @@ export class WorkflowService {
       emitEventSafe: (type, payload) => this.emitEventSafe(type, payload),
       makeEngineHost: (run, parent) => this.makeEngineHost(run, parent),
       abortChildConversation: (run, conversationId) => this.abortChildConversation(run, conversationId),
+      isAutoRecoverOnRestart: () => this.isAutoRecoverOnRestart(),
+      isRunSuspending: (run) =>
+        run.suspended === true ||
+        (this.isAutoRecoverOnRestart() && this.host.isHostClosing?.() === true && run.userAborted !== true),
+      deferExternalReattach: this.deferExternalReattach,
+      waitExternalRuntimeReady: () => this.externalRuntimeReadyGate,
     }
     this.recovery = new StartupRecovery(this.ctx)
+  }
+
+  /** 判断当前是否启用重启自动恢复（配置项与 HELM_AUTO_RECOVER=0/false 逃生阀）。 */
+  isAutoRecoverOnRestart(): boolean {
+    if (this.autoRecoverOption === false) return false
+    if (typeof this.autoRecoverOption === 'function' && !this.autoRecoverOption()) return false
+    return !isAutoRecoverEnvDisabled()
+  }
+
+  /** 判断宿主内核是否处于关停窗口。 */
+  isHostClosing(): boolean {
+    return this.host.isHostClosing?.() === true
+  }
+
+  /** runtime.started 阶段放行被推迟的外部运行时（executionId）与 pre-resolve 重挂。 */
+  startDeferredReattaches(): void {
+    this.resolveExternalRuntimeReady()
   }
 
   /** 启动恢复（阶段一屏障；实现位于 service-recovery）。幂等；run() 首次调用前自动执行。 */
@@ -294,6 +331,46 @@ export class WorkflowService {
     return out
   }
 
+  /** 按 (conversationId, parentToolCallId) 精确查找既有 Run（同步工具跨重启幂等重放用）。 */
+  findRunByParentToolCall(conversationId: number, parentToolCallId: string): RunRecord | undefined {
+    if (parentToolCallId === '') return undefined
+    for (const active of this.active.values()) {
+      if (active.conversationId === conversationId && active.record.parentToolCallId === parentToolCallId) {
+        return active.record
+      }
+    }
+    const index = this.runs
+      .readIndex()
+      .filter((entry) => entry.conversationId === conversationId)
+      .sort((a, b) => b.createdAt - a.createdAt)
+    for (const entry of index) {
+      let record: RunRecord
+      try {
+        record = this.runs.load(entry.id)
+      } catch (error) {
+        if (error instanceof HelmError && error.code === 'not_found') continue
+        throw error
+      }
+      if (record.parentToolCallId === parentToolCallId) return record
+    }
+    return undefined
+  }
+
+  /** 查询完整持久 RunRecord（actions / CLI / 批量恢复读取规格与恢复元数据用）。 */
+  loadRunRecord(runId: string): RunRecord {
+    const active = this.active.get(runId)
+    if (active !== undefined) return active.record
+    return this.runs.load(runId)
+  }
+
+  /** 判断接管标记是否仍对应有效接管运行（非幽灵）。 */
+  isTakeoverActive(markerRunId: string, conversationId: number): boolean {
+    return !this.runs.inspectTakeoverMarker(markerRunId, conversationId, {
+      reserved: this.takeoverReservations.has(markerRunId),
+      active: this.active.has(markerRunId),
+    }).ghost
+  }
+
   /**
    * 返回满足自动断点续跑条件的后台工作流（实现位于 service-recovery）。
    */
@@ -347,6 +424,7 @@ export class WorkflowService {
    * 才返回（各自子会话的守卫中止在 run 结算链内等待）。
    */
   async cancelRunsUnderConversation(conversationId: number): Promise<void> {
+    if (this.host.isHostClosing?.() === true && this.isAutoRecoverOnRestart()) return
     await this.cancellation.cancelBoundary(`conv:${conversationId}`, [conversationId], (run, isWithin) =>
       isWithin(run.conversationId, conversationId),
     )
@@ -362,10 +440,30 @@ export class WorkflowService {
     return abortChildViaHost(this.host, run, conversationId)
   }
 
+  /**
+   * 宿主优雅关停挂起（仅 ctx.host.isClosing === true && autoRecoverOnRestart）：
+   * 停用 Worker 与本地等待句柄，严禁调用 abortConversationGuarded，落盘
+   * status='running' + suspendedCleanly=true 并 flush。
+   */
+  async suspend(): Promise<void> {
+    this.closed = true
+    const inFlight = [...this.active.values()]
+    for (const run of inFlight) {
+      run.suspended = true
+      run.abort.abort()
+    }
+    await Promise.all(inFlight.map((run) => run.done))
+    await this.state.flush?.()
+  }
+
+  /** 关停全部在途 run（插件停用 / close 降级用）：标记 userAborted 强制走 aborted 收尾。 */
   async close(): Promise<void> {
     this.closed = true
     const inFlight = [...this.active.values()]
-    for (const run of inFlight) run.abort.abort()
+    for (const run of inFlight) {
+      run.userAborted = true
+      run.abort.abort()
+    }
     await Promise.all(inFlight.map((run) => run.done))
     await this.state.flush?.()
   }
@@ -381,6 +479,8 @@ export class WorkflowService {
       persistChildConversationFact: (activeRun, conversationId) =>
         this.persistChildConversationFact(activeRun, conversationId),
       loadWorkflowRef: (ref) => this.loadWorkflowRef(ref),
+      waitExternalRuntimeReady: () => this.externalRuntimeReadyGate,
+      isSuspending: (activeRun) => this.ctx.isRunSuspending(activeRun),
     }
   }
 

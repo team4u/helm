@@ -29,7 +29,7 @@ import {
   writeSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
+import { HelmError, type AgentExecutionInfo, type JsonSchema } from '@helm/protocol'
 import type {
   WorkflowProgressEntry,
   WorkflowRunStatus,
@@ -137,6 +137,31 @@ export interface RunRecord {
   autoResumeCount?: number
   /** 已接替本失败 run 的新 run ID（防重复续跑；与索引同步）。 */
   resumedByRunId?: string
+  /** 宿主优雅关停主动挂起标记：下次启动恢复清零且不计入异常崩溃次数。 */
+  suspendedCleanly?: boolean
+  /** 连续非优雅挂起的崩溃恢复计数（> 3 触发 [crash_recovery_limit] 熔断）。 */
+  crashRecoveries?: number
+  /** 脱敏后的后台单子代理启动规格（用于重启原位重挂与失败后 resume 续接；严禁落盘 secretNames 明文）。 */
+  subagentSpec?: PersistedSubagentSpec
+}
+
+/** 持久化的单子代理派生规格（严格脱敏，不含机密名或密钥明文）。 */
+export interface PersistedSubagentSpec {
+  agentId: string
+  requestId: string
+  prompt: string
+  agentType?: string
+  cwd?: string
+  isolation?: 'none' | 'worktree'
+  gate?: string
+  gateTimeoutMs?: number
+  schema?: JsonSchema
+  maxSubagentDepth?: number
+  model?: string
+  effort?: string
+  fork?: boolean
+  attachments?: string[]
+  hadSecretGrant?: boolean
 }
 
 /** 持久层读出的错误可打印形态（store 异常诊断用）。 */
@@ -198,7 +223,9 @@ export function isNonRetryableWorkflowError(error: string | undefined): boolean 
   const normalized = error.toLowerCase()
   return normalized.includes('workflow_action_uncertain') ||
     normalized.includes('[validation_error]') ||
-    normalized.includes('workflow script has a syntax error')
+    normalized.includes('workflow script has a syntax error') ||
+    normalized.includes('[crash_recovery_limit]') ||
+    normalized.includes('secret_grant_expired_on_restart')
 }
 
 /**
@@ -259,6 +286,64 @@ function runRecordProblem(record: unknown): string | undefined {
   }
   if (r['pendingChildCleanup'] !== undefined && typeof r['pendingChildCleanup'] !== 'boolean') {
     return 'pendingChildCleanup 非布尔'
+  }
+  if (r['suspendedCleanly'] !== undefined && typeof r['suspendedCleanly'] !== 'boolean') {
+    return 'suspendedCleanly 非布尔'
+  }
+  if (
+    r['crashRecoveries'] !== undefined &&
+    (!Number.isInteger(r['crashRecoveries']) || (r['crashRecoveries'] as number) < 0)
+  ) {
+    return 'crashRecoveries 非负整数'
+  }
+  if (r['subagentSpec'] !== undefined) {
+    const specProblem = subagentSpecProblem(r['subagentSpec'])
+    if (specProblem !== undefined) return `subagentSpec 非法（${specProblem}）`
+  }
+  return undefined
+}
+
+function subagentSpecProblem(value: unknown): string | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return `非对象结构（${typeof value}）`
+  }
+  const spec = value as Record<string, unknown>
+  if ('secretNames' in spec) return '不得持久 secretNames'
+  if (typeof spec['agentId'] !== 'string' || spec['agentId'] === '') return 'agentId 非非空字符串'
+  if (typeof spec['requestId'] !== 'string' || spec['requestId'] === '') return 'requestId 非非空字符串'
+  if (typeof spec['prompt'] !== 'string') return 'prompt 非字符串'
+  for (const field of ['agentType', 'cwd', 'gate', 'model', 'effort'] as const) {
+    if (spec[field] !== undefined && typeof spec[field] !== 'string') return `${field} 非字符串`
+  }
+  if (spec['isolation'] !== undefined && spec['isolation'] !== 'none' && spec['isolation'] !== 'worktree') {
+    return 'isolation 非法'
+  }
+  if (
+    spec['gateTimeoutMs'] !== undefined &&
+    (!Number.isInteger(spec['gateTimeoutMs']) || (spec['gateTimeoutMs'] as number) <= 0)
+  ) {
+    return 'gateTimeoutMs 非正整数'
+  }
+  if (
+    spec['schema'] !== undefined &&
+    (spec['schema'] === null || typeof spec['schema'] !== 'object' || Array.isArray(spec['schema']))
+  ) {
+    return 'schema 非对象'
+  }
+  if (
+    spec['maxSubagentDepth'] !== undefined &&
+    (!Number.isInteger(spec['maxSubagentDepth']) || (spec['maxSubagentDepth'] as number) < 1)
+  ) {
+    return 'maxSubagentDepth 非正整数'
+  }
+  for (const flag of ['hadSecretGrant', 'fork'] as const) {
+    if (spec[flag] !== undefined && typeof spec[flag] !== 'boolean') return `${flag} 非布尔`
+  }
+  if (
+    spec['attachments'] !== undefined &&
+    (!Array.isArray(spec['attachments']) || !spec['attachments'].every((item) => typeof item === 'string'))
+  ) {
+    return 'attachments 非字符串数组'
   }
   return undefined
 }

@@ -75,7 +75,7 @@ flowchart TD
 | 触发情形 | 说明 |
 | :--- | :--- |
 | 悬挂非幂等意图行 | 存在 `action_started`（未标 `idempotent`）且无对应终态行——不论 `seq` 位置 |
-| 损坏行无法判定类型 | 单条损坏但能从残余文本读出完整 `"type":"agent"` 前缀的候选行计 `ioError` 后跳过（诊断暴露、不阻断其余行重放）；其余（含可解析但形状未知的行）一律保守 uncertain |
+| 损坏行无法判定类型 | 单条损坏但能从残余文本读出完整 `"type":"agent"` 或 `"type":"agent_started"` 前缀的候选行计 `ioError` 后跳过（诊断暴露、不阻断其余行重放）；其余（含可解析但形状未知的行）一律保守 uncertain |
 | 非幂等动作失败终态 | 存在 `ok: false` 且未标幂等的 action 行（handler 抛错不等于零副作用） |
 | 序号冲突 | 相同 `seq` 对应不同记录，无法安全去重；版本或序号字段非法的 action 行也显式拒绝恢复 |
 | 文件不可读 | 权限或磁盘错误（`journal_read_failed`）；ENOENT 视为正常空账本 |
@@ -84,22 +84,30 @@ flowchart TD
 
 ## Hub 重启恢复
 
-插件服务生命周期由宿主的统一启动屏障保证顺序（全部插件 `prepare` 完成后才开始 `start`，随后恢复 SDK 调度器并触发进程内 `runtime.started`）：
+默认开启重启无感原位恢复（配置 `autoRecoverOnRestart`，默认 `true`；`false` 或环境变量 `HELM_AUTO_RECOVER=0` 时回退中止收敛模式）：
 
-**阶段一 `prepareRecovery`（全局 prepare 屏障内）**：扫描全部遗留 `running` 以及优雅关停带 `pendingChildCleanup` 标记的记录（覆盖后台、同步 `SubagentWorkflow`、CLI `workflows run` 与 `subagent`），为所有关联原生子会话经 `abortConversationGuarded` 落持久 abort 标记——不唤醒 SDK 调度器、不提交任何输入，防止遗留原生子会话在恢复后成为孤儿任务继续执行。此刻其他插件的工具尚未注册完成，任何输入提交都会产生孤儿回合。守卫中止逐个执行：会话已删除（`not_found`）或已被人类接管（`ownership_conflict`——human 红线拒绝）这两类确定性可接受失败诊断后继续；其余失败（持久化 I/O 等）上抛阻断屏障，绝不带着未落取消标记启动调度器。
+**优雅关停（`ctx.host.isClosing === true && effectiveAutoRecover`）**：引擎调用 `workflows.suspend()`——终止进程内 Worker 与本地等待句柄，**不**调用 `abortConversationGuarded`、**不**改写终态、**不**触发 `onRunSettled` / 父会话通知，对在途 `RunRecord` 落盘 `suspendedCleanly: true`（保持 `status: 'running'`）并维持 Worktree `running` 租约 fail-closed 保留。单插件停用（`ctx.host.isClosing === false`）或关闭自动恢复时完整保留既有 `close()` 中止落盘 `aborted` 语义。
 
-**阶段二 `init`（服务 start）**：清理 `pendingChildCleanup` 标记、对跨重启 `running` 记录的遗留子会话执行守卫中止并显式标 `failed`（workflow 记 `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）`，subagent 记 `subagent run interrupted by process restart（可凭 conversationId/executionId 通过 resume 续接）`），并仅对 `notifyParentOnSettle === true` 的后台任务经 outbox 补发父会话通知（`notifiedAt` 标记保证 at-least-once，同步与 CLI 工作流绝不通知父会话）。此刻工具已注册，补发输入消费安全。
+**阶段一 `prepareRecovery`（全局 prepare 屏障内）**：扫描全部 `pendingChildCleanup === true` 的已终态记录，以及（当自动恢复关闭、或运行触发 `crashRecoveries > 3` 熔断 / `actionUncertain` / `secret_grant_expired_on_restart` 不可原位恢复时）对应 `running` 记录的遗留子会话，经 `abortConversationGuarded` 落持久 abort 标记；可原位恢复的健康 `running` 记录不中止子会话，保留给 `harness.resume()` 与原位重挂。
 
-**阶段三 `runtime.started`（`harness.resume()` 后启动收尾）**：调度器恢复运行后，插件等待恢复收集的遗留子会话真实收敛至 `idle`（`awaitPreparedChildrenSettled`），随后回收可证明已停止的原生 Worktree 崩溃租约（外部 `executionId` 租约仍保持 fail-closed 保留），使残留工作树可恢复正常 `resume` 或 `cleanup_worktree`。
+**阶段二 `init`（服务 start）**：
+- 若 `suspendedCleanly === true`：清除标记且不递增 `crashRecoveries`；若为异常崩溃（无 `suspendedCleanly`）：先递增 `crashRecoveries` 并落盘，`crashRecoveries > 3` 时触发 `[crash_recovery_limit]` 熔断（守卫中止子会话并标 `failed`）；
+- 健康后台单子代理（`kind === 'subagent'`）：若崩溃于 `onResolved` 前且 `subagentSpec.hadSecretGrant === true`（内存机密已失效），诚实标 `failed (secret_grant_expired_on_restart)`；否则凭原 `runId`、`requestId` 与 `reattach` 原位重挂（原生 `conversationId` 于 `harness.resume()` 前同步等待 `onResolved` 就位结构化输出与 Worktree 租约，外部 `executionId` 于 `runtime.started` 放行）；
+- 健康 DSL 工作流：沿用原 `runId` 启动 Worker，以 `initialSeq = maxExistingSeq + 1`、`inPlaceResume: true` 追加打开原账本（已落盘终态 0 Token 重放且不重复追加），遇到未配对终态的 `agent_started` 行时以原 `requestId` + `reattach` 原位重挂完成后继续执行；
+- `subagent` 与 `SubagentWorkflow` 模型工具均声明 `replay: 'safe'` 并按受信 `(conversationId, callId)` 幂等重放，重启恢复 `ToolTask` 时继续等待原 run 或直接返回终态结果，不重复派生。
+- 已达成终态且未发送父会话汇报的后台运行仍由 outbox 补发（`notifiedAt` 防重复）。
 
-此后开发者可凭该 runId 安全续接：
+**阶段三 `runtime.started`（`harness.resume()` 后启动收尾）**：放行外部运行时与 pre-resolve 重挂，等待待收敛的遗留子会话结算至 `idle`（`awaitPreparedChildrenSettled`），随后回收可证明已停止的原生 Worktree 崩溃租约（外部 `executionId` 租约与活跃重挂租约保持 fail-closed 保留）。
+
+对于已因重启熔断或历史原因处于 `failed` 的任务，开发者可单条或批量续跑：
 
 ```bash
-# 从中断 run 恢复（省略 --conversation-id 时沿用原 run 的会话）
+# 从单条 failed/aborted 工作流或具句柄的单子代理恢复
 pnpm helm workflows run ./pipeline.js --resume-from-run-id wf_1a2b3c4d5e6f --wait
 
-# subagent 类 run：不重放账本，改用 subagent 工具的 resume 续接
-# （凭 execution.conversationId / executionId）
+# 批量续接当前会话或全局全部可恢复的失败工作流与后台单子代理（不可恢复项记入 skipped）
+pnpm helm workflows resume-failed --current
+pnpm helm workflows resume-failed --all
 ```
 
 恢复执行继承原 run 的 `args`（显式传入可覆盖），已成功前缀的智能体调用零 Token 瞬间返回，自中断点起实时接续。

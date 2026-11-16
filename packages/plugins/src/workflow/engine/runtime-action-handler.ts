@@ -23,7 +23,8 @@ import { RuntimeControl, Semaphore } from './runtime-control.js'
 export interface ActionCallContext {
   host: WorkflowHost
   signal: AbortSignal | undefined
-  runState: { isAborted(): boolean; isSettled(): boolean }
+  inPlaceResume?: boolean
+  runState: { isAborted(): boolean; isSettled(): boolean; isSuspended?(): boolean }
   emit(entries: WorkflowEntry[]): void
   respond(callId: number, ok: boolean, value?: unknown, error?: string, fatal?: boolean): void
   allocateIndex(): number
@@ -104,28 +105,30 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
       // 默默容忍会让新 run 账本缺失该 action 终态——下次 resume 无法复用，
       // 可能重执行副作用。账本不可写 = 不可安全记账 = 不可继续。
       const effectiveReplayedIdempotent = payload.idempotent ?? (replayed.entry.idempotent === true)
-      try {
-        await recordAction({
-          type: 'action',
-          index,
-          key,
-          ok: true,
-          result: redactPlainValue(replayed.entry.result, ctx.redactText),
-          ...(effectiveReplayedIdempotent ? { idempotent: true } : {}),
-        })
-      } catch (error) {
-        const message =
-          error instanceof JournalWriteError
-            ? error.message
-            : `workflow journal append failed: ${error instanceof Error ? error.message : String(error)}`
-        ctx.respond(
-          callId,
-          false,
-          undefined,
-          `workflow journal replay bookkeeping failed; aborting to keep the run resumable: ${message}`,
-          true,
-        )
-        return
+      if (ctx.inPlaceResume !== true) {
+        try {
+          await recordAction({
+            type: 'action',
+            index,
+            key,
+            ok: true,
+            result: redactPlainValue(replayed.entry.result, ctx.redactText),
+            ...(effectiveReplayedIdempotent ? { idempotent: true } : {}),
+          })
+        } catch (error) {
+          const message =
+            error instanceof JournalWriteError
+              ? error.message
+              : `workflow journal append failed: ${error instanceof Error ? error.message : String(error)}`
+          ctx.respond(
+            callId,
+            false,
+            undefined,
+            `workflow journal replay bookkeeping failed; aborting to keep the run resumable: ${message}`,
+            true,
+          )
+          return
+        }
       }
       ctx.replay.consumeAction(replayed.entry)
       ctx.respond(callId, true, replayed.entry.result ?? null)
@@ -250,6 +253,9 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
         ctx.openLaunches.delete(callId)
       }
 
+      if (ctx.runState.isSettled() || (ctx.runState.isSuspended?.() === true && !outcome.ok)) {
+        return
+      }
       const finishedAt = Date.now()
       // 终态行落盘（fsync）之后才 respond；写失败 = 已执行但无法记账，显式不确定。
       try {

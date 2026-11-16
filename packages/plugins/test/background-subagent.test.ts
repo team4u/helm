@@ -540,7 +540,7 @@ describe('startBackgroundAgent', () => {
       journalPath,
       subagentMeta: { agentType: 'researcher', execution: { conversationId: 42 } },
     })
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     await service.init()
     const summary = service.getRun('wf_restartdead0001')
     assert.equal(summary.status, 'failed')
@@ -571,7 +571,7 @@ describe('startBackgroundAgent', () => {
       updatedAt: 1,
       journalPath,
     })
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     await service.init()
     const summary = service.getRun('wf_wfdsldead00001')
     assert.equal(summary.status, 'failed')
@@ -684,7 +684,7 @@ describe('startBackgroundAgent', () => {
       return origSpawn(req)
     }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     const { run } = await service.startBackgroundAgent({
       parentConversationId: 1,
       prompt: 'close-while-closing',
@@ -714,9 +714,9 @@ describe('startBackgroundAgent', () => {
     assert.equal(host.abortedConversations.length, 0, 'host closing 期不再调用已关闭的 abortConversationGuarded')
     assert.equal(host.settledCalls.length, 0, 'host closing 期不向父会话发通知')
 
-    // 重启后恢复：prepareRecovery 收集 55 并守卫中止，init 清除 pendingChildCleanup 并补发两条 outbox
+    // 重启后恢复（autoRecoverOnRestart=false）：prepareRecovery 收集 55 并守卫中止，init 清除 pendingChildCleanup 并补发两条 outbox
     hostClosing = false
-    const reopened = new WorkflowService({ dataDir, host, state })
+    const reopened = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     await reopened.prepareRecovery()
     assert.deepEqual(host.abortedConversations, [55])
     await reopened.init()
@@ -734,7 +734,7 @@ describe('startBackgroundAgent', () => {
     const host = makeHost()
     host.isHostClosing = () => hostClosing
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     host.behavior = { kind: 'hanging', execution: { conversationId: 77 } }
     let rejectWorkflowSpawn!: (error: Error) => void
     host.spawnAgent = async (req) => {
@@ -767,7 +767,7 @@ describe('startBackgroundAgent', () => {
     assert.equal(host.settledCalls.length, 0)
 
     hostClosing = false
-    const reopened = new WorkflowService({ dataDir, host, state })
+    const reopened = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     await reopened.prepareRecovery()
     assert.deepEqual(host.abortedConversations, [77])
     await reopened.init()
@@ -819,7 +819,7 @@ describe('startBackgroundAgent', () => {
       return { done: 2 }
     }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
     const run = await service.run({
       conversationId: 1,
       script:

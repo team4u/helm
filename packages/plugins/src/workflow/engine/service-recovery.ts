@@ -15,7 +15,7 @@
  */
 
 import { HelmError } from '@helm/protocol'
-import { readJournal } from './journal.js'
+import { readJournal, type JournalReadResult } from './journal.js'
 import {
   backgroundChildIds,
   errorMessage,
@@ -23,7 +23,11 @@ import {
   type RunRecord,
 } from './run-store.js'
 import { toSummary } from './run-summary.js'
+import { reattachBackgroundAgent } from './background-agent-runner.js'
+import { resumeWorkflowInPlace } from './service-run.js'
 import type { WorkflowServiceContext } from './service-context.js'
+
+const MAX_CRASH_RECOVERIES = 3
 
 export interface WorkflowAutoResumeCandidate {
   runId: string
@@ -53,6 +57,7 @@ export class StartupRecovery {
    */
   async prepareRecovery(): Promise<void> {
     if (this.recoveryPrepared) return
+    const autoRecover = this.svc.isAutoRecoverOnRestart()
     const index = this.svc.runs.readIndex()
     const childIds = new Set<number>()
     for (const entry of index) {
@@ -65,8 +70,14 @@ export class StartupRecovery {
         if (error instanceof HelmError && error.code === 'not_found') continue
         throw error
       }
-      if (record.status !== 'running' && record.pendingChildCleanup !== true) continue
-      for (const id of backgroundChildIds(record)) childIds.add(id)
+      if (record.pendingChildCleanup === true) {
+        for (const id of backgroundChildIds(record)) childIds.add(id)
+        continue
+      }
+      if (record.status !== 'running') continue
+      if (!autoRecover || this.willAbortOnAutoRecover(record)) {
+        for (const id of backgroundChildIds(record)) childIds.add(id)
+      }
     }
     // 逐会话守卫取消。仅两类确定性可接受失败可诊断后继续：not_found（会话
     // 已删除）/ ownership_conflict（human 接管，红线拒绝——human 绝不 abort）。
@@ -93,18 +104,97 @@ export class StartupRecovery {
     this.recoveryPrepared = true
   }
 
+  /** 预判自动恢复模式下某 running 记录是否必定放弃恢复并须中止遗留子会话。 */
+  private willAbortOnAutoRecover(record: RunRecord): boolean {
+    if (record.suspendedCleanly !== true && (record.crashRecoveries ?? 0) + 1 > MAX_CRASH_RECOVERIES) {
+      return true
+    }
+    if (record.kind === 'subagent') {
+      const spec = record.subagentSpec
+      if (spec === undefined) return true
+      const exec = record.subagentMeta?.execution
+      const hasHandle = exec?.conversationId !== undefined || exec?.executionId !== undefined
+      if (!hasHandle && spec.hadSecretGrant === true) return true
+      return false
+    }
+    const script = this.readScriptForRecord(record)
+    if (script === undefined) return true
+    const journal = readJournal(record.journalPath)
+    return journal.readFailed !== undefined || journal.actionUncertain
+  }
+
+  private readScriptForRecord(record: RunRecord): string | undefined {
+    if (record.script !== undefined) return record.script
+    if (record.scriptPath !== undefined) {
+      try {
+        return this.svc.library.readScriptFile(record.scriptPath)
+      } catch {
+        return undefined
+      }
+    }
+    return undefined
+  }
+
+  private async failRecoveredRecord(
+    record: RunRecord,
+    errorText: string,
+    pendingNotifies: Array<() => Promise<void>>,
+  ): Promise<void> {
+    const children = new Set<number>(backgroundChildIds(record))
+    for (const id of children) this.pendingSettlementChildIds.add(id)
+    await Promise.all([...children].map(async (id) => {
+      try {
+        await this.svc.host.abortConversationGuarded(id)
+      } catch (error) {
+        process.stderr.write(
+          `workflow init: guarded abort conversation ${id} failed: ${errorMessage(error)}\n`,
+        )
+      }
+    }))
+    if (record.pendingChildCleanup !== undefined) {
+      delete record.pendingChildCleanup
+    }
+    if (record.suspendedCleanly !== undefined) {
+      delete record.suspendedCleanly
+    }
+    record.status = 'failed'
+    record.updatedAt = Date.now()
+    record.error = errorText
+    if (record.nodes !== undefined) {
+      record.nodes = record.nodes.map((node) => node.status === 'running' || node.status === 'pending'
+        ? { ...node, status: 'failed', settledAt: record.updatedAt, error: record.error }
+        : node)
+    }
+    this.svc.writeRecord(record)
+    if (record.notifyParentOnSettle === true && record.notifiedAt === undefined) {
+      const target = record
+      pendingNotifies.push(async () => {
+        if (this.svc.host.onBackgroundAgentSettled === undefined) return
+        await this.svc.host.onBackgroundAgentSettled(toSummary(target), {
+          parentConversationId: target.conversationId,
+          ...(target.subagentMeta ?? {}),
+        })
+        target.notifiedAt = Date.now()
+        this.svc.writeRecord(target)
+      })
+    }
+    this.svc.emitEventSafe('workflow.updated', { run: toSummary(record) })
+  }
+
   async init(): Promise<void> {
     if (this.recovered) return
     if (this.initPromise !== undefined) return this.initPromise
     this.initPromise = (async () => {
       try {
         await this.prepareRecovery()
+        const autoRecover = this.svc.isAutoRecoverOnRestart()
         const index = this.svc.runs.readIndex()
         let changed = false
         // 通知 outbox 补发：崩溃前已达终态但 onBackgroundAgentSettled 未成功（或
         // 未及调用）的记录。回调失败不阻断 init（stderr 诊断，notifiedAt 不置位，
         // 下次 init 重试）。
         const pendingNotifies: Array<() => Promise<void>> = []
+        const reattachHorizons: Promise<void>[] = []
         for (const entry of index) {
           let record: RunRecord
           try {
@@ -142,54 +232,134 @@ export class StartupRecovery {
             }
             continue
           }
-          // 权威坐标 = 运行期即时持久化的 childConversationIds（合并 subagentMeta/
-          // nodes 冗余投影）。覆盖后台、同步与 CLI 全部运行中工作流，防止遗留
-          // ownerless 原生子会话在 harness.resume() 后成为孤儿任务继续执行；
-          // 守卫中止逐个诊断，单个拒绝不阻断其余恢复。
-          const children = new Set<number>(backgroundChildIds(record))
-          for (const id of children) this.pendingSettlementChildIds.add(id)
-          await Promise.all([...children].map(async (id) => {
-            try {
-              await this.svc.host.abortConversationGuarded(id)
-            } catch (error) {
-              process.stderr.write(
-                `workflow init: guarded abort conversation ${id} failed: ${errorMessage(error)}\n`,
-              )
-            }
-          }))
-          if (record.pendingChildCleanup !== undefined) {
-            delete record.pendingChildCleanup
+          if (!autoRecover) {
+            const errorText =
+              record.kind === 'subagent'
+                ? 'subagent run interrupted by process restart（可凭 conversationId/executionId 通过 resume 续接）'
+                : `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）：${record.error ?? ''}`.trim()
+            await this.failRecoveredRecord(record, errorText, pendingNotifies)
+            changed = true
+            continue
           }
-          record.status = 'failed'
-          record.updatedAt = Date.now()
-          record.error =
-            record.kind === 'subagent'
-              ? 'subagent run interrupted by process restart（可凭 conversationId/executionId 通过 resume 续接）'
-              : `run interrupted by process restart（账本完好，可经 resumeFromRunId 恢复）：${record.error ?? ''}`.trim()
-          if (record.nodes !== undefined) {
-            record.nodes = record.nodes.map((node) => node.status === 'running' || node.status === 'pending'
-              ? { ...node, status: 'failed', settledAt: record.updatedAt, error: record.error }
-              : node)
+
+          // 自动恢复路径（§1.3）：区分优雅挂起与异常崩溃，并先将计数变更落盘再发起恢复。
+          if (record.suspendedCleanly === true) {
+            delete record.suspendedCleanly
+          } else {
+            record.crashRecoveries = (record.crashRecoveries ?? 0) + 1
           }
           this.svc.writeRecord(record)
+          await this.svc.state.flush?.()
           changed = true
-          // 仅 notifyParentOnSettle=true 的后台 run 补发通知；同步与 CLI 工作流
-          // 绝不向父会话发通知。
-          if (record.notifyParentOnSettle === true && record.notifiedAt === undefined) {
-            const target = record
-            pendingNotifies.push(async () => {
-              if (this.svc.host.onBackgroundAgentSettled === undefined) return
-              await this.svc.host.onBackgroundAgentSettled(toSummary(target), {
-                parentConversationId: target.conversationId,
-                ...(target.subagentMeta ?? {}),
-              })
-              target.notifiedAt = Date.now()
-              this.svc.writeRecord(target)
-            })
+
+          if ((record.crashRecoveries ?? 0) > MAX_CRASH_RECOVERIES) {
+            process.stderr.write(
+              `workflow init: circuit breaker tripped for ${record.id} (crashRecoveries=${record.crashRecoveries})\n`,
+            )
+            await this.failRecoveredRecord(
+              record,
+              `[crash_recovery_limit] 连续异常崩溃恢复超过上限（${MAX_CRASH_RECOVERIES} 次），已触发熔断中止恢复`,
+              pendingNotifies,
+            )
+            continue
           }
+
+          if (record.kind === 'subagent') {
+            const spec = record.subagentSpec
+            if (spec === undefined) {
+              await this.failRecoveredRecord(
+                record,
+                'subagent run interrupted by process restart（缺少持久化启动规格 subagentSpec，无法自动恢复）',
+                pendingNotifies,
+              )
+              continue
+            }
+            const exec = record.subagentMeta?.execution
+            const hasHandle = exec?.conversationId !== undefined || exec?.executionId !== undefined
+            if (!hasHandle && spec.hadSecretGrant === true) {
+              await this.failRecoveredRecord(
+                record,
+                '[secret_grant_expired_on_restart] 后台子代理在创建执行环境前因重启中断，且原请求授予了会话内存机密（secretNames），重启后内存机密已失效，拒绝无机密降级启动',
+                pendingNotifies,
+              )
+              continue
+            }
+            try {
+              this.svc.host.getConversation(record.conversationId)
+            } catch (error) {
+              await this.failRecoveredRecord(
+                record,
+                `subagent 所属父会话 ${record.conversationId} 不可用，无法恢复：${errorMessage(error)}`,
+                pendingNotifies,
+              )
+              continue
+            }
+            const reattached = reattachBackgroundAgent(this.svc, record)
+            if (reattached.isNativeReattach) {
+              reattachHorizons.push(reattached.horizonGate)
+            }
+            this.svc.emitEventSafe('workflow.updated', { run: toSummary(record) })
+            continue
+          }
+
+          const script = this.readScriptForRecord(record)
+          if (script === undefined) {
+            await this.failRecoveredRecord(
+              record,
+              'run interrupted by process restart（未持久化脚本源，无法原位续跑）',
+              pendingNotifies,
+            )
+            continue
+          }
+          const journal: JournalReadResult = readJournal(record.journalPath)
+          if (journal.readFailed !== undefined) {
+            await this.failRecoveredRecord(
+              record,
+              `[journal_read_failed] 工作流账本不可读（${journal.readFailed.code}）：${journal.readFailed.message}`,
+              pendingNotifies,
+            )
+            continue
+          }
+          if (journal.actionUncertain) {
+            const why =
+              journal.failedActions > 0
+                ? '存在失败（ok:false）的动作终态行'
+                : '账本存在已开始但未确认完成或无法判定的动作调用'
+            await this.failRecoveredRecord(
+              record,
+              `[workflow_action_uncertain] 工作流 ${record.id} 的${why}（failedActions=${journal.failedActions}），拒绝自动恢复`,
+              pendingNotifies,
+            )
+            continue
+          }
+          try {
+            this.svc.host.getConversation(record.conversationId)
+          } catch (error) {
+            await this.failRecoveredRecord(
+              record,
+              `工作流所属父会话 ${record.conversationId} 不可用，无法恢复：${errorMessage(error)}`,
+              pendingNotifies,
+            )
+            continue
+          }
+          const initialSeq = journal.entries.reduce((max, item) => Math.max(max, item.seq + 1), 0)
+          const resumeJournalIoErrors =
+            journal.ioErrors > 0
+              ? [`journal ${record.id} has ${journal.ioErrors} corrupt/unreadable line(s) (in-place resume from ${record.journalPath})`]
+              : undefined
+          const resumed = resumeWorkflowInPlace(this.svc, record, {
+            script,
+            journalEntries: journal.entries,
+            initialSeq,
+            ...(resumeJournalIoErrors !== undefined ? { resumeJournalIoErrors } : {}),
+          })
+          reattachHorizons.push(resumed.horizonGate)
           this.svc.emitEventSafe('workflow.updated', { run: toSummary(record) })
         }
         if (changed) await this.svc.state.flush?.()
+        if (reattachHorizons.length > 0) {
+          await Promise.allSettled(reattachHorizons)
+        }
         this.recovered = true
         // 先置 recovered 再补发：失败重试时上面循环不会重复处理（记录已非 running）。
         for (const notify of pendingNotifies) {

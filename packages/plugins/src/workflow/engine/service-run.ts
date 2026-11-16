@@ -10,8 +10,8 @@
  */
 
 import { mkdirSync } from 'node:fs'
-import { HelmError, redactJsonValue, type ConversationSummary } from '@helm/protocol'
-import type { WorkflowRunRequest, WorkflowRunSummary } from '../../contracts.js'
+import { HelmError, redactJsonValue, type AgentSpawnRequest, type ConversationSummary } from '@helm/protocol'
+import { withWorkflowSpawnMeta, type WorkflowRunRequest, type WorkflowRunSummary } from '../../contracts.js'
 import {
   JournalWriter,
   readJournal,
@@ -25,11 +25,59 @@ import {
   type WorkflowRunResult,
 } from './runtime.js'
 import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
-import { newRunId, type RunRecord } from './run-store.js'
+import { backgroundChildIds, newRunId, type RunRecord } from './run-store.js'
 import { redactSummaryNodes, toSummary } from './run-summary.js'
 import { settleWorkflowRun } from './run-settle.js'
 import { makeRunProgressHandler } from './run-progress.js'
+import { startBackgroundAgent } from './background-agent-runner.js'
 import type { WorkflowServiceContext } from './service-context.js'
+
+const SUBAGENT_RESUME_PROMPT = '前次执行中断或未通过验收，请检查当前工作区状态并继续完成原任务。'
+
+/** 检查并占位原 run 的 resumedByRunId 接管标记（workflow 与 subagent 续接共用）。 */
+async function claimResumeTakeover(
+  svc: WorkflowServiceContext,
+  replayFrom: RunRecord,
+  newRunIdValue: string,
+): Promise<() => void> {
+  const currentMarker = svc.runs.load(replayFrom.id).resumedByRunId
+  if (currentMarker !== undefined) {
+    const takeover = svc.runs.inspectTakeoverMarker(currentMarker, replayFrom.conversationId, {
+      reserved: svc.takeoverReservations.has(currentMarker),
+      active: svc.active.has(currentMarker),
+    })
+    if (!takeover.ghost) {
+      throw new HelmError(
+        'conflict',
+        `运行 ${replayFrom.id} 已被 ${currentMarker} 接管续跑（${takeover.reason}）；请从接管的 run 继续或人工核查`,
+        409,
+        { runId: replayFrom.id, resumedByRunId: currentMarker },
+      )
+    }
+    process.stderr.write(
+      `workflow resume: clearing orphaned takeover marker ${currentMarker} on ${replayFrom.id}（索引与磁盘均无接管痕迹，确证从未写记录/账本）\n`,
+    )
+    replayFrom.resumedByRunId = undefined
+  }
+  svc.takeoverReservations.add(newRunIdValue)
+  let reservationHeld = true
+  const release = (): void => {
+    if (reservationHeld) {
+      reservationHeld = false
+      svc.takeoverReservations.delete(newRunIdValue)
+    }
+  }
+  try {
+    replayFrom.resumedByRunId = newRunIdValue
+    replayFrom.updatedAt = Date.now()
+    svc.writeRecord(replayFrom)
+    await svc.state.flush?.()
+  } catch (error) {
+    release()
+    throw error
+  }
+  return release
+}
 
 /**
  * 启动一个工作流 run：后台执行，立即返回 summary（不等完成）。
@@ -68,18 +116,96 @@ export async function startWorkflowRun(
   let replayFrom: RunRecord | undefined
   if (request.resumeFromRunId !== undefined) {
     replayFrom = svc.runs.load(request.resumeFromRunId)
-    if (replayFrom.kind === 'subagent') {
-      throw new HelmError('validation_error', '后台子代理运行没有工作流重放脚本；请用 execution.conversationId/executionId 通过 subagent resume 续接', 400, { runId: replayFrom.id })
+    if (svc.active.has(replayFrom.id)) {
+      throw new HelmError('conflict', `工作流 ${replayFrom.id} 仍在运行中`, 409, { runId: replayFrom.id })
     }
-    if (replayFrom.status === 'running' && !svc.active.has(replayFrom.id)) {
+    if (replayFrom.kind === 'subagent') {
+      if (replayFrom.status === 'running') {
+        replayFrom.status = 'failed'
+        replayFrom.error = 'run interrupted（可经 resumeFromRunId 续接）'
+        svc.writeRecord(replayFrom)
+        await svc.state.flush?.()
+      }
+      if (replayFrom.status !== 'failed' && replayFrom.status !== 'aborted') {
+        throw new HelmError(
+          'validation_error',
+          `后台子代理 ${replayFrom.id} 当前状态为 ${replayFrom.status}，仅 failed/aborted 状态支持 resumeFromRunId 续接`,
+          400,
+          { runId: replayFrom.id, status: replayFrom.status },
+        )
+      }
+      if (sources.length > 0) {
+        throw new HelmError(
+          'validation_error',
+          '对单子代理执行 resumeFromRunId 时不允许同时提供 name/script/scriptPath',
+          400,
+          { runId: replayFrom.id },
+        )
+      }
+      if (request.conversationId !== undefined && request.conversationId !== replayFrom.conversationId) {
+        throw new HelmError(
+          'validation_error',
+          `恢复目标不匹配：子代理 ${replayFrom.id} 属于会话 ${replayFrom.conversationId}，不能改在会话 ${request.conversationId} 下恢复`,
+          400,
+          { runId: replayFrom.id, recordedConversationId: replayFrom.conversationId, requestedConversationId: request.conversationId },
+        )
+      }
+      const spec = replayFrom.subagentSpec
+      const exec = replayFrom.subagentMeta?.execution
+      const resumeRef = exec?.executionId ?? (exec?.conversationId !== undefined ? String(exec.conversationId) : undefined)
+      if (spec === undefined || resumeRef === undefined) {
+        throw new HelmError(
+          'validation_error',
+          `后台子代理 ${replayFrom.id} 缺少可续接执行句柄或持久化规格（无法执行 resumeFromRunId）`,
+          400,
+          { runId: replayFrom.id },
+        )
+      }
+      // 提前验证目标父会话存在
+      try {
+        svc.host.getConversation(replayFrom.conversationId)
+      } catch {
+        throw new HelmError('not_found', `会话 ${replayFrom.conversationId} 不存在，无法在其下续接子代理`, 404, {
+          conversationId: replayFrom.conversationId,
+        })
+      }
+      const nextRunId = newRunId()
+      const releaseTakeover = await claimResumeTakeover(svc, replayFrom, nextRunId)
+      const foregroundContext = context?.foreground === true
+      const spawnReq: AgentSpawnRequest = {
+        parentConversationId: replayFrom.conversationId,
+        prompt: SUBAGENT_RESUME_PROMPT,
+        resume: resumeRef,
+        ...(spec.agentType !== undefined ? { agentType: spec.agentType } : {}),
+        ...(spec.isolation !== undefined ? { isolation: spec.isolation } : {}),
+        ...(spec.gate !== undefined ? { gate: spec.gate } : {}),
+        ...(spec.gateTimeoutMs !== undefined ? { gateTimeoutMs: spec.gateTimeoutMs } : {}),
+        ...(spec.schema !== undefined ? { schema: spec.schema } : {}),
+        ...(spec.maxSubagentDepth !== undefined
+          ? { meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: spec.maxSubagentDepth }) }
+          : {}),
+      }
+      const started = await startBackgroundAgent(svc, spawnReq, {
+        ...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
+        ...(replayFrom.name !== '' ? { label: replayFrom.name } : {}),
+        foreground: foregroundContext,
+        notifyParentOnSettle: foregroundContext ? false : (context?.notifyParentOnSettle ?? true),
+        preassigned: {
+          runId: nextRunId,
+          replayedFrom: replayFrom.id,
+          autoResumeCount: (replayFrom.autoResumeCount ?? 0) + 1,
+          onPersisted: releaseTakeover,
+          onPersistFailed: releaseTakeover,
+        },
+      })
+      return started.run
+    }
+    if (replayFrom.status === 'running') {
       // init() 已把跨重启 running 标 failed；此处 running 只可能是同进程旧状态。
       replayFrom.status = 'failed'
       replayFrom.error = 'run interrupted（账本完好，可经 resumeFromRunId 恢复）'
       svc.writeRecord(replayFrom)
       await svc.state.flush?.()
-    }
-    if (svc.active.has(replayFrom.id)) {
-      throw new HelmError('conflict', `工作流 ${replayFrom.id} 仍在运行中`, 409, { runId: replayFrom.id })
     }
   }
 
@@ -212,55 +338,7 @@ export async function startWorkflowRun(
    */
   let releaseTakeoverReservation: () => void = () => {}
   if (replayFrom !== undefined) {
-    // 并发接管串行化（同步临界段）：终检用现读记录——本 run 入口 loadRecord
-    // 后已经过 init()/flush 等 await 点，并发 resume 可能已抢先落标记；从
-    // 现读检查到标记写入之间无 await（单线程事件循环），后到者必然读到先
-    // 到者的标记并 409，不可能双双接管。
-    const currentMarker = svc.runs.load(replayFrom.id).resumedByRunId
-    if (currentMarker !== undefined) {
-      // 幽灵标记甄别：索引 not_found 不等于新 run 从未存在——接管 run 可能
-      // 已写记录/账本后索引才丢失。只有进程内保留、活跃表、索引与磁盘
-      // （同会话的记录与账本文件）四面都无痕迹才确证可重接管；仍有痕迹
-      // （即使索引缺失）保持 409 诊断，防对已产生副作用的 run 重复续跑。
-      // 接管记录损坏如实上抛。
-      const takeover = svc.runs.inspectTakeoverMarker(currentMarker, replayFrom.conversationId, {
-        reserved: svc.takeoverReservations.has(currentMarker),
-        active: svc.active.has(currentMarker),
-      })
-      if (!takeover.ghost) {
-        throw new HelmError(
-          'conflict',
-          `工作流 ${replayFrom.id} 已被运行 ${currentMarker} 接管续跑（${takeover.reason}）；请从接管的 run 继续或人工核查`,
-          409,
-          { runId: replayFrom.id, resumedByRunId: currentMarker },
-        )
-      }
-      process.stderr.write(
-        `workflow resume: clearing orphaned takeover marker ${currentMarker} on ${replayFrom.id}（索引与磁盘均无接管痕迹，确证从未写记录/账本）\n`,
-      )
-      replayFrom.resumedByRunId = undefined
-    }
-    // 接管保留（防并发双接管）：从旧 record 标记落盘到新 run 快照落盘之间
-    // 存在 await 窗口（flush 等），此间的幽灵检测在索引与磁盘上都看不到新
-    // run——保留集合先占位，检测一律按「接管仍存在」409；绝不放宽整个
-    // 活跃期，快照落盘或启动失败即释放。
-    svc.takeoverReservations.add(runId)
-    let reservationHeld = true
-    releaseTakeoverReservation = (): void => {
-      if (reservationHeld) {
-        reservationHeld = false
-        svc.takeoverReservations.delete(runId)
-      }
-    }
-    try {
-      replayFrom.resumedByRunId = runId
-      replayFrom.updatedAt = Date.now()
-      svc.writeRecord(replayFrom)
-      await svc.state.flush?.()
-    } catch (error) {
-      releaseTakeoverReservation()
-      throw error
-    }
+    releaseTakeoverReservation = await claimResumeTakeover(svc, replayFrom, runId)
   }
 
   const abort = new AbortController()
@@ -377,10 +455,12 @@ export async function startWorkflowRun(
     let failure: unknown
     try {
       result = await runWorkflow({
+        runId,
         script,
         ...(args !== undefined ? { args } : {}),
         host: engineHost,
         signal: abort.signal,
+        isSuspended: () => svc.isRunSuspending(run),
         ...svc.caps,
         ...(svc.redact !== undefined ? { redact: svc.redact } : {}),
         onProgress,
@@ -413,4 +493,98 @@ export async function startWorkflowRun(
   })()
 
   return { ...run.summary }
+}
+
+/**
+ * 同 runId 原位续跑 DSL 工作流（重启恢复阶段调用）：
+ * 复用原 ActiveRun、原 journalPath 与 initialSeq = maxExistingSeq + 1，
+ * 对已落盘终态行零 Token 重放且不重复写回账本，对未决 agent_started 行发 reattach。
+ * 返回 nativeReattachHorizon：所有未决原生 agent_started 均完成 onResolved 重挂（或早退）后 resolve。
+ */
+export function resumeWorkflowInPlace(
+  svc: WorkflowServiceContext,
+  record: RunRecord,
+  options: {
+    script: string
+    journalEntries: readonly WorkflowJournalEntry[]
+    initialSeq: number
+    resumeJournalIoErrors?: string[]
+  },
+): { horizonGate: Promise<void> } {
+  const runId = record.id
+  const parent = svc.host.getConversation(record.conversationId)
+  const abort = new AbortController()
+  let resolveRunDone: () => void = () => {}
+  const doneGate = new Promise<void>((resolve) => {
+    resolveRunDone = resolve
+  })
+  let resolveHorizon: () => void = () => {}
+  const horizonGate = new Promise<void>((resolve) => {
+    resolveHorizon = resolve
+  })
+
+  const run: ActiveRun = {
+    runId,
+    conversationId: record.conversationId,
+    abort,
+    record,
+    done: doneGate,
+    summary: toSummary(record),
+    journalPath: record.journalPath,
+    writer: new JournalWriter(record.journalPath, true, options.initialSeq),
+    progress: [],
+    timeline: record.progress ? [...record.progress] : [],
+    pendingAborts: new Set(),
+    pendingExecs: new Set(),
+    childConversations: new Set(backgroundChildIds(record)),
+    foregroundWaiters: new Set(),
+    lastPersistAt: Date.now(),
+    lastNodeEventAt: Date.now(),
+  }
+  svc.active.set(runId, run)
+
+  const engineHost = svc.makeEngineHost(run, parent)
+  const onProgress = makeRunProgressHandler(svc, run)
+
+  void (async () => {
+    let result: WorkflowRunResult | undefined
+    let failure: unknown
+    try {
+      result = await runWorkflow({
+        runId,
+        script: options.script,
+        ...(record.args !== undefined ? { args: record.args } : {}),
+        host: engineHost,
+        signal: abort.signal,
+        isSuspended: () => svc.isRunSuspending(run),
+        onReattachHorizon: resolveHorizon,
+        ...svc.caps,
+        ...(svc.redact !== undefined ? { redact: svc.redact } : {}),
+        onProgress,
+        journal: {
+          entries: options.journalEntries,
+          inPlaceResume: true,
+          retryFailedCalls: false,
+          append: async (entry) => {
+            await run.writer.append(redactJournalEntry(entry, svc.redact))
+          },
+        },
+      })
+    } catch (error) {
+      failure = error
+    } finally {
+      resolveHorizon()
+    }
+    try {
+      await settleWorkflowRun(svc, run, options.resumeJournalIoErrors, result, failure)
+    } catch (error) {
+      process.stderr.write(
+        `workflow ${runId}: in-place resume settle crashed: ${error instanceof Error ? error.message : String(error)}\n`,
+      )
+      run.settleError = run.settleError ?? error
+    }
+    resolveRunDone()
+  })()
+
+  return { horizonGate }
 }

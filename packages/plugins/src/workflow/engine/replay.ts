@@ -2,7 +2,8 @@ import { hasValidScopeIdentity, type JournalScope, type WorkflowJournalEntry } f
 
 export type ReplayScope = JournalScope
 
-type SettledEntry = Exclude<WorkflowJournalEntry, { type: 'action_started' }>
+type SettledEntry = Exclude<WorkflowJournalEntry, { type: 'action_started' | 'agent_started' }>
+export type StartedAgentEntry = Extract<WorkflowJournalEntry, { type: 'agent_started' }>
 
 export interface ReplayResult {
   hit: boolean
@@ -13,6 +14,7 @@ export interface ReplayResult {
 /** Global indices describe this run; stable scope coordinates describe the script. */
 export class JournalReplay {
   private readonly settled = new Map<string, SettledEntry>()
+  private readonly startedAgents = new Map<string, StartedAgentEntry>()
   private readonly scopes = new Set<string>()
   private readonly broken = new Set<string>()
   private readonly consumedActions = new Set<WorkflowJournalEntry>()
@@ -24,6 +26,10 @@ export class JournalReplay {
       if (!hasValidScopeIdentity(entry)) throw new Error('workflow_action_uncertain: invalid journal scope identity')
       this.scopes.add(entry.scopePath)
       if (entry.type === 'action_started') continue
+      if (entry.type === 'agent_started') {
+        this.startedAgents.set(this.key(entry, entry.attempt ?? 1), entry)
+        continue
+      }
       const key = this.key(entry, entry.type === 'agent' ? entry.attempt ?? 1 : 1)
       if (this.settled.has(key)) {
         throw new Error(`workflow_action_uncertain: duplicate journal coordinate ${key}`)
@@ -38,6 +44,29 @@ export class JournalReplay {
 
   history(scope: ReplayScope, attempt = 1): SettledEntry | undefined {
     return this.settled.get(this.key(scope, attempt))
+  }
+
+  /**
+   * 仅同文件原位恢复（inPlaceResume）使用：返回尚未配对终态 agent 行的
+   * agent_started 坐标（存在终态行、scope 已断链或 key 不符时返回 undefined）。
+   */
+  startedAgent(scope: ReplayScope, attempt = 1, key?: string): StartedAgentEntry | undefined {
+    if (this.isBroken(scope.scopePath)) return undefined
+    const coord = this.key(scope, attempt)
+    if (this.settled.has(coord)) return undefined
+    const started = this.startedAgents.get(coord)
+    if (started === undefined) return undefined
+    if (key !== undefined && started.key !== key) return undefined
+    return started
+  }
+
+  /** 返回所有尚未被终态行配对的 agent_started 坐标（供原位恢复登记地平线用）。 */
+  unsettledStartedAgents(): StartedAgentEntry[] {
+    const out: StartedAgentEntry[] = []
+    for (const [coord, entry] of this.startedAgents) {
+      if (!this.settled.has(coord)) out.push(entry)
+    }
+    return out
   }
 
   terminalFailureAttempt(scope: ReplayScope): number {

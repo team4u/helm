@@ -11,7 +11,7 @@
  * 等底层模块，保持 engine 内部依赖无环。
  */
 
-import type { AgentExecutionInfo, AgentGateResult } from '@helm/protocol'
+import type { AgentExecutionInfo, AgentGateResult, AgentSpawnRequest } from '@helm/protocol'
 import type { CompiledSchema } from './json-schema.js'
 import type { WorkflowMeta } from './meta.js'
 import type { JournalWriteInput, WorkflowJournalEntry } from './journal.js'
@@ -34,6 +34,10 @@ export interface WorkflowSpawnRequest {
   gateTimeoutMs?: number
   /** 跨重启恢复时传递账本中的 execution handle。 */
   resumeRef?: string
+  /** 跨重启幂等提交键（如 `"helm:spawn:" + runId + ":" + scopePath + ":" + scopeCallIndex + ":" + attempt`）。 */
+  requestId?: string
+  /** 跨重启原位重挂目标（与 resume / fork 互斥）。 */
+  reattach?: AgentSpawnRequest['reattach']
   /**
    * 执行环境确定后回传（原生子会话或外部运行时均适用）：conversationId /
    * executionId / effectiveCwd / worktree 等元数据 + 实际模型信息。引擎把
@@ -189,10 +193,16 @@ export type ActionJournalInput =
   | Omit<Extract<JournalAppendInput, { type: 'action_started' }>, keyof ReplayScope>
 
 export interface RunWorkflowOptions {
+  /** 所属 run 标识（用于派生确定性幂等 requestId）。 */
+  runId?: string
   script: string
   args?: unknown
   host: WorkflowHost
   signal?: AbortSignal
+  /** 宿主关停优雅挂起判断：为 true 时不向内核发送守卫中止，也不落盘伪失败终态行。 */
+  isSuspended?(): boolean
+  /** 同 runId 原位恢复且所有未决原生 agent_started 均完成 onResolved 重挂（或提前终结）时触发。 */
+  onReattachHorizon?(): void
   onProgress?(entries: readonly WorkflowEntry[]): void
   concurrency?: number
   agentCap?: number
@@ -207,6 +217,8 @@ export interface RunWorkflowOptions {
    */
   journal?: {
     entries?: readonly WorkflowJournalEntry[]
+    /** 同文件原位恢复（in-place resume）：命中已落盘终态时零 Token 重放且不重复追加终态行，未决 agent_started 触发 reattach。 */
+    inPlaceResume?: boolean
     /** Failed source runs get a fresh budget for their terminal failed goals. */
     retryFailedCalls?: boolean
     append?(entry: JournalWriteInput): Promise<void> | void

@@ -18,7 +18,7 @@ import type { JournalReplay } from './replay.js'
 import type { AgentCallPayload, CompletedChild, WorkflowHost, WorkflowSpawnRequest, WorkflowSpawnResult } from './runtime-types.js'
 import { agentRetryPrompt, applyGate, applySchema, executionInfoForMeta, preview, scopedResumeKey } from './runtime-validation.js'
 import { type LiveAgent, RuntimeControl, Semaphore } from './runtime-control.js'
-import type { AgentRecordInput } from './runtime-recorder.js'
+import type { AgentRecordInput, AgentStartedRecordInput } from './runtime-recorder.js'
 import { resolveAgentReplayCall } from './runtime-agent-replay.js'
 import { agentJournalKey } from './journal.js'
 
@@ -31,17 +31,23 @@ export interface AgentRunCounters {
 
 /** handleAgentCall 的全部依赖（由 runWorkflow 构造；字段含义见 runWorkflow）。 */
 export interface AgentCallContext {
+  runId?: string
+  inPlaceResume?: boolean
   host: WorkflowHost
   agentCap: number
   /** options.journal?.retryFailedCalls === true（失败目标续跑独立重试预算）。 */
   retryFailedCalls: boolean
   /** run 终态读取（每次调用读当前值，与原闭包变量读取语义一致）。 */
-  runState: { isAborted(): boolean; isSettled(): boolean }
+  runState: { isAborted(): boolean; isSettled(): boolean; isSuspended?(): boolean }
   emit(entries: WorkflowEntry[]): void
   respond(callId: number, ok: boolean, value?: unknown, error?: string, fatal?: boolean): void
   allocateIndex(): number
   /** agent 行尽力记账（写失败仅诊断计数，不中断 run）。 */
   recordAgent(entry: AgentRecordInput): Promise<void>
+  /** agent_started 行记账（onResolved 落盘后供重启原位重挂使用）。 */
+  recordAgentStarted?(entry: AgentStartedRecordInput): Promise<void>
+  /** 通知 runWorkflow 原生 agent_started 的 onResolved 重挂已完成。 */
+  markNativeReattachResolved?(coordKey: string): void
   inflight: Set<string>
   semaphore: Semaphore
   control: RuntimeControl
@@ -57,7 +63,7 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
   if (resolution.kind !== 'live') return
   const state = resolution.state
   const {
-    base, index, scopeId, label, agentType, model, isolation, agentId, compiledSchema,
+    base, index, scope, scopeId, label, agentType, model, isolation, agentId, compiledSchema,
     keyInput, attemptLimit, queuedAt, recordAttempt,
   } = state
   let attempt = state.attempt
@@ -65,6 +71,7 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
   let attemptPrompt = state.attemptPrompt
   let attemptKey = state.attemptKey
   let resumeTarget = state.resumeTarget
+  let reattachEntry = state.reattachEntry
   const runGate = ctx.host.runGate?.bind(ctx.host)
   const resumeAgent = ctx.host.resumeAgent?.bind(ctx.host)
 
@@ -123,6 +130,17 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
       const startedAt = Date.now()
       ctx.emit([{ ...base, queuedAt, startedAt, ...attemptMark }])
 
+      const currentReattach = reattachEntry
+      reattachEntry = undefined
+      const coordKey = JSON.stringify([scope.scopePath, scope.scopeCallIndex, attempt])
+      const spawnRequestId =
+        currentReattach !== undefined
+          ? currentReattach.requestId
+          : ctx.runId !== undefined
+            ? `helm:spawn:${ctx.runId}:${scope.scopePath}:${scope.scopeCallIndex}:${attempt}`
+            : undefined
+      let pendingStartedWrite: Promise<void> | undefined
+
       const onResolved: NonNullable<WorkflowSpawnRequest['onResolved']> = (info) => {
         if (info.nodeId !== undefined) base.nodeId = info.nodeId
         if (info.conversationId !== undefined) base.conversationId = info.conversationId
@@ -135,6 +153,26 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
         if (info.requestedThinking !== undefined) base.requestedThinking = info.requestedThinking
         if (info.requestedModel !== undefined) base.requestedModel = info.requestedModel
         if (!ctx.inflight.has(agentId)) return
+        if (currentReattach !== undefined) {
+          ctx.markNativeReattachResolved?.(coordKey)
+        } else if (
+          pendingStartedWrite === undefined &&
+          spawnRequestId !== undefined &&
+          ctx.recordAgentStarted !== undefined
+        ) {
+          const execSnapshot = executionInfoForMeta(base)
+          if (execSnapshot !== undefined) {
+            pendingStartedWrite = ctx.recordAgentStarted({
+              ...scope,
+              index: attemptIndex,
+              key: attemptKey,
+              attempt,
+              invocationIndex: index,
+              requestId: spawnRequestId,
+              execution: execSnapshot,
+            })
+          }
+        }
         ctx.emit([{ ...base, queuedAt, startedAt, ...attemptMark, lastProgressAt: Date.now() }])
       }
       const onGateResult: NonNullable<WorkflowSpawnRequest['onGateResult']> = (gateResult) => {
@@ -148,7 +186,41 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
       let result: WorkflowSpawnResult
       try {
         result =
-          resumeTarget !== undefined && resumeAgent !== undefined
+          currentReattach !== undefined
+            ? await ctx.host.spawnAgent({
+                agentId,
+                index: attemptIndex,
+                prompt: attemptPrompt,
+                label,
+                agentType,
+                ...(model !== undefined ? { model } : {}),
+                ...(payload.effort !== undefined ? { effort: payload.effort } : {}),
+                ...(payload.maxSubagentDepth !== undefined ? { maxSubagentDepth: payload.maxSubagentDepth } : {}),
+                ...(compiledSchema !== undefined ? { schema: compiledSchema } : {}),
+                ...(isolation !== undefined ? { isolation } : {}),
+                ...(payload.phaseIndex !== undefined ? { phaseIndex: payload.phaseIndex } : {}),
+                ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
+                ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
+                ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+                ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
+                ...(payload.timeoutMs !== undefined ? { timeoutMs: payload.timeoutMs } : {}),
+                ...(payload.gateTimeoutMs !== undefined ? { gateTimeoutMs: payload.gateTimeoutMs } : {}),
+                requestId: currentReattach.requestId,
+                reattach: {
+                  ...(currentReattach.execution.conversationId !== undefined
+                    ? { conversationId: currentReattach.execution.conversationId }
+                    : {}),
+                  ...(currentReattach.execution.executionId !== undefined
+                    ? { executionId: currentReattach.execution.executionId }
+                    : {}),
+                  ...(currentReattach.execution.effectiveCwd !== undefined
+                    ? { effectiveCwd: currentReattach.execution.effectiveCwd }
+                    : {}),
+                },
+                onResolved,
+                ...(payload.gate !== undefined ? { onGateResult } : {}),
+              })
+            : resumeTarget !== undefined && resumeAgent !== undefined
             ? await resumeAgent(resumeTarget.agentId, attemptPrompt, {
                 ...(resumeTarget.resumeRef !== undefined ? { resumeRef: resumeTarget.resumeRef } : {}),
                 ...(compiledSchema !== undefined ? { schema: compiledSchema } : {}),
@@ -179,6 +251,7 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
                 ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
                 ...(payload.timeoutMs !== undefined ? { timeoutMs: payload.timeoutMs } : {}),
                 ...(payload.gateTimeoutMs !== undefined ? { gateTimeoutMs: payload.gateTimeoutMs } : {}),
+                ...(spawnRequestId !== undefined ? { requestId: spawnRequestId } : {}),
                 onResolved,
                 ...(payload.gate !== undefined ? { onGateResult } : {}),
               })
@@ -214,12 +287,14 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
       } catch (error) {
         result = { ok: false, error: error instanceof Error ? error.message : String(error) }
       } finally {
+        if (currentReattach !== undefined) ctx.markNativeReattachResolved?.(coordKey)
         ctx.inflight.delete(agentId)
         live.started = false
         ctx.semaphore.release()
       }
 
-      if (ctx.runState.isSettled()) return
+      if (pendingStartedWrite !== undefined) await pendingStartedWrite
+      if (ctx.runState.isSettled() || ctx.runState.isSuspended?.() === true) return
       if (intent() === 'skip') return settleSkipped({})
 
       if (intent() === 'retry' && !ctx.runState.isAborted()) {

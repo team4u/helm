@@ -65,6 +65,7 @@ export function registerSubagentTool(
 
   ctx.tool({
     name: 'subagent',
+    replay: 'safe',
     promptGuidelines: [
       '后台任务启动后可继续响应用户或处理其他工作；完成汇报会自动到达本会话，不要使用 sleep 或循环查询等待结果。',
       '只有紧接着的下一步必须依赖子代理结果、期间没有其他工作时，才显式指定 background:false 同步等待。',
@@ -119,8 +120,6 @@ export function registerSubagentTool(
     structuredOutputSchema: subagentOutputSchema,
     async execute(args, context) {
       const a = args as Record<string, unknown>
-      // 嵌套深度前置拒绝（防线二）：达到子树上限的会话是叶子，不创建任何后台 run。
-      assertCanSpawn(context.conversationId)
       if (a['maxSubagentDepth'] !== undefined) {
         const raw = a['maxSubagentDepth']
         if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > HARD_MAX_SUBAGENT_DEPTH) {
@@ -169,85 +168,28 @@ export function registerSubagentTool(
         return envelopeError(`subagent_failed: ${backgroundChoice.message}`, backgroundChoice.reason)
       }
       let resolved: AgentExecutionInfo | undefined
-      const request: AgentSpawnRequest = {
-        parentConversationId: context.conversationId,
-        ...(context.callId !== undefined ? { parentToolCallId: context.callId } : {}),
-        prompt: String(a['prompt']),
-        ...(a['agentType'] !== undefined ? { agentType: String(a['agentType']) } : {}),
-        ...(a['cwd'] !== undefined ? { cwd: String(a['cwd']) } : {}),
-        ...(a['fork'] === true ? { fork: true } : {}),
-        ...(a['isolation'] !== undefined ? { isolation: 'worktree' } : {}),
-        ...(a['schema'] !== undefined ? { schema: a['schema'] as Record<string, unknown> } : {}),
-        ...(a['gate'] !== undefined ? { gate: String(a['gate']) } : {}),
-        ...(a['resume'] !== undefined ? { resume: String(a['resume']) } : {}),
-        ...(a['model'] !== undefined ? { model: String(a['model']) } : {}),
-        ...(a['effort'] !== undefined ? { effort: String(a['effort']) } : {}),
-        ...(a['maxSubagentDepth'] !== undefined
-          ? { meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: Number(a['maxSubagentDepth']) }) }
-          : {}),
-        ...(Array.isArray(a['attachments']) ? { attachments: a['attachments'] as string[] } : {}),
-        ...(Array.isArray(a['secretNames']) ? { secretNames: a['secretNames'] as string[] } : {}),
-        onResolved: (info) => {
-          resolved = info
-        },
-        signal: context.signal,
-      }
       const resumeRef = a['resume'] !== undefined ? String(a['resume']) : undefined
-      try {
-        if (backgroundChoice.background) {
-          const started = await workflows.startBackgroundAgent(request, {
-            parentToolCallId: context.callId,
-            notifyParentOnSettle: true,
-          })
-          syncRunsDoc()
-          const payload = {
-            ok: true,
-            background: true,
-            runId: started.run.id,
-            status: started.run.status,
-            ...(started.execution !== undefined ? { execution: executionOf(started.execution) } : {}),
-          }
-          const footer = subagentFooter(undefined, started.execution)
-          return {
-            output: [{ type: 'text', text: `${safeResultText(payload)}${footer === '' ? '' : `\n${footer}`}` }],
-            structuredOutput: payload,
-          }
+
+      const formatBackgroundHandle = (runId: string, exec?: AgentExecutionInfo) => {
+        const summary = workflows.getRun(runId)
+        const effectiveExec = exec ?? workflows.loadRunRecord(runId).subagentMeta?.execution
+        const payload = {
+          ok: true,
+          background: true,
+          runId: summary.id,
+          status: summary.status,
+          ...(effectiveExec !== undefined ? { execution: executionOf(effectiveExec) } : {}),
         }
-        // 同步路径统一走受管后台单子代理启动：从启动起即有 durable WorkflowRun
-        //（foreground 模式：record 标记 syncForeground、notifyParentOnSettle
-        // 初始 false、父 signal 绑定至 detach 或终态），等待 detach 唤醒或终态；
-        // 不再裸调 ctx.host.spawnAgent（生命周期与 SubagentWorkflow 同构，
-        // UI/动作可按 runId detach 转后台）。
-        const started = await workflows.startBackgroundAgent(request, {
-          parentToolCallId: context.callId,
-          notifyParentOnSettle: false,
-          foreground: true,
-        })
-        const execution = started.execution
-        syncRunsDoc()
-        const outcome = await workflows.waitForeground(started.run.id)
-        if (outcome === 'detached') {
-          // detach 转后台：立即返回后台句柄（与 background:true 返回形状兼容），
-          // 终态经 BackgroundReporter followUp 汇报；父 signal 已由 detach
-          // 临界段解绑，不再中止本 run。status 现读真实值（detach 后 run 可能
-          // 已快速终态，不伪造 running）。
-          syncRunsDoc()
-          const payload = {
-            ok: true,
-            background: true,
-            runId: started.run.id,
-            status: workflows.getRun(started.run.id).status,
-            ...(execution !== undefined ? { execution: executionOf(execution) } : {}),
-          }
-          const footer = subagentFooter(undefined, execution)
-          return {
-            output: [{ type: 'text', text: `${safeResultText(payload)}${footer === '' ? '' : `\n${footer}`}` }],
-            structuredOutput: payload,
-          }
+        const footer = subagentFooter(undefined, effectiveExec)
+        return {
+          output: [{ type: 'text', text: `${safeResultText(payload)}${footer === '' ? '' : `\n${footer}`}` }],
+          structuredOutput: payload,
         }
-        // 自然终态：保留同步工具的最终结果/错误语义。
-        const final = workflows.getRun(started.run.id)
-        const resolvedInfo = resolved
+      }
+
+      const formatTerminalResult = (runId: string, initialExec?: AgentExecutionInfo) => {
+        const final = workflows.getRun(runId)
+        const resolvedInfo = resolved ?? initialExec ?? workflows.loadRunRecord(runId).subagentMeta?.execution
         const footer = subagentFooter(resumeRef, resolvedInfo)
         if (final.status === 'completed') {
           const payload = {
@@ -260,7 +202,7 @@ export function registerSubagentTool(
             structuredOutput: payload,
           }
         }
-        const message = final.error ?? `子代理运行 ${started.run.id} 终态为 ${final.status}`
+        const message = final.error ?? `子代理运行 ${runId} 终态为 ${final.status}`
         return {
           output: [{ type: 'text', text: footer === '' ? `subagent_failed: ${message}` : `subagent_failed: ${message}\n${footer}` }],
           isError: true,
@@ -270,7 +212,109 @@ export function registerSubagentTool(
             ...(resolvedInfo !== undefined ? { execution: executionOf(resolvedInfo) } : {}),
           },
         }
+      }
+
+      const waitForegroundRunAndFormat = async (runId: string, initialExec?: AgentExecutionInfo, attachAbortOnReplay = false) => {
+        const current = workflows.getRun(runId)
+        if (current.detachedAt !== undefined) {
+          syncRunsDoc()
+          return formatBackgroundHandle(runId, initialExec)
+        }
+        if (current.status !== 'running') {
+          syncRunsDoc()
+          return formatTerminalResult(runId, initialExec)
+        }
+        const onAbort = () => {
+          if (workflows.isAutoRecoverOnRestart() && workflows.isHostClosing()) return
+          void workflows.abort(runId).catch(() => {})
+        }
+        if (attachAbortOnReplay) {
+          context.signal?.addEventListener('abort', onAbort, { once: true })
+          if (context.signal?.aborted) onAbort()
+        }
+        try {
+          const outcome = await workflows.waitForeground(runId, {
+            ...(attachAbortOnReplay
+              ? { onDetached: () => context.signal?.removeEventListener('abort', onAbort) }
+              : {}),
+            ...(context.signal !== undefined ? { signal: context.signal } : {}),
+          })
+          if (outcome === 'detached') {
+            syncRunsDoc()
+            return formatBackgroundHandle(runId, initialExec)
+          }
+          return formatTerminalResult(runId, initialExec)
+        } finally {
+          if (attachAbortOnReplay) context.signal?.removeEventListener('abort', onAbort)
+        }
+      }
+
+      try {
+        // 跨重启/工具重放幂等：以受信 (conversationId, callId) 查既有 Run，绝不重复派生。
+        if (typeof context.callId === 'string' && context.callId !== '') {
+          const existing = workflows.findRunByParentToolCall(context.conversationId, context.callId)
+          if (existing !== undefined) {
+            if (backgroundChoice.background || existing.detachedAt !== undefined) {
+              syncRunsDoc()
+              return formatBackgroundHandle(existing.id, existing.subagentMeta?.execution)
+            }
+            return await waitForegroundRunAndFormat(existing.id, existing.subagentMeta?.execution, true)
+          }
+        }
+
+        // 嵌套深度前置拒绝（防线二）：达到子树上限的会话是叶子，不创建任何后台 run。
+        assertCanSpawn(context.conversationId)
+        const request: AgentSpawnRequest = {
+          parentConversationId: context.conversationId,
+          ...(context.callId !== undefined ? { parentToolCallId: context.callId } : {}),
+          prompt: String(a['prompt']),
+          ...(a['agentType'] !== undefined ? { agentType: String(a['agentType']) } : {}),
+          ...(a['cwd'] !== undefined ? { cwd: String(a['cwd']) } : {}),
+          ...(a['fork'] === true ? { fork: true } : {}),
+          ...(a['isolation'] !== undefined ? { isolation: 'worktree' } : {}),
+          ...(a['schema'] !== undefined ? { schema: a['schema'] as Record<string, unknown> } : {}),
+          ...(a['gate'] !== undefined ? { gate: String(a['gate']) } : {}),
+          ...(a['resume'] !== undefined ? { resume: String(a['resume']) } : {}),
+          ...(a['model'] !== undefined ? { model: String(a['model']) } : {}),
+          ...(a['effort'] !== undefined ? { effort: String(a['effort']) } : {}),
+          ...(a['maxSubagentDepth'] !== undefined
+            ? { meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: Number(a['maxSubagentDepth']) }) }
+            : {}),
+          ...(Array.isArray(a['attachments']) ? { attachments: a['attachments'] as string[] } : {}),
+          ...(Array.isArray(a['secretNames']) ? { secretNames: a['secretNames'] as string[] } : {}),
+          onResolved: (info) => {
+            resolved = info
+          },
+          signal: context.signal,
+        }
+
+        if (backgroundChoice.background) {
+          const started = await workflows.startBackgroundAgent(request, {
+            parentToolCallId: context.callId,
+            notifyParentOnSettle: true,
+          })
+          syncRunsDoc()
+          return formatBackgroundHandle(started.run.id, started.execution)
+        }
+        // 同步路径统一走受管后台单子代理启动：从启动起即有 durable WorkflowRun
+        //（foreground 模式：record 标记 syncForeground、notifyParentOnSettle
+        // 初始 false、父 signal 绑定至 detach 或终态），等待 detach 唤醒或终态；
+        // 不再裸调 ctx.host.spawnAgent（生命周期与 SubagentWorkflow 同构，
+        // UI/动作可按 runId detach 转后台）。
+        const started = await workflows.startBackgroundAgent(request, {
+          parentToolCallId: context.callId,
+          notifyParentOnSettle: false,
+          foreground: true,
+        })
+        syncRunsDoc()
+        return await waitForegroundRunAndFormat(started.run.id, started.execution, false)
       } catch (error) {
+        // 宿主优雅关停挂起期间父回合 abortSignal 触发：必须原样上抛拒绝，让
+        // pi-durable 保持 ToolTask 未结算并在重启后按 replay: 'safe' 幂等重放，
+        // 绝不能吞错伪装成已结算的失败 tool_result。
+        if (workflows.isHostClosing() && workflows.isAutoRecoverOnRestart() && context.signal?.aborted) {
+          throw error
+        }
         const message = error instanceof Error ? error.message : String(error)
         const footer = subagentFooter(resumeRef, resolved)
         return {

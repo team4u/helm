@@ -48,6 +48,16 @@ export type JournalWriteInput = JournalScope & (
       seq?: number
     }
   | {
+      type: 'agent_started'
+      index: number
+      key: string
+      attempt?: number
+      invocationIndex?: number
+      requestId: string
+      execution: JournalAgentExecution
+      seq?: number
+    }
+  | {
       type: 'action_started'
       index: number
       key: string
@@ -121,6 +131,18 @@ export type WorkflowJournalEntry = JournalScope & (
       skipped?: boolean
       error?: string
       timedOut?: boolean
+    }
+  | {
+      v: 1
+      seq: number
+      /** agent 派生意图与执行环境已解析（用于同 runId 重启原位 reattach）。 */
+      type: 'agent_started'
+      index: number
+      key: string
+      attempt?: number
+      invocationIndex?: number
+      requestId: string
+      execution: JournalAgentExecution
     }
   | {
       v: 1
@@ -277,6 +299,25 @@ export function isAgentEntry(value: unknown): value is Extract<WorkflowJournalEn
     (e['timedOut'] === undefined || typeof e['timedOut'] === 'boolean') &&
     (e['execution'] === undefined || isAgentExecutionShape(e['execution'])) &&
     (e['gate'] === undefined || isAgentGateShape(e['gate']))
+  )
+}
+
+export function isAgentStartedEntry(
+  value: unknown,
+): value is Extract<WorkflowJournalEntry, { type: 'agent_started' }> {
+  if (typeof value !== 'object' || value === null) return false
+  const e = value as Record<string, unknown>
+  return (
+    e['v'] === 1 && Number.isSafeInteger(e['seq']) && (e['seq'] as number) >= 0 &&
+    e['type'] === 'agent_started' &&
+    Number.isSafeInteger(e['index']) &&
+    (e['index'] as number) >= 0 &&
+    hasValidScopeIdentity(e) &&
+    typeof e['key'] === 'string' &&
+    typeof e['requestId'] === 'string' && e['requestId'] !== '' &&
+    (e['attempt'] === undefined || (Number.isInteger(e['attempt']) && (e['attempt'] as number) >= 1)) &&
+    (e['invocationIndex'] === undefined || (Number.isInteger(e['invocationIndex']) && (e['invocationIndex'] as number) >= 0 && (e['invocationIndex'] as number) <= (e['index'] as number))) &&
+    isAgentExecutionShape(e['execution'])
   )
 }
 
