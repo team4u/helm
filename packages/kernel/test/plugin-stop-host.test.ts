@@ -19,9 +19,6 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import {
   HelmError,
   type ConversationSummary,
@@ -29,8 +26,14 @@ import {
   type PluginDefinition,
   type PluginDocHandle,
 } from '@helm/protocol'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import {
+  MemoryDocStore,
+  cleanupDir,
+  makeConversationSummary,
+  makeTempDir,
+} from './helpers.js'
 
 /** 判定「stop 窗口外旧句柄拒绝」的统一断言。 */
 function isContextExpired(err: unknown): boolean {
@@ -68,23 +71,7 @@ class ListenerCountingSignalController {
 }
 
 function makeConversation(id: number): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }
+  return makeConversationSummary({ id })
 }
 
 /**
@@ -309,23 +296,6 @@ class StopWindowBackend implements PluginHostBackend {
   }
 }
 
-class MemoryDocStore implements PluginDocStore {
-  readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (structuredClone(this.store.get(key)) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
 let dataDir: string
 let backend: StopWindowBackend
 
@@ -333,13 +303,13 @@ function makeHost(): PluginHost {
   return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
 }
 
-beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-plugin-stop-host-'))
+beforeEach(async () => {
+  dataDir = await makeTempDir('helm-plugin-stop-host-')
   backend = new StopWindowBackend()
 })
 
-afterEach(() => {
-  rmSync(dataDir, { recursive: true, force: true })
+afterEach(async () => {
+  await cleanupDir(dataDir)
 })
 
 // ---------------------------------------------------------------------------

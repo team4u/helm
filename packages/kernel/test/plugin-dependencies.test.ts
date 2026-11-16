@@ -15,37 +15,18 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import {
   PluginHost,
-  type PluginDocStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, assertRejectsCode, cleanupDir, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(`${pluginId}:`)) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
 
 let dataDir: string
 let docs: MemoryDocStore
@@ -69,19 +50,6 @@ function makeHost(options: { deferServices?: boolean } = {}): PluginHost {
   })
 }
 
-async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<HelmError> {
-  let caught: unknown
-  try {
-    await promise
-  } catch (err) {
-    caught = err
-  }
-  assert.ok(caught instanceof HelmError, `期望 HelmError，实际：${String(caught)}`)
-  assert.equal(caught.code, code)
-  if (status !== undefined) assert.equal(caught.status, status)
-  return caught
-}
-
 function def(id: string, dependencies?: string[], define?: PluginDefinition['definePlugin']): PluginDefinition {
   return {
     id,
@@ -90,14 +58,14 @@ function def(id: string, dependencies?: string[], define?: PluginDefinition['def
   }
 }
 
-beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-plugin-deps-'))
+beforeEach(async () => {
+  dataDir = await makeTempDir('helm-plugin-deps-')
   docs = new MemoryDocStore()
   events = []
 })
 
-afterEach(() => {
-  rmSync(dataDir, { recursive: true, force: true })
+afterEach(async () => {
+  await cleanupDir(dataDir)
 })
 
 // ---------------------------------------------------------------------------
@@ -106,9 +74,9 @@ afterEach(() => {
 
 test('依赖声明：非法形状拒绝；重复项去重；摘要透出 dependencies', { timeout: 60_000 }, async () => {
   const host = makeHost()
-  await rejectsCode(host.register(def('bad', ['ok-id', 'bad@^1.0'])), 'invalid_plugin_definition', 400)
-  await rejectsCode(host.register(def('bad2', ['x', 42 as unknown as string])), 'invalid_plugin_definition', 400)
-  await rejectsCode(host.register(def('bad3', 'nope' as unknown as string[])), 'invalid_plugin_definition', 400)
+  await assertRejectsCode(() => host.register(def('bad', ['ok-id', 'bad@^1.0'])), 'invalid_plugin_definition', 400)
+  await assertRejectsCode(() => host.register(def('bad2', ['x', 42 as unknown as string])), 'invalid_plugin_definition', 400)
+  await assertRejectsCode(() => host.register(def('bad3', 'nope' as unknown as string[])), 'invalid_plugin_definition', 400)
 
   await host.register(def('dep-base'))
   await host.register(def('user', ['dep-base', 'dep-base']))
@@ -123,11 +91,11 @@ test('依赖声明：非法形状拒绝；重复项去重；摘要透出 depende
 
 test('自依赖与两插件环路：注册边界显式 plugin_dependency_cycle', { timeout: 60_000 }, async () => {
   const host = makeHost()
-  await rejectsCode(host.register(def('self', ['self'])), 'plugin_dependency_cycle', 409)
+  await assertRejectsCode(() => host.register(def('self', ['self'])), 'plugin_dependency_cycle', 409)
 
   // 先注册 b（依赖 a，a 未注册——停用态注册允许，启用时才校验满足性）；再注册 a（依赖 b）成环。
   await host.register(def('b', ['a']), { enabled: false })
-  const err = await rejectsCode(host.register(def('a', ['b'])), 'plugin_dependency_cycle', 409)
+  const err = (await assertRejectsCode(() => host.register(def('a', ['b'])), 'plugin_dependency_cycle', 409)) as HelmError
   assert.deepEqual((err.details as { cycle: string[] }).cycle, ['a', 'b', 'a'])
   assert.equal(host.list().some((s) => s.id === 'a'), false, '成环插件不进入注册表')
 })
@@ -142,11 +110,11 @@ test('enable 依赖校验：缺失 / 仅注册未启用 / 启用后成功', { ti
   await host.register(def('user2', ['disabled-dep']), { enabled: false })
   await host.register(def('user3', ['enabled-dep']), { enabled: false })
 
-  const missingErr = await rejectsCode(host.enable('user'), 'plugin_dependency_missing', 409)
+  const missingErr = (await assertRejectsCode(() => host.enable('user'), 'plugin_dependency_missing', 409)) as HelmError
   assert.equal((missingErr.details as { dependency: string }).dependency, 'missing-dep')
 
   await host.register(def('disabled-dep'), { enabled: false })
-  const notEnabledErr = await rejectsCode(host.enable('user2'), 'plugin_dependency_not_enabled', 409)
+  const notEnabledErr = (await assertRejectsCode(() => host.enable('user2'), 'plugin_dependency_not_enabled', 409)) as HelmError
   assert.equal((notEnabledErr.details as { dependency: string }).dependency, 'disabled-dep')
   assert.equal(host.get('user2')?.enabled, false, '启用失败保持停用')
 
@@ -158,7 +126,7 @@ test('enable 依赖校验：缺失 / 仅注册未启用 / 启用后成功', { ti
 
 test('注册即启用同样校验依赖；依赖启用后可恢复', { timeout: 60_000 }, async () => {
   const host = makeHost()
-  await rejectsCode(host.register(def('eager', ['not-there']), { enabled: true }), 'plugin_dependency_missing', 409)
+  await assertRejectsCode(() => host.register(def('eager', ['not-there']), { enabled: true }), 'plugin_dependency_missing', 409)
   assert.equal(host.list().some((s) => s.id === 'eager'), false)
 
   const host2 = makeHost()
@@ -270,7 +238,7 @@ test('非 force 停用被依赖插件：plugin_in_use 拦截（含传递依赖�
   await host.register(def('mid', ['base']), { enabled: true })
   await host.register(def('top', ['mid']), { enabled: true })
 
-  const err = await rejectsCode(host.disable('base'), 'plugin_in_use', 409)
+  const err = (await assertRejectsCode(() => host.disable('base'), 'plugin_in_use', 409)) as HelmError
   const usages = (err.details as { usages: Array<{ kind: string; id: string }> }).usages
   assert.deepEqual(
     usages.map((u) => u.id).sort(),
@@ -315,7 +283,7 @@ test('force 停用：成功且依赖者显式标记（status=failed + plugin.cha
 
   // force 停用后遗留的故障态依赖者同样保护注销：必须先停用依赖者。
   await host.disable('base', { force: true })
-  await rejectsCode(host.unregister('base'), 'plugin_in_use', 409)
+  await assertRejectsCode(() => host.unregister('base'), 'plugin_in_use', 409)
   await host.disable('user')
   await host.unregister('base')
   await host.dispose()
@@ -325,13 +293,13 @@ test('注销被依赖插件：依赖者在启用态时拒绝；停用依赖者�
   const host = makeHost()
   await host.register(def('base'), { enabled: true })
   await host.register(def('user', ['base']), { enabled: true })
-  await rejectsCode(host.unregister('base'), 'plugin_in_use', 409)
+  await assertRejectsCode(() => host.unregister('base'), 'plugin_in_use', 409)
 
   await host.disable('user')
   await host.unregister('base')
   assert.equal(host.get('base'), undefined)
   // base 移除后 user 的依赖缺失：enable 显式失败。
-  await rejectsCode(host.enable('user'), 'plugin_dependency_missing', 409)
+  await assertRejectsCode(() => host.enable('user'), 'plugin_dependency_missing', 409)
   await host.dispose()
 })
 

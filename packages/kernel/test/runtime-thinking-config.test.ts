@@ -1,17 +1,16 @@
 /** 真实 SQLite + pi-durable + faux：镜像、继承覆盖和 SDK 配置必须一致。 */
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, it, type TestContext } from 'node:test'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/runtime.js'
+import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
-type Runtime = KernelRuntime & { faux: ReturnType<typeof fauxProvider> }
+type Runtime = KernelRuntime & { faux: ReturnType<typeof makeFauxModels>['faux'] }
 type ThinkingSummary = ConversationSummary & { thinkingLevelOverride?: string }
 let savedModel: string | undefined
 before(() => {
@@ -24,20 +23,18 @@ after(() => {
 })
 
 async function open(dir: string): Promise<Runtime> {
-  const models = createModels()
-  const faux = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
   return Object.assign(await KernelRuntime.open({
     dataDir: dir, cwd: dir, models,
   }), { faux })
 }
 
 async function fixture(t: TestContext): Promise<{ dir: string; kernel: Runtime }> {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-thinking-'))
+  const dir = await makeTempDir('helm-thinking-')
   const kernel = await open(dir)
   t.after(async () => {
     await kernel.close()
-    rmSync(dir, { recursive: true, force: true })
+    await cleanupDir(dir)
   })
   return { dir, kernel }
 }

@@ -14,9 +14,8 @@
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
 import { join } from 'node:path'
-import { writeFile, mkdir, mkdtemp, rm, symlink, chmod, readFile } from 'node:fs/promises'
+import { writeFile, mkdir, symlink, chmod, readFile, rm } from 'node:fs/promises'
 import { gunzipSync } from 'node:zlib'
-import { tmpdir } from 'node:os'
 import {
   AuthService,
   CredentialService,
@@ -34,6 +33,7 @@ import { HelmError, type ConversationDetail, type ConversationEntry, type Conver
 import { createHubHandler, startHub } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -110,23 +110,7 @@ let hub0: TestEventHub
 
 function summary(id: number, title: string): ConversationSummary {
   const now = Date.now()
-  return {
-    id,
-    title,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'faux/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: now,
-    updatedAt: now,
-  }
+  return makeConversationSummary({ id, title, model: 'faux/model', createdAt: now, updatedAt: now })
 }
 
 /** 内存会话面：真实服务 + 模拟 conversation/ask/search。 */
@@ -356,21 +340,6 @@ function hostApiForPluginHost(): PluginHostBackend {
   }
 }
 
-function docStore() {
-  const docs = new Map<string, unknown>()
-  return {
-    get: <T>(key: string, initial: T): T => (docs.has(key) ? (docs.get(key) as T) : initial),
-    set: <T>(key: string, value: T): void => void docs.set(key, value),
-    deletePlugin: (pluginId: string): void => {
-      const prefix = `${pluginId}:`
-      for (const key of [...docs.keys()]) {
-        if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) docs.delete(key)
-      }
-    },
-    flush: async () => {},
-  }
-}
-
 /** 真实 register 一个含 public/private 路由与动作的插件。 */
 async function registerRoutePlugin(host: PluginHost): Promise<void> {
   publicHandlerCalls = []
@@ -426,7 +395,7 @@ async function registerDocPlugin(host: PluginHost): Promise<void> {
 }
 
 before(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'helm-http-test-'))
+  dataDir = await makeTempDir('helm-http-test-')
   auth = new AuthService(dataDir)
   credentials = new CredentialService(dataDir)
   profiles = new ProfileService(dataDir)
@@ -434,7 +403,7 @@ before(async () => {
   providers = new ProviderService(dataDir)
   stash = new SecretStash()
   artifacts = new ArtifactService(dataDir, new InMemoryArtifactRepository(), stash)
-  pluginHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: hostApiForPluginHost(), docs: docStore() })
+  pluginHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: hostApiForPluginHost(), docs: new MemoryDocStore() })
   await registerRoutePlugin(pluginHost)
   await registerDocPlugin(pluginHost)
   hub0 = new TestEventHub()
@@ -451,7 +420,7 @@ before(async () => {
 })
 
 after(async () => {
-  await rm(dataDir, { recursive: true, force: true })
+  await cleanupDir(dataDir)
 })
 
 // ---------------------------------------------------------------------------
@@ -498,7 +467,7 @@ test('配置后 status：无 token false；错误 token false；有效 token tru
 
 test('恶意网页抢先 setup 防护：恶意 Origin 403 且不写配置；text/plain 冒充 415', { timeout: 60_000 }, async () => {
   // 独立 dataDir：验证恶意请求绝不写入 auth 配置（抢先设置密码失败）
-  const evilDir = await mkdtemp(join(tmpdir(), 'helm-http-evil-'))
+  const evilDir = await makeTempDir('helm-http-evil-')
   try {
     const evilAuth = new AuthService(evilDir)
     const evilKernel = makeKernel()
@@ -544,7 +513,7 @@ test('恶意网页抢先 setup 防护：恶意 Origin 403 且不写配置；text
     })
     assert.equal(cliOk.status, 200)
   } finally {
-    await rm(evilDir, { recursive: true, force: true })
+    await cleanupDir(evilDir)
   }
 })
 
@@ -560,7 +529,7 @@ test('POST /api/auth/setup 弱密码 400 weak_password；重复 setup 409', { ti
 
 test('POST /api/auth/login 未 setup 时 409 not_setup', { timeout: 60_000 }, async () => {
   // 独立 dataDir：全局基座在首个鉴权测试前已完成 setup，无法覆盖未配置分支
-  const freshDir = await mkdtemp(join(tmpdir(), 'helm-http-nosetup-'))
+  const freshDir = await makeTempDir('helm-http-nosetup-')
   try {
     const freshKernel = makeKernel()
     ;(freshKernel as { auth: AuthService }).auth = new AuthService(freshDir)
@@ -570,7 +539,7 @@ test('POST /api/auth/login 未 setup 时 409 not_setup', { timeout: 60_000 }, as
     assert.equal(res.body.error.code, 'not_setup')
     assert.equal(res.body.error.message, '尚未完成 setup，请先执行初始化')
   } finally {
-    await rm(freshDir, { recursive: true, force: true })
+    await cleanupDir(freshDir)
   }
 })
 

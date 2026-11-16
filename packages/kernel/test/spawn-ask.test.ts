@@ -14,23 +14,21 @@
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
 import { HelmError } from '@helm/protocol'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AskService } from '../src/runtime/asks.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../src/runtime/spawn.js'
 import { HelmStore } from '../src/runtime/store.js'
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
 import { ArtifactService, SecretStash } from '../src/services/index.js'
+import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
-type FauxHandle = ReturnType<typeof fauxProvider>
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 interface TestHarness {
   harness: Harness
@@ -45,9 +43,7 @@ interface TestHarness {
  * Map 模拟宿主（真实实现由 runtime.ts 组合，此处测 spawn 自身契约）。
  */
 async function openSpawnHarness(options: { profiles?: Record<string, { model?: string; cwd?: string; runtime?: { kind: string; agent: string } }> } = {}): Promise<TestHarness> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const storage = new MemoryStorage()
   const registry = createRegistry()
   const harness = await Harness.open(
@@ -189,11 +185,11 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-spawn-ask-'))
+  rootDir = await makeTempDir('helm-spawn-ask-')
 })
 
 after(async () => {
-  rmSync(rootDir, { recursive: true, force: true })
+  await cleanupDir(rootDir)
 })
 
 // ---------------------------------------------------------------------------

@@ -20,15 +20,13 @@
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
-type FauxHandle = ReturnType<typeof fauxProvider>
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 interface RecordedUpsert {
   status: ConversationSummary['status']
@@ -40,17 +38,15 @@ interface RecordedUpsert {
 let root = ''
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'helm-run-summary-'))
+  root = await makeTempDir('helm-run-summary-')
 })
 
 after(async () => {
-  rmSync(root, { recursive: true, force: true })
+  await cleanupDir(root)
 })
 
 async function openRuntime(name: string): Promise<KernelRuntime & { __faux: FauxHandle }> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const runtime = await KernelRuntime.open({
     dataDir: join(root, name),
     cwd: join(root, name),
@@ -78,15 +74,6 @@ function recordUpserts(kernel: KernelRuntime, conversationId: number): {
     })
   })
   return { frames, stop: unsubscribe }
-}
-
-/** 轮询等待条件成立（防挂死，总超时显式）。 */
-async function waitFor(cond: () => boolean, ms = 8_000): Promise<void> {
-  const deadline = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error('waitFor 超时')
-    await new Promise((r) => setTimeout(r, 15))
-  }
 }
 
 describe('emitRunSummary：run 启动与 doing 语义变化的实时摘要', { timeout: 60_000 }, () => {

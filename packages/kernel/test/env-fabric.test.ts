@@ -20,10 +20,8 @@ import { test, describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
 import { WebSocket } from 'ws'
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import type { NodeRegisterInput, NodeRegisterResult } from '@helm/protocol'
@@ -38,26 +36,19 @@ import {
 } from '../src/env/index.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { startHub } from '../src/http/index.js'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import {
   createNodeDaemon,
   type NodeDaemon,
   type NodeIdentity,
 } from '@helm/node'
+import { cleanupDir, makeFauxModels, makeTempDir, sleep as delay } from './helpers.js'
 
 const bg = BACKGROUND_CONTEXT
 
 // ---------------------------------------------------------------------------
 // 基座
 // ---------------------------------------------------------------------------
-
-function makeFauxModels() {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
-  return { models, faux }
-}
 
 /** 纯 EnvFabric 测试基座（HTTP server + gateway，不经 KernelRuntime）。 */
 async function startFabricHub(
@@ -114,11 +105,11 @@ async function startNode(opts: {
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-envfabric-'))
+  rootDir = await makeTempDir('helm-envfabric-')
 })
 
 after(async () => {
-  rmSync(rootDir, { recursive: true, force: true })
+  await cleanupDir(rootDir)
 })
 
 // ---------------------------------------------------------------------------
@@ -204,7 +195,7 @@ describe('EnvFabric 节点连接与远端执行', { timeout: 60_000 }, () => {
       await daemon.close()
       await hub.close()
       await new Promise<void>((resolve) => target.close(() => resolve()))
-      rmSync(nodeData, { recursive: true, force: true })
+      await cleanupDir(nodeData)
     }
   })
 

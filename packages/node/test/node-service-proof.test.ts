@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { useTempDir } from '@helm/test-kit/node'
 import { getNodeServiceStatus, renderServiceSpec } from '../src/daemon/service.js'
 
 test('systemd 参数分别转义引号、specifier 和环境展开', { timeout: 60_000 }, () => {
@@ -30,28 +29,24 @@ test('Windows 注册使用任务计划 XML，参数不经过 cmd 展开', { time
   assert.equal(spec.installCmd.includes('/TR'), false)
 })
 
-test('Windows 安装状态以平台任务查询为准，查询失败明确为未知', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-service-proof-'))
-  try {
-    const options = { platform: 'win32' as const, serviceHome: join(dir, 'home') }
-    const actual = await getNodeServiceStatus('/tmp/cli.js', dir, { ...options, execCommand: { run: async () => ({ code: 0, stdout: '"HelmNode","Running"', stderr: '' }) } })
-    assert.equal(actual.installed, true, '没有本地 XML 副本也可有已注册的平台任务')
-    assert.equal(actual.running, 'running')
-    const failure = await getNodeServiceStatus('/tmp/cli.js', dir, { ...options, execCommand: { run: async () => ({ code: 1, stdout: '', stderr: 'Access is denied' }) } })
-    assert.equal(failure.installed, null)
-    assert.equal(failure.running, 'unknown')
-    assert.match(failure.detail ?? '', /状态查询命令失败/)
-  } finally { await rm(dir, { recursive: true, force: true }) }
+test('Windows 安装状态以平台任务查询为准，查询失败明确为未知', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-service-proof-')
+  const options = { platform: 'win32' as const, serviceHome: join(dir, 'home') }
+  const actual = await getNodeServiceStatus('/tmp/cli.js', dir, { ...options, execCommand: { run: async () => ({ code: 0, stdout: '"HelmNode","Running"', stderr: '' }) } })
+  assert.equal(actual.installed, true, '没有本地 XML 副本也可有已注册的平台任务')
+  assert.equal(actual.running, 'running')
+  const failure = await getNodeServiceStatus('/tmp/cli.js', dir, { ...options, execCommand: { run: async () => ({ code: 1, stdout: '', stderr: 'Access is denied' }) } })
+  assert.equal(failure.installed, null)
+  assert.equal(failure.running, 'unknown')
+  assert.match(failure.detail ?? '', /状态查询命令失败/)
 })
 
-test('launchctl 单任务字典中的 PID 表示真实运行状态', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-launchctl-proof-'))
-  try {
-    const status = await getNodeServiceStatus('/tmp/cli.js', dir, {
-      platform: 'darwin', serviceHome: dir,
-      execCommand: { run: async () => ({ code: 0, stdout: '{\n "Label" = "ai.helm.node";\n "PID" = 1234;\n}', stderr: '' }) },
-    })
-    assert.equal(status.installed, true)
-    assert.equal(status.running, 'running')
-  } finally { await rm(dir, { recursive: true, force: true }) }
+test('launchctl 单任务字典中的 PID 表示真实运行状态', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-launchctl-proof-')
+  const status = await getNodeServiceStatus('/tmp/cli.js', dir, {
+    platform: 'darwin', serviceHome: dir,
+    execCommand: { run: async () => ({ code: 0, stdout: '{\n "Label" = "ai.helm.node";\n "PID" = 1234;\n}', stderr: '' }) },
+  })
+  assert.equal(status.installed, true)
+  assert.equal(status.running, 'running')
 })

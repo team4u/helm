@@ -8,37 +8,26 @@
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError, type TurnSettledPayload } from '@helm/protocol'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { buildToolEnv } from '../src/runtime/tools.js'
 import type { HelmEventFrame, HelmSnapshot } from '@helm/protocol'
+import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
 /**
  * faux provider 绑定：KernelRuntime.open 允许 options.models 直接注入测试
  * Models（明确为测试用途）；注入时 reloadModels 不替换（保护外部集合）。
  */
 
-type FauxHandle = ReturnType<typeof fauxProvider>
-
-/** 捕获最近一次模型请求的工厂钩子（before_turn sections/tools/messages 验证）。 */
-
-function makeFauxModels(): { models: ReturnType<typeof createModels>; faux: FauxHandle } {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
-  return { models, faux }
-}
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 interface OpenOpts {
   model?: string
@@ -78,11 +67,11 @@ async function assertThrowsSync(fn: () => unknown, code: string): Promise<void> 
 let root: string
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'helm-runtime-'))
+  root = await makeTempDir('helm-runtime-')
 })
 
 after(async () => {
-  rmSync(root, { recursive: true, force: true })
+  await cleanupDir(root)
 })
 
 describe('KernelRuntime 基础生命周期', { timeout: 60_000 }, () => {

@@ -16,8 +16,7 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, rmSync as rmSyncFn } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { HelmError, clientNpmRootsOf } from '@helm/protocol'
 import { clearClientCompilerMemoryCache, compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
@@ -31,15 +30,16 @@ import { doctorPluginDir } from '../src/plugins/plugin-doctor.js'
 import { PluginPackageManager, type PackageRunner } from '../src/plugins/package-manager.js'
 import { PluginPackageManagerStore } from '../src/plugins/package-store.js'
 import { ConfigService } from '../src/services/config.js'
+import { cleanupDir, makePluginSummary, makeTempDir, useTempDir } from './helpers.js'
 
 let workDir: string
 
-beforeEach(() => {
-  workDir = mkdtempSync(join(tmpdir(), 'helm-client-deps-'))
+beforeEach(async () => {
+  workDir = await makeTempDir('helm-client-deps-')
 })
 
-afterEach(() => {
-  rmSync(workDir, { recursive: true, force: true })
+afterEach(async () => {
+  await cleanupDir(workDir)
 })
 
 function writeJson(path: string, value: unknown): void {
@@ -312,13 +312,13 @@ interface NpmCall {
   cwd: string
 }
 
-test('受管安装补装清单前端依赖：--no-save、版本取已声明 range；无声明时沿用原命令', { timeout: 60_000 }, async () => {
+test('受管安装补装清单前端依赖：--no-save、版本取已声明 range；无声明时沿用原命令', { timeout: 60_000 }, async (t) => {
   const calls: NpmCall[] = []
   const runner: PackageRunner = async (cmd, args, opts) => {
     calls.push({ cmd, args, cwd: opts.cwd })
     return { code: 0, stdout: '', stderr: '' }
   }
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-pkg-client-deps-'))
+  const dataDir = useTempDir(t, 'helm-pkg-client-deps-')
   const srcDir = join(workDir, 'src-plugin')
   mkdirSync(srcDir)
   writeJson(join(srcDir, 'plugin.json'), { id: 'managed-client-dep', main: 'index.ts' })
@@ -341,15 +341,15 @@ test('受管安装补装清单前端依赖：--no-save、版本取已声明 rang
     cwd: workDir,
     store: new PluginPackageManagerStore(new ConfigService(dataDir)),
     host: {
-      async registerManagedPlugin(dir) {
-        return { summary: { id: 'managed-client-dep', name: 'x', locked: false, enabled: false, hooks: [], actions: [], tools: [] }, pluginId: 'managed-client-dep' }
+      async registerManagedPlugin() {
+        return { summary: makePluginSummary({ id: 'managed-client-dep', name: 'x', enabled: false }), pluginId: 'managed-client-dep' }
       },
       async enableManagedPlugin() {
         throw new HelmError('unused', '本测试不启用', 500)
       },
       assertManagedPluginUpdateSafe() {},
       async updateManagedPlugin() {
-        return { summary: { id: 'managed-client-dep', name: 'x', locked: false, enabled: false, hooks: [], actions: [], tools: [] } }
+        return { summary: makePluginSummary({ id: 'managed-client-dep', name: 'x', enabled: false }) }
       },
       async removeManagedPlugin() {
         return { wasEnabled: false }
@@ -366,16 +366,15 @@ test('受管安装补装清单前端依赖：--no-save、版本取已声明 rang
   assert.ok(installCall.args.includes('--no-save'), '前端依赖补装不得改写 package.json')
   assert.ok(installCall.args.includes('client-chart@^4.2.0'), '版本取 package.json 已声明 range')
   assert.ok(installCall.args.includes('client-extra'), '子路径说明符按包名补装，不把子路径当 npm 包名')
-  rmSyncFn(dataDir, { recursive: true, force: true })
 })
 
-test('无前端依赖声明时安装命令保持原样（--omit=dev，无 --no-save/说明符）', { timeout: 60_000 }, async () => {
+test('无前端依赖声明时安装命令保持原样（--omit=dev，无 --no-save/说明符）', { timeout: 60_000 }, async (t) => {
   const calls: NpmCall[] = []
   const runner: PackageRunner = async (cmd, args, opts) => {
     calls.push({ cmd, args, cwd: opts.cwd })
     return { code: 0, stdout: '', stderr: '' }
   }
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-pkg-plain-'))
+  const dataDir = useTempDir(t, 'helm-pkg-plain-')
   const srcDir = join(workDir, 'plain-plugin')
   mkdirSync(srcDir)
   writeJson(join(srcDir, 'plugin.json'), { id: 'plain-plugin', main: 'index.ts' })
@@ -388,14 +387,14 @@ test('无前端依赖声明时安装命令保持原样（--omit=dev，无 --no-s
     store: new PluginPackageManagerStore(new ConfigService(dataDir)),
     host: {
       async registerManagedPlugin() {
-        return { summary: { id: 'plain-plugin', name: 'x', locked: false, enabled: false, hooks: [], actions: [], tools: [] }, pluginId: 'plain-plugin' }
+        return { summary: makePluginSummary({ id: 'plain-plugin', name: 'x', enabled: false }), pluginId: 'plain-plugin' }
       },
       async enableManagedPlugin() {
         throw new HelmError('unused', '本测试不启用', 500)
       },
       assertManagedPluginUpdateSafe() {},
       async updateManagedPlugin() {
-        return { summary: { id: 'plain-plugin', name: 'x', locked: false, enabled: false, hooks: [], actions: [], tools: [] } }
+        return { summary: makePluginSummary({ id: 'plain-plugin', name: 'x', enabled: false }) }
       },
       async removeManagedPlugin() {
         return { wasEnabled: false }
@@ -411,5 +410,4 @@ test('无前端依赖声明时安装命令保持原样（--omit=dev，无 --no-s
   assert.ok(installCall.args.includes('--omit=dev'))
   assert.equal(installCall.args.includes('--no-save'), false)
   assert.equal(installCall.args.some((a) => a.startsWith('leftmost')), false)
-  rmSyncFn(dataDir, { recursive: true, force: true })
 })

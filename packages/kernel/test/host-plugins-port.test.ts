@@ -12,8 +12,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { HelmError, type HelmHostApi, type PluginDefinition, type PluginSummary } from '@helm/protocol'
@@ -21,32 +20,15 @@ import {
   PluginHost,
   PluginPackageManager,
   PluginPackageManagerStore,
-  type PluginDocStore,
 } from '../src/plugins/index.js'
 import { ConfigService } from '../src/services/config.js'
 import { hostBackendStub } from './helpers/host-backend-stub.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // 基建
 // ---------------------------------------------------------------------------
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
 
 /** 最小合法外部插件源（约定入口形态；与 plugin-package-manager.test 同构）。 */
 const PLUGIN_SRC = (id: string, version = '1.0.0') => `export default {
@@ -76,13 +58,13 @@ interface Env {
   host: PluginHost
   dataDir: string
   srcParent: string
-  close(): void
+  close(): Promise<void>
 }
 
 /** 真实 PluginHost + 真实 PluginPackageManager（local 源；无网络依赖）。 */
 async function makeEnv(): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-host-plugins-'))
-  const srcParent = mkdtempSync(join(tmpdir(), 'helm-host-plugins-src-'))
+  const dataDir = await makeTempDir('helm-host-plugins-')
+  const srcParent = await makeTempDir('helm-host-plugins-src-')
   // 后端 plugins 端口接线：与 runtime createPluginHostBackend 同一委托面
   //（直接转发 PluginHost 既有公共方法，复用同一生命周期队列与任务跟踪）。
   const backend = hostBackendStub()
@@ -111,9 +93,9 @@ async function makeEnv(): Promise<Env> {
     host,
     dataDir,
     srcParent,
-    close() {
-      rmSync(dataDir, { recursive: true, force: true })
-      rmSync(srcParent, { recursive: true, force: true })
+    async close() {
+      await cleanupDir(dataDir)
+      await cleanupDir(srcParent)
     },
   }
 }
@@ -201,7 +183,7 @@ test('host.plugins 端口转发：doctor/install/update/enable/disable/remove �
     assert.ok(!api.plugins.list().some((s) => s.id === 'port-demo'), '清单中应已移除')
   } finally {
     await env.host.dispose()
-    env.close()
+    await env.close()
   }
 })
 
@@ -223,7 +205,7 @@ test('host.plugins.disable 停用其他插件（经端口）与 disable(force) �
     assert.equal(again.enabled, false)
   } finally {
     await env.host.dispose()
-    env.close()
+    await env.close()
   }
 })
 
@@ -280,7 +262,7 @@ test('doctor 报告捕获真实 ui.screen 声明：register 通过时 screens �
     assert.deepEqual(byId.screens, ['main', 'detail'])
   } finally {
     await env.host.dispose()
-    env.close()
+    await env.close()
   }
 })
 
@@ -302,7 +284,7 @@ test('doctor 失败（register 未通过）时不出部分 screens：无 ui.scre
     assert.equal(bad.screens, undefined, 'register 未通过时不得携带部分 screens')
   } finally {
     await env.host.dispose()
-    env.close()
+    await env.close()
   }
 })
 
@@ -330,7 +312,7 @@ test('自指生命周期拒绝：插件对自身 update/remove/disable 立即 40
     await api.plugins.list()
   } finally {
     await env.host.dispose()
-    env.close()
+    await env.close()
   }
 })
 
@@ -363,7 +345,7 @@ test('自指拒绝在动作执行中也成立：handler 内调用 self disable �
     assert.ok(api)
   } finally {
     await env.host.dispose()
-    env.close()
+    await env.close()
   }
 })
 
@@ -393,12 +375,12 @@ test('错误边界：未知插件/非法路径/互斥目标', { timeout: 60_000 
     await expectHelmError(() => api.plugins.install('/nonexistent/plugin/dir'), 'plugin_package_install_failed', 404)
   } finally {
     await env.host.dispose()
-    env.close()
+    await env.close()
   }
 })
 
 test('后端未接线 plugins 端口：修改操作显式 501，读面照常可用', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-host-plugins-noport-'))
+  const dataDir = await makeTempDir('helm-host-plugins-noport-')
   // 显式不接线 plugins 端口（undefined）：与轻量测试宿主同形态。
   const backend = hostBackendStub()
   backend.plugins = undefined
@@ -419,7 +401,7 @@ test('后端未接线 plugins 端口：修改操作显式 501，读面照常可�
     await expectHelmError(() => api.plugins.disable('p:probe'), 'plugin_self_lifecycle_forbidden', 409)
   } finally {
     await host.dispose()
-    rmSync(dataDir, { recursive: true, force: true })
+    await cleanupDir(dataDir)
   }
 })
 
@@ -447,13 +429,13 @@ test('周期守卫：停用后旧句柄 plugins 全方法一律 409 plugin_conte
     }
   } finally {
     await env.host.dispose()
-    env.close()
+    await env.close()
   }
 })
 
 test('脱敏边界：doctor 失败诊断中的机密经宿主 redactText 出站', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-host-plugins-redact-'))
-  const srcParent = mkdtempSync(join(tmpdir(), 'helm-host-plugins-redact-src-'))
+  const dataDir = await makeTempDir('helm-host-plugins-redact-')
+  const srcParent = await makeTempDir('helm-host-plugins-redact-src-')
   // 构造带机密的宿主：redact 把明文机密替换为标记（模拟 SecretStash）。
   const SECRET = 'sk-helm-super-secret-token'
   const stub = hostBackendStub()
@@ -488,8 +470,8 @@ test('脱敏边界：doctor 失败诊断中的机密经宿主 redactText 出站'
     assert.ok(text.includes('[REDACTED]'), '机密应被替换为脱敏标记')
   } finally {
     await host.dispose()
-    rmSync(dataDir, { recursive: true, force: true })
-    rmSync(srcParent, { recursive: true, force: true })
+    await cleanupDir(dataDir)
+    await cleanupDir(srcParent)
   }
 })
 
@@ -540,7 +522,7 @@ test('在途任务跟踪：port 调用计入调用方插件 tracker（disable �
     assert.equal(env.host.get('p:operator')?.enabled, false)
   } finally {
     await env.host.dispose()
-    env.close()
+    await env.close()
   }
 })
 

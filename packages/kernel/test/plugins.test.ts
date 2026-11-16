@@ -4,14 +4,12 @@
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { SecretStash, AuthService } from '../src/services/index.js';
 import { createHubHandler, type KernelRuntimeLike } from '../src/http/index.js';
 import {
   HelmError,
-  type ConversationSummary,
   type ExternalTriggerEnvelope,
   type PluginDefinition,
   type PluginDocHandle,
@@ -20,7 +18,6 @@ import {
   PluginHost,
   actionToolAlias,
   validatePluginInput,
-  type PluginDocStore,
   type PluginConfigStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js';
@@ -29,29 +26,21 @@ import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js';
 
 import { createPluginBuildProvider } from '@helm/plugin-build';
 import type { PluginBuildProvider } from '@helm/protocol';
+import {
+  MemoryConfigStore,
+  MemoryDocStore,
+  assertRejectsCode,
+  cleanupDir,
+  makeConversationSummary,
+  makeTempDir,
+} from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
 
-function makeConversation(id: number): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'default',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  };
+function makeConversation(id: number) {
+  return makeConversationSummary({ id, profileId: 'default' });
 }
 
 /**
@@ -104,34 +93,6 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
   };
 }
 
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>();
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial;
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value));
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-
-  async flush(): Promise<void> {}
-}
-
-class MemoryConfigStore implements PluginConfigStore {
-  store = new Map<string, Record<string, unknown>>();
-  get(pluginId: string): Record<string, unknown> {
-    return { ...this.store.get(pluginId) };
-  }
-  set(pluginId: string, value: Record<string, unknown>): void {
-    this.store.set(pluginId, { ...value });
-  }
-}
-
 function makeEnvelope(over: Partial<ExternalTriggerEnvelope> = {}): ExternalTriggerEnvelope {
   return {
     id: 'evt-1',
@@ -148,16 +109,6 @@ let events: string[];
 /** emitEvent 完整载荷（plugin.changed 的 ui 字段等断言用）。 */
 let eventPayloads: Array<{ type: string; payload: unknown }>;
 
-/** 断言 Promise 以指定 code/status 的 HelmError 拒。 */
-async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<void> {
-  await assert.rejects(promise, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`);
-    assert.equal(err.code, code);
-    if (status !== undefined) assert.equal(err.status, status);
-    return true;
-  });
-}
-
 /** 断言同步函数抛指定 code 的 HelmError。 */
 function throwsCode(fn: () => unknown, code: string): void {
   assert.throws(fn, (err: unknown) => {
@@ -171,15 +122,15 @@ function makeHost(config?: PluginConfigStore, extra?: { buildProvider?: PluginBu
   return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeHostApi(events), docs, config, ...(extra?.buildProvider !== undefined ? { buildProvider: extra.buildProvider } : {}) });
 }
 
-beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-plugins-test-'));
+beforeEach(async () => {
+  dataDir = await makeTempDir('helm-plugins-test-');
   docs = new MemoryDocStore();
   events = [];
   eventPayloads = [];
 });
 
-afterEach(() => {
-  rmSync(dataDir, { recursive: true, force: true });
+afterEach(async () => {
+  await cleanupDir(dataDir);
 });
 
 // ---------------------------------------------------------------------------
@@ -378,7 +329,7 @@ test('钩子返回 undefined 等价 continue；transform 缺 value / 破坏必�
       ctx.hook.onTrigger(() => ({ action: 'transform' }) as never);
     },
   });
-  await rejectsCode(h2.runHook('trigger', makeEnvelope()), 'invalid_hook_result');
+  await assertRejectsCode(() => h2.runHook('trigger', makeEnvelope()), 'invalid_hook_result');
 
   // transform 破坏必要字段（source 被删）
   const h3 = makeHost();
@@ -405,7 +356,7 @@ test('钩子返回 undefined 等价 continue；transform 缺 value / 破坏必�
       ctx.hook.onTrigger(() => ({ action: 'resend' }) as never);
     },
   });
-  await rejectsCode(h4.runHook('trigger', makeEnvelope()), 'invalid_hook_result');
+  await assertRejectsCode(() => h4.runHook('trigger', makeEnvelope()), 'invalid_hook_result');
 });
 
 test('钩子执行抛异常：包装 hook_execution_failed 且不静默', { timeout: 60_000 }, async () => {
@@ -613,7 +564,7 @@ test('disable 遇在途 action / tool / 挂起 spawn 一律 409，结束后可�
 
   const running = host.invokeAction('p:busy', 'slow', {});
   await new Promise((r) => setTimeout(r, 20));
-  await rejectsCode(host.disable('p:busy'), 'plugin_has_live_tasks', 409);
+  await assertRejectsCode(() => host.disable('p:busy'), 'plugin_has_live_tasks', 409);
 
   release();
   assert.deepEqual(await running, { done: true });
@@ -630,14 +581,14 @@ test('挂起 agent_spawn 与自定义 task 也计入在途保护', { timeout: 60
     },
   });
   host.beginSpawnTask('p:spawner', 'spawn-1');
-  await rejectsCode(host.disable('p:spawner'), 'plugin_has_live_tasks');
+  await assertRejectsCode(() => host.disable('p:spawner'), 'plugin_has_live_tasks');
   host.endSpawnTask('p:spawner', 'spawn-1');
 
   const task = host.withTask('p:spawner', 'custom', async () => {
     await new Promise((r) => setTimeout(r, 30));
     return 1;
   });
-  await rejectsCode(host.disable('p:spawner'), 'plugin_has_live_tasks');
+  await assertRejectsCode(() => host.disable('p:spawner'), 'plugin_has_live_tasks');
   assert.equal(await task, 1);
   await host.disable('p:spawner');
 });
@@ -657,7 +608,7 @@ test('runHook 执行期间 disable 被拒绝（钩子在途计为任务）', { t
   });
   const running = host.runHook('trigger', makeEnvelope());
   await new Promise((r) => setTimeout(r, 20));
-  await rejectsCode(host.disable('p:hooky'), 'plugin_has_live_tasks');
+  await assertRejectsCode(() => host.disable('p:hooky'), 'plugin_has_live_tasks');
   release();
   await running;
   await host.disable('p:hooky');
@@ -749,7 +700,7 @@ test('locked 插件 disable/unregister 403 plugin_locked', { timeout: 60_000 }, 
     assert.equal(err.status, 403);
     return true;
   });
-  await rejectsCode(host.unregister('builtin:profile'), 'plugin_locked', 403);
+  await assertRejectsCode(() => host.unregister('builtin:profile'), 'plugin_locked', 403);
 });
 
 test('doc 命名空间隔离 pluginId:name；get 返回 clone 防未持久化突变', { timeout: 60_000 }, async () => {
@@ -846,33 +797,36 @@ test('路由声明相对路径：宿主拼接到插件命名空间，完整 /api
   );
 
   // 完整 /api 前缀一律拒绝（新契约只收相对路径，命名空间由宿主负责）
-  await rejectsCode(
-    host.register({
-      id: 'p:evil',
-      definePlugin: (ctx) => {
-        ctx.route({ method: 'GET', path: '/api/conversations', handler: () => new Response('x') });
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:evil',
+        definePlugin: (ctx) => {
+          ctx.route({ method: 'GET', path: '/api/conversations', handler: () => new Response('x') });
+        },
+      }),
     'invalid_route_path',
   );
-  await rejectsCode(
-    host.register({
-      id: 'p:evil2',
-      definePlugin: (ctx) =>
-        void ctx.route({ method: 'GET', path: '/api/plugins/p%3Aevil2/routes/x', handler: () => new Response('x') }),
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:evil2',
+        definePlugin: (ctx) =>
+          void ctx.route({ method: 'GET', path: '/api/plugins/p%3Aevil2/routes/x', handler: () => new Response('x') }),
+      }),
     'invalid_route_path',
   );
   // 点段 / 编码点段 / 查询串 / 片段 / 空段 / 尾斜杠 / 仅根：相对路径形态非法
   const rejectPath = async (suffix: string) => {
     const pluginId = `p:seg-${suffix.length}-${suffix.replaceAll(/[^A-Za-z0-9]/g, 'p')}`;
-    await rejectsCode(
-      host.register({
-        id: pluginId,
-        definePlugin: (ctx) => {
-          ctx.route({ method: 'GET', path: suffix, handler: () => new Response('x') });
-        },
-      }),
+    await assertRejectsCode(
+      () =>
+        host.register({
+          id: pluginId,
+          definePlugin: (ctx) => {
+            ctx.route({ method: 'GET', path: suffix, handler: () => new Response('x') });
+          },
+        }),
       'invalid_route_path',
     );
   };
@@ -957,7 +911,7 @@ test('dispose 逆序停用全部插件；dispose 后调用显式报错', { timeo
   await host.dispose();
   assert.deepEqual(stops, ['second', 'first']);
   throwsCode(() => host.listActions(), 'plugin_host_disposed');
-  await rejectsCode(host.register({ id: 'p:x', definePlugin: () => {} }), 'plugin_host_disposed');
+  await assertRejectsCode(() => host.register({ id: 'p:x', definePlugin: () => {} }), 'plugin_host_disposed');
   await host.dispose(); // 幂等
 });
 
@@ -981,19 +935,20 @@ test('cli.command 语义化命令路径：合法声明透传 manifest，动作 i
 
   // 动作 id 禁止点号：全限定 ID 以首个 '.' 分割，含点会产生歧义解析
   const hDot = makeHost();
-  await rejectsCode(
-    hDot.register({
-      id: 'p:dot-action',
-      definePlugin: (ctx) => {
-        ctx.action({
-          id: 'cron.create',
-          description: 'x',
-          inputSchema: { type: 'object' },
-          outputSchema: { type: 'object' },
-          handler: () => ({}),
-        });
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      hDot.register({
+        id: 'p:dot-action',
+        definePlugin: (ctx) => {
+          ctx.action({
+            id: 'cron.create',
+            description: 'x',
+            inputSchema: { type: 'object' },
+            outputSchema: { type: 'object' },
+            handler: () => ({}),
+          });
+        },
+      }),
     'invalid_action_spec',
   );
   assert.equal(hDot.list().length, 0);
@@ -1008,36 +963,38 @@ test('cli.command 语义化命令路径：合法声明透传 manifest，动作 i
   assert.equal(hDot.list().length, 1);
 
   const h2 = makeHost();
-  await rejectsCode(
-    h2.register({
-      id: 'p:bad-cli',
-      definePlugin: (ctx) => {
-        ctx.action({
-          id: 'x',
-          description: 'x',
-          inputSchema: { type: 'object' },
-          outputSchema: { type: 'object' },
-          cli: { command: [] },
-          handler: () => ({}),
-        });
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      h2.register({
+        id: 'p:bad-cli',
+        definePlugin: (ctx) => {
+          ctx.action({
+            id: 'x',
+            description: 'x',
+            inputSchema: { type: 'object' },
+            outputSchema: { type: 'object' },
+            cli: { command: [] },
+            handler: () => ({}),
+          });
+        },
+      }),
     'invalid_action_spec',
   );
-  await rejectsCode(
-    h2.register({
-      id: 'p:bad-cli2',
-      definePlugin: (ctx) => {
-        ctx.action({
-          id: 'x',
-          description: 'x',
-          inputSchema: { type: 'object' },
-          outputSchema: { type: 'object' },
-          cli: { command: ['ok', ''] },
-          handler: () => ({}),
-        });
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      h2.register({
+        id: 'p:bad-cli2',
+        definePlugin: (ctx) => {
+          ctx.action({
+            id: 'x',
+            description: 'x',
+            inputSchema: { type: 'object' },
+            outputSchema: { type: 'object' },
+            cli: { command: ['ok', ''] },
+            handler: () => ({}),
+          });
+        },
+      }),
     'invalid_action_spec',
   );
 });
@@ -1046,14 +1003,14 @@ test('重复注册 / 未知插件 / 未启用插件动作调用均显式报错',
   const host = makeHost();
   const def: PluginDefinition = { id: 'p:dup', definePlugin: () => {} };
   await host.register(def);
-  await rejectsCode(host.register(def), 'plugin_already_registered');
+  await assertRejectsCode(() => host.register(def), 'plugin_already_registered');
 
-  await rejectsCode(host.disable('p:none'), 'unknown_plugin');
-  await rejectsCode(host.invokeAction('p:none', 'a', {}), 'unknown_plugin');
+  await assertRejectsCode(() => host.disable('p:none'), 'unknown_plugin');
+  await assertRejectsCode(() => host.invokeAction('p:none', 'a', {}), 'unknown_plugin');
 
   await host.register({ id: 'p:off', definePlugin: () => {} });
   await host.disable('p:off');
-  await rejectsCode(host.invokeAction('p:off', 'x', {}), 'plugin_disabled');
+  await assertRejectsCode(() => host.invokeAction('p:off', 'x', {}), 'plugin_disabled');
 });
 
 // ---------------------------------------------------------------------------
@@ -1178,8 +1135,8 @@ test('disable 的 await 期间新 invokeAction/executeTool/runHook 被隔离；s
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(stopStarted, 'stop 应已开始（处于 await）');
   // await 期间新任务一律拒绝；runHook 不执行其 handler（无参与者走 continue）
-  await rejectsCode(host.invokeAction('p:race', 'ping', {}), 'plugin_disabled');
-  await rejectsCode(host.executeTool('nope', {}, { conversationId: 1 }), 'unknown_tool');
+  await assertRejectsCode(() => host.invokeAction('p:race', 'ping', {}), 'plugin_disabled');
+  await assertRejectsCode(() => host.executeTool('nope', {}, { conversationId: 1 }), 'unknown_tool');
   const hookResult = await host.runHook('trigger', makeEnvelope());
   assert.equal(hookResult.action, 'continue');
   releaseStop();
@@ -1269,7 +1226,7 @@ test('disable 遇 stop 失败：状态落位已停用（不虚假 enabled=true�
       ctx.service({ id: 'svc', start: () => {}, stop: () => { throw new Error('stop 崩溃'); } });
     },
   });
-  await rejectsCode(host.disable('p:stopfail'), 'plugin_service_stop_failed');
+  await assertRejectsCode(() => host.disable('p:stopfail'), 'plugin_service_stop_failed');
   // 关键：不维持 enabled=true 但注册已清空的虚假状态
   const summary = host.list().find((p) => p.id === 'p:stopfail')!;
   assert.equal(summary.enabled, false);
@@ -1357,8 +1314,8 @@ test('disable stop 失败：已落位停用，仍发一次 plugin.changed(enable
   assert.deepEqual(summary.actions, []);
   assert.deepEqual(summary.tools, []);
   assert.deepEqual(summary.hooks, []);
-  await rejectsCode(host.invokeAction('p:dfail', 'act', {}), 'plugin_disabled');
-  await rejectsCode(host.executeTool('direct_tool', {}, { conversationId: 1 }), 'unknown_tool');
+  await assertRejectsCode(() => host.invokeAction('p:dfail', 'act', {}), 'plugin_disabled');
+  await assertRejectsCode(() => host.executeTool('direct_tool', {}, { conversationId: 1 }), 'unknown_tool');
 
   // 宿主托管资源在 stop 失败路径同样被释放
   assert.ok(events.includes('release:p:dfail:7'));
@@ -1567,10 +1524,10 @@ test('register/enable/disable/unregister 成功后发 plugin.changed 事件；�
   const h2 = makeHost();
   await h2.register({ id: 'p:locked', locked: true, definePlugin: () => {} });
   const before = events.length;
-  await rejectsCode(h2.disable('p:locked'), 'plugin_locked');
-  await rejectsCode(h2.unregister('p:locked'), 'plugin_locked');
-  await rejectsCode(h2.disable('p:none'), 'unknown_plugin');
-  await rejectsCode(h2.unregister('p:none'), 'unknown_plugin');
+  await assertRejectsCode(() => h2.disable('p:locked'), 'plugin_locked');
+  await assertRejectsCode(() => h2.unregister('p:locked'), 'plugin_locked');
+  await assertRejectsCode(() => h2.disable('p:none'), 'unknown_plugin');
+  await assertRejectsCode(() => h2.unregister('p:none'), 'unknown_plugin');
   assert.equal(events.length, before); // 拒绝未新增事件
 });
 
@@ -1732,8 +1689,8 @@ test('action 输出含 Map/undefined/循环等非 JSON 值时边界显式报错�
       });
     },
   });
-  await rejectsCode(host.invokeAction('p:out', 'map-out', {}), 'invalid_json_value');
-  await rejectsCode(host.invokeAction('p:out', 'undef-out', {}), 'invalid_json_value');
+  await assertRejectsCode(() => host.invokeAction('p:out', 'map-out', {}), 'invalid_json_value');
+  await assertRejectsCode(() => host.invokeAction('p:out', 'undef-out', {}), 'invalid_json_value');
 });
 
 // ---------------------------------------------------------------------------
@@ -1742,37 +1699,39 @@ test('action 输出含 Map/undefined/循环等非 JSON 值时边界显式报错�
 
 test('action 声明 $async Schema 在注册边界即拒（invalid_plugin_schema）并整体回滚', { timeout: 60_000 }, async () => {
   const host = makeHost();
-  await rejectsCode(
-    host.register({
-      id: 'p:async-schema',
-      definePlugin: (ctx) => {
-        ctx.action({
-          id: 'a',
-          description: 'x',
-          inputSchema: { type: 'object', $async: true },
-          outputSchema: { type: 'object' },
-          handler: () => ({}),
-        });
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:async-schema',
+        definePlugin: (ctx) => {
+          ctx.action({
+            id: 'a',
+            description: 'x',
+            inputSchema: { type: 'object', $async: true },
+            outputSchema: { type: 'object' },
+            handler: () => ({}),
+          });
+        },
+      }),
     'invalid_plugin_schema',
   );
   assert.equal(host.list().length, 0);
 
   // 非法 Schema（无法编译）同样在注册边界回滚，不等首次调用
-  await rejectsCode(
-    host.register({
-      id: 'p:bad-schema2',
-      definePlugin: (ctx) => {
-        ctx.action({
-          id: 'a',
-          description: 'x',
-          inputSchema: { type: 'quux' } as never,
-          outputSchema: { type: 'object' },
-          handler: () => ({}),
-        });
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:bad-schema2',
+        definePlugin: (ctx) => {
+          ctx.action({
+            id: 'a',
+            description: 'x',
+            inputSchema: { type: 'quux' } as never,
+            outputSchema: { type: 'object' },
+            handler: () => ({}),
+          });
+        },
+      }),
     'invalid_plugin_schema',
   );
   assert.equal(host.list().length, 0);
@@ -1832,23 +1791,25 @@ test('ctx.tool 名 provider-safe 校验：点/超长拒绝；不同长 id 的别
   const host = makeHost();
   // 点与超长能过通用 id 校验但不过 provider-safe 校验
   for (const [i, name] of ['has.dot', 'a'.repeat(65)].entries()) {
-    await rejectsCode(
-      host.register({
-        id: `p:tn-${i}`,
-        definePlugin: (ctx) =>
-          void ctx.tool({ name, description: 'x', inputSchema: { type: 'object' }, execute: () => 'ok' }),
-      }),
+    await assertRejectsCode(
+      () =>
+        host.register({
+          id: `p:tn-${i}`,
+          definePlugin: (ctx) =>
+            void ctx.tool({ name, description: 'x', inputSchema: { type: 'object' }, execute: () => 'ok' }),
+        }),
       'invalid_tool_spec',
     );
   }
   // 冒号/空格/空名在通用 id 校验即拒（invalid_identifier），同样回滚
   for (const [i, name] of ['has:colon', 'has space', ''].entries()) {
-    await rejectsCode(
-      host.register({
-        id: `p:tn2-${i}`,
-        definePlugin: (ctx) =>
-          void ctx.tool({ name, description: 'x', inputSchema: { type: 'object' }, execute: () => 'ok' }),
-      }),
+    await assertRejectsCode(
+      () =>
+        host.register({
+          id: `p:tn2-${i}`,
+          definePlugin: (ctx) =>
+            void ctx.tool({ name, description: 'x', inputSchema: { type: 'object' }, execute: () => 'ok' }),
+        }),
       'invalid_identifier',
     );
   }
@@ -1988,7 +1949,7 @@ test('ctx.host.execEnv：真实调用 backend（required 端口）+ 在途任务
   await new Promise((r) => setTimeout(r, 20));
 
   // 此时在途有 host.execEnv 和 action:p:exec-live.run-cmd，disable 必须被 409 拒绝
-  await rejectsCode(host.disable('p:exec-live'), 'plugin_has_live_tasks', 409);
+  await assertRejectsCode(() => host.disable('p:exec-live'), 'plugin_has_live_tasks', 409);
 
   // 放行 execEnv
   finishExec({ ok: true, exitCode: 0, output: 'finished', timedOut: false });

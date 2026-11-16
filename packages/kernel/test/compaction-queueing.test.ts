@@ -15,31 +15,21 @@
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { CompactionTask, defineExtension, hook } from '@earendil-works/pi-durable'
 import type { ConversationLive, HelmEventFrame } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
-type FauxHandle = ReturnType<typeof fauxProvider>
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 interface CapturedNotice {
   level: string
   title: string
   body?: string
   conversationId?: number
-}
-
-async function waitFor(cond: () => boolean | Promise<boolean>, ms = 15_000): Promise<void> {
-  const deadline = Date.now() + ms
-  while (!(await cond())) {
-    if (Date.now() > deadline) throw new Error('waitFor 超时')
-    await new Promise((r) => setTimeout(r, 15))
-  }
 }
 
 async function waitForGateOrAbort(gate: Promise<void>, signal?: AbortSignal): Promise<void> {
@@ -89,12 +79,12 @@ function extractText(content: unknown): string {
 describe('Compaction queueing, empty-skip reconciliation & rewind guard', { timeout: 60_000 }, () => {
   let root = ''
 
-  before(() => {
-    root = mkdtempSync(join(tmpdir(), 'helm-compact-queue-'))
+  before(async () => {
+    root = await makeTempDir('helm-compact-queue-')
   })
 
-  after(() => {
-    rmSync(root, { recursive: true, force: true })
+  after(async () => {
+    await cleanupDir(root)
   })
 
   async function openRuntime(name: string): Promise<{
@@ -103,9 +93,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     dir: string
   }> {
     const dir = join(root, name)
-    const models = createModels()
-    const faux = fauxProvider()
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels()
     const kernel = await KernelRuntime.open({
       dataDir: dir,
       cwd: dir,

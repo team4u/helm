@@ -11,6 +11,7 @@ import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
 import type { ConversationSummary, HelmEventFrame, HelmSnapshot } from '@helm/protocol'
 import { EventHub, type SseFrame, type SnapshotProvider } from '../src/runtime/events.js'
+import { makeConversationSummary, waitFor } from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // fixture
@@ -22,24 +23,13 @@ interface Fixture {
   persistedSeqs: number[]
 }
 function summary(id: number, title: string, doing?: string): ConversationSummary {
-  return {
+  return makeConversationSummary({
     id,
     title,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
     createdAt: 1_000,
     updatedAt: 1_000,
     ...(doing !== undefined ? { doing } : {}),
-  }
+  })
 }
 
 function makeFixture(opts?: { maxPendingBytes?: number; initialSeq?: number; keepaliveMs?: number }): Fixture {
@@ -93,15 +83,6 @@ async function readAll(
     onChunk?.(text)
   }
   return all
-}
-
-/** 等待条件成立（轮询 microtask+短 timer，防挂死）。 */
-async function waitFor(cond: () => boolean, ms = 2000): Promise<void> {
-  const deadline = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error('waitFor 超时')
-    await new Promise((r) => setTimeout(r, 5))
-  }
 }
 
 /** 单次读取附带 Deadline：心跳未按时到达即显式失败（不让测试挂到套件超时）。 */

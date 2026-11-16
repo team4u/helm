@@ -5,12 +5,8 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import {
   HelmError,
-  type ConversationSummary,
   type HelmEventFrame,
   type PluginSessionDocHandle,
   type PublicPluginSessionDoc,
@@ -21,25 +17,10 @@ import { SessionDocEventHub } from '../src/runtime/events.js'
 import { AuthService } from '../src/services/index.js'
 import { createHubHandler, startHub, type KernelRuntimeLike, type SessionDocEventPort } from '../src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 
-function makeConversation(id: number): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'default',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }
+function makeConversation(id: number) {
+  return makeConversationSummary({ id, profileId: 'default' })
 }
 
 let dataDir: string
@@ -91,7 +72,7 @@ const backend: PluginHostBackend = {
 const memorySessionStore = new Map<string, string>()
 
 beforeEach(async () => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-http-sd-'))
+  dataDir = await makeTempDir('helm-http-sd-')
   sessionDocHub = new SessionDocEventHub()
   globalFrames = []
   metricsHandle = undefined
@@ -102,12 +83,7 @@ beforeEach(async () => {
   pluginHost = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
-    docs: {
-      get: <T>(key: string, initial: T) => initial,
-      set: () => {},
-      deletePlugin: () => {},
-      flush: async () => {},
-    },
+    docs: new MemoryDocStore(),
     sessionDocs: {
       get: (p, n, c) => memorySessionStore.get(`${p}\0${n}\0${c}`),
       put: (p, n, c, v) => memorySessionStore.set(`${p}\0${n}\0${c}`, v),
@@ -180,7 +156,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeHub?.()
-  rmSync(dataDir, { recursive: true, force: true })
+  await cleanupDir(dataDir)
 })
 
 function authInit(): RequestInit {

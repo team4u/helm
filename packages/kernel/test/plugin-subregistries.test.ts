@@ -21,23 +21,11 @@ import {
 } from '../src/plugins/capability-registry.js';
 import { UiRegistry } from '../src/plugins/ui-registry.js';
 import { PluginTaskTracker } from '../src/plugins/tracking.js';
+import { MemoryDocStore } from './helpers.js';
 
-class MemoryDocStore implements PluginDocStore {
-  data = new Map<string, unknown>();
+class TrackedDocStore extends MemoryDocStore {
   flushed = false;
-  get<T>(key: string, initial: T): T {
-    return this.data.has(key) ? (this.data.get(key) as T) : initial;
-  }
-  set<T>(key: string, value: T): void {
-    this.data.set(key, value);
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.data.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.data.delete(key)
-    }
-  }
-  async flush(): Promise<void> {
+  override async flush(): Promise<void> {
     this.flushed = true;
   }
 }
@@ -78,7 +66,7 @@ class MemorySessionDocStore implements PluginSessionDocStore {
 }
 
 test('PluginDocRegistry：文档注册、隔离、更新通知与生命周期守卫', { timeout: 60_000 }, async () => {
-  const store = new MemoryDocStore();
+  const store = new TrackedDocStore();
   const updates: Array<{ pluginId: string; name: string; value: unknown }> = [];
   const registry = new PluginDocRegistry(store, (pluginId, name, value) => {
     updates.push({ pluginId, name, value });

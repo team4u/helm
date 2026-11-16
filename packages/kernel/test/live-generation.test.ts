@@ -16,12 +16,9 @@
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import type { ConversationEntry, ConversationLive, HelmEventFrame, HelmSnapshot } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
@@ -30,6 +27,7 @@ import { deriveConversationLive, liveGenerationOf } from '../src/runtime/entries
 import { EventHub } from '../src/runtime/events.js'
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
 import { HelmStore, type ConvMeta } from '../src/runtime/store.js'
+import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // 1. 纯函数：受限投影
@@ -222,12 +220,12 @@ describe('conversation.live generation 事件边界校验', { timeout: 60_000 },
 describe('ConversationTracker 真实 SDK：live 帧 generation 事实', { timeout: 60_000 }, () => {
   let root = ''
 
-  before(() => {
-    root = mkdtempSync(join(tmpdir(), 'helm-live-generation-'))
+  before(async () => {
+    root = await makeTempDir('helm-live-generation-')
   })
 
-  after(() => {
-    rmSync(root, { recursive: true, force: true })
+  after(async () => {
+    await cleanupDir(root)
   })
 
   async function openTracker(options?: { tokensPerSecond?: number }): Promise<{
@@ -235,16 +233,14 @@ describe('ConversationTracker 真实 SDK：live 帧 generation 事实', { timeou
     harness: Harness
     lives: ConversationLive[]
     entries: ConversationEntry[]
-    faux: ReturnType<typeof fauxProvider>
+    faux: ReturnType<typeof makeFauxModels>['faux']
     close: () => Promise<void>
   }> {
     const dir = join(root, `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
     const database = await openHelmDatabase(dir)
     const store = new HelmStore(database)
     await store.load()
-    const models = createModels()
-    const faux = fauxProvider({ tokensPerSecond: options?.tokensPerSecond })
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels({ tokensPerSecond: options?.tokensPerSecond })
     const registry = createRegistry()
     const harness = await Harness.open(
       database.storage,
@@ -298,14 +294,6 @@ describe('ConversationTracker 真实 SDK：live 帧 generation 事实', { timeou
       completionSeq: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    }
-  }
-
-  async function waitFor(cond: () => boolean, ms = 10_000): Promise<void> {
-    const deadline = Date.now() + ms
-    while (!cond()) {
-      if (Date.now() > deadline) throw new Error('waitFor 超时')
-      await new Promise((r) => setTimeout(r, 15))
     }
   }
 

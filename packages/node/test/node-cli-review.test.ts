@@ -18,13 +18,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helm/test-kit/node';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc } from 'birpc';
 import type { EnvExecOutputEvent } from '@helm/protocol';
@@ -38,10 +38,6 @@ import {
   uninstallNodeService,
   type ServiceExec,
 } from '../src/daemon/service.js';
-
-async function tempDir(prefix: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
-}
 
 interface Captured {
   out: string;
@@ -156,14 +152,8 @@ const realIsAlive = (pid: number): boolean => {
 };
 
 /** 等待条件成立（真实施测轮询，非固定 sleep；条件可异步）。 */
-async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  assert.ok(await condition(), `等待超时：${what}`);
-}
+const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
+  kitWaitFor(condition, { timeoutMs, intervalMs: 100, message: `等待超时：${what}` });
 
 // ---------------------------------------------------------------------------
 // 1. 全链路：start -d / status / stop / restart（真实多进程 + 真实 Hub）

@@ -7,19 +7,16 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { HelmError, type PluginDefinition } from '@helm/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
 import {
   PluginHost,
-  type PluginDocStore,
   type PluginHostBackend,
   type PluginProviderPort,
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import { createPluginBuildProvider } from '@helm/plugin-build';
+import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // fake 基建
@@ -31,42 +28,10 @@ function makeHostApi(): PluginHostBackend {
     ...createPluginHostBackendFixture(),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
-    createConversation: async (init) => ({
-      id: 1,
-      title: init.title ?? 'new',
-      profileId: 'default',
-      tags: [],
-      cwd: '/tmp',
-      model: 'test/model',
-      thinkingLevel: '',
-      status: 'idle',
-      stateChangeSeq: 1,
-      completionSeq: 0,
-      unread: false,
-      pinned: false,
-      pendingAskCount: 0,
-      createdAt: 1,
-      updatedAt: 1,
-    }),
+    createConversation: async (init) => makeConversationSummary({ id: 1, title: init.title ?? 'new', profileId: 'default' }),
     listConversations: () => [],
-    getConversation: (id) => ({
-      id,
-      title: `conv-${id}`,
-      profileId: 'default',
-      tags: [],
-      cwd: '/tmp',
-      model: 'test/model',
-      thinkingLevel: '',
-      status: 'idle',
-      stateChangeSeq: 1,
-      completionSeq: 0,
-      unread: false,
-      pinned: false,
-      pendingAskCount: 0,
-      createdAt: 1,
-      updatedAt: 1,
-    }),
-    updateConversation: async (id) => ({} as never),
+    getConversation: (id) => makeConversationSummary({ id, profileId: 'default' }),
+    updateConversation: async () => ({} as never),
     manageConversation: () => () => {},
     markConversationOwnership: noop,
     createAsk: async () => ({ id: 'ask-1', status: 'answered', answers: {} }),
@@ -83,23 +48,6 @@ function makeHostApi(): PluginHostBackend {
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     emitEvent: () => {},
   };
-}
-
-class MemoryDocStore implements PluginDocStore {
-  private store = new Map<string, unknown>();
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial;
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value));
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
 }
 
 /** 最小合法 provider（形状满足 pi-ai Provider 契约，行为无需真实）。 */
@@ -166,8 +114,8 @@ function definePluginWith(id: string, fn: (ctx: import('@helm/protocol').HelmPlu
   return { id, name: id, definePlugin: fn };
 }
 
-function makeHost(plugins?: PluginProviderPort): { host: PluginHost; dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-plugin-providers-'));
+async function makeHost(plugins?: PluginProviderPort): Promise<{ host: PluginHost; dir: string }> {
+  const dir = await makeTempDir('helm-plugin-providers-');
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     host: makeHostApi(),
@@ -181,7 +129,7 @@ async function dispose(host: PluginHost, dir: string): Promise<void> {
   try {
     await host.dispose();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    await cleanupDir(dir);
   }
 }
 
@@ -190,7 +138,7 @@ async function dispose(host: PluginHost, dir: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 test('provider 声明缺少必要形状被显式拒绝', { timeout: 60_000 }, async () => {
-  const { host, dir } = makeHost(new FakeProviderRegistry());
+  const { host, dir } = await makeHost(new FakeProviderRegistry());
   try {
     const bad = (over: Record<string, unknown>) =>
       definePluginWith('test:bad', (ctx) => {
@@ -237,7 +185,7 @@ test('provider 声明缺少必要形状被显式拒绝', { timeout: 60_000 }, as
 
 test('启用挂载、停用卸载、再启用重挂载（真实所有权与顺序）', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
-  const { host, dir } = makeHost(registry);
+  const { host, dir } = await makeHost(registry);
   try {
     const events: string[] = [];
     await host.register(
@@ -292,7 +240,7 @@ test('启用挂载、停用卸载、再启用重挂载（真实所有权与顺�
 
 test('默认停用注册只收集声明不挂载（configSchema 照常可用）', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
-  const { host, dir } = makeHost(registry);
+  const { host, dir } = await makeHost(registry);
   try {
     await host.register(
       definePluginWith('test:off', (ctx) => {
@@ -313,7 +261,7 @@ test('默认停用注册只收集声明不挂载（configSchema 照常可用）'
 });
 
 test('默认停用且宿主未提供 providers 端口时注册成功，启用显式 501', { timeout: 60_000 }, async () => {
-  const { host, dir } = makeHost();
+  const { host, dir } = await makeHost();
   try {
     // 端口缺失：停用探测必须成功（声明不挂载），不受端口影响
     await host.register(
@@ -340,7 +288,7 @@ test('默认停用且宿主未提供 providers 端口时注册成功，启用显
 
 test('服务 start 前已完成 provider 挂载（服务可依赖自身 provider）', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
-  const { host, dir } = makeHost(registry);
+  const { host, dir } = await makeHost(registry);
   try {
     const seen: string[] = [];
     await host.register(
@@ -363,7 +311,7 @@ test('服务 start 前已完成 provider 挂载（服务可依赖自身 provider
 
 test('服务 start 失败时释放全部已挂载 provider', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
-  const { host, dir } = makeHost(registry);
+  const { host, dir } = await makeHost(registry);
   try {
     await assert.rejects(
       () =>
@@ -402,7 +350,7 @@ test('服务 start 失败时释放全部已挂载 provider', { timeout: 60_000 }
 test('第二个 provider 挂载失败时释放第一个', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   registry.failRegisterOn = 'second';
-  const { host, dir } = makeHost(registry);
+  const { host, dir } = await makeHost(registry);
   try {
     await assert.rejects(
       () =>
@@ -432,7 +380,7 @@ test('第二个 provider 挂载失败时释放第一个', { timeout: 60_000 }, a
 
 test('过期 ctx（旧 epoch）不能再注册 provider', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
-  const { host, dir } = makeHost(registry);
+  const { host, dir } = await makeHost(registry);
   try {
     let stolen: ((p: Provider) => void) | null = null;
     await host.register(
@@ -464,7 +412,7 @@ test('过期 ctx（旧 epoch）不能再注册 provider', { timeout: 60_000 }, a
 
 test('provider 在途流预检拒绝停用（不进入服务 stop 半拆状态）', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
-  const { host, dir } = makeHost(registry);
+  const { host, dir } = await makeHost(registry);
   try {
     const events: string[] = [];
     await host.register(
@@ -506,7 +454,7 @@ test('provider 在途流预检拒绝停用（不进入服务 stop 半拆状态�
 
 test('卸载（unregister）同样先预检再逆序卸载 provider', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
-  const { host, dir } = makeHost(registry);
+  const { host, dir } = await makeHost(registry);
   try {
     await host.register(
       definePluginWith('test:unreg', (ctx) => {
@@ -532,7 +480,7 @@ test('卸载（unregister）同样先预检再逆序卸载 provider', { timeout:
 
 test('provider 卸载失败时诊断聚合显式上抛（不静默）', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
-  const { host, dir } = makeHost(registry);
+  const { host, dir } = await makeHost(registry);
   try {
     await host.register(
       definePluginWith('test:unreg-fail', (ctx) => {
@@ -558,7 +506,7 @@ test('provider 卸载失败时诊断聚合显式上抛（不静默）', { timeou
 });
 
 test('不声明 provider 的插件不受可选端口缺失影响（既有接口不放松）', { timeout: 60_000 }, async () => {
-  const { host, dir } = makeHost(); // 无 providers 端口
+  const { host, dir } = await makeHost(); // 无 providers 端口
   try {
     await host.register(
       definePluginWith('test:plain', (ctx) => {
@@ -580,7 +528,7 @@ test('不声明 provider 的插件不受可选端口缺失影响（既有接口�
 test('端口存在但未实现 assertIdle 时停用照常（可选预检）', { timeout: 60_000 }, async () => {
   const registry = new FakeProviderRegistry();
   const port: PluginProviderPort = { register: registry.register.bind(registry) };
-  const { host, dir } = makeHost(port);
+  const { host, dir } = await makeHost(port);
   try {
     await host.register(
       definePluginWith('test:no-idle-check', (ctx) => {

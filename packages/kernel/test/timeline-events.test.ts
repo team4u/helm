@@ -14,12 +14,9 @@
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness } from '@earendil-works/pi-durable'
 import { createRegistry } from '@earendil-works/pi-durable'
 import type { ConversationEntry, ConversationLive, HelmEventFrame, HelmSnapshot } from '@helm/protocol'
@@ -29,19 +26,11 @@ import { deriveConversationLive, toConversationEntry } from '../src/runtime/entr
 import { EventHub } from '../src/runtime/events.js'
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
 import { HelmStore, summaryOf, type ConvMeta } from '../src/runtime/store.js'
+import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // 工具
 // ---------------------------------------------------------------------------
-
-/** 轮询等待条件成立（防挂死，总超时显式）。 */
-async function waitFor(cond: () => boolean, ms = 5_000): Promise<void> {
-  const deadline = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error('waitFor 超时')
-    await new Promise((r) => setTimeout(r, 10))
-  }
-}
 
 function convMeta(id: number): ConvMeta {
   return {
@@ -342,16 +331,16 @@ describe('EventHub 新 core 事件类型', { timeout: 60_000 }, () => {
 describe('ConversationTracker 真实 SDK 时间线与实时事件', { timeout: 60_000 }, () => {
   let root = ''
 
-  before(() => {
-    root = mkdtempSync(join(tmpdir(), 'helm-timeline-'))
+  before(async () => {
+    root = await makeTempDir('helm-timeline-')
   })
 
-  after(() => {
-    rmSync(root, { recursive: true, force: true })
+  after(async () => {
+    await cleanupDir(root)
   })
 
   /** 真实 Harness + SQLite + faux provider + tracker（不伪造 KernelRuntime）。 */
-  type FauxHandle = ReturnType<typeof fauxProvider>
+  type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
   async function openTracker(): Promise<{
     tracker: ConversationTracker
     harness: Harness
@@ -363,9 +352,7 @@ describe('ConversationTracker 真实 SDK 时间线与实时事件', { timeout: 6
     const database = await openHelmDatabase(dir)
     const store = new HelmStore(database)
     await store.load()
-    const models = createModels()
-    const faux = fauxProvider()
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels()
     const registry = createRegistry()
     const harness = await Harness.open(
       database.storage,
@@ -510,10 +497,8 @@ describe('ConversationTracker 真实 SDK 时间线与实时事件', { timeout: 6
     const database = await openHelmDatabase(dir)
     const store = new HelmStore(database)
     await store.load()
-    const faux = fauxProvider()
+    const { models, faux } = makeFauxModels()
     faux.setResponses([fauxAssistantMessage('ok')])
-    const models = createModels()
-    models.setProvider(faux.provider)
     const registry = createRegistry()
     const harness = await Harness.open(
       database.storage,
@@ -584,10 +569,8 @@ describe('ConversationTracker 真实 SDK 时间线与实时事件', { timeout: 6
     const database = await openHelmDatabase(dir)
     const store = new HelmStore(database)
     await store.load()
-    const faux = fauxProvider()
+    const { models, faux } = makeFauxModels()
     faux.setResponses([fauxAssistantMessage('ok')])
-    const models = createModels()
-    models.setProvider(faux.provider)
     const registry = createRegistry()
     const harness = await Harness.open(
       database.storage,

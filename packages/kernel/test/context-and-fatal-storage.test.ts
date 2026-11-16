@@ -10,14 +10,12 @@ import {
   withContextValue,
   type Context,
 } from '@earendil-works/chord/context'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import { HelmError, type HelmEventFrame } from '@helm/protocol'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import http from 'node:http'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import { startHub } from '../src/http/index.js'
@@ -42,23 +40,17 @@ import {
   SecretStash,
   ensureDataDir,
 } from '../src/services/index.js'
+import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
 let root: string
 
-before(() => {
-  root = mkdtempSync(join(tmpdir(), 'helm-ctx-faults-'))
+before(async () => {
+  root = await makeTempDir('helm-ctx-faults-')
 })
 
-after(() => {
-  rmSync(root, { recursive: true, force: true })
+after(async () => {
+  await cleanupDir(root)
 })
-
-function makeFauxModels() {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
-  return { models, faux }
-}
 
 async function openTestRuntime(
   dir: string,

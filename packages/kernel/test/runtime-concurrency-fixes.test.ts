@@ -14,32 +14,23 @@
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError } from '@helm/protocol'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { KernelRuntime, ModelRegistry } from '../src/runtime/index.js'
 import { createFileModelsStore } from '../src/runtime/models-store.js'
 import { CredentialService, ConfigService, ProviderService, SecretStash, ensureDataDir } from '../src/services/index.js'
+import { deferred, makeFauxModels, useTempDir, waitFor } from './helpers.js'
 
-function makeFauxModels() {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
-  return { models, faux }
-}
-
-async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: ReturnType<typeof fauxProvider> }> {
+async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: ReturnType<typeof makeFauxModels>['faux'] }> {
   const { models, faux } = makeFauxModels()
   const runtime = await KernelRuntime.open({ dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
   return Object.assign(runtime, { __faux: faux })
 }
 
-test('turn_settled transform 产出非法事件载荷：结算链吸收错误，close 不被毒化中断', { timeout: 60_000 }, async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-settle-poison-'))
+test('turn_settled transform 产出非法事件载荷：结算链吸收错误，close 不被毒化中断', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-settle-poison-')
   const kernel = await openRuntime(dataDir)
   try {
     await kernel.plugins.register({
@@ -63,12 +54,11 @@ test('turn_settled transform 产出非法事件载荷：结算链吸收错误，
     assert.equal(kernel.getConversation(1).completionSeq, 2)
   } finally {
     await kernel.close().catch(() => {})
-    await rm(dataDir, { recursive: true, force: true })
   }
 })
 
-test('dispatchInternalEvent 逐监听器隔离：抛错不阻断后续监听器，也不产生 unhandledRejection', { timeout: 60_000 }, async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-internal-event-'))
+test('dispatchInternalEvent 逐监听器隔离：抛错不阻断后续监听器，也不产生 unhandledRejection', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-internal-event-')
   const kernel = await openRuntime(dataDir)
   const unhandled: unknown[] = []
   const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
@@ -86,12 +76,11 @@ test('dispatchInternalEvent 逐监听器隔离：抛错不阻断后续监听器�
   } finally {
     process.off('unhandledRejection', onUnhandled)
     await kernel.close()
-    await rm(dataDir, { recursive: true, force: true })
   }
 })
 
-test('start() 失败清除单飞句柄：重试发起全新尝试，而非永远收到陈旧拒绝', { timeout: 60_000 }, async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-start-retry-'))
+test('start() 失败清除单飞句柄：重试发起全新尝试，而非永远收到陈旧拒绝', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-start-retry-')
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   try {
     let startCalls = 0
@@ -108,23 +97,21 @@ test('start() 失败清除单飞句柄：重试发起全新尝试，而非永远
     assert.equal(startCalls, 2, '重试必须重新调用 pluginHost.start，而不是返回缓存的陈旧拒绝')
   } finally {
     await kernel.close()
-    await rm(dataDir, { recursive: true, force: true })
   }
 })
 
-test('close() 等待在途 start() 收敛：服务 stop 在 start 完成之后，teardown 不与启动交错', { timeout: 60_000 }, async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-close-waits-start-'))
+test('close() 等待在途 start() 收敛：服务 stop 在 start 完成之后，teardown 不与启动交错', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-close-waits-start-')
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
   try {
     const order: string[] = []
-    let releaseStart!: () => void
-    const startGate = new Promise<void>((resolve) => { releaseStart = resolve })
+    const startGate = deferred()
     await kernel.plugins.register({
       id: 'test:slow-start',
       definePlugin(ctx) {
         ctx.service({
           id: 'svc',
-          async start() { order.push('start-begin'); await startGate; order.push('start-end') },
+          async start() { order.push('start-begin'); await startGate.promise; order.push('start-end') },
           stop() { order.push('stop') },
         })
       },
@@ -133,17 +120,16 @@ test('close() 等待在途 start() 收敛：服务 stop 在 start 完成之后�
     await new Promise((resolve) => setTimeout(resolve, 25))
     // start 仍在途（服务 start 被门闩挂起）时发起 close
     const closing = kernel.close()
-    releaseStart()
+    startGate.resolve()
     await Promise.all([starting, closing])
     assert.deepEqual(order, ['start-begin', 'start-end', 'stop'], 'teardown 必须等 start 完成后再停服务')
   } finally {
     await kernel.close().catch(() => {})
-    await rm(dataDir, { recursive: true, force: true })
   }
 })
 
-test('plugin.changed：refreshPluginTools 抛错不阻断事件发布', { timeout: 60_000 }, async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-plugin-changed-'))
+test('plugin.changed：refreshPluginTools 抛错不阻断事件发布', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-plugin-changed-')
   const kernel = await openRuntime(dataDir)
   try {
     ;(kernel as unknown as { refreshPluginTools: () => void }).refreshPluginTools = () => {
@@ -158,72 +144,65 @@ test('plugin.changed：refreshPluginTools 抛错不阻断事件发布', { timeou
     assert.equal(seen.length, 1, '热装失败仍必须发布 plugin.changed（客户端不能丢失插件状态变化）')
   } finally {
     await kernel.close()
-    await rm(dataDir, { recursive: true, force: true })
   }
 })
 
-test('供应商注销 rebuild 窗口内：新 stream acquire 显式失败（runtime_provider_retiring），不再产生不可检测的在途流', { timeout: 60_000 }, async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-provider-retiring-'))
-  try {
-    await ensureDataDir(dataDir)
-    const providersSvc = new ProviderService(dataDir)
-    const credentialsSvc = new CredentialService(dataDir)
-    const configSvc = new ConfigService(dataDir)
-    // 门闩 providersSvc.list：第 2 次（注销的 rebuild）在窗口内挂起，制造
-    // 「usage 检查已过、rebuild 未完」的 await 窗口
-    let listCalls = 0
-    let releaseList!: () => void
-    const listGate = new Promise<void>((resolve) => { releaseList = resolve })
-    const gatedProviders = Object.create(providersSvc) as ProviderService
-    ;(gatedProviders as unknown as { list: () => ReturnType<ProviderService['list']> }).list = async () => {
-      listCalls += 1
-      if (listCalls >= 2) await listGate
-      return providersSvc.list()
-    }
-    // get 显式指向原实例：其内部 this.list() 否则会误计入门控次数
-    ;(gatedProviders as unknown as { get: ProviderService['get'] }).get = (id) => providersSvc.get(id)
-
-    let current = createModels()
-    const published: string[] = []
-    const registry = new ModelRegistry(
-      {
-        dataDir,
-        providersSvc: gatedProviders,
-        credentialsSvc,
-        configSvc,
-        stash: new SecretStash(),
-        modelsStore: createFileModelsStore(dataDir),
-        setModels: (m) => { current = m as typeof current },
-        externalModels: false,
-        events: { publish: (type) => { published.push(type) } },
-        pluginHost: () => undefined,
-        alignAllConversations: async () => {},
-      },
-      createModels(),
-      {},
-    )
-    const faux = fauxProvider({ provider: 'retire-p', models: [{ id: 'm1' }] })
-    const unregister = await registry.registerRuntimeProvider(faux.provider, 'test:retire')
-    assert.ok(published.includes('models.changed'))
-
-    // 发起注销并在 rebuild 窗口内停留
-    const unregistering = unregister()
-    const deadline = Date.now() + 10_000
-    while (listCalls < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
-    assert.equal(listCalls, 2, '注销的 rebuild 应进入门闩窗口')
-
-    // 窗口内：旧集合仍含该供应商，但新 stream acquire 必须显式失败
-    const wrapped = current.getProvider('retire-p')
-    assert.ok(wrapped, '窗口内旧集合仍可寻址该供应商')
-    assert.throws(
-      () => (wrapped as unknown as { stream: () => void }).stream(),
-      (err: unknown) => err instanceof HelmError && err.code === 'runtime_provider_retiring' && err.status === 409,
-    )
-
-    releaseList()
-    await unregistering
-    assert.ok(!registry.listModelProviders().some((p) => p.id === 'retire-p'), '注销完成后目录移除')
-  } finally {
-    await rm(dataDir, { recursive: true, force: true })
+test('供应商注销 rebuild 窗口内：新 stream acquire 显式失败（runtime_provider_retiring），不再产生不可检测的在途流', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-provider-retiring-')
+  await ensureDataDir(dataDir)
+  const providersSvc = new ProviderService(dataDir)
+  const credentialsSvc = new CredentialService(dataDir)
+  const configSvc = new ConfigService(dataDir)
+  // 门闩 providersSvc.list：第 2 次（注销的 rebuild）在窗口内挂起，制造
+  // 「usage 检查已过、rebuild 未完」的 await 窗口
+  let listCalls = 0
+  const listGate = deferred()
+  const gatedProviders = Object.create(providersSvc) as ProviderService
+  ;(gatedProviders as unknown as { list: () => ReturnType<ProviderService['list']> }).list = async () => {
+    listCalls += 1
+    if (listCalls >= 2) await listGate.promise
+    return providersSvc.list()
   }
+  // get 显式指向原实例：其内部 this.list() 否则会误计入门控次数
+  ;(gatedProviders as unknown as { get: ProviderService['get'] }).get = (id) => providersSvc.get(id)
+
+  let current = createModels()
+  const published: string[] = []
+  const registry = new ModelRegistry(
+    {
+      dataDir,
+      providersSvc: gatedProviders,
+      credentialsSvc,
+      configSvc,
+      stash: new SecretStash(),
+      modelsStore: createFileModelsStore(dataDir),
+      setModels: (m) => { current = m as typeof current },
+      externalModels: false,
+      events: { publish: (type) => { published.push(type) } },
+      pluginHost: () => undefined,
+      alignAllConversations: async () => {},
+    },
+    createModels(),
+    {},
+  )
+  const { faux } = makeFauxModels({ provider: 'retire-p', models: [{ id: 'm1' }] })
+  const unregister = await registry.registerRuntimeProvider(faux.provider, 'test:retire')
+  assert.ok(published.includes('models.changed'))
+
+  // 发起注销并在 rebuild 窗口内停留
+  const unregistering = unregister()
+  await waitFor(() => listCalls >= 2, { timeoutMs: 10_000, intervalMs: 10 })
+  assert.equal(listCalls, 2, '注销的 rebuild 应进入门闩窗口')
+
+  // 窗口内：旧集合仍含该供应商，但新 stream acquire 必须显式失败
+  const wrapped = current.getProvider('retire-p')
+  assert.ok(wrapped, '窗口内旧集合仍可寻址该供应商')
+  assert.throws(
+    () => (wrapped as unknown as { stream: () => void }).stream(),
+    (err: unknown) => err instanceof HelmError && err.code === 'runtime_provider_retiring' && err.status === 409,
+  )
+
+  listGate.resolve()
+  await unregistering
+  assert.ok(!registry.listModelProviders().some((p) => p.id === 'retire-p'), '注销完成后目录移除')
 })

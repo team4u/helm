@@ -16,44 +16,33 @@
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConfigService, CredentialService } from '../src/services/index.js';
 import { HelmPluginConfigStore } from '../src/runtime/plugin-config-store.js';
-import { HelmError, type ConversationSummary, type PluginDefinition } from '@helm/protocol';
+import { HelmError, type PluginDefinition } from '@helm/protocol';
 import {
   PluginHost,
-  type PluginDocStore,
   type PluginConfigStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js';
 import { createPluginBuildProvider } from '@helm/plugin-build';
+import {
+  MemoryDocStore,
+  assertRejectsCode,
+  cleanupDir,
+  makeConversationSummary,
+  makeTempDir,
+} from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
 
-function makeConversation(id: number): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'default',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  };
+function makeConversation(id: number) {
+  return makeConversationSummary({ id, profileId: 'default' });
 }
 
 function makeHostApi(events: string[]): PluginHostBackend {
@@ -86,23 +75,6 @@ function makeHostApi(events: string[]): PluginHostBackend {
       events.push(`event:${type}`);
     },
   };
-}
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>();
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial;
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value));
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
 }
 
 /**
@@ -160,18 +132,6 @@ function fullPlugin(id: string, marks: string[]): PluginDefinition {
   };
 }
 
-async function rejectsCode(promise: Promise<unknown>, code: string): Promise<HelmError> {
-  let caught: HelmError | undefined;
-  await assert.rejects(promise, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`);
-    assert.equal(err.code, code);
-    caught = err;
-    return true;
-  });
-  assert.ok(caught instanceof HelmError);
-  return caught;
-}
-
 function triggerPayload(id = 'e1') {
   return { id, source: 'test', text: 'x', createdAt: 1 };
 }
@@ -184,14 +144,14 @@ function makeHost(config?: PluginConfigStore): PluginHost {
   return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeHostApi(events), docs, config });
 }
 
-beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-plugin-races-test-'));
+beforeEach(async () => {
+  dataDir = await makeTempDir('helm-plugin-races-test-');
   docs = new MemoryDocStore();
   events = [];
 });
 
-afterEach(() => {
-  rmSync(dataDir, { recursive: true, force: true });
+afterEach(async () => {
+  await cleanupDir(dataDir);
 });
 
 // ---------------------------------------------------------------------------
@@ -219,7 +179,7 @@ test('enable 持久化挂起窗口：服务已启动但 action 拒绝/hook 不�
   try {
     // 窗口内：服务确已启动，但插件对外完全不可用（未提交）
     assert.deepEqual(marks, ['svc-start'], '服务已启动（持久化尚未落定）');
-    await rejectsCode(host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
+    await assertRejectsCode(() => host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
     marks.length = 0;
     const r = await host.runHook('trigger', triggerPayload());
     assert.equal(r.action, 'continue');
@@ -261,7 +221,7 @@ test('enable 持久化失败：窗口内同样不可用，回滚为停用且无�
   await entered;
   let windowHeld = true;
   try {
-    await rejectsCode(host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
+    await assertRejectsCode(() => host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
     assert.deepEqual(host.listUi(), []);
   } catch (err) {
     windowHeld = false;
@@ -272,7 +232,7 @@ test('enable 持久化失败：窗口内同样不可用，回滚为停用且无�
   assert.ok(windowHeld);
   rejectPersist(new Error('网络盘断开'));
 
-  const err = await rejectsCode(enabling, 'plugin_enabled_persist_failed');
+  const err = (await assertRejectsCode(() => enabling, 'plugin_enabled_persist_failed')) as HelmError;
   assert.match(err.message, /网络盘断开/);
 
   // 回滚落位：停用、服务已 stop、托管释放、schema 还原、无在途任务
@@ -306,7 +266,7 @@ test('getEnabled 抛错：注册零残留（注册表/数据目录/钩子/托管
     },
     setEnabled() {},
   });
-  await rejectsCode(host.register(fullPlugin('p:boom', [])), 'io_broken');
+  await assertRejectsCode(() => host.register(fullPlugin('p:boom', [])), 'io_broken');
 
   assert.equal(host.list().length, 0, '注册表零残留');
   assert.equal(existsSync(join(dataDir, 'plugins', pluginDataDirName('p:boom'))), false, '插件数据目录未创建');
@@ -325,7 +285,7 @@ test('getEnabled 抛错：注册零残留（注册表/数据目录/钩子/托管
     },
     setEnabled() {},
   });
-  const wrapped = await rejectsCode(host2.register(fullPlugin('p:boom2', [])), 'plugin_registration_failed');
+  const wrapped = (await assertRejectsCode(() => host2.register(fullPlugin('p:boom2', [])), 'plugin_registration_failed')) as HelmError;
   assert.match(wrapped.message, /底层 IO 超时/);
   assert.equal(host2.list().length, 0);
 
@@ -346,7 +306,7 @@ test('getEnabled 返回非布尔值：显式拒绝（绝不 truthy 猜测），�
     },
     setEnabled() {},
   });
-  const err = await rejectsCode(host.register(fullPlugin('p:lie', [])), 'plugin_enabled_state_invalid');
+  const err = (await assertRejectsCode(() => host.register(fullPlugin('p:lie', [])), 'plugin_enabled_state_invalid')) as HelmError;
   assert.equal(err.status, 500);
   assert.equal(host.list().length, 0);
   assert.equal(existsSync(join(dataDir, 'plugins', pluginDataDirName('p:lie'))), false);
@@ -465,14 +425,14 @@ test('写时 pluginEnabled 损坏：显式 config_corrupt，绝不用 {} 重建�
 
   // load 成功后外部把 pluginEnabled 破坏成非布尔值映射
   writeFileSync(configPath, JSON.stringify({ pluginEnabled: { ghost: 'yes' } }), 'utf8');
-  await rejectsCode(store.setEnabled('p:x', true), 'config_corrupt');
+  await assertRejectsCode(() => store.setEnabled('p:x', true), 'config_corrupt');
   let raw = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
   assert.deepEqual(raw['pluginEnabled'], { ghost: 'yes' }, '损坏内容原样保留（未重建）');
   assert.equal(store.getEnabled('p:x'), undefined, '写失败镜像不变');
 
   // 整体非对象同样显式拒绝
   writeFileSync(configPath, JSON.stringify({ pluginEnabled: 'nope' }), 'utf8');
-  await rejectsCode(store.setEnabled('p:x', true), 'config_corrupt');
+  await assertRejectsCode(() => store.setEnabled('p:x', true), 'config_corrupt');
   raw = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
   assert.equal(raw['pluginEnabled'], 'nope');
 });
@@ -485,8 +445,8 @@ test('写时 plugins 字段损坏：显式 config_corrupt，不静默重建', { 
   await store.load();
 
   writeFileSync(configPath, JSON.stringify({ plugins: 'corrupt' }), 'utf8');
-  await rejectsCode(
-    store.set('p:x', { retries: 1 }, { retries: { type: 'number' } }),
+  await assertRejectsCode(
+    () => store.set('p:x', { retries: 1 }, { retries: { type: 'number' } }),
     'config_corrupt',
   );
   const raw = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;

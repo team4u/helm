@@ -16,8 +16,7 @@ import { after, before, beforeEach, describe, test } from 'node:test'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
 import { AddressInfo } from 'node:net'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import process from 'node:process'
 import type { ProviderConfig } from '@helm/protocol'
@@ -37,6 +36,7 @@ import {
 } from '../src/runtime/models.js'
 import { createFileModelsStore } from '../src/runtime/models-store.js'
 import { HelmError } from '@helm/protocol'
+import { useTempDir } from './helpers.js'
 
 /** 单个捕获到的请求。 */
 interface CapturedRequest {
@@ -427,71 +427,63 @@ describe('PI 全量供应商', { timeout: 60_000 }, () => {
 })
 
 describe('文件版动态目录缓存（models-store.json）', { timeout: 60_000 }, () => {
-  test('ENOENT 返回空；write/update/delete 持久化且并发 update 不丢写', { timeout: 60_000 }, async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), 'helm-models-store-'))
-    try {
-      const store = createFileModelsStore(dataDir)
-      assert.equal(await store.read('p1'), undefined)
+  test('ENOENT 返回空；write/update/delete 持久化且并发 update 不丢写', { timeout: 60_000 }, async (t) => {
+    const dataDir = useTempDir(t, 'helm-models-store-')
+    const store = createFileModelsStore(dataDir)
+    assert.equal(await store.read('p1'), undefined)
 
-      await store.write('p1', { models: [], checkedAt: 111 })
-      await store.write('p2', { models: [], checkedAt: 222, etag: '"v1"' })
-      assert.deepEqual(await store.read('p1'), { models: [], checkedAt: 111 })
-      assert.deepEqual(await store.read('p2'), { models: [], checkedAt: 222, etag: '"v1"' })
+    await store.write('p1', { models: [], checkedAt: 111 })
+    await store.write('p2', { models: [], checkedAt: 222, etag: '"v1"' })
+    assert.deepEqual(await store.read('p1'), { models: [], checkedAt: 111 })
+    assert.deepEqual(await store.read('p2'), { models: [], checkedAt: 222, etag: '"v1"' })
 
-      // update：undefined 不改写；对象写入。
-      await store.update('p1', async () => undefined)
-      assert.deepEqual(await store.read('p1'), { models: [], checkedAt: 111 })
-      await store.update('p1', async (current) => ({ ...current!, checkedAt: 333 }))
-      assert.equal((await store.read('p1'))?.checkedAt, 333)
-      await store.delete('p2')
-      assert.equal(await store.read('p2'), undefined)
+    // update：undefined 不改写；对象写入。
+    await store.update('p1', async () => undefined)
+    assert.deepEqual(await store.read('p1'), { models: [], checkedAt: 111 })
+    await store.update('p1', async (current) => ({ ...current!, checkedAt: 333 }))
+    assert.equal((await store.read('p1'))?.checkedAt, 333)
+    await store.delete('p2')
+    assert.equal(await store.read('p2'), undefined)
 
-      // 并发 update：两个不同 provider 同时读改写，锁内串行不丢彼此写入。
-      await Promise.all([
-        store.update('a', async () => ({ models: [], checkedAt: 1 })),
-        store.update('b', async () => ({ models: [], checkedAt: 2 })),
-      ])
-      assert.equal((await store.read('a'))?.checkedAt, 1)
-      assert.equal((await store.read('b'))?.checkedAt, 2)
+    // 并发 update：两个不同 provider 同时读改写，锁内串行不丢彼此写入。
+    await Promise.all([
+      store.update('a', async () => ({ models: [], checkedAt: 1 })),
+      store.update('b', async () => ({ models: [], checkedAt: 2 })),
+    ])
+    assert.equal((await store.read('a'))?.checkedAt, 1)
+    assert.equal((await store.read('b'))?.checkedAt, 2)
 
-      // 落盘为 0600 且顶层为对象（Windows 无 POSIX mode，跳过模式位校验）。
-      const raw = JSON.parse(await readFile(join(dataDir, 'models-store.json'), 'utf8')) as Record<string, unknown>
-      assert.ok(typeof raw['p1'] === 'object')
-      if (process.platform !== 'win32') {
-        const { stat } = await import('node:fs/promises')
-        const mode = (await stat(join(dataDir, 'models-store.json'))).mode & 0o777
-        assert.equal(mode, 0o600)
-      }
-    } finally {
-      await rm(dataDir, { recursive: true, force: true })
+    // 落盘为 0600 且顶层为对象（Windows 无 POSIX mode，跳过模式位校验）。
+    const raw = JSON.parse(await readFile(join(dataDir, 'models-store.json'), 'utf8')) as Record<string, unknown>
+    assert.ok(typeof raw['p1'] === 'object')
+    if (process.platform !== 'win32') {
+      const { stat } = await import('node:fs/promises')
+      const mode = (await stat(join(dataDir, 'models-store.json'))).mode & 0o777
+      assert.equal(mode, 0o600)
     }
   })
 
-  test('损坏文件显式抛 models_store_corrupted，绝不静默当空目录', { timeout: 60_000 }, async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), 'helm-models-store-corrupt-'))
-    try {
-      const path = join(dataDir, 'models-store.json')
-      await writeFile(path, '{invalid-json')
-      const store = createFileModelsStore(dataDir)
-      await assert.rejects(() => store.read('p1'), (err: unknown) => {
-        assert.ok(err instanceof HelmError)
-        assert.equal(err.code, 'models_store_corrupted')
-        return true
-      })
-      await writeFile(path, '["array"]')
-      await assert.rejects(() => store.read('p1'), (err: unknown) => {
-        assert.ok(err instanceof HelmError)
-        assert.equal(err.code, 'models_store_corrupted')
-        return true
-      })
-      await assert.rejects(() => store.update('p1', () => ({ models: [] })), (err: unknown) => {
-        assert.ok(err instanceof HelmError)
-        assert.equal(err.code, 'models_store_corrupted')
-        return true
-      })
-    } finally {
-      await rm(dataDir, { recursive: true, force: true })
-    }
+  test('损坏文件显式抛 models_store_corrupted，绝不静默当空目录', { timeout: 60_000 }, async (t) => {
+    const dataDir = useTempDir(t, 'helm-models-store-corrupt-')
+    const path = join(dataDir, 'models-store.json')
+    await writeFile(path, '{invalid-json')
+    const store = createFileModelsStore(dataDir)
+    await assert.rejects(() => store.read('p1'), (err: unknown) => {
+      assert.ok(err instanceof HelmError)
+      assert.equal(err.code, 'models_store_corrupted')
+      return true
+    })
+    await writeFile(path, '["array"]')
+    await assert.rejects(() => store.read('p1'), (err: unknown) => {
+      assert.ok(err instanceof HelmError)
+      assert.equal(err.code, 'models_store_corrupted')
+      return true
+    })
+    await assert.rejects(() => store.update('p1', () => ({ models: [] })), (err: unknown) => {
+      assert.ok(err instanceof HelmError)
+      assert.equal(err.code, 'models_store_corrupted')
+      return true
+    })
   })
 })
 

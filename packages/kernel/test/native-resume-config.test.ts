@@ -20,16 +20,15 @@
  * bash 工具真实执行取证；绝不 mock 完成。
  */
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import { HelmError } from '@helm/protocol'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
 /** 每次真实模型请求的取证记录（faux 工厂第 2/4 参数）。 */
 interface RequestRecord {
@@ -39,7 +38,7 @@ interface RequestRecord {
 
 interface TestEnv {
   kernel: KernelRuntime
-  faux: ReturnType<typeof fauxProvider>
+  faux: ReturnType<typeof makeFauxModels>['faux']
   requests: RequestRecord[]
   dataDir: string
   close(): Promise<void>
@@ -51,14 +50,12 @@ interface TestEnv {
  * options.reasoning（SDK thinkingLevel 的真实映射产物）。
  */
 async function openEnv(dataDir: string): Promise<TestEnv> {
-  const models = createModels()
-  const faux = fauxProvider({
+  const { models, faux } = makeFauxModels({
     models: [
       { id: 'faux-1', name: 'faux-1' },
       { id: 'faux-2', name: 'faux-2' },
     ],
   })
-  models.setProvider(faux.provider)
   const requests: RequestRecord[] = []
   const kernel = await KernelRuntime.open({
     dataDir,
@@ -92,12 +89,12 @@ function pwdToolCall() {
 
 let rootDir: string
 
-before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-native-resume-'))
+before(async () => {
+  rootDir = await makeTempDir('helm-native-resume-')
 })
 
-after(() => {
-  rmSync(rootDir, { recursive: true, force: true })
+after(async () => {
+  await cleanupDir(rootDir)
 })
 
 /** 写入真实 Profile 文件（ProfileService 读取 profiles/<id>/profile.json）。 */

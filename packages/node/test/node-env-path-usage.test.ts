@@ -19,23 +19,23 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, openSync, closeSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, symlinkSync, openSync, closeSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { cleanupDir, makeTempDir } from '@helm/test-kit/node'
 import { createNodeEnvRpcServer, type NodeEnvRpcServer } from '../src/index.js'
 import { LocalExecutionEnv } from '../src/daemon/local-env.js'
 
 let rootDir: string
 let server: NodeEnvRpcServer
 
-before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-node-pathusage-'))
+before(async () => {
+  rootDir = await makeTempDir('helm-node-pathusage-')
   server = createNodeEnvRpcServer({ defaultCwd: rootDir })
 })
 
 after(async () => {
   await server.dispose().catch(() => undefined)
-  rmSync(rootDir, { recursive: true, force: true })
+  await cleanupDir(rootDir)
 })
 
 /** 以 target 为 cwd 启动长驻子进程（真实占用；绝不用扫描目标作为 helper 的启动方式以外用途）。 */

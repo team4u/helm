@@ -30,11 +30,8 @@
 
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxToolCall, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ConversationInput, TurnSettledPayload } from '@helm/protocol'
@@ -42,8 +39,9 @@ import { KernelRuntime } from '../src/runtime/index.js'
 import { ConversationTracker } from '../src/runtime/conversations.js'
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
 import { HelmStore } from '../src/runtime/store.js'
+import { cleanupDir, deferred, makeFauxModels, makeTempDir, sleep, waitFor } from './helpers.js'
 
-type FauxHandle = ReturnType<typeof fauxProvider>
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 /** 单会话聚合镜像的可观测子集（与 ConversationMirror 字段同名）。 */
 interface MirrorLike {
@@ -74,17 +72,15 @@ const timeout = { timeout: 60_000 } as const
 let root: string
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'helm-tracker-'))
+  root = await makeTempDir('helm-tracker-')
 })
 
 after(async () => {
-  rmSync(root, { recursive: true, force: true })
+  await cleanupDir(root)
 })
 
 async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxHandle }> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const runtime = await KernelRuntime.open({
     dataDir: dir,
     cwd: dir,
@@ -134,26 +130,36 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
       assert.equal(mapAfter?.size ?? 0, 0, '已结算输入的历史记录不残留')
 
       // 第三轮在途 abort：只含当前输入，绝不污染旧轮 origin。
+      const started = deferred()
+      const gate = deferred()
       kernel.__faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 5 && echo done' })], {
-          stopReason: 'toolUse',
-        }),
+        async (_ctx, opts) => {
+          started.resolve()
+          opts?.signal?.addEventListener('abort', () => gate.resolve(), { once: true })
+          if (!opts?.signal?.aborted) await gate.promise
+          return fauxAssistantMessage('unused')
+        },
       ])
-      void kernel.submitInput(1, '会被中止的当前问题', { origin: 'human' }).catch(() => {})
-      await new Promise((r) => setTimeout(r, 300))
-      assert.equal(kernel.getConversation(1).status, 'working')
-      await kernel.abortConversation(1)
-      await kernel.waitForIdle(1).catch(() => {})
-      assert.equal(settled.length, 3)
-      const aborted = settled[2]!
-      assert.equal(aborted.outcome, 'aborted')
-      assert.equal(
-        aborted.inputs.length,
-        1,
-        `aborted 只含当前 run 输入，实际：${JSON.stringify(aborted.inputs.map((i) => [i.id, i.origin]))}`,
-      )
-      assert.equal(aborted.inputs[0]!.text, '会被中止的当前问题')
-      assert.equal(aborted.inputs[0]!.origin, 'human', '当前输入 origin 不被历史 trigger 污染')
+      try {
+        void kernel.submitInput(1, '会被中止的当前问题', { origin: 'human' }).catch(() => {})
+        await started.promise
+        await waitFor(() => kernel.getConversation(1).status === 'working')
+        assert.equal(kernel.getConversation(1).status, 'working')
+        await kernel.abortConversation(1)
+        await kernel.waitForIdle(1).catch(() => {})
+        assert.equal(settled.length, 3)
+        const aborted = settled[2]!
+        assert.equal(aborted.outcome, 'aborted')
+        assert.equal(
+          aborted.inputs.length,
+          1,
+          `aborted 只含当前 run 输入，实际：${JSON.stringify(aborted.inputs.map((i) => [i.id, i.origin]))}`,
+        )
+        assert.equal(aborted.inputs[0]!.text, '会被中止的当前问题')
+        assert.equal(aborted.inputs[0]!.origin, 'human', '当前输入 origin 不被历史 trigger 污染')
+      } finally {
+        gate.resolve()
+      }
     } finally {
       await kernel.close()
     }
@@ -175,7 +181,7 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
       const map = tracker.mirrors.get(1)?.trackedInputs
       assert.equal(map?.size ?? 0, 0, '三轮 complete 后无历史 req: 记录残留（不复活）')
       // 稍等观察者快照推进后再验一次（旧缺陷在每次窗口扫描时复活历史）。
-      await new Promise((r) => setTimeout(r, 200))
+      await sleep(30)
       assert.equal(tracker.mirrors.get(1)?.trackedInputs.size ?? 0, 0, '后续快照不复活历史输入')
     } finally {
       await kernel.close()
@@ -184,16 +190,24 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
 
   it('busy 中 followUp 排队：全部输入恰一次结算，无重复无丢失', timeout, async () => {
     const kernel = await openRuntime(join(root, 'followup-unique'))
+    const releaseFirst = deferred()
     try {
       const settled = collectSettled(kernel)
+      const firstInFlight = deferred()
       kernel.__faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 1' })], { stopReason: 'toolUse' }),
+        async () => {
+          firstInFlight.resolve()
+          await releaseFirst.promise
+          return fauxAssistantMessage([fauxToolCall('bash', { command: 'true' })], { stopReason: 'toolUse' })
+        },
         fauxAssistantMessage('工具轮回答'),
         fauxAssistantMessage('排队输入回答'),
       ])
       await kernel.submitInput(1, '首条输入', { origin: 'human' })
+      await firstInFlight.promise
       // busy 中 followUp 排队：SDK 在后续 run 消费（中间 continue 轮无输入）。
       await kernel.submitInput(1, '排队的第二条', { origin: 'agent', whenBusy: 'followUp' })
+      releaseFirst.resolve()
       await kernel.waitForIdle(1)
       assert.ok(settled.length >= 1)
       // 全部结算载荷汇总：两条输入各恰一次，无重复。
@@ -206,6 +220,7 @@ describe('输入唯一性与历史不复活', { timeout: 60_000 }, () => {
       // 无历史伪造输入（只含真实提交的两条）。
       assert.equal(allInputs.length, 2, `总输入数恰为提交数：${JSON.stringify(texts)}`)
     } finally {
+      releaseFirst.resolve()
       await kernel.close()
     }
   })
@@ -246,9 +261,7 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       const database = await openHelmDatabase(dir)
       const store = new HelmStore(database)
       await store.load()
-      const faux = fauxProvider()
-      const models = createModels()
-      models.setProvider(faux.provider)
+      const { models, faux } = makeFauxModels()
       const harness = await Harness.open(
         database.storage,
         { models: () => models, registry: createRegistry(), settings: { followUpMode: 'all' } },
@@ -271,7 +284,7 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         },
       })
 
-    // 第一段：提交带 meta 的 agent 输入，工具长回合在途时直接关 storage（模拟崩溃）。
+    // 第一段：提交带 meta 的 agent 输入，生成请求进入在途后直接关 storage（模拟崩溃）。
     let convId = 0
     {
       const { harness, store, database, faux } = await mkHarness()
@@ -300,10 +313,12 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       })
       const tracker = trackerOfHarness(harness, store)
       await tracker.observe(id)
-      // 慢响应工厂：长回合在途（无工具依赖，纯 provider 延迟；只需超过重启窗口 600ms 即可）。
+      const entered = deferred()
       faux.setResponses([
         async () => {
-          await new Promise((r) => setTimeout(r, 3000))
+          entered.resolve()
+          // 保持在途足够长（数据库关闭后不会立刻完成）以便崩溃前活跃 run 仍在途。
+          await sleep(150)
           return fauxAssistantMessage('重启后回答')
         },
       ])
@@ -319,7 +334,7 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         },
         BACKGROUND_CONTEXT,
       )
-      await new Promise((r) => setTimeout(r, 400))
+      await entered.promise
       // 模拟崩溃：不经 harness.close（其会 abort 在途 run），直接断 storage
       //（SQLite 崩溃安全，已 commit 的 pi.live.run 状态落盘）。
       await database.close()
@@ -344,15 +359,11 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
         // 重启恢复后关联索引已登记（markConsumed 可命中，结算不丢输入）。
         const index = (tracker as unknown as TrackerInternals).mirrors.get(id)?.submissionIndex
         assert.ok(index !== undefined && index.size >= 1, '重启后 submissionId->requestId 索引在册')
-        // 第二段重设慢工厂响应（run 重启后续跑）。
-        faux.setResponses([
-          async () => {
-            await new Promise((r) => setTimeout(r, 200))
-            return fauxAssistantMessage('恢复后的回答')
-          },
-        ])
+        // 第二段重设响应工厂（run 重启后续跑）。
+        faux.setResponses([fauxAssistantMessage('恢复后的回答')])
         await conv.waitForIdle(BACKGROUND_CONTEXT).catch(() => {})
-        await new Promise((r) => setTimeout(r, 300))
+        await tracker.waitTurnSettled(id)
+        await waitFor(() => settled.some((s) => s.conversation.id === id))
         const settledPayload = settled.find((s) => s.conversation.id === id)
         assert.ok(settledPayload !== undefined, '重启后 run 结算到达')
         assert.equal(settledPayload.inputs.length, 1)
@@ -380,9 +391,7 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       const database = await openHelmDatabase(dir)
       const store = new HelmStore(database)
       await store.load()
-      const faux = fauxProvider()
-      const models = createModels()
-      models.setProvider(faux.provider)
+      const { models, faux } = makeFauxModels()
       const harness = await Harness.open(
         database.storage,
         { models: () => models, registry: createRegistry(), settings: { followUpMode: 'all' } },
@@ -489,12 +498,20 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
 
   it('stopObserving 后在途异步 adoptInitial 不向 maps 复活条目', timeout, async () => {
     const kernel = await openRuntime(join(root, 'stop-no-ghost'))
+    const gate = deferred()
     try {
+      const started = deferred()
       kernel.__faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'sleep 3' })], { stopReason: 'toolUse' }),
+        async (_ctx, opts) => {
+          started.resolve()
+          opts?.signal?.addEventListener('abort', () => gate.resolve(), { once: true })
+          if (!opts?.signal?.aborted) await gate.promise
+          return fauxAssistantMessage('unused')
+        },
       ])
       void kernel.submitInput(1, '停观前的在途问题').catch(() => {})
-      await new Promise((r) => setTimeout(r, 300))
+      await started.promise
+      await waitFor(() => kernel.getConversation(1).status === 'working')
       assert.equal(kernel.getConversation(1).status, 'working')
       // 删除会话（内部 stopObserving）：令牌删除，在途回读作废。
       const conv = await kernel.createConversation({})
@@ -509,6 +526,7 @@ describe('requestId 重复提交与重启恢复', { timeout: 60_000 }, () => {
       await kernel.waitForIdle(1).catch(() => {})
       assert.equal(tracker.mirrors.get(1)?.observeGeneration, genBefore)
     } finally {
+      gate.resolve()
       await kernel.close()
     }
   })

@@ -12,8 +12,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { HelmError, type ConversationSummary } from '@helm/protocol'
@@ -29,6 +28,7 @@ import {
 } from '../src/runtime/runtime-host-backend.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 
 interface StoreHandle {
   store: HelmStore
@@ -72,23 +72,7 @@ function makeHost(handle: StoreHandle, dataDir: string): PluginHost {
       if (id !== 1) {
         throw new HelmError('not_found', `会话不存在: ${id}`, 404)
       }
-      return {
-        id,
-        title: 'conv-1',
-        profileId: 'default',
-        tags: [],
-        cwd: '/tmp',
-        model: 'test/model',
-        thinkingLevel: '',
-        status: 'idle',
-        stateChangeSeq: 1,
-        completionSeq: 0,
-        unread: false,
-        pinned: false,
-        pendingAskCount: 0,
-        createdAt: 1,
-        updatedAt: 1,
-      }
+      return makeConversationSummary({ id, title: 'conv-1', profileId: 'default' })
     },
   }
   return new PluginHost({ buildProvider: createPluginBuildProvider(),
@@ -100,7 +84,7 @@ function makeHost(handle: StoreHandle, dataDir: string): PluginHost {
 }
 
 test('purgePluginPersistentData：SQLite 中该插件全局 doc 与会话文档整体清除、不交叉误删、重启不复活', { timeout: 60_000 }, async () => {
-  const base = mkdtempSync(join(tmpdir(), 'helm-purge-e2e-'))
+  const base = await makeTempDir('helm-purge-e2e-')
   try {
     const handle = await openStore(base)
     const host = makeHost(handle, join(base, 'plugins'))
@@ -155,7 +139,7 @@ test('purgePluginPersistentData：SQLite 中该插件全局 doc 与会话文档�
     assert.equal(reopened.store.getPluginDoc('__global', 'demo:sub:records'), '{"n":9}')
     await reopened.close()
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    await cleanupDir(base)
   }
 })
 
@@ -182,7 +166,7 @@ async function seedManagedInstall(
 }
 
 test('PluginPackageManager.remove：purge 落盘成功后才删目录与安装记录（重开库不复活）', { timeout: 60_000 }, async () => {
-  const base = mkdtempSync(join(tmpdir(), 'helm-purge-rm-'))
+  const base = await makeTempDir('helm-purge-rm-')
   try {
     const handle = await openStore(base)
     const host = makeHost(handle, join(base, 'plugins'))
@@ -215,12 +199,12 @@ test('PluginPackageManager.remove：purge 落盘成功后才删目录与安装�
     assert.equal(reopened.store.getPluginSessionDoc('demo', 'runs', 1), undefined, 'remove resolve 后删除必须已落盘')
     await reopened.close()
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    await cleanupDir(base)
   }
 })
 
 test('purge DELETE 落盘失败：remove 显式拒绝，目录与安装记录保留，故障恢复后可重试', { timeout: 60_000 }, async () => {
-  const base = mkdtempSync(join(tmpdir(), 'helm-purge-fail-'))
+  const base = await makeTempDir('helm-purge-fail-')
   try {
     const handle = await openStore(base)
     const host = makeHost(handle, join(base, 'plugins'))
@@ -276,12 +260,12 @@ test('purge DELETE 落盘失败：remove 显式拒绝，目录与安装记录保
     assert.equal(verified.store.getPluginSessionDoc('demo', 'runs', 1), undefined, '重试成功的删除真实落盘')
     await verified.close()
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    await cleanupDir(base)
   }
 })
 
 test('停用不清数据：disable 后 doc/sessionDoc 持久保留，重新启用读回原值', { timeout: 60_000 }, async () => {
-  const base = mkdtempSync(join(tmpdir(), 'helm-purge-disable-'))
+  const base = await makeTempDir('helm-purge-disable-')
   try {
     const handle = await openStore(base)
     const host = makeHost(handle, join(base, 'plugins'))
@@ -307,6 +291,6 @@ test('停用不清数据：disable 后 doc/sessionDoc 持久保留，重新启�
     assert.deepEqual(doc.value, { n: 1 })
     await handle.close()
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    await cleanupDir(base)
   }
 })

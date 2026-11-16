@@ -19,25 +19,19 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError } from '@helm/protocol'
-import { waitFor } from './helpers.js'
+import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 
-type RuntimeWithFaux = KernelRuntime & { __faux: ReturnType<typeof fauxProvider> }
+type RuntimeWithFaux = KernelRuntime & { __faux: ReturnType<typeof makeFauxModels>['faux'] }
 
 async function openRuntime(dir: string): Promise<RuntimeWithFaux> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const kernel = await KernelRuntime.open({
     dataDir: dir,
     cwd: dir,
@@ -86,11 +80,11 @@ function isHelmError(code: string, status: number) {
 let root: string
 
 test.before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'helm-guarded-'))
+  root = await makeTempDir('helm-guarded-')
 })
 
 test.after(async () => {
-  rmSync(root, { recursive: true, force: true })
+  await cleanupDir(root)
 })
 
 // ---------------------------------------------------------------------------

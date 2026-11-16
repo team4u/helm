@@ -17,23 +17,20 @@
  * 事实（target-cwd 的 TrustedPlatformHost 结构），绝不 mock 规范化本身。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
 import { HelmError } from '@helm/protocol'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { runNativeSpawn, type NativeSpawnDeps } from '../src/runtime/spawn.js'
 import { RuntimeAgentSpawn } from '../src/runtime/runtime-agent-spawn.js'
 import type { TrustedPlatformHost } from '../src/runtime/target-cwd.js'
 import { ArtifactService, SecretStash } from '../src/services/index.js'
 import type { EnvFabric } from '../src/env/index.js'
+import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
-type FauxHandle = ReturnType<typeof fauxProvider>
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 interface SpawnEnv {
   harness: Harness
@@ -60,9 +57,7 @@ async function openSpawnEnv(options: {
   hubPlatform?: string
   profiles?: Record<string, { cwd?: string; nodeId?: string }>
 } = {}): Promise<SpawnEnv> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const storage = new MemoryStorage()
   const registry = createRegistry()
   const harness = await Harness.open(storage, { models: () => models, registry }, BACKGROUND_CONTEXT)
@@ -76,7 +71,7 @@ async function openSpawnEnv(options: {
   const updates: Array<{ id: number; patch: Record<string, unknown> }> = []
   const lastTexts = new Map<number, string>()
   const observers = new Map<number, () => void>()
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-spawn-cwd-'))
+  const dataDir = await makeTempDir('helm-spawn-cwd-')
 
   const deps: NativeSpawnDeps = {
     dataDir,
@@ -173,7 +168,7 @@ async function openSpawnEnv(options: {
       for (const detach of observers.values()) detach()
       await harness.close(BACKGROUND_CONTEXT)
       await storage.close(BACKGROUND_CONTEXT)
-      rmSync(dataDir, { recursive: true, force: true })
+      await cleanupDir(dataDir)
     },
   }
 }

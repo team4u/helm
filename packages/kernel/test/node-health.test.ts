@@ -13,19 +13,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import os from 'node:os'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
 import { createBirpc } from 'birpc'
-import { setTimeout as delay } from 'node:timers/promises'
 import type { NodeHealthSnapshot, NodeHeartbeatInput, NodeRegisterInput, NodeRegisterResult } from '@helm/protocol'
 import { NodeRegistry, sanitizeNodeHealth, attachNodeWsGateway, type HubConnectionLocal } from '../src/env/index.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { startHub } from '../src/http/index.js'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { cleanupDir, makeFauxModels, makeTempDir, sleep as delay } from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // 测试基座
@@ -198,8 +194,7 @@ async function openHubApp(dir: string): Promise<{
   token: string
   close(): Promise<void>
 }> {
-  const models = createModels()
-  models.setProvider(fauxProvider().provider)
+  const { models } = makeFauxModels()
   const kernel = await KernelRuntime.open({
     dataDir: dir,
     cwd: dir,
@@ -252,8 +247,8 @@ function assertCompleteHealth(health: unknown): void {
 
 let rootDir: string
 
-test('setup: 创建临时根目录', { timeout: 60_000 }, () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-node-health-'))
+test('setup: 创建临时根目录', { timeout: 60_000 }, async () => {
+  rootDir = await makeTempDir('helm-node-health-')
 })
 
 // ---------------------------------------------------------------------------
@@ -513,7 +508,7 @@ test('GET /api/nodes：local 与在线 BYOM 均含完整真实 health；离线�
     assert.equal(offline['health'], undefined, '离线后不得残留过期 health')
   } finally {
     await app.close().catch(() => undefined)
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined)
+    await cleanupDir(dir).catch(() => undefined)
   }
 })
 
@@ -590,6 +585,6 @@ async function connectNodeWithToken(
   }
 }
 
-test('teardown: 清理临时根目录', { timeout: 60_000 }, () => {
-  rmSync(rootDir, { recursive: true, force: true })
+test('teardown: 清理临时根目录', { timeout: 60_000 }, async () => {
+  await cleanupDir(rootDir)
 })

@@ -12,32 +12,23 @@
  * assistant entry 模型消息的 provider/model 与 faux 调用计数。
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError, type ConversationEntry } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
-type FauxHandle = ReturnType<typeof fauxProvider>
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 type RuntimeWithFaux = KernelRuntime & { __faux: FauxHandle }
-
-/** 双模型 faux 目录（faux-1/faux-2）用于区分优先级来源。 */
-function makeFauxModels(ids: string[]): { models: ReturnType<typeof createModels>; faux: FauxHandle } {
-  const models = createModels()
-  const faux = fauxProvider({ models: ids.map((id) => ({ id })) })
-  models.setProvider(faux.provider)
-  return { models, faux }
-}
 
 async function openRuntime(
   dir: string,
   opts: { model?: string; ids?: string[] } = {},
 ): Promise<RuntimeWithFaux> {
-  const { models, faux } = makeFauxModels(opts.ids ?? ['faux-1'])
+  const { models, faux } = makeFauxModels({ models: (opts.ids ?? ['faux-1']).map((id) => ({ id })) })
   const runtime = await KernelRuntime.open({
     dataDir: dir,
     cwd: dir,
@@ -78,7 +69,7 @@ let root: string
 let savedHelmModel: string | undefined
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'helm-model-cfg-'))
+  root = await makeTempDir('helm-model-cfg-')
   // 本文件显式管理全部模型来源，隔离外部环境变量。
   savedHelmModel = process.env['HELM_MODEL']
   delete process.env['HELM_MODEL']
@@ -86,7 +77,7 @@ before(async () => {
 
 after(async () => {
   if (savedHelmModel !== undefined) process.env['HELM_MODEL'] = savedHelmModel
-  rmSync(root, { recursive: true, force: true })
+  await cleanupDir(root)
 })
 
 // ---------------------------------------------------------------------------
@@ -291,7 +282,7 @@ describe('Profile 损坏与缺失的显式错误', { timeout: 60_000 }, () => {
       assert.equal(kernel.__faux.state.callCount, 0, 'Profile 损坏时不得发起模型请求')
 
       // 既有会话的 Profile 被删：即使会话已有生效模型也要求真实 Profile 存在。
-      rmSync(join(dir, 'profiles', 'worker'), { recursive: true, force: true })
+      await cleanupDir(join(dir, 'profiles', 'worker'))
       await assert.rejects(
         () => kernel.submitInput(conv.id, '问题'),
         (err: unknown) =>

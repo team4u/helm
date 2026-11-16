@@ -10,12 +10,9 @@
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { Harness } from '@earendil-works/pi-durable'
 import { createRegistry } from '@earendil-works/pi-durable'
 import type { ConversationLive } from '@helm/protocol'
@@ -25,16 +22,7 @@ import { deriveConversationLive, type InboxItemLike } from '../src/runtime/entri
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
 import { HelmStore, type ConvMeta } from '../src/runtime/store.js'
 import { KernelRuntime } from '../src/runtime/index.js'
-import { createModels as createRuntimeModels } from '@earendil-works/pi-ai/models'
-
-/** 轮询等待条件成立（防挂死，总超时显式）。 */
-async function waitFor(cond: () => boolean, ms = 5_000): Promise<void> {
-  const deadline = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error('waitFor 超时')
-    await new Promise((r) => setTimeout(r, 10))
-  }
-}
+import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 /** 快照中指定会话的实时视图（queuedInputs 事实源）。 */
 function findLive(kernel: KernelRuntime, conversationId: number): ConversationLive | undefined {
@@ -134,15 +122,15 @@ describe('deriveConversationLive queuedInputs', { timeout: 60_000 }, () => {
 describe('ConversationTracker queuedInputs 实时事件', { timeout: 60_000 }, () => {
   let root = ''
 
-  before(() => {
-    root = mkdtempSync(join(tmpdir(), 'helm-queued-'))
+  before(async () => {
+    root = await makeTempDir('helm-queued-')
   })
 
-  after(() => {
-    rmSync(root, { recursive: true, force: true })
+  after(async () => {
+    await cleanupDir(root)
   })
 
-  type FauxHandle = ReturnType<typeof fauxProvider>
+  type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
   async function openTracker(): Promise<{
     tracker: ConversationTracker
     harness: Harness
@@ -155,9 +143,7 @@ describe('ConversationTracker queuedInputs 实时事件', { timeout: 60_000 }, (
     const database = await openHelmDatabase(dir)
     const store = new HelmStore(database)
     await store.load()
-    const models = createModels()
-    const faux = fauxProvider()
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels()
     const registry = createRegistry()
     const harness = await Harness.open(
       database.storage,
@@ -276,19 +262,17 @@ describe('ConversationTracker queuedInputs 实时事件', { timeout: 60_000 }, (
 describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => {
   let root = ''
 
-  before(() => {
-    root = mkdtempSync(join(tmpdir(), 'helm-queued-snap-'))
+  before(async () => {
+    root = await makeTempDir('helm-queued-snap-')
   })
 
-  after(() => {
-    rmSync(root, { recursive: true, force: true })
+  after(async () => {
+    await cleanupDir(root)
   })
 
   it('run 进行中 followUp/steer 入队后，重连快照携带 queuedInputs（无需再提交或再 token）', { timeout: 60_000 }, async () => {
     const dir = join(root, 'snap1')
-    const models = createRuntimeModels()
-    const faux = fauxProvider()
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels()
     let entered!: () => void
     let answer!: (message: ReturnType<typeof fauxAssistantMessage>) => void
     const started = new Promise<void>((resolve) => { entered = resolve })
@@ -346,9 +330,7 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
 
   it('忙碌中省略 whenBusy 默认 steer；显式 followUp 仍排队；reject 报 409 conversation_busy', { timeout: 60_000 }, async () => {
     const dir = join(root, 'default-steer')
-    const models = createRuntimeModels()
-    const faux = fauxProvider()
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels()
     let entered!: () => void
     let answer!: (message: ReturnType<typeof fauxAssistantMessage>) => void
     const started = new Promise<void>((resolve) => { entered = resolve })
@@ -416,9 +398,7 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
 
   it('空闲会话不复活 idle 空 live（快照不含无内容条目）', { timeout: 60_000 }, async () => {
     const dir = join(root, 'snap2')
-    const models = createRuntimeModels()
-    const faux = fauxProvider()
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels()
     faux.setResponses([fauxAssistantMessage('仅一轮')])
     const kernel = await KernelRuntime.open({
       dataDir: dir,

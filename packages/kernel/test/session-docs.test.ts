@@ -12,12 +12,8 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import {
   HelmError,
-  type ConversationSummary,
   type PluginDefinition,
   type HelmEventFrame,
 } from '@helm/protocol'
@@ -31,29 +27,19 @@ import { SessionDocEventHub } from '../src/runtime/events.js'
 import { openHelmDatabase } from '../src/runtime/sqlite.js'
 import { HelmStore } from '../src/runtime/store.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import {
+  MemoryDocStore,
+  cleanupDir,
+  makeConversationSummary,
+  makeTempDir,
+} from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
 
-function makeConversation(id: number): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'default',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }
+function makeConversation(id: number) {
+  return makeConversationSummary({ id, profileId: 'default' })
 }
 
 /** 可变会话表 fixture：deleteConversation 后 getConversation 如实抛 404。 */
@@ -123,23 +109,6 @@ class MemorySessionDocStore implements PluginSessionDocStore {
   async flush(): Promise<void> {}
 }
 
-class MemoryDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
 let dataDir: string
 let docs: MemoryDocStore
 let sessionDocs: MemorySessionDocStore
@@ -163,15 +132,15 @@ function throwsCode(fn: () => unknown, code: string, status?: number): void {
   })
 }
 
-beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-session-doc-test-'))
+beforeEach(async () => {
+  dataDir = await makeTempDir('helm-session-doc-test-')
   docs = new MemoryDocStore()
   sessionDocs = new MemorySessionDocStore()
   hostApi = makeHostApi()
 })
 
-afterEach(() => {
-  rmSync(dataDir, { recursive: true, force: true })
+afterEach(async () => {
+  await cleanupDir(dataDir)
 })
 
 // ---------------------------------------------------------------------------
@@ -746,7 +715,7 @@ test('SessionDocEventHub.response：首帧 snapshot 后增量；abort 清理订�
 // ---------------------------------------------------------------------------
 
 test('HelmStore 会话文档 CRUD + 会话删除级联清理（真实 sqlite）', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-store-sd-'))
+  const dir = await makeTempDir('helm-store-sd-')
   try {
     const db = await openHelmDatabase(dir)
     const store = new HelmStore(db)
@@ -793,12 +762,12 @@ test('HelmStore 会话文档 CRUD + 会话删除级联清理（真实 sqlite）'
     await store.close()
     await db.close()
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    await cleanupDir(dir)
   }
 })
 
 test('HelmStore 重启后镜像恢复会话文档（真实 sqlite）', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-store-sd2-'))
+  const dir = await makeTempDir('helm-store-sd2-')
   try {
     {
       const db = await openHelmDatabase(dir)
@@ -835,6 +804,6 @@ test('HelmStore 重启后镜像恢复会话文档（真实 sqlite）', { timeout
       await db.close()
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    await cleanupDir(dir)
   }
 })

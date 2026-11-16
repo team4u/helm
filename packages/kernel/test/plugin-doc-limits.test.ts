@@ -13,40 +13,21 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { HelmError, type PluginDocHandle, type PluginSessionDocHandle } from '@helm/protocol'
 import {
   PluginHost,
   PLUGIN_DOC_MAX_JSON_BYTES,
-  type PluginDocStore,
   type PluginHostBackend,
   type PluginSessionDocStore,
 } from '../src/plugins/index.js'
 import { PluginDocRegistry } from '../src/plugins/doc-registry.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, assertRejectsCode, cleanupDir, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(`${pluginId}:`)) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
 
 class MemorySessionDocStore implements PluginSessionDocStore {
   store = new Map<string, string>()
@@ -107,28 +88,15 @@ function throwsCode(fn: () => unknown, code: string, status?: number): HelmError
   return caught
 }
 
-async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<HelmError> {
-  let caught: unknown
-  try {
-    await promise
-  } catch (err) {
-    caught = err
-  }
-  assert.ok(caught instanceof HelmError, `期望 HelmError，实际：${String(caught)}`)
-  assert.equal(caught.code, code)
-  if (status !== undefined) assert.equal(caught.status, status)
-  return caught
-}
-
-beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-doc-limits-'))
+beforeEach(async () => {
+  dataDir = await makeTempDir('helm-doc-limits-')
   docs = new MemoryDocStore()
   sessionDocs = new MemorySessionDocStore()
   events = []
 })
 
-afterEach(() => {
-  rmSync(dataDir, { recursive: true, force: true })
+afterEach(async () => {
+  await cleanupDir(dataDir)
 })
 
 // ---------------------------------------------------------------------------
@@ -138,21 +106,21 @@ afterEach(() => {
 test('doc initial 超限：注册拒绝 plugin_doc_too_large，details 完整', { timeout: 60_000 }, async () => {
   const host = makeHost()
   const big = 'x'.repeat(PLUGIN_DOC_MAX_JSON_BYTES) // 序列化 = 上限 + 2 字节（引号）
-  await rejectsCode(
-    host.register({
-      id: 'p:big',
-      definePlugin: (ctx) => {
-        ctx.doc('big', big)
-      },
-    }),
+  const err = (await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:big',
+        definePlugin: (ctx) => {
+          ctx.doc('big', big)
+        },
+      }),
     'plugin_doc_too_large',
     413,
-  ).then((err) => {
-    assert.deepEqual(
-      { ...(err.details as Record<string, unknown>) },
-      { pluginId: 'p:big', name: 'big', kind: 'doc', bytes: PLUGIN_DOC_MAX_JSON_BYTES + 2, maxBytes: PLUGIN_DOC_MAX_JSON_BYTES },
-    )
-  })
+  )) as HelmError
+  assert.deepEqual(
+    { ...(err.details as Record<string, unknown>) },
+    { pluginId: 'p:big', name: 'big', kind: 'doc', bytes: PLUGIN_DOC_MAX_JSON_BYTES + 2, maxBytes: PLUGIN_DOC_MAX_JSON_BYTES },
+  )
   assert.equal(host.list().length, 0)
   assert.equal(docs.store.size, 0)
 })
@@ -217,17 +185,18 @@ test('doc 边界：序列化恰好等于上限时放行', { timeout: 60_000 }, a
 
 test('sessionDoc initial 超限：注册拒绝 plugin_doc_too_large', { timeout: 60_000 }, async () => {
   const host = makeHost()
-  await rejectsCode(
-    host.register({
-      id: 'p:sbig',
-      definePlugin: (ctx) => {
-        ctx.sessionDoc('big', 'q'.repeat(PLUGIN_DOC_MAX_JSON_BYTES))
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:sbig',
+        definePlugin: (ctx) => {
+          ctx.sessionDoc('big', 'q'.repeat(PLUGIN_DOC_MAX_JSON_BYTES))
+        },
+      }),
     'plugin_doc_too_large',
     413,
   ).then((err) => {
-    const details = err.details as Record<string, unknown>
+    const details = (err as { details: Record<string, unknown> }).details
     assert.equal(details.kind, 'sessionDoc')
     assert.equal(details.pluginId, 'p:sbig')
     assert.equal(details.maxBytes, PLUGIN_DOC_MAX_JSON_BYTES)

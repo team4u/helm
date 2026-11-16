@@ -18,17 +18,15 @@
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ContextView } from '@earendil-works/pi-durable'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { calculateContextTokens } from '@earendil-works/pi-ai/utils/estimate'
 import type { AssistantMessage, Message, SystemMessage, Tool, UserMessage } from '@earendil-works/pi-ai'
 import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import type { ProviderConfig } from '@helm/protocol'
+import { cleanupDir, makeFauxModels, makeTempDir, waitFor as waitForCondition } from './helpers.js'
 import {
   assembleContextUsage,
   compactionFailureNoticeOf,
@@ -479,22 +477,20 @@ describe('事件边界：conversation.upsert 携带 contextUsage 的形状校验
 // 集成：真实 KernelRuntime（faux provider + SQLite + 观察者链路）
 // ---------------------------------------------------------------------------
 
-type FauxHandle = ReturnType<typeof fauxProvider>
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 let root = ''
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'helm-context-usage-'))
+  root = await makeTempDir('helm-context-usage-')
 })
 
 after(async () => {
-  rmSync(root, { recursive: true, force: true })
+  await cleanupDir(root)
 })
 
 async function openRuntime(name: string): Promise<KernelRuntime & { __faux: FauxHandle }> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const runtime = await KernelRuntime.open({
     dataDir: join(root, name),
     cwd: join(root, name),
@@ -504,13 +500,7 @@ async function openRuntime(name: string): Promise<KernelRuntime & { __faux: Faux
   return Object.assign(runtime, { __faux: faux })
 }
 
-async function waitFor(cond: () => boolean, ms = 15_000): Promise<void> {
-  const deadline = Date.now() + ms
-  while (!cond()) {
-    if (Date.now() > deadline) throw new Error('waitFor 超时')
-    await new Promise((r) => setTimeout(r, 20))
-  }
-}
+const waitFor = (cond: () => boolean, ms = 15_000): Promise<void> => waitForCondition(cond, ms)
 
 function recordUpserts(kernel: KernelRuntime, conversationId: number): {
   frames: ConversationSummary[]

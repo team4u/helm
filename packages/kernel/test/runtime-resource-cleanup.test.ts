@@ -13,15 +13,13 @@
 
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { createEnvFabric, type EnvFabric } from '../src/env/index.js'
+import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
-type FauxHandle = ReturnType<typeof fauxProvider>
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 interface RuntimeInternals {
   handledToolCalls: Map<string, { conversationId: number | undefined; result: unknown }>
@@ -42,17 +40,15 @@ const timeout = { timeout: 60_000 } as const
 let root: string
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'helm-resclean-'))
+  root = await makeTempDir('helm-resclean-')
 })
 
 after(async () => {
-  rmSync(root, { recursive: true, force: true })
+  await cleanupDir(root)
 })
 
 async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxHandle }> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const runtime = await KernelRuntime.open({
     dataDir: dir,
     cwd: dir,

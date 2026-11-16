@@ -12,14 +12,11 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import type { Model, Provider } from '@earendil-works/pi-ai'
-import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import type { ConversationSummary } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { startHub } from '../src/http/index.js'
+import { makeFauxModels, useTempDir } from './helpers.js'
 
 /** 与 HelmModelSourceMeta / PiMagpieModel 同形态：未知窗口标记随模型对象透传。 */
 type WindowedModel = Model<string> & { helmContextWindowKnown?: boolean }
@@ -53,8 +50,8 @@ async function waitForUpsertWindow(
   }
 }
 
-test('目录 contextWindow 投影与 models.changed 迫齐：unknown→known→移除，stateChangeSeq 不变', { timeout: 60_000 }, async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-models-window-'))
+test('目录 contextWindow 投影与 models.changed 迫齐：unknown→known→移除，stateChangeSeq 不变', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-models-window-')
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   let kernel: KernelRuntime | undefined
   try {
@@ -66,7 +63,7 @@ test('目录 contextWindow 投影与 models.changed 迫齐：unknown→known→�
     })
 
     // 动态供应商（形态对齐 Magpie toPiModel 产物）：目录数组可换 = 模拟目录刷新。
-    const faux = fauxProvider({ provider: 'win', models: [{ id: 'm-ctx' }, { id: 'm-bad' }] })
+    const { faux } = makeFauxModels({ provider: 'win', models: [{ id: 'm-ctx' }, { id: 'm-bad' }] })
     const unknownModel: WindowedModel = { ...faux.getModel('m-ctx')!, contextWindow: 128_000, helmContextWindowKnown: false }
     const badModel: WindowedModel = { ...faux.getModel('m-bad')!, contextWindow: Number.POSITIVE_INFINITY }
     const knownModel: WindowedModel = { ...faux.getModel('m-ctx')!, contextWindow: 400_000 }
@@ -136,6 +133,5 @@ test('目录 contextWindow 投影与 models.changed 迫齐：unknown→known→�
   } finally {
     await hub?.close().catch(() => {})
     await kernel?.close().catch(() => {})
-    await rm(dataDir, { recursive: true, force: true })
   }
 })

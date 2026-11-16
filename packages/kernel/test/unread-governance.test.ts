@@ -13,24 +13,15 @@
  * 全部真实执行：真 pi-durable SDK + SQLite + faux provider + 真原生 spawn 管道。
  */
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { ConversationSummary, TurnSettledPayload } from '@helm/protocol'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
-type FauxHandle = ReturnType<typeof fauxProvider>
-
-function makeFauxModels(): { models: ReturnType<typeof createModels>; faux: FauxHandle } {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
-  return { models, faux }
-}
+type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 
 async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxHandle }> {
   const { models, faux } = makeFauxModels()
@@ -54,12 +45,12 @@ async function collectSettled(kernel: KernelRuntime): Promise<TurnSettledPayload
 
 let root: string
 
-before(() => {
-  root = mkdtempSync(join(tmpdir(), 'helm-unread-governance-'))
+before(async () => {
+  root = await makeTempDir('helm-unread-governance-')
 })
 
-after(() => {
-  rmSync(root, { recursive: true, force: true })
+after(async () => {
+  await cleanupDir(root)
 })
 
 describe('回合结算 unread 治理', { timeout: 60_000 }, () => {

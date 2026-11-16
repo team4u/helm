@@ -4,37 +4,24 @@
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { HelmError, type ConversationSummary, type EnvExecResponse, type MaybePromise, type PluginDefinition } from '@helm/protocol';
-import { PluginHost, type PluginDocStore } from '../src/plugins/index.js';
+import { PluginHost } from '../src/plugins/index.js';
 import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js';
 import { createPluginBuildProvider } from '@helm/plugin-build';
+import {
+  MemoryDocStore,
+  assertRejectsCode,
+  cleanupDir,
+  makeConversationSummary,
+  makeTempDir,
+} from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-    ...over,
-  };
+  return makeConversationSummary({ id, ...over });
 }
 
 /** 可编程会话面：scope 执行期校验经 host.getConversation 现取真实摘要。 */
@@ -136,38 +123,12 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   }
 }
 
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>();
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial;
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value));
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
 let dataDir: string;
 let backend: FakeBackend;
 let docs: MemoryDocStore;
 
 function makeHost(): PluginHost {
   return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs });
-}
-
-async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<void> {
-  await assert.rejects(promise, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`);
-    assert.equal(err.code, code);
-    if (status !== undefined) assert.equal(err.status, status);
-    return true;
-  });
 }
 
 function throwsCode(fn: () => unknown, code: string): void {
@@ -212,14 +173,14 @@ function scopedToolName(pluginId: string): string {
   return `scoped_tool_${pluginId.replaceAll(/[^A-Za-z0-9]/g, '_')}`;
 }
 
-beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-plugins-contract-'));
+beforeEach(async () => {
+  dataDir = await makeTempDir('helm-plugins-contract-');
   backend = new FakeBackend();
   docs = new MemoryDocStore();
 });
 
-afterEach(() => {
-  rmSync(dataDir, { recursive: true, force: true });
+afterEach(async () => {
+  await cleanupDir(dataDir);
 });
 
 // ---------------------------------------------------------------------------
@@ -247,8 +208,8 @@ test('scope 注册边界：非纯对象/未知字段/非法元素一律 invalid_
     { tags: 'worker' },
   ];
   for (const [i, scope] of badScopes.entries()) {
-    await rejectsCode(
-      host.register(scopedPlugin(`p:bad-${i}`, { tool: scope })),
+    await assertRejectsCode(
+      () => host.register(scopedPlugin(`p:bad-${i}`, { tool: scope })),
       'invalid_plugin_scope',
       400,
     );
@@ -256,8 +217,8 @@ test('scope 注册边界：非纯对象/未知字段/非法元素一律 invalid_
   // 全部回滚：无插件注册
   assert.equal(host.list().length, 0);
   // 动作 scope 同样在注册边界拒绝
-  await rejectsCode(
-    host.register(scopedPlugin('p:bad-action', { action: { tags: [new Date()] } })),
+  await assertRejectsCode(
+    () => host.register(scopedPlugin('p:bad-action', { action: { tags: [new Date()] } })),
     'invalid_plugin_scope',
   );
 
@@ -277,19 +238,20 @@ test('模型供应商 scope 随会话切换生效，执行边界复核工具与�
   await host.executeTool(scopedToolName('p:model-provider'), {}, { conversationId: 1 });
   conversation.model = 'another/model';
   assert.ok(!host.listTools(conversation).some((tool) => tool.name === scopedToolName('p:model-provider')));
-  await rejectsCode(host.executeTool(scopedToolName('p:model-provider'), {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
-  await rejectsCode(host.invokeAction('p:model-provider', 'scoped_action', {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
+  await assertRejectsCode(() => host.executeTool(scopedToolName('p:model-provider'), {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
+  await assertRejectsCode(() => host.invokeAction('p:model-provider', 'scoped_action', {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
 });
 
 test('ui scope 也在注册边界校验：非法 ui spec scope 拒绝', { timeout: 60_000 }, async () => {
   const host = makeHost();
-  await rejectsCode(
-    host.register({
-      id: 'p:ui-scope',
-      definePlugin: (ctx) => {
-        ctx.ui.screen({ id: 's', label: 'x', scope: { bogus: [1] } as never });
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:ui-scope',
+        definePlugin: (ctx) => {
+          ctx.ui.screen({ id: 's', label: 'x', scope: { bogus: [1] } as never });
+        },
+      }),
     'invalid_plugin_scope',
   );
   // 合法 ui scope 注册成功且进清单
@@ -313,13 +275,14 @@ test('timeline.renderer matchMeta 仅允许 { renderer: 非空字符串 }', { ti
     'nope',
     {},
   ].entries()) {
-    await rejectsCode(
-      host.register({
-        id: `p:mm-${i}`,
-        definePlugin: (ctx) => {
-          ctx.ui.timelineRenderer({ id: 'r', kinds: ['x'], matchMeta: matchMeta as never });
-        },
-      }),
+    await assertRejectsCode(
+      () =>
+        host.register({
+          id: `p:mm-${i}`,
+          definePlugin: (ctx) => {
+            ctx.ui.timelineRenderer({ id: 'r', kinds: ['x'], matchMeta: matchMeta as never });
+          },
+        }),
       'invalid_ui_spec',
     );
   }
@@ -406,9 +369,9 @@ test('executeTool 双重校验：scope 未命中 403，命中放行；无 scope 
   );
 
   // 会话 1（assistant）不在 scope：可见性之外的直接执行也被拒
-  await rejectsCode(host.executeTool(scopedToolName('p:guard'), {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
-  await rejectsCode(
-    host.invokeAction('p:guard', 'scoped_action', {}, { conversationId: 1 }),
+  await assertRejectsCode(() => host.executeTool(scopedToolName('p:guard'), {}, { conversationId: 1 }), 'conversation_scope_violation', 403);
+  await assertRejectsCode(
+    () => host.invokeAction('p:guard', 'scoped_action', {}, { conversationId: 1 }),
     'conversation_scope_violation',
     403,
   );
@@ -429,11 +392,11 @@ test('scope 会话摘要经 host.getConversation 现取：会话不存在如实�
   await host.register(
     scopedPlugin('p:gone', { tool: { conversationIds: [999] }, action: { conversationIds: [999] } }),
   );
-  await rejectsCode(host.executeTool(scopedToolName('p:gone'), {}, { conversationId: 999 }), 'not_found', 404);
+  await assertRejectsCode(() => host.executeTool(scopedToolName('p:gone'), {}, { conversationId: 999 }), 'not_found', 404);
   // 私改 conversations 面板不影响：getConversation 现取真实数据
   backend.conversations.delete(1);
-  await rejectsCode(
-    host.invokeAction('p:gone', 'scoped_action', {}, { conversationId: 1 }),
+  await assertRejectsCode(
+    () => host.invokeAction('p:gone', 'scoped_action', {}, { conversationId: 1 }),
     'not_found',
   );
 });
@@ -460,7 +423,7 @@ test('exposeAsTool 动作派生工具继承 scope：executeTool 经 invokeAction
   assert.deepEqual(await host.executeTool(alias, {}, { conversationId: 3 }), { patrolled: true });
   // 其他会话不可见且执行被拒（双重校验）
   assert.equal(host.listTools(backend.conversations.get(1)!).length, 0);
-  await rejectsCode(host.executeTool(alias, {}, { conversationId: 1 }), 'conversation_scope_violation');
+  await assertRejectsCode(() => host.executeTool(alias, {}, { conversationId: 1 }), 'conversation_scope_violation');
   // listActions manifest 携带 scope（run_action 清单注入用）
   const manifest = host.listActions().find((a) => a.id === 'patrol')!;
   assert.deepEqual(manifest.scope, { profileIds: ['watchdog'] });
@@ -559,22 +522,24 @@ test('getPublicDoc：public 可读（含未写过的初值）；private/missing/
 
 test('doc opts 只允许 { public?: boolean }：未知字段拒绝', { timeout: 60_000 }, async () => {
   const host = makeHost();
-  await rejectsCode(
-    host.register({
-      id: 'p:doc-opts',
-      definePlugin: (ctx) => {
-        ctx.doc('k', { n: 0 }, { public: true, extra: 1 } as never);
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:doc-opts',
+        definePlugin: (ctx) => {
+          ctx.doc('k', { n: 0 }, { public: true, extra: 1 } as never);
+        },
+      }),
     'invalid_doc_spec',
   );
-  await rejectsCode(
-    host.register({
-      id: 'p:doc-opts2',
-      definePlugin: (ctx) => {
-        ctx.doc('k', { n: 0 }, { public: 'yes' } as never);
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:doc-opts2',
+        definePlugin: (ctx) => {
+          ctx.doc('k', { n: 0 }, { public: 'yes' } as never);
+        },
+      }),
     'invalid_doc_spec',
   );
 });
@@ -614,16 +579,17 @@ test('ctx.host.manageConversation 自动携带本插件 pluginId；释放句柄�
 
 test('register/enable 失败不泄漏宿主生命周期资源（definePlugin 抛错即回滚释放）', { timeout: 60_000 }, async () => {
   const host = makeHost();
-  await rejectsCode(
-    host.register({
-      id: 'p:leak',
-      definePlugin: (ctx) => {
-        void ctx.host.manageConversation(2);
-        void ctx.host.onEvent('workflow.settled', () => {});
-        void ctx.host.registerAskSeqResolver(() => undefined);
-        throw new Error('definePlugin 崩溃');
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:leak',
+        definePlugin: (ctx) => {
+          void ctx.host.manageConversation(2);
+          void ctx.host.onEvent('workflow.settled', () => {});
+          void ctx.host.registerAskSeqResolver(() => undefined);
+          throw new Error('definePlugin 崩溃');
+        },
+      }),
     'plugin_registration_failed',
   );
   // 三类资源全部回滚释放
@@ -649,7 +615,7 @@ test('register/enable 失败不泄漏宿主生命周期资源（definePlugin 抛
   });
   await host.disable('p:leak2');
   failStart = true;
-  await rejectsCode(host.enable('p:leak2'), 'plugin_service_start_failed');
+  await assertRejectsCode(() => host.enable('p:leak2'), 'plugin_service_start_failed');
   assert.equal(backend.managed.size, 0);
 });
 
@@ -683,7 +649,7 @@ test('onEvent(workflow.settled) 监听：停用自动解除；回调计入在途
     for (const listener of backend.workflowListeners) await listener(makeRun('wf_b'));
   })();
   await new Promise((r) => setTimeout(r, 3));
-  await rejectsCode(host.disable('p:wf'), 'plugin_has_live_tasks');
+  await assertRejectsCode(() => host.disable('p:wf'), 'plugin_has_live_tasks');
   await firing;
   assert.deepEqual(settledRuns, ['wf_a', 'wf_b']);
 
@@ -755,32 +721,35 @@ test('相对路由：宿主拼接命名空间，listRoutes 输出完整挂载路
   assert.equal(routes[0]!.public, true);
 
   // 完整 /api 前缀、点段逃逸、编码逃逸一律拒绝
-  await rejectsCode(
-    host.register({
-      id: 'p:evil',
-      definePlugin: (ctx) => {
-        ctx.route({ method: 'GET', path: '/api/plugins/p%3Aevil/routes/x', handler: () => new Response('x') });
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:evil',
+        definePlugin: (ctx) => {
+          ctx.route({ method: 'GET', path: '/api/plugins/p%3Aevil/routes/x', handler: () => new Response('x') });
+        },
+      }),
     'invalid_route_path',
   );
-  await rejectsCode(
-    host.register({
-      id: 'p:evil2',
-      definePlugin: (ctx) => {
-        ctx.route({ method: 'GET', path: '/%2e%2e/other', handler: () => new Response('x') });
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:evil2',
+        definePlugin: (ctx) => {
+          ctx.route({ method: 'GET', path: '/%2e%2e/other', handler: () => new Response('x') });
+        },
+      }),
     'invalid_route_path',
   );
   // 非法百分号编码（%zz）注册边界即拒
-  await rejectsCode(
-    host.register({
-      id: 'p:evil3',
-      definePlugin: (ctx) => {
-        ctx.route({ method: 'GET', path: '/hook%zz', handler: () => new Response('x') });
-      },
-    }),
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:evil3',
+        definePlugin: (ctx) => {
+          ctx.route({ method: 'GET', path: '/hook%zz', handler: () => new Response('x') });
+        },
+      }),
     'invalid_route_path',
   );
   assert.equal(host.listRoutes().length, 1);
