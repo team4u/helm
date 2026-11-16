@@ -699,10 +699,10 @@ test('clean dom', { timeout: 60_000 }, () => {
   )
 })
 
-test('safe-test-assert：循环 __reactFiber$ 模拟 DOM 节点 assert.equal(el, null) 在 <50ms 内抛摘要化 AssertionError', { timeout: 60_000 }, async () => {
+test('safe-test-assert：循环 __reactFiber$ 模拟 DOM 节点 assert.equal(el, null) 与 assert.deepEqual([el], []) 在 <50ms 内抛摘要化 AssertionError', { timeout: 60_000 }, async () => {
   const preloadUrl = pathToFileURL(path.join(scriptsDir, 'lib', 'safe-test-assert.mjs')).href
   await import(preloadUrl)
-  const { equal } = await import('node:assert/strict')
+  const { equal, deepEqual } = await import('node:assert/strict')
 
   // 构造带深度循环 React Fiber 引用的模拟 DOM 元素
   const fiber: Record<string, unknown> = { memoizedProps: {}, return: null, stateNode: null }
@@ -733,6 +733,21 @@ test('safe-test-assert：循环 __reactFiber$ 模拟 DOM 节点 assert.equal(el,
   assert.throws(
     () => equal(el, null),
     (err: unknown) => err instanceof assert.AssertionError && err.message.includes('[DOM <div#card.box.active>]'),
+  )
+  assert.throws(
+    () => assert.deepEqual([el], []),
+    (err: unknown) => {
+      assert.ok(err instanceof assert.AssertionError)
+      assert.deepEqual(err.actual, ['[DOM <div#card.box.active>]'])
+      assert.ok(err.message.includes('[DOM <div#card.box.active>]'), `数组元素未包含紧凑摘要: ${err.message}`)
+      return true
+    },
+  )
+  assert.throws(
+    () => deepEqual([el], []),
+    (err: unknown) =>
+      err instanceof assert.AssertionError &&
+      err.message.includes('[DOM <div#card.box.active>]'),
   )
   const elapsedMs = performance.now() - t0
   assert.ok(elapsedMs < 50, `危险 DOM 断言耗时 ${elapsedMs.toFixed(1)}ms 超过 50ms 阈值`)
