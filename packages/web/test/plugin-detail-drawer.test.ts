@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import React, { act } from 'react'
 import * as ReactDOMClient from 'react-dom/client'
@@ -947,4 +948,38 @@ test('PluginDetailDrawer：「右屏打开」按钮具备窄屏隐藏类且不�
   )
   assert.match(html, /split-toggle-btn plugin-drawer-split-btn/)
   assert.match(html, /右屏打开/)
+})
+
+test('PluginConfigForm：长标签与「默认 / 已配置」徽章防拆字碰撞结构与 CSS 契约', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(PluginConfigForm, {
+      pluginId: 'builtin:herdr',
+      config: {
+        values: {
+          agentStartTimeoutMs: 15000,
+          defaultProfile: 'coder',
+        },
+        sources: {
+          agentStartTimeoutMs: 'default',
+          defaultProfile: 'configured',
+        },
+        schema: {
+          agentStartTimeoutMs: { type: 'number', label: 'agent 启动超时（毫秒）' },
+          defaultProfile: { type: 'string', label: '默认代理配置名称' },
+        },
+      },
+      onSaved: () => {},
+    }),
+  )
+  assert.match(html, /form-grid plugin-config-row/)
+  assert.match(html, /form-grid-label plugin-config-field-label/)
+  assert.match(html, /plugin-config-field-name">agent 启动超时（毫秒）<\/span>/)
+  assert.match(html, /text-subtle plugin-config-source-tag"[^>]*>默认<\/span>/)
+  assert.match(html, /badge badge-neutral plugin-config-source-tag"[^>]*>已配置<\/span>/)
+
+  const pluginCenterCss = readFileSync(new URL('../src/styles/plugin-center.css', import.meta.url), 'utf8')
+  assert.match(pluginCenterCss, /\.form-grid\.plugin-config-row\s*\{[^}]*grid-template-columns:\s*minmax\(140px,\s*176px\)\s+minmax\(0,\s*1fr\)/)
+  assert.match(pluginCenterCss, /\.plugin-config-field-label\s*\{[^}]*flex-wrap:\s*wrap/)
+  assert.match(pluginCenterCss, /\.plugin-config-source-tag\s*\{[^}]*flex-shrink:\s*0/)
+  assert.match(pluginCenterCss, /\.plugin-config-source-tag\s*\{[^}]*white-space:\s*nowrap/)
 })

@@ -57,6 +57,11 @@
   gap: 12px;
 }
 
+.modal-body > .nav-item {
+  flex-shrink: 0;
+  height: auto;
+}
+
 /* 左右分栏模态弹窗原语 */
 .modal-body-split,
 .asset-modal-body {

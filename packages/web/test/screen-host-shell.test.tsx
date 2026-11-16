@@ -345,4 +345,10 @@ test('CSS 契约：Primitives (.screen-heading/.callout-*/.kbd-hint)、双重头
 
   // 5) 粗指针触屏设备隐藏 .kbd-hint
   assert.match(responsiveCss, /@media\s*\(hover:\s*none\)\s*and\s*\(pointer:\s*coarse\)\s*\{[\s\S]*?\.kbd-hint[\s\S]*?display:\s*none/, '触屏粗指针环境应隐藏 .kbd-hint')
+
+  // 6) 命令面板等 .modal-body 内 .nav-item 不得被 flex 压缩导致双行文字纵向重叠
+  assert.match(css, /\.nav-item\s*\{[^}]*height:\s*auto;/, '.nav-item 应保持 height: auto 自适应双行内容')
+  assert.match(css, /\.nav-item\s*\{[^}]*flex-shrink:\s*0;/, '.nav-item 必须设置 flex-shrink: 0 防纵向溢出压缩')
+  assert.match(css, /\.modal-body\s*>\s*\.nav-item\s*\{[^}]*flex-shrink:\s*0;/, '.modal-body > .nav-item 必须防压缩保证滚动而非压行')
+  assert.match(css, /\.modal-body\s*>\s*\.nav-item\s*\{[^}]*height:\s*auto;/, '.modal-body > .nav-item 保持 height: auto')
 })

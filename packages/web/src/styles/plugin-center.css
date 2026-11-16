@@ -582,7 +582,30 @@
   margin-top: 4px;
 }
 
-/* 配置字段：控件与单字段重置微操作同行 */
+/* 配置字段：标签与默认/已配置标记不拆字碰撞，控件与单字段重置微操作同行 */
+.form-grid.plugin-config-row {
+  grid-template-columns: minmax(140px, 176px) minmax(0, 1fr);
+}
+
+.plugin-config-field-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.plugin-config-field-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plugin-config-source-tag {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .plugin-config-field-value {
   display: flex;
   align-items: center;

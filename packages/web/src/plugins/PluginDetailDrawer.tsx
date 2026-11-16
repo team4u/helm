@@ -137,18 +137,18 @@ export function PluginConfigForm({
           const canReset =
             !isRequiredWithoutDefault && canResetConfigField(schema, source, config.values?.[key])
           return (
-            <div key={key} className="form-grid">
-              <label htmlFor={fieldId} className="form-grid-label">
+            <div key={key} className="form-grid plugin-config-row">
+              <label htmlFor={fieldId} className="form-grid-label plugin-config-field-label">
                 {schema.secret === true && <HelmIcon name="lock" size={11} />}
-                <span>{schema.label ?? key}</span>
+                <span className="plugin-config-field-name">{schema.label ?? key}</span>
                 {schema.required && <span className="text-err">*</span>}
                 {source === 'configured' && (
-                  <span className="badge badge-neutral" title="用户已显式配置">
+                  <span className="badge badge-neutral plugin-config-source-tag" title="用户已显式配置">
                     已配置
                   </span>
                 )}
                 {source === 'default' && (
-                  <span className="text-subtle" title="当前使用默认值">
+                  <span className="text-subtle plugin-config-source-tag" title="当前使用默认值">
                     默认
                   </span>
                 )}
