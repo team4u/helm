@@ -3,6 +3,7 @@
  */
 import {
   HelmError,
+  parseNonEmptyLocalizedText,
   type ActionManifest,
   type ArtifactPreviewerSpec,
   type CommandSpec,
@@ -15,6 +16,7 @@ import {
   type HookOptions,
   type MarkdownCodeBlockSpec,
   type PluginActionContext,
+  type PluginConfigFieldSchema,
   type PluginServiceSpec,
   type PluginSlotContributionSpec,
   type ProfileRuntimeUiSpec,
@@ -52,6 +54,40 @@ export interface CreatePluginContextOptions {
   assertNotDisposed: () => void;
   assertContextUsable: (state: PluginState, epoch: number, what: string) => void;
   isRegisteredState: (state: PluginState) => boolean;
+}
+
+/**
+ * Display-copy guard for ctx.configSchema declarations: label / description,
+ * when present, must be valid non-blank LocalizedText (supported locale keys
+ * only). Pure shape check on the display fields — value semantics stay with
+ * PluginConfigStore at write time.
+ */
+export function assertConfigSchemaDisplayCopy(
+  pluginId: string,
+  schema: Record<string, PluginConfigFieldSchema>,
+): void {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    throw new HelmError('invalid_config_schema', `plugin ${pluginId} configSchema must be object`, 400, { pluginId });
+  }
+  for (const [key, field] of Object.entries(schema)) {
+    if (!field || typeof field !== 'object' || Array.isArray(field)) {
+      throw new HelmError('invalid_config_schema', `plugin ${pluginId} config field ${key} must be object`, 400, {
+        pluginId,
+        field: key,
+      });
+    }
+    for (const copyField of ['label', 'description'] as const) {
+      const value = field[copyField];
+      if (value !== undefined && parseNonEmptyLocalizedText(value) === undefined) {
+        throw new HelmError(
+          'invalid_config_schema',
+          `plugin ${pluginId} config field ${key}  ${copyField} must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`,
+          400,
+          { pluginId, field: key, copyField },
+        );
+      }
+    }
+  }
 }
 
 export function createPluginContext(options: CreatePluginContextOptions): HelmPluginContext {
@@ -111,6 +147,7 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmPl
       if (state.configSchema) {
         throw new HelmError('duplicate_config_schema', `plugin ${pluginId} duplicate declaration configSchema`, 409);
       }
+      assertConfigSchemaDisplayCopy(pluginId, schema);
       state.configSchema = schema;
     },
 

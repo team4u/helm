@@ -17,6 +17,7 @@
 import {
   HelmError,
   RESERVED_SLASH_COMMANDS,
+  parseNonEmptyLocalizedText,
   type PluginUiContribution,
   type UiActionSpec,
 } from '@helm/protocol';
@@ -295,8 +296,8 @@ function validateProfileRuntimeSpec(spec: Record<string, unknown>, id: string, c
     );
   }
   const label = spec['label'];
-  if (typeof label !== 'string' || label.length === 0) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.profileRuntime need to non-empty label`, 400, {
+  if (parseNonEmptyLocalizedText(label) === undefined) {
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.profileRuntime need to non-empty display label`, 400, {
       pluginId,
       id,
     });
@@ -446,8 +447,8 @@ function validateToolViewSpec(spec: Record<string, unknown>, id: string, ctx: Ui
 function validateArtifactPreviewerSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId, fnName } = ctx;
   const label = spec['label'];
-  if (typeof label !== 'string' || label.length === 0) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.artifactPreviewer need to non-empty label`, 400, {
+  if (parseNonEmptyLocalizedText(label) === undefined) {
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.artifactPreviewer need to non-empty display label`, 400, {
       pluginId,
       id,
     });
@@ -476,8 +477,8 @@ function validateArtifactPreviewerSpec(spec: Record<string, unknown>, id: string
 function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   const label = spec['label'];
-  if (typeof label !== 'string' || label.length === 0) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.composerCompleter need to non-empty label`, 400, {
+  if (parseNonEmptyLocalizedText(label) === undefined) {
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.composerCompleter need to non-empty display label`, 400, {
       pluginId,
       id,
     });

@@ -27,7 +27,9 @@ import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   HelmError,
+  LOCALIZED_TEXT_JSON_SCHEMA,
   type HelmHostApi,
+  type LocalizedText,
   type PluginDefinition,
   type PluginDoctorReport,
   type PluginSummary,
@@ -182,7 +184,8 @@ interface AppValidateResult {
   screenIds: string[]
   /** Screen fact source: host-doctor (captured by real temporary registration) / registered (listUi fact) / deferred (no conclusion available when diagnostics fail). */
   screenBasis: 'host-doctor' | 'registered' | 'deferred'
-  summary?: string
+  /** Plugin display name (display copy passthrough; resolve via the active locale). */
+  summary?: LocalizedText
 }
 
 /**
@@ -286,7 +289,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
             checks: { type: 'array', items: { type: 'object' } },
             screenIds: { type: 'array', items: { type: 'string' } },
             screenBasis: { type: 'string', enum: ['host-doctor', 'registered', 'deferred'] },
-            summary: { type: 'string' },
+            summary: LOCALIZED_TEXT_JSON_SCHEMA,
           },
           required: ['ok', 'dir', 'checks', 'screenIds', 'screenBasis'],
           additionalProperties: false,
@@ -459,8 +462,9 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
         {
           apps: Array<{
             pluginId: string
-            name: string
-            description?: string
+            /** Display copy passed through from the plugin summary (resolve via the active locale; JSON keeps the raw shape). */
+            name: LocalizedText
+            description?: LocalizedText
             version?: string
             enabled: boolean
             status?: string
@@ -481,8 +485,8 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
                 type: 'object',
                 properties: {
                   pluginId: { type: 'string' },
-                  name: { type: 'string' },
-                  description: { type: 'string' },
+                  name: LOCALIZED_TEXT_JSON_SCHEMA,
+                  description: LOCALIZED_TEXT_JSON_SCHEMA,
                   version: { type: 'string' },
                   enabled: { type: 'boolean' },
                   status: { type: 'string' },

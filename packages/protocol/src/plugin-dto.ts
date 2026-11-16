@@ -10,7 +10,7 @@
 
 import type { ConversationScope } from './conversation.js'
 import type { AgentNamespacedMeta } from './meta.js'
-import type { ExecutionText } from './locale.js'
+import type { ExecutionText, LocalizedText } from './locale.js'
 
 /** JSON Schema object; validated uniformly by the host at the boundary. */
 export type JsonSchema = Record<string, unknown>
@@ -187,8 +187,10 @@ export interface PluginInUseItem {
 /** Plugin config field schema; secret: true is automatically split into credentials.json. */
 export interface PluginConfigFieldSchema {
   type: 'string' | 'number' | 'boolean'
-  label?: string
-  description?: string
+  /** Display copy for the config form field (resolved by the active UI locale). */
+  label?: LocalizedText
+  /** Display copy describing the field purpose (resolved by the active UI locale). */
+  description?: LocalizedText
   default?: string | number | boolean
   secret?: boolean
   required?: boolean
@@ -247,9 +249,18 @@ export interface PluginDiagnosticError {
 
 export interface PluginSummary {
   id: string
-  name: string
-  /** Short plugin description (from the plugin definition, displayed directly by the frontend, no ID special-casing). */
-  description?: string
+  /**
+   * Display name (display copy): a plain string or a per-locale map, resolved
+   * by the consuming UI via its active locale (CLI human output resolves with
+   * 'en'; --json keeps the raw localized shape). Passed through as declared.
+   */
+  name: LocalizedText
+  /**
+   * Short plugin description (display copy, same resolution rules as `name`).
+   * From the plugin definition, displayed directly by the frontend, no ID
+   * special-casing.
+   */
+  description?: LocalizedText
   /**
    * Linear vector icon name of the plugin (maps to a HelmIcon name, optional).
    * The frontend falls back to the default icon placeholder
@@ -301,7 +312,12 @@ export interface PluginManagedMeta {
 export interface ActionManifest extends PluginPromptFields {
   pluginId: string
   id: string
-  description: string
+  /**
+   * Action description — execution copy (plain string, deliberately never
+   * localized): it feeds CLI help, workflow journals and machine-facing
+   * surfaces, so the active UI locale must never change it.
+   */
+  description: ExecutionText
   inputSchema: JsonSchema
   outputSchema: JsonSchema
   exposeAsTool?: boolean

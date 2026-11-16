@@ -17,6 +17,7 @@ import { readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   HelmError,
+  parseNonEmptyLocalizedText,
   type PluginDefinition,
   type PluginDiagnosticError,
 } from '@helm/protocol';
@@ -105,9 +106,10 @@ async function registerScanFailure(
           stage,
         };
   const { id, meta } = resolveFailedPluginId(dirPath, dirName, existingIds);
+  const metaName = parseNonEmptyLocalizedText(meta['name']);
   plugins.registerFailed({
     id,
-    ...(typeof meta['name'] === 'string' && meta['name'].length > 0 ? { name: meta['name'] } : {}),
+    ...(metaName !== undefined ? { name: metaName } : {}),
     error: { ...error, details: { ...(error.details ?? {}), dirPath } },
   });
   existingIds.add(id);

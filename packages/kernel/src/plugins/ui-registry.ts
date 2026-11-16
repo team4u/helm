@@ -18,6 +18,7 @@ import {
   HelmError,
   assertModuleRefShape,
   clientNpmRootsOf,
+  parseNonEmptyLocalizedText,
   type PluginBuildProvider,
   type PluginClientBundle,
   type PluginClientNpmRoot,
@@ -82,6 +83,22 @@ export class UiRegistry {
         throw new HelmError(
           'invalid_ui_spec',
           `plugin ${pluginId} ui.${fnName}  ${field} must be security integer (actual:${String(value)})`,
+          400,
+          { pluginId, id, field },
+        );
+      }
+    }
+
+    // display copy fields: uniform display-metadata guard for every surface —
+    // when label / title / description is declared it must be a plain string or
+    // a supported-locale map with non-blank values (parseNonEmptyLocalizedText).
+    // Surface-specific required-ness stays in the dedicated validators below.
+    for (const field of ['label', 'title', 'description'] as const) {
+      const value = spec[field];
+      if (value !== undefined && parseNonEmptyLocalizedText(value) === undefined) {
+        throw new HelmError(
+          'invalid_ui_spec',
+          `plugin ${pluginId} ui.${fnName}  ${field} must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`,
           400,
           { pluginId, id, field },
         );

@@ -63,6 +63,8 @@ export type ExecutionText = string
  * Validate and narrow unknown input to `LocalizedText` (boundary guard):
  * plain strings pass through; objects must map supported-locale keys to string
  * values and declare at least one own entry. Anything else returns undefined.
+ * Note: empty/whitespace-only strings are accepted here — use
+ * `parseNonEmptyLocalizedText` where display metadata must be non-empty.
  */
 export function parseLocalizedText(value: unknown): LocalizedText | undefined {
   if (typeof value === 'string') return value
@@ -73,6 +75,24 @@ export function parseLocalizedText(value: unknown): LocalizedText | undefined {
     entries++
   }
   return entries > 0 ? (value as LocalizedText) : undefined
+}
+
+/**
+ * Strict display-metadata guard: `parseLocalizedText` plus a non-empty
+ * (after trim) requirement on the plain string and on every locale entry.
+ * This is the single pure validator for plugin display metadata declared at
+ * registration boundaries (definition name/description, UI spec label/title/
+ * description, config field label/description): unsupported locale keys,
+ * non-string values and blank copy are all rejected.
+ */
+export function parseNonEmptyLocalizedText(value: unknown): LocalizedText | undefined {
+  const parsed = parseLocalizedText(value)
+  if (parsed === undefined) return undefined
+  if (typeof parsed === 'string') return parsed.trim().length > 0 ? parsed : undefined
+  for (const text of Object.values(parsed)) {
+    if (text.trim().length === 0) return undefined
+  }
+  return parsed
 }
 
 /**
@@ -95,6 +115,24 @@ export function resolveLocalizedText(text: LocalizedText, locale: HelmLocale): s
 
 /** Minimal translator: resolves `LocalizedText` to a display string for one locale. */
 export type LocaleTranslator = (text: LocalizedText) => string
+
+/**
+ * Reusable JSON Schema fragment for LocalizedText-typed action output fields
+ * (a plain string or a map over supported locale keys; at least one entry).
+ * Boundary output validation stays honest: localized display copy passes
+ * through instead of being coerced to one locale.
+ */
+export const LOCALIZED_TEXT_JSON_SCHEMA = {
+  anyOf: [
+    { type: 'string', minLength: 1 },
+    {
+      type: 'object',
+      additionalProperties: false,
+      minProperties: 1,
+      properties: { en: { type: 'string' }, 'zh-CN': { type: 'string' } },
+    },
+  ],
+} as const
 
 /** Create a translator bound to a locale (pure; safe to recreate per render). */
 export function createLocaleTranslator(locale: HelmLocale): LocaleTranslator {

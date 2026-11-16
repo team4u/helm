@@ -24,6 +24,7 @@ import {
   type PluginDiagnosticError,
   type PluginDoctorReport,
   type PluginInstallResult,
+  type LocalizedText,
   type PluginReloadResult,
   type PluginRemoveResult,
   type PluginRescanResult,
@@ -167,8 +168,8 @@ export class PluginHost {
 
   registerFailed(spec: {
     id: string;
-    name?: string;
-    description?: string;
+    name?: LocalizedText;
+    description?: LocalizedText;
     version?: string;
     error: PluginDiagnosticError;
   }): void {

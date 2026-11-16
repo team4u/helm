@@ -3,6 +3,7 @@
  */
 import {
   HelmError,
+  parseNonEmptyLocalizedText,
   type PluginDefinition,
   type PluginDiagnosticError,
   type PluginSummary,
@@ -28,6 +29,20 @@ export function assertDefinition(definition: PluginDefinition): void {
   }
   if (!/^[A-Za-z0-9:_-]+$/.test(definition.id)) {
     throw new HelmError('invalid_plugin_definition', `plugin id only allows character parent number : _ -:${definition.id}`, 400);
+  }
+  // Display copy boundary guard: a plain string or a per-locale map with
+  // supported locale keys and non-blank copy (same rule for builtin and
+  // external plugins — no ID special-casing).
+  for (const field of ['name', 'description'] as const) {
+    const value = definition[field];
+    if (value !== undefined && parseNonEmptyLocalizedText(value) === undefined) {
+      throw new HelmError(
+        'invalid_plugin_definition',
+        `plugin ${definition.id}  ${field} must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`,
+        400,
+        { pluginId: definition.id, field },
+      );
+    }
   }
   if (typeof definition.definePlugin !== 'function') {
     throw new HelmError('invalid_plugin_definition', `plugin ${definition.id} missing definePlugin function`, 400);

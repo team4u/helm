@@ -50,6 +50,8 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   HelmError,
+  parseNonEmptyLocalizedText,
+  type LocalizedText,
   type PluginBuildProvider,
   type PluginDefinition,
   type PluginDiagnosticError,
@@ -76,8 +78,8 @@ export interface ExternalPluginHost {
   /** optional:scan / load phase fault occupy register (real PluginHost provide; test stub not implemented when keep old behavior on throw). */
   registerFailed?(spec: {
     id: string;
-    name?: string;
-    description?: string;
+    name?: LocalizedText;
+    description?: LocalizedText;
     version?: string;
     error: PluginDiagnosticError;
   }): void;
@@ -338,9 +340,10 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
   const def = candidate as Record<string, unknown>;
   if (typeof def.id !== 'string' || def.id.length === 0) throw fail('missing non-empty string id');
   // name optional (same protocol PluginDefinition): not provide when render name by PluginHost
-  // back id; provide when must be non-empty string, do not another add required constraint (and built-in plugin same right)
-  if (def.name !== undefined && (typeof def.name !== 'string' || def.name.length === 0)) {
-    throw fail('name provide when must be non-empty string');
+  // back id; provide when must be display copy (non-empty string or supported-locale map), do not
+  // another add required constraint (and built-in plugin same right)
+  if (def.name !== undefined && parseNonEmptyLocalizedText(def.name) === undefined) {
+    throw fail(`name provide when must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`);
   }
   if (def.icon !== undefined && (typeof def.icon !== 'string' || def.icon.trim().length === 0)) {
     throw fail('icon provide when must be non-empty string');

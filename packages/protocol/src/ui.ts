@@ -5,7 +5,7 @@
  */
 
 import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, ConversationSummary, ToolResultTruncation, WhenBusy } from './conversation.js'
-import type { HelmLocale, LocaleTranslator } from './locale.js'
+import type { HelmLocale, LocaleTranslator, LocalizedText } from './locale.js'
 import type { PluginSummary } from './plugin-dto.js'
 
 /** Reserved CSS text export name kept by the compiler; the loader mounts it onto the page only after validating the module. */
@@ -19,11 +19,21 @@ export interface ClientComponentRef {
   export: string
 }
 
-/** Common shape of all UI extension points (client.tsx track only: the declarative JSON spec track has moved out of the kernel and is provided by the builtin:json-render plugin via markdown code blocks). */
+/**
+ * Common shape of all UI extension points (client.tsx track only: the declarative JSON spec track has moved out of the kernel and is provided by the builtin:json-render plugin via markdown code blocks).
+ *
+ * Display copy fields (`title` and the per-surface `label` / `description`) are
+ * `LocalizedText`: a plain string or a per-locale map resolved by the host UI
+ * via its active locale. They never influence execution. The registration
+ * boundary validates them with `parseNonEmptyLocalizedText` (supported locale
+ * keys, non-blank copy) — invalid declarations are rejected, never silently
+ * stripped.
+ */
 export interface UiSpecBase {
   /** Extension-point-unique ID (final addressing is <extension>:<pluginId>/<id>). */
   id: string
-  title?: string
+  /** Display copy for the extension (resolved by the active UI locale). */
+  title?: LocalizedText
   /** client.tsx component reference (requires the plugin definition to provide clientRoot). */
   client?: ClientComponentRef
   /** Conversation scope: render this extension point only for matching conversations (or when no conversation context exists). */
@@ -32,7 +42,7 @@ export interface UiSpecBase {
 
 // 1. sidebar.item & sidebar.section
 export interface SidebarItemSpec extends UiSpecBase {
-  label: string
+  label: LocalizedText
   icon?: string
   /** Click target, e.g. 'conversation:1', 'conversation:profile:superagent', 'screen:builtin:superagent/recall-graph'. */
   target?: string
@@ -40,7 +50,7 @@ export interface SidebarItemSpec extends UiSpecBase {
 }
 
 export interface SidebarSectionSpec extends UiSpecBase {
-  label: string
+  label: LocalizedText
   icon?: string
   /** Conversation filter tag inside the group (e.g. 'worker'). */
   filterTag?: string
@@ -52,7 +62,7 @@ export interface SidebarSectionSpec extends UiSpecBase {
 
 // 2. screen (full-screen custom view, supports left/right split view side by side)
 export interface ScreenSpec extends UiSpecBase {
-  label: string
+  label: LocalizedText
   icon?: string
 }
 
@@ -100,12 +110,16 @@ export interface ToolViewSpec extends UiSpecBase {
 
 // 5. composer.pill & composer.widget
 export interface ComposerPillSpec extends UiSpecBase {
-  label: string
+  label: LocalizedText
   icon?: string
 }
 
 export interface ComposerWidgetSpec extends UiSpecBase {}
-/** Completions only insert text; they never execute commands carried by candidates. */
+/**
+ * Completions only insert text; they never execute commands carried by
+ * candidates. Item labels are runtime data produced by plugin actions/docs
+ * (not registration-time display metadata), so they stay plain strings.
+ */
 export interface ComposerCompletionItem {
   id: string
   label: string
@@ -132,7 +146,7 @@ export type ComposerCompletionSource =
 
 /** Completions are rendered uniformly by the host and accept no client callbacks or views. '/' is reserved for commands and skills. */
 export interface ComposerCompleterSpec extends Omit<UiSpecBase, 'client'> {
-  label: string
+  label: LocalizedText
   trigger: '@' | '#' | ':'
   priority?: number
   source: ComposerCompletionSource
@@ -140,7 +154,7 @@ export interface ComposerCompleterSpec extends Omit<UiSpecBase, 'client'> {
 
 /** Exact MIME values or type/*; extensions are dot-prefixed lowercase suffixes (including multi-segment suffixes). The two matchers are OR-combined. */
 export interface ArtifactPreviewerSpec extends UiSpecBase {
-  label: string
+  label: LocalizedText
   icon?: string
   priority?: number
   mimeTypes?: string[]
@@ -178,7 +192,7 @@ export interface WorkbenchPanelBadgeSpec {
 }
 
 export interface WorkbenchPanelSpec extends UiSpecBase {
-  label: string
+  label: LocalizedText
   icon?: string
   order?: number
   /** Dynamic badge and status bar config (drives workbench drawer tab counts, footer summaries and the top bar "Workbench" aggregate badge). */
@@ -187,11 +201,12 @@ export interface WorkbenchPanelSpec extends UiSpecBase {
 
 // 7. commandPalette (⌘K) & settings.panel
 export interface CommandSpec extends UiSpecBase {
-  title: string
+  title: LocalizedText
   icon?: string
   /** Trigger word without /; also derives the composer slash menu. Must not override host reserved commands. */
   slash?: string
-  description?: string
+  /** Display copy describing the command (resolved by the active UI locale). */
+  description?: LocalizedText
   /** Quick commands reuse the ctx.action endpoint. */
   actionId?: string
   actionPluginId?: string
@@ -200,7 +215,7 @@ export interface CommandSpec extends UiSpecBase {
 }
 
 export interface SettingsPanelSpec extends UiSpecBase {
-  label: string
+  label: LocalizedText
   order?: number
 }
 
@@ -208,9 +223,10 @@ export interface SettingsPanelSpec extends UiSpecBase {
 export interface ProfileRuntimeUiSpec {
   id: string
   kind: string
-  label: string
+  label: LocalizedText
   icon?: string
-  description?: string
+  /** Display copy describing the runtime (resolved by the active UI locale). */
+  description?: LocalizedText
   agentSuggestions?: string[]
   order?: number
 }
@@ -218,7 +234,7 @@ export interface ProfileRuntimeUiSpec {
 /** Unified UI action declaration: one shape serves three micro slots (distinguished by target), no more duplicated methods. */
 export interface UiActionSpec extends UiSpecBase {
   target: 'conversation:header' | 'conversation:row' | 'timeline:entry'
-  label: string
+  label: LocalizedText
   icon?: string
   order?: number
   /** conversation:header only: 'toolbar' renders direct buttons, 'menu' (default) folds into the dropdown. */

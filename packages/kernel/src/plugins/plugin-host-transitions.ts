@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   HelmError,
   type HookName,
+  type LocalizedText,
   type PluginConfigFieldSchema,
   type PluginDefinition,
   type PluginDiagnosticError,
@@ -175,8 +176,8 @@ export async function rollbackEnablePlugin(
 export function registerFailedPlaceholder(
   spec: {
     id: string;
-    name?: string;
-    description?: string;
+    name?: LocalizedText;
+    description?: LocalizedText;
     version?: string;
     error: PluginDiagnosticError;
   },

@@ -32,6 +32,7 @@ import type {
 } from './env-rpc.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
 import type { AgentNamespacedMeta } from './meta.js'
+import type { LocalizedText } from './locale.js'
 import type {
   ActionManifest,
   AgentExecutionInfo,
@@ -926,11 +927,21 @@ export interface HelmPluginContext<TConfig = Record<string, unknown>> {
 }
 
 export interface PluginDefinition {
-  /** 插件 ID，如 'builtin:profile'、'builtin:herdr'。 */
+  /** Plugin ID, e.g. 'builtin:profile', 'builtin:herdr'. */
   id: string
-  name?: string
-  /** 插件简短功能描述：面向插件中心卡片与 CLI 列表展示，一句话说明职责边界。 */
-  description?: string
+  /**
+   * Plugin display name (display copy, `LocalizedText`): a plain string or a
+   * `{ en, 'zh-CN' }` map, resolved by the consuming UI via its active locale
+   * (CLI human output resolves with 'en'; --json keeps the raw shape). The
+   * registration boundary validates it with parseNonEmptyLocalizedText
+   * (supported locale keys, non-blank copy).
+   */
+  name?: LocalizedText
+  /**
+   * Short plugin description (display copy, same resolution rules as `name`):
+   * shown on plugin-center cards and CLI listings, one sentence on scope.
+   */
+  description?: LocalizedText
   /**
    * 插件线性矢量图标名称（对应 HelmIcon name，可选）。
    * 缺省时使用默认图标占位。
