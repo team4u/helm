@@ -976,7 +976,7 @@ test('草稿状态输入 /：弹出内置命令、按 Profile 过滤的技能与
   await act(async () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
   })
-  assert.equal(document.querySelector('.agent-standby-pane .composer-popover'), null, 'Esc 关闭斜杠浮层')
+  assert.ok(document.querySelector('.agent-standby-pane .composer-popover') === null, 'Esc 关闭斜杠浮层')
   assert.equal(state.createCalls.length, 0)
 
   // 切换到 skills: [] 的 coder 待命页：浮层关闭且不展示任何技能
@@ -1001,7 +1001,7 @@ test('草稿状态输入 / 过滤与回填技能：仅替换触发 token，随�
   // 路径中段斜杠不误触发
   act(() => { typeInto(input, 'src/index') })
   await settle()
-  assert.equal(document.querySelector('.agent-standby-pane .composer-popover'), null, '路径中段 / 不误弹出')
+  assert.ok(document.querySelector('.agent-standby-pane .composer-popover') === null, '路径中段 / 不误弹出')
 
   // 保留前文 + 触发 /rev 过滤，Enter 选中回填 /skill:review （带尾空格），不预建会话
   act(() => { typeInto(input, '请执行 /rev') })
@@ -1021,7 +1021,7 @@ test('草稿状态输入 / 过滤与回填技能：仅替换触发 token，随�
   await act(async () => { pressEnter(input) })
   await settle()
   assert.equal(input.value, '请执行 /skill:review ', '仅替换 /rev token，保留前缀文本')
-  assert.equal(document.querySelector('.agent-standby-pane .composer-popover'), null, '选中回填后浮层关闭')
+  assert.ok(document.querySelector('.agent-standby-pane .composer-popover') === null, '选中回填后浮层关闭')
   assert.equal(state.createCalls.length, 0, '回填技能不提前创建会话')
 
   // 补充指令后 Enter 才真正 create -> submit
@@ -1057,7 +1057,7 @@ test('草稿状态插件斜杠命令：浮层选中即执行且关闭浮层，�
   assert.equal(state.actionCalls[0]!.pluginId, 'p1')
   assert.equal(state.actionCalls[0]!.actionId, 'ping')
   assert.deepEqual(state.actionCalls[0]!.body, { input: { source: 'standby' } }, '未锚定时不伪造 conversationId')
-  assert.equal(document.querySelector('.agent-standby-pane .composer-popover'), null, '执行插件命令后浮层关闭')
+  assert.ok(document.querySelector('.agent-standby-pane .composer-popover') === null, '执行插件命令后浮层关闭')
   assert.equal(input.value, '草稿前缀 ', '仅消费触发 token，保留其余草稿')
   assert.equal(state.createCalls.length, 0, '执行插件命令不创建会话')
 
@@ -1132,7 +1132,7 @@ test('草稿状态输入 @：弹出点名角色候选（携带 profileId）、�
   // 邮箱中间 @ 不误触发
   act(() => { typeInto(input, 'user@example.com') })
   await act(async () => { await new Promise((r) => setTimeout(r, 200)) })
-  assert.equal(document.querySelector('.composer-completion-popover'), null, '邮箱中间 @ 不误弹出')
+  assert.ok(document.querySelector('.composer-completion-popover') === null, '邮箱中间 @ 不误弹出')
 
   // 行中空白后输入 @co：防抖触发 action 查询（携带 profileId: assistant，不伪造 conversationId）
   act(() => { typeInto(input, '请帮我找 @co') })
@@ -1149,7 +1149,7 @@ test('草稿状态输入 @：弹出点名角色候选（携带 profileId）、�
   await act(async () => { pressEnter(input) })
   await settle()
   assert.equal(input.value, '请帮我找 @coder ', '仅替换 @co token，保留前缀')
-  assert.equal(document.querySelector('.composer-completion-popover'), null, '选中后浮层关闭')
+  assert.ok(document.querySelector('.composer-completion-popover') === null, '选中后浮层关闭')
   assert.equal(state.createCalls.length, 0, '选中 @ 候选不提前创建会话')
   assert.equal(state.submitCalls.length, 0)
 
@@ -1192,7 +1192,7 @@ test('草稿状态输入 # / :：支持全局 doc 补全源并正常替换；ses
   await act(async () => { pressEnter(input) })
   await settle()
   assert.equal(input.value, '#缺陷 ')
-  assert.equal(document.querySelector('.composer-completion-popover'), null)
+  assert.ok(document.querySelector('.composer-completion-popover') === null)
   assert.equal(state.createCalls.length, 0)
 
   // sessionDoc 源在无会话的草稿态下明确提示，不无限 loading
@@ -1204,5 +1204,5 @@ test('草稿状态输入 # / :：支持全局 doc 补全源并正常替换；ses
   await act(async () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
   })
-  assert.equal(document.querySelector('.composer-completion-popover'), null, 'Escape 关闭补全浮层')
+  assert.ok(document.querySelector('.composer-completion-popover') === null, 'Escape 关闭补全浮层')
 })
