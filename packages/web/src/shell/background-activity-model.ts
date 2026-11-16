@@ -1,9 +1,12 @@
 /**
  * 侧栏「会话后台在途」纯函数层（零 React/DOM 依赖，单测直测）。
  *
- * 数据源：复用通用 workbench.panel badge 契约——启用插件的
- * groupedUi.workbenchPanels 中声明 badge.byConversationField 的面板，其 public doc
- * 提供按会话索引的 { count, tone?, footerText? }（resolveWorkbenchPanelBadge 解析）。
+ * 数据源：
+ * 1. 复用通用 workbench.panel badge 契约——启用插件的 groupedUi.workbenchPanels 中
+ *    声明 badge.byConversationField 的面板，其 public doc 提供按会话索引的
+ *    { count, tone?, footerText? }（resolveWorkbenchPanelBadge 解析）。
+ * 2. 会话上下文精简态——conversation.contextUsage?.compacting === true（内核异步
+ *    compaction 在途，无需额外插件 doc，直接归并入同一在途索引与摘要「上下文精简中」）。
  * 本层不感知任何插件 ID、不新增协议字段；纯函数只做推导，badge doc 的按需
  * 加载由 Sidebar 的 effect 调 store.ensurePluginDoc 完成（纯函数零副作用）。
  *
@@ -15,7 +18,7 @@
  *   tone = 'warn'（如后台失败汇总）都不点亮在途环——计数与失败已在工作台
  *   角标可见，不在途就不冒充在途；
  * - count 不参与判定（含全部历史，不区分在途）；
- * - footerText 原样进入 tooltip 摘要（去重后「 · 」拼接），绝不解析字符串含义。
+ * - footerText 与「上下文精简中」原样进入 tooltip 摘要（去重后「 · 」拼接），绝不解析字符串含义。
  */
 
 import type { ConversationSummary, WorkbenchPanelSpec } from '@helm/protocol'
@@ -27,22 +30,39 @@ import { AGENT_SUB_LIST_PREVIEW, conversationStatusDotClass, conversationStatusT
 /** 摘要片段分隔符（与工作台底部状态栏 footerText 拼接风格一致）。 */
 const SUMMARY_SEPARATOR = ' · '
 
-/** 单个会话的后台在途摘要（由命中面板的按会话角标聚合）。 */
+/** 上下文精简进行中的后台在途摘要文案。 */
+const COMPACTING_SUMMARY = '上下文精简中'
+
+/** 单个会话的后台在途摘要（由命中面板的按会话角标与上下文精简态聚合）。 */
 export interface ConversationBackgroundActivity {
-  /** 存在在途后台任务（任一命中面板的按会话角标 tone = 'accent'）。 */
+  /** 存在在途后台任务（任一命中面板的按会话角标 tone = 'accent'，或 contextUsage.compacting = true）。 */
   active: boolean
-  /** 运行摘要文案：各命中角标 footerText 去重后拼接（可为空串）。 */
+  /** 运行摘要文案：各命中角标 footerText 与精简文案去重后拼接（可为空串）。 */
   summary: string
 }
 
 /** 会话后台在途索引（key: conversationId；侧栏各会话行按 id 查询）。 */
 export type ConversationBackgroundIndex = ReadonlyMap<number, ConversationBackgroundActivity>
 
+/** 把非空且未重复的摘要片段并入指定会话的后台在途条目。 */
+function appendBackgroundSummary(
+  result: Map<number, ConversationBackgroundActivity>,
+  conversationId: number,
+  fragment: string,
+): void {
+  const text = fragment.trim()
+  const prev = result.get(conversationId)
+  const parts = prev === undefined || prev.summary === '' ? [] : prev.summary.split(SUMMARY_SEPARATOR)
+  if (text !== '' && !parts.includes(text)) parts.push(text)
+  result.set(conversationId, { active: true, summary: parts.join(SUMMARY_SEPARATOR) })
+}
+
 /**
  * 汇总每个会话的后台在途摘要：
- * - 只消费声明 badge.byConversationField 的启用面板，且会话必须命中 panel.spec.scope；
- * - tone = 'accent' 的按会话条目把该会话标记为在途并汇入 footerText；
- * - 插件停用后其 UI 贡献与 doc 均从 store 消失，本函数自然归零。
+ * - 消费声明 badge.byConversationField 的启用面板（会话须命中 panel.spec.scope），
+ *   将 tone = 'accent' 的条目标记为在途并汇入 footerText；
+ * - 检查每个会话的 contextUsage?.compacting === true，将其标记为在途并汇入「上下文精简中」；
+ * - 插件停用后其 UI 贡献与 doc 均从 store 消失，面板来源自然归零。
  */
 export function summarizeConversationBackgroundActivity(input: {
   panels: ReadonlyArray<QualifiedUiSpec<WorkbenchPanelSpec>>
@@ -61,11 +81,12 @@ export function summarizeConversationBackgroundActivity(input: {
       if (!matchesUiScope(conversation, panel.spec.scope)) continue
       const resolved = resolveWorkbenchPanelBadge(badge, docValue, conversation.id)
       if (resolved.tone !== 'accent') continue
-      const footer = resolved.footerText?.trim() ?? ''
-      const prev = result.get(conversation.id)
-      const parts = prev === undefined ? [] : prev.summary === '' ? [] : prev.summary.split(SUMMARY_SEPARATOR)
-      if (footer !== '' && !parts.includes(footer)) parts.push(footer)
-      result.set(conversation.id, { active: true, summary: parts.join(SUMMARY_SEPARATOR) })
+      appendBackgroundSummary(result, conversation.id, resolved.footerText ?? '')
+    }
+  }
+  for (const conversation of input.conversations) {
+    if (conversation.contextUsage?.compacting === true) {
+      appendBackgroundSummary(result, conversation.id, COMPACTING_SUMMARY)
     }
   }
   return result
@@ -153,7 +174,7 @@ export function resolveStandingStatusIndicator(
 
 /**
  * 会话在途判定（供折叠预览保留）：主回合 working/blocked，或存在后台在途
- * （badge tone = accent）。复用本模型的后台在途索引，不重复实现后台活动判定。
+ * （badge tone = accent 或 contextUsage.compacting = true）。复用本模型的后台在途索引，不重复实现后台活动判定。
  */
 export function isConversationInFlight(
   conv: Pick<ConversationSummary, 'id' | 'status'>,

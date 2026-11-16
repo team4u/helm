@@ -6,12 +6,13 @@
  *   这是「等待你」，不是机器活动，不阻止「机器停下」通知；
  * - 后台在途：summarizeConversationBackgroundActivity 的按会话索引
  *   （workbench 面板角标 tone = 'accent'，如 builtin:workflow 运行中的后台
- *   子代理与 DSL run），插件停用后索引自然归零；
+ *   子代理与 DSL run，以及会话 contextUsage.compacting = true 上下文精简），
+ *   插件停用后对应面板贡献与 doc 自然归零；
  * - badge doc 未知：启用面板所需的按会话角标 doc 尚未首次加载时，后台在途
  *   事实不可知——保持 unknown，绝不据此宣称安静（宁可晚提醒，不误报空闲）。
  *
  * 「机器活动」判定（任一命中即 active）：任一会话 status = working，或任一
- * 会话存在后台在途（accent 角标）。blocked 不在其中：等待人类不是机器在忙。
+ * 会话存在后台在途（accent 角标或上下文精简中）。blocked 不在其中：等待人类不是机器在忙。
  *
  * 通知只在「忙碌周期」结算时产生（见 use-quiet-notifier 的防抖与累积）：
  * 机器活动期间累计参与会话（跨多个被活动取消的安静防抖窗口保留），安静
@@ -31,7 +32,7 @@ export type BrowserNotificationPermission = 'default' | 'granted' | 'denied' | '
 
 /** 全局活动快照：机器活动 / 等待人类 / badge doc 未知三轴正交，是通知状态机的唯一输入。 */
 export interface ActivitySnapshot {
-  /** 机器在途（主回合 working 或后台 accent 角标）的会话 ID 集合。 */
+  /** 机器在途（主回合 working、后台 accent 角标或上下文精简中）的会话 ID 集合。 */
   activeConversationIds: ReadonlySet<number>
   /** 等待人类输入/审批（status = blocked）的会话 ID 集合——不是机器活动。 */
   blockedConversationIds: ReadonlySet<number>
@@ -50,7 +51,7 @@ export function resolveActivitySnapshot(input: {
   const activeConversationIds = new Set<number>()
   const blockedConversationIds = new Set<number>()
   for (const conversation of input.conversations) {
-    // 后台 accent 优先于五态：blocked/idle 父会话名下后台仍在跑就是机器在途。
+    // 后台在途（accent 角标或上下文精简）优先于五态：blocked/idle 父会话名下后台仍在跑就是机器在途。
     if (conversation.status === 'working' || input.background.get(conversation.id)?.active === true) {
       activeConversationIds.add(conversation.id)
     }
