@@ -1,77 +1,87 @@
-# SuperAgent 双层中枢与看门狗插件
+# SuperAgent 双层中枢插件
 
-`builtin:superagent` 是实验性双层中枢（可选启用）：一个常驻 SuperAgent 中枢会话承担 0 阻塞总控路由，点名任意 Profile 专家派生后台驻留 Worker 执行长任务；一个常驻巡检看门狗会话配合插件自管服务完成两层巡检与自愈。角色全部经 `profileId` 表达（`superagent` / `watchdog`），不重复打角色 Tag，内核零角色硬编码。
+`builtin:superagent` 解决「人类不想逐条回答派工问题、系统要有人兜底巡检」的问题：双层中枢 = 总控路由会话（Router）+ 驻留后台 Worker + RecallGraph 记忆图谱，外加一套自管的两层巡检看门狗（Watchdog）。适合把批量任务、长期值守和自动恢复交给中枢的使用者。它与 `builtin:workflow` 的受管子代理是两套并行机制：Worker 经 `dispatch_worker` 派生（`createConversation`，不经 `agent_spawn` 管道），不进深度登记表。
 
-## 常驻会话与自举资产
+## 当前状态
 
-首次启用时动态创建并持久化两个专属会话（ID 记录于公开文档 `index`，不硬编码）：
+默认停用，显式 `helm plugins enable builtin:superagent` 启用。启用时自举两个常驻 Profile（`superagent` 中枢、`watchdog` 看门狗，含 SYSTEM.md 资产与 `watchdog-playbooks` 技能包），创建两个受管会话（`manageConversation` 删除保护、归属标记 `helm`）。停用期间 `helm.rewind` 造成的 RecallGraph 漂移在下次启用时分页重放补偿。
 
-| 会话 | profileId | 职责 |
+## 能力和入口
+
+### 路由与 Worker
+
+- **L0 确定性路由（`trigger` 钩子）**：`mutedSources` 命中的事件 0-Token 丢弃；`threadKey` 命中活跃 Worker 订阅时 `transform` 直投该 Worker（0ms 直通）；失效订阅清理后回落常规路由；无显式目标的信封缺省路由中枢会话。
+- **路由收敛模式**（`routerMode`，默认开启）：`before_turn` 对中枢会话剥离重度阻塞工具（`edit / write / bash / subagent / SubagentWorkflow`）并注入 `<active_workers>` 态势段落；`tool_call` 钩子二次守卫。中枢保持轻量回合，耗时执行全部发生在 Worker 会话。
+- **输入 origin 追踪与自动汇报**：Worker 回合 `turn_settled` 时先写 RecallGraph；本回合消费输入含 `agent` / `trigger` 来源即向中枢投递结构化汇报卡（`meta.renderer: 'superagent:worker-report'`，前端 timelineRenderer 渲染）；纯 `human` 回合仅静默更新图谱。
+- **RecallGraph**：公开文档 `recall-graph` 持久化结算节点（会话 / profileId / completionSeq / inputIds / outcome / 摘要 / 产物元数据 / 关键词）。`helm.rewind` 回退输入时（实时事件 + 启用期重放补偿）`omittedInputIds` 命中节点即时删除。
+
+### 动作与工具（五端复用）
+
+| 入口 | 形态 | 说明 |
 | :--- | :--- | :--- |
-| SuperAgent 中枢 | `superagent` | 承接综合需求，识别意图并派工；`skills: []` 禁用全部技能（只做路由调度，不消费排障手册） |
-| 巡检看门狗 | `watchdog` | 接收异常事实、按技能规则推理处置；`skills: ['watchdog-playbooks']` 仅可见本插件自举的排障手册 |
+| `dispatch_worker` | 动作（仅 superagent Profile 会话） | 非阻塞派生后台 Worker（立即返回 `workerConversationId`，绝不同步等待模型回合） |
+| `inspect_worker` | 动作 | 读取 Worker 最近时间线摘要与产物列表 |
+| `recall_context` | 动作 | 检索 RecallGraph（多词 AND） |
+| `subscribe_thread` / `archive_worker` | 动作 | threadKey 订阅绑定（冲突显式拒绝不抢占）/ 归档已完成 Worker（解绑订阅、标签换 `worker-archived`；运行中拒绝） |
+| `set_router_mode` | 动作 | 持久修改路由收敛模式（写插件配置，即时生效） |
+| `watchdog_inspect` / `watchdog_recover` / `watchdog_abort` | 工具 + 同名动作 | L2 认知排障专属工具；`scope` 限定 watchdog Profile 且执行期核对会话 ID；`inspect` 附会话 cwd 进程占用快照（`activeProcesses`，探测失败不伪造空清单） |
+| `watchdog_tick` | 动作 | 手动触发一次巡检 |
 
-插件启动时经 `ctx.host.manageConversation` 接管两个会话（启用期间删除保护，`409 conversation_managed_by_plugin`）并标记归属权 `ownedBy: 'helm'`；停用时自动释放。自举资产（`superagent` / `watchdog` Profile 的 profile.json + SYSTEM.md、`watchdog-playbooks` 技能含 `references/herdr-stalled.md`、`references/ci-failure.md` 与 `references/code-hang-loop.md`）逐文件幂等补齐，既有文件一律不覆盖。归属冲突防护：记录的会话当前 `profileId` 与期望不符时显式 `409 superagent_resident_conversation_conflict` 拒绝占用，请人工核对。
+`dispatch_worker` 是本插件专属协议，与 `subagent` 的 `background` 参数无关、不得当作通用后台派生入口。Worker 会话属 `ownedBy: 'helm'` 自动化会话，其派生任务按归属策略缺省同步。
 
-启用期间还补偿停用遗漏的 `helm.rewind` 联动：分页重放全部有召回节点会话的 rewind 标记，删除 `omittedInputIds` 命中的 RecallGraph 节点；运行期则经 `conversation.entry` 事件实时联动。
+### 两层巡检看门狗
 
-## 0 阻塞总控路由
+巡检完全由插件自有 `ctx.service` 驱动（内核无巡检定时器、无 `watchdog_tick` Hook）。singleflight 定时 tick（默认 15s）流程：
 
-中枢的核心工具经 `ctx.tool` 注册（`scope: { profileIds: ['superagent'] }` 会话过滤 + 执行期二次校验双保险），同名 `ctx.action` 复用同一 handler 供 HTTP / CLI 五端调用：
-
-| 能力 | 形态 | 说明 |
-| :--- | :--- | :--- |
-| `dispatch_worker` | 工具 + 动作 | 非阻塞派生后台 Worker：`createConversation`（`tags: ['worker']`、父会话为中枢、可选 `profileId` / `title` / `threadKey` / `cwd` / `nodeId`）+ `submitInput(origin: 'agent')` 后立即返回 `workerConversationId`，绝不同步等待模型回合。禁止派生中枢/看门狗 Profile（防自激）；提交失败显式回滚登记与订阅 |
-| `inspect_worker` | 工具 + 动作 | 读取 Worker 最近时间线摘要与产物列表 |
-| `recall_context` | 工具 + 动作 | 检索 RecallGraph 召回图谱（多词 AND 过滤，limit 1..100） |
-| `subscribe_thread` | 工具 + 动作 | 将 threadKey 订阅绑定到指定 Worker（已被活跃 Worker 订阅时显式 `409` 拒绝抢占） |
-| `archive_worker` | 动作 | 归档已完成 Worker：`worker` 标签换 `worker-archived`、解绑订阅、移出登记；运行中（working/blocked）或正在结算的 Worker 拒绝归档 |
-| `set_router_mode` | 动作 | 持久修改中枢路由收敛模式（写插件配置 `routerMode`，即时生效） |
-
-**路由收敛模式**（`routerMode`，默认开启）下，`before_turn` 对中枢会话剥离重度阻塞工具（`edit / write / bash / subagent / SubagentWorkflow`）并注入 `<active_workers>` 态势段落；`tool_call` 钩子对被剥离工具二次守卫 block（提示改用 `dispatch_worker` 派工）。中枢因此保持轻量回合——所有耗时执行都发生在 Worker 会话。`mutedSources` 配置（逗号/换行分隔的精确 source 名）命中的触发事件在 `trigger` 钩子 0-Token 丢弃。
-
-边界：`dispatch_worker` 是本插件专属的非阻塞 Worker 协议（`createConversation` + `origin: 'agent'` 输入，不经 `agent_spawn` 管道），与 `builtin:workflow` `subagent` 的 `background` 参数无关、不得当作通用后台派生入口使用，也绝不同步等待模型回合；Worker 结果经独立 `turn_settled` → 中枢汇报链回传（见「输入 origin 追踪与自动汇报」）。Worker 会话属 `ownedBy: 'helm'` 自动化会话，其派生任务按归属策略缺省同步。
-
-## 输入 origin 追踪与自动汇报
-
-每次提交的输入携带来源 `origin: 'human' | 'agent' | 'trigger'`。Worker 回合结算时（`turn_settled` 统一覆盖 `completed / failed / aborted` 三态），插件先无条件把结算摘要写入 RecallGraph；随后检查本回合消费输入的来源——只要含任一 `agent` 或 `trigger` 来源，即向中枢投递结构化汇报卡片（`submitInput` 携带 `meta.renderer: 'superagent:worker-report'`，前端经 timelineRenderer 渲染为汇报卡）；纯 `human` 回合仅静默更新图谱，不打扰中枢。汇报失败显式上报错误（reportError 通道同步投递中枢），不吞。
-
-## ThreadKey 0ms 直通路由
-
-`trigger` 钩子实现事件直通：入站信封携带 `threadKey` 且订阅表命中活跃 Worker 时，`transform` 改写 `targetConversationId` 直投该 Worker，跳过中枢意图识别实现零延迟直达；订阅指向已失活的 Worker 时清理失效订阅后回落常规路由。无 threadKey 且无显式目标的信封缺省路由中枢（`superagent` 插件未启用时回落内核缺省策略）。`mutedSources` 命中检查先于一切。
-
-## RecallGraph 召回图谱
-
-公开文档 `recall-graph` 持久化结算节点：每节点含会话 ID、profileId、completionSeq、本回合消费的 inputIds、outcome、摘要、产物元数据与关键词。中枢接受新需求时经 `recall_context` 检索历史任务摘要，优先复用已有上下文的 Worker，减少重复冷启动。`helm.rewind` 回退输入时（`conversation.entry` 事件实时捕获 + 启用期分页重放补偿），`omittedInputIds` 命中的节点即时删除，图谱与会话历史保持一致。
-
-## 两层巡检看门狗
-
-巡检周期完全由插件自有 `ctx.service`（`superagent-watchdog`）驱动——内核不内置巡检定时器、不存在 `watchdog_tick` Hook。singleflight 定时 tick（默认 15s）的流程：
-
-**Layer 1 机械探针（0-Token 规则表）**：先经 `ctx.host` 只读端口（`listConversations` / `getConversationOwnership`）与插件自有的会话活动统计构造原生会话事实，再以 `diagnostics.collect` 进程内事件（`broadcast: false`，await 全部监听器）采集外部探针——`builtin:herdr` 监听该事件追加自有窗格的真实探针。汇总后按确定性规则表分类处置：
+- **Layer 1 机械探针（0-Token 规则表）**：经 `ctx.host` 只读端口与真实事件驱动的会话活动统计构造原生会话事实，再以 `diagnostics.collect` 进程内事件（`broadcast: false`，await 全部监听器）采集外部探针——`builtin:herdr` 监听该事件追加自有窗格探针。按确定性规则表处置：
 
 | 异常形态 | 处置 |
 | :--- | :--- |
-| owned 会话 blocked 且无待答 Ask | `bridge_to_ask`：创建恢复/中止确认 AskDoc |
+| owned 会话 blocked 且无待答 Ask | `bridge_to_ask` 创建恢复/中止确认 |
 | owned 会话超长停滞（≥ `abortAfterMs`，默认 30 分钟） | `auto_abort_and_notify` + 唤醒 L2 |
-| 持续 error 或连续错误达阈值（`errorThreshold`，默认 3） | `wake_watchdog` 交认知层判断 |
-| 停滞达唤醒阈值（`stalledAfterMs`，默认 5 分钟） | `wake_watchdog` |
+| 持续 error 或连续错误达 `errorThreshold`（默认 3） | `wake_watchdog` |
+| 停滞达 `stalledAfterMs`（默认 5 分钟） | `wake_watchdog` |
 | human 归属异常 / 外部窗格无权威 seq | 仅只读通知 |
-| 外部窗格连续不可达达阈值 | 唤醒 L2 + 通知 |
-| `workflow_run` 失败探针（helm 归属，冷却期满） | `auto_resume` 断点续跑（见下文） |
+| `workflow_run` 失败探针（helm 归属，冷却期满） | `auto_resume` 断点续跑 |
 
-去重状态持久化于私有 doc：同 `(targetKind, nodeId, targetId, stateChangeSeq)` 同类动作恰好一次，未达阈值绝不预先占坑，跨重启不重复危险动作；文档损坏显式报错拒绝巡检（回空会令已处理动作重放）。
+去重状态持久化于私有 doc：同 `(targetKind, nodeId, targetId, stateChangeSeq)` 同类动作恰好一次，跨重启不重复危险动作；文档损坏显式报错拒绝巡检。`workflow_run` 续跑链路：冷却退避按已续跑次数 0/1/2 → 2/5/15 分钟，达 3 次上限交人类；每 tick 最多恢复 1 个且最旧失败优先；经 `host.invokeAction('builtin:workflow', 'run', { resumeFromRunId, ... })` 从断点恢复。
 
-**workflow_run 失败断点续跑**：`builtin:workflow` 经 `diagnostics.collect` 事件追加 `kind=workflow_run` 的失败 Run 探针（`ownedBy: 'helm'`，`stateChangeSeq` 即 `autoResumeCount`）。该类探针走独立确定性 0-Token 链路，不进通用外部状态规则（error 直接唤醒 L2 会绕过冷却与限流）：事实（`runId` / `conversationId` / `failedAt` / `autoResumeCount`）严格校验，残缺或缺权威 seq 时 `notify_only` 不猜造；严格仅 `helm` 归属后台探针（human/bot 只通知）；冷却退避按已续跑次数 0/1/2 → 2/5/15 分钟，未满冷却零动作，续跑达 3 次上限后交人类处置。冷却期满经 `host.invokeAction('builtin:workflow', 'run', { resumeFromRunId, conversationId })` 从断点恢复；每 tick 最多恢复 1 个 Run 且按 `failedAt` 升序（最旧失败优先，防网关刚恢复时同时唤醒多个大工作流再次打挂接口）。防重不占去重文档坑位——依赖探针侧 `resumedByRunId` / `stateChangeSeq` 机制（续跑成功的旧 Run 不再上报、新失败 Run 携带新水位），执行层仅加内存 in-flight（防相邻 tick 重叠）与失败后 10 分钟重试推迟。
-
-会话活动统计（真实无活动时钟与连续失败计数）由插件订阅真实事件维护：`conversation.live`（内核已按内容指纹去重，插件侧再按 run 进度字段过滤，仅 queuedInputs 变化的帧不算活动）、`conversation.upsert`（working 摘要即 run 启动/doing 翻转，首字前唯一活动信号）、`turn_settled` 钩子（failed 递增、completed 归零、aborted 保持；回合结束清活动时钟）与 `conversation.deleted`（统计清理）。绝不用每帧心跳假活动；停用后随订阅自动解除，无统计 timer/observer 残留；重启后无活动记录时不报停滞（不伪造时钟起点）。
-
-**Layer 2 认知推理**：Layer 1 判定需认知排障时，把异常事实（XML 转义防逃逸，不用反引号围栏杜绝 prompt 注入面）合并投递到看门狗会话（`origin: 'agent'` / `followUp`）。模型结合 `watchdog-playbooks` 技能手册推理根因与处置，经专属工具落地：`watchdog_inspect`（现查目标真实详情，只读；conversation 模式附会话工作目录 `(nodeId ?? 'local', cwd)` 的进程占用快照 `activeProcesses`——经 `host.inspectNodePathUsage` 现查并逐项脱敏为 `{pid, name, source, path}`，探测失败（节点离线等）或 cwd 为空时字段缺省、不伪造空清单）、`watchdog_recover`（向 owned 会话提交恢复提示，`whenBusy: 'steer'`）、`watchdog_abort`（中止 owned 会话，human/中枢/看门狗自身拒绝）。三个工具 `scope` 限定 watchdog Profile 且执行期核对实际 watchdog 会话 ID（防同 Profile 人类直聊滥用）；同名 `ctx.action` 供 HTTP/CLI（`helm superagent watchdog_*`）。手册 `references/code-hang-loop.md` 即围绕该快照展开：结合最近时间线与 `activeProcesses` 定位卡死进程（如卡在工作树目录里的 vitest / node / python，按 `pid` / `name` / `path` 识别归属），经 `watchdog_recover` 以 steer 提示交目标会话自行终止进程并续跑；停滞达 `abortAfterMs` 时 L1 已 `auto_abort_and_notify` 中止回合交外层重试，L2 只复核中止与重试结果，不重复中止。
+- **Layer 2 认知推理**：把异常事实（XML 转义防逃逸）投递看门狗会话，结合 `watchdog-playbooks` 技能推理根因，经上述三个专属工具落地处置。
 
 ### 归属权红线（内核执行层强制）
 
-`ownedBy: 'human'` 的人类直连会话与 Herdr 终端窗格**严禁发送任何按键或中止指令**，仅允许只读诊断与通知（未标记一律按 human 处理）。一切自动化中止与输入提交统一走内核 guarded 端口（`ctx.host.abortConversationGuarded` / `submitInputGuarded`）：探针观测的 `ownedBy` 与 `stateChangeSeq` 随调用传入，内核在会话串行域内、于第一个不可逆动作前同步复核，human 红线在执行层原子兑现，不再依赖插件侧 check-then-act。外部窗格的中止只能经核对 `facts.parentConversationId` 指向的 owned 原生工作会话后由 L2/规则对该会话 abort，由 Herdr 原取消链清理。外部探针的 `stalledBasis` 口径只反映状态翻转间隔、不含 working 内部活动——绝不单独作为自动中止证据。看门狗自身（含同 Profile 直聊会话）绝不做探针目标，其 failed/aborted 仅经 `turn_settled` 通知，防自巡检死循环。
+`ownedBy: 'human'` 的人类直连会话与 Herdr 终端窗格**严禁发送任何按键或中止指令**，仅允许只读诊断与通知。一切自动化中止/提交统一走内核 `abortConversationGuarded` / `submitInputGuarded`：探针观测的 `ownedBy` 与 `stateChangeSeq` 随调用传入，内核在会话串行域内、第一个不可逆动作前原子复核。外部窗格的中止只能经核对 `facts.parentConversationId` 指向的 owned 原生工作会话后对该会话 abort。外部探针 `stalledBasis='since-last-state-change'` 只反映状态翻转间隔，绝不单独作为自动中止证据。看门狗自身绝不做探针目标，防自巡检死循环。
 
-## UI 扩展
+## 配置与数据边界
 
-插件注册较完整的前端贡献面：左栏三个导航（中枢与看门狗会话站位、`记忆与订阅图谱` 全屏 Screen）、两个按 `filterTag` 过滤的会话分组（`后台 Worker`、默认折叠的 `已归档 Worker`）、中枢会话的 composer 态势挂件与路由模式药丸、`dispatch_worker` 工具视图、`superagent:worker-report` 时间线渲染器、召回图谱全屏 Screen 与设置面板。
+| 配置 | 类型 | 缺省 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `routerMode` | boolean | true | 中枢路由收敛模式 |
+| `mutedSources` | string | 空 | 逗号/换行分隔的精确事件源名，命中即 0-Token 丢弃 |
+| `watchdogEnabled` | boolean | true | 关闭后不执行 Watchdog 巡检策略 |
+| `stalledAfterMs` | number | 300000 | 停滞判定 |
+| `abortAfterMs` | number | 1800000 | 自动中止（须 ≥ 停滞判定） |
+| `errorThreshold` | number | 3 | 连续报错唤醒阈值 |
+
+公开文档：`index`（workers + 常驻会话 ID）、`subscriptions`（threadKey 绑定）、`recall-graph`、`routing`（routerMode 只读镜像，UI 数据源；真实配置唯一来源是插件配置）。私有文档：看门狗去重状态。
+
+## 停用与失败语义
+
+停用后：中枢/看门狗工具与动作、UI 贡献、受管 Profile 会话站位即时消失；受管会话释放管理权（`manageConversation` 解除），已创建 Worker 会话不删除。`liveTasks` 声明在途后台任务与 working/blocked 的 Worker/常驻会话——停用遇在途即 `409 plugin_has_live_tasks`。常驻会话记录的 profileId 与实际不符时显式 `409 superagent_resident_conversation_conflict` 拒绝占用，要求人工核对。错误汇报链（reportError）投递失败如实记日志，不吞。
+
+## 源码与测试入口
+
+| 内容 | 位置 |
+| :--- | :--- |
+| 插件入口 | `packages/plugins/src/superagent.ts` |
+| 领域契约 / 路由钩子 / 动作 | `packages/plugins/src/superagent/contracts.ts`、`hooks.ts`、`actions.ts` |
+| RecallGraph / 结算摘要 | `packages/plugins/src/superagent/recall.ts`、`settlement.ts` |
+| 看门狗组合根与子模块 | `packages/plugins/src/superagent/watchdog.ts`、`watchdog-*.ts` |
+| Profile / 技能资产 | `packages/plugins/src/superagent/assets/` |
+| 测试 | `packages/plugins/test/superagent*.test.ts`（含 watchdog 巡检、resume、rewind、probe、tick shutdown 与 integration） |
+
+## 相关文档
+
+- [工作流与子代理编排](workflow.md)：受管子代理与 `auto_resume` 消费的 `run` 动作
+- [Herdr 终端协同](herdr.md)：外部窗格探针的采集方
+- [微内核架构总览](../architecture/overview.md)：内核无巡检定时器的架构边界

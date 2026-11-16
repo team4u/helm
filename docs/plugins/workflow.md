@@ -1,132 +1,90 @@
 # 工作流与子代理编排插件
 
-`builtin:workflow` 是 Helm 确定性多智能体编排与受管 Git Worktree 的权威承载插件（默认启用、非 locked 可停用）。内核不持有任何编排语义：DSL 运行时、journal 重放、`WorktreeAllocator` 全量生命周期（租约分配、断点续接与安全清理）都是本插件的私有资产，跨 spawn 的通用边界才留在内核侧 `runtime/spawn`。本文给出插件的能力面、状态持久化设计与崩溃恢复时序；DSL 语法、账本重放与 Worktree/Gate 的深度指南见 `docs/workflows/` 三篇（[dsl-guide](../workflows/dsl-guide.md) · [worktree-and-gate](../workflows/worktree-and-gate.md) · [journaling-recovery](../workflows/journaling-recovery.md)）。
+`builtin:workflow` 为需要多智能体协作的使用者提供确定性编排：把「派一个子代理」「跑一个多阶段流水线」「在隔离 Git Worktree 里写代码并跑门禁」变成可重放、可恢复、可观测的运行记录。适合编写编排脚本的开发者、需要委派任务的会话使用者，以及排查子代理/工作树状态的维护者。本文是该插件的权威文档；DSL 语法与执行模型的完整参考另见[原生 JavaScript DSL 手册](../workflows/dsl-guide.md)。
 
-## 模型工具（3 个）
+## 当前状态
 
-| 工具 | 核心入参 | 语义 |
-| :--- | :--- | :--- |
-| `subagent` | `prompt` 必填；`agentType`（Profile ID 或 `herdr:agy` 等外部运行时标识；非 `fork` 缺省 `assistant`，`fork: true` 缺省继承父会话 Profile）、`cwd`、`fork`（布尔值，从父会话当前已完成上下文分叉派生原生子会话，与 `resume` 互斥；不支持外部运行时）、`background`、`isolation: 'worktree'`、`schema`、`gate`、`resume`、`model`、`effort`、`attachments`、`maxSubagentDepth`（显式授予子树派生深度上限，1..5，缺省继承 2）、`secretNames`（外部运行时窗格的父会话机密逐名授予，仅外部运行时消费，原生 Profile 不支持） | 派生单个子代理。生命周期缺省按当前会话归属判定：人类直连会话缺省后台，自动化会话（非 human-owned）缺省同步等待最终结果；自动化会话显式 `background: true` 被拒绝。同步路径统一经受管后台单子代理启动（durable 前台 run，`syncForeground` 标记），阻塞等待期间可被 `detach` 动作按 runId 转后台（调用立即返回后台句柄，终态 followUp 汇报）。`agentType` 只选择目标执行体，不参与生命周期判定 |
-| `SubagentWorkflow` | `script / scriptPath / name` 三择一；`args` 任意 JSON（字符串形 JSON 自动解包）；`resumeFromRunId`；`background`（同一归属策略） | 在当前会话执行确定性编排脚本。生命周期缺省同 `subagent` 按会话归属判定（人类直连缺省后台、自动化缺省同步，自动化显式 `background: true` 拒绝）；后台启动即返回 running summary，终态经幂等汇报链投递；同步返回真实执行 summary（runId/status/nodes/result）。同步 run 标记 `syncForeground`，阻塞等待期间可被 `detach` 转后台（返回形状与后台启动兼容） |
-| `cleanup_worktree` | `worktreeId`（`node:path`）/ `conversationId` / `path`（可附 `nodeId` 消歧）三择一；`deleteBranch`、`force` | 清理一个受管隔离 Git Worktree；无任何显式选择器时以当前会话为选择器（`--current` 语义） |
+默认启用、非 `locked` 可停用。三个模型工具（`subagent` / `SubagentWorkflow` / `cleanup_worktree`）、DSL 编排引擎（journal 重放 + 前缀缓存）与受管 Git Worktree 生命周期全部归属本插件——内核对 Git 零语义，无本插件时 `isolation: 'worktree'` 等执行环境要求无插件兑现而原样到达原生执行行时显式返回 `unsupported_runtime`。引擎为插件自有资产（`packages/plugins/src/workflow/engine/`），内核不 import 本目录。
 
-三个工具均返回结构化输出（`structuredOutput`），失败分支显式 `isError` 并附完整错误信息，绝不伪造空元数据。`subagent` 的 `resume` 凭上次执行的 `execution.conversationId` 或 `execution.executionId` 续接同一执行上下文；后台汇报经 `submitInput` 携带幂等 `requestId`（`helm:subagent-report:<runId>`），跨重启不重复投递。
+## 能力和入口
 
-后台子代理的汇报链路有完整的诚实性设计：父会话已被删除时，汇报降级为全局 notification 通知（「后台任务已结束，可在任务列表检查结果」）；其余故障（store/IO/权限）如实上抛，由引擎 outbox（`notifiedAt` 不置位）在下次 `init` 时补发，绝不吞错。
+### 模型工具（3 个）
 
-## 默认后台协同：按会话归属判定生命周期
+- **`subagent`**：派生子代理。支持 `fork: true` 从父会话上下文分叉、`isolation: 'worktree'` 隔离工作树、`resume` 续接（凭 `execution.conversationId` / `executionId`）、`schema` 结构化输出、`gate` 验收命令、`model` / `effort` 覆盖、`maxSubagentDepth` 显式授予派生深度；
+- **`SubagentWorkflow`**：确定性 DSL 编排（内联 `script` / `scriptPath` / 已保存 `name`），journal 账本支持 `resumeFromRunId` 断点恢复；
+- **`cleanup_worktree`**：清理受管隔离 Git Worktree（错误分支绝不伪造 metadata）。
 
-`subagent` 与 `SubagentWorkflow` 两个模型工具共享同一套后台策略：生命周期缺省不由目标 Profile 决定，而由**当前会话的归属**（`ownedBy`）判定。`profileId` / `agentType` 只选择目标执行体（原生 Profile 或 `herdr:agy` 等外部运行时），不参与生命周期判定——派生一个外部运行时任务与派生一个原生 Profile 任务，缺省策略完全相同。
+后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询）、显式 `background: false` 同步等待；`bot` / `helm` 自动化会话缺省同步、显式 `background: true` 拒绝。`helm workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。
 
-| 当前会话归属 | 缺省生命周期 | 显式 `background` |
-| :--- | :--- | :--- |
-| `human`（人类直连会话，缺省值） | 后台：执行环境就绪即返回运行句柄（`runId` + 实际 execution），父回合继续；终态后自动幂等汇报 | `background: false` 显式退回同步等待最终结果 |
-| `helm` / `bot`（受管子代理、SuperAgent Worker 等自动化会话） | 同步：等待真实终态结果再返回，供确定性链路继续推进 | `background: true` 显式拒绝（显式报错并携带当前会话归属事实，绝不静默降级为同步） |
-
-设计动因：人类回合不应被长任务阻塞——后台执行、完成后汇报即可；自动化链路（中枢路由、批处理、编排脚本）需要真实结果才能推进，后台句柄只是把不确定性往后推。因此自动化会话显式要求后台属于契约错误，直接拒绝而不是猜测意图。
-
-### 四类执行体的区别
-
-| 执行体 | 派生机制 | 深度登记 | 结果回传 |
-| :--- | :--- | :--- | :--- |
-| 原生 Profile 子会话 | 内核 `spawnAgent` 管道（`agent_spawn` Hook，含 `fork: true` 上下文分叉） | 进 `subagent-conversations` 登记表，受嵌套深度契约约束；支持 `resume` 续接 | 同步等待最终结果；后台经下文幂等汇报链投递父会话 |
-| 外部 Herdr Profile（`herdr:<kind>` 前缀或 `runtime.kind: 'herdr'` 的 Profile） | `builtin:herdr` 拦截 `agent_spawn`，在终端窗格执行并通过文件交接回传 | 派生入口检查调用方深度；窗格没有原生 `conversationId`，不登记为子会话 | 后台终态同样汇报父会话；`onResolved` 回传 `controls.steer`，`workflow.steer` 据此委托 `builtin:herdr` 的 steer 动作（使用现有 `agent.prompt`，返回 `guardLevel=preflight`，不要求新增服务端能力）；`resume` 仅适用于仍存在且空闲的执行 |
-| SuperAgent Worker | `builtin:superagent` 的 `dispatch_worker`：`createConversation`（不经 spawn 管道） | 不进登记表、不受深度契约约束 | 插件自有非阻塞协议：派工立即返回 `workerConversationId`、绝不同步等待；汇报走独立 `turn_settled` → 中枢路由链。它不是 `subagent` 的 `background` 参数，两者不得混用 |
-| 会话级 fork / 人工会话 | 人类在 Web/CLI 直接创建或经 `conversations fork` 按条目分叉的普通会话 | 不进登记表、不受深度限制 | 就是普通会话；人类直连（human-owned）即适用「缺省后台」策略 |
-
-### 与 `workflows run` 动作/CLI 的区别
-
-`helm workflows run`（HTTP `run` 动作同款）是启动入口而非模型工具：缺省 `wait=false` 启动即返回（run 后台推进，进度经会话投影订阅），`--wait` 才同步等终态。它与模型工具的 `background` 策略是**不同参数、不同入口**：前者描述「这次启动要不要等」，后者描述「当前会话派生任务的缺省生命周期」。不要把两者写成同一开关。
-
-### 后台完成自动幂等汇报
-
-模型工具后台启动的 run 到达终态（完成/失败/中止/中断）后，引擎经 `submitInput` 向父会话投递 `followUp` 汇报。子代理的幂等键为 `helm:subagent-report:<runId>`，工作流为 `helm:workflow-report:<runId>`；未确认送达的通知在 Hub 重启时补发，父会话按 `requestId` 持久去重。汇报附带投递时其余在途运行的快照，不把单个任务完成当成全部任务完成。父会话已删除时发送全局 notification（见上文诚实性设计）。CLI/动作启动的 run 保留现有查询与 `--wait` 语义，不自动向会话投递汇报。
-
-因此**禁止 sleep 轮询**：发起后台任务后不要用 `sleep`、循环 bash 或定时重查去等结果——汇报会自动到达本会话。需要主动核对进度时用只读的 `helm workflows inspect <runId>`（按需查询，不是等待手段）。
-
-## 五端动作（12 个）
-
-工作流定义是跨会话可复用资产，唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js` 文件目录（无 catalog/state 副本）；`get` / `save` / `delete` 是这组资产的完整管理面，创建与修改全部由 AI / CLI 经动作完成，Web 端只读。
+### 动作（13 个，五端复用）
 
 | 动作 | CLI 映射 | 说明 |
 | :--- | :--- | :--- |
-| `list` | `helm workflows list` | 列出已保存的工作流定义（每条携带真实文件事实 `updatedAt` / `size`；元数据非法的条目保留并附 `metadataError`） |
-| `get` | `helm workflows get <name>` | 读取完整定义（只读源码 + 元数据 + 文件事实）；供 Web 只读展示与 AI 读取，不构成编辑能力；不存在 404 |
-| `save` | `helm workflows save [nameOrFile]` | 保存定义：`script`（位置参数为本地脚本文件时自动读入）或 `--from-run-id` 二选一；缺省名用脚本 `meta.name`，显式 `--name` 与 `meta.name` 不一致时拒绝；名称安全校验（`SAFE_NAME` 防路径穿越）；保存前做 validateScript 全量检查与 worker 同形状的 compile-only 语法预检（零副作用）；重复保存默认拒绝（`409 workflow_already_exists`），`--overwrite` 才覆盖；原子写入（同目录临时文件 + fsync，新建经 link 原子占位、并发同名创建恰好一个成功，覆盖经 rename 原子替换）；既有目标为越界符号链接时拒绝；返回保存后按真实 fs 重建的摘要（`created` + `workflow`）。`fromRunId` 把持久 RunRecord 中的脚本源固化为定义（内联 run 保存 `script`、文件 run 重读 `scriptPath`）；subagent run 与无脚本源的 run 显式拒绝 |
-| `delete` | `helm workflows delete <name>` | 删除定义文件（历史运行记录不受影响）；不存在 404；lstat/realpath 防目录外符号链接，目录条目拒绝 |
-| `run` | `helm workflows run [nameOrFile]` | 在指定或当前会话启动运行；新 run 必须显式指定会话（CLI `--current` 或 `--conversation-id`）；位置参数为已保存名或本地脚本文件（自动读入 `script`）；`--wait` 同步等终态 |
-| `runs` | `helm workflows runs` | 列出运行记录；支持 `conversationId` 过滤，CLI `--current` 缺省按当前会话过滤 |
-| `inspect` | `helm workflows inspect <runId>` | 查看单个运行详情（含节点状态与进度时间线；已保存定义发起的 run 携带 `savedName`） |
+| `list` | `helm workflows list` | 列出已保存定义（每条携带真实文件事实 `updatedAt` / `size`；元数据非法条目保留并附 `metadataError`） |
+| `get` | `helm workflows get <name>` | 读取完整定义（只读源码 + 元数据；Web/AI 只读，不提供编辑） |
+| `save` | `helm workflows save [nameOrFile]` | `script`（位置参数为本地脚本文件时自动读入）或 `--from-run-id` 二选一；缺省名用 `meta.name`；默认拒绝覆盖，`--overwrite` 才覆盖；保存前语法预检，原子写入 |
+| `delete` | `helm workflows delete <name>` | 删除定义文件（历史运行记录不受影响）；防目录外符号链接 |
+| `run` | `helm workflows run [nameOrFile]` | 启动运行；新 run 必须显式指定会话（CLI `--current` 或 `--conversation-id`）；`--wait` 同步等终态 |
+| `runs` | `helm workflows runs` | 列出运行记录，支持按会话过滤 |
+| `inspect` | `helm workflows inspect <runId>` | 单个运行详情（节点状态 + 进度时间线） |
 | `abort` | `helm workflows abort <runId>` | 中止运行中的工作流或后台子代理 |
-| `detach` | `helm workflows detach <runId>` | 把运行中的**前台同步** run（同步工具阻塞等待路径，`syncForeground` 标记）转入后台：引擎在同步临界段原子置位 `detachedAt`/`notifyParentOnSettle`，持久化并唤醒阻塞中的工具调用（立即返回后台句柄），父 signal 解绑（父回合结束/中止不再误杀）；终态经幂等汇报链 followUp；转后台临界段同步解绑父 signal（subagent 引擎绑定与 SubagentWorkflow 工具绑定同语义）。仅 running 且前台同步的 run 可转（后台启动与已转后台拒绝，幂等防重复）；run 发起会话必须 human-owned（automation 同步等待是防早结算既定策略，`detach_forbidden` 403；前端对 bot/helm 查看方同样隐藏按钮）；会话内调用仅允许发起会话自身或其祖先（`detach_out_of_scope` 403）；未知 run 404。动作等待状态存储队列落盘：flush 失败如实报 `detach_flush_failed` 500——记录文件已 fsync（detached 事实已持久、任务按后台语义继续并汇报），绝不回滚或取消。UI 在同步运行卡显示「转入后台」按钮（同一动作入口） |
-| `steer` | `helm workflows steer <runId> --text "<指导>"` | 向在途后台子代理插话；只允许发起会话或其祖先控制。原生节点按归属与 CAS 水位经内核 guarded 端口提交；外部执行按节点 `controls.steer` 动态委托插件动作，如实返回 `preflight`（发送前预检）或 `cas`（提交点原子复核）；Herdr 使用现有 `agent.prompt`，预检与投递之间刚变 idle 时允许接续一轮。原生已结束模型回合、human 归属、DSL 工作流、混合候选歧义均显式拒绝；`steered=true` 仅代表投递成功，不代表指导已执行完成；同步获得 HTTP、CLI、模型工具与 `run_action` 入口 |
-| `cleanup_worktree` | `helm worktrees cleanup` | 与工具同款语义；选择器三择一互斥，`--force` 清理脏工作树（不可越过占用/归属/locked 校验） |
-| `list_worktrees` | `helm worktrees list` | 列出受管工作树登记（含已清理记录的元数据；新建在前） |
-| `inspect_worktree` | `helm worktrees inspect <worktreeId>` | 只读检视受管工作树：登记元数据 + 目标节点真实 git 只读探测（未提交文件清单、领先基线提交数、diff 统计与有上限预览）；仅登记记录可检视，不支持任意目录；已清理/目录缺失如实返回 `unavailableReason`，git 失败显式报错（附截断诊断，绝不静默当成功）；diff 固定 `--no-ext-diff --no-textconv` 且仅覆盖 tracked 改动（untracked 文件内容不进 diff，仍完整见于状态清单与 `dirtyFileCount` 真实总数）；预览/统计/状态清单在采集阶段即限内存，超出置 `diffTruncated`/`dirtyFilesTruncated` 或统计末尾截断说明，不假装完整；成功输出与错误诊断均经机密脱敏 |
+| `steer` | `helm workflows steer <runId> --text` | 向在途后台子代理插话纠偏；原生执行经内核 guarded 端口按归属与 CAS 水位提交，外部执行按节点 `controls.steer` 委托目标插件并如实返回 `guardLevel`（`preflight` / `cas`）；`steered=true` 仅代表投递成功 |
+| `detach` | `helm workflows detach <runId>` | 把运行中的**前台同步** run 转入后台：阻塞中的工具调用立即返回后台句柄，终态 followUp 汇报；仅 running 且前台同步标记的 run 可转，run 发起会话必须 human-owned |
+| `cleanup_worktree` | `helm worktrees cleanup` | 与工具同款；选择器 `--worktree-id` / `--conversation-id` / `--path [--node-id]` 三选一互斥 |
+| `list_worktrees` | `helm worktrees list` | 受管工作树登记（含已清理记录的元数据） |
+| `inspect_worktree` | `helm worktrees inspect <worktreeId>` | 只读检视：登记元数据 + 目标节点真实 git 只读探测（状态/统计/有上限 diff 预览）；仅登记记录可检视 |
 
-`run` 与 `cleanup_worktree` 对会话目标有显式冲突校验：输入 `conversationId` 与调用上下文（`--current` / `run_action` / workflow）同时存在且不一致时，显式 `400 validation_error` 拒绝——静默选边等于在调用方不知情下改投目标。
+`run` 与 `cleanup_worktree` 对会话目标有显式冲突校验：输入 `conversationId` 与调用上下文同时存在且不一致时显式 `400 validation_error`。
 
-## 状态持久化设计
+### 前端贡献
 
-插件的状态分布在四个层次，按「谁消费、进不进全局流」精确划分：
+- `toolView`：`subagent-card`（`replaceRow: true`）与 `workflow-card`（`replaceRow: true`，含「保存为工作流」「断点恢复」「重放」入口）；
+- `timelineRenderer` `background-report`：后台结算汇报折叠卡；
+- `slot` `active-tray`（Composer 停靠区）与 `workbenchPanel` `tasks`（badge 绑定 `run-badges`）；
+- `sidebarItem` + `screen` `library`：工作流库全屏视图（只读浏览、显式选择目标会话运行、两步确认删除；无编辑器，「让 AI 修改」仅提供可复制请求文本）。
 
-| 文档 | 类型 | 内容 | 流通范围 |
+## 配置与数据边界
+
+| 配置 | 类型 | 缺省 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `records` | 私有 `ctx.doc` | run 索引 + 每 run 完整记录（引擎唯一持久层） | 仅插件内部，重启恢复读同一命名空间 |
-| `worktree-state` | 私有 `ctx.doc` | WorktreeAllocator 登记表 + durable 租约表 + agentId 绑定表 | 仅插件内部；停用期间不清除，重新启用后 cleanup 仍可定位 |
-| `subagent-conversations` | 私有 `ctx.doc` | 受管子代理登记表：`depth` / `parentConversationId` / `maxSubagentDepth`（子树上限快照）等派生事实 | 仅插件内部；跨重启持久，是深度契约的唯一事实来源 |
-| `runs` | 公开 `ctx.sessionDoc` | 当前会话及其后代发起的 run 列表投影，保留每个 run 的直接发起者 | 不进全局首帧/全局 SSE；前端经专用 SSE 按会话订阅 |
-| `run-badges` | 公开 `ctx.doc` | 每会话紧凑角标（`count / tone / footerText`，如「2 运行中 · 1 失败」） | 有意全局：工作台导航角标需要跨会话可见；完整 run 摘要绝不进入 |
+| `maxConcurrentAgents` | integer | 按 CPU 并行度计算（2..32） | 单个 run 的并发 agent 上限（1..128） |
+| `maxSubagentDepth` | integer | 2 | 受管子代理嵌套深度上限（1..5）；主会话为第 0 层，变更只影响新派生任务树 |
 
-不存在内存降级或内核私有存储注入：所有运行态经 `records` 落 state.sqlite，重启后恢复。runs 投影带值缓存（JSON 直比，值不变跳过写入、不发重复事件）；已删除的父会话不重建孤儿分片（store 级联清理），无 runs 的已持久会话清到空而非保留旧投影。
+状态分布在五个文档，按消费面精确划分：
 
-引擎经 `emitEvent` 发布两个事件：`workflow.updated`（全局只发状态失效提示 `{run: {id, conversationId, status}}`，详情走会话投影订阅）与 `workflow.settled`（完整 summary，`broadcast: false` 进程内分发，`builtin:herdr` 的双轨保活清理监听它）。
+| 文档 | 类型 | 内容 |
+| :--- | :--- | :--- |
+| `records` | 私有 `ctx.doc` | run 索引 + 每 run 完整记录（引擎唯一持久层，重启恢复同一命名空间） |
+| `worktree-state` | 私有 `ctx.doc` | Worktree 登记表 + durable 租约表 + agentId 绑定表；停用期间不清除 |
+| `subagent-conversations` | 私有 `ctx.doc` | 受管子代理登记表（`depth` / `parentConversationId` / 子树上限），深度契约唯一事实来源 |
+| `runs` | 公开 `ctx.sessionDoc` | 当前会话及后代发起的 run 投影；专用 SSE 按会话订阅，不进全局首帧 |
+| `run-badges` | 公开 `ctx.doc` | 每会话紧凑角标（`count / tone / footerText`），有意全局 |
 
-## 嵌套深度契约
+工作流定义文件唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js`。引擎经 `emitEvent` 发布 `workflow.updated`（全局仅状态失效提示）与 `workflow.settled`（完整 summary，`broadcast: false` 进程内分发，`builtin:herdr` 监听它做双轨保活清理）。
 
-受管子代理（经 `subagent` 工具（含 `fork: true`） / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认可嵌套 `DEFAULT_MAX_SUBAGENT_DEPTH`（2）层：主会话直接派生一层，一层子代理默认可继续派生二层，达到子树上限的会话即编排叶子。会话级 `conversations fork` 会话与 SuperAgent worker（经 `createConversation` / `forkConversation` 创建，不经 spawn 管道）不进登记表，不受限制。
+**嵌套深度契约**：受管子代理（经 `subagent` / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认可嵌套 2 层，达到子树上限即编排叶子。三道防线：`before_turn` 剥离叶子回合的派工工具、工具/动作入口前置拒绝（`403 subagent_depth_exceeded`）、`agent_spawn` 钩子（priority 300）兜底。会话级 `conversations fork` 与 SuperAgent Worker 不进登记表、不受限。DSL `workflow()` 脚本组合深度保持一层限制，与子代理层级分别计数。
 
-三道防线共用登记表事实：`before_turn` 对叶子回合剥离 `subagent` / `SubagentWorkflow`（一层子代理保留派工工具与协作目录）；工具与 `run` 动作入口在创建任何 run 记录前拒绝（`403 subagent_depth_exceeded`，携带 `depth` / `maxSubagentDepth` 事实）；`agent_spawn` 钩子（priority 300，先于 worktree 分配）兜底拒绝并登记新事实。
+## 停用与失败语义
 
-`maxSubagentDepth` 表示相对受管任务树根的绝对层级上限，主会话为第 0 层。默认值为 2，可在插件中心配置，或通过现有 `helm plugins config` 命令读写（范围 1..5 的整数）。配置变更影响新派生的任务树，已有子代理继续沿用登记上限。
+- **liveTasks**：运行中 run 以 `workflow:<runId>` 标签声明——停用本插件时 `409 plugin_has_live_tasks` 硬阻断，不可 force；
+- **两阶段崩溃恢复**：阶段一 `prepareRecovery`（全局 prepare 屏障内，先于任何服务 start）只落持久 abort 标记，不唤醒 SDK 调度器、不提交输入；阶段二 `init`（全部插件 prepare 完成后）终止遗留子任务、把遗留 `running` 显式标 `failed(interrupted)`（subagent 类附 resume 提示、DSL 类附 `resumeFromRunId` 提示）、补发崩溃前未通知的父会话汇报；
+- **受控停用**：先置 stopping 拦截后台回调，await 引擎 close，再做最终 runs 投影并 `await records.flush()`；投影是派生观察面，持久层损坏时发显式 notification 后不阻断拆毁；
+- **级联取消**：`turn_settled`（outcome=aborted）取消该会话子树内在途 run；受管子会话中止一律经 `abortConversationGuarded` 内核原子复核（human 红线）；
+- **Worktree 租约 fail-closed**：分配路径在 `git worktree add` 副作用之前持久登记占位，崩溃后不能证明停止就阻塞清理（`worktree_execution_unknown`），一切未知状态保留租约。
 
-主会话可以在 `subagent({ maxSubagentDepth: 3 })` 或 DSL `agent(prompt, { maxSubagentDepth: 3 })` 中为大型任务显式开放到第 3 层。受管子代理只能继承或降低其上限，不能自行提高授权；设置值不得小于本次目标子代理的实际层级。续接不改变父子归属与层级，未传上限时保留原授权，显式设置时重新校验。所有入口均校验硬上限 5，越界或登记损坏时报错，不做兼容读取或猜测。
+## 源码与测试入口
 
-这项限制只约束受管子代理派生。DSL `workflow()` 的脚本组合深度仍保持原有一层限制，与子代理层级分别计数。
+| 内容 | 位置 |
+| :--- | :--- |
+| 插件入口（组装与文档声明） | `packages/plugins/src/workflow.ts` |
+| 引擎 / 隔离 / 钩子 / 动作 / 工具 / UI | `packages/plugins/src/workflow/`（`engine/`、`isolation*.ts`、`hooks.ts`、`actions*.ts`、`tools*.ts`、`ui.ts`、`worktree*.ts`） |
+| 插件配置 Schema | `packages/plugins/src/workflow/config.ts` |
+| 共享契约（run/doc/worktree/meta 形状） | `packages/plugins/src/contracts.ts` |
+| 主要测试 | `packages/plugins/test/workflow*.test.ts`（引擎、恢复重放、steer、detach、abort 级联、库管理）、`worktree-*.test.ts`、`workflow-shutdown.integration.test.ts`、`background-restart.integration.test.ts` |
 
-## 两阶段崩溃恢复
-
-重启恢复分两个阶段完成，顺序由宿主全局 prepare 屏障保证：
-
-**阶段一 `prepareRecovery`**（全部服务 `start` 之前）：只读遗留记录，对自己登记为 running 的子会话调用 `abortConversationGuarded`。调度器暂停时，该操作只落持久 abort 标记，并逐任务复核会话归属。此阶段**不唤醒 SDK 调度器、不提交任何输入**——此刻其他插件的工具尚未注册，任何输入提交都会产生 orphan 回合。
-
-**阶段二 `init`**（全部插件 prepare 完成后）：终止遗留子任务（等待真实终态，不先回报 interrupted 却让旧回合继续跑）、把遗留 `running` 显式标 `failed(interrupted)`（subagent 类附「可凭 conversationId/executionId 通过 resume 续接」提示；DSL 类附「账本完好，可经 resumeFromRunId 恢复」）、补发崩溃前已达终态但未通知的父会话汇报（outbox 机制，`notifiedAt` 防重复）。随后快照已持久分片集合并同步 runs 投影与角标。
-
-受控停用（`stop`）同样有严格时序：先置 `stopping` 拦截运行期后台回调，`await` 引擎 `close`（在途 run 终态写入私有 records，写入经宿主受控停止窗口放行），再做最终 runs 分片与角标投影并 `await records.flush()` 真实落盘。最终投影是派生观察面——若持久层损坏导致读取失败，发布显式 notification 诊断后不阻断拆毁（引擎终态已在 records，业务读取路径会显式报错，不静默）。
-
-## 在途保护：liveTasks 与工作树占用
-
-`liveTasks()` 返回运行中 run 的 `workflow:<runId>` 标签——停用插件时宿主据此 `409 plugin_has_live_tasks` 硬阻断（不可 force）。
-
-工作树占用事实由本插件直接维护：cleanup 链以宿主在途 spawn 执行坐标（`ctx.host.listActiveSpawnExecutions`，含外部运行时回传坐标）与自身 durable 租约（pending 占位与 running 一视同仁）判定 `isPathInUse`，不经任何宿主侧声明端口。
-
-Worktree 隔离经 `agent_spawn` around continuation（priority 200，先于外部运行时接管器如 herdr 的 100 执行 = 更外层）包裹完整派生：在 `next` 前分配/续接/登记租约，外部执行同样被租约与登记包裹。durable 租约 fail-closed：分配路径在 `git worktree add` 副作用**之前**持久登记占位，崩溃后该占位无在途执行即显式 `worktree_execution_unknown` 阻塞清理——不能证明停止就不能清理；释放仅两种（执行确认成功、或确认从未启动），一切未知状态保留租约。
-
-## 前端扩展
-
-插件注册五个 client 模块视图（组件经 `usePluginSessionDoc` 自行订阅 runs 分片，动作经 `ctx.callAction`，零宿主私有依赖）：
-
-- `toolView` `subagent-card`（`replaceRow: true`）：时间线内 subagent 工具调用的双层胶囊实时卡，多次 resume 折叠展示；
-- `toolView` `workflow-card`（`replaceRow: true`）：时间线内 SubagentWorkflow 调用的工作流运行卡。适合的 run（非 subagent 且非已保存定义发起）提供一键「保存为工作流」（`save fromRunId`，保存名取脚本 `meta.name`；重名 / 校验失败如实报错，绝不伪造成功）。已完成的 DSL run（含内联脚本）提供「重放」表单，经 `resumeFromRunId` 发起新 run，保留原会话；空白沿用原 args，显式 args 经 JSON 校验后覆盖。文件脚本重读最新内容，内联脚本沿用原源码。缓存按稳定作用域复用调用载荷相同的前缀，失配只断链所在作用域及其子作用域，兄弟作用域的成功节点照常复用；副作用不确定时按引擎契约显式拒绝。失败/中止 run 提供「断点恢复」。重放、恢复和中止在途均防止重复提交。
-- `sidebarItem` `workflow-library` + `screen` `library`：工作流库全屏视图（一级主舞台卡片网格 + 右侧标准详情抽屉）。工作流定义是跨会话资产、不属会话 workbench 管理范畴；Screen 只读浏览（`updatedAt` / `size` 文件事实）、`get` 只读源码（`pre`/`code` + 复制，无任何编辑器）、运行（Radix `Select` 显式选择目标会话 + args 严格 JSON 解析）、删除（两步确认）与刷新；「让 AI 修改」仅提供可复制的明确请求文本（经 AI 调用 `save` 写回），不在 Web 内改文件。选中项与搜索词写入 `sp.*` 深链参数（`setParams` 唯一导航）。
-- `workbenchPanel` `tasks`：工作台面板（当前会话执行树 + 紧凑工作流库运行入口），`badge` 绑定 `run-badges` 文档。工作流库分节经 `list` 动作展示已保存定义并支持在当前会话运行（每行 args 草稿独立、按会话隔离、严格解析 JSON），并提供到工作流库 Screen 的导航；定义管理（源码/删除）不在此承担。有 worktree 的节点卡与独立子代理卡均提供只读改动概览（`inspect_worktree`），优先按登记 ID 定位，无 ID 时以 path 与节点消歧。审阅按钮仅向父会话提交请求，Web 不执行 git 写操作。Diff 仅覆盖已跟踪文件，未跟踪文件见状态列表；清理按钮使用同一精确选择器并在途禁用。
-
-执行卡片统一使用 `ExecutionNode` 视图模型连接子会话、工作流、动作及外部执行。每个实际执行只计数一次；卡片汇总后代的运行、异常、审批状态，在当前层展示直系子项，深层任务通过抽屉继续查看。审批与后代活动作为独立摘要呈现，工作流自身的结算结果仍以引擎记录为准。
-
-会话抽屉展示祖先路径。点击已在主屏或分屏展示的祖先只关闭抽屉；点击其他祖先在抽屉内切换，保持主屏上下文。`AskDock` 汇集当前会话及后代的待确认项，标注来源；提交仍针对原始 AskDoc 并携带其 CAS 水位线。
-
-## 延伸阅读
+## 相关文档
 
 - [原生 JavaScript DSL 手册](../workflows/dsl-guide.md)：`agent` / `parallel` / `pipeline` / `phase` 语法与确定性约束
-- [Git Worktree 与自动化门禁](../workflows/worktree-and-gate.md)：代码沙箱隔离与测试门禁验收
-- [状态流水与意外恢复](../workflows/journaling-recovery.md)：执行账本、前缀重放与断点续跑语义
+- [Git Worktree 与代码门禁](../workflows/worktree-and-gate.md)：Worktree 生命周期、租约与 Gate 验收
+- [状态流水与故障恢复](../workflows/journaling-recovery.md)：journal 记账、前缀重放与断点续跑语义
+- [Herdr 终端协同](herdr.md)：外部运行时执行体如何被编排消费

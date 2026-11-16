@@ -1,73 +1,61 @@
-# builtin:token-speed — 实时解码速率
+# Token 速率插件
 
-输入区状态行的实时解码速率（tok/s）只读插件：**默认停用**，显式启用后经 `COMPOSER_STATUS_SLOT`（`builtin:composer/status`）在宿主输入区状态区显示。算法参考本机 [pi-token-speed](https://www.npmjs.com/package/pi-token-speed) 扩展（时间滑动窗口 / burst-stall 平滑 / 工具执行暂停时钟 / 终值对账），按 helm 观察层的可观察事实重写。
+`builtin:token-speed` 解决「直观看到当前会话解码有多快」的问题：在宿主输入区状态行显示实时解码速率（tok/s）、首字延迟与终态对账值。适合关心模型响应速度的使用者。它是机制与策略分离的典型案例——内核只透传 `ConversationLive.generation` 通用流式事实（taskId + attempt + 受限 message 投影），零速率计算；滑动窗口、chars/4 估算、TTFT、burst/stall 平滑、按 taskId 对账、工具执行时间剔除等全部策略在本插件。算法参考本机 pi-token-speed 扩展（npm 包）按 helm 观察层事实重写。
 
-## 机制与策略分离
+## 当前状态
 
-- **内核只透传事实**：`ConversationLive.generation` 携带当前 generation 的 `taskId / attempt` 与受限 message 投影（text / thinking / toolCall name+arguments、供应商累计 `usage.output`），随既有 75ms live 节流帧流动，零速率计算、零额外持久写。停用本插件不改变内核行为。
-- **策略全在插件**：滑动窗口速率、chars/4 估算、TTFT、burst/stall 平滑、provider usage 终值对账、工具执行时间剔除（暂停解码计时同时保持最近有效速率显示）、尾帧节流补写、显示格式。
-- **高频会话级状态只进 sessionDoc**：`speed` 公共会话文档（专用 SSE 按需订阅）承载每会话速率状态，写入按 120ms 节流并在窗口尾部延迟补写末帧（首测 / 阶段变化 / 速率首现 / 终态立即写），绝不进全局 `ctx.doc` 或 conversation summary。
+默认停用，显式 `helm plugins enable builtin:token-speed` 启用。纯只读展示：无动作、无工具、无 CLI 命令（不触发五端映射义务）。
 
-## 数据流
+## 能力和入口
+
+### 展示与数据流
+
+经 `ctx.ui.slot` 注入 `COMPOSER_STATUS_SLOT`（宿主输入区状态行），组件 `TokenSpeedStatusBadge` 经专用 SSE 订阅公共会话文档 `speed`（`ctx.sessionDoc`，写入按 120ms 节流并在窗口尾部延迟补写末帧；首测 / 阶段变化 / 速率首现 / 终态立即写）。徽标文本一律加 `≈` 前缀——一切速率都是节流帧观测估算，tooltip 明示口径。
 
 ```
-内核 conversation.live 帧（generation 事实）
-  └─ ctx.host.onEvent('conversation.live') → 状态机（token-speed/tracker.ts）
-内核 conversation.entry（信封校验后按 kind 分流）
-  ├─ pi.reset / pi.compaction / helm.rewind：上下文失效 marker → 彻底清空该
-  │   会话速率状态（状态机 + 节流定时器/指纹 + speed 文档），不回读旧上下文、
-  │   不回退旧 TPS
-  └─ pi.assistant 完成事实（taskId / usage.output / stopReason / contentChars）
-      → 按请求身份精确对账并补算取消尾 partial 后的尾部新增内容与完成时间，
-      随即刷新实时文档（aborted / error 尝试计数与时间作废；无 taskId 的
-      entry 身份不明不关联）
-ctx.hook.onTurnSettled
-  ├─ conversation.status === 'working'：工具轮 handOver 的中间结算，链继续累计
-  ├─ outcome === 'failed' / 'aborted'：未完成回答绝不冒充正常终态，直接清空
-  │   当前测量（含文档与待写定时器）
-  └─ 其余（completed 链终点）：终态对账值写入 sessionDoc（phase: 'settled'）
-ctx.host.onEvent('conversation.deleted') → 状态机与会话文档彻底清理
-sessionDoc('speed', public) → client.tsx TokenSpeedStatusBadge（专用 SSE）
+内核 conversation.live 帧（generation 事实）→ 状态机（tracker.ts）
+conversation.entry：pi.reset / pi.compaction / helm.rewind → 彻底清空该会话状态
+                    pi.assistant 完成事实 → 按请求身份精确对账补算尾帧
+turn_settled：failed/aborted → 清空当前测量；completed 链终点 → 终态写入 sessionDoc
+conversation.deleted → 状态机与会话文档彻底清理
 ```
 
-## 生命周期与清理语义
+### 算法口径（诚实性）
 
-本插件的数据全部是**派生测量**（可由新流量重建，无迁移、无静默回退）：
+- **段（segment）**：以 `(taskId, attempt)` 标识一次模型请求；工具轮切换由任务身份区分、重试由 attempt 区分；已完成段超缓存上限折叠为累计值，长回合不丢计数；
+- **解码净耗时**：各段「首增长帧 → 末增长观测」之和，工具执行与请求等待不计入；工具执行期保持最近有效速率显示并明示暂停计时，不断流、不以 0.0 冒充；
+- **TTFT**：起点锚为本回合首个非废弃段首次观测到空 generation 的帧时间（SDK 不提供请求开始锚点，内核不伪造；中途接入拿不到起点时省略）；终点是首次有效内容帧或 `pi.assistant` 落库时刻；
+- **速率**：时间滑动窗口内新增生成量 / 实际跨度；跨度下限 100ms 防尖峰，跨段绝不延伸；终态只汇总计数与观测时长可配对的成功响应，中途启用仅观测到后半段时不用整条 usage 除以残缺时长；
+- **token 口径**：优先 `usage.output` 供应商累计增量，无推进时退回 chars/4 估算（与内核 `estimateTokens` 同口径），`mixed` 如实标注。
 
-- **启用周期开始**（启动或中途启用；服务 `prepare` 屏障，先于任何服务 `start` 与输入恢复）：清空上一周期遗留的全部 `speed` 会话文档（含已结算终态）。重启或中途启用无法取得完整测量，**宁可显示空，绝不把上周期的 decoding/tools 实时态冒充当前**；停用期间持久行保留（会话文档承诺跨停用存活），下一周期 `prepare` 统一清理。
-- **运行期**：completed 终态（`phase: 'settled'`）保留显示到下一回合首测覆盖——这是本插件选择的简单语义（最后一次真实结算结果继续可见）；失败 / 中止回合直接清空，不残留旧值。
-- **上下文失效**：`pi.reset` / `pi.compaction` / `helm.rewind` 落库即旧上下文失效，其上的速率事实对新上下文不可归属，彻底清空，绝不回退显示旧 TPS。
-- **停用**：UI 贡献、事件监听与文档订阅即时消失（无幻影残留）；服务 `stop` 清内存态。
+## 配置与数据边界
 
-## 算法口径（诚实性）
-
-- **一切速率都是观测估算**：输入是内核 live 节流帧（75ms）叠加 pi-durable partial 提交节流（约 100ms）的累计快照，不是逐 token 事件；所有基于帧时间的速率（含终态对账速率）都只是帧粒度近似——**即使终态 token 数经 provider usage 对账准确，时间仍是观测近似**。徽标文本一律加 `≈` 前缀（移动端无 title 也能看到估算口径），tooltip 明示「时间为节流帧观测近似，非服务器精确解码时间」。
-- **段（segment）**：以 `(taskId, attempt)` 标识一次模型请求。工具轮切换由任务身份区分，重试由 attempt 区分；即使工具帧被节流合并，仍能正确分段。内容回退不用于猜测身份，已完成请求的迟到快照不会复活旧测量。已完成段超过缓存上限时折叠为累计值，长回合不丢计数。
-- **解码净耗时（decodeMs）**：各段「首增长帧 → 末增长观测（含 `pi.assistant` 尾部新增内容落库时刻）」之和，段间的工具执行和请求等待不计入。实时窗口在新请求开始时重置，避免跨请求混算；同时状态机保留本回合最近一次有效实时速率 `lastLiveTps`，确保进入 `tools` 工具执行、轮间首字等待或短暂流式停顿期时状态行速率不断流，并在 tooltip 明示暂停计时。两端时间受 SDK partial 提交和 live 节流影响，并非服务器解码时间。
-- **TTFT**：起点锚为**本回合首个非废弃段首次观测到空 generation 的帧时间**（段级绑定，绝不把前序轮工具执行耗时污染进后续轮次；SDK 不提供请求开始锚点，内核不伪造），终点是首次有效内容帧或无中间帧时的 `pi.assistant` 落库时刻；中途接入（启用 / 重启发生在流中）拿不到起点时省略，不伪造；tooltip 如实标注「起点为插件首次观测，非请求精确起点」。
-- **速率（tps）**：时间滑动窗口（默认 1000ms，可配 100–30000ms）内新增生成量 / 实际时间跨度；窗口内全部事件同段同刻（网关缓冲后一次冲刷）时跨度向前延伸到同段前驱事件（停滞期计入有效吞吐）；跨段绝不延伸；跨度下限 100ms 防尖峰。极短 `<100ms` 零中间 partial 工具调用在 `pi.assistant` 到达时按整段跨度（下限 100ms）估算保守速率供随后的工具期展示（不改 `decodeMs` 与 `settle()` 速率配对口径）。工具执行期、轮间首字等待期或窗口短暂滑空时保持最近有效 `tps`（工具执行不计入解码时间）；仅在首测前或终态无可配对响应时不显示，**绝不以 0.0 tok/s 冒充**。
-- **token 口径（source）**：优先用 `generation.message.usage.output` 供应商累计增量；无推进时退回 chars/4 估算（与内核 `estimateTokens` 同一保守口径，text/thinking/toolCall 参数全计）；`conversation.entry` 的最终 `usage.output` 是权威值，到达即对账覆盖该段流式口径；`mixed` 如实标注。
-- **终态（phase: 'settled'）**：仅将计数与观测时长可配对的成功响应汇总计算速率；中途启用仅观测到后半段、或整个响应只有一个增长帧时，不用整条 usage 除以残缺时长。累计 token 数仍如实保留。无可测响应时不显示速率；有可靠观测时保留显示到下一回合首测。失败 / 中止回合与上下文失效 marker 直接清空（见「生命周期与清理语义」）。
-
-## 配置
-
-| 字段 | 类型 | 缺省 | 说明 |
+| 配置 | 类型 | 缺省 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `slidingWindowMs` | number | 1000 | 时间滑动窗口（毫秒，100–30000）；慢服务器建议 3000–15000（对齐 pi-token-speed 指引），从下一回合生效 |
+| `slidingWindowMs` | integer | 1000 | 时间滑动窗口（100..30000 毫秒）；慢服务器建议 3000–15000；从下一回合生效 |
 
-## 启停
+会话速率状态只进 public `sessionDoc`（专用 SSE 按需订阅），绝不进全局 `ctx.doc` 或 conversation summary。
 
-```bash
-helm plugins enable builtin:token-speed   # 状态区出现速率徽标；上周期遗留测量被清空，由新流量重建
-helm plugins disable builtin:token-speed  # 徽标与文档订阅即时消失，无幻影残留；重启用时 prepare 再清上周期持久行
-```
+## 停用与失败语义
 
-无动作 / 无工具 / 无 CLI 命令（纯只读展示，不触发五端映射义务）。
+本插件数据全部是**派生测量**（可由新流量重建，无迁移、无回退）：
 
-## 实现索引
+- **启用周期开始**（`prepare` 屏障，先于任何服务 start 与输入恢复）：清空上一周期遗留的全部 `speed` 会话文档——重启或中途启用拿不到完整测量，宁可显示空，绝不把上周期 decoding/tools 态冒充当前；
+- **上下文失效**：`pi.reset` / `pi.compaction` / `helm.rewind` 落库即彻底清空该会话状态，不回读旧上下文、不回退旧 TPS；
+- **失败/中止回合**：直接清空当前测量，未完成回答绝不冒充正常终态；completed 终态保留显示到下一回合首测覆盖；
+- **停用**：UI 贡献、事件监听与文档订阅即时消失，无幻影残留；内核照常透传事实，零额外计算。
 
-- 生产者：`packages/plugins/src/token-speed.ts`（工厂 + 事件接线 + sessionDoc 发布节流 + 生命周期服务）
-- 契约：`packages/plugins/src/token-speed/contracts.ts`（文档形状、事件载荷守卫、常量）
-- 算法：`packages/plugins/src/token-speed/tracker.ts`（纯状态机，时间注入可测）
-- 前端：`packages/plugins/src/token-speed/client/index.tsx`（`TokenSpeedStatusBadge`）
-- 测试：`packages/plugins/test/token-speed.test.ts`（算法 + 装配 + 生命周期）、`packages/plugins/test/token-speed-metering.test.ts`（重试、工具轮、迟到快照和长回合计量）；真实组合层集成：`packages/plugins/test/token-speed.integration.test.ts`；内核事实透传：`packages/kernel/test/live-generation.test.ts`
+## 源码与测试入口
+
+| 内容 | 位置 |
+| :--- | :--- |
+| 插件入口（事件接线 + 节流发布 + 生命周期） | `packages/plugins/src/token-speed.ts` |
+| 契约与常量 | `packages/plugins/src/token-speed/contracts.ts` |
+| 纯状态机（时间注入可测） | `packages/plugins/src/token-speed/tracker.ts` |
+| 前端徽标 | `packages/plugins/src/token-speed/client/index.tsx` |
+| 测试 | `packages/plugins/test/token-speed.test.ts`、`token-speed-metering.test.ts`（重试、工具轮、迟到快照、长回合计量）、`token-speed.integration.test.ts`（真实组合层）；内核事实透传 `packages/kernel/test/live-generation.test.ts` |
+
+## 相关文档
+
+- [插件系统设计与契约](overview.md)：`ctx.sessionDoc` 分片与专用 SSE 机制
+- [微内核架构总览](../architecture/overview.md)：内核只透传通用流式事实的边界

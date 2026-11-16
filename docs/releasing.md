@@ -1,84 +1,106 @@
-# helm 发布流程（release.yml）
+# helm 发布流程
 
-本文描述 `.github/workflows/release.yml` 的职责链、发布门槛与操作步骤。常规 push / PR 校验见 `ci.yml`，桌面三平台日常验证见 `desktop-ci.yml`，互不影响：`release.yml` 仅由 `v*` tag 触发。
+本文面向执行版本发布的维护者，描述 `.github/workflows/` 三条工作流的真实边界：本地能验什么、CI 验什么、release 流水线发布什么、哪些环节没有覆盖（签名/公证、部分网络场景）。读完你应当能安全地打 tag 发版并知道每一步失败时去哪里找现场。开发阶段的日常验证见 [AGENTS.md](../AGENTS.md) 与[安装与配置指南](getting-started/installation.md)。
 
-## 职责链
+## 当前状态：三条工作流各管一段
 
-| 作业 | 职责 | 触发面 |
-| --- | --- | --- |
-| `verify` | 校验 tag 形态、探测 payload 组装器 | 仅读取仓库 |
-| `build` | ubuntu 全量构建与测试（等价 ci.yml，作为发布门槛） | 仅读取仓库 |
+| 工作流 | 触发 | 职责 |
+| :--- | :--- | :--- |
+| `ci.yml` | push / PR | 全仓验证：typecheck → lint → `check:hygiene` → build → POSIX 全量 `test:all`、Windows `test:unit` + 跨平台路径回归 |
+| `desktop-ci.yml` | push(main) / PR / 手动 | 桌面三平台（Linux/Windows/macOS）：desktop 包 typecheck/build → 测试 → `dist:dir` 解包应用 → 打包 App 冒烟 → `dist --publish never` 产出安装包 artifact（绝不自动发布） |
+| `release.yml` | 仅 `v*` tag | 发布：verify → build → desktop-package×3 → npm-payload → desktop-release（草稿 Release） |
+
+`desktop-ci.yml` 不重复跑全仓测试（那是 `ci.yml` 的职责），`release.yml` 的 `build` 作业承担发布门槛（等价 ci.yml 的 ubuntu 通道 + payload pack/install/start 网络验收）。
+
+## release.yml 职责链
+
+| 作业 | 职责 | 触达面 |
+| :--- | :--- | :--- |
+| `verify` | 校验 tag 形态（`v<semver>`）、探测 payload 组装器 | 仅读仓库 |
+| `build` | ubuntu 全量构建与测试 + payload 网络验收（`PAYLOAD_NPM_SMOKE=1`） | 仅读仓库 |
+| `desktop-package` | 三平台打安装包（`--publish never`）+ 打包 App 冒烟，产物作 workflow artifact | 仅读仓库 |
 | `npm-payload` | npm Hub payload 条件发布（仅 ubuntu 一次，provenance） | npm registry |
-| `desktop-package` | 三平台（Linux/Windows/macOS）打安装包（`--publish never`）+ 打包 App 冒烟，产物作为 workflow artifact | 仅读取仓库 |
 | `desktop-release` | 汇总三平台安装包，创建草稿 Release 并上传附件 | GitHub Releases |
 
-依赖关系：`verify → build → desktop-package×3 → npm-payload → desktop-release`。npm 发布必须等待全量测试和三平台打包/冒烟通过。`desktop-release` 同时需要 `npm-payload` 与全部 `desktop-package` 成功；npm 发布失败时不创建草稿。
+依赖关系：`verify → build → desktop-package×3 → npm-payload → desktop-release`。npm 发布必须等全量测试与三平台打包/冒烟全部通过；`desktop-release` 同时需要 `npm-payload` 有确定结果（成功或明确跳过），npm 发布失败不创建草稿。
 
 ## npm Hub payload 发布（单一入口）
 
-发布依据**只有** `packages/payload/dist/package.json`（构建产物，由 `@helm/payload` 组装器生成；默认 name `@team4u/helm-hub`，构建期 env `HELM_PAYLOAD_PACKAGE` 可覆盖）。不做全仓 non-private 扫描——workspace 包即使去掉 private 也不会被本流水线发布。
+发布依据**只有** `packages/payload/dist/package.json`（构建产物；默认 name `@team4u/helm-hub`，构建期 env `HELM_PAYLOAD_PACKAGE` 可覆盖）。不做全仓 non-private 扫描。两条铁律：
 
-两条铁律：
+- **绝不 `pnpm pack` workspace 包**：`@helm/payload` 永远 `private: true`，是组装器不是发布物。对它 pack 会把 manifest 垫进 `dist/` 路径前缀，updater 按根布局探测必然落空。发布必须进入 `packages/payload/dist` 目录 `npm pack` / `npm publish`（tarball 根即 payload 根）；
+- **绝不伪称已发布**：Release 说明的 npm 状态由 `npm-payload` 作业实际输出渲染，成功 / 明确跳过 / 未完成三种结论如实陈述。
 
-- **绝不 `pnpm pack` workspace 包**：`@helm/payload` 永远 `private: true`，它是组装器不是发布物。对它 pack 会把 manifest 等内容垫进 `dist/` 路径前缀，updater 按 payload 根布局探测必然落空。发布必须进入 `packages/payload/dist` 目录用 `npm pack` / `npm publish`（tarball 根即 payload 根）。
-- **绝不伪称已发布**：Release 说明中的 npm 状态由 `npm-payload` 作业的实际输出（`status-line`）渲染，成功 / 明确跳过 / 未完成三种结论如实陈述；令牌缺失在发布前快速失败。
-
-### 发布门槛（全部满足才执行 `npm publish`）
-
-1. `packages/payload` 存在（缺失则整个作业按占位跳过，notice 说明）。
-2. `pnpm build` 后 `packages/payload/dist/package.json` 存在——缺失即组装器契约破裂，作业显式失败。
-3. 该 package.json `private !== true`（`private: true` 走占位跳过分支，绿色成功、不 publish）。
-4. `version` 与 tag 完全锁步（不一致显式失败）；`repository` 字段存在（npm provenance 必需，须指向本仓库）。
-5. `NPM_TOKEN` secret 已配置，注入为 `NODE_AUTH_TOKEN`（`setup-node` 的 `registry-url` 据此写入 runner `~/.npmrc`，npm publish 实际读取的就是它）。缺失则快速失败并给出指引，绝不半途报晦涩错误、绝不假装成功。
-
-满足后在 `packages/payload/dist` 内 `npm pack --pack-destination` 打 tarball，再 `npm publish <tarball> --provenance --access public`（provenance 依赖 OIDC，作业声明 `id-token: write`；npm >= 9.5，Node 24 自带满足）。npm Trusted Publishing（OIDC 免令牌直发）当前未启用，启用后可替换第 5 步。
-
-### 与桌面安装包的关系
-
-npm payload 只在 ubuntu 构建、发布一次。三平台桌面安装包 baseline 同源——各平台在 `desktop-package` 矩阵中自行 `assemble-hub` 组装（不消费 npm 产物）；已发布安装的桌面客户端依赖由桌面端 bundled npm 安装，与本流水线无关。
+发布门槛（全部满足才 `npm publish`）：`packages/payload` 存在 → 构建后 `dist/package.json` 存在（缺失即组装器契约破裂显式失败）→ `private !== true`（`private: true` 走占位跳过分支，绿色成功不 publish）→ `version` 与 tag 锁步 + `repository` 字段存在（provenance 必需）→ `NPM_TOKEN` secret 已配置（注入为 `NODE_AUTH_TOKEN`；缺失快速失败给指引）。满足后在 dist 内 `npm pack` 打 tarball 再 `npm publish <tarball> --provenance --access public`（provenance 依赖 OIDC，作业声明 `id-token: write`）。npm Trusted Publishing（OIDC 免令牌）当前未启用。
 
 ## 桌面安装包（Electron）
 
-- `desktop-package` 矩阵流程：install frozen → 全仓 build → `dist:dir` 解包应用 → `scripts/desktop-smoke.mjs --packaged` 冒烟（定位 `release/*-unpacked` 可执行文件，隔离 `HELM_DATA_DIR`、固定 3202 端口（可显式 `--port=<测试端口>`，端口被占则 preflight 拒绝、绝不 attach 既有服务）、60s 超时杀树，依据 `smoke.json` 的 `ok:true` + `nativeCompiler:true`（workflow/mermaid 编译真实可用）判定；Linux 包 `xvfb-run`，依赖 `libasound2t64`（ubuntu-24.04 包名））→ `dist -- --publish never` 产出安装包。
-- 安装包目录是 **`packages/desktop/release/`**（electron-builder `directories.output`；`dist/` 是 tsc 产物目录，两回事）。上传集合：`*.exe`（NSIS）/ `*.dmg` / `*.zip`（mac）/ `*.AppImage` / `*.deb`（Linux）。矩阵上传步骤 `if-no-files-found: error`——某平台一个安装包都没产出即失败，`desktop-release` 下载后再兜底校验非空，绝不发布空附件草稿。
-- 冒烟报告（`smoke.json` / 截图 / `stdout.log` / `stderr.log`）在矩阵与 `desktop-ci.yml` 均 `if: always()` 上传（artifact 名 `release-smoke-<os>` / `smoke-report-<os>`），失败现场永远保留。
-- 全部未签名 / 未公证（无证书资产；mac `identity: null`），说明如实写进草稿。
-- 草稿 Release（`--generate-notes` 自动变更记录 + npm 状态如实陈述）需人工核对后手动 Publish，流水线不自动公开；重复运行同一 tag 用 `--clobber` 覆盖附件。
-- 日常 push / PR 的三平台打包与冒烟在 `desktop-ci.yml`（同样上传安装包 artifact，`--publish never`），本流水线不与之重复跑全量测试（`build` 作业承担发布门槛）。
+- `desktop-package` 流程：install frozen → 契约检查（`scripts/desktop-ci-contract.mjs`）→ 全仓 build（`assemble-hub` 依赖 workspace dist）→ `dist:dir` → 冒烟（`scripts/desktop-smoke.mjs --packaged`：定位解包可执行文件、隔离 `HELM_DATA_DIR`、固定端口（被占 preflight 拒绝、绝不 attach 既有服务）、60s 超时杀树，依据 `smoke.json` 的 `ok: true` 判定；Linux 需 `xvfb-run` 与 `libasound2t64`）→ `dist --publish never` 产出安装包；
+- 安装包目录是 **`packages/desktop/release/`**（electron-builder 输出；`dist/` 是 tsc 产物目录，两回事）。上传集合：`*.exe`（NSIS）/ `*.dmg` / `*.zip` / `*.AppImage` / `*.deb`，`if-no-files-found: error`；`desktop-release` 下载后再兜底校验非空，绝不发布空附件草稿；
+- 冒烟报告（`smoke.json` / 截图 / 日志）`if: always()` 上传，失败现场永远保留；
+- **签名与公证的真实边界：当前无证书资产，全部安装包未签名 / 未公证（mac `identity: null`）**，草稿说明如实陈述；macOS / Windows 首次安装可能触发系统开发者验证提示。Electron 底座更新走托盘「下载桌面新版」打开 GitHub Releases，完整应用的无人值守替换尚未接入；
+- 草稿 Release（`--generate-notes`）需人工核对后手动 Publish；重复运行同一 tag 用 `--clobber` 覆盖附件。
 
 ## 发布操作步骤
 
 ```bash
-# 1. 全量锁步 bump 版本（packages/payload 及 dist 契约的单一版本源需与 tag 一致）
+# 1. 全量锁步 bump 版本（payload 版本单一来源需与 tag 一致）
 # 2. 提交变更
 git commit -am "chore(release): v0.1.0"
 # 3. 打 tag 并推送
 git tag v0.1.0
 git push origin v0.1.0
-# 4. 在 Actions 观察 Release 流水线（verify → build → desktop-package×3 → npm-payload → desktop-release）
-# 5. 核对草稿 Release 内容后手动 Publish
+# 4. 在 Actions 观察 verify → build → desktop-package×3 → npm-payload → desktop-release
+# 5. 核对草稿 Release 内容（npm 状态行、安装包清单、未签名说明）后手动 Publish
 ```
 
 ## 本地校验
 
+本地能覆盖的检查与流水线的边界：
+
 ```bash
-# YAML 语法
-python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml')); yaml.safe_load(open('.github/workflows/desktop-ci.yml'))"
-# 工作流静态检查（可选，若本地安装了 actionlint）
-actionlint .github/workflows/release.yml .github/workflows/desktop-ci.yml
-# 打包 App 冒烟 wrapper（需先 dist:dir 产出解包应用；本机 3202 有真实 Hub 时显式传测试端口）
+# 全量验收（等价发布门槛的测试面）
+pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
+
+# payload 组装与契约（网络验收默认跳过，CI 在 release 的 build 作业以 PAYLOAD_NPM_SMOKE=1 执行）
+pnpm --filter @helm/payload run build
+
+# 桌面打包 App 冒烟（需先 dist:dir；本机 3202 有真实 Hub 时显式传测试端口）
+pnpm --filter @helm/desktop run dist:dir
 node scripts/desktop-smoke.mjs --packaged --port=32020
+
+# 工作流 YAML 静态检查（可选）
+python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
 ```
+
+本地**不**覆盖：三平台交叉打包（各平台 runner 自行 assemble，不能拿 Linux 依赖交叉打 macOS）、npm 真实 publish、GitHub Release 创建、真实 npm registry 下载链路（桌面 updater 的完整端到端）。
 
 ## 排错速查
 
 | 现象 | 原因与处理 |
-| --- | --- |
-| `verify` 失败：tag 不是 v<semver> | 改用合法 tag（如 `v0.1.0`、`v1.2.3-rc.1`） |
-| `npm-payload` 失败：dist/package.json 缺失 | 组装器契约破裂：`pnpm build` 后 `packages/payload/dist` 根必须有可发布 package.json（含 name/version/files） |
-| `npm-payload` 失败：版本与 tag 不一致 | payload 版本单一来源锁步 tag 后重新打 tag |
-| `npm-payload` 失败：未配置 NPM_TOKEN | Settings -> Secrets and variables -> Actions 配置 `NPM_TOKEN`（建议 Granular Access Token 限定 `@team4u/helm-hub`）后重跑 |
-| `npm publish` 被 registry 拒绝（provenance） | 确认 payload package.json 的 `repository` 与实际发布仓库一致、令牌有目标包权限 |
+| :--- | :--- |
+| `verify` 失败：tag 不是 v\<semver\> | 改用合法 tag（如 `v0.1.0`、`v1.2.3-rc.1`） |
+| `npm-payload`：dist/package.json 缺失 | 组装器契约破裂：`pnpm build` 后 `packages/payload/dist` 根必须有可发布 package.json |
+| `npm-payload`：版本与 tag 不一致 | payload 版本单一来源锁步 tag 后重新打 tag |
+| `npm-payload`：未配置 NPM_TOKEN | Settings -> Secrets and variables -> Actions 配置后重跑 |
+| `npm publish` 被 registry 拒绝（provenance） | 确认 payload `repository` 与实际仓库一致、令牌有目标包权限 |
 | `desktop-package` 冒烟失败 | 下载 `release-smoke-<os>` artifact 看 `smoke.json` / 截图 / 日志尾部 |
 | `desktop-package` 上传失败：no files found | `packages/desktop/release/` 无安装包产物，检查 electron-builder 日志 |
-| `desktop-release` 失败：未下载到任何安装包 | 矩阵 artifact 缺失（上游已失败时本作业不会运行；此处为兜底断言） |
+| `desktop-release`：未下载到任何安装包 | 矩阵 artifact 缺失（上游失败时本作业不会运行；此处为兜底断言） |
+
+## 源码与测试入口
+
+| 内容 | 位置 |
+| :--- | :--- |
+| 三条工作流 | `.github/workflows/ci.yml`、`desktop-ci.yml`、`release.yml` |
+| 桌面冒烟脚本 | `scripts/desktop-smoke.mjs` |
+| 桌面包契约检查 | `scripts/desktop-ci-contract.mjs` |
+| payload 组装器 | `packages/payload/build.mjs` |
+| 桌面打包配置 | `packages/desktop/electron-builder.yml`、`scripts/assemble-hub.mjs` |
+| 测试 | `packages/payload/test/payload.test.ts`（含网络验收用例）、`packages/desktop/test/` |
+
+## 相关文档
+
+- [@helm/payload README](../packages/payload/README.md)：payload 布局与依赖补齐契约
+- [Helm Desktop README](../packages/desktop/README.md)：桌面监督、更新与环境变量
+- [安装与配置指南](getting-started/installation.md)：端口与数据目录规划

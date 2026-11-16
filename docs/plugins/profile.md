@@ -1,107 +1,64 @@
 # 角色与技能底座插件
 
-`builtin:profile` 是系统常驻底座插件（`locked: true`，不可停用、不可卸载），为所有会话按其绑定的 `profileId` 注入人格定义（SYSTEM.md）、工作区项目约定（AGENTS.md）、可用技能目录与跨 Profile 协作认知。长期记忆已拆分至独立的 [`builtin:memory`](memory.md)，本插件零记忆逻辑；内核与 `@helm/protocol` 对两者均无感知，全靠插件在 `before_turn` 注入。
+`builtin:profile` 解决「会话知道自己是谁、能用什么」的问题：按会话绑定的 Profile 注入人格定义（SYSTEM.md）、工作区项目约定（AGENTS.md）、可用技能目录与跨 Profile 协作认知，并提供 `load_skill` 工具按需下钻技能手册。适合配置角色的使用者、编写技能的插件作者，以及排查「模型为什么看不到某技能」的维护者。长期记忆已拆分至独立的 [`builtin:memory`](memory.md)，本插件零记忆逻辑；内核与 `@helm/protocol` 对两者均无感知。
 
-## 启动自举
+## 当前状态
+
+系统常驻底座插件：`locked: true`，不可停用、不可卸载（停用返回 `403 locked_plugin_cannot_be_disabled`）。默认 `assistant` Profile 的托管元数据由本插件自举。
+
+## 能力和入口
+
+### 启动自举
 
 插件服务 `profile-skills` 在启动时完成两件事：
 
-1. **同步受管系统技能 `helm-cli`**：经 `ctx.host.skills.ensureSkill` 把 `skills/helm-cli/`（SKILL.md + `references/workflows-and-agents.md` + `references/skill-and-plugin-dev.md` + `references/plugin-client-code-splitting.md`）以源码版本为准逐文件覆盖、缺失补齐。PluginHost 校验 SKILL.md frontmatter 的 `managedByPlugin` 绑定 `builtin:profile`，登记受管后常规写入接口统一 403 拒绝。
-2. **补写默认 Profile 托管声明**：默认 `assistant` Profile 由内核 `ProfileService.ensureDefault` 先行创建；插件启动时若其 `profile.json` 缺少 `managedByPlugin`，经 `ctx.host.profiles.save` 显式补写 `builtin:profile`（已存在或已是其他值时原样保留，不做旧数据归一化）。默认 Profile 不存在属内核未初始化异常，如实上抛。
+1. **同步受管系统技能 `helm-cli`**：经 `ctx.host.skills.ensureSkill` 把 `skills/helm-cli/`（SKILL.md + references）以源码版本为准逐文件覆盖、缺失补齐。PluginHost 校验 SKILL.md frontmatter 的 `managedByPlugin` 绑定 `builtin:profile`，受管技能常规写入接口 403 拒绝。技能目录同时合入机器级共享来源 `~/.agents/skills`。
+2. **补写默认 Profile 托管声明**：默认 `assistant` Profile 由内核先行创建；插件启动时若其 `profile.json` 缺少 `managedByPlugin`，显式补写 `builtin:profile`（已存在时原样保留，不做旧数据归一化）。默认 Profile 不存在属内核未初始化异常，如实上抛。
 
-自举不重建被外部删除的资产——缺失告警与自愈见下文。生成式 UI 手册（`generative-ui` 技能）归 `builtin:json-render` 自举，随其启停进入或离开可用目录，与本插件无耦合。
+### `before_turn` 注入流水线
 
-## `before_turn` 注入流水线
-
-每个回合开始前，插件按会话 Profile 注入以下段落（均实时重读配置，Profile 修改与插件启停在下一回合即时生效，不维护第二份持久目录）：
+每回合开始前按会话 Profile 注入以下段落（均实时重读，Profile 修改与插件启停在下一回合即时生效）：
 
 | 段落 ID | 触发条件 | 内容 |
 | :--- | :--- | :--- |
-| `profile.system` | SYSTEM.md 非空白 | SYSTEM.md 原始全文（人格、语气与行为准则） |
-| `profile.assets-missing` | SYSTEM.md 缺失或为空 | `<profile_assets_missing>` 包裹的显式说明：本回合无该 Profile 人格，要求模型告知用户、谨慎回答、不假装特定人格 |
-| `profile.agents` | 会话靶点工作区存在非空白 `AGENTS.md` | `<project_instructions path="...">` 包裹的项目约定全文（先经全局脱敏，超过 64000 字符显式截断） |
-| `profile.agents-unavailable` | 远端节点离线、宿主能力未接线（nodeIpc / executionEnv）、`AGENTS.md` 为特殊文件或超过 256 KiB 字节读取上限、读取期间文件发生变化，或读取遭遇 `not_found` / `is_directory` 之外的真实错误 | `<project_instructions_unavailable>` 包裹的显式说明：本回合未能取得项目约定及原因，绝不静默降级为「无文件」 |
-| `profile.skills` | 可用技能非空 | `<available_skills>` 包裹的技能目录（id/name/description/references），提示经 `load_skill` 按需加载 |
-| `profile.catalog` | 当回合实际有 `subagent` / `SubagentWorkflow` 派工工具 | `<available_profiles>` 协作目录与委派指引 |
+| `profile.system` | SYSTEM.md 非空白 | SYSTEM.md 原始全文 |
+| `profile.assets-missing` | SYSTEM.md 缺失或为空 | `<profile_assets_missing>` 显式说明：本回合无该 Profile 人格，要求模型告知用户、不假装特定人格 |
+| `profile.agents` | 会话靶点工作区存在非空白 AGENTS.md | `<project_instructions path="...">` 项目约定全文（先脱敏，超 64000 字符显式截断） |
+| `profile.agents-unavailable` | 远端节点离线、宿主能力未接线、AGENTS.md 为特殊文件或超 256 KiB 读取上限等 | `<project_instructions_unavailable>` 显式说明原因，绝不静默降级为「无文件」 |
+| `profile.skills` | 可用技能非空 | `<available_skills>` 目录（id/name/description/references） |
+| `profile.catalog` | 当回合实际有 `subagent` / `SubagentWorkflow` 派工工具 | `<available_profiles>` 协作目录与 `@` 点名委派指引 |
 
-**资产缺失自愈防线**：外部误删 SYSTEM.md 时降级为空文本但不静默换人格——先向人类发一次性 warning 通知（按 profileId 独立去重，文件恢复即停、再次缺失可重新告警），再向模型注入 `profile.assets-missing` 显式说明，后续经 `helm profiles update --system` 等写入自愈重建（不是启动时自动恢复）。`not_found` 之外的 IO/权限错误如实上抛，不吞、不降级。
+目录注入钩子以低于默认值的 priority 运行（`-100`），看到的是默认优先级钩子（如路由模式工具剥离）收敛后的最终工具清单——无派工工具的回合（含达到深度上限的叶子子代理）不注入目录，避免教唆调用不存在的工具；不按 `parentConversationId` 一刀切排除（fork / SuperAgent worker 有父链但应保留协作能力）。
 
-**工作区 AGENTS.md 项目约定**：每回合开始前按会话靶点（节点缺省 `local` + `cwd`）读取工作区根目录的 `AGENTS.md`，注入 `profile.agents`（紧随人格资产、先于技能目录），文件修改下一回合实时生效（无缓存）。路径按 `cwd` 自身形状选择词法规则合成，POSIX 与 Windows 靶点路径均正确。行为契约：
+**资产缺失自愈防线**：外部误删 SYSTEM.md 时按空处理但不静默换人格——先向人类发一次性 warning 通知（按 profileId 独立去重，恢复即停、再删可重新告警），再注入 `profile.assets-missing`；后续经 `helm profiles update --system` 等写入自愈重建。`not_found` 之外的 IO/权限错误如实上抛。
 
-- **常态跳过**：工作区无该文件（`not_found`）、同名目录（`is_directory` / `EISDIR`）、悬空软链或内容纯空白时，本回合不注入任何相关段落；
-- **有界安全读取**：正文绝不整读——先经 `canonicalPath` 解析软链，再以 `openBinaryReader({ noFollow: true })` 在解析后的真实路径上打开普通文件，kind / size 以同一打开句柄上的元信息为权威（预检后路径被换成软链或 FIFO 都无法劫持本次读取：软链被 `noFollow` 拒绝，FIFO 过不了普通文件检查且不阻塞）；正文只做有界定位读，至多请求 256 KiB + 1 字节；
-- **字节上限**：单次读取上限 256 KiB（`MAX_AGENTS_MD_BYTES`；64k 字符的最坏 UTF-8 编码约 192 KiB，仍有余量）。句柄元信息报告超过上限、或一次有界读取实证超过上限的文件，不读 / 不注入正文，注入 `profile.agents-unavailable` 并附实际字节数；FIFO 等特殊文件同样显式不可用，绝不读正文；
-- **读取期间变化**：读后同句柄二次复核 size / mtime 与实读字节数，文件在读取期间增长、截断或改写（不一致）时不注入可能不完整的旧前缀，显式注入 `profile.agents-unavailable` 说明变化；
-- **诚实性红线**：远端节点经在线预检判定离线时直接注入 `profile.agents-unavailable` 显式说明（不进入远程执行通道阻塞等待）；宿主能力未接线（在线探测、执行环境抛 `unsupported` 等）、权限、连接中断、句柄关闭失败等真实故障同样注入该段并附错误码与脱敏后的错误消息，绝不静默降级为「文件不存在」；
-- **机密与上限防线**：内容与错误消息注入前先经宿主全局脱敏（工作区文件可能意外包含机密明文）；超过 64000 字符上限时截取前缀并附显式截断说明，绝不静默截断。
+### 工具、动作与 UI
 
-`profile.catalog` 的注入钩子以低于默认值的 priority（-100）运行，确保在默认优先级的工具剥离钩子（如 superagent 路由模式收敛、`builtin:workflow` 对达到层级上限的受管子代理剥离派工工具）之后、按届时的实际 `turn.tools` 决定注入与否——没有可用派工工具的回合不注入目录，避免教唆模型调用不存在的工具。不按 `parentConversationId` 一刀切排除（fork 会话或 SuperAgent 驻留 Worker 同样有父链，但只要当回合仍持有派工工具即保留完整协作能力）。
+- **`load_skill` 工具**：读取技能 SKILL.md 或目录内参考文件（`path` 示例 `references/guide.md`）。可用性实时判定：Profile 白名单外或托管插件停用返回 `403 skill_not_available`；技能不存在 `404 not_found`。这是认知目录边界，不是权限沙箱——bash/API 仍可读文件。
+- **`list_mentionable` 动作**（幂等）：`@` 补全源。身份裁决以调用上下文会话为唯一可信来源，无上下文时接受显式 `--conversation-id` / `--profile-id`（待命草稿态），三者都缺显式 `400 validation_error`。CLI：`helm profile list_mentionable`。
+- **`composerCompleter`** `profile-mentions`：`@` 触发的补全源（复用宿主通用补全渲染）。
+- **`sidebarItem`** `assistant`：左栏个人助理站位，指向 `conversation:profile:assistant`（不依赖某一具体会话存在，会话全部删除后站位仍在）。
 
-## 跨 Profile `@` 点名协同
+## 配置与数据边界
 
-用户在任意会话写 `让 @reviewer 审查` 时，`@` 只是文本点名：由当前智能体理解依赖并决定是否经 `subagent({ agentType: "reviewer", prompt })` 委派，补全不执行命令、不劫持消息转发。协作目录与补全共用同一候选计算（`computeCatalog`），排除规则四条：
+本插件自身**无 `ctx.configSchema` 配置项**。Profile 的技能白名单（`Profile.skills`：缺省全部、`[]` 禁用全部、非空白名单）与 SYSTEM.md 归 Profile 配置管理（`helm profiles create/update`）。插件不持有自己的持久文档——技能目录每回合从 `ctx.host.skills.list()` 现读。
 
-- 排除当前会话自身 Profile（不能点名自己）；
-- 排除 `humanSelectable: false`（superagent/watchdog 等常驻单例角色不面向人类）；
-- 排除 `managedByPlugin` 指向未启用插件的托管角色（托管插件停用即隐藏）；
-- 排除 `runtime.kind` 无任何已启用 `profile.runtime` UI 贡献对应的角色（外部运行时未被插件接管时原生执行行会显式拒绝，不进目录误导）。
+## 停用与失败语义
 
-候选摘要从各自 SYSTEM.md 的首个非标题自然段提取、单行化并限 100 Unicode 码点；候选缺 SYSTEM.md 时摘要留空（`undefined`），不告警、不伪造简介——认知缺失告警纪律只针对「当前会话绑定 Profile」的人格资产。目录只提供摘要，不把其他角色的完整 SYSTEM.md 或 MEMORY.md 注入当前会话。
+不可停用（locked）。故障面主要是资产读取：SYSTEM.md 缺失按上文显式告警与注入处理；AGENTS.md 读取失败显式注入 `profile.agents-unavailable`；Profile 不存在属配置异常，`500 profile_not_found` 显式报错。候选 Profile 摘要读取的 `not_found` 只影响该候选的 `summary` 字段（undefined，不伪造简介），其余错误如实上抛。
 
-补全与目录消费两个入口：
+## 源码与测试入口
 
-```bash
-# 只读动作（幂等），自动映射 HTTP 与 helm CLI
-helm profile list_mentionable --current --json
-# 无会话上下文时显式指定目标会话或待命角色
-helm profile list_mentionable --input '{"query":"review","conversationId":42}' --json
-helm profile list_mentionable --input '{"query":"review","profileId":"assistant"}' --json
-```
-
-身份裁决纪律：调用上下文会话（Web 会话补全 / CLI `--current` 注入的外层 `conversationId`）是唯一可信来源；无上下文时依次接受显式 `input.conversationId` 或 `input.profileId`（待命草稿态使用）且必须经真实存在性校验。三者都缺显式 `400 validation_error`，绝不猜测默认会话或角色。Web 侧声明 `trigger: '@'`、`priority: 100` 的 `composerCompleter` 绑定该动作（`source: { kind: 'action', actionId: 'list_mentionable' }`）。
-
-## 两层技能按需加载
-
-为节约模型上下文，技能采用两层加载：Layer 1 是 `before_turn` 注入的轻量目录（名称、描述与引用清单）；Layer 2 是模型按需调用 `load_skill` 工具读取 SKILL.md 全文或 `references/*.md` 子文件。工具执行时按会话当前 Profile 白名单与插件启停状态**实时判定**可用性（与目录注入同规则）：白名单外或托管插件停用返回 `403 skill_not_available`，技能不存在返回 `404 not_found`（不泄漏内容）；路径穿越、绝对路径与软链在 `SkillService.readFile` 边界拒绝。
-
-`profile.json` 的 `skills` 字段控制当前 Profile 的技能目录与 `load_skill`：
-
-| 配置 | 行为 |
+| 内容 | 位置 |
 | :--- | :--- |
-| 省略 `skills` | 全部当前可用技能；新安装的技能自动可用 |
-| `"skills": []` | 禁用全部技能 |
-| `"skills": ["helm-cli", "git-commit"]` | 仅白名单内技能可用 |
+| 插件入口 | `packages/plugins/src/profile.ts` |
+| AGENTS.md 读取与注入 | `packages/plugins/src/profile/agents-md.ts` |
+| 协作目录计算与渲染 | `packages/plugins/src/profile/catalog.ts` |
+| helm-cli 技能资产 | `packages/plugins/src/profile/skill/`（构建后随包分发） |
+| 测试 | `packages/plugins/test/profile-agents-md.test.ts`、`profile-collaboration.test.ts`、`profile-collaboration.integration.test.ts`、`profile-starters.test.ts` |
 
-托管技能额外要求其 `managedByPlugin` 对应插件处于启用状态。此配置是技能发现与加载策略，不是权限沙箱——bash 与其他工具仍可读文件。
+## 相关文档
 
-### 机器级共享技能来源（~/.agents/skills）
-
-除 `~/.helm/skills`（或 `HELM_DATA_DIR` 覆盖值）外，内核自动扫描机器级共享来源 `~/.agents/skills`（pi 生态技能库，如 git-commit、herdr、actiondock 等），并将技能摘要标记为 `source: 'agents'`：
-
-- **SkillService 的读写语义**：`SkillService` 从共享根扫描与读取；其 `writeFile` / `ensureSkill` 仍只写 dataDir。dataDir 同名条目优先，作为 Helm 技能目录内的本地覆盖。该语义只约束技能服务和插件自举资产，不是通用文件访问沙箱。
-- **通用命令权限**：`bash`、`read`、`write`、`edit` 按执行节点操作系统权限工作，不受会话 cwd 目录限制。因此，命令工具可以直接访问（包括写入）`~/.agents/skills`；共享来源标识不代表文件系统只读，也不构成安全边界。若当前执行节点与 Hub 不同，命令操作的是执行节点文件系统，技能扫描仍发生在 Hub 的共享根。
-- **加载与安全校验**：外部 frontmatter 中的 `managedByPlugin` 会被剥离，避免共享技能伪装成受管插件技能。`load_skill` / `SkillService.readFile` 仍只接受技能包内相对路径，并拒绝路径穿越和软链；这些校验限定该 API 的读取范围，不限制通用 `read`/`write`/`edit` 命令。
-- **条目过滤**：共享根整体不存在视为空；单条目坏数据（非法 id、缺 SKILL.md、frontmatter 坏、软链目录）跳过，不拖垮整个技能目录；非 ENOENT 的真实 IO 错误如实上抛。references 不列隐藏项、`node_modules`、构建产物目录或不符合 `load_skill` 路径格式的文件。
-- **白名单照常生效**：`profile.skills` 白名单与插件启停过滤对共享技能同样适用；共享技能可直接选入白名单。
-- **热生效**：每次回合重新读目录，共享根增删技能下一回合即生效，无需重启。
-
-```bash
-helm profiles update coder --skills '["helm-cli","git-commit"]' --json
-helm profiles update coder --skills '[]' --json
-helm profiles update coder --all-skills --json   # 删除 skills 键，恢复全部
-```
-
-## `Profile.starters` 空白会话引导词
-
-`profile.json` 的 `starters` 字段（`[{label, prompt}]`）是纯静态配置，不是 UI 扩展点：仅真正空白且历史已加载完整的会话显示引导卡片，点击回填草稿后由用户确认发送。上限六项；label 去首尾空白后最多 24 个 Unicode 码点，prompt 非纯空白、最多 4000 码点。草稿、附件、历史编辑与在途上传不被覆盖。
-
-```bash
-helm profiles update reviewer --starters '[{"label":"审查改动","prompt":"请审查当前工作区的未提交改动。"}]' --json
-helm profiles update reviewer --starters '[]' --json   # 清空恢复宿主默认
-```
-
-## 详情抽屉子插槽与左栏站位
-
-本插件提供 `builtin:profile/detail-section` 子插槽（协议常量 `PROFILE_DETAIL_SECTION_SLOT`）：Web 角色详情抽屉在该位置挂载 `<PluginSlot>`，传递 `{ profileId, isNew, disabled }`。其他插件经 `ctx.ui.slot({ target: PROFILE_DETAIL_SECTION_SLOT })` 注入单 Profile 级扩展区块——[`builtin:memory`](memory.md) 的记忆开关与编辑器即挂载于此。宿主不硬编码任何插件业务字段。
-
-左栏注册 `sidebarItem`（`target: 'conversation:profile:assistant'`，order 0）作为 assistant Profile 站位导航：指向 Profile 而非某一具体会话——该 Profile 的会话全部删除后站位仍在，点击可新建会话，不依赖任何固定会话 ID 存在。
+- [长期记忆](memory.md)：MEMORY.md 注入与单 Profile 开关（与本插件正交）
+- [插件系统设计与契约](overview.md)：受管技能与技能目录的宿主机制
+- [CLI 命令参考](../cli/reference.md)：`helm profiles` / `helm skills` 命令
