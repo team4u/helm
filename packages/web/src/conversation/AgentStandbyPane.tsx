@@ -1,22 +1,34 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Profile } from '@helm/protocol'
-import { conversationsApi } from '../lib/api.js'
+import { assetsApi, conversationsApi } from '../lib/api.js'
 import { errorText, formatBytes } from '../lib/format.js'
-import { HelmIcon, Popover, PopoverContent, PopoverPortal, PopoverTrigger, Select, type SelectOption } from '@helm/plugin-client'
+import { HelmIcon, Select, type SelectOption } from '@helm/plugin-client'
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { useStableCallback } from '../lib/use-stable-callback.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { collectEnabledPluginIds, isHumanSelectableProfile } from '../shell/sidebar-model.js'
-import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { Tooltip } from '../ui/Tooltip.js'
+import { CommandPopover, type PopoverItem } from './CommandPopover.js'
+import { ModelPickerControl } from './ModelPicker.js'
+import { detectCompletionToken } from './composer-completion-model.js'
 import { envDraftOnNodeChange, useIsMobile } from './composer-model.js'
+import {
+  COMPOSER_SHORTCUTS,
+  isComposerSubmitEnterEvent,
+  isShiftTabEvent,
+  nextThinkingLevel,
+} from './keybindings-model.js'
+import { slashMenuSkills } from './slash-menu-skills.js'
 import {
   admitStandbyFiles,
   executeStandbySend,
   getStandbyDraft,
   inheritedEnvOf,
   resetEnvStandbyDraft,
+  resolveStandbyEffectiveModel,
+  resolveStandbyThinkingLevel,
   standbyDraftKey,
   standbyEnvError,
   standbyManageAction,
@@ -57,6 +69,38 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   const profile = useMemo(() => store.profiles.find((p) => p.id === profileId), [store.profiles, profileId])
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
   const humanSelectable = profile !== undefined && isHumanSelectableProfile(profile, enabledPluginIds)
+
+  // store 未携带全局默认模型时，按需读取 /api/models/default 补全模型与思考档位继承链。
+  const [fetchedDefaultModelInfo, setFetchedDefaultModelInfo] = useState<{ defaultModel: string; defaultThinkingLevel: string } | null>(null)
+  const defaultModelGenRef = useRef(0)
+  const refreshDefaultModelInfo = useCallback(async (): Promise<void> => {
+    if (store.defaultModelInfo !== undefined) return
+    const gen = ++defaultModelGenRef.current
+    try {
+      const info = await assetsApi.getDefaultModel()
+      if (gen !== defaultModelGenRef.current) return
+      if (
+        info !== null &&
+        typeof info === 'object' &&
+        !Array.isArray(info) &&
+        typeof info.defaultModel === 'string' &&
+        typeof info.defaultThinkingLevel === 'string'
+      ) {
+        setFetchedDefaultModelInfo({
+          defaultModel: info.defaultModel,
+          defaultThinkingLevel: info.defaultThinkingLevel,
+        })
+      }
+    } catch {
+      /* 全局默认读取失败时保持 null，回退角色自身与「默认模型」文案 */
+    }
+  }, [store.defaultModelInfo])
+  useEffect(() => {
+    if (store.defaultModelInfo !== undefined) return
+    void refreshDefaultModelInfo()
+    return () => { defaultModelGenRef.current++ }
+  }, [store.defaultModelInfo, refreshDefaultModelInfo])
+  const effectiveDefaultModelInfo = store.defaultModelInfo !== undefined ? store.defaultModelInfo : fetchedDefaultModelInfo
 
   // 目标环境继承：按坐标隔离后，每份草稿首次挂载即采纳本坐标环境（用户编辑优先不被覆盖）。
   useEffect(() => {
@@ -284,6 +328,8 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           draftKey={draftKey}
           draft={draft}
           profile={profile}
+          enabledPluginIds={enabledPluginIds}
+          defaultModelInfo={effectiveDefaultModelInfo}
           envError={envError}
           anchored={draft.conversationId !== undefined}
           isSplit={isSplit}
@@ -292,6 +338,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           onSend={submitDraft}
           onAddFiles={addFiles}
           onResetEnvToDefault={resetEnvToDefault}
+          onCatalogRefreshed={refreshDefaultModelInfo}
         />
       ) : null}
     </div>
@@ -299,13 +346,15 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
 }
 
 // ---------------------------------------------------------------------------
-// 待命输入区（真草稿：正文 + 附件暂存 + 模型/思考档位 + 起始环境）
+// 待命输入区（真草稿：正文 + 附件暂存 + 模型/思考档位 + 静态 '/' 技能补全 + 起始环境）
 // ---------------------------------------------------------------------------
 
 interface StandbyComposerProps {
   draftKey: string
   draft: StandbyDraftState
   profile: Profile
+  enabledPluginIds: ReadonlySet<string>
+  defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string } | null
   envError: string | null
   /** create 已锁定真实会话：模型/思考/环境随会话固化，不再接受修改。 */
   anchored: boolean
@@ -315,20 +364,170 @@ interface StandbyComposerProps {
   onSend: () => void
   onAddFiles: (files: ReadonlyArray<File>) => void
   onResetEnvToDefault: () => void
+  onCatalogRefreshed: () => Promise<void>
 }
 
-function StandbyComposer({ draftKey, draft, profile, envError, anchored, isSplit, textareaRef, fileInputRef, onSend, onAddFiles, onResetEnvToDefault }: StandbyComposerProps) {
+function StandbyComposer({
+  draftKey,
+  draft,
+  profile,
+  enabledPluginIds,
+  defaultModelInfo,
+  envError,
+  anchored,
+  isSplit,
+  textareaRef,
+  fileInputRef,
+  onSend,
+  onAddFiles,
+  onResetEnvToDefault,
+  onCatalogRefreshed,
+}: StandbyComposerProps) {
   const store = useHelmStore()
   const dragDepthRef = useRef(0)
   const [dragging, setDragging] = useState(false)
+  const [slashOpen, setSlashOpen] = useState(false)
+  const [slashQuery, setSlashQuery] = useState('')
   const isMobile = useIsMobile(680)
   const busy = draft.sending
   const sendDisabled = busy || draft.text.trim() === '' || envError !== null
-  // 锚定后锁定一切影响创建的配置：重试跳过 create，新设置不会生效，不可星现可改但不生效。
+  // 锚定后锁定一切影响创建的配置：重试跳过 create，新设置不会生效，不可显现可改但不生效。
   const configLocked = busy || anchored
 
+  const effectiveModel = resolveStandbyEffectiveModel(
+    draft.model,
+    profile.model,
+    defaultModelInfo?.defaultModel,
+  )
+  const currentModel = effectiveModel !== undefined
+    ? store.models.find((model) => model.id === effectiveModel)
+    : undefined
+  const currentLevels = currentModel?.thinkingLevels ?? ['off']
+  const effectiveThinkingLevel = resolveStandbyThinkingLevel(
+    currentLevels,
+    draft.thinkingLevel,
+    profile.thinkingLevel,
+    defaultModelInfo?.defaultThinkingLevel,
+  )
+
+  useEffect(() => {
+    setSlashOpen(false)
+    setSlashQuery('')
+  }, [draftKey])
+
+  const detectSlashPopover = useCallback((value: string, caret: number): void => {
+    const token = detectCompletionToken(value.slice(0, caret))
+    if (token !== null && token.trigger === '/') {
+      setSlashOpen(true)
+      setSlashQuery(token.query)
+      return
+    }
+    setSlashOpen(false)
+    setSlashQuery('')
+  }, [])
+
+  const applySlashPick = (apply: string): void => {
+    const el = textareaRef.current
+    const current = getStandbyDraft(draftKey).text
+    if (el === null) {
+      setSlashOpen(false)
+      return
+    }
+    const caret = el.selectionStart ?? current.length
+    const before = current.slice(0, caret)
+    const tokenRe = /(?:^|\s)(\/[a-zA-Z0-9:_-]*)$/
+    const m = tokenRe.exec(before)
+    const start = m !== null ? caret - (m[1]?.length ?? 0) : caret
+    const next = `${current.slice(0, start)}${apply}${current.slice(caret)}`
+    updateStandbyDraft(draftKey, { text: next })
+    setSlashOpen(false)
+    requestAnimationFrame(() => {
+      const pos = start + apply.length
+      el.focus()
+      el.setSelectionRange(pos, pos)
+    })
+  }
+  const applySlashPickStable = useStableCallback(applySlashPick)
+  const closeSlashPopoverStable = useStableCallback((): void => {
+    setSlashOpen(false)
+  })
+
+  const availableSkills = useMemo(
+    () => slashMenuSkills(profile, store.skills, enabledPluginIds),
+    [profile, store.skills, enabledPluginIds],
+  )
+  const slashMenuItems = useMemo<PopoverItem[]>(() => {
+    const hostItems: PopoverItem[] = [
+      {
+        id: '/new',
+        label: '/new',
+        hint: '开始新话题',
+        run: () => {
+          setSlashOpen(false)
+          if (getStandbyDraft(draftKey).sending) return
+          updateStandbyDraft(draftKey, { text: '', localFiles: [], uploaded: [], error: null })
+          store.pushNotice({ type: 'notification', level: 'info', title: '已开始新草稿', body: '继续输入新的首条消息即可' })
+        },
+      },
+      {
+        id: '/clear',
+        label: '/clear',
+        hint: '重置上下文',
+        run: () => {
+          setSlashOpen(false)
+          store.pushNotice({
+            type: 'notification',
+            level: 'warning',
+            title: '/clear 需要已有会话',
+            body: '请先发送首条消息创建会话后再使用该命令',
+          })
+        },
+      },
+      {
+        id: '/compact',
+        label: '/compact',
+        hint: '精简上下文',
+        run: () => {
+          setSlashOpen(false)
+          store.pushNotice({
+            type: 'notification',
+            level: 'warning',
+            title: '/compact 需要已有会话',
+            body: '请先发送首条消息创建会话后再使用该命令',
+          })
+        },
+      },
+    ]
+    const skillItems: PopoverItem[] = availableSkills.map((s) => ({
+      id: `/skill:${s.id}`,
+      label: `/skill:${s.id}`,
+      hint: s.name,
+      apply: `/skill:${s.id} `,
+    }))
+    return [...hostItems, ...skillItems]
+  }, [availableSkills, draftKey, store])
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (e.defaultPrevented || e.nativeEvent.defaultPrevented) {
+      return
+    }
+    if (
+      slashOpen &&
+      !e.nativeEvent.isComposing &&
+      (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Escape')
+    ) {
+      return
+    }
+    if (isShiftTabEvent(e) && !e.nativeEvent.isComposing) {
+      e.preventDefault()
+      if (configLocked) return
+      const next = nextThinkingLevel(currentLevels, effectiveThinkingLevel)
+      if (next !== null) {
+        updateStandbyDraft(draftKey, { thinkingLevel: next })
+      }
+      return
+    }
+    if (isComposerSubmitEnterEvent(e) && !e.nativeEvent.isComposing) {
       e.preventDefault()
       if (!sendDisabled) onSend()
       return
@@ -461,11 +660,30 @@ function StandbyComposer({ draftKey, draft, profile, envError, anchored, isSplit
             rows={1}
             readOnly={busy}
             placeholder={isMobile ? '输入消息开始新话题…' : '输入消息开始新话题；Enter 发送 · Shift+Enter 换行 · 可拖入或粘贴附件'}
-            onChange={(e) => updateStandbyDraft(draftKey, { text: e.target.value })}
+            onChange={(e) => {
+              updateStandbyDraft(draftKey, { text: e.target.value })
+              detectSlashPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
+            }}
+            onKeyUp={(e) => {
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+                detectSlashPopover(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)
+              }
+            }}
+            onClick={(e) => {
+              detectSlashPopover(e.currentTarget.value, e.currentTarget.selectionStart ?? e.currentTarget.value.length)
+            }}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             spellCheck={false}
           />
+          {slashOpen ? (
+            <CommandPopover
+              query={slashQuery}
+              slashItems={slashMenuItems}
+              onPick={applySlashPickStable}
+              onClose={closeSlashPopoverStable}
+            />
+          ) : null}
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
               <Tooltip content="选择附件（发送时才上传）" side="top">
@@ -480,7 +698,15 @@ function StandbyComposer({ draftKey, draft, profile, envError, anchored, isSplit
                   <HelmIcon name="plus" size={19} />
                 </button>
               </Tooltip>
-              <StandbyModelPicker draftKey={draftKey} draft={draft} profile={profile} disabled={configLocked} />
+              <StandbyModelPicker
+                draftKey={draftKey}
+                draft={draft}
+                profile={profile}
+                defaultModelInfo={defaultModelInfo}
+                disabled={configLocked}
+                isSplit={isSplit}
+                onCatalogRefreshed={onCatalogRefreshed}
+              />
               <input
                 ref={fileInputRef}
                 type="file"
@@ -514,128 +740,79 @@ function StandbyComposer({ draftKey, draft, profile, envError, anchored, isSplit
 }
 
 // ---------------------------------------------------------------------------
-// 模型 / 思考档位选择（模型随 create 提交；思考档位创建后 patch）
+// 模型 / 思考档位选择（模型随 create 提交；思考档位创建后 patch；复用 ModelPickerControl）
 // ---------------------------------------------------------------------------
 
-function StandbyModelPicker({ draftKey, draft, profile, disabled }: {
+function StandbyModelPicker({
+  draftKey,
+  draft,
+  profile,
+  defaultModelInfo,
+  disabled,
+  isSplit,
+  onCatalogRefreshed,
+}: {
   draftKey: string
   draft: StandbyDraftState
   profile: Profile
+  defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string } | null
   disabled: boolean
+  isSplit?: boolean
+  onCatalogRefreshed: () => Promise<void>
 }) {
   const store = useHelmStore()
-  const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState('')
   const lockedNote = '已随会话锁定（或发送中），重试复用当前配置'
 
-  const effectiveModel = draft.model !== undefined && draft.model !== '' ? draft.model : profile.model
-  const rawShortName = effectiveModel !== undefined && effectiveModel !== '' ? effectiveModel.split('/').pop() ?? effectiveModel : ''
-  const shortName = rawShortName.trim() !== '' ? rawShortName : '默认模型'
-  const currentModel = effectiveModel !== undefined ? store.models.find((model) => model.id === effectiveModel) : undefined
+  const effectiveModel = resolveStandbyEffectiveModel(
+    draft.model,
+    profile.model,
+    defaultModelInfo?.defaultModel,
+  )
+  const currentModel = effectiveModel !== undefined
+    ? store.models.find((model) => model.id === effectiveModel)
+    : undefined
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
-
-  // 计算待命状态下的实际生效档位：优先取草稿，若无则取角色或全局默认，兜底 off 或首项支持档位。
-  const fallbackThinkingLevel = currentLevels.includes('off') ? 'off' : (currentLevels[0] ?? '')
-  const rawThinkingLevel =
-    draft.thinkingLevel !== undefined && draft.thinkingLevel !== ''
-      ? draft.thinkingLevel
-      : profile.thinkingLevel !== undefined && profile.thinkingLevel !== ''
-        ? profile.thinkingLevel
-        : store.defaultModelInfo?.defaultThinkingLevel !== undefined && store.defaultModelInfo.defaultThinkingLevel !== ''
-          ? store.defaultModelInfo.defaultThinkingLevel
-          : fallbackThinkingLevel
-  const effectiveThinkingLevel = currentLevels.includes(rawThinkingLevel) ? rawThinkingLevel : fallbackThinkingLevel
+  const effectiveThinkingLevel = resolveStandbyThinkingLevel(
+    currentLevels,
+    draft.thinkingLevel,
+    profile.thinkingLevel,
+    defaultModelInfo?.defaultThinkingLevel,
+  )
   const showThinkingBadge = supportsThinking && effectiveThinkingLevel !== '' && effectiveThinkingLevel !== 'off'
 
   const pickModel = (model: string): void => {
-    setOpen(false)
     // 切换模型后重置思考档位为 undefined，使其按新模型能力重新解析。
-    updateStandbyDraft(draftKey, { model: model === '' ? undefined : model, thinkingLevel: undefined })
+    updateStandbyDraft(draftKey, { model, thinkingLevel: undefined })
+  }
+  const resetToDefault = (): void => {
+    updateStandbyDraft(draftKey, { model: undefined, thinkingLevel: undefined })
   }
   const pickThinking = (level: string): void => {
     updateStandbyDraft(draftKey, { thinkingLevel: level })
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm composer-model-button"
-          disabled={disabled}
-          aria-expanded={open}
-          aria-label={`模型与思考档位：${shortName}${showThinkingBadge ? ` · ${effectiveThinkingLevel}` : ''}`}
-          title={
-            disabled
-              ? lockedNote
-              : effectiveModel !== undefined && effectiveModel !== ''
-                ? `当前模型：${effectiveModel}${showThinkingBadge ? ` · 思考 ${effectiveThinkingLevel}` : ''}`
-                : `跟随角色/全局默认模型${showThinkingBadge ? ` · 思考 ${effectiveThinkingLevel}` : ''}`
-          }
-        >
-          <span className="composer-model-label">{shortName}</span>
-          {showThinkingBadge ? <span className="composer-model-level">· {effectiveThinkingLevel}</span> : null}
-          <HelmIcon name="chevron-down" size={12} />
-        </button>
-      </PopoverTrigger>
-      <PopoverPortal>
-        <PopoverContent side="top" align="start" sideOffset={8} className="composer-popover composer-model-popover">
-          <button
-            type="button"
-            className="popover-item"
-            disabled={disabled}
-            title="创建会话时不指定模型，由服务器按角色/全局默认解析"
-            onClick={() => pickModel('')}
-          >
-            跟随角色默认{profile.model !== undefined && profile.model !== '' ? `（${profile.model}）` : ''}
-          </button>
-          <div className="composer-model-search-bar" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
-              <HelmIcon name="search" size={13} />
-              <input
-                aria-label="搜索模型"
-                placeholder="搜索模型…"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </div>
-          </div>
-          {store.models
-            .filter((model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(query.toLowerCase()))
-            .map((model) => (
-              <button
-                key={model.id}
-                title={model.id}
-                type="button"
-                disabled={disabled}
-                className={`popover-item${model.id === draft.model ? ' popover-item-active' : ''}`}
-                onClick={() => pickModel(model.id)}
-              >
-                <span className="mono">{model.modelId}</span>
-                <span className="popover-item-meta">{model.provider}</span>
-              </button>
-            ))}
-          {store.models.every((model) => !model.available || model.disabled === true) && (
-            <div className="popover-item" style={{ cursor: 'default', color: 'var(--fg-subtle)' }}>暂无可用模型；请先在「模型与凭据」配置供应商密钥</div>
-          )}
-          {supportsThinking ? (
-            <>
-              <div className="popover-header">
-                思考档位
-                <span style={{ color: 'var(--fg-subtle)' }}>{shortName}</span>
-              </div>
-              <ThinkingLevelControl
-                value={effectiveThinkingLevel}
-                levels={currentLevels}
-                disabled={disabled}
-                onPick={pickThinking}
-              />
-            </>
-          ) : null}
-        </PopoverContent>
-      </PopoverPortal>
-    </Popover>
+    <ModelPickerControl
+      effectiveModel={effectiveModel}
+      selectedModel={draft.model}
+      activeThinkingLevel={effectiveThinkingLevel}
+      fallbackPanel={isSplit ? 'split' : 'primary'}
+      resetLabel={`跟随角色默认${profile.model !== undefined && profile.model !== '' ? `（${profile.model}）` : ''}`}
+      resetTitle="创建会话时不指定模型，由服务器按角色/全局默认解析"
+      buttonTitle={
+        disabled
+          ? lockedNote
+          : effectiveModel !== undefined && effectiveModel !== ''
+            ? `当前模型：${effectiveModel}${showThinkingBadge ? ` · 思考 ${effectiveThinkingLevel}` : ''} (${COMPOSER_SHORTCUTS.toggleModelPicker})`
+            : `跟随角色/全局默认模型${showThinkingBadge ? ` · 思考 ${effectiveThinkingLevel}` : ''} (${COMPOSER_SHORTCUTS.toggleModelPicker})`
+      }
+      disabled={disabled}
+      onPickModel={pickModel}
+      onResetDefault={resetToDefault}
+      onPickThinking={pickThinking}
+      onCatalogRefreshed={onCatalogRefreshed}
+    />
   )
 }
 

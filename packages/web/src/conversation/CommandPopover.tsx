@@ -109,7 +109,7 @@ export function CommandPopover({
     <div className="composer-popover">
       <div className="popover-header">
         命令与技能
-        <span style={{ color: 'var(--fg-subtle)' }}>↑↓ 选择 · Enter 确认 · Esc 关闭</span>
+        <span className="kbd-hint popover-kbd-hint">↑↓ 选择 · Enter 确认 · Esc 关闭</span>
       </div>
       {visible.map((item, idx) => (
         <button

@@ -99,11 +99,12 @@ export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, an
         sideOffset={8}
         className="composer-popover composer-completion-popover"
         onOpenAutoFocus={(event) => event.preventDefault()}
+        onEscapeKeyDown={(event) => event.stopPropagation()}
         aria-label={`${TRIGGER_TITLES[trigger]}候选`}
       >
         <div className="popover-header">
           {TRIGGER_TITLES[trigger]}
-          <span style={{ color: 'var(--fg-subtle)' }}>↑↓ 选择 · Enter 确认 · Esc 关闭</span>
+          <span className="kbd-hint popover-kbd-hint">↑↓ 选择 · Enter 确认 · Esc 关闭</span>
         </div>
         <div
           ref={listRef}

@@ -81,3 +81,87 @@
   user-select: none;
 }
 
+.popover-kbd-hint {
+  color: var(--fg-subtle);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.composer-inline-kbd {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--fg-subtle);
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 0 4px;
+  line-height: 1.4;
+}
+
+/* Composer 顶部直出托盘插槽（COMPOSER_DOCK_SLOT）：无在途贡献时归零高度与 flex 间距 */
+.composer-dock-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.composer-dock-slot:empty {
+  display: none;
+}
+
+/* 移动端忙时独立发送双按钮（[插话] / [排队]） */
+.composer-busy-mobile-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.composer-toolbar .composer-mobile-steer-btn,
+.composer-toolbar .composer-mobile-queue-btn {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 11px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 500;
+  gap: 4px;
+  line-height: 1;
+}
+.composer-toolbar .composer-mobile-steer-btn {
+  background: var(--fg);
+  border-color: transparent;
+  color: var(--fg-on-solid);
+}
+.composer-toolbar .composer-mobile-steer-btn:hover:not(:disabled) {
+  background: var(--fg-secondary);
+  border-color: transparent;
+  color: var(--fg-on-solid);
+}
+.composer-toolbar .composer-mobile-steer-btn:disabled {
+  opacity: 0.55;
+  background: var(--bg-muted);
+  color: var(--fg-subtle);
+}
+
+/* ModelPicker 搜索栏与空态 */
+.composer-model-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 2px;
+}
+.composer-model-search-input {
+  flex: 1;
+  min-width: 0;
+}
+.composer-popover .popover-item.composer-model-empty {
+  cursor: default;
+  color: var(--fg-subtle);
+}
+.composer-popover .popover-item.composer-model-empty:hover {
+  background: transparent;
+  color: var(--fg-subtle);
+}
+.composer-model-thinking-name {
+  color: var(--fg-subtle);
+}
+

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol'
-import { COMPOSER_STATUS_SLOT } from '@helm/protocol'
+import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT } from '@helm/protocol'
 import { conversationsApi } from '../lib/api.js'
 import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
 import { HelmIcon, PluginSlot } from '@helm/plugin-client'
@@ -32,6 +32,15 @@ import {
   useIsMobile,
 } from './composer-model.js'
 import { useComposerSend, type ComposerPrefill } from './composer-send.js'
+import {
+  canRecallOnArrowUp,
+  isComposerSubmitEnterEvent,
+  isPlainArrowUpEvent,
+  isShiftTabEvent,
+  latestHumanQueuedInput,
+  nextThinkingLevel,
+  resolveEffectiveThinkingLevel,
+} from './keybindings-model.js'
 import { lastEditableHumanInput } from './timeline-model.js'
 import { contextUsageLabel } from './context-usage-model.js'
 import { formatBytes } from '../lib/format.js'
@@ -85,6 +94,8 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const extrasRef = useRef<HTMLDetailsElement | null>(null)
   const dragDepthRef = useRef(0)
+  const thinkingPendingRef = useRef(false)
+  const optimisticThinkingRef = useRef<{ forModel: string; fromProp: string; value: string } | null>(null)
   const [dragging, setDragging] = useState(false)
   const [widgetsExpanded, setWidgetsExpanded] = useState(false)
   const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
@@ -122,6 +133,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     uploadFiles,
     removeAttachment,
     applyHistoryEdit,
+    withdrawQueuedInput,
     send,
     sendExplicit,
     runPluginCommand,
@@ -165,6 +177,10 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     return () => observer.disconnect()
   }, [autoGrow])
   useEffect(() => {
+    optimisticThinkingRef.current = null
+  }, [conversation.id, conversation.model, conversation.thinkingLevel])
+
+  useEffect(() => {
     const extras = extrasRef.current
     if (extras === null) return
     const onPointerDown = (event: PointerEvent): void => {
@@ -172,6 +188,8 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     }
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape' && extras.open) {
+        event.preventDefault()
+        event.stopPropagation()
         extras.open = false
         extras.querySelector('summary')?.focus()
       }
@@ -329,6 +347,35 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     if (files.length > 0) void uploadFiles(files)
   }
 
+  const cycleThinking = async (): Promise<void> => {
+    if (thinkingPendingRef.current) return
+    const currentModel = store.models.find((m) => m.id === conversation.model)
+    const levels = currentModel?.thinkingLevels ?? ['off']
+    const baseLevel =
+      optimisticThinkingRef.current !== null &&
+      optimisticThinkingRef.current.forModel === conversation.model &&
+      optimisticThinkingRef.current.fromProp === conversation.thinkingLevel
+        ? optimisticThinkingRef.current.value
+        : conversation.thinkingLevel
+    const effective = resolveEffectiveThinkingLevel(levels, baseLevel)
+    const next = nextThinkingLevel(levels, effective)
+    if (next === null) return
+    thinkingPendingRef.current = true
+    optimisticThinkingRef.current = {
+      forModel: conversation.model,
+      fromProp: conversation.thinkingLevel,
+      value: next,
+    }
+    try {
+      await conversationsApi.patch(conversation.id, { thinkingLevel: next })
+    } catch (err) {
+      optimisticThinkingRef.current = null
+      notifyError('切换思考等级失败', err)
+    } finally {
+      thinkingPendingRef.current = false
+    }
+  }
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     // 浮层已消费或已被 defaultPrevented 的按键绝不再向下传递触发发送
     if (e.defaultPrevented || e.nativeEvent.defaultPrevented) {
@@ -341,12 +388,18 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     ) {
       return // 由浮层全局捕获处理（IME composing 时不拦截，交给输入法）
     }
+    if (isShiftTabEvent(e) && !e.nativeEvent.isComposing) {
+      e.preventDefault()
+      void cycleThinking()
+      return
+    }
     if (e.key === 'Escape' && popover === null && !completionOpen && editingEntryId !== null) {
       e.preventDefault()
+      e.stopPropagation()
       cancelEdit()
       return
     }
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (isComposerSubmitEnterEvent(e) && !e.nativeEvent.isComposing) {
       e.preventDefault()
       if (editingEntryId !== null) {
         void send('followUp')
@@ -355,7 +408,18 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       void send(working ? busyEnterMode(e.metaKey || e.ctrlKey) : 'followUp')
       return
     }
-    if (e.key === 'ArrowUp' && text === '' && editingEntryId === null) {
+    if (
+      isPlainArrowUpEvent(e) &&
+      !e.nativeEvent.isComposing &&
+      editingEntryId === null &&
+      canRecallOnArrowUp(e.currentTarget.value, e.currentTarget.selectionStart)
+    ) {
+      const queued = latestHumanQueuedInput(store.conversationLives[conversation.id]?.queuedInputs)
+      if (queued !== undefined) {
+        e.preventDefault()
+        void withdrawQueuedInput(queued)
+        return
+      }
       const target = lastEditableHumanInput(detail?.entries ?? [])
       if (target !== undefined) {
         e.preventDefault()
@@ -384,6 +448,15 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             ))}
           </div>
         ) : null}
+        {/* 宿主输入区顶部保留插槽：在途编排活动条直出在 AskDock 上方（桌面与移动端均不收入 more 菜单）；无在途内容时归零高度。 */}
+        <PluginSlot
+          ownerPluginId="builtin:composer"
+          name={COMPOSER_DOCK_SLOT}
+          conversationId={conversation.id}
+          composer={composer}
+          className="composer-dock-slot"
+          slotProps={{ conversation, composer } satisfies ComposerScopeProps}
+        />
         <AskDock conversationId={conversation.id} />
         {envConfigurable ? (
           <SessionEnvBar
@@ -418,6 +491,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
               >
                 <HelmIcon name="x" size={12} />
                 <span>取消</span>
+                <span className="kbd-hint composer-inline-kbd">Esc</span>
               </button>
             </div>
           ) : null}
@@ -579,6 +653,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
               uploading={uploading}
               envBlocker={envBlocker}
               text={text}
+              isMobile={isMobile}
               send={send}
               abortTurn={abortTurn}
             />

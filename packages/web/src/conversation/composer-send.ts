@@ -10,7 +10,7 @@
  * 本模块只导出 hook 与纯类型（无组件），保持 .ts Fast Refresh 约定。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ConversationAttachmentRef, ConversationSummary, WhenBusy } from '@helm/protocol'
+import type { ConversationAttachmentRef, ConversationSummary, QueuedConversationInput, WhenBusy } from '@helm/protocol'
 import { conversationsApi } from '../lib/api.js'
 import {
   commandActionPluginId,
@@ -90,6 +90,8 @@ export interface ComposerSendApi {
   removeAttachment: (artifactId: string) => void
   /** ↑ 历史编辑：整体替换文本 / 锚点 / 附件（含空附件清空旧草稿）。 */
   applyHistoryEdit: (target: EditRequestTarget) => void
+  /** ↑ 排队撤回重编：撤回 queuedInputs 中的人类排队消息并回填到草稿（不触发历史回滚横幅）。 */
+  withdrawQueuedInput: (queued: QueuedConversationInput) => Promise<void>
   /** 宿主真实发送流程（乐观清空 + 失败按活草稿版本回滚 + whenBusy 策略）。 */
   send: (busyMode?: WhenBusy, strict?: boolean) => Promise<void>
   /** 提交显式文本（不消费草稿 / 编辑锚点 / 附件；失败如实 reject）。 */
@@ -115,6 +117,14 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
   const uploadingRef = useRef(0)
   const envBlockedRef = useRef(false)
   const commandPendingRef = useRef(false)
+  const withdrawingRef = useRef(false)
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
   // 活草稿版本：text / 编辑目标 / 附件任一变化推进，用于发送失败后判断草稿是否已被用户修改
   const liveDraftRef = useRef<ComposerDraftVersion>(draftVersionOf('', null, []))
   // 只触达实例 ref，无状态闭包：空依赖维持恒定身份，作为下游 useCallback 的稳定依赖。
@@ -344,6 +354,63 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
     requestAnimationFrame(() => textareaRef.current?.focus())
   }, [syncLiveDraft, textareaRef])
 
+  /** ↑ 排队撤回重编：优先从 pi.inbox 撤回最新人类排队项并回填文本与附件。 */
+  const withdrawQueuedInput = useCallback(async (queued: QueuedConversationInput): Promise<void> => {
+    if (withdrawingRef.current || sendingRef.current || uploadingRef.current > 0) return
+    withdrawingRef.current = true
+    try {
+      const res = await conversationsApi.withdraw(conversation.id, queued.submissionId)
+      if (!mountedRef.current) return
+      const baseTarget: EditRequestTarget = {
+        text: queued.text,
+        ...(queued.attachments !== undefined && queued.attachments.length > 0
+          ? { attachments: queued.attachments }
+          : {}),
+      }
+      const live = liveDraftRef.current
+      const draftModified = live.text !== '' || live.targetEntryId !== null
+      if (res.status === 'withdrawn') {
+        if (draftModified) {
+          store.pushNotice({
+            type: 'notification',
+            level: 'info',
+            title: '已撤回排队消息',
+            body: `当前草稿非空，未覆盖输入：${queued.text}`,
+            conversationId: conversation.id,
+          })
+          return
+        }
+        applyHistoryEdit(baseTarget)
+      } else if ((res.status === 'already_placed' || res.status === 'settled') && res.entryId !== undefined) {
+        if (draftModified) {
+          store.pushNotice({
+            type: 'notification',
+            level: 'warning',
+            title: '消息已进入执行',
+            body: '当前草稿非空，未进入历史消息编辑',
+            conversationId: conversation.id,
+          })
+          return
+        }
+        applyHistoryEdit({ ...baseTarget, entryId: res.entryId })
+      } else {
+        store.pushNotice({
+          type: 'notification',
+          level: 'warning',
+          title: '无法撤回排队消息',
+          body: `提交已进入执行（status=${res.status}）`,
+          conversationId: conversation.id,
+        })
+      }
+    } catch (err) {
+      if (mountedRef.current) {
+        notifyError('撤回排队消息失败', err)
+      }
+    } finally {
+      withdrawingRef.current = false
+    }
+  }, [conversation.id, applyHistoryEdit, notifyError, store])
+
   const send = useCallback(async (busyMode: WhenBusy = 'steer', strict = false): Promise<void> => {
     const draft = liveDraftRef.current.text
     const payload = draft.trim()
@@ -504,6 +571,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
     uploadFiles,
     removeAttachment,
     applyHistoryEdit,
+    withdrawQueuedInput,
     send,
     sendExplicit,
     runPluginCommand,

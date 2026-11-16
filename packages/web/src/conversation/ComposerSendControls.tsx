@@ -8,12 +8,12 @@ import {
   DropdownMenuTrigger,
 } from '../ui/DropdownMenu.js'
 import { Tooltip } from '../ui/Tooltip.js'
-import type { SessionEnvBlocker } from './composer-model.js'
+import { useIsMobile, type SessionEnvBlocker } from './composer-model.js'
 
 // ---------------------------------------------------------------------------
 // 发送 / 停止控件（自 Composer.tsx 拆出）：空闲发送、正忙停止与插话/排队分流。
-// props 命名与原组件内变量一致（send / abortTurn / uploading / text …），
-// 保证源码级行为锚点（title / aria-label / 分支条件）逐字不变。
+// 桌面端保留分体下拉（带 .kbd-hint 角标）；移动端正忙有输入时直接并排显式
+// 呈现 [插话]（steer）与 [排队]（followUp）两个独立按钮，无需记忆快捷键。
 // ---------------------------------------------------------------------------
 
 export interface ComposerSendControlsProps {
@@ -23,6 +23,7 @@ export interface ComposerSendControlsProps {
   uploading: number
   envBlocker: SessionEnvBlocker
   text: string
+  isMobile?: boolean
   send: (busyMode?: WhenBusy, strict?: boolean) => Promise<void>
   abortTurn: () => Promise<void>
 }
@@ -34,9 +35,14 @@ export function ComposerSendControls({
   uploading,
   envBlocker,
   text,
+  isMobile,
   send,
   abortTurn,
 }: ComposerSendControlsProps) {
+  const detectedMobile = useIsMobile(680)
+  const mobile = isMobile ?? detectedMobile
+  const busyDisabled = sending || uploading > 0 || envBlocker.blocked
+
   return (
     <span className="composer-toolbar-right">
       {!working || editingEntryId !== null ? (
@@ -68,13 +74,42 @@ export function ComposerSendControls({
             <HelmIcon name="square" size={14} />
           </button>
         </Tooltip>
+      ) : mobile ? (
+        <div className="composer-busy-mobile-actions">
+          <button
+            type="button"
+            className="btn btn-sm btn-primary composer-mobile-steer-btn composer-steer-action"
+            disabled={busyDisabled}
+            onClick={() => void send('steer')}
+            title="下一个步骤边界注入"
+            aria-label={uploading > 0 ? `上传中 (${uploading})` : '插话引导'}
+          >
+            <HelmIcon
+              name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
+              size={13}
+              className={sending || uploading > 0 ? 'spin-slow' : undefined}
+            />
+            <span>插话</span>
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary composer-mobile-queue-btn"
+            disabled={busyDisabled}
+            onClick={() => void send('followUp')}
+            title="当前回合结束后处理"
+            aria-label="排队发送"
+          >
+            <HelmIcon name="clock" size={13} />
+            <span>排队</span>
+          </button>
+        </div>
       ) : (
         <DropdownMenuRoot>
           <div className="composer-split-send">
             <button
               type="button"
               className="composer-split-main composer-steer-action"
-              disabled={sending || uploading > 0 || envBlocker.blocked}
+              disabled={busyDisabled}
               onClick={() => void send('steer')}
               title="下一个步骤边界注入（Enter）"
               aria-label={uploading > 0 ? `上传中 (${uploading})` : editingEntryId !== null ? '更新并重新生成' : '插话引导'}
@@ -91,7 +126,7 @@ export function ComposerSendControls({
               <button
                 type="button"
                 className="composer-split-trigger"
-                disabled={sending || uploading > 0 || envBlocker.blocked}
+                disabled={busyDisabled}
                 aria-label="选择发送策略"
                 title="选择发送策略（插话 / 排队）"
               >
@@ -109,7 +144,7 @@ export function ComposerSendControls({
                 <div className="composer-busy-menu-title">插话引导</div>
                 <div className="composer-busy-menu-desc">下一个步骤边界注入</div>
               </div>
-              <span className="composer-busy-menu-kbd">Enter</span>
+              <span className="composer-busy-menu-kbd kbd-hint">Enter</span>
             </DropdownMenuItem>
             <DropdownMenuItem
               className="composer-busy-menu-item composer-queue-button"
@@ -122,7 +157,7 @@ export function ComposerSendControls({
                 <div className="composer-busy-menu-title">排队发送</div>
                 <div className="composer-busy-menu-desc">当前回合结束后处理</div>
               </div>
-              <span className="composer-busy-menu-kbd">⌘/Ctrl+Enter</span>
+              <span className="composer-busy-menu-kbd kbd-hint">⌘/Ctrl+Enter</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
