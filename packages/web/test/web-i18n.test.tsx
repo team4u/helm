@@ -125,8 +125,8 @@ test('useWebLocale consumers switch en -> zh-CN -> en immediately via setLocale'
     assert.equal(toggle.getAttribute('title'), 'Open / close the split view on the right')
 
     const switchButton = [...host.querySelectorAll('button')].find((b) => b.textContent === 'switch-locale')
-    assert.ok(switchButton !== null)
-    const switchBtn: HTMLButtonElement = switchButton
+    assert.ok(switchButton !== undefined, 'locale switch harness button must exist')
+    const switchBtn = switchButton as HTMLButtonElement
     await act(async () => { switchBtn.click() })
     assert.equal(committedLocale, 'zh-CN')
     const toggleZh = host.querySelector<HTMLButtonElement>('.split-toggle-btn')
