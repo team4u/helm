@@ -124,6 +124,15 @@
   font-weight: 500;
 }
 
+/* 行首状态槽：固定宽度灯位，idle 空槽保持续行标题对齐（灯不渲染槽仍在） */
+.nav-status-slot {
+  width: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
 .nav-item-meta {
   display: flex;
   align-items: center;

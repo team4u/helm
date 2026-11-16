@@ -3,13 +3,13 @@
  *
  * - 收敛展示带宿主归档 tag 的人类自有根会话（暴露规则与 Agent 站位一致：
  *   有父链 / bot-helm 托管 / 插件 section 接管的会话绝不进入）；
- * - 默认折叠；展开后按归属智能体 + 标题辨识，行内「恢复」直达，也可进入批量恢复；
+ * - 默认折叠；展开后按归属智能体 + 标题辨识，单行恢复走行内「更多操作」菜单
+ *   （菜单对已归档会话自动提供「恢复会话」项），也可进入批量恢复；
  * - 恢复经现有会话 PATCH（archive-ops），失败显式通知，不静默吞错；
  * - 分组为空时整体不渲染，零视觉残留。
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ConversationSummary } from '@helm/protocol'
 import { Checkbox, HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import type { HelmStoreValue } from '../lib/types.js'
@@ -17,11 +17,11 @@ import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { buildArchivedConversationList, isConversationActive } from './sidebar-model.js'
 import type { ArchivedConversationListItem } from './sidebar-model.js'
-import { archiveBatchNotice, patchConversationArchived, patchConversationsArchived } from './archive-ops.js'
+import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
-import { ConversationStatusDot, HoverIconButton } from './SidebarPrimitives.js'
+import { ConversationStatusDot } from './SidebarPrimitives.js'
 
-/** 已归档分组的单个会话行：标题 + 归属智能体徽标 + 状态灯 + 恢复入口。 */
+/** 已归档分组的单个会话行：状态灯前置行首 + 标题 + 归属智能体徽标 + 动作区菜单。 */
 function ArchivedConversationRow({
   item,
   store,
@@ -30,8 +30,6 @@ function ArchivedConversationRow({
   batchMode,
   selected,
   onToggleSelect,
-  onRestore,
-  restoring,
 }: {
   item: ArchivedConversationListItem
   store: HelmStoreValue
@@ -40,8 +38,6 @@ function ArchivedConversationRow({
   batchMode?: boolean
   selected?: boolean
   onToggleSelect?: (id: number) => void
-  onRestore: (conv: ConversationSummary) => void
-  restoring: boolean
 }): ReactNode {
   const conv = item.conv
   const active = isConversationActive(store, conv.id)
@@ -76,6 +72,9 @@ function ArchivedConversationRow({
         }}
         aria-current={active ? 'page' : undefined}
       >
+        <span className="nav-status-slot">
+          <ConversationStatusDot conv={conv} background={background.get(conv.id)} />
+        </span>
         <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
       </button>
       <span className="nav-item-meta">
@@ -86,20 +85,8 @@ function ArchivedConversationRow({
           {item.profileLabel}
         </span>
         <span className="tabular-nums">#{conv.id}</span>
-        <ConversationStatusDot conv={conv} background={background.get(conv.id)} />
         <span className="nav-item-row-actions">
-          <span className="sidebar-split-action" onClick={(e) => e.stopPropagation()}>
-            <HoverIconButton
-              className="split-toggle-btn sidebar-split-btn"
-              title={restoring ? '恢复中...' : '恢复到智能体列表'}
-              icon={restoring ? 'loader' : 'rotate-ccw'}
-              onClick={(e) => {
-                e.stopPropagation()
-                if (!restoring) onRestore(conv)
-              }}
-            />
-          </span>
-          <ConversationRowActionsMenu conversation={conv} showHostArchiveAction={false} />
+          <ConversationRowActionsMenu conversation={conv} />
         </span>
       </span>
     </div>
@@ -119,7 +106,6 @@ export function ArchivedConversationsGroup({
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [restoring, setRestoring] = useState(false)
-  const [restoringId, setRestoringId] = useState<number | null>(null)
 
   const items = useMemo(
     () =>
@@ -151,39 +137,8 @@ export function ArchivedConversationsGroup({
 
   const isAllSelected = items.length > 0 && items.every((item) => selectedIds.has(item.conv.id))
 
-  /** 单行恢复：失败显式通知，绝不静默吞错；成功依赖 conversation.upsert 更新列表。 */
-  const restoreOne = async (conv: ConversationSummary): Promise<void> => {
-    if (restoring) return
-    setRestoringId(conv.id)
-    setRestoring(true)
-    try {
-      await patchConversationArchived(conv, false)
-      store.pushNotice({
-        type: 'notification',
-        level: 'info',
-        title: '已恢复会话',
-        body: `会话 #${conv.id} 已恢复至智能体列表`,
-      })
-      setSelectedIds((prev) => {
-        if (!prev.has(conv.id)) return prev
-        const next = new Set(prev)
-        next.delete(conv.id)
-        return next
-      })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: '恢复会话失败',
-        body: `会话 #${conv.id}：${err instanceof Error ? err.message : String(err)}`,
-      })
-    } finally {
-      setRestoringId(null)
-      setRestoring(false)
-    }
-  }
-
-  /** 批量恢复：逐会话 PATCH + allSettled 汇总（部分失败不掩盖成功项）。 */
+  /** 批量恢复：逐会话 PATCH + allSettled 汇总（部分失败不掩盖成功项）；
+   *  单行恢复走行内「更多操作」菜单（ConversationRowActionsMenu 对已归档会话自动提供恢复项）。 */
   const executeBatchRestore = async () => {
     if (selectedIds.size === 0 || restoring) return
     setRestoring(true)
@@ -292,8 +247,6 @@ export function ArchivedConversationsGroup({
             batchMode={batchMode}
             selected={selectedIds.has(item.conv.id)}
             onToggleSelect={toggleSelect}
-            onRestore={(conv) => void restoreOne(conv)}
-            restoring={restoringId === item.conv.id}
           />
         ))}
     </div>

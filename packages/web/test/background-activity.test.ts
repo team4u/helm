@@ -593,6 +593,67 @@ test('插件停用（贡献消失）或仅剩 neutral 历史计数时无任何�
 })
 
 // ---------------------------------------------------------------------------
+// 状态灯前置行首固定灯位（nav-status-slot）：各行灯垂直对齐的结构契约
+// ---------------------------------------------------------------------------
+
+/** 断言行标题之前的行首段包含 nav-status-slot 内的状态灯（灯在 nav-item-label 之前）。 */
+function dotBeforeLabel(html: string, title: string): boolean {
+  const labelIdx = html.indexOf(`>${title}</span>`)
+  if (labelIdx < 0) return false
+  const rowStart = html.lastIndexOf('<div class="nav-item', labelIdx)
+  return /<span class="nav-status-slot"><span class="status-dot /.test(html.slice(rowStart, labelIdx))
+}
+
+test('状态灯前置行首：working/done/idle+后台在途的灯均在标题之前的固定灯位内', { timeout: 60_000 }, () => {
+  const store = sidebarStore({
+    conversations: [
+      conv({ id: 1, title: '当前在跑', profileId: 'assistant', status: 'working', doing: '正在思考方案' }),
+      conv({ id: 2, title: '已完成', profileId: 'assistant', status: 'done' }),
+      conv({ id: 3, title: '纯空闲', profileId: 'assistant' }),
+      conv({ id: 4, title: '后台在跑', profileId: 'assistant' }),
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 1 },
+    groupedUi: groupUiContributions([panelContribution()]),
+    pluginDocs: {
+      'builtin:workflow/run-badges': badgesDoc({ '4': { count: 2, tone: 'accent', footerText: '2 运行中' } }),
+    },
+  })
+  const html = renderSidebar(store)
+  assert.ok(dotBeforeLabel(html, '当前在跑'), 'working 状态灯在标题之前')
+  assert.ok(dotBeforeLabel(html, '已完成'), 'done 状态灯在标题之前')
+  assert.ok(dotBeforeLabel(html, '后台在跑'), '后台空心环灯在标题之前')
+  // idle 空槽：灯不渲染但槽保留，续行标题保持对齐
+  assert.ok(
+    html.includes('<span class="nav-status-slot"></span><span class="nav-item-label">纯空闲</span>'),
+    'idle 行空槽保留（灯不渲染槽仍在）',
+  )
+  // 槽位数量与行数一致：每条会话行（nav-item-sub）与每个站位行各恰好一个 nav-status-slot
+  const subRows = (html.match(/class="nav-item nav-item-sub/g) ?? []).length
+  const standingRows = (html.match(/class="nav-item agent-standing-row/g) ?? []).length
+  const slots = (html.match(/class="nav-status-slot"/g) ?? []).length
+  assert.equal(subRows, 4, '四条会话子行全部渲染')
+  assert.equal(slots, subRows + standingRows, '会话行行行有灯槽（idle 空槽也计入），站位行同样有槽')
+})
+
+test('折叠站位行状态灯前置：standing indicator 渲染在 nav-status-slot 内且位于名称之前', { timeout: 60_000 }, () => {
+  const store = sidebarStore({
+    conversations: [
+      conv({ id: 1, title: '在跑', profileId: 'coder', status: 'working', doing: '重构中' }),
+      conv({ id: 50, title: '别处', profileId: 'assistant' }),
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 50 },
+  })
+  const html = renderSidebar(store)
+  // 折叠站位行：名称之前有 nav-status-slot 且其内含代表会话状态灯
+  const labelIdx = html.indexOf('>编码专员</span>')
+  assert.ok(labelIdx > 0, '折叠站位行渲染')
+  const rowStart = html.lastIndexOf('<div class="nav-item agent-standing-row', labelIdx)
+  const head = html.slice(rowStart, labelIdx)
+  assert.match(head, /<span class="nav-status-slot"><span class="status-dot status-dot-working"/, '站位指示灯在名称之前的固定灯位内')
+})
+
+
+// ---------------------------------------------------------------------------
 // 挂载路径：badge doc 经 Sidebar effect 按需加载（纯函数零副作用）
 // ---------------------------------------------------------------------------
 

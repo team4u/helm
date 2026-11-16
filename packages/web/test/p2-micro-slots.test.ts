@@ -598,6 +598,15 @@ test('Sidebar 源码契约：会话行消费 conversation.row.action，不干扰
   assert.ok(matches.length >= 2, `至少 Agent 二级行与插件 section 行挂载菜单，实际 ${matches.length}`)
 })
 
+test('ConversationRowActionsMenu 源码契约：Radix DropdownMenu 承载，无手写浮层监听', { timeout: 60_000 }, () => {
+  const src = readFileSync(new URL('../src/ui/ConversationRowActionsMenu.tsx', import.meta.url), 'utf8')
+  // 菜单形态必须是项目 Radix DropdownMenu 封装（内容经 Portal，不被侧栏滚动容器裁剪）
+  assert.match(src, /DropdownMenuTrigger/)
+  assert.match(src, /DropdownMenuPortal/)
+  // 关闭/外点/Escape 交给 Radix，严禁手写 document 全局监听
+  assert.doesNotMatch(src, /document\.addEventListener/)
+})
+
 test('groupedUi 微插槽分组：surface 正确归组并按 order 排序', { timeout: 60_000 }, () => {
   const contributions: PluginUiContribution[] = [
     headerActionContribution({ id: 'h2', label: '二', actionId: 'a', order: 20 }),
