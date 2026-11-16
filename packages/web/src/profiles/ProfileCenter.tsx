@@ -1,15 +1,15 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import type { Profile } from './profile-center-model.js'
 import {
   buildProfileCategoryCounts,
   filterProfiles,
   PROFILE_CATEGORY_TABS,
-  summarizeProfiles,
   type ProfileCategoryTab,
 } from './profile-center-model.js'
 import { ProfileCard } from './ProfileCard.js'
 import { ProfileDetailDrawer } from './ProfileDetailDrawer.js'
 import { HelmIcon } from '@helm/plugin-client'
+import { assetsApi } from '../lib/api.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 
@@ -38,6 +38,29 @@ export function ProfileCenter({
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<ProfileCategoryTab>('all')
   const [isCreatingNew, setIsCreatingNew] = useState(false)
+  const [fetchedDefaultModel, setFetchedDefaultModel] = useState<{
+    defaultModel: string
+    defaultThinkingLevel: string
+  } | null>(null)
+
+  const effectiveDefaultModelInfo =
+    store.defaultModelInfo !== undefined ? store.defaultModelInfo : fetchedDefaultModel
+
+  useEffect(() => {
+    if (store.defaultModelInfo !== undefined || !store.authenticated) return
+    let cancelled = false
+    void assetsApi
+      .getDefaultModel()
+      .then((info) => {
+        if (!cancelled) setFetchedDefaultModel(info)
+      })
+      .catch(() => {
+        if (!cancelled) setFetchedDefaultModel(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [store.authenticated, store.defaultModelInfo])
 
   const profiles = store.profiles ?? []
   const categoryCounts = useMemo(() => buildProfileCategoryCounts(profiles), [profiles])
@@ -49,8 +72,9 @@ export function ProfileCenter({
     })
   }, [profiles, query, activeTab])
 
+  const activeTarget = isSplit ? store.splitTarget : store.primaryTarget
   const selectedProfileId =
-    store.primaryTarget.kind === 'profiles' ? store.primaryTarget.profileId : undefined
+    activeTarget?.kind === 'profiles' ? activeTarget.profileId : undefined
 
   const selectedProfile = useMemo(
     () => profiles.find((p) => p.id === selectedProfileId) ?? null,
@@ -63,19 +87,31 @@ export function ProfileCenter({
       selectedProfileId === 'new',
   )
 
+  const openCenterTarget = (profileId?: string) => {
+    const target =
+      profileId !== undefined
+        ? { kind: 'profiles' as const, profileId }
+        : { kind: 'profiles' as const }
+    if (isSplit) {
+      store.openTarget(target, { split: true })
+    } else {
+      store.openTarget(target)
+    }
+  }
+
   const handleSelectProfile = (profileId: string) => {
     setIsCreatingNew(false)
-    store.openTarget({ kind: 'profiles', profileId })
+    openCenterTarget(profileId)
   }
 
   const handleCreateNew = () => {
     setIsCreatingNew(true)
-    store.openTarget({ kind: 'profiles', profileId: 'new' })
+    openCenterTarget('new')
   }
 
   const handleCloseDrawer = () => {
     setIsCreatingNew(false)
-    store.openTarget({ kind: 'profiles' })
+    openCenterTarget(undefined)
   }
 
   const handleProfileSaved = (saved: Profile) => {
@@ -87,7 +123,7 @@ export function ProfileCenter({
       title: '角色已保存',
       body: `${saved.name || saved.id} 配置已更新`,
     })
-    store.openTarget({ kind: 'profiles', profileId: saved.id })
+    openCenterTarget(saved.id)
   }
 
   const handleProfileDeleted = (deletedId: string) => {
@@ -99,7 +135,7 @@ export function ProfileCenter({
       title: '角色已删除',
       body: `角色 ${deletedId} 已彻底删除`,
     })
-    store.openTarget({ kind: 'profiles' })
+    openCenterTarget(undefined)
   }
 
   const handleResetFilters = () => {
@@ -211,6 +247,7 @@ export function ProfileCenter({
                 key={p.id}
                 profile={p}
                 selected={selectedProfileId === p.id}
+                defaultModelInfo={effectiveDefaultModelInfo}
                 onSelect={() => handleSelectProfile(p.id)}
               />
             ))}

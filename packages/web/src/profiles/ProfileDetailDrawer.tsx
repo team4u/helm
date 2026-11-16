@@ -362,7 +362,7 @@ export function ProfileDetailDrawer({
             <div className="primary-drawer-header-left">
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
-                  <DialogTitle className="primary-drawer-title">
+                  <DialogTitle className="primary-drawer-title break-word">
                     {titleText}
                   </DialogTitle>
                   {isSystem && (
@@ -373,14 +373,14 @@ export function ProfileDetailDrawer({
                   )}
                 </div>
                 {!isNew && form.id && (
-                  <div className="mono text-subtle text-xs">{form.id}</div>
+                  <div className="mono text-subtle break-word">{form.id}</div>
                 )}
               </div>
             </div>
             <DialogClose asChild>
               <button
                 type="button"
-                className="btn btn-ghost btn-sm"
+                className="btn btn-ghost btn-icon-sm"
                 aria-label="关闭抽屉"
                 title="关闭"
                 onClick={handleRequestClose}
@@ -393,18 +393,9 @@ export function ProfileDetailDrawer({
           {/* 抽屉主体：表单各区块 */}
           <div className="primary-drawer-body">
             {error && (
-              <div
-                className="badge badge-warn"
-                role="alert"
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  justifyContent: 'flex-start',
-                  fontSize: 12,
-                }}
-              >
+              <div className="callout callout-error" role="alert">
                 <HelmIcon name="alert-circle" size={14} />
-                <span>{error}</span>
+                <span className="callout-text">{error}</span>
               </div>
             )}
 
@@ -528,9 +519,12 @@ export function ProfileDetailDrawer({
                     </span>
                   )}
                   {profileThinkingLevelUnsupported && (
-                    <span className="text-subtle">
-                      当前档位 {form.thinkingLevel} 不在所选模型支持列表，保存前请调整。
-                    </span>
+                    <div className="callout callout-warn" role="status">
+                      <HelmIcon name="alert-triangle" size={13} />
+                      <span className="callout-text">
+                        当前档位 {form.thinkingLevel} 不在所选模型支持列表，保存前请调整。
+                      </span>
+                    </div>
                   )}
                 </div>
 
@@ -696,10 +690,7 @@ export function ProfileDetailDrawer({
 
             {/* 技能白名单配置 */}
             <section className="section-flat">
-              <div
-                className="section-flat-header"
-                style={{ justifyContent: 'space-between' }}
-              >
+              <div className="section-flat-header flex-row-between">
                 <span className="section-flat-title">可用技能白名单</span>
                 <Switch
                   id="profile-form-skills-switch"
@@ -712,21 +703,19 @@ export function ProfileDetailDrawer({
               </div>
 
               {form.useAllSkills ? (
-                <div className="text-subtle text-xs" style={{ padding: '2px 0' }}>
+                <div className="text-subtle">
                   已允许此角色无限制使用系统内所有可用技能。
                 </div>
               ) : (
                 <div
                   className="flex-col"
                   style={{
-                    gap: 8,
                     maxHeight: 180,
                     overflowY: 'auto',
-                    paddingTop: 4,
                   }}
                 >
                   {availableSkills.length === 0 ? (
-                    <div className="text-subtle text-xs">暂无已加载的技能</div>
+                    <div className="text-subtle">暂无已加载的技能</div>
                   ) : (
                     availableSkills.map((s) => (
                       <Checkbox
@@ -734,14 +723,9 @@ export function ProfileDetailDrawer({
                         checked={form.selectedSkillIds.includes(s.id)}
                         onChange={(checked) => handleToggleSkill(s.id, checked)}
                         label={
-                          <span
-                            className="flex-row"
-                            style={{ gap: 6, fontSize: 12 }}
-                          >
+                          <span className="flex-row text-muted">
                             <span>{s.name}</span>
-                            <span className="mono text-subtle text-xs">
-                              ({s.id})
-                            </span>
+                            <span className="mono text-subtle">({s.id})</span>
                           </span>
                         }
                       />
@@ -753,42 +737,45 @@ export function ProfileDetailDrawer({
           </div>
 
           {/* 抽屉底部操作栏 */}
-          <div className="primary-drawer-footer">
-            {canDelete && (
+          <div className="primary-drawer-footer flex-row-between">
+            <div>
+              {canDelete && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm text-err"
+                  disabled={isSaving || isDeleting}
+                  onClick={() => setShowDeleteConfirm(true)}
+                >
+                  <HelmIcon name="trash" size={13} />
+                  <span>删除角色</span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex-row">
               <button
                 type="button"
-                className="btn btn-ghost btn-sm text-danger"
-                style={{ marginRight: 'auto' }}
+                className="btn btn-ghost btn-sm"
                 disabled={isSaving || isDeleting}
-                onClick={() => setShowDeleteConfirm(true)}
+                onClick={handleRequestClose}
               >
-                <HelmIcon name="trash" size={13} />
-                <span>删除角色</span>
+                取消
               </button>
-            )}
 
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={isSaving || isDeleting}
-              onClick={handleRequestClose}
-            >
-              取消
-            </button>
-
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              disabled={
-                isSaving ||
-                isDeleting ||
-                (isNew && !profileIdValid(form.id.trim()))
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={
+                  isSaving ||
+                  isDeleting ||
+                  (isNew && !profileIdValid(form.id.trim()))
               }
-              onClick={() => void handleSave()}
-            >
-              <HelmIcon name={isSaving ? 'loader' : 'check'} size={13} />
-              <span>{isSaving ? '保存中…' : '保存角色'}</span>
-            </button>
+                onClick={() => void handleSave()}
+              >
+                <HelmIcon name={isSaving ? 'loader' : 'check'} size={13} />
+                <span>{isSaving ? '保存中…' : '保存角色'}</span>
+              </button>
+            </div>
           </div>
         </DialogContent>
       </DialogPortal>

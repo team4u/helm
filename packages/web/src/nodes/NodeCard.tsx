@@ -85,41 +85,39 @@ export function NodeCard({
               {displayName}
             </span>
             {isLocal && (
-              <span className="badge badge-neutral text-xs" title="微内核本机节点">
+              <span className="badge badge-neutral" title="微内核本机节点">
                 本机
               </span>
             )}
             {version && (
-              <span className="badge badge-neutral mono text-xs" title={`版本 ${version}`}>
+              <span className="badge badge-neutral mono" title={`版本 ${version}`}>
                 {version}
               </span>
             )}
           </div>
-          <div className="primary-card-id mono text-xs text-subtle" title={node.id}>
+          <div className="primary-card-id mono text-subtle break-word" title={node.id}>
             {node.id}
           </div>
         </div>
       </div>
 
       {/* 中部：平台架构、版本与运行概览 */}
-      <div className="primary-card-desc">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-          {platformArch !== '--' && (
-            <span className="badge badge-neutral mono text-xs" title="平台与架构">
-              {platformArch}
-            </span>
-          )}
-          {node.hostname && (
-            <span className="mono text-xs text-subtle" title={`主机名: ${node.hostname}`}>
-              {node.hostname}
-            </span>
-          )}
-          {uptime !== '--' && (
-            <span className="text-xs text-subtle" title={`运行时长: ${uptime}`}>
-              {uptime}
-            </span>
-          )}
-        </div>
+      <div className="flex-row-wrap">
+        {platformArch !== '--' && (
+          <span className="badge badge-neutral mono" title="平台与架构">
+            {platformArch}
+          </span>
+        )}
+        {node.hostname && (
+          <span className="mono text-subtle break-word" title={`主机名: ${node.hostname}`}>
+            {node.hostname}
+          </span>
+        )}
+        {uptime !== '--' && (
+          <span className="text-subtle" title={`运行时长: ${uptime}`}>
+            {uptime}
+          </span>
+        )}
       </div>
 
       {/* 底部：心跳/连接状态 + 支持能力胶囊标签 */}
@@ -133,7 +131,7 @@ export function NodeCard({
           ))}
           {tools.length > 4 && (
             <span
-              className="primary-card-pill text-subtle"
+              className="primary-card-pill text-subtle tabular-nums"
               title={`另有 ${tools.length - 4} 项工具能力`}
             >
               +{tools.length - 4}
@@ -141,8 +139,8 @@ export function NodeCard({
           )}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'} text-xs`}>
+        <div className="flex-row">
+          <span className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'}`}>
             {isOnline ? '在线' : '离线'}
           </span>
         </div>

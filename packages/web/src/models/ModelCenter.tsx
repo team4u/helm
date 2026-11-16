@@ -9,9 +9,12 @@ import { ModelCard } from './ModelCard.js'
 import { ModelDetailDrawer } from './ModelDetailDrawer.js'
 import {
   buildMergedProviders,
+  buildProviderCategoryCounts,
   DEFAULT_PROVIDERS,
   filterProviders,
-  summarizeProviders,
+  PROVIDER_FILTER_TABS,
+  sortProvidersConfiguredFirst,
+  type ProviderFilterTab,
   type ProviderItem,
   type ProviderModelItem,
 } from './model-center-model.js'
@@ -50,6 +53,7 @@ export function ModelCenter({
 }: ModelCenterProps): React.JSX.Element {
   const store = useHelmStore()
   const [query, setQuery] = useState('')
+  const [statusTab, setStatusTab] = useState<ProviderFilterTab>('all')
 
   // 动态目录与全局默认模型状态
   const [catalog, setCatalog] = useState<ModelProviderSummary[]>([])
@@ -87,7 +91,7 @@ export function ModelCenter({
 
   // 将预设主流供应商与 store 中的凭据、网关、模型目录及后端全量 catalog 实时融合
   const providers = useMemo(() => {
-    if (customProviders) return customProviders
+    if (customProviders) return sortProvidersConfiguredFirst(customProviders)
     return buildMergedProviders(
       DEFAULT_PROVIDERS,
       store.credentials,
@@ -97,12 +101,12 @@ export function ModelCenter({
     )
   }, [customProviders, store.credentials, store.providers, store.models, catalog])
 
-  // 总量统计
+  const statusCounts = useMemo(() => buildProviderCategoryCounts(providers), [providers])
 
-  // 综合过滤（按关键词）
+  // 综合过滤（按配置状态标签与关键词）
   const filteredProviders = useMemo(() => {
-    return filterProviders(providers, { query })
-  }, [providers, query])
+    return filterProviders(providers, { query, statusTab })
+  }, [providers, query, statusTab])
 
   // 路由与抽屉联动：支持主屏和分屏下的 providerId 与 tab
   const currentTarget =
@@ -338,20 +342,29 @@ export function ModelCenter({
               )}
             </div>
 
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={handleRefreshAll}
-              disabled={refreshingCatalog}
-              title="刷新全部模型目录"
+            <div
+              className="primary-category-pills"
+              role="tablist"
+              aria-label="供应商配置状态筛选"
             >
-              <HelmIcon
-                name="refresh-cw"
-                size={13}
-                className={refreshingCatalog ? 'spin' : ''}
-              />
-              <span>{refreshingCatalog ? '正在刷新...' : '刷新模型目录'}</span>
-            </button>
+              {PROVIDER_FILTER_TABS.map((tab) => {
+                const count = statusCounts[tab.key] ?? 0
+                const isActive = statusTab === tab.key
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    className={`primary-category-pill${isActive ? ' is-active' : ''}`}
+                    onClick={() => setStatusTab(tab.key)}
+                  >
+                    <span>{tab.label}</span>
+                    <span className="badge tabular-nums">{count}</span>
+                  </button>
+                )
+              })}
+            </div>
           </div>
 
           {/* 主体卡片网格或空状态 */}
@@ -362,14 +375,15 @@ export function ModelCenter({
               </div>
               <div className="primary-center-empty-text">未找到匹配的供应商</div>
               <div className="primary-center-empty-hint">
-                没有符合检索条件的大语言模型供应商，请尝试更换关键词。
+                没有符合检索条件的大语言模型供应商，请尝试更换关键词或切换筛选状态。
               </div>
-              {query && (
+              {(query || statusTab !== 'all') && (
                 <button
                   type="button"
                   className="btn btn-sm btn-ghost"
                   onClick={() => {
                     setQuery('')
+                    setStatusTab('all')
                   }}
                 >
                   重置筛选条件

@@ -114,7 +114,7 @@ export function SkillDetailDrawer({
         ? 'badge badge-neutral mono'
         : sourceBadge?.variant === 'agents'
           ? 'badge badge-accent'
-          : 'badge badge-ghost'
+          : 'badge badge-neutral'
 
   const fileOptions: Array<SelectOption<string>> = files.map((f) => ({
     value: f.path,
@@ -146,7 +146,7 @@ export function SkillDetailDrawer({
             <div className="primary-drawer-header-left">
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
-                  <DialogTitle className="primary-drawer-title">
+                  <DialogTitle className="primary-drawer-title break-word">
                     {skill?.name || skill?.id || '技能详情'}
                   </DialogTitle>
                   {sourceBadge && (
@@ -156,19 +156,19 @@ export function SkillDetailDrawer({
                   )}
                 </div>
                 {skill && (
-                  <div className="primary-drawer-id mono text-subtle text-xs" title={skill.id}>
+                  <div className="primary-drawer-id mono text-subtle break-word" title={skill.id}>
                     {skill.id}
                   </div>
                 )}
                 {skill?.source === 'agents' && (
-                  <div className="text-subtle text-xs">机器级共享根</div>
+                  <div className="text-subtle">机器级共享根</div>
                 )}
               </div>
             </div>
             <DialogClose asChild>
               <button
                 type="button"
-                className="btn btn-ghost btn-sm"
+                className="btn btn-ghost btn-icon-sm"
                 aria-label="关闭"
                 title="关闭"
               >
@@ -263,9 +263,9 @@ export function SkillDetailDrawer({
                     {/* 正文阅读区 */}
                     <div className="skill-reader-body" data-mode={richText ? 'rich' : 'source'}>
                       {error ? (
-                        <div className="callout callout--error" role="alert">
+                        <div className="callout callout-error" role="alert">
                           <HelmIcon name="alert-circle" size={13} />
-                          <span>{`读取失败：${error}`}</span>
+                          <span className="callout-text">{`读取失败：${error}`}</span>
                         </div>
                       ) : loading && content === '' ? (
                         <div className="skill-reader-placeholder text-subtle">

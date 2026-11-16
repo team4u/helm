@@ -15,8 +15,11 @@ import { ModelCenter } from '../src/models/ModelCenter.js'
 import {
   buildDefaultModelOptions,
   buildMergedProviders,
+  buildProviderCategoryCounts,
   DEFAULT_PROVIDERS,
   filterProviders,
+  sortProvidersConfiguredFirst,
+  summarizeCardModels,
   summarizeProviders,
   UNSET_MODEL_VALUE,
   type ProviderItem,
@@ -890,6 +893,109 @@ test('ModelCenter: 插件网关端点保存不触发任何 providers 写入（�
       0,
       '插件网关保存不得产生任何 providers 写请求',
     )
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('ModelCenter: 「全部 / 已配置」筛选药丸、已配置卡片前 3 模型预览与统一 callout', { timeout: 60_000 }, async () => {
+  const { act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+
+  const customList: ProviderItem[] = [
+    {
+      id: 'unconfigured-first',
+      name: 'Beta 未配置',
+      configured: false,
+      modelsCount: 1,
+      models: [{ id: 'beta-1', name: 'Beta 1', enabled: true }],
+    },
+    {
+      id: 'anthropic',
+      name: 'Anthropic',
+      configured: true,
+      modelsCount: 4,
+      models: [
+        { id: 'anthropic/claude-opus-4', name: 'anthropic/claude-opus-4', enabled: true },
+        { id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet', enabled: true },
+        { id: 'claude-3-5-haiku', name: 'Claude 3.5 Haiku', enabled: true },
+        { id: 'claude-3-opus', name: 'Claude 3 Opus', enabled: true },
+      ],
+    },
+  ]
+
+  assert.deepEqual(buildProviderCategoryCounts(customList), { all: 2, configured: 1 })
+  assert.deepEqual(
+    filterProviders(customList, { statusTab: 'configured' }).map((p) => p.id),
+    ['anthropic'],
+  )
+  assert.deepEqual(summarizeCardModels(customList[1]!, 3), {
+    previewNames: ['claude-opus-4', 'Claude 3.7 Sonnet', 'Claude 3.5 Haiku'],
+    remainingCount: 1,
+  })
+  assert.equal(sortProvidersConfiguredFirst(customList)[0]?.id, 'anthropic', '已配置供应商应排在最前')
+
+  // ModelCard 渲染前 3 模型短名 + +1 与 0 内联 style
+  const cardHtml = renderToStaticMarkup(
+    e(ModelCard, { provider: customList[1]!, onSelect: () => {} }),
+  )
+  assert.match(cardHtml, /claude-opus-4/)
+  assert.match(cardHtml, /Claude 3\.7 Sonnet/)
+  assert.match(cardHtml, /Claude 3\.5 Haiku/)
+  assert.doesNotMatch(cardHtml, /Claude 3 Opus/)
+  assert.match(cardHtml, /\+1/)
+  assert.ok(!cardHtml.includes('style='), 'ModelCard 不应残留内联 style')
+
+  // ModelCenter 交互点击「已配置」药丸筛选
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({}), { status: 200 })) as typeof fetch
+  const store = makeTestStore({ primaryTarget: { kind: 'models' } })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  try {
+    await act(async () => {
+      root.render(
+        e(HostStoreProviders, { value: store }, e(ModelCenter, { providers: customList, inlineDrawer: true })),
+      )
+    })
+
+    const cardsBefore = Array.from(container.querySelectorAll('.primary-card'))
+    assert.equal(cardsBefore.length, 2)
+    assert.match(cardsBefore[0]?.textContent ?? '', /Anthropic/, '已配置卡片应优先渲染在最前')
+
+    const configuredTab = Array.from(container.querySelectorAll('[role="tab"]')).find((el) =>
+      el.textContent?.includes('已配置'),
+    ) as HTMLElement | undefined
+    assert.ok(configuredTab, 'ModelCenter 应渲染「已配置」筛选药丸')
+
+    await act(async () => {
+      configuredTab.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    const cardsAfter = Array.from(container.querySelectorAll('.primary-card'))
+    assert.equal(cardsAfter.length, 1)
+    assert.match(cardsAfter[0]?.textContent ?? '', /Anthropic/)
+
+    // 验证 ModelDetailDrawer 使用统一 .callout-error 与 .btn-icon-sm
+    const drawerHtml = renderToStaticMarkup(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(ModelDetailDrawer, {
+          provider: customList[1]!,
+          open: true,
+          inline: true,
+          onClose: () => {},
+        }),
+      ),
+    )
+    assert.match(drawerHtml, /btn btn-ghost btn-icon-sm/)
+    assert.ok(!drawerHtml.includes('callout--'), 'ModelDetailDrawer 不得残留 callout--* 旧类')
   } finally {
     globalThis.fetch = originalFetch
     await act(async () => {

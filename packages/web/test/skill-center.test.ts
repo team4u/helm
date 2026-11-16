@@ -543,7 +543,72 @@ test('SkillCard: 共享根技能展示「共享」徽章与强调色样式', { t
   assert.ok(html.includes('badge-accent'), '共享根技能应使用 badge-accent 徽章样式')
   assert.ok(html.includes('共享'), '共享根技能应展示「共享」来源徽章')
   assert.ok(!html.includes('工作区'), '共享根技能不得展示「工作区」徽章')
+  assert.doesNotMatch(html, /badge-ghost|badge-subtle/, '不得使用未定义的 badge-ghost / badge-subtle 类')
   assert.doesNotMatch(html, emojiRegex, 'SkillCard 渲染输出严禁包含 Emoji')
+})
+
+test('SkillCard: 无参考文件时省略「0 个参考文件」，提供可复制 /skill:<id> 命令胶囊且阻止冒泡', { timeout: 60_000 }, async () => {
+  const { act } = await import('react')
+  const ReactDOMClient = await import('react-dom/client')
+  const noRefSkill = mockSkills[2] // database-migration，无参考文件
+  let selectedCount = 0
+
+  const html = renderToString(
+    e(SkillCard, {
+      skill: noRefSkill,
+      selected: false,
+      onSelect: () => {},
+    }),
+  )
+  assert.ok(!html.includes('0 个参考文件'), '无参考文件时不得渲染「0 个参考文件」')
+  assert.ok(html.includes('/skill:database-migration'), '应展示可复制的 /skill:<id> 命令胶囊')
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+  const navWithClipboard = navigator as unknown as {
+    clipboard?: { writeText?: (text: string) => Promise<void> }
+  }
+  const origClipboard = navWithClipboard.clipboard
+  const copied: string[] = []
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: async (text: string) => {
+        copied.push(text)
+      },
+    },
+  })
+
+  try {
+    await act(async () => {
+      root.render(
+        e(SkillCard, {
+          skill: noRefSkill,
+          selected: false,
+          onSelect: () => {
+            selectedCount++
+          },
+        }),
+      )
+    })
+
+    const copyBtn = host.querySelector('button[aria-label="复制斜杠指令 /skill:database-migration"]')
+    assert.ok(copyBtn, '应渲染可点击复制的 /skill:<id> 按钮')
+    await act(async () => {
+      copyBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(selectedCount, 0, '点击复制命令胶囊必须 stopPropagation，不触发展开详情抽屉')
+    assert.deepEqual(copied, ['/skill:database-migration'])
+  } finally {
+    if (origClipboard !== undefined) {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: origClipboard })
+    }
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  }
 })
 
 test('SkillCard: 鼠标点击与键盘无障碍交互激活', { timeout: 60_000 }, async () => {
@@ -887,8 +952,8 @@ test('SkillDetailDrawer: 读取失败显式报错与空文件占位，不静默�
     )
   })
 
-  const callout = host.querySelector('.callout--error') as HTMLElement
-  assert.ok(callout, '读取失败应渲染错误提示')
+  const callout = host.querySelector('.callout-error') as HTMLElement
+  assert.ok(callout, '读取失败应渲染统一 .callout-error 错误提示')
   assert.ok(callout.textContent?.includes('读取失败'), '错误提示应包含失败前缀')
   assert.ok(callout.textContent?.includes('节点离线'), '错误提示应包含原始错误信息')
 

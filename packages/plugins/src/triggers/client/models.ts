@@ -33,6 +33,28 @@ export interface WebhookRow {
   createdAt: number
 }
 
+export type TriggerDetailSelection =
+  | { kind: 'cron'; id: string }
+  | { kind: 'webhook'; id: string }
+
+export function formatTriggerTargetSummary(row: {
+  targetConversationId?: number
+  targetProfileId?: string
+  threadKey?: string
+}): string {
+  const parts: string[] = []
+  if (row.targetConversationId !== undefined) {
+    parts.push(`会话 #${row.targetConversationId}`)
+  }
+  if (row.targetProfileId) {
+    parts.push(`角色 ${row.targetProfileId}`)
+  }
+  if (row.threadKey) {
+    parts.push(`ThreadKey ${row.threadKey}`)
+  }
+  return parts.length > 0 ? parts.join(' · ') : '默认路由'
+}
+
 export function parseCronJobs(doc: { jobs?: unknown } | undefined): CronJobRow[] {
   return Array.isArray(doc?.jobs) ? (doc!.jobs as CronJobRow[]) : []
 }

@@ -232,8 +232,8 @@ test('PluginInstallModal：默认不启用（enable 不上送），失败展示�
 
     // enable 默认关闭：上送 false，请求体不带 enable 字段（api 层仅在 true 时携带）
     assert.equal(capturedEnable, false)
-    const callout = host.querySelector('.callout--error')
-    assert.ok(callout, '失败必须展示错误提示')
+    const callout = host.querySelector('.callout-error')
+    assert.ok(callout, '失败必须展示统一 .callout-error 错误提示')
     assert.match(callout.textContent ?? '', /registry unreachable/)
   } finally {
     pluginsApi.install = originalInstall
@@ -515,8 +515,8 @@ test('PluginDetailDrawer：卸载 409 在途任务展示清晰诊断，不关闭
       confirmBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
 
-    const callout = host.querySelector('.callout--error')
-    assert.ok(callout, '409 时必须展示诊断提示')
+    const callout = host.querySelector('.callout-error')
+    assert.ok(callout, '409 时必须展示统一 .callout-error 诊断提示')
     assert.match(callout.textContent ?? '', /plugin_has_live_tasks/)
     assert.match(callout.textContent ?? '', /在途任务/)
     assert.equal(removedCallbackCount, 0, '失败时不得触发关闭抽屉回调')

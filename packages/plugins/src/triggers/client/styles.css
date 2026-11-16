@@ -1,10 +1,116 @@
 /**
  * builtin:triggers 插件样式。
  *
- * 通用结构一律复用宿主设计系统原语（.screen-container / .helm-table / .kv-list /
- * .callout / .loading-state），此处仅保留 tg-note 业务专属提示样式。
+ * 通用结构一律复用宿主设计系统原语（Screen / ScreenSection / KvGrid / Dialog /
+ * .helm-table / .callout / .loading-state），此处保留 tg-* 专属交互、详情代码块与
+ * 移动端卡片降级排版。
  */
 .tg-note {
   font-size: 12.5px;
+  line-height: 1.5;
   color: var(--fg-muted);
+  word-break: break-word;
+}
+
+.tg-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tg-row {
+  cursor: pointer;
+}
+
+.tg-row:hover td,
+.tg-row:focus-visible td,
+.tg-row.is-selected td {
+  background: var(--bg-subtle);
+}
+
+.tg-drawer-close {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.tg-detail-text {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+@media (max-width: 680px) {
+  .tg-table-wrap .helm-table-wrap {
+    border: none;
+    background: transparent;
+    overflow: visible;
+  }
+
+  .tg-table-wrap .helm-table,
+  .tg-table-wrap .helm-table tbody,
+  .tg-table-wrap .helm-table tr {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .tg-table-wrap .helm-table thead {
+    display: none;
+  }
+
+  .tg-table-wrap .helm-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tg-table-wrap .helm-table tr {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    box-sizing: border-box;
+  }
+
+  .tg-table-wrap .helm-table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 4px 0;
+    border: none;
+    max-width: none;
+    min-width: 0;
+    white-space: normal;
+    word-break: break-word;
+    text-align: right;
+  }
+
+  .tg-table-wrap .helm-table td[colspan] {
+    display: block;
+    text-align: center;
+    padding: 12px 4px;
+  }
+
+  .tg-table-wrap .helm-table td[data-label]:not([colspan])::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    color: var(--fg-subtle);
+    font-size: 11px;
+    text-align: left;
+  }
+
+  .tg-table-wrap .helm-table td.cell-actions {
+    padding-top: 8px;
+    margin-top: 4px;
+    border-top: 1px solid var(--border);
+    align-items: center;
+  }
 }

@@ -218,9 +218,9 @@ export function PluginConfigForm({
         })}
       </div>
       {error && (
-        <div className="callout callout--error" role="alert">
+        <div className="callout callout-error" role="alert">
           <HelmIcon name="alert-circle" size={13} />
-          <span className="selectable">{error}</span>
+          <span className="callout-text selectable">{error}</span>
         </div>
       )}
       <div>
@@ -449,7 +449,7 @@ export function PluginDetailDrawer({
             </div>
             <DialogClose asChild>
               <button
-                className="btn btn-ghost btn-sm plugin-drawer-close-btn"
+                className="btn btn-ghost btn-icon-sm plugin-drawer-close-btn"
                 aria-label="关闭"
                 title="关闭"
               >
@@ -467,7 +467,7 @@ export function PluginDetailDrawer({
                 {/* 快速动作与启停栏 */}
                 <div className="plugin-drawer-action-bar">
                   <div className="plugin-drawer-status-wrap">
-                    <span className="text-subtle text-xs">当前状态</span>
+                    <span className="text-subtle">当前状态</span>
                     {isPluginFailed(plugin) ? (
                       <span className="badge badge-err" title="插件加载或启用失败，详见下方诊断信息">
                         <HelmIcon name="alert-circle" size={10} />
@@ -506,7 +506,7 @@ export function PluginDetailDrawer({
                         </button>
                         <button
                           type="button"
-                          className="btn btn-sm"
+                          className="btn btn-sm split-toggle-btn plugin-drawer-split-btn"
                           title="在右侧分屏并排打开"
                           onClick={() =>
                             store.openTarget(
@@ -546,9 +546,9 @@ export function PluginDetailDrawer({
                 </div>
 
                 {actionError && (
-                  <div className="callout callout--error" role="alert">
+                  <div className="callout callout-error" role="alert">
                     <HelmIcon name="alert-circle" size={13} />
-                    <span className="selectable">{actionError}</span>
+                    <span className="callout-text selectable">{actionError}</span>
                   </div>
                 )}
 
@@ -599,7 +599,7 @@ export function PluginDetailDrawer({
 
                 {/* 故障诊断框：结构化展示阶段、错误码与完整消息 */}
                 {plugin.error && (
-                  <div className="callout callout--error" role="alert">
+                  <div className="callout callout-error" role="alert">
                     <HelmIcon name="alert-circle" size={13} />
                     <div className="plugin-diagnostic-body">
                       <div className="plugin-diagnostic-title">插件加载或启用失败</div>
@@ -614,7 +614,7 @@ export function PluginDetailDrawer({
 
                 {/* 409 plugin_in_use 占用确认：知情后可选强制停用 */}
                 {inUseConfirm && (
-                  <div className="callout callout--warning" role="alert">
+                  <div className="callout callout-warn" role="alert">
                     <HelmIcon name="alert-triangle" size={13} />
                     <div className="plugin-inuse-body">
                       <div className="plugin-diagnostic-title">插件资源占用确认（plugin_in_use）</div>
@@ -663,7 +663,7 @@ export function PluginDetailDrawer({
                           ))}
                         </div>
                       ) : (
-                        <div className="text-subtle text-xs">无声明工具</div>
+                        <div className="text-subtle">无声明工具</div>
                       )}
                     </div>
 
@@ -684,7 +684,7 @@ export function PluginDetailDrawer({
                           ))}
                         </div>
                       ) : (
-                        <div className="text-subtle text-xs">无声明动作</div>
+                        <div className="text-subtle">无声明动作</div>
                       )}
                     </div>
 
@@ -705,7 +705,7 @@ export function PluginDetailDrawer({
                           ))}
                         </div>
                       ) : (
-                        <div className="text-subtle text-xs">无拦截钩子</div>
+                        <div className="text-subtle">无拦截钩子</div>
                       )}
                     </div>
                   </div>
@@ -718,14 +718,14 @@ export function PluginDetailDrawer({
                     <span>配置项</span>
                   </h4>
                   {loadingConfig ? (
-                    <div className="flex-row text-muted" style={{ padding: '8px 0' }}>
-                      <HelmIcon name="loader" size={13} />
+                    <div className="loading-state">
+                      <HelmIcon name="loader" size={13} className="spin-slow" />
                       <span>正在读取配置...</span>
                     </div>
                   ) : configError ? (
-                    <div className="callout callout--error" role="alert">
+                    <div className="callout callout-error" role="alert">
                       <HelmIcon name="alert-circle" size={13} />
-                      <span className="selectable">{configError}</span>
+                      <span className="callout-text selectable">{configError}</span>
                     </div>
                   ) : config && config.pluginId === plugin.id ? (
                     <PluginConfigForm

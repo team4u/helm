@@ -19,9 +19,10 @@ const e = React.createElement
 GlobalRegistrator.register()
 mountSharedPluginNamespaces()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+;(globalThis as Record<string, unknown>).React = React
 
 interface Components {
-  TriggersManagerScreen: (p: Partial<ScreenProps>) => React.ReactElement
+  TriggersManagerScreen: (p: Partial<ScreenProps> & { inlineDrawer?: boolean }) => React.ReactElement
   TriggersSettingsPanel: () => React.ReactElement
 }
 
@@ -244,9 +245,80 @@ test('manager screen：动作失败显式展示错误不静默', { timeout: 60_0
     })
     await act(async () => {})
     assert.match(host.textContent ?? '', /cron_trigger 失败：目标会话不存在/, '错误显式展示')
+    const errCallout = host.querySelector('.callout.callout-error')
+    assert.ok(errCallout, '动作失败必须渲染统一 .callout-error 原语')
   } finally {
     unmount()
   }
+})
+
+test('manager screen：Screen .screen-heading 排版，点击 Cron / Webhook 行打开右侧详情抽屉', { timeout: 60_000 }, async () => {
+  const spy = makeSpyCtx()
+  const { host, unmount } = await mount(
+    spy,
+    e(components.TriggersManagerScreen, { pluginId: 'builtin:triggers', screenId: 'manager', isSplit: false, params: {}, setParams: () => {}, inlineDrawer: true }),
+  )
+  try {
+    const heading = host.querySelector('.screen-header .screen-heading')
+    assert.ok(heading, 'Screen 页头必须使用 .screen-heading 紧致组排')
+
+    const brokenRow = Array.from(host.querySelectorAll('tbody tr')).find((tr) =>
+      tr.textContent?.includes('broken'),
+    )
+    assert.ok(brokenRow, '应存在 broken cron 行')
+    await act(async () => {
+      brokenRow.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    await act(async () => {})
+
+    const dialog = host.querySelector('[role="dialog"].primary-drawer-content')
+    assert.ok(dialog, '点击行应展开右侧 540px 详情抽屉')
+    assert.match(dialog.textContent ?? '', /broken/)
+    assert.match(dialog.textContent ?? '', /0 \* \* \* \*/)
+    assert.match(dialog.textContent ?? '', /失败任务/)
+    assert.ok(dialog.querySelector('.callout.callout-error'), '抽屉内最近错误应使用 .callout-error')
+
+    const closeBtn = dialog.querySelector('button.tg-drawer-close.btn-icon-sm')
+    assert.ok(closeBtn, '抽屉右上角关闭按钮应具备 .tg-drawer-close.btn-icon-sm')
+    await act(async () => {
+      closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    await act(async () => {})
+    assert.equal(host.querySelector('[role="dialog"].primary-drawer-content'), null, '关闭按钮应收起抽屉')
+
+    const webhookRow = Array.from(host.querySelectorAll('tbody tr')).find((tr) =>
+      tr.textContent?.includes('ci/main'),
+    )
+    assert.ok(webhookRow)
+    await act(async () => {
+      webhookRow.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    await act(async () => {})
+    const whDialog = host.querySelector('[role="dialog"].primary-drawer-content')
+    assert.ok(whDialog, '点击 Webhook 行应展开详情抽屉')
+    assert.match(whDialog.textContent ?? '', /CI 构建/)
+    assert.doesNotMatch(whDialog.textContent ?? '', /hasSecret/, '抽屉同样不得暴露 hasSecret 内部键名')
+  } finally {
+    unmount()
+  }
+})
+
+test('静态规范契约：triggers/client/index.tsx 零 Emoji、无原生 <select>、保 Fast Refresh', { timeout: 60_000 }, async () => {
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const srcPath = fileURLToPath(new URL('../../plugins/src/triggers/client/index.tsx', import.meta.url))
+  const src = readFileSync(srcPath, 'utf-8')
+  const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}]/u
+
+  assert.doesNotMatch(src, emojiRegex, 'triggers/client/index.tsx 严禁包含 Emoji')
+  assert.ok(!/<select[\s>]/i.test(src), 'triggers/client/index.tsx 严禁使用原生 <select>')
+  assert.ok(!src.includes('callout--'), 'triggers/client/index.tsx 不得残留 callout--* 旧类')
+  assert.ok(!src.includes("from 'lucide-react'"), '应统一使用 @helm/plugin-client HelmIcon')
+  const exports = src.match(/^export (?!interface|type)\s+(\w+)\s+([A-Za-z0-9_]+)/gm) ?? []
+  assert.ok(
+    exports.every((exp) => exp.includes('function TriggersManagerScreen') || exp.includes('function TriggersSettingsPanel')),
+    'triggers/client/index.tsx 只导出 React 组件与 TS 类型以保证 Fast Refresh',
+  )
 })
 
 test('settingsPanel：计数、CLI 引导与打开管理入口', { timeout: 60_000 }, async () => {

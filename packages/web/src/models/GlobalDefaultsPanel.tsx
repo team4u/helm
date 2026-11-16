@@ -137,7 +137,7 @@ export function GlobalDefaultsPanel({
           <HelmIcon name="sliders" size={14} />
           <span className="section-flat-title">全局模型规则</span>
         </div>
-        <p className="text-muted" style={{ margin: 0 }}>
+        <p className="text-muted">
           新会话的继承链：会话临时覆盖 &gt; Profile 模型 &gt; 此处全局默认。切换后对所有未显式覆盖模型的会话即时生效。
         </p>
 
@@ -190,9 +190,14 @@ export function GlobalDefaultsPanel({
           <button type="button" className="btn btn-ghost" onClick={handleReset} disabled={saving}>
             <span>重置</span>
           </button>
-          {saveSuccess && <span className="text-subtle">配置已成功保存</span>}
-          {saveError && <span className="text-err">{saveError}</span>}
+          {saveSuccess && <span className="text-subtle" role="status">配置已成功保存</span>}
         </div>
+        {saveError && (
+          <div className="callout callout-error" role="alert">
+            <HelmIcon name="alert-circle" size={13} />
+            <span className="callout-text">{saveError}</span>
+          </div>
+        )}
       </div>
     </div>
   )
