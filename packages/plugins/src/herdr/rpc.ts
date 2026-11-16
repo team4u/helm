@@ -339,7 +339,7 @@ export function assertOkResult(result: unknown, method: string): void {
 // - `AgentSendKeysParams` is only `{target, keys}` (src/api/schema/agents.rs:18-22),
 //   with no CAS field; serde has no deny_unknown_fields -- blindly sending extra fields would be
 //   **silently ignored while keys are written anyway** by old servers, exactly reproducing the approval-bridge residual window this contract closes;
-// - `ping` -> `{type:'pong', version, protocol, capabilities}`（src/api/server.rs:337-347、
+// - `ping` -> `{type:'pong', version, protocol, capabilities}` (src/api/server.rs:337-347 and 
 //   src/api/schema/server.rs:17-24) is the official capability channel, extensible forward-compatibly via serde(default) fields.
 //
 // Hence the helm-side contract (a proposal; end-to-end effective once the Herdr server ships support):

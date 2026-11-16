@@ -55,7 +55,7 @@ export class ResumeCoordinator {
   /**
    * Real resume dual entries (identify via our own records first, independent of request.agentType):
    * - standalone subagent: resume = onResolved.executionId (paneId), usually no
-   *   request.agentId；
+   *   request.agentId;
    * - workflow resumeAgent: resume = the agentId recorded for this run, no agentType.
    * Validation: only the same workflow (undefined tracks must agree too) and the same parent conversation; busy/
    * settled/unknown/ambiguous are rejected; explicit kind/nodeId/cwd mismatches are explicitly rejected (never silently ignored);

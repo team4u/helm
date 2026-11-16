@@ -9,7 +9,7 @@
  *   `\\` + `.` (local host) + `\\pipe\\` + the raw name joined segment by segment, **without replacing
  *   colons/slashes** (after herdr's marker path `C:\\Users\\...\\herdr.sock` enters the pipe name, the colon
  *   stays as-is -- NPFS does not forbid `:` in names apart from NUL and path-separator semantics);
- * - `src/os/windows/local_socket/name_type.rs` `map_generic_namespaced_osstr`：
+ * - `src/os/windows/local_socket/name_type.rs` `map_generic_namespaced_osstr`:
  *   a full pipe path already in `\\HOST\\pipe\\NAME` form passes through unchanged (`is_pipefs`).
  * Derived from source; not verified on a physical Windows machine (tests state this honestly).
  */

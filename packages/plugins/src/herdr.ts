@@ -195,7 +195,7 @@ export function createHerdrPlugin(
           if (stopping) return
           host.notify(
               'Herdr event handling failed',
-            `${event.type} ${'workspaceId' in event ? event.workspaceId : event.paneId}：${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
+            `${event.type} ${'workspaceId' in event ? event.workspaceId : event.paneId}: ${error instanceof Error ? depsOf().redact(error.message) : String(error)}`,
             'error',
           )
         })

@@ -37,7 +37,7 @@ export { HerdrTransportError } from './transport-shared.js'
  * Local endpoint resolution (aligned with herdr source `config/io.rs` + `session.rs` + `ipc.rs`;
  * XDG_CONFIG_HOME takes precedence over platform dirs):
  * - Unix: `${XDG_CONFIG_HOME ?? ~/.config}/herdr[/sessions/<name>]/herdr.sock` (a UDS file);
- * - Windows：`${XDG_CONFIG_HOME ?? %APPDATA% ?? USERPROFILE/AppData/Roaming}/herdr/.../herdr.sock`
+ * - Windows: `${XDG_CONFIG_HOME ?? %APPDATA% ?? USERPROFILE/AppData/Roaming}/herdr/.../herdr.sock`
  *   it is only a marker file -- the real endpoint is a Named Pipe (at connect time, join per the
  *   interprocess pathcvt rules with the `\\.\\pipe\\` prefix; never treat the marker file path as a connectable endpoint).
  *

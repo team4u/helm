@@ -8,7 +8,7 @@
  *   - the deadline covers the **entire** call (incl. model resolution): Promise.race against an independent
  *     timeout promise returns on time even if the underlying dependency ignores AbortSignal;
  *     the timer and abort listener are fully cleaned up; a late result is swallowed (already observed), producing no
- *     unhandled rejection；
+ *     unhandled rejection;
  *   - when the external signal is pre-aborted, no request is issued; in-flight cancellation propagates the
  *     original semantics via an independent abort promise, never falling back;
  *   - enhancement failures such as timeout/model-missing/parse-failure return undefined with a redacted short

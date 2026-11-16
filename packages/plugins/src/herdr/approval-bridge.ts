@@ -348,7 +348,7 @@ export class ApprovalBridge {
   }
 
   private casUnsupportedError(target: HerdrTarget, server?: { version: string; protocol: number }): HelmError {
-    const serverLabel = server !== undefined ? `（version ${server.version}, protocol ${server.protocol}）` : ''
+    const serverLabel = server !== undefined ? ` (version ${server.version}, protocol ${server.protocol})` : ''
     return new HelmError(
       'herdr_cas_unsupported',
       `Target Herdr${serverLabel} does not advertise '${SEND_KEYS_CAS_CAPABILITY}' in ping capabilities; refusing CAS-less agent.send_keys: old servers silently ignore expected_state_seq and write keys anyway (reproducing the approval bridge's CAS residual window); upgrade the Herdr server to a version that advertises the capability and re-enable the herdr plugin`,

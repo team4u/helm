@@ -446,7 +446,7 @@ const NAMED_LOGICAL_KEYS = new Set([
   'backtick',
 ])
 
-/** F1 ~ F12。 */
+/** F1 through F12. */
 const FUNCTION_KEY = /^[fF](?:[1-9]|1[0-2])$/
 /** ctrl/alt + single alphanumeric. */
 const MODIFIER_COMBO = /^(?:ctrl|alt)\+[a-z0-9]$/i
