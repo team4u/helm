@@ -36,11 +36,16 @@
   --code-token-addition: #3a7959;
   --code-token-deletion: #bb3d46;
 
-  /* 工具差异展示语义底色（行级淡底 + 词级加深） */
+  /* 工具差异展示语义底色（行级淡底 + 词级加深）与行号槽 */
   --diff-add-bg: rgba(26, 127, 55, 0.12);
   --diff-remove-bg: rgba(207, 34, 46, 0.1);
   --diff-add-word-bg: rgba(26, 127, 55, 0.32);
   --diff-remove-word-bg: rgba(207, 34, 46, 0.28);
+  --diff-gutter-bg: #eef1f4;
+  --diff-gutter-border: rgba(27, 31, 36, 0.08);
+
+  --human-pill-bg: #ffffff;
+  --human-pill-border: #dcdce3;
 
   --fg: #1c1c21;
   --fg-secondary: #4b4b53;
@@ -139,11 +144,16 @@
   --code-token-addition: #68b78d;
   --code-token-deletion: #ea7f81;
 
-  /* 工具差异展示语义底色（行级淡底 + 词级加深） */
+  /* 工具差异展示语义底色（行级淡底 + 词级加深）与行号槽 */
   --diff-add-bg: rgba(46, 160, 67, 0.16);
   --diff-remove-bg: rgba(248, 81, 73, 0.15);
   --diff-add-word-bg: rgba(63, 185, 80, 0.38);
   --diff-remove-word-bg: rgba(248, 81, 73, 0.36);
+  --diff-gutter-bg: #1c222b;
+  --diff-gutter-border: rgba(240, 246, 252, 0.08);
+
+  --human-pill-bg: #26262c;
+  --human-pill-border: #3a3a45;
 
   --fg: #ededf1;
   --fg-secondary: #b9b9c1;

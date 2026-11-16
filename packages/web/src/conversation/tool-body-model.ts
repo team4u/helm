@@ -7,10 +7,11 @@
  * - 行切片（head/tail，用于源码预览与输出尾部折叠——均为本地已有完整文本，
  *   展开可还原，与服务端截断语义无关）；
  * - 通用工具入参的键值归一（多行字符串/嵌套值块状展示，原始数据入口兜底）；
- * - 26px 单行摘要的极简统计（edit +N −N / write 行数；运行态只报事实不报成功）。
+ * - 26px 单行摘要的极简统计（edit +N −N / write 行数；运行态只报事实不报成功）；
+ * - 折叠步骤组统计（StepGroupSummary：思考/工具/失败/运行中计数与耗时聚合）。
  */
 
-import type { ToolResultTruncation, ToolTrace } from './timeline-model.js'
+import type { FoldableStep, ToolResultTruncation, ToolTrace } from './timeline-model.js'
 import { languageFromFilename } from './code-language.js'
 import { buildPendingEditDiff, checkEditToolResult } from './edit-diff-model.js'
 
@@ -247,4 +248,53 @@ export function toolRowStats(tool: ToolTrace): ToolRowStats | undefined {
     return { text: `${countLines(content)} 行`, title: '写入内容行数' }
   }
   return undefined
+}
+
+// ---------------------------------------------------------------------------
+// 折叠步骤组摘要（StepGroup / MultiStepGroup 纯聚合统计）
+// ---------------------------------------------------------------------------
+
+export interface StepGroupSummary {
+  stepCount: number
+  thinkingCount: number
+  toolCount: number
+  errorCount: number
+  runningCount: number
+  totalDurationMs?: number
+}
+
+/** 聚合折叠步骤组内的思考与工具计数、失败/运行态数量及有效正耗时总和（零与非法值不计入）。 */
+export function summarizeStepGroup(steps: ReadonlyArray<FoldableStep>): StepGroupSummary {
+  let thinkingCount = 0
+  let toolCount = 0
+  let errorCount = 0
+  let runningCount = 0
+  let durationSum = 0
+
+  for (const step of steps) {
+    if (step.kind === 'thinking') {
+      thinkingCount += 1
+      continue
+    }
+    toolCount += 1
+    if (step.tool.isError || step.tool.status === 'error') {
+      errorCount += 1
+    }
+    if (step.tool.status === 'running') {
+      runningCount += 1
+    }
+    const d = step.tool.durationMs
+    if (typeof d === 'number' && Number.isFinite(d) && d > 0) {
+      durationSum += d
+    }
+  }
+
+  return {
+    stepCount: steps.length,
+    thinkingCount,
+    toolCount,
+    errorCount,
+    runningCount,
+    ...(durationSum > 0 ? { totalDurationMs: durationSum } : {}),
+  }
 }

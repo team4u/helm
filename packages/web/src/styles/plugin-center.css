@@ -19,28 +19,6 @@
   animation-duration: 0.9s;
 }
 
-.trace-entry {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  width: 100%;
-}
-.trace-entry .trace-row {
-  width: 100%;
-}
-
-.trace-section-label {
-  font-size: 10.5px;
-  color: var(--fg-subtle);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  user-select: none;
-}
-
-.trace-toolview {
-  margin: 2px 0;
-}
-
 /* --------------------------------------------------------------------------
  * 全屏插件中心：容器、顶栏、检索工具栏、卡片网格与空态
  * -------------------------------------------------------------------------- */

@@ -19,7 +19,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
-import type { ToolTrace } from '../src/conversation/timeline-model.js'
+import type { FoldableStep, ToolTrace } from '../src/conversation/timeline-model.js'
 import { ToolExpandedBody } from '../src/conversation/ToolExpandedBody.js'
 
 const e = React.createElement
@@ -27,7 +27,7 @@ const e = React.createElement
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
-const { TraceRow } = await import('../src/conversation/TimelineRows.js')
+const { TraceRow, StepGroup } = await import('../src/conversation/TimelineRows.js')
 
 // ---------------------------------------------------------------------------
 // 挂载工具
@@ -75,6 +75,14 @@ function rowUi(tool: ToolTrace, defaultOpen = false): React.ReactElement {
     HostStoreProviders,
     { value: store },
     e(TraceRow, { tool, conversationId: 1, defaultOpen, siblingCalls: [] }),
+  )
+}
+
+function stepGroupUi(steps: FoldableStep[], active = false): React.ReactElement {
+  return e(
+    HostStoreProviders,
+    { value: store },
+    e(StepGroup, { steps, active, conversationId: 1, siblingCalls: [] }),
   )
 }
 
@@ -603,6 +611,150 @@ test('原型属性同名工具走通用展示，不误当作内置 React 组件'
       assert.match(m.host.textContent ?? '', /真实参数/)
       assert.match(m.host.textContent ?? '', /真实输出/)
     }
+  } finally {
+    m.unmount()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// TraceRow 右侧 chevron 指示器与 StepGroup 折叠错误徽标 / 总耗时
+// ---------------------------------------------------------------------------
+
+test('TraceRow：外层保持 div.trace-row[role="button"]，右侧显示 chevron 指示器并随展开切换且不污染耗时文本', { timeout: 60_000 }, async () => {
+  const m = createMount()
+  try {
+    await m.render(
+      rowUi(trace({ toolName: 'bash', status: 'done', durationMs: 120, input: { command: 'ls' }, resultText: 'ok' })),
+    )
+    const row = m.host.querySelector('div.trace-row') as HTMLElement
+    assert.ok(row !== null, '外层可点击元素必须保持 div.trace-row')
+    assert.equal(row.getAttribute('role'), 'button')
+    assert.equal(row.getAttribute('aria-expanded'), 'false')
+    const rightEl = row.querySelector('.trace-row-right')
+    assert.equal(rightEl?.textContent, '120ms', 'chevron SVG 不污染 .trace-row-right 纯文本')
+    const chevronCollapsed = rightEl?.querySelector('.trace-row-chevron')
+    assert.ok(chevronCollapsed !== null, '渲染 .trace-row-chevron')
+    assert.ok(chevronCollapsed.classList.contains('lucide-chevron-right'), '收起态为 chevron-right')
+
+    await act(async () => {
+      row.click()
+    })
+    assert.equal(row.getAttribute('aria-expanded'), 'true')
+    assert.equal(rightEl?.textContent, '120ms')
+    const chevronExpanded = rightEl?.querySelector('.trace-row-chevron')
+    assert.ok(chevronExpanded?.classList.contains('lucide-chevron-down'), '展开态切换为 chevron-down')
+
+    // right 为空串（unknown 状态且无耗时）：仍保留 chevron 且不渲染多余空 span 文本
+    await m.render(rowUi(trace({ toolName: 'bash', status: 'unknown', isError: false })))
+    const unknownRight = m.host.querySelector('.trace-row-right')
+    assert.equal(unknownRight?.textContent, '')
+    assert.ok(unknownRight?.querySelector('.trace-row-chevron') !== null)
+  } finally {
+    m.unmount()
+  }
+})
+
+test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；展开后隐藏失败徽标并保留总耗时', { timeout: 60_000 }, async () => {
+  const m = createMount()
+  try {
+    const steps: FoldableStep[] = [
+      { kind: 'thinking', thinking: { key: 'th1', text: '先检查环境' } },
+      { kind: 'tool', tool: trace({ key: 't1', toolName: 'read', status: 'done', durationMs: 120, input: { path: '/a' } }) },
+      {
+        kind: 'tool',
+        tool: trace({
+          key: 't2',
+          toolName: 'bash',
+          status: 'error',
+          isError: true,
+          durationMs: 1380,
+          input: { command: 'pnpm test' },
+          resultText: 'exit 1',
+        }),
+      },
+    ]
+    await m.render(stepGroupUi(steps, false))
+
+    const summaryBtn = m.host.querySelector('button.trace-group-summary') as HTMLButtonElement
+    assert.ok(summaryBtn !== null)
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
+    assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), true, '收起且含失败时加错误修饰类')
+    assert.match(summaryBtn.textContent ?? '', /思考与执行过程 \(3 步\)/)
+
+    const errorBadge = summaryBtn.querySelector('.trace-group-badge.trace-group-badge-error')
+    assert.equal(errorBadge?.textContent, '含 1 项失败')
+    const meta = summaryBtn.querySelector('.trace-group-meta.tabular-nums')
+    assert.equal(meta?.textContent, '1.5s')
+
+    // 展开后：隐藏组级失败徽标与错误修饰类（组内失败行直接标红），保留总耗时
+    await act(async () => {
+      summaryBtn.click()
+    })
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
+    assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), false)
+    assert.ok(summaryBtn.querySelector('.trace-group-badge-error') === null, '展开后隐藏失败徽标')
+    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, '1.5s', '展开后保留总耗时')
+    assert.ok(m.host.querySelector('.trace-group-steps .trace-row.trace-row-error') !== null)
+
+    // 再次收起：恢复错误徽标与修饰类
+    await act(async () => {
+      summaryBtn.click()
+    })
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
+    assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), true)
+    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '含 1 项失败')
+  } finally {
+    m.unmount()
+  }
+})
+
+test('StepGroup：进行中（active=true）不显示总耗时，单思考步委派 ThinkingRow 不嵌套摘要', { timeout: 60_000 }, async () => {
+  const m = createMount()
+  try {
+    const steps: FoldableStep[] = [
+      {
+        kind: 'tool',
+        tool: trace({ key: 't1', toolName: 'bash', status: 'error', isError: true, durationMs: 400 }),
+      },
+      {
+        kind: 'tool',
+        tool: trace({ key: 't2', toolName: 'read', status: 'running' }),
+      },
+    ]
+    await m.render(stepGroupUi(steps, true))
+    const summaryBtn = m.host.querySelector('button.trace-group-summary') as HTMLButtonElement
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
+    assert.match(summaryBtn.textContent ?? '', /正在思考与执行 \(2 步\)…/)
+    assert.ok(summaryBtn.querySelector('.trace-group-meta') === null, '进行中不显示总耗时')
+    assert.ok(summaryBtn.querySelector('.trace-group-badge-error') === null, '展开态不显示失败徽标')
+
+    // 进行中手动收起：已有失败可显示失败徽标，但仍不显示总耗时
+    await act(async () => {
+      summaryBtn.click()
+    })
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
+    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '含 1 项失败')
+    assert.ok(summaryBtn.querySelector('.trace-group-meta') === null, 'active=true 时收起仍不显示总耗时')
+
+    // 结束为非活跃态（active=false）：现在展示总耗时
+    await m.render(
+      stepGroupUi(
+        [
+          steps[0]!,
+          { kind: 'tool', tool: trace({ key: 't2', toolName: 'read', status: 'done', durationMs: 100 }) },
+        ],
+        false,
+      ),
+    )
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
+    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, '500ms')
+
+    // 单步 thinking 保持早退 ThinkingRow，不出现 "(1 步)" 或组徽标
+    await m.render(stepGroupUi([{ kind: 'thinking', thinking: { key: 'only', text: '单步思路' } }], false))
+    const singleBtn = m.host.querySelector('button.trace-group-summary') as HTMLButtonElement
+    assert.equal(singleBtn.textContent, '思考过程')
+    assert.ok(singleBtn.querySelector('.trace-group-badge') === null)
+    assert.ok(singleBtn.querySelector('.trace-group-meta') === null)
   } finally {
     m.unmount()
   }

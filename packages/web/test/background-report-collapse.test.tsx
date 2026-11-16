@@ -518,6 +518,13 @@ test('HumanMessage: 排队 agent 长文折叠可展开收起，复制入口保�
 
   const agentPill = host.querySelector('.msg-human-pill-collapsible')
   assert.ok(agentPill, '排队 agent 长文折叠展示')
+  const agentRow = agentPill!.closest('.msg-human-row')
+  assert.ok(agentRow !== null, 'agent 排队胶囊外层应包含 .msg-human-row')
+  assert.equal(agentRow.classList.contains('msg-human-row-external'), true, 'origin=agent 应附加 .msg-human-row-external')
+  assert.equal(agentPill!.classList.contains('msg-human-pill'), true)
+  assert.equal(agentPill!.classList.contains('msg-human-pill-queued'), true)
+  assert.ok(agentRow.querySelector('.msg-origin-tag') !== null)
+  assert.ok(agentRow.querySelector('.msg-human-footer') !== null)
   assert.match(agentPill!.querySelector('.msg-human-collapsed-text')?.textContent ?? '', /后台子代理任务已结算/)
   // 折叠态只见预览，不见全文。
   assert.equal(agentPill!.textContent?.includes('otherRunningTasks'), false)
@@ -540,9 +547,12 @@ test('HumanMessage: 排队 agent 长文折叠可展开收起，复制入口保�
   assert.ok(document.activeElement === expand, '收起时保留键盘焦点')
   assert.equal(host.querySelector('.msg-human-pill-collapsible')?.textContent?.includes('otherRunningTasks'), false)
 
-  // 人类排队长文与正式消息不折叠。
+  // 人类排队长文与正式消息不折叠，也不附加外部来源类名。
   const humanPills = Array.from(host.querySelectorAll('.msg-human-pill')).filter((p) => p.textContent?.includes('人类排队长文'))
   assert.equal(humanPills.length, 1)
+  const humanRow = humanPills[0]!.closest('.msg-human-row')
+  assert.ok(humanRow !== null, 'human 胶囊外层应包含 .msg-human-row')
+  assert.equal(humanRow.classList.contains('msg-human-row-external'), false, 'origin=human 不得附加 .msg-human-row-external')
   assert.equal(humanPills[0]!.classList.contains('msg-human-pill-collapsible'), false, 'human 输入不折叠')
   assert.ok(humanPills[0]!.textContent?.includes('人人人'), 'human 长文直接全文展示')
   unmount()
