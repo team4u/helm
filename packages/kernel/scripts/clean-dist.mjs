@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 /**
- * 构建前置清理：删除本包 dist。
+ * 构建前置清理：增量裁剪本包 dist 中已无对应源码的陈旧产物（--force / HELM_CLEAN_DIST=1 全量清空）。
  *
- * Why：tsc 增量输出不清理陈旧文件；本包源码布局经历过拆包迁移
- * （builtin-plugins 与组合根迁出 @helm/kernel），残留旧输出会被
- * payload / 桌面组装整目录复制而悄悄交付。构建从干净 dist 开始，
- * 交付永远只含当前源码树的产物。
+ * Why：保留有效增量输出配合 tsc incremental，同时防止拆包迁移或删改源码后的旧产物
+ * （如历史 main.js / app.js / builtin-plugins/*）被 payload / 桌面组装整目录复制悄悄带走。
  */
-import { rmSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runCleanDistCli } from '../../../scripts/lib/prune-dist.mjs';
 
 const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-rmSync(join(pkgRoot, 'dist'), { recursive: true, force: true });
+runCleanDistCli(pkgRoot, process.argv.slice(2), { preserveClients: false });
