@@ -32,7 +32,10 @@ function createBoot(electron?: ElectronApi): DesktopBoot {
   if (bundled !== undefined && typeof bundled.name !== 'string') throw new Error('安装包缺少有效的更新包名称');
   const config = resolveDesktopConfig(process.env, resources === undefined ? {} : {
     payloadPackage: process.env.HELM_PAYLOAD_PACKAGE ?? bundled?.name as string,
-    hubEntry: process.env.HELM_DESKTOP_HUB_ENTRY ?? join(resources, 'hub', 'kernel', 'dist', 'main.js'),
+    // 打包形态 hub 入口：payload manifest entries.hub = "hub/dist/main.js"，落在
+    // <resources>/hub（extraResources）下即 hub/hub/dist/main.js（@helm/hub 包 dist；
+    // topology 拆分后不再位于 kernel 包）。
+    hubEntry: process.env.HELM_DESKTOP_HUB_ENTRY ?? join(resources, 'hub', 'hub', 'dist', 'main.js'),
     cliEntry: process.env.HELM_CLI_ENTRY ?? join(resources, 'hub', 'cli', 'dist', 'index.js'),
     webDistDir: process.env.HELM_DESKTOP_WEB_DIST ?? join(resources, 'hub', 'web', 'dist'),
   });
