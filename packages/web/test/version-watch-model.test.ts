@@ -162,7 +162,7 @@ test('探测成功：唯一化 URL 拉取 /index.html，no-store + Accept: text/
   const entry = await probeLatestIndexEntry({ ...stub.deps, nonce: () => 'n-1' })
   assert.equal(entry, '/assets/index-NEW.js')
   assert.equal(stub.calls.length, 1)
-  assert.equal(stub.calls[0]!.url, '/index.html?helmv=n-1', 'URL 携带防缓存唯一参数（穿透忽略 no-store 的 WebView 缓存层）')
+  assert.equal(stub.calls[0]!.url, '/index.html?helmv=n-1', 'URL 携带防缓存唯一参数（应对可能忽略 no-store 的缓存层）')
   assert.equal(stub.calls[0]!.init.cache, 'no-store')
   assert.deepEqual(stub.calls[0]!.init.headers, { accept: 'text/html' })
   assert.equal(buildIndexProbeUrl('zzz'), '/index.html?helmv=zzz')
@@ -331,16 +331,19 @@ test('刷新 URL cache-buster：追加唯一参数且每次替换旧值，绝不
 // 指纹自动刷新跨页防环
 // ---------------------------------------------------------------------------
 
-test('指纹自动刷新跨页防环：同一目标入口只自动发起一次；不同入口/无证据放行', { timeout: 60_000 }, () => {
+test('指纹自动刷新跨页防环：同一目标入口只自动发起一次；不同入口放行', { timeout: 60_000 }, () => {
   const storage = memoryStorage()
   assert.equal(claimFingerprintAutoReload(storage, '/assets/index-B.js'), true, '首次对 B 发起：允许并记录')
   assert.equal(storage.getItem(FINGERPRINT_RELOAD_GUARD_KEY), '/assets/index-B.js')
   assert.equal(claimFingerprintAutoReload(storage, '/assets/index-B.js'), false, '同入口再次自动发起：拒绝（上次未落地，防环）')
   assert.equal(claimFingerprintAutoReload(storage, '/assets/index-C.js'), true, '新部署（不同入口）：正常允许')
-  assert.equal(claimFingerprintAutoReload(storage, null), true, '无指纹证据（不应发生）：放行，不拦截')
-  assert.equal(claimFingerprintAutoReload(null, '/assets/index-B.js'), true, 'storage 不可用（隐私模式）：放行')
-  assert.equal(claimFingerprintAutoReload(memoryStorage({ getItem: true }), '/assets/index-B.js'), true, '读取抛错放行')
-  assert.equal(claimFingerprintAutoReload(memoryStorage({ setItem: true }), '/assets/index-D.js'), true, '写入抛错放行（fail-open）')
+  assert.equal(claimFingerprintAutoReload(storage, null), true, '无指纹证据（不可达防御分支）：放行')
+})
+
+test('指纹自动刷新防环 fail-closed：storage 不可用一律拒绝自动刷新（禁 storage 的 WebView + 回吐旧缓存 = 无限循环）', { timeout: 60_000 }, () => {
+  assert.equal(claimFingerprintAutoReload(null, '/assets/index-B.js'), false, '无 storage 拒绝')
+  assert.equal(claimFingerprintAutoReload(memoryStorage({ getItem: true }), '/assets/index-B.js'), false, '读取抛错拒绝')
+  assert.equal(claimFingerprintAutoReload(memoryStorage({ setItem: true }), '/assets/index-D.js'), false, '写入抛错拒绝（未落标记不放行）')
 })
 
 // ---------------------------------------------------------------------------

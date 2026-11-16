@@ -32,8 +32,8 @@
  * - 自动刷新防环：页内 reloadTriggered 只触发一次（重复探测/重复通知不再
  *   刷）；preloadError 证据驱动的刷新占用每 tab 一次的 sessionStorage 名额
  *   （storage 不可用一律拒绝自动刷新）；指纹变化驱动的刷新对同一目标入口
- *   每 tab 只自动发起一次（WebView 回吐旧缓存时不无限循环），正常连续部署
- *   （入口不同）不受影响；
+ *   每 tab 只自动发起一次（WebView 回吐旧缓存时不无限循环，正常连续部署
+ *   的入口不同不受影响；storage 不可用同样拒绝自动刷新，只留横幅与手动）；
  * - vite:preloadError 恒 preventDefault（Vite 6 契约：未取消会重抛底层错误
  *   覆盖提示）；
  * - 卸载后在途探测回包不再推进状态机或触发刷新、升级重试 timer 一并清理
@@ -152,19 +152,25 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
   const escalateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** 装配存活标记：卸载后迟到的探测回包不再推进状态机或触发 reload。 */
   const activeRef = useRef(true)
+  /** 清理未决的升级重试 timer（新导航尝试或卸载时调用；只触碰 ref，任意渲染代实例等价）。 */
+  const clearReloadEscalation = useCallback((): void => {
+    if (escalateTimerRef.current !== null) {
+      clearTimeout(escalateTimerRef.current)
+      escalateTimerRef.current = null
+    }
+  }, [])
   useEffect(() => {
     activeRef.current = true
     return () => {
       activeRef.current = false
-      if (escalateTimerRef.current !== null) {
-        clearTimeout(escalateTimerRef.current)
-        escalateTimerRef.current = null
-      }
+      clearReloadEscalation()
     }
-  }, [])
+  }, [clearReloadEscalation])
 
   /**
    * 发起一次刷新导航（WebView-safe）：
+   * - 先清理未决的升级重试 timer：新导航（尤其用户手动点击）取代旧尝试，
+   *   不得在其之后再追加一条自动导航；
    * - 注入 reload 时完全委托（测试语义）；
    * - 第一次尝试 = 保持 pathname/query/hash 的干净同址 `location.replace()`
    *   （真文档 reload 语义，桌面行为不变、地址不引入参数）；
@@ -174,6 +180,7 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
    *   交互现场时，自动升级重试一次；之后不再自动升级（防循环，手动始终可用）。
    */
   const issueReloadNavigation = useCallback(function navigate(): void {
+    clearReloadEscalation()
     reloadAttemptsRef.current += 1
     const attempt = reloadAttemptsRef.current
     const injected = reloadRef.current
@@ -185,7 +192,7 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
     if (loc === undefined) return
     const nonce = attempt === 1 ? null : `${Date.now().toString(36)}-${attempt}`
     loc.replace(buildVersionReloadUrl(loc, nonce))
-    if (attempt !== 1 || escalateTimerRef.current !== null) return
+    if (attempt !== 1) return
     escalateTimerRef.current = setTimeout(() => {
       escalateTimerRef.current = null
       // 导航确实没有发生（页面还活着）：仍待刷新、且挂起条件未在窗口内出现
@@ -194,7 +201,7 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
       if (draftDirtyRef.current || modalOpenRef.current || textFocusRef.current) return
       navigate()
     }, versionWatchTimings.reloadEscalateMs)
-  }, [])
+  }, [clearReloadEscalation])
 
   /** 自动刷新一次性闸门：本页生命周期内自动路径只发起一次（防重复探测/通知循环）。 */
   const autoReloadOnce = useCallback((): void => {
@@ -223,9 +230,11 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
       return
     }
     if (fingerprintPending) {
-      // 指纹驱动的自动刷新对同一目标入口每 tab 只发起一次：WebView 对同址
-      // 导航回吐旧缓存时不再无限循环，保留横幅与手动动作；连续部署（入口
-      // 不同）不受影响；storage 异常放行（无循环证据不拦截正常升级）。
+      // 指纹驱动的自动刷新对同一目标入口每 tab 只发起一次（sessionStorage
+      // 名额，跨 tab 不共享）：WebView 对同址导航回吐旧缓存时不再无限循环，
+      // 保留横幅与手动动作；连续部署（入口不同）不受影响。storage 不可用
+      // 时 fail-closed 拒绝自动刷新（禁 storage 的 WebView + 回吐旧缓存 =
+      // 跨页无限刷新），只保留横幅与手动。
       if (claimFingerprintAutoReload(safeSessionStorage(), stateRef.current.latestEntry)) autoReloadOnce()
       return
     }

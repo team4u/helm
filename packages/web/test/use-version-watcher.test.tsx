@@ -855,6 +855,36 @@ test('WebView 吞掉同址导航时自动升级 cache-buster：URL 保留 pathna
   })
 })
 
+test('升级 timer 被后续手动导航取代：待决窗口内手动点击只发一次导航，不追加自动升级', { timeout: 60_000 }, async () => {
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  const stub = makeStubLocation({ hash: '#/c/3' })
+  harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY), { location: stub.location })
+  const h = harness
+  h.renderStore('boot-1')
+  await flush()
+  h.respond(() => htmlOf(NEW_ENTRY))
+  await withTimings({ reloadEscalateMs: 150 }, async () => {
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.reloads(), 1, '自动刷新第一次尝试（升级 timer 待决）')
+
+    // 升级窗口内用户手动点击：新导航取代旧尝试，旧 timer 必须作废
+    act(() => {
+      h.view().reloadNow()
+    })
+    await flush()
+    assert.equal(h.reloads(), 2, '手动点击发出一条导航')
+    assert.match(h.replaceUrls()[1]!, new RegExp(`${RELOAD_CACHE_BUSTER_PARAM}=`), '手动点击直接进入带 buster 的尝试')
+
+    // 越过原升级期限后不再有追加的自动导航（旧行为会在这里多发一条）
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    })
+    assert.equal(h.reloads(), 2, '一次用户操作只对应一次导航，不追加自动升级')
+    assert.equal(h.view().updateAvailable, true, '页面未卸载（替身不导航）：提示保留')
+  })
+})
+
 test('升级窗口内出现本地输入现场：放弃自动升级；转清后自动路径也不再重复导航，手动仍可用', { timeout: 60_000 }, async () => {
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
   const stub = makeStubLocation({ hash: '#/c/9' })
@@ -910,6 +940,50 @@ test('同目标入口的自动刷新跨页仅一次：上一页未落地不再�
   })
   await flush()
   assert.equal(h.reloads(), 1, '手动刷新不受跨页防环约束')
+})
+
+test('storage 不可用：指纹驱动的自动刷新同样拒绝（fail-closed 防跨页无限刷新），保留横幅与手动', { timeout: 60_000 }, async () => {
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  harness = mountWatcher()
+  const h = harness
+  h.renderStore('boot-1')
+  await flush()
+  h.respond(() => htmlOf(NEW_ENTRY))
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage')
+  Object.defineProperty(globalThis, 'sessionStorage', {
+    configurable: true,
+    get() {
+      throw new DOMException('Storage disabled', 'SecurityError')
+    },
+  })
+  try {
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.view().updateAvailable, true, '待刷新提示保留')
+    assert.equal(h.reloads(), 0, 'storage 不可用拒绝自动刷新（禁 storage 的 WebView + 回吐旧缓存 = 无限循环）')
+
+    // 挂起条件反复变化（失焦/聚焦）也不得绕过 fail-closed 自动刷新
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    act(() => {
+      input.focus()
+    })
+    act(() => {
+      input.blur()
+    })
+    await flush()
+    assert.equal(h.reloads(), 0)
+    input.remove()
+
+    act(() => {
+      h.view().reloadNow()
+    })
+    await flush()
+    assert.equal(h.reloads(), 1, '手动「立即刷新」不受影响')
+  } finally {
+    if (descriptor !== undefined) Object.defineProperty(globalThis, 'sessionStorage', descriptor)
+    else delete (globalThis as { sessionStorage?: unknown }).sessionStorage
+  }
 })
 
 // ---------------------------------------------------------------------------

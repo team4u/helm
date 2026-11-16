@@ -78,8 +78,9 @@ export interface IndexEntryProbeDeps {
 }
 
 /** 探测 URL 防缓存参数名：部分 WebView 缓存层忽略 `cache: 'no-store'`，
- *  `Accept`/Cache-Control 都拦不住时只有 URL 级唯一化必然穿透任意 HTTP 缓存
- *  （服务端按 pathname 解析，query 不影响静态路由）。 */
+ *  URL 级唯一化让每次探测命中不同的完整 URL——按 URL 键控的缓存通常因此
+ *  取回新文档（规范语义上不同 URL 即不同缓存项），但自定义 WebView 壳/
+ *  代理仍可能介入，真机行为未验证，残余风险见任务汇报。 */
 const INDEX_PROBE_CACHE_PARAM = 'helmv'
 
 /** 缺省随机数：时间戳 + 进程内自增序号，同毫秒内两次探测也必然不同。 */
@@ -227,8 +228,9 @@ export interface VersionReloadLocation extends VersionReloadUrlSource {
 /**
  * 刷新 URL 防缓存参数名。部分移动 WebView 壳会吞掉 `location.reload()`，
  * 或对同址导航回吐缓存里的旧文档——带唯一参数的 `location.replace()` 走
- * 完整顶层导航管线且 URL 无缓存项，必然重新拉取文档。参数只放在 query
- * （hash 是应用路由，绝不污染），且每次构造先剥掉旧值，绝不累积。
+ * 完整顶层导航管线，且按规范语义命中一个此前不存在的缓存键，通常迫使
+ * 缓存层重新取回文档；自定义壳/代理仍可能介入，不承诺必然。参数只放在
+ * query（hash 是应用路由，绝不污染），且每次构造先剥掉旧值，绝不累积。
  */
 export const RELOAD_CACHE_BUSTER_PARAM = 'helm_reload'
 
@@ -247,25 +249,28 @@ export function buildVersionReloadUrl(loc: VersionReloadUrlSource, nonce: string
   return `${loc.pathname}${search === '' ? '' : `?${search}`}${loc.hash}`
 }
 
-/** sessionStorage 标记键：最近一次指纹驱动自动刷新的目标入口。 */
+/** sessionStorage 标记键：最近一次指纹驱动自动刷新的目标入口。
+ *  必须存 sessionStorage（每 tab 独立名额）：跨 tab 共享的 localStorage 会让
+ *  同时打开的多个 tab 互相吃掉防环名额，误伤正常升级。 */
 export const FINGERPRINT_RELOAD_GUARD_KEY = 'helm:version-fingerprint-reload'
 
 /**
  * 指纹驱动的自动刷新跨页防环：同一目标入口在本 tab 只自动发起一次。
  * WebView 对同址导航回吐旧缓存时会出现「reload 落地仍是旧文档 → 探测又见
  * 新入口 → 再 reload」的死循环；同入口第二次起不再自动刷新，保留横幅与
- * 手动动作（手动不受限）。与 preloadError 名额的 fail-closed 相反，这里
- * storage 不可用（隐私模式等）一律放行：没有「已循环」的证据就不拦截
- * 正常升级路径——该环只出现在缓存行为异常的容器里，不能让所有隐私模式
- * 用户失去自动刷新。
+ * 手动动作（手动不受限）。
+ * 与 preloadError 名额同纪律 fail-closed：storage 不可用（null / 读 / 写任一
+ * 失败）一律拒绝自动刷新——WebView 可能同时禁用 storage 且持续回吐旧缓存，
+ * 放行即是跨页无限自动刷新；保留横幅与手动刷新已足够完成升级。
  */
 export function claimFingerprintAutoReload(storage: Storage | null, latestEntry: string | null): boolean {
-  if (latestEntry === null || storage === null) return true
+  if (latestEntry === null) return true
+  if (storage === null) return false
   try {
     if (storage.getItem(FINGERPRINT_RELOAD_GUARD_KEY) === latestEntry) return false
     storage.setItem(FINGERPRINT_RELOAD_GUARD_KEY, latestEntry)
     return true
   } catch {
-    return true
+    return false
   }
 }
