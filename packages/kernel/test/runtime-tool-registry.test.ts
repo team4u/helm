@@ -10,6 +10,7 @@ import {
 import type { HandledToolCallEntry } from '../src/runtime/hook-bridge.js'
 import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
 import type { DerivedToolSpec } from '../src/plugins/index.js'
+import { CapabilityRegistry } from '../src/plugins/capability-registry.js'
 
 describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_000 }, () => {
   it('wrapToolExecute：命中 handled 缓存时直接返回接管结果并删除缓存，不执行原工具', { timeout: 60_000 }, async () => {
@@ -396,5 +397,98 @@ describe('RuntimeToolRegistry 与 wrapToolExecute 单元测试', { timeout: 60_0
     for (const unsafeName of ['bash', 'write', 'edit', 'register_artifact', 'run_action']) {
       assert.notEqual(byName.get(unsafeName)?.replay, 'safe', `${unsafeName} 不得声明 replay: safe`)
     }
+  })
+
+  it('installPluginTools 与 CapabilityRegistry：校验并透传 PluginToolSpec.replay（safe/unsafe/缺省）', { timeout: 60_000 }, () => {
+    const cap = new CapabilityRegistry()
+    cap.registerTool('demo', {
+      name: 'safe_tool',
+      description: 'safe',
+      inputSchema: { type: 'object' },
+      replay: 'safe',
+      execute: () => ({ ok: true }),
+    })
+    cap.registerTool('demo', {
+      name: 'unsafe_tool',
+      description: 'unsafe',
+      inputSchema: { type: 'object' },
+      replay: 'unsafe',
+      execute: () => ({ ok: true }),
+    })
+    cap.registerTool('demo', {
+      name: 'default_tool',
+      description: 'default',
+      inputSchema: { type: 'object' },
+      execute: () => ({ ok: true }),
+    })
+    assert.throws(
+      () =>
+        cap.registerTool('demo', {
+          name: 'bad_replay_tool',
+          description: 'bad',
+          inputSchema: { type: 'object' },
+          replay: 'always' as never,
+          execute: () => ({ ok: true }),
+        }),
+      (error: unknown) => error instanceof HelmError && error.code === 'invalid_tool_spec' && error.status === 400,
+    )
+
+    const derived = cap.listTools(['demo'])
+    const installed: Extension[] = []
+    const fakeToolDeps: HelmToolDeps = {
+      dataDir: '/tmp/test',
+      defaultCwd: '/tmp/test',
+      hubUrl: 'http://127.0.0.1:3202',
+      stashEnvFor: () => ({}),
+      redact: (t) => t,
+      artifacts: {
+        spill: async () => ({ text: 'spill' }),
+        get: async () => ({} as never),
+        readContent: async () => '',
+        readBuffer: async () => new Uint8Array(),
+      },
+    }
+    const registryModule = new RuntimeToolRegistry({
+      registry: {
+        install(ext: Extension) {
+          installed.push(ext)
+        },
+      },
+      toolDeps: fakeToolDeps,
+      getPluginHost: () => ({
+        invokeAction: async () => undefined,
+        executeTool: async () => undefined,
+        listTools: () => derived,
+        listActions: () => [],
+      }),
+      isArtifactAuthorized: () => true,
+      redact: (t) => t,
+      handledToolCalls: new Map(),
+      getConversation: (id) => ({
+        id,
+        title: 'test',
+        profileId: 'assistant',
+        tags: [],
+        cwd: '/tmp/test',
+        model: 'faux/faux-1',
+        thinkingLevel: '',
+        status: 'idle',
+        stateChangeSeq: 1,
+        completionSeq: 0,
+        unread: false,
+        pinned: false,
+        pendingAskCount: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      }),
+    })
+
+    registryModule.refreshPluginTools()
+    const tools = installed[0]!.tools!
+    const byName = new Map(tools.map((t) => [t.name, t]))
+    assert.equal(byName.get('safe_tool')?.replay, 'safe')
+    assert.equal(byName.get('unsafe_tool')?.replay, 'unsafe')
+    assert.equal(byName.get('default_tool')?.replay, undefined)
+    assert.equal(Object.hasOwn(byName.get('default_tool')!, 'replay'), false)
   })
 })

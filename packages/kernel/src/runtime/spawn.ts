@@ -32,11 +32,15 @@ import { parseModelRef } from './models.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { resolveSpawnTargetChain } from './spawn-target.js'
 import {
-  assertSpawnForkFields,
   resolveCleanForkAnchor,
   resolveForkMode,
   resolveInheritedModelAndThinking,
 } from './spawn-fork.js'
+import {
+  assertSpawnRequestModes,
+  readSubmissionAssistantText,
+  recoverAcceptedStructuredOutput,
+} from './spawn-reattach.js'
 import type { HelmToolDeps } from './tool-deps.js'
 import { runGate, MAX_TIMEOUT_MS } from './tools.js'
 import {
@@ -226,20 +230,38 @@ export async function runNativeSpawn(deps: NativeSpawnDeps, request: AgentSpawnR
   // transform 后的最终请求在此复查；业务值由命名空间所有方插件校验）。
   sanitizeAgentNamespacedMeta(request.meta, { agentId: request.agentId ?? 'subagent', field: 'spawn request meta' })
   assertSpawnRequestShape(request)
-  const childId = request.resume === undefined ? undefined : resolveResumeRef(deps, request.resume, request.parentConversationId)
-  if (childId !== undefined) {
+  const resumeChildId =
+    request.resume === undefined ? undefined : resolveResumeRef(deps, request.resume, request.parentConversationId)
+  const reattachChildId =
+    request.reattach?.conversationId === undefined
+      ? undefined
+      : resolveReattachRef(deps, request.reattach.conversationId, request.parentConversationId)
+  if (reattachChildId !== undefined && request.requestId === undefined) {
+    throw new HelmError(
+      'validation_error',
+      'reattach.conversationId 必须同时提供 requestId 以实现跨重启幂等重挂',
+      400,
+      { conversationId: reattachChildId },
+    )
+  }
+  if (resumeChildId !== undefined) {
     // 状态预检是与 claim 互补的第二道防线（覆盖未经本表的历史在途状态）。
-    const status = deps.getConversation(childId)?.status
+    const status = deps.getConversation(resumeChildId)?.status
     if (status === 'working' || status === 'blocked') {
-      throw new HelmError('subagent_in_use', `子会话 ${childId} 仍在执行，不能并发续接`, 409, { conversationId: childId })
+      throw new HelmError('subagent_in_use', `子会话 ${resumeChildId} 仍在执行，不能并发续接`, 409, {
+        conversationId: resumeChildId,
+      })
     }
-    claimSpawnConversation(deps.harness, childId)
+  }
+  const claimedChildId = resumeChildId ?? reattachChildId
+  if (claimedChildId !== undefined) {
+    claimSpawnConversation(deps.harness, claimedChildId)
   }
   const execution: NativeSpawnExecution = {}
   try {
-    return await runNativeSpawnTurn(deps, request, execution)
+    return await runNativeSpawnTurn(deps, request, execution, reattachChildId)
   } finally {
-    if (childId !== undefined) releaseSpawnConversation(deps.harness, childId)
+    if (claimedChildId !== undefined) releaseSpawnConversation(deps.harness, claimedChildId)
     if (execution.childId !== undefined) releaseSpawnConversation(deps.harness, execution.childId)
   }
 }
@@ -266,7 +288,12 @@ async function runNativeSpawnTurn(
   deps: NativeSpawnDeps,
   request: AgentSpawnRequest,
   execution: NativeSpawnExecution,
+  reattachChildId: number | undefined,
 ): Promise<unknown> {
+  if (reattachChildId !== undefined) {
+    return await runNativeReattachTurn(deps, request, reattachChildId)
+  }
+
   // ---- resume 解析：纯数字 convId 或 agentId 映射；绝不猜测续接（'12abc' 拒绝）。----
   // resume 配置基线：原子会话镜像（profileId/cwd/model）是唯一事实来源。
   // 缺省沿用；显式 agentType/cwd/model 变更经同一 updateConversation 路径应用
@@ -349,9 +376,68 @@ async function runNativeSpawnTurn(
   return await runChildTurn(deps, request, conversation, childId as number, structured, gateCwd)
 }
 
+/**
+ * 原位重挂既有子会话：不新建会话、不修改模型或目录配置，直接触发 onResolved，
+ * 在唤醒执行前登记 structuredOutputSessions 并确保注册结构化输出扩展，
+ * 随后以确定性 requestId 幂等拿回既有持久 SubmissionHandle 等待结算。
+ */
+async function runNativeReattachTurn(
+  deps: NativeSpawnDeps,
+  request: AgentSpawnRequest,
+  childId: number,
+): Promise<unknown> {
+  const existing = deps.getConversation(childId)
+  const parent = deps.getParentOfConversation(childId)
+  if (existing === undefined || parent === undefined || parent !== request.parentConversationId) {
+    throw new HelmError(
+      'not_found',
+      `reattach 目标子会话 ${childId} 不存在或不属于父会话 ${request.parentConversationId}；绝不新建会话假冒重挂`,
+      404,
+      { conversationId: childId, parentConversationId: request.parentConversationId },
+    )
+  }
+  const target: SpawnTarget = {
+    nodeId: existing.nodeId ?? 'local',
+    childCwd: existing.cwd !== '' ? existing.cwd : (request.reattach?.effectiveCwd ?? deps.defaultCwd),
+  }
+  deps.assertNodeAvailable?.(target.nodeId)
+  const structured = prepareStructuredSession(request)
+  if (structured !== undefined && deps.structuredOutputSessions === undefined) {
+    throw new HelmError(
+      'invalid_state',
+      '请求携带 schema 但宿主未注入 structuredOutputSessions（装配缺陷）：结构化输出结果槽无处登记',
+      500,
+    )
+  }
+  if (request.agentId) deps.agentSessions.set(request.agentId, childId)
+  notifyResumeResolved(deps, request, childId, target)
+
+  let structuredExtension: Extension | undefined
+  if (structured !== undefined) {
+    deps.structuredOutputSessions!.set(childId, structured)
+    structuredExtension = buildStructuredOutputExtension(deps.structuredOutputSessions!)
+    deps.installChildExtension(structuredExtension)
+  }
+
+  const conversation = await deps.harness.conversation(childId as never, bg)
+  if (!conversation) {
+    if (structured !== undefined && deps.structuredOutputSessions?.get(childId) === structured) {
+      deps.structuredOutputSessions.delete(childId)
+    }
+    throw new HelmError('not_found', `子会话不存在：${childId}`, 404, { conversationId: childId })
+  }
+  if (structured !== undefined && structuredExtension !== undefined) {
+    const agent = await conversation.agent(bg)
+    if (!agent.extensions.some((ext) => ext.name === STRUCTURED_OUTPUT_EXTENSION_NAME)) {
+      await conversation.configure({ extensions: { add: [structuredExtension] } }, bg)
+    }
+  }
+  return await runChildTurn(deps, request, conversation, childId, structured, target.childCwd)
+}
+
 /** 请求形状硬校验（同步段；全部显式拒绝，绝不静默改默认）。 */
 function assertSpawnRequestShape(request: AgentSpawnRequest): void {
-  assertSpawnForkFields(request)
+  assertSpawnRequestModes(request)
   if (request.isolation !== undefined && request.isolation !== null && request.isolation !== '') {
     // 内核零业务分支：非空 isolation 到达原生执行行 = 没有插件经 agent_spawn
     // continuation 兑现（如 builtin:workflow 停用时的 worktree 隔离）。
@@ -372,6 +458,13 @@ function assertSpawnRequestShape(request: AgentSpawnRequest): void {
     throw new HelmError(
       'unsupported_runtime',
       `agentType '${agentType}' 是外部运行时标识（namespace:kind 形式），需要对应插件经 agent_spawn 钩子接管（当前未注册该运行时）`,
+      400,
+    )
+  }
+  if (request.reattach !== undefined && request.reattach.conversationId === undefined) {
+    throw new HelmError(
+      'unsupported_runtime',
+      `原生 subagent 执行行不支持仅通过 executionId='${request.reattach.executionId ?? ''}' 重挂（需要对应外部运行时插件接管）`,
       400,
     )
   }
@@ -733,27 +826,61 @@ Schema: ${JSON.stringify(structured.schema)}
     : basePrompt
 
   const submission = await conversation.submit(
-    { type: 'input', content: promptText, whenBusy: 'followUp' },
+    {
+      type: 'input',
+      ...(request.requestId !== undefined ? { requestId: request.requestId } : {}),
+      content: promptText,
+      whenBusy: 'followUp',
+    },
     bg,
   )
   const settled = await submission.wait(bg)
   assertNotUnanswered(settled, childId)
+
+  const resolveTurnText = async (
+    turnSettled: typeof settled,
+  ): Promise<string | undefined> => {
+    if (
+      typeof conversation.entries === 'function' &&
+      turnSettled.type === 'input' &&
+      turnSettled.status === 'done' &&
+      turnSettled.answer !== undefined
+    ) {
+      return await readSubmissionAssistantText(conversation, turnSettled)
+    }
+    return deps.getLastAssistantText(childId)
+  }
 
   if (structured) {
     if (structured.accepted !== undefined) {
       await settleGate(deps, request, gateCwd, childId)
       return structured.accepted
     }
+    if (settled.type === 'input' && settled.entry !== undefined) {
+      const recovered = await recoverAcceptedStructuredOutput(
+        conversation,
+        structured.schema,
+        settled.entry,
+        settled.answer,
+      )
+      if (recovered.found) {
+        structured.accepted = recovered.value
+        await settleGate(deps, request, gateCwd, childId)
+        return structured.accepted
+      }
+    }
     // 未走工具：一次文本自愈追问（模型可能直接输出 JSON 文本）。
-    const text = deps.getLastAssistantText(childId) ?? ''
+    const text = (await resolveTurnText(settled)) ?? ''
     const parsed = parseSchemaCandidate(text, structured.schema)
     if (parsed.ok) {
       await settleGate(deps, request, gateCwd, childId)
       return parsed.value
     }
+    const healRequestId = request.requestId !== undefined ? `${request.requestId}:schema-heal` : undefined
     const heal = await conversation.submit(
       {
         type: 'input',
+        ...(healRequestId !== undefined ? { requestId: healRequestId } : {}),
         content:
           `你上一条回答未通过 register_structured_output 工具提交结果。请立即调用 ` +
           `register_structured_output 工具，output 参数为满足 Schema 的合法 JSON。` +
@@ -769,7 +896,20 @@ Schema: ${JSON.stringify(structured.schema)}`,
       await settleGate(deps, request, gateCwd, childId)
       return structured.accepted
     }
-    const lastText = deps.getLastAssistantText(childId) ?? ''
+    if (healSettled.type === 'input' && healSettled.entry !== undefined) {
+      const recoveredHeal = await recoverAcceptedStructuredOutput(
+        conversation,
+        structured.schema,
+        healSettled.entry,
+        healSettled.answer,
+      )
+      if (recoveredHeal.found) {
+        structured.accepted = recoveredHeal.value
+        await settleGate(deps, request, gateCwd, childId)
+        return structured.accepted
+      }
+    }
+    const lastText = (await resolveTurnText(healSettled)) ?? ''
     const retry = parseSchemaCandidate(lastText, structured.schema)
     if (retry.ok) {
       await settleGate(deps, request, gateCwd, childId)
@@ -784,7 +924,7 @@ Schema: ${JSON.stringify(structured.schema)}`,
   }
 
   await settleGate(deps, request, gateCwd, childId)
-  const text = deps.getLastAssistantText(childId)
+  const text = await resolveTurnText(settled)
   if (text === undefined || text === '') {
     throw new HelmError('subagent_failed', `子代理（会话 ${childId}）完成但无文本输出`, 502, {
       conversationId: childId,
@@ -868,4 +1008,30 @@ function resolveResumeRef(deps: NativeSpawnDeps, ref: string, parentId: number):
   const parent = deps.getParentOfConversation(candidate)
   if (parent === undefined || parent !== parentId) return undefined
   return candidate
+}
+
+/**
+ * reattach.conversationId 严格解析：必须为正安全整数、会话真实存在且父归属匹配，
+ * 否则显式 404/400 拒绝，绝不新建会话假冒重挂。
+ */
+function resolveReattachRef(deps: NativeSpawnDeps, convId: number, parentId: number): number {
+  if (!Number.isSafeInteger(convId) || convId <= 0) {
+    throw new HelmError(
+      'validation_error',
+      `reattach.conversationId 必须是正安全整数（收到 ${String(convId)}）`,
+      400,
+      { conversationId: convId },
+    )
+  }
+  const parent = deps.getParentOfConversation(convId)
+  const existing = deps.getConversation(convId)
+  if (existing === undefined || parent === undefined || parent !== parentId) {
+    throw new HelmError(
+      'not_found',
+      `reattach 目标子会话 ${convId} 不存在或不属于父会话 ${parentId}；绝不新建会话假冒重挂`,
+      404,
+      { conversationId: convId, parentConversationId: parentId },
+    )
+  }
+  return convId
 }

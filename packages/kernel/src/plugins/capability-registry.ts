@@ -38,6 +38,8 @@ export interface DerivedToolSpec {
   inputSchema: JsonSchema;
   /** 结构化输出 Schema（ctx.tool 声明时透传；run_action 派生工具无此字段）。 */
   structuredOutputSchema?: JsonSchema;
+  /** 跨重启工具重放安全性（ctx.tool 声明时透传；缺省按 'unsafe'）。 */
+  replay?: 'safe' | 'unsafe';
   /** 工具使用指引完整段落（仅激活工具投射；未激活不产生幻影文本）。 */
   promptSnippet?: string;
   /** 单行要点（聚合进 prompt.tools.guidelines 共享 section）。 */
@@ -397,6 +399,13 @@ export class CapabilityRegistry {
       }
       assertSchemaCompilable(spec.structuredOutputSchema);
     }
+    if (spec.replay !== undefined && spec.replay !== 'safe' && spec.replay !== 'unsafe') {
+      throw new HelmError(
+        'invalid_tool_spec',
+        `插件 ${pluginId} 工具 ${spec.name} 的 replay 必须是 'safe' | 'unsafe'（收到 ${String(spec.replay)}）`,
+        400,
+      );
+    }
     const prompt = validatedPromptFields(`插件 ${pluginId} 工具 ${spec.name}`, spec, 'invalid_tool_spec');
     if (typeof spec.execute !== 'function') {
       throw new HelmError('invalid_tool_spec', `插件 ${pluginId} 工具 ${spec.name} 缺少 execute`, 400);
@@ -517,6 +526,7 @@ export class CapabilityRegistry {
             ...(tool.spec.structuredOutputSchema !== undefined
               ? { structuredOutputSchema: tool.spec.structuredOutputSchema }
               : {}),
+            ...(tool.spec.replay !== undefined ? { replay: tool.spec.replay } : {}),
             ...(tool.spec.promptSnippet !== undefined ? { promptSnippet: tool.spec.promptSnippet } : {}),
             ...(tool.spec.promptGuidelines !== undefined
               ? { promptGuidelines: [...tool.spec.promptGuidelines] }
