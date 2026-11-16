@@ -24,28 +24,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
 .msg-ai-block:focus-within .msg-hover-bar,
 .msg-human-row:focus .msg-hover-bar,
 .msg-ai-block:focus .msg-hover-bar { opacity: 1; }
-.msg-ai-body table:not(.helm-table):not(.jr-table) { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; margin: 12px 0; }
-.msg-ai-body table:not(.helm-table):not(.jr-table) td, .msg-ai-body table:not(.helm-table):not(.jr-table) th { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
-.msg-ai-body table:not(.helm-table):not(.jr-table) th { background: var(--bg-subtle); }
-.msg-ai-body blockquote { border-left: 2px solid var(--border-strong); margin-left: 0; padding-left: 14px; color: var(--prose-muted); }
-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-.code-block-pre { white-space: pre; overflow-wrap: normal; }
-/* 语法高亮：与 pi 同源的语义色相映射（蓝=关键字、黄=函数、紫=类型、
-   青=变量、橙=字符串、绿=数字、灰=注释标点） */
-.hljs-comment, .hljs-quote { color: var(--code-token-comment); font-style: italic; }
-.hljs-keyword, .hljs-selector-tag, .hljs-name { color: var(--code-token-keyword); }
-.hljs-title, .hljs-section { color: var(--code-token-title); font-weight: 600; }
-.hljs-title.class_, .hljs-built_in { color: var(--code-token-type); }
-.hljs-type, .hljs-class { color: var(--code-token-type); }
-.hljs-string, .hljs-regexp, .hljs-template-tag { color: var(--code-token-string); }
-.hljs-attr, .hljs-variable, .hljs-template-variable, .hljs-params, .hljs-attribute { color: var(--code-token-variable); }
-.hljs-bullet { color: var(--code-token-type); }
-.hljs-number, .hljs-literal, .hljs-symbol { color: var(--code-token-number); }
-.hljs-meta, .hljs-meta .hljs-keyword, .hljs-selector-class, .hljs-selector-id,
-.hljs-tag, .hljs-subst, .hljs-operator, .hljs-punctuation { color: var(--code-token-muted); }
-.hljs-addition { color: var(--code-token-addition); }
-.hljs-deletion { color: var(--code-token-deletion); }
-.code-highlight-error { display: block; padding: 5px 14px; border-bottom: 1px solid var(--code-border); color: var(--err); font-size: 11px; }
 @container (max-width: 680px) {
   .conversation-topbar { gap: 8px; padding: 0 12px; }
   /* 移动端顶栏左侧让位汉堡菜单后标题在更窄的剩余空间里垂直居中 */
@@ -64,8 +42,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .composer-env-cwd { max-width: 180px; font-size: 11px; }
   .composer-env-cwd-input { width: min(180px, 100%); }
   .timeline-scroll { padding: 16px 14px 22px; }
+  .timeline-scroll-bottom-btn { right: 14px; bottom: 14px; }
   .msg-human-pill { max-width: 92%; }
   .msg-hover-bar { opacity: 0.85; }
+  .trace-diff-row { grid-template-columns: 2.6em 2.6em 1fr; }
+  .trace-diff-pending .trace-diff-row { grid-template-columns: minmax(0, 1fr); }
+  .trace-kv { grid-template-columns: 1fr; gap: 2px; }
   .composer-shell { padding-inline: 10px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
   .composer-textarea { max-height: 120px; }
   .composer-picker-root { max-width: 180px; }

@@ -375,7 +375,7 @@ test('ConversationTimeline：回合处于 busy（working/live）时不提前渲�
 test('样式契约：msg-time-meta 与 msg-ai-footer / msg-human-footer 样式规范', { timeout: 60_000 }, () => {
   assert.match(stylesCss, /\.msg-ai-footer\s*\{[^}]*display:\s*flex/)
   assert.match(stylesCss, /\.msg-human-footer\s*\{[^}]*display:\s*flex/)
-  assert.match(stylesCss, /\.msg-time-meta\s*\{[^}]*color:\s*var\(--fg-subtle\)/)
+  assert.match(stylesCss, /\.msg-time-meta\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--fg-muted\)\s*88%,\s*transparent\)/)
   assert.match(stylesCss, /\.msg-time-meta\s*\{[^}]*font-size:\s*11px/)
   assert.match(stylesCss, /\.msg-time-meta\s*\{[^}]*font-variant-numeric:\s*tabular-nums/)
 })
