@@ -50,19 +50,18 @@ function SidebarSectionGroups({ store, background }: { store: HelmStoreValue; ba
   )
 }
 
-/** 单条会话行（插件 sidebar.section 分组内渲染）。 */
+/** 单条会话行（插件 sidebar.section 分组内渲染）：状态灯前置行首固定灯位，
+ *  右侧只留 #id 与动作区；分屏入口收敛到会话详情顶栏，行内不携带分屏按钮。 */
 function ConversationRow({
   conv,
   background,
   active,
   onOpen,
-  onOpenSplit,
 }: {
   conv: ConversationSummary
   background?: ConversationBackgroundActivity
   active: boolean
   onOpen: () => void
-  onOpenSplit: () => void
 }) {
   return (
     <div
@@ -70,23 +69,14 @@ function ConversationRow({
       style={{ minHeight: 30, opacity: 1 }}
     >
       <button type="button" className="nav-item-main nav-open" onClick={onOpen} aria-current={active ? 'page' : undefined}>
+        <span className="nav-status-slot">
+          <ConversationStatusDot conv={conv} background={background} />
+        </span>
         <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
       </button>
       <span className="nav-item-meta">
         <span className="tabular-nums">#{conv.id}</span>
-        <ConversationStatusDot conv={conv} background={background} />
         <span className="nav-item-row-actions">
-          <span className="sidebar-split-action" onClick={(e) => e.stopPropagation()}>
-            <HoverIconButton
-              className="split-toggle-btn sidebar-split-btn"
-              title="在右屏分屏打开"
-              icon="columns"
-              onClick={(e) => {
-                e.stopPropagation()
-                onOpenSplit()
-              }}
-            />
-          </span>
           <ConversationRowActionsMenu conversation={conv} />
         </span>
       </span>
@@ -154,9 +144,6 @@ function SidebarSectionGroup({
             background={background.get(conv.id)}
             active={isConversationActive(store, conv.id)}
             onOpen={() => store.openTarget({ kind: 'conversation', conversationId: conv.id })}
-            onOpenSplit={() =>
-              store.openTarget({ kind: 'conversation', conversationId: conv.id }, { split: true })
-            }
           />
         ))}
     </div>

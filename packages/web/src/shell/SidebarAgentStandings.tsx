@@ -27,7 +27,6 @@ import {
 } from './background-activity-model.js'
 import {
   ConversationStatusDot,
-  HoverIconButton,
   RemoteNodeTag,
   StandingStatusDot,
 } from './SidebarPrimitives.js'
@@ -124,11 +123,6 @@ function AgentStandingItem({
     }
   }
 
-  const openSplit = (e: React.MouseEvent, convId: number) => {
-    e.stopPropagation()
-    store.openTarget({ kind: 'conversation', conversationId: convId }, { split: true })
-  }
-
   return (
     <div className="agent-standing">
       <div
@@ -153,10 +147,12 @@ function AgentStandingItem({
           disabled={!batchMode && !agent.primaryConversation && !agent.canCreateConversation}
           aria-current={headerActive ? 'page' : undefined}
         >
+          <span className="nav-status-slot">
+            {!isOpen && standingIndicator !== null && <StandingStatusDot indicator={standingIndicator} />}
+          </span>
           <span className="nav-item-label">{agent.label}</span>
         </button>
         <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
-          {!isOpen && standingIndicator !== null && <StandingStatusDot indicator={standingIndicator} />}
           {!isOpen && agent.primaryConversation?.nodeId && agent.primaryConversation.nodeId !== 'local' && (
             <RemoteNodeTag nodeId={agent.primaryConversation.nodeId} />
           )}
@@ -165,16 +161,6 @@ function AgentStandingItem({
           )}
           {!batchMode && (
             <AgentNewConversationButton agent={agent} onCreate={onCreate} />
-          )}
-          {!batchMode && agent.primaryConversation && !isOpen && (
-            <span className="sidebar-split-action">
-              <HoverIconButton
-                className="split-toggle-btn sidebar-split-btn"
-                title="在右屏分屏打开"
-                icon="columns"
-                onClick={(e) => openSplit(e, agent.primaryConversation!.id)}
-              />
-            </span>
           )}
         </span>
       </div>
@@ -262,7 +248,7 @@ function AgentConversationsList({
 }
 
 /** Agent 名下单个历史会话行（批量模式缩进渲染 + 勾选）。
- * 分屏入口收敛到会话详情顶栏，会话行不再携带分屏按钮。 */
+ * 状态灯前置行首固定灯位；分屏入口收敛到会话详情顶栏，会话行不携带分屏按钮。 */
 function AgentConversationRow({
   conv,
   store,
@@ -316,12 +302,14 @@ function AgentConversationRow({
         }}
         aria-current={active ? 'page' : undefined}
       >
+        <span className="nav-status-slot">
+          <ConversationStatusDot conv={conv} background={background} />
+        </span>
         <span className="nav-item-label">{conv.title || `会话 #${conv.id}`}</span>
       </button>
       <span className="nav-item-meta">
         <span className="tabular-nums">#{conv.id}</span>
         {conv.nodeId && conv.nodeId !== 'local' && <RemoteNodeTag nodeId={conv.nodeId} />}
-        <ConversationStatusDot conv={conv} background={background} />
         {!batchMode && (
           <span className="nav-item-row-actions">
             <ConversationRowActionsMenu conversation={conv} />
