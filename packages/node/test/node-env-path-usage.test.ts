@@ -12,8 +12,8 @@
  *   绝不经继承进入子命令（envExec 与 LocalExecutionEnv.exec 直连两口径）；
  *   调用方显式注入的合法值按次生效。
  *
- * 诚实性：EACCES 分支无法在 root 宿主真实复现，由 protocol 注入 io 单测覆盖
- * （packages/protocol/test/path-usage.test.ts）；此处只测真实可证行为。
+ * 诚实性：EACCES 分支无法在 root 宿主真实复现，由 env-io 注入 io 单测覆盖
+ * （packages/env-io/test/path-usage.test.ts）；此处只测真实可证行为。
  */
 
 import { describe, it, before, after } from 'node:test'
@@ -75,8 +75,11 @@ describe('envPathUsage：真实 /proc', { timeout: 60_000 }, () => {
       assert.equal(hit!.source, 'cwd')
       assert.equal(hit!.path, target)
       assert.equal(typeof hit!.name, 'string', '应含进程名（comm）')
-      // 完整性不假设 root：非完整环境必须携带 fail-closed 诊断。
+      // 完整性不假设 root：非完整环境必须携带 fail-closed 诊断；跨 uid
+      // 盲区（非 root 宿主上的其他 uid 进程）计入 unobservable 且不影响 complete。
       assert.equal(typeof r.value.complete, 'boolean')
+      assert.equal(typeof r.value.unobservable, 'number', '快照必须携带盲区计数')
+      assert.ok(r.value.unobservable >= 0, '盲区计数必须是非负整数')
       if (r.value.complete !== true) {
         assert.ok(r.value.diagnostics.length > 0, 'complete=false 必须携带不完整诊断')
       }

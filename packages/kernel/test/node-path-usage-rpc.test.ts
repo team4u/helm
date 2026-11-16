@@ -16,8 +16,9 @@
  *
  * 平台契约：真实 /proc 链路仅 Linux；非 Linux 平台本文件不整体失败也不静默
  * skip——显式断言 path_usage_not_supported（当前跨平台行为限制的如实契约）。
- * root 假设不成立的环境（其他 uid 进程不可见）下 complete 可为 false：占用
- * 命中（同 uid 子进程）断言不受影响，完整性只断言布尔与 fail-closed 诊断。
+ * 非 root 环境下其他 uid 属主进程不可读：计入 unobservable（结构性盲区，
+ * 不影响 complete）；占用命中（同 uid 子进程）断言不受影响，完整性只断言
+ * 布尔与 fail-closed 诊断。
  */
 
 import { test, describe, it, before, after } from 'node:test'
@@ -333,6 +334,56 @@ describe('节点快照/信封严格校验（真实 RPC 通道返回伪造载荷�
       )
     } finally {
       await hub.close()
+    }
+  })
+
+  it('unobservable 非法（负数 / 非整数）：拒绝采信', { timeout: 60_000 }, async () => {
+    for (const bad of [-1, 1.5, '3']) {
+      const hub = await startHubWithFakeNode(async (input) => ({
+        ok: true,
+        value: { path: input.path, processes: [], matchedTotal: 0, processesTruncated: false, complete: true, unobservable: bad, diagnostics: [] },
+      }))
+      try {
+        const err = await expectSnapshotRejected(hub.fabric)
+        assert.ok(err.message.includes('unobservable'), `诊断应指明 unobservable 非法（实得 ${err.message}）`)
+      } finally {
+        await hub.close()
+      }
+    }
+  })
+
+  it('unobservable 缺省：按 0 采信（旧节点任何拒绝都报 complete=false，缺省 0 语义安全）；合法值透传', { timeout: 60_000 }, async () => {
+    const hub = await startHubWithFakeNode(async (input) => ({
+      ok: true,
+      value: { path: input.path, processes: [], matchedTotal: 0, processesTruncated: false, complete: true, diagnostics: [] },
+    }))
+    try {
+      const usage = await hub.fabric.inspectPathUsage('node-old', '/wt')
+      assert.equal(usage.unobservable, 0, '缺省字段按 0 采信')
+      assert.equal(usage.complete, true)
+    } finally {
+      await hub.close()
+    }
+
+    const hub2 = await startHubWithFakeNode(async (input) => ({
+      ok: true,
+      value: {
+        path: input.path,
+        processes: [],
+        matchedTotal: 0,
+        processesTruncated: false,
+        complete: true,
+        unobservable: 7,
+        diagnostics: ['pid 1 (uid 0): 跨用户无权读取 cwd（EACCES），不可观测（未计入完整性判定）'],
+      },
+    }))
+    try {
+      const usage = await hub2.fabric.inspectPathUsage('node-old', '/wt')
+      assert.equal(usage.unobservable, 7, '合法盲区计数透传')
+      assert.equal(usage.complete, true)
+      assert.ok(usage.diagnostics.some((d) => d.includes('不可观测')))
+    } finally {
+      await hub2.close()
     }
   })
 

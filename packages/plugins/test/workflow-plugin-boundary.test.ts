@@ -111,6 +111,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
       matchedTotal: 0,
       processesTruncated: false,
       complete: true,
+      unobservable: 0,
       diagnostics: [],
     })
   }

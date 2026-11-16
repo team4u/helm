@@ -36,12 +36,20 @@ const MANAGED_BRANCH_PREFIXES = ['helm/spawn-', 'helm/wf-'] as const
 
   /**
    * 删除前进程占用快照检查（per-repo 锁内、真实 git worktree remove 前的
-   * 最后一道屏障；force 不可绕过）：
+   * 最后一道屏障；force 不可绕过）。
+   *
+   * 完整性语义（结构性盲区与扫描异常分治）：快照 complete 由扫描方区分
+   * ——可观测集合内的读取异常（同 uid PID 被拒、stat 异常等）或扫描上限
+   * 触发时 complete=false；跨 uid 不可观测的进程（Linux DAC 结构性盲区，
+   * 如非 root Hub 遇 root 属主进程）计入 unobservable 并在 diagnostics
+   * 如实呈现，不影响 complete——与 Hub 同 uid 的进程（helm 派生的子
+   * 代理/git/shell）永远可观测，保护面不受影响。
    * - 探测端口缺失 / 探测失败（节点离线、守护进程版本不支持、平台不支持、
    *   权限、超时）→ worktree_process_check_failed（不能证明 0 占用就不能
-   *   删除，绝不静默跳过、绝不当作干净）；
+   *   删除，绝不静默跳过、绝不当作干净；force 也不可绕过）；
    * - 无命中的不完整快照最多复查两次（进程 exec/退出期间可能瞬时拒读）；
-   *   只有新的完整零占用快照可放行，持续不完整仍携带 diagnostics 拒绝；
+   *   只有新的完整零占用快照可放行，持续不完整仍携带 diagnostics 拒绝
+   *   （盲区不触发复查——unobservable 不计入完整性判定）；
    * - 命中（cwd / 打开 fd 引用 worktree 或其子目录）→ worktree_process_in_use
    *   （409，含 PID/进程名/引用路径，路径与诊断均经 redact 脱敏；进程名
    *   与 PID 非机密）；只诊断与拒绝，绝不自动 kill/发键；命中且快照同时
