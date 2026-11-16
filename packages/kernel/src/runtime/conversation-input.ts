@@ -10,8 +10,8 @@
  * - 全新输入提交到 SDK harness 并与 tracker 登记绑定。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { JsonValue } from '@earendil-works/chord/json'
-import type { Harness } from '@earendil-works/pi-durable'
+import { copyJson, type JsonValue } from '@earendil-works/chord/json'
+import { InboxDoc, LiveDoc, type Harness } from '@earendil-works/pi-durable'
 import type {
   ArtifactMetadata,
   ConversationAttachmentRef,
@@ -161,8 +161,72 @@ export class ConversationInputPipeline {
     },
   ): Promise<{ submissionId: string }> {
     const { finalInput, finalWhenBusy, effectiveText, resolvedAttachments, content, mutationGuard } = prepared
+    const requestId = prepared.requestId ?? finalInput.id
+    const entryData = copyJson(
+      {
+        id: finalInput.id,
+        text: effectiveText,
+        origin: finalInput.origin,
+        createdAt: finalInput.createdAt,
+        whenBusy: finalWhenBusy,
+        ...(finalInput.meta !== undefined ? { meta: finalInput.meta } : {}),
+        ...(resolvedAttachments !== undefined
+          ? { attachments: resolvedAttachments.map((r) => r.ref) }
+          : {}),
+      },
+      { omitUndefinedProperties: true },
+    )
     this.host.tracker.registerInput(id, finalInput)
     try {
+      // 原子核对 pi.live：SDK admitSubmission 只看 live.run 而不看 live.compactions，
+      // 在无活跃 run 但存在进行中压缩任务时，在此事务内把输入排入 pi.inbox（或 reject），
+      // 避免新回合在未精简的旧上下文上抢跑。
+      const queueResult = await conversation.commit(async (tx) => {
+        const live = await tx.doc(LiveDoc, id as never)
+        const inbox = await tx.doc(InboxDoc, id as never)
+        const existing = await tx.submissionByRequest(id as never, requestId)
+        if (existing !== undefined) {
+          if (existing.type !== 'input') {
+            throw new Error(`Request ${requestId} already identifies a submission of type ${existing.type}`)
+          }
+          return { handled: true as const, submissionId: existing.id as number }
+        }
+        if (live.run === undefined && (live.compactions?.length ?? 0) > 0 && prepared.whenIdle !== 'reject') {
+          if (finalWhenBusy === 'reject') {
+            throw new HelmError(
+              'conversation_busy',
+              `会话 ${id} 正在精简上下文，拒绝提交（whenBusy=reject）`,
+              409,
+              { conversationId: id },
+            )
+          }
+          if (mutationGuard !== undefined) {
+            this.host.assertMutationGuard(id, mutationGuard)
+          }
+          const sub = await tx.createSubmission({
+            conversationId: id as never,
+            requestId,
+            type: 'input',
+            status: 'queued',
+          })
+          inbox.items.push({
+            id: sub.id,
+            mode: finalWhenBusy === 'steer' ? 'steer' : 'followUp',
+            content: copyJson(content, { omitUndefinedProperties: true }) as never,
+            entry: {
+              kind: 'helm.input',
+              data: entryData,
+            },
+          })
+          return { handled: true as const, submissionId: sub.id as number }
+        }
+        return { handled: false as const }
+      }, BACKGROUND_CONTEXT)
+      if (queueResult.handled) {
+        this.host.tracker.bindSubmission(id, finalInput.id, queueResult.submissionId)
+        return { submissionId: String(queueResult.submissionId) }
+      }
+
       // 提交点最终复核：与下方 SDK submit 调用（第一个不可逆动作）之间零
       // await——上方全部准备工作窗口内的归属翻转在此拦截，绝不产生提交。
       if (mutationGuard !== undefined) {
@@ -176,19 +240,9 @@ export class ConversationInputPipeline {
           ...(prepared.whenIdle !== undefined ? { whenIdle: prepared.whenIdle } : {}),
           entry: {
             kind: 'helm.input',
-            data: {
-              id: finalInput.id,
-              text: effectiveText,
-              origin: finalInput.origin,
-              createdAt: finalInput.createdAt,
-              whenBusy: finalWhenBusy,
-              ...(finalInput.meta !== undefined ? { meta: finalInput.meta } : {}),
-              ...(resolvedAttachments !== undefined
-                ? { attachments: resolvedAttachments.map((r) => r.ref) }
-                : {}),
-            } as unknown as JsonValue,
+            data: entryData,
           },
-          requestId: prepared.requestId ?? finalInput.id,
+          requestId,
         },
         BACKGROUND_CONTEXT,
       )

@@ -254,6 +254,7 @@ export function assembleRuntimeServices(
     ownershipOf: (id) => ownership.getOwnership(id),
     // 上下文用量：窗口按当前 Models 集合解析（未知不伪造）。
     models: () => modelsRegistry.models,
+    isClosed: () => runtime.isClosing,
     events: {
       onSummaryChanged: (summary) => {
         if (options.store.getConv(summary.id) === undefined || options.store.isDeleted(summary.id)) return

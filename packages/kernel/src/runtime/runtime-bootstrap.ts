@@ -310,6 +310,7 @@ export async function teardownKernelRuntime(deps: {
   // 最新链再等待一轮，防止中止触发的结算写入与 store.close 竞态。
   await step('settledInflight#2', () => deps.settledInflight())
   await step('settledInflight#3', () => deps.settledInflight())
+  deps.tracker.close()
   await step('pluginHost.dispose', () => deps.pluginHost?.dispose() ?? Promise.resolve())
   await step('nodeForward.close', () => deps.nodeForward?.close() ?? Promise.resolve())
   await step('envFabric.dispose', () => deps.envFabric.dispose())

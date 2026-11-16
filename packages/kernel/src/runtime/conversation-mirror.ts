@@ -86,6 +86,9 @@ export interface ConversationMirror {
   settledWaiters: Array<() => void>
   /** 已发过 conversation.entry 的最大 entry id（观察窗口内单调）。 */
   lastEmittedEntry: number
+  /** 最近一次快照扫到的最大 entry id（用于判定 pi.compaction 是否新落库，
+   * 与 onEntryCommitted sink 是否挂接无关）。 */
+  lastSeenEntryId: number
   /** 待发 live 快照（节流窗口内的最新值；终态时强制冲刷）。 */
   pendingLive: ConversationLive | undefined
   /** 节流冲刷 timer（stopObserving/close 必须清理，防删除后幽灵事件）。 */
@@ -120,6 +123,7 @@ export function createConversationMirror(): ConversationMirror {
     settledError: undefined,
     settledWaiters: [],
     lastEmittedEntry: 0,
+    lastSeenEntryId: 0,
     pendingLive: undefined,
     liveTimer: undefined,
     lastLiveKey: undefined,

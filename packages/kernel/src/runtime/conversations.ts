@@ -93,6 +93,8 @@ export class ConversationTracker {
   private readonly notifiedCompactionFailures = new Map<number, number>()
   /** contextUsage 缓存/刷新链（在途刷新可跨越停观，状态不进镜像）。 */
   private readonly usage: ContextUsageRefresh
+  /** tracker 关闭守卫（close() 或宿主 isClosed 置位后拒绝迟到异步对账副作用）。 */
+  private closed = false
 
   constructor(options: {
     harness: Harness
@@ -106,6 +108,8 @@ export class ConversationTracker {
     /** 当前 Models 集合现读（contextUsage 的窗口解析用）；缺省不解析
      * （contextWindow 省略，绝不伪造）。 */
     models?: () => Models
+    /** 宿主关闭状态回调（与 tracker.close() 双保险）。 */
+    isClosed?: () => boolean
   }) {
     this.harness = options.harness
     this.store = options.store
@@ -113,6 +117,7 @@ export class ConversationTracker {
     this.redactError = options.redactError ?? ((text) => text)
     this.ownershipOf = options.ownershipOf
     this.modelsOf = options.models
+    this.isClosedFn = options.isClosed
     const host: ContextUsageHost = {
       harness: this.harness,
       store: this.store,
@@ -133,6 +138,13 @@ export class ConversationTracker {
 
   /** 当前 Models 集合现读（缺省不解析：窗口省略）。 */
   private readonly modelsOf: (() => Models) | undefined
+
+  /** 宿主关闭状态现读（缺省恒 false；与 tracker.closed 双保险）。 */
+  private readonly isClosedFn: (() => boolean) | undefined
+
+  private get isClosing(): boolean {
+    return this.closed || (this.isClosedFn?.() ?? false)
+  }
 
   /** 取（必要时创建）会话镜像：所有写入路径的唯一入口。 */
   private mirrorOf(id: number): ConversationMirror {
@@ -194,12 +206,15 @@ export class ConversationTracker {
     // 上下文触发水位线与 entry 事件水位线同一初值对齐：初始快照内的历史标记
     // （pi.compaction 等）不触发后续 adopt 的重复刷新（初始刷新见下方调度）。
     let usageWatermark = -1
+    let seenEntryId = mirror.lastSeenEntryId
     for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
       const numeric = Number(raw.id)
       if (Number.isFinite(numeric) && numeric > watermark) watermark = numeric
       if (Number.isFinite(numeric) && numeric > usageWatermark) usageWatermark = numeric
+      if (Number.isFinite(numeric) && numeric > seenEntryId) seenEntryId = numeric
     }
     mirror.lastEmittedEntry = watermark
+    mirror.lastSeenEntryId = seenEntryId
     if (usageWatermark >= 0) this.usage.advanceWatermarkTo(id, usageWatermark)
     // inbox 镜像登记先于 run 判定：重启/停 run 但 inbox 仍有排队输入时，
     // queuedInputs 派生与 listLiveViews 快照不丢排队事实（不在 web 伪造队列）。
@@ -282,6 +297,14 @@ export class ConversationTracker {
       // inbox 项 id 即 SDK submissionId：登记关联索引（出队放置后 markConsumed 可命中）。
       this.mirrorOf(id).submissionIndex.set(item.id, data.id)
       this.upsertTrackedInput(id, data.id, data)
+    }
+  }
+
+  /** 关闭 tracker：停观全部会话并阻断在途异步精简对账再发副作用。 */
+  close(): void {
+    this.closed = true
+    for (const id of [...this.mirrors.keys()]) {
+      this.stopObserving(id)
     }
   }
 
@@ -409,6 +432,11 @@ export class ConversationTracker {
   /** 会话是否有在途工作（close abort 结算判定：空闲不伪造 aborted 结算）。 */
   hasLiveWork(conversationId: number): boolean {
     return this.mirrors.get(conversationId)?.live?.run !== undefined
+  }
+
+  /** 会话是否有进行中的上下文精简任务（不计入 hasLiveWork，避免伪造 turn_settled）。 */
+  isCompacting(conversationId: number): boolean {
+    return (this.mirrors.get(conversationId)?.live?.compactions?.length ?? 0) > 0
   }
 
   /** SSE 快照用实时视图清单：仅活跃 run、流式 generation 或非空 queued 的会话。
@@ -561,6 +589,33 @@ export class ConversationTracker {
     // 新落库条目：按 id 序对每条恰发一次（提交顺序保持，SDK 同 commit 折叠时
     // 窗口仍是全序，逐条推进水位线）。
     this.emitNewEntries(id, view.entries as never as ReadonlyArray<EntryRecordLike>)
+
+    // 检测本快照是否落入新 pi.compaction 条目（独立于 onEntryCommitted sink）。
+    const prevSeenEntryId = mirror.lastSeenEntryId
+    let nextSeenEntryId = prevSeenEntryId
+    let hasNewCompactionEntry = false
+    for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
+      const numeric = Number(raw.id)
+      if (!Number.isFinite(numeric) || numeric <= prevSeenEntryId) continue
+      if (numeric > nextSeenEntryId) nextSeenEntryId = numeric
+      if (raw.kind === 'pi.compaction') hasNewCompactionEntry = true
+    }
+    mirror.lastSeenEntryId = nextSeenEntryId
+
+    // 精简任务结束且未落盘 pi.compaction、当前无活跃 run/其余精简任务：
+    // 调度异步对账（adopt 内严禁 await），甄别空跳过 vs 中止/失败。
+    const prevCompactions = prev?.compactions ?? []
+    const nextCompactions = live?.compactions ?? []
+    const nextTaskIds = new Set(nextCompactions.map((c) => c.taskId))
+    const finishedCompactions = prevCompactions.filter((c) => !nextTaskIds.has(c.taskId))
+    if (
+      finishedCompactions.length > 0 &&
+      nextCompactions.length === 0 &&
+      !hasNewCompactionEntry &&
+      live?.run === undefined
+    ) {
+      void this.reconcileFinishedCompaction(id, mirror.observeGeneration, finishedCompactions)
+    }
 
     // 先结算已结束的 prev run（含同快照折叠：run1 结束 + run2 开始同 commit）。
     if (prev?.run && (!live?.run || live.run.taskId !== prev.run.taskId)) {
@@ -991,6 +1046,85 @@ export class ConversationTracker {
       body: compactionFailureNoticeOf(failure, this.redactError),
       conversationId: id,
     })
+  }
+
+  /**
+   * 无 pi.compaction 落盘的精简结束异步对账（adopt 同步快照外执行）：
+   * - 逐任务查询权威终态，仅当存在干净完成（status='terminal' 且
+   *   outcome.status='completed'、无摘要写入且非 compactionFailure）时视为
+   *   空跳过（selectCut === undefined 或 beforeCompact decline）；
+   * - aborted / failed 任务一律忽略（绝不误报「当前上下文无需精简」，也绝不在
+   *   未精简上下文上擅自冲刷排队输入）；
+   * - 确认干净空跳过后：若有 manual 触发发 info 通知；若 inbox 仍有 steer/followUp
+   *   排队输入且当前空闲无压缩，通过 continue 自动启动下一回合。
+   */
+  private async reconcileFinishedCompaction(
+    id: number,
+    generation: symbol | undefined,
+    finished: ReadonlyArray<{ taskId: number; trigger: string; blocking: boolean }>,
+  ): Promise<void> {
+    try {
+      if (this.isClosing || !this.store.getConv(id)) return
+      const initialMirror = this.mirrors.get(id)
+      if (initialMirror === undefined || initialMirror.observeGeneration !== generation) return
+
+      let hasCleanEmpty = false
+      let hasManualEmpty = false
+      for (const task of finished) {
+        const record = await this.harness.getTask(task.taskId as never, BACKGROUND_CONTEXT)
+        if (this.isClosing || !this.store.getConv(id)) return
+        const currentMirror = this.mirrors.get(id)
+        if (currentMirror === undefined || currentMirror.observeGeneration !== generation) return
+        if (record === undefined) continue
+        if (record.state.status !== 'terminal' || record.state.outcome.status !== 'completed') continue
+        if (currentMirror.live?.compactionFailure?.taskId === task.taskId) continue
+        const result = record.state.outcome.result as { entryId?: unknown; submissionId?: unknown } | undefined
+        if (result?.entryId !== undefined || result?.submissionId !== undefined) continue
+        hasCleanEmpty = true
+        if (task.trigger === 'manual') hasManualEmpty = true
+      }
+      if (!hasCleanEmpty) return
+
+      const mirror = this.mirrors.get(id)
+      if (mirror === undefined || mirror.observeGeneration !== generation) return
+
+      if (hasManualEmpty) {
+        this.events.onNotification?.({
+          level: 'info',
+          title: '当前上下文无需精简',
+          body: '历史消息未超过保留窗口，未生成新的摘要。',
+          conversationId: id,
+        })
+      }
+
+      const hasQueuedInputs = (mirror.inbox ?? []).some(
+        (item) => item.mode === 'steer' || item.mode === 'followUp',
+      )
+      if (!hasQueuedInputs || mirror.live?.run !== undefined || (mirror.live?.compactions?.length ?? 0) > 0) {
+        return
+      }
+      const conv = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+      if (this.isClosing || !this.store.getConv(id)) return
+      const latestMirror = this.mirrors.get(id)
+      if (latestMirror === undefined || latestMirror.observeGeneration !== generation) return
+      const stillQueued = (latestMirror.inbox ?? []).some(
+        (item) => item.mode === 'steer' || item.mode === 'followUp',
+      )
+      if (!stillQueued || latestMirror.live?.run !== undefined || (latestMirror.live?.compactions?.length ?? 0) > 0) {
+        return
+      }
+      try {
+        await conv?.submit({ type: 'continue' }, BACKGROUND_CONTEXT)
+      } catch (error) {
+        const name = (error as { name?: string })?.name
+        const code = (error as { code?: string })?.code
+        if (name === 'ConversationBusy' || code === 'not_found') return
+        throw error
+      }
+    } catch (error) {
+      if (this.isClosing) return
+      console.error(`[helm] 会话 ${id} 精简结束对账失败:`, error)
+    }
   }
 
   setPendingAskCount(conversationId: number, count: number): void {
