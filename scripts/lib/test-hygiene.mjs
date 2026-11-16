@@ -8,7 +8,11 @@
  *   skip-without-reason   skip 必须附理由字符串（{ skip: true }、裸 test.skip、
  *                         无法静态确认带理由的 skip 条件均视为违规）；
  *   suite-timeout-env     禁止给 process.env.HELM_TEST_SUITE_TIMEOUT_MS 赋值
- *                         （kernel env-registry-races 依赖宿主 HELM_* 被剥除，注入即误报）。
+ *                         （kernel env-registry-races 依赖宿主 HELM_* 被剥除，注入即误报）；
+ *   unsafe-dom-assert     禁止对 DOM 节点 / Window 调用 assert.equal / strictEqual /
+ *                         deepEqual / deepStrictEqual / notDeepEqual / notDeepStrictEqual
+ *                         （或双侧均为 DOM 节点的 notEqual / notStrictEqual），避免失败时
+ *                         util.inspect 递归遍历整棵 DOM/React Fiber 树引发卡死或 OOM。
  *
  * 识别范围：node:test 的具名导入（test/it/describe，含 as 别名）、默认导入、命名空间导入
  * （import * as nt 后 nt.test/nt.it/nt.describe，含 .skip/.todo 变体）。todo 不执行 →
@@ -26,9 +30,159 @@ const ENV_VAR = 'HELM_TEST_SUITE_TIMEOUT_MS';
 const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];
 
 /**
- * @typedef {{ file: string, line: number, rule: 'timeout-missing' | 'skip-without-reason' | 'suite-timeout-env', message: string }} HygieneViolation
+ * @typedef {{ file: string, line: number, rule: 'timeout-missing' | 'skip-without-reason' | 'suite-timeout-env' | 'unsafe-dom-assert', message: string }} HygieneViolation
  * @typedef {{ violations: HygieneViolation[], stats: { testCalls: number, skipCalls: number, todoCalls: number, subtestCalls: number } }} HygieneReport
  */
+
+const ASSERT_METHODS = new Set([
+  'equal',
+  'strictEqual',
+  'notEqual',
+  'notStrictEqual',
+  'deepEqual',
+  'deepStrictEqual',
+  'notDeepEqual',
+  'notDeepStrictEqual',
+]);
+const SINGLE_ARG_DOM_UNSAFE = new Set([
+  'equal',
+  'strictEqual',
+  'deepEqual',
+  'deepStrictEqual',
+  'notDeepEqual',
+  'notDeepStrictEqual',
+]);
+const BOTH_ARG_DOM_UNSAFE = new Set(['notEqual', 'notStrictEqual']);
+
+const DOM_RETURNING_METHODS = new Set([
+  'querySelector',
+  'getElementById',
+  'closest',
+  'createElement',
+  'cloneNode',
+]);
+const DOM_COLLECTION_METHODS = new Set([
+  'querySelectorAll',
+  'getElementsByTagName',
+  'getElementsByClassName',
+]);
+const DOM_RETURNING_PROPS = new Set([
+  'activeElement',
+  'parentElement',
+  'parentNode',
+  'firstElementChild',
+  'lastElementChild',
+  'firstChild',
+  'lastChild',
+  'nextElementSibling',
+  'previousElementSibling',
+  'documentElement',
+  'ownerDocument',
+  'defaultView',
+]);
+
+/** 收集 node:assert / node:assert/strict 的导入绑定（默认、具名/别名、命名空间、strict）。 */
+function collectAssertBindings(ts, sourceFile) {
+  /** @type {Set<string>} */ const assertObjects = new Set();
+  /** @type {Map<string, string>} */ const assertFns = new Map();
+  for (const st of sourceFile.statements) {
+    if (!ts.isImportDeclaration(st)) continue;
+    const spec = st.moduleSpecifier;
+    if (!ts.isStringLiteral(spec)) continue;
+    if (spec.text !== 'node:assert' && spec.text !== 'node:assert/strict') continue;
+    const clause = st.importClause;
+    if (!clause) continue;
+    if (clause.name) assertObjects.add(clause.name.text);
+    const nb = clause.namedBindings;
+    if (nb && ts.isNamedImports(nb)) {
+      for (const el of nb.elements) {
+        const imported = (el.propertyName ?? el.name).text;
+        const local = el.name.text;
+        if (imported === 'strict') assertObjects.add(local);
+        else if (ASSERT_METHODS.has(imported)) assertFns.set(local, imported);
+      }
+    }
+    if (nb && ts.isNamespaceImport(nb)) assertObjects.add(nb.name.text);
+  }
+  return { assertObjects, assertFns };
+}
+
+function classifyAssertCall(ts, callee, assertBindings) {
+  if (ts.isIdentifier(callee)) {
+    return assertBindings.assertFns.get(callee.text) ?? null;
+  }
+  if (ts.isPropertyAccessExpression(callee)) {
+    const method = callee.name.text;
+    if (!ASSERT_METHODS.has(method)) return null;
+    const host = callee.expression;
+    if (ts.isIdentifier(host) && assertBindings.assertObjects.has(host.text)) return method;
+    if (
+      ts.isPropertyAccessExpression(host) &&
+      (host.name.text === 'strict' || host.name.text === 'default') &&
+      ts.isIdentifier(host.expression) &&
+      assertBindings.assertObjects.has(host.expression.text)
+    ) {
+      return method;
+    }
+  }
+  return null;
+}
+
+/** 解包括号、as / 类型断言 / satisfies / 非空断言。 */
+function unwrapExpr(ts, expr) {
+  let cur = expr;
+  while (
+    cur &&
+    (ts.isParenthesizedExpression(cur) ||
+      ts.isAsExpression(cur) ||
+      ts.isTypeAssertionExpression(cur) ||
+      ts.isSatisfiesExpression(cur) ||
+      ts.isNonNullExpression(cur))
+  ) {
+    cur = cur.expression;
+  }
+  return cur;
+}
+
+function isDomCollectionExpr(ts, expr, lookupDomListVar) {
+  const cur = unwrapExpr(ts, expr);
+  if (!cur) return false;
+  if (ts.isIdentifier(cur)) return lookupDomListVar(cur.text);
+  if (ts.isCallExpression(cur)) {
+    const callee = unwrapExpr(ts, cur.expression);
+    if (ts.isPropertyAccessExpression(callee) && DOM_COLLECTION_METHODS.has(callee.name.text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isDomNodeExpr(ts, expr, lookupDomVar, lookupDomListVar) {
+  const cur = unwrapExpr(ts, expr);
+  if (!cur) return false;
+  if (ts.isIdentifier(cur)) {
+    return cur.text === 'document' || cur.text === 'window' || lookupDomVar(cur.text);
+  }
+  if (ts.isCallExpression(cur)) {
+    const callee = unwrapExpr(ts, cur.expression);
+    if (ts.isPropertyAccessExpression(callee) && DOM_RETURNING_METHODS.has(callee.name.text)) {
+      return true;
+    }
+    return false;
+  }
+  if (ts.isElementAccessExpression(cur)) {
+    return isDomCollectionExpr(ts, cur.expression, lookupDomListVar);
+  }
+  if (ts.isPropertyAccessExpression(cur)) {
+    const prop = cur.name.text;
+    if (DOM_RETURNING_PROPS.has(prop)) return true;
+    if (prop === 'body' || prop === 'head') {
+      const host = unwrapExpr(ts, cur.expression);
+      return Boolean(host && ts.isIdentifier(host) && host.text === 'document');
+    }
+  }
+  return false;
+}
 
 /** 收集 node:test 的导入绑定：testFn（test/it，含别名）、describe、命名空间。 */
 function collectTestBindings(ts, sourceFile) {
@@ -188,10 +342,36 @@ export function analyzeTestSource(ts, filePath, source) {
   const scriptKind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, scriptKind);
   const bindings = collectTestBindings(ts, sourceFile);
+  const assertBindings = collectAssertBindings(ts, sourceFile);
   const consts = collectTopLevelConsts(ts, sourceFile);
   /** @type {HygieneViolation[]} */
   const violations = [];
   const stats = { testCalls: 0, skipCalls: 0, todoCalls: 0, subtestCalls: 0 };
+
+  const scopeStack = [{ domVars: new Map(), domListVars: new Map() }];
+  const lookupScope = (kind, name) => {
+    for (let i = scopeStack.length - 1; i >= 0; i -= 1) {
+      if (scopeStack[i][kind].has(name)) return scopeStack[i][kind].get(name);
+    }
+    return false;
+  };
+  const lookupDomVar = (name) => lookupScope('domVars', name);
+  const lookupDomListVar = (name) => lookupScope('domListVars', name);
+  const assignScope = (kind, name, value) => {
+    for (let i = scopeStack.length - 1; i >= 0; i -= 1) {
+      if (scopeStack[i][kind].has(name)) {
+        scopeStack[i][kind].set(name, value);
+        return;
+      }
+    }
+    scopeStack[scopeStack.length - 1][kind].set(name, value);
+  };
+  const isScopeNode = (node) =>
+    ts.isBlock(node) ||
+    ts.isFunctionLike(node) ||
+    ts.isForStatement(node) ||
+    ts.isForOfStatement(node) ||
+    ts.isForInStatement(node);
 
   const lineOf = (node) => sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
   const namePreview = (call) => {
@@ -205,7 +385,43 @@ export function analyzeTestSource(ts, filePath, source) {
    * @param {boolean} inheritedTimeout 外层 describe/父测试已声明的 timeout 是否覆盖本调用
    */
   const visit = (node, inheritedTimeout) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      const top = scopeStack[scopeStack.length - 1];
+      const isDom = node.initializer
+        ? isDomNodeExpr(ts, node.initializer, lookupDomVar, lookupDomListVar)
+        : false;
+      const isList = node.initializer
+        ? isDomCollectionExpr(ts, node.initializer, lookupDomListVar)
+        : false;
+      top.domVars.set(node.name.text, isDom);
+      top.domListVars.set(node.name.text, isList);
+    } else if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.left)
+    ) {
+      assignScope('domVars', node.left.text, isDomNodeExpr(ts, node.right, lookupDomVar, lookupDomListVar));
+      assignScope('domListVars', node.left.text, isDomCollectionExpr(ts, node.right, lookupDomListVar));
+    }
+
     if (ts.isCallExpression(node)) {
+      const assertMethod = classifyAssertCall(ts, node.expression, assertBindings);
+      if (assertMethod && node.arguments.length >= 2) {
+        const leftIsDom = isDomNodeExpr(ts, node.arguments[0], lookupDomVar, lookupDomListVar);
+        const rightIsDom = isDomNodeExpr(ts, node.arguments[1], lookupDomVar, lookupDomListVar);
+        const unsafe = SINGLE_ARG_DOM_UNSAFE.has(assertMethod)
+          ? leftIsDom || rightIsDom
+          : BOTH_ARG_DOM_UNSAFE.has(assertMethod) && leftIsDom && rightIsDom;
+        if (unsafe) {
+          violations.push({
+            file: filePath,
+            line: lineOf(node),
+            rule: 'unsafe-dom-assert',
+            message: `禁止对 DOM/Window 节点调用 assert.${assertMethod}(...)（失败时 util.inspect 会遍历 DOM/Fiber 树导致卡死或 OOM）；请改用 assert.ok(el === null, ...) 或 assert.ok(a === b, ...)`,
+          });
+        }
+      }
+
       const cls = classifyCallee(ts, node.expression, bindings);
       const isSubtestCall =
         !cls &&
@@ -278,6 +494,15 @@ export function analyzeTestSource(ts, filePath, source) {
         rule: 'suite-timeout-env',
         message: `禁止给 process.env.${ENV_VAR} 赋值（kernel env-registry-races 依赖宿主 HELM_* 被剥除，注入会误报）`,
       });
+    }
+    if (isScopeNode(node)) {
+      scopeStack.push({ domVars: new Map(), domListVars: new Map() });
+      try {
+        node.forEachChild((c) => visit(c, inheritedTimeout));
+      } finally {
+        scopeStack.pop();
+      }
+      return;
     }
     node.forEachChild((c) => visit(c, inheritedTimeout));
   };

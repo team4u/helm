@@ -224,7 +224,7 @@ test('PACKAGE_TIERS 与 test-suites.mjs SUITES 镜像锁定；全仓包都有档
   assert.ok(testFilesOfPackage(repoRoot, 'cli').some((f) => f.endsWith('.test.ts')))
 })
 
-test('planCheckCommands：desktop 选中时插入 dist build 前置；顺序固定；空选集无命令', { timeout: 60_000 }, () => {
+test('planCheckCommands：有测试文件时前置 check-hygiene；desktop 选中时插入 dist build 前置；顺序固定；空选集无命令', { timeout: 60_000 }, () => {
   const pm = { cmd: 'node', args: ['/pnpm/bin/pnpm.cjs'] }
   const withDesktop = planCheckCommands({
     affectedDirs: ['desktop', 'kernel'],
@@ -233,12 +233,19 @@ test('planCheckCommands：desktop 选中时插入 dist build 前置；顺序固�
     execPath: '/node',
     repoRoot: '/repo',
   })
-  assert.equal(withDesktop.length, 3)
-  assert.deepEqual(withDesktop[0]?.args, ['/pnpm/bin/pnpm.cjs', 'typecheck'])
-  assert.deepEqual(withDesktop[1]?.args, ['/pnpm/bin/pnpm.cjs', '--filter', '@helm/desktop', 'run', 'build'])
-  assert.match(withDesktop[1]?.label ?? '', /desktop/)
-  assert.equal(withDesktop[2]?.args[0], path.join('/repo', 'scripts', 'run-tests.mjs'))
-  assert.equal(withDesktop[2]?.args.length, 3)
+  assert.equal(withDesktop.length, 4)
+  assert.equal(withDesktop[0]?.cmd, '/node')
+  assert.deepEqual(withDesktop[0]?.args, [
+    path.join('/repo', 'scripts', 'check-test-hygiene.mjs'),
+    '--files',
+    'packages/desktop/test/bootstrap.test.ts',
+    'packages/kernel/test/http.test.ts',
+  ])
+  assert.deepEqual(withDesktop[1]?.args, ['/pnpm/bin/pnpm.cjs', 'typecheck'])
+  assert.deepEqual(withDesktop[2]?.args, ['/pnpm/bin/pnpm.cjs', '--filter', '@helm/desktop', 'run', 'build'])
+  assert.match(withDesktop[2]?.label ?? '', /desktop/)
+  assert.equal(withDesktop[3]?.args[0], path.join('/repo', 'scripts', 'run-tests.mjs'))
+  assert.equal(withDesktop[3]?.args.length, 3)
 
   const withoutDesktop = planCheckCommands({
     affectedDirs: ['cli'],
@@ -247,7 +254,10 @@ test('planCheckCommands：desktop 选中时插入 dist build 前置；顺序固�
     execPath: '/node',
     repoRoot: '/repo',
   })
-  assert.equal(withoutDesktop.length, 2)
+  assert.equal(withoutDesktop.length, 3)
+  assert.equal(withoutDesktop[0]?.args[0], path.join('/repo', 'scripts', 'check-test-hygiene.mjs'))
+  assert.deepEqual(withoutDesktop[1]?.args, ['/pnpm/bin/pnpm.cjs', 'typecheck'])
+  assert.equal(withoutDesktop[2]?.args[0], path.join('/repo', 'scripts', 'run-tests.mjs'))
   assert.ok(withoutDesktop.every((c) => !c.args.includes('@helm/desktop')))
 
   const none = planCheckCommands({ affectedDirs: [], testFiles: [], pm, execPath: '/node', repoRoot: '/repo' })
@@ -638,6 +648,163 @@ process.exit(code)
       poll()
     })
     assert.ok(gone, `忽略 TERM 的孙进程必须被真实拓扑整组收割，不留孤儿`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------- unsafe-dom-assert / safe-test-assert / SIGKILL 看门狗
+
+test('hygiene：unsafe-dom-assert 精确命中 DOM 节点断言并放行文本/普通 body/ok/notEqual null', { timeout: 60_000 }, () => {
+  // 正例（违规）：querySelector / getElementById / 局部变量 / document.activeElement 两侧 / document.body / 具名导入
+  assert.deepEqual(
+    rulesOf(`import test from 'node:test'
+import assert from 'node:assert/strict'
+import { strictEqual } from 'node:assert'
+test('bad dom', { timeout: 60_000 }, () => {
+  assert.equal(document.querySelector('.a'), null)
+  strictEqual(document.getElementById('x'), null)
+  const el = document.querySelector('.b')
+  assert.equal(el, null)
+  assert.notStrictEqual(document.activeElement, el)
+  assert.deepEqual(document.body, null)
+})`),
+    [
+      'unsafe-dom-assert',
+      'unsafe-dom-assert',
+      'unsafe-dom-assert',
+      'unsafe-dom-assert',
+      'unsafe-dom-assert',
+    ],
+  )
+
+  // 反例（干净）：textContent / innerHTML / getAttribute / length / req.body / hit.body / assert.ok / assert.notEqual(el, null)
+  assert.deepEqual(
+    rulesOf(`import test from 'node:test'
+import assert from 'node:assert/strict'
+test('clean dom', { timeout: 60_000 }, () => {
+  const el = document.querySelector('.a')
+  assert.equal(el?.textContent, 'ok')
+  assert.equal(el?.innerHTML, '<span>ok</span>')
+  assert.equal(el?.getAttribute('role'), 'dialog')
+  assert.equal(document.querySelectorAll('.item').length, 2)
+  assert.equal(hit.body, 'payload')
+  assert.equal(req.body, 'raw')
+  assert.equal(draft.body, 'draft')
+  assert.ok(el === null)
+  assert.notEqual(el, null)
+  assert.notStrictEqual(document.activeElement, null)
+})`),
+    [],
+  )
+})
+
+test('safe-test-assert：循环 __reactFiber$ 模拟 DOM 节点 assert.equal(el, null) 在 <50ms 内抛摘要化 AssertionError', { timeout: 60_000 }, async () => {
+  const preloadUrl = pathToFileURL(path.join(scriptsDir, 'lib', 'safe-test-assert.mjs')).href
+  await import(preloadUrl)
+  const { equal } = await import('node:assert/strict')
+
+  // 构造带深度循环 React Fiber 引用的模拟 DOM 元素
+  const fiber: Record<string, unknown> = { memoizedProps: {}, return: null, stateNode: null }
+  fiber.child = fiber
+  fiber.return = fiber
+  const bigArr = Array.from({ length: 5000 }, (_, i) => ({ i, parent: fiber }))
+  fiber.memoizedProps = { items: bigArr }
+  const el: Record<string, unknown> = {
+    nodeType: 1,
+    nodeName: 'DIV',
+    id: 'card',
+    className: 'box active',
+    __reactFiber$xyz: fiber,
+    ownerDocument: null,
+  }
+  fiber.stateNode = el
+  el.ownerDocument = { nodeType: 9, nodeName: '#document', body: el }
+
+  const t0 = performance.now()
+  assert.throws(
+    () => assert.equal(el, null),
+    (err: unknown) => {
+      assert.ok(err instanceof assert.AssertionError)
+      assert.ok(err.message.includes('[DOM <div#card.box.active>]'), `未包含紧凑摘要: ${err.message}`)
+      return true
+    },
+  )
+  assert.throws(
+    () => equal(el, null),
+    (err: unknown) => err instanceof assert.AssertionError && err.message.includes('[DOM <div#card.box.active>]'),
+  )
+  const elapsedMs = performance.now() - t0
+  assert.ok(elapsedMs < 50, `危险 DOM 断言耗时 ${elapsedMs.toFixed(1)}ms 超过 50ms 阈值`)
+
+  // 正常对象保留原生 diff，不被错误摘要化
+  assert.throws(
+    () => assert.deepEqual({ alpha: 1 }, { alpha: 2 }),
+    (err: unknown) => err instanceof assert.AssertionError && err.message.includes('alpha'),
+  )
+})
+
+test('进程纪律：run-tests.mjs 被 SIGKILL 强杀时父死看门狗自动收割 detached 测试进程组', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX 父死看门狗与进程组信号语义；Windows 不适用' : false }, async () => {
+  const dir = path.join(repoRoot, 'node_modules', '.helm-runtests-sigkill')
+  rmSync(dir, { recursive: true, force: true })
+  mkdirSync(dir, { recursive: true })
+  const marker = path.join(dir, 'grandchild.pid')
+  const holder = path.join(dir, 'hold.test.ts')
+  const grandchildCode =
+    `process.on('SIGTERM', () => {}); process.on('SIGINT', () => {});` +
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid));` +
+    `setInterval(() => {}, 1000);`
+  writeFileSync(
+    holder,
+    `import test from 'node:test'
+import { spawn } from 'node:child_process'
+test('hold-sigkill', { timeout: 60_000 }, () => {
+  const g = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildCode)}], { stdio: 'ignore' })
+  if (g.pid == null) throw new Error('grandchild spawn failed')
+  return new Promise(() => {})
+})
+`,
+  )
+
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  const runner = spawn(process.execPath, [path.join(scriptsDir, 'run-tests.mjs'), holder], {
+    cwd: repoRoot,
+    env,
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  let stderr = ''
+  runner.stderr?.on('data', (d) => {
+    stderr += String(d)
+  })
+
+  try {
+    const up = Date.now() + 30_000
+    while (!existsSync(marker) && Date.now() < up) {
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    assert.ok(existsSync(marker), `孙进程 PID marker 未出现；stderr: ${stderr}`)
+    const grandchildPid = Number(readFileSync(marker, 'utf8'))
+    assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0)
+    assert.ok(pidAlive(grandchildPid), '强杀 run-tests 前孙进程必须存活')
+
+    runner.kill('SIGKILL')
+    const exitSignal = await new Promise<string | null>((resolve) => {
+      runner.on('exit', (_c, s) => resolve(s))
+    })
+    assert.equal(exitSignal, 'SIGKILL')
+
+    // 父进程暴毙后，detached 看门狗应在 1s SIGKILL 升级内收割整棵 detached 测试进程组
+    const gone = await new Promise<boolean>((resolve) => {
+      const start = Date.now()
+      const poll = () => {
+        if (!pidAlive(grandchildPid)) resolve(true)
+        else if (Date.now() - start > 10_000) resolve(false)
+        else setTimeout(poll, 100)
+      }
+      poll()
+    })
+    assert.ok(gone, 'run-tests.mjs 被 SIGKILL 后父死看门狗必须收割其 detached 测试进程组，不留孤儿')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
