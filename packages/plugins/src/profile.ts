@@ -271,16 +271,17 @@ export function createProfilePlugin(): PluginDefinition {
 
       // ---- @ 补全动作：list_mentionable（幂等只读；自动映射 HTTP / CLI） ----
       ctx.action<
-        { query?: string; conversationId?: number },
+        { query?: string; conversationId?: number; profileId?: string },
         { items: Array<{ id: string; label: string; insertText: string; hint: string; icon: string }> }
       >({
         id: 'list_mentionable',
-        description: '列出当前会话可 @ 点名协作的 Profile 候选（@ 补全源；--current 或显式 --conversation-id 选上下文）',
+        description: '列出当前会话或待命角色可 @ 点名协作的 Profile 候选（@ 补全源；--current / --conversation-id / --profile-id 选上下文）',
         inputSchema: {
           type: 'object',
           properties: {
             query: { type: 'string', description: '过滤前缀（缺省空）' },
-            conversationId: { type: 'number', description: '显式目标会话（CLI 无调用上下文时使用；Web 补全不传，以服务端上下文为准）' },
+            conversationId: { type: 'number', description: '显式目标会话（CLI 无调用上下文时使用；Web 会话补全不传，以服务端上下文为准）' },
+            profileId: { type: 'string', minLength: 1, description: '显式目标角色（无会话上下文如待命草稿态时使用；有会话上下文时以服务端会话所属角色为准）' },
           },
           additionalProperties: false,
         },
@@ -309,26 +310,32 @@ export function createProfilePlugin(): PluginDefinition {
         idempotent: true,
         async handler(input, context) {
           // 身份裁决：调用上下文会话（Web / --current 注入的外层 conversationId）
-          // 是唯一可信来源；input.conversationId 仅在无上下文时作为 CLI 显式
-          // 目标，且必须经真实 getConversation 校验存在。两者都缺 → 显式
-          // validation_error，绝不猜测默认会话。
-          let conversationId = context.conversationId
-          if (conversationId === undefined) {
-            if (input.conversationId === undefined) {
-              throw new HelmError(
-                'validation_error',
-                '缺少会话上下文：Web 补全自动携带；CLI 请用 --current 或 --conversation-id 显式指定',
-                400,
-              )
+          // 是唯一可信来源；无上下文时依次接受显式 input.conversationId 或
+          // input.profileId（待命草稿态），且必须经真实校验存在。三者都缺 →
+          // 显式 validation_error，绝不猜测默认会话或角色。
+          let targetProfileId: string
+          if (context.conversationId !== undefined) {
+            targetProfileId = ctx.host.getConversation(context.conversationId).profileId
+          } else if (input.conversationId !== undefined) {
+            targetProfileId = ctx.host.getConversation(input.conversationId).profileId
+          } else if (input.profileId !== undefined) {
+            const profile = await profiles.get(input.profileId)
+            if (profile === undefined) {
+              throw new HelmError('not_found', `角色不存在: ${input.profileId}`, 404, { profileId: input.profileId })
             }
-            conversationId = input.conversationId
+            targetProfileId = profile.id
+          } else {
+            throw new HelmError(
+              'validation_error',
+              '缺少会话或角色上下文：Web 补全自动携带；CLI 请用 --current 或 --conversation-id / --profile-id 显式指定',
+              400,
+            )
           }
-          const conversation = ctx.host.getConversation(conversationId)
           const query = (input.query ?? '').trim().toLowerCase()
           // 补全无回合工具清单：按插件可用性判定候选（不伪称能确定最终工具
           // 清单——注入目录时另有回合级收敛，两者规则同源；嵌套子代理的
           // 回合级剥离由 builtin:workflow 钩子完成，补全面不再按父链排除）。
-          const entries = await computeCatalog(conversation.profileId)
+          const entries = await computeCatalog(targetProfileId)
           const items = entries
             .filter((entry) => {
               if (query === '') return true

@@ -27,6 +27,7 @@ import { conversationsApi } from '../src/lib/api.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import {
   COMPLETION_VISIBLE_LIMIT,
+  buildCompletionActionCall,
   completersForTrigger,
   detectCompletionToken,
   extractCompletionItems,
@@ -114,6 +115,51 @@ test('verifyCompletionActionManifest：需真实 manifest 且 idempotent:true', 
   assert.equal(verifyCompletionActionManifest(actions, 'p1', 'search'), null)
   assert.match(verifyCompletionActionManifest(actions, 'p1', 'mutate')!, /idempotent/)
   assert.match(verifyCompletionActionManifest(actions, 'p1', 'ghost')!, /未注册/)
+})
+
+test('buildCompletionActionCall：真实会话传 conversationId；草稿态按 schema 决定 profileId 或显式拒绝', { timeout: 60_000 }, () => {
+  const profileAware: ActionManifest = {
+    pluginId: 'builtin:profile',
+    id: 'list_mentionable',
+    description: '',
+    idempotent: true,
+    inputSchema: {
+      type: 'object',
+      properties: { query: { type: 'string' }, conversationId: { type: 'number' }, profileId: { type: 'string' } },
+      additionalProperties: false,
+    },
+    outputSchema: {},
+  }
+  const queryOnly: ActionManifest = {
+    pluginId: 'p1',
+    id: 'search',
+    description: '',
+    idempotent: true,
+    inputSchema: { type: 'object', properties: { query: { type: 'string' } }, additionalProperties: false },
+    outputSchema: {},
+  }
+  const convRequired: ActionManifest = {
+    pluginId: 'p2',
+    id: 'session_search',
+    description: '',
+    idempotent: true,
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, conversationId: { type: 'number' } }, required: ['conversationId'] },
+    outputSchema: {},
+  }
+
+  assert.deepEqual(buildCompletionActionCall(profileAware, 'co', { conversationId: 7, profileId: 'assistant' }), {
+    input: { query: 'co', conversationId: 7 },
+    conversationId: 7,
+  })
+  assert.deepEqual(buildCompletionActionCall(profileAware, 'co', { profileId: 'assistant' }), {
+    input: { query: 'co', profileId: 'assistant' },
+  })
+  assert.deepEqual(buildCompletionActionCall(queryOnly, 'hi', { profileId: 'assistant' }), {
+    input: { query: 'hi' },
+  })
+  const rejected = buildCompletionActionCall(convRequired, 'hi', { profileId: 'assistant' })
+  assert.equal(rejected.input, null)
+  assert.match(rejected.error!, /需要已有会话/)
 })
 
 test('merge/filter：插件+源命名空间去重、上限截断、空格 AND 过滤', { timeout: 60_000 }, () => {

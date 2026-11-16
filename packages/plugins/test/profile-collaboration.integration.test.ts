@@ -306,6 +306,17 @@ test('协作2: HTTP list_mentionable——query 过滤/insertText 尾随空格/�
     const bad = await env.call({ input: { query: 42, conversationId: env.rootId } })
     assert.equal(bad.status, 400, `非法入参应 400：${bad.body}`)
     assert.equal((JSON.parse(bad.body) as { error: { code: string } }).error.code, 'validation_error')
+
+    // --- 待命草稿态（无会话上下文）：显式 profileId 正常列出，无效 profileId 显式 404，零会话/模型副作用
+    const standby = await env.call({ input: { query: 'review', profileId: 'assistant' } })
+    assert.equal(standby.status, 200, standby.body)
+    const standbyItems = parseItems(standby.body)
+    assert.deepEqual(standbyItems.map((i) => i.id), ['reviewer'])
+    assert.equal(standbyItems[0]!.insertText, '@reviewer ')
+    const missingProfile = await env.call({ input: { query: '', profileId: 'no-such-profile' } })
+    assert.equal(missingProfile.status, 404, missingProfile.body)
+    assert.equal(kernel.listConversations().length, convCountBefore, '待命态 list_mentionable 不得派生新会话')
+    assert.equal(env.faux.state.callCount, modelCallsBefore, '待命态 list_mentionable 不得发起模型调用')
   } finally {
     await env.close()
   }

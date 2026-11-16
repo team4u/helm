@@ -218,3 +218,78 @@ test('字符估算按累计量取整，不因逐字小帧而成倍计量', { tim
   assert.equal(tracker.liveStatus(800)!.outputTokens, 2, '8字符约2 tokens，不是每帧1 token累计8次')
   assert.equal(tracker.liveStatus(800)!.decodeMs, 700, '不增加取整后token数的内容增长仍推进观测时间')
 })
+
+test('短工具调用 partial + pi.assistant 尾帧补算：单中间快照也能测出真实时长与终态速率', { timeout: 60_000 }, () => {
+  const tracker = trackerOf()
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  // 100ms 观察到一个中间 partial（60 chars -> 15 tok），随后 pi-durable 取消尾定时器
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message({ text: 't'.repeat(60) }) } })
+  // 220ms 落库 pi.assistant（完整 120 chars，权威 usageOutput=30）
+  tracker.noteCompletion(
+    { taskId: 1, entryId: 'tail-1', usageOutput: 30, stopReason: 'toolUse', contentChars: 120 },
+    220,
+  )
+  tracker.observeFrame(230, { hasTools: true })
+  const duringTools = tracker.liveStatus(230)!
+  assert.equal(duringTools.phase, 'tools')
+  assert.equal(duringTools.decodeMs, 120, '首增长 100ms -> pi.assistant 落库 220ms')
+  assert.equal(duringTools.outputTokens, 30)
+  assert.ok((duringTools.tps ?? 0) > 0, '工具执行期立即保留有效速率')
+  const settled = tracker.settle(300)!
+  assert.equal(settled.decodeMs, 120)
+  assert.ok(Math.abs((settled.tps ?? 0) - 250) < 1e-6, '30 tok / 0.12s = 250 tok/s')
+})
+
+test('极短 <100ms 零 partial 工具调用工具期可见速率，且绝不把工具耗时污染进下轮 TTFT', { timeout: 60_000 }, () => {
+  const tracker = trackerOf()
+  // 第 1 轮（taskId=1）：空 generation 后 80ms 内直接落库（0 个中间 partial）
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  tracker.noteCompletion(
+    { taskId: 1, entryId: 'short-1', usageOutput: 20, stopReason: 'toolUse', contentChars: 80 },
+    80,
+  )
+  tracker.observeFrame(100, { hasTools: true })
+  const duringTools = tracker.liveStatus(5_000)!
+  assert.equal(duringTools.phase, 'tools')
+  assert.equal(duringTools.decodeMs, 0, '零中间 partial 不把 TTFT 混入净解码时长')
+  assert.equal(duringTools.ttftMs, 80, '第 1 轮首字延迟 80ms')
+  assert.ok(Math.abs((duringTools.tps ?? 0) - 200) < 1e-6, '按 minSpanMs=100ms 保守估算 200 tok/s')
+
+  // 第 2 轮（taskId=2）：10s 工具执行后开始，TTFT 不被第 1 轮或工具期污染
+  tracker.observeFrame(10_100, { generation: { taskId: 2, attempt: 1 } })
+  const waitingTtft = tracker.liveStatus(10_100)!
+  assert.equal(waitingTtft.phase, 'decoding')
+  assert.ok(Math.abs((waitingTtft.tps ?? 0) - 200) < 1e-6, '轮间首字等待期保持上一轮速率')
+  tracker.observeFrame(10_200, { generation: { taskId: 2, attempt: 1, message: message({ text: 'r'.repeat(400) }) } })
+  tracker.observeFrame(10_500, { generation: { taskId: 2, attempt: 1, message: message({ text: 'r'.repeat(800) }) } })
+  tracker.noteCompletion(
+    { taskId: 2, entryId: 'short-2', usageOutput: 200, stopReason: 'stop', contentChars: 800 },
+    10_500,
+  )
+  const settled = tracker.settle(10_600)!
+  assert.equal(settled.ttftMs, 80, '10s 工具耗时绝不污染 TTFT')
+  assert.equal(settled.decodeMs, 300)
+  assert.equal(settled.outputTokens, 220)
+})
+
+test('流式停顿超过窗口不掉空；唯一尝试失败作废清空 lastLiveTps', { timeout: 60_000 }, () => {
+  const tracker = trackerOf()
+  tracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  tracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message({ text: 'a'.repeat(400) }) } })
+  tracker.observeFrame(300, { generation: { taskId: 1, attempt: 1, message: message({ text: 'a'.repeat(800) }) } })
+  const activeTps = tracker.liveStatus(300)!.tps!
+  // 2.2s 停顿超过 1s 窗口：liveStatus 仍保留上次有效速率不闪烁消失
+  const stalled = tracker.liveStatus(2_500)!
+  assert.equal(stalled.phase, 'decoding')
+  assert.ok(Math.abs((stalled.tps ?? 0) - activeTps) < 1e-6, '停顿超过窗口期仍保留最近有效速率')
+
+  // 唯一尝试失败作废：清零 tokens 与 lastLiveTps，直到下一成功尝试重建
+  const failTracker = trackerOf()
+  failTracker.observeFrame(0, { generation: { taskId: 1, attempt: 1 } })
+  failTracker.observeFrame(100, { generation: { taskId: 1, attempt: 1, message: message({ text: 'x'.repeat(400) }) } })
+  assert.ok((failTracker.liveStatus(100)?.tps ?? 0) > 0)
+  failTracker.noteCompletion(failure(1, 'aborted'), 200)
+  assert.equal(failTracker.liveStatus(200), undefined, '唯一失败尝试作废后不保留测量')
+  failTracker.observeFrame(300, { generation: { taskId: 1, attempt: 2 } })
+  assert.equal(failTracker.liveStatus(300), undefined, '重试新段首字前不残留失败尝试速率')
+})

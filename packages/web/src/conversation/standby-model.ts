@@ -10,7 +10,7 @@
  */
 import { useSyncExternalStore } from 'react'
 import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helm/protocol'
-import { envDraftError, type EnvDraft } from './composer-model.js'
+import { envDraftError, parseCompactSlashCommand, type EnvDraft } from './composer-model.js'
 
 /** 发送前本地暂存附件（不创建会话、不上传）。 */
 export interface StandbyLocalFile {
@@ -212,7 +212,9 @@ export type StandbyManageAction =
 export function standbyManageAction(payload: string): StandbyManageAction {
   const cmd = payload.trim()
   if (cmd === '/new') return { kind: 'clear-draft' }
-  if (cmd === '/clear' || cmd === '/compact') return { kind: 'needs-conversation', command: cmd }
+  if (cmd === '/clear' || parseCompactSlashCommand(cmd) !== null) {
+    return { kind: 'needs-conversation', command: cmd === '/clear' ? '/clear' : '/compact' }
+  }
   return null
 }
 

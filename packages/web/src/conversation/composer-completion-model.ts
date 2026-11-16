@@ -153,6 +153,51 @@ export function verifyCompletionActionManifest(
   return null
 }
 
+export interface CompletionActionCallPlan {
+  /** 构建出的 action input；若当前上下文无法满足必需参数则为 null 并附 error。 */
+  input: Record<string, unknown> | null
+  conversationId?: number
+  error?: string
+}
+
+/**
+ * 按当前上下文（真实会话或待命草稿 profileId）与动作 manifest.inputSchema
+ * 组装补全查询入参：
+ * - 真实会话：{ query, conversationId } 且外层携带真实 conversationId；
+ * - 无会话（待命草稿）：
+ *   - 若 schema.required 强制要求 conversationId -> 显式报错需要已有会话（不伪造 ID）；
+ *   - 若 schema.properties 声明了 profileId（且提供 profileId）-> { query, profileId }；
+ *   - 否则 -> { query }（避免向 additionalProperties:false 的外部插件塞入未声明字段）。
+ */
+export function buildCompletionActionCall(
+  manifest: ActionManifest,
+  query: string,
+  context: { conversationId?: number; profileId?: string },
+): CompletionActionCallPlan {
+  if (context.conversationId !== undefined) {
+    return {
+      input: { query, conversationId: context.conversationId },
+      conversationId: context.conversationId,
+    }
+  }
+  const schema = manifest.inputSchema as { properties?: unknown; required?: unknown } | undefined
+  const required = Array.isArray(schema?.required) ? schema.required : []
+  if (required.includes('conversationId')) {
+    return {
+      input: null,
+      error: `动作 ${manifest.pluginId}/${manifest.id} 需要已有会话（发送首条消息创建后可用）`,
+    }
+  }
+  const props =
+    schema?.properties !== null && typeof schema?.properties === 'object' && !Array.isArray(schema?.properties)
+      ? (schema.properties as Record<string, unknown>)
+      : undefined
+  if (context.profileId !== undefined && props !== undefined && Object.hasOwn(props, 'profileId')) {
+    return { input: { query, profileId: context.profileId } }
+  }
+  return { input: { query } }
+}
+
 /** 空格分词 AND 过滤（大小写不敏感，中文 includes 友好）；空查询原样返回。
  * 候选 label 常带触发符前缀（#标签），而查询已剥离触发符（词）；
  * 因此每词同时匹配原串与剥前缀后的串，避免“#词”查不到“#标签”。 */

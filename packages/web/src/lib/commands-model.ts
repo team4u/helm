@@ -5,7 +5,7 @@
  * 光标插入/触发词清理的纯文本计算，以及命令面板的会话作用域过滤与 hint 派生。
  * 纯函数无 React 依赖，供 Composer / CommandPaletteModal 与单测共同消费。
  */
-import { RESERVED_SLASH_COMMANDS, type CommandSpec, type ConversationSummary } from '@helm/protocol'
+import { RESERVED_SLASH_COMMANDS, type CommandSpec, type ConversationSummary, type NotificationEvent } from '@helm/protocol'
 import { matchesUiScope } from './types.js'
 
 /** 宿主保留的会话内管理命令斜杠词；插件 slash 声明不得覆盖（后端注册边界拒绝，前端防御性跳过）。 */
@@ -127,6 +127,54 @@ export function insertAtCaret(text: string, caret: number, fragment: string, sel
   const pos = Math.max(0, Math.min(text.length, Math.trunc(caret) || 0))
   const end = Math.max(pos, Math.min(text.length, Math.trunc(selectionEnd) || 0))
   return { next: text.slice(0, pos) + fragment + text.slice(end), nextCaret: pos + fragment.length }
+}
+
+const SLASH_REPLACE_RE = /(?:^|\s)(\/[a-zA-Z0-9:_-]*)$/
+
+/** 用 apply 替换光标前最近的 '/' 触发 token（含 '/'），保留前后文本。 */
+export function replaceSlashToken(
+  text: string,
+  caret: number,
+  apply: string,
+): { next: string; nextCaret: number } {
+  const pos = Math.max(0, Math.min(text.length, Math.trunc(caret) || 0))
+  const m = SLASH_REPLACE_RE.exec(text.slice(0, pos))
+  const start = m !== null ? pos - (m[1]?.length ?? 0) : pos
+  return {
+    next: `${text.slice(0, start)}${apply}${text.slice(pos)}`,
+    nextCaret: start + apply.length,
+  }
+}
+
+export interface PluginSlashExecDeps {
+  invokePluginAction: (pluginId: string, actionId: string, input: unknown, conversationId?: number) => Promise<unknown>
+  pushNotice: (notice: NotificationEvent) => void
+  conversationId?: number
+}
+
+/** 执行插件斜杠命令绑定的动作并推送统一成功/失败通知；失败原样抛出供调用方保留草稿。 */
+export async function executePluginSlashAction(cmd: QualifiedCommand, deps: PluginSlashExecDeps): Promise<void> {
+  const actionId = cmd.spec.actionId
+  if (actionId === undefined) throw new Error('插件命令未绑定动作')
+  try {
+    await deps.invokePluginAction(commandActionPluginId(cmd), actionId, cmd.spec.input, deps.conversationId)
+    deps.pushNotice({
+      type: 'notification',
+      level: 'info',
+      title: '命令已执行',
+      body: `${cmd.spec.slash !== undefined ? `/${cmd.spec.slash} · ` : ''}${cmd.spec.title}`,
+      ...(deps.conversationId !== undefined ? { conversationId: deps.conversationId } : {}),
+    })
+  } catch (err: unknown) {
+    deps.pushNotice({
+      type: 'notification',
+      level: 'error',
+      title: `命令执行失败：/${cmd.spec.slash ?? cmd.spec.id}`,
+      body: err instanceof Error ? err.message : String(err),
+      ...(deps.conversationId !== undefined ? { conversationId: deps.conversationId } : {}),
+    })
+    throw err
+  }
 }
 
 /**

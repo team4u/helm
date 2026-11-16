@@ -22,9 +22,9 @@ export const DEFAULT_SLIDING_WINDOW_MS = 1000
 export const MIN_SLIDING_WINDOW_MS = 100
 export const MAX_SLIDING_WINDOW_MS = 30_000
 
-/** sessionDoc 写入节流间隔（毫秒）：live 帧最短 75ms 一帧，文档写入再降一个
- * 数量级（首测 / 阶段变化 / 终态不受节流，立即写）。 */
-export const DOC_WRITE_INTERVAL_MS = 250
+/** sessionDoc 写入节流间隔（毫秒）：live 帧最短 75ms、partial 节流 100ms，
+ * 120ms 兼顾实时跟手与写入降频（首测 / 阶段变化 / 终态立即写，同阶段尾帧延迟补写）。 */
+export const DOC_WRITE_INTERVAL_MS = 120
 
 /** token 口径：provider = 供应商 usage 增量；estimate = chars/4 估算；
  * mixed = 同一测量内两种口径都有。 */
@@ -46,12 +46,14 @@ export interface ConversationEntryEnvelope {
 
 /** 每会话速率状态（sessionDoc `speed` 的值；null = 尚无可显示测量）。 */
 export interface TokenSpeedStatus {
-  /** 当前阶段：decoding = 模型生成中；tools = 工具执行中（解码时钟暂停）；
-   * settled = 回合已结算（终态对账值，保留到下一回合开始）。 */
+  /** 当前阶段：decoding = 模型生成中；tools = 工具执行中（解码时钟暂停，
+   * 保留本回合最近有效速率展示）；settled = 回合已结算（终态对账值，保留
+   * 到下一回合开始）。 */
   phase: 'decoding' | 'tools' | 'settled'
-  /** 当前速率 tokens/sec：decoding = 时间滑动窗口速率；settled = 对账解码
-   * 速率（仅汇总计数与时长可配对的响应）。无可靠测量（首字前 / 窗口滑空 / 工具
-   * 暂停 / 终态无可测累计）时省略——绝不以 0.0 冒充真实速率。 */
+  /** 当前速率 tokens/sec：decoding = 时间滑动窗口速率（停顿或轮间首字等待期
+   * 保持本回合最近有效值）；tools = 暂停解码计时并保持最近有效值；settled =
+   * 对账解码速率（仅汇总计数与时长可配对的响应）。仅在本回合尚无可靠首测或
+   * settled 无可配对测量时省略——绝不以 0.0 冒充真实速率。 */
   tps?: number
   /** 累计输出 tokens（口径见 source；终态已尽量用最终 usage.output 对账）。 */
   outputTokens: number
@@ -74,6 +76,35 @@ export interface TokenSpeedStatus {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * 统计模型消息 content 块的累计生成字符量：
+ * text + thinking + toolCall(name + arguments JSON)。
+ * 流式投影（tracker.ts）与落库 pi.assistant 尾帧补算共用同一公式。
+ */
+export function contentCharsOfBlocks(content: readonly unknown[]): number {
+  let chars = 0
+  for (const block of content) {
+    if (!isPlainObject(block)) continue
+    const type = block['type']
+    if (type === 'text' && typeof block['text'] === 'string') {
+      chars += block['text'].length
+    } else if (type === 'thinking' && typeof block['thinking'] === 'string') {
+      chars += block['thinking'].length
+    } else if (type === 'toolCall' && typeof block['name'] === 'string') {
+      chars += block['name'].length
+      if ('arguments' in block && block['arguments'] !== undefined) {
+        try {
+          const serialized = JSON.stringify(block['arguments'])
+          if (typeof serialized === 'string') chars += serialized.length
+        } catch {
+          // 非 JSON 参数形状：跳过（不伪造长度）。
+        }
+      }
+    }
+  }
+  return chars
 }
 
 /** conversation.live 事件守卫的输出帧（速率策略消费的最小子集）。
@@ -142,20 +173,23 @@ export function asConversationEntryEnvelope(payload: unknown): ConversationEntry
  * - taskId：entry.taskId（内核 byTaskId 投影的正整数；scheduler 上下文等
  *   无归属时缺省——身份不明的事实不关联不猜测）；
  * - usageOutput：正有限数（未上报 / 零值省略，绝不以 0 对账）；
- * - stopReason：必需（aborted / error 为失败尝试，计数与时间作废）。 */
+ * - stopReason：必需（aborted / error 为失败尝试，计数与时间作废）；
+ * - contentChars：model[0].content 为数组时的累计字符量（用于补算取消尾
+ *   partial 定时器后的真实尾部增量；缺省时省略）。 */
 export interface AssistantCompletionFacts {
   conversationId: number
   taskId: number | undefined
   entryId: string | undefined
   usageOutput: number | undefined
   stopReason: string
+  contentChars?: number
 }
 
 /**
  * conversation.entry 事件守卫（pi.assistant 完成事实抽取）：model[0] 必须是
- * role = assistant 且携带 stopReason 的消息；usage.output 为正有限数时携带。
- * 不按 stopReason 过滤成败（失败请求的终结事实同样返回），成功与否的处置
- * 归策略层；载荷形状非法返回 undefined。
+ * role = assistant 且携带 stopReason 的消息；usage.output 为正有限数时携带，
+ * content 为数组时携带 contentChars。不按 stopReason 过滤成败（失败请求的
+ * 终结事实同样返回），成功与否的处置归策略层；载荷形状非法返回 undefined。
  */
 export function asAssistantCompletion(payload: unknown): AssistantCompletionFacts | undefined {
   if (!isPlainObject(payload) || payload['type'] !== 'conversation.entry') return undefined
@@ -180,7 +214,16 @@ export function asAssistantCompletion(payload: unknown): AssistantCompletionFact
     const output = usage['output']
     if (typeof output === 'number' && Number.isFinite(output) && output > 0) usageOutput = output
   }
-  return { conversationId, taskId, entryId, usageOutput, stopReason }
+  const content = first['content']
+  const contentChars = Array.isArray(content) ? contentCharsOfBlocks(content) : undefined
+  return {
+    conversationId,
+    taskId,
+    entryId,
+    usageOutput,
+    stopReason,
+    ...(contentChars !== undefined ? { contentChars } : {}),
+  }
 }
 
 /** conversation.deleted 事件守卫：返回会话 id。 */

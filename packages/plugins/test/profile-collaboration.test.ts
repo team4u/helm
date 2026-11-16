@@ -771,3 +771,47 @@ test('list_mentionable：CLI --current 形态（仅上下文会话，input 完�
     await env.close()
   }
 })
+
+test('list_mentionable：待命草稿态支持显式 profileId（无会话时校验真实角色，有会话上下文时不可伪造）', { timeout: 60_000 }, async () => {
+  const env = await makeEnv([createWorkflowPlugin()], true)
+  try {
+    await seedProfile(env.profiles, env.dataDir, { id: 'coder', name: '编码专家' }, '# C\n后端开发。')
+    await seedProfile(env.profiles, env.dataDir, { id: 'reviewer', name: '代码评审' }, '# R\n代码评审。')
+
+    // 无会话上下文 + 显式 profileId：排除自身，返回其余可用协作角色
+    const standby = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { query: '', profileId: 'coder' })) as {
+      items: Array<{ id: string; insertText: string }>
+    }
+    assert.deepEqual(
+      standby.items.map((i) => i.id).sort(),
+      ['assistant', 'reviewer'],
+      '待命草稿态按 profileId 排除自身并返回可用点名角色',
+    )
+    assert.ok(!standby.items.some((i) => i.id === 'coder'), '排除自身 Profile')
+
+    // query 过滤生效
+    const filtered = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { query: 'rev', profileId: 'coder' })) as {
+      items: Array<{ id: string; insertText: string }>
+    }
+    assert.deepEqual(filtered.items.map((i) => i.id), ['reviewer'])
+    assert.equal(filtered.items[0]!.insertText, '@reviewer ')
+
+    // 不存在的 profileId -> 404 not_found（绝不猜测或放行）
+    await assert.rejects(
+      () => env.host.invokeAction('builtin:profile', 'list_mentionable', { profileId: 'ghost' }),
+      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+    )
+
+    // 有会话上下文（conv 1 属 assistant）时不得被 input.profileId 冒充成 coder
+    const contextWins = (await env.host.invokeAction(
+      'builtin:profile',
+      'list_mentionable',
+      { query: '', profileId: 'coder' },
+      { conversationId: 1 },
+    )) as { items: Array<{ id: string }> }
+    assert.ok(contextWins.items.some((i) => i.id === 'coder'), '有调用上下文时以会话所属 assistant 为准')
+    assert.ok(!contextWins.items.some((i) => i.id === 'assistant'), '有调用上下文时仍排除会话自身 assistant')
+  } finally {
+    await env.close()
+  }
+})

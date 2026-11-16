@@ -21,8 +21,8 @@
 import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord/json'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
-import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
+import { createLocalExecutionEnv } from '../../env/local-host-env.js'
 import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import { redactJsonValue } from '../../redact.js'
 import { invalidPathText, normalizePathForTarget, targetPlatformForNode } from '../target-platform.js'
@@ -157,7 +157,7 @@ export async function runShell(
     // 节点守护进程合并节点宿主基底（节点真实 PATH/HOME 工具链）并剥除节点
     // 宿主 HELM_TOKEN，受管合成最后覆盖；绝不合成默认 PATH 覆盖节点工具链。
   } else if (nodeId === 'local') {
-    shell = new NodeExecutionEnv({ cwd })
+    shell = createLocalExecutionEnv({ cwd })
     // 无 fabric 兜底（测试用）：仍走既有受管合成策略（宿主基底 + 受管
     // 固定覆盖 + cliBinDir PATH 前置），自带完整 env 并显式 inheritEnv:false
     // （SDK 二次继承会把已剥除的宿主 HELM_TOKEN 重新带回）。

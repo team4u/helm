@@ -53,11 +53,12 @@
 ```bash
 # 只读动作（幂等），自动映射 HTTP 与 helm CLI
 helm profile list_mentionable --current --json
-# 无调用上下文时显式指定目标会话
+# 无会话上下文时显式指定目标会话或待命角色
 helm profile list_mentionable --input '{"query":"review","conversationId":42}' --json
+helm profile list_mentionable --input '{"query":"review","profileId":"assistant"}' --json
 ```
 
-身份裁决纪律：调用上下文会话（Web 补全 / CLI `--current` 注入的外层 `conversationId`）是唯一可信来源；`input.conversationId` 仅在无上下文时作为 CLI 显式目标且必须经真实 `getConversation` 校验。两者都缺显式 `400 validation_error`，绝不猜测默认会话。Web 侧声明 `trigger: '@'`、`priority: 100` 的 `composerCompleter` 绑定该动作（`source: { kind: 'action', actionId: 'list_mentionable' }`）。
+身份裁决纪律：调用上下文会话（Web 会话补全 / CLI `--current` 注入的外层 `conversationId`）是唯一可信来源；无上下文时依次接受显式 `input.conversationId` 或 `input.profileId`（待命草稿态使用）且必须经真实存在性校验。三者都缺显式 `400 validation_error`，绝不猜测默认会话或角色。Web 侧声明 `trigger: '@'`、`priority: 100` 的 `composerCompleter` 绑定该动作（`source: { kind: 'action', actionId: 'list_mentionable' }`）。
 
 ## 两层技能按需加载
 

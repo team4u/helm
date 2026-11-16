@@ -13,6 +13,7 @@ import { useHelmStore } from '../lib/store-context.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import {
   COMPLETION_QUERY_DEBOUNCE_MS,
+  buildCompletionActionCall,
   completersForTrigger,
   extractCompletionItems,
   filterByQuery,
@@ -47,12 +48,13 @@ const EMPTY_SNAPSHOT: CompletionSourceSnapshot = { hasSources: false, items: [],
 
 interface ActionSourceState {
   loading: boolean
+  contextKey: string
   /** `${pluginId}/${specId}` -> 合法候选。 */
   results: Record<string, ComposerCompletionItem[]>
   errors: Record<string, string>
 }
 
-const ACTION_IDLE: ActionSourceState = { loading: false, results: {}, errors: {} }
+const ACTION_IDLE: ActionSourceState = { loading: false, contextKey: '', results: {}, errors: {} }
 
 interface SessionDocTuple {
   pluginId: string
@@ -69,11 +71,15 @@ export interface UseComposerCompletionSourcesInput {
   /** 当前触发 token（null = 浮层关闭，全部源停订、晚响应作废）。 */
   token: CompletionToken | null
   completers: ReadonlyArray<QualifiedUiSpec<ComposerCompleterSpec>>
-  conversation: ConversationSummary
+  conversation?: ConversationSummary
+  /** 无会话（待命草稿态）时供支持 profileId 参数的 action 补全源使用。 */
+  profileId?: string
 }
 
 export function useComposerCompletionSources(input: UseComposerCompletionSourcesInput): CompletionSourceSnapshot {
-  const { token, completers, conversation } = input
+  const { token, completers, conversation, profileId } = input
+  const conversationId = conversation?.id
+  const contextKey = `${conversationId ?? ''}:${profileId ?? ''}`
   const store = useHelmStore()
   const trigger = token === null ? null : token.trigger
   const query = token?.query ?? ''
@@ -112,22 +118,22 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docKey, ensurePluginDoc, pluginDocs])
 
-  // ---- sessionDoc 源：专用 SSE 通道合并订阅（快照引用稳定） ----
+  // ---- sessionDoc 源：专用 SSE 通道合并订阅（快照引用稳定；无会话时不上订） ----
   const tuplesKey = useMemo(() => JSON.stringify(sessionDocSources.map((s) => ({ pluginId: s.pluginId, docName: s.spec.source.name }))), [sessionDocSources])
   const { subscribeSessionDoc, getSessionDocState } = store
   const subscribeSession = useCallback(
     (listener: () => void) => {
       const list = JSON.parse(tuplesKey) as SessionDocTuple[]
-      if (list.length === 0) return () => {}
-      const offs = list.map((t) => subscribeSessionDoc({ ...t, conversationId: conversation.id }, listener))
+      if (list.length === 0 || conversationId === undefined) return () => {}
+      const offs = list.map((t) => subscribeSessionDoc({ ...t, conversationId }, listener))
       return () => { for (const off of offs) off() }
     },
-    [tuplesKey, conversation.id, subscribeSessionDoc],
+    [tuplesKey, conversationId, subscribeSessionDoc],
   )
   const getSnapshot = useCallback(() => {
     const list = JSON.parse(tuplesKey) as SessionDocTuple[]
-    if (list.length === 0) return EMPTY_SESSION_STATES
-    const states = list.map((t) => getSessionDocState({ ...t, conversationId: conversation.id }))
+    if (list.length === 0 || conversationId === undefined) return EMPTY_SESSION_STATES
+    const states = list.map((t) => getSessionDocState({ ...t, conversationId }))
     const cached = sessionSnapshotCache.get(subscribeSession)
     if (cached !== undefined && cached.keys === tuplesKey && states.every((s, i) => s === cached.states[i])) {
       return cached.result
@@ -135,7 +141,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     const result = list.map((t, i) => ({ tuple: t, state: states[i] }))
     sessionSnapshotCache.set(subscribeSession, { keys: tuplesKey, states, result })
     return result
-  }, [tuplesKey, conversation.id, getSessionDocState, subscribeSession])
+  }, [tuplesKey, conversationId, getSessionDocState, subscribeSession])
   const sessionStates = useSyncExternalStore(subscribeSession, getSnapshot, () => EMPTY_SESSION_STATES)
 
   // ---- action 源：防抖 + generation 防竞态 ----
@@ -149,40 +155,67 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
       setActionState(ACTION_IDLE)
       return
     }
-    // 调用前核对真实 manifest：未注册或未声明 idempotent:true 一律拒绝（前端不伪造 nodeId/cwd）。
+    // 调用前核对真实 manifest 与入参计划（未注册 / 非幂等 / 无会话却强依赖 conversationId 一律显式拒绝）。
     const manifestErrors: Record<string, string> = {}
+    const runnable: Array<{
+      src: ActionSource
+      target: string
+      key: string
+      input: Record<string, unknown>
+      conversationId?: number
+    }> = []
     for (const src of actionSources) {
       const target = src.spec.source.actionPluginId ?? src.pluginId
+      const key = `${src.pluginId}/${src.spec.id}`
       const invalid = verifyCompletionActionManifest(actions, target, src.spec.source.actionId)
-      if (invalid !== null) manifestErrors[`${src.pluginId}/${src.spec.id}`] = invalid
+      if (invalid !== null) {
+        manifestErrors[key] = invalid
+        continue
+      }
+      const manifest = actions.find((a) => a.pluginId === target && a.id === src.spec.source.actionId)!
+      const plan = buildCompletionActionCall(manifest, query, { conversationId, profileId })
+      if (plan.input === null) {
+        manifestErrors[key] = plan.error ?? '当前上下文不支持该补全动作'
+        continue
+      }
+      runnable.push({
+        src,
+        target,
+        key,
+        input: plan.input,
+        ...(plan.conversationId !== undefined ? { conversationId: plan.conversationId } : {}),
+      })
     }
-    if (Object.keys(manifestErrors).length > 0) {
-      setActionState({ loading: false, results: {}, errors: manifestErrors })
+    if (runnable.length === 0) {
+      setActionState({ loading: false, contextKey, results: {}, errors: manifestErrors })
       return
     }
-    setActionState((prev) => ({ loading: true, results: prev.results, errors: {} }))
+    setActionState((prev) => ({
+      loading: true,
+      contextKey,
+      results: prev.contextKey === contextKey ? prev.results : {},
+      errors: manifestErrors,
+    }))
     const timer = setTimeout(() => {
       void Promise.allSettled(
-        actionSources.map((src) => {
-          const target = src.spec.source.actionPluginId ?? src.pluginId
-          return invokePluginAction(target, src.spec.source.actionId, { query, conversationId: conversation.id }, conversation.id)
-        }),
+        runnable.map((entry) =>
+          invokePluginAction(entry.target, entry.src.spec.source.actionId, entry.input, entry.conversationId),
+        ),
       ).then((settled) => {
         if (generation !== actionGeneration.current) return
         const results: Record<string, ComposerCompletionItem[]> = {}
-        const errors: Record<string, string> = {}
+        const errors: Record<string, string> = { ...manifestErrors }
         settled.forEach((entry, index) => {
-          const src = actionSources[index]!
-          const key = `${src.pluginId}/${src.spec.id}`
+          const item = runnable[index]!
           if (entry.status === 'rejected') {
-            errors[key] = entry.reason instanceof Error ? entry.reason.message : String(entry.reason)
+            errors[item.key] = entry.reason instanceof Error ? entry.reason.message : String(entry.reason)
             return
           }
           const parsed = parseCompletionActionResult(entry.value)
-          if (parsed.items === null) errors[key] = parsed.error ?? '补全动作返回无效'
-          else results[key] = parsed.items
+          if (parsed.items === null) errors[item.key] = parsed.error ?? '补全动作返回无效'
+          else results[item.key] = parsed.items
         })
-        setActionState({ loading: false, results, errors })
+        setActionState({ loading: false, contextKey, results, errors })
       })
     }, COMPLETION_QUERY_DEBOUNCE_MS)
     return () => {
@@ -190,7 +223,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
       // generation 已由下一次 effect 推进；清理只停本定时器。
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceKey, query, conversation.id, invokePluginAction, actions, actionSources])
+  }, [sourceKey, query, contextKey, conversationId, profileId, invokePluginAction, actions, actionSources])
 
   // ---- 合并（渲染期纯计算）：各插件源按 priority 源顺序 ----
   return useMemo(() => {
@@ -214,20 +247,29 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
       }
     }
 
-    for (const entry of sessionStates) {
-      const label = `${entry.tuple.pluginId}/${entry.tuple.docName}`
-      const state = entry.state as { value?: unknown; hasValue: boolean; error?: string }
-      if (state.error !== undefined) {
-        errors.push({ source: label, message: state.error })
-        continue
+    if (conversationId === undefined) {
+      for (const src of sessionDocSources) {
+        errors.push({
+          source: `${src.pluginId}/${src.spec.id}`,
+          message: '会话文档补全源需要已有会话（发送首条消息创建后可用）',
+        })
       }
-      if (!state.hasValue) {
-        loading = true
-        continue
+    } else {
+      for (const entry of sessionStates) {
+        const label = `${entry.tuple.pluginId}/${entry.tuple.docName}`
+        const state = entry.state as { value?: unknown; hasValue: boolean; error?: string }
+        if (state.error !== undefined) {
+          errors.push({ source: label, message: state.error })
+          continue
+        }
+        if (!state.hasValue) {
+          loading = true
+          continue
+        }
+        const extracted = extractCompletionItems(state.value, itemsFieldOf(sessionDocSources, entry.tuple))
+        if (extracted.error !== undefined) errors.push({ source: label, message: extracted.error })
+        if (extracted.items !== null) groups.push({ pluginId: entry.tuple.pluginId, items: filterByQuery(extracted.items, query) })
       }
-      const extracted = extractCompletionItems(state.value, itemsFieldOf(sessionDocSources, entry.tuple))
-      if (extracted.error !== undefined) errors.push({ source: label, message: extracted.error })
-      if (extracted.items !== null) groups.push({ pluginId: entry.tuple.pluginId, items: filterByQuery(extracted.items, query) })
     }
 
     for (const src of actionSources) {
@@ -237,7 +279,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
         errors.push({ source: key, message: error })
         continue
       }
-      const items = actionState.results[key]
+      const items = actionState.contextKey === contextKey ? actionState.results[key] : undefined
       if (items !== undefined) {
         // 服务端已按 query 过滤，客户端不重复过滤（保留服务端模糊/拼音匹配语义）。
         groups.push({ pluginId: src.pluginId, items })
@@ -249,7 +291,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     const merged = mergeCompletionItems(groups)
     return { hasSources: sources.length > 0, items: merged.items, total: merged.total, truncated: merged.truncated, loading, errors }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, active, query, docSources, sessionDocSources, actionSources, pluginDocs, loadErrors, sessionStates, actionState])
+  }, [token, active, query, conversationId, contextKey, docSources, sessionDocSources, actionSources, pluginDocs, loadErrors, sessionStates, actionState])
 }
 
 function itemsFieldOf(

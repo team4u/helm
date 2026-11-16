@@ -279,6 +279,7 @@ test('standbyManageAction：/new 清草稿，/clear 与 /compact 需已有会话
   assert.deepEqual(standbyManageAction('  /new  '), { kind: 'clear-draft' })
   assert.deepEqual(standbyManageAction('/clear'), { kind: 'needs-conversation', command: '/clear' })
   assert.deepEqual(standbyManageAction('/compact'), { kind: 'needs-conversation', command: '/compact' })
+  assert.deepEqual(standbyManageAction('/compact 保留架构决策'), { kind: 'needs-conversation', command: '/compact' })
   assert.equal(standbyManageAction('/definitely-not-registered'), null)
   assert.equal(standbyManageAction('请帮我执行 /new'), null, '非精确命中不拦截')
 })
