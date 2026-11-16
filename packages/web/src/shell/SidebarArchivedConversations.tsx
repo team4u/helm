@@ -231,7 +231,7 @@ export function ArchivedConversationsGroup({
               disabled={selectedIds.size === 0 || restoring}
               onClick={() => void executeBatchRestore()}
             >
-              {restoring ? '恢复中...' : `恢复所选 (${selectedIds.size})`}
+              {restoring ? '恢复中...' : `恢复 (${selectedIds.size})`}
             </button>
           </div>
         </div>

@@ -520,7 +520,7 @@ export function AgentStandingsGroup({
                 }
               }}
             >
-              {isAllSelected ? '清空' : '全选可删'}
+              {isAllSelected ? '清空' : '全选'}
             </button>
             <button
               type="button"
@@ -528,7 +528,7 @@ export function AgentStandingsGroup({
               disabled={selectedIds.size === 0 || deleting || archiving}
               onClick={() => void executeBatchArchive()}
             >
-              {archiving ? '归档中...' : `归档所选 (${selectedIds.size})`}
+              {archiving ? '归档中...' : `归档 (${selectedIds.size})`}
             </button>
             <button
               type="button"
@@ -536,7 +536,7 @@ export function AgentStandingsGroup({
               disabled={selectedIds.size === 0 || deleting || archiving}
               onClick={() => setBatchDeleteConfirmOpen(true)}
             >
-              {deleting ? '删除中...' : `删除所选 (${selectedIds.size})`}
+              {deleting ? '删除中...' : `删除 (${selectedIds.size})`}
             </button>
           </div>
         </div>
