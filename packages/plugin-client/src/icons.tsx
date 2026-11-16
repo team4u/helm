@@ -45,6 +45,7 @@ import {
   Laptop,
   Layers,
   LayoutGrid,
+  ListFilter,
   ListTree,
   Loader2,
   Lock,
@@ -185,6 +186,7 @@ const ICON_MAP = {
   circle: Circle,
   'circle-slash': CircleSlash,
   'layout-grid': LayoutGrid,
+  'list-filter': ListFilter,
   'list-tree': ListTree,
   outline: ListTree,
 } satisfies Record<string, LucideIcon>
