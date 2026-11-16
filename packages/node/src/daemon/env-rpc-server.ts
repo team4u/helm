@@ -493,9 +493,10 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
      * 节点本机进程占用快照（删除前诊断；只读面，升级排空不拒绝——与文件
      * 只读操作同口径）。进程内直接扫描（零 helper spawn、不用目标 cwd 启动
      * 任何子进程）；只读 cwd/fd/comm 定位信息，绝不读 cmdline/environ。
-     * 入参严格校验（仅 path 字段）；非 Linux 平台显式 not_supported；同 uid
-     * PID 持久拒读使 complete=false（绝不假装完整/干净）；跨 uid 拒读经
-     * scannerUid 区分为结构性盲区（unobservable 计数 + 诊断，不影响完整性）。
+     * 入参严格校验（仅 path 字段）；非 Linux 平台显式 not_supported；持久
+     * 权限拒读（EACCES/EPERM，跨 uid 或 non-dumpable 如 systemd --user）
+     * 计为结构性盲区（unobservable 计数 + 诊断，不影响完整性）；非权限
+     * 类读取错误使 complete=false（绝不假装完整/干净）。
      */
     async envPathUsage(raw: unknown): Promise<RpcResult<NodePathUsage>> {
       if (!isRecord(raw) || Array.isArray(raw)) {
@@ -511,13 +512,11 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       }
       const procRoot = options.pathUsage?.procRoot ?? '/proc';
       // 与 Hub 侧共用 @helm/env-io 同一 node fs 适配，绝不各复制一套语义。
-      // scannerUid 传自身 uid：跨 uid 拒读属结构性盲区（unobservable 呈现）。
       const io = createNodePathUsageIo();
       const result = await scanPathUsage(target, {
         io,
         platform: options.pathUsage?.platform?.() ?? process.platform,
         ...(procRoot === '/proc' ? {} : { procRoot }),
-        ...(typeof process.getuid === 'function' ? { scannerUid: process.getuid() } : {}),
       });
       if (result.ok) return { ok: true, value: result.value };
       const code = result.error.code === 'invalid'

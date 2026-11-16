@@ -243,13 +243,14 @@ export interface NodePathUsageProcess {
  *
  * 诚实性纪律：`complete=false` 语义是「可观测进程集合内存在读取异常或
  * 扫描上限触发」——消费方必须 fail-closed，绝不能当 0 占用；`diagnostics`
- * 携带人类可读的不完整原因（如被拒 PID 与属主 uid）。跨 uid 的权限拒绝
- * （Linux DAC 结构性盲区：非 root 扫描方对其他 uid 属主进程天然不可读）
- * 不再置 `complete=false`，而是计入 `unobservable` 并在 `diagnostics`
- * 如实呈现——与 Hub 同 uid 的进程（helm 自身派生的子代理/git/shell）
- * 永远可观测，保护面不受影响；消费方 fail-closed 纪律不变。快照只是
- * 删除前的一次性观测：扫描之后新启动的进程不在保护范围内（并发竞争
- * 如实存在）。
+ * 携带人类可读的不完整原因（如被拒 PID 与属主 uid）。权限类 errno
+ * （EACCES/EPERM）的持久拒读是结构性盲区（跨 uid，或 non-dumpable 进程
+ * 如 systemd --user——属主自己也读不了；任何非 root 扫描方都会撞上），
+ * 不论 uid 不再置 `complete=false`，而是计入 `unobservable` 并在
+ * `diagnostics` 如实呈现——与 Hub 同 uid 的普通可转储进程（helm 自身
+ * 派生的子代理/git/shell）永远可观测，保护面不受影响；消费方
+ * fail-closed 纪律不变。快照只是删除前的一次性观测：扫描之后新启动的
+ * 进程不在保护范围内（并发竞争如实存在）。
  */
 export interface NodePathUsage {
   /** 探测的绝对路径（调用方入参原样回显）。 */
@@ -262,7 +263,7 @@ export interface NodePathUsage {
   processesTruncated: boolean
   /** false = 扫描不完整（可观测集合内异常或上限触发）；绝不能当 0 占用。 */
   complete: boolean
-  /** 跨 uid 不可观测的进程计数（结构性盲区，非负整数；按 PID 去重；不影响 complete 判定）。 */
+  /** 权限不可观测的进程计数（结构性盲区：跨 uid 或 non-dumpable；非负整数；按 PID 去重；不影响 complete 判定）。 */
   unobservable: number
   /** 不完整原因与盲区诊断（人类可读；如 "pid 123 (uid 0): EACCES"）。 */
   diagnostics: string[]

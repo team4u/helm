@@ -97,7 +97,7 @@ export interface EnvExecInput {
 
 `EnvFabric.inspectPathUsage(nodeId, path, signal?)` 与插件端口 `ctx.host.inspectNodePathUsage({ nodeId, path, signal? })` 查询绝对路径是否被进程 cwd 或打开的文件句柄引用。local 在 Hub 进程内执行，远端通过节点 `envPathUsage` RPC 执行；两侧共用 `@helm/env-io` 的扫描实现与文件系统适配，protocol 只定义 RPC 形状。kernel 与 node 互不依赖实现代码，也不启动扫描子进程。
 
-结果提供 PID、进程名、引用来源和路径，以及扫描完整性、真实命中进程数、跨 uid 盲区计数和报告截断标记。可观测集合内的读取异常（同 uid 进程被拒、其他错误）或扫描上限触发必须反映为 `complete: false`，消费方不能把不完整结果当作零占用；跨 uid 的权限拒绝（Linux DAC 结构性盲区，如非 root 扫描方遇 root 属主进程）计入 `unobservable` 并在诊断中如实呈现，不影响完整性判定——与扫描方同 uid 的进程永远可观测。离线节点、不支持的平台或无效响应显式失败。当前只支持 Linux 的可见 `/proc` 视图，不读取命令行和环境变量，不自动终止进程；扫描是一次性快照，不提供跨进程互斥。`builtin:workflow` 在删除 worktree 前使用该端口，快照不完整或不支持的平台会阻止自动清理，详见 [worktree 清理规则](../workflows/worktree-and-gate.md)。
+结果提供 PID、进程名、引用来源和路径，以及扫描完整性、真实命中进程数、权限盲区计数和报告截断标记。可观测集合内的非权限类读取异常（如 EIO）或扫描上限触发必须反映为 `complete: false`，消费方不能把不完整结果当作零占用；持久的权限拒绝（EACCES/EPERM，不论 uid：跨 uid，或 non-dumpable 进程如 `systemd --user`——属主自己也读不了；任何非 root 扫描方都会撞上）计入 `unobservable` 并在诊断中如实呈现，不影响完整性判定——与扫描方同 uid 的普通可转储进程永远可观测。离线节点、不支持的平台或无效响应显式失败。当前只支持 Linux 的可见 `/proc` 视图，不读取命令行和环境变量，不自动终止进程；扫描是一次性快照，不提供跨进程互斥。`builtin:workflow` 在删除 worktree 前使用该端口，快照不完整或不支持的平台会阻止自动清理，详见 [worktree 清理规则](../workflows/worktree-and-gate.md)。
 
 ### 节点文件互斥
 
