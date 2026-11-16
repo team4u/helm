@@ -334,6 +334,7 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     store.putArtifact({
       id: 'art-del',
       conversationId: 11,
+      kind: 'upload',
       name: 'n',
       path: '/tmp/x',
       mimeType: 'text/plain',
@@ -488,6 +489,85 @@ describe('HelmStore 持久层（真实 SQLite）', { timeout: 60_000 }, () => {
     assert.equal(orphan, undefined, '删除会话必须同步删除链接行')
     await reopened.store.close()
     await reopened.database.close()
+    await rm(base, { recursive: true, force: true })
+  })
+
+  it('helm_artifacts 读写与重启还原 kind；非法 kind 在写/载入边界显式拒绝', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'art-kind-'))
+    const { store, database } = await openStoreAt(base)
+    store.putArtifact({
+      id: 'art-up',
+      conversationId: 1,
+      kind: 'upload',
+      name: 'u.txt',
+      path: 'artifacts/1/u.txt',
+      mimeType: 'text/plain',
+      size: 1,
+      createdAt: 10,
+    })
+    store.putArtifact({
+      id: 'art-reg',
+      conversationId: 1,
+      kind: 'registered',
+      name: 'r.txt',
+      path: 'artifacts/1/r.txt',
+      mimeType: 'text/plain',
+      size: 2,
+      createdAt: 20,
+    })
+    store.putArtifact({
+      id: 'art-sp',
+      conversationId: 1,
+      kind: 'spill',
+      name: 's.txt',
+      path: 'artifacts/1/s.txt',
+      mimeType: 'text/plain',
+      size: 3,
+      createdAt: 30,
+    })
+    assert.throws(
+      () => store.putArtifact({
+        id: 'art-bad',
+        conversationId: 1,
+        kind: 'bogus' as never,
+        name: 'b.txt',
+        path: 'artifacts/1/b.txt',
+        mimeType: 'text/plain',
+        size: 1,
+        createdAt: 40,
+      }),
+      HelmError,
+    )
+    await store.flushPublic()
+    await store.close()
+    await database.close()
+
+    const reopened = await openStoreAt(base)
+    assert.deepEqual(
+      reopened.store.listArtifacts(1).map((a) => [a.id, a.kind]),
+      [
+        ['art-up', 'upload'],
+        ['art-reg', 'registered'],
+        ['art-sp', 'spill'],
+      ],
+    )
+    await reopened.store.close()
+    await reopened.database.close()
+
+    // 库内损坏 kind：load() 必须显式报错 store_data_corrupted
+    const dbCorrupt = await openHelmDatabase(base)
+    await dbCorrupt.db.run(
+      "INSERT INTO helm_artifacts (id, conversation_id, kind, name, path, mime_type, size, created_at) VALUES ('art-corrupt', 1, 'bad_kind', 'x', 'artifacts/1/x', 'text/plain', 1, 50)",
+    )
+    await dbCorrupt.close()
+    const dbReopen = await openHelmDatabase(base)
+    const storeCorrupt = new HelmStore(dbReopen)
+    await assert.rejects(() => storeCorrupt.load(), (e: unknown) => {
+      assert.ok(e instanceof HelmError)
+      assert.equal(e.code, 'store_data_corrupted')
+      return true
+    })
+    await dbReopen.close()
     await rm(base, { recursive: true, force: true })
   })
 })

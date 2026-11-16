@@ -69,5 +69,5 @@ export type { PluginSlotProps } from './plugin-slot.js'
 
 // ---- 图标与格式化纯函数 ----
 export { HelmIcon } from './icons.js'
-export type { HelmIconProps } from './icons.js'
+export type { HelmIconName, HelmIconProps } from './icons.js'
 export { formatTime, formatCompactTimestamp, formatDurationMs, formatBytes } from './format.js'

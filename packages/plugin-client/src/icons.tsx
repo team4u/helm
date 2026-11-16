@@ -20,6 +20,7 @@ import {
   ChevronRight,
   ChevronUp,
   Circle,
+  CircleSlash,
   Clock,
   Code2,
   Columns2,
@@ -30,6 +31,7 @@ import {
   Edit3,
   ExternalLink,
   Eye,
+  File,
   FileCode,
   FileText,
   Folder,
@@ -37,6 +39,7 @@ import {
   GitFork,
   HardDrive,
   Key,
+  Laptop,
   Layers,
   LayoutGrid,
   ListTree,
@@ -63,6 +66,7 @@ import {
   RotateCw,
   Search,
   Send,
+  Server,
   Settings,
   Shield,
   ShieldAlert,
@@ -83,7 +87,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 
-const ICON_MAP: Record<string, LucideIcon> = {
+const ICON_MAP = {
   sparkles: Sparkles,
   bot: Bot,
   boxes: Boxes,
@@ -105,10 +109,13 @@ const ICON_MAP: Record<string, LucideIcon> = {
   square: Square,
   'git-branch': GitBranch,
   'git-fork': GitFork,
+  file: File,
   'file-text': FileText,
   'file-code': FileCode,
   cpu: Cpu,
   'hard-drive': HardDrive,
+  laptop: Laptop,
+  server: Server,
   search: Search,
   settings: Settings,
   puzzle: Puzzle,
@@ -169,13 +176,16 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'message-square': MessageSquare,
   code: Code2,
   circle: Circle,
+  'circle-slash': CircleSlash,
   'layout-grid': LayoutGrid,
   'list-tree': ListTree,
   outline: ListTree,
-}
+} satisfies Record<string, LucideIcon>
+
+export type HelmIconName = keyof typeof ICON_MAP
 
 export interface HelmIconProps {
-  name?: string
+  name?: HelmIconName | (string & {})
   size?: number
   className?: string
   style?: CSSProperties
@@ -183,6 +193,8 @@ export interface HelmIconProps {
 
 export function HelmIcon({ name, size = 14, className, style }: HelmIconProps) {
   const key = (name ?? 'circle').toLowerCase().trim()
-  const Comp = ICON_MAP[key] ?? Circle
+  const Comp = Object.hasOwn(ICON_MAP, key)
+    ? (ICON_MAP as Record<string, LucideIcon>)[key]!
+    : Circle
   return <Comp size={size} strokeWidth={1.75} className={className} style={style} />
 }

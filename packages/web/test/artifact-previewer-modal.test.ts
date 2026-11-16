@@ -89,6 +89,7 @@ function installArtifactFetch(artifacts: TestArtifact[]): void {
 const artifactMeta = (a: TestArtifact, conversationId: number): ArtifactMetadata => ({
   id: a.id,
   conversationId,
+  kind: 'upload',
   name: a.name ?? '',
   path: `artifacts/${conversationId}/${a.name ?? a.id}`,
   mimeType: a.mimeType ?? '',

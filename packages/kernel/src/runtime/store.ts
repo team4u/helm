@@ -10,8 +10,8 @@
  * - close 等待在途 flush 彻底结束，并把首个错误返回给调用方上报。
  */
 
-import type { ConversationStatus, ConversationSummary } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ArtifactKind, ConversationStatus, ConversationSummary } from '@helm/protocol'
+import { HelmError, isArtifactKind } from '@helm/protocol'
 import type { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node'
 import type { HelmDatabase } from './sqlite.js'
 
@@ -57,6 +57,7 @@ export interface AskRow {
 export interface ArtifactRow {
   id: string
   conversationId: number
+  kind: ArtifactKind
   name: string
   path: string
   mimeType: string
@@ -186,15 +187,25 @@ export class HelmStore {
     for (const row of await this.db.all<{
       id: string
       conversation_id: number
+      kind: string
       name: string
       path: string
       mime_type: string
       size: number
       created_at: number
-    }>('SELECT id, conversation_id, name, path, mime_type, size, created_at FROM helm_artifacts')) {
+    }>('SELECT id, conversation_id, kind, name, path, mime_type, size, created_at FROM helm_artifacts')) {
+      if (!isArtifactKind(row.kind)) {
+        throw new HelmError(
+          'store_data_corrupted',
+          `持久化数据损坏（helm_artifacts#${row.id}.kind）：非法产物类型 ${String(row.kind)}`,
+          500,
+          { id: row.id, kind: row.kind },
+        )
+      }
       this.artifacts.set(row.id, {
         id: row.id,
         conversationId: row.conversation_id,
+        kind: row.kind,
         name: row.name,
         path: row.path,
         mimeType: row.mime_type,
@@ -421,14 +432,18 @@ export class HelmStore {
 
   putArtifact(row: ArtifactRow): void {
     this.assertWritable()
+    if (!isArtifactKind(row.kind)) {
+      throw new HelmError('validation_error', `产物类型非法: ${String(row.kind)}`, 400, { id: row.id, kind: row.kind })
+    }
     this.artifacts.set(row.id, { ...row })
     this.enqueue(() =>
       this.db.run(
-        `INSERT INTO helm_artifacts (id, conversation_id, name, path, mime_type, size, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET name=excluded.name, path=excluded.path, mime_type=excluded.mime_type, size=excluded.size`,
+        `INSERT INTO helm_artifacts (id, conversation_id, kind, name, path, mime_type, size, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, name=excluded.name, path=excluded.path, mime_type=excluded.mime_type, size=excluded.size`,
         row.id,
         row.conversationId,
+        row.kind,
         row.name,
         row.path,
         row.mimeType,

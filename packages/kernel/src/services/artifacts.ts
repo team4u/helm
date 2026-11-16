@@ -9,7 +9,7 @@
 import { mkdir, readFile, readdir, realpath, rm, stat } from 'node:fs/promises'
 import { join, sep } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { HelmError, type ArtifactMetadata } from '@helm/protocol'
+import { HelmError, type ArtifactKind, type ArtifactMetadata } from '@helm/protocol'
 import {
   FileNotFoundError,
   atomicWriteFile,
@@ -183,7 +183,7 @@ export function truncateUtf8Tail(text: string, maxBytes: number): string {
   return buf.subarray(start).toString('utf8')
 }
 
-export type { ArtifactMetadata }
+export type { ArtifactKind, ArtifactMetadata }
 
 /**
  * 产物相对路径（POSIX 分隔符，落库与跨平台读取的唯一形态）。
@@ -251,6 +251,7 @@ export class ArtifactService {
     const metadata: ArtifactMetadata = {
       id,
       conversationId,
+      kind: 'registered',
       name,
       path: artifactRelPath(conversationId, storedName),
       mimeType,
@@ -309,6 +310,7 @@ export class ArtifactService {
     const metadata: ArtifactMetadata = {
       id,
       conversationId,
+      kind: 'upload',
       name: safeName,
       path: artifactRelPath(conversationId, storedName),
       mimeType,
@@ -390,6 +392,7 @@ export class ArtifactService {
     const metadata: ArtifactMetadata = {
       id: randomUUID(),
       conversationId,
+      kind: 'spill',
       name: fileName,
       path: artifactRelPath(conversationId, fileName),
       mimeType: 'text/plain',

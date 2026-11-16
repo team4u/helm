@@ -6,7 +6,7 @@
  * 产物内容读取带三重防线：元数据形状门禁（仓库不是可信边界）+
  * 三层 realpath 防符号链接越界 + ENOENT 如实 404。
  */
-import { HelmError } from '@helm/protocol'
+import { HelmError, isArtifactKind } from '@helm/protocol'
 import type { ArtifactMetadata } from '@helm/protocol'
 import { realpath as nodeFsRealpath, readFile as nodeFsReadFile } from 'node:fs/promises'
 import { join as joinPath, sep as PATH_SEP } from 'node:path'
@@ -52,13 +52,14 @@ export async function handleArtifactsDomain(
 
 /**
  * 产物元数据形状门禁：path 必须形如 artifacts/<positiveConvId>/<file>，
- * 且 conversationId 为正整数。仓库（内存 Map/sqlite）不是可信边界，
- * 手改 DB 的伪造 meta 不得让 HTTP 层读任意文件。
+ * conversationId 为正整数，且 kind 必须是 'upload' | 'registered' | 'spill'。
+ * 仓库（内存 Map/sqlite）不是可信边界，手改 DB 的伪造 meta 不得让 HTTP 层读任意文件。
  */
 function assertArtifactMetadataShape(metadata: ArtifactMetadata): void {
   if (
     !Number.isInteger(metadata.conversationId) ||
     metadata.conversationId <= 0 ||
+    !isArtifactKind(metadata.kind) ||
     typeof metadata.path !== 'string'
   ) {
     throw new HelmError('artifact_metadata_illegal', `产物元数据非法: ${metadata.id}`, 500)

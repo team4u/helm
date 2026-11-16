@@ -112,7 +112,7 @@ test('artifacts put：二进制流上传（octet-stream + 编码文件名 + 字�
   const hub = await startHub({
     'POST /api/conversations/3/artifacts': () => ({
       status: 201,
-      body: { id: 'art-1', conversationId: 3, name: '数据 报告.md', size: content.byteLength, mimeType: 'text/markdown', createdAt: 1 },
+      body: { id: 'art-1', conversationId: 3, kind: 'upload', name: '数据 报告.md', size: content.byteLength, mimeType: 'text/markdown', createdAt: 1 },
     }),
   })
   try {
@@ -139,7 +139,7 @@ test('artifacts put：人类模式输出追加 [Artifact] id=<id> name=<name> �
   const hub = await startHub({
     'POST /api/conversations/3/artifacts': () => ({
       status: 201,
-      body: { id: 'art-img-99', conversationId: 3, name: 'output.png', size: 12, mimeType: 'image/png', createdAt: 1 },
+      body: { id: 'art-img-99', conversationId: 3, kind: 'upload', name: 'output.png', size: 12, mimeType: 'image/png', createdAt: 1 },
     }),
   })
   try {
@@ -156,7 +156,7 @@ test('artifacts put：--name 与 --mime-type 覆盖；--current 目标会话', {
   const file = path.join(dir, 'plain.txt')
   await fsp.writeFile(file, 'abc')
   const hub = await startHub({
-    'POST /api/conversations/7/artifacts': () => ({ status: 201, body: { id: 'x' } }),
+    'POST /api/conversations/7/artifacts': () => ({ status: 201, body: { id: 'x', conversationId: 7, kind: 'upload', name: 'renamed.bin', path: 'artifacts/7/renamed.bin', mimeType: 'application/x-thing', size: 3, createdAt: 1 } }),
   })
   try {
     const r = await run(

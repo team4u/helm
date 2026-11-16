@@ -528,7 +528,7 @@ test('workflows inspect/abort：位置参数映射 runId（动态动作命令）
 test('artifacts：文本直出、二进制强制 --output、列表走会话端点', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const hub = await startHub({
-    'GET /api/conversations/3/artifacts': () => ({ body: [{ id: 'a1', conversationId: 3, name: 'out.txt', path: 'artifacts/3/out.txt', mimeType: 'text/plain', size: 3, createdAt: 0 }] }),
+    'GET /api/conversations/3/artifacts': () => ({ body: [{ id: 'a1', conversationId: 3, kind: 'upload', name: 'out.txt', path: 'artifacts/3/out.txt', mimeType: 'text/plain', size: 3, createdAt: 0 }] }),
     'GET /api/artifacts/a1/content': (body, req) => {
       void body
       const accept = req.headers['accept'] ?? ''

@@ -223,6 +223,7 @@ test('writeUploaded：二进制字节原样落盘（不做 UTF-8 重编码）', 
   const bytes = Uint8Array.from([0, 255, 128, 10, 200, 1, 0xfe])
   const meta = await artifacts.writeUploaded(1, { name: 'blob.bin', bytes })
   assert.equal(meta.conversationId, 1)
+  assert.equal(meta.kind, 'upload')
   assert.equal(meta.name, 'blob.bin')
   assert.equal(meta.size, bytes.byteLength)
   assert.deepEqual([...(await artifacts.readBuffer(meta.id))], [...bytes])
@@ -307,6 +308,7 @@ test('HTTP 二进制流上传：octet-stream + x-artifact-filename，字节一�
     body: bytes as unknown as BodyInit,
   })
   assert.equal(res.status, 201)
+  assert.equal(res.body.kind, 'upload')
   assert.equal(res.body.name, '截图 final.png')
   assert.equal(res.body.mimeType, 'image/png')
   assert.equal(res.body.size, bytes.byteLength)
@@ -409,7 +411,7 @@ test('HTTP 文本上传触发脱敏（秘密不落盘）；GET 列表包含全�
   const list = await call('GET', '/api/conversations/1/artifacts')
   assert.equal(list.status, 200)
   assert.ok(Array.isArray(list.body) && list.body.length > 0)
-  assert.ok(list.body.some((m: { name: string }) => m.name === 'env.txt'))
+  assert.ok(list.body.some((m: { name: string; kind: string }) => m.name === 'env.txt' && m.kind === 'upload'))
 })
 
 test('产物读取拒绝跨会话元数据和软链越界，保持二进制字节', { timeout: 60_000 }, async () => {

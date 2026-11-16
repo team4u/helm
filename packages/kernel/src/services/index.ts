@@ -90,6 +90,7 @@ export {
   SPILL_THRESHOLD_BYTES,
   PREVIEW_HEAD_BYTES,
   truncateUtf8Safe,
+  type ArtifactKind,
   type ArtifactMetadata,
   type ArtifactRepository,
   type RegisterOptions,

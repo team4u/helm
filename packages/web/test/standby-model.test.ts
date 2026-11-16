@@ -76,7 +76,7 @@ function makeDeps(log: DepLog, nextId = { value: 9 }): StandbySendDeps {
     upload: async (id, file) => {
       if (log.failures.uploadNames?.includes(file.name)) throw new Error(`upload failed: ${file.name}`)
       log.uploads.push({ id, name: file.name })
-      const meta: ArtifactMetadata = { id: `art-${log.uploads.length}`, conversationId: id, name: file.name, path: `artifacts/${id}/${file.name}`, mimeType: file.type, size: file.size, createdAt: 0 }
+      const meta: ArtifactMetadata = { id: `art-${log.uploads.length}`, conversationId: id, kind: 'upload', name: file.name, path: `artifacts/${id}/${file.name}`, mimeType: file.type, size: file.size, createdAt: 0 }
       return meta
     },
     submit: async (id, payload) => {
@@ -355,7 +355,7 @@ test('世代作废：upload 等待期 reset 后不继续 submit、已上传转�
   deps.upload = async (id, file) => {
     await gate
     log.uploads.push({ id, name: file.name })
-    return { id: 'art-1', conversationId: id, name: file.name, path: '', mimeType: file.type, size: file.size, createdAt: 0 }
+    return { id: 'art-1', conversationId: id, kind: 'upload', name: file.name, path: '', mimeType: file.type, size: file.size, createdAt: 0 }
   }
   const { draft } = admitStandbyFiles(getStandbyDraft(key), [makeFile('wait.txt')])
   updateStandbyDraft(key, { ...draft, text: '上传中释放' })

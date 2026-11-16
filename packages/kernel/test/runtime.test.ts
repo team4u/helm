@@ -386,6 +386,7 @@ describe('工具真实执行', { timeout: 60_000 }, () => {
       assert.ok(artifacts.length >= 1)
       const spillArtifact = artifacts.find((a) => a.name.startsWith('tool-spill-'))
       assert.ok(spillArtifact, '应有 spill 产物')
+      assert.equal(spillArtifact.kind, 'spill')
     } finally {
       await kernel.close()
     }

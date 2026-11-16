@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS helm_asks (
 CREATE TABLE IF NOT EXISTS helm_artifacts (
   id TEXT PRIMARY KEY,
   conversation_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
   name TEXT NOT NULL,
   path TEXT NOT NULL,
   mime_type TEXT NOT NULL,

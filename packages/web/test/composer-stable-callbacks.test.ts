@@ -164,7 +164,7 @@ function stubApi(opts?: { uploadGate?: Promise<void>; submitGate?: Promise<void>
     uploadsSeen.push({ id, name: file.name })
     if (opts?.uploadGate !== undefined) await opts.uploadGate
     const meta: ArtifactMetadata = {
-      id: `art-${id}`, conversationId: id, name: file.name,
+      id: `art-${id}`, conversationId: id, kind: 'upload', name: file.name,
       path: `artifacts/${id}/${file.name}`, mimeType: file.type || 'application/octet-stream',
       size: file.size, createdAt: 1,
     }

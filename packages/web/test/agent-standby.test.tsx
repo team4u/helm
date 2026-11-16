@@ -198,7 +198,7 @@ function installFetch(): void {
         state.uploadFailures--
         return jsonResponse({ error: { code: 'internal_error', message: 'upload failed' } }, 500)
       }
-      return jsonResponse({ id: `art-${state.uploadCalls.length}`, name, size: 5, mimeType: 'text/plain' })
+      return jsonResponse({ id: `art-${state.uploadCalls.length}`, conversationId: id, kind: 'upload', name, path: `artifacts/${id}/${name}`, size: 5, mimeType: 'text/plain', createdAt: 0 })
     }
     const resetMatch = /^\/api\/conversations\/(\d+)\/reset$/.exec(url)
     if (resetMatch && method === 'POST') {

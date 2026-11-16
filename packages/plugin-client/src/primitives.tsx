@@ -46,13 +46,11 @@ export function Screen(props: ScreenProps): ReactNode {
           header
         ) : (
           <div className="screen-header">
-            <div className="screen-title">{title}</div>
-            {(subtitle !== undefined || actions !== undefined) && (
-              <>
-                {subtitle !== undefined && <span className="screen-subtitle">{subtitle}</span>}
-                {actions !== undefined && <div className="stack-row">{actions}</div>}
-              </>
-            )}
+            <div className="screen-heading">
+              {title !== undefined && <div className="screen-title">{title}</div>}
+              {subtitle !== undefined && <span className="screen-subtitle">{subtitle}</span>}
+            </div>
+            {actions !== undefined && <div className="stack-row">{actions}</div>}
           </div>
         ))}
       {children}

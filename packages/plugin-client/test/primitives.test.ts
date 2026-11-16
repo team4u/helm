@@ -8,6 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { Window } from 'happy-dom'
 import * as React from 'react'
 import { Fragment } from 'react'
 import { renderToString } from 'react-dom/server'
@@ -33,20 +34,60 @@ test('布局原语进入共享 SDK 与 protocol 清单，且清单内全部符�
   }
 })
 
-test('Screen：header 组合渲染 screen-container / screen-header / title / subtitle（SSR）', { timeout: 60_000 }, () => {
+test('Screen：header 组合渲染 screen-container / screen-header / screen-heading(title+subtitle) / actions 兄弟节点（SSR）', { timeout: 60_000 }, () => {
   const html = renderToString(
     e(
       Screen,
-      { title: '任务中心', subtitle: '共 3 条' },
+      {
+        title: '任务中心',
+        subtitle: '共 3 条',
+        actions: e('button', { type: 'button' }, '刷新'),
+      },
       e('div', { 'data-testid': 'body' }, '内容'),
     ),
   )
   assert.match(html, /screen-container/)
   assert.match(html, /screen-header/)
+  assert.match(html, /screen-heading/)
   assert.match(html, /screen-title/)
   assert.match(html, /screen-subtitle/)
   assert.match(html, /任务中心/)
   assert.match(html, /共 3 条/)
+
+  const win = new Window()
+  win.document.body.innerHTML = html
+  const header = win.document.body.querySelector('.screen-header')
+  assert.ok(header !== null, '必须渲染 .screen-header')
+  const children = Array.from(header.children)
+  assert.equal(children.length, 2, '.screen-header 仅包含左测 .screen-heading 与右侧 .stack-row 两个直接子节点')
+  assert.equal(children[0]!.className, 'screen-heading')
+  assert.equal(children[1]!.className, 'stack-row')
+  assert.equal(children[0]!.querySelector('.screen-title')?.textContent, '任务中心')
+  assert.equal(children[0]!.querySelector('.screen-subtitle')?.textContent, '共 3 条')
+  assert.equal(children[0]!.querySelector('.stack-row'), null, 'actions 不得被裹入 .screen-heading')
+  assert.equal(children[1]!.querySelector('button')?.textContent, '刷新')
+
+  // 仅传 subtitle + actions（缺省 title）：.screen-heading 仍包裹 subtitle，不渲染空 .screen-title
+  const subOnly = renderToString(
+    e(Screen, { subtitle: '仅副标题', actions: e('button', { type: 'button' }, '操作') }),
+  )
+  win.document.body.innerHTML = subOnly
+  const subHeader = win.document.body.querySelector('.screen-header')!
+  assert.equal(subHeader.children[0]!.className, 'screen-heading')
+  assert.equal(subHeader.children[0]!.querySelector('.screen-title'), null)
+  assert.equal(subHeader.children[0]!.querySelector('.screen-subtitle')?.textContent, '仅副标题')
+  assert.equal(subHeader.children[1]!.className, 'stack-row')
+
+  // 仅传 actions：保留 .screen-heading 占位以维持 justify-content: space-between 右对齐
+  const actionsOnly = renderToString(
+    e(Screen, { actions: e('button', { type: 'button' }, '新建') }),
+  )
+  win.document.body.innerHTML = actionsOnly
+  const actHeader = win.document.body.querySelector('.screen-header')!
+  assert.equal(actHeader.children.length, 2)
+  assert.equal(actHeader.children[0]!.className, 'screen-heading')
+  assert.equal(actHeader.children[1]!.className, 'stack-row')
+  void win.close()
 })
 
 test('Screen：传 header 时整体替换默认页头；全部缺省时不渲染页头', { timeout: 60_000 }, () => {

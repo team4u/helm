@@ -1520,7 +1520,7 @@ test('artifacts 列表 + content 真实 content-type/disposition/字节；未知
   const meta = await artifacts.register(ROOT_CONVERSATION_ID, source, { name: 'note.md' })
   const list = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}/artifacts`)
   assert.equal(list.status, 200)
-  assert.ok(list.body.some((a: any) => a.id === meta.id))
+  assert.ok(list.body.some((a: any) => a.id === meta.id && a.kind === 'registered'))
   const content = await call(handler, 'GET', `/api/artifacts/${meta.id}/content?inline=1`)
   assert.equal(content.status, 200)
   assert.equal(content.headers.get('content-type'), 'text/markdown')
@@ -1566,6 +1566,7 @@ test('artifacts 伪造 metadata（path=credentials.json）不得泄密', { timeo
   const fakeMeta = {
     id: 'evil-1',
     conversationId: ROOT_CONVERSATION_ID,
+    kind: 'registered' as const,
     name: 'credentials.json',
     path: 'credentials.json',
     mimeType: 'application/json',
@@ -1590,6 +1591,7 @@ test('artifacts 伪 metadata（artifacts/<convId>/../../escape）拒绝', { time
   const fakeMeta = {
     id: 'evil-2',
     conversationId: ROOT_CONVERSATION_ID,
+    kind: 'registered' as const,
     name: 'escape',
     path: 'artifacts/1/../../escape-secret.txt',
     mimeType: 'text/plain',
@@ -1617,6 +1619,7 @@ test('artifacts 符号链接越界拒绝（文件名段软链逃逸）', { timeo
   const fakeMeta = {
     id: 'evil-3',
     conversationId: ROOT_CONVERSATION_ID,
+    kind: 'registered' as const,
     name: 'link.txt',
     path: `artifacts/${ROOT_CONVERSATION_ID}/link.txt`,
     mimeType: 'text/plain',
@@ -1648,6 +1651,7 @@ test('artifacts 会话目录软链逃逸拒绝', { timeout: 60_000 }, async () =
   const fakeMeta = {
     id: 'evil-4',
     conversationId: 777777,
+    kind: 'registered' as const,
     name: 'loot.txt',
     path: 'artifacts/777777/loot.txt',
     mimeType: 'text/plain',
@@ -1662,6 +1666,36 @@ test('artifacts 会话目录软链逃逸拒绝', { timeout: 60_000 }, async () =
   assert.equal(res.status, 500)
   assert.equal(res.body.error.code, 'artifact_path_illegal')
   assert.ok(!res.text.includes('CONV-SYMLINK-SECRET'))
+})
+
+test('artifacts 非法或缺失 kind 元数据门禁拒绝（500 artifact_metadata_illegal）', { timeout: 60_000 }, async () => {
+  const evilRepo = new InMemoryArtifactRepository()
+  const evilArtifacts = new ArtifactService(dataDir, evilRepo, stash)
+  const valid = await evilArtifacts.writeUploaded(ROOT_CONVERSATION_ID, {
+    name: 'ok.txt',
+    bytes: new TextEncoder().encode('OK'),
+  })
+  const fileSegment = valid.path.split('/')[2]!
+  evilRepo.put({
+    ...valid,
+    id: 'evil-bad-kind',
+    path: `artifacts/${ROOT_CONVERSATION_ID}/${fileSegment}`,
+    kind: 'bogus' as never,
+  })
+  evilRepo.put({
+    ...valid,
+    id: 'evil-missing-kind',
+    path: `artifacts/${ROOT_CONVERSATION_ID}/${fileSegment}`,
+    kind: undefined as never,
+  })
+  const kernel = makeKernel()
+  ;(kernel as { artifacts: ArtifactService }).artifacts = evilArtifacts
+  const handler = createHubHandler(kernel)
+  for (const id of ['evil-bad-kind', 'evil-missing-kind']) {
+    const res = await call(handler, 'GET', `/api/artifacts/${id}/content`)
+    assert.equal(res.status, 500)
+    assert.equal(res.body.error.code, 'artifact_metadata_illegal')
+  }
 })
 
 test('artifacts 读权限错误不伪称 missing（非 ENOENT 原样 500）', { timeout: 60_000 }, async () => {

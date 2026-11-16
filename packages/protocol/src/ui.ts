@@ -249,6 +249,12 @@ export const NODE_DETAIL_SECTION_SLOT = 'builtin:node/detail-section' as const
  * 状态区（不收入 more 菜单）。 */
 export const COMPOSER_STATUS_SLOT = 'builtin:composer/status' as const
 
+/** 宿主输入区顶部托盘保留的命名空间，不代表存在 builtin:composer 插件。
+ * 贡献组件收到 ComposerScopeProps（conversation + composer），在 AskDock
+ * 上方直出渲染（桌面与移动端均不折叠进 more 菜单）；无在途内容时应返回
+ * null 归零高度。 */
+export const COMPOSER_DOCK_SLOT = 'builtin:composer/dock' as const
+
 /** 仅已有节点挂载；不包含节点接入令牌或其他凭据。 */
 export interface NodeDetailSlotProps {
   nodeId: string

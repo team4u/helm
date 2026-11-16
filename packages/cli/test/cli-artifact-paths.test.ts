@@ -60,6 +60,7 @@ function uploadRoute(conversationId: number, name: string): RouteHandler {
     return jsonResponse(201, {
       id: 'art-1',
       conversationId,
+      kind: 'upload',
       name,
       path: `artifacts/${conversationId}/${name}`,
       mimeType: 'application/octet-stream',

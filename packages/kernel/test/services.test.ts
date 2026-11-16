@@ -971,6 +971,7 @@ test('artifacts: register 复制登记、readContent 读取、list 与 deleteCon
   const src = await tempSourceFile('# 报告\n内容'.repeat(100))
   const meta = await artifacts.register(1, src, { name: 'report.md' })
   assert.equal(meta.conversationId, 1)
+  assert.equal(meta.kind, 'registered')
   assert.equal(meta.name, 'report.md')
   // metadata.path 固定为 POSIX 分隔符（artifactRelPath），Windows 上也不得出现反斜杠
   assert.ok(meta.path.startsWith('artifacts/1/'))
@@ -1022,6 +1023,7 @@ test('artifacts: spill 32KiB 阈值、4KiB UTF-8 安全预览、秘密不落盘�
   assert.notEqual(r3.artifact, undefined)
   const meta = r3.artifact!
   assert.equal(meta.conversationId, 1)
+  assert.equal(meta.kind, 'spill')
   assert.ok(meta.path.includes('tool-spill-call-3.txt'))
   assert.ok(meta.size > 32 * 1024)
   // 返回文本：头部预览 + 截断标记 + 尾部摘要 + id/path 指引
