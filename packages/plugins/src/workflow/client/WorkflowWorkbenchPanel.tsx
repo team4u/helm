@@ -1,7 +1,9 @@
 /**
  * builtin:workflow 右侧工作台面板（tasks）：
- * - 聚焦当前会话及其后代的真实在途/历史运行（工作流 DAG、节点明细、Gate 审批、Worktree 检视、
- *   原生子会话流与外部代理运行），无损承接时间线 `.trace-row` 收口后移出的全部详情。
+ * - 按统一执行树 `buildExecutionTree` 渲染当前会话的一级执行节点（workflow / external / conversation），
+ *   消除后台原生子代理双卡重复、外部节点误分类、深层后代平铺泄露与统计双计。
+ * - 为独立/后台原生子代理保留 `backgroundRun`、`executionToolStatus` 与 `WorktreeInspectSection`
+ *   （Git Diff 检视与清理），无损承接时间线 `.trace-row` 收口后移出的全部详情。
  * - 支持从时间线或底部活动托盘点击后经 `workbench-focus` 直接展开并定位到对应 `run.id`。
  * - 已去除重复的工作流定义库列表（保留右上角轻量跳转至独立 `library` 全屏视图）。
  */
@@ -16,14 +18,20 @@ import { WorkflowRunCardBody } from './WorkflowRunCard.tsx'
 import { SubagentLiveCard } from './SubagentCard.tsx'
 import { ExternalRunSummary } from './ExternalRunSummary.tsx'
 import { WorktreeInspectSection } from './WorktreeInspectSection.tsx'
-import { aggregateExecutionNodes, buildExecutionTree } from './model-execution-tree.ts'
+import { buildExecutionTree } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
+import { executionToolStatus } from './model-execution-status.ts'
 import { stringifyPretty } from './model-format.ts'
 import {
   clearWorkbenchRunFocus,
   peekWorkbenchRunFocus,
   subscribeWorkbenchRunFocus,
 } from './workbench-focus.ts'
+
+function nodeMatchesRunId(node: ExecutionNode, targetRunId: string): boolean {
+  if (node.run?.id === targetRunId) return true
+  return node.children.some((child) => nodeMatchesRunId(child, targetRunId))
+}
 
 export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): ReactNode {
   const ctx = usePluginContext()
@@ -43,7 +51,7 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
     return initial !== undefined ? { [initial]: true } : {}
   })
   const [resultOpenIds, setResultOpenIds] = useState<Record<string, boolean>>({})
-  const runRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const nodeRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
   useEffect(() => {
     const pending = conversationId !== undefined ? peekWorkbenchRunFocus(conversationId)?.runId : undefined
@@ -65,16 +73,6 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
     [conversationId],
   )
 
-  useEffect(() => {
-    if (conversationId === undefined || focusedRunId === undefined) return
-    if (!runs.some((r) => r.id === focusedRunId)) return
-    const el = runRefs.current[focusedRunId]
-    if (el !== null && el !== undefined && typeof el.scrollIntoView === 'function') {
-      el.scrollIntoView({ block: 'nearest' })
-    }
-    clearWorkbenchRunFocus(conversationId, focusedRunId)
-  }, [focusedRunId, runs, conversationId])
-
   const tree = useMemo(
     () =>
       conversationId !== undefined
@@ -82,6 +80,18 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
         : [],
     [conversationId, conversations, runs],
   )
+
+  useEffect(() => {
+    if (conversationId === undefined || focusedRunId === undefined) return
+    const matchedTopNode = tree.find((node) => nodeMatchesRunId(node, focusedRunId))
+    if (matchedTopNode === undefined) return
+    const targetKey = matchedTopNode.run?.id ?? matchedTopNode.key
+    const el = nodeRefs.current[targetKey]
+    if (el !== null && el !== undefined && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest' })
+    }
+    clearWorkbenchRunFocus(conversationId, focusedRunId)
+  }, [focusedRunId, tree, conversationId])
 
   const viewerScope = useMemo(
     () =>
@@ -94,27 +104,14 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
     [conversationId, conversations],
   )
 
-  const standaloneChildren = useMemo(
-    () => tree.filter((node) => node.kind === 'conversation' && node.conversationId !== undefined),
-    [tree],
-  )
-
-  const runNodesByRunId = useMemo(() => {
-    const map = new Map<string, ExecutionNode>()
-    for (const node of tree) {
-      if (node.run !== undefined) map.set(node.run.id, node)
-    }
-    return map
-  }, [tree])
-
   return (
     <div className="workflow-workbench-panel">
       <div className="workflow-workbench-head">
         <span className="workflow-workbench-head-left">
           <Icon name="workflow" size={14} />
           <span>当前会话任务</span>
-          {runs.length + standaloneChildren.length > 0 ? (
-            <span className="badge badge-neutral tabular-nums">{runs.length + standaloneChildren.length}</span>
+          {tree.length > 0 ? (
+            <span className="badge badge-neutral tabular-nums">{tree.length}</span>
           ) : null}
         </span>
         <button
@@ -129,40 +126,32 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
 
       {conversationId === undefined ? (
         <div className="workflow-workbench-empty">请先打开一个会话，工作台将展示当前会话的工作流与子代理任务。</div>
-      ) : runs.length === 0 && standaloneChildren.length === 0 ? (
+      ) : tree.length === 0 ? (
         <div className="workflow-workbench-empty">当前会话暂无工作流或子代理运行记录。</div>
       ) : (
         <div className="workflow-workbench-list">
-          {runs.map((run, idx) => {
-            const treeNode = runNodesByRunId.get(run.id)
-            const childNodes = treeNode?.children ?? []
-            const isFocused = focusedRunId === run.id
-            const defaultOpen = focusedRunId !== undefined ? isFocused : idx === 0 || run.status === 'running'
-            const cardOpen = openRunIds[run.id] ?? defaultOpen
-            const resultOpen = resultOpenIds[run.id] ?? false
-            const isStandaloneExternalSubagent =
-              run.kind === 'subagent' &&
-              (run.nodes ?? []).length === 0 &&
-              childNodes.length === 0
+          {tree.map((node, idx) => {
+            const run = node.run
+            const refKey = run?.id ?? node.key
+            const isFocused = focusedRunId !== undefined && nodeMatchesRunId(node, focusedRunId)
 
-            return (
-              <div
-                key={run.id}
-                data-run-id={run.id}
-                ref={(el) => {
-                  runRefs.current[run.id] = el
-                }}
-                className={`workflow-workbench-run-wrap${isFocused ? ' workflow-workbench-run-focused' : ''}`}
-              >
-                {isStandaloneExternalSubagent ? (
-                  <ExternalSubagentWorkbenchCard
-                    run={run}
-                    viewer={viewerScope}
-                  />
-                ) : (
+            if (node.kind === 'workflow' && run !== undefined) {
+              const defaultOpen =
+                focusedRunId !== undefined ? isFocused : idx === 0 || run.status === 'running'
+              const cardOpen = openRunIds[run.id] ?? defaultOpen
+              const resultOpen = resultOpenIds[run.id] ?? false
+              return (
+                <div
+                  key={node.key}
+                  data-run-id={run.id}
+                  ref={(el) => {
+                    nodeRefs.current[refKey] = el
+                  }}
+                  className={`workflow-workbench-run-wrap${isFocused ? ' workflow-workbench-run-focused' : ''}`}
+                >
                   <WorkflowRunCardBody
                     run={run}
-                    childNodes={childNodes}
+                    childNodes={node.children}
                     cardOpen={cardOpen}
                     onToggleCard={() =>
                       setOpenRunIds((prev) => ({
@@ -180,26 +169,57 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
                     inWorkbench
                     viewer={viewerScope}
                   />
-                )}
-              </div>
-            )
-          })}
+                </div>
+              )
+            }
 
-          {standaloneChildren.map((node) => {
-            const childId = node.conversationId
-            if (childId === undefined) return null
-            const subtree = aggregateExecutionNodes(node.children)
-            const hasRunning = node.status === 'working' || node.status === 'blocked' || subtree.running > 0
-            return (
-              <SubagentLiveCard
-                key={node.key}
-                childConversationId={childId}
-                childNodes={node.children}
-                toolStatus={hasRunning ? 'running' : node.status === 'error' ? 'error' : 'done'}
-                expanded
-                viewer={viewerScope}
-              />
-            )
+            if (node.kind === 'external' && run !== undefined) {
+              return (
+                <div
+                  key={node.key}
+                  data-run-id={run.id}
+                  ref={(el) => {
+                    nodeRefs.current[refKey] = el
+                  }}
+                  className={`workflow-workbench-run-wrap${isFocused ? ' workflow-workbench-run-focused' : ''}`}
+                >
+                  <ExternalSubagentWorkbenchCard run={run} viewer={viewerScope} />
+                </div>
+              )
+            }
+
+            if (node.kind === 'conversation' && node.conversationId !== undefined) {
+              const worktreeNode = run?.nodes?.find((n) => n.worktree !== undefined)
+              const inspectNodeId =
+                worktreeNode?.nodeId ??
+                (node.summary?.nodeId !== undefined && node.summary.nodeId !== '' ? node.summary.nodeId : undefined)
+              return (
+                <div
+                  key={node.key}
+                  data-run-id={run?.id}
+                  ref={(el) => {
+                    nodeRefs.current[refKey] = el
+                  }}
+                  className={`workflow-workbench-run-wrap${isFocused ? ' workflow-workbench-run-focused' : ''}`}
+                >
+                  <SubagentLiveCard
+                    childConversationId={node.conversationId}
+                    backgroundRun={run}
+                    toolStatus={executionToolStatus(node.summary, run)}
+                    worktree={worktreeNode?.worktree}
+                    childNodes={node.children}
+                    expanded={false}
+                    viewer={viewerScope}
+                    worktreeInspect={{
+                      parentConversationId: conversationId,
+                      ...(inspectNodeId !== undefined ? { nodeId: inspectNodeId } : {}),
+                    }}
+                  />
+                </div>
+              )
+            }
+
+            return null
           })}
         </div>
       )}
@@ -214,8 +234,10 @@ function ExternalSubagentWorkbenchCard({
   run: WorkflowRunSummary
   viewer: { conversationId: number; ownedBy?: string } | undefined
 }): ReactNode {
-  const worktree = run.nodes?.find((n) => n.worktree !== undefined)?.worktree
-  const executionId = run.nodes?.find((n) => n.executionId !== undefined)?.executionId
+  const worktreeNode = run.nodes?.find((n) => n.worktree !== undefined)
+  const execNode = run.nodes?.find((n) => n.executionId !== undefined || n.nodeId !== undefined || n.effectiveCwd !== undefined)
+  const worktree = worktreeNode?.worktree
+  const executionId = execNode?.executionId
   const toolStatus = run.status === 'running' ? 'running' : run.status === 'completed' ? 'done' : 'error'
   const resultPretty = useMemo(() => stringifyPretty(run.result), [run.result])
 
@@ -226,6 +248,8 @@ function ExternalSubagentWorkbenchCard({
         worktree={worktree}
         toolStatus={toolStatus}
         executionId={executionId}
+        nodeId={execNode?.nodeId ?? worktreeNode?.nodeId}
+        effectiveCwd={execNode?.effectiveCwd}
         viewer={viewer}
       />
       {run.status === 'completed' && run.result !== undefined ? (
@@ -247,6 +271,7 @@ function ExternalSubagentWorkbenchCard({
             branch: worktree.branch,
             ...(worktree.id !== undefined && worktree.id !== '' ? { id: worktree.id } : {}),
           }}
+          nodeId={worktreeNode?.nodeId}
           baseCommit={worktree.baseCommit}
           taskLabel={run.name}
           parentConversationId={run.conversationId}

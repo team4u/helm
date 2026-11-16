@@ -168,6 +168,7 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
   const ctx = usePluginContext()
   const [cleaning, setCleaning] = useState(false)
   const rows: Array<[string, string]> = []
+  if (node.startedAt !== undefined) rows.push(['开始时间', formatCompactTimestamp(node.startedAt)])
   if (node.agentType !== undefined) rows.push(['执行后端', node.agentType])
   if (node.executionId !== undefined) rows.push(['外部执行', node.executionId])
   if (node.nodeId !== undefined) rows.push(['执行节点', node.nodeId])
@@ -184,16 +185,10 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
     <div className="workflow-node-detail">
       {rows.length > 0 ? (
         <div className="kv-grid">
-        {node.startedAt !== undefined ? (
-          <>
-            <span className="kv-key">开始时间</span>
-            <span className="kv-val tabular-nums">{formatCompactTimestamp(node.startedAt)}</span>
-          </>
-        ) : null}
           {rows.map(([k, v]) => (
             <span key={k} style={{ display: 'contents' }}>
               <span className="kv-key">{k}</span>
-              <span className="kv-val mono">{v}</span>
+              <span className={`kv-val ${k === '开始时间' ? 'tabular-nums' : 'mono'}`}>{v}</span>
             </span>
           ))}
         </div>

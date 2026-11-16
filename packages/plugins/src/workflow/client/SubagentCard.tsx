@@ -219,7 +219,10 @@ export function SubagentLiveCard(props: {
       {props.expanded === true && streamLines.length > 0 ? (
         <SubagentStream lines={streamLines} followRef={stream.ref} onScroll={stream.onScroll} />
       ) : null}
-      {props.expanded === true ? (
+      {props.expanded === true &&
+      (props.callDetails !== undefined
+        ? props.callDetails.input !== undefined || props.callDetails.result !== undefined || props.callDetails.artifactRef !== undefined
+        : toolSummary?.prompt !== undefined || toolSummary?.resultText !== undefined) ? (
         <ToolCallDetailsInline
           input={props.callDetails !== undefined ? props.callDetails.input : toolSummary?.prompt}
           result={props.callDetails !== undefined ? props.callDetails.result : toolSummary?.resultText}

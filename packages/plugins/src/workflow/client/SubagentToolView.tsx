@@ -1,8 +1,9 @@
 /**
  * builtin:workflow subagent 工具调用时间线单行渲染器：
  * - 与宿主 TimelineRows.tsx 的 26px `.trace-row` 同构，不在主时间线堆叠大卡片。
- * - 原生子会话点击直达右侧 ConversationDrawer；外部 CLI/托管运行点击定位右边栏工作台对应 run.id；
- *   未落库前置失败可原地展开参数与错误详情。
+ * - 校验 `isLatestSubagentCallForTarget` 续接去重：仅最新调用响应在途状态与 `useToolActivity`，
+ *   历史被后续 `resume` 接替的调用保持自身终态并标示「已在下文续接」。
+ * - AskDoc 待审批事实优先于 `working`，避免子会话卡在等待授权时误标「执行中」。
  * - 后台子代理派发句柄在途阶段绝不将 ~34ms 派发确认耗时当成子会话总耗时展示。
  */
 import { useId, useMemo, useState } from 'react'
@@ -22,6 +23,7 @@ import { Icon } from './WorkflowIcon.tsx'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import {
   cleanInlineMarkdown,
+  isLatestSubagentCallForTarget,
   latestTurnStartedAt,
   parentToolSummaryOf,
   parseSubagentExecutionInfo,
@@ -32,6 +34,7 @@ import {
   resolveSubagentTaskTitle,
   subagentBadge,
 } from './models.ts'
+import type { SubagentBadge } from './models.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 
 export function SubagentToolView(props: ToolViewProps): ReactNode {
@@ -77,25 +80,69 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
     return undefined
   }, [execMeta?.run, execInfo?.runId, runs])
 
+  const isLatest = useMemo(
+    () =>
+      viewerConversationId === undefined
+        ? true
+        : isLatestSubagentCallForTarget(
+            {
+              callId: props.callId,
+              input: props.input,
+              result: props.result,
+              siblingCalls: props.siblingCalls,
+              conversationId: viewerConversationId,
+            },
+            childId,
+            conversations,
+            execMeta?.executionId ?? execInfo?.executionId,
+          ),
+    [
+      props.callId,
+      props.input,
+      props.result,
+      props.siblingCalls,
+      viewerConversationId,
+      childId,
+      conversations,
+      execMeta?.executionId,
+      execInfo?.executionId,
+    ],
+  )
+
   const isBgHandle = execInfo?.background === true && execInfo.runId !== undefined
   const handleStatus = execInfo?.status
   const [detailsOpen, setDetailsOpen] = useState(false)
   const detailsId = useId()
 
-  const isRunning =
-    props.status === 'running' ||
-    childSummary?.status === 'working' ||
-    childSummary?.status === 'blocked' ||
-    backgroundRun?.status === 'running' ||
-    (isBgHandle && backgroundRun === undefined && (handleStatus === 'running' || handleStatus === 'blocked'))
+  const hasPendingAsk =
+    isLatest && (childConv.pendingAsks.length > 0 || (childSummary?.pendingAskCount ?? 0) > 0)
 
-  useToolActivity(props.callId, isRunning)
-  const nowMs = useElapsedNowMs(isRunning)
+  const badge: SubagentBadge = hasPendingAsk
+    ? { status: 'blocked', label: '等待审批', badge: 'badge-warn' }
+    : isLatest
+      ? subagentBadge(childSummary?.status, props.status, backgroundRun, {
+          isBackgroundHandle: isBgHandle,
+          handleStatus,
+        })
+      : subagentBadge(undefined, props.status)
 
-  const badge = subagentBadge(childSummary?.status, props.status, backgroundRun, {
-    isBackgroundHandle: isBgHandle,
-    handleStatus,
-  })
+  const isWorking =
+    isLatest &&
+    !hasPendingAsk &&
+    (props.status === 'running' ||
+      childSummary?.status === 'working' ||
+      backgroundRun?.status === 'running' ||
+      (isBgHandle && backgroundRun === undefined && handleStatus === 'running'))
+
+  const isActiveForActivity =
+    isLatest &&
+    (isWorking ||
+      hasPendingAsk ||
+      childSummary?.status === 'blocked' ||
+      (isBgHandle && backgroundRun === undefined && handleStatus === 'blocked'))
+
+  useToolActivity(props.callId, isActiveForActivity)
+  const nowMs = useElapsedNowMs(isWorking || hasPendingAsk)
 
   const rawPrompt =
     parentToolSummary.prompt ??
@@ -113,6 +160,9 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
 
   const fallbackStartedAt = parentToolSummary.startedAt ?? latestTurnStartedAt(childConv.detail?.entries)
   const elapsedMs = useMemo(() => {
+    if (!isLatest) {
+      return isBgHandle ? undefined : props.durationMs
+    }
     if (childId !== undefined) {
       return resolveSubagentElapsedMs({
         ...(backgroundRun !== undefined ? { backgroundRun } : {}),
@@ -131,6 +181,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
     }
     return props.durationMs
   }, [
+    isLatest,
     childId,
     backgroundRun,
     parentToolSummary,
@@ -144,10 +195,9 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   ])
 
   const isError =
+    badge.status === 'error' ||
     props.status === 'error' ||
-    backgroundRun?.status === 'failed' ||
-    backgroundRun?.status === 'aborted' ||
-    childSummary?.status === 'error'
+    (isLatest && (backgroundRun?.status === 'failed' || backgroundRun?.status === 'aborted' || childSummary?.status === 'error'))
 
   const targetWorkbenchRunId = backgroundRun?.id ?? execInfo?.runId
   const canOpenChildDrawer = childId !== undefined
@@ -155,11 +205,12 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
   const hasErrorText = props.status === 'error' && resultText !== undefined && resultText.trim() !== ''
 
   const baseTitle = taskTitle ?? '子代理调用'
-  const displaySummary = hasErrorText && resultText !== undefined
-    ? `${baseTitle} · ${cleanInlineMarkdown(resultText.split(/\r?\n/, 1)[0] ?? '')}`
-    : execMeta?.nodeId !== undefined
-      ? `${execMeta.nodeId} · ${baseTitle}`
-      : baseTitle
+  const displaySummary =
+    hasErrorText && resultText !== undefined
+      ? `${baseTitle} · ${cleanInlineMarkdown(resultText.split(/\r?\n/, 1)[0] ?? '')}`
+      : execMeta?.nodeId !== undefined
+        ? `${execMeta.nodeId} · ${baseTitle}`
+        : baseTitle
 
   const handleActivate = (): void => {
     if (canOpenChildDrawer && childId !== undefined) {
@@ -183,6 +234,11 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
         : '展开子代理调用详情'
 
   const toolName = childId !== undefined ? `子代理 #${childId}` : execMeta?.executionId !== undefined ? '外部代理' : '子代理'
+  const profileBadge =
+    childId !== undefined && childSummary?.profileId !== undefined && childSummary.profileId !== ''
+      ? `@${childSummary.profileId}`
+      : undefined
+  const worktreeBranch = execMeta?.worktree?.branch
 
   return (
     <div className="trace-entry">
@@ -195,13 +251,29 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
         onClick={handleActivate}
       >
         <span className="trace-row-left">
-          <Icon name={isError ? 'alert-circle' : isRunning ? 'loader' : 'bot'} size={12} className={isRunning ? SPIN : undefined} />
+          <Icon
+            name={isError ? 'alert-circle' : hasPendingAsk ? 'clock' : isWorking ? 'loader' : 'bot'}
+            size={12}
+            className={isWorking ? SPIN : undefined}
+          />
           <span className="trace-tool-name">{toolName}</span>
+          {profileBadge !== undefined ? (
+            <span className="badge badge-neutral workflow-trace-badge">{profileBadge}</span>
+          ) : null}
           <span className={`trace-tool-summary${isError ? ' workflow-trace-error' : ''}`} title={displaySummary}>
             {displaySummary}
           </span>
         </span>
         <span className="trace-row-right workflow-trace-right">
+          {!isLatest ? (
+            <span className="badge badge-neutral workflow-trace-badge">已在下文续接</span>
+          ) : null}
+          {worktreeBranch !== undefined ? (
+            <span className="badge badge-neutral workflow-trace-badge" title={execMeta?.worktree?.path}>
+              <Icon name="git-branch" size={10} />
+              {worktreeBranch}
+            </span>
+          ) : null}
           <span className={`badge workflow-trace-badge ${badge.badge}`}>{badge.label}</span>
           {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
           <Icon

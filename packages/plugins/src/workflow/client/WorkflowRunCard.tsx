@@ -87,13 +87,14 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   )
   const subtree = useMemo(() => aggregateExecutionNodes(childNodes), [childNodes])
   const effectiveStatus = run !== undefined ? effectiveRunNodeStatus(run, subtree) : undefined
+  const toolActive = run !== undefined ? run.status === 'running' : props.status === 'running'
   const isRunning =
     run !== undefined
       ? run.status === 'running' || effectiveStatus === 'working' || effectiveStatus === 'blocked'
       : props.status === 'running'
 
-  useToolActivity(props.callId, isRunning)
-  const nowMs = useElapsedNowMs(isRunning)
+  useToolActivity(props.callId, toolActive)
+  const nowMs = useElapsedNowMs(toolActive)
   const resultText = typeof props.result === 'string' ? props.result : undefined
   const isBgHandle = run === undefined && isBackgroundWorkflowResultHandle(resultText)
 

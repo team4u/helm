@@ -24,7 +24,13 @@ import { after, before, describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { CLIENT_SHARED_GLOBALS, compilePluginClientModule } from '@helm/plugin-build'
-import { PLUGIN_CLIENT_CSS_EXPORT, type ConversationDetail, type ConversationEntry, type ConversationSummary } from '@helm/protocol'
+import {
+  PLUGIN_CLIENT_CSS_EXPORT,
+  type AskSpec,
+  type ConversationDetail,
+  type ConversationEntry,
+  type ConversationSummary,
+} from '@helm/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 
 GlobalRegistrator.register()
@@ -88,6 +94,7 @@ interface HostStubLog {
   workbenchOpens: boolean[]
   screens: string[]
   notices: Array<{ message: string; tone: string }>
+  activeToolCallIds: Set<string>
 }
 
 function createConv(overrides: Partial<ConversationSummary> & { id: number }): ConversationSummary {
@@ -115,9 +122,11 @@ function createHostHarness(init: {
   conversationId: number
   conversations?: ConversationSummary[]
   conversationDetails?: Record<number, ConversationDetail>
+  pendingAsks?: AskSpec[]
   runsByConversation?: Record<number, WorkflowRunSummary[]>
   pluginDocs?: Record<string, unknown>
 }) {
+  const activeToolCallIds = new Set<string>()
   const log: HostStubLog = {
     actions: [],
     drawers: [],
@@ -125,6 +134,7 @@ function createHostHarness(init: {
     workbenchOpens: [],
     screens: [],
     notices: [],
+    activeToolCallIds,
   }
   const conversations = init.conversations ?? [createConv({ id: init.conversationId, ownedBy: 'human' })]
   const sessionRuns = new Map<number, WorkflowRunSummary[]>()
@@ -152,7 +162,7 @@ function createHostHarness(init: {
     conversations,
     conversationDetails: init.conversationDetails ?? {},
     conversationLives: {},
-    pendingAsks: [],
+    pendingAsks: init.pendingAsks ?? [],
     loadErrors: {},
     plugins: [],
     screens: [],
@@ -206,6 +216,15 @@ function createHostHarness(init: {
   }
 
   const ctx = SDK.createPluginClientContext(port, 'builtin:workflow', init.conversationId)
+  const toolActivityRegistry: import('../../plugin-client/src/index.js').ToolActivityRegistry = {
+    activeToolCallIds,
+    registerActivity: (callId) => {
+      activeToolCallIds.add(callId)
+      return () => {
+        activeToolCallIds.delete(callId)
+      }
+    },
+  }
 
   const mountNode = (node: React.ReactNode) => {
     const container = document.createElement('div')
@@ -216,7 +235,11 @@ function createHostHarness(init: {
         e(
           SDK.PluginClientHostContext.Provider,
           { value: port },
-          e(SDK.PluginClientContext.Provider, { value: ctx }, node),
+          e(
+            SDK.PluginClientContext.Provider,
+            { value: ctx },
+            e(SDK.ToolActivityContext.Provider, { value: toolActivityRegistry }, node),
+          ),
         ),
       )
     })
@@ -764,6 +787,264 @@ describe('Workflow 三区零重复与无损呈现', () => {
           assert.ok(ok, `${file} 违反 Fast Refresh 仅导出组件/类型约定: ${line}`)
         }
       }
+    }
+  })
+
+  test('审校回归：WorkflowWorkbenchPanel 执行树去重/外部运行/深层后代隔离/Worktree 检视/父 idle+子 running 自身已完成', { timeout: 60_000 }, () => {
+    const bgChild = createConv({
+      id: 35,
+      parentConversationId: 1,
+      parentToolCallId: 'call_bg_35',
+      status: 'idle',
+      title: '后台原生子代理',
+      nodeId: 'local',
+      cwd: '/repo/wt-35',
+    })
+    const grandChild = createConv({
+      id: 36,
+      parentConversationId: 35,
+      status: 'working',
+      title: '孙子任务 36',
+    })
+    const bgSubagentRun: WorkflowRunSummary = {
+      id: 'wf_bg_native_35',
+      name: '后台原生子代理 run',
+      conversationId: 1,
+      parentToolCallId: 'call_bg_35',
+      status: 'completed',
+      kind: 'subagent',
+      createdAt: 1_700_000_100_000,
+      updatedAt: 1_700_000_105_000,
+      nodes: [
+        {
+          id: 'agent',
+          label: '子代理执行',
+          kind: 'agent',
+          status: 'done',
+          conversationId: 35,
+          nodeId: 'local',
+          worktree: { path: '/tmp/wt-35', branch: 'feat/wt-35', id: 'wt-35', baseCommit: 'd47c2aaed' },
+        },
+      ],
+    }
+    const extWithNodesRun: WorkflowRunSummary = {
+      id: 'wf_ext_nodes',
+      name: '外部 Codex 节点 run',
+      conversationId: 1,
+      status: 'completed',
+      kind: 'subagent',
+      createdAt: 1_700_000_110_000,
+      updatedAt: 1_700_000_120_000,
+      nodes: [
+        {
+          id: 'codex-1',
+          label: 'Codex CLI',
+          kind: 'agent',
+          status: 'done',
+          executionId: 'pane-42',
+          nodeId: 'remote-x',
+          effectiveCwd: '/srv/ext',
+          worktree: { path: '/tmp/wt-ext', branch: 'feat/ext', id: 'wt-ext', baseCommit: 'd47c2aaed' },
+        },
+      ],
+    }
+    const grandchildWorkflowRun: WorkflowRunSummary = {
+      id: 'wf_grandchild',
+      name: '后代会话私有工作流',
+      conversationId: 35,
+      status: 'running',
+      kind: 'workflow',
+      createdAt: 1_700_000_130_000,
+      updatedAt: 1_700_000_135_000,
+      nodes: [{ id: 'g1', label: '后代步骤', kind: 'action', status: 'running' }],
+    }
+    const startedOnlyWorkflow: WorkflowRunSummary = {
+      id: 'wf_started_only',
+      name: '仅含开始时间节点的工作流',
+      conversationId: 1,
+      status: 'running',
+      kind: 'workflow',
+      createdAt: 1_700_000_140_000,
+      updatedAt: 1_700_000_141_000,
+      nodes: [{ id: 'only-ts', label: '仅时间节点', kind: 'action', status: 'running', startedAt: 1_700_000_140_500 }],
+    }
+
+    const harness = createHostHarness({
+      conversationId: 1,
+      conversations: [createConv({ id: 1 }), bgChild, grandChild],
+      runsByConversation: { 1: [bgSubagentRun, extWithNodesRun, grandchildWorkflowRun, startedOnlyWorkflow] },
+    })
+
+    const wbMount = harness.mountNode(e(mod.WorkflowWorkbenchPanel, {}))
+    try {
+      const rootWraps = [...wbMount.container.querySelectorAll('.workflow-workbench-list > .workflow-workbench-run-wrap')]
+      assert.equal(rootWraps.length, 3, '仅渲染 3 个一级节点（后台子代理/外部执行/当前工作流），后代 wf_grandchild 严禁平铺到顶层')
+      assert.equal(
+        wbMount.container.querySelector('.workflow-workbench-head .badge-neutral')?.textContent,
+        '3',
+        '顶栏任务计数必须按 tree.length 统计而非双计',
+      )
+
+      // 1. 后台原生子代理仅渲染 1 张 SubagentLiveCard（无重复 workflow-run-card），且保留 WorktreeInspectSection 与「自身已完成」
+      const bgWrap = wbMount.container.querySelector('[data-run-id="wf_bg_native_35"]')
+      assert.ok(bgWrap !== null)
+      assert.equal(bgWrap.querySelectorAll('.subagent-live-card').length, 1, '后台原生子代理仅渲染 1 张子代理卡')
+      assert.equal(bgWrap.querySelector('.workflow-run-card'), null, '不得重复渲染 WorkflowRunCardBody')
+      assert.equal(bgWrap.querySelector('details'), null, '无 callDetails 时不得渲染空 <details> 调用详情')
+      assert.ok(bgWrap.querySelector('.worktree-inspect') !== null, '工作台子代理卡必须保留 WorktreeInspectSection')
+      assert.ok(bgWrap.textContent?.includes('feat/wt-35'))
+      assert.ok(bgWrap.textContent?.includes('自身已完成'), '父 idle + 子 running 时必须显示「自身已完成」而非「自身执行中」')
+
+      // 2. 有 nodes 明细的外部代理 run 走 ExternalRunSummary，不误渲染 WorkflowRunCardBody
+      const extWrap = wbMount.container.querySelector('[data-run-id="wf_ext_nodes"]')
+      assert.ok(extWrap !== null)
+      assert.ok(extWrap.querySelector('.subagent-external-card') !== null, '有节点的外部 run 必须走 ExternalRunSummary')
+      assert.equal(extWrap.querySelector('.workflow-run-card'), null)
+      assert.ok(extWrap.textContent?.includes('pane-42'))
+      assert.ok(extWrap.textContent?.includes('remote-x:/srv/ext'))
+      assert.ok(extWrap.querySelector('.worktree-inspect') !== null, '外部 run 也应保留 WorktreeInspectSection')
+
+      // 3. 深层后代 wf_grandchild 不得在根工作台平铺出现
+      assert.equal(wbMount.container.querySelector('[data-run-id="wf_grandchild"]'), null, '深层后代 run 严禁越层平铺')
+
+      // 4. 仅含 startedAt 的节点明细不被 rows.length > 0 吞掉
+      const tsWrap = wbMount.container.querySelector('[data-run-id="wf_started_only"]')
+      assert.ok(tsWrap !== null)
+      assert.ok(tsWrap.textContent?.includes('开始时间'), '仅含 startedAt 时仍应渲染开始时间键值行')
+    } finally {
+      wbMount.unmount()
+    }
+  })
+
+  test('审校回归：SubagentToolView 续接去重 + AskDoc 审批优先 + @profile/分支徽章 + WorkflowToolView 终态释放活动', { timeout: 60_000 }, () => {
+    const childAskConv = createConv({
+      id: 50,
+      parentConversationId: 1,
+      parentToolCallId: 'call_old_50',
+      profileId: 'coder',
+      status: 'working',
+      pendingAskCount: 1,
+      title: '子代理 50',
+    })
+    const settledWithLiveChildRun: WorkflowRunSummary = {
+      id: 'wf_settled_child_live',
+      name: '已结算主流程',
+      conversationId: 1,
+      parentToolCallId: 'call_wf_done',
+      status: 'completed',
+      kind: 'workflow',
+      createdAt: 1_700_000_200_000,
+      updatedAt: 1_700_000_210_000,
+      nodes: [
+        { id: 'c1', label: '后台子节点', kind: 'agent', status: 'done', conversationId: 50 },
+      ],
+    }
+    const pendingAsk: AskSpec = {
+      id: 'ask_50',
+      conversationId: 50,
+      expectedStateSeq: 1,
+      kind: 'confirm',
+      title: '确认执行危险命令',
+      body: 'confirm?',
+      options: [{ id: 'yes', label: '允许' }],
+      createdAt: 1_700_000_205_000,
+    }
+    const oldResult = JSON.stringify({ ok: true, execution: { conversationId: 50 } })
+    const newResult = JSON.stringify({
+      ok: true,
+      execution: {
+        conversationId: 50,
+        worktree: { path: '/tmp/wt-50', branch: 'feat/sub-wt' },
+      },
+    })
+    const siblingCalls = [
+      {
+        callId: 'call_old_50',
+        toolName: 'subagent',
+        input: { prompt: '首次执行' },
+        status: 'done' as const,
+        result: oldResult,
+      },
+      {
+        callId: 'call_new_50',
+        toolName: 'subagent',
+        input: { resume: 50, prompt: '继续执行' },
+        status: 'running' as const,
+        result: newResult,
+      },
+    ]
+
+    const harness = createHostHarness({
+      conversationId: 1,
+      conversations: [createConv({ id: 1 }), childAskConv],
+      pendingAsks: [pendingAsk],
+      runsByConversation: { 1: [settledWithLiveChildRun] },
+    })
+
+    // 1. 历史被续接的旧调用：保持已完成，标「已在下文续接」，绝不注册活动
+    const oldMount = harness.mountNode(
+      e(mod.SubagentToolView, {
+        callId: 'call_old_50',
+        toolName: 'subagent',
+        input: { prompt: '首次执行' },
+        status: 'done',
+        result: oldResult,
+        durationMs: 1200,
+        conversationId: 1,
+        siblingCalls,
+      }),
+    )
+    try {
+      const text = oldMount.container.textContent ?? ''
+      assert.ok(text.includes('已在下文续接'), '被后续 resume 接替的历史调用应标注「已在下文续接」')
+      assert.ok(text.includes('已完成'), '被接替的旧调用应保持自身终态而非随新调用变更为执行中/等待审批')
+      assert.equal(harness.log.activeToolCallIds.has('call_old_50'), false, '历史被续接调用不得再上报 useToolActivity')
+    } finally {
+      oldMount.unmount()
+    }
+
+    // 2. 最新调用：pendingAsk 优先于 working 显示「等待审批」，展示 @profileId 与 worktree 分支
+    const newMount = harness.mountNode(
+      e(mod.SubagentToolView, {
+        callId: 'call_new_50',
+        toolName: 'subagent',
+        input: { resume: 50, prompt: '继续执行' },
+        status: 'running',
+        result: newResult,
+        conversationId: 1,
+        siblingCalls,
+      }),
+    )
+    try {
+      const text = newMount.container.textContent ?? ''
+      assert.ok(text.includes('等待审批'), '有待审批 AskDoc 时即使 childSummary.status=working 也必须优先显示「等待审批」')
+      assert.equal(text.includes('执行中'), false)
+      assert.ok(text.includes('@coder'), '原生子代理行应展示 @profileId 胶囊')
+      assert.ok(text.includes('feat/sub-wt'), '携带 worktree 时应展示紧凑分支徽章')
+      assert.equal(harness.log.activeToolCallIds.has('call_new_50'), true)
+    } finally {
+      newMount.unmount()
+    }
+
+    // 3. WorkflowToolView：run.status 终态后即使子会话仍在工作，useToolActivity 也必须释放
+    const wfDoneMount = harness.mountNode(
+      e(mod.WorkflowToolView, {
+        callId: 'call_wf_done',
+        toolName: 'SubagentWorkflow',
+        input: { name: '已结算主流程' },
+        status: 'done',
+        result: JSON.stringify({ runId: 'wf_settled_child_live' }),
+        conversationId: 1,
+      }),
+    )
+    try {
+      assert.equal(
+        harness.log.activeToolCallIds.has('call_wf_done'),
+        false,
+        'run.status 为终态后即使后代仍在跑，WorkflowToolView 的 useToolActivity 也必须释放',
+      )
+    } finally {
+      wfDoneMount.unmount()
     }
   })
 })
