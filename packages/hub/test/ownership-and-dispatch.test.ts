@@ -272,7 +272,7 @@ test('ownership4: since has self define Profile/Skill one by one byte keep; only
       join(env.dataDir, 'skills', 'watchdog-playbooks', 'references', 'herdr-stalled.md'),
       'utf8',
     )
-    assert.match(herdrRef, /Herdr 终端窗格停滞处置/)
+    assert.match(herdrRef, /Handling Stalled Herdr Terminal Panes/)
     // all new write watchdog Profile carry new template field (managedByPlugin + humanSelectable=false)
     const watchdogJson = JSON.parse(
       readFileSync(join(env.dataDir, 'profiles', 'watchdog', 'profile.json'), 'utf8'),

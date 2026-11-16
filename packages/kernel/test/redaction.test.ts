@@ -21,7 +21,7 @@ test('structure output reject loop, non- JSON data and redaction after field con
   for (const value of [cyclic, { value: undefined }, [NaN], new Map(), Array(1)]) {
     assert.throws(() => redactJsonValue(value, (text) => text))
   }
-  assert.throws(() => redactJsonValue({ first: 1, second: 2 }, () => 'same'), /冲突/)
+  assert.throws(() => redactJsonValue({ first: 1, second: 2 }, () => 'same'), /Redacted output fields collide/)
 })
 
 test('stream redaction override secret across chunked, overlap before suffix and old fixed cut point', { timeout: 60_000 }, () => {

@@ -123,7 +123,7 @@ test('LocalExecutionEnv win32 exec: without symbol POSIX  cwd explicit failed, d
   if (!r.ok) {
     assert.equal(r.error.code, 'spawn_error');
     assert.ok(r.error.message.includes('/home/user'), 'diagnose must keep original options.cwd');
-    assert.ok(r.error.message.includes('无法确定'), 'diagnose must carry protocol unmappable_posix_root reason');
+    assert.ok(r.error.message.includes('cannot determine a Windows drive correspondence'), 'diagnose must carry protocol unmappable_posix_root reason');
   }
 });
 

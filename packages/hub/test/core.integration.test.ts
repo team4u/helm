@@ -640,7 +640,7 @@ test('collection into2.7: Profile skills blank name single - - double Profile di
     // ② blank name single outside (in directory in but do not in profile.skills)→ 403 skill_not_available
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'beta-guide' }, { conversationId: convWhite.id }),
-      { code: 'skill_not_available', message: /不可用/ },
+      { code: 'skill_not_available', message: /is unavailable for profile/ },
     )
 
     // ③ [] Profile: directory do not inject + all skill reject (contains helm-cli inside placement skill)
@@ -655,11 +655,11 @@ test('collection into2.7: Profile skills blank name single - - double Profile di
     }
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'alpha-guide' }, { conversationId: convNone.id }),
-      { code: 'skill_not_available', message: /不可用/ },
+      { code: 'skill_not_available', message: /is unavailable for profile/ },
     )
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'helm-cli' }, { conversationId: convNone.id }),
-      { code: 'skill_not_available', message: /不可用/ },
+      { code: 'skill_not_available', message: /is unavailable for profile/ },
     )
 
     // ④ by default assistant Profile(default): all available skill inject (contains helm-cli and blank name single outside beta)
@@ -693,7 +693,7 @@ test('collection into2.7: Profile skills blank name single - - double Profile di
     await kernel.profiles.save({ id: 'white-profile', name: 'blank name single', tags: [], skills: ['alpha-guide', 'managed-guide'] })
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'managed-guide' }, { conversationId: convWhite.id }),
-      { code: 'skill_not_available', message: /不可用|已停用/ },
+      { code: 'skill_not_available', message: /is unavailable for profile|is disabled/ },
     )
     // enable plugin after the same skill i.e. when can read (enabledPluginIds same turn heavy read)
     await host.enable('builtin:superagent')
@@ -717,7 +717,7 @@ test('collection into2.7: Profile skills blank name single - - double Profile di
     await host.disable('builtin:superagent')
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'managed-guide' }, { conversationId: convWhite.id }),
-      { code: 'skill_not_available', message: /不可用|已停用/ },
+      { code: 'skill_not_available', message: /is unavailable for profile|is disabled/ },
     )
 
     // ⑦ runtime modify Profile(change blank name single) under one turn takes effect: blank name single clean into [] after directory disappear
@@ -734,7 +734,7 @@ test('collection into2.7: Profile skills blank name single - - double Profile di
     // ⑧ unknown skill 404(without leaking content); blank name single inside but not installed → 404 same
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'no-such-skill' }, { conversationId: convWhite.id }),
-      { code: 'not_found', message: /缺失|no-such-skill/ },
+      { code: 'not_found', message: /missing|no-such-skill/ },
     )
   } finally {
     await env.close()
