@@ -225,6 +225,7 @@ function makeFakeIsolation(options: FakeIsolationOptions = {}): FakeIsolationHan
           matchedTotal: 0,
           processesTruncated: false,
           complete: true,
+          unobservable: 0,
           diagnostics: [],
         }),
         getConversation: () => ({ cwd: gatedPath ?? '/repo', nodeId: 'local', status: 'idle' }),

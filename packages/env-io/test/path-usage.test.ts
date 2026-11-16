@@ -3,9 +3,10 @@
  *
  * 覆盖：cwd/fd 命中与子目录、路径分量边界（/a 不匹配 /ab）、(deleted) 后缀、
  * realpath 第二匹配基、ENOENT/ESRCH 退出竞态忽略、EACCES/EPERM 可见
- * （complete=false + diagnostics 含 uid）、扫描上限（complete=false）、
- * 报告截断（matchedTotal 真值）、平台 not_supported、非法路径拒绝、
- * abort 取消、/proc 不可列举。
+ * （complete=false + diagnostics 含 uid）、scannerUid 分治（跨 uid 结构性
+ * 盲区 unobservable 计数且 complete=true；同 uid 被拒 / scannerUid 缺省仍
+ * complete=false）、扫描上限（complete=false）、报告截断（matchedTotal
+ * 真值）、平台 not_supported、非法路径拒绝、abort 取消、/proc 不可列举。
  */
 
 import { describe, it } from 'node:test'
@@ -14,14 +15,14 @@ import { scanPathUsage, validatePosixScanPath, type PathUsageIo } from '../src/i
 
 interface Fixture {
   /** procRoot 下的目录名列表（数字为 PID）。 */
-  pids: Record<string, { cwd?: string | Error; fds?: Record<string, string | Error> | Error; comm?: string | Error; gone?: boolean }>
+  pids: Record<string, { cwd?: string | Error; fds?: Record<string, string | Error> | Error; comm?: string | Error; gone?: boolean; uid?: number }>
 }
 
 function err(code: string, message = code): Error {
   return Object.assign(new Error(message), { code })
 }
 
-/** fixture io：按 Fixture 表解析 readlink/readdir/readFile；stat 固定 uid；realpath 走映射表。 */
+/** fixture io：按 Fixture 表解析 readlink/readdir/readFile；stat 返回每 PID uid（缺省 statUid）；realpath 走映射表。 */
 function makeIo(fixture: Fixture, realpaths: Record<string, string> = {}, statUid = 1000): PathUsageIo {
   const io: PathUsageIo = {
     async readlink(p) {
@@ -61,7 +62,7 @@ function makeIo(fixture: Fixture, realpaths: Record<string, string> = {}, statUi
       if (pid === undefined) throw err('ENOENT')
       // gone: true 模拟「读取时被拒、复核时已证实退出」（stat ENOENT）。
       if (pid.gone === true) throw err('ENOENT')
-      return { uid: statUid }
+      return { uid: pid.uid ?? statUid }
     },
     async readFile(p) {
       const m = /^\/proc\/(\d+)\/comm$/.exec(p)
@@ -164,7 +165,7 @@ describe('scanPathUsage（注入 io）', { timeout: 60_000 }, () => {
     assert.deepEqual(r.value.diagnostics, [])
   })
 
-  it('EACCES/EPERM 可见：complete=false，diagnostics 含 pid 与 uid', { timeout: 60_000 }, async () => {
+  it('EACCES/EPERM 可见（scannerUid 缺省）：complete=false，diagnostics 含 pid 与 uid', { timeout: 60_000 }, async () => {
     const io = makeIo({
       pids: {
         '60': { cwd: err('EACCES', 'denied') },
@@ -175,19 +176,76 @@ describe('scanPathUsage（注入 io）', { timeout: 60_000 }, () => {
     const r = await scanPathUsage('/wt', { io, platform: 'linux' })
     assert.equal(r.ok, true)
     if (!r.ok) return
-    assert.equal(r.value.complete, false)
+    assert.equal(r.value.complete, false, 'scannerUid 缺省：一切持久拒绝都算异常（fail-closed）')
+    assert.equal(r.value.unobservable, 0)
     assert.equal(r.value.diagnostics.length, 2)
     assert.ok(r.value.diagnostics.some((d) => d.includes('pid 60') && d.includes('uid 1000') && d.includes('EACCES')), String(r.value.diagnostics))
     assert.ok(r.value.diagnostics.some((d) => d.includes('pid 62') && d.includes('fd')))
   })
 
-  it('同一 PID 的 cwd 与 fd 双拒只记一条诊断', { timeout: 60_000 }, async () => {
-    const io = makeIo({ pids: { '70': { cwd: err('EPERM'), fds: undefined } } })
-    const r = await scanPathUsage('/wt', { io, platform: 'linux' })
+  it('scannerUid 注入 + 跨 uid 被拒：结构性盲区 unobservable 计数，complete=true，诊断如实呈现', { timeout: 60_000 }, async () => {
+    const io = makeIo({
+      pids: {
+        '63': { cwd: err('EACCES', 'denied'), uid: 0 }, // 跨 uid（root 属主，扫描方 1000）
+        '64': { cwd: '/safe', fds: undefined, uid: 0 }, // 跨 uid：fd 目录拒读
+        '65': { cwd: '/safe', fds: {}, uid: 1000 }, // 同 uid 正常
+      },
+    })
+    const r = await scanPathUsage('/wt', { io, platform: 'linux', scannerUid: 1000 })
     assert.equal(r.ok, true)
     if (!r.ok) return
-    assert.equal(r.value.complete, false)
-    assert.equal(r.value.diagnostics.filter((d) => d.includes('pid 70')).length, 1)
+    assert.equal(r.value.complete, true, '跨 uid 拒读是结构性盲区，不计入完整性判定')
+    assert.equal(r.value.unobservable, 2)
+    assert.equal(r.value.matchedTotal, 0)
+    assert.ok(
+      r.value.diagnostics.some((d) => d.includes('pid 63') && d.includes('uid 0') && d.includes('跨用户') && d.includes('EACCES')),
+      String(r.value.diagnostics),
+    )
+    assert.ok(r.value.diagnostics.some((d) => d.includes('pid 64') && d.includes('fd') && d.includes('不可观测')), String(r.value.diagnostics))
+  })
+
+  it('同 uid 被拒（scannerUid 注入）：仍 complete=false（fail-closed，不因盲区分治放松）', { timeout: 60_000 }, async () => {
+    const io = makeIo({ pids: { '66': { cwd: err('EACCES', 'denied'), uid: 1000 } } })
+    const r = await scanPathUsage('/wt', { io, platform: 'linux', scannerUid: 1000 })
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    assert.equal(r.value.complete, false, '同 uid 被拒是扫描异常而非盲区')
+    assert.equal(r.value.unobservable, 0)
+    assert.ok(r.value.diagnostics.some((d) => d.includes('pid 66') && d.includes('该进程占用情况未知')), String(r.value.diagnostics))
+  })
+
+  it('盲区与命中并存：matchedTotal 如实上报，盲区不吞已有证据', { timeout: 60_000 }, async () => {
+    const io = makeIo({
+      pids: {
+        '67': { cwd: '/wt/sub', fds: {}, comm: 'worker\n', uid: 1000 },
+        '68': { cwd: err('EACCES', 'denied'), uid: 0 },
+      },
+    })
+    const r = await scanPathUsage('/wt', { io, platform: 'linux', scannerUid: 1000 })
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    assert.equal(r.value.complete, true)
+    assert.equal(r.value.unobservable, 1)
+    assert.equal(r.value.matchedTotal, 1)
+    assert.equal(r.value.processes[0]!.pid, 67)
+  })
+
+  it('同一 PID 的 cwd 与 fd 双拒只记一条诊断（跨 uid 盲区同料去重计数）', { timeout: 60_000 }, async () => {
+    const io = makeIo({ pids: { '70': { cwd: err('EPERM'), fds: undefined, uid: 0 } } })
+    const denied = await scanPathUsage('/wt', { io, platform: 'linux' })
+    assert.equal(denied.ok, true)
+    if (!denied.ok) return
+    assert.equal(denied.value.complete, false)
+    assert.equal(denied.value.unobservable, 0)
+    assert.equal(denied.value.diagnostics.filter((d) => d.includes('pid 70')).length, 1)
+
+    // 同料注入 scannerUid：跨 uid 双拒只计一次 unobservable、一条诊断。
+    const blind = await scanPathUsage('/wt', { io, platform: 'linux', scannerUid: 1000 })
+    assert.equal(blind.ok, true)
+    if (!blind.ok) return
+    assert.equal(blind.value.complete, true)
+    assert.equal(blind.value.unobservable, 1)
+    assert.equal(blind.value.diagnostics.filter((d) => d.includes('pid 70')).length, 1)
   })
 
   it('扫描上限：PID 数超限时 complete=false 且诊断明示；报告截断按唯一 PID 保留真实总数', { timeout: 60_000 }, async () => {

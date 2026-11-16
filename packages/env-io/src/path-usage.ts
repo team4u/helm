@@ -11,8 +11,12 @@
  * 诚实性纪律（fail-closed）：
  * - 平台非 Linux（无 /proc 可靠语义）→ not_supported，绝不伪造结果；
  * - 进程已退出（ENOENT/ESRCH）是正常竞态，忽略；无权读取（EACCES/EPERM）
- *   与其他读取错误必须可见：complete=false + diagnostics（附属主 uid），
- *   绝不当作干净；
+ *   与其他读取错误必须可见，绝不当作干净。语义按「结构性盲区」与
+ *   「扫描异常」分治：注入 scannerUid 时，属主 uid ≠ scannerUid 的持久
+ *   拒读是 Linux DAC 跨 uid 结构性盲区（OS 能力模型如此，非扫描器异常）
+ *   ——unobservable 计数 + diagnostics 如实呈现，不置 complete=false
+ *   （绝不静默丢弃）；同 uid 被拒、scannerUid 缺省（一切拒绝都算异常）
+ *   与 stat 自身异常等仍置 complete=false（fail-closed）；
  * - 扫描 PID 上限触发 → complete=false（绝不静默漏报）；
  * - 命中清单受报告上限截断时 matchedTotal 保留真实计数；
  * - 只读取定位信息（cwd、fd 链接、comm），绝不读 cmdline/environ（机密）。
@@ -58,6 +62,13 @@ export interface ScanPathUsageOptions {
   maxReported?: number
   /** 诊断条数上限（缺省 32；超出聚合计数，不无限膨胀）。 */
   maxDiagnostics?: number
+  /**
+   * 扫描方自身 uid（process.getuid() 口径）。提供时，属主 uid 不同的 PID
+   * 持久拒读属 Linux DAC 跨 uid 结构性盲区：unobservable 计数 + 诊断，
+   * 不置 complete=false。缺省时保持旧行为——一切持久拒绝都算扫描异常
+   * 置 complete=false（fail-closed）。
+   */
+  scannerUid?: number
   signal?: AbortSignal
 }
 
@@ -207,13 +218,24 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
   let matchedTotal = 0
   let truncated = false
   const pidDenied = new Set<number>()
+  let unobservable = 0
   let scanned = 0
 
-  /** 记录盲区（fail-closed）：complete=false + 诊断（附 uid；同 PID 去重）。 */
+  /**
+   * 记录持久拒读（同 PID 去重）：跨 uid 结构性盲区（scannerUid 已注入且
+   * 属主 uid ≠ scannerUid）如实计数 unobservable + 诊断（附 uid），不计入
+   * 完整性判定；其余（同 uid 被拒、scannerUid 缺省、stat 自身异常导致
+   * uid 未知）仍 fail-closed：complete=false + 诊断。
+   */
   const recordDenied = (pid: number, what: string, uid: number | undefined, code: string): void => {
-    complete = false
     if (pidDenied.has(pid)) return
     pidDenied.add(pid)
+    if (uid !== undefined && options.scannerUid !== undefined && uid !== options.scannerUid) {
+      unobservable += 1
+      diagnostics.add(`pid ${pid} (uid ${uid}): 跨用户无权读取 ${what}（${code}），不可观测（未计入完整性判定）`)
+      return
+    }
+    complete = false
     diagnostics.add(`pid ${pid}${uid !== undefined ? ` (uid ${uid})` : ''}: 无权读取 ${what}（${code}），该进程占用情况未知`)
   }
 
@@ -236,7 +258,8 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
    * - PID 仍在 → 重读一次：成功则如实采用（瞬时错误不算盲区）；仍拒或
    *   gone（本次重读证实退出）则按退出/盲区如实结算；
    * - stat 自身非退出类错误 → 无法证明存在状态，直接记录盲区（fail-closed）。
-   * 绝不因「应该可读」放过真 EACCES：仍拒师 PID 存活时必记 complete=false。
+   * 绝不因「应该可读」放过真 EACCES：仍拒且 PID 存活时必经 recordDenied
+   * 如实结算（跨 uid 盲区计数呈现，同 uid/其余情况置 complete=false）。
    */
   const settleDenied = async <T>(
     pid: number,
@@ -355,6 +378,7 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
       matchedTotal,
       processesTruncated: truncated,
       complete,
+      unobservable,
       diagnostics: diagnostics.values,
     },
   }

@@ -287,6 +287,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
         matchedTotal: 0,
         processesTruncated: false,
         complete: false,
+        unobservable: 0,
         diagnostics: ['pid 999 (uid 0): 无权读取 cwd（EACCES），该进程占用情况未知'],
       }),
       docStore: {
@@ -360,6 +361,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
         matchedTotal: 0,
         processesTruncated: false,
         complete: calls === 3,
+        unobservable: 0,
         diagnostics: calls === 3 ? [] : ['pid 42: fd 暂时不可读（EACCES）'],
       }
     }
@@ -380,6 +382,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
         matchedTotal: 0,
         processesTruncated: false,
         complete: false,
+        unobservable: 0,
         diagnostics: ['pid 42: fd 仍不可读（EACCES）'],
       }
     }
@@ -402,6 +405,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
         matchedTotal: 1,
         processesTruncated: false,
         complete: false,
+        unobservable: 0,
         diagnostics: ['另一 PID 不可读（EACCES）'],
       }
     }

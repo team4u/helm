@@ -176,6 +176,7 @@ test('activeProcesses：按 (nodeId ?? local, cwd) 现查并逐项脱敏为 {pid
         matchedTotal: 2,
         processesTruncated: false,
         complete: true,
+        unobservable: 0,
         diagnostics: [],
       }
     },
@@ -203,6 +204,7 @@ test('activeProcesses：显式 nodeId 透传给 inspectNodePathUsage', { timeout
       matchedTotal: 1,
       processesTruncated: false,
       complete: true,
+      unobservable: 0,
       diagnostics: [],
     }),
   })
