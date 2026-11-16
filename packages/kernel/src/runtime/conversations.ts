@@ -477,6 +477,18 @@ export class ConversationTracker {
     this.emitSettled(conversationId, 'aborted', all, undefined)
   }
 
+  /** 非活跃 run 态下显式 abort 后清理残留的排队追踪登记（conversation.abort()
+   * 已撤回 pi.inbox，不会触发 settleAborted；仅在当前无活跃 live.run 时清理，
+   * 绝不触碰并发启动的新 run）。 */
+  clearQueuedTracking(conversationId: number): void {
+    const mirror = this.mirrors.get(conversationId)
+    if (mirror === undefined || mirror.live?.run !== undefined) return
+    for (const [submissionId, requestId] of [...mirror.submissionIndex]) {
+      mirror.submissionIndex.delete(submissionId)
+      mirror.trackedInputs.delete(requestId)
+    }
+  }
+
   /** 取当前 run 的全部输入（abort 结算）：已放置（run.inputs 经索引）+ 已消费集 +
    * 尚未关联 submissionId 的登记，按 input.id 去重；绝不遍历历史 run 的
    * 追踪记录（已结算输入不再复活，origin 与重复输入不被旧历史污染）。 */

@@ -255,7 +255,12 @@ function buildDividerNode(item: DividerItem): OutlineDividerNode {
     key: `outline:divider:${item.key}`,
     entryId: item.entryId,
     divider: item.divider,
-    label: item.divider === 'reset' ? '上下文已重置' : '上下文已精简',
+    label:
+      item.divider === 'reset'
+        ? '上下文已重置'
+        : item.pending === true
+          ? '正在精简上下文…'
+          : '上下文已精简',
   }
 }
 

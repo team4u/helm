@@ -325,6 +325,14 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         ),
         false,
       )
+      const tracker = (kernel as unknown as {
+        tracker: {
+          mirrors: Map<number, { trackedInputs: Map<string, unknown>; submissionIndex: Map<number, string> }>
+        }
+      }).tracker
+      const mirror = tracker.mirrors.get(1)
+      assert.equal(mirror?.trackedInputs.size ?? 0, 0, 'abort 后非 run 排队追踪记录必须清空')
+      assert.equal(mirror?.submissionIndex.size ?? 0, 0, 'abort 后排队 submissionIndex 必须清空')
     } finally {
       recorder.stop()
       releaseSummary()
