@@ -22,32 +22,18 @@ import {
   type ConversationSummary,
   type PluginSessionDocHandle,
 } from '@helm/protocol'
-import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.js'
+import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createHelm } from '../../hub/src/app.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
-function makeConversation(id: number, parent?: number): ConversationSummary {
-  return {
+const makeConversation = (id: number, parent?: number): ConversationSummary =>
+  makeConversationSummary({
     id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
     ...(parent !== undefined ? { parentConversationId: parent } : {}),
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }
-}
+  })
 
 class FakeBackend extends PluginHostBackendFixtureBase {
   conversations = new Map<number, ConversationSummary>()
@@ -102,25 +88,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   emitEvent(type: string, payload: unknown): void {
     this.events.push({ type, payload })
   }
-}
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  writes: string[] = []
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? structuredClone(this.store.get(key) as T) : structuredClone(initial)
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-    this.writes.push(key)
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
 }
 
 /** 会话文档持久层替身（键语义与 PluginSessionDocStore 一致）。 */

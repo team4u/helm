@@ -16,10 +16,8 @@
  * deferred faux 响应阻塞工具返回，确保在「工具仍在执行」时检查运行期关联。
  */
 
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -34,17 +32,7 @@ import { openHelmDatabase } from '../../kernel/src/runtime/sqlite.js'
 import { HelmStore } from '../../kernel/src/runtime/store.js'
 import { EventHub } from '../../kernel/src/runtime/events.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-
-interface FauxHandle {
-  setResponses(messages: unknown[]): void
-}
-
-function makeFauxModels(): { models: ReturnType<typeof createModels>; faux: unknown } {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider((faux as unknown as { provider: never }).provider)
-  return { models, faux }
-}
+import { makeConversationSummary, makeFauxModels, useTempDir } from './helpers/plugin-test-env.js'
 
 /** 慢速脚本：每个 agent 调用真实 spawn 子会话（faux 子会话脚本慢速流式输出）。 */
 const SLOW_SCRIPT =
@@ -65,7 +53,7 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
   })
   try {
     // --- 1. 快速 run：完成后 summary.parentToolCallId 即真实工具 callId ---
-    ;(faux as FauxHandle).setResponses([
+    faux.setResponses([
       fauxAssistantMessage(
         [fauxToolCall('SubagentWorkflow', { script: FAST_SCRIPT, background: false }, { id: 'call-fast-1' })],
         { stopReason: 'toolUse' },
@@ -83,7 +71,7 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
 
     // --- 2. 慢速 run：工具执行期间（run 已创建、工具未返回）按 callId 精确取 ---
     // 子代理（faux 子会话）不设响应 -> subagent 工具等待，父回合工具在途。
-    ;(faux as FauxHandle).setResponses([
+    faux.setResponses([
       fauxAssistantMessage(
         [fauxToolCall('SubagentWorkflow', { script: SLOW_SCRIPT, background: false }, { id: 'call-slow-2' })],
         { stopReason: 'toolUse' },
@@ -174,23 +162,8 @@ test('run() 无受信 context（HTTP/CLI 路径事实）：run 无 parentToolCal
       throw new Error('此测试不调用动作')
     },
     listActions: () => [],
-    getConversation: (id) => ({
-      id,
-      title: 't',
-      profileId: 'assistant',
-      tags: [],
-      cwd: dataDir,
-      model: 'm',
-      thinkingLevel: '',
-      status: 'idle',
-      stateChangeSeq: 1,
-      completionSeq: 0,
-      unread: false,
-      pinned: false,
-      pendingAskCount: 0,
-      createdAt: 0,
-      updatedAt: 0,
-    }),
+    getConversation: (id) =>
+      makeConversationSummary({ id, title: 't', cwd: dataDir, model: 'm', createdAt: 0, updatedAt: 0 }),
     async abortConversationGuarded() {},
     emitEvent: (type, payload) => events.publish(type, payload),
   }
@@ -212,11 +185,11 @@ test('run() 无受信 context（HTTP/CLI 路径事实）：run 无 parentToolCal
   }
 })
 
-test('run 动作 inputSchema 不得注入 parentToolCallId（additionalProperties:false 拒绝未知字段）', { timeout: 60_000 }, async () => {
+test('run 动作 inputSchema 不得注入 parentToolCallId（additionalProperties:false 拒绝未知字段）', { timeout: 60_000 }, async (t) => {
   // 编排已剥离为插件动作：run 的 inputSchema 不含 parentToolCallId 且
   // additionalProperties:false——语义冒充在动作边界被拒绝，内部元数据仅
   // 受信工具上下文（PluginToolContext.callId）可注入。
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-schema-'))
+  const dataDir = useTempDir(t, 'helm-wf-schema-')
   const { models } = makeFauxModels()
   const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: models as never })
   try {
@@ -232,6 +205,5 @@ test('run 动作 inputSchema 不得注入 parentToolCallId（additionalPropertie
     )
   } finally {
     await app.close().catch(() => {})
-    rmSync(dataDir, { recursive: true, force: true })
   }
 })

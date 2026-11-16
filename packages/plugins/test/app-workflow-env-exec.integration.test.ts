@@ -23,15 +23,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { createHelm } from '../../hub/src/app.js'
 import { readJournal, type WorkflowJournalEntry } from '../src/workflow/engine/journal.js'
 import { pluginDataDirName } from '../../kernel/src/plugins/plugin-dir-name.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { makeFauxModels, useTempDir } from './helpers/plugin-test-env.js'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -57,9 +55,7 @@ interface Env {
 async function makeEnv(): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-env-act-'))
   const convCwd = join(dataDir, 'conv-cwd')
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const { models } = makeFauxModels()
   const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
 
   // 会话绑定 (nodeId='local', cwd=convCwd)：env.exec 缺省靶点必须继承它。
@@ -239,11 +235,9 @@ test('env.exec2: 普通插件动作 preflight invalid input 不锁死 resume；�
   }
 })
 
-test('env.exec3: 插件声明 idempotent: true 的动作在账本生效（resume 失败步安全重跑）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-idem-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+test('env.exec3: 插件声明 idempotent: true 的动作在账本生效（resume 失败步安全重跑）', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-wf-idem-')
+  const { models } = makeFauxModels()
   const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
     let handlerRuns = 0
@@ -324,6 +318,5 @@ test('env.exec3: 插件声明 idempotent: true 的动作在账本生效（resume
     assert.equal(handlerRuns, 2, '幂等失败步 live 重跑（副作用已声明安全）')
   } finally {
     await app.close().catch(() => {})
-    rmSync(dataDir, { recursive: true, force: true })
   }
 })

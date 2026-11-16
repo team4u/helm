@@ -29,12 +29,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AgentSpawnRequest } from '@helm/protocol'
 import { parseWorkflowSpawnMeta } from '../src/contracts.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+import { makeFauxModels, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -240,7 +240,7 @@ describe('WorkflowService 生产适配：spawn/resume 端口参数面', () => {
 
 interface RealEnv {
   kernel: KernelRuntime
-  faux: ReturnType<typeof fauxProvider>
+  faux: FauxProviderHandle
   dataDir: string
   /** kernel.runGate（本机 fallback）调用计数。 */
   gateFallbackRuns: number
@@ -249,9 +249,7 @@ interface RealEnv {
 
 /** 真 KernelRuntime + faux；runGate 包装计数（fallback sentinel）。 */
 async function openRealEnv(dataDir: string): Promise<RealEnv> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const kernel = await KernelRuntime.open({
     dataDir,
     cwd: dataDir,

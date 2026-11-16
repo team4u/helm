@@ -25,8 +25,7 @@
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
@@ -47,8 +46,13 @@ import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/ind
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { ArtifactService, SecretStash } from '../../kernel/src/services/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-
-type FauxHandle = ReturnType<typeof fauxProvider>
+import {
+  createGitTemplate,
+  makeConversationSummary,
+  makeFauxModels,
+  type FauxProviderHandle,
+  type GitTemplate,
+} from './helpers/plugin-test-env.js'
 
 /**
  * 平台事实：进程占用扫描当前仅实现 Linux /proc。测试契约按平台如实分叉：
@@ -88,25 +92,16 @@ function localNodePorts() {
   }
 }
 
-/** 真实临时 Git 仓库（git init + 初始 commit；用户级配置隔离）。 */
+/** 真实临时 Git 仓库（由 suite 级 Git 模板整树克隆，避免每用例重复 init/commit）。 */
 function makeGitRepo(dir: string): string {
-  mkdirSync(dir, { recursive: true })
-  const git = (args: string[]) =>
-    execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-  git(['init', '-q', '-b', 'main'])
-  git(['config', 'user.email', 'test@helm.local'])
-  git(['config', 'user.name', 'helm-test'])
-  writeFileSync(join(dir, 'README.md'), '# repo\n')
-  git(['add', '.'])
-  git(['commit', '-qm', 'init'])
-  return dir
+  return gitTemplate.cloneTo(dir)
 }
 
 /** 真实 SDK Harness（MemoryStorage）+ faux provider + 完整 NativeSpawnDeps（spawn-ask 同构）。 */
 async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
   harness: Harness
   deps: NativeSpawnDeps
-  faux: FauxHandle
+  faux: FauxProviderHandle
   allocator: WorktreeAllocator
   isolation: WorktreeIsolation
   /**
@@ -122,9 +117,7 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
   docs: Map<string, unknown>
   close(): Promise<void>
 }> {
-  const models = createModels()
-  const faux = fauxProvider()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
   const storage = new MemoryStorage()
   const registry = createRegistry()
   const harness = await Harness.open(
@@ -346,12 +339,15 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
 }
 
 let rootDir: string
+let gitTemplate: GitTemplate
 
 before(() => {
   rootDir = mkdtempSync(join(tmpdir(), 'helm-native-worktree-'))
+  gitTemplate = createGitTemplate('helm-native-wt-template-')
 })
 
 after(() => {
+  gitTemplate.cleanup()
   rmSync(rootDir, { recursive: true, force: true })
 })
 
@@ -755,23 +751,8 @@ async function executeCleanupTool(
     submitInput: async () => {},
     createConversation: async () => ({}) as never,
     listConversations: () => [],
-    getConversation: (id: number) => ({
-      id,
-      title: `conv-${id}`,
-      profileId: 'assistant',
-      tags: [],
-      cwd: dataDir,
-      model: '',
-      thinkingLevel: '',
-      status: 'idle',
-      stateChangeSeq: 1,
-      completionSeq: 0,
-      unread: false,
-      pinned: false,
-      pendingAskCount: 0,
-      createdAt: 1,
-      updatedAt: 1,
-    }),
+    getConversation: (id: number) =>
+      makeConversationSummary({ id, cwd: dataDir, model: '', createdAt: 1, updatedAt: 1 }),
     updateConversation: async () => ({}) as never,
     abortConversation: async () => {},
     getConversationOwnership(id: number): 'helm' | 'bot' | 'human' {

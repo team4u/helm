@@ -22,41 +22,27 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, type AgentSpawnRequest, type ConversationSummary } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
-import { PluginHost, type PluginConfigStore, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
-import { FsOutputFiles, HERDR_FAST_TEST_TIMINGS, serveTransport } from './helpers/herdr-unit-fixture.js'
+import {
+  FsOutputFiles,
+  HERDR_FAST_TEST_TIMINGS,
+  agentInfoOf,
+  serveTransport,
+  type HerdrPaneState as PaneState,
+  type HerdrPaneStatus as PaneStatus,
+} from './helpers/herdr-unit-fixture.js'
+import {
+  MemoryConfigStore,
+  MemoryDocStore,
+  makeConversationSummary,
+  waitFor as baseWaitFor,
+} from './helpers/plugin-test-env.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
-
-type PaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
-
-interface PaneState {
-  paneId: string
-  tabId: string
-  workspaceId: string
-  agentStatus: PaneStatus
-  seq: number
-  name?: string
-  cwd: string
-  launchPending?: boolean
-}
-
-function agentInfoOf(pane: PaneState) {
-  return {
-    pane_id: pane.paneId,
-    tab_id: pane.tabId,
-    workspace_id: pane.workspaceId,
-    agent_status: pane.agentStatus,
-    interactive_ready: pane.agentStatus !== 'unknown',
-    state_change_seq: pane.seq,
-    launch_pending: pane.launchPending === true,
-    cwd: pane.cwd,
-    ...(pane.name !== undefined ? { name: pane.name } : {}),
-  }
-}
 
 /** 真实 protocol 22 形状的受控服务端（agent.prompt admission 语义如实模拟）。 */
 class ProtocolServerTransport implements HerdrTransport {
@@ -244,23 +230,6 @@ class ProtocolServerTransport implements HerdrTransport {
   }
 }
 
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
 class MemorySessionDocStore {
   store = new Map<string, string>()
   get(pluginId: string, name: string, conversationId: number): string | undefined {
@@ -290,12 +259,6 @@ class MemorySessionDocStore {
   async flush(): Promise<void> {}
 }
 
-class MemoryConfigStore implements PluginConfigStore {
-  constructor(private readonly initial: Record<string, unknown> = {}) {}
-  get(): Record<string, unknown> { return this.initial }
-  set(): void {}
-}
-
 interface Env {
   host: PluginHost
   transport: ProtocolServerTransport
@@ -310,23 +273,7 @@ async function makeEnv(): Promise<Env> {
   const parentCwd = join(dataDir, 'parent')
   mkdirSync(parentCwd, { recursive: true })
   const transport = new ProtocolServerTransport()
-  const conversation1: ConversationSummary = {
-    id: 1,
-    title: 'conv-1',
-    profileId: 'assistant',
-    tags: [],
-    cwd: parentCwd,
-    model: '',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }
+  const conversation1 = makeConversationSummary({ id: 1, cwd: parentCwd, model: '' })
   const conversations = new Map<number, ConversationSummary>([[1, conversation1]])
   const parentNotifications: Array<{ conversationId: number; text: string; meta: Record<string, unknown> }> = []
   const gateCalls: number[] = []
@@ -388,14 +335,8 @@ async function makeEnv(): Promise<Env> {
   }
 }
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 10): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (await predicate()) return
-    if (Date.now() > deadline) assert.fail('waitFor 超时：条件在限定时间内未成立')
-    await delay(intervalMs)
-  }
-}
+const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 10): Promise<void> =>
+  baseWaitFor(predicate, { timeoutMs, intervalMs, message: 'waitFor 超时：条件在限定时间内未成立' })
 
 test('双插件联调: 真实形状服务端上 herdr 后台 run 经 workflow.steer 委托投递（guardLevel=preflight），最新文件交接/Gate 恰一次、父通知正常', { timeout: 60_000 }, async () => {
   const env = await makeEnv()

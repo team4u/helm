@@ -32,14 +32,18 @@ import type { Provider } from '@earendil-works/pi-ai'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
 import {
   PluginHost,
-  type PluginDocStore,
-  type PluginConfigStore,
   type PluginHostBackend,
   type PluginProviderPort,
 } from '../../kernel/src/plugins/index.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { createMagpiePlugin } from '../src/magpie.js'
 import { compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
+import {
+  MemoryConfigStore,
+  MemoryDocStore,
+  makeConversationSummary,
+  waitFor as baseWaitFor,
+} from './helpers/plugin-test-env.js'
 import {
   MAGPIE_PLUGIN_ID,
   MAGPIE_PROVIDER_ID,
@@ -186,41 +190,8 @@ class ModelsProviderPort implements PluginProviderPort {
   }
 }
 
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-
-  async flush(): Promise<void> {}
-}
-
-class MemoryConfigStore implements PluginConfigStore {
-  store = new Map<string, Record<string, unknown>>()
-  get(pluginId: string): Record<string, unknown> {
-    return { ...this.store.get(pluginId) }
-  }
-  set(pluginId: string, value: Record<string, unknown>): void {
-    this.store.set(pluginId, { ...value })
-  }
-}
-
-function makeConversation(id: number, model = 'test/model'): ConversationSummary {
-  return {
-    id, title: `conv-${id}`, profileId: 'default', tags: [], cwd: '/tmp', model, thinkingLevel: '',
-    status: 'idle', stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false,
-    pendingAskCount: 0, createdAt: 1, updatedAt: 1,
-  }
-}
+const makeConversation = (id: number, model = 'test/model'): ConversationSummary =>
+  makeConversationSummary({ id, profileId: 'default', model })
 
 function makeHostApi(overrides: Partial<PluginHostBackend> = {}): PluginHostBackend {
   return {
@@ -357,14 +328,8 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
 }
 
 /** 等待谓词成立（轮询，默认 5s）。 */
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (await predicate()) return
-    if (Date.now() > deadline) assert.fail('waitFor 超时：条件在限定时间内未成立')
-    await new Promise((r) => setTimeout(r, 25))
-  }
-}
+const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> =>
+  baseWaitFor(predicate, { timeoutMs, message: 'waitFor 超时：条件在限定时间内未成立' })
 
 interface StatusView {
   gatewayUrl: string; configuredRoot: boolean; local: boolean; reachable: boolean

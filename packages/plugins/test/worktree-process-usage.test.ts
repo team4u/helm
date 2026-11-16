@@ -22,7 +22,7 @@ import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdtempSync, openSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmError } from '@helm/protocol'
@@ -30,28 +30,24 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createEnvFabric } from '../../kernel/src/env/fabric.js'
 import { WorktreeAllocator } from '../src/workflow/worktree.js'
+import { createGitTemplate, type GitTemplate } from './helpers/plugin-test-env.js'
 
 let rootDir: string
+let gitTemplate: GitTemplate
 
 before(() => {
   rootDir = mkdtempSync(join(tmpdir(), 'helm-wt-procusage-'))
+  gitTemplate = createGitTemplate('helm-wt-procusage-template-')
 })
 
 after(() => {
+  gitTemplate.cleanup()
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-/** 真实临时 Git 仓库。 */
+/** 真实临时 Git 仓库（由 suite 级 Git 模板克隆）。 */
 function makeGitRepo(dir: string): string {
-  mkdirSync(dir, { recursive: true })
-  const git = (args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' })
-  git(['init', '-q', '-b', 'main'])
-  git(['config', 'user.email', 'test@helm.local'])
-  git(['config', 'user.name', 'helm-test'])
-  writeFileSync(join(dir, 'README.md'), '# repo\n')
-  git(['add', '.'])
-  git(['commit', '-qm', 'init'])
-  return dir
+  return gitTemplate.cloneTo(dir)
 }
 
 /** local 真实端口（与生产同契约）+ 指定 fabric 的进程占用探测。 */

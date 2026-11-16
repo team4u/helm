@@ -10,34 +10,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmError, type ConversationSummary, type MaybePromise, type PluginDefinition, type PluginToolContext } from '@helm/protocol'
 import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
-import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.js'
+import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { pluginToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
 
-function makeConversation(id: number): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'test/model',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }
-}
+const makeConversation = (id: number): ConversationSummary => makeConversationSummary({ id })
 
 /** 可编程后端：emitEvent 可等待（内部监听器顺序执行、错误上抛）。 */
 class FakeBackend extends PluginHostBackendFixtureBase {
@@ -157,23 +140,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
       for (const listener of [...set]) await listener(payload)
     })()
   }
-}
-
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
 }
 
 class MemorySessionDocStore {

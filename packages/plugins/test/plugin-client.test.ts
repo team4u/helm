@@ -27,6 +27,7 @@ import { createHubHandler } from '../../kernel/src/http/index.js'
 import type { EventHub, KernelRuntimeLike} from '../../kernel/src/http/index.js'
 import { compilePluginClientModule, createPluginBuildProvider, installNodeChunkBridge } from '@helm/plugin-build'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 测试基座（真实临时目录 + 真实 services + 真实 PluginHost）
@@ -42,13 +43,7 @@ class TestEventHub implements EventHub {
   }
 }
 
-function makeConversation(id: number): ConversationSummary {
-  return {
-    id, title: `conv-${id}`, profileId: 'default', tags: [], cwd: '/tmp', model: 'test/model', thinkingLevel: '',
-    status: 'idle', stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false,
-    pendingAskCount: 0, createdAt: 1, updatedAt: 1,
-  }
-}
+const makeConversation = (id: number): ConversationSummary => makeConversationSummary({ id, profileId: 'default' })
 
 function makeBackend(): PluginHostBackend {
   return {
@@ -149,19 +144,10 @@ before(async () => {
     `import { useCounter } from './helper'\nimport { useState } from 'react'\n\nexport function Panel(props: { title: string }) {\n  const [n, bump] = useCounter()\n  const [label] = useState(props.title)\n  return label + ':' + n\n}\n`,
   )
 
-  class MemoryDocStore {
-    store = new Map<string, unknown>()
-    get<T>(key: string, initial: T): T {
-      return this.store.has(key) ? (this.store.get(key) as T) : initial
-    }
-    set<T>(key: string, value: T): void {
-      this.store.set(key, structuredClone(value))
-    }
-  }
   pluginHost = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: makeBackend(),
-    docs: new MemoryDocStore() as never,
+    docs: new MemoryDocStore(),
   })
   await pluginHost.register({
     id: 'test:client-fixture',

@@ -32,126 +32,56 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, type AgentGateResult, type AskResult, type ConversationSummary, type MaybePromise, type Profile } from '@helm/protocol'
+import { HelmError, type AskResult, type ConversationSummary, type MaybePromise, type Profile } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
-import { PluginHost, type PluginConfigStore, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { extractWorkflowExecutionMeta } from '../src/contracts.js'
 import type { AgentExecutionInfo } from '@helm/protocol'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
-import { SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
 import type { DiagnosticsCollection } from '../src/diagnostics.js'
 import { LocalNodeChannel } from '../src/herdr/local-node-channel.js'
 import type { HelmHostNodeIpcPort } from '@helm/protocol'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { FsOutputFiles, HERDR_FAST_TEST_TIMINGS, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
+import {
+  BaseFakeHerdrTransport,
+  HERDR_FAST_TEST_TIMINGS,
+  agentInfoOf,
+  ipcLineCall,
+  serveTransport,
+  type HerdrPaneStatus,
+} from './helpers/herdr-unit-fixture.js'
+import {
+  MemoryConfigStore,
+  MemoryDocStore,
+  makeConversationSummary,
+  waitFor as baseWaitFor,
+} from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 受控 HerdrTransport
 // ---------------------------------------------------------------------------
 
-type PaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
-
-interface PaneState {
-  paneId: string
-  tabId: string
-  workspaceId: string
-  agentStatus: PaneStatus
-  seq: number
-  name?: string
-  cwd: string
-}
-
-class FakeTransport implements HerdrTransport {
-  panes = new Map<string, PaneState>()
-  tabs = new Map<string, { closed: boolean }>()
-  workspaces = new Map<string, { closed: boolean }>()
-  calls: Array<{ target: HerdrTarget; method: string; params: Record<string, unknown> }> = []
-  eventListeners: Array<(e: HerdrEvent) => void> = []
-  sendKeysLog: Array<{ paneId: string; keys: string[] }> = []
-  metadataReports: Array<Record<string, unknown>> = []
-  removedFiles: string[] = []
-  outputFiles = new FsOutputFiles()
-  errors = new Map<string, () => Error>()
-  subscribeAck: 'ok' | 'fail' = 'ok'
-  /** prompt 行为：返回 prompt 后的 pane 状态（默认 idle = 直达终态）。 */
-  promptStatus: PaneStatus | Array<PaneStatus> = 'idle'
-  /** prompt 同步回调（此时交接文件名已可从 text 提取，测试在此写文件）。 */
-  onPrompt: ((pane: PaneState, text: string) => void) | undefined
+class FakeTransport extends BaseFakeHerdrTransport {
   /** send_keys 后目标状态（默认 working 模拟键已生效处理中）。 */
-  afterSendKeys: PaneStatus = 'working'
+  afterSendKeys: HerdrPaneStatus = 'working'
   /** agent.wait 轮询中止信号（测试用：中止后挂起的 wait 立即以 timeout 终结）。 */
   waitAbort: AbortSignal | undefined
   /** agent.wait 因 waitAbort 中止的次数（测试确定性观察点）。 */
   waitBreaks = 0
   /** 自定义终端快照（agent.read 返回；缺省 tail of <pane> 行）。 */
   snapshotText: string | undefined
-  /** ping capabilities 通告：缺省模拟支持 send_keys CAS 的服务端；测试可改写模拟旧服务端（真实 0.9.5 无 CAS 字段）。 */
-  pongCapabilities: Record<string, unknown> | null = {
-    live_handoff: false,
-    detached_server_daemon: false,
-    endpoint_protocol_generation: 1,
-    [SEND_KEYS_CAS_CAPABILITY]: true,
-  }
-
-  private record(target: HerdrTarget, method: string, params: Record<string, unknown>): void {
-    this.calls.push({ target, method, params })
-  }
-
-  private paneOf(ref: unknown): PaneState {
-    const id = typeof ref === 'string' ? ref : String((ref as { pane_id?: unknown })?.pane_id ?? '')
-    const pane = this.panes.get(id)
-    if (!pane) throw new HelmError('agent_not_found', `no pane ${id}`, 404)
-    return pane
-  }
 
   async call(target: HerdrTarget, method: string, params: Record<string, unknown>): Promise<unknown> {
     this.record(target, method, params)
     const errorFactory = this.errors.get(method)
     if (errorFactory) throw errorFactory()
     switch (method) {
-      case 'tab.create': {
-        const n = this.panes.size + 1
-        const workspaceId = (params['workspace_id'] as string | undefined) ?? 'ws-default'
-        const paneId = `${workspaceId}:p${n}`
-        const tabId = `${workspaceId}:t${n}`
-        const paneCwd = (params['cwd'] as string) ?? '/tmp'
-        // 生产 readLocalOutput 经真实 fs canonicalPath：pane cwd 必须真实存在。
-        mkdirSync(join(paneCwd, '.helm'), { recursive: true })
-        this.panes.set(paneId, {
-          paneId,
-          tabId,
-          workspaceId,
-          agentStatus: 'idle',
-          seq: 1,
-          cwd: paneCwd,
-        })
-        this.tabs.set(tabId, { closed: false })
-        return {
-          type: 'tab_created',
-          tab: { tab_id: tabId, workspace_id: workspaceId },
-          root_pane: { pane_id: paneId, workspace_id: workspaceId, tab_id: tabId },
-        }
-      }
-      case 'worktree.create': {
-        const n = this.panes.size + 1
-        const workspaceId = `ws-wt-${n}`
-        const paneId = `${workspaceId}:p1`
-        const tabId = `${workspaceId}:t1`
-        const path = `${params['cwd']}/.worktrees/wt${n}`
-        mkdirSync(join(path, '.helm'), { recursive: true })
-        this.panes.set(paneId, { paneId, tabId, workspaceId, agentStatus: 'idle', seq: 1, cwd: path })
-        this.tabs.set(tabId, { closed: false })
-        this.workspaces.set(workspaceId, { closed: false })
-        return {
-          type: 'worktree_created',
-          workspace: { workspace_id: workspaceId },
-          tab: { tab_id: tabId, workspace_id: workspaceId },
-          root_pane: { pane_id: paneId, workspace_id: workspaceId, tab_id: tabId },
-          worktree: { path, branch: (params['branch'] as string) ?? 'helm/wf-x' },
-        }
-      }
+      case 'tab.create':
+        return this.createTabPane(params, true)
+      case 'worktree.create':
+        return this.createWorktreePane(params, true)
       case 'tab.close': {
         const tabId = params['tab_id'] as string
         const tab = this.tabs.get(tabId)
@@ -186,7 +116,7 @@ class FakeTransport implements HerdrTransport {
         // 真实语义：阻塞直至 until 命中（fake 以 10ms 轮询模拟；waitAbort
         // 中止时立即以 timeout 终结，与状态变化解耦，供测试确定性收尾）。
         const pane = this.paneOf(params['target'])
-        const until = ((params['until'] as string[]) ?? []).map((s) => s as PaneStatus)
+        const until = ((params['until'] as string[]) ?? []).map((s) => s as HerdrPaneStatus)
         const waitSignal = this.waitAbort
         for (let i = 0; i < 2_000; i += 1) {
           if (until.length === 0 || until.includes(pane.agentStatus)) {
@@ -217,24 +147,13 @@ class FakeTransport implements HerdrTransport {
         return { type: 'pane_read', read: { pane_id: pane.paneId, text } }
       }
       case 'ping':
-        return {
-          type: 'pong',
-          version: 'test-server',
-          protocol: 22,
-          ...(this.pongCapabilities !== null ? { capabilities: { ...this.pongCapabilities } } : {}),
-        }
+        return this.handlePing()
       case 'agent.send_keys': {
         // CAS 契约（未来服务端行为）：expected_state_seq 必须匹配当前权威 seq，
         // 不匹配以 stale_state 拒绝且键不写入。写键不代表检测到状态变化；
         // consumeKeys 才推进权威水位。
         const pane = this.paneOf(params['target'])
-        const expected = params['expected_state_seq']
-        if (typeof expected !== 'number' || !Number.isSafeInteger(expected) || expected < 0) {
-          throw new HelmError('invalid_params', 'agent.send_keys 必须携带非负整数 expected_state_seq（CAS 契约）', 400)
-        }
-        if (expected !== pane.seq) {
-          throw new HelmError('stale_state', `expected_state_seq=${expected} 与当前 state_change_seq=${pane.seq} 不符，按键未发送`, 409)
-        }
+        this.assertSendKeysCas(pane, params)
         this.sendKeysLog.push({ paneId: pane.paneId, keys: params['keys'] as string[] })
         return { type: 'ok' }
       }
@@ -247,106 +166,15 @@ class FakeTransport implements HerdrTransport {
         this.metadataReports.push(params)
         return { type: 'ok' }
       case 'session.snapshot':
-        return {
-          type: 'session_snapshot',
-          snapshot: {
-            version: 'test',
-            protocol: 22,
-            workspaces: [],
-            tabs: [],
-            layouts: [],
-            // 官方形状：panes 覆盖全部窗格（含无 Agent 的 shell），agents 仅
-            // Agent 终端；两者都真实输出供总览 join。
-            panes: [...this.panes.values()].filter((p) => !this.tabs.get(p.tabId)?.closed).map((p) => ({
-              pane_id: p.paneId,
-              workspace_id: p.workspaceId,
-              tab_id: p.tabId,
-              focused: false,
-              agent_status: p.name !== undefined ? p.agentStatus : 'unknown',
-              cwd: p.cwd,
-            })),
-            agents: [...this.panes.values()].filter((p) => p.name !== undefined && !this.tabs.get(p.tabId)?.closed).map(agentInfoOf),
-          },
-        }
+        return this.buildSessionSnapshot()
       default:
         throw new HelmError('method_not_found', `fake transport 不支持 ${method}`, 400)
     }
   }
 
-  async readOutput(target: HerdrTarget, cwd: string, fileName: string): Promise<string> {
-    const errorFactory = this.errors.get('readOutput')
-    if (errorFactory) throw errorFactory()
-    this.record(target, 'readOutput', { cwd, fileName })
-    const content = this.outputFiles.get(`${cwd}/.helm/${fileName}`)
-    if (content === undefined) {
-      throw new HelmError('herdr_output_missing', `交接文件不存在: ${cwd}/.helm/${fileName}`, 404)
-    }
-    return content
-  }
-
-  async removeOutput(target: HerdrTarget, cwd: string, fileName: string): Promise<void> {
-    this.record(target, 'removeOutput', { cwd, fileName })
-    const key = `${cwd}/.helm/${fileName}`
-    if (this.outputFiles.delete(key)) this.removedFiles.push(key)
-  }
-
-  gateRuns = 0
-  async runGate(
-    target: HerdrTarget,
-    command: string,
-    cwd: string,
-    signal?: AbortSignal,
-    env?: Record<string, string>,
-  ): Promise<AgentGateResult> {
-    this.record(target, 'runGate', { command, cwd, env })
-    this.gateRuns += 1
-    return { ok: true, output: 'remote gate ok' }
-  }
-
-  async subscribe(
-    target: HerdrTarget,
-    onEvent: (event: HerdrEvent) => void,
-    onError: (error: unknown) => void,
-  ): Promise<() => void> {
-    if (this.subscribeAck === 'fail') {
-      throw new HelmError('herdr_socket', 'subscribe failed', 502)
-    }
-    this.record(target, 'events.subscribe', {})
-    this.eventListeners.push(onEvent)
-    void onError
-    return () => {
-      this.eventListeners = this.eventListeners.filter((l) => l !== onEvent)
-    }
-  }
-
-  emit(event: HerdrEvent): void {
-    for (const listener of [...this.eventListeners]) listener(event)
-  }
-
-  advancePane(paneId: string, status: PaneStatus): void {
-    const pane = this.panes.get(paneId)
-    if (!pane) return
-    pane.agentStatus = status
-    pane.seq += 1
-    this.emit({ type: 'pane.updated', paneId })
-  }
-
   /** 等待键发送后模拟终端消化（默认测试在需要时手动调用）。 */
-  consumeKeys(paneId: string, status: PaneStatus = this.afterSendKeys): void {
+  consumeKeys(paneId: string, status: HerdrPaneStatus = this.afterSendKeys): void {
     this.advancePane(paneId, status)
-  }
-}
-
-function agentInfoOf(pane: PaneState) {
-  return {
-    pane_id: pane.paneId,
-    tab_id: pane.tabId,
-    workspace_id: pane.workspaceId,
-    agent_status: pane.agentStatus,
-    interactive_ready: pane.agentStatus !== 'unknown',
-    state_change_seq: pane.seq,
-    cwd: pane.cwd,
-    ...(pane.name !== undefined ? { name: pane.name } : {}),
   }
 }
 
@@ -354,26 +182,8 @@ function agentInfoOf(pane: PaneState) {
 // 测试环境
 // ---------------------------------------------------------------------------
 
-function makeConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp/helm-herdr-parent',
-    model: '',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-    ...over,
-  }
-}
+const makeConversation = (id: number, over: Partial<ConversationSummary> = {}): ConversationSummary =>
+  makeConversationSummary({ id, cwd: '/tmp/helm-herdr-parent', model: '', ...over })
 
 class FakeBackend implements PluginHostBackend {
   conversations = new Map<number, ConversationSummary>()
@@ -545,23 +355,6 @@ class FakeBackend implements PluginHostBackend {
   }
 }
 
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
 interface Env {
   host: PluginHost
   backend: FakeBackend
@@ -573,12 +366,6 @@ interface Env {
   resolvedInfos: Array<Record<string, unknown>>
   gateResults: Array<{ ok: boolean; output: string }>
   close(): Promise<void>
-}
-
-class MemoryConfigStore implements PluginConfigStore {
-  constructor(private readonly initial: Record<string, unknown> = {}) {}
-  get(pluginId: string): Record<string, unknown> { return this.initial }
-  set(): void {}
 }
 
 async function makeEnv(options: {
@@ -681,14 +468,8 @@ function fileNameOf(text: string): string {
   return text.match(/wf-out-[A-Za-z0-9_.-]+\.(json|md)/)?.[0] ?? ''
 }
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000, intervalMs = 25): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (await predicate()) return
-    if (Date.now() > deadline) assert.fail('waitFor 超时：条件在限定时间内未成立')
-    await delay(intervalMs)
-  }
-}
+const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000, intervalMs = 25): Promise<void> =>
+  baseWaitFor(predicate, { timeoutMs, intervalMs, message: 'waitFor 超时：条件在限定时间内未成立' })
 
 /** 标准成功脚本：prompt 直达 done，onPrompt 写入交接文件。 */
 function scriptSuccess(env: Env, content: string, schema = false): void {

@@ -8,64 +8,26 @@
  * disable 路径的在途拒绝（409 plugin_has_live_tasks）由 watchdog 主测试覆盖。
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test } from 'node:test'
 import { HelmError, type ConversationSummary, type MaybePromise } from '@helm/protocol'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import {
   registerSuperAgentWatchdog,
 } from '../src/superagent/watchdog.js'
 import type { SuperAgentWatchdogRuntime } from '../src/superagent/contracts.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import {
+  MemoryDocStore,
+  deferred,
+  makeConversationSummary,
+  useTempDir,
+} from './helpers/plugin-test-env.js'
 
-function makeSummary(id: number): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: '',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  }
-}
+const makeSummary = (id: number): ConversationSummary => makeConversationSummary({ id, model: '' })
 
-class MemoryDocStore implements PluginDocStore {
-  readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
-function deferred() {
-  let resolve!: () => void
-  const promise = new Promise<void>((done) => { resolve = done })
-  return { promise, resolve }
-}
-
-test('service stop 等待已进入采集的在途 tick，插件释放前完成 Doc 写入', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-tick-close-'))
+test('service stop 等待已进入采集的在途 tick，插件释放前完成 Doc 写入', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-tick-close-')
   const conversations = new Map<number, ConversationSummary>([[1, makeSummary(1)]])
   const eventListeners = new Map<string, Array<(payload: unknown) => MaybePromise<void>>>()
   const entered = deferred()
@@ -156,5 +118,4 @@ test('service stop 等待已进入采集的在途 tick，插件释放前完成 D
     host.invokeAction('builtin:superagent', 'watchdog_tick', {}),
     (error: unknown) => error instanceof HelmError,
   )
-  rmSync(dataDir, { recursive: true, force: true })
 })

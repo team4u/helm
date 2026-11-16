@@ -41,9 +41,7 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
-  fauxProvider,
   fauxAssistantMessage,
   fauxToolCall,
   type FauxResponseStep,
@@ -54,6 +52,8 @@ import { HelmError } from '@helm/protocol'
 import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import type { RecallGraphDoc } from '../src/superagent/contracts.js'
+import { deferred, makeFauxModels, waitFor as testWaitFor, type Deferred, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 import assert from 'node:assert/strict'
 
@@ -73,34 +73,9 @@ const DOC_RECALL = 'recall-graph'
 const RENDERER_WORKER_REPORT = 'superagent:worker-report'
 const PASSWORD = 'superagent验收密码八位'
 
-/** 手写 deferred（gate 握手，不用 sleep 对齐并发时序）。 */
-interface Deferred<T> {
-  promise: Promise<T>
-  resolve(value: T): void
-  isSettled(): boolean
-}
-
-function deferred<T>(): Deferred<T> {
-  let settled = false
-  let resolveFn!: (value: T) => void
-  const promise = new Promise<T>((res) => {
-    resolveFn = (value) => {
-      if (settled) return
-      settled = true
-      res(value)
-    }
-  })
-  return { promise, resolve: resolveFn, isSettled: () => settled }
-}
-
-/** 原子等待真实落库/状态条件（超时即失败，不静默兜底）。 */
+/** 原子等待真实落库/状态条件（超时即失败，默认 15s）。 */
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (await predicate()) return
-    if (Date.now() > deadline) assert.fail('waitFor 超时：条件在限定时间内未成立')
-    await new Promise((r) => setTimeout(r, 25))
-  }
+  await testWaitFor(predicate, { timeoutMs, message: 'waitFor 超时：条件在限定时间内未成立' })
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +84,7 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 
 
 interface SuperAgentEnv {
   dataDir: string
-  faux: ReturnType<typeof fauxProvider>
+  faux: FauxProviderHandle
   app: Awaited<ReturnType<typeof createHelm>>
   /** 每次模型请求捕获（工具声明回放 + system sections + user 文本）。 */
   requests: Array<{ toolNames: string[]; sections: string[]; userTexts: string[] }>
@@ -118,9 +93,7 @@ interface SuperAgentEnv {
 
 async function makeEnv(dataDir?: string): Promise<SuperAgentEnv> {
   const dir = dataDir ?? mkdtempSync(join(tmpdir(), 'helm-superagent-'))
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const { models, faux } = makeFauxModels()
 
   const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
 
@@ -1257,6 +1230,65 @@ test('真实事件链路：内核会话事件桥接到插件 onEvent；watchdog 
     assert.ok(settledOutcomes.includes('failed') && settledOutcomes.includes('completed'), 'turn.settled 桥接到插件')
 
     await kernel.plugins.disable(SUPERAGENT_ID).catch(() => {})
+  } finally {
+    await env.close()
+  }
+})
+
+test('真实组合：编辑 Worker 历史输入经 SDK 事件清理对应召回节点并保留前轮', { timeout: 60_000 }, async () => {
+  const env = await makeEnv()
+  try {
+    const { kernel } = env.app
+    await kernel.profiles.save({ id: 'rewrite-expert', name: '编辑回归专家' })
+    await kernel.plugins.enable(SUPERAGENT_ID)
+
+    // FIXTURE（组合层桥接，与 superagent-rewind.test.ts 同源标注）：tracker 的
+    // onEntryCommitted 把 conversation.entry 发布到 SSE EventHub，内核构造器把
+    // 核心会话事件帧转投内部宿主事件面（原生桥接），插件经公开
+    // ctx.host.onEvent('conversation.entry') 消费（ConversationEntryEvent 信封
+    // 形状）。本测试直接依赖该原生链路（真实 tracker 帧 + 真实插件订阅 +
+    // 真实 RecallGraph 清理路径均不被模拟）。
+
+    const index = kernel.plugins.getPublicDoc(SUPERAGENT_ID, DOC_INDEX).value as { routerConversationId: number }
+    env.faux.setResponses([fauxAssistantMessage('初始任务完成'), fauxAssistantMessage('中枢已记录')])
+    const worker = await kernel.plugins.invokeAction(SUPERAGENT_ID, 'dispatch_worker', {
+      prompt: '准备初始任务', profileId: 'rewrite-expert',
+    }) as { workerConversationId: number }
+    const id = worker.workerConversationId
+    await kernel.waitForIdle(id)
+    await kernel.waitForIdle(index.routerConversationId)
+    const nodes = () => (kernel.plugins.getPublicDoc(SUPERAGENT_ID, DOC_RECALL).value as RecallGraphDoc)
+      .nodes.filter((node) => node.conversationId === id)
+    assert.equal(nodes().length, 1)
+
+    env.faux.setResponses([
+      fauxAssistantMessage('应保留的第一轮回答'),
+      fauxAssistantMessage('应失效的第二轮旧回答'),
+      fauxAssistantMessage('编辑后的第二轮回答'),
+    ])
+    await kernel.submitInput(id, '应保留的第一轮提问')
+    await kernel.waitForIdle(id)
+    await kernel.submitInput(id, '应失效的第二轮旧提问')
+    await kernel.waitForIdle(id)
+    const oldNodes = nodes()
+    assert.equal(oldNodes.length, 3)
+    const detail = await kernel.getConversationDetail(id)
+    const oldInput = detail.entries.find((entry) => entry.kind === 'helm.input'
+      && (entry.data as { text?: string }).text === '应失效的第二轮旧提问')
+    assert.ok(oldInput)
+    const inputId = (oldInput.data as { id: string }).id
+    const oldNode = oldNodes.find((node) => node.inputIds.includes(inputId))
+    assert.ok(oldNode)
+    const retainedIds = oldNodes.filter((node) => node.id !== oldNode.id).map((node) => node.id)
+
+    await kernel.submitInput(id, '编辑后的第二轮提问', { replaceFromEntryId: Number(oldInput.id) })
+    await kernel.waitForIdle(id)
+    const updated = nodes()
+    assert.equal(updated.length, 3, '旧节点被移除，新回合生成一个新节点')
+    assert.equal(updated.some((node) => node.id === oldNode.id || node.inputIds.includes(inputId)), false)
+    assert.ok(retainedIds.every((nodeId) => updated.some((node) => node.id === nodeId)), '前轮召回节点保留')
+    assert.ok(updated.some((node) => node.summary.includes('编辑后的第二轮回答')))
+    assert.equal(JSON.stringify((await kernel.getConversationDetail(id)).entries).includes('应失效的第二轮旧回答'), false)
   } finally {
     await env.close()
   }

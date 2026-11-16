@@ -16,15 +16,12 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { COMPOSER_STATUS_SLOT, HelmError } from '@helm/protocol'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHelm } from '../../hub/src/app.js'
 import { TOKEN_SPEED_DOC, TOKEN_SPEED_PLUGIN_ID, type TokenSpeedStatus } from '../src/token-speed/contracts.js'
+import { cleanupDir, makeFauxModels, makeTempDir, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 /** 480 字符 ≈ 120 tokens，tokensPerSecond=240 → 约 500ms 真实流式生成（跨越采样窗口）。 */
 const STREAM_TEXT = 'x'.repeat(480)
@@ -32,16 +29,14 @@ const STREAM_TOKENS = 120
 
 interface Env {
   dataDir: string
-  faux: ReturnType<typeof fauxProvider>
+  faux: FauxProviderHandle
   app: Awaited<ReturnType<typeof createHelm>>
   close(): Promise<void>
 }
 
 async function makeEnv(): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-token-speed-it-'))
-  const faux = fauxProvider({ tokensPerSecond: 240 })
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const dataDir = await makeTempDir('helm-token-speed-it-')
+  const { models, faux } = makeFauxModels({ tokensPerSecond: 240 })
   const app = await createHelm({
     buildProvider: createPluginBuildProvider(),
     dataDir,
@@ -55,7 +50,7 @@ async function makeEnv(): Promise<Env> {
     app,
     async close() {
       await app.close().catch(() => {})
-      rmSync(dataDir, { recursive: true, force: true })
+      await cleanupDir(dataDir)
     },
   }
 }

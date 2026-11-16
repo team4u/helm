@@ -41,6 +41,7 @@ import { extractMeta, WorkflowMetaError } from '../src/workflow/engine/meta.js'
 import { type WorkflowEntry, type WorkflowActionEntry } from '../src/workflow/engine/progress.js'
 import { normalizeWorkflowArgs, runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/workflow/engine/runtime.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+import { deferred, makeFauxModels } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -1472,6 +1473,7 @@ describe('WorkflowService', () => {
 
   it('abort kills the run and awaits in-flight child conversation aborts', timeout, async () => {
     let resolveSpawn: (() => void) | undefined
+    const spawnEntered = deferred<void>()
     let spawned = 0
     let childConvId = 0
     const host = makeServiceHost()
@@ -1480,6 +1482,7 @@ describe('WorkflowService', () => {
       spawned++
       childConvId = 100 + spawned
       request.onResolved?.({ conversationId: childConvId })
+      spawnEntered.resolve()
       await new Promise<void>((resolve) => {
         resolveSpawn = resolve
       })
@@ -1490,8 +1493,8 @@ describe('WorkflowService', () => {
       conversationId: 1,
       script: META('svc4') + 'const v = await agent("hang")\nreturn v',
     })
-    // 等 spawn 进入在途。
-    await new Promise((r) => setTimeout(r, 150))
+    // 等 spawn 真正进入在途。
+    await spawnEntered.promise
     await service.abort(summary.id)
     assert.equal(spawned, 1)
     const final = service.getRun(summary.id)
@@ -2211,15 +2214,10 @@ describe('workflow real-SDK integration (faux provider)', () => {
   it('agent() without explicit agentType spawns via default assistant profile end to end', timeout, async () => {
     // 动态加载真 KernelRuntime 组装链（faux provider + 真 spawn.ts + 真 profiles）。
     const { KernelRuntime } = await import('../../kernel/src/runtime/index.js')
-    const { fauxProvider, fauxAssistantMessage } = await import(
-      '@earendil-works/pi-ai/providers/faux'
-    )
-    const { createModels } = await import('@earendil-works/pi-ai/models')
+    const { fauxAssistantMessage } = await import('@earendil-works/pi-ai/providers/faux')
 
     const dataDir = mkdtempSync(join(tmpdir(), 'wf-sdk-'))
-    const faux = fauxProvider()
-    const models = createModels()
-    models.setProvider(faux.provider)
+    const { models, faux } = makeFauxModels()
 
     const runtime = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir,
@@ -2315,11 +2313,8 @@ describe('workflow real-SDK integration (faux provider)', () => {
   it('real env.exec child processes are cancelled on early return and script failure', timeout, async () => {
     const { createHelm } = await import('../../hub/src/app.js')
     const { createPluginBuildProvider } = await import('@helm/plugin-build')
-    const { fauxProvider } = await import('@earendil-works/pi-ai/providers/faux')
-    const { createModels } = await import('@earendil-works/pi-ai/models')
     const dataDir = mkdtempSync(join(tmpdir(), 'wf-exec-cleanup-'))
-    const models = createModels()
-    models.setProvider(fauxProvider().provider)
+    const { models } = makeFauxModels()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
     // 插件化后编排引擎仅经 builtin:workflow 动作总线驱动（不再暴露 app.workflows）。
     const workflows = app.kernel.plugins!
@@ -2375,13 +2370,9 @@ describe('workflow real-SDK integration (faux provider)', () => {
 
   it('env.exec in real KernelRuntime executes command without consuming tokens', timeout, async () => {
     const { KernelRuntime } = await import('../../kernel/src/runtime/index.js')
-    const { fauxProvider } = await import('@earendil-works/pi-ai/providers/faux')
-    const { createModels } = await import('@earendil-works/pi-ai/models')
 
     const dataDir = mkdtempSync(join(tmpdir(), 'wf-env-exec-real-'))
-    const faux = fauxProvider()
-    const models = createModels()
-    models.setProvider(faux.provider)
+    const { models } = makeFauxModels()
 
     const runtime = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir,

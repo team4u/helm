@@ -15,10 +15,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmError, type Profile } from '@helm/protocol'
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import { FsOutputFiles, HERDR_FAST_TEST_TIMINGS, ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
+import {
+  FsOutputFiles,
+  HERDR_FAST_TEST_TIMINGS,
+  agentInfoOf,
+  ipcLineCall,
+  serveTransport,
+  type HerdrPaneState as PaneState,
+  type HerdrPaneStatus as PaneStatus,
+} from './helpers/herdr-unit-fixture.js'
+import { MemoryConfigStore, MemoryDocStore } from './helpers/plugin-test-env.js'
 import type { HerdrEvent, HerdrNodeChannel, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
@@ -26,31 +35,6 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 // ---------------------------------------------------------------------------
 // 受控 HerdrTransport（与 herdr.test.ts 同款裁剪版）
 // ---------------------------------------------------------------------------
-
-type PaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
-
-interface PaneState {
-  paneId: string
-  tabId: string
-  workspaceId: string
-  agentStatus: PaneStatus
-  seq: number
-  name?: string
-  cwd: string
-}
-
-function agentInfoOf(pane: PaneState) {
-  return {
-    pane_id: pane.paneId,
-    tab_id: pane.tabId,
-    workspace_id: pane.workspaceId,
-    agent_status: pane.agentStatus,
-    interactive_ready: pane.agentStatus !== 'unknown',
-    state_change_seq: pane.seq,
-    cwd: pane.cwd,
-    ...(pane.name !== undefined ? { name: pane.name } : {}),
-  }
-}
 
 class FakeTransport implements HerdrTransport {
   panes = new Map<string, PaneState>()
@@ -350,23 +334,6 @@ class FakeBackend implements PluginHostBackend {
   }
 }
 
-class MemoryDocStore implements PluginDocStore {
-  store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-  async flush(): Promise<void> {}
-}
-
 interface Env {
   host: PluginHost
   transport: FakeTransport
@@ -374,12 +341,6 @@ interface Env {
   /** 附件元数据解析记录（deps.getArtifact 调用）。 */
   artifactLookups: Array<{ id: string; conversationId: number }>
   close(): Promise<void>
-}
-
-class MemoryConfigStore {
-  constructor(private readonly initial: Record<string, unknown> = {}) {}
-  get(): Record<string, unknown> { return this.initial }
-  set(): void {}
 }
 
 async function makeEnv(opts: { withGetArtifact?: boolean; hubUrls?: Record<string, string> } = {}): Promise<Env> {

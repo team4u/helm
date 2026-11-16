@@ -26,10 +26,8 @@
  * （真子会话、真 worker 线程、真 journal），绝不 mock 引擎或伪造完成结果。
  */
 
-import { createModels } from '@earendil-works/pi-ai/models'
 import {
   fauxAssistantMessage,
-  fauxProvider,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import type { AgentSpawnRequest } from '@helm/protocol'
@@ -46,19 +44,7 @@ import { buildManagedEnv, runShell } from '../../kernel/src/runtime/tools.js'
 import type { HelmToolDeps } from '../../kernel/src/runtime/tool-deps.js'
 import { SecretStash } from '../../kernel/src/services/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-
-interface FauxHandle {
-  setResponses(messages: unknown[]): void
-  state: { callCount: number }
-  provider: { id: string }
-}
-
-function makeFauxModels(): { models: ReturnType<typeof createModels>; faux: FauxHandle } {
-  const models = createModels()
-  const faux = fauxProvider() as unknown as FauxHandle
-  models.setProvider(faux.provider as never)
-  return { models, faux }
-}
+import { makeFauxModels, useTempDir } from './helpers/plugin-test-env.js'
 
 let rootDir: string
 
@@ -849,4 +835,44 @@ describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同�
       await kernel.close()
     }
   })
+})
+
+test('外部子代理执行元数据的工具正文与持久结果统一脱敏', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-spawn-metadata-')
+  const { models, faux } = makeFauxModels()
+  const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, models, model: 'faux/faux-1' })
+  try {
+    const secret = 'private-metadata-folder'
+    kernel.stash.put(1, 'PATH_SECRET', secret)
+    // subagent 工具由 builtin:workflow 插件提供（引擎 state 走插件私有 records doc）。
+    await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.plugins.register({
+      id: 'test:metadata-boundary',
+      definePlugin(ctx) {
+        ctx.hook.onAgentSpawn((request) => {
+          request.onResolved?.({
+            nodeId: 'local',
+            executionId: 'pane-9',
+            effectiveCwd: `/srv/${secret}/task`,
+            meta: { 'builtin:workflow': { worktree: { path: `/srv/${secret}/task`, branch: `helm/${secret}/task` } } },
+          })
+          return { action: 'handled', result: { answer: 42 } }
+        })
+      },
+    })
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('subagent', { prompt: '检查元数据', agentType: 'herdr:pi', background: false })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('完成'),
+    ])
+    await kernel.submitInput(1, '执行任务')
+    await kernel.waitForIdle(1)
+    const detail = await kernel.getConversationDetail(1, { limit: 30 })
+    const output = JSON.stringify(detail)
+    assert.ok(detail.entries.some((entry) => entry.kind === 'pi.tool-result'))
+    assert.ok(output.includes('pane-9'), '非机密续接标识仍可读取')
+    assert.ok(output.includes('[REDACTED:'), '正文或元数据应包含真实 stash 标记')
+    assert.ok(!output.includes(secret), '执行目录与分支中的机密不得落入工具正文或结构化结果')
+  } finally {
+    await kernel.close()
+  }
 })

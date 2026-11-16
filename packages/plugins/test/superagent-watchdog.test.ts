@@ -58,6 +58,10 @@ import type {
   SuperAgentConfig,
   SuperAgentWatchdogRuntime,
 } from '../src/superagent/contracts.js'
+import {
+  MemoryDocStore,
+  makeConversationSummary as baseConversationSummary,
+} from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 受控依赖基座
@@ -75,24 +79,6 @@ interface Recorded {
   trackFailures: Array<{ label: string; error: unknown }>
 }
 
-/** 内存版 PluginDocStore（带类型化 store 字段供测试直接注入/检查）。 */
-class MemoryDocStore implements PluginDocStore {
-  readonly store = new Map<string, unknown>()
-  get<T>(key: string, initial: T): T {
-    return this.store.has(key) ? (this.store.get(key) as T) : initial
-  }
-  set<T>(key: string, value: T): void {
-    this.store.set(key, structuredClone(value))
-  }
-  deletePlugin(pluginId: string): void {
-    const prefix = `${pluginId}:`
-    for (const key of [...this.store.keys()]) {
-      if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.store.delete(key)
-    }
-  }
-
-  async flush(): Promise<void> {}
-}
 /** 构造 watch 用的内核同构 guarded 端口（存在/归属/水位复核 + 记录）。 */
 function makeGuardedPorts(
   conversations: Map<number, ConversationSummary>,
@@ -155,26 +141,8 @@ function makeToolSpec(name: string): PluginToolSpec {
   }
 }
 
-function makeConversationSummary(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
-  return {
-    id,
-    title: `conv-${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp',
-    model: 'faux/faux-1',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 10,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-    ...over,
-  }
-}
+const makeConversationSummary = (id: number, over: Partial<ConversationSummary> = {}): ConversationSummary =>
+  baseConversationSummary({ id, model: 'faux/faux-1', stateChangeSeq: 10, ...over })
 
 interface HarnessOptions {
   routerId?: number

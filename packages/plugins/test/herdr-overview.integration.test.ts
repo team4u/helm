@@ -31,13 +31,11 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-
 import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import type { HerdrTarget, HerdrTransport, HerdrCallOptions, HerdrEvent } from '../src/herdr/contracts.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
+import { makeFauxModels, waitFor } from './helpers/plugin-test-env.js'
 
 const testDir = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(testDir, '..', '..', '..')
@@ -237,9 +235,7 @@ interface Env {
 }
 
 async function openEnv(dataDir: string, transport: HerdrTransport): Promise<Env> {
-  const faux = fauxProvider()
-  const models = createModels()
-  models.setProvider(faux.provider)
+  const { models } = makeFauxModels()
   // 受控 transport 经真实 UDS 行协议暴露：零参 herdr 插件以配置 socketPath
   // 直连（组合层已无 herdrTransport 注入缝）。
   const socketPath = join(dataDir, 'herdr.sock')
@@ -318,14 +314,17 @@ async function waitForOverview(
   predicate: (doc: OverviewShape) => boolean,
   timeoutMs = 15_000,
 ): Promise<OverviewShape> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const doc = await readOverview(base, token)
-    assert.equal(doc.status, 200, 'overview doc 应为公开可读')
-    if (predicate(doc.value!)) return doc.value!
-    if (Date.now() > deadline) assert.fail('waitForOverview 超时：条件在限定时间内未成立')
-    await new Promise((r) => setTimeout(r, 25))
-  }
+  let latest!: OverviewShape
+  await waitFor(
+    async () => {
+      const doc = await readOverview(base, token)
+      assert.equal(doc.status, 200, 'overview doc 应为公开可读')
+      latest = doc.value!
+      return predicate(latest)
+    },
+    { timeoutMs, message: 'waitForOverview 超时：条件在限定时间内未成立' },
+  )
+  return latest
 }
 
 /** SSE 订阅：先等 snapshot 首帧就绪再触发被测行为；返回真实增量帧。 */
