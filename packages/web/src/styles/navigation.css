@@ -65,6 +65,13 @@
   text-transform: inherit;
 }
 
+.sidebar-group-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
 /* 已归档分组行内的归属智能体徽标：防长名撑破行宽。 */
 .archived-profile-label {
   max-width: 96px;
@@ -77,7 +84,8 @@
   min-height: 32px;
   height: auto;
   flex-shrink: 0;
-  padding: 5px 10px;
+  padding: 5px 8px;
+  position: relative;
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
@@ -98,9 +106,69 @@
   color: var(--fg);
 }
 
-.nav-item-active,
-.nav-item-active:hover {
-  background: var(--nav-active-bg);
+/* 侧栏行级底色由 --nav-row-bg 统一驱动，供绝对定位行尾动作渐变无缝融合 */
+.sidebar-context .nav-item {
+  --nav-row-bg: transparent;
+  background: var(--nav-row-bg);
+}
+
+.sidebar-context .nav-item:hover {
+  --nav-row-bg: var(--nav-hover-bg);
+}
+
+.sidebar-context .nav-item:not(.nav-item-active):not(.nav-item-split):has([aria-expanded="true"]) {
+  --nav-row-bg: var(--nav-hover-bg);
+  color: var(--fg);
+}
+
+/* 归属父行弱态：子会话激活而父站位未进入待命态时，仅提亮加粗文字，无卡片底与阴影 */
+.agent-standing-row-branch {
+  color: var(--fg);
+}
+
+.sidebar-context .nav-item.agent-standing-row-branch {
+  color: var(--fg);
+}
+
+.agent-standing-row-branch .nav-item-label {
+  font-weight: 600;
+}
+
+/* 分屏非聚焦在场态：柔和底色 + 1px 内描边 */
+.nav-item-split:hover,
+.nav-item-split {
+  --nav-row-bg: var(--nav-split-bg);
+  background: var(--nav-row-bg);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.sidebar-context .nav-item.nav-item-split:hover,
+.sidebar-context .nav-item.nav-item-split {
+  --nav-row-bg: var(--nav-split-bg);
+  background: var(--nav-row-bg);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.nav-item-split .nav-item-label {
+  font-weight: 500;
+}
+
+/* 唯一高亮实心卡片：待命亮父行、进会话亮子行 */
+.nav-item-active:hover,
+.nav-item-active {
+  --nav-row-bg: var(--nav-active-bg);
+  background: var(--nav-row-bg);
+  color: var(--nav-active-fg);
+  box-shadow: var(--seg-edge);
+  font-weight: 500;
+}
+
+.sidebar-context .nav-item.nav-item-active:hover,
+.sidebar-context .nav-item.nav-item-active {
+  --nav-row-bg: var(--nav-active-bg);
+  background: var(--nav-row-bg);
   color: var(--nav-active-fg);
   box-shadow: var(--seg-edge);
   font-weight: 500;
@@ -108,6 +176,45 @@
 
 .nav-item-active .nav-item-meta {
   color: var(--nav-active-muted);
+}
+
+/* 分屏焦点刻度与微标：与主舞台面板顶缘焦点条呼应 */
+.nav-item-focused {
+  position: relative;
+}
+
+.nav-item-focused::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.nav-pane-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.nav-item-focused .nav-pane-tag {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .nav-item-main {
@@ -126,23 +233,21 @@
   font-weight: 500;
 }
 
-/* 行首状态槽：固定宽度灯位，idle 空槽保持续行标题对齐（灯不渲染槽仍在）。
- * 紧凑左缘：槽以 -4px 左负边距伸入行内边距，灯芯贴近行左缘，标题不被推远；
- * 槽宽必须显著大于 7px 灯芯（留足取整余量）：8px 曾在移动端非整数缩放下
- * 把圆点挤成椭圆，10px 起稳定；跨行对齐依赖槽宽固定，不随灯是否渲染变化。 */
+/* 行首状态槽：固定 10px 灯位，圆心精准落在左起 8 + 5 = 13px 轴线上；
+ * idle 空槽保持跨行标题左缘对齐，且为 7px 灯芯与呼吸光晕留足空间。 */
 .nav-status-slot {
   width: 10px;
-  margin-left: -4px;
+  margin-left: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
 
-/* 仅带灯槽的行收紧 main 间距（标题紧贴灯槽）：设置导航/视图行的图标位
- * 不渲染 nav-status-slot，保持 .nav-item-main 基础 8px gap 不受影响。 */
+/* 仅带灯槽的行使用 6px 间距（8 + 10 + 6 = 24px），与展开子列表左缘齐平；
+ * 设置导航/视图行不渲染 nav-status-slot，保持 .nav-item-main 基础 8px gap。 */
 .nav-item-main:has(> .nav-status-slot) {
-  gap: 4px;
+  gap: 6px;
 }
 
 .nav-item-meta {
@@ -162,39 +267,20 @@
   gap: 2px;
 }
 
+/* 1px 竖向引导线正对父行状态灯圆心 13px 轴线；子列表内容从 13 + 1 + 10 = 24px 起排，与父行标题齐平 */
 .agent-standing-group .agent-conversations-list {
-  margin: 4px 0 2px 8px;
-  padding-left: 4px;
+  margin: 2px 0 4px 13px;
+  padding-left: 10px;
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-/* 高亮策略（参考 magpie 父强子弱）：站位行（父）恒点亮——卡片底由 .nav-item-active
- * 提供，叠加微投影描边；话题列表展开、当前会话子行（子）同时点亮时父行高亮不消失。 */
-.agent-standing-group .agent-standing-row.nav-item-active,
-.agent-standing-group .agent-standing-row.nav-item-active:hover {
-  box-shadow: var(--seg-edge);
-}
-
-/* 当前会话子行（子，弱高亮）：半透明药丸底 + 前景加重，无描边阴影，
- * 与父行的实心卡片形成层级对比。 */
-.agent-standing-group .nav-item-sub.nav-item-active,
-.agent-standing-group .nav-item-sub.nav-item-active:hover {
-  background: color-mix(in srgb, var(--fg) 6.5%, transparent);
-  color: var(--fg);
-  box-shadow: none;
-}
-
-.agent-standing-group .nav-item-sub.nav-item-active .nav-item-label {
-  font-weight: 500;
-}
-
 .nav-item-sub {
   min-height: 28px;
-  padding: 3px 8px;
-  border-radius: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
   font-size: 12.5px;
 }
 
@@ -203,33 +289,129 @@
   font-weight: 400;
 }
 
+.nav-item-sub.nav-item-active .nav-item-label,
+.nav-item-sub.nav-item-split .nav-item-label {
+  font-weight: 500;
+}
+
 /* 行级悬停操作（子会话重命名/删除、站位与视图行的分屏按钮与新建按钮）：
- * 平时隐藏不抢视觉焦点，悬停/聚焦/激活行或触屏设备才显示。 */
+ * 桌面端悬停设备下对非激活/非分屏行采用绝对定位叠加渐变，实现零文字重排、零抖动；
+ * 激活行、分屏行与触屏设备保持常规流内联，避免与 .nav-pane-tag（主/分）重叠碰撞。 */
 .nav-item-row-actions,
 .sidebar-split-action,
 .agent-new-conv-btn {
-  display: none;
+  display: inline-flex;
   align-items: center;
   gap: 2px;
 }
 
-.nav-item:hover .nav-item-row-actions,
-.nav-item:focus-within .nav-item-row-actions,
+@media (hover: hover) {
+  .nav-item:not(.nav-item-active):not(.nav-item-split) .nav-item-row-actions,
+  .nav-item:not(.nav-item-active):not(.nav-item-split) .sidebar-split-action {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0;
+    pointer-events: none;
+    padding-left: 14px;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    background: linear-gradient(90deg, transparent 0%, var(--nav-row-bg, var(--bg-subtle)) 38%);
+    transition: opacity 100ms ease;
+  }
+
+  .sidebar-context .nav-item:not(.nav-item-active):not(.nav-item-split):focus-within:not(:hover):not(:has([aria-expanded="true"])) .nav-item-row-actions,
+  .sidebar-context .nav-item:not(.nav-item-active):not(.nav-item-split):focus-within:not(:hover):not(:has([aria-expanded="true"])) .sidebar-split-action {
+    background: linear-gradient(90deg, transparent 0%, var(--bg-subtle) 38%);
+  }
+
+  .nav-item:not(.nav-item-active):not(.nav-item-split):hover .nav-item-row-actions,
+  .nav-item:not(.nav-item-active):not(.nav-item-split):focus-within .nav-item-row-actions,
+  .nav-item:not(.nav-item-active):not(.nav-item-split):has([aria-expanded="true"]) .nav-item-row-actions,
+  .nav-item:not(.nav-item-active):not(.nav-item-split):hover .sidebar-split-action,
+  .nav-item:not(.nav-item-active):not(.nav-item-split):focus-within .sidebar-split-action,
+  .nav-item:not(.nav-item-active):not(.nav-item-split):has([aria-expanded="true"]) .sidebar-split-action {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .nav-item:not(.nav-item-active):not(.nav-item-split) .nav-item-row-actions:empty {
+    display: none;
+  }
+
+  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split) .agent-new-conv-btn {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 100ms ease, background 120ms ease, color 120ms ease;
+  }
+
+  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):hover .agent-new-conv-btn:not(:hover) {
+    background: var(--nav-hover-bg);
+  }
+
+  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):focus-within:not(:hover) .agent-new-conv-btn:not(:hover) {
+    background: var(--bg-subtle);
+  }
+
+  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split) .nav-item-meta > :not(.agent-new-conv-btn) {
+    transition: opacity 100ms ease;
+  }
+
+  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):hover .agent-new-conv-btn,
+  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):focus-within .agent-new-conv-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):hover .nav-item-meta > :not(.agent-new-conv-btn),
+  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):focus-within .nav-item-meta > :not(.agent-new-conv-btn) {
+    opacity: 0;
+  }
+}
+
 .nav-item-active .nav-item-row-actions,
-.nav-item:hover .sidebar-split-action,
-.nav-item:focus-within .sidebar-split-action,
 .nav-item-active .sidebar-split-action,
-.nav-item:hover .agent-new-conv-btn,
-.nav-item:focus-within .agent-new-conv-btn,
-.nav-item-active .agent-new-conv-btn {
+.nav-item-active .agent-new-conv-btn,
+.nav-item-split .nav-item-row-actions,
+.nav-item-split .sidebar-split-action,
+.nav-item-split .agent-new-conv-btn {
+  position: static;
+  transform: none;
   display: inline-flex;
+  opacity: 1;
+  pointer-events: auto;
+  background: transparent;
+  padding-left: 0;
+}
+
+.nav-item-active .nav-item-row-actions:empty,
+.nav-item-split .nav-item-row-actions:empty {
+  display: none;
 }
 
 @media (hover: none) {
   .nav-item-row-actions,
   .sidebar-split-action,
   .agent-new-conv-btn {
+    position: static;
+    transform: none;
     display: inline-flex;
+    opacity: 1;
+    pointer-events: auto;
+    background: transparent;
+    padding-left: 0;
+  }
+
+  .nav-item-row-actions:empty {
+    display: none;
   }
 }
 
@@ -317,7 +499,7 @@
   color: var(--fg-muted);
 }
 
-.agent-new-conv-btn {
+.nav-item .agent-new-conv-btn {
   color: var(--fg-muted);
 }
 
@@ -379,13 +561,20 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 27px;
-  padding: 0 8px;
+  height: 28px;
+  padding: 0 6px 0 8px;
   margin-bottom: 4px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
+  background: var(--bg-muted);
   color: var(--fg-muted);
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.sidebar-search:focus-within {
+  background: var(--bg-elevated);
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .sidebar-search-input {
@@ -404,6 +593,39 @@
 
 .sidebar-search-input::placeholder {
   color: var(--fg-subtle);
+}
+
+.sidebar-search-clear {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sidebar-search .sidebar-search-clear {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.sidebar-search-clear:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.sidebar-search .sidebar-search-clear:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--bg-hover);
 }
 
 .sidebar-search-empty {
