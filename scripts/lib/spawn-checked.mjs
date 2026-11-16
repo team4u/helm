@@ -16,8 +16,9 @@
  * 退出码如实透传：子进程按码退出原样返回；被信号终止按 128+signal（GNU timeout 惯例）。
  *
  * 包管理器调用解析（resolvePackageManagerInvoke）：Windows 下 spawn('pnpm') 因 .cmd
- * 解析问题在 shell:false 时不可用；优先用 pnpm 注入的 npm_execpath（包管理器 JS 入口，
- * 校验 .js/.cjs/.mjs 后缀）+ 当前 Node 可执行文件构造 argv，绝不拼 shell 字符串。
+ * 解析问题在 shell:false 时不可用（EINVAL）；优先用 pnpm 注入的 npm_execpath 构造
+ * argv，绝不拼 shell 字符串：.js/.cjs/.mjs 入口校验后缀后用当前 Node 运行；pnpm.exe
+ * （官方 standalone 安装注入的可执行启动器）是真实可执行文件，直接 spawn；其余回退。
  */
 import { spawn } from 'node:child_process';
 
@@ -45,6 +46,13 @@ export function resolvePackageManagerInvoke(env = process.env) {
   // （POSIX shebang 可直接 spawn；直接 node 调用脚本的 Windows 场景请通过 pnpm script 进入）。
   if (typeof execPath === 'string' && /\.(cjs|mjs|js)$/.test(execPath)) {
     return { cmd: process.execPath, args: [execPath] };
+  }
+  // pnpm 官方 standalone 安装（Windows 常见）注入的 npm_execpath 指向 pnpm.exe 可执行
+  // 启动器：.exe 是真实可执行文件而非 .cmd 脚本，无需 shell、无注入面，与 .cjs 分支
+  // 同等信任级别，直接 spawn；若回退裸 'pnpm'，Windows 上会解析为 pnpm.cmd 导致 EINVAL。
+  // basename 按两种分隔符切分：POSIX 的 path.basename 不认反斜杠，无法解析 Windows 路径。
+  if (typeof execPath === 'string' && execPath.split(/[\\/]/).pop()?.toLowerCase() === 'pnpm.exe') {
+    return { cmd: execPath, args: [] };
   }
   return { cmd: 'pnpm', args: [] };
 }
