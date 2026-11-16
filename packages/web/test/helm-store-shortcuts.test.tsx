@@ -15,6 +15,7 @@ import {
   hasAnyOpenOverlay,
   hasBlockingAlertDialog,
   hasDialogOpen,
+  hasNonModelPickerDialogOpen,
   isApplePlatform,
   isConversationAbortable,
   isInlineInputEscapeTarget,
@@ -308,7 +309,16 @@ test('shortcuts-model 纯函数：分屏焦点、状态检查与本地持久化�
   dialog.setAttribute('role', 'dialog')
   document.body.appendChild(dialog)
   assert.equal(hasDialogOpen(), true)
+  assert.equal(hasNonModelPickerDialogOpen(), true)
   dialog.remove()
+
+  const modelPopover = document.createElement('div')
+  modelPopover.setAttribute('role', 'dialog')
+  modelPopover.className = 'helm-popover-content composer-model-popover'
+  document.body.appendChild(modelPopover)
+  assert.equal(hasDialogOpen(), true)
+  assert.equal(hasNonModelPickerDialogOpen(), false)
+  modelPopover.remove()
 
   const alertDialog = document.createElement('div')
   alertDialog.setAttribute('role', 'alertdialog')
@@ -415,6 +425,30 @@ test('HelmStoreProvider 分屏焦点路由与全局单键快捷键派发（Ctrl+
     const evL2 = dispatchWindowKey({ key: 'l', ctrlKey: true })
     assert.equal(evL2.defaultPrevented, true)
     assert.deepEqual(fired[2], { action: 'toggle-model-picker', panel: 'primary' })
+
+    // ModelPicker Popover 打开（带 role="dialog" + .composer-model-popover）时：
+    // 再次 Ctrl+L 仍正常派发 toggle-model-picker 关闭浮层；Ctrl+O 仍被阻止
+    const modelPopover = document.createElement('div')
+    modelPopover.setAttribute('role', 'dialog')
+    modelPopover.className = 'helm-popover-content composer-model-popover'
+    document.body.appendChild(modelPopover)
+    const countBeforePopover = fired.length
+    const evLToggleClose = dispatchWindowKey({ key: 'l', ctrlKey: true })
+    assert.equal(evLToggleClose.defaultPrevented, true, 'ModelPicker 打开时再次 Ctrl+L 应可派发关闭事件')
+    const evOBlockedByPopover = dispatchWindowKey({ key: 'o', ctrlKey: true })
+    assert.equal(evOBlockedByPopover.defaultPrevented, false)
+    assert.deepEqual(fired.slice(countBeforePopover), [{ action: 'toggle-model-picker', panel: 'primary' }])
+    modelPopover.remove()
+
+    // 普通模态/抽屉 [role="dialog"] 打开时：Ctrl+L 应被拦截，绝不派发
+    const normalDialog = document.createElement('div')
+    normalDialog.setAttribute('role', 'dialog')
+    document.body.appendChild(normalDialog)
+    const countBeforeNormalDialog = fired.length
+    const evLBlocked = dispatchWindowKey({ key: 'l', ctrlKey: true })
+    assert.equal(evLBlocked.defaultPrevented, false)
+    assert.equal(fired.length, countBeforeNormalDialog)
+    normalDialog.remove()
   } finally {
     window.removeEventListener('helm:shortcut', onShortcut)
   }
@@ -470,7 +504,10 @@ test('HelmStoreProvider 双击 Esc 防误触状态机（浮层拦截 / 非运行
     capturedStore?.setFocusedPanel?.('split')
   })
 
-  // 2) 若内层元素调用 stopPropagation，绝不进入武装状态
+  // 2) 若内层元素调用 stopPropagation，或携带 Shift+Esc，绝不进入武装状态
+  dispatchWindowKey({ key: 'Escape', shiftKey: true })
+  assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
+
   const consumerInput = document.querySelector<HTMLElement>('[data-testid="esc-consumer-input"]')
   assert.ok(consumerInput)
   dispatchWindowKey({ key: 'Escape' }, consumerInput)

@@ -33,6 +33,7 @@ import {
   hasAnyOpenOverlay,
   hasBlockingAlertDialog,
   hasDialogOpen,
+  hasNonModelPickerDialogOpen,
   hasNonWorkbenchDialogOpen,
   isConversationAbortable,
   isInlineInputEscapeTarget,
@@ -825,7 +826,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
         return
       }
 
-      if (event.key === 'Escape' && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      if (event.key === 'Escape' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
         if (
           event.defaultPrevented ||
           hasAnyOpenOverlay(activeModalRef.current, workbenchOpenRef.current) ||
@@ -882,14 +883,17 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
         return
       }
 
-      if (activeModalRef.current !== null || workbenchOpenRef.current || hasDialogOpen()) return
+      if (activeModalRef.current !== null || workbenchOpenRef.current) return
 
       if (isCtrlOnly && keyLower === 'l') {
+        if (hasNonModelPickerDialogOpen()) return
         event.preventDefault()
         const detail: HelmShortcutDetail = { action: 'toggle-model-picker', panel }
         window.dispatchEvent(new CustomEvent<HelmShortcutDetail>('helm:shortcut', { detail }))
         return
       }
+
+      if (hasDialogOpen()) return
 
       if (isCtrlOnly && keyLower === 'o') {
         event.preventDefault()

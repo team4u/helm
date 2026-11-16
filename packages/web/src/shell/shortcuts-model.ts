@@ -32,6 +32,7 @@ const OVERLAY_SELECTOR = [
 
 const DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"]'
 const NON_WORKBENCH_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.helm-workbench)'
+const NON_MODEL_PICKER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.composer-model-popover)'
 
 export function getStoredSidebarCollapsed(): boolean {
   try {
@@ -91,6 +92,12 @@ export function hasDialogOpen(): boolean {
 export function hasNonWorkbenchDialogOpen(): boolean {
   if (typeof document === 'undefined') return false
   return document.querySelector(NON_WORKBENCH_DIALOG_SELECTOR) !== null
+}
+
+/** 检测除 ModelPicker 浮层以外的阻塞对话框（确保 Ctrl+L 再次按下时可切换关闭已打开的选型框）。 */
+export function hasNonModelPickerDialogOpen(): boolean {
+  if (typeof document === 'undefined') return false
+  return document.querySelector(NON_MODEL_PICKER_DIALOG_SELECTOR) !== null
 }
 
 export function hasAnyOpenOverlay(activeModal: ActiveModal, workbenchOpen: boolean): boolean {
