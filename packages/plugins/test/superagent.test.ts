@@ -289,8 +289,8 @@ test('superagent4: 启用自举——Profile/技能/两常驻会话/公开 doc/�
     const kernel = env.app.kernel
     // Profile 资产（逐文件）
     const sys = readFileSync(join(env.dataDir, 'profiles', 'superagent', 'SYSTEM.md'), 'utf8')
-    assert.match(sys, /SuperAgent 中枢/)
-    assert.match(readFileSync(join(env.dataDir, 'profiles', 'watchdog', 'SYSTEM.md'), 'utf8'), /巡检看门狗/)
+    assert.match(sys, /SuperAgent Hub/)
+    assert.match(readFileSync(join(env.dataDir, 'profiles', 'watchdog', 'SYSTEM.md'), 'utf8'), /Watchdog/)
     assert.match(readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8'), /watchdog-playbooks/)
     // 新自举默认技能策略：router skills=[]、watchdog 仅 watchdog-playbooks
     const routerJson = JSON.parse(
@@ -386,8 +386,8 @@ test('superagent5: 幂等自举——不覆盖用户文件；partial-start 补�
     rmSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'references', 'ci-failure.md'))
     await env.app.kernel.plugins.disable('builtin:superagent')
     await enableSuperAgent(env)
-    assert.match(readFileSync(join(env.dataDir, 'profiles', 'superagent', 'SYSTEM.md'), 'utf8'), /SuperAgent 中枢/)
-    assert.match(readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'references', 'ci-failure.md'), 'utf8'), /CI 失败处置/)
+    assert.match(readFileSync(join(env.dataDir, 'profiles', 'superagent', 'SYSTEM.md'), 'utf8'), /SuperAgent Hub/)
+    assert.match(readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'references', 'ci-failure.md'), 'utf8'), /CI Failure Handling/)
     // MEMORY.md 由 builtin:memory 自治：partial-start 补齐只针对 SYSTEM.md 与
     // 技能 references，不创建/补回记忆文件。
     assert.equal(existsSync(join(env.dataDir, 'profiles', 'watchdog', 'MEMORY.md')), false)
@@ -1179,8 +1179,8 @@ test('superagent 记忆归属: 已初始化文件被删后重启/superagent 重�
       await app2.kernel.submitInput(routerId2, '重启后的自检')
       await app2.kernel.waitForIdle(routerId2)
       assert.ok(
-        notifications2.some((n) => n.title.includes('Long-term Memory文件缺失')),
-        'memory 插件应检测到已初始化文件的缺失并显式告警',
+        notifications2.some((n) => n.title.includes('Long-term memory file missing')),
+        'the memory plugin should explicitly warn when an initialized file is missing',
       )
       assert.ok(missingSystemSections.some((section) => section.includes('<memory_assets_missing>')), '缺失段落真实进入重启后的模型请求')
       assert.equal(existsSync(memoryPath), false, '告警路径绝不重建文件（自愈只经显式写入）')

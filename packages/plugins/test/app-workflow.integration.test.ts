@@ -204,7 +204,7 @@ test('工作流2: action() 经 PluginHost 动作总线共享 Schema 校验——
     const badNode = badSummary.nodes?.find((n) => n.kind === 'action')
     assert.ok(badNode, '应含 action 节点')
     assert.equal(badNode!.status, 'failed', '非法入参动作节点应显式 failed')
-    assert.ok(/校验失败|minLength/.test(badNode!.error ?? ''), `节点错误应指向 Schema 校验：${badNode!.error}`)
+    assert.ok(/reference validation failed|minLength|must NOT have fewer/.test(badNode!.error ?? ''), `action node error should identify Schema validation: ${badNode!.error}`)
     assert.deepEqual(env.echoCalls, ['wf-hello'], '非法输入不执行 handler（计数不增）')
 
     // 未知动作全限定 ID 同样折叠 null + 节点 failed

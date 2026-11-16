@@ -164,7 +164,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     // 非法 profileId（目录注入）显式拒绝
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'get', { profileId: '../etc' }),
-      (err: unknown) => err instanceof Error && /非法 profile id/.test(err.message),
+      (err: unknown) => err instanceof Error && /only allows a-z 0-9 and hyphen/.test(err.message),
     )
   })
 

@@ -464,8 +464,8 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'SubagentWorkflow')
       assert.ok(
-        text.includes('workflow_failed') && text.includes('恰好提供一个'),
-        `应显式报错而非伪造运行：${text.slice(0, 300)}`,
+        text.includes('workflow_failed') && text.includes('exactly one of'),
+        `Expected an explicit failure, not a fabricated run: ${text.slice(0, 300)}`,
       )
     } finally {
       await app.close()

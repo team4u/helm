@@ -204,7 +204,7 @@ test('env.exec2: 普通插件动作 preflight invalid input 不锁死 resume；�
     const badNode = badRun.nodes?.find((n) => n.kind === 'action')
     assert.ok(badNode)
     assert.equal(badNode!.status, 'failed')
-    assert.match(badNode!.error ?? '', /校验失败|minLength/)
+    assert.match(badNode!.error ?? '', /reference validation failed|minLength|must NOT have fewer/)
     assert.deepEqual(env.echoCalls, [], '非法输入不执行 handler')
 
     // 账本（引擎私有 journal）不得含 action_started，且无 non-idempotent uncertain。

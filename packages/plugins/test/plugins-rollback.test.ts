@@ -269,7 +269,7 @@ test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 asset
     const memMissing = sections.find((s) => s.id === 'memory.assets-missing')
     assert.ok(memMissing !== undefined, '必须注入 memory.assets-missing 节')
     assert.ok(memMissing.text.includes('MEMORY.md'), '显式点名 MEMORY.md 缺失')
-    assert.ok(memMissing.text.includes('不要假装') || sysMissing.text.includes('不要假装'), '明确指示模型不得假装拥有记忆/人格')
+    assert.ok(memMissing.text.includes('until then you have no long-term memory') || sysMissing.text.includes('do not pretend'), 'the model is told not to fabricate missing memory or persona')
     // 人类侧告警也发出（双通道：模型可见 + 人类通知）。
     assert.ok(
       backend.notifications.some((n) => n.title.includes('MEMORY.md') || n.title.includes('Long-term Memory')),

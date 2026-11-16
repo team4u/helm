@@ -298,13 +298,13 @@ describe('register_artifact：local 真实字节登记', { timeout: 60_000 }, ()
     const tool = createRegisterArtifactTool(deps)
     const dirResult = await tool.execute({ path: '.' }, makeApi(dir), BACKGROUND_CONTEXT)
     assert.equal(dirResult.isError, true)
-    assert.ok((dirResult.output as Array<{ text: string }>)[0]!.text.includes('目录'))
+    assert.ok((dirResult.output as Array<{ text: string }>)[0]!.text.includes('is directory'))
     if (process.platform !== 'win32') {
       const fifo = join(dir, 'pipe.fifo')
       execSync(`mkfifo ${fifo}`)
       const fifoResult = await tool.execute({ path: 'pipe.fifo' }, makeApi(dir), BACKGROUND_CONTEXT)
       assert.equal(fifoResult.isError, true)
-      assert.ok((fifoResult.output as Array<{ text: string }>)[0]!.text.includes('不是普通文件'))
+      assert.ok((fifoResult.output as Array<{ text: string }>)[0]!.text.includes('not ordinary file'))
       rmSync(fifo)
     }
     // 文本 mime：ArtifactService 统一脱敏（秘密不落盘承诺覆盖本路径）。
@@ -619,7 +619,7 @@ describe('register_artifact：remote 节点真实字节与显式拒绝', { timeo
       BACKGROUND_CONTEXT,
     )
     assert.equal(specialResult.isError, true)
-    assert.ok((specialResult.output as Array<{ text: string }>)[0]!.text.includes('不是普通文件'))
+    assert.ok((specialResult.output as Array<{ text: string }>)[0]!.text.includes('not ordinary file'))
     assert.equal(special.readers[0]!.closed, true, '特殊文件失败路径释放句柄')
     assert.equal(special.readers[0]!.readLengths.length, 0, '未读任何字节')
   })
@@ -642,7 +642,7 @@ describe('read/write/edit/bash：真实 target 路径与 nodeId 回显', { timeo
     assert.equal(writeStructured.nodeId, 'local')
     const writeText = (writeResult.output as Array<{ text: string }>)[0]!.text
     assert.ok(writeText.includes(expected), `write 成功消息必须回显绝对路径（${writeText}）`)
-    assert.ok(writeText.includes('节点 local'))
+    assert.ok(writeText.includes('node local'))
     const editTool = createEditTool(deps)
     const editResult = await editTool.execute(
       { path: 'sub/out/报告.md', oldText: '第一版', newText: '第二版' },
