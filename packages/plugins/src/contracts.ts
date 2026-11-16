@@ -171,6 +171,8 @@ export interface WorkflowRunSummary {
   progress?: WorkflowProgressEntry[]
   /** 从 journal 前缀重放恢复的 run 携带的源 run ID。 */
   replayedFrom?: string
+  /** 已被新续跑 run 接管的源记录标识，供前端隐藏重复恢复入口。 */
+  resumedByRunId?: string
   /**
    * 账本记账失败的诊断明细（agent 行写失败；恢复重放的损行计数）。
    * 只读诊断面：只影响下次 resume 的重放优化，不影响本次 run 结果；
