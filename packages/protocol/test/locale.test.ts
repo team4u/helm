@@ -17,12 +17,12 @@ import {
   resolveLocalizedText,
 } from '../src/index.js'
 
-test('HELM_LOCALES：支持集与默认回退 locale 锁定', { timeout: 60_000 }, () => {
+test('HELM_LOCALES: supported set and default fallback are stable', { timeout: 60_000 }, () => {
   assert.deepEqual(HELM_LOCALES, ['en', 'zh-CN'])
   assert.equal(DEFAULT_HELM_LOCALE, 'en')
 })
 
-test('normalizeLocaleTag：zh-* 归一到 zh-CN，其余（含非法值）回退 en', { timeout: 60_000 }, () => {
+test('normalizeLocaleTag: zh-* normalizes to zh-CN and all other values fall back to en', { timeout: 60_000 }, () => {
   // zh family: bare zh and every zh-* variant collapse to zh-CN
   for (const tag of ['zh', 'zh-CN', 'zh-cn', 'zh-TW', 'zh-HK', 'zh-SG', 'zh-Hans', 'zh-Hant', 'ZH', ' zh-CN ']) {
     assert.equal(normalizeLocaleTag(tag), 'zh-CN', `expected zh-CN for ${JSON.stringify(tag)}`)
@@ -38,7 +38,7 @@ test('normalizeLocaleTag：zh-* 归一到 zh-CN，其余（含非法值）回退
   assert.equal(normalizeLocaleTag(42 as unknown as string), 'en', 'non-string input falls back to en')
 })
 
-test('isHelmLocale：仅精确匹配支持集（大小写敏感）', { timeout: 60_000 }, () => {
+test('isHelmLocale: only exact supported locale values match', { timeout: 60_000 }, () => {
   assert.equal(isHelmLocale('en'), true)
   assert.equal(isHelmLocale('zh-CN'), true)
   for (const value of ['zh-cn', 'ZH-CN', 'EN', 'fr', '', 42, null, undefined, { en: 'x' }]) {
@@ -46,7 +46,7 @@ test('isHelmLocale：仅精确匹配支持集（大小写敏感）', { timeout: 
   }
 })
 
-test('parseLocalizedText：边界校验显示文案（string 直通 / map 键值严格 / 其余拒绝）', { timeout: 60_000 }, () => {
+test('parseLocalizedText: validates display copy at the boundary', { timeout: 60_000 }, () => {
   // plain strings pass through (backwards compatible with existing string fields)
   assert.equal(parseLocalizedText('hello'), 'hello')
   assert.equal(parseLocalizedText(''), '')
@@ -60,7 +60,7 @@ test('parseLocalizedText：边界校验显示文案（string 直通 / map 键值
   }
 })
 
-test('resolveLocalizedText：string 直通；map 按请求 locale -> 默认 locale -> 声明序回退', { timeout: 60_000 }, () => {
+test('resolveLocalizedText: uses requested, default, then declaration-order fallbacks', { timeout: 60_000 }, () => {
   // plain string is locale-independent
   assert.equal(resolveLocalizedText('hello', 'zh-CN'), 'hello')
   assert.equal(resolveLocalizedText('hello', 'en'), 'hello')
@@ -74,7 +74,7 @@ test('resolveLocalizedText：string 直通；map 按请求 locale -> 默认 loca
   assert.equal(resolveLocalizedText({ 'zh-CN': '你好' }, 'en'), '你好')
 })
 
-test('createLocaleTranslator：绑定单一 locale 的最小 translator', { timeout: 60_000 }, () => {
+test('createLocaleTranslator: binds a minimal translator to one locale', { timeout: 60_000 }, () => {
   const zh = createLocaleTranslator('zh-CN')
   const en = createLocaleTranslator('en')
   assert.equal(zh('plain'), 'plain', 'plain strings pass through untouched')
