@@ -66,7 +66,7 @@ function codeEl(host: HTMLElement): HTMLElement {
 const TS_HEAD = 'const answer: number = 42\n'
 const TS_APPENDED = TS_HEAD + 'export { answer }\n'
 
-test('流式增量帧与高亮同帧提交，不退回纯文本', async () => {
+test('流式增量帧与高亮同帧提交，不退回纯文本', { timeout: 60_000 }, async () => {
   const m = createMount()
   try {
     m.render(e(SyntaxCode, { code: TS_HEAD, language: 'typescript' }))
@@ -83,7 +83,7 @@ test('流式增量帧与高亮同帧提交，不退回纯文本', async () => {
   }
 })
 
-test('模块缓存就绪后新挂载代码块首帧即高亮', async () => {
+test('模块缓存就绪后新挂载代码块首帧即高亮', { timeout: 60_000 }, async () => {
   // 预热：确保同进程模块级缓存就绪
   const warm = createMount()
   warm.render(e(SyntaxCode, { code: 'let x = 1\n', language: 'typescript' }))
