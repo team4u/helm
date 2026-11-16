@@ -7,7 +7,7 @@ import { getNodeServiceStatus, renderServiceSpec } from '../src/daemon/service.j
 test('systemd parameter respectively escaping quotes,specifier and environment expand', { timeout: 60_000 }, () => {
   const spec = renderServiceSpec({
     platform: 'linux', nodePath: '/usr/bin/node', cliEntryPath: '/opt/helm/cli.js',
-    dataDir: '/tmp/Chinese %h $HOME "quoted"', serviceHome: '/tmp/home',
+    dataDir: '/tmp/中文 %h $HOME "quoted"', serviceHome: '/tmp/home',
   })
   assert.ok(spec.content.includes('%%h'), 'hundred number cannot trigger systemd specifier')
   assert.ok(spec.content.includes('$$HOME'), 'dollar symbol cannot trigger systemd environment expand')
@@ -18,7 +18,7 @@ test('systemd parameter respectively escaping quotes,specifier and environment e
 test('Windows register use task plan XML, parameter without going through cmd expand', { timeout: 60_000 }, () => {
   const spec = renderServiceSpec({
     platform: 'win32', nodePath: 'C:\\Program Files\\node.exe', cliEntryPath: 'C:\\helm\\cli.js',
-    dataDir: 'C:\\Chinese %USERPROFILE% & $x\\', serviceHome: '/tmp/home',
+    dataDir: 'C:\\中文 %USERPROFILE% & $x\\', serviceHome: '/tmp/home',
   })
   assert.deepEqual(spec.installCmd, ['schtasks', '/Create', '/F', '/TN', 'HelmNode', '/XML', spec.targetPath])
   assert.match(spec.content, /<Task version="1\.2" xmlns="http:\/\/schemas\.microsoft\.com\/windows\/2004\/02\/mit\/task">/)
@@ -39,6 +39,24 @@ test('Windows install state with platform task query is allow, query failed expl
   assert.equal(failure.installed, null)
   assert.equal(failure.running, 'unknown')
   assert.match(failure.detail ?? '', /state query command failed/)
+})
+
+test('Windows service queries recognize localized status and missing-task messages', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-service-localized-')
+  const cases = [
+    { code: 0, stdout: '"HelmNode","正在运行"', stderr: '', installed: true, running: 'running' },
+    { code: 0, stdout: '"HelmNode","就绪"', stderr: '', installed: true, running: 'stopped' },
+    { code: 1, stdout: '', stderr: '错误: 系统找不到指定的文件。', installed: false, running: 'unknown' },
+    { code: 1, stdout: '', stderr: '错误: 指定的任务不存在。', installed: false, running: 'unknown' },
+  ] as const
+  for (const sample of cases) {
+    const status = await getNodeServiceStatus('/tmp/cli.js', dir, {
+      platform: 'win32', serviceHome: dir,
+      execCommand: { run: async () => ({ code: sample.code, stdout: sample.stdout, stderr: sample.stderr }) },
+    })
+    assert.equal(status.installed, sample.installed)
+    assert.equal(status.running, sample.running)
+  }
 })
 
 test('launchctl single task dictionary in PID means real run state', { timeout: 60_000 }, async (t) => {
