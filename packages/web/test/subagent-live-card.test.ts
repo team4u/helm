@@ -29,7 +29,7 @@ import { workflowUi } from './helpers/workflow-ui.js'
 import { importWorkflowClientModule, importWorkflowModels, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 const HelmStoreContext = { Provider: TestStoreProvider }
 import type { HelmStoreValue } from '../src/lib/types.js'
-import type { SubagentParentToolSummary, ExecutionNode } from '../../plugins/src/workflow/client/models.ts'
+import type { SubagentParentToolSummary, ExecutionNode, SubagentRunView } from '../../plugins/src/workflow/client/models.ts'
 mountSharedPluginNamespaces({ realHooks: true })
 const {
   buildSubagentStreamLines, subagentBadge, toolResultPreviewTruncated, isScrolledToBottom,
@@ -176,29 +176,49 @@ test('subagentBadge：summary done/idle 且父工具 error 仍如实标异常；
 // 纯逻辑：background: true 后台 run 状态参与判定（绝不假完成）
 // ---------------------------------------------------------------------------
 
-test('subagentBadge：后台 run running 且子会话 idle/done/无 summary 时保持后台运行中，不假完成', { timeout: 60_000 }, () => {
+test('subagentBadge：真后台 run running 且子会话 idle/done/无 summary 时保持后台运行中，不假完成', { timeout: 60_000 }, () => {
   // 典型场景：background: true 工具行已返回句柄（done），模型输出完毕（子会话 idle），
   // 后台仍在跑 gate 验收命令——绝不能提前显示“已完成”
-  assert.deepEqual(subagentBadge('idle', 'done', 'running'), { status: 'working', label: '后台运行中', badge: 'badge-accent' })
-  assert.deepEqual(subagentBadge('done', 'done', 'running'), { status: 'working', label: '后台运行中', badge: 'badge-accent' })
-  assert.deepEqual(subagentBadge(undefined, 'done', 'running'), { status: 'working', label: '后台运行中', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge('idle', 'done', { status: 'running' }), { status: 'working', label: '后台运行中', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge('done', 'done', { status: 'running' }), { status: 'working', label: '后台运行中', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge(undefined, 'done', { status: 'running' }), { status: 'working', label: '后台运行中', badge: 'badge-accent' })
   // 后台子会话刚启动（父工具行尚 running）
-  assert.deepEqual(subagentBadge(undefined, 'running', 'running'), { status: 'working', label: '后台运行中', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge(undefined, 'running', { status: 'running' }), { status: 'working', label: '后台运行中', badge: 'badge-accent' })
 })
 
 test('subagentBadge：后台 run 终态如实呈现，不被子会话旧 idle 覆盖', { timeout: 60_000 }, () => {
-  assert.deepEqual(subagentBadge('idle', 'done', 'failed'), { status: 'error', label: '异常', badge: 'badge-err' })
-  assert.deepEqual(subagentBadge('idle', 'done', 'aborted'), { status: 'error', label: '已中止', badge: 'badge-warn' })
+  assert.deepEqual(subagentBadge('idle', 'done', { status: 'failed' }), { status: 'error', label: '异常', badge: 'badge-err' })
+  assert.deepEqual(subagentBadge('idle', 'done', { status: 'aborted' }), { status: 'error', label: '已中止', badge: 'badge-warn' })
   // run completed：不再干预，回到 summary/toolStatus 原判定（idle+done = 已完成）
-  assert.deepEqual(subagentBadge('idle', 'done', 'completed'), { status: 'done', label: '已完成', badge: 'badge-ok' })
+  assert.deepEqual(subagentBadge('idle', 'done', { status: 'completed' }), { status: 'done', label: '已完成', badge: 'badge-ok' })
 })
 
-test('subagentBadge：子会话 working 时带后台 run 标注为后台执行中；blocked 审批优先', { timeout: 60_000 }, () => {
-  assert.deepEqual(subagentBadge('working', 'done', 'running'), { status: 'working', label: '后台执行中', badge: 'badge-accent' })
+test('subagentBadge：子会话 working 时带真后台 run 标注为后台执行中；blocked 审批优先', { timeout: 60_000 }, () => {
+  assert.deepEqual(subagentBadge('working', 'done', { status: 'running' }), { status: 'working', label: '后台执行中', badge: 'badge-accent' })
   // 无后台 run 关联：保持原有“执行中”
   assert.deepEqual(subagentBadge('working', 'done'), { status: 'working', label: '执行中', badge: 'badge-accent' })
   // blocked 按真实审批优先，不被后台 run 状态覆盖
-  assert.deepEqual(subagentBadge('blocked', 'running', 'running'), { status: 'blocked', label: '等待审批', badge: 'badge-warn' })
+  assert.deepEqual(subagentBadge('blocked', 'running', { status: 'running' }), { status: 'blocked', label: '等待审批', badge: 'badge-warn' })
+})
+
+test('subagentBadge：前台同步 run（syncForeground 未 detach）显示执行中，不自称后台；detachedAt 置位即真后台', { timeout: 60_000 }, () => {
+  const fg: SubagentRunView = { status: 'running', syncForeground: true }
+  // 子会话 working：前台同步 run 只是父回合阻塞等待，徽章与「转入后台」按钮不矛盾
+  assert.deepEqual(subagentBadge('working', 'done', fg), { status: 'working', label: '执行中', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge('working', 'unknown', fg), { status: 'working', label: '执行中', badge: 'badge-accent' })
+  // run running 而子会话 idle/done/无 summary（gate/结算期）：保持 working「执行中」，不假完成也不自称后台
+  assert.deepEqual(subagentBadge('idle', 'done', fg), { status: 'working', label: '执行中', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge('done', 'done', fg), { status: 'working', label: '执行中', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge(undefined, 'done', fg), { status: 'working', label: '执行中', badge: 'badge-accent' })
+  // blocked 审批优先语义在前台同步 run 下同样成立
+  assert.deepEqual(subagentBadge('blocked', 'running', fg), { status: 'blocked', label: '等待审批', badge: 'badge-warn' })
+  // detach 转后台后（detachedAt 置位）：真后台文案恢复
+  const detached: SubagentRunView = { status: 'running', syncForeground: true, detachedAt: 5 }
+  assert.deepEqual(subagentBadge('working', 'done', detached), { status: 'working', label: '后台执行中', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge('idle', 'done', detached), { status: 'working', label: '后台运行中', badge: 'badge-accent' })
+  // 真后台 run（background 启动，无 syncForeground）文案不回归
+  assert.deepEqual(subagentBadge('working', 'done', { status: 'running' }), { status: 'working', label: '后台执行中', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge('idle', 'done', { status: 'running' }), { status: 'working', label: '后台运行中', badge: 'badge-accent' })
 })
 
 // ---------------------------------------------------------------------------
@@ -367,6 +387,10 @@ test('前台同步 run：查看会话即发起会话且 human 归属显示「转
     viewer: { conversationId: 1 },
   })
   assert.ok(visible.includes('转入后台'), '前台同步 running run 应显示转入后台按钮')
+  // 前台同步卡徽章与「转入后台」按钮不矛盾：执行中，不自称后台
+  assert.ok(visible.includes('执行中'), '前台同步卡徽章应显示执行中')
+  assert.ok(!visible.includes('后台执行中'), '前台同步卡不得显示后台执行中')
+  assert.ok(!visible.includes('后台运行中'), '前台同步卡不得显示后台运行中')
 
   // 查看会话归属 human：显示；归属 automation（helm/bot）：隐藏。
   assert.ok(
@@ -406,6 +430,28 @@ test('前台同步 run：查看会话即发起会话且 human 归属显示「转
     viewer: { conversationId: 2 },
   })
   assert.ok(!otherViewer.includes('转入后台'), '查看会话非发起会话时不得显示转入后台按钮')
+})
+
+test('前台同步 run gate/结算期：子会话 idle 不假完成，徽章执行中且不自称后台', { timeout: 60_000 }, () => {
+  const store = makeStore({
+    conversations: [summary(11, 'idle')],
+    conversationDetails: { 11: { ...summary(11, 'idle'), entries: [] } },
+  })
+  // 工具行已 done、子会话 idle，但前台同步 run 仍在 running（gate 验收/结算期）：
+  // 徽章保持 working「执行中」，与同卡「转入后台」按钮一致，不假完成也不自称后台。
+  const html = renderCard(store, 'done', {
+    backgroundRun: bgRun({
+      status: 'running',
+      syncForeground: true,
+      nodes: [{ id: 'g1', kind: 'agent', status: 'running', gateCommand: 'pnpm test' }],
+    }),
+    viewer: { conversationId: 1 },
+  })
+  assert.ok(html.includes('转入后台'), '前台同步 running run 应显示转入后台按钮')
+  assert.ok(html.includes('执行中'), 'gate/结算期徽章应显示执行中')
+  assert.ok(!html.includes('后台执行中'), '前台同步卡不得显示后台执行中')
+  assert.ok(!html.includes('后台运行中'), '前台同步卡不得显示后台运行中')
+  assert.ok(!html.includes('已完成'), 'run 未结算不得假完成')
 })
 
 test('无 worktree 且无后台 run：不渲染空徽章与错误行', { timeout: 60_000 }, () => {
@@ -726,6 +772,29 @@ test('resolveSubagentHeaderSnippet：error 优先后台 run 失败，其次父�
     resolveSubagentHeaderSnippet({ badgeStatus: 'error', backgroundRun: nodeErrRun }),
     { kind: 'error', tag: '后台执行失败', text: '测试失败：期望 3 得到 2' },
   )
+  // 前台同步 run 失败：兜底文案不自称「后台」
+  assert.deepEqual(
+    resolveSubagentHeaderSnippet({ badgeStatus: 'error', backgroundRun: bgRun({ status: 'failed', syncForeground: true }) }),
+    { kind: 'error', tag: '执行失败', text: '执行失败' },
+  )
+  // 前台同步 run 失败但有真实错误文本：文本如实，tag 仍为「执行失败」
+  assert.deepEqual(
+    resolveSubagentHeaderSnippet({ badgeStatus: 'error', backgroundRun: bgRun({ status: 'failed', syncForeground: true, error: 'gate 验收失败：退出码 1' }) }),
+    { kind: 'error', tag: '执行失败', text: 'gate 验收失败：退出码 1' },
+  )
+  // 前台同步 run 失败节点无 error：gate 输出如实，兜底不自称「后台」
+  assert.deepEqual(
+    resolveSubagentHeaderSnippet({
+      badgeStatus: 'error',
+      backgroundRun: bgRun({ status: 'failed', syncForeground: true, nodes: [{ id: 'n1', kind: 'agent', status: 'failed' }] }),
+    }),
+    { kind: 'error', tag: '执行失败', text: '执行失败' },
+  )
+  // 已 detach（detachedAt 置位）：真后台，保持原文案
+  assert.deepEqual(
+    resolveSubagentHeaderSnippet({ badgeStatus: 'error', backgroundRun: bgRun({ status: 'failed', syncForeground: true, detachedAt: 5 }) }),
+    { kind: 'error', tag: '后台执行失败', text: '后台执行失败' },
+  )
   // 父工具 JSON 错误信封
   assert.deepEqual(
     resolveSubagentHeaderSnippet({ badgeStatus: 'error', toolSummary: { resultText: JSON.stringify({ ok: false, error: '执行超时' }) } }),
@@ -935,6 +1004,28 @@ test('ExternalRunSummary：显示 run 总耗时（结算定格 createdAt→updat
   )
   assert.ok(html.includes('subagent-live-elapsed'), '应渲染独立总耗时位')
   assert.ok(html.includes('1m0s'), '结算 run 显示定格总耗时')
+})
+
+test('ExternalRunSummary：前台同步 run 失败兜底为执行失败，真后台与已 detach 保持后台执行失败', { timeout: 60_000 }, async () => {
+  const subagentModule = await importWorkflowClientModule('SubagentCard.tsx')
+  const ExternalRunSummary = subagentModule.ExternalRunSummary as React.ComponentType<Record<string, unknown>>
+  const render = (run: WorkflowRunSummary): string => renderToString(
+    e(TestStoreProvider, { value: makeStore({}) },
+      e(ExternalRunSummary, { run, toolStatus: 'error' })),
+  )
+  // 前台同步 failed 且无 error 文本：兜底「执行失败」，不自称后台
+  const fg = render(bgRun({ status: 'failed', syncForeground: true }))
+  assert.ok(fg.includes('执行失败'), '前台同步失败应显示执行失败')
+  assert.ok(!fg.includes('后台执行失败'), '前台同步失败不得自称后台执行失败')
+  // 真后台（background 启动）failed：保持「后台执行失败」
+  assert.ok(render(bgRun({ status: 'failed' })).includes('后台执行失败'), '真后台失败保持后台执行失败')
+  // 已 detach（detachedAt 置位）failed：同真后台
+  assert.ok(render(bgRun({ status: 'failed', syncForeground: true, detachedAt: 5 })).includes('后台执行失败'), '已 detach 的失败 run 保持后台执行失败')
+  // 带真实 error 文本时前后台都以标签前缀如实拼接
+  assert.ok(
+    render(bgRun({ status: 'failed', syncForeground: true, error: 'gate 退出码 1' })).includes('执行失败：gate 退出码 1'),
+    '前台同步失败带 error 时显示「执行失败：<error>」',
+  )
 })
 
 test('blocked 折叠卡：warn 描边 + 等待审批副栏（pendingAsk 标题）', { timeout: 60_000 }, () => {

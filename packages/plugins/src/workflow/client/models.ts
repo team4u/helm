@@ -44,8 +44,9 @@ export {
   resolveSubagentElapsedMs,
   extractSubagentResultPreview,
   resolveSubagentHeaderSnippet,
+  runFailureFallbackLabel,
 } from './model-subagent-card.ts'
-export type { SubagentCardStatus, SubagentBadge, SubagentHeaderSnippet } from './model-subagent-card.ts'
+export type { SubagentCardStatus, SubagentBadge, SubagentHeaderSnippet, SubagentRunView } from './model-subagent-card.ts'
 
 // 工作流运行卡纯逻辑（model-run.ts）
 export {

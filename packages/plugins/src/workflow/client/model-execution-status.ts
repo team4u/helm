@@ -68,7 +68,7 @@ export function executionConversationStatus(
   return subagentBadge(
     summary?.status,
     toolStatus ?? executionToolStatus(summary, backgroundRun),
-    backgroundRun?.status,
+    backgroundRun,
   ).status
 }
 

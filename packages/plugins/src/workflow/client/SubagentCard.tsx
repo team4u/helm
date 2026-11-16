@@ -86,7 +86,7 @@ export function SubagentLiveCard(props: {
   const selfBadge: SubagentBadge =
     pendingAsk !== undefined || (summary?.pendingAskCount ?? 0) > 0
       ? { status: 'blocked', label: '等待审批', badge: 'badge-warn' }
-      : subagentBadge(summary?.status, toolStatus, backgroundRun?.status)
+      : subagentBadge(summary?.status, toolStatus, backgroundRun)
   const taskTitle = resolveSubagentTaskTitle(summary, childConversationId, toolSummary, backgroundRun)
   const statSegments = useMemo(
     () =>

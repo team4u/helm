@@ -22,31 +22,55 @@ export interface SubagentBadge {
   badge: string
 }
 
+/** 徽章 / 错误文案判定所需的关联 run 最小视图。 */
+export type SubagentRunView = Pick<WorkflowRunSummary, 'status' | 'syncForeground' | 'detachedAt'>
+
+/**
+ * 真后台 run：background 启动或已 detach（转后台即视为后台 run）；
+ * 前台同步（syncForeground 且未 detach）只是父回合工具调用阻塞等待，
+ * 与同卡「转入后台」按钮语义一致，文案不得自称「后台」。
+ */
+function isTrueBackgroundRun(run: SubagentRunView): boolean {
+  return !(run.syncForeground === true && run.detachedAt === undefined)
+}
+
+/**
+ * 关联 run 失败兜底文案：前台同步（未 detach）显示「执行失败」，
+ * 真后台（background 启动或已 detach）保持「后台执行失败」。
+ */
+export function runFailureFallbackLabel(run: SubagentRunView): string {
+  return isTrueBackgroundRun(run) ? '后台执行失败' : '执行失败'
+}
+
 /**
  * 卡片徽章状态：优先真实 summary.status，无 summary 时才以父工具 toolStatus 兜底；
- * background: true 的后台 run 状态必须参与判定——run 仍在 running 时绝不提前显示「已完成」。
+ * 关联 run 状态必须参与判定——run 仍在 running 时绝不提前显示「已完成」；
+ * 仅真后台 run（background 启动或已 detach）自称「后台执行中/后台运行中」，
+ * 前台同步 run 一律「执行中」（run running 而子会话 idle/done 的 gate/结算期
+ * 亦保持 working，不假完成）。
  */
 export function subagentBadge(
   summaryStatus: string | undefined,
   toolStatus: 'running' | 'done' | 'error' | 'unknown',
-  backgroundRunStatus?: WorkflowRunSummary['status'],
+  run?: SubagentRunView,
 ): SubagentBadge {
+  const trueBackground = run !== undefined && isTrueBackgroundRun(run)
   if (summaryStatus === 'blocked') return { status: 'blocked', label: '等待审批', badge: 'badge-warn' }
   if (summaryStatus === 'working') {
     return {
       status: 'working',
-      label: backgroundRunStatus !== undefined ? '后台执行中' : '执行中',
+      label: trueBackground ? '后台执行中' : '执行中',
       badge: 'badge-accent',
     }
   }
   if (
-    backgroundRunStatus === 'running' &&
+    run?.status === 'running' &&
     (summaryStatus === 'idle' || summaryStatus === 'done' || summaryStatus === undefined)
   ) {
-    return { status: 'working', label: '后台运行中', badge: 'badge-accent' }
+    return { status: 'working', label: trueBackground ? '后台运行中' : '执行中', badge: 'badge-accent' }
   }
-  if (backgroundRunStatus === 'failed') return { status: 'error', label: '异常', badge: 'badge-err' }
-  if (backgroundRunStatus === 'aborted') return { status: 'error', label: '已中止', badge: 'badge-warn' }
+  if (run?.status === 'failed') return { status: 'error', label: '异常', badge: 'badge-err' }
+  if (run?.status === 'aborted') return { status: 'error', label: '已中止', badge: 'badge-warn' }
   if (summaryStatus === 'error') return { status: 'error', label: '异常', badge: 'badge-err' }
   if (summaryStatus === 'done' || summaryStatus === 'idle') {
     if (toolStatus === 'running') return { status: 'working', label: '执行中', badge: 'badge-accent' }
@@ -204,16 +228,17 @@ function errorTextFromToolSummary(toolSummary: SubagentParentToolSummary | undef
   return undefined
 }
 
-/** 后台 run 失败时的错误文本。 */
+/** 关联 run 失败时的错误文本（前台同步与真后台的兜底文案有别）。 */
 function backgroundRunError(backgroundRun: WorkflowRunSummary): string | undefined {
+  const fallback = runFailureFallbackLabel(backgroundRun)
   if (backgroundRun.error !== undefined && backgroundRun.error.trim() !== '') {
     return firstLineOf(backgroundRun.error, 100)
   }
   const failed = backgroundRun.nodes?.find((n) => n.status === 'failed')
-  if (failed === undefined) return '后台执行失败'
+  if (failed === undefined) return fallback
   if (failed.error !== undefined && failed.error.trim() !== '') return firstLineOf(failed.error, 100)
   if (failed.gate?.ok === false && failed.gate.output.trim() !== '') return firstLineOf(failed.gate.output, 100)
-  return '后台执行失败'
+  return fallback
 }
 
 /** 后台 run 产出的单行预览。 */
@@ -278,10 +303,14 @@ export function resolveSubagentHeaderSnippet(input: {
   }
   if (input.badgeStatus === 'error') {
     if (input.backgroundRun?.status === 'failed' || input.backgroundRun?.status === 'aborted') {
+      // 前台同步 run 失败不自称「后台」；真后台保持原文案。
+      const failText = input.backgroundRun.status === 'aborted'
+        ? '已中止'
+        : runFailureFallbackLabel(input.backgroundRun)
       return {
         kind: 'error',
-        tag: input.backgroundRun.status === 'aborted' ? '已中止' : '后台执行失败',
-        text: backgroundRunError(input.backgroundRun) ?? '后台执行失败',
+        tag: failText,
+        text: backgroundRunError(input.backgroundRun) ?? failText,
       }
     }
     const toolErr = errorTextFromToolSummary(input.toolSummary)

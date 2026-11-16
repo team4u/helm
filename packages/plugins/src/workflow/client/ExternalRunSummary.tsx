@@ -8,7 +8,7 @@ import type { WorkflowRunSummary } from '../../contracts.js'
 import { useElapsedNowMs } from './hooks.ts'
 import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
-import { subagentBadge } from './model-subagent-card.ts'
+import { subagentBadge, runFailureFallbackLabel } from './model-subagent-card.ts'
 import { canDetachForegroundRun, resolveRunElapsedMs, type DetachViewerScope } from './model-run.ts'
 
 export function ExternalRunSummary(props: {
@@ -24,8 +24,12 @@ export function ExternalRunSummary(props: {
   const nodes = run?.nodes ?? []
   const running = nodes.filter((n) => n.status === 'running').length
   const failed = nodes.find((n) => n.status === 'failed')
-  const runError = run?.status === 'failed' || run?.status === 'aborted' ? (run.error ?? '后台执行失败') : undefined
-  const badge = subagentBadge(undefined, toolStatus, run?.status)
+  // 失败/中止 run 的错误行：兜底标签区分前台同步（执行失败）与真后台（后台执行失败），
+  // error 文本如实拼接（缺省只剩标签，不重复兜底两次）。
+  const runError = run !== undefined && (run.status === 'failed' || run.status === 'aborted')
+    ? [runFailureFallbackLabel(run), run.error].filter(Boolean).join('：')
+    : undefined
+  const badge = subagentBadge(undefined, toolStatus, run)
   const active = badge.status === 'working'
   const failedState = badge.status === 'error'
   // run 总耗时：运行中随秒表动态推进，结束定格在 createdAt → updatedAt；
@@ -85,7 +89,7 @@ export function ExternalRunSummary(props: {
         {runError !== undefined ? (
           <div className="subagent-stream-line subagent-stream-error subagent-bg-error" title={runError}>
             <Icon name="x" size={11} />
-            <span className="subagent-stream-body">后台执行失败：{runError}</span>
+            <span className="subagent-stream-body">{runError}</span>
           </div>
         ) : null}
         {failed !== undefined && failed.error !== undefined ? (
