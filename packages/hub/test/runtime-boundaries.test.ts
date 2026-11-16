@@ -112,7 +112,7 @@ test('真实组合：关停释放插件服务并结束仍连接的 SSE 读取', 
     await fixture.app.close();
     assert.equal(stopped, true);
     // 关闭前的最终文档广播可能已入流队列；消费完已入队帧后必须收到 EOF。
-    while (!(await reader.read()).done) {}
+    while (!(await reader.read()).done) { /* 排空剩余 SSE 帧直至 EOF */ }
     assert.equal(fixture.app.kernel.events.subscriberCount, 0);
   } finally { await fixture.close(); }
 });

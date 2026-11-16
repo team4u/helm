@@ -54,11 +54,11 @@ test('parsePluginSource：git 短写 / SCP / https 与 @ref / #subdirectory', { 
   assert.equal(short.ref, 'v1')
 
   const scp = parsePluginSource('git:git@github.com:user/repo.git', '/wd')
-  assert.ok(scp.kind === 'git' && scp.kind === 'git')
+  assert.ok(scp.kind === 'git')
   assert.equal((scp as { repo: string }).repo, 'git@github.com:user/repo.git')
 
   const https = parsePluginSource('https://github.com/user/repo.git', '/wd')
-  assert.ok(https.kind === 'git' && https.kind === 'git')
+  assert.ok(https.kind === 'git')
   assert.equal((https as { repo: string }).repo, 'https://github.com/user/repo.git')
 
   const httpsRef = parsePluginSource('https://github.com/user/repo.git#v2.0.0', '/wd')

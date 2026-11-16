@@ -93,7 +93,7 @@ export function getComposerPlaceholder(working: boolean, isMobile: boolean): str
 }
 
 /** 会话正忙时 Enter 的默认 whenBusy 策略（插话引导）。 */
-export const BUSY_ENTER_DEFAULT: 'steer' = 'steer'
+export const BUSY_ENTER_DEFAULT = 'steer' as const
 
 /** 空会话起始环境条回传 Composer 的发送门控状态（纯类型放 .ts 模块，保 Fast Refresh）。 */
 export interface SessionEnvBlocker {

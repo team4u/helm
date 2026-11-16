@@ -55,13 +55,13 @@ function safeConversationId(value: unknown): number | null {
  * - null / 空串 / 空白串（常见于模板求值失败）与其它非法值 → null（显式 invalid，绝不静默路由）。
  */
 export function parseSendTarget(target: unknown, defaultConversationId?: number): number | null {
-  const useDefault = (): number | null => safeConversationId(defaultConversationId)
-  if (target === undefined) return useDefault()
+  const resolveDefault = (): number | null => safeConversationId(defaultConversationId)
+  if (target === undefined) return resolveDefault()
   if (typeof target === 'number') return safeConversationId(target)
   if (typeof target !== 'string') return null
   const trimmed = target.trim()
   if (trimmed === '') return null
-  if (trimmed === 'current' || trimmed === 'conversation:current') return useDefault()
+  if (trimmed === 'current' || trimmed === 'conversation:current') return resolveDefault()
   if (trimmed.startsWith('conversation:')) {
     return safeConversationId(Number(trimmed.slice('conversation:'.length).trim()))
   }
