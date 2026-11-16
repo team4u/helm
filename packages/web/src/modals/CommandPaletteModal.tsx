@@ -248,9 +248,9 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     {
       kind: 'command',
       id: 'builtin:toggle-quiet-notify',
-      title: store.quietNotifyEnabled ? '关闭全部空闲浏览器通知' : '开启全部空闲浏览器通知（所有会话与后台在途结束后提醒）',
+      title: store.quietNotifyEnabled ? '关闭后台浏览器通知' : '开启后台浏览器通知（会话完成或等待处理且页面不在前台时提醒）',
       icon: store.quietNotifyEnabled ? 'bell' : 'bell-off',
-      keywords: ['notify', 'notification', 'quiet', 'idle', '通知', '提醒', '空闲'],
+      keywords: ['notify', 'notification', 'background', 'quiet', 'blocked', '通知', '提醒', '后台', '完成', '审批'],
       run: () => {
         void store.setQuietNotify(!store.quietNotifyEnabled)
       },

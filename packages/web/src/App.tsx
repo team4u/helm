@@ -27,7 +27,7 @@ import { versionDeferHint } from './shell/version-watch-model.js'
 function HelmShellInner() {
   const store = useHelmStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  // 「全部空闲」浏览器通知：全局装配一次（内部自行门控偏好/认证状态）。
+  // 后台浏览器通知：全局装配一次（内部自行门控偏好/认证状态）。
   useQuietNotifier()
   // 版本感知与自动刷新：全局装配一次（生产入口识别不到时内部休眠）。
   const versionWatch = useVersionWatcher()

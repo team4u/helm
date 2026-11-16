@@ -399,7 +399,7 @@ export interface HelmStoreValue {
   sseConnected: boolean
   theme: ThemeMode
   themePreference: ThemePreference
-  /** 「全部空闲」浏览器通知偏好（localStorage 持久化；权限授予才真正投递）。 */
+  /** 后台浏览器通知偏好（localStorage 持久化；权限授予才真正投递）。 */
   quietNotifyEnabled: boolean
 
   // 核心实时数据

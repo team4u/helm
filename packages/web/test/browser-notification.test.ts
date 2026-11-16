@@ -1,9 +1,11 @@
 /**
- * 浏览器 Notification DOM 边界封装测试（stub 全局 Notification，happy-dom
- * 提供 window/document）：
+ * 浏览器 Notification 与页面活跃状态 DOM 边界封装测试（stub 全局 Notification，
+ * happy-dom 提供 window/document）：
  * - 权限读取/请求：宿主无 Notification 如实返回 'unsupported'，不抛出；
  * - 投递：权限未授予返回 false；授予后构造通知并透传 title/body/tag，
- *   onclick 先聚焦窗口再回调；构造异常返回 false 不抛出。
+ *   onclick 先聚焦窗口再回调；构造异常返回 false 不抛出；
+ * - isPageActive：仅在存在 document、!document.hidden 且 document.hasFocus()
+ *   为 true 时返回 true。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -12,6 +14,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 GlobalRegistrator.register()
 
 const {
+  isPageActive,
   readBrowserNotificationPermission,
   requestBrowserNotificationPermission,
   showBrowserNotification,
@@ -81,7 +84,7 @@ test('请求抛出（旧回调形态返回 undefined / 宿主异常）：回退�
 
 test('权限未授予时投递返回 false 且不构造通知', { timeout: 60_000 }, () => {
   const instances = installFakeNotification({ permission: 'denied' })
-  assert.equal(showBrowserNotification({ title: 'Helm 已全部空闲' }), false)
+  assert.equal(showBrowserNotification({ title: 'Helm 会话已完成' }), false)
   assert.equal(instances.length, 0)
 })
 
@@ -95,17 +98,17 @@ test('权限授予后投递：透传 title/body/tag，onclick 先聚焦窗口再
   }
   try {
     const delivered = showBrowserNotification({
-      title: 'Helm 已全部空闲',
+      title: 'Helm 会话已完成',
       body: '#2 重构侧栏',
-      tag: 'helm-quiet',
+      tag: 'helm-conv-2',
       onClick: () => clicked.push('navigate'),
     })
     assert.equal(delivered, true)
     assert.equal(instances.length, 1)
     const notification = instances[0]!
-    assert.equal(notification.title, 'Helm 已全部空闲')
+    assert.equal(notification.title, 'Helm 会话已完成')
     assert.equal(notification.options.body, '#2 重构侧栏')
-    assert.equal(notification.options.tag, 'helm-quiet')
+    assert.equal(notification.options.tag, 'helm-conv-2')
     assert.equal(clicked.length, 0)
     notification.onclick?.({} as Event)
     assert.deepEqual(clicked, ['navigate'])
@@ -120,4 +123,49 @@ test('通知构造异常：返回 false 不抛出（不伪造成功）', { timeo
   installFakeNotification({ permission: 'granted', constructThrows: true })
   assert.equal(showBrowserNotification({ title: 'x' }), false)
   uninstallNotification()
+})
+
+test('isPageActive：仅在页面可见且窗口聚焦时返回 true；无 document 或缺 hasFocus 返回 false', { timeout: 60_000 }, () => {
+  const originalHiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden')
+  const originalHasFocus = document.hasFocus
+  const setHidden = (hidden: boolean) => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+  }
+  try {
+    setHidden(false)
+    document.hasFocus = () => true
+    assert.equal(isPageActive(), true)
+
+    setHidden(true)
+    document.hasFocus = () => true
+    assert.equal(isPageActive(), false)
+
+    setHidden(false)
+    document.hasFocus = () => false
+    assert.equal(isPageActive(), false)
+
+    setHidden(true)
+    document.hasFocus = () => false
+    assert.equal(isPageActive(), false)
+
+    Object.defineProperty(document, 'hasFocus', { configurable: true, value: undefined })
+    assert.equal(isPageActive(), false)
+  } finally {
+    if (originalHiddenDescriptor !== undefined) {
+      Object.defineProperty(document, 'hidden', originalHiddenDescriptor)
+    } else {
+      delete (document as unknown as Record<string, unknown>).hidden
+    }
+    Object.defineProperty(document, 'hasFocus', { configurable: true, writable: true, value: originalHasFocus })
+  }
+
+  const originalDocDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  try {
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: undefined })
+    assert.equal(isPageActive(), false)
+  } finally {
+    if (originalDocDescriptor !== undefined) {
+      Object.defineProperty(globalThis, 'document', originalDocDescriptor)
+    }
+  }
 })

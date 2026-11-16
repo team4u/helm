@@ -24,7 +24,7 @@ import { createPluginClientHostPort } from './plugin-client-host.js'
 import { formatLocationHash, hashHasPrimaryTarget, isSameLocationState, parseLocationHash, shouldPushLocationHistory, upgradeLegacyLocationState, type WorkspaceLocationState } from './url-hash-model.js'
 import { groupUiContributions, isPrototypeParamKey, resolveTargetString, SCREEN_PARAM_KEY_PATTERN, spaceForTarget, type ActiveModal, type FocusedPanel, type GroupedUiSpecs, type HelmStoreValue, type ResolvedTarget, type SidebarSpace, type ThemeMode, type ThemePreference, type ToastNotice } from './types.js'
 import { errorText } from './format.js'
-import { requestBrowserNotificationPermission } from './browser-notification.js'
+import { isPageActive, requestBrowserNotificationPermission } from './browser-notification.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import {
   activeTargetForPanel,
@@ -52,7 +52,7 @@ const getStoredPreference = (): ThemePreference => {
   }
 }
 
-/** 「全部空闲」浏览器通知偏好（localStorage 'helm:quiet-notify' = '1'）。 */
+/** 后台浏览器通知偏好（localStorage 'helm:quiet-notify' = '1'）。 */
 const getStoredQuietNotify = (): boolean => {
   try {
     return localStorage.getItem('helm:quiet-notify') === '1'
@@ -186,6 +186,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const sseCursorRef = useRef<{ bootId: string; seq: number } | null>(null)
   const requests = useRef(new Map<string, Promise<unknown>>())
   const failedDocs = useRef(new Set<string>())
+  const unreadClearInFlight = useRef(new Set<number>())
+  const unreadClearedSeq = useRef(new Map<number, number>())
   const pluginEpoch = useRef(new Map<string, number>())
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>())
   const escAbortTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -333,7 +335,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
       }
       const permission = await requestBrowserNotificationPermission()
       if (permission === 'unsupported') {
-        pushNotice({ type: 'notification', level: 'warning', title: '当前浏览器不支持通知', body: '浏览器通知 API 不可用，无法开启全部空闲提醒。' })
+        pushNotice({ type: 'notification', level: 'warning', title: '当前浏览器不支持通知', body: '浏览器通知 API 不可用，无法开启后台通知提醒。' })
         return
       }
       if (permission !== 'granted') {
@@ -377,6 +379,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     session.current++
     requests.current.clear()
     failedDocs.current.clear()
+    unreadClearInFlight.current.clear()
+    unreadClearedSeq.current.clear()
     // 续传凭据一并作废：同一 Hub 换身份后不得沿用其他授权会话的客户端水位。
     sseCursorRef.current = null
     assetGeneration.current++
@@ -770,16 +774,105 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     openTarget(home, { history: 'replace' })
   }, [authenticated, assetsLoaded, sseConnected, locationState, boot, openTarget])
 
+  const visibleConversationIds = useCallback((): number[] => {
+    const ids = new Set<number>()
+    for (const target of [targets.current.primaryTarget, targets.current.splitTarget]) {
+      if (target?.kind === 'conversation') ids.add(target.conversationId)
+    }
+    return [...ids]
+  }, [])
+
+  /**
+   * 前台可见聚焦门控自动清未读（单飞 + stateChangeSeq 水位防重）：
+   * - 仅当 authenticated && isPageActive() 且会话当前 unread=true 时才发 PATCH；
+   * - 请求在途期间由 unreadClearInFlight 去重，成功后记录 requestedSeq 水位，
+   *   在 SSE upsert 尚未将 unread 翻为 false 期间拦截 visibilitychange+focus 连发；
+   * - 收到 unread=false 或 stateChangeSeq 推进且仍 unread=true 时允许下次清零；
+   * - 失败只报 toast 通知，绝不污染 loadErrors['conversation:id']。
+   */
+  const clearVisibleConversationUnread = useCallback(
+    (id: number, candidate?: ConversationSummary): void => {
+      const summary = candidate ?? liveRef.current.conversations.find((conv) => conv.id === id)
+      if (summary === undefined) return
+      if (!summary.unread) {
+        unreadClearedSeq.current.delete(id)
+        return
+      }
+      if (!authenticatedRef.current || !isPageActive()) return
+      if (unreadClearInFlight.current.has(id)) return
+      const clearedSeq = unreadClearedSeq.current.get(id)
+      if (clearedSeq !== undefined && summary.stateChangeSeq <= clearedSeq) return
+      const epoch = session.current
+      const requestedSeq = summary.stateChangeSeq
+      unreadClearInFlight.current.add(id)
+      void conversationsApi
+        .patch(id, { unread: false })
+        .then((updated) => {
+          if (epoch !== session.current) return
+          unreadClearInFlight.current.delete(id)
+          const latest = liveRef.current.conversations.find((conv) => conv.id === id)
+          if (latest !== undefined && !latest.unread) {
+            unreadClearedSeq.current.delete(id)
+            return
+          }
+          const updatedSeq =
+            typeof updated?.stateChangeSeq === 'number' && updated.unread === false
+              ? updated.stateChangeSeq
+              : requestedSeq
+          const ackSeq = Math.max(requestedSeq, updatedSeq)
+          if (
+            latest !== undefined &&
+            latest.unread &&
+            latest.stateChangeSeq > ackSeq &&
+            visibleConversationIds().includes(id)
+          ) {
+            unreadClearedSeq.current.set(id, ackSeq)
+            clearVisibleConversationUnread(id, latest)
+            return
+          }
+          if (latest === undefined) return
+          unreadClearedSeq.current.set(id, ackSeq)
+        })
+        .catch((error: unknown) => {
+          if (epoch === session.current) {
+            unreadClearInFlight.current.delete(id)
+            pushNotice({
+              type: 'notification',
+              level: 'error',
+              title: '标记已读失败',
+              body: errorText(error),
+            })
+          }
+        })
+    },
+    [pushNotice, visibleConversationIds],
+  )
+
   useEffect(() => {
     if (!authenticated) return
-    const visible = [primaryTarget, splitTarget].filter((target): target is { kind: 'conversation'; conversationId: number } => target?.kind === 'conversation')
-    for (const id of new Set(visible.map((target) => target.conversationId))) {
+    for (const id of visibleConversationIds()) {
       void loadConversationDetail(id)
       void loadConversationArtifacts(id)
-      const summary = liveRef.current.conversations.find((conv) => conv.id === id)
-      if (summary?.unread) void conversationsApi.patch(id, { unread: false }).catch((error: unknown) => pushNotice({ type: 'notification', level: 'error', title: '标记已读失败', body: errorText(error) }))
+      clearVisibleConversationUnread(id)
     }
-  }, [authenticated, primaryTarget, splitTarget, loadConversationDetail, loadConversationArtifacts, pushNotice])
+  }, [authenticated, primaryTarget, splitTarget, loadConversationDetail, loadConversationArtifacts, visibleConversationIds, clearVisibleConversationUnread])
+
+  // 切回前台且窗口恢复聚焦时补清当前主屏/分屏可见会话未读（登出/卸载自动解绑）。
+  useEffect(() => {
+    if (!authenticated || typeof document === 'undefined' || typeof window === 'undefined') return
+    const onPageActive = () => {
+      if (!isPageActive()) return
+      for (const id of visibleConversationIds()) {
+        clearVisibleConversationUnread(id)
+      }
+    }
+    document.addEventListener('visibilitychange', onPageActive)
+    window.addEventListener('focus', onPageActive)
+    return () => {
+      document.removeEventListener('visibilitychange', onPageActive)
+      window.removeEventListener('focus', onPageActive)
+    }
+  }, [authenticated, visibleConversationIds, clearVisibleConversationUnread])
 
   // 命中老消息时逐页取历史，直至 entry 可见或游标耗尽。
   useEffect(() => {
@@ -957,6 +1050,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
               session.current++
               requests.current.clear()
               failedDocs.current.clear()
+              unreadClearInFlight.current.clear()
+              unreadClearedSeq.current.clear()
               // 断线期间可能发生停用/升级：旧模块与在途下载不能跨快照复活。
               resetPluginClientCache()
               setLoadErrors({})
@@ -966,8 +1061,10 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
               setConversationArtifacts({})
               retry = 0
               announceLive()
-              for (const target of [targets.current.primaryTarget, targets.current.splitTarget]) {
-                if (target?.kind === 'conversation') { void loadConversationDetail(target.conversationId, true); void loadConversationArtifacts(target.conversationId) }
+              for (const id of visibleConversationIds()) {
+                void loadConversationDetail(id, true)
+                void loadConversationArtifacts(id)
+                clearVisibleConversationUnread(id)
               }
             } else if (message.event === 'resumed') {
               if (mode !== null) throw new Error('实时连接收到重复的 resumed 控制帧')
@@ -1031,12 +1128,15 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
             if (event.type === 'models.changed') void refreshAssets()
             if (event.type === 'conversation.upsert' && 'conversation' in event) {
               const conv = event.conversation
-              const visible = [targets.current.primaryTarget, targets.current.splitTarget].some((target) => target?.kind === 'conversation' && target.conversationId === conv.id)
+              if (!conv.unread) unreadClearedSeq.current.delete(conv.id)
+              const visible = visibleConversationIds().includes(conv.id)
               if (visible && conv.status !== 'working') void loadConversationArtifacts(conv.id)
-              if (visible && conv.unread) void conversationsApi.patch(conv.id, { unread: false }).catch((error: unknown) => reportLoad(`conversation:${conv.id}`, error))
+              if (visible && conv.unread) clearVisibleConversationUnread(conv.id, conv)
             }
             if (deletedEvent !== undefined) {
               const id = deletedEvent.conversationId
+              unreadClearInFlight.current.delete(id)
+              unreadClearedSeq.current.delete(id)
               // 删除导航唯一 truths：仅当被删的正是当前主屏/分屏/抽屉目标时，
               // 以 replace 回到该智能体待命态（无 Profile 信息时显式回角色中心）；
               // 绝不选中其他会话，批量连续删除不闪烁，用户已切走时不覆盖新导航。
@@ -1101,7 +1201,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     }
     void connect()
     return () => { active = false; if (timer) clearTimeout(timer); controller?.abort() }
-  }, [authenticated, logout, loadConversationDetail, loadConversationArtifacts, reportLoad, pushNotice, refreshAssets, updateLive, applyPrimaryTarget])
+  }, [authenticated, logout, loadConversationDetail, loadConversationArtifacts, visibleConversationIds, clearVisibleConversationUnread, pushNotice, refreshAssets, updateLive, applyPrimaryTarget])
 
   const groupedUi = useMemo(() => groupUiContributions(live.uiContributions), [live.uiContributions])
   // Context value 需引用稳定：任何一处局部状态变化都不应触发全量消费组件重渲染。

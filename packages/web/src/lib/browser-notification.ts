@@ -15,6 +15,17 @@ export function readBrowserNotificationPermission(): BrowserNotificationPermissi
 }
 
 /**
+ * 判定当前页面是否处于前台活跃且聚焦态：
+ * - 无 document（非 DOM/SSR 环境）返回 false；
+ * - 否则要求页面未隐藏（!document.hidden）且窗口聚焦（document.hasFocus()）。
+ * 供前台自动清未读（仅活跃时清）与后台通知投递（!isPageActive() 时投递）共用。
+ */
+export function isPageActive(): boolean {
+  if (typeof document === 'undefined') return false
+  return !document.hidden && (typeof document.hasFocus === 'function' ? document.hasFocus() : false)
+}
+
+/**
  * 请求通知权限（必须由用户手势触发，如开关点击）：返回最终权限。旧回调
  * 形态（返回 undefined）回退读取当前权限；宿主不支持返回 'unsupported'。
  */
