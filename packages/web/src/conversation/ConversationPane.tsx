@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationAttachmentRef } from '@helm/protocol'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmIcon, Popover, PopoverContent, PopoverTrigger } from '@helm/plugin-client'
 import {
   isConversationArchivable,
   isConversationArchived,
@@ -118,6 +118,8 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const workbenchTabs = useWorkbenchTabs(conversationId, conversation)
   const workbenchBadge = summarizeWorkbenchBadge(workbenchTabs)
   const hasWorkbenchPanel = workbenchTabs.some((tab) => tab.id !== 'artifacts')
+  const convArtifacts = store.conversationArtifacts[conversationId]
+  const hasAnyArtifacts = Array.isArray(convArtifacts) && convArtifacts.length > 0
   const detailError = store.loadErrors[`conversation:${conversationId}`]
   if (detailError) {
     return (
@@ -127,7 +129,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           <span className="pane-error-actions">
             <button className="btn" onClick={() => void store.loadConversationDetail(conversationId, true)}>重试</button>
             {isDrawer && onCloseDrawer !== undefined ? (
-              <button type="button" className="btn btn-sm btn-ghost" onClick={onCloseDrawer}>关闭</button>
+              <button type="button" className="btn btn-sm btn-ghost conversation-drawer-close-btn" aria-label="关闭抽屉" onClick={onCloseDrawer}>关闭</button>
             ) : isSplit && onCloseSplit !== undefined ? <CloseSplitButton onCloseSplit={onCloseSplit} /> : null}
           </span>
         </div>
@@ -141,7 +143,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         正在加载会话 #{conversationId}…
         {isDrawer && onCloseDrawer !== undefined ? (
           <span className="pane-loading-split-close">
-            <button type="button" className="btn btn-sm btn-ghost" onClick={onCloseDrawer}>关闭</button>
+            <button type="button" className="btn btn-sm btn-ghost conversation-drawer-close-btn" aria-label="关闭抽屉" onClick={onCloseDrawer}>
+              <HelmIcon name="x" size={14} />
+            </button>
           </span>
         ) : isSplit && onCloseSplit !== undefined ? (
           <span className="pane-loading-split-close">
@@ -318,9 +322,44 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               onBlur={() => void saveTitle()}
             />
           ) : (
-            <span className="pane-title">
-              {conversation.title === '' ? `会话 #${conversationId}` : conversation.title}
-            </span>
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="pane-title pane-title-btn"
+                  title={conversation.title === '' ? `会话 #${conversationId}` : conversation.title}
+                >
+                  {conversation.title === '' ? `会话 #${conversationId}` : conversation.title}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="start" sideOffset={6} portalled className="pane-title-popover">
+                <div className="pane-title-popover-heading">
+                  {conversation.title === '' ? `会话 #${conversationId}` : conversation.title}
+                </div>
+                <div className="kv-grid pane-title-popover-meta">
+                  <span className="kv-key">会话 ID</span>
+                  <span className="kv-val mono">#{conversationId}</span>
+                  <span className="kv-key">智能体</span>
+                  <span className="kv-val">{conversation.profileId}</span>
+                  <span className="kv-key">节点</span>
+                  <span className="kv-val mono">{currentNodeId}</span>
+                  <span className="kv-key">工作目录</span>
+                  <span className="kv-val mono">{conversation.cwd || '(未设置)'}</span>
+                  {conversation.ownedBy !== undefined ? (
+                    <>
+                      <span className="kv-key">归属</span>
+                      <span className="kv-val mono">{conversation.ownedBy}</span>
+                    </>
+                  ) : null}
+                  {conversation.model !== '' ? (
+                    <>
+                      <span className="kv-key">模型</span>
+                      <span className="kv-val mono">{conversation.model}</span>
+                    </>
+                  ) : null}
+                </div>
+              </PopoverContent>
+            </Popover>
           )}
           <span className="pane-cwd-subtitle" title={envSubtitle.tooltip}>
             <span className="env-subtitle-full">{envSubtitle.text}</span>
@@ -340,6 +379,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             <button
               type="button"
               className="btn btn-sm"
+              aria-label="新话题"
               title="在当前智能体下开始新话题"
               disabled={actionPending !== null}
               onClick={startNewThread}
@@ -357,10 +397,11 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               slotProps={{ conversation }}
             />
           ))}
-          {!isDrawer && (workbenchCount > 0 || hasWorkbenchPanel) ? (
+          {!isDrawer && (workbenchCount > 0 || hasWorkbenchPanel || hasAnyArtifacts) ? (
             <button
               type="button"
               className={`btn btn-sm${store.workbenchOpen ? ' btn-primary' : ''}`}
+              aria-label={workbenchCount > 0 ? `工作台（${workbenchCount}）` : '工作台'}
               title="展开右侧工作台（插件面板与产物）"
               onClick={() => {
                 // 打开首个可用页签；已打开时保持当前有效页签。
@@ -373,44 +414,33 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               }}
             >
               <HelmIcon name="panel-right" size={12} />
-              工作台
+              <span className="pane-action-label">工作台</span>
               {workbenchCount > 0 && <span className={`badge ${workbenchBadgeClass} tabular-nums`}>{workbenchCount}</span>}
             </button>
           ) : null}
           {isDrawer && onCloseDrawer !== undefined ? (
-            <>
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost conversation-drawer-primary-btn"
-                title="在主屏中全屏打开此会话"
-                onClick={() => {
-                  onCloseDrawer()
-                  store.openTarget({ kind: 'conversation', conversationId })
-                }}
-              >
-                <HelmIcon name="external-link" size={12} />
-                <span className="pane-action-label">全屏</span>
-              </button>
-              <Tooltip content="关闭子会话抽屉 (Esc)" side="bottom">
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost conversation-drawer-close-btn"
-                  aria-label="关闭抽屉"
-                  title="关闭子会话抽屉 (Esc)"
-                  onClick={onCloseDrawer}
-                >
-                  <HelmIcon name="x" size={13} />
-                  <span className="pane-action-label">关闭</span>
-                </button>
-              </Tooltip>
-            </>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost conversation-drawer-primary-btn"
+              aria-label="全屏打开此会话"
+              title="在主屏中全屏打开此会话"
+              onClick={() => {
+                onCloseDrawer()
+                store.openTarget({ kind: 'conversation', conversationId })
+              }}
+            >
+              <HelmIcon name="external-link" size={12} />
+              <span className="pane-action-label">全屏</span>
+            </button>
           ) : isSplit && onCloseSplit !== undefined ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
-            <SplitToggleButton
-              isSplitActive={store.splitTarget !== null}
-              onToggleSplit={toggleSplit}
-            />
+            <span className={store.splitTarget === null ? 'pane-split-btn' : undefined}>
+              <SplitToggleButton
+                isSplitActive={store.splitTarget !== null}
+                onToggleSplit={toggleSplit}
+              />
+            </span>
           )}
           <span className="pane-more-menu" ref={moreMenuRef}>
             <DropdownMenu open={moreOpen} onOpenChange={setMoreOpen}>
@@ -536,8 +566,43 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               </DropdownMenuPortal>
             </DropdownMenu>
           </span>
+          {isDrawer && onCloseDrawer !== undefined ? (
+            <Tooltip content="关闭子会话抽屉 (Esc)" side="bottom">
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost conversation-drawer-close-btn"
+                aria-label="关闭抽屉"
+                title="关闭子会话抽屉 (Esc)"
+                onClick={onCloseDrawer}
+              >
+                <HelmIcon name="x" size={13} />
+                <span className="pane-action-label">关闭</span>
+              </button>
+            </Tooltip>
+          ) : null}
         </div>
       </header>
+      {isDrawer ? (
+        <div className="pane-drawer-env-bar" aria-label="子会话环境上下文">
+          <span className="pane-drawer-env-item mono">#{conversationId}</span>
+          <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
+          <span className="pane-drawer-env-item">
+            <HelmIcon name="bot" size={11} />
+            <span>{conversation.profileId}</span>
+          </span>
+          <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
+          <span className="pane-drawer-env-item mono" title={`${currentNodeId}:${conversation.cwd || '(未设置)'}`}>
+            <HelmIcon name={currentNodeId === 'local' ? 'laptop' : 'server'} size={11} />
+            <span>{`${currentNodeId}:${conversation.cwd || '(未设置)'}`}</span>
+          </span>
+          {conversation.ownedBy !== undefined ? (
+            <>
+              <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
+              <span className="badge badge-neutral">{`归属 ${conversation.ownedBy}`}</span>
+            </>
+          ) : null}
+        </div>
+      ) : null}
 
       <ConversationTimeline
         conversation={conversation}

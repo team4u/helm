@@ -1326,3 +1326,20 @@ export function resolveAssistantAnchorEntry(
   }
   return lastTextEntry ?? lastAssistant
 }
+
+/** Ctrl+O 过程步骤折叠切换指令（按最新含过程步骤的助手回合精准同步）。 */
+export interface ProcessShortcutCommand {
+  open: boolean
+  seq: number
+}
+
+/** 查找最新一条包含可折叠过程步骤（step-group）的助手回合 key；无则返回 undefined。 */
+export function findLatestProcessTurnKey(items: ReadonlyArray<TimelineItem>): string | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!
+    if (item.kind === 'assistant' && item.segments.some((seg) => seg.kind === 'step-group')) {
+      return item.key
+    }
+  }
+  return undefined
+}

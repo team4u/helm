@@ -193,8 +193,17 @@
 }
 
 /* 聊天时间线滚动区 */
+.timeline-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
 .timeline-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-anchor: auto;
   padding: 20px 24px 28px;
@@ -566,15 +575,22 @@
 }
 
 .trace-row {
+  width: 100%;
   min-height: 26px;
   padding: 2px 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  border: none;
   border-radius: var(--radius-xs);
+  background: transparent;
+  font-family: inherit;
   font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
   color: var(--fg-secondary);
+  box-sizing: border-box;
   cursor: pointer;
   transition: background 100ms ease;
 }
@@ -583,8 +599,17 @@
   background: var(--bg-hover);
 }
 
+.trace-row:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--accent));
+  outline-offset: -1px;
+}
+
 .trace-row-error .trace-row-left > svg {
   color: var(--err);
+}
+
+.trace-row-warn .trace-row-left > svg {
+  color: var(--warn);
 }
 
 .trace-row-left {
@@ -617,11 +642,22 @@
 }
 
 .trace-row-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
+}
+
+.trace-row .badge,
+.trace-row .btn-xs {
+  height: 18px;
+  padding: 0 5px;
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .trace-expanded-body {
@@ -948,5 +984,312 @@
   align-items: center;
   gap: 5px;
   white-space: nowrap;
+}
+
+/* 顶栏标题点击详情浮层 / 分屏按钮容器 / 抽屉精简环境条 */
+.pane-title-btn {
+  border: none;
+  background: transparent;
+  padding: 2px 4px;
+  margin-left: -4px;
+  line-height: 1.4;
+  font-family: inherit;
+  text-align: left;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.pane-title-btn:hover {
+  background: var(--bg-hover);
+}
+.pane-title-btn:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--accent));
+  outline-offset: 1px;
+}
+
+.pane-title-popover {
+  width: min(360px, calc(100vw - 24px));
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pane-title-popover-heading {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  line-height: 1.4;
+  word-break: break-word;
+}
+.pane-title-popover-meta {
+  font-size: 12px;
+}
+
+.pane-split-btn {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.pane-drawer-env-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-subtle);
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  flex-shrink: 0;
+}
+.pane-drawer-env-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-drawer-env-sep {
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+/* 工作台抽屉页签与产物分栏（覆盖 modals.css 的 .tabs-bar / .tab-btn） */
+.helm-workbench .tabs-bar {
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px 0 12px;
+  flex-shrink: 0;
+}
+.helm-workbench .workbench-tabs-scroll {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.helm-workbench .workbench-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+.helm-workbench .tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.helm-workbench .workbench-close-btn {
+  flex-shrink: 0;
+  margin-left: auto;
+  align-self: center;
+}
+.helm-workbench .workbench-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.helm-workbench .workbench-plugin-body {
+  padding: 10px;
+}
+.helm-workbench .workbench-footer {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.workbench-artifacts-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13px;
+}
+.artifact-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.artifact-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+.artifact-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+.artifact-empty-hint {
+  padding: 14px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+.artifact-card-list,
+.artifact-spill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.artifact-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface, var(--bg));
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.artifact-card:hover {
+  border-color: var(--border-strong, var(--border));
+  background: var(--bg-hover);
+}
+.artifact-card-compact {
+  padding: 8px 10px;
+}
+.artifact-card-thumb {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  color: var(--fg-secondary);
+}
+.artifact-card-compact .artifact-card-thumb {
+  width: 30px;
+  height: 30px;
+}
+.artifact-card-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.artifact-card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.artifact-card-title-btn {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.artifact-card-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-card-title-btn:hover .artifact-card-name {
+  text-decoration: underline;
+}
+.artifact-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+.artifact-card-format {
+  color: var(--fg-secondary);
+}
+.artifact-card-mime {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.artifact-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.artifact-spill-section {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.artifact-spill-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.artifact-spill-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.artifact-spill-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--accent));
+  outline-offset: 1px;
+}
+.artifact-spill-title {
+  font-weight: 500;
+}
+.artifact-spill-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+@media (max-width: 520px) {
+  .artifact-card {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .artifact-card-actions {
+    width: 100%;
+    justify-content: flex-end;
+    padding-top: 2px;
+  }
 }
 

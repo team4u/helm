@@ -1,19 +1,165 @@
-import { useEffect, useMemo } from 'react'
-import type { ConversationSummary } from '@helm/protocol'
+import { useEffect, useId, useMemo, useState } from 'react'
+import type { ArtifactMetadata, ConversationSummary } from '@helm/protocol'
 import { HelmIcon, Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Tabs, TabsList, TabsTrigger } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Tooltip } from '../ui/Tooltip.js'
-import { formatBytes } from '../lib/format.js'
+import { artifactsApi } from '../lib/api.js'
+import { formatBytes, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
 import {
+  artifactFormatLabel,
+  artifactIconName,
+  artifactKindLabel,
   buildWorkbenchFooter,
+  isImageArtifact,
+  partitionArtifactsByKind,
   resolveActiveWorkbenchTab,
 } from './workbench-model.js'
 import { useWorkbenchTabs } from './workbench-hooks.js'
 
+function ArtifactThumb({ artifactId, filename }: { artifactId: string; filename: string }) {
+  const [thumbUrl, setThumbUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (
+      typeof URL === 'undefined' ||
+      typeof URL.createObjectURL !== 'function' ||
+      typeof URL.revokeObjectURL !== 'function'
+    ) {
+      return
+    }
+    let cancelled = false
+    let objectUrl: string | null = null
+    void artifactsApi.fetchBlob(artifactId, true)
+      .then((blob) => {
+        if (cancelled || !blob || blob.size === 0) return
+        objectUrl = URL.createObjectURL(blob)
+        setThumbUrl(objectUrl)
+      })
+      .catch(() => {
+        /* 缩略图加载失败时保留默认图标占位 */
+      })
+    return () => {
+      cancelled = true
+      if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
+    }
+  }, [artifactId])
+
+  if (thumbUrl !== null) {
+    return <img src={thumbUrl} alt={filename} className="artifact-card-img" loading="lazy" />
+  }
+  return <HelmIcon name="file" size={16} />
+}
+
+interface ArtifactCardProps {
+  artifact: ArtifactMetadata
+  compact?: boolean
+  isDownloading: boolean
+  onPreview: (artifact: ArtifactMetadata) => void
+  onDownload: (artifact: ArtifactMetadata) => void
+}
+
+function ArtifactCard({
+  artifact,
+  compact = false,
+  isDownloading,
+  onPreview,
+  onDownload,
+}: ArtifactCardProps) {
+  const formatLabel = artifactFormatLabel(artifact.mimeType, artifact.name)
+  const timestamp = artifact.createdAt > 0 ? formatMessageTime(artifact.createdAt) : ''
+
+  return (
+    <div
+      className={compact ? 'artifact-card artifact-card-compact' : 'artifact-card'}
+      data-artifact-id={artifact.id}
+      data-artifact-kind={artifact.kind}
+    >
+      <div className="artifact-card-thumb" aria-hidden="true">
+        {!compact && isImageArtifact(artifact.mimeType) ? (
+          <ArtifactThumb artifactId={artifact.id} filename={artifact.name} />
+        ) : (
+          <HelmIcon name={artifactIconName(artifact.mimeType, artifact.kind)} size={compact ? 14 : 16} />
+        )}
+      </div>
+      <div className="artifact-card-main">
+        <button
+          type="button"
+          className="artifact-card-title-btn"
+          title={`预览 ${artifact.name}`}
+          onClick={() => onPreview(artifact)}
+        >
+          <span className="artifact-card-name">{artifact.name}</span>
+        </button>
+        <div className="artifact-card-meta">
+          <span className={artifact.kind === 'registered' ? 'badge badge-accent' : 'badge badge-neutral'}>
+            {artifactKindLabel(artifact.kind)}
+          </span>
+          <span className="artifact-card-format">{formatLabel}</span>
+          <span className="mono artifact-card-mime" title={artifact.mimeType}>{artifact.mimeType}</span>
+          <span className="mono tabular-nums artifact-card-size">{formatBytes(artifact.size)}</span>
+          {timestamp !== '' ? (
+            <span className="artifact-card-time" title={formatFullTimestamp(artifact.createdAt)}>
+              {timestamp}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <div className="artifact-card-actions">
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs artifact-action-btn"
+          aria-label={`预览 ${artifact.name}`}
+          title="预览"
+          onClick={() => onPreview(artifact)}
+        >
+          <HelmIcon name="eye" size={12} />
+          <span>预览</span>
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs artifact-action-btn"
+          aria-label={`下载 ${artifact.name}`}
+          title="下载"
+          disabled={isDownloading}
+          onClick={() => onDownload(artifact)}
+        >
+          <HelmIcon name={isDownloading ? 'loader' : 'download'} size={12} />
+          <span>{isDownloading ? '下载中' : '下载'}</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function ArtifactsTab({ conversationId }: { conversationId: number }) {
   const store = useHelmStore()
-  const artifacts = store.conversationArtifacts[conversationId] ?? []
+  const rawArtifacts = store.conversationArtifacts[conversationId]
+  const artifacts = useMemo(() => (Array.isArray(rawArtifacts) ? rawArtifacts : []), [rawArtifacts])
+  const { deliverables, spills } = useMemo(() => partitionArtifactsByKind(artifacts), [artifacts])
+  const [spillExpanded, setSpillExpanded] = useState(false)
+  const [downloadingId, setDownloadingId] = useState<string | null>(null)
+  const spillPanelId = useId()
+
+  const handlePreview = (artifact: ArtifactMetadata) => {
+    store.setActiveModal({ kind: 'artifact-preview', artifactId: artifact.id, conversationId })
+  }
+
+  const handleDownload = (artifact: ArtifactMetadata) => {
+    setDownloadingId(artifact.id)
+    void artifactsApi.downloadToBrowser(artifact.id, artifact.name)
+      .catch((err) => {
+        store.pushNotice({
+          type: 'notification',
+          level: 'error',
+          title: '下载产物失败',
+          body: err instanceof Error ? err.message : String(err),
+        })
+      })
+      .finally(() => {
+        setDownloadingId((current) => (current === artifact.id ? null : current))
+      })
+  }
 
   if (artifacts.length === 0) {
     return (
@@ -22,28 +168,61 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
       </div>
     )
   }
+
   return (
-    <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div className="list">
-        {artifacts.map((a) => (
-          <div key={a.id} className="row">
-            <button
-              type="button"
-              className="row-main"
-              style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0 }}
-              title={`预览 ${a.name}`}
-              onClick={() => store.setActiveModal({ kind: 'artifact-preview', artifactId: a.id, conversationId })}
-            >
-              <HelmIcon name={a.mimeType.startsWith('image/') ? 'eye' : 'file-text'} size={13} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
-              <span className="badge badge-neutral mono">{a.mimeType}</span>
-            </button>
-            <span className="mono tabular-nums" style={{ fontSize: 11, color: 'var(--fg-muted)', flexShrink: 0 }}>
-              {formatBytes(a.size)}
-            </span>
+    <div className="workbench-artifacts-body">
+      <section className="artifact-section" aria-label="正式产物">
+        <div className="artifact-section-head">
+          <span className="artifact-section-title">交付产物</span>
+          <span className="badge badge-neutral tabular-nums">{deliverables.length}</span>
+        </div>
+        {deliverables.length === 0 ? (
+          <div className="artifact-empty-hint">暂无注册产物或上传附件</div>
+        ) : (
+          <div className="artifact-card-list">
+            {deliverables.map((artifact) => (
+              <ArtifactCard
+                key={artifact.id}
+                artifact={artifact}
+                isDownloading={downloadingId === artifact.id}
+                onPreview={handlePreview}
+                onDownload={handleDownload}
+              />
+            ))}
           </div>
-        ))}
-      </div>
+        )}
+      </section>
+
+      {spills.length > 0 ? (
+        <section className="artifact-spill-section" aria-label="超长工具输出快照">
+          <button
+            type="button"
+            className="artifact-spill-toggle"
+            aria-expanded={spillExpanded}
+            aria-controls={spillPanelId}
+            onClick={() => setSpillExpanded((v) => !v)}
+          >
+            <HelmIcon name={spillExpanded ? 'chevron-down' : 'chevron-right'} size={13} />
+            <span className="artifact-spill-title">超长工具输出快照</span>
+            <span className="badge badge-neutral tabular-nums">{spills.length}</span>
+            <span className="artifact-spill-hint">{spillExpanded ? '收起' : '点击展开'}</span>
+          </button>
+          {spillExpanded ? (
+            <div id={spillPanelId} className="artifact-spill-list">
+              {spills.map((artifact) => (
+                <ArtifactCard
+                  key={artifact.id}
+                  artifact={artifact}
+                  compact
+                  isDownloading={downloadingId === artifact.id}
+                  onPreview={handlePreview}
+                  onDownload={handleDownload}
+                />
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   )
 }
@@ -99,21 +278,22 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
       >
         <TabsList asChild>
           <div className="tabs-bar">
-            {tabs.map((tab) => (
-              <TabsTrigger
-                key={tab.id}
-                value={tab.id}
-                className={`tab-btn${tab.id === activeTab ? ' tab-btn-active' : ''}`}
-              >
-                {tab.label}
-                {tab.count > 0 && tab.id !== activeTab ? (
-                  <span className={`badge ${tab.tone === 'warn' ? 'badge-warn' : tab.tone === 'accent' ? 'badge-accent' : 'badge-neutral'} tabular-nums`}>
-                    {tab.count}
-                  </span>
-                ) : null}
-              </TabsTrigger>
-            ))}
-            <span style={{ flex: 1 }} />
+            <div className="workbench-tabs-scroll">
+              {tabs.map((tab) => (
+                <TabsTrigger
+                  key={tab.id}
+                  value={tab.id}
+                  className={`tab-btn${tab.id === activeTab ? ' tab-btn-active' : ''}`}
+                >
+                  <span>{tab.label}</span>
+                  {tab.count > 0 ? (
+                    <span className={`badge ${tab.tone === 'warn' ? 'badge-warn' : tab.tone === 'accent' ? 'badge-accent' : 'badge-neutral'} tabular-nums`}>
+                      {tab.count}
+                    </span>
+                  ) : null}
+                </TabsTrigger>
+              ))}
+            </div>
             <Tooltip content="关闭工作台" side="left">
               <button
                 type="button"
@@ -127,15 +307,15 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
             </Tooltip>
           </div>
         </TabsList>
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div className="workbench-body">
           {conversationId === undefined ? (
             <div className="empty-state empty-state-compact">
               <p className="empty-state-title">无活跃会话上下文</p>
             </div>
           ) : activeTab === 'artifacts' ? (
-            <ArtifactsTab conversationId={conversationId} />
+            <ArtifactsTab key={conversationId} conversationId={conversationId} />
           ) : activePanel !== undefined && activePanel.spec !== undefined && activePanel.pluginId !== undefined ? (
-            <div style={{ padding: 10 }}>
+            <div className="workbench-plugin-body">
               <PluginUiView
                 pluginId={activePanel.pluginId}
                 spec={activePanel.spec}
@@ -152,7 +332,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
         </div>
             </Tabs>
             {footerParts.length > 0 ? (
-              <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', gap: 6, fontSize: 11, color: 'var(--fg-muted)' }}>
+              <div className="workbench-footer">
                 {footerParts.map((part) => (
                   <span key={part} className="badge badge-neutral">{part}</span>
                 ))}

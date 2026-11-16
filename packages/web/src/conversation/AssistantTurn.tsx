@@ -7,7 +7,7 @@ import { matchTimelineEntryActions, timelineEntryActionContextOf } from './actio
 import { MarkdownView } from './MarkdownView.js'
 import { StepGroup, TraceRow } from './TimelineRows.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'
-import { isAssistantTurnBusy, assistantModelFullLabel, assistantModelShortLabel, type AssistantModelIdentity, type AssistantTurn } from './timeline-model.js'
+import { isAssistantTurnBusy, assistantModelFullLabel, assistantModelShortLabel, type AssistantModelIdentity, type AssistantTurn, type ProcessShortcutCommand } from './timeline-model.js'
 import { formatDurationMs, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
 import { Tooltip } from '../ui/Tooltip.js'
 
@@ -44,6 +44,8 @@ export interface AssistantTurnViewProps {
   isLatestTurn?: boolean
   /** 回合锚点对应的真实持久化 pi.assistant 条目（见 resolveAssistantAnchorEntry）。 */
   anchorEntry?: ConversationEntry
+  /** Ctrl+O 过程步骤折叠指令（仅最新含过程步骤回合传入）。 */
+  processShortcut?: ProcessShortcutCommand
   /** 从回合末条目分叉新会话（ConversationTimeline 统一实例化的动作服务）。 */
   onForkFromHere: (entryId: string) => Promise<void>
 }
@@ -52,7 +54,7 @@ export function AssistantTurnView(props: AssistantTurnViewProps) {
   return <ToolActivityProvider><AssistantTurnContent {...props} /></ToolActivityProvider>
 }
 
-function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn = false, anchorEntry, onForkFromHere }: AssistantTurnViewProps) {
+function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn = false, anchorEntry, processShortcut, onForkFromHere }: AssistantTurnViewProps) {
   const store = useHelmStore()
   const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
   const [forking, setForking] = useState(false)
@@ -135,6 +137,7 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
               active={seg.active === true}
               conversationId={conversation.id}
               siblingCalls={siblingCalls}
+              shortcutToggle={processShortcut}
             />
           )
         }

@@ -18,6 +18,7 @@ import {
   buildAssistantModelBoundaries,
   buildTimelineItems,
   collectSiblingCalls,
+  findLatestProcessTurnKey,
   lastEditableHumanInput,
   queuedAgentTextCollapse,
   resolveAssistantAnchorEntry,
@@ -25,6 +26,7 @@ import {
   type EditRequestTarget,
   type HumanInputItem,
   type PluginCardItem,
+  type ProcessShortcutCommand,
   type TimelineItem,
 } from './timeline-model.js'
 import { useTimelineEntryActions } from './timeline-actions.js'
@@ -568,9 +570,13 @@ export function ConversationTimeline({
   const entryActions = useTimelineEntryActions(conversation, onRequestEdit)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [localHighlightEntryId, setLocalHighlightEntryId] = useState<string | null>(null)
+  const [processToggle, setProcessToggle] = useState<{ turnKey: string; command: ProcessShortcutCommand } | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const innerRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  const processToggleSeqRef = useRef(0)
+  const latestProcessTurnKeyRef = useRef<string | undefined>(undefined)
   const stickToBottomRef = useRef(true)
   const lastScrollTopRef = useRef(0)
   const lastHumanRef = useRef<{ conversationId: number; key: string | undefined } | null>(null)
@@ -626,6 +632,7 @@ export function ConversationTimeline({
     lastOutlineTickRef.current = null
     initialBottomRef.current.active = false
     initialBottomRef.current.consumed = false
+    setProcessToggle(null)
     const ownedConversationId = conversation.id
     return () => {
       const active = activeCalibrationRef.current
@@ -700,6 +707,40 @@ export function ConversationTimeline({
     }
     return undefined
   }, [items])
+
+  const latestProcessTurnKey = useMemo(() => findLatestProcessTurnKey(items), [items])
+  latestProcessTurnKeyRef.current = latestProcessTurnKey
+
+  // Ctrl+O 全局快捷键分发：按面板（primary/split）精准切换最新含过程步骤助手回合的折叠态；
+  // 通过查询当下 DOM 真实 aria-expanded 状态决定开合方向，确保与手动点击零打架。
+  useEffect(() => {
+    const onShortcut = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return
+      const detail = event.detail as unknown
+      if (detail === null || typeof detail !== 'object' || Array.isArray(detail)) return
+      const { action, panel } = detail as { action?: unknown; panel?: unknown }
+      if (action !== 'toggle-process-groups' || (panel !== 'primary' && panel !== 'split')) return
+      const root = rootRef.current
+      if (root === null) return
+      if (root.closest('.conversation-drawer') !== null) return
+      const myPanel = root.closest('[data-helm-panel]')?.getAttribute('data-helm-panel') ?? 'primary'
+      if (panel !== myPanel) return
+      const targetTurnKey = latestProcessTurnKeyRef.current
+      if (targetTurnKey === undefined) return
+      const turnEl = innerRef.current?.querySelector<HTMLElement>('[data-latest-process-turn="true"]')
+      const rootToggles = turnEl?.querySelectorAll<HTMLElement>('[data-process-toggle="root"]')
+      const anyOpen =
+        rootToggles !== undefined &&
+        Array.from(rootToggles).some((el) => el.getAttribute('aria-expanded') === 'true')
+      const nextSeq = ++processToggleSeqRef.current
+      setProcessToggle({
+        turnKey: targetTurnKey,
+        command: { open: !anyOpen, seq: nextSeq },
+      })
+    }
+    window.addEventListener('helm:shortcut', onShortcut)
+    return () => window.removeEventListener('helm:shortcut', onShortcut)
+  }, [])
 
   // 历史行渲染隔离（content-visibility）：仅浏览器支持时启用；live 流式回合、
   // 排队输入、最新 assistant 回合与高亮/大纲定位目标行在 resolveContainmentClass
@@ -999,7 +1040,8 @@ export function ConversationTimeline({
     resolvedAsks.length === 0
 
   return (
-    <div ref={scrollRef} className="timeline-scroll">
+    <div ref={rootRef} className="timeline-container">
+      <div ref={scrollRef} className="timeline-scroll">
       {store.conversationDetails[conversation.id]?.nextCursor && (
         <button className="btn btn-ghost btn-sm" disabled={loadingOlder} onClick={loadEarlierEntries}>
           {loadingOlder ? '正在加载历史…' : '加载更早的消息'}
@@ -1090,6 +1132,7 @@ export function ConversationTimeline({
               className={`${highlightClass(anchorId)}${cvClass !== '' ? ` ${cvClass}` : ''}`.trim()}
               ref={highlightScrollRef}
               data-entry-id={anchorId}
+              data-latest-process-turn={item.key === latestProcessTurnKey ? 'true' : undefined}
             >
               {modelBoundary !== undefined ? <AssistantModelBoundary model={modelBoundary} /> : null}
               <AssistantTurnView
@@ -1098,6 +1141,7 @@ export function ConversationTimeline({
                 siblingCalls={siblingCalls}
                 anchorEntry={resolveAssistantAnchorEntry(item.entryIds, activeEntriesById)}
                 isLatestTurn={item.key === lastAssistantKey}
+                processShortcut={processToggle?.turnKey === item.key ? processToggle.command : undefined}
                 onForkFromHere={entryActions.forkFromHere}
               />
             </div>
@@ -1118,6 +1162,7 @@ export function ConversationTimeline({
         ) : null}
       </div>
       <div ref={bottomRef} className="timeline-scroll-anchor" />
+      </div>
     </div>
   )
 }
