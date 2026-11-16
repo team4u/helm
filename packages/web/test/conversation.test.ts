@@ -1315,3 +1315,69 @@ test('resolveSubagentExecutionMeta：run 节点 worktree 优先于 JSON/footer �
   }
   assert.deepEqual(resolveSubagentExecutionMeta(bodyMention, 1, [run]), {})
 })
+
+// ---------------------------------------------------------------------------
+// 精简进行中（pending compaction divider）时间线排列
+// ---------------------------------------------------------------------------
+
+test('buildTimelineItems：compacting=true 时在回合之后、queuedInputs 之前插入 pending compaction 分割线', { timeout: 60_000 }, () => {
+  const items = buildTimelineItems(
+    [
+      entry('1', 'helm.input', { data: { text: '历史提问', origin: 'human' } }),
+      assistantEntry('2', [{ type: 'text', text: '历史回答' }]),
+    ],
+    {
+      compacting: true,
+      live: {
+        conversationId: 1,
+        text: '',
+        tools: [],
+        updatedAt: 100,
+        queuedInputs: [
+          {
+            submissionId: '9',
+            id: 'q-after-compact',
+            text: '精简后继续分析',
+            mode: 'followUp',
+            origin: 'human',
+            createdAt: 200,
+          },
+        ],
+      },
+      working: false,
+    },
+  )
+
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ['human', 'assistant', 'divider', 'human'],
+    'pending compaction 分割线必须位于已提交/live 回合之后、queuedInputs 之前',
+  )
+  const divider = items[2]
+  assert.ok(divider?.kind === 'divider')
+  assert.equal(divider.key, 'divider:compacting')
+  assert.equal(divider.entryId, 'compacting:live')
+  assert.equal(divider.divider, 'compaction')
+  assert.equal(divider.pending, true)
+  const queued = items[3]
+  assert.ok(queued?.kind === 'human')
+  assert.equal(queued.queuedMode, 'followUp')
+  assert.equal(queued.text, '精简后继续分析')
+})
+
+test('buildTimelineItems：compacting 未开启时不插入 pending compaction 分割线', { timeout: 60_000 }, () => {
+  const withoutFlag = buildTimelineItems([
+    entry('1', 'helm.input', { data: { text: '提问', origin: 'human' } }),
+    assistantEntry('2', [{ type: 'text', text: '回答' }]),
+  ])
+  assert.equal(withoutFlag.some((item) => item.kind === 'divider' && item.pending === true), false)
+
+  const falseFlag = buildTimelineItems(
+    [
+      entry('1', 'helm.input', { data: { text: '提问', origin: 'human' } }),
+      assistantEntry('2', [{ type: 'text', text: '回答' }]),
+    ],
+    { compacting: false },
+  )
+  assert.equal(falseFlag.some((item) => item.kind === 'divider' && item.pending === true), false)
+})
