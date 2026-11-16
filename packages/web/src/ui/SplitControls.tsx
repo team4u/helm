@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { HelmIcon } from '@helm/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from './Tooltip.js'
 
 export interface CloseSplitButtonProps {
@@ -8,25 +9,28 @@ export interface CloseSplitButtonProps {
 }
 
 /**
- * 分屏窗格公共关闭按钮：
- * - 基于 Radix Tooltip（content="关闭本分屏", side="bottom"）；
- * - 携带 split-close-btn 与 pane-action-label 类，分屏或窄屏下自动响应。
+ * Shared close button for split panes:
+ * - Radix Tooltip (content = localized "close this split view", side = bottom);
+ * - carries the split-close-btn and pane-action-label classes so split panes
+ *   and narrow screens respond automatically.
  */
 export function CloseSplitButton({
   onCloseSplit,
-  label = 'Close split view',
+  label,
 }: CloseSplitButtonProps): React.JSX.Element {
+  const { t } = useWebLocale()
+  const effectiveLabel = label ?? t('ui.split.closeView')
   return (
-    <Tooltip content="Close this split view" side="bottom">
+    <Tooltip content={t('ui.split.closeThisView')} side="bottom">
       <button
         type="button"
         className="btn btn-sm btn-ghost split-close-btn"
-        aria-label={label}
-        title="Close this split view"
+        aria-label={effectiveLabel}
+        title={t('ui.split.closeThisView')}
         onClick={onCloseSplit}
       >
         <HelmIcon name="x" size={13} />
-        <span className="pane-action-label">{label}</span>
+        <span className="pane-action-label">{effectiveLabel}</span>
       </button>
     </Tooltip>
   )
@@ -38,21 +42,25 @@ export interface SplitToggleButtonProps {
 }
 
 /**
- * 分屏开启/关闭切换按钮：
- * - 基于 Radix Tooltip（content=isSplitActive ? '关闭分屏' : '并排分屏', side="bottom"）；
- * - 携带 split-toggle-btn 与 split-active 状态类，窄屏仅保留激活态。
+ * Split open/close toggle button:
+ * - Radix Tooltip (content switches between the localized close/side-by-side
+ *   copy, side = bottom);
+ * - carries the split-toggle-btn and split-active state classes; narrow
+ *   screens keep only the active state.
  */
 export function SplitToggleButton({
   isSplitActive,
   onToggleSplit,
 }: SplitToggleButtonProps): React.JSX.Element {
+  const { t } = useWebLocale()
+  const actionLabel = isSplitActive ? t('ui.split.closeView') : t('ui.split.sideBySide')
   return (
-    <Tooltip content={isSplitActive ? 'Close split view' : 'Side-by-side split'} side="bottom">
+    <Tooltip content={actionLabel} side="bottom">
       <button
         type="button"
         className={`btn btn-sm split-toggle-btn${isSplitActive ? ' btn-primary split-active' : ''}`}
-        aria-label={isSplitActive ? 'Close split view' : 'Side-by-side split'}
-        title="Open / close the split view on the right"
+        aria-label={actionLabel}
+        title={t('ui.split.toggleTitle')}
         onClick={onToggleSplit}
       >
         <HelmIcon name="columns" size={12} />
