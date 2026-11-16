@@ -1,17 +1,17 @@
 /**
- * 本机节点连接的最小生产 helper（`nodeId === 'local'`）：
- * - 真实 IPC：Unix 直接 connect UDS 路径；Windows 按 herdr 实际规则把
- *   marker 文件路径换算为 Named Pipe 名（见 windowsPipeNameOf 源码依据注释）；
- * - 真实执行环境：`NodeExecutionEnv` 结构即满足 `HerdrNodeEnv`（Pick 子集）。
+ * Minimal production helper for local node connections (`nodeId === 'local'`):
+ * - Real IPC: on Unix, connect directly to the UDS path; on Windows, convert the marker
+ *   file path into the Named Pipe name per herdr's actual rules (see the windowsPipeNameOf source-evidence comment);
+ * - Real execution environment: the `NodeExecutionEnv` structure already satisfies `HerdrNodeEnv` (a Pick subset).
  *
- * Windows pipe 名规则（interprocess 2.4.2 源码核实，非臆测）：
- * - `src/os/windows/path_conversion.rs` `pathcvt`（L126-137）：namespaced 名只是
- *   `\\\\` + `.`（本地主机）+ `\\pipe\\` + 原始 name 逐段拼接，**不替换冒号/
- *   斜杠**（herdr 的 marker 路径 `C:\\Users\\...\\herdr.sock` 进 pipe 名后冒号
- *   原样保留——NPFS 对 name 除 NUL 与路径分隔语义外不禁止 `:`）；
+ * Windows pipe name rules (verified against interprocess 2.4.2 source, not guessed):
+ * - `src/os/windows/path_conversion.rs` `pathcvt` (L126-137): a namespaced name is just
+ *   `\\` + `.` (local host) + `\\pipe\\` + the raw name joined segment by segment, **without replacing
+ *   colons/slashes** (after herdr's marker path `C:\\Users\\...\\herdr.sock` enters the pipe name, the colon
+ *   stays as-is -- NPFS does not forbid `:` in names apart from NUL and path-separator semantics);
  * - `src/os/windows/local_socket/name_type.rs` `map_generic_namespaced_osstr`：
- *   已是 `\\HOST\pipe\NAME` 形态的完整 pipe 路径原样通过（`is_pipefs`）。
- * 依据源码推导，未在 Windows 实机验证（测试如实声明）。
+ *   a full pipe path already in `\\HOST\\pipe\\NAME` form passes through unchanged (`is_pipefs`).
+ * Derived from source; not verified on a physical Windows machine (tests state this honestly).
  */
 
 import { connect } from 'node:net'
@@ -20,13 +20,13 @@ import type { RpcResult } from '@helm/protocol'
 import type { HerdrNodeChannel, HerdrNodeEnv } from './contracts.js'
 import { isWindowsShapedPath } from './transport.js'
 
-/** interprocess `\\<host>\pipe\<name>` 的本地主机段（pathcvt LOCAL_HOSTNAME）。 */
+/** The local-host segment of interprocess's `\\<host>\\pipe\\<name>` (pathcvt LOCAL_HOSTNAME). */
 const PIPE_PREFIX = '\\\\.\\pipe\\'
 
 /**
- * Windows marker 文件路径 → named pipe 连接名。
- * 规则 = `\\.\pipe\` + 原始路径（仅统一正斜杠为反斜杠；冒号/其余字符原样）。
- * 已是完整 pipe 路径（`\\.\pipe\...` 或 `\\HOST\pipe\...`）时原样返回。
+ * Windows marker file path -> named pipe connection name.
+ * Rule = `\\.\\pipe\\` + the raw path (only normalize forward slashes to backslashes; colons/other characters as-is).
+ * A full pipe path (`\\.\\pipe\\...` or `\\HOST\\pipe\\...`) is returned unchanged.
  */
 export function windowsPipeNameOf(markerPath: string): string {
   const normalized = markerPath.replaceAll('/', '\\')
@@ -34,7 +34,7 @@ export function windowsPipeNameOf(markerPath: string): string {
   return PIPE_PREFIX + normalized
 }
 
-/** interprocess `is_pipefs` 同规则：`\\HOST\pipe\...`（host 段非空）即完整 pipe 路径。 */
+/** Same rule as interprocess `is_pipefs`: `\\HOST\\pipe\\...` (non-empty host segment) is a full pipe path. */
 function isPipePath(path: string): boolean {
   if (!path.startsWith('\\\\')) return false
   const hostEnd = path.indexOf('\\', 2)
@@ -43,15 +43,15 @@ function isPipePath(path: string): boolean {
 }
 
 /**
- * 端点形态判定：已是完整 pipe 路径或 Windows 路径形状（盘符/UNC）即 named pipe，
- * 其余（POSIX 路径，含显式相对/绝对 UDS 路径）为 Unix socket。纯路径形状判定，
- * 不依赖 Hub 进程平台（Linux Hub 显式配置 Windows 端点同样按 pipe 连接）。
+ * Endpoint form detection: a full pipe path or a Windows path shape (drive letter/UNC) means named pipe;
+ * anything else (POSIX paths, incl. explicit relative/absolute UDS paths) is a Unix socket. Pure path-shape detection
+ * independent of the Hub process platform (a Windows endpoint explicitly configured on a Linux Hub still connects as a pipe).
  */
 export function endpointKindOf(endpoint: string): 'unix-socket' | 'named-pipe' {
   return isWindowsShapedPath(endpoint) || isPipePath(endpoint.replaceAll('/', '\\')) ? 'named-pipe' : 'unix-socket'
 }
 
-/** 建立到本机 Herdr IPC 端点的 socket 连接（Unix UDS / Windows Named Pipe）。 */
+/** Establish a socket connection to the local Herdr IPC endpoint (Unix UDS / Windows Named Pipe). */
 export function connectHerdrEndpoint(endpoint: string, kind: 'unix-socket' | 'named-pipe') {
   if (kind === 'named-pipe') {
     return connect(windowsPipeNameOf(endpoint))
@@ -60,9 +60,9 @@ export function connectHerdrEndpoint(endpoint: string, kind: 'unix-socket' | 'na
 }
 
 /**
- * 本机节点通道（`nodeId === 'local'`；其它节点一律拒绝——EnvFabric 未注入时
- * transport 对远端目标显式报 herdr_node_unavailable，绝不经本类兜底本机执行）。
- * 一连接一请求：写入单行请求，读到首个换行响应即返回并关闭。
+ * Local node channel (`nodeId === 'local'`; every other node is rejected -- when EnvFabric is not injected,
+ * transport explicitly reports herdr_node_unavailable for remote targets; never uses this class as a local fallback).
+ * One request per connection: write a single-line request, return on the first newline response, then close.
  */
 export class LocalNodeChannel implements HerdrNodeChannel {
   private readonly envCache = new Map<string, HerdrNodeEnv>()
@@ -75,7 +75,7 @@ export class LocalNodeChannel implements HerdrNodeChannel {
     return undefined
   }
 
-  /** 本机节点即 Hub 宿主：平台就是 process.platform（cwd 规范化用）。 */
+  /** The local node is the Hub host itself: the platform is process.platform (for cwd normalization). */
   nodePlatform(nodeId: string): string | undefined {
     return nodeId === 'local' ? process.platform : undefined
   }
@@ -86,7 +86,7 @@ export class LocalNodeChannel implements HerdrNodeChannel {
     signal?: AbortSignal,
   ): Promise<RpcResult<string>> {
     if (nodeId !== 'local') {
-      return { ok: false, error: { code: 'invalid', message: `LocalNodeChannel 仅承载 'local' 节点（收到 '${nodeId}'）` } }
+      return { ok: false, error: { code: 'invalid', message: `LocalNodeChannel only carries the 'local' node (got '${nodeId}')` } }
     }
     if (input.endpoint === undefined) {
       return { ok: false, error: { code: 'invalid', message: 'ipcCall requires an explicit endpoint' } }
@@ -95,7 +95,7 @@ export class LocalNodeChannel implements HerdrNodeChannel {
       return { ok: false, error: { code: 'aborted', message: 'ipcCall aborted' } }
     }
     return await new Promise<RpcResult<string>>((resolve) => {
-      // 端点形态按路径形状判定（Windows 端点必须换算 pipe 名，绝不 connect marker 文件）。
+      // Endpoint form follows path shape (a Windows endpoint must be converted to the pipe name; never connect to the marker file).
       const socket = connectHerdrEndpoint(input.endpoint!, endpointKindOf(input.endpoint!))
       socket.setNoDelay(true)
       const chunks: Buffer[] = []
@@ -144,12 +144,12 @@ export class LocalNodeChannel implements HerdrNodeChannel {
 
   envFor(nodeId: string, cwd: string): HerdrNodeEnv {
     if (nodeId !== 'local') {
-      throw new Error(`LocalNodeChannel 仅承载 'local' 节点的文件环境（收到 '${nodeId}'）`)
+      throw new Error(`LocalNodeChannel only carries the file environment of the 'local' node (got '${nodeId}')`)
     }
     const cached = this.envCache.get(cwd)
     if (cached !== undefined) return cached
-    // NodeExecutionEnv 结构即满足 HerdrNodeEnv（Pick 子集）；取消由调用方
-    // 在 exec 选项处派生（transport 层 withAbortSignal）。
+    // The NodeExecutionEnv structure already satisfies HerdrNodeEnv (a Pick subset); cancellation is derived
+    // by the caller at the exec options (transport-layer withAbortSignal).
     const env: HerdrNodeEnv = new NodeExecutionEnv({ cwd })
     this.envCache.set(cwd, env)
     return env

@@ -1,9 +1,9 @@
 /**
- * Herdr RPC 结果边界校验：把 transport.call 解包的 unknown result 收敛为
- * 强类型形状。官方协议为 tag = "type" 的 snake_case 枚举（herdr 0.9.5 /
- * protocol 22，服务端源码核实）；任何字段缺失/类型不符都在本边界显式抛
- * HelmError('herdr_protocol_violation')，绝不静默降级（不伪造 0 / unknown /
- * 空串），坏数据不得成为 CAS 或终态判断的权威。
+ * Herdr RPC result boundary validation: converge the unknown result unpacked by transport.call into
+ * strongly-typed shapes. The official protocol is a snake_case enum with tag = "type" (herdr 0.9.5 /
+ * protocol 22, verified against server source); any missing field / type mismatch throws explicitly at
+ * this boundary as HelmError('herdr_protocol_violation'), never silently degrading (no fabricated 0 / unknown /
+ * empty strings); bad data must never become the authority for CAS or terminal-state decisions.
  */
 
 import { HelmError } from '@helm/protocol'
@@ -34,14 +34,14 @@ export interface HerdrAgentInfo {
   agent?: string
   name?: string
   /**
-   * 官方 AgentInfo 常规字段（可选；正常 RPC 形状保留，不为 steer 必填）。
+   * Official AgentInfo regular fields (optional; kept for the normal RPC shape, not required for steer).
    */
   terminalId?: string
   agentStatus: HerdrAgentStatus
   stateChangeSeq: number
-  /** 真实启动序列：agent.start 后短暂 unknown + launch_pending（服务端实测）。 */
+  /** Real startup sequence: briefly unknown + launch_pending after agent.start (measured against the server). */
   launchPending?: boolean
-  /** 官方字段省略时为 false；idle 本身不足以接受 prompt。 */
+  /** false when the official field is omitted; idle alone is not enough to accept a prompt. */
   interactiveReady: boolean
   focused?: boolean
   cwd?: string
@@ -75,7 +75,7 @@ function asObject(result: unknown, method: string): Record<string, unknown> {
   if (!isObj(result)) {
     throw new HelmError(
       'herdr_protocol_violation',
-      `${method} 返回的 result 不是对象：${JSON.stringify(result)?.slice(0, 200)}`,
+      `${method} returned a result that is not an object: ${JSON.stringify(result)?.slice(0, 200)}`,
       502,
       { method, result },
     )
@@ -88,7 +88,7 @@ function expectType(result: unknown, method: string, expected: string): Record<s
   if (obj['type'] !== expected) {
     throw new HelmError(
       'herdr_protocol_violation',
-      `${method} 返回的 result.type 应为 '${expected}'，实际：${JSON.stringify(obj['type'])}`,
+      `${method} returned result.type '${expected}' expected, got: ${JSON.stringify(obj['type'])}`,
       502,
       { method, expected, actual: obj['type'] },
     )
@@ -101,7 +101,7 @@ function reqString(obj: Record<string, unknown>, method: string, key: string): s
   if (typeof v !== 'string' || v.length === 0) {
     throw new HelmError(
       'herdr_protocol_violation',
-      `${method} 结果字段 ${key} 缺失或非非空字符串`,
+      `${method} result field ${key} is missing or not a non-empty string`,
       502,
       { method, key, value: v },
     )
@@ -118,13 +118,13 @@ function optBool(obj: Record<string, unknown>, key: string): boolean | undefined
   return typeof obj[key] === 'boolean' ? (obj[key] as boolean) : undefined
 }
 
-/** 状态严格枚举：未知值是协议违约（服务端 AgentStatus 仅五值）。 */
+/** Strict status enum: unknown values are protocol violations (the server's AgentStatus has only five values). */
 function parseStatus(v: unknown, method: string): HerdrAgentStatus {
   const status = AGENT_STATUSES.find((s) => s === v)
   if (status === undefined) {
     throw new HelmError(
       'herdr_protocol_violation',
-      `${method} agent_status 非法：${JSON.stringify(v)}`,
+      `${method} has invalid agent_status: ${JSON.stringify(v)}`,
       502,
       { method, agentStatus: v },
     )
@@ -132,12 +132,12 @@ function parseStatus(v: unknown, method: string): HerdrAgentStatus {
   return status
 }
 
-/** seq 严格非负整数（服务端 u64）：缺失/小数/负数/字符串都是违约，绝不伪造 0。 */
+/** seq is a strict non-negative integer (server u64): missing/decimal/negative/string are all violations; never fabricate 0. */
 function parseSeq(v: unknown, method: string, field = 'state_change_seq'): number {
   if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) {
     throw new HelmError(
       'herdr_protocol_violation',
-      `${method} ${field} 缺失或非非负安全整数：${String(v)}`,
+      `${method} ${field} is missing or not a non-negative safe integer: ${String(v)}`,
       502,
       { method, field, resolvedType: typeof v },
     )
@@ -148,7 +148,7 @@ function parseSeq(v: unknown, method: string, field = 'state_change_seq'): numbe
 function parseTab(obj: Record<string, unknown>, method: string): HerdrTabInfo {
   const tab = obj['tab']
   if (!isObj(tab)) {
-    throw new HelmError('herdr_protocol_violation', `${method} 结果缺少 tab 对象`, 502, { method })
+    throw new HelmError('herdr_protocol_violation', `${method} result is missing the tab object`, 502, { method })
   }
   return { tabId: reqString(tab, method, 'tab_id'), workspaceId: reqString(tab, method, 'workspace_id') }
 }
@@ -156,7 +156,7 @@ function parseTab(obj: Record<string, unknown>, method: string): HerdrTabInfo {
 function parsePane(obj: Record<string, unknown>, method: string, key = 'root_pane'): HerdrPaneInfo {
   const pane = obj[key]
   if (!isObj(pane)) {
-    throw new HelmError('herdr_protocol_violation', `${method} 结果缺少 ${key} 对象`, 502, { method, key })
+    throw new HelmError('herdr_protocol_violation', `${method} result is missing the ${key} object`, 502, { method, key })
   }
   return {
     paneId: reqString(pane, method, 'pane_id'),
@@ -177,7 +177,7 @@ export function parseWorktreeCreated(result: unknown): WorktreeCreated {
   const obj = expectType(result, 'worktree.create', 'worktree_created')
   const worktree = obj['worktree']
   if (!isObj(worktree)) {
-    throw new HelmError('herdr_protocol_violation', 'worktree.create 结果缺少 worktree 对象', 502, {})
+    throw new HelmError('herdr_protocol_violation', 'worktree.create result is missing the worktree object', 502, {})
   }
   return {
     workspaceId: reqString(asObject(obj['workspace'], 'worktree.create'), 'worktree.create', 'workspace_id'),
@@ -192,7 +192,7 @@ export function parseWorktreeCreated(result: unknown): WorktreeCreated {
 
 function parseAgentInfo(agent: unknown, method: string): HerdrAgentInfo {
   if (!isObj(agent)) {
-    throw new HelmError('herdr_protocol_violation', `${method} 结果缺少 agent 对象`, 502, { method })
+    throw new HelmError('herdr_protocol_violation', `${method} result is missing the agent object`, 502, { method })
   }
   return {
     paneId: reqString(agent, method, 'pane_id'),
@@ -211,7 +211,7 @@ function parseAgentInfo(agent: unknown, method: string): HerdrAgentInfo {
   }
 }
 
-/** agent.start / agent.get / agent.wait / agent.prompt 共用的 agent_info 形状。 */
+/** Shared agent_info shape for agent.start / agent.get / agent.wait / agent.prompt. */
 export function parseAgentResult(result: unknown, method: string, expected: string): HerdrAgentInfo {
   const obj = expectType(result, method, expected)
   return parseAgentInfo(obj['agent'], method)
@@ -222,10 +222,10 @@ export function parsePaneRead(result: unknown): PaneRead {
   const obj = expectType(result, 'agent.read', 'pane_read')
   const read = obj['read']
   if (!isObj(read)) {
-    throw new HelmError('herdr_protocol_violation', 'agent.read 结果缺少 read 对象', 502, {})
+    throw new HelmError('herdr_protocol_violation', 'agent.read result is missing the read object', 502, {})
   }
   const text = read['text']
-  if (typeof text !== 'string') throw new HelmError('herdr_protocol_violation', 'agent.read text 必须是字符串', 502)
+  if (typeof text !== 'string') throw new HelmError('herdr_protocol_violation', 'agent.read text must be a string', 502)
   return { paneId: reqString(read, 'agent.read', 'pane_id'), text }
 }
 
@@ -234,9 +234,9 @@ export function isOkResult(result: unknown): boolean {
 }
 
 /**
- * session.snapshot 的 panes[] 行（官方 PaneInfo 子集；服务端 src/api/schema/
- * panes.rs:527-560）。pane 无 state_change_seq（seq 只在 AgentInfo），普通
- * shell 的 agent_status 官方为 unknown——两者都如实保留，绝不伪造。
+ * The panes[] rows of session.snapshot (an official PaneInfo subset; server src/api/schema/
+ * panes.rs:527-560). A pane has no state_change_seq (seq only exists in AgentInfo); a plain
+ * shell's agent_status is officially unknown -- both are preserved as-is, never fabricated.
  */
 export interface HerdrPaneSnapshotInfo {
   paneId: string
@@ -254,7 +254,7 @@ export interface HerdrPaneSnapshotInfo {
 /** session.snapshot -> {type:'session_snapshot', snapshot:{agents, panes, tabs, workspaces}} */
 export interface SessionSnapshotData {
   agents: HerdrAgentInfo[]
-  /** 全部本机窗格（含人类 shell）；agents 仅 Agent 终端，按 paneId join。 */
+  /** All local panes (incl. human shells); agents covers only Agent terminals, joined by paneId. */
   panes: HerdrPaneSnapshotInfo[]
 }
 
@@ -262,15 +262,15 @@ export function parseSessionSnapshot(result: unknown): SessionSnapshotData {
   const obj = expectType(result, 'session.snapshot', 'session_snapshot')
   const snapshot = obj['snapshot']
   if (!isObj(snapshot)) {
-    throw new HelmError('herdr_protocol_violation', 'session.snapshot 结果缺少 snapshot 对象', 502, {})
+    throw new HelmError('herdr_protocol_violation', 'session.snapshot result is missing the snapshot object', 502, {})
   }
   const agents = snapshot['agents']
   if (!Array.isArray(agents)) {
-    throw new HelmError('herdr_protocol_violation', 'session.snapshot.agents 必须是数组', 502, {})
+    throw new HelmError('herdr_protocol_violation', 'session.snapshot.agents must be an array', 502, {})
   }
   const panes = snapshot['panes']
   if (!Array.isArray(panes)) {
-    throw new HelmError('herdr_protocol_violation', 'session.snapshot.panes 必须是数组', 502, {})
+    throw new HelmError('herdr_protocol_violation', 'session.snapshot.panes must be an array', 502, {})
   }
   const parsedAgents = agents.map((a) => parseAgentInfo(a, 'session.snapshot'))
   const parsedPanes = panes.map((p) => parsePaneSnapshotInfo(p, 'session.snapshot'))
@@ -278,7 +278,7 @@ export function parseSessionSnapshot(result: unknown): SessionSnapshotData {
     const ids = new Set<string>()
     for (const row of rows) {
       if (ids.has(row.paneId)) {
-        throw new HelmError('herdr_protocol_violation', `session.snapshot.${name} 含重复 pane_id`, 502)
+        throw new HelmError('herdr_protocol_violation', `session.snapshot.${name} contains duplicate pane_id`, 502)
       }
       ids.add(row.paneId)
     }
@@ -290,18 +290,18 @@ function snapshotString(pane: Record<string, unknown>, key: string): string | un
   const value = pane[key]
   if (value === undefined) return undefined
   if (typeof value !== 'string') {
-    throw new HelmError('herdr_protocol_violation', `session.snapshot.panes.${key} 必须是字符串`, 502)
+    throw new HelmError('herdr_protocol_violation', `session.snapshot.panes.${key} must be a string`, 502)
   }
   return value
 }
 
 function parsePaneSnapshotInfo(pane: unknown, method: string): HerdrPaneSnapshotInfo {
   if (!isObj(pane)) {
-    throw new HelmError('herdr_protocol_violation', `${method}.panes 项必须是对象`, 502, {})
+    throw new HelmError('herdr_protocol_violation', `${method}.panes items must be objects`, 502, {})
   }
   const focused = pane['focused']
   if (typeof focused !== 'boolean') {
-    throw new HelmError('herdr_protocol_violation', `${method}.panes 项 ${String(pane['pane_id'])} 缺少 focused 布尔字段`, 502, {})
+    throw new HelmError('herdr_protocol_violation', `${method}.panes item ${String(pane['pane_id'])} is missing the boolean focused field`, 502, {})
   }
   return {
     paneId: reqString(pane, method, 'pane_id'),
@@ -318,14 +318,14 @@ function parsePaneSnapshotInfo(pane: unknown, method: string): HerdrPaneSnapshot
 }
 
 /**
- * 预期 'ok' 的结果（tab.close / workspace.close / send_keys / report_metadata——
- * 服务端源码逐条核实）。非 ok 显式抛协议违约——绝不把失败静默当成功。
+ * Results expected to be 'ok' (tab.close / workspace.close / send_keys / report_metadata --
+ * verified line-by-line against server source). A non-ok result throws an explicit protocol violation -- never silently treated as success.
  */
 export function assertOkResult(result: unknown, method: string): void {
   if (!isOkResult(result)) {
     throw new HelmError(
       'herdr_protocol_violation',
-      `${method} 应返回 {type:'ok'}，实际：${JSON.stringify(result)?.slice(0, 200)}`,
+      `${method} should return {type:'ok'}, got: ${JSON.stringify(result)?.slice(0, 200)}`,
       502,
       { method, result },
     )
@@ -333,54 +333,54 @@ export function assertOkResult(result: unknown, method: string): void {
 }
 
 // ---------------------------------------------------------------
-// agent.send_keys 协议级 CAS（helm 侧契约；等待 Herdr 服务端配套）
+// Protocol-level CAS for agent.send_keys (helm-side contract; awaiting Herdr server support)
 //
-// 现状证据（/root/code/herdr 服务端源码，herdr 0.9.5 / protocol 22，只读核实）：
-// - `AgentSendKeysParams` 仅 `{target, keys}`（src/api/schema/agents.rs:18-22），
-//   无任何 CAS 字段；serde 无 deny_unknown_fields——盲发额外字段会被旧服务端
-//   **静默忽略并照常写键**，恰好复现本契约要关闭的审批桥残窗；
+// Current evidence (/root/code/herdr server source, herdr 0.9.5 / protocol 22, read-only verification):
+// - `AgentSendKeysParams` is only `{target, keys}` (src/api/schema/agents.rs:18-22),
+//   with no CAS field; serde has no deny_unknown_fields -- blindly sending extra fields would be
+//   **silently ignored while keys are written anyway** by old servers, exactly reproducing the approval-bridge residual window this contract closes;
 // - `ping` -> `{type:'pong', version, protocol, capabilities}`（src/api/server.rs:337-347、
-//   src/api/schema/server.rs:17-24）是官方能力通告通道，字段按 serde(default) 前向兼容扩展。
+//   src/api/schema/server.rs:17-24) is the official capability channel, extensible forward-compatibly via serde(default) fields.
 //
-// 因此 helm 侧契约（提案，需 Herdr 服务端发布配套后端到端生效）：
-// - 能力通告：pong.capabilities.`send_keys_expected_state_seq` === true；
-// - 请求字段：agent.send_keys params 增 `expected_state_seq: u64`（与 AgentInfo
-//   既有 `state_change_seq` 同词根，遵循协议 snake_case 惯例）；
-// - 拒绝语义：服务端当前 state_change_seq ≠ expected_state_seq 时返回 wire 错误
-//   `stale_state` 且**不写入任何按键**。
-// 在服务端配套发布前，executor 以能力门禁拒绝无 CAS 发键（绝不静默降级）。
+// Hence the helm-side contract (a proposal; end-to-end effective once the Herdr server ships support):
+// - Capability advertisement: pong.capabilities.`send_keys_expected_state_seq` === true;
+// - Request field: agent.send_keys params add `expected_state_seq: u64` (same root as AgentInfo's
+//   existing `state_change_seq`, following the protocol's snake_case convention);
+// - Rejection semantics: when the server's current state_change_seq != expected_state_seq, return the wire error
+//   `stale_state` and **write no keystrokes**.
+// Until the server ships support, the executor rejects CAS-less key sends via the capability gate (never silently degrades).
 // ---------------------------------------------------------------
 
-/** pong.capabilities 中通告 agent.send_keys CAS 支持的字段名（wire 名）。 */
+/** The field name (wire name) in pong.capabilities advertising agent.send_keys CAS support. */
 export const SEND_KEYS_CAS_CAPABILITY = 'send_keys_expected_state_seq'
 
-/** 服务端 CAS 拒绝错误码（wire error.code；语义 = 键未发送）。 */
+/** Server CAS rejection error code (wire error.code; semantics = keys not sent). */
 export const STALE_STATE_ERROR_CODE = 'stale_state'
 
-/** agent.send_keys 请求（helm 内部 camelCase；wire 由 buildSendKeysParams 转换）。 */
+/** agent.send_keys request (helm-internal camelCase; the wire form is converted by buildSendKeysParams). */
 export interface SendKeysRequest {
   target: string
   keys: string[]
-  /** CAS 期望水位：必须等于审批条目观测的权威 state_change_seq。 */
+  /** CAS expected watermark: must equal the authoritative state_change_seq observed by the approval entry. */
   expectedStateSeq: number
 }
 
-/** 构造 agent.send_keys wire params（边界校验：target/keys/seq 非法即显式拒绝）。 */
+/** Build agent.send_keys wire params (boundary validation: invalid target/keys/seq rejected explicitly). */
 export function buildSendKeysParams(request: SendKeysRequest): Record<string, unknown> {
   if (typeof request.target !== 'string' || request.target.length === 0) {
-    throw new HelmError('validation_error', 'agent.send_keys target 必须是非空字符串', 400, { target: request.target })
+    throw new HelmError('validation_error', 'agent.send_keys target must be a non-empty string', 400, { target: request.target })
   }
   if (
     !Array.isArray(request.keys) ||
     request.keys.length === 0 ||
     request.keys.some((key) => typeof key !== 'string' || key.length === 0)
   ) {
-    throw new HelmError('validation_error', 'agent.send_keys keys 必须是非空字符串数组', 400, { keys: request.keys })
+    throw new HelmError('validation_error', 'agent.send_keys keys must be a non-empty string array', 400, { keys: request.keys })
   }
   if (typeof request.expectedStateSeq !== 'number' || !Number.isSafeInteger(request.expectedStateSeq) || request.expectedStateSeq < 0) {
     throw new HelmError(
       'validation_error',
-      `agent.send_keys expectedStateSeq 必须是非负安全整数：${String(request.expectedStateSeq)}`,
+      `agent.send_keys expectedStateSeq must be a non-negative safe integer: ${String(request.expectedStateSeq)}`,
       400,
       { expectedStateSeq: request.expectedStateSeq },
     )
@@ -389,37 +389,37 @@ export function buildSendKeysParams(request: SendKeysRequest): Record<string, un
 }
 
 // ---------------------------------------------------------------
-// agent.prompt 运行中插话（现有协议；steer 按预检语义使用）
+// agent.prompt in-flight steer (existing protocol; steer uses it with preflight semantics)
 //
-// 现状证据（/root/code/herdr 服务端源码，herdr 0.9.5 / protocol 22，只读核实）：
-// - `AgentPromptParams` 仅 `{target, text, wait}`（src/api/schema/agents.rs:176-181），
-//   无任何守卫字段；serde 无 deny_unknown_fields——helm 绝不盲发拟议扩展字段
-//   （会被旧服务端静默忽略，核验形同虚设）；
-// - 服务端 admission 在写入任何 PTY 字节前拒绝 blocked / launch_pending /
-//   无 known_agent / 非前台 CLI（wire 错误 agent_blocked / agent_not_ready /
-//   agent_not_found 等，零写入）；预检 working 后刚转 idle 的提交会被接续为
-//   新回合；
-// - admission 不是提交点原子复核（粘贴与回车间 lifecycle 仍可能变化）——
-//   helm 侧如实以 preflight 语义回报（guardLevel 'preflight'），绝不伪称 CAS。
+// Current evidence (/root/code/herdr server source, herdr 0.9.5 / protocol 22, read-only verification):
+// - `AgentPromptParams` is only `{target, text, wait}` (src/api/schema/agents.rs:176-181),
+//   with no guard fields; serde has no deny_unknown_fields -- helm never blindly sends proposed extension fields
+//   (old servers would silently ignore them, making verification pointless);
+// - Server admission rejects blocked / launch_pending / no known_agent / non-foreground CLI before
+//   writing any PTY bytes (wire errors agent_blocked / agent_not_ready /
+//   agent_not_found etc., zero writes); a submission that just turned idle after a working precheck is continued as
+//   a new turn;
+// - Admission is not a commit-point atomic recheck (lifecycle may still change between paste and Enter) --
+//   helm honestly reports preflight semantics (guardLevel 'preflight'); never claim CAS.
 //
-// steer 投递形状：{target: 受管 agentName, text}（无 wait、无附加字段、单次
-// 不重试）；结果确定性由唯一交接文件名重定向保证（见 executor）。
+// Steer delivery shape: {target: managed agentName, text} (no wait, no extra fields, single
+// delivery without retry); outcome determinism is guaranteed by the unique handoff-file-name redirect (see executor).
 // ---------------------------------------------------------------
 
-/** ping -> pong 解析出的服务端能力摘要。 */
+/** Server capability summary parsed from ping -> pong. */
 export interface HerdrServerInfo {
   version: string
   protocol: number
-  /** agent.send_keys 是否支持 expected_state_seq CAS（capabilities 严格通告 true）。 */
+  /** Whether agent.send_keys supports expected_state_seq CAS (capabilities strictly advertises true). */
   sendKeysCas: boolean
 }
 
 /**
- * pong 严格边界校验（真实形状：type='pong' + version + protocol + 可选 capabilities）：
- * - version/protocol 缺失或类型不符 -> herdr_protocol_violation（坏数据不得成为
- *   能力判断依据）；
- * - capabilities 缺省/null -> 能力如实视为不支持（旧服务端）；
- * - 能力字段存在但非布尔 -> 违约；仅在严格 === true 时视为支持。
+ * Strict pong boundary validation (real shape: type='pong' + version + protocol + optional capabilities):
+ * - version/protocol missing or type-mismatched -> herdr_protocol_violation (bad data must not become
+ *   the basis for capability decisions);
+ * - capabilities missing/null -> capabilities honestly treated as unsupported (old servers);
+ * - a capability field present but not boolean -> violation; supported only on strict === true.
  */
 export function parsePong(result: unknown): HerdrServerInfo {
   const obj = expectType(result, 'ping', 'pong')
@@ -431,14 +431,14 @@ export function parsePong(result: unknown): HerdrServerInfo {
   const capabilities = obj['capabilities']
   if (capabilities === undefined || capabilities === null) return info
   if (!isObj(capabilities)) {
-    throw new HelmError('herdr_protocol_violation', 'ping capabilities 必须是对象或 null', 502, { capabilities })
+    throw new HelmError('herdr_protocol_violation', 'ping capabilities must be an object or null', 502, { capabilities })
   }
   const casValue = capabilities[SEND_KEYS_CAS_CAPABILITY]
   if (casValue !== undefined) {
     if (typeof casValue !== 'boolean') {
       throw new HelmError(
         'herdr_protocol_violation',
-        `ping capabilities.${SEND_KEYS_CAS_CAPABILITY} 必须是布尔值，实际：${JSON.stringify(casValue)}`,
+        `ping capabilities.${SEND_KEYS_CAS_CAPABILITY} must be a boolean, got: ${JSON.stringify(casValue)}`,
         502,
         { value: casValue },
       )
@@ -449,9 +449,9 @@ export function parsePong(result: unknown): HerdrServerInfo {
 }
 
 /**
- * 服务端 CAS 拒绝判定：wire error.code === 'stale_state'（经 transport
- * raiseWireError 成为 HerdrTransportError.code；结构化判定兼容进程内
- * HelmError 形状）。语义 = 键未发送，调用方不得当作发送成功。
+ * Server CAS rejection detection: wire error.code === 'stale_state' (becomes HerdrTransportError.code
+ * via transport raiseWireError; the structured check also tolerates the in-process HelmError
+ * shape). Semantics = keys not sent; callers must not treat it as a successful send.
  */
 export function isStaleStateError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === STALE_STATE_ERROR_CODE

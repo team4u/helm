@@ -15,63 +15,63 @@ import { assertSafeOutputName, isWindowsShapedPath, readLocalOutput, readNodeOut
 import { runLocalGate, runNodeGate } from './transport-gate.js'
 import { checkAborted, HerdrTransportError } from './transport-shared.js'
 
-// 拆分 re-export：交接文件 IO 与 Gate 执行迁至同级子模块，原有导出符号
-// 从 transport.js 导入的既有消费方（executor / local-node-channel / 测试）不变。
+// Split re-exports: handoff-file IO and Gate execution moved to sibling submodules; existing consumers
+// importing the exported symbols from transport.js (executor / local-node-channel / tests) are unchanged.
 export { MAX_OUTPUT_BYTES, isAbsoluteAnyPath, isWindowsShapedPath, pathContains } from './transport-output.js'
 export { MAX_GATE_OUTPUT_BYTES } from './transport-gate.js'
 export { HerdrTransportError } from './transport-shared.js'
 
 /**
- * Herdr 官方行协议 IPC 的最小 NDJSON 传输。
+ * Minimal NDJSON transport for the official Herdr line-protocol IPC.
  *
- * Wire 契约（herdr 0.9.5 / protocol 22，经 `herdr api schema --json` 与服务端源码核实）：
- * - 一条连接一个请求：写一行 `{"id","method","params"}`，读一行 `{"id","result"}` 或
- *   `{"id","error":{"code","message"}}`，随后连接结束。
- * - `events.subscribe`：先回 `{"id","result":{"type":"subscription_started"}}` ack，
- *   之后每行是裸事件帧 `{"event","data"}`，无 id。
+ * Wire contract (herdr 0.9.5 / protocol 22, verified via `herdr api schema --json` and server source):
+ * - one request per connection: write a line `{"id","method","params"}`, read a line `{"id","result"}` or
+ *   `{"id","error":{"code","message"}}`, then the connection ends.
+ * - `events.subscribe`: first replies with the `{"id","result":{"type":"subscription_started"}}` ack,
+ *   afterwards each line is a bare event frame `{"event","data"}` with no id.
  *
- * 机密纪律：环境变量只经 JSON params（tab.create 的 env 对象）传递，永不落入
- * 任何进程命令行。远端节点一律经 `HerdrNodeChannel`（内核 EnvFabric 节点通道）
- * 转发单行 JSON 请求；任务与机密内容不出现在任何 argv。
+ * Secret discipline: environment variables travel only inside JSON params (tab.create's env object), never
+ * into any process command line. Remote nodes always forward the single-line JSON request via `HerdrNodeChannel`
+ * (the kernel EnvFabric node channel); tasks and secret contents never appear in any argv.
  *
- * 本机端点解析（与 herdr 源码 `config/io.rs` + `session.rs` + `ipc.rs` 对齐；
- * XDG_CONFIG_HOME 优先于平台目录）：
- * - Unix：`${XDG_CONFIG_HOME ?? ~/.config}/herdr[/sessions/<name>]/herdr.sock`（UDS 文件）；
+ * Local endpoint resolution (aligned with herdr source `config/io.rs` + `session.rs` + `ipc.rs`;
+ * XDG_CONFIG_HOME takes precedence over platform dirs):
+ * - Unix: `${XDG_CONFIG_HOME ?? ~/.config}/herdr[/sessions/<name>]/herdr.sock` (a UDS file);
  * - Windows：`${XDG_CONFIG_HOME ?? %APPDATA% ?? USERPROFILE/AppData/Roaming}/herdr/.../herdr.sock`
- *   只是标记文件，真实端点是 Named Pipe（连接时按 interprocess pathcvt 规则
- *   拼接 `\\.\pipe\` 前缀，绝不把标记文件路径当可连接端点）。
+ *   it is only a marker file -- the real endpoint is a Named Pipe (at connect time, join per the
+ *   interprocess pathcvt rules with the `\\.\\pipe\\` prefix; never treat the marker file path as a connectable endpoint).
  *
- * 远端端点纪律（跨平台/跨机器）：远端只传**显式** target.socketPath（可缺省）与
- * session；HERDR_SOCKET_PATH / 配置目录 / 端点形态（UDS vs pipe）全部由目标
- * 节点自行解析。绝不把 Hub 本机的 resolveSocketPath() 结果或 endpointKind
- * 强加给远端（那会把 Linux Hub 的 ~/.config 路径发给 Windows 目标）。
+ * Remote endpoint discipline (cross-platform/cross-machine): only the **explicit** target.socketPath (optional)
+ * and session travel to the remote; HERDR_SOCKET_PATH / config dirs / endpoint form (UDS vs pipe) are all resolved
+ * by the target node itself. Never impose the Hub-local resolveSocketPath() result or endpointKind on the
+ * remote (that would send a Linux Hub's ~/.config path to a Windows target).
  */
 
 export interface HerdrTransportOptions {
-  /** 诊断与错误信息脱敏；缺省原样返回。 */
+  /** Redaction for diagnostics and error messages; defaults to returning as-is. */
   redact?: (text: string) => string
-  /** 跨节点通道（EnvFabric 或测试 fixture 注入）。缺省时远端目标显式报错，绝不回退本机。 */
+  /** Cross-node channel (injected by EnvFabric or a test fixture). When absent, remote targets fail explicitly; never fall back to local. */
   nodeChannel?: HerdrNodeChannel
-  /** events.subscribe ack 等待期限；缺省 SUBSCRIBE_ACK_TIMEOUT_MS（测试可缩短）。 */
+  /** Wait deadline for events.subscribe ack; defaults to SUBSCRIBE_ACK_TIMEOUT_MS (shortened in tests). */
   subscribeAckTimeoutMs?: number
 }
 
 export const HERDR_CALL_TIMEOUT_MS = 120_000
-/** agent.start 的服务端启动上限（>3000 且 ≤300000 ms）加传输余量。 */
+/** The server-side startup cap for agent.start (>3000 and <=300000 ms) plus transport headroom. */
 export const HERDR_START_TIMEOUT_CEILING_MS = 300_000
 export const HERDR_START_TIMEOUT_MARGIN_MS = 15_000
-/** agent.prompt(wait)/agent.wait 无显式超时时不设客户端死线，交给 signal/服务端。 */
+/** No client deadline for agent.prompt(wait)/agent.wait without an explicit timeout; left to signal/server. */
 export const HERDR_WAIT_METHODS = new Set(['agent.prompt', 'agent.wait', 'pane.wait_for_output', 'events.wait'])
-/** 单帧（单行 JSON）大小上限；订阅流按帧限额，不按连接生命周期累计。 */
+/** Per-frame (single JSON line) size cap; the subscription stream is limited per frame, not cumulatively over the connection lifetime. */
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024
 const SUBSCRIPTION_METHOD = 'events.subscribe'
-/** 状态事件类型：官方契约要求订阅时按 pane_id 逐窗格过滤，无全量订阅。 */
+/** Status event types: the official contract requires per-pane filtering by pane_id at subscribe time; no global subscription. */
 const PANE_STATUS_EVENT_TYPE = 'pane.agent_status_changed'
 /**
- * 全局订阅集（官方 type 基订阅，payload 走 EventData）：覆盖窗格生命周期与
- * 位置/焦点变化。pane.moved 会换 pane ID（官方 panes.rs:1326 只发 moved，
- * 无配套 created/closed）必须重取快照；agent_status_changed 需指定 pane_id
- * （每个关注窗格一条过滤订阅，由调用方随快照 paneIds 变化重建）。
+ * Global subscription set (subscribe by official type, payload rides in EventData): covers pane lifecycle
+ * and position/focus changes. pane.moved changes the pane ID (official panes.rs:1326 emits only moved,
+ * with no companion created/closed) so a snapshot must be re-fetched; agent_status_changed requires pane_id
+ * (one filter subscription per pane of interest, rebuilt by the caller as snapshot paneIds change).
  */
 const SUBSCRIPTION_TYPES = [
   'pane.created',
@@ -83,15 +83,15 @@ const SUBSCRIPTION_TYPES = [
   'tab.closed',
   'workspace.closed',
 ] as const
-// 全局 EventEnvelope 的名称使用 snake_case；专用状态事件使用点号。
-// 订阅请求仍统一使用点号，只在接收边界规范成内部 HerdrEvent 名称。
+// The global EventEnvelope names use snake_case; the dedicated status events use dots.
+// Subscription requests still use dots uniformly; normalization to internal HerdrEvent names happens only at the receive boundary.
 const WIRE_EVENT_TYPES = new Map<string, HerdrEvent['type']>(
   SUBSCRIPTION_TYPES.map((type) => [type.replace('.', '_'), type] as const),
 )
 const SUBSCRIBE_ACK_TIMEOUT_MS = 15_000
-/** 远端 RPC 单行请求 ID：wire 校验必须精确匹配。 */
+/** Single-line request ID for remote RPC: wire validation must match it exactly. */
 const REMOTE_RPC_ID = 'helm-remote-1'
-/** 节点 ID 单一安全 token（含 'local'；空串与超长显式拒绝）。 */
+/** Node ID as a single safe token (incl. 'local'; empty strings and oversize values rejected explicitly). */
 const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -106,14 +106,14 @@ function describeTarget(target: HerdrTarget): string {
   return 'herdr local default session'
 }
 
-/** session 名会成为 socket 路径段，字符白名单（与 herdr 侧 validate_name 同向）。 */
+/** The session name becomes a socket path segment; character whitelist (aligned with herdr's validate_name). */
 export function isValidSessionName(name: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)
 }
 
 /**
- * 节点 ID 单一安全 token：字母数字开头，可含 `.` `_` `-`，长度 1..128。
- * 空串与非法字符显式拒绝（绝不把空串默默当本机——那是静默降级）。
+ * Node ID as a single safe token: starts alphanumeric, may contain `.` `_` `-`, length 1..128.
+ * Empty strings and illegal characters are rejected explicitly (never silently treat an empty string as local -- that is silent degradation).
  */
 export function isValidNodeId(name: string): boolean {
   return NODE_ID_PATTERN.test(name)
@@ -129,10 +129,10 @@ function assertTarget(target: HerdrTarget): void {
 }
 
 /**
- * 本机 Herdr IPC 端点路径解析（仅本机节点使用；远端节点自行解析）：
- * target.socketPath > HERDR_SOCKET_PATH > 会话目录（session 或默认）。
- * Unix 上即 UDS 文件本身；Windows 上是 named pipe 的 marker 文件（连接时
- * 必须换算为 pipe 名，绝不能直接 connect 文件路径）。
+ * Local Herdr IPC endpoint path resolution (local node only; remote nodes resolve themselves):
+ * target.socketPath > HERDR_SOCKET_PATH > session dir (session or default).
+ * On Unix this is the UDS file itself; on Windows it is the named pipe's marker file (at connect time
+ * it must be converted to the pipe name; never connect directly to the file path).
  */
 export function resolveSocketPath(target: HerdrTarget): string {
   if (target.socketPath) return target.socketPath
@@ -147,7 +147,7 @@ export function resolveSocketPath(target: HerdrTarget): string {
   return posix.join(configHome, 'herdr', 'herdr.sock')
 }
 
-/** 会话/等待类长请求：无显式 timeoutMs 时不套客户端死线，由 signal 或服务端 wait 超时终止。 */
+/** Long session/wait-style requests: no client deadline without an explicit timeoutMs; terminated by signal or the server's wait timeout. */
 function resolveCallTimeoutMs(method: string, params: Record<string, unknown>, options: HerdrCallOptions | undefined): number | undefined {
   if (options?.timeoutMs !== undefined) return options.timeoutMs
   if (HERDR_WAIT_METHODS.has(method)) return undefined
@@ -169,18 +169,18 @@ function timeoutPromise(ms: number, target: string): { promise: Promise<never>; 
   return { promise, clear: () => handle && clearTimeout(handle) }
 }
 
-// --------------------------------------------------------------- 帧解码 --
+// --------------------------------------------------------------- frame decoding --
 
 /**
- * NDJSON 帧解码器：按字节找 \n 边界，未完整的 UTF-8 尾部留在字节缓冲，
- * 字符串解码用增量 TextDecoder，可被 subclass 复用于确定性逐字节回归。
- * 限额按单帧计（limitBytes），不按连接累计。
+ * NDJSON frame decoder: find \n boundaries by bytes; an incomplete UTF-8 tail stays in the byte buffer;
+ * string decoding uses an incremental TextDecoder; subclasses can reuse it for deterministic byte-by-byte regression.
+ * Limits are per frame (limitBytes), not cumulative per connection.
  */
 export class LineAssembler {
   private buffer: Buffer = Buffer.alloc(0)
   private decoder = new TextDecoder('utf-8', { fatal: true })
 
-  /** 喂入任意切分的 chunk，返回本次完成的行（不含 \n）。超限/非法 UTF-8 抛错。 */
+  /** Feed an arbitrarily split chunk; returns the lines completed this time (without \n). Over-limit/invalid UTF-8 throws. */
   push(chunk: Buffer, limitBytes = MAX_FRAME_BYTES): string[] {
     this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk])
     if (this.buffer.includes(0)) {
@@ -202,7 +202,7 @@ export class LineAssembler {
     return lines
   }
 
-  /** EOF：残留字节按最后一帧处理；不完整 UTF-8 是协议错误。 */
+  /** EOF: leftover bytes are treated as the last frame; incomplete UTF-8 is a protocol error. */
   flush(): string[] {
     if (this.buffer.length === 0) return []
     const rest = this.buffer
@@ -226,7 +226,7 @@ function parseJsonLine(line: string, target: string): Record<string, unknown> | 
   try {
     parsed = JSON.parse(trimmed)
   } catch {
-    // 先整体脱敏再取预览，避免坏帧原文携带机密泄漏。
+    // Redact the whole thing first, then take the preview, so a bad frame's raw text cannot leak secrets.
     throw new HerdrTransportError('herdr_protocol', 'invalid JSON line', target)
   }
   if (!isObject(parsed)) {
@@ -248,15 +248,15 @@ function raiseWireError(error: { code?: unknown; message?: unknown }, target: st
   throw new HerdrTransportError(code, `${code}: ${message}`, target)
 }
 
-// --------------------------------------------------------- 本机 socket RPC --
+// --------------------------------------------------------- local socket RPC --
 
 /**
- * 建立到本机 Herdr IPC 端点的连接：
- * - Unix 路径：直连 UDS 文件；
- * - Windows 形状路径（盘符/UNC，含完整 pipe 路径）：磁盘上的 herdr.sock 只是
- *   marker 文件，真实端点是 `\\.\pipe\` 命名管道——先确认 marker 文件存在
- *   （不存在即 herdr_unreachable，与 UDS ENOENT 同语义），再换算 pipe 名连接，
- *   绝不把 marker 文件路径当可连接端点。
+ * Establish a connection to the local Herdr IPC endpoint:
+ * - Unix path: connect straight to the UDS file;
+ * - Windows-shaped path (drive letter/UNC, incl. a full pipe path): the on-disk herdr.sock is only a
+ *   marker file; the real endpoint is the `\\.\\pipe\\` named pipe -- first confirm the marker file exists
+ *   (absent means herdr_unreachable, same semantics as UDS ENOENT), then convert to the pipe name and connect;
+ *   never treat the marker file path as a connectable endpoint.
  */
 async function openLocalHerdrSocket(socketPath: string, target: string): Promise<Socket> {
   const net = await import('node:net')
@@ -265,7 +265,7 @@ async function openLocalHerdrSocket(socketPath: string, target: string): Promise
     socket.setNoDelay(true)
     return socket
   }
-  // 已是完整 pipe 路径：无 marker 可查，直接换算连接（pipe 名即端点）。
+  // Already a full pipe path: no marker to check; convert and connect directly (the pipe name is the endpoint).
   if (!/^\\\\(\.|[^\\]+)\\pipe\\/.test(socketPath.replaceAll('/', '\\'))) {
     const fs = await import('node:fs/promises')
     try {
@@ -275,12 +275,12 @@ async function openLocalHerdrSocket(socketPath: string, target: string): Promise
       if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM') {
         throw new HerdrTransportError(
           'herdr_unreachable',
-          `herdr marker 文件不存在（${code ?? 'stat failed'}）：${socketPath}，请确认 Windows 本机 herdr 正在运行`,
+          `herdr marker file does not exist (${code ?? 'stat failed'}): ${socketPath}; confirm the local Windows herdr is running`,
           target,
           { cause: err },
         )
       }
-      throw new HerdrTransportError('herdr_io', `无法访问 herdr marker 文件：${socketPath}（${code ?? String(err)}）`, target, { cause: err })
+      throw new HerdrTransportError('herdr_io', `cannot access the herdr marker file: ${socketPath} (${code ?? String(err)})`, target, { cause: err })
     }
   }
   const socket = connectHerdrEndpoint(socketPath, 'named-pipe')
@@ -288,7 +288,7 @@ async function openLocalHerdrSocket(socketPath: string, target: string): Promise
   return socket
 }
 
-/** 一连接一请求：拿到首个完整响应行即销毁连接。 */
+/** One request per connection: destroy the connection as soon as the first complete response line arrives. */
 async function callLocal(
   socketPath: string,
   target: string,
@@ -337,8 +337,8 @@ async function callLocal(
     })
   })
 
-  // abort 主动结算：彻底销毁本方 socket（含读方向），不依赖对端先关闭；
-  // 无 deadline 的 agent.wait 也必须能被 abort 立即终止。
+  // Active abort settle: thoroughly destroy our side of the socket (incl. the read side), not relying on the peer closing first;
+  // an agent.wait without a deadline must also be terminated immediately by abort.
   let onAbort: () => void = () => {}
   const abortRejection = new Promise<never>((_, reject) => {
     onAbort = () => {
@@ -361,7 +361,7 @@ async function callLocal(
   const envelope = parseJsonLine(line, target)
   if (!envelope) throw new HerdrTransportError('herdr_protocol', 'empty response line', target)
   if (envelope['id'] !== requestId) {
-    // 缺 id 或错 id 都是对端协议违规，绝不当作成功。
+    // A missing or wrong id is a peer protocol violation; never treated as success.
     throw new HerdrTransportError('herdr_protocol', 'response id missing or mismatched', target)
   }
   if (envelope['result'] === undefined && envelope['error'] === undefined) {
@@ -371,14 +371,14 @@ async function callLocal(
   return envelope['result']
 }
 
-// ------------------------------------------------------- 本机事件订阅流 --
+// ------------------------------------------------------- local event subscription --
 
 /**
- * 订阅流：ack 后每行一个裸事件帧。
- * 单一终结器保证资源只清一次、错误只报一次；ack 与事件同 chunk 到达时逐行处理完。
- * options.paneIds 为每个去重窗格追加 {type:'pane.agent_status_changed',pane_id} 过滤订阅；
- * options.signal 任一时刻 abort 都关闭本次 socket：待 ack Promise 立即以 herdr_aborted 结算，
- * 正常流阶段仅静默关闭，不当作新错误通知 onError。
+ * Subscription stream: after the ack, each line is a bare event frame.
+ * A single finalizer guarantees resources are cleaned once and errors reported once; when the ack and events arrive in the same chunk, lines are processed in order.
+ * options.paneIds appends a {type:'pane.agent_status_changed',pane_id} filter subscription per deduped pane;
+ * an abort of options.signal at any moment closes this socket: the pending-ack Promise settles immediately with herdr_aborted,
+ * while in the normal streaming phase it just closes silently, not reported as a new error to onError.
  */
 async function subscribeLocal(
   socketPath: string,
@@ -391,7 +391,7 @@ async function subscribeLocal(
 ): Promise<() => void> {
   const signal = options?.signal
   checkAborted(signal, target)
-  // 订阅集：全局拓扑事件 + 每个去重 paneId 一条状态过滤订阅。
+  // Subscription set: global topology events + one status filter subscription per deduped paneId.
   const paneIds = [...new Set(options?.paneIds ?? [])]
   const invalidPaneId = paneIds.find((paneId) => typeof paneId !== 'string' || paneId === '')
   if (invalidPaneId !== undefined) {
@@ -405,7 +405,7 @@ async function subscribeLocal(
   let acked = false
   let terminate: (error: unknown) => void = () => {}
 
-  /** 唯一终结路径：温和关闭 socket（发 FIN，避免服务端连接悬挂）；错误只报一次。 */
+  /** The single finalization path: gracefully close the socket (send FIN, avoiding a hung server connection); errors are reported once. */
   function failOnce(error: unknown): void {
     if (terminated) return
     terminated = true
@@ -440,7 +440,7 @@ async function subscribeLocal(
         }
         if (!envelope) continue
         if (envelope['event'] !== undefined) {
-          // ack 之前到达的事件帧：仍按序分发，不丢弃。
+          // Event frames arriving before the ack: still dispatched in order, not dropped.
           if (!dispatchEventFrame(envelope)) return
           continue
         }
@@ -461,7 +461,7 @@ async function subscribeLocal(
           const type = isObject(result) ? result['type'] : undefined
           if (type === 'subscription_started') {
             succeed()
-            continue // 同 chunk 后续行继续按事件处理
+            continue // later lines of the same chunk continue as events
           }
           failOnce(new HerdrTransportError('herdr_protocol', 'unexpected subscription ack result', target))
           return
@@ -484,7 +484,7 @@ async function subscribeLocal(
       failOnce(new HerdrTransportError('herdr_socket', `socket error: ${redact(err.message)}`, target, { cause: err }))
     })
     socket.once('close', () => {
-      if (stopped) return // stop()/abort 主动关闭不是错误
+      if (stopped) return // an active close from stop()/abort is not an error
       failOnce(new HerdrTransportError('herdr_disconnected', terminated ? 'subscription socket closed' : 'subscription socket closed before ack', target))
     })
   })
@@ -495,8 +495,8 @@ async function subscribeLocal(
   const request = { id: 'sub', method: SUBSCRIPTION_METHOD, params: { subscriptions } }
   socket.write(`${JSON.stringify(request)}\n`)
 
-  // abort 主动结算：待 ack 阶段 reject 本次 Promise，正常流阶段仅静默关闭；
-  // 二者都不把 abort 当作新错误上报 onError。
+  // Active abort settle: reject the pending Promise in the ack phase, close silently in the normal streaming phase;
+  // neither reports abort as a new error to onError.
   const onAbort = () => {
     if (terminated) return
     stopped = true
@@ -505,11 +505,11 @@ async function subscribeLocal(
     if (!acked) terminate(new HerdrTransportError('herdr_aborted', 'subscription aborted', target))
   }
   signal?.addEventListener('abort', onAbort, { once: true })
-  // checkAborted 与 addEventListener 之间已 abort 的窗口补偿（abort 事件不追溯触发）。
+  // Compensation for the window between checkAborted and addEventListener where abort already fired (abort events do not fire retroactively).
   if (signal?.aborted) onAbort()
 
-  // ack 期限：无论哪条路径失败（超时/坏帧/断线）都必须经 failOnce 关闭 socket，
-  // 否则服务端连接悬挂且 close 监听器残留。
+  // Ack deadline: whichever path fails (timeout/bad frame/disconnect) must close the socket via failOnce,
+  // otherwise the server connection hangs and close listeners leak.
   const ackTimer = timeoutPromise(subscribeAckTimeoutMs, target)
   try {
     await Promise.race([
@@ -523,7 +523,7 @@ async function subscribeLocal(
       ),
     ])
   } catch (err) {
-    // 拒绝路径调用方拿不到 stop()：在此白行清理 abort listener，不泄漏。
+    // The rejection path's caller never gets stop(): clean up the abort listener here so it doesn't leak.
     signal?.removeEventListener('abort', onAbort)
     throw err
   } finally {
@@ -531,10 +531,10 @@ async function subscribeLocal(
   }
 
   /**
-   * 事件帧 → {type, paneId}；pane.created/updated 携带完整 PaneInfo（官方
-   * EventData），closed/exited/focused/agent_status_changed 为 pane_id 字段，
-   * moved 取 data.pane.pane_id（新 ID；旧 ID 由快照重取对齐）。
-   * 坏帧经终结器上报并停止订阅。
+   * Event frame -> {type, paneId}; pane.created/updated carries the full PaneInfo (official
+   * EventData); closed/exited/focused/agent_status_changed use the pane_id field;
+   * moved takes data.pane.pane_id (the new ID; the old ID is realigned by re-fetching the snapshot).
+   * Bad frames are reported through the finalizer and stop the subscription.
    */
   function dispatchEventFrame(frame: Record<string, unknown>): boolean {
     try {
@@ -577,22 +577,22 @@ async function subscribeLocal(
   return () => {
     stopped = true
     signal?.removeEventListener('abort', onAbort)
-    // 正常退订发送 FIN，让对端及时释放订阅；写侧结束后再销毁读侧，避免长驻 socket。
+    // A normal unsubscribe sends FIN so the peer releases the subscription promptly; destroy the read side after the write side ends, avoiding a lingering socket.
     socket.end(() => socket.destroy())
   }
 }
 
-// ------------------------------------------------------------ 远端节点通道 --
+// ------------------------------------------------------------ remote node channel --
 
 /**
- * 解析远端调用所需的通道：EnvFabric 未注入（缺 nodeChannel）时显式
- * herdr_node_unavailable；节点离线显式 herdr_node_offline。绝不回退本机。
+ * Resolve the channel needed for remote calls: when EnvFabric is not injected (nodeChannel missing),
+ * explicitly herdr_node_unavailable; an offline node is explicitly herdr_node_offline. Never fall back to local.
  */
 function requireChannel(nodeChannel: HerdrNodeChannel | undefined, nodeId: string, target: string): HerdrNodeChannel {
   if (nodeChannel === undefined) {
     throw new HerdrTransportError(
       'herdr_node_unavailable',
-      `node '${nodeId}' has no HerdrNodeChannel（EnvFabric 未注入）；远端 Herdr 调用不可用，且绝不回退本机`,
+      `node '${nodeId}' has no HerdrNodeChannel (EnvFabric not injected); remote Herdr calls are unavailable and never fall back to local`,
       target,
     )
   }
@@ -602,7 +602,7 @@ function requireChannel(nodeChannel: HerdrNodeChannel | undefined, nodeId: strin
   return nodeChannel
 }
 
-/** 通道层错误码 → 传输错误码（超时/取消/IO 如实分型，不吞错）。 */
+/** Channel-layer error codes -> transport error codes (timeouts/cancellation/IO typed honestly; no swallowed errors). */
 function raiseChannelError(code: string, message: string, target: string): never {
   const mapped =
     code === 'timeout' ? 'herdr_timeout'
@@ -614,10 +614,10 @@ function raiseChannelError(code: string, message: string, target: string): never
 }
 
 /**
- * 远端 RPC：单行 JSON 经节点通道直达目标节点的本机 Herdr IPC。
- * 只传显式 target.socketPath（可缺省）与 session——端点路径/形态由目标节点
- * 自行解析（本机 resolveSocketPath/endpointKind 绝不下发）。
- * 机密只存在于 JSON 结构内部，绝不进入任何命令行 argv。
+ * Remote RPC: a single-line JSON reaches the target node's local Herdr IPC via the node channel.
+ * Only the explicit target.socketPath (optional) and session travel -- the endpoint path/form is resolved by
+ * the target node itself (local resolveSocketPath/endpointKind are never sent down).
+ * Secrets exist only inside the JSON structure, never in any command-line argv.
  */
 async function callRemote(
   nodeChannel: HerdrNodeChannel,
@@ -654,7 +654,7 @@ async function callRemote(
   return envelope['result']
 }
 
-// ------------------------------------------------------------- 工厂 --
+// ------------------------------------------------------------- factories --
 
 export function createHerdrTransport(factoryOptions?: HerdrTransportOptions): HerdrTransport {
   const redact = factoryOptions?.redact ?? ((text: string) => text)
@@ -710,7 +710,7 @@ export function createHerdrTransport(factoryOptions?: HerdrTransportOptions): He
         if (channel.ipcSubscribe !== undefined) {
           return subscribeNode(channel, nodeId, target, onEvent, onError, options)
         }
-        // 通道不支持事件转发：显式失败，不静默降级为无事件。
+        // The channel does not support event forwarding: fail explicitly, never silently degrade to no events.
         return Promise.reject(
           new HerdrTransportError('herdr_subscribe_unsupported', `node channel for '${nodeId}' does not stream events`, describeTarget(target)),
         )
@@ -721,12 +721,12 @@ export function createHerdrTransport(factoryOptions?: HerdrTransportOptions): He
 }
 
 /**
- * 远端事件订阅（经通道 ipcSubscribe）。
+ * Remote event subscription (via the channel's ipcSubscribe).
  *
- * 契约：通道在 Promise resolve 前自行消费并验证订阅 ACK；resolve 即代表订阅
- * 就绪，此后 onLine 只推送裸事件帧——本函数不再等待第二个 ACK，也不再设
- * ack timer。事件可能在 Promise resolve 之前到达（缓冲后按序分发，不丢弃）。
- * stop/abort/流关闭均只终结一次并释放订阅（release），回调至多一次。
+ * Contract: the channel consumes and validates the subscription ACK itself before the Promise resolves;
+ * resolving means the subscription is ready, after which onLine only pushes bare event frames -- this function
+ * waits for no second ACK and sets no ack timer. Events may arrive before the Promise resolves (buffered and
+ * dispatched in order, not dropped). stop/abort/stream close all finalize once and release the subscription; callbacks at most once.
  */
 function subscribeNode(
   channel: HerdrNodeChannel,
@@ -748,7 +748,7 @@ function subscribeNode(
     let stopped = false
     let settled = false
     let release: (() => void) | undefined
-    /** 唯一终结路径：释放订阅、移除 abort 监听；错误只报一次。 */
+    /** The single finalization path: release the subscription, remove the abort listener; errors reported once. */
     const finish = (error: unknown): void => {
       if (settled) return
       settled = true
@@ -757,18 +757,18 @@ function subscribeNode(
       try {
         release?.()
       } catch (releaseError) {
-        // 释放失败如实并入终结错误，不静默吞。
+        // Release failures merge honestly into the finalization error; never silently swallowed.
         onError(releaseError)
       }
       if (error !== undefined) onError(error)
     }
     const onAbort = () => finish(undefined)
 
-    // 事件可能在 ipcSubscribe Promise resolve 之前到达：缓冲待 resolve 后按序分发。
+    // Events may arrive before the ipcSubscribe Promise resolves: buffered, then dispatched in order once resolved.
     const earlyLines: string[] = []
     let ready = false
 
-    /** 事件帧解析与本地订阅同规则；坏帧经 finish 终结整个流。 */
+    /** Event frame parsing follows the same rules as the local subscription; bad frames finalize the whole stream. */
     const handleEventFrame = (frame: Record<string, unknown>): void => {
       try {
         const wireType = frame['event']
@@ -819,8 +819,8 @@ function subscribeNode(
         handleEventFrame(envelope)
         return
       }
-      // ACK 已在通道层消费验证；resolve 后再到达的 id 帧是通道实现违约，
-      // 如实终结（不静默丢弃，也不当成功）。
+      // The ACK was consumed and validated at the channel layer; an id frame arriving after resolve is a channel
+      // implementation violation -- finalize honestly (not silently dropped, not treated as success).
       finish(new HerdrTransportError('herdr_protocol', 'unexpected post-ack response frame on subscription stream', targetLabel))
     }
 
@@ -859,11 +859,11 @@ function subscribeNode(
       .then(
         (stop) => {
           if (stopped) {
-            // abort 与 resolve 竞态：已终结，这里只兜底释放。
+            // abort vs resolve race: already finalized; this is only a fallback release.
             try {
               stop()
             } catch {
-              /* finish 已上报过错误；释放失败不再二次上报 */
+              /* finish already reported an error; a release failure is not reported twice */
             }
             return
           }
