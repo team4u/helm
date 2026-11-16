@@ -457,6 +457,20 @@ async function renderWorkflowToolView(
   )
 }
 
+/** 渲染 WorkflowWorkbenchPanel：docValue 提供 runs 文档（可携带 conversations 桩），conversation 默认 id=1。 */
+async function renderWorkflowWorkbench(
+  docValue: unknown = undefined,
+  conversations: unknown[] | undefined = undefined,
+  viewerConversation: ConversationSummary = summary(1, 'idle'),
+): Promise<string> {
+  setWorkflowClientStub(conversations !== undefined ? { docValue, conversations } : { docValue })
+  const mod = await importWorkflowClientModule('index.tsx')
+  const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
+  return renderToString(
+    e(PluginClientContext.Provider, { value: stubCtx }, e(WorkflowWorkbenchPanel, { conversation: viewerConversation })),
+  )
+}
+
 const HELLO_RUN = run({
   id: 'wf_hello',
   name: 'hello-orchestra',
@@ -509,13 +523,7 @@ const HELLO_RUN = run({
 })
 
 async function renderHelloRun(): Promise<string> {
-  return renderWorkflowToolView(
-    {
-      callId: 'wf_call', toolName: 'SubagentWorkflow', input: { script: 'x' },
-      status: 'done', conversationId: 1, siblingCalls: [],
-    },
-    { runs: [HELLO_RUN] },
-  )
+  return renderWorkflowWorkbench({ runs: [HELLO_RUN] })
 }
 
 test('buildWorkflowPhaseSections：pending 节点不被 done 掩盖——终结 run 有未执行节点保持 pending', { timeout: 60_000 }, () => {
@@ -545,30 +553,32 @@ test('buildWorkflowPhaseSections：pending 节点不被 done 掩盖——终结 
 test('SSR：run 主徽章同源有效状态——run 已完成但子任务仍在执行不假完成，自身终态另标清楚', { timeout: 60_000 }, async () => {
   const conv11 = { ...summary(11, 'working', 1), doing: '后台补测试', updatedAt: 50 }
   const conv21 = { ...summary(21, 'working', 11), doing: '补齐回归', updatedAt: 40 }
-  const html = await renderWorkflowToolView(
-    {
-      callId: 'call-x', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [],
-    },
-    {
-      runs: [
-        run({
-          id: 'wf_straggler', kind: 'workflow', status: 'completed', parentToolCallId: 'call-x',
-          createdAt: 1_000, updatedAt: 60_000,
-          nodes: [node({ id: 'a', kind: 'agent', status: 'done', conversationId: 11, label: '实现者' })],
-        }),
-      ],
-    },
+  const doc = {
+    runs: [
+      run({
+        id: 'wf_straggler', kind: 'workflow', status: 'completed', parentToolCallId: 'call-x',
+        createdAt: 1_000, updatedAt: 60_000,
+        nodes: [node({ id: 'a', kind: 'agent', status: 'done', conversationId: 11, label: '实现者' })],
+      }),
+    ],
+  }
+  const toolHtml = await renderWorkflowToolView(
+    { callId: 'call-x', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+    doc,
     [conv11, conv21],
   )
-  assert.ok(html.includes('自身已完成'), '自身终态应另标清楚')
+  assert.match(toolHtml, /badge-accent[^>]*>执行中/, '时间线单行主徽章同源不得假完成')
+  assert.ok(!toolHtml.includes('>已完成<'), '时间线单行不得假完成')
+
+  const html = await renderWorkflowWorkbench(doc, [conv11, conv21])
+  assert.ok(html.includes('自身已完成'), '工作台卡自身终态应另标清楚')
   assert.ok(!/>已完成</.test(html), '不得以孤立的「已完成」作为主徽章假完成')
   assert.match(html, /badge-accent[^>]*>执行中/, '主徽章应为同源有效状态（子任务仍在执行）')
   assert.ok(html.includes('子树 0/2'), '子树计数如实展示未完成（深层后台子任务计入）')
 })
 
-test('SSR：run 全部于孙结算时主徽章保留自身终态文案（已完成 / 失败 / 已中止）', { timeout: 60_000 }, async () => {
-  const done = await renderWorkflowToolView(
-    { callId: 'c1', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+test('SSR：run 全部子孙结算时主徽章保留自身终态文案（已完成 / 失败 / 已中止）', { timeout: 60_000 }, async () => {
+  const done = await renderWorkflowWorkbench(
     {
       runs: [
         run({
@@ -581,8 +591,7 @@ test('SSR：run 全部于孙结算时主徽章保留自身终态文案（已完�
   assert.ok(done.includes('>已完成<'), '全部结算应显示已完成')
   assert.ok(!done.includes('自身'), '有效状态与自身一致时不得重复标注')
 
-  const failed = await renderWorkflowToolView(
-    { callId: 'c2', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+  const failed = await renderWorkflowWorkbench(
     {
       runs: [
         run({
@@ -595,18 +604,20 @@ test('SSR：run 全部于孙结算时主徽章保留自身终态文案（已完�
   assert.ok(failed.includes('>失败<'), '自身失败保留更具体终态文案')
 })
 
-test('SSR：WorkflowToolView 无关联 run 时保留调用详情（不虚构工作流卡）', { timeout: 60_000 }, async () => {
+test('SSR：WorkflowToolView 无关联 run 时收口单行并保留折叠详情开关（不虚构工作流卡）', { timeout: 60_000 }, async () => {
   const html = await renderWorkflowToolView({
     callId: 'w1', toolName: 'SubagentWorkflow', input: { script: 'x' },
     status: 'running', result: '原始工作流返回结果', conversationId: 1, siblingCalls: [],
   })
-  assert.ok(html.includes('调用详情'))
-  assert.ok(html.includes('原始工作流返回结果'))
+  assert.ok(html.includes('workflow-trace-row-btn'), '无 run 时渲染紧凑单行开关')
+  assert.ok(html.includes('aria-expanded="false"'), '默认折叠调用详情')
+  assert.ok(!html.includes('workflow-run-card'), '无 run 不虚构工作流卡')
+  assert.ok(!html.includes('原始工作流返回结果'), '折叠态不预先展开原始输出')
 })
 
 test('SSR：工作流节点无折叠手风琴壳，最外层直接直出一体化整卡与动作扁平卡', { timeout: 60_000 }, async () => {
   const html = await renderHelloRun()
-  assert.ok(html.includes('subagent-live-card'), '应直接在最外层直出子代理一体化整卡')
+  assert.ok(html.includes('subagent-live-card'), '工作台应直接在最外层直出子代理一体化整卡')
   assert.ok(html.includes('subagent-card-clickable'), '子代理卡必须携带整卡统一 hover 类')
   assert.ok(html.includes('workflow-action-card'), '动作节点应渲染扁平双层卡')
   assert.ok(!html.includes('展开节点详情'), '不得包含节点展开/收起按钮文案')
@@ -618,8 +629,8 @@ test('SSR：多阶段工作流渲染阶段胶囊、日志、产出预览与徽�
   assert.ok(/1\.<!-- -->\s*调研|1\. 调研/.test(html), '应渲染阶段 1 标题')
   assert.ok(/2\.<!-- -->\s*实现|2\. 实现/.test(html), '应渲染阶段 2 标题')
   assert.ok(html.includes('3/3'), '应渲染全局节点完成计数')
-  assert.match(html, /workflow-phase-count[^>]*>\(2\/2\)/, '调研阶段应计入 agent 与 action 两个节点')
-  assert.match(html, /workflow-phase-count[^>]*>\(1\/1\)/, '实现阶段应计入 cached 完成节点')
+  assert.match(html, /phase-segment-done[\s\S]*?1\.[\s\S]*?调研[\s\S]*?\(2\/2\)/, '调研阶段胶囊应计入 agent 与 action 两个节点')
+  assert.match(html, /phase-segment-done[\s\S]*?2\.[\s\S]*?实现[\s\S]*?\(1\/1\)/, '实现阶段胶囊应计入 cached 完成节点')
   assert.ok(html.includes('workflow-log-text'))
   assert.ok(html.includes('开始调研'))
   assert.ok(html.includes('实现完成'))
@@ -647,33 +658,21 @@ test('SSR：一体化整卡无任何并排查看 / 分屏按钮（最新交互�
 })
 
 test('SSR：断点恢复按钮仅 DSL 工作流可见，后台单子代理不显示', { timeout: 60_000 }, async () => {
-  const dslFailed = await renderWorkflowToolView(
-    {
-      callId: 'call-dsl', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1,
-      siblingCalls: [],
-    },
+  const dslFailed = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_dsl', kind: 'workflow', status: 'failed', error: '阶段实现失败', parentToolCallId: 'call-dsl', nodes: [node({ id: 'a', status: 'failed', error: 'gate 未通过' })] })] },
   )
   assert.ok(dslFailed.includes('断点恢复'), '失败的 DSL 工作流应显示断点恢复按钮')
   assert.ok(dslFailed.includes('失败'))
   assert.ok(dslFailed.includes('gate 未通过'), '失败节点应展示错误摘要')
 
-  const subagentFailed = await renderWorkflowToolView(
-    {
-      callId: 'call-sub', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1,
-      siblingCalls: [],
-    },
+  const subagentFailed = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_sub', kind: 'subagent', status: 'failed', error: '子代理异常退出', parentToolCallId: 'call-sub', nodes: [node({ id: 'a', status: 'failed' })] })] },
   )
   assert.ok(!subagentFailed.includes('断点恢复'), '失败的后台单子代理不得显示断点恢复按钮')
 })
 
 test('SSR：running 工作流显示中止按钮与执行中徽章', { timeout: 60_000 }, async () => {
-  const html = await renderWorkflowToolView(
-    {
-      callId: 'call-run', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
-      siblingCalls: [],
-    },
+  const html = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_live', status: 'running', parentToolCallId: 'call-run', nodes: [node({ id: 'a', status: 'running', conversationId: 11, phaseTitle: '调研' })] })] },
   )
   assert.ok(html.includes('中止'), 'running run 应显示中止按钮')
@@ -705,66 +704,52 @@ test('canDetachForegroundRun：仅运行中前台同步 + 发起会话 + human�
 test('SSR：前台同步 run 仅在查看会话即发起会话且 human 归属时显示「转入后台」', { timeout: 60_000 }, async () => {
   // 前台同步（syncForeground 未 detached）+ 当前会话 = 发起会话；会话列表
   // 未提供 ownedBy（缺省 human）。
-  const visible = await renderWorkflowToolView(
-    {
-      callId: 'call-fg', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
-      siblingCalls: [],
-    },
+  const visible = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_fg', status: 'running', syncForeground: true, parentToolCallId: 'call-fg', nodes: [node({ id: 'a', status: 'running' })] })] },
+    [],
+    summary(1, 'working'),
   )
   assert.ok(visible.includes('转入后台'), '前台同步 running run 应显示转入后台按钮')
 
   // 查看会话归属 human：显示。
-  const humanViewer = await renderWorkflowToolView(
-    {
-      callId: 'call-fg-h', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
-      siblingCalls: [],
-    },
+  const humanViewer = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_fg_h', status: 'running', syncForeground: true, parentToolCallId: 'call-fg-h', nodes: [node({ id: 'a', status: 'running' })] })] },
     [{ ...summary(1, 'working'), ownedBy: 'human' }],
+    { ...summary(1, 'working'), ownedBy: 'human' },
   )
   assert.ok(humanViewer.includes('转入后台'), 'human 查看方应显示转入后台按钮')
 
   // 查看会话归属 automation（helm/bot）：隐藏（服务端同样拒绝，不显示注定失败的入口）。
   for (const ownedBy of ['helm', 'bot'] as const) {
-    const automationViewer = await renderWorkflowToolView(
-      {
-        callId: 'call-fg-a', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
-        siblingCalls: [],
-      },
+    const automationViewer = await renderWorkflowWorkbench(
       { runs: [run({ id: 'wf_fg_a', status: 'running', syncForeground: true, parentToolCallId: 'call-fg-a', nodes: [node({ id: 'a', status: 'running' })] })] },
       [{ ...summary(1, 'working'), ownedBy }],
+      { ...summary(1, 'working'), ownedBy },
     )
     assert.ok(!automationViewer.includes('转入后台'), `automation（${ownedBy}）查看方不得显示转入后台按钮`)
   }
 
   // 已转后台（detachedAt）：按钮消失（不可重复 detach）。
-  const detached = await renderWorkflowToolView(
-    {
-      callId: 'call-fg2', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
-      siblingCalls: [],
-    },
+  const detached = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_fg2', status: 'running', syncForeground: true, detachedAt: 123, parentToolCallId: 'call-fg2', nodes: [node({ id: 'a', status: 'running' })] })] },
+    [],
+    summary(1, 'working'),
   )
   assert.ok(!detached.includes('转入后台'), '已转后台的 run 不得再显示转入后台按钮')
 
   // 非发起会话查看（run 属于后代会话 2）：按钮隐藏，服务端授权仍兜底。
-  const otherConv = await renderWorkflowToolView(
-    {
-      callId: 'call-fg3', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1,
-      siblingCalls: [],
-    },
+  const otherConv = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_fg3', conversationId: 2, status: 'running', syncForeground: true, parentToolCallId: 'call-fg3', nodes: [node({ id: 'a', status: 'running' })] })] },
+    [summary(1, 'working'), summary(2, 'working', 1)],
+    summary(1, 'working'),
   )
   assert.ok(!otherConv.includes('转入后台'), '查看会话非发起会话时不得显示转入后台按钮')
 
   // 终态 run：按钮消失。
-  const settled = await renderWorkflowToolView(
-    {
-      callId: 'call-fg4', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1,
-      siblingCalls: [],
-    },
+  const settled = await renderWorkflowWorkbench(
     { runs: [run({ id: 'wf_fg4', status: 'completed', syncForeground: true, parentToolCallId: 'call-fg4', nodes: [node({ id: 'a', status: 'done' })] })] },
+    [],
+    summary(1, 'working'),
   )
   assert.ok(!settled.includes('转入后台'), '终态 run 不得显示转入后台按钮')
 })
@@ -797,15 +782,14 @@ test('SSR：WorkflowWorkbenchPanel 列出当前会话工作流与子代理', { t
   const html = renderToString(
     e(PluginClientContext.Provider, { value: stubCtx }, e(WorkflowWorkbenchPanel, { conversation: conv })),
   )
-  assert.ok(html.includes('工作流运行'), '应渲染工作流分组标题')
+  assert.ok(html.includes('当前会话任务'), '应渲染工作台统一标题')
+  assert.ok(html.includes('工作流库'), '应保留工作流库跳转入口')
   assert.ok(html.includes('列表工作流'))
-  assert.ok(html.includes('子代理会话'), '应渲染子代理分组标题')
   assert.ok(html.includes('正在跑测试'), '子代理卡副栏应显示实时 doing')
 })
 
 test('SSR：外部 agent 节点与 cached 无会话节点不伪造子会话或误标为动作', { timeout: 60_000 }, async () => {
-  const html = await renderWorkflowToolView(
-    { callId: 'external-call', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1 },
+  const html = await renderWorkflowWorkbench(
     { runs: [run({ parentToolCallId: 'external-call', status: 'completed', nodes: [
       node({ id: 'external', kind: 'agent', status: 'done', executionId: 'pane-42', label: '外部实现者', output: '完成' }),
       node({ id: 'cached', kind: 'agent', status: 'done', cached: true, label: '复用缓存', output: '缓存结果' }),

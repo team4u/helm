@@ -93,14 +93,20 @@ test('工作流真实编译与加载：阶段状态颜色不被基础样式覆�
 
     for (let attempt = 0; attempt < 2; attempt++) {
       const loaded = await loadPluginClientModule('builtin:workflow', 'index.tsx')
-      const Component = loaded.module.WorkflowToolView as React.ComponentType<Record<string, unknown>>
+      const Component = loaded.module.WorkflowWorkbenchPanel as React.ComponentType<Record<string, unknown>>
       host.innerHTML = renderToString(React.createElement(PluginClientContext.Provider, { value: context },
-        React.createElement(Component, { callId: 'style-call', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1 })))
+        React.createElement(Component, {
+          conversation: {
+            id: 1, title: '主会话', profileId: 'assistant', tags: [], cwd: '/tmp', model: '', thinkingLevel: '',
+            status: 'working', stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false, pendingAskCount: 0,
+            createdAt: 1, updatedAt: 2,
+          },
+        })))
       assert.equal(document.querySelectorAll('style[data-helm-plugin-css]').length, 1, '每个有效入口只挂一份合并样式')
       checkColors()
       evictPluginClientCache('builtin:workflow')
       assert.equal(document.querySelectorAll('style[data-helm-plugin-css]').length, 0, '停用移除插件样式')
-      assert.equal(getCachedClientComponent('builtin:workflow', 'index.tsx', 'WorkflowToolView'), undefined)
+      assert.equal(getCachedClientComponent('builtin:workflow', 'index.tsx', 'WorkflowWorkbenchPanel'), undefined)
     }
   } finally {
     globalThis.fetch = originalFetch

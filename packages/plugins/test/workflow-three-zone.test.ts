@@ -37,8 +37,10 @@ GlobalRegistrator.register()
 
 const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
 const React = req('react') as typeof import('react')
-const ReactDOM = req('react-dom') as typeof import('react-dom')
-const ReactDOMClient = req('react-dom/client') as typeof import('react-dom/client')
+const ReactDOM = req('react-dom') as unknown
+const ReactDOMClient = req('react-dom/client') as {
+  createRoot: (container: Element) => { render(node: React.ReactNode): void; unmount(): void }
+}
 const ReactJsxRuntime = req('react/jsx-runtime') as Record<string, unknown>
 const LucideReact = req('lucide-react') as Record<string, unknown>
 const SDK = await import('../../plugin-client/src/index.js')
@@ -46,12 +48,12 @@ const SDK = await import('../../plugin-client/src/index.js')
 const g = globalThis as Record<string, unknown>
 g.React = React
 g.IS_REACT_ACT_ENVIRONMENT = true
-g[CLIENT_SHARED_GLOBALS['react']] = React
-g[CLIENT_SHARED_GLOBALS['react-dom']] = ReactDOM
-g[CLIENT_SHARED_GLOBALS['react-dom/client']] = ReactDOMClient
-g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']] = ReactJsxRuntime
-g[CLIENT_SHARED_GLOBALS['lucide-react']] = LucideReact
-g[CLIENT_SHARED_GLOBALS['@helm/plugin-client']] = SDK
+g[CLIENT_SHARED_GLOBALS['react']!] = React
+g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
+g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
+g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
+g[CLIENT_SHARED_GLOBALS['@helm/plugin-client']!] = SDK
 
 const e = React.createElement
 const { act } = React
@@ -475,11 +477,11 @@ describe('Workflow 三区零重复与无损呈现', () => {
   test('WorkflowToolView + WorkflowWorkbenchPanel：时间线点击精准聚焦工作台 run.id，去重工作流库，Popover 更多菜单与无损元数据', { timeout: 60_000 }, async () => {
     const entriesWithTask: ConversationEntry[] = [
       {
-        seq: 1,
+        id: 'e-1',
         kind: 'helm.input',
         createdAt: 1_700_000_000_000,
         data: { text: '从 entries 提取的任务首行标题', origin: 'agent' },
-      } as ConversationEntry,
+      },
     ]
     const childConv = createConv({
       id: 30,
@@ -514,16 +516,15 @@ describe('Workflow 三区零重复与无损呈现', () => {
       parentToolCallId: 'call_wf_target',
       status: 'completed',
       kind: 'workflow',
-      script: 'export default () => {}',
       replayedFrom: 'wf_seed',
       createdAt: 1_700_000_010_000,
       updatedAt: 1_700_000_025_000,
-      phases: [{ id: 'p1', title: '分析阶段', status: 'done' }],
+      phases: [{ title: '分析阶段' }],
       nodes: [
         {
           id: 'n1',
           label: '外部审计',
-          phaseId: 'p1',
+          phaseTitle: '分析阶段',
           kind: 'agent',
           status: 'done',
           executionId: 'pane-42',
@@ -533,7 +534,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
         {
           id: 'n2',
           label: '原生审查',
-          phaseId: 'p1',
+          phaseTitle: '分析阶段',
           kind: 'agent',
           status: 'done',
           conversationId: 30,
@@ -546,8 +547,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
       conversationId: 1,
       conversations: [createConv({ id: 1 }), childConv, standaloneChild],
       conversationDetails: {
-        30: { summary: childConv, entries: [] },
-        31: { summary: standaloneChild, entries: entriesWithTask },
+        30: { ...childConv, entries: [] },
+        31: { ...standaloneChild, entries: entriesWithTask },
       },
       runsByConversation: { 1: [runOlder, runTarget] },
     })
@@ -626,17 +627,16 @@ describe('Workflow 三区零重复与无损呈现', () => {
       kind: 'subagent_report' | 'workflow_report',
       payload: Record<string, unknown>,
       createdAt: number,
-    ): ConversationEntry =>
-      ({
-        seq,
-        kind: 'helm.input',
-        createdAt,
-        data: {
-          origin: 'trigger',
-          meta: { kind, backgroundRunId: payload.runId },
-          text: `[后台任务回报]\n${JSON.stringify(payload)}`,
-        },
-      }) as ConversationEntry
+    ): ConversationEntry => ({
+      id: `report-${seq}`,
+      kind: 'helm.input',
+      createdAt,
+      data: {
+        origin: 'trigger',
+        meta: { kind, backgroundRunId: payload.runId },
+        text: `[后台任务回报]\n${JSON.stringify(payload)}`,
+      },
+    })
 
     // 1. 完成态：默认折叠为 26px .trace-row，清理 Markdown 摘要，点击原地展开无损字段
     const okEntry = makeReportEntry(
@@ -719,15 +719,15 @@ describe('Workflow 三区零重复与无损呈现', () => {
       abortedMount.unmount()
     }
 
-    const invalidEntry = {
-      seq: 4,
+    const invalidEntry: ConversationEntry = {
+      id: 'report-invalid',
       kind: 'helm.input',
       data: {
         origin: 'trigger',
         meta: { kind: 'subagent_report', backgroundRunId: 'wf_bad' },
         text: 'broken-raw-report-text',
       },
-    } as ConversationEntry
+    }
     const invalidMount = harness.mountNode(e(mod.BackgroundReportCard, { entry: invalidEntry, entryIndex: 3, conversationId: 1 }))
     try {
       const toggle = invalidMount.container.querySelector('button.workflow-trace-toggle') as HTMLButtonElement
@@ -943,10 +943,10 @@ describe('Workflow 三区零重复与无损呈现', () => {
       id: 'ask_50',
       conversationId: 50,
       expectedStateSeq: 1,
-      kind: 'confirm',
       title: '确认执行危险命令',
-      body: 'confirm?',
-      options: [{ id: 'yes', label: '允许' }],
+      description: 'confirm?',
+      fields: [{ name: 'allow', label: '允许', type: 'confirm' }],
+      status: 'pending',
       createdAt: 1_700_000_205_000,
     }
     const oldResult = JSON.stringify({ ok: true, execution: { conversationId: 50 } })

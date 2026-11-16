@@ -44,6 +44,9 @@ const e = React.createElement
 const workflowClient = await importWorkflowClientModule()
 seedPluginClientModule('builtin:workflow', 'index.tsx', workflowClient)
 const SubagentLiveCard = workflowClient.SubagentLiveCard as React.ComponentType<Record<string, unknown>>
+const { ExternalRunSummary } = (await importWorkflowClientModule('ExternalRunSummary.tsx')) as {
+  ExternalRunSummary: React.ComponentType<Record<string, unknown>>
+}
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
 const { WorkbenchDrawer } = await import('../src/conversation/WorkbenchDrawer.js')
@@ -465,7 +468,7 @@ test('无 worktree 且无后台 run：不渲染空徽章与错误行', { timeout
   assert.ok(!html.includes('后台执行失败'))
 })
 
-test('同步外部子代理无原生子会话：完成后卡片停止显示执行中', { timeout: 60_000 }, () => {
+test('同步外部子代理无原生子会话：完成后停止显示执行中（时间线单行与工作台摘要同致）', { timeout: 60_000 }, () => {
   const conversation = summary(1, 'idle')
   const result = JSON.stringify({ ok: true, result: 'done', execution: {
     nodeId: 'local', executionId: 'pane-9',
@@ -477,19 +480,31 @@ test('同步外部子代理无原生子会话：完成后卡片停止显示执�
     { id: '3', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'ext-1', toolName: 'subagent', content: [{ type: 'text', text: result }], isError: false }] },
     { id: '4', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '任务完成' }], stopReason: 'stop' }] },
   ]
-  const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [conversation] }) },
+  const timelineHtml = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [conversation] }) },
     e(ConversationTimeline, { conversation, detailEntries: entries, onRequestEdit: () => {} })))
-  assert.ok(html.includes('subagent-external-card'))
-  assert.ok(html.includes('外部执行已结束'))
-  assert.ok(html.includes('已完成'))
-  assert.ok(!html.includes('外部运行时执行中'))
+  assert.ok(timelineHtml.includes('workflow-trace-row-btn'), '时间线使用紧凑单行回执')
+  assert.ok(timelineHtml.includes('已完成'))
+  assert.ok(!timelineHtml.includes('执行中'))
+  assert.ok(!timelineHtml.includes('外部运行时执行中'))
+
+  const extHtml = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [conversation] }) },
+    e(ExternalRunSummary, {
+      toolStatus: 'done',
+      executionId: 'pane-9',
+      nodeId: 'local',
+      worktree: { path: '/tmp/wt-9', branch: 'helm/wf-9' },
+    })))
+  assert.ok(extHtml.includes('subagent-external-card'))
+  assert.ok(extHtml.includes('外部执行已结束'))
+  assert.ok(extHtml.includes('已完成'))
+  assert.ok(!extHtml.includes('外部运行时执行中'))
 })
 
 // ---------------------------------------------------------------------------
-// SSR 实际渲染：紧凑卡与多次 resume 去重
+// SSR 实际渲染：时间线单行与多次 resume 去重
 // ---------------------------------------------------------------------------
 
-test('resume 正在运行时：历史失败调用保留失败状态，只有最新调用挂载执行中的实时卡', { timeout: 60_000 }, () => {
+test('resume 正在运行时：历史失败调用保留异常状态，只有最新调用渲染执行中单行', { timeout: 60_000 }, () => {
   const parent = summary(1, 'working')
   const child = { ...summary(12, 'working'), parentConversationId: 1, parentToolCallId: 'call_new' }
   const entries: ConversationEntry[] = [
@@ -500,12 +515,16 @@ test('resume 正在运行时：历史失败调用保留失败状态，只有最�
   ]
   const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [parent, child] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
-  assert.equal((html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length, 1)
-  const historicalRow = html.match(/<div class="trace-row trace-row-error"[\s\S]*?<\/div>/)?.[0]
-  assert.ok(historicalRow, '历史失败调用的工具行应保留')
-  assert.match(historicalRow, /已在下文续接[\s\S]*?trace-row-right">失败<\/span>/)
+  assert.equal((html.match(/workflow-trace-row-btn/g) ?? []).length, 2, '前序与最新调用均收口为单行按钮')
+  assert.equal((html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length, 0, '主时间线不堆叠工作台大卡片')
+  const historicalRow = html.match(/<button[^>]*trace-row workflow-trace-row-btn trace-row-error[\s\S]*?<\/button>/)?.[0]
+  assert.ok(historicalRow, '历史失败调用的单行应保留 trace-row-error')
+  assert.match(historicalRow, /已在下文续接[\s\S]*?异常/)
   assert.equal(historicalRow.includes('spin-slow'), false, '历史失败行不能随后续 resume 转圈')
-  assert.match(html, /subagent-live-card[\s\S]*?执行中/)
+  const activeRows = html.match(/<button[^>]*class="trace-row workflow-trace-row-btn"[\s\S]*?<\/button>/g) ?? []
+  assert.equal(activeRows.length, 1, '最新调用单行不应标错')
+  assert.match(activeRows[0]!, /spin-slow[\s\S]*?执行中/)
+  assert.equal(activeRows[0]!.includes('已在下文续接'), false)
 })
 
 test('expanded=false：SSR 首帧不渲染实时流，保留头部与状态徽章', { timeout: 60_000 }, () => {
@@ -523,7 +542,7 @@ test('expanded=false：SSR 首帧不渲染实时流，保留头部与状态徽�
   assert.ok(!html.includes('subagent-live-stream'), '折叠态 SSR 首帧不得渲染实时流容器')
 })
 
-test('同一子会话 #12 被首次派生 + resume 续接：时间线仅 1 张实时卡，前序行标注已在下文续接', { timeout: 60_000 }, () => {
+test('同一子会话 #12 被首次派生 + resume 续接：时间线均收口单行，仅前序行标注已在下文续接', { timeout: 60_000 }, () => {
   const parent = summary(1, 'idle')
   const child12 = { ...summary(12, 'done'), parentConversationId: 1, title: '子会话 12' }
   const entries: ConversationEntry[] = [
@@ -537,11 +556,12 @@ test('同一子会话 #12 被首次派生 + resume 续接：时间线仅 1 张�
   ]
   const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [parent, child12] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
-  const cardCount = (html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length
-  assert.equal(cardCount, 1, `同一子会话多次 resume 仅渲染 1 张实时卡，实际 ${cardCount}`)
-  // React SSR 在插值两侧插入 <!-- --> 注释节点，用正则匹配「#12 · 已在下文续接」
-  assert.match(html, /#<!-- -->12<!-- -->\s*·\s*已在下文续接/, '前序被续接的调用行应显示轻量续接标识')
-  assert.match(html, /子会话 #<!-- -->12/, '唯一实时卡应挂在最新调用处并显示子会话编号')
+  assert.equal((html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length, 0, '时间线不渲染工作台大卡')
+  const rowButtons = html.match(/<button[^>]*workflow-trace-row-btn[\s\S]*?<\/button>/g) ?? []
+  assert.equal(rowButtons.length, 2, `两次调用应各占 1 行紧凑轨迹，实际 ${rowButtons.length}`)
+  assert.match(rowButtons[0]!, /子代理 #12[\s\S]*?已在下文续接/, '前序行应标注续接标识')
+  assert.doesNotMatch(rowButtons[1]!, /已在下文续接/, '最新调用行不得带续接标识')
+  assert.match(rowButtons[1]!, /子代理 #12[\s\S]*?已完成/, '最新调用行承载子会话编号与终态')
 })
 
 test('工作台独立子会话：紧凑卡无实时流，保留副栏且 working 排在 idle 前面', { timeout: 60_000 }, () => {
@@ -553,7 +573,7 @@ test('工作台独立子会话：紧凑卡无实时流，保留副栏且 working
   const html = renderToString(
     e(TestStoreProvider, { value: store }, e(WorkbenchDrawer, { conversationId: 1 })),
   )
-  assert.ok(html.includes('子代理会话'), '分组标题应渲染')
+  assert.ok(html.includes('当前会话任务'), '工作台统一标题应渲染')
   assert.ok(html.includes('子会话 #<!-- -->31') || html.includes('子会话 #31'), '折叠卡片头部应显示 #31')
   assert.ok(html.includes('子会话 #<!-- -->32') || html.includes('子会话 #32'), 'working 卡片头部应显示 #32')
   // 工作台仅展示紧凑卡，不渲染内嵌实时流容器。
@@ -1049,7 +1069,7 @@ test('blocked 折叠卡：warn 描边 + 等待审批副栏（pendingAsk 标题�
   assert.ok(html.includes('确认执行 rm -rf dist'), '副栏应显示 pendingAsk 标题')
 })
 
-test('时间线挂载实时卡后不再重复渲染 subagent trace-row；被 resume 续接的前序调用仍保留', { timeout: 60_000 }, () => {
+test('时间线替换默认 subagent trace-row 为插件单行（无双横条），前序 resume 保留续接标识', { timeout: 60_000 }, () => {
   const parent = summary(1, 'idle')
   const child12 = { ...summary(12, 'done'), parentConversationId: 1, title: '子会话 12' }
   const entries: ConversationEntry[] = [
@@ -1063,18 +1083,15 @@ test('时间线挂载实时卡后不再重复渲染 subagent trace-row；被 res
   ]
   const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [parent, child12] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
-  const cardCount = (html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length
-  assert.equal(cardCount, 1, `仅最新调用挂载 1 张实时卡，实际 ${cardCount}`)
-  // 最新调用（挂卡处）不再渲染底部 trace-row；被续接的前序调用仍保留 trace-row
-  const toolRows = html.match(/<div class="trace-row[\s\S]*?<\/div>/g) ?? []
-  const subagentRows = toolRows.filter((r) => r.includes('subagent'))
-  assert.equal(subagentRows.length, 1, `仅被续接的前序调用保留 trace-row，实际 ${subagentRows.length}`)
-  assert.match(subagentRows[0]!, /已在下文续接/, '保留的前序行应标注续接标识')
-  // 前序行不含已完成徽章状态（前序是历史调用，实时卡承载最新状态）
-  assert.ok(html.includes('子会话 #<!-- -->12'), '实时卡应显示子会话编号')
+  assert.equal((html.match(/<div class="trace-row/g) ?? []).length, 0, 'replaceRow 接管后不得保留宿主默认 div.trace-row')
+  const rowButtons = html.match(/<button[^>]*workflow-trace-row-btn[\s\S]*?<\/button>/g) ?? []
+  assert.equal(rowButtons.length, 2, `两次调用各渲染 1 行插件轨迹，实际 ${rowButtons.length}`)
+  assert.match(rowButtons[0]!, /已在下文续接/, '前序行应标注续接标识')
+  assert.doesNotMatch(rowButtons[1]!, /已在下文续接/)
+  assert.ok(html.includes('子代理 #12'), '最新调用行应显示子会话编号')
 })
 
-test('时间线普通 subagent 调用无父 trace-row 双横条：胶囊卡独占展示', { timeout: 60_000 }, () => {
+test('时间线普通 subagent 调用无父 trace-row 双横条：单行轨迹独占展示', { timeout: 60_000 }, () => {
   const parent = summary(1, 'idle')
   const child12 = { ...summary(12, 'done'), parentConversationId: 1, title: '子会话 12' }
   const entries: ConversationEntry[] = [
@@ -1085,9 +1102,8 @@ test('时间线普通 subagent 调用无父 trace-row 双横条：胶囊卡独�
   ]
   const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [parent, child12] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
-  assert.equal((html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length, 1, '唯一调用挂载 1 张实时卡')
-  const subagentRows = (html.match(/<div class="trace-row[\s\S]*?<\/div>/g) ?? []).filter((r) => r.includes('subagent'))
-  assert.equal(subagentRows.length, 0, `挂卡后不得再渲染 subagent trace-row，实际 ${subagentRows.length}`)
+  assert.equal((html.match(/workflow-trace-row-btn/g) ?? []).length, 1, '唯一调用只渲染 1 行插件轨迹')
+  assert.equal((html.match(/<div class="trace-row/g) ?? []).length, 0, '不得与宿主默认工具行同时存在双横条')
 })
 
 test('加载失败折叠卡：error 描边 + 加载失败副栏（零请求展示错误）', { timeout: 60_000 }, () => {
@@ -1109,21 +1125,20 @@ test('加载失败折叠卡：error 描边 + 加载失败副栏（零请求展�
 // SSR：无 Emoji / 特殊符号黑名单
 // ---------------------------------------------------------------------------
 
-test('工作流业务卡隐藏重复工具行，但保留本次调用入参和原始结果入口', { timeout: 60_000 }, () => {
+test('工作流业务卡替换宿主默认工具行：首帧收口单行并支持按需查看原始调用详情', { timeout: 60_000 }, () => {
   const parent = summary(1, 'idle')
   const entries: ConversationEntry[] = [
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'wf_call', name: 'SubagentWorkflow', arguments: { script: '原始脚本内容' } }] }] },
     { id: '2', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'wf_call', toolName: 'SubagentWorkflow', content: [{ type: 'text', text: '原始工作流返回结果' }] }] },
   ]
   // runs 已改为会话分片订阅（usePluginSessionDoc）：SSR 首帧无订阅数据时，
-  // WorkflowToolView 如实回退原始调用详情，绝不虚构运行卡；替换 trace-row
-  // 的行为不依赖是否有订阅数据。
+  // WorkflowToolView 保持单行可展开按钮（不回退宿主 div.trace-row），绝不虚构运行卡。
   const html = renderToString(e(TestStoreProvider, { value: makeStore({ conversations: [parent] }) },
     e(ConversationTimeline, { conversation: parent, detailEntries: entries, onRequestEdit: () => {} })))
-  assert.ok(!html.includes('class="trace-row"'), '无数据也不得回退宿主默认工具行')
-  assert.ok(html.includes('调用详情'))
-  assert.ok(html.includes('原始脚本内容'))
-  assert.ok(html.includes('原始工作流返回结果'))
+  assert.ok(!html.includes('class="trace-row"'), '无数据也不得回退宿主默认 div.trace-row')
+  assert.ok(html.includes('workflow-trace-row-btn'), '使用 WorkflowToolView 单行按钮')
+  assert.ok(html.includes('aria-expanded="false"'), '无 run 时默认收起详情入口')
+  assert.ok(!html.includes('调用详情') && !html.includes('原始工作流返回结果'), '默认收起时不预先摊开调用详情与原始输出')
 })
 
 test('折叠子代理卡：不渲染内联流与展开箭头，整卡通过抽屉查看详情', { timeout: 60_000 }, () => {

@@ -714,13 +714,10 @@ test('工作流节点卡内深层子代理同样渲染紧凑子项并可打开�
   })
   const spy = makeSpyCtx()
   const mod = await importWorkflowClientModule('index.tsx')
-  const WorkflowToolView = mod['WorkflowToolView'] as (p: Record<string, unknown>) => React.ReactElement
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(
     spy,
-    e(WorkflowToolView, {
-      callId: 'wf_call', toolName: 'SubagentWorkflow', input: { script: 'x' },
-      status: 'running', conversationId: 1, siblingCalls: [],
-    }),
+    e(Panel, { conversation: summary(1, 'working') }),
   )
   try {
     // run 头部：深层后代存在时展示子树计数（#11 working + #21 done = 1/2）

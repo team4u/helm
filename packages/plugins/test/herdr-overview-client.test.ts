@@ -23,8 +23,10 @@ GlobalRegistrator.register()
 
 const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
 const React = req('react') as typeof import('react')
-const ReactDOM = req('react-dom') as typeof import('react-dom')
-const ReactDOMClient = req('react-dom/client') as typeof import('react-dom/client')
+const ReactDOM = req('react-dom') as unknown
+const ReactDOMClient = req('react-dom/client') as {
+  createRoot: (container: Element) => { render(node: React.ReactNode): void; unmount(): void }
+}
 const ReactJsxRuntime = req('react/jsx-runtime') as Record<string, unknown>
 const LucideReact = req('lucide-react') as Record<string, unknown>
 const SDK = await import('../../plugin-client/src/index.js')
@@ -32,12 +34,12 @@ const SDK = await import('../../plugin-client/src/index.js')
 const g = globalThis as Record<string, unknown>
 g.React = React
 g.IS_REACT_ACT_ENVIRONMENT = true
-g[CLIENT_SHARED_GLOBALS['react']] = React
-g[CLIENT_SHARED_GLOBALS['react-dom']] = ReactDOM
-g[CLIENT_SHARED_GLOBALS['react-dom/client']] = ReactDOMClient
-g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']] = ReactJsxRuntime
-g[CLIENT_SHARED_GLOBALS['lucide-react']] = LucideReact
-g[CLIENT_SHARED_GLOBALS['@helm/plugin-client']] = SDK
+g[CLIENT_SHARED_GLOBALS['react']!] = React
+g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
+g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
+g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
+g[CLIENT_SHARED_GLOBALS['@helm/plugin-client']!] = SDK
 
 const e = React.createElement
 const { act } = React
@@ -151,6 +153,7 @@ function mountHerdrOverview(doc: OverviewDoc) {
 describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
   test('human 直连窗格在桌面表格与移动卡片均严格只读，零控制按钮；helm 受管窗格开放合规动作', { timeout: 60_000 }, async () => {
     const doc: OverviewDoc = {
+      version: 2,
       updatedAt: 1_700_000_050_000,
       stale: false,
       asks: [{ paneId: '%10', nodeId: 'local', seq: 3, phase: 'waiting_approval' }],
@@ -158,6 +161,8 @@ describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
         {
           nodeId: 'local',
           paneId: '%1',
+          tabId: 'tab-1',
+          workspaceId: 'ws-1',
           ownedBy: 'human',
           agentStatus: 'blocked',
           agentName: 'claude',
@@ -169,6 +174,8 @@ describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
         {
           nodeId: 'local',
           paneId: '%10',
+          tabId: 'tab-2',
+          workspaceId: 'ws-1',
           ownedBy: 'helm',
           agentStatus: 'blocked',
           agentName: 'codex',

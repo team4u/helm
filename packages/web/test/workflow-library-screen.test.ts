@@ -14,23 +14,24 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
-import { createRoot } from 'react-dom/client'
 import type { ConversationSummary, PluginClientContext as PluginClientContextType, ScreenProps, WorkbenchPanelProps } from '@helm/protocol'
 // 类型引用（test-only）：workflow/herdr 共享契约归属 @helm/plugins（自 @helm/protocol
 // 迁出，见 devDependency）；纯类型零运行时耦合，不放宽生产包边界。
 import type { WorkflowRunSummary } from '@helm/plugins/contracts'
-import { PluginClientContext } from '@helm/plugin-client'
 
-import {
+// 先注册 DOM 全局对象再导入 react-dom / @helm/plugin-client（保证 Radix Popover 等 useLayoutEffect 识别 DOM 环境）。
+GlobalRegistrator.register()
+const { createRoot } = await import('react-dom/client')
+const { PluginClientContext } = await import('@helm/plugin-client')
+const {
   importWorkflowClientModule,
   importWorkflowModels,
   mountSharedPluginNamespaces,
   setWorkflowClientStub,
-} from './helpers/workflow-client.js'
+} = await import('./helpers/workflow-client.js')
 
 const e = React.createElement
 
-GlobalRegistrator.register()
 mountSharedPluginNamespaces()
 // React 19 act 环境：事件处理器在 act 外静默抑制更新断言；显式开启
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -374,6 +375,29 @@ test('运行卡「保存为工作流」：内联 run 显示并调用 save fromRu
   }
   const { host, unmount } = await mountClient(ctx, e(Panel, { conversation }))
   try {
+    const inlineWrap = host.querySelector<HTMLElement>('[data-run-id="wf_inline"]')
+    const savedWrap = host.querySelector<HTMLElement>('[data-run-id="wf_saved"]')
+    const subagentWrap = host.querySelector<HTMLElement>('[data-run-id="wf_bg"]')
+    assert.ok(inlineWrap && savedWrap && subagentWrap, '三个 run 均应在工作台渲染')
+
+    // subagent running run 只有中止，无更多操作与保存入口；completed savedRun 有更多操作（重放）但无保存入口。
+    assert.equal(subagentWrap.querySelector('button[aria-label="更多操作"]'), null)
+    const savedMore = savedWrap.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]')
+    assert.ok(savedMore)
+    act(() => {
+      savedMore.click()
+    })
+    assert.equal([...savedWrap.querySelectorAll('button')].filter((b) => (b.textContent ?? '').includes('保存为工作流')).length, 0)
+    act(() => {
+      savedMore.click()
+    })
+
+    // inline completed run 打开 ··· 更多操作后仅此处提供「保存为工作流」。
+    const inlineMore = inlineWrap.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]')
+    assert.ok(inlineMore)
+    act(() => {
+      inlineMore.click()
+    })
     const saveButtons = [...host.querySelectorAll('button')].filter((b) => (b.textContent ?? '').includes('保存为工作流'))
     assert.equal(saveButtons.length, 1, '只有内联 run 提供保存入口（已保存定义与 subagent 不显示）')
     await act(async () => {

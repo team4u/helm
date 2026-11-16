@@ -118,7 +118,7 @@ test('真实共享 hooks 消费会话文档 snapshot/增量：父工具已返回
     assert.match(ui.host.textContent!, /后台运行中/)
     assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar') === null, 'done 工具的 run.running 仍隐藏复制/分叉')
     assert.deepEqual(docs, [], '首帧已直投文档，SDK 不得重新拉取')
-    await act(async () => { (ui.host.querySelector('.subagent-card-clickable') as HTMLElement).click() })
+    await act(async () => { (ui.host.querySelector('button.workflow-trace-row-btn') as HTMLElement).click() })
     assert.deepEqual(modals, [{ kind: 'conversation-drawer', conversationId: 11 }])
     assert.deepEqual(navigations, [], '不能跳主屏或打开分屏')
     assert.deepEqual(workbenchChanges, [], '不能收起已有工作台')
@@ -131,22 +131,23 @@ test('真实共享 hooks 消费会话文档 snapshot/增量：父工具已返回
     runsValue = [{ ...run, status: 'failed', error: 'Gate 命令退出码 1' }]
     await act(async () => { publishSessionRuns() })
     await ui.render(store(), timeline)
-    assert.match(ui.host.textContent!, /Gate 命令退出码 1/)
+    assert.ok(ui.host.querySelector('button.workflow-trace-row-btn.trace-row-error'), '后台失败在时间线行显式标错')
+    assert.match(ui.host.textContent!, /异常/)
     assert.doesNotMatch(ui.host.textContent!, /后台运行中/)
     assert.ok(ui.host.querySelector('.msg-ai-block .msg-hover-bar'), '后台终态后恢复复制/分叉')
 
     state = applyEventFrame(state, { seq: 4, event: { type: 'plugin.changed', plugin: { ...plugin, enabled: false }, ui: [] } })
     await ui.render(store(), timeline)
-    assert.equal(ui.host.querySelector('.subagent-card-clickable'), null, '停用必须卸载插件 UI')
+    assert.equal(ui.host.querySelector('button.workflow-trace-row-btn'), null, '停用必须卸载插件 UI')
     assert.deepEqual(state.pluginDocs, {}, '停用必须清文档')
     state = applyEventFrame(state, { seq: 5, event: { type: 'plugin.changed', plugin, ui: workflowUi } })
     // 重启用后经会话分片到达 completed 终态。
     runsValue = [{ ...run, status: 'completed' }]
     await act(async () => { publishSessionRuns() })
     await ui.render(store(), timeline)
-    assert.equal(ui.host.querySelectorAll('.subagent-card-clickable').length, 1)
+    assert.equal(ui.host.querySelectorAll('button.workflow-trace-row-btn').length, 1)
+    assert.equal(ui.host.querySelector('button.workflow-trace-row-btn.trace-row-error'), null)
     assert.match(ui.host.textContent!, /已完成/)
-    assert.doesNotMatch(ui.host.textContent!, /Gate 命令退出码 1/)
   } finally { await ui.close() }
 })
 
@@ -241,7 +242,10 @@ test('resume 仅最新调用报告活动；旧卡由活跃转历史或卸载不�
     assert.deepEqual(bars(), [false], '原调用初次挂载时确实上报活动')
     await ui.render(store(true), timeline([...oldEntries, ...newEntries]))
     assert.deepEqual(bars(), [true, false], '续接后仅最新调用 busy；历史回合恢复操作条')
-    assert.equal(ui.host.querySelectorAll('.subagent-card-clickable').length, 1)
+    const rows = ui.host.querySelectorAll('button.workflow-trace-row-btn')
+    assert.equal(rows.length, 2, '前序调用与最新调用各占一行紧凑轨迹')
+    assert.match(rows[0]!.textContent ?? '', /已在下文续接/)
+    assert.doesNotMatch(rows[1]!.textContent ?? '', /已在下文续接/)
     assert.match(ui.host.textContent!, /已在下文续接/)
     await ui.render(store(true), timeline(newEntries))
     assert.deepEqual(bars(), [false], '移除旧卡不会误删最新调用的登记')

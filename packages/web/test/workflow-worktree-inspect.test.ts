@@ -15,23 +15,24 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
-import { createRoot } from 'react-dom/client'
 import type { ConversationSummary, PluginClientContext as PluginClientContextType, ToolViewProps, WorkbenchPanelProps } from '@helm/protocol'
 // 类型引用（test-only）：workflow/herdr 共享契约归属 @helm/plugins（自 @helm/protocol
 // 迁出，见 devDependency）；纯类型零运行时耦合，不放宽生产包边界。
 import type { WorkflowNodeState, WorkflowRunSummary } from '@helm/plugins/contracts'
-import { PluginClientContext } from '@helm/plugin-client'
 
-import {
+// 先注册 DOM 全局对象再导入 react-dom / @helm/plugin-client（保证 Radix Popover 等 useLayoutEffect 识别 DOM 环境）。
+GlobalRegistrator.register()
+const { createRoot } = await import('react-dom/client')
+const { PluginClientContext } = await import('@helm/plugin-client')
+const {
   importWorkflowClientModule,
   importWorkflowModels,
   mountSharedPluginNamespaces,
   setWorkflowClientStub,
-} from './helpers/workflow-client.js'
+} = await import('./helpers/workflow-client.js')
 
 const e = React.createElement
 
-GlobalRegistrator.register()
 mountSharedPluginNamespaces()
 // React 19 act 环境：事件处理器在 act 外静默抑制更新断言；显式开启
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -269,6 +270,7 @@ interface RecordingCtx extends PluginClientContextType {
   submissions: Array<{ text: string; options?: Record<string, unknown> }>
   notices: string[]
   drawerCalls: number[]
+  screenCalls: string[]
 }
 
 function makeRecordingCtx(actionResults: Record<string, unknown>): RecordingCtx {
@@ -276,6 +278,7 @@ function makeRecordingCtx(actionResults: Record<string, unknown>): RecordingCtx 
   const submissions: RecordingCtx['submissions'] = []
   const notices: string[] = []
   const drawerCalls: number[] = []
+  const screenCalls: string[] = []
   return {
     pluginId: 'builtin:workflow',
     callAction: async (action: string, input?: unknown) => {
@@ -286,7 +289,9 @@ function makeRecordingCtx(actionResults: Record<string, unknown>): RecordingCtx 
     submitInput: async (text: string, options?: { conversationId?: number; whenBusy?: string }) => {
       submissions.push({ text, options })
     },
-    openScreen: () => {},
+    openScreen: (target: string) => {
+      screenCalls.push(target)
+    },
     openConversationDrawer: (id: number) => {
       drawerCalls.push(id)
     },
@@ -305,13 +310,14 @@ function makeRecordingCtx(actionResults: Record<string, unknown>): RecordingCtx 
     submissions,
     notices,
     drawerCalls,
+    screenCalls,
   }
 }
 
 async function mountClient(
   ctx: PluginClientContextType,
   element: React.ReactElement,
-): Promise<{ host: HTMLElement; unmount: () => void }> {
+): Promise<{ host: HTMLElement; rerender: (element: React.ReactElement) => Promise<void>; unmount: () => void }> {
   const host = document.createElement('div')
   document.body.appendChild(host)
   let root: ReturnType<typeof createRoot> | undefined
@@ -322,6 +328,9 @@ async function mountClient(
   await act(async () => {})
   return {
     host,
+    rerender: async (element) => {
+      await act(async () => { root?.render(e(PluginClientContext.Provider, { value: ctx }, element)) })
+    },
     unmount: () => {
       act(() => root?.unmount())
       host.remove()
@@ -329,11 +338,17 @@ async function mountClient(
   }
 }
 
-function buttonByText(host: HTMLElement, text: string): HTMLButtonElement {
+function buttonByText(host: ParentNode, text: string): HTMLButtonElement {
   const buttons = [...host.querySelectorAll('button')] as HTMLButtonElement[]
   const found = buttons.find((b) => (b.textContent ?? '').includes(text))
-  assert.ok(found !== null, `应存在含「${text}」的按钮（实得：${buttons.map((b) => b.textContent).join(' | ')}）`)
-  return found!
+  assert.ok(found !== undefined, `应存在含「${text}」的按钮（实得：${buttons.map((b) => b.textContent).join(' | ')}）`)
+  return found
+}
+
+function openMoreMenu(host: HTMLElement): void {
+  const more = host.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]')
+  assert.ok(more !== null, '工作流卡应存在 ··· 更多操作按钮')
+  more.click()
 }
 
 /**
@@ -354,18 +369,10 @@ function setControlledValue(input: HTMLInputElement, value: string): void {
   })
 }
 
-/** 工作流库中指定名称行（含该行的输入与运行按钮）。 */
-function libraryRow(host: HTMLElement, name: string): HTMLElement {
-  const rows = [...host.querySelectorAll('.workflow-library-item')] as HTMLElement[]
-  const row = rows.find((r) => r.querySelector('.workflow-library-name')?.textContent === name)
-  assert.ok(row !== undefined, `应存在工作流行 ${name}`)
-  return row!
-}
-
-test('工作流库：渲染已保存定义与元数据；每行独立 args 草稿不串行', { timeout: 60_000 }, async () => {
+test('工作台去重工作流库仅留跳转入口；独立工作流库切换条目保持 args 草稿/错误隔离', { timeout: 60_000 }, async () => {
   setWorkflowClientStub({
     docValue: { runs: [] },
-    conversations: [],
+    conversations: [workbenchConversation()],
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const ctx = makeRecordingCtx({
@@ -376,68 +383,71 @@ test('工作流库：渲染已保存定义与元数据；每行独立 args 草�
         { name: 'broken', metadataError: 'meta.name is required', updatedAt: 1, size: 2 },
       ],
     },
+    get: {
+      workflow: {
+        name: 'release',
+        description: '发布流程：检查并发布',
+        updatedAt: 1_700_000_000_000,
+        size: 4096,
+        script: 'export const meta = { name: "release" }\nreturn 1',
+      },
+    },
     run: { run: { id: 'wf_new' } },
   })
   const mod = await importWorkflowClientModule('index.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
-  const { host, unmount } = await mountClient(ctx, e(Panel, { conversation: workbenchConversation() }))
+  const LibraryScreen = mod['WorkflowLibraryScreen'] as (p: Record<string, unknown>) => React.ReactElement
+
+  // 1. 工作台已去重：不内嵌定义列表、不重复请求 list，仅保留右上角「工作流库」跳转按钮。
+  const wb = await mountClient(ctx, e(Panel, { conversation: workbenchConversation() }))
   try {
-    assert.match(host.textContent!, /工作流库/)
-    assert.match(host.textContent!, /release/)
-    assert.match(host.textContent!, /发布流程/)
-    assert.match(host.textContent!, /2 阶段：检查 \/ 发布/)
-    assert.match(host.textContent!, /元数据校验失败/, 'metadataError 条目必须如实展示诊断')
-    assert.equal(host.querySelectorAll('.workflow-library-args').length, 3, '每行一个 args 输入')
-
-    // 空 args：按名运行到当前会话（args 缺省不携带，沿用脚本缺省）。
+    assert.equal(wb.host.querySelector('.workflow-library-item'), null, '工作台不得再内嵌重复工作流库行')
+    assert.equal(wb.host.querySelector('.workflow-library-args'), null)
+    assert.equal(ctx.calls.filter((c) => c.action === 'list').length, 0, '工作台挂载不发起多余 list 请求')
     await act(async () => {
-      buttonByText(libraryRow(host, 'release'), '运行').click()
+      buttonByText(wb.host, '工作流库').click()
     })
-    assert.deepEqual(ctx.calls.find((c) => c.action === 'run')!.input, { name: 'release', conversationId: 1 })
-
-    // 每行独立草稿：release 行填 {"a":1}，audit 行填 {"b":2}，各自携带各自 args。
-    const releaseInput = libraryRow(host, 'release').querySelector('.workflow-library-args') as HTMLInputElement
-    const auditInput = libraryRow(host, 'audit').querySelector('.workflow-library-args') as HTMLInputElement
-    await act(async () => {
-      setControlledValue(releaseInput, '{"a":1}')
-    })
-    assert.equal(releaseInput.value, '{"a":1}')
-    assert.equal(auditInput.value, '', '另一行草稿不受影响')
-    await act(async () => {
-      buttonByText(libraryRow(host, 'release'), '运行').click()
-    })
-    assert.deepEqual(
-      ctx.calls.filter((c) => c.action === 'run').at(-1)!.input,
-      { name: 'release', conversationId: 1, args: { a: 1 } },
-    )
-    await act(async () => {
-      setControlledValue(auditInput, '{"b":2}')
-    })
-    await act(async () => {
-      buttonByText(libraryRow(host, 'audit'), '运行').click()
-    })
-    assert.deepEqual(
-      ctx.calls.filter((c) => c.action === 'run').at(-1)!.input,
-      { name: 'audit', conversationId: 1, args: { b: 2 } },
-      '第二行携带自己的 args，不串第一行草稿',
-    )
-
-    // 每行独立错误：release 行填非法 JSON，错误只出现在该行，audit 行仍可运行。
-    await act(async () => {
-      setControlledValue(releaseInput, '{oops}')
-    })
-    await act(async () => {
-      buttonByText(libraryRow(host, 'release'), '运行').click()
-    })
-    assert.match(libraryRow(host, 'release').textContent!, /合法 JSON/)
-    assert.equal(libraryRow(host, 'audit').querySelector('.callout'), null, '解析错误不得串到其他行')
-    assert.equal(
-      ctx.calls.filter((c) => c.action === 'run').length,
-      3,
-      '非法 JSON 不得提交 run 动作',
-    )
+    assert.deepEqual(ctx.screenCalls, ['screen:builtin:workflow/library'])
   } finally {
-    unmount()
+    wb.unmount()
+  }
+
+  // 2. 独立工作流库全屏页（inlineDrawer）：渲染卡片与元数据诊断，切换选中工作流重置 args 草稿与错误。
+  const params: Record<string, string> = { wf: 'release' }
+  const setParams = (patch: Record<string, string | undefined>) => {
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) delete params[k]
+      else params[k] = v
+    }
+  }
+  const lib = await mountClient(
+    ctx,
+    e(LibraryScreen, { pluginId: 'builtin:workflow', screenId: 'library', isSplit: false, params, setParams, inlineDrawer: true }),
+  )
+  try {
+    assert.match(lib.host.textContent!, /工作流库/)
+    assert.match(lib.host.textContent!, /release/)
+    assert.match(lib.host.textContent!, /发布流程/)
+    assert.match(lib.host.textContent!, /audit/)
+    assert.match(lib.host.textContent!, /元数据校验失败/, 'metadataError 条目必须如实展示诊断')
+
+    const drawer = lib.host.querySelector('.workflow-lib-drawer') as HTMLElement | null
+    assert.ok(drawer !== null, '选中 release 时内联抽屉挂载')
+    const argsInput = drawer.querySelector('.workflow-library-args') as HTMLInputElement
+    assert.ok(argsInput !== null)
+    await act(async () => {
+      setControlledValue(argsInput, '{oops}')
+    })
+    assert.equal(argsInput.value, '{oops}')
+
+    // 切换到 audit：抽屉参数草稿自动清空，不串 release 草稿。
+    await lib.rerender(
+      e(LibraryScreen, { pluginId: 'builtin:workflow', screenId: 'library', isSplit: false, params: { wf: 'audit' }, setParams, inlineDrawer: true }),
+    )
+    const auditInput = lib.host.querySelector('.workflow-lib-drawer .workflow-library-args') as HTMLInputElement
+    assert.equal(auditInput.value, '', '切换工作流后 args 草稿清空不串行')
+  } finally {
+    lib.unmount()
   }
 })
 
@@ -470,18 +480,18 @@ test('节点卡改动概览：检视渲染与审阅；completed run 提供「重
     run: { run: { id: 'wf_new' } },
   })
   const mod = await importWorkflowClientModule('index.tsx')
-  const ToolView = mod['WorkflowToolView'] as (p: Partial<ToolViewProps>) => React.ReactElement
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
-    e(ToolView, {
-      callId: 'wf_call', toolName: 'SubagentWorkflow', input: { name: 'release' },
-      status: 'done', conversationId: 1, siblingCalls: [],
-    }),
+    e(Panel, { conversation: workbenchConversation() }),
   )
   try {
-    // 已完成 DSL run：提供「重放」入口，不提供断点恢复。
-    assert.ok(host.textContent!.includes('重放'), '已完成 run 应提供重放入口')
+    // 已完成 DSL run：经 ··· 更多操作提供「重放」入口，不提供断点恢复。
     assert.ok(!host.textContent!.includes('断点恢复'), '已完成 run 不得提供断点恢复')
+    act(() => {
+      openMoreMenu(host)
+    })
+    assert.ok(host.textContent!.includes('重放'), '已完成 run 更多操作菜单应提供重放入口')
     await act(async () => {
       buttonByText(host, '重放').click()
     })
@@ -545,13 +555,10 @@ test('检视失败显式呈现：错误可见且可重试，绝不伪造空统�
     throw new Error('node offline: 探测失败')
   }
   const mod = await importWorkflowClientModule('index.tsx')
-  const ToolView = mod['WorkflowToolView'] as (p: Partial<ToolViewProps>) => React.ReactElement
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
-    e(ToolView, {
-      callId: 'wf_call2', toolName: 'SubagentWorkflow', input: { script: 'x' },
-      status: 'error', conversationId: 1, siblingCalls: [],
-    }),
+    e(Panel, { conversation: workbenchConversation() }),
   )
   try {
     assert.ok(host.textContent!.includes('断点恢复'), '失败 run 应提供断点恢复')
@@ -580,15 +587,15 @@ test('重放表单：内联 run 可重放且显式 args 覆盖；非法 JSON 不
   })
   const ctx = makeRecordingCtx({ run: { run: { id: 'wf_replay' } } })
   const mod = await importWorkflowClientModule('index.tsx')
-  const ToolView = mod['WorkflowToolView'] as (p: Partial<ToolViewProps>) => React.ReactElement
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
-    e(ToolView, {
-      callId: 'wf_call3', toolName: 'SubagentWorkflow', input: { script: 'x' },
-      status: 'done', conversationId: 1, siblingCalls: [],
-    }),
+    e(Panel, { conversation: workbenchConversation() }),
   )
   try {
+    act(() => {
+      openMoreMenu(host)
+    })
     await act(async () => {
       buttonByText(host, '重放').click()
     })
@@ -642,6 +649,9 @@ test('工作台重放双击防重复：在途 ref 拦截，同拍连点只发一
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(ctx, e(Panel, { conversation: workbenchConversation() }))
   try {
+    act(() => {
+      openMoreMenu(host)
+    })
     await act(async () => {
       buttonByText(host, '重放').click()
     })
@@ -683,13 +693,10 @@ test('独立子代理卡检视：有工作树时提供入口；点击不触发�
   })
   const ctx = makeRecordingCtx({ inspect_worktree: INSPECT_RAW })
   const mod = await importWorkflowClientModule('index.tsx')
-  const SubagentToolView = mod['SubagentToolView'] as (p: Partial<ToolViewProps>) => React.ReactElement
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
-    e(SubagentToolView, {
-      callId: 'call-bg', toolName: 'subagent', input: { prompt: '后台任务' },
-      status: 'done', conversationId: 1, siblingCalls: [],
-    }),
+    e(Panel, { conversation: workbenchConversation() }),
   )
   try {
     // 独立子代理卡内嵌检视入口；展开用登记 ID 精确选择器。
@@ -743,13 +750,10 @@ test('独立子代理卡检视：无登记 ID 时用 path+子会话节点消歧�
   })
   const ctx = makeRecordingCtx({ inspect_worktree: INSPECT_RAW })
   const mod = await importWorkflowClientModule('index.tsx')
-  const SubagentToolView = mod['SubagentToolView'] as (p: Partial<ToolViewProps>) => React.ReactElement
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
-    e(SubagentToolView, {
-      callId: 'call-bg2', toolName: 'subagent', input: { prompt: '远端任务' },
-      status: 'done', conversationId: 1, siblingCalls: [],
-    }),
+    e(Panel, { conversation: workbenchConversation() }),
   )
   try {
     const toggle = host.querySelector('.worktree-inspect button') as HTMLButtonElement
@@ -789,13 +793,10 @@ test('工作流节点卡不重复渲染检视节：节点外层一处，子代�
   })
   const ctx = makeRecordingCtx({})
   const mod = await importWorkflowClientModule('index.tsx')
-  const ToolView = mod['WorkflowToolView'] as (p: Partial<ToolViewProps>) => React.ReactElement
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
-    e(ToolView, {
-      callId: 'wf_call4', toolName: 'SubagentWorkflow', input: { script: 'x' },
-      status: 'done', conversationId: 1, siblingCalls: [],
-    }),
+    e(Panel, { conversation: workbenchConversation() }),
   )
   try {
     assert.equal(host.querySelectorAll('.worktree-inspect').length, 1, 'workflow 节点卡只在外层渲染检视节，避免重复')
