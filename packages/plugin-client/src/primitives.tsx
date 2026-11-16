@@ -11,6 +11,8 @@
  */
 import { Children, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { HelmIcon } from './icons.js'
+import { usePluginTranslator } from './i18n.js'
+import { uiCopy } from './ui-copy.js'
 
 function joinClass(...parts: Array<string | undefined>): string {
   return parts.filter(Boolean).join(' ')
@@ -164,17 +166,17 @@ function inferColSpan(columns: number | undefined, children: ReactNode): number 
  * </DataTable>
  * ```
  *
- * The default loading / empty labels below are fixed English texts of the SDK.
- * If they ever need to be translated by the host, expose localized strings via
- * props (loadingLabel / emptyLabel) — do not extend the protocol for this.
+ * Default labels follow the shared UI locale; explicit loadingLabel and
+ * emptyLabel props take precedence.
  */
 export function DataTable(props: DataTableProps): ReactNode {
+  const t = usePluginTranslator()
   const {
     columns,
     loading = false,
-    loadingLabel = 'Loading…',
+    loadingLabel = t(uiCopy.loading),
     empty = false,
-    emptyLabel = 'No data',
+    emptyLabel = t(uiCopy.noData),
     label,
     className,
     children,

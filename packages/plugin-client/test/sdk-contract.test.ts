@@ -385,6 +385,40 @@ test('usePluginLocale / usePluginTranslator: context takes precedence over port,
   ])
 })
 
+test('shared primitives update labels with the host locale without changing selected values', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const port = makePort(log)
+  const options = Array.from({ length: 5 }, (_, index) => ({ value: `v${index}`, label: `Option ${index}` }))
+  const changes: string[][] = []
+  const tree = (locale: 'en' | 'zh-CN') => e(SDK.PluginClientHostContext.Provider, { value: { ...port, locale } },
+    e('div', null,
+      e(SDK.CopyButton, { text: 'user text' }),
+      e(SDK.DataTable, { loading: true, children: null }),
+      e(SDK.DataTable, { empty: true, children: null }),
+      e(SDK.MultiSelect, { options, value: ['v0', 'v1'], open: true, inline: true, onValuesChange: (values: string[]) => changes.push(values) })))
+  const { root, host } = mount(tree('en'))
+  try {
+    assert.equal(host.querySelector('button')?.getAttribute('title'), 'Copy')
+    assert.equal(host.querySelector('[role="status"]')?.textContent, 'Loading…')
+    assert.equal(host.querySelector('.table-empty')?.textContent, 'No data')
+    assert.equal(host.querySelector('.helm-select-label')?.textContent, '2 selected')
+    assert.equal(host.querySelector('input')?.getAttribute('placeholder'), 'Search options…')
+    act(() => root.render(tree('zh-CN')))
+    assert.equal(host.querySelector('button')?.getAttribute('title'), '复制')
+    assert.equal(host.querySelector('[role="status"]')?.textContent, '加载中…')
+    assert.equal(host.querySelector('.table-empty')?.textContent, '暂无数据')
+    assert.equal(host.querySelector('.helm-select-label')?.textContent, '已选择 2 项')
+    assert.equal(host.querySelector('input')?.getAttribute('placeholder'), '搜索选项…')
+    assert.equal(host.querySelectorAll('[role="option"][aria-selected="true"]').length, 2)
+    assert.deepEqual(changes, [], 'changing locale never submits a selection change')
+    act(() => root.render(tree('en')))
+    assert.equal(host.querySelector('.helm-select-label')?.textContent, '2 selected')
+    assert.equal(host.querySelector('button')?.getAttribute('title'), 'Copy')
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
 test('PluginSlot: short names qualify, lists render all matches, singles render the first, fallbacks render when empty, and missing owners warn', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
