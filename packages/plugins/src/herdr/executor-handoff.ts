@@ -1,20 +1,20 @@
 /**
- * Herdr 执行器子模块：文件交接校验、原地追问自愈与 Gate 执行。
+ * Herdr executor submodule: handoff file validation, in-place follow-up self-heal and Gate execution.
  *
- * 从 executor.ts 拆出（行为与拆分前逐行等价）；依赖经 PaneHandoffPort 注入
- * （executor 持有 registry / transport / 窗格环境基线与机密重新授权 / 结算
- * 等待与失败标记）：
- * - readAndValidateOutput：交接文件读取 + JSON Schema/md 稳定性校验，失败仅
- *   自愈一次（同形追问），再失败显式 herdr_output_contract_violation 并附
- *   agent.read recent_unwrapped 40 行脱敏快照，绝不截终端脏文本冒充结果；
- * - readDiagnostic：40 行脱敏诊断快照（executor / 审批桥共用）；
- * - runGateFor：文件成功后恰好一次（本机 runLocalGate / 远端 transport.runGate，
- *   同一实际 cwd 与路由基线 env；机密不缓存，每次按本次请求 secretNames 从
- *   当前 stash 重新授权，缺失/过期/已结算在 gate 子进程启动前显式 404）。
+ * Split out of executor.ts (behavior line-for-line equivalent to before the split); dependencies injected via PaneHandoffPort
+ * (the executor holds the registry / transport / pane env baseline and secret re-authorization / settle
+ * waiting and failure marking):
+ * - readAndValidateOutput: handoff file read + JSON Schema/md stability validation; on failure self-heal
+ *   exactly once (same-shape follow-up), then fail explicitly with herdr_output_contract_violation plus the
+ *   agent.read recent_unwrapped 40-line redacted snapshot; never pass off dirty terminal text as the result;
+ * - readDiagnostic: 40-line redacted diagnostic snapshot (shared by executor / approval bridge);
+ * - runGateFor: exactly once after file success (local runLocalGate / remote transport.runGate,
+ *   same actual cwd and routing baseline env; secrets are never cached, re-authorized per request secretNames
+ *   from the current stash; missing/expired/settled gets an explicit 404 before the gate subprocess starts).
  *
- * 诚实性纪律（不静默降级）：transport IO/SSH/权限错误如实抛诊断
- * （herdr_output_missing 404 是唯一可自愈边界码），绝不把其它错误当缺文件
- * 重投任务。
+ * Honesty discipline (no silent degradation): transport IO/SSH/permission errors throw diagnostics as-is
+ * (herdr_output_missing 404 is the only self-healable boundary code); never re-dispatch the task treating
+ * other errors as a missing file.
  */
 
 import { setTimeout as delay } from 'node:timers/promises'
@@ -24,16 +24,16 @@ import { nodeIdOf, paneStateKey, targetOf, type ManagedPane } from './panes.js'
 import { parsePaneRead, type HerdrAgentInfo } from './rpc.js'
 import { redactSchemaText } from './spawn-rules.js'
 
-/** PaneHandoff 对执行器（executor）的最小依赖面。 */
+/** The minimal dependency surface of PaneHandoff on the executor. */
 export interface PaneHandoffPort {
   transport: NonNullable<HerdrPluginDependencies['transport']>
   redact(text: string): string
   notify(title: string, body: string, level: 'info' | 'error'): void
-  /** AskDoc 目标会话（缺省父会话）。 */
+  /** AskDoc target conversation (defaults to the parent conversation). */
   askConversationId(parentConversationId: number): number
-  /** 窗格环境基线（paneEnvs 现值；Gate 与续接共用，不含 stash 机密）。 */
+  /** Pane env baseline (current paneEnvs value; shared by Gate and resume, no stash secrets). */
   paneEnvOf(key: string): Record<string, string> | undefined
-  /** 从当前 stash 重新授权机密叠加到基线（每次现取，缺失在内核边界显式 404）。 */
+  /** Re-authorize secrets from the current stash overlaid onto the baseline (fetched fresh each time; missing gets an explicit 404 at the kernel boundary). */
   applyPaneSecrets(
     baseline: Record<string, string>,
     parentConversationId: number,
@@ -41,22 +41,22 @@ export interface PaneHandoffPort {
     target: HerdrTarget,
     secretNames: string[],
   ): Record<string, string>
-  /** prompt --wait（blocked 也可能立即返回，审批桥接管）。 */
+  /** prompt --wait (blocked may also return immediately; the approval bridge takes over). */
   promptAndWait(target: HerdrTarget, pane: ManagedPane, text: string, signal?: AbortSignal): Promise<HerdrAgentInfo>
-  /** 结算等待 + blocked 审批桥循环。 */
+  /** Settle waiting + blocked approval bridge loop. */
   waitUntilSettled(request: AgentSpawnRequest, pane: ManagedPane, initial: HerdrAgentInfo): Promise<void>
-  /** $helm 状态 Token 投射（自愈追问前标记 heal）。 */
+  /** $helm status token projection (mark heal before the self-heal follow-up). */
   project(pane: ManagedPane, token: string): Promise<void>
-  /** 失败窗格保留现场标记（outcome=failed + 脱敏 failureNote）。 */
+  /** Failure pane keep-the-scene marker (outcome=failed + redacted failureNote). */
   markFailed(pane: ManagedPane, note: string): Promise<void>
-  /** 本机 Gate 执行端口（远端走 transport.runGate）。 */
+  /** Local Gate execution port (remote goes through transport.runGate). */
   runLocalGate: HerdrPluginDependencies['runLocalGate']
-  /** md 交接稳定性复检间隔（测试可缩短；生产缺省 300ms）。 */
+  /** md handoff stability recheck interval (shortened in tests; production default 300ms). */
   mdStableRecheckMs?: number
 }
 
 export class PaneHandoff {
-  /** md 交接稳定性复检的间隔（两次读一致才接受；json 有 schema 硬校验无需此检）。 */
+  /** Interval for the md handoff stability recheck (accepted only when two reads agree; json has hard schema validation and needs no such check). */
   private static readonly DEFAULT_MD_STABLE_RECHECK_MS = 300
 
   constructor(private readonly port: PaneHandoffPort) {}
@@ -71,13 +71,13 @@ export class PaneHandoff {
         raw = await transport.readOutput(target, pane.effectiveCwd, fileName, request.signal)
       } catch (error) {
         if (error instanceof HelmError && error.code === 'herdr_output_missing') {
-          return { ok: false, reason: `交接文件缺失：${fileName}`, recoverable: true }
+          return { ok: false, reason: `handoff file missing: ${fileName}`, recoverable: true }
         }
-        // 其它 IO/SSH/权限错误：如实抛诊断，不当缺文件自愈。
+        // Other IO/SSH/permission errors: throw diagnostics as-is; do not self-heal as a missing file.
         throw error
       }
       if (request.schema === undefined) {
-        if (raw.trim() === '') return { ok: false, reason: '交接文件为空', recoverable: true }
+        if (raw.trim() === '') return { ok: false, reason: 'handoff file is empty', recoverable: true }
         return { ok: true, value: this.port.redact(raw) }
       }
       let parsed: unknown
@@ -86,12 +86,12 @@ export class PaneHandoff {
       } catch (err) {
         return {
           ok: false,
-          reason: `交接文件不是合法 JSON：${err instanceof Error ? err.message : String(err)}`,
+          reason: `handoff file is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
           recoverable: true,
         }
       }
       try {
-        validateOrThrow(request.schema, parsed, '交接文件内容未通过 JSON Schema 校验', 'schema_validation_failed', 502)
+        validateOrThrow(request.schema, parsed, 'handoff file content failed JSON Schema validation', 'schema_validation_failed', 502)
         return { ok: true, value: JSON.parse(this.port.redact(JSON.stringify(parsed))) as unknown }
       } catch (err) {
         if (err instanceof HelmError && err.code === 'schema_validation_failed') {
@@ -102,11 +102,11 @@ export class PaneHandoff {
     }
 
     /**
-     * md 交接的稳定性复检：agent 非原子多段写 + agent.wait 返回 idle 但后台
-     * 仍在写时，首读可能拿到截断 Markdown——间隔短时复读一致才接受，否则
-     * 按可自愈失败走追问路径（json 路径已有 parse+schema 硬校验，无需此检；
-     * 残余风险：两次读间隔内恰好写完且不再变化的前缀截断仍无法区分，由
-     * 自愈追问兑底）。
+     * Stability recheck for md handoff: with non-atomic multi-part writes plus agent.wait returning
+     * idle while a background write is still going, the first read may see truncated Markdown -- accept
+     * only when a short-interval re-read agrees, otherwise take the self-heal follow-up path (the json
+     * path already has parse+schema hard validation and needs no such check; residual risk: a truncated
+     * prefix that happens to finish and stop changing between the two reads is still indistinguishable, backstopped by the self-heal follow-up).
      */
     const readOnceStable = async (): Promise<{ ok: true; value: unknown } | { ok: false; reason: string; recoverable: boolean }> => {
       const first = await readOnce()
@@ -116,17 +116,17 @@ export class PaneHandoff {
       const second = await readOnce()
       if (!second.ok) return second
       if (second.value !== first.value) {
-        return { ok: false, reason: '交接文件仍在写入（间隔复读内容不一致）', recoverable: true }
+        return { ok: false, reason: 'handoff file is still being written (interval re-read disagrees)', recoverable: true }
       }
       return first
     }
 
     let attempt = await readOnceStable()
     if (!attempt.ok) {
-      this.port.notify('Herdr 交接自愈', `pane ${pane.paneId} 首次交接失败（${attempt.reason}），追问一次`, 'info')
+      this.port.notify('Herdr handoff self-heal', `pane ${pane.paneId} first handoff failed (${attempt.reason}); following up once`, 'info')
       await this.port.project(pane, `heal:${pane.agentName}`)
-      // 自愈追问本身也可能 blocked：同一审批桥等待真实进展后再读文件，
-      // 不能读缺文件就判失败。
+      // The self-heal follow-up itself may also get blocked: the same approval bridge waits for real
+      // progress before re-reading the file; a missing file must not be judged a failure.
       await this.promptAndWaitHeal(request, pane, attempt.reason)
       attempt = await readOnceStable()
     }
@@ -135,7 +135,7 @@ export class PaneHandoff {
       const snapshot = await this.readDiagnostic(pane)
       throw new HelmError(
         'herdr_output_contract_violation',
-        `pane ${pane.paneId} 两次交接均失败（${attempt.reason}）；窗格保留供人工排查。终端最后 40 行（脱敏）：\n${snapshot}`,
+        `pane ${pane.paneId} both handoff attempts failed (${attempt.reason}); pane kept for manual investigation. Last 40 terminal lines (redacted):\n${snapshot}`,
         502,
         { paneId: pane.paneId, reason: attempt.reason, snapshot },
       )
@@ -144,17 +144,17 @@ export class PaneHandoff {
     return attempt.value
   }
 
-  /** 自愈追问：与首轮同形（prompt --wait + blocked 桥循环）。 */
+  /** Self-heal follow-up: same shape as the first round (prompt --wait + blocked bridge loop). */
   private async promptAndWaitHeal(request: AgentSpawnRequest, pane: ManagedPane, reason: string): Promise<void> {
     const target = targetOf(pane)
     const text =
-      `你上一轮未按要求交付。${reason}。请立即将最终结果写入 ${pane.effectiveCwd}/.helm/${pane.outputFileName}` +
-      (request.schema !== undefined ? `（满足 Schema 的单个 JSON 值）。\nJSON Schema: ${redactSchemaText(request.schema, this.port.redact)}` : '（Markdown 全文）。')
+      `Your previous round did not deliver as required. ${reason}. Write the final result now to ${pane.effectiveCwd}/.helm/${pane.outputFileName}` +
+      (request.schema !== undefined ? ` (a single JSON value satisfying the Schema).\nJSON Schema: ${redactSchemaText(request.schema, this.port.redact)}` : ' (full Markdown).')
     const info = await this.port.promptAndWait(target, pane, this.port.redact(text), request.signal)
     await this.port.waitUntilSettled(request, pane, info)
   }
 
-  /** agent.read recent_unwrapped 40 行脱敏快照（诊断专用）。 */
+  /** agent.read recent_unwrapped 40-line redacted snapshot (diagnostics only). */
   async readDiagnostic(pane: ManagedPane): Promise<string> {
     try {
       const read = parsePaneRead(
@@ -167,14 +167,14 @@ export class PaneHandoff {
       )
       return this.port.redact(read.text).slice(-4_000)
     } catch (error) {
-      return `[快照读取失败：${error instanceof Error ? this.port.redact(error.message) : String(error)}]`
+      return `[snapshot read failed: ${error instanceof Error ? this.port.redact(error.message) : String(error)}]`
     }
   }
 
-  /** gate：文件成功后恰好一次；本机 runLocalGate，远端 transport.runGate（同一实际 cwd 与路由基线 env）。 */
+  /** gate: exactly once after file success; local runLocalGate, remote transport.runGate (same actual cwd and routing baseline env). */
   async runGateFor(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
     const baseline = this.port.paneEnvOf(paneStateKey(pane))
-    if (baseline === undefined) throw new HelmError('herdr_context_unavailable', '任务环境已丢失，无法在同一环境执行 Gate', 409)
+    if (baseline === undefined) throw new HelmError('herdr_context_unavailable', 'task environment is lost; cannot run Gate in the same environment', 409)
     const env = this.port.applyPaneSecrets(baseline, request.parentConversationId, pane.effectiveCwd, targetOf(pane), request.secretNames ?? [])
     const gate: { ok: boolean; output: string } =
       nodeIdOf(pane) === undefined
@@ -187,10 +187,10 @@ export class PaneHandoff {
         : await this.port.transport.runGate(targetOf(pane), request.gate!, pane.effectiveCwd, request.signal, env)
     request.onGateResult?.({ ...gate, output: this.port.redact(gate.output) })
     if (!gate.ok) {
-      await this.port.markFailed(pane, `gate 失败：${request.gate}`)
+      await this.port.markFailed(pane, `gate failed: ${request.gate}`)
       throw new HelmError(
         'gate_failed',
-        `验收命令失败（exit≠0）：${request.gate}\n${this.port.redact(gate.output).slice(-2000)}`,
+        `gate command failed (exit!=0): ${request.gate}\n${this.port.redact(gate.output).slice(-2000)}`,
         502,
         { output: this.port.redact(gate.output).slice(-4000) },
       )

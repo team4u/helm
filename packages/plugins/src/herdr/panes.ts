@@ -1,13 +1,13 @@
 /**
- * 受管窗格登记表：scopeKey(nodeId, paneId) -> 归属/父子/workflow/实际 cwd/目标/清理通道。
+ * Managed pane registry: scopeKey(nodeId, paneId) -> ownership/parent/workflow/actual cwd/target/cleanup channel.
  *
- * 职责：
- * - 记录本插件创建的每个 Herdr 窗格（tab/worktree 两种形态）及其**冻结连接目标**
- *   （启用时确定，非机密：nodeId/session/socketPath）——同一窗格的所有命令、事件、
- *   文件与清理永远走同一 HerdrTarget，绝不热换连接去误伤另一台服务器上的同 ID 窗格；
- * - 记录 spawn 路由（agent kind / Profile id）供无 agentType 的真实 resume 续接；
- * - 支持同 workflow 或同父回合 resume 定位（稳定 agentId 或 paneId 双键）；
- * - 区分「成功保活待结算」与「失败保留现场」（失败 pane 不参与自动清理）。
+ * Responsibilities:
+ * - Record every Herdr pane created by this plugin (tab/worktree forms) and its **frozen connection target**
+ *   (determined at enable; non-secret: nodeId/session/socketPath) -- all commands, events,
+ *   files and cleanup for a pane always go through the same HerdrTarget; never hot-swap connections and risk hitting same-ID panes on another server;
+ * - Record the spawn routing (agent kind / Profile id) for real resumes without agentType;
+ * - Support same-workflow or same-parent-turn resume lookup (stable agentId or dual paneId keys);
+ * - Distinguish "succeeded, keepalive pending settle" from "failed, keep the scene" (failure panes never join auto-cleanup).
  */
 
 import { HelmError } from '@helm/protocol'
@@ -15,43 +15,43 @@ import { targetNodeId, type HerdrTarget } from './contracts.js'
 
 export type PaneOutcome = 'running' | 'keepalive' | 'failed' | 'settled'
 
-/** spawn 路由快照（resume 缺 agentType 时沿用；kind 与 Profile 定位均非机密）。 */
+/** Spawn routing snapshot (reused when resume has no agentType; both kind and Profile lookup are non-secret). */
 export interface PaneRouting {
   kind: string
-  /** 命中的 Profile ID（Profile 入口时存在；前缀直调为 undefined）。 */
+  /** The matched Profile ID (present for Profile entry; undefined for direct-prefix calls). */
   profileId?: string
 }
 
 export interface ManagedPane {
-  /** 冻结连接目标（启用周期内不变；远端含 nodeId，本机为 session/socketPath/{}）。 */
+  /** Frozen connection target (constant within an enable cycle; remote carries nodeId, local carries session/socketPath/{}). */
   target: HerdrTarget
   paneId: string
   tabId: string
-  /** worktree 模式下的 workspace 与工作树（普通 tab 模式为 undefined）。 */
+  /** Workspace and worktree in worktree mode (undefined in plain tab mode). */
   workspaceId?: string
   worktree?: { path: string; branch?: string }
-  /** 实际生效工作目录（worktree 模式为 worktree.path；resume 缺省沿用）。 */
+  /** The actually effective working directory (worktree.path in worktree mode; the default reused by resume). */
   effectiveCwd: string
   agentName: string
-  /** spawn 路由快照（resume 沿用 kind / Profile）。 */
+  /** Spawn routing snapshot (resume reuses kind / Profile). */
   routing: PaneRouting
-  /** 归属：派生它的父会话。 */
+  /** Ownership: the parent conversation that spawned it. */
   parentConversationId: number
-  /** agent_spawn 的稳定 agentId（workflow resume 键）。 */
+  /** agent_spawn's stable agentId (the workflow resume key). */
   agentId?: string
-  /** 派生它的 workflow run；单回合 subagent 为 undefined。 */
+  /** The workflow run that spawned it; undefined for single-turn subagents. */
   workflowRunId?: string
-  /** 当前生命周期形态。 */
+  /** Current lifecycle form. */
   outcome: PaneOutcome
-  /** 交接文件名（成功清理后清空）。 */
+  /** Handoff file name (cleared after successful cleanup). */
   outputFileName?: string
   createdAt: number
   settledAt?: number
-  /** 失败时的脱敏诊断摘要（保留现场说明）。 */
+  /** Redacted diagnostic summary on failure (the keep-the-scene explanation). */
   failureNote?: string
 }
 
-/** 持久化镜像形状（ctx.doc 'managed'；仅非机密字段）。 */
+/** Persistence mirror shape (ctx.doc 'managed'; non-secret fields only). */
 export interface ManagedDoc {
   version: 1
   panes: Array<{
@@ -79,16 +79,16 @@ export function targetOf(pane: { target: HerdrTarget }): HerdrTarget {
   return pane.target
 }
 
-/** 目标节点标识（undefined = 本机）；所有归属匹配/查询统一经此取值。 */
+/** Target node identifier (undefined = local); all ownership matching/queries go through this. */
 export function nodeIdOf(pane: { target?: HerdrTarget }): string | undefined {
   return targetNodeId(pane.target)
 }
 
 /**
- * 窗格登记表（进程内权威状态 + 持久镜像写入端口）。
+ * Pane registry (in-process authoritative state + persistent mirror write port).
  */
 export class PaneRegistry {
-  /** 结算记录有界回收上限：settled 保留最近 N 条（tab 已关，仅对账/审计值）；failed 保留更久（现场排查记录）。 */
+  /** Bounded reclaim cap for settled records: keep the most recent N settled (tab already closed; reconciliation/audit value only); failed kept longer (scene-investigation records). */
   static readonly MAX_RETAINED_SETTLED = 50
   static readonly MAX_RETAINED_FAILED = 20
   private readonly panes = new Map<string, ManagedPane>()
@@ -99,7 +99,7 @@ export class PaneRegistry {
     if (restored) {
       for (const pane of restored.panes) {
         if (!pane.target || !pane.routing || typeof pane.routing.kind !== 'string' || pane.routing.kind === '') {
-          throw new HelmError('herdr_managed_invalid', 'Herdr 受管记录缺少 target/routing', 500)
+          throw new HelmError('herdr_managed_invalid', 'Herdr managed record is missing target/routing', 500)
         }
         this.panes.set(scopeKey(targetNodeId(pane.target), pane.paneId), {
           target: pane.target,
@@ -132,17 +132,17 @@ export class PaneRegistry {
     return this.panes.get(scopeKey(nodeId, paneId))
   }
 
-  /** 按稳定 agentId 或 paneId 定位 resume 候选（跨节点可能撞 paneId，由调用方裁决歧义）。 */
+  /** Locate resume candidates by stable agentId or paneId (paneId may collide across nodes; the caller adjudicates ambiguity). */
   findByResumeRef(ref: string): ManagedPane[] {
     return [...this.panes.values()].filter((p) => p.agentId === ref || p.paneId === ref)
   }
 
-  /** 按 workflow run 定位全部 pane。 */
+  /** Locate all panes by workflow run. */
   findByWorkflow(workflowRunId: string): ManagedPane[] {
     return [...this.panes.values()].filter((p) => p.workflowRunId === workflowRunId)
   }
 
-  /** 按父回合定位全部 pane。 */
+  /** Locate all panes by parent turn. */
   findByParent(parentConversationId: number): ManagedPane[] {
     return [...this.panes.values()].filter((p) => p.parentConversationId === parentConversationId)
   }
@@ -165,10 +165,10 @@ export class PaneRegistry {
   }
 
   /**
-   * 结算记录有界回收（防无界增长：每次 spawn 永久追加会使内存与持久 doc
-   * 全量重写、对账/stop 线性变慢）：按 settledAt（缺省 createdAt）保留最近
-   * N 条 settled 与 M 条 failed；running/keepalive 绝不回收。failed 保留更
-   * 久——failureNote 是现场排查记录（回收记录不关 tab，仅弃置登记）。
+   * Bounded reclaim of settled records (prevents unbounded growth: appending forever
+   * per spawn would make memory and the persistent doc fully rewritten, slowing reconciliation/stop linearly): keep the most recent
+   * N settled and M failed by settledAt (createdAt fallback); running/keepalive are never reclaimed. failed is kept
+   * longer -- failureNote is a scene-investigation record (reclaiming a record does not close its tab; it only drops the registration).
    */
   prune(options: { maxSettled?: number; maxFailed?: number } = {}): number {
     const maxSettled = options.maxSettled ?? PaneRegistry.MAX_RETAINED_SETTLED
@@ -189,8 +189,8 @@ export class PaneRegistry {
   }
 
   /**
-   * 仅内存标记 settled（不刷持久镜像）：服务 stop 路径专用——停用中 doc 句柄
-   * 已失效（plugin_context_expired），持久状态由下个启用周期对账重建。
+   * Memory-only settled marking (no persistent mirror flush): service stop path only -- during disable the doc handle
+   * is already invalid (plugin_context_expired); persistent state is rebuilt by next enable cycle's reconciliation.
    */
   markSettledVolatile(nodeId: string | undefined, paneId: string): void {
     const pane = this.panes.get(scopeKey(nodeId, paneId))
@@ -198,7 +198,7 @@ export class PaneRegistry {
     this.panes.set(scopeKey(nodeId, paneId), { ...pane, outcome: 'settled', settledAt: Date.now() })
   }
 
-  /** liveTasks 标签：仍运行 + 成功保活待结算（失败/已结算不计）。 */
+  /** liveTasks label: still running + succeeded keepalive pending settle (failure/settled don't count). */
   liveTaskLabels(): string[] {
     const labels: string[] = []
     for (const pane of this.panes.values()) {
@@ -208,7 +208,7 @@ export class PaneRegistry {
     return labels
   }
 
-  /** 非机密对账视图（重启扫描用）。 */
+  /** Non-secret reconciliation view (for restart scans). */
   snapshot(): ManagedDoc {
     return {
       version: 1,
@@ -241,12 +241,12 @@ export function scopeKey(nodeId: string | undefined, paneId: string): string {
   return `${nodeId ?? 'local'}:${paneId}`
 }
 
-/** executor 内存表主键：与 target 完整坐标绑定的 pane 唯一键（跨节点不撞号）。 */
+/** executor in-memory table primary key: the pane's unique key bound to the target's full coordinates (no cross-node collisions). */
 export function paneStateKey(pane: { target: HerdrTarget; paneId: string }): string {
   return JSON.stringify([pane.target, pane.paneId])
 }
 
-/** closePane 单飞键（node 坐标折叠 'local'；与 steer 门禁共用同一坐标）。 */
+/** closePane single-flight key (node coordinate folds 'local'; shares the same coordinate with the steer gate). */
 export function paneCloseKey(pane: { target?: HerdrTarget; paneId: string }): string {
   return scopeKey(nodeIdOf(pane), pane.paneId)
 }

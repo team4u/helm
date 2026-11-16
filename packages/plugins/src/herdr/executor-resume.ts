@@ -1,16 +1,16 @@
 /**
- * Herdr 执行器子模块：resume 权威确认与路由恢复。
+ * Herdr executor submodule: resume authoritative confirmation and routing recovery.
  *
- * 从 executor.ts 拆出（行为与拆分前逐行等价）；依赖经 ResumePort 注入
- * （executor 持有 registry / 权威 agent.get / 附件门禁 / 环境基线与任务主循环）。
+ * Split out of executor.ts (behavior line-for-line equivalent to before the split); dependencies injected
+ * via ResumePort (the executor holds the registry / authoritative agent.get / attachment gate / env baseline and the task main loop).
  *
- * 超时安全边界（TimeoutError 中止，区别于普通 AbortError 取消）：
- * - 无安全 stop/CAS 手段停止底层 CLI——超时只保存诊断并保留 pane（标 failed，
- *   不关窗、不发键），绝不把保留 pane 包装成可无条件续接；
- * - 后续 resume 在任何 prompt 发送前经 assertResumeAgentConfirmed 权威确认：
- *   仅 idle/done 可续接；working/blocked/unknown/无法确认一律显式拒绝
- *   （不新建、不按键中止）；启动期超时（agent.start 完成与否不确定）同样
- *   先安全确认，绝不盲目重发 agent.start。
+ * Timeout safety boundary (TimeoutError aborts, distinct from plain AbortError cancellation):
+ * - There is no safe stop/CAS means to stop the underlying CLI -- on timeout we only save diagnostics and keep the pane (mark failed,
+ *   no window close, no keystrokes), never dressing a kept pane up as unconditionally resumable;
+ * - a later resume passes assertResumeAgentConfirmed for authoritative confirmation before any prompt is sent:
+ *   only idle/done may resume; working/blocked/unknown/unconfirmable are explicitly rejected
+ *   (no new pane, no keystroke abort); a startup-phase timeout (agent.start completion uncertain) likewise
+ *   confirms safely first, never blindly re-sends agent.start.
  */
 
 import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helm/protocol'
@@ -26,26 +26,26 @@ import {
   type SpawnRouting,
 } from './spawn-rules.js'
 
-/** ResumeCoordinator 对执行器（executor）的最小依赖面。 */
+/** The minimal dependency surface of ResumeCoordinator on the executor. */
 export interface ResumePort {
   registry: PaneRegistry
-  /** Profile 运行时表（resolveSpawnRouting 双入口解析用）。 */
+  /** Profile runtime table (for resolveSpawnRouting's dual entries). */
   profiles: HerdrPluginDependencies['profiles']
   redact(text: string): string
-  /** 权威 agent.get（seq 唯一可信来源；executor 持有）。 */
+  /** Authoritative agent.get (the single trusted source of seq; held by the executor). */
   agentGet(target: HerdrTarget, paneId: string, signal?: AbortSignal): Promise<HerdrAgentInfo>
-  /** 附件诚实性门禁（任何续接副作用之前；远端无可达 HELM_HUB_URL 显式拒绝）。 */
+  /** Attachment honesty gate (before any resume side effect; explicit rejection when remote has no reachable HELM_HUB_URL). */
   assertAttachmentsReachable(request: AgentSpawnRequest, target: HerdrTarget, routing: SpawnRouting): void
-  /** 编排层执行信息（controls.steer 委托引用与 worktree 租约登记）。 */
+  /** Orchestration-layer execution info (controls.steer delegation reference and worktree lease registration). */
   executionInfoOf(pane: ManagedPane): AgentExecutionInfo
-  /** 窗格环境基线登记（resume 缺失时按当前路由重建；不含 stash 机密）。 */
+  /** Pane env baseline registry (rebuilt per current routing when missing at resume; no stash secrets). */
   hasPaneEnv(key: string): boolean
   setPaneEnv(key: string, env: Record<string, string>): void
-  /** 窗格环境基线重建（buildSpawnEnv 受管 HELM_* + Profile 合并；不含 stash 机密）。 */
+  /** Pane env baseline rebuild (buildSpawnEnv managed HELM_* + Profile merge; no stash secrets). */
   buildPaneBaselineEnv(parentConversationId: number, cwd: string, routing: SpawnRouting, target: HerdrTarget): Record<string, string>
-  /** spawn 前解析附件元数据（展示字段）。 */
+  /** Resolve attachment metadata before spawn (display fields). */
   preloadAttachmentMeta(request: AgentSpawnRequest): Promise<void>
-  /** 任务主循环（投递-审批-交接；executor 持有）。 */
+  /** Task main loop (deliver-approve-handoff; held by the executor). */
   runManagedTask(request: AgentSpawnRequest, pane: ManagedPane): Promise<unknown>
 }
 
@@ -53,23 +53,23 @@ export class ResumeCoordinator {
   constructor(private readonly port: ResumePort) {}
 
   /**
-   * 真实 resume 双入口（先识别自有记录，不依赖 request.agentType）：
-   * - standalone subagent：resume = onResolved.executionId（paneId），通常无
+   * Real resume dual entries (identify via our own records first, independent of request.agentType):
+   * - standalone subagent: resume = onResolved.executionId (paneId), usually no
    *   request.agentId；
-   * - workflow resumeAgent：resume = 本 run 记录的 agentId，无 agentType。
-   * 校验：只准同 workflow（含 undefined 轨道一致）及同父会话；拒绝 busy/
-   * settled/未知/歧义；显式 kind/nodeId/cwd 不一致显式拒绝（不静默忽略）；
-   * 任何 prompt 发送前经 assertResumeAgentConfirmed 权威确认底层 Agent
-   * （仅 idle/done 可续接；超时保留 pane 的 working/blocked 与启动期未定
-   * 状态一律显式拒绝，不新建、不按键中止）。
-   * 返回 undefined 表示该 ref 非本插件记录（交还内核原生 resume）。
+   * - workflow resumeAgent: resume = the agentId recorded for this run, no agentType.
+   * Validation: only the same workflow (undefined tracks must agree too) and the same parent conversation; busy/
+   * settled/unknown/ambiguous are rejected; explicit kind/nodeId/cwd mismatches are explicitly rejected (never silently ignored);
+   * before any prompt is sent, assertResumeAgentConfirmed authoritatively confirms the underlying Agent
+   * (only idle/done may resume; a timeout-kept pane's working/blocked and startup-undetermined
+   *   states are always explicitly rejected -- no new pane, no keystroke abort).
+   * Returning undefined means the ref is not recorded by this plugin (hand back to the kernel's native resume).
    */
   async resumeInto(request: AgentSpawnRequest, candidates: ManagedPane[]): Promise<unknown> {
     const resumeRef = request.resume!
     if (candidates.length > 1) {
       throw new HelmError(
         'resume_ambiguous',
-        `resume ref '${resumeRef}' 命中 ${candidates.length} 个窗格（跨机器 paneId 撞号），请用稳定 agentId 消歧`,
+        `resume ref '${resumeRef}' matched ${candidates.length} panes (paneId collision across machines); disambiguate with a stable agentId`,
         409,
         { resumeRef, panes: candidates.map((p) => `${nodeIdOf(p) ?? 'local'}:${p.paneId}`) },
       )
@@ -78,18 +78,18 @@ export class ResumeCoordinator {
     if (pane.parentConversationId !== request.parentConversationId) {
       throw new HelmError(
         'cross_parent_resume_rejected',
-        `resume ref '${resumeRef}' 属于父会话 ${pane.parentConversationId}，当前父会话 ${request.parentConversationId} 无权续接`,
+        `resume ref '${resumeRef}' belongs to parent conversation ${pane.parentConversationId}; the current parent conversation ${request.parentConversationId} is not allowed to resume it`,
         409,
         { resumeRef, ownerParent: pane.parentConversationId, requesterParent: request.parentConversationId },
       )
     }
-    // workflow 轨道一致性：两边必须同为同一 workflow（或同为 undefined）。
+    // Workflow track consistency: both sides must be the same workflow (or both undefined).
     const paneWf = pane.workflowRunId
     const reqWf = parseWorkflowSpawnMeta(request.meta).runId
     if (paneWf !== reqWf) {
       throw new HelmError(
         'resume_workflow_mismatch',
-        `resume ref '${resumeRef}' 属于 workflow ${String(paneWf)}，当前调用轨道 ${String(reqWf)}，拒绝跨轨道续接`,
+        `resume ref '${resumeRef}' belongs to workflow ${String(paneWf)}; the calling track is ${String(reqWf)}; cross-track resume rejected`,
         409,
         { resumeRef, paneWorkflowRunId: paneWf, requestWorkflowRunId: reqWf },
       )
@@ -97,7 +97,7 @@ export class ResumeCoordinator {
     if (pane.outcome === 'running') {
       throw new HelmError(
         'pane_busy',
-        `pane ${pane.paneId} 正在被另一个执行占用（outcome=running），拒绝并发 resume`,
+        `pane ${pane.paneId} is occupied by another execution (outcome=running); concurrent resume rejected`,
         409,
         { paneId: pane.paneId },
       )
@@ -105,34 +105,34 @@ export class ResumeCoordinator {
     if (pane.outcome === 'settled') {
       throw new HelmError(
         'pane_settled',
-        `pane ${pane.paneId} 已结算关闭（outcome=settled），无 PTY 可续接`,
+        `pane ${pane.paneId} is already settled and closed (outcome=settled); no PTY to resume`,
         409,
         { paneId: pane.paneId },
       )
     }
-    // 路由：缺 agentType 沿用登记路由；显式给出且 kind 不一致显式拒绝。
+    // Routing: without agentType, keep the registered routing; an explicit one with a mismatched kind is explicitly rejected.
     assertNoUnsupportedOverrides(request.model, request.effort)
     const resumeRouting = await this.resolveResumeRouting(request, pane)
-    // resume 附件门禁：与新建同语义（远端窗格无可达 HELM_HUB_URL 拒绝）。
+    // resume attachment gate: same semantics as new spawns (remote panes without a reachable HELM_HUB_URL are rejected).
     this.port.assertAttachmentsReachable(request, targetOf(pane), resumeRouting)
     if (request.cwd !== undefined && request.cwd !== pane.effectiveCwd) {
       throw new HelmError(
         'resume_cwd_conflict',
-        `resume 显式 cwd '${request.cwd}' 与窗格实际工作目录 '${pane.effectiveCwd}' 不一致；续接必须保留原 worktree cwd`,
+        `resume explicit cwd '${request.cwd}' does not match the pane's actual working directory '${pane.effectiveCwd}'; a resume must keep the original worktree cwd`,
         409,
         { resumeRef, requestCwd: request.cwd, effectiveCwd: pane.effectiveCwd },
       )
     }
-    // 权威续接门禁：任何 prompt 发送前以 agent.get 确认底层 Agent 可安全续接
-    // （TimeoutError 保留 pane 的底层 CLI 可能仍 working/blocked；启动期超时
-    // 的 agent.start 完成与否未定——都先安全确认，绝不盲目投递）。
+    // Authoritative resume gate: before any prompt is sent, agent.get confirms the underlying Agent is safe to resume
+    // (a TimeoutError-kept pane's underlying CLI may still be working/blocked; a startup-phase timeout leaves
+    // agent.start completion undetermined -- both confirm safely first, never deliver blindly).
     await this.assertResumeAgentConfirmed(request, pane)
 
     const unique = `${Date.now()}-resume-${HashShort.of(request.prompt.slice(0, 160))}-${request.parentConversationId}-${Math.random().toString(36).slice(2, 6)}`
     const safeId = `r${HashShort.of(unique)}`
     const ext = request.schema !== undefined ? 'json' : 'md'
     if (this.port.registry.get(nodeIdOf(pane), pane.paneId)?.outcome === 'running') {
-      throw new HelmError('pane_busy', `pane ${pane.paneId} 已由另一续接占用`, 409)
+      throw new HelmError('pane_busy', `pane ${pane.paneId} is already occupied by another resume`, 409)
     }
     const spawnRunId = parseWorkflowSpawnMeta(request.meta).runId
     const updated = this.port.registry.update(nodeIdOf(pane), pane.paneId, {
@@ -142,10 +142,10 @@ export class ResumeCoordinator {
       ...(spawnRunId !== undefined ? { workflowRunId: spawnRunId } : {}),
     })!
     request.onResolved?.(this.port.executionInfoOf(updated))
-    // request.cwd 缺省代表沿用窗格实际 cwd（不重开窗、不重建 env tab）。
-    // 续接不重跑 agent.start（窗格已有 agent）；直接进入投递-审批-交接循环。
-    // env 缺失（失败窗格清理后）：按当前路由与窗格实际 cwd 重建基线（不含机密；
-    // resume 的 Gate 按 resume 请求自身 secretNames 重新授权，不沿用建窗时授予）。
+    // A missing request.cwd means keeping the pane's actual cwd (no window reopen, no env tab rebuild).
+    // Resume does not re-run agent.start (the pane already has an agent); go straight into the deliver-approve-handoff loop.
+    // Missing env (after a failure pane cleanup): rebuild the baseline from current routing and the pane's actual cwd (no secrets;
+    // the resume's Gate re-authorizes per the resume request's own secretNames, not the ones granted at pane creation).
     if (!this.port.hasPaneEnv(paneStateKey(updated))) {
       this.port.setPaneEnv(
         paneStateKey(updated),
@@ -157,15 +157,15 @@ export class ResumeCoordinator {
   }
 
   /**
-   * resume 权威就绪门禁（在任何 prompt 发送前执行；安全边界）：
-   * - TimeoutError 超时保留的 pane 底层 CLI 可能仍 working/blocked——没有
-   *   安全 stop/CAS 手段，不能把保留 pane 包装成可无条件续接；
-   * - 启动期超时（agent.start 完成与否不确定）同样以此门禁显式拒绝或安全
-   *   确认：身份与状态均权威确认才放行，绝不盲目重发 agent.start；
-   * - 放行条件：身份（pane/tab/name）与受管登记精确一致且状态 idle/done；
-   *   working/blocked/unknown/launch_pending、无法权威确认（agent.get 失败）
-   *   或身份不一致一律显式拒绝——不新建 Agent、不代发按键中止，交人类在
-   *   Herdr 终端确认后再续接。
+   * resume authoritative readiness gate (runs before any prompt is sent; safety boundary):
+   * - A TimeoutError-kept pane's underlying CLI may still be working/blocked -- there is no
+   *   safe stop/CAS means, so a kept pane must not be dressed up as unconditionally resumable;
+   * - A startup-phase timeout (agent.start completion uncertain) also goes through this gate to explicitly reject
+   *   or safely confirm: pass only when both identity and state are authoritatively confirmed; never blindly re-send agent.start;
+   * - Pass condition: identity (pane/tab/name) exactly matches the managed registration and the state is idle/done;
+   *   working/blocked/unknown/launch_pending, failure to confirm authoritatively (agent.get fails)
+   *   or identity mismatch are all explicitly rejected -- no new Agent, no keystroke abort on anyone's behalf;
+   *   let a human confirm in the Herdr terminal before resuming.
    */
   private async assertResumeAgentConfirmed(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
     const resumeRef = request.resume!
@@ -176,7 +176,7 @@ export class ResumeCoordinator {
       if (request.signal?.aborted) throw error
       throw new HelmError(
         'resume_agent_unconfirmed',
-        `pane ${pane.paneId} 无法权威确认底层 Agent 状态（${error instanceof Error ? this.port.redact(error.message) : String(error)}）；常见于启动期超时后 agent.start 完成与否不确定，或窗格已无受管 Agent。拒绝盲目续接：不新建 Agent、不重发 agent.start、不代发按键；请先在 Herdr 终端人工确认该窗格后再 resume`,
+        `pane ${pane.paneId}: cannot authoritatively confirm the underlying Agent state (${error instanceof Error ? this.port.redact(error.message) : String(error)}); typically after a startup-phase timeout leaves agent.start completion uncertain, or the pane no longer has a managed Agent. Refusing blind resume: no new Agent, no agent.start re-send, no keystrokes on your behalf; confirm this pane manually in the Herdr terminal before resuming`,
         409,
         { resumeRef, paneId: pane.paneId, cause: (error as { code?: string }).code ?? 'agent_get_failed' },
       )
@@ -184,7 +184,7 @@ export class ResumeCoordinator {
     if (authority.paneId !== pane.paneId || authority.tabId !== pane.tabId || authority.name !== pane.agentName) {
       throw new HelmError(
         'herdr_ownership_lost',
-        `pane ${pane.paneId} 权威身份与受管登记不一致（name=${String(authority.name)} tab=${authority.tabId}），无法确认受管 Agent 仍在该窗格（可能从未启动成功或已被替换），拒绝续接`,
+        `pane ${pane.paneId}'s authoritative identity does not match the managed registration (name=${String(authority.name)} tab=${authority.tabId}); cannot confirm the managed Agent is still in this pane (it may never have started or was replaced); resume rejected`,
         409,
         { resumeRef, paneId: pane.paneId, authorityName: authority.name, authorityTabId: authority.tabId },
       )
@@ -192,7 +192,7 @@ export class ResumeCoordinator {
     if (authority.launchPending === true) {
       throw new HelmError(
         'resume_agent_busy',
-        `pane ${pane.paneId} 仍在启动（launch_pending），底层 CLI 状态未定，拒绝续接`,
+        `pane ${pane.paneId} is still starting (launch_pending); the underlying CLI state is undetermined; resume rejected`,
         409,
         { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus },
       )
@@ -200,7 +200,7 @@ export class ResumeCoordinator {
     if (authority.agentStatus === 'working') {
       throw new HelmError(
         'resume_agent_busy',
-        `pane ${pane.paneId} 底层 CLI 仍在执行（working；常见于超时保留的 pane），拒绝续接：不新建、不按键中止；请等其在 Herdr 终端完结（idle/done）后再 resume`,
+        `pane ${pane.paneId}'s underlying CLI is still executing (working; typical for timeout-kept panes); resume rejected: no new pane, no keystroke abort; wait for it to finish (idle/done) in the Herdr terminal before resuming`,
         409,
         { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus },
       )
@@ -208,7 +208,7 @@ export class ResumeCoordinator {
     if (authority.agentStatus === 'blocked') {
       throw new HelmError(
         'resume_agent_blocked',
-        `pane ${pane.paneId} 底层 CLI 正 blocked 等待审批按键，续接绝不代人类发键；请在 Herdr 终端直接处理该阻塞后再 resume`,
+        `pane ${pane.paneId}'s underlying CLI is blocked awaiting approval keystrokes; a resume never sends keys on a human's behalf; resolve the block directly in the Herdr terminal before resuming`,
         409,
         { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus, stateChangeSeq: authority.stateChangeSeq },
       )
@@ -216,7 +216,7 @@ export class ResumeCoordinator {
     if (authority.agentStatus !== 'idle' && authority.agentStatus !== 'done') {
       throw new HelmError(
         'resume_agent_unconfirmed',
-        `pane ${pane.paneId} 权威状态为 ${authority.agentStatus}，无法确认可安全续接（仅 idle/done 可续接）`,
+        `pane ${pane.paneId}'s authoritative state is ${authority.agentStatus}; a safe resume cannot be confirmed (only idle/done may resume)`,
         409,
         { resumeRef, paneId: pane.paneId, agentStatus: authority.agentStatus },
       )
@@ -224,10 +224,10 @@ export class ResumeCoordinator {
   }
 
   /**
-   * resume 路由解析：显式 agentType 校验 kind 一致；缺省沿用 pane.routing。
-   * 节点语义：resume 沿用旧窗格登记的节点（缺省与显式一致仅校验不重算——
-   * 显式 nodeId 与旧节点不同即 resume_node_conflict 拒绝，绝不静默把续接
-   * 投到另一台机器；也不按当前父会话节点重新解析）。
+   * resume routing resolution: an explicit agentType validates kind consistency; the default keeps pane.routing.
+   * Node semantics: resume keeps the old pane's registered node (the default and explicit values merely validate, no recompute --
+   * an explicit nodeId different from the old node is rejected with resume_node_conflict, never silently
+   * delivering the continuation to another machine; nor re-resolving against the current parent conversation's node).
    */
   private async resolveResumeRouting(request: AgentSpawnRequest, pane: ManagedPane): Promise<SpawnRouting> {
     if (request.agentType === undefined || request.agentType === '') {
@@ -244,7 +244,7 @@ export class ResumeCoordinator {
     if (routing === undefined) {
       throw new HelmError(
         'resume_agent_type_rejected',
-        `resume 显式 agentType '${request.agentType}' 非 Herdr 运行时，与既有 herdr 窗格不匹配`,
+        `resume explicit agentType '${request.agentType}' is not a Herdr runtime; mismatched with the existing herdr pane`,
         409,
         { resume: request.resume, agentType: request.agentType },
       )
@@ -252,7 +252,7 @@ export class ResumeCoordinator {
     if (routing.kind !== pane.routing.kind || routing.profileId !== pane.routing.profileId) {
       throw new HelmError(
         'resume_kind_conflict',
-        `resume 显式 agentType kind '${routing.kind}' 与窗格 agent kind '${pane.routing.kind}' 不一致，拒绝静默改型`,
+        `resume explicit agentType kind '${routing.kind}' does not match the pane's agent kind '${pane.routing.kind}'; silent re-typing rejected`,
         409,
         { resume: request.resume, requestKind: routing.kind, paneKind: pane.routing.kind },
       )
@@ -262,12 +262,12 @@ export class ResumeCoordinator {
     if (requestNodeId !== undefined && requestNodeId !== paneNodeId) {
       throw new HelmError(
         'resume_node_conflict',
-        `resume 显式节点 '${requestNodeId}' 与窗格目标节点 '${paneNodeId}' 不一致，拒绝跨节点续接`,
+        `resume explicit node '${requestNodeId}' does not match the pane's target node '${paneNodeId}'; cross-node resume rejected`,
         409,
         { resume: request.resume, requestNodeId, paneNodeId },
       )
     }
-    // 沿用窗格冻结目标（显式节点仅作一致性校验，不热换连接）。
+    // Keep the pane's frozen target (the explicit node is only consistency-checked; no hot connection swap).
     return { ...routing, nodeId: paneNodeId }
   }
 }

@@ -1,16 +1,16 @@
 /**
- * Herdr 执行器子模块：运行中插话（steer）投递与唯一交接文件轮转。
+ * Herdr executor submodule: in-flight steer delivery and single-handoff-file rotation.
  *
- * 从 executor.ts 拆出（行为与拆分前逐行等价）；依赖经 SteerDispatcherPort
- * 注入（executor 持有 registry / transport / 权威 agent.get / 阶段与任务登记）：
- * - steerPane：受管窗格运行中插话（按 pane 互斥；单次投递不重试）；
- * - settleThroughSteers：任务结算前的在途 steer 排空、权威复查与最新交接
- *   文件核验（成功插话即把唯一交接文件重定向到全新名字，旧结果天然防冒充）；
- * - 状态登记（在途 steer / 不确定投递失败 / 作废旧文件名单）归本模块自管，
- * executor 在任务结算、closePane 与 releasePaneState 时经 forget() 作废。
+ * Split out of executor.ts (behavior line-for-line equivalent to before the split); dependencies injected via
+ * SteerDispatcherPort (the executor holds the registry / transport / authoritative agent.get / phase and task registries):
+ * - steerPane: in-flight steer for a managed pane (mutual exclusion per pane; single delivery, no retry);
+ * - settleThroughSteers: in-flight steer draining before task settlement, authoritative recheck and latest
+ *   handoff file verification (a successful steer redirects the single handoff file to a brand-new name; old results are naturally spoof-proof);
+ * - state registries (in-flight steers / uncertain-delivery failures / voided old-file list) are self-managed
+ *   here; the executor voids them via forget() at task settlement, closePane and releasePaneState.
  *
- * 诚实语义：guardLevel='preflight'——预检不是提交点原子复核（不可伪称
- * CAS）；steered=true 仅代表单次投递成功。
+ * Honesty semantics: guardLevel='preflight' -- the precheck is not a commit-point atomic recheck (never
+ * claim CAS); steered=true only means the single delivery succeeded.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -21,51 +21,51 @@ import { parseAgentResult, type HerdrAgentInfo } from './rpc.js'
 import { buildOutputFileName } from './spawn-rules.js'
 import type { SteerPaneInput } from './executor.js'
 
-/** 受管任务生命周期阶段（与 executor 内部登记一致；仅 'task' 可插话）。 */
+/** Managed-task lifecycle phases (consistent with the executor's internal registry; only 'task' is steerable). */
 export type SteerPhase = 'startup' | 'task' | 'handoff' | 'gate'
 
-/** SteerDispatcher 对执行器（executor）的最小依赖面。 */
+/** The minimal dependency surface of SteerDispatcher on the executor. */
 export interface SteerDispatcherPort {
   registry: PaneRegistry
   transport: NonNullable<HerdrPluginDependencies['transport']>
   redact(text: string): string
   notify(title: string, body: string, level: 'info' | 'error'): void
-  /** 权威 agent.get（seq 唯一可信来源；executor 持有）。 */
+  /** Authoritative agent.get (the single trusted source of seq; held by the executor). */
   agentGet(target: HerdrTarget, paneId: string, signal?: AbortSignal): Promise<HerdrAgentInfo>
-  /** 结算等待 + blocked 审批桥循环（executor 持有）。 */
+  /** Settle waiting + blocked approval bridge loop (held by the executor). */
   waitUntilSettled(request: AgentSpawnRequest, pane: ManagedPane, initial: HerdrAgentInfo): Promise<void>
-  /** agent.start 启动超时（config.startupTimeoutMs；预算复用口径见各调用点）。 */
+  /** agent.start startup timeout (config.startupTimeoutMs; budget reuse per call site). */
   startupTimeoutMs(): number
-  /** 插话后等待后续回合起步的预算（测试可缩短；缺省复用 startupTimeoutMs()）。 */
+  /** Budget for waiting for the follow-up turn to start after a steer (shortened in tests; defaults to reusing startupTimeoutMs()). */
   steerWaitBudgetMs?: number
-  /** 在途受管任务请求（steer 门禁复核原 run signal）。 */
+  /** The in-flight managed task's request (steer gate rechecks the original run signal). */
   activeTaskOf(key: string): AgentSpawnRequest | undefined
-  /** 在途任务当前阶段（startup/task/handoff/gate；无任务 undefined）。 */
+  /** The in-flight task's current phase (startup/task/handoff/gate; undefined when no task). */
   phaseOf(key: string): SteerPhase | undefined
-  /** 更新在途任务阶段（结算核验终段切 handoff，此后插话被阶段门禁拒绝）。 */
+  /** Update the in-flight task's phase (the settle-verification final segment switches to handoff; steers are rejected by the phase gate afterwards). */
   setPhase(key: string, phase: SteerPhase): void
-  /** pane 是否正在关闭（closePane 单飞登记；关闭中拒绝插话）。 */
+  /** Whether the pane is currently closing (closePane single-flight registry; no steers while closing). */
   isClosingPane(pane: ManagedPane): boolean
 }
 
 export class SteerDispatcher {
-  /** steer 投递短超时：预检后单次投递应远小于此；超时如实报不确定，不重试。 */
+  /** Short timeout for steer delivery: a single delivery after precheck should be far shorter than this; on timeout report uncertainty honestly, no retry. */
   private static readonly STEER_PROMPT_TIMEOUT_MS = 5_000
 
-  /** 服务端 admission 确定零写入的拒绝码（其余超时/断线/坏响应一律按不确定投递处理）。 */
+  /** Server-admission rejection codes confirmed to have written nothing (all other timeouts/disconnects/bad responses are treated as uncertain delivery). */
   private static readonly STEER_ZERO_WRITE_CODES = new Set(['agent_not_ready', 'agent_blocked', 'agent_not_found'])
 
-  /** 在途 steer（按 pane 互斥；driveTask 结算前排空）。 */
+  /** In-flight steers (mutual exclusion per pane; drained before driveTask settles). */
   private readonly activeSteers = new Map<string, Promise<{ stateChangeSeq: number }>>()
   /**
-   * 不确定投递（超时/断线/坏响应）的插话失败记录（paneKey -> 脱敏原因）：
-   * 任务结算排空在途 steer 后据此显式失败并保留现场（绝不读旧结果或
-   * 自愈冒充），后续插话不得清除未确认的投递。服务端 admission
-   * 确定零写入拒绝（agent_not_ready/agent_blocked/agent_not_found）
-   * 不记本表。
+   * Steer failure records for uncertain deliveries (timeouts/disconnects/bad responses) (paneKey -> redacted reason):
+   * after draining in-flight steers, task settlement fails explicitly and keeps the scene based on these
+   * (never reads old results nor fakes via self-heal); later steers must not clear unconfirmed deliveries.
+   * Server-admission confirmations of zero writes (agent_not_ready/agent_blocked/agent_not_found)
+   * are not recorded here.
    */
   private readonly steerFailures = new Map<string, string>()
-  /** 已被插话作废的旧交接文件名（paneKey -> 名单；仅成功交接后统一清理）。 */
+  /** Old handoff file names voided by steers (paneKey -> list; cleaned up together only after a successful handoff). */
   private readonly steerRetiredFiles = new Map<string, string[]>()
 
   constructor(private readonly port: SteerDispatcherPort) {}
@@ -86,66 +86,66 @@ export class SteerDispatcher {
     return this.steerFailures.get(key)
   }
 
-  /** 任务结算/窗格关闭/外部释放时作废插话登记（在途 steer promise 自行退出）。 */
+  /** Void steer registries on task settle / pane close / external release (in-flight steer promises exit on their own). */
   forget(key: string): void {
     this.steerFailures.delete(key)
     this.steerRetiredFiles.delete(key)
   }
 
   /**
-   * 受管窗格运行中插话（按 pane 互斥；单次投递不重试）：
+   * In-flight steer for a managed pane (mutual exclusion per pane; single delivery, no retry):
    *
-   * 门禁（任何一步失败确定性拒绝，绝无静默降级）：
-   * 1. live 执行上下文：registry 现值 outcome=running 且阶段为 'task'
-   *    （startup/handoff/gate/keepalive/failed/settled 一律拒绝）；
-   * 2. run/父会话强匹配：workflowRunId 与 parentConversationId 必须与受管
-   *    记录精确相等（仅限 workflow run 管理下的窗格）；
-   * 3. 原 run signal 未取消（跨节点冻结 target：不重算 node/socket，不接受
-   *    同 pane 不同 node——由 plugin 动作层精确 (nodeId, paneId) 定位保证）；
-   * 4. agent.get 预检：name/tab/pane 身份精确相等、working 且非
-   *    launch_pending；blocked 交原 Ask 审批桥（此处拒绝）；预检已
-   *    idle/done/unknown 拒绝（绝不主动新建回合）；
-   * 5. 预检跨 await 后复核阶段/registry/run signal；
-   * 6. 投递：现有 agent.prompt {target: 受管 agentName, text}，无 wait、
-   *    无附加守卫字段、显式短超时，单次调用即终局，绝不重试。预检到
-   *    服务端接收之间刚转 idle 的提交交由真实 admission 裁定（允许接续
-   *    新回合）；服务端确定零写入拒绝（agent_not_ready/agent_blocked/
-   *    agent_not_found）不动原交接路径；超时/断线/坏响应
-   *    为不确定投递——按 pane 记失败，任务结算时显式失败保留现场，
-   *    绝不落回旧交接文件或自动重发。
+   * Gates (any step failing rejects deterministically, never silently degrades):
+   * 1. live execution context: the registry's current outcome=running and phase 'task'
+   *    (startup/handoff/gate/keepalive/failed/settled always reject);
+   * 2. strict run/parent-conversation match: workflowRunId and parentConversationId must exactly
+   *    equal the managed record (only for panes managed under a workflow run);
+   * 3. the original run signal is not cancelled (frozen cross-node target: no node/socket recompute, no
+   *    accepting the same pane on a different node -- guaranteed by the plugin action layer's exact (nodeId, paneId) targeting);
+   * 4. agent.get precheck: name/tab/pane identities match exactly, working and not
+   *    launch_pending; blocked goes to the original Ask approval bridge (rejected here); a precheck that is already
+   *    idle/done/unknown rejects (never proactively start a new turn);
+   * 5. after the precheck crosses an await, recheck phase/registry/run signal;
+   * 6. delivery: the existing agent.prompt {target: managed agentName, text}, no wait,
+   *    no extra guard fields, an explicit short timeout; a single call is final, never retried. A submission that
+   *    turned idle between precheck and server receipt is ruled by real admission (continuing into a new turn
+   *    is allowed); server-confirmed zero-write rejections (agent_not_ready/agent_blocked/
+   *    agent_not_found) leave the original handoff path untouched; timeouts/disconnects/bad responses
+   *    are uncertain deliveries -- recorded as a per-pane failure; task settlement fails explicitly and keeps
+   *    the scene, never falling back to the old handoff file or auto-resending.
    *
-   * 诚实语义：guardLevel='preflight'——预检不是提交点原子复核（不可伪称
-   * CAS）；steered=true 仅代表单次投递成功。每次成功插话把唯一交接文件
-   * 重定向到全新 wf-out-* 名（旧名作废）：任务结算只接受最新名字的交付，
-   * 旧结果/迟到写回天然无法冒充。
+   * Honesty semantics: guardLevel='preflight' -- the precheck is not a commit-point atomic recheck (never
+   * claim CAS); steered=true only means the single delivery succeeded. Every successful steer redirects
+   * the single handoff file to a brand-new wf-out-* name (the old name is voided): settlement accepts only the
+   * latest name's delivery; old results / late write-backs are naturally unable to spoof.
    */
   async steerPane(pane: ManagedPane, input: SteerPaneInput): Promise<{ stateChangeSeq: number }> {
     if (typeof input.text !== 'string' || input.text.trim() === '') {
-      throw new HelmError('validation_error', '插话指导内容不能为空白', 400)
+      throw new HelmError('validation_error', 'steer guidance text cannot be blank', 400)
     }
     const key = paneStateKey(pane)
     if (this.activeSteers.has(key)) {
       throw new HelmError(
         'herdr_steer_in_flight',
-        `pane ${pane.paneId} 已有在途插话，拒绝重入（按 pane 互斥）`,
+        `pane ${pane.paneId} already has an in-flight steer; re-entry rejected (mutual exclusion per pane)`,
         409,
         { paneId: pane.paneId },
       )
     }
     const steer = (async (): Promise<{ stateChangeSeq: number }> => {
-      // 1-2) live 上下文 + 阶段 + run/父会话强匹配（以 registry 现值为准）。
+      // 1-2) live context + phase + strict run/parent match (the registry's current values are authoritative).
       const current = this.assertSteerable(pane, input)
-      // 3) 原 run signal 未取消。
+      // 3) The original run signal is not cancelled.
       const origin = this.port.activeTaskOf(key)
       if (origin === undefined || origin.signal?.aborted) {
         throw new HelmError(
           'herdr_steer_task_ended',
-          `pane ${pane.paneId} 的原任务已结束或正在取消，拒绝插话`,
+          `pane ${pane.paneId}'s original task has ended or is being cancelled; steer rejected`,
           409,
           { paneId: pane.paneId },
         )
       }
-      // 4) 预检：权威 agent.get 核验身份与工作状态（preflight，非提交点 CAS）。
+      // 4) Precheck: authoritative agent.get verifies identity and working state (preflight, not a commit-point CAS).
       const authority = await this.port.agentGet(current.target, current.paneId, input.signal)
       if (
         authority.paneId !== current.paneId ||
@@ -154,7 +154,7 @@ export class SteerDispatcher {
       ) {
         throw new HelmError(
           'herdr_steer_identity_mismatch',
-          `pane ${current.paneId} 权威身份与受管记录不一致（name=${String(authority.name)} tab=${authority.tabId}），拒绝插话`,
+          `pane ${current.paneId}'s authoritative identity does not match the managed record (name=${String(authority.name)} tab=${authority.tabId}); steer rejected`,
           409,
           { paneId: current.paneId, authorityName: authority.name, authorityTabId: authority.tabId },
         )
@@ -162,7 +162,7 @@ export class SteerDispatcher {
       if (authority.launchPending === true) {
         throw new HelmError(
           'herdr_steer_not_ready',
-          `pane ${current.paneId} 仍在启动（launch_pending），拒绝插话`,
+          `pane ${current.paneId} is still starting (launch_pending); steer rejected`,
           409,
           { paneId: current.paneId },
         )
@@ -170,7 +170,7 @@ export class SteerDispatcher {
       if (authority.agentStatus === 'blocked') {
         throw new HelmError(
           'herdr_steer_agent_blocked',
-          `pane ${current.paneId} 当前 blocked（等待审批），插话交由原审批桥负责：请先在 AskDock 完成审批`,
+          `pane ${current.paneId} is currently blocked (awaiting approval); steering is the original approval bridge's job: complete the approval in the AskDock first`,
           409,
           { paneId: current.paneId, stateChangeSeq: authority.stateChangeSeq },
         )
@@ -178,23 +178,23 @@ export class SteerDispatcher {
       if (authority.agentStatus !== 'working') {
         throw new HelmError(
           'herdr_steer_not_working',
-          `pane ${current.paneId} 当前状态为 ${authority.agentStatus}，仅 working 可插话（绝不新建回合）`,
+          `pane ${current.paneId}'s current state is ${authority.agentStatus}; only working is steerable (never start a new turn)`,
           409,
           { paneId: current.paneId, agentStatus: authority.agentStatus },
         )
       }
-      // 5) 预检跨 await 复核：任务可能已结算/取消/进入新阶段。
+      // 5) Recheck after the precheck crosses an await: the task may have settled/cancelled/entered a new phase.
       this.assertSteerable(pane, input)
       const originAfter = this.port.activeTaskOf(key)
       if (originAfter === undefined || originAfter.signal?.aborted) {
         throw new HelmError(
           'herdr_steer_task_ended',
-          `pane ${pane.paneId} 插话期间原任务已结束或取消，投递中止（未发送任何输入）`,
+          `pane ${pane.paneId}'s original task ended or was cancelled during the steer; delivery aborted (no input sent)`,
           409,
           { paneId: pane.paneId },
         )
       }
-      // 6) 单次投递：全新唯一交接文件名 + 现有 agent.prompt（无 wait/无附加字段）。
+      // 6) Single delivery: a brand-new unique handoff file name + the existing agent.prompt (no wait/no extra fields).
       const next = this.nextSteerOutputFileName(current)
       const text = this.steerPromptText(current, input, next)
       try {
@@ -211,21 +211,21 @@ export class SteerDispatcher {
       } catch (error) {
         const code = (error as { code?: string }).code
         if (typeof code === 'string' && SteerDispatcher.STEER_ZERO_WRITE_CODES.has(code)) {
-          // 服务端 admission 确定零写入：不重定向交接文件、不记失败，
-          // 原任务按自身节奏继续（前一有效路径保持不变）。
+          // Server admission confirmed zero writes: do not redirect the handoff file, do not record failure;
+          // the original task continues at its own pace (the previous valid path stays unchanged).
           throw error
         }
-        // 超时/断线/坏响应：投递结果不确定（可能已写入）。按 pane 记失败，
-        // 任务结算时显式失败保留现场；绝不静默落回旧文件或自动重发。
+        // Timeout/disconnect/bad response: the delivery outcome is uncertain (it may have been written). Record a per-pane failure;
+        // task settlement fails explicitly and keeps the scene; never silently fall back to the old file or auto-resend.
         if (this.port.activeTaskOf(key) === origin) {
           this.steerFailures.set(key, error instanceof Error ? error.message : String(error))
         }
         throw error
       }
       if (this.port.activeTaskOf(key) !== origin || origin.signal?.aborted || this.port.isClosingPane(current)) {
-        throw new HelmError('herdr_steer_task_ended', `pane ${pane.paneId} 的输入已投递，但原任务已取消或关闭；请检查现场，不要重发`, 409)
+        throw new HelmError('herdr_steer_task_ended', `pane ${pane.paneId}'s input was delivered, but the original task was cancelled or closed; inspect the scene, do not resend`, 409)
       }
-      // 成功投递后重定向唯一交接文件；结算排空在途 steer 时必然可见。
+      // Redirect the single handoff file after successful delivery; visible when settlement drains in-flight steers.
       this.port.registry.update(nodeIdOf(current), current.paneId, { outputFileName: next })
       const retired = this.steerRetiredFiles.get(key) ?? []
       if (current.outputFileName !== undefined && current.outputFileName !== '') {
@@ -238,24 +238,24 @@ export class SteerDispatcher {
     return steer
   }
 
-  /** steer 门禁前置（registry 现值复核；返回现值供后续步骤共用）。 */
+  /** Steer gate prelude (registry current-value recheck; returns the current value for later steps). */
   private assertSteerable(pane: ManagedPane, input: SteerPaneInput): ManagedPane {
     const current = this.port.registry.get(nodeIdOf(pane), pane.paneId)
     if (current === undefined || current.outcome !== 'running') {
       throw new HelmError(
         'herdr_steer_not_running',
-        `pane ${pane.paneId} 不在受管运行中（outcome=${current?.outcome ?? 'unmanaged'}），拒绝插话`,
+        `pane ${pane.paneId} is not under managed running (outcome=${current?.outcome ?? 'unmanaged'}); steer rejected`,
         409,
         { paneId: pane.paneId, outcome: current?.outcome ?? 'unmanaged' },
       )
     }
-    // 关闭中拒绝：closePane 在入口同步登记 activeCloses，但 phase/outcome 要
-    // 到若干次 await 之后才变更——非 abort 关闭过程（workflow/turn settle、
-    // 对账回收）同样必须挡住 steer，不能只看 task+running 门禁。
+    // Reject while closing: closePane registers activeCloses synchronously at entry, but phase/outcome
+    // change only after several awaits -- non-abort closes (workflow/turn settle,
+    // reconciliation reclaim) must also block steers, not just the task+running gate.
     if (this.port.isClosingPane(pane)) {
       throw new HelmError(
         'herdr_steer_task_ended',
-        `pane ${pane.paneId} 正在关闭（结算/取消/回收中），拒绝插话`,
+        `pane ${pane.paneId} is closing (settle/cancel/reclaim in progress); steer rejected`,
         409,
         { paneId: pane.paneId },
       )
@@ -264,7 +264,7 @@ export class SteerDispatcher {
     if (phase !== 'task') {
       throw new HelmError(
         'herdr_steer_phase',
-        `pane ${pane.paneId} 当前处于 ${phase ?? '无在途任务'} 阶段，仅任务执行期（task）可插话`,
+        `pane ${pane.paneId} is currently in phase ${phase ?? 'no in-flight task'}; only the task execution phase (task) is steerable`,
         409,
         { paneId: pane.paneId, phase: phase ?? 'none' },
       )
@@ -272,7 +272,7 @@ export class SteerDispatcher {
     if (current.workflowRunId !== input.workflowRunId || current.parentConversationId !== input.parentConversationId) {
       throw new HelmError(
         'herdr_steer_context_mismatch',
-        `pane ${pane.paneId} 受管归属（workflow=${String(current.workflowRunId)} 父会话=${current.parentConversationId}）与插话目标（workflow=${input.workflowRunId} 父会话=${input.parentConversationId}）不一致，拒绝跨轨道插话`,
+        `pane ${pane.paneId}'s managed ownership (workflow=${String(current.workflowRunId)} parent conversation=${current.parentConversationId}) does not match the steer target (workflow=${input.workflowRunId} parent conversation=${input.parentConversationId}); cross-track steer rejected`,
         409,
         {
           paneId: pane.paneId,
@@ -286,7 +286,7 @@ export class SteerDispatcher {
     if (this.steerFailures.has(paneStateKey(pane))) {
       throw new HelmError(
         'herdr_steer_uncertain',
-        `pane ${pane.paneId} 的前次插话投递结果不确定，请先检查现场，不能继续插话掩盖该结果`,
+        `pane ${pane.paneId}'s previous steer delivery is uncertain; inspect the scene first -- do not keep steering to bury that result`,
         409,
         { paneId: pane.paneId },
       )
@@ -294,34 +294,34 @@ export class SteerDispatcher {
     return current
   }
 
-  /** 插话投递文本：来源前缀 + 脱敏指导 + 交接文件重定向（旧路径作废，仅最新指导有效）。 */
+  /** Steer delivery text: source prefix + redacted guidance + handoff file redirect (old path voided; only the latest guidance counts). */
   private steerPromptText(pane: ManagedPane, input: SteerPaneInput, nextFileName: string): string {
     const previous = pane.outputFileName
     if (previous === undefined || previous === '') {
       throw new HelmError(
         'herdr_context_unavailable',
-        `pane ${pane.paneId} 缺少交接文件名（任务阶段异常），拒绝插话`,
+        `pane ${pane.paneId} has no handoff file name (abnormal task phase); steer rejected`,
         409,
         { paneId: pane.paneId },
       )
     }
     return [
-      `父会话插话纠偏（后台运行 ${input.workflowRunId}）：`,
+      `Parent-conversation steer (background run ${input.workflowRunId}):`,
       this.port.redact(input.text),
       '',
-      '--- helm 交接契约更新（必须遵守）---',
-      `按本插话的最新指导完成剩余工作后，把最终结果写入新文件 ${pane.effectiveCwd}/.helm/${nextFileName}（内容要求与原交接契约一致，仍须通过原 Schema 与 Gate）。`,
-      `原交接文件 ${previous} 已作废：不要再写旧文件；helm 只接受新文件的交付，未写新文件视为任务失败。`,
+      '--- helm handoff contract update (must follow) ---',
+      `After finishing the remaining work per this steer's latest guidance, write the final result to the new file ${pane.effectiveCwd}/.helm/${nextFileName} (same content requirements as the original handoff contract; must still pass the original Schema and Gate).`,
+      `The original handoff file ${previous} is voided: do not write the old file again; helm accepts only the new file's delivery, and not writing it counts as task failure.`,
     ].join('\n')
   }
 
-  /** 本次插话的全新唯一交接文件名（与当前业务文件同扩展；复用同一白名单）。 */
+  /** The brand-new unique handoff file name for this steer (same extension as the current business file; reuses the same whitelist). */
   private nextSteerOutputFileName(pane: ManagedPane): string {
     const fileName = pane.outputFileName
     if (fileName === undefined || fileName === '') {
       throw new HelmError(
         'herdr_context_unavailable',
-        `pane ${pane.paneId} 缺少交接文件名（任务阶段异常），拒绝插话`,
+        `pane ${pane.paneId} has no handoff file name (abnormal task phase); steer rejected`,
         409,
         { paneId: pane.paneId },
       )
@@ -330,7 +330,7 @@ export class SteerDispatcher {
     return buildOutputFileName(`s${randomUUID()}`, ext)
   }
 
-  /** 成功交接后清理已被插话作废的旧结果文件（失败路径保留现场；清理失败显式通知不拖垮已验证结果）。 */
+  /** Clean up old result files voided by steers after a successful handoff (failure paths keep the scene; cleanup failure notifies explicitly without dragging down the verified result). */
   async clearRetiredOutputs(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
     const key = paneStateKey(pane)
     const retired = this.steerRetiredFiles.get(key)
@@ -341,8 +341,8 @@ export class SteerDispatcher {
       }
     } catch (error) {
       this.port.notify(
-        'Herdr 作废交接文件清理未竟',
-        `插话作废的旧结果文件删除失败（结果已验证，不影响本次交付）：${error instanceof Error ? this.port.redact(error.message) : String(error)}`,
+        'Herdr voided-handoff-file cleanup incomplete',
+        `Failed to delete the old result file voided by a steer (result already verified; does not affect this delivery): ${error instanceof Error ? this.port.redact(error.message) : String(error)}`,
         'error',
       )
     } finally {
@@ -351,22 +351,22 @@ export class SteerDispatcher {
   }
 
   /**
-   * 结算等待 + 在途 steer 排空 + 权威复查 + 最新交接文件核验：
-   * - 首个 idle/done 可能早于 steer 投递（文本+回车多步序列）被 agent.wait
-   *   观察到——不能直接进交接。排空在途 steer（等待真实 RPC 终局，非固定
-   *   延时）后以权威 agent.get 复查：working 说明插话已开启新回合（回到
-   *   结算等待），blocked 交审批桥；unknown 如实失败；
-   * - 不确定投递（超时/断线/坏响应）已按 pane 记失败：结算显式
-   *   herdr_steer_uncertain 失败并保留现场（绝不读旧结果，也不经自愈追问
-   *   冒充按最新指导的交付）；后续插话不能抹去该不确定结果；
-   * - 成功插话即把唯一交接文件重定向到全新名字（旧结果天然防冒充）：
-   *   idle/done 时新文件未出现则不得进交接——有界 agent.wait(until
-   *   working/blocked) 等后续回合起步后复查（不宣称 idle 可证明 CLI 已
-   *   消费队列）；预算耗尽仍无新文件交由 readAndValidateOutput 的一次自愈
-   *   按最新文件名兑底（追问后仍缺则显式失败保留现场）；
-   * - 文件核验跨 await 期间可能又有插话（重定向更新名字）或留下不确定
-   *   记录：必须重新核验；终核验与切换 handoff 阶段在同一同步段完成，
-   *   此后插话被阶段门禁拒绝。
+   * Settle waiting + in-flight steer draining + authoritative recheck + latest handoff file verification:
+   * - The first idle/done may be observed by agent.wait before the steer delivery lands (a multi-step
+   *   text+Enter sequence) -- do not go straight to handoff. After draining in-flight steers (waiting for
+   *   the real RPC final state, not a fixed delay), recheck with authoritative agent.get: working means
+   *   the steer started a new turn (back to settle waiting); blocked goes to the approval bridge; unknown fails honestly;
+   * - Uncertain deliveries (timeouts/disconnects/bad responses) already recorded per pane: settlement
+   *   fails explicitly with herdr_steer_uncertain and keeps the scene (never reads old results, nor fakes a
+   *   latest-guidance delivery via the self-heal follow-up); later steers cannot erase that uncertain result;
+   * - A successful steer redirects the single handoff file to a brand-new name (old results are naturally
+   *   spoof-proof): on idle/done the new file must exist before entering handoff -- bounded
+   *   agent.wait(until working/blocked) waits for the follow-up turn to start, then rechecks (idle alone
+   *   does not prove the CLI consumed the queue); if the budget is exhausted with no new file, the single
+   *   self-heal in readAndValidateOutput backstops on the latest file name (if still missing after the follow-up, fail explicitly and keep the scene);
+   * - During file verification's awaits another steer may land (redirecting to a newer name) or leave an
+   *   uncertain record: verification must restart; the final verification and the handoff phase switch happen
+   *   in the same synchronous segment, after which steers are rejected by the phase gate.
    */
   async settleThroughSteers(
     request: AgentSpawnRequest,
@@ -386,7 +386,7 @@ export class SteerDispatcher {
       if (uncertain !== undefined) {
         throw new HelmError(
           'herdr_steer_uncertain',
-          `pane ${pane.paneId} 的插话投递结果不确定（${this.port.redact(uncertain)}）：拒绝以旧交接结果或自愈追问冒充按最新指导的交付，任务显式失败并保留现场`,
+          `pane ${pane.paneId}'s steer delivery is uncertain (${this.port.redact(uncertain)}): refusing to pass off an old handoff result or a self-heal follow-up as a latest-guidance delivery; the task fails explicitly and keeps the scene`,
           502,
           { paneId: pane.paneId, reason: this.port.redact(uncertain) },
         )
@@ -397,12 +397,12 @@ export class SteerDispatcher {
         continue
       }
       if (authority.agentStatus === 'unknown') {
-        throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} 状态 unknown，无法确认完成`, 502)
+        throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} state unknown; completion cannot be confirmed`, 502)
       }
       if (!steerSettled()) continue
       const currentName = latestName()
       if (currentName !== undefined && currentName !== initialFileName) {
-        // 插话已重定向唯一交接文件：新文件未出现前不得进交接（旧结果冒充防线）。
+        // The steer redirected the single handoff file: do not enter handoff before the new file appears (anti-spoof for old results).
         let present = false
         try {
           await this.port.transport.readOutput(targetOf(pane), pane.effectiveCwd, currentName, request.signal)
@@ -412,23 +412,23 @@ export class SteerDispatcher {
         }
         if (!steerSettled() || latestName() !== currentName) continue
         if (!present) {
-          // 新结果未出现：有界等待后续回合起步后复查（working/blocked 回主循环）。
+          // New result not present: bounded wait for the follow-up turn to start, then recheck (working/blocked goes back to the main loop).
           const resumed = await this.waitSteerTurnOrNone(request, pane)
           if (resumed !== undefined) {
             info = resumed
             continue
           }
-          // 超时附近可能刚起步：先复查权威状态，避免向仍工作中的 CLI 提前追问。
+          // It may have just started near the timeout: recheck the authoritative state first, to avoid prematurely following up on a still-working CLI.
           info = await this.port.agentGet(pane.target, pane.paneId, request.signal)
           if (!steerSettled() || latestName() !== currentName) continue
           if (info.agentStatus === 'working' || info.agentStatus === 'blocked') continue
           if (info.agentStatus === 'unknown') {
-            throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} 状态 unknown，无法确认完成`, 502)
+            throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} state unknown; completion cannot be confirmed`, 502)
           }
-          // 仍 settled 时交由原单次自愈按最新文件名兑底，绝不读旧文件。
+          // When still settled, the original single self-heal backstops on the latest file name; never read the old file.
         }
       }
-      // 终核验与切 handoff 同一同步段：此后插话被阶段门禁拒绝。
+      // Final verification and the handoff switch in the same synchronous segment: steers are rejected by the phase gate afterwards.
       if (!steerSettled() || latestName() !== currentName) continue
       request.signal?.throwIfAborted()
       this.port.setPhase(key, 'handoff')
@@ -437,9 +437,9 @@ export class SteerDispatcher {
   }
 
   /**
-   * 有界等待后续回合（agent.wait until working/blocked，预算复用启动超时）：
-   * 返回新回合的权威 info（working/blocked）；预算耗尽返回 undefined。
-   * 超时交调用方复查状态，再按最新业务文件走原单次交接自愈。
+   * Bounded wait for the follow-up turn (agent.wait until working/blocked; budget reuses the startup timeout):
+   * returns the new turn's authoritative info (working/blocked); returns undefined when the budget is exhausted.
+   * On timeout the caller rechecks state, then takes the original single handoff self-heal on the latest business file.
    */
   private async waitSteerTurnOrNone(
     request: AgentSpawnRequest,

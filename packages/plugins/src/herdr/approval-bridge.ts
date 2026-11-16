@@ -1,31 +1,31 @@
 /**
- * Herdr 审批桥：blocked 状态的 Ask 创建（createAsk）与终态消费（consumeAskOutcome）。
+ * Herdr approval bridge: Ask creation (createAsk) for the blocked state and terminal-state consumption (consumeAskOutcome).
  *
- * 从 executor.ts 拆出的两段审批桥职责（行为与拆分前逐行等价），依赖经
- * ApprovalBridgePort 注入（executor 持有 agent.get / 终端快照 / 销单与宿主
- * AskDoc 端口）：
- * - createAsk（预分配 id，条目已先登记）：返回终态结果与本次快照生成的
- *   按键规划（plan 供 consumeAskOutcome 将 decision 映射为按键序列）。
- *   - 创建前权威复核：seq 已推进/已非 blocked -> 无需再问（synthetic superseded）；
- *   - 宿主返回 cancelled 且条目已被销（404 竞态确认）-> 同样 synthetic superseded
- *     回主循环，绝不留 pending；
- *   - 混合快慢路径：正则已识别标准菜单（>= 2 项）时走 0ms 确定性快路径，
- *     绝不调 AI；仅非标 TUI 快照且配置了模型端口时才异步解析候选按键选项；
- *   - Ask 存续复核：createAsk 返回的是终态 promise，其入库可晚于事件销单的
- *     404；在该 promise 结束前持续复核并销单，远端同样无需依赖本机 socket
- *     事件；瞬时故障退避重试，超上限先销宿主 AskDoc 再显式失败，绝不留
- *     永远 pending 的孤儿审批卡；
- *   - 重试 attempt（重开审批）时描述开头附「上次按键未解除阻塞」提示，
- *     终端快照用代码块围栏包裹（前端 AskDock 据此提取折叠快照）。
- * - consumeAskOutcome：answered 且权威 seq 未推进 -> CAS 能力门禁 -> 带
- *   expected_state_seq 的 CAS send_keys（stale_state 拒绝 = 键未发送，绝不
- *   重试）；cancelled/superseded -> 按语义收敛。
+ * The two approval-bridge responsibilities split out of executor.ts (behavior line-for-line equivalent to before
+ * the split); dependencies injected via ApprovalBridgePort (the executor holds agent.get / terminal snapshot /
+ * cancellation and the host AskDoc port):
+ * - createAsk (pre-allocated id, entry registered first): returns the terminal-state result and the keystroke
+ *   plan generated from this snapshot (plan lets consumeAskOutcome map the decision to a keystroke sequence).
+ *   - Authoritative recheck before creation: seq already advanced / no longer blocked -> no need to ask (synthetic superseded);
+ *   - Host returns cancelled and the entry was already cancelled (404 race confirmation) -> likewise synthetic superseded
+ *     back to the main loop; never leave a pending behind;
+ *   - Hybrid fast/slow paths: once the regex has recognized a standard menu (>= 2 items), take the 0ms deterministic fast path
+ *     and never call AI; only for non-standard TUI snapshots with a configured model port are candidate keystroke options parsed async;
+ *   - Ask liveness recheck: createAsk returns a terminal-state promise whose storage may land later than the event-driven
+ *     cancellation's 404; keep rechecking and cancelling until that promise ends; remote likewise needs no local socket
+ *     events; transient failures back off and retry, past the limit first cancel the host AskDoc then fail explicitly; never leave
+ *     a forever-pending orphan approval card;
+ *   - On a retry attempt (reopened approval), prefix the description with a "last keystrokes did not clear the block" hint;
+ *     the terminal snapshot is wrapped in a code fence (the frontend AskDock extracts the collapsible snapshot from it).
+ * - consumeAskOutcome: answered and the authoritative seq has not advanced -> CAS capability gate -> CAS
+ *   send_keys with expected_state_seq (a stale_state rejection = keys not sent, never retried);
+ *   cancelled/superseded -> converge per semantics.
  *
- * agent.send_keys 的 CAS 能力门禁（显式探测，绝不静默降级）：
- * 目标 Herdr 未在 ping capabilities 通告 SEND_KEYS_CAS_CAPABILITY 时拒绝发键
- * （herdr_cas_unsupported）——旧服务端 serde 忽略未知字段，盲发
- * expected_state_seq 会被静默当作无 CAS 写键，恰好复现本修复要关闭的残窗。
- * 探测结果在同一启用周期内按 target 冻结（Herdr 升级后重新启用插件生效）。
+ * CAS capability gate for agent.send_keys (explicit probing, never silently degraded):
+ * When the target Herdr does not advertise SEND_KEYS_CAS_CAPABILITY in ping capabilities, sending keys is rejected
+ * (herdr_cas_unsupported) -- old servers' serde ignores unknown fields, so blindly sending expected_state_seq would
+ * silently act as a CAS-less key write, exactly reproducing the residual window this fix closes.
+ * Probe results are frozen per target within the same enable cycle (re-enable the plugin after Herdr upgrades).
  */
 
 import { setTimeout as delay } from 'node:timers/promises'
@@ -54,7 +54,7 @@ import {
   type HerdrAgentInfo,
 } from './rpc.js'
 
-/** 审批桥对执行器（executor）与宿主的最小依赖面。 */
+/** The approval bridge's minimal dependency surface on the executor and host. */
 export interface ApprovalBridgePort {
   asks: AskCoordinator
   transport: NonNullable<HerdrPluginDependencies['transport']>
@@ -64,31 +64,31 @@ export interface ApprovalBridgePort {
   }
   redact(text: string): string
   analyzeBlockedSnapshot?: HerdrPluginDependencies['analyzeBlockedSnapshot']
-  /** 权威 agent.get（seq 唯一可信来源；executor 持有）。 */
+  /** Authoritative agent.get (the single trusted source of seq; held by the executor). */
   agentGet(target: HerdrTarget, paneId: string, signal?: AbortSignal): Promise<HerdrAgentInfo>
-  /** agent.read recent_unwrapped 40 行脱敏快照（诊断专用；executor 持有）。 */
+  /** agent.read recent_unwrapped 40-line redacted snapshot (diagnostics only; held by the executor). */
   readDiagnostic(pane: ManagedPane): Promise<string>
-  /** 宿主销单（404 = 已结算，调用方据此清条目；其余错误如实上抛）。 */
+  /** Host cancellation (404 = already settled, callers clear the entry on it; other errors propagate as-is). */
   cancelAskQuietly(askId: string, reason: 'cancelled' | 'superseded'): Promise<void>
-  /** 轮询间隔（测试可缩短；生产缺省 100ms）。用于 AskDoc 存续复核。 */
+  /** Poll interval (shortened in tests; production default 100ms). Used for the AskDoc liveness recheck. */
   pollIntervalMs: number
-  /** Ask 存续轮询瞬时故障退避基数与上限（测试可缩短；生产缺省 500ms / 4000ms）。 */
+  /** Backoff base and cap for transient failures in the Ask liveness poll (shortened in tests; production defaults 500ms / 4000ms). */
   askPollTransientBackoffBaseMs?: number
   askPollTransientBackoffCapMs?: number
-  /** abort 后销单退避上限（测试可缩短；生产缺省 3200ms）。 */
+  /** Post-abort cancellation backoff cap (shortened in tests; production default 3200ms). */
   abortCancelBackoffCapMs?: number
 }
 
 export class ApprovalBridge {
-  /** abort 后循环销单的最大尝试次数（防 cancel 持续失败时重试+通知风暴；剩余兑底交给 closePane）。 */
+  /** Max attempts of the post-abort cancellation loop (prevents retry+notify storms when cancel keeps failing; the remaining backstop goes to closePane). */
   private static readonly MAX_ABORT_CANCEL_ATTEMPTS = 5
   private static readonly DEFAULT_ABORT_CANCEL_BACKOFF_CAP_MS = 3_200
-  /** Ask 存续复核对瞬时故障（herdr_timeout/节点闪断）的最大连续容忍次数（退避重试）；超过才销单并显式失败。 */
+  /** Max consecutive tolerances for transient failures (herdr_timeout/node flaps) in the Ask liveness recheck (backoff retry); beyond that, cancel and fail explicitly. */
   private static readonly MAX_ASK_POLL_TRANSIENT_FAILURES = 6
   private static readonly DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_BASE_MS = 500
   private static readonly DEFAULT_ASK_POLL_TRANSIENT_BACKOFF_CAP_MS = 4_000
 
-  /** send_keys CAS 能力探测结果（同一启用周期内按 target 冻结）。 */
+  /** send_keys CAS capability probe result (frozen per target within the same enable cycle). */
   private readonly sendKeysCasSupport = new Map<string, boolean>()
 
   constructor(private readonly port: ApprovalBridgePort) {}
@@ -110,8 +110,8 @@ export class ApprovalBridge {
   }
 
   /**
-   * createAsk（预分配 id，条目已先登记）：返回终态结果与本次快照生成的
-   * 按键规划（plan 供 consumeAskOutcome 将 decision 映射为按键序列）。
+   * createAsk (pre-allocated id, entry registered first): returns the terminal-state result and the keystroke
+   * plan generated from this snapshot (plan lets consumeAskOutcome map the decision to a keystroke sequence).
    */
   async createAsk(
     request: AgentSpawnRequest,
@@ -125,9 +125,9 @@ export class ApprovalBridge {
       return this.settleSuperseded(entry)
     }
     const snapshot = await this.port.readDiagnostic(pane)
-    // 混合快慢路径：正则已识别标准菜单（>= 2 项）时走 0ms 确定性快路径，
-    // 绝不调 AI（省延迟、省 Token）；仅非标 TUI 快照（如横向按钮 / 快捷键提示）
-    // 且配置了模型端口时，才异步解析候选按键选项。
+    // Hybrid fast/slow paths: once the regex has recognized a standard menu (>= 2 items), take the 0ms deterministic fast path
+    // and never call AI (saves latency and tokens); only for non-standard TUI snapshots (e.g. horizontal buttons / hotkey hints)
+    // with a configured model port are candidate keystroke options parsed async.
     let aiAnalysis: BlockedSnapshotAnalysis | undefined
     let aiDiagnostic: string | undefined
     const fastItems = extractMenuItemsFromSnapshot(snapshot)
@@ -141,18 +141,18 @@ export class ApprovalBridge {
         aiAnalysis = outcome.analysis
         aiDiagnostic = outcome.diagnostic
         if (aiDiagnostic !== undefined) {
-          // 增强未完成不阻塞审批主流程，但绝不静默：通知人类已回退通用选项。
-          this.port.host.notify('阻塞快照 AI 解析未完成', this.port.redact(aiDiagnostic), 'info')
+          // An incomplete enhancement does not block the approval main flow, but is never silent: notify the human of the fallback to generic options.
+          this.port.host.notify('Blocked-snapshot AI parse incomplete', this.port.redact(aiDiagnostic), 'info')
         }
       } catch (error) {
-        // 外部取消立即传播；其余情况（含注入端口直接 throw）如实通知后回退。
-        // 诊断用固定安全文案，不回显上游 Error.message（可含 raw response/快照）。
+        // External cancellation propagates immediately; otherwise (incl. the injected port throwing directly) notify honestly and fall back.
+        // Diagnostics use a fixed safe message; the upstream Error.message is not echoed (may contain raw response/snapshot).
         if (request.signal?.aborted) throw error
         aiAnalysis = undefined
-        aiDiagnostic = '阻塞快照 AI 解析异常（请求失败），已回退通用按键选项'
-        this.port.host.notify('阻塞快照 AI 解析未完成', aiDiagnostic, 'info')
+        aiDiagnostic = 'Blocked-snapshot AI parse failed (request error); fell back to generic keystroke options'
+        this.port.host.notify('Blocked-snapshot AI parse incomplete', aiDiagnostic, 'info')
       }
-      // AI 等待期间终端可能自行推进：权威复核 seq，过期则不挂旧 AskDoc。
+      // The terminal may advance on its own while waiting for AI: authoritatively recheck seq; if stale, do not attach an old AskDoc.
       const latest = await this.port.agentGet(targetOf(pane), pane.paneId, request.signal)
       await this.cancelSuperseded(pane, latest)
       if (latest.stateChangeSeq !== entry.seq || latest.agentStatus !== 'blocked') {
@@ -162,30 +162,30 @@ export class ApprovalBridge {
     const plan = buildHerdrAskPromptPlan(snapshot, aiAnalysis, (t) => this.port.redact(t))
     const retryHint =
       entry.attempt > 0 && entry.lastSentKeys && entry.lastSentKeys.length > 0
-        ? `上次发送的按键 [${entry.lastSentKeys.join(', ')}] 未解除阻塞（终端仍停留在 seq ${entry.seq}），请对照快照重新选择。\n\n`
+        ? `The last keystrokes sent [${entry.lastSentKeys.join(', ')}] did not clear the block (the terminal is still at seq ${entry.seq}); please re-choose against the snapshot.\n\n`
         : ''
-    const aiSummaryLine = plan.summary ? `阻塞摘要：${this.port.redact(plan.summary)}\n\n` : ''
+    const aiSummaryLine = plan.summary ? `Block summary: ${this.port.redact(plan.summary)}\n\n` : ''
     const aiFallbackLine = aiDiagnostic ? `${this.port.redact(aiDiagnostic)}\n\n` : ''
-    // 快照统一取尾部 1500 字符：与 AI 解析所据内容同口径，保证人类看到
-    // 模型做出判断所依据的当前菜单（长快照头部往往是无关节奏输出）。
-    const description = `${retryHint}${aiSummaryLine}${aiFallbackLine}终端 agent (${pane.agentName}) 在 ${pane.effectiveCwd} 等待选择。终端快照（脱敏）：\n\`\`\`\n${snapshot.slice(-1500)}\n\`\`\``
+    // The snapshot uniformly takes the trailing 1500 characters: the same slice the AI parse relied on, ensuring the human sees
+    // the current menu the model based its judgment on (long snapshot heads are usually irrelevant rhythm output).
+    const description = `${retryHint}${aiSummaryLine}${aiFallbackLine}Terminal agent (${pane.agentName}) is waiting for a choice in ${pane.effectiveCwd}. Terminal snapshot (redacted):\n\`\`\`\n${snapshot.slice(-1500)}\n\`\`\``
     const pending = this.port.host.createAsk({
       id: entry.askId,
       conversationId,
       ownerPluginId: 'builtin:herdr',
-      title: `Herdr 审批：pane ${pane.paneId}`,
+      title: `Herdr approval: pane ${pane.paneId}`,
       description,
       fields: [
         {
           name: 'decision',
-          label: '如何处理该阻塞？',
+          label: 'How should this block be handled?',
           type: 'select',
           required: true,
           options: plan.options,
         },
         {
           name: 'key',
-          label: '自定义按键序列（仅 decision=custom 时使用，多键用空格或逗号分隔，如 enter / esc / down, enter）',
+          label: 'Custom keystroke sequence (only used when decision=custom; separate multiple keys with spaces or commas, e.g. enter / esc / down, enter)',
           type: 'text',
           required: false,
         },
@@ -193,22 +193,22 @@ export class ApprovalBridge {
       expectedStateSeq: entry.seq,
     })
     this.port.asks.markPending(entry)
-    // createAsk 返回的是终态 promise；其入库可晚于事件销单的 404。
-    // 在该 promise 结束前持续复核并销单，远端同样无需依赖本机 socket 事件。
+    // createAsk returns a terminal-state promise; its storage may land later than the event-driven cancellation's 404.
+    // Keep rechecking and cancelling until that promise ends; remote likewise needs no local socket events.
     const monitor = new AbortController()
     const result = pending.finally(() => monitor.abort())
     const polling = (async () => {
-      // 存续复核容错边界：瞬时故障（herdr_timeout/节点闪断）退避重试，超过
-      // 上限才先销宿主 AskDoc 再显式失败；绝不让一次抖动击穿任务，也绝不
-      // 留下永远 pending 的孤儿审批卡。
+      // Liveness recheck fault tolerance boundary: transient failures (herdr_timeout/node flaps) back off and retry; only
+      // past the limit first cancel the host AskDoc then fail explicitly; never let one jitter pierce the task, and never
+      // leave a forever-pending orphan approval card.
       let transientFailures = 0
       let abortCancelAttempts = 0
       while (!monitor.signal.aborted) {
         try { await delay(this.port.pollIntervalMs, undefined, { signal: monitor.signal }) }
         catch (error) { if (monitor.signal.aborted) return; throw error }
         if (request.signal?.aborted) {
-          // abort 后销单退避有界：cancel 持续非 404 失败时不得每 100ms
-          // 重试+通知风暴；超限后交由 closePane 的 paneClosed 清单兑底。
+          // Post-abort cancellation backoff is bounded: when cancel keeps failing non-404, there must be no 100ms
+          // retry+notify storm; past the limit, closePane's paneClosed list takes over the backstop.
           if (abortCancelAttempts >= ApprovalBridge.MAX_ABORT_CANCEL_ATTEMPTS) return
           if (abortCancelAttempts > 0) {
             try {
@@ -234,10 +234,10 @@ export class ApprovalBridge {
           if ((error as { code?: string }).code === 'herdr_aborted') throw error
           transientFailures += 1
           if (transientFailures > ApprovalBridge.MAX_ASK_POLL_TRANSIENT_FAILURES) {
-            // 最终失败：异步销宿主 AskDoc 后立即上抛真实错误（不 await——
-            // 等待会让宿主 cancelled 终态先赢 Promise.race，把基础设施失败
-            // 伪装成「人类取消」abort 路径关掉失败现场）；兑底 cancel 由
-            // 任务链 catch 的同步销单保证，绝不留 pending 孤儿审批卡。
+            // Final failure: cancel the host AskDoc async then immediately rethrow the real error (no await --
+            // awaiting would let the host's cancelled terminal state win Promise.race first, disguising infrastructure failure
+            // as a "human cancelled" abort path closing the failure scene); the backstop cancel is
+            // guaranteed by the task chain catch's synchronous cancellation; never leave a pending orphan approval card.
             void this.port.cancelAskQuietly(entry.askId, 'cancelled')
             throw error
           }
@@ -270,7 +270,7 @@ export class ApprovalBridge {
     }
   }
 
-  /** 消费终态：answered 且权威 seq 未推进 -> 能力门禁 -> 带 expected_state_seq 的 CAS send_keys（stale_state 拒绝 = 键未发送，绝不重试）；cancelled -> false。 */
+  /** Consume the terminal state: answered and the authoritative seq has not advanced -> capability gate -> CAS send_keys with expected_state_seq (a stale_state rejection = keys not sent, never retried); cancelled -> false. */
   async consumeAskOutcome(
     request: AgentSpawnRequest,
     pane: ManagedPane,
@@ -301,14 +301,14 @@ export class ApprovalBridge {
     }
     const authority = await this.port.agentGet(targetOf(pane), pane.paneId, request.signal)
     await this.cancelSuperseded(pane, authority)
-    if (authority.name !== pane.agentName) throw new HelmError('herdr_ownership_lost', `pane ${pane.paneId} 的 Agent 身份已变化，不能发送按键`, 409)
+    if (authority.name !== pane.agentName) throw new HelmError('herdr_ownership_lost', `pane ${pane.paneId}'s Agent identity has changed; cannot send keystrokes`, 409)
     if (authority.stateChangeSeq !== entry.seq || authority.agentStatus !== 'blocked') {
       this.port.asks.settle(entry, { keysSent: false })
       return true
     }
-    // 协议级 CAS：send_keys 携带 expected_state_seq（entry.seq），彻底关闭上方
-    // 权威 agent.get 与写键之间的毫秒级残窗——人类在终端直接按键推进 seq 时
-    // 服务端必须以 stale_state 拒绝且不写入任何按键。
+    // Protocol-level CAS: send_keys carries expected_state_seq (entry.seq), thoroughly closing the millisecond-scale
+    // residual window between the authoritative agent.get above and the key write -- when a human presses keys directly
+    // in the terminal and advances seq, the server must reject with stale_state and write no keystrokes.
     await this.assertSendKeysCas(targetOf(pane), request.signal)
     try {
       await assertOkResult(
@@ -322,18 +322,18 @@ export class ApprovalBridge {
       )
     } catch (error) {
       if (!isStaleStateError(error)) throw error
-      // 服务端 CAS 拒绝 = 键未发送：按「终端已先行推进」收敛（同 superseded
-      // 语义回主循环等权威状态），绝不重试同一批 keys，绝不记发送成功。
+      // Server CAS rejection = keys not sent: converge as "the terminal advanced first" (back to the main loop
+      // waiting for the authoritative state, same as superseded semantics); never retry the same batch of keys, never record a successful send.
       this.port.asks.settle(entry, { keysSent: false })
       this.port.host.notify(
-        'Herdr 审批已过时',
-        `pane ${pane.paneId} 的按键选择因终端状态已推进（stale_state）被服务端拒绝，未发送任何按键；主循环将继续按权威状态收敛`,
+        'Herdr approval superseded',
+        `pane ${pane.paneId}'s keystroke choice was rejected by the server because the terminal state advanced (stale_state); no keystrokes were sent; the main loop will keep converging on the authoritative state`,
         'info',
       )
       return true
     }
     this.port.asks.settle(entry, { keysSent: true, sentKeys: keys })
-    this.port.host.notify('Herdr 审批已发送', `pane ${pane.paneId} 已按人类选择发送按键：${keys.join(' ')}`, 'info')
+    this.port.host.notify('Herdr approval sent', `pane ${pane.paneId} sent keystrokes per the human's choice: ${keys.join(' ')}`, 'info')
     return true
   }
 
@@ -351,7 +351,7 @@ export class ApprovalBridge {
     const serverLabel = server !== undefined ? `（version ${server.version}, protocol ${server.protocol}）` : ''
     return new HelmError(
       'herdr_cas_unsupported',
-      `目标 Herdr${serverLabel} 未在 ping capabilities 通告 '${SEND_KEYS_CAS_CAPABILITY}'，拒绝无 CAS 的 agent.send_keys：旧服务端会静默忽略 expected_state_seq 并照常写键（复现审批桥 CAS 残窗）；请升级 Herdr 服务端至通告该能力的版本，并重新启用 herdr 插件`,
+      `Target Herdr${serverLabel} does not advertise '${SEND_KEYS_CAS_CAPABILITY}' in ping capabilities; refusing CAS-less agent.send_keys: old servers silently ignore expected_state_seq and write keys anyway (reproducing the approval bridge's CAS residual window); upgrade the Herdr server to a version that advertises the capability and re-enable the herdr plugin`,
       502,
       {
         capability: SEND_KEYS_CAS_CAPABILITY,
