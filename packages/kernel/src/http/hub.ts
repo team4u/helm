@@ -17,7 +17,8 @@
  * 拒绝跨站表单/text-simple POST 冒充 JSON；插件 public 原始路由不强制
  * JSON（webhook 载荷形态由插件自定）。
  *
- * SSE：kernel.events.response() 由 runtime 提供；HTTP 层不做缓存/转换，
+ * SSE：kernel.events.response() 由 runtime 提供；HTTP 层不做缓存/转换、
+ * 不压缩（gzip 仅覆盖 application/json，见 gzip.ts）；
  * 断开（signal abort）由 events 实现负责取消订阅。
  */
 import {
@@ -31,6 +32,7 @@ import {
 import { handleApi } from './routes.js'
 import { decodeSegments, findPluginRoute, PathDecodeError } from './route-match.js'
 import { createStaticServe, type StaticServe } from './static.js'
+import { acceptsGzip, gzipJsonResponse } from './gzip.js'
 import { HelmError } from '@helm/protocol'
 import type { KernelRuntimeLike } from './contracts.js'
 
@@ -99,10 +101,10 @@ export function createHubHandler(
         if (request.method === 'GET' || request.method === 'HEAD') {
           const serve = await resolveStaticServe()
           if (serve !== undefined) {
-            return withCors(await serve.serve(request.method, url.pathname), origin)
+            return gzipJsonResponse(request, withCors(await serve.serve(request.method, url.pathname, { acceptGzip: acceptsGzip(request) }), origin))
           }
         }
-        return withCors(errorResponse(redactor, 404, 'not_found', '路由不存在'), origin)
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 404, 'not_found', '路由不存在'), origin))
       }
 
       // 去尾斜杠归一（/api/conversations/ 等价 /api/conversations）
@@ -113,36 +115,36 @@ export function createHubHandler(
       if (PUBLIC_PATHS.has(normalized)) {
         // auth/setup|login 是 JSON 端点：跨站 text/plain 简单 POST 冒充被拒。
         if (request.method !== 'GET' && request.method !== 'HEAD' && !jsonContentTypeOk(request)) {
-          return withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON 端点需 content-type: application/json'), origin)
+          return gzipJsonResponse(request, withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON 端点需 content-type: application/json'), origin))
         }
-        return withCors(await handleApi(request, kernel, redactor), origin)
+        return gzipJsonResponse(request, withCors(await handleApi(request, kernel, redactor), origin))
       }
 
       // 插件 public 路由豁免（其 handler 自行验签）；与派发共用匹配器。
       const isPublic = isPublicPluginRoute(kernel, request.method, segments)
       if (!isPublic && isJsonEndpoint(request.method, normalized) && !jsonContentTypeOk(request)) {
-        return withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON 端点需 content-type: application/json'), origin)
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 415, 'unsupported_media_type', 'JSON 端点需 content-type: application/json'), origin))
       }
       if (isPublic) {
-        return withCors(await handleApi(request, kernel, redactor), origin)
+        return gzipJsonResponse(request, withCors(await handleApi(request, kernel, redactor), origin))
       }
 
       const token = bearerToken(request)
       if (token === undefined) {
-        return withCors(errorResponse(redactor, 401, 'unauthorized', '缺少 Bearer token'), origin)
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 401, 'unauthorized', '缺少 Bearer token'), origin))
       }
       const valid = await kernel.auth.verifyToken(token)
       if (valid !== true) {
-        return withCors(errorResponse(redactor, 401, 'unauthorized', 'token 无效或已过期'), origin)
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 401, 'unauthorized', 'token 无效或已过期'), origin))
       }
 
-      return withCors(await handleApi(request, kernel, redactor), origin)
+      return gzipJsonResponse(request, withCors(await handleApi(request, kernel, redactor), origin))
     } catch (error) {
       // 非法路径编码（含 public 匹配阶段）也要给出结构化 400，而非 500。
       if (error instanceof PathDecodeError) {
-        return withCors(errorResponse(redactor, 400, 'invalid_path_encoding', error.message), origin)
+        return gzipJsonResponse(request, withCors(errorResponse(redactor, 400, 'invalid_path_encoding', error.message), origin))
       }
-      return withCors(errorToResponse(redactor, redactText(kernel), error), origin)
+      return gzipJsonResponse(request, withCors(errorToResponse(redactor, redactText(kernel), error), origin))
     }
   }
 }

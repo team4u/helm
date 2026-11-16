@@ -1270,6 +1270,54 @@ const WF_RUN_MANIFESTS = [
   },
 ]
 
+test('conversations entry：[id] <entryId>/--current 解析与校验', { timeout: 60_000 }, async () => {
+  const dir = await tempDir()
+  const hub = await startHub({
+    'GET /api/conversations/7/entries/42': () => ({
+      body: { id: '42', kind: 'pi.tool-result', model: [{ role: 'toolResult', content: [{ type: 'text', text: '全文' }] }] },
+    }),
+    'GET /api/conversations/9/entries/42': () => ({ body: { id: '42', kind: 'pi.assistant' } }),
+  })
+  try {
+    const explicit = await run(['conversations', 'entry', '7', '42', '--json'], makeEnv(hub.url, dir))
+    assert.equal(explicit.code, 0, explicit.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7/entries/42')
+    assert.equal(JSON.parse(explicit.out).id, '42')
+
+    const current = await run(['conversations', 'entry', '--current', '42', '--json'], {
+      ...makeEnv(hub.url, dir),
+      HELM_CONVERSATION_ID: '9',
+    })
+    assert.equal(current.code, 0, current.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations/9/entries/42')
+
+    const currentFlag = await run(['conversations', 'entry', '--current', '42', '--json'], {
+      ...makeEnv(hub.url, dir),
+      HELM_CONVERSATION_ID: '9',
+    })
+    assert.equal(currentFlag.code, 0, currentFlag.err)
+    assert.equal(hub.hits.at(-1)?.path, '/api/conversations/9/entries/42')
+
+    // 缺 entryId / 非法 entryId / 缺会话目标：显式报错（不发请求）
+    const noEntry = await run(['conversations', 'entry', '7', '--json'], makeEnv(hub.url, dir))
+    assert.equal(noEntry.code, 1)
+    assert.equal((JSON.parse(noEntry.err) as { error: { code: string } }).error.code, 'missing_conversation_target')
+
+    const badEntry = await run(['conversations', 'entry', '7', 'abc', '--json'], makeEnv(hub.url, dir))
+    assert.equal(badEntry.code, 1)
+    assert.equal((JSON.parse(badEntry.err) as { error: { code: string } }).error.code, 'invalid_id')
+
+    const zero = await run(['conversations', 'entry', '7', '0', '--json'], makeEnv(hub.url, dir))
+    assert.equal(zero.code, 1)
+    assert.equal((JSON.parse(zero.err) as { error: { code: string } }).error.code, 'invalid_id')
+
+    const extra = await run(['conversations', 'entry', '7', '42', 'x', '--json'], makeEnv(hub.url, dir))
+    assert.equal(extra.code, 1)
+  } finally {
+    await hub.close()
+  }
+})
+
 test('conversations get：--limit/--cursor 映射 query；--current 读 env', { timeout: 60_000 }, async () => {
   const dir = await tempDir()
   const hub = await startHub({

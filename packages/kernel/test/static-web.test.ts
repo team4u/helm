@@ -13,6 +13,7 @@
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
+import { gunzipSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -45,6 +46,9 @@ function makeKernel(dataDir: string): KernelRuntimeLike {
     plugins: undefined as never,
     listConversations: async () => [],
     getConversationDetail: async () => {
+      throw new Error('unused')
+    },
+    getConversationEntry: async () => {
       throw new Error('unused')
     },
     createConversation: async () => {
@@ -347,4 +351,56 @@ test('startHub(port:0) 显式失效目录：启动显式报错（不静默禁用
     startHub({ kernel: makeKernel(dataDir), port: 0, webDistDir: join(dataDir, 'no-such-dist') }),
     (err: unknown) => err instanceof HelmError && err.code === 'web_dist_invalid',
   )
+})
+
+// ---------------------------------------------------------------------------
+// 静态 gzip
+// ---------------------------------------------------------------------------
+
+test('静态文本资源 gzip：阈值内压缩、Vary/Content-Length 正确、缓存命中、PNG 不压缩', { timeout: 60_000 }, async () => {
+  const bigJs = `console.log(${JSON.stringify('v'.repeat(4096))});\n`
+  await writeFile(join(webDist, 'assets', 'big-A1b2.js'), bigJs)
+  const smallJs = 'console.log(1)\n'
+  await writeFile(join(webDist, 'assets', 'small-B2c3.js'), smallJs)
+  await writeFile(join(webDist, 'assets', 'img-C3d4.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, ...new Array(2048).fill(1)]))
+
+  const authed = (path: string, headers: Record<string, string> = {}): Request =>
+    new Request(`${BASE}${path}`, {
+      headers: { ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}), ...headers },
+    })
+
+  // >1KiB 文本 + Accept-Encoding: gzip → 压缩，解压与原文一致
+  const gzReq = authed('/assets/big-A1b2.js', { 'accept-encoding': 'gzip', origin: 'http://x' })
+  const gzRes = await handler(gzReq)
+  assert.equal(gzRes.headers.get('content-encoding'), 'gzip')
+  const vary = (gzRes.headers.get('vary') ?? '').toLowerCase().split(',').map((token) => token.trim())
+  assert.ok(vary.includes('accept-encoding'), `静态压缩必须保留 Accept-Encoding: ${vary}`)
+  assert.ok(vary.includes('origin'), `CORS 不能覆盖压缩协商的 Vary: ${vary}`)
+  const gzBytes = new Uint8Array(await gzRes.arrayBuffer())
+  assert.equal(Number(gzRes.headers.get('content-length')), gzBytes.byteLength)
+  assert.equal(gunzipSync(gzBytes).toString('utf8'), bigJs, '解压后与原文一致')
+
+  // 二次请求走缓存（结果一致）
+  const gzAgain = await handler(authed('/assets/big-A1b2.js', { 'accept-encoding': 'gzip' }))
+  assert.equal(gzAgain.headers.get('content-encoding'), 'gzip')
+  assert.equal(gunzipSync(new Uint8Array(await gzAgain.arrayBuffer())).toString('utf8'), bigJs, '缓存命中结果一致')
+
+  // <1KiB 文本不压缩；不接受 gzip 的客户端拿 identity
+  const small = await handler(authed('/assets/small-B2c3.js', { 'accept-encoding': 'gzip' }))
+  assert.equal(small.headers.get('content-encoding'), null)
+  await small.text()
+  const identity = await handler(authed('/assets/big-A1b2.js'))
+  assert.equal(identity.headers.get('content-encoding'), null)
+  assert.equal(await identity.text(), bigJs)
+
+  // PNG（不可压缩格式）不压缩
+  const png = await handler(authed('/assets/img-C3d4.png', { 'accept-encoding': 'gzip' }))
+  assert.equal(png.headers.get('content-encoding'), null)
+  assert.equal(Number(png.headers.get('content-length')), 2052)
+  await png.arrayBuffer()
+
+  // HEAD 与 GET 同压缩头语义，body 为空
+  const head = await handler(new Request(`${BASE}/assets/big-A1b2.js`, { method: 'HEAD', headers: { 'accept-encoding': 'gzip' } }))
+  assert.equal(head.headers.get('content-encoding'), 'gzip')
+  assert.ok(head.body === null || (await head.text()) === '')
 })

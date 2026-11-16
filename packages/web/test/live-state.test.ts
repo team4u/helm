@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationDetail, ConversationLive, ConversationSummary, HelmSnapshot } from '@helm/protocol'
-import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, SseParser } from '../src/lib/live-state.js'
+import { applyConversationEntry, applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, SseParser } from '../src/lib/live-state.js'
 import { normalizeModelCatalogInfo } from '../src/lib/api.js'
 import type { NodeInfo } from '@helm/protocol'
 
@@ -287,4 +287,55 @@ test('working/blocked upsert 不删 live（仅终态清理）', { timeout: 60_00
   assert.ok(state.conversationLives[1])
   state = applyEventFrame(state, { seq: 12, event: { type: 'conversation.upsert', conversation: { ...conv, status: 'blocked' } } })
   assert.ok(state.conversationLives[1])
+})
+
+// ---------------------------------------------------------------------------
+// 单条目回填（applyConversationEntry）：SSE 事件与截断全文回填共用语义
+// ---------------------------------------------------------------------------
+
+test('applyConversationEntry 同 id 原位替换保序，不动分页游标', { timeout: 60_000 }, () => {
+  const e1 = { id: '1', kind: 'pi.user' }
+  const e2 = { id: '2', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'c1', content: [{ type: 'text', text: '预览' }], truncated: true }] }
+  const e3 = { id: '3', kind: 'pi.assistant' }
+  const detail: ConversationDetail = { ...conv, entries: [e1, e2, e3], nextCursor: 'cursor-1' }
+  const state = { ...emptyLiveState(), conversationDetails: { 1: detail } }
+
+  const full = { id: '2', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'c1', content: [{ type: 'text', text: '完整原文'.repeat(50) }] }] }
+  const next = applyConversationEntry(state, 1, full)
+  const entries = next.conversationDetails[1]!.entries
+  assert.deepEqual(entries.map((entry) => entry.id), ['1', '2', '3'], '回填不得把条目挪到队尾（时间线依赖时间正序）')
+  assert.equal(entries[1], full, '同 id 原位替换')
+  assert.equal(next.conversationDetails[1]!.nextCursor, 'cursor-1', '分页游标不受回填影响')
+  assert.equal(applyConversationEntry(next, 1, full), next, '幂等：重复回填同一对象不产生新状态')
+})
+
+test('applyConversationEntry 详情未加载时落 pendingEntries，新 id 追加队尾', { timeout: 60_000 }, () => {
+  const state = emptyLiveState()
+  const entry = { id: '7', kind: 'pi.assistant' }
+  const withPending = applyConversationEntry(state, 5, entry)
+  assert.deepEqual(withPending.pendingEntries[5], [entry])
+  const later = applyConversationEntry(withPending, 5, { id: '8', kind: 'pi.tool-result' })
+  assert.deepEqual(later.pendingEntries[5]!.map((item) => item.id), ['7', '8'])
+})
+
+test('conversation.entry 事件复用回填语义：同 id 原位替换而非挪尾', { timeout: 60_000 }, () => {
+  const e1 = { id: '1', kind: 'pi.user' }
+  const e2 = { id: '2', kind: 'pi.assistant' }
+  const detail: ConversationDetail = { ...conv, entries: [e1, e2] }
+  let state: ReturnType<typeof emptyLiveState> = { ...emptyLiveState(), seq: 0, conversationDetails: { 1: detail } }
+  state = applyEventFrame(state, { seq: 1, event: { type: 'conversation.entry', conversationId: 1, entry: { id: '3', kind: 'pi.tool-result' } } })
+  state = applyEventFrame(state, { seq: 2, event: { type: 'conversation.entry', conversationId: 1, entry: { id: '3', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'c', content: [] }] } } })
+  assert.deepEqual(state.conversationDetails[1]!.entries.map((entry) => entry.id), ['1', '2', '3'])
+})
+
+test('回填的全文条目在更早页重合并时保留（current 优先于新页）', { timeout: 60_000 }, () => {
+  const truncated = { id: '2', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'c1', content: [{ type: 'text', text: '预览' }], truncated: true }] }
+  const full = { id: '2', kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: 'c1', content: [{ type: 'text', text: '完整原文' }] }] }
+  const first: ConversationDetail = { ...conv, entries: [truncated], nextCursor: 'cur' }
+  let state = mergeConversationDetail(emptyLiveState(), first)
+  state = applyConversationEntry(state, 1, full)
+  // 服务端分页再次返回同一批条目（仍是截断预览）：已回填的全文不得被预览回退
+  const pageAgain: ConversationDetail = { ...conv, entries: [truncated], nextCursor: 'cur2' }
+  const merged = mergeConversationDetail(state, pageAgain, true)
+  assert.equal(merged.conversationDetails[1]!.entries.find((entry) => entry.id === '2'), full, 'current 中的全文回填优先于新页预览')
 })

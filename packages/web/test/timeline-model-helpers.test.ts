@@ -59,7 +59,8 @@ test('buildToolViewProps：running/error 映射 running/error，可选字段全�
     trace({
       callId: 'call_1',
       input: { cmd: 'ls' },
-      resultText: 'ok',
+      resultText: '预览',
+      resultTruncation: { truncated: true, totalChars: 9000, totalLines: 300 },
       structuredOutput: { files: 2 },
       startedAt: 123,
       durationMs: 456,
@@ -70,7 +71,8 @@ test('buildToolViewProps：running/error 映射 running/error，可选字段全�
   )
   assert.equal(full.callId, 'call_1')
   assert.deepEqual(full.input, { cmd: 'ls' })
-  assert.equal(full.result, 'ok')
+  assert.equal(full.result, '预览')
+  assert.deepEqual(full.resultTruncation, { truncated: true, totalChars: 9000, totalLines: 300 })
   assert.deepEqual(full.structuredOutput, { files: 2 })
   assert.equal(full.startedAt, 123)
   assert.equal(full.durationMs, 456)

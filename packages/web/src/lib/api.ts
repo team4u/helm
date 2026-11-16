@@ -6,6 +6,7 @@ import type {
   AuthToken,
   ConversationCompactResponse,
   ConversationDetail,
+  ConversationEntry,
   ConversationForkRequest,
   ConversationInit,
   ConversationInputResult,
@@ -183,6 +184,22 @@ export const conversationsApi = {
     if (opts?.cursor) params.set('cursor', opts.cursor)
     const qs = params.toString()
     return apiRequest<ConversationDetail>('GET', `/api/conversations/${id}${qs ? `?${qs}` : ''}`)
+  },
+  /** 单条目全文取回（服务端时间线预览截断时；返回完整 ConversationEntry）。 */
+  getEntry(id: number, entryId: string | number): Promise<ConversationEntry> {
+    // entryId 是与 ConversationEntry.id 对应的安全正整数（数字字符串）；
+    // 严格整数字符串校验与 fork/withdraw 同一防错锚点，绝不容忍 '3oops' 锚定 3。
+    const raw = String(entryId)
+    const numericEntryId = typeof entryId === 'number' ? entryId : /^[0-9]+$/.test(raw) ? Number(raw) : NaN
+    if (!Number.isInteger(numericEntryId) || !Number.isSafeInteger(numericEntryId) || numericEntryId <= 0) {
+      throw new ApiClientError(
+        'validation_error',
+        `entryId 需为安全正整数（收到 ${String(entryId)}）`,
+        400,
+        { entryId },
+      )
+    }
+    return apiRequest<ConversationEntry>('GET', `/api/conversations/${id}/entries/${numericEntryId}`)
   },
   create(init?: ConversationInit): Promise<ConversationSummary> {
     return apiRequest<ConversationSummary>('POST', '/api/conversations', init ?? {})

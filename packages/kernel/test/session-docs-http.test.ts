@@ -147,6 +147,10 @@ beforeEach(async () => {
       if (!existing.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
       return { ...makeConversation(id), entries: [] } as never
     },
+    getConversationEntry: async (id, entryId) => {
+      if (!existing.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      throw new HelmError('not_found', `条目 ${entryId} 在会话 ${id} 中不存在`, 404)
+    },
     createConversation: async () => makeConversation(3),
     updateConversation: async (id) => makeConversation(id),
     deleteConversation: async () => {},

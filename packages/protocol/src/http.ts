@@ -71,6 +71,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'events watch',
   'conversations list',
   'conversations get',
+  'conversations entry',
   'conversations create',
   'conversations update',
   'conversations delete',

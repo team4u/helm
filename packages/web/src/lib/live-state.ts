@@ -108,6 +108,44 @@ export function mergeConversationDetail(state: LiveState, detail: ConversationDe
   }
 }
 
+/** 条目 upsert：同 id 原位替换（时间线依赖时间正序，回填全文不得把条目挪到队尾），
+ * 新 id 追加队尾（与既有 conversation.entry 事件追加语义一致）。 */
+function upsertEntryStable(entries: ConversationEntry[], entry: ConversationEntry): ConversationEntry[] {
+  const index = entries.findIndex((item) => item.id === entry.id)
+  if (index < 0) return [...entries, entry]
+  if (entries[index] === entry) return entries
+  const next = [...entries]
+  next[index] = entry
+  return next
+}
+
+/**
+ * 单条目写入（SSE conversation.entry 事件与截断全文回填共用语义）：
+ * 详情已加载则原位并入其 entries；否则落入 pendingEntries 等详情首载合并。
+ * 不触碰 nextCursor，分页游标语义不变。
+ */
+export function applyConversationEntry(state: LiveState, conversationId: number, entry: ConversationEntry): LiveState {
+  const detail = state.conversationDetails[conversationId]
+  if (detail) {
+    const entries = upsertEntryStable(detail.entries, entry)
+    if (entries === detail.entries) return state
+    return {
+      ...state,
+      conversationDetails: {
+        ...state.conversationDetails,
+        [conversationId]: { ...detail, entries },
+      },
+    }
+  }
+  const existingPending = state.pendingEntries[conversationId]
+  if (existingPending !== undefined) {
+    const pending = upsertEntryStable(existingPending, entry)
+    if (pending === existingPending) return state
+    return { ...state, pendingEntries: { ...state.pendingEntries, [conversationId]: pending } }
+  }
+  return { ...state, pendingEntries: { ...state.pendingEntries, [conversationId]: [entry] } }
+}
+
 /** 任何序号缺口都重连取快照，不能继续显示缺帧的“最新状态”。 */
 export function applyEventFrame(state: LiveState, frame: HelmEventFrame): LiveState {
   if (!Number.isSafeInteger(frame.seq) || !frame.event || typeof frame.event.type !== 'string') throw new Error('实时事件格式无效')
@@ -143,11 +181,7 @@ export function applyEventFrame(state: LiveState, frame: HelmEventFrame): LiveSt
       }
       break
     case 'conversation.entry':
-      if ('entry' in event) {
-        const detail = state.conversationDetails[event.conversationId]
-        if (detail) next.conversationDetails = { ...state.conversationDetails, [detail.id]: { ...detail, entries: upsert(detail.entries, event.entry) } }
-        else next.pendingEntries = { ...state.pendingEntries, [event.conversationId]: upsert(state.pendingEntries[event.conversationId] ?? [], event.entry) }
-      }
+      if ('entry' in event) return applyConversationEntry(next, event.conversationId, event.entry)
       break
     case 'conversation.live':
       if ('live' in event) next.conversationLives = { ...state.conversationLives, [event.live.conversationId]: event.live }

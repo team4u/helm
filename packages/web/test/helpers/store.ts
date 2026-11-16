@@ -29,7 +29,7 @@ export function makeTestStore(overrides: Partial<HelmStoreValue> = {}): HelmStor
     workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null, highlightedEntry: null, notices: [],
     setTheme: noop, setThemePreference: noop, toggleTheme: noop, setQuietNotify: asyncNoop, checkAuth: asyncNoop,
     onAuthenticated: asyncNoop, logout: noop, refreshAssets: asyncNoop, syncPlugins: noop, refreshNodes: asyncNoop,
-    loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop, loadConversationArtifacts: asyncNoop,
+    loadConversationDetail: asyncNoop, loadEarlierEntries: asyncNoop, backfillConversationEntry: noop, loadConversationArtifacts: asyncNoop,
     ensurePluginDoc: asyncNoop, openTarget: noop, closeSplit: noop, setScreenParams: noop, setWorkbenchOpen: noop,
     setWorkbenchTab: noop, openSpace: noop, setActiveModal: noop, dismissNotice: noop, pushNotice: noop,
     invokePluginAction: asyncNoop,

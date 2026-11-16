@@ -4,9 +4,9 @@ import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
-import type { ActionManifest, ArtifactMetadata, ConversationDetail, ConversationSummary, HelmEventFrame, HelmResumedFrame, HelmSnapshot, PluginSummary, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
+import type { ActionManifest, ArtifactMetadata, ConversationDetail, ConversationEntry, ConversationSummary, HelmEventFrame, HelmResumedFrame, HelmSnapshot, PluginSummary, Profile, ProviderConfig, SkillSummary } from '@helm/protocol'
 import { ApiClientError, assetsApi, authApi, conversationsApi, getStoredToken, nodesApi, pluginsApi, setStoredToken, type CredentialSummary, type ModelDescriptor, type NodeInfo } from './api.js'
-import { applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, readSseChunkWithDeadline, sortNodes, SseParser, sseClientTimings, type LiveState } from './live-state.js'
+import { applyConversationEntry, applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, readSseChunkWithDeadline, sortNodes, SseParser, sseClientTimings, type LiveState } from './live-state.js'
 import { HelmStoreContext, useHelmStore } from './store-context.js'
 import { PluginClientHostContext, usePluginDocValue } from '@helm/plugin-client'
 import {
@@ -425,6 +425,11 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     requests.current.set(key, task)
     await task
   }, [reportLoad, updateLive])
+
+  /** 单条目全文回填（服务端预览截断后按需取回；复用 conversation.entry 的原位 upsert 语义）。 */
+  const backfillConversationEntry = useCallback((conversationId: number, entry: ConversationEntry): void => {
+    updateLive((state) => applyConversationEntry(state, conversationId, entry))
+  }, [updateLive])
 
   const loadConversationArtifacts = useCallback(async (id: number): Promise<ArtifactMetadata[] | undefined> => {
     const key = `artifacts:${id}`
@@ -888,12 +893,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     () => ({
       ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
       live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],
   )
   useEffect(() => {

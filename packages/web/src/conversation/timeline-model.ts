@@ -18,6 +18,7 @@ import type {
   ConversationLive,
   InputOrigin,
   TimelineRendererSpec,
+  ToolResultTruncation,
   ToolViewSiblingCall,
   ToolViewSpec,
   WhenBusy,
@@ -49,6 +50,9 @@ export interface HelmInputData {
 
 export type ToolTraceStatus = 'running' | 'done' | 'error' | 'unknown'
 
+/** 服务端时间线预览截断标记使用 protocol 中的跨包契约。 */
+export type { ToolResultTruncation } from '@helm/protocol'
+
 export interface ToolTrace {
   key: string
   toolName: string
@@ -57,6 +61,10 @@ export interface ToolTrace {
   status: ToolTraceStatus
   isError: boolean
   resultText?: string
+  /** 服务端预览截断标记；未截断或 live 实时结果缺省。 */
+  resultTruncation?: ToolResultTruncation
+  /** 携带该结果的 pi.tool-result entry id（截断时按需取回全文的精确定位键）。 */
+  resultEntryId?: string
   /** 工具调用所在已持久化条目的时间；流式调用尚无记录时省略。 */
   startedAt?: number
   durationMs?: number
@@ -66,6 +74,22 @@ export interface ToolTrace {
   structuredOutput?: unknown
   /** 命中插件 tool.view（如 dispatch_worker）：豁免折叠，直接渲染业务卡片。 */
   toolView?: QualifiedToolView
+}
+
+/** toolResult 消息扩展级截断元数据读取：`truncated` 必须显式为 true 才构成截断
+ * （缺省或 false = 完整原文）；totalChars/totalLines 仅收窄为有限非负数，非法值
+ * 丢弃——未知不伪造。形状不符（非对象）返回 undefined。 */
+export function readResultTruncation(message: unknown): ToolResultTruncation | undefined {
+  if (message === null || typeof message !== 'object') return undefined
+  const m = message as Record<string, unknown>
+  if (m['truncated'] !== true) return undefined
+  const totalChars = m['totalChars']
+  const totalLines = m['totalLines']
+  return {
+    truncated: true,
+    ...(typeof totalChars === 'number' && Number.isFinite(totalChars) && totalChars >= 0 ? { totalChars } : {}),
+    ...(typeof totalLines === 'number' && Number.isFinite(totalLines) && totalLines >= 0 ? { totalLines } : {}),
+  }
 }
 
 export interface ThinkingTrace {
@@ -544,7 +568,7 @@ function newTurn(): TurnAcc {
 function makeToolTrace(
   key: string,
   toolName: string,
-  opts: { callId?: string; input?: unknown; status?: ToolTraceStatus; isError?: boolean; resultText?: string; structuredOutput?: unknown; startedAt?: number; durationMs?: number; toolViews?: ReadonlyArray<QualifiedToolView> },
+  opts: { callId?: string; input?: unknown; status?: ToolTraceStatus; isError?: boolean; resultText?: string; resultTruncation?: ToolResultTruncation; resultEntryId?: string; structuredOutput?: unknown; startedAt?: number; durationMs?: number; toolViews?: ReadonlyArray<QualifiedToolView> },
 ): ToolTrace {
   const status = opts.status ?? 'unknown'
   return {
@@ -555,6 +579,8 @@ function makeToolTrace(
     status,
     isError: opts.isError ?? status === 'error',
     ...(opts.resultText !== undefined ? { resultText: opts.resultText } : {}),
+    ...(opts.resultTruncation !== undefined ? { resultTruncation: opts.resultTruncation } : {}),
+    ...(opts.resultEntryId !== undefined ? { resultEntryId: opts.resultEntryId } : {}),
     ...(opts.structuredOutput !== undefined ? { structuredOutput: opts.structuredOutput } : {}),
     ...(opts.durationMs !== undefined ? { durationMs: opts.durationMs } : {}),
     ...(opts.startedAt !== undefined ? { startedAt: opts.startedAt } : {}),
@@ -799,6 +825,8 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
     const resultText = contentTextOf(m.content)
     const isError = m.isError === true
     const durationMs = typeof m.durationMs === 'number' && Number.isFinite(m.durationMs) ? m.durationMs : undefined
+    // 服务端截断标记随 toolResult 消息携带（truncated/totalChars/totalLines）。
+    const truncation = readResultTruncation(m)
     // 结构化结果的持久化通道是 toolResult 消息的 details（pi-durable 不把
     // structuredOutput 写入会话条目，它只给嵌套调用方）；非对象值不采纳。
     const details = m.details
@@ -817,6 +845,10 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
         if (structuredOutput !== undefined) seg.tool.structuredOutput = structuredOutput
         if (durationMs !== undefined) seg.tool.durationMs = durationMs
         seg.tool.artifactRef = detectArtifactRef(seg.tool.resultText)
+        if (truncation !== undefined) {
+          seg.tool.resultTruncation = truncation
+          seg.tool.resultEntryId = entry.id
+        }
         paired = true
         break
       }
@@ -831,6 +863,7 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
         status: isError ? 'error' : 'done',
         isError,
         ...(resultText !== '' ? { resultText } : {}),
+        ...(truncation !== undefined ? { resultTruncation: truncation, resultEntryId: entry.id } : {}),
         ...(structuredOutput !== undefined ? { structuredOutput } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
         toolViews: opts.toolViews,
@@ -1094,6 +1127,7 @@ function pushSiblingCall(calls: ToolViewSiblingCall[], tool: ToolTrace): void {
     ...(tool.input !== undefined ? { input: tool.input } : {}),
     status: tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'done',
     ...(tool.resultText !== undefined ? { result: tool.resultText } : {}),
+    ...(tool.resultTruncation !== undefined ? { resultTruncation: tool.resultTruncation } : {}),
     ...(tool.structuredOutput !== undefined ? { structuredOutput: tool.structuredOutput } : {}),
   })
 }
@@ -1221,6 +1255,7 @@ export function buildToolViewProps(
     ...(tool.input !== undefined ? { input: tool.input } : {}),
     status: tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'done',
     ...(tool.resultText !== undefined ? { result: tool.resultText } : {}),
+    ...(tool.resultTruncation !== undefined ? { resultTruncation: tool.resultTruncation } : {}),
     ...(tool.structuredOutput !== undefined ? { structuredOutput: tool.structuredOutput } : {}),
     isError: tool.isError,
     ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}),

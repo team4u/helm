@@ -104,6 +104,10 @@ function makeKernel(): KernelRuntimeLike {
       if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
       return { ...found, entries: [] }
     },
+    async getConversationEntry(id: number, entryId: number) {
+      if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      throw new HelmError('not_found', `条目 ${entryId} 在会话 ${id} 中不存在`, 404)
+    },
     async createConversation(init) {
       const id = Math.max(0, ...conversations.keys()) + 1
       const created = summary(id, init?.title ?? `会话 ${id}`)

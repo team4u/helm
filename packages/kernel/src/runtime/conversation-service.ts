@@ -12,6 +12,7 @@ import type {
   ArtifactMetadata,
   ConversationAttachmentRef,
   ConversationDetail,
+  ConversationEntry,
   ConversationInit,
   ConversationInputResult,
   ConversationListFilter,
@@ -176,6 +177,7 @@ export class ConversationService {
       stash: this.stash,
       getConversation: (id) => this.getConversation(id),
       collectRewindIntervals: (conv) => this.rewind.collectRewindIntervals(conv),
+      ensureContextUsage: (id) => this.tracker.ensureContextUsage(id),
     })
 
     this.profileAlignment = new ConversationProfileService({
@@ -410,10 +412,14 @@ export class ConversationService {
   // ------------------------------------------------------------------
 
   async getConversationDetail(id: number, options?: { limit?: number; cursor?: string }): Promise<ConversationDetail> {
-    // 缓存缺失（重启后首次打开/分叉新建）时先等初始刷新完成：首个 detail 即
-    // 携带 contextUsage；已缓存时零开销直通（后续分页不重复刷新）。
-    await this.tracker.ensureContextUsage(id)
+    // contextUsage 刷新与时间线分页在 detailOps 内并行，两腿完成后重取
+    // 权威摘要合并（见 conversation-detail.ts）；任一腿失败整体拒绝。
     return this.detailOps.getConversationDetail(id, options)
+  }
+
+  /** 单条时间线条目（未截断、已脱敏；rewind 可见性与详情分页一致）。 */
+  async getConversationEntry(id: number, entryId: number): Promise<ConversationEntry> {
+    return this.detailOps.getConversationEntry(id, entryId)
   }
 
   async collectRewindIntervals(

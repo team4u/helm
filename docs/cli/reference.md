@@ -39,7 +39,9 @@ CLI 登录态保存于 `<dataDir>/cli-token`（0600，`{ hubUrl, token }`）；�
 
 **`helm conversations list [--profile <id>] [--status <st>] [--tag <tag>] [--all | --parent <id>]`** — 列出会话。`--status` 取值 `working|blocked|done|idle|error`。默认仅顶层会话（不含子代理等派生子会话）；`--all` 全量列出；`--parent <id>` 仅列出该会话的直接子会话（与 `--all` 互斥，需正整数）。
 
-**`helm conversations get [id] [--current] [--limit <n>] [--cursor <str>]`** — 会话详情与分页时间线；`--limit` 缺省 50，`--cursor` 回传上次响应 `nextCursor`。
+**`helm conversations get [id] [--current] [--limit <n>] [--cursor <str>]`** — 会话详情与分页时间线；`--limit` 缺省 50，`--cursor` 回传上次响应 `nextCursor`。详情对超长纯文本 tool-result 做头尾截断（消息携带 `truncated/totalChars/totalLines`），并过滤 `pi.system` 与剥离供应商签名载荷。
+
+**`helm conversations entry [id] <entryId> [--current]`** — 单条时间线条目全文（`GET /api/conversations/:id/entries/:entryId`）：返回未截断原文（仅剥离签名载荷）；被原地覆盖重发（rewind）隐藏的条目与详情可见性一致地 404。
 
 **`helm conversations create [--title] [--profile-id] [--node <id>] [--cwd] [--model] [--tags]`** — 创建会话；`--node` 绑定计算节点（缺省继承 Profile 或 `local`）；`--tags` 接受 JSON 数组或逗号分隔。
 

@@ -84,6 +84,7 @@ beforeEach(async () => {
     },
     listConversations: async () => [],
     getConversationDetail: async () => ({}) as never,
+    getConversationEntry: async () => ({}) as never,
     createConversation: async () => ({}) as never,
     updateConversation: async () => ({}) as never,
     deleteConversation: async () => {},

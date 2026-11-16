@@ -28,6 +28,7 @@ managedByPlugin: {{MANAGED_BY}}
 ### 会话
 - `helm conversations list [--profile <id>] [--status <s>] [--tag <t>]`：默认仅顶层会话（降噪）；`--all` 含子代理等全部派生子会话，`--parent <id>` 精确列出某会话的直接子会话（与 --all 互斥）。
 - `helm conversations get [id] [--current] [--limit N] [--cursor <c>]`（含分页时间线）
+- `helm conversations entry [id] <entryId> [--current]`（单条时间线全文；详情分页对超长纯文本 tool-result 做了头尾截断，此命令返回未截断原文）
 - `helm conversations create [--title <t>] [--profile-id <id>] [--node <nodeId>] [--cwd <dir>] [--model <m>] [--tags <t>]`
 - `helm conversations update <id> --title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread`
 - `helm conversations reset [id] [--current] [--handoff <text>]`（重置上下文，handoff 作为首条消息）

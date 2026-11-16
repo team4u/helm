@@ -12,6 +12,7 @@ import type {
   ConversationDetail,
   ConversationInit,
   ConversationInputResult,
+  ConversationEntry,
   ConversationListFilter,
   ConversationPatch,
   ConversationSummary,
@@ -243,6 +244,13 @@ export interface KernelRuntimeLike {
     id: number,
     opts?: { limit?: number; cursor?: string },
   ): Promise<ConversationDetail> | ConversationDetail
+  /** GET /api/conversations/:id/entries/:entryId 消费：单条未截断但已脱敏
+   * （签名剥离）的条目；rewind 覆盖旧条目与详情可见性一致地 404。
+   * 可选：runtime 未提供时 HTTP 501（与 withdrawQueuedInput 同风格）。 */
+  getConversationEntry?(
+    id: number,
+    entryId: number,
+  ): Promise<ConversationEntry> | ConversationEntry
   createConversation(init?: ConversationInit): Promise<ConversationSummary> | ConversationSummary
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary> | ConversationSummary
   deleteConversation(id: number): Promise<void> | void
@@ -390,4 +398,4 @@ export interface HubHandle {
 }
 
 // 导出供测试构造完整 Profile
-export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationInputResult, PluginSummary, PluginStatus, PluginDiagnosticError, PluginInUseItem, PluginConfigFieldSource, PluginConfigResponse, ActionManifest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, ConversationCompactResponse, ConversationWithdrawResponse, PluginDoctorReport, PluginReloadResult, PluginRescanResult, PluginInstallResult, PluginUpdateResult, PluginRemoveResult }
+export type { Profile, ProviderConfig, SkillSummary, ArtifactMetadata, AskSpec, ConversationSummary, ConversationDetail, ConversationEntry, ConversationInputResult, PluginSummary, PluginStatus, PluginDiagnosticError, PluginInUseItem, PluginConfigFieldSource, PluginConfigResponse, ActionManifest, PublicPluginDoc, NodeInfo, NodeIssuedToken, NodeUpgradeCheckInput, NodeUpgradeCheckResult, NodeUpgradeInput, NodeUpgradeResult, EnvExecRequest, EnvExecResponse, ModelCatalogEntry, ModelCatalog, ConversationCompactResponse, ConversationWithdrawResponse, PluginDoctorReport, PluginReloadResult, PluginRescanResult, PluginInstallResult, PluginUpdateResult, PluginRemoveResult }

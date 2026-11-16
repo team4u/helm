@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
 import { join } from 'node:path'
 import { writeFile, mkdir, mkdtemp, rm, symlink, chmod, readFile } from 'node:fs/promises'
+import { gunzipSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import {
   AuthService,
@@ -29,7 +30,7 @@ import {
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import { HelmError, type ConversationDetail, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginSummary, type HelmPluginContext } from '@helm/protocol'
+import { HelmError, type ConversationDetail, type ConversationEntry, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginSummary, type HelmPluginContext } from '@helm/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
@@ -137,6 +138,8 @@ const withdrawn: Array<{ id: number; submissionId: number }> = []
 let detailFixture: ConversationDetail | undefined
 const detailCalls: Array<{ id: number; opts?: { limit?: number; cursor?: string } }> = []
 const updateCalls: Array<{ id: number; patch: ConversationPatch }> = []
+let entryFixture: ConversationEntry | undefined
+const entryCalls: Array<{ id: number; entryId: number }> = []
 let waitForInputResult: ConversationInputResult | undefined
 let waitForInputError: HelmError | undefined
 const waitForInputCalls: Array<{ id: number; submissionId: string }> = []
@@ -192,6 +195,12 @@ function makeKernel(): KernelRuntimeLike {
         return { ...detailFixture, id }
       }
       return { ...conversations.get(id)!, entries: [] }
+    },
+    async getConversationEntry(id: number, entryId: number) {
+      entryCalls.push({ id, entryId })
+      if (!conversations.has(id)) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (entryFixture !== undefined) return { ...entryFixture, id: String(entryId) }
+      throw new HelmError('not_found', `条目 ${entryId} 在会话 ${id} 中不存在`, 404, { conversationId: id, entryId })
     },
     async createConversation(init) {
       const id = Math.max(0, ...conversations.keys()) + 1
@@ -761,6 +770,109 @@ test('GET /:id 会话不存在 404；多余段 404', { timeout: 60_000 }, async 
   assert.equal(missing.status, 404)
   const extra = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}/entries`)
   assert.equal(extra.status, 404)
+})
+
+test('GET /:id/entries/:entryId 单条条目端点：透传/404/400/多余段', { timeout: 60_000 }, async () => {
+  entryFixture = {
+    id: '7',
+    kind: 'pi.tool-result',
+    model: [{ role: 'toolResult', toolCallId: 'c1', toolName: 'bash', content: [{ type: 'text', text: 'x'.repeat(4000) }] }],
+  }
+  const { handler } = makeHandlers()
+  const ok = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}/entries/7`)
+  assert.equal(ok.status, 200)
+  assert.equal(ok.body.kind, 'pi.tool-result')
+  assert.equal(ok.body.id, '7')
+  assert.equal(ok.body.model[0].content[0].text, 'x'.repeat(4000))
+  assert.deepEqual(entryCalls.at(-1), { id: ROOT_CONVERSATION_ID, entryId: 7 })
+
+  const missingConv = await call(handler, 'GET', '/api/conversations/999/entries/7')
+  assert.equal(missingConv.status, 404)
+  entryFixture = undefined // 会话存在但条目缺失：404
+  const missingEntry = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}/entries/8`)
+  assert.equal(missingEntry.status, 404)
+  assert.equal(missingEntry.body.error.code, 'not_found')
+
+  for (const bad of ['0', '-1', 'abc', '1.5', '999999999999999999999999']) {
+    const res = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}/entries/${bad}`)
+    assert.equal(res.status, 400, bad)
+    assert.equal(res.body.error.code, 'validation_error', bad)
+  }
+  const extraSeg = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}/entries/7/extra`)
+  assert.equal(extraSeg.status, 404)
+  const wrongMethod = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/entries/7`, { body: {} })
+  assert.equal(wrongMethod.status, 404)
+})
+
+test('JSON 响应 gzip：阈值/协商/Vary 合并/Content-Length/解压一致', { timeout: 60_000 }, async () => {
+  detailFixture = detailOf({
+    entries: [
+      {
+        id: 'big',
+        kind: 'pi.tool-result',
+        model: [{ role: 'toolResult', toolCallId: 'c9', toolName: 'bash', content: [{ type: 'text', text: 'y'.repeat(8192) }] }],
+      },
+    ],
+  })
+  const { handler } = makeHandlers()
+  // 带 Origin + Accept-Encoding: gzip：压缩 + Vary 合并（Origin 与 Accept-Encoding 并存）
+  const direct = new Request(`http://127.0.0.1:3202/api/conversations/${ROOT_CONVERSATION_ID}?limit=50`, {
+    headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'gzip, br', origin: 'http://x' },
+  })
+  const res = await handler(direct)
+  assert.equal(res.headers.get('content-encoding'), 'gzip')
+  const vary = res.headers.get('vary') ?? ''
+  const varyTokens = vary.toLowerCase().split(',').map((s) => s.trim())
+  assert.ok(varyTokens.includes('accept-encoding'), vary)
+  assert.ok(varyTokens.includes('origin'), vary)
+  const compressed = new Uint8Array(await res.arrayBuffer())
+  assert.equal(Number(res.headers.get('content-length')), compressed.byteLength)
+  const decompressed = gunzipSync(compressed).toString('utf8')
+  const parsed = JSON.parse(decompressed)
+  assert.equal(parsed.entries[0].model[0].content[0].text, 'y'.repeat(8192))
+
+  // 小响应（<1KiB）不压缩但仍合并 Vary；body 完整可读（clone 未消费原 body）
+  const smallReq = new Request('http://127.0.0.1:3202/api/conversations', {
+    headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'gzip' },
+  })
+  const small = await handler(smallReq)
+  assert.equal(small.headers.get('content-encoding'), null)
+  assert.ok(
+    (small.headers.get('vary') ?? '').toLowerCase().split(',').map((t) => t.trim()).includes('accept-encoding'),
+    'identity 小响应也要带 Vary: Accept-Encoding',
+  )
+  const smallBody = await small.text()
+  assert.ok(Array.isArray(JSON.parse(smallBody)), 'identity 响应 body 未被 clone 消费')
+
+  // 客户端不接受 gzip：identity
+  const identity = await call(handler, 'GET', `/api/conversations/${ROOT_CONVERSATION_ID}?limit=50`)
+  assert.equal(identity.headers.get('content-encoding'), null)
+
+  // q=0 视为拒绝
+  const q0 = new Request(`http://127.0.0.1:3202/api/conversations/${ROOT_CONVERSATION_ID}?limit=50`, {
+    headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'gzip;q=0, br' },
+  })
+  const q0res = await handler(q0)
+  assert.equal(q0res.headers.get('content-encoding'), null)
+  await q0res.text()
+
+  // SSE 不压缩（text/event-stream）
+  const sseReq = new Request('http://127.0.0.1:3202/api/events', {
+    headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'gzip' },
+  })
+  const sse = await handler(sseReq)
+  assert.equal(sse.headers.get('content-type'), 'text/event-stream')
+  assert.equal(sse.headers.get('content-encoding'), null)
+  await sse.body?.cancel() // mock SSE 流保持打开：读全文会悬挂，直接 cancel
+
+  // HEAD 不压缩
+  const headReq = new Request(`http://127.0.0.1:3202/api/conversations/${ROOT_CONVERSATION_ID}`, {
+    method: 'HEAD',
+    headers: { authorization: `Bearer ${token}`, 'accept-encoding': 'gzip' },
+  })
+  const head = await handler(headReq)
+  assert.equal(head.headers.get('content-encoding'), null)
+  await head.text()
 })
 
 test('POST /:id/input 校验 origin/whenBusy 枚举并透传 kernel.submitInput', { timeout: 60_000 }, async () => {

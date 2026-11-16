@@ -10,6 +10,7 @@ import type {
   MarkdownCodeBlockSpec,
   UiActionSpec,
   ConversationDetail,
+  ConversationEntry,
   ConversationLive,
   ConversationScope,
   ConversationSummary,
@@ -451,6 +452,10 @@ export interface HelmStoreValue {
   refreshNodes(): Promise<NodeInfo[] | undefined>
   loadConversationDetail(conversationId: number, force?: boolean): Promise<ConversationDetail | undefined>
   loadEarlierEntries(conversationId: number): Promise<void>
+  /** 单条目全文回填（服务端时间线预览截断后按需取回）：与 conversation.entry 事件
+   * 同一 upsert 语义（同 id 原位替换保序），不触发网络、不动分页游标。
+   * 生产 Provider 恒提供；测试替身可省略（截断取回 hook 会显式报错，不静默降级）。 */
+  backfillConversationEntry?(conversationId: number, entry: ConversationEntry): void
   loadConversationArtifacts(conversationId: number): Promise<ArtifactMetadata[] | undefined>
   ensurePluginDoc(pluginId: string, docName: string): Promise<unknown>
   /** 订阅会话级文档元组（ref-count 共享专用 SSE 流；详见 lib/session-docs.ts）。 */

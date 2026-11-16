@@ -10,7 +10,7 @@
  * - 26px 单行摘要的极简统计（edit +N −N / write 行数；运行态只报事实不报成功）。
  */
 
-import type { ToolTrace } from './timeline-model.js'
+import type { ToolResultTruncation, ToolTrace } from './timeline-model.js'
 import { languageFromFilename } from './code-language.js'
 import { buildPendingEditDiff, checkEditToolResult } from './edit-diff-model.js'
 
@@ -116,6 +116,16 @@ export function inputKvEntries(input: unknown): KvEntry[] {
 }
 
 // ---------------------------------------------------------------------------
+// 服务端截断预览文案（纯函数：绝不把预览行数冒充全文总量，总量未知不伪造）
+// ---------------------------------------------------------------------------
+
+/** 服务端截断预览说明：总量仅采用服务端计数（totalLines/totalChars），均缺失时只说明预览性质。 */
+export function truncationPreviewNote(t: ToolResultTruncation): string {
+  const total = t.totalLines !== undefined ? `全文 ${t.totalLines} 行` : t.totalChars !== undefined ? `全文 ${t.totalChars} 字符` : ''
+  return total === '' ? '输出超长，服务端仅传回预览' : `输出超长，服务端仅传回预览（${total}）`
+}
+
+// ---------------------------------------------------------------------------
 // write / read / bash 展示数据
 // ---------------------------------------------------------------------------
 
@@ -152,17 +162,22 @@ export interface ReadBodyData {
   language: string
   /** 输出含内核超长 Spill 标记：预览性质文本，不做源码语法高亮。 */
   isSpill: boolean
+  /** true = content 取自原始输出文本（resultText），受服务端预览截断约束；
+   * false = structuredOutput.content（details 通道，完整传回，不受结果文本截断影响）。 */
+  fromResultText: boolean
 }
 
 export function readBodyData(tool: ToolTrace): ReadBodyData {
   const structured = asRecord(tool.structuredOutput)
   const input = asRecord(tool.input)
   const path = stringField(structured, 'path') ?? stringField(input, 'path')
-  const content = stringField(structured, 'content') ?? tool.resultText
+  const structuredContent = stringField(structured, 'content')
+  const content = structuredContent ?? tool.resultText
   return {
     content,
     language: languageFromFilename(path),
     isSpill: tool.artifactRef !== undefined,
+    fromResultText: structuredContent === undefined && tool.resultText !== undefined,
   }
 }
 

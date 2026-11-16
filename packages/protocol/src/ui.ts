@@ -3,7 +3,7 @@
  * 每个扩展点经 client.tsx 具名导出引用渲染（宿主共享 React 运行时，本包不引 React 类型）。
  */
 
-import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, ConversationSummary, WhenBusy } from './conversation.js'
+import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, ConversationSummary, ToolResultTruncation, WhenBusy } from './conversation.js'
 import type { PluginSummary } from './plugin.js'
 
 /** 编译器保留的 CSS 文本导出名；加载器确认模块有效后才将其挂入页面。 */
@@ -316,6 +316,8 @@ export interface ToolViewSiblingCall {
   status: 'running' | 'done' | 'error'
   result?: unknown
   structuredOutput?: unknown
+  /** 结果是详情端点的截断预览时携带，插件不得将 result 当完整原文。 */
+  resultTruncation?: ToolResultTruncation
 }
 
 /** tool.view：工具调用过程与结果的可序列化数据。 */
@@ -326,6 +328,8 @@ export interface ToolViewProps {
   status: 'running' | 'done' | 'error'
   result?: unknown
   structuredOutput?: unknown
+  /** 结果是详情端点的截断预览时携带，插件不得将 result 当完整原文。 */
+  resultTruncation?: ToolResultTruncation
   isError?: boolean
   startedAt?: number
   durationMs?: number

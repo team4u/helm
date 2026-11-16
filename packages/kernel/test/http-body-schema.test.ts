@@ -108,6 +108,7 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
     },
     async listConversations() { return [] },
     async getConversationDetail(id: number) { throw new HelmError('not_found', `会话不存在: ${id}`, 404) },
+    async getConversationEntry(id: number, entryId: number) { throw new HelmError('not_found', `条目 ${entryId} 在会话 ${id} 中不存在`, 404) },
     async createConversation() { throw new HelmError('not_found', 'x', 404) },
     async updateConversation() { throw new HelmError('not_found', 'x', 404) },
     async deleteConversation() { throw new HelmError('not_found', 'x', 404) },

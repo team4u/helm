@@ -1,7 +1,7 @@
 /**
  * 会话领域路由：/api/conversations（列表/创建/详情/更新/删除/input/
- * withdraw/abort/reset/compact/fork/artifacts）、/api/asks（审批队列）、
- * /api/search（全文检索）。
+ * withdraw/abort/reset/compact/fork/entries/:entryId/artifacts）、/api/asks
+ * （审批队列）、/api/search（全文检索）。
  */
 import type { ConversationListFilter, ConversationStatus } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
@@ -58,6 +58,12 @@ export async function handleConversationsDomain(
       return jsonOk(redactor, { ok: true })
     }
     return methodNotAllowed(redactor, method)
+  }
+  if (third === 'entries' && method === 'GET' && fourth !== undefined && ctx.segments[4] === undefined) {
+    if (kernel.getConversationEntry === undefined) {
+      throw new HelmError('not_implemented', '当前 runtime 未提供单条条目读取', 501)
+    }
+    return jsonOk(redactor, await kernel.getConversationEntry(id, parseIdParam(fourth, 'entryId')))
   }
   if (third === 'input' && method === 'POST' && fourth === undefined) {
     const body = await readJsonBody(ctx.request)

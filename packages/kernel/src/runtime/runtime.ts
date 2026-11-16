@@ -17,6 +17,7 @@ import {
   type AskResult,
   type AskSpec,
   type ConversationDetail,
+  type ConversationEntry,
   type ConversationInit,
   type ConversationInputResult,
   type ConversationListFilter,
@@ -542,6 +543,11 @@ export class KernelRuntime {
 
   getConversationDetail(id: number, options?: Parameters<ConversationService['getConversationDetail']>[1]): Promise<ConversationDetail> {
     return this.conversations.getConversationDetail(id, options)
+  }
+
+  /** 单条时间线条目（未截断、已脱敏；GET /api/conversations/:id/entries/:entryId）。 */
+  getConversationEntry(id: number, entryId: number): Promise<ConversationEntry> {
+    return this.conversations.getConversationEntry(id, entryId)
   }
 
   async createConversation(init: ConversationInit = {}): Promise<ConversationSummary> {

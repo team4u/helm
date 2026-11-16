@@ -125,7 +125,14 @@ export function corsHeaders(origin: string | null): Record<string, string> {
 export function withCors(response: Response, origin: string | null): Response {
   const headers = corsHeaders(origin)
   if (Object.keys(headers).length === 0) return response
-  for (const [k, v] of Object.entries(headers)) response.headers.set(k, v)
+  for (const [k, v] of Object.entries(headers)) {
+    if (k !== 'vary') response.headers.set(k, v)
+  }
+  const vary = new Set((response.headers.get('vary') ?? '').split(',').map((token) => token.trim()).filter(Boolean))
+  if (![...vary].some((token) => token.toLowerCase() === '*')) {
+    if (![...vary].some((token) => token.toLowerCase() === 'origin')) vary.add('Origin')
+    response.headers.set('vary', [...vary].join(', '))
+  }
   return response
 }
 

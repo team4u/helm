@@ -199,7 +199,28 @@ export function matchesConversationScope(
  * 会话时间线条目（pi-durable EntryRecord 的跨端子集）。
  * `model` 是面向模型上下文的消息数组（assistant 文本在 model 中，非 data）；
  * `data` 是应用侧 JSON 载荷，display/bookkeeping entry 可能缺省。
+ *
+ * HTTP 详情投影约定（仅详情分页端点；SSE 与单条端点不带）：
+ * - `pi.system` 条目被过滤，不外发；
+ * - model 消息内容块上的供应商签名载荷（thinkingSignature /
+ *   textSignature / thoughtSignature）被剥离（仅限 assistant 消息的
+ *   content 块；toolResult 的 details 等业务对象不触碰）；
+ * - 超限的纯文本 toolResult 消息被显式截断（保留头尾），并在该消息对象上
+ *   追加 `truncated: true` / `totalChars` / `totalLines` 标记，供前端与
+ *   每条 pi.tool-result 精确配对；结构化 JSON 信封（含尾部 footer 行）与
+ *   已携带 `[Artifact] id=` 产物入口的 spill 预览文本豁免（全文以产物为准）。
+ *   单条端点 `GET /api/conversations/:id/entries/:entryId` 返回未截断原文
+ *   （仅剥离签名，且签名剥离仅作用于 model 载荷），数据库原文永不改变。
  */
+/** HTTP 详情投影对 tool-result 纯文本预览的显式截断事实。 */
+export interface ToolResultTruncation {
+  truncated: true
+  /** 截断前完整文本字符数；缺省表示服务端未提供该计数。 */
+  totalChars?: number
+  /** 截断前完整文本行数；缺省表示服务端未提供该计数。 */
+  totalLines?: number
+}
+
 export interface ConversationEntry {
   id: string
   kind: string

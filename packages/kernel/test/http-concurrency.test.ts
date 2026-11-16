@@ -367,6 +367,9 @@ test('POST /api/conversations/:id/artifacts TOCTOU：入口校验通过后会话
         if (detailCalls === 1) return { ...summaryOf(id), entries: [] }
         throw new HelmError('not_found', `会话不存在: ${id}`, 404)
       },
+      getConversationEntry: async (id: number, entryId: number) => {
+        throw new HelmError('not_found', `条目 ${entryId} 在会话 ${id} 中不存在`, 404)
+      },
     } as unknown as KernelRuntimeLike
     await assert.rejects(
       handleApi(

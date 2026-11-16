@@ -12,6 +12,7 @@ import {
   coerceTags,
   enumFlag,
   parseNoFlags,
+  parsePositiveInt,
   printPlainText,
   printResult,
   requirePositional,
@@ -166,6 +167,28 @@ export function conversationsCommands(): CommandSpec[] {
       const qs = query.size > 0 ? `?${query.toString()}` : ''
       const hub = await ctx.hub()
       printResult(ctx, await hub.get<unknown>(`/api/conversations/${id}${qs}`))
+    },
+  })
+
+  // ---- conversations entry（单条时间线条目全文）----
+  cmds.push({
+    path: ['conversations', 'entry'],
+    description: '查看单条时间线条目（GET /api/conversations/:id/entries/:entryId；详情投影截断后的未截断原文）',
+    flags: convFlags,
+    positional: '[id] <entryId>',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags([{ name: 'current', type: 'boolean' }], ctx.args)
+      const first = parsed.positionals[0]
+      const second = parsed.positionals[1]
+      assertNoExtraPositionals(parsed.positionals, 2)
+      if (second === undefined && first === undefined) {
+        throw new CliError('缺少 <entryId> 位置参数（[id] <entryId>，会话目标可用 --current）', 'missing_positional')
+      }
+      // 单 positional 视为 entryId：会话目标必须来自 --current（或 env）。
+      const id = resolveConversationTarget(parsed.flags, second === undefined ? undefined : first, ctx.env)
+      const entryId = parsePositiveInt((second ?? first) as string, 'entryId')
+      const hub = await ctx.hub()
+      printResult(ctx, await hub.get<unknown>(`/api/conversations/${id}/entries/${entryId}`))
     },
   })
 
